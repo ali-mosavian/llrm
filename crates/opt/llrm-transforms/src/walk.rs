@@ -70,8 +70,8 @@ use llrm_mir::passes::PreservedAnalyses;
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 
 use crate::interprocedural::{
-    Liveness, calls_of, declared, function_mut, managers, private, procedures, reporting_marked, roots, roots_here,
-    vouched,
+    Liveness, calls_of, declared, function_mut, managers, private, procedures, reporting, reporting_marked, roots,
+    roots_here, vouched,
 };
 
 /// What the interprocedural step does to a body before the Simplify list:
@@ -101,6 +101,18 @@ impl ProgramPass for ModuleIpo {
         for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules) {
             modules[at].changed(id);
             changed = true;
+        }
+        // `GlobalOptPass`, which LLVM runs here: a variable is split into the
+        // pieces its loads read, and one a body writes before it reads is that
+        // body's stack slot, while the loads are still there to be seen.
+        for at in 0..count {
+            let ids = reporting(&mut program.modules[at], &mut modules[at], |module| {
+                crate::globalsra::split(module, &program.layout)
+            });
+            changed |= !ids.is_empty();
+            for id in ids {
+                modules[at].changed(id);
+            }
         }
         let mut cloning = crate::ipacp::Cloning::default();
         for at in 0..count {
@@ -321,9 +333,18 @@ impl ProgramPass for Walk {
                             for (callee, mut calls) in by_callee {
                                 calls.sort();
                                 let global = module.global(callee);
+                                // The references left once this step's splice
+                                // is counted: a
+                                // site inlined beside the refused ones
+                                // no longer keeps the callee alive.
+                                let count = |calls: &[(GlobalId, i64)]| {
+                                    calls.iter().filter(|(one, _)| *one == callee).map(|(_, n)| *n).sum::<i64>()
+                                };
+                                let left =
+                                    live.references().get(&callee).copied().unwrap_or(0) - count(&was) + count(&mid);
                                 let goes = crate::inlinecost::local_linkage(global.linkage)
                                     && !addressed.contains(&callee)
-                                    && live.references().get(&callee).copied() == Some(calls.len() as i64);
+                                    && left == calls.len() as i64;
                                 if goes {
                                     units.push((calls, body_size(module, &program.layout, tti, callee)));
                                 } else {
@@ -372,7 +393,7 @@ impl ProgramPass for Walk {
                                         credit
                                     );
                                 }
-                                if tried < best + credit {
+                                if tried <= best + credit {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -536,6 +557,7 @@ impl SelfInline {
                         body: std::rc::Rc::new(function.clone()),
                         frame: crate::inline::grown(context, &program.layout, function),
                         moved: false,
+                        last_call: false,
                         callee: None,
                         self_calls: None,
                         self_sites: 0,
@@ -600,10 +622,12 @@ fn body_size(
     id: GlobalId,
 ) -> i64 {
     let function = module.global(id).function().expect("a body");
+    let float =
+        |ty: llrm_mir::types::TypeId| llrm_mir::tti::Ty::of(&module.context.types, ty).is_some_and(|ty| ty.is_float());
     function
         .walk()
         .map(|(_, inst)| {
-            llrm_mir::instructioncost::instruction_cost(
+            let units = llrm_mir::instructioncost::instruction_cost(
                 tti,
                 &module.context,
                 layout,
@@ -612,7 +636,21 @@ fn body_size(
                 inst,
                 llrm_mir::tti::CostKind::CodeSize,
             )
-            .value
+            .value;
+            let operation = function.instruction(inst);
+            let moves = matches!(
+                operation.opcode,
+                llrm_mir::opcode::Opcode::Load { .. }
+                    | llrm_mir::opcode::Opcode::Store { .. }
+                    | llrm_mir::opcode::Opcode::Call(_)
+            );
+            let touches = !moves
+                && (float(operation.ty)
+                    || operation
+                        .operands
+                        .iter()
+                        .any(|&operand| function.operand_type(&module.context, operand).is_some_and(|ty| float(ty))));
+            if touches { units * tti.float_code_size_percent() / 100 } else { units }
         })
         .sum()
 }

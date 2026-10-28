@@ -20,6 +20,7 @@
 use super::dag::{BooleanContents, SDValue, SelectionDAG};
 use super::fold::mask;
 use super::isd::ISD;
+use super::x86_lowering::x86isd;
 
 /// `MaxRecursionDepth`.
 const MAX_DEPTH: u32 = 6;
@@ -84,12 +85,16 @@ fn walk(
         return KnownBits::unknown(width);
     }
     let operand = |at: usize| walk(dag, dag.operand(value, at), depth + 1);
-    match dag.opcode(value) {
+    let opcode = dag.opcode(value);
+    match opcode {
         ISD::SetCC if value.res == 0 => {
             // A compare is 0 or 1 where the target's boolean contents say so.
             let zero_or_one = dag.config().boolean_contents == BooleanContents::ZeroOrOne && width > 1;
             KnownBits { zero: if zero_or_one { all & !1 } else { 0 }, one: 0, width }
         }
+        // `X86TargetLowering::computeKnownBitsForTargetNode`:
+        // `Known.Zero.setBitsFrom(1)`.
+        op if op == x86isd::SETCC && value.res == 0 => KnownBits { zero: all & !1, one: 0, width },
         ISD::And => {
             let (rhs, lhs) = (operand(1), operand(0));
             KnownBits { zero: lhs.zero | rhs.zero, one: lhs.one & rhs.one, width }
@@ -160,6 +165,14 @@ fn walk(
             }
             _ => KnownBits::unknown(width),
         },
+        ISD::BSwap | ISD::BitReverse => {
+            let inner = operand(0);
+            let flip = |v: u128| {
+                let flipped = if opcode == ISD::BSwap { v.swap_bytes() } else { v.reverse_bits() };
+                flipped >> (128 - width)
+            };
+            KnownBits { zero: flip(inner.zero), one: flip(inner.one), width }
+        }
         _ => KnownBits::unknown(width),
     }
 }

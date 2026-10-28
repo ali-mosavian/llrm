@@ -163,3 +163,18 @@ def test_a_build_that_left_the_previous_binary_in_place_is_refused_not_stored_un
     done = subprocess.run(["bash", str(SCRIPT), str(scratch), second], cwd=repo, env={**env, "PAIR_CARGO": f"{idle} cargo"}, capture_output=True, text=True)
     assert done.returncode != 0 and "not built from" in done.stderr, done.stderr
     assert not (scratch / f"sbp-{second}" / "dist" / "llrm-c").exists()
+
+
+def test_the_cargo_of_a_dist_build_asks_buildslot_to_jump_the_queue(tmp_path):
+    """A pair_build holding the shared dist lock queued for a build slot behind short tests, 44 min at 0% CPU, with 11 more builds waiting on the lock."""
+    repo = tmp_path / "repo"
+    (sha,) = repo_with_commits(repo, 1)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    env = stub(scratch, tmp_path / "targets.log")
+    seen = tmp_path / "priority"
+    wrapper = scratch / "cargo-priority"
+    wrapper.write_text(f'#!/bin/bash\necho "${{BUILDSLOT_PRIORITY:-unset}}" > {seen}\nexec {scratch / "cargo-stub"} "$@"\n')
+    wrapper.chmod(0o755)
+    build(scratch, repo, sha, {**env, "PAIR_CARGO": f"{wrapper} cargo"})
+    assert seen.read_text().strip() == "0"

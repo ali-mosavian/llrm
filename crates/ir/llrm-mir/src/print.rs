@@ -7,10 +7,12 @@ use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, 
 use crate::hash::HashMap;
 use crate::lexer::is_name;
 use crate::module::{
-    BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataOperand, Module, Operand,
-    UnnamedAddr, ValueId,
+    BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataId, MetadataOperand,
+    Module, Operand, Special, UnnamedAddr, ValueId,
 };
-use crate::opcode::{Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, Tail, spelling};
+use crate::opcode::{
+    AtomicKind, Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, RMW_OPS, Tail, spelling,
+};
 use crate::types::{FloatKind, Type, TypeId, struct_text};
 
 pub fn module(module: &Module) -> String {
@@ -45,7 +47,7 @@ pub fn module(module: &Module) -> String {
             .iter()
             .enumerate()
             .filter(|(_, one)| matches!(one.kind, GlobalKind::Variable(_)))
-            .map(|(at, one)| printer.variable(at, one)),
+            .map(|(at, one)| printer.variable(at, one, module.global_metadata.get(&(at as u32)))),
     );
     for (at, global) in module.globals.iter().enumerate() {
         if let GlobalKind::Function(function) = &global.kind {
@@ -71,12 +73,18 @@ pub fn module(module: &Module) -> String {
         .metadata
         .iter()
         .enumerate()
-        .map(|(at, node)| {
-            format!(
+        .map(|(at, node)| match module.special.get(&MetadataId(at as u32)) {
+            Some(special) => format!(
+                "!{at} = {}!{}({})\n",
+                if node.distinct { "distinct " } else { "" },
+                special.kind,
+                printer.special_operands(special, &node.operands)
+            ),
+            None => format!(
                 "!{at} = {}!{{{}}}\n",
                 if node.distinct { "distinct " } else { "" },
                 printer.metadata_operands(&node.operands)
-            )
+            ),
         })
         .collect();
     section(&mut out, nodes.into_iter());
@@ -461,6 +469,7 @@ impl Printer<'_> {
         &self,
         at: usize,
         global: &GlobalValue,
+        attached: Option<&Vec<(String, MetadataId)>>,
     ) -> String {
         let GlobalKind::Variable(variable) = &global.kind else { unreachable!("a variable") };
         let linkage = match (global.linkage, variable.initializer) {
@@ -477,7 +486,9 @@ impl Printer<'_> {
         words.push(self.ty(variable.ty));
         words.extend(variable.initializer.map(|one| self.constant(one)));
         let align = variable.align.map(|one| format!(", align {one}")).unwrap_or_default();
-        format!("{} = {}{align}\n", self.globals[at], words.join(" "))
+        let attached: String =
+            attached.into_iter().flatten().map(|(kind, node)| format!(", !{kind} !{}", node.0)).collect();
+        format!("{} = {}{align}{attached}\n", self.globals[at], words.join(" "))
     }
 
     fn function(
@@ -526,6 +537,16 @@ impl Printer<'_> {
         if let Some(personality) = function.personality {
             words.push(format!("personality {}", self.typed_constant(personality)));
         }
+        if declaration {
+            // Clang's spelling: the attachments follow `declare`.
+            for (at, (kind, node)) in function.metadata.iter().enumerate() {
+                words.insert(1 + at, format!("!{kind} !{}", node.0));
+            }
+        } else {
+            for (kind, node) in &function.metadata {
+                words.push(format!("!{kind} !{}", node.0));
+            }
+        }
         let mut out = words.join(" ");
         if declaration {
             out.push('\n');
@@ -552,13 +573,25 @@ impl Printer<'_> {
             }
             for inst in function.iter_block(block) {
                 for record in function.debug_records().iter().filter(|one| one.before == inst) {
+                    let extra: String = record
+                        .expression
+                        .iter()
+                        .chain(record.location.iter())
+                        .map(|node| format!(", !{}", node.0))
+                        .collect();
                     let _ = match record.what {
-                        DebugWhat::Declare(at) => {
-                            writeln!(out, "  #dbg_declare({}, !{})", self.typed(function, slots, at), record.variable.0)
-                        }
-                        DebugWhat::Value(at) => {
-                            writeln!(out, "  #dbg_value({}, !{})", self.typed(function, slots, at), record.variable.0)
-                        }
+                        DebugWhat::Declare(at) => writeln!(
+                            out,
+                            "  #dbg_declare({}, !{}{extra})",
+                            self.typed(function, slots, at),
+                            record.variable.0
+                        ),
+                        DebugWhat::Value(at) => writeln!(
+                            out,
+                            "  #dbg_value({}, !{}{extra})",
+                            self.typed(function, slots, at),
+                            record.variable.0
+                        ),
                         DebugWhat::Piece { value, offset, bytes } => writeln!(
                             out,
                             "  #dbg_piece({}, !{}, {offset}, {bytes})",
@@ -690,6 +723,33 @@ impl Printer<'_> {
                 let align = align.map(|one| format!(", align {one}")).unwrap_or_default();
                 format!("store {}{}, {}{align}", if *volatile { "volatile " } else { "" }, typed(0), typed(1))
             }
+            Opcode::Atomic(info) => {
+                let align = info.align.map(|one| format!(", align {one}")).unwrap_or_default();
+                let volatile = if info.volatile { "volatile " } else { "" };
+                let scope = if info.single_thread { " syncscope(\"singlethread\")" } else { "" };
+                let order = info.ordering.spelling();
+                match info.kind {
+                    AtomicKind::Load => {
+                        format!("load atomic {volatile}{}, {}{scope} {order}{align}", self.ty(inst.ty), typed(0))
+                    }
+                    AtomicKind::Store => {
+                        format!("store atomic {volatile}{}, {}{scope} {order}{align}", typed(0), typed(1))
+                    }
+                    AtomicKind::Rmw(op) => {
+                        let name = RMW_OPS.iter().find(|(one, _)| *one == op).map_or("xchg", |(_, name)| name);
+                        format!("atomicrmw {volatile}{name} {}, {}{scope} {order}{align}", typed(0), typed(1))
+                    }
+                    AtomicKind::CmpXchg { failure, weak } => format!(
+                        "cmpxchg {}{volatile}{}, {}, {}{scope} {order} {}{align}",
+                        if weak { "weak " } else { "" },
+                        typed(0),
+                        typed(1),
+                        typed(2),
+                        failure.spelling()
+                    ),
+                    AtomicKind::Fence => format!("fence{scope} {order}"),
+                }
+            }
             Opcode::GetElementPtr { source } => {
                 let rest: Vec<String> = (0..ops.len()).map(typed).collect();
                 format!("getelementptr{flags} {}, {}", self.ty(*source), rest.join(", "))
@@ -783,6 +843,7 @@ impl Printer<'_> {
                 Type::Float(kind) => float(*kind, *bits),
                 _ => unreachable!("a floating constant has a floating type"),
             },
+            ConstantKind::Float80(bits) => format!("0xK{bits:020X}"),
             ConstantKind::Null => "null".to_owned(),
             ConstantKind::Poison => "poison".to_owned(),
             ConstantKind::Undef => "undef".to_owned(),
@@ -824,6 +885,34 @@ impl Printer<'_> {
                 MetadataOperand::Node(node) => format!("!{}", node.0),
                 MetadataOperand::String(text) => format!("!{}", string(text.as_bytes())),
                 MetadataOperand::Constant(id) => self.typed_constant(*id),
+                MetadataOperand::Ident(word) => word.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// A specialized node's values, each after its field's name: strings and
+    /// integers bare, as LLVM writes them in `!DILocation(line: 3)`.
+    fn special_operands(
+        &self,
+        special: &Special,
+        operands: &[MetadataOperand],
+    ) -> String {
+        operands
+            .iter()
+            .zip(&special.fields)
+            .map(|(one, field)| {
+                let value = match one {
+                    MetadataOperand::Null => "null".to_owned(),
+                    MetadataOperand::Node(node) => format!("!{}", node.0),
+                    MetadataOperand::String(text) => string(text.as_bytes()),
+                    MetadataOperand::Constant(id) => match &self.context.get(*id).kind {
+                        ConstantKind::Int(value) => (*value as u64 as i64).to_string(),
+                        _ => self.typed_constant(*id),
+                    },
+                    MetadataOperand::Ident(word) => word.clone(),
+                };
+                if field.is_empty() { value } else { format!("{field}: {value}") }
             })
             .collect::<Vec<_>>()
             .join(", ")

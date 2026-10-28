@@ -55,7 +55,8 @@ static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
 
 /// The CPUs' timings: `timings.times`.
 static TIMINGS: LazyLock<llrm_target::timings::Timings> = LazyLock::new(|| {
-    llrm_target::timings::Timings::parse(include_str!("timings.times")).expect("timings.times parses")
+    llrm_target::timings::Timings::parse_tuned(include_str!("timings.times"), llrm_target::tune::X86)
+        .expect("timings.times parses")
 });
 
 /// The pin's register pressure sets for the registers described above:
@@ -89,6 +90,10 @@ impl M32 {
 impl llrm_target::Target for M32 {
     fn registers(&self) -> &'static llrm_lir::registers::Info {
         &REGISTER_INFO
+    }
+
+    fn selects_by_dag(&self) -> bool {
+        true
     }
 
     fn name(&self) -> &'static str {
@@ -197,6 +202,10 @@ impl llrm_target::Target for M32 {
         CALLING.native().frame_enter
     }
 
+    fn frame_wrap_split_size(&self) -> bool {
+        CALLING.native().frame_wrap_split_size
+    }
+
     /// Past EBP and the return address; there is no far call.
     fn first_argument_offset(
         &self,
@@ -299,6 +308,15 @@ impl llrm_target::Target for M32 {
         wide_divisor: bool,
     ) -> Result<llrm_target::routines::Divide, String> {
         llrm_x86::helpers::divide(signed, wide_divisor, 32).map_err(|refused| refused.message)
+    }
+
+    fn divide_routine_used(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        used: llrm_target::routines::Used,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide_used(signed, wide_divisor, 32, used).map_err(|refused| refused.message)
     }
 
     fn float_width(
@@ -404,6 +422,19 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// The GPRs were ordered eax ecx edx ebx esi edi, so the callee-saved ebx
+    /// was the first of them taken; the pin's GR32 order
+    /// (X86RegisterInfo.td) is eax ecx edx esi edi ebx.
+    #[test]
+    fn test_general_registers_are_allocated_in_the_pins_order() {
+        let order: Vec<&str> = super::REGISTERS
+            .iter()
+            .map(|r| r.name.as_str())
+            .filter(|n| ["eax", "ecx", "edx", "esi", "edi", "ebx"].contains(n))
+            .collect();
+        assert_eq!(order, ["eax", "ecx", "edx", "esi", "edi", "ebx"]);
+    }
+
     /// The limits the pin's `computePSetLimit` gives the x86-32 sets with the
     /// six general registers allocatable, worked by hand from the table:
     /// set 35 (GR16) is 66 - 2 * (34 - 6) of its largest class,

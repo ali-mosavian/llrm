@@ -26,6 +26,13 @@ impl FloatKind {
     }
 }
 
+/// The 10 bytes of an x87 extended value, from its 80 bits.
+pub fn x87_image(bits: u128) -> [u8; 10] {
+    let mut bytes = [0; 10];
+    bytes.copy_from_slice(&bits.to_le_bytes()[..10]);
+    bytes
+}
+
 /// The 10 bytes of x87's extended format holding the double whose bits
 /// are `double`: its sign and exponent rebiased to 15 bits, and its fraction
 /// under an explicit integer bit.
@@ -209,6 +216,12 @@ impl Types {
         id: TypeId,
     ) -> bool {
         matches!(self.get(id), Type::Void)
+    }
+
+    /// What a held fact about these types was true of: how many there are, and
+    /// how many identified structs.
+    pub fn version(&self) -> (usize, usize) {
+        (self.types.len(), self.named.len())
     }
 
     pub fn body(

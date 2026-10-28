@@ -16,9 +16,11 @@
 //! parameter's attributes allow, with a pass to a member of the SCC assumed
 //! harmless.
 //!
-//! DEVIATE A1: MIR has no `nofree` and no `initializes`-free tracking: the
-//! `IsFree` property is not tracked, so "all accesses" is read and write.
-//! DEVIATE A2: only `captures(none)` can be stated (see
+//! A parameter no use can free is `nofree` too (`IsFree`): a write through it
+//! by a call whose site, callee and parameter do not say `nofree` may free it.
+//!
+//! DEVIATE A1: `nofree_obj` has no MIR spelling, so only `nofree` is looked
+//! for. DEVIATE A2: only `captures(none)` can be stated (see
 //! [`crate::capturetracking`]), so a parameter that would be
 //! `captures(ret: ...)` stays unstated. Not translated yet:
 //! `addArgumentAttrsFromCallsites` (nonnull), `returned`; `inferInitializes` is
@@ -205,15 +207,16 @@ impl CaptureTracker for ArgumentUsesTracker<'_> {
     }
 }
 
-/// `ArgAccessProperties`, without `IsFree` (DEVIATE A1).
+/// `ArgAccessProperties`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Access {
     read: bool,
     write: bool,
+    free: bool,
 }
 
 impl Access {
-    const ALL: Self = Self { read: true, write: true };
+    const ALL: Self = Self { read: true, write: true, free: true };
 
     fn has_all(self) -> bool {
         self == Self::ALL
@@ -223,7 +226,7 @@ impl Access {
         self,
         other: Self,
     ) -> Self {
-        Self { read: self.read || other.read, write: self.write || other.write }
+        Self { read: self.read || other.read, write: self.write || other.write, free: self.free || other.free }
     }
 }
 
@@ -242,6 +245,19 @@ fn call_param_has(
         .and_then(|one| module.global(one).function())
         .and_then(|one| one.parameter_attrs.get(index))
         .is_some_and(|attrs| fact(&Facts::of(attrs)))
+}
+
+/// `CallBase::hasFnAttr(NoFree)`: the site's attributes or the direct callee's.
+fn call_has_nofree(
+    module: &Module,
+    function: &Function,
+    call: InstId,
+) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else { return false };
+    Facts::of(&info.attrs).no_free()
+        || llrm_mir::memory::callee(&module.context, function, call)
+            .and_then(|one| module.global(one).function())
+            .is_some_and(|one| Facts::of(&one.attrs).no_free())
 }
 
 /// `CallBase::getMemoryEffects`: the site's attributes met with the direct
@@ -365,6 +381,11 @@ fn determine_pointer_access_attrs(
             }
             if argument.is_mod_set() && !only_reads_operand(module, function, used.user, index) {
                 access.write = true;
+                if !call_has_nofree(module, function, used.user)
+                    && !call_param_has(module, function, used.user, index, Facts::no_free)
+                {
+                    access.free = true;
+                }
             }
         } else {
             // The value operand of a store is not a use of its memory.
@@ -389,8 +410,13 @@ fn add_access_attrs(
     arg: Arg,
     access: Access,
 ) -> bool {
-    if access.has_all() {
-        return false;
+    let mut changed = false;
+    if !access.free && !Facts::of(parameter_mut(module, arg)).no_free() {
+        parameter_mut(module, arg).extend(Fact::NoFree.attribute());
+        changed = true;
+    }
+    if access.read && access.write {
+        return changed;
     }
     let want = if access.read {
         Fact::ReadOnly

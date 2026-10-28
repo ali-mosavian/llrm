@@ -435,7 +435,7 @@ fn test_a_block_that_jumps_to_itself_stays() {
 /// `optimized`'s round: the tails merged, then the branches settled.
 fn merged(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     let merged = tailmerge::merged(body, false, None)?.unwrap_or_else(|| body.clone());
-    Ok(machinedce::eliminated(threaded(&merged)))
+    Ok(threaded(&merged))
 }
 
 fn two_zero_tails(inserted: bool) -> LirBody {
@@ -462,6 +462,18 @@ fn test_identical_result_tails_are_merged() {
 
     assert_eq!(physical.iter().filter(|what| what.op == Operation::Move).count(), 1);
     assert_eq!(physical.iter().filter(|what| what.op == Operation::Branch).count(), 0);
+}
+
+/// The compare of a branch the merge made redundant stays, as in LLVM (T6):
+/// the dead-code sweep that followed each merge cost 1.7 M Ir on d_faces and
+/// changed no object.
+#[test]
+fn test_a_merge_leaves_the_compare_of_the_branch_it_made_redundant() {
+    let result = merged(&placed(&two_zero_tails(true)).unwrap()).unwrap();
+
+    // The source's four compares: the branch's and the three of the common
+    // tail.
+    assert_eq!(physical(&result).iter().filter(|what| what.op == Operation::Compare).count(), 4);
 }
 
 /// Merged tails set the same register but named different values: a later

@@ -357,3 +357,31 @@ b0:
     );
     assert!(changed && !text.contains("load"), "{text}");
 }
+
+/// lru.c: a pointer stored at `@c+8` and `@c+12` was loaded again through
+/// `addrspacecast (@c)` +8 (the far alias): the cast constant was no
+/// base to look through, so the store at +12 might alias the load. +101 B at
+/// -Os m16, and the pin forwards.
+#[test]
+fn test_a_load_through_a_far_cast_of_a_global_sees_the_store_to_its_own_offset() {
+    let mut module = parsed(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+@c = internal global [48 x i8] zeroinitializer
+@b = internal global [6 x i8] zeroinitializer
+define i32 @f(i16 %0) {
+b1:
+  store ptr addrspace(1) addrspacecast (ptr @b to ptr addrspace(1)), ptr getelementptr inbounds nuw (i8, ptr @c, i16 8)
+  store ptr addrspace(1) addrspacecast (ptr @b to ptr addrspace(1)), ptr getelementptr inbounds nuw (i8, ptr @c, i16 12)
+  %1 = load ptr addrspace(1), ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) addrspacecast (ptr @c to ptr addrspace(1)), i16 8)
+  %2 = ptrtoint ptr addrspace(1) %1 to i32
+  ret i32 %2
+}
+",
+    );
+    let layout = llrm_analysis::testing::layout(&module);
+    let outer = Outer::of(&module, None);
+    let (context, function) = module.function_mut("f").expect("@f");
+    run_impl_cfg(context, &layout, function, &outer, true, None);
+    let after = printed(&module);
+    assert!(!after.contains("load"), "{after}");
+}

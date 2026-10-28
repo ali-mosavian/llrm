@@ -99,7 +99,7 @@ impl Options {
         arch: std::rc::Rc<dyn llrm_target::Target>,
         selection: &'static crate::backend::isel::Compiled,
     ) -> Self {
-        let isel = crate::backend::shadow::Selector::for_target(arch.name());
+        let isel = crate::backend::shadow::Selector::for_target(&*arch);
         Self {
             machine,
             pipeline: Default::default(),
@@ -332,6 +332,8 @@ pub fn compiled_module(
             &options.libcalls,
         )
     })?;
+    let mut assembled = assembled;
+    data::zero_to_bss(&mut assembled, &program.modules[0], program.segments.data_space, options.machine.bss_begin);
     stage_files(options, "", &assembled)?;
     Ok(assembled)
 }
@@ -457,7 +459,13 @@ pub fn optimized(
     pipeline.lower_switches &= options.isel != crate::backend::shadow::Selector::Dag;
     let applied =
         llrm_transforms::pipeline::Applied { options: pipeline, dump: options.dump.clone(), ..Default::default() };
+    // The pipeline sees an atomic access as a call it cannot move.
+    program.modules.iter_mut().try_for_each(llrm_mir::atomic::hidden)?;
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    // The widest atomic access: a 64-bit one needs `cmpxchg8b` below 64 bits.
+    let native = if llrm_target::Target::layout(&*options.arch).mode == 64 { 64 } else { 32 };
+    let tso = options.arch.name().starts_with("x86");
+    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
         program
@@ -470,6 +478,9 @@ pub fn optimized(
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
+    timed("mir libm calls", || {
+        program.modules.iter_mut().try_for_each(|module| crate::backend::libmcalls::expanded(module, &options.libcalls))
+    })?;
     if let Some((_, convention, symbol)) = options.libcalls.iter().find(|(name, ..)| name == "memcpy") {
         timed("mir memcpy calls", || {
             program
@@ -478,6 +489,9 @@ pub fn optimized(
                 .try_for_each(|module| crate::backend::memcpycall::expanded(module, *convention, symbol))
         })?;
     }
+    timed("mir constant intrinsics", || {
+        program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)
+    })?;
     if crate::backend::memsetpattern::expands_for(options.isel) {
         timed("mir memset patterns", || {
             program.modules.iter_mut().try_for_each(crate::backend::memsetpattern::expanded)
@@ -510,7 +524,11 @@ pub fn optimized(
             .modules
             .iter_mut()
             .try_for_each(
-                |module| crate::backend::funnel::expanded(module, |operation| options.arch.expands(operation)),
+                |module| crate::backend::funnel::expanded(
+                    module,
+                    |operation| options.arch.expands(operation),
+                    |bits| crate::backend::funnel::kept_for_isel(options.isel, &format!("i{bits}")),
+                ),
             )
     })?;
     timed("mir absolute values", || {
@@ -529,7 +547,9 @@ pub fn optimized(
                 |module| crate::backend::compares::expanded(module, |operation| options.arch.expands(operation)),
             )
     })?;
-    timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
+    if options.isel != crate::backend::shadow::Selector::Dag {
+        timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
+    }
     let layout = options.arch.layout();
     if layout.expands_some("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));

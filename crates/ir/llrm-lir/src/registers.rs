@@ -291,6 +291,9 @@ pub struct Info {
     pub loads: &'static [(RegId, &'static str)],
     /// The registers a pass may borrow for a moment, most preferred first.
     pub scratch: &'static [RegId],
+    /// The 8-bit registers in allocation order, the high bytes among them
+    /// (the GR8 class); empty where the target has none.
+    pub bytes: &'static [RegId],
     /// The segment register each address space of a pair kind means, where the
     /// target has segments: what an access without a prefix reads, the stack's,
     /// the code's, and the one a far pointer's selector is loaded into.
@@ -567,6 +570,11 @@ impl Info {
         self.view(self.root(register), bytes as u32 * 8).unwrap_or(register)
     }
 
+    /// The 8-bit allocation order (`@bytes`), empty where the target has none.
+    pub fn byte_order(&self) -> &'static [RegId] {
+        self.bytes
+    }
+
     /// The segment registers, by iced's number.
     pub fn segments(&self) -> impl Iterator<Item = RegId> + '_ {
         self.entries().filter(|(_, one)| one.classes & class::SEGMENT != 0).map(|(id, _)| id)
@@ -597,7 +605,7 @@ impl Info {
         &self,
         register: RegId,
     ) -> bool {
-        self.integer(register) || self.is_segment(register)
+        self.integer(register) || self.is_segment(register) || self.in_class(register, class::XMM)
     }
 
     /// The entries in iced's number order, with their registers.

@@ -40,10 +40,22 @@ fn preprocess_and_dependency_jobs_pass_through_without_the_target_flag() {
 
 #[test]
 fn untranslated_features_are_refused_not_dropped() {
-    for flag in ["-fsanitize=address", "-fprofile-generate", "-flto", "-g", "-gdwarf-4"] {
+    for flag in ["-fsanitize=address", "-fprofile-generate", "-flto"] {
         assert!(parse(&words(&format!("{flag} x.c"))).is_err(), "{flag}");
     }
     assert!(parse(&words("-g0 x.c")).is_ok());
+}
+
+/// `-g` was refused ("debug info is not carried yet"), so no program could
+/// carry debug info: clang gets `-g`, the backend the flag that names the
+/// format.
+#[test]
+fn debug_flags_reach_clang_and_the_backend() {
+    let one = built("-gcodeview -c x.c");
+    assert!(one.clang.iter().any(|flag| flag == "-g"), "{:?}", one.clang);
+    assert!(one.clang.iter().any(|flag| flag == "-fexperimental-assignment-tracking=disabled"), "{:?}", one.clang);
+    assert_eq!(one.llc, words("-gcodeview"));
+    assert!(built("-g0 -c x.c").clang.iter().all(|flag| flag != "-g"));
 }
 
 #[test]
@@ -94,4 +106,76 @@ fn mabi_goes_to_the_backend_after_the_tables_own() {
     let args = llc_args(&table["x86_16-dos"], &one, Path::new("x.ll"), Path::new("x.obj"));
     let last = args.iter().rposition(|arg| arg.starts_with("-mabi=")).unwrap();
     assert_eq!(args[last], "-mabi=regparm3");
+}
+
+/// The Watcom front end's tests pass the backend's switches (`-march`,
+/// `-fno-inline-functions-called-once`, `-mcode-segment=`) with the source;
+/// clang took them all and the backend saw none, so a program built with them
+/// came out as without.
+#[test]
+fn the_backends_switches_reach_the_backend() {
+    let one =
+        built("-march=i486 -fno-inline-functions-called-once -fno-jump-tables -mcode-segment=X -fno-inline=f -c x.c");
+    assert_eq!(
+        one.llc,
+        words("-march=i486 -fno-inline-functions-called-once -fno-jump-tables -mcode-segment=X -fno-inline=f")
+    );
+    assert_eq!(one.clang, words("-march=i486"));
+}
+
+/// `--dump d` was taken for an input: "cannot specify -o with several
+/// inputs" and no stage written.
+#[test]
+fn dump_reaches_the_backend_with_its_directory() {
+    let one = built("--dump d -c x.c");
+    assert_eq!(one.llc, words("--dump d"));
+    assert_eq!(one.inputs.len(), 1);
+    assert_eq!(built("--dump=d -c x.c").llc, words("--dump=d"));
+}
+
+/// `huge_array.c` (flags `-m32`) failed at m32 with "expected ';' after top
+/// level declarator": the flat header emptied `near` and `far` but not `huge`.
+#[test]
+fn the_flat_header_empties_every_segment_keyword() {
+    let flat =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../toolchain/clang/flat.h")).unwrap();
+    for keyword in ["__near", "__far", "__huge", "near", "far", "huge"] {
+        assert!(flat.lines().any(|line| line.trim() == format!("#define {keyword}")), "{keyword}");
+    }
+}
+
+/// The tests that spawned llrm-c pass `-fobject-format=elf` and `-Omax`; clang
+/// refused both ("unknown argument", "invalid integral value 'max'").
+#[test]
+fn the_object_format_goes_to_the_backend_and_omax_is_clangs_o3() {
+    let one = built("-fobject-format=elf -Omax -c x.c");
+    assert_eq!(one.llc, words("-fobject-format=elf"));
+    assert_eq!(one.clang, words("-O3"));
+    assert_eq!(one.level, "max");
+}
+
+/// The m16 datalayout is stated in the target's `datalayout.toml` and again in
+/// every m16 row of the table, and clang's own (the fork's `I8086.h`). A row
+/// that drifted compiled with another `long double` layout than the backend
+/// laid out: clang refused `struct { char c; long double v; short s; }` with a
+/// static initializer ("cannot compile this static initializer yet") while the
+/// default `f80` was 128 bits.
+#[test]
+fn every_m16_row_states_the_targets_datalayout() {
+    let target: toml::Table =
+        include_str!("../../../target/llrm-x86-m16/src/machines/datalayout.toml").parse().unwrap();
+    let stated = target["datalayout"].as_str().unwrap();
+    let table = targets(TARGETS).unwrap();
+    for name in ["x86_16-dos", "x86_16-bcc", "x86_16-wat"] {
+        let row = table[name].datalayout.replace("-ni:2:3", "");
+        assert_eq!(row, stated, "{name}");
+    }
+    assert!(stated.contains("-f80:16-"), "{stated}");
+}
+
+/// `-Og` reached the backend as `-Og`, so the loops of o1_fill.rs stayed
+/// loops: clang's -Og is its -O1, which has LoopIdiomRecognize.
+#[test]
+fn og_reaches_the_backend_as_o1_like_clang() {
+    assert_eq!(built("-Og -c x.c").level, "1");
 }

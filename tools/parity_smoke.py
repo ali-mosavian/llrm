@@ -108,18 +108,27 @@ class Meter:
         self.value = total if seen else None
 
 
-def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, str]:
-    """(exit code, output) of `command`; (None, '') if it ran past `seconds` and its whole process group was killed. A cargo killed alone leaves its test binary
-    running unseen: the unit step read '0.0 s' for 1,143 tests that went on in the background."""
-    child = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+CUT_GRACE = 3.0  # seconds a cut group has to exit on SIGINT before SIGKILL
+
+
+def run_cut(command: list[str], seconds: float, cwd: Path, env: dict[str, str] | None = None) -> tuple[int | None, str]:
+    """(exit code, output) of `command`; (None, '') if it ran past `seconds` and its whole process group was stopped. A cargo killed alone leaves its test binary
+    running unseen: the unit step read '0.0 s' for 1,143 tests that went on in the background. The group gets SIGINT first, so the `perf stat` wrapped around the command
+    (see Meter) still writes the instructions it counted; SIGKILL took them to the grave and a cut step counted 0 G beside a finished one's 120 G."""
+    child = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
     try:
         out, _ = child.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:  # it ended between the timeout and the kill
-            pass
-        child.communicate()
+        for sig in (signal.SIGINT, signal.SIGKILL):
+            try:
+                os.killpg(child.pid, sig)
+            except ProcessLookupError:  # it ended between the timeout and the signal
+                break
+            try:
+                child.communicate(timeout=CUT_GRACE if sig == signal.SIGINT else None)
+                break
+            except subprocess.TimeoutExpired:
+                continue
         _charged[0] += seconds
         return None, ""
     return child.returncode, out
@@ -231,12 +240,12 @@ def docs_failures(root: Path = ROOT, run=None) -> dict[str, str]:
     """`ratchet:docs` -> the generated pages that are out of date (or the figure problem) on the tree in `root`; none when `docsbuild --check` is clean. A header change
     that landed without `docsbuild --sync` (jumps.rs) refused every docs-touching PR after it (#2757, #2763, #2857, #2836) with nothing naming the page."""
     run = run or (lambda command: subprocess.run(command, cwd=root, capture_output=True, text=True))
-    done = run([sys.executable, "tools/docsbuild/build.py", "--check"])
+    done = run([sys.executable, "tools/docs/docsbuild/build.py", "--check"])
     if not done.returncode:
         return {}
     lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
     pages = [line for line in lines if line.startswith("docs/")]
-    why = f"out of date: {', '.join(pages)}; run python3 tools/docsbuild/build.py --sync" if pages else " / ".join(lines[:2])
+    why = f"out of date: {', '.join(pages)}; run python3 tools/docs/docsbuild/build.py --sync" if pages else " / ".join(lines[:2])
     # one name per output line: docsbuild --check was red on the base with 23 lines, and a 24th hid behind the one `ratchet:docs`
     named = {f"ratchet:docs {line.replace(': ', ' - ').replace('; ', ' ')[:140]}": why[:300] for line in lines}
     return named or {"ratchet:docs": why[:300]}
@@ -278,7 +287,7 @@ def causes_of(names) -> str:
     return f" [{text}]" if text else ""
 
 
-def panic_reasons(output: str) -> dict[str, str]:
+def panic_reasons(output: str, more: int = 0) -> dict[str, str]:
     """Each test's first panic message from a `cargo test` output: `thread 'NAME' (id) panicked at FILE:L:C:` and the line after it, with a `left:`/`right:` pair appended. A refusal that
     names only the test sent its author to rerun the runner's command to see what failed (#4172's `debug_assert_eq!`, which fires in the debug profile the runner uses and not in release)."""
     found: dict[str, str] = {}
@@ -289,7 +298,13 @@ def panic_reasons(output: str) -> dict[str, str]:
         reason = lines[at + 1].strip()
         pair = [one.strip() for one in lines[at + 2 : at + 4] if re.match(r"\s*(left|right):", one)]
         short = m["name"].rsplit("::", 1)[-1]
-        found.setdefault(short, reason + (f" ({', '.join(pair)})" if pair else ""))
+        # `more` lines of the message that follow, up to a blank line or rustc's `note:`: docs_in_sync prints the stale pages' names there
+        extra = []
+        for one in lines[at + 2 : at + 2 + more]:
+            if not one.strip() or one.startswith("note:"):
+                break
+            extra.append(one.strip())
+        found.setdefault(short, reason + (f" ({', '.join(pair)})" if pair else "") + (f" [{'; '.join(extra)}]" if extra and not pair else ""))
         found.setdefault(m["name"], found[short])
     return found
 
@@ -601,10 +616,23 @@ SCANNERS = {
     "no_partial_ecx_counts": "scans the 32-bit runtime assembly",
     "selectiondag_registry": "reads the SD registry in the plan and every source's SD numbers",
     "no_local_paths": "scans docs",
+    "target_facts": "reads the target descriptions' facts",
     "no_todo": "scans sources",
     "tracked_build_products": "lists tracked files",
 }
 TOOL_COMPILERS = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")  # what tools/dosbatch and the run_tests scripts build programs with
+
+
+def with_common(
+    text: str,
+    root: Path = ROOT,
+) -> str:
+    """`text` of a target and, if it says `mod common;`, the text of tests/common/mod.rs and of each `common::NAME` submodule it names: what a target reaches through the helper."""
+    if not re.search(r"^\s*(?:pub\s+)?mod common;", text, re.M):
+        return text
+    common = root / "tests" / "common"
+    files = [common / "mod.rs", *(common / f"{name}.rs" for name in set(re.findall(r"\bcommon::(\w+)", text)))]
+    return "\n".join([text, *(one.read_text(errors="replace") for one in files if one.is_file())])
 
 
 def integration_map(
@@ -622,7 +650,7 @@ def integration_map(
     bins = {target["name"]: named(Path(target["src_path"]).read_text()) for one in metadata["packages"] if one["name"] == "llrm" for target in one["targets"] if target["kind"] == ["bin"]}
     out = {}
     for source in sorted((root / "tests").glob("*.rs")):
-        text = source.read_text(errors="replace")
+        text = with_common(source.read_text(errors="replace"), root)
         used = named(text)
         for name in set(re.findall(r"CARGO_BIN_EXE_([\w-]+)", text)):
             used |= {name} & bins.keys() and bins[name]
@@ -700,6 +728,11 @@ def integration_failures(
     if done.returncode and not found:
         found = {"integration-did-not-run"}
         CAUSES["integration-did-not-run"] = did_not_run_cause(done.stdout, done.returncode)
+    reasons = panic_reasons(done.stdout, more=8)
+    for one in found:
+        short = one.split("::", 1)[-1]
+        if short in reasons:
+            CAUSES[one] = reasons[short][:400]
     listed = xfail.load_for(root).keys()
     # a listed test that passes is as much a gate failure as an unlisted one that fails: its fix removes its entry
     passing = {f"xpass {one}" for one in test_outcomes(done.stdout, "ok") if one in listed}
@@ -762,7 +795,9 @@ def unit_step(package: str, allowance: float):
         ranking = selection().get("units", {})
         names = unit_tests(package, allowance, {k: [(n, s) for n, s in v.get("tests", [])] for k, v in ranking.items()})
         command = ["cargo", "test", "-q", "--lib", "-p", package] + (["--", "--exact", *names] if names else [])
-        code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT)
+        # an unranked crate runs its whole lib, cut by wall time: one test thread keeps that wall time the CPU it is charged (32 threads ran 32x the budget in it)
+        env = None if names else {**os.environ, "RUST_TEST_THREADS": "1"}
+        code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT, env=env)
         if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
         listed = xfail.load_for(ROOT)

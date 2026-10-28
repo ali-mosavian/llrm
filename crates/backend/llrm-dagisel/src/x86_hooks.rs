@@ -13,6 +13,11 @@
 //!   `isSExtAbsoluteSymbolRef` are `false`: tail calls, 64-bit zero-extension
 //!   and absolute symbols are not translated yet, and `false` only declines a
 //!   pattern. Owner sdag-c. Exit: C3. Review 2026-12-10.
+//! - **SD221** (m16) `shouldAvoidImmediateInstFormsForSize` does not count a
+//!   call argument's store as a use: it is a `push imm` at real mode, smaller
+//!   than the register that would hold the constant. The pin has no 16-bit
+//!   target to answer for. Owner w12. Exit: a 16-bit size model in the hook.
+//!   Review 2026-12-10.
 //! - **SD38** `isUnneededShiftMask` reads the mask only, not
 //!   `computeKnownBits`: the DAG API has no known-bits yet. Owner sdag-c. Exit:
 //!   when it has. Review 2026-12-10.
@@ -359,15 +364,14 @@ fn find_non_imm_use<D: AddrDag>(
     if dag.is_only_user_of(immediate_use, def) {
         return false;
     }
-    let mut visited = vec![immediate_use];
+    let mut visited = crate::dag::Visited::of(immediate_use);
     let mut worklist = Vec::new();
-    let seed = |node: u32, visited: &mut Vec<u32>, worklist: &mut Vec<u32>| {
+    let seed = |node: u32, visited: &mut crate::dag::Visited, worklist: &mut Vec<u32>| {
         for i in 0..dag.num_operands(node) {
             let op = dag.operand(node, i);
-            if (dag.value_type(op) == mvt::Other && ignore_chains) || op.node == def || visited.contains(&op.node) {
+            if (dag.value_type(op) == mvt::Other && ignore_chains) || op.node == def || !visited.insert(op.node) {
                 continue;
             }
-            visited.push(op.node);
             worklist.push(op.node);
         }
     };
@@ -546,6 +550,14 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         for (user, operand) in users {
             if use_count >= 2 {
                 break;
+            }
+            // DEVIATE SD221 (m16): the pin has no 16-bit target. A call
+            // argument stored at real mode becomes `push imm`, 2 to 3 bytes
+            // against the register's `push r` (1 or 2) and the `mov` that
+            // makes it, held across the calls in a register the function
+            // saves; the store is not a use that argues for the register.
+            if self.options.address_mode == AddrMode::Real16 && dag.is_call_argument_store(user) {
+                continue;
             }
             // A machine node, or a store of the value: counts.
             if dag.is_machine(user) || (dag.opcode(user) == isd::STORE && operand == 1) {

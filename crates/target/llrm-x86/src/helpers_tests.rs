@@ -306,6 +306,38 @@ fn the_divides_equal_the_hosts() {
     }
 }
 
+/// The signed divide by a dword divisor fixed the sign of both results for a
+/// caller that reads one (SD232): data_int64 pasted 87 bytes of routine for a
+/// quotient. A routine for the result read is shorter and gives that result as
+/// the host does.
+#[test]
+fn a_divide_read_for_one_result_is_shorter_and_that_result_is_right() {
+    for bits in [16, 32] {
+        let both = divide(true, false, bits).expect("assembles");
+        for (used, name) in [(Used::Quotient, "div64_s32q"), (Used::Remainder, "div64_s32r")] {
+            let routine = divide_used(true, false, bits, used).expect("assembles");
+            assert_eq!(routine.name, name);
+            assert!(
+                routine.code.len() + 6 <= both.code.len(),
+                "{name}: {} of {} bytes",
+                routine.code.len(),
+                both.code.len()
+            );
+            for &dividend in &values() {
+                for &divisor in values().iter().filter(|&&one| one != 0 && one >> 32 == 0) {
+                    let ((quotient, remainder), _) = divided(&routine, bits, dividend, divisor);
+                    let (a, b) = (dividend as i64, divisor as i64);
+                    let (got, want) = match used {
+                        Used::Quotient => (quotient, a.wrapping_div(b) as u64),
+                        _ => (remainder, a.wrapping_rem(b) as u64),
+                    };
+                    assert_eq!(got, want, "{name} {dividend:#x} / {divisor:#x} at {bits} bits");
+                }
+            }
+        }
+    }
+}
+
 /// A divide by a divisor of two dwords estimates the quotient with one `div`
 /// and corrects it: 144 instructions at the worst, where a round per bit of
 /// the quotient is some 600.

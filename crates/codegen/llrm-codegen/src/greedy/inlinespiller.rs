@@ -73,6 +73,29 @@ pub struct Tables {
     /// The registers whose one definition can be made again where they are
     /// read (`isTriviallyReMaterializable`).
     pub remat: RefCell<crate::support::hash::HashSet<u32>>,
+    /// The definition of each such register as the body had it: what a split
+    /// copy of the register leads back to (`scanRemattable`'s original value).
+    pub remat_roots: RefCell<HashMap<u32, Arc<Insn>>>,
+    /// The family each value of the body belongs to (a clone of a value is of
+    /// its family) and the wide reads (more than 2 bytes) of each family, by
+    /// (slot, block): a call loses a family member's high half only where a
+    /// wide read can follow (`CallMasks`). A value in no family is wide.
+    pub family: RefCell<HashMap<u32, u32>>,
+    pub wide_reads: RefCell<HashMap<u32, Vec<(crate::liveness::slotindex::SlotIndex, usize)>>>,
+}
+
+impl Tables {
+    /// `new` is a clone of `from`: of its family, if it has one.
+    pub fn derive_family(
+        &self,
+        new: u32,
+        from: u32,
+    ) {
+        let root = self.family.borrow().get(&from).copied();
+        if let Some(root) = root {
+            self.family.borrow_mut().insert(new, root);
+        }
+    }
 }
 
 // DEVIATE D-I: `isTriviallyReMaterializable` is answered by the spiller's own
@@ -113,8 +136,28 @@ pub fn remat_shape(one: &Insn) -> bool {
                     w.dests.as_slice(),
                     [Loc::Held(held)] if held.value == one.defines[0]
                 )
-                && w.sources.len() == 1
+                && (w.sources.len() == 1
+                    || (w.op == Operation::FloatLoad
+                        && w.sources.is_empty()
+                        && matches!(w.name.as_deref(), Some("fld1" | "fldz"))))
         })
+}
+
+/// The register a plain `mov` copies, when `one` is nothing else.
+fn plain_copy_source(one: &Insn) -> Option<u32> {
+    let w = one.what.as_ref()?;
+    match (w.op, w.name.as_deref(), w.dests.as_slice(), w.sources.as_slice()) {
+        (Operation::Move, Some("mov"), [Loc::Held(_)], [Loc::Held(from)])
+            if one.uses == [from.value]
+                && one.group.is_none()
+                && one.requires.is_empty()
+                && one.delivers.is_empty()
+                && one.clobbers.is_empty() =>
+        {
+            Some(from.value)
+        }
+        _ => None,
+    }
 }
 
 /// `InlineSpiller`.
@@ -291,7 +334,8 @@ impl<'a> InlineSpiller<'a> {
         reg: u32,
         vrai: &crate::liveness::calcspillweights::VirtRegAuxInfo<'_>,
     ) -> Option<Vec<u32>> {
-        if !self.tables.remat.borrow().contains(&reg) {
+        let own_remat = self.tables.remat.borrow().contains(&reg);
+        if !own_remat && !self.tables.remat.borrow().contains(&self.original) {
             return None;
         }
         let mut def: Option<InstrKey> = None;
@@ -303,21 +347,39 @@ impl<'a> InlineSpiller<'a> {
                 def = Some(operand.instr);
             }
         }
-        let def = Arc::clone(lis.instr(def?));
+        // The instruction that defines `reg`: what goes once it is made again.
+        let own = Arc::clone(lis.instr(def?));
+        let mut def = Arc::clone(&own);
+        if !own_remat {
+            // `scanRemattable` asks the original's value number at the def, so
+            // a split copy of a remattable value is remattable: the
+            // definition made again is the original's. Only a
+            // definition that reads no register, so nothing has to
+            // be available at the use.
+            // A piece the split made around the definition itself is defined by
+            // it already.
+            if !(remat_shape(&own) && own.uses.is_empty()) {
+                let root = Arc::clone(self.tables.remat_roots.borrow().get(&self.original)?);
+                if plain_copy_source(&own).is_none() || !root.uses.is_empty() {
+                    return None;
+                }
+                def = root;
+            }
+        }
         if !remat_shape(&def) || def.uses.contains(&reg) {
             return None;
         }
         let what = def.what.clone()?;
         let Loc::Held(defined) = what.dests[0] else { return None };
         let units: Vec<(usize, Vec<InstrKey>)> =
-            Self::units(lis, reg).into_iter().filter(|(_, members)| members != &[def.id()]).collect();
+            Self::units(lis, reg).into_iter().filter(|(_, members)| members != &[own.id()]).collect();
         for (_, members) in &units {
             let first = lis.indexes.get_instruction_index(members[0]);
-            if !vrai.all_uses_available_at(def.id(), &first, lis) {
+            if !def.uses.is_empty() && !vrai.all_uses_available_at(def.id(), &first, lis) {
                 return None;
             }
         }
-        let def_block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(def.id()));
+        let def_block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(own.id()));
         let mut made = Vec::new();
         for (block, members) in units {
             // The registers a copy's members write: a definition that reads one
@@ -415,6 +477,7 @@ impl<'a> InlineSpiller<'a> {
             self.tables.orders.borrow_mut().insert(value, order);
             let width = self.tables.widths.borrow().get(&reg).copied().unwrap_or(0);
             self.tables.widths.borrow_mut().insert(value, width);
+            self.tables.derive_family(value, reg);
             let bytes = self.tables.float_bytes.borrow().get(&reg).copied();
             if let Some(bytes) = bytes {
                 self.tables.float_bytes.borrow_mut().insert(value, bytes);
@@ -422,7 +485,13 @@ impl<'a> InlineSpiller<'a> {
             self.tables.remat.borrow_mut().insert(value);
             made.push(value);
         }
-        lis.remove_instr(def_block, def.id());
+        if own_remat {
+            lis.remove_instr(def_block, own.id());
+        } else {
+            // A copy reads a register whose range it was holding up:
+            // `eliminateDeadDefs` cuts it back (`spill` calls it).
+            self.dead.push(own.id());
+        }
         Some(made)
     }
 
@@ -575,6 +644,7 @@ impl<'a> InlineSpiller<'a> {
         }
         self.tables.orders.borrow_mut().insert(new, order);
         self.tables.widths.borrow_mut().insert(new, width);
+        self.tables.derive_family(new, reg);
         NATIVE_UNITS.with(|one| one.set(one.get() + 1));
         Some(vec![new])
     }
@@ -1374,6 +1444,7 @@ impl Spiller for InlineSpiller<'_> {
                 lis.insert_interval(li);
                 new_vregs.push(value);
             }
+            self.eliminate_dead_defs(lis, matrix, shrunk);
             edit.erase_virt_reg(lis, reg);
             self.recomputed(lis, &new_vregs[first_new..]);
             return;

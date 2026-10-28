@@ -702,7 +702,7 @@ pub fn value_id(
             K::Zero => 2,
             K::Bytes(_) => 3,
             K::Int(_) => 5,
-            K::Float(_) => 7,
+            K::Float(_) | K::Float80(_) => 7,
             K::Null => 9,
             K::Aggregate(_) => match cx.context.types.get(cx.context.get(id).ty) {
                 MirType::Array { .. } => 11,
@@ -770,6 +770,14 @@ fn llvm_opcode(
         O::Alloca { .. } => 32,
         O::Load { .. } => 33,
         O::Store { .. } => 34,
+        // A load or store atomic is the load or store opcode in LLVM.
+        O::Atomic(info) => match info.kind {
+            llrm_mir::opcode::AtomicKind::Load => 33,
+            llrm_mir::opcode::AtomicKind::Store => 34,
+            llrm_mir::opcode::AtomicKind::Fence => 36,
+            llrm_mir::opcode::AtomicKind::CmpXchg { .. } => 37,
+            llrm_mir::opcode::AtomicKind::Rmw(_) => 38,
+        },
         O::GetElementPtr { .. } => 35,
         O::Cast(op) => match op {
             C::Trunc => 39,

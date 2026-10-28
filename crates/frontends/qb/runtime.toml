@@ -14,6 +14,12 @@
 # pointer argument past its return; it needs the source to show it.
 #
 # `cleanup = -1` is "not known", which is not the same as zero.
+#
+# For `llrm-qb` a row changes a listing only through `captures = "NONE"` (a
+# pointer argument the routine keeps no copy of) or `raises_error = false`
+# (the call is nounwind): any routine without a row already writes only
+# runtime cells when the program handles no errors. Rows for B$PECY, B$PSR8,
+# B$PCR8, B$PSR4 and B$PEOS were measured to leave the listing identical.
 
 ["B$HARY"]
 cleanup = -1
@@ -72,9 +78,25 @@ evidence = '''
 rt/rtterm.asm: `cProc B$CEND,<PUBLIC,FAR,FORCEFRAME>`, no parameters, `Exceptions: Does not return.` -- END and SYSTEM. It zeroes b$errnum and branches to the END executor, closing files and terminating the runtime.
 '''
 
+["B$CENC"]
+cleanup = 2
+control = "never"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = true
+inputs = []
+evidence = '''
+rt/rtterm.asm (PDS 7.1 BCL71ENR.LIB module rtterm, disassembled): B$CENC is `push bp; mov bp,sp; mov ax,[bp+6]; mov b$ExitCode,al` and falls into B$CEND's body, so it takes one word (the exit code, low byte used) and never returns. BC 7.1 and VBDOS emit `mov ax,n; push ax; call far B$CENC` for `END n` and `SYSTEM n`; QB 4.5 BC rejects `END 3` as a syntax error.
+'''
+
 ["B$CENP"]
 cleanup = 0
 control = "never"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = false
@@ -198,6 +220,7 @@ rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descrip
 ["B$EVCK"]
 cleanup = 0
 control = "unknown"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = false
@@ -512,6 +535,7 @@ rt/helpi4.asm: `B$MUI4(I4 op1,I4 op2)`, `Uses: ax,cx,dx,bx`, `Exceptions: none`,
 ["B$OEGA"]
 cleanup = 4
 control = "unknown"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = true
@@ -683,10 +707,12 @@ error_handling = false
 writes = "OWN"
 reads = "OWN"
 clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+captures = "NONE"
 established = true
 inputs = []
 evidence = '''
 rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the [b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` names no preserved register. Exceptions: out of DATA, syntax error, overflow.
+Audit of what it keeps (`captures = "NONE"`): CommRead takes pDest as a stack parameter and uses it once, in the REP MOVSW that stores the value (GETPTR ,ES,DI,pDest); it is stored nowhere else. The numeric routines only set b$VTYP and jump in.
 '''
 
 ["B$RDI4"]
@@ -698,10 +724,12 @@ error_handling = false
 writes = "OWN"
 reads = "OWN"
 clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+captures = "NONE"
 established = true
 inputs = []
 evidence = '''
 rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the [b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` names no preserved register. Exceptions: out of DATA, syntax error, overflow.
+Audit of what it keeps (`captures = "NONE"`): CommRead takes pDest as a stack parameter and uses it once, in the REP MOVSW that stores the value (GETPTR ,ES,DI,pDest); it is stored nowhere else. The numeric routines only set b$VTYP and jump in.
 '''
 
 ["B$RDR4"]
@@ -713,15 +741,35 @@ error_handling = false
 writes = "OWN"
 reads = "OWN"
 clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+captures = "NONE"
 established = true
 inputs = []
 evidence = '''
 rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the [b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` names no preserved register. Exceptions: out of DATA, syntax error, overflow.
+Audit of what it keeps (`captures = "NONE"`): CommRead takes pDest as a stack parameter and uses it once, in the REP MOVSW that stores the value (GETPTR ,ES,DI,pDest); it is stored nowhere else. The numeric routines only set b$VTYP and jump in.
+'''
+
+["B$RDR8"]
+cleanup = 4
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+captures = "NONE"
+established = true
+inputs = []
+evidence = '''
+rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the [b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` names no preserved register. Exceptions: out of DATA, syntax error, overflow.
+Audit of what it keeps (`captures = "NONE"`): CommRead takes pDest as a stack parameter and uses it once, in the REP MOVSW that stores the value (GETPTR ,ES,DI,pDest); it is stored nowhere else. The numeric routines only set b$VTYP and jump in.
 '''
 
 ["B$RESN"]
 cleanup = 0
 control = "never"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = true
@@ -1119,6 +1167,375 @@ parameters = ["int"]
 view = { length = "1", data = "slot($0)" }
 check = { when = "$0 < 0 or 255 < $0", raise = 5 }
 
+# Normal-return stack cleanup read directly from the matching entry in all
+# three shipped Microsoft runtimes.  This is deliberately only a stack ABI
+# table: memory, clobber, allocation, error and alias effects remain those of
+# the conservative runtime contract.  BCOM45/BCL71ENR/VBDCL10E hashes are
+# 5b1c7a6f..., 873fde67..., and 59ad49b0...; tools/libdump.py records the
+# member, entry offset and RETF for every row.  SCAT is family-specific (the
+# VBDOS far-string entry consumes an extra word), so it is not generalized.
+[pops.string]
+"B$ASSN" = 12
+"B$FASC" = 2
+"B$FCHR" = 2
+"B$FCVC" = 2
+"B$FCVD" = 2
+"B$FCVI" = 2
+"B$FCVL" = 2
+"B$FCVS" = 2
+"B$FHEX" = 4
+"B$FLEN" = 2
+"B$FMID" = 6
+"B$FMKC" = 8
+"B$FMKD" = 8
+"B$FMKI" = 2
+"B$FMKL" = 4
+"B$FMKS" = 4
+"B$FMDF" = 8
+"B$FMSF" = 4
+"B$FOCT" = 4
+"B$INS2" = 4
+"B$INS3" = 6
+"B$LCAS" = 2
+"B$LDFS" = 6
+"B$LEFT" = 4
+"B$LTRM" = 2
+"B$MCVD" = 2
+"B$MCVS" = 2
+"B$RGHT" = 4
+"B$RTRM" = 2
+"B$SASS" = 4
+"B$SCMP" = 4
+"B$SCPY" = 2
+"B$SPAC" = 2
+"B$STRI" = 4
+"B$STRS" = 4
+"B$UCAS" = 2
+
+# Stack widths read from actual QB 4.5 /A listings for the graphics forms,
+# then checked against their runtime RETF cleanup. Coordinate state is latched
+# by N1/N2 before the drawing call; it is deliberately not hidden in MIR.
+[pops.graphics]
+"B$PAL2" = 6
+# gwpal.asm: parmD fpData, parmW pAd.
+"B$PALU" = 6
+"B$N1I2" = 4
+"B$N2I2" = 4
+"B$N1R4" = 8
+"B$N2R4" = 8
+"B$S1I2" = 4
+"B$S2I2" = 4
+"B$S1R4" = 8
+"B$S2R4" = 8
+"B$CSTT" = 4
+"B$CSTO" = 4
+"B$CASP" = 4
+# circle.asm: parmD Radius, parmW Color.
+"B$CIRC" = 6
+"B$LINE" = 6
+"B$PAIN" = 4
+# paint.asm: parmSD sdTile, parmW Border, parmSD sdBkgd (-1 for none).
+"B$PNTC" = 6
+"B$PSTC" = 2
+# grpoint.asm: `void pascal B$PSET()` and B$PRST, no parameters.
+"B$PSET" = 0
+"B$PRST" = 0
+"B$PNI2" = 4
+"B$PNR4" = 8
+"B$GGET" = 6
+"B$GPUT" = 8
+# grview.asm: seven Pascal words; `void pascal B$VEW0()`.
+"B$VIEW" = 14
+"B$VEW0" = 0
+# grwindow.asm: four R4 and a word; `void pascal B$WIN0()`.
+"B$WIND" = 18
+"B$WIN0" = 0
+"B$FTAB" = 2
+
+
+[pops.statement]
+"B$BEEP" = 0
+"B$LNIN" = 10
+# `void B$LPRT(void)` and `void B$WRIT(void)`: QB45 rt/iolpt.asm and
+# rt/prnval.asm, FAR, no arguments.
+"B$LPRT" = 0
+"B$WRIT" = 0
+# Path descriptor, channel, record length -1 and mode; BCOM45
+# dkopen.asm B$OPEN at 0224 returns with RETF 8 at 0252.
+"B$OPEN" = 8
+"B$SLEP" = 4
+# Measured in BC output (QB 4.5, PDS 7.1, VBDOS): `call far B$STOP`
+# and `call far B$REST`, nothing pushed.
+"B$STOP" = 0
+"B$REST" = 0
+# QB45 rt/dkstmt.asm B$FILS(parmW fname): the pattern's descriptor.
+"B$FILS" = 2
+# QB45 rt/osstmt.asm B$SSHL(parmSD sdExec): the command's descriptor.
+"B$SSHL" = 2
+# QB45 rt/dvstmt.asm B$FATR(parmW channel, parmW fieldid).
+"B$FATR" = 4
+# QB45 rt/osstmt.asm B$SENV(parmSD sdEnviron).
+"B$SENV" = 2
+# QB45 rt/dkstmt.asm B$KILL(parmSD fname), B$NAME(parmSD oldname,
+# parmSD newname); rt/directry.asm `pascal far B$MDIR(psdDirectory)`,
+# B$CDIR and B$RDIR alike.
+"B$KILL" = 2
+"B$NAME" = 4
+"B$MDIR" = 2
+"B$CDIR" = 2
+"B$RDIR" = 2
+# QB45 rt/rlset.asm: parmW psdSource, parmD psdDest, parmW cbDest.
+"B$LSET" = 8
+"B$RSET" = 8
+"B$SOND" = 6
+"B$DRAW" = 2
+"B$VARP" = 4
+"B$SADD" = 2
+# PDS 7.1 BCL71ENR.LIB stcommon.asm at 0035: `push bp / mov bp,sp / mov bx,[bp+6] / mov ax,ds`, one near
+# descriptor word, the tail `pop bp / retf 2`; the segment comes back in ax.
+"B$SSEG" = 2
+"B$SDAT" = 2
+"B$STIM" = 2
+"B$FDAT" = 0
+"B$FTIM" = 0
+
+# Fixed stack blocks read from the runtime source: a call of any of `names` that pushes `bytes` bytes pops them.
+# `evidence` is appended to the routine's measured evidence; `{name}` stands for the routine.
+
+[[pop]]
+names = ["B$SMID"]
+bytes = 12
+evidence = '''
+QB45 rt/mid.asm declares one dword and four word parameters; cEnd returns past all 12 bytes. VBDOS listings use the same stack shape. Other effects remain conservative.
+'''
+
+[[pop]]
+names = ["B$GET3", "B$PUT3"]
+bytes = 8
+evidence = '''
+QB45 rt/dvstmt.asm declares Channel word, RecPtr dword, and RecLen word; B$GET3 cEnd returns past all 8 bytes and B$PUT3 joins that epilogue. Other effects stay conservative.
+'''
+
+[[pop]]
+names = ["B$FEOF", "B$DSKI"]
+bytes = 2
+evidence = '''
+QB45 rt/dvstmt.asm B$FEOF (0073..009a) and rt/inpdsk.asm B$DSKI (0016..0060) read the one file-number word at [BP+6] and return with RETF 2. Device and error effects remain conservative.
+'''
+
+[[pop]]
+names = ["B$FRI2"]
+bytes = 2
+evidence = '''
+stfree.asm FRE selectors join POP SI/BP / RETF 2 after reading the one selector word. Heap compaction and error effects remain conservative.
+'''
+
+[[pop]]
+names = ["B$FCMD"]
+bytes = 0
+evidence = '''
+COMMAND$ takes no argument: each shipped library's B$FCMD returns with nothing popped and its answer in AX.
+'''
+
+[[pop]]
+names = ["B$GET4", "B$PUT4"]
+bytes = 12
+evidence = '''
+QB45 rt/dvstmt.asm declares Channel word, RecNum dword, RecPtr dword, and RecLen word; both entry points return past all 12 bytes.
+'''
+
+[[pop]]
+names = ["B$SSEK"]
+bytes = 6
+evidence = '''
+QB45 rt/dkio.asm declares FileNum word and RecNum dword; B$SSEK is a far Pascal entry returning past all 6 bytes.
+'''
+
+[[pop]]
+names = ["B$STRI", "B$STRS"]
+bytes = 4
+evidence = '''
+QB45 rt/strfcn.asm declares two word parameters for {name}; the far Pascal entry returns past all 4 bytes.
+'''
+
+[[pop]]
+names = ["B$FLEN"]
+bytes = 2
+evidence = '''
+Typed LEN supplies one descriptor word. BCOM45 strfcn.asm B$FLEN 000f..001c, BCL71ENR stcommon.asm 0050..005d, and VBDCL10E stcore.asm 02b9..02f9 each end RETF 2. Heap, alias and error effects remain conservative.
+'''
+
+[[pop]]
+names = ["B$SPAC"]
+bytes = 2
+evidence = '''
+Typed SPACE$ supplies the word count seen at [BP+6]; VBDOS D_SURF.OBJ 2d1c..2d24 shows that one pushed word, and farstr strfcn.asm's Pascal entry returns past 2 bytes. Allocation, alias and error effects remain conservative.
+'''
+
+[[pop]]
+names = ["B$FINP"]
+bytes = 4
+evidence = '''
+QB45 rt/inputf.asm `cProc B$FINP,<PUBLIC,FAR>` with ParmW cbInp and ParmW Channel, so cEnd returns past 4 bytes. Allocation, file and error effects remain conservative.
+'''
+
+[[pop]]
+names = ["B$FEVS", "B$FEVI"]
+bytes = 2
+evidence = '''
+QB45 rt/osstmt.asm declares one word descriptor or integer parameter for {name}; the far Pascal entry returns past 2 bytes.
+'''
+
+[[pop]]
+names = ["B$INPP"]
+bytes = 6
+evidence = '''
+QB45 runtime/rt/inptty.asm declares one near prompt descriptor and one far input-table pointer; its cProc frame reads the six-byte argument block at [BP+6]..[BP+0A]. PDS and VBDOS retain the same documented entry, confirmed by the measured VBDOS INP*.OBJ sites.
+'''
+
+[[pop]]
+names = ["B$LBND", "B$UBND"]
+bytes = 4
+evidence = '''
+QB45 rt/dynamic.asm declares pAd and iDim as two word Pascal parameters for {name}; the shared cEnd removes exactly four bytes. Bounds errors and descriptor effects remain conservative.
+'''
+
+[[pop]]
+names = ["B$RDSD"]
+bytes = 6
+evidence = '''
+QB45 rt/read.asm AssignStr consumes a far destination pointer plus a word fixed-string length; shared return removes 6 bytes.
+'''
+
+[[pop]]
+names = ["B$FDR1"]
+bytes = 2
+evidence = '''
+The typed DIR$ source form selects the FDR1 find-first entry and supplies its one descriptor word; VBDCL10E rt/dkdir.asm's saved nonzero mode selects the shared RETF 2 exit. Filesystem, heap, alias and error effects remain conservative.
+'''
+
+[[pop]]
+names = ["B$DSG0"]
+bytes = 0
+evidence = '''
+QB45, PDS71 and VBDOS rtinit.asm B$DSG0 store DS into the runtime DEF SEG word and immediately RETF; the typed bare DEF SEG form has no stack arguments.
+'''
+
+[[pop]]
+names = ["B$FERR", "B$FERL"]
+bytes = 0
+evidence = '''
+Typed ERR/ERL has no arguments; rt/error.asm returns directly after loading the saved value.
+'''
+
+[[pop]]
+names = ["B$FREF"]
+bytes = 0
+evidence = '''
+QB45 rt/dvstmt.asm declares `int pascal B$FREF(void)` and its cProc has no parameters; the measured PDS71 PDLOCAL.OBJ call likewise has no preceding argument push.
+'''
+
+[[pop]]
+names = ["B$FRSD"]
+bytes = 2
+evidence = '''
+QB45, PDS71 and VBDOS stfree.asm B$FRSD read the descriptor word at [BP+6] and join a RETF 2 epilogue; the FRE("") VBDOS probe pushes the canonical null descriptor. Heap and error effects remain conservative.
+'''
+
+[[pop]]
+names = ["B$RNZP"]
+bytes = 8
+evidence = '''
+VBDCL10E.LIB random.asm B$RNZP at 0079 reads its R8 seed at [BP+0Ah] and returns with RETF 8; MAIN.OBJ 07fe..080c pushes the high and low dwords before the call.
+'''
+
+[[pop]]
+names = ["B$PMAP"]
+bytes = 6
+evidence = '''
+QB45 grpmap.asm B$PMAP(parmD expr, parmW funct) returns the address of its R4 result in AX with RETF 6; BC pushes the dword, then the word.
+'''
+
+[[pop]]
+names = ["B$RND0"]
+bytes = 0
+evidence = '''
+QB45 random.asm declares B$RND0 with no parameters and returns its result address in AX with a bare RETF.
+'''
+
+[[pop]]
+names = ["B$RND1"]
+bytes = 4
+evidence = '''
+VBDCL10E.LIB random.asm B$RND1 reads its R4 selector at [BP+6]/[BP+8], returns its result address in AX, and exits with RETF 4; RND.OBJ shows the matching dword push.
+'''
+
+[[pop]]
+names = ["B$RSTB"]
+bytes = 2
+evidence = '''
+VBDOS REST.OBJ moves the labeled DATA key to AX, pushes it, and calls B$RSTB with one word.
+'''
+
+[[pop]]
+names = ["B$SCLS"]
+bytes = 2
+evidence = '''
+QB45 rt/gwscr.asm declares B$SCLS with one ScnNum word; its Pascal far entry consumes that selector. VBDOS uses the same typed runtime entry.
+'''
+
+[[pop]]
+names = ["B$WIDT"]
+bytes = 4
+evidence = '''
+QB45 runtime/rt/iotty.asm declares width and height as two Pascal words; the typed source site supplies exactly those four bytes.
+'''
+
+[[pop]]
+names = ["B$VWPT"]
+bytes = 4
+evidence = '''
+QB45 runtime/rt/grview.asm declares TopLine and BotLine as two Pascal words; VBDOS VIEWP.OBJ independently confirms that call shape.
+'''
+
+[[pop]]
+names = ["B$SPLY"]
+bytes = 2
+evidence = '''
+QB45 runtime/rt/gwplays.asm declares one near string descriptor; VBDOS PLAY.OBJ independently confirms that call shape.
+'''
+
+[[pop]]
+names = ["B$INKY"]
+bytes = 0
+evidence = '''
+QB45 rt/stinkey.asm declares sd* pascal B$INKY(void); its far entry returns the descriptor in AX with no parameters.
+'''
+
+[[pop]]
+names = ["B$USNG"]
+bytes = 2
+evidence = '''
+QB45 runtime/rt/prtu.asm declares one near format descriptor; VBDOS PRTUSING.OBJ independently confirms that call shape.
+'''
+
+# Which routines write a runtime cell a program names by EXTDEF, where the
+# runtime source settles it. A call to anything else leaves the cell alone,
+# unless it runs the program's own code -- which `enters_user_code` and an
+# error handler say, and the caller asks.
+#
+# b$seg, QuickBASIC 4.5: rt/rtinit.asm writes it three times and nothing else
+# does. B$DSG0 `MOV [b$seg],DS` and B$DSEG `MOV [b$seg],AX`; B$RTCLR
+# `MOV b$seg,DS`, reached through b$clr_disp from clear.asm's B$SCLR (whose
+# CLR_RUN B$RUNL and B$StackReset jump to) and through b$run_disp's
+# B$RTRUNINI from B$IINIT, B$Init and B$RUNINI. abs.asm, peek.asm and
+# bload.asm only read it, and no reference takes its address. ABSOLUTE runs
+# machine code of the program's choosing.
+[[writers]]
+cell = "b$seg"
+family = "qb45"
+routines = ["B$DSEG", "B$DSG0", "B$SCLR", "B$RUNL", "B$StackReset", "B$Init", "B$IINIT", "B$RUNINI", "ABSOLUTE"]
+
 # llrm's runtime takes its calls as the target's own convention states them, except these routines, whose
 # stack block is the call site's own length (the bounds of every dimension, the channels closed): a register
 # convention cannot name that, so they keep BASIC's pushes and are popped by the callee.
@@ -1248,6 +1665,7 @@ evidence = "runtime/qb/events.c: PEN(n) of a machine with no joystick or light p
 ["B$SCMP"]
 cleanup = 4
 control = "returns"
+flags_result = true
 enters_user_code = false
 raises_error = false
 error_handling = false
@@ -1258,4 +1676,102 @@ established = true
 inputs = ["ax", "bx", "cx", "dx", "si", "di"]
 evidence = '''
 rt/stcore.asm `cProc SCMP,<FAR>,<ES,SI,DI>` with `parmW psdL` and `parmW psdR`, so RETF 4 and es, si and di come back. It sets ES=DS, compares the shorter length with REPE CMPSB, saves the flags with PUSHF and frees each operand as a temporary only, which raises nothing; no error comes out of it, so a string comparison under ON ERROR is a plain call. The result is the flags (flags_result).
+'''
+
+["B$BSAV"]
+cleanup = 6
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/bload.asm: `cProc B$BSAV,<PUBLIC,FAR>` with three ParmW (pFileName, Offs, third), so it returns with `ret 6`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$BLOD"]
+cleanup = 6
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/bload.asm: `cProc B$BLOD,<PUBLIC,FAR>` with three ParmW (pFileName, Offs, third), so it returns with `ret 6`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$SCLR"]
+cleanup = 4
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/clear.asm: `cProc B$SCLR,<FAR,PUBLIC>` with parmW stack and parmW fStack, so it returns with `ret 4`. It zeroes the program's data segment, closes the files, starts the heaps afresh and may move the stack, so every register and every byte of memory is conceded, as is a callback into the program.
+'''
+
+["B$SCHN"]
+cleanup = 2
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+BC 4.50 on `CHAIN "NEXT"`: `mov ax,<descriptor> / push ax / call far B$SCHN`, then B$CENP; BCOM45.LIB osrun.asm B$SCHN opens with `push bp / mov bp,sp / mov bx,[bp+6]`, one word. Only the cleanup is claimed: it loads and runs another program, so every register and every byte of memory is conceded.
+'''
+
+["B$DTSR"]
+cleanup = 6
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+VBDCL10E.LIB evalfn.asm defines B$DTSR. VBDOS BC on `d = DATESERIAL(1992, 2, 29)`: three `mov ax,<word> / push ax`, `call far B$DTSR`, then `mov si,ax` and four MOVSW copy the R8 AX points to into the variable, with nothing popped after the call, so the callee pops its three words (ret 6). Only the cleanup is claimed: the body was not read, so every register and every byte of memory is conceded.
+'''
+
+["B$FLDP"]
+cleanup = 2
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/field.asm: `cProc B$FLDP,<PUBLIC,FAR>,<SI>` with one ParmW (Channel), so it returns with `ret 2`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$FIEL"]
+cleanup = 4
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/field.asm: `cProc B$FIEL,<PUBLIC,FAR>,<SI>` with two ParmW (Wid, psdStringVar), so it returns with `ret 4`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
 '''

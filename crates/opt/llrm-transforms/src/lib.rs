@@ -93,6 +93,9 @@ pub mod canonical;
 pub mod cfg;
 pub mod cgpaddr;
 pub mod cgpbranch;
+pub mod cgpmemalign;
+#[cfg(test)]
+mod cgpmemalign_tests;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
@@ -102,8 +105,10 @@ pub mod combine_add_idioms;
 pub mod combine_addsub;
 pub mod combine_and;
 pub mod combine_and_select;
+pub mod combine_bitorder;
 pub mod combine_branch;
 pub mod combine_build;
+pub mod combine_castcall;
 pub mod combine_casts;
 #[cfg(test)]
 mod combine_casts_tests;
@@ -120,6 +125,7 @@ pub mod combine_gep;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
+pub mod combine_icmp_binop;
 pub mod combine_icmp_const;
 pub mod combine_icmp_logic;
 pub mod combine_loadstore;
@@ -172,6 +178,7 @@ pub mod decide;
 pub mod dfajumpthreading;
 #[cfg(test)]
 mod dfajumpthreading_tests;
+pub mod divrempairs;
 pub mod earlycse;
 pub mod edges;
 pub mod emptyblocks;
@@ -180,6 +187,7 @@ pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
+pub mod expansion;
 pub mod extload;
 pub mod extpromotion;
 pub mod fixednarrow;
@@ -202,6 +210,8 @@ pub mod hoistcommon;
 pub mod homes;
 pub mod icmpchain;
 pub mod indvars;
+pub mod inferalignment;
+pub mod inferfunctionattrs;
 pub mod inferspace;
 #[cfg(test)]
 mod inferspace_tests;
@@ -249,6 +259,7 @@ pub mod loopunrollandjam;
 pub mod loopunrollpass;
 pub mod loopunrollruntime;
 pub mod loopversioning;
+pub mod lowerconstantintrinsics;
 pub mod lowerexpect;
 pub mod lsr_chain;
 pub mod lsr_collect;
@@ -273,7 +284,11 @@ mod lsr_use_tests;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
+pub mod memsetpattern;
+#[cfg(test)]
+mod memsetpattern_tests;
 pub mod mergestores;
+pub mod mldstmotion;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;

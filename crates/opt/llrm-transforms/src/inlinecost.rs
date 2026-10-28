@@ -77,8 +77,9 @@
 //!   simplified again with the call inlined, is smaller by the target's size
 //!   cost (`walk.rs`, callers of at most 300 instructions; the sites of a
 //!   private callee that dies with its last call are tried together, its body
-//!   credited). The pin's cost does not follow a load through a pointer
-//!   argument, so it never sees the loop or the arithmetic fold.
+//!   credited; so are the sites of a private callee called only from this
+//!   caller, whatever they pass). The pin's cost does not follow a load through
+//!   a pointer argument, so it never sees the loop or the arithmetic fold.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -117,7 +118,7 @@ use llrm_mir::context::{ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{Attribute, BinaryOp, CallInfo, CastOp, FloatPredicate, IntPredicate, Opcode};
+use llrm_mir::opcode::{AtomicKind, Attribute, BinaryOp, CallInfo, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::tti::{CastKind, CostKind, Ty};
 use llrm_mir::types::{FloatKind, Type};
 use llrm_support::hash::HashMap;
@@ -959,6 +960,13 @@ impl<'a> Analyzer<'a> {
             Opcode::FNeg => self.visit_fneg(inst),
             Opcode::Load { volatile, .. } => self.visit_load(inst, *volatile),
             Opcode::Store { volatile, .. } => self.visit_store(inst, *volatile),
+            // `LoadInst` and `StoreInst` that are not simple,
+            // then `visitInstruction`.
+            Opcode::Atomic(info) => match info.kind {
+                AtomicKind::Load => self.visit_load(inst, true),
+                AtomicKind::Store => self.visit_store(inst, true),
+                _ => self.visit_default(inst),
+            },
             Opcode::ExtractValue(_) | Opcode::InsertValue(_) => self.visit_aggregate(inst),
             Opcode::Call(_) | Opcode::Invoke(_) => self.visit_call(inst),
             Opcode::Ret => {
@@ -1576,14 +1584,12 @@ impl<'a> Analyzer<'a> {
                 _ => None,
             })
             .collect();
-        let (clusters, table) = if self.params.tti == Tti::Generic {
-            (cases.len() as u64, 0)
-        } else {
-            llrm_mir::tti::basic_case_clusters(
-                &cases,
-                self.site.layout.pointer(0).bits,
-                self.site.caller_size != CallerSize::Speed,
-            )
+        let for_size = self.site.caller_size != CallerSize::Speed;
+        let index_bits = self.site.layout.pointer(0).bits;
+        let (clusters, table) = match self.site.tti {
+            Some(tti) => tti.estimated_number_of_case_clusters(&cases, index_bits, for_size),
+            None if self.params.tti == Tti::Generic => (cases.len() as u64, 0),
+            None => llrm_mir::tti::basic_case_clusters(&cases, index_bits, for_size),
         };
         let default_unreachable = match operation.operands[1] {
             Operand::Block(default) => self
@@ -2549,7 +2555,8 @@ pub fn sites(
 }
 
 /// `sites`, and the sites the target's -Os bound alone refused whose call
-/// passes a constant or a stack slot (SZ2): `trials`
+/// passes a constant or a stack slot, or whose private callee has no call but
+/// these (SZ2): `trials`
 /// takes their copies, for the walk to try inlined against not.
 #[allow(clippy::too_many_arguments)]
 pub fn sites_with_trials(
@@ -2570,13 +2577,31 @@ pub fn sites_with_trials(
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
     let context = DecideContext { counts, addressed, recursive, params, size, always_only, tti };
     let frequencies = caller_frequencies(module, layout, caller);
+    // The calls to each callee here: a private callee all of whose calls are
+    // here goes with the last one inlined.
+    let mut here: llrm_support::hash::IndexMap<GlobalId, i64> = Default::default();
+    if trials.is_some() {
+        for (_, inst) in caller.walk() {
+            if let Some(callee) = llrm_mir::memory::callee(&module.context, caller, inst) {
+                *here.entry(callee).or_default() += 1;
+            }
+        }
+    }
+    let goes = |callee: GlobalId| {
+        local_linkage(module.global(callee).linkage)
+            && !addressed.contains(&callee)
+            && counts.get(&callee).is_some_and(|all| here.get(&callee) == Some(all))
+    };
     for (_, inst) in caller.walk() {
         let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies) else { continue };
         if let Some(decided) = decided.as_deref_mut() {
             decided.push((inst, decision.callee, decision.cost.clone()));
         }
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
-        if !decision.inline && !(blocked && trials.is_some() && worth_a_trial(module, caller, inst, decision.callee)) {
+        let worth = blocked
+            && trials.is_some()
+            && (goes(decision.callee) || worth_a_trial(module, caller, inst, decision.callee));
+        if !decision.inline && !worth {
             continue;
         }
         let GlobalKind::Function(callee) = &module.global(decision.callee).kind else { continue };
@@ -2591,6 +2616,9 @@ pub fn sites_with_trials(
             body: std::rc::Rc::new((**callee).clone()),
             frame: crate::inline::grown(&module.context, layout, callee),
             moved: false,
+            last_call: local_linkage(module.global(decision.callee).linkage)
+                && !addressed.contains(&decision.callee)
+                && counts.get(&decision.callee) == Some(&1),
             callee: Some(decision.callee),
             self_sites: own.len(),
             self_calls: (!own.is_empty()).then(|| {

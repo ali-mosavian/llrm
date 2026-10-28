@@ -288,7 +288,7 @@ impl LirBody {
                         }
                         notes.extend(one.debug.before.iter().copied());
                         notes.sort_unstable();
-                        Arc::new(Insn { debug: DebugTags { before: notes, ..one.debug.clone() }, ..(**one).clone() })
+                        one.retagged(DebugTags { before: notes, ..one.debug.clone() })
                     })
                     .collect();
                 block.with_insns(insns)
@@ -360,7 +360,7 @@ impl LirBody {
                         defines.extend(tags);
                         defines.sort_unstable();
                         defines.dedup();
-                        Arc::new(Insn { debug: DebugTags { defines, ..one.debug.clone() }, ..(**one).clone() })
+                        one.retagged(DebugTags { defines, ..one.debug.clone() })
                     })
                     .collect();
                 block.with_insns(insns)
@@ -395,10 +395,7 @@ impl LirBody {
                                     .is_some_and(|what| what.op == crate::model::ir::Operation::Move)
                                 && one.uses.len() == 1 =>
                         {
-                            Arc::new(Insn {
-                                debug: DebugTags { defines: vec![*value], ..one.debug.clone() },
-                                ..(**one).clone()
-                            })
+                            one.retagged(DebugTags { defines: vec![*value], ..one.debug.clone() })
                         }
                         _ => Arc::clone(one),
                     })
@@ -565,6 +562,20 @@ impl Insn {
     pub fn id(&self) -> u64 {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         *self.ident.get_or_init(|| NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// `self` told other `-g` tags. Still the same instruction, so it keeps
+    /// its identity: a new one would read as a removal and an insertion to
+    /// the analyses that follow instructions by identity, and `-g` would
+    /// change the slot indexes the allocator ranks by.
+    #[must_use]
+    pub fn retagged(
+        &self,
+        debug: DebugTags,
+    ) -> Arc<Insn> {
+        let new = Insn { debug, ..self.clone() };
+        let _ = new.ident.0.set(self.id());
+        Arc::new(new)
     }
 
     /// Whether it was inserted beside a source instruction: it covers no bytes.
@@ -1159,6 +1170,10 @@ pub struct LirBody {
     /// The values (by number) that arrive in a cell above the frame, with the
     /// cell's displacement and size: arguments the caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
+    /// The argument bytes the callee of each indirect call pops, by the call's
+    /// address (`callframe`'s `call_frame_destroy N, M`): the stack depth after
+    /// it, which `masm` cannot read from a call it does not name.
+    pub call_pops: Arc<IndexMap<i64, i64>>,
     /// The facts worked out of this body and the bodies made from it
     /// (`analysis::facts`).
     pub facts: crate::analysis::facts::Kept,
@@ -1327,7 +1342,7 @@ impl LirBody {
             float_stack: 0,
             homes: Arc::default(),
             float_bytes: Arc::default(),
-            bits: crate::frontends::bc::declen::BITNESS,
+            bits: 16,
             registers: Self::default_registers(),
             slotted: false,
             cfa_variables: false,
@@ -1336,6 +1351,7 @@ impl LirBody {
             frame_saved: None,
             notes: Arc::default(),
             arguments_in_cells: Arc::default(),
+            call_pops: Arc::default(),
             facts: Default::default(),
         }
     }
@@ -1404,6 +1420,7 @@ impl LirBody {
             frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
+            call_pops: Arc::clone(&self.call_pops),
             facts: self.facts.clone(),
         }
     }
@@ -1735,6 +1752,17 @@ mod tests {
         let kept = without(&[prior, spread], |one| one.at == 0x12, None::<fn(&Arc<Insn>) -> Arc<Insn>>);
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[1].covers, Some((0x12, 0x14)));
+    }
+
+    /// `-g` moved a note onto a block's last instruction, which got a new
+    /// identity: the allocator's slot indexes counted a removal and an
+    /// insertion more, and grep.c at -O1 came out different with `-g`.
+    #[test]
+    fn retagging_an_instruction_keeps_its_identity() {
+        let one = instruction(0x08, Some((0x08, 0x0a)));
+        let tagged = one.retagged(super::DebugTags { before: vec![3], ..one.debug.clone() });
+        assert_eq!(tagged.id(), one.id());
+        assert_eq!(tagged.debug.before, vec![3]);
     }
 
     #[test]

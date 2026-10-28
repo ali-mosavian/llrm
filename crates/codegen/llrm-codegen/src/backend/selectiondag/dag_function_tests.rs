@@ -38,7 +38,7 @@ pub(super) fn names(text: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
-pub(super) const M16_STACK_ARGS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+pub(super) const M16_STACK_ARGS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare i16 @g(i16, i16)
 define i16 @f(i16 %a) {
 entry:
@@ -47,7 +47,7 @@ entry:
 }
 ";
 
-pub(super) const FAR_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+pub(super) const FAR_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare void @far() addrspace(1)
 declare void @near()
 define void @f() {
@@ -58,7 +58,8 @@ entry:
 }
 ";
 
-pub(super) const QB_STRING_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+pub(super) const QB_STRING_COMPARE: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 i16 @f(ptr %a, ptr %b) addrspace(1) {
 entry:
   %r = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
@@ -114,6 +115,7 @@ pub(super) fn select_with_contracts(text: &str) -> Result<crate::backend::isel::
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: true,
+        frame_zeroed: false,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     super::dag_function::selected_in_pool(
@@ -387,7 +389,7 @@ fn a_load_read_by_a_compare_is_folded_into_it() {
     assert!(compare.sources.iter().any(|l| matches!(l, Loc::Mem(_))), "{compare:?}");
 }
 
-const WORD_MINUS_ONE_TWICE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const WORD_MINUS_ONE_TWICE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @a = global i16 0
 @b = global i16 0
 define void @f() {
@@ -451,7 +453,7 @@ fn the_low_bit_of_an_argument_is_tested_in_memory() {
     assert_eq!(reads, [1], "one byte read of the argument, no dword: {reads:?}");
 }
 
-const WORD_FROM_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const WORD_FROM_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @slot = global i16 0
 declare cc 1005 i16 @c(i16)
 declare cc 1005 void @u(i16)
@@ -484,7 +486,8 @@ fn a_word_zero_extended_from_a_byte_is_a_word_value() {
     assert!(matches!(extend.dests.as_slice(), [Loc::Held(h)] if h.width == 2), "{extend:?}");
 }
 
-const DWORD_AND_WORD_FROM_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const DWORD_AND_WORD_FROM_COMPARE: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @word = global i16 0
 @dword = global i32 0
 declare cc 1005 i16 @c(i16)
@@ -725,6 +728,39 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
     assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
 }
 
+/// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)
+/// where the pin keeps the one `imul` (`combineMul`: `hasMinSize` returns
+/// first): bench/mandel.nib m16 -Os, +8 B. The pin declines at `minsize`
+/// only, so at m32 -Os the chain stays: histo's `x * 7` was `imul` (13+ clocks
+/// on a 486) against the pin's `lea; sub`, +25.5% clk, x_dct +60% clk.
+#[test]
+fn at_os_a_multiply_by_a_constant_is_one_imul_at_m16_and_a_chain_at_m32() {
+    let names = |pointer: &str, size: bool, factor: u32| {
+        let module = llrm_mir::parse::module(&format!(
+            "target datalayout = \"e-p:{pointer}:{pointer}-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {{
+  %r = mul i32 %a, {factor}
+  ret i32 %r
+}}
+"
+        ))
+        .expect("parses");
+        let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+        cpu.size = size;
+        let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
+    };
+    let count = |names: &[String], one: &str| names.iter().filter(|n| *n == one).count();
+    let speed = names("32", false, 24);
+    assert_eq!((count(&speed, "imul"), count(&speed, "shl")), (0, 1), "speed: lea and shift");
+    let m16 = names("16", true, 24);
+    assert_eq!((count(&m16, "imul"), count(&m16, "shl")), (1, 0), "m16 -Os: {m16:?}");
+    let m32 = names("32", true, 24);
+    assert_eq!((count(&m32, "imul"), count(&m32, "shl")), (0, 1), "m32 -Os: {m32:?}");
+    let seven = names("32", true, 7);
+    assert_eq!(count(&seven, "imul"), 0, "m32 -Os x*7: {seven:?}");
+}
+
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
 /// no byte divide): examples/dice.nib and easing.nib stopped compiling.
 #[test]
@@ -743,7 +779,7 @@ define i8 @f(i8 %a) {
     selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const COPY_4000_BYTES: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const COPY_4000_BYTES: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @a = global [2000 x i16] zeroinitializer, align 2
 @b = global [2000 x i16] zeroinitializer, align 2
 declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
@@ -770,7 +806,7 @@ fn a_big_copy_without_a_memcpy_routine_moves_dwords() {
 #[test]
 fn a_big_copy_to_a_far_pointer_still_selects() {
     let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @b = global [100 x i16] zeroinitializer, align 2
 declare void @llvm.memcpy.p1.p0.i16(ptr addrspace(1), ptr, i16, i1)
 define void @f(ptr addrspace(1) %d) {
@@ -790,7 +826,7 @@ define void @f(ptr addrspace(1) %d) {
 #[test]
 fn a_copy_of_a_variable_size_moves_dwords_and_then_bytes() {
     let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @a = global [100 x i16] zeroinitializer, align 2
 @b = global [100 x i16] zeroinitializer, align 2
 declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
@@ -816,7 +852,7 @@ define void @f(i16 %n) {
 fn a_copy_out_of_a_global_reads_through_ds() {
     use crate::model::ir::Loc;
     let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @a = global [100 x i16] zeroinitializer, align 2
 @b = global [100 x i16] zeroinitializer, align 2
 declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
@@ -861,4 +897,146 @@ b4:
 fn a_selector_put_in_es_in_two_blocks_is_two_values() {
     let selected = select_with_contracts(SEGMENT_LOADED_IN_TWO_BLOCKS).unwrap_or_else(|why| panic!("{why}"));
     assert_eq!(crate::backend::verify::verify(&selected.body, true), Vec::<String>::new());
+}
+
+fn move_3840_at_m16(metadata: &str) -> crate::backend::isel::Selected {
+    let module = llrm_mir::parse::module(&format!(
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+@s = global [2000 x i16] zeroinitializer, align 2
+declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)
+define void @f() {{
+  call void @llvm.memmove.p0.p0.i16(ptr @s, ptr getelementptr (i8, ptr @s, i16 160), i16 3840, i1 false){metadata}
+  ret void
+}}
+!0 = !{{}}
+"
+    ))
+    .expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0))
+}
+
+/// A memmove a pass proved forward or backward was a call of the runtime's
+/// `memmove` at m16 (scroll.c: 2.2x the old selector's clocks, a frame for the
+/// value kept across the call); the old selector moves it inline, `rep movsd`
+/// up or `push ds; pop es; std; rep movsd; cld` down.
+#[test]
+fn a_proved_move_at_m16_is_inline_string_code() {
+    let up = move_3840_at_m16(", !llrm.forward !0");
+    let names: Vec<_> =
+        up.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "movsd") && names.iter().all(|n| n != "call"), "{names:?}");
+    let down = move_3840_at_m16(", !llrm.backward !0");
+    assert!(
+        down.inline.values().any(|bytes| bytes[..] == [0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5, 0xFC]),
+        "{:?}",
+        down.inline
+    );
+}
+
+/// A forward string move of 3840 bytes (a multiple of four) was followed by
+/// `xor cx, cx; rep movsb`, a copy of zero bytes (scroll.c m16 -Os, +3 B).
+#[test]
+fn a_forward_string_move_of_whole_dwords_has_no_byte_tail() {
+    let up = move_3840_at_m16(", !llrm.forward !0");
+    let names: Vec<_> =
+        up.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "movsd") && names.iter().all(|n| n != "movsb"), "{names:?}");
+}
+
+/// A byte argument was extended to the dword register (`mov edx, 12`, 6 bytes
+/// at m16) though the callee truncates it; the old selector writes `dl`
+/// (mandel.nib: 4 bytes a call).
+#[test]
+fn a_byte_argument_at_m16_goes_in_the_byte_register() {
+    use llrm_lir::registers::RegId;
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+declare cc 1005 void @g(i32, i8 zeroext)
+define void @f() {
+  call cc 1005 void @g(i32 204, i8 zeroext 12)
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    let registers: Vec<RegId> = call.requires.iter().map(|(_, register)| *register).collect();
+    assert!(registers.contains(&RegId::DL) && !registers.contains(&RegId::EDX), "{registers:?}");
+}
+
+/// `bitcast float %f to i32` of an argument was `fld; fstp; and` through a
+/// stack temporary (7 instructions); the pin reads the bits with the integer
+/// load (`(conv (load x))` is `(load (conv*)x)`).
+#[test]
+fn a_float_argument_read_as_bits_is_an_integer_load() {
+    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define i32 @f(float %x) {
+  %i = bitcast float %x to i32
+  %a = and i32 %i, 2147483647
+  ret i32 %a
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!seen.iter().any(|n| n.starts_with("fld") || n.starts_with("fst")), "{seen:?}");
+}
+
+/// `(a[i] >> 8) & 255` was `mov; shr; movzx` (x_radix, +5.3% clk at -O3); the
+/// pin reads the byte at `a + 1` with one `movzx`.
+#[test]
+fn a_byte_of_a_loaded_word_is_one_byte_load() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %a, i32 %i) {
+  %p = getelementptr i32, ptr %a, i32 %i
+  %v = load i32, ptr %p
+  %s = lshr i32 %v, 8
+  %m = and i32 %s, 255
+  ret i32 %m
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!seen.iter().any(|n| n.starts_with("sh")), "{seen:?}");
+    assert!(seen.iter().any(|n| n.starts_with("movzx")), "{seen:?}");
+}
+
+/// `llvm.fshl` by a variable was expanded in MIR to `shl`, `shr 1`, `not`,
+/// `and` and `shr` before selection (8 instructions at i32); the pin selects
+/// one `shld` for a word or a dword, and for a byte (`LowerFunnelShift`)
+/// widens to a dword, shifts and takes the high byte.
+#[test]
+fn a_word_or_dword_funnel_shift_is_one_shld_and_a_byte_one_selects() {
+    for (bits, shld) in [(32, 1), (16, 1), (8, 0)] {
+        let ir = format!(
+            "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+declare i{bits} @llvm.fshl.i{bits}(i{bits}, i{bits}, i{bits})
+define i{bits} @f(i{bits} %a, i{bits} %b, i{bits} %y) {{
+b0:
+  %r = call i{bits} @llvm.fshl.i{bits}(i{bits} %a, i{bits} %b, i{bits} %y)
+  ret i{bits} %r
+}}
+"
+        );
+        let mut module = llrm_mir::parse::module(&ir).expect("parses");
+        crate::backend::funnel::expanded(
+            &mut module,
+            |_| true,
+            |bits| crate::backend::funnel::kept_for_isel(crate::backend::shadow::Selector::Dag, &format!("i{bits}")),
+        )
+        .expect("expands");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("i{bits}: {}", e.0));
+        let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names.iter().filter(|n| &***n == "shld").count(), shld, "i{bits}: {names:?}");
+    }
 }

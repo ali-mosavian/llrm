@@ -44,7 +44,7 @@ use crate::backend::allocate::{LiveAt, live_rows};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::liveness;
 use crate::backend::regclass;
-use crate::backend::regpressure::{Delta, Model, Pick, PressureChange, Tracker, try_pressure};
+use crate::backend::regpressure::{Delta, Model, Pick, PressureChange, Region, Tracker, try_pressure};
 use crate::backend::target::Segments;
 use crate::backend::twoaddr;
 use crate::model::ir::{Loc, Operation};
@@ -241,6 +241,45 @@ pub struct Graph {
     /// ([`def_latency`]), one for an output dependence, none for an anti
     /// dependence or a memory order.
     pub latencies: Vec<Vec<u32>>,
+    /// For each instruction, the ones weakly ordered before it
+    /// ([`copy_constrain`]): they never hold a node back, `Weak` of
+    /// `tryCandidate` only prefers the one with fewer left.
+    pub weak_preds: Vec<Vec<usize>>,
+    pub weak_succs: Vec<Vec<usize>>,
+}
+
+impl Graph {
+    /// Whether `to` follows `from` through the edges, weak ones too
+    /// (`ScheduleDAGTopologicalSort::IsReachable`).
+    fn reaches(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> bool {
+        let mut seen = vec![false; self.succs.len()];
+        let mut stack = vec![from];
+        while let Some(node) = stack.pop() {
+            if node == to {
+                return true;
+            }
+            if std::mem::replace(&mut seen[node], true) {
+                continue;
+            }
+            stack.extend(self.succs[node].iter().chain(&self.weak_succs[node]).copied());
+        }
+        false
+    }
+
+    fn add_weak(
+        &mut self,
+        before: usize,
+        after: usize,
+    ) {
+        if !self.weak_preds[after].contains(&before) {
+            self.weak_preds[after].push(before);
+            self.weak_succs[before].push(after);
+        }
+    }
 }
 
 /// The latency of what `one` defines for the default scheduling model of a
@@ -427,14 +466,157 @@ pub fn graph(
             succs[earlier].push(later);
         }
     }
-    Graph { preds, succs, latencies }
+    Graph { preds, succs, latencies, weak_preds: vec![Vec::new(); n], weak_succs: vec![Vec::new(); n] }
+}
+
+/// One live range segment of a value in a region, in slots: a position `p`
+/// reads at `2p` and a dead def ends at `2p + 1`.
+struct Segment {
+    start: i64,
+    end: i64,
+}
+
+const LIVE_IN_SLOT: i64 = -1;
+const LIVE_OUT_SLOT: i64 = i64::MAX;
+
+/// The segments of `value` in `insns` and the positions of its defs. A def
+/// that reads the value (two-address) ends one segment and starts the next at
+/// the same instruction, as the pin's live intervals do.
+fn segments_of(
+    insns: &[Arc<Insn>],
+    value: u32,
+    live_out: bool,
+) -> (Vec<Segment>, Vec<usize>) {
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut defs = Vec::new();
+    for (at, one) in insns.iter().enumerate() {
+        let (reads, defines) = (one.uses.contains(&value), one.defines.contains(&value));
+        let slot = 2 * at as i64;
+        if reads {
+            match segments.last_mut() {
+                Some(last) => last.end = slot,
+                None => segments.push(Segment { start: LIVE_IN_SLOT, end: slot }),
+            }
+        }
+        if defines {
+            defs.push(at);
+            // A two-address def starts a segment where the one it reads ends.
+            segments.push(Segment { start: slot, end: slot + 1 });
+        }
+    }
+    if live_out && let Some(last) = segments.last_mut() {
+        last.end = LIVE_OUT_SLOT;
+    }
+    (segments, defs)
+}
+
+fn copy_of(one: &Insn) -> Option<(u32, u32)> {
+    let what = one.what.as_ref()?;
+    match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
+        (Operation::Move, [Loc::Held(dst)], [Loc::Held(src)]) if dst.value != src.value => Some((dst.value, src.value)),
+        _ => None,
+    }
+}
+
+/// `CopyConstrain::apply` (MachineScheduler.cpp#L2298): for a copy with a
+/// local end and a global one, weak edges that open a hole in the global
+/// register's range, so the copy's local uses stay beside the copy and it
+/// can coalesce. `live_out` tells what lives below the region.
+pub fn copy_constrain(
+    insns: &[Arc<Insn>],
+    graph: &mut Graph,
+    live_out: &dyn Fn(u32) -> bool,
+) {
+    let mut ranges: HashMap<u32, (Vec<Segment>, Vec<usize>)> = HashMap::default();
+    for (copy, one) in insns.iter().enumerate() {
+        let Some((dst, src)) = copy_of(one) else { continue };
+        for value in [dst, src] {
+            ranges.entry(value).or_insert_with(|| segments_of(insns, value, live_out(value)));
+        }
+        constrain_local_copy(insns, graph, &ranges, copy, dst, src);
+    }
+}
+
+/// `constrainLocalCopy`.
+fn constrain_local_copy(
+    insns: &[Arc<Insn>],
+    graph: &mut Graph,
+    ranges: &HashMap<u32, (Vec<Segment>, Vec<usize>)>,
+    copy: usize,
+    dst: u32,
+    src: u32,
+) {
+    let local = |value: u32| {
+        let (segments, _) = &ranges[&value];
+        segments.first().is_some_and(|first| first.start != LIVE_IN_SLOT)
+            && segments.last().is_some_and(|last| last.end != LIVE_OUT_SLOT)
+    };
+    // A dead destination has nothing to constrain.
+    if ranges[&dst].0.iter().any(|segment| segment.start == 2 * copy as i64 && segment.end == segment.start + 1) {
+        return;
+    }
+    let (local_value, global_value) = if local(src) {
+        (src, dst)
+    } else if local(dst) {
+        (dst, src)
+    } else {
+        return;
+    };
+    let (local_segments, local_defs) = &ranges[&local_value];
+    let (global_segments, global_defs) = &ranges[&global_value];
+    let begin = local_segments[0].start;
+    // The global segment after the start of the local range: the one that
+    // ends after it, or the next if it holds it.
+    let Some(mut at) = global_segments.iter().position(|segment| segment.end > begin) else { return };
+    if global_segments[at].start <= begin {
+        at += 1;
+    }
+    let Some(next) = global_segments.get(at) else { return };
+    if at > 0 {
+        let before = &global_segments[at - 1];
+        // Two-address defs leave no hole, and the instruction that starts the
+        // local range cannot also make the hole.
+        if before.end.div_euclid(2) == next.start.div_euclid(2) || before.start.div_euclid(2) == begin.div_euclid(2) {
+            return;
+        }
+    }
+    if next.start == LIVE_IN_SLOT {
+        return;
+    }
+    let global_def = (next.start / 2) as usize;
+    let first_local = (begin / 2) as usize;
+    // The uses of the last local def go before the global def.
+    let last_local_def = *local_defs.last().expect("a local range has a def");
+    let local_uses: Vec<usize> = (last_local_def + 1..insns.len())
+        .filter(|&at| at != global_def && insns[at].uses.contains(&local_value))
+        .collect();
+    if local_uses.iter().any(|&user| graph.reaches(global_def, user)) {
+        return;
+    }
+    // And the earlier readers of the global before the start of the local.
+    let after = global_defs.iter().copied().filter(|&at| at < global_def).max().map_or(0, |at| at + 1);
+    let global_uses: Vec<usize> =
+        (after..global_def).filter(|&at| at != first_local && insns[at].uses.contains(&global_value)).collect();
+    if global_uses.iter().any(|&user| graph.reaches(first_local, user)) {
+        return;
+    }
+    if trace() {
+        eprintln!(
+            "machinesched constraining copy {copy} (local {local_value}, global {global_value}): {local_uses:?} -> {global_def}, {global_uses:?} -> {first_local}"
+        );
+    }
+    for user in local_uses {
+        graph.add_weak(user, global_def);
+    }
+    for user in global_uses {
+        graph.add_weak(user, first_local);
+    }
 }
 
 /// `LLRM_MS_TRACE`: each pick with the reason `tracePick` of the pin names, for
 /// a line-by-line reading against `llc -debug-only=machine-scheduler`.
 fn trace() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_MS_TRACE").is_some())
+    llrm_support::env_flag!("LLRM_MS_TRACE")
 }
 
 /// What the tracker needs to follow a region's pressure bottom-up.
@@ -448,30 +630,41 @@ pub struct Tracking<'a> {
 
 /// `tryCandidate` (MachineScheduler.cpp#L3965) of `GenericScheduler` for a
 /// bottom-up region of a target with no schedule model: `RegExcess`,
-/// `RegCritical`, `RegMax` where pressure is tracked, then `NodeOrder` (the
+/// `RegCritical` where pressure is tracked, `Weak`, `RegMax` where it is, then
+/// `NodeOrder` (the
 /// later one first). Left out: `tryBiasPhysRegs` (no physical-register copy is
-/// in a region, MS4), stalls, clusters, weak edges and resources (no model),
+/// in a region, MS4), stalls, clusters and resources (no model),
 /// and latency, which only `ReduceLatency` turns on and `pickNode` of a
 /// bottom-up region never sets (`NoPolicy`).
 fn try_candidate(
     try_node: usize,
     try_delta: &Delta,
+    try_weak: usize,
     cand_node: usize,
     cand_delta: &Delta,
+    cand_weak: usize,
     tracked: bool,
 ) -> Option<&'static str> {
+    let pressure = |name, try_p, cand_p| match try_pressure(try_p, cand_p) {
+        Pick::Try => Some(Some(name)),
+        Pick::Cand => Some(None),
+        Pick::Neither => None,
+    };
     if tracked {
         for (name, try_p, cand_p) in [
             ("REG-EXCESS", try_delta.excess, cand_delta.excess),
             ("REG-CRIT", try_delta.critical_max, cand_delta.critical_max),
-            ("REG-MAX", try_delta.current_max, cand_delta.current_max),
         ] {
-            match try_pressure(try_p, cand_p) {
-                Pick::Try => return Some(name),
-                Pick::Cand => return None,
-                Pick::Neither => {}
+            if let Some(picked) = pressure(name, try_p, cand_p) {
+                return picked;
             }
         }
+    }
+    if try_weak != cand_weak {
+        return (try_weak < cand_weak).then_some("WEAK");
+    }
+    if tracked && let Some(picked) = pressure("REG-MAX", try_delta.current_max, cand_delta.current_max) {
+        return picked;
     }
     (try_node > cand_node).then_some("ORDER")
 }
@@ -498,18 +691,30 @@ pub fn bottom_up(
     let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
     let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
     let mut placed = Vec::with_capacity(n);
+    let mut weak_left: Vec<usize> = graph.weak_succs.iter().map(Vec::len).collect();
     // `RegionPressure` (program order) and `RegionCriticalPSets`.
     let mut region_max: Vec<u32> = Vec::new();
     let mut critical: Vec<PressureChange> = Vec::new();
-    let mut tracker = tracking.map(|tracking| {
-        let mut program = Tracker::new(tracking.model, tracking.live_out.iter().copied(), []);
-        for one in insns.iter().rev() {
-            program.advance_upward(one);
-        }
-        region_max = program.max().to_vec();
-        critical = Tracker::critical_sets(tracking.model, &region_max);
-        Tracker::over(tracking.model, tracking.live_out.iter().copied(), tracking.live_thru.iter().copied(), insns)
-    });
+    let region = tracking.map(|_| Region::of(insns));
+    let mut tracker = tracking
+        .zip(region.as_ref())
+        .map(
+            |(tracking, region)| {
+                let mut program = Tracker::over(tracking.model, region, tracking.live_out.iter().copied(), [], false);
+                for node in (0..n).rev() {
+                    program.place(node);
+                }
+                region_max = program.max().to_vec();
+                critical = Tracker::critical_sets(tracking.model, &region_max);
+                Tracker::over(
+                    tracking.model,
+                    region,
+                    tracking.live_out.iter().copied(),
+                    tracking.live_thru.iter().copied(),
+                    true,
+                )
+            },
+        );
     while placed.len() < n {
         let mut best = 0;
         let mut why = "ONLY1";
@@ -524,8 +729,10 @@ pub fn bottom_up(
                 if let Some(reason) = try_candidate(
                     available[candidate],
                     &deltas[candidate],
+                    weak_left[available[candidate]],
                     available[best],
                     &deltas[best],
+                    weak_left[available[best]],
                     tracker.is_some(),
                 ) {
                     best = candidate;
@@ -538,7 +745,7 @@ pub fn bottom_up(
             eprintln!("machinesched pick {node} {:?} {why} tracked={}", insns[node].defines, tracker.is_some());
         }
         if let Some(tracker) = &mut tracker {
-            tracker.place(&insns[node]);
+            tracker.place(node);
             // `updateScheduledPressure`.
             for entry in &mut critical {
                 let most = tracker.max()[entry.set] as i32;
@@ -548,6 +755,9 @@ pub fn bottom_up(
             }
         }
         placed.push(node);
+        for &before in &graph.weak_preds[node] {
+            weak_left[before] -= 1;
+        }
         for &before in &graph.preds[node] {
             waiting[before] -= 1;
             if waiting[before] == 0 {
@@ -682,14 +892,17 @@ pub fn scheduled(
             // What is live below a region is asked for a region of more than
             // half the allocatable registers only.
             let mut now: HashSet<u32> = HashSet::default();
-            if regions.iter().any(|region| region.len() > limit / 2) {
+            let copies = regions.iter().any(|region| insns[region.clone()].iter().any(|one| copy_of(one).is_some()));
+            if copies || regions.iter().any(|region| region.len() > limit / 2) {
                 let live = live.get_or_insert_with(|| live_rows(body));
                 let mut values: Vec<u32> =
                     insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
                 values.sort_unstable();
                 values.dedup();
                 now = values.into_iter().filter(|&value| counted(value) && live.live_out(block.at, value)).collect();
-                if let Some(make) = model.take() {
+                if regions.iter().any(|region| region.len() > limit / 2)
+                    && let Some(make) = model.take()
+                {
                     made = Some(make(body, &counted));
                 }
             }
@@ -720,14 +933,12 @@ pub fn scheduled(
                         let live_thru = live_out.iter().copied().filter(|value| !tied.contains(value)).collect();
                         Tracking { model, live_out, live_thru }
                     });
-                    let order = bottom_up(slice, &graph(slice, regs, bits), tracking.as_ref());
+                    let mut deps = graph(slice, regs, bits);
+                    copy_constrain(slice, &mut deps, &|value| now.contains(&value));
+                    let order = bottom_up(slice, &deps, tracking.as_ref());
                     if order.iter().enumerate().any(|(place, &node)| place != node) {
-                        let mut ats: Vec<i64> = slice.iter().map(|one| one.at).collect();
-                        ats.sort_unstable();
                         for (place, &node) in order.iter().enumerate() {
-                            let mut moved = (*slice[node]).clone();
-                            moved.at = ats[place];
-                            out[region.start + place] = Arc::new(moved);
+                            out[region.start + place] = Arc::clone(&slice[node]);
                         }
                         changed = true;
                     }
@@ -803,6 +1014,50 @@ mod tests {
             insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![cell(8)]), vec![3], vec![]),
             insn(3, semantics(Operation::Move, "mov", vec![cell(0)], vec![held(2)]), vec![], vec![2]),
         ]
+    }
+
+    /// `l = g; g = x; t = l * 3; out = t + g` (x_iir's `%2 = COPY %8`, `%8 =
+    /// COPY %6`, `imul %2`): the pin's `CopyConstrain` keeps the use of the
+    /// copy before the global's next def, so the copy dies at once and
+    /// coalesces. Without it the schedule was copy, def, `imul`: the copy's
+    /// register stayed live across the def and could not coalesce, and a
+    /// `mov` more was left in the loop.
+    #[test]
+    fn test_the_use_of_a_copy_stays_before_the_next_def_of_the_copied_value() {
+        use super::{bottom_up, copy_constrain};
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(2)], vec![held(1)]), vec![2], vec![1]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(1)], vec![held(4)]), vec![1], vec![4]),
+            insn(2, semantics(Operation::Binary, "imul", vec![held(3)], vec![held(2), imm(3)]), vec![3], vec![2]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(5)], vec![held(3), held(1)]), vec![5], vec![3, 1]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let mut found = graph(&insns, regs, 16);
+        assert_eq!(bottom_up(&insns, &found, None), [0, 1, 2, 3], "premise: program order without the edge");
+        copy_constrain(&insns, &mut found, &|value| value == 1);
+        assert_eq!(found.weak_preds[1], [2]);
+        assert_eq!(bottom_up(&insns, &found, None), [0, 2, 1, 3]);
+    }
+
+    /// `l = g; g = g + 1; t = l * 3; out = t + g`: the pin returns at "two
+    /// address defs have no hole" when the next def of the copied value reads
+    /// it, so it adds no edge. Merging the two segments added one: x_ll_arith
+    /// (`%15 = COPY %13` ... `%13 = SHLD %13`) got a schedule 16 bytes larger.
+    #[test]
+    fn test_no_edge_is_added_before_a_two_address_def_of_the_copied_value() {
+        use super::copy_constrain;
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(2)], vec![held(1)]), vec![2], vec![1]),
+            insn(1, semantics(Operation::Binary, "add", vec![held(1)], vec![held(1), imm(1)]), vec![1], vec![1]),
+            insn(2, semantics(Operation::Binary, "imul", vec![held(3)], vec![held(2), imm(3)]), vec![3], vec![2]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(5)], vec![held(3), held(1)]), vec![5], vec![3, 1]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let mut found = graph(&insns, regs, 16);
+        copy_constrain(&insns, &mut found, &|value| value == 1);
+        assert!(found.weak_preds.iter().all(Vec::is_empty), "{:?}", found.weak_preds);
     }
 
     /// `x = load [m]; y = x + 1; z = load [n]; store [m], y`: a load feeds the
@@ -887,6 +1142,41 @@ mod tests {
             .flat_map(|one| one.defines.clone())
             .collect();
         assert_eq!(kept, [1, 2, 3, 4, 5, 6]);
+    }
+
+    /// A scheduled instruction took the `at` of the place it moved to, but an
+    /// `at` names the instruction: the optimizer's `spares` pairs, and the
+    /// compare a branch reads, find theirs by it. After a region is ordered
+    /// each instruction still has its own.
+    #[test]
+    fn test_a_moved_instruction_keeps_its_at() {
+        use super::scheduled;
+        use crate::model::lir::{LirBlock, LirBody};
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let mut insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(11)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![imm(12)]), vec![2], vec![]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![imm(13)]), vec![3], vec![]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(1), held(2)]), vec![4], vec![1, 2]),
+            insn(4, semantics(Operation::Binary, "add", vec![held(5)], vec![held(4), held(3)]), vec![5], vec![4, 3]),
+            insn(5, semantics(Operation::Binary, "add", vec![held(6)], vec![held(5), imm(1)]), vec![6], vec![5]),
+        ];
+        insns.push(insn(6, semantics(Operation::Return, "ret", vec![], vec![held(6)]), vec![], vec![6]));
+        let mut body = LirBody::new(
+            "kept",
+            0,
+            vec![LirBlock::new(0, insns).into()],
+            crate::support::hash::IndexMap::default(),
+            crate::support::hash::IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let after = scheduled(&body, 2, |_, _| one_set(2));
+        let order: Vec<u32> = after.blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+        assert_ne!(order, [1, 2, 3, 4, 5, 6], "the load of 3 moved");
+        for one in after.blocks[0].insns.iter() {
+            let first = one.defines.first().copied().unwrap_or(7);
+            assert_eq!(one.at, i64::from(first) - 1, "the instruction defining {first} kept its at");
+        }
     }
 
     /// A load was held back four cycles above its reader (the unbuffered

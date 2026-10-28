@@ -124,6 +124,22 @@ pub const fn lftr_default() -> bool {
     true
 }
 
+/// Whether the edits since `mark` made a phi: a counter was widened.
+fn made_a_phi(
+    function: &llrm_mir::module::Function,
+    mark: llrm_mir::module::Mark,
+) -> bool {
+    use llrm_mir::module::ValueDef;
+    function
+        .touched_since(mark)
+        .is_some_and(
+            |touched| touched.values_added.iter().any(|value| match function.value(value).def {
+                ValueDef::Instruction(inst) => function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi,
+                _ => false,
+            }),
+        )
+}
+
 /// After a step: what its edits touched is dropped from the expressions.
 fn settled(
     session: &mut ScevSession,
@@ -131,9 +147,18 @@ fn settled(
     unit: &passes::Unit,
     outer: &passes::Outer,
     changed: bool,
+    keep_counts: bool,
 ) -> bool {
     if changed {
-        session.forget_since(unit.context, unit.layout, &outer.globals, &outer.metadata, unit.function, *mark);
+        session.forget_since_keeping(
+            unit.context,
+            unit.layout,
+            &outer.globals,
+            &outer.metadata,
+            unit.function,
+            *mark,
+            keep_counts,
+        );
         *mark = unit.function.mark();
         // The pin's `SE.verify()` after a pass that kept it: what is kept is
         // what a new one would work out.
@@ -219,7 +244,15 @@ impl FunctionPass for IndVars {
             unit.declared,
             &outer,
         );
-        let compared = settled(&mut session, &mut mark, unit, &outer, compared);
+        // Widening replaces operands in place, as the pin does without telling
+        // ScalarEvolution: the loop's exit count stays the one worked out
+        // before, in the narrow type, and LFTR takes its limit from that
+        // (`genLoopLimit`, which then extends it as `wide.trip.count`). The pin
+        // forgets only a deleted or replaced value and, after
+        // `optimizeLoopExits` and `predicateLoopExits`, the loop:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp#L1933-L1968
+        let widened = compared && made_a_phi(unit.function, mark);
+        let compared = settled(&mut session, &mut mark, unit, &outer, compared, widened);
         let rewrote = crate::exitvalues::enabled() && {
             let changed = crate::exitvalues::rewritten_in(
                 &mut session,
@@ -230,17 +263,19 @@ impl FunctionPass for IndVars {
                 &outer,
                 self.size,
             );
-            settled(&mut session, &mut mark, unit, &outer, changed)
+            settled(&mut session, &mut mark, unit, &outer, changed, false)
         };
         let merged = crate::congruentiv::enabled() && {
             let changed =
                 crate::congruentiv::replaced_in(&mut session, unit.context, unit.layout, unit.function, &outer);
-            settled(&mut session, &mut mark, unit, &outer, changed)
+            // It only replaces and erases values, which tell ScalarEvolution
+            // (the value handles) of those values; no loop's count reads them.
+            settled(&mut session, &mut mark, unit, &outer, changed, widened)
         };
         let canonical = crate::canonexit::enabled() && {
             let changed =
                 crate::canonexit::canonicalized_in(&mut session, unit.context, unit.layout, unit.function, &outer);
-            settled(&mut session, &mut mark, unit, &outer, changed)
+            settled(&mut session, &mut mark, unit, &outer, changed, false)
         };
         let optimized = crate::exitopt::enabled() && {
             let changed = crate::exitopt::optimized_in(
@@ -251,7 +286,7 @@ impl FunctionPass for IndVars {
                 unit.declared,
                 &outer,
             );
-            settled(&mut session, &mut mark, unit, &outer, changed)
+            settled(&mut session, &mut mark, unit, &outer, changed, false)
         };
         let predicated = crate::exitpredicate::enabled() && {
             let changed = crate::exitpredicate::predicated_in(
@@ -262,7 +297,7 @@ impl FunctionPass for IndVars {
                 unit.declared,
                 &outer,
             );
-            settled(&mut session, &mut mark, unit, &outer, changed)
+            settled(&mut session, &mut mark, unit, &outer, changed, false)
         };
         let tested = self.lftr
             && crate::lftr::enabled()
