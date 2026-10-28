@@ -1118,7 +1118,25 @@ pub fn visit_trunc(
     // DEVIATE 4: trunc (select(icmp_ult(A, DestTy_umax+1), A, sext(icmp_sgt(A,
     // 0)))) --> trunc (smin(smax(0, A), DestTy_umax))
     // DEVIATE 1: foldVecTruncToExtElt, foldVecExtTruncToExtElt.
-    // DEVIATE 4: trunc (ctlz_i32(zext(A), B) --> add(ctlz_i16(A, B), C)
+    // trunc (ctlz_i32(zext(A), B) --> add(ctlz_i16(A, B), C)
+    let narrow_ctlz = {
+        let q = query(c, Some(inst));
+        pattern::intrinsic_call(&q, src, "llvm.ctlz").and_then(|(_, args)| {
+            let [extended, flag] = *args else { return None };
+            let (_, _, a) = pattern::cast(&q, extended, CastOp::ZExt)?;
+            Some((a, flag))
+        })
+    };
+    if let Some((a, flag)) = narrow_ctlz
+        && shared::has_one_use(c, src)
+    {
+        let a_w = width(c, a);
+        if a_w == dest_w && a_w > src_w.ilog2() {
+            let width_diff = c.int(c.type_of(a), u128::from(src_w - a_w));
+            let narrow = c.create_intrinsic(inst, "ctlz", dest_ty, &[a, flag]);
+            return c.replace_with_binop(inst, BinaryOp::Add, narrow, width_diff, Flags::default());
+        }
+    }
     // DEVIATE 1: trunc (vscale).
     // DEVIATE 4: trunc(scmp(x, y)), trunc(ucmp(x, y)).
 

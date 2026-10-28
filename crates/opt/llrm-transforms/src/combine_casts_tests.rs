@@ -450,3 +450,30 @@ b0:
     let out = printed(&module);
     assert!(out.contains("call i8 @llvm.usub.sat.i8(i8 %a, i8 %b)"), "{out}");
 }
+
+/// `trunc (ctlz_i32 (zext A), B)` is `ctlz_i16 (A, B) + 16`. Stayed a 32-bit
+/// count and a truncate before.
+#[test]
+fn a_truncated_ctlz_of_an_extension_is_a_narrow_ctlz_plus_the_width_difference() {
+    let text = "declare i32 @llvm.ctlz.i32(i32, i1)
+
+define i16 @f(i16 %a) {
+b0:
+  %z = zext i16 %a to i32
+  %c = call i32 @llvm.ctlz.i32(i32 %z, i1 false)
+  %r = trunc i32 %c to i16
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i16 @llvm.ctlz.i16(i16 %a, i1 false)"), "{out}");
+    assert!(out.contains("add i16 %0, 16"), "{out}");
+}
