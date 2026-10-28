@@ -3,7 +3,7 @@
 //! flags its forms read and write.
 
 use indexmap::IndexMap;
-use llrm_instr as parse;
+use llrm_target::instr as parse;
 
 #[derive(Debug)]
 pub struct Shape {

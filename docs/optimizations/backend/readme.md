@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 132 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -25,7 +25,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | cfi | Reads call frame information back from emitted code. | `debuginfo.rs`, under `-g`. | [cfi](cfi.md) |
 | classes | What the selected target says about its registers, for the allocator and the passes around it. | `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller | [classes](classes.md) |
 | cmpsub | A compare of a value with a constant, where the same value minus (nearly) that constant is made just before it: the subtract's flags are the compare's. | A machine phase ahead of the first SSA phase (`flow::machine_with`), at | [cmpsub](cmpsub.md) |
-| coalesce | Removes a copy whose two values can share a register: the phase that runs LLVM's `RegisterCoalescer` ([`crate::coalescer`]), and the interference graph `twoaddr` and the spiller read. | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
+| coalesce | Removes a copy whose two values can share a register: the phase that runs LLVM's `RegisterCoalescer` ([`crate::coalescer`]). | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
 | combiner | A chain of one integer operation rebuilt so the operand that arrives last joins last: LLVM's `MachineCombiner` ([MachineCombiner.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCombiner.cpp)) with the generic reassociation patterns of `TargetInstrInfo`, the only ones i486 has. | On SSA, after `leaopt` and before `phielim` (the pin's `addILPOpts`, after | [combiner](combiner.md) |
 | comparefold | Fold a one-use load into the comparison that reads it, as a memory operand. | Per block, inside isel's cross-instruction selection | [comparefold](comparefold.md) |
 | compares | Expands `llvm.scmp` and `llvm.ucmp` into two compares and a subtract in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, with the bit counts, for a target | [compares](compares.md) |
@@ -62,7 +62,6 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | frameobjects | Where each frame object goes and how big the frame is: LLVM's `PEIImpl::calculateFrameObjectOffsets` ([PrologEpilogInserter.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PrologEpilogInserter.cpp#L856)). | Nothing yet (FO-1). | [frameobjects](frameobjects.md) |
 | funnel | Expands `llvm.fshl` and `llvm.fshr` into shifts and an or in MIR before instruction selection, for the targets whose description lists `fshl` or `fshr` under `expand`. | Once per module in `driver::optimized`, for a target that lists `fshl` or | [funnel](funnel.md) |
 | globals | Turns a MIR module's globals into assembler symbols and data: names, and each initializer's bytes with a relocation for every address in it. | `global names` and the data loop in `assemble::assembled_by`, once per | [globals](globals.md) |
-| hintwalk | The register each value is wanted in because of the copies that lead to it from a pinned value, kept up to date by what a rewrite names. | `HintWalk`: `fresh`, `update`, `wanted`. | [hintwalk](hintwalk.md) |
 | incremental | A dataflow answer over a body's blocks, held between asks and brought up to date from the blocks that changed. | `liveness`, `upperzero` and `peephole` (flag liveness). | [incremental](incremental.md) |
 | inline_asm | Names the QB runtime's registers for inline assembly operands and clobbers. | `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`). | [inline_asm](inline_asm.md) |
 | intbits | Integers of a given width held in an `i64`: the masks and wraps that stay defined at eight bytes, where `1 << 64` is not. | `stepflags` (the constant of a compare against a step) and `peephole` | [intbits](intbits.md) |
@@ -76,10 +75,9 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | libmcalls | Turns the rounding intrinsics x87 has no instruction for into calls of the C library: `llvm.floor.f64` is a call of `floor`. | Once per module in `driver::optimized`, after the pipeline: the optimizer | [libmcalls](libmcalls.md) |
 | lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
 | lirtext | LIR as text, one stage at a time: what `ISEL_DUMP` prints after each machine phase. | `assemble` after each machine phase when `ISEL_DUMP` is set; the register | [lirtext](lirtext.md) |
-| live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit`, `regclass` and | [live](live.md) |
+| live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit` and `regclass` | [live](live.md) |
 | liveness | Which physical register and flag lanes are live into and dead out of each block, and what one instruction reads and writes. | `peephole` and the sub-passes it runs (`regthrash`, `copysink`, | [liveness](liveness.md) |
 | liverangeshrink | Moves an instruction up to just after the last definition of its operands, so the operands' live ranges end sooner. | A machine phase after `machinesink` and before `phielim` | [liverangeshrink](liverangeshrink.md) |
-| liveunion | Answers which values already hold a register where an interval lies, so the allocator can test an assignment without visiting every holder. | `allocate` and `splitkit`. | [liveunion](liveunion.md) |
 | loopslots | Moves a loop's invariant loads, of a spill slot or of a constant, out of the loop to its entry edges. | After `peephole` (spill traffic is final), before `schedule`. Always on; | [loopslots](loopslots.md) |
 | lower_int64 | The contract of an inline routine the compiler places where an operation has no instruction (`llrm_x86::helpers`): what it reads and what it changes. | `isel/wide` (64-bit arithmetic helpers) and `isel/unwind`. | [lower_int64](lower_int64.md) |
 | machinecp | Forward and backward copy propagation inside a block, and dead-copy removal: LLVM's `MachineCopyPropagation`. | In the peephole phase, where `copyprop` ran (it and `regthrash`'s rename | [machinecp](machinecp.md) |
@@ -94,7 +92,6 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | nativeframe | The frame plan of a procedure whose prologue already exists (native-code input): where it reserves the frame, where it releases it, and which registers hold values on entry. | `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and | [nativeframe](nativeframe.md) |
 | nearcode | Puts a function a frontend allows near, which only its own module calls and only directly, in the near code space, so callers enter it by a near call. | Once per module at the start of `assemble::assembled_by` (`mir near code`), | [nearcode](nearcode.md) |
 | needs | What a body contains that a peephole sub-pass could act on, so that `peephole` skips a sub-pass whose subject is absent. | `peephole`. | [needs](needs.md) |
-| neighbours | The values one value interferes with: a sorted set that turns into a bit vector once it is dense. | `coalesce`, for its interference graph. | [neighbours](neighbours.md) |
 | objbuild | Encodes a masm module as a format-neutral object: code and data laid out in sections, each name resolved, each reference to one a relocation. | Once per module, after `assemble` and `data layout` have produced the masm | [objbuild](objbuild.md) |
 | optimizephis | A phi cycle that carries one value is that value, and one nothing reads is gone: `OptimizePHIs` before MachineCSE. | After `FarIndirectCalls`, before [`crate::backend::phiconst`](phiconst.md). Every level. | [optimizephis](optimizephis.md) |
 | overlap | Whether two machine memory operands may overlap, read from their addresses alone. | `spiller`, `floatassign`, `storedhomes`. | [overlap](overlap.md) |
@@ -113,7 +110,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | regclass | The register class of each value: the set of registers an instruction's operands allow it to be in. | Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate`, at | [regclass](regclass.md) |
 | registerinfo | The backend's view of a target's register file: re-exports of the types a target's `registers.regs` description generates. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [registerinfo](registerinfo.md) |
 | regpressure | Register pressure per pressure set, for the pre-RA scheduler: `RegPressureTracker` of the pin (RegisterPressure.cpp) as `GenericScheduler` asks it of a bottom-up region. | Named by `machinesched`. | [regpressure](regpressure.md) |
-| regthrash | Renames a definition's register so that a copy after it is a copy of a register to itself. | First sub-pass of [`crate::backend::peephole`](peephole.md), gated on a register copy | [regthrash](regthrash.md) |
+| regthrash | Which register lanes are dead after each instruction of a block, from the lanes dead at its exit. | `peephole`, `exactaddress`, `sharedstores`, `fixupleas`, `fixupbw` | [regthrash](regthrash.md) |
 | relayout | Lays a function's frame out a second time, with a hole for the spill slots, by moving each frame cell of the first layout. | In `machined_once` (`assemble.rs`), after the first layout is chosen, unless | [relayout](relayout.md) |
 | repbsf | `bsf` gets the `rep` prefix (the TZCNT encoding, which processors without `tzcnt` run as the same `bsf`) unless the function is optimised for size or the instruction's flags are read. | Named by `peephole`. | [repbsf](repbsf.md) |
 | returnsplit | Gives a return that reloads a spilled constant its own block on the edges that stored the constant, where that lets the frame be set up later. | In `assemble`, ahead of `jumps::duplicated_returns`, at -O1 and above. | [returnsplit](returnsplit.md) |

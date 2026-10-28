@@ -68,7 +68,7 @@ mod tests {
     fn options() -> llrm_codegen::driver::Options {
         llrm_codegen::driver::Options {
             dump: None,
-            ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+            ..llrm_driver::m16_options_old(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
         }
     }
 

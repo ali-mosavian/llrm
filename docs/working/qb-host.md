@@ -55,7 +55,7 @@ runtime/qb/                portable runtime; touches the machine only through ru
 
 ## Open rows (the issue's checklist against what landed)
 
-1. macOS arm64: not built or run natively (arm64 Linux under qemu passes the headless tests: `tests/qb_arm64.rs`, sysroot from `tools/build-arm64-sysroot.sh`). Milestone 6 is open. The dirty-line stress (`tests/qb_dirty.rs`, `tests/qbhost/dirty_stress.c`) passes on x86 (plain, TSan) and arm64 under qemu, which orders memory strongly: only arm64 hardware can show a tear.
+1. macOS arm64: not built or run natively (arm64 Linux under qemu passes the headless tests: `tests/qb_arm64.rs`, sysroot from `tools/targets/build-arm64-sysroot.sh`). Milestone 6 is open. The dirty-line stress (`tests/qb_dirty.rs`, `tests/qbhost/dirty_stress.c`) passes on x86 (plain, TSan) and arm64 under qemu, which orders memory strongly: only arm64 hardware can show a tear.
 2. Real window and real audio device: only the dummy drivers ran; no X11/Wayland/sound server on tinytim.
 3. Audio: the callback is tested only for receiving the tone (`sdl_audio_current`), not for its samples; PLAY timing through
    SDL is untested (PLAY parse and timing are tested headless). No tone queue (see Deviations).

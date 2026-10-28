@@ -760,8 +760,8 @@ impl Analysis for ExposedFrames {
         }
         let unit = Unit::within(context, layout, function, analyses.outer());
         Some(
-            crate::frameescape::exposed_renewed(function, previous.iter().copied(), &touched, |inst| {
-                crate::memory::is_lifetime_marker(&unit, inst)
+            crate::frameescape::exposed_renewed(function, previous.iter().copied(), &touched, |inst, at| {
+                crate::memory::kept_by(&unit, inst, at)
             })
             .into_iter()
             .collect(),
