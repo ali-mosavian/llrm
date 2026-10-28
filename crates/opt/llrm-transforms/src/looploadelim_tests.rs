@@ -122,3 +122,39 @@ corpus!(
     two_candidates,
     two_stores_same_block,
 );
+
+/// `n` counted loops in a row, each reading and writing `@a`.
+fn counted_loops(n: usize) -> String {
+    let mut text = String::from(
+        "@a = global [64 x i32] zeroinitializer\n\ndefine void @f(i32 %n) {\nb0:\n  %g = icmp sgt i32 %n, 0\n  br i1 %g, label %p0, label %end\n\n",
+    );
+    for k in 0..n {
+        let next = if k + 1 == n { "end".to_owned() } else { format!("p{}", k + 1) };
+        text += &format!(
+            "p{k}:\n  br label %l{k}\n\nl{k}:\n  %i{k} = phi i32 [ 0, %p{k} ], [ %n{k}, %l{k} ]\n  %q{k} = getelementptr inbounds i32, ptr @a, i32 %i{k}\n  %v{k} = load i32, ptr %q{k}\n  store i32 %v{k}, ptr %q{k}\n  %n{k} = add nuw nsw i32 %i{k}, 1\n  %c{k} = icmp eq i32 %n{k}, %n\n  br i1 %c{k}, label %x{k}, label %l{k}\n\nx{k}:\n  br label %{next}\n\n"
+        );
+    }
+    text + "end:\n  ret void\n}\n"
+}
+
+/// The trip counts worked out by `LoopDeletion` and then `LoopLoadElim` over
+/// `n` loops neither changes.
+fn computed_counts(n: usize) -> usize {
+    let mut module = parsed(&counted_loops(n));
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::loopdeletion::LoopDeletion);
+    manager.add(LoopLoadElim { max_target_vector_width_in_bits: 0 });
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// `LoopLoadElim` made its own expressions and worked out each loop's trip
+/// count again: 128 loops cost it 96 M instructions, 85 M of them in
+/// `LoopAccessInfo`, where the pin's pass reads the count its analysis manager
+/// already holds. A loop nothing changed is counted once across passes.
+#[test]
+fn a_loop_an_earlier_pass_counted_is_not_counted_again() {
+    assert_eq!(computed_counts(4), 4);
+    assert_eq!(computed_counts(16), 16);
+}
