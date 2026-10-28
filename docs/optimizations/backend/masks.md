@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/masks.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/masks.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/masks.rs sha256:11b98967887215ef0b04fc695889c880b497499de4f61fd35a7351f13b3960f0 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/masks.rs sha256:1cb54a2feede709ed0770563bfcc0aa86fe25d03839e130cdd889c82a3dcd9b4 -->
 
 # masks
 
@@ -15,9 +15,9 @@ whether one of them lies inside an interval, comparing registers by root so
 value wider than a word.
 
 ## Example
-A value live across `call f`, which clobbers `eax`, `ecx` and `edx`: the call
-is a mask point inside its interval, so `_clobbered` is true for those three
-and the value takes `ebx`, `esi` or `edi`.
+A value live across `call f`, which clobbers `eax`, `ecx` and `edx`: the
+call is a mask point inside its interval, so `_clobbered` is true for
+those three and the value takes `ebx`, `esi` or `edi`.
 
 ## Used by
 `backend::allocate`, the greedy allocator's inputs, and the passes that

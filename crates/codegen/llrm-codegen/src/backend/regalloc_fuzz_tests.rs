@@ -1153,7 +1153,7 @@ fn test_an_edited_answer_works_its_changed_values_out_from_where_they_occur() {
 /// 1.8). It reads the rows of bits, and builds no set of the live values.
 #[test]
 fn test_two_address_fixing_builds_no_set_of_the_live_values() {
-    use crate::backend::allocate::SETS_BUILT;
+    use crate::backend::liverows::SETS_BUILT;
     let (plain, _) = body(3, &Shape { pool: 12, ops: 14 });
     SETS_BUILT.with(|one| one.set(0));
     let _ = crate::backend::twoaddr::tied(&plain, Default::default());
@@ -1161,7 +1161,7 @@ fn test_two_address_fixing_builds_no_set_of_the_live_values() {
     assert_eq!(built, 0, "{built} sets of the live values built");
 }
 
-/// `allocate::live` was built from per-block sorted sets and converted to bit
+/// `liverows::live` was built from per-block sorted sets and converted to bit
 /// rows for the fixed point: 24% of compiling QCport's `d_faces` (#559). Dense
 /// rows all the way give the same sets.
 #[test]
@@ -1171,12 +1171,12 @@ fn test_dense_liveness_is_what_the_sorted_sets_gave() {
         let (plain, _) = body(seed, &shape);
         for body in [in_ssa(&plain), plain] {
             assert_eq!(
-                crate::backend::allocate::live(&body),
-                crate::backend::allocate::live_reference(&body),
+                crate::backend::liverows::live(&body),
+                crate::backend::liverows::live_reference(&body),
                 "seed {seed}"
             );
-            let (entering, leaving) = crate::backend::allocate::live_reference(&body);
-            let rows = crate::backend::allocate::live_rows(&body);
+            let (entering, leaving) = crate::backend::liverows::live_reference(&body);
+            let rows = crate::backend::liverows::live_rows(&body);
             for block in &body.blocks {
                 assert_eq!(
                     rows.entering(block.at).collect::<Vec<_>>(),
@@ -1348,7 +1348,7 @@ fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_fi
 /// answer it: whether it is live at a block's entry and exit, as the sets said.
 #[test]
 fn test_one_values_liveness_from_rows_is_what_the_sets_said() {
-    use crate::backend::allocate::{LiveAt, live_reference, live_rows, live_rows_by};
+    use crate::backend::liverows::{LiveAt, live_reference, live_rows, live_rows_by};
     for seed in 0..150 {
         let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
         let (plain, _) = body(seed, &shape);
@@ -1835,7 +1835,7 @@ fn test_a_scan_after_a_rewrite_is_edited_where_it_stands() {
 /// liveness says.
 #[test]
 fn test_live_intervals_are_live_where_the_dataflow_says() {
-    use crate::backend::allocate::{LiveAt, live_rows};
+    use crate::backend::liverows::{LiveAt, live_rows};
     use crate::liveness::liveintervals::LiveIntervals;
     let mut checked = 0;
     let mut multi_def = 0;

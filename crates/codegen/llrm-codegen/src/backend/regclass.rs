@@ -1180,7 +1180,7 @@ pub fn violations(
     skip: &BTreeSet<u32>,
 ) -> Vec<Violation> {
     let confined = classes_with(body, &BTreeSet::new(), segments, registers, true);
-    let (_, live_out) = crate::backend::allocate::live(body);
+    let (_, live_out) = crate::backend::liverows::live(body);
     let general: BTreeSet<RegId> = registers.available.iter().map(|one| crate::backend::masks::_whole(*one)).collect();
     let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
     let files: [(&'static str, &BTreeSet<RegId>); 2] = [("general", &general), ("selector", &selectors)];
