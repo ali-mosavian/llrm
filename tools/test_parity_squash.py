@@ -1943,6 +1943,20 @@ def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_pa
     assert any("the real cause" in line for line in got), got
 
 
+def test_the_tool_tests_of_a_landing_leave_the_dosbox_bench_programs_to_the_gate(tmp_path):
+    """#5690's tool-tests stage ran every bench program in DOSBox, minutes each, and ran into the 600 s cap; the batch was refused on a test the gate owns."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+    ran = []
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+
+    ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: ran.append(command) or Done(), ensure=lambda: "")
+    assert ps.GATE_ONLY_TESTS and all(f"--deselect={one}" in ran[0] for one in ps.GATE_ONLY_TESTS), ran
+
+
 def test_a_tool_test_that_times_out_refuses_the_batch_instead_of_crashing_it(tmp_path):
     """#5690's pytest ran past 600 s: TimeoutExpired went uncaught, the batch died with a traceback and no REFUSED line, and the PR came back every pass."""
     (tmp_path / "tools").mkdir()

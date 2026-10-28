@@ -41,8 +41,9 @@ fn procedure(
         .collect()
 }
 
-/// The m16 default's spelling of a C name in a listing (`_twice@3`, regparm3), as
-/// the tests without `-mabi=sysv` meet it; `common::symbol` is the default target's.
+/// The m16 default's spelling of a C name in a listing (`_twice@3`, regparm3),
+/// as the tests without `-mabi=sysv` meet it; `common::symbol` is the default
+/// target's.
 fn watcom(name: &str) -> String {
     format!("_{name}@3")
 }

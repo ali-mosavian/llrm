@@ -1084,6 +1084,11 @@ def scanners_for(files: list[str]) -> tuple[str, ...]:
     return ALWAYS_SCANNERS
 
 
+# Tests that launch DOSBox bench programs for minutes each (29 min for one pytest id): the CI gate runs them, a landing batch does not (its cap is 600 s).
+# Ids are relative to tools/, pytest's rootdir.
+GATE_ONLY_TESTS = ("dosbatch/test_qb32.py::test_bench_program_prints_what_it_should_on_both_targets",)
+
+
 def tool_tests_for(files: list[str], root: Path = ROOT) -> list[str]:
     """The pytest files of the Python tools a diff touches: tools/x.py -> tools/test_x.py, and a changed test file itself; none for a diff outside tools/."""
     tests = set()
@@ -1106,7 +1111,7 @@ def tool_test_failures(files: list[str], root: Path = ROOT, run=subprocess.run, 
         return [why]
     stage("tool-tests")
     try:
-        done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
+        done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *[f"--deselect={one}" for one in GATE_ONLY_TESTS], *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
     except subprocess.TimeoutExpired:  # an uncaught timeout killed the batch with no REFUSED line, and the PR came back every pass
         return ["the tool tests ran past 600 s"]
     if done.returncode == 0:

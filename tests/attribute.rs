@@ -26,14 +26,22 @@ fn compiled(
     (output, listing)
 }
 
-/// The text of `main_` (`_main` at m16, whose default is C's for `main`), the one routine that calls.
+/// The text of `main_` (`_main` at m16, whose default is C's for `main`), the
+/// one routine that calls.
 fn main_of(listing: &str) -> &str {
     let from = listing.find("main_ proc").or_else(|| listing.find("_main proc")).expect("main");
     &listing[from..listing[from..].find("endp").map_or(listing.len(), |at| from + at)]
 }
 
+/// Calls in `main_`, a tail call (`jmp k_`, not a jump to a local `L1_1`) among
+/// them.
 fn calls(listing: &str) -> usize {
-    main_of(listing).lines().filter(|line| line.trim_start().starts_with("call")).count()
+    let is_call = |line: &str| {
+        let line = line.trim_start();
+        line.starts_with("call")
+            || line.strip_prefix("jmp ").is_some_and(|target| !target.trim_start().starts_with('L'))
+    };
+    main_of(listing).lines().filter(|line| is_call(line)).count()
 }
 
 const PLAIN: &str = "int k(int x) { return x + 1; }\nint main(void) { return k(2); }\n";
