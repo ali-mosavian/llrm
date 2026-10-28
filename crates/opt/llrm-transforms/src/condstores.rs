@@ -89,8 +89,7 @@ fn single_successor(
     function: &Function,
     block: BlockId,
 ) -> Option<BlockId> {
-    let successors = function.successors(block);
-    (successors.len() == 1).then(|| successors[0])
+    function.sole_successor(block)
 }
 
 /// `ensureValueAvailableInSuccessor`: a phi in the only successor of `block`

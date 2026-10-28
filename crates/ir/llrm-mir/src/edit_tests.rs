@@ -1043,3 +1043,23 @@ fn test_reserved_instructions_do_not_move_the_arena() {
     }
     assert_eq!(f.instruction_capacity(), at);
 }
+
+/// Asking whether a switch of 256 cases has one successor listed its 256
+/// targets (`Function::successors` 12 K Ir a call, 8,720 calls in a 256-state
+/// machine: SimplifyCFG x3.5 a doubling, the pin's x1.8). It stops at the
+/// second distinct target.
+#[test]
+fn the_sole_successor_of_a_switch_stops_at_a_second_target() {
+    let cases: String = (0..256).map(|i| format!("    i32 {i}, label %t{}\n", i % 2)).collect();
+    let text = format!(
+        "define void @f(i32 %x) {{\nentry:\n  switch i32 %x, label %t0 [\n{cases}  ]\nt0:\n  br label %t1\nt1:\n  ret void\n}}\n"
+    );
+    let mut module = module(&text);
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    crate::module::GENERIC_SUCCESSOR_SCANS.with(|scans| scans.set(0));
+    let (switch, jump) = (f.sole_successor(layout[0]), f.sole_successor(layout[1]));
+    let scans = crate::module::GENERIC_SUCCESSOR_SCANS.with(std::cell::Cell::get);
+    assert_eq!((switch, jump), (None, Some(layout[2])));
+    assert_eq!(scans, 0, "the successors of the switch were listed whole");
+}
