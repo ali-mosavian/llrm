@@ -208,7 +208,7 @@ def _compile_basic(source: Path, obj: Path, flags: tuple[str, ...]) -> None:
 
 
 def link(program: Path, objects: dict[str, Path], exe: Path, work: Path) -> tuple[Path, ...]:
-    return dosbatch.link_target(TARGET, program, exe, work, runtime=(START_FILES, []), objects_after=tuple(closure(program, objects)))
+    return dosbatch.link_target(TARGET, program, exe, work, runtime=(START_FILES, []), objects_after=tuple(closure(program, objects)), defines=dosbatch.os_defines(TARGET, "qb"))
 
 
 # Every dos32 run is on virtual time (the fork's `[cpu] virtual time`): the guest clock follows the instructions it
