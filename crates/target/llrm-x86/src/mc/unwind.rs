@@ -256,6 +256,41 @@ mod tests {
         assert!(file.windows(EH.len()).any(|bytes| bytes == EH));
     }
 
+    /// A frame whose CFA moves to a register the compact form has no slot for
+    /// is `0x04000000` (DWARF) with the FDE in `__eh_frame`, as the pin writes
+    /// it; the linker, not the object, fills in the FDE's offset.
+    #[test]
+    fn a_frame_the_compact_form_cannot_say_keeps_its_fde() {
+        use llrm_object::assembler::Cfi;
+        let compact = "00000000000000000b0000000000000400000000000000000000000000000000";
+        let eh = "1400000000000000017a520001781001100c070890010000240000001c000000b0ffffffffffffff0b0000000000000000420e108c02430d0c450c0708000000";
+        let hex = |text: &str| -> Vec<u8> { (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap()).collect() };
+        let frame = Frame {
+            section: 0,
+            offset: 0,
+            length: 0x0b,
+            rows: vec![
+                row(2, 16, &[("r12", -16)]),
+                FrameRow { cfa_register: "r12".into(), ..row(5, 16, &[("r12", -16)]) },
+                row(10, 8, &[("r12", -16)]),
+            ],
+            cfi: vec![
+                Cfi::DefCfaOffset { offset: 16 },
+                Cfi::Offset { register: 12, offset: -16 },
+                Cfi::DefCfaRegister { register: 12 },
+                Cfi::DefCfa { register: 7, offset: 8 },
+            ],
+        };
+        let written = macho_expanded(&object(vec![frame.clone()])).unwrap();
+        let [_, unwind, _] = &written.sections[..] else { panic!("{} sections", written.sections.len()) };
+        assert_eq!(unwind.image, hex(compact));
+        // Everything but the FDE's pointer, which the Mach-O writer resolves
+        // from the sections' addresses.
+        let file = X86Objects.write_object("macho", &object(vec![frame])).unwrap();
+        let eh = hex(eh);
+        assert!(file.windows(64).any(|bytes| bytes[..32] == eh[..32] && bytes[40..] == eh[40..]));
+    }
+
     #[test]
     fn the_registers_have_system_v_numbers() {
         assert_eq!(
