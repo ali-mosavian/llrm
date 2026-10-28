@@ -698,6 +698,23 @@ impl FixedPins {
             }))
         };
         let (Some(first), Some(last)) = (li.segments.first(), li.segments.last()) else { return false };
+        // The merged range of each unit of the register (the pin's
+        // `LiveRegMatrix::checkRegUnitInterference`) says at once that no pin
+        // meets the range; only a meeting is then told from a copy that makes
+        // it, pin by pin.
+        let meets = self
+            .tri
+            .regunits(phys)
+            .any(
+                |unit| self.units
+                    .get(&unit)
+                    .is_some_and(
+                        |range| li.segments.iter().any(|segment| range.overlaps_interval(&segment.start, &segment.end)),
+                    ),
+            );
+        if !meets {
+            return false;
+        }
         near.iter().map(|&at| &self.pins[at]).any(|pin| {
             #[cfg(test)]
             PINS_EXAMINED.with(|count| count.set(count.get() + 1));
@@ -2183,6 +2200,33 @@ mod tests {
         li
     }
 
+    /// `FixedPins` as `decide_with_split` builds them: the merged range of each
+    /// unit comes from the pins.
+    fn fixed_pins(
+        tri: RegisterInfo,
+        pins: Vec<FixedPin>,
+        copies: crate::support::hash::HashMap<SlotIndex, (u32, u32)>,
+    ) -> FixedPins {
+        let mut units: crate::support::hash::HashMap<u32, crate::liveness::liverange::LiveRange> = Default::default();
+        for pin in &pins {
+            for unit in tri.regunits(pin.root) {
+                let range = units
+                    .entry(unit)
+                    .or_insert_with(
+                        || crate::liveness::liverange::LiveRange {
+                            segments: Vec::new(),
+                            valnos: Vec::new(),
+                        },
+                    );
+                for (start, end) in &pin.segments {
+                    range.segments.push(crate::liveness::liverange::Segment::new(start.clone(), end.clone(), None));
+                }
+                range.segments.sort_by(|a, b| a.start.cmp(&b.start));
+            }
+        }
+        FixedPins { tri, pins, units, copies, overlapping: Default::default() }
+    }
+
     /// A value copied into the register a pinned value holds may sit in it:
     /// the overlap starts at the copy (`LiveRange::overlaps(Other, CP)`). The
     /// pinned value was a vreg that every other range had to avoid, so `k`
@@ -2195,13 +2239,11 @@ mod tests {
         let tri = RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO));
         // Value 2 is pinned to ecx over [10, 20) and is made by `mov v2, v1` at
         // 10.
-        let pins = FixedPins {
+        let pins = fixed_pins(
             tri,
-            pins: vec![FixedPin { reg: 2, root: RegId::ECX, segments: vec![(at[10].clone(), at[20].clone())] }],
-            units: Default::default(),
-            copies: [(at[10].clone(), (2, 1))].into_iter().collect(),
-            overlapping: Default::default(),
-        };
+            vec![FixedPin { reg: 2, root: RegId::ECX, segments: vec![(at[10].clone(), at[20].clone())] }],
+            [(at[10].clone(), (2, 1))].into_iter().collect(),
+        );
         assert!(!pins.interferes(&span(1, 5, 30, &at), RegId::ECX), "the copy's source shares ecx");
         assert!(pins.interferes(&span(3, 5, 30, &at), RegId::ECX), "another range over the pin");
         assert!(!pins.interferes(&span(3, 5, 30, &at), RegId::EDX), "a register the pin does not hold");
@@ -2217,17 +2259,41 @@ mod tests {
         let at = fixed_pin_slots();
         let tri = RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO));
         let pin = |reg, root| FixedPin { reg, root, segments: vec![(at[10].clone(), at[20].clone())] };
-        let pins = FixedPins {
+        let pins = fixed_pins(
             tri,
-            pins: vec![pin(2, RegId::ECX), pin(3, RegId::EDX), pin(4, RegId::ESI), pin(5, RegId::EDI)],
-            units: Default::default(),
-            copies: Default::default(),
-            overlapping: Default::default(),
-        };
+            vec![pin(2, RegId::ECX), pin(3, RegId::EDX), pin(4, RegId::ESI), pin(5, RegId::EDI)],
+            Default::default(),
+        );
         PINS_EXAMINED.with(|count| count.set(0));
         assert!(pins.interferes(&span(1, 12, 30, &at), RegId::ECX));
         assert!(pins.interferes(&span(1, 12, 30, &at), RegId::ECX));
         assert!(!pins.interferes(&span(1, 12, 30, &at), RegId::EAX));
         assert_eq!(PINS_EXAMINED.with(std::cell::Cell::get), 2, "the ecx pin, twice; none for eax");
+    }
+
+    /// A query walked every pin sharing a unit with the register even when the
+    /// range lay between them all: 200 pins of ecx examined per question, 21 M
+    /// instructions of `FixedPins::interferes` in jpeg_fixed -O2. The merged
+    /// range of the unit rejects it first.
+    #[test]
+    fn a_range_between_the_pins_of_a_register_examines_none_of_them() {
+        let at = fixed_pin_slots();
+        let tri = RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO));
+        let pins = fixed_pins(
+            tri,
+            (0..8)
+                .map(|k| FixedPin {
+                    reg: 10 + k,
+                    root: RegId::ECX,
+                    segments: vec![(at[10 + 2 * k as usize].clone(), at[11 + 2 * k as usize].clone())],
+                })
+                .collect(),
+            Default::default(),
+        );
+        PINS_EXAMINED.with(|count| count.set(0));
+        assert!(!pins.interferes(&span(1, 3, 5, &at), RegId::ECX), "before every pin");
+        assert!(!pins.interferes(&span(1, 11, 12, &at), RegId::ECX), "between two");
+        assert_eq!(PINS_EXAMINED.with(std::cell::Cell::get), 0, "no pin walked for a range that meets none");
+        assert!(pins.interferes(&span(1, 12, 13, &at), RegId::ECX), "over one");
     }
 }

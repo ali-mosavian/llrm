@@ -20,6 +20,7 @@ typedef struct Fdb {
     byte flags;
     /* where the next byte of PRINT # goes on its line */
     byte column;
+    byte past; /* a BINARY file's last read came up short: what EOF means there */
     unsigned record_length; /* RANDOM's record, INPUT's and OUTPUT's buffer */
 } Fdb;
 
