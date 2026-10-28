@@ -1081,7 +1081,10 @@ def tool_test_failures(files: list[str], root: Path = ROOT, run=subprocess.run, 
         return [why]
     stage("tool-tests")
     done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
-    return [] if done.returncode == 0 else (done.stdout + done.stderr).strip().splitlines()[-6:]
+    if done.returncode == 0:
+        return []
+    lines = (done.stdout + done.stderr).strip().splitlines()
+    return [*[line for line in lines if line.startswith("E  ")][:20], *lines[-6:]]  # the last lines are the summary; the error text sits above them
 
 
 def landing_scanner_failures(

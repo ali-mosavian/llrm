@@ -1876,3 +1876,17 @@ def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
     monkeypatch.setattr(ps.subprocess, "run", lambda command, **kw: ran.append(command))
     ps._build_release()
     assert ran and "wccq" in ran[0], ran
+
+
+def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_path):
+    """Only the last 6 lines of pytest were kept: #5690 was refused five times with "BuildError" and the stderr naming the cause was cut."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+
+    class Done:
+        returncode = 1
+        stdout = "\n".join(["E   dosbatch.BuildError: llrm-qb: the real cause", *["    frame"] * 30, "ERROR tools/x.py::t", "1 error"])
+        stderr = ""
+
+    got = ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: Done(), ensure=lambda: "")
+    assert any("the real cause" in line for line in got), got
