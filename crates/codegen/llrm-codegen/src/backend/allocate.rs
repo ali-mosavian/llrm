@@ -114,8 +114,7 @@
 //! what changed, pins are found again for the changed blocks, the union is
 //! refreshed, any placed value that now overlaps another or has a clobber in
 //! its range is unplaced, and every new, moved or unplaced value re-enters
-//! the queue. The loop stops when the queue is empty (`BUDGET` visits at
-//! most, 200000).
+//! the queue. The loop stops when the queue is empty.
 //!
 //! The last chance before a value is spilled is recoloring
 //! (`greedy::greedy`'s `try_last_chance_recoloring`).
@@ -226,154 +225,19 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::analysis::frequency::Frequency;
 use crate::analysis::intervals::{self as ranges, key};
 use crate::backend::allocresult::{Assignment, Error, Unplaced};
+use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame};
 use crate::backend::masks::_whole;
+use crate::backend::regclass::{classes, explicit_selectors_given};
 use crate::backend::target::{self, Segments};
 use crate::backend::{constrain, datagroup};
-use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
+use crate::model::ir::{Loc, Operation};
 use crate::model::lir::{self, Insn, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
-use crate::support::hash::{IndexMap, IndexSet};
-
-/// Most queue visits an allocation may take: more means it does not converge, a
-/// bug.
-pub const BUDGET: usize = 200_000;
-
-use crate::backend::classes::RegisterClasses;
-use crate::backend::regclass::classes;
-
-/// A plain move into one value; whether anything reads it is the caller's.
-pub fn _unread_move(one: &Insn) -> bool {
-    let Some(what) = &one.what else {
-        return false;
-    };
-    what.op == Operation::Move
-        && what.dests.len() == 1
-        && what.sources.len() == 1
-        && matches!(what.dests[0], Loc::Held(_))
-        && matches!(what.sources[0], Loc::Imm(_) | Loc::Held(_))
-        && matches!(&what.dests[0], Loc::Held(dest) if one.defines == [dest.value])
-        && one.requires.is_empty()
-        && one.delivers.is_empty()
-        && one.clobbers.is_empty()
-        && one.group.is_none()
-        && one.symbol != Some(true)
-}
-
-/// Each far cell whose selector is also read as a number, or pinned to a
-/// general register, reached through ES.
-pub fn explicit_selectors(
-    body: &LirBody,
-    pinned: Option<&IndexMap<u32, RegId>>,
-    segments: &Segments,
-    registers: &RegisterClasses,
-) -> LirBody {
-    let confined = classes(body, &BTreeSet::new(), segments, registers);
-    explicit_selectors_given(body, pinned, segments, &confined).unwrap_or_else(|| body.clone())
-}
-
-/// `explicit_selectors`, given the body's classes: None where no cell is
-/// rewritten.
-pub fn explicit_selectors_given(
-    body: &LirBody,
-    pinned: Option<&IndexMap<u32, RegId>>,
-    segments: &Segments,
-    confined: &crate::backend::regclass::Classes,
-) -> Option<LirBody> {
-    let regs = body.regs();
-    let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
-    let empty = IndexMap::default();
-    let pinned = pinned.unwrap_or(&empty);
-    let mut conflicted: BTreeSet<u32> = BTreeSet::new();
-    for block in &body.blocks {
-        for one in &block.insns {
-            let Some(what) = &one.what else {
-                continue;
-            };
-            for place in what.dests.iter().chain(&what.sources) {
-                if let Loc::Mem(cell) = place {
-                    if let Some(selector) = cell.selector {
-                        if confined.get(&selector.value) != Some(&selectors)
-                            || !regs.is_segment(*pinned.get(&selector.value).unwrap_or(&regs.far()))
-                        {
-                            conflicted.insert(selector.value);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if conflicted.is_empty() {
-        return None;
-    }
-
-    let through_es = |place: &Loc| -> Loc {
-        if let Loc::Mem(cell) = place {
-            if cell.selector.is_some_and(|selector| conflicted.contains(&selector.value)) {
-                let addr = cell.addr.expect("a far cell has an address");
-                return Loc::Mem(Mem {
-                    selector: None,
-                    addr: Some(Addr { segment: regs.far().iced(), ..addr }),
-                    ..cell.clone()
-                });
-            }
-        }
-        place.clone()
-    };
-
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns = Vec::new();
-        for one in &block.insns {
-            let named: Vec<Held> = match &one.what {
-                None => Vec::new(),
-                Some(what) => what
-                    .dests
-                    .iter()
-                    .chain(&what.sources)
-                    .filter_map(|place| match place {
-                        Loc::Mem(cell) => cell.selector.filter(|selector| conflicted.contains(&selector.value)),
-                        _ => None,
-                    })
-                    .collect(),
-            };
-            if named.is_empty() {
-                insns.push(Arc::clone(one));
-                continue;
-            }
-            let what = one.what.as_ref().expect("named is empty without semantics");
-            let what = Semantics {
-                dests: what.dests.iter().map(&through_es).collect(),
-                sources: what.sources.iter().map(&through_es).collect(),
-                ..what.clone()
-            };
-            let requires: IndexSet<(Held, RegId)> =
-                one.requires.iter().copied().chain(named.iter().map(|held| (*held, regs.far()))).collect();
-            let uses: IndexSet<u32> = one.uses.iter().copied().chain(named.iter().map(|held| held.value)).collect();
-            let mut made = (**one).clone();
-            made.what = Some(what);
-            made.requires = requires.into_iter().collect();
-            made.uses = uses.into_iter().collect();
-            insns.push(Arc::new(made));
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    Some(body.with_blocks(blocks))
-}
-
-/// How many copies away a fixed register still reaches a value as its hint: the
-/// allocator's copy-hint propagation depth, as gcc exposes its limits as
-/// `--param`s. A chain of copies longer than this carries no hint further. The
-/// corpus (136 files at -O1, -O2, -O3, -Os and -Omax, 141,519 propagations)
-/// reaches 74 at the most (crc, an unrolled loop), 17 everywhere else, and 96%
-/// stop within 8; 128 is above the most. Without a bound a copy chain of N
-/// values is walked end to end after every spill (`cells`, N=448: 221 levels),
-/// N rounds of N steps.
-pub const HINT_DEPTH: usize = 128;
+use crate::support::hash::IndexMap;
 
 /// A register for every value, by the greedy allocator, for the tests of the
 /// passes that need an assignment of a body that does not spill.
@@ -730,45 +594,6 @@ impl LIRTransform for RegAlloc {
     }
 }
 
-/// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
-/// reloads, stores and rematerializations, and the frame operands of x87 and
-/// other instructions. The allocator can reach only the first three.
-pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static str, f64> {
-    let deep = ranges::depths(body);
-    let busy = Frequency::of(body);
-    let mut out = std::collections::BTreeMap::new();
-    for block in &body.blocks {
-        let depth = deep.get(&block.at).copied().unwrap_or(0);
-        if depth == 0 {
-            continue;
-        }
-        for one in &block.insns {
-            let Some(what) = &one.what else { continue };
-            let frame = what
-                .dests
-                .iter()
-                .chain(&what.sources)
-                .any(
-                    |place| matches!(
-                        place,
-                        Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)
-                    ),
-                );
-            let float = what.op.is_x87();
-            let cause = match () {
-                _ if one.spill_reload => "reload",
-                _ if one.spill_store => "store",
-                _ if one.rematerialized => "remat",
-                _ if frame && float => "x87-frame",
-                _ if frame => "int-frame",
-                _ => continue,
-            };
-            *out.entry(cause).or_insert(0.0) += busy.block(block.at);
-        }
-    }
-    out
-}
-
 /// Python `format(value, "g")`.
 pub(crate) fn _g(value: f64) -> String {
     if value.is_nan() {
@@ -791,6 +616,24 @@ pub(crate) fn _g(value: f64) -> String {
         return format!("{}e{sign}{:02}", trimmed(mantissa.to_owned()), exponent.abs());
     }
     trimmed(format!("{value:.*}", (5 - exponent) as usize))
+}
+
+/// A plain move into one value; whether anything reads it is the caller's.
+fn _unread_move(one: &Insn) -> bool {
+    let Some(what) = &one.what else {
+        return false;
+    };
+    what.op == Operation::Move
+        && what.dests.len() == 1
+        && what.sources.len() == 1
+        && matches!(what.dests[0], Loc::Held(_))
+        && matches!(what.sources[0], Loc::Imm(_) | Loc::Held(_))
+        && matches!(&what.dests[0], Loc::Held(dest) if one.defines == [dest.value])
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty()
+        && one.group.is_none()
+        && one.symbol != Some(true)
 }
 
 /// `body` without the abandoned moves (an instruction nothing reads) in
@@ -857,7 +700,7 @@ mod tests {
     use crate::backend::rewriter::{_dead_insertions, _placed, _settled};
     use crate::backend::{parcopy, select, verify};
     use crate::model::ir;
-    use crate::model::ir::{Imm, Reg};
+    use crate::model::ir::{Addr, Held, Imm, Mem, Reg, Semantics, Space};
     use crate::model::lir::LirBlock;
     use crate::support::hash::IndexMap;
 
