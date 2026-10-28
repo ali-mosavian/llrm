@@ -1464,3 +1464,41 @@ fn a_frame_register_function_rebases_the_frame_address_on_it_and_back() {
     let has = |pattern: &[u8]| frame.windows(pattern.len()).any(|window| window == pattern);
     assert!(has(&[0x0D, 0x06]) && has(&[0x0C, 0x07, 0x08]) && has(&[0x86, 0x02]), "{frame:02x?}");
 }
+
+/// A frame whose registers are pushed before the locals' space (`saved_first`,
+/// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
+/// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
+/// add rsp, 32; pop rbx; ret`.
+#[test]
+fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
+    let text = format!(
+        "{SYSV}declare i32 @g(ptr, i32)\ndeclare i32 @h(i32)\n\
+         define i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %buf = alloca [6 x i32]\n  \
+         %x = call i32 @g(ptr %buf, i32 %a)\n  %y = call i32 @h(i32 %x)\n  %z = add i32 %y, %x\n  ret i32 %z\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_of(&text),
+        hex(
+            "1400000000000000017a5200017810011b0c07089001000\
+             01c0000001c000000000000002200000000410e10440e3083025b0e10410e0800"
+        )
+    );
+}
+
+/// An `add` of a constant to a register moved the tracked frame address as if
+/// it adjusted the stack pointer, so the exit after a restated frame declared
+/// `def_cfa_offset 14` (`add eax, 2` after the first return).
+#[test]
+fn an_add_to_a_register_does_not_move_the_frame_address() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndeclare i32 @h(i32)\n\
+         define i32 @f(i32 %a, i32 %b) \"disable-tail-calls\"=\"true\" {{\n  %x = call i32 @g(i32 %a)\n  \
+         %c = icmp sgt i32 %x, %b\n  br i1 %c, label %big, label %rest\nbig:\n  %hx = call i32 @h(i32 %x)\n  \
+         %r1 = add i32 %hx, 1\n  ret i32 %r1\nrest:\n  %n = icmp slt i32 %x, 0\n  br i1 %n, label %neg, label %done\n\
+         neg:\n  %gb = call i32 @g(i32 %b)\n  %r2 = add i32 %gb, 2\n  ret i32 %r2\ndone:\n  ret i32 %x\n}}\n"
+    );
+    let frame = eh_frame_of(&text);
+    // `DW_CFA_def_cfa_offset` (0x0E) only ever names the entry's 16 and the return's 8.
+    let offsets: Vec<u8> = frame.windows(2).filter(|pair| pair[0] == 0x0E).map(|pair| pair[1]).collect();
+    assert!(!offsets.is_empty() && offsets.iter().all(|one| matches!(one, 8 | 16)), "{frame:02x?}");
+}

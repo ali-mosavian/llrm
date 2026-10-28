@@ -663,6 +663,9 @@ struct CfiState {
     depth: i64,
     framed: bool,
     frame: i64,
+    /// The entry sets the frame register (`mov bp, sp`): a push of it is the
+    /// frame's own save. Without one it is a callee-saved register like any.
+    uses_frame: bool,
 }
 
 impl CfiState {
@@ -670,8 +673,9 @@ impl CfiState {
         slot: i64,
         sp: u16,
         bp: u16,
+        uses_frame: bool,
     ) -> Self {
-        CfiState { slot, sp, bp, depth: slot, framed: false, frame: 0 }
+        CfiState { slot, sp, bp, depth: slot, framed: false, frame: 0, uses_frame }
     }
 
     /// The directive that restates the frame address after code that left it
@@ -699,7 +703,7 @@ impl CfiState {
         match (what.op, what.name.as_deref()) {
             (Operation::Push, _) => {
                 self.depth += self.slot;
-                if &what.sources[0] == bp {
+                if self.uses_frame && &what.sources[0] == bp {
                     // The frame register's own save is declared at once, the
                     // others' at the end of the prologue.
                     out.push(Cfi::DefCfaOffset { offset: self.depth });
@@ -722,7 +726,7 @@ impl CfiState {
                 self.frame = self.depth;
                 out.push(Cfi::DefCfaRegister { register: self.bp });
             }
-            (Operation::Binary, Some(name @ ("sub" | "add"))) => {
+            (Operation::Binary, Some(name @ ("sub" | "add"))) if what.dests.first() == Some(&sp_reg()) => {
                 let size = what.sources.get(1).and_then(imm).unwrap_or(0);
                 self.depth += if name == "sub" { size } else { -size };
                 if !self.framed && size != 0 {
@@ -1483,7 +1487,6 @@ fn built(
     // check), which is what the rows below are right for.
     let plain = procedure.body.bits == 64
         && wrap.is_none()
-        && !sequences.first
         && procedure.interrupt.is_none()
         && procedure.entry == 0
         && !procedure.far
@@ -1494,29 +1497,33 @@ fn built(
     let dwarf =
         |register: RegId| regs.name(register).and_then(llrm_x86::mc::unwind::register).map(|number| number as u16);
     let numbers = dwarf(procedure.registers.pointer).zip(dwarf(procedure.registers.stack));
-    let mut cfi =
-        numbers.filter(|_| plain).map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame));
+    let uses_frame = enter.iter().any(|one| {
+        one.op == Operation::Move && one.dests.first() == Some(&bp) && one.sources.first() == Some(&sp_reg())
+    });
+    let callee_saved = saved_of(procedure);
+    let mut cfi = numbers
+        .filter(|_| plain)
+        .map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame, uses_frame));
     let (mut entry_items, mut after_entry) = (Vec::new(), None);
     if let Some(cfi) = cfi.as_mut() {
         entry_items.push(Item::Mark(Mark::Declared));
-        let pushes = sequences.entry.len() - sequences.saved.len();
         let mut pending = Vec::new();
-        for (at, one) in enter.iter().enumerate() {
+        for one in enter.iter() {
             entry_items.push(Item::Semantics(one.clone()));
             let marks = cfi.after(one, &bp);
-            if at >= pushes
+            if one.op == Operation::Push
                 && let Loc::Reg(pushed) = &one.sources[0]
+                && callee_saved.contains(&pushed.register)
                 && let Some(register) = dwarf(pushed.register)
             {
                 // A callee-saved register's own offset is declared after the
-                // whole prologue (`emitCalleeSavedFrameMoves`).
+                // whole prologue (`emitCalleeSavedFrameMoves`), the last
+                // pushed first.
                 pending.push(Item::Cfi(Cfi::Offset { register, offset: -cfi.depth }));
-                entry_items.extend(marks);
-            } else {
-                entry_items.extend(marks);
             }
+            entry_items.extend(marks);
         }
-        entry_items.extend(pending);
+        entry_items.extend(pending.into_iter().rev());
         after_entry = Some(cfi.clone());
     } else {
         entry_items.extend(enter.into_iter().map(Item::Semantics));
