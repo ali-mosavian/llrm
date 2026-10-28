@@ -1321,6 +1321,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::And, vt, &[self.dag.operand(n0, 0), mask]));
             }
         }
+        // `srl (sra x, y), w-1` is `srl x, w-1`: the sign bit is the one `sra`
+        // leaves alone ([L11886][pin]).
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11886
+        if op == ISD::Srl && self.dag.opcode(n0) == ISD::Sra && self.dag.constant(n1) == Some(width - 1) {
+            return Some(self.dag.get_node(ISD::Srl, vt, &[self.dag.operand(n0, 0), n1]));
+        }
         if self.dag.opcode(n0) != op {
             return None;
         }
