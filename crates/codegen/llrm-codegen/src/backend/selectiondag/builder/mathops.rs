@@ -61,6 +61,16 @@ impl Builder<'_> {
                 let scale = self.get_value(instruction.operands[2])?;
                 self.expand_div_fix(first, second, scale)
             }
+            Intrinsic::Saturating { op, signed } => {
+                let second = self.get_value(instruction.operands[1])?;
+                let code = match (op, signed) {
+                    (BinaryOp::Add, true) => ISD::SAddSat,
+                    (BinaryOp::Add, false) => ISD::UAddSat,
+                    (_, true) => ISD::SSubSat,
+                    (_, false) => ISD::USubSat,
+                };
+                self.dag.get_node(code, dest, &[first, second])
+            }
             Intrinsic::MinMax { signed, max } => {
                 let second = self.get_value(instruction.operands[1])?;
                 let code = match (signed, max) {

@@ -96,7 +96,10 @@ fn fneg_and_fabs_of_a_float_are_sign_mask_logic() {
     ] {
         let (dag, root) = legalized_float_op(op, inner, f64v);
         assert_eq!((dag.opcode(root), dag.value_type(root)), (want, f64v), "{op:?}");
-        assert!(dag.constant_pool.contains(&(mask, EVT::Simple(MVT::I128))), "{op:?}: mask");
+        // The mask is in both lanes of the 16 bytes, as the pin's vector
+        // constant.
+        let splat = mask | mask << 64;
+        assert!(dag.constant_pool.contains(&(splat, EVT::Simple(MVT::I128))), "{op:?}: mask");
     }
 }
 
@@ -147,7 +150,8 @@ fn fcopysign_of_a_float_is_two_masks_and_an_or() {
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.value_type(root)), (x86isd::FOR, f32v));
     for mask in [(1u128 << 31) - 1, 1 << 31] {
-        assert!(dag.constant_pool.contains(&(mask, EVT::Simple(MVT::I128))));
+        let splat = mask * 0x0000_0001_0000_0001_0000_0001_0000_0001;
+        assert!(dag.constant_pool.contains(&(splat, EVT::Simple(MVT::I128))));
     }
 }
 
@@ -305,4 +309,26 @@ fn stacksave_and_stackrestore_copy_the_stack_pointer() {
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::CopyToReg);
     assert_eq!(dag.opcode(dag.operand(root, 2)), ISD::CopyFromReg);
+}
+
+/// `f32`/`f64` `FADD` and `FSUB` are Custom at SSE2 (the pin's horizontal-op
+/// hook, `lowerFaddFsub`), which returns the node itself when no horizontal
+/// form applies. The hook declined, the node was expanded and the function was
+/// refused: every scalar float add and subtract at m64.
+#[test]
+fn a_scalar_float_add_and_sub_survive_legalization() {
+    let tli = TargetLowering::x86_64(Features { sse2: true, cmov: true, ..Features::default() }, MVT::I64);
+    for (op, vt) in [(ISD::FAdd, MVT::F32), (ISD::FSub, MVT::F32), (ISD::FAdd, MVT::F64), (ISD::FSub, MVT::F64)] {
+        let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+        let vt = EVT::Simple(vt);
+        let (a, b) = (dag.get_register(vt, 1), dag.get_register(vt, 2));
+        let node = dag.get_node(op, vt, &[a, b]);
+        dag.set_root(node);
+        TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+            .run()
+            .expect("legalizes");
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), op, "{vt:?}");
+    }
 }
