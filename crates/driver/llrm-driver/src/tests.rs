@@ -1058,6 +1058,27 @@ fn a_static_function_is_entered_by_a_near_call() {
     assert!(listing.contains("call far ptr _taken@3"), "{listing}");
 }
 
+/// COFF spells `f` as `_f`: the debug info imported before the rename named a
+/// symbol that no longer existed, no function was described, and the writer
+/// refused "the line table's lines are in no function".
+#[test]
+fn a_clang_unit_with_decorated_symbols_keeps_its_functions_in_the_debug_info() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/dbg.ll")
+        .lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") {
+                "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\""
+                    .to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-g", "-fobject-format=coff"]), &text, "dbgfix").unwrap();
+    assert!(!built.debug.expect("debug info").procedures.is_empty());
+}
+
 /// A `-g` object from clang's IR names clang's source, `dbg.c`, with its MD5,
 /// not the `.ll` file: the debugger could not find the text.
 #[test]
