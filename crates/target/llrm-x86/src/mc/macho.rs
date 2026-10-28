@@ -67,7 +67,7 @@ impl MachTargetWriter for X8664MachO {
 
 #[cfg(test)]
 mod tests {
-    use llrm_object::{Fix, Reloc, Target};
+    use llrm_object::{Binding, Definition, Fix, Object, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
 
@@ -95,5 +95,57 @@ mod tests {
         assert_eq!(described(8, 0).0, described(5, -3).0);
         assert_eq!(described(4, 0).0, X86_64_RELOC_SIGNED);
         assert_eq!(described(7, 0).0, X86_64_RELOC_SIGNED);
+    }
+
+    /// The field `write` leaves in an instruction: the 4 bytes after `prefix`
+    /// in the object, for the instruction `image` with a relocation `from`
+    /// bytes short of the place and `addend` past the symbol.
+    fn written_field(
+        image: Vec<u8>,
+        prefix: &[u8],
+        from: usize,
+        addend: i64,
+    ) -> i32 {
+        let at = prefix.len();
+        let reloc = Reloc::new(at, Fix::pc_rel(4, from), Target::Symbol(0), addend);
+        let spans = vec![[0, image.len()]];
+        let text = Section {
+            name: "A_TEXT".into(),
+            role: Role::Text,
+            near: true,
+            align: 16,
+            image: image.clone(),
+            spans,
+            relocs: vec![reloc],
+        };
+        let symbol = Symbol {
+            name: "x".into(),
+            binding: Binding::Public,
+            definition: Definition::Undefined,
+            size: 0,
+            group: None,
+        };
+        let object = Object {
+            name: "a.c".into(),
+            bits: 64,
+            sections: vec![text],
+            symbols: vec![symbol],
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            debug: None,
+        };
+        let bytes = llrm_macho::write(&object, &X8664MachO).unwrap();
+        let tail = &image[at + 4..];
+        let found = bytes.windows(image.len()).position(|w| w.starts_with(prefix) && w.ends_with(tail)).unwrap();
+        i32::from_le_bytes(bytes[found + at..found + at + 4].try_into().unwrap())
+    }
+
+    /// The same two instructions write the same field, -1, as the pin clang's
+    /// assembler leaves for both.
+    #[test]
+    fn two_instructions_with_the_same_total_addend_write_the_same_field() {
+        let cmpb = written_field(vec![0x80, 0x3D, 0, 0, 0, 0, 1], &[0x80, 0x3D], 5, 0);
+        let lea = written_field(vec![0x48, 0x8D, 0x05, 0, 0, 0, 0], &[0x48, 0x8D, 0x05], 4, -1);
+        assert_eq!((cmpb, lea), (-1, -1));
     }
 }
