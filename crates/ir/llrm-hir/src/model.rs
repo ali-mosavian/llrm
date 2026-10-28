@@ -912,6 +912,10 @@ pub struct DataObject {
     // False when no code takes its address, this module's or another's: only
     // a reference naming it reaches it.
     pub addressed: bool,
+    // True when a routine the program calls reaches the object without its
+    // address being passed (CLEAR zeroes the program's variables): an
+    // internal object is then as visible as an external one.
+    pub exposed: bool,
     // The segment the frontend places it in. Its alignment is a stated fact.
     pub segment: Option<String>,
 }
@@ -931,6 +935,7 @@ impl DataObject {
             linkage: DataLinkage::Internal,
             address: AddressKind::Near,
             addressed: true,
+            exposed: false,
             segment: None,
         }
     }
@@ -1221,6 +1226,9 @@ pub struct Program {
     /// A frame's locals start zeroed; false where the language leaves them
     /// indeterminate.
     pub zeroed_locals: bool,
+    /// Built for the run-time module (BRUN45, BC without /O): its marker, and
+    /// the externals that load the module.
+    pub run_time_module: bool,
     /// The bytes of each word of a buffer's or view's descriptor (its flags,
     /// length and capacity): the language's promise, which the descriptor
     /// places' field type states too. 2 for every language but Nib on a
@@ -1262,6 +1270,7 @@ impl Program {
             float_mode: FloatMode::Inline,
             float_semantics: FloatSemantics::Declared,
             zeroed_locals: true,
+            run_time_module: false,
             descriptor_word: 2,
             frames: Frames::Runtime,
             promises: RuntimePromises::default(),
