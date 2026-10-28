@@ -1,7 +1,7 @@
 //! A call to a finished static callee destroys what the callee wrote, and no
 //! more.
 
-use std::process::Command;
+mod common;
 
 /// `caller` keeps `b`, `c` and `d` across a call to a static function that
 /// writes only memory. Under `--isel=dag` the call destroyed the convention's
@@ -18,9 +18,9 @@ fn test_a_dag_call_keeps_the_registers_its_callee_did_not_write() {
          int caller(int a, int b, int c, int d) { leaf(a); return b + c + d; }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["-m16", "-march=i386", "-Os", "-mabi=regparm3", "--isel=dag", "-S", "-o", "a.s"])
+        .args(["-m16", "-march=i386", "-Os", "--isel=dag", "-S", "-o", "a.s"])
         .arg(&source)
         .output()
         .unwrap();
