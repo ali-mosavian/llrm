@@ -55,13 +55,10 @@ use std::sync::Arc;
 
 use llrm_lir::registers::Regs;
 
-use crate::backend::allocate::RFP;
 use crate::backend::floatregions::clears_stack;
 use crate::backend::fpregs::{live_out, slot_of, touched};
 use crate::model::ir::{Loc, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBody};
-
-const SLOTS: usize = RFP.len();
 
 /// `one` as a copy between two x87 registers: `(destination, source)`.
 fn copy_of(
@@ -84,8 +81,14 @@ fn copy_of(
 }
 
 /// The copies valid at a point: for each register, the one it is a copy of.
-#[derive(Clone, Copy, Default)]
-struct Copies([Option<u8>; SLOTS]);
+#[derive(Clone)]
+struct Copies(Vec<Option<u8>>);
+
+impl Copies {
+    fn new(regs: Regs) -> Self {
+        Self(vec![None; regs.rfp_registers().len()])
+    }
+}
 
 impl Copies {
     /// `slot` is written: it is no copy, and no copy of it holds.
@@ -115,7 +118,7 @@ fn forwarded(
         .map(|place| match slot_of(regs, place).and_then(|at| copies.0[at]) {
             Some(from) => {
                 changed = true;
-                Loc::Reg(Reg { register: RFP[from as usize], width: 10 })
+                Loc::Reg(Reg { register: regs.rfp_registers()[from as usize], width: 10 })
             }
             None => place.clone(),
         })
@@ -128,12 +131,12 @@ fn forward(
     regs: Regs,
     insns: &[Arc<Insn>],
 ) -> Vec<Arc<Insn>> {
-    let mut copies = Copies::default();
+    let mut copies = Copies::new(regs);
     insns
         .iter()
         .map(|one| {
             if clears_stack(regs, one) || !one.clobbers.is_empty() {
-                copies = Copies::default();
+                copies = Copies::new(regs);
                 return Arc::clone(one);
             }
             let Some(what) = &one.what else {
@@ -141,7 +144,7 @@ fn forward(
             };
             if one.group.is_some() {
                 let (_, defs) = touched(regs, what);
-                (0..SLOTS).filter(|at| defs >> at & 1 == 1).for_each(|at| copies.written(at));
+                (0..copies.0.len()).filter(|at| defs >> at & 1 == 1).for_each(|at| copies.written(at));
                 return Arc::clone(one);
             }
             let mut made = Arc::clone(one);
@@ -159,7 +162,7 @@ fn forward(
                 return made;
             }
             let (_, defs) = touched(regs, made.what.as_ref().expect("semantics"));
-            (0..SLOTS).filter(|at| defs >> at & 1 == 1).for_each(|at| copies.written(at));
+            (0..copies.0.len()).filter(|at| defs >> at & 1 == 1).for_each(|at| copies.written(at));
             made
         })
         .collect()
@@ -296,7 +299,7 @@ fn without_double_roundings(
         }
         let mut fused = (*insns[at + 2]).clone();
         let what = fused.what.as_mut().expect("a store");
-        what.sources = vec![Loc::Reg(Reg { register: RFP[held], width: 10 })];
+        what.sources = vec![Loc::Reg(Reg { register: regs.rfp_registers()[held], width: 10 })];
         made[at + 2] = Arc::new(fused);
         made[at] = lir::anchor(Arc::clone(&insns[at]));
         made[at + 1] = lir::anchor(Arc::clone(&insns[at + 1]));

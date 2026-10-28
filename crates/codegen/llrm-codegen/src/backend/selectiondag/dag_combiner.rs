@@ -341,6 +341,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 self.visit_sra(node).or_else(|| self.visit_shift(node)).or_else(|| self.reduce_load_width_of(node))
             }
             ISD::BSwap => self.visit_bswap(node),
+            ISD::Rotl | ISD::Rotr => self.visit_rotate(node),
             ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax => self.visit_iminmax(node),
             ISD::BitReverse => self.visit_bitreverse(node),
             ISD::SDiv => self.visit_sdiv(node),
@@ -410,12 +411,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_setcc(vt, n1, n0, cond.swapped_operands()));
         }
         let c1 = c1?;
-        // `ExpandSetCCOperands`: a pair is zero when `lo | hi` is, and a far
-        // pointer's null test was `shl; movzx; add; je` of the joined dword
-        // where the old selector had `or ax, dx`.
-        if matches!(cond, CondCode::SetEq | CondCode::SetNe) && c1 == 0 && self.dag.opcode(n0) == ISD::BuildPair {
+        // `ExpandSetCCOperands`: a pair equals a constant when both halves do
+        // (`(lo ^ c.lo) | (hi ^ c.hi)` is zero), so a long a call returned in
+        // dx:ax is compared by halves, not joined into one dword first.
+        if matches!(cond, CondCode::SetEq | CondCode::SetNe) && self.dag.opcode(n0) == ISD::BuildPair {
             let (low, high) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
             let half = self.dag.value_type(low);
+            let bits = half.size_in_bits();
+            let part = |this: &mut Self, value: SDValue, constant: u128| {
+                if constant == 0 {
+                    value
+                } else {
+                    let constant = this.dag.get_constant(constant, half);
+                    this.dag.get_node(ISD::Xor, half, &[value, constant])
+                }
+            };
+            let low = part(self, low, c1 & super::fold::mask(bits));
+            let high = part(self, high, (c1 >> bits) & super::fold::mask(bits));
             let either = self.dag.get_node(ISD::Or, half, &[low, high]);
             let zero = self.dag.get_constant(0, half);
             return Some(self.dag.get_setcc(vt, either, zero, cond));
