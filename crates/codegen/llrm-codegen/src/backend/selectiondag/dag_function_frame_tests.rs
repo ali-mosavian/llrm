@@ -477,20 +477,27 @@ fn select_m32(ir: &str) -> Result<crate::backend::isel::Selected, String> {
 }
 
 /// A `memmove` a pass proved forward is `rep movsb`, one proved backward is
-/// `std; rep movsb; cld` from the last byte, where the runtime has no
+/// `std; rep movsd; cld` from the last dword, where the runtime has no
 /// `memmove` (`copyw.nib`'s scroll up and down at m32); one proved neither way
-/// is still refused.
+/// is still refused. The backward copy went a byte at a time at m32: scroll
+/// bq32 -Os ran 91270 instructions beside the old selector's 55165.
 #[test]
 fn a_memmove_with_a_proved_direction_is_a_string_copy() {
     assert!(select_m32(&memmove_ir(", !llrm.forward !0")).is_ok());
     let backward = select_m32(&memmove_ir(", !llrm.backward !0")).unwrap_or_else(|why| panic!("{why}"));
-    assert!(
-        backward.inline.values().any(|bytes| bytes[..] == [0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC]),
-        "{:?}",
-        backward.inline
-    );
+    assert!(backward.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0xA5, 0xFC]), "{:?}", backward.inline);
     let refused = select_m32(&memmove_ir("")).err().expect("no direction proved");
     assert!(refused.contains("memmove"), "{refused}");
+}
+
+/// A backward `memmove` of a size that is no multiple of four moves the low
+/// bytes after the dwords.
+#[test]
+fn a_backward_memmove_at_m32_moves_the_tail_bytes_after_the_dwords() {
+    let ir = memmove_ir(", !llrm.backward !0").replace("78000", "78001");
+    let backward = select_m32(&ir).unwrap_or_else(|why| panic!("{why}"));
+    let tail = [0xFD, 0xF3, 0xA5, 0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4, 0xFC];
+    assert!(backward.inline.values().any(|bytes| bytes[..] == tail), "{:?}", backward.inline);
 }
 
 const SCALED_INDEX_AT_M16: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"

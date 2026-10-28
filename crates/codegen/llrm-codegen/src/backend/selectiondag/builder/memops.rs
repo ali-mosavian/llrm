@@ -899,8 +899,10 @@ impl Builder<'_> {
     /// `std; rep movsd; cld` from the last dword down, then the `size % 4` low
     /// bytes (`add si, 3; add di, 3; mov cx, dx; rep movsb`): a move a pass
     /// proved backward, as the old selector writes it (`LLRM_ASM`, SD305, with
-    /// `cx`, `si`, `di`, `dx` as operands). 16-bit addressing; a size that is
-    /// a multiple of four has no tail.
+    /// `cx`, `si`, `di`, `dx` as operands). A size that is a multiple of four
+    /// has no tail. At m16 the pointers are near, so DS is copied to ES first
+    /// and `movsd` takes the operand-size prefix; a flat target needs neither
+    /// (it names no string registers).
     fn backward_rep_movs_dwords(
         &mut self,
         chain: SDValue,
@@ -910,7 +912,8 @@ impl Builder<'_> {
     ) -> SDValue {
         use super::super::inline_asm::lower_asm;
         let pointer = self.target.dag.pointer;
-        if pointer != EVT::I16 {
+        let flat = pointer != EVT::I16;
+        if flat && pointer != EVT::I32 {
             return self.backward_rep_movsb(chain, dst, src, size);
         }
         let count = self.dag.get_zext_or_trunc(size, pointer);
@@ -925,27 +928,35 @@ impl Builder<'_> {
         };
         let (from, to) = (last(self, src), last(self, dst));
         let tail = self.constant_size(count).is_none_or(|bytes| bytes % 4 != 0);
-        // `push ds; pop es`: both pointers are near, in DS
-        let mut code = vec![0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5];
+        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5] };
         if tail {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
         code.push(0xFC);
-        let Some(strings) = self.arch.string_registers() else {
+        let strings = self.arch.string_registers();
+        if strings.is_none() && !flat {
             return self.backward_rep_movsb(chain, dst, src, size);
-        };
+        }
         let name_of = |register| self.arch.registers().name(register).expect("a described register");
-        let mut names = vec![name_of(strings.count), name_of(strings.source), name_of(strings.destination)];
+        let mut names = match strings {
+            Some(strings) => vec![name_of(strings.count), name_of(strings.source), name_of(strings.destination)],
+            None => vec!["cx", "si", "di"],
+        };
         let mut values = vec![dwords, from, to];
         if tail {
-            names.push(name_of(strings.tail));
+            names.push(strings.map_or("dx", |strings| name_of(strings.tail)));
             values.push(rest);
         }
         let block = llrm_mir::intrinsics::AsmBlock {
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
             outputs: Vec::new(),
-            clobbers: names.iter().copied().chain([name_of(strings.destination_segment)]).map(Into::into).collect(),
+            clobbers: names
+                .iter()
+                .copied()
+                .chain(strings.map(|strings| name_of(strings.destination_segment)))
+                .map(Into::into)
+                .collect(),
             memory: true,
             fixups: Vec::new(),
         };
