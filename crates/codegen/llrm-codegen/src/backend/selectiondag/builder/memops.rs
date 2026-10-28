@@ -96,9 +96,11 @@ impl Builder<'_> {
                 self.dag.set_root(node);
                 Ok(())
             }
-            Intrinsic::Compare { .. } | Intrinsic::FMulAdd | Intrinsic::Fixed { .. } => {
-                self.visit_math(instruction, intrinsic)
-            }
+            Intrinsic::Compare { .. }
+            | Intrinsic::FMulAdd
+            | Intrinsic::Fixed { .. }
+            | Intrinsic::FixedMul { .. }
+            | Intrinsic::ShiftSat { .. } => self.visit_math(instruction, intrinsic),
             Intrinsic::WithOverflow { .. }
             | Intrinsic::Saturating { .. }
             | Intrinsic::MinMax { .. }
