@@ -323,6 +323,7 @@ impl Hooks for X86Lowering {
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
+            ISD::SSubSat => Some(lower_ssubsat(dag, node)),
             ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
             ISD::FCopySign => lower_fcopysign(dag, node),
@@ -2055,6 +2056,29 @@ fn lower_abs(
     let flags = SDValue { node: neg.node, res: 1 };
     let code = cond_code(dag, cond::NS);
     dag.get_node(x86isd::CMOV, vt, &[x, neg, code, flags])
+}
+
+/// `LowerADDSAT_SUBSAT` for a scalar `SSUBSAT` ([L29900][pin]): the signed
+/// difference with overflow, and on overflow the maximum if the wrapped
+/// difference is negative, else the minimum.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29900
+fn lower_ssubsat(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let (x, y) = (dag.operand(node, 0), dag.operand(node, 1));
+    let min = 1u128 << (vt.size_in_bits() - 1);
+    let zero = dag.get_constant(0, vt);
+    let result = dag.get_node_multi(ISD::SSubO, &[vt, EVT::I8], &[x, y]);
+    let (difference, overflow) = (result, SDValue { node: result.node, res: 1 });
+    let sat_min = dag.get_constant(min, vt);
+    let sat_max = dag.get_constant(min - 1, vt);
+    let negative = dag.get_setcc(EVT::I8, difference, zero, CondCode::SetLt);
+    let saturated = dag.get_select(vt, negative, sat_max, sat_min);
+    dag.get_select(vt, overflow, saturated, difference)
 }
 
 /// `LowerCTLZ` ([L29730][pin]): `bsr`, a `cmov` for a zero source, and

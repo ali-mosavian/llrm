@@ -85,7 +85,7 @@ fn context_in(
     f: impl FnOnce(&EmitContext<'_>),
 ) {
     let target = llrm_x86_m32::M32;
-    let map = OpcodeMap::new(llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr"));
+    let map = OpcodeMap::new(llrm_target::instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
     let no_blocks = HashMap::default();
     f(&EmitContext {

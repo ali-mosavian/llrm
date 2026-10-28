@@ -20,7 +20,6 @@ llrm-target = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-llrm-instr = { workspace = true }
 llrm-iselgen = { workspace = true }
 llrm-target = { workspace = true }
 

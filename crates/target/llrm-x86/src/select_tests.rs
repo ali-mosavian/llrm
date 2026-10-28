@@ -294,6 +294,15 @@ fn test_a_bare_literal_address_keeps_two_bytes_however_small_it_is() {
 }
 
 #[test]
+fn test_a_negative_literal_address_is_the_same_word_unsigned() {
+    // `PEEK(&HB8000 + 3998)` at DEF SEG = 0 under dag asked for `es:[-28770]`;
+    // the direct-address field was refused and the program did not compile.
+    let cell = ir::Mem::new(Some(Addr::new(Space::Literal, -28770)), 2);
+    let made = made(arith_mem("add", RegId::BX, &cell, At::bits16(0)));
+    assert_eq!(hex(&made.code), "031e9e8f");
+}
+
+#[test]
 fn test_a_relocated_push_keeps_the_wide_immediate() {
     assert_eq!(hex(&made(push_imm(0, 2, At::bits16(0), true)).code), "680000");
     assert_eq!(hex(&made(push_imm(0, 2, At::bits16(0), false)).code), "6a00");
