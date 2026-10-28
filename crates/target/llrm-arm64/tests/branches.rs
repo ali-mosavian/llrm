@@ -37,3 +37,15 @@ fn a_logical_and_or_or_of_comparisons_is_a_chain_of_branches() {
     }
     assert_eq!(asm.matches("cbz").count() + asm.matches("cbnz").count(), 4, "{asm}");
 }
+
+/// A call result marked `zeroext`/`signext` is already extended, so returning it needs no extension
+/// and the call is a jump: QB `cn_pos` ended `blr; and w0, w0, #0xff; ret` where clang has `br`.
+#[test]
+fn a_returned_extended_call_result_is_a_tail_call() {
+    let asm = driver::assembly(include_str!("data/zeroext_call_result.ll"), Platform::Darwin, true)
+        .expect("the functions lower");
+    for left in ["blr", "and\t", "sxth", "uxtb"] {
+        assert!(!asm.contains(left), "{left} left in\n{asm}");
+    }
+    assert_eq!(asm.matches("\tbr x").count(), 2, "{asm}");
+}

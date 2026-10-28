@@ -19,6 +19,18 @@ fn has_flag(
     attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == name))
 }
 
+/// What `attrs` promise of a value narrower than 32 bits: `zeroext` and
+/// `signext` say its upper bits are extended, as `AssertZext`/`AssertSext` do.
+fn promised_extension(attrs: &[Attribute]) -> Known {
+    if has_flag(attrs, "zeroext") {
+        Known::Zero
+    } else if has_flag(attrs, "signext") {
+        Known::Sign
+    } else {
+        Known::Nothing
+    }
+}
+
 /// Where the register save areas of a variadic function lie and where its
 /// variadic arguments begin, for `va_start`.
 #[derive(Clone, Copy, Debug)]
@@ -123,8 +135,9 @@ impl Selector<'_> {
             }
             // What the attributes promise of its extension.
             let value = match value {
-                Val::Int(g) if has_flag(&attrs, "zeroext") => Val::Int(G { known: Known::Zero, ..g }),
-                Val::Int(g) if has_flag(&attrs, "signext") => Val::Int(G { known: Known::Sign, ..g }),
+                Val::Int(g) if promised_extension(&attrs) != Known::Nothing => {
+                    Val::Int(G { known: promised_extension(&attrs), ..g })
+                }
                 other => other,
             };
             self.vals.insert(parameter, value);
@@ -252,7 +265,14 @@ impl Selector<'_> {
                 Callee::Register(g.reg)
             }
         };
-        let result = self.emit_call(callee, passed, assigner.stack_bytes(), returns, self.sibling_call_eligible(instruction, info))?;
+        let result = self.emit_call(
+            callee,
+            passed,
+            assigner.stack_bytes(),
+            returns,
+            promised_extension(&info.return_attrs),
+            self.sibling_call_eligible(instruction, info),
+        )?;
         if let (Some(value), Some(result_id)) = (result, instruction.result) {
             self.vals.insert(result_id, value);
         }
@@ -340,6 +360,7 @@ impl Selector<'_> {
         passed: Vec<(Val, Vec<Place>)>,
         stack: u64,
         returns: llrm_mir::TypeId,
+        extension: Known,
         tail: bool,
     ) -> Selected<Option<Val>> {
         let mut uses = Vec::new();
@@ -399,8 +420,9 @@ impl Selector<'_> {
             let _ = leaf_type;
             let dst = match leaf {
                 Val::Int(g) => {
-                    // A result narrower than 32 bits is as the callee left it.
-                    g.known = Known::Nothing;
+                    // A result narrower than 32 bits is as the callee left it:
+                    // extended when the call says so.
+                    g.known = extension;
                     Reg::Gpr(g.reg)
                 }
                 Val::Ptr(AddrExpr { base: Base::Reg(reg), .. }) => Reg::Gpr(*reg),
@@ -564,7 +586,7 @@ impl Selector<'_> {
                 }
                 let void = self.types().void();
                 let callee = Callee::Symbol(crate::data::symbol_name(self.platform, base));
-                self.emit_call(callee, passed, assigner.stack_bytes(), void, false)?;
+                self.emit_call(callee, passed, assigner.stack_bytes(), void, Known::Nothing, false)?;
                 Ok(())
             }
             "stacksave" => {
@@ -621,7 +643,7 @@ impl Selector<'_> {
         );
         let name = format!("{base}{}", if single { "f" } else { "" });
         let callee = Callee::Symbol(crate::data::symbol_name(self.platform, &name));
-        let result = self.emit_call(callee, passed, assigner.stack_bytes(), instruction.ty, false)?;
+        let result = self.emit_call(callee, passed, assigner.stack_bytes(), instruction.ty, Known::Nothing, false)?;
         if let (Some(value), Some(result_id)) = (result, instruction.result) {
             self.vals.insert(result_id, value);
         }
