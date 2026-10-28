@@ -248,6 +248,7 @@ pub fn read_from_cell(
     let mut made = one.clone();
     made.what = Some(fused);
     made.uses.retain(|used| *used != value);
+    made.undefs.retain(|used| *used != value);
     made.widths.retain(|(used, _)| *used != value);
     Some(made)
 }

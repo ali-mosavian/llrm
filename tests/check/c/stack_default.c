@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -O2 -S -o /dev/stdout
+// RUN: llrm-cc %s -O2 -S -o /dev/stdout
 // The default build checks nothing: no limit word, no overflow routine.
 // CHECK-LABEL: deep{{(@3)?}} proc
 // CHECK-NOT: LL$STACK_LOW

@@ -131,7 +131,7 @@ impl llrm_target::Target for M16 {
         instructions::TEXT.clone()
     }
 
-    fn dialect(&self) -> &'static llrm_instr::Dialect {
+    fn dialect(&self) -> &'static llrm_target::instr::Dialect {
         llrm_x86::instructions::dialect()
     }
 
@@ -247,6 +247,10 @@ impl llrm_target::Target for M16 {
 
     fn cost_model(&self) -> llrm_target::CostModel {
         cost_model
+    }
+
+    fn selects_by_dag(&self) -> bool {
+        true
     }
 
     fn name(&self) -> &'static str {

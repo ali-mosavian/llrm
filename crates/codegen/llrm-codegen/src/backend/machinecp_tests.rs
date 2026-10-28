@@ -256,6 +256,25 @@ fn test_a_copy_into_a_segment_register_is_kept() {
     assert_eq!(lines(&got), ["mov ES,BX"]);
 }
 
+/// `mov es, bx` twice with neither side written between: the second reloads
+/// what `es` holds (triggers.c `ent_move_trigs`, dag m16 -Os: 9 of 78 register
+/// moves were these). A write to `bx` between them keeps it.
+#[test]
+fn test_a_segment_load_that_repeats_an_available_one_is_dropped() {
+    let repeated = vec![
+        mov(0, rl(RegId::ES, 2), rl(RegId::BX, 2)),
+        add(1, rl(RegId::CX, 2), rl(RegId::DX, 2)),
+        mov(2, rl(RegId::ES, 2), rl(RegId::BX, 2)),
+    ];
+    assert_eq!(lines(&propagated(&body(repeated, &[RegId::ES]))), ["mov ES,BX", "add CX,CX,DX", "-"]);
+    let rewritten = vec![
+        mov(0, rl(RegId::ES, 2), rl(RegId::BX, 2)),
+        add(1, rl(RegId::BX, 2), rl(RegId::DX, 2)),
+        mov(2, rl(RegId::ES, 2), rl(RegId::BX, 2)),
+    ];
+    assert_eq!(lines(&propagated(&body(rewritten, &[RegId::ES]))), ["mov ES,BX", "add BX,BX,DX", "mov ES,BX"]);
+}
+
 /// `bx` is shifted in place and then copied to `ax`, which held `bx` already:
 /// the shift works on `ax` and the copy goes. (`propagateDefs` declines a
 /// tied definition; the pinned output of the fixed-point test was this form.)
