@@ -429,14 +429,14 @@ fn a_zext_of_a_select_with_a_constant_arm_goes_into_the_arms() {
 fn a_truncated_clamped_difference_of_extensions_is_a_saturating_subtract() {
     let text = "declare i32 @llvm.smax.i32(i32, i32)
 
-define i8 @f(i8 %a, i8 %b) {
+define i16 @f(i16 %a, i16 %b) {
 b0:
-  %x = zext i8 %a to i32
-  %y = zext i8 %b to i32
+  %x = zext i16 %a to i32
+  %y = zext i16 %b to i32
   %d = sub i32 %x, %y
   %m = call i32 @llvm.smax.i32(i32 %d, i32 0)
-  %r = trunc i32 %m to i8
-  ret i8 %r
+  %r = trunc i32 %m to i16
+  ret i16 %r
 }
 ";
     let mut module = parsed(text);
@@ -448,7 +448,7 @@ b0:
     crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
     declared.place(&mut module).unwrap();
     let out = printed(&module);
-    assert!(out.contains("call i8 @llvm.usub.sat.i8(i8 %a, i8 %b)"), "{out}");
+    assert!(out.contains("call i16 @llvm.usub.sat.i16(i16 %a, i16 %b)"), "{out}");
 }
 
 /// `trunc (ctlz_i32 (zext A), B)` is `ctlz_i16 (A, B) + 16`. Stayed a 32-bit
