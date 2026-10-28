@@ -8,7 +8,13 @@ static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    if llrm_codegen::support::version::asked(&argv, "llrm-c", env!("LLRM_BUILD_SHA"), env!("LLRM_BUILD_DIRTY"), env!("LLRM_BUILD_INCREMENTAL")) {
+    if llrm_codegen::support::version::asked(
+        &argv,
+        "llrm-c",
+        env!("LLRM_BUILD_SHA"),
+        env!("LLRM_BUILD_DIRTY"),
+        env!("LLRM_BUILD_INCREMENTAL"),
+    ) {
         return;
     }
     if let Err(why) = llrm_mir::dumpdir::refuse(&argv) {

@@ -1,10 +1,10 @@
 //! `--version` of a binary: the commit it was compiled from and whether that
 //! tree had changes.
 //!
-//! The line is `NAME SHA` with `+dirty` (the tree had changes) and `+incremental`
-//! (an incremental build: its instruction counts are not the cost gate's) after
-//! it, read by `tools/stamp.py`. It is printed and checked, never hashed into
-//! anything the compiler writes.
+//! The line is `NAME SHA` with `+dirty` (the tree had changes) and
+//! `+incremental` (an incremental build: its instruction counts are not the
+//! cost gate's) after it, read by `tools/stamp.py`. It is printed and checked,
+//! never hashed into anything the compiler writes.
 
 /// The line `--version` prints.
 pub fn line(
@@ -43,7 +43,8 @@ mod tests {
         assert_eq!(line("llrm-c", "abc", "1", "0"), "llrm-c abc+dirty");
     }
 
-    /// The object writer ran 13% more instructions in an incremental build of the same commit (9.5 -> 10.9 Minstr, #5744): the stamp says which.
+    /// The object writer ran 13% more instructions in an incremental build of
+    /// the same commit (9.5 -> 10.9 Minstr, #5744): the stamp says which.
     #[test]
     fn an_incremental_build_shows_in_the_line() {
         assert_eq!(line("llrm-llc", "abc", "0", "1"), "llrm-llc abc+incremental");
