@@ -1010,10 +1010,10 @@ why = "measured 14.7 -> 36.8 Minstr (x2.50)"
 kind = "steps"
 axis = "cases"
 name = "mir decide@766"
-ratio = 3.4
+ratio = 3.6
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 10.9 -> 34.6 Minstr (x3.18)"
+owner = "w2"
+why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
 
 [[debt]]
 kind = "steps"
@@ -1049,7 +1049,7 @@ name = "mir decide@675"
 ratio = 3.55
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: measured 3.7 -> 12.5 Minstr (x3.38); unprofiled, follow-up by w2"
+why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
 
 [[debt]]
 kind = "steps"
@@ -1058,7 +1058,7 @@ name = "mir decide@690"
 ratio = 3.55
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: measured 3.7 -> 12.5 Minstr (x3.38); unprofiled, follow-up by w2"
+why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
 
 [[debt]]
 kind = "steps"
@@ -1067,7 +1067,7 @@ name = "mir decide@1178"
 ratio = 2.89
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: measured 8.6 -> 23.7 Minstr (x2.75); unprofiled, follow-up by w2"
+why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
 
 [[debt]]
 kind = "steps"
@@ -1698,18 +1698,6 @@ ratio = 2.5
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w13 regalloc"
 why = "measured 36.9 -> 87.3 Minstr (x2.37)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "lir optimizephis"
-ratio = 2.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 5.2 -> 12.0 Minstr (x2.31)"
-
-# [[window]] rows: steps that switch on inside an axis's window (tools/test_budgets.py,
-# test_no_step_switches_on_between_the_two_sizes_of_an_axis). A step near the bound (jump about 1.0) comes and goes with what else is in the tree; a row no longer needed is deleted by hand.
 
 [[window]]
 axis = "joins"
