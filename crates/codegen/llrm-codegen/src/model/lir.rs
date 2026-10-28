@@ -412,16 +412,25 @@ impl LirBody {
     }
 }
 
-/// A source position (`DILocation`'s line and column; column 0 is unknown).
+/// A source position (`DILocation`: line, column, the scope it is in and the
+/// call it was inlined at). Column 0 is unknown; `scope` and `inlined_at` are
+/// the MIR module's metadata ids plus one, 0 for none.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct SrcLoc {
     pub line: u32,
     pub column: u32,
+    pub scope: u32,
+    pub inlined_at: u32,
 }
 
 impl SrcLoc {
     pub const fn line(line: u32) -> Self {
-        Self { line, column: 0 }
+        Self { line, column: 0, scope: 0, inlined_at: 0 }
+    }
+
+    /// The row a line table has for this place: its scopes do not change it.
+    pub const fn row(self) -> (u32, u32) {
+        (self.line, self.column)
     }
 }
 
@@ -1061,6 +1070,9 @@ pub struct DebugVariable {
     /// The register that argument arrives in, where one does: it holds the
     /// value until the function stores it into the home.
     pub arrives: Option<RegId>,
+    /// The lexical block (`!DILexicalBlock`) it is declared in; none for the
+    /// function's own scope.
+    pub scope: Option<llrm_mir::MetadataId>,
 }
 
 /// Where a `-g` variable is.
