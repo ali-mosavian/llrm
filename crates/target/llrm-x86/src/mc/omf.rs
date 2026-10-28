@@ -21,6 +21,13 @@ impl OmfTargetWriter for X86Omf {
     ) -> bool {
         matches!(kind, fixup::BRANCH_2 | fixup::BRANCH_4)
     }
+
+    fn debug_target(
+        &self,
+        bits: u8,
+    ) -> llrm_object::debug::DebugTarget {
+        fixup::debug_target(bits)
+    }
 }
 
 #[cfg(test)]

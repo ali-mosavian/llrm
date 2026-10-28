@@ -255,6 +255,16 @@ needs = [
 require = ["LLRM_REQUIRE_WDUMP"]
 needs = [{ env = "WDUMP", default = "~/dos/devtools/dev/c/watcom/binl/wdump", marker = "." }]
 
+# The pinned clang and the m16 clang the llrm-cc tests drive, built by .github/workflows/toolchain.yml into trees named for their shas
+# (toolchain/clangbuild.sh --print). Open source, so not private: CI builds and caches them, and a missing one is red there (only `perf` may
+# be missing); a local run with GATE_ALLOW_MISSING=1 skips the steps that need them with this reason.
+[capability.clang]
+require = []
+needs = [
+  { run = 'cd "$(git rev-parse --show-toplevel)" && test -x "$(sh toolchain/clangbuild.sh --print pin)/bin/clang"' },
+  { run = 'cd "$(git rev-parse --show-toplevel)" && test -x "$(sh toolchain/clangbuild.sh --print m16)/bin/clang"' },
+]
+
 [capability.qcport]
 private = true
 require = []
@@ -277,6 +287,7 @@ group_env = { reference = { QCPORT = "rm-quake/src" }, cost = { QCPORT = "rm-qua
 # A step is skipped whole; a language or binary is left out of the step that runs it, and the step is skipped if no language is left.
 # A Python test file declares its own need, not here: `REQUIRES = ["perf"]` at module level.
 [requires]
+integration = ["clang"]  # the llrm-cc tests (tests/common/cc.rs) drive the pinned and m16 clang
 turbo = ["turbo"]
 cv4 = ["codeview"]
 qcport = ["qcport"]

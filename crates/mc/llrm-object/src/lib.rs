@@ -61,10 +61,6 @@ impl FixupKind {
     pub const SECREL_2: Self = Self(4005);
     /// COFF: the target's offset within its section (`FK_SecRel_4`).
     pub const SECREL_4: Self = Self(4006);
-    /// OMF: the selector of the target's segment.
-    pub const SEGMENT_BASE: Self = Self(4007);
-    /// OMF: a 16:16 pointer, whose offset is the field's first two bytes.
-    pub const FAR_POINTER: Self = Self(4008);
     /// A target's kinds start here and are its own (`FIRST_TARGET + n`), so two
     /// targets reuse the numbers.
     pub const FIRST_TARGET: Self = Self(4010);
@@ -79,8 +75,6 @@ impl FixupKind {
             Self::DATA_8 => ("FK_Data_8", 64),
             Self::SECREL_2 => ("FK_SecRel_2", 16),
             Self::SECREL_4 => ("FK_SecRel_4", 32),
-            Self::SEGMENT_BASE => ("segment_base", 16),
-            Self::FAR_POINTER => ("far_pointer", 32),
             _ => ("none", 0),
         };
         FixupKindInfo { name, offset: 0, bits }
@@ -102,12 +96,12 @@ pub struct Fix {
     /// The value is relative to the place (`MCFixup::PCRel`).
     pub pc_rel: bool,
     /// The bytes from the field's start to the place a pc-relative value is
-    /// relative to: an x86 call's is the field's width, the field's end.
-    /// DEVIATE: LLVM folds it into the addend. llrm keeps it apart because two
-    /// writers choose by it alone: coff64's `REL32_1..5` against LLVM's
-    /// `REL32`, and Mach-O's `SIGNED_n`, which llvm-mc picks from the total
-    /// addend. `cmpb $1, x(%rip)` and `lea x-1(%rip)` share the total -5 and -1
-    /// and one object in LLVM, and two here.
+    /// relative to: an x86 call's is the field's width, the field's end. LLVM
+    /// folds it into the addend; llrm keeps it apart and the writers add it
+    /// back, choosing by the total: coff64 writes `REL32` for every value (the
+    /// distance past the end goes into the field) and Mach-O picks `SIGNED_n`
+    /// from `-(total + 4)`, so `cmpb $1, x(%rip)` and `lea x-1(%rip)` are one
+    /// object as in LLVM.
     pub pc_bias: usize,
     /// The value's specifier (`S_ABS`, `S_GOT`).
     pub spec: u8,
@@ -119,8 +113,6 @@ impl Fix {
     /// COFF: the target's address relative to the image base
     /// (`VK_COFF_IMGREL32`).
     pub const S_IMGREL: u8 = 2;
-    pub const SEGMENT_BASE: Fix = Fix::plain(FixupKind::SEGMENT_BASE);
-    pub const FAR_POINTER: Fix = Fix::plain(FixupKind::FAR_POINTER);
     pub const SECTION_INDEX: Fix = Fix::plain(FixupKind::SECREL_2);
 
     /// An absolute fixup of `kind`.
@@ -395,8 +387,6 @@ mod tests {
             (Fix::abs(4), 4),
             (Fix::abs(8), 8),
             (Fix::pc_rel(4, 5), 4),
-            (Fix::SEGMENT_BASE, 2),
-            (Fix::FAR_POINTER, 4),
             (Fix::section_offset(4), 4),
         ];
         for (fix, width) in widths {
