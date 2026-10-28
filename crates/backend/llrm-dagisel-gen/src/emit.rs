@@ -54,6 +54,7 @@ fn item(m: &Matcher) -> String {
         M::RecordChild(c) => format!("RecordChild({c})"),
         M::RecordMemRef => "RecordMemRef".into(),
         M::CaptureGlueInput => "CaptureGlueInput".into(),
+        M::CaptureDeactivationSymbol => "CaptureDeactivationSymbol".into(),
         M::MoveChild(c) => format!("MoveChild({c})"),
         M::MoveSibling(c) => format!("MoveSibling({c})"),
         M::MoveParent => "MoveParent".into(),

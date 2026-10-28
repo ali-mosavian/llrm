@@ -243,6 +243,8 @@ impl Selector {
                     }
                     continue;
                 }
+                // llrm builds no `ISD::DEACTIVATION_SYMBOL` (PAuth), so there is none to capture.
+                Matcher::CaptureDeactivationSymbol => continue,
                 Matcher::MoveChild(child) => {
                     if usize::from(child) >= dag.num_operands(n.node) {
                         false
