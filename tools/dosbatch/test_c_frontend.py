@@ -111,3 +111,9 @@ def test_llrm_cc_reads_the_rows_own_os_header_not_llrm_cs(monkeypatch, tmp_path)
     command = run_tests.compile_command(run_tests.Program(source=source, flags=[], known=None), tmp_path / "p.obj")
     assert "/llrm-c-header-dir" not in command, command
     assert "/llrm-c-header-dir" not in dosbatch.c_compile(source, tmp_path / "p.obj", "x86-m16", "-O2", Path("/llrm-c-header-dir"), [])[0]
+
+
+def test_an_absolute_runtime_file_names_an_object_in_the_work_directory():
+    """llrm-nib names the hook by absolute path: the object's name began with "/", a directory that did not exist (jwasm A1106 in NibCutTests)."""
+    name = dosbatch.object_name(str(dosbatch.ROOT / "runtime/nib/x86-m16/init.asm"))
+    assert "/" not in name and name == dosbatch.object_name("runtime/nib/x86-m16/init.asm")

@@ -230,6 +230,9 @@ def runtime_object(name: str, path: Path, defines: tuple[str, ...] = ()) -> Path
 def object_name(name: str) -> str:
     """The object of runtime file `name`, unique across directories: a platform's start.asm and the OS layer's share a stem."""
     source = Path(name)
+    if source.is_absolute():
+        # The compiler names the hook by absolute path; its leading "/" made the object's name a directory (jwasm A1106: cannot open file).
+        source = source.relative_to(ROOT) if source.is_relative_to(ROOT) else Path(*source.parts[1:])
     return "_".join([*(part for part in source.parent.parts if part != "runtime"), source.stem]).upper() + ".OBJ"
 
 
