@@ -66,6 +66,9 @@ thread_local! {
     static TABLES: std::cell::Cell<Option<(ValueTable, LeaderMap)>> = const { std::cell::Cell::new(None) };
 }
 
+/// The frames the manager holds as exposed.
+type Exposed = <llrm_analysis::manager::ExposedFrames as llrm_mir::passes::Analysis>::Result;
+
 pub struct GvnPass<'a> {
     context: &'a mut Context,
     layout: &'a DataLayout,
@@ -74,7 +77,7 @@ pub struct GvnPass<'a> {
     /// The manager's `ExposedFrames`, taken at entry: removals only shrink
     /// exposure and GVN makes no allocas. Without it `object_of` walks an
     /// alloca's uses at every access asked of it.
-    exposed: Option<&'a std::collections::BTreeSet<llrm_mir::module::ValueId>>,
+    exposed: Option<&'a Exposed>,
     dt: std::borrow::Cow<'a, DomTree>,
     vn: ValueTable,
     leader_table: LeaderMap,
@@ -125,7 +128,7 @@ pub fn run_impl_exposed(
     outer: &Outer,
     pre: bool,
     dominators: Option<&DomTree>,
-    exposed: Option<&std::collections::BTreeSet<llrm_mir::module::ValueId>>,
+    exposed: Option<&Exposed>,
 ) -> (bool, bool) {
     let tables = TABLES.with(|pool| pool.take()).unwrap_or_else(|| (ValueTable::new(), LeaderMap::default()));
     let mut tables = tables;
@@ -157,7 +160,7 @@ pub fn run_impl_exposed(
 /// `unit` told the frames the pass holds as exposed, when it holds them.
 pub(super) fn exposing<'b>(
     unit: llrm_analysis::memory::Unit<'b>,
-    exposed: Option<&'b std::collections::BTreeSet<llrm_mir::module::ValueId>>,
+    exposed: Option<&'b Exposed>,
 ) -> llrm_analysis::memory::Unit<'b> {
     exposed.map_or(unit, |set| unit.with_exposed(set))
 }
