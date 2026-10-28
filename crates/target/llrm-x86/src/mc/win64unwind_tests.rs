@@ -190,7 +190,18 @@ fn declared_directives_are_encoded_as_the_pins_assembler_does() {
 fn a_declared_prologue_is_not_read_back_from_the_bytes() {
     use llrm_object::{Frame, Seh};
     let mut object = with(&[0xC3]);
-    object.frames.push(Frame { section: 0, offset: 0, length: 1, rows: Vec::new(), seh: vec![(1, Seh::PushReg(6))] });
+    object
+        .frames
+        .push(
+            Frame {
+                section: 0,
+                offset: 0,
+                length: 1,
+                rows: Vec::new(),
+                cfi: Vec::new(),
+                seh: vec![(1, Seh::PushReg(6))],
+            },
+        );
     let written = expanded(&object).unwrap();
     let xdata = written.sections.iter().find(|one| one.name == ".xdata").unwrap();
     assert_eq!(xdata.image, bytes("0101010001600000"));

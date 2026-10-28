@@ -235,6 +235,7 @@ mod tests {
                 FrameRow { cfa_register: "rbp".into(), ..row(4, 16, &[("rbp", -16)]) },
                 FrameRow { cfa_register: "rbp".into(), ..row(9, 16, &[("rbp", -16), ("rbx", -24)]) },
             ],
+            seh: Vec::new(),
             cfi: vec![
                 Cfi::DefCfaOffset { offset: 16 },
                 Cfi::Offset { register: 6, offset: -16 },
@@ -277,6 +278,7 @@ mod tests {
                 FrameRow { cfa_register: "r12".into(), ..row(5, 16, &[("r12", -16)]) },
                 row(10, 8, &[("r12", -16)]),
             ],
+            seh: Vec::new(),
             cfi: vec![
                 Cfi::DefCfaOffset { offset: 16 },
                 Cfi::Offset { register: 12, offset: -16 },
