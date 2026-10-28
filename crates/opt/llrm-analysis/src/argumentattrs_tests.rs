@@ -88,6 +88,33 @@ b0:
     assert!(nofree("get") && !nofree("h") && nofree("hn"));
 }
 
+/// `addArgumentAttrsFromCallsites`: the pin's `opt -passes=function-attrs`
+/// gives `a`'s `%p` `nonnull` and nothing else here.
+#[test]
+fn a_parameter_passed_to_a_nonnull_noundef_one_of_a_guaranteed_call_is_nonnull() {
+    let (module, _) = stated(
+        "declare void @use(ptr noundef nonnull)
+declare void @plain(ptr nonnull)
+declare void @may_not_return()
+define void @a(ptr %p, ptr %q) {
+b0:
+  call void @use(ptr %p)
+  call void @plain(ptr %q)
+  ret void
+}
+define void @b(ptr %p) {
+b0:
+  call void @may_not_return()
+  call void @use(ptr %p)
+  ret void
+}
+",
+        &["a", "b"],
+    );
+    let nonnull = |name, index| facts(&module, name, index).non_null();
+    assert!(nonnull("a", 0) && !nonnull("a", 1) && !nonnull("b", 0));
+}
+
 #[test]
 fn an_unused_parameter_is_nocapture_readnone() {
     let (module, _) = stated("define void @f(ptr %p) {\nb0:\n  ret void\n}\n", &["f"]);
