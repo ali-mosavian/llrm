@@ -35,7 +35,7 @@
 //! show each answer.
 //!
 //! # Used by
-//! [`crate::backend::allocate`], [`crate::backend::coalesce`],
+//! [`crate::backend::allocate`], [`crate::coalescer::pass`],
 //! [`crate::backend::constrain`], [`crate::backend::datagroup`],
 //! [`crate::backend::regclass`], [`crate::backend::parcopy`],
 //! [`crate::backend::ssaspill`] and [`crate::backend::masm`] (register names).

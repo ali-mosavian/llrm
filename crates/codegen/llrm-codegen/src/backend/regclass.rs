@@ -87,7 +87,7 @@
 //! # Provides
 //! One answer to "which registers may this value be in", owned here (#441).
 //! Read by [`crate::backend::ssaspill`], [`crate::backend::allocate`],
-//! [`crate::backend::coalesce`], [`crate::backend::constrain`],
+//! [`crate::coalescer::pass`], [`crate::backend::constrain`],
 //! and `target.rs`.
 //!
 //! # Needs

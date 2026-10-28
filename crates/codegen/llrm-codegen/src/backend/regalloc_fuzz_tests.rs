@@ -11,12 +11,12 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use crate::backend::allocate::RegAlloc;
-use crate::backend::coalesce::Coalescer;
 use crate::backend::cpu::ProfileOrName;
 use crate::backend::parcopy::ParallelCopy;
 use crate::backend::phielim::PhiElimination;
 use crate::backend::twoaddr::TwoAddress;
 use crate::backend::{target, verify};
+use crate::coalescer::pass::Coalescer;
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::LIRTransform;

@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 137 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 136 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -26,7 +26,6 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 137 documen
 | cfi | Reads call frame information back from emitted code. | `debuginfo.rs`, under `-g`. | [cfi](cfi.md) |
 | classes | What the selected target says about its registers, for the allocator and the passes around it. | `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller | [classes](classes.md) |
 | cmpsub | A compare of a value with a constant, where the same value minus (nearly) that constant is made just before it: the subtract's flags are the compare's. | A machine phase ahead of the first SSA phase (`flow::machine_with`), at | [cmpsub](cmpsub.md) |
-| coalesce | Removes a copy whose two values can share a register: the phase that runs LLVM's `RegisterCoalescer` ([`crate::coalescer`]). | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
 | combiner | A chain of one integer operation rebuilt so the operand that arrives last joins last: LLVM's `MachineCombiner` ([MachineCombiner.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCombiner.cpp)) with the generic reassociation patterns of `TargetInstrInfo`, the only ones i486 has. | On SSA, after `leaopt` and before `phielim` (the pin's `addILPOpts`, after | [combiner](combiner.md) |
 | comparefold | Fold a one-use load into the comparison that reads it, as a memory operand. | Per block, inside isel's cross-instruction selection | [comparefold](comparefold.md) |
 | compares | Expands `llvm.scmp` and `llvm.ucmp` into two compares and a subtract in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, with the bit counts, for a target | [compares](compares.md) |
@@ -104,7 +103,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 137 documen
 | peepholeopt | A subtract whose difference nothing reads is a compare. | A machine phase on SSA after MachineSink and ahead of MachineCombiner (the | [peepholeopt](peepholeopt.md) |
 | phiconst | One value for a constant that several edges of a phi carry. | Phase 1 of the machine phases, before `SsaSpill`, so both allocation routes | [phiconst](phiconst.md) |
 | phielim | Takes LIR out of SSA: each phi becomes parallel copies on its incoming edges. | A machine phase after `ssaspill` (spiller route only) and before | [phielim](phielim.md) |
-| postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [postings](postings.md) |
+| postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), `crate::coalescer::pass`, | [postings](postings.md) |
 | postrasink | Moves a register copy, or a spill store, into the one successor that needs it. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `copysink`. Once per | [postrasink](postrasink.md) |
 | precse | The same pure computation made twice, made once: `MachineCSE` before PHI elimination, where a value has one definition. | A machine phase before `machinesink` (`flow::machine_with`), at every -O | [precse](precse.md) |
 | prezeroed | The entry block's zero writes to a local nothing has touched yet, for a frame the runtime zero-fills (QB's `B$ENRA`): the frame already holds them. | The DAG path (`selectiondag/builder.rs`) and the old selector (`isel.rs`), | [prezeroed](prezeroed.md) |
@@ -112,7 +111,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 137 documen
 | pushfold | A value that a load made and nothing else reads is read from memory where it is pushed or added: `mov r, [m]; push r` is `push [m]`, and `v2 := add v0, v1` with `v1` such a load is `v2 := add v0, [m]`, whichever operand of a commutative operation the load is. | Twice. As `LoadFold` first of the machine phases, after selection: the pin's | [pushfold](pushfold.md) |
 | regalloc_input | Test support: the machine-phase list and the LIR a fixture has reached just before a chosen phase. | Tests of [`crate::backend::allocate`](allocate.md), `crate::backend::ssaspill`, | [regalloc_input](regalloc_input.md) |
 | regclass | The register class of each value: the set of registers an instruction's operands allow it to be in. | Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate`, at | [regclass](regclass.md) |
-| registerinfo | The backend's view of a target's register file: re-exports of the types a target's `registers.regs` description generates. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [registerinfo](registerinfo.md) |
+| registerinfo | The backend's view of a target's register file: re-exports of the types a target's `registers.regs` description generates. | [`crate::backend::allocate`](allocate.md), `crate::coalescer::pass`, | [registerinfo](registerinfo.md) |
 | regpressure | Register pressure per pressure set, for the pre-RA scheduler: `RegPressureTracker` of the pin (RegisterPressure.cpp) as `GenericScheduler` asks it of a bottom-up region. | Named by `machinesched`. | [regpressure](regpressure.md) |
 | regthrash | Which register lanes are dead after each instruction of a block, from the lanes dead at its exit. | `peephole`, `exactaddress`, `sharedstores`, `fixupleas`, `fixupbw` | [regthrash](regthrash.md) |
 | relayout | Lays a function's frame out a second time, with a hole for the spill slots, by moving each frame cell of the first layout. | In `machined_once` (`assemble.rs`), after the first layout is chosen, unless | [relayout](relayout.md) |
@@ -135,7 +134,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 137 documen
 | stepflags | Removes a compare of a value with a constant when a step of the same value already sets those flags. | Once per block in instruction selection, after `comparefold` and before | [stepflags](stepflags.md) |
 | storecombine | Packs two neighbouring literal word stores into one dword store. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [storecombine](storecombine.md) |
 | storedhomes | Finds the memory cells that provably still hold a phi's value, so a spilled value read from one needs no store and no slot of its own. | `crate::backend::spiller` and [`crate::backend::floatassign`](floatassign.md) (`held`); | [storedhomes](storedhomes.md) |
-| target | What the machine has for the register allocator: operand needs, the segment registers, and the facts the allocator asks of each instruction, so it can place operands without knowing x86. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [target](target.md) |
+| target | What the machine has for the register allocator: operand needs, the segment registers, and the facts the allocator asks of each instruction, so it can place operands without knowing x86. | [`crate::backend::allocate`](allocate.md), `crate::coalescer::pass`, | [target](target.md) |
 | timing | Core-clock bounds of multiplies and divides, read from the CPU profile, so the compiler can pick a multiply or divide form by cost. | [`crate::backend::division`](division.md) (multiply by reciprocal against a divide) and | [timing](timing.md) |
 | twoaddr | Rewrites three-address arithmetic into x86's two-address form before register allocation. | A machine phase after `floatalloc` and before `coalesce` | [twoaddr](twoaddr.md) |
 | upperzero | Which 32-bit register roots hold zero in their upper half, and the `movzx` that makes it so where a 32-bit address needs it. | `established` is the last sub-pass of [`crate::backend::peephole`](peephole.md), run when | [upperzero](upperzero.md) |
