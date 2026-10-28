@@ -819,7 +819,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     let eligible = procedure.entry == 0
         && procedure.interrupt.is_none()
         && !procedure.far
-        && procedure.body.bits == 32
+        && matches!(procedure.body.bits, 32 | 64)
         && procedure.reserve != 0
         && procedure.callees.values().all(|one| one.code.is_empty())
         && [false, true].iter().all(|omit| {

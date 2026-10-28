@@ -44,6 +44,8 @@ pub trait Machine {
     const NUMBER: u16;
     /// Relocations carry their addend (RELA); else it is in the field (REL).
     const ADDEND: bool;
+    /// `sh_type` of `.eh_frame`: `SHT_X86_64_UNWIND` on x86-64, else PROGBITS.
+    const UNWIND_TYPE: u32 = SHT_PROGBITS;
 
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported>;
 }
@@ -110,7 +112,7 @@ fn put_word<M: Machine>(
 }
 
 /// The ELF name, type and flags of `section`.
-fn spelling(section: &Section) -> Result<(&'static str, u32, u64), Unsupported> {
+fn spelling<M: Machine>(section: &Section) -> Result<(&'static str, u32, u64), Unsupported> {
     if !section.near {
         return Err(unsupported(format!(
             "{}: a segment addressed by its own selector has no ELF section",
@@ -126,6 +128,7 @@ fn spelling(section: &Section) -> Result<(&'static str, u32, u64), Unsupported> 
         // Named as the DWARF writer names it.
         Role::InitFunctions => (".init_array", SHT_INIT_ARRAY, SHF_ALLOC | SHF_WRITE),
         Role::Debug(_) => (".debug", SHT_PROGBITS, 0),
+        Role::Unwind => (".eh_frame", M::UNWIND_TYPE, SHF_ALLOC),
     })
 }
 
@@ -153,7 +156,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
 
     // Section indices: 0 is the null section, the object's follow in order.
     let mut names = Strings::new();
-    let spelled: Vec<(&str, u32, u64)> = object.sections.iter().map(spelling).collect::<Result<_, _>>()?;
+    let spelled: Vec<(&str, u32, u64)> = object.sections.iter().map(spelling::<M>).collect::<Result<_, _>>()?;
     // A role's first section is `.text`, `.data`...; a further one is told
     // apart by its own name.
     let mut section_names: Vec<String> = Vec::new();
@@ -272,7 +275,9 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let alignment = section.align.max(4).next_power_of_two();
         align(&mut out, alignment);
         let offset = out.len() as u64;
-        if kind == SHT_PROGBITS {
+        // Every type but NOBITS has its bytes in the file (`.eh_frame` is
+        // `SHT_X86_64_UNWIND`, `.init_array` `SHT_INIT_ARRAY`).
+        if kind != SHT_NOBITS {
             out.extend(&images[index]);
         }
         headers.push(Header {

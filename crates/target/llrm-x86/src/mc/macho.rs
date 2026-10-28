@@ -133,6 +133,7 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             debug: None,
+            frames: Vec::new(),
         };
         let bytes = llrm_macho::write(&object, &X8664MachO).unwrap();
         let tail = &image[at + 4..];
