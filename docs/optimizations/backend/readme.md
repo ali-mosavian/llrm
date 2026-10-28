@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 133 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -95,6 +95,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 133 documen
 | needs | What a body contains that a peephole sub-pass could act on, so that `peephole` skips a sub-pass whose subject is absent. | `peephole`. | [needs](needs.md) |
 | objbuild | Encodes a masm module as a format-neutral object: code and data laid out in sections, each name resolved, each reference to one a relocation. | Once per module, after `assemble` and `data layout` have produced the masm | [objbuild](objbuild.md) |
 | optimizephis | A phi cycle that carries one value is that value, and one nothing reads is gone: `OptimizePHIs` before MachineCSE. | After `FarIndirectCalls`, before [`crate::backend::phiconst`](phiconst.md). Every level. | [optimizephis](optimizephis.md) |
+| overalign | Aligns a static local that wants more than the stack gives, in MIR before instruction selection. | `mir over-aligned locals` in `driver::optimized`, after `ehprepare`, once | [overalign](overalign.md) |
 | overlap | Whether two machine memory operands may overlap, read from their addresses alone. | `spiller`, `floatassign`, `storedhomes`. | [overlap](overlap.md) |
 | parcopy | Writes each parallel copy group (the copies a phi becomes on an edge, which happen at once) as a sequence of moves that computes the same thing. | After `regalloc`, before `prologue` and the peephole, once per body, at | [parcopy](parcopy.md) |
 | peephole | Local rewrites of allocated LIR that need the final physical registers. | Once per body, as the machine phase after `prologue` and before `loopslots` | [peephole](peephole.md) |

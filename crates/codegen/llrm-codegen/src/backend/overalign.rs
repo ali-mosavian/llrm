@@ -25,14 +25,21 @@
 //! four instructions per local. Exit: realign in `masm::lowered`. Dynamic
 //! `alloca`s keep the alignment the DAG builder passes (`DynamicStackAlloc`).
 //!
+//! # Example
+//! `int aligned(int n) { _Alignas(64) int v[4] = {n, 1, 2, 3}; return use(v);
+//! }` at `-m64 -O1` first had `sub rsp, 24; lea rdi, [rsp]`. Now it takes 88
+//! bytes and `lea rax, [rsp]; add rax, 63; and rax, -64` before the first use.
+//!
+//! From the compiler's `-S` output of `tests/frame_realign_m64.rs`' source.
+//!
 //! # Runs
 //! `mir over-aligned locals` in `driver::optimized`, after `ehprepare`, once
 //! per module, whatever the -O level.
 
+use llrm_mir::GlobalId;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::GlobalId;
 use llrm_mir::module::{GlobalKind, InstId, Module, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 
@@ -88,8 +95,10 @@ pub fn aligned(
                 .filter(|one| {
                     let user = function.instruction(one.user);
                     let marker = matches!(user.opcode, Opcode::Call(_))
-                        && matches!(user.operands.last(), Some(Operand::Constant(callee))
-                            if matches!(context.get(*callee).kind, ConstantKind::Global(id) if markers.contains(&id)));
+                        && matches!(
+                            user.operands.last(),
+                            Some(Operand::Constant(callee)) if matches!(context.get(*callee).kind, ConstantKind::Global(id) if markers.contains(&id))
+                        );
                     !marker
                 })
                 .map(|one| (one.user, one.index as usize))

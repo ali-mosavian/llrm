@@ -41,11 +41,7 @@ fn test_an_over_aligned_local_is_aligned_at_run_time() {
         .output()
         .unwrap();
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
-    let linked = Command::new(&clang)
-        .current_dir(dir)
-        .args(["-O1", "-o", "run", "main.c", "a.o"])
-        .output()
-        .unwrap();
+    let linked = Command::new(&clang).current_dir(dir).args(["-O1", "-o", "run", "main.c", "a.o"]).output().unwrap();
     assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
     let ran = Command::new(dir.join("run")).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&ran.stdout), "0\n0\n0\n0\n");
