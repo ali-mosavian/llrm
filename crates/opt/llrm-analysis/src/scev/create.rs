@@ -158,6 +158,7 @@ impl ScalarEvolution {
         if let Some(s) = self.get_existing_scev(v) {
             return s;
         }
+        CREATED.with(|count| count.set(count.get() + 1));
         self.create_scev_iter(cx, v)
     }
 
@@ -1288,4 +1289,14 @@ fn is_mask(
     bits: u32,
 ) -> bool {
     bits != 0 && bits <= a.width && a == low_bits_set(a.width, bits)
+}
+
+thread_local! {
+    static CREATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many values `get_scev` has analysed afresh on this thread (a miss of
+/// the value map): a test counts what a pass asks again after an edit.
+pub fn scevs_created() -> usize {
+    CREATED.with(std::cell::Cell::get)
 }
