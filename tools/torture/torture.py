@@ -212,6 +212,7 @@ def main() -> int:
     parser.add_argument("names", nargs="*")
     parser.add_argument("--bits", type=int, choices=[16, 32, 64], default=32, help="the target's int width (64: x86_64-linux objects, linked and run natively)")
     parser.add_argument("--levels", default="O0,O2,Os")
+    parser.add_argument("--isel", choices=["old", "dag", "shadow"], help="the instruction selector llrm-cc is asked for (64 bits: its default is not the DAG)")
     parser.add_argument("--stage", choices=["compile", "run"], default="run")
     parser.add_argument("--sample", type=int, default=0, help="the first N programs only")
     parser.add_argument("--gate", action="store_true", help="the fixed sample of sample.txt, all levels; exits 1 on any build, link or wrong result that is not named")
@@ -240,11 +241,11 @@ def build_support(target: str, out: Path) -> subprocess.CompletedProcess:
 NATIVE_SECONDS = 15
 
 
-def build_native(source: Path, level: str, work: Path, stem: str, rules: list[dict]) -> tuple[str, str, Path | None]:
+def build_native(source: Path, level: str, work: Path, stem: str, rules: list[dict], isel: str | None = None) -> tuple[str, str, Path | None]:
     """(class, why, exe) of `source` as an x86_64-linux object linked by the host's cc: the m64 row has no DOS to run in."""
     text = source.read_text(errors="replace")
     obj, exe = work / f"{stem}.o", work / stem
-    command = [str(BIN / "llrm-cc"), LEVELS[level], "-c", "-I", str(source.parent), *DIALECT, *program_options(text), str(source), "-o", str(obj)]
+    command = [str(BIN / "llrm-cc"), LEVELS[level], "-c", "-I", str(source.parent), *DIALECT, *program_options(text), *([f"--isel={isel}"] if isel else []), str(source), "-o", str(obj)]
     done = run_within_cpu(command, COMPILE_SECONDS, {"LLRM_CC_TARGET": "x86_64-linux"})
     if done is None:
         return "compile", f"did not finish in {COMPILE_SECONDS} s of CPU", None
@@ -351,7 +352,7 @@ def run_64(args, work: Path) -> int:
 
     def one(case):
         source, level = case
-        kind, why, exe = build_native(source, level, work, names[case], rules)
+        kind, why, exe = build_native(source, level, work, names[case], rules, args.isel)
         if kind == "built" and args.stage == "run":
             kind, why = run_native(exe)
         return case, (kind, why)
