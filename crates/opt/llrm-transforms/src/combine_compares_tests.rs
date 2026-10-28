@@ -734,3 +734,100 @@ fn test_a_product_with_a_constant_against_a_constant_divides_the_constant() {
         "  %0 = icmp sgt i16 %x, 0\n  ret i1 %0\n",
     );
 }
+
+/// `foldGEPICmp`, `CommonPointerBase`'s two-GEP arm: `zero()` of the QB heap
+/// compared `p + 24` with `p + x - 8` as pointers, so loop-idiom's memset
+/// length was three instructions where the pin's is eight and `lh_alloc`
+/// inlined `first_fit` (311 instructions against the pin's 90).
+#[test]
+fn test_two_geps_off_one_base_compare_their_offsets() {
+    let after = combined(
+        "define i1 @f(ptr %p, i64 %x) {
+b0:
+  %a = getelementptr inbounds nuw i8, ptr %p, i64 24
+  %b = getelementptr inbounds nuw i8, ptr %p, i64 %x
+  %c = getelementptr inbounds i8, ptr %b, i64 -8
+  %r = icmp ult ptr %a, %c
+  ret i1 %r
+}
+",
+    );
+    assert!(after.contains("icmp sgt i64 %x, 32") && !after.contains("getelementptr"), "{after}");
+}
+
+/// Two GEPs of one base that differ in one index compare that index.
+#[test]
+fn test_two_geps_that_differ_in_one_index_compare_it() {
+    let after = combined(
+        "define i1 @f(ptr %p, i64 %a, i64 %b) {
+b0:
+  %x = getelementptr inbounds nuw i32, ptr %p, i64 %a
+  %y = getelementptr inbounds nuw i32, ptr %p, i64 %b
+  %r = icmp ult ptr %x, %y
+  ret i1 %r
+}
+",
+    );
+    assert!(after.contains("icmp samesign ult i64 %a, %b") && !after.contains("getelementptr"), "{after}");
+}
+
+/// A GEP compared with itself needs no compare.
+#[test]
+fn test_a_gep_compared_with_an_equal_gep_is_decided() {
+    let after = combined(
+        "define i1 @f(ptr %p, i64 %a) {
+b0:
+  %x = getelementptr inbounds nuw i32, ptr %p, i64 %a
+  %y = getelementptr inbounds nuw i32, ptr %p, i64 %a
+  %r = icmp ule ptr %x, %y
+  ret i1 %r
+}
+",
+    );
+    assert!(after.contains("ret i1 true") && !after.contains("icmp"), "{after}");
+}
+
+/// GEPs of different bases and the same indices compare the bases.
+#[test]
+fn test_geps_of_two_bases_with_the_same_indices_compare_the_bases() {
+    let after = combined(
+        "define i1 @f(ptr %p, ptr %q, i64 %a) {
+b0:
+  %x = getelementptr inbounds nuw i32, ptr %p, i64 %a
+  %y = getelementptr inbounds nuw i32, ptr %q, i64 %a
+  %r = icmp ult ptr %x, %y
+  ret i1 %r
+}
+",
+    );
+    assert!(after.contains("icmp ult ptr %p, %q") && !after.contains("getelementptr"), "{after}");
+}
+
+/// Without flags the offsets still compare when both cross the base's
+/// alignment boundary the same number of times: `p + 1 < p + 3` on a base
+/// aligned to 16.
+#[test]
+fn test_constant_offsets_inside_one_alignment_unit_compare_without_flags() {
+    let after = combined(
+        "define i1 @f(ptr align 16 %p) {
+b0:
+  %x = getelementptr i8, ptr %p, i64 1
+  %y = getelementptr i8, ptr %p, i64 3
+  %r = icmp ult ptr %x, %y
+  ret i1 %r
+}
+",
+    );
+    assert!(!after.contains("icmp ult ptr"), "{after}");
+    let across = combined(
+        "define i1 @f(ptr align 16 %p) {
+b0:
+  %x = getelementptr i8, ptr %p, i64 15
+  %y = getelementptr i8, ptr %p, i64 17
+  %r = icmp ult ptr %x, %y
+  ret i1 %r
+}
+",
+    );
+    assert!(across.contains("icmp ult ptr"), "offsets on two sides of the boundary are left: {across}");
+}

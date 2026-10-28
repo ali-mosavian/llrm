@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 217 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 218 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -42,7 +42,8 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_distribute | `InstCombinerImpl::foldUsingDistributiveLaws`: factor a common term out of two operands of a binary operator, or expand an operator over an operand it distributes over when both halves simplify. | `visit_and`, `visit_or`, `visit_xor`, `visit_add`, `visit_sub`, `visit_mul`. | [combine_distribute](combine_distribute.md) |
 | combine_fp | `visitFDiv`'s `foldFDivConstantDivisor`: a division by a constant is a multiply by its reciprocal. | `combine::visitors` for `fdiv`. | [combine_fp](combine_fp.md) |
 | combine_funnel | `convertOrOfShiftsToFunnelShift` and `matchFunnelShift`: an `or` of two opposite shifts, or of a pair of concatenations, is a funnel shift. | `visitOr` ([`crate::combine_or`](combine_or.md)), and by `SimplifyDemandedBits` | [combine_funnel](combine_funnel.md) |
-| combine_gep | `visitGetElementPtrInst`: canonical forms of a `getelementptr`. | Named by `combine_compares`, `combine_gep_index`, `combine_gep_merge`, `combine_gep_phi`. | [combine_gep](combine_gep.md) |
+| combine_gep | `visitGetElementPtrInst`: canonical forms of a `getelementptr`. | Named by `combine_compares`, `combine_gep_base`, `combine_gep_index`, `combine_gep_merge`, `combine_gep_phi`. | [combine_gep](combine_gep.md) |
+| combine_gep_base | `CommonPointerBase` and `EmitGEPOffsets`: the pointer two GEP chains share and the offset each adds to it. |  | [combine_gep_base](combine_gep_base.md) |
 | combine_gep_index | The rewrites of `visitGetElementPtrInst` that read its indices and flags (:3513-3705): a scaled single index, `inbounds` and `nuw` the object or the indices prove, a sum split in two GEPs, a select of constants, and `srem` as `urem`. | Named by `combine_gep`. | [combine_gep_index](combine_gep_index.md) |
 | combine_gep_merge | `visitGEPOfGEP`: a `getelementptr` of a `getelementptr` as one. | [`combine_gep`](combine_gep.md), which calls `visit_gep_of_gep` when a | [combine_gep_merge](combine_gep_merge.md) |
 | combine_gep_phi | `foldGEPOfPhi`: a `getelementptr` of a phi of `getelementptr`s as a `getelementptr` of a phi of the one index they differ in. | The `getelementptr` visit of [`combine_gep`](combine_gep.md), which | [combine_gep_phi](combine_gep_phi.md) |

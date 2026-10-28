@@ -124,6 +124,7 @@ mod combine_flags_result_tests;
 pub mod combine_fp;
 pub mod combine_funnel;
 pub mod combine_gep;
+pub mod combine_gep_base;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
@@ -224,7 +225,6 @@ pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
 pub mod instsimplify;
-pub mod simplifylibcalls;
 pub mod instworklist;
 #[cfg(test)]
 mod instworklist_tests;
@@ -329,6 +329,7 @@ pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;
 pub mod simplifyindvar;
+pub mod simplifylibcalls;
 pub mod sinkcast;
 pub mod sinkcommon;
 pub mod spares;

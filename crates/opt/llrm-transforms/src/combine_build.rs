@@ -72,7 +72,7 @@ impl Combiner<'_> {
     }
 
     /// The value of the instruction `inst` made.
-    fn value_of(
+    pub(crate) fn value_of(
         &self,
         inst: InstId,
     ) -> Operand {

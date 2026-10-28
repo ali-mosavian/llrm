@@ -243,6 +243,7 @@ dependencies = [
  "llrm-codegen",
  "llrm-dwarf",
  "llrm-elf",
+ "llrm-env",
  "llrm-iselgen",
  "llrm-lir",
  "llrm-macho",

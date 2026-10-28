@@ -263,6 +263,17 @@ impl Combiner<'_> {
         gep: InstId,
         no_assumptions: bool,
     ) -> Operand {
+        self.emit_gep_offset_at(gep, gep, no_assumptions)
+    }
+
+    /// `emit_gep_offset` with the builder before `at`: `foldGEPICmp` emits an
+    /// offset at the compare, `EmitGEPOffsets` at the GEP it rewrites.
+    pub fn emit_gep_offset_at(
+        &mut self,
+        at: InstId,
+        gep: InstId,
+        no_assumptions: bool,
+    ) -> Operand {
         let Gep { source, indices, flags, ty, .. } = self.gep_of(gep).expect("a getelementptr");
         let int_ty = self.index_type(ty);
         // nusw implies nsw for the offset arithmetic.
@@ -289,18 +300,18 @@ impl Combiner<'_> {
                 }
                 (Step::Struct(_), None) => unreachable!("a struct index is a constant"),
                 (Step::Sequence(element), _) => {
-                    let index = self.int_cast(gep, index, int_ty);
+                    let index = self.int_cast(at, index, int_ty);
                     match self.alloc_size(element) {
                         1 => index,
                         stride => {
                             let scale = self.int(int_ty, u128::from(stride));
-                            self.create_binop(gep, BinaryOp::Mul, index, scale, wrap)
+                            self.create_binop(at, BinaryOp::Mul, index, scale, wrap)
                         }
                     }
                 }
             };
             result = Some(match result {
-                Some(sum) => self.create_binop(gep, BinaryOp::Add, sum, term, wrap),
+                Some(sum) => self.create_binop(at, BinaryOp::Add, sum, term, wrap),
                 None => term,
             });
         }

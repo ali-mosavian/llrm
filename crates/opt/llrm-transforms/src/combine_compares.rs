@@ -59,6 +59,7 @@ use llrm_mir::knownbits::KnownBits;
 use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
+use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
 use llrm_mir::valuetracking::range::{self, SelectOperand, SelectPatternFlavor};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
@@ -255,13 +256,14 @@ pub fn visit_icmp(
 }
 
 /// `foldGEPICmp`
-/// ([:`foldGEPICmp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)),
-/// its first arm: `icmp (gep Ptr, OFFSET), Ptr` is `icmp OFFSET, 0`, for an
-/// equality or an unsigned predicate on a GEP with a no-wrap flag.
+/// ([:`foldGEPICmp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)):
+/// a compare of two pointers off one base is a compare of the offsets, for an
+/// equality or an unsigned predicate on GEPs with a no-wrap flag.
 ///
-/// DEVIATE 1: one GEP between the compare and `Ptr` (`CommonPointerBase`
-/// walks a chain). Exit: translate `CommonPointerBase`.
-/// DEVIATE 2: the null arm and the GEP-against-GEP arms are not made.
+/// DEVIATE 1: pointer casts are not looked through (`stripPointerCasts` of the
+/// right side, and the arm for two bases that differ only by casts). Exit:
+/// `strip_pointer_casts_same_representation` in the query.
+/// DEVIATE 2: the null arm and `transformToIndexedCompare` are not made.
 fn fold_gep_icmp(
     c: &mut Combiner,
     inst: InstId,
@@ -272,33 +274,92 @@ fn fold_gep_icmp(
     use crate::combine_gep::GepFlags;
     // Signed compares of GEPs are not index compares: the final add of the
     // base can overflow.
-    if matches!(
-        pred,
-        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
-    ) {
+    if pred.is_signed() {
         return None;
     }
-    let def = c.definition_of(gep_operand)?;
-    let gep = c.gep_of(def)?;
-    if gep.ptr != rhs {
-        return None;
-    }
-    let flags = GepFlags::of(gep.flags);
+    let lhs_gep = c.defining_gep(gep_operand).and_then(|def| c.gep_of(def))?;
     let equality = matches!(pred, IntPredicate::Eq | IntPredicate::Ne);
-    if !equality && !(flags.in_bounds || flags.nusw || flags.nuw) {
-        return None;
-    }
-    let offset = c.emit_gep_offset(def, false);
-    let zero = c.int(c.type_of(offset), 0);
-    // Without nuw the offset can wrap the address space: compare it as signed.
-    let pred = match (flags.nuw, pred) {
-        (false, IntPredicate::Ugt) => IntPredicate::Sgt,
-        (false, IntPredicate::Uge) => IntPredicate::Sge,
-        (false, IntPredicate::Ult) => IntPredicate::Slt,
-        (false, IntPredicate::Ule) => IntPredicate::Sle,
-        (_, same) => same,
+    // Unsigned predicates can be folded if the GEPs have any nowrap flag.
+    let can_fold = |flags: GepFlags| equality || flags != GepFlags::default();
+    // Without nuw the offsets can wrap the address space: compare them signed.
+    let new_icmp_of = |c: &mut Combiner, flags: GepFlags, a: Operand, b: Operand| {
+        if !flags.nuw {
+            return new_icmp(c, inst, pred.signed(), a, b);
+        }
+        let i1 = c.context.types.int(1);
+        let same_sign = if flags.nusw { Flags::SAMESIGN } else { Flags::default() };
+        c.replace_with_new(inst, Opcode::ICmp(pred), i1, vec![a, b], same_sign)
     };
-    Some(new_icmp(c, inst, pred, offset, zero))
+
+    let base = c.common_pointer_base(gep_operand, rhs);
+    let index_ty = c.index_type(lhs_gep.ty);
+    if base.ptr == Some(rhs) && can_fold(base.lhs_flags) && !c.is_expensive(&base) {
+        // ((gep Ptr, OFFSET) cmp Ptr) ---> (OFFSET cmp 0)
+        let offset = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty);
+        let zero = c.int(c.type_of(offset), 0);
+        return Some(new_icmp_of(c, base.lhs_flags, offset, zero));
+    }
+
+    let rhs_gep = c.defining_gep(rhs).and_then(|def| c.gep_of(def))?;
+    let flags = GepFlags::of(lhs_gep.flags).and(GepFlags::of(rhs_gep.flags));
+    let same_shape = lhs_gep.indices.len() == rhs_gep.indices.len() && lhs_gep.source == rhs_gep.source;
+
+    if lhs_gep.ptr != rhs_gep.ptr {
+        // If all indices are the same, just compare the base pointers.
+        if same_shape
+            && c.type_of(lhs_gep.ptr) == c.type_of(rhs_gep.ptr)
+            && lhs_gep.indices == rhs_gep.indices
+            && can_fold(flags)
+        {
+            let i1 = c.context.types.int(1);
+            let operands = vec![lhs_gep.ptr, rhs_gep.ptr];
+            return Some(c.replace_with_new(inst, Opcode::ICmp(pred), i1, operands, Flags::default()));
+        }
+    } else if same_shape {
+        // If the GEPs only differ by one index, compare it.
+        let mut differing = lhs_gep.indices.iter().zip(&rhs_gep.indices).filter(|(l, r)| l != r);
+        let first = differing.next();
+        let irreconcilable = first.is_some_and(|(l, r)| c.type_of(*l) != c.type_of(*r));
+        match (first, differing.next()) {
+            // The same GEP: no comparison is needed.
+            (None, _) => {
+                let i1 = c.context.types.int(1);
+                return Some(Visit::Replace(c.int(i1, u128::from(pred.true_when_equal()))));
+            }
+            // Note that nowrap flags are always needed when comparing two
+            // indices.
+            (Some((&l, &r)), None) if !irreconcilable && flags != GepFlags::default() => {
+                return Some(new_icmp_of(c, flags, l, r));
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(ptr) = base.ptr.filter(|_| !c.is_expensive(&base)) {
+        // ((gep Ptr, OFFSET1) cmp (gep Ptr, OFFSET2)  --->  (OFFSET1 cmp
+        // OFFSET2)
+        let mut fold = can_fold(base.lhs_flags.and(base.rhs_flags));
+        if !fold {
+            // Without the flags, the offsets still compare when both cross the
+            // base's alignment boundary the same number of times: either both
+            // arguments wrap, or none does.
+            let q = query(c, Some(inst));
+            let width = c.env.layout.pointer(0).index_bits;
+            let (l_base, l_offset) = strip_and_accumulate_constant_offsets(&q, gep_operand, width, true);
+            let (r_base, r_offset) = strip_and_accumulate_constant_offsets(&q, rhs, width, true);
+            if l_base == ptr && r_base == ptr {
+                let alignment = i128::from(known::pointer_alignment(&q, ptr));
+                let floor = |offset: u128| signed(offset, width).div_euclid(alignment);
+                fold = floor(l_offset) == floor(r_offset);
+            }
+        }
+        if fold {
+            let l = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty);
+            let r = c.emit_gep_offsets(inst, &base.rhs_geps, base.rhs_flags, index_ty);
+            return Some(new_icmp_of(c, base.lhs_flags.and(base.rhs_flags), l, r));
+        }
+    }
+    None
 }
 
 /// `foldSignBitTest`

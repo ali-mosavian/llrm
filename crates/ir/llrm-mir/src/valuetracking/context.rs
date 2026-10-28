@@ -628,10 +628,7 @@ pub fn compute_known_bits_from_context(
 
 /// `CmpInst::isTrueWhenEqual`.
 fn is_true_when_equal(pred: IntPredicate) -> bool {
-    matches!(
-        pred,
-        IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle
-    )
+    pred.true_when_equal()
 }
 
 /// `m_Specific(side)` of `x`.
