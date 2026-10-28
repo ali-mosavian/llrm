@@ -341,6 +341,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 self.visit_sra(node).or_else(|| self.visit_shift(node)).or_else(|| self.reduce_load_width_of(node))
             }
             ISD::BSwap => self.visit_bswap(node),
+            ISD::Rotl | ISD::Rotr => self.visit_rotate(node),
             ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax => self.visit_iminmax(node),
             ISD::BitReverse => self.visit_bitreverse(node),
             ISD::SDiv => self.visit_sdiv(node),
