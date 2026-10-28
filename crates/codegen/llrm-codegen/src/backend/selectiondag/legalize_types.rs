@@ -486,8 +486,6 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(then);
                 self.dag.get_node(ISD::Select, wide, &[cond, then, other])
             }
-            // `PromoteIntRes_UNDEF`: an undef of the promoted type.
-            ISD::Undef | ISD::Poison => self.dag.get_undef(to),
             ISD::Freeze => {
                 // `PromoteIntRes_FREEZE`: the promoted operand, frozen.
                 let promoted = self.promoted_integer(self.dag.operand(value, 0));
