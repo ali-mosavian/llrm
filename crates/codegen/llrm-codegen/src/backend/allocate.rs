@@ -1322,32 +1322,6 @@ pub fn explicit_selectors_given(
     Some(body.with_blocks(blocks))
 }
 
-/// The values an instruction is a plain same-width copy between, if it is.
-fn _copy_pair(one: &Insn) -> Option<(u32, u32)> {
-    let what = one.what.as_ref()?;
-    if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
-        if let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) {
-            if dest.width == source.width && dest.value != source.value {
-                return Some((dest.value, source.value));
-            }
-        }
-    }
-    None
-}
-
-fn _copy_hints(body: &LirBody) -> IndexMap<u32, Vec<u32>> {
-    let mut hints: IndexMap<u32, Vec<u32>> = IndexMap::default();
-    for block in &body.blocks {
-        for one in &block.insns {
-            if let Some((dest, source)) = _copy_pair(one) {
-                hints.entry(dest).or_default().push(source);
-                hints.entry(source).or_default().push(dest);
-            }
-        }
-    }
-    hints
-}
-
 /// How many copies away a fixed register still reaches a value as its hint: the
 /// allocator's copy-hint propagation depth, as gcc exposes its limits as
 /// `--param`s. A chain of copies longer than this carries no hint further. The
@@ -1504,31 +1478,6 @@ thread_local! {
     static LAST_STATS: std::cell::Cell<(usize, usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
 }
 
-/// Every value that wants a register, dead definitions included.
-/// The values of `wanted` the body still names: from the postings the body is
-/// followed with, not a walk of every instruction (a spill asks it of its few).
-fn _named_among(
-    body: &LirBody,
-    wanted: &BTreeSet<u32>,
-) -> BTreeSet<u32> {
-    let arrives: BTreeSet<u32> = body.blocks.iter().flat_map(|block| block.phis.iter().map(|phi| phi.result)).collect();
-    let found: BTreeSet<u32> = crate::backend::postings::following(body, |postings| {
-        wanted
-            .iter()
-            .copied()
-            .filter(|value| {
-                arrives.contains(value) || postings.defs_count(*value) != 0 || postings.uses_count(*value) != 0
-            })
-            .collect()
-    });
-    body.facts.0.bump_by("named-among", wanted.len());
-    if llrm_support::env_flag!("LLRM_CHECK_POSTINGS") {
-        let walked: BTreeSet<u32> = _values(body).into_iter().filter(|one| wanted.contains(one)).collect();
-        assert!(found == walked, "{}: the values still named, from the postings, differ from the walk", body.name);
-    }
-    found
-}
-
 fn _values(body: &LirBody) -> Vec<u32> {
     let mut out: BTreeSet<u32> = BTreeSet::new();
     for block in &body.blocks {
@@ -1539,33 +1488,6 @@ fn _values(body: &LirBody) -> Vec<u32> {
         }
     }
     out.into_iter().collect()
-}
-
-/// Where a range sits in the queue: first by how few registers may hold it
-/// (LLVM's register class `AllocationPriority`,
-/// which `RegClassPriorityTrumpsGlobalness` puts before anything else), then
-/// `_priority`. The wide values fit around the narrow ones.
-fn _queue_priority(
-    one: Option<&Interval>,
-    at: Stage,
-    class: Option<usize>,
-    wide: usize,
-    index: &Indexes,
-) -> f64 {
-    let narrow = class.map_or(0, |registers| wide.saturating_sub(registers));
-    _priority(one, at, index) + narrow as f64 * 1e9
-}
-
-/// Where this range sits in the queue. Larger first, as LLVM does.
-fn _priority(
-    one: Option<&Interval>,
-    at: Stage,
-    index: &Indexes,
-) -> f64 {
-    match one {
-        None => 0.0,
-        Some(one) => one.size(index) as f64 + if at != Stage::Assign { 1e6 } else { 0.0 },
-    }
 }
 
 /// How wide each value is anywhere it is read or written.
@@ -2241,22 +2163,6 @@ impl LIRTransform for RegAlloc {
     }
 }
 
-/// Python `max(first, second)`: the first unless the second is larger.
-fn _max(
-    first: f64,
-    second: f64,
-) -> f64 {
-    if second > first { second } else { first }
-}
-
-/// Python `min(first, second)`: the first unless the second is smaller.
-fn _min(
-    first: f64,
-    second: f64,
-) -> f64 {
-    if second < first { second } else { first }
-}
-
 /// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
 /// reloads, stores and rematerializations, and the frame operands of x87 and
 /// other instructions. The allocator can reach only the first three.
@@ -2380,7 +2286,6 @@ mod tests {
     use llrm_lir::registers::RegId;
 
     use super::*;
-    use crate::analysis::intervals::Segment;
     use crate::backend::rewriter::{_dead_insertions, _placed, _settled};
     use crate::backend::{parcopy, select, verify};
     use crate::model::ir::{Imm, Reg};
@@ -2466,18 +2371,6 @@ mod tests {
         let message = got.err().map(|error| error.to_string()).expect("an error, not a fallback allocation");
         assert!(message.contains("cannot_place"), "{message}");
         assert_eq!(greedy_runs().1, 0, "nothing falls back");
-    }
-
-    /// A spill walked every instruction of the body to learn which of its few
-    /// values the rewrite left named (d_faces -O1: 634 spills, 272 M of 24.7 G
-    /// instructions). The postings say.
-    #[test]
-    fn test_the_values_a_spill_left_named_come_from_the_postings_not_a_walk() {
-        let at = |at: i64, defines: Vec<u32>, uses: Vec<u32>| Insn::new(at, Some((at, at + 1)), None, defines, uses);
-        let body = body_of("f", 0, vec![at(0, vec![1], vec![]), at(1, vec![2], vec![1]), at(2, vec![], vec![2])]);
-        let found = super::_named_among(&body, &BTreeSet::from([1, 2, 3]));
-        assert_eq!(found, BTreeSet::from([1, 2]), "value 3 is named nowhere");
-        assert_eq!(body.facts.0.counted("named-among"), 3, "asked of the three values, from the postings");
     }
 
     /// lru bas `BENCHLRU&` at -Os: an argument loaded in the entry block and
@@ -2977,37 +2870,6 @@ mod tests {
             insns[0].what.as_ref().expect("semantics").dests[0],
             reg(RegId::SI, 2),
             "the original was pinned away from si"
-        );
-    }
-
-    /// A base or index on m16 may be BX, SI, DI or BP; a value of any class
-    /// fits in the rest. The queue took the longest range first whatever
-    /// its class, so a short base found its three registers taken by wide
-    /// values that could have been elsewhere: bench/quicksort +18%
-    /// instructions against the search over shapes, which tried the
-    /// base first (#944).
-    #[test]
-    fn test_a_value_few_registers_may_hold_goes_before_a_longer_one_any_may() {
-        let span = |end: i64| Interval::new(1, vec![Segment { start: 0, end }]);
-        let (short, long) = (span(4), span(400));
-        assert!(
-            _queue_priority(Some(&short), Stage::Assign, Some(4), 6, &Indexes::plain())
-                > _queue_priority(Some(&long), Stage::Assign, Some(6), 6, &Indexes::plain())
-        );
-        assert!(
-            _queue_priority(Some(&short), Stage::Assign, None, 6, &Indexes::plain())
-                < _queue_priority(Some(&long), Stage::Assign, None, 6, &Indexes::plain()),
-            "no class: longest first"
-        );
-        assert!(
-            _queue_priority(Some(&long), Stage::Assign, Some(4), 6, &Indexes::plain())
-                > _queue_priority(Some(&short), Stage::Assign, Some(4), 6, &Indexes::plain()),
-            "one class: longest first"
-        );
-        assert!(
-            _queue_priority(Some(&short), Stage::Assign, Some(1), 6, &Indexes::plain())
-                > _queue_priority(Some(&short), Stage::Assign, Some(4), 6, &Indexes::plain()),
-            "the fewer registers, the sooner"
         );
     }
 
