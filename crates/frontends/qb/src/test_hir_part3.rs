@@ -1264,7 +1264,7 @@ fn capture_program() -> hir::Program {
 #[test]
 fn test_stage_observer_sees_the_hir_once_and_preserves_object_bytes() {
     let program = capture_program();
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let uncaptured = qb_compile::object_bytes(&program, Path::new("capture.bas"), None, &codegen).expect("emits");
     let mut seen: Vec<hir::Program> = Vec::new();
     let mut observer = |program: &hir::Program| {
@@ -2372,8 +2372,9 @@ fn test_a_module_compiles_through_the_rich_mir() {
     let source = tmp.path().join("RICH.BAS");
     std::fs::write(&source, "DECLARE SUB Fade (level%)\r\nSUB Fade (level%)\r\nOUT &H3C8, 0\r\nv% = INP(&H3C9)\r\nIF COMMAND$ > \"A\" THEN OUT &H3C9, level% + v%\r\nEND SUB\r\n").unwrap();
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()))
-        .expect("assembles");
+    let module =
+        qb_compile::assembled(&program, None, &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()))
+            .expect("assembles");
     let text = masm::text(&module).expect("prints");
     let fade = between(&text, "FADE proc", "endp");
     let call = fade.find("call far ptr B$SCMP").expect("the comparison's call");
@@ -2394,8 +2395,9 @@ fn test_the_runtime_frame_zeroes_the_locals() {
         None,
     )
     .expect("parses");
-    let module = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()))
-        .expect("assembles");
+    let module =
+        qb_compile::assembled(&program, None, &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()))
+            .expect("assembles");
     let text = masm::text(&module).expect("prints");
     let report = between(&text, "REPORT proc", "endp");
     assert!(report.contains("call far ptr B$ENRA"), "{report}");
@@ -2412,7 +2414,7 @@ fn test_data_statements_compile_through_the_rich_mir() {
     for name in ["fpcalc", "fpcsex", "fpi2cs", "fpicse", "hotlpx", "lngmxx", "pressx"] {
         let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../../tests/run/qb/{name}.bas"));
         let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-        qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()))
+        qb_compile::assembled(&program, None, &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 }
@@ -2425,8 +2427,9 @@ fn test_rich_route_keys_data_rows_by_position() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "rstend.bas", b"DEFINT A-Z\nDATA 1, 2\nREAD a, b\nRESTORE again\nREAD c\nRESTORE\nREAD d\nPRINT a; b; c; d\nEND\nagain:\nDATA 3, 4\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-    let rich = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()))
-        .expect("compiles");
+    let rich =
+        qb_compile::assembled(&program, None, &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()))
+            .expect("compiles");
     let text = masm::text(&rich).expect("prints");
     let rows = between(&text, "$QB$DS label byte\n", "BC_DS ends");
     assert_eq!(
@@ -2675,8 +2678,9 @@ fn test_def_seg_stores_the_runtime_segment_cell() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "defseg.bas", b"DEF SEG = &HA000\nBSAVE \"V.BIN\", 0, 64000\n");
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()))
-        .expect("assembles");
+    let module =
+        qb_compile::assembled(&program, None, &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()))
+            .expect("assembles");
     assert!(module.externs.iter().any(|(name, _)| name == "b$seg"), "{}", masm::text(&module).expect("prints"));
 }
 
@@ -2689,7 +2693,7 @@ fn test_a_word_array_after_an_odd_object_lies_at_an_even_offset() {
     let directory = tempfile::tempdir().expect("a directory");
     let text = "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nk = LEN(COMMAND$)\r\nf3(k) = LEN(s)\r\nPRINT f3(k + 1), s\r\n";
     let program = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
     let (_, items) = module.data.iter().find(|(name, _)| name == "BC_DATA").expect("BC_DATA");
     let mut offset = 0;
@@ -2758,7 +2762,7 @@ fn test_the_listing_is_the_code_the_object_holds() {
         None,
     )
     .expect("parses");
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
     let text = llrm_codegen::driver::basic::text(&module).unwrap();
     let keep = between(&text, "KEEP proc far", "KEEP endp");
@@ -3208,7 +3212,8 @@ fn listing_of(
     let directory = tempfile::tempdir().expect("creates a directory");
     let out = directory.path().join(format!("{name}.asm"));
     let input = written(&directory, &format!("{name}.bas"), source.as_bytes());
-    let argv = [input.to_str().unwrap(), "-O2", "-march=i486", "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
+    let argv = [input.to_str().unwrap(), "-O2", "--isel=old", "-march=i486", "-S", "-o", out.to_str().unwrap()]
+        .map(str::to_owned);
     assert_eq!(crate::cli::main(&argv), 0);
     std::fs::read_to_string(&out).expect("the listing")
 }
@@ -3301,10 +3306,11 @@ fn a_port_poll_does_not_reload_a_cell_stored_before_it_at_either_target() {
         let poll = lines.iter().position(|one| *one == "in al, dx").expect("the port read");
         // The premise: the masks are known constants at the poll, in the
         // instruction and not in a cell.
-        // (x ^ 8) & 8 is (x & 8) ^ 8: either order is the poll.
+        // (x ^ 8) & 8 is (x & 8) ^ 8, either order, or (x & 8) == 8 as a `cmp`:
+        // the DAG selector's form.
         let mut masks = [lines[poll + 1], lines[poll + 2]];
         masks.sort();
-        assert_eq!(masks, ["and al, 8", "xor al, 8"], "{target}: {text}");
+        assert!(masks == ["and al, 8", "xor al, 8"] || masks == ["and al, 8", "cmp al, 8"], "{target}: {text}");
         assert!(!text.contains("W$D"), "{target}: a cell held the masks: {text}");
     }
 }
@@ -3330,7 +3336,8 @@ fn a_constant_wait_mask_goes_to_the_poll_as_it_is_and_a_variable_one_through_a_c
         // The test of the masked byte may be a `test` for the `and` it needs no
         // result of.
         assert!(
-            constant.contains("xor al, 8") && (constant.contains("and al, 8") || constant.contains("test al, 8")),
+            (constant.contains("xor al, 8") || constant.contains("cmp al, 8") || constant.contains("not al"))
+                && (constant.contains("and al, 8") || constant.contains("test al, 8")),
             "{target}: {constant}"
         );
         assert!(!constant.contains("ptr W$D"), "{target}: a cell held a constant mask: {constant}");
@@ -3618,6 +3625,35 @@ fn test_bsave_and_bload_have_a_stack_cleanup_contract() {
     }
 }
 
+/// FIELD was refused ("valid, but this compiler cannot generate code for it
+/// yet"): it is B$FLDP(channel), then B$FIEL(width, variable) per pair.
+#[test]
+fn test_field_is_a_preamble_and_one_call_per_variable() {
+    let text = listing_of(
+        "fieldcalls",
+        "OPEN \"R\" FOR RANDOM AS #1 LEN = 16\r\nFIELD #1, 8 AS n$, 8 AS m$\r\nLSET n$ = \"x\"\r\nCLOSE\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    assert_eq!(main.matches("call far ptr B$FLDP").count(), 1, "{main}");
+    assert_eq!(main.matches("call far ptr B$FIEL").count(), 2, "{main}");
+    assert!(main.find("B$FLDP") < main.find("B$FIEL"), "{main}");
+}
+
+/// GET and PUT without a record variable were refused ("cannot generate code
+/// for it yet"): they transfer the FIELD buffer, B$GET1/B$PUT1 for the next
+/// record and B$GET2/B$PUT2 for a numbered one.
+#[test]
+fn test_get_and_put_without_a_variable_call_the_buffer_routines() {
+    let text = listing_of(
+        "getputbuffer",
+        "OPEN \"R\" FOR RANDOM AS #1 LEN = 16\r\nFIELD #1, 16 AS n$\r\nGET #1\r\nGET #1, 3\r\nLSET n$ = \"x\"\r\nPUT #1\r\nPUT #1, 4\r\nCLOSE\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    for routine in ["B$GET1", "B$GET2", "B$PUT1", "B$PUT2"] {
+        assert_eq!(main.matches(&format!("call far ptr {routine}")).count(), 1, "{routine}: {main}");
+    }
+}
+
 /// `END n` and `SYSTEM n` (PDS 7.1, VBDOS) were refused ("END with a return
 /// code"). BC pushes the code as a word and calls `B$CENC` (measured in BC 7.1
 /// and VBDOS objects), which never returns.
@@ -3754,4 +3790,57 @@ fn test_a_common_variable_is_still_stored_before_a_chain() {
     let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     let call = main.find("call far ptr B$SCHN").expect("the call");
     assert!(main[..call].contains("mov word ptr X%, 4"), "x% is stored: {main}");
+}
+
+/// PCOPY was refused ("cannot generate code for it yet"): it is
+/// B$PCPY(from page, to page), two pushed words in QB 4.5.
+#[test]
+fn test_pcopy_calls_the_page_copy_routine() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let out = directory.path().join("pcopypages.asm");
+    let input = written(&directory, "pcopypages.bas", b"SCREEN 7\r\nPCOPY 1, 2\r\nEND\r\n");
+    let argv = [
+        input.to_str().unwrap(),
+        "--dialect",
+        "qb45",
+        "--runtime",
+        "qb45",
+        "-O2",
+        "-march=i486",
+        "-S",
+        "-o",
+        out.to_str().unwrap(),
+    ]
+    .map(str::to_owned);
+    assert_eq!(crate::cli::main(&argv), 0);
+    let text = std::fs::read_to_string(&out).expect("the listing");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$PCPY").expect("the call");
+    assert!(main[..call].trim_end().ends_with("pushd 65538"), "pages 1 and 2 are two pushed words: {main}");
+}
+
+/// An object linked with BRUN45.LIB crashed at start ("no stack segment", entry
+/// at 0:0): BC without /O marks the header `bm` and names `$AC`, `$DAC` and
+/// `b$seg`, which make LINK pull in the loader of BRUN45.EXE. Ours named none.
+#[test]
+fn the_run_time_module_flag_marks_the_header_and_names_the_loader_externals() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "rtm.bas", b"PRINT \"hello\"\r\nEND\r\n");
+    let build = |run_time_module: bool| {
+        let frontend = qb_driver::Frontend { run_time_module, ..qb_driver::Frontend::new("qb45", "qb45") };
+        let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+        let bytes = object_bytes(&program, "RTM.BAS").expect("emits");
+        let records = omf::parse(&bytes).expect("parses");
+        let externals = omf::externals(&records);
+        let marker =
+            bytes.windows(2).any(|pair| pair == b"bm") as u8 + bytes.windows(2).any(|pair| pair == b"bl") as u8 * 2;
+        (marker, externals)
+    };
+    let (marker, externals) = build(true);
+    assert_eq!(marker & 1, 1, "header marker bm");
+    for name in ["$AC", "$DAC", "b$seg"] {
+        assert!(externals.iter().any(|one| one == name), "{name} in {externals:?}");
+    }
+    let (_, plain) = build(false);
+    assert!(!plain.iter().any(|one| one == "$AC"), "{plain:?}");
 }

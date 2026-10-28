@@ -9,7 +9,6 @@ description = "The Nib language frontend and language server"
 llrm-codegen = { workspace = true }
 llrm-driver = { workspace = true }
 llrm-mir = { workspace = true }
-llrm-instr = { workspace = true }
 llrm-target = { workspace = true }
 llrm-transforms = { workspace = true }
 indexmap = { workspace = true }

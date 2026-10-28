@@ -1,8 +1,9 @@
 //! tests/check: one file in, CHECK lines out, lit and FileCheck style.
 //!
-//! A file's `RUN:` line names a tool and its arguments, `%s` being the file
-//! (`not` first: it must fail). The tool's stdout and stderr are matched
-//! against the file's directives, in a comment (`;`, `'` or `//`):
+//! A file's `RUN:` line names a tool (`llrm-cc`: the C driver, in llrm-c's
+//! argument dialect) and its arguments, `%s` being the file (`not` first: it
+//! must fail). The tool's stdout and stderr are matched against the file's
+//! directives, in a comment (`;`, `'` or `//`):
 //!
 //!   CHECK: text            a later line contains it
 //!   CHECK-LABEL: text      the same, naming where a block starts
@@ -15,6 +16,8 @@
 //! `{{regex}}` inside a pattern is a regular expression; runs of blanks match
 //! each other.
 //!
+//! `RUN-PENDING:` is a RUN line not yet run: a gap llrm-cc has to close first.
+//!
 //! A `RUN:` line may name several configurations: each `{a | b | c}` in it is
 //! every alternative, and the product of its groups is run, each against the
 //! same directives. Equal groups choose together (`--dialect {qb45 | pds71}
@@ -25,6 +28,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use regex::Regex;
+
+mod common;
 
 #[derive(Debug, PartialEq)]
 enum Kind {
@@ -225,10 +230,14 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
             }
             let arguments: Vec<String> =
                 words[1..].iter().map(|word| word.replace("%s", &path.display().to_string())).collect();
-            let done = Command::new(tool(words[0]))
-                .args(&arguments)
-                .output()
-                .unwrap_or_else(|error| panic!("{}: {}: {error}", path.display(), words[0]));
+            let done = if words[0] == "llrm-cc" {
+                // llrm-c's arguments, served by llrm-cc over the pinned clang
+                // (needs LLRM_OW, LLRM_CLANG_M16).
+                common::cc::llrm_c().args(&arguments).output()
+            } else {
+                Command::new(tool(words[0])).args(&arguments).output()
+            }
+            .unwrap_or_else(|error| panic!("{}: {}: {error}", path.display(), words[0]));
             let output = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
             let name = path.strip_prefix(&root).unwrap().display();
             if done.status.success() == must_fail {

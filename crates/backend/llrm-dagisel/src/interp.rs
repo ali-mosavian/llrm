@@ -825,20 +825,20 @@ fn handle_merge_input_chains<D: Dag>(
         return Some(dag.operand(matched[0], 0));
     }
 
-    let mut visited: Vec<u32> = Vec::new();
+    let mut visited = crate::dag::Visited::new();
     let mut worklist: Vec<u32> = Vec::new();
     let mut input_chains: Vec<SDValue> = Vec::new();
 
     fn add_chains<D: Dag>(
         dag: &D,
         v: SDValue,
-        visited: &mut Vec<u32>,
+        visited: &mut crate::dag::Visited,
         chains: &mut Vec<SDValue>,
     ) {
-        if dag.value_type(v) != mvt::Other || dag.opcode(v.node) == isd::EntryToken || visited.contains(&v.node) {
+        if dag.value_type(v) != mvt::Other || dag.opcode(v.node) == isd::EntryToken || visited.contains(v.node) {
             return;
         }
-        visited.push(v.node);
+        visited.insert(v.node);
         if dag.opcode(v.node) == isd::TokenFactor {
             for i in 0..dag.num_operands(v.node) {
                 add_chains(dag, dag.operand(v.node, i), visited, chains);
@@ -850,7 +850,7 @@ fn handle_merge_input_chains<D: Dag>(
 
     for &n in &matched {
         worklist.push(n);
-        visited.push(n);
+        visited.insert(n);
     }
     while let Some(n) = worklist.pop() {
         add_chains(dag, dag.operand(n, 0), &mut visited, &mut input_chains);
