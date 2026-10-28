@@ -12,7 +12,10 @@ from pathlib import Path
 
 
 def read(binary) -> tuple[str, bool]:
-    """(sha, dirty) a binary prints for --version; SystemExit if it prints none (built before the stamp)."""
+    """(sha, dirty) a binary prints for --version; SystemExit if it prints none (built before the stamp). `llrm-cc` forwards
+    --version to the pinned clang: its stamp is the `llrm-llc` beside it."""
+    if Path(binary).name == "llrm-cc":
+        binary = Path(binary).with_name("llrm-llc")
     try:
         done = subprocess.run([str(binary), "--version"], capture_output=True, text=True)
     except OSError as why:

@@ -99,3 +99,20 @@ fn a_masked_byte_of_a_bit_reversal_masks_the_input() {
     assert!(out.contains("@llvm.bitreverse.i32"), "{out}");
     assert!(!out.contains("shl") && !out.contains("lshr"), "{out}");
 }
+
+/// Two bits swapped at the ends of nine (`x0 -> r8`, `x8 -> r0`): a reversal of
+/// nine bits, whose width is no multiple of 8. `correct_for_bswap` took
+/// `(9 >> 3) - (8 >> 3) - 1` in unsigned arithmetic and panicked with "subtract
+/// with overflow" (jpeg_fixed at -O2 -g); the pin's unsigned wrap says "no".
+#[test]
+fn a_nine_bit_reversal_is_not_a_byte_swap_and_does_not_panic() {
+    let body = "  %a = and i32 %x, 1
+  %b = shl i32 %a, 8
+  %c = and i32 %x, 256
+  %d = lshr i32 %c, 8
+  %r = or i32 %b, %d
+  ret i32 %r
+";
+    let out = combined("i32 %x", "i32", body);
+    assert!(out.contains("llvm.bitreverse.i9"), "{out}");
+}
