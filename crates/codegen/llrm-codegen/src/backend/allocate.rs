@@ -1191,15 +1191,6 @@ pub fn live_reference(body: &LirBody) -> (Live, Live) {
     (live_in, live_out)
 }
 
-/// How far a range has got, and therefore what may still be tried on it.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum Stage {
-    Assign = 0,
-    Split = 1,
-    Spill = 2,
-    Done = 3,
-}
-
 use crate::backend::classes::RegisterClasses;
 use crate::backend::regclass::classes;
 
