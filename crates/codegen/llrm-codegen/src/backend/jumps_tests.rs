@@ -496,6 +496,35 @@ fn two_zero_tails(inserted: bool) -> LirBody {
     )
 }
 
+/// Every arm of a join was seen whole (`Seq` of 41 items) to hash its last
+/// instruction, 82 items built where the pin reads three per arm
+/// (`HashEndOfMBB`, BranchFolding.cpp:362).
+#[test]
+fn test_arms_that_end_differently_are_not_seen_whole() {
+    let arm = |at: i64, last: Arc<Insn>| {
+        let mut insns: Vec<Arc<Insn>> = (0..40).map(|n| _compare(at + 100 + n)).collect();
+        insns.extend([_inserted(last), _inserted(_jump(at + 50, 30))]);
+        block(at, insns, vec![30]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            arm(10, _move(10, imm(0))),
+            arm(20, _compare(20)),
+            block(30, vec![_compare(30), _compare(31), _compare(32), _return(33)], vec![]).into(),
+        ],
+    );
+    let source = placed(&source).unwrap();
+    tailmerge::ITEMS_BUILT.with(|one| one.set(0));
+
+    tailmerge::merged(&source, false, None).unwrap();
+
+    let built = tailmerge::ITEMS_BUILT.with(|one| one.get());
+    assert!(built <= 12, "{built} items built for two arms that cannot share a tail");
+}
+
 /// qglsurf emitted the same zero-result tail from two failure arms.
 #[test]
 fn test_identical_result_tails_are_merged() {
