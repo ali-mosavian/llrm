@@ -286,14 +286,14 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
         if variant.language == "c":
             extra += [*c_include_arguments(work), "-I", str(variant.source.parent)]
-        done = cpulimit.run([str(BIN / tool), str(source), *arguments, *extra, *flags, "-o", str(obj)], 300, capture_output=True, text=True)
+        done = cpulimit.run(dosbatch.with_isel([str(BIN / tool), str(source), *arguments, *extra, *flags, "-o", str(obj)]), 300, capture_output=True, text=True)
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == "c":
             exe, linked = work / f"{stem}.exe", obj
             if counted is not None:
                 linked = work / f"{stem}.counted.obj"
-                done = cpulimit.run([str(BIN / tool), str(counted), *arguments, *extra, *flags, "-o", str(linked)], 300, capture_output=True, text=True)
+                done = cpulimit.run(dosbatch.with_isel([str(BIN / tool), str(counted), *arguments, *extra, *flags, "-o", str(linked)]), 300, capture_output=True, text=True)
                 if done.returncode != 0 or not linked.exists():
                     return "compile: " + (done.stderr or done.stdout).strip()[-300:]
             dosbatch.link_c(linked, exe, work, listing)

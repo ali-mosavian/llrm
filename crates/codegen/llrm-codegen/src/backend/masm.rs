@@ -725,7 +725,7 @@ impl CfiState {
                 self.frame = self.depth;
                 out.push(Cfi::DefCfaRegister { register: self.bp });
             }
-            (Operation::Binary, Some(name @ ("sub" | "add"))) => {
+            (Operation::Binary, Some(name @ ("sub" | "add"))) if what.dests.first() == Some(&sp_reg()) => {
                 let size = what.sources.get(1).and_then(imm).unwrap_or(0);
                 self.depth += if name == "sub" { size } else { -size };
                 if !self.framed && size != 0 {
@@ -994,7 +994,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // comparison (`frame_omitted`), its cell is not reserved: the return
     // address and the registers are what the locals are aligned below. The
     // 32-bit frames keep it (Watcom's layout, not the pin's).
-    let dropped = procedure.body.bits == 64 && {
+    let dropped = matches!(procedure.body.bits, 64) && {
         let held = frame_held(&procedure);
         (!procedure.size || held || procedure.registers.free) && stack_addressed(&procedure, 0).is_some()
     };
@@ -1537,9 +1537,8 @@ fn built(
     // Call frame information, declared as the entry and the exits are written:
     // only for a plain frame (no shrink-wrapping, interrupt, `enter` or stack
     // check), which is what the rows below are right for.
-    let plain = procedure.body.bits == 64
+    let plain = llrm_x86::mc::unwind::declares(procedure.body.bits)
         && wrap.is_none()
-        && !sequences.first
         && procedure.interrupt.is_none()
         && procedure.entry == 0
         && !procedure.far
@@ -1559,15 +1558,17 @@ fn built(
     let (mut entry_items, mut after_entry) = (Vec::new(), None);
     if let Some(cfi) = cfi.as_mut() {
         entry_items.push(Item::Mark(Mark::Declared));
-        let pushes = sequences.entry.len() - sequences.saved.len();
         let mut pending = Vec::new();
-        for (at, one) in enter.iter().enumerate() {
+        for one in &enter {
             entry_items.push(Item::Semantics(one.clone()));
             let marks = cfi.after(one, &bp);
             entry_items.extend(seh_after(one, &bp, &hardware));
-            if at >= pushes
+            // The System V callee-saved registers: rbx, rbp and r12 to r15
+            // (the frame register's own push is told apart by its name).
+            if one.op == Operation::Push
                 && let Loc::Reg(pushed) = &one.sources[0]
-                && let Some(register) = dwarf(pushed.register)
+                && let Some(register) =
+                    dwarf(pushed.register).filter(|number| llrm_x86::mc::unwind::CALLEE_SAVED.contains(number))
             {
                 // A callee-saved register's own offset is declared after the
                 // whole prologue (`emitCalleeSavedFrameMoves`).
@@ -1577,7 +1578,8 @@ fn built(
                 entry_items.extend(marks);
             }
         }
-        entry_items.extend(pending);
+        // In the reverse of the order they were pushed, as the pin lists them.
+        entry_items.extend(pending.into_iter().rev());
         after_entry = Some(cfi.clone());
     } else {
         entry_items.extend(enter.into_iter().map(Item::Semantics));

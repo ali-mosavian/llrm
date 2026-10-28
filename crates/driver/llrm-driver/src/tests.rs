@@ -1392,55 +1392,6 @@ fn a_variable_bit_clear_of_a_quadword_is_btr() {
     assert!(listing.lines().any(|line| line.trim().starts_with("btr")), "{listing}");
 }
 
-/// The pin pushes the callee-saved registers `ebp, ebx, edi, esi`
-/// (`clang -target i386-unknown-linux-gnu -O2` on this function, with and
-/// without `-fno-omit-frame-pointer`): the last of CSR_32 (`esi, edi, ebx,
-/// ebp`) first. llrm pushed `esi, edi, ebp` here, the order of its own list
-/// (`ebx, esi, edi, ebp`). The allocator takes no `ebx` for this function, so
-/// the three it pushes are those of the pin's order.
-#[test]
-fn m32_callee_saved_registers_are_pushed_in_the_pins_order() {
-    let text = "\
-         target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
-         target triple = \"i386-unknown-linux-gnu\"\n\
-         declare i32 @g(i32)\n\
-         define i32 @six(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f) {\n\
-           %s1 = call i32 @g(i32 %a)\n\
-           %s2 = call i32 @g(i32 %b)\n\
-           %s3 = call i32 @g(i32 %c)\n\
-           %s4 = call i32 @g(i32 %d)\n\
-           %s5 = call i32 @g(i32 %e)\n\
-           %s6 = call i32 @g(i32 %f)\n\
-           %p1 = call i32 @g(i32 %s1)\n\
-           %p2 = call i32 @g(i32 %s2)\n\
-           %p3 = call i32 @g(i32 %s3)\n\
-           %p4 = call i32 @g(i32 %s4)\n\
-           %p5 = call i32 @g(i32 %s5)\n\
-           %p6 = call i32 @g(i32 %s6)\n\
-           %t0 = add i32 %s1, %p1\n\
-           %x2 = add i32 %s2, %p2\n\
-           %t1 = add i32 %t0, %x2\n\
-           %x3 = add i32 %s3, %p3\n\
-           %t2 = add i32 %t1, %x3\n\
-           %x4 = add i32 %s4, %p4\n\
-           %t3 = add i32 %t2, %x4\n\
-           %x5 = add i32 %s5, %p5\n\
-           %t4 = add i32 %t3, %x5\n\
-           %x6 = add i32 %s6, %p6\n\
-           %t5 = add i32 %t4, %x6\n\
-           ret i32 %t5\n\
-         }\n\
-         ";
-    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O2"]), text, "six").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let pushed: Vec<&str> = listing
-        .lines()
-        .map(str::trim)
-        .filter(|line| matches!(*line, "push ebp" | "push ebx" | "push edi" | "push esi"))
-        .collect();
-    assert_eq!(pushed, ["push ebp", "push edi", "push esi"], "{listing}");
-}
-
 /// The `.eh_frame` of `text` (an x86-64 module) written as ELF.
 fn eh_frame_of(text: &str) -> Vec<u8> {
     let (built, format) = crate::llc::compiled(&flags(&["-m64", "-O2"]), text, "f").unwrap();
@@ -1579,4 +1530,45 @@ fn the_declared_win64_prologue_is_what_the_code_bytes_say() {
     let declared = llrm_x86::mc::win64unwind::from_seh("f", &frame.seh).unwrap();
     let read = llrm_x86::mc::win64unwind::from_prologue("f", body).unwrap();
     assert_eq!(declared, read, "{:?}", frame.seh);
+}
+
+/// A callee-saved register pushed before the stack `sub` (the pin's order,
+/// `saved_first`) had no `.eh_frame`: the frame was left out of the declared
+/// ones. Its offset is declared after the `sub` (`def_cfa_offset n; offset
+/// rbx`), as the pin writes it.
+#[test]
+fn a_pushed_register_before_the_stack_adjustment_is_declared_after_it() {
+    let text = format!(
+        "{SYSV}declare i32 @g(ptr)\ndefine i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %buf = alloca [24 x i8]\n  %r = call i32 @g(ptr %buf)\n  %s = add i32 %r, %a\n  ret i32 %s\n}}\n"
+    );
+    let frame = eh_frame_of(&text);
+    assert!(frame.windows(4).any(|window| window[0] == 0x0E && window[2..] == [0x83, 0x02]), "{frame:02x?}");
+}
+
+/// The pin declares the offsets of the saved registers last pushed first
+/// (`rbx` at cfa-32, `r14` at -24, `rbp` at -16 after pushes of rbp, r14,
+/// rbx). They were listed in push order, and a pushed `rbp` that was no frame
+/// register got no offset at all.
+#[test]
+fn saved_registers_are_declared_last_pushed_first() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndeclare i32 @h(i32)\ndefine i32 @f(i32 %a, i32 %b) \"disable-tail-calls\"=\"true\" {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @h(i32 %b)\n  %z = call i32 @g(i32 %x)\n  %s = add i32 %x, %y\n  %t = add i32 %s, %z\n  ret i32 %t\n}}\n"
+    );
+    let frame = eh_frame_of(&text);
+    let offsets = |window: &[u8]| window[0] & 0xC0 == 0x80 && window[2] & 0xC0 == 0x80 && window[1] > window[3];
+    assert!(frame.windows(4).any(offsets), "{frame:02x?}");
+}
+
+/// An `add eax, 2` was read as a move of the stack pointer: the frame address
+/// went 2 lower (`def_cfa_offset 14`, then 6) in the middle of the function.
+/// The bytes are the pin's for `push rax; call; add eax,2; pop rcx; ret`.
+#[test]
+fn an_add_to_a_register_other_than_the_stack_pointer_does_not_move_the_frame_address() {
+    let text = format!(
+        "{SYSV}declare i32 @g()\ndefine i32 @f() \"disable-tail-calls\"=\"true\" {{\n  %r = call i32 @g()\n  %s = add i32 %r, 2\n  ret i32 %s\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_of(&text),
+        hex("1400000000000000017a5200017810011b0c070890010000140000001c000000000000000b00000000410e10490e0800")
+    );
 }

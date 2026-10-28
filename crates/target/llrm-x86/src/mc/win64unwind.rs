@@ -234,7 +234,12 @@ pub fn from_prologue(
                     _ => break,
                 }
             }
-            Mnemonic::Movaps | Mnemonic::Movups | Mnemonic::Movdqa | Mnemonic::Movdqu
+            Mnemonic::Movaps
+            | Mnemonic::Movups
+            | Mnemonic::Movapd
+            | Mnemonic::Movupd
+            | Mnemonic::Movdqa
+            | Mnemonic::Movdqu
                 if instruction.op1_kind() == OpKind::Register =>
             {
                 let xmm = instruction.op1_register();

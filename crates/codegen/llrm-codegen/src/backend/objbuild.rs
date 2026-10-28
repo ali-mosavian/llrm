@@ -546,8 +546,9 @@ pub fn written_in(
         if let Some(dir) = llrm_target::object::all_writers_dir() {
             for other in Format::ALL {
                 let written = if other == format { Ok(bytes.clone()) } else { serialized(&object, other) };
-                if let Ok(written) = written {
-                    llrm_target::object::record_writer(&dir, other, &written);
+                match written {
+                    Ok(written) => llrm_target::object::record_writer(&dir, other, &written),
+                    Err(why) => llrm_target::object::record_refusal(&dir, other, &format!("{why:?}")),
                 }
             }
         }
@@ -1278,7 +1279,7 @@ fn declared_frames(
 ) -> Vec<llrm_object::Frame> {
     use llrm_object::assembler::Cfi;
     use llrm_object::debug::FrameRow;
-    let name = |number: u16| llrm_x86::mc::unwind::register_name(u64::from(number)).unwrap_or("rip").to_owned();
+    let name = llrm_x86::mc::unwind::register_label;
     let mut frames = Vec::new();
     for (section, segment) in segments.iter().enumerate() {
         for (symbol, &(home, start)) in symbols {
@@ -1287,7 +1288,7 @@ fn declared_frames(
             if !segment.declared.iter().any(within) {
                 continue;
             }
-            let entry = FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() };
+            let entry = llrm_x86::mc::unwind::entry_row();
             let mut state = entry.clone();
             let mut rows: Vec<FrameRow> = Vec::new();
             let mut ops = Vec::new();
