@@ -111,6 +111,9 @@ pub struct LoopIdiomRecognize {
     /// only; the stores keep their own reading of the attribute.
     pub for_size: bool,
     apply_code_size_heuristics: bool,
+    /// The function being run has `"no-builtins"`: the pin's TLI then states
+    /// every library function unavailable (`libcall`).
+    no_builtins: bool,
     has_memset: bool,
     has_memset_pattern: bool,
     has_memcpy: bool,
@@ -169,6 +172,16 @@ pub fn get_mem_set_pattern_value(
 }
 
 impl LoopIdiomRecognize {
+    /// The pin's per-function `TargetLibraryInfo::has`: a library function
+    /// the target states (`stated`) is unavailable in a function with
+    /// `"no-builtins"`. Every idiom that forms a libcall asks here.
+    pub(crate) fn libcall(
+        &self,
+        stated: bool,
+    ) -> bool {
+        stated && !self.no_builtins
+    }
+
     pub fn new(
         options: Options,
         library: Library,
@@ -179,6 +192,7 @@ impl LoopIdiomRecognize {
             routines: Vec::new(),
             for_size: false,
             apply_code_size_heuristics: false,
+            no_builtins: false,
             has_memset: library.memset,
             has_memset_pattern: library.memset_pattern16,
             has_memcpy: library.memcpy,

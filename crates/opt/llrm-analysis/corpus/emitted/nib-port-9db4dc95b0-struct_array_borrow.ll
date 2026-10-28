@@ -1,6 +1,6 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-define internal void @nudge(ptr addrspace(1) %0) addrspace(1) {
+define internal cc 1005 void @nudge(ptr addrspace(1) nonnull dereferenceable(4) noalias nocapture %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %1 = load i16, ptr addrspace(1) %0
   %2 = getelementptr i8, ptr addrspace(1) %0, i16 2
@@ -10,10 +10,9 @@ b1:
   ret void
 }
 
-define internal void @update(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1) {
+define internal cc 1005 void @update(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %1 = alloca i16
-  store i16 0, ptr %1
   %2 = load i16, ptr addrspace(1) %0
   store i16 0, ptr %1, !tbaa !2
   br label %b2
@@ -21,73 +20,59 @@ b1:
 b2:
   %3 = load i16, ptr %1, !tbaa !2
   %4 = icmp ult i16 %3, %2
-  %5 = sext i1 %4 to i8
-  %6 = icmp ne i8 %5, 0
-  br i1 %6, label %b3, label %b5
+  br i1 %4, label %b3, label %b5
 
 b3:
-  %7 = getelementptr i8, ptr addrspace(1) %0, i16 4
-  %8 = load ptr addrspace(1), ptr addrspace(1) %7
-  %9 = mul i16 %3, 4
-  %10 = getelementptr i8, ptr addrspace(1) %8, i16 %9
-  call addrspace(1) void @nudge(ptr addrspace(1) %10)
+  %5 = getelementptr i8, ptr addrspace(1) %0, i16 4
+  %6 = load ptr addrspace(1), ptr addrspace(1) %5
+  %7 = mul i16 %3, 4
+  %8 = getelementptr inbounds i8, ptr addrspace(1) %6, i16 %7
+  call cc 1005 addrspace(1) void @nudge(ptr addrspace(1) %8)
   br label %b4
 
 b4:
-  %11 = load i16, ptr %1, !tbaa !2
-  %12 = add i16 %11, 1
-  store i16 %12, ptr %1, !tbaa !2
+  %9 = load i16, ptr %1, !tbaa !2
+  %10 = add i16 %9, 1
+  store i16 %10, ptr %1, !tbaa !2
   br label %b2
 
 b5:
   ret void
 }
 
-define internal i16 @calculate() addrspace(1) {
+define internal cc 1005 i16 @calculate() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %0 = alloca [8 x i8]
   %1 = alloca i16
   %2 = alloca i16
   %3 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 8, i1 false)
-  store i16 0, ptr %1
-  store i16 0, ptr %2
-  call void @llvm.memset.p0.i16(ptr %3, i8 0, i16 8, i1 false)
   store i16 2, ptr %1, !tbaa !2
   store i16 2, ptr %2, !tbaa !2
-  %4 = sub i16 0, 0
-  %5 = getelementptr inbounds [4 x i8], ptr %3, i16 %4
-  store i16 1, ptr %5, !tbaa !2
-  %6 = sub i16 0, 0
-  %7 = getelementptr inbounds [4 x i8], ptr %3, i16 %6
-  %8 = getelementptr inbounds i8, ptr %7, i16 2
-  store i16 2, ptr %8, !tbaa !2
-  %9 = sub i16 1, 0
-  %10 = getelementptr inbounds [4 x i8], ptr %3, i16 %9
-  store i16 10, ptr %10, !tbaa !2
-  %11 = sub i16 1, 0
-  %12 = getelementptr inbounds [4 x i8], ptr %3, i16 %11
-  %13 = getelementptr inbounds i8, ptr %12, i16 2
-  store i16 20, ptr %13, !tbaa !2
-  %14 = addrspacecast ptr %3 to ptr addrspace(1)
+  %4 = getelementptr inbounds [4 x i8], ptr %3, i16 0
+  store i16 1, ptr %4, !tbaa !2
+  %5 = getelementptr inbounds [4 x i8], ptr %3, i16 0
+  %6 = getelementptr inbounds i8, ptr %5, i16 2
+  store i16 2, ptr %6, !tbaa !2
+  %7 = getelementptr inbounds [4 x i8], ptr %3, i16 1
+  store i16 10, ptr %7, !tbaa !2
+  %8 = getelementptr inbounds [4 x i8], ptr %3, i16 1
+  %9 = getelementptr inbounds i8, ptr %8, i16 2
+  store i16 20, ptr %9, !tbaa !2
+  %10 = addrspacecast ptr %3 to ptr addrspace(1)
   store i16 2, ptr %0, !tbaa !2
-  %15 = getelementptr inbounds i8, ptr %0, i16 2
-  store i16 2, ptr %15, !tbaa !2
-  %16 = getelementptr inbounds i8, ptr %0, i16 4
-  store ptr addrspace(1) %14, ptr %16, !tbaa !2
-  %17 = addrspacecast ptr %0 to ptr addrspace(1)
-  call addrspace(1) void @update(ptr addrspace(1) %17)
-  %18 = sub i16 0, 0
-  %19 = getelementptr inbounds [4 x i8], ptr %3, i16 %18
-  %20 = load i16, ptr %19, !tbaa !2
-  %21 = sub i16 1, 0
-  %22 = getelementptr inbounds [4 x i8], ptr %3, i16 %21
-  %23 = load i16, ptr %22, !tbaa !2
-  %24 = add i16 %20, %23
-  ret i16 %24
+  %11 = getelementptr inbounds i8, ptr %0, i16 2
+  store i16 2, ptr %11, !tbaa !2
+  %12 = getelementptr inbounds i8, ptr %0, i16 4
+  store ptr addrspace(1) %10, ptr %12, !tbaa !2
+  %13 = addrspacecast ptr %0 to ptr addrspace(1)
+  call cc 1005 addrspace(1) void @update(ptr addrspace(1) %13)
+  %14 = getelementptr inbounds [4 x i8], ptr %3, i16 0
+  %15 = load i16, ptr %14, !tbaa !2
+  %16 = getelementptr inbounds [4 x i8], ptr %3, i16 1
+  %17 = load i16, ptr %16, !tbaa !2
+  %18 = add i16 %15, %17
+  ret i16 %18
 }
-
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}

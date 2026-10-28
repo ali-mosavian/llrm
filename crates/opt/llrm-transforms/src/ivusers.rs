@@ -34,9 +34,15 @@ use std::cell::RefCell;
 use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::dense::{IdMap, IdSet};
-use llrm_mir::module::{BlockId, InstId, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::pattern::phi_incoming;
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`IvUsers::of`] ran on this thread.
+    pub static BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// What the analysis asks of the pass that runs it.
 pub struct Env<'a> {
@@ -147,7 +153,42 @@ fn should_use_post_inc_value(
     phi_incoming(instruction).all(|(value, from)| value != operand || cx.tree.dominates(latch, from))
 }
 
+/// The first way the uses a pass carried through its edits differ from the
+/// ones made afresh for the function as it is now, or none.
+pub fn difference(
+    carried: &[IvStrideUse],
+    fresh: &[IvStrideUse],
+) -> Option<String> {
+    if let Some((at, (a, b))) = carried.iter().zip(fresh).enumerate().find(|(_, (a, b))| a != b) {
+        return Some(format!("use {at}: carried {a:?}, fresh {b:?}"));
+    }
+    (carried.len() != fresh.len()).then(|| format!("{} uses carried, {} fresh", carried.len(), fresh.len()))
+}
+
+/// `LLRM_CHECK_IVUSERS`: a pass that carries its `IvUsers` through an edit
+/// instead of making them again rebuilds them and fails on a difference.
+pub fn check_enabled() -> bool {
+    llrm_support::env_flag!("LLRM_CHECK_IVUSERS")
+}
+
 impl IvUsers {
+    /// Under `LLRM_CHECK_IVUSERS`: panics unless `self`, carried to the
+    /// function as it is now, is what [`Self::of`] makes of it.
+    pub fn assert_current(
+        &self,
+        se: &mut ScalarEvolution,
+        cx: &Cx,
+        env: &Env,
+    ) {
+        if !check_enabled() {
+            return;
+        }
+        let fresh = Self::of(se, cx, self.l, env);
+        if let Some(found) = difference(&self.uses, &fresh.uses) {
+            panic!("IvUsers carried through an edit are stale: {found}");
+        }
+    }
+
     /// `IVUsers::IVUsers`: all the uses of the induction variables of the loop
     /// with header `l`, from the phis of its header.
     pub fn of(
@@ -156,6 +197,8 @@ impl IvUsers {
         l: BlockId,
         env: &Env,
     ) -> Self {
+        #[cfg(test)]
+        BUILDS.with(|made| made.set(made.get() + 1));
         let mut users = Self { l, uses: Vec::new(), processed: IdSet::new(), order: None, order_builds: 0, ordered: 0 };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
@@ -287,6 +330,56 @@ impl IvUsers {
         inst: InstId,
     ) -> bool {
         self.processed.contains(&inst)
+    }
+
+    /// The exit test `old` was moved beside the branch, or copied there as
+    /// `copy`, which is then a use of its own: whether the uses are still the
+    /// ones [`Self::of`] would make. They are not where the test's operand has
+    /// users the move put out of program order (IU1); then they are made again.
+    pub fn carry_exit_test(
+        &mut self,
+        function: &Function,
+        old: InstId,
+        copy: Option<InstId>,
+    ) -> bool {
+        let Some(at) = self.uses.iter().position(|u| u.user == old) else { return true };
+        // A test of two induction variables is a user of both: which of them
+        // finds it first depends on where it is.
+        let walked = |value: &Operand| match value {
+            Operand::Value(v) => {
+                matches!(
+                    function.value(*v).def,
+                    ValueDef::Instruction(def) if self.processed.contains(&def)
+                )
+            }
+            _ => false,
+        };
+        if function.instruction(old).operands.iter().filter(|op| walked(op)).count() > 1 {
+            return false;
+        }
+        let place = |user: InstId| {
+            let block = function.parent(user)?;
+            let index = function.layout().iter().position(|&one| one == block)?;
+            Some((index, function.number_in_block(user)?))
+        };
+        if let Some(copy) = copy {
+            // The copy is found just before the test it copies, or among the
+            // descendants of a user between them: only the first is kept.
+            let Operand::Value(value) = self.uses[at].operand else { return false };
+            let mut users: Vec<InstId> = function.users(value).iter().map(|one| one.user).collect();
+            users.sort_by_key(|&user| std::cmp::Reverse(place(user)));
+            users.dedup();
+            let next = users.iter().position(|&user| user == copy).and_then(|i| users.get(i + 1));
+            if next != Some(&old) {
+                return false;
+            }
+            let mut one = self.uses[at].clone();
+            one.user = copy;
+            self.uses.insert(at, one);
+        }
+        let operand = self.uses[at].operand;
+        let places: Vec<_> = self.uses.iter().filter(|u| u.operand == operand).map(|u| place(u.user)).collect();
+        places.windows(2).all(|pair| pair[0] >= pair[1])
     }
 
     /// `transformToPostInc`: the use of `cond` takes the post-incremented value

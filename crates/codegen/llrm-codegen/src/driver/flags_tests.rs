@@ -396,15 +396,19 @@ fn test_no_inline_names_each_function_and_is_not_the_inline_functions_pass() {
     assert!(parsed(&["-fno-inline-functions"]).unwrap().no_inline.is_empty());
 }
 
-/// `--isel=` takes `old` (the default) and `dag`, inline or as the next
-/// argument; anything else is an error.
+/// `--isel=` takes `dag`, `old` and `shadow`, inline or as the next argument;
+/// anything else is an error. With none, a target gets the DAG selector where
+/// it selects (16- and 32-bit x86) and the old one elsewhere.
 #[test]
 fn test_isel_names_the_selector() {
-    assert_eq!(parsed(&[]).unwrap().isel, Selector::Old);
-    assert_eq!(parsed(&["--isel=dag"]).unwrap().isel, Selector::Dag);
-    assert_eq!(parsed(&["--isel=shadow"]).unwrap().isel, Selector::Shadow);
-    assert_eq!(parsed(&["--isel", "old"]).unwrap().isel, Selector::Old);
+    assert_eq!(parsed(&[]).unwrap().isel, None);
+    assert_eq!(parsed(&["--isel=dag"]).unwrap().isel, Some(Selector::Dag));
+    assert_eq!(parsed(&["--isel=shadow"]).unwrap().isel, Some(Selector::Shadow));
+    assert_eq!(parsed(&["--isel", "old"]).unwrap().isel, Some(Selector::Old));
     assert!(parsed(&["--isel=fast"]).unwrap_err().contains("unknown --isel=fast"));
+    assert_eq!(Selector::for_target(&llrm_x86_m16::M16), Selector::Dag);
+    assert_eq!(Selector::for_target(&llrm_x86_m32::M32), Selector::Dag);
+    assert_eq!(Selector::for_target(&llrm_x86_m64::M64), Selector::Old);
 }
 
 /// `-fallocation-routes` chose between the allocator alone and a second route

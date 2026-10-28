@@ -352,7 +352,7 @@ def test_a_refusal_after_a_rebuild_names_the_newest_source_the_oldest_binary_and
 
 GENERATOR = """import sys
 from pathlib import Path
-root = Path(__file__).resolve().parents[2]
+root = Path(__file__).resolve().parents[3]
 pages = sorted(p.stem for p in (root / "docs/optimizations/passes").glob("page_*.md"))
 want = "".join(f"- {name}\\n" for name in ["a", *pages])
 index = root / "docs/optimizations/passes/readme.md"
@@ -1837,3 +1837,97 @@ def test_a_squash_refused_for_merge_conflicts_prints_the_owner_and_files(capsys,
     refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Pull Request has merge conflicts (mergePullRequest)\n")  # noqa: E731
     assert ps.squash("5462", info, "body", run=refuse) is False
     assert "has merge conflicts (mergePullRequest) [owner w10; conflicts in: dag_function_tests.rs]" in capsys.readouterr().out
+
+
+def test_every_scanner_is_in_the_default_scan_the_conditional_one_or_nightly():
+    """The SD registry sat red on parity for two hours behind a default scan of four of the fifteen scanners. A scanner added to the full map without a place in the default scan
+    (or the build-input trigger, or NIGHTLY_ONLY) is now a failure here."""
+    smoke = ps.parity_smoke_module()
+    placed = set(ps.ALWAYS_SCANNERS) | {"build_script_reruns"} | set(smoke.NIGHTLY_ONLY)
+    assert set(smoke.SCANNERS) <= placed, sorted(set(smoke.SCANNERS) - placed)
+
+
+def test_a_diff_that_touches_a_tool_runs_that_tools_python_tests_and_a_red_one_refuses_the_batch(tmp_path):
+    """test_assemble.py sat red on parity for hours: landing ran Rust tests only, so a tools/ change never ran the Python tests that guard it."""
+    (tmp_path / "tools").mkdir()
+    for name in ("parity_squash.py", "test_parity_squash.py", "test_other.py", "lonely.py"):
+        (tmp_path / "tools" / name).write_text("")
+    assert ps.tool_tests_for(["tools/parity_squash.py", "tools/test_other.py", "tools/lonely.py", "docs/a.md", "crates/x.rs"], tmp_path) == ["tools/test_other.py", "tools/test_parity_squash.py"]
+    assert ps.tool_tests_for(["docs/a.md"], tmp_path) == []
+    ran = []
+
+    class Done:
+        returncode = 1
+        stdout = "FAILED tools/test_other.py::test_x\n1 failed"
+        stderr = ""
+
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: ran.append(command) or Done(), ensure=lambda: "") == ["FAILED tools/test_other.py::test_x", "1 failed"]
+    assert "tools/test_other.py" in ran[0]
+    assert ps.tool_test_failures(["docs/a.md"], tmp_path, run=lambda *a, **k: ran.append("never")) == [] and "never" not in ran
+
+
+def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(tmp_path):
+    """The 02:32 batch was refused ("stale binaries ... run cargo build --release --bins") by its own tool-tests stage: pytest ran before the build stage had refreshed the release binaries."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+    order = []
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: order.append("pytest") or Done(), ensure=lambda: order.append("ensure") or "") == []
+    assert order == ["ensure", "pytest"], order
+    order.clear()
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda *a, **k: order.append("pytest"), ensure=lambda: "binaries still older than the merged tree") == ["binaries still older than the merged tree"]
+    assert "pytest" not in order
+    import inspect
+
+    assert "tool_test_failures(" in inspect.getsource(ps.merge_batch)
+
+
+
+def test_the_rebuild_includes_llrm_c_when_the_directory_holds_one(tmp_path):
+    """`cargo build --release --bins` skips llrm-c (required-features = c-legacy): the llrm-c left in coord-ps-target stayed 02:55 old and refused the 03:12 pass ("binaries still older than the merged tree")."""
+    assert "wccq" not in ps.bins_command(tmp_path)
+    (tmp_path / "llrm-c").write_text("")
+    assert ps.bins_command(tmp_path)[-2:] == ["--features", "wccq"]
+
+
+def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
+    """_build_release ran `--bins` without the llrm-c feature, then the stages touched the old llrm-c: QB programs linked with a stale compiler ("isel: value#15 is defined 2 times") and the 04:51 pass was refused at link five times."""
+    (tmp_path / "release").mkdir()
+    (tmp_path / "release" / "llrm-c").write_text("")
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
+    monkeypatch.setattr(ps, "git", lambda *args, **kw: "tree")
+    monkeypatch.setattr(ps, "_BUILT", set())
+    ran = []
+    monkeypatch.setattr(ps.subprocess, "run", lambda command, **kw: ran.append(command))
+    ps._build_release()
+    assert ran and "wccq" in ran[0], ran
+
+
+def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_path):
+    """Only the last 6 lines of pytest were kept: #5690 was refused five times with "BuildError" and the stderr naming the cause was cut."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+
+    class Done:
+        returncode = 1
+        stdout = "\n".join(["E   dosbatch.BuildError: llrm-qb: the real cause", *["    frame"] * 30, "ERROR tools/x.py::t", "1 error"])
+        stderr = ""
+
+    got = ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: Done(), ensure=lambda: "")
+    assert any("the real cause" in line for line in got), got
+
+
+def test_a_tool_test_that_times_out_refuses_the_batch_instead_of_crashing_it(tmp_path):
+    """#5690's pytest ran past 600 s: TimeoutExpired went uncaught, the batch died with a traceback and no REFUSED line, and the PR came back every pass."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+
+    def slow(command, **kw):
+        raise ps.subprocess.TimeoutExpired(command, 600)
+
+    got = ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=slow, ensure=lambda: "")
+    assert got and "600 s" in got[0], got

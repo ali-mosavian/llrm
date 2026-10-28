@@ -107,7 +107,7 @@ impl ProgramPass for ModuleIpo {
         // body's stack slot, while the loads are still there to be seen.
         for at in 0..count {
             let ids = reporting(&mut program.modules[at], &mut modules[at], |module| {
-                crate::globalsra::split(module, &program.layout)
+                crate::globalsra::split(module, &program.layout, program.target.spaces())
             });
             changed |= !ids.is_empty();
             for id in ids {
@@ -280,6 +280,14 @@ impl ProgramPass for Walk {
                             Some(&constant),
                             &mut declared,
                         )? > 0;
+                        // A recursive callee's peeled copies spliced here make
+                        // this body one with self-copies too (`SELF_COPIED`).
+                        if spliced && !peeled.is_empty() {
+                            function_mut(module, id)
+                                .1
+                                .attrs
+                                .push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.to_owned()));
+                        }
                         // DEVIATE (recursion): a tree-recursive function waits
                         // for its tail-call elimination
                         // until its copies are made
@@ -502,6 +510,13 @@ fn self_calls(
     Some(frequencies)
 }
 
+/// The flag a body that had copies of itself made (D10), or took a recursive
+/// callee's peeled copies, carries from then on:
+/// the simplifier folds the chains of tests those copies make (`n - 1 == 0`,
+/// `n - 2 == 0`, ...) through `algebraic::_offset_compared` whoever else reads
+/// the sum, which the pin does only with one use.
+pub const SELF_COPIED: &str = "llrm-self-copied";
+
 /// DEVIATE (recursion): the copies of a tree-recursive function in itself, as
 /// gcc's `recursive_inlining` makes them, to the limits of [`crate::inline`],
 /// then its tail-call elimination, which the walk left out
@@ -583,6 +598,9 @@ impl SelfInline {
                             llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED
                         ),
                     );
+                if copies > 0 {
+                    function_mut(module, id).1.attrs.push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.to_owned()));
+                }
                 modules[at].changed(id);
                 modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                 (self.simplify)(module, &mut modules[at], id, "self-inline.");
