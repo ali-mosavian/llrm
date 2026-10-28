@@ -78,3 +78,21 @@ fn a_dword_read_earlier_in_the_loop_body_is_spilled_whole() {
     );
     assert!(!names(&text, "esi") && !names(&text, "edi"), "{text}");
 }
+
+/// The region split saw SI and EDI destroyed by every call, so the offset of a
+/// far pointer used past a call in the compares after it was spilled whole and
+/// reloaded into BX before each compare (far2: 19 frame accesses, 4 `mov ebx`).
+#[test]
+fn a_far_offset_stays_in_a_register_through_compares_and_a_later_call() {
+    let text = listing(
+        "typedef struct { long magic; short a, b, c, d; } M;\n\
+         typedef struct { M far *p; short z; } W;\n\
+         extern M far *mk(void); extern M far *row(void); extern void fail(const char *s);\n\
+         extern void copy(M far *d, M far *s, short n);\n\
+         void f(W *w) { M far *m = mk(); M far *r; if (!m) fail(\"a\"); r = row(); if (!r) fail(\"b\");\n\
+         copy(m, r, 168);\n\
+         if (m->magic != 827347793L || m->a != 1 || m->b != 3 || m->c != 9 || m->d != 256) fail(\"bad\");\n\
+         w->p = m; }\n",
+    );
+    assert!(!text.contains("mov ebx"), "{text}");
+}
