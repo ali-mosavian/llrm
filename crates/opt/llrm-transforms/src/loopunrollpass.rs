@@ -32,6 +32,13 @@
 //! - U8 `simplifyLoopAfterUnroll` simplifies without a dominator tree or
 //!   assumptions.
 //! - U9 Blocks an unroll merges away are erased once, when the pass ends.
+//! - U1 At `optsize` a loop of at most the target's few trips is unrolled under
+//!   the target's bar (`Tti::unroll_size_few_trips`; m16: 3 trips, 30) where
+//!   the pin's `OptSizeThreshold` is 0 on x86. float_in_place_update.c at -Os
+//!   m16: 132 bytes to 14 (main 76); the corpus of 258 programs at m16 -Os
+//!   changes in no other. logical_value.c (main 25, here 155), split_loops.c
+//!   and int64_division.c need the cost analysis held to a bar too, which grew
+//!   matmul.nib 390 to 562 bytes: open.
 //!
 //! # Example
 //! A loop of four trips becomes four copies; the induction variable's
@@ -875,7 +882,17 @@ fn should_full_unroll(
     // When computing the unrolled size, note that BEInsns are not replicated
     // like the rest of the loop body.
     let unrolled_size = uce.unrolled_loop_size(up, full_unroll_trip_count);
-    if unrolled_size < u64::from(up.threshold) {
+    // DEVIATE U1: a loop of few trips is held to the target's `optsize` bar
+    // (the pin's is `OptSizeThreshold`, 0 on x86).
+    let few = if run.options.opt_size {
+        run.tti
+            .unroll_size_few_trips()
+            .filter(|&(trips, _)| full_unroll_trip_count <= trips)
+            .map_or(up.threshold, |(_, bar)| up.threshold.max(bar))
+    } else {
+        up.threshold
+    };
+    if unrolled_size < u64::from(few) {
         return Some(full_unroll_trip_count);
     }
 
