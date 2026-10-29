@@ -105,13 +105,15 @@ fn modulo_names_and_copies(text: &str) -> Vec<String> {
     out
 }
 
-/// `llc`'s loop, with a callee-saved `d2` kept across it. The allocators
-/// differ, so the registers are renamed and the copies between them dropped.
+/// `llc`'s loop, less its frame: it keeps `n` in the callee-saved `d2`, which
+/// costs `suba`, two `movem`s and `adda`; the loop here holds `n` in `%a0`
+/// (`cmp.l An, Dn` exists), a register a call clobbers anyway. The allocators
+/// differ, so the data registers are renamed and the copies between them
+/// dropped.
 #[test]
-fn a_counted_loop_is_equal_to_llc_modulo_register_names_and_copies() {
-    let llc = "sum:\n\tsuba.l\t#4, %sp\n\tmovem.l\t%d2, (0,%sp)\n\tmoveq\t#0, %d0\n\tmove.l\t(8,%sp), %d1\n\tmove.l\t%d0, %d2\n\
-               .LBB0_1:\n\tadd.l\t%d2, %d0\n\tadd.l\t#1, %d2\n\tcmp.l\t%d1, %d2\n\tblt\t.LBB0_1\n\
-               \tmovem.l\t(0,%sp), %d2\n\tadda.l\t#4, %sp\n\trts\n";
+fn a_counted_loop_is_llcs_without_the_callee_saved_frame() {
+    let llc = "sum:\n\tmoveq\t#0, %d0\n\tmove.l\t(4,%sp), %a0\n\tmove.l\t%d0, %d2\n\
+               .LBB0_1:\n\tadd.l\t%d2, %d0\n\tadd.l\t#1, %d2\n\tcmp.l\t%a0, %d2\n\tblt\t.LBB0_1\n\trts\n";
     assert_eq!(modulo_names_and_copies(&compiled(SUM, "sum")), modulo_names_and_copies(llc));
 }
 
@@ -205,4 +207,15 @@ fn spilled_incoming_arguments_are_reloaded_from_their_own_slots() {
     let asm = compiled(&ir, "p");
     let stores = asm.lines().filter(|line| line.starts_with("\tmovem.l\t%d") && !line.contains('-')).count();
     assert!(stores <= 1, "{asm}");
+}
+
+/// A constant held in an address register is `move.w #1, %a0` (`ExpandMOVI`),
+/// not `moveq #1, %a0`, which has no encoding: `fib` returned 0 when the
+/// allocator first gave its constant an address register.
+#[test]
+fn a_constant_in_an_address_register_is_not_a_moveq() {
+    let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("fib")).expect("parses");
+    let asm = text_with(&module, "k", Cpu::M68000, Options::PINNED).expect("compiles");
+    assert!(asm.contains("%a0") && !asm.lines().any(|l| l.contains("moveq") && l.contains("%a")), "{asm}");
+    assert!(asm.contains("move.w\t#1, %a0"), "{asm}");
 }

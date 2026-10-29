@@ -57,10 +57,7 @@ fn a_call_encodes_as_llvm_mc_does() {
 #[test]
 fn a_loop_branch_is_resolved_as_llvm_mc_does() {
     let code = assemble(&function("sum"), 0).unwrap().code;
-    assert_eq!(
-        hex(&code),
-        "9ffc0000000448ef000400007200242f00082001d081d2bc00000001b2826df44cef00040000dffc000000044e75"
-    );
+    assert_eq!(hex(&code), "7200206f00042001d081d2bc00000001b2886df44e75");
 }
 
 fn qemu() -> Option<PathBuf> {

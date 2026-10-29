@@ -24,6 +24,8 @@ const IMM_THEN_DST: &[AsmOperand] = &[
     AsmOperand { name: "imm", at: 1, method: "printImmediate" },
     AsmOperand { name: "dst", at: 0, method: "printOperand" },
 ];
+const SRC: &[AsmOperand] = &[AsmOperand { name: "src", at: 0, method: "printOperand" }];
+const MASK: &[AsmOperand] = &[AsmOperand { name: "mask", at: 0, method: "printMoveMask" }];
 const DST: &[AsmOperand] = &[AsmOperand { name: "dst", at: 0, method: "printOperand" }];
 
 /// `(name, asm string, operands)`, as the pin's `asm` rows.
@@ -35,6 +37,10 @@ pub fn asm(name: &str) -> Option<(&'static str, &'static [AsmOperand])> {
         "SUBQ8d" => ("subq.b\t$imm, $dst", IMM_THEN_DST),
         "SUBQ16d" => ("subq.w\t$imm, $dst", IMM_THEN_DST),
         "SUBQ32d" | "SUBQ32a" => ("subq.l\t$imm, $dst", IMM_THEN_DST),
+        "PUSH32" => ("move.l\t$src, -(%sp)", SRC),
+        "POP32" => ("move.l\t(%sp)+, $dst", DST),
+        "PUSHM32" => ("movem.l\t$mask, -(%sp)", MASK),
+        "POPM32" => ("movem.l\t(%sp)+, $mask", MASK),
         "TST8d" => ("tst.b\t$dst", DST),
         "TST16d" => ("tst.w\t$dst", DST),
         "TST32d" => ("tst.l\t$dst", DST),
@@ -73,6 +79,16 @@ const fn test(size: u64) -> [Piece; 4] {
     [bits(8, 8, 0b0100_1010), bits(6, 2, size), field(3, 3, 0, 3), field(0, 3, 0, 0)]
 }
 
+// `move.l reg, -(%sp)`: 0010 111 100 mmm rrr
+static PUSH: [Piece; 5] = [bits(12, 4, 0b0010), bits(9, 3, 7), bits(6, 3, 0b100), field(3, 3, 0, 3), field(0, 3, 0, 0)];
+// `move.l (%sp)+, reg`: 0010 rrr mmm 011 111
+static POP: [Piece; 5] = [bits(12, 4, 0b0010), field(9, 3, 0, 0), field(6, 3, 0, 3), bits(3, 3, 0b011), bits(0, 3, 7)];
+// `movem.l regs, -(%sp)`: 0x48E7, then the mask with d0 as bit 15
+static PUSHM: [Piece; 2] =
+    [bits(0, 16, 0x48E7), Piece::Operand { lo: 16, width: 16, at: 0, from: 0, enc: Enc::InverseMoveMask }];
+// `movem.l (%sp)+, regs`: 0x4CDF, then the mask with d0 as bit 0
+static POPM: [Piece; 2] = [bits(0, 16, 0x4CDF), field(16, 16, 0, 0)];
+
 static ADDQ: [[Piece; 6]; 3] = [quick(0, 0), quick(0, 1), quick(0, 2)];
 static SUBQ: [[Piece; 6]; 3] = [quick(1, 0), quick(1, 1), quick(1, 2)];
 static TST: [[Piece; 4]; 3] = [test(0), test(1), test(2)];
@@ -86,6 +102,10 @@ pub fn encoding(name: &str) -> Option<(u16, &'static [Piece])> {
         "SUBQ8d" => (16, &SUBQ[0]),
         "SUBQ16d" => (16, &SUBQ[1]),
         "SUBQ32d" | "SUBQ32a" => (16, &SUBQ[2]),
+        "PUSH32" => (16, &PUSH),
+        "POP32" => (16, &POP),
+        "PUSHM32" => (32, &PUSHM),
+        "POPM32" => (32, &POPM),
         "TST8d" => (16, &TST[0]),
         "TST16d" => (16, &TST[1]),
         "TST32d" => (16, &TST[2]),

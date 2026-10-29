@@ -81,3 +81,39 @@ fn a_counting_loop_uses_addq_and_tst_where_the_pin_does_not() {
     };
     assert!(size(Options::default()) < size(Options::PINNED));
 }
+
+/// Push and pop of saved registers, bytes from binutils: `move.l %d2,-(%sp)`
+/// 2f02, `move.l (%sp)+,%d2` 241f, `movem.l %d2-%d3,-(%sp)` 48e73000,
+/// `movem.l (%sp)+,%d2-%d3` 4cdf000c, `movem.l %d2-%d7/%a2,-(%sp)` 48e73f20,
+/// `movem.l (%sp)+,%d2-%d7/%a2` 4cdf04fc, `move.l %a2,-(%sp)` 2f0a, `move.l
+/// (%sp)+,%a2` 245f.
+#[test]
+fn push_and_pop_encode_as_binutils_does() {
+    let one = |opcode, to| Inst { opcode, operands: vec![Operand::Reg(to)] };
+    let many = |opcode, mask| Inst { opcode, operands: vec![Operand::Imm(mask)] };
+    let d = |n: u32| 1i64 << n;
+    let cases = [
+        (one("PUSH32", reg::D2), "2f02"),
+        (one("POP32", reg::D2), "241f"),
+        (many("PUSHM32", d(2) | d(3)), "48e73000"),
+        (many("POPM32", d(2) | d(3)), "4cdf000c"),
+        (many("PUSHM32", 0xFC | d(10)), "48e73f20"),
+        (many("POPM32", 0xFC | d(10)), "4cdf04fc"),
+        (one("PUSH32", reg::A2), "2f0a"),
+        (one("POP32", reg::A2), "245f"),
+    ];
+    for (inst, golden) in cases {
+        assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
+    }
+}
+
+/// A leaf that only saves registers opens its frame with a push: the pin's
+/// `suba.l #8, %sp` and `movem.l %d2-%d3, (0,%sp)` are 12 bytes, the push 4.
+#[test]
+fn a_frame_of_saved_registers_is_pushed_not_carved() {
+    let ir = "define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [%a, %entry], [%s1, %l]\n  %t = phi i32 [%b, %entry], [%t1, %l]\n  %u = phi i32 [%c, %entry], [%u1, %l]\n  %v = phi i32 [%d, %entry], [%v1, %l]\n  %s1 = add i32 %s, %t\n  %t1 = add i32 %t, %u\n  %u1 = add i32 %u, %v\n  %v1 = add i32 %v, %i\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, 100\n  br i1 %e, label %l, label %x\nx:\n  %r = add i32 %s1, %u1\n  ret i32 %r\n}";
+    let pinned = compiled(ir, Options::PINNED);
+    let ours = compiled(ir, Options::default());
+    assert!(pinned.contains("suba.l") && pinned.contains("movem.l\t%d2"), "{pinned}");
+    assert!(ours.contains("-(%sp)") && ours.contains("(%sp)+") && !ours.contains("suba.l"), "{ours}");
+}
