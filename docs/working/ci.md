@@ -77,4 +77,9 @@ On the deadline the owner pays it (the check goes red or the test goes) or moves
 
 - DEBT skip-llrm-pass | limit 2 tests | deadline 2026-11-05 | owner w11 | `tools/difftest/test_difftest.py` skips `llrm-pass is not built`: the python group's pytest step builds no binaries.
 - DEBT skip-readme-c | limit 1 test | deadline 2026-11-05 | owner w9 | `tests/test_readme.py` C case skips `llrm-c is not built`: the readme's C listing is llrm-c's; it moves to llrm-cc (m16 row, needs the pinned m16 clang) or the section goes at the C4 removal.
+- DEBT skip-qcport-console | limit 1 test | deadline 2026-11-05 | owner w9 | `tools/test_qcport_sweep.py::test_qcport_console_encodes_at_every_level` skips `llrm-c is not built`: QCport is compiled by llrm-c; it moves to llrm-cc (m16 row) or goes at the C4 removal.
+- DEBT llrm-c-scoreboard | limit 1 tool | deadline 2026-11-05 | owner w9 | `tools/scoreboard.py` runs `llrm-c`; no gate runs it. Move to llrm-cc or delete at C4.
+- DEBT llrm-c-compile-map | limit 1 tool | deadline 2026-11-05 | owner w9 | `tools/compile_map.py` runs `llrm-c`; no gate runs it. Move to llrm-cc or delete at C4.
+- DEBT llrm-c-pipeline-runs | limit 1 tool | deadline 2026-11-05 | owner w9 | `tools/pipeline-runs.py` runs `llrm-c`; no gate runs it. Move to llrm-cc or delete at C4.
+- DEBT llrm-c-qcport-sweep | limit 1 tool | deadline 2026-11-05 | owner w9 | `tools/qcport_sweep.py` builds and runs `llrm-c`; only its console test is gated (skip-qcport-console). Move to llrm-cc or delete at C4.
 - DEBT skip-pindiff-llc | limit 1 test | deadline 2026-11-05 | owner w11 | `tools/pairs/test_pindiff.py` skips `needs LLRM_LLC`: nothing sets it in CI.
