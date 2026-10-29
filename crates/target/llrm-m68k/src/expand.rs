@@ -90,6 +90,7 @@ pub fn finish(
     assignment: &Assignment,
     number: usize,
     slots: &[i32],
+    overlay: bool,
 ) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
@@ -256,6 +257,15 @@ pub fn finish(
         }
     }
     lines.extend(out.into_iter().map(Line::Inst));
+    if overlay {
+        lines = lines
+            .into_iter()
+            .map(|line| match line {
+                Line::Inst(inst) => Line::Inst(crate::overlay::rewrite(inst)),
+                label => label,
+            })
+            .collect();
+    }
     Ok(lines)
 }
 

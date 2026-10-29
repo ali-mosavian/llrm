@@ -7,7 +7,7 @@
 //! a store through `(%d0)`) and before register-class constraints (the base
 //! in a data register).
 
-use llrm_m68k::compile::text;
+use llrm_m68k::compile::{Options, text, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
@@ -18,7 +18,7 @@ fn compiled(
 ) -> String {
     let text_in = format!("target datalayout = \"{DATALAYOUT}\"\n{body}");
     let module = llrm_mir::parse::module(&text_in).expect("parses");
-    text(&module, name, Cpu::M68000).expect("compiles")
+    text_with(&module, name, Cpu::M68000, Options::PINNED).expect("compiles")
 }
 
 #[test]

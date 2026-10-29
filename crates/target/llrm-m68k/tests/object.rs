@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use llrm_m68k::compile::{Item, items};
+use llrm_m68k::compile::{Item, Options, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::encode::encode;
 use llrm_m68k::object::{assemble, executable, start, write_executable};
@@ -26,7 +26,7 @@ define i32 @caller(i32 %a, i8 %b) {\n  %r = call i32 @callee(i32 %a, i8 %b)\n  r
 
 fn function(name: &str) -> Vec<Item> {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{IR}")).expect("parses");
-    items(&module, name, Cpu::M68000).expect("compiles")
+    items_with(&module, name, Cpu::M68000, Options::PINNED).expect("compiles")
 }
 
 fn hex(bytes: &[u8]) -> String {

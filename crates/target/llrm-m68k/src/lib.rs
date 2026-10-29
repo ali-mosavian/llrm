@@ -14,6 +14,7 @@ pub mod mac;
 pub mod mc;
 pub mod mfunc;
 pub mod object;
+pub mod overlay;
 pub mod regalloc;
 pub mod target;
 
