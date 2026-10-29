@@ -27,7 +27,7 @@
 use super::dag_function::selected;
 
 pub(super) fn names(text: &str) -> Result<Vec<String>, String> {
-    let module = llrm_mir::parse::module(text).expect("parses");
+    let module = crate::testing::module(text).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .map_err(|e| e.0)?;
     Ok(done
@@ -101,7 +101,7 @@ impl crate::backend::assemble::Abi for Stub {
 }
 
 pub(super) fn verdicts(flags: bool) -> Vec<Result<super::builder::RuntimeAnswer, &'static str>> {
-    let module = llrm_mir::parse::module(QB_STRING_COMPARE).expect("parses");
+    let module = crate::testing::module(QB_STRING_COMPARE).expect("parses");
     let function = module.global(module.named("f").expect("f")).function().expect("a body");
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let verdicts =
@@ -110,7 +110,7 @@ pub(super) fn verdicts(flags: bool) -> Vec<Result<super::builder::RuntimeAnswer,
 }
 
 pub(super) fn select_with_contracts(text: &str) -> Result<crate::backend::isel::Selected, String> {
-    let module = llrm_mir::parse::module(text).expect("parses");
+    let module = crate::testing::module(text).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
@@ -147,7 +147,7 @@ entry:
 /// 44 functions of the corpora.
 #[test]
 fn a_subregister_is_the_same_value_viewed_narrower() {
-    let module = llrm_mir::parse::module(BYTE).expect("parses");
+    let module = crate::testing::module(BYTE).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -176,7 +176,7 @@ entry:
 /// functions of the corpora).
 #[test]
 fn the_type_legalizer_has_the_targets_hooks() {
-    let module = llrm_mir::parse::module(FLOAT64).expect("parses");
+    let module = crate::testing::module(FLOAT64).expect("parses");
     let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .err()
         .map_or_else(String::new, |e| e.0);
@@ -196,7 +196,7 @@ entry:
 /// functions of the corpora. The quotient is the divide's first result.
 #[test]
 fn a_divide_is_cdq_then_idiv_on_eax_and_edx() {
-    let module = llrm_mir::parse::module(DIVIDE).expect("parses");
+    let module = crate::testing::module(DIVIDE).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let names: Vec<String> = done
@@ -237,7 +237,7 @@ entry:
 /// corpus shadow at `-Os` (lru, scroll, `MOV32r1`) differed by this.
 #[test]
 fn at_os_a_constant_stored_twice_is_loaded_once() {
-    let module = llrm_mir::parse::module(STORES_THE_SAME_CONSTANT).expect("parses");
+    let module = crate::testing::module(STORES_THE_SAME_CONSTANT).expect("parses");
     let moves = |size: bool| {
         let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
         cpu.size = size;
@@ -260,7 +260,7 @@ define i32 @f(i32 %a, i32 %y) {
 /// hidden LEA: `lea b + y*8; sub y` (histo, 13 functions at `-Os`).
 #[test]
 fn a_shifted_difference_plus_a_value_is_a_lea_and_a_sub() {
-    let module = llrm_mir::parse::module(TIMES_SEVEN_PLUS).expect("parses");
+    let module = crate::testing::module(TIMES_SEVEN_PLUS).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let names: Vec<String> =
@@ -283,7 +283,7 @@ define i32 @f(i32 %s, i32 %u, i32 %y) {
 /// 7(b - d)`) kept `lea; sub; add; add` and ran 23 instructions over the pin.
 #[test]
 fn a_value_plus_a_shifted_difference_is_a_lea_and_a_sub() {
-    let module = llrm_mir::parse::module(SUM_PLUS_TIMES_SEVEN).expect("parses");
+    let module = crate::testing::module(SUM_PLUS_TIMES_SEVEN).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let names: Vec<String> =
@@ -308,7 +308,7 @@ define i32 @f(i16 %x) {
 /// the pin (bintree, 13 functions of the corpus shadow).
 #[test]
 fn a_chain_of_word_operations_has_no_casts_between_them() {
-    let module = llrm_mir::parse::module(WORD_CHAIN).expect("parses");
+    let module = crate::testing::module(WORD_CHAIN).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let names: Vec<String> =
@@ -378,7 +378,7 @@ b:
 #[test]
 fn a_load_read_by_a_compare_is_folded_into_it() {
     use crate::model::ir::Loc;
-    let module = llrm_mir::parse::module(COMPARE_WITH_LOADED).expect("parses");
+    let module = crate::testing::module(COMPARE_WITH_LOADED).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -406,7 +406,7 @@ define void @f() {
 #[test]
 fn at_os_m16_a_word_constant_is_made_in_a_word_register() {
     use crate::model::ir::Loc;
-    let module = llrm_mir::parse::module(WORD_MINUS_ONE_TWICE).expect("parses");
+    let module = crate::testing::module(WORD_MINUS_ONE_TWICE).expect("parses");
     let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
     cpu.size = true;
     let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
@@ -441,7 +441,7 @@ b:
 #[test]
 fn the_low_bit_of_an_argument_is_tested_in_memory() {
     use crate::model::ir::Loc;
-    let module = llrm_mir::parse::module(TESTS_THE_LOW_BIT_OF_A_LOAD).expect("parses");
+    let module = crate::testing::module(TESTS_THE_LOW_BIT_OF_A_LOAD).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -478,7 +478,7 @@ define cc 1005 void @f(i16 %a, i16 %b) {
 #[test]
 fn a_word_zero_extended_from_a_byte_is_a_word_value() {
     use crate::model::ir::Loc;
-    let module = llrm_mir::parse::module(WORD_FROM_COMPARE).expect("parses");
+    let module = crate::testing::module(WORD_FROM_COMPARE).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -509,7 +509,7 @@ define cc 1005 void @f(i16 %a) {
 #[test]
 fn a_zero_extended_byte_read_as_a_dword_too_stays_a_dword() {
     use crate::model::ir::Loc;
-    let module = llrm_mir::parse::module(DWORD_AND_WORD_FROM_COMPARE).expect("parses");
+    let module = crate::testing::module(DWORD_AND_WORD_FROM_COMPARE).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -536,7 +536,7 @@ define i32 @g(i32 %x) {
 /// `sar eax, 31; or eax, 1` and `sar eax, 31; xor eax, 5`.
 #[test]
 fn a_select_on_the_sign_is_the_sign_mask_not_a_branch() {
-    let module = llrm_mir::parse::module(SIGN_SELECTS).expect("parses");
+    let module = crate::testing::module(SIGN_SELECTS).expect("parses");
     for name in ["f", "g"] {
         let done =
             selected(&module, name, &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
@@ -573,7 +573,7 @@ b:
 }}
 "
             );
-            let module = llrm_mir::parse::module(&ir).expect("parses");
+            let module = crate::testing::module(&ir).expect("parses");
             let done =
                 selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
                     .unwrap_or_else(|e| panic!("{}", e.0));
@@ -609,7 +609,7 @@ entry:
   ret i32 %r
 }
 ";
-    let module = llrm_mir::parse::module(text).expect("parses");
+    let module = crate::testing::module(text).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .expect("selects");
     assert!(done.body.returns_twice);
@@ -619,7 +619,7 @@ entry:
   ret i32 1
 }
 ";
-    let module = llrm_mir::parse::module(plain).expect("parses");
+    let module = crate::testing::module(plain).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .expect("selects");
     assert!(!done.body.returns_twice);
@@ -653,7 +653,7 @@ b6:
   br i1 %e, label %b2, label %b6
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -679,7 +679,7 @@ define i64 @f(i64 %a, i32 %i) {
   ret i64 %r
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -698,7 +698,7 @@ define i64 @f(i64 %a, i64 %b) {
   ret i64 %r
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -718,7 +718,7 @@ define i32 @f(i32 %a) {
 /// selector's clocks), where the old selector keeps the `idiv` at -Os.
 #[test]
 fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
-    let module = llrm_mir::parse::module(REMAINDER_BY_ELEVEN).expect("parses");
+    let module = crate::testing::module(REMAINDER_BY_ELEVEN).expect("parses");
     let names = |size: bool| {
         let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
         cpu.size = size;
@@ -737,7 +737,7 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
 #[test]
 fn at_os_a_multiply_by_a_constant_is_one_imul_at_m16_and_a_chain_at_m32() {
     let names = |pointer: &str, size: bool, factor: u32| {
-        let module = llrm_mir::parse::module(&format!(
+        let module = crate::testing::module(&format!(
             "target datalayout = \"e-p:{pointer}:{pointer}-i64:32-n8:16:32\"
 define i32 @f(i32 %a) {{
   %r = mul i32 %a, {factor}
@@ -766,7 +766,7 @@ define i32 @f(i32 %a) {{
 /// no byte divide): examples/dice.nib and easing.nib stopped compiling.
 #[test]
 fn at_os_a_byte_remainder_by_a_constant_still_selects() {
-    let module = llrm_mir::parse::module(
+    let module = crate::testing::module(
         "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i8 @f(i8 %a) {
   %r = urem i8 %a, 6
@@ -794,7 +794,7 @@ define void @f() {
 /// (4 times the iterations of the old selector's `rep movsd`; scroll.c).
 #[test]
 fn a_big_copy_without_a_memcpy_routine_moves_dwords() {
-    let module = llrm_mir::parse::module(COPY_4000_BYTES).expect("parses");
+    let module = crate::testing::module(COPY_4000_BYTES).expect("parses");
     let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
     let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     let names: Vec<_> =
@@ -806,7 +806,7 @@ fn a_big_copy_without_a_memcpy_routine_moves_dwords() {
 /// "integer constant of Simple(Far)" and examples/level.nib stopped compiling.
 #[test]
 fn a_big_copy_to_a_far_pointer_still_selects() {
-    let module = llrm_mir::parse::module(
+    let module = crate::testing::module(
         "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @b = global [100 x i16] zeroinitializer, align 2
 declare void @llvm.memcpy.p1.p0.i16(ptr addrspace(1), ptr, i16, i1)
@@ -826,7 +826,7 @@ define void @f(ptr addrspace(1) %d) {
 /// (`copy_idioms.c`, 4 times the iterations of the old copy).
 #[test]
 fn a_copy_of_a_variable_size_moves_dwords_and_then_bytes() {
-    let module = llrm_mir::parse::module(
+    let module = crate::testing::module(
         "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @a = global [100 x i16] zeroinitializer, align 2
 @b = global [100 x i16] zeroinitializer, align 2
@@ -852,7 +852,7 @@ define void @f(i16 %n) {
 #[test]
 fn a_copy_out_of_a_global_reads_through_ds() {
     use crate::model::ir::Loc;
-    let module = llrm_mir::parse::module(
+    let module = crate::testing::module(
         "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @a = global [100 x i16] zeroinitializer, align 2
 @b = global [100 x i16] zeroinitializer, align 2
@@ -904,7 +904,7 @@ fn a_selector_put_in_es_in_two_blocks_is_two_values() {
 /// cloned the `and` whose flags the branch reads, and the clone defined the
 /// value the first one did ('value N is defined 2 times in a body that should
 /// be in SSA'); `link_check` refused every batch that touched `runtime/`.
-const FLAGS_PRODUCER_CLONED: &str = r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
+const FLAGS_PRODUCER_CLONED: &str = r#"target datalayout = "@m16-datalayout@-ni:2:3"
 @_boxes = internal constant <{ ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1) }> zeroinitializer
 @_octets = internal constant <{ ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1) }> zeroinitializer
 @_dots = internal constant <{ ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1) }> zeroinitializer
@@ -988,7 +988,7 @@ fn a_cloned_flag_producer_defines_a_value_of_its_own() {
 }
 
 fn move_3840_at_m16(metadata: &str) -> crate::backend::isel::Selected {
-    let module = llrm_mir::parse::module(&format!(
+    let module = crate::testing::module(&format!(
         "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
 @s = global [2000 x i16] zeroinitializer, align 2
 declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)
@@ -1038,7 +1038,7 @@ fn a_forward_string_move_of_whole_dwords_has_no_byte_tail() {
 #[test]
 fn a_byte_argument_at_m16_goes_in_the_byte_register() {
     use llrm_lir::registers::RegId;
-    let module = llrm_mir::parse::module(
+    let module = crate::testing::module(
         "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
 declare cc 1005 void @g(i32, i8 zeroext)
 define void @f() {
@@ -1061,7 +1061,7 @@ define void @f() {
 /// `imul`.
 #[test]
 fn the_high_word_of_a_signed_widening_multiply_is_one_imul() {
-    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+    let ir = "target datalayout = \"@m32-datalayout@\"
 define i32 @f(i32 %a, i32 %b) {
   %x = sext i32 %a to i64
   %y = sext i32 %b to i64
@@ -1071,7 +1071,7 @@ define i32 @f(i32 %a, i32 %b) {
   ret i32 %r
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -1084,13 +1084,13 @@ define i32 @f(i32 %a, i32 %b) {
 /// (SD3 keeps scaled indexes out of 16-bit addressing, not out of an `lea`).
 #[test]
 fn at_m16_a_multiply_by_five_is_an_lea() {
-    let ir = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+    let ir = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 define i32 @f(i32 %a) {
   %r = mul i32 %a, 5
   ret i32 %r
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -1103,13 +1103,13 @@ define i32 @f(i32 %a) {
 /// index: `lea ecx, [ecx+ecx*4]; lea edx, [edx+ecx*2]`.
 #[test]
 fn at_m16_a_qword_multiply_by_ten_is_two_leas_and_a_mul() {
-    let ir = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+    let ir = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 define i64 @f(i64 %a) {
   %r = mul i64 %a, 10
   ret i64 %r
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -1123,13 +1123,13 @@ define i64 @f(i64 %a) {
 /// multiply by five stays an `imul` there.
 #[test]
 fn at_m16_os_a_multiply_by_five_stays_an_imul() {
-    let ir = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+    let ir = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 define i32 @f(i32 %a) {
   %r = mul i32 %a, 5
   ret i32 %r
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
     cpu.size = true;
     let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
@@ -1143,14 +1143,14 @@ define i32 @f(i32 %a) {
 /// load (`(conv (load x))` is `(load (conv*)x)`).
 #[test]
 fn a_float_argument_read_as_bits_is_an_integer_load() {
-    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+    let ir = "target datalayout = \"@m32-datalayout@\"
 define i32 @f(float %x) {
   %i = bitcast float %x to i32
   %a = and i32 %i, 2147483647
   ret i32 %a
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -1171,7 +1171,7 @@ define i32 @f(ptr %a, i32 %i) {
   ret i32 %m
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -1188,7 +1188,7 @@ define i32 @f(ptr %a, i32 %i) {
 fn a_word_or_dword_funnel_shift_is_one_shld_and_a_byte_one_selects() {
     for (bits, shld) in [(32, 1), (16, 1), (8, 0)] {
         let ir = format!(
-            "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+            "target datalayout = \"@m32-datalayout@\"
 declare i{bits} @llvm.fshl.i{bits}(i{bits}, i{bits}, i{bits})
 define i{bits} @f(i{bits} %a, i{bits} %b, i{bits} %y) {{
 b0:
@@ -1197,7 +1197,7 @@ b0:
 }}
 "
         );
-        let mut module = llrm_mir::parse::module(&ir).expect("parses");
+        let mut module = crate::testing::module(&ir).expect("parses");
         crate::backend::funnel::expanded(
             &mut module,
             |_| true,
@@ -1217,7 +1217,7 @@ b0:
 /// built for.
 #[test]
 fn a_dbg_line_reaches_the_instructions_selected_from_it() {
-    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+    let ir = "target datalayout = \"@m32-datalayout@\"
 define i32 @f(i32 %a, i32 %b) {
   %s = sub i32 %a, %b, !dbg !0
   %t = mul i32 %s, %b, !dbg !1
@@ -1226,7 +1226,7 @@ define i32 @f(i32 %a, i32 %b) {
 !0 = !{i32 7}
 !1 = !{i32 8}
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let lines: Vec<u32> = done.body.insns().iter().filter_map(|one| one.line.map(|at| at.line)).collect();
@@ -1237,7 +1237,7 @@ define i32 @f(i32 %a, i32 %b) {
 /// column 0. The instructions selected from it carry (line, column).
 #[test]
 fn a_dbg_column_reaches_the_instructions_selected_from_it() {
-    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+    let ir = "target datalayout = \"@m32-datalayout@\"
 define i32 @f(i32 %a, i32 %b) {
   %s = sub i32 %a, %b, !dbg !0
   %t = mul i32 %s, %b, !dbg !1
@@ -1246,7 +1246,7 @@ define i32 @f(i32 %a, i32 %b) {
 !0 = !DILocation(line: 7, column: 5)
 !1 = !DILocation(line: 8, column: 12)
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let places: Vec<(u32, u32)> =
@@ -1258,7 +1258,7 @@ define i32 @f(i32 %a, i32 %b) {
 /// inlined twice left no way to tell the two bodies' instructions apart.
 #[test]
 fn a_dbg_scope_and_inlined_at_reach_the_instructions_selected_from_it() {
-    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+    let ir = "target datalayout = \"@m32-datalayout@\"
 define i32 @f(i32 %a, i32 %b) {
   %s = sub i32 %a, %b, !dbg !1
   %t = mul i32 %s, %b, !dbg !3
@@ -1269,7 +1269,7 @@ define i32 @f(i32 %a, i32 %b) {
 !2 = !DILocation(line: 9, column: 1, scope: !0)
 !3 = !DILocation(line: 8, column: 12, scope: !0, inlinedAt: !2)
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let places: Vec<(u32, u32, u32)> =
@@ -1291,7 +1291,7 @@ define cc 1000 i32 @f(i32 %a) {
   ret i32 %r
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
@@ -1329,7 +1329,7 @@ define cc 1000 i16 @f(i16 %a) {
   ret i16 %r
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
@@ -1367,7 +1367,7 @@ define cc 1000 i16 @f(i16 %a) {
   ret i16 %r
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,

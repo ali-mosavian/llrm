@@ -18,6 +18,10 @@
 //! before `at`. `consumes` is set when the inversion eats an instruction (a
 //! `not` that is dropped).
 //!
+//! # Used by
+//! The equality folds of `combine_icmp_binop.rs` that turn an `and` of a freely
+//! invertible operand into an `or` of its inverse.
+//!
 //! # Example
 //! `~(x + 5)` is `-6 - x`:
 //!

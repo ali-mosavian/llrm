@@ -1100,7 +1100,7 @@ fn fixed_point_multiplies_and_saturating_shifts_select_at_every_width() {
         ] {
             let scale = if extra.is_empty() { "" } else { ", i32" };
             let ir = format!(
-                "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+                "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare i{width} @llvm.{name}.i{width}(i{width}, i{width}{scale})
 define i{width} @f(i{width} %a, i{width} %b) {{
 entry:

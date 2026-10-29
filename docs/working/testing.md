@@ -161,7 +161,7 @@ QCport, the largest C program llrm-c compiles, is not in this repository. Its va
 (the Borland headers) and, to run it, `QCPORT_BORLAND` (the all-Borland build) and `JWLINK`.
 
     tools/qcport-compile.sh                 every module at -O2 and -Os; each refusal is listed
-    tools/qcport-run.py                     links the llrm-c build, runs it headless beside the Borland build, compares frames,
+    tools/qcport-run-cc.py                  links the llrm-cc build, runs it headless beside the Borland build, compares frames,
                                             polygons and the md5 of BENCH.BMP
 
 `QCPORT_OBJECTS` reuses objects the gate already built; `QCPORT_RUN_SECONDS` caps each run. Run both before merging a change to

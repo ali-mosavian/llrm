@@ -431,7 +431,7 @@ def test_a_c_benches_os_layer_header_is_the_rows_not_a_stale_one(tmp_path):
         pytest.skip("no llrm-cc in the dist")
     variant = next(one for one in bench.variants(bench.BENCH / "stft_fixed") if one.language == "c")
     (_, arguments, _), *_ = bench.compiles(variant, "Os", tmp_path, "stft")
-    done = subprocess.run([str(bench.BIN / "llrm-cc"), *arguments, "-E", "-H", "-o", "/dev/null"], env=bench.c_environment(variant), capture_output=True, text=True)
+    done = subprocess.run([str(bench.BIN / "llrm-cc"), *arguments, "-E", "-H", "-o", str(tmp_path / "stft.i")], env=bench.c_environment(variant), capture_output=True, text=True)
     headers = [line for line in done.stderr.splitlines() if line.endswith("llrm_os.h")]
     assert headers and not any(str(tmp_path) in line for line in headers), done.stderr
 

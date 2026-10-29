@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_invert.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_invert.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_invert.rs sha256:36ed25f10ddfda233dc04451e9678a79a1216b53b0942cc6a4fe4001cc5e046f -->
+<!-- src: crates/opt/llrm-transforms/src/combine_invert.rs sha256:3b03bcc979db7e50ce4661a4eea5790b3e0fa1f9930fd3b5a309448be233b9c8 -->
 
 # combine_invert
 
@@ -22,6 +22,10 @@ that asks finds less than the pin, never more.
 some value when the answer is yes); with `build` it makes the `~V`
 before `at`. `consumes` is set when the inversion eats an instruction (a
 `not` that is dropped).
+
+## Used by
+The equality folds of `combine_icmp_binop.rs` that turn an `and` of a freely
+invertible operand into an `or` of its inverse.
 
 ## Example
 `~(x + 5)` is `-6 - x`:

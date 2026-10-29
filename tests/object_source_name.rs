@@ -4,9 +4,11 @@
 //! for a directory of it ("Enter directory for m.ll"); with a path in the file,
 //! it prefilled the build machine's directory.
 
+mod common;
+
 use std::process::Command;
 
-const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const IR: &str = "target datalayout = \"@LAYOUT@-ni:2:3\"
 target triple = \"i386-unknown-unknown-code16\"
 
 @count = dso_local global i16 0, align 2, !dbg !0
@@ -29,7 +31,7 @@ fn an_object_with_debug_info_is_named_for_its_source_file() {
     let directory = tempfile::tempdir().unwrap();
     let input = directory.path().join("m.ll");
     let output = directory.path().join("m.obj");
-    std::fs::write(&input, IR).unwrap();
+    std::fs::write(&input, IR.replace("@LAYOUT@", &common::datalayout("x86-m16"))).unwrap();
     let done = Command::new(env!("CARGO_BIN_EXE_llrm-llc"))
         .args(["-O0", "-g", "-o"])
         .arg(&output)
