@@ -153,7 +153,7 @@ fn a_word_select_returns_the_larger_word() {
     let ir = "define i16 @max16(i16 %a, i16 %b) {\n  %c = icmp ugt i16 %a, %b\n  %r = select i1 %c, i16 %a, i16 %b\n  ret i16 %r\n}";
     let text = compile(ir, "max16");
     // the result starts as one operand and the other is moved in on one path: no jump over arms
-    assert!(!text.contains("jmp _cmd"), "{text}");
+    assert!(!text.lines().any(|l| l.contains("jmp ") && l.contains("_cmd")), "{text}");
     for (a, b, lo, hi) in [(300u16, 5000u16, 0x88, 0x13), (700, 20, 0xBC, 0x02)] {
         let setup = set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8);
         let run = |after: &str| common::run_with("alloc-max16", &format!("{setup}  jsr max16\n{after}"), &text);
@@ -1220,7 +1220,7 @@ fn a_byte_select_loads_once_when_a_holds_a_value_or_the_condition_is_the_carry()
     for (name, ir, no_jump, f) in cases {
         let text = compile(&ir, name);
         if no_jump {
-            assert!(!text.contains("jmp _cmd"), "{name}: {text}");
+            assert!(!text.lines().any(|l| l.contains("jmp ") && l.contains("_cmd")), "{name}: {text}");
         }
         for (x, y) in [(0u8, 0u8), (1, 2), (2, 1), (200, 100), (100, 200), (255, 255), (7, 7)] {
             let main = format!("{}{}  jsr {name}\n", set("rc2", u16::from(x)), set("rc3", u16::from(y)));
@@ -1534,4 +1534,16 @@ define i8 @arr(i8 %x) {
 }";
     let text = compile(ir, "arr");
     assert_eq!(common::run_with("alloc-arr", &format!("{}  jsr arr\n", set("rc2", 5)), &text), 12);
+}
+
+/// The labels the emitter numbers inside a function (`_cmt1`, `_cmd1`, `_pa1`) were the same in every
+/// function, so two functions in one file defined them twice (differential tests: "Symbol '_far1' is
+/// already defined"). Each function names its own: max of 3 and 9, then of 4 and 2, from one file.
+#[test]
+fn two_functions_in_one_file_do_not_share_internal_labels() {
+    let one = "define i8 @maxa(i8 %a, i8 %b) {\n  %c = icmp ugt i8 %a, %b\n  %r = select i1 %c, i8 %a, i8 %b\n  ret i8 %r\n}";
+    let two = "define i8 @maxb(i8 %a, i8 %b) {\n  %c = icmp ugt i8 %a, %b\n  %r = select i1 %c, i8 %a, i8 %b\n  ret i8 %r\n}";
+    let text = compile(one, "maxa") + &compile(two, "maxb");
+    let main = format!("{}{}  jsr maxa\n  pha\n{}{}  jsr maxb\n  sta rc2\n  pla\n  clc\n  adc rc2\n", set("rc2", 3), set("rc3", 9), set("rc2", 4), set("rc3", 2));
+    assert_eq!(common::run_with("alloc-two-files", &main, &text), 13);
 }
