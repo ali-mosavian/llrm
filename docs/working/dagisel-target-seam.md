@@ -86,3 +86,16 @@ returns the displacement and frame index without the index, before the `hasIndex
 No lit test under `llvm/test/CodeGen/M68k` indexes a stack array. Ours: `match_address_base` in
 `target/llrm-m68k/src/dagisel/addr.rs` (DEVIATE); the run test is `a_local_array_is_a_frame_object` in
 `tests/results.rs`. Whether to report it upstream is the user's call.
+
+## Open: shared code that still assumes little-endian (grep 2026-10-29)
+
+`DagConfig::big_endian` (default false, so x86 is unchanged) covers `trunc (load)`, `srl/and (load)` narrowing
+(`reduce_load_width.rs`) and store-to-load forwarding (`combine_load.rs`). Not yet:
+
+- `legalize_types.rs` `expand_load` / `expand_store` (and the `Mem` offsets of `expand_*` for i64): low half at +0,
+  high at +4. An i64 load on m68k would swap its halves.
+- `combine_store_merge.rs` (L383): merges adjacent stores with the lowest address as the lowest bits.
+- `dag_combiner.rs` L841: a load of the same address read as little-endian when a store is forwarded.
+- Not looked at: `match_rotate.rs`, `bswap_combine.rs` and `combine_funnel.rs` (load-based forms).
+
+Each is a bug on m68k the moment a kernel uses i64 or merged stores; none is hit by the two bench sets.
