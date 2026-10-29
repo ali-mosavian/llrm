@@ -419,6 +419,20 @@ fn dag_name(
     dag.block_name(block.0).to_owned()
 }
 
+/// An attribute that moves an argument out of the place its type gives it
+/// (`sret` to `x8`, `byval` to memory, `inreg`, `nest`, the Swift ones): a target's calling
+/// hook that does not place them refuses.
+fn relocating_attribute(attrs: &[llrm_mir::opcode::Attribute]) -> Option<&'static str> {
+    use llrm_mir::opcode::Attribute;
+    const TYPED: [&str; 5] = ["sret", "byval", "byref", "inalloca", "preallocated"];
+    const FLAGS: [&str; 5] = ["inreg", "nest", "swiftself", "swifterror", "swiftasync"];
+    attrs.iter().find_map(|attr| match attr {
+        Attribute::Type(name, _) => TYPED.into_iter().find(|one| name == one),
+        Attribute::Flag(name) => FLAGS.into_iter().find(|one| name == one),
+        _ => None,
+    })
+}
+
 impl<'a> Builder<'a> {
     /// The whole target description, for the paths that read x86-style
     /// `calling.toml` conventions, string registers and runtime routines.
@@ -516,6 +530,8 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
+            call_attrs_move_arguments: false,
+            fixed_args: 0,
             had_tail_call: false,
             volatile_memory: false,
             block,
@@ -556,6 +572,10 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is to a variadic function: at m64
     /// `lower_call` sets `al` to the vector registers it uses.
     variadic_call: bool,
+    /// The call being lowered has an argument whose attribute moves it (`relocating_attribute`).
+    call_attrs_move_arguments: bool,
+    /// The parameters the callee declares: the arguments after them are variadic.
+    fixed_args: usize,
     /// A `TC_RETURN` ended the block: nothing after the call is built.
     had_tail_call: bool,
     /// The memory intrinsic being lowered is volatile.
@@ -960,6 +980,9 @@ impl Builder<'_> {
         outside: &llrm_support::hash::HashSet<ValueId>,
     ) -> Result<(), Refused> {
         let parameters = self.function.parameters().to_vec();
+        if self.function.parameter_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()) {
+            return Err(Refused("a parameter attribute that moves it, with a target's calling hook"));
+        }
         let mut ins = Vec::new();
         let mut shapes = Vec::new();
         for &arg in &parameters {
@@ -1205,7 +1228,8 @@ impl Builder<'_> {
             arg_types
                 .push(self.function.operand_type(&self.module.context, *argument).ok_or(Refused("block argument"))?);
         }
-        let (result_type, _, variadic) = self.module.signature(info.function_type);
+        let (result_type, named, variadic) = self.module.signature(info.function_type);
+        let named = named.len();
         // A target with a calling hook places every part itself: it reads no plan.
         let hooked = self.calling().is_some();
         let first = if hooked { 0 } else { self.full_arch()?.first_argument_offset(false) };
@@ -1337,6 +1361,8 @@ impl Builder<'_> {
             }
         }
         self.variadic_call = variadic;
+        self.fixed_args = named;
+        self.call_attrs_move_arguments = info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some());
         let result =
             self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
         if let (true, Some(answer)) = (flags_answer, result) {
@@ -1508,7 +1534,11 @@ impl Builder<'_> {
         if sibling || flags_answer || byvals.iter().any(Option::is_some) {
             return Err(Refused("tail call, flags answer or byval with a target's calling hook"));
         }
+        if std::mem::take(&mut self.call_attrs_move_arguments) {
+            return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
+        }
         let mut outs = Vec::new();
+        let variadic_from = if std::mem::take(&mut self.variadic_call) { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
                 Some(ISD::SignExtend) => Ext::Sign,
@@ -1519,7 +1549,7 @@ impl Builder<'_> {
             let pieces = self.split_for_calling(*value, ext)?;
             let split = pieces.len() > 1;
             for piece in pieces {
-                outs.push(Out { value: piece, ext, pointer: false, arg_vt, split });
+                outs.push(Out { value: piece, ext, pointer: false, arg_vt, split, variadic: at >= variadic_from });
             }
         }
         let void = self.module.context.types.is_void(result_type);
@@ -1884,7 +1914,7 @@ impl Builder<'_> {
             let pieces = self.split_for_calling(value, ext)?;
             let split = pieces.len() > 1;
             for piece in pieces {
-                outs.push(Out { value: piece, ext, pointer, arg_vt, split });
+                outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false });
             }
         }
         calling.accepts(&self.dag, Site::Return, &outs, &[]).map_err(Refused)?;

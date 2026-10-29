@@ -32,6 +32,10 @@ impl Builder<'_> {
         intrinsic: &Intrinsic,
     ) -> Result<(), Refused> {
         match intrinsic {
+            // The expansion is x86's `rep movs` and `rep stos` and its registers.
+            Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove if self.arch.full().is_none() => {
+                Err(Refused("a mem intrinsic for a target with no string instructions"))
+            }
             Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove => {
                 self.visit_mem_intrinsic(instruction, info, intrinsic)
             }
