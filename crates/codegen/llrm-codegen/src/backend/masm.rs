@@ -584,6 +584,9 @@ pub enum Item {
     /// A `.cfi_*` directive (`MCCFIInstruction`), where LLVM's lands: no
     /// code of its own.
     Cfi(llrm_object::assembler::Cfi),
+    /// A `.seh_*` directive (Win64): no code of its own, stamped with the
+    /// offset after the instruction before it.
+    Seh(llrm_object::Seh),
 }
 
 /// `-g`: a place in the code a debugger is told of.
@@ -743,6 +746,41 @@ impl CfiState {
         }
         out.into_iter().map(Item::Cfi).collect()
     }
+}
+
+/// The `.seh_*` directive a prologue instruction needs
+/// (`X86FrameLowering::BuildCFI`'s Win64 arm): `.seh_pushreg` for a push of a
+/// register the function must keep, `.seh_stackalloc` for `sub rsp` and for a
+/// push of any other register, `.seh_setframe` where the frame register is set
+/// from `rsp`. `hardware` is a register's number in the instruction set.
+fn seh_after(
+    what: &Semantics,
+    bp: &Loc,
+    hardware: &dyn Fn(&Loc) -> Option<u8>,
+) -> Option<Item> {
+    use llrm_object::Seh;
+    let imm = |loc: &Loc| match loc {
+        Loc::Imm(imm) => Some(imm.value),
+        _ => None,
+    };
+    let seh = match (what.op, what.name.as_deref()) {
+        (Operation::Push, _) => {
+            let number = hardware(what.sources.first()?)?;
+            if llrm_x86::mc::win64unwind::is_nonvolatile(number) { Seh::PushReg(number) } else { Seh::StackAlloc(8) }
+        }
+        (Operation::Move, _) if what.dests.first() == Some(bp) && what.sources.first() == Some(&sp_reg()) => {
+            Seh::SetFrame(hardware(bp)?, 0)
+        }
+        (Operation::Address, _) if what.dests.first() == Some(bp) => match what.sources.first() {
+            Some(Loc::Mem(from)) => Seh::SetFrame(hardware(bp)?, u64::try_from(from.offset).ok()?),
+            _ => return None,
+        },
+        (Operation::Binary, Some("sub")) if what.dests.first() == Some(&sp_reg()) => {
+            Seh::StackAlloc(u64::try_from(what.sources.get(1).and_then(imm)?).ok()?)
+        }
+        _ => return None,
+    };
+    Some(Item::Seh(seh))
 }
 
 fn reg(register: RegId) -> Loc {
@@ -1588,6 +1626,10 @@ fn built(
     let numbers = dwarf(procedure.registers.pointer).zip(dwarf(procedure.registers.stack));
     let mut cfi =
         numbers.filter(|_| plain).map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame));
+    let hardware = |loc: &Loc| match loc {
+        Loc::Reg(one) => regs.name(one.register).and_then(llrm_x86::mc::win64unwind::hardware),
+        _ => None,
+    };
     let (mut entry_items, mut after_entry) = (Vec::new(), None);
     if let Some(cfi) = cfi.as_mut() {
         entry_items.push(Item::Mark(Mark::Declared));
@@ -1595,6 +1637,7 @@ fn built(
         for one in &enter {
             entry_items.push(Item::Semantics(one.clone()));
             let marks = cfi.after(one, &bp);
+            entry_items.extend(seh_after(one, &bp, &hardware));
             // The System V callee-saved registers: rbx, rbp and r12 to r15
             // (the frame register's own push is told apart by its name).
             if one.op == Operation::Push
@@ -2110,7 +2153,7 @@ fn addressed_pass(
     let name_of = |target: i64| label(number, target);
     for item in items.iter_mut() {
         match item {
-            Item::Align(_) | Item::Cfi(_) => {}
+            Item::Align(_) | Item::Cfi(_) | Item::Seh(_) => {}
             Item::Label(label) => {
                 if after_dead_end.contains(&label.name) {
                     depth = None;
@@ -2482,7 +2525,7 @@ pub fn _procedure_of(
         match item {
             Item::Align(CodeAlign { log2, .. }) => out.push(format!("    align {}", 1u32 << log2)),
             Item::Label(Label { name }) => out.push(format!("{name}:")),
-            Item::Mark(_) | Item::Cfi(_) => {}
+            Item::Mark(_) | Item::Cfi(_) | Item::Seh(_) => {}
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
                 out.extend(_code(&code).into_iter().map(|line| format!("    {line}")));
             }
