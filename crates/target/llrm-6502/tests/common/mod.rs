@@ -66,13 +66,23 @@ pub fn cycles_with(
     main: &str,
     extra: &str,
 ) -> i64 {
+    cycles_on("sim6502", name, main, extra)
+}
+
+/// [`cycles_with`] on the cc65 target `target` (`sim6502` or `sim65c02`).
+pub fn cycles_on(
+    target: &str,
+    name: &str,
+    main: &str,
+    extra: &str,
+) -> i64 {
     let platform = Platform::parse(SIM65).expect("sim65 row");
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("rt-cycles-{name}"));
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("rt-cycles-{target}-{name}"));
     std::fs::create_dir_all(&dir).unwrap();
     let source = format!("{}.export _main\n_main:\n{main}  rts\n{extra}{RUNTIME}", equates(&platform));
     std::fs::write(dir.join("p.s"), source).unwrap();
     let built = Command::new("cl65")
-        .args(["-t", "sim6502", "-o"])
+        .args(["-t", target, "-o"])
         .arg(dir.join("p.bin"))
         .arg(dir.join("p.s"))
         .output()

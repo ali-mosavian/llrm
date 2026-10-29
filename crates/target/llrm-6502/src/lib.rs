@@ -9,6 +9,7 @@ pub mod platform;
 pub mod prepare;
 pub mod select;
 pub mod target;
+pub mod timing;
 
 use llrm_lir::registers::{RegId, Row};
 
