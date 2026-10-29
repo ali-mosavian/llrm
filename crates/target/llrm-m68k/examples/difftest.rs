@@ -56,6 +56,62 @@ fn clang() -> PathBuf {
     })
 }
 
+/// A guarded child ended: its exit code and stdout, or the deadline passed.
+enum Guarded {
+    Exited(Option<i32>, String),
+    TimedOut,
+}
+
+/// Runs `program` in its own process group under a CPU limit (`ulimit -t`, which holds even if
+/// this driver is gone) and a wall deadline, and kills the group on every way out. Plain
+/// `Command::output` left looping programs at 97% CPU for an hour, and uutils `timeout -s KILL`
+/// never fired on this box. Ported from the 6502 harness (ce5f75ba59).
+fn guarded(
+    program: &Path,
+    args: &[&str],
+    seconds: u32,
+) -> Option<Guarded> {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    struct Group(u32);
+    impl Drop for Group {
+        fn drop(&mut self) {
+            let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", self.0)]).stderr(Stdio::null()).status();
+        }
+    }
+
+    let mut child = Command::new("sh")
+        .args(["-c", &format!("ulimit -t {seconds}; exec \"$0\" \"$@\"")])
+        .arg(program)
+        .args(args)
+        .process_group(0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let _group = Group(child.id());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds.into());
+    let status = loop {
+        if let Some(status) = child.try_wait().ok()? {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            return Some(Guarded::TimedOut);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let mut text = String::new();
+    child.stdout.take()?.read_to_string(&mut text).ok()?;
+    // killed by the CPU limit: SIGXCPU (24) or SIGKILL (9)
+    use std::os::unix::process::ExitStatusExt;
+    if matches!(status.signal(), Some(9 | 24)) {
+        return Some(Guarded::TimedOut);
+    }
+    Some(Guarded::Exited(status.code(), text))
+}
+
 fn run(
     command: &mut Command,
     what: &str,
@@ -156,11 +212,11 @@ fn qemu(
     limit: &str,
     cpu: &str,
 ) -> Result<i32, bool> {
-    let status = Command::new("timeout").args([limit, "qemu-m68k", "-cpu", cpu]).arg(exe).status().map_err(|_| false)?;
-    match status.code() {
-        Some(124) | Some(137) => Err(true),
-        Some(code) => Ok(code),
-        None => Err(false),
+    let seconds: u32 = limit.trim_end_matches('s').parse().unwrap_or(10);
+    match guarded(Path::new("qemu-m68k"), &["-cpu", cpu, &exe.display().to_string()], seconds) {
+        Some(Guarded::TimedOut) => Err(true),
+        Some(Guarded::Exited(Some(code), _)) => Ok(code),
+        _ => Err(false),
     }
 }
 
@@ -243,9 +299,10 @@ fn check_text(
     if let Err(why) = built {
         return Outcome::Reference(why);
     }
-    let host: i32 = match run(&mut Command::new("timeout").arg("10").arg(dir.join("host")), "host run") {
-        Ok(text) => text.trim().parse().unwrap_or(-1),
-        Err(why) => return Outcome::Reference(why),
+    let host: i32 = match guarded(&dir.join("host"), &[], 10) {
+        Some(Guarded::Exited(Some(0), text)) => text.trim().parse().unwrap_or(-1),
+        Some(Guarded::TimedOut) => return Outcome::Reference("host run: timed out".into()),
+        _ => return Outcome::Reference("host run: failed".into()),
     };
     // m68k gcc has the 32-bit `long` of the target; the host's is 64 bits, so it is the second opinion
     let gcc_m68k = gcc_m68k(&dir, &full);
@@ -386,4 +443,30 @@ fn main() {
         }
     }
     println!("{count} programs from seed {first}: {ok} ok, {differs} differ, {hang} hang, {reject} reject, {reference} no reference");
+}
+
+/// A looping program is killed at the limit and leaves nothing behind. The driver ran host
+/// programs and qemu under `timeout`, which did not kill them: loops piled up at 97% CPU.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_program_that_never_exits_is_killed() {
+        let dir = std::env::temp_dir().join(format!("llrm-m68k-guard-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("spin.c"), "int main(void) { for (;;) ; }\n").unwrap();
+        assert!(Command::new("gcc").current_dir(&dir).args(["-O0", "-o", "spin", "spin.c"]).status().unwrap().success());
+        let bin = dir.join("spin").canonicalize().unwrap();
+        let start = std::time::Instant::now();
+        assert!(matches!(guarded(&bin, &[], 1), Some(Guarded::TimedOut)));
+        assert!(start.elapsed().as_secs() < 10, "took {:?}", start.elapsed());
+        let alive = std::fs::read_dir("/proc")
+            .unwrap()
+            .flatten()
+            .filter(|entry| std::fs::read_link(entry.path().join("exe")).is_ok_and(|exe| exe == bin))
+            .count();
+        assert_eq!(alive, 0, "{alive} copies of {} still running", bin.display());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
