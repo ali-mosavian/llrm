@@ -288,6 +288,17 @@ fn post_increment_forms_encode_as_binutils_does() {
     }
 }
 
+/// `divu.l %d2,%d1` and `divs.l %d2,%d1`, from binutils. The pin's rows encoded the remainder
+/// register as `%d0` (`divul.l %d2,%d0:%d1`), which overwrote the dividend in `%d0`: 68020
+/// differential seeds 608, 636 (about one in five programs) gave wrong results.
+#[test]
+fn a_long_divide_stores_no_remainder() {
+    let divide = |opcode, dq: &str, src: &str| Inst { opcode, operands: vec![register(dq), register(dq), register(src)] };
+    for (inst, golden) in [(divide("UDIVd32d32", "d1", "d2"), "4c421001"), (divide("SDIVd32d32", "d3", "d0"), "4c403803")] {
+        assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
+    }
+}
+
 /// `cmpa.l %d0,%a1` b3c0 and `cmpa.l %a2,%a3` b7ca, from binutils.
 #[test]
 fn cmpa_encodes_as_binutils_does() {
