@@ -414,3 +414,60 @@ fn a_word_that_does_not_fit_spills_a_byte_it_overlaps() {
     assert_eq!(slots.len(), 2);
     assert_eq!(assignment.0[3], W);
 }
+
+/// A value the target marks rematerializable is made again at each use, not
+/// stored and reloaded: the constant `v2` below, live across two others on a
+/// two-register file. It used to cost a `spill_store` and a `spill_load`.
+#[test]
+fn a_rematerializable_value_is_made_again_not_spilled() {
+    let mut constant = op("const", vec![Operand::Def(v(2))]);
+    constant.rematerializable = true;
+    let mut function = function(
+        vec![
+            constant,
+            op("def", vec![Operand::Def(v(0))]),
+            op("def", vec![Operand::Def(v(1))]),
+            use1(v(0)),
+            use1(v(1)),
+            use1(v(0)),
+            use1(v(1)),
+            use1(v(2)),
+        ],
+        3,
+    );
+    let (_, slots) = allocate_spilling::<Spilly>(&mut function, 10).unwrap();
+    assert!(slots.is_empty(), "{slots:?}");
+    assert_eq!(count(&function, 0, "spill_store") + count(&function, 0, "spill_load"), 0);
+    let consts: Vec<usize> = function.blocks[0]
+        .insts
+        .iter()
+        .enumerate()
+        .filter(|(_, inst)| inst.kind == Kind::Op("const"))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(consts.len(), 1, "one copy, right before its use");
+    assert_eq!(function.blocks[0].insts[consts[0] + 1].kind, Kind::Op("use"));
+}
+
+/// A phi's copy goes before the flag setter a branch reads, so it cannot
+/// clobber the flags; unless it copies a value the setter or a later
+/// instruction defines. It was put above the copy that defines its source,
+/// which read an undefined register (arrsum after the mid-end looped with
+/// garbage pointers).
+#[test]
+fn a_phi_copy_is_not_hoisted_above_the_definition_of_its_source() {
+    let mut setter = op("setter", vec![Operand::Def(v(0))]);
+    setter.sets_flags = true;
+    let mut branch = op("branch", vec![Operand::Block(1)]);
+    branch.terminator = true;
+    branch.reads_flags = true;
+    let mut function = MFunction::<()>::new("f");
+    function.classes = vec![(); 4];
+    function.blocks.push(Block { id: 0, insts: vec![setter, Inst::copy(v(1), v(0)), branch], phis: vec![] });
+    function.blocks.push(Block { id: 1, insts: vec![], phis: vec![Phi { result: v(2), incoming: vec![(0, v(1))] }] });
+    eliminate_phis(&mut function);
+    let insts = &function.blocks[0].insts;
+    let defines = insts.iter().position(|i| i.operands.first() == Some(&Operand::Def(v(1)))).unwrap();
+    let reads = insts.iter().position(|i| i.operands.get(1) == Some(&Operand::Use(v(1)))).unwrap();
+    assert!(defines < reads, "{insts:?}");
+}

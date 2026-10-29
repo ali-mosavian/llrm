@@ -55,9 +55,14 @@ pub struct Inst {
     pub may_store: bool,
     pub side_effects: bool,
     pub cheap_as_move: bool,
+    /// The spiller may run it again at each use instead of keeping its result
+    /// (`isTriviallyReMaterializable`).
+    pub rematerializable: bool,
     /// It writes a result before it has read every use, so no def may share
     /// a register with a use (`earlyclobber`).
     pub early_clobber: bool,
+    /// Its two register sources may swap places (`isCommutable`).
+    pub commutable: bool,
 }
 
 impl Inst {
@@ -78,7 +83,9 @@ impl Inst {
             may_store: false,
             side_effects: false,
             cheap_as_move: false,
+            rematerializable: false,
             early_clobber: false,
+            commutable: false,
         }
     }
 

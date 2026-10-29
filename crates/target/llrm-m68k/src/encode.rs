@@ -140,7 +140,14 @@ fn operand_value(
 
 /// `encodeInstruction`.
 pub fn encode(inst: &Inst) -> Result<Encoded, String> {
-    let &(_, width, pieces) = encoding(inst.opcode).ok_or_else(|| format!("no encoding for {}", inst.opcode))?;
+    let (width, pieces) = match crate::overlay::encoding(inst.opcode) {
+        Some(row) => row,
+        None => {
+            let &(_, width, pieces) =
+                encoding(inst.opcode).ok_or_else(|| format!("no encoding for {}", inst.opcode))?;
+            (width, pieces)
+        }
+    };
     if width == 0 {
         return Err(format!("{} is a pseudo-instruction: it has no encoding", inst.opcode));
     }

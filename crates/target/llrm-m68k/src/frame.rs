@@ -74,6 +74,11 @@ pub enum FrameOp {
     Save { registers: Vec<RegId>, base: Base, offset: i64 },
     /// `movem.l (offset, base), regs`
     Restore { registers: Vec<RegId>, base: Base, offset: i64 },
+    /// `move.l reg, -(%sp)` or `movem.l regs, -(%sp)`: the overlay's
+    /// prologue, when the frame is only the saved registers.
+    Push(Vec<RegId>),
+    /// `move.l (%sp)+, reg` or `movem.l (%sp)+, regs`.
+    Pop(Vec<RegId>),
 }
 
 /// The laid-out frame.
@@ -168,6 +173,23 @@ impl Layout {
             ops.push(FrameOp::Save { registers: self.saved.clone(), base, offset });
         }
         ops
+    }
+
+    /// Whether the frame is nothing but the saved registers, so pushing and
+    /// popping them opens and closes it with no `suba`/`adda` and no offsets
+    /// (the same addresses result: the stack size is the bytes pushed).
+    pub fn pushes(&self) -> bool {
+        !self.has_fp && !self.saved.is_empty() && self.stack_size == SLOT * self.saved.len() as i64
+    }
+
+    /// The prologue of a frame that [`pushes`](Layout::pushes).
+    pub fn push_prologue(&self) -> Vec<FrameOp> {
+        vec![FrameOp::Push(self.saved.clone())]
+    }
+
+    /// The epilogue of a frame that [`pushes`](Layout::pushes).
+    pub fn pop_epilogue(&self) -> Vec<FrameOp> {
+        vec![FrameOp::Pop(self.saved.clone())]
     }
 
     /// `emitEpilogue` with `restoreCalleeSavedRegisters`.
