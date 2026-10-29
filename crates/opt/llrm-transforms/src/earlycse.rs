@@ -10,8 +10,7 @@
 //!   or target memory intrinsics, memset forwarding, fences or atomics: MIR has
 //!   none (or `fill` makes them later). `llvm.assume` is handled.
 //! - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
-//!   does it only when poison-generating flags remain); a load's metadata not
-//!   shared by both loads is dropped (`combineMetadataForCSE` merges it).
+//!   does it only when poison-generating flags remain).
 //! - DEVIATE a call's attributes are not intersected; a call that only reads or
 //!   only writes memory (`memory::of`, which counts every location including
 //!   `inaccessiblemem`) is numbered unless it is an `llvm.`/`llrm.` marker.
@@ -1185,13 +1184,7 @@ impl Walk<'_> {
         kept: InstId,
         removed: InstId,
     ) {
-        let theirs = self.function.instruction(removed).metadata.clone();
-        let mine = self.function.instruction(kept).metadata.clone();
-        for (kind, node) in mine {
-            if !theirs.iter().any(|(other, same)| *other == kind && *same == node) {
-                self.function.unannotate(kept, &kind);
-            }
-        }
+        crate::local::combine_metadata_for_cse(self.view.metadata, self.function, kept, removed, false);
     }
 
     /// `EarlyCSE::run`
