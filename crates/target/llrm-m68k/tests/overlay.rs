@@ -229,3 +229,26 @@ fn two_masks_of_one_register_in_a_row_are_one() {
     let ours = compiled(ir, Options::default());
     assert!(ours.contains("and.l\t#1,") && !ours.contains("and.l\t#255"), "{ours}");
 }
+
+fn arrmax_loop() -> &'static str {
+    "define i32 @f(ptr %p, i32 %n) {\nentry:\n  %f = load i32, ptr %p\n  br label %l\nl:\n  %i = phi i32 [1, %entry], [%i1, %l]\n  %m = phi i32 [%f, %entry], [%m1, %l]\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  %c = icmp sgt i32 %v, %m\n  %m1 = select i1 %c, i32 %v, i32 %m\n  %i1 = add i32 %i, 1\n  %d = icmp slt i32 %i1, %n\n  br i1 %d, label %l, label %x\nx:\n  ret i32 %m1\n}"
+}
+
+/// Register-to-register moves between the loop label and its last branch.
+fn loop_register_moves(asm: &str) -> usize {
+    let body = asm.split(".LBB0_1:").nth(1).expect("a loop");
+    let end = body.rfind("\tblt").expect("the loop branch");
+    body[..end].lines().filter(|line| line.starts_with("\tmove.l\t%")).count()
+}
+
+/// The running maximum was copied on both arms of the select and once more at
+/// the loop end: the copy of the loaded value joined its register first and
+/// kept the copy that runs every trip from joining the maximum's. Now the
+/// maximum stays in its register and only the arm that takes a new one moves.
+#[test]
+fn a_select_in_a_loop_leaves_one_move_on_the_arm_that_changes_the_value() {
+    let pinned = compiled(arrmax_loop(), Options::PINNED);
+    assert!(loop_register_moves(&pinned) >= 3, "{pinned}");
+    let ours = compiled(arrmax_loop(), Options::default());
+    assert_eq!(loop_register_moves(&ours), 1, "{ours}");
+}

@@ -80,6 +80,9 @@ pub fn items_with(
     let mut function = emit(name, &blocks)?;
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
+    if options.overlay {
+        crate::regalloc::split_flag_edges(&mut function);
+    }
     eliminate_phis_with(&mut function, options.overlay);
     fold_reserved_copies(&mut function);
     if options.overlay {
@@ -90,7 +93,11 @@ pub fn items_with(
     }
     commute_tied(&mut function);
     two_address(&mut function);
-    let (assignment, slots) = allocate_spilling(&mut function, 0)?;
+    let (assignment, slots) = if options.overlay {
+        crate::regalloc::allocate_spilling_by_frequency(&mut function, 0)?
+    } else {
+        allocate_spilling(&mut function, 0)?
+    };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
