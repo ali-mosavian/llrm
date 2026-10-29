@@ -121,11 +121,21 @@ pub fn select_function(
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
-    let widths = info
+    let mut widths: HashMap<u32, u32> = info
         .value_regs
         .iter()
         .map(|(value, reg)| (*reg, 8 * layout.alloc_size(&module.context.types, function.value(value).ty) as u32))
         .collect();
+    // a value wider than a word is several registers, each a word: a phi copy names them all
+    let wide: Vec<(u32, usize)> = info
+        .value_regs
+        .iter()
+        .map(|(value, reg)| (*reg, layout.alloc_size(&module.context.types, function.value(value).ty) as usize / 2))
+        .filter(|(_, parts)| *parts > 1)
+        .collect();
+    for (reg, parts) in wide {
+        widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
+    }
     Ok(Selection { blocks: selected, locals, cpu, widths, zero_page: 16, tuning: crate::alloc::Tuning::SPEED })
 }
 

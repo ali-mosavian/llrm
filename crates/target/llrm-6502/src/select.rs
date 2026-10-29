@@ -37,6 +37,7 @@ use crate::frame::{Function, Layout, layout};
 
 const EXTRACT_SUBREG: u16 = 8;
 const REG_SEQUENCE: u16 = 19;
+const COPY: u16 = 20;
 /// `RegisterClass` ids of the generated descriptions.
 const CARRY: i16 = ids::CarryRegClassID as i16;
 const FLAGS: i16 = ids::FlagsRegClassID as i16;
@@ -456,6 +457,14 @@ fn lower(
         ISD::Machine(code) => {
             let code = code as u16;
             match code {
+                // `FREEZE` selects to a `COPY` of its operand
+                COPY => {
+                    let from = location(module, name, one, at(0), values, cells)?;
+                    let bits = data_bits(0);
+                    let cell = cell_for(cells, bits);
+                    values.insert((node, 0), cell.clone());
+                    Ok(vec![copy(bits, cell, from)])
+                }
                 EXTRACT_SUBREG => {
                     let word = location(module, name, one, at(0), values, cells)?;
                     let Operand::Reg(word) = word else { return Err("EXTRACT_SUBREG of a non-register".into()) };
