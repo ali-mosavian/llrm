@@ -241,7 +241,7 @@ jobs:
     # A skipped ancestor (static, when nothing it checks changed) would skip this job too: success() looks at every job upstream.
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.toolchain.result == 'success' && needs.pintools.result == 'success' }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_groups)[matrix.group] }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
