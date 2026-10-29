@@ -192,11 +192,15 @@ impl ProgramPass for Walk {
     ) -> Result<(), String> {
         let mut modules = managers(program, analyses);
         let roots = roots(program);
-        let params = crate::inlinecost::InlineParams {
+        let mut params = crate::inlinecost::InlineParams {
             allow_recursive_call: self.inline.recursive,
             last_call_to_static: self.inline.last,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
+        // The target's tuning table.
+        if let Some(threshold) = program.target.tti().and_then(|tti| tti.inline_threshold_override()) {
+            params.default_threshold = threshold;
+        }
         let size = self.inline.caller_size();
         for at in 0..program.modules.len() {
             let wanted: BTreeSet<GlobalId> = procedures(program, at).into_iter().collect();

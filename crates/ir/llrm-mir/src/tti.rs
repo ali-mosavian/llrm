@@ -388,6 +388,12 @@ pub trait Tti {
         None
     }
 
+    /// The target's `DefaultThreshold` for the inliner (its tuning table);
+    /// none: the pass's own.
+    fn inline_threshold_override(&self) -> Option<i64> {
+        None
+    }
+
     /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
