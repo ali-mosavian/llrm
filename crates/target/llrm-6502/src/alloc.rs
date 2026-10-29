@@ -17,7 +17,7 @@ use std::fmt::Write;
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::successors;
 use llrm_spike_mf::spill::allocate_spilling;
-use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Reg, Target};
+use llrm_spike_mf::{Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, remove_identity_copies};
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::emit::{MInst, Operand as Machine, address, spill};
@@ -1117,7 +1117,6 @@ pub fn build(
         }
         b.flush_packs();
     }
-    fold_branches(&mut b.function);
     remove_dead(&mut b.function);
     Ok((b.function, labels))
 }
@@ -1135,79 +1134,16 @@ fn opposite(kind: Kind) -> Option<Kind> {
     }))
 }
 
-/// `BranchFolder`'s simple cases: a branch to a block that only jumps goes to
-/// where it jumps, a block nothing reaches goes, and a conditional branch over
-/// the jump that follows it, to the next block, becomes the opposite branch.
-///
-/// DEVIATE: spike-local, in the 6502 only. Reason: it needs the opposite of a
-/// branch. Exit: a `Target` hook, in `llrm-spike-mf`.
-fn fold_branches(function: &mut MFunction<Class>) {
-    // threading, to a fixed point (a loop of empty jumps stays)
-    loop {
-        let only_jump: HashMap<u32, u32> = function
-            .blocks
-            .iter()
-            .filter_map(|block| match &block.insts[..] {
-                [Inst { kind: Kind::Op("JMP" | "BRA"), operands, .. }] => match operands[..] {
-                    [Operand::Block(to)] if to != block.id => Some((block.id, to)),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect();
-        let mut changed = false;
-        for operand in function.blocks.iter_mut().flat_map(|b| &mut b.insts).flat_map(|i| &mut i.operands) {
-            if let Operand::Block(to) = operand
-                && let Some(next) = only_jump.get(to)
-            {
-                *to = *next;
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
+impl<const STACK: bool> Jump for Mos<STACK> {
+    fn jump(block: u32) -> Inst {
+        let mut jump = Inst::new(Kind::Op("JMP"), vec![Operand::Block(block)]);
+        jump.terminator = true;
+        jump.barrier = true;
+        jump
     }
-    // unreachable blocks
-    let reached = {
-        let next = successors(function);
-        let mut seen = vec![false; function.blocks.len()];
-        let mut work = vec![0usize];
-        while let Some(at) = work.pop() {
-            if !std::mem::replace(&mut seen[at], true) {
-                work.extend(next[at].iter().copied());
-            }
-        }
-        seen
-    };
-    let mut at = 0;
-    function
-        .blocks
-        .retain(
-            |_| {
-                at += 1;
-                reached[at - 1]
-            },
-        );
-    // the condition over a jump, to the block that follows
-    for at in 0..function.blocks.len() {
-        let next_id = function.blocks.get(at + 1).map(|b| b.id);
-        let insts = &mut function.blocks[at].insts;
-        let n = insts.len();
-        if n < 2 {
-            continue;
-        }
-        let (Some(flipped), [Operand::Block(skipped), _], [Operand::Block(to)]) =
-            (opposite(insts[n - 2].kind), &insts[n - 2].operands[..], &insts[n - 1].operands[..])
-        else {
-            continue;
-        };
-        if matches!(insts[n - 1].kind, Kind::Op("JMP" | "BRA")) && Some(*skipped) == next_id {
-            let to = *to;
-            insts[n - 2].kind = flipped;
-            insts[n - 2].operands[0] = Operand::Block(to);
-            insts.pop();
-        }
+
+    fn reverse(branch: &Inst) -> Option<Inst> {
+        Some(Inst { kind: opposite(branch.kind)?, ..branch.clone() })
     }
 }
 
@@ -1470,20 +1406,8 @@ fn emit_with<const STACK: bool>(
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(p) => p,
     };
-    // copies the allocator joined are gone; blocks that held only those now
-    // just jump
-    for block in &mut function.blocks {
-        block
-            .insts
-            .retain(
-                |inst| !(inst.kind == Kind::Copy
-                    && matches!(
-                        inst.operands[..],
-                        [Operand::Def(d), Operand::Use(s)] if at(d) == at(s)
-                    )),
-            );
-    }
-    fold_branches(&mut function);
+    remove_identity_copies::<Mos<STACK>>(&mut function, &assignment);
+    branch_fold::<Mos<STACK>>(&mut function);
     let after = live_after(&function, &at);
     let slot_name = |slot: i32| format!("s_{}_{}", function.name, slot);
     let mut out = String::new();
