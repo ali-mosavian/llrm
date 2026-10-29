@@ -850,6 +850,15 @@ def test_a_row_above_its_clock_limit_fails_the_gate():
     assert bench.clock_problems("fib c -Os", {"clocks": 10**9}, limits) == []
 
 
+def test_lru_c_may_not_go_back_to_the_rep_stosb_fill():
+    """lru c -Os ran 377 clocks while a 28-byte `rep stosb` fill replaced its loop; with the loop kept it is 293."""
+    limits = bench.clock_limits()
+    assert limits["lru c -Os"] == 293
+    assert bench.clock_problems("lru c -Os", {"clocks": 377}, limits) == [
+        "lru c -Os: clocks 377 > limit 293 (tools/bench/clock_limits.toml)"
+    ]
+
+
 def test_a_row_above_main_with_no_clock_entry_fails_the_gate():
     """quicksort nib ran 447484 clocks against main's 316122; had its entry been missing the gate would have gone red only on the first run."""
     main = {"quicksort nib -Os": 316122}
