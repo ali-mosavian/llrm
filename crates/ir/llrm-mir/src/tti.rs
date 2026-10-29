@@ -612,6 +612,16 @@ pub trait Tti {
         AddressingMode::None
     }
 
+    /// Beyond the pin: whether a strict exit compare of a unit-stride counter
+    /// that never passes its bound should become `!=` (`exitne`). Counting to
+    /// zero and testing `!=` is cheap where a decrement sets the flags and one
+    /// branch follows (m68k `subq; bne`, `dbra`), not where the compare is
+    /// free anyway (x86: the rewrite moved `bq32` rows the wrong way). Off by
+    /// default; a target opts in where it measured a win.
+    fn prefers_exit_ne(&self) -> bool {
+        false
+    }
+
     /// `isIndexedLoadLegal(MIM_PostInc, ty)`: a load that steps its pointer by
     /// the access size after it (`(An)+`).
     fn is_post_inc_load_legal(

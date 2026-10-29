@@ -75,7 +75,12 @@ pub fn items_with(
     let module = if options.mid_end {
         optimized = mid_end_described_by(
             module,
-            &M68k { indexed_displacement: options.overlay, post_indexed: options.overlay && !options.size, ..M68k::default() },
+            &M68k {
+                indexed_displacement: options.overlay,
+                post_indexed: options.overlay && !options.size,
+                exit_ne: options.overlay,
+                ..M68k::default()
+            },
             Some(Rc::new(M68kMachine)),
         )?;
         &optimized
@@ -226,7 +231,7 @@ pub fn mid_end_described_by(
     let mut declared = Declared::of(&module);
     for name in names {
         let (context, function) = module.function_mut(&name).ok_or("a function that vanished")?;
-        if llrm_transforms::exitne::enabled() {
+        if llrm_transforms::exitne::enabled() && tti.prefers_exit_ne() {
             llrm_transforms::exitne::strengthened(context, &layout, function, &outer);
         }
         llrm_transforms::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, tti, false);
