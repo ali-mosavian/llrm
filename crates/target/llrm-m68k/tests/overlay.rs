@@ -848,3 +848,19 @@ mod repeated_compares {
         assert_eq!(drop_repeated_compares(different.clone()), different);
     }
 }
+
+/// A frame of saved registers and an outgoing-argument area was `suba.l #20,
+/// %sp; movem.l regs, (8,%sp)` and back: 24 B of prologue and epilogue. The
+/// saved registers are the top of the frame, so pushing them and taking the
+/// rest off the stack pointer opens the same frame in 12 B (fnptr 52 to 40 B,
+/// muldiv 80 to 68).
+#[test]
+fn saved_registers_are_pushed_and_the_rest_of_the_frame_follows() {
+    let ir = llrm_m68k::kernels::source_in("library", "fnptr");
+    let module = llrm_mir::parse::module(&ir).expect("parses");
+    let ours = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
+    assert!(ours.contains("movem.l\t%d2-%d3/%a2, -(%sp)\n\tsubq.l\t#8, %sp\n"), "{ours}");
+    assert!(ours.contains("\taddq.l\t#8, %sp\n\tmovem.l\t(%sp)+, %d2-%d3/%a2\n\trts"), "{ours}");
+    let pinned = text_with(&module, "k", Cpu::M68000, Options::PINNED).expect("compiles");
+    assert!(pinned.contains("suba.l\t#20, %sp\n\tmovem.l\t%d2-%d3/%a2, (8,%sp)"), "{pinned}");
+}
