@@ -123,6 +123,32 @@ fn run_ir(
     status.code()
 }
 
+/// [`run_ir`] with the runtime the libcalls of a 68000 name (`__mulsi3` and the others) linked in.
+fn run_ir_with_runtime(
+    ir: &str,
+    args: &[Arg],
+) -> Option<i32> {
+    if !std::path::Path::new("/usr/bin/qemu-m68k").exists() {
+        return None;
+    }
+    let runtime = llrm_m68k::kernels::source_in("library", "rt");
+    let text = format!(
+        "target datalayout = \"{DATALAYOUT}\"\n{ir}\n{}",
+        runtime.split_once('\n').map_or("", |(_, rest)| rest)
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut code = Vec::new();
+    for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+        let name = global.name.as_deref().expect("a named function");
+        code.extend(items(&module, name, Cpu::M68000).expect("compiles"));
+    }
+    let exe = std::env::temp_dir().join(format!("llrm-m68k-rt-{}-{}", std::process::id(), ir.len()));
+    write_executable(&exe, &executable(&program(args, code)).unwrap()).unwrap();
+    let status = Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
+    std::fs::remove_file(&exe).ok();
+    status.code()
+}
+
 /// A `switch` made blocks of its own that the function builder refused ("a switch lowering made
 /// blocks"): every generated program has one. Each case, the shared one and the default.
 #[test]
@@ -143,5 +169,25 @@ fn a_shift_left_by_16_moves_the_low_word_up_and_clears_the_rest() {
     let ir = "define i32 @k(i32 %x) {\n  %s = shl i32 %x, 16\n  %r = lshr i32 %s, 24\n  ret i32 %r\n}";
     if let Some(got) = run_ir(ir, &[Arg::Imm(0x00AB1234)]) {
         assert_eq!(got, 0x12);
+    }
+}
+
+/// A value shifted left by 16 and fed back round a loop kept the old low word: the clear of the
+/// low word (`and.l #-65536`) ended up after the loop, so the next trip multiplied the swapped
+/// word with garbage in its low half. Seed 96 of the differential driver gave 169 for 139.
+#[test]
+fn a_value_shifted_up_16_round_a_loop_has_its_low_word_cleared_each_trip() {
+    let ir = "define i32 @k(i32 %x, i32 %y) {\nentry:\n  br label %l\n\
+        l:\n  %p = phi i32 [ %x, %entry ], [ %s, %l ]\n  %i = phi i32 [ 4, %entry ], [ %i1, %l ]\n\
+        \x20 %m = mul i32 %p, %y\n  %n = xor i32 %m, -1\n  %s = shl i32 %n, 16\n  %i1 = sub i32 %i, 1\n\
+        \x20 %c = icmp eq i32 %i1, 0\n  br i1 %c, label %done, label %l\n\
+        done:\n  %h = lshr i32 %s, 16\n  %r = xor i32 %h, %s\n  ret i32 %r\n}";
+    let (mut p, y) = (0x0001_0003u32, 0x0007_0005u32);
+    for _ in 0..4 {
+        p = (!p.wrapping_mul(y)) << 16;
+    }
+    let want = ((p >> 16) ^ p) & 0xFF;
+    if let Some(got) = run_ir_with_runtime(ir, &[Arg::Imm(0x0001_0003), Arg::Imm(0x0007_0005)]) {
+        assert_eq!(got, want as i32);
     }
 }

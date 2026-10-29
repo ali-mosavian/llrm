@@ -248,11 +248,14 @@ impl Emitter<'_> {
         // the clear and the extract were emitted on the way here: drop them
         let dead: Vec<Reg> = [clear, extract].iter().filter_map(|v| self.values.get(&(v.node, v.res)).copied()).collect();
         into.retain(|inst| !matches!(inst.operands.first(), Some(Operand::Def(reg)) if dead.contains(reg)));
+        // one definition of the result: a register defined twice (the copy, then the mask) is
+        // not what `machine_sink` expects, and it sank the mask out of a loop
         let dst = self.new_reg(Class::Dr32);
         self.values.insert((node, 0), dst);
-        into.push(Inst::copy(dst, swapped));
-        let mut mask = Inst::new(Kind::Op("AND32di"), vec![Operand::Def(dst), Operand::Use(dst), Operand::Imm(-65536)]);
+        let mut mask =
+            Inst::new(Kind::Op("AND32di"), vec![Operand::Def(dst), Operand::Use(swapped), Operand::Imm(-65536)]);
         mask.sets_flags = true;
+        mask.ties = vec![(0, 1)];
         into.push(mask);
         Ok(())
     }
