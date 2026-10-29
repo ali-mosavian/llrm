@@ -6,6 +6,10 @@ pub const C64: &str = include_str!("machines/c64.toml");
 pub const C64_LD65: &str = include_str!("machines/c64.cfg");
 /// The ld65 memory layout of an Apple II DOS 3.3 binary.
 pub const APPLE2_LD65: &str = include_str!("machines/apple2.cfg");
+/// The ld65 memory layout of an NES NROM image.
+pub const NES_LD65: &str = include_str!("machines/nes.cfg");
+/// The ld65 memory layout of an Atari 8-bit XEX file.
+pub const ATARI8_LD65: &str = include_str!("machines/atari8.cfg");
 pub const SIM65: &str = include_str!("machines/sim65.toml");
 
 /// Every platform row; the stubs are marked `status = "stub"` in their file.
@@ -63,6 +67,34 @@ pub fn apple2_startup(platform: &Platform) -> String {
     format!(
         ".import __MAIN_START__, __MAIN_LAST__\n.segment \"HEADER\"\n.word __MAIN_START__\n.word __MAIN_LAST__ - __MAIN_START__\n\
          .segment \"CODE\"\n.export start\nstart:\n  lda #${:02X}\n  sta rc0\n  lda #${:02X}\n  sta rc1\n  jsr _main\n  sta $0400\nhalt:\n  jmp halt\n",
+        platform.soft_stack & 0xFF,
+        platform.soft_stack >> 8
+    )
+}
+
+/// What an NES image starts with: the iNES header (2 x 16K PRG, 1 x 8K CHR, mapper 0), then `start`,
+/// the reset vector, which sets the soft stack pointer, calls `_main` and keeps its result in
+/// `$0000`. `nmi` and `irq` are `rti`.
+pub fn nes_startup(platform: &Platform) -> String {
+    format!(
+        ".segment \"HEADER\"\n.byte \"NES\", $1A, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n\
+         .segment \"CODE\"\n.export start\nstart:\n  sei\n  cld\n  ldx #$FF\n  txs\n  lda #${:02X}\n  sta rc0\n  lda #${:02X}\n  sta rc1\n  jsr _main\n  sta $00\nhalt:\n  jmp halt\n\
+         nmi:\n  rti\nirq:\n  rti\n\
+         .segment \"VECTORS\"\n.word nmi, start, irq\n.segment \"CODE\"\n",
+        platform.soft_stack & 0xFF,
+        platform.soft_stack >> 8
+    )
+}
+
+/// What an Atari XEX file starts with: `$FFFF`, the load chunk header (start and inclusive end),
+/// then `start`, which sets the soft stack pointer, calls `_main` and keeps its result in `$0600`;
+/// the RUNAD chunk (`$02E0`) at the end points at `start`.
+pub fn atari8_startup(platform: &Platform) -> String {
+    format!(
+        ".import __MAIN_START__, __MAIN_LAST__\n.segment \"HEADER\"\n.word $FFFF\n\
+         .segment \"MAINHDR\"\n.word __MAIN_START__\n.word __MAIN_LAST__ - 1\n\
+         .segment \"CODE\"\n.export start\nstart:\n  lda #${:02X}\n  sta rc0\n  lda #${:02X}\n  sta rc1\n  jsr _main\n  sta $0600\nhalt:\n  jmp halt\n\
+         .segment \"TRAILER\"\n.word $02E0, $02E1, start\n.segment \"CODE\"\n",
         platform.soft_stack & 0xFF,
         platform.soft_stack >> 8
     )

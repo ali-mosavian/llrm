@@ -1,8 +1,9 @@
-# NES, NROM cartridge: code in ROM at $8000, so the program's data cannot sit there. STUB: ZP from
-# cc65's nes config ($02), not yet checked against a run.
+# NES, NROM cartridge: code in ROM at $8000, so the program's data cannot sit there. CHECKED BY BUILD ONLY:
+# ZP from cc65's nes config ($02); the image is assembled, linked and its header and vectors are
+# tested, nothing here runs an NES.
 [platform]
 name = "nes"
-status = "stub"
+status = "built"
 load_address = 0x8000
 imag_base = 0x02
 soft_stack = 0x0700
