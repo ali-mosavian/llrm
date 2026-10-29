@@ -16,11 +16,39 @@ fn root() -> &'static Path {
 }
 
 fn sysroot() -> PathBuf {
+    for tool in ["clang", "ld.lld", "qemu-aarch64"] {
+        let found = Command::new("which").arg(tool).output().is_ok_and(|out| out.status.success());
+        assert!(found, "qb_arm64 needs `{tool}` on the PATH");
+    }
     let made = Command::new(root().join("tools/targets/build-arm64-sysroot.sh"))
         .output()
         .expect("tools/targets/build-arm64-sysroot.sh runs");
     assert!(made.status.success(), "no arm64 sysroot: {}", String::from_utf8_lossy(&made.stderr));
     PathBuf::from(String::from_utf8_lossy(&made.stdout).trim())
+}
+
+/// The sysroot's libgcc directory, whatever gcc version the package carried.
+fn gcc_dir(sysroot: &Path) -> PathBuf {
+    let versions = sysroot.join("usr/lib/gcc-cross/aarch64-linux-gnu");
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&versions)
+        .unwrap_or_else(|e| panic!("{}: {e}", versions.display()))
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    found.sort_by_key(|path| path.file_name().and_then(|n| n.to_str()).and_then(|n| n.parse::<u32>().ok()));
+    found.pop().unwrap_or_else(|| panic!("no gcc version under {}", versions.display()))
+}
+
+/// The directory was `.../15` in the source; the runner's Ubuntu 24.04 carries
+/// 14 and every arm64 test failed to link.
+#[test]
+fn the_libgcc_directory_is_the_newest_version_in_the_sysroot() {
+    let root = std::env::temp_dir().join(format!("gcc_dir_arm64_{}", std::process::id()));
+    let versions = root.join("usr/lib/gcc-cross/aarch64-linux-gnu");
+    for version in ["9", "14"] {
+        std::fs::create_dir_all(versions.join(version)).unwrap();
+    }
+    assert_eq!(gcc_dir(&root), versions.join("14"));
+    std::fs::remove_dir_all(&root).ok();
 }
 
 /// Builds `sources` for aarch64 Linux, runs the program under qemu; its
@@ -45,7 +73,7 @@ fn build_and_run_with(
 ) -> String {
     let sysroot = sysroot();
     let libc = sysroot.join("usr/aarch64-linux-gnu");
-    let gcc = sysroot.join("usr/lib/gcc-cross/aarch64-linux-gnu/15");
+    let gcc = gcc_dir(&sysroot);
     let qb = root().join("runtime/qb");
     let mut build = Command::new("clang");
     build.args(["--target=aarch64-linux-gnu", "-fuse-ld=lld", "-static", "-std=gnu11", "-w", "-g", "-pthread"]);
