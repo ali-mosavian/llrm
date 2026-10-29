@@ -3315,12 +3315,10 @@ fn a_port_poll_does_not_reload_a_cell_stored_before_it_at_either_target() {
         let lines: Vec<&str> = text.lines().map(str::trim).collect();
         let poll = lines.iter().position(|one| *one == "in al, dx").expect("the port read");
         // The premise: the masks are known constants at the poll, in the
-        // instruction and not in a cell.
-        // (x ^ 8) & 8 is (x & 8) ^ 8, either order, or (x & 8) == 8 as a `cmp`:
-        // the DAG selector's form.
-        let mut masks = [lines[poll + 1], lines[poll + 2]];
-        masks.sort();
-        assert!(masks == ["and al, 8", "xor al, 8"] || masks == ["and al, 8", "cmp al, 8"], "{target}: {text}");
+        // instruction and not in a cell. `(x ^ 8) & 8` is nonzero when bit 3 is
+        // clear, one `test al, 8`: the pin's code for the same loop (clang
+        // 4b787ddb, i486: `in al, dx; test al, 8; jne`).
+        assert_eq!(lines[poll + 1], "test al, 8", "{target}: {text}");
         assert!(!text.contains("W$D"), "{target}: a cell held the masks: {text}");
     }
 }

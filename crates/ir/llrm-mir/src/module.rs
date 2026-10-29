@@ -1317,6 +1317,14 @@ pub struct Special {
     pub fields: Vec<String>,
 }
 
+/// The metadata of a [`Module`] borrowed apart from its functions, so a pass
+/// can read it while it edits one.
+#[derive(Clone, Copy)]
+pub struct Metadata<'a> {
+    pub nodes: &'a [MetadataNode],
+    pub special: &'a std::collections::BTreeMap<MetadataId, Special>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Module {
     pub context: Context,
@@ -1370,6 +1378,19 @@ impl Module {
         let global = self.globals.iter_mut().find(|one| one.name.as_deref() == Some(name))?;
         match &mut global.kind {
             GlobalKind::Function(function) => Some((&mut self.context, function)),
+            GlobalKind::Variable(_) => None,
+        }
+    }
+
+    /// `function_mut`, with the module's metadata apart from it.
+    pub fn function_and_metadata_mut(
+        &mut self,
+        name: &str,
+    ) -> Option<(&mut Context, &mut Function, Metadata<'_>)> {
+        let Module { context, globals, metadata, special, .. } = self;
+        let global = globals.iter_mut().find(|one| one.name.as_deref() == Some(name))?;
+        match &mut global.kind {
+            GlobalKind::Function(function) => Some((context, function, Metadata { nodes: metadata, special })),
             GlobalKind::Variable(_) => None,
         }
     }

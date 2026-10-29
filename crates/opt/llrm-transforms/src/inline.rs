@@ -158,7 +158,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::{Facts, Inlining};
 use llrm_mir::memory::{Callees, callee};
-use llrm_mir::module::{Function, InstId, Module, Operand, ValueDef};
+use llrm_mir::module::{Function, InstId, Metadata, MetadataId, Module, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::splice::{Spliced, carries, spliced};
@@ -1135,6 +1135,33 @@ fn insert_lifetimes(
     }
 }
 
+/// The `!dbg` location of `inst`.
+fn dbg_of(
+    function: &Function,
+    inst: InstId,
+) -> Option<MetadataId> {
+    function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "dbg").map(|&(_, node)| node)
+}
+
+/// The copies of `body` placed at a call located at `site`: each location
+/// says it was inlined at `site`, and an instruction without one is at
+/// `site` itself (`fixupLineNumbers`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/InlineFunction.cpp#L1706>).
+fn inlined_at(
+    function: &mut Function,
+    body: &Function,
+    copies: &[InstId],
+    site: MetadataId,
+    metadata: Metadata,
+    declared: &mut Declared,
+) {
+    let originals = body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret);
+    for ((_, inst), &copy) in originals.zip(copies) {
+        let node = dbg_of(body, inst).map_or(site, |loc| declared.inlined_at(metadata, loc, site));
+        function.set_metadata(copy, "dbg", Some(node));
+    }
+}
+
 /// `planned` at `call`, then what is inlined into the copy.
 fn executed(
     context: &mut Context,
@@ -1144,8 +1171,10 @@ fn executed(
     planned: &Planned,
     declared: &mut Declared,
     placed: &mut Placed,
+    metadata: Metadata,
 ) -> Result<(), String> {
     let seq = planned.seq;
+    let located = dbg_of(function, call);
     let after = placed.copies.range(seq + 1..).next().map(|(_, &one)| one);
     if let Some(copy) = copy_byval_arguments(context, function, layout, call, &planned.candidate.body, declared, after)?
     {
@@ -1157,6 +1186,9 @@ fn executed(
         _ => llrm_mir::opcode::Tail::None,
     };
     let made = spliced(context, function, call, &planned.candidate.body, anchor);
+    if let Some(site) = located {
+        inlined_at(function, &planned.candidate.body, &made.copies, site, metadata, declared);
+    }
     fold_entry_allocas(context, function, layout, &planned.candidate.body, &made, anchor);
     narrow_tail_calls(function, &made.copies, site);
     placed.lifetimes.push(unmarked_allocas(context, function, layout, &planned.candidate.body, &made, declared));
@@ -1175,7 +1207,7 @@ fn executed(
         placed.stack.insert(seq, copy);
     }
     for (place, nested) in planned.nested.iter().rev() {
-        executed(context, function, layout, copies[*place], nested, declared, placed)?;
+        executed(context, function, layout, copies[*place], nested, declared, placed, metadata)?;
     }
     Ok(())
 }
@@ -1226,6 +1258,7 @@ pub fn expanded_all(
     available: &IndexMap<GlobalId, Candidate>,
     constant: Option<&SparseIdMap<InstId, Candidate>>,
     declared: &mut Declared,
+    metadata: Metadata,
 ) -> Result<usize, String> {
     let calls: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
     let start = (semantic_count(function), frame(context, caller.layout, function));
@@ -1263,7 +1296,7 @@ pub fn expanded_all(
     let mut placed =
         Placed { base: function.entry().and_then(|entry| function.block(entry).first()), ..Placed::default() };
     for (call, planned) in sites.iter().rev() {
-        executed(context, function, caller.layout, *call, planned, declared, &mut placed)?;
+        executed(context, function, caller.layout, *call, planned, declared, &mut placed, metadata)?;
     }
     assert_eq!(end.0, semantic_count(function), "the size kept is not the body's");
     assert_eq!(end.1, frame(context, caller.layout, function), "the stack kept is not the body's");
