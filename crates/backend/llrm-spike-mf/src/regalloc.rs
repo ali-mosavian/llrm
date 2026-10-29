@@ -48,6 +48,18 @@ pub trait Target {
     ) -> bool {
         one == other
     }
+    /// Whether a register worth `weight` (its mentions, each scaled by its loop depth) should take
+    /// `root`, when `first_use` says no other register of the function has taken it yet. A target
+    /// whose registers cost something to use the first time (a callee-saved one is saved and
+    /// restored) answers no for a register that gains less, and that register is spilled
+    /// (`RAGreedy::tryAssignCSRFirstTime`, RegAllocGreedy.cpp#L2188).
+    fn worth_taking(
+        _root: RegId,
+        _first_use: bool,
+        _weight: u64,
+    ) -> bool {
+        true
+    }
     /// The instruction that stores `register` (of `class`) to frame `slot`;
     /// `None` when the target cannot spill.
     fn spill_store(
@@ -595,6 +607,12 @@ impl<T: Target> GraphColoring<T> {
             colour.insert(count + at, *root);
         }
         let mut assigned: Vec<Option<RegId>> = vec![None; count];
+        let mentions = crate::spill::costs(function);
+        let mut weight = vec![0u64; total];
+        for v in 0..count {
+            weight[find(&mut parent, v)] += mentions[v];
+        }
+        let mut taken_roots: Vec<RegId> = Vec::new();
         // the most constrained class first, so a word is not left with what
         // the bytes took
         let mut order: Vec<usize> = (0..count).collect();
@@ -613,10 +631,18 @@ impl<T: Target> GraphColoring<T> {
             }
             if !colour.contains_key(&node) {
                 let taken: HashSet<RegId> = edges[node].iter().filter_map(|n| colour.get(n).copied()).collect();
-                let Some(chosen) = T::candidates(classes[node])
-                    .into_iter()
-                    .find(|root| !taken.iter().any(|one| T::overlaps(*one, *root)))
-                else {
+                let fits = |root: &RegId| !taken.iter().any(|one| T::overlaps(*one, *root));
+                let first_use = |root: &RegId| !taken_roots.iter().any(|one| T::overlaps(*one, *root));
+                let candidates = T::candidates(classes[node]);
+                // a register the spill code made (one short run) cannot be spilled again
+                let chosen = candidates.iter().copied().find(|root| {
+                    fits(root) && (crate::spill::already_minimal(function, v as u32) || T::worth_taking(*root, first_use(root), weight[node]))
+                });
+                if chosen.is_none() && candidates.iter().any(|root| fits(root)) {
+                    let crowd = (0..count as u32).filter(|u| find(&mut parent, *u as usize) == node).collect();
+                    return Err(Uncolourable { vreg: v as u32, crowd, blockers: Vec::new() });
+                }
+                let Some(chosen) = chosen else {
                     let near: Vec<usize> = edges[node].iter().copied().chain([node]).collect();
                     let crowd = (0..count as u32).filter(|u| near.contains(&find(&mut parent, *u as usize))).collect();
                     let wanted = T::candidates(classes[node]);
@@ -632,6 +658,7 @@ impl<T: Target> GraphColoring<T> {
                         .collect();
                     return Err(Uncolourable { vreg: v as u32, crowd, blockers });
                 };
+                taken_roots.push(chosen);
                 colour.insert(node, chosen);
             }
             assigned[v] = Some(T::view(colour[&node], function.classes[v]));
