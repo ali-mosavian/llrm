@@ -13,7 +13,7 @@ fn names(
 /// unnoticed: the registry said joined and the stand-in kept running.
 #[test]
 fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
-    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let on = Applied { options: pipeline::Options { ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     // The rotate slot follows the option, as in the pipeline's own check.
     let rotate = pipeline::Options::default().rotate_slot;
@@ -60,7 +60,7 @@ fn test_a_slot_that_runs_and_is_not_registered_fails() {
 #[test]
 fn test_the_built_lists_satisfy_the_registry_at_every_level() {
     for options in [pipeline::Options::basic(), pipeline::Options::standard(), pipeline::Options::size()] {
-        let on = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+        let on = Applied { options: pipeline::Options { ..options }, ..Applied::default() };
         for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify] {
             let built = names(&on, phase);
             let level = if on.options.pre { parity::Level::O2 } else { parity::Level::O1 };
@@ -75,10 +75,7 @@ fn test_the_built_lists_satisfy_the_registry_at_every_level() {
 /// cleanup slot; only `dead@1242` finds work (48 of 1480 runs).
 #[test]
 fn test_no_dead_pass_follows_instcombine_in_the_simplify_slots() {
-    let on = Applied {
-        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
-        ..Applied::default()
-    };
+    let on = Applied { options: pipeline::Options { ..pipeline::Options::standard() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     let dead: Vec<_> = built.iter().filter(|name| name.starts_with("dead@")).collect();
     assert!(dead.is_empty(), "{dead:?}");
@@ -227,17 +224,9 @@ fn runs_of(applied: &Applied) -> Vec<String> {
 /// repeats a body until nothing changes), clang 11: once per function. Under
 /// the LLVM order it is once per body.
 #[test]
-fn test_the_llvm_order_runs_gvn_once_per_body_and_the_rounds_do_not() {
+fn test_the_llvm_order_runs_gvn_once_per_body() {
     let order = runs_of(&Applied::default());
     assert_eq!(parity::check_run_counts(&order, 3, parity::Level::O2), Ok(()), "{order:?}");
-    let rounds = runs_of(&Applied {
-        options: pipeline::Options { llvm_order: false, ..Default::default() },
-        ..Applied::default()
-    });
-    assert!(
-        parity::check_run_counts(&rounds, 3, parity::Level::O2).is_err(),
-        "premise: the rounds run gvn more than once per body: {rounds:?}"
-    );
 }
 
 /// `LLRM_DEBUG=counts` said nothing of who asked for an analysis under the
@@ -261,8 +250,7 @@ fn test_the_default_order_prints_callers_lines_split_by_joined_slots() {
 /// per body.
 #[test]
 fn test_the_llvm_order_has_no_gvn_at_o1_as_the_pin_has_none() {
-    let o1 =
-        Applied { options: pipeline::Options { llvm_order: true, ..pipeline::Options::basic() }, ..Applied::default() };
+    let o1 = Applied { options: pipeline::Options { ..pipeline::Options::basic() }, ..Applied::default() };
     let lines = runs_of(&o1);
     assert_eq!(parity::check_run_counts(&lines, 3, parity::Level::O1), Ok(()), "{lines:?}");
     let o2 = runs_of(&Applied::default());
@@ -315,10 +303,7 @@ fn test_the_tally_lines_of_the_real_registry_add_up() {
 /// slot was missing from the -O2 list, so its output never reached later slots.
 #[test]
 fn test_bdce_stands_between_gvn_and_the_next_fold() {
-    let on = Applied {
-        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
-        ..Applied::default()
-    };
+    let on = Applied { options: pipeline::Options { ..pipeline::Options::standard() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
     assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("combine@801"), "{built:?}");
@@ -328,7 +313,7 @@ fn test_bdce_stands_between_gvn_and_the_next_fold() {
 /// (`PassBuilderPipelines.cpp` l.815).
 #[test]
 fn test_adce_stands_between_cvp_and_memcpyopt() {
-    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let on = Applied { options: pipeline::Options { ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} not built"));
     assert_eq!((at("cvp@810") + 1, at("adce@815") + 1), (at("adce@815"), at("memcpyopt@818")));
@@ -337,10 +322,7 @@ fn test_adce_stands_between_cvp_and_memcpyopt() {
 /// LLVM runs SCCP after GVN and before BDCE.
 #[test]
 fn test_sccp_stands_between_gvn_and_bdce() {
-    let on = Applied {
-        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
-        ..Applied::default()
-    };
+    let on = Applied { options: pipeline::Options { ..pipeline::Options::standard() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
     assert_eq!((at("gvn@787") + 1, at("sccp@792") + 1), (at("sccp@792"), at("bdce@797")));
@@ -443,7 +425,7 @@ fn test_an_old_slot_that_runs_a_translated_pass_fails() {
 #[test]
 fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
     for options in [pipeline::Options::basic(), pipeline::Options::standard(), pipeline::Options::size()] {
-        let on = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+        let on = Applied { options: pipeline::Options { ..options }, ..Applied::default() };
         for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late] {
             let passes = pipeline::llvm_order(&on, phase);
             let held: Vec<_> = passes.iter().map(|one| (one.name(), one.translations())).collect();
@@ -565,10 +547,7 @@ fn test_moving_a_row_changes_the_recount_and_no_literal() {
 /// translated pass Old in a copy of the registry, and the check names it.
 #[test]
 fn test_marking_a_wired_row_old_is_caught_on_the_real_lists() {
-    let on = Applied {
-        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
-        ..Applied::default()
-    };
+    let on = Applied { options: pipeline::Options { ..pipeline::Options::standard() }, ..Applied::default() };
     let mut checked = 0;
     for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late] {
         let passes = pipeline::llvm_order(&on, phase);
@@ -649,7 +628,7 @@ fn test_a_missing_entry_whose_pass_has_a_source_file_fails() {
 /// 3 or 4 of 65 objects, +5 to +24 B. The slot is gone.
 #[test]
 fn test_the_simplify_list_has_no_decide_after_jump_threading() {
-    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let on = Applied { options: pipeline::Options { ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     assert!(!built.contains(&"decide@809"), "decide@809 runs again: {built:?}");
     assert!(built.contains(&"jumpthreading@809") && built.contains(&"cvp@810"));
