@@ -8,10 +8,11 @@
 //! mode, because the frame register was named `rbp` where the register file
 //! names `ebp`.
 
+mod common;
+
 use std::process::Command;
 
-const IR: &str =
-    "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+const IR: &str = "target datalayout = \"@LAYOUT@\"
 target triple = \"x86_64-unknown-linux-gnu\"
 
 declare i32 @g(i32)
@@ -31,7 +32,7 @@ define i32 @f(i32 %a, i32 %b) {
 fn three_values_across_calls_take_rbx_rbp_r14() {
     let directory = tempfile::tempdir().unwrap();
     let input = directory.path().join("f.ll");
-    std::fs::write(&input, IR).unwrap();
+    std::fs::write(&input, IR.replace("@LAYOUT@", &common::datalayout("x86-m64"))).unwrap();
     let done =
         Command::new(env!("CARGO_BIN_EXE_llrm-llc")).args(["-O2", "-S", "-o", "-"]).arg(&input).output().unwrap();
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));

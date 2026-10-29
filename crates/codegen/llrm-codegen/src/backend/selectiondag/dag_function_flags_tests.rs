@@ -760,3 +760,51 @@ fn a_sub_whose_difference_is_unread_is_a_cmp() {
     assert!(names.iter().any(|n| n == "cmp"), "{names:?}");
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
 }
+
+const QB_THREE_COMPARES: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+define cc 1000 i16 @f(ptr %a, ptr %b, ptr %c, ptr %d, ptr %e, ptr %g) addrspace(1) {
+entry:
+  %r1 = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  %c1 = icmp eq i16 %r1, 0
+  %r2 = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %c, ptr %d)
+  %c2 = icmp eq i16 %r2, 0
+  %r3 = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %e, ptr %g)
+  %c3 = icmp eq i16 %r3, 0
+  %a1 = and i1 %c1, %c2
+  %a2 = and i1 %a1, %c3
+  br i1 %a2, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}
+declare cc 1000 i16 @llrm.qb.B$SCMP(ptr, ptr) addrspace(1)
+";
+
+/// Three string compares anded into one branch: the merged condition exported
+/// the first compares' flags answers to registers, and `Target(24585)` (the
+/// answer's node) reached selection (`CannotSelect`; 4 qb45 conformance
+/// programs, e.g. `a$ = "dog " and b$ = "!" and len(c$) = 8`).
+#[test]
+fn string_compares_anded_into_a_branch_are_selected() {
+    let module = llrm_mir::parse::module(QB_THREE_COMPARES).expect("parses");
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &super::dag_function_tests::Stub { flags: true },
+        segments: &crate::backend::target::BASIC,
+        runtime: true,
+        frame_zeroed: false,
+        hole: 0,
+        facts: None,
+    };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    );
+    assert!(done.is_ok(), "{:?}", done.err().map(|e| e.0));
+}
