@@ -78,6 +78,11 @@ fn main() -> ExitCode {
         let flag = arg.trim_start_matches('-');
         match (arg.starts_with('-') && arg != "-", flag) {
             (true, "S" | "verify-each" | "opaque-pointers" | "enable-new-pm") => {}
+            // Debug checks the passes here do not have; the output is the same.
+            (true, "verify-scev" | "verify-loop-info" | "verify-dom-info" | "indvars-predicate-loops=1") => {}
+            (true, _) if flag.starts_with("simplifycfg-require-and-preserve-domtree=") => {}
+            // SAFETY: single-threaded here, before any pass reads the variable.
+            (true, "indvars-predicate-loops=0") => unsafe { std::env::set_var("LLRM_NO_SCEV_PREDICATE", "1") },
             (true, "disable-output") => quiet = true,
             (true, "o") => output = args.next(),
             (true, "mtriple") => triple = args.next(),

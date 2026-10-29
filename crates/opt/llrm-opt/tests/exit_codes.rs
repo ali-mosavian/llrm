@@ -61,3 +61,15 @@ fn a_module_without_a_triple_is_reduced_with_the_x86_64_cost_model() {
     assert_eq!(code, Some(0), "{err}");
     assert!(!out.contains("shl"), "{out}");
 }
+
+/// The pin's sink-from-preheader.ll runs `indvars -indvars-predicate-loops=0`:
+/// the flag was unknown, so the test exited 77 and was never run.
+#[test]
+fn indvars_predicate_loops_and_the_debug_checks_are_accepted() {
+    for flag in ["-indvars-predicate-loops=0", "-indvars-predicate-loops=1", "-verify-scev", "-verify-loop-info"] {
+        let (code, _, err) = run(&["-S", "-passes=indvars", flag], LOOP);
+        assert_eq!(code, Some(0), "{flag}: {err}");
+    }
+    let (code, _, err) = run(&["-S", "-passes=indvars", "-indvars-no-such-flag"], LOOP);
+    assert_eq!((code, err.trim()), (Some(77), "unsupported: -indvars-no-such-flag"));
+}
