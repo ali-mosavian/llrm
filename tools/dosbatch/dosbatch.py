@@ -177,10 +177,10 @@ WATCOM_ROWS = {16: "x86_16-wat", 32: "x86_32-wat"}
 
 def c_compile(source: Path, obj: Path, target: str, level: str, include: Path, abi: list[str], extra: list[str] = ()) -> tuple[list[str], dict[str, str]]:
     """(command, environment) that builds the C `source` for `target`: llrm-cc over clang, the target a row of its table, not a flag.
-    `include` is unused: the row's -isystem has llrm_os.h."""
+    `include` is searched too: a Nib program's exports are declared there as NAME.h; llrm_os.h is the row's -isystem."""
     if target_bits(target) not in WATCOM_ROWS:
         raise BuildError(f"llrm-cc has no row for {target}")
-    return [str(BIN / "llrm-cc"), level, "-c", *abi, *extra, str(source), "-o", str(obj)], {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
+    return [str(BIN / "llrm-cc"), level, "-c", "-I", str(include), *abi, *extra, str(source), "-o", str(obj)], {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
 
 
 def m_flag(target: str) -> str:
