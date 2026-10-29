@@ -45,12 +45,12 @@ fn i64_add_and_i32_sub_select_as_the_pin_does() {
 /// outgoing area (`LDRWui`, `LDRBBui` of fixed objects), as in the pin; a
 /// float argument is refused, not mis-placed.
 #[test]
-fn stack_arguments_are_loads_and_a_float_is_refused() {
+fn stack_arguments_are_loads_and_a_vector_is_refused() {
     let params = (0..9).map(|i| format!("i32 %a{i}")).chain(["i8 %b".to_owned()]).collect::<Vec<_>>().join(", ");
     let ir = format!("define i32 @f({params}) {{\n  %z = zext i8 %b to i32\n  %r = add i32 %a8, %z\n  ret i32 %r\n}}");
     assert_eq!(selected(&ir).unwrap(), [["LDRBBui", "LDRWui", "ADDWrr", "RET_ReallyLR"]]);
-    let why = selected("define float @f(float %a) {\n  ret float %a\n}").expect_err("refused");
-    assert!(why.contains("no integer"), "{why}");
+    let why = selected("define <4 x i32> @f(<4 x i32> %a) {\n  ret <4 x i32> %a\n}").expect_err("refused");
+    assert!(why.contains("vector"), "{why}");
 }
 
 /// Calls: `ADJCALLSTACKDOWN`, the stack stores, `BL` or `BLR`, `ADJCALLSTACKUP`;
@@ -188,6 +188,58 @@ fn integer_alu_selects_the_pins_opcodes() {
         expected.push("RET_ReallyLR");
         assert_eq!(selected(&ir).unwrap_or_else(|why| panic!("{op}: {why}")), [expected], "{op}");
     }
+}
+
+/// Scalar floats: arithmetic, compares, conversions, loads and stores select the
+/// pin's opcodes; names are its `-stop-after=finalize-isel` for the same IR.
+#[test]
+fn scalar_floats_select_the_pins_opcodes() {
+    let cases: &[(&str, &str, &str, &[&str])] = &[
+        ("float", "float %a, float %b", "fadd float %a, %b", &["FADDSrr"]),
+        ("double", "double %a, double %b", "fmul double %a, %b", &["FMULDrr"]),
+        ("double", "double %a, double %b", "fsub double %a, %b", &["FSUBDrr"]),
+        ("double", "double %a, double %b", "fdiv double %a, %b", &["FDIVDrr"]),
+        ("double", "double %a", "fneg double %a", &["FNEGDr"]),
+        ("double", "i32 %a", "sitofp i32 %a to double", &["SCVTFUWDri"]),
+        ("double", "i64 %a", "uitofp i64 %a to double", &["UCVTFUXDri"]),
+        ("i32", "double %a", "fptosi double %a to i32", &["FCVTZSUWDr"]),
+        ("float", "double %a", "fptrunc double %a to float", &["FCVTSDr"]),
+        ("double", "float %a", "fpext float %a to double", &["FCVTDSr"]),
+        ("double", "ptr %p", "load double, ptr %p", &["LDRDui"]),
+        // the pin's InstrEmitter turns `COPY_TO_REGCLASS` into a cross-class `COPY`
+        ("i32", "float %a", "bitcast float %a to i32", &["COPY_TO_REGCLASS"]),
+    ];
+    for &(ret, params, op, want) in cases {
+        let ir = format!("define {ret} @f({params}) {{\n  %r = {op}\n  ret {ret} %r\n}}");
+        let mut expected: Vec<&str> = want.to_vec();
+        expected.push("RET_ReallyLR");
+        assert_eq!(selected(&ir).unwrap_or_else(|why| panic!("{op}: {why}")), [expected], "{op}");
+    }
+    let store = "define void @f(ptr %p, float %a) {\n  store float %a, ptr %p\n  ret void\n}";
+    assert_eq!(selected(store).unwrap(), [["STRSui", "RET_ReallyLR"]]);
+    let compare = |pred: &str| {
+        let ir = format!("define i32 @f(double %a, double %b) {{\n  %c = fcmp {pred} double %a, %b\n  %r = zext i1 %c to i32\n  ret i32 %r\n}}");
+        selected(&ir).unwrap_or_else(|why| panic!("{pred}: {why}"))
+    };
+    assert_eq!(compare("olt"), [["FCMPDrr", "CSINCWr", "RET_ReallyLR"]]);
+    assert_eq!(compare("one"), [["FCMPDrr", "CSINCWr", "CSINCWr", "RET_ReallyLR"]]);
+    let select = "define double @f(double %a, double %b) {\n  %c = fcmp ogt double %a, %b\n  %r = select i1 %c, double %a, double %b\n  ret double %r\n}";
+    assert_eq!(selected(select).unwrap(), [["FCMPDrr", "FCSELDrrr", "RET_ReallyLR"]]);
+}
+
+/// Float constants: an `fmov` immediate, zero, or two `mov`s and an `fmov`
+/// are selected as the pin does; a constant that needs a pool is refused,
+/// not mis-materialised.
+#[test]
+fn float_constants_are_fmov_immediates_or_mov_pairs_and_a_pool_is_refused() {
+    let add = |ty: &str, constant: &str| {
+        selected(&format!("define {ty} @f({ty} %a) {{\n  %r = fadd {ty} %a, {constant}\n  ret {ty} %r\n}}"))
+    };
+    assert_eq!(add("double", "4.0").unwrap(), [["FMOVDi", "FADDDrr", "RET_ReallyLR"]]);
+    assert_eq!(add("double", "0.0").unwrap(), [["FMOVD0", "FADDDrr", "RET_ReallyLR"]]);
+    assert_eq!(add("float", "0x3FB99999A0000000").unwrap(), [["MOVi32imm", "COPY_TO_REGCLASS", "FADDSrr", "RET_ReallyLR"]]);
+    let why = add("double", "3.14159").expect_err("a pool constant is refused");
+    assert!(why.contains("ConstantPool"), "{why}");
 }
 
 mod emitted {

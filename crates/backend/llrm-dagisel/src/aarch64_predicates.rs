@@ -4,11 +4,10 @@
 //! ones are re-exported.
 //!
 //! DEVIATE: [`never`] stands for a predicate whose query the [`Dag`] lacks (an
-//! atomic ordering, an indexed store, `ComputeNumSignBits`, a floating-point
-//! immediate encoding, a memory intrinsic's type, `isWorthFoldingALU`): the
+//! atomic ordering, an indexed store, `ComputeNumSignBits`, a memory intrinsic's type, `isWorthFoldingALU`): the
 //! patterns that name it are not selected and the block is refused, never
 //! mis-selected. Reason: loads and stores of the scalar subset need none.
-//! Exit: with the atomics (`FEAT-atomics`) and the float immediates.
+//! Exit: with the atomics (`FEAT-atomics`).
 
 pub use crate::predicates::*;
 
@@ -20,6 +19,16 @@ type Args<'a, D, H> = (&'a D, &'a H, SDValue);
 
 pub fn never<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
     false
+}
+
+/// `fpimm32`: `getFP32Imm(Imm) != -1`.
+pub fn fp_imm_fmov32<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+    dag.fp_bits(v).is_some_and(|bits| hooks.fp_imm_code(bits, false).is_some())
+}
+
+/// `fpimm64`: `getFP64Imm(Imm) != -1`.
+pub fn fp_imm_fmov64<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+    dag.fp_bits(v).is_some_and(|bits| hooks.fp_imm_code(bits, true).is_some())
 }
 
 /// `ConstantSDNode::getSExtValue`.

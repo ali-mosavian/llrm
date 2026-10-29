@@ -135,6 +135,15 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
         }
     }
 
+    fn fp_imm_code(
+        &self,
+        bits: u128,
+        double: bool,
+    ) -> Option<u8> {
+        let value = if double { f64::from_bits(bits as u64) } else { f64::from(f32::from_bits(bits as u32)) };
+        crate::mc::immediate::fp_immediate(value)
+    }
+
     /// `RunSDNodeXForm`: `XFORMS` has each body.
     fn run_xform(
         &mut self,
@@ -144,6 +153,17 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
     ) -> SDValue {
         let n = || addr::zext(dag, value).expect("an xform of a constant");
         let signed = || dag.constant(value).expect("an xform of a constant");
+        // `fpimm32XForm`, `fpimm64XForm`: the 8-bit code; `bitcast_fpimm_to_i32`/`i64`: the bits.
+        if matches!(xform, 34 | 35 | 38 | 39) {
+            let bits = dag.fp_bits(value).expect("an xform of a float constant");
+            let code = || i64::from(<Self as Hooks<D>>::fp_imm_code(self, bits, xform == 35).expect("a float immediate the predicate accepted"));
+            let (constant, vt) = match xform {
+                34 | 35 => (code(), mvt::i32),
+                38 => (bits as u32 as i64, mvt::i32),
+                _ => (bits as u64 as i64, mvt::i64),
+            };
+            return dag.target_constant(constant, vt);
+        }
         let (constant, vt) = match xform {
             // `V`: the operand as it is.
             2 | 29 | 31 => return value,

@@ -13,7 +13,9 @@
 //! mask, glue`, `CALLSEQ_END` and a `CopyFromReg` of each result. A return is
 //! `RET_GLUE chain, registers.., glue`.
 //!
-//! DEVIATE: not translated are floats and vectors, `sret` (`x8`), HFAs,
+//! A float part takes `s0`..`s7`/`d0`..`d7` apart from the integer registers, or 4/8 bytes of stack.
+//!
+//! DEVIATE: not translated are `f16`/`fp128` and vectors, `sret` (`x8`), HFAs,
 //! `byval`, varargs, tail calls and a callee reached through the GOT; `accepts`
 //! refuses what it can see. Reason: the integer calls come first. Exit: B3.
 //!
@@ -22,7 +24,7 @@
 //! `LowerFormalArguments`, `LowerReturn`; `AArch64CallingConvention.td`.
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
-use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::target_calling::{FixedObject, In, LiveIn, Out, Site, TargetCalling};
 use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_sdag::actions::LoadExt;
@@ -39,12 +41,20 @@ pub const CALL: u16 = llrm_dagisel::generated::aarch64::ids::isd::CALL;
 const X: [RegId; 8] = [reg::X0, reg::X1, reg::X2, reg::X3, reg::X4, reg::X5, reg::X6, reg::X7];
 const W: [RegId; 8] = [reg::W0, reg::W1, reg::W2, reg::W3, reg::W4, reg::W5, reg::W6, reg::W7];
 
+const S: [RegId; 8] = [reg::S0, reg::S1, reg::S2, reg::S3, reg::S4, reg::S5, reg::S6, reg::S7];
+const D: [RegId; 8] = [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7];
+
 /// The register part `at` of type `vt` is in.
 fn register(
     at: usize,
     vt: EVT,
 ) -> RegId {
-    if vt == EVT::I32 { W[at] } else { X[at] }
+    match vt {
+        EVT::I32 => W[at],
+        EVT::Simple(MVT::F32) => S[at],
+        EVT::Simple(MVT::F64) => D[at],
+        _ => X[at],
+    }
 }
 
 /// Where `CC_AArch64_DarwinPCS` puts a part.
@@ -61,10 +71,20 @@ type Part = (EVT, EVT, bool);
 
 /// The location of each part, and the bytes of stack they take.
 fn place(parts: &[Part]) -> (Vec<Location>, u64) {
-    let (mut next, mut stack) = (0, 0u64);
+    let (mut next, mut next_float, mut stack) = (0, 0, 0u64);
     let locations = parts
         .iter()
         .map(|&(vt, arg_vt, split)| {
+            if vt.is_floating_point() {
+                if next_float < 8 {
+                    next_float += 1;
+                    return Location::Register(register(next_float - 1, vt));
+                }
+                let bytes = vt.size_in_bits() / 8;
+                let offset = stack.next_multiple_of(u64::from(bytes));
+                stack = offset + u64::from(bytes);
+                return Location::Stack { offset: offset as i64, bytes };
+            }
             // The half of a split `i128` leaves `x7` alone; on the stack it is 8 bytes aligned to 16 and
             // shadows `x7`.
             let registers = if split && vt == EVT::I64 { 7 } else { 8 };
@@ -115,14 +135,14 @@ impl TargetCalling for Aarch64Calling {
         outs: &[Out],
         ins: &[In],
     ) -> Result<(), &'static str> {
-        let integer = |vt: EVT| vt == EVT::I32 || vt == EVT::I64;
+        let integer = |vt: EVT| matches!(vt, EVT::I32 | EVT::I64 | EVT::Simple(MVT::F32 | MVT::F64));
         let known = |arg_vt: EVT, split: bool| {
-            if split { arg_vt == EVT::integer(128) } else { arg_vt.is_integer() && arg_vt.size_in_bits() <= 64 }
+            if split { arg_vt == EVT::integer(128) } else { arg_vt.size_in_bits() <= 64 && (arg_vt.is_integer() || arg_vt.is_floating_point()) }
         };
         let outs: Vec<Part> = outs.iter().map(|o| (dag.value_type(o.value), o.arg_vt, o.split)).collect();
         let ins: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split)).collect();
         if !outs.iter().chain(&ins).all(|&(vt, arg_vt, split)| integer(vt) && known(arg_vt, split)) {
-            return Err("an arm64 argument or result that is no integer");
+            return Err("an arm64 argument or result that is no integer or float");
         }
         // A result is in registers.
         let (outs_in_registers, ins_in_registers) = (place(&outs).0.iter().all(is_register), place(&ins).0.iter().all(is_register));

@@ -53,6 +53,10 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::Xor => super::lowering::lower_xor(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
+            ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
+            ISD::FpToSInt | ISD::FpToUInt => super::lowering::lower_fp_to_int(dag, node),
+            ISD::FpExtend => super::lowering::lower_fp_extend(dag, node),
+            ISD::FpRound => super::lowering::lower_fp_round(dag, node),
             _ => None,
         };
         if lowered.is_some() {
@@ -140,7 +144,8 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     globals: &Globals,
 ) -> Result<Vec<Unit>, Refusal> {
-    let tli = TargetLowering::aarch64(Aarch64Features::default());
+    let mut tli = TargetLowering::aarch64(Aarch64Features::default());
+    tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone() };
     let legal = legalized_with(dag, &tli, &mut lowering, None);
     // The reason the legalizer stopped is the Custom operation it could not lower.

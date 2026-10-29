@@ -13,6 +13,19 @@ int64_t call_many(int64_t);
 int64_t take_many(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, signed char, int);
 int twice(int);
 int indirect(int (*)(int), int);
+double fops(double, double);
+int fcmps(double, double);
+double fmax_(double, double) __asm__("_fmaxd");
+double convert(int, int64_t, float);
+double sum_array(const double *, int);
+void scale(float *, float);
+double fcalls(double, int);
+int fbits(float);
+
+double c_fmix(int n, double a, float f, int64_t i, double d, double e, double g, double h, double j, double k, double l, float m, signed char c) {
+  return n + 2 * a + 3 * f + 4 * i + 5 * d + 6 * e + 7 * g + 8 * h + 9 * j + 10 * k + 11 * l + 12 * m + 13 * c;
+}
+float c_half(float x) { return x * 0.5f; }
 
 int64_t c_many(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g, int64_t h, int64_t i, signed char j, int k) {
   return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h + 9 * i + 10 * j + 11 * k;
@@ -81,6 +94,45 @@ int main(void) {
     int r = 2 * x + 1, s = 2 * r + 1;
     if (twice(x) != r + s + x) { printf("twice(%d)\n", x); bad++; }
     if (indirect(c_twice, x) != r) { printf("indirect(%d)\n", x); bad++; }
+  }
+  {
+    double fv[] = {0.0, 1.5, -2.25, 1e10, -3.0, 0.1};
+    int nf = sizeof fv / sizeof *fv;
+    double nan = __builtin_nan("");
+    for (int i = 0; i < nf + 1; i++)
+      for (int j = 0; j < nf + 1; j++) {
+        double a = i < nf ? fv[i] : nan, b = j < nf ? fv[j] : nan;
+        if (j < nf && fops(a, fv[j] == 0 ? 1 : b) != -(((a + (fv[j] == 0 ? 1 : b)) * (a - (fv[j] == 0 ? 1 : b))) / (fv[j] == 0 ? 1 : b)) && a == a) { printf("fops(%g,%g)\n", a, b); bad++; }
+        int want = (a < b) | (a <= b) << 1 | (a > b) << 2 | (a >= b) << 3 | (a == b) << 4 | (a < b || a > b) << 5 |
+                   (a == b || a != a || b != b) << 6 | (a != b) << 7 | (a != a || b != b) << 8 | (a == a && b == b) << 9 |
+                   (!(a >= b)) << 10 | (!(a < b)) << 11;
+        if (fcmps(a, b) != want) { printf("fcmps(%g,%g)=%x want %x\n", a, b, fcmps(a, b), want); bad++; }
+        double m = a > b ? a : b;
+        double got = fmax_(a, b);
+        if (!(got == m || (got != got && m != m))) { printf("fmax(%g,%g)\n", a, b); bad++; }
+      }
+    float fl = 2.5f;
+    for (int a = -5; a < 6; a++) {
+      double c = convert(a, 1000000007LL * a, fl);
+      float t = (float)((double)a + (double)(uint64_t)(1000000007LL * a) + (double)fl);
+      if (c != (double)(int)(double)t) { printf("convert(%d)=%g\n", a, c); bad++; }
+    }
+    double arr[] = {1.5, 2.5, -4.0, 8.25, 0.125};
+    if (sum_array(arr, 5) != 8.375) { printf("sum_array\n"); bad++; }
+    float cell = 3.0f;
+    scale(&cell, 1.5f);
+    if (cell != 4.5f) { printf("scale\n"); bad++; }
+    for (int n = -3; n < 4; n++) {
+      double a = 0.75 * n;
+      float g = c_half((float)n);
+      double r = c_fmix(n, a, g, 7, a, a, a, a, a, a, a, g, 5);
+      if (fcalls(a, n) != r + a) { printf("fcalls(%d)\n", n); bad++; }
+    }
+    float bf[] = {0.0f, 1.0f, -2.5f};
+    for (int i = 0; i < 3; i++) {
+      int bits; __builtin_memcpy(&bits, &bf[i], 4);
+      if (fbits(bf[i]) != bits) { printf("fbits\n"); bad++; }
+    }
   }
   if (bad) printf("%d bad\n", bad);
   return bad != 0;

@@ -780,6 +780,15 @@ impl Dag for DagisAdapter<'_> {
             _ => false,
         }
     }
+    fn fp_bits(
+        &self,
+        value: PinValue,
+    ) -> Option<u128> {
+        match self.dag.node(ours(value)).data {
+            NodeData::ConstFp { bits } => Some(bits),
+            _ => None,
+        }
+    }
     fn fp_class(
         &self,
         value: PinValue,
