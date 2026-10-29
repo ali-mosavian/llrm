@@ -1,10 +1,12 @@
 # NES, NROM cartridge: code in ROM at $8000, so the program's data cannot sit there. CHECKED BY BUILD ONLY:
 # ZP from cc65's nes config ($02); the image is assembled, linked and its header and vectors are
 # tested, nothing here runs an NES.
+# zero_page = 26: cc65's own ZP segment for this target is $0002 size $001A (/usr/share/cc65/cfg/nes.cfg:5); the program must assume: NMI and IRQ handlers (`rti` stubs here) use no zero page.
 [platform]
 name = "nes"
 status = "built"
 load_address = 0x8000
 imag_base = 0x02
 zero_page = 26
+cc65_cfg = "nes.cfg"
 soft_stack = 0x0700
