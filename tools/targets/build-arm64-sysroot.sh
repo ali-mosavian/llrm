@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Unpacks Ubuntu's arm64 cross libc and libgcc into ~/.cache/llrm-arm64-sysroot (ARM64_SYSROOT overrides) so that
-# clang and lld build static arm64 Linux programs that qemu-aarch64 runs. No root: apt-get download and dpkg -x.
-# Prints the sysroot's root. Needs clang, ld.lld and qemu-aarch64 on the path.
+# llrm-cc (the arm64-glibc row) builds static arm64 Linux programs that qemu-aarch64 runs. No root: apt-get download and dpkg -x.
+# Prints the sysroot's root. Needs ld.lld and qemu-aarch64 on the path.
 set -euo pipefail
 
 # The newest libgcc-N-dev-arm64-cross among the package names on stdin; the runner's Ubuntu may not carry 15.
