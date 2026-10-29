@@ -81,3 +81,11 @@ fn a_step_whose_a_is_read_is_kept() {
     let out = opt("f:\n  clc\n  lda rc3\n  adc #1\n  sta rc3\n  rts\n");
     assert!(out.contains("adc #1"), "{out}");
 }
+
+/// A store of the value a register already holds goes unless a call follows (the call may read it
+/// as an argument); a compare nobody reads goes (`max8` kept the first `cmp` of a redone pair).
+#[test]
+fn a_self_copy_and_a_dead_compare_go() {
+    let out = opt("f:\n  lda rc2\n  sta rc2\n  lda rc3\n  cmp rc4\n  lda rc2\n  rts\n");
+    assert_eq!(lines(&out), ["f:", "lda rc2", "rts"]);
+}

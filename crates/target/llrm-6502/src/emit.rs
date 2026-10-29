@@ -251,6 +251,17 @@ pub fn expand(
             let lo = zero_page_pointer(&mut out, &lo, &hi);
             writeln!(out, "  ldy #{off}\n  lda {sl}\n  sta ({lo}),y\n  iny\n  lda {sh}\n  sta ({lo}),y").unwrap();
         }
+        op::LDAX | op::STAX => {
+            let load = inst.opcode == op::LDAX;
+            let (value, symbol, index) = if load { (&o[0], &o[1], &o[2]) } else { (&o[0], &o[1], &o[2]) };
+            let Operand::Label(symbol) = symbol else { return Err(format!("an indexed access takes a symbol, not {symbol:?}")) };
+            let (value, index) = (reg(value)?, reg(index)?);
+            if load {
+                writeln!(out, "  ldx {index}\n  lda {symbol},x\n  sta {value}").unwrap();
+            } else {
+                writeln!(out, "  ldx {index}\n  lda {value}\n  sta {symbol},x").unwrap();
+            }
+        }
         op::STZP => {
             let ((lo, hi), off) = (word(&o[0])?, imm(&o[1])?);
             let lo = zero_page_pointer(&mut out, &lo, &hi);

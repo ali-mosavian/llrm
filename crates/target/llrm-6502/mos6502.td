@@ -136,6 +136,13 @@ let mayLoad = 1 in {
   def LDP8 : MOSInst<(outs Imag8:$d), (ins memri:$p), "ldp $d, ($p)", [(set i8:$d, (load MOSAddr:$p))]>;
   def LDP16 : MOSInst<(outs Imag16:$d), (ins memri:$p), "ldp16 $d, ($p)", [(set i16:$d, (load MOSAddr:$p))]>;
 }
+// A global indexed by a byte: LDX i; LDA g,X. The address is the symbol plus the zero-extended index.
+def absx : Operand<i16> { let MIOperandInfo = (ops i16imm, Imag8); }
+def MOSAbsX : ComplexPattern<i16, 2, "SelectAbsX", [], []>;
+let mayLoad = 1, AddedComplexity = 10 in
+  def LDAX : MOSInst<(outs Imag8:$d), (ins absx:$a), "ldax $d, $a", [(set i8:$d, (load MOSAbsX:$a))]>;
+let mayStore = 1, AddedComplexity = 10 in
+  def STAX : MOSInst<(outs), (ins Imag8:$s, absx:$a), "stax $s, $a", [(store i8:$s, MOSAbsX:$a)]>;
 let mayStore = 1 in {
   def STP8 : MOSInst<(outs), (ins Imag8:$s, memri:$p), "stp $s, ($p)", [(store i8:$s, MOSAddr:$p)]>;
   def STP16 : MOSInst<(outs), (ins Imag16:$s, memri:$p), "stp16 $s, ($p)", [(store i16:$s, MOSAddr:$p)]>;

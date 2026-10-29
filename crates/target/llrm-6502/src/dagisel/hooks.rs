@@ -12,7 +12,7 @@ use llrm_dagisel::matcher::Vt;
 use llrm_dagisel::x86_addr::AddrDag;
 use llrm_dagisel::x86_hooks::find_non_imm_use;
 
-use super::generated::{instrinfo, mos_mos6502, mos_w65c02};
+use super::generated::{ids::isd as own, instrinfo, mos_mos6502, mos_w65c02};
 
 /// The CPUs the tables are generated for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +69,32 @@ fn select_indirect<D: Dag>(
     results.push((offset, None));
 }
 
+/// `SelectAbsX`: `(add (wrapper global), (zext i8 index))` as the symbol and the byte index, either
+/// operand order.
+fn select_absx<D: Dag>(
+    dag: &mut D,
+    value: SDValue,
+    results: &mut Vec<(SDValue, Option<u32>)>,
+) -> bool {
+    if dag.opcode(value.node) != isd::ADD {
+        return false;
+    }
+    let operands = [dag.operand(value.node, 0), dag.operand(value.node, 1)];
+    for (wrapper, extend) in [(operands[0], operands[1]), (operands[1], operands[0])] {
+        if dag.opcode(wrapper.node) != own::WRAPPER || dag.opcode(extend.node) != isd::ZERO_EXTEND {
+            continue;
+        }
+        let symbol = dag.operand(wrapper.node, 0);
+        let index = dag.operand(extend.node, 0);
+        if dag.opcode(symbol.node) == isd::TargetGlobalAddress && dag.value_type(index) == mvt::i8 {
+            results.push((symbol, None));
+            results.push((index, None));
+            return true;
+        }
+    }
+    false
+}
+
 impl<D: AddrDag> Hooks<D> for MosHooks {
     fn pointer_type(&self) -> Vt {
         mvt::i16
@@ -105,9 +131,14 @@ impl<D: AddrDag> Hooks<D> for MosHooks {
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool {
-        assert_eq!(pattern, 0, "SelectIndirect is the only complex pattern");
-        select_indirect(dag, value, results);
-        true
+        match pattern {
+            0 => {
+                select_indirect(dag, value, results);
+                true
+            }
+            1 => select_absx(dag, value, results),
+            _ => unreachable!("the table has two complex patterns"),
+        }
     }
 
     /// The one transform of the table is `to_tframeindex`.

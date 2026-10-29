@@ -296,7 +296,7 @@ fn pure(
     op: &str,
     arg: &str,
 ) -> bool {
-    matches!(op, "lda" | "ldx" | "ldy" | "tax" | "tay" | "txa" | "tya") && !arg.contains('(')
+    matches!(op, "lda" | "ldx" | "ldy" | "tax" | "tay" | "txa" | "tya" | "cmp" | "cpx" | "cpy") && !arg.contains('(')
 }
 
 /// One instruction's liveness, over the whole function.
@@ -461,12 +461,28 @@ impl Values {
     }
 }
 
+/// A `jsr` follows `at` before the block ends.
+fn call_ahead(
+    lines: &[Line],
+    at: usize,
+) -> bool {
+    for line in &lines[at + 1..] {
+        match line {
+            Line::Label(_) => return false,
+            Line::Ins(op, _) if op == "jsr" => return true,
+            Line::Ins(op, _) if ends_block(op) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Redundant loads out or turned into transfers, redundant stores out. Per block: a label forgets.
 fn track_values(lines: &mut Vec<Line>) -> bool {
     let mut values = Values::default();
     let mut changed = false;
     let mut out: Vec<Line> = Vec::with_capacity(lines.len());
-    for line in lines.iter() {
+    for (here, line) in lines.iter().enumerate() {
         let Line::Ins(op, arg) = line else {
             if matches!(line, Line::Label(_)) {
                 values.reset();
@@ -536,8 +552,9 @@ fn track_values(lines: &mut Vec<Line>) -> bool {
                 };
                 if let Place::Cell(c) = &p {
                     match values.regs[reg] {
-                        // a store to a physical register stays: it may be a call's argument, which `jsr` reads
-                        Some(v) if values.cells.get(c) == Some(&v) && is_virtual(c) => {
+                        // a store to a physical register stays when a call follows in the block: it may be an
+                        // argument, which `jsr` reads
+                        Some(v) if values.cells.get(c) == Some(&v) && (is_virtual(c) || !call_ahead(lines, here)) => {
                             changed = true;
                             continue;
                         }
