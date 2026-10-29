@@ -1,12 +1,12 @@
-name: tblgen-tree
-description: The pin's llvm-tblgen and source (toolchain/tblgenbuild.sh) that the DAG tables' staleness test regenerates from, restored from the cache or built, and saved under the ref that runs this.
+name: pintools-tree
+description: The pin's llc, opt and llvm-tblgen with its source (toolchain/pintoolsbuild.sh), restored from the cache or built, and saved under the ref that runs this.
 runs:
   using: composite
   steps:
     - id: tree
       shell: bash
       run: |
-        dir=$(sh toolchain/tblgenbuild.sh --print)
+        dir=$(sh toolchain/pintoolsbuild.sh --print)
         echo "dir=$dir" >> "$GITHUB_OUTPUT"
         echo "name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
     - id: restore
@@ -20,7 +20,7 @@ runs:
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y -qq ninja-build cmake lld
-        sh toolchain/tblgenbuild.sh
+        sh toolchain/pintoolsbuild.sh
     # Saved here, as in clang-tree: a cancelled job's post step saves nothing.
     - if: steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
@@ -28,4 +28,4 @@ runs:
         path: ${{ steps.tree.outputs.dir }}
         key: llrm-${{ steps.tree.outputs.name }}
     - shell: bash
-      run: ${{ steps.tree.outputs.dir }}/build/bin/llvm-tblgen --version | head -3
+      run: ${{ steps.tree.outputs.dir }}/build/bin/llc --version | head -3
