@@ -1716,7 +1716,7 @@ fn a_big_coff_frame_is_probed_before_it_is_allocated() {
     let text = format!(
         "{SYSV}declare i32 @g(ptr)\ndefine i32 @f() \"disable-tail-calls\"=\"true\" {{\n  %a = alloca [20040 x i8]\n  %r = call i32 @g(ptr %a)\n  ret i32 %r\n}}\n"
     );
-    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    let (built, _) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
     let frame_of = |format| {
         let object = llrm_codegen::backend::objbuild::built_in(
             &built,
@@ -1748,7 +1748,7 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     let text = format!(
         "{SYSV}declare i32 @g(i32)\ndefine i32 @f(i32 %x) {{\n  %a = alloca [20040 x i8]\n  %q = getelementptr i8, ptr %a, i64 20000\n  store volatile i8 1, ptr %q\n  %r = tail call i32 @g(i32 %x)\n  ret i32 %r\n}}\n"
     );
-    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O0"]), &text, "f").unwrap();
+    let (built, _) = compiled(&flags(&["-m64", "-O0"]), &text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     let jmp = lines.iter().position(|line| line.starts_with("jmp ")).unwrap_or_else(|| panic!("{listing}"));
@@ -1763,7 +1763,7 @@ fn the_declared_win64_prologue_is_what_the_code_bytes_say() {
     let text = format!(
         "{SYSV}declare i32 @g(i32)\ndefine i32 @f(i32 %a, i32 %b) \"disable-tail-calls\"=\"true\" {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @g(i32 %b)\n  %s = add i32 %x, %y\n  %t = add i32 %s, %a\n  ret i32 %t\n}}\n"
     );
-    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    let (built, _) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
     let object =
         llrm_codegen::backend::objbuild::built(&built, "f.ll", llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
             .unwrap();
