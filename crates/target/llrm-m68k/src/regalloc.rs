@@ -39,7 +39,15 @@ impl Target for M68kRegisters {
         match class {
             Class::Dr8 | Class::Dr16 | Class::Dr32 => DATA.to_vec(),
             Class::Ar32 => ADDRESS.to_vec(),
-            Class::Xr32 => DATA.iter().chain(&ADDRESS).copied().collect(),
+            // the registers a call clobbers anyway first, then the saved ones:
+            // a saved register costs a push and a pop (`RegisterClassInfo`
+            // orders the callee-saved last)
+            Class::Xr32 => CALLER_SAVED
+                .iter()
+                .chain(DATA.iter().filter(|one| !CALLER_SAVED.contains(one)))
+                .chain(ADDRESS.iter().filter(|one| !CALLER_SAVED.contains(one)))
+                .copied()
+                .collect(),
         }
     }
 
