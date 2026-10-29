@@ -53,6 +53,8 @@ pub struct PhiUpdate {
     pub phi_block: BlockId,
     pub result: u32,
     pub incoming: u32,
+    /// The phi's width in bits, for a register no node of the block names.
+    pub bits: u32,
 }
 
 /// One block, selected and scheduled.
@@ -111,7 +113,8 @@ pub fn select_function_with(
             };
             let phi_block = function.parent(def).ok_or("a phi outside a block")?;
             let result = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
-            one.phis.push(PhiUpdate { phi_block, result, incoming });
+            let bits = module.context.types.int_bits(function.value(phi).ty).unwrap_or(32);
+            one.phis.push(PhiUpdate { phi_block, result, incoming, bits });
         }
     }
     Ok(selected)
