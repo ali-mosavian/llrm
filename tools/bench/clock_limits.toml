@@ -35,7 +35,6 @@
 "recfloat c -Os" = 50104  # main 47103
 "recsum c -Os" = 82039  # main 82036
 "ring bas -Os" = 76021  # main 74990
-"ring c -Os" = 80220  # main 68220
 "scroll c -Os" = 687174  # main 668279
 "shellsort c -Os" = 16576  # main 14989
 "textfill bas -Os" = 64169  # main 58189
@@ -67,3 +66,7 @@
 "fib bas -Os" = 1313485  # main 1116464
 "hanoi bas -Os" = 1130452  # main 1040343
 "matmul c -Os" = 21851  # main 20480
+
+
+# class 6: masked scaled-index IV, main steps the IV pre-scaled (tile class): DEBT bench-clocks-ring-mask-iv
+"ring c -Os" = 80220  # main 68220
