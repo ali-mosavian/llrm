@@ -454,13 +454,24 @@ fn tlink_builds_turbo_debuggers_table_from_nib_and_from_optimised_c() {
     let scratch = tempfile::tempdir().unwrap();
     for (short, tool, source, level) in [("nib", "llrm-nib", "known.nib", "-O0"), ("cfast", "llrm-c", "known.c", "-O2")]
     {
-        let made = Command::new(bins.join(tool))
-            .args(["-m16", "-gtd", level])
-            .arg(matrix.join(source))
-            .arg("-o")
-            .arg(scratch.path().join(format!("{short}.obj")))
-            .output()
-            .unwrap();
+        // llrm-c is gone: its command line is served by llrm-cc over the pinned clang.
+        let made = if tool == "llrm-c" {
+            common::cc::llrm_c()
+                .args(["-m16", "-gtd", level])
+                .arg(matrix.join(source))
+                .arg("-o")
+                .arg(scratch.path().join(format!("{short}.obj")))
+                .output()
+                .unwrap()
+        } else {
+            Command::new(bins.join(tool))
+                .args(["-m16", "-gtd", level])
+                .arg(matrix.join(source))
+                .arg("-o")
+                .arg(scratch.path().join(format!("{short}.obj")))
+                .output()
+                .unwrap()
+        };
         assert!(made.status.success(), "{short}: {}", String::from_utf8_lossy(&made.stderr));
     }
     let mut commands = Vec::new();
