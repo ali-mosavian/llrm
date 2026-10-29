@@ -512,13 +512,36 @@ fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i3
     run(&dir.join("o.bin"))
 }
 
+/// The third opinion: the program compiled by the host gcc with the target's widths (`unsigned` is 16
+/// bits, `unsigned long` 32), run, and folded the way `main` folds it. `None` when gcc fails.
+fn native(dir: &Path, source: &str) -> Option<i32> {
+    let text = source
+        .lines()
+        .filter(|line| !line.starts_with("extern const unsigned char"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace("(int)", "(int16_t)")
+        .replace("unsigned long", "uint32_t")
+        .replace("unsigned char", "uint8_t")
+        .replace("signed char", "int8_t")
+        .replace("unsigned", "uint16_t");
+    let program = format!(
+        "#include <stdint.h>\n#include <stdio.h>\nconst uint8_t buf[16]={{3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3}};\nconst uint8_t tab[8]={{2,5,8,11,14,17,20,23}};\n{text}\nint main(void){{ uint16_t r = test(); printf(\"%d\\n\", (r ^ (r >> 8)) & 255); return 0; }}\n"
+    );
+    std::fs::write(dir.join("n.c"), program).ok()?;
+    tool(dir, "gcc", &["-O0", "-fwrapv", "-fpack-struct=1", "-w", "-o", "n.bin", "n.c"]).ok()?;
+    let out = Command::new(dir.join("n.bin")).output().ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
 enum Outcome {
     Agree,
     /// A program the harness could not compare: the reason.
     Skipped(String),
-    /// cc65 -O, ours -O2, and the two cross-checks: cc65 without -O and ours on the unoptimized IR.
-    Mismatch(i32, i32, Option<i32>, Option<i32>),
-    /// cc65 -O disagrees with ours and cc65 without -O agrees with ours: a bug in cc65's optimizer.
+    /// cc65 -O, ours -O2, and the cross-checks: cc65 without -O, ours on the unoptimized IR and the
+    /// host gcc.
+    Mismatch(i32, i32, Option<i32>, Option<i32>, Option<i32>),
+    /// cc65 -O disagrees with ours and the host gcc agrees with ours: a bug in cc65.
     Cc65(i32, i32),
 }
 
@@ -551,10 +574,11 @@ fn check(seed: u64) -> Outcome {
         Ok(Some(code)) => {
             let plain = cc65(&dir, &source, false).ok().flatten();
             let unoptimized = ours(&dir, &source, seed, false).ok().flatten();
-            if plain == Some(code) {
+            let third = native(&dir, &source);
+            if third == Some(code) {
                 Outcome::Cc65(reference, code)
             } else {
-                Outcome::Mismatch(reference, code, plain, unoptimized)
+                Outcome::Mismatch(reference, code, plain, unoptimized, third)
             }
         }
         Ok(None) => Outcome::Skipped("ours hit the cycle cap".into()),
@@ -595,14 +619,14 @@ fn random_programs_agree_with_cc65() {
             }
             Outcome::Cc65(want, got) => {
                 cc65_bugs += 1;
-                println!("seed {seed}: cc65 -O bug: cc65 -O {want}, cc65 plain and ours {got}");
+                println!("seed {seed}: cc65 bug: cc65 -O {want}, ours and the host gcc {got}");
             }
-            Outcome::Mismatch(want, got, plain, unoptimized) => {
+            Outcome::Mismatch(want, got, plain, unoptimized, third) => {
                 bad += 1;
-                println!("seed {seed}: MISMATCH cc65 -O {want}, ours -O2 {got}; cc65 plain {plain:?}, ours unoptimized {unoptimized:?}");
+                println!("seed {seed}: MISMATCH cc65 -O {want}, ours -O2 {got}; cc65 plain {plain:?}, ours unoptimized {unoptimized:?}, host gcc {third:?}");
             }
         }
     }
-    println!("{count} programs from seed {first}: {agree} agree, {bad} mismatch, {cc65_bugs} cc65 -O bugs, {skipped} skipped");
+    println!("{count} programs from seed {first}: {agree} agree, {bad} mismatch, {cc65_bugs} cc65 bugs, {skipped} skipped");
     assert_eq!(bad, 0, "miscompiles; programs kept in target/tmp/difftest/<seed>");
 }
