@@ -84,6 +84,8 @@ impl BuilderArch for Aarch64Arch {
 pub struct Selected {
     pub dag: SelectionDAG,
     pub units: Vec<Unit>,
+    /// The argument registers copied to virtual registers on entry.
+    pub live_ins: Vec<(RegId, u32)>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -91,13 +93,22 @@ pub fn select_function(
     module: &Module,
     name: &str,
 ) -> Result<Vec<Selected>, String> {
+    let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    select_function_in(module, name, &layout)
+}
+
+/// [`select_function`] under the data layout the program was compiled with.
+pub fn select_function_in(
+    module: &Module,
+    name: &str,
+    layout: &DataLayout,
+) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
         .global(id)
         .function()
         .filter(|one| !one.is_declaration())
         .ok_or_else(|| format!("@{name} has no body"))?;
-    let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     // The target's `TargetCalling` places every value; the builder reads none of this.
     let convention = Convention {
         parameters: Vec::new(),
@@ -112,13 +123,13 @@ pub fn select_function(
     let mut info = FunctionLoweringInfo::new(function);
     let mut selected = Vec::new();
     for &block in function.layout() {
-        let mut built = build_block(module, function, &layout, &target, &Aarch64Arch, &convention, &mut info, block)
+        let mut built = build_block(module, function, layout, &target, &Aarch64Arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
         if !built.extra.is_empty() {
             return Err("a switch lowering made blocks".to_owned());
         }
         let units = select_block(&mut built.dag).map_err(|why| format!("{why:?}"))?;
-        selected.push(Selected { dag: built.dag, units });
+        selected.push(Selected { dag: built.dag, units, live_ins: built.live_ins });
     }
     Ok(selected)
 }

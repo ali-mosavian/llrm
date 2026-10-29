@@ -59,3 +59,34 @@ fn a_custom_operation_is_refused_not_expanded() {
     let why = selected(ir).expect_err("refused");
     assert!(why.contains("custom lowering"), "{why}");
 }
+
+mod emitted {
+    use llrm_arm64::dag::emit::emit;
+    use llrm_arm64::dag::function::select_function;
+    use llrm_arm64::mc::inst::{Inst, Width};
+    use llrm_arm64::mc::visit::Reg;
+    use llrm_arm64::mfunc::Op;
+
+    use super::DATALAYOUT;
+
+    fn machine(body: &str) -> llrm_arm64::mfunc::MFunc {
+        let text = format!("target datalayout = \"{DATALAYOUT}\"\n{body}");
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        emit("f", &select_function(&module, "f").expect("selects")).expect("emits")
+    }
+
+    /// `f(a, b) = a + b`: both arguments copied out of `w0`/`w1`, one `add`,
+    /// the result copied into `w0`, a return reading `w0`. The hand selector
+    /// makes the same ops (`isel/call.rs` `copy_in`, `ret`).
+    #[test]
+    fn an_add_is_two_live_in_copies_an_add_a_result_copy_and_a_return() {
+        let mf = machine("define i32 @f(i32 %a, i32 %b) {\n  %r = add i32 %a, %b\n  ret i32 %r\n}");
+        let ops = &mf.blocks[0].ops;
+        assert_eq!(ops.len(), 5, "{ops:?}");
+        assert!(matches!(&ops[0], Op::Copy { src: Reg::Gpr(g), .. } if g.0 == 0), "{ops:?}");
+        assert!(matches!(&ops[1], Op::Copy { src: Reg::Gpr(g), .. } if g.0 == 1), "{ops:?}");
+        assert!(matches!(&ops[2], Op::I(Inst::AddSubShifted { width: Width::W, amount: 0, .. })), "{ops:?}");
+        assert!(matches!(&ops[3], Op::Copy { dst: Reg::Gpr(g), .. } if g.0 == 0), "{ops:?}");
+        assert!(matches!(&ops[4], Op::Return { uses, .. } if uses.len() == 1), "{ops:?}");
+    }
+}
