@@ -2004,12 +2004,23 @@ fn test_far_pointer_loaded_in_one_instruction() {
         ("override", Some(les("les", 71, override_))),
         ("override, segment first", None),
         ("another cell", None),
+        ("one slot", Some(les("les", 71, frame_cell))),
+        ("two slots", None),
+        ("two slots, segment first", None),
     ] {
         let bx = rl(RegId::BX, 2);
         let segment = rl(if variant == "fs" { RegId::FS } else { RegId::ES }, 2);
         let mut low = mem(frame(-8), 2, RegId::BP, 0, 2);
         let mut high = mem(frame(if variant == "another cell" { -4 } else { -6 }), 2, RegId::BP, 0, 2);
         let mut base = RegId::BP;
+        // QCport's d_faces.c -O2 loaded ES from the wrong word: two spill slots
+        // side by side were fused into one dword cell, and the next layout
+        // moved them apart. Only the halves of one slot stay together.
+        if variant.starts_with("one slot") || variant.starts_with("two slots") {
+            let high_home = if variant.starts_with("one slot") { -8 } else { -6 };
+            low.addr = low.addr.map(|addr| addr.in_slot(-8));
+            high.addr = high.addr.map(|addr| addr.in_slot(high_home));
+        }
         if variant.starts_with("through the offset") {
             (low, high) = (mem(None, 2, RegId::BX, 0, 1), mem(None, 2, RegId::BX, 2, 1));
             base = RegId::BX;

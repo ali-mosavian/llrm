@@ -702,14 +702,27 @@ pub fn same_cell(
     logical(one).same_place(&logical(other)) && physical(one) == physical(other) && placed(one) && placed(other)
 }
 
+/// Frame cells of two slots: the next layout moves each slot alone, so a
+/// pair that is a dword now is not one after it.
+fn across_slots(
+    low: &Mem,
+    high: &Mem,
+) -> bool {
+    low.addr.zip(high.addr).is_some_and(|(low, high)| low.slot_home() != high.slot_home())
+}
+
 /// `high` is the word right after `low`, reached the same way. The
 /// displacement may be carried by the address, by the operand's offset,
-/// or by both at once, so either may be the one two further on.
+/// or by both at once, so either may be the one two further on. Both lie
+/// in one slot.
 pub fn next_word(
     _cx: &Cx,
     low: &Mem,
     high: &Mem,
 ) -> bool {
+    if across_slots(low, high) {
+        return false;
+    }
     let same = |cell: &Mem| Mem { addr: cell.addr.map(|addr| ir::Addr { disp: 0, ..addr }), offset: 0, ..cell.clone() };
     if same(low) != same(high) {
         return false;
@@ -782,7 +795,7 @@ pub fn above(
     high: &Mem,
     low: &Mem,
 ) -> bool {
-    high.word_above(low)
+    !across_slots(low, high) && high.word_above(low)
 }
 
 /// Both cells are reached through the same registers.
