@@ -118,3 +118,60 @@ fn a_source_that_lives_on_or_is_read_twice_stays() {
     reschedule_kills::<Two>(&mut lives);
     assert_eq!(names(&lives), ["def", "step", "load"]);
 }
+
+/// A store that takes its value in a fixed register moves with the copy that puts the value there:
+/// the copy and the store are one instruction to the allocator. Without the copy moving too, the
+/// store read a register the copy made after the step and stayed (170 bytes of lz4 on the 6502).
+#[test]
+fn a_store_through_a_fixed_register_takes_its_feeding_copy_along() {
+    use llrm_lir::registers::RegId;
+    use llrm_spike_mf::Reg;
+    let fixed = Reg::Phys(RegId::from_raw(0));
+    let mut put = op("put", vec![Operand::Use(fixed), Operand::Use(v(0))]);
+    put.may_store = true;
+    let mut f = function(vec![
+        op("def", vec![Operand::Def(v(0))]),
+        op("def", vec![Operand::Def(v(3))]),
+        tied_step(1, 0),
+        Inst::copy(fixed, v(3)),
+        put,
+        op("use", vec![Operand::Use(v(1))]),
+    ]);
+    reschedule_kills::<Two>(&mut f);
+    assert_eq!(names(&f), ["def", "def", "copy", "put", "step", "use"]);
+    // a copy into a different register feeds nothing: the store goes alone
+    let other = Reg::Phys(RegId::from_raw(1));
+    let mut put = op("put", vec![Operand::Use(fixed), Operand::Use(v(0))]);
+    put.may_store = true;
+    let mut g = function(vec![
+        op("def", vec![Operand::Def(v(0))]),
+        op("def", vec![Operand::Def(v(3))]),
+        tied_step(1, 0),
+        Inst::copy(other, v(3)),
+        put,
+        op("use", vec![Operand::Use(v(1))]),
+    ]);
+    reschedule_kills::<Two>(&mut g);
+    assert_eq!(names(&g), ["def", "def", "put", "step", "copy", "use"]);
+}
+
+/// The copy that feeds the store's fixed register may itself come through a virtual register.
+#[test]
+fn a_chain_of_copies_into_the_fixed_register_moves_whole() {
+    use llrm_lir::registers::RegId;
+    use llrm_spike_mf::Reg;
+    let fixed = Reg::Phys(RegId::from_raw(0));
+    let mut put = op("put", vec![Operand::Use(fixed), Operand::Use(v(0))]);
+    put.may_store = true;
+    let mut f = function(vec![
+        op("def", vec![Operand::Def(v(0))]),
+        op("def", vec![Operand::Def(v(3))]),
+        tied_step(1, 0),
+        Inst::copy(v(4), v(3)),
+        Inst::copy(fixed, v(4)),
+        put,
+        op("use", vec![Operand::Use(v(1))]),
+    ]);
+    reschedule_kills::<Two>(&mut f);
+    assert_eq!(names(&f), ["def", "def", "copy", "copy", "put", "step", "use"]);
+}
