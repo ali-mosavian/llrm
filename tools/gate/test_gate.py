@@ -760,6 +760,18 @@ def test_a_failed_step_prints_what_its_failing_tests_printed_not_only_the_log_ta
     assert gate.failure_text("everything passed\n") == ""
 
 
+def test_every_failing_pytest_file_shows_its_failure_and_a_log_without_tests_shows_its_head():
+    """Gate 3's python group had nine red files and the log named the failure of the first four: the 80-line cap went to the files that sort
+    first, and tools/test_oracles.py's text never reached CI. A step with no test output (oracle-qcport) showed only the tail of the
+    emulator's logs, not the verdict line above them."""
+    section = lambda name: [f"######## {name}: exit 1", "= FAILURES =", f"___ test_{name} ___", *[f"E   line {i} of {name}" for i in range(40)], "= short test summary info ="]
+    names = [f"tools/test_{c}.py" for c in "abcdefghi"]
+    shown = gate.failure_text("\n".join(line for name in names for line in section(name)))
+    assert all(f"line 0 of {name}" in shown for name in names)
+    head = gate.log_head("QCport built by llrm-c draws differently from the Borland build:\n  a run drew nothing\n" + "\n".join(f"tail {i}" for i in range(100)))
+    assert "a run drew nothing" in head and "tail 99" not in head
+
+
 def test_what_a_runner_lacks_is_a_named_skip_and_what_it_needs_is_installed(tmp_path):
     """GitHub CI was red on every commit: `tests/dwarf.rs` failed for want of Open Watcom's wdump (LLRM_REQUIRE_DWARF made a missing tool a
     failure), the QB45 runtime-library tests errored in LIB.EXE for want of QB45 (now only the tests that compare with BCOM45 need it), and the vsgcc harness could not link gcc -m32 programs
