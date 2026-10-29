@@ -460,7 +460,8 @@ fn main() {
             }
             Outcome::Differs { ours, reference, host } => {
                 differs += 1;
-                println!("seed {seed}: MISMATCH ours {ours}, m68k gcc -O2 {reference}, host gcc -O0 {host}");
+                let note = if host == reference { "" } else { " (the host's long is 64 bits: it may differ without a bug)" };
+                println!("seed {seed}: MISMATCH ours {ours}, m68k gcc -O2 {reference}, host gcc -O0 {host}{note}");
             }
             Outcome::Hang => {
                 hang += 1;
