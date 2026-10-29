@@ -1711,7 +1711,15 @@ fn save_preserved<const STACK: bool>(
     used.sort_by_key(|r| r.index());
     let mut saves = Vec::new();
     let mut restores = Vec::new();
-    for byte in used {
+    // Static slots: each cell goes on the hardware stack, three bytes to save and three to restore
+    // against five and five through a slot of its own (and no RAM). The soft stack keeps its slots:
+    // a recursive function would run the hardware stack out.
+    if !STACK && !used.is_empty() {
+        saves.extend(used.iter().map(|byte| Inst::new(Kind::Op("PUSHC"), vec![Operand::Use(Reg::Phys(*byte))])));
+        let popped = used.iter().rev().map(|byte| Operand::Def(Reg::Phys(*byte))).collect();
+        restores.push(Inst::new(Kind::Op("POPS"), popped));
+    }
+    for byte in used.into_iter().filter(|_| STACK) {
         let slot = slots.iter().map(|(s, _)| s + 1).max().unwrap_or(0);
         slots.push((slot, Class::MEM));
         saves.push(Mos::<STACK>::spill_store(Class::MEM, Reg::Phys(byte), slot).expect("a spill"));
@@ -2028,6 +2036,28 @@ fn emit_with<const STACK: bool>(
                     writeln!(out, "{done}:").unwrap();
                 }
                 // a slot is a byte, or two for a pair
+                // a callee-saved cell on the hardware stack (see `save_preserved`); the restore keeps the
+                // result in `a` safe in `y`, which no result uses
+                (Kind::Op("PUSHC"), _) => {
+                    if a_live {
+                        return Err("a is live where a callee-saved cell is pushed".into());
+                    }
+                    writeln!(out, "  lda {}\n  pha", register_name(regs[0])).unwrap();
+                }
+                (Kind::Op("POPS"), _) => {
+                    if a_live && after[b][i].contains(&reg::Y) {
+                        return Err("a and y are live where callee-saved cells are popped".into());
+                    }
+                    if a_live {
+                        out.push_str("  tay\n");
+                    }
+                    for r in &regs {
+                        writeln!(out, "  pla\n  sta {}", register_name(*r)).unwrap();
+                    }
+                    if a_live {
+                        out.push_str("  tya\n");
+                    }
+                }
                 (Kind::Op(kind @ ("SPILL" | "RELOAD")), [_, Operand::Frame(slot), ..]) if STACK => {
                     let register = regs[0];
                     let lanes: Vec<RegId> =
