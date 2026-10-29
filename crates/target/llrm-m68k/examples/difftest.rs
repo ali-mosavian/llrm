@@ -9,6 +9,8 @@
 //! compiler or the assembler said no: the reason is printed) or `reference` (the host could not build
 //! it). A program that does not agree is kept in `$DIFF_KEEP` (default `$TMPDIR/llrm-m68k-difftest`).
 //!
+//! `$DIFF_CPU=m68020` compiles for the 68020.
+//!
 //! `$LLRM_PIN_CLANG` is the pin's clang; `$GCC_M68K` the unpacked cross toolchain.
 
 use std::path::{Path, PathBuf};
@@ -49,6 +51,14 @@ fn options() -> Options {
         Ok("pinned") => Options::PINNED,
         Ok("mid-end-only") => Options { overlay: false, ..Options::default() },
         _ => Options::default(),
+    }
+}
+
+/// `$DIFF_CPU`: `m68020` selects 68020 code (the instructions the 68000 table hides: `mulu.l`, `divs.l`).
+fn cpu() -> Cpu {
+    match std::env::var("DIFF_CPU").as_deref() {
+        Ok("m68020") => Cpu::M68020,
+        _ => Cpu::M68000,
     }
 }
 
@@ -343,7 +353,7 @@ fn check_text(
     };
     let mut items = Vec::new();
     for name in defined(&ir) {
-        match items_with(&module, &name, Cpu::M68000, options()) {
+        match items_with(&module, &name, cpu(), options()) {
             Ok(code) => items.extend(code),
             Err(why) => return Outcome::Reject(format!("{name}: {why}")),
         }
