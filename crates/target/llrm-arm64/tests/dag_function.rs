@@ -51,29 +51,13 @@ fn a_ninth_argument_is_refused() {
     assert!(why.contains("x0..x7"), "{why}");
 }
 
-/// `AArch64TargetLowering` makes `setcc` Custom, which this slice does not
-/// translate. `NoHooks` would silently expand it; the block is refused instead.
+/// `AArch64TargetLowering` makes `ctpop` Custom, which is not translated.
+/// `NoHooks` would silently expand it; the block is refused instead.
 #[test]
 fn a_custom_operation_is_refused_not_expanded() {
-    let ir = "define i32 @f(i32 %a, i32 %b) {\n  %c = icmp slt i32 %a, %b\n  %r = select i1 %c, i32 %a, i32 %b\n  ret i32 %r\n}";
+    let ir = "declare i32 @llvm.ctpop.i32(i32)\ndefine i32 @f(i32 %a) {\n  %r = call i32 @llvm.ctpop.i32(i32 %a)\n  ret i32 %r\n}";
     let why = selected(ir).expect_err("refused");
     assert!(why.contains("custom lowering"), "{why}");
-}
-
-/// The complex patterns were all-false: an immediate or shifted operand never
-/// folded, so `a + 5` was refused for lack of a constant. Names are the pin's
-/// `-stop-after=finalize-isel` for the same IR.
-#[test]
-fn arithmetic_folds_immediates_and_shifted_registers() {
-    let one = |ret: &str, params: &str, body: &str| {
-        let ir = format!("define {ret} @f({params}) {{\n{body}\n  ret {ret} %r\n}}");
-        selected(&ir).unwrap()
-    };
-    assert_eq!(one("i32", "i32 %a", "  %r = add i32 %a, 5"), [["ADDWri", "RET_ReallyLR"]]);
-    assert_eq!(one("i32", "i32 %a", "  %r = add i32 %a, -5"), [["SUBSWri", "RET_ReallyLR"]]);
-    assert_eq!(one("i64", "i64 %a", "  %r = add i64 %a, 4096"), [["ADDXri", "RET_ReallyLR"]]);
-    let shifted = "  %s = shl i32 %b, 2\n  %r = add i32 %a, %s";
-    assert_eq!(one("i32", "i32 %a, i32 %b", shifted), [["ADDWrs", "RET_ReallyLR"]]);
 }
 
 /// Loads and stores select the pin's addressing forms: scaled offset (`ui`),
@@ -114,6 +98,25 @@ fn global_addresses_select_adrp_movaddr_and_loadgot() {
     assert_eq!(one("i32", "  %v = load i32, ptr @g\n  ret i32 %v"), [["ADRP", "LDRWui", "RET_ReallyLR"]]);
     assert_eq!(one("ptr", "  ret ptr @g"), [["MOVaddr", "RET_ReallyLR"]]);
     assert_eq!(one("i32", "  %v = load i32, ptr @e\n  ret i32 %v"), [["LOADgot", "LDRWui", "RET_ReallyLR"]]);
+}
+
+/// Integer compares and selects: `SUBS`/`ADDS` and `CSEL`/`CSINC` on the flags,
+/// as the pin's `-stop-after=finalize-isel` has them for the same IR.
+#[test]
+fn integer_compares_and_selects_select_subs_and_csel() {
+    let one = |ret: &str, params: &str, body: &str| {
+        selected(&format!("define {ret} @f({params}) {{\n{body}\n}}")).unwrap()
+    };
+    let zext = |pred: &str, rhs: &str| format!("  %c = icmp {pred} i32 %a, {rhs}\n  %r = zext i1 %c to i32\n  ret i32 %r");
+    let want = |first: &'static str, second: &'static str| [vec![first, second, "RET_ReallyLR"]];
+    assert_eq!(one("i32", "i32 %a, i32 %b", &zext("eq", "%b")), want("SUBSWrr", "CSINCWr"));
+    assert_eq!(one("i32", "i32 %a", &zext("ugt", "5")), want("SUBSWri", "CSINCWr"));
+    assert_eq!(one("i32", "i32 %a", &zext("slt", "4097")), want("SUBSWri", "CSINCWr"));
+    assert_eq!(one("i32", "i32 %a", &zext("eq", "-5")), want("ADDSWri", "CSINCWr"));
+    let select = "  %c = icmp slt i32 %a, %b\n  %r = select i1 %c, i32 %a, i32 %b\n  ret i32 %r";
+    assert_eq!(one("i32", "i32 %a, i32 %b", select), want("SUBSWrr", "CSELWr"));
+    let wide = "  %p = icmp sge i64 %a, 0\n  %r = select i1 %p, i64 %b, i64 %c\n  ret i64 %r";
+    assert_eq!(one("i64", "i64 %a, i64 %b, i64 %c", wide), want("ADDSXri", "CSELXr"));
 }
 
 mod emitted {

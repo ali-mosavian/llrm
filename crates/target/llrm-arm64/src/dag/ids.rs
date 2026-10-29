@@ -9,6 +9,10 @@ use crate::REGISTER_INFO;
 /// The pin's names that `registers.regs` spells otherwise.
 const ALIASES: &[(&str, &str)] = &[("FP", "x29"), ("LR", "x30")];
 
+/// The flags register has no line in `registers.regs`; the shared stages
+/// know the one id that stands for it (x86's `EFLAGS`, here `NZCV`).
+const FLAGS: RegId = llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID;
+
 pub struct Aarch64Ids {
     registers: Vec<(u16, RegId)>,
 }
@@ -23,6 +27,7 @@ impl Aarch64Ids {
                 let ours = ALIASES.iter().find(|(from, _)| *from == name).map_or(name, |(_, to)| to);
                 named(&ours.to_ascii_lowercase()).map(|id| (pin, id))
             })
+            .chain([(reg::NZCV, FLAGS)])
             .collect();
         Aarch64Ids { registers }
     }

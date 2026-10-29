@@ -51,3 +51,21 @@ define i32 @gext() { %v = load i32, ptr @e
  ret i32 %v }
 define void @gst(i32 %x) { store i32 %x, ptr getelementptr ([4 x i32], ptr @g, i64 0, i64 1)
  ret void }
+define i32 @eq(i32 %a, i32 %b) { %c = icmp eq i32 %a, %b
+ %r = zext i1 %c to i32
+ ret i32 %r }
+define i32 @slt(i32 %a, i32 %b) { %c = icmp slt i32 %a, %b
+ %r = select i1 %c, i32 %a, i32 %b
+ ret i32 %r }
+define i32 @ugt5(i32 %a) { %c = icmp ugt i32 %a, 5
+ %r = zext i1 %c to i32
+ ret i32 %r }
+define i64 @sge0(i64 %a, i64 %b, i64 %c) { %p = icmp sge i64 %a, 0
+ %r = select i1 %p, i64 %b, i64 %c
+ ret i64 %r }
+define i32 @neg(i32 %a) { %c = icmp eq i32 %a, -5
+ %r = zext i1 %c to i32
+ ret i32 %r }
+define i32 @seleq(i32 %a, i32 %b, i32 %c, i32 %d) { %p = icmp ne i32 %a, %b
+ %r = select i1 %p, i32 %c, i32 %d
+ ret i32 %r }
