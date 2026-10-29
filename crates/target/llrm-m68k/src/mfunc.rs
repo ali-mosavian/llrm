@@ -320,11 +320,23 @@ pub fn emit(
     for (pred, one) in blocks.iter().enumerate() {
         for update in &one.phis {
             let at = blocks.iter().position(|other| other.block == update.phi_block).ok_or("a phi in no block")?;
-            let (Some(&result), Some(&incoming)) =
-                (emitter.builder.get(&update.result), emitter.builder.get(&update.incoming))
-            else {
-                continue;
+            // a value the block never names (a phi read only by other blocks'
+            // phis) has no register yet: it is a register of the phi's width
+            let class = match update.bits {
+                1 | 8 => Class::Dr8,
+                16 => Class::Dr16,
+                _ => Class::Xr32,
             };
+            let register = |emitter: &mut Emitter, number: u32| match emitter.builder.get(&number) {
+                Some(&reg) => reg,
+                None => {
+                    let made = emitter.new_reg(class);
+                    emitter.builder.insert(number, made);
+                    made
+                }
+            };
+            let result = register(&mut emitter, update.result);
+            let incoming = register(&mut emitter, update.incoming);
             let phis = &mut emitter.function.blocks[at].phis;
             match phis.iter_mut().find(|phi| phi.result == result) {
                 Some(phi) => phi.incoming.push((pred, incoming)),

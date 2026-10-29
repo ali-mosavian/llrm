@@ -122,3 +122,36 @@ fn two_selects_on_one_compare_share_one_branch() {
         }
     }
 }
+
+/// A join's phi read only by other phis (the loop's and the exit's) was never
+/// named by a node of its block, so it got no register and its inputs were
+/// dropped: the loop counted nothing and returned its start value.
+#[test]
+fn a_phi_read_only_by_other_phis_keeps_its_inputs() {
+    let ir = "define i32 @f(i32 %n) {
+entry:
+  br label %l
+l:
+  %i = phi i32 [0, %entry], [%i2, %j]
+  %c = phi i32 [0, %entry], [%c2, %j]
+  %odd = and i32 %i, 1
+  %t = icmp eq i32 %odd, 0
+  br i1 %t, label %a, label %j
+a:
+  %c1 = add i32 %c, 1
+  br label %j
+j:
+  %c2 = phi i32 [%c1, %a], [%c, %l]
+  %i2 = add i32 %i, 1
+  %d = icmp eq i32 %i2, %n
+  br i1 %d, label %x, label %l
+x:
+  %r = phi i32 [%c2, %j]
+  ret i32 %r
+}";
+    for options in [Options::default(), Options::PINNED] {
+        if let Some(code) = status(ir, &[7], options) {
+            assert_eq!(code, 4, "{options:?}");
+        }
+    }
+}
