@@ -1,4 +1,4 @@
-# Results, 2026-10-29 13:42 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Results, 2026-10-29 13:47 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 gcc is m68k-linux-gnu-gcc 15 (`-mcpu=68000`), the Debian cross toolchain unpacked without root. Cycles are not
 modelled: "insns" are executed instructions, which price a 68000 `move` and a `muls` the same. "ours" has the
@@ -24,7 +24,7 @@ Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -
 | gcd | 26 | 26 | 28 | 26 | 26 | 17 | 17 | 16 | 17 | 17 | -O2 +1 insns |
 | arrsum | 32 | 22 | 22 | 20 | 20 | 103 | 69 | 69 | 68 | 68 | at or below |
 | arrmax | 38 | 34 | 32 | 32 | 26 | 130 | 115 | 100 | 114 | 97 | -O2 +2 B, -O2 +15 insns, -Os +6 B, -Os +17 insns |
-| countgt | 50 | 44 | 42 | 42 | 42 | 152 | 120 | 123 | 119 | 168 | -O2 +2 B |
+| countgt | 50 | 44 | 42 | 38 | 42 | 152 | 120 | 123 | 134 | 168 | -O2 +2 B |
 | strlen | 18 | 18 | 20 | 18 | 18 | 59 | 59 | 44 | 59 | 57 | -O2 +15 insns, -Os +2 insns |
 | copy | 34 | 34 | 34 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | at or below |
 
@@ -43,7 +43,7 @@ Rows still above a reference: max, fib, gcd, arrmax, countgt, strlen.
 | gcd | 26 | 26 | 26 | 32 | 26 | 26 | 28 | 17 | 17 | 17 | 16 | 17 | 17 | 16 | 42 all |
 | arrsum | 32 | 22 | 20 | 64 | 64 | 20 | 22 | 103 | 69 | 68 | 153 | 153 | 68 | 69 | 80 all |
 | arrmax | 38 | 34 | 32 | 92 | 88 | 26 | 32 | 130 | 115 | 114 | 248 | 235 | 97 | 100 | 9 all |
-| countgt | 50 | 44 | 42 | 86 | 86 | 42 | 42 | 152 | 120 | 119 | 234 | 234 | 168 | 123 | 9 all |
+| countgt | 50 | 44 | 38 | 86 | 86 | 42 | 42 | 152 | 120 | 134 | 234 | 234 | 168 | 123 | 9 all |
 | strlen | 18 | 18 | 18 | 36 | 36 | 18 | 20 | 59 | 59 | 59 | 89 | 89 | 57 | 44 | 13 all |
 | copy | 34 | 34 | 34 | 42 | 42 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | 59 | 59 | 33 all |
 

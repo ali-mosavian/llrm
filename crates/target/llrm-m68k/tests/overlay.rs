@@ -317,6 +317,10 @@ fn a_loaded_value_compared_with_a_register_is_read_by_the_compare() {
     let ours = compiled(ir, Options::default());
     assert!(ours.contains("cmp.l\t(%a0), %d") && !ours.contains("move.l\t(%a0)"), "{ours}");
     assert!(code_size(ir, Options::default()) <= code_size(ir, Options::PINNED));
+    // where size is wanted the argument is read from its slot instead, which
+    // the swap would turn into a register: 4 bytes more on countgt
+    let sized = compiled(ir, Options { size: true, ..Options::default() });
+    assert!(sized.contains("move.l\t(%a0)"), "{sized}");
 }
 
 /// A load read twice is loaded once: swapping would load it again.
