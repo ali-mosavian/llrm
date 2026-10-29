@@ -60,6 +60,31 @@ pub fn run_with(
     run_on("sim6502", name, main, extra).0
 }
 
+/// [`run_with`], and the cycles sim65 counts for the whole program (start-up and exit included).
+pub fn cycles_with(
+    name: &str,
+    main: &str,
+    extra: &str,
+) -> i64 {
+    let platform = Platform::parse(SIM65).expect("sim65 row");
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("rt-cycles-{name}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = format!("{}.export _main\n_main:\n{main}  rts\n{extra}{RUNTIME}", equates(&platform));
+    std::fs::write(dir.join("p.s"), source).unwrap();
+    let built = Command::new("cl65")
+        .args(["-t", "sim6502", "-o"])
+        .arg(dir.join("p.bin"))
+        .arg(dir.join("p.s"))
+        .output()
+        .expect("cl65");
+    assert!(built.status.success(), "cl65: {}", String::from_utf8_lossy(&built.stderr));
+    let out = Command::new("sim65").args(["-c", "-x", "50000000"]).arg(dir.join("p.bin")).output().expect("sim65");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.trim().strip_suffix(" cycles").and_then(|n| n.trim().parse::<i64>().ok()))
+        .expect("a cycle count")
+}
+
 /// [`run_with`] on the cc65 target `target` (`sim6502` or `sim65c02`): the exit
 /// code and the size of the linked binary.
 pub fn run_on(

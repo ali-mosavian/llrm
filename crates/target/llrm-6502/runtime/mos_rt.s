@@ -29,7 +29,6 @@ __mulhi3:                       ; rs1 * rs2 -> A:X
   lda #0
   sta rc6
   sta rc7
-  ldx #16
 @next:
   lsr rc5
   ror rc4
@@ -44,7 +43,8 @@ __mulhi3:                       ; rs1 * rs2 -> A:X
 @skip:
   asl rc2
   rol rc3
-  dex
+  lda rc4                       ; stop when no multiplier bits are left
+  ora rc5
   bne @next
   lda rc6
   ldx rc7
