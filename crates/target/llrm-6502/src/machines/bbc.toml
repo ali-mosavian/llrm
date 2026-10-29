@@ -1,0 +1,7 @@
+# BBC Micro, disc with DFS (PAGE = $1900). STUB: $70..$8F is the zero page the MOS leaves to user
+# programs, so rc0..rc15 fit; not yet checked against a run.
+[platform]
+name = "bbc"
+status = "stub"
+load_address = 0x1900
+imag_base = 0x70

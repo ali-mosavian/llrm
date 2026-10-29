@@ -1,0 +1,7 @@
+# Apple II, DOS 3.3 binary. STUB: values from cc65's apple2 config (ZP at $80, program at $0803), not
+# yet checked against a run.
+[platform]
+name = "apple2"
+status = "stub"
+load_address = 0x0803
+imag_base = 0x80

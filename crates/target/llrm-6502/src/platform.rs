@@ -6,6 +6,16 @@ pub const C64: &str = include_str!("machines/c64.toml");
 pub const C64_LD65: &str = include_str!("machines/c64.cfg");
 pub const SIM65: &str = include_str!("machines/sim65.toml");
 
+/// Every platform row; the stubs are marked `status = "stub"` in their file.
+pub const ROWS: [&str; 6] = [
+    C64,
+    SIM65,
+    include_str!("machines/apple2.toml"),
+    include_str!("machines/atari8.toml"),
+    include_str!("machines/nes.toml"),
+    include_str!("machines/bbc.toml"),
+];
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Platform {
     pub name: String,

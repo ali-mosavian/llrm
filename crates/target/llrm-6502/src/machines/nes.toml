@@ -1,0 +1,7 @@
+# NES, NROM cartridge: code in ROM at $8000, so the program's data cannot sit there. STUB: ZP from
+# cc65's nes config ($02), not yet checked against a run.
+[platform]
+name = "nes"
+status = "stub"
+load_address = 0x8000
+imag_base = 0x02

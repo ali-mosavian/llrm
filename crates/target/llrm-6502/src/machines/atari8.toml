@@ -1,0 +1,7 @@
+# Atari 8-bit, XEX binary. STUB: from cc65's atari config (ZP from $82, program near $2000), not yet
+# checked against a run.
+[platform]
+name = "atari8"
+status = "stub"
+load_address = 0x2000
+imag_base = 0x82
