@@ -54,7 +54,8 @@ pub fn layout_facts(datalayout: &str) -> BTreeMap<String, String> {
     facts
 }
 
-/// The sizes in bytes the C front end lays types out as (`[c]` of the description).
+/// The sizes in bytes the C front end lays types out as (`[c]` of the
+/// description).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CAbi {
     pub int: u32,
@@ -74,15 +75,17 @@ pub struct CAbi {
 #[derive(Clone, Debug, Deserialize)]
 pub struct Target {
     pub triple: String,
-    /// The crate whose description (`crates/target/llrm-NAME`) states the C sizes; `wchar_bytes` and
-    /// `long_double_bytes` are this row's libc's departures from it.
+    /// The crate whose description (`crates/target/llrm-NAME`) states the C
+    /// sizes; `wchar_bytes` and `long_double_bytes` are this row's libc's
+    /// departures from it.
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub wchar_bytes: Option<u32>,
     #[serde(default)]
     pub long_double_bytes: Option<u32>,
-    /// `description`'s sizes with the row's departures applied (filled by `targets`).
+    /// `description`'s sizes with the row's departures applied (filled by
+    /// `targets`).
     #[serde(skip)]
     pub c_abi: Option<CAbi>,
     /// What llrm-llc is told the module's layout is (its target's

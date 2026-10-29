@@ -1,6 +1,8 @@
-//! The C front end lays types out as the target description says (`[c]`), not as its triple's default does: sizeof of
-//! each type through the row's own clang command, against the description plus the row's libc. Needs the clangs
-//! (`LLRM_PIN_CLANG`, `LLRM_CLANG_M16`) and the Open Watcom headers (`LLRM_OW`).
+//! The C front end lays types out as the target description says (`[c]`), not
+//! as its triple's default does: sizeof of each type through the row's own
+//! clang command, against the description plus the row's libc. Needs the clangs
+//! (`LLRM_PIN_CLANG`, `LLRM_CLANG_M16`) and the Open Watcom headers
+//! (`LLRM_OW`).
 
 use std::process::Command;
 
@@ -33,7 +35,9 @@ fn test_every_row_lays_types_out_as_its_description_says() {
     for (name, row) in &table {
         let Some(want) = &row.c_abi else { continue };
         let variable = row.clang_env.as_deref().unwrap_or("LLRM_PIN_CLANG");
-        let Some(clang) = std::env::var_os(variable).filter(|one| !one.is_empty()).or_else(|| std::env::var_os("LLRM_PIN_CLANG")) else {
+        let Some(clang) =
+            std::env::var_os(variable).filter(|one| !one.is_empty()).or_else(|| std::env::var_os("LLRM_PIN_CLANG"))
+        else {
             eprintln!("{name}: skipped, {variable} is not set");
             continue;
         };
