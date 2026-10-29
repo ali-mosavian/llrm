@@ -767,8 +767,8 @@ fn machined_once(
     // spill slots can end on a word, so a 4-aligned frame needs it too: the
     // backend run again aligns the allocas and the frame moved by the hole
     // did not (reserve 286 against 288).
-    let spilled =
-        if frame.align > 1 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
+    let align = frame.align.max(frame.alloca_align);
+    let spilled = if align > 1 { (spilled + align - 1).div_euclid(align) * align } else { spilled };
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(best(first));
     }
@@ -1085,6 +1085,7 @@ fn staged(
         far,
         pops,
         depth,
+        align: alloca_align,
         extents,
         temporaries,
         over_aligned,
@@ -1171,6 +1172,7 @@ fn staged(
     frame.floor = frame.floor.min(-depth);
     frame.align = registers.align.max(registers.slot).max(frame.align);
     frame.hole = hole;
+    frame.alloca_align = alloca_align;
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
     // DEVIATE D14: the pin gives each rounding store and reload its own
