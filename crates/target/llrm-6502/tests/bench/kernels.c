@@ -118,3 +118,31 @@ unsigned lz4(const unsigned char *in, unsigned char *out, unsigned outlen) {
   return out - start;
 }
 #endif
+/* Loops that keep several variables live across the iteration. */
+#ifdef K_xs8
+unsigned char xs8(unsigned char x, unsigned char n) { while (n--) { x ^= x << 3; x ^= x >> 5; x ^= x << 1; } return x; }
+#endif
+#ifdef K_minmax
+unsigned char minmax(const unsigned char *p, unsigned char n) {
+  unsigned char lo = 255, hi = 0, i;
+  for (i = 0; i < n; ++i) { unsigned char v = p[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+  return hi - lo;
+}
+#endif
+#ifdef K_fletcher
+unsigned fletcher(const unsigned char *p, unsigned char n) {
+  unsigned char a = 0, b = 0, i;
+  for (i = 0; i < n; ++i) { a += p[i]; if (a >= 255) a -= 255; b += a; if (b >= 255) b -= 255; }
+  return ((unsigned)b << 8) | a;
+}
+#endif
+#ifdef K_hash16
+unsigned hash16(const char *s) { unsigned h = 5381; while (*s) { h = (h << 5) + h + (unsigned char)*s; ++s; } return h; }
+#endif
+#ifdef K_dotx
+unsigned char dotx(const unsigned char *a, const unsigned char *b, unsigned char n) {
+  unsigned char s = 0, i;
+  for (i = 0; i < n; ++i) s += a[i] ^ b[i];
+  return s;
+}
+#endif
