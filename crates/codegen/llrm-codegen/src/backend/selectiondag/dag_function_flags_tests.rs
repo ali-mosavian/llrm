@@ -788,6 +788,7 @@ fn select_with_flags_answers(text: &str) -> Result<crate::backend::isel::Selecte
         segments: &crate::backend::target::BASIC,
         runtime: true,
         frame_zeroed: false,
+        hole: 0,
         facts: None,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
