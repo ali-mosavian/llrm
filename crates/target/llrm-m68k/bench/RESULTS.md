@@ -9,6 +9,27 @@ from the pin's output.
 columns include theirs). Compare ours with llc, raw with nothing. The mid-end is LSR only, priced by the m68k `Tti`:
 the full -O2 pipeline closed-forms loops into i33 arithmetic the legalizer cannot lower yet.
 
+## Summary: every row against the best reference
+
+| kernel | raw B | ours B | best ref B | raw insns | ours insns | best ref insns | status |
+|---|---|---|---|---|---|---|---|
+| sum | 18 | 18 | 16 (gcc -Os) | 44 | 44 | 43 (gcc -Os) | +2 B, +1 insns |
+| popcount | 26 | 26 | 22 (gcc -O2) | 85 | 85 | 85 (gcc -O2) | +4 B |
+| max | 16 | 16 | 16 (gcc -O2) | 6 | 6 | 5 (gcc -O2) | +1 insns |
+| absdiff | 22 | 22 | 22 (llc -O2) | 7 | 7 | 7 (gcc -O2) | at or below |
+| clamp | 26 | 26 | 26 (gcc -O2) | 9 | 9 | 9 (gcc -O2) | at or below |
+| fib | 28 | 28 | 22 (gcc -Os) | 67 | 67 | 64 (gcc -Os) | +6 B, +3 insns |
+| gcd | 26 | 26 | 26 (gcc -Os) | 17 | 17 | 16 (gcc -O2) | +1 insns |
+| arrsum | 32 | 22 | 20 (gcc -Os) | 103 | 69 | 68 (gcc -Os) | +2 B, +1 insns |
+| arrmax | 38 | 34 | 26 (gcc -Os) | 130 | 115 | 97 (gcc -Os) | +8 B, +18 insns |
+| countgt | 52 | 46 | 42 (gcc -O2) | 168 | 136 | 123 (gcc -O2) | +4 B, +13 insns |
+| strlen | 20 | 22 | 18 (gcc -Os) | 59 | 60 | 44 (gcc -O2) | +4 B, +16 insns |
+| copy | 34 | 34 | 34 (gcc -O2) | 59 | 59 | 59 (gcc -O2) | at or below |
+
+Rows still above the best reference: sum, popcount, max, fib, gcd, arrsum, arrmax, countgt, strlen.
+
+## Full table
+
 | kernel | raw B | ours B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | raw insns | ours insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | sum | 18 | 18 | 46 | 46 | 16 | 18 | 44 | 44 | 48 | 48 | 43 | 44 | 45 all |
