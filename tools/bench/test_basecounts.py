@@ -296,3 +296,21 @@ def test_the_judge_fails_a_run_that_judged_nothing_and_a_program_that_yielded_no
     assert problems == ["COVERAGE sieve: no row was judged (rows skipped: error)"]
     assert bc.coverage(got, base, set())[3] == ["COVERAGE: no row was judged: no program is the same in the base and the head"]
     assert bc.coverage(got, base, {"fib", "edited"})[3] == []
+
+
+def test_a_program_edited_since_the_base_is_judged_against_the_base_compiler_on_its_edited_sources(tmp_path):
+    """jpeg_single and 8 more were left out of the judge (their sources differ from main's): their rows grew 11693 vs 6016 unseen. Now the
+    base compiler measures the head's sources and those counts are the base; a row it cannot build is named, not judged."""
+    base = {FIB: row(100), ("jpeg", "nib", "O2"): row(50)}
+    asked = []
+
+    def measure(names):
+        asked.append(names)
+        return {("jpeg", "nib", "O2"): row(60), ("jpeg", "c", "O2"): {"error": "no front end"}}
+
+    got, same, unbuilt = bc.with_edited(base, {"fib": "a", "jpeg": "old"}, {"fib": "a", "jpeg": "new"}, ["O2"], measure, tmp_path, "t")
+    assert same == {"fib", "jpeg"} and asked == [["jpeg"]] and unbuilt == ["jpeg c -O2"]
+    worse, _, _ = bc.judge({FIB: row(100), ("jpeg", "nib", "O2"): row(70)}, got, [], same)
+    assert worse == [("jpeg nib -O2", "instructions", 60, 70)]
+    bc.with_edited(base, {"jpeg": "old"}, {"jpeg": "new"}, ["O2"], measure, tmp_path, "t")
+    assert asked == [["jpeg"]], "measured once per tree and edit"
