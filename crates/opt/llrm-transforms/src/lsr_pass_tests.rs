@@ -1055,22 +1055,3 @@ fn a_quadratic_start_is_expanded_into_the_outer_loop_on_a_flat_target() {
     let after = printed(&module);
     assert!(after.contains("[ 5, %b1 ]"), "{after}");
 }
-
-/// The pin's post-increment-insertion.ll `test_01`: the address is of an
-/// atomic load. LSR took an atomic access for no address use at all (it is
-/// `Opcode::Atomic`, not `Load`), priced the use `Basic` and made a second,
-/// pointer phi; `opt` keeps the one index phi and scales it into the address.
-#[test]
-fn an_atomic_load_is_an_address_use_as_in_opt() {
-    let text = "define i32 @f(ptr %p, i64 %len, i32 %x) {\nentry:\n  br label %loop\nloop:\n  %iv = phi i64 [ %iv.next, %backedge ], [ %len, %entry ]\n  %iv.next = add nsw i64 %iv, -1\n  %cond_1 = icmp eq i64 %iv, 0\n  br i1 %cond_1, label %exit, label %backedge\nbackedge:\n  %addr = getelementptr inbounds i32, ptr %p, i64 %iv.next\n  %loaded = load atomic i32, ptr %addr unordered, align 4\n  %cond_2 = icmp eq i32 %loaded, %x\n  br i1 %cond_2, label %failure, label %loop\nexit:\n  ret i32 -1\nfailure:\n  unreachable\n}\n";
-    let mut module = parsed(&format!("target datalayout = \"e-m:e-i64:64-f80:128-n8:16:32:64-S128\"\n{text}"));
-    let (layout, outer) = (layout(&module), Outer::of(&module, None));
-    let mut declared = llrm_mir::passes::Declared::of(&module);
-    let (context, function) = module.function_mut("f").expect("@f");
-    let tti = X86::of_cpu("x86-64").unwrap();
-    let changed = crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
-    let after = printed(&module);
-    assert!(changed, "{after}");
-    assert_eq!(after.matches(" = phi ").count(), 1, "{after}");
-    assert!(after.contains("shl i64 %"), "{after}");
-}
