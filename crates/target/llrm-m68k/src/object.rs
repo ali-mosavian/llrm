@@ -139,6 +139,7 @@ pub fn assemble(
                 }
                 order.push(name);
             }
+            Item::Bytes(bytes) => code.extend_from_slice(bytes),
             Item::Inst(one) => {
                 let encoded = encode(one)?;
                 pending.push((code.len(), encoded.clone()));
@@ -212,9 +213,9 @@ pub fn executable(items: &[Item]) -> Result<Vec<u8>, String> {
     put(&mut out, 40, 2); // shentsize
     put(&mut out, 5, 2);
     put(&mut out, 4, 2); // shstrndx
-    // PT_LOAD, R+X, the file from its start
+    // PT_LOAD, R+W+X (data rides in the segment), the file from its start
     let filesz = text_off + code.len() as u32;
-    for word in [1u32, 0, BASE, BASE, filesz, filesz, 5, 0x1000] {
+    for word in [1u32, 0, BASE, BASE, filesz, filesz, 7, 0x1000] {
         put(&mut out, u64::from(word), 4);
     }
     out.extend_from_slice(&code);

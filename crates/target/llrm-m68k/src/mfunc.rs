@@ -290,3 +290,128 @@ pub fn emit(
     }
     Ok(emitter.function)
 }
+
+/// The conditional branch for an `M68k::CondCode`.
+fn branch_for(cond: i64) -> Option<&'static str> {
+    Some(match cond {
+        2 => "Bhi8",
+        3 => "Bls8",
+        4 => "Bcc8",
+        5 => "Bcs8",
+        6 => "Bne8",
+        7 => "Beq8",
+        8 => "Bvc8",
+        9 => "Bvs8",
+        10 => "Bpl8",
+        11 => "Bmi8",
+        12 => "Bge8",
+        13 => "Blt8",
+        14 => "Bgt8",
+        15 => "Ble8",
+        _ => return None,
+    })
+}
+
+fn is_cmov(inst: &Inst) -> bool {
+    matches!(inst.kind, Kind::Op(name) if name.starts_with("CMOV"))
+}
+
+/// A `CMOV`'s result, false value, true value and condition.
+fn cmov_parts(inst: &Inst) -> Result<(Reg, Reg, Reg, i64), String> {
+    let [Operand::Def(result), Operand::Use(on_false), Operand::Use(on_true), Operand::Imm(cond)] = inst.operands[..]
+    else {
+        return Err("a CMOV with unexpected operands".to_owned());
+    };
+    // the node's operands are the false value, then the true one (X86's order)
+    Ok((result, on_false, on_true, cond))
+}
+
+/// `M68kTargetLowering::EmitLoweredSelect`: a run of `CMOV` pseudos on one
+/// condition (or its opposite) becomes one diamond. The block branches to a
+/// new block on the condition; the new block that falls through is empty; the
+/// join holds a phi per `CMOV` and what followed the run. A phi may not read an
+/// earlier phi of the join, so a later `CMOV`'s operand that is an earlier
+/// result is renamed to the value that result has on each path.
+///
+/// DEVIATE: the cascaded case (`CMOV (CMOV F, T, c1), T, c2`) is not
+/// translated. Reason: nothing selected it yet. Exit: when a kernel needs it.
+pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
+    let mut next_id = function.blocks.iter().map(|block| block.id + 1).max().unwrap_or(0);
+    let mut at = 0;
+    while at < function.blocks.len() {
+        let Some(p) = function.blocks[at].insts.iter().position(is_cmov) else {
+            at += 1;
+            continue;
+        };
+        let mut tail = function.blocks[at].insts.split_off(p);
+        let (_, _, _, first) = cmov_parts(&tail[0])?;
+        let same =
+            |inst: &Inst| is_cmov(inst) && cmov_parts(inst).is_ok_and(|(.., cond)| cond == first || cond == first ^ 1);
+        // The run may hold copies between the `CMOV`s (the exports of phi
+        // inputs); they move to the join, which is where their sources are.
+        let mut cmovs: Vec<Inst> = Vec::new();
+        let mut copies: Vec<Inst> = Vec::new();
+        let mut taken = 0;
+        for inst in &tail {
+            let uses_copied = |inst: &Inst| {
+                inst.operands
+                    .iter()
+                    .any(
+                        |operand| matches!(
+                            operand,
+                            Operand::Use(reg) if copies.iter().any(|copy| copy.operands[0] == Operand::Def(*reg))
+                        ),
+                    )
+            };
+            if same(inst) && !uses_copied(inst) {
+                cmovs.push(inst.clone());
+            } else if inst.kind == Kind::Copy {
+                copies.push(inst.clone());
+            } else {
+                break;
+            }
+            taken += 1;
+        }
+        tail.drain(..taken);
+        tail.splice(0..0, copies);
+        let branch = branch_for(first).ok_or_else(|| format!("a CMOV on condition {first}"))?;
+        let mut head_value: HashMap<Reg, Reg> = HashMap::new();
+        let mut other_value: HashMap<Reg, Reg> = HashMap::new();
+        let mut phis = Vec::new();
+        for cmov in &cmovs {
+            let (result, on_false, on_true, cond) = cmov_parts(cmov)?;
+            let (when_true, when_false) = if cond == first { (on_true, on_false) } else { (on_false, on_true) };
+            let on_head = head_value.get(&when_true).copied().unwrap_or(when_true);
+            let on_other = other_value.get(&when_false).copied().unwrap_or(when_false);
+            head_value.insert(result, on_head);
+            other_value.insert(result, on_other);
+            phis.push(Phi { result, incoming: vec![(at, on_head), (at + 1, on_other)] });
+        }
+        let (otherwise, join) = (next_id, next_id + 1);
+        next_id += 2;
+        let mut jump = Inst::new(Kind::Op(branch), vec![Operand::Block(join)]);
+        jump.terminator = true;
+        jump.reads_flags = true;
+        function.blocks[at].insts.push(jump);
+        function.blocks.insert(at + 1, Block { id: otherwise, insts: Vec::new(), phis: Vec::new() });
+        function.blocks.insert(at + 2, Block { id: join, insts: tail, phis });
+        // the join is where control leaves the original block: other phis name
+        // it, and every block after the original moved down by two
+        for (index, block) in function.blocks.iter_mut().enumerate() {
+            if index == at + 2 {
+                continue;
+            }
+            for phi in &mut block.phis {
+                for (pred, _) in &mut phi.incoming {
+                    if *pred == at {
+                        *pred = at + 2;
+                    } else if *pred > at {
+                        *pred += 2;
+                    }
+                }
+            }
+        }
+        at += 1;
+    }
+    Ok(())
+}

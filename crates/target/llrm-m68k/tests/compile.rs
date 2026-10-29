@@ -142,3 +142,14 @@ fn shifts_print_as_llc_does() {
     assert_eq!(shift("ashr i32 %x, 3"), format!("{load}\tasr.l\t#3, %d0\n\trts\n"));
     assert_eq!(shift("shl i32 %x, 9"), "s:\n\tmoveq\t#9, %d1\n\tmove.l\t(4,%sp), %d0\n\tlsl.l\t%d1, %d0\n\trts\n");
 }
+
+/// A select is a diamond: the `CMOV` pseudo of the pin, expanded as
+/// `EmitLoweredSelect` does. Text equal to `llc`, labels aside.
+#[test]
+fn selects_print_as_llc_does() {
+    let max = "define i32 @m(i32 %a, i32 %b) {\n  %c = icmp sgt i32 %a, %b\n  %r = select i1 %c, i32 %a, i32 %b\n  ret i32 %r\n}";
+    assert_eq!(
+        compiled(max, "m"),
+        "m:\n\tmove.l\t(4,%sp), %d0\n\tmove.l\t(8,%sp), %d1\n\tcmp.l\t%d1, %d0\n\tbgt\t.LBB0_2\n\tmove.l\t%d1, %d0\n.LBB0_2:\n\trts\n"
+    );
+}

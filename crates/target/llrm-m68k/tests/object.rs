@@ -46,7 +46,7 @@ fn a_call_encodes_as_llvm_mc_does() {
         .iter()
         .filter_map(|item| match item {
             Item::Inst(inst) => Some(encode(inst).unwrap().bytes),
-            Item::Label(_) => None,
+            Item::Label(_) | Item::Bytes(_) => None,
         })
         .flatten()
         .collect();
@@ -108,4 +108,13 @@ fn a_call_with_a_byte_argument_exits_with_the_sum() {
     if let Some(code) = status("caller", &[40, 2], &["callee"]) {
         assert_eq!(code, 42);
     }
+}
+
+/// A pseudo-instruction has an empty encoding row; it encoded as zero bytes,
+/// so a select (`CMOV32r`) left no code and `max(7, 42)` exited with 7.
+#[test]
+fn a_pseudo_instruction_has_no_encoding() {
+    use llrm_m68k::mc::{Inst, Operand};
+    let pseudo = Inst { opcode: "CMOV32r", operands: vec![Operand::Reg(llrm_m68k::reg::D0)] };
+    assert!(encode(&pseudo).is_err());
 }
