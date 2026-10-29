@@ -619,6 +619,8 @@ impl Builder {
     ) {
         // a constant or a symbol's address is cheaper to load again than to keep in a slot
         inst.rematerializable |= matches!(inst.kind, Kind::Op("LDI" | "LDS"));
+        // and a load sets N and Z, so it is not run again where a compare's flags are live
+        inst.sets_flags |= matches!(inst.kind, Kind::Op("LDI" | "LDS"));
         self.function.blocks[self.current].insts.push(inst);
     }
 

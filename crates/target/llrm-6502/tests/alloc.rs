@@ -1650,6 +1650,59 @@ define i16 @sloadx(ptr %p) {
     }
 }
 
+/// A constant used where a compare's flags are live was loaded again between the compare and its
+/// `CMOV16`, and the load reset Z: `bne` never branched, and a 0/1 flag was always 1 (differential
+/// seed 36: 255 for 127).
+#[test]
+fn a_constant_is_not_loaded_again_between_a_compare_and_its_select() {
+    let ir = "declare i16 @llvm.fshl.i16(i16, i16, i16)
+@buf = external global [16 x i8]
+define i16 @remat() {
+entry:
+  %a = alloca [8 x i32], align 2
+  br label %fill
+fill:
+  %i = phi i8 [ 0, %entry ], [ %i1, %fill ]
+  %iz = zext i8 %i to i16
+  %p = getelementptr inbounds [8 x i32], ptr %a, i16 0, i16 %iz
+  store i32 1, ptr %p, align 2
+  %i1 = add i8 %i, 1
+  %fd = icmp eq i8 %i1, 8
+  br i1 %fd, label %mid, label %fill
+mid:
+  %b = load i8, ptr @buf, align 1
+  %z = icmp eq i8 %b, 0
+  %a0 = load i32, ptr %a, align 2
+  %a0t = trunc i32 %a0 to i16
+  %o = or i16 %a0t, 1
+  %m = urem i16 239, %o
+  %zx = zext i1 %z to i32
+  store i32 %zx, ptr %a, align 2
+  br label %sum
+sum:
+  %j = phi i8 [ 0, %mid ], [ %j1, %sum ]
+  %ck = phi i16 [ %m, %mid ], [ %ck1, %sum ]
+  %jz = zext i8 %j to i16
+  %r = call i16 @llvm.fshl.i16(i16 %ck, i16 %ck, i16 1)
+  %q = getelementptr inbounds [8 x i32], ptr %a, i16 0, i16 %jz
+  %l = load i32, ptr %q, align 2
+  %lt = trunc i32 %l to i16
+  %ck1 = xor i16 %r, %lt
+  %j1 = add i8 %j, 1
+  %sd = icmp eq i8 %j1, 8
+  br i1 %sd, label %done, label %sum
+done:
+  ret i16 %ck1
+}";
+    let text = compile_within_ten_seconds(ir, "remat");
+    // a0 is 1 when buf[0] is 0 and 0 otherwise; the sum folds a0 and seven ones
+    for (first, want) in [(3, 127), (0, 255)] {
+        let data = format!(".export buf\nbuf: .byte {first},1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\n");
+        let got = common::run_with(&format!("alloc-remat-{first}"), "  jsr remat\n", &format!("{text}{data}"));
+        assert_eq!(got, want, "buf[0] = {first}");
+    }
+}
+
 /// Compile on a thread and fail after ten seconds: a scheduler or allocator loop with no progress
 /// bound shows as a failure here instead of a stuck run.
 fn compile_within_ten_seconds(
