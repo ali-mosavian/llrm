@@ -15,7 +15,7 @@ SETUP = (ROOT / ".github/actions/setup/action.yml").read_text()
 def test_the_gate_waits_for_a_toolchain_job_that_builds_both_trees_in_this_run():
     job = CI.split("  toolchain:\n")[1].split("\n  gate:\n")[0]
     assert "kind: [pin, m16]" in job and "./.github/actions/clang-tree" in job and "timeout-minutes: 120" in job
-    assert "needs: [plan, build, toolchain]" in CI and "needs.toolchain.result == 'success'" in CI
+    assert "needs: [plan, build, toolchain, pintools]" in CI and "needs.toolchain.result == 'success'" in CI
 
 
 def test_a_failed_toolchain_job_is_a_failed_verdict():

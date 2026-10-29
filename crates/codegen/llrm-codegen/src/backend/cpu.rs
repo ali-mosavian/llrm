@@ -334,6 +334,12 @@ impl Profile {
         _listed(&self._costs, operation).ok_or_else(|| format!("{} has no cost for {operation}", self.name))
     }
 
+    /// Clocks a byte of code is worth, in thousandths, where code is tuned
+    /// for size (the target's, none elsewhere).
+    pub fn size_milliclocks_per_byte(&self) -> i64 {
+        if self.size || self.min_size { self.target().size_milliclocks_per_byte() } else { 0 }
+    }
+
     /// `TuningSlow3OpsLEA`: a three-operand LEA takes three cycles, so
     /// X86FixupLEAs splits it. Of the nine `-march`es only `x86-64`, tuned as
     /// clang and llc tune it by default, `generic` (X86.td L1903): not
