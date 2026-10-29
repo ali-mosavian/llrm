@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Cut a mismatching difftest program down by deleting lines while the mismatch stays.
 
-usage: difftest-reduce.py <difftest binary> <program.c> <out.c> [hang | needle <text>]
+usage: reduce.py <difftest binary> <program.c> <out.c> [hang | needle <text>]
 
-A candidate counts only if the harness still reports MISMATCH (ours differs from both cc65 modes it
+The syntax check that keeps a candidate defined is `DIFF_STRICT_CMD` (default: clang for msp430, the 6502 test's
+front end) plus the -Werror flags. A candidate counts only if the harness still reports MISMATCH (ours differs from both cc65 modes it
 checks), so a program that stops compiling or turns into a cc65 bug is dropped.
 """
 import os
@@ -18,8 +19,9 @@ needle = sys.argv[5] if len(sys.argv) > 5 and sys.argv[4] == "needle" else None
 
 def strict_ok(path):
     check = subprocess.run(
-        ["clang", "--target=msp430", "-funsigned-char", "-fsyntax-only", "-Werror=return-type", "-Werror=uninitialized",
-         "-Werror=sometimes-uninitialized", "-Werror=conditional-uninitialized", path],
+        os.environ.get("DIFF_STRICT_CMD", "clang --target=msp430 -funsigned-char -fsyntax-only").split()
+        + ["-Werror=return-type", "-Werror=uninitialized", "-Werror=sometimes-uninitialized",
+           "-Werror=conditional-uninitialized", path],
         capture_output=True,
     )
     return check.returncode == 0
