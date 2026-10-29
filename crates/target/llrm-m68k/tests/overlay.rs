@@ -521,3 +521,75 @@ fn a_pointer_stepped_before_the_compare_that_reads_it_is_post_incremented() {
         assert!(!ours.contains(&format!("addq.l\t#{bytes}, %a")), "{ty}: {ours}");
     }
 }
+
+fn after_mid_end(ir: &str) -> String {
+    use std::rc::Rc;
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
+    let tti = llrm_m68k::machine::M68k { indexed_displacement: true, post_indexed: true, ..Default::default() };
+    let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine)))
+        .expect("the mid-end runs");
+    llrm_mir::print::module(&done)
+}
+
+fn walk_with_call(ty: &str) -> String {
+    format!(
+        "declare void @g(i32)
+define i32 @f(ptr %p, i32 %n) {{
+entry:
+  br label %head
+head:
+  %i = phi i32 [ 0, %entry ], [ %i1, %latch ]
+  %q = getelementptr {ty}, ptr %p, i32 %i
+  %v = load {ty}, ptr %q
+  %z = zext {ty} %v to i32
+  call void @g(i32 %z)
+  br label %latch
+latch:
+  %i1 = add i32 %i, 1
+  %c = icmp ult i32 %i1, %n
+  br i1 %c, label %head, label %done
+done:
+  ret i32 %i1
+}}"
+    )
+}
+
+/// The step of a new pointer for a post-indexed load goes in the load's block
+/// (`getFixupInsertPos`), not the latch's, where the loop's counter steps; for
+/// a byte and for a word.
+#[test]
+fn the_step_of_a_post_indexed_pointer_is_made_beside_its_load() {
+    for ty in ["i8", "i16"] {
+        let done = after_mid_end(&walk_with_call(ty));
+        let head = done.split("head:").nth(1).and_then(|rest| rest.split("latch:").next()).expect("a head block");
+        assert!(head.contains("getelementptr"), "{ty}: {done}");
+        assert!(head.contains("load"), "{ty}: {done}");
+    }
+}
+
+/// The pre-indexed addressing of the pin's LSR (`AMK_PreIndexed`) is not
+/// translated (see `lsr_solve.rs`): a pointer that steps down before each
+/// access stays a step and an access, not `move.b -(%a0), ...`. This pins the
+/// limit; when it is lifted the test changes with it.
+#[test]
+fn a_pointer_stepped_down_before_each_access_is_not_pre_decremented_yet() {
+    let ir = "define i32 @f(ptr %p, i32 %n) {
+entry:
+  br label %loop
+loop:
+  %q = phi ptr [ %p, %entry ], [ %q1, %loop ]
+  %i = phi i32 [ 0, %entry ], [ %i1, %loop ]
+  %s = phi i32 [ 0, %entry ], [ %s1, %loop ]
+  %q1 = getelementptr i8, ptr %q, i32 -1
+  %v = load i8, ptr %q1
+  %z = zext i8 %v to i32
+  %s1 = add i32 %s, %z
+  %i1 = add i32 %i, 1
+  %c = icmp ult i32 %i1, %n
+  br i1 %c, label %loop, label %done
+done:
+  ret i32 %s1
+}";
+    let ours = compiled(ir, Options::default());
+    assert!(!ours.contains("-(%a"), "{ours}");
+}
