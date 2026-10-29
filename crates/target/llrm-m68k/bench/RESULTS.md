@@ -1,4 +1,4 @@
-# Results, 2026-10-29 13:47 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Results, 2026-10-29 13:55 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 gcc is m68k-linux-gnu-gcc 15 (`-mcpu=68000`), the Debian cross toolchain unpacked without root. Cycles are not
 modelled: "insns" are executed instructions, which price a 68000 `move` and a `muls` the same. "ours" has the
@@ -20,7 +20,7 @@ Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -
 | max | 16 | 16 | 16 | 16 | 16 | 6 | 6 | 5 | 6 | 5 | -O2 +1 insns, -Os +1 insns |
 | absdiff | 22 | 22 | 22 | 22 | 22 | 7 | 7 | 7 | 7 | 7 | at or below |
 | clamp | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | at or below |
-| fib | 28 | 28 | 28 | 26 | 22 | 67 | 67 | 67 | 66 | 64 | -Os +4 B, -Os +2 insns |
+| fib | 28 | 28 | 28 | 22 | 22 | 67 | 67 | 67 | 64 | 64 | at or below |
 | gcd | 26 | 26 | 28 | 26 | 26 | 17 | 17 | 16 | 17 | 17 | -O2 +1 insns |
 | arrsum | 32 | 22 | 22 | 20 | 20 | 103 | 69 | 69 | 68 | 68 | at or below |
 | arrmax | 38 | 34 | 32 | 32 | 26 | 130 | 115 | 100 | 114 | 97 | -O2 +2 B, -O2 +15 insns, -Os +6 B, -Os +17 insns |
@@ -28,7 +28,7 @@ Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -
 | strlen | 18 | 18 | 20 | 18 | 18 | 59 | 59 | 44 | 59 | 57 | -O2 +15 insns, -Os +2 insns |
 | copy | 34 | 34 | 34 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | at or below |
 
-Rows still above a reference: max, fib, gcd, arrmax, countgt, strlen.
+Rows still above a reference: max, gcd, arrmax, countgt, strlen.
 
 ## Full table
 
@@ -39,7 +39,7 @@ Rows still above a reference: max, fib, gcd, arrmax, countgt, strlen.
 | max | 16 | 16 | 16 | 16 | 16 | 16 | 16 | 6 | 6 | 6 | 6 | 6 | 5 | 5 | 42 all |
 | absdiff | 22 | 22 | 22 | 22 | 22 | 24 | 24 | 7 | 7 | 7 | 7 | 7 | 8 | 7 | 42 all |
 | clamp | 26 | 26 | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 42 all |
-| fib | 28 | 28 | 26 | 66 | 66 | 22 | 28 | 67 | 67 | 66 | 139 | 139 | 64 | 67 | 89 all |
+| fib | 28 | 28 | 22 | 66 | 66 | 22 | 28 | 67 | 67 | 64 | 139 | 139 | 64 | 67 | 89 all |
 | gcd | 26 | 26 | 26 | 32 | 26 | 26 | 28 | 17 | 17 | 17 | 16 | 17 | 17 | 16 | 42 all |
 | arrsum | 32 | 22 | 20 | 64 | 64 | 20 | 22 | 103 | 69 | 68 | 153 | 153 | 68 | 69 | 80 all |
 | arrmax | 38 | 34 | 32 | 92 | 88 | 26 | 32 | 130 | 115 | 114 | 248 | 235 | 97 | 100 | 9 all |

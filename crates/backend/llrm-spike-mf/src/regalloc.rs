@@ -48,6 +48,14 @@ pub trait Target {
     ) -> bool {
         one == other
     }
+    /// The class the instruction `name` names for operand `index`, where it
+    /// does (`MCInstrDesc::operands`).
+    fn operand_class(
+        _name: &str,
+        _index: usize,
+    ) -> Option<Self::Class> {
+        None
+    }
     /// The instruction that stores `register` (of `class`) to frame `slot`;
     /// `None` when the target cannot spill.
     fn spill_store(
