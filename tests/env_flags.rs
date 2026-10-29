@@ -33,7 +33,7 @@ fn reached(
     if let Some(value) = value {
         command.env(format!("LLRM_CHECK_{name}"), value);
     }
-    let done = command.output().expect("runs llrm-c");
+    let done = command.output().expect("runs llrm-cc");
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     String::from_utf8_lossy(&done.stderr)
         .lines()

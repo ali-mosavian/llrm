@@ -18,7 +18,7 @@ flowchart TB
   linkStyle default stroke:#64748b,stroke-width:2.2px
   src["<b>bench/NAME/NAME.c</b><br/><small>+ vsgcc/kernels/x_*/x_*.c</small>"]:::src
   wrap["<b>wrapped source: one copy,</b><br/><small>every compiler builds it<br/>(wrap.py: main calls<br/>bench_NAME through a<br/>volatile pointer)</small>"]:::mid
-  llrm["<b>llrm-c -m32 -mabi=sysv</b><br/><small>-O1/-O2/-O3/-Os<br/>-march=i486<br/>OMF object<br/>harness.py links it</small>"]:::opt
+  llrm["<b>llrm-cc -m32 -mabi=sysv</b><br/><small>-O1/-O2/-O3/-Os<br/>-march=i486<br/>OMF object<br/>harness.py links it</small>"]:::opt
   gcc["<b>gcc -m32 -march=i486</b><br/><small>-O1/-O2/-O3/-Os<br/>ELF object<br/>ld -static + stub.elf</small>"]:::out
   clang["<b>clang -m32 ...</b><br/><small>-O1/-O2/-O3/-Os<br/>ELF object<br/>ld -static + stub.elf</small>"]:::data
   run["<b>unicorn, 32-bit protected</b><br/><small>mode: run main#59; count<br/>bench_NAME from entry to<br/>its own return</small>"]:::warn
@@ -35,7 +35,7 @@ flowchart TB
   per --> tab
 ```
 
-*One C source through llrm-c, gcc and clang, counted in 32-bit unicorn*
+*One C source through llrm-cc, gcc and clang, counted in 32-bit unicorn*
 
 Compile time is a separate flow: the same sources go to each compiler under `perf stat`, and only the compile is counted.
 
@@ -47,7 +47,7 @@ For each program, the work llrm's `m32` object does against gcc's and clang's at
 
 ### How
 
-    crates/target/llrm-x86-m32/vsgcc/run.sh                                  # build llrm-c, every program with every compiler, run, print
+    crates/target/llrm-x86-m32/vsgcc/run.sh                                  # build llrm-cc, every program with every compiler, run, print
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/harness.py sieve gccO2        # one program, one variant (prints one JSON line)
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/table.py                      # the tables, from $VSGCC_WORK/results.jsonl
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/loops.py sieve llrm gccO2 clangO2   # hottest loop, side by side
@@ -56,9 +56,9 @@ Variants are `llrm` (that is `-O2`), `llrmO1`, `llrmO3`, `llrmOs` and `gccO1 gcc
 
 Flags, from [build.sh](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-x86-m32/vsgcc/build.sh#L22):
 
-- llrm: `llrm-c -m32 -mabi=sysv -O<n> -march=i486`. `VSGCC_ABI` overrides the convention; `sysv` is what gcc and clang use, so the table does not compare register arguments with stack ones.
+- llrm: `llrm-cc -m32 -mabi=sysv -O<n> -march=i486`. `VSGCC_ABI` overrides the convention; `sysv` is what gcc and clang use, so the table does not compare register arguments with stack ones.
 - gcc and clang: `-Dfar= -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables`.
-- No `-fno-inline-functions` (`tools/bench` uses it). [wrap.py](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-x86-m32/vsgcc/wrap.py#L11) makes `main` call the kernel through a volatile pointer in every compiler's copy: the kernel stays a call, nothing is cloned for `main`'s constants, and everything else inlines as the level says. `__attribute__((noinline))` would do the same for gcc and clang, but llrm-c's C front end does not take it.
+- No `-fno-inline-functions` (`tools/bench` uses it). [wrap.py](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-x86-m32/vsgcc/wrap.py#L11) makes `main` call the kernel through a volatile pointer in every compiler's copy: the kernel stays a call, nothing is cloned for `main`'s constants, and everything else inlines as the level says. `__attribute__((noinline))` would do the same for gcc and clang, but llrm-cc's C front end does not take it.
 
 ### What it prints
 
@@ -89,7 +89,7 @@ Flags, from [build.sh](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de0581
 
 ### What is compared
 
-What llrm-c spends turning C source into an object, against `gcc -c` and `clang -c`, at `-O0`, `-O1`, `-O2`, `-O3` and `-Os`, on the same programs.
+What llrm-cc spends turning C source into an object, against `gcc -c` and `clang -c`, at `-O0`, `-O1`, `-O2`, `-O3` and `-Os`, on the same programs.
 
 ### Which instruments
 
@@ -103,7 +103,7 @@ What llrm-c spends turning C source into an object, against `gcc -c` and `clang 
 What each side runs under `perf stat -e instructions:u` (children included, one process per compile, run under `setarch -R` so address-space layout does not move the count):
 
 ```
- llrm-c   one process: C front end (preprocessor included), HIR, MIR passes,
+ llrm-cc   one process: C front end (preprocessor included), HIR, MIR passes,
           instruction selection, register allocation, OMF writer
  gcc -c   driver + cc1 (preprocessor and compiler) + as          (3 processes)
  clang -c driver + cc1 with its integrated assembler

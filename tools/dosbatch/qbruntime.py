@@ -403,7 +403,7 @@ RUNTIME_ROW = "x86_16-wat"
 
 
 def c_flags() -> list[str]:
-    # No -I include: its llrm_os.h is llrm-c's, with a plain `__cdecl` the fork clang ignores (borland.h erases it); the row's own header has the attribute that keeps the OS layer's stack convention.
+    # No -I include: a directory's llrm_os.h has a plain `__cdecl` the fork clang ignores (borland.h erases it); the row's own header has the attribute that keeps the OS layer's stack convention.
     # An empty BSSB ahead of each object's _BSS: start.asm zeroes from it (the objects' order is the linker's).
     return ["-mbss-begin", "-I", str(RUNTIME), "-I", str(platform_directory()), *device_includes()]
 

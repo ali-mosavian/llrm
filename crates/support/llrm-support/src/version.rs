@@ -39,8 +39,8 @@ mod tests {
 
     #[test]
     fn a_dirty_tree_shows_in_the_line() {
-        assert_eq!(line("llrm-c", "abc", "0", "0"), "llrm-c abc");
-        assert_eq!(line("llrm-c", "abc", "1", "0"), "llrm-c abc+dirty");
+        assert_eq!(line("llrm-qb", "abc", "0", "0"), "llrm-qb abc");
+        assert_eq!(line("llrm-qb", "abc", "1", "0"), "llrm-qb abc+dirty");
     }
 
     /// The object writer ran 13% more instructions in an incremental build of
@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn only_a_lone_version_flag_asks() {
-        assert!(asked(&["--version".to_owned()], "llrm-c", "abc", "0", "0"));
-        assert!(!asked(&["--version".to_owned(), "x.c".to_owned()], "llrm-c", "abc", "0", "0"));
+        assert!(asked(&["--version".to_owned()], "llrm-qb", "abc", "0", "0"));
+        assert!(!asked(&["--version".to_owned(), "x.c".to_owned()], "llrm-qb", "abc", "0", "0"));
     }
 }

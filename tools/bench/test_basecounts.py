@@ -134,7 +134,7 @@ def test_a_base_that_does_not_measure_says_why_on_one_line_the_gate_prints(monke
     filter drops."""
     import subprocess
 
-    monkeypatch.setattr(bc.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "Traceback\nBuildError: llrm-c: unrecognized arguments: -mbss-begin\n"))
+    monkeypatch.setattr(bc.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "Traceback\nBuildError: llrm-cc: unrecognized arguments: -mbss-begin\n"))
     try:
         bc.measure_in_subprocess(tmp_path, ["O2"], tmp_path / "w")
     except SystemExit as why:

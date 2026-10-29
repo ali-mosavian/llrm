@@ -73,8 +73,8 @@ This private path duplicates what LLVM shares (one CodeGen over any target). It 
 The Mac needs: a clone or worktree of `feat/arm64-spike`; rustup (toolchain per `rust-toolchain.toml`); Xcode command line tools (`clang`, `ld`). Then:
 
 ```
-cargo build --release -p llrm-c --bin llrm-c
-target/release/llrm-c -O2 -march=<arm64 name> prog.c -o prog.o   # flags provisional: fixed when the target lands (today: -O2 -march=i486 -S -o)
+cargo build --release -p llrm-cc --bin llrm-cc
+target/release/llrm-cc -O2 -march=<arm64 name> prog.c -o prog.o   # flags provisional: fixed when the target lands (today: -O2 -march=i486 -S -o)
 clang -arch arm64 prog.o -o prog && ./prog       # system clang links; the compiler is llrm
 clang -arch arm64 -O2 prog.c -o ref && ./ref     # reference output
 ```

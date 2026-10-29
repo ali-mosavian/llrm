@@ -1,4 +1,4 @@
-//! The `llrm-c` shim writes assembly text for `-S`, not an object.
+//! The `llrm-cc` shim writes assembly text for `-S`, not an object.
 
 mod common;
 

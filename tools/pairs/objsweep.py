@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Whether two llrm-c builds write the same object bytes over the vsgcc programs, per target and level.
+"""Whether two llrm-cc builds write the same object bytes over the vsgcc programs, per target and level.
 
-    [OBJSWEEP_FLAGS="--isel=dag"] tools/pairs/objsweep.py OLD_LLRM_C NEW_LLRM_C [--src DIR] [--levels O1,O2,O3,Os] [--targets m32,m16] [--jobs N]
+    [OBJSWEEP_FLAGS="--isel=dag"] tools/pairs/objsweep.py OLD_LLRM_CC NEW_LLRM_CC [--src DIR] [--levels O1,O2,O3,Os] [--targets m32,m16] [--jobs N]
 
 DIR holds the wrapped sources vsgcc compiles (`ROWS_WORK/<name>/b/*.c`, written by crates/target/llrm-x86-m32/vsgcc/build.sh).
 Prints one line: `objsweep old <md5> new <md5>: N objects changed (targets, levels)`, then the changed objects with their sizes and every
@@ -42,7 +42,7 @@ def changed_files(old_sha: str, new_sha: str) -> list[str] | None:
 
 
 CC_TARGETS = {"m32": "x86_32-wat", "m16": "x86_16-wat"}  # llrm-cc's LLRM_CC_TARGET rows
-FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"]}  # llrm-c rejects -march=i286 on m16, and takes no -m64: name it only for llrm-cc
+FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"]}  # -march=i286 is rejected on m16
 
 
 # The -g leg: the debug formats each target writes. An object holds its debug sections, so comparing whole objects compares them.
@@ -78,15 +78,12 @@ def run_compiler(command: list[str], out: Path, writers: dict[str, str] | None, 
 
 
 def compile_one(binary: str, source: Path, target: str, level: str, out: Path, isel: str = "old", writers: dict[str, str] | None = None, extra: list[str] | None = None) -> tuple[bytes | None, str]:
-    """(object bytes, '') or (None, first line of stderr). `out` ends in `.o`: llrm-c writes any other name as assembly text."""
-    cc = Path(binary).name == "llrm-cc"
+    """(object bytes, '') or (None, first line of stderr)."""
     # llrm-cc links without -c, takes its Watcom target from LLRM_CC_TARGET (none at m64) and the m16 clang only at m16.
-    environment = None
-    if cc:
-        environment = {key: value for key, value in os.environ.items() if key not in ("LLRM_CC_TARGET", "LLRM_CLANG_M16") or (key == "LLRM_CLANG_M16" and target == "m16")}
-        if target in CC_TARGETS:
-            environment["LLRM_CC_TARGET"] = CC_TARGETS[target]
-    command = [binary, *FLAGS[target], f"--isel={isel}", *os.environ.get("OBJSWEEP_FLAGS", "").split(), *(extra or []), f"-{level}", *(["-c"] if cc else []), "-o", str(out), str(source)]
+    environment = {key: value for key, value in os.environ.items() if key not in ("LLRM_CC_TARGET", "LLRM_CLANG_M16") or (key == "LLRM_CLANG_M16" and target == "m16")}
+    if target in CC_TARGETS:
+        environment["LLRM_CC_TARGET"] = CC_TARGETS[target]
+    command = [binary, *FLAGS[target], f"--isel={isel}", *os.environ.get("OBJSWEEP_FLAGS", "").split(), *(extra or []), f"-{level}", "-c", "-o", str(out), str(source)]
     return run_compiler(command, out, writers, environment)
 
 

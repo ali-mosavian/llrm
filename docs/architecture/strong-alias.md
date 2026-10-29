@@ -74,15 +74,14 @@ pointer actual and what has already escaped; it cannot reach an unrelated
 frame object. The data model and its cost are in [modref.md](modref.md).
 
 What the C library is known to do (`strlen` reads its arguments and keeps
-none) is stated by `llrm-c` in `crates/frontends/llrm-c/src/libfunc.rs`, as
-attributes on the declaration. A local definition overrides it; a name's
+none) is stated as attributes on the declaration. A local definition overrides it; a name's
 decoration alone grants no contract.
 
 ## Language promises
 
 `!tbaa` types make two accesses disjoint unless one type is an ancestor of the
 other (`typed_apart`); character and untyped accesses stay conservative.
-`llrm-c` writes C's aliasing classes as a TBAA tree, and a C `restrict`
+`llrm-cc` writes C's aliasing classes as a TBAA tree, and a C `restrict`
 parameter becomes a `noalias` parameter, which gives it a restrict root that
 travels with the pointer through copies, arithmetic and phis. `llrm-nib` and
 `llrm-qb` state their own facts the same way, through `llrm_hir::facts`.

@@ -34,7 +34,7 @@ def existing_dist(full: str, scratch: Path) -> Path | None:
     """A dist of `full` another session built under a shortened name (sbp-36ad593b8): its `ok` names the full sha it was built from, which is the proof; the directory name alone is not."""
     for name in (full, full[:10], full[:9], full[:8]):
         ok = scratch / f"sbp-{name}" / "ok"
-        if ok.is_file() and (scratch / f"sbp-{name}" / "dist" / "llrm-c").is_file() and f"sha: {full}" in ok.read_text().splitlines():
+        if ok.is_file() and (scratch / f"sbp-{name}" / "dist" / "llrm-llc").is_file() and f"sha: {full}" in ok.read_text().splitlines():
             return scratch / f"sbp-{name}" / "dist"
     return None
 

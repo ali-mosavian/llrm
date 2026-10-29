@@ -94,7 +94,7 @@ def test_a_dist_built_under_a_shortened_name_is_reused_only_when_its_ok_names_th
     """w9 built sbp-36ad593b8; looking only for sbp-<full> queued a second 40-minute build of the same commit."""
     full = "36ad593b8f77b17352ad5e1f9df4191f599fd8ab"
     (tmp_path / "sbp-36ad593b8" / "dist").mkdir(parents=True)
-    (tmp_path / "sbp-36ad593b8" / "dist" / "llrm-c").write_text("x")
+    (tmp_path / "sbp-36ad593b8" / "dist" / "llrm-llc").write_text("x")
     (tmp_path / "sbp-36ad593b8" / "ok").write_text(f"sha: {full}\n")
     assert readiness.existing_dist(full, tmp_path) == tmp_path / "sbp-36ad593b8" / "dist"
     (tmp_path / "sbp-36ad593b8" / "ok").write_text("sha: 0000000000000000000000000000000000000000\n")

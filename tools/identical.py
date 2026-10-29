@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Whether two builds (llrm-llc, compiled through llrm-cc beside it, or llrm-c) write the same bytes: every program, every tests/run/c program and every QCport module, at each level.
+"""Whether two builds (llrm-llc, compiled through the llrm-cc beside it) write the same bytes: every program, every tests/run/c program and every QCport module, at each level.
 
-    tools/identical.py OLD_LLRM_C NEW_LLRM_C [--levels=-O1,-O2,-Os,-Omax] [--programs-only] [--old-head REV] [--new-head REV]
+    tools/identical.py OLD_COMPILER NEW_COMPILER [--levels=-O1,-O2,-Os,-Omax] [--programs-only] [--old-head REV] [--new-head REV]
 
 A binary older than its head's commit is a stale build (a build that failed leaves the last one): it aborts, unless --stale-ok.
 
@@ -130,7 +130,7 @@ def bench_compiles(work: Path, levels: tuple[str, ...] = BENCH_LEVELS) -> dict[s
 
 
 def same(job: tuple[str, str, str, list[str]], old: str, new: str, work: Path) -> tuple[str, str, str | None]:
-    """One compile by `old` and by `new` (the tool beside each llrm-c): the objects are the same bytes. `arguments` end in `-o OBJ`."""
+    """One compile by `old` and by `new` (the tool beside each compiler): the objects are the same bytes. `arguments` end in `-o OBJ`."""
     name, level, tool, arguments = job
     outs = []
     for tag, compiler in (("old", old), ("new", new)):
@@ -143,7 +143,7 @@ def same(job: tuple[str, str, str, list[str]], old: str, new: str, work: Path) -
         )
         at = len(arguments) - 1 - arguments[::-1].index("-o")
         command = [str(Path(compiler).with_name(tool)), *arguments[:at], "-o", str(out), *arguments[at + 2 :]]
-        if tool == "llrm-c" and Path(compiler).name == "llrm-llc":  # the backend is the subject: llrm-cc compiles, with it
+        if tool == "llrm-cc" and Path(compiler).name == "llrm-llc":  # the backend is the subject: llrm-cc compiles, with it
             command, driven = pgo.through_driver(Path(compiler).with_name("llrm-cc"), Path(compiler), arguments[: at - 1], Path(arguments[at - 1]), str(out))
             env = {**env, "LLRM_LLC": driven["LLRM_LLC"], "LLRM_CC_TARGET": driven["LLRM_CC_TARGET"]}
         done = subprocess.run(command, capture_output=True, text=True, env=env)
@@ -180,7 +180,7 @@ def main() -> int:
         files = corpus(work, Path(qcport).expanduser() if qcport else None, Path(headers).expanduser() if headers else None, args.programs_only)
         levels = args.levels.split(",")
         jobs = [
-            (name, level, "llrm-c", [*([level] if level else []), *flags, str(source), "-o", "OBJ"])
+            (name, level, "llrm-cc", [*([level] if level else []), *flags, str(source), "-o", "OBJ"])
             for name, (source, flags) in files.items()
             for level in (levels if not name.startswith("run/") else [""])
         ]

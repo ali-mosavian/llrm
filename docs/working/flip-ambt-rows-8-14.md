@@ -1,6 +1,6 @@
 # flip-ambt rows 8-14
 
-Method: tip `c76f9a6a5`, `llrm-c` md5 `8cc269d828497b719ed84ba27bcb5350` (dist build by `tools/pairs/pair_build.sh`), `-m32 -mabi=sysv -march=i486 -O2`, pin `llc -O2 -disable-lsr` with `PIN_TRIPLE=i486-unknown-none-elf` on the dag path's pre-isel IR (`30-switchconv.ll`), one harness and price table; script `ambt/run.py` (w12) pointed at this tree. Owner w11 (sdag-c), 2026-10-26.
+Method: tip `c76f9a6a5`, `llrm-cc` md5 `8cc269d828497b719ed84ba27bcb5350` (dist build by `tools/pairs/pair_build.sh`), `-m32 -mabi=sysv -march=i486 -O2`, pin `llc -O2 -disable-lsr` with `PIN_TRIPLE=i486-unknown-none-elf` on the dag path's pre-isel IR (`30-switchconv.ll`), one harness and price table; script `ambt/run.py` (w12) pointed at this tree. Owner w11 (sdag-c), 2026-10-26.
 
 Clocks (instructions, code bytes); all rows `ok`:
 

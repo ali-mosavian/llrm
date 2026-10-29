@@ -38,7 +38,7 @@ Two processors are in play: the 32-bit comparison counts a protected-mode 486 st
 
 - [vs-gcc-clang](vs-gcc-clang.md): llrm's `m32` output and compile cost against gcc and clang. Tooling: [vsgcc](../../crates/target/llrm-x86-m32/vsgcc/readme.md), [scaling](../../crates/target/llrm-x86-m32/vsgcc/scaling.md).
 - [m32-vs-m16](m32-vs-m16.md): llrm's `m32` against its `m16` on the same programs: the requirement that m32 is no worse. Tooling: `vsgcc/against_m16.py`.
-- [vs-borland-watcom](vs-borland-watcom.md): llrm-c's 16-bit output against BCC, Turbo C, Turbo C++ and Open Watcom, by `tools/bench`.
+- [vs-borland-watcom](vs-borland-watcom.md): llrm-cc's 16-bit output against BCC, Turbo C, Turbo C++ and Open Watcom, by `tools/bench`.
 - [llvm](llvm/readme.md): why LLVM's compile is cheap and llrm's is not, on identical inputs: the ladder, per-pass and cache profiles, mechanism pages with LLVM and llrm source excerpts, and the ranked proposals. Tooling: `tools/ladder`.
 - [vs-basic](vs-basic.md): llrm-qb against the BC compilers of QuickBASIC 4.5, PDS 7.1 and VBDOS: counts, sizes, output.
 

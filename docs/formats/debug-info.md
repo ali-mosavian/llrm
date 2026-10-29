@@ -11,7 +11,7 @@ flowchart LR
   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
-  fe["<b>Frontends</b><br/><small>llrm-c, llrm-nib, llrm-qb:<br/>HIR debug Builder</small>"]:::src
+  fe["<b>Frontends</b><br/><small>llrm-cc, llrm-nib, llrm-qb:<br/>HIR debug Builder</small>"]:::src
   mir["<b>MIR</b><br/><small>!types !functions !globals<br/>#35;dbg_declare<br/>#35;dbg_value/_piece/_gone<br/>lines</small>"]:::mid
   be["<b>Backend</b><br/><small>debuginfo::described<br/>(types, procedures)<br/>valuetrack (ranges)<br/>cfi (frame rows)<br/>debuginfo::laid_out<br/>-#gt; debug::Info</small>"]:::opt
   dw["<b>llrm-dwarf</b><br/><small>.debug_*<br/>ELF, Mach-O,<br/>OMF (-gdwarf)</small>"]:::out
@@ -113,7 +113,7 @@ variable (`Function.metadata`, `Module.global_metadata`). Nothing reads them yet
 ## Flags
 
 The flags are in `Flags::take` ([source](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/flags.rs#L244)),
-shared by `llrm-c`, `llrm-nib`, `llrm-qb` and the other bins that take compiler flags.
+shared by `llrm-cc`, `llrm-nib`, `llrm-qb` and the other bins that take compiler flags.
 
 | flag | effect |
 |---|---|
@@ -188,7 +188,7 @@ No gap by construction: BASIC's CodeView dialect has no register record (QB loca
 | `tests/turbo.rs` | `TLINK /v` and `TDUMP` agree with Turbo C++ on the module table; Turbo Debugger shows the same watch values |
 | `tests/objwriters.rs` | LLVM tools read every bench COFF object and its CodeView; `lld-link` makes a PDB |
 | `crates/mc/llrm-dwarf/src/tests.rs` | unit headers, relocations, line table, frame rows, `llvm-dwarfdump --verify` per class and version |
-| `tools/dwarf-coverage.sh llrm-c` | per level, how many source variables have a location and what share of their scope bytes it covers, against gcc |
+| `tools/dwarf-coverage.sh llrm-cc` | per level, how many source variables have a location and what share of their scope bytes it covers, against gcc |
 | `tools/debug-matrix.py` | the matrix of #1338; every OMF DWARF cell is valid under `jwlink` and `wdump` (which reads DWARF 2 and 3 only, so OMF cells use `-gdwarf-2`; 32-bit `-gdwarf 4`/`5` crashes `wdump`) |
 | the emulator fork's symbol tests ([`tests/symbols/qb`](https://github.com/ali-mosavian/dosbox-x/blob/main/tests/symbols/qb/README.md)) | QuickBASIC images at `-m16` and `-m32` (under DOS/32A, linked with `jwlink`) read in the debugger with `-gcodeview` and `-gdwarf`: locals, and by-reference parameters read through their pointers |
 

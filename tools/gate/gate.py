@@ -317,7 +317,7 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
 
     touched = {crate_of(f, pkgs) for f in live} - {None}
     cargo = any(not f.startswith("tools/") or f.startswith("tools/bench/") for f in live)
-    p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"} | reading(cfg, pkgs, live))  # the root crate enables features (llrm-c's toolchain) the others lack alone
+    p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"} | reading(cfg, pkgs, live))  # the root crate enables features the others lack alone
     if narrow:
         return narrowed(p, cfg, live)
     steps = []
@@ -453,15 +453,15 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
     return Plan(p.tier, p.reason + " (steps asked for)", steps, p.packages, p.languages, p.files)
 
 
-# The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
+# The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-cc (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
 # So there is no `cargo build --bins` here: it made a second set of every crate (238 CPU-s) for binaries the test build then links over
 # (all of them but hir-mir, which the corpus scripts build themselves).
 WARNING_FLAGS = "-D warnings"
 WARNINGS_AS_ERRORS = f"RUSTFLAGS='{WARNING_FLAGS}'"
-# Every step runs with the same RUSTFLAGS: a `cargo test --test X` without them rebuilt llrm-c apart from the build step's and put
-# its binary over target/release/llrm-c (the inode changed after `integration`), while `torture`, `run` and the like were running it:
-# "No such file or directory: .../release/llrm-c" in torture. One set of flags, one build, one binary.
+# Every step runs with the same RUSTFLAGS: a `cargo test --test X` without them rebuilt llrm-cc apart from the build step's and put
+# its binary over target/release/llrm-cc (the inode changed after `integration`), while `torture`, `run` and the like were running it:
+# "No such file or directory: .../release/llrm-cc" in torture. One set of flags, one build, one binary.
 # RUSTC_BOOTSTRAP too, for the lib step's `--shuffle`: libtest reads it when the tests run, but cargo takes it for an input of every
 # crate it builds, so set on the lib step alone it rebuilt the whole workspace there (1,088 CPU-s) and again in the next cargo step.
 # CARGO_INCREMENTAL=0 as CI builds: profile.release is incremental (256 units), and the same commit counts 10.3 -> 33.3 Minstr in lir pressuresink
@@ -483,7 +483,7 @@ DIST_BUILD = "cargo build --profile dist -q --bins"
 SKIPPED_DOC = "echo 'test result: ok. 0 passed; 0 failed; no doc comment has a fence to run, rustdoc not run'"
 
 # A lib test that depends on the order tests run in passes in the plain order and fails when the threads start in
-# another (llrm-c's m16 tests, 29 of 136, when an m32 test bound the register file first). The lib step runs the
+# another (the m16 tests, 29 of 136, when an m32 test bound the register file first). The lib step runs the
 # tests in a random order; each test binary prints its seed ("running 136 tests (shuffle seed: N)", kept in the
 # failed step's log), and LLRM_SHUFFLE_SEED=N repeats that order. (RUSTC_BOOTSTRAP is in STEP_ENV.)
 
@@ -834,9 +834,9 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
 
 def snapshot_binaries(release: Path, into: Path) -> Path:
     """The executables cargo left in `release`, linked into `into` for the steps to run. Every `cargo test --release --test X` compiles
-    the root package's binaries again as a test does (another metadata hash) and links `release/llrm-c` to its own: cargo removes the file
+    the root package's binaries again as a test does (another metadata hash) and links `release/llrm-cc` to its own: cargo removes the file
     and links the new one, even for a unit that was fresh, so with steps running cargo side by side the path has moments with no file
-    (torture: `No such file .../release/llrm-c`). A hard link keeps the inode it was made of: the next link cargo makes is another file."""
+    (torture: `No such file .../release/llrm-cc`). A hard link keeps the inode it was made of: the next link cargo makes is another file."""
     into.mkdir(parents=True, exist_ok=True)
     for one in sorted(release.iterdir()):
         if one.is_file() and os.access(one, os.X_OK) and one.suffix != ".d":
@@ -983,7 +983,7 @@ def watch_main(force: bool, every: int = 5, hours: float = 2.0) -> int:
         full = plan(["Cargo.toml"], "full")
         execute(restricted(full, ["measure"], set(commands(full, load(), packages())) | set(load()["exclusive"])))
     # And against the main commit 50 merges or a week back: a branch may add up to the tolerance, ten of them may not.
-    # Both ends of the creep are built as the shipped llrm-c is (`dist`): the slow drift is the user's, not the gate's build's.
+    # Both ends of the creep are built as the shipped llrm-cc is (`dist`): the slow drift is the user's, not the gate's build's.
     subprocess.run(["bash", "-c", DIST_BUILD], cwd=ROOT, env=os.environ, check=True)
     creep = subprocess.run([sys.executable, "tools/measure.py", "creep", "HEAD"], cwd=ROOT, env={**os.environ, "LLRM_BIN": f"{target}/dist", "LLRM_MEASURE_PROFILE": "dist"})
     if creep.returncode == 1:

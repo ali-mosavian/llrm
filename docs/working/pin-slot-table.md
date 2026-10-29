@@ -7,7 +7,7 @@ Output of the slot test (funcattrs-port, 2026-10-22; first table 1442783c8e6d, c
 
 ## Instrument checks
 
-1. Source of each row. Function-list slots (Early, Cleanup, Simplify, Late) come from the REGISTRY (`parity::REGISTRY`, the slots `llvm_order` builds at that level). Module-level passes are not in the registry, so the first table read them all `none`; they are now matched against the EXECUTED order: `--dump` of d_faces -O1, -O2 and -Os (LLRM_* unset, `llrm-c -m32 -march=i486`), whose stage files are numbered in the order the manager ran them: `globalopt, ports, stamp, pipeline (early list), ipo-early, sccp, pipeline (cleanup list), walk, pipeline (late list), interprocedural, writeonly, globaldce, available-externally, calleepop` and then llrm's own backend-facing passes (rotate, lsr, window, ...); -Os drops the rotate/fold/algebraic/indvars/dead/licm rounds. This is also what pipeline.rs `recorded` adds, in that order. Rows of the Module phase say `EXECUTED` and name the stage.
+1. Source of each row. Function-list slots (Early, Cleanup, Simplify, Late) come from the REGISTRY (`parity::REGISTRY`, the slots `llvm_order` builds at that level). Module-level passes are not in the registry, so the first table read them all `none`; they are now matched against the EXECUTED order: `--dump` of d_faces -O1, -O2 and -Os (LLRM_* unset, `llrm-cc -m32 -march=i486`), whose stage files are numbered in the order the manager ran them: `globalopt, ports, stamp, pipeline (early list), ipo-early, sccp, pipeline (cleanup list), walk, pipeline (late list), interprocedural, writeonly, globaldce, available-externally, calleepop` and then llrm's own backend-facing passes (rotate, lsr, window, ...); -Os drops the rotate/fold/algebraic/indvars/dead/licm rounds. This is also what pipeline.rs `recorded` adds, in that order. Rows of the Module phase say `EXECUTED` and name the stage.
 2. -Os. The pin has no -Os pipeline: `opt -passes='default<Os>'` stops with `The optimization level "Os" is no longer supported. Use O2 in conjunction with the optsize attribute instead.` (run at d1106deb71cc). The other route, `clang -Os -mllvm -print-pipeline-passes`, prints the same list as `clang -O2` (cross-checked in the fixture's header, md5 c28bf2ee...). So the -Os fixture is the -O2 list with optsize on the IR, and -Os counts equal -O2's.
 
 ## Counts (pin slots)
@@ -109,7 +109,7 @@ The second `globaldce`, `constmerge` and `rpo-function-attrs` the pin runs after
 
 ## QCport-stage ablation (the follow-up of the MISSING ranking)
 
-`tools/pairs/pin_ablate.py` over the 65 QCport modules' stage IRs (`llrm-c -m16 -march=i386 -O2 --dump`, `01-globalopt.ll`; the pin parses
+`tools/pairs/pin_ablate.py` over the 65 QCport modules' stage IRs (`llrm-cc -m16 -march=i386 -O2 --dump`, `01-globalopt.ll`; the pin parses
 all 65 once `threeway` and `flagsresult`, llrm's own attributes, are dropped), the pin's -O2 list with one instance of a pass removed at
 a time; at -O2 and at -Os (the -O2 list on `optsize` IR: `LLRM_ABLATE_OPTSIZE=1`); baseline 63213 instructions (-O2), 51432 (-Os).
 The metric is the pin's output instruction count, not object bytes. The instances that still have no slot of ours and move something:

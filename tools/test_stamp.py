@@ -20,7 +20,7 @@ def stub(tmp_path, name, line, code=0):
 
 def test_a_binary_built_from_another_sha_is_refused(tmp_path):
     """The 65eed2ad7 dist that was another tree's: its stamp said so and nothing looked."""
-    binary = stub(tmp_path, "llrm-c", "llrm-c aaaa1111")
+    binary = stub(tmp_path, "llrm-llc", "llrm-llc aaaa1111")
     assert stamp.check(binary, "aaaa1111") == "aaaa1111"
     assert stamp.check(binary, "aaaa") == "aaaa1111"
     with pytest.raises(SystemExit, match="built from aaaa1111, not bbbb2222"):
@@ -28,7 +28,7 @@ def test_a_binary_built_from_another_sha_is_refused(tmp_path):
 
 
 def test_a_dirty_tree_is_refused_unless_allowed(tmp_path):
-    binary = stub(tmp_path, "llrm-c", "llrm-c aaaa1111+dirty")
+    binary = stub(tmp_path, "llrm-llc", "llrm-llc aaaa1111+dirty")
     with pytest.raises(SystemExit, match="with changes"):
         stamp.check(binary, "aaaa1111")
     assert stamp.check(binary, "aaaa1111", allow_dirty=True) == "aaaa1111"
@@ -36,7 +36,7 @@ def test_a_dirty_tree_is_refused_unless_allowed(tmp_path):
 
 def test_a_binary_without_a_stamp_is_refused(tmp_path):
     with pytest.raises(SystemExit, match="no build stamp"):
-        stamp.check(stub(tmp_path, "llrm-c", "usage: llrm-c [-h]", code=2))
+        stamp.check(stub(tmp_path, "llrm-llc", "usage: llrm-llc [-h]", code=2))
 
 
 def test_the_options_are_taken_from_the_line_and_the_environment(monkeypatch):
@@ -54,10 +54,10 @@ def test_a_binary_overwritten_after_its_ok_is_refused(tmp_path):
 
     dist = tmp_path / "sbp-aaaa1111" / "dist"
     dist.mkdir(parents=True)
-    binary = stub(dist, "llrm-c", "llrm-c aaaa1111")
-    (tmp_path / "sbp-aaaa1111" / "ok").write_text(f"sha: aaaa1111\n{hashlib.md5(binary.read_bytes()).hexdigest()}  llrm-c\n")
+    binary = stub(dist, "llrm-llc", "llrm-llc aaaa1111")
+    (tmp_path / "sbp-aaaa1111" / "ok").write_text(f"sha: aaaa1111\n{hashlib.md5(binary.read_bytes()).hexdigest()}  llrm-llc\n")
     assert stamp.check(binary, "aaaa1111") == "aaaa1111"
-    binary.write_text("#!/bin/sh\necho 'llrm-c aaaa1111'\n# another build\n")
+    binary.write_text("#!/bin/sh\necho 'llrm-llc aaaa1111'\n# another build\n")
     with pytest.raises(SystemExit, match="recorded when it was built"):
         stamp.check(binary, "aaaa1111")
 
@@ -74,7 +74,7 @@ def test_an_incremental_build_is_refused_for_a_count_unless_allowed(tmp_path, mo
     budgets.toml rows measured on a dev tree's build were baselined on the wrong binary and #5744 was refused three times for it."""
     monkeypatch.delenv("LLRM_ALLOW_INCREMENTAL", raising=False)
     cold = stub(tmp_path, "llrm-llc", "llrm-llc aaaa1111")
-    warm = stub(tmp_path, "llrm-c", "llrm-c aaaa1111+dirty+incremental")
+    warm = stub(tmp_path, "llrm-qb", "llrm-qb aaaa1111+dirty+incremental")
     stamp.refuse_incremental(cold)
     assert stamp.read(warm) == ("aaaa1111", True)
     with pytest.raises(SystemExit, match="built from aaaa1111 incrementally"):

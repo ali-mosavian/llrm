@@ -2,7 +2,7 @@
 
 Eleven `isel_tests` went red at #4992 (`pressuresink` deleted; first bad commit d50878167, bisect first-parent, good 30e8dc659). They pin the instruction order and registers of `--isel=old`, which retires with the flip (#4512). Each carries `#[ignore = "OLD-SEL-n ..."]`; the flip PR deletes them with the old selector.
 
-m16 sizes are x86 encodings summed by hand over the instructions that differ, `-march=i386` forms. The DAG selector (`--isel=dag`, `llrm-c -Os -m16 -march=i386`) compiles the C shapes of rows 5 and 8 without the growth (`fld; fadd dword ptr [bp+10]`, no second cell). Rows 6 and 7 were not run on it.
+m16 sizes are x86 encodings summed by hand over the instructions that differ, `-march=i386` forms. The DAG selector (`--isel=dag`, `llrm-cc -Os -m16 -march=i386`) compiles the C shapes of rows 5 and 8 without the growth (`fld; fadd dword ptr [bp+10]`, no second cell). Rows 6 and 7 were not run on it.
 
 | Row | Test | Delta | Size |
 |---|---|---|---|

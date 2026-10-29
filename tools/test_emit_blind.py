@@ -1,4 +1,4 @@
-"""llrm-c writes the object only for an `.o` or `.obj` output; `-o /dev/null` gets the assembly text and the encoder never runs. A tool that checks a compile
+"""The compiler writes the object only for an `.o` or `.obj` output; `-o /dev/null` gets the assembly text and the encoder never runs. A tool that checks a compile
 succeeded with `-o /dev/null` is blind past isel (QCport's ui/console.c died in the encoder for days under a sweep that read 0 failed)."""
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ MEASURING = {
     "test_compile_gap.py": "asserts the gap tool does not print to /dev/null",
     "parity_smoke.py": "compile_ok swaps the null device for an object (test_parity_smoke)",
 }
-# Not llrm-c: the pin's llc and clang, or a front end that writes its object whatever the name (llrm-qb, llrm-nib).
+# Not the C compiler: the pin's llc and clang, or a front end that writes its object whatever the name (llrm-qb, llrm-nib).
 OTHER_TOOLS = re.compile(r"LLC|llc|clang|gcc|llrm-qb|llrm-nib|\bll\b|perf|valgrind")
 
 
@@ -26,7 +26,7 @@ def devnull_compiles(path: Path) -> list[int]:
         and '"-S"' not in line
         and "2>" not in line
         and not OTHER_TOOLS.search(line)
-        and ("llrm-c" in path.read_text() or "compiler" in path.read_text())
+        and ("llrm-cc" in path.read_text() or "compiler" in path.read_text())
     ]
 
 

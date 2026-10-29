@@ -10,7 +10,7 @@ TL;DR: both passes are llrm-only module passes that cost 16.4 M Ir (d_faces -O2 
 
 So the pin has no counterpart for either decision. `InlineSpiller` and `LiveRangeEdit` take their facts from the instruction (`!invariant.load`, memory operands), never from an alias analysis.
 
-## Measured (llrm-c at origin/feat/parity, passes switched off by a local hack)
+## Measured (llrm-cc at origin/feat/parity, passes switched off by a local hack)
 - QCport, 64 of 65 modules, m16: `-Os` 290,470 B with and without; `-O2` 351,266 B with, 351,261 B without. The passes buy no bytes there.
 - qbq-llrm render and game, 7 files, m32 `-O2`: 40,272 B with, 40,316 B without (+44 B, 0.1%).
 - Cost: 16.4 M Ir of the 1063 M ledger (1.5%).

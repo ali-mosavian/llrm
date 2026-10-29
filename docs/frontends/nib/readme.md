@@ -36,7 +36,7 @@ flowchart TB
   sem["<b>semantic/</b><br/><small>types, borrow checker</small>"]:::src
   hir["<b>HIR</b><br/><small>common, typed, name-resolved</small>"]:::mid
   run["<b>llrm-run</b><br/><small>host interpreter</small>"]:::data
-  mir["<b>MIR, optimizer, backend</b><br/><small>shared with llrm-qb, llrm-c</small>"]:::opt
+  mir["<b>MIR, optimizer, backend</b><br/><small>shared with llrm-qb, llrm-cc</small>"]:::opt
   obj["<b>object file</b><br/><small>OMF for m16</small>"]:::out
   dos["<b>link with runtime,</b><br/><small>run in DOS</small>"]:::mid
   src --> syn
@@ -52,7 +52,7 @@ flowchart TB
 
 ## Tools
 
-Build them without the DOS toolchain, which only `llrm-c` needs:
+Build them without the DOS toolchain, which only `llrm-cc` needs:
 
 ```sh
 cargo build --release --no-default-features --bin llrm-nib --bin llrm-run \
@@ -120,7 +120,7 @@ error.
 
 ## `noundef` (note N1)
 
-llrm-c states `noundef` on scalar parameters and arguments as clang does
+llrm-cc states `noundef` on scalar parameters and arguments as clang does
 (`DetermineNoUndef`, CGCall.cpp). llrm-nib states none yet.
 
 What guarantees a defined value: a binding needs an initializer

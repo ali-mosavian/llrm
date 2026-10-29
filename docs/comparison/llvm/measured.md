@@ -16,7 +16,7 @@ Measured with an LLVM built from source (Release, assertions off, X86 only, stat
 | LLVM tag (scoreboard column) | `llvmorg-20.1.8`, `87f0227cb60147a26a1eeb4fb06e3b505e9c7261` |
 | build | `cmake -G Ninja llvm -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=OFF -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_ENABLE_PROJECTS=clang -DCMAKE_CXX_FLAGS=-g1 -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 -DLLVM_USE_LINKER=lld -DLLVM_INCLUDE_TESTS=OFF`, then `ninja clang opt llc llvm-extract` |
 | input | `render/d_faces.c` of qbq-llrm, `-w -m32 -march=i486 -fno-inline-functions`, the Borland keywords defined away, as `tools/compile-gap.py` |
-| llrm | `llrm-c` built `--profile dist` from main `954bc48fa`, `tools/compile-gap.py` and `LLRM_DEBUG=runs,time` |
+| llrm | `llrm-cc` built `--profile dist` from main `954bc48fa`, `tools/compile-gap.py` and `LLRM_DEBUG=runs,time` |
 | d_faces IR | 11 functions, 3,295 IR instructions before optimization (counted from the `.ll`): `d_draw_faces` 2,742, `clip_w` 346, `sc_mipfloor_c` 70, `sc_shift_c` 34, `cam_plane_dist` 33, `qglFaceFetch` 27, `ifloor` 23, `d_faces_layout_ok` 14, three of 2 |
 
 Commands: IR `clang <flags> -O2 -Xclang -disable-llvm-passes -emit-llvm -S`; pass counts `opt -passes='default<O2>' -debug-pass-manager -print-changed -disable-output` (`-Os` is `default<O2>` on the `optsize` IR, which LLVM requires); phases `valgrind --tool=callgrind clang -cc1 <the driver's cc1 line>` then `callgrind_annotate --inclusive=yes`.

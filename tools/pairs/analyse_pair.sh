@@ -1,13 +1,13 @@
 #!/bin/bash
-# analyse_pair.sh DIR BASE_BINDIR NEW_BINDIR  (dirs holding llrm-c; DIR under PAIR_SCRATCH, default ~/scratch): d_faces runner, QCport bytes, drop broken rows,
+# analyse_pair.sh DIR BASE_BINDIR NEW_BINDIR  (dirs holding llrm-cc and llrm-llc; DIR under PAIR_SCRATCH, default ~/scratch): d_faces runner, QCport bytes, drop broken rows,
 # analyse.py -> DIR/report.txt, with the arms line (binary paths and md5) first. Run from the checkout whose tools/ it should use (its own).
 R=$(cd "$(dirname "$0")/../.." && pwd); S=${PAIR_SCRATCH:-$HOME/scratch}; W=$S/$1; export ROWS_WORK=$W DFACES_SRC=${DFACES_SRC:-$S/qbq-llrm/src}
 touch $2/llrm-* $3/llrm-* $2/nibfront $3/nibfront 2>/dev/null
 cd $R
-printf "arms: base=%s llrm-c md5 %s; new=%s llrm-c md5 %s (base is the first binary, new the second)\n" "$2" "$(md5sum $2/llrm-c | cut -c1-12)" "$3" "$(md5sum $3/llrm-c | cut -c1-12)" > $W/arms.txt
+printf "arms: base=%s llrm-llc md5 %s; new=%s llrm-llc md5 %s (base is the first binary, new the second)\n" "$2" "$(md5sum $2/llrm-llc | cut -c1-12)" "$3" "$(md5sum $3/llrm-llc | cut -c1-12)" > $W/arms.txt
 for n in base main; do d=$([ $n = base ] && echo $2 || echo $3)
   VSGCC_WORK=$W/dfw-$n LLRM_BIN=$d nice -n 10 uv run -q --project tools python crates/target/llrm-x86-m32/vsgcc/dfaces/run.py --levels O1 O2 O3 Os --json $W/df-$n.json > $W/df-$n.log 2>&1; done
-BASE_LLRM=$2/llrm-c MAIN_LLRM=$3/llrm-c nice -n 10 python3 tools/rows/qcport.py > $W/qcport.log 2>&1
+BASE_LLRM=$2/llrm-cc MAIN_LLRM=$3/llrm-cc nice -n 10 python3 tools/rows/qcport.py > $W/qcport.log 2>&1
 python3 - "$W" <<'PY'
 import json,collections,os,sys
 W=sys.argv[1]+'/'

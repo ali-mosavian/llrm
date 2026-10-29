@@ -56,7 +56,6 @@ llrm-iselgen = { path = "crates/backend/llrm-iselgen" }
 llrm-peepgen = { path = "crates/backend/llrm-peepgen" }
 llrm-nib = { path = "crates/frontends/nib" }
 llrm-qb = { path = "crates/frontends/qb" }
-llrm-c = { path = "crates/frontends/llrm-c" }
 llrm-qbruntime = { path = "runtime/qb" }
 
 [package]
@@ -78,19 +77,14 @@ llrm-bcdriver = { workspace = true }
 llrm-driver = { workspace = true }
 llrm-nib = { workspace = true }
 llrm-qb = { workspace = true }
-llrm-c = { workspace = true, optional = true }
 llrm-cc = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
 default = ["toolchain"]
-# What the build scripts bootstrap: Open Watcom's wccq (llrm-c), jwasm and jwlink, and DOSBox-X.
-# The lib tests need only wccq.
+# What the build scripts bootstrap: jwasm and jwlink, and DOSBox-X.
 toolchain = ["jw", "dosrun"]
-# The Watcom-dialect llrm-c, kept until llrm-cc replaces it (C4): not built by default.
-c-legacy = ["dep:llrm-c"]
-wccq = ["c-legacy", "llrm-c/toolchain"]
 jw = []
 dosrun = []
 system-alloc = []
@@ -106,11 +100,6 @@ toml = { workspace = true }
 [[bin]]
 name = "llrm-qb"
 path = "src/bin/llrm-qb.rs"
-
-[[bin]]
-name = "llrm-c"
-path = "src/bin/llrm-c.rs"
-required-features = ["c-legacy"]
 
 [[bin]]
 name = "llrm-cc"
@@ -157,7 +146,7 @@ incremental = true
 [profile.dev]
 debug = "line-tables-only"
 
-# The shipped llrm-c, the vs-gcc compile-time table and the creep run on main: one codegen unit and fat LTO (about 3 minutes from cold, against
+# The shipped llrm-cc, the vs-gcc compile-time table and the creep run on main: one codegen unit and fat LTO (about 3 minutes from cold, against
 # 7-60 s incremental). Compile instructions -11..-13% (d_faces, combat, cmd, mdl, nbody_single, queens, x_life, 2026-10-09); thin LTO with
 # 16 units gets -6.5..-7.4% in ~40 s. Not for the PR gate, which compares two commits built the same way on `release`:
 # the deltas of #1039, #1032 and #1029 agree in sign and size under release, thin and dist (docs/working/testing.md).

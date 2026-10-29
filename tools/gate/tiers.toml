@@ -81,12 +81,12 @@ owners = ["runtime/qb/**", "runtime/shared/dos/**", "crates/frontends/qb/**", "c
 [[heavy]]
 step = "qcport"
 why = "builds and runs QCport against the all-Borland build: 100 s"
-owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/driver/llrm-cc/**", "crates/target/llrm-x86-m32/**", "crates/mc/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**", "crates/codegen/**"]
+owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/driver/llrm-cc/**", "crates/target/llrm-x86-m32/**", "crates/mc/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**", "crates/codegen/**"]
 
 [[heavy]]
 step = "oracle-qcport"
 why = "QCport's modules under every LLRM_CHECK_* oracle, then built and run against the Borland build: the C corpus the oracle sweep lacks"
-owners = ["tools/oracle_qcport.py", "tools/oracle_sweep.py", "tools/oracle_expected.toml", "tools/qcport*", "tools/qcport/**", "crates/frontends/llrm-c/**", "crates/driver/llrm-cc/**", "crates/backend/**", "crates/opt/**", "crates/codegen/**"]
+owners = ["tools/oracle_qcport.py", "tools/oracle_sweep.py", "tools/oracle_expected.toml", "tools/qcport*", "tools/qcport/**", "crates/driver/llrm-cc/**", "crates/backend/**", "crates/opt/**", "crates/codegen/**"]
 
 [[heavy]]
 step = "rfmt-post"
@@ -96,12 +96,12 @@ owners = ["tools/rfmt-post/**", "tools/fmt.sh", "rustfmt.toml"]
 [[heavy]]
 step = "measure"
 why = "compile cost (QCport and the 66 programs at -O1/-O2/-O3/-Os) and its growth with size (axes at N and 2N, and each step of the compile) against the merge-base's measurement in ~/.cache/llrm/measure: 3-8 minutes when the base is not measured yet"
-owners = ["crates/backend/**", "crates/codegen/**", "crates/driver/llrm-driver/**", "crates/opt/**", "crates/frontends/llrm-c/**", "crates/driver/llrm-cc/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-x86/**", "tools/compile-cost.py", "tools/measure.py", "bench/**"]
+owners = ["crates/backend/**", "crates/codegen/**", "crates/driver/llrm-driver/**", "crates/opt/**", "crates/driver/llrm-cc/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-x86/**", "tools/compile-cost.py", "tools/measure.py", "bench/**"]
 
 # `run` always runs when code changed, on the languages the diff can affect (all, in a full tier).
 [run_languages]
 qb = ["crates/frontends/qb/**", "crates/frontends/qb/**", "runtime/qb/**", "tests/run/qb/**"]
-c = ["crates/frontends/llrm-c/**", "crates/driver/llrm-cc/**", "tests/run/c/**"]
+c = ["crates/driver/llrm-cc/**", "tests/run/c/**"]
 nib = ["crates/frontends/nib/**", "tests/run/nib/**"]
 # Everything else (targets, examples, bench, tests/run/huge, tests/run/alias, run.rs) runs all languages.
 
@@ -190,7 +190,6 @@ slow_pytest = [
     "tools/bench/test_bench.py",
     "tools/dosbatch/test_qbgfxspeed.py",
     "crates/target/llrm-x86-m32/vsgcc/test_scaling.py",
-    "tools/test_alloc_scaling.py",
     "tools/test_oracles.py",
     "tools/dosbatch/test_qb32cache.py",
     "tests/test_loops.py",

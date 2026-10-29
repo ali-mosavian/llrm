@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Whether two binaries are one build: a pair built into one shared CARGO_TARGET_DIR gave two llrm-c that differed by 83 path bytes, and the pair read 0 objects changed.
+"""Whether two binaries are one build: a pair built into one shared CARGO_TARGET_DIR gave two llrm-llc that differed by 83 path bytes, and the pair read 0 objects changed.
 
     tools/pairs/voidpair.py OLD NEW      prints `distinct: N bytes differ` and exits 0, or `VOID PAIR: ...` and exits 1
 

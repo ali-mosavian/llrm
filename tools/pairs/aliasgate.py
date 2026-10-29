@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """The never-a-NoAlias-gained gate for a change to the alias stack's inputs.
 
-    tools/pairs/aliasgate.py --dumper BASE_LLRM_C --old OLD_ALIAS_PAIRS --new NEW_ALIAS_PAIRS [--src DIR] [--jobs N]
+    tools/pairs/aliasgate.py --dumper BASE_LLRM_CC --old OLD_ALIAS_PAIRS --new NEW_ALIAS_PAIRS [--src DIR] [--jobs N]
 
-The dumper (one llrm-c, so both sides read one IR) writes each source's per-pass
+The dumper (one llrm-cc, so both sides read one IR) writes each source's per-pass
 module dumps (`--dump`); at three stages of each (the first, the last of the
 walk, the last) the OLD and NEW builds of `alias_pairs` record the stack's
 answers for every load and store pair and every call against every access
@@ -14,12 +14,14 @@ wrapped sources vsgcc compiles (`ROWS_WORK/<name>/b/*.c`).
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+CC_ROWS = {"m32": "x86_32-wat", "m16": "x86_16-wat"}  # llrm-cc takes its target row from LLRM_CC_TARGET
 FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"]}
 
 
@@ -35,7 +37,7 @@ def stages(directory: Path) -> list[Path]:
 def one(args: argparse.Namespace, source: Path, target: str, work: Path) -> tuple[str, int, int, int, int, list[str]]:
     name = f"{source.stem}-{target}"
     dump = work / name
-    done = subprocess.run([args.dumper, *FLAGS[target], "-O2", "--dump", str(dump), "-o", str(work / f"{name}.o"), str(source)], capture_output=True, text=True)
+    done = subprocess.run([args.dumper, *FLAGS[target], "-O2", "-c", "--dump", str(dump), "-o", str(work / f"{name}.o"), str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_CC_TARGET": CC_ROWS[target]})
     if done.returncode != 0:
         return name, 0, 0, 0, 0, [f"{name}: the dumper failed: {(done.stderr.strip().splitlines() or ['?'])[-1][:100]}"]
     totals = [0, 0, 0, 0]

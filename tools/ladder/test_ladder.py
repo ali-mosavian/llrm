@@ -33,7 +33,7 @@ def asm_instructions(shape: str, n: int) -> int:
 def test_a_shape_is_c89_and_the_same_text_every_time(shape: str) -> None:
     text = gen.generate(shape, 50)
     assert text == gen.generate(shape, 50)
-    assert "for (unsigned" not in text, "wccq takes no C99 declaration in a for"
+    assert "for (unsigned" not in text, "the text is C89: no declaration in a for"
     assert gen.generate(shape, 100).count("\n") > text.count("\n")
 
 

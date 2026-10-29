@@ -13,7 +13,7 @@ PANIC = "thread 'main' panicked at crates/opt/llrm-analysis/src/memory.rs:10:5:\
 
 
 def compiler(tmp_path: Path, body: str) -> Path:
-    path = tmp_path / "llrm-c"
+    path = tmp_path / "llrm-cc"
     path.write_text("#!/bin/sh\n" + body)
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path
@@ -47,10 +47,10 @@ def test_a_run_that_drew_nothing_is_no_pass():
 
 
 def test_a_module_is_compiled_by_llrm_cc_for_the_borland_row_and_flags(tmp_path):
-    """tools/oracle_qcport.py ran target/gate-bins/llrm-c, which is gone: gate run 2 died with FileNotFoundError before one module."""
+    """tools/oracle_qcport.py ran a compiler that is gone: gate run 2 died with FileNotFoundError before one module."""
     fake = compiler(tmp_path, 'echo "$LLRM_CC_TARGET $*" > "$0.said"\n')
     oracle_qcport.compile_module(fake, tmp_path / "sc.c", "-O2", oracle_qcport.flags(tmp_path, tmp_path / "bcinc"), tmp_path / "sc.obj")
-    said = (tmp_path / "llrm-c.said").read_text()
+    said = (tmp_path / "llrm-cc.said").read_text()
     assert said.startswith("x86_16-dos -O2 -c ") and f"-nostdinc -isystem {tmp_path / 'bcinc'}" in said
 
 

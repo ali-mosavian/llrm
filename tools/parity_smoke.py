@@ -378,7 +378,7 @@ def oracle_env() -> dict[str, str]:
 
 
 def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
-    """None where the compile succeeded; else its first line of complaint. A `-o /dev/null` is an object in a scratch directory: llrm-c encodes only for an `.o` or
+    """None where the compile succeeded; else its first line of complaint. A `-o /dev/null` is an object in a scratch directory: the compiler encodes only for an `.o` or
     `.obj` output, so the null device never reached the encoder."""
     try:
         with tempfile.TemporaryDirectory(prefix="smoke-") as work:
@@ -539,9 +539,8 @@ def dependants(touched: set[str], graph: dict[str, set[str]]) -> set[str]:
     return out
 
 
-# Lib tests that exist only with a feature, which no layer enabled (llrm-c's `toolchain`: the call-boundary and compile listings; an interrupt handler refused for four days, #2936): the
-# features each package's lib run turns on. 12 s on a warm target for llrm-c.
-LIB_FEATURES: dict[str, tuple[str, ...]] = {"llrm-c": ("toolchain",)}
+# Lib tests that exist only with a feature no layer enabled: the features each package's lib run turns on. No package needs one today.
+LIB_FEATURES: dict[str, tuple[str, ...]] = {}
 
 
 def lib_command(package: str, *extra: str) -> list[str]:
@@ -659,7 +658,6 @@ def integration_map(
             used |= {name} & bins.keys() and bins[name]
         if source.stem == "check":
             # tests/check.rs runs whichever tool a file's RUN line names, from beside llrm-qb: the compilers of its RUN lines, not only the one CARGO_BIN_EXE names
-            # (copy_idioms.c, which drives llrm-c, went red on parity unseen: a change to llrm-c ran no check).
             for case in (root / "tests" / "check").rglob("*"):
                 for tool in re.findall(r"RUN:\s*(?:not\s+)?([\w-]+)", case.read_text(errors="replace") if case.is_file() else ""):
                     used |= bins.get(tool, set())
@@ -899,7 +897,7 @@ def dump(data: dict) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--bin", type=Path, default=None, help="the llrm-c, llrm-qb and llrm-nib directory (default: LLRM_BIN, else the target dir's release)")
+    parser.add_argument("--bin", type=Path, default=None, help="the llrm-cc, llrm-qb and llrm-nib directory (default: LLRM_BIN, else the target dir's release)")
     parser.add_argument("--base", default="origin/feat/parity", help="what the merge result is compared with to find the touched crates")
     parser.add_argument("--skip", action="append", default=[], metavar="STEP", help="a step known red (tools/parity_squash.py --known-red): not run, named as skipped in the line")
     parser.add_argument("--rank", nargs="+", metavar="CRATE", help="measure these crates' unit tests once and write the ranking")

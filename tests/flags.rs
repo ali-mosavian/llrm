@@ -78,8 +78,7 @@ fn tools() -> Vec<Tool> {
 }
 
 /// Binaries that name no target, and why.
-const EXEMPT: [(&str, &str); 5] = [
-    ("llrm-c", "the dropped Watcom front end, still built; llrm-cc replaces it and is tested above"),
+const EXEMPT: [(&str, &str); 4] = [
     ("llrm-llc", "reads LLVM IR; takes -m through the shared flag parser"),
     ("llrm-mir", "reads MIR, which states its own datalayout"),
     ("llrm-pass", "runs one pass on MIR text, which states its own datalayout"),

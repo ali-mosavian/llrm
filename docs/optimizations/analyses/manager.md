@@ -126,7 +126,7 @@ and when an analysis starts to be kept:
 
 ```text
 for s in 1 2 3 4 5 6 7 8; do
-  LLRM_CHECK_ORDER=$s tools/identical.py target/release/llrm-c target/release/llrm-c
+  LLRM_CHECK_ORDER=$s tools/identical.py target/release/llrm-cc target/release/llrm-cc
 done
 ```
 

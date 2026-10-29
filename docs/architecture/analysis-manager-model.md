@@ -63,7 +63,7 @@ Where we deviate (by grep and reading; counts are measured in section 3):
 
 ## 3. Measured
 
-One run of `llrm-c -m32 -mabi=sysv -march=i486 -O2` on `d_faces`, `21aadae64`, release. `LLRM_DEBUG=counts` for asks and misses (11 bodies per slot), `LLRM_DEBUG=time` for own M (instructions, the same run's profile of the process). The glue figures are from the callgrind glue table of `8e278bbf2`.
+One run of `llrm-cc -m32 -mabi=sysv -march=i486 -O2` on `d_faces`, `21aadae64`, release. `LLRM_DEBUG=counts` for asks and misses (11 bodies per slot), `LLRM_DEBUG=time` for own M (instructions, the same run's profile of the process). The glue figures are from the callgrind glue table of `8e278bbf2`.
 
 Open factor, resolved (measured, cycles-queue-quiet-host, `feat/parity` 13a6a6ade, d_faces `-O2`): the 89 is not a count of compiled bodies. Ours has 11 defines entering the pipeline and 7 after globaldce; the pin (`opt default<O2>`, same flags) goes 11 to 6. Per-pass runs (`LLRM_DEBUG=runs`, 11 bodies): combine 55, fold 55, simplifycfg 33, licm 33, sroa 33, gvn 11; the pin runs InstCombine 73 times and SimplifyCFG 78. So there is no 8x factor: 89 counted analysis shapes, and the step lines' in=21/out=21 are defines plus declarations. The only extra define at `-O2` was `clip_w_` (inline refused, a decision gap; closed by #3354, see compile-gap-series.md row C1). Our `-O1` inlined nothing (the pin's goes 11 to 6); fixed by #3249. Per-body figures below divide by 11.
 

@@ -2,7 +2,7 @@
 
 `canReassign` and the `EnableLocalReassign` clause of `canEvictInterferenceBasedOnCost` are translated at d1106deb71cc: the pin turns it on by default (`RegAllocEvictionAdvisor.cpp#L184-L188`, `TargetSubtargetInfo.cpp#L59-L62`, no x86 override). Before, a cheaper local range was never taken out of a register to make room for a heavier local one.
 
-Measured on parity `7f75d65222` and main `origin/main` (clean builds, one target dir each), `llrm-c -m16 -march=i386 -Os`, QCport's 65 modules, emitted bytes. The 15 modules that change; every other module is equal:
+Measured on parity `7f75d65222` and main `origin/main` (clean builds, one target dir each), `llrm-cc -m16 -march=i386 -Os`, QCport's 65 modules, emitted bytes. The 15 modules that change; every other module is equal:
 
 | module | main B | parity B | with change B |
 |---|---|---|---|
@@ -38,7 +38,7 @@ Not held conditions (oversight). Exit: the allocation order of the evicted local
 
 ## Oversight's sweep of d3f08d2438: QCport -Os object bytes, main / parent / head
 
-Source: `qcport-os-3446.tsv` (OMF object-file bytes of `llrm-c -Os`, 65 modules; llrm-c md5 main 56f120bb59fa, parent 804e487fd4c9, head 0eff6c50903f). Modules whose bytes differ between parent and head; the other 50 are equal.
+Source: `qcport-os-3446.tsv` (OMF object-file bytes of `llrm-cc -Os`, 65 modules; llrm-cc md5 main 56f120bb59fa, parent 804e487fd4c9, head 0eff6c50903f). Modules whose bytes differ between parent and head; the other 50 are equal.
 
 | module | main | parent | head | head - parent |
 |---|--:|--:|--:|--:|

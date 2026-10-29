@@ -3,7 +3,7 @@
 
     ladder_gen.py SHAPE N        SHAPE: arith | mem | loop | diamond | calls | float | mixed
 
-Same C89 text goes to every compiler (wccq takes no C99 declarations); unsigned arithmetic only, so there is no UB to
+Same C89 text goes to every compiler ; unsigned arithmetic only, so there is no UB to
 fold differently. Every value reaches the return or a store, so none is dead.
 """
 from __future__ import annotations

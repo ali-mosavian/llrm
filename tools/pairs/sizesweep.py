@@ -12,6 +12,7 @@ summary: variants grown and shrunk, bytes each way. `summarize` reads that text 
 """
 from __future__ import annotations
 
+import os
 import argparse
 import re
 import shutil
@@ -44,10 +45,11 @@ def summarize(text: str) -> str:
 
 
 TARGETS = {"m16": "-m16", "m32": "-m32"}
+CC_ROWS = {"m16": "x86_16-wat", "m32": "x86_32-wat"}
 
 
 def own_target(flags: list[str]) -> str:
-    """The target a program's own flags name (`m16`, `m32`), else `m16`: the compilers' default target is the 16-bit DOS one (llrm-c with and without -m16 emit the same -S)."""
+    """The target a program's own flags name (`m16`, `m32`), else `m16`: the compilers' default target is the 16-bit DOS one ."""
     for flag in flags:
         if flag in ("-m16", "-m32"):
             return "m" + flag[2:]
@@ -75,20 +77,25 @@ def sweep(before: str, after: str, isel: str, level: str, target: str) -> list[s
 
 
 def _sweep(run_tests, sizes, scratch: Path, before: str, after: str, isel: str, level: str, target: str, out: list[str], totals: list[int]) -> list[str]:
+    import llrmbin
+
     programs = [program for program in run_tests.discover([]) if own_target(program.flags) == target]
     skipped = len(run_tests.discover([])) - len(programs)
     header = [f"# target {target}: {len(programs)} programs compiled with {TARGETS[target]} forced, {skipped} variants of the other target left out; {level} --isel={isel}; cpu: the compiler's default (no -march)"]
     for program in programs:
-        tool = {".bas": "llrm-qb", ".nib": "llrm-nib", ".c": "llrm-c"}[program.source.suffix]
+        tool = {".bas": "llrm-qb", ".nib": "llrm-nib", ".c": "llrm-cc"}[program.source.suffix]
         measured = []
         for dist in (before, after):
             obj = scratch / "sizesweep.obj"
             obj.unlink(missing_ok=True)
             dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
             flags = [flag for flag in program.flags if not flag.startswith("-O") and flag not in ("-m16", "-m32")]
-            command = [f"{dist}/{tool}", str(program.source), *dialect, *flags, TARGETS[target], level, f"--isel={isel}", "-o", str(obj)]
+            cc = tool == "llrm-cc"
+            command = [f"{dist}/{tool}", str(program.source), *dialect, *flags, TARGETS[target], level, f"--isel={isel}", *(["-c"] if cc else []), "-o", str(obj)]
             require_target(command, target)
-            subprocess.run(command, capture_output=True)
+            # llrm-cc takes its target row from LLRM_CC_TARGET; it links without -c.
+            env = {**os.environ, **llrmbin.cc_environment(), "LLRM_CC_TARGET": CC_ROWS[target]} if cc else None
+            subprocess.run(command, capture_output=True, env=env)
             measured.append(sizes.code_bytes(obj) if obj.exists() else None)
         if None in measured:
             continue

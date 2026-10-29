@@ -147,8 +147,7 @@ Closing the window ends the program with exit code 0 (a user's Ctrl-Break leaves
 `tests/qb_sdl.rs` asserts the smoke's exit status).
 
 Mac findings: sdl2-compat (Homebrew's default `sdl2-config`, on SDL3) crashes on a synthetic `SDL_TEXTINPUT` pushed with no
-window, which `sdl_smoke.c` does; use real SDL2 2.32.x. `cargo test` on macOS stops in `crates/frontends/llrm-c/build.rs`
-(Open Watcom bootstrap, `cpyright.exe` is never built); build the smoke by hand with the `cc` line of `tests/qb_sdl.rs`.
+window, which `sdl_smoke.c` does; use real SDL2 2.32.x. Build the smoke by hand with the `cc` line of `tests/qb_sdl.rs`.
 
 ### Mac results (macOS 27.2, Xcode 27.1, Apple M3, clang 21)
 
@@ -176,9 +175,6 @@ Fixed on `qb-host-mac`: `sdl.h` renamed `qbsdl.h` (it collided with SDL2's `SDL.
    sync_request that does not guarantee a full frame.
 7. `llrm-qb -m64 -fobject-format=macho`: `llrm-qb: error: x86-m64 cannot write macho; it writes elf`.
 
-Open: Open Watcom `./build.sh boot` on macOS never builds `bld/git/binbuild/cpyright.exe` ("Can not open
-.../bld/git/binbuild/cpyright.exe for reading", then "Build failed"), so plain `cargo test` fails in
-`crates/frontends/llrm-c/build.rs`.
 
 Mac follow-up (feat/qb-host 8ffd78684 merged in):
 - Row 6: `-fsanitize=thread` with Mac clang: 3/3 `ok`, no race reports; `qb_sdl` 3/3 and `qb_headless` 3/3 pass.

@@ -93,7 +93,7 @@ def llrm(lang: str, source: Path, obj: Path, config: Config, stages: Path | None
     if not config.inline:
         common.insert(-2, "-fno-inline-functions")
     if lang == "c":
-        # llrm-c's m16 convention (regparm3) is the x86_16-dos-rp3 row of llrm-cc.
+        # the m16 register convention (regparm3) is the x86_16-dos-rp3 row of llrm-cc.
         command = [str(BIN / "llrm-cc"), "-c", "--target=x86_16-dos-rp3", str(source), *common]
         env.update(llrmbin.cc_environment())
     elif lang == "bas":
@@ -145,7 +145,7 @@ IA16_OPT = {"-O2": "-O2", "-O3": "-O3", "-Os": "-Os"}
 
 
 def watcom(source: Path, obj: Path, config: Config) -> None:
-    """Open Watcom, medium model, cdecl as llrm-c calls, no stack checks."""
+    """Open Watcom, medium model, cdecl as llrm-cc calls, no stack checks."""
     _run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", OW_CPU[config.cpu], *OW_OPT[config.opt],
           str(source), f"-fo={obj}"])
 

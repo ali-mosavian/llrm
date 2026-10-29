@@ -56,7 +56,7 @@ from dosbatch import BIN, ROOT, Job  # noqa: E402
 os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
 def physical_defines() -> list[str]:
-    """`-DPHYSICAL_<NAME>=0x..UL` for each physical address the platform description names, as llrm-c passes them: the
+    """`-DPHYSICAL_<NAME>=0x..UL` for each physical address the platform description names, as llrm-cc passes them: the
     reference compilers build the same program, which reads them (bench/textfill)."""
     text = (ROOT / "crates/target/llrm-x86/platform.toml").read_text()
     return [f"-DPHYSICAL_{name.upper()}=0x{address:X}UL" for name, address in tomllib.loads(text)["physical"].items()]
@@ -325,11 +325,11 @@ def references_available() -> bool:
 
 
 def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:
-    """Open Watcom, medium model, cdecl as llrm-c calls, no stack checks, inline 8087: tools/loops' reference build.
+    """Open Watcom, medium model, cdecl as llrm-cc calls, no stack checks, inline 8087: tools/loops' reference build.
     Linked with Watcom's own start-up, CLIBM and MATH87M (NOEMU87: no emulator, as BCC's FP87). Only `report` comes
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
-    flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
+    flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-cc compiles it
     done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]

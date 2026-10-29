@@ -12,7 +12,7 @@ def test_an_unset_environment_is_one_clear_line_not_a_traceback():
     assert "QCPORT is not set" in done.stderr and "Traceback" not in done.stderr
 
 
-def test_the_default_row_is_the_register_convention_llrm_c_has():
+def test_the_default_row_is_the_register_convention_row():
     spec = importlib.util.spec_from_file_location("qcport_size", TOOL)
     source = TOOL.read_text()
     assert spec and 'default="x86_16-dos-rp3"' in source

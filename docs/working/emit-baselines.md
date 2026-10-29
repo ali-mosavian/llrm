@@ -2,7 +2,7 @@
 
 Owner: w-8. Date: 2026-10-23.
 
-llrm-c writes an object only for an `.o` or `.obj` output; `-o /dev/null` gets the assembly text, so a cost measured there leaves out the encoder and the
+llrm-cc writes an object only for an `.o` or `.obj` output; `-o /dev/null` gets the assembly text, so a cost measured there leaves out the encoder and the
 object write, which clang's `-c` includes. The measuring tools now compile to an object (`llrmbin.with_object`, a path of fixed length).
 
 | Tool | Was | Now |

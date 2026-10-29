@@ -41,17 +41,20 @@ def measure(sha: str, source: Path, flags: list[str], done: set[str]) -> None:
     if s9 in done:
         return
     built = subprocess.run(["bash", str(HERE / "pair_build.sh"), str(SCRATCH), s9], cwd=WORKTREE, capture_output=True, text=True)
-    binary = SCRATCH / f"sbp-{s9}" / "dist" / "llrm-c"
+    binary = SCRATCH / f"sbp-{s9}" / "dist" / "llrm-cc"
     if built.returncode or not binary.exists():
         record = {"sha": s9, "error": "build failed", "tail": built.stderr[-200:]}
     else:
-        env = {k: v for k, v in os.environ.items() if not k.startswith("LLRM_")}
+        sys.path.insert(0, str(HERE.parent))
+        import llrmbin
+
+        env = {**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_")}, **llrmbin.cc_environment(), "LLRM_CC_TARGET": "x86_32-wat"}
         with tempfile.TemporaryDirectory() as tmp:
             wrapper = Path(tmp) / "d_faces_flat.c"
             wrapper.write_text("".join(f"#define {k}\n" for k in KEYWORDS) + f'#include "{source}"\n')
             cost = {}
             for level in LEVELS:
-                cmd = [str(binary), "-m32", "-mabi=sysv", "-march=i486", f"-{level}", *flags, "-o", str(Path(tmp) / "o.obj"), str(wrapper)]
+                cmd = [str(binary), "-c", "-m32", "-mabi=sysv", "-march=i486", f"-{level}", *flags, "-o", str(Path(tmp) / "o.obj"), str(wrapper)]
                 cost[level] = min(perf(cmd, env) for _ in range(3)) / 1e6
         record = {"sha": s9, "md5": hashlib.md5(binary.read_bytes()).hexdigest()[:12], "subject": git("log", "-1", "--format=%s", sha, cwd=WORKTREE), **cost}
     with OUT.open("a") as handle:

@@ -556,7 +556,7 @@ fn test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_on
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
     let compiler = env!("CARGO_BIN_EXE_llrm-cc");
-    let different = scratch.path().join("llrm-c-os");
+    let different = scratch.path().join("llrm-cc-os");
     std::fs::write(&different, format!("#!/bin/sh\nexec {compiler} \"$@\" -Os\n")).unwrap();
     std::fs::set_permissions(&different, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let gate = |new: &Path| {
@@ -607,7 +607,7 @@ fn test_llrm_os_h_needs_no_include_path() {
             .current_dir(scratch.path())
             .output()
             .unwrap();
-        assert!(done.status.success(), "llrm-c {mode}: {}", String::from_utf8_lossy(&done.stdout));
+        assert!(done.status.success(), "llrm-cc {mode}: {}", String::from_utf8_lossy(&done.stdout));
     }
 }
 

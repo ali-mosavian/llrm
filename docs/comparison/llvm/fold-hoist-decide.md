@@ -103,7 +103,7 @@ fn _numbers(
         let facts = match shared.as_deref() {
 ```
 
-The C front end is a child process (Open Watcom's `wccq`) that records the code generator's calls; `translate` turns that stream into HIR, a second IR with its own model; `hir::mir::emit` lowers HIR to MIR, a third.
+The C front end is a child process (Open Watcom's front end) that records the code generator's calls; `translate` turns that stream into HIR, a second IR with its own model; `hir::mir::emit` lowers HIR to MIR, a third.
 
 [`translate.rs#L1-L7`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/frontends/llrm-c/src/translate.rs#L1-L7)
 
@@ -123,7 +123,7 @@ The C front end is a child process (Open Watcom's `wccq`) that records the code 
 
 ## Measured
 
-Instructions, `d_faces.c` of qbq-llrm at `-O2 -m32 -march=i486 -fno-inline-functions`, llrm-c of main `21f5c9fc8` (callgrind inclusive, `LLRM_DEBUG=runs`), then re-run on main `1a3e557c1` for the ladder rows.
+Instructions, `d_faces.c` of qbq-llrm at `-O2 -m32 -march=i486 -fno-inline-functions`, llrm-cc of main `21f5c9fc8` (callgrind inclusive, `LLRM_DEBUG=runs`), then re-run on main `1a3e557c1` for the ladder rows.
 
 `fold` by body (M, with the analyses it asks first; four runs unless noted): `d_draw_faces` 156.0 (runs 55.7, 41.8, 34.0, 24.5), the body before it 8.5, the rest 0.1 to 1.5 each. Inside `fold` over the file (266.5 M, 48 runs): `_numbers` 137.9 (`ThroughMemory` 70.0, `Held::of` 35.9, the float solver 26.1 in two runs), the float half 94.4 over 20 runs (`Annotated` 44.1, `floatfacts::solved_over` 41.4, `PlainAccesses` 3.8). `d_draw_faces` after its first pass: 1,198 MIR instructions, 175 loads, 73 stores, 38 calls, 112 phis, 112 float operations.
 
@@ -144,7 +144,7 @@ On main `1a3e557c1` the same N=200 shape: `fold` 99.2, `gvn` 200.0, `hoist` 61.5
 
 Inside `hoist` and `decide`, from the [compile-time spec](../../architecture/compile-time-spec.md): an idle `hoist` run is 35% `Accesses::managed`, 23% `_invariant_run` (19.8 k `_movable` calls) and 17% spill forecast; an idle `decide` run is 27% `Held::of`.
 
-The front end, `d_faces` on main: `wccq` child 18 M (perf stat with and without `--no-inherit`), `frontend translate` 42.0 M, `hir to mir` 15.3 M, `hir::unit` and the stream 5.8 M: about 81 M against clang's 33.0 M (front end of `cc1`), 2.5x. On the ladder it is linear: `arith` `translate` 58.8, 234.4 M at N=400, 1600 (16.2 k per IR instruction; clang's whole `cc1 -disable-llvm-passes` is 16.4 k per IR instruction), `hir to mir` 20.3, 79.8 M. The front end allocates 260,499 blocks (6.9% of all allocations, 31 MB).
+The front end, `d_faces` on main: the Open Watcom front end child 18 M (perf stat with and without `--no-inherit`), `frontend translate` 42.0 M, `hir to mir` 15.3 M, `hir::unit` and the stream 5.8 M: about 81 M against clang's 33.0 M (front end of `cc1`), 2.5x. On the ladder it is linear: `arith` `translate` 58.8, 234.4 M at N=400, 1600 (16.2 k per IR instruction; clang's whole `cc1 -disable-llvm-passes` is 16.4 k per IR instruction), `hir to mir` 20.3, 79.8 M. The front end allocates 260,499 blocks (6.9% of all allocations, 31 MB).
 
 ## Proposed change
 

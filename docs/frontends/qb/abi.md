@@ -166,7 +166,7 @@ with a local offset. `ON ERROR GOTO 0` passes zero at that exact position.
 
 ## `noundef` (note Q1)
 
-llrm-c states `noundef` on scalar parameters and arguments as clang does
+llrm-cc states `noundef` on scalar parameters and arguments as clang does
 (`DetermineNoUndef`, CGCall.cpp). llrm-qb states none yet.
 
 What guarantees a defined value: every QB variable reads as zero until

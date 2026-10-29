@@ -1494,7 +1494,7 @@ name = "mir walk"
 ratio = 2.42
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: measured 72.6 -> 167.2 Minstr (x2.30); not red on llrm-c IR; at the limit (x2.30), reads differ by host; not profiled"
+why = "llrm-cc 2026-10-28: measured 72.6 -> 167.2 Minstr (x2.30); at the limit (x2.30), reads differ by host; not profiled"
 
 [[debt]]
 kind = "steps"

@@ -32,7 +32,6 @@ in [readme.md](readme.md).
 | `frontends/llrm-qb` | The `llrm-qb` driver: dialects, inline runtime, stage dumps |
 | `frontends/llrm-qbruntime` | QB runtime routine contracts (`runtime.toml`) |
 | `frontends/nib` | The Nib frontend: lexer, parser, semantics, std, runtime, and the language server (`lsp`) |
-| `frontends/llrm-c` | C through Open Watcom's front end (`toolchain/owshim/`): capture stream and translation to HIR |
 | `driver/llrm-bcdriver` | Compiles objects BC wrote: lift, optimise, select, write a fresh object |
 | `frontends/bcobj` | The BC object frontend: x86 decode, blocks and runtime ABI facts, and the lift of a BC object to MIR |
 | `codegen/llrm-codegen` | The compile driver, instruction selection, machine phases (`flow.rs`), layout, `objbuild`, the HIR interpreter, ABIs |
@@ -56,7 +55,7 @@ in [readme.md](readme.md).
 
 | Path | Holds |
 | --- | --- |
-| `src/bin` | `llrm-qb`, `llrm-nib`, `llrm-c`, `llrm-omf`, `llrm-mir`, `llrm-run`, `nibfront`, `nib-lsp` (package `llrm`) |
+| `src/bin` | `llrm-qb`, `llrm-nib`, `llrm-cc`, `llrm-omf`, `llrm-mir`, `llrm-run`, `nibfront`, `nib-lsp` (package `llrm`) |
 | `build.rs` | Builds jwasm, jwlink and the headless DOSBox-X beside the binaries (features `jw`, `dosrun`) |
 | `runtime/` | `qb` (the QB runtime in C), `c` and `nib` (per-target `x86-m16`, `x86-m32` descriptions and startup), `shared` (DOS facts and OS descriptions) |
 | `tests/` | Integration tests (`*.rs`, `test_*.py`), `run` and `check` suites per language, `differential`, `inputs`, `fixtures`, host shims (`hostalloc`, `hostgfx`) |

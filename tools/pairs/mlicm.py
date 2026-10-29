@@ -1,7 +1,8 @@
 """Premise for codegen row 42 (docs/working/early-machinelicm.md): on the same IR at m32, instructions of ours vs the pin's llc with and without -disable-machine-licm.
 
-    mlicm.py LLRM_C LEVEL(-O2|-Os) SRC_DIR [m32|m16]   (m16 compiles the QCport modules under ~/scratch/qcport/src)
+    mlicm.py LLRM_CC LEVEL(-O2|-Os) SRC_DIR [m32|m16]   (m16 compiles the QCport modules under ~/scratch/qcport/src)
 """
+import os
 import glob, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -16,6 +17,7 @@ Q = Path.home() / "scratch/qcport/src"
 MODS = ("host", "render", "model", "game", "sound", "ui")
 INC = [x for d in (*MODS, "qgl") for x in ("-I", str(Q / d))] + ["-I", str(Path.home() / "scratch/qctc/inc")] if MODE == "m16" else []
 FLAGS = ["-m16"] if MODE == "m16" else ["-m32", "-mabi=sysv", "-march=i486"]
+os.environ["LLRM_CC_TARGET"] = "x86_16-wat" if MODE == "m16" else "x86_32-wat"  # llrm-cc takes its target row from the environment
 WORK = Path.home() / "scratch/w3-mlicm/tmp"
 WORK.mkdir(exist_ok=True)
 

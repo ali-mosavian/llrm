@@ -4,7 +4,7 @@ For contributors to the register allocator. Measured first; the design follows f
 
 ## Measured
 
-`llrm-c -O2 -m32`, instructions the compiler itself executes (`LLRM_DEBUG=time`), one function of each shape from `scaling.py` at N, 2N, 4N, 8N.
+`llrm-cc -O2 -m32`, instructions the compiler itself executes (`LLRM_DEBUG=time`), one function of each shape from `scaling.py` at N, 2N, 4N, 8N.
 
 | Axis | N | compile Minstr | allocator Minstr | allocator share | rounds | allocations | allocator, ×per doubling |
 |---|---|---|---|---|---|---|---|

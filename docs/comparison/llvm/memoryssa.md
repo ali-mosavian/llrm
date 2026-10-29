@@ -85,7 +85,7 @@ The cap is the same size and idea, on one of three entry points. The difference 
 | structure build | `MemorySSAAnalysis::run` 2.47 M (0.60%), 27 builds | `Accesses::run` 194.1 M (6.02%), 99 builds |
 | distinct keys | not counted | 1,675 of 4,787 queries |
 
-Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`. LLVM: callgrind on `clang -cc1` of d1106deb71cc (total 415.4 M); query counts from llvm-measured. llrm: callgrind on the release `llrm-c` of 21f5c9fc8 (total 3,224 M); query and key counts from the walker-cache entry of compile-time-spec section 8 (dist build).
+Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`. LLVM: callgrind on `clang -cc1` of d1106deb71cc (total 415.4 M); query counts from llvm-measured. llrm: callgrind on the release `llrm-cc` of 21f5c9fc8 (total 3,224 M); query and key counts from the walker-cache entry of compile-time-spec section 8 (dist build).
 
 ## Proposed change
 

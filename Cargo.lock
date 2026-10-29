@@ -197,7 +197,6 @@ dependencies = [
  "llrm-alloc",
  "llrm-analysis",
  "llrm-bcdriver",
- "llrm-c",
  "llrm-cc",
  "llrm-codegen",
  "llrm-driver",
@@ -283,34 +282,6 @@ dependencies = [
  "llrm-support",
  "llrm-target",
  "llrm-x86-m16",
- "toml",
-]
-
-[[package]]
-name = "llrm-c"
-version = "0.1.0"
-dependencies = [
- "iced-x86",
- "indexmap",
- "llrm-c",
- "llrm-codegen",
- "llrm-driver",
- "llrm-mir",
- "llrm-object",
- "llrm-support",
- "llrm-target",
- "llrm-transforms",
- "llrm-x86",
- "llrm-x86-m16",
- "llrm-x86-m32",
- "num-bigint",
- "num-traits",
- "regex",
- "rustc-hash",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
  "toml",
 ]
 

@@ -108,7 +108,7 @@ The step is the same and equally cheap; the cost is behind it. A dropped llrm re
 | `registers`, `counted`, `bounded` | no counterpart | 202 builds 32.7 M, 143 builds 34.3 M, 135 builds 103.6 M |
 | `points-to`, `annotated`, `through-memory` | no counterpart (AAManager 44 builds) | 118 builds 48.0 M, 116 builds 78.9 M, 66 builds 75.4 M |
 
-Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`, 11 functions. LLVM: `valgrind --tool=callgrind` on `clang -cc1` of d1106deb71cc, total 415.4 M. llrm: callgrind on the release `llrm-c` of 21f5c9fc8, total 3,224 M; build counts and own M from `LLRM_DEBUG=time`.
+Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`, 11 functions. LLVM: `valgrind --tool=callgrind` on `clang -cc1` of d1106deb71cc, total 415.4 M. llrm: callgrind on the release `llrm-cc` of 21f5c9fc8, total 3,224 M; build counts and own M from `LLRM_DEBUG=time`.
 
 ## Proposed change
 

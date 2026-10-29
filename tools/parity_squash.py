@@ -454,8 +454,8 @@ def smoke_bins(env: dict | None = None) -> str:
 
 
 def bins_command(directory: Path) -> list[str]:
-    """The cargo build that refreshes every binary `directory` holds: `--bins` skips llrm-c (required-features = c-legacy), so a leftover llrm-c stayed older than the sources for good and the 03:12 pass was refused for it."""
-    return ["cargo", "build", "--release", "--bins", "-q", *(["--features", "wccq"] if (directory / "llrm-c").is_file() else [])]
+    """The cargo build that refreshes every binary."""
+    return ["cargo", "build", "--release", "--bins", "-q"]
 
 
 def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
@@ -1256,7 +1256,7 @@ def _build_release() -> None:
     if tree in _BUILT:
         return
     release = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "release"
-    subprocess.run(slotted(bins_command(release)), cwd=ROOT, check=True)  # --bins alone leaves llrm-c as old as the last hand build, and the stages touch it fresh
+    subprocess.run(slotted(bins_command(release)), cwd=ROOT, check=True)
     _BUILT.add(tree)
 
 
@@ -1592,7 +1592,7 @@ def _in_target(target: Path | None, kind: str = "test"):
     return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / kind)}, **kw)
 
 
-ALONE_DEPENDANTS = {"llrm-qb", "llrm-c", "llrm-nib"}  # the dependants whose lib tests failed batches that passed alone (#4927); the rest of the closure is the batch's to run
+ALONE_DEPENDANTS = {"llrm-qb", "llrm-nib"}  # the dependants whose lib tests failed batches that passed alone (#4927); the rest of the closure is the batch's to run
 ALONE_JOBS = "2"  # PRs checked at once: three took 6 of 8 cargo processes beside the batch's tests
 SOURCE_SCANNING_PACKAGES = {"llrm-mir"}  # lib tests that scan other crates' sources (no_file_gains_*): upstream of the crates they judge, so a dependants run never reaches them
 

@@ -53,7 +53,7 @@ QCport m16 (+553 B, 33 objects; earliest differing normalised stage of `LLRM_MIR
 | B. float constants not folded (the FR-2 cause) | ls O2/O3 +165 each | +330 |
 | E. not classified: the first hunk is none of the above | keybind Os -5, mod_tex O1/O2/O3/Os +29/+10/+10/+6, sbar O1 +5, snd_mix Os +1, sys Os -5 | +51 |
 
-Rows corpus objsweep, 11 objects. RETRACTED (w-8, 2026-10-24): objsweep wrote `x.old`, which llrm-c writes as assembly text, so every size here was text
+Rows corpus objsweep, 11 objects. RETRACTED (w-8, 2026-10-24): objsweep wrote `x.old`, which llrm-cc writes as assembly text, so every size here was text
 bytes. Object bytes, same two binaries: x_fir m16 O2/O3 +21 each and m32 -16, x_cordic m16 O3 +34 and m32 O3 +16, lru m32/m16 Os +10/-1, floats m32 Os -4,
 sieve m32 Os -4, nbody m32 Os -4 (+57 B in all). x_fir m16 +21: not GlobalOpt. MIR is -7 instructions in the new build (walk +16, GlobalOpt then
 -39) and the machine code -7 until RegAlloc, +8 after it: a register-allocation difference at m16 on the changed IR (tools/sizebisect). The others: causes owed with the E group, w-6, 2026-11-06. The translations of FR-2 (`foldNot`,

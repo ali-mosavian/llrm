@@ -6,7 +6,7 @@
 Each commit gets a worktree and a target directory of its own under $LLRM_AB_DIR (default ~/.cache/llrm/ab), built with
 `CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile dist --bin llrm-cc --bin llrm-llc`, the compiler the cost gate measures (tools/measure.py): `release`
 re-partitions its 16 codegen units when one file changes and flips the inlining of unrelated functions (the same PR read +0.46..0.61% on the gate's
-shapes in release, +0.01..0.04% in dist), and its `incremental = true` makes a 6% heavier llrm-c with the opposite sign (#2077: +0.24%
+shapes in release, +0.01..0.04% in dist), and its `incremental = true` makes a 6% heavier compiler with the opposite sign (#2077: +0.24%
 incremental, -0.58% CI mode). `--profile release` measures the old way. A CHECK or EXP switch in the environment that `--allow-env` does not name is refused (tools/envguard.py): both sides run in one environment.
 Prints per program and level `perf stat` instructions:u of both, and with --cycles N the min and
 median of cycles:u over N alternated runs (a loaded host's cycles are noise: instructions are the claim), with --cache callgrind's

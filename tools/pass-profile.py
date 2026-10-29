@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Where llrm-c's compile instructions go, summed over the files compile-cost.py measures (the 66 programs and, when QCPORT and
+"""Where llrm-cc's compile instructions go, summed over the files compile-cost.py measures (the 66 programs and, when QCPORT and
 QCPORT_INC are set, QCport's modules).
 
-    tools/pass-profile.py [--level -O2] [--top 22] [llrm-c]
+    tools/pass-profile.py [--level -O2] [--top 22] [llrm-cc]
 
 Each file is compiled with `LLRM_DEBUG=time`; its `[instr]` rows (a step's own user-space instructions, children excluded) are
 summed per step, per group. The table is the question "what is the biggest step overall", which a profile of one file cannot
@@ -37,13 +37,13 @@ ROW = re.compile(r"^\[instr\]\s+([\d.]+) (Minstr|Mcpu-ns) own\s+[\d.]+ \S+ total
 
 def own_work(compiler: Path, flags: list[str], source: Path, level: str) -> dict[str, float]:
     """One file's steps, by own Minstr; raises NoCounter where the rows are CPU time."""
-    with llrmbin.with_object([str(compiler), level, *flags, str(source), "-o", llrmbin.OBJECT]) as command:
-        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    with llrmbin.with_object([str(compiler), level, "-c", *flags, str(source), "-o", llrmbin.OBJECT]) as command:
+        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, **llrmbin.cc_environment(), "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
     if done.returncode:
         raise SystemExit(f"{source.name}: exit {done.returncode}\n{done.stderr[-400:]}")
     rows = ROW.findall(done.stderr)
     if not rows or any(unit != "Minstr" for _, unit, _ in rows):
-        raise compile_cost.NoCounter("llrm-c printed no instruction counts per step")
+        raise compile_cost.NoCounter("llrm-cc printed no instruction counts per step")
     return {name: float(own) for own, _, name in rows}
 
 
@@ -67,7 +67,7 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
     parser.add_argument("compiler", nargs="?", type=Path)
     args = parser.parse_args()
-    compiler = args.compiler or llrmbin.bin_dir() / "llrm-c"
+    compiler = args.compiler or llrmbin.compiler(llrmbin.bin_dir())
     with tempfile.TemporaryDirectory(dir=os.environ.get("CARGO_TARGET_DIR")) as tmp:
         files = compile_cost.files(Path(tmp))
         try:

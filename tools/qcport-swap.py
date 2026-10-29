@@ -2,7 +2,7 @@
 """Whole-run executed instructions of QCport arms that differ in one module.
 
     QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc QCPORT_BORLAND=~/scratch/qcbcc JWLINK=... \\
-        tools/qcport-swap.py d_faces BASE/llrm-c parity=PARITY/llrm-c head=HEAD/llrm-c
+        tools/qcport-swap.py d_faces BASE/COMPILER parity=PARITY/COMPILER head=HEAD/COMPILER
 
 Every module but MODULE is built once by BASE at -O2; each arm swaps in MODULE built by its compiler. The BENCH run (`start.qmp -ticks 300`)
 executes in the dosrun emulator on virtual time and prints the instructions it executed, the md5 of each arm's EXE and of MODULE's object.

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Per function, what the DAG selector makes against the pin's llc, bucketed by cause.
 
-    tools/dagisel/select_shadow.py LLRM_C SELECT_SHADOW [--src DIR] [--programs a,b] [--jobs N] [--out FILE]
+    tools/dagisel/select_shadow.py LLRM_CC SELECT_SHADOW [--src DIR] [--programs a,b] [--jobs N] [--out FILE]
 
 SELECT_SHADOW is `cargo build --release -p llrm-codegen --example select_shadow`. Each program is compiled
-by `LLRM_C -m32 -march=i486 -O2 --dump`; the last IR the dump writes goes to the example (the DAG path:
+by `LLRM_CC -m32 -march=i486 -O2 --dump`; the last IR the dump writes goes to the example (the DAG path:
 builder, legalizers, `select_node`) and to the pin's `llc -O2 -stop-after=finalize-isel` (through
 pin.py). Every defined function of the IR lands in exactly one bucket, so the total is fixed (a whole-program failure puts all its functions in one bucket; a program with no IR counts as one row). The first bucket that fits: a block the builder or a legalizer refuses
 (by reason), a node the selector could not select (by node), machine opcodes that differ from the pin's
@@ -22,11 +22,13 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pairs"))
 import pin  # noqa: E402
+import llrmbin  # noqa: E402
 
-FLAGS = ["-m32", "-mabi=sysv", "-march=i486", "-O2"]
-M16_FLAGS = ["-m16", "-march=i386", "-O2"]
+FLAGS = ["-c", *llrmbin.c_args(32), "-mabi=sysv", "-O2"]
+M16_FLAGS = ["-c", *llrmbin.c_args(16), "-O2"]
 # Opcodes the pin's selection makes that are not instructions we compare: copies and bookkeeping.
 FLAG_WORDS = {"nuw", "nsw", "exact", "nnan", "ninf", "nsz", "arcp", "contract", "afn", "reassoc", "nofpexcept", "samesign", "nneg", "disjoint", "inbounds", "fmf"}
 # The pin's finalize-isel runs `EmitLoweredSelect`: its output has a JCC_1 diamond where our DAG selection still has the
@@ -202,13 +204,13 @@ def compare(shadow: str, ir: Path, program: str) -> list[tuple[str, str, str]]:
     return rows_of(program, funcs, refused, pin_opcodes(theirs.stdout), ir.read_text())
 
 
-def one(llrm_c: str, shadow: str, source: Path, m16: bool = False, level: str = "-O2") -> list[tuple[str, str, str]]:
+def one(llrm_cc: str, shadow: str, source: Path, m16: bool = False, level: str = "-O2") -> list[tuple[str, str, str]]:
     """[(program, function, bucket)]."""
     with tempfile.TemporaryDirectory() as tmp:
         dump = Path(tmp) / "d"
         dump.mkdir()
         flags = [*(M16_FLAGS if m16 else FLAGS)[:-1], level]
-        done = subprocess.run([llrm_c, *flags, "--dump", str(dump), "-S", "-o", str(Path(tmp) / "o.s"), str(source)], capture_output=True, text=True, timeout=600)
+        done = subprocess.run([llrm_cc, *flags, "--dump", str(dump), "-S", "-o", str(Path(tmp) / "o.s"), str(source)], capture_output=True, text=True, timeout=600, env={**os.environ, **llrmbin.cc_environment()})
         ir = last_ir(dump)
         if done.returncode != 0 or ir is None:
             return whole_program(source.stem, ir.read_text() if ir else "", "compile failed: " + (done.stderr.strip().splitlines() or ["?"])[-1][:60])
@@ -232,11 +234,11 @@ def one(llrm_c: str, shadow: str, source: Path, m16: bool = False, level: str = 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("llrm_c")
+    parser.add_argument("llrm_cc")
     parser.add_argument("shadow")
     parser.add_argument("--src", default=str(Path(os.environ.get("ROWS_WORK", Path.home() / "scratch/rows")) / "base/b"))
     parser.add_argument("--programs", default="")
-    parser.add_argument("--ir", default="", help="compare one IR file the pin and the example both read (no llrm-c)")
+    parser.add_argument("--ir", default="", help="compare one IR file the pin and the example both read (no compiler)")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     parser.add_argument("--out", default="")
     parser.add_argument("--level", default="-O2", choices=["-O2", "-Os"])
@@ -252,7 +254,7 @@ def main() -> int:
         want = set(args.programs.split(","))
         sources = [s for s in sources if s.stem in want]
     with ThreadPoolExecutor(args.jobs) as pool:
-        rows = [row for part in pool.map(lambda s: one(args.llrm_c, args.shadow, s, args.m16, args.level), sources) for row in part]
+        rows = [row for part in pool.map(lambda s: one(args.llrm_cc, args.shadow, s, args.m16, args.level), sources) for row in part]
     buckets = Counter(bucket for _, _, bucket in rows)
     good = "selects" if args.m16 else "equal"
     buckets[good] += buckets[EQUAL_FP]

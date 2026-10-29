@@ -71,7 +71,7 @@ LLVM decides locally and leaves register pressure to the machine passes (`Machin
 | memory structure | shared `MemorySSA` (27 builds in all, 2.5 M) | `Accesses::managed` 58.4 M (9 builds under `hoist`) |
 | invariant runs found | in the walk | `_invariant_run` 37.5 M (43 calls), `_frequency` 16.1 M |
 
-Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`. LLVM: callgrind on `clang -cc1` of d1106deb71cc, total 415.4 M. llrm: callgrind on the release `llrm-c` of 21f5c9fc8, total 3,224 M. The `-Os` figure is from `LLRM_DEBUG=hoist` on commit 954bc48fa.
+Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`. LLVM: callgrind on `clang -cc1` of d1106deb71cc, total 415.4 M. llrm: callgrind on the release `llrm-cc` of 21f5c9fc8, total 3,224 M. The `-Os` figure is from `LLRM_DEBUG=hoist` on commit 954bc48fa.
 
 ## Proposed change
 

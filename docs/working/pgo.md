@@ -1,6 +1,6 @@
-# The profile-guided llrm-c
+# The profile-guided llrm-cc
 
-A build of `llrm-c` guided by a profile of compiling real code takes about 15-18% fewer instructions per compile than the `dist` build, and
+A build of `llrm-cc` guided by a profile of compiling real code takes about 15-18% fewer instructions per compile than the `dist` build, and
 7-13% fewer cycles (user time follows the cycles, not the instructions), with the same output bytes. Measured on programs the profile never
 saw, with the training of this directory's corpus (the repository's own programs, none of these four, no QCport at all); one tree, plain `dist`
 against `dist` with the profile; cycles are the minimum of seven runs alternated with the other binary on a loaded host:
@@ -20,7 +20,7 @@ this. The profile-guided build is for the shipped compiler and for the second co
     rustup component add llvm-tools          # the llvm-profdata of rustc's own LLVM; another version cannot read the profiles
     python3 tools/pgo/pgo.py build --out DIR --profile-dir PROFILES [--siblings DIR_WITH_THE_OTHER_TOOLS]
 
-`DIR/llrm-c` is the compiler. The first run makes the profile (an instrumented build, the corpus through it, a merge: about 15 minutes) and
+`DIR/llrm-cc` is the compiler. The first run makes the profile (an instrumented build, the corpus through it, a merge: about 15 minutes) and
 the second build uses it; a later run reuses the profile while it is fresh. `QCPORT` (QCport's `src`) adds its render modules to the training.
 `--exclude NAME ...` leaves programs out of the training: use it to measure on programs the profile did not see, never measure a program
 that trained it.
@@ -52,5 +52,5 @@ identical) did exactly that. A cache saved by a pull request run is visible to t
 
 ## Measuring with it
 
-The scoreboard's second column is `DIR/llrm-c` from the command above, run against the plain `dist` llrm-c on the same commit. Report
+The scoreboard's second column is `DIR/llrm-cc` from the command above, run against the plain `dist` llrm-cc on the same commit. Report
 instructions (`perf stat -e instructions:u`) as the count and the cycles beside it: the cycles are the smaller gain.

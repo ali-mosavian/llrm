@@ -1,6 +1,6 @@
 # Instructions against the pin's llc, on the same IR
 
-Why: on the same IR, address folding equals the pin's (`docs/working/codegenprepare.md`), yet our backend has more instructions than the pin's `llc` with CodeGenPrepare on: +2.7% at -Os and +6.3% at -O2 over the 65 QCport modules at m16. This classifies them by mnemonic. Owner of the file: w-4; instrument `classes.py` (our IR at the switchconv stage; ours `llrm-c -S`, the pin's `llc -O2 -filetype=asm`; stamped base 25d838613b).
+Why: on the same IR, address folding equals the pin's (`docs/working/codegenprepare.md`), yet our backend has more instructions than the pin's `llc` with CodeGenPrepare on: +2.7% at -Os and +6.3% at -O2 over the 65 QCport modules at m16. This classifies them by mnemonic. Owner of the file: w-4; instrument `classes.py` (our IR at the switchconv stage; ours `llrm-cc -S`, the pin's `llc -O2 -filetype=asm`; stamped base 25d838613b).
 
 Caveats, for every table:
 - Same IR for both, so the mid-end is not the difference; the code generators are.

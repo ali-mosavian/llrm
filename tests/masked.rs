@@ -19,9 +19,8 @@ fn compiled(
     let out = scratch.path().join("out.asm");
     let input = root.join("tests/inputs/masked").join(source);
     let flags = ["--isel=dag", "-O2", "-march=i486", "-S", "-o"];
-    // llrm-c is gone: its command line is served by llrm-cc over the pinned
-    // clang.
-    let done = if tool == "llrm-c" {
+    // llrm-cc runs over the pinned clang, so it is not a sibling binary of llrm-qb.
+    let done = if tool == "llrm-cc" {
         common::cc::llrm_cc().arg(&input).args(arguments).args(flags).arg(&out).output().unwrap()
     } else {
         Command::new(bin.join(tool)).arg(&input).args(arguments).args(flags).arg(&out).output().unwrap()
@@ -57,7 +56,7 @@ fn test_a_masked_byte_widened_is_one_movzx_in_basic() {
 
 #[test]
 fn test_a_masked_byte_widened_is_one_movzx_in_c() {
-    assert_byte_extension("c", &compiled("llrm-c", "mix.c", &["-fno-inline-functions"]));
+    assert_byte_extension("c", &compiled("llrm-cc", "mix.c", &["-fno-inline-functions"]));
 }
 
 #[test]

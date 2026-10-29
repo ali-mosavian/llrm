@@ -17,7 +17,7 @@ For readers and contributors of llrm. Read in this order; each section's readme 
 |---|---|
 | [root readme](../readme.md) | What llrm is, its programs, how to build and use them |
 | [architecture](architecture/readme.md) | The pipeline, the MIR boundary, HIR, analyses, source layout, packages |
-| [frontends](frontends/readme.md) | [QuickBASIC](frontends/qb/readme.md), [Nib](frontends/nib/readme.md), [what the Open Watcom C front end gathers](frontends/c/ow-contract.md), and [BC objects](frontends/bc.md) |
+| [frontends](frontends/readme.md) | [QuickBASIC](frontends/qb/readme.md), [Nib](frontends/nib/readme.md), [C](frontends/c/readme.md), and [BC objects](frontends/bc.md) |
 | [optimizations](optimizations/readme.md) | One note per optimization, each measured on a program |
 | [formats](formats/readme.md) | The object model and its writers; debug information |
 | [machine](machine/readme.md) | x86 real mode: prefixes, pointer lowering, targets |

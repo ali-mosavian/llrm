@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
+import llrmbin  # noqa: E402
 
 BASE = re.compile(r"\[regalloc\] (\S+): (\d+) insns, (\d+) spilled, cost ([\d.e+-]+), (\d+) forced")
 TRIAL = re.compile(r"\[regalloc\]   trial (\w+) \(splitting (\w+)\): (\d+) spilled, cost ([\d.e+-]+), (\d+) forced")
@@ -62,8 +63,8 @@ def parse(name, lvl, err):
 def compiled(job):
     name, source, flags, level = job
     environment = dict(os.environ, LLRM_DEBUG="regalloc,candidates,routes", LLRM_CANDIDATES="measure")
-    command = [str(ROOT / "target/release/llrm-c"), *flags, level, "-S", "-o", "/dev/null", str(source)]
-    done = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=900)
+    command = [str(llrmbin.compiler(ROOT / "target/release")), "-c", *llrmbin.c_args(16), *flags, level, "-S", "-o", "/dev/null", str(source)]
+    done = subprocess.run(command, capture_output=True, text=True, env={**environment, **llrmbin.cc_environment()}, timeout=900)
     return name, level, done.stderr
 
 

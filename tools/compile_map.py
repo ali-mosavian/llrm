@@ -214,14 +214,14 @@ def output_args(kind: str, directory: Path) -> tuple[list[str], list[str]]:
 
 
 def build_map(args) -> dict:
-    llrm = llrmbin.bin_dir() / "llrm-c"
+    llrm = llrmbin.compiler(llrmbin.bin_dir())
     source = args.source if args.source.is_absolute() else QCPORT / args.source
     outdir = Path(tempfile.mkdtemp(prefix="compile_map_out"))
     import atexit, shutil
     atexit.register(shutil.rmtree, outdir, True)
     llrm_out, foreign_out = output_args(args.output, outdir)
-    base = [str(llrm), "-m32", args.level, *INCLUDES, *llrm_out, str(source)]
-    env = {"PATH": os.environ["PATH"]}
+    base = [str(llrm), "-c", *llrmbin.c_args(32), args.level, *INCLUDES, *llrm_out, str(source)]
+    env = {"PATH": os.environ["PATH"], **llrmbin.cc_environment()}
     total = instructions(base, env)
     timing = {"llrm": cycles(base, env)}
     timed_env = {**env, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "1000"}

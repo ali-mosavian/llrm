@@ -70,7 +70,7 @@ impl Lab {
         );
     }
 
-    /// `llrm-c`'s command line served by llrm-cc over clang (the Watcom m16
+    /// llrm-cc over clang (the Watcom m16
     /// row), in the lab's directory.
     fn compile(
         &self,

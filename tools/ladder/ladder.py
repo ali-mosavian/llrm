@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Compile-cost ladder: instructions:u of LLVM's opt/llc and llrm-c on identical generated C.
+"""Compile-cost ladder: instructions:u of LLVM's opt/llc and llrm-cc on identical generated C.
 
-    ladder.py [--llvm DIR] [--llrm llrm-c] [--shapes a,b] [--sizes 25,50,...] [--runs 3] OUT.json
+    ladder.py [--llvm DIR] [--llrm llrm-cc] [--shapes a,b] [--sizes 25,50,...] [--runs 3] OUT.json
 
 Per (shape, N): IR instruction count before optimization, `opt -passes='default<O2>'`, `llc -O2`, clang end to end,
-llrm-c end to end, and llrm's optimizer/backend split from LLRM_DEBUG=time. Minimum of --runs, alternating sides.
+llrm-cc end to end, and llrm's optimizer/backend split from LLRM_DEBUG=time. Minimum of --runs, alternating sides.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from ladder_gen import SHAPES, generate  # noqa: E402
 
 FLAGS = ["-w", "-m32", "-march=i486", "-fno-inline-functions"]
+LLRM_FLAGS = ["--target=x86_32-wat", "-march=i486"]  # llrm-cc takes its target as a row
 
 
 def instr(cmd: list[str], env: dict[str, str] | None = None) -> int:
@@ -42,7 +43,7 @@ def ir_count(text: str) -> int:
 
 def llrm_split(llrm: str, c: str) -> dict[str, float]:
     """Inclusive Minstr of `mir pipeline` (optimizer) and `assemble` (backend) from `LLRM_DEBUG=time`'s `[instr]` table."""
-    err = subprocess.run([llrm, "-m32", "-march=i486", "-O2", "-S", "-o", os.devnull, c], capture_output=True, text=True,
+    err = subprocess.run([llrm, *LLRM_FLAGS, "-O2", "-S", "-o", os.devnull, c], capture_output=True, text=True,
                          env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "700"}).stderr
     out: dict[str, float] = {}
     for line in err.split("[instr] by own work")[1].split("nesting")[0].splitlines():
@@ -58,7 +59,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
     ap.add_argument("--llvm", default=str(Path.home() / "scratch/llvm-build/bin"))
-    ap.add_argument("--llrm", default="llrm-c")
+    ap.add_argument("--llrm", default="llrm-cc")
     ap.add_argument("--shapes", default=",".join(SHAPES))
     ap.add_argument("--sizes", default="25,50,100,200,400,800,1600")
     ap.add_argument("--runs", type=int, default=3)
@@ -76,7 +77,7 @@ def main() -> None:
                     "opt": [opt, "-passes=default<O2>", "-disable-output", raw],
                     "llc": [llc, "-O2", "-mtriple=i486-pc-linux-gnu", o2, "-o", null],
                     "clang": [clang, *FLAGS, "-O2", "-S", c, "-o", null],
-                    "llrm": [a.llrm, "-m32", "-march=i486", "-O2", "-S", "-o", null, c],
+                    "llrm": [a.llrm, *LLRM_FLAGS, "-O2", "-S", "-o", null, c],
                 }
                 best: dict[str, int] = {}
                 for _ in range(a.runs):

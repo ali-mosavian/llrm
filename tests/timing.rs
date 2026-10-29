@@ -185,7 +185,7 @@ fn compiled_c(
     if let Some(verify) = verify {
         command.env("LLRM_VERIFY", verify);
     }
-    let done = command.output().expect("runs llrm-c");
+    let done = command.output().expect("runs llrm-cc");
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     String::from_utf8_lossy(&done.stderr).into_owned()
 }

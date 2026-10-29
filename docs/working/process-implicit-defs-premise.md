@@ -15,7 +15,7 @@ LIR has `implicit_def` (isel) and `Insn::undefs`; a phi reads an undefined value
 
 ## Whole effect, one instrument
 
-Extends in the final code of the same 56 modules: the pin's asm has 2147 lines starting `movz` (AT&T `movzwl`, `movzbl`), ours 437 `movzx` (listing.asm of `llrm-c -Os -fno-inline-functions`, md5 45b29c601799: feat/parity 28191940c1 plus the copywhy probe). Ours has fewer, not more; the two counts are not the same measure (the pin's include byte extends and its own address forms), so the claim is only that no gap shows on this axis. Not measured: bytes attributable to the widening, and the same count at m32.
+Extends in the final code of the same 56 modules: the pin's asm has 2147 lines starting `movz` (AT&T `movzwl`, `movzbl`), ours 437 `movzx` (listing.asm of `llrm-cc -Os -fno-inline-functions`, md5 45b29c601799: feat/parity 28191940c1 plus the copywhy probe). Ours has fewer, not more; the two counts are not the same measure (the pin's include byte extends and its own address forms), so the claim is only that no gap shows on this axis. Not measured: bytes attributable to the widening, and the same count at m32.
 
 ## Decision
 

@@ -6,7 +6,7 @@ architecture-order: 150
 
 TL;DR: `indvars` is 64.4 M of `d_faces` -O2 (46 runs, 34 of them in the pipeline step), LLVM's `IndVarSimplify` 23.6 M (41 loop invocations). Two rows are 55% of it and both are an analysis derived again after an edit, where LLVM's `ScalarEvolution` is kept and told what changed: the facts of the body are derived afresh after each of 12 widenings (21.8 M), and each exit's trip count is found again at every run (13.9 M).
 
-Sources: llrm CI-mode build of main 7ac662405, `llrm-c -m32 -O2` of `d_faces.c`, callgrind inclusive, `LLRM_DEBUG=time` for runs; LLVM 24 (d1106deb71cc) `opt -passes='default<O2>'` on the same file, callgrind inclusive of `IndVarSimplifyPass::run`, which includes the `ScalarEvolution` it builds.
+Sources: llrm CI-mode build of main 7ac662405, `llrm-cc -m32 -O2` of `d_faces.c`, callgrind inclusive, `LLRM_DEBUG=time` for runs; LLVM 24 (d1106deb71cc) `opt -passes='default<O2>'` on the same file, callgrind inclusive of `IndVarSimplifyPass::run`, which includes the `ScalarEvolution` it builds.
 
 ## 1. What LLVM does
 

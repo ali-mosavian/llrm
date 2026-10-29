@@ -1,5 +1,5 @@
 """
-A case as C, for llrm-c, Open Watcom and gcc-ia16 (16-bit int), and for the
+A case as C, for llrm-cc, Open Watcom and gcc-ia16 (16-bit int), and for the
 host's clang, which validates the oracle (`host=True`: fixed-width types).
 
 Arithmetic narrower than int, and u16's, is cast back to its type where it
@@ -108,7 +108,7 @@ class Emitter:
         if isinstance(e, Cast):
             source = self.type_of(e.a)
             if F80 in (source, e.type) and source != e.type:
-                # wccq converts long double only to and from double
+                # long double converts only to and from double
                 return f"(({ctype(e.type)})(double){self.expr(e.a)})"
             return f"(({ctype(e.type)}){self.expr(e.a)})"
         if isinstance(e, Cmp):
@@ -296,7 +296,7 @@ def helpers(case: Case, e: "Emitter") -> list[str]:
         out.append(f"    for (k = 0; k < {array.count}UL; k++) {{")
         for f, (name, kind) in enumerate(_named_fields(array.elem)):
             place = "p[k]" + (f".{name}" if name else "")
-            # wccq converts long double only to and from double
+            # long double converts only to and from double
             t = ctype(kind) + (")(double" if kind == F80 else "")
             out.append(f"        seed = seed0 + {101 * f}u; x = fillx(k, seed);")
             out.append(f"        if (step) {place} = ({t})(lo + (i32)k * step);")

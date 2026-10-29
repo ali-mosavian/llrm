@@ -9,7 +9,7 @@ spec.loader.exec_module(check_ivusers)
 
 
 def fake(tmp_path, body):
-    script = tmp_path / "llrm-c"
+    script = tmp_path / "llrm-cc"
     script.write_text(f"#!/bin/sh\n{body}\n")
     script.chmod(0o755)
     return str(script)

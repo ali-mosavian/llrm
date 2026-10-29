@@ -120,9 +120,9 @@ The instruction itself is not where DHAT finds the allocations (`Instruction::cl
 
 ## Measured
 
-`d_faces.c` of qbq-llrm, `-O2 -m32 -march=i486 -fno-inline-functions`. llrm-c built `--profile dist` from main `21f5c9fc8` and, for DHAT, with the global allocator removed (`valgrind --tool=dhat`; 3.26 G instructions against 2.8 G with mimalloc). `cc1` is the driver's own command line under DHAT.
+`d_faces.c` of qbq-llrm, `-O2 -m32 -march=i486 -fno-inline-functions`. llrm-cc built `--profile dist` from main `21f5c9fc8` and, for DHAT, with the global allocator removed (`valgrind --tool=dhat`; 3.26 G instructions against 2.8 G with mimalloc). `cc1` is the driver's own command line under DHAT.
 
-| | clang 24 `cc1` | llrm-c |
+| | clang 24 `cc1` | llrm-cc |
 |---|---:|---:|
 | allocations | 62,881 | 3,765,923 |
 | bytes allocated | 38.4 MB | 638 MB |
@@ -133,18 +133,18 @@ The instruction itself is not where DHAT finds the allocations (`Instruction::cl
 | peak resident set (`/usr/bin/time`), mimalloc | 63 MB | 82 MB |
 | peak resident set, system allocator (empty input: 18 MB) | 63 MB | 44 MB |
 
-Resident set above an empty input, per pre-optimization IR instruction (`tools/ladder/rss.py`, clang end to end against `llrm-c`):
+Resident set above an empty input, per pre-optimization IR instruction (`tools/ladder/rss.py`, clang end to end against `llrm-cc`):
 
-| shape, N | IR instructions | clang | llrm-c |
+| shape, N | IR instructions | clang | llrm-cc |
 |---|---:|---:|---:|
 | mem 100 | 1,205 | 697 B | 17,890 B |
 | mem 1600 | 19,205 | 302 B | 16,192 B |
 | arith 1600 | 14,467 | 445 B | 7,836 B |
 | diamond 1600 | 6,413 | 941 B | 15,108 B |
 
-The same with `llrm-c` built without mimalloc (system allocator), which returns freed memory:
+The same with `llrm-cc` built without mimalloc (system allocator), which returns freed memory:
 
-| shape, N | IR instructions | clang | llrm-c |
+| shape, N | IR instructions | clang | llrm-cc |
 |---|---:|---:|---:|
 | mem 1600 | 19,205 | 309 B | 11,652 B |
 | arith 1600 | 14,467 | 377 B | 4,450 B |
@@ -152,7 +152,7 @@ The same with `llrm-c` built without mimalloc (system allocator), which returns 
 
 What is live at the peak, from DHAT (`t-gmax`, 23.3 MB in 106,021 blocks on `d_faces`): the backend's copies of LIR, not the analysis tables: `peephole::EffectsHeld::remember` 2.9 MB, `spiller::_renamed` 2.3, `allocate::applied` 2.1, `phielim::_renamed` 1.9, `coalesce::_renamed` 1.1, `Semantics::clone` 0.8 (18,442 blocks). The rest of the 82 MB is mimalloc keeping pages after `free`: 44 MB with the system allocator.
 
-Allocations by owner in llrm-c (first matching frame of the DHAT stack, so each block counts once):
+Allocations by owner in llrm-cc (first matching frame of the DHAT stack, so each block counts once):
 
 | owner | allocations | share | MB |
 |---|---:|---:|---:|

@@ -2,7 +2,7 @@
 
 TL;DR: clang's profile is flat (the top function is 1.5% of instructions, the top 50 together 22%); llrm's is not (the top 50 are 42%). 18.0% of llrm's instructions are the allocator, `memcpy`/`memset`/`memcmp` and `Vec` growth, against 5.8% in `cc1`. In L1d misses the same split is wider: 13.9x in total, and no single `cc1` function owns more than 2.5%.
 
-Input `d_faces.c` of qbq-llrm, `-O2 -m32 -march=i486 -fno-inline-functions`, the Borland keywords defined away. `cc1` is the driver's own command line, `valgrind --tool=callgrind`; llrm-c is the `dist` build of main `21f5c9fc8`. Self cost summed per function name (inlined copies from different files joined). Misses from `--cache-sim=yes` (D1 32 KB, 8-way, 64 B lines); the `-Os` totals are within 1% of the `-O2` ones.
+Input `d_faces.c` of qbq-llrm, `-O2 -m32 -march=i486 -fno-inline-functions`, the Borland keywords defined away. `cc1` is the driver's own command line, `valgrind --tool=callgrind`; llrm-cc is the `dist` build of main `21f5c9fc8`. Self cost summed per function name (inlined copies from different files joined). Misses from `--cache-sim=yes` (D1 32 KB, 8-way, 64 B lines); the `-Os` totals are within 1% of the `-O2` ones.
 
 ## Top 50 by self instructions
 
@@ -61,7 +61,7 @@ clang 24 `cc1`: 421 M in total. What the top entries do: `_int_malloc`, `malloc`
 | `ScalarEvolution::getRangeRef` | 1.1 | 0.26% |
 | `Type::getPrimitiveSizeInBits` | 1.1 | 0.25% |
 
-llrm-c: 2,874 M. What the top entries do: the `mi_*` rows are mimalloc; `escapes`, `MemRef::of`, `walked_from`, `structure_of`, `exposed_frames`, `point_values` are the alias and memory-SSA facts; `View::forecast` is the spill forecast; `Function::successors` builds a `Vec` of a block's successors.
+llrm-cc: 2,874 M. What the top entries do: the `mi_*` rows are mimalloc; `escapes`, `MemRef::of`, `walked_from`, `structure_of`, `exposed_frames`, `point_values` are the alias and memory-SSA facts; `View::forecast` is the spill forecast; `Function::successors` builds a `Vec` of a block's successors.
 
 | function | M instr | share | what it does |
 |---|---:|---:|---|
@@ -148,7 +148,7 @@ clang 24 `cc1`: 3.08 M in total (instructions: 415 M).
 | `` | 0.02 | 0.6% |
 | `free` | 0.02 | 0.5% |
 
-llrm-c: 42.7 M in total (instructions: 2,903 M).
+llrm-cc: 42.7 M in total (instructions: 2,903 M).
 
 | function | M D1 misses | share |
 |---|---:|---:|

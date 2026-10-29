@@ -73,7 +73,7 @@ The ready copy is written first, the cycle becomes one `xchg`, and an anchor
 keeps the virtual definition the dropped copies stood for.
 
 From `ISEL_DUMP=1` of a C function whose loop does `t = a; a = b; b = t;`,
-compiled with `llrm-c -O2 -m16`: the `RegAlloc` and `ParallelCopy` stages.
+compiled with `llrm-cc -O2 -m16`: the `RegAlloc` and `ParallelCopy` stages.
 
 ## Runs
 After `regalloc`, before `prologue` and the peephole, once per body, at

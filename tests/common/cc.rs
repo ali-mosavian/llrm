@@ -1,6 +1,5 @@
-//! `llrm-c`'s command line served by `llrm-cc` over the pinned clang: what the
-//! tests that spawned `CARGO_BIN_EXE_llrm-c` use instead. The target is the
-//! Watcom one the arguments name (`-m32`, else `-m16` as llrm-c defaulted).
+//! `llrm-cc` over the pinned clang, driven from tests as one command line. The
+//! target is the Watcom one the arguments name (`-m32`, else `-m16`).
 //! Needs the pinned clang (`LLRM_PIN_CLANG`, `LLRM_CLANG_M16` at m16) and the
 //! Open Watcom headers (`LLRM_OW`) in the environment.
 
@@ -11,7 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 
-/// A `Command` for `llrm-cc`, built as `llrm-c`'s was: the target is chosen
+/// A `Command` for `llrm-cc`: the target is chosen
 /// when it runs, from the arguments added after it was made.
 #[derive(Default)]
 pub struct LlrmCc {
@@ -100,9 +99,7 @@ impl LlrmCc {
 
     fn command(&mut self) -> Command {
         let wide = self.arguments.iter().any(|one| one == "-m32");
-        // llrm-c chose by the output's extension: `-o x.obj` compiled, `-o
-        // x.asm` wrote the listing; llrm-cc links unless told `-c` or
-        // `-S`.
+        // llrm-cc links unless told `-c`, `-S` or `-E`.
         let stops = self.arguments.iter().any(|one| one == "-c" || one == "-S" || one == "-E");
         let output = self.arguments.iter().position(|one| one == "-o").and_then(|at| self.arguments.get(at + 1));
         let extension =

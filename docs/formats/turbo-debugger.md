@@ -77,7 +77,7 @@ breakpoints, so a reader thread answers each with `continue`.
 
 A `-gtd` binary is loaded as in `tests/turbo.rs`:
 
-1. `llrm-c -m16 -gtd -O0 lst.c -o llst.obj`.
+1. `llrm-cc -m16 -gtd -O0 lst.c -o llst.obj`.
 2. In DOS, `tlink /v c:\lib\c0m llst.obj, llst.exe,, c:\lib\cm` (`/v` builds the table; `c0m` and `cm` are Turbo
    C++'s medium-model start-up and library).
 3. A session mounting the Turbo C++ tree as `c:`, Turbo Debugger as `d:` and the work directory as `w:`, with

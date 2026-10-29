@@ -1,7 +1,7 @@
 """Register copies a function has after phi elimination, two-address and the coalescer: the pin's `COPY`s and ours,
 and why each of ours was left (`LLRM_COALESCE_WHY=1`).
 
-usage: copywhy.py LLRM_C LLC OUT_DIR [--triple T [--cpu C]] FUNCTION... -- llrm-c args (source, flags, includes)
+usage: copywhy.py LLRM_CC LLC OUT_DIR [--triple T [--cpu C]] FUNCTION... -- llrm-cc args (-c, target, source, flags, includes)
 
 The pin runs as code16 with a frame pointer unless `--triple` names its target (m32: `--triple i386-unknown-linux-gnu --cpu i486`).
 
@@ -79,7 +79,7 @@ def main() -> None:
             _, fn, reason = line.split("\t")
             why[fn][reason] += 1
     pin = pin_counts(llc, glob.glob(os.path.join(out, "*-cgpaddr.ll"))[0], target)
-    print("pin = llc -O2 on the cgpaddr dump; ours = llrm-c as run (see header of tools/copywhy.py)")
+    print("pin = llc -O2 on the cgpaddr dump; ours = llrm-cc as run (see header of tools/copywhy.py)")
     print("function | phi pin/ours | twoaddr pin/ours | coalescer pin/ours | why ours were left")
     for f in funcs:
         cells = [f"{pin.get((s, f))}/{ours.get((s, f))}" for s in STAGES]

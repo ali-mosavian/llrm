@@ -57,4 +57,4 @@ More than eight live values never reaches `floatalloc`: `floatassign` spills one
 
 ## See it
 
-`llrm-c -S` prints the assembly, where the stack form is visible; `--dump DIR` shows MIR only. Tests: `floatalloc_tests.rs`, `floatassign_tests.rs` simulate the allocated stack and assert the stored values.
+`llrm-cc -S` prints the assembly, where the stack form is visible; `--dump DIR` shows MIR only. Tests: `floatalloc_tests.rs`, `floatassign_tests.rs` simulate the allocated stack and assert the stored values.

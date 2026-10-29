@@ -36,7 +36,7 @@ class GateTests(unittest.TestCase):
 
 class LinkTests(unittest.TestCase):
     def test_a_nib_benchmark_links_the_files_its_link_header_names_resolved(self):
-        """`link: @c-runtime` went to nib-build.sh as a file name (llrm-c: wccq failed on .../@c-runtime) for parity and scalar."""
+        """`link: @c-runtime` went to nib-build.sh as a file name (the compiler could not open .../@c-runtime) for parity and scalar."""
         extras = bench.nib_extras(bench.ROOT / "bench/parity/parity/parity.nib")
         self.assertEqual(extras, [str(bench.ROOT / "runtime/c/x86-m16/ext.asm")])
 
@@ -426,7 +426,7 @@ def test_reference_builds_find_bench_io_in_the_volume_root(tmp_path):
 
 
 def test_a_c_benches_os_layer_header_is_the_rows_not_a_stale_one(tmp_path):
-    """A `-I` for llrm-c's llrm_os.h shadowed llrm-cc's: jpeg and stft (the file readers) built, then printed 0 and -1 (a failed open)."""
+    """A `-I` for the Watcom front end's llrm_os.h shadowed llrm-cc's: jpeg and stft (the file readers) built, then printed 0 and -1 (a failed open)."""
     if not (bench.BIN / "llrm-cc").is_file():
         pytest.skip("no llrm-cc in the dist")
     variant = next(one for one in bench.variants(bench.BENCH / "stft_fixed") if one.language == "c")
@@ -864,7 +864,7 @@ def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_t
 
 
 def test_a_c_bench_row_builds_and_links(tmp_path):
-    """llrm-c built C benches that dosbatch then linked for llrm-cc's `main_` (6524193a71): all 48 `c` rows failed with `main_` undefined in start.asm."""
+    """The Watcom front end built C benches that dosbatch then linked for llrm-cc's `main_` (6524193a71): all 48 `c` rows failed with `main_` undefined in start.asm."""
     if not (bench.BIN / "llrm-cc").is_file():
         pytest.skip("no llrm-cc in the dist")
     variant = next(one for one in bench.variants(bench.BENCH / "bintree") if one.language == "c")

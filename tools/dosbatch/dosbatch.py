@@ -142,7 +142,7 @@ def assemble(source: Path, obj: Path, *defines: str) -> None:
 
 
 def ow_root() -> Path:
-    """The Open Watcom tree wccq is built from (toolchain/owshim/build.sh): OWROOT, else the cached one."""
+    """The Open Watcom tree (pinned by toolchain/owshim/ow-commit): OWROOT, else the cached one."""
     if os.environ.get("OWROOT"):
         return Path(os.environ["OWROOT"])
     commit = (ROOT / "toolchain" / "owshim" / "ow-commit").read_text().strip()
@@ -150,7 +150,7 @@ def ow_root() -> Path:
 
 
 def watcom_cc(target: str) -> Path:
-    """Open Watcom's own compiler for `target`, built in the same tree as wccq (`bwcc386` for 32 bits, `bwcc` for 16): the ground
+    """Open Watcom's own compiler for `target`, built in the same tree (`bwcc386` for 32 bits, `bwcc` for 16): the ground
     truth of its register convention."""
     return ow_root() / "build" / "binbuild" / ("bwcc386" if target_bits(target) == 32 else "bwcc")
 
@@ -177,7 +177,7 @@ WATCOM_ROWS = {16: "x86_16-wat", 32: "x86_32-wat"}
 
 def c_compile(source: Path, obj: Path, target: str, level: str, include: Path | None, abi: list[str], extra: list[str] = (), declarations: Path | None = None) -> tuple[list[str], dict[str, str]]:
     """(command, environment) that builds the C `source` for `target`: llrm-cc over clang, the target a row of its table, not a flag.
-    `include` is unused: the row's -isystem has llrm_os.h, and a directory made for llrm-c holds its own, which would shadow it.
+    `include` is unused: the row's -isystem has llrm_os.h, and a directory made for another front end holds its own, which would shadow it.
     `declarations` is searched: the directory of a Nib program's exports, NAME.h, with nothing else in it."""
     if target_bits(target) not in WATCOM_ROWS:
         raise BuildError(f"llrm-cc has no row for {target}")

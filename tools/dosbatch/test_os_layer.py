@@ -14,7 +14,7 @@ TARGET = dosbatch.linkrecipe.named(32)
 
 
 def test_the_directory_a_compiler_built_in_another_tree_names_is_read_from_this_tree(monkeypatch):
-    """A gate of main read an llrm-c the tip's gate had built in a shared target: its directory named train-tree, and `.relative_to(ROOT)`
+    """A gate of main read a compiler the tip's gate had built in a shared target: its directory named train-tree, and `.relative_to(ROOT)`
     failed in 14 test modules at collection."""
     said = {"directory": "/elsewhere/train-tree/runtime/shared/dos/m32", "start": "start.asm"}
     monkeypatch.setattr(dosbatch.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, said[cmd[-1]] + "\n", ""))

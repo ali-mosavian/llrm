@@ -41,7 +41,7 @@ The run count per slot must match LLVM's. `parity::RUNS_PER_BODY` states it and 
 
 ## Recount of the registry
 
-The count of record is the registry's own recount: `LLRM_DEBUG=counts llrm-c -O2 f.c -S -o /dev/null 2>&1 | grep '^\[parity\]'` prints it from `parity.rs` of the build it runs, the same at every level (it counts the registry, not the built list): all slots by state (Partial counted apart from Translated), each phase's slots, the analyses. No page or test pins a number: `parity_tests.rs` checks that the tally and the printed lines are the recount of the rows by kind, so a PR that moves a slot edits its row and nothing else.
+The count of record is the registry's own recount: `LLRM_DEBUG=counts llrm-cc -O2 f.c -S -o /dev/null 2>&1 | grep '^\[parity\]'` prints it from `parity.rs` of the build it runs, the same at every level (it counts the registry, not the built list): all slots by state (Partial counted apart from Translated), each phase's slots, the analyses. No page or test pins a number: `parity_tests.rs` checks that the tally and the printed lines are the recount of the rows by kind, so a PR that moves a slot edits its row and nothing else.
 
 `parity::check_phase` fails when a slot the registry calls Old or Missing holds a translated pass (`FunctionPass::translation`), and when a Translated or Partial slot is not run, so a wiring PR updates its row in the same commit. A Partial row says what is done and what is left (`criterion:` and `exit:`); stage landings inside a row the registry counts as one slot (SimplifyCFG pieces under `decide@N`, LSR, jumps) do not move the count until the row's own criterion is met.
 

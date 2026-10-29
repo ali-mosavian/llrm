@@ -38,9 +38,7 @@ flowchart TB
 
 *Producers of HIR and the way to MIR*
 
-Producers: `llrm-qb` (parser `qbfront`), `llrm-nib` and `llrm-c`
-(`crates/frontends/llrm-c/src/translate.rs`, from Open Watcom's
-code-generator calls). `llrm-qb --dump-hir PATH` writes the JSON document and
+Producers: `llrm-qb` (parser `qbfront`) and `llrm-nib`. `llrm-qb --dump-hir PATH` writes the JSON document and
 `hir-mir HIR.json` (`crates/ir/llrm-hir/src/bin/hir-mir.rs`) prints the MIR it
 emits, with each refusal and verifier complaint on stderr.
 

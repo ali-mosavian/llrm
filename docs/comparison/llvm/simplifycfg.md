@@ -88,7 +88,7 @@ LLVM's rule is the cheap syntactic one and the rest is left to other passes (Cor
 | branches decided, d_faces | n/a | 0 of 574 visits at `-m32 -march=i486 -fno-inline-functions`; 9 with the corpus flags |
 | decided, 421 compiles | n/a | 245 of about 22,000 visits (facts 142, ranges 52, implied 11, switches 40) |
 
-Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2` unless stated. LLVM: callgrind on `clang -cc1` of d1106deb71cc, total 415.4 M. llrm: callgrind on the release `llrm-c` of 21f5c9fc8, total 3,224 M; decision counts from a counter at each conditional terminator of `_decisions`.
+Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2` unless stated. LLVM: callgrind on `clang -cc1` of d1106deb71cc, total 415.4 M. llrm: callgrind on the release `llrm-cc` of 21f5c9fc8, total 3,224 M; decision counts from a counter at each conditional terminator of `_decisions`.
 
 ## Proposed change
 

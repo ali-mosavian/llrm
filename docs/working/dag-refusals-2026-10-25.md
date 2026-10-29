@@ -9,7 +9,7 @@ Parity `121f6f17e`, release binaries, `--isel=dag` (strict) with `LLRM_DEBUG=ise
 | QCport, -Os | m32 | 15 of 65 | 115 | 0 | 50 (frontend: `E1020 Dimension cannot be 0`, missing prototypes; the same under `--isel=old`) |
 | tests/llc C programs (27) | m64 | 26 | - | 0 | 1: `vla`, `DynamicStackAlloc` has no lowering (#4666/#4678) |
 
-No corpus program reaches a refusal at m16 or m32; `qb/bounds.bas`, the one reached string of the earlier inventory, is gone. No frontend produces a dynamic `alloca` at m16 or m32 (llrm-c has no VLA and no `__builtin_alloca`), so m32 `vla` is IR-only.
+No corpus program reaches a refusal at m16 or m32; `qb/bounds.bas`, the one reached string of the earlier inventory, is gone. No frontend produces a dynamic `alloca` at m16 or m32 (llrm-cc has no VLA and no `__builtin_alloca`), so m32 `vla` is IR-only.
 
 Against `refusal-inventory.md` (187 sites): reached 0 at m16/m32, 1 at m64 (`DynamicStackAlloc`); the rest stay unreached.
 

@@ -15,7 +15,7 @@
 //! else.
 //!
 //! # Example
-//! `LLRM_VERIFY=0 llrm-c f.c` verifies nothing; `LLRM_VERIFY=1` and a bare
+//! `LLRM_VERIFY=0 llrm-cc f.c` verifies nothing; `LLRM_VERIFY=1` and a bare
 //! `LLRM_VERIFY=yes` do.
 
 use std::ffi::{OsStr, OsString};

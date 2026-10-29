@@ -45,7 +45,7 @@ The manager has `Scevs` (`scev/analysis.rs`: one `ScalarEvolution` per function,
 
 Inclusive callgrind Ir (3.25.1) of the calls a pass makes into `ScalarEvolution`, counting callers outside SE itself so no call is counted twice.
 
-- Ours: w-3's run, `cg.out`, total 1,434,903,106 Ir; `llrm-c` of d7d4e23a4 (md5 dda9cea7f636, parity plus the D12 revert); input `d_faces_flat.c` (md5 ca759b58a127); `-m32 -mabi=sysv -O2 -march=i486`. Not the ledger's run (c4fade734, 1,317.7 M): never mix the two.
+- Ours: w-3's run, `cg.out`, total 1,434,903,106 Ir; `llrm-cc` of d7d4e23a4 (md5 dda9cea7f636, parity plus the D12 revert); input `d_faces_flat.c` (md5 ca759b58a127); `-m32 -mabi=sysv -O2 -march=i486`. Not the ledger's run (c4fade734, 1,317.7 M): never mix the two.
 - Pin: `cg-opt.out` (285,166,041 Ir) and `cg-llc.out` (214,484,575 Ir), the pin's `opt` (md5 e8430a02d9bc) and `llc` (906c6268d6e7) on our `01-globalopt` IR of the same input, i386 i486 target.
 - Different inputs to the same passes, so read the shape, not the last digit.
 

@@ -25,7 +25,7 @@ fn test_a_kept_inline_is_optimised_in_one_caller_before_the_next_is_spliced_into
         .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .spawn()
-        .expect("runs llrm-c");
+        .expect("runs llrm-cc");
     let started = Instant::now();
     let mut stderr = child.stderr.take().expect("piped");
     let reader = std::thread::spawn(move || {

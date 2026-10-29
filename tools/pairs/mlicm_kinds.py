@@ -1,12 +1,13 @@
 """Which in-loop instructions the pin's early MachineLICM removes at m16, by kind (docs/working/early-machinelicm.md).
 
-    mlicm_kinds.py LLRM_C LEVEL MODULE...      (QCport module names, e.g. mdl_ai cmd sc ent weapons)
+    mlicm_kinds.py LLRM_CC LEVEL MODULE...      (QCport module names, e.g. mdl_ai cmd sc ent weapons)
 
 Per function, the pin's `llc -O2` with and without `-disable-machine-licm` on our IR; an instruction line (AT&T, operands as printed) is
 in a loop when it lies between a label and a later branch back to it. Prints, per kind (the mnemonic and the shape of the operands), the
 in-loop instructions without the pass less those with it. A text diff of the two listings was tried first: register and label numbers
 differ throughout, so it reports a gross 1765 where the net is 754.
 """
+import os
 import collections, glob, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
@@ -14,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pin
 
 OURS, LV, MODULES = sys.argv[1], sys.argv[2], sys.argv[3:]
+os.environ["LLRM_CC_TARGET"] = "x86_16-wat"  # llrm-cc takes its target row from the environment
 Q = Path.home() / "scratch/qcport/src"
 DIRS = ("host", "render", "model", "game", "sound", "ui")
 INC = [x for d in (*DIRS, "qgl") for x in ("-I", str(Q / d))] + ["-I", str(Path.home() / "scratch/qctc/inc")]

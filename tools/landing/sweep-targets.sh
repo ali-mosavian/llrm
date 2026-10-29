@@ -21,7 +21,7 @@ for root in $roots; do
   done
 done
 
-# pair_build dists (`<root>/<name>/{ok,dist/llrm-c}`, 250 MB each, 400 of them by 10-24) and their `wt-pair-*` checkouts: pruned when older than DIST_MIN (default 180) minutes and no
+# pair_build dists (`<root>/<name>/{ok,dist/llrm-qb}`, 250 MB each, 400 of them by 10-24) and their `wt-pair-*` checkouts: pruned when older than DIST_MIN (default 180) minutes and no
 # process has the directory as its cwd or in its command line. `ok` is pair_build's marker; a dist without it is its owner's and is only listed (`kept: ...`). DRY=1 lists and removes nothing.
 # One snapshot of every process's cwd and command line, taken once: a scan of /proc per candidate took longer than the sweep's cadence.
 procs=$(mktemp); trap 'rm -f "$procs"' EXIT
@@ -29,7 +29,7 @@ procs=$(mktemp); trap 'rm -f "$procs"' EXIT
 in_use() { grep -qF -- "$1" "$procs"; }
 tip=${TIP_SHA:-$(git -C "$HERE" rev-parse --verify -q origin/feat/parity 2>/dev/null)}
 for root in $roots; do
-  for holder in $(find "$root" -maxdepth 3 -path '*/dist/llrm-c' -mmin +"${DIST_MIN:-180}" -printf '%h\n' 2>/dev/null | xargs -r -n1 dirname | sort -u); do
+  for holder in $(find "$root" -maxdepth 3 -path '*/dist/llrm-qb' -mmin +"${DIST_MIN:-180}" -printf '%h\n' 2>/dev/null | xargs -r -n1 dirname | sort -u); do
     [ -e "$holder/ok" ] || { echo "kept (no ok marker): $holder"; continue; }
     name=$(basename "$holder")
     # Never the pinned base (every base-vs-new measure compares against it) nor the dist of the tip last landed (the next pair's base): TIP_SHA overrides the head read from origin/feat/parity.

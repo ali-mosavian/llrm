@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# g-identical.sh llrm-c "mode:format ...": the assembly of every bench C program with and without -g, per target and level;
+# g-identical.sh llrm-cc "mode:format ...": the assembly of every bench C program with and without -g, per target and level;
 # lists the ones that differ. The targets are the pairs -g ships, for example "m32:elf".
 export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
+arch() { case $1 in m16) echo --target=x86_16-wat -march=i386;; *) echo --target=x86_32-wat -march=i486;; esac; }
 C=$1; TARGETS=$2; T=$(mktemp -d); same=0; differ=0
 for f in bench/*/*.c; do n=$(basename "$f" .c)
   for t in $TARGETS; do m=${t%%:*}; fmt=${t##*:}; for o in O0 O1 O2 Os; do
-    $C -$m -fobject-format=$fmt -$o -S "$f" -o "$T/a.s" >/dev/null 2>&1 || continue
-    $C -$m -fobject-format=$fmt -$o -g -S "$f" -o "$T/b.s" >/dev/null 2>&1 || { echo "FAIL -g $n $t $o"; continue; }
+    $C $(arch $m) -fobject-format=$fmt -$o -S "$f" -o "$T/a.s" >/dev/null 2>&1 || continue
+    $C $(arch $m) -fobject-format=$fmt -$o -g -S "$f" -o "$T/b.s" >/dev/null 2>&1 || { echo "FAIL -g $n $t $o"; continue; }
     if cmp -s "$T/a.s" "$T/b.s"; then same=$((same+1)); else differ=$((differ+1)); echo "DIFFERS $n $t $o"; fi
   done; done
 done

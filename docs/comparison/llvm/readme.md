@@ -45,7 +45,7 @@ flowchart LR
     l3["<b>code generation</b><br/><small>196 M</small>"]:::out
     l1 --> l2 --> l3
   end
-  subgraph R["llrm: llrm-c, 2,903 M instructions"]
+  subgraph R["llrm: llrm-cc, 2,903 M instructions"]
     direction LR
     r1["<b>front end and the rest</b><br/><small>125 M, 3.8x</small>"]:::mid
     r2["<b>optimizer</b><br/><small>1,856 M, 10.4x</small>"]:::opt
@@ -70,7 +70,7 @@ Generated C, the same text compiled by both (`tools/ladder/ladder_gen.py SHAPE N
 | diamond | 59 / 176 | 58 / 183 | 0.83 / 1.07 | 0.88 / 1.44 |
 | calls | 45 / 94 | 75 / 123 | 0.76 / 1.03 | 0.83 / 0.99 |
 
-Fixed cost: an empty function costs 6 M (`opt`) + 8 M (`llc`) in LLVM, 15 M for `clang -c` end to end, and 10 M for `llrm-c`. The fitted intercepts are noise around zero. There is no fixed-cost gap.
+Fixed cost: an empty function costs 6 M (`opt`) + 8 M (`llc`) in LLVM, 15 M for `clang -c` end to end, and 10 M for `llrm-cc`. The fitted intercepts are noise around zero. There is no fixed-cost gap.
 
 Totals (M instructions, whole compile):
 
@@ -170,13 +170,13 @@ On `d_faces` `Printer::instruction` is 46 M (1.6%), `Stamp` 49 M (1.7%), the HIR
 ## Reproduce
 
 ```
-python3 tools/ladder/ladder.py --llrm <llrm-c> OUT.json     # the ladder
+python3 tools/ladder/ladder.py --llrm <llrm-cc> OUT.json     # the ladder
 python3 tools/ladder/fit.py OUT.json --upto 200             # the slopes
-python3 tools/ladder/cycles.py <qbq-llrm src> --runs 5 --llrm <llrm-c> <d_faces.c> ...
-python3 tools/ladder/rss.py --llrm <llrm-c> --shape mem     # resident set per IR instruction
+python3 tools/ladder/cycles.py <qbq-llrm src> --runs 5 --llrm <llrm-cc> <d_faces.c> ...
+python3 tools/ladder/rss.py --llrm <llrm-cc> --shape mem     # resident set per IR instruction
 ```
 
-Per-pass numbers: `valgrind --tool=callgrind opt -passes='default<O2>' -disable-output f.ll`, `callgrind_annotate --inclusive=yes`, and `LLRM_DEBUG=time,runs llrm-c ...`. Allocations: `valgrind --tool=dhat` on `cc1` and on `llrm-c` built without its global allocator. Cache: `callgrind --cache-sim=yes`.
+Per-pass numbers: `valgrind --tool=callgrind opt -passes='default<O2>' -disable-output f.ll`, `callgrind_annotate --inclusive=yes`, and `LLRM_DEBUG=time,runs llrm-cc ...`. Allocations: `valgrind --tool=dhat` on `cc1` and on `llrm-cc` built without its global allocator. Cache: `callgrind --cache-sim=yes`.
 
 ## Open questions
 

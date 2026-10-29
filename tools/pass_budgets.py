@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Instructions per IR instruction per pass run, the table plan step 4.1 judges the passes by.
 
-    QCPORT=<qb-quake src> tools/pass_budgets.py [--llrm llrm-c] [--levels O1,O2,Os] [--budget 300] [source.c]
+    QCPORT=<qb-quake src> tools/pass_budgets.py [--llrm llrm-cc] [--levels O1,O2,Os] [--budget 300] [source.c]
 
 One compile of d_faces (or `source.c`) per level with `LLRM_DEBUG=counts,time`. A pass's cost is its `mir NAME` row's total
 instructions (the analyses it made the manager compute are inside it, as `counts` charges them); its size is the sum of the
@@ -20,6 +20,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(next((ROOT / "crates/target").glob("*/vsgcc/dfaces"))))
+sys.path.insert(0, str(ROOT / "tools"))
+import llrmbin  # noqa: E402
 import wrapper  # noqa: E402  the d_faces wrapper and flags run.py builds with
 # Steps that run other passes; their total is the passes' too.
 CONTAINERS = {"pipeline"}
@@ -55,14 +57,15 @@ def table(passes: list[dict], budget: float) -> str:
 def command(llrm: str, level: str, source: str | None, qcport: Path, work: Path) -> list[str]:
     """One compile: `source` as given, else QCport's d_faces through the wrapper run.py compiles it with."""
     if source:
-        return [llrm, "-m32", "-march=i486", f"-{level}", "-o", str(work / "pass-budgets.obj"), source]
-    return wrapper.llrm_command(llrm, level, qcport, wrapper.write_source(qcport / "render/d_faces.c", work / "d_faces_flat.c"), work / "pass-budgets.obj")
+        return [llrm, "-c", *llrmbin.c_args(32), f"-{level}", "-o", str(work / "pass-budgets.obj"), source]
+    flat = wrapper.write_source(qcport / "render/d_faces.c", work / "d_faces_flat.c")
+    return [llrm, "-c", *llrmbin.c_args(32), f"-{level}", *wrapper.includes(qcport), "-o", str(work / "pass-budgets.obj"), str(flat)]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("source", nargs="?", help="a C file; by default d_faces of $QCPORT")
-    parser.add_argument("--llrm", default=str(ROOT / "target/release/llrm-c"))
+    parser.add_argument("--llrm", default=str(llrmbin.compiler(ROOT / "target/release")))
     parser.add_argument("--levels", default="O1,O2,Os")
     parser.add_argument("--budget", type=float, default=300.0, help="instructions per IR instruction per run (plan step 4.1)")
     args = parser.parse_args()
@@ -71,7 +74,7 @@ def main() -> None:
     for level in args.levels.split(","):
         done = subprocess.run(
             command(args.llrm, level, args.source, qc, work),
-            capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "counts,time", "LLRM_TIME_TOP": "2000"},
+            capture_output=True, text=True, env={**os.environ, **llrmbin.cc_environment(), "LLRM_DEBUG": "counts,time", "LLRM_TIME_TOP": "2000"},
         )
         if done.returncode:
             sys.exit(f"failed at -{level}: {done.stderr[-400:]}")

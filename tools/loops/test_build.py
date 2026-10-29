@@ -62,7 +62,7 @@ class FromTheDescriptionTests(unittest.TestCase):
 
 class CompilerTests(unittest.TestCase):
     def test_a_c_loop_is_compiled_by_llrm_cc_on_the_register_convention_row(self):
-        """tools/loops ran target/gate-bins/llrm-c, which is gone: gate run 2's test_a_case_s_quality_does_not_depend_on_its_batch died on it."""
+        """tools/loops ran a compiler binary that is gone: gate run 2's test_a_case_s_quality_does_not_depend_on_its_batch died on it."""
         seen = []
         original = build._run
         build._run = lambda command, env=None, cwd=None, timeout=600: seen.append(command)

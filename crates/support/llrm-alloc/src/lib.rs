@@ -37,7 +37,7 @@
 //! 5. Chunks are never freed, so a block is valid for as long as the process.
 //!
 //! # Used by
-//! The compiler binaries (`llrm-c`, `llrm-qb`, `llrm-nib`, `llrm-mir`)
+//! The compiler binaries (`llrm-cc`, `llrm-qb`, `llrm-nib`, `llrm-mir`)
 //! declare it as `#[global_allocator]`; no library crate does.
 
 use std::alloc::{GlobalAlloc, Layout};

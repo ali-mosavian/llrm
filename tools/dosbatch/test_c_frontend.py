@@ -18,7 +18,7 @@ def command(monkeypatch, target="dos16"):
 
 
 def test_llrm_cc_is_the_c_frontend(monkeypatch):
-    """The default was llrm-c, which a build without the c-legacy feature lacks: every tests/run C program failed in the landing's behavioural stage."""
+    """The default was a frontend a build may lack: every tests/run C program failed in the landing's behavioural stage."""
     words, env = command(monkeypatch)
     assert Path(words[0]).name == "llrm-cc" and env
     assert dosbatch.c_frontend() == "llrm-cc" and Path(run_tests.compile_command(run_tests.Program(source=Path("a.c"), flags=[], known=None), Path("a.obj"))[0]).name == "llrm-cc"
@@ -49,8 +49,7 @@ def test_a_target_without_a_row_is_a_build_error_not_a_key_error(monkeypatch):
 
 
 def test_a_c_program_itself_is_built_by_llrm_cc_where_the_run_names_it(monkeypatch, tmp_path):
-    """Only the `link:` extras went through LLRM_C_FRONTEND: a pass of 463 programs 'on llrm-cc' ran llrm-c for all but 21 of them
-    (wccq errors in its log), and passed with LLRM_CLANG_M16 unset."""
+    """Only the `link:` extras went through LLRM_C_FRONTEND: a pass of 463 programs 'on llrm-cc' ran another front end for all but 21 of them, and passed with LLRM_CLANG_M16 unset."""
     import run_tests  # noqa: E402
 
     monkeypatch.delenv("LLRM_ISEL", raising=False)
@@ -89,27 +88,27 @@ def test_start_up_objects_built_with_different_entries_do_not_share_a_path(tmp_p
     assert a != b and a.parent == b.parent == tmp_path
 
 
-def test_llrm_cc_reads_the_rows_own_os_header_not_llrm_cs(monkeypatch, tmp_path):
-    """A -I of llrm-c's llrm_os.h came before the row's -isystem one: os_files, os_find, os_more... called the OS layer by llrm-c's
-    pragmas and read -6 for 6 (7 programs of the DOSBox pass)."""
+def test_llrm_cc_reads_the_rows_own_os_header(monkeypatch, tmp_path):
+    """A -I of another front end's llrm_os.h came before the row's -isystem one: os_files, os_find, os_more... called the OS layer by the other
+    front end's pragmas and read -6 for 6 (7 programs of the DOSBox pass)."""
     import run_tests  # noqa: E402
 
     monkeypatch.delenv("LLRM_ISEL", raising=False)
     source = tmp_path / "p.c"
     source.write_text("int main(void) { return 0; }\n")
-    monkeypatch.setattr(dosbatch, "c_include", lambda target, work: Path("/llrm-c-header-dir"))
+    monkeypatch.setattr(dosbatch, "c_include", lambda target, work: Path("/old-header-dir"))
     command = run_tests.compile_command(run_tests.Program(source=source, flags=[], known=None), tmp_path / "p.obj")
-    assert "/llrm-c-header-dir" not in command, command
-    assert "/llrm-c-header-dir" not in dosbatch.c_compile(source, tmp_path / "p.obj", "x86-m16", "-O2", Path("/llrm-c-header-dir"), [])[0]
+    assert "/old-header-dir" not in command, command
+    assert "/old-header-dir" not in dosbatch.c_compile(source, tmp_path / "p.obj", "x86-m16", "-O2", Path("/old-header-dir"), [])[0]
 
 
 def test_a_nib_programs_declarations_are_searched_and_the_header_dir_still_is_not(tmp_path):
     """Nib's foreign C includes NAME.h from the directory of its exports (interop: 'main.h' file not found, #6025), and that directory
-    alone: the one `include` names holds llrm-c's llrm_os.h, which shadowed the row's and sent the QB runtime's bq16 programs to handle 426."""
+    alone: the one `include` names holds another front end's llrm_os.h, which shadowed the row's and sent the QB runtime's bq16 programs to handle 426."""
     source = tmp_path / "geometry.c"
-    command = dosbatch.c_compile(source, tmp_path / "g.obj", "x86-m16", "-O2", Path("/llrm-c-header-dir"), [], declarations=Path("/exports"))[0]
+    command = dosbatch.c_compile(source, tmp_path / "g.obj", "x86-m16", "-O2", Path("/old-header-dir"), [], declarations=Path("/exports"))[0]
     assert command[command.index("-I") + 1] == "/exports", command
-    assert "/llrm-c-header-dir" not in command, command
+    assert "/old-header-dir" not in command, command
 
 
 def test_a_watcom_abi_program_links_the_start_up_that_calls_main_(monkeypatch):
@@ -125,8 +124,8 @@ def test_an_absolute_runtime_file_names_an_object_in_the_work_directory():
     assert "/" not in name and name == dosbatch.object_name("runtime/nib/x86-m16/init.asm")
 
 
-def test_the_qb_runtime_c_sources_build_with_the_c_frontend_not_llrm_c(monkeypatch, tmp_path):
-    """qb32.build and qbruntime._compile_c named llrm-c: with it unbuilt every QB program failed the landing's link check ("llrm was built without the toolchain feature")."""
+def test_the_qb_runtime_c_sources_build_with_the_c_frontend(monkeypatch, tmp_path):
+    """qb32.build and qbruntime._compile_c named a compiler binary: with it unbuilt every QB program failed the landing's link check ("llrm was built without the toolchain feature")."""
     import qb32
     import qbruntime
 
@@ -135,13 +134,12 @@ def test_the_qb_runtime_c_sources_build_with_the_c_frontend_not_llrm_c(monkeypat
     qbruntime._compile_c(Path("a.c"), tmp_path / "a.obj", tmp_path)
     (command, env), = asked
     assert Path(command[0]).name == "llrm-cc" and "-mbss-begin" in command and env == {"LLRM_CC_TARGET": "x86_16-wat"}, (command, env)
-    assert not any(Path(one).name == "llrm-c" for one in command)
-    assert str(tmp_path) not in command, "llrm-c's llrm_os.h (a plain __cdecl, ignored by the fork clang) would shadow the row's"
+    assert str(tmp_path) not in command, "another front end's llrm_os.h (a plain __cdecl, ignored by the fork clang) would shadow the row's"
     assert qb32._stamp(dosbatch.c_frontend()).startswith("llrm-cc")
 
 
 def test_the_real_mode_runtime_objects_are_cached_per_row(monkeypatch, tmp_path):
-    """bq16 programs died on `KeyError: 426` (an INT 21h write to a garbage handle): the runtime's C was built with llrm-c's llrm_os.h, whose plain `__cdecl` the
+    """bq16 programs died on `KeyError: 426` (an INT 21h write to a garbage handle): the runtime's C was built with another front end's llrm_os.h, whose plain `__cdecl` the
     fork clang ignores, so `LL$WRITE_FILE` got register arguments; the cache key ignored the build, so the old objects were served after the fix."""
     import qb32
     import qbbuild

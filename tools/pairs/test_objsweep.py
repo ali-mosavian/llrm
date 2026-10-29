@@ -52,7 +52,7 @@ def test_a_named_selector_is_kept_and_both_means_old_and_dag():
 
 
 def test_the_selector_reaches_the_compile(tmp_path):
-    stub = tmp_path / "llrm-c"
+    stub = tmp_path / "llrm-cc"
     stub.write_text('#!/bin/sh\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && { printf "%s" "$*" > "$a"; next=; };; esac; done; exit 0\n')
     stub.chmod(0o755)
     data, why = objsweep.compile_one(str(stub), tmp_path / "x.c", "m32", "O2", tmp_path / "x.o", "dag")
@@ -112,7 +112,7 @@ def test_a_changed_debug_byte_is_a_changed_object(tmp_path):
 
 
 def test_an_llrm_cc_is_asked_for_an_object_and_given_its_target(tmp_path, monkeypatch):
-    """objsweep ran llrm-cc as it ran llrm-c: m64 linked ("ld returned 1") and m32/m16 had no LLRM_CC_TARGET, so all 852 compiles failed on both sides and the sweep read "0 objects changed"."""
+    """objsweep ran llrm-cc without -c or a target row: m64 linked ("ld returned 1") and m32/m16 had no LLRM_CC_TARGET, so all 852 compiles failed on both sides and the sweep read "0 objects changed"."""
     stub = tmp_path / "llrm-cc"
     stub.write_text('#!/bin/sh\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && { printf "%s|%s|%s" "$*" "$LLRM_CC_TARGET" "$LLRM_CLANG_M16" > "$a"; next=; };; esac; done; exit 0\n')
     stub.chmod(0o755)

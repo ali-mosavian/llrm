@@ -59,7 +59,7 @@
   <text class="t" x="124" y="145" text-anchor="middle">Nib</text>
   <rect class="box" x="20" y="190" width="208" height="46" rx="6"/>
   <text class="t" x="124" y="209" text-anchor="middle">C</text>
-  <text class="sub" x="124" y="226" text-anchor="middle">Open Watcom front end</text>
+  <text class="sub" x="124" y="226" text-anchor="middle">clang front end</text>
   <rect class="box" x="20" y="250" width="208" height="46" rx="6"/>
   <text class="t" x="124" y="269" text-anchor="middle">BC-built .OBJ</text>
   <text class="sub" x="124" y="286" text-anchor="middle">decode and raise</text>

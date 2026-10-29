@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """llrm against gcc: instructions:u per level, and where llrm's go, by family.
 
-    tools/scoreboard.py [--levels O1 O2] [--jobs N] [--json FILE] [llrm-c]
+    tools/scoreboard.py [--levels O1 O2] [--jobs N] [--json FILE] [llrm-cc]
 
 Two sets, from tools/compile-cost.py's files. The 66 programs (wrapped as vsgcc compiles them) are what gcc can compile: llrm/gcc
 over the whole compile, per level, and gcc's `-fsyntax-only` as its parse. QCport's modules are Open Watcom DOS C, which gcc
@@ -71,8 +71,8 @@ def measure(llrm: Path, levels: list[str], jobs: int) -> list[dict]:
 
         def one(job):
             name, level, source, flags = job
-            made, err = instructions([str(llrm), level, *flags, str(source), "-o", llrmbin.OBJECT],
-                                     {"LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"}, ok=True)
+            made, err = instructions([str(llrm), level, "-c", *flags, str(source), "-o", llrmbin.OBJECT],
+                                     {**llrmbin.cc_environment(), "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"}, ok=True)
             rows = {m.group(2): float(m.group(1)) for m in ROW.finditer(err)}
             run = {"file": name, "set": "qcport" if name.startswith("qcport/") else "programs", "level": level, "llrm": made,
                    "rows": rows, "gcc": None, "gcc_parse": None}
@@ -148,7 +148,7 @@ def main() -> int:
     parser.add_argument("llrm", nargs="?", type=Path)
     args = parser.parse_args()
 
-    runs = measure(args.llrm or llrmbin.bin_dir() / "llrm-c", [f"-{level.lstrip('-')}" for level in args.levels], args.jobs)
+    runs = measure(args.llrm or llrmbin.compiler(llrmbin.bin_dir()), [f"-{level.lstrip('-')}" for level in args.levels], args.jobs)
     if args.json:
         args.json.write_text(json.dumps(runs))
     print(report(runs))

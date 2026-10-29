@@ -8,8 +8,8 @@ ulimit -v "${LLRM_MEMORY_LIMIT_KB:-8000000}"  # a runaway compile dies at 8 GB i
 #   tools/identity.sh KIND BASE_BIN NEW_BIN [-m16|-m32]   (c, qcport: BASE_BIN, NEW_BIN are llrm-cc)
 #
 # KIND: nib    llrm-nib over examples/, tests/run/nib, bench/, at -O2 and -Os, procedure segments
-#       c      llrm-c over bench/ and tests/run/c, at -O2
-#       qcport llrm-c over QCport's modules at -O2 and -Os; QCPORT names its src/ and QCPORT_INC the
+#       c      llrm-cc over bench/ and tests/run/c, at -O2
+#       qcport llrm-cc over QCport's modules at -O2 and -Os; QCPORT names its src/ and QCPORT_INC the
 #              Borland headers it builds with (neither is in this repository)
 # IDENTITY_SAME_SOURCE=1 allows BASE_BIN and NEW_BIN to be one binary (a build against itself).
 # The -m flag is passed to the compiler (default: its own, m16).
