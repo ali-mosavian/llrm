@@ -97,6 +97,19 @@ def test_every_root_test_binary_is_in_exactly_one_step():
         assert in_integration != (name in whole), name
 
 
+def test_a_root_test_named_like_a_members_runs_only_the_root_one():
+    """gate run 3 (c1d651c7b976) said "INCOMPLETE: 2 results of 1 test binaries": a bare `cargo test --test run` also ran llrm-arm64's
+    tests/run.rs (24 tests, all filtered out by the step's filter), and the step counts one binary."""
+    pkgs = gate.packages()
+    cmds = gate.commands(gate.plan(["crates/ir/llrm-mir/src/lib.rs"]), gate.load(), pkgs)
+    shared = {t for _, t in gate.crate_tests(pkgs)} & set(gate.root_tests())
+    assert "run" in shared, shared
+    for name in shared:
+        for step, cmd in cmds.items():
+            if step != "crate-tests" and re.search(rf"--test {name}(\s|$)", cmd):
+                assert f"-p llrm --test {name}" in cmd or re.search(rf"-p llrm (--test \w+ )*--test {name}(\s|$)", cmd), (step, cmd)
+
+
 def test_the_test_that_writes_into_the_tree_runs_alone_after_the_run_test_could_see_it():
     """It left crates/target/llrm-x86-m32/.rerun-probe in the tree while `run` compared the tree: `run` failed, 'the run left files'."""
     cfg = gate.load()
