@@ -46,7 +46,7 @@ use llrm_target::Target;
 use llrm_target::routines::Used;
 
 use super::actions::{Features, TargetLowering};
-use super::builder::{BuilderTarget, RuntimeAnswer, build_block};
+use super::builder::{BuilderTarget, RuntimeAnswer, SizeTrade, build_block};
 use super::dag_select::select_block;
 use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
 use super::function_lowering::FunctionLoweringInfo;
@@ -708,6 +708,23 @@ impl super::emit::ConstantCells for PoolCells<'_> {
     }
 }
 
+/// The clock prices a size-only pick weighs against bytes (m16: the fill it
+/// prices is real mode's).
+fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
+    let rate = cpu.size_milliclocks_per_byte();
+    if rate == 0 {
+        return None;
+    }
+    let costs = cpu.target().costs();
+    Some(SizeTrade {
+        milliclocks_per_byte: rate,
+        fill: costs.fill,
+        fill_cell: costs.fill_cell,
+        store: costs.store,
+        prefix: costs.prefix,
+    })
+}
+
 fn selected_in(
     module: &Module,
     name: &str,
@@ -787,6 +804,7 @@ fn selected_in(
         .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_opt_size(cpu.size || cpu.min_size)
         .with_min_size(cpu.min_size)
+        .with_size_trade(size_trade(cpu))
         .with_tail_calls(tail_calls_on())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
