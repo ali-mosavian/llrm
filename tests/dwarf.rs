@@ -112,8 +112,15 @@ fn dwarfdump_verifies_every_bench_program_at_both_ends_of_the_optimiser() {
                 // Every function has call frame information: one the code could
                 // not be followed through has none.
                 let frames = Command::new(&dump).arg("--debug-frame").arg(&object).output().unwrap();
+                // `--debug-frame` lists `.eh_frame` after `.debug_frame`: the
+                // count is of the first.
                 let (fdes, functions) = (
-                    String::from_utf8_lossy(&frames.stdout).matches(" FDE ").count(),
+                    String::from_utf8_lossy(&frames.stdout)
+                        .split(".eh_frame contents")
+                        .next()
+                        .unwrap()
+                        .matches(" FDE ")
+                        .count(),
                     // An inlined function's abstract subprogram has no code.
                     shown.matches("DW_TAG_subprogram").count() - shown.matches("DW_AT_inline\t").count(),
                 );
