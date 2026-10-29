@@ -286,10 +286,42 @@ fn condition(
     if dag.opcode(value) == mosisd::SETCC {
         return (dag.operand(value, 0), dag.operand(value, 1));
     }
-    let byte = if dag.value_type(value) == EVT::I1 { dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]) } else { value };
+    let byte = condition_byte(dag, value);
     let zero = dag.get_constant(0, EVT::I8);
     let flags = dag.get_node(mosisd::CMP, EVT::I8, &[byte, zero]);
     (cc_operand(dag, cond::NE), flags)
+}
+
+/// A condition value as a byte of 0 or 1. A logic op over conditions stays
+/// in bytes: zero-extending it legalizes back into a `select` on itself, whose
+/// lowering is `CMOV` on a compare of that `select`.
+fn condition_byte(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+) -> SDValue {
+    match dag.value_type(value) {
+        EVT::I1 => match dag.opcode(value) {
+            ISD::Constant => {
+                let bit = dag.constant(value).expect("a constant") & 1;
+                dag.get_constant(bit, EVT::I8)
+            }
+            ISD::SetCC => match lower_setcc(dag, value) {
+                Some(lowered) => lowered,
+                None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
+            },
+            ISD::Truncate if dag.value_type(dag.operand(value, 0)) == EVT::I8 => {
+                let (byte, one) = (dag.operand(value, 0), dag.get_constant(1, EVT::I8));
+                dag.get_node(ISD::And, EVT::I8, &[byte, one])
+            }
+            op @ (ISD::And | ISD::Or | ISD::Xor) => {
+                let (a, b) = (dag.operand(value, 0), dag.operand(value, 1));
+                let (a, b) = (condition_byte(dag, a), condition_byte(dag, b));
+                dag.get_node(op, EVT::I8, &[a, b])
+            }
+            _ => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
+        },
+        _ => value,
+    }
 }
 
 /// `LowerSELECT`: `CMOV false, true, cc, flags`.
