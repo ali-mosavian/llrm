@@ -105,11 +105,13 @@ fn a_saved_float_register_is_stated_with_the_extended_form() {
 
 const DARWIN_DATALAYOUT: &str = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32";
 
-/// The pinned AArch64 LLVM's `bin`, or None where it is not built (the test then
-/// says it skipped).
+/// The pinned AArch64 LLVM's `bin`, or None where it is not built (the test
+/// then says it skipped).
 fn pinned() -> Option<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
-    let bin = PathBuf::from(std::env::var("LLVM_BUILD").unwrap_or_else(|_| format!("{home}/scratch/llvm-build-aarch64"))).join("bin");
+    let bin =
+        PathBuf::from(std::env::var("LLVM_BUILD").unwrap_or_else(|_| format!("{home}/scratch/llvm-build-aarch64")))
+            .join("bin");
     bin.join("llvm-objdump").exists().then_some(bin)
 }
 

@@ -60,7 +60,9 @@ pub fn compact_encoding(
     }
     let (fp, lr) = (("x29".to_owned(), -16), ("x30".to_owned(), -8));
     match rows.iter().find(|row| row.cfa_register == "x29") {
-        Some(row) if row.cfa_offset == 16 && row.saved.len() == 2 && row.saved.contains(&fp) && row.saved.contains(&lr) => {
+        Some(row)
+            if row.cfa_offset == 16 && row.saved.len() == 2 && row.saved.contains(&fp) && row.saved.contains(&lr) =>
+        {
             MODE_FRAME
         }
         Some(_) => dwarf,
@@ -122,10 +124,7 @@ mod tests {
 
     #[test]
     fn saved_pairs_are_left_to_the_dwarf_frame_at_its_entry() {
-        let rows = [
-            row(4, "sp", 32, &[("x19", -32)]),
-            row(8, "x29", 16, &[("x19", -32), ("x29", -16), ("x30", -8)]),
-        ];
+        let rows = [row(4, "sp", 32, &[("x19", -32)]), row(8, "x29", 16, &[("x19", -32), ("x29", -16), ("x30", -8)])];
         assert_eq!(compact_encoding(&rows, 0x1c), 0x0300_001c);
     }
 

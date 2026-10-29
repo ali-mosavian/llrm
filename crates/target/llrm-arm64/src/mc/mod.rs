@@ -63,8 +63,8 @@ impl ObjectTarget for Arm64Objects {
 }
 
 /// `object` with `__eh_frame` and `__compact_unwind` for the frames the backend
-/// declared: ld64 reads an entry of 32 bytes for each function (its address, its
-/// length, the encoding, a personality and a language-specific area).
+/// declared: ld64 reads an entry of 32 bytes for each function (its address,
+/// its length, the encoding, a personality and a language-specific area).
 fn with_unwind(object: &Object) -> Result<Object, Unsupported> {
     use llrm_object::{Fix, Reloc, Role, Section, Target};
     let (mut expanded, fdes) = llrm_dwarf::eh_frame::expanded_as(object, &unwind::eh_target(), "__eh_frame")?;
@@ -76,14 +76,18 @@ fn with_unwind(object: &Object) -> Result<Object, Unsupported> {
         image.extend(unwind::compact_encoding(&frame.rows, fde).to_le_bytes());
         image.extend([0u8; 16]);
     }
-    expanded.sections.push(Section {
-        name: "__compact_unwind".to_owned(),
-        role: Role::Unwind,
-        near: true,
-        align: 8,
-        spans: vec![[0, image.len()]],
-        image,
-        relocs,
-    });
+    expanded
+        .sections
+        .push(
+            Section {
+                name: "__compact_unwind".to_owned(),
+                role: Role::Unwind,
+                near: true,
+                align: 8,
+                spans: vec![[0, image.len()]],
+                image,
+                relocs,
+            },
+        );
     Ok(expanded)
 }
