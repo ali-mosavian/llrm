@@ -520,3 +520,24 @@ fn a_function_reentered_through_a_pointer_keeps_its_values() {
     let setup = "  lda #<sum\n  sta rc2\n  lda #>sum\n  sta rc3\n  lda #4\n  sta rc4\n";
     assert_eq!(common::run_with("alloc-reenter", &format!("{setup}  jsr sum\n"), &text), 10);
 }
+
+const STRUCTS: &str = "%S = type { i16, i16 }\n\
+define i16 @sumv(ptr byval(%S) %s) {\n  %a = load i16, ptr %s\n  %q = getelementptr i8, ptr %s, i16 2\n  %b = load i16, ptr %q\n  %r = add i16 %a, %b\n  ret i16 %r\n}\n\
+define void @mk(ptr sret(%S) %o, i16 %x) {\n  store i16 %x, ptr %o\n  %q = getelementptr i8, ptr %o, i16 2\n  %y = add i16 %x, 1\n  store i16 %y, ptr %q\n  ret void\n}\n\
+define i16 @pass(i16 %x) {\n  %l = alloca %S\n  store i16 %x, ptr %l\n  %q = getelementptr i8, ptr %l, i16 2\n  %y = add i16 %x, 1\n  store i16 %y, ptr %q\n  %r = call i16 @sumv(ptr byval(%S) %l)\n  ret i16 %r\n}\n\
+define i16 @take(i16 %x) {\n  %o = alloca %S\n  call void @mk(ptr sret(%S) %o, i16 %x)\n  %a = load i16, ptr %o\n  %q = getelementptr i8, ptr %o, i16 2\n  %b = load i16, ptr %q\n  %r = add i16 %a, %b\n  ret i16 %r\n}";
+
+fn structs(entry: &str) -> String {
+    ["sumv", "mk", entry].iter().map(|f| compile(STRUCTS, f)).collect()
+}
+
+/// A struct passed by value (`byval`) and one returned through `sret`, the way a C frontend lowers
+/// them: `pass(5)` is 5 + 6, `take(5)` the same through `mk`.
+#[test]
+fn a_struct_passed_byval_and_returned_through_sret_round_trips() {
+    for entry in ["pass", "take"] {
+        let text = structs(entry);
+        let run = common::run_with("alloc-struct", &format!("{}  jsr {entry}\n", set("rc2", 5) + &set("rc3", 0)), &text);
+        assert_eq!(run, 11, "{entry}");
+    }
+}
