@@ -5,17 +5,17 @@
 //! # See also
 //! `WebAssemblySetP2AlignOperands.cpp`, pin d1106deb71cc.
 
-use crate::asm_strings::ASM_STRINGS;
+use crate::asm_strings::find;
 use crate::mir::{Function, Operand};
 
 /// `WebAssembly::GetDefaultP2Align`: the log2 of the access size the
 /// mnemonic names, as the printer needs it.
 pub fn default_p2align(opcode: u16) -> Option<u64> {
-    let (_, text, names) = ASM_STRINGS.iter().find(|(id, ..)| *id == opcode)?;
-    if !names.contains(&"p2align") {
+    let asm = find(opcode)?;
+    if !asm.names.contains(&"p2align") {
         return None;
     }
-    let (ty, op) = text.split_once('.')?;
+    let (ty, op) = asm.text.split_once('.')?;
     Some(if op.contains("8") {
         0
     } else if op.contains("16") {

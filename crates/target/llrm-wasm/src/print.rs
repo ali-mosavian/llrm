@@ -10,7 +10,7 @@
 //! `WebAssemblyInstPrinter.cpp` (`printWebAssemblyP2AlignOperand`), pin
 //! d1106deb71cc.
 
-use crate::asm_strings::ASM_STRINGS;
+use crate::asm_strings::find;
 use crate::mir::{Function, Inst, Operand, ValType};
 use crate::set_p2align::default_p2align;
 
@@ -41,13 +41,10 @@ fn with_comment(
 /// One instruction after the passes: its stack-form string with the operands
 /// filled in.
 pub fn instruction(inst: &Inst) -> String {
-    let &(_, text, names) = ASM_STRINGS
-        .iter()
-        .find(|(id, ..)| *id == inst.opcode)
-        .unwrap_or_else(|| panic!("opcode {} has no assembly string", inst.opcode));
+    let asm = find(inst.opcode).unwrap_or_else(|| panic!("opcode {} has no assembly string", inst.opcode));
     let immediates = inst.operands.iter().filter_map(|o| if let Operand::Imm(v) = o { Some(*v) } else { None });
-    let mut text = text.to_string();
-    for (name, value) in names.iter().zip(immediates) {
+    let mut text = asm.text.to_string();
+    for (name, value) in asm.names.iter().zip(immediates) {
         let shown = if *name == "p2align" {
             if default_p2align(inst.opcode) == Some(value as u64) { String::new() } else { format!(":p2align={value}") }
         } else {
