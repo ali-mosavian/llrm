@@ -93,7 +93,7 @@ pub fn atari8_startup(platform: &Platform) -> String {
     format!(
         ".import __MAIN_START__, __MAIN_LAST__\n.segment \"HEADER\"\n.word $FFFF\n\
          .segment \"MAINHDR\"\n.word __MAIN_START__\n.word __MAIN_LAST__ - 1\n\
-         .segment \"CODE\"\n.export start\nstart:\n  lda #${:02X}\n  sta rc0\n  lda #${:02X}\n  sta rc1\n  jsr _main\n  sta $0600\nhalt:\n  jmp halt\n\
+         .segment \"CODE\"\n.export start, halt\nstart:\n  lda #${:02X}\n  sta rc0\n  lda #${:02X}\n  sta rc1\n  jsr _main\n  sta $0600\nhalt:\n  jmp halt\n\
          .segment \"TRAILER\"\n.word $02E0, $02E1, start\n.segment \"CODE\"\n",
         platform.soft_stack & 0xFF,
         platform.soft_stack >> 8
