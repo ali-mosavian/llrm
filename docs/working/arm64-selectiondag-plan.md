@@ -203,3 +203,7 @@ Stay on the SelectionDAG route. Do not start GlobalISel.
 Revisit only if the pin's default changes: `aarch64-enable-global-isel-at-O` > 0 in a later pin. Recheck that one line at each pin bump.
 
 First step unchanged: dry-run `llrm-dagisel-gen` on `AArch64GenDAGISel.inc`.
+
+## Status (P6 slice B2)
+
+`crates/target/llrm-arm64/src/dag/` runs the shared builder, combiner, legalizers, matcher and scheduler on the generated AArch64 table: `ids.rs` (pin registers by name), `call.rs` (AAPCS64 integers in `x0`..`x7`, `RET_GLUE`), `function.rs` (`BuilderArch`, `select_function`), `pipeline.rs` (empty hooks, sched info). `tests/dag_function.rs`: `add` selects `ADDWrr` + `RET_ReallyLR`, `sub i32` is `SUBSWrr` as the pin's `finalize-isel` has it. Refused: calls, stack arguments, floats, any Custom operation. Next: C1 (units to `MFunc`), D1 (`--isel=dag|shadow`).
