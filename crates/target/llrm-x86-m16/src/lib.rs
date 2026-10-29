@@ -12,7 +12,7 @@ pub mod target;
 pub mod timings;
 
 pub use cycles::report;
-pub use target::{Dos, ENCODABLE_BASES, FRAME, GENERAL, PRESERVED, WORD_INDEXES, word_bases};
+pub use target::{Dos, ENCODABLE_BASES, FRAME, GENERAL, PRESERVED, WORD_INDEXES, with_pin_tuning, word_bases};
 pub use timings::ARCHS;
 
 /// Real mode's data layout and address spaces: `machines/datalayout.toml`.

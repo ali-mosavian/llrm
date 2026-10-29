@@ -106,13 +106,32 @@ impl X86 {
     /// The profile of a `-march` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<X86> {
         match cpu {
-            "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => {
-                Some(X86 { sse1: false, sse2: false, macro_fusion: false, quad: false, real_mode: None, tuning: llrm_mir::target::Tuning::PIN })
-            }
-            "core2" => Some(X86 { sse1: true, sse2: true, macro_fusion: true, quad: false, real_mode: None, tuning: llrm_mir::target::Tuning::PIN }),
+            "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => Some(X86 {
+                sse1: false,
+                sse2: false,
+                macro_fusion: false,
+                quad: false,
+                real_mode: None,
+                tuning: llrm_mir::target::Tuning::PIN,
+            }),
+            "core2" => Some(X86 {
+                sse1: true,
+                sse2: true,
+                macro_fusion: true,
+                quad: false,
+                real_mode: None,
+                tuning: llrm_mir::target::Tuning::PIN,
+            }),
             // `-march=x86-64`: the baseline of long mode, SSE2
             // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
-            "x86-64" => Some(X86 { sse1: true, sse2: true, macro_fusion: true, quad: true, real_mode: None, tuning: llrm_mir::target::Tuning::PIN }),
+            "x86-64" => Some(X86 {
+                sse1: true,
+                sse2: true,
+                macro_fusion: true,
+                quad: true,
+                real_mode: None,
+                tuning: llrm_mir::target::Tuning::PIN,
+            }),
             _ => None,
         }
     }

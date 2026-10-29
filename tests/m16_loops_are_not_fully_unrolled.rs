@@ -44,9 +44,9 @@ fn at_o2_a_32_byte_memset_is_a_fill_not_eight_stores() {
     assert!(text.matches("mov dword ptr [bp").count() <= 4, "{text}");
 }
 
-/// A six-statement callee with three callers was copied three times by 225-threshold
-/// inlining three copies at -O2 (jpeg_single.nib: one 2439-instruction
-/// `_main`, 11693 bytes against main's 6016); m16's bar is 50.
+/// A six-statement callee with three callers was copied three times by
+/// 225-threshold inlining three copies at -O2 (jpeg_single.nib: one
+/// 2439-instruction `_main`, 11693 bytes against main's 6016); m16's bar is 50.
 #[test]
 fn at_o2_a_mid_sized_callee_with_several_callers_stays_a_call() {
     let scratch = tempfile::tempdir().unwrap();
