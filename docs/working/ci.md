@@ -75,5 +75,6 @@ A check or waiver that is knowingly missing is a line here, not a silence. Forma
 
 On the deadline the owner pays it (the check goes red or the test goes) or moves the date in a commit that says why.
 
+- DEBT o1-fill-rep-stos | limit 1 test | deadline 2026-11-13 | owner w9 | `tests/o1_fill.rs` is ignored: the DAG selector has no node for `memset.pattern`, so `driver/mod.rs` expands a 16-bit fill back into a loop and `rep stosw` never forms; needs a DAG lowering or dropping the loopidiom DEVIATE.
 - DEBT skip-llrm-pass | limit 2 tests | deadline 2026-11-05 | owner w11 | `tools/difftest/test_difftest.py` skips `llrm-pass is not built`: the python group's pytest step builds no binaries.
 - DEBT skip-pindiff-llc | limit 1 test | deadline 2026-11-05 | owner w11 | `tools/pairs/test_pindiff.py` skips `needs LLRM_LLC`: nothing sets it in CI.
