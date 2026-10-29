@@ -17,6 +17,11 @@ fn root() -> &'static Path {
 }
 
 fn sysroot() -> PathBuf {
+    static MADE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    MADE.get_or_init(make_sysroot).clone()
+}
+
+fn make_sysroot() -> PathBuf {
     for tool in ["ld.lld", "qemu-aarch64"] {
         let found = Command::new("which").arg(tool).output().is_ok_and(|out| out.status.success());
         assert!(found, "qb_arm64 needs `{tool}` on the PATH");
