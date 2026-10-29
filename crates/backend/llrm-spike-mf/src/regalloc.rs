@@ -39,6 +39,42 @@ pub trait Target {
     fn reserved(root: RegId) -> bool;
     /// The roots a call leaves unspecified.
     fn caller_saved() -> Vec<RegId>;
+    /// Whether two allocatable registers share storage (a pair and its
+    /// bytes); a register overlaps itself.
+    fn overlaps(
+        one: RegId,
+        other: RegId,
+    ) -> bool {
+        one == other
+    }
+    /// The instruction that stores `register` (of `class`) to frame `slot`;
+    /// `None` when the target cannot spill.
+    fn spill_store(
+        _class: Self::Class,
+        _register: Reg,
+        _slot: i32,
+    ) -> Option<Inst> {
+        None
+    }
+    /// The instruction that loads frame `slot` into `register`.
+    fn spill_load(
+        _class: Self::Class,
+        _register: Reg,
+        _slot: i32,
+    ) -> Option<Inst> {
+        None
+    }
+}
+
+/// No register fits `vreg`; `crowd` are the virtual registers (itself
+/// included) that interfere with it or were joined to it.
+#[derive(Clone, Debug)]
+pub struct Uncolourable {
+    pub vreg: u32,
+    pub crowd: Vec<u32>,
+    /// The virtual registers already coloured with a register that covers one
+    /// `vreg` could have used: giving one up makes room.
+    pub blockers: Vec<u32>,
 }
 
 /// The physical register of each virtual register.
@@ -285,6 +321,21 @@ impl<T: Target> Allocate<T::Class> for GraphColoring<T> {
         &self,
         function: &MFunction<T::Class>,
     ) -> Result<Assignment, String> {
+        self.colour(function).map_err(|failed| {
+            format!(
+                "no register for v{} ({:?}); spilling is not translated",
+                failed.vreg, function.classes[failed.vreg as usize]
+            )
+        })
+    }
+}
+
+impl<T: Target> GraphColoring<T> {
+    /// Colour every register, or name the first one nothing fits.
+    pub fn colour(
+        &self,
+        function: &MFunction<T::Class>,
+    ) -> Result<Assignment, Uncolourable> {
         let count = function.classes.len();
         let mut nodes = Nodes { count, physical: Vec::new() };
         let effects_of: Vec<Vec<(Vec<usize>, Vec<usize>)>> = function
@@ -340,6 +391,11 @@ impl<T: Target> Allocate<T::Class> for GraphColoring<T> {
                     }
                     for other in defs {
                         connect(*d, *other, &mut edges);
+                    }
+                }
+                if block.insts[i].early_clobber {
+                    for (d, u) in defs.iter().flat_map(|d| uses.iter().map(move |u| (d, u))) {
+                        connect(*d, *u, &mut edges);
                     }
                 }
                 for d in defs {
@@ -409,7 +465,17 @@ impl<T: Target> Allocate<T::Class> for GraphColoring<T> {
             colour.insert(count + at, *root);
         }
         let mut assigned: Vec<Option<RegId>> = vec![None; count];
-        for v in 0..count {
+        // the most constrained class first, so a word is not left with what
+        // the bytes took
+        let mut order: Vec<usize> = (0..count).collect();
+        let reach: Vec<usize> = (0..count)
+            .map(|v| {
+                let node = find(&mut parent, v);
+                T::candidates(classes[node]).len()
+            })
+            .collect();
+        order.sort_by_key(|v| reach[*v]);
+        for v in order {
             let node = find(&mut parent, v);
             if node >= count {
                 assigned[v] = Some(T::view(colour[&node], function.classes[v]));
@@ -417,10 +483,25 @@ impl<T: Target> Allocate<T::Class> for GraphColoring<T> {
             }
             if !colour.contains_key(&node) {
                 let taken: HashSet<RegId> = edges[node].iter().filter_map(|n| colour.get(n).copied()).collect();
-                let chosen = T::candidates(classes[node])
+                let Some(chosen) = T::candidates(classes[node])
                     .into_iter()
-                    .find(|root| !taken.contains(root))
-                    .ok_or_else(|| format!("no register for v{v} ({:?}); spilling is not translated", classes[node]))?;
+                    .find(|root| !taken.iter().any(|one| T::overlaps(*one, *root)))
+                else {
+                    let near: Vec<usize> = edges[node].iter().copied().chain([node]).collect();
+                    let crowd = (0..count as u32).filter(|u| near.contains(&find(&mut parent, *u as usize))).collect();
+                    let wanted = T::candidates(classes[node]);
+                    let blockers = (0..count as u32)
+                        .filter(|u| {
+                            let other = find(&mut parent, *u as usize);
+                            other != node
+                                && edges[node].contains(&other)
+                                && colour
+                                    .get(&other)
+                                    .is_some_and(|c| wanted.iter().any(|candidate| T::overlaps(*c, *candidate)))
+                        })
+                        .collect();
+                    return Err(Uncolourable { vreg: v as u32, crowd, blockers });
+                };
                 colour.insert(node, chosen);
             }
             assigned[v] = Some(T::view(colour[&node], function.classes[v]));

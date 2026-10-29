@@ -89,6 +89,7 @@ pub fn finish(
     function: &MFunction,
     assignment: &Assignment,
     number: usize,
+    slots: &[i32],
 ) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
@@ -135,12 +136,16 @@ pub fn finish(
         })
         .collect();
     let fixed: Vec<i32> = function.fixed.keys().rev().copied().collect();
-    let objects: Vec<Object> = fixed
+    let mut objects: Vec<Object> = fixed
         .iter()
         .map(|index| Object { size: 4, align: 4, offset: function.fixed[index], callee_saved: false, dead: false })
         .collect();
+    // the spill slots are locals, after the fixed objects (`getStackSlotRange`:
+    // one long each)
+    objects.extend(slots.iter().map(|_| Object { size: 4, align: 4, offset: 0, callee_saved: false, dead: false }));
+    let frame_indices: Vec<i32> = fixed.iter().chain(slots).copied().collect();
     let layout = frame::layout(&Function {
-        fixed: objects.len(),
+        fixed: fixed.len(),
         objects,
         saved: used,
         max_call_frame,
@@ -170,7 +175,8 @@ pub fn finish(
                     Operand::Imm(value) => {
                         // a frame index follows the displacement it adds to
                         if let Some(Operand::Frame(index)) = it.peek() {
-                            let at = fixed.iter().position(|one| one == index).ok_or("an unknown frame index")?;
+                            let at =
+                                frame_indices.iter().position(|one| one == index).ok_or("an unknown frame index")?;
                             let (base, disp) = layout.address(at);
                             it.next();
                             converted.push(mc::Operand::Imm(value + disp));
@@ -206,6 +212,26 @@ pub fn finish(
             Kind::Op("RET") => {
                 layout.epilogue().iter().for_each(|op| frame_op(op, &mut out));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
+            }
+            Kind::Op("MOVM32pm_P") => {
+                let [mc::Operand::Imm(disp), ref base, mc::Operand::Reg(src)] = operands[..] else {
+                    return Err("MOVM32pm_P operands".to_owned());
+                };
+                let mask = mask_bit(REGISTER_INFO.root(src)).ok_or("a spill of a register no MOVEM names")?;
+                out.push(mc::Inst {
+                    opcode: "MOVM32pm",
+                    operands: vec![mc::Operand::Imm(disp), base.clone(), mc::Operand::Imm(1 << mask)],
+                });
+            }
+            Kind::Op("MOVM32mp_P") => {
+                let [mc::Operand::Reg(dst), mc::Operand::Imm(disp), ref base] = operands[..] else {
+                    return Err("MOVM32mp_P operands".to_owned());
+                };
+                let mask = mask_bit(REGISTER_INFO.root(dst)).ok_or("a reload into a register no MOVEM names")?;
+                out.push(mc::Inst {
+                    opcode: "MOVM32mp",
+                    operands: vec![mc::Operand::Imm(1 << mask), mc::Operand::Imm(disp), base.clone()],
+                });
             }
             Kind::Op("MOVI32ri") => {
                 let [mc::Operand::Reg(dst), mc::Operand::Imm(value)] = operands[..] else {

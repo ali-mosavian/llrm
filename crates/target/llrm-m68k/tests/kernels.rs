@@ -10,7 +10,7 @@ use std::process::Command;
 
 use llrm_m68k::compile::items;
 use llrm_m68k::dagisel::hooks::Cpu;
-use llrm_m68k::kernels::{program, source, table};
+use llrm_m68k::kernels::{Arg, DATALAYOUT, program, source, table};
 use llrm_m68k::object::{executable, write_executable};
 
 /// The kernel's hand-derived result and the exit status of its run.
@@ -70,4 +70,38 @@ fn clang_agrees_with_the_target_on_sizes_and_datalayout() {
         ir.contains(&format!("target datalayout = \"{}\"", llrm_m68k::kernels::DATALAYOUT)),
         "datalayout differs:\n{ir}"
     );
+}
+
+/// Twenty arguments xor-ed with a counter and summed in a loop: more values
+/// live at once than the eight data registers hold. It stopped with "no
+/// register for v14"; now the surplus is spilled with `movem`, which leaves
+/// the condition codes alone. Sum over three trips, hand-derived: 1150, so
+/// the exit status is 1150 mod 256.
+#[test]
+fn more_live_values_than_data_registers_are_spilled() {
+    if !std::path::Path::new("/usr/bin/qemu-m68k").exists() {
+        eprintln!("qemu-m68k is not installed: not run");
+        return;
+    }
+    let params: Vec<String> = (0..20).map(|k| format!("i32 %a{k}")).collect();
+    let mut ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"\ndefine i32 @k({}) {{\nentry:\n  br label %l\nl:\n",
+        params.join(", ")
+    );
+    ir.push_str("  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n");
+    let mut sum = "%s".to_owned();
+    for k in 0..20 {
+        ir.push_str(&format!("  %m{k} = xor i32 %a{k}, %i\n  %t{k} = add i32 {sum}, %m{k}\n"));
+        sum = format!("%t{k}");
+    }
+    ir.push_str(&format!("  %s1 = add i32 {sum}, 1\n  %i1 = add i32 %i, 1\n  %c = icmp slt i32 %i1, %a0\n"));
+    ir.push_str("  br i1 %c, label %l, label %x\nx:\n  ret i32 %s1\n}\n");
+    let module = llrm_mir::parse::module(&ir).expect("parses");
+    let code = items(&module, "k", Cpu::M68000).expect("compiles");
+    let args: Vec<Arg> = std::iter::once(3).chain(11..30).map(Arg::Imm).collect();
+    let exe = std::env::temp_dir().join(format!("llrm-m68k-spill-{}", std::process::id()));
+    write_executable(&exe, &executable(&program(&args, code)).unwrap()).unwrap();
+    let status = Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
+    std::fs::remove_file(&exe).ok();
+    assert_eq!(status.code(), Some(1150 % 256));
 }

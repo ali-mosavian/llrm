@@ -118,3 +118,24 @@ fn a_pseudo_instruction_has_no_encoding() {
     let pseudo = Inst { opcode: "CMOV32r", operands: vec![Operand::Reg(llrm_m68k::reg::D0)] };
     assert!(encode(&pseudo).is_err());
 }
+
+/// A branch past 127 bytes, and a branch to the next instruction, take the
+/// 16-bit form as `llvm-mc` gives them (`beq.w`, `bra.w`). They stopped at
+/// "-202 does not fit 1 bytes" and encoded a zero displacement that reads as
+/// "16 bits follow".
+#[test]
+fn far_and_zero_displacement_branches_take_the_16_bit_form_as_llvm_mc_does() {
+    use llrm_m68k::mc::Operand::Symbol;
+    use llrm_m68k::object::item;
+    let items = vec![
+        Item::Label("k".to_owned()),
+        item("Beq8", vec![Symbol(".L1".to_owned(), 0)]),
+        Item::Bytes(vec![0; 200]),
+        Item::Label(".L1".to_owned()),
+        item("BRA8", vec![Symbol(".L2".to_owned(), 0)]),
+        Item::Label(".L2".to_owned()),
+        item("RTS", vec![]),
+    ];
+    let code = assemble(&items, 0).unwrap().code;
+    assert_eq!(hex(&code), format!("670000ca{}600000024e75", "00".repeat(200)));
+}

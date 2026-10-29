@@ -7,7 +7,7 @@
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::Target;
 pub use llrm_spike_mf::regalloc::{Allocate, Assignment};
-use llrm_spike_mf::{Jump, Kind, Operand};
+use llrm_spike_mf::{Jump, Kind, Operand, Reg};
 
 use crate::mfunc::{Class, MFunction};
 use crate::{REGISTER_INFO, reg};
@@ -67,6 +67,37 @@ impl Target for M68kRegisters {
     fn caller_saved() -> Vec<RegId> {
         CALLER_SAVED.to_vec()
     }
+
+    /// `getStoreRegOpcode`: a `MOVEM` pseudo, since a `move` would overwrite
+    /// the condition codes a branch may still read.
+    fn spill_store(
+        _class: Class,
+        register: Reg,
+        slot: i32,
+    ) -> Option<llrm_spike_mf::Inst> {
+        Some(llrm_spike_mf::Inst {
+            may_store: true,
+            ..llrm_spike_mf::Inst::new(
+                Kind::Op("MOVM32pm_P"),
+                vec![Operand::Imm(0), Operand::Frame(slot), Operand::Use(register)],
+            )
+        })
+    }
+
+    /// `getLoadRegOpcode`.
+    fn spill_load(
+        _class: Class,
+        register: Reg,
+        slot: i32,
+    ) -> Option<llrm_spike_mf::Inst> {
+        Some(llrm_spike_mf::Inst {
+            may_load: true,
+            ..llrm_spike_mf::Inst::new(
+                Kind::Op("MOVM32mp_P"),
+                vec![Operand::Def(register), Operand::Imm(0), Operand::Frame(slot)],
+            )
+        })
+    }
 }
 
 pub type GraphColoring = llrm_spike_mf::GraphColoring<M68kRegisters>;
@@ -75,6 +106,15 @@ pub use llrm_spike_mf::regalloc::{eliminate_phis, successors, two_address};
 
 pub fn fold_reserved_copies(function: &mut MFunction) {
     llrm_spike_mf::regalloc::fold_reserved_copies::<M68kRegisters>(function)
+}
+
+/// Allocation that spills what does not fit; the slots it made, with their
+/// classes.
+pub fn allocate_spilling(
+    function: &mut MFunction,
+    first_slot: i32,
+) -> Result<(Assignment, Vec<(i32, Class)>), String> {
+    llrm_spike_mf::spill::allocate_spilling::<M68kRegisters>(function, first_slot)
 }
 
 /// `MachineSinking` over the m68k function.

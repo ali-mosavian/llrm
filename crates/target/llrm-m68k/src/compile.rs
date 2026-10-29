@@ -9,7 +9,7 @@ use crate::expand::{Line, finish};
 use crate::mc;
 use crate::mfunc::{emit, expand_cmov};
 use crate::regalloc::{
-    Allocate, GraphColoring, branch_fold, eliminate_phis, fold_reserved_copies, machine_sink, remove_identity_copies,
+    allocate_spilling, branch_fold, eliminate_phis, fold_reserved_copies, machine_sink, remove_identity_copies,
     two_address,
 };
 
@@ -39,11 +39,12 @@ pub fn items(
     eliminate_phis(&mut function);
     fold_reserved_copies(&mut function);
     two_address(&mut function);
-    let assignment = GraphColoring::default().allocate(&function)?;
+    let (assignment, slots) = allocate_spilling(&mut function, 0)?;
+    let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     remove_identity_copies(&mut function, &assignment);
     branch_fold(&mut function);
     let mut out = vec![Item::Label(name.to_owned())];
-    for line in finish(&function, &assignment, number)? {
+    for line in finish(&function, &assignment, number, &slots)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),

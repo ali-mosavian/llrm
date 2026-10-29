@@ -55,6 +55,9 @@ pub struct Inst {
     pub may_store: bool,
     pub side_effects: bool,
     pub cheap_as_move: bool,
+    /// It writes a result before it has read every use, so no def may share
+    /// a register with a use (`earlyclobber`).
+    pub early_clobber: bool,
 }
 
 impl Inst {
@@ -75,6 +78,7 @@ impl Inst {
             may_store: false,
             side_effects: false,
             cheap_as_move: false,
+            early_clobber: false,
         }
     }
 
