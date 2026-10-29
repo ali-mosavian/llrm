@@ -310,20 +310,6 @@ fn packed(
     }
 }
 
-/// `value` into the field of `width` bytes at `at`, wrapped to it.
-fn pack_field(
-    buffer: &mut [u8],
-    at: usize,
-    width: usize,
-    value: i64,
-) {
-    if width == 4 {
-        buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
-    } else {
-        buffer[at..at + 2].copy_from_slice(&(value as u16).to_le_bytes());
-    }
-}
-
 /// Everything of a fixup after its location: fix data, frame datum, target
 /// datum.
 struct Resolved {
@@ -506,7 +492,8 @@ fn ledata(
         if Some(kind.kind) == writer.debug_target(16).segment_base && made.value != 0 {
             return Err(unencodable(format!("{}: a segment base with an addend", section.name)));
         }
-        pack_field(&mut image, at, packed(writer, kind), made.value);
+        llrm_object::apply_fixup(&mut image, at, packed(writer, kind), kind.pc_rel, made.value, &section.name)
+            .map_err(|one| unencodable(one.0))?;
         subrecords.insert(at, (made.subrecord, kind));
     }
     let (mut out, mut placed) = (Vec::new(), 0);
@@ -1078,5 +1065,14 @@ mod tests {
         let jump = Reloc::new(1, Fix::pc_rel(4, 8), Target::Symbol(0), 0);
         let made = object(32u8, vec![section("T", vec![0; 8], vec![jump])], vec![symbol("f", Definition::Undefined)]);
         assert!(matches!(write(&made), Err(Error::Unencodable(_))));
+    }
+
+    /// A 16-bit offset field given an addend of 0x12345 was wrapped to 0x2345
+    /// and written; it is refused.
+    #[test]
+    fn an_addend_a_field_cannot_hold_is_refused() {
+        let word = Reloc::new(0, Fix::abs(2), Target::Symbol(0), 0x12345);
+        let made = object(16u8, vec![section("T", vec![0; 2], vec![word])], vec![symbol("f", Definition::Undefined)]);
+        assert!(matches!(write(&made), Err(Error::Unencodable(text)) if text.contains("does not fit")));
     }
 }
