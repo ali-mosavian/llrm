@@ -668,11 +668,34 @@ pub mod opcode {
 }
 
 pub mod reg {
+    pub const A0: u16 = 9;
+    pub const A1: u16 = 10;
+    pub const A2: u16 = 11;
+    pub const A3: u16 = 12;
+    pub const A4: u16 = 13;
+    pub const A5: u16 = 14;
+    pub const A6: u16 = 15;
     pub const AR16RegClassID: u16 = 3;
     pub const AR32RegClassID: u16 = 12;
     pub const AR32_TCRegClassID: u16 = 18;
+    pub const BD0: u16 = 16;
+    pub const BD1: u16 = 17;
+    pub const BD2: u16 = 18;
+    pub const BD3: u16 = 19;
+    pub const BD4: u16 = 20;
+    pub const BD5: u16 = 21;
+    pub const BD6: u16 = 22;
+    pub const BD7: u16 = 23;
     pub const CCR: u16 = 1;
     pub const CCRCRegClassID: u16 = 1;
+    pub const D0: u16 = 24;
+    pub const D1: u16 = 25;
+    pub const D2: u16 = 26;
+    pub const D3: u16 = 27;
+    pub const D4: u16 = 28;
+    pub const D5: u16 = 29;
+    pub const D6: u16 = 30;
+    pub const D7: u16 = 31;
     pub const DR16RegClassID: u16 = 4;
     pub const DR32RegClassID: u16 = 13;
     pub const DR8RegClassID: u16 = 0;
@@ -688,6 +711,22 @@ pub mod reg {
     pub const PC: u16 = 5;
     pub const SP: u16 = 6;
     pub const SRCRegClassID: u16 = 8;
+    pub const WA0: u16 = 40;
+    pub const WA1: u16 = 41;
+    pub const WA2: u16 = 42;
+    pub const WA3: u16 = 43;
+    pub const WA4: u16 = 44;
+    pub const WA5: u16 = 45;
+    pub const WA6: u16 = 46;
+    pub const WD0: u16 = 47;
+    pub const WD1: u16 = 48;
+    pub const WD2: u16 = 49;
+    pub const WD3: u16 = 50;
+    pub const WD4: u16 = 51;
+    pub const WD5: u16 = 52;
+    pub const WD6: u16 = 53;
+    pub const WD7: u16 = 54;
+    pub const WSP: u16 = 8;
     pub const XR16RegClassID: u16 = 2;
     pub const XR32RegClassID: u16 = 11;
 }

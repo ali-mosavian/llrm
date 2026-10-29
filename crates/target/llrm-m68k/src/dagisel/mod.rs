@@ -3,8 +3,17 @@
 
 pub mod addr;
 #[rustfmt::skip]
+#[path = "generated/asm.rs"]
+pub mod asm;
+pub mod call;
+#[rustfmt::skip]
+#[path = "generated/enc.rs"]
+pub mod enc;
+#[rustfmt::skip]
 #[allow(unused_variables)]
 pub mod generated;
+pub mod function;
 pub mod hooks;
 pub mod lowering;
+pub mod pipeline;
 pub mod predicates;

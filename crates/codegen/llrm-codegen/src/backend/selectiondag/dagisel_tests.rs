@@ -188,25 +188,27 @@ fn a_register_the_target_cannot_map_is_a_refusal_not_a_virtual_register() {
     use llrm_dagisel::generated::ids::mvt;
     use llrm_lir::registers::RegId;
 
-    use super::dagisel_adapter::{PinRegister, TargetIds};
+    use super::dagisel_adapter::PinRegisters;
 
     struct OneRegister;
-    impl TargetIds for OneRegister {
-        fn register(
+    impl PinRegisters for OneRegister {
+        fn phys_reg(
             &self,
             pin: u16,
-        ) -> PinRegister {
-            match pin {
-                0 => PinRegister::Virtual,
-                1 => PinRegister::Physical(RegId::from_raw(1)),
-                _ => PinRegister::Unknown,
-            }
+        ) -> Option<RegId> {
+            (pin == 1).then_some(RegId::from_raw(1))
         }
         fn pin_register(
             &self,
             id: RegId,
         ) -> Option<u16> {
             (id == RegId::from_raw(1)).then_some(1)
+        }
+        fn unmapped(
+            &self,
+            pin: u16,
+        ) -> bool {
+            pin > 1
         }
     }
 
@@ -216,7 +218,7 @@ fn a_register_the_target_cannot_map_is_a_refusal_not_a_virtual_register() {
     assert_eq!(x86.refusal(), None, "x86 keeps reading an unnamed register as virtual");
 
     let mut dag = SelectionDAG::new(DagConfig::default());
-    let mut adapter = DagisAdapter::with_ids(&mut dag, &OneRegister);
+    let mut adapter = DagisAdapter::with_registers(&mut dag, &OneRegister);
     adapter.register(0, mvt::i32);
     adapter.register(1, mvt::i32);
     assert_eq!(adapter.refusal(), None);

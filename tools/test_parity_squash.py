@@ -1178,7 +1178,7 @@ def test_every_stage_of_the_fast_pass_stamps_the_batch_log():
     import inspect
 
     source = inspect.getsource(ps.merge_batch)
-    names = ["fast-merge", "workspace-check", "lib-tests", "scanners", "link", "behavioural"]
+    names = ["fast-merge", "workspace-check", "lib-tests", "scanners", "link", "behavioural", "stale"]
     at = [source.find(f'stage("{name}")') for name in names]
     assert all(i >= 0 for i in at), dict(zip(names, at))
     assert at == sorted(at), "stamped out of the order they run"

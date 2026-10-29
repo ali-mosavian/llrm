@@ -1,6 +1,6 @@
 //! The pin's AArch64 register numbers as arm64 register ids, by name.
 
-use llrm_codegen::backend::selectiondag::dagisel_adapter::{PinRegister, TargetIds};
+use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_dagisel::generated::aarch64::ids::reg;
 use llrm_lir::registers::RegId;
 
@@ -34,15 +34,12 @@ impl Default for Aarch64Ids {
     }
 }
 
-impl TargetIds for Aarch64Ids {
-    fn register(
+impl PinRegisters for Aarch64Ids {
+    fn phys_reg(
         &self,
         pin: u16,
-    ) -> PinRegister {
-        if pin == 0 {
-            return PinRegister::Virtual;
-        }
-        self.registers.iter().find(|(number, _)| *number == pin).map_or(PinRegister::Unknown, |&(_, id)| PinRegister::Physical(id))
+    ) -> Option<RegId> {
+        self.registers.iter().find(|(number, _)| *number == pin).map(|&(_, id)| id)
     }
 
     fn pin_register(
@@ -50,6 +47,14 @@ impl TargetIds for Aarch64Ids {
         id: RegId,
     ) -> Option<u16> {
         self.registers.iter().find(|(_, ours)| *ours == id).map(|&(pin, _)| pin)
+    }
+
+    /// Every number but `$noreg` and the registers of the file.
+    fn unmapped(
+        &self,
+        pin: u16,
+    ) -> bool {
+        pin != 0 && self.phys_reg(pin).is_none()
     }
 }
 
@@ -67,12 +72,12 @@ mod tests {
     #[test]
     fn pin_registers_map_by_name_and_a_stranger_is_unknown() {
         let ids = Aarch64Ids::new();
-        assert_eq!(ids.register(pin("W0")), PinRegister::Physical(ours::W0));
-        assert_eq!(ids.register(pin("X1")), PinRegister::Physical(ours::X1));
-        assert_eq!(ids.register(pin("FP")), PinRegister::Physical(ours::X29));
-        assert_eq!(ids.register(pin("SP")), PinRegister::Physical(ours::SP));
-        assert_eq!(ids.register(0), PinRegister::Virtual);
-        assert_eq!(ids.register(60000), PinRegister::Unknown);
+        assert_eq!(ids.phys_reg(pin("W0")), Some(ours::W0));
+        assert_eq!(ids.phys_reg(pin("X1")), Some(ours::X1));
+        assert_eq!(ids.phys_reg(pin("FP")), Some(ours::X29));
+        assert_eq!(ids.phys_reg(pin("SP")), Some(ours::SP));
+        assert!(!ids.unmapped(0));
+        assert!(ids.unmapped(60000));
         assert_eq!(ids.pin_register(ours::W1), Some(pin("W1")));
         assert_eq!(ids.pin_register(ours::V3), None);
     }

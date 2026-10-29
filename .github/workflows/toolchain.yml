@@ -1,6 +1,6 @@
 # The clang trees the llrm-cc tests need, built once per sha and cached (toolchain/clangbuild.sh): `pin` (LLRM_PIN_CLANG) and `m16`
-# (LLRM_CLANG_M16). One job per tree: a tree is ~5.8 CPU-hours, about 3 h on 4 hosted vCPUs (an ESTIMATE, from the m16 tree's
-# .ninja_log; not yet measured on a runner), so both in one job would meet the 6 h limit. The setup action restores them; a missing one is red.
+# (LLRM_CLANG_M16). One job per tree: cold, a tree is 3127 ninja steps, 74-76 min on a hosted runner (run 40785285056, no ccache hit), so both in one job
+# would take 2.5 h. The setup action restores them; a missing one is red.
 name: toolchain
 on:
   workflow_dispatch:
@@ -17,26 +17,6 @@ jobs:
         kind: [pin, m16]
     steps:
       - uses: actions/checkout@v4
-      - id: tree
-        run: |
-          dir=$(sh toolchain/clangbuild.sh --print ${{ matrix.kind }})
-          echo "dir=$dir" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
-      - id: restore
-        uses: actions/cache@v4
+      - uses: ./.github/actions/clang-tree
         with:
-          path: ${{ steps.tree.outputs.dir }}
-          key: llrm-${{ steps.tree.outputs.name }}
-      - name: ccache (the second tree shares most objects with the first)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ccache
-          key: ccache-clang-${{ matrix.kind }}-${{ github.sha }}
-          restore-keys: ccache-clang-
-      - name: build
-        if: steps.restore.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ninja-build cmake ccache lld
-          sh toolchain/clangbuild.sh ${{ matrix.kind }}
-      - run: ${{ steps.tree.outputs.dir }}/bin/clang --version
+          kind: ${{ matrix.kind }}
