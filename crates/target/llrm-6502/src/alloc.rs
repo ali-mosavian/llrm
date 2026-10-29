@@ -424,12 +424,19 @@ impl Builder {
         let acc = Reg::Phys(reg::A);
         if zero {
             let (al, ah) = self.read_word(&a.0)?;
-            let (bl, bh) = self.read_word(&b.0)?;
+            // a constant right side is two immediates, not two cells loaded with it
+            let rhs = match self.word_constant(&b.0) {
+                Some(bytes) => bytes.map(Operand::Imm),
+                None => {
+                    let (bl, bh) = self.read_word(&b.0)?;
+                    for r in [bl, bh] {
+                        self.require(r, Class::MEM)?;
+                    }
+                    [Operand::Use(bl), Operand::Use(bh)]
+                }
+            };
             for r in [al, ah] {
                 self.require(r, Class(Class::X | Class::Y | Class::M))?;
-            }
-            for r in [bl, bh] {
-                self.require(r, Class::MEM)?;
             }
             let mut cmp = Inst::new(
                 Kind::Op("CMPZ"),
@@ -438,8 +445,8 @@ impl Builder {
                     Operand::Def(acc),
                     Operand::Use(al),
                     Operand::Use(ah),
-                    Operand::Use(bl),
-                    Operand::Use(bh),
+                    rhs[0].clone(),
+                    rhs[1].clone(),
                 ],
             );
             cmp.sets_flags = true;
@@ -1904,7 +1911,7 @@ fn emit_with<const STACK: bool>(
                     let (lo, hi) = (register_name(regs[1]), register_name(regs[3]));
                     writeln!(out, "  lda {hi}\n  cmp #$80\n  ror {hi}\n  ror {lo}").unwrap()
                 }
-                (Kind::Op("CMPZ"), _) => {
+                (Kind::Op("CMPZ"), [_, _, _, _, low, high]) => {
                     made += 1;
                     let load = |out: &mut String, r: RegId| match r {
                         r if r == reg::X => out.push_str("  txa\n"),
@@ -1912,9 +1919,27 @@ fn emit_with<const STACK: bool>(
                         r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
                     };
                     load(&mut out, regs[2]);
-                    writeln!(out, "  cmp {}\n  bne _cz{made}", register_name(regs[4])).unwrap();
-                    load(&mut out, regs[3]);
-                    writeln!(out, "  cmp {}\n_cz{made}:", register_name(regs[5])).unwrap();
+                    match (low, high) {
+                        // against zero the loads set the flag: both bytes zero is `lda lo; ora hi`
+                        (Operand::Imm(0), Operand::Imm(0)) if regs[3] != reg::X && regs[3] != reg::Y => {
+                            writeln!(out, "  ora {}", register_name(regs[3])).unwrap();
+                        }
+                        (Operand::Imm(0), Operand::Imm(0)) => {
+                            writeln!(out, "  bne _cz{made}").unwrap();
+                            load(&mut out, regs[3]);
+                            writeln!(out, "_cz{made}:").unwrap();
+                        }
+                        (Operand::Imm(low), Operand::Imm(high)) => {
+                            writeln!(out, "  cmp #{low}\n  bne _cz{made}").unwrap();
+                            load(&mut out, regs[3]);
+                            writeln!(out, "  cmp #{high}\n_cz{made}:").unwrap();
+                        }
+                        _ => {
+                            writeln!(out, "  cmp {}\n  bne _cz{made}", register_name(regs[4])).unwrap();
+                            load(&mut out, regs[3]);
+                            writeln!(out, "  cmp {}\n_cz{made}:", register_name(regs[5])).unwrap();
+                        }
+                    }
                 }
                 (Kind::Op(step @ ("INC" | "DEC")), _) => {
                     let (inc, r) = (step == "INC", regs[0]);
