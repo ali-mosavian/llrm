@@ -155,48 +155,54 @@ fn dot(a: &[i16], b: &[i16]) -> i32:
 
 ```asm
 _dot proc far
-    push bp                         ; a is the far pointer [bp+6], b [bp+10]
+    push bp                     ; a is the far pointer [bp+6], b [bp+10]
     mov bp, sp
+    sub sp, 6
     push si
     push di
-L0_0:
-    les bx, dword ptr [bp+6]        ; es:bx = a's slice: length, then data pointer
-    lfs si, dword ptr [bp+10]       ; fs:si = b's slice
-    mov dx, word ptr es:[bx]        ; len(a)
-    mov cx, word ptr fs:[si]        ; len(b)
-    les ax, dword ptr es:[bx+4]     ; [hoisted] es:ax = a's data
-    lfs di, dword ptr fs:[si+4]     ; [hoisted] fs:di = b's data
-    cmp dx, cx
-    jae L0_9
-L0_8:
-    mov cx, dx
-L0_9:                               ; cx = min(len(a), len(b)): zip ends with the shorter slice,
-    test cx, cx                       ; decided once, not tested in the loop
-    je L0_4294967297                ; [header copy] no elements: skip the loop
-L0_27:
-    add cx, cx
-    mov bx, cx
-    neg bx                          ; [one induction variable] bx = -2*count
-    lea si, [eax+ecx]               ; [biased] a's data + 2*count
-    add di, cx                      ; [biased] b's data + 2*count
-    xor eax, eax                    ; total = 0
-L0_12:
-    movsx ecx, word ptr es:[bx+si]  ; a[i]
-    movsx edx, word ptr fs:[bx+di]  ; b[i]
-    imul ecx, edx
-    add eax, ecx                    ; total += product
-    add bx, 2                       ; [flag reuse] the step's flags end the loop at 0
-    jne L0_12                       ; zip pairs the elements: no index, no bounds check
-L0_25:
-    pop di                          ; the long is in eax, where it returns
-    pop si
-    pop bp
-    retf
-L0_4294967297:
+L0_1:
+    les di, dword ptr [bp+6]
+    mov cx, word ptr es:[di]
+    lfs bx, dword ptr [bp+10]
+    mov ax, word ptr fs:[bx]
+    mov word ptr [bp-4], ax
+    test ax, ax
+    sete al
+    mov word ptr [bp-2], cx
+    test cx, cx
+    sete cl
+    or cl, al
     xor eax, eax
-    pop di
+    test cl, cl
+    jne L0_3
+L0_2:
+    mov cx, 1
+    mov ax, word ptr es:[di+4]
+    mov word ptr [bp-6], ax
+    mov es, word ptr es:[di+6]
+    mov di, word ptr fs:[bx+4]
+    mov fs, word ptr fs:[bx+6]
+    xor eax, eax
+L0_4:
+    mov edx, eax
+    lea bx, [ecx+ecx]
+    mov si, word ptr [bp-6]
+    movsx esi, word ptr es:[bx+si-2]
+    movsx eax, word ptr fs:[bx+di-2]
+    imul eax, esi
+    add eax, edx
+    cmp cx, word ptr [bp-2]
+    jae L0_3
+L0_5:
+    mov dx, cx
+    inc dx
+    cmp cx, word ptr [bp-4]
+    mov cx, dx
+    jb L0_4
+L0_3:                           ; cx = min(len(a), len(b)): zip ends with the shorter slice,
+    pop di                      ; the long is in eax, where it returns
     pop si
-    pop bp
+    leave
     retf
 _dot endp
 ```
@@ -205,7 +211,7 @@ A Nib slice is a far pointer to its length and data pointer. `zip` pairs the
 elements until the shorter slice ends, so there is no `n`, and no index to check.
 Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
 
-BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 -march=i486 -O3 --whole-program -fno-inline-functions-called-once -S` (DOT is called once, and would go into its caller):
+BASIC, `llrm-qb dot.bas --dialect pds71 --runtime qb45 -march=i486 -O3 --whole-program -fno-inline=DOT -S` (DOT is called once, and would go into its caller):
 
 ```basic
 DECLARE FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
@@ -230,56 +236,62 @@ END FUNCTION
 
 ```asm
 DOT proc near
-    push bp                         ; a plain frame, not B$ENRA; near, as --whole-program
-    mov bp, sp                      ; sees every caller. a() is [bp+6], b() [bp+4]
+L1_1:
+    mov dx, word ptr P%+14
+    mov ax, dx
+    dec ax
+    mov cx, word ptr Q%+14
+    mov bx, cx
+    dec bx
+    cmp ax, bx
+    jl L1_11
+L1_10:
+    mov ax, bx
+L1_11:
+    test ax, ax
+    js L1_2_1
+L1_2:
+    push bp                     ; a plain frame, not B$ENRA; near, as --whole-program
+    mov bp, sp                  ; sees every caller. a() is [bp+6], b() [bp+4]
+    sub sp, 2
     push si
     push di
-L1_0:
-    mov si, word ptr [bp+6]         ; a() descriptor: the arguments were pushed left to right
-    mov bx, word ptr [bp+4]         ; b() descriptor
-    mov ax, word ptr [si+14]        ; UBOUND(a): one dimension, so its slot is fixed, from 0,
-    dec ax                          ; so the bound is its count less 1; no allocated test
-    mov cx, word ptr [bx+14]
-    dec cx                          ; UBOUND(b)
-    cmp ax, cx                      ; [inlined] Min%: no call, ax = the smaller bound
-    jl L1_12
-L1_11:
-    mov ax, cx
-L1_12:
-    mov es, word ptr [si+2]         ; [hoisted] es = a's data segment
-    mov si, word ptr [si+10]        ; [hoisted] a's data offset
-    mov fs, word ptr [bx+2]         ; [hoisted] fs = b's data segment
-    mov di, word ptr [bx+10]        ; [hoisted] di = b's data offset
-    test ax, ax
-    jl L1_4294967297                ; [header copy] bound < 0: no iterations
-L1_44:
-    add ax, ax                      ; ax = 2 * bound
-    mov bx, ax
-    neg bx
-    add bx, -2                      ; [one induction variable] bx = -2 * (bound + 1)
-    add si, ax                      ; [biased] a's offset + 2 * bound; the +2 is in the loop's
-    add di, ax                      ; [biased] b's offset + 2 * bound; displacement
-    xor eax, eax                    ; total = 0
-L1_27:
-    movsx ecx, word ptr es:[bx+si+2] ; a(i), sign-extended
-    movsx edx, word ptr fs:[bx+di+2] ; b(i)
-    imul ecx, edx                   ; CLNG(a(i)) * b(i)
-    add eax, ecx                    ; total += product
-    add bx, 2                       ; [flag reuse] the step's flags end the loop at 0
-    jne L1_27
-L1_42:
-    shld edx, eax, 16               ; the long returns in DX:AX
+    xor eax, eax
+    mov es, word ptr P%+2
+    mov si, word ptr P%+10
+    mov fs, word ptr Q%+2
+    mov di, word ptr Q%+10
+    dec cx                      ; UBOUND(b)
+    dec dx
+    cmp cx, dx
+    jl L1_26
+L1_25:
+    mov cx, dx
+L1_26:
+    inc cx
+    xor bx, bx
+    mov word ptr [bp-2], di
+L1_3:
+    movsx edx, word ptr es:[bx+si]
+    mov di, si
+    mov si, word ptr [bp-2]
+    movsx esi, word ptr fs:[bx+si]
+    imul esi, edx
+    add eax, esi
+    mov si, di
+    add bx, 2                   ; [flag reuse] the step's flags end the loop at 0
+    dec cx
+    jne L1_3
+L1_4:
+    shld edx, eax, 16           ; the long returns in DX:AX
     pop di
     pop si
-    pop bp
-    ret 4                           ; the callee pops the two arguments
-L1_4294967297:
+    leave
+    ret
+L1_2_1:
     xor eax, eax
     shld edx, eax, 16
-    pop di
-    pop si
-    pop bp
-    ret 4
+    ret
 DOT endp
 ```
 

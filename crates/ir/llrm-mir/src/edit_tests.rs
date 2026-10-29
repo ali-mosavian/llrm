@@ -840,6 +840,28 @@ fn test_unannotate_logs_the_rewrite_of_the_instruction() {
     assert!(f.take_changes().is_empty(), "nothing was taken off the second time");
 }
 
+/// `!tbaa` is part of an access's reference: a pass that set or put one on an
+/// instruction logged nothing, and the kept `MemRef` of the load still named
+/// the old type (`LLRM_CHECK_REFERENCES` with `LLRM_CHECK_ORDER` panicked on
+/// idioms.c and memfuncs_runtime.c).
+#[test]
+fn test_set_metadata_and_annotate_log_the_rewrite_of_the_instruction() {
+    let mut module = module(
+        "define i16 @f(ptr %p) {\nentry:\n  %v = load i16, ptr %p, !range !0\n  ret i16 %v\n}\n\n!0 = !{i16 0, i16 -32768}\n",
+    );
+    let f = function(&mut module);
+    let (v, _) = named(f, "v");
+    let node = f.instruction(v).metadata[0].1;
+    f.take_changes();
+    f.set_metadata(v, "range", None);
+    assert!(f.instruction(v).metadata.is_empty(), "premise: the range is gone");
+    assert_eq!(f.take_changes(), vec![Change::Rewritten(v)]);
+    f.annotate(v, "range", node);
+    assert_eq!(f.take_changes(), vec![Change::Rewritten(v)]);
+    f.set_metadata(v, "tbaa", None);
+    assert!(f.take_changes().is_empty(), "nothing was taken off");
+}
+
 /// `take_name` is `Value::takeName`: the new value is named what the old one
 /// was and the old one has none, as SCCP's `sext` -> `zext nneg` keeps `%s`.
 #[test]
