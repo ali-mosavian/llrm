@@ -2,14 +2,15 @@
 //! the reduced programs of `tests/difftest/`: random C programs (`llrm-cgen`, 32-bit `int`) compiled by the pin's
 //! clang to IR, by this compiler to a static m68k executable run under `qemu-m68k`, against the same
 //! program built by m68k gcc -O2 for the 68020 under qemu (the toolchain has no libgcc, so no 68000 divide)
-//! and by the host's gcc at -O0, whose 64-bit `long` can differ. The 8-bit
+//! and by the host's gcc at -m32 -O0 (ILP32, so `long` is as wide). The 8-bit
 //! fold of the 16-bit checksum must agree.
 //!
 //! Each seed ends `ok`, `differs`, `hang` (ours ran past the time limit), `reject` (clang, the
 //! compiler or the assembler said no: the reason is printed) or `reference` (the host could not build
 //! it). A program that does not agree is kept in `$DIFF_KEEP` (default `$TMPDIR/llrm-m68k-difftest`).
 //!
-//! `$DIFF_CPU=m68020` compiles for the 68020.
+//! `$DIFF_CPU=m68020` compiles for the 68020. `$DIFF_UBSAN=1` builds the host program with
+//! `-fsanitize=undefined`: one that trips it has no reference.
 //!
 //! `$LLRM_PIN_CLANG` is the pin's clang; `$GCC_M68K` the unpacked cross toolchain.
 
@@ -316,12 +317,16 @@ fn check_text(
         }
     }
 
-    // the reference: the host's gcc at -O0
+    // the second opinion: the host's gcc at -O0, as ILP32 like the m68k data model, so `long` is
+    // as wide on both; `$DIFF_UBSAN` adds the undefined-behaviour check (a program that trips it
+    // has no reference)
     std::fs::write(dir.join("main.c"), HOST_MAIN).unwrap();
-    let built = run(
-        Command::new("gcc").current_dir(&dir).args(["-O0", "-w", "-o", "host", "main.c", "p.c"]),
-        "host gcc",
-    );
+    let mut host_args = vec!["-m32", "-O0", "-w"];
+    if std::env::var_os("DIFF_UBSAN").is_some() {
+        host_args.extend(["-fsanitize=undefined", "-fno-sanitize-recover=all"]);
+    }
+    host_args.extend(["-o", "host", "main.c", "p.c"]);
+    let built = run(Command::new("gcc").current_dir(&dir).args(&host_args), "host gcc");
     if let Err(why) = built {
         return Outcome::Reference(why);
     }
@@ -330,7 +335,7 @@ fn check_text(
         Some(Guarded::TimedOut) => return Outcome::Reference("host run: timed out".into()),
         _ => return Outcome::Reference("host run: failed".into()),
     };
-    // m68k gcc has the 32-bit `long` of the target; the host's is 64 bits, so it is the second opinion
+    // m68k gcc is the reference; the host's answer is the second opinion
     let gcc_m68k = gcc_m68k(&dir, &full);
     let reference = gcc_m68k.unwrap_or(host);
 
@@ -460,8 +465,7 @@ fn main() {
             }
             Outcome::Differs { ours, reference, host } => {
                 differs += 1;
-                let note = if host == reference { "" } else { " (the host's long is 64 bits: it may differ without a bug)" };
-                println!("seed {seed}: MISMATCH ours {ours}, m68k gcc -O2 {reference}, host gcc -O0 {host}{note}");
+                println!("seed {seed}: MISMATCH ours {ours}, m68k gcc -O2 {reference}, host gcc -m32 -O0 {host}");
             }
             Outcome::Hang => {
                 hang += 1;
