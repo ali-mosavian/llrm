@@ -462,3 +462,36 @@ fn a_loop_leaving_on_either_of_two_tests_compiles() {
     });
     wait.recv_timeout(std::time::Duration::from_secs(10)).expect("compiling schr does not return");
 }
+
+fn refusal(
+    ir: &str,
+    name: &str,
+) -> String {
+    let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    match select_function(&module, name, Cpu::Mos6502) {
+        Err(why) => why,
+        Ok(selection) => function_text(&module, name, &selection).expect_err("is refused"),
+    }
+}
+
+/// A spill slot of a recursive function sits above its locals; one past
+/// `(rc0),y`'s 255 is refused with its reason, not emitted with a wrapped offset.
+#[test]
+fn a_spill_slot_beyond_256_bytes_is_refused_with_a_message() {
+    let ir = "define i8 @rec(i8 %n) {\nentry:\n  %a = alloca [300 x i8]\n  store i8 %n, ptr %a\n  %z = icmp eq i8 %n, 0\n  \
+              br i1 %z, label %base, label %step\nbase:\n  ret i8 0\nstep:\n  %m = sub i8 %n, 1\n  \
+              %r = call i8 @rec(i8 %m)\n  %s = add i8 %r, %n\n  %p = load i8, ptr %a\n  %t = add i8 %s, %p\n  ret i8 %t\n}";
+    assert!(refusal(ir, "rec").contains("a frame beyond 256 bytes"));
+}
+
+/// A switch into a block with phis is compiled (per-edge blocks carry the phi
+/// copies): `sw(1)` is 7, any other value 9.
+#[test]
+fn a_switch_to_a_block_with_phis_selects_the_right_value() {
+    let ir = "define i8 @sw(i8 %x) {\nentry:\n  switch i8 %x, label %other [ i8 1, label %join ]\nother:\n  br label %join\n\
+              join:\n  %r = phi i8 [ 7, %entry ], [ 9, %other ]\n  ret i8 %r\n}";
+    let text = compile(ir, "sw");
+    let run = |x: u16| common::run_with("alloc-sw", &format!("{}  jsr sw\n", set("rc2", x)), &text);
+    assert_eq!((run(1), run(2), run(0)), (7, 9, 9));
+}
