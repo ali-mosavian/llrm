@@ -96,3 +96,52 @@ p:
   %r = select i1 %big, i32 2, i32 1
   ret i32 %r
 }
+
+define i32 @shifts(i32 %a, i32 %b) {
+  %s = and i32 %b, 31
+  %l = shl i32 %a, %s
+  %r = lshr i32 %a, %s
+  %q = ashr i32 %a, %s
+  %r3 = mul i32 %r, 3
+  %q5 = mul i32 %q, 5
+  %t = add i32 %l, %r3
+  %u = add i32 %t, %q5
+  ret i32 %u
+}
+
+define i32 @logic(i32 %a, i32 %b) {
+  %x = and i32 %a, %b
+  %y = or i32 %a, 61680
+  %z = xor i32 %a, %b
+  %n = xor i32 %b, -1
+  %m = mul i32 %a, %b
+  %ng = sub i32 0, %a
+  %t1 = add i32 %x, %y
+  %t2 = add i32 %t1, %z
+  %t3 = add i32 %t2, %n
+  %t4 = add i32 %t3, %m
+  %t5 = add i32 %t4, %ng
+  ret i32 %t5
+}
+
+define i32 @divs(i32 %a, i32 %b) {
+  %q = sdiv i32 %a, %b
+  %u = udiv i32 %a, %b
+  %r = srem i32 %a, %b
+  %t = add i32 %q, %u
+  %v = add i32 %t, %r
+  ret i32 %v
+}
+
+define i64 @widen(i32 %a) {
+  %b = trunc i32 %a to i8
+  %s8 = sext i8 %b to i64
+  %z8 = zext i8 %b to i64
+  %s = sext i32 %a to i64
+  %z = zext i32 %a to i64
+  %t = add i64 %s8, %z8
+  %u = add i64 %t, %s
+  %v = add i64 %u, %z
+  %w = shl i64 %v, 3
+  ret i64 %w
+}
