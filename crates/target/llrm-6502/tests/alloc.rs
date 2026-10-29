@@ -304,3 +304,42 @@ go:
         assert_eq!(common::run_with(&format!("alloc-loc-{n}"), &format!("{}  jsr loc\n", set("rc2", n)), &code), want);
     }
 }
+
+/// Run `moves` (as `(dest, source)` register names) on sim65 with `rc2` = 1,
+/// `rc3` = 2, `x` = 5 and `a` = 9, then return the byte `read` names.
+fn moved(
+    moves: &[(&str, &str)],
+    a_live: bool,
+    read: &str,
+) -> i32 {
+    use llrm_6502::alloc::parallel_move;
+    let id = |name: &str| match name {
+        "a" => llrm_6502::reg::A,
+        "x" => llrm_6502::reg::X,
+        "rc2" => llrm_6502::reg::RC2,
+        _ => llrm_6502::reg::RC3,
+    };
+    let moves: Vec<_> = moves.iter().map(|(d, s)| (id(d), id(s))).collect();
+    let mut code = String::from("pmove:\n");
+    parallel_move(&mut code, &moves, a_live);
+    code.push_str(&format!("  {}\n  rts\n", if read == "a" { "nop".to_owned() } else { format!("lda {read}") }));
+    let main = "  lda #1\n  sta rc2\n  lda #2\n  sta rc3\n  ldx #5\n  lda #9\n  jsr pmove\n";
+    common::run_with(&format!("pm-{}", code.len()), main, &code)
+}
+
+/// A swap of two cells keeps a live `a` and exchanges them; moving `a` into a
+/// cell another move reads (`rc3 := a; rc2 := rc3`) must not let the second
+/// move clobber `a` first. The pair `PACK` of an add result did that
+/// (`lda rc5; sta rc2; sta rc3`), and the array-index loop returned 254 for 17.
+#[test]
+fn parallel_moves_swap_and_keep_a() {
+    let swap = [("rc2", "rc3"), ("rc3", "rc2")];
+    assert_eq!(moved(&swap, true, "a"), 9);
+    assert_eq!(moved(&swap, true, "rc2"), 2);
+    assert_eq!(moved(&swap, true, "rc3"), 1);
+    let through = [("rc3", "a"), ("rc2", "rc3")];
+    assert_eq!(moved(&through, false, "rc3"), 9);
+    assert_eq!(moved(&through, false, "rc2"), 2);
+    let to_x = [("rc2", "x"), ("x", "rc2")];
+    assert_eq!(moved(&to_x, true, "rc2"), 5);
+}

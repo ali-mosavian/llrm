@@ -1330,6 +1330,77 @@ fn through_a(
     }
 }
 
+/// Several byte moves as if at once: no move reads a register an earlier one
+/// wrote, and `a` is saved around the sequence when it is live after it. A
+/// cycle (a swap of two cells) goes through the stack.
+pub fn parallel_move(
+    out: &mut String,
+    moves: &[(RegId, RegId)],
+    a_live: bool,
+) {
+    let mut pending: Vec<(RegId, Option<RegId>)> =
+        moves.iter().filter(|(d, s)| d != s).map(|(d, s)| (*d, Some(*s))).collect();
+    if pending.is_empty() {
+        return;
+    }
+    let a_is_dest = pending.iter().any(|(d, _)| *d == reg::A);
+    let save = a_live && !a_is_dest;
+    if save {
+        out.push_str("  pha\n");
+    }
+    let direct = |r: RegId| r == reg::A || r == reg::X || r == reg::Y;
+    while !pending.is_empty() {
+        let a_wanted = |skip: usize, pending: &[(RegId, Option<RegId>)]| {
+            pending.iter().enumerate().any(|(i, (_, s))| i != skip && *s == Some(reg::A))
+        };
+        let ready = (0..pending.len()).find(|&i| {
+            let (d, s) = pending[i];
+            let free = !pending.iter().enumerate().any(|(j, (_, other))| j != i && *other == Some(d));
+            let scratch = match s {
+                Some(s) => !(direct(d) && direct(s) && (d == reg::A || s == reg::A)),
+                None => true,
+            };
+            let clobbers_a = scratch && d != reg::A && s != Some(reg::A);
+            free && (!clobbers_a || !a_wanted(i, &pending)) && (d != reg::A || !a_wanted(i, &pending))
+        });
+        match ready {
+            Some(i) => {
+                let (d, s) = pending.remove(i);
+                match s {
+                    Some(s) => move_byte(out, d, s, false),
+                    None => {
+                        out.push_str("  pla\n");
+                        move_byte(out, d, reg::A, false);
+                    }
+                }
+            }
+            None => {
+                // blocked: either a move needs `a` as scratch while another
+                // reads it, or only cycles of cells are left. Park the value
+                // on the stack and read it from there (two moves at most, so
+                // one parked value).
+                let free = |i: usize, pending: &[(RegId, Option<RegId>)]| {
+                    !pending.iter().enumerate().any(|(j, (_, s))| j != i && *s == Some(pending[i].0))
+                };
+                let parked = if (0..pending.len()).any(|i| free(i, &pending)) {
+                    out.push_str("  pha\n");
+                    reg::A
+                } else {
+                    let (d, _) = pending[0];
+                    writeln!(out, "  lda {}\n  pha", register_name(d)).unwrap();
+                    d
+                };
+                for (_, s) in pending.iter_mut().filter(|(_, s)| *s == Some(parked)) {
+                    *s = None;
+                }
+            }
+        }
+    }
+    if save {
+        out.push_str("  pla\n");
+    }
+}
+
 fn move_byte(
     out: &mut String,
     to: RegId,
@@ -1441,18 +1512,15 @@ fn emit_with<const STACK: bool>(
                 .collect();
             match (inst.kind, &inst.operands[..]) {
                 (Kind::Copy, _) if is_pair(regs[0]) || is_pair(regs[1]) => {
-                    for n in 0..2 {
-                        move_byte(&mut out, lane(regs[0], n), lane(regs[1], n), a_live);
-                    }
+                    let moves: Vec<_> = (0..2).map(|n| (lane(regs[0], n), lane(regs[1], n))).collect();
+                    parallel_move(&mut out, &moves, a_live);
                 }
                 (Kind::Copy, _) => move_byte(&mut out, regs[0], regs[1], a_live),
                 (Kind::Op("UNPACK"), _) => {
-                    move_byte(&mut out, regs[0], lane(regs[2], 0), a_live);
-                    move_byte(&mut out, regs[1], lane(regs[2], 1), a_live);
+                    parallel_move(&mut out, &[(regs[0], lane(regs[2], 0)), (regs[1], lane(regs[2], 1))], a_live);
                 }
                 (Kind::Op("PACK"), _) => {
-                    move_byte(&mut out, lane(regs[0], 0), regs[1], a_live);
-                    move_byte(&mut out, lane(regs[0], 1), regs[2], a_live);
+                    parallel_move(&mut out, &[(lane(regs[0], 0), regs[1]), (lane(regs[0], 1), regs[2])], a_live);
                 }
                 (Kind::Op("LDPY"), [_, _, Operand::Imm(off), _]) => {
                     writeln!(out, "  ldy #{off}\n  lda ({}),y", register_name(lane(regs[1], 0))).unwrap()
