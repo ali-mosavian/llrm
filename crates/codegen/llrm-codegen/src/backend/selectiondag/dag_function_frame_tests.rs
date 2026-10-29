@@ -41,7 +41,7 @@ fn stack_temporaries_are_cells_below_the_frame_pointer() {
     use super::dag_function::{Frame, Temporaries};
     use super::emit::FrameMap;
     use super::x86_preprocess::FrameObjects;
-    let frame = Frame::new(vec![8, 12]);
+    let frame = Frame::new(vec![8, 12], 0);
     let mut temps = Temporaries(&frame);
     let (first, second) = (temps.create_stack_temporary(4, 4), temps.create_stack_temporary(8, 8));
     let disp = |index| match frame.cell(index, 4).expect("a cell").addr {
@@ -1105,6 +1105,58 @@ fn fills_and_stores(name: &str) -> (usize, usize) {
 fn at_os_an_18_byte_clear_is_a_fill() {
     assert_eq!(fills_and_stores("f").0, 1, "a fill for the local");
     assert_eq!(fills_and_stores("h").0, 1, "a fill for the global");
+}
+
+/// Fills and stores a `memset` of `length` bytes of `value` to a local becomes
+/// at -Os, m16, on a 486.
+fn memset_shape(
+    length: u32,
+    value: i32,
+) -> (usize, usize) {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+declare void @use(ptr)
+define void @f() {{
+entry:
+  %a = alloca [{length} x i8], align 2
+  call void @llvm.memset.p0.i16(ptr %a, i8 {value}, i16 {length}, i1 false)
+  call void @use(ptr %a)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats = || insns.iter().filter_map(|i| i.what.as_ref());
+    let fills = whats().filter(|w| w.op == crate::model::ir::Operation::Fill).count();
+    let stores = whats()
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    (fills, stores)
+}
+
+/// A 10-byte clear at m16 -Os was a `rep stosb` on bytes alone (19 B of
+/// stores against 16): 57 clocks of a 486 for 3 bytes, 17 clocks a byte
+/// against the target's 10.
+#[test]
+fn at_os_a_10_byte_clear_is_stores_not_rep_stos() {
+    assert_eq!(memset_shape(10, 0).0, 0);
+}
+
+/// sc.c's 14-byte zero fill: 7 bytes saved for 66 clocks, 9.4 a byte, pay.
+#[test]
+fn at_os_a_14_byte_zero_fill_stays_rep_stos() {
+    assert_eq!(memset_shape(14, 0).0, 1);
+}
+
+/// Past the break-even length the fill is smaller by more than it costs.
+#[test]
+fn at_os_a_long_fill_is_rep_stos() {
+    assert_eq!(memset_shape(54, 0).0, 1);
 }
 
 /// A cell exactly one past a frame object's end is the next object's first
