@@ -72,3 +72,9 @@ if [ -n "$ASM_NS" ]; then
   "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
   python3 -I "$ROOT/tools/dagisel/asmtable.py" "$WORK/target.json" "$OUT/asm.rs" "${ASM_NS%::}"
 fi
+# `enc = "<namespace>"`: the instructions' binary encodings (enc.rs), for the object writer.
+ENC_NS=$(field enc)
+if [ -n "$ENC_NS" ]; then
+  [ -f "$WORK/target.json" ] || "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
+  python3 -I "$ROOT/tools/dagisel/enctable.py" "$WORK/target.json" "$OUT/enc.rs" "${ENC_NS%::}"
+fi
