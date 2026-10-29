@@ -679,11 +679,10 @@ def test_two_prs_that_each_change_one_rows_count_are_judged_each_on_its_own_delt
     assert "instructions 95 > 90 (worse)" in judged(second, base_b)[0]  # rebased onto the first, it is judged on that base
 
 
-def _c_build_commands(monkeypatch, tmp_path, name, reads_attribute=True):
-    """The llrm-c commands `bench.build` runs for the C benchmark `name` at -O2."""
+def _c_build_commands(monkeypatch, tmp_path, name):
+    """The llrm-cc commands `bench.build` runs for the C benchmark `name` at -O2."""
     variant = next(one for directory in bench.benchmarks([name]) for one in bench.variants(directory) if one.language == "c")
     seen = []
-    monkeypatch.setattr(bench, "reads_noinline_attribute", lambda compiler: reads_attribute)
 
     def run(command, *args, **kwargs):
         seen.append(command)
@@ -710,13 +709,6 @@ def test_the_object_that_is_sized_has_no_pointer_in_it(monkeypatch, tmp_path):
     text = Path(sized[1]).read_text()
     assert "__attribute__((noinline)) long bench_rectwo(" in text and "volatile" not in text
     assert sized[sized.index("-o") + 1].endswith("x.obj") and counted[counted.index("-o") + 1].endswith("x.counted.obj")
-
-
-def test_a_compiler_that_cannot_read_the_noinline_attribute_gets_the_flag_not_a_failing_source(monkeypatch, tmp_path):
-    """The main dist's llrm-c hands C to wccq, which fails `__attribute__((noinline))` as E1169: all 48 C rows of the m16 -Os table were errors on main
-    and the C kernels went uncompared. Such a compiler is given the plain source and -fno-inline-functions."""
-    (sized,) = _c_build_commands(monkeypatch, tmp_path, "rectwo", reads_attribute=False)
-    assert "__attribute__" not in Path(sized[1]).read_text() and "-fno-inline-functions" in sized
 
 
 def test_the_m32_table_builds_llrm_with_no_inlining_flag_either():
