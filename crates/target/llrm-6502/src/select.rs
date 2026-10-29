@@ -104,7 +104,11 @@ pub fn function_text(
     name: &str,
     selection: &Selection,
 ) -> Result<String, String> {
-    let recursive = module.named(name).is_some_and(|id| llrm_mir::callgraph::CallGraph::new(module).recursive(id));
+    // a call through a pointer no `!callees` bounds may come back into this function
+    let recursive = module.named(name).is_some_and(|id| {
+        let graph = llrm_mir::callgraph::CallGraph::new(module);
+        graph.recursive(id) || graph.calls_unknown(id)
+    });
     let (items, _) = function_items(module, name, selection)?;
     let (function, labels) = alloc::build(name, &items).map_err(|why| format!("{name}: {}", why.0))?;
     let (code, slots) = alloc::emit(function, &labels, recursive)?;
