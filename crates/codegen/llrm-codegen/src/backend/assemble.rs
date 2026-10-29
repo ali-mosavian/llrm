@@ -211,7 +211,7 @@ pub fn assembled_by(
         if global.function().is_some_and(|one| !one.is_declaration()) {
             let name = global.name.as_deref().unwrap_or_default();
             let made = llrm_support::debug::in_function(name, || machined(module, name, abi, &pool, &target))?;
-            facts.record(name, &made.body, &made.registers);
+            facts.record(name, &made.body, &made.registers, &made.calls);
             done.insert(id, made);
         }
     }
