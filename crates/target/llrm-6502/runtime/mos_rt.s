@@ -15,6 +15,40 @@
 ; Division by zero gives the all-ones quotient and the dividend as remainder (the restoring loop
 ; below, unchanged). Signed division truncates toward zero and the remainder has the dividend's sign.
 
+; ---- callee-saved cells on the hardware stack, for a function that keeps three or more -------------
+
+; __csave: Y = n; pushes rc8..rc(7+n) in that order under the caller's return address, which it
+; holds in __ra meanwhile. Changes A, X, Y. __crest: X = n, A (a byte result) in Y; the function's
+; own return: pops rc(7+n)..rc8 and returns to the function's caller. Changes A, X.
+.export __csave
+__csave:
+  pla
+  sta __ra
+  pla
+  sta __ra+1
+  ldx #1
+@next:
+  lda rc7,x
+  pha
+  inx
+  dey
+  bne @next
+  lda __ra+1
+  pha
+  lda __ra
+  pha
+  rts
+
+.export __crest
+__crest:
+@next:
+  pla
+  sta rc7,x
+  dex
+  bne @next
+  tya
+  rts
+
 ; ---- multiply: the low half of the product -------------------------------------------------------
 
 .export __mulqi3
@@ -346,6 +380,7 @@ __ashrhi3:                      ; rs1 >> rc4 (arithmetic) -> A:X
 
 .segment "BSS"
 __sa: .res 4
+__ra: .res 2
 __sb: .res 4
 __st: .res 4
 __sr: .res 4

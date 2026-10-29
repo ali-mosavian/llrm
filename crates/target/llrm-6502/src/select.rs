@@ -429,7 +429,8 @@ fn lower(
     let data_bits = |res: usize| n.values[res].size_in_bits();
     let at = |index: usize| n.ops[index];
     match n.opcode {
-        ISD::TokenFactor | ISD::EntryToken => Ok(Vec::new()),
+        // the frame objects share nothing here (no stack coloring), so a lifetime marker says nothing
+        ISD::TokenFactor | ISD::EntryToken | ISD::LifetimeStart | ISD::LifetimeEnd => Ok(Vec::new()),
         ISD::CopyFromReg => {
             let from = location(module, name, one, at(1), values, cells)?;
             let bits = data_bits(0);

@@ -83,10 +83,12 @@ pub fn target_lowering() -> TargetLowering {
     set(&[Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra], Action::Legal);
     set(&[UDivRem, SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], Action::Expand);
+    // rotates are shifts and an or, built where they are lowered
+    set(&[Rotl, Rotr], Action::Custom);
     set(&[ZeroExtend, AnyExtend], Action::Custom);
     // A long multiply, divide or shift by a variable is one node of two words
     // (`lower_long`).
-    for op in [Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra] {
+    for op in [Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra, Rotl, Rotr] {
         tl.set_operation_action(op, MVT::I32, Action::Custom);
     }
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
@@ -109,6 +111,7 @@ impl Hooks for MosLowering {
         node: SDValue,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
+            ISD::Rotl | ISD::Rotr => Some(lower_rotate(dag, node)),
             ISD::SetCC => lower_setcc(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
@@ -122,6 +125,35 @@ impl Hooks for MosLowering {
             _ => None,
         }
     }
+}
+
+/// `expandROT`: `rotl x, c` is `(x << c) | (x >> (w - c))`, the amounts taken modulo the width. A
+/// constant amount is two shifts by constants (the first is a rotate by nothing when the amount is 0).
+fn lower_rotate(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (x, amount) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(node);
+    let width = vt.size_in_bits() as u128;
+    let (left, right) = if dag.opcode(node) == ISD::Rotl { (ISD::Shl, ISD::Srl) } else { (ISD::Srl, ISD::Shl) };
+    let shift_vt = dag.value_type(amount);
+    if let Some(c) = dag.constant(amount) {
+        let c = c % width;
+        if c == 0 {
+            return x;
+        }
+        let (by, back) = (dag.get_constant(c, shift_vt), dag.get_constant(width - c, shift_vt));
+        let (high, low) = (dag.get_node(left, vt, &[x, by]), dag.get_node(right, vt, &[x, back]));
+        return dag.get_node(ISD::Or, vt, &[high, low]);
+    }
+    let mask = dag.get_constant(width - 1, shift_vt);
+    let by = dag.get_node(ISD::And, shift_vt, &[amount, mask]);
+    let zero = dag.get_constant(0, shift_vt);
+    let negated = dag.get_node(ISD::Sub, shift_vt, &[zero, amount]);
+    let back = dag.get_node(ISD::And, shift_vt, &[negated, mask]);
+    let (high, low) = (dag.get_node(left, vt, &[x, by]), dag.get_node(right, vt, &[x, back]));
+    dag.get_node(ISD::Or, vt, &[high, low])
 }
 
 /// A long (`i32`) multiply, divide, remainder or shift by a variable:

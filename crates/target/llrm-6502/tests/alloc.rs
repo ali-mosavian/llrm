@@ -1412,7 +1412,7 @@ done:
 
 /// A word shifted by n bits is n `asl`/`rol` pairs (4 bytes each, 20 for the shift by 5 in hash16) or,
 /// with an index register free, a counted loop of 9 bytes that takes 5 more clocks a bit. The level
-/// decides: at size (8 clocks a byte) every shift of 3 to 7 bits is the loop; at speed (1 clock a
+/// decides: at size (12 clocks a byte) every shift of 3 to 7 bits is the loop; at speed (1 clock a
 /// byte) none is. Both bytes of each result are checked, the shifted word added to the word so that
 /// the shift stays in cells.
 #[test]
@@ -1433,6 +1433,42 @@ fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
                 assert_eq!(run(""), i32::from(want & 0xFF), "{op} {k} of {x:#x}, low byte");
                 assert_eq!(run("  txa\n"), i32::from(want >> 8), "{op} {k} of {x:#x}, high byte");
             }
+        }
+    }
+}
+
+/// Three callee-saved cells cost 18 bytes of `lda`/`pha` and `pla`/`sta`. At the size level they are
+/// saved by `__csave` and restored by a jump to `__crest` (11 bytes, 99 clocks more); at speed they
+/// stay inline. digits(5) = 1, digits(10) = 2, digits(99) = 2, digits(100) = 3, digits(65535) = 5.
+#[test]
+fn three_saved_cells_are_shared_helpers_at_the_size_level_only() {
+    let ir = "define i8 @digits(i16 %v) {
+entry:
+  %c = icmp ugt i16 %v, 9
+  br i1 %c, label %loop, label %done
+loop:
+  %n = phi i8 [ 1, %entry ], [ %n2, %loop ]
+  %x = phi i16 [ %v, %entry ], [ %q, %loop ]
+  %q = udiv i16 %x, 10
+  %n2 = add i8 %n, 1
+  %g = icmp ugt i16 %x, 99
+  br i1 %g, label %loop, label %out
+out:
+  ret i8 %n2
+done:
+  ret i8 1
+}";
+    let shared = compile_at(ir, "digits", 16, Tuning::SIZE);
+    let inline = compile_at(ir, "digits", 16, Tuning::SPEED);
+    assert!(shared.contains("jsr __csave") && shared.contains("jmp __crest") && !shared.contains("pha"), "{shared}");
+    assert!(inline.contains("pha") && !inline.contains("__csave"), "{inline}");
+    for (v, want) in [(5u16, 1), (10, 2), (99, 2), (100, 3), (65535, 5)] {
+        for (name, text) in [("shared", &shared), ("inline", &inline)] {
+            let setup = set("rc2", v & 0xFF) + &set("rc3", v >> 8) + &set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3);
+            // the callee-saved cells come back as they were
+            let after = "  lda rc8\n  cmp #$A1\n  bne bad\n  lda rc9\n  cmp #$B2\n  bne bad\n  lda rc10\n  cmp #$C3\n  bne bad\n  pla\n  rts\nbad:\n  lda #99\n  rts\n";
+            let program = format!("{setup}  jsr digits\n  pha\n{}", after);
+            assert_eq!(common::run_with(&format!("alloc-digits-{name}-{v}"), &program, text), want, "{name} digits({v})");
         }
     }
 }
