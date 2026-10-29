@@ -247,3 +247,22 @@ fn arithmetic_with_overflow_gives_the_wrapped_value_and_the_carry_or_overflow() 
         }
     }
 }
+
+/// Three division libcalls whose results feed each other, with work for the next one in between.
+/// The ILP scheduler began the arguments of the last call inside the one before it, and the stack
+/// slots they share were overwritten (differential seeds 1203 and 36 more gave wrong values): the
+/// call-frame resource keeps one call sequence at a time, as `DelayForLiveRegsBottomUp` does.
+#[test]
+fn the_arguments_of_two_libcalls_are_not_interleaved() {
+    let ir = "define i32 @k(i32 %a, i32 %b) {\n\
+        \x20 %bo = or i32 %b, 1\n  %v1 = udiv i32 %a, %bo\n  %x = xor i32 %a, 118\n  %x2 = shl i32 %x, 3\n\
+        \x20 %v1o = or i32 %v1, 1\n  %m = urem i32 %v1, %v1o\n  %mo = or i32 %m, 1\n  %w = udiv i32 %x2, %mo\n\
+        \x20 %r = add i32 %w, %v1\n  ret i32 %r\n}";
+    let (a, b) = (1_000_000u32, 6u32);
+    let v1 = a / (b | 1);
+    let m = v1 % (v1 | 1);
+    let expected = ((a ^ 118) << 3) / (m | 1) + v1;
+    if let Some(got) = run_ir_with_runtime(ir, &[Arg::Imm(a.into()), Arg::Imm(b.into())]) {
+        assert_eq!(got, (expected & 255) as i32);
+    }
+}
