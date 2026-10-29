@@ -966,23 +966,27 @@ entry:
 /// overlapping dwords as a plain copy makes them.
 #[test]
 fn a_volatile_copy_is_the_accesses_it_names_and_no_more() {
-    let module = llrm_mir::parse::module(VOLATILE_COPY).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
-        .unwrap_or_else(|e| panic!("{}", e.0));
-    let mut widths: Vec<u32> = done
-        .body
-        .insns()
-        .iter()
-        .filter_map(|i| i.what.as_ref())
-        .filter(|w| w.name.as_deref() == Some("mov"))
-        .filter_map(|w| match w.dests.as_slice() {
-            [crate::model::ir::Loc::Mem(cell)] => Some(cell.width),
-            _ => None,
-        })
-        .collect();
-    widths.sort_unstable();
-    assert_eq!(widths, [1, 2, 4], "the stores: {widths:?}");
-    assert!(done.body.insns().iter().filter(|i| i.volatile).count() >= 3, "volatile accesses");
+    // The profile prices on the 16-bit machine, whose table limits a copy to
+    // two moves at every level: this one is about volatile accesses, not that.
+    llrm_x86_m16::with_pin_tuning(|| {
+        let module = llrm_mir::parse::module(VOLATILE_COPY).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+        let mut widths: Vec<u32> = done
+            .body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter(|w| w.name.as_deref() == Some("mov"))
+            .filter_map(|w| match w.dests.as_slice() {
+                [crate::model::ir::Loc::Mem(cell)] => Some(cell.width),
+                _ => None,
+            })
+            .collect();
+        widths.sort_unstable();
+        assert_eq!(widths, [1, 2, 4], "the stores: {widths:?}");
+        assert!(done.body.insns().iter().filter(|i| i.volatile).count() >= 3, "volatile accesses");
+    });
 }
 
 const VOLATILE_LOAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -1233,10 +1237,11 @@ entry:
     assert!(names.iter().any(|n| n == "inc"), "{names:?}");
 }
 
-/// At -O2 the same copy is three dword load and store pairs, as the pin's
-/// `MaxStoresPerMemcpy` (8) allows; only -Os (SD225, limit 2) uses `rep movsd`.
+/// At -O2 the same copy is `rep movsd` too: m16's table states the -Os limit
+/// (2, SD225) at every level, where the pin's `MaxStoresPerMemcpy` (8) would
+/// make three dword load and store pairs.
 #[test]
-fn at_o2_a_12_byte_copy_is_inline_dword_moves() {
+fn at_o2_a_12_byte_copy_is_a_string_move_at_m16() {
     let module = llrm_mir::parse::module(M16_COPY_12).expect("parses");
     let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
     let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
@@ -1248,7 +1253,7 @@ fn at_o2_a_12_byte_copy_is_inline_dword_moves() {
         .filter_map(|i| i.what.as_ref())
         .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
         .count();
-    assert_eq!((copies, stores), (0, 3), "three stores and no string move");
+    assert_eq!((copies, stores), (1, 0), "a string move and no stores");
 }
 
 const M16_FAR_COPY_12: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
