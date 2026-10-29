@@ -26,7 +26,7 @@ use super::fold::mask;
 use super::function_lowering::FunctionLoweringInfo;
 use super::isd::{CondCode, ISD};
 use super::mvt::{EVT, MVT};
-use super::target_calling::{Ext, In, Out, TargetCalling};
+use super::target_calling::{Ext, In, Out, Site, TargetCalling};
 use crate::backend::isel::{Convention, Parameter, convention_for};
 
 /// An instruction the builder does not translate yet; the shadow harness
@@ -973,6 +973,7 @@ impl Builder<'_> {
             shapes.push((vt, parts.len()));
             ins.extend(parts.into_iter().map(|vt| In { vt, pointer }));
         }
+        calling.accepts(&self.dag, Site::Arguments, &[], &ins).map_err(Refused)?;
         let entry = self.dag.entry_node();
         let mut offsets = Vec::new();
         let mut live_in = |reg: RegId| {
@@ -1509,6 +1510,7 @@ impl Builder<'_> {
             let pointer = self.is_pointer_type(result_type);
             (vt, self.calling_parts(vt)?.into_iter().map(|vt| In { vt, pointer }).collect())
         };
+        calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
         let (chain, parts) = calling.lower_call(&mut self.dag, root, callee_node, &outs, &ins);
         self.dag.set_root(chain);
@@ -1857,6 +1859,7 @@ impl Builder<'_> {
                 outs.push(Out { value: piece, ext, pointer });
             }
         }
+        calling.accepts(&self.dag, Site::Return, &outs, &[]).map_err(Refused)?;
         let node = calling.lower_return(&mut self.dag, chain, &outs);
         self.dag.set_root(node);
         Ok(())

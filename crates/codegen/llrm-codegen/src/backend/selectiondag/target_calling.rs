@@ -62,7 +62,27 @@ pub type FixedObject<'a> = &'a mut dyn FnMut(u32, i64, bool) -> i32;
 /// A live-in register: the virtual register the function receives `reg` in.
 pub type LiveIn<'a> = &'a mut dyn FnMut(RegId) -> u32;
 
+/// Where a [`TargetCalling::accepts`] question comes from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Site {
+    Arguments,
+    Call,
+    Return,
+}
+
 pub trait TargetCalling: Debug + Sync {
+    /// Whether the target places these parts (`outs` the values sent, `ins` the
+    /// values received); the builder refuses with the reason when it does not.
+    fn accepts(
+        &self,
+        _dag: &SelectionDAG,
+        _site: Site,
+        _outs: &[Out],
+        _ins: &[In],
+    ) -> Result<(), &'static str> {
+        Ok(())
+    }
+
     /// `LowerCall`: the call sequence and the call; returns the chain and the
     /// result parts.
     fn lower_call(
