@@ -89,8 +89,11 @@ unsigned sum16(const unsigned char *p, unsigned char n) { unsigned s = 0; unsign
 #ifdef K_schr
 unsigned char schr(const char *s, unsigned char c) { const char *p = s; while (*p && *p != (char)c) ++p; return *p ? p - s : 255; }
 #endif
-#ifdef K_lz4
+#if defined(K_lz4) || defined(K_lz4c)
 /* The C of cc65's libsrc/common/lz4.s (a162565e), with its memcpy as forward byte loops. */
+#ifdef K_lz4c
+static /* one function for the allocator: lz4 is inlined into lz4c */
+#endif
 unsigned lz4(const unsigned char *in, unsigned char *out, unsigned outlen) {
   unsigned char token, tmp;
   unsigned offset;
@@ -116,6 +119,15 @@ unsigned lz4(const unsigned char *in, unsigned char *out, unsigned outlen) {
     while (offset) { *out++ = *src++; --offset; }
   }
   return out - start;
+}
+#endif
+#ifdef K_lz4c
+/* lz4, then a Fletcher sum of the bytes it wrote: s2 in the high byte, s1 in the low. */
+unsigned lz4c(const unsigned char *in, unsigned char *out, unsigned outlen) {
+  unsigned char s1 = 0, s2 = 0;
+  unsigned n = lz4(in, out, outlen), i;
+  for (i = 0; i < n; ++i) { s1 += out[i]; s2 += s1; }
+  return ((unsigned)s2 << 8) | s1;
 }
 #endif
 /* Loops that keep several variables live across the iteration. */
