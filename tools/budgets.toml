@@ -775,15 +775,6 @@ why = "measured 31.0 -> 87.1 Minstr (x2.81)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "lir machinesink"
-ratio = 3
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 28.2 -> 78.3 Minstr (x2.77)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "regalloc base"
 ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -843,15 +834,6 @@ ratio = 2.7
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 14.7 -> 36.8 Minstr (x2.50)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "lir split returns"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 9.1 -> 23.9 Minstr (x2.64)"
 
 [[debt]]
 kind = "steps"
