@@ -64,6 +64,13 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
         }
     }
+    // a sign-extending load is a load and a sign extension: no instruction reads one
+    for (vt, mem) in [(MVT::I16, MVT::I8), (MVT::I32, MVT::I8), (MVT::I32, MVT::I16), (MVT::I64, MVT::I8)]
+        .into_iter()
+        .chain([(MVT::I64, MVT::I16), (MVT::I64, MVT::I32)])
+    {
+        tl.set_load_ext_action(LoadExt::SExtLoad, vt, mem, Action::Expand);
+    }
     for (vt, mem) in [(MVT::I64, MVT::I32), (MVT::I64, MVT::I16), (MVT::I64, MVT::I8), (MVT::I32, MVT::I16)]
         .into_iter()
         .chain([(MVT::I32, MVT::I8), (MVT::I16, MVT::I8)])
