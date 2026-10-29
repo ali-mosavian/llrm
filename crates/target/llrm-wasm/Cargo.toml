@@ -8,3 +8,4 @@ description = "The WebAssembly target: its descriptions and DAG selector tables,
 [dependencies]
 llrm-target = { workspace = true }
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
+llrm-codegen = { workspace = true }

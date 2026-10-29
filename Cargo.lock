@@ -641,6 +641,7 @@ dependencies = [
 name = "llrm-wasm"
 version = "0.1.0"
 dependencies = [
+ "llrm-codegen",
  "llrm-dagisel",
  "llrm-target",
 ]

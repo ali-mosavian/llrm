@@ -6,4 +6,5 @@ pub mod addr;
 #[allow(unused_variables)]
 pub mod generated;
 pub mod hooks;
+pub mod lowering;
 pub mod predicates;
