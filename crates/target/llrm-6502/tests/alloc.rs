@@ -1621,6 +1621,35 @@ define i8 @tfrozen(i8 %a) {
     }
 }
 
+/// A sign-extended byte read through a pointer was `CannotSelect(Load)` (differential seeds 9-11):
+/// the combiner makes an extending load of it, which the legalizer turns back into a load and an
+/// extension. With a constant operation after the extension the combine runs again.
+#[test]
+fn a_sign_extended_load_is_a_load_and_an_extension() {
+    let ir = "define i16 @sload(ptr %p) {
+  %b = load i8, ptr %p
+  %s = sext i8 %b to i16
+  ret i16 %s
+}
+define i16 @sloadx(ptr %p) {
+  %b = load i8, ptr %p
+  %s = sext i8 %b to i16
+  %x = xor i16 %s, 1456
+  ret i16 %x
+}";
+    for name in ["sload", "sloadx"] {
+        let text = compile_within_ten_seconds(ir, name);
+        for byte in [0u16, 5, 0x7F, 0x80, 0xFF] {
+            let setup = format!("{}{}  lda #{byte}\n  sta $0300\n", set("rc2", 0), set("rc3", 3));
+            let extended = byte as u8 as i8 as i16 as u16;
+            let want = i32::from(if name == "sloadx" { extended ^ 1456 } else { extended });
+            let low = common::run_with(&format!("alloc-{name}-{byte}"), &format!("{setup}  jsr {name}\n"), &text);
+            let high = common::run_with(&format!("alloc-{name}-h-{byte}"), &format!("{setup}  jsr {name}\n  txa\n"), &text);
+            assert_eq!((high << 8) | low, want, "{name} {byte:#x}");
+        }
+    }
+}
+
 /// Compile on a thread and fail after ten seconds: a scheduler or allocator loop with no progress
 /// bound shows as a failure here instead of a stuck run.
 fn compile_within_ten_seconds(
