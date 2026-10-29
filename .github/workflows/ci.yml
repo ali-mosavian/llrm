@@ -253,7 +253,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           clang: "required"
-          pintools: ${{ (matrix.group == 'unit' || matrix.group == 'integration') && 'required' || '' }}
+          pintools: ${{ (matrix.group == 'unit' || matrix.group == 'integration' || matrix.group == 'python') && 'required' || '' }}
       # tinytim has perf (the sysctl and a seccomp profile allowing perf_event_open): nothing may be missing there.
       - if: runner.environment == 'self-hosted'
         run: echo "GATE_ALLOW_MISSING=" >> "$GITHUB_ENV"
