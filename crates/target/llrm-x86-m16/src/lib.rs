@@ -599,6 +599,7 @@ mod tuning_tests {
                 size_milliclocks_per_byte: 0,
                 unroll_threshold: None,
                 unroll_max_percent_threshold_boost: None,
+                inline_threshold: None,
                 ..table
             },
             Tuning::PIN
