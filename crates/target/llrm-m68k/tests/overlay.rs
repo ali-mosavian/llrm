@@ -291,3 +291,15 @@ fn an_argument_read_once_outside_a_loop_is_read_from_its_slot() {
     assert!(ours.contains("add.l\t(8,%sp), %d"), "{ours}");
     assert!(!ours.contains("move.l\t(8,%sp)"), "{ours}");
 }
+
+/// popcount's `x & 1` of a copy was `move.l %d1, %d2; and.l #1, %d2`, 8 bytes;
+/// `moveq #1, %d2; and.l %d1, %d2` is 4 with the same value and codes.
+#[test]
+fn a_small_constant_mask_of_a_copy_is_a_moveq_and_a_register_and() {
+    let ir = "define i32 @f(i32 %a) {\n  %m = and i32 %a, 1\n  %r = add i32 %m, %a\n  ret i32 %r\n}";
+    let pinned = compiled(ir, Options::PINNED);
+    assert!(pinned.contains("and.l\t#1,"), "{pinned}");
+    let ours = compiled(ir, Options::default());
+    assert!(ours.contains("moveq\t#1,") && !ours.contains("and.l\t#1,"), "{ours}");
+    assert!(code_size(ir, Options::default()) < code_size(ir, Options::PINNED));
+}

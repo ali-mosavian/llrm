@@ -1,4 +1,4 @@
-# Results, 2026-10-29 13:29 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Results, 2026-10-29 13:32 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 gcc is m68k-linux-gnu-gcc 15 (`-mcpu=68000`), the Debian cross toolchain unpacked without root. Cycles are not
 modelled: "insns" are executed instructions, which price a 68000 `move` and a `muls` the same. "ours" has the
@@ -16,7 +16,7 @@ Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -
 | kernel | raw B | ours B | best -O2 B | ours -Os B | best -Os B | raw insns | ours insns | best -O2 insns | ours -Os insns | best -Os insns | status |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | sum | 18 | 18 | 18 | 16 | 16 | 44 | 44 | 44 | 43 | 43 | at or below |
-| popcount | 26 | 26 | 22 | 26 | 22 | 85 | 85 | 85 | 85 | 85 | -O2 +4 B, -Os +4 B |
+| popcount | 22 | 22 | 22 | 22 | 22 | 85 | 85 | 85 | 85 | 85 | at or below |
 | max | 16 | 16 | 16 | 16 | 16 | 6 | 6 | 5 | 6 | 5 | -O2 +1 insns, -Os +1 insns |
 | absdiff | 22 | 22 | 22 | 22 | 22 | 7 | 7 | 7 | 7 | 7 | at or below |
 | clamp | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | at or below |
@@ -28,13 +28,14 @@ Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -
 | strlen | 20 | 22 | 20 | 22 | 18 | 59 | 60 | 44 | 60 | 57 | -O2 +2 B, -O2 +16 insns, -Os +4 B, -Os +3 insns |
 | copy | 34 | 34 | 34 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | at or below |
 
-Rows still above a reference: popcount, max, fib, gcd, arrmax, countgt, strlen.
+Rows still above a reference: max, fib, gcd, arrmax, countgt, strlen.
+
 ## Full table
 
 | kernel | raw B | ours B | ours -Os B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | raw insns | ours insns | ours -Os insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | sum | 18 | 18 | 16 | 46 | 46 | 16 | 18 | 44 | 44 | 43 | 48 | 48 | 43 | 44 | 45 all |
-| popcount | 26 | 26 | 26 | 52 | 52 | 22 | 22 | 85 | 85 | 85 | 103 | 103 | 85 | 85 | 8 all |
+| popcount | 22 | 22 | 22 | 52 | 52 | 22 | 22 | 85 | 85 | 85 | 103 | 103 | 85 | 85 | 8 all |
 | max | 16 | 16 | 16 | 16 | 16 | 16 | 16 | 6 | 6 | 6 | 6 | 6 | 5 | 5 | 42 all |
 | absdiff | 22 | 22 | 22 | 22 | 22 | 24 | 24 | 7 | 7 | 7 | 7 | 7 | 8 | 7 | 42 all |
 | clamp | 26 | 26 | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 42 all |
@@ -45,6 +46,7 @@ Rows still above a reference: popcount, max, fib, gcd, arrmax, countgt, strlen.
 | countgt | 52 | 46 | 38 | 86 | 86 | 42 | 42 | 168 | 136 | 134 | 234 | 234 | 168 | 123 | 9 all |
 | strlen | 20 | 22 | 22 | 36 | 36 | 18 | 20 | 59 | 60 | 60 | 89 | 89 | 57 | 44 | 13 all |
 | copy | 34 | 34 | 34 | 42 | 42 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | 59 | 59 | 33 all |
+
 ## Above llc -Os or gcc -Os (bytes / insns, best reference)
 
 | kernel | best reference | ours | gap |
