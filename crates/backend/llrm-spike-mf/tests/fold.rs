@@ -100,3 +100,37 @@ fn a_layout_with_nothing_to_fold_stays() {
     assert_eq!(shape(&function), before);
     let _ = branch;
 }
+
+fn cond(to: u32) -> Inst {
+    terminator("branch", false, Some(to))
+}
+
+/// A compare chain, as a switch lowers: each block tests and branches to a
+/// return, and the others jump to one shared default return. Folding it never
+/// returned (blocks 2 and 5 both pulled the default next to themselves,
+/// forever); the 6502 `switch` test hung on it.
+#[test]
+fn a_chain_of_tests_sharing_one_default_terminates() {
+    let blocks = vec![
+        vec![cond(3), jump(1)],
+        vec![cond(10), jump(2)],
+        vec![cond(6), jump(11)],
+        vec![cond(7), jump(4)],
+        vec![cond(8), jump(5)],
+        vec![cond(9), jump(11)],
+        vec![ret()],
+        vec![ret()],
+        vec![ret()],
+        vec![ret()],
+        vec![ret()],
+        vec![ret()],
+    ];
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut function = layout(blocks);
+        branch_fold::<Two>(&mut function);
+        let _ = done.send(function.blocks.len());
+    });
+    let blocks = wait.recv_timeout(std::time::Duration::from_secs(5)).expect("branch_fold does not return");
+    assert!(blocks <= 12);
+}
