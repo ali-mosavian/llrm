@@ -196,7 +196,7 @@ fn lld_link_makes_a_pdb_of_a_c_program() {
         "sizeof 8",
         "S_GDATA32",
         "`g`",
-        "line/addr entries",
+        "line/column/addr entries",
     ] {
         assert!(text.contains(wanted), "no {wanted}:\n{text}");
     }
