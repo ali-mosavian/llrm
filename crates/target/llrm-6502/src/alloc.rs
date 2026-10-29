@@ -659,7 +659,7 @@ fn pointer_cells(
                 && match *opcode {
                     op::COPY16 => true,
                     op::ADD16 => matches!(&operands[2], Machine::Reg(b) if constant(b)),
-                    op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 => at == 1,
+                    op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => at == 1,
                     op::STZP | op::LEASP16 | op::JSRI => at == 0,
                     _ => false,
                 };
@@ -697,7 +697,7 @@ fn pointer_bases(items: &[Item]) -> HashSet<String> {
     for item in items {
         let Item::Inst(MInst { opcode, operands }) = item else { continue };
         let at = match *opcode {
-            op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 => 1,
+            op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => 1,
             op::STZP | op::LEASP16 | op::JSRI => 0,
             _ => continue,
         };
@@ -1193,6 +1193,24 @@ pub fn build(
                     ));
                     b.copy(to, acc);
                 }
+            }
+            // 65C02: `lda (p)` / `sta (p)`, no `y`
+            op::LDPZ => {
+                let ptr = b.pointer(name(&o[1])?)?;
+                b.require(ptr, Class::PAIR)?;
+                b.define(name(&o[0])?);
+                let d = b.byte(name(&o[0])?)?;
+                let acc = Reg::Phys(reg::A);
+                b.push(Inst::new(Kind::Op("LDP0"), vec![Operand::Def(acc), Operand::Use(ptr)]));
+                b.copy(d, acc);
+            }
+            op::STPZ => {
+                let ptr = b.pointer(name(&o[1])?)?;
+                b.require(ptr, Class::PAIR)?;
+                let value = b.byte(name(&o[0])?)?;
+                let acc = Reg::Phys(reg::A);
+                b.copy(acc, value);
+                b.push(Inst::new(Kind::Op("STP0"), vec![Operand::Use(acc), Operand::Use(ptr)]));
             }
             op::STP8 | op::STP16 => {
                 let ptr = b.pointer(name(&o[1])?)?;
@@ -1706,6 +1724,7 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("STPY"), [_, _, Operand::Imm(off), _]) => {
                     writeln!(out, "  ldy #{off}\n  sta ({}),y", register_name(lane(regs[1], 0))).unwrap()
                 }
+                (Kind::Op("LDP0"), _) => writeln!(out, "  lda ({})", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("STP0"), _) => writeln!(out, "  sta ({})", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("LDI"), [_, Operand::Imm(value)]) => {
                     let d = regs[0];
