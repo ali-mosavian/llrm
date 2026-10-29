@@ -1292,3 +1292,34 @@ fn every_function_of_an_m32_object_has_an_eh_frame_entry_from_and_back_to_the_ca
         }
     }
 }
+
+/// x86-64 functions that set their frame up past an early return
+/// (shrink-wrapped at -Os) declare it: 3 FDEs, each from and back to
+/// `CFA=RSP+8`, and the registers pushed in the body are restored
+/// (`DW_CFA_restore`) where the code goes on without them.
+#[test]
+fn a_shrink_wrapped_m64_function_declares_its_frame_and_restores_its_registers() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("wrapped.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/wrapped.c");
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .args(["-m64", "-Os", "-c", "-o"])
+        .arg(&object)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let dumped = Command::new(dwarfdump).arg("--eh-frame").arg(&object).output().unwrap();
+    let dump = String::from_utf8_lossy(&dumped.stdout).into_owned();
+    let frames: Vec<&str> = dump.split(" FDE ").skip(1).collect();
+    assert_eq!(frames.len(), 3, "{dump}");
+    for frame in &frames {
+        let rows: Vec<&str> = frame.lines().filter(|line| line.contains(": CFA=RSP")).collect();
+        assert!(rows.first().unwrap().contains("CFA=RSP+8:") && rows.last().unwrap().contains("CFA=RSP+8:"), "{frame}");
+    }
+    assert!(dump.matches("DW_CFA_restore").count() >= 4, "{dump}");
+}
