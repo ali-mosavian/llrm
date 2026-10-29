@@ -186,3 +186,23 @@ fn a_loop_does_not_jump_through_a_block_that_only_jumps() {
     let text = text(&module, "k", Cpu::M68000).expect("compiles");
     assert!(!text.contains(":\n\tbra"), "{text}");
 }
+
+/// Twenty live incoming arguments in a loop: each is a load of its slot,
+/// which runs again where the value is read instead of being stored to a
+/// frame slot and reloaded. It stored 18 of them (`movem.l %d0, (N,%sp)`).
+#[test]
+fn spilled_incoming_arguments_are_reloaded_from_their_own_slots() {
+    let params: Vec<String> = (0..20).map(|k| format!("i32 %a{k}")).collect();
+    let mut ir = format!("define i32 @p({}) {{\nentry:\n  br label %l\nl:\n", params.join(", "));
+    ir.push_str("  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n");
+    let mut sum = "%s".to_owned();
+    for k in 0..20 {
+        ir.push_str(&format!("  %m{k} = xor i32 %a{k}, %i\n  %t{k} = add i32 {sum}, %m{k}\n"));
+        sum = format!("%t{k}");
+    }
+    ir.push_str(&format!("  %s1 = add i32 {sum}, 1\n  %i1 = add i32 %i, 1\n  %c = icmp slt i32 %i1, %a0\n"));
+    ir.push_str("  br i1 %c, label %l, label %x\nx:\n  ret i32 %s1\n}\n");
+    let asm = compiled(&ir, "p");
+    let stores = asm.lines().filter(|line| line.starts_with("\tmovem.l\t%d") && !line.contains('-')).count();
+    assert!(stores <= 1, "{asm}");
+}

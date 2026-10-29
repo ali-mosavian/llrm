@@ -142,6 +142,14 @@ fn remat_source<C>(
         return None;
     }
     let inst = &function.blocks[block].insts[index];
+    // a copy of a rematerializable value is one too (the coalescer would have
+    // joined them): look through it to the instruction that makes the value
+    if inst.kind == Kind::Copy
+        && let [Operand::Def(_), Operand::Use(Reg::Virt(source))] = inst.operands[..]
+        && source != v
+    {
+        return remat_source(function, source);
+    }
     let invariant = |inst: &Inst| {
         !inst.may_load
             || inst.operands.iter().any(|o| matches!(o, Operand::Frame(slot) if function.fixed.contains_key(slot)))
@@ -149,6 +157,7 @@ fn remat_source<C>(
     let defines_only_v = inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).count() == 1;
     let reads_nothing = !inst.operands.iter().any(|o| matches!(o, Operand::Use(_)));
     (inst.kind != Kind::Copy
+        && inst.rematerializable
         && !inst.call
         && !inst.terminator
         && !inst.may_store
@@ -224,7 +233,56 @@ fn rematerialize<C: Copy>(
         }
         function.blocks[at].insts = out;
     }
+    remove_dead_defs(function);
     Some(made)
+}
+
+/// Drops the side-effect-free definitions nothing reads any more, which
+/// rematerializing a copy's source leaves behind.
+fn remove_dead_defs<C>(function: &mut MFunction<C>) {
+    loop {
+        let mut used = HashSet::new();
+        for block in &function.blocks {
+            for inst in &block.insts {
+                for operand in &inst.operands {
+                    if let Operand::Use(Reg::Virt(u)) = operand {
+                        used.insert(*u);
+                    }
+                }
+            }
+            for phi in &block.phis {
+                used.extend(
+                    phi.incoming.iter().filter_map(|(_, r)| if let Reg::Virt(u) = r { Some(*u) } else { None }),
+                );
+            }
+        }
+        let mut removed = false;
+        for block in &mut function.blocks {
+            let mut at = block.insts.len();
+            while at > 0 {
+                at -= 1;
+                let inst = &block.insts[at];
+                let defs: Vec<u32> = inst
+                    .operands
+                    .iter()
+                    .filter_map(|o| if let Operand::Def(Reg::Virt(d)) = o { Some(*d) } else { None })
+                    .collect();
+                let pure = !inst.call
+                    && !inst.terminator
+                    && !inst.may_store
+                    && !inst.side_effects
+                    && inst.ties.is_empty()
+                    && !(inst.sets_flags && flags_live_at(&block.insts, at + 1));
+                if pure && !defs.is_empty() && defs.iter().all(|d| !used.contains(d)) {
+                    block.insts.remove(at);
+                    removed = true;
+                }
+            }
+        }
+        if !removed {
+            return;
+        }
+    }
 }
 
 /// Whether every definition and use of `v` is in one run of instructions of

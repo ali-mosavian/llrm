@@ -234,6 +234,14 @@ impl Emitter<'_> {
                     .map(|(at, one)| (one.tied_to as usize, at))
                     .collect();
                 let ccr = pin::CCR;
+                // DEVIATE from the pin, whose M68k marks nothing
+                // rematerializable: a constant move and a load of an incoming
+                // argument slot (immutable) run again where they are read,
+                // which is smaller than a store and a reload.
+                // Exit: never; a target choice, as an override.
+                let loads_argument = desc.has(flag::MAY_LOAD)
+                    && !desc.has(flag::MAY_STORE)
+                    && operands.iter().any(|operand| matches!(operand, Operand::Frame(index) if *index < 0));
                 into.push(Inst {
                     call: desc.has(flag::CALL),
                     ties,
@@ -245,6 +253,7 @@ impl Emitter<'_> {
                     may_store: desc.has(flag::MAY_STORE),
                     side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
                     cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
+                    rematerializable: desc.has(flag::REMATERIALIZABLE) || desc.has(flag::MOVE_IMM) || loads_argument,
                     ..Inst::new(Kind::Op(name), operands)
                 });
             }
