@@ -91,3 +91,29 @@ fn at_o2_a_1024_byte_zeroing_is_rep_stosd() {
     let text = std::fs::read_to_string(directory.join("z.s")).unwrap();
     assert!(text.contains("rep stosd") && text.contains("mov cx, 256"), "{text}");
 }
+
+/// An aligned 32-byte zeroing at -Os keeps the 16-bit fill (`xor ax, ax; rep
+/// stosw`); the dword form's `xor eax, eax` and wider moves grew fpbench.nib,
+/// jpeg_*.nib and nbody_single.nib by 13 bytes. At -O2 it is `rep stosd`.
+#[test]
+fn at_os_an_aligned_fill_is_words_and_at_o2_dwords() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(
+        directory.join("z.c"),
+        "extern void use(char *p);\nvoid f(void) { char b[32] __attribute__((aligned(4))); __builtin_memset(b, 0, 32); use(b); }\n",
+    )
+    .unwrap();
+    let listing = |level: &str| {
+        let output = common::cc::llrm_c()
+            .current_dir(directory)
+            .args([level, "-m16", "-march=i386", "-S", "-o", "z.s", "z.c"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        std::fs::read_to_string(directory.join("z.s")).unwrap()
+    };
+    let size = listing("-Os");
+    assert!(size.contains("rep stosw") && !size.contains("stosd"), "{size}");
+    assert!(listing("-O2").contains("rep stosd"));
+}

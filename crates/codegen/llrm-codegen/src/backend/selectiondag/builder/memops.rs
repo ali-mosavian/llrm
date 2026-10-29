@@ -1285,8 +1285,9 @@ impl Builder<'_> {
             }
         } else if let Some(byte) = self.dag.constant(value) {
             // `getOptimalRepType`: a dword at most on a target with 32-bit
-            // registers, whatever its pointers.
-            let block = alignment.min(word.max(4));
+            // registers, whatever its pointers; for size the pointer's width
+            // (`mov eax, 0` is more bytes: fpbench.nib +3 at -Os).
+            let block = alignment.min(if self.has_opt_size() { word } else { word.max(4) });
             let mut pattern = byte as u64 & 255;
             if block >= 2 {
                 pattern |= pattern << 8;
