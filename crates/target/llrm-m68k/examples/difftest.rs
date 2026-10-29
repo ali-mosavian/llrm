@@ -37,6 +37,16 @@ enum Outcome {
     Reference(String),
 }
 
+/// `$DIFF_OPTIONS`: `raw` (no mid-end), `size`, `pinned` (no overlay) or `os-raw`; which layer a failure is in.
+fn options() -> Options {
+    match std::env::var("DIFF_OPTIONS").as_deref() {
+        Ok("raw") => Options { mid_end: false, ..Options::default() },
+        Ok("size") => Options { size: true, ..Options::default() },
+        Ok("pinned") => Options::PINNED,
+        _ => Options::default(),
+    }
+}
+
 fn clang() -> PathBuf {
     std::env::var_os("LLRM_PIN_CLANG").map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(std::env::var("HOME").unwrap()).join("scratch/llvm-build/bin/clang")
@@ -254,7 +264,7 @@ fn check(
     };
     let mut items = Vec::new();
     for name in defined(&ir) {
-        match items_with(&module, &name, Cpu::M68000, Options::default()) {
+        match items_with(&module, &name, Cpu::M68000, options()) {
             Ok(code) => items.extend(code),
             Err(why) => return Outcome::Reject(format!("{name}: {why}")),
         }
