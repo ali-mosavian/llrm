@@ -8,7 +8,7 @@
 //! register. `setcc`, `select` and `brcond` on a value that is not a compare
 //! test it against zero.
 //!
-//! DEVIATE: not translated yet are `LowerToBTST`, overflow arithmetic
+//! DEVIATE: not translated yet are the `trunc` forms of `LowerToBTST`, overflow arithmetic
 //! (`LowerXALUO`), the `SETCC_CARRY` folds of `LowerSELECT`, the
 //! and/or-of-setcc and xor-1 folds of `LowerBRCOND`, `EmitTest`'s narrowing of
 //! a truncated arithmetic result, and floating-point conditions. Reason: each
@@ -33,6 +33,7 @@ pub mod m68kisd {
     use super::{ISD, ids};
 
     pub const CMP: ISD = ISD::Target(ids::CMP);
+    pub const BTST: ISD = ISD::Target(ids::BTST);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
@@ -318,6 +319,52 @@ fn emit_cmp(
     dag.get_node(m68kisd::CMP, EVT::I8, &[op1, op0])
 }
 
+/// `getBitTestCondition`: the `BTST` of bit `bit_no` of `src`, read as `cc`
+/// (`EQ` or `NE`); `BTST` sets `Z` when the bit is clear, as an `and` does.
+fn bit_test(
+    dag: &mut SelectionDAG,
+    src: SDValue,
+    bit_no: SDValue,
+    cc: CondCode,
+) -> SDValue {
+    let mut src = src;
+    if matches!(dag.value_type(src), EVT::I8 | EVT::I16) {
+        src = dag.get_node(ISD::AnyExtend, EVT::I32, &[src]);
+    }
+    let vt = dag.value_type(src);
+    let bit_no = if dag.value_type(bit_no) == vt { bit_no } else { dag.get_node(ISD::AnyExtend, vt, &[bit_no]) };
+    let test = dag.get_node(m68kisd::BTST, EVT::I8, &[src, bit_no]);
+    let code = cc_operand(dag, if cc == CondCode::SetEq { cond::EQ } else { cond::NE });
+    dag.get_node(m68kisd::SETCC, EVT::I8, &[code, test])
+}
+
+/// `LowerAndToBTST`: `(1 << n) & x` and `(x >> n) & 1` against zero are a bit
+/// test.
+fn lower_and_to_btst(
+    dag: &mut SelectionDAG,
+    and: SDValue,
+    cc: CondCode,
+) -> Option<SDValue> {
+    if dag.value_type(and) != EVT::I32 {
+        return None;
+    }
+    let (mut op0, mut op1) = (dag.operand(and, 0), dag.operand(and, 1));
+    if dag.opcode(op1) == ISD::Shl {
+        std::mem::swap(&mut op0, &mut op1);
+    }
+    if dag.opcode(op0) == ISD::Shl {
+        if dag.constant(dag.operand(op0, 0)) == Some(1) {
+            return Some(bit_test(dag, op1, dag.operand(op0, 1), cc));
+        }
+        return None;
+    }
+    let mask = dag.constant(op1)?;
+    if mask == 1 && dag.opcode(op0) == ISD::Srl {
+        return Some(bit_test(dag, dag.operand(op0, 0), dag.operand(op0, 1), cc));
+    }
+    None
+}
+
 /// `LowerSETCC`, integer part.
 ///
 /// DEVIATE from the pin: with `load_as_source`, a compare whose left side is a
@@ -348,6 +395,15 @@ fn lower_setcc(
     {
         (op0, op1) = (op1, op0);
         cc = cc.swapped_operands();
+    }
+    // `(1 << n) & x == 0`, `((x >> n) & 1) != 0`: a bit test
+    if matches!(cc, CondCode::SetEq | CondCode::SetNe)
+        && dag.is_null_constant(op1)
+        && dag.opcode(op0) == ISD::And
+        && dag.has_one_use(op0.node)
+        && let Some(test) = lower_and_to_btst(dag, op0, cc)
+    {
+        return Some(test);
     }
     // `setcc (setcc c), 0|1` with `==` or `!=` is the inner condition or its
     // opposite.

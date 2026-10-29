@@ -845,3 +845,21 @@ define i32 @f(i32 %x) {
         }
     }
 }
+
+/// `(x & (1 << n)) == 0` was `moveq #1; lsl.l n; and.l x; ...`; the pin
+/// (`LowerAndToBTST`) tests the bit: `btst %dn, %dx`. Both outcomes run. A
+/// constant one-bit mask is left to `and`/`tst`: `btst #15` saved
+/// instructions in isolation but cost crc16 40 more (see `RESULTS-library.md`).
+#[test]
+fn a_shifted_one_against_zero_is_a_btst() {
+    use llrm_m68k::kernels::Arg::Imm;
+    let ir = "define i32 @k(i32 %x, i32 %n) {\n  %s = shl i32 1, %n\n  %a = and i32 %s, %x\n  %c = icmp eq i32 %a, 0\n  %r = select i1 %c, i32 7, i32 9\n  ret i32 %r\n}";
+    let options = Options { mid_end: false, ..Options::default() };
+    let asm = text_with(&module(ir), "k", Cpu::M68000, options).unwrap();
+    assert!(asm.contains("btst\t%d") && !asm.contains("and.l") && !asm.contains("lsl"), "{asm}");
+    for (x, n, want) in [(0x8000, 15, 9), (0x7FFF, 15, 7), (1, 0, 9), (0x80000000u32 as i64, 31, 9), (0x7FFFFFFF, 31, 7)] {
+        if let Some(code) = status_with_data(ir, &[Imm(x), Imm(n)], options) {
+            assert_eq!(code, want, "x = {x:#x}, n = {n}\n{asm}");
+        }
+    }
+}
