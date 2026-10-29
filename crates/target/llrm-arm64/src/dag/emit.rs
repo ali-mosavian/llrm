@@ -8,9 +8,10 @@
 //! its operands. `RET_ReallyLR` becomes `Op::Return` over the physical
 //! registers it names.
 //!
-//! DEVIATE: one block, `ADD`/`SUB` register and immediate forms only. Reason:
-//! the first function needs no more; each family adds rows to [`build`] with an
-//! encoder byte check. Exit: C2..Cn.
+//! DEVIATE: one block; `ADD`/`SUB` register, shifted-register and immediate
+//! forms and the integer `LDR`/`STR` (`ui`, `UR`, `roX`) forms only, with no
+//! memory operand kept (`MemOperand::default`). Reason: each family adds rows
+//! to [`build`] with an encoder byte check. Exit: C2..Cn.
 
 use std::collections::HashMap;
 
@@ -22,7 +23,7 @@ use llrm_lir::registers::RegId;
 
 use super::function::Selected;
 use crate::REGISTER_INFO;
-use crate::mc::inst::{AddSub, Gpr, Inst, Shift, Width};
+use crate::mc::inst::{Addr, AddSub, Extend, Gpr, Inst, Memory, MemOperand, Shift, Width};
 use crate::mc::visit::Reg;
 use crate::mfunc::{MBlock, MFunc, Op, block_label};
 
@@ -47,6 +48,8 @@ fn gpr_of(id: RegId) -> Result<Gpr, String> {
 enum Operand {
     Reg(Gpr),
     Imm(u64),
+    /// A frame object, by the builder's frame index.
+    Slot(u32),
 }
 
 /// `ADDWrr`, `SUBSXri` and the rest of the add/sub family: (subtract, set
@@ -66,9 +69,64 @@ fn add_sub(name: &str) -> Option<(AddSub, Width, bool)> {
         "Xrr" => (Width::X, false),
         "Wri" => (Width::W, true),
         "Xri" => (Width::X, true),
+        "Wrs" => (Width::W, false),
+        "Xrs" => (Width::X, false),
         _ => return None,
     };
     Some((op, width, form))
+}
+
+/// What a load or store opcode moves, how it addresses, and whether it stores.
+struct MemoryForm {
+    width: Width,
+    bytes: u8,
+    sign: bool,
+    store: bool,
+    form: AddressForm,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum AddressForm {
+    /// `ui`: an offset in units of the access size.
+    Scaled,
+    /// `UR`: an unscaled signed offset.
+    Unscaled,
+    /// `roX`: a base and an index register.
+    Register,
+}
+
+/// `LDRWui`, `STURXi`, `LDRSBWroX` and the rest of the integer load/store family.
+fn memory_form(name: &str) -> Option<MemoryForm> {
+    let (store, rest) = if let Some(rest) = name.strip_prefix("LDUR") {
+        (false, ("UR", rest))
+    } else if let Some(rest) = name.strip_prefix("STUR") {
+        (true, ("UR", rest))
+    } else if let Some(rest) = name.strip_prefix("LDR") {
+        (false, ("", rest))
+    } else {
+        (true, ("", name.strip_prefix("STR")?))
+    };
+    let (unscaled, rest) = rest;
+    let (element, form) = if unscaled == "UR" {
+        (rest.strip_suffix('i')?, AddressForm::Unscaled)
+    } else if let Some(element) = rest.strip_suffix("ui") {
+        (element, AddressForm::Scaled)
+    } else {
+        (rest.strip_suffix("roX")?, AddressForm::Register)
+    };
+    let (width, bytes, sign) = match element {
+        "BB" => (Width::W, 1, false),
+        "HH" => (Width::W, 2, false),
+        "W" => (Width::W, 4, false),
+        "X" => (Width::X, 8, false),
+        "SBW" => (Width::W, 1, true),
+        "SBX" => (Width::X, 1, true),
+        "SHW" => (Width::W, 2, true),
+        "SHX" => (Width::X, 2, true),
+        "SW" => (Width::X, 4, true),
+        _ => return None,
+    };
+    Some(MemoryForm { width, bytes, sign, store, form })
 }
 
 /// The instruction of machine opcode `name` writing `rd`.
@@ -81,6 +139,16 @@ fn build(
         return match (immediate, operands) {
             (false, [Operand::Reg(rn), Operand::Reg(rm)]) => {
                 Ok(Inst::AddSubShifted { op, width, rd, rn: *rn, rm: *rm, shift: Shift::Lsl, amount: 0 })
+            }
+            // `ADDWrs rn, rm, shifter`: the shift type in bits 6.., the amount below
+            (false, [Operand::Reg(rn), Operand::Reg(rm), Operand::Imm(shifter)]) => {
+                let shift = match shifter >> 6 {
+                    0 => Shift::Lsl,
+                    1 => Shift::Lsr,
+                    2 => Shift::Asr,
+                    other => return Err(format!("{name}: shift type {other}")),
+                };
+                Ok(Inst::AddSubShifted { op, width, rd, rn: *rn, rm: *rm, shift, amount: (shifter & 0x3f) as u8 })
             }
             // `ADDWri rn, imm12, shift` where the shift operand is 0 or 12
             (true, [Operand::Reg(rn), Operand::Imm(imm), Operand::Imm(shift)]) => Ok(Inst::AddSubImm {
@@ -141,12 +209,52 @@ impl Emitter<'_> {
             NodeData::Const { bits, .. } if matches!(node.opcode, ISD::TargetConstant | ISD::Constant) => {
                 Ok(Operand::Imm(bits as u64))
             }
+            NodeData::FrameIndex(index) if node.opcode == ISD::TargetFrameIndex => Ok(Operand::Slot(index as u32)),
             _ => self
                 .values
                 .get(&(value.node, value.res))
                 .map(|&g| Operand::Reg(g))
                 .ok_or_else(|| format!("operand {:?} has no register", node.opcode)),
         }
+    }
+
+    /// A load or store: operands are `[value,] base, offset...` without chains.
+    fn memory(
+        &mut self,
+        id: u32,
+        name: &str,
+        access: &MemoryForm,
+        operands: &[Operand],
+    ) -> Result<(), String> {
+        let (value, address) = match (access.store, operands) {
+            (true, [Operand::Reg(value), rest @ ..]) => (Some(*value), rest),
+            (false, rest) => (None, rest),
+            _ => return Err(format!("{name}: a store of something that is no register")),
+        };
+        let size = i64::from(access.bytes);
+        let addr = match (access.form, address) {
+            (AddressForm::Register, [Operand::Reg(base), Operand::Reg(index), Operand::Imm(_), Operand::Imm(shifted)]) => {
+                Addr::Register { base: *base, index: *index, extend: Extend::Uxtx, shifted: *shifted != 0 }
+            }
+            (AddressForm::Register, _) => return Err(format!("{name}: a register offset that is not base and index")),
+            (form, [base, Operand::Imm(imm)]) => {
+                let imm = *imm as i64 * if form == AddressForm::Scaled { size } else { 1 };
+                match base {
+                    Operand::Reg(base) => Addr::Offset { base: *base, imm },
+                    Operand::Slot(slot) => Addr::Slot { slot: *slot, offset: imm },
+                    Operand::Imm(_) => return Err(format!("{name}: a base that is a constant")),
+                }
+            }
+            _ => return Err(format!("{name}: operands are not those of its form")),
+        };
+        let rd = if access.store { None } else { Some(self.mf.gpr()) };
+        let mem = Memory::Int { width: access.width, bytes: access.bytes, sign: access.sign, reg: value.or(rd).expect("a value") };
+        let mmo = MemOperand::default();
+        self.ops.push(Op::I(if access.store { Inst::Store { mem, addr, mmo } } else { Inst::Load { mem, addr, mmo } }));
+        if let Some(rd) = rd {
+            self.values.insert((id, 0), rd);
+        }
+        Ok(())
     }
 
     fn node(
@@ -197,6 +305,9 @@ impl Emitter<'_> {
                     })
                     .map(|&op| self.operand(op))
                     .collect::<Result<Vec<_>, _>>()?;
+                if let Some(access) = memory_form(name) {
+                    return self.memory(id, name, &access, &operands);
+                }
                 let rd = self.mf.gpr();
                 self.ops.push(Op::I(build(name, rd, &operands)?));
                 self.values.insert((id, 0), rd);
@@ -215,6 +326,9 @@ pub fn emit(
     let [block] = blocks else { return Err("more than one block: branches are not translated".into()) };
     let mut emitter =
         Emitter { dag: &block.dag, mf: MFunc::new(name), values: HashMap::new(), vregs: HashMap::new(), ops: Vec::new() };
+    for &(size, align) in &block.frame {
+        emitter.mf.slot(size, align);
+    }
     for &(reg, vreg) in &block.live_ins {
         let dst = emitter.vreg(vreg);
         emitter.ops.push(Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(gpr_of(reg)?) });
