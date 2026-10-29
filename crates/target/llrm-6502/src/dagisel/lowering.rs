@@ -11,8 +11,8 @@
 //! operands; a signed compare flips both sign bits and compares unsigned, except against zero,
 //! where N is the sign.
 //!
-//! DEVIATE: `i16` compares and selects are not lowered (they need a chain through Z and C). Exit:
-//! the i16 compare slice.
+//! A word compare is `CMP` too (C and N come out of the high byte's subtract-with-borrow); equality
+//! is `CMPZ`, whose Z covers both bytes.
 
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
@@ -27,6 +27,7 @@ pub mod mosisd {
     use super::{ISD, ids};
 
     pub const CMP: ISD = ISD::Target(ids::CMP);
+    pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
@@ -70,7 +71,9 @@ pub fn target_lowering() -> TargetLowering {
     set(&[CtTz, CtLz, CtPop, BSwap], Action::Expand);
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     for op in [SetCC, Select] {
-        tl.set_operation_action(op, MVT::I8, Action::Custom);
+        for vt in [MVT::I8, MVT::I16] {
+            tl.set_operation_action(op, vt, Action::Custom);
+        }
     }
     tl
 }
@@ -110,16 +113,18 @@ fn cond_of(
     }
 }
 
-/// `x ^ 0x80`: the sign bit flipped, so a signed compare is an unsigned one. A constant folds.
+/// `x ^ sign bit`: so a signed compare is an unsigned one. A constant folds.
 fn flip_sign(
     dag: &mut SelectionDAG,
     value: SDValue,
 ) -> SDValue {
+    let vt = dag.value_type(value);
+    let sign = 1u128 << (vt.size_in_bits() - 1);
     match dag.constant(value) {
-        Some(bits) => dag.get_constant(bits ^ 0x80, EVT::I8),
+        Some(bits) => dag.get_constant(bits ^ sign, vt),
         None => {
-            let sign = dag.get_constant(0x80, EVT::I8);
-            dag.get_node(ISD::Xor, EVT::I8, &[value, sign])
+            let sign = dag.get_constant(sign, vt);
+            dag.get_node(ISD::Xor, vt, &[value, sign])
         }
     }
 }
@@ -162,12 +167,14 @@ fn lower_setcc(
     node: SDValue,
 ) -> Option<SDValue> {
     let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
-    if dag.value_type(op0) != EVT::I8 {
+    if !matches!(dag.value_type(op0), EVT::I8 | EVT::I16) {
         return None;
     }
     let cc = cond_of(dag, dag.operand(node, 2));
     let (code, a, b) = translate_cc(dag, cc, op0, op1);
-    let flags = dag.get_node(mosisd::CMP, EVT::I8, &[a, b]);
+    // Equality on a word needs Z over both bytes.
+    let compare = if dag.value_type(a) == EVT::I16 && matches!(code, cond::EQ | cond::NE) { mosisd::CMPZ } else { mosisd::CMP };
+    let flags = dag.get_node(compare, EVT::I8, &[a, b]);
     let code = cc_operand(dag, code);
     Some(dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags]))
 }

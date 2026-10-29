@@ -106,3 +106,54 @@ fn select_on_unsigned_greater_equal_is_cmov_on_carry_set() {
     assert_eq!([dag.operand(root, 0), dag.operand(root, 1)], [y, x]);
     assert_eq!(dag.constant(dag.operand(root, 2)), Some(cond::CS));
 }
+
+fn words(dag: &mut SelectionDAG) -> [SDValue; 2] {
+    [1, 2].map(|n| dag.get_register(EVT::I16, n))
+}
+
+/// A word `<u` compares like a byte: C clear after `cmp a, b`, on the word operands.
+#[test]
+fn a_word_unsigned_less_is_carry_clear_on_a_word_cmp() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let [a, b] = words(&mut dag);
+    let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetULt);
+    dag.set_root(test);
+
+    let root = legalize(&mut dag);
+
+    assert_eq!(dag.constant(dag.operand(root, 0)), Some(cond::CC));
+    let cmp = dag.operand(root, 1);
+    assert_eq!((dag.opcode(cmp), dag.operand(cmp, 0), dag.operand(cmp, 1)), (mosisd::CMP, a, b));
+}
+
+/// `cmp`'s Z covers only the high byte of a word, so a word `==` is `CMPZ`, which compares both.
+#[test]
+fn a_word_equality_is_cmpz() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let [a, b] = words(&mut dag);
+    let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetEq);
+    dag.set_root(test);
+
+    let root = legalize(&mut dag);
+
+    assert_eq!(dag.constant(dag.operand(root, 0)), Some(cond::EQ));
+    assert_eq!(dag.opcode(dag.operand(root, 1)), mosisd::CMPZ);
+}
+
+/// A signed word compare against a constant flips bit 15: `a <s 5` is `(a ^ 0x8000) <u 0x8005`.
+#[test]
+fn a_signed_word_compare_flips_bit_15() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let [a, _] = words(&mut dag);
+    let five = dag.get_constant(5, EVT::I16);
+    let test = dag.get_setcc(EVT::I1, a, five, CondCode::SetLt);
+    dag.set_root(test);
+
+    let root = legalize(&mut dag);
+
+    let cmp = dag.operand(root, 1);
+    let flipped = dag.operand(cmp, 0);
+    assert_eq!(dag.opcode(flipped), ISD::Xor);
+    assert_eq!(dag.constant(dag.operand(flipped, 1)), Some(0x8000));
+    assert_eq!(dag.constant(dag.operand(cmp, 1)), Some(0x8005));
+}

@@ -177,3 +177,42 @@ fn cmov_picks_the_true_value_only_when_the_condition_holds() {
     assert_eq!(run("cmov-eq", &[main_returning(cmov(4, 4), "rc4")]), 20);
     assert_eq!(run("cmov-ne", &[main_returning(cmov(4, 5), "rc4")]), 10);
 }
+
+fn word_compare(
+    compare: u16,
+    a: i64,
+    b: i64,
+    code: i64,
+) -> Body {
+    vec![
+        i(op::LDI16, vec![reg("rs1"), imm(a)]),
+        i(op::LDI16, vec![reg("rs2"), imm(b)]),
+        i(compare, vec![reg("p"), reg("rs1"), reg("rs2")]),
+        i(op::SETCC8, vec![reg("rc8"), imm(code), reg("p")]),
+    ]
+}
+
+/// 0x1234 <u 0x1300 (the high bytes differ: 0x12 < 0x13) is 1; 0x1300 <u 0x1234 is 0; 0x12FF <u
+/// 0x1300 (the low bytes alone say otherwise, the borrow decides) is 1.
+#[test]
+fn a_word_compare_orders_by_the_high_byte_then_the_low() {
+    let ult = |a, b| main_returning(word_compare(op::CMP16, a, b, 2), "rc8");
+    assert_eq!(run("cmp16-hi-lt", &[ult(0x1234, 0x1300)]), 1);
+    assert_eq!(run("cmp16-hi-ge", &[ult(0x1300, 0x1234)]), 0);
+    assert_eq!(run("cmp16-borrow", &[ult(0x12FF, 0x1300)]), 1);
+}
+
+/// Equal words give Z; words that differ in only the high byte, or in only the low byte, do not.
+#[test]
+fn a_word_equality_needs_both_bytes() {
+    let eq = |a, b| main_returning(word_compare(op::CMPZ16, a, b, 0), "rc8");
+    assert_eq!(run("cmpz16-same", &[eq(0x1234, 0x1234)]), 1);
+    assert_eq!(run("cmpz16-hi", &[eq(0x1234, 0x1334)]), 0);
+    assert_eq!(run("cmpz16-lo", &[eq(0x1234, 0x1235)]), 0);
+}
+
+/// `-1 <s 1` on words as lowered: bit 15 flipped, 0xFFFF -> 0x7FFF and 1 -> 0x8001; 0x7FFF <u 0x8001.
+#[test]
+fn a_signed_word_compare_through_flipped_bit_15() {
+    assert_eq!(run("cmp16-signed", &[main_returning(word_compare(op::CMP16, 0x7FFF, 0x8001, 2), "rc8")]), 1);
+}

@@ -50,6 +50,8 @@ def SDTMOSBrcond : SDTypeProfile<0, 3, [SDTCisVT<0, OtherVT>, SDTCisVT<1, i8>, S
 def SDTMOSSetcc : SDTypeProfile<1, 2, [SDTCisVT<0, i8>, SDTCisVT<1, i8>, SDTCisVT<2, i8>]>;
 def SDTMOSCmov : SDTypeProfile<1, 4, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>, SDTCisVT<3, i8>, SDTCisVT<4, i8>]>;
 def MOScmp : SDNode<"MOSISD::CMP", SDTMOSCmp>;
+// Equality: the Z flag of a - b over all the bytes (cmp's own Z covers the high byte only).
+def MOScmpz : SDNode<"MOSISD::CMPZ", SDTMOSCmp>;
 def MOSbrcond : SDNode<"MOSISD::BRCOND", SDTMOSBrcond, [SDNPHasChain]>;
 def MOSsetcc : SDNode<"MOSISD::SETCC", SDTMOSSetcc>;
 def MOScmov : SDNode<"MOSISD::CMOV", SDTMOSCmov>;
@@ -109,6 +111,10 @@ def COPY8 : MOSInst<(outs Reg8:$d), (ins Reg8:$s), "copy $d, $s", []>;
 def COPY16 : MOSInst<(outs Imag16:$d), (ins Imag16:$s), "copy $d, $s", []>;
 // LDA a; CMP b: the flags of a - b.
 def CMP8 : MOSInst<(outs Flags:$f), (ins Imag8:$a, Imag8:$b), "cmp $f, $a, $b", [(set i8:$f, (MOScmp i8:$a, i8:$b))]>;
+// LDA alo; CMP blo; LDA ahi; SBC bhi: C is a >= b unsigned and N the sign of a - b.
+def CMP16 : MOSInst<(outs Flags:$f), (ins Imag16:$a, Imag16:$b), "cmp16 $f, $a, $b", [(set i8:$f, (MOScmp i16:$a, i16:$b))]>;
+// Z only when both bytes are equal.
+def CMPZ16 : MOSInst<(outs Flags:$f), (ins Imag16:$a, Imag16:$b), "cmpz16 $f, $a, $b", [(set i8:$f, (MOScmpz i16:$a, i16:$b))]>;
 let isBranch = 1, isTerminator = 1 in {
   def BEQ : MOSInst<(outs), (ins brtarget:$t, Flags:$f), "beq $t", [(MOSbrcond bb:$t, (i8 0), i8:$f)]>;
   def BNE : MOSInst<(outs), (ins brtarget:$t, Flags:$f), "bne $t", [(MOSbrcond bb:$t, (i8 1), i8:$f)]>;
@@ -117,6 +123,8 @@ let isBranch = 1, isTerminator = 1 in {
   def BMI : MOSInst<(outs), (ins brtarget:$t, Flags:$f), "bmi $t", [(MOSbrcond bb:$t, (i8 4), i8:$f)]>;
   def BPL : MOSInst<(outs), (ins brtarget:$t, Flags:$f), "bpl $t", [(MOSbrcond bb:$t, (i8 5), i8:$f)]>;
 }
+def CMOV16 : MOSInst<(outs Imag16:$d), (ins Imag16:$f0, Imag16:$t, i8imm:$cc, Flags:$f), "cmov16 $d, $f0, $t, $cc, $f",
+                     [(set i16:$d, (MOScmov i16:$f0, i16:$t, imm:$cc, i8:$f))]>;
 // A condition as a byte 0 or 1, and a select: branches in the emitted code, flags saved around the loads.
 def SETCC8 : MOSInst<(outs Imag8:$d), (ins i8imm:$cc, Flags:$f), "setcc $d, $cc, $f", [(set i8:$d, (MOSsetcc imm:$cc, i8:$f))]>;
 def CMOV8 : MOSInst<(outs Imag8:$d), (ins Imag8:$f0, Imag8:$t, i8imm:$cc, Flags:$f), "cmov $d, $f0, $t, $cc, $f",

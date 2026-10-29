@@ -9,6 +9,7 @@ pub mod isd {
     pub const CALL: u16 = 24577;
     pub const CMOV: u16 = 24581;
     pub const CMP: u16 = 24578;
+    pub const CMPZ: u16 = 24582;
     pub const RET_GLUE: u16 = 24576;
     pub const SETCC: u16 = 24580;
 }
@@ -28,29 +29,32 @@ pub mod opcode {
     pub const BMI: u16 = 346;
     pub const BNE: u16 = 347;
     pub const BPL: u16 = 348;
-    pub const CMOV8: u16 = 349;
-    pub const CMP8: u16 = 350;
-    pub const COPY16: u16 = 351;
-    pub const COPY8: u16 = 352;
-    pub const JMP: u16 = 353;
-    pub const JSR: u16 = 354;
-    pub const LDI16: u16 = 355;
-    pub const LDI8: u16 = 356;
-    pub const LDP8: u16 = 357;
-    pub const OR16: u16 = 358;
-    pub const OR8: u16 = 359;
-    pub const RET: u16 = 360;
-    pub const SETCC8: u16 = 361;
-    pub const STP8: u16 = 362;
-    pub const STZP: u16 = 363;
-    pub const SUB16: u16 = 364;
-    pub const SUB8: u16 = 365;
-    pub const SUBO16: u16 = 366;
-    pub const SUBO8: u16 = 367;
-    pub const SUBOC16: u16 = 368;
-    pub const SUBOC8: u16 = 369;
-    pub const XOR16: u16 = 370;
-    pub const XOR8: u16 = 371;
+    pub const CMOV16: u16 = 349;
+    pub const CMOV8: u16 = 350;
+    pub const CMP16: u16 = 351;
+    pub const CMP8: u16 = 352;
+    pub const CMPZ16: u16 = 353;
+    pub const COPY16: u16 = 354;
+    pub const COPY8: u16 = 355;
+    pub const JMP: u16 = 356;
+    pub const JSR: u16 = 357;
+    pub const LDI16: u16 = 358;
+    pub const LDI8: u16 = 359;
+    pub const LDP8: u16 = 360;
+    pub const OR16: u16 = 361;
+    pub const OR8: u16 = 362;
+    pub const RET: u16 = 363;
+    pub const SETCC8: u16 = 364;
+    pub const STP8: u16 = 365;
+    pub const STZP: u16 = 366;
+    pub const SUB16: u16 = 367;
+    pub const SUB8: u16 = 368;
+    pub const SUBO16: u16 = 369;
+    pub const SUBO8: u16 = 370;
+    pub const SUBOC16: u16 = 371;
+    pub const SUBOC8: u16 = 372;
+    pub const XOR16: u16 = 373;
+    pub const XOR8: u16 = 374;
 }
 
 pub mod reg {

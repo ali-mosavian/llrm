@@ -216,6 +216,28 @@ pub fn expand(
         op::CMP8 => {
             writeln!(out, "  lda {}\n  cmp {}", reg(&o[1])?, reg(&o[2])?).unwrap();
         }
+        // lda alo; cmp blo; lda ahi; sbc bhi: C is a >= b over the word, N the sign of the difference.
+        op::CMP16 => {
+            let ((al, ah), (bl, bh)) = (word(&o[1])?, word(&o[2])?);
+            writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}").unwrap();
+        }
+        // Z only if both bytes are equal: the first mismatch leaves Z clear.
+        op::CMPZ16 => {
+            *labels += 1;
+            let ((al, ah), (bl, bh)) = (word(&o[1])?, word(&o[2])?);
+            writeln!(out, "  lda {al}\n  cmp {bl}\n  bne _z{labels}\n  lda {ah}\n  cmp {bh}\n_z{labels}:").unwrap();
+        }
+        op::CMOV16 => {
+            *labels += 1;
+            let skip = format!("_cc{labels}");
+            let ((dl, dh), (fl, fh), (tl, th)) = (word(&o[0])?, word(&o[1])?, word(&o[2])?);
+            let branch = branch_on(imm(&o[3])? ^ 1)?;
+            writeln!(
+                out,
+                "  php\n  lda {fl}\n  sta {dl}\n  lda {fh}\n  sta {dh}\n  plp\n  {branch} {skip}\n  lda {tl}\n  sta {dl}\n  lda {th}\n  sta {dh}\n{skip}:"
+            )
+            .unwrap();
+        }
         // The flags are in P; PHP/PLP carry them over the loads, which set N and Z.
         // SETCC: d := 1, branch on cc over d := 0.
         // CMOV d, false, true: d := false, branch on !cc over d := true.
