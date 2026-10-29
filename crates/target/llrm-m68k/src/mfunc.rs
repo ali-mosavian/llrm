@@ -20,25 +20,19 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`, pin d1106deb71cc.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
-use llrm_dagisel::instr::{InstrDesc, OperandDesc};
-use llrm_lir::registers::RegId;
+use llrm_dagisel::instr::OperandDesc;
+pub use llrm_spike_mf as mf;
+pub use llrm_spike_mf::{Block, Inst, Kind, Operand, Phi, Reg};
 
 use crate::dagisel::function::Selected;
 use crate::dagisel::generated::ids::reg as pin;
 use crate::dagisel::generated::instrinfo::{self, flag};
 use crate::dagisel::generated::m68k_m68000::MACHINE_OPCODES;
-
-/// A register: virtual, numbered in [`MFunction::classes`], or physical.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum Reg {
-    Virt(u32),
-    Phys(RegId),
-}
 
 /// The register class a virtual register is allocated from
 /// (`M68kRegisterInfo`).
@@ -87,71 +81,8 @@ impl Class {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Operand {
-    Def(Reg),
-    Use(Reg),
-    Imm(i64),
-    Symbol(String, i64),
-    Frame(i32),
-    Block(u32),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Kind {
-    /// The pin's instruction by name.
-    Op(&'static str),
-    /// `COPY dst, src`.
-    Copy,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Inst {
-    pub kind: Kind,
-    pub operands: Vec<Operand>,
-    pub call: bool,
-    /// `(def operand, use operand)` pairs that must be one register
-    /// (`TIED_TO`).
-    pub ties: Vec<(usize, usize)>,
-}
-
-/// `PHI result, (incoming, predecessor)..`: a predecessor is a block index.
-#[derive(Clone, Debug)]
-pub struct Phi {
-    pub result: Reg,
-    pub incoming: Vec<(usize, Reg)>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Block {
-    /// The IR block's number: what a [`Operand::Block`] names.
-    pub id: u32,
-    pub insts: Vec<Inst>,
-    pub phis: Vec<Phi>,
-}
-
-impl Inst {
-    /// The pin's description of the instruction, if it is one.
-    pub fn desc(&self) -> Option<&'static InstrDesc> {
-        let Kind::Op(name) = self.kind else { return None };
-        MACHINE_OPCODES.iter().find(|(_, one)| *one == name).and_then(|(code, _)| instrinfo::desc(*code as u16))
-    }
-
-    pub fn is_terminator(&self) -> bool {
-        self.desc().is_some_and(|desc| desc.has(flag::TERMINATOR))
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct MFunction {
-    pub name: String,
-    pub blocks: Vec<Block>,
-    /// The class of each virtual register.
-    pub classes: Vec<Class>,
-    /// Each incoming-argument frame index and its offset from the stack
-    /// pointer at entry.
-    pub fixed: BTreeMap<i32, i64>,
-}
+/// The machine function over m68k's classes.
+pub type MFunction = mf::MFunction<Class>;
 
 fn opcode_name(code: u32) -> Option<&'static str> {
     MACHINE_OPCODES.iter().find(|(value, _)| u32::from(*value) == code).map(|(_, name)| *name)
@@ -267,23 +198,13 @@ impl Emitter<'_> {
                 let Some(Operand::Use(src)) = self.operand(n.ops[2])? else {
                     return Err("CopyToReg of a value that is no register".to_owned());
                 };
-                into.push(Inst {
-                    kind: Kind::Copy,
-                    operands: vec![Operand::Def(dst), Operand::Use(src)],
-                    call: false,
-                    ties: vec![],
-                });
+                into.push(Inst::copy(dst, src));
             }
             ISD::CopyFromReg => {
                 let src = self.register(n.ops[1]).ok_or("CopyFromReg of no register")?;
                 let dst = self.new_reg(Class::of_type(n.values[0]));
                 self.values.insert((node, 0), dst);
-                into.push(Inst {
-                    kind: Kind::Copy,
-                    operands: vec![Operand::Def(dst), Operand::Use(src)],
-                    call: false,
-                    ties: vec![],
-                });
+                into.push(Inst::copy(dst, src));
             }
             ISD::Machine(code) => {
                 let name = opcode_name(code).ok_or("a machine node with no name")?;
@@ -312,7 +233,20 @@ impl Emitter<'_> {
                     .filter(|(_, one)| one.tied_to >= 0)
                     .map(|(at, one)| (one.tied_to as usize, at))
                     .collect();
-                into.push(Inst { kind: Kind::Op(name), operands, call: desc.has(flag::CALL), ties });
+                let ccr = pin::CCR;
+                into.push(Inst {
+                    call: desc.has(flag::CALL),
+                    ties,
+                    terminator: desc.has(flag::TERMINATOR),
+                    barrier: desc.has(flag::BARRIER),
+                    sets_flags: desc.implicit_defs.contains(&ccr),
+                    reads_flags: desc.implicit_uses.contains(&ccr),
+                    may_load: desc.has(flag::MAY_LOAD),
+                    may_store: desc.has(flag::MAY_STORE),
+                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
+                    cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
+                    ..Inst::new(Kind::Op(name), operands)
+                });
             }
             _ => {}
         }
@@ -326,12 +260,8 @@ pub fn emit(
     blocks: &[Selected],
 ) -> Result<MFunction, String> {
     let first = blocks.first().ok_or("a function with no block")?;
-    let mut emitter = Emitter {
-        dag: &first.dag,
-        function: MFunction { name: name.to_owned(), ..MFunction::default() },
-        values: HashMap::new(),
-        builder: HashMap::new(),
-    };
+    let mut emitter =
+        Emitter { dag: &first.dag, function: MFunction::new(name), values: HashMap::new(), builder: HashMap::new() };
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
@@ -363,4 +293,129 @@ pub fn emit(
         }
     }
     Ok(emitter.function)
+}
+
+/// The conditional branch for an `M68k::CondCode`.
+fn branch_for(cond: i64) -> Option<&'static str> {
+    Some(match cond {
+        2 => "Bhi8",
+        3 => "Bls8",
+        4 => "Bcc8",
+        5 => "Bcs8",
+        6 => "Bne8",
+        7 => "Beq8",
+        8 => "Bvc8",
+        9 => "Bvs8",
+        10 => "Bpl8",
+        11 => "Bmi8",
+        12 => "Bge8",
+        13 => "Blt8",
+        14 => "Bgt8",
+        15 => "Ble8",
+        _ => return None,
+    })
+}
+
+fn is_cmov(inst: &Inst) -> bool {
+    matches!(inst.kind, Kind::Op(name) if name.starts_with("CMOV"))
+}
+
+/// A `CMOV`'s result, false value, true value and condition.
+fn cmov_parts(inst: &Inst) -> Result<(Reg, Reg, Reg, i64), String> {
+    let [Operand::Def(result), Operand::Use(on_false), Operand::Use(on_true), Operand::Imm(cond)] = inst.operands[..]
+    else {
+        return Err("a CMOV with unexpected operands".to_owned());
+    };
+    // the node's operands are the false value, then the true one (X86's order)
+    Ok((result, on_false, on_true, cond))
+}
+
+/// `M68kTargetLowering::EmitLoweredSelect`: a run of `CMOV` pseudos on one
+/// condition (or its opposite) becomes one diamond. The block branches to a
+/// new block on the condition; the new block that falls through is empty; the
+/// join holds a phi per `CMOV` and what followed the run. A phi may not read an
+/// earlier phi of the join, so a later `CMOV`'s operand that is an earlier
+/// result is renamed to the value that result has on each path.
+///
+/// DEVIATE: the cascaded case (`CMOV (CMOV F, T, c1), T, c2`) is not
+/// translated. Reason: nothing selected it yet. Exit: when a kernel needs it.
+pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
+    let mut next_id = function.blocks.iter().map(|block| block.id + 1).max().unwrap_or(0);
+    let mut at = 0;
+    while at < function.blocks.len() {
+        let Some(p) = function.blocks[at].insts.iter().position(is_cmov) else {
+            at += 1;
+            continue;
+        };
+        let mut tail = function.blocks[at].insts.split_off(p);
+        let (_, _, _, first) = cmov_parts(&tail[0])?;
+        let same =
+            |inst: &Inst| is_cmov(inst) && cmov_parts(inst).is_ok_and(|(.., cond)| cond == first || cond == first ^ 1);
+        // The run may hold copies between the `CMOV`s (the exports of phi
+        // inputs); they move to the join, which is where their sources are.
+        let mut cmovs: Vec<Inst> = Vec::new();
+        let mut copies: Vec<Inst> = Vec::new();
+        let mut taken = 0;
+        for inst in &tail {
+            let uses_copied = |inst: &Inst| {
+                inst.operands
+                    .iter()
+                    .any(
+                        |operand| matches!(
+                            operand,
+                            Operand::Use(reg) if copies.iter().any(|copy| copy.operands[0] == Operand::Def(*reg))
+                        ),
+                    )
+            };
+            if same(inst) && !uses_copied(inst) {
+                cmovs.push(inst.clone());
+            } else if inst.kind == Kind::Copy {
+                copies.push(inst.clone());
+            } else {
+                break;
+            }
+            taken += 1;
+        }
+        tail.drain(..taken);
+        tail.splice(0..0, copies);
+        let branch = branch_for(first).ok_or_else(|| format!("a CMOV on condition {first}"))?;
+        let mut head_value: HashMap<Reg, Reg> = HashMap::new();
+        let mut other_value: HashMap<Reg, Reg> = HashMap::new();
+        let mut phis = Vec::new();
+        for cmov in &cmovs {
+            let (result, on_false, on_true, cond) = cmov_parts(cmov)?;
+            let (when_true, when_false) = if cond == first { (on_true, on_false) } else { (on_false, on_true) };
+            let on_head = head_value.get(&when_true).copied().unwrap_or(when_true);
+            let on_other = other_value.get(&when_false).copied().unwrap_or(when_false);
+            head_value.insert(result, on_head);
+            other_value.insert(result, on_other);
+            phis.push(Phi { result, incoming: vec![(at, on_head), (at + 1, on_other)] });
+        }
+        let (otherwise, join) = (next_id, next_id + 1);
+        next_id += 2;
+        let mut jump = Inst::new(Kind::Op(branch), vec![Operand::Block(join)]);
+        jump.terminator = true;
+        jump.reads_flags = true;
+        function.blocks[at].insts.push(jump);
+        function.blocks.insert(at + 1, Block { id: otherwise, insts: Vec::new(), phis: Vec::new() });
+        function.blocks.insert(at + 2, Block { id: join, insts: tail, phis });
+        // the join is where control leaves the original block: other phis name
+        // it, and every block after the original moved down by two
+        for (index, block) in function.blocks.iter_mut().enumerate() {
+            if index == at + 2 {
+                continue;
+            }
+            for phi in &mut block.phis {
+                for (pred, _) in &mut phi.incoming {
+                    if *pred == at {
+                        *pred = at + 2;
+                    } else if *pred > at {
+                        *pred += 2;
+                    }
+                }
+            }
+        }
+        at += 1;
+    }
+    Ok(())
 }

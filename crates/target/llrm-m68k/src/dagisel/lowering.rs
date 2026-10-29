@@ -76,7 +76,7 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     use ISD::*;
     let int = [MVT::I8, MVT::I16, MVT::I32];
     let m68020 = cpu == Cpu::M68020;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&int, false));
+    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type());
     tl.init_actions();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
