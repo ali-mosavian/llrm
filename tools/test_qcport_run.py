@@ -191,3 +191,28 @@ def test_the_pinned_drawing_is_no_difference_and_any_other_is():
     built = {"frames": "62", "polys": "37637", "md5": "ba64e86d5de8b0adb94f2fe3e76ffeea"}
     assert qcport_run.pinned(65, built) == []
     assert qcport_run.pinned(64, {**built, "polys": "23434"}) == ["modules: pinned 65, llrm 64", "polys: pinned 37637, llrm 23434"]
+
+
+def test_a_run_stopped_for_stalling_leaves_no_emulator_behind(tmp_path):
+    """run.sh starts the emulator under `timeout`, which makes its own process group: killing the script's group left two DOSBoxes
+    burning a core each for up to the 900 s cap (found 2026-10-29 after a stalled run), starving the steps that ran beside them."""
+    import os
+    import time
+
+    (tmp_path / "tools").mkdir()
+    pidfile = tmp_path / "emulator.pid"
+    script = tmp_path / "tools" / "run.sh"
+    script.write_text(f"#!/bin/sh\ntimeout 60 sh -c 'echo $$ > {pidfile}; exec sleep 60' &\nwait\n")
+    script.chmod(0o755)
+    work = tmp_path / "side"
+    work.mkdir()
+    why = qcport_run.run(work, tmp_path / "qcport", stall=1, cap=30, tick=0.2)
+    assert why == "no progress for 1s", why
+    emulator = int(pidfile.read_text())
+    time.sleep(0.3)
+    try:
+        os.kill(emulator, 0)
+    except ProcessLookupError:
+        return
+    os.kill(emulator, 9)
+    raise AssertionError(f"the emulator ({emulator}) outlived the run that was stopped")
