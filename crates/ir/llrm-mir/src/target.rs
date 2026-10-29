@@ -24,6 +24,13 @@ pub struct Tuning {
     /// Clocks a byte of code is worth, in thousandths, where a decision is
     /// made for size; 0: bytes alone decide.
     pub size_milliclocks_per_byte: i64,
+    /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
+    /// full-unroll pass; none: the pass's own, by optimization level.
+    pub unroll_threshold: Option<u32>,
+    pub unroll_max_percent_threshold_boost: Option<u32>,
+    /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
+    /// optimized for size; none: 225, or 250 at -O3.
+    pub inline_threshold: Option<i64>,
 }
 
 impl Tuning {
@@ -36,6 +43,9 @@ impl Tuning {
         max_stores_per_memmove: 8,
         max_stores_per_memmove_opt_size: 4,
         size_milliclocks_per_byte: 0,
+        unroll_threshold: None,
+        unroll_max_percent_threshold_boost: None,
+        inline_threshold: None,
     };
 }
 
@@ -643,5 +653,7 @@ mod tests {
         assert_eq!((pin.max_stores_per_memcpy, pin.max_stores_per_memcpy_opt_size), (8, 4));
         assert_eq!((pin.max_stores_per_memmove, pin.max_stores_per_memmove_opt_size), (8, 4));
         assert_eq!(pin.size_milliclocks_per_byte, 0);
+        assert_eq!((pin.unroll_threshold, pin.unroll_max_percent_threshold_boost), (None, None));
+        assert_eq!(pin.inline_threshold, None);
     }
 }
