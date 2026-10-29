@@ -103,6 +103,15 @@ def test_llrm_cc_reads_the_rows_own_os_header_not_llrm_cs(monkeypatch, tmp_path)
     assert "/llrm-c-header-dir" not in dosbatch.c_compile(source, tmp_path / "p.obj", "x86-m16", "-O2", Path("/llrm-c-header-dir"), [])[0]
 
 
+def test_a_nib_programs_declarations_are_searched_and_the_header_dir_still_is_not(tmp_path):
+    """Nib's foreign C includes NAME.h from the directory of its exports (interop: 'main.h' file not found, #6025), and that directory
+    alone: the one `include` names holds llrm-c's llrm_os.h, which shadowed the row's and sent the QB runtime's bq16 programs to handle 426."""
+    source = tmp_path / "geometry.c"
+    command = dosbatch.c_compile(source, tmp_path / "g.obj", "x86-m16", "-O2", Path("/llrm-c-header-dir"), [], declarations=Path("/exports"))[0]
+    assert command[command.index("-I") + 1] == "/exports", command
+    assert "/llrm-c-header-dir" not in command, command
+
+
 def test_a_watcom_abi_program_links_the_start_up_that_calls_main_(monkeypatch):
     """-mabi=watcom spells `main` as `main_`: watcom_far_sum, fsgs_call, register_upper_half and wc16_mixed failed to link
     ('_main is an undefined reference') when only some runs asked for LL_MAIN=main_ (#5540)."""
