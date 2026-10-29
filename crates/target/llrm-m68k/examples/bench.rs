@@ -151,13 +151,32 @@ fn main() {
         let module = llrm_mir::parse::module(&source_in(&set, "h")).unwrap();
         items(&module, "h", Cpu::M68000).unwrap()
     });
+    // the size of the routine alone: the runtime it calls is assembled beside
+    // it to resolve the symbols, and taken off
+    let measure = |code: &[Item], runtime: &[Item]| -> Result<usize, String> {
+        let mut all = code.to_vec();
+        all.extend(runtime.iter().cloned());
+        Ok(assemble(&all, 0)?.code.len() - assemble(runtime, 0).map_or(0, |one| one.code.len()))
+    };
     println!(
         "| kernel | raw B | ours B | ours -Os B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | raw insns | ours insns | ours -Os insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |"
     );
     println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
     for (name, args, expected, leaf) in rows {
         let ir = kernel_dir.join(format!("{name}.ll"));
-        let module = llrm_mir::parse::module(&source_in(&set, name)).unwrap();
+        // a routine that is not a leaf calls the runtime of `rt.ll`, compiled
+        // with it as one module so the local labels of the two do not meet
+        let mut text = source_in(&set, name);
+        let mut runtime_names: Vec<&str> = Vec::new();
+        if !leaf {
+            text.push_str(source_in(&set, "rt").split_once('\n').map_or("", |(_, rest)| rest));
+            runtime_names = vec!["__mulsi3", "__udivsi3", "__umodsi3", "__divsi3", "__modsi3"];
+        }
+        let module = llrm_mir::parse::module(&text).unwrap();
+        let runtime: Vec<Item> = runtime_names
+            .iter()
+            .flat_map(|runtime_name| items(&module, runtime_name, Cpu::M68000).unwrap())
+            .collect();
         let mut cells = Vec::new();
         let mut verdicts = Vec::new();
         let mut counts = Vec::new();
@@ -165,16 +184,16 @@ fn main() {
             // the raw IR, as the overlay compiles it without the LSR pass `llc`
             // runs
             items_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).and_then(|code| {
-                let size = assemble(&code, 0)?.code.len();
+                let size = measure(&code, &runtime)?;
                 Ok((code, size))
             }),
             items(&module, "k", Cpu::M68000).and_then(|code| {
-                let size = assemble(&code, 0)?.code.len();
+                let size = measure(&code, &runtime)?;
                 Ok((code, size))
             }),
             // size wanted over clocks, as `-Os` or an `optsize` function
             items_with(&module, "k", Cpu::M68000, Options { size: true, ..Options::default() }).and_then(|code| {
-                let size = assemble(&code, 0)?.code.len();
+                let size = measure(&code, &runtime)?;
                 Ok((code, size))
             }),
             Ok({
@@ -198,13 +217,26 @@ fn main() {
                 None => Err("no gcc".to_owned()),
             });
         }
-        for variant in variants {
+        for (index, variant) in variants.into_iter().enumerate() {
             match variant {
                 Ok((code, size)) => {
                     cells.push(size.to_string());
                     if !leaf {
                         counts.push("-".to_owned());
-                        verdicts.push("ok".to_owned());
+                        // our own code runs against the runtime of `rt.ll`; the
+                        // references call libgcc, which is not linked here
+                        if index < 3 {
+                            let mut code = code;
+                            code.extend(helper.clone().unwrap_or_default());
+                            code.extend(runtime.clone());
+                            let exe = dir.join(format!("{name}.elf"));
+                            write_executable(&exe, &executable(&program_with_data(&args, code, &block)).unwrap())
+                                .unwrap();
+                            let (status, _) = run(&exe);
+                            verdicts.push(if status == expected { "ok".to_owned() } else { format!("got {status}") });
+                        } else {
+                            verdicts.push("ok".to_owned());
+                        }
                         continue;
                     }
                     let mut code = code;

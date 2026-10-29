@@ -316,3 +316,152 @@ fn a_byte_copy_through_two_post_incremented_pointers_copies_every_byte() {
         }
     }
 }
+
+/// Exit status of `f(args)` with the runtime of `bench/library/rt.ll` behind it.
+fn status_with_runtime(
+    ir: &str,
+    args: &[i64],
+    options: Options,
+) -> Option<i32> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static RUNS: AtomicUsize = AtomicUsize::new(0);
+    let qemu = qemu()?;
+    let mut all = start("f", args);
+    // one module, so the local labels of the routines do not meet
+    let rt = include_str!("../bench/library/rt.ll");
+    let runtime = module(&format!("{ir}\n{}", rt.split_once('\n').map_or("", |(_, rest)| rest)));
+    all.extend(items_with(&runtime, "f", Cpu::M68000, options).expect("compiles"));
+    for name in ["__mulsi3", "__udivsi3", "__umodsi3", "__divsi3", "__modsi3"] {
+        all.extend(items_with(&runtime, name, Cpu::M68000, options).expect("the runtime compiles"));
+    }
+    let path = std::env::temp_dir().join(format!(
+        "llrm-m68k-results-rt-{}-{}",
+        std::process::id(),
+        RUNS.fetch_add(1, Ordering::Relaxed)
+    ));
+    write_executable(&path, &executable(&all).unwrap()).unwrap();
+    let code = Command::new("timeout").args(["10"]).arg(qemu).arg(&path).status().unwrap().code();
+    std::fs::remove_file(&path).ok();
+    code
+}
+
+/// A 32-bit multiply, divide or remainder on the 68000 had no instruction and
+/// no conversion to the runtime call, so no routine that used one compiled
+/// (`muldiv` of the library set). Each operation, over operands of every sign,
+/// with the operands in both orders (the divide does not commute).
+#[test]
+fn a_wide_multiply_divide_or_remainder_calls_the_runtime() {
+    let operations: [(&str, fn(i32, i32) -> i32); 5] = [
+        ("mul", i32::wrapping_mul),
+        ("sdiv", i32::wrapping_div),
+        ("udiv", |a, b| ((a as u32) / (b as u32)) as i32),
+        ("srem", i32::wrapping_rem),
+        ("urem", |a, b| ((a as u32) % (b as u32)) as i32),
+    ];
+    let pairs = [(1000, 7), (-1000, 7), (1000, -7), (-1000, -7), (123_456_789, 1000), (7, 1000), (-5, 3)];
+    let mut wrong = Vec::new();
+    for (op, expect) in operations {
+        let ir = format!("define i32 @f(i32 %a, i32 %b) {{\n  %r = {op} i32 %a, %b\n  ret i32 %r\n}}");
+        for (a, b) in pairs {
+            for options in [Options::default(), Options::PINNED] {
+                if let Some(code) = status_with_runtime(&ir, &[i64::from(a), i64::from(b)], options) {
+                    if code != expect(a, b) & 255 {
+                        wrong.push(format!("{op} {a} {b} {options:?}: got {code}, want {}", expect(a, b) & 255));
+                    }
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The bench's `a * b + a / b + a % b`: the remainder is combined with the
+/// divide, and the three calls keep their values across each other.
+#[test]
+fn a_function_with_three_runtime_calls_keeps_its_values() {
+    let ir = include_str!("../bench/library/muldiv.ll").replace("@k", "@f");
+    for options in [Options::default(), Options::PINNED] {
+        if let Some(code) = status_with_runtime(&ir, &[1000, 7], options) {
+            assert_eq!(code, 236, "{options:?}");
+        }
+    }
+}
+
+/// A condition read past a select got the codes of whatever ran last: the
+/// arm of the select (`move` and `sub` set them), so `zext (icmp)` beside
+/// `select (icmp)` (the quotient bit of a division loop) was the codes of
+/// the subtract. Four conditions, so no one flag's value covers it; the
+/// operands make the carry of the add differ from the compare's.
+#[test]
+fn a_flag_reader_past_a_select_reads_the_codes_of_the_compare() {
+    type Model = fn(i32, i32) -> bool;
+    let conditions: [(&str, Model); 4] = [
+        ("uge", |n, d| n as u32 >= d as u32),
+        ("sgt", |n, d| n > d),
+        ("slt", |n, d| n < d),
+        ("ult", |n, d| (n as u32) < d as u32),
+    ];
+    let triples = [(10, 3, 5), (3, 10, 5), (-4, 6, 9), (6, -4, 9), (200, 200, 1), (i32::MAX, 1, 7), (-1, 1, 2)];
+    let mut wrong = Vec::new();
+    for (cond, model) in conditions {
+        let ir = format!(
+            "define i32 @f(i32 %n, i32 %d, i32 %m) {{
+  %c = icmp {cond} i32 %n, %d
+  %sum = add i32 %n, %d
+  %r = select i1 %c, i32 %sum, i32 %n
+  %m2 = shl i32 %m, 1
+  %bit = zext i1 %c to i32
+  %o = or i32 %m2, %bit
+  %t = add i32 %o, %r
+  ret i32 %t
+}}"
+        );
+        for (n, d, m) in triples {
+            let want = ((m << 1) | i32::from(model(n, d))).wrapping_add(if model(n, d) { n.wrapping_add(d) } else { n });
+            for options in [Options::default(), Options::PINNED] {
+                if let Some(code) = status(&ir, &[i64::from(n), i64::from(d), i64::from(m)], options) {
+                    if code != want & 255 {
+                        wrong.push(format!("{cond} {n} {d} {m} {options:?}: got {code}, want {}", want & 255));
+                    }
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Two selects on one compare with a call between: the second read the codes
+/// the call left (`neg` of the result), so `|a| * b` negated back by the sign
+/// of `a` (the signed remainder of the runtime) was wrong for a positive `a`.
+/// The compare runs again for the second select, as the pin's scheduler does.
+/// Another condition and a different call than the motivating one.
+#[test]
+fn a_second_select_on_a_compare_after_a_call_compares_again() {
+    for cond in ["slt", "ult", "sgt"] {
+        let ir = format!(
+            "define i32 @f(i32 %a, i32 %b) {{
+  %c = icmp {cond} i32 %a, %b
+  %x = select i1 %c, i32 %a, i32 %b
+  %p = call i32 @__mulsi3(i32 %x, i32 3)
+  %q = sub i32 0, %p
+  %r = select i1 %c, i32 %q, i32 %p
+  ret i32 %r
+}}"
+        );
+        for (a, b) in [(2, 9), (9, 2), (-3, 4), (4, -3), (5, 5)] {
+            let holds = match cond {
+                "slt" => a < b,
+                "ult" => (a as u32) < b as u32,
+                _ => a > b,
+            };
+            let x: i32 = if holds { a } else { b };
+            let p = x.wrapping_mul(3);
+            let want = if holds { p.wrapping_neg() } else { p };
+            for options in [Options::default(), Options::PINNED] {
+                if let Some(code) = status_with_runtime(&ir, &[i64::from(a), i64::from(b)], options) {
+                    assert_eq!(code, want & 255, "{cond} {a} {b} {options:?}");
+                }
+            }
+        }
+    }
+}
