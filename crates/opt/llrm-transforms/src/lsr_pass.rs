@@ -411,10 +411,12 @@ pub fn reduced_held(
                         body: &lp_blocks,
                         iv_inc_insert_pos: plan.iv_inc_insert_pos,
                         dead: Vec::new(),
+                        hoisted: Vec::new(),
                         changed: false,
                     };
                     run.implement_solution(&plan);
                     let dead = std::mem::take(&mut run.dead);
+                    let hoisted = std::mem::take(&mut run.hoisted);
                     let rewrote = run.changed;
                     // `ImplementSolution`: the dead instructions go first, so
                     // the increments move over only the
@@ -432,6 +434,7 @@ pub fn reduced_held(
                         body: &lp_blocks,
                         iv_inc_insert_pos: plan.iv_inc_insert_pos,
                         dead: Vec::new(),
+                        hoisted,
                         changed: false,
                     };
                     run.move_increments();
