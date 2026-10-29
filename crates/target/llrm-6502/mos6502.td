@@ -195,8 +195,11 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1 in
   def JMP : MOSInst<(outs), (ins brtarget:$t), "jmp $t", [(br bb:$t)]>;
 let isBranch = 1, isTerminator = 1, isBarrier = 1, Predicates = [HasCMOS], AddedComplexity = 10 in
   def BRA : MOSInst<(outs), (ins brtarget:$t), "bra $t", [(br bb:$t)]>;
-let isCall = 1 in
+let isCall = 1 in {
   def JSR : MOSInst<(outs), (ins calltarget:$t), "jsr $t", [(MOScall tglobaladdr:$t)]>;
+  // The 6502 has no indirect jsr: the return address and target-1 are pushed and an rts enters the callee.
+  def JSRI : MOSInst<(outs), (ins Imag16:$p), "jsr ($p)", [(MOScall i16:$p)]>;
+}
 
 // The call sequence's stack adjustment, resolved by the frame code once the frame is laid out.
 let Defs = [RS0, P], Uses = [RS0] in {

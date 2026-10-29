@@ -495,3 +495,28 @@ fn a_switch_to_a_block_with_phis_selects_the_right_value() {
     let run = |x: u16| common::run_with("alloc-sw", &format!("{}  jsr sw\n", set("rc2", x)), &text);
     assert_eq!((run(1), run(2), run(0)), (7, 9, 9));
 }
+
+/// `f(p, x)` calls the function `p` points to with `x`: an indirect call, which the 6502
+/// has no instruction for, was refused ("an indirect call").
+const CALL_THROUGH: &str = "define i8 @twice(i8 %x) {\n  %r = add i8 %x, %x\n  ret i8 %r\n}\n\
+    define i8 @via(ptr %f, i8 %x) {\n  %r = call i8 %f(i8 %x)\n  %s = add i8 %r, 1\n  ret i8 %s\n}";
+
+#[test]
+fn an_indirect_call_enters_the_callee_and_returns() {
+    let text = compile(CALL_THROUGH, "via") + &compile(CALL_THROUGH, "twice");
+    // via(&twice, 20) = 41
+    let setup = "  lda #<twice\n  sta rc2\n  lda #>twice\n  sta rc3\n  lda #20\n  sta rc4\n";
+    assert_eq!(common::run_with("alloc-indirect", &format!("{setup}  jsr via\n"), &text), 41);
+}
+
+/// A function that calls itself through a pointer is as reentrant as one that calls itself by
+/// name: its values live across the call must be on the soft stack, not in static slots.
+#[test]
+fn a_function_reentered_through_a_pointer_keeps_its_values() {
+    let ir = "define i8 @sum(ptr %f, i8 %n) {\nentry:\n  %z = icmp eq i8 %n, 0\n  br i1 %z, label %base, label %step\nbase:\n  \
+              ret i8 0\nstep:\n  %m = sub i8 %n, 1\n  %r = call i8 %f(ptr %f, i8 %m)\n  %s = add i8 %r, %n\n  ret i8 %s\n}";
+    let text = compile(ir, "sum");
+    // sum(&sum, 4) = 4 + 3 + 2 + 1 = 10
+    let setup = "  lda #<sum\n  sta rc2\n  lda #>sum\n  sta rc3\n  lda #4\n  sta rc4\n";
+    assert_eq!(common::run_with("alloc-reenter", &format!("{setup}  jsr sum\n"), &text), 10);
+}

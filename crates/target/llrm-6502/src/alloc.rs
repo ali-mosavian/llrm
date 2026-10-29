@@ -478,6 +478,23 @@ impl Builder {
         self.push(jsr);
     }
 
+    /// `jsr (pointer)`: the same, entering the callee through the pair that
+    /// holds its address.
+    fn call_through(
+        &mut self,
+        pointer: Reg,
+    ) {
+        let arguments = results(&self.function.blocks[self.current].insts);
+        let mut jsr = Inst::new(
+            Kind::Op("JSRI"),
+            std::iter::once(Operand::Use(pointer))
+                .chain(arguments.into_iter().map(|r| Operand::Use(Reg::Phys(r))))
+                .collect(),
+        );
+        jsr.call = true;
+        self.push(jsr);
+    }
+
     fn push(
         &mut self,
         inst: Inst,
@@ -579,7 +596,7 @@ fn pointer_cells(items: &[Item]) -> HashSet<String> {
         let Item::Inst(MInst { opcode, operands }) = item else { continue };
         let at = match *opcode {
             op::LDP8 | op::LDP16 | op::STP8 | op::STP16 => 1,
-            op::STZP | op::LEASP16 => 0,
+            op::STZP | op::LEASP16 | op::JSRI => 0,
             _ => continue,
         };
         if let Some(Machine::Reg(cell)) = operands.get(at)
@@ -1088,8 +1105,13 @@ pub fn build(
                 b.push(Inst::new(Kind::Op("ADJSP"), vec![Operand::Def(Reg::Phys(reg::A)), Operand::Imm(i64::from(n))]));
             }
             op::JSR => {
-                let Machine::Label(callee) = &o[0] else { return Err(Unsupported("an indirect call".into())) };
+                let Machine::Label(callee) = &o[0] else { return Err(Unsupported("a call to a non-label".into())) };
                 b.call(callee);
+            }
+            op::JSRI => {
+                let pointer = b.pointer(name(&o[0])?)?;
+                b.require(pointer, Class::PAIR)?;
+                b.call_through(pointer);
             }
             code @ (op::MUL8 | op::UDIV8 | op::SDIV8 | op::UREM8 | op::SREM8 | op::SHLV8 | op::SRLV8 | op::SRAV8) => {
                 let routine = match code {
@@ -1534,6 +1556,17 @@ fn emit_with<const STACK: bool>(
                     writeln!(out, "{done}:").unwrap();
                 }
                 (Kind::Op("JSR"), [Operand::Symbol(callee, _), ..]) => writeln!(out, "  jsr {callee}").unwrap(),
+                // return address, then target-1, then rts into the callee; its
+                // own rts lands on the label
+                (Kind::Op("JSRI"), _) => {
+                    made += 1;
+                    let (lo, hi) = (register_name(lane(regs[0], 0)), register_name(lane(regs[0], 1)));
+                    writeln!(
+                        out,
+                        "  lda #>(_ci{made}-1)\n  pha\n  lda #<(_ci{made}-1)\n  pha\n  lda {lo}\n  sec\n  sbc #1\n  tax\n  lda {hi}\n  sbc #0\n  pha\n  txa\n  pha\n  rts\n_ci{made}:"
+                    )
+                    .unwrap();
+                }
                 (Kind::Op("STZ"), _) => writeln!(out, "  stz {}", register_name(regs[0])).unwrap(),
                 (Kind::Op("STZM"), [Operand::Symbol(symbol, _)]) => writeln!(out, "  stz {symbol}").unwrap(),
                 (Kind::Op("LDM"), [_, Operand::Symbol(symbol, _)]) => writeln!(out, "  lda {symbol}").unwrap(),
