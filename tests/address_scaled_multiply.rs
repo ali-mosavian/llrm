@@ -59,9 +59,9 @@ fn a_factor_of_a_lea_and_an_address_scale_is_one_lea_at_every_level() {
     }
 }
 
-/// A multiply by 7 is no `lea` factor times a scale: the pin's `llc` on the same
-/// IR makes it `lea r, [i*8]` and `sub r, i` at both levels (no `imul`, which the
-/// selector once kept for `-Os` size), and so do we.
+/// A multiply by 7 is no `lea` factor times a scale: the pin's `llc` on the
+/// same IR makes it `lea r, [i*8]` and `sub r, i` at both levels (no `imul`,
+/// which the selector once kept for `-Os` size), and so do we.
 ///
 /// llrm-cc: the register that holds the index is `eax`, as in the pin's
 /// listing (pin-shape).
