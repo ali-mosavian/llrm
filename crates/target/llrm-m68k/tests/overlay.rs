@@ -139,8 +139,9 @@ fn a_test_right_after_the_instruction_that_set_the_flags_is_dropped() {
 }
 
 /// `add` can overflow, so after it `gt` (Z clear and N = V) is not what `tst`
-/// gives: the `tst.l` stays for it, and goes for `ne`. `slt 0` is `N` alone (the
-/// sign of the wrapped sum, as the pin selects it: `add; bmi`), which needs none.
+/// gives: the `tst.l` stays for it, and goes for `ne`. `slt 0` is `N` alone
+/// (the sign of the wrapped sum, as the pin selects it: `add; bmi`), which
+/// needs none.
 #[test]
 fn a_test_after_an_add_stays_for_a_signed_ordering_and_goes_for_equality() {
     let signed = branches("%s = add i32 %a, %b\n  %c = icmp sgt i32 %s, 0");
@@ -149,6 +150,42 @@ fn a_test_after_an_add_stays_for_a_signed_ordering_and_goes_for_equality() {
     assert!(!sign.contains("tst.l") && sign.contains("add.l"), "{sign}");
     let equal = branches("%s = add i32 %a, %b\n  %c = icmp ne i32 %s, 0");
     assert!(!equal.contains("tst.l"), "{equal}");
+}
+
+/// `__modsi3` ended each way of a negate with `move.l %d2, %d0` and one of them
+/// with `bra`: both ways began with the copy. It runs ahead of the compare once
+/// (`HoistCommonCodeInSuccs`).
+#[test]
+fn the_copy_both_ways_begin_with_runs_before_the_branch() {
+    let ir = "declare i32 @g(i32)
+define i32 @f(i32 %a) {
+  %an = icmp slt i32 %a, 0
+  %na = sub i32 0, %a
+  %ua = select i1 %an, i32 %na, i32 %a
+  %m = call i32 @g(i32 %ua)
+  %nm = sub i32 0, %m
+  %r = select i1 %an, i32 %nm, i32 %m
+  ret i32 %r
+}";
+    let text = compiled(ir, Options::PINNED);
+    assert_eq!(text.matches("move.l\t%d2, %d0").count(), 1, "{text}");
+    assert!(!text.contains("bra"), "{text}");
+}
+
+/// The copy that hoisting put before a `tst.l` of its source left the codes
+/// `tst.l` gives: the `tst.l %d2` after `move.l %d2, %d0` was kept, an
+/// instruction on the path that had none.
+#[test]
+fn a_test_after_a_copy_of_the_tested_register_is_dropped() {
+    use llrm_m68k::expand::Line;
+    use llrm_m68k::overlay::drop_redundant_tests;
+    let inst = |opcode, operands| Line::Inst(Inst { opcode, operands });
+    let copy = inst("MOV32rr", vec![register("d0"), register("d2")]);
+    let branch = inst("Bpl8", vec![]);
+    let lines = vec![copy.clone(), inst("TST32d", vec![register("d2")]), branch.clone()];
+    assert_eq!(opcodes(&drop_redundant_tests(lines)), ["MOV32rr", "Bpl8"]);
+    let other = vec![copy, inst("TST32d", vec![register("d1")]), branch];
+    assert_eq!(opcodes(&drop_redundant_tests(other)), ["MOV32rr", "TST32d", "Bpl8"]);
 }
 
 /// Post-increment forms derived from the pin's `(An)` rows, bytes from
@@ -496,7 +533,10 @@ done:
     assert!(!ours.contains("addq.l\t#1, %a"), "{ours}");
 }
 
-fn counted_scan(ty: &str, step: &str) -> String {
+fn counted_scan(
+    ty: &str,
+    step: &str,
+) -> String {
     format!(
         "define i32 @f(ptr %p) {{
 entry:
@@ -580,7 +620,8 @@ exit:
         let pointer_phis = done.lines().filter(|line| line.contains("phi ptr")).count();
         assert_eq!(pointer_phis, 2, "step {step}: a stepping pointer per array\n{done}");
     }
-    // bench/library/memcpy.ll: pointers and a down counter, and the pin keeps them
+    // bench/library/memcpy.ll: pointers and a down counter, and the pin keeps
+    // them
     let done = after_pinned_mid_end(
         "define i32 @k(ptr %0, ptr %1, i32 %2) {
   %4 = icmp sgt i32 %2, 0
@@ -636,8 +677,7 @@ fn a_down_counter_tested_above_its_floor_is_counted_to_zero() {
 #[test]
 fn the_strict_compare_stays_where_the_target_does_not_prefer_exit_ne() {
     use std::rc::Rc;
-    let module =
-        llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{MEMCPY}")).expect("parses");
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{MEMCPY}")).expect("parses");
     let tti = llrm_m68k::machine::M68k { indexed_displacement: true, post_indexed: true, ..Default::default() };
     let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine)))
         .expect("the mid-end runs");
@@ -889,7 +929,8 @@ mod repeated_compares {
     fn a_compare_after_a_label_a_write_or_other_operands_stays() {
         let with_label = vec![cmp(), branch("Beq8"), Line::Label(3), cmp(), branch("Bge8")];
         assert_eq!(drop_repeated_compares(with_label.clone()), with_label);
-        let write = Line::Inst(Inst { opcode: "ADDQ32d", operands: vec![register("d2"), register("d2"), Operand::Imm(1)] });
+        let write =
+            Line::Inst(Inst { opcode: "ADDQ32d", operands: vec![register("d2"), register("d2"), Operand::Imm(1)] });
         let after_write = vec![cmp(), branch("Beq8"), write, cmp(), branch("Bge8")];
         assert_eq!(drop_repeated_compares(after_write.clone()), after_write);
         let other = Line::Inst(Inst { opcode: "CMP32dr", operands: vec![register("d3"), register("a1")] });
@@ -916,12 +957,17 @@ fn saved_registers_are_pushed_and_the_rest_of_the_frame_follows() {
 
 fn library(name: &str) -> String {
     let text = std::fs::read_to_string(format!("{}/bench/library/{name}.ll", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    text.lines().filter(|line| !line.starts_with("target datalayout")).collect::<Vec<_>>().join("\n").replace("@k(", "@f(")
+    text.lines()
+        .filter(|line| !line.starts_with("target datalayout"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace("@k(", "@f(")
 }
 
-/// bsearch's key is compared twice per trip (`==`, then `<`): two readers, so the argument fold
-/// (one reader only) kept the load, the register and, at `-Os`, a second callee-saved register
-/// to save (+4 B over gcc, 70 B). Expected: both compares read the slot, 64 B.
+/// bsearch's key is compared twice per trip (`==`, then `<`): two readers, so
+/// the argument fold (one reader only) kept the load, the register and, at
+/// `-Os`, a second callee-saved register to save (+4 B over gcc, 70 B).
+/// Expected: both compares read the slot, 64 B.
 #[test]
 fn an_argument_compared_twice_in_a_loop_is_read_from_its_slot_at_the_size_level() {
     let size = Options { size: true, ..Options::default() };
@@ -929,17 +975,19 @@ fn an_argument_compared_twice_in_a_loop_is_read_from_its_slot_at_the_size_level(
     assert!(code_size(&library("bsearch"), size) <= 64);
 }
 
-/// muldiv reads `b` three times, as the outgoing arguments of three calls: folded, each is a 6 B
-/// memory-to-memory `move` where the register form is 4, and the function grew from 68 to 78 B.
+/// muldiv reads `b` three times, as the outgoing arguments of three calls:
+/// folded, each is a 6 B memory-to-memory `move` where the register form is 4,
+/// and the function grew from 68 to 78 B.
 #[test]
 fn an_argument_read_three_times_keeps_its_register() {
     let text = compiled(&library("muldiv"), Options::default());
     assert!(!text.contains(",%sp), ("), "{text}");
 }
 
-/// memset stored the low byte of its `c` argument from a register: the 4 B load, the register and,
-/// at `-Os`, the callee-saved register the index then needed (46 B against gcc's 44). A byte
-/// read of an argument is the last byte of its slot (big-endian): `move.b (11,%sp), (%a1)+`.
+/// memset stored the low byte of its `c` argument from a register: the 4 B
+/// load, the register and, at `-Os`, the callee-saved register the index then
+/// needed (46 B against gcc's 44). A byte read of an argument is the last byte
+/// of its slot (big-endian): `move.b (11,%sp), (%a1)+`.
 #[test]
 fn a_byte_of_an_argument_is_read_from_the_end_of_its_slot() {
     let size = Options { size: true, ..Options::default() };
@@ -948,8 +996,8 @@ fn a_byte_of_an_argument_is_read_from_the_end_of_its_slot() {
     assert!(code_size(&library("memset"), size) <= 40);
 }
 
-/// The same argument also read as a whole value keeps its register: the load is not given up for
-/// the byte store alone.
+/// The same argument also read as a whole value keeps its register: the load is
+/// not given up for the byte store alone.
 #[test]
 fn an_argument_also_read_whole_keeps_its_register() {
     let ir = "define i32 @f(ptr %p, i32 %c, i32 %n) {
@@ -976,8 +1024,9 @@ fn constant(value: i64) -> String {
     compiled(&format!("define i32 @f() {{\n  ret i32 {value}\n}}"), Options::default())
 }
 
-/// crc16 loaded 65535 with `move.l #65535` (6 B) twice, where gcc has `moveq #0; not.w` (4 B). A
-/// constant of 0xFF80..0xFFFF is a `moveq` and a `not.w`; 0xFF7F, one short, and 0x10000 are not.
+/// crc16 loaded 65535 with `move.l #65535` (6 B) twice, where gcc has `moveq
+/// #0; not.w` (4 B). A constant of 0xFF80..0xFFFF is a `moveq` and a `not.w`;
+/// 0xFF7F, one short, and 0x10000 are not.
 #[test]
 fn a_constant_just_under_64k_is_a_moveq_and_not_w() {
     let text = constant(65535);
@@ -987,8 +1036,8 @@ fn a_constant_just_under_64k_is_a_moveq_and_not_w() {
     assert!(!constant(65536 * 128).contains("swap"));
 }
 
-/// A `moveq` value shifted up 16 is a `moveq` and a `swap` (4 B for 6); a value that is not a
-/// multiple of 64 KiB is not.
+/// A `moveq` value shifted up 16 is a `moveq` and a `swap` (4 B for 6); a value
+/// that is not a multiple of 64 KiB is not.
 #[test]
 fn a_constant_shifted_up_16_is_a_moveq_and_swap() {
     let text = constant(65536 * 3);
@@ -1021,9 +1070,10 @@ fn opcodes(lines: &[llrm_m68k::expand::Line]) -> Vec<&'static str> {
         .collect()
 }
 
-/// crc16's `eori.l #4129` (6 B) against gcc's `eor.w` (4 B): the high half is xored with zeros. The
-/// narrow form is taken where a `tst` or a return follows, not where a branch reads the codes
-/// (`N` and `Z` would come from the word), and not for a constant over 16 bits.
+/// crc16's `eori.l #4129` (6 B) against gcc's `eor.w` (4 B): the high half is
+/// xored with zeros. The narrow form is taken where a `tst` or a return
+/// follows, not where a branch reads the codes (`N` and `Z` would come from the
+/// word), and not for a constant over 16 bits.
 #[test]
 fn an_xor_with_a_word_constant_is_a_word_xor_unless_its_codes_are_read() {
     use llrm_m68k::overlay::narrow_immediates;
@@ -1034,20 +1084,24 @@ fn an_xor_with_a_word_constant_is_a_word_xor_unless_its_codes_are_read() {
     assert_eq!(opcodes(&narrow_immediates(vec![long_op("XOR32di", -1), after("RTS")])), ["XOR32di", "RTS"]);
 }
 
-/// `andi` narrows only where the mask's high half is all ones (the high half of the register is
-/// kept); `and.l #255` clears it and must stay long.
+/// `andi` narrows only where the mask's high half is all ones (the high half of
+/// the register is kept); `and.l #255` clears it and must stay long.
 #[test]
 fn an_and_keeps_its_long_form_unless_the_mask_keeps_the_high_half() {
     use llrm_m68k::overlay::narrow_immediates;
-    assert_eq!(opcodes(&narrow_immediates(vec![long_op("AND32di", -65536 | 0x1234), after("RTS")])), ["AND16di", "RTS"]);
+    assert_eq!(
+        opcodes(&narrow_immediates(vec![long_op("AND32di", -65536 | 0x1234), after("RTS")])),
+        ["AND16di", "RTS"]
+    );
     assert_eq!(opcodes(&narrow_immediates(vec![long_op("AND32di", 255), after("RTS")])), ["AND32di", "RTS"]);
 }
 
 #[test]
 fn word_immediates_encode_as_binutils_does() {
     let word = |opcode, value| Inst { opcode, operands: vec![register("d0"), register("d0"), Operand::Imm(value)] };
-    // eori.w #4129,%d0; or.w #40000,%d0 (the pin's `or` with a source of #imm: binutils
-    // assembles the same text as `ori`, 0040 9c40, as long and as quick); and.w #4660,%d0 (c07c 1234)
+    // eori.w #4129,%d0; or.w #40000,%d0 (the pin's `or` with a source of #imm:
+    // binutils assembles the same text as `ori`, 0040 9c40, as long and as
+    // quick); and.w #4660,%d0 (c07c 1234)
     for (inst, golden) in [
         (word("XOR16di", 4129), "0a401021"),
         (word("OR16di", 40000), "807c9c40"),
@@ -1069,24 +1123,26 @@ fn global_function(name: &str) -> String {
     text_with(&module, name, Cpu::M68000, Options::PINNED).expect("compiles")
 }
 
-/// A load of a global was `move.l (g,%a0), %d0`: the matcher did not know `PC` (no register id), took
-/// the symbol for an address-register displacement and read `%a0`, which nothing set. The pin's
-/// output (`llc -mtriple=m68k`) is pc-relative: `move.l (g,%pc), %d0`.
+/// A load of a global was `move.l (g,%a0), %d0`: the matcher did not know `PC`
+/// (no register id), took the symbol for an address-register displacement and
+/// read `%a0`, which nothing set. The pin's output (`llc -mtriple=m68k`) is
+/// pc-relative: `move.l (g,%pc), %d0`.
 #[test]
 fn a_global_is_loaded_pc_relative() {
     assert_eq!(global_function("load"), "load:\n\tmove.l\t(g,%pc), %d0\n\trts\n");
     assert_eq!(global_function("fold"), "fold:\n\tmove.l\t(a+8,%pc), %d0\n\trts\n");
 }
 
-/// Stores cannot go to a pc-relative destination: the pin takes the address into a register.
+/// Stores cannot go to a pc-relative destination: the pin takes the address
+/// into a register.
 #[test]
 fn a_global_is_stored_through_its_address() {
     assert_eq!(global_function("store"), "store:\n\tlea\t(g,%pc), %a0\n\tmove.l\t(4,%sp), (%a0)\n\trts\n");
     assert_eq!(global_function("addr"), "addr:\n\tlea\t(g,%pc), %a0\n\trts\n");
 }
 
-/// An array in read-only data indexed by a register was `CannotSelect(Load)`; the pin's output is
-/// `lea (t,%pc), %a0; move.b (0,%a0,%d0), %d0`.
+/// An array in read-only data indexed by a register was `CannotSelect(Load)`;
+/// the pin's output is `lea (t,%pc), %a0; move.b (0,%a0,%d0), %d0`.
 #[test]
 fn a_constant_array_is_indexed_through_its_address() {
     let text = global_function("index");
@@ -1104,9 +1160,10 @@ fn narrow_global(name: &str) -> Result<String, String> {
     text_with(&module, name, Cpu::M68000, Options::PINNED)
 }
 
-/// A byte or word of a global, zero-extended, was `MOVZXd16q8: addressing mode q is not translated`
-/// (the generated programs read `buf` and `tab` this way). The pin: `move.b (buf+6,%pc), %d0` after
-/// a clear, and through an index register `lea (buf,%pc), %a0; move.b (0,%a0,%d0), %d0`.
+/// A byte or word of a global, zero-extended, was `MOVZXd16q8: addressing mode
+/// q is not translated` (the generated programs read `buf` and `tab` this way).
+/// The pin: `move.b (buf+6,%pc), %d0` after a clear, and through an index
+/// register `lea (buf,%pc), %a0; move.b (0,%a0,%d0), %d0`.
 #[test]
 fn a_narrow_global_is_zero_extended_from_its_pc_relative_address() {
     let byte = narrow_global("zb").expect("compiles");
@@ -1116,9 +1173,11 @@ fn a_narrow_global_is_zero_extended_from_its_pc_relative_address() {
     assert!(narrow_global("zbi").expect("compiles").contains("move.b\t(0,%a0,%d0), %d0"));
 }
 
-/// `MOVZXd32d16` defines an `XR32` register in the pin, so the allocator could give it an address
-/// register: the expansion cleared it with `moveq #0, %a1` (a `moveq` into `d1` in the bits) and
-/// `move.w %d4, %a1` is `movea.w`, which sign-extends. A generated program (a `zext i16` kept in a register) came out 4 where gcc has 3. The result of a zero extension is a data register.
+/// `MOVZXd32d16` defines an `XR32` register in the pin, so the allocator could
+/// give it an address register: the expansion cleared it with `moveq #0, %a1`
+/// (a `moveq` into `d1` in the bits) and `move.w %d4, %a1` is `movea.w`, which
+/// sign-extends. A generated program (a `zext i16` kept in a register) came out
+/// 4 where gcc has 3. The result of a zero extension is a data register.
 #[test]
 fn a_zero_extension_defines_a_data_register() {
     let module = llrm_mir::parse::module(&format!(
@@ -1140,9 +1199,10 @@ fn a_zero_extension_defines_a_data_register() {
     assert!(seen > 0, "no zero extension was selected");
 }
 
-/// `shl x, 16` is selected as `SUBREG_TO_REG (CLR16dd (EXTRACT_SUBREG (SWAP x)))`, which the emitter
-/// had no case for ("no encoding for SUBREG_TO_REG"): every generated program with a shift by 16 was
-/// rejected. The pin's `swap; clr.w`; a shift by 15 stays a shift.
+/// `shl x, 16` is selected as `SUBREG_TO_REG (CLR16dd (EXTRACT_SUBREG (SWAP
+/// x)))`, which the emitter had no case for ("no encoding for SUBREG_TO_REG"):
+/// every generated program with a shift by 16 was rejected. The pin's `swap;
+/// clr.w`; a shift by 15 stays a shift.
 #[test]
 fn a_shift_left_by_16_is_swap_and_clear_word() {
     let text = compiled("define i32 @f(i32 %x) {\n  %r = shl i32 %x, 16\n  ret i32 %r\n}", Options::default());
@@ -1151,11 +1211,12 @@ fn a_shift_left_by_16_is_swap_and_clear_word() {
     assert!(!other.contains("swap"), "{other}");
 }
 
-/// `widen_compare_operands` let a compare's second operand take an address register where nothing
-/// else restricts it; it read the table's `XR32` for the result of `MOVZXd32d16` as free, so a
-/// zero-extended word was given `a0` again (`moveq #0, %a0; move.w %d3, %a0`: a sign extension),
-/// and a sign-extended one got `ext.l %a0`, which does not exist. Seeds 12 and 75 of the
-/// differential driver.
+/// `widen_compare_operands` let a compare's second operand take an address
+/// register where nothing else restricts it; it read the table's `XR32` for the
+/// result of `MOVZXd32d16` as free, so a zero-extended word was given `a0`
+/// again (`moveq #0, %a0; move.w %d3, %a0`: a sign extension),
+/// and a sign-extended one got `ext.l %a0`, which does not exist. Seeds 12 and
+/// 75 of the differential driver.
 #[test]
 fn a_compare_does_not_widen_an_extension_to_an_address_register() {
     for (extension, mnemonic) in [("zext", "MOVZX"), ("sext", "MOVSX")] {
@@ -1171,7 +1232,10 @@ fn a_compare_does_not_widen_an_extension_to_an_address_register() {
             .iter()
             .flat_map(|block| &block.insts)
             .filter_map(|inst| match (inst.kind, &inst.operands[..]) {
-                (llrm_spike_mf::Kind::Op("CMP32dr"), [_, llrm_spike_mf::Operand::Use(llrm_spike_mf::Reg::Virt(rhs))]) => Some(*rhs),
+                (
+                    llrm_spike_mf::Kind::Op("CMP32dr"),
+                    [_, llrm_spike_mf::Operand::Use(llrm_spike_mf::Reg::Virt(rhs))],
+                ) => Some(*rhs),
                 _ => None,
             })
             .count();
@@ -1187,9 +1251,10 @@ fn a_compare_does_not_widen_an_extension_to_an_address_register() {
     }
 }
 
-/// The mid-end handed out an id for a declaration a pass made (`llvm.umin.i1`) and never added the
-/// declaration to the module, so selecting the call panicked with an index out of range
-/// (`Module::global`). Seed 57 of the differential driver.
+/// The mid-end handed out an id for a declaration a pass made (`llvm.umin.i1`)
+/// and never added the declaration to the module, so selecting the call
+/// panicked with an index out of range (`Module::global`). Seed 57 of the
+/// differential driver.
 #[test]
 fn a_declaration_the_mid_end_makes_is_in_the_module() {
     let ir = r#"@zero = external constant i8, align 1
@@ -1239,9 +1304,10 @@ define i16 @f() {
     llrm_m68k::dagisel::function::select_function(&module, "f", Cpu::M68000).expect("selects");
 }
 
-/// `movea.w #imm, %an` sign-extends, and the pin's `isUInt<16>` sent 32768..65535 through it: an
-/// address register got 0xFFFF8000.. for 0x8000.. Seed 59 of the differential driver (a select
-/// of 49080 kept in an address register).
+/// `movea.w #imm, %an` sign-extends, and the pin's `isUInt<16>` sent
+/// 32768..65535 through it: an address register got 0xFFFF8000.. for 0x8000..
+/// Seed 59 of the differential driver (a select of 49080 kept in an address
+/// register).
 #[test]
 fn a_constant_above_32k_is_not_moved_into_an_address_register_by_a_word_move() {
     use llrm_m68k::reg::A0;
@@ -1253,14 +1319,18 @@ fn a_constant_above_32k_is_not_moved_into_an_address_register_by_a_word_move() {
     assert!(moves.iter().any(|one| one.opcode == "MOV16ai"), "{moves:?}");
 }
 
-/// The chain pass did not see a reload (`movem.l (64,%sp), %a3`: a register mask, no register
-/// operand) as a new value of the register it chained, so an access after the reload had the
-/// chain's size taken off its displacement and read 4 bytes below the array. Seed 86 of the
-/// differential driver (the result changed with the stack contents).
+/// The chain pass did not see a reload (`movem.l (64,%sp), %a3`: a register
+/// mask, no register operand) as a new value of the register it chained, so an
+/// access after the reload had the chain's size taken off its displacement and
+/// read 4 bytes below the array. Seed 86 of the differential driver (the result
+/// changed with the stack contents).
 #[test]
 fn a_reload_of_the_chained_register_ends_the_chain() {
     use llrm_m68k::expand::Line;
-    use llrm_m68k::mc::{Inst, Operand::{Imm, Reg}};
+    use llrm_m68k::mc::{
+        Inst,
+        Operand::{Imm, Reg},
+    };
     use llrm_m68k::reg::{A3, D1, D2, D3, SP};
     let lines = vec![
         Line::Inst(Inst { opcode: "MOV32dj", operands: vec![Reg(D1), Reg(A3)] }),
@@ -1274,10 +1344,11 @@ fn a_reload_of_the_chained_register_ends_the_chain() {
     assert_eq!(last.operands, vec![Reg(D3), Imm(4), Reg(A3)], "{out:?}");
 }
 
-/// Two compares, each read by two `scc`, with the second compare between them: the codes of the
-/// first were gone when its second reader came (the compare has a folded volatile load, so it
-/// cannot run again), and the function was rejected ("the condition codes of an arithmetic result
-/// are read past an instruction that sets them"). The pin saves the codes as `copyPhysReg` does.
+/// Two compares, each read by two `scc`, with the second compare between them:
+/// the codes of the first were gone when its second reader came (the compare
+/// has a folded volatile load, so it cannot run again), and the function was
+/// rejected ("the condition codes of an arithmetic result are read past an
+/// instruction that sets them"). The pin saves the codes as `copyPhysReg` does.
 /// Seeds 23, 30, 41, 57, 62, 66 of the differential driver.
 #[test]
 fn the_codes_of_a_compare_that_cannot_run_again_are_saved_across_the_next_one() {
@@ -1327,10 +1398,11 @@ define i16 @f() {
     assert!(text.contains("move.w\t%sr, %d") && text.contains("move.w\t%d") && text.contains(", %ccr"), "{text}");
 }
 
-/// A compare read by a branch with a phi's copy between them that overwrites a register the
-/// compare reads: the compare cannot run again, and `tst` of its result is not the same codes.
-/// It was rejected ("no way to keep the flags of CMP past a copy"); the pin saves the codes as
-/// `copyPhysReg` does. Seeds 23, 30, 41, 181 of the differential driver.
+/// A compare read by a branch with a phi's copy between them that overwrites a
+/// register the compare reads: the compare cannot run again, and `tst` of its
+/// result is not the same codes. It was rejected ("no way to keep the flags of
+/// CMP past a copy"); the pin saves the codes as `copyPhysReg` does. Seeds 23,
+/// 30, 41, 181 of the differential driver.
 #[test]
 fn the_codes_of_a_compare_are_pushed_round_a_copy_that_cannot_move_or_be_repeated() {
     let ir = r#"@zero = external constant i8, align 1

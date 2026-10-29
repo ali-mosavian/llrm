@@ -159,8 +159,11 @@ const CONDITIONAL: [(&str, &str); 7] = [
 ];
 
 /// `BranchFolder` over the m68k function.
-pub fn branch_fold(function: &mut MFunction) -> bool {
-    llrm_spike_mf::branch_fold::<M68kRegisters>(function)
+pub fn branch_fold(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) -> bool {
+    llrm_spike_mf::branch_fold_hoisting::<M68kRegisters>(function, assignment)
 }
 
 /// `MachineBlockPlacement` over the m68k function.

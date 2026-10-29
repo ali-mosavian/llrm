@@ -128,7 +128,7 @@ pub fn items_with(
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
     preserve_flags(&mut function, &assignment)?;
-    branch_fold(&mut function);
+    branch_fold(&mut function, &assignment);
     if options.overlay {
         crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
     }
@@ -166,7 +166,8 @@ fn edge_odds(
     for &block in function.layout() {
         for (index, to) in llrm_mir::loopinfo::children(function, block).enumerate() {
             let probability = bpi.get_edge_probability(function, block, index);
-            let entry = odds.entry((block.0, to.0)).or_insert((llrm_mir::blockfrequency::BranchProbability::get_zero(), index));
+            let entry =
+                odds.entry((block.0, to.0)).or_insert((llrm_mir::blockfrequency::BranchProbability::get_zero(), index));
             entry.0 = entry.0 + probability;
         }
     }
@@ -235,7 +236,8 @@ pub fn mid_end_described_by(
             llrm_transforms::exitne::strengthened(context, &layout, function, &outer);
         }
         llrm_transforms::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, tti, false);
-        // the ids the pass handed out for declarations name nothing until they are placed
+        // the ids the pass handed out for declarations name nothing until they
+        // are placed
         declared.place(&mut module)?;
     }
     Ok(module)
