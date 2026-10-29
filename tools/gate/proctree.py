@@ -50,17 +50,9 @@ def tree_cpu(pid: int) -> float:
 
 
 def describe(pid: int) -> list[str]:
-    """One line per process under `pid` (itself included): pid, state, CPU seconds, what it waits on, its command. What a killed step was doing."""
-    lines = []
-    for one in [pid, *descendants(pid)]:
-        try:
-            with open(f"/proc/{one}/stat") as handle:
-                state = handle.read().rpartition(")")[2].split()[0]
-            with open(f"/proc/{one}/cmdline", "rb") as handle:
-                command = handle.read().replace(b"\0", b" ").decode(errors="replace").strip()
-            with open(f"/proc/{one}/wchan") as handle:
-                waits = handle.read().strip() or "-"
-        except OSError:
-            continue
-        lines.append(f"  {one} {state} {tree_cpu(one):.1f}s wchan={waits} {command[:200]}")
-    return lines
+    """`ps -o pid,ppid,stat,wchan:20,etime,args` of `pid` and everything under it: what a killed step was doing and waiting on."""
+    import subprocess
+
+    pids = ",".join(str(one) for one in [pid, *descendants(pid)])
+    done = subprocess.run(["ps", "-o", "pid,ppid,stat,wchan:20,etime,args", "-p", pids, "--cols", "300"], capture_output=True, text=True)
+    return [f"  {line}" for line in done.stdout.splitlines()] or ["  (ps printed nothing)"]

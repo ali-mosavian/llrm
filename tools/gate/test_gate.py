@@ -721,7 +721,7 @@ def test_a_step_with_no_log_growth_and_no_cpu_is_killed_with_its_last_lines(tmp_
     assert code == gate.STALL_CODE and wall < 120 and _time.time() - began < 120, (code, wall)
     log = (tmp_path / "hang.failed.log").read_text()
     assert "before the hang" in log and "STALLED" in log
-    assert "the tree when it was killed:" in log and sleeper in log and "wchan=" in log, "run 5's bench-base was killed and the log said not what it waited on"
+    assert "the tree when it was killed:" in log and sleeper in log and "WCHAN" in log and "PPID" in log, "run 5's bench-base was killed and the log said not what it waited on"
     # writing keeps a step alive without CPU; computing keeps it alive without writing
     assert gate.run_step("chatty", "for i in 1 2 3 4 5 6; do echo $i; sleep 0.5; done", tmp_path, env, stall=2)[1] == 0
     spin = 'python3 -c "import time; t = time.process_time()\nwhile time.process_time() - t < 4: pass"'
