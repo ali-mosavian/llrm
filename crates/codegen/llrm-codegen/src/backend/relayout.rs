@@ -94,10 +94,13 @@ pub fn laid_again(
     if frame.native.is_some() || frame.hole != 0 {
         return None;
     }
-    let (again, homes) = replayed(frame, hole)?;
+    let (mut again, homes) = replayed(frame, hole)?;
+    again.call_area = frame.call_area;
     let moved = Moves { frame: Some(frame), homes: &homes, hole };
     let mut machined = shifted(first, frame, &moved)?;
-    machined.reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor);
+    // The area `ReserveCallFrame` set aside lies below the locals, as in
+    // `assemble.rs`.
+    machined.reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor) + again.call_area;
     Some((machined, again))
 }
 
@@ -781,6 +784,25 @@ mod tests {
         assert_eq!(far_cells(&done.body), 0);
         let word = again.extents.iter().find(|(_, size)| *size == 2).expect("the word");
         assert_eq!(word.0, -2);
+    }
+
+    /// bc_circle_aspect at m32 -Os printed 4 pixels for 100: `B$CIRC` reserves
+    /// a 12-byte call area, took the second layout, and that layout dropped
+    /// the area, so `c.cx` and `c.cy` lay where the `octet` call stores its
+    /// stack arguments. The reserve must still hold the area below the
+    /// locals.
+    #[test]
+    fn test_the_second_layout_keeps_the_reserved_call_area() {
+        use super::laid_again;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(-8);
+        frame.align = 4;
+        frame.call_area = 12;
+        let home = frame.slot(7_i64, 4).expect("a spill slot");
+        let (done, again) = laid_again(&machined(reading(&[(home, home)])), &frame, 8).expect("it can be laid again");
+        let lowest = again.slots.values().copied().chain([again.floor]).min().expect("a floor");
+        assert_eq!(again.call_area, 12);
+        assert_eq!(done.reserve, -lowest + 12, "the locals lie above the outgoing area");
     }
 
     /// An order that would need more room than the objects have is not taken.

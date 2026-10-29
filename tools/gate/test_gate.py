@@ -1069,6 +1069,14 @@ def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
                 os.kill(int(sleeper_pid.read_text()), signal.SIGKILL)
 
 
+def test_a_gate_without_a_user_bus_refuses_with_the_hint_instead_of_exiting_on_a_dbus_line():
+    """Under `env -i` the gate re-executed itself into systemd-run, which failed with one dbus line and no verdict (bare-environment repro, 2026-10-29)."""
+    assert "GATE_SCOPED=1" in gate.scope_refusal({}, "/usr/bin/systemd-run")
+    assert gate.scope_refusal({"XDG_RUNTIME_DIR": "/run/user/1"}, "/usr/bin/systemd-run") is None
+    assert gate.scope_refusal({"GATE_SCOPED": "1"}, "/usr/bin/systemd-run") is None
+    assert gate.scope_refusal({}, "") is None
+
+
 def test_the_gate_scope_is_omitted_from_systemd_oomd(tmp_path):
     """systemd-oomd SIGKILLed two fast gates at 13:56 on memory pressure (58%, then 78%, over 50% for 20 s) with 174 G free: a gate in its
     own scope was a victim. The scope carries user.oomd_omit, which oomd honours."""
@@ -1323,8 +1331,9 @@ def test_the_bench_step_is_cut_into_the_configured_shards_each_with_its_own_slic
     p = gate.plan(["bench/fib/fib.c"], "full")
     groups = gate.groups_of(p, {})
     n = gate.load()["bench"]["shards"]
-    assert [g for g in groups if g.startswith("bench")] == [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
+    assert [g for g in groups if g.startswith("bench")] == ["bench-base"] + [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
     assert gate.shard_of("bench-3") == ("bench", f"3/{n}") and gate.shard_of("tools") == ("tools", None)
+    assert gate.shard_of("bench-base") == ("bench", "base"), "the base is measured once, by its own job, for every slice to be judged against"
     assert "--shard" in gate.commands(p, gate.load(), gate.packages())["bench"]
 
 
