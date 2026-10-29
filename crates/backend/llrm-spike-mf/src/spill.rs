@@ -24,7 +24,7 @@ fn loop_depths<C>(function: &MFunction<C>) -> Vec<u32> {
 
 /// What spilling each register would cost: its definitions and uses, each
 /// weighted by the loop it is in.
-fn costs<C>(function: &MFunction<C>) -> Vec<u64> {
+pub(crate) fn costs<C>(function: &MFunction<C>) -> Vec<u64> {
     let mut cost = vec![0u64; function.classes.len()];
     for (block, depth) in function.blocks.iter().zip(loop_depths(function)) {
         let weight = LOOP_WEIGHT.pow(depth.min(4));
@@ -304,7 +304,7 @@ fn remove_dead_defs<C>(function: &mut MFunction<C>) {
 
 /// Whether every definition and use of `v` is in one run of instructions of
 /// one block: spilling it leaves the same run, so frees nothing.
-fn already_minimal<C>(
+pub(crate) fn already_minimal<C>(
     function: &MFunction<C>,
     v: u32,
 ) -> bool {
