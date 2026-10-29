@@ -347,7 +347,7 @@ fn ours_row(
     tool(
         &dir,
         "clang",
-        &["--target=msp430", "-O2", "-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm", "-fno-unwind-tables", &define, "-o", &raw, source.to_str().unwrap()],
+        &["--target=msp430", "-funsigned-char", "-fpack-struct=1", "-O2", "-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm", "-fno-unwind-tables", &define, "-o", &raw, source.to_str().unwrap()],
     )?;
     let retargeted: String = std::fs::read_to_string(dir.join(&raw))
         .unwrap()
