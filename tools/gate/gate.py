@@ -1000,6 +1000,14 @@ def scoped(argv: list[str], environ: dict | None = None, have: str | None = None
     return [have, "--user", "--scope", "-q", "-p", f"CPUWeight={weight}", "-p", "ManagedOOMPreference=omit", "--setenv=GATE_SCOPED=1", *argv]
 
 
+def scope_refusal(environ: dict | None = None, have: str | None = None) -> str | None:
+    """Why `scoped` would fail: systemd-run --user needs a user bus. Without one it exited with only a dbus line and no verdict."""
+    environ = os.environ if environ is None else environ
+    if scoped(["x"], environ, have) is None or environ.get("XDG_RUNTIME_DIR") or environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        return None
+    return "no systemd user bus (XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS unset): set GATE_SCOPED=1 to run without the scope"
+
+
 def main() -> int:
     kill_on_term()
     ap = argparse.ArgumentParser()
@@ -1038,6 +1046,9 @@ def main() -> int:
     if args.command == "run":
         head, dirty = head_state()
         if (why := refusal(head, dirty, args.expect, args.allow_dirty)) is not None:
+            print(f"gate: {why}")
+            return 2
+        if not args.json and (why := scope_refusal()):
             print(f"gate: {why}")
             return 2
         if not args.json and (wrapped := scoped([sys.executable, *sys.argv])):
