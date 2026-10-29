@@ -51,8 +51,23 @@ fn rc(n: u8) -> RegId {
 /// (`Platform::zero_page`): `rc0`..`rc15` and, above them, as many scratch cells as it has room for.
 const BASE_CELLS: u8 = 16;
 
+/// What a byte of code is worth against a clock, per level (the tuning struct of this target): a
+/// size-reducing choice is taken when each byte it saves costs at most `clocks_per_byte` more clocks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Tuning {
+    pub clocks_per_byte: u32,
+}
+
+impl Tuning {
+    /// Speed: a byte saved is not worth a clock.
+    pub const SPEED: Tuning = Tuning { clocks_per_byte: 1 };
+    /// Size: a byte saved is worth up to eight clocks (a shift loop of 3 bits is 3 bytes and 16 clocks).
+    pub const SIZE: Tuning = Tuning { clocks_per_byte: 8 };
+}
+
 thread_local! {
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
+    static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
 }
 
 fn imaginary() -> u8 {
@@ -1728,10 +1743,13 @@ pub fn emit(
     stack: bool,
     cmos: bool,
     zero_page: u8,
+    tuning: Tuning,
 ) -> Result<(String, Vec<(String, usize)>), String> {
     let before = IMAGINARY.with(|n| n.replace(zero_page.clamp(BASE_CELLS, MOST_CELLS)));
+    let level = TUNING.with(|t| t.replace(tuning));
     let result = emit_on(function, labels, stack, cmos);
     IMAGINARY.with(|n| n.set(before));
+    TUNING.with(|t| t.set(level));
     result
 }
 
@@ -2038,11 +2056,15 @@ fn emit_with<const STACK: bool>(
                         if step == "SHL1" { ("asl", "rol") } else { ("lsr", "ror") };
                     let (low, high) = (register_name(regs[0]), register_name(regs[2]));
                     let (one, two) = if step == "SHL1" { (low, high) } else { (high, low) };
-                    // a run of four or more shifts is shorter as a counted loop (nine bytes, against
-                    // four a shift) when an index register is free to count
+                    // a run of shifts is shorter as a counted loop (nine bytes, against four a shift)
+                    // when an index register is free to count; it takes 5 clocks a shift and one more
+                    // than the run, so it is chosen where each byte it saves costs no more clocks than
+                    // the level's rate
                     let run = block.insts[i..].iter().take_while(|next| next.kind == inst.kind && next.operands == inst.operands).count();
+                    let (saved, slower) = (4 * run as i64 - 9, 5 * run as u32 + 1);
+                    let pays = saved > 0 && slower <= TUNING.with(|t| t.get()).clocks_per_byte * saved as u32;
                     match spare {
-                        Some(index) if run >= 4 => {
+                        Some(index) if pays => {
                             made += 1;
                             writeln!(out, "  ld{index} #{run}\n_sh{made}:\n  {first} {one}\n  {second} {two}\n  de{index}\n  bne _sh{made}").unwrap();
                             repeated = run - 1;

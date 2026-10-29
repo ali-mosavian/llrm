@@ -86,6 +86,8 @@ pub struct Selection {
     pub widths: HashMap<u32, u32>,
     /// The zero-page bytes the platform gives the imaginary registers: 16 or more (`Platform::zero_page`).
     pub zero_page: u8,
+    /// The level's price of a byte against a clock.
+    pub tuning: crate::alloc::Tuning,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -124,7 +126,7 @@ pub fn select_function(
         .iter()
         .map(|(value, reg)| (*reg, 8 * layout.alloc_size(&module.context.types, function.value(value).ty) as u32))
         .collect();
-    Ok(Selection { blocks: selected, locals, cpu, widths, zero_page: 16 })
+    Ok(Selection { blocks: selected, locals, cpu, widths, zero_page: 16, tuning: crate::alloc::Tuning::SPEED })
 }
 
 /// The size of each static alloca, by the frame index `FunctionLoweringInfo`
