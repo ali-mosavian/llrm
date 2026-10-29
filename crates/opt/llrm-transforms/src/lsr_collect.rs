@@ -888,6 +888,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     tti: self.tti,
                     l: self.l,
                     hardware_loop_profitable: self.hardware_loop_profitable,
+                    as_written: true,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);

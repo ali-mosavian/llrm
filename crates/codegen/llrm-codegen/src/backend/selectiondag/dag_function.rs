@@ -106,6 +106,8 @@ pub(super) struct Frame {
     /// (displacement, size) of each object made, by index.
     locals: std::cell::RefCell<Vec<(i64, i64)>>,
     depth: std::cell::Cell<i64>,
+    /// The widest alignment any object was made with.
+    align: std::cell::Cell<i64>,
 }
 
 impl Frame {
@@ -113,7 +115,7 @@ impl Frame {
         params: Vec<i64>,
         hole: i64,
     ) -> Frame {
-        Frame { params, locals: Default::default(), depth: std::cell::Cell::new(hole) }
+        Frame { params, locals: Default::default(), depth: std::cell::Cell::new(hole), align: std::cell::Cell::new(1) }
     }
 }
 
@@ -159,6 +161,7 @@ impl FrameObjects for Temporaries<'_> {
         let (size, align) = (i64::from(size), i64::from(align.max(1)));
         let depth = (self.0.depth.get() + size + align - 1).div_euclid(align) * align;
         self.0.depth.set(depth);
+        self.0.align.set(self.0.align.get().max(align));
         let mut locals = self.0.locals.borrow_mut();
         locals.push((-depth, size));
         (locals.len() - 1) as i32
@@ -789,7 +792,7 @@ fn selected_in(
         }
     }
     let (builder_target, address_mode) = match bitness {
-        16 => (BuilderTarget::m16().with_memset_stores_size(4).with_memcpy_moves_size(2), AddrMode::Real16),
+        16 => (BuilderTarget::m16(), AddrMode::Real16),
         64 => (BuilderTarget::m64(), AddrMode::Flat64),
         _ => (BuilderTarget::m32(), AddrMode::Flat32),
     };
@@ -797,6 +800,7 @@ fn selected_in(
     // The frontends compile static code: every symbol is `dso_local`.
     builder_target.dag.dso_local_symbols = true;
     let builder_target = builder_target
+        .with_tuning(cpu.target().tuning())
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
         // DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
@@ -1390,6 +1394,7 @@ fn selected_in(
         far,
         pops,
         depth: fixed_depth,
+        align: frame.align.get(),
         extents: frame.locals.borrow().clone(),
         temporaries: frame.locals.borrow().len() - fixed_objects,
         over_aligned,
