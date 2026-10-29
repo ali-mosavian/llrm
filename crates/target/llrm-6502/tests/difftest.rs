@@ -1,12 +1,10 @@
-//! Differential tests: random small C programs, compiled by cc65 -O and by
-//! clang -> opt -> ours, run on sim65; the 8-bit fold of a 16-bit checksum must
-//! agree. `DIFF_SEEDS=<first>:<count>` (default 0:40), `DIFF_JOBS` threads
-//! (default 4). A mismatch leaves the program in `target/tmp/difftest/<seed>/`.
+//! Differential tests: random small C programs, compiled by cc65 -O and by clang -> opt -> ours, run on
+//! sim65; the 8-bit fold of a 16-bit checksum must agree. `DIFF_SEEDS=<first>:<count>` (default 0:40),
+//! `DIFF_JOBS` threads (default 4). A mismatch leaves the program in `target/tmp/difftest/<seed>/`.
 //!
-//! The programs are free of undefined behaviour: unsigned arithmetic only
-//! (narrow operands are widened first), signed values come from conversions of
-//! unsigned ones, no signed division, shifts are by constants or masked counts,
-//! array indexes are masked, loops are bounded, recursion is bounded.
+//! The programs are free of undefined behaviour: unsigned arithmetic only (narrow operands are widened
+//! first), signed values come from conversions of unsigned ones, no signed division, shifts are by
+//! constants or masked counts, array indexes are masked, loops are bounded, recursion is bounded.
 //!
 //! Needs cc65, clang (msp430 front end), LLVM 20 `opt`, cl65 and sim65.
 
@@ -52,11 +50,9 @@ fn cap() -> String {
     std::env::var("DIFF_CAP").unwrap_or_else(|_| "30000000".into())
 }
 
-/// sim65 on `bin`: the exit code, or `None` when the cycle cap is hit. sim65
-/// then says "Maximum number of cycles reached." and exits 126; that was
-/// matched as "Max number" and so read as the program's own exit code 126
-/// (differential seeds 26 and 51: cc65 -O "agreed" with ours on a hang of
-/// both).
+/// sim65 on `bin`: the exit code, or `None` when the cycle cap is hit. sim65 then says "Maximum number of
+/// cycles reached." and exits 126; that was matched as "Max number" and so read as the program's own
+/// exit code 126 (differential seeds 26 and 51: cc65 -O "agreed" with ours on a hang of both).
 fn run(bin: &Path) -> Result<Option<i32>, String> {
     let out = Command::new("sim65").args(["-x", &cap()]).arg(bin).output().map_err(|e| e.to_string())?;
     if String::from_utf8_lossy(&out.stderr).contains("Maximum number of cycles") {
@@ -65,57 +61,28 @@ fn run(bin: &Path) -> Result<Option<i32>, String> {
     Ok(out.status.code())
 }
 
-fn cc65(
-    dir: &Path,
-    source: &str,
-    optimize: bool,
-) -> Result<Option<i32>, String> {
-    std::fs::write(
-        dir.join("c.c"),
-        format!("{source}\nint main(void) {{ unsigned r = test(); return (r ^ (r >> 8)) & 255; }}\n"),
-    )
-    .unwrap();
+fn cc65(dir: &Path, source: &str, optimize: bool) -> Result<Option<i32>, String> {
+    std::fs::write(dir.join("c.c"), format!("{source}\nint main(void) {{ unsigned r = test(); return (r ^ (r >> 8)) & 255; }}\n")).unwrap();
     std::fs::write(dir.join("data.s"), DATA).unwrap();
     tool(dir, "cl65", &["-t", "sim6502", if optimize { "-O" } else { "-g0" }, "-o", "c.bin", "c.c", "data.s"])?;
     run(&dir.join("c.bin"))
 }
 
-fn ours(
-    dir: &Path,
-    source: &str,
-    seed: u64,
-    optimize: bool,
-) -> Result<Option<i32>, String> {
+fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i32>, String> {
     std::fs::write(dir.join("o.c"), source).unwrap();
     tool(
         dir,
         "clang",
         &[
-            "--target=msp430",
-            "-funsigned-char",
-            "-fpack-struct=1",
-            "-O2",
-            "-Xclang",
-            "-disable-llvm-passes",
-            "-S",
-            "-emit-llvm",
-            "-fno-unwind-tables",
-            "-o",
-            "raw.ll",
-            "o.c",
+            "--target=msp430", "-funsigned-char", "-fpack-struct=1", "-O2", "-Xclang", "-disable-llvm-passes", "-S",
+            "-emit-llvm", "-fno-unwind-tables", "-o", "raw.ll", "o.c",
         ],
     )?;
     let raw: String = std::fs::read_to_string(dir.join("raw.ll"))
         .unwrap()
         .lines()
         .filter(|l| !l.starts_with("target triple"))
-        .map(|l| {
-            if l.starts_with("target datalayout") {
-                format!("target datalayout = \"{}\"", datalayout())
-            } else {
-                l.to_owned()
-            }
-        })
+        .map(|l| if l.starts_with("target datalayout") { format!("target datalayout = \"{}\"", datalayout()) } else { l.to_owned() })
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(dir.join("raw.ll"), raw).unwrap();
@@ -123,38 +90,22 @@ fn ours(
     if !optimize {
         std::fs::copy(dir.join("raw.ll"), dir.join("k.ll")).unwrap();
     } else {
-        tool(
-            dir,
-            "/usr/lib/llvm-20/bin/opt",
-            &[
-                "-O2",
-                inline,
-                "-unroll-threshold=0",
-                "-unroll-full-max-count=0",
-                "-vectorize-loops=false",
-                "-vectorize-slp=false",
-                "-S",
-                "raw.ll",
-                "-o",
-                "k.ll",
-            ],
-        )?;
+    tool(
+        dir,
+        "/usr/lib/llvm-20/bin/opt",
+        &["-O2", inline, "-unroll-threshold=0", "-unroll-full-max-count=0", "-vectorize-loops=false", "-vectorize-slp=false", "-S", "raw.ll", "-o", "k.ll"],
+    )?;
     }
     let mut text = sanitize(&std::fs::read_to_string(dir.join("k.ll")).unwrap());
     if std::env::var("DIFF_NOLIFETIME").is_ok() {
         text = text.lines().filter(|l| !l.contains("llvm.lifetime")).collect::<Vec<_>>().join("\n");
     }
-    let mut module =
-        llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e:?}").chars().take(120).collect::<String>())?;
+    let mut module = llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e:?}").chars().take(120).collect::<String>())?;
     llrm_6502::prepare::split_phi_edges(&mut module);
     let platform = Platform::parse(SIM65).unwrap();
     let mut asm = String::new();
-    let names: Vec<String> =
-        std::iter::once("test".to_owned()).chain((0..4).map(|n| format!("h{n}"))).chain(["bump".to_owned()]).collect();
-    for name in names
-        .iter()
-        .filter(|n| module.named(n).is_some_and(|id| module.global(id).function().is_some_and(|f| !f.is_declaration())))
-    {
+    let names: Vec<String> = std::iter::once("test".to_owned()).chain((0..4).map(|n| format!("h{n}"))).chain(["bump".to_owned()]).collect();
+    for name in names.iter().filter(|n| module.named(n).is_some_and(|id| module.global(id).function().is_some_and(|f| !f.is_declaration()))) {
         if std::env::var("DIFF_TRACE").is_ok() {
             eprintln!("trace: seed {seed}: compiling {name}");
         }
@@ -173,11 +124,7 @@ fn ours(
         }
     }
     let runtime = reachable_runtime(&asm);
-    std::fs::write(
-        dir.join("f.s"),
-        format!("{}.import buf\n.import tab\n.import zero\n{asm}{runtime}", equates(&platform)),
-    )
-    .unwrap();
+    std::fs::write(dir.join("f.s"), format!("{}.import buf\n.import tab\n.import zero\n{asm}{runtime}", equates(&platform))).unwrap();
     let driver = format!(
         ".export _main\n{}.import test\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  jsr test\n  stx fold\n  eor fold\n  ldx #0\n  rts\n.segment \"BSS\"\nfold: .res 1\n",
         equates(&platform)
@@ -188,13 +135,9 @@ fn ours(
     run(&dir.join("o.bin"))
 }
 
-/// The third opinion: the program compiled by the host gcc with the target's
-/// widths (`unsigned` is 16 bits, `unsigned long` 32), run, and folded the way
-/// `main` folds it. `None` when gcc fails.
-fn native(
-    dir: &Path,
-    source: &str,
-) -> Option<i32> {
+/// The third opinion: the program compiled by the host gcc with the target's widths (`unsigned` is 16
+/// bits, `unsigned long` 32), run, and folded the way `main` folds it. `None` when gcc fails.
+fn native(dir: &Path, source: &str) -> Option<i32> {
     let text = source
         .lines()
         .filter(|line| !line.starts_with("extern const"))
@@ -224,15 +167,13 @@ fn cycles(bin: &Path) -> Option<i64> {
     text.lines().find_map(|line| line.strip_suffix(" cycles")?.trim().parse().ok())
 }
 
-/// The linked size and cycles of the two builds in `dir`: cc65 -O (`c.bin`) and
-/// ours (`o.bin`).
+/// The linked size and cycles of the two builds in `dir`: cc65 -O (`c.bin`) and ours (`o.bin`).
 fn measure(dir: &Path) -> Option<[i64; 4]> {
     let bytes = |name: &str| std::fs::metadata(dir.join(name)).ok().map(|m| m.len() as i64);
     Some([bytes("c.bin")?, bytes("o.bin")?, cycles(&dir.join("c.bin"))?, cycles(&dir.join("o.bin"))?])
 }
 
-/// [`measure`] of a program that does nothing: what both builds cost before the
-/// program's own code.
+/// [`measure`] of a program that does nothing: what both builds cost before the program's own code.
 fn baseline() -> [i64; 4] {
     static BASE: std::sync::OnceLock<[i64; 4]> = std::sync::OnceLock::new();
     *BASE.get_or_init(|| {
@@ -251,37 +192,25 @@ enum Outcome {
     Agree(Option<[i64; 4]>),
     /// A program the harness could not compare: the reason.
     Skipped(String),
-    /// cc65 -O, ours -O2, and the cross-checks: cc65 without -O, ours on the
-    /// unoptimized IR and the host gcc.
+    /// cc65 -O, ours -O2, and the cross-checks: cc65 without -O, ours on the unoptimized IR and the
+    /// host gcc.
     Mismatch(i32, i32, Option<i32>, Option<i32>, Option<i32>),
-    /// cc65 -O disagrees with ours and the host gcc agrees with ours: a bug in
-    /// cc65. cc65 -O, ours and the host gcc, and cc65 without -O
+    /// cc65 -O disagrees with ours and the host gcc agrees with ours: a bug in cc65.
+    /// cc65 -O, ours and the host gcc, and cc65 without -O
     Cc65(i32, i32, Option<i32>),
 }
 
 fn check(seed: u64) -> Outcome {
     let dir = work(seed);
-    // `DIFF_FILE=<path>` runs a hand-written program (with a `test`) in place
-    // of the generated one
-    let source =
-        std::env::var("DIFF_FILE").map(|path| std::fs::read_to_string(path).unwrap()).unwrap_or_else(|_| program(seed));
+    // `DIFF_FILE=<path>` runs a hand-written program (with a `test`) in place of the generated one
+    let source = std::env::var("DIFF_FILE").map(|path| std::fs::read_to_string(path).unwrap()).unwrap_or_else(|_| program(seed));
     std::fs::write(dir.join("p.c"), &source).unwrap();
-    // a reduced program must stay defined: no missing return, no read of a
-    // local before it is set
+    // a reduced program must stay defined: no missing return, no read of a local before it is set
     if std::env::var("DIFF_STRICT").is_ok() {
         let strict = tool(
             &dir,
             "clang",
-            &[
-                "--target=msp430",
-                "-funsigned-char",
-                "-fsyntax-only",
-                "-Werror=return-type",
-                "-Werror=uninitialized",
-                "-Werror=sometimes-uninitialized",
-                "-Werror=conditional-uninitialized",
-                "p.c",
-            ],
+            &["--target=msp430", "-funsigned-char", "-fsyntax-only", "-Werror=return-type", "-Werror=uninitialized", "-Werror=sometimes-uninitialized", "-Werror=conditional-uninitialized", "p.c"],
         );
         if let Err(why) = strict {
             return Outcome::Skipped(format!("not a defined program: {why}"));
@@ -296,8 +225,7 @@ fn check(seed: u64) -> Outcome {
         Ok(Some(code)) if code == reference => {
             let sizes = std::env::var("DIFF_SIZES").ok().and_then(|_| measure(&dir));
             if std::env::var("DIFF_ORACLE").is_ok() {
-                // cc65 and ours agree: the host model disagreeing is a hole in
-                // the model
+                // cc65 and ours agree: the host model disagreeing is a hole in the model
                 match native(&dir, &source) {
                     Some(host) if host != code => {
                         ORACLE_DIFFERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -331,8 +259,7 @@ fn check(seed: u64) -> Outcome {
 #[ignore = "needs cc65, clang and LLVM 20; run with --ignored --nocapture"]
 fn random_programs_agree_with_cc65() {
     let spec = std::env::var("DIFF_SEEDS").unwrap_or_else(|_| "0:40".into());
-    let (first, count) =
-        spec.split_once(':').map(|(a, b)| (a.parse::<u64>().unwrap(), b.parse::<u64>().unwrap())).unwrap();
+    let (first, count) = spec.split_once(':').map(|(a, b)| (a.parse::<u64>().unwrap(), b.parse::<u64>().unwrap())).unwrap();
     let jobs: usize = std::env::var("DIFF_JOBS").ok().and_then(|j| j.parse().ok()).unwrap_or(4);
     let seeds: Vec<u64> = (first..first + count).collect();
     let results = std::sync::Mutex::new(Vec::new());
@@ -368,15 +295,11 @@ fn random_programs_agree_with_cc65() {
                 if *plain == Some(*got) {
                     cc65_o_only += 1;
                 }
-                println!(
-                    "seed {seed}: cc65 bug: cc65 -O {want}, ours and the host gcc {got}; cc65 without -O {plain:?}"
-                );
+                println!("seed {seed}: cc65 bug: cc65 -O {want}, ours and the host gcc {got}; cc65 without -O {plain:?}");
             }
             Outcome::Mismatch(want, got, plain, unoptimized, third) => {
                 bad += 1;
-                println!(
-                    "seed {seed}: MISMATCH cc65 -O {want}, ours -O2 {got}; cc65 plain {plain:?}, ours unoptimized {unoptimized:?}, host gcc {third:?}"
-                );
+                println!("seed {seed}: MISMATCH cc65 -O {want}, ours -O2 {got}; cc65 plain {plain:?}, ours unoptimized {unoptimized:?}, host gcc {third:?}");
             }
         }
     }
@@ -398,36 +321,23 @@ fn random_programs_agree_with_cc65() {
                 std::cmp::Ordering::Equal => equal += 1,
                 std::cmp::Ordering::Greater => slower += 1,
             }
-            println!(
-                "seed {seed}: net bytes cc65 -O {} ours {}; net cycles cc65 -O {} ours {}",
-                net[0], net[1], net[2], net[3]
-            );
+            println!("seed {seed}: net bytes cc65 -O {} ours {}; net cycles cc65 -O {} ours {}", net[0], net[1], net[2], net[3]);
         }
         println!(
             "{} agreeing programs, net of an empty one: bytes ours smaller {smaller} / equal {same} / larger {larger} (totals cc65 -O {}, ours {}); cycles ours fewer {faster} / equal {equal} / more {slower} (totals cc65 -O {}, ours {})",
-            measured.len(),
-            totals[0],
-            totals[1],
-            totals[2],
-            totals[3]
+            measured.len(), totals[0], totals[1], totals[2], totals[3]
         );
     }
     if std::env::var("DIFF_ORACLE").is_ok() {
-        println!(
-            "host gcc differs from cc65 -O and ours on {} of {agree} agreeing programs",
-            ORACLE_DIFFERS.load(std::sync::atomic::Ordering::Relaxed)
-        );
+        println!("host gcc differs from cc65 -O and ours on {} of {agree} agreeing programs", ORACLE_DIFFERS.load(std::sync::atomic::Ordering::Relaxed));
     }
-    println!(
-        "{count} programs from seed {first}: {agree} agree, {bad} mismatch, {cc65_bugs} cc65 bugs ({cc65_o_only} of them only with -O), {skipped} skipped"
-    );
+    println!("{count} programs from seed {first}: {agree} agree, {bad} mismatch, {cc65_bugs} cc65 bugs ({cc65_o_only} of them only with -O), {skipped} skipped");
     assert_eq!(bad, 0, "miscompiles; programs kept in target/tmp/difftest/<seed>");
 }
 
-/// A macro the runtime defines after one routine and another uses was left out
-/// when only the other was reached: `__umodsi3` reached `cmp_sub_32` and ca65
-/// stopped at `':' expected` (differential seeds 14, 24, 33 were rejected for
-/// it).
+/// A macro the runtime defines after one routine and another uses was left out when only the other
+/// was reached: `__umodsi3` reached `cmp_sub_32` and ca65 stopped at `':' expected` (differential
+/// seeds 14, 24, 33 were rejected for it).
 #[test]
 fn a_reachable_routine_gets_the_macros_it_uses() {
     let runtime = reachable_runtime("  jsr __umodsi3\n");
