@@ -5,4 +5,5 @@ name = "bbc"
 status = "stub"
 load_address = 0x1900
 imag_base = 0x70
+zero_page = 26
 soft_stack = 0x7C00

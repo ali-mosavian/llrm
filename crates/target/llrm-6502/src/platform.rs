@@ -28,6 +28,9 @@ pub struct Platform {
     pub load_address: u16,
     /// The zero-page address of `rc0`.
     pub imag_base: u8,
+    /// The zero-page bytes from `imag_base` the program may use as registers: `rc0`..`rc15` and
+    /// scratch cells above them (`rc16`.., at most 26 bytes). 16 where a row does not say.
+    pub zero_page: u8,
     /// Where the soft stack (`rs0`) starts; it grows down.
     pub soft_stack: u16,
 }
@@ -43,6 +46,10 @@ impl Platform {
             name: table.get("name").and_then(|v| v.as_str()).ok_or("platform.name is not a string")?.to_owned(),
             load_address: u16::try_from(number("load_address")?).map_err(|_| "load_address is not 16 bits")?,
             imag_base: u8::try_from(number("imag_base")?).map_err(|_| "imag_base is not 8 bits")?,
+            zero_page: match table.get("zero_page") {
+                None => 16,
+                Some(_) => u8::try_from(number("zero_page")?).map_err(|_| "zero_page is not 8 bits")?,
+            },
             soft_stack: u16::try_from(number("soft_stack")?).map_err(|_| "soft_stack is not 16 bits")?,
         })
     }

@@ -47,15 +47,30 @@ fn rc(n: u8) -> RegId {
     RegId::from_raw(reg::RC0.index() as u8 + n)
 }
 
-/// The zero-page bytes a value may live in: `rc2`..`rc7`, which a call clobbers, then `rc8`..`rc15`,
-/// which a callee keeps (see [`preserved`]).
-fn cells() -> impl Iterator<Item = RegId> {
-    (2..16).map(rc)
+/// The zero-page bytes the imaginary registers may use on the platform being compiled for
+/// (`Platform::zero_page`): `rc0`..`rc15` and, above them, as many scratch cells as it has room for.
+const BASE_CELLS: u8 = 16;
+
+thread_local! {
+    static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
 }
 
-/// The pairs a pointer may live in: `rs1`..`rs3` over `rc2`..`rc7`, then `rs4`..`rs7`.
+fn imaginary() -> u8 {
+    IMAGINARY.with(|n| n.get())
+}
+
+/// The zero-page bytes a value may live in: `rc2`..`rc7`, which a call clobbers, then the platform's
+/// extra scratch cells `rc16`.., which a call clobbers too, then `rc8`..`rc15`, which a callee keeps
+/// (see [`preserved`]). Scratch comes before the kept cells: using one costs no save and restore.
+fn cells() -> impl Iterator<Item = RegId> {
+    (2..8).chain(BASE_CELLS..imaginary()).chain(8..BASE_CELLS).map(rc)
+}
+
+/// The pairs a pointer may live in: `rs1`..`rs3` over `rc2`..`rc7`, the scratch pairs `rs8`.., then
+/// `rs4`..`rs7`.
 fn pairs() -> impl Iterator<Item = RegId> {
-    [reg::RS1, reg::RS2, reg::RS3, reg::RS4, reg::RS5, reg::RS6, reg::RS7].into_iter()
+    let scratch = (BASE_CELLS / 2..imaginary() / 2).map(|n| RegId::from_raw(reg::RS0.index() as u8 + n));
+    [reg::RS1, reg::RS2, reg::RS3].into_iter().chain(scratch).chain([reg::RS4, reg::RS5, reg::RS6, reg::RS7])
 }
 
 /// A callee-saved zero-page byte or pair (`rc8`..`rc15`, `rs4`..`rs7`): a function that uses one
@@ -1708,6 +1723,22 @@ fn move_byte(
 /// without it, and the sunk form is kept only if it is no larger and no slower by the timing table
 /// (`MachineSink` weighs the move by block frequency; the table is this target's).
 pub fn emit(
+    function: MFunction<Class>,
+    labels: &[Vec<String>],
+    stack: bool,
+    cmos: bool,
+    zero_page: u8,
+) -> Result<(String, Vec<(String, usize)>), String> {
+    let before = IMAGINARY.with(|n| n.replace(zero_page.clamp(BASE_CELLS, MOST_CELLS)));
+    let result = emit_on(function, labels, stack, cmos);
+    IMAGINARY.with(|n| n.set(before));
+    result
+}
+
+/// The most zero-page bytes the register file names (`rc0`..`rc25`).
+pub const MOST_CELLS: u8 = 26;
+
+fn emit_on(
     function: MFunction<Class>,
     labels: &[Vec<String>],
     stack: bool,

@@ -84,6 +84,8 @@ pub struct Selection {
     /// The width in bits of the register of every value that has one: a phi input is read on an
     /// edge laid out before any block that names it (a loop's back edge).
     pub widths: HashMap<u32, u32>,
+    /// The zero-page bytes the platform gives the imaginary registers: 16 or more (`Platform::zero_page`).
+    pub zero_page: u8,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -122,7 +124,7 @@ pub fn select_function(
         .iter()
         .map(|(value, reg)| (*reg, 8 * layout.alloc_size(&module.context.types, function.value(value).ty) as u32))
         .collect();
-    Ok(Selection { blocks: selected, locals, cpu, widths })
+    Ok(Selection { blocks: selected, locals, cpu, widths, zero_page: 16 })
 }
 
 /// The size of each static alloca, by the frame index `FunctionLoweringInfo`

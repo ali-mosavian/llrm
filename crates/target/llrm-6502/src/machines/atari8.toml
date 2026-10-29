@@ -5,4 +5,5 @@ name = "atari8"
 status = "built"
 load_address = 0x2000
 imag_base = 0x82
+zero_page = 26
 soft_stack = 0x8000

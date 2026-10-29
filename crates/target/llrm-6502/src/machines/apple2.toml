@@ -6,4 +6,5 @@ name = "apple2"
 status = "built"
 load_address = 0x0803
 imag_base = 0x80
+zero_page = 26
 soft_stack = 0x9600

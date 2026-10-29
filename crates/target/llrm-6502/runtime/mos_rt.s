@@ -1,8 +1,16 @@
 ; Spike runtime for the 6502 target: what the compiler would call for multiply, divide, remainder and
 ; shifts by a variable. The `mos` convention: a byte argument in the first free of rc2.., a word in
 ; rs1 (rc2:rc3) then rs2 (rc4:rc5), a byte result in A, a word in A (low):X (high). The routines may
-; change A, X, Y and rc2..rc7 and keep rc0, rc1 and rc8..rc15. The caller defines rc0..rc15 (the
-; platform's zero-page base).
+; change A, X, Y and rc2..rc7 and keep rc0, rc1 and rc8..rc15. The caller defines rc0..rc(N-1), N being
+; the platform row's `zero_page` (16 to 26 bytes from its zero-page base).
+;
+; Zero-page registers: rc0:rc1 is the soft stack pointer; rc2..rc7 are arguments and caller-saved
+; scratch; rc8..rc15 are callee-saved (a function that uses one saves it on entry); rc16..rc(N-1) are
+; caller-saved scratch like rc2..rc7, which a compiled function may change and a call may clobber,
+; and which these routines never touch. N is per platform because the zero page is: C64, Apple II,
+; NES, Atari 8-bit, BBC and sim65 all leave 26 bytes (cc65 keeps about the same for sreg, tmp1..4 and
+; ptr1..4), so N = 26; a platform with less lists less. The compiler uses the scratch cells before
+; the callee-saved ones: they cost no save and restore.
 ;
 ; Division by zero gives the all-ones quotient and the dividend as remainder (the restoring loop
 ; below, unchanged). Signed division truncates toward zero and the remainder has the dividend's sign.
