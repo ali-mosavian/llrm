@@ -1,6 +1,6 @@
 # Measuring llrm-cc: compile time and size
 
-Owner: w10. Date: 2026-10-27. Frontend: llrm-cc (clang), not llrm-c. These numbers never mix with llrm-c's (`tools/compile-cost.py`, `tools/sizes.py`, `docs/working/emit-baselines.md`).
+Owner: w10. Date: 2026-10-27. Frontend: llrm-cc (clang), not llrm-cc. These numbers never mix with llrm-cc's (`tools/compile-cost.py`, `tools/sizes.py`, `docs/working/emit-baselines.md`).
 
 ## Method
 

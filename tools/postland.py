@@ -154,7 +154,7 @@ def group_summary(output: str) -> str:
 
 
 def unit_summary(output: str) -> str:
-    """`llrm-c 142/6, llrm-mir 900/1 ...` (tests run / failing) per crate, from each binary's `test result:` line."""
+    """`llrm-qb 142/6, llrm-mir 900/1 ...` (tests run / failing) per crate, from each binary's `test result:` line."""
     parts = []
     for block in output.split("     Running ")[1:]:
         binary = re.search(r"/(\w+)-[0-9a-f]+\)", block.splitlines()[0])
@@ -201,7 +201,7 @@ def unit_result(output: str, code: int) -> set[str]:
 
 def unit_failures(at: Path, name: str | None = None) -> tuple[set[str], str]:
     """`unit <crate>::<test>` for each failing lib test of the workspace (or of one test), in one cargo through buildslot: a crate alone lacks the features the
-    root package turns on (llrm-c's `toolchain`: 19 tests failed with "built without the toolchain feature" on a run per crate), a workspace run has them."""
+    root package turns on (19 tests failed with "built without the toolchain feature" on a run per crate), a workspace run has them."""
     env = {**os.environ, "CARGO_TARGET_DIR": str(HOME / "target-test"), "CARGO_INCREMENTAL": "0"}
     env.pop("RUSTFLAGS", None)
     command = [*LOW, "buildslot", "cargo", "test", "--release", "--workspace", "--lib", "--no-fail-fast", *([name] if name else [])]

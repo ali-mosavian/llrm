@@ -6,7 +6,7 @@ architecture-order: 140
 
 TL;DR: `decide` is 124.7 M of `d_faces` -O2 (36 runs, 3.5 M a run) and decides nothing: all 36 runs find no branch to decide, 4 of them thread a block. Across the 38 bench programs it decides 15 branches in all (guards 10, constants 4, ranges 1) in 5 runs of about 520. LLVM's four counterparts together are 31.9 M. The cost is per run and per branch, spent on answers that are all "no": 1,021 range proofs that fail, 486 guard collections, a constant propagation over the whole body, and the facts asked first (58%).
 
-Sources: llrm CI-mode build of main 7ac662405, `llrm-c -m32 -O2` of `d_faces.c`, callgrind inclusive of `decide::_decided` and its callees (children overlap where a callee is asked first by `decide`); decisions counted by a probe in `_decided` and `_decisions` (throwaway); LLVM 24 `opt -passes='default<O2>'` on the same file, inclusive of `<Pass>::run`.
+Sources: llrm CI-mode build of main 7ac662405, `llrm-cc -m32 -O2` of `d_faces.c`, callgrind inclusive of `decide::_decided` and its callees (children overlap where a callee is asked first by `decide`); decisions counted by a probe in `_decided` and `_decisions` (throwaway); LLVM 24 `opt -passes='default<O2>'` on the same file, inclusive of `<Pass>::run`.
 
 ## 1. LLVM, the four parts
 

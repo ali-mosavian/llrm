@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""llrm-c's compile cost against clang's and gcc's, per level, on d_faces and chosen bench programs.
+"""llrm-cc's compile cost against clang's and gcc's, per level, on d_faces and chosen bench programs.
 
-    QCPORT=<qb-quake src> tools/compile-gap.py [--programs matmul,quicksort] [llrm-c]   (builds the dist llrm-c if none is given)
+    QCPORT=<qb-quake src> tools/compile-gap.py [--programs matmul,quicksort] [llrm-cc]   (builds the dist llrm-cc and llrm-llc if none is given)
 
 Prints user-space instructions of `-S` compiles (perf stat; best of 3 by cycles) for the three compilers, then for d_faces
 llrm's phases in own instructions (`LLRM_DEBUG=time`'s `[instr]`, summed by phase) beside clang's `-ftime-report`
@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pin_clang  # noqa: E402
 import corpora  # noqa: E402
+import llrmbin  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 LEVELS = ("-O1", "-O2", "-O3", "-Os")
@@ -53,7 +54,7 @@ def instructions(cmd: list[str]) -> int:
 def phases(llrm: str, level: str, args: list[str]) -> dict[str, float]:
     """Own Minstr by phase (`[instr]` of LLRM_DEBUG=time, a step's analyses counted under their own names, so no
     instruction twice). Work done, the same on a loaded host; the ms columns of the same report are not."""
-    err = run([llrm, "-m32", "-march=i486", level, *args], {"LLRM_DEBUG": "time", "LLRM_TIME_TOP": "700"}).stderr
+    err = run([llrm, *llrmbin.c_args(32), level, *args], {**llrmbin.cc_environment(), "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "700"}).stderr
     own: dict[str, float] = collections.Counter()
     for line in err.split("[instr] by own work")[1].split("nesting")[0].splitlines():
         found = re.search(r"([\d.]+) Minstr own\s+[\d.]+ Minstr total\s+\d+x (\S+)", line)
@@ -73,23 +74,23 @@ def clang_phases(clang: str, level: str, args: list[str]) -> list[float]:
 
 
 def dist_build() -> str:
-    """The tree's llrm-c as shipped (fat LTO, one codegen unit): compile-time claims quote it, as a release build
+    """The tree's llrm-cc as shipped (fat LTO, one codegen unit): compile-time claims quote it, as a release build
     reads about 10% to 20% more instructions; gates stay on release."""
     built = subprocess.run(
-        ["cargo", "build", "--profile", "dist", "--bin", "llrm-c", "--message-format=json"],
+        ["cargo", "build", "--profile", "dist", "--bin", "llrm-cc", "--bin", "llrm-llc", "--message-format=json"],
         cwd=ROOT, capture_output=True, text=True,
     )
     if built.returncode:
         sys.exit(f"dist build failed\n{built.stderr[-400:]}")
     for line in reversed(built.stdout.splitlines()):
-        if '"executable":"' in line and '"name":"llrm-c"' in line:
+        if '"executable":"' in line and '"name":"llrm-cc"' in line:
             return json.loads(line)["executable"]
-    sys.exit("no llrm-c in the build")
+    sys.exit("no llrm-cc in the build")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("llrm", nargs="?", help="an llrm-c to measure; by default the tree's, built with the dist profile")
+    parser.add_argument("llrm", nargs="?", help="an llrm-cc to measure; by default the tree's, built with the dist profile")
     parser.add_argument("--programs", default="matmul,quicksort,nbody,sieve,switch")
     parser.add_argument(
         "--clang",
@@ -104,6 +105,7 @@ def main() -> None:
     args = parser.parse_args()
     args.clang = args.clang or pin_clang.path()
     args.llrm = args.llrm or dist_build()
+    os.environ.update(llrmbin.cc_environment())
     qc = corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus)
     print(corpora.header("dfaces", qc))
     includes = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(qc / d))]
@@ -116,12 +118,13 @@ def main() -> None:
     sink = ["-o", target]
     sink_cc = ["-c", *sink]
     flags = ["-m32", "-march=i486", "-fno-inline-functions"]
+    ours = [*llrmbin.c_args(32), "-fno-inline-functions"]
     for level in LEVELS:
         extra_column = " / distro clang" if args.distro_clang else ""
         print(f"{level}: compile M instructions   llrm / clang / gcc{extra_column}")
         for name, (source, extra) in inputs.items():
             cost = [
-                instructions([cc, *flags, *(["-w"] if cc != args.llrm else []), level, *extra, *(sink if cc == args.llrm else sink_cc), source])
+                instructions([cc, *(ours if cc == args.llrm else flags), *(["-w"] if cc != args.llrm else []), level, *extra, *(sink if cc == args.llrm else sink_cc), source])
                 / 1e6
                 for cc in (args.llrm, args.clang, "gcc")
             ]

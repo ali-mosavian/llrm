@@ -28,7 +28,7 @@ from spec import (
 from expect import PARTNERS
 
 S6 = Struct("s6", (("x", I16), ("y", I16), ("z", I16)))
-# 10 bytes as a struct: llrm-c converts long double to nothing (wccq E1090)
+# 10 bytes as a struct: a long double converts to nothing
 S10 = Struct("s10", (("x", I16), ("y", I32), ("z", I32)))
 SIZES = {"equal": (I16,), "two": (I16, I32), "distinct": (U8, I16, I32, F64, S6, S10)}
 EXTENT = 300  # elements an array holds past its largest start offset

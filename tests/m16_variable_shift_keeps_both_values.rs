@@ -10,7 +10,7 @@ fn test_a_variable_i64_shift_has_no_jump() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), "long long f(long long a, long long b) { return a << (b & 63); }\n")
         .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["a.c", "-m16", "-march=i386", "-O2", "--isel=dag", "-S", "-o", "-"])
         .output()

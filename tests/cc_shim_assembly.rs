@@ -7,7 +7,7 @@ fn s_writes_assembly_through_the_llrm_c_shim() {
     let scratch = tempfile::tempdir().unwrap();
     let source = scratch.path().join("one.c");
     std::fs::write(&source, "int one(void) { return 1; }\n").unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-march=i486", "-O1", "-S", "-o", "a.s"])
         .arg(&source)

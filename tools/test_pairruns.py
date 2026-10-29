@@ -43,7 +43,7 @@ def test_a_new_side_that_fails_hundreds_of_programs_is_a_broken_premise_too():
 def test_a_side_that_ran_nothing_is_a_broken_premise_not_no_new_failure():
     """The base of #2948 and #2902 printed one 'stale binaries' line and no group: the diff said 'no new tests/run failure' of a base that never ran."""
     ran = "[c] 350 programs: 350 pass, 0 known, 0 fail\n"
-    added, _ = pairruns.compare("stale binaries in /x: llrm-c older than the source\ndone\n", ran)
+    added, _ = pairruns.compare("stale binaries in /x: llrm-cc older than the source\ndone\n", ran)
     assert len(added) == 1 and added[0].startswith("PREMISE BROKEN: the base run printed no group line") and "stale binaries" in added[0]
 
 

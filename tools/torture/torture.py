@@ -57,8 +57,7 @@ def cause(text: str) -> str:
     """What a compiler's complaint says with its place and its names taken out: the key failures are counted by."""
     lines = [one.strip() for one in text.strip().splitlines() if one.strip()]
     # The first of its errors says it (clang prints warnings before the error that stops it)
-    line = next((one for one in lines if "Error!" in one or " error: " in one or one.startswith("llrm-llc:")), lines[0] if lines else "")
-    line = re.sub(r"^.*Error!\s*E\d+:\s*", "wccq: ", line)
+    line = next((one for one in lines if " error: " in one or one.startswith("llrm-llc:")), lines[0] if lines else "")
     line = re.sub(r"^llrm-cc?:\s*", "", line)
     line = re.sub(r"^\S+\.c:\d+(:\d+)?:\s*", "", line)
     line = re.sub(r"'[^']*'", "'_'", line)

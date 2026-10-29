@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Final code bytes per module at m16: the old selector, the DAG path and the pin's llc on the same IR.
 
-    tools/dagisel/m16_bytes.py LLRM_C [--src DIR] [--level=-Os] [--jobs N] [--out FILE]
+    tools/dagisel/m16_bytes.py LLRM_CC [--src DIR] [--level=-Os] [--jobs N] [--out FILE]
 
-Each program is compiled by `LLRM_C -m16 -march=i386 LEVEL` with `--isel=old` and `--isel=dag` (bytes of LEDATA in the OMF
+Each program is compiled by `LLRM_CC -c --target=x86_16-wat -march=i386 LEVEL` with `--isel=old` and `--isel=dag` (bytes of LEDATA in the OMF
 object, as tools/rows/qcport.py counts them); the last IR the dump writes goes through llrm's dialect fixes (difftest.normalise)
 to the pin's `llc -O2 -frame-pointer=all -filetype=obj` for the code16 target, and `size -A` gives its .text.
 
@@ -23,9 +23,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parent / "pairs"))
 sys.path.insert(0, str(HERE.parent / "difftest"))
 import difftest  # noqa: E402
+import llrmbin  # noqa: E402
 import pin  # noqa: E402
 
 
@@ -50,7 +52,7 @@ def pin_text(size_output: str) -> int:
     return 0
 
 
-def one(llrm_c: str, source: Path, level: str) -> tuple[str, int | None, int | None, int | None, str]:
+def one(llrm_cc: str, source: Path, level: str) -> tuple[str, int | None, int | None, int | None, str]:
     """(program, pin, old, dag, why-not)."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -58,8 +60,8 @@ def one(llrm_c: str, source: Path, level: str) -> tuple[str, int | None, int | N
         for mode in ("old", "dag"):
             obj, dump = tmp / f"{mode}.obj", tmp / f"d_{mode}"
             done = subprocess.run(
-                [llrm_c, "-m16", "-march=i386", level, f"--isel={mode}", "--dump", str(dump), "-o", str(obj), str(source)],
-                capture_output=True, text=True, timeout=600,
+                [llrm_cc, "-c", *llrmbin.c_args(16), level, f"--isel={mode}", "--dump", str(dump), "-o", str(obj), str(source)],
+                capture_output=True, text=True, timeout=600, env={**os.environ, **llrmbin.cc_environment()},
             )
             if done.returncode != 0 or not obj.exists():
                 return source.stem, None, None, None, f"{mode} compile failed"
@@ -79,7 +81,7 @@ def one(llrm_c: str, source: Path, level: str) -> tuple[str, int | None, int | N
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("llrm_c")
+    parser.add_argument("llrm_cc")
     parser.add_argument("--src", required=True)
     parser.add_argument("--level", default="-O2", choices=["-O2", "-Os"])
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
@@ -87,7 +89,7 @@ def main() -> int:
     args = parser.parse_args()
     sources = sorted(Path(args.src).glob("*.c"))
     with ThreadPoolExecutor(args.jobs) as pool:
-        rows = list(pool.map(lambda s: one(args.llrm_c, s, args.level), sources))
+        rows = list(pool.map(lambda s: one(args.llrm_cc, s, args.level), sources))
     done = [r for r in rows if r[1] is not None]
     skipped = [r for r in rows if r[1] is None]
     farther = [r for r in done if abs(r[3] - r[1]) > abs(r[2] - r[1])]

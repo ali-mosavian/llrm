@@ -2,7 +2,7 @@
 
 target: clang -m32 -march=i486 (triple i386, cpu i486, no SSE/MMX by arch); datalayout e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32 (ledger `ledger-c4fade734-O2.txt`).
 
-Measured: callgrind Ir of `llrm-c -m32 -mabi=sysv -march=i486 -O2` over d_faces (the ledger's command), dist build of c4fade7345 (llrm-c md5 68c5bd191371): 1,313.9 M (ledger 1,317.7 M). Profile `cg-c4fade.out`; callee lists `ann100.txt` there. Pin numbers are the ledger's. Every PR below carries Ir before/after on dist and objects identical (objsweep) or a bytes/clocks row; nothing buys compile time with quality. Dates are PR-open dates.
+Measured: callgrind Ir of `llrm-cc -m32 -mabi=sysv -march=i486 -O2` over d_faces (the ledger's command), dist build of c4fade7345 (llrm-cc md5 68c5bd191371): 1,313.9 M (ledger 1,317.7 M). Profile `cg-c4fade.out`; callee lists `ann100.txt` there. Pin numbers are the ledger's. Every PR below carries Ir before/after on dist and objects identical (objsweep) or a bytes/clocks row; nothing buys compile time with quality. Dates are PR-open dates.
 
 ## (b) scalar: EarlyCSE 42.3 / DSE 15.0 / MemCpyOpt 14.7 (ours 72.0 M; pin 7.8 + 2.9 + 2.0 = 12.7 M)
 

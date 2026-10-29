@@ -83,7 +83,7 @@ loop; `cgpaddr` follows the last `gvn`, which makes the phis it sinks;
 
 ## Example
 No honest example: the pipeline is the order of the passes, not one rewrite,
-and no one function shows it. `llrm-c --dump DIR` writes the module after
+and no one function shows it. `llrm-cc --dump DIR` writes the module after
 each stage (`NN-stage.ll`) and, for each body, each changed step of the
 fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 

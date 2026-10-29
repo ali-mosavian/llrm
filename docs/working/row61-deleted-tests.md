@@ -70,7 +70,7 @@
 - `test_the_arm_that_skips_the_update_takes_no_exchange_in_a_loop`
 - `test_x87_memory_operand_matches_each_public_cpu_cost`
 
-## llrm-c compile.rs: the float argument slot under floatassign (RFP-3 is the route's row) (1)
+## llrm-cc compile.rs: the float argument slot under floatassign (RFP-3 is the route's row) (1)
 - `test_truncation_saves_the_control_word_once_per_bodytest_a_float_argument_is_read_from_its_own_cell`
 
 ## parallel-copy stress tests whose premise (a loop copy of N moves) the old lowering made; ParallelCopy's own tests pin the cycles (2)

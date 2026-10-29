@@ -52,7 +52,7 @@ flowchart LR
   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
-  fe["<b>Front end</b><br/><small>llrm-c</small>"]:::src
+  fe["<b>Front end</b><br/><small>llrm-cc</small>"]:::src
   mir["<b>MIR</b><br/><small>SSA</small>"]:::mid
   opt["<b>Optimizer</b><br/><small>llrm-transforms</small>"]:::opt
   obj["<b>Object file</b>"]:::out

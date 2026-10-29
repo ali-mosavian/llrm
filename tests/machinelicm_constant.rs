@@ -11,7 +11,7 @@ mod common;
 fn a_constant_the_loop_reads_is_made_ahead_of_it() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/recsum/recsum.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O1", "--isel=dag", "-S", "-o", "a.s"])
         .arg(&source)

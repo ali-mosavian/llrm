@@ -28,7 +28,7 @@ Each step: ledger d_faces Ir before and after, objects on the 568 sweep.
 TA-R1 (numbered row, owner w-1, exit 2026-11-14): what is left, each under 0.4 M and mostly inherent: `_untied` 0.53 (the 140 tied instructions build their copies), `finish` 0.35 (`body_like` clones 7 bodies), `_reused` 0.39 (its index for 679 candidate blocks), `three_address`, `try_instruction_commute`, the two reschedules and `scan_uses` 0.12-0.15 each. Re-profile at the tip on the exit date; a callee that still shows over 0.3 M gets a PR, the rest is recorded as inherent.
 
 ## m16 `add` to `lea` (textfill; owner w-1 with w-2, plan 2026-11-06)
-`llrm-c -m16 -O2 -march=i386 -S bench/textfill/textfill.c` loops with `add ax,2; cmp bx,3997; mov bx,ax; jb`. The pin at m32 (and BC at m16, with a changed constant) has no extra `mov`: `cmp eax,3997; lea eax,[eax+2]; jb`.
+`llrm-cc -m16 -O2 -march=i386 -S bench/textfill/textfill.c` loops with `add ax,2; cmp bx,3997; mov bx,ax; jb`. The pin at m32 (and BC at m16, with a changed constant) has no extra `mov`: `cmp eax,3997; lea eax,[eax+2]; jb`.
 
 Cause: `three_address` returns None for anything but dwords (`into.width != 4`), so the word add stays two-address and its result needs the copy. `lea ax,[bx+2]` is flag-free in 16-bit addressing, but only `bx`, `si`, `di`, `bp` can be the base, so the conversion needs a register-class constraint on the source before allocation.
 

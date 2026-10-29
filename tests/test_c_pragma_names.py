@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import llrmbin  # noqa: E402
 
-# The pragma comes before the declaration it names, as Watcom's does and clang's reads it; llrm-c also took it after.
+# The pragma comes before the declaration it names, as Watcom's does and clang's reads it.
 SOURCE = """\
 #pragma aux ltrm "B$LTRM"
 #pragma aux b_seg "b$seg"

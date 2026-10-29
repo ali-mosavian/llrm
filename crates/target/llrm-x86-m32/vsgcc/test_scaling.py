@@ -153,9 +153,9 @@ def test_the_compilers_environment_and_path_do_not_depend_on_where_the_binaries_
     for name in ("a", "a-much-longer-directory-name-" * 3):
         folder = tmp_path / name
         folder.mkdir()
-        (folder / "llrm-c").write_text("")
+        (folder / "llrm-cc").write_text("")
         monkeypatch.setenv("LLRM_BIN", str(folder))
         monkeypatch.setattr(llrmbin, "stale_binaries", lambda *_: [])
         env = scaling.measured_environment()
-        seen.add((len(env["LLRM_BIN"]), sum(len(k) + len(v) for k, v in env.items()), len(str(llrmbin.pinned(folder / "llrm-c")))))
+        seen.add((len(env["LLRM_BIN"]), sum(len(k) + len(v) for k, v in env.items()), len(str(llrmbin.pinned(folder / "llrm-cc")))))
     assert len(seen) == 1, seen

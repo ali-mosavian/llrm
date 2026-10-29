@@ -1,5 +1,4 @@
-//! `-o -` writes standard output, as gcc's does: llrm-cc (llrm-c's command
-//! line), llrm-nib and llrm-qb each wrote a file named `-` in the working
+//! `-o -` writes standard output, as gcc's does: llrm-cc, llrm-nib and llrm-qb each wrote a file named `-` in the working
 //! directory and printed nothing.
 
 use std::path::{Path, PathBuf};
@@ -14,17 +13,16 @@ fn bin(name: &str) -> PathBuf {
 #[test]
 fn o_dash_writes_standard_output_in_every_frontend_and_no_file_named_dash() {
     let sources = [
-        ("llrm-c", "p.c", "int add(int a, int b)\n{\n    return a + b;\n}\n"),
+        ("llrm-cc", "p.c", "int add(int a, int b)\n{\n    return a + b;\n}\n"),
         ("llrm-nib", "p.nib", "fn main() -> i16:\n    return 3 + 4\n"),
         ("llrm-qb", "p.bas", "DIM total AS INTEGER\ntotal = 3 + 4\nPRINT total\n"),
     ];
     for (tool, source, text) in sources {
         let scratch = tempfile::tempdir().unwrap();
         std::fs::write(scratch.path().join(source), text).unwrap();
-        // llrm-c is gone: its command line is served by llrm-cc over the pinned
-        // clang.
-        let made = if tool == "llrm-c" {
-            common::cc::llrm_c()
+        // llrm-cc runs over the pinned clang, so it is not a sibling binary of llrm-qb.
+        let made = if tool == "llrm-cc" {
+            common::cc::llrm_cc()
                 .args(["-m16", "-S"])
                 .arg(source)
                 .args(["-o", "-"])

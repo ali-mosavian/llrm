@@ -105,7 +105,7 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
         // changes nothing.
         let text = std::fs::read_to_string(fixtures.join(source)).unwrap().replace("__attribute__((noinline)) ", "");
         std::fs::write(scratch.path().join(format!("{short}.c")), text).unwrap();
-        let made = common::cc::llrm_c()
+        let made = common::cc::llrm_cc()
             .env("LLRM_CC_TARGET", "x86_16-dos")
             .args(["-m16", "-gtd", "-O0"])
             .arg(scratch.path().join(format!("{short}.c")))
@@ -218,7 +218,7 @@ fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
     .unwrap();
     // Turbo C++'s own convention, whose symbols the table is compared by:
     // cdecl.
-    let made = common::cc::llrm_c()
+    let made = common::cc::llrm_cc()
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .args(["-m16", "-gtd", "-O0"])
         .arg(scratch.path().join("fnp.c"))
@@ -401,7 +401,7 @@ fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
     let scratch = tempfile::tempdir().unwrap();
     std::fs::copy(fixtures.join("list.c"), scratch.path().join("lst.c")).unwrap();
-    let made = common::cc::llrm_c()
+    let made = common::cc::llrm_cc()
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .args(["-m16", "-gtd", "-O0"])
         .arg(scratch.path().join("lst.c"))
@@ -452,7 +452,7 @@ fn tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register() {
         scratch.path().join("rv.c"),
     )
     .unwrap();
-    let made = common::cc::llrm_c()
+    let made = common::cc::llrm_cc()
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .args(["-m16", "-gtd", "-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"])
         .arg(scratch.path().join("rv.c"))
@@ -497,7 +497,7 @@ fn tlink_builds_turbo_debuggers_table_from_nib_and_from_optimised_c() {
         .output()
         .unwrap();
     assert!(made.status.success(), "nib: {}", String::from_utf8_lossy(&made.stderr));
-    let made = common::cc::llrm_c()
+    let made = common::cc::llrm_cc()
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .args(["-m16", "-gtd", "-O2"])
         .arg(matrix.join("known.c"))

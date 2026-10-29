@@ -18,7 +18,7 @@ Each is built from `src/bin`. `llrm-qb` is the default `cargo run` target.
 | Program | Does |
 |---|---|
 | `llrm-qb` | QuickBASIC-family source (QB 4.5, QBasic 1.1, PDS 7.1, VBDOS, QuickrBASIC) to an object; see [the dialects](docs/frontends/qb/dialects.md) |
-| `llrm-c` | C, through a patched Open Watcom front end (`toolchain/owshim/`), to an object; see [the front end](docs/frontends/c/ow-contract.md) |
+| `llrm-cc` | C, through the clang driver, to an object; see [the front end](docs/frontends/c/readme.md) |
 | `llrm-nib` | Nib, llrm's own language, to an object; see [the language](docs/frontends/nib/readme.md) |
 | `llrm-omf` | A small input route: objects written by QuickBASIC's BC, raised to MIR and compiled afresh; see [BC objects](docs/frontends/bc.md) |
 | `llrm-mir` | Reads and verifies MIR text and writes it back; `--run [--entry NAME] [--fuel N]` runs `@main` on the interpreter; `--ivs` prints each innermost loop's induction-variable count |
@@ -39,16 +39,12 @@ The default feature `toolchain` bootstraps what the compilers and tests need:
 
 | Feature | Builds |
 |---|---|
-| `wccq` | Open Watcom's front end for `llrm-c` (`toolchain/owshim/`) |
 | `jw` | `jwasm` and `jwlink` |
 | `dosrun` | the headless DOSBox-X the DOS tests run on |
 
 Their binaries land in `target/<profile>`. Sources are cloned under `$XDG_CACHE_HOME/llrm` (`~/.cache/llrm` when
 unset), one tree per pinned commit, made whole or not at all, so worktrees and parallel builds share them safely.
 `$OWROOT` names an existing Open Watcom tree to use instead of cloning one. The scripts need a Unix host.
-
-`--no-default-features --features wccq` builds only the front end the library tests need. Without any feature the
-build bootstraps nothing; `llrm-c` then has no Open Watcom front end.
 
 On Debian or Ubuntu the toolchain needs:
 
@@ -63,7 +59,7 @@ The Rust toolchain is pinned by `rust-toolchain.toml`. Python tools run through 
 
 ```sh
 target/release/llrm-qb PROGRAM.BAS --dialect qb45 --runtime qb45 -o PROGRAM.OBJ
-target/release/llrm-c program.c -o PROGRAM.OBJ
+target/release/llrm-cc --target=x86_16-wat program.c -o PROGRAM.OBJ
 target/release/llrm-nib program.nib -o PROGRAM.OBJ
 target/release/llrm-omf MAIN.OBJ DRAW.OBJ -o build/optimized -march=i486
 ```
@@ -72,7 +68,7 @@ target/release/llrm-omf MAIN.OBJ DRAW.OBJ -o build/optimized -march=i486
 dialect is `vbdos`. `llrm-omf` takes every object of a program in LINK order, ignores `.LIB` arguments, writes
 `-o` as the object (one input) or a directory (several), and writes nothing unless every object succeeds.
 
-`llrm-qb`, `llrm-c`, `llrm-nib` and `llrm-omf` share gcc-named options:
+`llrm-qb`, `llrm-cc`, `llrm-nib` and `llrm-omf` share gcc-named options:
 
 | Option | Does |
 |---|---|
@@ -83,7 +79,7 @@ dialect is `vbdos`. `llrm-omf` takes every object of a program in LINK order, ig
 | `-fsanitize=CHECKS`, `-ftrapv`, `-fwrapv` | Run-time checks: `bounds`, `integer-divide-by-zero`, `signed-integer-overflow`, `stack`, or `undefined` (the first three); see [semantic switches](docs/reference/semantics/readme.md) |
 | `-g` | Debug information; see [formats](docs/formats/readme.md) |
 | `-S` | Writes the assembly listing instead of an object |
-| `--dump DIR` | Writes every stage to `DIR`, for diffing; `llrm-qb`, `llrm-c` and `llrm-nib` take it, and `LLRM_MIR_STAGES=DIR` does the same for any of them |
+| `--dump DIR` | Writes every stage to `DIR`, for diffing; `llrm-qb`, `llrm-cc` and `llrm-nib` take it, and `LLRM_MIR_STAGES=DIR` does the same for any of them |
 
 `llrm-qb --runtime-frames` calls the runtime's frame entry and exit in every procedure, so its frame chain, stack check
 and event poll are there to debug against. `--own-frames` is accepted and does nothing.
@@ -97,7 +93,7 @@ One loop in three languages: a dot product of two `int` arrays, returned as a
 `long`. The sources are in [examples/dot](examples/dot); each listing is what `-S`
 prints with `-march=i486`, and the comments are added by hand. C is in the medium model.
 
-C, `llrm-c dot.c -march=i486 -S`:
+C, `llrm-cc --target=x86_16-wat dot.c -march=i486 -O2 -S`:
 
 ```c
 long dot(const int *a, const int *b, int n)
@@ -112,33 +108,38 @@ long dot(const int *a, const int *b, int n)
 
 ```asm
 _dot@3 proc far
-L0_0:
+L0_1:
     test cx, cx
-    jle L0_4294967297               ; [header copy] one guard for n <= 0, ahead of the prologue
-L0_17:
-    push si                         ; a is in ax, b in dx, n in cx (regparm3); si and di are callee-saved
-    push di
-    mov si, ax                      ; si = a, an address register: ax cannot address
-    mov di, dx                      ; di = b
-    add cx, cx                      ; cx = 2n, the byte length of each array
-    mov bx, cx
-    neg bx                          ; [one induction variable] bx = -2n is the counter and the offset
-    add si, cx                      ; [biased] a + 2n, so a[i] is at [bx+si]
-    add di, cx                      ; [biased] b + 2n
-    xor eax, eax                    ; total = 0
-L0_4:
-    movsx ecx, word ptr [bx+si]     ; a[i], sign-extended to 32 bits
-    movsx edx, word ptr [bx+di]     ; b[i]
-    imul ecx, edx                   ; (long)a[i] * b[i]: a 32-bit multiply, no runtime helper
-    add eax, ecx                    ; total += product
-    add bx, 2                       ; step one int; [flag reuse] its flags end the loop at 0
-    jne L0_4
+    jle L0_2_1
 L0_2:
-    pop di                          ; the long is already in eax: it returns there
-    pop si                          ; no frame: nothing is on the stack
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push si
+    push di
+    mov si, ax
+    xor eax, eax
+    xor bx, bx
+L0_3:
+    movsx edi, word ptr [bx+si]
+    mov dword ptr [bp-4], edi
+    mov di, dx
+    mov dx, si
+    movsx esi, word ptr [bx+di]
+    imul esi, dword ptr [bp-4]
+    add eax, esi
+    mov si, dx
+    mov dx, di
+    add bx, 2
+    dec cx
+    jne L0_3
+L0_4:
+    pop di
+    pop si
+    leave
     retf
-L0_4294967297:
-    xor eax, eax                    ; n <= 0: no saved registers were touched
+L0_2_1:
+    xor eax, eax
     retf
 _dot@3 endp
 ```

@@ -338,7 +338,7 @@ def test_drift_header_names_the_binary_the_ir_and_the_md5s(tmp_path):
     before.write_bytes(b"one")
     after.write_bytes(b"two")
     lines = drift.header(["aaa", "bbb"], [before, after])
-    assert "llrm-llc" in lines[0] and "NOT llrm-c" in lines[0] and "clang IR" in lines[0]
+    assert "llrm-llc" in lines[0] and "NOT llrm-cc" in lines[0] and "clang IR" in lines[0]
     assert lines[1] == "# before: aaa llrm-llc md5 f97c5d29941b"
     assert lines[2] == "# after: bbb llrm-llc md5 b8a9f715dbb6"
 

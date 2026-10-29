@@ -3,8 +3,8 @@
 
     tools/pairs/m16os.py BASE_DIST NEW_DIST [--level -Os] [--top 30] [--clocks] [--out FILE]
 
-BASE_DIST and NEW_DIST are dist directories (llrm-c, llrm-qb, llrm-nib, nibfront). The header names both builds: the sha in the directory name or
-`llrm-c --version`, and the md5 of each binary. Bytes are `tools/sizes.py`'s measure (OMF code and data emitted, linked-in runtime not counted), per
+BASE_DIST and NEW_DIST are dist directories (llrm-llc, llrm-qb, llrm-nib, nibfront). The header names both builds: the sha in the directory name or
+`llrm-llc --version`, and the md5 of each binary. Bytes are `tools/sizes.py`'s measure (OMF code and data emitted, linked-in runtime not counted), per
 program, the demos left out. A program one side cannot compile is listed, not compared. For the `--top` growers each function's instruction count in the
 `-S` listing is compared (a proxy: bytes per function are not in the object), the functions that grew most first, and those only one side has.
 `--clocks` runs tools/bench/bench.py (unicorn instruction streams priced by the 486 table) with each build and joins its rows by name.
@@ -45,12 +45,12 @@ def md5(path: Path) -> str:
 
 
 def identify(dist: Path) -> str:
-    """`DIST: sha (from llrm-c --version, else the directory's name), md5 of llrm-c llrm-qb llrm-nib`."""
-    done = subprocess.run([str(dist / "llrm-c"), "--version"], capture_output=True, text=True)
+    """`DIST: sha (from llrm-llc --version, else the directory's name), md5 of llrm-llc llrm-qb llrm-nib`."""
+    done = subprocess.run([str(dist / "llrm-llc"), "--version"], capture_output=True, text=True)
     words = done.stdout.split()
     named = re.search(r"sbp-([0-9a-f]{40})", str(dist.resolve()))
     sha = words[1] if done.returncode == 0 and len(words) == 2 else (named[1] + " (from the directory name, no build stamp)" if named else "unknown")
-    return f"{dist}: {sha}; md5 " + " ".join(f"{name} {md5(dist / name)}" for name in ("llrm-c", "llrm-qb", "llrm-nib"))
+    return f"{dist}: {sha}; md5 " + " ".join(f"{name} {md5(dist / name)}" for name in ("llrm-llc", "llrm-qb", "llrm-nib"))
 
 
 PROC = re.compile(r"^(\S+)\s+proc\b")

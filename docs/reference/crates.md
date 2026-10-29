@@ -47,7 +47,7 @@ flowchart TB
   linkStyle default stroke:#64748b,stroke-width:2.2px
   subgraph g_fe["PROGRAMS"]
     qb["<b>llrm-qb</b>"]:::src
-    c["<b>llrm-c</b>"]:::src
+    c["<b>llrm-cc</b>"]:::src
     nib["<b>llrm-nib</b>"]:::src
     bcd["<b>llrm-bcdriver</b>"]:::src
   end
@@ -227,7 +227,7 @@ See [the object model](../formats/object-model.md).
 | `llrm-qb` | The QuickBASIC-family frontend behind `llrm-qb` |
 | `qbfront` | The QuickBASIC-family parser and semantic analysis, to HIR; its parser tables are generated at build time from `grammar/` by `crates/frontends/qb/crates/buildprs` |
 | `llrm-qbruntime` | The QuickBASIC runtime's `B$` routine contracts, shared by `qbfront` and the BC frontend |
-| `llrm-c` | The C frontend behind `llrm-c`, through Open Watcom's front end |
+| `llrm-cc` | The C driver: clang as the front end, `llrm-llc` after it |
 | `llrm-nib` | The Nib frontend behind `llrm-nib`, `llrm-run`, `nibfront` and `nib-lsp` |
 
 ## BC objects
@@ -242,4 +242,4 @@ See [BC objects](../frontends/bc.md).
 ## The workspace root
 
 `llrm` (`src/bin`) holds the eight programs and depends on `llrm-codegen`, `llrm-mir`, `llrm-bcdriver`, `llrm-nib`,
-`llrm-qb` and `llrm-c`.
+`llrm-qb` and `llrm-cc`.

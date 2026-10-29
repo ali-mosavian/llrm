@@ -154,8 +154,7 @@ CC_ENV = ("LLRM_OW", "LLRM_PIN_CLANG", "LLRM_CLANG_M16")
 
 
 def compile_command(axis: str, source_path: Path, object_path: str) -> tuple[list[str], dict[str, str]]:
-    """llrm-cc's argv and environment for one axis: the clang front end into llrm-llc (llrm-c, the Watcom front end, is being deleted, and its IR is not
-    the IR of the compiler that stays), the 32-bit target at -march=i486 and the 16-bit at i386 (llrm-c rejects i286 at m16 and llrm-cc has no such flag)."""
+    """llrm-cc's argv and environment for one axis: the clang front end into llrm-llc, the 32-bit target at -march=i486 and the 16-bit at i386 (llrm-cc has no i286 flag)."""
     target, flags = CC_TARGETS["m16" if axis.endswith("-m16") else "m32"]
     env = {**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k in CC_ENV}, "LLRM_CC_TARGET": target}
     env.setdefault("LLRM_OW", str(Path.home() / "scratch/ow-src"))
@@ -183,7 +182,7 @@ def run(source: str, axis: str, stage: str) -> str:
 
 
 def test_the_axes_are_compiled_by_llrm_cc(monkeypatch):
-    """run() invoked llrm-c, the Watcom front end being deleted: every row of budgets.toml was measured on the IR of a compiler that does not stay (branches'
+    """run() invoked the Watcom front end: every row of budgets.toml was measured on the IR of a compiler that does not stay (branches'
     lir_rename_asks read x2.65 there and x2.0 through llrm-cc)."""
     seen, real = {}, subprocess.run
     llrmbin.bin_dir()  # its stamp check runs the binaries: before the patch

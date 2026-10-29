@@ -47,7 +47,7 @@ STEPS = (
 
 
 def steps_compiler(linear="0.01 * n", quadratic="0.0002 * n * n", unit="Minstr"):
-    """A 'compiler' printing the [instr] rows llrm-c does: one linear step, one quadratic, one too small to count."""
+    """A 'compiler' printing the [instr] rows llrm-cc does: one linear step, one quadratic, one too small to count."""
     return lambda compiler, level, source: [sys.executable, "-I", "-c", STEPS.format(linear=linear, quadratic=quadratic, unit=unit), str(source)]
 
 
@@ -142,7 +142,7 @@ def test_the_cells_axis_reads_n_distinct_cells_after_the_stores_to_every_cell_be
 def test_the_steps_that_scanned_every_function_per_function_stay_linear_in_the_functions(tmp_path):
     """4,096 small functions at -O2 cost 385 G instructions: call-effects and summaries callbacks added up every entry's summary
     for each body and for each entry that changed (126 G and 89 G, 2N/N = 3.9 each), and trivialunswitch copied the callees map for
-    each function (9 G, 3.9). The front end read every fact stated so far to say one more, scanned every wccq node for each parameter's
+    each function (9 G, 3.9). The front end read every fact stated so far to say one more, scanned every front-end node for each parameter's
     facts (frontend translate 26 G, 1.9) and rebuilt the function's value and place maps and searched all its calls' ABIs for each call
     instruction (hir to mir 12 G, 1.9). A step 2N/N above 2.2 (slope 1.1) on the `functions` axis fails; a few Minstr of start-up are allowed."""
     n = 128

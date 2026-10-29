@@ -30,7 +30,7 @@ fn a_split_register_read_as_undef_by_its_own_def_compiles() {
 fn a_copy_of_an_undefined_value_does_not_panic_the_spill_weights() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/crc/crc.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["--isel=dag", "-O2", "-c", "-o", "x.obj"])
         .arg(&source)

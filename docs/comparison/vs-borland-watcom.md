@@ -15,7 +15,7 @@ flowchart TB
   classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
   src["<b>bench/NAME/NAME.c</b>"]:::src
-  llrm["<b>llrm-c -O2 or -Os</b><br/><small>-fno-inline-functions<br/>llrm's own link</small>"]:::opt
+  llrm["<b>llrm-cc -O2 or -Os</b><br/><small>-fno-inline-functions<br/>llrm's own link</small>"]:::opt
   bcc["<b>bcc.sh in DOSBox-X</b><br/><small>bcc / tcc -mm, 8087<br/>jwlink + that toolchain's<br/>C0M, CM, FP87, MATHM</small>"]:::out
   ow["<b>bwcc (host)</b><br/><small>Open Watcom -mm -4 -fpi87<br/>jwlink + OW's CLIBM,<br/>MATH87M, NOEMU87</small>"]:::data
   run["<b>real-mode unicorn</b><br/><small>crates/target/llrm-x86-m16<br/>/bench/icount.py<br/>counts bench_NAME: entry to<br/>return, runtime calls included</small>"]:::warn
@@ -35,13 +35,13 @@ flowchart TB
   ins -.-> tm
 ```
 
-*One C source through llrm-c, Borland C and Open Watcom, counted by the same emulator*
+*One C source through llrm-cc, Borland C and Open Watcom, counted by the same emulator*
 
 ## Generated instructions and size
 
 ### What is compared
 
-Executed instructions and memory operands of each benchmark's kernel, and the code, data and bss bytes of its object, per optimisation level (`O2`, `Os`). llrm's C result (`[c.O2]`, `[c.Os]`, built by `llrm-c` for its default 16-bit target with `-fno-inline-functions` and the program's header flags, `-march=i486`) sits beside each reference's table in `bench/NAME/expected.toml`.
+Executed instructions and memory operands of each benchmark's kernel, and the code, data and bss bytes of its object, per optimisation level (`O2`, `Os`). llrm's C result (`[c.O2]`, `[c.Os]`, built by `llrm-cc` for its default 16-bit target with `-fno-inline-functions` and the program's header flags, `-march=i486`) sits beside each reference's table in `bench/NAME/expected.toml`.
 
 | Table | Compiler | Switches (from [bench.py](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/tools/bench/bench.py#L69)) |
 |---|---|---|

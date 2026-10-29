@@ -8,20 +8,20 @@ This page rests on an instruction count of the first dump of `d_faces`; no rows 
 
 rows total 0 / with counters 0 / failed 0 / missing 0: no output row has been measured for this page.
 
-TL;DR: the entry gap of 596 code instructions is mostly two front-end shapes, not aggregates: 403 are branch conditions and scaled indices (section 2), and about 46 are the aggregate expansion. llrm-c copies and zero-fills an aggregate as a run of word loads and stores (`translate.rs` `copy`, any size) where clang emits one `llvm.memcpy` or `llvm.memset` (`EmitAggregateCopy`, `emitStoresForConstant`). The plan makes llrm-c emit the intrinsics, checks that isel's small-size lowering gives what the expansion gave, and reviews `memcpyopt`'s re-merge of the expansion. But the aggregate expansion is only about 46 of the first dump's 341-instruction gap to clang (1.2% of the dump): most of the gap is two other front-end shapes, named below with their owners, and they are not aggregates.
+TL;DR: the entry gap of 596 code instructions is mostly two front-end shapes, not aggregates: 403 are branch conditions and scaled indices (section 2), and about 46 are the aggregate expansion. llrm-cc copies and zero-fills an aggregate as a run of word loads and stores (`translate.rs` `copy`, any size) where clang emits one `llvm.memcpy` or `llvm.memset` (`EmitAggregateCopy`, `emitStoresForConstant`). The plan makes llrm-cc emit the intrinsics, checks that isel's small-size lowering gives what the expansion gave, and reviews `memcpyopt`'s re-merge of the expansion. But the aggregate expansion is only about 46 of the first dump's 341-instruction gap to clang (1.2% of the dump): most of the gap is two other front-end shapes, named below with their owners, and they are not aggregates.
 
 Rule for the code: each Rust function is a translation of the C++ function named in its first comment (permalink at `d1106deb71cc`); anything not translated is a numbered DEVIATE with its fact, taken only with oversight's approval.
 
 ## 1. The entry gap of `d_faces`, by opcode
 
-Instrument: `llrm-c -m32 -O1 --dump` of `render/d_faces.c` (corpus `dfaces`, hash `53880fe70961`, from `tools/corpora.py`), its first dump `01-globalopt.ll`, against the pinned clang 24.0.0git (`d1106deb71cc`, `tools/llvmpin.py`) `-O1 -Xclang -disable-llvm-passes -emit-llvm` of the same file with the foreign flags of `compile_time.sh`. Instructions are the lines of a function body that are not labels; opcodes are read from the text; calls are split by callee. llrm at `b2fd0b0eb`.
+Instrument: `llrm-cc -m32 -O1 --dump` of `render/d_faces.c` (corpus `dfaces`, hash `53880fe70961`, from `tools/corpora.py`), its first dump `01-globalopt.ll`, against the pinned clang 24.0.0git (`d1106deb71cc`, `tools/llvmpin.py`) `-O1 -Xclang -disable-llvm-passes -emit-llvm` of the same file with the foreign flags of `compile_time.sh`. Instructions are the lines of a function body that are not labels; opcodes are read from the text; calls are split by callee. llrm at `b2fd0b0eb`.
 
 llrm 3,636, clang 3,295: a gap of 341. Of clang's, 255 are no code: 228 `llvm.lifetime` markers and 27 other `llvm.*` calls (`fmuladd` and kin). Counting only code, the gap is 596.
 
 | opcode | llrm | clang | diff | what it is | owner |
 |---|---|---|---|---|---|
 | `zext` + `icmp ne` after a comparison | 136 / 222 | 11 / 104 | +125 / +118 | 118 chains of `icmp; zext i1 to i32; icmp ne 0; br` where clang branches on the `icmp` | `llrm-hir` `mir.rs` `terminator` (`Branch` tests `value != 0`; `truths`, the comparison's `i1`, is used for `assume` only) |
-| `mul` | 199 | 8 | +191 | 167 of them `mul idx, size` feeding a `getelementptr i8`; clang's GEP is typed and takes the index | `llrm-c` `translate.rs` `scaled` |
+| `mul` | 199 | 8 | +191 | 167 of them `mul idx, size` feeding a `getelementptr i8`; clang's GEP is typed and takes the index | `llrm-cc` `translate.rs` `scaled` |
 | `store` / `load` | 427 / 1,057 | 385 / 1,026 | +42 / +31 | the word expansion of aggregate copies and zero-fills, and spill-like round trips of locals | `translate.rs` `copy`; the rest unclassified |
 | `fmul` / `fadd` | 59 / 36 | 32 / 13 | +27 / +23 | clang contracts `a*b+c` into `llvm.fmuladd` (28 calls); the target has no fused op, so it is expanded again | not a gap: no fused op on x87 |
 | `trunc` / `sext` / `alloca` | 68 / 352 / 175 | 41 / 329 / 153 | +27 / +23 / +22 | unclassified | open |
@@ -63,7 +63,7 @@ DEVIATE D4 (pending): MIR pointers are opaque and Open Watcom's tree does not ca
 | A0 | this page; the classification above; the rest of the gap (trunc, sext, alloca, the extra loads) named by owner | every opcode of the gap has an owner |
 | B1 | the `Branch` terminator branches on the recorded `i1` | fail-first unit test on the emitted MIR of `if (a < b)`: no `zext`, no `icmp ne`; first dump of `d_faces` -236; rows rule, per-row worse counts first, since a different canonical form at the entry moves every later pass |
 | B2 | `PtrOffset` of `mul idx, K` is a typed-stride `getelementptr` | the same for `a[i]`; first dump -167; identical or better output on the corpus |
-| A1 | `llrm-c` emits `llvm.memcpy` for an aggregate copy and `llvm.memset` / stores for a constant fill, by clang's rules above (`EmitAggregateCopy`, `emitStoresForConstant`); the HIR gets the operations if it has none | unit tests: the emitted MIR of a struct copy, a zero-init, a small and a large initializer; the first dump of `d_faces` loses the expansion |
+| A1 | `llrm-cc` emits `llvm.memcpy` for an aggregate copy and `llvm.memset` / stores for a constant fill, by clang's rules above (`EmitAggregateCopy`, `emitStoresForConstant`); the HIR gets the operations if it has none | unit tests: the emitted MIR of a struct copy, a zero-init, a small and a large initializer; the first dump of `d_faces` loses the expansion |
 | A2 | isel: a small `memcpy`/`memset` lowers to the per-word expansion it replaces (same pairs, same order, same width), larger to `rep` | emitted code of the corpus identical where the expansion was inlined; per-row worse counts first |
 | A3 | `memcpyopt`'s re-merge reviewed: what is left of it once the front end emits the intrinsic, and `tryMergingIntoMemset` (the `lru` finding) | the pass keeps only what other passes produce |
 | A4 | corpus: the 7 programs of `tests/run` with struct copies, QCport, and the vsgcc programs with struct copies (the 71 vsgcc rows alone would not move) | rows |

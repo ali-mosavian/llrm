@@ -18,33 +18,33 @@ class ResolverTests(unittest.TestCase):
             self.assertEqual(llrmbin.bin_dir({}, Path(repo)), Path(repo) / "target" / "release")
 
     def test_a_binary_older_than_its_source_is_refused(self):
-        """`cargo build -p llrm-c` builds only the library: bench and a repro ran a day-old llrm-c and measured the old
+        """`cargo build -p llrm-cc` builds only the library: bench and a repro ran a day-old llrm-cc and measured the old
         compiler. The resolver names the binaries older than a file cargo's dep-info lists, and refuses them."""
         import os
 
         with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as built:
             repo, release = Path(repo), Path(built) / "release"
             release.mkdir()
-            (repo / "Cargo.toml").write_text('[[bin]]\nname = "llrm-c"\npath = "x.rs"\n')
+            (repo / "Cargo.toml").write_text('[[bin]]\nname = "llrm-cc"\npath = "x.rs"\n')
             source = repo / "lib.rs"
             source.write_text("")
-            (release / "llrm-c").write_text("")
-            (release / "llrm-c.d").write_text(f"{release}/llrm-c: {source}\n")
+            (release / "llrm-cc").write_text("")
+            (release / "llrm-cc.d").write_text(f"{release}/llrm-cc: {source}\n")
             (release / "leftover").write_text("")  # not declared: `cargo build --bins` does not rebuild it
             (release / "leftover.d").write_text(f"{release}/leftover: {source}\n")
             generated = release / "build" / "core-1" / "out" / "selectors.rs"  # a build script rewrites these when it reruns
             generated.parent.mkdir(parents=True)
             generated.write_text("")
-            (release / "llrm-c.d").write_text(f"{release}/llrm-c: {source} {generated}\n")
-            os.utime(release / "llrm-c", (1000, 1000))
+            (release / "llrm-cc.d").write_text(f"{release}/llrm-cc: {source} {generated}\n")
+            os.utime(release / "llrm-cc", (1000, 1000))
             os.utime(release / "leftover", (1000, 1000))
             os.utime(generated, (5000, 5000))
             os.utime(source, (2000, 2000))
-            self.assertEqual(llrmbin.stale_binaries(release, repo), ["llrm-c"])
+            self.assertEqual(llrmbin.stale_binaries(release, repo), ["llrm-cc"])
             with self.assertRaises(SystemExit) as refused:
                 llrmbin.bin_dir({"LLRM_BIN": str(release)}, repo)
             self.assertIn("cargo build --release --bins", str(refused.exception))
-            os.utime(release / "llrm-c", (3000, 3000))  # newer than the source, older than the generated file
+            os.utime(release / "llrm-cc", (3000, 3000))  # newer than the source, older than the generated file
             self.assertEqual(llrmbin.bin_dir({"LLRM_BIN": str(release)}, repo), release)
 
     def test_binaries_are_judged_against_the_tree_they_were_built_from(self):
@@ -55,23 +55,23 @@ class ResolverTests(unittest.TestCase):
             gated, base = Path(gated), Path(base)
             for root in (gated, base):
                 (root / "crates").mkdir()
-                (root / "Cargo.toml").write_text('[[bin]]\nname = "llrm-c"\npath = "x.rs"\n')
+                (root / "Cargo.toml").write_text('[[bin]]\nname = "llrm-cc"\npath = "x.rs"\n')
                 (root / "toolchain/owshim").mkdir(parents=True)
                 (root / "toolchain/owshim/ow-commit").write_text("")
             release = base / "target" / "release"
             release.mkdir(parents=True)
             source = base / "crates" / "lib.rs"
             source.write_text("")
-            (release / "llrm-c").write_text("")
-            (release / "llrm-c.d").write_text(f"{release}/llrm-c: {source}\n")
+            (release / "llrm-cc").write_text("")
+            (release / "llrm-cc.d").write_text(f"{release}/llrm-cc: {source}\n")
             os.utime(source, (2000, 2000))
             os.utime(base / "toolchain/owshim/ow-commit", (2000, 2000))
-            os.utime(release / "llrm-c", (3000, 3000))
+            os.utime(release / "llrm-cc", (3000, 3000))
             os.utime(gated / "toolchain/owshim/ow-commit", (9000, 9000))  # checked out after the base was built
             self.assertEqual(llrmbin.stale_binaries(release, gated), [])
             self.assertEqual(llrmbin.bin_dir({"LLRM_BIN": str(release)}, gated), release)
             os.utime(base / "toolchain/owshim/ow-commit", (9500, 9500))  # its own patch changed since: stale
-            self.assertEqual(llrmbin.stale_binaries(release, gated), ["llrm-c"])
+            self.assertEqual(llrmbin.stale_binaries(release, gated), ["llrm-cc"])
 
     def test_the_shell_scripts_ask_the_resolver_not_a_copy_of_it(self):
         """Eleven scripts spelled `target/release` and `LLRM_BIN` themselves: the same fact, and wrong in a tree built elsewhere."""
@@ -91,14 +91,14 @@ def test_a_pinned_binary_has_a_path_of_one_length_whatever_directory_it_is_in(tm
     short, long = tmp_path / "a", tmp_path / ("a-much-longer-directory-name-" * 3)
     for folder in (short, long):
         folder.mkdir()
-        (folder / "llrm-c").write_text("")
-    first, second = llrmbin.pinned(short / "llrm-c"), llrmbin.pinned(long / "llrm-c")
+        (folder / "llrm-cc").write_text("")
+    first, second = llrmbin.pinned(short / "llrm-cc"), llrmbin.pinned(long / "llrm-cc")
     assert len(str(first)) == len(str(second)) == llrmbin.PINNED_BYTES
-    assert os.readlink(first) == str(short / "llrm-c") and os.readlink(second) == str(long / "llrm-c")
+    assert os.readlink(first) == str(short / "llrm-cc") and os.readlink(second) == str(long / "llrm-cc")
 
 
 def test_two_copies_of_one_binary_are_refused_and_two_different_ones_print_both_md5(tmp_path):
-    """`cargo build -p llrm-c` did not relink the binary: two commits' "builds" were one file, and the identity pair read 0 differ."""
+    """`cargo build -p llrm-cc` did not relink the binary: two commits' "builds" were one file, and the identity pair read 0 differ."""
     import pytest
 
     a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
@@ -117,17 +117,17 @@ def test_a_source_with_a_future_mtime_is_named_as_the_reason_a_binary_stays_stal
     import time
 
     (tmp_path / "crates").mkdir()
-    (tmp_path / "Cargo.toml").write_text('[package]\nname = "llrm"\nversion = "0.0.0"\n[[bin]]\nname = "llrm-c"\npath = "src/c.rs"\n')
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "llrm"\nversion = "0.0.0"\n[[bin]]\nname = "llrm-cc"\npath = "src/c.rs"\n')
     src = tmp_path / "crates/a.rs"
     src.write_text("x")
     release = tmp_path / "target/release"
     release.mkdir(parents=True)
-    binary = release / "llrm-c"
+    binary = release / "llrm-cc"
     binary.write_text("b")
-    (release / "llrm-c.d").write_text(f"{binary}: {src}\n")
+    (release / "llrm-cc.d").write_text(f"{binary}: {src}\n")
     future = time.time() + 3600
     os.utime(src, (future, future))
-    assert llrmbin.stale_binaries(release, tmp_path) == ["llrm-c"]
+    assert llrmbin.stale_binaries(release, tmp_path) == ["llrm-cc"]
     detail = llrmbin.stale_detail(release, tmp_path)
     assert str(src) in detail and "FUTURE" in detail, detail
 
@@ -137,21 +137,21 @@ def _dist(tmp_path, content: bytes, recorded: bytes):
 
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "Cargo.toml").write_text('[[bin]]\nname = "llrm-c"\npath = "x.rs"\n')
+    (repo / "Cargo.toml").write_text('[[bin]]\nname = "llrm-cc"\npath = "x.rs"\n')
     source = repo / "lib.rs"
     source.write_text("")
     dist = tmp_path / "sbp-abc" / "dist"
     dist.mkdir(parents=True)
-    (dist / "llrm-c").write_bytes(content)
-    (dist / "llrm-c.d").write_text(f"{dist}/llrm-c: {source}\n")
-    (tmp_path / "sbp-abc" / "ok").write_text(f"sha: abc\n{hashlib.md5(recorded).hexdigest()}  llrm-c\n")
+    (dist / "llrm-cc").write_bytes(content)
+    (dist / "llrm-cc.d").write_text(f"{dist}/llrm-cc: {source}\n")
+    (tmp_path / "sbp-abc" / "ok").write_text(f"sha: abc\n{hashlib.md5(recorded).hexdigest()}  llrm-cc\n")
     return repo, dist, source
 
 
 def test_a_dist_binary_matching_its_recorded_md5_passes_with_an_old_mtime(tmp_path):
     """A checkout made every source newer than the dist built from the same sha; the guard then wanted the binaries touched, which hides a real stale one."""
     repo, dist, source = _dist(tmp_path, b"built", b"built")
-    os.utime(dist / "llrm-c", (1, 1))
+    os.utime(dist / "llrm-cc", (1, 1))
     assert llrmbin.stale_binaries(dist, repo) == []
 
 
@@ -159,7 +159,7 @@ def test_a_dist_binary_not_matching_its_recorded_md5_is_stale_with_a_fresh_mtime
     """A fresh mtime says nothing of what the binary is: one that differs from what the dist built must be refused."""
     repo, dist, source = _dist(tmp_path, b"other", b"built")
     os.utime(source, (1, 1))
-    assert llrmbin.stale_binaries(dist, repo) == ["llrm-c"]
+    assert llrmbin.stale_binaries(dist, repo) == ["llrm-cc"]
 
 
 def test_the_compiler_is_llrm_cc(tmp_path):

@@ -13,7 +13,7 @@ fn final_mir(
     arguments: &[&str],
     dump: &Path,
 ) -> String {
-    let made = common::cc::llrm_c()
+    let made = common::cc::llrm_cc()
         .args(arguments)
         .arg("--dump")
         .arg(dump)

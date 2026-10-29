@@ -18,7 +18,7 @@ const ROUNDINGS: &str = "float g(double a, double b, double c) {
 fn test_roundings_through_memory_share_one_slot() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("g.c"), ROUNDINGS).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m16", "-march=i486", "-Os", "--isel=dag", "-S", "-o", "g.s", "g.c"])
         .output()

@@ -22,7 +22,7 @@ what came back.
   (`LLRM_BLESS=1` rewrites it).
 - `known.txt` lists where llrm still differs.
 
-`cargo test --release -p llrm-c --features toolchain callconv` runs the
+`cargo test --release --test callconv` runs the
 unit level. `tools/callconv/c.sh` runs the programs: llrm and BCC callers
 and callees in all four pairings, a module llrm refuses replaced by BCC's.
 

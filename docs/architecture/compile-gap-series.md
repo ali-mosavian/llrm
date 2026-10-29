@@ -4,7 +4,7 @@ architecture-order: 410
 ---
 # Compile-cost gap against clang and gcc, by date
 
-Each table is one run of `tools/compile-gap.py` (`-m32 -march=i486 -fno-inline-functions`, an object written by each compiler) with the tree's dist-profile `llrm-c`, on a given commit of `main`. Cost is user-space instructions (`perf stat`, quickest of three by cycles), in millions. The ratio is llrm over the cheaper of clang 20.1.8 and gcc 13.4.0. **Reference note:** every clang column in this file before the section of `5e2e995ef` is the distro clang 20.1.8 (`tools/compile-gap.py` defaults `--clang` to the `PATH` clang), not the pinned 24.0.0git `d1106deb71cc`; those clang figures (for example 553 / 555 M for `d_faces` -O2 / -O3) and the ratios derived from them (5.1x, 5.6x) are void as a reference to clang 24, whose `d_faces` -O2 is 415.5 M. The section of `5e2e995ef` gives both; the scoreboard in the plan uses the pinned binary only. Instructions are the claim: the host is loaded, so cycles are not compared.
+Each table is one run of `tools/compile-gap.py` (`-m32 -march=i486 -fno-inline-functions`, an object written by each compiler) with the tree's dist-profile `llrm-cc`, on a given commit of `main`. Cost is user-space instructions (`perf stat`, quickest of three by cycles), in millions. The ratio is llrm over the cheaper of clang 20.1.8 and gcc 13.4.0. **Reference note:** every clang column in this file before the section of `5e2e995ef` is the distro clang 20.1.8 (`tools/compile-gap.py` defaults `--clang` to the `PATH` clang), not the pinned 24.0.0git `d1106deb71cc`; those clang figures (for example 553 / 555 M for `d_faces` -O2 / -O3) and the ratios derived from them (5.1x, 5.6x) are void as a reference to clang 24, whose `d_faces` -O2 is 415.5 M. The section of `5e2e995ef` gives both; the scoreboard in the plan uses the pinned binary only. Instructions are the claim: the host is loaded, so cycles are not compared.
 
 A table is read against the one before it: the delta column is the change in llrm's instructions and in the ratio since the previous date. The worst ratio is named beside the geometric mean of the ratios.
 
@@ -39,7 +39,7 @@ d_faces is the largest file of the QCport tree this script compiles. The Borland
 
 d_faces, llrm's own work by phase (Minstr, share): at -O2 `mir` 1,342 (42%), `analysis` 702 (22%), `regalloc` 479 (15%), `lir` 365 (11%), `isel` 56 (2%); clang's optimizer is 272 M (49% of its time) and its codegen 216 M (39%).
 
-Checked: one commit on all sides (the compilers do not change between tables; llrm-c is the dist build of the commit above); each compile writes an object; a failed compile stops the run (the first run stopped on `lru`, whose `far` pointers clang cannot parse: the Borland keywords are now defined away for every program, as for d_faces); `queens` -O3 was run twice more for llrm alone (1,552,975,343 and 1,552,968,042 instructions).
+Checked: one commit on all sides (the compilers do not change between tables; llrm-cc is the dist build of the commit above); each compile writes an object; a failed compile stops the run (the first run stopped on `lru`, whose `far` pointers clang cannot parse: the Borland keywords are now defined away for every program, as for d_faces); `queens` -O3 was run twice more for llrm alone (1,552,975,343 and 1,552,968,042 instructions).
 
 ## 2026-10-17, `5344082af` (after the first batch)
 
@@ -109,7 +109,7 @@ Where the compile goes beside the pass work, d_faces (callgrind, dist build): co
 
 ## 2026-10-17, `5e2e995ef`: one baseline for the plan (step 0.1)
 
-One table at one main SHA (`5e2e995ef`, `--profile dist` and the same tree with `--features system-alloc`), `perf stat -e instructions:u` min of 3 including the `wccq` child, `d_faces.c` of qbq-llrm with `-m32 -march=i486 -fno-inline-functions` and the Borland keywords defined away. Clang 24 is the static build at `d1106deb71cc`, clang 20.1.8 the static build of the tag, each `-c`. Phases are `LLRM_DEBUG=time` inclusive totals; the in-process front end excludes the `wccq` child (about 18 M). Computes per pass run counts `WHY fn` lines of `LLRM_WHY=1` over the pass runs of `LLRM_DEBUG=runs`; the spec's 2.8 uses its own counter.
+One table at one main SHA (`5e2e995ef`, `--profile dist` and the same tree with `--features system-alloc`), `perf stat -e instructions:u` min of 3 including the Open Watcom front end child, `d_faces.c` of qbq-llrm with `-m32 -march=i486 -fno-inline-functions` and the Borland keywords defined away. Clang 24 is the static build at `d1106deb71cc`, clang 20.1.8 the static build of the tag, each `-c`. Phases are `LLRM_DEBUG=time` inclusive totals; the in-process front end excludes the Open Watcom front end child (about 18 M). Computes per pass run counts `WHY fn` lines of `LLRM_WHY=1` over the pass runs of `LLRM_DEBUG=runs`; the spec's 2.8 uses its own counter.
 
 | level | llrm M | clang 24 M | ratio | clang 20.1.8 M | ratio | front end (in process) | `mir pipeline` | `assemble` | computes per pass run |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -145,7 +145,7 @@ Allocations and memory at -O2 (`d_faces`; DHAT on the system-allocator build): 2
 
 ## 2026-10-21, `0b494eb7ab`: the walk, the -O1 inliner, the pass_ch stage, retrange (w-6)
 
-d_faces `-m32`, release profile, `perf stat -e instructions:u` of `llrm-c -S` (no `-fno-inline-functions`), one change at a time on `feat/parity`. Row C1: `clip_w_` is inlined as the pin does since #3354 (`visitCondBrInst`; the callee's `br (not X)` guards hid the loop-entry guard, so it was priced and kept as a call): d_faces `-O2` has the pin's 6 defines, and the compile is 1457.7 -> 1580.9 M (+8.5%; `float-facts` 22.5 -> 43.0 M, `gvn@787` +6.5, `fold@677` +5, `regalloc` +7), `-O1`, `-O3` and `-Os` flat. Oversight accepted it on 2026-10-21 (no row above main that was not above it at the base).
+d_faces `-m32`, release profile, `perf stat -e instructions:u` of `llrm-cc -S` (no `-fno-inline-functions`), one change at a time on `feat/parity`. Row C1: `clip_w_` is inlined as the pin does since #3354 (`visitCondBrInst`; the callee's `br (not X)` guards hid the loop-entry guard, so it was priced and kept as a call): d_faces `-O2` has the pin's 6 defines, and the compile is 1457.7 -> 1580.9 M (+8.5%; `float-facts` 22.5 -> 43.0 M, `gvn@787` +6.5, `fold@677` +5, `regalloc` +7), `-O1`, `-O3` and `-Os` flat. Oversight accepted it on 2026-10-21 (no row above main that was not above it at the base).
 
 | change | -O1 M | -O2 M | -O3 M | -Os M |
 |---|---:|---:|---:|---:|

@@ -74,7 +74,7 @@ class LinkTests(unittest.TestCase):
             dosbatch.runtime_library(dosbatch.Job("T001", "obj", Path("P.OBJ"), runtime="empty"), dosbatch.QB45_TOOLS, Path("."))
 
     def test_c_runtime_is_each_targets_own_file_and_a_name_is_beside_the_source(self):
-        """`link: @c-runtime` reached the compiler as a file name in bench (llrm-c: wccq failed on .../@c-runtime):
+        """`link: @c-runtime` reached the compiler as a file name in bench (the compiler failed on .../@c-runtime):
         only run_tests resolved it. Every reader resolves it here."""
         source = Path("bench/parity/parity/parity.nib")
         self.assertEqual(dosbatch.link_files(source, ["@c-runtime"], "x86-m16"), [dosbatch.ROOT / "runtime/c/x86-m16/ext.asm"])

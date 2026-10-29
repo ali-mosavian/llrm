@@ -4,9 +4,9 @@ TL;DR: allocation plus its copying is 69.8 M of 740.8 M Ir (9.4%) and flat: the 
 callers hold 32% of it. No single mechanical cut is worth a PR. `successors` and
 `predecessors` allocate nothing (inline `BlockList`); their 6.8 M each is traversal.
 
-Command: `llrm-c -m32 -mabi=sysv -march=i486 -O2 -Dfar= -Dhuge= -Dnear= -Dpascal= -Dcdecl= -D__far= -D_far= -D__near= -D_near=` with `-I` of `qcstub/src/{host,render,model,game,sound,ui,qgl}` and `qctc/inc`, on `render/d_faces.c`.
+Command: `llrm-cc -m32 -mabi=sysv -march=i486 -O2 -Dfar= -Dhuge= -Dnear= -Dpascal= -Dcdecl= -D__far= -D_far= -D__near= -D_near=` with `-I` of `qcstub/src/{host,render,model,game,sound,ui,qgl}` and `qctc/inc`, on `render/d_faces.c`.
 Method: `valgrind --tool=callgrind --separate-callers=4` on the line-tables release
-`llrm-c` (built `-p llrm --bin llrm-c`), then `allocby.py` sums `__rust_alloc`,
+`llrm-cc` (built `-p llrm-cc --bin llrm-cc`), then `allocby.py` sums `__rust_alloc`,
 `__rust_dealloc`, `__rust_realloc`, `__rust_alloc_zeroed` and `memcpy` by the first
 `llrm_` frame of the chain. Plain profile for inclusive numbers.
 Bytes are not in a callgrind profile; sizes below are element sizes.

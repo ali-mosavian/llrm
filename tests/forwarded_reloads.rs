@@ -19,7 +19,7 @@ void p(short n)
 fn listing() -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let done = common::cc::llrm_c()
+    let done = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m16", "-march=i386", "-O2", "-S", "-o", "a.s", "a.c"])
         .output()

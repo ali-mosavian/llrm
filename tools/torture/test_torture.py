@@ -14,7 +14,7 @@ import torture  # noqa: E402
 
 class CompilerTests(unittest.TestCase):
     def test_the_programs_and_the_support_library_are_built_by_llrm_cc_on_one_row(self):
-        """libc.c was built by llrm-c while the programs' calling convention came from the other front end's rows: on parity it failed (E1034 memcpy "already defined")
+        """libc.c was built by another front end while the programs' calling convention came from the other front end's rows: on parity it failed (E1034 memcpy "already defined")
         and the harness stopped before the first program."""
         seen = []
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(torture, "run_within_cpu", lambda command, seconds, env=None: seen.append((command, env)) or None):
@@ -57,7 +57,7 @@ class CauseTests(unittest.TestCase):
         self.assertIn("20040409-1", [one.get("program") for one in rules])
 
     def test_the_support_library_defines_no_builtin_and_leaves_the_runtimes_routines_to_it(self):
-        """libc.c defined `__builtin_memcpy` and the like for llrm-c, which clang refuses ('definition of builtin function'), and its own memcpy
+        """libc.c defined `__builtin_memcpy` and the like for the old front end, which clang refuses ('definition of builtin function'), and its own memcpy
         for a runtime that has one ('redefinition of memcpy_', 411 link failures)."""
         text = (Path(__file__).parent / "libc.c").read_text()
         self.assertNotIn("__builtin_", text)

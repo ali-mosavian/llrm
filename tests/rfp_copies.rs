@@ -19,7 +19,7 @@ fn test_nbody_keeps_no_copy_between_x87_registers() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/nbody/nbody.c");
     let flags = ["-m32", "-O2", "-march=i486"];
     let listing = scratch.path().join("nbody.s");
-    let output = common::cc::llrm_c().args(flags).args(["-S", "-o"]).arg(&listing).arg(&source).output().unwrap();
+    let output = common::cc::llrm_cc().args(flags).args(["-S", "-o"]).arg(&listing).arg(&source).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let listing = std::fs::read_to_string(listing).unwrap();
     let floating =

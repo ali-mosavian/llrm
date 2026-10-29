@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""QCport's 65 modules at -Os: code bytes through llrm-c and through llrm-cc, per module and in total.
+"""QCport's 65 modules at -Os: code bytes through llrm-cc, per module and in total.
 
     QCPORT=.../src QCPORT_INC=... LLRM_BORLAND_INC=... LLRM_CLANG_M16=... LLRM_OW=... \\
         tools/qcport-size.py [--row x86_16-dos-rp3] [--isel dag] [--top 12]
 
---row is the llrm-cc target row (default x86_16-dos-rp3, the register convention llrm-c has at m16, so the two columns compare like
-with like; x86_16-dos is cdecl, the Borland-link row). --isel is given to both compilers. Prints the totals and the modules where
-llrm-cc is larger by most; a module either side cannot compile is left out of the totals and named.
+--row is the llrm-cc target row (x86_16-dos is cdecl, the Borland-link row). Prints the total and the largest modules;
+a module that does not compile is left out of the total and named.
 """
 from __future__ import annotations
 
@@ -50,24 +49,22 @@ def main() -> int:
         work = Path(scratch)
 
         def one(source: Path):
-            c, cc = work / f"{source.stem}.c.o", work / f"{source.stem}.cc.o"
-            subprocess.run([str(bin_dir / "llrm-c"), "-Os", *extra, *dirs, "-I", include, str(source), "-o", str(c)], capture_output=True)
+            cc = work / f"{source.stem}.cc.o"
             env = {**os.environ, "LLRM_CC_TARGET": args.row}
             subprocess.run(
                 [str(bin_dir / "llrm-cc"), "-Os", "-c", *extra, "-fasm-blocks", "-D_asm=__asm", "-nostdinc", "-isystem", borland, *dirs, str(source), "-o", str(cc)],
                 capture_output=True, env=env)
-            return f"{source.parent.name}/{source.name}", sizes.code_bytes(c) if c.exists() else None, sizes.code_bytes(cc) if cc.exists() else None
+            return f"{source.parent.name}/{source.name}", sizes.code_bytes(cc) if cc.exists() else None
 
         with ThreadPoolExecutor(6) as pool:
             rows = list(pool.map(one, modules))
-    both = [row for row in rows if row[1] is not None and row[2] is not None]
-    skipped = [row[0] for row in rows if row not in both]
-    c, cc = sum(row[1] for row in both), sum(row[2] for row in both)
-    print(f"row {args.row}{' --isel=' + args.isel if args.isel else ''}: {len(both)} modules, llrm-c {c} B, llrm-cc {cc} B, {cc - c:+d} ({(cc - c) * 100 / c:+.2f}%)")
+    built = [row for row in rows if row[1] is not None]
+    skipped = [row[0] for row in rows if row[1] is None]
+    print(f"row {args.row}{' --isel=' + args.isel if args.isel else ''}: {len(built)} modules, llrm-cc {sum(row[1] for row in built)} B")
     if skipped:
-        print("left out (one side did not compile):", *skipped)
-    for name, a, b in sorted(both, key=lambda row: row[1] - row[2])[: args.top]:
-        print(f"  {name:28} {a:7} {b:7} {b - a:+d}")
+        print("left out (did not compile):", *skipped)
+    for name, size in sorted(built, key=lambda row: -row[1])[: args.top]:
+        print(f"  {name:28} {size:7}")
     return 0
 
 

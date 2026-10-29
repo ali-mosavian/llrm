@@ -95,7 +95,7 @@ hint 325; locally hot 525; the cost-benefit analysis is off (`inline-enable-cost
 (the translation of InlineCost.cpp); `LLRM_EXP_INLINECOST=1` prints the cost beside the old decision. Both are off, and
 a build without them is byte-identical to main (1,583 objects of `tools/identical.py`).
 
-Compile time, instructions (`perf stat instructions:u`, `llrm-c -O2`, QCport modules, base against the switch on):
+Compile time, instructions (`perf stat instructions:u`, `llrm-cc -O2`, QCport modules, base against the switch on):
 
 | file | base | decide | | per-body pipeline re-runs after a splice / fixed-point steps (base -> decide) |
 |---|--:|--:|--:|---|

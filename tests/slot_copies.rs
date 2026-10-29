@@ -13,7 +13,7 @@ void g(double x) { long v = (long)x; p(v); q(v); }
 fn listing() -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let done = common::cc::llrm_c()
+    let done = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m16", "-march=i386", "-Os", "-S", "-o", "a.s", "a.c"])
         .output()

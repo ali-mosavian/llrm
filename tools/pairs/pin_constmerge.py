@@ -3,7 +3,7 @@ import subprocess, glob, os, re, sys, shutil, tempfile
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pin
-H=os.path.expanduser("~"); L=f"{H}/scratch/sbp-e1dd29df450dd3161452a7fe4de399be02d384f7/dist/llrm-c"  # a dist llrm-c; CM_LLRM overrides
+H=os.path.expanduser("~"); L=f"{H}/scratch/sbp-e1dd29df450dd3161452a7fe4de399be02d384f7/dist/llrm-cc"  # a dist llrm-cc; CM_LLRM overrides
 L=os.environ.get("CM_LLRM", L)
 Q=f"{H}/scratch/qcport/src"; MODS=("host","render","model","game","sound","ui")
 inc=[f for d in (*MODS,"qgl") for f in ("-I",f"{Q}/{d}")]+["-I",f"{H}/scratch/qctc/inc"]
@@ -15,7 +15,7 @@ def one(src):
     name=os.path.relpath(src,Q)
     d=tempfile.mkdtemp(prefix="cm-",dir=f"{H}/scratch")
     try:
-        r=subprocess.run([L,"-Os",*inc,"--dump",d+"/d","-o",d+"/o.obj",src],capture_output=True,text=True)
+        r=subprocess.run([L,"-c","-Os",*inc,"--dump",d+"/d","-o",d+"/o.obj",src],capture_output=True,text=True,env={**os.environ,"LLRM_CC_TARGET":"x86_16-wat"})
         f=d+"/d/09-pipeline.ll"
         if not os.path.exists(f): return name,None
         text=open(f).read().replace(" threeway","")

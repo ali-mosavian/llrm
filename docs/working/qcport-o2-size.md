@@ -1,6 +1,6 @@
 # AM-QC-1: QCport -O2 size, cause per module (w-6, parity 69b60cafc)
 
-Numbers: emitted OMF bytes (LEDATA) of the 65 QCport modules, the measure of `tools/rows/qcport.py`, one `llrm-c` dist of 69b60cafc, flags added to `-O2` one at a time.
+Numbers: emitted OMF bytes (LEDATA) of the 65 QCport modules, the measure of `tools/rows/qcport.py`, one `llrm-cc` dist of 69b60cafc, flags added to `-O2` one at a time.
 
 | build | bytes | vs -O2 |
 |---|--:|--:|

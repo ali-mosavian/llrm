@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 fn test_a_kept_inline_is_optimised_in_one_caller_before_the_next_is_spliced_into() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/i8out");
     let directory = tempfile::tempdir().expect("a directory");
-    let mut child = common::cc::llrm_c()
+    let mut child = common::cc::llrm_cc()
         .args(["-m16", "-O2", "-I", root.to_str().unwrap(), "-S", "-o", directory.path().join("x.s").to_str().unwrap()])
         .arg(root.join("i8out.c"))
         .env("LLRM_DEBUG", "time")
@@ -25,7 +25,7 @@ fn test_a_kept_inline_is_optimised_in_one_caller_before_the_next_is_spliced_into
         .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .spawn()
-        .expect("runs llrm-c");
+        .expect("runs llrm-cc");
     let started = Instant::now();
     let mut stderr = child.stderr.take().expect("piped");
     let reader = std::thread::spawn(move || {

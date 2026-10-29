@@ -204,7 +204,7 @@ OBJECT_BYTES = 100
 
 @contextlib.contextmanager
 def with_object(command: list[str]):
-    """`command` with the `OBJECT` placeholder made a path to write the object to. llrm-c encodes only for an `.o` or `.obj` output; `-o /dev/null` gets
+    """`command` with the `OBJECT` placeholder made a path to write the object to. llrm-cc encodes only for an `.o` or `.obj` output; `-o /dev/null` gets
     the assembly text, so a cost measured there leaves out the encoder and the object write (emit: 4 M of 22 M Ir on d_faces, 2026-10-23). The path is
     OBJECT_BYTES long whatever the directory: a longer argv moved an instruction count (see `pinned`)."""
     if OBJECT not in command:

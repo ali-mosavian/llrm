@@ -13,7 +13,7 @@ fn test_a_backward_string_move_needs_no_frame() {
         "static short s[2000];\nvoid f(void)\n{\n    int i;\n    for (i = 1919; i >= 0; --i) s[i + 80] = s[i];\n}\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["a.c", "-m16", "-march=i386", "-Os", "--isel=dag", "-S", "-o", "-"])
         .output()

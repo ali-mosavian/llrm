@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Clocks of old and dag (OMF), dag (ELF) and the pin's `llc` on dag's pre-isel IR (ELF), one harness, one price table.
 
-    tools/pairs/ambt_pin.py PROG LLRM_C       -> one JSON line; PIN_TRIPLE (default i486-unknown-none-elf, stack alignment 4), PIN_EXTRA (llc flags)
+    tools/pairs/ambt_pin.py PROG LLRM_CC       -> one JSON line; PIN_TRIPLE (default i486-unknown-none-elf, stack alignment 4), PIN_EXTRA (llc flags)
 
 A harness that does not answer (its stale-binary guard exits with a message, a program that fails to link) stops the run with that message:
 a null clock once looked like a result. Needs `cargo build --release --bins` in this tree and the rows corpus in ~/scratch/rows/main24d.
@@ -32,6 +32,7 @@ def sh(cmd: list[str], **kw) -> subprocess.CompletedProcess:
 
 
 def main(prog: str, llrm: str) -> dict:
+    os.environ["LLRM_CC_TARGET"] = "x86_32-wat"  # llrm-cc takes its target row from the environment
     harness_dir = next((R / "crates/target").glob("*/vsgcc"))
     base = Path(os.environ.get("ROWS_MAIN24D", Path.home() / "scratch/rows/main24d"))
     work = Path(tempfile.mkdtemp(prefix="ambt-", dir=Path.home() / "scratch"))

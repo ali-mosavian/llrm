@@ -15,7 +15,7 @@ fn test_a_byte_product_used_in_a_loop_compiles() {
         "void g(unsigned char *at, unsigned h, unsigned f, unsigned char *b)\n{\n    unsigned ink = (f & 3) * 0x55;\n    for (; h; h--, b++) at[0] = *b & ink;\n}\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["a.c", "-m16", "-march=i386", "-O2", "--isel=dag", "-S", "-o", "-"])
         .output()

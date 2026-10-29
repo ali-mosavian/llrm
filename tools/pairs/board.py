@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""The compile board: d_faces compile cost, one flag set, perf instructions:u, minimum of 3, for several llrm-c builds and the pinned clang.
+"""The compile board: d_faces compile cost, one flag set, perf instructions:u, minimum of 3, for several llrm-cc builds and the pinned clang.
 
-    QCPORT=<qb-quake src> tools/pairs/board.py --clang CLANG NAME=LLRM_C... [--levels O1,O2,O3,Os]
+    QCPORT=<qb-quake src> tools/pairs/board.py --clang CLANG NAME=LLRM_CC... [--levels O1,O2,O3,Os]
 
 Every llrm build is measured with and without -fno-inline-functions, and so is clang, at each level; -m32 -march=i486, an object written to a file, the Borland
 keywords defined away. A compile that fails stops the run (the count of a failed compile is a few million, not a measurement). For each llrm build the
@@ -50,11 +50,14 @@ def header(source, includes: list[str], clang: str, builds: list, up: str) -> li
     return lines
 
 
-def instructions(cmd: list[str]) -> float:
+LLRM_CC_ENV = {"LLRM_CC_TARGET": "x86_32-wat"}  # llrm-cc takes its target row from the environment
+
+
+def instructions(cmd: list[str], env: dict | None = None) -> float:
     """Minimum of three runs, in M."""
     best = None
     for _ in range(3):
-        err = run(["perf", "stat", "-x,", "-e", "instructions:u", *cmd]).stderr
+        err = run(["perf", "stat", "-x,", "-e", "instructions:u", *cmd], env).stderr
         found = re.search(r"^(\d+),,instructions", err, re.M)
         assert found, err[-200:]
         best = int(found[1]) if best is None else min(best, int(found[1]))
@@ -62,7 +65,7 @@ def instructions(cmd: list[str]) -> float:
 
 
 def phases(llrm: str, level: str, args: list[str]) -> dict[str, float]:
-    err = run([llrm, "-m32", "-march=i486", level, *args], {"LLRM_DEBUG": "time", "LLRM_TIME_TOP": "700"}).stderr
+    err = run([llrm, "-c", "-m32", "-march=i486", level, *args], {**LLRM_CC_ENV, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "700"}).stderr
     if "[instr] by own work" not in err:
         return {}
     own: dict[str, float] = collections.Counter()
@@ -102,7 +105,7 @@ def main() -> int:
         row = {}
         for name, llrm in builds:
             for tag, extra in (("inline", []), ("noinl", ["-fno-inline-functions"])):
-                row[f"{name} {tag}"] = instructions([llrm, "-m32", "-mabi=sysv", "-march=i486", f"-{level}", *extra, *KEYWORDS, *includes, "-o", sink, source])
+                row[f"{name} {tag}"] = instructions([llrm, "-c", "-m32", "-mabi=sysv", "-march=i486", f"-{level}", *extra, *KEYWORDS, *includes, "-o", sink, source], LLRM_CC_ENV)
         for tag, extra in (("inline", []), ("noinl", ["-fno-inline-functions"])):
             row[f"clang {tag}"] = instructions([clang, "-w", "-m32", "-march=i486", f"-{level}", *extra, *KEYWORDS, *includes, "-c", "-o", sink, source])
         table[level] = row

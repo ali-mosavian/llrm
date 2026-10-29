@@ -25,7 +25,7 @@ class CheckTests(unittest.TestCase):
         )
         self.assertEqual(check.final_counts(stage, "_f"), {"stores": 1, "reloads": 2, "argument": 1})
 
-    @unittest.skipUnless(check.LLC.exists() and Path(check.llrm_c()).exists(), "needs the pin's llc and a built llrm-c")
+    @unittest.skipUnless(check.LLC.exists() and Path(check.llrm_cc()).exists(), "needs the pin's llc and a built llrm-c")
     def test_both_sides_are_split_in_the_same_three_classes(self):
         """A single 'frame refs' number for llrm against the pin's split hid which class differed (x_dct: 45 vs 27)."""
         done = subprocess.run([sys.executable, str(Path(check.__file__)), "_bench_x_dct", str(KERNEL)], capture_output=True, text=True)

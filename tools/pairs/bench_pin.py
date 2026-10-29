@@ -1,6 +1,6 @@
 """Clocks, taken branches and jumps of ours against the pin's llc, with and without a pass's switch, on the vsgcc programs at m32.
 
-    uv run --project tools python tools/pairs/bench_pin.py LLRM_C LEVEL(-O2|-O3) SWITCH [PROG...]
+    uv run --project tools python tools/pairs/bench_pin.py LLRM_CC LEVEL(-O2|-O3) SWITCH [PROG...]
 
 Our IR (the `switchconv` stage of the wrapped program, -mabi=sysv) goes to our back end (OMF) and to the pin's `llc -O2 -filetype=obj` with
 and without SWITCH (ELF, linked as the gcc and clang variants are); crates/target/llrm-x86-m32/vsgcc/harness.py runs all three in its 486
@@ -20,6 +20,7 @@ sys.path.insert(0, str(REPO / "tools"))
 import pin  # noqa: E402
 
 LLRM, LEVEL, SWITCH, *ONLY = sys.argv[1:]
+os.environ["LLRM_CC_TARGET"] = "x86_32-wat"  # llrm-cc takes its target row from the environment
 EMU = subprocess.run(["python3", str(REPO / "tools/linkrecipe.py"), "x86-m32", "ld-emulation"], capture_output=True, text=True).stdout.strip()
 of = pin.target("m32")
 LLC = str(pin.PINNED_BIN / "llc")

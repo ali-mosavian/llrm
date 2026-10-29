@@ -11,7 +11,7 @@ mod common;
 fn test_a_kept_result_and_a_fresh_one_name_a_frame_slot_alike() {
     let source = format!("{}/tests/run/c/i64_param_home.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .env("LLRM_CHECK_REPLAY", "1")
         .args(["-O2", "-march=i486", "-m32", "-S", "-o", "a.s", &source])

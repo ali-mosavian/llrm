@@ -27,7 +27,7 @@ fn listing(flags: &[&str]) -> String {
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
     let output =
-        common::cc::llrm_c().current_dir(directory).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
+        common::cc::llrm_cc().current_dir(directory).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
@@ -55,7 +55,7 @@ fn test_a_pop_into_a_frame_cell_is_addressed_after_the_stack_is_taken_back() {
     .unwrap();
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), kernel).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -91,7 +91,7 @@ fn test_a_stack_array_indexed_by_a_register_is_addressed_through_the_stack_point
 fn test_a_function_that_only_reads_a_stack_argument_does_not_save_the_frame_register() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), "int g(int);\nint f(int n) { return g(n) + 1; }\n").unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -111,7 +111,7 @@ fn test_size_keeps_the_stack_addressed_frame_where_a_value_holds_the_frame_regis
     for program in ["fill_nest", "stack_arrays_copy"] {
         let source = format!("{}/tests/run/c/{program}.c", env!("CARGO_MANIFEST_DIR"));
         let scratch = tempfile::tempdir().unwrap();
-        let output = common::cc::llrm_c()
+        let output = common::cc::llrm_cc()
             .current_dir(scratch.path())
             .args(["-m32", "-march=i486", "-Os", "-S", "-o", "a.s", &source])
             .output()
@@ -140,7 +140,7 @@ long f(int n) { int i; for (i = 0; i < n; ++i) peg[0][top[0]++] = n - i; mv(n, 0
     for level in ["-O2", "-Os"] {
         let scratch = tempfile::tempdir().unwrap();
         std::fs::write(scratch.path().join("a.c"), source).unwrap();
-        let output = common::cc::llrm_c()
+        let output = common::cc::llrm_cc()
             .current_dir(scratch.path())
             .args(["-m32", "-mabi=sysv", "-march=i486", level, "-S", "-o", "a.s", "a.c"])
             .output()
@@ -157,7 +157,7 @@ long f(int n) { int i; for (i = 0; i < n; ++i) peg[0][top[0]++] = n - i; mv(n, 0
 fn test_a_dead_looking_run_of_labels_is_addressed_again_once_a_branch_reaches_it() {
     let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/run/c/compare_to_int64.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-O2", "-S", "-o", "a.s", source])
         .output()
@@ -176,7 +176,7 @@ fn test_a_label_a_known_branch_reaches_ends_the_run_taken_for_dead() {
     let source =
         concat!(env!("CARGO_MANIFEST_DIR"), "/crates/target/llrm-x86-m32/vsgcc/kernels/x_binsearch/x_binsearch.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "a.s", source])
         .output()

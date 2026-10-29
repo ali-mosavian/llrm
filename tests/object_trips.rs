@@ -28,7 +28,7 @@ fn multiplies(level: &str) -> (usize, usize) {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32", level, "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()

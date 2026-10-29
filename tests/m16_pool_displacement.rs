@@ -11,7 +11,7 @@ fn test_u64_constant_to_double_reads_the_fudge_at_plus_four() {
                   double f(void) { u64 big = 0xFFFFFFFFFFFFFFFFULL; double e = (double)big; return e; }\n";
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["--isel=dag", "-O0", "-S", "-o", "a.s", "a.c"])
         .output()

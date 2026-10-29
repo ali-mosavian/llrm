@@ -27,7 +27,7 @@ A function of 3 instructions holding one register copy:
 [isel] id selector=old instructions=3 copies=1 executed=3 memory=0
 ```
 
-From `LLRM_DEBUG=isel llrm-c -m32 -O2` of `int id(int x) { return x; }`.
+From `LLRM_DEBUG=isel llrm-cc -m32 -O2` of `int id(int x) { return x; }`.
 
 ## Used by
 `assemble::staged` (the choice and the dump), `assemble::machined` (the

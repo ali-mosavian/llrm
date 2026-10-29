@@ -13,7 +13,7 @@ convention = "ia16"
 [abi.regparm3]
 convention = "regparm3"
 
-# cdecl16, m16's C ABI: Borland's medium model as `wccq` is asked for it (-mm -ecc; `_name`
+# cdecl16, m16's C ABI: Borland's medium model as Open Watcom is asked for it (-mm -ecc; `_name`
 # symbols). A far call (a procedure that is exported) leaves a 4-byte return address.
 
 [cdecl16]

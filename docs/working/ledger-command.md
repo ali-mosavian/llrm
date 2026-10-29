@@ -4,7 +4,7 @@ Owner: w-6. A perf PR's compile-cost before/after pair is taken with this comman
 (`tools/pairs/pair_build.sh`, `CARGO_INCREMENTAL=0`, no `LLRM_*`), and the PR body states the command line and the number:
 
 ```bash
-valgrind --tool=callgrind --callgrind-out-file=OUT.cg DIST/llrm-c -m32 -mabi=sysv -march=i486 -O2 \
+valgrind --tool=callgrind --callgrind-out-file=OUT.cg DIST/llrm-cc -m32 -mabi=sysv -march=i486 -O2 \
   -Dfar= -Dhuge= -Dnear= -Dpascal= -Dcdecl= -D__far= -D_far= -D__near= -D_near= \
   -I qbq-llrm/src -I qbq-llrm/src/render -I qbq-llrm/src/game -I qbq-llrm/src/host -I qbq-llrm/src/qgl \
   -o REAL_FILE.o qbq-llrm/src/render/d_faces.c

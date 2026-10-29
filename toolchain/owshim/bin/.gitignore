@@ -1,4 +1,0 @@
-# Build intermediates of build.sh; only wccq itself is committed.
-*
-!wccq
-!.gitignore

@@ -71,7 +71,7 @@ macho = "_*"
 pointer = ["eax"]
 float = ["st0"]
 
-# cdecl32, m32's C ABI: Open Watcom's 386 flat ABI as `wccq` is asked for it (-ecc: the stack
+# cdecl32, m32's C ABI: Open Watcom's 386 flat ABI as Open Watcom is asked for it (-ecc: the stack
 # convention, not Watcom's register-based default; structs packed -zp4; `_name` symbols), with one
 # deliberate difference: the aggregate return below, which is reentrant.
 

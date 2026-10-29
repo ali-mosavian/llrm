@@ -2,7 +2,7 @@
 
 Ledger e90b803c8a bucket: ours 90.9 M Ir against the pin's 33.6 M (2.70x) on d_faces -O2.
 
-Method: callgrind, `llrm-c -m32 -mabi=sysv -march=i486 -O2` on `render/d_faces.c` (release, parity 1bd7d34afc + #3660; `cg.sw.out`) against the pin's `opt -passes=default<O2>` callgrind on the same stage (`cg-opt.out`), inclusive Ir, `callgrind_annotate --tree=calling`.
+Method: callgrind, `llrm-cc -m32 -mabi=sysv -march=i486 -O2` on `render/d_faces.c` (release, parity 1bd7d34afc + #3660; `cg.sw.out`) against the pin's `opt -passes=default<O2>` callgrind on the same stage (`cg-opt.out`), inclusive Ir, `callgrind_annotate --tree=calling`.
 
 ## Pass totals
 

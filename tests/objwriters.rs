@@ -11,7 +11,7 @@ fn compile(
     arguments: &[&str],
     out: &Path,
 ) -> Output {
-    common::cc::llrm_c().args(arguments).arg(source).arg("-o").arg(out).output().unwrap()
+    common::cc::llrm_cc().args(arguments).arg(source).arg("-o").arg(out).output().unwrap()
 }
 
 fn have(tool: &str) -> bool {

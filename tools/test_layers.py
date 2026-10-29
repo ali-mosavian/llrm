@@ -32,7 +32,7 @@ LAYERS = [
         ],
     ),
     ("driver", ["llrm-driver", "llrm-cc", "llrm-bcdriver"]),
-    ("frontends", ["llrm-c", "llrm-nib", "llrm-qb", "llrm-qbruntime", "llrm-bcobj"]),
+    ("frontends", ["llrm-nib", "llrm-qb", "llrm-qbruntime", "llrm-bcobj"]),
     ("tools", ["llrm"]),
 ]
 RANK = {name: at for at, (_, names) in enumerate(LAYERS) for name in names}
@@ -97,23 +97,6 @@ def test_the_root_mir_directory_is_not_tracked():
     assert tracked == "", tracked.splitlines()[:3]
 
 
-def test_the_default_build_does_not_make_llrm_c():
-    """llrm-llc and llrm-cc are the C compiler; llrm-c builds only with feature c-legacy (and wccq, which brings it)."""
-    import tomllib
-
-    manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
-    features = manifest["features"]
-    wanted, seen = list(features["default"]), set()
-    while wanted:
-        name = wanted.pop()
-        if name not in seen:
-            seen.add(name)
-            wanted += [f for f in features.get(name, []) if "/" not in f and not f.startswith("dep:")]
-    assert "c-legacy" not in seen and "wccq" not in seen, seen
-    binary = next(b for b in manifest["bin"] if b["name"] == "llrm-c")
-    assert binary["required-features"] == ["c-legacy"]
-
-
 def test_a_frontend_crate_has_no_binary_of_its_own():
     """qbfront was a second QB binary beside llrm-qb; frontends are libraries the root binaries link."""
     for manifest in sorted((ROOT / "crates" / "frontends").glob("*/Cargo.toml")):
@@ -130,9 +113,3 @@ def test_the_workspace_members_follow_the_layer_glob():
     inside = {Path(p["manifest_path"]).parent.relative_to(ROOT).as_posix() for p in metadata["packages"]}
     layers = {p.parent.relative_to(ROOT).as_posix() for p in (ROOT / "crates").glob("*/*/Cargo.toml")}
     assert layers <= inside, sorted(layers - inside)
-
-
-def test_llrm_c_lib_tests_build_without_the_root_enabling_its_feature():
-    """llrm-c became optional in the root: `--workspace --all-targets` then compiled its lib tests without `toolchain` and stopped at the compile_error (#5586 refused 00:51)."""
-    done = subprocess.run(["cargo", "check", "-p", "llrm-c", "--lib", "--tests"], cwd=ROOT, capture_output=True, text=True)
-    assert done.returncode == 0, done.stderr[-600:]

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Callgrind callee splits, checked: every call edge between our own files must name the callee in the caller's source file.
 
-    tools/callgrind-check.py record [--bin llrm-c] [--out profile.out] [--cwd DIR] -- ARGS...   # run under callgrind
+    tools/callgrind-check.py record [--bin llrm-cc] [--out profile.out] [--cwd DIR] -- ARGS...   # run under callgrind
     tools/callgrind-check.py check profile.out [--top 20] [--under CALLER]                      # exit 1 on a false edge
 
-Record with a dist build that has line tables (`CARGO_PROFILE_DIST_DEBUG=line-tables-only cargo build --profile dist --bin llrm-c`);
+Record with a dist build that has line tables (`CARGO_PROFILE_DIST_DEBUG=line-tables-only cargo build --profile dist --bin llrm-cc --bin llrm-llc`);
 `record` runs callgrind with `--read-inline-info=yes --dump-instr=no --compress-pos=no --compress-strings=no`. Pass totals
 (a function's inclusive row) are reliable; a callee split is not, because under fat LTO identical-code folding and merged
 tails put a callee under a caller that never calls it (machinedce::eliminated under tails_merged, parity 59c834686).
@@ -92,7 +92,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="mode", required=True)
     rec = sub.add_parser("record")
-    rec.add_argument("--bin", default="llrm-c")
+    rec.add_argument("--bin", default="llrm-cc")
     rec.add_argument("--out", default="profile.out")
     rec.add_argument("--cwd", default=".")
     rec.add_argument("rest", nargs=argparse.REMAINDER)

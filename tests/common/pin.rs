@@ -19,7 +19,7 @@ pub fn listing(
     // On disk: `--dump` refuses a tmpfs (thousands of small files).
     let scratch = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let dump = scratch.path().join("dump");
-    let output = super::cc::llrm_c()
+    let output = super::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(flags)
         .args(["-S", "-o", "a.s", "--dump"])

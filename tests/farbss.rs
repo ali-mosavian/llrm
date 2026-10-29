@@ -70,13 +70,13 @@ impl Lab {
         );
     }
 
-    /// `llrm-c`'s command line served by llrm-cc over clang (the Watcom m16
+    /// llrm-cc over clang (the Watcom m16
     /// row), in the lab's directory.
     fn compile(
         &self,
         args: &[&str],
     ) {
-        let done = common::cc::llrm_c().args(args).current_dir(self.dir.path()).output().unwrap();
+        let done = common::cc::llrm_cc().args(args).current_dir(self.dir.path()).output().unwrap();
         assert!(
             done.status.success(),
             "llrm-cc {args:?}: {}{}",

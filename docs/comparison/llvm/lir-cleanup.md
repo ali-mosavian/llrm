@@ -140,7 +140,7 @@ The roadmap already names this: step 6 of [compile-time spec](../../architecture
 
 ## Measured
 
-Instructions: `valgrind --tool=callgrind --inclusive=yes` on `llrm-c` of main `21f5c9fc8` and on the driver's `cc1` for LLVM; `LLRM_DEBUG=time` for the ladder. `d_faces.c` of qbq-llrm, `-O2 -m32 -march=i486`. The output is 1,835 instructions in llrm and 1,863 in clang, so a per-instruction rate means the same thing on both sides.
+Instructions: `valgrind --tool=callgrind --inclusive=yes` on `llrm-cc` of main `21f5c9fc8` and on the driver's `cc1` for LLVM; `LLRM_DEBUG=time` for the ladder. `d_faces.c` of qbq-llrm, `-O2 -m32 -march=i486`. The output is 1,835 instructions in llrm and 1,863 in clang, so a per-instruction rate means the same thing on both sides.
 
 | step | LLVM | llrm |
 |---|---|---:|

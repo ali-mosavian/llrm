@@ -24,7 +24,7 @@ void adler(const unsigned char *p, unsigned n)
 fn test_a_conditional_subtract_reuses_the_compare_flags() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["--isel=dag", "-m32", "-mabi=sysv", "-march=i486", "-Os", "-S", "-o", "-", "a.c"])
         .output()

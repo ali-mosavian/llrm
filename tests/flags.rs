@@ -78,8 +78,7 @@ fn tools() -> Vec<Tool> {
 }
 
 /// Binaries that name no target, and why.
-const EXEMPT: [(&str, &str); 5] = [
-    ("llrm-c", "the dropped Watcom front end, still built; llrm-cc replaces it and is tested above"),
+const EXEMPT: [(&str, &str); 4] = [
     ("llrm-llc", "reads LLVM IR; takes -m through the shared flag parser"),
     ("llrm-mir", "reads MIR, which states its own datalayout"),
     ("llrm-pass", "runs one pass on MIR text, which states its own datalayout"),
@@ -94,7 +93,7 @@ fn run(
     std::fs::write(directory.join(tool.input.0), tool.input.1).unwrap();
     if tool.name == "llrm-cc" {
         // llrm-cc names its target by `LLRM_CC_TARGET`; the helper maps `-m32`.
-        return common::cc::llrm_c()
+        return common::cc::llrm_cc()
             .current_dir(directory)
             .args(flags)
             .arg(tool.input.0)

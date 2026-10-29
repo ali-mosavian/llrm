@@ -148,7 +148,7 @@ fn compiled_c(
 ) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let out = scratch.path().join("out.asm");
-    let done = common::cc::llrm_c().arg(source).args(arguments).arg("-S").arg("-o").arg(&out).output().unwrap();
+    let done = common::cc::llrm_cc().arg(source).args(arguments).arg("-S").arg("-o").arg(&out).output().unwrap();
     assert!(done.status.success(), "llrm-cc {}: {}", source.display(), String::from_utf8_lossy(&done.stderr));
     std::fs::read_to_string(out).unwrap()
 }

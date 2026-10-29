@@ -26,10 +26,9 @@ fn compiled(
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join(format!("x87.{extension}"));
     std::fs::write(&path, source).unwrap();
-    // llrm-c is gone: its command line is served by llrm-cc over the pinned
-    // clang.
-    let done = if tool == "llrm-c" {
-        common::cc::llrm_c()
+    // llrm-cc runs over the pinned clang, so it is not a sibling binary of llrm-qb.
+    let done = if tool == "llrm-cc" {
+        common::cc::llrm_cc()
             .arg(&path)
             .args(flags)
             .arg("-o")
@@ -154,7 +153,7 @@ fn c_operations() -> String {
 fn test_every_c_float_operation_is_priced_at_os_in_both_modes() {
     let source = c_operations();
     for mode in ["-m16", "-m32"] {
-        if let Err(why) = compiled("llrm-c", &source, "c", &[mode, "-Os"]) {
+        if let Err(why) = compiled("llrm-cc", &source, "c", &[mode, "-Os"]) {
             panic!("{mode}: {why}");
         }
     }

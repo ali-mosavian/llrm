@@ -14,7 +14,7 @@ fn listing_with(
 ) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         // The call to `h` is the premise: inlined (the pin inlines it), `f`
         // calls nothing that holds a double and needs no pad.

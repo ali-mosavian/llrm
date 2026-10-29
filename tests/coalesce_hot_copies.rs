@@ -49,7 +49,7 @@ fn test_the_join_of_a_loop_variable_takes_its_register_not_the_registers_of_one_
     let source = scratch.path().join("a.c");
     std::fs::write(&source, KERNEL).unwrap();
     let flags = ["-m32", "-mabi=sysv", "-O1", "-march=i486"];
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(flags)
         .args(["-S", "-o", "a.s"])

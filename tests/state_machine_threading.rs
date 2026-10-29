@@ -32,7 +32,7 @@ fn copies_of_the_step(level: &str) -> usize {
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), MACHINE).unwrap();
     let output =
-        common::cc::llrm_c().current_dir(directory).args(["-m32", level, "-S", "-o", "a.s", "a.c"]).output().unwrap();
+        common::cc::llrm_cc().current_dir(directory).args(["-m32", level, "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap().matches("12345").count()
 }

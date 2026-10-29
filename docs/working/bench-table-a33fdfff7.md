@@ -2,7 +2,7 @@
 
 TL;DR: at -O2 the dag selector is 1.143x old on clocks (1.063 vs 0.930 of min(gcc, clang)) and 0.957x on code bytes (1.128 vs 1.179). -Os code: dag 1.007, old 0.956.
 
-Method: tip a33fdfff7ab1088d71225b2e502a9f9abcd3652e (includes #4780); llrm-c md5 7a42e6825e865ea80e03894e5d042de8, dist built by `tools/pairs/pair_build.sh` at a33fdfff7ab1088d71225b2e502a9f9abcd3652e; its llrm-c.d names only `wt-pair-a33fdfff7ab1088d71225b2e502a9f9abcd3652e` sources (1190 refs, no other sha); `--isel=old` / `--isel=dag` per column; 71 programs, m32; gcc 13.4 and pinned clang d1106deb71cc rebuilt by vsgcc build.sh at stack alignment 4; clocks from the vsgcc harness price table (486); no LLRM_* env. All 71 programs ok in both columns; no failed or missing rows.
+Method: tip a33fdfff7ab1088d71225b2e502a9f9abcd3652e (includes #4780); llrm-cc md5 7a42e6825e865ea80e03894e5d042de8, dist built by `tools/pairs/pair_build.sh` at a33fdfff7ab1088d71225b2e502a9f9abcd3652e; its llrm-cc.d names only `wt-pair-a33fdfff7ab1088d71225b2e502a9f9abcd3652e` sources (1190 refs, no other sha); `--isel=old` / `--isel=dag` per column; 71 programs, m32; gcc 13.4 and pinned clang d1106deb71cc rebuilt by vsgcc build.sh at stack alignment 4; clocks from the vsgcc harness price table (486); no LLRM_* env. All 71 programs ok in both columns; no failed or missing rows.
 
 Geomean of llrm / max(1, min(gcc, clang)) per program; below 1.0 beats the best reference.
 

@@ -18,7 +18,7 @@ void f(int x)
 fn listing(level: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["--isel=dag", "-m16", "-march=i386", level, "-S", "-o", "-", "a.c"])
         .output()

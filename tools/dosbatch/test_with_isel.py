@@ -63,7 +63,7 @@ def test_a_selection_count_needs_the_selectors_report(tmp_path):
 
 
 def test_real_mode_c_takes_the_selector_too(monkeypatch, tmp_path):
-    """Real-mode C programs go through LLRM_ISEL like the rest (llrm-c kept them on the old selector)."""
+    """Real-mode C programs go through LLRM_ISEL like the rest (the old front end kept them on the old selector)."""
     import run_tests  # noqa: E402
 
     monkeypatch.setenv("LLRM_ISEL", "dag")

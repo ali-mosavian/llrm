@@ -1146,7 +1146,7 @@ From `qbq-llrm/src`, with `F` the foreign flags of `compile_time.sh` (`-D` far/n
 
 | what | command |
 |---|---|
-| whole compile | `perf stat -e instructions:u llrm-c -m32 -O1 $I -S -o /dev/null render/d_faces.c`; the same with `gcc`/`clang` and `$F` |
+| whole compile | `perf stat -e instructions:u llrm-cc -m32 -O1 $I -S -o /dev/null render/d_faces.c`; the same with `gcc`/`clang` and `$F` |
 | llrm steps, nesting, cache lookups | `LLRM_DEBUG=time LLRM_TIME_TOP=500` (add `timefunc` for per-function totals) |
 | optimizer rounds | `LLRM_DEBUG=runs` |
 | allocation events | `LLRM_DEBUG=regalloc,split,spill` |

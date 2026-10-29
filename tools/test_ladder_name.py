@@ -15,6 +15,6 @@ def test_the_ladder_generator_does_not_share_the_name_gen():
     sys.path.insert(0, str(HERE / "ladder"))
     ladder = importlib.import_module("ladder_gen")
     assert ladder.generate("mem", 4).startswith("void f(")
-    for name in ("test_alloc_scaling.py", "ladder/test_ladder.py"):
+    for name in ("ladder/test_ladder.py",):
         text = (HERE / name).read_text()
         assert "\n    import gen\n" not in text and "\nimport gen\n" not in text, f"{name} still imports the name gen"

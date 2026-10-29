@@ -34,15 +34,13 @@ The matrix's listings are read as facts, one per line with the listing line it c
 
 | Test | Pins |
 |---|---|
-| `cargo test --release -p llrm-c --features toolchain callconv` | llrm-c's lowering of each call boundary equals BCC's (`reference.txt`); `known.txt` lists where it differs; `test_the_reference_table_is_what_bcc_listed` keeps the table current, `LLRM_BLESS=1` rewrites it |
-| `cargo test --release -p llrm-qb callconv` | the same for BASIC against BC's listings |
+| `cargo test --release -p llrm-qb callconv` | BASIC's lowering of each call boundary equals BC's listings |
 
 ## Per-convention tests
 
 | Test | Pins |
 |---|---|
 | `tests/register_convention.rs` | `watcall32`: arguments in EAX, EDX, EBX, ECX, the rest on the stack popped by the callee; `cdecl32`; what a callee saves; private functions under `-mabi=sysv`; a full-width `va_start` |
-| `crates/frontends/llrm-c/src/compile.rs` | `regparm3` by argument size, `ia16` struct results, `watcall16` words, pairs and struct results, over `tests/fixtures/c/regparm3.c`, `ia16.cgs`, `watcall16.cgs` |
 | `crates/codegen/llrm-codegen/src/backend/isel_tests.rs` | the frame and register save sequence of a far function |
 | `tests/ipra.rs` | callee facts: a caller keeps a value in a register a private callee does not write; an exported or recursive one tells nothing |
 | `tests/nearcalls.rs` | near entry for a private function in C, Nib and BASIC |

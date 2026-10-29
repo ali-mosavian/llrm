@@ -17,8 +17,8 @@ def load(name: str):
 
 
 def fake_llrm(path: Path, body: str) -> str:
-    """A stand-in llrm-c: writes `body` to the -o file; a source containing FAIL makes it exit 1."""
-    path.write_text(f'#!/bin/bash\n# {'#' * 5000 * (1 + ord(body[0]) % 2)}\n[ "$1" = --version ] && {{ echo "llrm-c abc123"; exit 0; }}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ngrep -q FAIL "$a" && {{ echo "llrm-c: boom" >&2; exit 1; }}\necho {body} > "$o"\n')
+    """A stand-in llrm-cc: writes `body` to the -o file; a source containing FAIL makes it exit 1."""
+    path.write_text(f'#!/bin/bash\n# {'#' * 5000 * (1 + ord(body[0]) % 2)}\n[ "$1" = --version ] && {{ echo "llrm-cc abc123"; exit 0; }}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ngrep -q FAIL "$a" && {{ echo "llrm-cc: boom" >&2; exit 1; }}\necho {body} > "$o"\n')
     path.chmod(0o755)
     return str(path)
 
@@ -38,13 +38,13 @@ def test_objsweep_names_a_changed_object_and_a_one_sided_failure(tmp_path, monke
 
 def test_objsweep_measures_the_object_not_the_assembly_text(tmp_path, monkeypatch):
     monkeypatch.setenv("LLRM_PAIR_CROSS_BRANCH", "1")  # the fake builds stamp a sha no repository has; their ancestry is test_ancestry's; --isel=old since no diff of them can be read
-    """objsweep wrote to `x.old`: llrm-c wrote assembly text there, so x_fir m16 read +350 B (text) where the object grew 21 B."""
+    """objsweep wrote to `x.old`: the compiler wrote assembly text there, so x_fir m16 read +350 B (text) where the object grew 21 B."""
     src = tmp_path / "b"
     src.mkdir()
     (src / "p.c").write_text("int a;")
     for name, obj in (("old", "A"), ("new", "B")):
         pad = "#" * (5000 if name == "old" else 9000)  # two builds, not one relinked
-        (tmp_path / name).write_text(f'#!/bin/bash\n# {pad}\n[ "$1" = --version ] && {{ echo "llrm-c abc123"; exit 0; }}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ncase "$o" in *.o|*.obj) echo {obj} > "$o";; *) echo TEXT > "$o";; esac\n')
+        (tmp_path / name).write_text(f'#!/bin/bash\n# {pad}\n[ "$1" = --version ] && {{ echo "llrm-cc abc123"; exit 0; }}\nfor a; do [ "$p" = -o ] && o=$a; p=$a; done\ncase "$o" in *.o|*.obj) echo {obj} > "$o";; *) echo TEXT > "$o";; esac\n')
         (tmp_path / name).chmod(0o755)
     done = subprocess.run([sys.executable, str(HERE / "objsweep.py"), str(tmp_path / "old"), str(tmp_path / "new"), "--src", str(src), "--levels", "O2", "--targets", "m32", "--isel=old"], capture_output=True, text=True)
     assert "changed p m32 -O2" in done.stdout, done.stdout + done.stderr
@@ -71,11 +71,11 @@ def test_the_stub_defines_strlen(tmp_path):
 
 def test_a_pair_of_one_build_relinked_is_void(tmp_path, monkeypatch):
     monkeypatch.setenv("LLRM_PAIR_CROSS_BRANCH", "1")  # the fake builds stamp a sha no repository has; their ancestry is test_ancestry's; --isel=old since no diff of them can be read
-    """Two llrm-c built into one shared target dir differed by 83 path bytes; objsweep read 0 objects changed of two copies of one compiler."""
+    """Two llrm-cc built into one shared target dir differed by 83 path bytes; objsweep read 0 objects changed of two copies of one compiler."""
     voidpair = load("voidpair")
     base = bytes(range(256)) * 1024
     a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
-    stamp = b'#!/bin/sh\necho "llrm-c abc123"\nexit 0\n'  # the binaries must answer --version; the rest is never run
+    stamp = b'#!/bin/sh\necho "llrm-cc abc123"\nexit 0\n'  # the binaries must answer --version; the rest is never run
     a.write_bytes(stamp + base)
     b.write_bytes(stamp + base[:100] + b"x" * 83 + base[183:])
     c.write_bytes(stamp + bytes(reversed(base)))
@@ -91,7 +91,7 @@ def test_runpinned_stops_when_the_dist_lacks_the_linker(tmp_path):
     """A VM without jwasm/jwlink/dosbox-x in the dist ran no test and the pair's run diff was empty, read as 'no new failure'."""
     dist = tmp_path / "dist"
     dist.mkdir()
-    (dist / "llrm-c").write_text("")
+    (dist / "llrm-llc").write_text("")
     repo = HERE.parents[1]
     done = subprocess.run(["bash", str(HERE / "runpinned.sh"), "0" * 9, str(dist), str(tmp_path / "out.txt")], capture_output=True, text=True, env={"PIN_TREES": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(tmp_path)}, cwd=repo)
     assert done.returncode == 2 and "is missing" in done.stderr, done.stderr
@@ -123,9 +123,9 @@ def test_board_and_cbisect_say_what_they_need_instead_of_running():
 
 
 def fake_selector(path: Path, extra: int = 0, refuse: bool = False) -> str:
-    """A stand-in llrm-c with two functions on the `isel` channel; `--isel=dag` gives `g` EXTRA more instructions, or is refused."""
+    """A stand-in llrm-cc with two functions on the `isel` channel; `--isel=dag` gives `g` EXTRA more instructions, or is refused."""
     path.write_text(
-        '#!/bin/bash\n[ "$1" = --version ] && { echo "llrm-c abc1234"; exit 0; }\n'
+        '#!/bin/bash\n[ "$1" = --version ] && { echo "llrm-cc abc1234"; exit 0; }\n'
         'for a; do case $a in --isel=*) s=${a#--isel=};; esac; [ "$p" = -o ] && o=$a; p=$a; done\n'
         f'[ "$s" = dag -o "$s" = shadow ] && {{ [ {int(refuse)} = 1 ] && {{ echo "@f: --isel=dag: cannot select" >&2; exit 1; }}; n={extra}; }} || n=0\n'
         'echo x > "$o"\necho "[isel] f selector=$s instructions=4 copies=1 executed=9 memory=2" >&2\n'

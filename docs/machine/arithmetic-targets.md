@@ -36,4 +36,4 @@ The prefix rule is Intel 241430-004 section 24.3 (page 24-3).
 
 ## See it
 
-`llrm-c -march=pentium -S` prints the selection for a CPU (compare `-march=i486`); `arithmetic.rs` and `division.rs` tests pin the chosen sequences. These are static estimates; [metal](metal.md) is about what only hardware can measure.
+`llrm-cc -march=pentium -S` prints the selection for a CPU (compare `-march=i486`); `arithmetic.rs` and `division.rs` tests pin the chosen sequences. These are static estimates; [metal](metal.md) is about what only hardware can measure.

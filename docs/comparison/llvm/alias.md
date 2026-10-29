@@ -110,7 +110,7 @@ The two buy the same ruling-out by opposite means: LLVM pays at the query (a bou
 | per-access setup | none (on demand) | `MemRef::of` 185,644 calls, 109.4 M (3.39%) |
 | whole alias tower | AAManager 44 builds | `Annotated` 297.6 M inclusive (9.23%), `points_to` 150.5 M (4.67%) |
 
-Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`. LLVM: callgrind on `clang -cc1` of d1106deb71cc, total 415.4 M, calls summed over callers. llrm: callgrind on the release `llrm-c` of 21f5c9fc8, total 3,224 M.
+Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`. LLVM: callgrind on `clang -cc1` of d1106deb71cc, total 415.4 M, calls summed over callers. llrm: callgrind on the release `llrm-cc` of 21f5c9fc8, total 3,224 M.
 
 ## Proposed change
 

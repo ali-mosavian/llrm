@@ -22,7 +22,7 @@ fn test_the_pressure_channel_reports_a_forecast_beside_the_allocators_spills() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .env("LLRM_DEBUG", "pressure")
         .args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])

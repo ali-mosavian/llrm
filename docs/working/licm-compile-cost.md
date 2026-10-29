@@ -1,6 +1,6 @@
 # LICM and loop-pass compile cost (w-3, plan note 2026-10-22)
 
-target: d_faces -O2, `llrm-c -m32 -mabi=sysv -march=i486`, callgrind Ir, ledger `ledger-c4fade734-O2.txt` (loop bucket: ours 192.7 M, pin 86.8 M). Own callgrind: dist d7d4e23a4 (parity plus the D12 revert), `w3-cg/cg.out`, total 1435 M. The pin side is the ledger's.
+target: d_faces -O2, `llrm-cc -m32 -mabi=sysv -march=i486`, callgrind Ir, ledger `ledger-c4fade734-O2.txt` (loop bucket: ours 192.7 M, pin 86.8 M). Own callgrind: dist d7d4e23a4 (parity plus the D12 revert), `w3-cg/cg.out`, total 1435 M. The pin side is the ledger's.
 
 ## Where LICM's 57-60 M goes
 

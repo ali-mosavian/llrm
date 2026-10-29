@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Per function, what the old and the DAG instruction selector leave: instructions, copies, executed instructions, bytes.
 
-    tools/pairs/isel_shadow.py LLRM_C [--new LLRM_C2] [--old-isel old] [--new-isel dag] [--src DIR] [--levels O1,O2] [--targets m32,m16] [--programs a,b]
+    tools/pairs/isel_shadow.py LLRM_CC [--new LLRM_CC2] [--old-isel old] [--new-isel dag] [--src DIR] [--levels O1,O2] [--targets m32,m16] [--programs a,b]
 
-Each cell (program, target, level) is compiled by `LLRM_C --isel=OLD` and `LLRM_C2 (default LLRM_C) --isel=NEW` (default `shadow`: the DAG path where it can select, else the old selector, each refusal reported) with `LLRM_DEBUG=isel`; the rows
+Each cell (program, target, level) is compiled by `LLRM_CC --isel=OLD` and `LLRM_CC2 (default LLRM_CC) --isel=NEW` (default `shadow`: the DAG path where it can select, else the old selector, each refusal reported) with `LLRM_DEBUG=isel`; the rows
 (`[isel] NAME selector=.. instructions=.. copies=.. executed=.. memory=..`, see backend/shadow.rs) and, at m32, the bytes of each function
 (ELF symbol sizes) and at m16 (jwasm's listing of `-S`, offsets from `proc` to `endp`; calibrated against the OMF code bytes by
-~/scratch/w3-qo/bytes.py) are compared by function. jwasm is $JWASM, else beside LLRM_C, else on PATH. Prints one summary line, then each function that differs and each cell one side refused. A compile that
+~/scratch/w3-qo/bytes.py) are compared by function. jwasm is $JWASM, else beside LLRM_CC, else on PATH. Prints one summary line, then each function that differs and each cell one side refused. A compile that
 fails is a refusal and is never counted as equal. The sources are objsweep's. Exit 1 on any difference or refusal.
 """
 from __future__ import annotations
@@ -91,8 +91,8 @@ def differences(old: dict, new: dict) -> list[str]:
 
 def compile_cell(binary: str, isel: str, source: Path, target: str, level: str, out: Path) -> tuple[dict | None, str]:
     """(rows, '') or (None, the first line of the error)."""
-    env = {**os.environ, "LLRM_DEBUG": "isel"}
-    done = subprocess.run([binary, *FLAGS[target], *(["-fobject-format=elf"] if target == "m32" else []), f"-{level}", f"--isel={isel}", "-o", str(out), str(source)], capture_output=True, text=True, env=env, timeout=600)
+    env = {**os.environ, "LLRM_DEBUG": "isel", "LLRM_CC_TARGET": {"m32": "x86_32-wat", "m16": "x86_16-wat"}[target]}
+    done = subprocess.run([binary, *FLAGS[target], *(["-fobject-format=elf"] if target == "m32" else []), f"-{level}", f"--isel={isel}", "-c", "-o", str(out), str(source)], capture_output=True, text=True, env=env, timeout=600)
     if done.returncode != 0:
         return None, (done.stderr.strip().splitlines() or [f"exit {done.returncode}"])[-1][:140]
     rows = {plain(name): row for name, row in parse_rows(done.stderr).items()}
@@ -102,7 +102,7 @@ def compile_cell(binary: str, isel: str, source: Path, target: str, level: str, 
             row["bytes"] = sizes.get(name, "-")
     else:
         asm = out.with_suffix(".asm")
-        made = subprocess.run([binary, *FLAGS[target], f"-{level}", f"--isel={isel}", "-S", "-o", str(asm), str(source)], capture_output=True, text=True)
+        made = subprocess.run([binary, *FLAGS[target], f"-{level}", f"--isel={isel}", "-S", "-o", str(asm), str(source)], capture_output=True, text=True, env=env)
         if made.returncode != 0:
             return None, (made.stderr.strip().splitlines() or ["-S failed"])[-1][:140]
         lst = out.with_suffix(".lst")

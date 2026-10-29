@@ -217,7 +217,7 @@ fn test_loops_over_many_arrays_build_on_a_p5() {
     let scratch = tempfile::tempdir().unwrap();
     for (name, cpu) in [("ninearrays", "P5"), ("tenarrays", "P5"), ("elevenarrays", "Core")] {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/c/{name}.c"));
-        let done = common::cc::llrm_c()
+        let done = common::cc::llrm_cc()
             .args([source.to_str().unwrap(), &march(cpu), "-O2", "-o", &format!("{name}.obj")])
             .current_dir(scratch.path())
             .output()
@@ -234,7 +234,7 @@ fn test_loops_over_many_arrays_build_on_a_p5() {
 fn test_an_unspillable_range_evicts_a_spillable_holder_at_any_stage() {
     let scratch = tempfile::tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/fivestreams.c");
-    let done = common::cc::llrm_c()
+    let done = common::cc::llrm_cc()
         .args([source.to_str().unwrap(), "-march=pentium", "-O2", "-o", "fivestreams.obj"])
         .current_dir(scratch.path())
         .output()
@@ -253,7 +253,7 @@ fn test_a_loop_over_many_arrays_keeps_no_product_in_a_frame_cell() {
     let scratch = tempfile::tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/tenstreams.c");
     let listing = scratch.path().join("tenstreams.asm");
-    let done = common::cc::llrm_c()
+    let done = common::cc::llrm_cc()
         .args([source.to_str().unwrap(), "-march=i386", "-O2", "-S", "-o", listing.to_str().unwrap()])
         .output()
         .unwrap();
@@ -328,7 +328,7 @@ fn test_c_far_and_huge_are_near_with_a_warning_on_m32() {
     let scratch = tempfile::tempdir().unwrap();
     let object = scratch.path().join("p.obj");
     let compile = |extra: &[&str]| {
-        common::cc::llrm_c()
+        common::cc::llrm_cc()
             .arg(root.join("tests/run/c/huge_array.c"))
             .args(extra)
             .args(["-O2", "-o", object.to_str().unwrap()])
@@ -385,7 +385,7 @@ fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     std::fs::write(&source, "char a[300], b[300];\nint c[25], d[25];\nvoid clear(void) { unsigned i; for (i = 0; i < 300; i++) a[i] = 0; }\nvoid copy(void) { int i; for (i = 0; i < 25; i++) d[i] = c[i]; }\nvoid copy_big(void) { int i; for (i = 0; i < 300; i++) b[i] = a[i]; }\nint main(void) { clear(); copy(); copy_big(); return b[5] + d[5]; }\n").unwrap();
     let listing = |target: &str| {
         let out = scratch.path().join(format!("{target}.asm"));
-        let done = common::cc::llrm_c()
+        let done = common::cc::llrm_cc()
             .arg(&source)
             .args([&mode(target), "-O2", "-S", "-o", out.to_str().unwrap()])
             .output()
@@ -556,7 +556,7 @@ fn test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_on
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
     let compiler = env!("CARGO_BIN_EXE_llrm-cc");
-    let different = scratch.path().join("llrm-c-os");
+    let different = scratch.path().join("llrm-cc-os");
     std::fs::write(&different, format!("#!/bin/sh\nexec {compiler} \"$@\" -Os\n")).unwrap();
     std::fs::set_permissions(&different, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let gate = |new: &Path| {
@@ -602,12 +602,12 @@ fn test_llrm_os_h_needs_no_include_path() {
     )
     .unwrap();
     for mode in ["-m16", "-m32"] {
-        let done = common::cc::llrm_c()
+        let done = common::cc::llrm_cc()
             .args([mode, source.to_str().unwrap(), "-o", scratch.path().join("io.obj").to_str().unwrap()])
             .current_dir(scratch.path())
             .output()
             .unwrap();
-        assert!(done.status.success(), "llrm-c {mode}: {}", String::from_utf8_lossy(&done.stdout));
+        assert!(done.status.success(), "llrm-cc {mode}: {}", String::from_utf8_lossy(&done.stdout));
     }
 }
 
@@ -621,7 +621,7 @@ fn test_a_program_links_with_a_driver_built_outside_the_checkouts_target_dir() {
     let source = scratch.path().join("p.c");
     std::fs::write(&source, "int main(void) { return 0; }\n").unwrap();
     for mode in ["-m16", "-m32"] {
-        let done = common::cc::llrm_c()
+        let done = common::cc::llrm_cc()
             .args([mode, source.to_str().unwrap(), "-o", scratch.path().join("p.exe").to_str().unwrap()])
             .output()
             .unwrap();

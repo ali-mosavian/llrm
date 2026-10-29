@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """First bad first-parent commit between GOOD and BAD for a command that passes (exit 0) or fails (exit 1), on a dist build of each probed commit.
 
-    PAIR_WT=<worktree> tools/pairs/firstbad.py GOOD BAD -- CMD...        CMD runs in PAIR_WT at the probed commit with DIST=<dir of its llrm-c, llrm-nib, jwasm, dosbox-x>
+    PAIR_WT=<worktree> tools/pairs/firstbad.py GOOD BAD -- CMD...        CMD runs in PAIR_WT at the probed commit with DIST=<dir of its llrm-cc, llrm-llc, llrm-nib, jwasm, dosbox-x>
 
 Any other exit code stops the run: a runner that refused to run (stale binaries, no summary) is not a failing commit. Both ends are probed first: a GOOD that fails or a BAD that passes stops the run (the predicate is not the bug). Builds go to SCRATCH/sbp-SHA9 (pair_build.sh, one
 target dir per worktree) and are reused; a probe that does not build counts as skipped and the search moves up. Prints `FIRST BAD sha subject`.
@@ -31,7 +31,7 @@ def probe(sha: str, cmd: list[str]) -> bool | None:
     git("checkout", "-q", "--detach", sha)
     built = subprocess.run(["bash", str(HERE / "pair_build.sh"), str(SCRATCH), s9], cwd=WORKTREE, capture_output=True, text=True)
     dist = SCRATCH / f"sbp-{s9}" / "dist"
-    if built.returncode or not (dist / "llrm-c").exists():
+    if built.returncode or not (dist / "llrm-llc").exists():
         cache[s9] = None
     else:
         for name in dist.glob("llrm-*"):  # the runners refuse binaries older than the checked-out sources; a copy made at build time keeps the old time

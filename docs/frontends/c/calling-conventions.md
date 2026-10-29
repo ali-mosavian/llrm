@@ -22,6 +22,6 @@ Rows without `-mregcall-default` (`x86_16-wat`, `x86_32-linux`, ...) keep the ol
 
 # m16
 
-`x86_16-wat` takes the target's default convention, regparm3, as llrm-c did: unmarked functions are `_name@3` (callee clobbers CX and DX), variadic ones too, `main` is C's `_main`, `__cdecl` is the stack convention. The row once forced `-mabi=watcom`, whose callee saves BX, CX and DX in every function: -Os programs came out 16% larger. `-mabi=watcom` stays available for interop.
+`x86_16-wat` takes the target's default convention, regparm3, as before: unmarked functions are `_name@3` (callee clobbers CX and DX), variadic ones too, `main` is C's `_main`, `__cdecl` is the stack convention. The row once forced `-mabi=watcom`, whose callee saves BX, CX and DX in every function: -Os programs came out 16% larger. `-mabi=watcom` stays available for interop.
 
-A C `static` function is entered by a near call at m16 (llrm-llc sets `nearcode` on every defined internal function; the backend keeps an address-taken one far). It is an m16 machine fact, as in llrm-c, not a pin pass: the pin has no near/far code.
+A C `static` function is entered by a near call at m16 (llrm-llc sets `nearcode` on every defined internal function; the backend keeps an address-taken one far). It is an m16 machine fact, not a pin pass: the pin has no near/far code.

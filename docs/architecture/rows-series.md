@@ -10,7 +10,7 @@ Each section is one comparison of llrm at two commits of `main`, on the same har
 
 Clocks are the emulator's 486 clocks (unicorn), not wall time. The ratio of a row is llrm over the lower of gcc 13.4.0 and clang 20.1.8 on that row's counter; the geometric mean over the rows is read beside the worst row. gcc and clang objects are built once and shared by both sides, so only llrm differs. QCport has no gcc or clang row (Open Watcom headers): its modules are compared llrm with llrm.
 
-Run: `tools/rows/run.sh main <llrm-c>`, then `tools/rows/run.sh base <llrm-c> main` for the other commit (its gcc and clang objects are the first run's), `vsgcc/dfaces/run.py --json` for each, `tools/rows/qcport.py`, `tools/rows/analyse.py`. The bench cells of every front end (BASIC, bq16, bq32, Nib, C), which vsgcc does not cover: `CARGO_TARGET_DIR=<dir whose release/ holds one commit's binaries> tools/bench/bench.py --opt O1 O2 O3 Os --no-judge --json X.json` for each side (about 25 minutes), then `tools/rows/bench_table.py BASE.json MAIN.json`.
+Run: `tools/rows/run.sh main <llrm-cc>`, then `tools/rows/run.sh base <llrm-cc> main` for the other commit (its gcc and clang objects are the first run's), `vsgcc/dfaces/run.py --json` for each, `tools/rows/qcport.py`, `tools/rows/analyse.py`. The bench cells of every front end (BASIC, bq16, bq32, Nib, C), which vsgcc does not cover: `CARGO_TARGET_DIR=<dir whose release/ holds one commit's binaries> tools/bench/bench.py --opt O1 O2 O3 Os --no-judge --json X.json` for each side (about 25 minutes), then `tools/rows/bench_table.py BASE.json MAIN.json`.
 
 ## 2026-10-17, `3dc0221a6` against `90bce0774`
 

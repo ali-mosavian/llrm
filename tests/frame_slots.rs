@@ -14,7 +14,7 @@ fn compiles(
     let scratch = tempfile::tempdir().unwrap();
     let source = format!("{}/bench/{program}/{program}.c", env!("CARGO_MANIFEST_DIR"));
     let output =
-        common::cc::llrm_c().current_dir(scratch.path()).args(flags).args(["-o", "a.obj", &source]).output().unwrap();
+        common::cc::llrm_cc().current_dir(scratch.path()).args(flags).args(["-o", "a.obj", &source]).output().unwrap();
     assert!(output.status.success(), "{program} {flags:?}: {}", String::from_utf8_lossy(&output.stderr));
 }
 

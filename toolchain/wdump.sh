@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build Open Watcom's wdump, the dump tool tests/dwarf.rs reads the 16-bit DWARF images with, and print its path.
-# Built as a tool from the tree owshim/ow-commit pins (the same tree wccq is relinked from, cloned and bootstrapped once,
+# Built as a tool from the tree owshim/ow-commit pins (the same tree the Open Watcom library is built from, cloned and bootstrapped once,
 # cached per commit under ~/.cache/llrm): its bootstrap makefile and the host compiler, a second on a bootstrapped tree.
 # OWROOT is an Open Watcom tree: the user's own when set. Nothing of Open Watcom's is copied into this repository.
 set -eu

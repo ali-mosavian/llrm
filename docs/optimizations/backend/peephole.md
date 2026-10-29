@@ -99,7 +99,7 @@ block 0x0001
 The zero load became `xor`, the subtraction of one `dec`, and the compare
 with zero `or`, which sets the flags `jne` reads as `cmp` did.
 
-From `ISEL_DUMP=1` of a C countdown loop compiled with `llrm-c -O2 -m16`:
+From `ISEL_DUMP=1` of a C countdown loop compiled with `llrm-cc -O2 -m16`:
 the `ParallelCopy` and `Peephole` stages.
 
 ## Runs

@@ -235,21 +235,21 @@ arms: base sbp-854bb7efc/dist isel=default; new sbp-d6d94ee7b0/dist isel=default
     +0.00%          +2 clocks  (456653 -> 456655)  qb/ndmax.bas
   void  c/bit_setclear.c [-Os -march=i486]: base: compile: /bit_setclear.c:
 cool-zhukovsky-b4940f/test
-  void  c/bit_test.c [-Os -march=i486]: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
+  void  c/bit_test.c [-Os -march=i486]: base: compile: llrm-cc: the Watcom front end failed on worktrees/cool-zhukovsky-b4940
   void  c/builtin_expect.c [-Os]: base: link: jwlink: Error! E2028: ___builtin_expect@3 is an undefined reference
 file work/perso
   void  c/builtins_table.c [-Os]: base: link: jwlink: Error! E2028: ___builtin_abs@3 is an undefined reference
 Error! E2028: ___builtin_cons
-  void  c/high_byte.c: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
-  void  c/huge_copy.c: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
-  void  c/huge_fill.c: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
+  void  c/high_byte.c: base: compile: llrm-cc: the Watcom front end failed on worktrees/cool-zhukovsky-b4940
+  void  c/huge_copy.c: base: compile: llrm-cc: the Watcom front end failed on worktrees/cool-zhukovsky-b4940
+  void  c/huge_fill.c: base: compile: llrm-cc: the Watcom front end failed on worktrees/cool-zhukovsky-b4940
   void  c/huge_runs.c: base: compile: d __declspec declaration
 worktrees/cool-zhukovsky-b49
-  void  c/inlined_tail_call_keeps_frame_stores.c [-Os]: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
+  void  c/inlined_tail_call_keeps_frame_stores.c [-Os]: base: compile: llrm-cc: the Watcom front end failed on worktrees/cool-zhukovsky-b4940
   void  c/tail_calls_edges.c [-Os -march=i486 -fno-inline=_sum5@3 -fno-inline=_big_sum@3 -fno-inline=_make_big@3 -fno-inline=vsum_ -fno-inline=_half@3 -fno-inline=_twice@3]: base: compile: ce
-llrm-c: error: unknown option -fno-inline=_sum5@3; the passes are -fallocation-search, -
+llrm-cc: error: unknown option -fno-inline=_sum5@3; the passes are -fallocation-search, -
   void  c/tail_calls_edges.c [-Os -march=i486 -mabi=regparm3 -fno-inline=_sum5@3 -fno-inline=_big_sum@3 -fno-inline=_make_big@3 -fno-inline=vsum_ -fno-inline=_half@3 -fno-inline=_twice@3]: base: compile: ce
-llrm-c: error: unknown option -fno-inline=_sum5@3; the passes are -fallocation-search, -
+llrm-cc: error: unknown option -fno-inline=_sum5@3; the passes are -fallocation-search, -
   void  examples/speaker.nib: base: the program never exited (limit)
   void  examples/ticker.nib: base: the program never exited (limit)
   void  grep/grep.bas: base: int 21h ah=0x19

@@ -1,6 +1,6 @@
 # Loop and scalar buckets: top callees on d_faces -O2
 
-Owner w-5. Callgrind inclusive Ir of `llrm-c -m32 -O2` on `qbq-llrm/src/render/d_faces.c` at the tip of `feat/parity`, 1,082 M in all. Inclusive numbers overlap (a callee under another is counted in both) and are upper bounds for what a change can save: F1c got 40% of its plan. Ledger: loop passes 140.7 M against the pin's 86.8 M; scalar 116.7 against 81.8.
+Owner w-5. Callgrind inclusive Ir of `llrm-cc -m32 -O2` on `qbq-llrm/src/render/d_faces.c` at the tip of `feat/parity`, 1,082 M in all. Inclusive numbers overlap (a callee under another is counted in both) and are upper bounds for what a change can save: F1c got 40% of its plan. Ledger: loop passes 140.7 M against the pin's 86.8 M; scalar 116.7 against 81.8.
 
 By pass, inclusive: Combine 85.8, Licm 50.3, Gvn 48.3, IndVars 39.7 (+6.0 `IndVarsOnCreated`), Cvp 29.4, SimplifyCfg 27.7, EarlyCse 26.7, LoopStrengthReduce 25.5, JumpThreading 19.3, DeadStoreElimination 15.7, LoopFullUnroll 11.9, MemCpyOpt 11.5, Sroa 10.9.
 
@@ -21,7 +21,7 @@ A row is a profile first (self cost by line, as the F1 rows were) and a change o
 
 ## IndVars against the pin, same IR (w-5)
 
-Input: `d_faces -O2`'s IR just before `indvars` in the function that has loops, which `llrm-c --dump DIR` writes as the file before `walk/N/*indvars*.ll` (the file after the pass is the next one). Ours: `valgrind --tool=callgrind --toggle-collect='*indvars*IndVars*run*' llrm-pass -O2 indvars FILE`. The pin: `--toggle-collect='*IndVarSimplify::run*' opt -passes=indvars -S FILE`. Inclusive Ir, in millions.
+Input: `d_faces -O2`'s IR just before `indvars` in the function that has loops, which `llrm-cc --dump DIR` writes as the file before `walk/N/*indvars*.ll` (the file after the pass is the next one). Ours: `valgrind --tool=callgrind --toggle-collect='*indvars*IndVars*run*' llrm-pass -O2 indvars FILE`. The pin: `--toggle-collect='*IndVarSimplify::run*' opt -passes=indvars -S FILE`. Inclusive Ir, in millions.
 
 | function (pin / ours) | pin | ours | ratio |
 |---|--:|--:|--:|

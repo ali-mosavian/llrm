@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """How many times each body goes through the MIR pipeline and the backend's allocators, and how much of that work changes nothing.
 
-    tools/pipeline-runs.py [--level -O2] [--group qcport|programs] [llrm-c]
+    tools/pipeline-runs.py [--level -O2] [--group qcport|programs] [llrm-cc]
 
 Compiles each file of compile-cost.py's set with `LLRM_DEBUG=runs,time,regalloc` and prints, per body: pipeline runs (the first,
 then what the interprocedural step reruns it for), fixed-point rounds, pass runs; the work of the pass runs that changed nothing
@@ -107,14 +107,14 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
     parser.add_argument("compiler", nargs="?", type=Path)
     args = parser.parse_args()
-    compiler = args.compiler or llrmbin.bin_dir() / "llrm-c"
-    env = {**os.environ, "LLRM_DEBUG": "runs,time,regalloc", "LLRM_TIME_TOP": "100000"}
+    compiler = args.compiler or llrmbin.compiler(llrmbin.bin_dir())
+    env = {**os.environ, **llrmbin.cc_environment(), "LLRM_DEBUG": "runs,time,regalloc", "LLRM_TIME_TOP": "100000"}
     with tempfile.TemporaryDirectory(dir=compile_cost.SCRATCH) as tmp:
         files = {k: v for k, v in compile_cost.files(Path(tmp)).items() if k.startswith("qcport/") == (args.group == "qcport")}
 
         def one(item):
             src, flags = item[1]
-            with llrmbin.with_object([str(compiler), args.level, *flags, str(src), "-o", llrmbin.OBJECT]) as command:
+            with llrmbin.with_object([str(compiler), args.level, "-c", *flags, str(src), "-o", llrmbin.OBJECT]) as command:
                 return subprocess.run(command, env=env, capture_output=True, text=True).stderr
 
         with ThreadPoolExecutor(args.jobs) as pool:

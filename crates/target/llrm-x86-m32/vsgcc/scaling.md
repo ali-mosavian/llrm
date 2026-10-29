@@ -14,7 +14,7 @@ For maintainers asking how the compile cost of llrm, gcc and clang grows with pr
         |                                                   |
         v  one C program per (axis, N)                      v
  +--------------+--------------+--------------+     one point per module:
- | llrm-c -m32  | gcc -m32 -c  | clang -m32 -c|     (MIR instructions, cost)
+ | llrm-cc -m32 | gcc -m32 -c  | clang -m32 -c|     (MIR instructions, cost)
  |  levels_time.command, -O0 -O1 -O2 -O3 -Os   |     MIR size: LLRM_DEBUG=mir
  +------+-------+------+-------+------+-------+
         |  perf stat -e instructions:u,task-clock, median of --runs
@@ -61,7 +61,7 @@ Each axis is a generated C program that prints a checksum; `check` compiles ever
 
 ## Gate
 
-`scaling_gate.py` is the gated form, run by `tools/measure.py`: it takes llrm-c's cost at N/2, N and 2N for the axes in its `SIZES` (and `chain` and `callers` again at `-m16`), less the empty file's, and forms `c(2N) - 3c(N) + 2c(N/2)`, which is nil for fixed and linear work and `1.5kN^2` for a quadratic term. It reads the same for each step with at least a `LOW` share of the work. It exits 77 where `perf` cannot count. Tolerances: `tools/gate/tiers.toml` `[measure]`. Method: [compile-time](../../../../docs/working/measurement/compile-time.md).
+`scaling_gate.py` is the gated form, run by `tools/measure.py`: it takes llrm-cc's cost at N/2, N and 2N for the axes in its `SIZES` (and `chain` and `callers` again at `-m16`), less the empty file's, and forms `c(2N) - 3c(N) + 2c(N/2)`, which is nil for fixed and linear work and `1.5kN^2` for a quadratic term. It reads the same for each step with at least a `LOW` share of the work. It exits 77 where `perf` cannot count. Tolerances: `tools/gate/tiers.toml` `[measure]`. Method: [compile-time](../../../../docs/working/measurement/compile-time.md).
 
 ## Known remaining superlinear
 

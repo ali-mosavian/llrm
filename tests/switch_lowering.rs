@@ -9,7 +9,7 @@ fn compares(
 ) -> usize {
     let scratch = tempfile::tempdir().unwrap();
     let source = format!("{}/crates/target/llrm-x86-m32/vsgcc/kernels/{kernel}/{kernel}.c", env!("CARGO_MANIFEST_DIR"));
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-fobject-format=elf", "-S", "-o", "a.s"])
         .args(flags)
@@ -52,7 +52,7 @@ fn without_switch_conversion_the_constants_are_a_table_or_compares() {
 fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/run/c/switch_jump_table.c");
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(flags)
         .args(["-march=i486", "-S", "-o", "a.s", source])

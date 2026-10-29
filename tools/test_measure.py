@@ -658,9 +658,9 @@ def test_a_base_is_measured_from_a_snapshot_that_the_next_build_in_the_shared_tr
 
     def build(command, **kw):
         release.mkdir(parents=True, exist_ok=True)
-        (release / "llrm-c").unlink(missing_ok=True)  # cargo links a new file, not the old inode
-        (release / "llrm-c").write_text(kw["env"]["WHO"])
-        (release / "llrm-c.d").write_text("llrm-c: src/lib.rs\n")
+        (release / "llrm-cc").unlink(missing_ok=True)  # cargo links a new file, not the old inode
+        (release / "llrm-cc").write_text(kw["env"]["WHO"])
+        (release / "llrm-cc.d").write_text("llrm-cc: src/lib.rs\n")
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(measure.subprocess, "run", build)
@@ -668,7 +668,7 @@ def test_a_base_is_measured_from_a_snapshot_that_the_next_build_in_the_shared_tr
     first = measure.built("a" * 40)
     monkeypatch.setenv("WHO", "second")
     second = measure.built("b" * 40)
-    assert (first / "llrm-c").read_text() == "first" and (second / "llrm-c").read_text() == "second" and first != second
+    assert (first / "llrm-cc").read_text() == "first" and (second / "llrm-cc").read_text() == "second" and first != second
     assert not list(first.glob("*.d")), "dep-info is not linked: nothing is compared with a tree that has moved on"
 
 

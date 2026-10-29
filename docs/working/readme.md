@@ -33,7 +33,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [pr-rules](pr-rules.md) | The goal, what a PR carries, how it lands, how to measure, safety |
 | [gate](gate.md) | What CI and the gate run, the tiers, what must pass |
 | [ci](ci.md) | CI as the gate: parity with `gate.py run`, private tools, instruction counters |
-| [pgo](pgo.md) | the profile-guided llrm-c: how it is built, when its profile is renewed, how to measure with it |
+| [pgo](pgo.md) | the profile-guided llrm-cc: how it is built, when its profile is renewed, how to measure with it |
 | [debugging](debugging.md) | Finding a miscompile in a DOS program, the debug socket and debug symbols |
 | [measurement](measurement/readme.md) | How we measure, the instruments, compile time, comparison with gcc |
 | [fragility](fragility.md) | What broke, or hid a break, and what guards it |
@@ -114,7 +114,6 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [licm-compile-cost](licm-compile-cost.md) | LICM and loop-pass compile cost (w-3, plan note 2026-10-22) |
 | [live-range-shrink](live-range-shrink.md) | Live Range Shrink (codegen slot 47) |
 | [liveness-reuse-plan](liveness-reuse-plan.md) | One lane solve serving flags: built and dropped, 0.50 M on `d_faces` |
-| [llrm-c-reds](llrm-c-reds.md) | The llrm-c lib reds (`cargo test --release -p llrm-c --lib --features toolchain`) |
 | [llrm-only-passes](llrm-only-passes.md) | llrm-only MIR passes bucket (d_faces -O2 m32, tip 3b5ac93b68) |
 | [lsr-address-registers](lsr-address-registers.md) | LSR address-register term (LU2): tried, not landed |
 | [lsr-callees](lsr-callees.md) | LSR callees against the pin, same IR — w-3, 2026-10-22 |

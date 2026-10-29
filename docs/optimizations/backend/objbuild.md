@@ -56,7 +56,7 @@ assert the bytes.
 
 ## Runs
 Once per module, after `assemble` and `data layout` have produced the masm
-module, when a frontend writes the object (`llrm-c`'s `compile.rs` calls
+module, when a frontend writes the object (`llrm-cc`'s `compile.rs` calls
 `written_in`). The BASIC driver (`driver/basic.rs`) reuses `_data`,
 `_code_by` and `object_of` with its own listing and header.
 

@@ -13,15 +13,15 @@ KNOWN = [{"match": "with no instruction choosing", "issue": 2454}]
 
 def test_kinds_drop_the_ids_that_differ_per_module():
     """menu (block 139) and triggers (block 73) are one bug: their messages differ in function suffixes and ids only."""
-    a = q.kind("llrm-c: @_menu_key@3: _menu_key@3: block 139 leaves for (133, 150, 156) with no instruction choosing")
-    b = q.kind("llrm-c: @_ent_lightning@3: _ent_lightning@3: block 73 leaves for (20, 77, 75) with no instruction choosing\n")
+    a = q.kind("llrm-cc: @_menu_key@3: _menu_key@3: block 139 leaves for (133, 150, 156) with no instruction choosing")
+    b = q.kind("llrm-cc: @_ent_lightning@3: _ent_lightning@3: block 73 leaves for (20, 77, 75) with no instruction choosing\n")
     assert a == b and a.endswith("with no instruction choosing")
-    assert q.kind("llrm-c: a jump to L1_125, which is nowhere") == q.kind("llrm-c: a jump to L2_7, which is nowhere") == "llrm-c: a jump to L, which is nowhere"
+    assert q.kind("llrm-cc: a jump to L1_125, which is nowhere") == q.kind("llrm-cc: a jump to L2_7, which is nowhere") == "llrm-cc: a jump to L, which is nowhere"
 
 
 def test_only_a_kind_no_known_entry_covers_is_new():
-    groups = q.grouped([("menu", "-O2", q.kind("x: block 1 leaves for (2) with no instruction choosing")), ("vid", "-Os", "llrm-c: a byte division")])
-    assert list(q.new_kinds(groups, KNOWN)) == ["llrm-c: a byte division"]
+    groups = q.grouped([("menu", "-O2", q.kind("x: block 1 leaves for (2) with no instruction choosing")), ("vid", "-Os", "llrm-cc: a byte division")])
+    assert list(q.new_kinds(groups, KNOWN)) == ["llrm-cc: a byte division"]
     assert q.new_kinds(groups, KNOWN + [{"match": "a byte division", "issue": 2456}]) == {}
 
 
@@ -37,7 +37,7 @@ def test_the_first_bad_commit_of_a_single_flip_is_found_in_log_steps():
 
 
 def test_the_issue_names_the_repro_the_head_and_the_first_bad_squash():
-    title, body = q.issue_text("llrm-c: a byte division", [("vid", "-O2"), ("vid", "-Os")], "a" * 40, ("b" * 40, "feat(x): y (#1)"))
+    title, body = q.issue_text("llrm-cc: a byte division", [("vid", "-O2"), ("vid", "-Os")], "a" * 40, ("b" * 40, "feat(x): y (#1)"))
     assert "vid -O2" in title and "aaaaaaaaa" in body and "-I $QCPORT" in body and "bbbbbbbbb feat(x): y (#1)" in body
 
 
@@ -60,7 +60,7 @@ def test_a_panic_is_keyed_by_its_place_and_message_not_by_rusts_backtrace_note()
 
 def test_a_commit_that_does_not_build_is_passed_over_not_a_crash():
     """The bisection of the 48-compile BitCast failure died on `CalledProcessError`: feat/parity did not build for three hours (#2544 with #2564), so the
-    middle commit of the window had no llrm-c. The first bad commit that builds is the answer."""
+    middle commit of the window had no llrm-cc. The first bad commit that builds is the answer."""
     commits = [f"c{i}" for i in range(20)]
     unbuildable = {f"c{i}" for i in range(8, 13)}
 
@@ -148,8 +148,8 @@ def test_a_program_whose_header_makes_it_real_mode_only_is_not_compiled_at_m32(t
 
 def test_the_header_names_the_sha_the_binary_was_built_from_not_the_ref_at_print_time(tmp_path, monkeypatch, capsys):
     """origin/feat/parity moved during a sweep and the header named 864f2b3fa for a binary built from 50a88a94b."""
-    binary = tmp_path / "llrm-c"
-    binary.write_text("#!/bin/sh\necho llrm-c " + "a" * 40 + "\n")
+    binary = tmp_path / "llrm-llc"
+    binary.write_text("#!/bin/sh\necho llrm-llc " + "a" * 40 + "\n")
     binary.chmod(0o755)
     moved = "f" * 40
     real_run = q.subprocess.run
@@ -169,8 +169,8 @@ def test_the_header_names_the_sha_the_binary_was_built_from_not_the_ref_at_print
 
 
 def test_a_binary_with_no_stamp_is_refused(tmp_path, monkeypatch):
-    binary = tmp_path / "llrm-c"
-    binary.write_text("#!/bin/sh\necho usage: llrm-c [-h] source\n")
+    binary = tmp_path / "llrm-llc"
+    binary.write_text("#!/bin/sh\necho usage: llrm-llc [-h] source\n")
     binary.chmod(0o755)
     monkeypatch.setattr(sys, "argv", ["qcport_sweep.py", "--bin", str(tmp_path)])
     try:
@@ -184,7 +184,7 @@ def test_a_binary_with_no_stamp_is_refused(tmp_path, monkeypatch):
 def test_the_callconv_c_fixtures_are_in_the_front_end_compile_set():
     """An interrupt handler with Borland's nine register parameters was refused from 10-19 to 10-23 (`a fact of no parameter`): no sweep compiled a C file of that kind."""
     jobs = q.extra_jobs()
-    callconv = [job for job in jobs if job[0] == "llrm-c"]
+    callconv = [job for job in jobs if job[0] == "llrm-cc"]
     assert {job[1].name for job in callconv} >= {"cfcallee.c", "cncallee.c"}
     assert {job[2:] for job in callconv} == {("-m16", "-O1"), ("-m16", "-O2")}
 
@@ -200,7 +200,7 @@ def test_a_c_fixture_is_compiled_with_the_header_directory(tmp_path):
     (tmp_path / "tests/run/qb").mkdir(parents=True)
     bins = tmp_path / "bins"
     bins.mkdir()
-    for tool in ("llrm-c", "llrm-qb", "llrm-nib"):
+    for tool in ("llrm-cc", "llrm-qb", "llrm-nib"):
         (bins / tool).write_text('#!/bin/sh\ncase "$*" in *"-I /inc"*) exit 0;; esac\necho "Error! E1055: Unable to open stdio.h" >&2\nexit 1\n')
         (bins / tool).chmod(0o755)
     failed = q.sweep_extra(bins, root=tmp_path, include=Path("/inc"))
@@ -209,17 +209,17 @@ def test_a_c_fixture_is_compiled_with_the_header_directory(tmp_path):
 
 def test_a_failure_is_keyed_by_its_error_not_by_a_warning_printed_after_it():
     """The 22:00 sweep keyed `Unable to open 'stdio.h'` as `Warning! WN: No prototype found for function 'printf'`: the last line was a warning."""
-    text = "wccq failed:\nx.c(3): Error! E1055: Unable to open 'stdio.h'\nx.c(36): Warning! W131: No prototype found for function 'printf'\n"
+    text = "llrm-cc failed:\nx.c(3): Error! E1055: Unable to open 'stdio.h'\nx.c(36): Warning! W131: No prototype found for function 'printf'\n"
     assert q.kind(text) == "x.c(...): Error! EN: Unable to open 'stdio.h'"
 
 
 def test_a_module_that_dies_only_at_emit_is_a_failed_compile(tmp_path):
-    """The sweep compiled to /dev/null, where llrm-c writes assembly text and never encodes the object: ui/console.c died in the encoder on m16 -O1..-O3
-    while the sweep read 0 failed of 768. The stand-in compiler dies when its output is an object, as llrm-c's encoder does."""
-    compiler = tmp_path / "llrm-c"
+    """The sweep compiled to /dev/null, where llrm-cc writes assembly text and never encodes the object: ui/console.c died in the encoder on m16 -O1..-O3
+    while the sweep read 0 failed of 768. The stand-in compiler dies when its output is an object, as the encoder does."""
+    compiler = tmp_path / "llrm-cc"
     compiler.write_text(
         "#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\n"
-        "if out.endswith(('.o', '.obj')):\n    sys.exit('llrm-c: Semantics(op=BINARY, name=sub)')\n"
+        "if out.endswith(('.o', '.obj')):\n    sys.exit('llrm-cc: Semantics(op=BINARY, name=sub)')\n"
     )
     compiler.chmod(0o755)
     qcport = tmp_path / "qcport"
@@ -241,14 +241,14 @@ def test_qcport_console_encodes_at_every_level():
     source = qcport / "ui" / "console.c"
     if not source.is_file() or not include.is_dir():
         pytest.skip("QCport is not on this host")
-    compiler = q.llrmbin.bin_dir() / "llrm-c"
+    compiler = q.llrmbin.compiler(q.llrmbin.bin_dir())
     if not compiler.exists():
-        pytest.skip("llrm-c is not built (debt skip-qcport-console)")
+        pytest.skip("llrm-cc is not built (debt skip-qcport-console)")
     flags = [f for part in (*q.MODULES, "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
     failed = {}
     for level in q.LEVELS:
         with q.object_file() as out:
-            done = subprocess.run([str(compiler), level, *flags, str(source), "-o", out], capture_output=True, text=True)
+            done = subprocess.run([str(compiler), level, "-c", *q.llrmbin.c_args(16), *flags, str(source), "-o", out], capture_output=True, text=True, env={**__import__("os").environ, **q.llrmbin.cc_environment()})
             if done.returncode:
                 failed[level] = done.stderr[-200:]
     assert not failed, failed

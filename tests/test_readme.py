@@ -18,7 +18,7 @@ DOT = ROOT / "examples" / "dot"
 
 CASES = [
     # C's function is spelled as the default ABI of m16 spells it (`_dot@3`); Nib's own procedures are not decorated.
-    ("C", [str(BIN / "llrm-c"), "dot.c", "-march=i486"], linkrecipe.symbol("x86-m16", "dot")),
+    ("C", [str(llrmbin.compiler(BIN)), "dot.c", llrmbin.c_args(16)[0], "-march=i486", "-O2"], linkrecipe.symbol("x86-m16", "dot")),
     ("Nib", [str(BIN / "llrm-nib"), "dot.nib", "--entry", "dot", "-march=i486"], "_dot"),
     ("BASIC", [str(BIN / "llrm-qb"), "dot.bas", "--dialect", "pds71", "--runtime", "qb45", "-march=i486", "-Omax", "--whole-program", "-fno-inline=DOT"], "DOT"),
 ]
@@ -46,7 +46,7 @@ def test_local_labels_are_compared_by_where_they_first_appear():
 
 
 def _listing(command: list[str], name: str, out: Path) -> str:
-    subprocess.run([*command, "-S", "-o", str(out)], cwd=DOT, check=True, capture_output=True)
+    subprocess.run([*command, "-S", "-o", str(out)], cwd=DOT, check=True, capture_output=True, env={**os.environ, **llrmbin.cc_environment()})
     text = out.read_text().replace("\r", "")
     return re.search(rf"^{re.escape(name)} proc.*?^{re.escape(name)} endp$", text, re.S | re.M).group(0)
 
@@ -55,13 +55,13 @@ def _listing(command: list[str], name: str, out: Path) -> str:
 def test_a_readme_listing_is_what_the_compiler_prints(language, command, name, tmp_path):
     """The readme's first C listing was written by hand, and nobody noticed it stop being the output."""
     if not Path(command[0]).exists():
-        pytest.skip(f"{Path(command[0]).name} is not built (debt skip-readme-c covers llrm-c; else cargo build --release --bins)")
+        pytest.skip(f"{Path(command[0]).name} is not built (cargo build --release --bins)")
     blocks = re.findall(r"```asm\n(.*?)\n```", (ROOT / "readme.md").read_text(), re.S)
     shown = blocks[[one[0] for one in CASES].index(language)]
     assert _renumbered(_uncommented(shown)) == _renumbered(_uncommented(_listing(command, name, tmp_path / "out.asm")))
 
 
-@pytest.mark.parametrize(("heading", "source"), [("C, `llrm-c", "dot.c"), ("Nib, `llrm-nib", "dot.nib"), ("BASIC, `llrm-qb", "dot.bas")])
+@pytest.mark.parametrize(("heading", "source"), [("C, `llrm-cc", "dot.c"), ("Nib, `llrm-nib", "dot.nib"), ("BASIC, `llrm-qb", "dot.bas")])
 def test_a_readme_source_is_the_example_file(heading, source):
     """The BASIC source shown was the Frontends block's, and the example kept an older source over a newer listing."""
     text = (ROOT / "readme.md").read_text()

@@ -68,7 +68,7 @@ def emulation():
 
 def write_source():
     """The file every compiler reads: d_faces.c with its keywords of the segmented models emptied, so that they all take the flat
-    model and one calling convention (llrm-c has no -D)."""
+    model and one calling convention."""
     wrapper.write_source(D_FACES, SOURCE)
 
 

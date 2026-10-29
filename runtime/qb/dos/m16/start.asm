@@ -59,7 +59,7 @@ qb_module_segment word  0                       ;; the module's code segment
 _DATA           ends
 
 ;; every object with near uninitialised data opens it with an empty BSSB ahead
-;; of its _BSS (llrm-c -mbss-begin, as xi.h's trio): whichever object the
+;; of its _BSS (llrm-cc -mbss-begin, as xi.h's trio): whichever object the
 ;; linker meets first fixes BSSB before every _BSS, and the start-up zeroes
 ;; from it, not from this object's own _BSS, which is where the linker put it
 BSSB            segment word public 'BSS'

@@ -769,9 +769,9 @@ def _closure(path):
 
 
 def test_a_red_test_in_a_crate_that_depends_on_the_changed_one_is_refused():
-    """llrm-c's lib tests were red on parity while PRs merged: each PR changed a crate llrm-c depends on, and the fast tier ran the changed crates only."""
-    red = {"unit llrm-c::compile::tests::a_call_boundary_listing"}
-    on_merged = lambda packages: set(red) if "llrm-c" in packages else set()  # noqa: E731
+    """A frontend's lib tests were red on parity while PRs merged: each PR changed a crate the frontend depends on, and the fast tier ran the changed crates only."""
+    red = {"unit llrm-qb::compile::tests::a_call_boundary_listing"}
+    on_merged = lambda packages: set(red) if "llrm-qb" in packages else set()  # noqa: E731
     assert ps.new_lib_failures(["crates/codegen/llrm-codegen/src/backend/peephole.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == red
 
 
@@ -996,8 +996,8 @@ def test_two_halves_that_build_apart_and_not_together_name_nobody_and_are_halved
     group = ["1", "2", "3", "4"]
     assert ps.build_offenders(group, lambda number: True, lambda: "") == []
 
-def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
-    """#2936 changed the lowering and broke llrm-c's call-boundary test, which only the toolchain feature builds and no layer ran."""
+def test_a_change_to_llrm_hir_also_runs_the_frontends_lib_tests():
+    """#2936 changed the lowering and broke a frontend's call-boundary test that no layer ran."""
     asked = []
 
     def on_merged(packages):
@@ -1006,8 +1006,8 @@ def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
 
     ps.new_lib_failures(["crates/ir/llrm-hir/src/mir.rs"], on_merged=on_merged, on_head=lambda by_package: set())
     ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set())
-    assert "llrm-c" in asked[0] and "llrm-hir" in asked[0]
-    assert "llrm-c" in asked[1]
+    assert "llrm-qb" in asked[0] and "llrm-hir" in asked[0]
+    assert "llrm-qb" in asked[1]
 
 
 def test_the_tool_modules_are_loaded_before_a_landing_can_change_them(tmp_path, monkeypatch):
@@ -1909,15 +1909,14 @@ def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(t
 
 
 
-def test_the_rebuild_includes_llrm_c_when_the_directory_holds_one(tmp_path):
-    """`cargo build --release --bins` skips llrm-c (required-features = c-legacy): the llrm-c left in coord-ps-target stayed 02:55 old and refused the 03:12 pass ("binaries still older than the merged tree")."""
-    assert "wccq" not in ps.bins_command(tmp_path)
+def test_the_rebuild_asks_for_no_legacy_feature_even_when_the_directory_holds_a_leftover_llrm_c(tmp_path):
+    """A leftover llrm-c in coord-ps-target made the rebuild pass `--features wccq`, a feature that goes with the Watcom frontend."""
     (tmp_path / "llrm-c").write_text("")
-    assert ps.bins_command(tmp_path)[-2:] == ["--features", "wccq"]
+    assert "--features" not in ps.bins_command(tmp_path)
 
 
-def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
-    """_build_release ran `--bins` without the llrm-c feature, then the stages touched the old llrm-c: QB programs linked with a stale compiler ("isel: value#15 is defined 2 times") and the 04:51 pass was refused at link five times."""
+def test_the_link_and_behavioural_build_asks_for_no_legacy_feature(tmp_path, monkeypatch):
+    """_build_release must build with `--bins` alone: the wccq feature goes with the Watcom frontend."""
     (tmp_path / "release").mkdir()
     (tmp_path / "release" / "llrm-c").write_text("")
     monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
@@ -1926,7 +1925,7 @@ def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
     ran = []
     monkeypatch.setattr(ps.subprocess, "run", lambda command, **kw: ran.append(command))
     ps._build_release()
-    assert ran and "wccq" in ran[0], ran
+    assert ran and "wccq" not in " ".join(ran[0]), ran
 
 
 def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_path):

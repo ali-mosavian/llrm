@@ -9,7 +9,7 @@ fn listing(source: &str) -> String {
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
     let output =
-        common::cc::llrm_c().current_dir(directory).args(["-m32", "-O2", "-S", "-o", "a.s", "a.c"]).output().unwrap();
+        common::cc::llrm_cc().current_dir(directory).args(["-m32", "-O2", "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }

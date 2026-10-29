@@ -4,7 +4,7 @@ architecture-order: 7
 ---
 # x86-64 spike
 
-TL;DR: POC, not for feat/parity until decided. Target `x86-m64` (ELF64, System V AMD64, run natively on tinytim), translated from the LLVM X86 backend at `d1106deb71cc`; oracle is the pinned `clang -target x86_64-linux-gnu`. Status 2026-10-19: all 27 programs of `tests/llc` (integers, pointers, structs of scalars, variadic calls and definitions, VLAs, external data) match the pinned clang's run (`tools/llc_check.sh`); floating point (SSE) is not started. The front end is clang's, through `llrm-llc`: see [LP64 C front end](lp64-c-frontend-plan.md).
+TL;DR: POC, not for feat/parity until decided. Target `x86-m64` (ELF64, System V AMD64, run natively on tinytim), translated from the LLVM X86 backend at `d1106deb71cc`; oracle is the pinned `clang -target x86_64-linux-gnu`. Status 2026-10-19: all 27 programs of `tests/llc` (integers, pointers, structs of scalars, variadic calls and definitions, VLAs, external data) match the pinned clang's run (`tools/llc_check.sh`); floating point (SSE) is not started. The front end is clang's, through `llrm-llc`.
 
 ## Route
 

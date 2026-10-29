@@ -30,7 +30,7 @@ fn test_a_loop_exit_at_minus_one_reads_the_carry_of_the_add() {
     std::fs::write(&source, KERNEL).unwrap();
     let flags = ["--isel=dag", "-m32", "-mabi=sysv", "-march=i486", "-O2"];
     let output =
-        common::cc::llrm_c().current_dir(scratch.path()).args(flags).args(["-S", "-o", "-", "a.c"]).output().unwrap();
+        common::cc::llrm_cc().current_dir(scratch.path()).args(flags).args(["-S", "-o", "-", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let asm = String::from_utf8_lossy(&output.stdout);
     let ours = common::pin::loops(&asm, Some("g"));
@@ -62,7 +62,7 @@ fn hanoi_listing(selector: &str) -> String {
     std::fs::write(scratch.path().join("a.c"), HANOI).unwrap();
     let flags = [selector, "-m32", "-mabi=sysv", "-march=i486", "-O2", "-fno-inline-functions"];
     let output =
-        common::cc::llrm_c().current_dir(scratch.path()).args(flags).args(["-S", "-o", "-", "a.c"]).output().unwrap();
+        common::cc::llrm_cc().current_dir(scratch.path()).args(flags).args(["-S", "-o", "-", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     String::from_utf8_lossy(&output.stdout).into_owned()
 }

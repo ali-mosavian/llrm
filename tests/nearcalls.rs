@@ -17,10 +17,9 @@ fn compiled(
     let scratch = tempfile::tempdir().unwrap();
     let (input, out) = (scratch.path().join(name), scratch.path().join("out.asm"));
     std::fs::write(&input, source).unwrap();
-    // llrm-c is gone: its command line is served by llrm-cc over the pinned
-    // clang.
-    let done = if tool == "llrm-c" {
-        common::cc::llrm_c().arg(&input).args(arguments).args(["-O2", "-S", "-o"]).arg(&out).output().unwrap()
+    // llrm-cc runs over the pinned clang, so it is not a sibling binary of llrm-qb.
+    let done = if tool == "llrm-cc" {
+        common::cc::llrm_cc().arg(&input).args(arguments).args(["-O2", "-S", "-o"]).arg(&out).output().unwrap()
     } else {
         Command::new(bin.join(tool)).arg(&input).args(arguments).args(["-O2", "-S", "-o"]).arg(&out).output().unwrap()
     };
@@ -51,7 +50,7 @@ fn near_down(
 #[test]
 fn test_c_enters_a_static_function_near() {
     let asm = compiled(
-        "llrm-c",
+        "llrm-cc",
         "near.c",
         "static int down(int n) { return n ? n - down(n - 1) : 0; }\nint up(int n) { return down(n); }\n",
         &[],
@@ -88,7 +87,7 @@ fn test_basic_enters_a_module_internal_procedure_near() {
 #[test]
 fn test_c_passes_the_field_a_static_function_reads_through_its_struct_pointer() {
     let source = "struct P { int *data; int len; };\nstatic int sum(const struct P *p, int n) { int len = p->len; return n ? len - sum(p, n - 1) : len; }\nint up(struct P *p) { return sum(p, 3); }\n";
-    let asm = compiled("llrm-c", "promote.c", source, &[]);
+    let asm = compiled("llrm-cc", "promote.c", source, &[]);
     let body = procedure(&asm, &common::symbol("sum"));
     // The fields arrive in registers: nothing is read through the pointer or
     // from the stack.

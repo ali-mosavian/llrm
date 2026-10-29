@@ -24,7 +24,7 @@ fn test_nine_live_doubles_spill_no_more_than_the_pin_through_the_frame() {
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
     let output =
-        common::cc::llrm_c().current_dir(directory).args(["-m32", "-O2", "-S", "-o", "a.s", "a.c"]).output().unwrap();
+        common::cc::llrm_cc().current_dir(directory).args(["-m32", "-O2", "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let listing = std::fs::read_to_string(directory.join("a.s")).unwrap();
     let stores = listing

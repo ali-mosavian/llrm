@@ -41,11 +41,9 @@ What the gate and CI require is in [gate](gate.md).
 Unit tests sit beside their module (`*_tests.rs`); a crate's integration tests are in its `tests/`. Root tests in `tests/*.rs`
 compile C, Nib or BASIC through the built binaries and assert on the object or listing.
 
-Cargo features (`Cargo.toml`) select what the build script fetches and builds: `wccq` (Open Watcom's C front end, needed by
-llrm-c), `jw` (jwasm, jwlink), `dosrun` (the DOSBox-X fork); `toolchain`, the default, is all three.
+Cargo features (`Cargo.toml`) select what the build script fetches and builds: `jw` (jwasm, jwlink), `dosrun` (the DOSBox-X fork); `toolchain`, the default, is both.
 
     cargo test --release --no-default-features --test docs_links     needs no toolchain
-    cargo test --release --no-default-features --features wccq --lib  the lib tests need only wccq
 
 `tests/toolchain.rs` builds programs with the bootstrapped DOS toolchain and runs them.
 
@@ -157,7 +155,7 @@ tools sets them all with `. tools/debug-gate.env`.
 
 ## External corpora
 
-QCport, the largest C program llrm-c compiles, is not in this repository. Its variables are `QCPORT` (its `src`), `QCPORT_INC`
+QCport, the largest C program llrm-cc compiles, is not in this repository. Its variables are `QCPORT` (its `src`), `QCPORT_INC`
 (the Borland headers) and, to run it, `QCPORT_BORLAND` (the all-Borland build) and `JWLINK`.
 
     tools/qcport-compile.sh                 every module at -O2 and -Os; each refusal is listed
@@ -165,7 +163,7 @@ QCport, the largest C program llrm-c compiles, is not in this repository. Its va
                                             polygons and the md5 of BENCH.BMP
 
 `QCPORT_OBJECTS` reuses objects the gate already built; `QCPORT_RUN_SECONDS` caps each run. Run both before merging a change to
-llrm-c, HIR, its verifier or MIR lowering.
+llrm-cc, HIR, its verifier or MIR lowering.
 
 `tools/torture/torture.py` builds GCC's `gcc.c-torture/execute` (`TORTURE_CORPUS` names the directory) at -O0, -O2 and -Os for m32
 and runs each program on the emulator; a program passes by exiting 0. Every program ends in one class: pass, refused by design
@@ -180,7 +178,7 @@ gate runs `--gate`, the fixed sample of `tools/torture/sample.txt`. The run stag
 ## Compile cost
 
 `tools/measure.py check` (gate step `measure`, run when the backend, transforms, front end or x86 targets change) compares this
-tree's `llrm-c` with the same measurement of the commit it branches from, in user-space instructions (`perf stat -e instructions:u`),
+tree's `llrm-cc` with the same measurement of the commit it branches from, in user-space instructions (`perf stat -e instructions:u`),
 so host load does not move them: the compile of the vsgcc programs and QCport's modules per level (`tools/compile-cost.py`), the
 cost at N/2, N and 2N on generated programs per axis (`crates/target/llrm-x86-m32/vsgcc/scaling_gate.py`), and each compile step
 with a large enough share of the work (`LLRM_DEBUG=time`'s `[instr]` rows).
@@ -190,8 +188,8 @@ target directory and measured with this tree's tools. The tolerances are `[measu
 step exits 77. `measure.py compare BASE SHA` compares two stored measurements; `measure.py creep` (run by `gate.py main`) compares
 a main commit with one 50 merges or a week back.
 
-The cost gate and the counter tests measure `dist` (`[profile.dist]`: one codegen unit, fat LTO), the shipped `llrm-c`: base and head are
-each built with `llrm-c` alone (`tools/measure.py`, `MEASURE_BUILDS`), the base beside the head, and a binary of another profile is
+The cost gate and the counter tests measure `dist` (`[profile.dist]`: one codegen unit, fat LTO), the shipped `llrm-cc`: base and head are
+each built with `llrm-cc` alone (`tools/measure.py`, `MEASURE_BUILDS`), the base beside the head, and a binary of another profile is
 refused. Under `release` (16 codegen units) an edit to one file re-partitions the units and flips the inlining of unrelated functions: the
 same pair (#1977) read +0.46..0.61% on its gate shapes there and +0.01..0.04% under `dist`. `tools/abmeasure.py PARENT HEAD` is the one
 way to quote a delta of the compiler's own cost. The other gate steps still build `release`.

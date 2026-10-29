@@ -1,6 +1,6 @@
 # Fold: what it costs, what it carries, how it goes (llrm-only bucket, d_faces -O2)
 
-Measured with callgrind --separate-callers=30 on d_faces -O2, dist f782e4c567e6 (parity 7c4d1afdb), 2026-10-21 (a shared-dir build: re-take before any number here is quoted). Pin side: clang -m32 -march=i486 (pin side), our `llrm-c -m32 -mabi=sysv -march=i486 -O2`; dist f782e4c567e6 (parity 7c4d1afdb), callgrind --separate-callers=30, 2026-10-21.
+Measured with callgrind --separate-callers=30 on d_faces -O2, dist f782e4c567e6 (parity 7c4d1afdb), 2026-10-21 (a shared-dir build: re-take before any number here is quoted). Pin side: clang -m32 -march=i486 (pin side), our `llrm-cc -m32 -mabi=sysv -march=i486 -O2`; dist f782e4c567e6 (parity 7c4d1afdb), callgrind --separate-callers=30, 2026-10-21.
 
 ## What Fold costs (200.4 M Ir of 1318 M)
 | part | Ir (M) | what runs |
@@ -25,7 +25,7 @@ coef[16] filled by a constant loop, read by an unrolled inner loop: LoopFullUnro
 4. `writes` (30.8 M) goes with its last caller.
 Open: loop_fusion is -Omax only.
 
-## Attribution of lights, client, savegame (2026-10-22; redone on parity 44cf50686 + the FOLD_NO_NUMBERS switch, llrm-c 44cf50686abc+dirty md5 7d53725c; the first table was taken on f8c14ca21, which still had `unroll.rs`). Re-checked 2026-10-22 on 41febda30 (llrm-c 41febda30474+dirty, md5 17fe7f72, same command both arms).
+## Attribution of lights, client, savegame (2026-10-22; redone on parity 44cf50686 + the FOLD_NO_NUMBERS switch, llrm-cc 44cf50686abc+dirty md5 7d53725c; the first table was taken on f8c14ca21, which still had `unroll.rs`). Re-checked 2026-10-22 on 41febda30 (llrm-cc 41febda30474+dirty, md5 17fe7f72, same command both arms).
 | object | what `_numbers` folds | pin pass | gap |
 |---|---|---|---|
 | client | `_pl_death_selftest@3`: no difference on 41febda30 (asm identical, 731 lines both arms) | left the table with #3597 | none |
@@ -49,7 +49,7 @@ vsgcc (568 compiles, 0 failed): 13 objects change, all bigger without `_numbers`
 | the objects still changed get a fix or a numbered row each; savegame is a row (ours-only gain) | 11-01 |
 | delete `_numbers`, then `writes` with its last caller, then floatfold into combine | 11-02 |
 
-## x_fir after #3569: GlobalOpt's SRA and localize do it (2026-10-22, 25d838613, llrm-c 25d838613b0a+dirty)
+## x_fir after #3569: GlobalOpt's SRA and localize do it (2026-10-22, 25d838613, llrm-cc 25d838613b0a+dirty)
 With `_numbers` off x_fir still has 3 loads of `coef` (offsets 0, 2, 4) in the preheader of the dot-product loop (+279 B at m32 -O2, +900 B at m16). `-fno-tree-pre` takes them away in our pipeline (asm 189 -> 182 lines, equal to the `_numbers` arm), and the pin's `gvn` alone removes them from our final dump, but that is the wrong probe: the pin's own order, run from our 09-pipeline MIR (sroa, early-cse, instcombine, loop-unroll-full, instcombine, gvn) also leaves 4 `coef` loads, and its next module pass, `globalopt`, removes the global: it splits `coef` into 16 `i16` allocas in `bench_x_fir` (SRA, then LocalizeGlobalVariable: one accessing function that does not recurse and writes the value before reading it), and the following instcombine/gvn fold the loads. So the plan stands: SRA of the global by accessed pieces, then localize it (`isPointerValueDeadOnEntryToFunction`), as a second GlobalOpt slot after the inliner. A first reading of this table (GVN's load PRE, GlobalOpt dropped) was wrong: it probed the pin's `gvn` on our final dump instead of the pin's own sequence.
 
 ## Dates

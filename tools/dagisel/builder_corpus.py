@@ -3,7 +3,7 @@
 
     tools/dagisel/builder_corpus.py BIN_DIR EXAMPLE [--jobs N]
 
-BIN_DIR holds llrm-c, llrm-nib and llrm-qb; EXAMPLE is `cargo build --release -p llrm-codegen --example
+BIN_DIR holds llrm-cc, llrm-llc, llrm-nib and llrm-qb; EXAMPLE is `cargo build --release -p llrm-codegen --example
 builder_refusals`. Each source is compiled to the last IR its `--dump` writes (tests/run c/alias/huge at m16
 and m32, nib and qb at m16, tests/qbrt, the QCport modules at m16 -Os), and the example reports the refused
 blocks. Prints reasons with block and program counts. Needs the work dir on a disk, not tmpfs ($TMPDIR).
@@ -13,12 +13,15 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+import sys
 import tempfile
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+import llrmbin  # noqa: E402
 QCPORT = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src"))
 QCINC = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc"))
 
@@ -30,7 +33,7 @@ def jobs() -> list[tuple[str, str, str, list[str]]]:
     for sub in ("c", "alias", "huge"):
         for src in sorted((ROOT / "tests/run" / sub).glob("*.c")):
             for mode in ("m16", "m32"):
-                out.append((f"run/{sub}", mode, src.stem, ["llrm-c", str(src), f"-{mode}", "-O2", "-I", str(ROOT / "tests/run" / sub)]))
+                out.append((f"run/{sub}", mode, src.stem, ["llrm-cc", str(src), "-c", *llrmbin.c_args(int(mode[1:])), "-O2", "-I", str(ROOT / "tests/run" / sub)]))
     for src in sorted((ROOT / "tests/run/nib").glob("*.nib")):
         for mode in ("m16", "m32"):
             out.append(("run/nib", mode, src.stem, ["llrm-nib", str(src), f"-{mode}", "-O2"]))
@@ -43,7 +46,7 @@ def jobs() -> list[tuple[str, str, str, list[str]]]:
     if QCPORT.is_dir():
         for d in ("host", "render", "model", "game", "sound", "ui"):
             for src in sorted((QCPORT / d).glob("*.c")):
-                out.append(("qcport", "m16", src.stem, ["llrm-c", str(src), "-m16", "-Os", *inc]))
+                out.append(("qcport", "m16", src.stem, ["llrm-cc", str(src), "-c", *llrmbin.c_args(16), "-Os", *inc]))
     return out
 
 
@@ -52,7 +55,7 @@ def compile_one(job, bins: Path, work: Path):
     dump = work / f"{group.replace('/', '_')}-{mode}-{program}"
     dump.mkdir(parents=True, exist_ok=True)
     cmd = [str(bins / cmd[0]), *cmd[1:], "--dump", str(dump), "-o", str(dump / "out.obj")]
-    done = subprocess.run(cmd, capture_output=True, text=True)
+    done = subprocess.run(cmd, capture_output=True, text=True, env={**os.environ, **llrmbin.cc_environment()})
     files = sorted(dump.glob("**/[0-9]*.ll"), key=lambda path: (path.stat().st_mtime, path.name))
     return job, (files[-1] if files else None), done.returncode
 

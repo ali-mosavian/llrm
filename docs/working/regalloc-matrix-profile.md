@@ -1,6 +1,6 @@
 # LiveRegMatrix profile, d_faces m32 -O2
 
-Parity `121f6f17e`, release `llrm-c` with line tables, callgrind Ir, `-m32 -march=i486 -O2`, `qcstub/src/render/d_faces.c`. Total 746.9 M; the allocator (`greedy_rewritten`) 77.6 M.
+Parity `121f6f17e`, release `llrm-cc` with line tables, callgrind Ir, `-m32 -march=i486 -O2`, `qcstub/src/render/d_faces.c`. Total 746.9 M; the allocator (`greedy_rewritten`) 77.6 M.
 
 | Function | Ir (inclusive) | Calls | Ir/call | Pin per call |
 |---|---|---|---|---|

@@ -92,7 +92,7 @@ Without `-o` and `-S` the HIR text is printed. `-o OUT` writes the OMF object,
 | `--dump-hir PATH` | Write the HIR text to `PATH` |
 | `--dump DIR` | Write `00-input.bas` and `01-hir.json` to `DIR`; `LLRM_MIR_STAGES` dumps the MIR passes |
 
-The gcc-style options of `llrm-c` and `llrm-nib` apply too: `-O0` to `-O3`,
+The gcc-style options of `llrm-cc` and `llrm-nib` apply too: `-O0` to `-O3`,
 `-Os`, `-Oz`, `-Og`, `-f[no-]PASS`, `-march`, `-mtune`, `-m16`, `-m32`, `-g` and
 `-S`. `-fsanitize=bounds,integer-divide-by-zero,signed-integer-overflow` (or
 `undefined`) are BC's `/D` checks, `-fsanitize=stack` is its stack check, `-fexcess-precision=standard` (or `-ffloat-store`) rounds every value stored to a SINGLE or DOUBLE variable to its type as BC does (off by default: [floating environment](../../reference/semantics/floating-environment.md)), and

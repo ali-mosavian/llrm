@@ -233,7 +233,7 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
             let done = if words[0] == "llrm-cc" {
                 // llrm-c's arguments, served by llrm-cc over the pinned clang
                 // (needs LLRM_OW, LLRM_CLANG_M16).
-                common::cc::llrm_c().args(&arguments).output()
+                common::cc::llrm_cc().args(&arguments).output()
             } else {
                 Command::new(tool(words[0])).args(&arguments).output()
             }

@@ -5,7 +5,7 @@ mod common;
 fn listing(kernel: &str) -> String {
     let source = format!("{}/crates/target/llrm-x86-m32/vsgcc/kernels/{kernel}/{kernel}.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", &source])
         .output()
@@ -44,7 +44,7 @@ fn test_a_guard_on_a_value_and_its_step_is_one_instruction_and_its_flags() {
 fn test_a_step_made_before_the_compare_of_its_value_is_made_after_it_in_place() {
     let source = format!("{}/bench/sieve/sieve.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
         .output()

@@ -15,7 +15,7 @@ float g(float p, float *q) { return q[0] - p * q[1]; }
 fn test_a_float_load_one_instruction_reads_is_that_instruction_s_memory_operand() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()

@@ -587,7 +587,7 @@ def program_tables(data: dict) -> list[str]:
     lines += [f"- {k}: " + "; ".join(f"{c.split()[0]} {','.join(x.split()[1] for x in f if x.startswith(c.split()[0]) and 'profile' not in x)}: {reason(why)}" for c, why in [one for one in f.items() if 'profile' not in one[0]][:1]) for k, f in failed.items()]
     lines += ["", "Stubbed so gcc and clang can read QCport (llrm reads the same stubbed text):", ""]
     lines += [f"- {what}: {len(files)} files" for what, files in data["stubbed"].items()]
-    lines += ["- Borland names declared for gcc/clang only (`-include prelude.h`): _fmemcpy, _fmemset, _fmemmove, _fmemcmp, _fstricmp, _fstrncmp, stricmp, FP_OFF, FP_SEG, __emit__; flags " + " ".join(SIZES + FOREIGN) + " (-Dfar etc. for gcc/clang only; llrm-c has no -D)"]
+    lines += ["- Borland names declared for gcc/clang only (`-include prelude.h`): _fmemcpy, _fmemset, _fmemmove, _fmemcmp, _fstricmp, _fstrncmp, stricmp, FP_OFF, FP_SEG, __emit__; flags " + " ".join(SIZES + FOREIGN) + " (-Dfar etc. for gcc/clang only)"]
     biggest = sorted(rows, key=lambda k: -rows[k]["mir"])[:5]
     unit = "Minstr" if all(rows[k].get("instr") for k in biggest) else "ms"
     lines += ["", f"Largest modules, llrm -O2 steps by own {unit}:", ""]

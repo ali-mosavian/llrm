@@ -10,7 +10,7 @@ flowchart TB
   classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
   a["<b>program differs</b>"]:::src
-  b["<b>one module</b><br/><small>llrm-c -S: listing, is the<br/>code wrong?</small>"]:::opt
+  b["<b>one module</b><br/><small>llrm-cc -S: listing, is the<br/>code wrong?</small>"]:::opt
   c["<b>the function</b><br/><small>--dump DIR: MIR after each pass,<br/>first wrong dump<br/>ISEL_DUMP=1: LIR after each<br/>machine phase</small>"]:::opt
   d["<b>the pass or phase</b><br/><small>reduce, fixture,<br/>test that fails first</small>"]:::out
   a -->|"swap one module at a time between<br/>the reference build and llrm's"| b
@@ -50,7 +50,7 @@ A stop at an address that moves between runs is an interrupt, not the code under
 
 ### Symbols
 
-At load the fork reads the program's debug info (CodeView, TDINFO or Watcom info appended to the EXE, or a `.TDS` beside it) and, for an EXE, the `.MAP` beside it as a fallback. A `.MAP` gives publics only, so code in a static function reads as an offset into the public before it; name it from a listing (`llrm-c -S`). Build with `-g` for the full information.
+At load the fork reads the program's debug info (CodeView, TDINFO or Watcom info appended to the EXE, or a `.TDS` beside it) and, for an EXE, the `.MAP` beside it as a fallback. A `.MAP` gives publics only, so code in a static function reads as an offset into the public before it; name it from a listing (`llrm-cc -S`). Build with `-g` for the full information.
 
 ## 2. Which module
 
@@ -60,7 +60,7 @@ Build the program entirely with the reference compiler, then replace one module 
 
 Run the failing build under dosrun with a `:write` range over the damage, or `:ms` for a hang. The `write` or `crash` event gives the address and symbol, and `calls` the path to it. Compare registers with what the listing says the code should hold:
 
-    llrm-c -S ... module.c -o module.obj
+    llrm-cc -S ... module.c -o module.obj
 
 A bad segment (`lds`, `ss:` on data the program model places in DS) points at the machine model (`-m[no-]stack-is-data`), not a pass.
 
@@ -72,7 +72,7 @@ A bad segment (`lds`, `ss:` on data the program model places in DS) points at th
 
 Compile the one module with every stage dumped:
 
-    llrm-c -O2 -I ... module.c -o module.obj --dump dump
+    llrm-cc -O2 -I ... module.c -o module.obj --dump dump
 
 `llrm-qb` and `llrm-nib` take `--dump` too; the variable `LLRM_MIR_STAGES=DIR` does the same for any driver. The directory must be on disk: a dump is thousands of small files, and the tools refuse a tmpfs such as `/tmp` or `/dev/shm` (it ran out of inodes once). The directory holds:
 
@@ -88,7 +88,7 @@ To confirm, turn the pass off and see the fault go: `-fno-PASS`, with gcc's name
 
 If the MIR is right to the last dump, the fault is in the machine phases:
 
-    ISEL_DUMP=1 llrm-c -O2 -I ... module.c -o module.obj
+    ISEL_DUMP=1 llrm-cc -O2 -I ... module.c -o module.obj
 
 prints the LIR after each machine phase (`=== PhiElimination`, `RegAlloc`, `ParallelCopy`, `Peephole`, `LoopSlots`, `Scheduler`, ...). The first phase whose output is wrong is the one.
 
@@ -98,7 +98,7 @@ prints the LIR after each machine phase (`=== PhiElimination`, `RegAlloc`, `Para
 
 ## 5. The regression test
 
-Reduce the module to the smallest source that still shows the fault, record the Watcom front end's output for it as the fixture's `.cgs`, and assert the symptom in the listing or the run. `tests/fixtures/c/nearviads.c` is one: near data read through SS, asserted by the absence of `ss:`, `lds` and `mov ds,` in the listing. Watch the test fail with the fix reverted.
+Reduce the module to the smallest source that still shows the fault, make it a `tests/check/c` case, and assert the symptom in the listing or the run. `tests/fixtures/c/nearviads.c` is one: near data read through SS, asserted by the absence of `ss:`, `lds` and `mov ds,` in the listing. Watch the test fail with the fix reverted.
 
 ## 6. The debug socket and debug symbols
 
@@ -164,7 +164,7 @@ The records are described in [debug-info](../formats/debug-info.md) and [turbo-d
 
 The steps of `tests/turbo.rs`, on `tests/fixtures/dwarf/list.c`:
 
-    llrm-c -m16 -gtd -O0 lst.c -o llst.obj
+    llrm-cc -m16 -gtd -O0 lst.c -o llst.obj
 
 In DOS, with Turbo C++ as `c:`, Turbo Debugger as `d:` and the work directory as `w:`:
 
@@ -177,4 +177,4 @@ The debug gate runs these against the real tools: `. tools/debug-gate.env` sets 
 
 ## Reducing a failure: `tools/reduce.py`
 
-`tools/reduce.py FILE --cmd 'COMMAND {}'` deletes lines (with `--unit blocks`, blank-line-separated blocks first: the functions of an IR file) while COMMAND keeps exiting 0 on the candidate (`{}` is its path), and writes `FILE.reduced`. It is one tool for C, Nib, BASIC and MIR text. COMMAND decides what "still fails" means, so it also decides that a candidate which no longer compiles is not interesting. Examples: a compiler panic, `! llrm-c -O2 {} -o /dev/null 2>&1 | grep -q 'widen.rs:142'`; a verifier error, `llrm-c ... 2>&1 | grep -q 'with no instruction choosing'`; a miscompile, a script that builds the candidate at the failing level and machine, runs it and compares with gcc's output (keep the candidate free of undefined behaviour, or it reduces to one). Every reproduced failure becomes a test at once, the smallest that still fails (`tests/run` for a program, a MIR text test for a pass): see [testing](testing.md).
+`tools/reduce.py FILE --cmd 'COMMAND {}'` deletes lines (with `--unit blocks`, blank-line-separated blocks first: the functions of an IR file) while COMMAND keeps exiting 0 on the candidate (`{}` is its path), and writes `FILE.reduced`. It is one tool for C, Nib, BASIC and MIR text. COMMAND decides what "still fails" means, so it also decides that a candidate which no longer compiles is not interesting. Examples: a compiler panic, `! llrm-cc -O2 {} -o /dev/null 2>&1 | grep -q 'widen.rs:142'`; a verifier error, `llrm-cc ... 2>&1 | grep -q 'with no instruction choosing'`; a miscompile, a script that builds the candidate at the failing level and machine, runs it and compares with gcc's output (keep the candidate free of undefined behaviour, or it reduces to one). Every reproduced failure becomes a test at once, the smallest that still fails (`tests/run` for a program, a MIR text test for a pass): see [testing](testing.md).

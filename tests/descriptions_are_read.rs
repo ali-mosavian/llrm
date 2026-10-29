@@ -20,7 +20,6 @@ const NAMED: &[(&str, &str)] = &[
     ("calling.toml", "*"),
     ("calling.toml", "*.symbol.*"),
     ("calling.toml", "abi.*"),
-    ("c.toml", "frontend.abi.*"),
     ("calling.toml", "*.result.*"),
     ("platform.toml", "physical.*"),
     ("datalayout.toml", "pointers.*"),

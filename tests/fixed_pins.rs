@@ -19,7 +19,7 @@ const SOURCE: &str = "int f(int x, int y, int n)
 fn listing(fixed: bool) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let mut run = common::cc::llrm_c();
+    let mut run = common::cc::llrm_cc();
     run.current_dir(scratch.path()).args([
         "-m32",
         "-mabi=sysv",
@@ -85,7 +85,7 @@ fn a_pinned_copy_does_not_push_its_source_out_of_the_register() {
     let copies = |fixed: bool| {
         let scratch = tempfile::tempdir().unwrap();
         std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-        let mut run = common::cc::llrm_c();
+        let mut run = common::cc::llrm_cc();
         run.current_dir(scratch.path()).args([
             "-m32",
             "-mabi=sysv",

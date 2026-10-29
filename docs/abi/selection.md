@@ -40,7 +40,7 @@ flowchart TB
 | x86-m32 | `watcom` | `watcall32` | yes |
 | | `sysv` | `sysv32` | |
 
-A family the target lacks is refused with the families it has (`Calling::chosen`, [`calling.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-target/src/calling.rs#L300)). `llrm-c` and `llrm-nib` read the switch; the driver resolves it in [`flags.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/flags.rs#L317).
+A family the target lacks is refused with the families it has (`Calling::chosen`, [`calling.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-target/src/calling.rs#L300)). `llrm-cc` and `llrm-nib` read the switch; the driver resolves it in [`flags.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/flags.rs#L317).
 
 ## Marks
 

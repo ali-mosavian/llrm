@@ -12,7 +12,7 @@ cargo build --release --no-default-features --bin nib-lsp
 
 This needs no external tools and builds on macOS. The default `toolchain`
 feature, which bootstraps Open Watcom, jwasm, jwlink and DOSBox-X, is only
-for the compilers; without it `llrm-c` reports that it was built without the
+for the compilers; without it `llrm-cc` reports that it was built without the
 toolchain feature.
 
 ## Running

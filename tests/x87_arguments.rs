@@ -15,7 +15,7 @@ double g(double x, float y) { return f(x * 0.5 + 1.0, y + 1.0f, 3); }
 fn test_a_float_argument_is_stored_into_the_space_made_for_it() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m32", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()

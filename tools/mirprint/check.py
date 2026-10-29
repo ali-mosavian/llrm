@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 LLC = Path(os.environ.get("LLC") or Path.home() / "scratch/llvm-build/bin/llc")
 
 
-def llrm_c() -> str:
+def llrm_cc() -> str:
     return os.environ.get("LLRM_C") or str(REPO / "target/debug/llrm-c")
 
 
@@ -57,7 +57,7 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 2
     function, source, flags = argv[0], argv[1], argv[2:] or ["-m32", "-mabi=sysv", "-march=i486", "-O2"]
-    done = subprocess.run([llrm_c(), *flags, "-S", "-o", "/dev/stdout", source], capture_output=True, text=True,
+    done = subprocess.run([llrm_cc(), *flags, "-S", "-o", "/dev/stdout", source], capture_output=True, text=True,
                           env={**os.environ, "LLRM_MIR_PRINT": function})
     if "MIR-PRINT-REFUSED" in done.stderr:
         print(next(line for line in done.stderr.splitlines() if "MIR-PRINT-REFUSED" in line))
@@ -76,7 +76,7 @@ def main(argv: list[str]) -> int:
     stores = len(re.findall(r"MOV32mr %stack\.", pin.stdout))
     reloads = len(re.findall(r"[A-Z0-9]+32rm %stack\.", pin.stdout))
     arguments = len(re.findall(r"%fixed-stack\.", pin.stdout))
-    dump = subprocess.run([llrm_c(), *flags, "-S", "-o", "/dev/null", source], capture_output=True, text=True,
+    dump = subprocess.run([llrm_cc(), *flags, "-S", "-o", "/dev/null", source], capture_output=True, text=True,
                           env={**os.environ, "ISEL_DUMP": "1"})
     final = final_counts(regalloc_stage(dump.stdout + dump.stderr), function)
     print(f"{function}: pin    stores {stores}, reloads {reloads}, argument {arguments}   (final MIR after virtregrewriter)")

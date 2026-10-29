@@ -1,10 +1,11 @@
-"""Per-mnemonic gap, ours against the pin's llc with and without --disable-peephole (same MIR, m32 i486): classify.py OURS_LLRM_C LEVEL"""
+"""Per-mnemonic gap, ours against the pin's llc with and without --disable-peephole (same MIR, m32 i486): classify.py OURS_LLRM_CC LEVEL"""
 import os, re, sys, subprocess, tempfile, shutil, glob, collections
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pin
 OURS, LV = sys.argv[1], sys.argv[2]
+os.environ["LLRM_CC_TARGET"] = "x86_32-wat"  # llrm-cc takes its target row from the environment
 SRC = Path(os.environ.get("PREMISE_SRC") or Path.home() / "scratch/rows/main24d/b")
 of = pin.target("m32", optsize=(LV == "-Os"))
 LLC = pin.PINNED_BIN / "llc"

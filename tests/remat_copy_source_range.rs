@@ -9,7 +9,7 @@ mod common;
 fn test_an_erased_remat_copy_shrinks_the_range_it_read() {
     let root = env!("CARGO_MANIFEST_DIR");
     let scratch = tempfile::tempdir().unwrap();
-    let mut command = common::cc::llrm_c();
+    let mut command = common::cc::llrm_cc();
     command.current_dir(scratch.path()).args(["-m16", "-Os"]);
     for directory in [
         "runtime/qb/dev",

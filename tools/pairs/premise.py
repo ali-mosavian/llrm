@@ -1,6 +1,6 @@
 """Premise test: ours against the pin's llc with and without one pass, on the same IR (m32 i486).
 
-    tools/pairs/premise.py OURS_LLRM_C LEVEL(-Os|-O2) PASSFLAG [N]
+    tools/pairs/premise.py OURS_LLRM_CC LEVEL(-Os|-O2) PASSFLAG [N]
 
 PASSFLAG: the llc switch that turns the pass off (--disable-peephole, --disable-machine-sink, -enable-misched=false).
 IR: our pipeline's last MIR dump (`*-switchconv.ll`), compiled for m32 -mabi=sysv -march=i486. Measures instructions and
@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pin
 
 OURS, LV, FLAG = sys.argv[1], sys.argv[2], sys.argv[3]
+os.environ["LLRM_CC_TARGET"] = "x86_32-wat"  # llrm-cc takes its target row from the environment
 LIMIT = int(sys.argv[4]) if len(sys.argv) > 4 else 10**9
 SRC = Path(os.environ.get("PREMISE_SRC") or Path.home() / "scratch/rows/main24d/b")  # the rows corpus: ROWS_WORK/main24d/b
 of = pin.target("m32", optsize=(LV == "-Os"))
@@ -58,7 +59,7 @@ def job(src):
         if None in (a, b, ao, bo): return None
         ours_ins = count(open(w + "/o.s").read())
         # our bytes: the object our compiler writes
-        o = subprocess.run([OURS, "-m32", "-mabi=sysv", "-march=i486", LV, "-o", w + "/o.obj", str(src)], capture_output=True, text=True)
+        o = subprocess.run([OURS, "-m32", "-mabi=sysv", "-march=i486", LV, "-c", "-o", w + "/o.obj", str(src)], capture_output=True, text=True)
         return src.name, ours_ins, count(a.decode()), count(b.decode()), text_bytes(ao), text_bytes(bo)
     finally:
         shutil.rmtree(w, ignore_errors=True)

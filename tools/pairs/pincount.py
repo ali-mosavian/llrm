@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Static instruction count of llrm-c against the pin's `llc` on the same IR, per program.
+"""Static instruction count of llrm-cc against the pin's `llc` on the same IR, per program.
 
-    tools/pairs/pincount.py LLRM_C [--src DIR] [--level O2] [--jobs N] [--env K=V ...] [--json OUT]
+    tools/pairs/pincount.py LLRM_CC [--src DIR] [--level O2] [--jobs N] [--env K=V ...] [--json OUT]
 
-For each `DIR/*.c` (default `ROWS_WORK/base/b`): llrm-c compiles it for m32 (`-march=i486 -mabi=sysv --isel=dag`) with `--dump`,
+For each `DIR/*.c` (default `ROWS_WORK/base/b`): llrm-cc compiles it for m32 (`-march=i486 -mabi=sysv --isel=dag`) with `--dump`,
 the pin's `llc` (pin.py, explicit m32 target) compiles the dump's last IR (the `switchconv` stage, the one handed to the backend), and
 both outputs are counted: the pin's lines that start with a tab and a lowercase letter, ours the indented lines that are not
 directives (`align`, `db`, `dd`, `dw`, `dq`, `org`) or comments. llc runs with `-disable-lsr` (`--pin-args`). Prints the totals, then the programs furthest above the pin.
-`--env` sets variables for llrm-c only (`LLRM_SRC_ORDER=1`). The IR is ours, so a gap is the backend's, not the optimizer's.
+`--env` sets variables for llrm-cc only (`LLRM_SRC_ORDER=1`). The IR is ours, so a gap is the backend's, not the optimizer's.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def one(binary: str, source: Path, level: str, env: dict, work: Path, target, pi
     name = source.stem
     dump = work / name
     out = work / f"{name}.s"
-    done = subprocess.run([binary, "--dump", str(dump), *FLAGS, f"-{level}", "-S", "-o", str(out), str(source)], capture_output=True, text=True, env=env, timeout=600)
+    done = subprocess.run([binary, "--dump", str(dump), *FLAGS, f"-{level}", "-S", "-o", str(out), str(source)], capture_output=True, text=True, env={**env, "LLRM_CC_TARGET": "x86_32-wat"}, timeout=600)
     ll = pin.backend_ir(dump)
     if done.returncode or ll is None or not out.exists():
         shutil.rmtree(dump, ignore_errors=True)

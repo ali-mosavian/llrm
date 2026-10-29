@@ -22,7 +22,7 @@ fn verdict(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), kernel(steps)).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .env("LLRM_DEBUG", "unroll")
         .args(flags)
@@ -65,7 +65,7 @@ fn test_each_target_unrolls_to_the_threshold_the_pin_states() {
     let rolled = |flags: &[&str]| {
         let scratch = tempfile::tempdir().unwrap();
         std::fs::write(scratch.path().join("a.c"), kernel(4)).unwrap();
-        let output = common::cc::llrm_c()
+        let output = common::cc::llrm_cc()
             .current_dir(scratch.path())
             .args(flags)
             .args(["-S", "-o", "a.s", "a.c"])

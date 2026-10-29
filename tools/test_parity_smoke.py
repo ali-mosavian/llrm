@@ -140,7 +140,7 @@ def test_a_known_red_step_is_the_only_one_skipped():
 
 
 def fake_qcport(tmp_path, fail_level=None):
-    """A QCport tree with render/d_faces.c and a stand-in llrm-c that fails the verifier at `fail_level` on d_faces.c only (stdout of the level it saw is kept)."""
+    """A QCport tree with render/d_faces.c and a stand-in llrm-cc that fails the verifier at `fail_level` on d_faces.c only (stdout of the level it saw is kept)."""
     import stat
 
     (tmp_path / "src/render").mkdir(parents=True)
@@ -148,7 +148,7 @@ def fake_qcport(tmp_path, fail_level=None):
     (tmp_path / "inc").mkdir()
     seen = tmp_path / "levels"
     compiler = tmp_path / "llrm-cc"
-    compiler.write_text(f"#!/bin/sh\necho \"$1\" >> {seen}\ncase \"$*\" in *d_faces.c*) [ \"$1\" = \"{fail_level}\" ] && {{ echo 'llrm-c: @_d_draw_faces@3: block 964 leaves for (964) with no instruction choosing' >&2; exit 1; }};; esac\nexit 0\n")
+    compiler.write_text(f"#!/bin/sh\necho \"$1\" >> {seen}\ncase \"$*\" in *d_faces.c*) [ \"$1\" = \"{fail_level}\" ] && {{ echo 'llrm-cc: @_d_draw_faces@3: block 964 leaves for (964) with no instruction choosing' >&2; exit 1; }};; esac\nexit 0\n")
     compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR)
     return seen
 
@@ -203,7 +203,7 @@ def test_a_qcport_module_that_fails_at_o2_fails_the_step_whatever_d_faces_does(t
         (tmp_path / "src" / module).write_text("int x;\n")
     (tmp_path / "inc").mkdir()
     compiler = tmp_path / "llrm-cc"
-    compiler.write_text("#!/bin/sh\ncase \"$*\" in *sound/snd.c*) echo 'llrm-c: @_snd_frame@3: BitCast of a float' >&2; exit 1;; esac\nexit 0\n")
+    compiler.write_text("#!/bin/sh\ncase \"$*\" in *sound/snd.c*) echo 'llrm-cc: @_snd_frame@3: BitCast of a float' >&2; exit 1;; esac\nexit 0\n")
     compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
     monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
@@ -402,7 +402,7 @@ def test_a_pr_touching_the_qb_frontend_x86_isel_or_the_runtime_spec_runs_every_t
     for path in ("crates/frontends/qb/src/compile.rs", "crates/frontends/qb/src/semantic.rs", "crates/frontends/qb/runtime.toml", "runtime/qb/strconv.c",
                  "crates/target/llrm-x86/src/select.rs", "crates/codegen/llrm-codegen/src/backend/isel.rs"):
         assert ps.runs_whole_groups([path]), path
-    for path in ("crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md", "tools/gate/gate.py", "crates/frontends/llrm-c/src/lib.rs"):
+    for path in ("crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md", "tools/gate/gate.py"):
         assert not ps.runs_whole_groups([path]), path
     assert ps.runs_whole_groups(["docs/arch.md", "crates/frontends/qb/src/lexer.rs"])
 
@@ -488,7 +488,7 @@ def test_a_transforms_only_pr_runs_the_lib_tests_of_llrm_codegen_and_a_red_one_i
     touched = ps.touched_packages(["crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md"], packages)
     assert touched == {"llrm-transforms"}
     closure = ps.dependants(touched, graph)
-    assert {"llrm-transforms", "llrm-codegen", "llrm-c", "llrm-qb"} <= closure and "llrm-support" not in closure, sorted(closure)
+    assert {"llrm-transforms", "llrm-codegen", "llrm-qb"} <= closure and "llrm-support" not in closure, sorted(closure)
     head = {"unit llrm-codegen::backend::isel_tests::test_old_red"}
     merged = head | {"unit llrm-codegen::backend::isel_tests::test_made_red_by_transforms"}
     why = sq.subset_refusals(head, merged, fixes=False)
@@ -561,12 +561,12 @@ def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
 
 
 def test_a_target_reaches_the_crates_and_compilers_of_the_helpers_it_uses(tmp_path):
-    """95 targets, after C1 moved them to `common::cc::llrm_c()`, imported no crate in their own text and were all unmapped: the helper's imports are the target's."""
+    """95 targets, after C1 moved them to `common::cc::llrm_cc()`, imported no crate in their own text and were all unmapped: the helper's imports are the target's."""
     (tmp_path / "tests" / "common").mkdir(parents=True)
     (tmp_path / "tests" / "common" / "mod.rs").write_text("use llrm_driver::all;")
     (tmp_path / "tests" / "common" / "cc.rs").write_text('env!("CARGO_BIN_EXE_llrm-cc")')
     (tmp_path / "tests" / "common" / "other.rs").write_text("use llrm_nib::x;")
-    text = ps.with_common("mod common;\nfn t() { common::cc::llrm_c(); }", tmp_path)
+    text = ps.with_common("mod common;\nfn t() { common::cc::llrm_cc(); }", tmp_path)
     assert "llrm_driver" in text and "CARGO_BIN_EXE_llrm-cc" in text and "llrm_nib" not in text
     assert "llrm_driver" in ps.with_common("pub mod common;", tmp_path)
     assert ps.with_common("fn t() {}", tmp_path) == "fn t() {}"
@@ -581,11 +581,11 @@ def test_a_runtime_change_runs_the_targets_that_build_the_runtime_with_cc_and_a_
 
 
 def test_the_check_target_is_mapped_to_every_compiler_its_run_lines_drive():
-    """tests/check.rs names only llrm-qb (CARGO_BIN_EXE) but runs the tool of each file's RUN line: copy_idioms.c drives llrm-c, and a change to llrm-c ran no check."""
+    """tests/check.rs names only llrm-qb (CARGO_BIN_EXE) but runs the tool of each file's RUN line: a change to a compiler its RUN lines drive ran no check."""
     mapping = ps.integration_map()
     packages, _ = ps.workspace_graph()
     # the crate directories come from the workspace: the re-org moved llrm-qb to crates/frontends/qb and the hard-coded path touched no package
-    for tool, changed in ((tool, f"{packages[tool].relative_to(ps.ROOT)}/src/lib.rs") for tool in ("llrm-c", "llrm-nib", "llrm-qb")):
+    for tool, changed in ((tool, f"{packages[tool].relative_to(ps.ROOT)}/src/lib.rs") for tool in ("llrm-cc", "llrm-nib", "llrm-qb")):
         chosen = ps.integration_targets_for([changed], ps.touched_packages([changed], packages), mapping)
         assert "check" in chosen, f"a change to {tool} does not run tests/check"
 
@@ -629,9 +629,10 @@ def test_a_24th_docsbuild_line_is_a_new_name_when_the_head_already_has_23():
     assert sq.new_names({"ratchet:docs"}, merged) == []  # a head cached before the lines were named covers them
 
 
-def test_llrm_c_lib_tests_run_with_the_toolchain_feature_and_other_crates_without():
-    """`cargo test -p llrm-c --lib` never ran the call-boundary and compile-listing tests (feature `toolchain`): an interrupt handler was refused from 10-19 to 10-23 and 16 listings went red unseen."""
-    assert ps.lib_command("llrm-c") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-c", "--lib", "--features", "toolchain"]
+def test_a_package_with_lib_features_runs_them_and_other_crates_without(monkeypatch):
+    """`cargo test -p X --lib` skipped the tests behind a feature no layer enabled (an interrupt handler was refused for four days and 16 listings went red unseen)."""
+    monkeypatch.setitem(ps.LIB_FEATURES, "llrm-featured", ("toolchain",))
+    assert ps.lib_command("llrm-featured") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-featured", "--lib", "--features", "toolchain"]
     assert ps.lib_command("llrm-codegen") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-codegen", "--lib"]
 
     class Done:
@@ -645,8 +646,8 @@ def test_llrm_c_lib_tests_run_with_the_toolchain_feature_and_other_crates_withou
         ran.append(command)
         return Done()
 
-    ps.dependants_lib_failures({"llrm-c", "llrm-codegen"}, run=run)
-    assert any("--features" in command and "llrm-c" in command for command in ran)
+    ps.dependants_lib_failures({"llrm-featured", "llrm-codegen"}, run=run)
+    assert any("--features" in command and "llrm-featured" in command for command in ran)
     assert not any("--features" in command and "llrm-codegen" in command for command in ran)
 
 
@@ -661,9 +662,9 @@ def test_a_selectiondag_change_runs_the_selectiondag_registry():
 
 
 def test_a_compile_to_the_null_device_reaches_the_encoder(tmp_path):
-    """The smoke layer compiled with `-o /dev/null`, where llrm-c writes assembly text and never encodes: a program that died in the encoder passed."""
+    """The smoke layer compiled with `-o /dev/null`, where the compiler writes assembly text and never encodes: a program that died in the encoder passed."""
     compiler = tmp_path / "llrm-cc"
-    compiler.write_text("#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\nif out.endswith('.obj'):\n    sys.exit('llrm-c: Semantics(op=BINARY)')\n")
+    compiler.write_text("#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\nif out.endswith('.obj'):\n    sys.exit('llrm-cc: Semantics(op=BINARY)')\n")
     compiler.chmod(0o755)
     assert ps.compile_ok([str(compiler), "x.c", "-o", __import__("os").devnull], {}) is not None
 
@@ -687,13 +688,12 @@ assertion `left == right` failed: a node on the worklist is ready
 
 
 def test_the_compile_smoke_drives_the_c_compiler_llrm_cc_names(tmp_path, monkeypatch):
-    """C2 switches the C compiler to llrm-cc: a smoke that compiled with the name "llrm-c" would still pass on a dist that has only the old binary."""
+    """C2 switches the C compiler to llrm-cc: a smoke that compiled with another name would pass on a dist that lacks llrm-cc."""
     seen = []
     monkeypatch.setattr(ps, "compile_ok", lambda command, env: seen.append(Path(command[0]).name))
-    for name in ("llrm-cc", "llrm-c"):
-        (tmp_path / name).write_text("")
+    (tmp_path / "llrm-cc").write_text("")
     ps.programs(tmp_path)
-    assert {"llrm-cc"} <= set(seen) and "llrm-c" not in seen
+    assert {"llrm-cc"} <= set(seen)
 
 
 

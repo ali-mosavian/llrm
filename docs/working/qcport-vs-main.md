@@ -1,6 +1,6 @@
 # QCport against main, 2026-10-21
 
-All 65 modules, OMF object-file bytes of `llrm-c` (tools/rows/qcport.py's compile: no flags, the sources of `src`; LEDATA bytes beside them). main = `854bb7efc4` (llrm-c md5 56f120bb59fa); parity = `c4fade7345` (fresh dist build, llrm-c md5 68c5bd191371). main builds all 65 (its total, 321,280, is oversight's in `qcport-os-3446.tsv`). An earlier note of mine that main fails 11 modules was my own `-m16 -march=i386` flags, not main.
+All 65 modules, OMF object-file bytes of `llrm-cc` (tools/rows/qcport.py's compile: no flags, the sources of `src`; LEDATA bytes beside them). main = `854bb7efc4` (llrm-cc md5 56f120bb59fa); parity = `c4fade7345` (fresh dist build, llrm-cc md5 68c5bd191371). main builds all 65 (its total, 321,280, is oversight's in `qcport-os-3446.tsv`). An earlier note of mine that main fails 11 modules was my own `-m16 -march=i386` flags, not main.
 
 ## -Os
 
