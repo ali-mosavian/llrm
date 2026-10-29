@@ -216,6 +216,40 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         new
     }
 
+    /// `LegalizeLoadOps`, extending loads: one the target does not have is an any-extending
+    /// load and an extension in the register. The value and the chain it replaces.
+    fn expand_ext_load(
+        &mut self,
+        node: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if self.dag.opcode(node) != ISD::Load {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        let ext = info.ext.filter(|ext| *ext != super::actions::LoadExt::ExtLoad)?;
+        let (EVT::Simple(wide), EVT::Simple(mem)) = (self.dag.value_type(node), info.mem_vt) else { return None };
+        if self.tli.load_ext_action(ext, wide, mem) != Action::Expand {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let any = self.dag.get_ext_load(
+            super::actions::LoadExt::ExtLoad,
+            vt,
+            chain,
+            ptr,
+            MemInfo { ext: None, ..info },
+        );
+        let value = if ext == super::actions::LoadExt::SExtLoad {
+            let ty = self.dag.get_value_type_node(info.mem_vt);
+            self.dag.get_node(ISD::SignExtendInReg, vt, &[any, ty])
+        } else {
+            let mask = self.dag.get_constant(super::fold::mask(info.mem_vt.size_in_bits()), vt);
+            self.dag.get_node(ISD::And, vt, &[any, mask])
+        };
+        Some((value, SDValue { node: any.node, res: 1 }))
+    }
+
     /// `LegalizeOp`.
     fn legalize_op(
         &mut self,
@@ -228,6 +262,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
+        }
+        if let Some(result) = self.expand_ext_load(node) {
+            self.replace_node(node, result.0);
+            self.replace_node(SDValue { node: n, res: 1 }, result.1);
+            return Ok(());
         }
         let vt = self.action_type(node);
         let mut action = match vt {
