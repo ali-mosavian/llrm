@@ -4,8 +4,8 @@
 
 include "llvm/Target/Target.td"
 
-def sub_lo : SubRegIndex<8>;
-def sub_hi : SubRegIndex<8, 8>;
+def sub_lo : SubRegIndex<8> { let Namespace = "MOS"; }
+def sub_hi : SubRegIndex<8, 8> { let Namespace = "MOS"; }
 
 class MOSReg<string n> : Register<n> { let Namespace = "MOS"; }
 class MOSPair<string n, list<Register> parts> : RegisterWithSubRegs<n, parts> {
@@ -58,6 +58,12 @@ def MOSbrcond : SDNode<"MOSISD::BRCOND", SDTMOSBrcond, [SDNPHasChain]>;
 def MOSsetcc : SDNode<"MOSISD::SETCC", SDTMOSSetcc>;
 def MOScmov : SDNode<"MOSISD::CMOV", SDTMOSCmov>;
 
+def SDT_MOSCallSeqStart : SDCallSeqStart<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
+def SDT_MOSCallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
+def MOScallseq_start : SDNode<"ISD::CALLSEQ_START", SDT_MOSCallSeqStart, [SDNPHasChain, SDNPOutGlue]>;
+def MOScallseq_end : SDNode<"ISD::CALLSEQ_END", SDT_MOSCallSeqEnd, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def SDT_MOSCall : SDTypeProfile<0, -1, [SDTCisVT<0, i16>]>;
+def MOScall : SDNode<"MOSISD::CALL", SDT_MOSCall, [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
 def MOSretglue : SDNode<"MOSISD::RET_GLUE", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
 class MOSInst<dag outs, dag ins, string asm, list<dag> pattern> : Instruction {
@@ -147,9 +153,17 @@ def SETCC8 : MOSInst<(outs Imag8:$d), (ins i8imm:$cc, Flags:$f), "setcc $d, $cc,
 def CMOV8 : MOSInst<(outs Imag8:$d), (ins Imag8:$f0, Imag8:$t, i8imm:$cc, Flags:$f), "cmov $d, $f0, $t, $cc, $f",
                     [(set i8:$d, (MOScmov i8:$f0, i8:$t, imm:$cc, i8:$f))]>;
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in
-  def JMP : MOSInst<(outs), (ins brtarget:$t), "jmp $t", []>;
+  def JMP : MOSInst<(outs), (ins brtarget:$t), "jmp $t", [(br bb:$t)]>;
 let isCall = 1 in
-  def JSR : MOSInst<(outs), (ins calltarget:$t), "jsr $t", []>;
+  def JSR : MOSInst<(outs), (ins calltarget:$t), "jsr $t", [(MOScall tglobaladdr:$t)]>;
+
+// The call sequence's stack adjustment, resolved by the frame code once the frame is laid out.
+let Defs = [RS0, P], Uses = [RS0] in {
+  def ADJCALLSTACKDOWN : MOSInst<(outs), (ins i16imm:$amt, i16imm:$amt2), "#ADJCALLSTACKDOWN",
+                                 [(MOScallseq_start timm:$amt, timm:$amt2)]>;
+  def ADJCALLSTACKUP : MOSInst<(outs), (ins i16imm:$amt1, i16imm:$amt2), "#ADJCALLSTACKUP",
+                               [(MOScallseq_end timm:$amt1, timm:$amt2)]>;
+}
 
 // rs0 += n, two's complement: the prologue, the epilogue and a call sequence that is not reserved.
 let Defs = [P] in
@@ -165,3 +179,9 @@ def MOSInstrInfo : InstrInfo;
 def MOS : Target { let InstructionSet = MOSInstrInfo; }
 
 defm : RemapAllTargetPseudoPointerOperands<Imag16>;
+
+// A word's bytes are the two halves of its pair.
+def : Pat<(i8 (trunc Imag16:$a)), (EXTRACT_SUBREG Imag16:$a, sub_lo)>;
+def : Pat<(i8 (trunc (srl Imag16:$a, (i8 8)))), (EXTRACT_SUBREG Imag16:$a, sub_hi)>;
+def : Pat<(i16 (zext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (LDI8 0), sub_hi)>;
+def : Pat<(i16 (anyext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (LDI8 0), sub_hi)>;

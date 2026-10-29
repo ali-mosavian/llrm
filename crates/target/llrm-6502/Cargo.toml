@@ -10,6 +10,7 @@ llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 llrm-codegen = { workspace = true }
 llrm-target = { workspace = true }
 llrm-lir = { workspace = true }
+llrm-mir = { workspace = true }
 toml = { workspace = true }
 
 [build-dependencies]

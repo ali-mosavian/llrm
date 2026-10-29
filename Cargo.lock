@@ -223,6 +223,7 @@ dependencies = [
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-lir",
+ "llrm-mir",
  "llrm-target",
  "toml",
 ]

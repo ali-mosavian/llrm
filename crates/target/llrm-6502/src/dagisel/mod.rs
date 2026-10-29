@@ -7,4 +7,6 @@ pub mod generated;
 pub mod predicates;
 pub mod lowering;
 pub mod call;
+pub mod function;
 pub mod hooks;
+pub mod pipeline;
