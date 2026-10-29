@@ -3632,6 +3632,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m32::M32),
         };
         let procedure = exits_inserted(procedure);
