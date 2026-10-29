@@ -56,6 +56,8 @@ enum Operand {
     Slot(u32),
     /// A global by id, and the offset into it.
     Symbol(u32, i64),
+    /// A block by id, as a branch names it.
+    Block(u32),
     /// The flags a compare set: the instruction before this one wrote them.
     Flags,
 }
@@ -201,6 +203,10 @@ fn build(
 struct Emitter<'a> {
     dag: &'a SelectionDAG,
     globals: &'a Globals,
+    function: &'a str,
+    layout: &'a [u32],
+    /// Blocks made for critical edges so far: their labels are numbered.
+    edges_made: usize,
     mf: MFunc,
     /// The virtual register each value is in.
     values: HashMap<(u32, u8), Gpr>,
@@ -246,6 +252,7 @@ impl Emitter<'_> {
             NodeData::Const { bits, .. } if matches!(node.opcode, ISD::TargetConstant | ISD::Constant) => {
                 Ok(Operand::Imm(bits as u64))
             }
+            NodeData::Block(id) => Ok(Operand::Block(id)),
             // The zero register as an operand of `CSINC` and the like.
             NodeData::PhysReg(id) if gpr_of(id)? == Gpr::R31 => Ok(Operand::Reg(Gpr::R31)),
             NodeData::Global { symbol, offset } if node.opcode == ISD::TargetGlobalAddress => {
@@ -265,6 +272,99 @@ impl Emitter<'_> {
         register: SDValue,
     ) -> bool {
         matches!(self.dag.node(register).data, NodeData::PhysReg(id) if id == llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
+    }
+
+    /// The copies a phi takes from the edges of `block` (the block at `at`), placed
+    /// as phi elimination does: at the end of the block when one successor has
+    /// phis, else in a block of its own on each edge that has them
+    /// (a critical edge). Returns the edge blocks.
+    fn phi_edges(
+        &mut self,
+        block: &Selected,
+        ops: &mut Vec<Op>,
+    ) -> Result<Vec<MBlock>, String> {
+        let with_phis: Vec<u32> =
+            block.successors.iter().copied().filter(|to| block.phis.iter().any(|p| p.to == *to)).collect();
+        if with_phis.is_empty() {
+            return Ok(Vec::new());
+        }
+        let is_branch = |op: &Op| {
+            matches!(op, Op::I(Inst::Branch { .. } | Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. }))
+        };
+        let first_branch = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);
+        let sequence = |this: &mut Self, to: u32| {
+            let moves = block
+                .phis
+                .iter()
+                .filter(|p| p.to == to)
+                .map(|p| (Reg::Gpr(this.vreg(p.dst)), Reg::Gpr(this.vreg(p.src))))
+                .filter(|(dst, src)| dst != src)
+                .collect();
+            let mf = &mut this.mf;
+            crate::mfunc::sequence_copies(moves, |_| Reg::Gpr(mf.gpr()))
+        };
+        if block.successors.len() == 1 {
+            let copies = sequence(self, with_phis[0]);
+            ops.splice(first_branch..first_branch, copies);
+            return Ok(Vec::new());
+        }
+        let mut edges = Vec::new();
+        for to in with_phis {
+            let label = self.label(to)?;
+            let Target::Label(label) = label else { unreachable!("a block label") };
+            let edge = format!(".L{}.e{}", self.function, self.edges_made);
+            self.edges_made += 1;
+            let mut body: Vec<Op> = sequence(self, to);
+            body.push(crate::mfunc::branch_to(&label));
+            edges.push(MBlock { label: edge.clone(), ops: body });
+            // Retarget the branches to `to`; a fall-through becomes a branch.
+            let mut retargeted = false;
+            for op in ops.iter_mut() {
+                if let Op::I(Inst::Branch { target, .. } | Inst::BranchCond { target, .. } | Inst::CompareBranch { target, .. } | Inst::TestBranch { target, .. }) = op {
+                    if *target == Target::Label(label.clone()) {
+                        *target = Target::Label(edge.clone());
+                        retargeted = true;
+                    }
+                }
+            }
+            if !retargeted {
+                ops.push(crate::mfunc::branch_to(&edge));
+            }
+        }
+        Ok(edges)
+    }
+
+    /// The label of block `id`.
+    fn label(
+        &self,
+        id: u32,
+    ) -> Result<Target, String> {
+        let at = self.layout.iter().position(|&one| one == id).ok_or("a branch to a block outside the function")?;
+        Ok(Target::Label(block_label(self.function, at)))
+    }
+
+    /// `B`, `Bcc`, `CBZW`..`CBNZX` and `TBZW`..`TBNZX`; `None` for any other opcode.
+    fn branch(
+        &self,
+        name: &str,
+        operands: &[Operand],
+    ) -> Result<Option<Inst>, String> {
+        let width = |suffix: &str| if suffix == "W" { Width::W } else { Width::X };
+        Ok(Some(match (name, operands) {
+            ("B", [Operand::Block(to)]) => Inst::Branch { link: false, target: self.label(*to)? },
+            ("Bcc", [Operand::Imm(cond), Operand::Block(to), ..]) => {
+                Inst::BranchCond { cond: cond_of(*cond)?, target: self.label(*to)? }
+            }
+            (_, [Operand::Reg(rt), Operand::Block(to)]) if name.starts_with("CB") && name.len() == 5 => {
+                let (nonzero, suffix) = (name.starts_with("CBNZ"), &name[name.len() - 1..]);
+                Inst::CompareBranch { nonzero, width: width(suffix), rt: *rt, target: self.label(*to)? }
+            }
+            (_, [Operand::Reg(rt), Operand::Imm(bit), Operand::Block(to)]) if name.starts_with("TB") && name.len() <= 6 => {
+                let nonzero = name.starts_with("TBNZ");
+                Inst::TestBranch { nonzero, rt: *rt, bit: *bit as u8, target: self.label(*to)? }
+            }
+            _ => return Ok(None),
+        }))
     }
 
     /// The relocation target of global `id` at `addend`, and whether it is a GOT slot.
@@ -367,12 +467,17 @@ impl Emitter<'_> {
                     .iter()
                     .filter(|op| {
                         let vt = self.dag.value_type(**op);
-                        vt != EVT::OTHER && vt != EVT::GLUE
+                        // A block is an operand of type `Other`, a chain is not.
+                        (vt != EVT::OTHER || self.dag.opcode(**op) == ISD::BasicBlock) && vt != EVT::GLUE
                     })
                     .map(|&op| self.operand(op))
                     .collect::<Result<Vec<_>, _>>()?;
                 if let Some(access) = memory_form(name) {
                     return self.memory(id, name, &access, &operands);
+                }
+                if let Some(branch) = self.branch(name, &operands)? {
+                    self.ops.push(Op::I(branch));
+                    return Ok(());
                 }
                 let dead = self.dag.users(SDValue { node: id, res: 0 }).next().is_none();
                 let sets_flags = name.starts_with("ADDS") || name.starts_with("SUBS");
@@ -441,28 +546,44 @@ impl Emitter<'_> {
     }
 }
 
-/// `blocks` (one) of function `name` as a machine function.
+/// `blocks` of function `name` as a machine function, one block of ops each.
 pub fn emit(
     name: &str,
     blocks: &[Selected],
 ) -> Result<MFunc, String> {
-    let [block] = blocks else { return Err("more than one block: branches are not translated".into()) };
-    let mut emitter =
-        Emitter { dag: &block.dag, globals: &block.globals, mf: MFunc::new(name), values: HashMap::new(), vregs: HashMap::new(), ops: Vec::new() };
-    for &(size, align) in &block.frame {
+    let first = blocks.first().ok_or("a function with no block")?;
+    let mut emitter = Emitter {
+        dag: &first.dag,
+        globals: &first.globals,
+        function: name,
+        layout: &first.layout,
+        edges_made: 0,
+        mf: MFunc::new(name),
+        values: HashMap::new(),
+        vregs: HashMap::new(),
+        ops: Vec::new(),
+    };
+    for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
     }
-    for &(reg, vreg) in &block.live_ins {
-        let dst = emitter.vreg(vreg);
-        emitter.ops.push(Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(gpr_of(reg)?) });
-    }
-    for unit in &block.units {
-        for &node in unit.nodes.iter().rev() {
-            emitter.node(node)?;
+    let mut edges: Vec<MBlock> = Vec::new();
+    for (at, block) in blocks.iter().enumerate() {
+        emitter.dag = &block.dag;
+        emitter.values.clear();
+        for &(reg, vreg) in &block.live_ins {
+            let dst = emitter.vreg(vreg);
+            emitter.ops.push(Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(gpr_of(reg)?) });
         }
+        for unit in &block.units {
+            for &node in unit.nodes.iter().rev() {
+                emitter.node(node)?;
+            }
+        }
+        let mut ops = std::mem::take(&mut emitter.ops);
+        edges.extend(emitter.phi_edges(block, &mut ops)?);
+        emitter.mf.blocks.push(MBlock { label: block_label(name, at), ops });
     }
-    let ops = std::mem::take(&mut emitter.ops);
-    let mut mf = emitter.mf;
-    mf.blocks.push(MBlock { label: block_label(name, 0), ops });
-    Ok(mf)
+    // The blocks made for critical edges lie after the function's own.
+    emitter.mf.blocks.extend(edges);
+    Ok(emitter.mf)
 }

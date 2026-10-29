@@ -9,7 +9,9 @@
 //! second result of the flag-setting node. The users read them as the last
 //! operand of `CSEL`.
 //!
-//! DEVIATE 1: no `emitConjunction` (`CCMP` chains), no `getCmpOperandFoldingProfit`
+//! DEVIATE 1: no `computeKnownBits` `x == 1` to `CBZ` normalization, no `CSET` + `BR_CC` fold,
+//! `BRCOND` expands to `BR_CC` here (the shared legalizer has no `ExpandNode` arm for it), no
+//! `emitConjunction` (`CCMP` chains), no `getCmpOperandFoldingProfit`
 //! swaps, no zero-extending-load `CMN` trick, no overflow-intrinsic folds, no
 //! `lookThroughSignExtension` `TST` form, no floating-point compare. Reason: the
 //! first compares need none; each is its own slice. Owner arm64-quality, review
@@ -410,4 +412,127 @@ fn lower_select_cc(
     let ccode = cond_const(dag, ccode);
     let out = dag.value_type(tval);
     Some(dag.get_node(ISD::Target(opcode), out, &[tval, fval, ccode, flags]))
+}
+
+/// `lookThroughSignExtension`: the value before a sign extension and the
+/// position of the sign bit it extends from.
+fn look_through_sign_extension(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> (SDValue, u128) {
+    match dag.opcode(value) {
+        ISD::SignExtendInReg => {
+            let from = match dag.node(dag.operand(value, 1)).data {
+                NodeData::ValueType(vt) => vt.size_in_bits(),
+                other => unreachable!("a value type operand, not {other:?}"),
+            };
+            (dag.operand(value, 0), u128::from(from - 1))
+        }
+        ISD::SignExtend => {
+            let inner = dag.operand(value, 0);
+            (inner, u128::from(dag.value_type(inner).size_in_bits() - 1))
+        }
+        _ => (value, u128::from(dag.value_type(value).size_in_bits() - 1)),
+    }
+}
+
+/// `optimizeBitTest`: `(and x, 2^k) ==/!= 0` is a `TBZ`/`TBNZ` of bit `k`.
+fn optimize_bit_test(
+    dag: &mut SelectionDAG,
+    op: SDValue,
+    chain: SDValue,
+    dest: SDValue,
+    opcode: u16,
+) -> Option<SDValue> {
+    if dag.opcode(op) != ISD::And {
+        return None;
+    }
+    if let Some(mask) = dag.constant(dag.operand(op, 1)).filter(|m| m.is_power_of_two()) {
+        let test = dag.operand(op, 0);
+        let bit = dag.get_constant(u128::from(mask.trailing_zeros()), EVT::I64);
+        return Some(dag.get_node(ISD::Target(opcode), EVT::OTHER, &[chain, test, bit, dest]));
+    }
+    let shift = dag.operand(op, 0);
+    if dag.opcode(shift) == ISD::Shl && dag.constant(dag.operand(shift, 0)) == Some(1) {
+        let one = dag.operand(shift, 0);
+        let (by, value) = (dag.operand(shift, 1), dag.operand(op, 1));
+        let shifted = dag.get_node(ISD::Srl, dag.value_type(one), &[value, by]);
+        let zero = dag.get_constant(0, EVT::I64);
+        return Some(dag.get_node(ISD::Target(opcode), EVT::OTHER, &[chain, shifted, zero, dest]));
+    }
+    None
+}
+
+/// `LowerBRCOND` has only the `CCMP` chain; the rest is `ExpandNode`'s `BR_CC`.
+pub fn lower_brcond(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (chain, cond, dest) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_integer() {
+        let (lhs, rhs, code) = (dag.operand(cond, 0), dag.operand(cond, 1), cond_of(dag, dag.operand(cond, 2)));
+        return lower_br_cc(dag, chain, code, lhs, rhs, dest);
+    }
+    if !dag.value_type(cond).is_integer() {
+        return None;
+    }
+    // We test only the i1 bit; the `and` is skipped when it is there already.
+    let vt = dag.value_type(cond);
+    let one = dag.get_constant(1, vt);
+    let masked = if dag.opcode(cond) == ISD::And && dag.constant(dag.operand(cond, 1)) == Some(1) {
+        cond
+    } else {
+        dag.get_node(ISD::And, vt, &[cond, one])
+    };
+    let zero = dag.get_constant(0, vt);
+    lower_br_cc(dag, chain, CondCode::SetNe, masked, zero, dest)
+}
+
+/// `LowerBR_CC` node form.
+pub fn lower_br_cc_node(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let ops: Vec<SDValue> = (0..5).map(|i| dag.operand(node, i)).collect();
+    let code = cond_of(dag, ops[1]);
+    lower_br_cc(dag, ops[0], code, ops[2], ops[3], ops[4])
+}
+
+/// `LowerBR_CC` for integers: `CBZ`/`CBNZ`, `TBZ`/`TBNZ`, else flags and `BRCOND`.
+fn lower_br_cc(
+    dag: &mut SelectionDAG,
+    chain: SDValue,
+    code: CondCode,
+    lhs: SDValue,
+    rhs: SDValue,
+    dest: SDValue,
+) -> Option<SDValue> {
+    if !dag.value_type(lhs).is_integer() {
+        return None;
+    }
+    let rhsc = signed_constant(dag, rhs);
+    let branch = |dag: &mut SelectionDAG, opcode: u16, ops: &[SDValue]| {
+        Some(dag.get_node(ISD::Target(opcode), EVT::OTHER, ops))
+    };
+    if rhsc == Some(0) {
+        if code == CondCode::SetEq {
+            return optimize_bit_test(dag, lhs, chain, dest, a64::TBZ)
+                .or_else(|| branch(dag, a64::CBZ, &[chain, lhs, dest]));
+        } else if code == CondCode::SetNe {
+            return optimize_bit_test(dag, lhs, chain, dest, a64::TBNZ)
+                .or_else(|| branch(dag, a64::CBNZ, &[chain, lhs, dest]));
+        } else if code == CondCode::SetLt && dag.opcode(lhs) != ISD::And {
+            let (test, bit) = look_through_sign_extension(dag, lhs);
+            let bit = dag.get_constant(bit, EVT::I64);
+            return branch(dag, a64::TBNZ, &[chain, test, bit, dest]);
+        }
+    }
+    if rhsc == Some(-1) && code == CondCode::SetGt && dag.opcode(lhs) != ISD::And {
+        let (test, bit) = look_through_sign_extension(dag, lhs);
+        let bit = dag.get_constant(bit, EVT::I64);
+        return branch(dag, a64::TBZ, &[chain, test, bit, dest]);
+    }
+    let (flags, ccode) = get_cmp(dag, lhs, rhs, code);
+    let ccode = cond_const(dag, ccode);
+    branch(dag, a64::BRCOND, &[chain, dest, ccode, flags])
 }
