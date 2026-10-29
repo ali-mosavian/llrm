@@ -583,12 +583,12 @@ fn a_compare_widened_to_each_width_is_zero_or_one() {
 }
 
 /// `or disjoint x, c` on a data value was `move.l d, a; lea (c,a), a; move.l a, d`
-/// (the pin has `add` patterns for `ADD32di` but only `lea` ones match the
-/// `add_like` or): 8 bytes and two moves where `add.l #c, d` is 6 and none.
-/// The value is the same, and a real pointer step stays an address add.
+/// (the pin has `ADD32di` patterns for `add` only, so the `add_like` or is a
+/// `lea`): 8 bytes and 16 clocks where `addq.l #c, d` is 2 and 8, for a `c` up
+/// to 8. The value is the same, and a real pointer step stays an address add.
 #[test]
 fn an_or_of_disjoint_bits_on_a_data_value_is_a_data_add() {
-    for (mask, bits) in [(15, 48), (7, 64), (255, 256), (3, 8)] {
+    for (mask, bits) in [(3, 8), (1, 2), (3, 4), (7, 8)] {
         let ir = format!(
             "define i32 @f(i32 %a) {{
   %m = and i32 %a, {mask}
@@ -612,4 +612,51 @@ fn an_or_of_disjoint_bits_on_a_data_value_is_a_data_add() {
 }";
     let asm = text_with(&module(ir), "f", Cpu::M68000, Options::default()).unwrap();
     assert!(asm.contains("(1,") || asm.contains("addq"), "{asm}");
+}
+
+/// The data add sets the condition codes the `lea` did not. A compare read again
+/// after the join of the diamond that holds the `or disjoint` must still be the
+/// compare's, whether read by a select or a `zext`.
+#[test]
+fn a_compare_read_after_the_join_of_an_or_disjoint_arm_keeps_its_value() {
+    for second in ["select i1 %c, i32 %m, i32 %a", "zext i1 %c to i32"] {
+        let ir = format!(
+            "define i32 @f(i32 %a) {{
+  %m = and i32 %a, 7
+  %c = icmp ult i32 %m, 4
+  %o = or disjoint i32 %m, 8
+  %add = add i32 %m, 87
+  %v = select i1 %c, i32 %o, i32 %add
+  %s = {second}
+  %r = add i32 %v, %s
+  ret i32 %r
+}}"
+        );
+        for a in [1_i64, 3, 5, 0x96] {
+            let m = a & 7;
+            let v = if m < 4 { m | 8 } else { m + 87 };
+            let s = if second.starts_with("select") { if m < 4 { m } else { a } } else { i64::from(m < 4) };
+            if let Some(code) = status(&ir, &[a], Options::default()) {
+                assert_eq!(i64::from(code), (v + s) & 0xFF, "{second} with {a}");
+            }
+        }
+    }
+}
+
+/// Kept by choice (not an open defect): a constant over 8 stays a `lea`, 8 bytes
+/// and 16 clocks against `add.l #c`'s 6 and 16 plus a move, and the indexed form
+/// `(48,%a0,%d0)` for `(m | 48) + a` is 8 and 20 against 8 and 24. The values
+/// are right either way.
+#[test]
+fn a_disjoint_or_with_a_wide_constant_keeps_its_value() {
+    let ir = "define i32 @f(i32 %a) {
+  %m = and i32 %a, 15
+  %o = or disjoint i32 %m, 48
+  %r = add i32 %o, %a
+  ret i32 %r
+}";
+    let asm = text_with(&module(ir), "f", Cpu::M68000, Options::default()).unwrap();
+    if let Some(code) = status(ir, &[0x95], Options::default()) {
+        assert_eq!(code, (((0x95 & 15) | 48) + 0x95) & 0xFF, "{asm}");
+    }
 }

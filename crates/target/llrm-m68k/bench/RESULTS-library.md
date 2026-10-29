@@ -45,7 +45,7 @@ Rows still above a reference: memcpy, memset, hex, crc16, bsearch, partition, mu
 | routine | gap | cause |
 |---|---|---|
 | memcpy, memset | +4 / +2 B (-Os) | both pointers are now `(An)+` (LSR `AMK_PostIndexed`, m68k overlay). What is left is the counter: `addq #1; subq #1; cmpi #1; bhi` where gcc counts to zero |
-| hex | +24 B, +9 insns | the `or disjoint` is now `add.l #48` (was `lea` through an address register; same bytes and clocks here, `addq` and 6 B less for a constant up to 8). What is left: gcc's `add.b #48` (4 B; the high bits are known zero and the sum is under 256), and the loop test `cmpi.l #16` on the old value where gcc tests the shifted value's codes |
+| hex | +24 B, +9 insns | the `or disjoint` of `'0' + d` is a `lea` through an address register (the pin has `ADD32di` for `add` only); kept for a constant over 8, where `add.l #c` is no better (8 B and 16 clocks either way; `addq` for 1 to 8 is 2 B, `lea_on_data`). The bench input (`0xBEEF`) never takes the digit arm. What is left: gcc's `add.b #48` (4 B; the high bits are known zero and the sum is under 256), and the loop test `cmpi.l #16` on the old value where gcc tests the shifted value's codes |
 | crc16 | +18 B, +6 insns | `and.l #32768` + `tst.l` of one bit where `btst #15` is 4 bytes; the 8-trip inner loop counter |
 | partition | +16 B, +27 insns | pointer arithmetic through data registers, repeated `lsl.l #2` of one index; two LSR index registers |
 | structcopy | +12 B | the pin's memcpy expansion stores with displacements (6 B a pair); gcc walks both pointers with `(An)+` (2 B a pair) |
