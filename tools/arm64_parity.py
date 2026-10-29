@@ -88,8 +88,8 @@ def link(obj, exe, harness=True):
     shim = exe.parent / ("harness.o" if harness else "shim.o")
     if not shim.exists():
         (exe.parent / (shim.stem + ".c")).write_text(HARNESS if harness else PLAIN)
-        sh(["clang", "-O2", "-arch", "arm64", "-c", str(exe.parent / (shim.stem + ".c")), "-o", str(shim)])
-    r = sh(["clang", "-arch", "arm64", str(obj), str(shim), "-o", str(exe)])
+        sh([str(PIN / "bin/clang"), "-O2", *TARGET, "-isysroot", SDK, "-c", str(exe.parent / (shim.stem + ".c")), "-o", str(shim)])
+    r = sh([str(PIN / "bin/clang"), *TARGET, "-isysroot", SDK, str(obj), str(shim), "-o", str(exe)])
     return r.returncode == 0, r.stderr.strip()
 
 

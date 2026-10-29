@@ -26,13 +26,13 @@ long dev_clock(void)
 /* The BIOS tick count (18.2 a second) and the timer chip's count within the tick, read together: a tick that comes between
    the two reads is read again. The chip is in square-wave mode, which counts down by two, 65536 to 0 in each half of the
    tick (838 ns a step); the status's output pin says which half. */
+#define PIT_STEPS 65536UL
 enum {
     BIOS_TICK_COUNT = 0x6C,
     PIT_CHANNEL_0 = 0x40,
     PIT_CONTROL = 0x43,
     PIT_READ_BACK_COUNT_AND_STATUS_0 = 0xC2,
     PIT_OUT_HIGH = 0x80,
-    PIT_STEPS = 65536UL,
     TENTHS_MS_PER_TICK_WHOLE = 549,
     TENTHS_MS_PER_TICK_FRACTION = 2542 /* ten thousandths: 65536 steps at 1193181.67 Hz is 549.2542 */
 };
