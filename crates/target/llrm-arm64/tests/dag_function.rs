@@ -119,6 +119,26 @@ fn integer_compares_and_selects_select_subs_and_csel() {
     assert_eq!(one("i64", "i64 %a, i64 %b, i64 %c", wide), want("ADDSXri", "CSELXr"));
 }
 
+/// Loops: the exit test is a `CBNZ`, a `TBNZ` of the sign or a masked bit, or
+/// flags and `Bcc`; names per block are the pin's `-stop-after=finalize-isel`.
+#[test]
+fn loop_exits_select_cbnz_tbnz_and_bcc() {
+    let looped = |step: &str, test: &str| {
+        let ir = format!(
+            "define i32 @f(i32 %n) {{\nentry:\n  br label %h\nh:\n  %i = phi i32 [%n, %entry], [%j, %h]\n  {step}\n{test}\n  br i1 %c, label %h, label %x\nx:\n  ret i32 %j\n}}"
+        );
+        selected(&ir).unwrap()
+    };
+    let cbnz = looped("%j = sub i32 %i, 3", "  %c = icmp ne i32 %j, 0");
+    assert_eq!(cbnz, [vec![], vec!["SUBSWri", "CBNZW", "B"], vec!["RET_ReallyLR"]]);
+    let tbnz = looped("%j = add i32 %i, 7", "  %m = and i32 %j, 4\n  %c = icmp ne i32 %m, 0");
+    assert_eq!(tbnz, [vec![], vec!["ADDWri", "TBNZW", "B"], vec!["RET_ReallyLR"]]);
+    let sign = looped("%j = sub i32 %i, 7", "  %c = icmp slt i32 %j, 0");
+    assert_eq!(sign, [vec![], vec!["SUBSWri", "TBNZW", "B"], vec!["RET_ReallyLR"]]);
+    let bcc = looped("%j = add i32 %i, 1", "  %c = icmp ult i32 %j, %n");
+    assert_eq!(bcc, [vec![], vec!["ADDWri", "SUBSWrr", "Bcc", "B"], vec!["RET_ReallyLR"]]);
+}
+
 mod emitted {
     use llrm_arm64::dag::emit::emit;
     use llrm_arm64::dag::function::select_function;

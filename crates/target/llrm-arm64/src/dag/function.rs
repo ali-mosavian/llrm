@@ -95,6 +95,21 @@ pub struct Selected {
     /// function's allocas, then what the builder made.
     pub frame: Vec<(u64, u64)>,
     pub globals: Globals,
+    /// The function's block ids in layout order: a branch names a block by id.
+    pub layout: Vec<u32>,
+    /// The successors of this block (ids), in the terminator's order.
+    pub successors: Vec<u32>,
+    /// What the phis of the function take from this block's edges.
+    pub phis: Vec<PhiCopy>,
+}
+
+/// `PHI result, [incoming, from this block]` of the successor `to`: registers by the
+/// builder's number.
+#[derive(Clone, Copy, Debug)]
+pub struct PhiCopy {
+    pub to: u32,
+    pub dst: u32,
+    pub src: u32,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -141,7 +156,28 @@ pub fn select_function_in(
             return Err("a switch lowering made blocks".to_owned());
         }
         let units = select_block(&mut built.dag, &globals).map_err(|why| format!("{why:?}"))?;
-        selected.push(Selected { dag: built.dag, units, live_ins: built.live_ins, frame: Vec::new(), globals: globals.clone() });
+        let phis = built
+            .phi_updates
+            .iter()
+            .map(|&(phi, src)| {
+                let llrm_mir::module::ValueDef::Instruction(def) = function.value(phi).def else {
+                    return Err("a phi that is no instruction".to_owned());
+                };
+                let to = function.parent(def).ok_or("a phi outside a block")?.0;
+                let dst = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+                Ok(PhiCopy { to, dst, src })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        selected.push(Selected {
+            dag: built.dag,
+            units,
+            live_ins: built.live_ins,
+            frame: Vec::new(),
+            globals: globals.clone(),
+            layout: function.layout().iter().map(|b| b.0).collect(),
+            successors: function.successors(block).into_iter().map(|b| b.0).collect(),
+            phis,
+        });
     }
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
     for block in &mut selected {
