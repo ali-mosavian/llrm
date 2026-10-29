@@ -35,7 +35,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[test]
 fn an_add_encodes_as_llvm_mc_does() {
-    let (code, _) = assemble(&function("add"), 0).unwrap();
+    let code = assemble(&function("add"), 0).unwrap().code;
     assert_eq!(hex(&code), "202f0004d0af00084e75");
 }
 
@@ -56,7 +56,7 @@ fn a_call_encodes_as_llvm_mc_does() {
 /// The loop's `blt` is pc-relative, to a label two instructions in.
 #[test]
 fn a_loop_branch_is_resolved_as_llvm_mc_does() {
-    let (code, _) = assemble(&function("sum"), 0).unwrap();
+    let code = assemble(&function("sum"), 0).unwrap().code;
     assert_eq!(
         hex(&code),
         "9ffc0000000448ef000400007200242f00082001d081d2bc00000001b2826df44cef00040000dffc000000044e75"

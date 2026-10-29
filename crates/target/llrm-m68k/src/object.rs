@@ -30,14 +30,12 @@ fn inst(
     Item::Inst(Inst { opcode, operands })
 }
 
-/// `_start`: push `args` (last first), call `callee`, pop them, and exit with
-/// the result as the status (`exit` is Linux m68k syscall 1: `d0` the number,
-/// `d1` the status, `trap #0`).
-pub fn start(
+/// Push `args` (last first), call `callee` and pop them; the result is in `d0`.
+pub fn call(
     callee: &str,
     args: &[i64],
 ) -> Vec<Item> {
-    let mut out = vec![Item::Label("_start".to_owned())];
+    let mut out = Vec::new();
     for arg in args.iter().rev() {
         out.push(inst("MOV32ei", vec![Operand::Reg(reg::SP), Operand::Imm(*arg)]));
     }
@@ -48,10 +46,29 @@ pub fn start(
             vec![Operand::Reg(reg::SP), Operand::Reg(reg::SP), Operand::Imm(4 * args.len() as i64)],
         ));
     }
+    out
+}
+
+/// `_start` for Linux: [`call`], then exit with the result as the status
+/// (`exit` is m68k syscall 1: `d0` the number, `d1` the status, `trap #0`).
+pub fn start(
+    callee: &str,
+    args: &[i64],
+) -> Vec<Item> {
+    let mut out = vec![Item::Label("_start".to_owned())];
+    out.extend(call(callee, args));
     out.push(inst("MOV32rr", vec![Operand::Reg(reg::D1), Operand::Reg(reg::D0)]));
     out.push(inst("MOVQ", vec![Operand::Reg(reg::D0), Operand::Imm(1)]));
     out.push(inst("TRAP", vec![Operand::Imm(0)]));
     out
+}
+
+/// A one-instruction item.
+pub fn item(
+    opcode: &'static str,
+    operands: Vec<Operand>,
+) -> Item {
+    inst(opcode, operands)
 }
 
 fn put(
@@ -95,12 +112,21 @@ pub fn write_executable(
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
 }
 
-/// The code of `items` placed at `base`, every fixup resolved, and the
-/// address of each label.
+/// Code placed at a base address.
+pub struct Assembled {
+    pub code: Vec<u8>,
+    /// The address of each label, in order.
+    pub labels: Vec<(String, u32)>,
+    /// The offsets of the absolute 32-bit fixups: where a loader that moves
+    /// the code adds its base (Atari relocations, Amiga `HUNK_RELOC32`).
+    pub absolute: Vec<usize>,
+}
+
+/// The code of `items` placed at `base`, every fixup resolved.
 pub fn assemble(
     items: &[Item],
     base: u32,
-) -> Result<(Vec<u8>, Vec<(String, u32)>), String> {
+) -> Result<Assembled, String> {
     let mut code = Vec::new();
     let mut symbols: HashMap<&str, u32> = HashMap::new();
     let mut order: Vec<&str> = Vec::new();
@@ -120,8 +146,12 @@ pub fn assemble(
             }
         }
     }
+    let mut absolute = Vec::new();
     for (start, encoded) in &pending {
         for fixup in &encoded.fixups {
+            if !fixup.pc_rel && fixup.size == 4 {
+                absolute.push(start + fixup.offset);
+            }
             let target =
                 *symbols.get(fixup.symbol.as_str()).ok_or_else(|| format!("undefined symbol {}", fixup.symbol))?;
             let at = start + fixup.offset;
@@ -129,14 +159,15 @@ pub fn assemble(
             patch(&mut code, at, fixup.size, value, fixup.pc_rel)?;
         }
     }
-    Ok((code, order.into_iter().map(|name| (name.to_owned(), symbols[name])).collect()))
+    let labels = order.into_iter().map(|name| (name.to_owned(), symbols[name])).collect();
+    Ok(Assembled { code, labels, absolute })
 }
 
 /// The executable, entered at `_start`, which `items` must define. Function
 /// labels (those without a leading `.`) become symbols.
 pub fn executable(items: &[Item]) -> Result<Vec<u8>, String> {
     let text_at = BASE + EHDR + PHDR;
-    let (code, labels) = assemble(items, text_at)?;
+    let Assembled { code, labels, .. } = assemble(items, text_at)?;
     let symbols: HashMap<&str, u32> = labels.iter().map(|(name, at)| (name.as_str(), *at)).collect();
     let order: Vec<&str> = labels.iter().map(|(name, _)| name.as_str()).collect();
     let entry = *symbols.get("_start").ok_or("no _start")?;
