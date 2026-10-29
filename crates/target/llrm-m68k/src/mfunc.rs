@@ -136,6 +136,12 @@ struct Emitter<'a> {
     /// The node whose condition codes are the ones in `CCR` now: the last
     /// instruction emitted that sets them, none after a call.
     flags_from: Option<u32>,
+    /// The nodes whose condition codes are read after something else set them again, and cannot
+    /// be run again (they have a result besides the codes, or touch memory): the codes are copied
+    /// to a register right after them (`InsertCopiesAndMoveSuccs`).
+    save: std::collections::HashSet<u32>,
+    /// The register the codes of a node in `save` were copied to.
+    saved: HashMap<u32, Reg>,
 }
 
 impl Emitter<'_> {
@@ -260,6 +266,43 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// The nodes of the block (in the order they will be emitted) whose condition codes a
+    /// `CopyToReg` to `CCR` reads after another node set them: the walk of `emit`'s `flags_from`.
+    fn nodes_to_save(
+        &self,
+        block: &Selected,
+    ) -> std::collections::HashSet<u32> {
+        let mut flags_from: Option<u32> = None;
+        let mut save = std::collections::HashSet::new();
+        for unit in &block.units {
+            for &node in unit.nodes.iter().rev() {
+                let value = SDValue { node, res: 0 };
+                match self.dag.opcode(value) {
+                    ISD::Machine(code) => {
+                        let Some(desc) = instrinfo::desc(code as u16) else { continue };
+                        let sets = desc.implicit_defs.contains(&pin::CCR);
+                        if sets || desc.has(flag::CALL) {
+                            flags_from = (sets && !desc.has(flag::CALL)).then_some(node);
+                        }
+                    }
+                    ISD::CopyToReg => {
+                        let n = self.dag.node(value);
+                        let to_ccr = matches!(self.dag.node(n.ops[1]).data, NodeData::PhysReg(id) if id == crate::reg::CCR);
+                        let source = n.ops[2];
+                        if to_ccr && matches!(self.dag.opcode(source), ISD::Machine(_)) {
+                            if flags_from != Some(source.node) && self.dag.node(source).values.len() != 1 {
+                                save.insert(source.node);
+                            }
+                            flags_from = Some(source.node);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        save
+    }
+
     fn emit(
         &mut self,
         node: u32,
@@ -283,6 +326,13 @@ impl Emitter<'_> {
                     // does, the compare runs again for this reader, as the
                     // pin's scheduler clones it.
                     if self.flags_from != Some(source.node) {
+                        if let Some(&kept) = self.saved.get(&source.node) {
+                            let mut restore = Inst::new(Kind::Op("CCR_RESTORE"), vec![Operand::Def(dst), Operand::Use(kept)]);
+                            restore.sets_flags = true;
+                            into.push(restore);
+                            self.flags_from = Some(source.node);
+                            return Ok(());
+                        }
                         if self.dag.node(source).values.len() != 1 {
                             return Err("the condition codes of an arithmetic result are read past an instruction \
                                         that sets them"
@@ -390,6 +440,18 @@ impl Emitter<'_> {
                     rematerializable: desc.has(flag::REMATERIALIZABLE) || desc.has(flag::MOVE_IMM) || loads_argument,
                     ..Inst::new(Kind::Op(name), operands)
                 });
+                if self.save.contains(&node) {
+                    let kept = self.new_reg(Class::Dr16);
+                    // not a `Copy`: the allocator takes a copy for the same value as its source, and
+                    // the codes of two compares are not one value
+                    let mut save = Inst::new(
+                        Kind::Op("CCR_SAVE"),
+                        vec![Operand::Def(kept), Operand::Use(Reg::Phys(crate::reg::CCR))],
+                    );
+                    save.reads_flags = true;
+                    into.push(save);
+                    self.saved.insert(node, kept);
+                }
             }
             _ => {}
         }
@@ -404,12 +466,14 @@ pub fn emit(
 ) -> Result<MFunction, String> {
     let first = blocks.first().ok_or("a function with no block")?;
     let mut emitter =
-        Emitter { dag: &first.dag, function: MFunction::new(name), values: HashMap::new(), builder: HashMap::new(), flags_from: None };
+        Emitter { dag: &first.dag, function: MFunction::new(name), values: HashMap::new(), builder: HashMap::new(), flags_from: None, save: Default::default(), saved: HashMap::new() };
     emitter.function.locals.extend(first.locals.iter().copied());
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
         emitter.flags_from = None;
+        emitter.saved.clear();
+        emitter.save = emitter.nodes_to_save(one);
         let mut insts = Vec::new();
         // A unit lists its glued nodes last first.
         for unit in &one.units {

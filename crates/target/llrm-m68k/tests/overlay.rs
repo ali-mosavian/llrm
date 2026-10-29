@@ -1273,3 +1273,110 @@ fn a_reload_of_the_chained_register_ends_the_chain() {
     let Line::Inst(last) = &out[out.len() - 2] else { panic!("an instruction") };
     assert_eq!(last.operands, vec![Reg(D3), Imm(4), Reg(A3)], "{out:?}");
 }
+
+/// Two compares, each read by two `scc`, with the second compare between them: the codes of the
+/// first were gone when its second reader came (the compare has a folded volatile load, so it
+/// cannot run again), and the function was rejected ("the condition codes of an arithmetic result
+/// are read past an instruction that sets them"). The pin saves the codes as `copyPhysReg` does.
+/// Seeds 23, 30, 41, 57, 62, 66 of the differential driver.
+#[test]
+fn the_codes_of_a_compare_that_cannot_run_again_are_saved_across_the_next_one() {
+    let ir = r#"@zero = external constant i8, align 1
+define i16 @f() {
+  %1 = load volatile i8, ptr @zero, align 1
+  %2 = load volatile i8, ptr @zero, align 1
+  %3 = load volatile i8, ptr @zero, align 1
+  %4 = load volatile i8, ptr @zero, align 1
+  %5 = load volatile i8, ptr @zero, align 1
+  %6 = load volatile i8, ptr @zero, align 1
+  %7 = add i8 %4, -41
+  %8 = zext i8 %5 to i16
+  %9 = add i16 %8, 31052
+  %10 = add i8 %6, -66
+  %11 = icmp eq i8 %2, -1
+  %12 = icmp eq i8 %1, -57
+  %13 = select i1 %11, i1 true, i1 %12
+  %14 = zext i1 %13 to i8
+  %15 = add i8 %7, %14
+  %16 = select i1 %13, i16 8, i16 0
+  %17 = xor i16 %9, %16
+  %18 = select i1 %13, i8 %15, i8 0
+  %19 = add i8 %10, %18
+  br label %20
+
+20:                                               ; preds = %0, %20
+  %21 = phi i8 [ %25, %20 ], [ 4, %0 ]
+  %22 = phi i8 [ %26, %20 ], [ %15, %0 ]
+  %23 = phi i8 [ %28, %20 ], [ %19, %0 ]
+  %24 = phi i16 [ %27, %20 ], [ %17, %0 ]
+  %25 = add i8 %21, -1
+  %26 = add i8 %22, -1
+  %27 = xor i16 %24, 2040
+  %28 = add i8 %26, %23
+  %29 = icmp eq i8 %25, 0
+  br i1 %29, label %30, label %20
+
+30:                                               ; preds = %20
+  %31 = xor i8 %26, %28
+  %32 = zext i8 %31 to i16
+  %33 = xor i16 %27, %32
+  ret i16 %33
+}
+"#;
+    let text = compiled(ir, Options::default());
+    assert!(text.contains("move.w\t%sr, %d") && text.contains("move.w\t%d") && text.contains(", %ccr"), "{text}");
+}
+
+/// A compare read by a branch with a phi's copy between them that overwrites a register the
+/// compare reads: the compare cannot run again, and `tst` of its result is not the same codes.
+/// It was rejected ("no way to keep the flags of CMP past a copy"); the pin saves the codes as
+/// `copyPhysReg` does. Seeds 23, 30, 41, 181 of the differential driver.
+#[test]
+fn the_codes_of_a_compare_are_pushed_round_a_copy_that_cannot_move_or_be_repeated() {
+    let ir = r#"@zero = external constant i8, align 1
+@buf = external constant [16 x i8], align 1
+define i16 @f() {
+  %1 = load volatile i8, ptr @zero, align 1
+  %2 = load volatile i8, ptr @zero, align 1
+  %3 = load volatile i8, ptr @zero, align 1
+  %4 = load volatile i8, ptr @zero, align 1
+  %5 = load volatile i8, ptr @zero, align 1
+  %6 = load volatile i8, ptr @zero, align 1
+  %7 = load volatile i8, ptr @zero, align 1
+  %8 = zext i8 %3 to i32
+  %9 = add i32 %8, -1
+  %10 = add i8 %5, -95
+  %11 = add i8 %1, 29
+  %12 = icmp ult i8 %11, -2
+  %13 = sext i1 %12 to i8
+  %14 = trunc i32 %9 to i8
+  %15 = and i8 %10, %14
+  %16 = add i8 %15, %13
+  %17 = icmp eq i8 %2, -64
+  %18 = zext i1 %17 to i32
+  %19 = zext i8 %16 to i32
+  %20 = zext i8 %10 to i32
+  %21 = add i8 %7, -99
+  %22 = zext i8 %6 to i32
+  %23 = add i32 %22, 38068
+  %24 = and i32 %9, 65535
+  %25 = or i32 %24, %18
+  %26 = shl i32 %25, 1
+  %27 = lshr i32 %24, 15
+  %28 = and i32 %26, 65534
+  %29 = or disjoint i32 %28, %27
+  %30 = xor i32 %29, %19
+  %31 = shl i32 %30, 1
+  %32 = lshr i32 %28, 15
+  %33 = or disjoint i32 %31, %32
+  %34 = zext i8 %21 to i32
+  %35 = xor i32 %23, %20
+  %36 = xor i32 %35, %34
+  %37 = xor i32 %36, %33
+  %38 = trunc i32 %37 to i16
+  ret i16 %38
+}
+"#;
+    let text = compiled(ir, Options::default());
+    assert!(text.contains("move.w\t%sr, -(%sp)") && text.contains("move.w\t(%sp)+, %ccr"), "{text}");
+}
