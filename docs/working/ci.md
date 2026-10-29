@@ -82,4 +82,5 @@ On the deadline the owner pays it (the check goes red or the test goes) or moves
 - DEBT llrm-c-compile-map | limit 1 tool | deadline 2026-11-05 | owner w9 | `tools/compile_map.py` runs `llrm-c`; no gate runs it. Move to llrm-cc or delete at C4.
 - DEBT llrm-c-pipeline-runs | limit 1 tool | deadline 2026-11-05 | owner w9 | `tools/pipeline-runs.py` runs `llrm-c`; no gate runs it. Move to llrm-cc or delete at C4.
 - DEBT llrm-c-qcport-sweep | limit 1 tool | deadline 2026-11-05 | owner w9 | `tools/qcport_sweep.py` builds and runs `llrm-c`; only its console test is gated (skip-qcport-console). Move to llrm-cc or delete at C4.
+- DEBT nib-dot-listing | limit the current 51-line listing | deadline 2026-11-05 | owner w13 | readme's Nib `dot` listing (regenerated in this branch) is worse than its old 45-line block under `--isel=old` and `dag`: `sub sp, 6`, spills of both lengths, `sete`/`or` for the empty test. Restore the old code, then regenerate.
 - DEBT skip-pindiff-llc | limit 1 test | deadline 2026-11-05 | owner w11 | `tools/pairs/test_pindiff.py` skips `needs LLRM_LLC`: nothing sets it in CI.
