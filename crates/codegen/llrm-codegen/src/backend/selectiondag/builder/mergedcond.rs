@@ -106,6 +106,14 @@ impl Builder<'_> {
         self.defining(operand).is_none_or(|inst| self.function.parent(inst) == Some(self.block))
     }
 
+    /// Whether `inst` compares a runtime routine's answer in the flags.
+    fn reads_flags_answer(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        llrm_mir::facts::compares_flags_result(&self.module.context, &self.module.globals, self.function, inst)
+    }
+
     /// `isExportableFromCurrentBlock`.
     fn exportable(
         &self,
@@ -381,7 +389,10 @@ impl Builder<'_> {
                 Opcode::ICmp(_) | Opcode::FCmp(_) => Some((compare.operands[0], compare.operands[1])),
                 _ => None,
             };
+            // DEVIATE: a compare of a runtime routine's flags answer is a leaf
+            // read as a value; its flags cannot be exported to another block.
             if let Some((lhs, rhs)) = operands
+                && !self.reads_flags_answer(inst)
                 && (cur_bb == switch_bb || (self.exportable(lhs) && self.exportable(rhs)))
             {
                 let cc = match &compare.opcode {
