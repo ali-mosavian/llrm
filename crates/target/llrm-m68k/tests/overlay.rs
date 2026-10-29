@@ -1252,3 +1252,24 @@ fn a_constant_above_32k_is_not_moved_into_an_address_register_by_a_word_move() {
     let moves = llrm_m68k::expand::expand_movi(A0, 32767).expect("expands");
     assert!(moves.iter().any(|one| one.opcode == "MOV16ai"), "{moves:?}");
 }
+
+/// The chain pass did not see a reload (`movem.l (64,%sp), %a3`: a register mask, no register
+/// operand) as a new value of the register it chained, so an access after the reload had the
+/// chain's size taken off its displacement and read 4 bytes below the array. Seed 86 of the
+/// differential driver (the result changed with the stack contents).
+#[test]
+fn a_reload_of_the_chained_register_ends_the_chain() {
+    use llrm_m68k::expand::Line;
+    use llrm_m68k::mc::{Inst, Operand::{Imm, Reg}};
+    use llrm_m68k::reg::{A3, D1, D2, D3, SP};
+    let lines = vec![
+        Line::Inst(Inst { opcode: "MOV32dj", operands: vec![Reg(D1), Reg(A3)] }),
+        Line::Inst(Inst { opcode: "MOV32dp", operands: vec![Reg(D2), Imm(4), Reg(A3)] }),
+        Line::Inst(Inst { opcode: "MOVM32mp", operands: vec![Imm(1 << 11), Imm(64), Reg(SP)] }),
+        Line::Inst(Inst { opcode: "MOV32dp", operands: vec![Reg(D3), Imm(4), Reg(A3)] }),
+        Line::Inst(Inst { opcode: "RTS", operands: vec![] }),
+    ];
+    let out = llrm_m68k::chain::chain_post_increment(lines, &[]);
+    let Line::Inst(last) = &out[out.len() - 2] else { panic!("an instruction") };
+    assert_eq!(last.operands, vec![Reg(D3), Imm(4), Reg(A3)], "{out:?}");
+}

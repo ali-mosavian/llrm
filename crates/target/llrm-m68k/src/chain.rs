@@ -116,7 +116,15 @@ fn mention_count(
     inst: &Inst,
     root: RegId,
 ) -> usize {
-    inst.operands.iter().filter(|o| matches!(o, Operand::Reg(r) if REGISTER_INFO.root(*r) == root)).count()
+    // a spill or a reload (`movem.l`) names its register in a mask, not as an operand
+    let mask = match (inst.opcode, &inst.operands[..]) {
+        ("MOVM32mp", [Operand::Imm(mask), ..]) | ("MOVM32pm", [_, _, Operand::Imm(mask)]) => Some(*mask),
+        ("PUSHM32" | "POPM32", [Operand::Imm(mask)]) => Some(*mask),
+        _ => None,
+    };
+    let in_mask = mask.zip(crate::expand::mask_bit(root)).is_some_and(|(mask, bit)| mask >> bit & 1 == 1);
+    usize::from(in_mask)
+        + inst.operands.iter().filter(|o| matches!(o, Operand::Reg(r) if REGISTER_INFO.root(*r) == root)).count()
 }
 
 fn is_address_register(root: RegId) -> bool {
