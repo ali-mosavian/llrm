@@ -624,7 +624,9 @@ fn check(seed: u64) -> Outcome {
                     None => println!("seed {seed}: host gcc could not build the program"),
                 }
             }
-            let _ = std::fs::remove_dir_all(&dir);
+            if std::env::var("DIFF_KEEP").is_err() {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
             Outcome::Agree(sizes)
         }
         Ok(Some(code)) => {

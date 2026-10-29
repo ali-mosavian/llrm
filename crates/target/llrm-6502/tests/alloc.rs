@@ -1703,6 +1703,80 @@ done:
     }
 }
 
+/// The low byte of `c ^ (p << 8)` was `c.lo ^ 0`: a zero loaded, stored and xored in (four instructions,
+/// seven bytes, in every crc16 inner loop).
+#[test]
+fn a_byte_op_with_its_identity_is_a_copy() {
+    let ir = "@buf = external global [16 x i8]
+define i8 @idt() {
+  %c = load i16, ptr @buf, align 1
+  %b = load i8, ptr getelementptr inbounds nuw (i8, ptr @buf, i16 2), align 1
+  %z = zext i8 %b to i16
+  %s = shl i16 %z, 8
+  %x = xor i16 %c, %s
+  %h = lshr i16 %x, 8
+  %t = trunc i16 %h to i8
+  ret i8 %t
+}";
+    let text = compile_within_ten_seconds(ir, "idt");
+    let function = text.split("idt:").nth(1).expect("the function is emitted").split(".segment").next().unwrap();
+    assert_eq!(function.matches("eor").count(), 1, "only the high byte is xored:\n{function}");
+    let data = ".export buf\nbuf: .byte 9,12,10\n";
+    let got = common::run_with("alloc-identity", "  jsr idt\n", &format!("{text}{data}"));
+    assert_eq!(got, 12 ^ 10);
+}
+
+/// The same with the zero first, `(p << 8) ^ c`: crc16 wrote it that way (99 bytes, 6442 cycles; 92 and 6369 now).
+#[test]
+fn a_byte_op_with_its_identity_on_the_left_is_a_copy() {
+    let ir = "@buf = external global [16 x i8]
+define i8 @idt() {
+  %c = load i16, ptr @buf, align 1
+  %b = load i8, ptr getelementptr inbounds nuw (i8, ptr @buf, i16 2), align 1
+  %z = zext i8 %b to i16
+  %s = shl i16 %z, 8
+  %x = xor i16 %s, %c
+  %h = lshr i16 %x, 8
+  %t = trunc i16 %h to i8
+  ret i8 %t
+}";
+    let text = compile_within_ten_seconds(ir, "idt");
+    let function = text.split("idt:").nth(1).expect("the function is emitted").split(".segment").next().unwrap();
+    assert_eq!(function.matches("eor").count(), 1, "only the high byte is xored:\n{function}");
+    let data = ".export buf\nbuf: .byte 9,12,10\n";
+    let got = common::run_with("alloc-identity-left", "  jsr idt\n", &format!("{text}{data}"));
+    assert_eq!(got, 12 ^ 10);
+}
+
+/// A register made by spill code could not be spilled again and was refused the only colours that fit
+/// (callee-saved cells, not "worth" saving for its weight): "no register for v217 ... and nothing to
+/// spill" (differential seed 127, once an unrelated change moved the pressure; needs the 26 cells of sim65).
+#[test]
+fn a_spill_temporary_takes_a_colour_that_costs_a_save() {
+    let ir = "define fastcc i16 @spt(i32 %0, i8 %1, i32 %2, i16 %3, ptr %4) {
+  br label %6
+6:
+  br label %6
+7:
+  %8 = icmp ne i32 %0, 1
+  %9 = load i32, ptr %4, align 2
+  %10 = icmp ult i32 %2, 1
+  %11 = select i1 %10, i16 1, i16 %3
+  store i32 %0, ptr null, align 2
+  %12 = icmp eq i8 0, %1
+  %13 = zext i1 %12 to i32
+  br label %14
+14:
+  %p = phi i16 [ %11, %7 ], [ 0, %14 ]
+  br label %14
+15:
+  %16 = xor i32 0, %13
+  ret i16 0
+}";
+    let text = compile_on(ir, "spt", 26);
+    assert!(text.contains("spt:"), "{text}");
+}
+
 /// `freeze` selects to the generic `COPY`, which the selector had no description of ("no description
 /// of opcode 20": differential seeds 21 and 26 were rejected for it).
 #[test]
