@@ -287,8 +287,21 @@ impl Emitter<'_> {
                 self.values.insert((node, 0), dst);
                 into.push(Inst::copy(dst, src));
             }
+            // `TargetOpcode::COPY` (20), which has no name in the pin's instruction table: the value
+            // in a register of its own
+            ISD::Machine(20) => {
+                let dst = self.new_reg(Class::of_type(n.values[0]));
+                self.values.insert((node, 0), dst);
+                let Some(Operand::Use(src)) = self.operand(n.ops[0])? else {
+                    return Err("COPY of a value that is no register".to_owned());
+                };
+                into.push(Inst::copy(dst, src));
+            }
             ISD::Machine(code) => {
-                let name = opcode_name(code).ok_or("a machine node with no name")?;
+                let name = opcode_name(code).ok_or_else(|| {
+                    let ops: Vec<String> = n.ops.iter().map(|op| format!("{:?}:{:?}", self.dag.opcode(*op), self.dag.value_type(*op))).collect();
+                    format!("a machine node with no name: {code}, values {:?}, operands {ops:?}", n.values)
+                })?;
                 // `EXTRACT_SUBREG`: the low byte or word of a register is the
                 // register narrowed, which the narrower class's view names
                 if name == "EXTRACT_SUBREG" {
