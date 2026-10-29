@@ -93,7 +93,7 @@ One loop in three languages: a dot product of two `int` arrays, returned as a
 `long`. The sources are in [examples/dot](examples/dot); each listing is what `-S`
 prints with `-march=i486`, and the comments are added by hand. C is in the medium model.
 
-C, `llrm-cc --target=x86_16-wat dot.c -march=i486 -S`:
+C, `llrm-cc --target=x86_16-wat dot.c -march=i486 -O2 -S`:
 
 ```c
 long dot(const int *a, const int *b, int n)
@@ -108,33 +108,38 @@ long dot(const int *a, const int *b, int n)
 
 ```asm
 _dot@3 proc far
-L0_0:
+L0_1:
     test cx, cx
-    jle L0_4294967297               ; [header copy] one guard for n <= 0, ahead of the prologue
-L0_17:
-    push si                         ; a is in ax, b in dx, n in cx (regparm3); si and di are callee-saved
-    push di
-    mov si, ax                      ; si = a, an address register: ax cannot address
-    mov di, dx                      ; di = b
-    add cx, cx                      ; cx = 2n, the byte length of each array
-    mov bx, cx
-    neg bx                          ; [one induction variable] bx = -2n is the counter and the offset
-    add si, cx                      ; [biased] a + 2n, so a[i] is at [bx+si]
-    add di, cx                      ; [biased] b + 2n
-    xor eax, eax                    ; total = 0
-L0_4:
-    movsx ecx, word ptr [bx+si]     ; a[i], sign-extended to 32 bits
-    movsx edx, word ptr [bx+di]     ; b[i]
-    imul ecx, edx                   ; (long)a[i] * b[i]: a 32-bit multiply, no runtime helper
-    add eax, ecx                    ; total += product
-    add bx, 2                       ; step one int; [flag reuse] its flags end the loop at 0
-    jne L0_4
+    jle L0_2_1
 L0_2:
-    pop di                          ; the long is already in eax: it returns there
-    pop si                          ; no frame: nothing is on the stack
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push si
+    push di
+    mov si, ax
+    xor eax, eax
+    xor bx, bx
+L0_3:
+    movsx edi, word ptr [bx+si]
+    mov dword ptr [bp-4], edi
+    mov di, dx
+    mov dx, si
+    movsx esi, word ptr [bx+di]
+    imul esi, dword ptr [bp-4]
+    add eax, esi
+    mov si, dx
+    mov dx, di
+    add bx, 2
+    dec cx
+    jne L0_3
+L0_4:
+    pop di
+    pop si
+    leave
     retf
-L0_4294967297:
-    xor eax, eax                    ; n <= 0: no saved registers were touched
+L0_2_1:
+    xor eax, eax
     retf
 _dot@3 endp
 ```

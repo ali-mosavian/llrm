@@ -18,7 +18,7 @@ DOT = ROOT / "examples" / "dot"
 
 CASES = [
     # C's function is spelled as the default ABI of m16 spells it (`_dot@3`); Nib's own procedures are not decorated.
-    ("C", [str(llrmbin.compiler(BIN)), "dot.c", llrmbin.c_args(16)[0], "-march=i486"], linkrecipe.symbol("x86-m16", "dot")),
+    ("C", [str(llrmbin.compiler(BIN)), "dot.c", llrmbin.c_args(16)[0], "-march=i486", "-O2"], linkrecipe.symbol("x86-m16", "dot")),
     ("Nib", [str(BIN / "llrm-nib"), "dot.nib", "--entry", "dot", "-march=i486"], "_dot"),
     ("BASIC", [str(BIN / "llrm-qb"), "dot.bas", "--dialect", "pds71", "--runtime", "qb45", "-march=i486", "-Omax", "--whole-program", "-fno-inline=DOT"], "DOT"),
 ]

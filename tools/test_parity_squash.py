@@ -769,9 +769,9 @@ def _closure(path):
 
 
 def test_a_red_test_in_a_crate_that_depends_on_the_changed_one_is_refused():
-    """llrm-c's lib tests were red on parity while PRs merged: each PR changed a crate llrm-c depends on, and the fast tier ran the changed crates only."""
-    red = {"unit llrm-c::compile::tests::a_call_boundary_listing"}
-    on_merged = lambda packages: set(red) if "llrm-c" in packages else set()  # noqa: E731
+    """A frontend's lib tests were red on parity while PRs merged: each PR changed a crate the frontend depends on, and the fast tier ran the changed crates only."""
+    red = {"unit llrm-qb::compile::tests::a_call_boundary_listing"}
+    on_merged = lambda packages: set(red) if "llrm-qb" in packages else set()  # noqa: E731
     assert ps.new_lib_failures(["crates/codegen/llrm-codegen/src/backend/peephole.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == red
 
 
@@ -996,8 +996,8 @@ def test_two_halves_that_build_apart_and_not_together_name_nobody_and_are_halved
     group = ["1", "2", "3", "4"]
     assert ps.build_offenders(group, lambda number: True, lambda: "") == []
 
-def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
-    """#2936 changed the lowering and broke llrm-c's call-boundary test, which only the toolchain feature builds and no layer ran."""
+def test_a_change_to_llrm_hir_also_runs_the_frontends_lib_tests():
+    """#2936 changed the lowering and broke a frontend's call-boundary test that no layer ran."""
     asked = []
 
     def on_merged(packages):
@@ -1006,8 +1006,8 @@ def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
 
     ps.new_lib_failures(["crates/ir/llrm-hir/src/mir.rs"], on_merged=on_merged, on_head=lambda by_package: set())
     ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set())
-    assert "llrm-c" in asked[0] and "llrm-hir" in asked[0]
-    assert "llrm-c" in asked[1]
+    assert "llrm-qb" in asked[0] and "llrm-hir" in asked[0]
+    assert "llrm-qb" in asked[1]
 
 
 def test_the_tool_modules_are_loaded_before_a_landing_can_change_them(tmp_path, monkeypatch):
