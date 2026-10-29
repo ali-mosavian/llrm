@@ -4,11 +4,16 @@
 name: toolchain
 on:
   workflow_dispatch:
+    inputs:
+      jobs:
+        description: "all, or pintools (skips the two hour-long clang builds)"
+        default: all
   push:
     branches: [feat/parity, main]
     paths: [toolchain/clang/pin, toolchain/clangbuild.sh, toolchain/cache.sh, toolchain/pintoolsbuild.sh, .github/actions/pintools-tree/action.yml, .github/workflows/toolchain.yml]
 jobs:
   clang:
+    if: ${{ inputs.jobs != 'pintools' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 350
     strategy:
