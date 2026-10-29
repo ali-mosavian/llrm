@@ -8,7 +8,7 @@
 //! runtime routine the function calls is counted and nothing else is. The result is checked against a
 //! hand-derived value first.
 //!
-//! Needs cc65, clang (msp430 target, for its IR), cl65 and sim65.
+//! Needs cc65, clang (msp430 front end), LLVM 20 `opt`, cl65 and sim65.
 
 mod common;
 
@@ -336,11 +336,28 @@ fn ours_row(
     let dir = work(kernel.name);
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench/kernels.c");
     let define = format!("-DK_{}", kernel.name);
+    // clang is only the C front end (msp430: int and pointers are 16 bits, as for cc65); the optimizer
+    // then runs on our datalayout, so only i8 is a legal integer and nothing widens to i16. `opt` stands
+    // in for the middle end, with the vectorizers off: there is no vector MIR.
+    let raw = format!("raw-{tag}.ll");
     let ll = format!("k-{tag}.ll");
     tool(
         &dir,
         "clang",
-        &["--target=msp430", clang_flag, "-S", "-emit-llvm", "-fno-unwind-tables", &define, "-o", &ll, source.to_str().unwrap()],
+        &["--target=msp430", "-O2", "-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm", "-fno-unwind-tables", &define, "-o", &raw, source.to_str().unwrap()],
+    )?;
+    let retargeted: String = std::fs::read_to_string(dir.join(&raw))
+        .unwrap()
+        .lines()
+        .filter(|l| !l.starts_with("target triple"))
+        .map(|l| if l.starts_with("target datalayout") { format!("target datalayout = \"{DATALAYOUT}\"") } else { l.to_owned() })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(dir.join(&raw), retargeted).unwrap();
+    tool(
+        &dir,
+        "/usr/lib/llvm-20/bin/opt",
+        &[clang_flag, "-vectorize-loops=false", "-vectorize-slp=false", "-S", &raw, "-o", &ll],
     )?;
     let text = sanitize(&std::fs::read_to_string(dir.join(&ll)).unwrap());
     let module = llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e:?}").chars().take(100).collect::<String>())?;
@@ -365,7 +382,7 @@ fn ours_row(
 #[test]
 #[ignore = "needs cc65, clang and sim65"]
 fn the_table() {
-    let mut out = String::from("| kernel | cc65 | cc65 -O | ours (clang -O2 IR) | ours (clang -Os IR) |\n|---|---|---|---|---|\n");
+    let mut out = String::from("| kernel | cc65 | cc65 -O | ours (opt -O2 IR) | ours (opt -Os IR) |\n|---|---|---|---|---|\n");
     let cell = |row: &Result<Row, String>| match row {
         Ok(r) => format!("{} B, {} cy", r.bytes, r.cycles),
         Err(why) => format!("n/a ({why})"),
