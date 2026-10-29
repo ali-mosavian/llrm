@@ -459,8 +459,9 @@ fn ours_row(
         &[clang_flag, "-vectorize-loops=false", "-vectorize-slp=false", "-S", &raw, "-o", &ll],
     )?;
     let text = sanitize(&std::fs::read_to_string(dir.join(&ll)).unwrap());
-    let module =
+    let mut module =
         llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e:?}").chars().take(100).collect::<String>())?;
+    llrm_6502::prepare::split_phi_edges(&mut module);
     let name = kernel.name;
     let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let selection = select_function(&module, name, Cpu::Mos6502)?;

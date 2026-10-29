@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
-use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, build_block};
+use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
@@ -46,6 +46,9 @@ pub fn builder_target() -> BuilderTarget {
             big_endian: false,
             calling: Some(&MosCalling),
         }),
+        // a branch on `a || b` is two branches (the default `getJumpConditionMergingParams`),
+        // not two 0/1 bytes and a logic op
+        tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
         ..BuilderTarget::m16()
     }
 }
