@@ -241,8 +241,12 @@ fn the_m68k_tti_strength_reduces_an_array_walk_and_a_scaled_index_does_not() {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).unwrap();
     let ours = llrm_mir::print::module(&llrm_m68k::compile::mid_end(&module).unwrap());
     let default = llrm_mir::print::module(
-        &llrm_m68k::compile::mid_end_described_by(&module, &llrm_m68k::machine::M68k { scaled_index: true }, None)
-            .unwrap(),
+        &llrm_m68k::compile::mid_end_described_by(
+            &module,
+            &llrm_m68k::machine::M68k { scaled_index: true, ..Default::default() },
+            None,
+        )
+        .unwrap(),
     );
     assert!(ours.contains("phi ptr"), "{ours}");
     assert!(!default.contains("phi ptr"), "{default}");
