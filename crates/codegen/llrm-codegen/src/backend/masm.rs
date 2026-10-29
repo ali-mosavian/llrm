@@ -3259,6 +3259,41 @@ mod tests {
         assert!(!lines.iter().any(|one| one == "ret"), "{lines:?}");
     }
 
+    /// A sibling call in a body whose frame register was omitted: the exits
+    /// inserted ahead of the return (`frame_exit` set) must still end in the
+    /// jump to the callee, not a `ret`.
+    #[test]
+    fn a_sibling_call_in_an_omitted_frame_still_jumps() {
+        let bx = Loc::Reg(ir::Reg { register: RegId::EBX, width: 4 });
+        let si = Loc::Reg(ir::Reg { register: RegId::ESI, width: 4 });
+        let r#move = insn(0, semantics(Operation::Move, "mov", vec![si], vec![bx]));
+        let leave = insn(1, semantics(Operation::Return, "jmp", vec![], vec![]));
+        let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
+        let body = lir::LirBody {
+            bits: 32,
+            ..lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default())
+        };
+        let procedure = Procedure {
+            name: "_get".into(),
+            public: true,
+            far: false,
+            body,
+            reserve: 0,
+            callees: IndexMap::from_iter([(1, Callee::new("_other", false))]),
+            interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: None,
+            registers: llrm_target::Target::frame_registers(&llrm_x86_m32::M32),
+        };
+        let procedure = exits_inserted(procedure);
+        assert_eq!(procedure.body.frame_exit, Some(true), "premise: the frame is omitted and its exits inserted");
+        let lines: Vec<String> =
+            _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
+        assert!(lines.iter().any(|one| one == "jmp _other"), "{lines:?}");
+        assert!(!lines.iter().any(|one| one == "ret"), "{lines:?}");
+    }
+
     /// x_hanoi2 `mv` -Os m32 pushed four registers before its `n == 0` exit:
     /// the size refusal of a wrap around a shared return was the 16-bit
     /// target's (a jump over the epilogue outgrows its short form), and applied
