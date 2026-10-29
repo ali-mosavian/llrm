@@ -2,20 +2,6 @@
 
 pub mod common;
 
-/// `program` run in `dir`. llrm-c is gone: its command line is served by llrm-cc over the pinned clang.
-fn spawned(
-    bin: &Path,
-    program: &str,
-    args: &[&str],
-    dir: &Path,
-) -> std::process::Output {
-    if program == "llrm-c" {
-        common::cc::llrm_c().args(args).current_dir(dir).output().unwrap()
-    } else {
-        Command::new(bin.join(program)).args(args).current_dir(dir).output().unwrap()
-    }
-}
-
 use std::path::Path;
 use std::process::Command;
 
