@@ -148,6 +148,20 @@ def region_difference(want: Path, got: Path, box: tuple[int, int, int, int]) -> 
     return sum(pixel(left, x, y) != pixel(right, x, y) for y in range(y0, y1) for x in range(x0, x1))
 
 
+def difference_mask(want: Path, got: Path, cols: int = 64, rows: int = 25) -> str:
+    """Where two screens differ, as text a job log can hold: the bounding box, then a grid of the screen with `#` in each cell that has a
+    differing pixel (the screens themselves stay out of a private group's log)."""
+    (width, height, left), (_, _, right) = qbplay.png_pixels(want), qbplay.png_pixels(got)
+    hits = [(i // 3 % width, i // 3 // width) for i in range(0, len(left), 3) if left[i : i + 3] != right[i : i + 3]]
+    if not hits:
+        return "no differing pixel"
+    grid = [[" "] * cols for _ in range(rows)]
+    for x, y in hits:
+        grid[y * rows // height][x * cols // width] = "#"
+    xs, ys = [x for x, _ in hits], [y for _, y in hits]
+    return f"{len(hits)} pixels in x {min(xs)}-{max(xs)}, y {min(ys)}-{max(ys)} of {width}x{height}\n" + "\n".join("|" + "".join(row) + "|" for row in grid)
+
+
 def keep_screens(name: str, target: str, checkpoint: str, want: Path, got: Path) -> None:
     """Both screens of a mismatch into the gate's logs (CI uploads them): the pixel count alone cannot say what drew wrong."""
     if logs := os.environ.get("CARGO_TARGET_DIR"):
@@ -164,6 +178,7 @@ def differences(name: str, want: dict[str, Path], got: dict[str, Path], target: 
         count = region_difference(want[checkpoint], got[checkpoint], box) if box else qbplay.differing_pixels(want[checkpoint], got[checkpoint])
         if count > CURSOR_PIXELS:
             bad.append(f"{checkpoint}: {count} pixels")
+            print(f"{name} {target} {checkpoint}: {difference_mask(want[checkpoint], got[checkpoint])}")
             keep_screens(name, target, checkpoint, want[checkpoint], got[checkpoint])
     return bad
 

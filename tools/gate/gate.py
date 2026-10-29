@@ -579,7 +579,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport",
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
-        "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider',
+        "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --must-pass tools/dosbatch/test_qbdemos.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider',
         # What the full tier's pytest step runs but for its slow files: #1765 and #1766 were smoke-green and failed tools/test_identical.py
         # and tests/test_readme.py in the train.
         "pytest-quick": cfg_pytest(skip_py + tuple(cfg["smoke"]["slow_pytest"]), "pytest-quick-durations"),
