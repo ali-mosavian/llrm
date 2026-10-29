@@ -2,7 +2,9 @@
 //!
 //! A table that no longer matches the generator, `features.toml` or the pin
 //! fails here; `tools/dagisel/regen.sh` rewrites it. `DAGISEL_SKIP_PIN=1` skips
-//! the test on a machine without the pin's source and build.
+//! the test on a machine without the pin's source and build. The gate does not
+//! set it: its `pintools` job builds the pin tree and exports `LLVM_SRC` and
+//! `LLVM_BUILD` (docs/working/ci.md).
 
 use std::path::Path;
 use std::process::Command;
