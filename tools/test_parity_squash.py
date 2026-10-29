@@ -1909,15 +1909,14 @@ def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(t
 
 
 
-def test_the_rebuild_includes_llrm_c_when_the_directory_holds_one(tmp_path):
-    """`cargo build --release --bins` skips llrm-c (required-features = c-legacy): the llrm-c left in coord-ps-target stayed 02:55 old and refused the 03:12 pass ("binaries still older than the merged tree")."""
-    assert "wccq" not in ps.bins_command(tmp_path)
+def test_the_rebuild_asks_for_no_legacy_feature_even_when_the_directory_holds_a_leftover_llrm_c(tmp_path):
+    """A leftover llrm-c in coord-ps-target made the rebuild pass `--features wccq`, a feature that goes with the Watcom frontend."""
     (tmp_path / "llrm-c").write_text("")
-    assert ps.bins_command(tmp_path)[-2:] == ["--features", "wccq"]
+    assert "--features" not in ps.bins_command(tmp_path)
 
 
-def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
-    """_build_release ran `--bins` without the llrm-c feature, then the stages touched the old llrm-c: QB programs linked with a stale compiler ("isel: value#15 is defined 2 times") and the 04:51 pass was refused at link five times."""
+def test_the_link_and_behavioural_build_asks_for_no_legacy_feature(tmp_path, monkeypatch):
+    """_build_release must build with `--bins` alone: the wccq feature goes with the Watcom frontend."""
     (tmp_path / "release").mkdir()
     (tmp_path / "release" / "llrm-c").write_text("")
     monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
@@ -1926,7 +1925,7 @@ def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
     ran = []
     monkeypatch.setattr(ps.subprocess, "run", lambda command, **kw: ran.append(command))
     ps._build_release()
-    assert ran and "wccq" in ran[0], ran
+    assert ran and "wccq" not in " ".join(ran[0]), ran
 
 
 def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_path):
