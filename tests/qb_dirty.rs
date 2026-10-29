@@ -22,7 +22,7 @@ fn stress(sanitize: Option<&str>) {
 /// With `hard`, the whole run sits under a finite hard data limit of that many bytes, as the gate's runners are.
 fn stress_under(sanitize: Option<&str>, hard: Option<&str>) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let out = std::env::temp_dir().join(format!("dirty_stress_{}_{}", sanitize.unwrap_or("plain"), std::process::id()));
+    let out = std::env::temp_dir().join(format!("dirty_stress_{}_{}_{}", sanitize.unwrap_or("plain"), hard.map_or("soft", |_| "hard"), std::process::id()));
     let mut build = Command::new("cc");
     build.args(["-std=gnu11", "-w", "-g", "-pthread", "-D__cdecl="]);
     if let Some(kind) = sanitize {
