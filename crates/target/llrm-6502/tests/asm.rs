@@ -39,7 +39,7 @@ fn run(
     let binary = dir.join("p.bin");
     let built = Command::new("cl65").args(["-t", "sim6502", "-o"]).arg(&binary).arg(&source).output().expect("cl65");
     assert!(built.status.success(), "cl65: {}", String::from_utf8_lossy(&built.stderr));
-    Command::new("sim65").arg(&binary).status().expect("sim65").code().expect("exit code")
+    Command::new("sim65").args(["-x", "50000000"]).arg(&binary).status().expect("sim65").code().expect("exit code")
 }
 
 fn main_returning(

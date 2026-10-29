@@ -8,7 +8,7 @@ use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue};
 use llrm_dagisel::matcher::{Emit, Matcher::*, Slice, Table, Vt};
 use crate::dagisel::predicates;
 
-pub static ITEMS: [llrm_dagisel::matcher::Matcher; 472] = [
+pub static ITEMS: [llrm_dagisel::matcher::Matcher; 479] = [
     SwitchOpcode,
     OpcodeCase { size: 23, opcode: 317 },
     RecordMemRef,
@@ -346,6 +346,13 @@ pub static ITEMS: [llrm_dagisel::matcher::Matcher; 472] = [
     MoveParent,
     EmitMergeInputChains(Slice { start: 0, len: 1 }),
     MorphNodeTo(Emit { opcode: 360, flags: 39, vts: [Vt(0), Vt(0)], num_vts: 0, operands: Slice { start: 28, len: 1 } }),
+    OpcodeCase { size: 6, opcode: 24583 },
+    RecordChild(0),
+    MoveChild(0),
+    CheckOpcode(39),
+    MoveParent,
+    CheckType(Vt(6)),
+    MorphNodeTo(Emit { opcode: 361, flags: 0, vts: [Vt(6), Vt(0)], num_vts: 1, operands: Slice { start: 0, len: 1 } }),
     OpcodeCase { size: 8, opcode: 59 },
     RecordChild(0),
     RecordChild(1),

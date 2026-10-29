@@ -161,3 +161,48 @@ fn a_word_store_runs() {
     assert_eq!(memory("st16-0", ir, "st16", &setup, "  lda buf\n"), 0x34);
     assert_eq!(memory("st16-1", ir, "st16", &setup, "  lda buf+1\n"), 0x12);
 }
+
+const GLOBAL: &str = "@g = global i8 7\n";
+const G_DATA: &str = ".segment \"DATA\"\ng: .byte 7\n.segment \"CODE\"\n";
+
+fn with_global(
+    name: &str,
+    body: &str,
+    function: &str,
+    after: &str,
+    setup: &str,
+) -> i32 {
+    let text = compile(&format!("{GLOBAL}{body}"), &[function]);
+    common::run_with(name, &format!("{setup}  jsr {function}\n{after}"), &format!("{text}{G_DATA}"))
+}
+
+/// The global starts as 7.
+#[test]
+fn a_global_load_runs() {
+    let ir = "define i8 @rd() {\n  %v = load i8, ptr @g\n  ret i8 %v\n}";
+    assert_eq!(with_global("rd", ir, "rd", "", ""), 7);
+}
+
+/// `wr(0x42)` leaves 0x42 = 66 in the global.
+#[test]
+fn a_global_store_runs() {
+    let ir = "define void @wr(i8 %v) {\n  store i8 %v, ptr @g\n  ret void\n}";
+    assert_eq!(with_global("wr", ir, "wr", "  lda g\n", &set("rc2", 0x42)), 0x42);
+}
+
+/// `addr()` returns the address of `g` in `a:x`; the caller compares both bytes and returns 1.
+#[test]
+fn a_global_address_runs() {
+    let ir = "define ptr @addr() {\n  ret ptr @g\n}";
+    let after = "  cmp #<g\n  bne bad\n  txa\n  cmp #>g\n  bne bad\n  lda #1\n  rts\nbad:\n  lda #0\n";
+    assert_eq!(with_global("addr", ir, "addr", after, ""), 1);
+}
+
+/// `sum(n)` adds 1..n in a loop of two phis (a do-while, so n = 1 runs once): 1+2+3+4 = 10, 1+..+5 = 15.
+#[test]
+fn a_phi_loop_runs() {
+    let ir = "define i8 @sum(i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [0, %entry], [%i2, %loop]\n  %s = phi i8 [0, %entry], [%s2, %loop]\n  %i2 = add i8 %i, 1\n  %s2 = add i8 %s, %i2\n  %c = icmp ult i8 %i2, %n\n  br i1 %c, label %loop, label %done\ndone:\n  ret i8 %s2\n}";
+    for (n, want) in [(1, 1), (4, 10), (5, 15)] {
+        assert_eq!(run(&format!("sum-{n}"), ir, "sum", &set("rc2", n), ""), want, "sum({n})");
+    }
+}

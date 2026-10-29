@@ -86,8 +86,13 @@ pub fn function_text(
             cells.virtual_regs.insert(vreg, cell.clone());
             body.push_str(&expand(&copy(bits, cell, Operand::reg(from)), &mut labels)?);
         }
+        let mut phis_done = false;
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
+                if !phis_done && is_terminator(&one.dag.nodes()[node as usize].opcode) {
+                    phis_done = true;
+                    body.push_str(&phi_copies(one, node, &mut cells, &mut labels)?);
+                }
                 for inst in lower(module, name, one, node, &mut values, &mut cells)? {
                     body.push_str(&expand(&inst, &mut labels)?);
                 }
@@ -105,6 +110,46 @@ pub fn function_text(
     Ok(body)
 }
 
+fn is_terminator(opcode: &ISD) -> bool {
+    matches!(opcode, ISD::Machine(code) if [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL, op::JMP, op::RET].contains(&(*code as u16)))
+}
+
+/// The copies into the phis of the successors, placed before the block's first terminator. A
+/// conditional branch reads the flags, which the copies' loads change: they are saved around.
+///
+/// DEVIATE: see `dagisel::function`.
+fn phi_copies(
+    one: &Selected,
+    terminator: u32,
+    cells: &mut Cells,
+    labels: &mut u32,
+) -> Result<String, String> {
+    if one.phi_copies.is_empty() {
+        return Ok(String::new());
+    }
+    let ISD::Machine(code) = one.dag.nodes()[terminator as usize].opcode else { unreachable!() };
+    let conditional = ![op::JMP, op::RET].contains(&(code as u16));
+    let mut text = if conditional { "  php\n".to_owned() } else { String::new() };
+    for &(input, own) in &one.phi_copies {
+        let Some(from) = cells.virtual_regs.get(&input).cloned() else { return Err(format!("phi input {input} was never written")) };
+        let Operand::Reg(name) = &from else { unreachable!() };
+        let bits = if name.starts_with("w_") { 16 } else { 8 };
+        let to = match cells.virtual_regs.get(&own) {
+            Some(cell) => cell.clone(),
+            None => {
+                let cell = cell_for(cells, bits);
+                cells.virtual_regs.insert(own, cell.clone());
+                cell
+            }
+        };
+        text.push_str(&expand(&copy(bits, to, from), labels)?);
+    }
+    if conditional {
+        text.push_str("  plp\n");
+    }
+    Ok(text)
+}
+
 /// Where `value` is: a constant, a label, a register or a cell.
 fn location(
     module: &Module,
@@ -118,9 +163,10 @@ fn location(
     match node.data {
         NodeData::Const { bits, .. } => Ok(Operand::Imm(bits as i64)),
         NodeData::Block(block) => Ok(Operand::Label(block_label(name, block))),
-        NodeData::Global { symbol, .. } => {
+        NodeData::Global { symbol, offset } => {
             let global = module.global(GlobalId(symbol));
-            Ok(Operand::Label(global.name.as_deref().ok_or("an unnamed callee")?.to_owned()))
+            let text = global.name.as_deref().ok_or("an unnamed global")?;
+            Ok(Operand::Label(if offset == 0 { text.to_owned() } else { format!("{text}{offset:+}") }))
         }
         NodeData::PhysReg(id) => {
             Ok(Operand::Reg(REGISTER_INFO.name(id).ok_or("a register with no name")?.to_owned()))
@@ -173,6 +219,7 @@ fn lower(
     let data_bits = |res: usize| n.values[res].size_in_bits();
     let at = |index: usize| n.ops[index];
     match n.opcode {
+        ISD::TokenFactor | ISD::EntryToken => Ok(Vec::new()),
         ISD::CopyFromReg => {
             let from = location(module, name, one, at(1), values, cells)?;
             let bits = data_bits(0);

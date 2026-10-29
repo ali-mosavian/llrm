@@ -64,6 +64,7 @@ def MOScallseq_start : SDNode<"ISD::CALLSEQ_START", SDT_MOSCallSeqStart, [SDNPHa
 def MOScallseq_end : SDNode<"ISD::CALLSEQ_END", SDT_MOSCallSeqEnd, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def SDT_MOSCall : SDTypeProfile<0, -1, [SDTCisVT<0, i16>]>;
 def MOScall : SDNode<"MOSISD::CALL", SDT_MOSCall, [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
+def MOSwrapper : SDNode<"MOSISD::WRAPPER", SDTIntUnaryOp>;
 def MOSretglue : SDNode<"MOSISD::RET_GLUE", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
 class MOSInst<dag outs, dag ins, string asm, list<dag> pattern> : Instruction {
@@ -189,3 +190,6 @@ def : Pat<(i16 (anyext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (LDI8
 def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;
 def : Pat<(i16 (or (ext8 Imag8:$lo), (shl (ext8 Imag8:$hi), (i8 8)))),
           (REG_SEQUENCE Imag16, Imag8:$lo, sub_lo, Imag8:$hi, sub_hi)>;
+
+// A global's address is a 16-bit immediate the linker fills in.
+def : Pat<(i16 (MOSwrapper tglobaladdr:$a)), (LDI16 tglobaladdr:$a)>;

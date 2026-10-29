@@ -27,6 +27,7 @@ pub mod mosisd {
     use super::{ISD, ids};
 
     pub const CMP: ISD = ISD::Target(ids::CMP);
+    pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
@@ -72,6 +73,7 @@ pub fn target_lowering() -> TargetLowering {
     set(&[UDivRem, SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], Action::Expand);
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
+    tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
     for op in [SetCC, Select] {
         for vt in [MVT::I8, MVT::I16] {
             tl.set_operation_action(op, vt, Action::Custom);
@@ -94,9 +96,20 @@ impl Hooks for MosLowering {
             ISD::SetCC => lower_setcc(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
+            ISD::GlobalAddress => lower_global_address(dag, node),
             _ => None,
         }
     }
+}
+
+/// `LowerGlobalAddress`: `WRAPPER` of the address, an immediate the linker fills in.
+fn lower_global_address(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Global { symbol, offset } = dag.node(node).data else { return None };
+    let address = dag.get_target_global_address(EVT::I16, symbol, offset);
+    Some(dag.get_node(mosisd::WRAPPER, EVT::I16, &[address]))
 }
 
 /// A shift by a constant of 1..width stays as it is, for the shift instructions; any other shift is

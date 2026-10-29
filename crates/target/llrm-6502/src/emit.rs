@@ -212,6 +212,10 @@ pub fn expand(
                 writeln!(out, "  lda #{}", (v >> 8) & 0xFF).unwrap();
                 writeln!(out, "  sta {hi}").unwrap();
             }
+            Operand::Label(symbol) => {
+                let (lo, hi) = word(&o[0])?;
+                writeln!(out, "  lda #<{symbol}\n  sta {lo}\n  lda #>{symbol}\n  sta {hi}").unwrap();
+            }
             _ => return Err("LDI16 takes a pair and an immediate".into()),
         },
         // `(zp),y` through the pair's low byte, y the byte offset; a word is two bytes, INY between.

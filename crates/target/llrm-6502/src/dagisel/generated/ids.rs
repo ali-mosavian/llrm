@@ -12,6 +12,7 @@ pub mod isd {
     pub const CMPZ: u16 = 24582;
     pub const RET_GLUE: u16 = 24576;
     pub const SETCC: u16 = 24580;
+    pub const WRAPPER: u16 = 24583;
 }
 
 pub mod opcode {

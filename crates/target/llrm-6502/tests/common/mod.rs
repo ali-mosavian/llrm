@@ -61,5 +61,5 @@ pub fn run_with(
         .output()
         .expect("cl65");
     assert!(built.status.success(), "cl65: {}", String::from_utf8_lossy(&built.stderr));
-    Command::new("sim65").arg(dir.join("p.bin")).status().expect("sim65").code().expect("exit code")
+    Command::new("sim65").args(["-x", "50000000"]).arg(dir.join("p.bin")).status().expect("sim65").code().expect("exit code")
 }

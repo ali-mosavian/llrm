@@ -1,6 +1,10 @@
 //! A function from IR to scheduled machine nodes: the shared builder, then
 //! [`super::pipeline`]'s stages, block by block.
 //!
+//! DEVIATE: a phi is a copy at the end of each predecessor, not a parallel copy per edge: wrong
+//! when the phi's old value is still read on the edge that does not take it. Reason: the spike has
+//! no critical-edge splitting. Exit: the shared machine function.
+//!
 //! DEVIATE: no static allocas, jump tables, switches or live-in registers: the
 //! builder makes the frame objects and the C convention passes what the registers do not hold on
 //! the stack, so the slice (arithmetic, branches, calls) needs none. Reason:
@@ -40,6 +44,8 @@ pub struct Selected {
     pub units: Vec<Unit>,
     /// The registers the block reads on arrival, with the virtual register each is copied to.
     pub live_ins: Vec<(RegId, u32)>,
+    /// The phi inputs this block exports: the register its value was copied to, and the phi's own.
+    pub phi_copies: Vec<(u32, u32)>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -68,7 +74,14 @@ pub fn select_function(
             return Err("a switch lowering made blocks".to_owned());
         }
         let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
-        selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins });
+        let mut phi_copies = Vec::new();
+        for (at, (phi, input)) in built.phi_updates.iter().enumerate() {
+            let own = *info.value_regs.get(phi).ok_or("a phi with no register")?;
+            // A value of several registers has one entry per part, in order.
+            let part = built.phi_updates[..at].iter().filter(|(one, _)| one == phi).count();
+            phi_copies.push((*input, if part == 0 { own } else { info.part_regs(own, part + 1)[part] }));
+        }
+        selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, phi_copies });
     }
     Ok(selected)
 }
