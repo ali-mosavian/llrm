@@ -21,6 +21,7 @@ fn main() {
             .chain(functions.iter().map(|one| match one {
                 Item::Label(name) => Item::Label(name.clone()),
                 Item::Inst(inst) => Item::Inst(inst.clone()),
+                Item::Bytes(bytes) => Item::Bytes(bytes.clone()),
             }))
             .collect::<Vec<_>>()
     };

@@ -9,6 +9,7 @@ pub mod dagisel;
 pub mod encode;
 pub mod expand;
 pub mod frame;
+pub mod kernels;
 pub mod mac;
 pub mod mc;
 pub mod mfunc;

@@ -89,6 +89,7 @@ pub fn finish(
     function: &MFunction,
     assignment: &Assignment,
     number: usize,
+    slots: &[i32],
 ) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
@@ -135,12 +136,16 @@ pub fn finish(
         })
         .collect();
     let fixed: Vec<i32> = function.fixed.keys().rev().copied().collect();
-    let objects: Vec<Object> = fixed
+    let mut objects: Vec<Object> = fixed
         .iter()
         .map(|index| Object { size: 4, align: 4, offset: function.fixed[index], callee_saved: false, dead: false })
         .collect();
+    // the spill slots are locals, after the fixed objects (`getStackSlotRange`:
+    // one long each)
+    objects.extend(slots.iter().map(|_| Object { size: 4, align: 4, offset: 0, callee_saved: false, dead: false }));
+    let frame_indices: Vec<i32> = fixed.iter().chain(slots).copied().collect();
     let layout = frame::layout(&Function {
-        fixed: objects.len(),
+        fixed: fixed.len(),
         objects,
         saved: used,
         max_call_frame,
@@ -170,7 +175,8 @@ pub fn finish(
                     Operand::Imm(value) => {
                         // a frame index follows the displacement it adds to
                         if let Some(Operand::Frame(index)) = it.peek() {
-                            let at = fixed.iter().position(|one| one == index).ok_or("an unknown frame index")?;
+                            let at =
+                                frame_indices.iter().position(|one| one == index).ok_or("an unknown frame index")?;
                             let (base, disp) = layout.address(at);
                             it.next();
                             converted.push(mc::Operand::Imm(value + disp));
@@ -207,6 +213,26 @@ pub fn finish(
                 layout.epilogue().iter().for_each(|op| frame_op(op, &mut out));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
             }
+            Kind::Op("MOVM32pm_P") => {
+                let [mc::Operand::Imm(disp), ref base, mc::Operand::Reg(src)] = operands[..] else {
+                    return Err("MOVM32pm_P operands".to_owned());
+                };
+                let mask = mask_bit(REGISTER_INFO.root(src)).ok_or("a spill of a register no MOVEM names")?;
+                out.push(mc::Inst {
+                    opcode: "MOVM32pm",
+                    operands: vec![mc::Operand::Imm(disp), base.clone(), mc::Operand::Imm(1 << mask)],
+                });
+            }
+            Kind::Op("MOVM32mp_P") => {
+                let [mc::Operand::Reg(dst), mc::Operand::Imm(disp), ref base] = operands[..] else {
+                    return Err("MOVM32mp_P operands".to_owned());
+                };
+                let mask = mask_bit(REGISTER_INFO.root(dst)).ok_or("a reload into a register no MOVEM names")?;
+                out.push(mc::Inst {
+                    opcode: "MOVM32mp",
+                    operands: vec![mc::Operand::Imm(1 << mask), mc::Operand::Imm(disp), base.clone()],
+                });
+            }
             Kind::Op("MOVI32ri") => {
                 let [mc::Operand::Reg(dst), mc::Operand::Imm(value)] = operands[..] else {
                     return Err("MOVI32ri operands".to_owned());
@@ -223,17 +249,104 @@ pub fn finish(
                     });
                 }
             }
-            Kind::Op("MOVZXd32p8") => {
-                let mc::Operand::Reg(dst) = operands[0] else { return Err("MOVZXd32p8 operands".to_owned()) };
-                let byte = REGISTER_INFO.view(REGISTER_INFO.root(dst), 8).ok_or("no byte view")?;
-                out.push(mc::Inst { opcode: "MOVQ", operands: vec![mc::Operand::Reg(dst), mc::Operand::Imm(0)] });
-                let mut load = operands.clone();
-                load[0] = mc::Operand::Reg(byte);
-                out.push(mc::Inst { opcode: "MOV8dp", operands: load });
+            Kind::Op(name) if extension(name).is_some() => {
+                out.extend(expand_extension(name, &operands)?);
             }
             Kind::Op(name) => out.push(mc::Inst { opcode: name, operands }),
         }
     }
     lines.extend(out.into_iter().map(Line::Inst));
     Ok(lines)
+}
+
+/// `MOVZXd32p8`, `MOVSXd16d8`..: a zero or sign extending move as
+/// `(signed, destination bits, addressing mode, source bits)`.
+fn extension(name: &str) -> Option<(bool, u32, char, u32)> {
+    let rest = name
+        .strip_prefix("MOVZX")
+        .map(|rest| (false, rest))
+        .or_else(|| name.strip_prefix("MOVSX").map(|rest| (true, rest)))?;
+    let (signed, rest) = rest;
+    let rest = rest.strip_prefix('d')?;
+    let split = rest.find(|c: char| c.is_ascii_alphabetic())?;
+    let destination: u32 = rest[..split].parse().ok()?;
+    let mode = rest[split..].chars().next()?;
+    let source: u32 = rest[split + 1..].parse().ok()?;
+    Some((signed, destination, mode, source))
+}
+
+fn inst(
+    opcode: &'static str,
+    operands: Vec<mc::Operand>,
+) -> mc::Inst {
+    mc::Inst { opcode, operands }
+}
+
+/// `ExpandMOVSZX_RR` and `ExpandMOVSZX_RM`: clear the destination and move
+/// into its low part, or move and then extend (`AddSExt`, `AddZExt`).
+///
+/// DEVIATE: the `q` and `k` modes and 16-bit destinations are not translated.
+/// Reason: nothing selected them yet. Exit: when a kernel needs them.
+fn expand_extension(
+    name: &str,
+    operands: &[mc::Operand],
+) -> Result<Vec<mc::Inst>, String> {
+    use mc::Operand::{Imm, Reg as R};
+    let (signed, to, mode, from) = extension(name).ok_or("not an extension")?;
+    let R(dst) = operands[0] else { return Err(format!("{name}: operands")) };
+    let root = REGISTER_INFO.root(dst);
+    let view = |bits| REGISTER_INFO.view(root, bits).ok_or_else(|| format!("{name}: no {bits}-bit view"));
+    let mut out = Vec::new();
+    let extend = |out: &mut Vec<mc::Inst>| -> Result<(), String> {
+        if signed {
+            if from == 8 {
+                let word = view(16)?;
+                out.push(inst("EXT16", vec![R(word), R(word)]));
+            }
+            if to == 32 {
+                out.push(inst("EXT32", vec![R(view(32)?), R(view(32)?)]));
+            }
+        } else {
+            let mask = if from == 8 { 0xFF } else { 0xFFFF };
+            let opcode = if to == 16 { "AND16di" } else { "AND32di" };
+            out.push(inst(opcode, vec![R(dst), R(dst), Imm(mask)]));
+        }
+        Ok(())
+    };
+    if mode == 'd' {
+        let R(source) = operands[1] else { return Err(format!("{name}: operands")) };
+        if REGISTER_INFO.root(source) == root {
+            extend(&mut out)?;
+        } else if signed {
+            out.push(inst(
+                if to == 16 { "MOV16dd" } else { "MOV32dd" },
+                vec![R(dst), R(REGISTER_INFO.view(REGISTER_INFO.root(source), to).ok_or("no view")?)],
+            ));
+            extend(&mut out)?;
+        } else {
+            out.push(inst("MOVQ", vec![R(dst), Imm(0)]));
+            out.push(inst(if from == 8 { "MOV8dd" } else { "MOV16dd" }, vec![R(view(from)?), R(source)]));
+        }
+        return Ok(out);
+    }
+    let load: &'static str = match (from, mode) {
+        (8, 'j') => "MOV8dj",
+        (8, 'p') => "MOV8dp",
+        (8, 'f') => "MOV8df",
+        (16, 'j') => "MOV16rj",
+        (16, 'p') => "MOV16rp",
+        (16, 'f') => "MOV16rf",
+        _ => return Err(format!("{name}: addressing mode {mode} is not translated")),
+    };
+    let reads_dst = operands[1..].iter().any(|one| matches!(one, R(reg) if REGISTER_INFO.root(*reg) == root));
+    let mut moved = operands.to_vec();
+    moved[0] = R(view(from)?);
+    if !signed && !reads_dst {
+        out.push(inst("MOVQ", vec![R(dst), Imm(0)]));
+        out.push(inst(load, moved));
+    } else {
+        out.push(inst(load, moved));
+        extend(&mut out)?;
+    }
+    Ok(out)
 }
