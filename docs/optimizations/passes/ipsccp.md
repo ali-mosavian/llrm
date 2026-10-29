@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ipsccp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ipsccp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:635982baa28934dce19db220c5e055f9637b995d7a79fa9dc875e5b36195e576 -->
+<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:b66c76fddb124502719150effd9144b57f2caa7cb1736c4b7f305a4c39af9d32 -->
 
 # ipsccp
 
@@ -90,10 +90,6 @@ Once per compile at -O1 and up, first in [`crate::walk::ModuleIpo`](walk.md)
 (`run_ipsccp_with`): after the early function pipeline, before the
 CGSCC walk, where the pin's `buildModuleSimplificationPipeline` runs
 `IPSCCPPass`.
-
-Under `LLRM_NO_LLVM_ORDER` (the legacy rounds) it does not run:
-`ModuleIpo` is `llvm_order` only, and the stand-in the rounds fell back on
-(`ipa-args`, `ipa-range`) is deleted.
 
 ## See also
 - Uses: [`crate::sccpsolver`](sccpsolver.md), [`crate::sccp`](sccp.md)'s rewrites,
