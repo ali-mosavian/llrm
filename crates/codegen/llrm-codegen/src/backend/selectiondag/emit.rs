@@ -3701,10 +3701,11 @@ impl Emitter<'_, '_> {
         }
         let disp = self.displacement(group[3])?;
         // A near pointer into the stack segment: `ss:[base+index*scale+disp]`.
-        let through_ss = self.dag.node(group[4]).data == NodeData::PhysReg(llrm_lir::registers::RegId::SS);
+        let stack_segment = self.ctx.registers.stack_segment_register();
+        let through_ss = self.dag.node(group[4]).data == NodeData::PhysReg(stack_segment);
         if through_ss && (base.is_some() || index.is_some()) {
             let address = Addr {
-                segment: llrm_lir::registers::RegId::SS.iced(),
+                segment: stack_segment.iced(),
                 ..Addr::new(crate::model::ir::Space::Literal, disp)
             };
             return Ok(Mem { base, index, scale, offset: disp, disp_width: 2, ..Mem::new(Some(address), cell_width) });
