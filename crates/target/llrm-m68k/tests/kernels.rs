@@ -105,3 +105,34 @@ fn more_live_values_than_data_registers_are_spilled() {
     std::fs::remove_file(&exe).ok();
     assert_eq!(status.code(), Some(1150 % 256));
 }
+
+/// `ir`'s function `k`, run with `args`: its exit status. `None` without qemu.
+fn run_ir(
+    ir: &str,
+    args: &[Arg],
+) -> Option<i32> {
+    if !std::path::Path::new("/usr/bin/qemu-m68k").exists() {
+        return None;
+    }
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
+    let code = items(&module, "k", Cpu::M68000).expect("compiles");
+    let exe = std::env::temp_dir().join(format!("llrm-m68k-ir-{}-{}", std::process::id(), ir.len()));
+    write_executable(&exe, &executable(&program(args, code)).unwrap()).unwrap();
+    let status = Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
+    std::fs::remove_file(&exe).ok();
+    status.code()
+}
+
+/// A `switch` made blocks of its own that the function builder refused ("a switch lowering made
+/// blocks"): every generated program has one. Each case, the shared one and the default.
+#[test]
+fn a_switch_takes_the_case_it_names() {
+    let ir = "define i32 @k(i32 %x) {\nentry:\n  switch i32 %x, label %d [ i32 0, label %a\n i32 1, label %b\n i32 2, label %c\n i32 5, label %a ]\n\
+        a:\n  br label %m\nb:\n  br label %m\nc:\n  br label %m\nd:\n  br label %m\n\
+        m:\n  %r = phi i32 [10, %a], [20, %b], [30, %c], [40, %d]\n  ret i32 %r\n}";
+    for (x, want) in [(0, 10), (1, 20), (2, 30), (5, 10), (3, 40), (9, 40), (-1, 40)] {
+        if let Some(got) = run_ir(ir, &[Arg::Imm(x)]) {
+            assert_eq!(got, want, "switch on {x}");
+        }
+    }
+}

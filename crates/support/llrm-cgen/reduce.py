@@ -72,14 +72,14 @@ def spans(text):
 
 # then each parenthesized expression of the test body becomes 0 or 1, or its own first operand
 text = "".join(lines)
-body_from = text.index("unsigned test(")
+body_from = re.search(r"unsigned( short)? test\(", text).start()
 changed = True
 while changed:
     changed = False
     for a, b in spans(text[body_from:]):
         a, b = a + body_from, b + body_from
         inner = text[a:b]
-        if inner in ("(0)", "(1)") or inner.startswith("(for") or re.match(r"\((unsigned|int|signed)[ a-z]*\)$", inner):
+        if inner in ("(0)", "(1)") or inner.startswith("(for") or re.match(r"\((unsigned|int|signed|short)[ a-z]*\)$", inner):
             continue
         for repl in ("(0)", "(1)"):
             trial = text[:a] + repl + text[b:]
