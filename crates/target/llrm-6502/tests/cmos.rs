@@ -11,13 +11,14 @@ use llrm_6502::select::function_text;
 const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
     @g = global i8 7\n\
     define i8 @clr(i8 %x) {\nentry:\n  store i8 0, ptr @g\n  br label %next\nnext:\n  %v = load i8, ptr @g\n  %r = add i8 %v, %x\n  ret i8 %r\n}\n\
+    define void @clrp(ptr %p) {\n  store i8 0, ptr %p\n  ret void\n}\n\
     define i8 @zero() {\n  ret i8 0\n}\n\
     define i8 @pick(i8 %x) {\nentry:\n  %c = icmp eq i8 %x, 0\n  br i1 %c, label %a, label %b\na:\n  br label %join\nb:\n  br label %join\njoin:\n  %r = phi i8 [ 10, %a ], [ 20, %b ]\n  ret i8 %r\n}";
 const G_DATA: &str = ".segment \"DATA\"\ng: .byte 7\n.segment \"CODE\"\n";
 
 fn text(cpu: Cpu) -> String {
     let module = llrm_mir::parse::module(IR).expect("parses");
-    ["clr", "zero", "pick"]
+    ["clr", "clrp", "zero", "pick"]
         .iter()
         .map(|name| {
             function_text(&module, name, &select_function(&module, name, cpu).expect("selects")).expect("emits")
@@ -58,7 +59,7 @@ fn only_the_65c02_selection_uses_stz_and_bra() {
         assert!(!nmos.contains(word), "NMOS text has {word}:\n{nmos}");
         assert!(cmos.contains(word), "65C02 text lacks {word}:\n{cmos}");
     }
-    assert!(cmos.contains("sta (rc"), "no unindexed (zp) store:\n{cmos}");
+    assert!(cmos.contains("sta (rc"), "no unindexed (zp) store through a pointer:\n{cmos}");
     let (_, nmos_size) = run("sim6502", Cpu::Mos6502, "clr");
     let (_, cmos_size) = run("sim65c02", Cpu::W65c02, "clr");
     assert!(cmos_size < nmos_size, "65C02 {cmos_size} bytes, NMOS {nmos_size}");

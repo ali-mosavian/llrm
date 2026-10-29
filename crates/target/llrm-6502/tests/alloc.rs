@@ -108,3 +108,17 @@ fn a_loop_with_selects_and_phis_runs_without_edge_jumps() {
         assert_eq!(common::run_with(&format!("alloc-gcd-{a}"), &format!("{setup}  jsr gcd\n"), &text), want);
     }
 }
+
+/// Bytes of a global at constant offsets are `lda buf+1`, not a pointer in the
+/// zero page and `(rc),y` (the cell path: 40 bytes, now 28). With buf = 1 2 3
+/// 4, buf[1] + buf[3] = 6.
+#[test]
+fn a_global_at_a_constant_offset_is_an_absolute_load() {
+    let ir = "@buf = global [4 x i8] [i8 1, i8 2, i8 3, i8 4]\n\
+        define i8 @pair() {\n  %p = getelementptr i8, ptr @buf, i16 1\n  %a = load i8, ptr %p\n  %q = getelementptr i8, ptr @buf, i16 3\n  %b = load i8, ptr %q\n  %r = add i8 %a, %b\n  ret i8 %r\n}";
+    let text = compile(ir, "pair", true);
+    assert!(text.contains("lda buf+1") && text.contains("buf+3"), "{text}");
+    assert!(!text.contains("),y"), "{text}");
+    let data = ".segment \"DATA\"\nbuf: .byte 1, 2, 3, 4\n.segment \"CODE\"\n";
+    assert_eq!(common::run_with("alloc-pair", "  jsr pair\n", &format!("{text}{data}")), 6);
+}

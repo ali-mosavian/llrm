@@ -143,6 +143,13 @@ let mayLoad = 1, AddedComplexity = 10 in
   def LDAX : MOSInst<(outs Imag8:$d), (ins absx:$a), "ldax $d, $a", [(set i8:$d, (load MOSAbsX:$a))]>;
 let mayStore = 1, AddedComplexity = 10 in
   def STAX : MOSInst<(outs), (ins Imag8:$s, absx:$a), "stax $s, $a", [(store i8:$s, MOSAbsX:$a)]>;
+// A global plus a constant offset: LDA g+k.
+def absaddr : Operand<i16> { let MIOperandInfo = (ops i16imm, i16imm); }
+def MOSAbs : ComplexPattern<i16, 2, "SelectAbs", [], []>;
+let mayLoad = 1, AddedComplexity = 20 in
+  def LDABS : MOSInst<(outs Imag8:$d), (ins absaddr:$a), "ldabs $d, $a", [(set i8:$d, (load MOSAbs:$a))]>;
+let mayStore = 1, AddedComplexity = 20 in
+  def STABS : MOSInst<(outs), (ins Imag8:$s, absaddr:$a), "stabs $s, $a", [(store i8:$s, MOSAbs:$a)]>;
 let mayStore = 1 in {
   def STP8 : MOSInst<(outs), (ins Imag8:$s, memri:$p), "stp $s, ($p)", [(store i8:$s, MOSAddr:$p)]>;
   def STP16 : MOSInst<(outs), (ins Imag16:$s, memri:$p), "stp16 $s, ($p)", [(store i16:$s, MOSAddr:$p)]>;
@@ -153,6 +160,8 @@ let Predicates = [HasCMOS] in {
     def STZ8 : MOSInst<(outs Imag8:$d), (ins), "stz $d", [(set i8:$d, (i8 0))]>;
   let mayStore = 1 in
     def STZP : MOSInst<(outs), (ins memri:$p), "stzp ($p)", [(store (i8 0), MOSAddr:$p)]>;
+  let mayStore = 1, AddedComplexity = 30 in
+    def STZABS : MOSInst<(outs), (ins absaddr:$a), "stzabs $a", [(store (i8 0), MOSAbs:$a)]>;
 }
 
 def brtarget : Operand<OtherVT>;

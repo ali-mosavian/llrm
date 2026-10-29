@@ -95,6 +95,30 @@ fn select_absx<D: Dag>(
     false
 }
 
+/// `SelectAbs`: `(wrapper global)` or `(add (wrapper global), c)` as the symbol
+/// and the offset.
+fn select_abs<D: Dag>(
+    dag: &mut D,
+    value: SDValue,
+    results: &mut Vec<(SDValue, Option<u32>)>,
+) -> bool {
+    let (wrapper, offset) = match (dag.opcode(value.node) == isd::ADD).then(|| dag.constant(dag.operand(value.node, 1)))
+    {
+        Some(Some(c)) if (0..65536).contains(&c) => (dag.operand(value.node, 0), c),
+        _ => (value, 0),
+    };
+    if dag.opcode(wrapper.node) != own::WRAPPER {
+        return false;
+    }
+    let symbol = dag.operand(wrapper.node, 0);
+    if dag.opcode(symbol.node) != isd::TargetGlobalAddress {
+        return false;
+    }
+    results.push((symbol, None));
+    results.push((dag.target_constant(offset, mvt::i16), None));
+    true
+}
+
 impl<D: AddrDag> Hooks<D> for MosHooks {
     fn pointer_type(&self) -> Vt {
         mvt::i16
@@ -136,8 +160,10 @@ impl<D: AddrDag> Hooks<D> for MosHooks {
                 select_indirect(dag, value, results);
                 true
             }
-            1 => select_absx(dag, value, results),
-            _ => unreachable!("the table has two complex patterns"),
+            // numbered by name, as `COMPLEX_PATTERNS` lists them
+            1 => select_abs(dag, value, results),
+            2 => select_absx(dag, value, results),
+            _ => unreachable!("the table has three complex patterns"),
         }
     }
 

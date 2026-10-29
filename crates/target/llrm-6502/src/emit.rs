@@ -102,6 +102,18 @@ fn branch_on(code: u128) -> Result<&'static str, String> {
     })
 }
 
+/// `symbol+offset` for an absolute access.
+pub fn address(
+    symbol: &Operand,
+    offset: &Operand,
+) -> Result<String, String> {
+    match (symbol, offset) {
+        (Operand::Label(symbol), Operand::Imm(0)) => Ok(symbol.clone()),
+        (Operand::Label(symbol), Operand::Imm(offset)) => Ok(format!("{symbol}+{offset}")),
+        other => Err(format!("{other:?} is not an absolute address")),
+    }
+}
+
 fn word(operand: &Operand) -> Result<(String, String), String> {
     halves(reg(operand)?).ok_or_else(|| format!("{operand:?} is not a pair register"))
 }
@@ -276,6 +288,23 @@ pub fn expand(
                 writeln!(out, "  ldx {index}\n  lda {value}\n  sta {symbol},x").unwrap();
             }
         }
+        op::LDABS => writeln!(
+            out,
+            "  lda {}
+  sta {}",
+            address(&o[1], &o[2])?,
+            reg(&o[0])?
+        )
+        .unwrap(),
+        op::STABS => writeln!(
+            out,
+            "  lda {}
+  sta {}",
+            reg(&o[0])?,
+            address(&o[1], &o[2])?
+        )
+        .unwrap(),
+        op::STZABS => writeln!(out, "  stz {}", address(&o[0], &o[1])?).unwrap(),
         op::STZP => {
             let ((lo, hi), off) = (word(&o[0])?, imm(&o[1])?);
             let lo = zero_page_pointer(&mut out, &lo, &hi);

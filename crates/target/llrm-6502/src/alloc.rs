@@ -20,7 +20,7 @@ use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Reg, Target};
 
 use crate::dagisel::generated::ids::opcode as op;
-use crate::emit::{MInst, Operand as Machine, spill};
+use crate::emit::{MInst, Operand as Machine, address, spill};
 use crate::reg;
 use crate::select::Item;
 
@@ -388,6 +388,9 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
         {
             values.insert(d.clone(), *value);
         }
+        if *opcode == op::STZ8 {
+            values.insert(d.clone(), 0);
+        }
     }
     values.retain(|cell, _| defs[cell.as_str()] == 1 && cell.starts_with("v_"));
     values
@@ -503,6 +506,30 @@ pub fn build(
                 }
                 b.copy(d, acc);
             }
+            op::STZ8 => {
+                b.define(name(&o[0])?);
+                let d = b.byte(name(&o[0])?)?;
+                b.require(d, Class::MEM)?;
+                b.push(Inst::new(Kind::Op("STZ"), vec![Operand::Def(d)]));
+            }
+            op::STZABS => {
+                let symbol = address(&o[0], &o[1]).map_err(Unsupported)?;
+                b.push(Inst::new(Kind::Op("STZM"), vec![Operand::Symbol(symbol, 0)]));
+            }
+            op::LDABS | op::STABS => {
+                let symbol = address(&o[1], &o[2]).map_err(Unsupported)?;
+                let acc = Reg::Phys(reg::A);
+                if inst.opcode == op::LDABS {
+                    b.define(name(&o[0])?);
+                    let d = b.byte(name(&o[0])?)?;
+                    b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
+                    b.copy(d, acc);
+                } else {
+                    let value = b.byte(name(&o[0])?)?;
+                    b.copy(acc, value);
+                    b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
+                }
+            }
             op::LDAX | op::STAX => {
                 let Machine::Label(symbol) = &o[1] else { return Err(Unsupported("an indexed access".into())) };
                 let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
@@ -563,7 +590,7 @@ pub fn build(
             }
             op::JMP | op::BRA => {
                 let target = b.block(&o[0])?;
-                let mut jump = Inst::new(Kind::Op("JMP"), vec![target]);
+                let mut jump = Inst::new(Kind::Op(if inst.opcode == op::BRA { "BRA" } else { "JMP" }), vec![target]);
                 jump.terminator = true;
                 jump.barrier = true;
                 b.push(jump);
@@ -639,7 +666,7 @@ fn fold_branches(function: &mut MFunction<Class>) {
             .blocks
             .iter()
             .filter_map(|block| match &block.insts[..] {
-                [Inst { kind: Kind::Op("JMP"), operands, .. }] => match operands[..] {
+                [Inst { kind: Kind::Op("JMP" | "BRA"), operands, .. }] => match operands[..] {
                     [Operand::Block(to)] if to != block.id => Some((block.id, to)),
                     _ => None,
                 },
@@ -693,7 +720,7 @@ fn fold_branches(function: &mut MFunction<Class>) {
         else {
             continue;
         };
-        if insts[n - 1].kind == Kind::Op("JMP") && Some(*skipped) == next_id {
+        if matches!(insts[n - 1].kind, Kind::Op("JMP" | "BRA")) && Some(*skipped) == next_id {
             let to = *to;
             insts[n - 2].kind = flipped;
             insts[n - 2].operands[0] = Operand::Block(to);
@@ -727,14 +754,18 @@ fn remove_dead(function: &mut MFunction<Class>) {
         let mut changed = false;
         for block in &mut function.blocks {
             let before = block.insts.len();
-            block.insts.retain(|inst| {
-                let pure = inst.kind == Kind::Copy || inst.kind == Kind::Op("LDI") || inst.kind == Kind::Op("LDS");
-                !(pure
-                    && matches!(
-                        inst.operands.first(),
-                        Some(Operand::Def(Reg::Virt(v))) if !read.contains(v)
-                    ))
-            });
+            block
+                .insts
+                .retain(
+                    |inst| {
+                        let pure = matches!(inst.kind, Kind::Copy | Kind::Op("LDI" | "LDS" | "STZ"));
+                        !(pure
+                            && matches!(
+                                inst.operands.first(),
+                                Some(Operand::Def(Reg::Virt(v))) if !read.contains(v)
+                            ))
+                    },
+                );
             changed |= block.insts.len() != before;
         }
         if !changed {
@@ -907,6 +938,10 @@ pub fn emit(
                         through_a(&mut out, a_live, &format!("  lda #{part}{symbol}\n  sta {}\n", register_name(d)));
                     }
                 }
+                (Kind::Op("STZ"), _) => writeln!(out, "  stz {}", register_name(regs[0])).unwrap(),
+                (Kind::Op("STZM"), [Operand::Symbol(symbol, _)]) => writeln!(out, "  stz {symbol}").unwrap(),
+                (Kind::Op("LDM"), [_, Operand::Symbol(symbol, _)]) => writeln!(out, "  lda {symbol}").unwrap(),
+                (Kind::Op("STM"), [_, Operand::Symbol(symbol, _)]) => writeln!(out, "  sta {symbol}").unwrap(),
                 (Kind::Op("ASL"), _) => out.push_str("  asl a\n"),
                 (Kind::Op("LSR"), _) => out.push_str("  lsr a\n"),
                 (Kind::Op("ASR"), _) => out.push_str("  cmp #$80\n  ror a\n"),
@@ -933,9 +968,9 @@ pub fn emit(
                     writeln!(out, "  {} {}", branch.to_lowercase(), target(to)).unwrap();
                 }
                 // a jump to the block that follows is the layout
-                (Kind::Op("JMP"), [to @ Operand::Block(id)]) => {
+                (Kind::Op(jump @ ("JMP" | "BRA")), [to @ Operand::Block(id)]) => {
                     if function.blocks.get(b + 1).map(|next| next.id) != Some(*id) {
-                        writeln!(out, "  jmp {}", target(to)).unwrap();
+                        writeln!(out, "  {} {}", jump.to_lowercase(), target(to)).unwrap();
                     }
                 }
                 // a := cc ? if_true : if_false, the branch first: loads set N
@@ -997,7 +1032,7 @@ pub fn emit(
             }
         }
     }
-    Ok((relax(&out), slots.iter().map(|(slot, _)| slot_name(*slot)).collect()))
+    Ok((crate::emit::relax_bra(&relax(&out)), slots.iter().map(|(slot, _)| slot_name(*slot)).collect()))
 }
 
 /// A conditional branch reaches 127 bytes. An instruction is at most 3 bytes,
