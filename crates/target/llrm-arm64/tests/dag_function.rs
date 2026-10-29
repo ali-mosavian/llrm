@@ -60,6 +60,22 @@ fn a_custom_operation_is_refused_not_expanded() {
     assert!(why.contains("custom lowering"), "{why}");
 }
 
+/// The complex patterns were all-false: an immediate or shifted operand never
+/// folded, so `a + 5` was refused for lack of a constant. Names are the pin's
+/// `-stop-after=finalize-isel` for the same IR.
+#[test]
+fn arithmetic_folds_immediates_and_shifted_registers() {
+    let one = |ret: &str, params: &str, body: &str| {
+        let ir = format!("define {ret} @f({params}) {{\n{body}\n  ret {ret} %r\n}}");
+        selected(&ir).unwrap()
+    };
+    assert_eq!(one("i32", "i32 %a", "  %r = add i32 %a, 5"), [["ADDWri", "RET_ReallyLR"]]);
+    assert_eq!(one("i32", "i32 %a", "  %r = add i32 %a, -5"), [["SUBSWri", "RET_ReallyLR"]]);
+    assert_eq!(one("i64", "i64 %a", "  %r = add i64 %a, 4096"), [["ADDXri", "RET_ReallyLR"]]);
+    let shifted = "  %s = shl i32 %b, 2\n  %r = add i32 %a, %s";
+    assert_eq!(one("i32", "i32 %a, i32 %b", shifted), [["ADDWrs", "RET_ReallyLR"]]);
+}
+
 mod emitted {
     use llrm_arm64::dag::emit::emit;
     use llrm_arm64::dag::function::select_function;

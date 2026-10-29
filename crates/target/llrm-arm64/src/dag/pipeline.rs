@@ -2,22 +2,18 @@
 //! AArch64 table, schedule.
 //!
 //! DEVIATE: no target combines (`PerformDAGCombine` of AArch64 is not
-//! translated), no `PreprocessISelDAG`, and every hook of the matcher says no,
-//! so a pattern that needs a complex pattern or a node predicate is not
-//! selected. A Custom operation is refused (the legalizer would otherwise
-//! expand it). Reason: the first function needs none. Exit: B3.
+//! translated) and no `PreprocessISelDAG`. A Custom operation is refused (the
+//! legalizer would otherwise expand it). Reason: the first functions need none.
+//! Exit: B3.
 
 use llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks;
 use llrm_codegen::backend::selectiondag::dag_select::{legalized_with, do_instruction_selection_with, Refusal};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks as LegalizeHooks;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
-use llrm_dagisel::dag::{Dag, Hooks, SDValue as PinValue};
 use llrm_dagisel::generated::aarch64::aarch64_apple_m1 as table;
 use llrm_dagisel::generated::aarch64::instrinfo::{self, flag};
-use llrm_dagisel::generated::ids::mvt;
 use llrm_dagisel::interp::Selector;
-use llrm_dagisel::matcher::Vt;
 use llrm_lir::registers::RegId;
 use llrm_sdag::actions::{Aarch64Features, TargetLowering};
 
@@ -40,90 +36,6 @@ impl LegalizeHooks for Aarch64Lowering {
     ) -> Option<SDValue> {
         self.custom.get_or_insert_with(|| format!("custom lowering of {:?}", dag.node(node).opcode));
         None
-    }
-}
-
-/// The matcher's hooks with nothing decided at selection time.
-pub struct Aarch64Hooks;
-
-impl<D: Dag> Hooks<D> for Aarch64Hooks {
-    fn pointer_type(&self) -> Vt {
-        mvt::i64
-    }
-    fn check_pattern_predicate(
-        &self,
-        _: u16,
-    ) -> bool {
-        false
-    }
-    fn check_node_predicate(
-        &self,
-        _: &D,
-        _: PinValue,
-        _: u16,
-    ) -> bool {
-        false
-    }
-    fn check_complex_pattern(
-        &mut self,
-        _: &mut D,
-        _: u32,
-        _: Option<u32>,
-        _: PinValue,
-        _: u8,
-        _: &mut Vec<(PinValue, Option<u32>)>,
-    ) -> bool {
-        false
-    }
-    fn run_xform(
-        &mut self,
-        _: &mut D,
-        value: PinValue,
-        _: u8,
-    ) -> PinValue {
-        value
-    }
-    fn is_profitable_to_fold(
-        &self,
-        _: &D,
-        _: PinValue,
-        _: u32,
-        _: u32,
-    ) -> bool {
-        true
-    }
-    fn is_legal_to_fold(
-        &self,
-        _: &D,
-        _: PinValue,
-        _: u32,
-        _: u32,
-    ) -> bool {
-        true
-    }
-    fn check_and_mask(
-        &self,
-        _: &D,
-        _: PinValue,
-        _: i64,
-        _: i64,
-    ) -> bool {
-        false
-    }
-    fn check_or_mask(
-        &self,
-        _: &D,
-        _: PinValue,
-        _: i64,
-        _: i64,
-    ) -> bool {
-        false
-    }
-    fn may_load_store(
-        &self,
-        opcode: u16,
-    ) -> (bool, bool) {
-        instrinfo::memory_flags(opcode)
     }
 }
 
@@ -183,7 +95,7 @@ pub fn select_block(dag: &mut SelectionDAG) -> Result<Vec<Unit>, Refusal> {
     }
     legal?;
     let selector = Selector::new(table::TABLE);
-    let mut hooks = Aarch64Hooks;
+    let mut hooks = super::hooks::Aarch64Hooks::default();
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| selector.select(adapter, &mut hooks, node))?;
     let root: SDValue = dag.get_root();
     Ok(schedule(dag, root, &Aarch64Sched))
