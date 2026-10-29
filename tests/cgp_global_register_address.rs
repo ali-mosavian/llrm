@@ -3,8 +3,10 @@
 
 mod common;
 
+/// `tile` is external: a `static` array nothing writes is constant zero, and
+/// the pin's `GlobalOpt` folds the whole walk to `return 0` (so do we).
 const KERNEL: &str = "
-static short tile[64][64];
+short tile[64][64];
 
 long walk(short dy)
 {

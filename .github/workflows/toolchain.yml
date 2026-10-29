@@ -20,6 +20,7 @@ jobs:
       - uses: ./.github/actions/clang-tree
         with:
           kind: ${{ matrix.kind }}
+          artifact: "true"
   # The pin's llc, opt and llvm-tblgen with its source (toolchain/pintoolsbuild.sh), the tree ci.yml's pintools job restores. Dispatchable on its own.
   pintools:
     runs-on: ubuntu-24.04
