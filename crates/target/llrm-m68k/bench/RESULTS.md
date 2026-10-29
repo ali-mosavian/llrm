@@ -47,25 +47,14 @@ Rows still above a reference: max, gcd, countgt, strlen.
 | strlen | 18 | 18 | 18 | 36 | 36 | 18 | 20 | 59 | 59 | 59 | 89 | 89 | 57 | 44 | 13 all |
 | copy | 34 | 34 | 34 | 42 | 42 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | 59 | 59 | 33 all |
 
-## Above llc -Os or gcc -Os (bytes / insns, best reference)
+## Above the best reference (bytes / insns)
 
-| kernel | best reference | ours | gap |
-|---|---|---|---|
-| sum | 16 B gcc / 43 gcc | 18 / 44 | gcc folds the first trip into the loop entry |
-| popcount | 22 B / 85 gcc | 26 / 85 | a `move`+`and` pair gcc fuses |
-| max | 16 B / 5 gcc | 16 / 6 | one insn; 6 in every earlier table too, not a regression |
-| fib | 22 B / 64 gcc | 32 / 77 | three phi copies the allocator keeps |
-| gcd | 26 B / 16 llc | 26 / 17 | llc rotates the loop (tail duplication, block placement) |
-| arrsum | 20 B / 68 gcc | 22 / 69 | gcc's loop test is `cmp` against the end pointer; ours keeps a counter |
-| arrmax | 26 B / 97 gcc | 36 / 139 | counter kept beside the pointer; max not folded |
-| countgt | 42 B / 123 gcc -O2 | 52 / 152 | as arrmax |
-| strlen | 18 B / 44 gcc -O2 | 24 / 74 | LSR moved it from 22 raw to 24: a phi copy pair in the loop; gcc -O2 unrolls the test |
+| kernel | level | reference | ours | gap |
+|---|---|---|---|---|
+| max | both | 5 insns gcc | 6 | gcc's branch favours the bench input (a <= b); llc is 6 too; layout |
+| gcd | -O2 | 16 insns llc | 17 | llc rotates the loop: tail duplication and block placement (held) |
+| countgt | -O2 | 42 B gcc | 44 | gcc counts with `ext.w`/`sub.w`; ours `slt; and.l #1; add` |
+| strlen | -O2 | 44 insns gcc | 59 | gcc peels the first test; loop peeling is shared pipeline work |
+| strlen | -Os | 57 insns gcc | 59 | the same peeled test |
 
-At or below both: absdiff, clamp, copy. Smaller than llc on every row except max, absdiff, clamp, gcd (equal).
-
-Done since the last table: LSR with a proper `Machine`/`Tti`, flags reuse, `preserve_flags`, pointer arithmetic in `An`,
-`(An)+` folding, `add #-n` as `subq`. `MachineCopyPropagation`'s spurious-copy case (strlen 24 to 22). The pin's commute step in two-address, `add` with an address-register source commutable, phi copies before the source's last read (fib 32 to 28, 77 to 67 insns; llc also emits three moves there). Next: the counter against the end pointer.
-
-Limit: the commute and phi-copy placement save a move on a loop that carries a sum (fib, 3 moves to 2). A rotation
-of three values with a sum (tribonacci) stays at 4 moves, as in the pin; `tests/overlay.rs` pins fib's shape only.
-Between the 32 B and 28 B fib tables only fib changed (32 to 28); no other row grew.
+At or below both: sum, popcount, absdiff, clamp, fib, arrsum, arrmax, copy.
