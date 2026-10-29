@@ -50,6 +50,11 @@ def test_program_matches_bcom45_byte_for_byte(results, name: str):
         assert result.screen_difference == "", f"{target}: {result.screen_difference}"
 
 
+def test_no_game_that_waits_for_a_key_is_compared_byte_for_byte():
+    """gorillas and nibbles (examples/basic) never end: both arms ran to the 120 s limit and the reference was "stopped", not "ok" (gate run 3)."""
+    assert not {"gorillas", "nibbles"} & set(SOURCES)
+
+
 @pytest.fixture(scope="module")
 def demos(tmp_path_factory):
     """The Microsoft demo programs, built and run the same way."""
