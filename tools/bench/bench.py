@@ -737,10 +737,18 @@ def clock_limits() -> dict[str, int]:
     return tomllib.loads((Path(__file__).parent / "clock_limits.toml").read_text()).get("clocks", {})
 
 
-def clock_problems(label: str, got: dict, limits: dict[str, int]) -> list[str]:
-    """A listed row above its limit fails: the clocks the step measured already, the same harness as main's."""
+def main_clocks() -> dict[str, int]:
+    """Main's -Os m16 clocks per row (main_clocks.toml): what a row may reach without an entry in clock_limits.toml."""
+    return tomllib.loads((Path(__file__).parent / "main_clocks.toml").read_text()).get("clocks", {})
+
+
+def clock_problems(label: str, got: dict, limits: dict[str, int], main: dict[str, int] | None = None) -> list[str]:
+    """A listed row above its limit fails: the clocks the step measured already, the same harness as main's. A row above main's with
+    no entry fails too: without it the first run of a regressed row would be red only by luck of the list."""
     if label in limits and got.get("clocks", 0) > limits[label]:
         return [f"{label}: clocks {got['clocks']} > limit {limits[label]} (tools/bench/clock_limits.toml)"]
+    if label not in limits and main and got.get("clocks", 0) > main.get(label, float("inf")):
+        return [f"{label}: clocks {got['clocks']} > main's {main[label]} and no entry in tools/bench/clock_limits.toml"]
     return []
 
 
@@ -791,6 +799,7 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
     problems = []
     waived = basecounts.waivers(ROOT)
     limits = clock_limits()
+    main = main_clocks()
     for directory in benchmarks(selected):
         name = str(directory.relative_to(BENCH))
         baseline = read_expected(directory)
@@ -814,7 +823,7 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                         problems.append(f"{label}: {got['instructions']} instructions run long enough for a timer tick (55 ms at the flat rate): the extender's handler lands inside the count")
                     want = baseline.get(variant.language, {}).get(opt)
                     problems += against(label, got, want, waived)
-                    problems += clock_problems(label, got, limits)
+                    problems += clock_problems(label, got, limits, main)
                     if variant.timed_only:
                         problems += time_against(label, got, want)
                     for reference in REFERENCES.get(variant.language, ()):

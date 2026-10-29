@@ -850,6 +850,20 @@ def test_a_row_above_its_clock_limit_fails_the_gate():
     assert bench.clock_problems("fib c -Os", {"clocks": 10**9}, limits) == []
 
 
+def test_a_row_above_main_with_no_clock_entry_fails_the_gate():
+    """quicksort nib ran 447484 clocks against main's 316122; had its entry been missing the gate would have gone red only on the first run."""
+    main = {"quicksort nib -Os": 316122}
+    assert bench.clock_problems("quicksort nib -Os", {"clocks": 316123}, {}, main) == [
+        "quicksort nib -Os: clocks 316123 > main's 316122 and no entry in tools/bench/clock_limits.toml"
+    ]
+    assert bench.clock_problems("quicksort nib -Os", {"clocks": 316122}, {}, main) == []
+    assert bench.clock_problems("quicksort nib -Os", {"clocks": 447484}, {"quicksort nib -Os": 447484}, main) == []
+
+
+def test_every_clock_limit_has_a_main_row_and_every_main_row_is_a_label():
+    assert set(bench.clock_limits()) <= set(bench.main_clocks())
+
+
 def test_every_clock_limit_names_a_real_row():
     """A typo in a row label would leave its row unjudged."""
     names = {one.name for directory in bench.benchmarks([]) for one in bench.variants(directory)}
