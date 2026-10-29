@@ -100,8 +100,16 @@ const KERNELS2: &[Kernel] = &[
     k("schr", &[P("str", 0), B(111)], false, 4),
 ];
 
-/// The C of `lz4.s` on `lz`, decompressing to `buf`; the answer is the length written.
-const KERNELS3: &[Kernel] = &[k("lz4", &[P("lz", 0), P("buf", 0), W(14)], true, 14)];
+/// The C of `lz4.s` on `lz`, decompressing to `buf` (the answer is the length written), and loops that
+/// keep several variables live in registers across the iteration; expected values from a Python model.
+const KERNELS3: &[Kernel] = &[
+    k("lz4", &[P("lz", 0), P("buf", 0), W(14)], true, 14),
+    k("xs8", &[B(0xA5), B(5)], false, 107),
+    k("minmax", &[P("buf", 0), B(16)], false, 8),
+    k("fletcher", &[P("buf", 0), B(16)], true, 15952),
+    k("hash16", &[P("str", 0)], true, 51393),
+    k("dotx", &[P("buf", 0), P("tab", 0), B(8)], false, 101),
+];
 
 fn work(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bench").join(name);
@@ -521,11 +529,13 @@ fn table3() {
     let mut out = String::from("| kernel | cc65 -O | cc65 lz4.s (hand) | ours | ours 65C02 |\n|---|---|---|---|---|\n");
     let cell = |row: &Result<Row, String>| match row {
         Ok(r) => format!("{} B, {} cy", r.bytes, r.cycles),
+        Err(why) if why.starts_with("no hand") => "-".to_owned(),
         Err(why) => format!("n/a ({why})"),
     };
     for kernel in KERNELS3 {
-        let rows = [cc65_row(kernel, &["-O"], "c1"), hand_row(kernel), ours_row(kernel, "-O2", "o2"), ours_row(kernel, "-O2", "o2m")];
-        for row in &rows {
+        let hand = if kernel.name == "lz4" { hand_row(kernel) } else { Err("no hand-written version".into()) };
+        let rows = [cc65_row(kernel, &["-O"], "c1"), hand, ours_row(kernel, "-O2", "o2"), ours_row(kernel, "-O2", "o2m")];
+        for row in rows.iter().filter(|row| !matches!(row, Err(why) if why.starts_with("no hand"))) {
             if let Err(why) = row {
                 eprintln!("{}: {why}", kernel.name);
             }
