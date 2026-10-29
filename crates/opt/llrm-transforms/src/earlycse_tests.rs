@@ -382,3 +382,21 @@ b:
     assert!(after.contains("define i32 @f"), "{after}");
     assert_eq!(get(Event::ContextClones), before, "earlycse cloned the context");
 }
+
+/// Two loads with equal `!range` nodes were one load that lost its range, so
+/// `ipsccp` found no argument range for quicksort's `sort` (+30% clocks).
+#[test]
+fn test_a_load_cse_keeps_the_range_both_loads_carry() {
+    let after = run("define i16 @f(ptr %p) {
+b0:
+  %a = load i16, ptr %p, !range !0
+  %b = load i16, ptr %p, !range !1
+  %c = add i16 %a, %b
+  ret i16 %c
+}
+!0 = !{i16 0, i16 100}
+!1 = !{i16 0, i16 100}
+");
+    assert_eq!(after.matches("load").count(), 1, "{after}");
+    assert!(after.contains("!range"), "{after}");
+}
