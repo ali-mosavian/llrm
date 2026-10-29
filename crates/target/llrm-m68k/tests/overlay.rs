@@ -1238,3 +1238,17 @@ define i16 @f() {
     let module = llrm_m68k::compile::mid_end(&module).expect("mid-end");
     llrm_m68k::dagisel::function::select_function(&module, "f", Cpu::M68000).expect("selects");
 }
+
+/// `movea.w #imm, %an` sign-extends, and the pin's `isUInt<16>` sent 32768..65535 through it: an
+/// address register got 0xFFFF8000.. for 0x8000.. Seed 59 of the differential driver (a select
+/// of 49080 kept in an address register).
+#[test]
+fn a_constant_above_32k_is_not_moved_into_an_address_register_by_a_word_move() {
+    use llrm_m68k::reg::A0;
+    for value in [32768, 49080, 65535] {
+        let moves = llrm_m68k::expand::expand_movi(A0, value).expect("expands");
+        assert!(moves.iter().all(|one| one.opcode != "MOV16ai"), "{value}: {moves:?}");
+    }
+    let moves = llrm_m68k::expand::expand_movi(A0, 32767).expect("expands");
+    assert!(moves.iter().any(|one| one.opcode == "MOV16ai"), "{moves:?}");
+}
