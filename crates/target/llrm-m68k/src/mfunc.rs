@@ -566,6 +566,10 @@ fn cmov_parts(inst: &Inst) -> Result<(Reg, Reg, Reg, i64), String> {
 fn flag_readers_to_hoist(tail: &[Inst]) -> Result<Vec<usize>, String> {
     let mut readers = Vec::new();
     for (at, inst) in tail.iter().enumerate() {
+        // another select on the codes is a diamond of its own, with the codes restored
+        if is_cmov(inst) {
+            continue;
+        }
         if inst.reads_flags {
             if inst.terminator {
                 return Err("a branch reads the flags of a compare past the select that follows it".to_owned());
@@ -646,6 +650,19 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
             tail.remove(one);
         }
         let branch = branch_for(first).ok_or_else(|| format!("a CMOV on condition {first}"))?;
+        // A select on another condition of the same codes follows the join, where the copies of
+        // the arms have set them again: the head keeps them and the join restores them.
+        // DEVIATE from the pin, which orders the readers before the pseudo.
+        if let Some(second) = tail.iter().take_while(|inst| !inst.sets_flags).position(is_cmov) {
+            function.classes.push(Class::Dr16);
+            let kept = Reg::Virt(function.classes.len() as u32 - 1);
+            let mut save = Inst::new(Kind::Op("CCR_SAVE"), vec![Operand::Def(kept), Operand::Use(Reg::Phys(crate::reg::CCR))]);
+            save.reads_flags = true;
+            hoisted.push(save);
+            let mut restore = Inst::new(Kind::Op("CCR_RESTORE"), vec![Operand::Def(Reg::Phys(crate::reg::CCR)), Operand::Use(kept)]);
+            restore.sets_flags = true;
+            tail.insert(second, restore);
+        }
         let mut head_value: HashMap<Reg, Reg> = HashMap::new();
         let mut other_value: HashMap<Reg, Reg> = HashMap::new();
         let mut phis = Vec::new();

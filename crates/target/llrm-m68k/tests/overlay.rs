@@ -227,6 +227,50 @@ v25:\n\
     compiled(ir, Options { mid_end: false, ..Options::default() });
 }
 
+/// A second select on the codes of a compare, after the first one's join set them again (and a call
+/// between), stayed a `CMOV` pseudo: "CMOV16d is a pseudo-instruction: it has no encoding"
+/// (differential seeds 719 and 847). The join of the first restores the codes the head kept.
+#[test]
+fn a_second_select_on_the_codes_of_one_compare_is_expanded() {
+    let ir = "@zero = external global i8\n\
+@buf = external global [16 x i8]\n\
+declare void @llvm.lifetime.start.p0(ptr captures(none))\n\
+declare void @llvm.lifetime.end.p0(ptr captures(none))\n\
+declare void @llvm.memset.p0.i32(ptr writeonly captures(none), i8, i32, i1 immarg)\n\
+declare i8 @h0()\n\
+define i16 @f() {\n\
+entry:\n\
+  %v2 = load volatile i8, ptr @zero, align 1\n\
+  %v7 = add i16 0, -7609\n\
+  %v11 = add i8 %v2, -1\n\
+  %v12 = icmp ult i8 %v11, -2\n\
+  %v17 = load i32, ptr null, align 2\n\
+  %v18 = lshr i32 %v17, 14\n\
+  %v19 = select i1 %v12, i32 %v18, i32 0\n\
+  %v20 = select i1 %v12, i16 129, i16 1\n\
+  %v22 = shl i16 0, 1\n\
+  %v23 = call fastcc i8 @h0()\n\
+  %v24 = icmp eq i8 %v23, 0\n\
+  %v25 = or i16 %v7, 1\n\
+  %v26 = select i1 %v24, i16 %v25, i16 1\n\
+  %v27 = udiv i16 %v22, %v26\n\
+  %v28 = and i16 %v27, %v20\n\
+  %v29 = shl i16 %v28, 2\n\
+  %v30 = select i1 %v12, i16 2, i16 0\n\
+  %v31 = or disjoint i16 %v29, %v30\n\
+  %v32 = xor i16 %v31, -15536\n\
+  %v33 = zext i16 %v32 to i32\n\
+  %v34 = lshr i32 %v19, 8\n\
+  %v35 = xor i32 %v34, %v33\n\
+  %v36 = xor i32 %v35, %v19\n\
+  %v37 = trunc i32 %v36 to i16\n\
+  ret i16 %v37\n\
+}";
+    let text = compiled(ir, Options::default());
+    assert!(!text.contains("should not be emitted"), "{text}");
+    assert!(text.contains("%ccr") || text.contains("%sr"), "{text}");
+}
+
 /// Post-increment forms derived from the pin's `(An)` rows, bytes from
 /// binutils: `add.l (%a1)+,%d0` d099, `add.b (%a1)+,%d3` d619, `and.l
 /// (%a1)+,%d1` c299.
