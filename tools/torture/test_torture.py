@@ -97,9 +97,10 @@ class OptionTests(unittest.TestCase):
         """There was no m64 gate: `--bits 64` was no choice. A program that exits 0 passes; one that aborts is `aborted`."""
         import subprocess
 
-        done = subprocess.run(["cc", "-x", "c", "-", "-o", "/dev/null"], input="int main(void){return 0;}", capture_output=True, text=True)
-        self.assertEqual(done.returncode, 0, "the host has a cc")
         with tempfile.TemporaryDirectory() as directory:
+            probe = Path(directory) / "probe"
+            done = subprocess.run(["cc", "-x", "c", "-", "-o", str(probe)], input="int main(void){return 0;}", capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, "the host has a cc")
             exe = Path(directory) / "aborts"
             subprocess.run(["cc", "-x", "c", "-", "-o", str(exe)], input="void abort(void); int main(void){abort();}", text=True, check=True)
             self.assertEqual(torture.run_native(exe), ("wrong", "aborted"))

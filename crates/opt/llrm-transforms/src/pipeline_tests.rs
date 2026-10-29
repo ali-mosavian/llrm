@@ -65,56 +65,6 @@ fn keeps_verifying_and_computing_the_same(
     true
 }
 
-/// Commutes @f's add so that its constant comes first or last.
-struct Commute {
-    name: &'static str,
-    constant_first: bool,
-}
-
-impl llrm_mir::passes::FunctionPass for Commute {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
-    fn run(
-        &mut self,
-        unit: &mut llrm_mir::passes::Unit,
-        _: &mut llrm_mir::passes::Analyses,
-    ) -> llrm_mir::passes::PreservedAnalyses {
-        use llrm_mir::module::Operand;
-        let (_, add) = unit
-            .function
-            .walk()
-            .find(|&(_, one)| {
-                unit.function.instruction(one).opcode
-                    == llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Add)
-            })
-            .expect("an add");
-        let operands = unit.function.instruction(add).operands.clone();
-        if matches!(operands[0], Operand::Constant(_)) == self.constant_first {
-            return llrm_mir::passes::PreservedAnalyses::all();
-        }
-        unit.function.set_operands(add, vec![operands[1], operands[0]]);
-        llrm_mir::passes::PreservedAnalyses::none()
-    }
-}
-
-/// Arenas never shrink, so before bodies were compared by their text two
-/// passes undoing each other ran the whole size-scaled limit.
-#[test]
-#[should_panic(expected = "cycle after 1 rounds")]
-fn passes_that_undo_each_other_stop_after_one_cycle() {
-    let mut module =
-        llrm_analysis::testing::parsed("define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n");
-    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
-    fixed.only = false;
-    fixed.passes = vec![
-        Box::new(Commute { name: "first", constant_first: true }),
-        Box::new(Commute { name: "last", constant_first: false }),
-    ];
-    crate::testing::managed(&mut module, fixed);
-}
-
 /// A loop counted in an internal global no code outside names, a
 /// `nocallback` routine called each trip: the count is proven and the
 /// loop copied out. GlobalsAA was never required, so every call wrote the
@@ -637,49 +587,6 @@ b3:
     assert!(!text.contains("phi i16 [ 0,"), "the loop of calls to @g stayed rolled:\n{text}");
 }
 
-/// QCport -O2 ran 11 KB past BCC's code, and out of memory loading a level:
-/// every call a body of nine operations was cheaper than in clocks was copied,
-/// though three copies come to more bytes than three calls. -O2 puts such a
-/// copy back as -Os does, unless the clocks it saves pay for the bytes.
-#[test]
-fn o2_does_not_copy_a_body_into_three_sites_where_the_code_grows() {
-    let mut module = llrm_analysis::testing::parsed(
-        "define i16 @mix(i16 %a, i16 %b) {
-b:
-  %t0 = xor i16 %a, %b
-  %t1 = shl i16 %a, 3
-  %t2 = add i16 %t0, %t1
-  %t3 = lshr i16 %b, 2
-  %t4 = sub i16 %t2, %t3
-  %t5 = and i16 %t4, 2047
-  %t6 = or i16 %t5, %a
-  %t7 = xor i16 %t6, %b
-  %t8 = add i16 %t7, 5
-  ret i16 %t8
-}
-
-define i16 @f(i16 %x, i16 %y) {
-b:
-  %p = call i16 @mix(i16 %x, i16 %y)
-  %q = call i16 @mix(i16 %y, i16 %x)
-  %r = call i16 @mix(i16 %p, i16 %q)
-  ret i16 %r
-}
-",
-    );
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
-        // The clocks' budget; the walk decides as LLVM does, and LLVM inlines
-        // all three.
-        pipeline::applied(
-            program,
-            &Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Default::default() },
-        )
-    })
-    .and_then(|done| done)
-    .unwrap();
-    assert_eq!(llrm_mir::print::module(&module).matches("call i16 @mix").count(), 3);
-}
-
 /// The pin's IPSCCP states what a function's callers pass as a range on its
 /// parameters at -O1 too. The stand-in it replaced (gcc's `-fipa-vrp`) ran at
 /// -O2 and up, and -O1 stated nothing.
@@ -883,33 +790,6 @@ entry:
     assert!(printed.contains("load i16, ptr @g"), "the load after the call was forwarded from before it:\n{printed}");
 }
 
-/// gcc's `pass_ch` stage ran after the interprocedural step under LLVM's order
-/// too, 8 passes the pin has no counterpart for: d_faces compile +52 M
-/// instructions at -O1, +41 M at -O2, +72 M at -O3.
-#[test]
-fn test_the_llvm_order_has_no_gcc_header_copy_stage() {
-    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
-    let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
-    assert!(pipeline::header_copied(&on).is_empty(), "premise: LLVM's order copies headers in LoopRotate");
-    assert!(!pipeline::header_copied(&off).is_empty(), "premise: gcc's order has the stage");
-}
-
-/// What the pipeline runs after the summaries are made and holds them past
-/// (`manager.freeze`) adds no memory operation. Six of those passes
-/// (loop-simplify, LCSSA, fold, algebraic, indvars, dead) did not say so, and
-/// each edit of theirs made the module's summaries and globals' facts again.
-#[test]
-fn the_passes_after_the_summaries_add_no_memory_operation() {
-    let applied = Applied {
-        options: pipeline::Options { llvm_order: false, ..pipeline::Options::basic() },
-        ..Applied::default()
-    };
-    let passes = pipeline::header_copied(&applied);
-    assert!(passes.len() >= 7, "premise: the pass list this test names");
-    let adding: Vec<_> = passes.iter().filter(|pass| pass.adds_memory_operations()).map(|pass| pass.name()).collect();
-    assert!(adding.is_empty(), "held past, so they must not add one: {adding:?}");
-}
-
 thread_local! {
     static BURNED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -998,16 +878,12 @@ fn billed_asking_for_costly(trips: u64) -> (super::Run, u64) {
         inputs: false,
         rounds: 0,
         steps: 0,
-        skipped: 0,
         fixed: 0,
         billing: true,
         idle: 0,
         useful: 0,
         idle_with_analyses: 0,
         useful_with_analyses: 0,
-        classified: unit.function.mark(),
-        stretches: Vec::new(),
-        unreached: 0,
         slice: None,
         persisted: 0,
         records: unit.context.extension::<crate::settled::Settled>(),
@@ -1091,140 +967,8 @@ impl llrm_mir::passes::FunctionPass for Watch {
     }
 }
 
-/// Changes the constant of @f's add, once: an arithmetic value that only a
-/// `ret` reads.
-struct Fold {
-    done: bool,
-}
-
-impl llrm_mir::passes::FunctionPass for Fold {
-    fn name(&self) -> &'static str {
-        "fold-once"
-    }
-
-    fn run(
-        &mut self,
-        unit: &mut llrm_mir::passes::Unit,
-        _: &mut llrm_mir::passes::Analyses,
-    ) -> llrm_mir::passes::PreservedAnalyses {
-        if std::mem::replace(&mut self.done, true) {
-            return llrm_mir::passes::PreservedAnalyses::all();
-        }
-        let (_, add) = unit
-            .function
-            .walk()
-            .find(|&(_, one)| {
-                unit.function.instruction(one).opcode
-                    == llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Add)
-            })
-            .expect("an add");
-        let ty = unit.function.instruction(add).ty;
-        let operands = unit.function.instruction(add).operands.clone();
-        let two = llrm_mir::module::Operand::Constant(unit.context.int(ty, 2));
-        unit.function.set_operands(add, vec![operands[0], two]);
-        llrm_mir::passes::PreservedAnalyses::none()
-    }
-}
-
 /// A fold in one function made every pass before it run again, the whole round,
 /// though what it changed was an arithmetic value only a `ret` reads: 13.6% of
-/// x_popcount -O2's compile was passes that found nothing (decide alone 3.4 of
-/// 94 Minstr), and a late fold (`& 3` over a sum masked again) cost it x1.024.
-/// A pass says what it reads (`FunctionPass::reads`), the driver what the edits
-/// reached (`footprint::of`): decide, which reads conditions, memory and
-/// the CFG, is not run again; one that reads everything is.
-#[test]
-fn a_fold_does_not_rerun_the_passes_that_read_nothing_it_reached() {
-    use llrm_mir::footprint::Footprint;
-    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
-    let mut module = llrm_analysis::testing::parsed(text);
-    let (narrow, wide) = (std::rc::Rc::new(std::cell::Cell::new(0)), std::rc::Rc::new(std::cell::Cell::new(0)));
-    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
-    fixed.only = false;
-    fixed.passes = vec![
-        Box::new(Watch {
-            name: "narrow",
-            reads: Footprint::CONTROL | Footprint::MEMORY | Footprint::STRUCTURE,
-            runs: std::rc::Rc::clone(&narrow),
-        }),
-        Box::new(Watch { name: "wide", reads: Footprint::ALL, runs: std::rc::Rc::clone(&wide) }),
-        Box::new(Fold { done: false }),
-    ];
-    crate::testing::managed(&mut module, fixed);
-    assert_eq!(wide.get(), 2, "a pass that reads everything is run again after the fold");
-    assert_eq!(narrow.get(), 1, "decide-like: the fold reached no condition, no memory and no block");
-}
-
-/// Changes the constant of @f's add on each of its first `left` runs, the way a
-/// chain of folds does one step per round.
-struct Chain {
-    left: usize,
-    runs: std::rc::Rc<std::cell::Cell<usize>>,
-}
-
-impl llrm_mir::passes::FunctionPass for Chain {
-    fn name(&self) -> &'static str {
-        "chain"
-    }
-
-    fn run(
-        &mut self,
-        unit: &mut llrm_mir::passes::Unit,
-        _: &mut llrm_mir::passes::Analyses,
-    ) -> llrm_mir::passes::PreservedAnalyses {
-        self.runs.set(self.runs.get() + 1);
-        if self.left == 0 {
-            return llrm_mir::passes::PreservedAnalyses::all();
-        }
-        self.left -= 1;
-        let (_, add) = unit
-            .function
-            .walk()
-            .find(|&(_, one)| {
-                unit.function.instruction(one).opcode
-                    == llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Add)
-            })
-            .expect("an add");
-        let ty = unit.function.instruction(add).ty;
-        let operands = unit.function.instruction(add).operands.clone();
-        let constant = llrm_mir::module::Operand::Constant(unit.context.int(ty, 10 + self.left as i128));
-        unit.function.set_operands(add, vec![operands[0], constant]);
-        llrm_mir::passes::PreservedAnalyses::none()
-    }
-}
-
-/// The rounds of a body's passes were bounded by its size (`max(16, blocks +
-/// insts + 1)`) and nothing else: the fourth and fifth round of d_faces'
-/// hottest body were 354 of its 6,246 Minstr, and found nothing the 284 rows of
-/// the vsgcc tables and the 65 QCport modules show (the objects are the same).
-/// `Options::rounds` bounds them; -Omax runs to the fixed point.
-#[test]
-fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
-    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
-    let through = |options: pipeline::Options| {
-        let mut module = llrm_analysis::testing::parsed(text);
-        let count = std::rc::Rc::new(std::cell::Cell::new(0));
-        let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), options, ..Applied::default() });
-        fixed.only = false;
-        fixed.passes = vec![Box::new(Chain { left: 8, runs: std::rc::Rc::clone(&count) })];
-        crate::testing::managed(&mut module, fixed);
-        count.get()
-    };
-    let runs = |rounds: usize| through(pipeline::Options { rounds, ..pipeline::Options::standard() });
-    assert_eq!(runs(4), 4, "the budget ends the rounds");
-    assert_eq!(runs(usize::MAX), 9, "premise: the chain runs to its end when nothing bounds it");
-    // -O1 ran four rounds, the third of which changed five passes of d_faces
-    // and the fourth none: 253 of 3,084 Minstr for the rounds after the
-    // second, and 5 of the 71 vsgcc objects differ without them (+0.18%
-    // clocks).
-    assert_eq!(through(pipeline::Options::basic()), 2, "-O1 runs two rounds");
-    assert_eq!(pipeline::Options::basic().rounds, 2);
-    assert_eq!(pipeline::Options::standard().rounds, 4);
-    assert_eq!(pipeline::Options::speed().rounds, 4);
-    assert_eq!(pipeline::Options::size().rounds, 4);
-    assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
-}
-
 /// Sixty sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them
 /// (six sweeps are completely unrolled by `LoopFullUnroll`, which LLVM's order
 /// runs before the jam, and leave no nest to jam),
@@ -1510,16 +1254,11 @@ x:
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
 }
 
-/// The LLVM order was off unless an env switch set it, so a default compile ran
-/// the rounds, not the parity pipeline: the default now has the three stages
-/// (early, cleanup, simplify) and the off knob the single fixed-point stage.
+/// A compile has the four stages (early, cleanup, simplify, late), each run
+/// once.
 #[test]
-fn test_the_llvm_order_is_the_default_and_its_off_switch_is_the_rounds() {
-    let on = Applied::default();
-    assert!(on.options.llvm_order, "the order is on by default");
-    assert_eq!(pipeline::function_stages(&on).len(), 4, "early, cleanup, simplify and late");
-    let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
-    assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
+fn test_the_function_pipeline_has_four_stages() {
+    assert_eq!(pipeline::function_stages(&Applied::default()).len(), 4, "early, cleanup, simplify and late");
 }
 
 /// The translated SROA and PromoteMemToReg were switches that defaulted off
@@ -1557,15 +1296,12 @@ fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_tr
     }
 }
 
-/// With `Options::llvm_order` a body goes through LLVM's early function
-/// pipeline, GlobalCleanup and function simplification once each, in that
-/// order, and `gvn` and `dse` run once; without it the rounds stand. The
-/// EarlyCSE in both of its places is the translated pass.
+/// A body goes through LLVM's early function pipeline, GlobalCleanup and
+/// function simplification once each, in that order, and `gvn` and `dse` run
+/// once. The EarlyCSE in both of its places is the translated pass.
 #[test]
 fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translated_earlycse() {
-    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
-    let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
-    assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
+    let on = Applied { options: pipeline::Options { ..Default::default() }, ..Applied::default() };
     assert_eq!(pipeline::function_stages(&on).len(), 4, "early, cleanup, simplify and late");
     let names = |phase| pipeline::llvm_order(&on, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
     let simplify = names(crate::parity::Phase::Simplify);
@@ -1579,7 +1315,7 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
 /// Now its slot is Translated and the order ends with it.
 #[test]
 fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
-    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let on = Applied { options: pipeline::Options { ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
     assert_eq!(
         late,
@@ -1614,8 +1350,7 @@ fn test_llvm_order_keeps_a_loop_computing_the_same() {
     let text = "define i16 @f(i16 %n) {\nb0:\n  %p = alloca i16\n  store i16 0, ptr %p\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp slt i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %s = load i16, ptr %p\n  %t = add i16 %s, %i\n  store i16 %t, ptr %p\n  %j = add i16 %i, 1\n  br label %h\nx:\n  %r = load i16, ptr %p\n  ret i16 %r\n}\n";
     let mut module = llrm_analysis::testing::parsed(text);
     let before = interpret::run(&module, "f", vec![interpret::Val::Int { bits: 6, width: 16 }], FUEL);
-    let applied =
-        Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let applied = Applied { options: pipeline::Options { ..Default::default() }, ..Applied::default() };
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &applied)
@@ -1634,10 +1369,7 @@ fn test_llvm_order_keeps_a_loop_computing_the_same() {
 fn test_a_switched_off_pass_does_not_fail_the_slot_check() {
     let text = "define i16 @f(i16 %n) {\nb0:\n  ret i16 %n\n}\n";
     let mut module = llrm_analysis::testing::parsed(text);
-    let applied = Applied {
-        options: pipeline::Options { llvm_order: true, unroll: false, ..Default::default() },
-        ..Applied::default()
-    };
+    let applied = Applied { options: pipeline::Options { unroll: false, ..Default::default() }, ..Applied::default() };
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &applied)
@@ -1677,10 +1409,8 @@ done:
 ";
     let entry_has_mul = |rotate_slot: bool| {
         let mut module = llrm_analysis::testing::parsed(text);
-        let applied = Applied {
-            options: pipeline::Options { llvm_order: true, rotate_slot, ..Default::default() },
-            ..Applied::default()
-        };
+        let applied =
+            Applied { options: pipeline::Options { rotate_slot, ..Default::default() }, ..Applied::default() };
         let printed =
             crate::testing::managed(&mut module, pipeline::Fixed::linear(&applied, pipeline::Phase::Simplify));
         let entry = printed.split("\n\n").find(|one| one.contains("b0:")).expect("the entry block").to_owned();
@@ -1723,10 +1453,8 @@ b2:
 }
 ";
     let mut module = llrm_analysis::testing::parsed(text);
-    let applied = Applied {
-        options: pipeline::Options { llvm_order: true, rotate_slot: true, ..Default::default() },
-        ..Applied::default()
-    };
+    let applied =
+        Applied { options: pipeline::Options { rotate_slot: true, ..Default::default() }, ..Applied::default() };
     let printed = crate::testing::managed(&mut module, pipeline::Fixed::linear(&applied, pipeline::Phase::Simplify));
     let looped = printed.split("\n\n").find(|one| one.contains("phi i16 [ 0")).expect("the loop block");
     assert!(looped.contains("add i16 %") && looped.contains("icmp slt") && looped.contains("br i1"), "{printed}");
@@ -1756,16 +1484,12 @@ fn test_a_run_that_changes_nothing_leaves_its_input_and_a_manifest_line() {
         dump: Some(directory.clone()),
         rounds: 0,
         steps: 0,
-        skipped: 0,
         fixed: 0,
         billing: false,
         idle: 0,
         useful: 0,
         idle_with_analyses: 0,
         useful_with_analyses: 0,
-        classified: unit.function.mark(),
-        stretches: Vec::new(),
-        unreached: 0,
         slice: None,
         persisted: 0,
         records: unit.context.extension::<crate::settled::Settled>(),
@@ -1799,16 +1523,12 @@ fn test_a_step_that_dumps_and_logs_nothing_formats_no_stage_name() {
         dump: None,
         rounds: 0,
         steps: 0,
-        skipped: 0,
         fixed: 0,
         billing: false,
         idle: 0,
         useful: 0,
         idle_with_analyses: 0,
         useful_with_analyses: 0,
-        classified: unit.function.mark(),
-        stretches: Vec::new(),
-        unreached: 0,
         slice: None,
         persisted: 0,
         records: unit.context.extension::<crate::settled::Settled>(),
@@ -1879,7 +1599,7 @@ fn test_the_runs_lines_carry_the_sizes_a_step_enters_and_leaves_and_the_body_nam
     );
     let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
     fixed.only = false;
-    fixed.passes = vec![Box::new(EraseUnused)];
+    fixed.passes = vec![Box::new(EraseUnused), Box::new(EraseUnused)];
     let (_, lines) = pipeline::capturing_runs(|| crate::testing::managed(&mut module, fixed));
     let steps: Vec<&String> = lines.iter().filter(|line| line.starts_with("step ")).collect();
     assert!(steps.first().is_some_and(|line| line.contains(" changed ") && line.ends_with(" in=3 out=2")), "{lines:?}");
@@ -2314,29 +2034,12 @@ fn test_the_llvm_order_hashes_no_body_for_a_cycle_history_it_never_reads() {
         done.map(|()| llrm_mir::counts::get(llrm_mir::counts::Event::Fingerprints) - before)
     };
     let order = Applied::default();
-    assert!(order.options.llvm_order, "the order is the default");
     let (name, path) = files.first().expect("a corpus module");
     assert_eq!(
         run(name, path, &order).unwrap_or_else(|error| panic!("{name}: {error}")),
         0,
         "{name}: the order hashed bodies it never compares"
     );
-    let mut rounds = Applied::default();
-    rounds.options.llvm_order = false;
-    // The rounds panic on a body that oscillates (a separate, older fault in
-    // some corpus entries): the smallest entry that converges shows the
-    // history.
-    let kept = files
-        .iter()
-        .rev()
-        .find_map(
-            |(name, path)| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run(name, path, &rounds).ok().filter(|hashed| *hashed > 0)
-            }))
-            .ok()
-            .flatten(),
-        );
-    assert!(kept.is_some(), "the rounds keep the history they compare");
 }
 
 /// `loopsimplify` gives a loop a dedicated exit, a jump alone in a block, and
@@ -2438,7 +2141,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     for slot in ["simplifycfg@1438", "simplifycfg@1682"] {
         assert!(pipeline::slot_built(&o2, slot), "{slot}");
     }
-    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let on = Applied { options: pipeline::Options { ..Default::default() }, ..Applied::default() };
     let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
     assert_eq!(
         late,
@@ -2834,7 +2537,7 @@ b3:
 fn four_trips_under(options: pipeline::Options) -> bool {
     let text = "define i16 @f(i16 %x) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %h ]\n  %t = phi i16 [ %x, %b0 ], [ %u, %h ]\n  %m = mul i16 %t, 3\n  %u = add i16 %m, %i\n  %j = add i16 %i, 1\n  %c = icmp slt i16 %j, 4\n  br i1 %c, label %h, label %x\nx:\n  ret i16 %u\n}\n";
     let mut module = llrm_analysis::testing::parsed(text);
-    let applied = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+    let applied = Applied { options: pipeline::Options { ..options }, ..Applied::default() };
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &applied)
@@ -2864,7 +2567,7 @@ fn test_the_full_unroll_takes_a_loop_only_below_o2_when_asked() {
 fn rotated_under(options: pipeline::Options) -> bool {
     let text = "define i32 @f(i16 %n, ptr %p) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp ult i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %k = zext i16 %i to i32\n  %a = getelementptr i32, ptr %p, i32 %k\n  store i32 %k, ptr %a\n  %j = add i16 %i, 1\n  br label %h\nx:\n  ret i32 0\n}\n";
     let mut module = llrm_analysis::testing::parsed(text);
-    let applied = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+    let applied = Applied { options: pipeline::Options { ..options }, ..Applied::default() };
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &applied)
@@ -3027,7 +2730,7 @@ fn test_simplifycfg_runs_first_so_no_unreachable_block_reaches_cgpaddr() {
         pipeline::Options::speed(),
         pipeline::Options::size(),
     ] {
-        let applied = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+        let applied = Applied { options: pipeline::Options { ..options }, ..Applied::default() };
         let early: Vec<_> = pipeline::llvm_order(&applied, Phase::Early).iter().map(|one| one.name()).collect();
         let first = early.iter().find(|name| !name.starts_with("lowerexpect")).expect("a pass");
         assert!(first.starts_with("decide@") || first.starts_with("simplifycfg"), "{early:?}");

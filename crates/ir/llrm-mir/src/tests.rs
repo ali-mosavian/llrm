@@ -1262,3 +1262,14 @@ fn a_flags_result_read_other_than_by_a_comparison_is_refused() {
         "{refused:?}"
     );
 }
+
+/// A constant of a packed identified struct printed as `{ .. }`, the unpacked
+/// spelling: the pin's llc refused the IR a `--dump` wrote
+/// ("packed'ness of initializer and type don't match") for 8 of QCport's 65
+/// modules, so their D-G1 count was missing.
+#[test]
+fn a_packed_named_struct_initializer_prints_packed() {
+    let text = "%s = type <{ i8, i16 }>\n@g = global %s <{ i8 1, i16 2 }>\n";
+    let printed = round(text);
+    assert!(printed.contains("global %s <{ i8 1, i16 2 }>"), "{printed}");
+}
