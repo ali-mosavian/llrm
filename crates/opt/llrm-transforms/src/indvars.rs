@@ -306,7 +306,6 @@ impl FunctionPass for IndVars {
             && crate::lftr::enabled()
             && crate::lftr::replaced_in(&mut session, unit.context, unit.layout, unit.function, unit.declared, &outer);
         // After LFTR, which owns the exits it can rewrite against a trip count.
-        settled(&mut session, &mut mark, unit, &outer, tested, false);
         let strengthened = crate::exitne::enabled()
             && crate::exitne::strengthened_in(&mut session, unit.context, unit.layout, unit.function, &outer);
         let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
