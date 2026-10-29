@@ -1,6 +1,7 @@
-//! `timing.rs`'s bytes and cycles against sim65, which counts a cycle for each of an instruction's
-//! cycles: a row is run twenty times and priced from the difference with a run of none. The table
-//! is from the W65C02S datasheet and masswerk's tables; this is the check that the code reads it right.
+//! `timing.rs`'s bytes and cycles against sim65, which counts a cycle for each
+//! of an instruction's cycles: a row is run twenty times and priced from the
+//! difference with a run of none. The table is from the W65C02S datasheet and
+//! masswerk's tables; this is the check that the code reads it right.
 
 mod common;
 
@@ -10,13 +11,13 @@ use llrm_6502::timing::instruction;
 const TARGETS: [(&str, Cpu); 2] = [("sim6502", Cpu::Mos6502), ("sim65c02", Cpu::W65c02)];
 
 /// `rc2:rc3` points at `slot`, `x` is 0 and `y` is 1.
-const SETUP: &str =
-    "  lda #<slot\n  sta rc2\n  lda #>slot\n  sta rc3\n  lda #0\n  sta rc5\n  ldx #0\n  ldy #1\n";
+const SETUP: &str = "  lda #<slot\n  sta rc2\n  lda #>slot\n  sta rc3\n  lda #0\n  sta rc5\n  ldx #0\n  ldy #1\n";
 const DATA: &str = ".segment \"BSS\"\nslot: .res 4\ncnt: .res 1\n.segment \"CODE\"\n";
 
-/// Cycles one trip of `body` takes in a counted loop (`dec cnt` and `bne`), found from two runs of
-/// one binary that differ only in the count. sim65's total moves by a cycle when the program's size
-/// puts later code across a page, so two runs of equal layout are the only fair difference.
+/// Cycles one trip of `body` takes in a counted loop (`dec cnt` and `bne`),
+/// found from two runs of one binary that differ only in the count. sim65's
+/// total moves by a cycle when the program's size puts later code across a
+/// page, so two runs of equal layout are the only fair difference.
 fn trip(
     target: &str,
     name: &str,
@@ -33,8 +34,9 @@ fn trip(
 
 /// What `trip` charges an empty body: `dec cnt` (6) and a taken `bne` (3).
 ///
-/// `test` is the calling test's own name: two tests building one work directory at once corrupt it
-/// (`ld65: Read error`, `Unresolved external '_main'`, about two runs in three).
+/// `test` is the calling test's own name: two tests building one work directory
+/// at once corrupt it (`ld65: Read error`, `Unresolved external '_main'`, about
+/// two runs in three).
 fn loop_cycles(
     target: &str,
     test: &str,
@@ -44,16 +46,81 @@ fn loop_cycles(
 
 /// Instructions that can run in a row without harm.
 const STRAIGHT: &[&str] = &[
-    "lda #1", "lda rc5", "lda slot", "lda slot,x", "lda slot,y", "lda rc5,x", "lda (rc2,x)", "lda (rc2),y",
-    "ldx #1", "ldx rc5", "ldx slot", "ldx slot,y", "ldy #1", "ldy rc5", "ldy slot", "ldy slot,x",
-    "sta rc5", "sta slot", "sta rc5,x", "sta slot,x", "sta slot,y", "sta (rc2,x)", "sta (rc2),y",
-    "stx rc5", "stx slot", "sty rc5", "sty slot",
-    "adc #1", "adc rc5", "adc slot", "adc (rc2),y", "sbc #1", "sbc rc5", "and #1", "and rc5", "ora #1", "eor #1",
-    "cmp #1", "cmp rc5", "cmp slot", "cpx #1", "cpx rc5", "cpy #1", "cpy slot",
-    "inc rc5", "inc slot", "inc rc5,x", "dec rc5", "dec slot", "asl a", "asl rc5", "asl slot", "lsr a", "lsr rc5",
-    "rol a", "rol rc5", "ror a", "ror rc5",
-    "tax", "tay", "txa", "tya", "inx", "iny", "dex", "dey", "clc", "sec", "nop",
-    "lda (rc2)", "sta (rc2)", "stz rc5", "stz slot", "inc a", "dec a",
+    "lda #1",
+    "lda rc5",
+    "lda slot",
+    "lda slot,x",
+    "lda slot,y",
+    "lda rc5,x",
+    "lda (rc2,x)",
+    "lda (rc2),y",
+    "ldx #1",
+    "ldx rc5",
+    "ldx slot",
+    "ldx slot,y",
+    "ldy #1",
+    "ldy rc5",
+    "ldy slot",
+    "ldy slot,x",
+    "sta rc5",
+    "sta slot",
+    "sta rc5,x",
+    "sta slot,x",
+    "sta slot,y",
+    "sta (rc2,x)",
+    "sta (rc2),y",
+    "stx rc5",
+    "stx slot",
+    "sty rc5",
+    "sty slot",
+    "adc #1",
+    "adc rc5",
+    "adc slot",
+    "adc (rc2),y",
+    "sbc #1",
+    "sbc rc5",
+    "and #1",
+    "and rc5",
+    "ora #1",
+    "eor #1",
+    "cmp #1",
+    "cmp rc5",
+    "cmp slot",
+    "cpx #1",
+    "cpx rc5",
+    "cpy #1",
+    "cpy slot",
+    "inc rc5",
+    "inc slot",
+    "inc rc5,x",
+    "dec rc5",
+    "dec slot",
+    "asl a",
+    "asl rc5",
+    "asl slot",
+    "lsr a",
+    "lsr rc5",
+    "rol a",
+    "rol rc5",
+    "ror a",
+    "ror rc5",
+    "tax",
+    "tay",
+    "txa",
+    "tya",
+    "inx",
+    "iny",
+    "dex",
+    "dey",
+    "clc",
+    "sec",
+    "nop",
+    "lda (rc2)",
+    "sta (rc2)",
+    "stz rc5",
+    "stz slot",
+    "inc a",
+    "dec a",
 ];
 
 /// The forms only the 65C02 has.
@@ -76,7 +143,8 @@ fn every_row_costs_what_sim65_counts() {
     }
 }
 
-/// The branches, jumps and calls, each with its target the next line or a routine of one `rts`.
+/// The branches, jumps and calls, each with its target the next line or a
+/// routine of one `rts`.
 #[test]
 fn flow_costs_what_sim65_counts() {
     for (target, cpu) in TARGETS {
@@ -119,8 +187,9 @@ fn every_row_takes_the_bytes_the_assembler_writes() {
     }
 }
 
-/// A macro definition in the text (the runtime keeps the ones its routines use) was priced as code:
-/// `mul16`'s priced size was 98 bytes against 44 linked once the runtime carried its macros.
+/// A macro definition in the text (the runtime keeps the ones its routines use)
+/// was priced as code: `mul16`'s priced size was 98 bytes against 44 linked
+/// once the runtime carried its macros.
 #[test]
 fn a_macro_body_is_not_priced_as_code() {
     let text = ".macro twice\n  asl a\n  asl a\n.endmacro\nf:\n  lda #1\n  rts\n";

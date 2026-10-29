@@ -46,6 +46,13 @@ pub struct Out {
     pub ext: Ext,
     /// `ArgFlags.isPointer()`.
     pub pointer: bool,
+    /// `OutputArg::ArgVT`: the type of the whole value this is a part of.
+    pub arg_vt: EVT,
+    /// `ArgFlags.isSplit()`: one of several parts of a value.
+    pub split: bool,
+    /// The argument is one of a call's variadic ones
+    /// (`CallLoweringInfo::IsVarArg` past `NumFixedArgs`).
+    pub variadic: bool,
 }
 
 /// An `ISD::InputArg`: a part of a formal argument or of a call's result.
@@ -53,6 +60,10 @@ pub struct Out {
 pub struct In {
     pub vt: EVT,
     pub pointer: bool,
+    /// `InputArg::ArgVT`: the type of the whole value this is a part of.
+    pub arg_vt: EVT,
+    /// `ArgFlags.isSplit()`.
+    pub split: bool,
 }
 
 /// `MachineFrameInfo::CreateFixedObject`: size, offset from the first
@@ -62,13 +73,44 @@ pub type FixedObject<'a> = &'a mut dyn FnMut(u32, i64, bool) -> i32;
 /// A live-in register: the virtual register the function receives `reg` in.
 pub type LiveIn<'a> = &'a mut dyn FnMut(RegId) -> u32;
 
+/// Where a [`TargetCalling::accepts`] question comes from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Site {
+    Arguments,
+    Call,
+    Return,
+}
+
 pub trait TargetCalling: Debug + Sync {
+    /// Whether the hook places an argument or parameter carrying the attribute
+    /// `name` (`sret`, `byval`, `inreg`..., see `relocating_attribute`)
+    /// where its type puts it; when it does not, a function or call with
+    /// one is refused.
+    fn places_attribute(
+        &self,
+        _name: &str,
+    ) -> bool {
+        false
+    }
+
     /// Whether a `byval` argument is passed as the address of a copy the
     /// caller makes in its own frame, the callee reading through the pointer.
     /// A target that puts the bytes in the argument area says no, and a call
     /// with one is refused.
     fn byval_by_reference(&self) -> bool {
         false
+    }
+
+    /// Whether the target places these parts (`outs` the values sent, `ins` the
+    /// values received); the builder refuses with the reason when it does not.
+    fn accepts(
+        &self,
+        _dag: &SelectionDAG,
+        _site: Site,
+        _outs: &[Out],
+        _ins: &[In],
+    ) -> Result<(), &'static str> {
+        Ok(())
     }
 
     /// `LowerCall`: the call sequence and the call; returns the chain and the

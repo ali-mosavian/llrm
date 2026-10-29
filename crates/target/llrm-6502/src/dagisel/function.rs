@@ -46,8 +46,9 @@ pub fn builder_target() -> BuilderTarget {
             big_endian: false,
             calling: Some(&MosCalling),
         }),
-        // a branch on `a || b` is two branches (the default `getJumpConditionMergingParams`),
-        // not two 0/1 bytes and a logic op
+        // a branch on `a || b` is two branches (the
+        // default `getJumpConditionMergingParams`), not two 0/1 bytes and a
+        // logic op
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
         ..BuilderTarget::m16()
     }
@@ -81,10 +82,12 @@ pub struct Selection {
     pub locals: Vec<i64>,
     /// The subtarget it was selected for: emission expands to the same CPU.
     pub cpu: Cpu,
-    /// The width in bits of the register of every value that has one: a phi input is read on an
-    /// edge laid out before any block that names it (a loop's back edge).
+    /// The width in bits of the register of every value that has one: a phi
+    /// input is read on an edge laid out before any block that names it (a
+    /// loop's back edge).
     pub widths: HashMap<u32, u32>,
-    /// The zero-page bytes the platform gives the imaginary registers: 16 or more (`Platform::zero_page`).
+    /// The zero-page bytes the platform gives the imaginary registers: 16 or
+    /// more (`Platform::zero_page`).
     pub zero_page: u8,
     /// The level's price of a byte against a clock.
     pub tuning: crate::alloc::Tuning,
@@ -126,7 +129,8 @@ pub fn select_function(
         .iter()
         .map(|(value, reg)| (*reg, 8 * layout.alloc_size(&module.context.types, function.value(value).ty) as u32))
         .collect();
-    // a value wider than a word is several registers, each a word: a phi copy names them all
+    // a value wider than a word is several registers, each a word: a phi copy
+    // names them all
     let wide: Vec<(u32, usize)> = info
         .value_regs
         .iter()

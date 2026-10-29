@@ -1,4 +1,5 @@
-//! The pieces of the C -> ours pipeline the benchmarks and the differential tests share.
+//! The pieces of the C -> ours pipeline the benchmarks and the differential
+//! tests share.
 
 use std::collections::HashMap;
 use std::path::Path;

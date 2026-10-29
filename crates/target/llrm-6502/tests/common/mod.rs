@@ -60,7 +60,8 @@ pub fn run_with(
     run_on("sim6502", name, main, extra).0
 }
 
-/// [`run_with`], and the cycles sim65 counts for the whole program (start-up and exit included).
+/// [`run_with`], and the cycles sim65 counts for the whole program (start-up
+/// and exit included).
 pub fn cycles_with(
     name: &str,
     main: &str,

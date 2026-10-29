@@ -13,6 +13,12 @@ import gate  # noqa: E402
 ROOT = gate.ROOT
 
 
+
+def ci_needs(workflow: str) -> list[str]:
+    """The last three jobs `ci:` waits for: the ones before them (static, toolchain, pintools, build) come and go."""
+    return re.search(r"\n  ci:\n    needs: \[([^\]]*)\]", workflow)[1].split(", ")[-3:]
+
+
 def test_a_change_in_the_c_frontend_runs_the_c_programs_and_qcport_not_the_debugger_sessions():
     p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     assert p.tier == "fast"
@@ -89,6 +95,19 @@ def test_every_root_test_binary_is_in_exactly_one_step():
             continue
         in_integration = f"--test {name} " in cmds["integration"] + " "
         assert in_integration != (name in whole), name
+
+
+def test_a_root_test_named_like_a_members_runs_only_the_root_one():
+    """gate run 3 (c1d651c7b976) said "INCOMPLETE: 2 results of 1 test binaries": a bare `cargo test --test run` also ran llrm-arm64's
+    tests/run.rs (24 tests, all filtered out by the step's filter), and the step counts one binary."""
+    pkgs = gate.packages()
+    cmds = gate.commands(gate.plan(["crates/ir/llrm-mir/src/lib.rs"]), gate.load(), pkgs)
+    shared = {t for _, t in gate.crate_tests(pkgs)} & set(gate.root_tests())
+    assert "run" in shared, shared
+    for name in shared:
+        for step, cmd in cmds.items():
+            if step != "crate-tests" and re.search(rf"--test {name}(\s|$)", cmd):
+                assert f"-p llrm --test {name}" in cmd or re.search(rf"-p llrm (--test \w+ )*--test {name}(\s|$)", cmd), (step, cmd)
 
 
 def test_the_test_that_writes_into_the_tree_runs_alone_after_the_run_test_could_see_it():
@@ -296,7 +315,7 @@ def test_without_the_opt_in_the_plan_and_the_commands_are_what_they_were(tmp_pat
 def test_a_python_test_file_that_needs_a_missing_probe_is_left_out_of_pytest_by_name():
     """test_scaling_gate.py read float('<not supported>') on a runner without counters and failed the python group on main; test_scaling.py failed 'Access to performance monitoring ... is limited' on a runner whose VM has no instruction counters."""
     missing = {"perf": "perf: `perf stat` fails here"}
-    assert sorted(gate.python_tests_unusable(missing)) == ["crates/target/llrm-x86-m32/vsgcc/test_scaling.py", "crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py"]
+    assert sorted(gate.python_tests_unusable(missing)) == ["crates/target/llrm-x86-m32/vsgcc/test_scaling.py", "crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py", "tools/test_parity_smoke_perf.py", "tools/test_scoreboard_perf.py"]  # by name: a new counter test is a new name here
     p = gate.plan(["tools/linkrecipe.py"])
     cmds = gate.commands(p, gate.load(), gate.packages(), frozenset(), tuple(gate.python_tests_unusable(missing)))
     assert "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling.py" in cmds["pytest"] and "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py" in cmds["pytest"]
@@ -741,6 +760,18 @@ def test_a_failed_step_prints_what_its_failing_tests_printed_not_only_the_log_ta
     assert gate.failure_text("everything passed\n") == ""
 
 
+def test_every_failing_pytest_file_shows_its_failure_and_a_log_without_tests_shows_its_head():
+    """Gate 3's python group had nine red files and the log named the failure of the first four: the 80-line cap went to the files that sort
+    first, and tools/test_oracles.py's text never reached CI. A step with no test output (oracle-qcport) showed only the tail of the
+    emulator's logs, not the verdict line above them."""
+    section = lambda name: [f"######## {name}: exit 1", "= FAILURES =", f"___ test_{name} ___", *[f"E   line {i} of {name}" for i in range(40)], "= short test summary info ="]
+    names = [f"tools/test_{c}.py" for c in "abcdefghi"]
+    shown = gate.failure_text("\n".join(line for name in names for line in section(name)))
+    assert all(f"line 0 of {name}" in shown for name in names)
+    head = gate.log_head("QCport built by llrm-c draws differently from the Borland build:\n  a run drew nothing\n" + "\n".join(f"tail {i}" for i in range(100)))
+    assert "a run drew nothing" in head and "tail 99" not in head
+
+
 def test_what_a_runner_lacks_is_a_named_skip_and_what_it_needs_is_installed(tmp_path):
     """GitHub CI was red on every commit: `tests/dwarf.rs` failed for want of Open Watcom's wdump (LLRM_REQUIRE_DWARF made a missing tool a
     failure), the QB45 runtime-library tests errored in LIB.EXE for want of QB45 (now only the tests that compare with BCOM45 need it), and the vsgcc harness could not link gcc -m32 programs
@@ -1063,6 +1094,14 @@ def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
                 os.kill(int(sleeper_pid.read_text()), signal.SIGKILL)
 
 
+def test_a_gate_without_a_user_bus_refuses_with_the_hint_instead_of_exiting_on_a_dbus_line():
+    """Under `env -i` the gate re-executed itself into systemd-run, which failed with one dbus line and no verdict (bare-environment repro, 2026-10-29)."""
+    assert "GATE_SCOPED=1" in gate.scope_refusal({}, "/usr/bin/systemd-run")
+    assert gate.scope_refusal({"XDG_RUNTIME_DIR": "/run/user/1"}, "/usr/bin/systemd-run") is None
+    assert gate.scope_refusal({"GATE_SCOPED": "1"}, "/usr/bin/systemd-run") is None
+    assert gate.scope_refusal({}, "") is None
+
+
 def test_the_gate_scope_is_omitted_from_systemd_oomd(tmp_path):
     """systemd-oomd SIGKILLed two fast gates at 13:56 on memory pressure (58%, then 78%, over 50% for 20 s) with 174 G free: a gate in its
     own scope was a victim. The scope carries user.oomd_omit, which oomd honours."""
@@ -1234,7 +1273,7 @@ def test_the_checks_that_build_nothing_run_alone_before_the_build():
     assert not {"fmt", "docs", "products"} & {s for g, steps in cfg["groups"].items() if g != "static" for s in steps}
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "  build:\n    needs: [plan, static]" in workflow and 'if g != "static"' in workflow, "the matrix never runs the static group"
-    assert "needs: [plan, build]\n    # A skipped ancestor" in workflow and "needs.build.result == 'success' }}" in workflow, "a skipped static job must not skip the gate"
+    assert re.search(r"needs: \[plan, build[^\]]*\]\n    # A skipped ancestor", workflow) and "needs.build.result == 'success'" in workflow, "a skipped static job must not skip the gate"
 
 
 def test_a_draft_runs_plan_and_static_only_and_is_never_reported_as_a_pass():
@@ -1309,7 +1348,7 @@ def test_the_bench_step_runs_as_shards_and_a_merge_judges_the_whole_and_records_
     assert "actions/cache/restore@v4" in workflow and "bench-base-$(python3 tools/bench/basecounts.py key HEAD^1" in workflow
     merge = workflow[workflow.index("  bench-merge:") : workflow.index("\n  ci:")]
     assert "bench.py --merge" in merge and "'--record'" in merge and "key: ${{ steps.basecounts.outputs.head }}" in merge
-    assert "needs: [plan, static, build, gate, bench-merge, setup-check]" in workflow
+    assert ci_needs(workflow) == ["gate", "bench-merge", "setup-check"], "ci waits for the gate, the merge and the set-up check, after any jobs before them"
     assert "if: always() && github.event_name == 'push' && steps.merge.outputs.recorded == 'true'" in merge, "saved even when the verdict is a failure"
 
 
@@ -1317,8 +1356,9 @@ def test_the_bench_step_is_cut_into_the_configured_shards_each_with_its_own_slic
     p = gate.plan(["bench/fib/fib.c"], "full")
     groups = gate.groups_of(p, {})
     n = gate.load()["bench"]["shards"]
-    assert [g for g in groups if g.startswith("bench")] == [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
+    assert [g for g in groups if g.startswith("bench")] == ["bench-base"] + [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
     assert gate.shard_of("bench-3") == ("bench", f"3/{n}") and gate.shard_of("tools") == ("tools", None)
+    assert gate.shard_of("bench-base") == ("bench", "base"), "the base is measured once, by its own job, for every slice to be judged against"
     assert "--shard" in gate.commands(p, gate.load(), gate.packages())["bench"]
 
 
@@ -1333,7 +1373,7 @@ def test_the_scaling_tests_run_in_their_own_step_in_their_own_group():
     """Only they need hardware counters, so only their job needs tinytim: the python group, with them in it, ran on tinytim for 12 minutes."""
     cfg = gate.load()
     assert cfg["groups"]["perf"] == ["pytest-perf", "oracle-premise"] and cfg["groups"]["oracle"] == ["oracle-sweep"] and "pytest-perf" not in cfg["groups"]["python"]
-    assert gate.perf_files() == sorted(f for f, needs in gate.declared_requirements().items() if "perf" in needs) and len(gate.perf_files()) == 2
+    assert gate.perf_files() == sorted(f for f, needs in gate.declared_requirements().items() if "perf" in needs) and len(gate.perf_files()) == 4
     assert cfg["requires"]["pytest-perf"] == ["perf"], "skipped whole, and allowed to be, where there are no counters"
     assert cfg["requires"]["oracle-premise"] == ["perf"], "which oracle ran at all is measured with perf; the sharded compiles need none"
 
@@ -1389,7 +1429,7 @@ def test_a_change_to_the_setup_action_is_run_on_tinytim_before_it_merges():
     """#1987 fixed the set-up there and its own diff planned no tinytim job: the live proof is a job for any change to the action."""
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "setup-check:" in workflow and "runs-on: [self-hosted, tinytim]" in workflow.split("setup-check:")[1].split("static:")[0]
-    assert "\\.github/actions/setup/" in workflow and "needs: [plan, static, build, gate, bench-merge, setup-check]" in workflow
+    assert "\\.github/actions/setup/" in workflow and ci_needs(workflow) == ["gate", "bench-merge", "setup-check"]
 
 
 def test_a_push_to_main_makes_no_perf_or_cost_job():

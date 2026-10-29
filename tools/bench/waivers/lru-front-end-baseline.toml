@@ -1,0 +1,26 @@
+reason = "lru -Os m16 bytes: a front-end-change baseline gap (llrm-c to llrm-cc), not a decision to grow; see DEBT lru-os-m16-bytes in docs/working/ci.md"
+
+[[row]]
+label = "lru c -Os"
+counter = "code_bytes"
+to = 402
+
+[[row]]
+label = "lru c -Os"
+counter = "instructions"
+to = 137
+
+[[row]]
+label = "lru c -Os"
+counter = "memory_operands"
+to = 61
+
+[[row]]
+label = "lru bq32 -Os"
+counter = "code_bytes"
+to = 515
+
+[[row]]
+label = "lru nib -Os"
+counter = "memory_operands"
+to = 147

@@ -450,17 +450,7 @@ impl<'a> Selector<'a> {
         &self,
         global: GlobalId,
     ) -> bool {
-        use llrm_mir::{GlobalKind, Linkage};
-        let global = self.module.global(global);
-        let defined = match &global.kind {
-            GlobalKind::Function(function) => !function.is_declaration(),
-            GlobalKind::Variable(variable) => variable.initializer.is_some(),
-        };
-        let local = matches!(global.linkage, Linkage::Internal | Linkage::Private);
-        let _ = defined;
-        // Darwin reaches anything not defined here through the GOT; Linux
-        // static code reaches all of it directly.
-        self.platform == Platform::Darwin && !local && !defined
+        global_needs_got(self.module, self.platform, global)
     }
 
     fn constant_expression(
@@ -754,4 +744,23 @@ impl Selector<'_> {
             Val::Ptr(_) | Val::Agg(_) => None,
         }
     }
+}
+
+/// [`Selector::needs_got`] for any module: the one rule, shared with the DAG
+/// path.
+pub(crate) fn global_needs_got(
+    module: &Module,
+    platform: Platform,
+    global: GlobalId,
+) -> bool {
+    use llrm_mir::{GlobalKind, Linkage};
+    let global = module.global(global);
+    let defined = match &global.kind {
+        GlobalKind::Function(function) => !function.is_declaration(),
+        GlobalKind::Variable(variable) => variable.initializer.is_some(),
+    };
+    let local = matches!(global.linkage, Linkage::Internal | Linkage::Private);
+    // Darwin reaches anything not defined here through the GOT; Linux
+    // static code reaches all of it directly.
+    platform == Platform::Darwin && !local && !defined
 }

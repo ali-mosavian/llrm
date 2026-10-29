@@ -50,8 +50,22 @@ pub struct TargetLoweringInfo {
     /// Per entry of `INTEGERS`: its action and the type it becomes.
     integers: [(TypeAction, MVT); 6],
     far: bool,
-    /// `getScalarShiftAmountTy` returns the shifted type (m68k) and not `i8`.
-    shift_by_value_type: bool,
+    /// `getSetCCResultType` for a scalar: x86 compares into an `i8`, AArch64
+    /// into an `i32`.
+    set_cc_result: MVT,
+    /// `getScalarShiftAmountTy`.
+    shift_amount: ShiftAmount,
+}
+
+/// What `getScalarShiftAmountTy` returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShiftAmount {
+    /// x86.
+    I8,
+    /// The shifted type (m68k).
+    ByValue,
+    /// The pointer-sized integer, the default (AArch64: `i64`).
+    Fixed(MVT),
 }
 
 impl TargetLoweringInfo {
@@ -76,18 +90,18 @@ impl TargetLoweringInfo {
                 integers[below] = (TypeAction::PromoteInteger, nearest_legal);
             }
         }
-        TargetLoweringInfo { integers, far, shift_by_value_type: false }
+        TargetLoweringInfo { integers, far, set_cc_result: MVT::I8, shift_amount: ShiftAmount::I8 }
     }
 
     /// A shift's amount has the type of the value shifted
     /// (`M68kTargetLowering::getScalarShiftAmountTy`).
     pub fn with_shift_by_value_type(mut self) -> TargetLoweringInfo {
-        self.shift_by_value_type = true;
+        self.shift_amount = ShiftAmount::ByValue;
         self
     }
 
-    pub fn shift_by_value_type(&self) -> bool {
-        self.shift_by_value_type
+    pub fn shift_amount(&self) -> ShiftAmount {
+        self.shift_amount
     }
 
     /// m32: `addRegisterClass` of `i8`, `i16`, `i32`; no far pointer.
@@ -103,6 +117,16 @@ impl TargetLoweringInfo {
     /// m16: the same registers, and the far pointer (SD2).
     pub fn x86_16() -> TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], true)
+    }
+
+    /// AArch64: `addRegisterClass` of `i32` and `i64`; a compare makes an `i32`
+    /// (`AArch64TargetLowering::getSetCCResultType`).
+    pub fn aarch64() -> TargetLoweringInfo {
+        TargetLoweringInfo {
+            set_cc_result: MVT::I32,
+            shift_amount: ShiftAmount::Fixed(MVT::I64),
+            ..TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false)
+        }
     }
 
     /// `getTypeConversion`: the action for `vt` and the type it becomes.
@@ -138,12 +162,12 @@ impl TargetLoweringInfo {
         }
     }
 
-    /// `getSetCCResultType`: X86 compares into an `i8`, whatever the operands.
+    /// `getSetCCResultType`: one type, whatever the operands (scalars only).
     pub fn set_cc_result_type(
         &self,
         _operand: EVT,
     ) -> EVT {
-        EVT::I8
+        EVT::Simple(self.set_cc_result)
     }
 
     /// The target has the far pointer type (m16).

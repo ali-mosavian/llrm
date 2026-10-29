@@ -127,7 +127,10 @@ fn flag_sequence_start(insts: &[Inst]) -> usize {
     let copies_to_physical =
         |inst: &Inst| inst.kind == Kind::Copy && matches!(inst.operands.first(), Some(Operand::Def(Reg::Phys(_))));
     let mut start = insts.len();
-    while start > 0 && !insts[start - 1].terminator && (insts[start - 1].sets_flags || copies_to_physical(&insts[start - 1])) {
+    while start > 0
+        && !insts[start - 1].terminator
+        && (insts[start - 1].sets_flags || copies_to_physical(&insts[start - 1]))
+    {
         start -= 1;
     }
     start
@@ -373,15 +376,18 @@ fn slot_access<C>(
     }
 }
 
-/// Test profile: check every slot sharing with [`verify_sharing`] and panic on a wrong one.
+/// Test profile: check every slot sharing with [`verify_sharing`] and panic on
+/// a wrong one.
 pub static VERIFY_SLOTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 type Sites = std::collections::BTreeSet<(usize, usize)>;
 
-/// What each read of a spill slot can see: the stores that may have written the value it reads. A
-/// store of a register that a reload of another slot filled stores that slot's value, wherever the two
-/// sit in the block, so it takes that slot's stores. Slots shared wrongly, or a read or copy taken for
-/// another, change the answer. `origin` names each instruction's place in the function it came from.
+/// What each read of a spill slot can see: the stores that may have written the
+/// value it reads. A store of a register that a reload of another slot filled
+/// stores that slot's value, wherever the two sit in the block, so it takes
+/// that slot's stores. Slots shared wrongly, or a read or copy taken for
+/// another, change the answer. `origin` names each instruction's place in the
+/// function it came from.
 fn slot_sources<C>(
     function: &MFunction<C>,
     slots: &[(i32, C)],
@@ -393,7 +399,8 @@ fn slot_sources<C>(
     let mut entry: Vec<Option<State>> = vec![None; function.blocks.len()];
     entry[0] = Some(State::new());
     let step = |state: &mut State, b: usize, reads: &mut Vec<((usize, usize), Sites)>| {
-        // the stores a register's value came from, while it holds a reloaded slot
+        // the stores a register's value came from, while it holds a reloaded
+        // slot
         let mut loaded: HashMap<Reg, Sites> = HashMap::new();
         for (i, inst) in function.blocks[b].insts.iter().enumerate() {
             let access = slot_access(inst, slots);
@@ -404,7 +411,9 @@ fn slot_sources<C>(
                         Some(Operand::Use(r)) => Some(*r),
                         _ => None,
                     };
-                    let sources = register.and_then(|r| loaded.get(&r).cloned()).unwrap_or_else(|| Sites::from([(b, origin[b][i])]));
+                    let sources = register
+                        .and_then(|r| loaded.get(&r).cloned())
+                        .unwrap_or_else(|| Sites::from([(b, origin[b][i])]));
                     state.insert(slots[slot].0, sources);
                 }
                 Some((slot, false)) => {
@@ -459,9 +468,10 @@ fn slot_sources<C>(
     reads
 }
 
-/// Slot sharing and the removal of the copies it makes into no-ops leave every read that remains seeing
-/// the stores it saw before: no two values that are live at once share a cell, and a read folded into
-/// an instruction reads the cell it names. `kept[b][i]` is where instruction `i` of block `b` of `after`
+/// Slot sharing and the removal of the copies it makes into no-ops leave every
+/// read that remains seeing the stores it saw before: no two values that are
+/// live at once share a cell, and a read folded into an instruction reads the
+/// cell it names. `kept[b][i]` is where instruction `i` of block `b` of `after`
 /// was in `before`.
 pub fn verify_sharing<C>(
     before: &MFunction<C>,
@@ -473,14 +483,18 @@ pub fn verify_sharing<C>(
     let identity: Vec<Vec<usize>> = before.blocks.iter().map(|b| (0..b.insts.len()).collect()).collect();
     let was = slot_sources(before, slots_before, &identity);
     let is = slot_sources(after, slots_after, kept);
-    // a removed self-copy was a read too; every read that is left must see what it saw
+    // a removed self-copy was a read too; every read that is left must see what
+    // it saw
     let mut now = is.iter().peekable();
     for (site, one) in &was {
         if let Some((at, other)) = now.peek()
             && at == site
         {
             if one != other {
-                return Err(format!("the read at block {} instruction {} saw the stores {one:?}, now {other:?}", site.0, site.1));
+                return Err(format!(
+                    "the read at block {} instruction {} saw the stores {one:?}, now {other:?}",
+                    site.0, site.1
+                ));
             }
             now.next();
         }
@@ -523,7 +537,8 @@ fn share_slots<C: Copy + PartialEq>(
                     Some((slot, true)) => {
                         // the copy's source holds the same value: no clash
                         let loaded = |p: usize| match (slot_access(&insts[p], slots), insts[p].operands.first()) {
-                            // a load only: a read of the slot folded into an instruction is not a copy source
+                            // a load only: a read of the slot folded into an
+                            // instruction is not a copy source
                             (Some((from, false)), Some(Operand::Def(r))) if is_reload(&insts[p]) => Some((from, *r)),
                             _ => None,
                         };
@@ -577,13 +592,16 @@ fn share_slots<C: Copy + PartialEq>(
             }
         }
     }
-    // `StackSlotColoring`: each slot that is still its own takes the first lower one it never shares a
-    // moment with, so a function's spills use as many cells as are live at once, not one per spill
+    // `StackSlotColoring`: each slot that is still its own takes the first
+    // lower one it never shares a moment with, so a function's spills use
+    // as many cells as are live at once, not one per spill
     for b in 0..n {
         if rep[b] != b {
             continue;
         }
-        let Some(a) = (0..b).find(|a| rep[*a] == *a && slots[*a].1 == slots[b].1 && !interferes[*a][b]) else { continue };
+        let Some(a) = (0..b).find(|a| rep[*a] == *a && slots[*a].1 == slots[b].1 && !interferes[*a][b]) else {
+            continue;
+        };
         rep[b] = a;
         for x in 0..n {
             if interferes[b][x] {
@@ -619,16 +637,16 @@ fn share_slots<C: Copy + PartialEq>(
     }
 }
 
-/// Whether `inst` only loads a slot into a register: `[Def(register), Frame(slot), ..]`. A read of
-/// the slot folded into another instruction (`ora slot`) is not one, and neither it nor the store of
-/// its result is a copy.
+/// Whether `inst` only loads a slot into a register: `[Def(register),
+/// Frame(slot), ..]`. A read of the slot folded into another instruction (`ora
+/// slot`) is not one, and neither it nor the store of its result is a copy.
 fn is_reload(inst: &Inst) -> bool {
     matches!(inst.operands.get(1), Some(Operand::Frame(_)))
 }
 
 /// A load of a slot followed by a store of the register back to it: the store
-/// goes, and the load with it when nothing else reads the register. `kept[b][i]` says where
-/// instruction `i` of block `b` was before.
+/// goes, and the load with it when nothing else reads the register.
+/// `kept[b][i]` says where instruction `i` of block `b` was before.
 fn drop_self_copies<C>(
     function: &mut MFunction<C>,
     slots: &[(i32, C)],
@@ -641,7 +659,8 @@ fn drop_self_copies<C>(
             }
         }
     }
-    let frame = |inst: &Inst| inst.operands.iter().find_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None });
+    let frame =
+        |inst: &Inst| inst.operands.iter().find_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None });
     let mut kept: Vec<Vec<usize>> = Vec::with_capacity(function.blocks.len());
     for block in &mut function.blocks {
         let mut out: Vec<Inst> = Vec::with_capacity(block.insts.len());
@@ -690,17 +709,20 @@ pub fn allocate_spilling_ordered<T: Target>(
     let mut slots = Vec::new();
     let mut temporaries = HashSet::new();
     loop {
-        let failures = match GraphColoring::<T>::by_frequency(by_frequency).with_unspillable(&temporaries).colour(function) {
-            Ok(assignment) => {
-                share_slots(function, &mut slots);
-                return Ok((assignment, slots));
-            }
-            Err(failures) => failures,
-        };
-        // A victim relieves the failures near it, so a victim per failure can spill more than the
-        // function needs; one per round made the cost the square of the spills. The round spills
-        // at most a quarter more than the function has spilled so far: the first spills are
-        // chosen one at a time, a long function's in O(log) rounds.
+        let failures =
+            match GraphColoring::<T>::by_frequency(by_frequency).with_unspillable(&temporaries).colour(function) {
+                Ok(assignment) => {
+                    share_slots(function, &mut slots);
+                    return Ok((assignment, slots));
+                }
+                Err(failures) => failures,
+            };
+        // A victim relieves the failures near it, so a victim per failure can
+        // spill more than the function needs; one per round made the
+        // cost the square of the spills. The round spills
+        // at most a quarter more than the function has spilled so far: the
+        // first spills are chosen one at a time, a long function's in
+        // O(log) rounds.
         let mut victims: Vec<u32> = Vec::new();
         let mut excluded = temporaries.clone();
         for failed in failures.iter().take(slots.len() / 4 + 1) {

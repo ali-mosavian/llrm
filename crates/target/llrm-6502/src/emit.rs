@@ -570,5 +570,7 @@ pub fn relax_bra(text: &str) -> String {
 /// The equates for the imaginary registers on `platform`: `rc0 = $80` and so
 /// on.
 pub fn equates(platform: &Platform) -> String {
-    (0..usize::from(platform.zero_page)).map(|n| format!("rc{n} = ${:02X}\n", platform.imag_base as usize + n)).collect()
+    (0..usize::from(platform.zero_page))
+        .map(|n| format!("rc{n} = ${:02X}\n", platform.imag_base as usize + n))
+        .collect()
 }

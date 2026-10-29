@@ -80,10 +80,13 @@ fn test_a_turn_that_saves_clocks_is_made_whatever_the_share_of_jumps() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    // A `mov` between the step and the branch leaves the flags alone, as in
+    // the pin (`dec ecx; mov esi, eax; je`).
     let counters: Vec<&str> = lines
-        .windows(2)
-        .filter(|pair| pair[0].starts_with("inc ") || pair[0].starts_with("dec "))
-        .map(|pair| pair[1])
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("inc ") || line.starts_with("dec "))
+        .filter_map(|(at, _)| lines[at + 1..].iter().find(|next| !next.starts_with("mov ")).copied())
         .collect();
     assert!(counters.iter().any(|next| next.starts_with("je ")), "the loop's test branches back: {counters:?}\n{text}");
 }

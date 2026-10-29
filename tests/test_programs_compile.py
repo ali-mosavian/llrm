@@ -15,7 +15,7 @@ from tools import envflag, llrmbin, sizes
 ROOT = Path(__file__).resolve().parents[1]
 BINS = llrmbin.bin_dir()
 KNOWN = ROOT / "tools" / "sizes-known.txt"
-NAMES = ("llrm-qb", "llrm-c", "llrm-nib")
+NAMES = ("llrm-qb", "llrm-cc", "llrm-llc", "llrm-nib")
 SOURCES = (".rs", ".toml", ".prs", ".lock", ".txt", ".isel", ".nib")
 
 

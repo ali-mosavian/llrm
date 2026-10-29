@@ -48,17 +48,28 @@ pub trait Target {
     ) -> bool {
         one == other
     }
-    /// Whether a register worth `weight` (its mentions, each scaled by its loop depth) should take
-    /// `root`, when `first_use` says no other register of the function has taken it yet. A target
-    /// whose registers cost something to use the first time (a callee-saved one is saved and
-    /// restored) answers no for a register that gains less, and that register is spilled
-    /// (`RAGreedy::tryAssignCSRFirstTime`, RegAllocGreedy.cpp#L2188).
+    /// Whether a register worth `weight` (its mentions, each scaled by its loop
+    /// depth) should take `root`, when `first_use` says no other register
+    /// of the function has taken it yet. A target whose registers cost
+    /// something to use the first time (a callee-saved one is saved and
+    /// restored) answers no for a register that gains less, and that register
+    /// is spilled (`RAGreedy::tryAssignCSRFirstTime`,
+    /// RegAllocGreedy.cpp#L2188).
     fn worth_taking(
         _root: RegId,
         _first_use: bool,
         _weight: u64,
     ) -> bool {
         true
+    }
+
+    /// The class the instruction `name` names for operand `index`, where it
+    /// does (`MCInstrDesc::operands`).
+    fn operand_class(
+        _name: &str,
+        _index: usize,
+    ) -> Option<Self::Class> {
+        None
     }
     /// The instruction that stores `register` (of `class`) to frame `slot`;
     /// `None` when the target cannot spill.
@@ -69,8 +80,9 @@ pub trait Target {
     ) -> Option<Inst> {
         None
     }
-    /// `foldMemoryOperand`: `inst` with its only read of the spilled `register` taken straight from frame
-    /// `slot`, where the target has an instruction form for that; the reload then goes.
+    /// `foldMemoryOperand`: `inst` with its only read of the spilled `register`
+    /// taken straight from frame `slot`, where the target has an
+    /// instruction form for that; the reload then goes.
     fn fold_spill(
         _inst: &Inst,
         _register: Reg,
@@ -412,8 +424,8 @@ pub struct GraphColoring<T> {
     /// Join copies that run on every trip of a loop before the ones in a
     /// branch of it (see [`GraphColoring::colour`]).
     pub by_frequency: bool,
-    /// Registers that cannot be spilled again (made by spill code), so a colour that costs more than
-    /// the register is worth is better than none.
+    /// Registers that cannot be spilled again (made by spill code), so a colour
+    /// that costs more than the register is worth is better than none.
     unspillable: HashSet<u32>,
     marker: PhantomData<T>,
 }
@@ -446,7 +458,8 @@ impl<T: Target> GraphColoring<T> {
         GraphColoring { by_frequency, unspillable: HashSet::new(), marker: PhantomData }
     }
 
-    /// The same, where the registers in `unspillable` take any colour that fits.
+    /// The same, where the registers in `unspillable` take any colour that
+    /// fits.
     pub fn with_unspillable(
         mut self,
         unspillable: &HashSet<u32>,
@@ -490,8 +503,9 @@ impl<T: Target> GraphColoring<T> {
         keyed.into_iter().map(|(_, inst)| inst).collect()
     }
 
-    /// Colour every register, or name each one nothing fits, in colouring order. A register left
-    /// uncoloured constrains no other, so one round names every victim the others still leave.
+    /// Colour every register, or name each one nothing fits, in colouring
+    /// order. A register left uncoloured constrains no other, so one round
+    /// names every victim the others still leave.
     pub fn colour(
         &self,
         function: &MFunction<T::Class>,
@@ -604,7 +618,10 @@ impl<T: Target> GraphColoring<T> {
                 }
                 // `drop` is live with another physical register that shares
                 // storage with `root`: joined, both would hold it at once
-                if edges[drop].iter().any(|n| *n >= count && *n != keep && T::overlaps(nodes.physical[*n - count], root)) {
+                if edges[drop]
+                    .iter()
+                    .any(|n| *n >= count && *n != keep && T::overlaps(nodes.physical[*n - count], root))
+                {
                     continue;
                 }
                 classes[keep]
@@ -662,10 +679,17 @@ impl<T: Target> GraphColoring<T> {
                 let fits = |root: &RegId| !taken.iter().any(|one| T::overlaps(*one, *root));
                 let first_use = |root: &RegId| !taken_roots.iter().any(|one| T::overlaps(*one, *root));
                 let candidates = T::candidates(classes[node]);
-                // a register the spill code made (one short run) cannot be spilled again
-                let chosen = candidates.iter().copied().find(|root| {
-                    fits(root) && (self.unspillable.contains(&(v as u32)) || crate::spill::already_minimal(function, v as u32) || T::worth_taking(*root, first_use(root), weight[node]))
-                });
+                // a register the spill code made (one short run) cannot be
+                // spilled again
+                let chosen = candidates
+                    .iter()
+                    .copied()
+                    .find(
+                        |root| fits(root)
+                            && (self.unspillable.contains(&(v as u32))
+                                || crate::spill::already_minimal(function, v as u32)
+                                || T::worth_taking(*root, first_use(root), weight[node])),
+                    );
                 if chosen.is_none() && candidates.iter().any(|root| fits(root)) {
                     let crowd = (0..count as u32).filter(|u| find(&mut parent, *u as usize) == node).collect();
                     failed_nodes.insert(node);

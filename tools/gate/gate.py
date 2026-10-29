@@ -130,18 +130,28 @@ def verdict_line(tier: str, failed: list[str], cut: list[str], took: float, skip
 
 
 def failure_text(log: str, limit: int = 80) -> str:
-    """What the failing tests of a cargo test or pytest log printed, at most `limit` lines: the log's last 30 lines name the failed target
-    and not the failure (CI said "1 target failed: -p llrm --test dwarf" and nothing of why)."""
-    lines = log.splitlines()
-    out, keep = [], False
-    for line in lines:
-        if re.match(r"^---- .+ (stdout|stderr) ----$", line) or re.match(r"^_{3,} .+ _{3,}$", line) or re.match(r"^={3,} (FAILURES|ERRORS) ={3,}$", line):
-            keep = True
-        elif re.match(r"^(failures:|test result:|={3,} short test summary info ={3,})", line):
-            keep = False
-        if keep and line.strip():
-            out.append(line)
-    return "\n".join(out[:limit])
+    """What the failing tests of a cargo test or pytest log printed, at most `limit` lines a file (pytest_shards prints one
+    `######## file: exit N` section per failing file): the log's last 30 lines name the failed target and not the failure (CI said
+    "1 target failed: -p llrm --test dwarf" and nothing of why), and one cap over the whole log went to the files that sort first."""
+    out = []
+    for section in re.split(r"(?m)^(?=######## )", log):
+        shown, keep = [], False
+        for line in section.splitlines():
+            if re.match(r"^---- .+ (stdout|stderr) ----$", line) or re.match(r"^_{3,} .+ _{3,}$", line) or re.match(r"^={3,} (FAILURES|ERRORS) ={3,}$", line):
+                keep = True
+            elif re.match(r"^(failures:|test result:|={3,} short test summary info ={3,})", line):
+                keep = False
+            if keep and line.strip():
+                shown.append(line)
+        if shown:
+            out += ([section.splitlines()[0]] if section.startswith("########") else []) + shown[:limit]
+    return "\n".join(out)
+
+
+def log_head(log: str, lines: int = 12) -> str:
+    """The first `lines` non-blank lines of a log: where a script that prints its verdict first (oracle-qcport's) says what failed,
+    and the tail shows only the emulator's logs under it."""
+    return "\n".join([line for line in log.splitlines() if line.strip()][:lines])
 
 
 def step_table(results: dict[str, tuple[int, float, float]]) -> str:
@@ -511,6 +521,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     # (with another crate that has one, the root crate stays in the scope: it turns on the features the others need)
     libs = scope if p.packages is None or any((ROOT / pkgs[n]["dir"] / "src/lib.rs").exists() for n in p.packages) else ""
     cargo = "cargo test --release -q --no-fail-fast"
+    # The root tests are named with -p llrm: a workspace member's test target of the same name (llrm-arm64's `run`) runs under a bare `--test run` too.
     split = cfg["split"]
     whole = set(cfg["whole"].values()) | set(cfg["exclusive"].values())
     skips = " ".join(f"--skip {s['filter']}" for s in split)
@@ -530,7 +541,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
 
     steps = {
         "build": BUILD,
-        "facts": f"{cargo} --test target_facts",
+        "facts": f"{cargo} -p llrm --test target_facts",
         # #1777 tracked d1.o, d4.o and d8.o and was smoke-green: the check of tests/tracked_build_products.rs, without a build.
         "products": "python3 -c \"import sys; sys.path.insert(0, 'tools/gate'); import gate; sys.exit(gate.products_main())\"",
         "docs": "python3 tools/docs/docsbuild/build.py --check && python3 tools/docs/passdocs.py --check",
@@ -538,7 +549,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         "lib": f"{cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
         # rustdoc over every crate costs 456 CPU-s to find no test: it runs when a doc comment has a fence to run.
         "doc": f"if python3 tools/gate/doctests.py crates src tests; then {cargo} {libs} --doc; else {SKIPPED_DOC}; fi" if libs else "true",
-        "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
+        "integration": f"{cargo} -p llrm {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",
         # Every scan runs, and any failing fails the step: the first red must not hide the others.
         "scans": "rc=0; "
@@ -576,12 +587,12 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         "qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/qcport-run-cc.py',
         "oracle-qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/oracle_qcport.py --jobs ${JOBS:-8}',
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
-        "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} --test run -- test_every_program_under_tests_run_prints_its_out",
+        "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} -p llrm --test run -- test_every_program_under_tests_run_prints_its_out",
     }
     for s in split:
-        steps[s["step"]] = f"{cargo} --test {s['bin']} -- {s['filter']}"
+        steps[s["step"]] = f"{cargo} -p llrm --test {s['bin']} -- {s['filter']}"
     for step, binary in {**cfg["whole"], **cfg["exclusive"]}.items():
-        steps[step] = f"{cargo} --test {binary}"
+        steps[step] = f"{cargo} -p llrm --test {binary}"
     return steps
 
 
@@ -699,13 +710,21 @@ def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
 SHARDED = {"bench": ("bench", "BENCH_SHARD"), "oracle": ("oracle", "ORACLE_SHARD")}
 
 
+# Slices a sharded group has besides its numbered ones: `bench-base` measures the base once, for every numbered slice's rows to be judged against.
+EXTRA_SLICES = {"bench": ("base",)}
+
+
 def shard_names(group: str) -> list[str]:
-    """`bench` as the CI jobs `bench-1` .. `bench-N` (likewise `oracle`): the step is cut into slices that run on their own runners; any other group as itself."""
-    return [f"{group}-{i}" for i in range(1, load()[SHARDED[group][0]]["shards"] + 1)] if group in SHARDED else [group]
+    """`bench` as the CI jobs `bench-base`, `bench-1` .. `bench-N` (likewise `oracle`, without a base): the step is cut into slices that run on their own runners; any other group as itself."""
+    if group not in SHARDED:
+        return [group]
+    return [f"{group}-{one}" for one in EXTRA_SLICES.get(group, ())] + [f"{group}-{i}" for i in range(1, load()[SHARDED[group][0]]["shards"] + 1)]
 
 
 def shard_of(group: str | None) -> tuple[str | None, str | None]:
-    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`; any other group as it is."""
+    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`, (`bench`, "base") for `bench-base`; any other group as it is."""
+    if group == "bench-base":
+        return "bench", "base"
     if group and (one := re.fullmatch(r"(bench|oracle)-(\d+)", group)):
         return one[1], f"{one[2]}/{load()[SHARDED[one[1]][0]]['shards']}"
     return group, None
@@ -871,6 +890,8 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
             text = (logs / f"{name}.log").read_text()
             if failures := failure_text(text):
                 print(f"    [{name}: what the failing tests printed]\n" + "\n".join("    " + line for line in failures.splitlines()), flush=True)
+            else:
+                print(f"    [{name}: the head of its log]\n" + "\n".join("    " + line for line in log_head(text).splitlines()), flush=True)
             print("\n".join("    " + line for line in text.splitlines()[-30:]), flush=True)
 
     for name, why in skipped.items():
@@ -1000,6 +1021,14 @@ def scoped(argv: list[str], environ: dict | None = None, have: str | None = None
     return [have, "--user", "--scope", "-q", "-p", f"CPUWeight={weight}", "-p", "ManagedOOMPreference=omit", "--setenv=GATE_SCOPED=1", *argv]
 
 
+def scope_refusal(environ: dict | None = None, have: str | None = None) -> str | None:
+    """Why `scoped` would fail: systemd-run --user needs a user bus. Without one it exited with only a dbus line and no verdict."""
+    environ = os.environ if environ is None else environ
+    if scoped(["x"], environ, have) is None or environ.get("XDG_RUNTIME_DIR") or environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        return None
+    return "no systemd user bus (XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS unset): set GATE_SCOPED=1 to run without the scope"
+
+
 def main() -> int:
     kill_on_term()
     ap = argparse.ArgumentParser()
@@ -1038,6 +1067,9 @@ def main() -> int:
     if args.command == "run":
         head, dirty = head_state()
         if (why := refusal(head, dirty, args.expect, args.allow_dirty)) is not None:
+            print(f"gate: {why}")
+            return 2
+        if not args.json and (why := scope_refusal()):
             print(f"gate: {why}")
             return 2
         if not args.json and (wrapped := scoped([sys.executable, *sys.argv])):

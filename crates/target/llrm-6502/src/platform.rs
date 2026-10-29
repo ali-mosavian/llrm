@@ -28,8 +28,9 @@ pub struct Platform {
     pub load_address: u16,
     /// The zero-page address of `rc0`.
     pub imag_base: u8,
-    /// The zero-page bytes from `imag_base` the program may use as registers: `rc0`..`rc15` and
-    /// scratch cells above them (`rc16`.., at most 26 bytes). 16 where a row does not say.
+    /// The zero-page bytes from `imag_base` the program may use as registers:
+    /// `rc0`..`rc15` and scratch cells above them (`rc16`.., at most 26
+    /// bytes). 16 where a row does not say.
     pub zero_page: u8,
     /// Where the soft stack (`rs0`) starts; it grows down.
     pub soft_stack: u16,

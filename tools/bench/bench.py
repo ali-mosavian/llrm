@@ -15,13 +15,14 @@ from __future__ import annotations
 import os
 import re
 import sys
+import functools
 import json
 import math
 import shutil
 import tempfile
-import functools
 import argparse
 import subprocess
+import time
 import tomllib
 from datetime import date
 from pathlib import Path
@@ -169,28 +170,13 @@ def c_environment(variant: Variant) -> dict[str, str]:
     return {**os.environ, "LLRM_CC_TARGET": dosbatch.WATCOM_ROWS[dosbatch.target_bits(dosbatch.REAL_MODE)]} if variant.language == "c" else dict(os.environ)
 
 
-@functools.cache
-def reads_noinline_attribute(compiler: str) -> bool:
-    """False where `compiler` rejects `__attribute__((noinline))` (a build before the native C front end hands the source to wccq, which reads it as
-    `__declspec`): all 48 C rows of the main dist were then "wccq failed", and the C kernels went uncompared. True where it cannot be run."""
-    if not Path(compiler).is_file():
-        return True
-    with tempfile.TemporaryDirectory() as directory:
-        probe = Path(directory) / "probe.c"
-        probe.write_text("__attribute__((noinline)) int f(int a) { return a; }\nint main(void) { return f(0); }\n")
-        done = subprocess.run([compiler, str(probe), "-O2", "-o", f"{directory}/probe.obj"], capture_output=True, text=True)
-        return done.returncode == 0 or "__declspec" not in done.stderr
-
-
 def kept_a_call(variant: Variant, work: Path, stem: str) -> tuple[Path, Path] | None:
     """A C kernel's sources that keep it a call without `-fno-inline-functions`, which also kept a recursive function from inlining
     itself, as gcc and clang do (`rectwo` ran 4.2x gcc's clocks, 2.6x with it on): `main` calling it through a volatile pointer
     (vsgcc's `wrap.py`, which a kernel of constants cannot be folded out of), to run and count, and the kernel `noinline` with `main` as
     it was, whose object is the one sized: the pointer is 18 bytes of code and 4 of data no reference compiler's object has. The
-    attribute is added to what llrm-c reads; the reference compilers read the source as it is. None where the source has no such kernel
-    (the build then keeps the flag), and where the compiler cannot read the attribute."""
-    if not reads_noinline_attribute(str(BIN / "llrm-c")):
-        return None
+    attribute is added to what llrm-cc reads; the reference compilers read the source as it is. None where the source has no such kernel
+    (the build then keeps the flag)."""
     text = variant.source.read_text()
     found = re.search(rf"^([a-z][a-z ]*[ *]){re.escape(variant.region)}\(", text, re.M)
     if found is None:
@@ -215,21 +201,9 @@ def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     return flags
 
 
-FLOAT_FLAG = "-fexcess-precision=standard"
-
-
-def float_flags(variant: "Variant") -> list[str]:
-    """The flag a float row is measured with: Nib's f32 is C's fast mode (only memory stores round), so a program's result may differ by an ulp with what stays in an x87
-    register across a loop (nbody_single printed 86015 for 86016 once LoopRotate was on, #3218); a row against a reference is measured with the rounding on, and records it
-    (docs/architecture/redesign-plan.md, floats)."""
-    if variant.language == "nib" and re.search(r"\bf(?:32|64)\b", variant.source.read_text()):
-        return [FLOAT_FLAG]
-    return []
-
-
-def nib_flags(variant: "Variant | None" = None) -> list[str]:
+def nib_flags() -> list[str]:
     """What nib-build.sh is given for a Nib benchmark's compile."""
-    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *(float_flags(variant) if variant else []), *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
 
 
 def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[str, list[str], Path]]:
@@ -238,7 +212,7 @@ def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[st
     nib-build.sh gives llrm-nib; its runtime and foreign parts do not depend on the program."""
     obj = work / f"{stem}.obj"
     if variant.language == "nib":
-        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags(variant)], obj)]
+        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags()], obj)]
     if variant.language == FLAT:
         source = qbbuild.flat_source(variant.source)
         return [("llrm-qb", qbbuild.compile_arguments(source, (*compile_flags(variant, opt), "-g"), qbbuild.FLAT, obj), obj)]
@@ -272,7 +246,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
             done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
-                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags(variant))})
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags())})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
             # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
@@ -543,6 +517,14 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
     return {key: counts for key, counts in found.items() if key[0] != "startup"}
 
 
+START = time.monotonic()
+
+
+def stage(text: str) -> None:
+    """A progress line on stderr, which the gate's bench step lets through (its stdout is judged): a shard that hit the job timeout printed nothing for 45 minutes."""
+    print(f"bench: [{time.monotonic() - START:6.0f}s] {text}", file=sys.stderr, flush=True)
+
+
 def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
     """{(benchmark, language, opt): counts or {"error": why} or {"known": issue}}. The levels are independent (a folder each) and are
     measured at once, in a process each; a timed run keeps them one after the other."""
@@ -572,8 +554,10 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
     objects = qbbuild.runtimes(work / f"runtime-{opt}") if any(v.language in OURS_BASIC for _, v in todo) else None
     with ThreadPoolExecutor() as pool:
         built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)], objects), todo))
+    stage(f"{opt}: built {len(todo)} programs")
     basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
     failed = link_basic(basic, folder)
+    stage(f"{opt}: linked {len(basic)} BASIC programs")
     jobs, plain, needs, flat = [], {}, {}, {}
     for (directory, variant), result in zip(todo, built):
         key = (variant.name, variant.language, opt)
@@ -599,13 +583,13 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
         counted = [(key, job) for key, job in jobs if job is not None]
         for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
             out[key] = counts
-    for (_, variant), key in ((one, (one[1].name, one[1].language, opt)) for one in todo):
-        if key in out and (flags := float_flags(variant)) and "skip" not in out[key]:
-            out[key] = {**out[key], "flags": flags}
+    stage(f"{opt}: counted {len(jobs)} programs")
     out |= measure_flat(flat, folder / "flat")
+    stage(f"{opt}: flat target done")
     jobs = [(key, job if job is not None else (flat[key][0], flat[key][1], None, None, None, None)) for key, job in jobs]
     exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
     run_timed(out, exes, {key: needs[key] for key in exes if needs.get(key)}, folder / "time", timing, already=set(flat))
+    stage(f"{opt}: DOSBox runs done")
     return out
 
 
@@ -746,6 +730,27 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -
     return problems
 
 
+def clock_limits() -> dict[str, int]:
+    """The -Os m16 rows whose 486 clocks are above main's and may not grow (clock_limits.toml, one debt class each in docs/working/ci.md):
+    row label -> clocks it may reach. A row with none is not judged."""
+    return tomllib.loads((Path(__file__).parent / "clock_limits.toml").read_text()).get("clocks", {})
+
+
+def main_clocks() -> dict[str, int]:
+    """Main's -Os m16 clocks per row (main_clocks.toml): what a row may reach without an entry in clock_limits.toml."""
+    return tomllib.loads((Path(__file__).parent / "main_clocks.toml").read_text()).get("clocks", {})
+
+
+def clock_problems(label: str, got: dict, limits: dict[str, int], main: dict[str, int] | None = None) -> list[str]:
+    """A listed row above its limit fails: the clocks the step measured already, the same harness as main's. A row above main's with
+    no entry fails too: without it the first run of a regressed row would be red only by luck of the list."""
+    if label in limits and got.get("clocks", 0) > limits[label]:
+        return [f"{label}: clocks {got['clocks']} > limit {limits[label]} (tools/bench/clock_limits.toml)"]
+    if label not in limits and main and got.get("clocks", 0) > main.get(label, float("inf")):
+        return [f"{label}: clocks {got['clocks']} > main's {main[label]} and no entry in tools/bench/clock_limits.toml"]
+    return []
+
+
 def time_against(label: str, got: dict, want: dict | None) -> list[str]:
     """A timed-only program has no count to gate: its own kernel time does, with the time tolerance, against the base's (worse only)."""
     if want is None or "kernel_ms" not in got or "kernel_ms" not in want:
@@ -792,6 +797,8 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
     each benchmark's expected.toml."""
     problems = []
     waived = basecounts.waivers(ROOT)
+    limits = clock_limits()
+    main = main_clocks()
     for directory in benchmarks(selected):
         name = str(directory.relative_to(BENCH))
         baseline = read_expected(directory)
@@ -810,13 +817,12 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                     problems.append(f"{label}: works; remove its known mark ({got['xpass']})")
                 elif "error" in got:
                     problems.append(f"{label}: {got['error']}")
-                elif float_flags(variant) and got.get("flags") != float_flags(variant):
-                    problems.append(f"{label}: a float row is measured with {FLOAT_FLAG} and records it in the row; this one records {got.get('flags')}")
                 else:
                     if variant.language == "bq32" and got.get("instructions", 0) >= qb32.BENCH_RATE * 55:
                         problems.append(f"{label}: {got['instructions']} instructions run long enough for a timer tick (55 ms at the flat rate): the extender's handler lands inside the count")
                     want = baseline.get(variant.language, {}).get(opt)
                     problems += against(label, got, want, waived)
+                    problems += clock_problems(label, got, limits, main)
                     if variant.timed_only:
                         problems += time_against(label, got, want)
                     for reference in REFERENCES.get(variant.language, ()):
@@ -884,41 +890,68 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     return lines
 
 
-def base_rows(args, only: list[str] | None = None) -> tuple[dict, set[str], str]:
+def base_rows(args) -> tuple[dict, set[str], str]:
     """(the base's rows of ours, the programs the base and this tree have alike, the base's commit): the base is the merge-base with
     origin/main, built and measured by its own tree (basecounts.py), once per tree."""
     import measure
 
     head = measure.git("rev-parse", "HEAD")
     base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
+    built = functools.cache(lambda sha: measure.built(sha, measure.BENCH_BASE_PROFILE))  # a cache miss and the edited programs both need it: one build
     with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
         base, was = basecounts.base_counts(
-            base_sha, args.opt, basecounts.compiler_key, lambda sha: measure.built(sha, measure.BENCH_BASE_PROFILE), lambda directory, opts, names=None: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time, names), args.time, only=only
+            base_sha, args.opt, basecounts.compiler_key, built, lambda directory, opts, names=None: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time, names), args.time
         )
-    now = basecounts.programs(ROOT)
-    return base, {name for name in now if was.get(name) == now[name]}, base_sha
+        now = basecounts.programs(ROOT)
+        base, same, unbuilt = basecounts.with_edited(
+            base, was, now, args.opt, lambda names: basecounts.measure_head_sources(built(base_sha), args.opt, args.work / "base-edited", names), tree=measure.tree_of(base_sha) or base_sha
+        )
+    if unbuilt:
+        print("edited programs the base compiler could not build, not judged: " + " ".join(unbuilt), flush=True)
+    return base, same, base_sha
+
+
+def base_leg(args) -> int:
+    """`--shard base`: the base's counts, measured (or restored) once for the whole run and written to `base.json` for --merge. The numbered slices
+    measure only the head: each of them built the base and measured its part of it (bench-3 of gate run 2 was cancelled at 60 minutes in it)."""
+    stage("base counts")
+    try:
+        base, same, base_sha = base_rows(args)
+    except BaseException as why:  # noqa: BLE001: the reason is the line the gate prints
+        print("FAIL BASE: the base could not be measured: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:])
+        return 1
+    stage(f"base {base_sha[:9]}: {len(base)} rows")
+    if args.json:
+        args.json.mkdir(parents=True, exist_ok=True)
+        (args.json / "base.json").write_text(json.dumps({"base": {"/".join(key): value for key, value in base.items()}, "same": sorted(same), "base_sha": base_sha}))
+    print(f"base {base_sha[:9]}: {len(base)} rows: 0 problems")
+    return 0
 
 
 def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
-    """The verdict of the `count` shard files in `folder` (bench.py --shard writes them): the lines the whole run prints that a shard
-    cannot (the standing against each reference, the waivers nothing needed, the problems last), and with `record` the head's counts as
-    the base of the next pull requests. A missing shard is a failure, named: its rows were not judged."""
+    """The verdict of the `count` shard files in `folder` (bench.py --shard writes them) judged against `base.json` (--shard base): the lines the
+    whole run prints that a shard cannot (the standing against each reference, the waivers nothing needed, the problems last), and with `record`
+    the head's counts as the base of the next pull requests. A missing shard, or no base, is a failure, named: its rows were not judged."""
     files = sorted(folder.glob("shard-*.json"))
     have = {int(one.stem.split("-")[1]) for one in files}
     if missing := sorted(set(range(1, count + 1)) - have):
         print(f"FAIL BASE: no result from bench shard {' '.join(map(str, missing))} of {count}: its rows were not judged")
         return 1
-    measured, base, same, problems, heads = {}, {}, set(), [], set()
+    if not (folder / "base.json").is_file():
+        print("FAIL BASE: no result from bench-base: no row was judged against the base")
+        return 1
+    measured = {}
     for one in files:
-        data = json.loads(one.read_text())
-        measured |= basecounts.rows_of(data["measured"])
-        base |= basecounts.rows_of(data["base"])
-        same |= set(data["same"])
-        problems += data["problems"]
-        heads.add(data["base_sha"])
+        measured |= basecounts.rows_of(json.loads(one.read_text())["measured"])
+    data = json.loads((folder / "base.json").read_text())
+    base, same, base_sha = basecounts.rows_of(data["base"]), set(data["same"]), data["base_sha"]
+    problems = judge(measured, [], opts, base, same)
+    judged, judged_programs, left_out, uncovered = basecounts.coverage(measured, base, same)
+    problems += uncovered
     stale = basecounts.judge(measured, base, basecounts.waivers(), same)[2]
     print(*standing(measured, [], opts), sep="\n")
-    print(f"BASE {' '.join(sorted(h[:9] for h in heads))}: {len(base)} rows")
+    print(f"BASE {base_sha[:9]}: {len(base)} rows")
+    print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
     print(*basecounts.stale_summary(stale), sep="\n")
     if record:
         import measure
@@ -950,12 +983,22 @@ def main() -> int:
     ONLY = args.lang
     if args.merge:
         return merge(Path(args.merge[0]), int(args.merge[1]), args.opt, args.record)
+    if args.shard == "base":
+        return base_leg(args)
     if args.shard:
         index, count = map(int, args.shard.split("/"))
         args.select = shards.of(index, count)
     if args.bless and not (args.reason and args.references):
         parser.error("--bless records the references, so it needs --references and --reason: every change to expected.toml says why")
+    stage(f"measuring {len(args.select) or 'every'} benchmarks at {' '.join(args.opt)}")
     measured = measure_all(args.select, args.opt, args.work, args.time)
+    stage(f"measured {len(measured)} rows")
+    if args.shard:  # a slice only measures: --merge judges every row against the base that `--shard base` measured once
+        print(f"shard {args.shard}: {len(measured)} measurements: 0 problems")
+        if args.json:
+            args.json.mkdir(parents=True, exist_ok=True)
+            (args.json / f"shard-{index}.json").write_text(json.dumps({"measured": {"/".join(key): value for key, value in measured.items()}}))
+        return 0
     if args.references:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json and not args.shard:
@@ -980,23 +1023,18 @@ def main() -> int:
         print(f"blessed {len({key[0] for key in references})} benchmarks, {changed} files changed")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
+    stage("base counts")
     try:
-        base, same, base_sha = base_rows(args, args.select) if args.shard else base_rows(args)
+        base, same, base_sha = base_rows(args)
     except BaseException as why:  # noqa: BLE001: the reason is the line the gate prints
         print("FAIL BASE: the base could not be measured: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:])
         return 1
+    stage(f"base {base_sha[:9]}: {len(base)} rows")
     problems = judge(measured, args.select, args.opt, base, same)
-    if args.shard:  # the rest of the verdict needs every shard: --merge
-        for one in problems:
-            print("FAIL", one)
-        print(f"shard {args.shard}: {len(measured)} measurements: {len(problems)} problems")
-        if args.json:
-            args.json.mkdir(parents=True, exist_ok=True)
-            mine = {"/".join(key): value for key, value in measured.items()}
-            (args.json / f"shard-{index}.json").write_text(
-                json.dumps({"measured": mine, "base": {"/".join(key): value for key, value in base.items() if key[0] in args.select}, "same": sorted(same), "problems": problems, "base_sha": base_sha})
-            )
-        return 1 if problems else 0
+    if not args.select:
+        judged, judged_programs, left_out, uncovered = basecounts.coverage(measured, base, same)
+        problems += uncovered
+        print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")

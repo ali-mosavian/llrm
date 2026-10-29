@@ -1,3 +1,0 @@
-# A flat 32-bit machine with no segments, ports or foreign ranges.
-addressing = "flat"
-segment_end_faults = false

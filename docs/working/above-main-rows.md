@@ -112,6 +112,7 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-RA-2 | huge_pointer_loop_compare.c m16 (`long __huge` loop, --isel=dag) | Os | instructions per iteration | 2e9de9ba6 build | parity 5e7fecf536 | +1 spill, +4 moves | 9479d4ba4a: a split copies the stack-argument reload (the pin's `canRematerializeAt(cheapAsAMove)`), and `setb dl` then needs a byte register while dx and bx are live | w13 | 2026-11-05, what the pin's `isAsCheapAsAMove` allows for a reload | #5435 |
 | OS-UNROLL-1 | tests/run/c/logical_value.c m16 | Os | code bytes | 25 | 153 | +128 | not isolated: found by the m16 -Os audit with float_in_place_update (fixed by #5616, 132 to 14 B); the few-trips unroll bar does not reach this loop | w3 | open | |
 | OS-UNROLL-2 | tests/run/c/split_loops.c m16 | Os | code bytes | 170 | 227 | +57 | as OS-UNROLL-1 | w3 | open | |
+| OS-UNROLL-3 | parity/scalar (bq16, bq32, c, nib) | O2 | code bytes | 165 / 159 / 66 / 69 | 353 / 249 / 249 / 252 | +188 / +90 / +183 / +183 (instructions 92 to 51, clocks 301 to 136 at bq16) | the pin's own `opt default<O2>` fully unrolls the 8-trip loop (same IR, code16 datalayout); main kept the loop. -Os keeps the loop (bq16 171 B). Fix: m16 DEVIATE, no full unroll at -O2 past a growth bar; #6037 removed the -O2 unroll (bq16 171 B now); `tools/bench/waivers/scalar-unroll.toml` holds the rest | w3 | after the fast-forward, DEBT 2026-11-12 | |
 
 ## To add by their owners
 

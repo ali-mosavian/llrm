@@ -169,6 +169,10 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         Load => pin::LOAD,
         Store => pin::STORE,
         AtomicSwap => pin::ATOMIC_SWAP,
+        // No x86 table names these; a target whose table does gets its own id
+        // map (B2).
+        AtomicCmpSwap | AtomicLoadAdd | AtomicLoadSub | AtomicLoadAnd | AtomicLoadOr | AtomicLoadXor
+        | AtomicLoadClr | AtomicLoad | AtomicStore => u16::MAX,
         CallSeqStart => pin::CALLSEQ_START,
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
@@ -285,6 +289,15 @@ pub trait PinRegisters {
         &self,
         id: llrm_lir::registers::RegId,
     ) -> Option<u16>;
+
+    /// Whether `register` is one the target cannot map. Selection then refuses
+    /// ([`DagisAdapter::refusal`]); the default reads it as virtual.
+    fn unmapped(
+        &self,
+        _register: u16,
+    ) -> bool {
+        false
+    }
 }
 
 /// x86's registers (the default of an adapter).
@@ -307,7 +320,8 @@ impl PinRegisters for X86Registers {
 
 impl DagisAdapter<'_> {
     /// The `Register` node for the pin's register number: physical when the
-    /// builder names it so.
+    /// builder names it so. A number the target does not know is a virtual
+    /// register for now and a [`DagisAdapter::refusal`].
     fn register_node(
         &mut self,
         vt: EVT,
@@ -315,6 +329,10 @@ impl DagisAdapter<'_> {
     ) -> SDValue {
         match self.registers.phys_reg(register) {
             Some(id) => self.dag.get_phys_register(vt, id),
+            None if self.registers.unmapped(register) => {
+                self.refusal.get_or_insert_with(|| format!("pin register {register} has no id on this target"));
+                self.dag.get_register(vt, u32::from(register))
+            }
             None => self.dag.get_register(vt, u32::from(register)),
         }
     }
@@ -343,6 +361,7 @@ pub struct DagisAdapter<'a> {
     node_id: Vec<i32>,
     /// The target's registers in the pin's numbering.
     registers: &'a dyn PinRegisters,
+    refusal: Option<String>,
 }
 
 impl<'a> DagisAdapter<'a> {
@@ -372,7 +391,13 @@ impl<'a> DagisAdapter<'a> {
         for (position, node) in super::dag_select::users_first(dag).into_iter().rev().enumerate() {
             node_id[node as usize] = position as i32;
         }
-        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id, registers }
+        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id, registers, refusal: None }
+    }
+
+    /// Why selection must be refused: the selector named a register the target
+    /// cannot map.
+    pub fn refusal(&self) -> Option<&str> {
+        self.refusal.as_deref()
     }
 
     /// `Node->setNodeId(-1)`.
@@ -756,6 +781,15 @@ impl Dag for DagisAdapter<'_> {
             _ => false,
         }
     }
+    fn fp_bits(
+        &self,
+        value: PinValue,
+    ) -> Option<u128> {
+        match self.dag.node(ours(value)).data {
+            NodeData::ConstFp { bits } => Some(bits),
+            _ => None,
+        }
+    }
     fn fp_class(
         &self,
         value: PinValue,
@@ -924,7 +958,16 @@ impl Dag for DagisAdapter<'_> {
     ) -> (u32, Vec<u32>) {
         let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
+        let old_operands: Vec<u32> = self.dag.nodes()[node as usize].ops.iter().map(|o| o.node).collect();
         let morphed = self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops);
+        // `SelectionDAG::MorphNodeTo` deletes the operands the new node no
+        // longer reads, and what only they read (a folded shift and its
+        // amount).
+        for operand in old_operands {
+            if operand != self.dag.entry_node().node && !self.has_live_users(operand) {
+                self.remove(operand);
+            }
+        }
         // `MorphNodeTo` reuses the node with new operands and resets its id
         // ("to the isel this is a newly allocated machine node"): left small
         // it would be pruned from a walk toward the later nodes it now reads.

@@ -19,12 +19,12 @@
 //! Nothing runs it yet: stage 4 of the translation of LSR.
 //!
 //! # Limits
-//! DEVIATE: `NarrowSearchSpaceByFilterPostInc` (post-indexed addressing, x86
-//! prefers none) and `NarrowSearchSpaceByDeletingCostlyFormulas`
-//! (`-lsr-exp-narrow`, off by default) are not ported.
+//! DEVIATE: `NarrowSearchSpaceByDeletingCostlyFormulas` (`-lsr-exp-narrow`,
+//! off by default) is not ported.
 
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::expr::Scev;
+use llrm_mir::tti::AddressingMode;
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::lsr_collect::Collection;
@@ -389,6 +389,47 @@ impl Collection<'_, '_> {
         }
     }
 
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L5196
+    /// `NarrowSearchSpaceByFilterPostInc`: over the complexity limit, the
+    /// address uses that may be post-incremented keep only their formulae of
+    /// the fewest registers.
+    pub fn narrow_search_space_by_filter_post_inc(
+        &mut self,
+        se: &mut ScalarEvolution,
+    ) {
+        if self.tti.preferred_addressing_mode() != AddressingMode::PostIndexed || !self.too_complex() {
+            return;
+        }
+        for lu_idx in 0..self.uses.len() {
+            let lu = &self.uses[lu_idx];
+            if lu.kind != Kind::Address {
+                continue;
+            }
+            let Some(ty) = lu.access_ty.mem_ty.and_then(|ty| se.ty_of(self.cx, ty)) else { continue };
+            let ty = crate::lsr_generate::tti_ty(ty);
+            if !self.tti.is_post_inc_load_legal(ty) && !self.tti.is_post_inc_store_legal(ty) {
+                continue;
+            }
+            let min_regs = lu.formulae.iter().map(Formula::num_regs).min().unwrap_or(usize::MAX);
+            let mut any = false;
+            let mut at = 0;
+            while at < self.uses[lu_idx].formulae.len() {
+                if self.uses[lu_idx].formulae[at].num_regs() > min_regs {
+                    self.uses[lu_idx].delete_formula(at);
+                    any = true;
+                } else {
+                    at += 1;
+                }
+            }
+            if any {
+                self.uses[lu_idx].recompute_regs(lu_idx, &mut self.reg_uses);
+            }
+            if !self.too_complex() {
+                break;
+            }
+        }
+    }
+
     /// `NarrowSearchSpaceUsingHeuristics`: thin the formulae with LLVM's rough
     /// heuristics, in its order, so the solver's worst case stays bounded.
     pub fn narrow_search_space_using_heuristics(
@@ -399,6 +440,7 @@ impl Collection<'_, '_> {
         self.narrow_search_space_by_collapsing_unrolled_code();
         self.narrow_search_space_by_refiltering_undesirable_dedicated_registers(se);
         self.narrow_search_space_by_filter_formula_with_same_scaled_reg(se);
+        self.narrow_search_space_by_filter_post_inc(se);
         self.narrow_search_space_by_merging_uses_outside_loop();
         self.narrow_search_space_by_picking_winner_regs(se);
     }

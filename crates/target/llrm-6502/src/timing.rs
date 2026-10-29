@@ -1,14 +1,19 @@
-//! Bytes and cycles of the instructions the emitter writes, on the NMOS 6502 and the 65C02.
+//! Bytes and cycles of the instructions the emitter writes, on the NMOS 6502
+//! and the 65C02.
 //!
-//! Sources: the W65C02S datasheet's Table 4-1 (cycles and bytes per addressing mode, with its notes:
-//! +1 for a page cross, +1 for a taken branch, +2 for read-modify-write, STA abs,X always pays the page
-//! cycle) and Table 7-1 (what the 65C02 changes), <https://westerndesigncenter.com/wdc/documentation/w65c02s.pdf>;
-//! and masswerk's 6502 instruction set tables, <https://www.masswerk.at/6502/6502_instruction_set.html>,
-//! for the per-instruction rows. `tests/timing.rs` runs each row on sim65 and compares.
+//! Sources: the W65C02S datasheet's Table 4-1 (cycles and bytes per addressing
+//! mode, with its notes: +1 for a page cross, +1 for a taken branch, +2 for
+//! read-modify-write, STA abs,X always pays the page cycle) and Table 7-1 (what
+//! the 65C02 changes),
+//! <https://westerndesigncenter.com/wdc/documentation/w65c02s.pdf>; and
+//! masswerk's 6502 instruction set tables,
+//! <https://www.masswerk.at/6502/6502_instruction_set.html>, for the
+//! per-instruction rows. `tests/timing.rs` runs each row on sim65 and compares.
 //!
-//! DEVIATE: a page cross is not charged (the address is not known here). Reason: the placement is the
-//! linker's. Exit: none for a static estimate. A conditional branch counts as taken when it goes
-//! backwards (a loop edge) and not taken when it goes forwards.
+//! DEVIATE: a page cross is not charged (the address is not known here).
+//! Reason: the placement is the linker's. Exit: none for a static estimate. A
+//! conditional branch counts as taken when it goes backwards (a loop edge) and
+//! not taken when it goes forwards.
 
 use crate::dagisel::hooks::Cpu;
 
@@ -48,7 +53,10 @@ fn mode(
     operand: &str,
 ) -> Option<Mode> {
     let operand = operand.trim();
-    if matches!(mnemonic, "bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra") {
+    if matches!(
+        mnemonic,
+        "bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra"
+    ) {
         return Some(Mode::Relative);
     }
     if operand.is_empty() {
@@ -68,7 +76,13 @@ fn mode(
             return zero_page(inner).then_some(Mode::IndirectX);
         }
         let inner = inner.strip_suffix(')')?;
-        return Some(if mnemonic == "jmp" { Mode::AbsoluteIndirect } else if zero_page(inner) { Mode::ZeroPageIndirect } else { return None });
+        return Some(if mnemonic == "jmp" {
+            Mode::AbsoluteIndirect
+        } else if zero_page(inner) {
+            Mode::ZeroPageIndirect
+        } else {
+            return None;
+        });
     }
     let (base, index) = match operand.rsplit_once(',') {
         Some((base, index)) => (base, Some(index)),
@@ -94,8 +108,8 @@ fn bytes(mode: Mode) -> u32 {
     }
 }
 
-/// The bytes and cycles of `mnemonic operand` (ca65 text, lower case) on `cpu`, or `None` for a form
-/// the emitter does not write or the CPU does not have.
+/// The bytes and cycles of `mnemonic operand` (ca65 text, lower case) on `cpu`,
+/// or `None` for a form the emitter does not write or the CPU does not have.
 pub fn instruction(
     cpu: Cpu,
     mnemonic: &str,
@@ -103,13 +117,22 @@ pub fn instruction(
 ) -> Option<Cost> {
     let cmos = cpu == Cpu::W65c02;
     let m = mode(mnemonic, operand)?;
-    let read = matches!(mnemonic, "lda" | "ldx" | "ldy" | "adc" | "sbc" | "and" | "ora" | "eor" | "cmp" | "cpx" | "cpy" | "bit");
+    let read = matches!(
+        mnemonic,
+        "lda" | "ldx" | "ldy" | "adc" | "sbc" | "and" | "ora" | "eor" | "cmp" | "cpx" | "cpy" | "bit"
+    );
     let store = matches!(mnemonic, "sta" | "stx" | "sty" | "stz");
     let modify = matches!(mnemonic, "asl" | "lsr" | "rol" | "ror" | "inc" | "dec");
     let cycles = if mnemonic == "jmp" {
         match m {
             Mode::Absolute => 3,
-            Mode::AbsoluteIndirect => if cmos { 6 } else { 5 },
+            Mode::AbsoluteIndirect => {
+                if cmos {
+                    6
+                } else {
+                    5
+                }
+            }
             _ => return None,
         }
     } else if mnemonic == "jsr" {
@@ -131,7 +154,13 @@ pub fn instruction(
             Mode::Immediate => 2,
             Mode::ZeroPage => 3,
             Mode::ZeroPageX | Mode::ZeroPageY | Mode::Absolute | Mode::AbsoluteX | Mode::AbsoluteY => 4,
-            Mode::ZeroPageIndirect => if cmos { 5 } else { return None },
+            Mode::ZeroPageIndirect => {
+                if cmos {
+                    5
+                } else {
+                    return None;
+                }
+            }
             Mode::IndirectY => 5,
             Mode::IndirectX => 6,
             _ => return None,
@@ -146,7 +175,13 @@ pub fn instruction(
             Mode::AbsoluteX | Mode::AbsoluteY => 5,
             Mode::IndirectY => 6,
             Mode::IndirectX => 6,
-            Mode::ZeroPageIndirect => if cmos { 5 } else { return None },
+            Mode::ZeroPageIndirect => {
+                if cmos {
+                    5
+                } else {
+                    return None;
+                }
+            }
             _ => return None,
         }
     } else if modify {
@@ -160,7 +195,13 @@ pub fn instruction(
             Mode::ZeroPage => 5,
             Mode::ZeroPageX => 6,
             Mode::Absolute => 6,
-            Mode::AbsoluteX => if cmos && !matches!(mnemonic, "inc" | "dec") { 6 } else { 7 },
+            Mode::AbsoluteX => {
+                if cmos && !matches!(mnemonic, "inc" | "dec") {
+                    6
+                } else {
+                    7
+                }
+            }
             _ => return None,
         }
     } else if m == Mode::Implied {
@@ -179,8 +220,9 @@ pub fn instruction(
     Some(Cost { bytes: bytes(m), cycles })
 }
 
-/// A static estimate of ca65 text from [`crate::alloc::emit`]: its bytes, and its cycles with each
-/// line counted once per trip, where a trip through a loop is ten for each level it is nested.
+/// A static estimate of ca65 text from [`crate::alloc::emit`]: its bytes, and
+/// its cycles with each line counted once per trip, where a trip through a loop
+/// is ten for each level it is nested.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Estimate {
     pub bytes: u32,
@@ -193,14 +235,18 @@ pub fn estimate(
     text: &str,
 ) -> Result<Estimate, String> {
     let lines: Vec<&str> = text.lines().map(|l| l.split(';').next().unwrap_or("")).collect();
-    let label_at = |name: &str| lines.iter().position(|l| l.trim_end().strip_suffix(':').is_some_and(|label| label == name));
+    let label_at =
+        |name: &str| lines.iter().position(|l| l.trim_end().strip_suffix(':').is_some_and(|label| label == name));
     // a backward branch makes the lines from its label to it a loop
     let mut depth = vec![0u32; lines.len()];
     let mut backward = vec![false; lines.len()];
     for (at, line) in lines.iter().enumerate() {
         let mut parts = line.split_whitespace();
         let (Some(mnemonic), Some(target)) = (parts.next(), parts.next()) else { continue };
-        if !matches!(mnemonic, "bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra" | "jmp") {
+        if !matches!(
+            mnemonic,
+            "bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra" | "jmp"
+        ) {
             continue;
         }
         if let Some(to) = label_at(target).filter(|to| *to <= at) {

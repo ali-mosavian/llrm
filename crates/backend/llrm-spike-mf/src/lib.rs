@@ -13,6 +13,7 @@ pub mod cfg;
 pub mod commute;
 pub mod fold;
 pub mod mfunc;
+pub mod placement;
 pub mod regalloc;
 pub mod reschedule;
 pub mod sink;

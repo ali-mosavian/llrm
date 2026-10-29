@@ -1,10 +1,12 @@
-//! Differential tests: random small C programs, compiled by cc65 -O and by clang -> opt -> ours, run on
-//! sim65; the 8-bit fold of a 16-bit checksum must agree. `DIFF_SEEDS=<first>:<count>` (default 0:40),
-//! `DIFF_JOBS` threads (default 4). A mismatch leaves the program in `target/tmp/difftest/<seed>/`.
+//! Differential tests: random small C programs, compiled by cc65 -O and by
+//! clang -> opt -> ours, run on sim65; the 8-bit fold of a 16-bit checksum must
+//! agree. `DIFF_SEEDS=<first>:<count>` (default 0:40), `DIFF_JOBS` threads
+//! (default 4). A mismatch leaves the program in `target/tmp/difftest/<seed>/`.
 //!
-//! The programs are free of undefined behaviour: unsigned arithmetic only (narrow operands are widened
-//! first), signed values come from conversions of unsigned ones, no signed division, shifts are by
-//! constants or masked counts, array indexes are masked, loops are bounded, recursion is bounded.
+//! The programs are free of undefined behaviour: unsigned arithmetic only
+//! (narrow operands are widened first), signed values come from conversions of
+//! unsigned ones, no signed division, shifts are by constants or masked counts,
+//! array indexes are masked, loops are bounded, recursion is bounded.
 //!
 //! Needs cc65, clang (msp430 front end), LLVM 20 `opt`, cl65 and sim65.
 
@@ -32,11 +34,17 @@ impl Rng {
         self.0
     }
 
-    fn below(&mut self, n: usize) -> usize {
+    fn below(
+        &mut self,
+        n: usize,
+    ) -> usize {
         (self.next() % n as u64) as usize
     }
 
-    fn chance(&mut self, percent: usize) -> bool {
+    fn chance(
+        &mut self,
+        percent: usize,
+    ) -> bool {
         self.below(100) < percent
     }
 }
@@ -57,7 +65,8 @@ impl Ty {
         }
     }
 
-    /// The type arithmetic on it is done in: `unsigned char` would promote to a signed `int`.
+    /// The type arithmetic on it is done in: `unsigned char` would promote to a
+    /// signed `int`.
     fn wide(self) -> &'static str {
         match self {
             Ty::U8 | Ty::U16 => "unsigned",
@@ -111,8 +120,9 @@ struct Scope {
     has_struct: bool,
 }
 
-/// The signed type a generated program views a value through; `DIFF_NOSIGNED` keeps the program's shape but
-/// makes the view unsigned, to tell which failures come from signed forms.
+/// The signed type a generated program views a value through; `DIFF_NOSIGNED`
+/// keeps the program's shape but makes the view unsigned, to tell which
+/// failures come from signed forms.
 fn signed_view(byte: bool) -> &'static str {
     match (std::env::var("DIFF_NOSIGNED").is_ok(), byte) {
         (false, true) => "signed char",
@@ -122,8 +132,9 @@ fn signed_view(byte: bool) -> &'static str {
     }
 }
 
-/// ` + zero` when `DIFF_OPAQUE` is set: `zero` is a volatile byte that reads 0, so the compiler cannot
-/// fold the starting values (and with them the whole program) into a checksum.
+/// ` + zero` when `DIFF_OPAQUE` is set: `zero` is a volatile byte that reads 0,
+/// so the compiler cannot fold the starting values (and with them the whole
+/// program) into a checksum.
 fn opaque() -> &'static str {
     if std::env::var("DIFF_OPAQUE").is_ok() { " + zero" } else { "" }
 }
@@ -135,7 +146,10 @@ struct Gen {
 }
 
 impl Gen {
-    fn constant(&mut self, ty: Ty) -> String {
+    fn constant(
+        &mut self,
+        ty: Ty,
+    ) -> String {
         let value = match self.rng.below(6) {
             0 => 0,
             1 => 1,
@@ -147,7 +161,11 @@ impl Gen {
         format!("{value}{}", ty.suffix())
     }
 
-    fn leaf(&mut self, ty: Ty, scope: &Scope) -> String {
+    fn leaf(
+        &mut self,
+        ty: Ty,
+        scope: &Scope,
+    ) -> String {
         match self.rng.below(10) {
             0..=4 if !scope.vars.is_empty() => {
                 let v = &scope.vars[self.rng.below(scope.vars.len())];
@@ -175,7 +193,11 @@ impl Gen {
     }
 
     /// An index in `0..len` (a power of two).
-    fn index(&mut self, scope: &Scope, len: usize) -> String {
+    fn index(
+        &mut self,
+        scope: &Scope,
+        len: usize,
+    ) -> String {
         if self.rng.chance(40) {
             return format!("{}", self.rng.below(len));
         }
@@ -183,7 +205,12 @@ impl Gen {
         format!("({e} & {})", len - 1)
     }
 
-    fn expr(&mut self, ty: Ty, depth: usize, scope: &Scope) -> String {
+    fn expr(
+        &mut self,
+        ty: Ty,
+        depth: usize,
+        scope: &Scope,
+    ) -> String {
         if depth == 0 || self.rng.chance(15) {
             return self.leaf(ty, scope);
         }
@@ -213,10 +240,15 @@ impl Gen {
             }
             10 => {
                 let e = self.expr(ty, depth - 1, scope);
-                if self.rng.chance(50) { format!("({})~({w}){e}", ty.c()) } else { format!("({})(0 - ({w}){e})", ty.c()) }
+                if self.rng.chance(50) {
+                    format!("({})~({w}){e}", ty.c())
+                } else {
+                    format!("({})(0 - ({w}){e})", ty.c())
+                }
             }
             11 => {
-                // a signed view of an unsigned value: arithmetic shift, or a sign-extending cast
+                // a signed view of an unsigned value: arithmetic shift, or a
+                // sign-extending cast
                 let from = TYPES[self.rng.below(2)];
                 let signed = signed_view(from == Ty::U8);
                 let e = self.expr(from, depth - 1, scope);
@@ -235,14 +267,23 @@ impl Gen {
         }
     }
 
-    fn call(&mut self, ty: Ty, depth: usize, scope: &Scope) -> String {
+    fn call(
+        &mut self,
+        ty: Ty,
+        depth: usize,
+        scope: &Scope,
+    ) -> String {
         let at = self.rng.below(self.helpers.len());
         let (name, params) = (self.helpers[at].name.clone(), self.helpers[at].params.clone());
         let args: Vec<String> = params.iter().map(|p| self.expr(*p, depth.saturating_sub(1), scope)).collect();
         format!("({}){name}({})", ty.c(), args.join(", "))
     }
 
-    fn cond(&mut self, depth: usize, scope: &Scope) -> String {
+    fn cond(
+        &mut self,
+        depth: usize,
+        scope: &Scope,
+    ) -> String {
         match self.rng.below(8) {
             0..=3 => {
                 let ty = TYPES[self.rng.below(3)];
@@ -265,17 +306,34 @@ impl Gen {
         }
     }
 
-    fn assign_target(&mut self, scope: &Scope) -> Option<Var> {
+    fn assign_target(
+        &mut self,
+        scope: &Scope,
+    ) -> Option<Var> {
         (!scope.vars.is_empty()).then(|| scope.vars[self.rng.below(scope.vars.len())].clone())
     }
 
     /// One to `most` statements.
-    fn some(&mut self, most: usize, depth: usize, scope: &mut Scope, indent: usize, out: &mut String) {
+    fn some(
+        &mut self,
+        most: usize,
+        depth: usize,
+        scope: &mut Scope,
+        indent: usize,
+        out: &mut String,
+    ) {
         let count = 1 + self.rng.below(most);
         self.stmts(count, depth, scope, indent, out);
     }
 
-    fn stmts(&mut self, count: usize, depth: usize, scope: &mut Scope, indent: usize, out: &mut String) {
+    fn stmts(
+        &mut self,
+        count: usize,
+        depth: usize,
+        scope: &mut Scope,
+        indent: usize,
+        out: &mut String,
+    ) {
         let pad = "  ".repeat(indent);
         for _ in 0..count {
             match self.rng.below(12) {
@@ -344,8 +402,15 @@ impl Gen {
                 _ => {
                     if let Some(v) = self.assign_target(scope) {
                         let e = self.expr(v.ty, 2, scope);
-                        writeln!(out, "{pad}{0} = ({1})({0} {2} ({3}){e});", v.name, v.ty.c(), ["+", "^", "|"][self.rng.below(3)], v.ty.wide())
-                            .unwrap();
+                        writeln!(
+                            out,
+                            "{pad}{0} = ({1})({0} {2} ({3}){e});",
+                            v.name,
+                            v.ty.c(),
+                            ["+", "^", "|"][self.rng.below(3)],
+                            v.ty.wide()
+                        )
+                        .unwrap();
                     }
                 }
             }
@@ -357,13 +422,23 @@ impl Gen {
     }
 
     /// `ck` rotates left and takes one more value.
-    fn fold(&mut self, scope: &Scope) -> String {
+    fn fold(
+        &mut self,
+        scope: &Scope,
+    ) -> String {
         let e = self.expr(Ty::U16, 1, scope);
         format!("ck = (ck << 1 | ck >> 15) ^ {e};")
     }
 
-    /// One function: locals, array fills, `count` statements, a checksum of everything, a return.
-    fn function(&mut self, name: &str, ret: Ty, params: &[Ty], top: bool) {
+    /// One function: locals, array fills, `count` statements, a checksum of
+    /// everything, a return.
+    fn function(
+        &mut self,
+        name: &str,
+        ret: Ty,
+        params: &[Ty],
+        top: bool,
+    ) {
         let mut scope = Scope { vars: Vec::new(), arrays: Vec::new(), counters: Vec::new(), has_struct: top };
         let mut head = String::new();
         let list: Vec<String> = params.iter().enumerate().map(|(n, t)| format!("{} p{n}", t.c())).collect();
@@ -378,21 +453,44 @@ impl Gen {
             let ty = TYPES[self.rng.below(3)];
             let v = Var { name: format!("v{n}"), ty };
             let c = self.constant(ty);
-            writeln!(head, "  {} {} = {};", ty.c(), v.name, if opaque().is_empty() { c } else { format!("({})({c}{})", ty.c(), opaque()) }).unwrap();
+            writeln!(
+                head,
+                "  {} {} = {};",
+                ty.c(),
+                v.name,
+                if opaque().is_empty() { c } else { format!("({})({c}{})", ty.c(), opaque()) }
+            )
+            .unwrap();
             scope.vars.push(v);
         }
         for n in 0..self.rng.below(3) {
             let ty = TYPES[self.rng.below(3)];
             let len = [4, 8, 16][self.rng.below(3)];
             writeln!(head, "  {} a{n}[{len}];", ty.c()).unwrap();
-            writeln!(init, "  for (j = 0; j < {len}; j++) a{n}[j] = ({})(j * {}U + {}{});", ty.c(), 1 + 2 * self.rng.below(5), self.rng.below(7), opaque())
-                .unwrap();
+            writeln!(
+                init,
+                "  for (j = 0; j < {len}; j++) a{n}[j] = ({})(j * {}U + {}{});",
+                ty.c(),
+                1 + 2 * self.rng.below(5),
+                self.rng.below(7),
+                opaque()
+            )
+            .unwrap();
             scope.arrays.push(Array { name: format!("a{n}"), ty, len });
         }
-        writeln!(head, "  unsigned char j, i0, i1, i2, i3;\n  unsigned ck = {}{};", self.rng.below(1000), opaque()).unwrap();
+        writeln!(head, "  unsigned char j, i0, i1, i2, i3;\n  unsigned ck = {}{};", self.rng.below(1000), opaque())
+            .unwrap();
         if top {
             writeln!(head, "  struct S s;").unwrap();
-            writeln!(init, "  s.a = {}{o}; s.b = {}{o}; s.c = {}{o};", self.rng.below(256), self.rng.below(65536), self.rng.below(256), o = opaque()).unwrap();
+            writeln!(
+                init,
+                "  s.a = {}{o}; s.b = {}{o}; s.c = {}{o};",
+                self.rng.below(256),
+                self.rng.below(65536),
+                self.rng.below(256),
+                o = opaque()
+            )
+            .unwrap();
         }
         let count = if top { 6 + self.rng.below(8) } else { 2 + self.rng.below(4) };
         let mut pieces = Vec::new();
@@ -401,15 +499,18 @@ impl Gen {
             self.stmts(1, 2, &mut scope, 1, &mut piece);
             pieces.push(piece);
         }
-        // `DIFF_LIMIT=k` keeps the first k statements of `test`: the way a mismatch is cut down
-        let keep = std::env::var("DIFF_LIMIT").ok().and_then(|k| k.parse().ok()).filter(|_| top).unwrap_or(pieces.len());
+        // `DIFF_LIMIT=k` keeps the first k statements of `test`: the way a
+        // mismatch is cut down
+        let keep =
+            std::env::var("DIFF_LIMIT").ok().and_then(|k| k.parse().ok()).filter(|_| top).unwrap_or(pieces.len());
         let body: String = pieces[..keep.min(pieces.len())].concat();
         let mut tail = String::new();
         for v in scope.vars.clone() {
             writeln!(tail, "  ck = (ck << 1 | ck >> 15) ^ (unsigned){0} ^ (unsigned)({0} >> 8);", v.name).unwrap();
         }
         for a in &scope.arrays {
-            writeln!(tail, "  for (j = 0; j < {}; j++) ck = (ck << 1 | ck >> 15) ^ (unsigned){}[j];", a.len, a.name).unwrap();
+            writeln!(tail, "  for (j = 0; j < {}; j++) ck = (ck << 1 | ck >> 15) ^ (unsigned){}[j];", a.len, a.name)
+                .unwrap();
         }
         if top {
             writeln!(tail, "  ck = (ck << 1 | ck >> 15) ^ s.a ^ s.b ^ s.c;").unwrap();
@@ -419,9 +520,11 @@ impl Gen {
     }
 }
 
-/// The program: a struct, a helper that takes it by pointer, helper functions, and `test`.
+/// The program: a struct, a helper that takes it by pointer, helper functions,
+/// and `test`.
 fn program(seed: u64) -> String {
-    let mut g = Gen { rng: Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1), helpers: Vec::new(), text: String::new() };
+    let mut g =
+        Gen { rng: Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1), helpers: Vec::new(), text: String::new() };
     g.text.push_str(
         "extern const unsigned char buf[16];\nextern const unsigned char tab[8];\nextern const volatile unsigned char zero;\nstruct S { unsigned char a; unsigned b; unsigned char c; };\n\
          static void bump(struct S *p, unsigned char x) { p->a = (unsigned char)(p->a + x); p->b = (unsigned)(p->b ^ ((unsigned)x << 3)); if (x & 1) p->c = (unsigned char)(p->c + p->a); }\n\n",
@@ -451,14 +554,19 @@ fn cap() -> String {
     std::env::var("DIFF_CAP").unwrap_or_else(|_| "30000000".into())
 }
 
-/// sim65 on `bin`: the exit code, or `None` when the cycle cap is hit. sim65 then says "Maximum number of
-/// cycles reached." and exits 126; that was matched as "Max number" and so read as the program's own
-/// exit code 126 (differential seeds 26 and 51: cc65 -O "agreed" with ours on a hang of both).
+/// sim65 on `bin`: the exit code, or `None` when the cycle cap is hit. sim65
+/// then says "Maximum number of cycles reached." and exits 126; that was
+/// matched as "Max number" and so read as the program's own exit code 126
+/// (differential seeds 26 and 51: cc65 -O "agreed" with ours on a hang of
+/// both).
 fn run(bin: &Path) -> Result<Option<i32>, String> {
     run_within(bin, &cap())
 }
 
-fn run_within(bin: &Path, cycles: &str) -> Result<Option<i32>, String> {
+fn run_within(
+    bin: &Path,
+    cycles: &str,
+) -> Result<Option<i32>, String> {
     let out = Command::new("sim65").args(["-x", cycles]).arg(bin).output().map_err(|e| e.to_string())?;
     if String::from_utf8_lossy(&out.stderr).contains("Maximum number of cycles") {
         return Ok(None);
@@ -466,28 +574,57 @@ fn run_within(bin: &Path, cycles: &str) -> Result<Option<i32>, String> {
     Ok(out.status.code())
 }
 
-fn cc65(dir: &Path, source: &str, optimize: bool) -> Result<Option<i32>, String> {
-    std::fs::write(dir.join("c.c"), format!("{source}\nint main(void) {{ unsigned r = test(); return (r ^ (r >> 8)) & 255; }}\n")).unwrap();
+fn cc65(
+    dir: &Path,
+    source: &str,
+    optimize: bool,
+) -> Result<Option<i32>, String> {
+    std::fs::write(
+        dir.join("c.c"),
+        format!("{source}\nint main(void) {{ unsigned r = test(); return (r ^ (r >> 8)) & 255; }}\n"),
+    )
+    .unwrap();
     std::fs::write(dir.join("data.s"), DATA).unwrap();
     tool(dir, "cl65", &["-t", "sim6502", if optimize { "-O" } else { "-g0" }, "-o", "c.bin", "c.c", "data.s"])?;
     run(&dir.join("c.bin"))
 }
 
-fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i32>, String> {
+fn ours(
+    dir: &Path,
+    source: &str,
+    seed: u64,
+    optimize: bool,
+) -> Result<Option<i32>, String> {
     std::fs::write(dir.join("o.c"), source).unwrap();
     tool(
         dir,
         "clang",
         &[
-            "--target=msp430", "-funsigned-char", "-fpack-struct=1", "-O2", "-Xclang", "-disable-llvm-passes", "-S",
-            "-emit-llvm", "-fno-unwind-tables", "-o", "raw.ll", "o.c",
+            "--target=msp430",
+            "-funsigned-char",
+            "-fpack-struct=1",
+            "-O2",
+            "-Xclang",
+            "-disable-llvm-passes",
+            "-S",
+            "-emit-llvm",
+            "-fno-unwind-tables",
+            "-o",
+            "raw.ll",
+            "o.c",
         ],
     )?;
     let raw: String = std::fs::read_to_string(dir.join("raw.ll"))
         .unwrap()
         .lines()
         .filter(|l| !l.starts_with("target triple"))
-        .map(|l| if l.starts_with("target datalayout") { format!("target datalayout = \"{}\"", datalayout()) } else { l.to_owned() })
+        .map(|l| {
+            if l.starts_with("target datalayout") {
+                format!("target datalayout = \"{}\"", datalayout())
+            } else {
+                l.to_owned()
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(dir.join("raw.ll"), raw).unwrap();
@@ -495,24 +632,40 @@ fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i3
     if !optimize {
         std::fs::copy(dir.join("raw.ll"), dir.join("k.ll")).unwrap();
     } else {
-    tool(
-        dir,
-        "/usr/lib/llvm-20/bin/opt",
-        &["-O2", inline, "-unroll-threshold=0", "-unroll-full-max-count=0", "-vectorize-loops=false", "-vectorize-slp=false", "-S", "raw.ll", "-o", "k.ll"],
-    )?;
+        tool(
+            dir,
+            "/usr/lib/llvm-20/bin/opt",
+            &[
+                "-O2",
+                inline,
+                "-unroll-threshold=0",
+                "-unroll-full-max-count=0",
+                "-vectorize-loops=false",
+                "-vectorize-slp=false",
+                "-S",
+                "raw.ll",
+                "-o",
+                "k.ll",
+            ],
+        )?;
     }
     let mut text = sanitize(&std::fs::read_to_string(dir.join("k.ll")).unwrap());
     if std::env::var("DIFF_NOLIFETIME").is_ok() {
         text = text.lines().filter(|l| !l.contains("llvm.lifetime")).collect::<Vec<_>>().join("\n");
     }
-    llrm_spike_mf::spill::VERIFY_SLOTS.store(std::env::var("DIFF_NOVERIFY").is_err(), std::sync::atomic::Ordering::Relaxed);
-    let mut module = llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e:?}").chars().take(120).collect::<String>())?;
+    llrm_spike_mf::spill::VERIFY_SLOTS
+        .store(std::env::var("DIFF_NOVERIFY").is_err(), std::sync::atomic::Ordering::Relaxed);
+    let mut module =
+        llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e:?}").chars().take(120).collect::<String>())?;
     llrm_6502::prepare::split_phi_edges(&mut module);
     let platform = Platform::parse(SIM65).unwrap();
     let mut asm = String::new();
-    let names: Vec<String> = std::iter::once("test".to_owned()).chain((0..4).map(|n| format!("h{n}"))).chain(["bump".to_owned()]).collect();
-    let defined: Vec<&String> =
-        names.iter().filter(|n| module.named(n).is_some_and(|id| module.global(id).function().is_some_and(|f| !f.is_declaration()))).collect();
+    let names: Vec<String> =
+        std::iter::once("test".to_owned()).chain((0..4).map(|n| format!("h{n}"))).chain(["bump".to_owned()]).collect();
+    let defined: Vec<&String> = names
+        .iter()
+        .filter(|n| module.named(n).is_some_and(|id| module.global(id).function().is_some_and(|f| !f.is_declaration())))
+        .collect();
     if std::env::var("DIFF_TRACE").is_ok() {
         eprintln!("trace: seed {seed}: compiling {defined:?}");
     }
@@ -535,7 +688,11 @@ fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i3
         Err(_) => return Err("ours: panic".to_owned()),
     }
     let runtime = reachable_runtime(&asm);
-    std::fs::write(dir.join("f.s"), format!("{}.import buf\n.import tab\n.import zero\n{asm}{runtime}", equates(&platform))).unwrap();
+    std::fs::write(
+        dir.join("f.s"),
+        format!("{}.import buf\n.import tab\n.import zero\n{asm}{runtime}", equates(&platform)),
+    )
+    .unwrap();
     let driver = format!(
         ".export _main\n{}.import test\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  jsr test\n  stx fold\n  eor fold\n  ldx #0\n  rts\n.segment \"BSS\"\nfold: .res 1\n",
         equates(&platform)
@@ -546,9 +703,13 @@ fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i3
     run(&dir.join("o.bin"))
 }
 
-/// The third opinion: the program compiled by the host gcc with the target's widths (`unsigned` is 16
-/// bits, `unsigned long` 32), run, and folded the way `main` folds it. `None` when gcc fails.
-fn native(dir: &Path, source: &str) -> Option<i32> {
+/// The third opinion: the program compiled by the host gcc with the target's
+/// widths (`unsigned` is 16 bits, `unsigned long` 32), run, and folded the way
+/// `main` folds it. `None` when gcc fails.
+fn native(
+    dir: &Path,
+    source: &str,
+) -> Option<i32> {
     let text = source
         .lines()
         .filter(|line| !line.starts_with("extern const"))
@@ -570,11 +731,16 @@ fn native(dir: &Path, source: &str) -> Option<i32> {
 /// Wall-clock limit for a host-built program.
 const HOST_SECONDS: u32 = 20;
 
-/// What a host-built `bin` prints, or `None` when it fails or outlives `seconds`. It runs in its own
-/// process group, killed on every way out, under a CPU limit (`ulimit -t`) that holds even if this
-/// harness is gone: bare `Command::output` left 14 `n.bin` loops at 97% CPU for an hour after their
-/// parents died. (uutils `timeout -s KILL` never fired, so it is not the guard.)
-fn host_run(bin: &Path, seconds: u32) -> Option<String> {
+/// What a host-built `bin` prints, or `None` when it fails or outlives
+/// `seconds`. It runs in its own process group, killed on every way out, under
+/// a CPU limit (`ulimit -t`) that holds even if this harness is gone: bare
+/// `Command::output` left 14 `n.bin` loops at 97% CPU for an hour after their
+/// parents died. (uutils `timeout -s KILL` never fired, so it is not the
+/// guard.)
+fn host_run(
+    bin: &Path,
+    seconds: u32,
+) -> Option<String> {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
@@ -620,13 +786,15 @@ fn cycles(bin: &Path) -> Option<i64> {
     text.lines().find_map(|line| line.strip_suffix(" cycles")?.trim().parse().ok())
 }
 
-/// The linked size and cycles of the two builds in `dir`: cc65 -O (`c.bin`) and ours (`o.bin`).
+/// The linked size and cycles of the two builds in `dir`: cc65 -O (`c.bin`) and
+/// ours (`o.bin`).
 fn measure(dir: &Path) -> Option<[i64; 4]> {
     let bytes = |name: &str| std::fs::metadata(dir.join(name)).ok().map(|m| m.len() as i64);
     Some([bytes("c.bin")?, bytes("o.bin")?, cycles(&dir.join("c.bin"))?, cycles(&dir.join("o.bin"))?])
 }
 
-/// [`measure`] of a program that does nothing: what both builds cost before the program's own code.
+/// [`measure`] of a program that does nothing: what both builds cost before the
+/// program's own code.
 fn baseline() -> [i64; 4] {
     static BASE: std::sync::OnceLock<[i64; 4]> = std::sync::OnceLock::new();
     *BASE.get_or_init(|| {
@@ -645,25 +813,37 @@ enum Outcome {
     Agree(Option<[i64; 4]>),
     /// A program the harness could not compare: the reason.
     Skipped(String),
-    /// cc65 -O, ours -O2, and the cross-checks: cc65 without -O, ours on the unoptimized IR and the
-    /// host gcc.
+    /// cc65 -O, ours -O2, and the cross-checks: cc65 without -O, ours on the
+    /// unoptimized IR and the host gcc.
     Mismatch(i32, i32, Option<i32>, Option<i32>, Option<i32>),
-    /// cc65 -O disagrees with ours and the host gcc agrees with ours: a bug in cc65.
-    /// cc65 -O, ours and the host gcc, and cc65 without -O
+    /// cc65 -O disagrees with ours and the host gcc agrees with ours: a bug in
+    /// cc65. cc65 -O, ours and the host gcc, and cc65 without -O
     Cc65(i32, i32, Option<i32>),
 }
 
 fn check(seed: u64) -> Outcome {
     let dir = work(seed);
-    // `DIFF_FILE=<path>` runs a hand-written program (with a `test`) in place of the generated one
-    let source = std::env::var("DIFF_FILE").map(|path| std::fs::read_to_string(path).unwrap()).unwrap_or_else(|_| program(seed));
+    // `DIFF_FILE=<path>` runs a hand-written program (with a `test`) in place
+    // of the generated one
+    let source =
+        std::env::var("DIFF_FILE").map(|path| std::fs::read_to_string(path).unwrap()).unwrap_or_else(|_| program(seed));
     std::fs::write(dir.join("p.c"), &source).unwrap();
-    // a reduced program must stay defined: no missing return, no read of a local before it is set
+    // a reduced program must stay defined: no missing return, no read of a
+    // local before it is set
     if std::env::var("DIFF_STRICT").is_ok() {
         let strict = tool(
             &dir,
             "clang",
-            &["--target=msp430", "-funsigned-char", "-fsyntax-only", "-Werror=return-type", "-Werror=uninitialized", "-Werror=sometimes-uninitialized", "-Werror=conditional-uninitialized", "p.c"],
+            &[
+                "--target=msp430",
+                "-funsigned-char",
+                "-fsyntax-only",
+                "-Werror=return-type",
+                "-Werror=uninitialized",
+                "-Werror=sometimes-uninitialized",
+                "-Werror=conditional-uninitialized",
+                "p.c",
+            ],
         );
         if let Err(why) = strict {
             return Outcome::Skipped(format!("not a defined program: {why}"));
@@ -678,7 +858,8 @@ fn check(seed: u64) -> Outcome {
         Ok(Some(code)) if code == reference => {
             let sizes = std::env::var("DIFF_SIZES").ok().and_then(|_| measure(&dir));
             if std::env::var("DIFF_ORACLE").is_ok() {
-                // cc65 and ours agree: the host model disagreeing is a hole in the model
+                // cc65 and ours agree: the host model disagreeing is a hole in
+                // the model
                 match native(&dir, &source) {
                     Some(host) if host != code => {
                         ORACLE_DIFFERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -712,7 +893,8 @@ fn check(seed: u64) -> Outcome {
 #[ignore = "needs cc65, clang and LLVM 20; run with --ignored --nocapture"]
 fn random_programs_agree_with_cc65() {
     let spec = std::env::var("DIFF_SEEDS").unwrap_or_else(|_| "0:40".into());
-    let (first, count) = spec.split_once(':').map(|(a, b)| (a.parse::<u64>().unwrap(), b.parse::<u64>().unwrap())).unwrap();
+    let (first, count) =
+        spec.split_once(':').map(|(a, b)| (a.parse::<u64>().unwrap(), b.parse::<u64>().unwrap())).unwrap();
     let jobs: usize = std::env::var("DIFF_JOBS").ok().and_then(|j| j.parse().ok()).unwrap_or(4);
     let seeds: Vec<u64> = (first..first + count).collect();
     let results = std::sync::Mutex::new(Vec::new());
@@ -748,11 +930,15 @@ fn random_programs_agree_with_cc65() {
                 if *plain == Some(*got) {
                     cc65_o_only += 1;
                 }
-                println!("seed {seed}: cc65 bug: cc65 -O {want}, ours and the host gcc {got}; cc65 without -O {plain:?}");
+                println!(
+                    "seed {seed}: cc65 bug: cc65 -O {want}, ours and the host gcc {got}; cc65 without -O {plain:?}"
+                );
             }
             Outcome::Mismatch(want, got, plain, unoptimized, third) => {
                 bad += 1;
-                println!("seed {seed}: MISMATCH cc65 -O {want}, ours -O2 {got}; cc65 plain {plain:?}, ours unoptimized {unoptimized:?}, host gcc {third:?}");
+                println!(
+                    "seed {seed}: MISMATCH cc65 -O {want}, ours -O2 {got}; cc65 plain {plain:?}, ours unoptimized {unoptimized:?}, host gcc {third:?}"
+                );
             }
         }
     }
@@ -774,23 +960,36 @@ fn random_programs_agree_with_cc65() {
                 std::cmp::Ordering::Equal => equal += 1,
                 std::cmp::Ordering::Greater => slower += 1,
             }
-            println!("seed {seed}: net bytes cc65 -O {} ours {}; net cycles cc65 -O {} ours {}", net[0], net[1], net[2], net[3]);
+            println!(
+                "seed {seed}: net bytes cc65 -O {} ours {}; net cycles cc65 -O {} ours {}",
+                net[0], net[1], net[2], net[3]
+            );
         }
         println!(
             "{} agreeing programs, net of an empty one: bytes ours smaller {smaller} / equal {same} / larger {larger} (totals cc65 -O {}, ours {}); cycles ours fewer {faster} / equal {equal} / more {slower} (totals cc65 -O {}, ours {})",
-            measured.len(), totals[0], totals[1], totals[2], totals[3]
+            measured.len(),
+            totals[0],
+            totals[1],
+            totals[2],
+            totals[3]
         );
     }
     if std::env::var("DIFF_ORACLE").is_ok() {
-        println!("host gcc differs from cc65 -O and ours on {} of {agree} agreeing programs", ORACLE_DIFFERS.load(std::sync::atomic::Ordering::Relaxed));
+        println!(
+            "host gcc differs from cc65 -O and ours on {} of {agree} agreeing programs",
+            ORACLE_DIFFERS.load(std::sync::atomic::Ordering::Relaxed)
+        );
     }
-    println!("{count} programs from seed {first}: {agree} agree, {bad} mismatch, {cc65_bugs} cc65 bugs ({cc65_o_only} of them only with -O), {skipped} skipped");
+    println!(
+        "{count} programs from seed {first}: {agree} agree, {bad} mismatch, {cc65_bugs} cc65 bugs ({cc65_o_only} of them only with -O), {skipped} skipped"
+    );
     assert_eq!(bad, 0, "miscompiles; programs kept in target/tmp/difftest/<seed>");
 }
 
-/// A macro the runtime defines after one routine and another uses was left out when only the other
-/// was reached: `__umodsi3` reached `cmp_sub_32` and ca65 stopped at `':' expected` (differential
-/// seeds 14, 24, 33 were rejected for it).
+/// A macro the runtime defines after one routine and another uses was left out
+/// when only the other was reached: `__umodsi3` reached `cmp_sub_32` and ca65
+/// stopped at `':' expected` (differential seeds 14, 24, 33 were rejected for
+/// it).
 #[test]
 fn a_reachable_routine_gets_the_macros_it_uses() {
     let runtime = reachable_runtime("  jsr __umodsi3\n");
@@ -798,8 +997,9 @@ fn a_reachable_routine_gets_the_macros_it_uses() {
     assert!(runtime.contains("__umodsi3:"));
 }
 
-/// A host program that loops forever is killed at the limit and leaves no process behind. It was run
-/// with no limit, and the loops of differential seeds piled up at 97% CPU for an hour.
+/// A host program that loops forever is killed at the limit and leaves no
+/// process behind. It was run with no limit, and the loops of differential
+/// seeds piled up at 97% CPU for an hour.
 #[test]
 fn a_host_program_that_never_exits_is_killed() {
     let dir = work(u64::MAX - 3);

@@ -62,11 +62,7 @@ impl Level {
             Self::O0 => pipeline::Options::none(),
             Self::O1 => pipeline::Options::basic(),
             // -O1 less what rewrites a loop a debugger steps through.
-            Self::Og => pipeline::Options {
-                loopidioms: false,
-                rounds: pipeline::Options::default().rounds,
-                ..pipeline::Options::basic()
-            },
+            Self::Og => pipeline::Options { loopidioms: false, ..pipeline::Options::basic() },
             Self::O2 => pipeline::Options::standard(),
             Self::O3 => pipeline::Options::speed(),
             Self::Omax => pipeline::Options::aggressive(),
@@ -74,6 +70,25 @@ impl Level {
             Self::Oz => pipeline::Options::min_size(),
         }
     }
+}
+
+/// `-f<pass>` or `-fno-<pass>` applied to `options`; false when `flag` names
+/// no pass.
+pub fn apply_pass_flag(
+    options: &mut pipeline::Options,
+    flag: &str,
+) -> bool {
+    let Some(name) = flag.strip_prefix("-f") else { return false };
+    let (name, on) = name.strip_prefix("no-").map_or((name, true), |rest| (rest, false));
+    PASSES
+        .iter()
+        .find(|(one, _)| *one == name)
+        .is_some_and(
+            |(_, set)| {
+                set(options, on);
+                true
+            },
+        )
 }
 
 /// gcc's `-f` pass names, each with the options it sets.

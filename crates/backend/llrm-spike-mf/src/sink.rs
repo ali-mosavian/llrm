@@ -73,7 +73,8 @@ struct Sink<'a, T: Target> {
     merge: HashMap<(u32, u32), u32>,
     to_split: Vec<(u32, u32)>,
     live_out: Option<Vec<HashSet<u32>>>,
-    /// Whether an edge may get a block of its own for an instruction to land in.
+    /// Whether an edge may get a block of its own for an instruction to land
+    /// in.
     allow_split: bool,
     /// Whether a copy or a rematerializable instruction stays where it is.
     keep_cheap: bool,
@@ -842,12 +843,13 @@ pub fn machine_sink<T: Target + Jump>(function: &mut MFunction<T::Class>) -> boo
     Sink::<T>::new(function).run()
 }
 
-/// [`machine_sink`] where no edge is split and a copy or a rematerializable instruction stays.
-/// DEVIATE: the pin splits when `PostponeSplitCriticalEdge` finds it worth it, and sinks a copy
-/// or a constant into the one successor that reads it. Reason: on a target whose jump costs
-/// bytes (the 6502's `jmp` is three) a block made for a one-move instruction costs more than the
-/// move saves on the other path (lz4 grew 16 bytes). Exit: the neutral-LIR task, with a
-/// block-cost hook.
+/// [`machine_sink`] where no edge is split and a copy or a rematerializable
+/// instruction stays. DEVIATE: the pin splits when `PostponeSplitCriticalEdge`
+/// finds it worth it, and sinks a copy or a constant into the one successor
+/// that reads it. Reason: on a target whose jump costs bytes (the 6502's `jmp`
+/// is three) a block made for a one-move instruction costs more than the
+/// move saves on the other path (lz4 grew 16 bytes). Exit: the neutral-LIR
+/// task, with a block-cost hook.
 pub fn machine_sink_in_place<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
     let mut sink = Sink::<T>::new(function);
     sink.allow_split = false;

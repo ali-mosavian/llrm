@@ -1,16 +1,19 @@
-//! Target DAG combines: a multiply by a constant of the form `2^N +- 1` (times a power of two) is
-//! a shift and an add or subtract, not a call to the multiply routine.
+//! Target DAG combines: a multiply by a constant of the form `2^N +- 1` (times
+//! a power of two) is a shift and an add or subtract, not a call to the
+//! multiply routine.
 //!
-//! DEVIATE: the pin does this in `visitMUL` when `TLI.decomposeMulByConstant` says so
+//! DEVIATE: the pin does this in `visitMUL` when `TLI.decomposeMulByConstant`
+//! says so
 //! ([L4908](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4908));
-//! the shared combiner has no such hook, so it is a target combine on `Mul` that runs when the
-//! generic `visitMUL` finds nothing. Only the one-shift forms of the pin's block: no `2^N +- 2^M`.
-//! Exit: the hook in the shared `visit_mul`.
+//! the shared combiner has no such hook, so it is a target combine on `Mul`
+//! that runs when the generic `visitMUL` finds nothing. Only the one-shift
+//! forms of the pin's block: no `2^N +- 2^M`. Exit: the hook in the shared
+//! `visit_mul`.
 
-use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 
 pub struct MosCombines;
 
@@ -32,7 +35,8 @@ impl CombineHooks for MosCombines {
     }
 }
 
-/// `x * c` as `(x << n) +- x`, shifted by the factors of two in `c` and negated for a negative `c`.
+/// `x * c` as `(x << n) +- x`, shifted by the factors of two in `c` and negated
+/// for a negative `c`.
 fn decompose_mul(
     dag: &mut SelectionDAG,
     node: SDValue,

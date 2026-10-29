@@ -3,17 +3,29 @@
 use llrm_spike_mf::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
 use llrm_spike_mf::spill::verify_sharing;
 
-fn store(register: u32, slot: i32) -> Inst {
+fn store(
+    register: u32,
+    slot: i32,
+) -> Inst {
     Inst::new(Kind::Op("STORE"), vec![Operand::Use(Reg::Virt(register)), Operand::Frame(slot)])
 }
 
-fn reload(register: u32, slot: i32) -> Inst {
+fn reload(
+    register: u32,
+    slot: i32,
+) -> Inst {
     Inst::new(Kind::Op("RELOAD"), vec![Operand::Def(Reg::Virt(register)), Operand::Frame(slot)])
 }
 
 /// `register := register op slot`: a read of the slot inside an instruction.
-fn folded(register: u32, slot: i32) -> Inst {
-    Inst::new(Kind::Op("OP"), vec![Operand::Def(Reg::Virt(register)), Operand::Use(Reg::Virt(register)), Operand::Frame(slot)])
+fn folded(
+    register: u32,
+    slot: i32,
+) -> Inst {
+    Inst::new(
+        Kind::Op("OP"),
+        vec![Operand::Def(Reg::Virt(register)), Operand::Use(Reg::Virt(register)), Operand::Frame(slot)],
+    )
 }
 
 fn function(insts: Vec<Inst>) -> MFunction<u8> {
@@ -60,9 +72,10 @@ fn values_that_never_overlap_may_share_a_cell() {
     assert_eq!(check(&before, one_cell(&before), vec![0, 1, 2, 3]), Ok(()));
 }
 
-/// A read folded into an instruction (`op r, slot`) followed by the store of its result is not a copy
-/// of one slot into another: removing that store as a self-copy once the two shared a cell left the next
-/// read with the old value (184 of 240 differential programs).
+/// A read folded into an instruction (`op r, slot`) followed by the store of
+/// its result is not a copy of one slot into another: removing that store as a
+/// self-copy once the two shared a cell left the next read with the old value
+/// (184 of 240 differential programs).
 #[test]
 fn a_folded_read_and_the_store_of_its_result_are_not_a_copy() {
     let before = vec![store(0, 0), folded(1, 0), store(1, 1), reload(2, 1)];
@@ -72,7 +85,8 @@ fn a_folded_read_and_the_store_of_its_result_are_not_a_copy() {
     assert!(check(&before, dropped, vec![0, 1, 3]).is_err(), "dropping the store is not");
 }
 
-/// A real copy (reload, store of the same register) may go when it lands in its own cell.
+/// A real copy (reload, store of the same register) may go when it lands in its
+/// own cell.
 #[test]
 fn a_copy_into_its_own_cell_may_go() {
     let before = vec![store(0, 0), reload(1, 0), store(1, 1), reload(2, 1)];

@@ -17,7 +17,10 @@ use std::fmt::Write;
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
-use llrm_spike_mf::{Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, remove_identity_copies, remove_redundant_copies_between, reschedule_kills, machine_sink_in_place};
+use llrm_spike_mf::{
+    Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, machine_sink_in_place,
+    remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
+};
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::hooks::Cpu;
@@ -47,12 +50,14 @@ fn rc(n: u8) -> RegId {
     RegId::from_raw(reg::RC0.index() as u8 + n)
 }
 
-/// The zero-page bytes the imaginary registers may use on the platform being compiled for
-/// (`Platform::zero_page`): `rc0`..`rc15` and, above them, as many scratch cells as it has room for.
+/// The zero-page bytes the imaginary registers may use on the platform being
+/// compiled for (`Platform::zero_page`): `rc0`..`rc15` and, above them, as many
+/// scratch cells as it has room for.
 const BASE_CELLS: u8 = 16;
 
-/// What a byte of code is worth against a clock, per level (the tuning struct of this target): a
-/// size-reducing choice is taken when each byte it saves costs at most `clocks_per_byte` more clocks.
+/// What a byte of code is worth against a clock, per level (the tuning struct
+/// of this target): a size-reducing choice is taken when each byte it saves
+/// costs at most `clocks_per_byte` more clocks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Tuning {
     pub clocks_per_byte: u32,
@@ -61,21 +66,25 @@ pub struct Tuning {
 impl Tuning {
     /// Speed: a byte saved is not worth a clock.
     pub const SPEED: Tuning = Tuning { clocks_per_byte: 1 };
-    /// Size: a byte saved is worth up to twelve clocks (a shift loop of 3 bits is 3 bytes and 16 clocks; three
-    /// shared callee-saved cells are 9 bytes and 99 clocks).
+    /// Size: a byte saved is worth up to twelve clocks (a shift loop of 3 bits
+    /// is 3 bytes and 16 clocks; three shared callee-saved cells are 9
+    /// bytes and 99 clocks).
     pub const SIZE: Tuning = Tuning { clocks_per_byte: 12 };
 }
 
 thread_local! {
-    /// Whether a function may save its callee-saved cells with `__csave`/`__crest` (see [`with_shared_saves`]).
+    /// Whether a function may save its callee-saved cells
+    /// with `__csave`/`__crest` (see [`with_shared_saves`]).
     static SHARED_SAVES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
 }
 
-/// `f` with the shared callee-save helpers allowed or not. A function that keeps `n >= 3` callee-saved
-/// cells saves `6n - 9` bytes with them, but the runtime that holds them is [`SAVE_HELPERS_BYTES`] a
-/// module: only a module whose users together save more than that should link it (`select::module_text`).
+/// `f` with the shared callee-save helpers allowed or not. A function that
+/// keeps `n >= 3` callee-saved cells saves `6n - 9` bytes with them, but the
+/// runtime that holds them is [`SAVE_HELPERS_BYTES`] a module: only a module
+/// whose users together save more than that should link it
+/// (`select::module_text`).
 pub fn with_shared_saves<R>(
     allowed: bool,
     f: impl FnOnce() -> R,
@@ -89,8 +98,8 @@ pub fn with_shared_saves<R>(
 /// The bytes `__csave` and `__crest` take once linked.
 pub const SAVE_HELPERS_BYTES: i64 = 34;
 
-/// What a function that keeps `n` callee-saved cells saves by calling the helpers: six bytes a cell
-/// inline, and two for the result, against eleven.
+/// What a function that keeps `n` callee-saved cells saves by calling the
+/// helpers: six bytes a cell inline, and two for the result, against eleven.
 pub fn shared_save_gain(n: u32) -> i64 {
     6 * i64::from(n) + 2 - 11
 }
@@ -99,22 +108,24 @@ fn imaginary() -> u8 {
     IMAGINARY.with(|n| n.get())
 }
 
-/// The zero-page bytes a value may live in: `rc2`..`rc7`, which a call clobbers, then the platform's
-/// extra scratch cells `rc16`.., which a call clobbers too, then `rc8`..`rc15`, which a callee keeps
-/// (see [`preserved`]). Scratch comes before the kept cells: using one costs no save and restore.
+/// The zero-page bytes a value may live in: `rc2`..`rc7`, which a call
+/// clobbers, then the platform's extra scratch cells `rc16`.., which a call
+/// clobbers too, then `rc8`..`rc15`, which a callee keeps (see [`preserved`]).
+/// Scratch comes before the kept cells: using one costs no save and restore.
 fn cells() -> impl Iterator<Item = RegId> {
     (2..8).chain(BASE_CELLS..imaginary()).chain(8..BASE_CELLS).map(rc)
 }
 
-/// The pairs a pointer may live in: `rs1`..`rs3` over `rc2`..`rc7`, the scratch pairs `rs8`.., then
-/// `rs4`..`rs7`.
+/// The pairs a pointer may live in: `rs1`..`rs3` over `rc2`..`rc7`, the scratch
+/// pairs `rs8`.., then `rs4`..`rs7`.
 fn pairs() -> impl Iterator<Item = RegId> {
     let scratch = (BASE_CELLS / 2..imaginary() / 2).map(|n| RegId::from_raw(reg::RS0.index() as u8 + n));
     [reg::RS1, reg::RS2, reg::RS3].into_iter().chain(scratch).chain([reg::RS4, reg::RS5, reg::RS6, reg::RS7])
 }
 
-/// A callee-saved zero-page byte or pair (`rc8`..`rc15`, `rs4`..`rs7`): a function that uses one
-/// saves it on entry and restores it before each return, so a value in it survives a call.
+/// A callee-saved zero-page byte or pair (`rc8`..`rc15`, `rs4`..`rs7`): a
+/// function that uses one saves it on entry and restores it before each return,
+/// so a value in it survives a call.
 fn preserved(register: RegId) -> bool {
     let at = register.index();
     (reg::RC8.index()..=reg::RC15.index()).contains(&at) || (reg::RS4.index()..=reg::RS7.index()).contains(&at)
@@ -206,8 +217,9 @@ impl<const STACK: bool> Target for Mos<STACK> {
             || (is_pair(other) && (lane(other, 0) == one || lane(other, 1) == one))
     }
 
-    // saving and restoring a callee-saved cell is five bytes each way; a spilled value costs about
-    // three bytes a mention (the reload) over a direct use, and a mention in a loop weighs ten
+    // saving and restoring a callee-saved cell is five bytes each way; a
+    // spilled value costs about three bytes a mention (the reload) over a
+    // direct use, and a mention in a loop weighs ten
     fn worth_taking(
         root: RegId,
         first_use: bool,
@@ -231,8 +243,9 @@ impl<const STACK: bool> Target for Mos<STACK> {
         Some(spill)
     }
 
-    /// The second operand of an ALU op or a compare is a memory operand: a spilled byte is read from
-    /// its cell as it is (`ora s_f_3`), not loaded into a zero-page cell first.
+    /// The second operand of an ALU op or a compare is a memory operand: a
+    /// spilled byte is read from its cell as it is (`ora s_f_3`), not
+    /// loaded into a zero-page cell first.
     fn fold_spill(
         inst: &Inst,
         register: Reg,
@@ -243,7 +256,9 @@ impl<const STACK: bool> Target for Mos<STACK> {
         else {
             return None;
         };
-        let once = inst.operands.iter().filter(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == register)).count() == 1;
+        let once =
+            inst.operands.iter().filter(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == register)).count()
+                == 1;
         if STACK || *second != register || !once {
             return None;
         }
@@ -468,8 +483,8 @@ impl Builder {
         self.versions.get(name).copied().unwrap_or(0)
     }
 
-    /// The fixed register an incoming argument's value arrived in, followed back through copies and
-    /// the unpacking of a pair into its bytes.
+    /// The fixed register an incoming argument's value arrived in, followed
+    /// back through copies and the unpacking of a pair into its bytes.
     fn arrives_in(
         &self,
         register: Reg,
@@ -477,9 +492,12 @@ impl Builder {
         let Reg::Virt(mut v) = register else { return None };
         let mut lane_of: Option<u8> = None;
         for _ in 0..8 {
-            let def = self.function.blocks.iter().flat_map(|block| &block.insts).find(|inst| {
-                inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(d)) if *d == v))
-            })?;
+            let def = self
+                .function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .find(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(d)) if *d == v)))?;
             let source = match (def.kind, &def.operands[..]) {
                 (Kind::Copy, [Operand::Def(_), Operand::Use(source)]) => *source,
                 (Kind::Op("UNPACK"), [Operand::Def(low), Operand::Def(_), Operand::Use(source)]) => {
@@ -496,8 +514,9 @@ impl Builder {
         None
     }
 
-    /// `count` single-bit steps of `step` on the accumulator. An arithmetic shift right by 7 leaves
-    /// only the sign, all ones or all zeros, which is cheaper than seven `cmp #$80; ror a`.
+    /// `count` single-bit steps of `step` on the accumulator. An arithmetic
+    /// shift right by 7 leaves only the sign, all ones or all zeros, which
+    /// is cheaper than seven `cmp #$80; ror a`.
     fn shift_a(
         &mut self,
         step: &'static str,
@@ -508,7 +527,8 @@ impl Builder {
             self.push(Inst::new(Kind::Op("SPLAT"), vec![Operand::Def(acc), Operand::Use(acc)]));
             return;
         }
-        // a logical shift by 7 leaves one bit: the carry out of the other end, rotated into a zero
+        // a logical shift by 7 leaves one bit: the carry out of the other end,
+        // rotated into a zero
         if let ("LSR" | "ASL", 7) = (step, count) {
             let one = if step == "LSR" { "TOPBIT" } else { "LOWBIT" };
             self.push(Inst::new(Kind::Op(one), vec![Operand::Def(acc), Operand::Use(acc)]));
@@ -537,7 +557,8 @@ impl Builder {
         let acc = Reg::Phys(reg::A);
         if zero {
             let (al, ah) = self.read_word(&a.0)?;
-            // a constant right side is two immediates, not two cells loaded with it
+            // a constant right side is two immediates, not two cells loaded
+            // with it
             let rhs = match self.word_constant(&b.0) {
                 Some(bytes) => bytes.map(Operand::Imm),
                 None => {
@@ -569,7 +590,10 @@ impl Builder {
         if word && matches!(code, 4 | 5) && self.word_constant(&b.0) == Some([0, 0]) {
             let (_, ah) = self.read_word(&a.0)?;
             self.copy(acc, ah);
-            let mut test = Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(acc), Operand::Imm(0)]);
+            let mut test = Inst::new(
+                Kind::Op("CMP"),
+                vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(acc), Operand::Imm(0)],
+            );
             test.sets_flags = true;
             self.push(test);
             return Ok(());
@@ -668,9 +692,11 @@ impl Builder {
         &mut self,
         mut inst: Inst,
     ) {
-        // a constant or a symbol's address is cheaper to load again than to keep in a slot
+        // a constant or a symbol's address is cheaper to load again than to
+        // keep in a slot
         inst.rematerializable |= matches!(inst.kind, Kind::Op("LDI" | "LDS"));
-        // and a load sets N and Z, so it is not run again where a compare's flags are live
+        // and a load sets N and Z, so it is not run again where a compare's
+        // flags are live
         inst.sets_flags |= matches!(inst.kind, Kind::Op("LDI" | "LDS"));
         self.function.blocks[self.current].insts.push(inst);
     }
@@ -717,7 +743,8 @@ impl Builder {
         Ok(())
     }
 
-    /// How many halves of the pair `name` are the identity of `mnemonic` (a known `0`, or `255` for `AND`).
+    /// How many halves of the pair `name` are the identity of `mnemonic` (a
+    /// known `0`, or `255` for `AND`).
     fn identity_halves(
         &self,
         mnemonic: &str,
@@ -761,8 +788,11 @@ impl Builder {
             self.push(bump);
             return Ok(());
         }
-        // a commutative op reads the operand with the known identity half as its second
-        let (a, b) = if matches!(mnemonic, "EOR" | "ORA" | "AND") && self.identity_halves(mnemonic, a) > self.identity_halves(mnemonic, b) {
+        // a commutative op reads the operand with the known identity half as
+        // its second
+        let (a, b) = if matches!(mnemonic, "EOR" | "ORA" | "AND")
+            && self.identity_halves(mnemonic, a) > self.identity_halves(mnemonic, b)
+        {
             (b, a)
         } else {
             (a, b)
@@ -772,7 +802,8 @@ impl Builder {
             Some(bytes) => bytes.map(Operand::Imm),
             None => {
                 let (bl, bh) = self.read_word(b)?;
-                // a half known to be a constant (the zero of a widened byte) is an immediate
+                // a half known to be a constant (the zero of a widened byte) is
+                // an immediate
                 let bname = b.strip_suffix("+1").unwrap_or(b);
                 let known = |halves: &HashMap<String, i64>, half: usize| {
                     let cell = if half == 0 { bname.to_owned() } else { format!("{bname}+1") };
@@ -806,12 +837,16 @@ impl Builder {
     }
 }
 
-/// A logical op whose immediate leaves the byte as it was: `x ^ 0`, `x | 0`, `x & 255`.
+/// A logical op whose immediate leaves the byte as it was: `x ^ 0`, `x | 0`, `x
+/// & 255`.
 fn is_identity(
     mnemonic: &str,
     second: &Operand,
 ) -> bool {
-    matches!((mnemonic, second), ("EOR" | "ORA", Operand::Imm(0)) | ("AND", Operand::Imm(255)))
+    matches!(
+        (mnemonic, second),
+        ("EOR" | "ORA", Operand::Imm(0)) | ("AND", Operand::Imm(255))
+    )
 }
 
 fn name(operand: &Machine) -> Result<&str, Unsupported> {
@@ -855,7 +890,9 @@ fn pointer_cells(
                 && match *opcode {
                     op::COPY16 => true,
                     op::ADD16 => matches!(&operands[2], Machine::Reg(b) if constant(b)),
-                    op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => at == 1,
+                    op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => {
+                        at == 1
+                    }
                     op::STZP | op::LEASP16 | op::JSRI => at == 0,
                     _ => false,
                 };
@@ -938,7 +975,8 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
         let word = cell.strip_suffix("+1").unwrap_or(cell);
         defs[cell] == 1 && defs[word] == 1 && (cell.starts_with("v_") || cell.starts_with("w_"))
     });
-    // a byte copied once from a constant is that constant (the zero high half of a widened byte)
+    // a byte copied once from a constant is that constant (the zero high half
+    // of a widened byte)
     for item in items {
         let Item::Inst(MInst { opcode: op::COPY8, operands }) = item else { continue };
         if let [Machine::Reg(d), Machine::Reg(source)] = &operands[..]
@@ -1179,7 +1217,8 @@ pub fn build(
                 b.push(set);
                 b.copy(d, Reg::Phys(reg::A));
             }
-            // 8 or more: one byte moves across, shifted by the rest of the count
+            // 8 or more: one byte moves across, shifted by the rest of the
+            // count
             code @ (op::SHL16 | op::SRL16 | op::SRA16) if (8..16).contains(&immediate(&o[2])?) => {
                 let rest = immediate(&o[2])? - 8;
                 let (al, ah) = b.read_word(name(&o[1])?)?;
@@ -1543,7 +1582,8 @@ pub fn build(
                 let counted = matches!(code, op::SHLV16 | op::SRLV16 | op::SRAV16);
                 let second = if counted { None } else { Some(b.read_word(name(&o[2])?)?) };
                 let (mut yl, mut yh) = second.unwrap_or((xl, xh));
-                // a product goes either way round: the operand that arrives in `rc4` is the second
+                // a product goes either way round: the operand that arrives in
+                // `rc4` is the second
                 if code == op::MUL16 && (b.arrives_in(xl) == Some(rc(4)) || b.arrives_in(yl) == Some(rc(2))) {
                     (xl, xh, yl, yh) = (yl, yh, xl, xh);
                 }
@@ -1831,13 +1871,15 @@ fn move_byte(
 /// used, or an error from the allocator. `cmos` is the 65C02 subtarget: a zero
 /// loaded into a cell is `stz`.
 ///
-/// A callee-saved cell costs a save and a restore, so [`Mos::worth_taking`] gives one only to a
-/// register that gains that back; the rest are spilled.
+/// A callee-saved cell costs a save and a restore, so [`Mos::worth_taking`]
+/// gives one only to a register that gains that back; the rest are spilled.
 ///
-/// An instruction the sink moved into another block (`machine_sink_in_place`) may cost a jump or a
-/// callee-saved cell the allocation then needs, so a function the sink changed is also emitted
-/// without it, and the sunk form is kept only if it is no larger and no slower by the timing table
-/// (`MachineSink` weighs the move by block frequency; the table is this target's).
+/// An instruction the sink moved into another block (`machine_sink_in_place`)
+/// may cost a jump or a callee-saved cell the allocation then needs, so a
+/// function the sink changed is also emitted without it, and the sunk form is
+/// kept only if it is no larger and no slower by the timing table
+/// (`MachineSink` weighs the move by block frequency; the table is this
+/// target's).
 pub fn emit(
     function: MFunction<Class>,
     labels: &[Vec<String>],
@@ -1876,9 +1918,11 @@ fn emit_on(
     }
     let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
     let price = |code: &str, slots: &[(String, usize)]| {
-        crate::timing::estimate(cpu, code).map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
+        crate::timing::estimate(cpu, code)
+            .map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
     };
-    // each change is kept only where it is no larger and no slower than the function without it
+    // each change is kept only where it is no larger and no slower than the
+    // function without it
     let mut best = (code, slots);
     let mut variants = vec![(false, false)];
     if sunk && shared {
@@ -1904,19 +1948,27 @@ fn adjust(
     writeln!(out, "  clc\n  lda rc0\n  adc #{}\n  sta rc0\n  lda rc1\n  adc #{}\n  sta rc1", n & 0xFF, n >> 8).unwrap();
 }
 
-/// The callee-saved bytes the allocation used are stored to a slot of their own on entry and loaded
-/// back before each `rts` (`PrologEpilogInserter::spillCalleeSavedRegisters`).
+/// The callee-saved bytes the allocation used are stored to a slot of their own
+/// on entry and loaded back before each `rts`
+/// (`PrologEpilogInserter::spillCalleeSavedRegisters`).
 fn save_preserved<const STACK: bool>(
     function: &mut MFunction<Class>,
     assignment: &llrm_spike_mf::regalloc::Assignment,
     slots: &mut Vec<(i32, Class)>,
 ) -> bool {
     let mut used: Vec<RegId> = Vec::new();
-    let named = function.blocks.iter().flat_map(|b| &b.insts).flat_map(|i| &i.operands).filter_map(|o| match o {
-        Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => Some(assignment.0[*v as usize]),
-        Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
-        _ => None,
-    });
+    let named = function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .flat_map(|i| &i.operands)
+        .filter_map(
+            |o| match o {
+                Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => Some(assignment.0[*v as usize]),
+                Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
+                _ => None,
+            },
+        );
     for register in named.collect::<Vec<_>>() {
         let bytes = if is_pair(register) { vec![lane(register, 0), lane(register, 1)] } else { vec![register] };
         for byte in bytes.into_iter().filter(|r| preserved(*r)) {
@@ -1928,12 +1980,14 @@ fn save_preserved<const STACK: bool>(
     used.sort_by_key(|r| r.index());
     let mut saves = Vec::new();
     let mut restores = Vec::new();
-    // Static slots: each cell goes on the hardware stack, three bytes to save and three to restore
-    // against five and five through a slot of its own (and no RAM). The soft stack keeps its slots:
-    // a recursive function would run the hardware stack out.
+    // Static slots: each cell goes on the hardware stack, three bytes to save
+    // and three to restore against five and five through a slot of its own
+    // (and no RAM). The soft stack keeps its slots: a recursive function
+    // would run the hardware stack out.
     if !STACK && !used.is_empty() {
-        // `rc8`.. up to `n` of them: one call saves and one jump restores (`__csave`, `__crest`), 11
-        // bytes against 6 a cell and 2 for the result, and 57 + 14n clocks more; taken where the level
+        // `rc8`.. up to `n` of them: one call saves and one jump restores
+        // (`__csave`, `__crest`), 11 bytes against 6 a cell and 2 for
+        // the result, and 57 + 14n clocks more; taken where the level
         // pays that for the bytes
         let n = used.len() as u32;
         let (saved, slower) = (shared_save_gain(n), 57 + 14 * n);
@@ -1971,15 +2025,17 @@ fn save_preserved<const STACK: bool>(
         }
         block.insts = out;
     }
-    // after the frame is allocated: its slots are addressed from the adjusted stack pointer
+    // after the frame is allocated: its slots are addressed from the adjusted
+    // stack pointer
     let entry = &mut function.blocks[0].insts;
     let at = usize::from(entry.first().is_some_and(|inst| inst.kind == Kind::Op("ADJSP")));
     entry.splice(at..at, saves);
     true
 }
 
-/// Whether `inst` tests only the zero or sign flag: `beq`, `bne`, `bmi`, `bpl`, or a select or set
-/// whose condition code (the last immediate, before the flags it reads) is one of those.
+/// Whether `inst` tests only the zero or sign flag: `beq`, `bne`, `bmi`, `bpl`,
+/// or a select or set whose condition code (the last immediate, before the
+/// flags it reads) is one of those.
 fn reads_zero_or_sign_only(inst: &Inst) -> bool {
     match inst.kind {
         Kind::Op("BEQ" | "BNE" | "BMI" | "BPL") => true,
@@ -1993,7 +2049,8 @@ fn reads_zero_or_sign_only(inst: &Inst) -> bool {
     }
 }
 
-/// Whether the emitted line leaves the zero and sign flags describing what `a` now holds.
+/// Whether the emitted line leaves the zero and sign flags describing what `a`
+/// now holds.
 fn sets_nz_of_a(line: &str) -> bool {
     let line = line.trim();
     let (mnemonic, operand) = line.split_once(' ').unwrap_or((line, ""));
@@ -2011,8 +2068,9 @@ fn emit_with<const STACK: bool>(
     sink: bool,
     share: bool,
 ) -> Result<(String, Vec<(String, usize)>, bool, bool), String> {
-    // an instruction goes to the one path that reads it; a bump of a pointer is then done in place,
-    // and the read of the old pointer that follows it goes first
+    // an instruction goes to the one path that reads it; a bump of a pointer is
+    // then done in place, and the read of the old pointer that follows it
+    // goes first
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
@@ -2100,7 +2158,11 @@ fn emit_with<const STACK: bool>(
                     if *k == 1 {
                         writeln!(out, "  inc {low}\n  bne _pa{made}\n  inc {high}\n_pa{made}:").unwrap();
                     } else {
-                        writeln!(out, "  clc\n  lda {low}\n  adc #{k}\n  sta {low}\n  bcc _pa{made}\n  inc {high}\n_pa{made}:").unwrap();
+                        writeln!(
+                            out,
+                            "  clc\n  lda {low}\n  adc #{k}\n  sta {low}\n  bcc _pa{made}\n  inc {high}\n_pa{made}:"
+                        )
+                        .unwrap();
                     }
                 }
                 (Kind::Op("LDPX"), _) => writeln!(out, "  lda ({}),y", register_name(lane(regs[1], 0))).unwrap(),
@@ -2129,7 +2191,12 @@ fn emit_with<const STACK: bool>(
                     if d == reg::A || d == reg::X || d == reg::Y {
                         writeln!(out, "  ld{} #{part}{symbol}", register_name(d)).unwrap();
                     } else {
-                        through_a(&mut out, a_live, spare, &format!("  lda #{part}{symbol}\n  sta {}\n", register_name(d)));
+                        through_a(
+                            &mut out,
+                            a_live,
+                            spare,
+                            &format!("  lda #{part}{symbol}\n  sta {}\n", register_name(d)),
+                        );
                     }
                 }
                 // n := t when cc, n already holding f: the branch skips the
@@ -2161,8 +2228,8 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("ASL"), _) => out.push_str("  asl a\n"),
                 (Kind::Op("LSR"), _) => out.push_str("  lsr a\n"),
                 (Kind::Op("ASR"), _) => out.push_str("  cmp #$80\n  ror a\n"),
-                // the sign into every bit: the carry out of `asl` is the sign, `sbc #0` turns it into 0 or $FF
-                // and `eor` flips it
+                // the sign into every bit: the carry out of `asl` is the
+                // sign, `sbc #0` turns it into 0 or $FF and `eor` flips it
                 (Kind::Op("SPLAT"), _) => out.push_str("  asl a\n  lda #0\n  sbc #0\n  eor #$ff\n"),
                 // `x >> 7` and `x << 7` of a byte: four bytes, not seven shifts
                 (Kind::Op("TOPBIT"), _) => out.push_str("  asl a\n  lda #0\n  rol a\n"),
@@ -2172,15 +2239,19 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("SAVEC"), _) => out.push_str("  lda #0\n  rol a\n"),
                 (Kind::Op("LOADC"), _) => out.push_str("  lsr a\n"),
                 (Kind::Op(step @ ("SHL1" | "SRL1")), _) => {
-                    let (first, second) =
-                        if step == "SHL1" { ("asl", "rol") } else { ("lsr", "ror") };
+                    let (first, second) = if step == "SHL1" { ("asl", "rol") } else { ("lsr", "ror") };
                     let (low, high) = (register_name(regs[0]), register_name(regs[2]));
                     let (one, two) = if step == "SHL1" { (low, high) } else { (high, low) };
-                    // a run of shifts is shorter as a counted loop (nine bytes, against four a shift)
-                    // when an index register is free to count; it takes 5 clocks a shift and one more
-                    // than the run, so it is chosen where each byte it saves costs no more clocks than
+                    // a run of shifts is shorter as a counted loop (nine bytes,
+                    // against four a shift) when an index
+                    // register is free to count; it takes 5 clocks a shift and
+                    // one more than the run, so it is
+                    // chosen where each byte it saves costs no more clocks than
                     // the level's rate
-                    let run = block.insts[i..].iter().take_while(|next| next.kind == inst.kind && next.operands == inst.operands).count();
+                    let run = block.insts[i..]
+                        .iter()
+                        .take_while(|next| next.kind == inst.kind && next.operands == inst.operands)
+                        .count();
                     let (saved, slower) = (4 * run as i64 - 9, 5 * run as u32 + 1);
                     let pays = saved > 0 && slower <= TUNING.with(|t| t.get()).clocks_per_byte * saved as u32;
                     match spare {
@@ -2205,7 +2276,8 @@ fn emit_with<const STACK: bool>(
                     };
                     load(&mut out, regs[2]);
                     match (low, high) {
-                        // against zero the loads set the flag: both bytes zero is `lda lo; ora hi`
+                        // against zero the loads set the flag: both bytes zero
+                        // is `lda lo; ora hi`
                         (Operand::Imm(0), Operand::Imm(0)) if regs[3] != reg::X && regs[3] != reg::Y => {
                             writeln!(out, "  ora {}", register_name(regs[3])).unwrap();
                         }
@@ -2276,7 +2348,8 @@ fn emit_with<const STACK: bool>(
                     writeln!(out, "  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
                     move_byte(&mut out, regs[1], reg::A, false, None);
                 }
-                // against zero, a load or an ALU result has already set the flags a zero or sign test reads
+                // against zero, a load or an ALU result has already set the
+                // flags a zero or sign test reads
                 (Kind::Op("CMP"), [_, _, Operand::Imm(0)])
                     if block.insts.get(i + 1).is_some_and(reads_zero_or_sign_only)
                         && out.lines().last().is_some_and(sets_nz_of_a) => {}
@@ -2324,24 +2397,29 @@ fn emit_with<const STACK: bool>(
                         );
                     let false_at = matches!(if_false, Operand::Use(_)).then(|| read.next()).flatten();
                     let true_at = matches!(if_true, Operand::Use(_)).then(|| read.next()).flatten();
-                    // `a` holds the compare's left side: `lda lhs; cmp rhs` just before
+                    // `a` holds the compare's left side: `lda lhs; cmp rhs`
+                    // just before
                     let held = i.checked_sub(2).and_then(|first| match (&block.insts[first], &block.insts[i - 1]) {
                         (copy, compare) if compare.kind == Kind::Op("CMP") => match (copy.kind, &copy.operands[..]) {
-                            (Kind::Copy, [Operand::Def(Reg::Phys(a)), Operand::Use(lhs)]) if *a == reg::A => Some(at(*lhs)),
+                            (Kind::Copy, [Operand::Def(Reg::Phys(a)), Operand::Use(lhs)]) if *a == reg::A => {
+                                Some(at(*lhs))
+                            }
                             _ => None,
                         },
                         _ => None,
                     });
                     let opposite = ["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize];
                     if held.is_some() && held == true_at {
-                        // the value to keep is already in `a`: skip the load of the other
+                        // the value to keep is already in `a`: skip the load of
+                        // the other
                         writeln!(out, "  {branch} {done}").unwrap();
                         load(&mut out, if_false, false_at);
                     } else if held.is_some() && held == false_at {
                         writeln!(out, "  {opposite} {done}").unwrap();
                         load(&mut out, if_true, true_at);
                     } else if matches!(code, 2 | 3) {
-                        // a load leaves the carry alone: the value for a true condition goes in first,
+                        // a load leaves the carry alone: the value for a true
+                        // condition goes in first,
                         // and the branch skips the other
                         load(&mut out, if_true, true_at);
                         writeln!(out, "  {branch} {done}").unwrap();
@@ -2355,8 +2433,9 @@ fn emit_with<const STACK: bool>(
                     writeln!(out, "{done}:").unwrap();
                 }
                 // a slot is a byte, or two for a pair
-                // a callee-saved cell on the hardware stack (see `save_preserved`); the restore keeps the
-                // result in `a` safe in `y`, which no result uses
+                // a callee-saved cell on the hardware stack
+                // (see `save_preserved`); the restore keeps the result in `a`
+                // safe in `y`, which no result uses
                 (Kind::Op("PUSHC"), _) => {
                     if a_live {
                         return Err("a is live where a callee-saved cell is pushed".into());
@@ -2369,8 +2448,9 @@ fn emit_with<const STACK: bool>(
                     }
                     writeln!(out, "  ldy #{}\n  jsr __csave", regs.len()).unwrap();
                 }
-                // the restore is the function's return: `jmp` to the routine that pops and returns,
-                // unless x holds a result, when the cells are popped here
+                // the restore is the function's return: `jmp` to the routine
+                // that pops and returns, unless x holds a result, when the
+                // cells are popped here
                 (Kind::Op("CREST"), _) if !after[b][i].contains(&reg::X) && !after[b][i].contains(&reg::Y) => {
                     if a_live {
                         out.push_str("  tay\n");
@@ -2443,7 +2523,9 @@ fn emit_with<const STACK: bool>(
                         let name = register_name(byte);
                         match (kind, direct) {
                             ("SPILL", true) => writeln!(out, "  st{name} {cell}").unwrap(),
-                            ("SPILL", false) => through_a(&mut out, a_live, spare, &format!("  lda {name}\n  sta {cell}\n")),
+                            ("SPILL", false) => {
+                                through_a(&mut out, a_live, spare, &format!("  lda {name}\n  sta {cell}\n"))
+                            }
                             (_, true) => writeln!(out, "  ld{name} {cell}").unwrap(),
                             (_, false) => through_a(&mut out, a_live, spare, &format!("  lda {cell}\n  sta {name}\n")),
                         }
@@ -2458,8 +2540,9 @@ fn emit_with<const STACK: bool>(
     Ok((own_labels(&crate::emit::relax_bra(&relax(&drop_reloads(&out))), &function.name), slots, sunk, shared))
 }
 
-/// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`, `_far1`) get the
-/// function's name, so two functions in one file do not define one label twice.
+/// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,
+/// `_far1`) get the function's name, so two functions in one file do not define
+/// one label twice.
 fn own_labels(
     text: &str,
     name: &str,
@@ -2471,9 +2554,11 @@ fn own_labels(
         let (before, here) = rest.split_at(at);
         out.push_str(before);
         let boundary = before.chars().last().is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
-        let kind = KINDS.iter().find(|kind| {
-            here.strip_prefix(**kind).is_some_and(|after| after.starts_with(|c: char| c.is_ascii_digit()))
-        });
+        let kind = KINDS
+            .iter()
+            .find(
+                |kind| here.strip_prefix(**kind).is_some_and(|after| after.starts_with(|c: char| c.is_ascii_digit())),
+            );
         match kind {
             Some(kind) if boundary => {
                 out.push_str(name);
@@ -2496,17 +2581,44 @@ fn own_labels(
 ///
 /// DEVIATE: line counting, not sizes (as `emit::relax_bra`). Exit: the shared
 /// branch relaxation.
-/// `sta m` then `lda m` (likewise `x` and `y`) of a zero-page or spill cell: the register still holds it,
-/// so the load goes. It also set the zero and sign flags, so it stays when a branch reads them before
-/// anything sets them again.
+/// `sta m` then `lda m` (likewise `x` and `y`) of a zero-page or spill cell:
+/// the register still holds it, so the load goes. It also set the zero and sign
+/// flags, so it stays when a branch reads them before anything sets them again.
 pub fn drop_reloads(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let cell = |operand: &str| operand.starts_with("rc") || operand.starts_with("s_");
     let sets_flags = |mnemonic: &str| {
         matches!(
             mnemonic,
-            "lda" | "ldx" | "ldy" | "adc" | "sbc" | "cmp" | "cpx" | "cpy" | "and" | "ora" | "eor" | "asl" | "lsr" | "rol" | "ror"
-                | "inc" | "dec" | "inx" | "iny" | "dex" | "dey" | "tax" | "tay" | "txa" | "tya" | "pla" | "bit" | "jsr" | "rts"
+            "lda"
+                | "ldx"
+                | "ldy"
+                | "adc"
+                | "sbc"
+                | "cmp"
+                | "cpx"
+                | "cpy"
+                | "and"
+                | "ora"
+                | "eor"
+                | "asl"
+                | "lsr"
+                | "rol"
+                | "ror"
+                | "inc"
+                | "dec"
+                | "inx"
+                | "iny"
+                | "dex"
+                | "dey"
+                | "tax"
+                | "tay"
+                | "txa"
+                | "tya"
+                | "pla"
+                | "bit"
+                | "jsr"
+                | "rts"
         )
     };
     let flags_unread_after = |from: usize| {
@@ -2518,7 +2630,10 @@ pub fn drop_reloads(text: &str) -> String {
             if sets_flags(mnemonic) {
                 return true;
             }
-            if !matches!(mnemonic, "sta" | "stx" | "sty" | "stz" | "clc" | "sec" | "pha" | "nop") {
+            if !matches!(
+                mnemonic,
+                "sta" | "stx" | "sty" | "stz" | "clc" | "sec" | "pha" | "nop"
+            ) {
                 return false;
             }
         }

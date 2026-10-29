@@ -17,7 +17,8 @@ fn compile(
     compile_on(ir, name, 16)
 }
 
-/// [`compile`] for a platform that gives the imaginary registers `zero_page` bytes.
+/// [`compile`] for a platform that gives the imaginary registers `zero_page`
+/// bytes.
 fn compile_on(
     ir: &str,
     name: &str,
@@ -26,7 +27,8 @@ fn compile_on(
     compile_at(ir, name, zero_page, Tuning::SPEED)
 }
 
-/// [`compile_on`] at a level: `Tuning::SIZE` takes a byte saved at up to eight clocks.
+/// [`compile_on`] at a level: `Tuning::SIZE` takes a byte saved at up to eight
+/// clocks.
 fn compile_at(
     ir: &str,
     name: &str,
@@ -153,7 +155,8 @@ fn a_global_at_a_constant_offset_is_an_absolute_load() {
 fn a_word_select_returns_the_larger_word() {
     let ir = "define i16 @max16(i16 %a, i16 %b) {\n  %c = icmp ugt i16 %a, %b\n  %r = select i1 %c, i16 %a, i16 %b\n  ret i16 %r\n}";
     let text = compile(ir, "max16");
-    // the result starts as one operand and the other is moved in on one path: no jump over arms
+    // the result starts as one operand and the other is moved in on one path:
+    // no jump over arms
     assert!(!text.lines().any(|l| l.contains("jmp ") && l.contains("_cmd")), "{text}");
     for (a, b, lo, hi) in [(300u16, 5000u16, 0x88, 0x13), (700, 20, 0xBC, 0x02)] {
         let setup = set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8);
@@ -365,8 +368,8 @@ fn parallel_moves_swap_and_keep_a() {
     assert_eq!(moved(&through, false, "rc3"), 9);
     assert_eq!(moved(&through, false, "rc2"), 2);
     // `a := rc2` must come after `rc3 := rc4`, which goes through `a`: the
-    // unpack of a pointer into `a` and a cell returned `rc4` in `a` (slen looped
-    // forever)
+    // unpack of a pointer into `a` and a cell returned `rc4` in `a` (slen
+    // looped forever)
     let into_a = [("a", "rc2"), ("rc3", "rc4")];
     assert_eq!(moved(&into_a, false, "a"), 1);
     assert_eq!(moved(&into_a, false, "rc3"), 3);
@@ -384,7 +387,9 @@ fn a_loaded_byte_widened_into_a_word_subtract_runs() {
     let text = compile(ir, "widen");
     let data = ".segment \"DATA\"\nval: .byte 7\n.segment \"CODE\"\n";
     let setup = "  lda #<val\n  sta rc2\n  lda #>val\n  sta rc3\n  lda #<1000\n  sta rc4\n  lda #>1000\n  sta rc5\n";
-    let run = |after: &str| common::run_with("alloc-widen", &format!("{setup}  jsr widen\n{after}"), &format!("{text}{data}"));
+    let run = |after: &str| {
+        common::run_with("alloc-widen", &format!("{setup}  jsr widen\n{after}"), &format!("{text}{data}"))
+    };
     assert_eq!(run(""), 0xE1);
     assert_eq!(run("  txa\n"), 0x03);
 }
@@ -451,7 +456,9 @@ fn a_reload_between_a_compare_and_its_branch_keeps_the_flags() {
     let text = compile(CRC16, "crc16");
     let data = ".segment \"DATA\"\nbytes: .byte 3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8\n.segment \"CODE\"\n";
     let setup = "  lda #<bytes\n  sta rc2\n  lda #>bytes\n  sta rc3\n  lda #12\n  sta rc4\n";
-    let run = |after: &str| common::run_with("alloc-crc16", &format!("{setup}  jsr crc16\n{after}"), &format!("{text}{data}"));
+    let run = |after: &str| {
+        common::run_with("alloc-crc16", &format!("{setup}  jsr crc16\n{after}"), &format!("{text}{data}"))
+    };
     assert_eq!(run(""), 0x66);
     assert_eq!(run("  txa\n"), 0xA1);
 }
@@ -502,7 +509,8 @@ fn refusal(
 }
 
 /// A spill slot of a recursive function sits above its locals; one past
-/// `(rc0),y`'s 255 is refused with its reason, not emitted with a wrapped offset.
+/// `(rc0),y`'s 255 is refused with its reason, not emitted with a wrapped
+/// offset.
 #[test]
 fn a_spill_slot_beyond_256_bytes_is_refused_with_a_message() {
     let ir = "define i8 @rec(i8 %n) {\nentry:\n  %a = alloca [300 x i8]\n  store i8 %n, ptr %a\n  %z = icmp eq i8 %n, 0\n  \
@@ -522,8 +530,8 @@ fn a_switch_to_a_block_with_phis_selects_the_right_value() {
     assert_eq!((run(1), run(2), run(0)), (7, 9, 9));
 }
 
-/// `f(p, x)` calls the function `p` points to with `x`: an indirect call, which the 6502
-/// has no instruction for, was refused ("an indirect call").
+/// `f(p, x)` calls the function `p` points to with `x`: an indirect call, which
+/// the 6502 has no instruction for, was refused ("an indirect call").
 const CALL_THROUGH: &str = "define i8 @twice(i8 %x) {\n  %r = add i8 %x, %x\n  ret i8 %r\n}\n\
     define i8 @via(ptr %f, i8 %x) {\n  %r = call i8 %f(i8 %x)\n  %s = add i8 %r, 1\n  ret i8 %s\n}";
 
@@ -535,8 +543,9 @@ fn an_indirect_call_enters_the_callee_and_returns() {
     assert_eq!(common::run_with("alloc-indirect", &format!("{setup}  jsr via\n"), &text), 41);
 }
 
-/// A function that calls itself through a pointer is as reentrant as one that calls itself by
-/// name: its values live across the call must be on the soft stack, not in static slots.
+/// A function that calls itself through a pointer is as reentrant as one that
+/// calls itself by name: its values live across the call must be on the soft
+/// stack, not in static slots.
 #[test]
 fn a_function_reentered_through_a_pointer_keeps_its_values() {
     let ir = "define i8 @sum(ptr %f, i8 %n) {\nentry:\n  %z = icmp eq i8 %n, 0\n  br i1 %z, label %base, label %step\nbase:\n  \
@@ -557,29 +566,33 @@ fn structs(entry: &str) -> String {
     ["sumv", "mk", entry].iter().map(|f| compile(STRUCTS, f)).collect()
 }
 
-/// A struct passed by value (`byval`) and one returned through `sret`, the way a C frontend lowers
-/// them: `pass(5)` is 5 + 6, `take(5)` the same through `mk`.
+/// A struct passed by value (`byval`) and one returned through `sret`, the way
+/// a C frontend lowers them: `pass(5)` is 5 + 6, `take(5)` the same through
+/// `mk`.
 #[test]
 fn a_struct_passed_byval_and_returned_through_sret_round_trips() {
     for entry in ["pass", "take"] {
         let text = structs(entry);
-        let run = common::run_with("alloc-struct", &format!("{}  jsr {entry}\n", set("rc2", 5) + &set("rc3", 0)), &text);
+        let run =
+            common::run_with("alloc-struct", &format!("{}  jsr {entry}\n", set("rc2", 5) + &set("rc3", 0)), &text);
         assert_eq!(run, 11, "{entry}");
     }
 }
 
-/// `x < 0` on a word did `cmp #0; sbc #0` over both bytes: the sign is the high byte alone.
+/// `x < 0` on a word did `cmp #0; sbc #0` over both bytes: the sign is the high
+/// byte alone.
 #[test]
 fn a_word_sign_test_reads_only_the_high_byte() {
     let ir = "define i8 @neg(i16 %x) {\n  %c = icmp slt i16 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}";
     let text = compile(ir, "neg");
     assert!(!text.contains("sbc"), "{text}");
-    let run = |x: u16| common::run_with("alloc-neg", &format!("{}  jsr neg\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
+    let run =
+        |x: u16| common::run_with("alloc-neg", &format!("{}  jsr neg\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
     assert_eq!((run(0xFFFF), run(0x8000), run(0x7FFF), run(0), run(5)), (7, 7, 9, 9, 9));
 }
 
-/// `(b << 8) ^ c` with `b` a widened byte (crc16's `c ^= p[i] << 8`) was eight `asl`/`rol` pairs
-/// on a word: the byte is the high half.
+/// `(b << 8) ^ c` with `b` a widened byte (crc16's `c ^= p[i] << 8`) was eight
+/// `asl`/`rol` pairs on a word: the byte is the high half.
 #[test]
 fn a_widened_byte_shifted_by_eight_and_xored_is_a_byte_move() {
     let ir = "define i16 @sh(i8 %b, i16 %c) {\n  %w = zext i8 %b to i16\n  %s = shl nuw i16 %w, 8\n  %r = xor i16 %s, %c\n  ret i16 %r\n}";
@@ -592,9 +605,9 @@ fn a_widened_byte_shifted_by_eight_and_xored_is_a_byte_move() {
     assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), 0x3400 ^ 0x1234);
 }
 
-/// A pointer walked through a loop (`p += 1`, `p += 3`) went UNPACK, a word add, PACK on every
-/// trip: a dozen moves and a clobbered `a`. It is the low byte bumped and the high one on carry,
-/// in the pair.
+/// A pointer walked through a loop (`p += 1`, `p += 3`) went UNPACK, a word
+/// add, PACK on every trip: a dozen moves and a clobbered `a`. It is the low
+/// byte bumped and the high one on carry, in the pair.
 #[test]
 fn a_pointer_bumped_in_a_loop_stays_a_pair() {
     for k in [1u16, 3] {
@@ -616,14 +629,16 @@ fn a_pointer_bumped_in_a_loop_stays_a_pair() {
     }
 }
 
-/// A branch on `c == 0 || c == k` was two 0/1 bytes through two selects, an `and` and a test
-/// (schr, 20 bytes over): it is one compare and branch per test, no `and` of two bytes.
+/// A branch on `c == 0 || c == k` was two 0/1 bytes through two selects, an
+/// `and` and a test (schr, 20 bytes over): it is one compare and branch per
+/// test, no `and` of two bytes.
 #[test]
 fn a_branch_on_two_compares_is_two_branches() {
     let text = compile(SCHR, "schr");
     assert!(!text.contains("  and rc"), "{text}");
     let run = |c: u16| {
-        // "ab\0" at the pointer in rc2:rc3 = data, c in rc4: returns the index of c, or -1 at the end
+        // "ab\0" at the pointer in rc2:rc3 = data, c in rc4: returns the index
+        // of c, or -1 at the end
         let data = ".segment \"DATA\"\ns: .byte 97, 98, 0\n.segment \"CODE\"\n";
         let setup = "  lda #<s\n  sta rc2\n  lda #>s\n  sta rc3\n".to_owned() + &set("rc4", c);
         common::run_with("alloc-schr", &format!("{setup}  jsr schr\n"), &format!("{text}{data}"))
@@ -631,7 +646,8 @@ fn a_branch_on_two_compares_is_two_branches() {
     assert_eq!((run(97), run(98), run(99)), (0, 1, 255));
 }
 
-/// `p + zext(i)` kept a cell holding zero just for the high byte's `adc`: the zero is an immediate.
+/// `p + zext(i)` kept a cell holding zero just for the high byte's `adc`: the
+/// zero is an immediate.
 #[test]
 fn a_widened_byte_added_to_a_word_adds_an_immediate_zero() {
     let ir = "define i16 @addb(i16 %a, i8 %b) {\n  %w = zext i8 %b to i16\n  %r = add i16 %a, %w\n  ret i16 %r\n}";
@@ -645,8 +661,8 @@ fn a_widened_byte_added_to_a_word_adds_an_immediate_zero() {
     }
 }
 
-/// `p[i]` with `i` a byte did a word add of `p` and `i` into a scratch pair before the load; it is
-/// `lda (p),y` with `i` in `y`.
+/// `p[i]` with `i` a byte did a word add of `p` and `i` into a scratch pair
+/// before the load; it is `lda (p),y` with `i` in `y`.
 #[test]
 fn a_byte_index_into_a_pointer_loads_and_stores_through_y() {
     let ir = "define i8 @bump(ptr %p, i8 %i) {\n  %w = zext i8 %i to i16\n  %q = getelementptr i8, ptr %p, i16 %w\n  \
@@ -657,13 +673,14 @@ fn a_byte_index_into_a_pointer_loads_and_stores_through_y() {
     // table[3] = 7 becomes 8 and 7 comes back
     let data = ".segment \"DATA\"\ntable: .byte 1, 2, 3, 7, 5\n.segment \"CODE\"\n";
     let setup = "  lda #<table\n  sta rc2\n  lda #>table\n  sta rc3\n  lda #3\n  sta rc4\n";
-    let run = |after: &str| common::run_with("alloc-index", &format!("{setup}  jsr bump\n{after}"), &format!("{text}{data}"));
+    let run =
+        |after: &str| common::run_with("alloc-index", &format!("{setup}  jsr bump\n{after}"), &format!("{text}{data}"));
     assert_eq!(run(""), 7);
     assert_eq!(run("  ldy #3\n  lda table,y\n"), 8);
 }
 
-/// The sum of a byte table (`s += p[i]`) took the word-add path for the address on every trip: the
-/// widened load is the same indexed load.
+/// The sum of a byte table (`s += p[i]`) took the word-add path for the address
+/// on every trip: the widened load is the same indexed load.
 #[test]
 fn a_widened_byte_loaded_at_a_byte_index_uses_y() {
     let ir = "define i16 @sum(ptr %p, i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]\n  \
@@ -674,7 +691,8 @@ fn a_widened_byte_loaded_at_a_byte_index_uses_y() {
     assert!(!text.contains("adc rc2") && !text.contains("sta rc3"), "{text}");
     let data = ".segment \"DATA\"\ntable: .byte 1, 2, 3, 200, 5\n.segment \"CODE\"\n";
     let setup = "  lda #<table\n  sta rc2\n  lda #>table\n  sta rc3\n  lda #4\n  sta rc4\n";
-    let run = |after: &str| common::run_with("alloc-at", &format!("{setup}  jsr sum\n{after}"), &format!("{text}{data}"));
+    let run =
+        |after: &str| common::run_with("alloc-at", &format!("{setup}  jsr sum\n{after}"), &format!("{text}{data}"));
     // 1 + 2 + 3 + 200 = 206
     assert_eq!((run(""), run("  txa\n")), (206, 0));
 }
@@ -683,8 +701,9 @@ const DIGITS: &str = "define i8 @digits(i16 %v) {\nentry:\n  %big = icmp ugt i16
     %n = phi i8 [ %n2, %loop ], [ 1, %entry ]\n  %x = phi i16 [ %q, %loop ], [ %v, %entry ]\n  %q = udiv i16 %x, 10\n  %n2 = add i8 %n, 1\n  \
     %more = icmp ugt i16 %x, 99\n  br i1 %more, label %loop, label %done\ndone:\n  %r = phi i8 [ 1, %entry ], [ %n2, %loop ]\n  ret i8 %r\n}";
 
-/// The constants 10 and 0 of `v / 10` were stored to static slots and loaded back before the call
-/// (`ldx #10; stx s_digits_5`): they are loaded again where they are read.
+/// The constants 10 and 0 of `v / 10` were stored to static slots and loaded
+/// back before the call (`ldx #10; stx s_digits_5`): they are loaded again
+/// where they are read.
 #[test]
 fn a_constant_is_loaded_again_not_stored_to_a_slot() {
     let text = compile(DIGITS, "digits");
@@ -750,10 +769,14 @@ fn nothing_is_pushed_around_moves_before_a_call() {
     assert_eq!(text.matches("  pha\n").count(), saves, "{text}");
 }
 
-/// A loop whose latch comes first in the layout: the latch's phi is read only on the edge back to
-/// the header, a block laid out right after it and before the body that writes the phi. It failed
-/// with "phi input was never written" (lz4, set 3). `fwd8` carries a byte, `fwd16` a word.
-fn forwarding(width: &str, extra: &str) -> String {
+/// A loop whose latch comes first in the layout: the latch's phi is read only
+/// on the edge back to the header, a block laid out right after it and before
+/// the body that writes the phi. It failed with "phi input was never written"
+/// (lz4, set 3). `fwd8` carries a byte, `fwd16` a word.
+fn forwarding(
+    width: &str,
+    extra: &str,
+) -> String {
     format!(
         "define i8 @fwd{width}(i8 %n) {{\nentry:\n  %z = icmp eq i8 %n, 0\n  br i1 %z, label %done, label %head\n\
          latch:\n  %f = phi {t} [ %g, %body ]\n  %k = phi i8 [ %h, %body ]\n  %c = icmp ult i8 %k, 100\n  \
@@ -781,16 +804,25 @@ fn a_phi_forwarded_on_a_back_edge_is_known_before_its_block_is_laid_out() {
         let text = compile(ir, name);
         for (arg, expected) in [(5, want), (0, 0)] {
             let setup = format!("  lda #{arg}\n  sta rc2\n");
-            assert_eq!(common::run_with(&format!("alloc-{name}-{arg}"), &format!("{setup}  jsr {name}\n"), &text), expected, "{name}({arg})");
+            assert_eq!(
+                common::run_with(&format!("alloc-{name}-{arg}"), &format!("{setup}  jsr {name}\n"), &text),
+                expected,
+                "{name}({arg})"
+            );
         }
     }
 }
 
-/// Four pointers advance through a table by different strides, with a sum and a counter: more live
-/// values than `rc2`..`rc7` hold. `quad` is a leaf (static save slots); `quadcall` ends in an indirect
-/// call, so it runs on the soft stack. buf = 3 1 4 1 5 9 2 6 5 3 5 8 9 7 9 3; strides 1, 2, 3, 1 from
-/// offsets 1, 2, 3, 4; four trips sum (a + b) + (c ^ d) to 58; `quadcall` doubles that, 116.
-fn quad_ir(name: &str, call: bool) -> String {
+/// Four pointers advance through a table by different strides, with a sum and a
+/// counter: more live values than `rc2`..`rc7` hold. `quad` is a leaf (static
+/// save slots); `quadcall` ends in an indirect call, so it runs on the soft
+/// stack. buf = 3 1 4 1 5 9 2 6 5 3 5 8 9 7 9 3; strides 1, 2, 3, 1 from
+/// offsets 1, 2, 3, 4; four trips sum (a + b) + (c ^ d) to 58; `quadcall`
+/// doubles that, 116.
+fn quad_ir(
+    name: &str,
+    call: bool,
+) -> String {
     let (head, tail) = if call {
         ("ptr %p, i8 %n, ptr %f", "  %out = call i8 %f(i8 %r)\n  ret i8 %out")
     } else {
@@ -813,10 +845,11 @@ fn quad_ir(name: &str, call: bool) -> String {
     )
 }
 
-/// Callee-saved zero-page bytes (`rc8`..`rc15`): a function that needs more than `rc2`..`rc7` uses
-/// them, saves what it touches on entry and restores it before returning. Before, it spilled; the
-/// caller's `rc8`..`rc15` must come back unchanged and the result be right, in a leaf and in a
-/// function on the soft stack.
+/// Callee-saved zero-page bytes (`rc8`..`rc15`): a function that needs more
+/// than `rc2`..`rc7` uses them, saves what it touches on entry and restores it
+/// before returning. Before, it spilled; the caller's `rc8`..`rc15` must come
+/// back unchanged and the result be right, in a leaf and in a function on the
+/// soft stack.
 #[test]
 fn a_function_short_of_cells_saves_and_restores_the_callee_saved_ones() {
     let data = ".segment \"DATA\"\ntab: .byte 3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\n.segment \"CODE\"\n";
@@ -836,14 +869,16 @@ fn a_function_short_of_cells_saves_and_restores_the_callee_saved_ones() {
         let program = format!("{text}{data}");
         let result = common::run_with(&format!("alloc-{name}"), &format!("{set}{args}  jsr {name}\n"), &program);
         assert_eq!(result, want, "{name}");
-        let kept = common::run_with(&format!("alloc-{name}-kept"), &format!("{set}{args}  jsr {name}\n{check}"), &program);
+        let kept =
+            common::run_with(&format!("alloc-{name}-kept"), &format!("{set}{args}  jsr {name}\n{check}"), &program);
         assert_eq!(kept, 0, "{name} changed a callee-saved cell");
     }
 }
 
-/// A value live across one call: a callee-saved cell costs a save and a restore (about eight bytes), a
-/// slot a store and a load; with both allocations priced by the timing table the smaller is kept. A
-/// loop that calls on every trip (digits) keeps the cell, which saves a reload per trip.
+/// A value live across one call: a callee-saved cell costs a save and a restore
+/// (about eight bytes), a slot a store and a load; with both allocations priced
+/// by the timing table the smaller is kept. A loop that calls on every trip
+/// (digits) keeps the cell, which saves a reload per trip.
 const ACROSS: &str = "define i8 @g(i8 %x) {\n  %r = add i8 %x, 3\n  ret i8 %r\n}\n\
     define i8 @across(i8 %x) {\n  %a = call i8 @g(i8 %x)\n  %b = add i8 %a, %x\n  ret i8 %b\n}";
 
@@ -855,10 +890,14 @@ fn a_callee_saved_cell_is_taken_only_when_it_is_the_smaller_code() {
     let program = format!("{single}");
     assert_eq!(common::run_with("alloc-single-call", &format!("{}  jsr across\n", set("rc2", 5)), &program), 13);
     let looped = compile(DIGITS, "digits");
-    assert!((8..16).any(|n| looped.contains(&format!("rc{n}"))), "a loop of calls keeps its values in a cell:\n{looped}");
+    assert!(
+        (8..16).any(|n| looped.contains(&format!("rc{n}"))),
+        "a loop of calls keeps its values in a cell:\n{looped}"
+    );
 }
 
-/// The word result of `name` for a word argument in rc2:rc3 (low byte in A, high byte in X).
+/// The word result of `name` for a word argument in rc2:rc3 (low byte in A,
+/// high byte in X).
 fn run_word(
     tag: &str,
     text: &str,
@@ -871,9 +910,10 @@ fn run_word(
     ((high as u16) << 8) | (low as u16 & 0xFF)
 }
 
-/// A word shifted right by 8 or more moves one byte across (`shl 8` was the only count tested):
-/// both right shifts, a count of exactly 8 and past it. The arithmetic one fills the high byte with
-/// the sign (`ashr 9` through `ashr 15`); that was seven `cmp #$80; ror a` for the sign alone.
+/// A word shifted right by 8 or more moves one byte across (`shl 8` was the
+/// only count tested): both right shifts, a count of exactly 8 and past it. The
+/// arithmetic one fills the high byte with the sign (`ashr 9` through `ashr
+/// 15`); that was seven `cmp #$80; ror a` for the sign alone.
 #[test]
 fn word_shifts_right_of_eight_or_more_move_one_byte() {
     for (op, count, f) in [
@@ -886,7 +926,8 @@ fn word_shifts_right_of_eight_or_more_move_one_byte() {
         let ir = format!("define i16 @sh(i16 %x) {{\n  %r = {op} i16 %x, {count}\n  ret i16 %r\n}}");
         let text = compile(&ir, "sh");
         assert!(!text.contains("rol"), "{op} {count}: {text}");
-        // the sign of the high byte takes no `ror`; the low byte takes `count - 8`, and is the sign too at 15
+        // the sign of the high byte takes no `ror`; the low byte takes `count -
+        // 8`, and is the sign too at 15
         let rors = text.matches("ror").count();
         assert_eq!(rors, if op == "ashr" && count != 15 { count as usize - 8 } else { 0 }, "{op} {count}: {text}");
         for x in [0x1234u16, 0x80FF, 0xFFFF, 0x0001, 0x7FFF] {
@@ -895,8 +936,9 @@ fn word_shifts_right_of_eight_or_more_move_one_byte() {
     }
 }
 
-/// Sign extension is the sign alone in the high byte: seven `cmp #$80; ror a` (21 bytes, 28
-/// cycles) for `sext i8 to i16`; an `ashr i8 x, 7` is the same value.
+/// Sign extension is the sign alone in the high byte: seven `cmp #$80; ror a`
+/// (21 bytes, 28 cycles) for `sext i8 to i16`; an `ashr i8 x, 7` is the same
+/// value.
 #[test]
 fn a_sign_extension_is_the_sign_splatted_not_seven_rotates() {
     let ir = "define i16 @ext(i8 %x) {\n  %r = sext i8 %x to i16\n  ret i16 %r\n}\n\
@@ -918,18 +960,21 @@ fn a_sign_extension_is_the_sign_splatted_not_seven_rotates() {
     }
 }
 
-/// `x >= 0` on a word reads the sign of the high byte alone, like `x < 0` (PL beside MI).
+/// `x >= 0` on a word reads the sign of the high byte alone, like `x < 0` (PL
+/// beside MI).
 #[test]
 fn a_word_non_negative_test_reads_only_the_high_byte() {
     let ir = "define i8 @pos(i16 %x) {\n  %c = icmp sge i16 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}";
     let text = compile(ir, "pos");
     assert!(!text.contains("sbc"), "{text}");
-    let run = |x: u16| common::run_with("alloc-pos", &format!("{}  jsr pos\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
+    let run =
+        |x: u16| common::run_with("alloc-pos", &format!("{}  jsr pos\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
     assert_eq!((run(0xFFFF), run(0x8000), run(0x7FFF), run(0), run(5)), (9, 9, 7, 7, 7));
 }
 
-/// A branch on `c == 3 || c == 0` is two compare-and-branches (the shape of `schr`, with the
-/// operands the other way round and no loop): no `ora` of two 0/1 bytes.
+/// A branch on `c == 3 || c == 0` is two compare-and-branches (the shape of
+/// `schr`, with the operands the other way round and no loop): no `ora` of two
+/// 0/1 bytes.
 #[test]
 fn a_branch_on_an_or_of_two_compares_is_two_branches() {
     let ir = "define i8 @either(i8 %c) {\nentry:\n  %a = icmp eq i8 %c, 3\n  %b = icmp eq i8 %c, 0\n  %o = or i1 %a, %b\n  \
@@ -940,8 +985,8 @@ fn a_branch_on_an_or_of_two_compares_is_two_branches() {
     assert_eq!((run(3), run(0), run(1), run(255)), (1, 1, 2, 2));
 }
 
-/// No `pha`/`pla` round a move when a call is in the function: two calls with values live across
-/// them (the digits kernel had one call in a loop).
+/// No `pha`/`pla` round a move when a call is in the function: two calls with
+/// values live across them (the digits kernel had one call in a loop).
 #[test]
 fn nothing_is_pushed_around_moves_between_two_calls() {
     let ir = "define i16 @two(i16 %a, i16 %b) {\n  %q = udiv i16 %a, 10\n  %r = urem i16 %b, 7\n  %s = add i16 %q, %r\n  \
@@ -951,7 +996,8 @@ fn nothing_is_pushed_around_moves_between_two_calls() {
     assert_eq!(text.matches("  pha\n").count(), saves, "{text}");
 }
 
-/// Constants 100 and 7 (not the 10 and 0 of digits) are loaded where read, not stored to a slot.
+/// Constants 100 and 7 (not the 10 and 0 of digits) are loaded where read, not
+/// stored to a slot.
 #[test]
 fn constants_of_a_division_are_loaded_again_not_stored() {
     let ir = "define i16 @cent(i16 %v) {\n  %q = udiv i16 %v, 100\n  %r = urem i16 %v, 7\n  %s = add i16 %q, %r\n  ret i16 %s\n}";
@@ -962,30 +1008,35 @@ fn constants_of_a_division_are_loaded_again_not_stored() {
     }
 }
 
-/// A word `==` or `!=` against a constant loaded the constant into two zero-page cells for the
-/// compare (`lda #0; sta rcN` twice before every `x == 0`: 75 bytes of lz4). The constant is two
-/// immediates, and zero is `lda lo; ora hi`.
+/// A word `==` or `!=` against a constant loaded the constant into two
+/// zero-page cells for the compare (`lda #0; sta rcN` twice before every `x ==
+/// 0`: 75 bytes of lz4). The constant is two immediates, and zero is `lda lo;
+/// ora hi`.
 #[test]
 fn a_word_equality_against_a_constant_has_no_constant_cells() {
     for (op, k) in [("eq", 0u16), ("ne", 0), ("eq", 300), ("ne", 0x2C00)] {
-        let ir = format!("define i8 @cmpk(i16 %x) {{\n  %c = icmp {op} i16 %x, {k}\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}}");
+        let ir = format!(
+            "define i8 @cmpk(i16 %x) {{\n  %c = icmp {op} i16 %x, {k}\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}}"
+        );
         let text = compile(&ir, "cmpk");
         assert!(!text.contains("lda #0\n  sta rc") && !text.contains("sta rc4"), "{op} {k}: {text}");
         if k == 0 {
             assert!(text.contains("ora rc3"), "{op} {k}: {text}");
         }
         for x in [0u16, 1, 0x0100, 300, 0x002C, 0x012D, 0x2C00, 0x2C01, 0xFFFF] {
-            let run = common::run_with("alloc-cmpk", &format!("{}  jsr cmpk\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
+            let run =
+                common::run_with("alloc-cmpk", &format!("{}  jsr cmpk\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
             let equal = x == k;
             assert_eq!(run, if (op == "eq") == equal { 7 } else { 9 }, "{op} {k} against {x:#06x}");
         }
     }
 }
 
-/// Saving a callee-saved cell costs a save and a restore (ten bytes), so it goes to a value that is
-/// used in a loop and not to one read once after it: `i`, `n` and `hot` live across a call in the
-/// loop, `cold` across all of it. The choice was all or none for the function, so `cold` took a
-/// fourth cell; it is a spill slot.
+/// Saving a callee-saved cell costs a save and a restore (ten bytes), so it
+/// goes to a value that is used in a loop and not to one read once after it:
+/// `i`, `n` and `hot` live across a call in the loop, `cold` across all of it.
+/// The choice was all or none for the function, so `cold` took a fourth cell;
+/// it is a spill slot.
 #[test]
 fn a_callee_saved_cell_goes_to_the_loop_values_only() {
     let ir = "declare i8 @ext(i8)\n\
@@ -998,9 +1049,9 @@ fn a_callee_saved_cell_goes_to_the_loop_values_only() {
     assert!(text.contains("  lda rc2\n  sta s_mix"), "cold is in a slot: {text}");
 }
 
-/// `shl i16 x, k` for k from 9 to 15 ran k - 8 asl/rol pairs over the whole word and then moved the
-/// low byte up (the high byte of every `rol` was dead). The result's high byte is the low byte
-/// shifted by k - 8: no `rol`.
+/// `shl i16 x, k` for k from 9 to 15 ran k - 8 asl/rol pairs over the whole
+/// word and then moved the low byte up (the high byte of every `rol` was dead).
+/// The result's high byte is the low byte shifted by k - 8: no `rol`.
 #[test]
 fn a_word_shift_left_of_nine_or_more_shifts_one_byte() {
     for count in [9u32, 11, 15] {
@@ -1013,10 +1064,11 @@ fn a_word_shift_left_of_nine_or_more_shifts_one_byte() {
     }
 }
 
-/// `q = p + 1; x = *p`: the read of the old pointer follows the bump in the IR, so `p` stayed live
-/// across it and the bump took a copy of the pair (`lda rc2; sta rc6; lda rc3; sta rc7`, then `inc
-/// rc6`: 170 bytes of lz4). The read goes first and the bump is done in `p`'s own cells. A load
-/// and a store through the old pointer, in a loop.
+/// `q = p + 1; x = *p`: the read of the old pointer follows the bump in the IR,
+/// so `p` stayed live across it and the bump took a copy of the pair (`lda rc2;
+/// sta rc6; lda rc3; sta rc7`, then `inc rc6`: 170 bytes of lz4). The read goes
+/// first and the bump is done in `p`'s own cells. A load and a store through
+/// the old pointer, in a loop.
 #[test]
 fn a_read_of_the_old_pointer_goes_before_its_bump() {
     for (name, body, result) in [
@@ -1038,9 +1090,10 @@ fn a_read_of_the_old_pointer_goes_before_its_bump() {
     }
 }
 
-/// A leaf saves its callee-saved cells on the hardware stack and pops them before `rts`; the result
-/// waiting in `a` (and `x`) must come through the pops, and the caller's cells must be as they were.
-/// A byte result (the quad test), a word result in `a` and `x`, and no result at all.
+/// A leaf saves its callee-saved cells on the hardware stack and pops them
+/// before `rts`; the result waiting in `a` (and `x`) must come through the
+/// pops, and the caller's cells must be as they were. A byte result (the quad
+/// test), a word result in `a` and `x`, and no result at all.
 #[test]
 fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
     let data = ".segment \"DATA\"\ntab: .byte 3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\nout: .res 1\n.segment \"CODE\"\n";
@@ -1056,7 +1109,11 @@ fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
     let base = quad_ir("quad", false);
     let word = base
         .replace("define i8 @quad(", "define i16 @quad(")
-        .replacen("  ret i8 %r\n}", "  %w = zext i8 %r to i16\n  %h = shl i16 %w, 8\n  %o = or i16 %h, %w\n  ret i16 %o\n}", 1);
+        .replacen(
+            "  ret i8 %r\n}",
+            "  %w = zext i8 %r to i16\n  %h = shl i16 %w, 8\n  %o = or i16 %h, %w\n  ret i16 %o\n}",
+            1,
+        );
     let void = base
         .replace("define i8 @quad(", "define void @quad(ptr %o, ")
         .replacen("  ret i8 %r\n}", "  store i8 %r, ptr %o\n  ret void\n}", 1);
@@ -1069,7 +1126,8 @@ fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
     assert_eq!((low, high), (58, 58));
     let kept = common::run_with("alloc-pushed-kept", &format!("{set}{args}  jsr quad\n{check}"), &program);
     assert_eq!(kept, 0, "the word version changed a callee-saved cell");
-    // no result: the output byte arrives through a pointer in rc2:rc3, the table in rc4:rc5, the count in rc6
+    // no result: the output byte arrives through a pointer in rc2:rc3, the
+    // table in rc4:rc5, the count in rc6
     let text = compile(&void, "quad");
     assert!(!text.contains("  tay\n  pla"), "no result to keep:\n{text}");
     let program = format!("{text}{data}");
@@ -1080,21 +1138,27 @@ fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
     assert_eq!(kept, 0, "the void version changed a callee-saved cell");
 }
 
-/// A zero or sign test of a value just loaded or computed in `a` compared it with 0 again
-/// (`lda rc2; cmp #0; beq`, 2 bytes and 2 cycles each, popcount): the load set the flags. Tests of
-/// a byte and of the high byte of a word, equal, not equal and negative, each branching on a value
-/// that reached `a` a different way.
+/// A zero or sign test of a value just loaded or computed in `a` compared it
+/// with 0 again (`lda rc2; cmp #0; beq`, 2 bytes and 2 cycles each, popcount):
+/// the load set the flags. Tests of a byte and of the high byte of a word,
+/// equal, not equal and negative, each branching on a value that reached `a` a
+/// different way.
 #[test]
 fn a_zero_or_sign_test_does_not_compare_again() {
     for (name, ir) in [
         ("isz", "define i8 @isz(i8 %x) {\n  %c = icmp eq i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
         ("nz", "define i8 @nz(i8 %x) {\n  %c = icmp ne i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
         ("neg", "define i8 @neg(i8 %x) {\n  %c = icmp slt i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
-        ("sum", "define i8 @sum(i8 %x, i8 %y) {\n  %s = add i8 %x, %y\n  %c = icmp eq i8 %s, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
+        (
+            "sum",
+            "define i8 @sum(i8 %x, i8 %y) {\n  %s = add i8 %x, %y\n  %c = icmp eq i8 %s, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}",
+        ),
     ] {
         let text = compile(ir, name);
         assert!(!text.contains("cmp #0"), "{name}: {text}");
-        let run = |x: u16, y: u16| common::run_with("alloc-nzt", &format!("{}{}  jsr {name}\n", set("rc2", x), set("rc3", y)), &text);
+        let run = |x: u16, y: u16| {
+            common::run_with("alloc-nzt", &format!("{}{}  jsr {name}\n", set("rc2", x), set("rc3", y)), &text)
+        };
         let want = |x: u16, y: u16| -> i32 {
             let (x, y) = (x as u8, y as u8);
             let yes = match name {
@@ -1111,10 +1175,11 @@ fn a_zero_or_sign_test_does_not_compare_again() {
     }
 }
 
-/// `b * a` swapped the two words in place (`ldx rc2; ldy rc3; ...; stx rc4; sty rc5`, 8 bytes)
-/// because the routine takes its first operand in rc2:rc3 and `a` arrives there but was named
-/// second. A product goes either way round: the call takes them as they arrive, whichever order the
-/// IR names, and with one operand computed.
+/// `b * a` swapped the two words in place (`ldx rc2; ldy rc3; ...; stx rc4; sty
+/// rc5`, 8 bytes) because the routine takes its first operand in rc2:rc3 and
+/// `a` arrives there but was named second. A product goes either way round: the
+/// call takes them as they arrive, whichever order the IR names, and with one
+/// operand computed.
 #[test]
 fn a_product_takes_its_operands_as_they_arrive() {
     let product = |first: &str, second: &str| {
@@ -1126,7 +1191,9 @@ fn a_product_takes_its_operands_as_they_arrive() {
     assert!(!swapped.contains("stx rc4"), "{swapped}");
     // a computed operand and an argument: (a + 1) * b either way
     let sum = |first: &str, second: &str| {
-        format!("define i16 @mulk(i16 %a, i16 %b) {{\n  %s = add i16 %a, 1\n  %r = mul i16 {first}, {second}\n  ret i16 %r\n}}")
+        format!(
+            "define i16 @mulk(i16 %a, i16 %b) {{\n  %s = add i16 %a, 1\n  %r = mul i16 {first}, {second}\n  ret i16 %r\n}}"
+        )
     };
     for (first, second) in [("%s", "%b"), ("%b", "%s")] {
         let text = compile(&sum(first, second), "mulk");
@@ -1139,10 +1206,11 @@ fn a_product_takes_its_operands_as_they_arrive() {
     }
 }
 
-/// A value kept in a callee-saved pair across a call was copied there from `rc2:rc3` and straight
-/// back into `rc2:rc3` for the call (`lda rc2; sta rc8; ...; lda rc8; sta rc2`: 8 bytes a trip in
-/// digits). The copy back changes nothing. A loop dividing by 7 and counting until the value is
-/// small, and the same with a remainder.
+/// A value kept in a callee-saved pair across a call was copied there from
+/// `rc2:rc3` and straight back into `rc2:rc3` for the call (`lda rc2; sta rc8;
+/// ...; lda rc8; sta rc2`: 8 bytes a trip in digits). The copy back changes
+/// nothing. A loop dividing by 7 and counting until the value is small, and the
+/// same with a remainder.
 #[test]
 fn a_copy_back_into_the_register_it_came_from_is_dropped() {
     for (name, op) in [("steps", "udiv"), ("rems", "urem")] {
@@ -1164,10 +1232,11 @@ fn a_copy_back_into_the_register_it_came_from_is_dropped() {
     }
 }
 
-/// A walk that returns the pointer it stopped at (the old one, not the bumped one) kept both
-/// pointers: the bump was made before the exit test, so the old pointer lived on beside it and the
-/// loop copied back (slen 67 B against cc65's 47). The bump sinks into the block that loops and is
-/// done in place. A scan for a zero byte returning its address, and one returning the distance.
+/// A walk that returns the pointer it stopped at (the old one, not the bumped
+/// one) kept both pointers: the bump was made before the exit test, so the old
+/// pointer lived on beside it and the loop copied back (slen 67 B against
+/// cc65's 47). The bump sinks into the block that loops and is done in place. A
+/// scan for a zero byte returning its address, and one returning the distance.
 #[test]
 fn a_bump_the_exit_does_not_need_is_made_only_on_the_looping_path() {
     let end = "define ptr @endp(ptr %p) {\nentry:\n  br label %loop\nloop:\n  %q = phi ptr [ %p, %entry ], [ %q2, %loop ]\n  \
@@ -1180,19 +1249,25 @@ fn a_bump_the_exit_does_not_need_is_made_only_on_the_looping_path() {
     let setup = "  lda #<s\n  sta rc2\n  lda #>s\n  sta rc3\n";
     for (name, ir, tail) in [("endp", end, "  sec\n  sbc #<s\n"), ("dist", dist, "")] {
         let text = compile(ir, name);
-        // the cell that is bumped is the one the byte was read through: no copy of the pointer
+        // the cell that is bumped is the one the byte was read through: no copy
+        // of the pointer
         let bumped = text.lines().find_map(|l| l.trim().strip_prefix("inc rc")).map(str::to_owned).expect("an inc rc");
         assert!(text.contains(&format!("(rc{bumped}),y")) || text.contains(&format!("(rc{bumped})")), "{name}: {text}");
-        let run = common::run_with(&format!("alloc-{name}"), &format!("{setup}  jsr {name}\n{tail}"), &format!("{text}{data}"));
+        let run = common::run_with(
+            &format!("alloc-{name}"),
+            &format!("{setup}  jsr {name}\n{tail}"),
+            &format!("{text}{data}"),
+        );
         assert_eq!(run, 11, "{name}");
     }
 }
 
-/// The sink moves an instruction into the one path that reads it, which can cost a jump and a
-/// callee-saved cell on the path that stays hot: in the two-exit loops of lz4 it made the function
-/// 13 bytes larger and 666 cycles slower. The sunk form is kept only if it is no larger and no
-/// slower. lz4 (clang -O2 IR of `tests/bench/kernels.c`) stays at its 447 bytes and 37224 cycles
-/// of before; the walk above, where the sink pays, still sinks.
+/// The sink moves an instruction into the one path that reads it, which can
+/// cost a jump and a callee-saved cell on the path that stays hot: in the
+/// two-exit loops of lz4 it made the function 13 bytes larger and 666 cycles
+/// slower. The sunk form is kept only if it is no larger and no slower. lz4
+/// (clang -O2 IR of `tests/bench/kernels.c`) stays at its 447 bytes and 37224
+/// cycles of before; the walk above, where the sink pays, still sinks.
 #[test]
 fn the_sink_is_kept_only_where_it_is_no_larger_and_no_slower() {
     let ir = include_str!("bench/lz4.ll");
@@ -1201,15 +1276,18 @@ fn the_sink_is_kept_only_where_it_is_no_larger_and_no_slower() {
     assert!(priced.bytes <= 447, "lz4 is {} bytes:\n{text}", priced.bytes);
 }
 
-/// A byte select jumped over one of two loads (`bcc t; lda f; jmp d; t: lda t; d:`, gcd). When the
-/// value to keep is the compare's left side it is already in `a` and one load goes; on a carry
-/// condition the load leaves the carry alone, so the value for a true condition goes in first and
-/// the branch skips the other. Both ways, with a constant arm, on registers, and on an equality
+/// A byte select jumped over one of two loads (`bcc t; lda f; jmp d; t: lda t;
+/// d:`, gcd). When the value to keep is the compare's left side it is already
+/// in `a` and one load goes; on a carry condition the load leaves the carry
+/// alone, so the value for a true condition goes in first and the branch skips
+/// the other. Both ways, with a constant arm, on registers, and on an equality
 /// (neither: it keeps the jump).
 #[test]
 fn a_byte_select_loads_once_when_a_holds_a_value_or_the_condition_is_the_carry() {
     let select = |name: &str, cmp: &str, t: &str, f: &str| {
-        format!("define i8 @{name}(i8 %x, i8 %y) {{\n  %c = icmp {cmp} i8 %x, %y\n  %r = select i1 %c, i8 {t}, i8 {f}\n  ret i8 %r\n}}")
+        format!(
+            "define i8 @{name}(i8 %x, i8 %y) {{\n  %c = icmp {cmp} i8 %x, %y\n  %r = select i1 %c, i8 {t}, i8 {f}\n  ret i8 %r\n}}"
+        )
     };
     let cases: [(&str, String, bool, fn(u8, u8) -> u8); 5] = [
         ("keeplhs", select("keeplhs", "ult", "%x", "0"), true, |x, y| if x < y { x } else { 0 }),
@@ -1225,14 +1303,18 @@ fn a_byte_select_loads_once_when_a_holds_a_value_or_the_condition_is_the_carry()
         }
         for (x, y) in [(0u8, 0u8), (1, 2), (2, 1), (200, 100), (100, 200), (255, 255), (7, 7)] {
             let main = format!("{}{}  jsr {name}\n", set("rc2", u16::from(x)), set("rc3", u16::from(y)));
-            assert_eq!(common::run_with(&format!("alloc-{name}"), &main, &text), i32::from(f(x, y)), "{name}({x}, {y}):\n{text}");
+            assert_eq!(
+                common::run_with(&format!("alloc-{name}"), &main, &text),
+                i32::from(f(x, y)),
+                "{name}({x}, {y}):\n{text}"
+            );
         }
     }
 }
 
-/// Two selects on one compare with a subtraction between them compared twice (`lda b; cmp a`
-/// again, 4 bytes, in gcd's loop), because the subtraction sets the carry. The second select now
-/// follows the first and reads its carry.
+/// Two selects on one compare with a subtraction between them compared twice
+/// (`lda b; cmp a` again, 4 bytes, in gcd's loop), because the subtraction sets
+/// the carry. The second select now follows the first and reads its carry.
 #[test]
 fn two_selects_on_one_carry_compare_make_the_compare_once() {
     let ir = "define i8 @split(i8 %a, i8 %b) {
@@ -1250,12 +1332,16 @@ fn two_selects_on_one_carry_compare_make_the_compare_once() {
         let (x, y) = if a > b { (b, 0) } else { (0, a) };
         let want = (a - x) ^ (b - y);
         let setup = set("rc2", a.into()) + &set("rc3", b.into());
-        assert_eq!(common::run_with(&format!("alloc-split-{a}-{b}"), &format!("{setup}  jsr split\n"), &text), want.into());
+        assert_eq!(
+            common::run_with(&format!("alloc-split-{a}-{b}"), &format!("{setup}  jsr split\n"), &text),
+            want.into()
+        );
     }
 }
 
-/// Sibling: a select on a zero flag is not shared (its loads set the zero flag, so a second
-/// select would read the wrong one); both selects still pick by the one compare.
+/// Sibling: a select on a zero flag is not shared (its loads set the zero flag,
+/// so a second select would read the wrong one); both selects still pick by the
+/// one compare.
 #[test]
 fn two_selects_on_an_equality_still_pick_by_it() {
     let ir = "define i8 @same(i8 %a, i8 %b) {
@@ -1272,13 +1358,17 @@ fn two_selects_on_an_equality_still_pick_by_it() {
         let (x, y) = if a == b { (7u8, a) } else { (b, 9) };
         let want = a.wrapping_sub(x) ^ b.wrapping_add(y);
         let setup = set("rc2", a.into()) + &set("rc3", b.into());
-        assert_eq!(common::run_with(&format!("alloc-same-{a}-{b}"), &format!("{setup}  jsr same\n"), &text), want.into());
+        assert_eq!(
+            common::run_with(&format!("alloc-same-{a}-{b}"), &format!("{setup}  jsr same\n"), &text),
+            want.into()
+        );
     }
 }
 
-/// A word times `2^n +- 1` (and the negative, and with factors of two) called `__mulhi3`:
-/// hash16's `h * 33` was 17 bytes of setup and a routine of 300 cycles a byte. It is a shift and an
-/// add or subtract. The high byte of the product is checked as well as the low.
+/// A word times `2^n +- 1` (and the negative, and with factors of two) called
+/// `__mulhi3`: hash16's `h * 33` was 17 bytes of setup and a routine of 300
+/// cycles a byte. It is a shift and an add or subtract. The high byte of the
+/// product is checked as well as the low.
 #[test]
 fn a_word_times_a_power_of_two_plus_or_minus_one_is_a_shift_and_add() {
     for (c, name) in [(33i32, "m33"), (15, "m15"), (-9, "mneg9"), (12, "m12"), (40, "m40")] {
@@ -1290,12 +1380,17 @@ fn a_word_times_a_power_of_two_plus_or_minus_one_is_a_shift_and_add() {
         for x in [0u16, 1, 7, 300, 1234, 65535] {
             let want = (x.wrapping_mul(c as u16) >> 8) as i32;
             let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
-            assert_eq!(common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n"), &text), want, "{x} * {c}");
+            assert_eq!(
+                common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n"), &text),
+                want,
+                "{x} * {c}"
+            );
         }
     }
 }
 
-/// Sibling: a constant that is not of that form (100 = 0b1100100) still multiplies, by the routine.
+/// Sibling: a constant that is not of that form (100 = 0b1100100) still
+/// multiplies, by the routine.
 #[test]
 fn a_word_times_another_constant_still_multiplies() {
     let ir = "define i8 @m100(i16 %x) {\n  %p = mul i16 %x, 100\n  %h = lshr i16 %p, 8\n  %t = trunc i16 %h to i8\n  ret i8 %t\n}";
@@ -1303,9 +1398,10 @@ fn a_word_times_another_constant_still_multiplies() {
     assert!(text.contains("__mulhi3"), "{text}");
 }
 
-/// `x > C` and `x <= C` against a constant compared the constant first (`lda #99; ldx #0; cmp lo;
-/// txa; sbc hi`, 11 bytes in digits' loop test). They are `x >= C + 1` and `x < C + 1` with the
-/// constant an immediate (10 bytes), and the edges where `C + 1` wraps keep their meaning.
+/// `x > C` and `x <= C` against a constant compared the constant first (`lda
+/// #99; ldx #0; cmp lo; txa; sbc hi`, 11 bytes in digits' loop test). They are
+/// `x >= C + 1` and `x < C + 1` with the constant an immediate (10 bytes), and
+/// the edges where `C + 1` wraps keep their meaning.
 #[test]
 fn a_greater_than_a_constant_compares_against_the_next_constant() {
     let cases: [(&str, &str, i32); 8] = [
@@ -1345,8 +1441,9 @@ fn a_greater_than_a_constant_compares_against_the_next_constant() {
     }
 }
 
-/// `select c, 1, 2` is `sext(c) + 2` to the combiner, and nothing selected a sign extension from
-/// a bit: "cannot select SignExtend". Both orders of two consecutive constants pick by `c`.
+/// `select c, 1, 2` is `sext(c) + 2` to the combiner, and nothing selected a
+/// sign extension from a bit: "cannot select SignExtend". Both orders of two
+/// consecutive constants pick by `c`.
 #[test]
 fn a_select_between_two_consecutive_constants_picks_by_the_condition() {
     for (n, (yes, no)) in [(1u16, 2u16), (7, 8), (2, 1), (9, 8), (255, 0)].into_iter().enumerate() {
@@ -1362,12 +1459,24 @@ fn a_select_between_two_consecutive_constants_picks_by_the_condition() {
     }
 }
 
-/// Ten sums are live at once. With 16 bytes of imaginary registers the allocator spills one (and
-/// saves a kept cell on the stack); with the 26 of a platform that has the room, they fit in scratch
-/// cells that need no save, and the result is the same: 4.
+/// Ten sums are live at once. With 16 bytes of imaginary registers the
+/// allocator spills one (and saves a kept cell on the stack); with the 26 of a
+/// platform that has the room, they fit in scratch cells that need no save, and
+/// the result is the same: 4.
 #[test]
 fn a_platform_with_more_zero_page_keeps_more_values_in_scratch_cells() {
-    let pairs = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "e"), ("e", "f"), ("a", "c"), ("b", "d"), ("c", "e"), ("d", "f"), ("a", "f")];
+    let pairs = [
+        ("a", "b"),
+        ("b", "c"),
+        ("c", "d"),
+        ("d", "e"),
+        ("e", "f"),
+        ("a", "c"),
+        ("b", "d"),
+        ("c", "e"),
+        ("d", "f"),
+        ("a", "f"),
+    ];
     let mut ir = String::from("define i8 @many(i8 %a, i8 %b, i8 %c, i8 %d, i8 %e, i8 %f) {\n");
     for (n, (x, y)) in pairs.iter().enumerate() {
         ir += &format!("  %t{n} = add i8 %{x}, %{y}\n");
@@ -1384,9 +1493,9 @@ fn a_platform_with_more_zero_page_keeps_more_values_in_scratch_cells() {
     assert_eq!(common::run_with("alloc-many-wide", &format!("{setup}  jsr many\n"), &wide), 4);
 }
 
-/// Scratch cells are caller-saved: loop values live across a call stay out of them, because the
-/// callee may use every cell but `rc8`..`rc15`. The callee here fills rc2..rc7 and rc16..rc25 and
-/// returns 3; four calls add up to 12.
+/// Scratch cells are caller-saved: loop values live across a call stay out of
+/// them, because the callee may use every cell but `rc8`..`rc15`. The callee
+/// here fills rc2..rc7 and rc16..rc25 and returns 3; four calls add up to 12.
 #[test]
 fn loop_values_live_across_a_call_are_not_left_in_a_scratch_cell() {
     let ir = "declare i8 @clob(i8)
@@ -1408,19 +1517,24 @@ done:
     let fill: String = (2..8).chain(16..26).map(|n| format!("  sta rc{n}\n")).collect();
     let callee = format!("clob:\n  lda #$EE\n{fill}  lda #3\n  rts\n");
     let setup = set("rc2", 4);
-    assert_eq!(common::run_with("alloc-sum-wide", &format!("{setup}  jsr sum\n"), &format!("{text}{callee}.export clob\n")), 12);
+    assert_eq!(
+        common::run_with("alloc-sum-wide", &format!("{setup}  jsr sum\n"), &format!("{text}{callee}.export clob\n")),
+        12
+    );
 }
 
-/// A word shifted by n bits is n `asl`/`rol` pairs (4 bytes each, 20 for the shift by 5 in hash16) or,
-/// with an index register free, a counted loop of 9 bytes that takes 5 more clocks a bit. The level
-/// decides: at size (12 clocks a byte) every shift of 3 to 7 bits is the loop; at speed (1 clock a
-/// byte) none is. Both bytes of each result are checked, the shifted word added to the word so that
-/// the shift stays in cells.
+/// A word shifted by n bits is n `asl`/`rol` pairs (4 bytes each, 20 for the
+/// shift by 5 in hash16) or, with an index register free, a counted loop of 9
+/// bytes that takes 5 more clocks a bit. The level decides: at size (12 clocks
+/// a byte) every shift of 3 to 7 bits is the loop; at speed (1 clock a
+/// byte) none is. Both bytes of each result are checked, the shifted word added
+/// to the word so that the shift stays in cells.
 #[test]
 fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
     for (op, k) in [("shl", 3u32), ("shl", 4), ("shl", 5), ("shl", 7), ("lshr", 3), ("lshr", 6)] {
         let name = format!("{op}{k}");
-        let ir = format!("define i16 @{name}(i16 %x) {{\n  %p = {op} i16 %x, {k}\n  %q = add i16 %p, %x\n  ret i16 %q\n}}");
+        let ir =
+            format!("define i16 @{name}(i16 %x) {{\n  %p = {op} i16 %x, {k}\n  %q = add i16 %p, %x\n  ret i16 %q\n}}");
         let looped = compile_at(&ir, &name, 16, Tuning::SIZE);
         let unrolled = compile_at(&ir, &name, 16, Tuning::SPEED);
         assert!(looped.contains("dex") || looped.contains("dey"), "{op} {k} at size:\n{looped}");
@@ -1430,7 +1544,9 @@ fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
                 let shifted = if op == "shl" { x << k } else { x >> k };
                 let want = shifted.wrapping_add(x);
                 let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
-                let run = |after: &str| common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n{after}"), text);
+                let run = |after: &str| {
+                    common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n{after}"), text)
+                };
                 assert_eq!(run(""), i32::from(want & 0xFF), "{op} {k} of {x:#x}, low byte");
                 assert_eq!(run("  txa\n"), i32::from(want >> 8), "{op} {k} of {x:#x}, high byte");
             }
@@ -1438,9 +1554,10 @@ fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
     }
 }
 
-/// Three callee-saved cells cost 18 bytes of `lda`/`pha` and `pla`/`sta`. At the size level they are
-/// saved by `__csave` and restored by a jump to `__crest` (11 bytes, 99 clocks more); at speed they
-/// stay inline. digits(5) = 1, digits(10) = 2, digits(99) = 2, digits(100) = 3, digits(65535) = 5.
+/// Three callee-saved cells cost 18 bytes of `lda`/`pha` and `pla`/`sta`. At
+/// the size level they are saved by `__csave` and restored by a jump to
+/// `__crest` (11 bytes, 99 clocks more); at speed they stay inline. digits(5) =
+/// 1, digits(10) = 2, digits(99) = 2, digits(100) = 3, digits(65535) = 5.
 #[test]
 fn three_saved_cells_are_shared_helpers_at_the_size_level_only() {
     let ir = "define i8 @digits(i16 %v) {
@@ -1465,18 +1582,24 @@ done:
     assert!(inline.contains("pha") && !inline.contains("__csave"), "{inline}");
     for (v, want) in [(5u16, 1), (10, 2), (99, 2), (100, 3), (65535, 5)] {
         for (name, text) in [("shared", &shared), ("inline", &inline)] {
-            let setup = set("rc2", v & 0xFF) + &set("rc3", v >> 8) + &set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3);
+            let setup =
+                set("rc2", v & 0xFF) + &set("rc3", v >> 8) + &set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3);
             // the callee-saved cells come back as they were
             let after = "  lda rc8\n  cmp #$A1\n  bne bad\n  lda rc9\n  cmp #$B2\n  bne bad\n  lda rc10\n  cmp #$C3\n  bne bad\n  pla\n  rts\nbad:\n  lda #99\n  rts\n";
             let program = format!("{setup}  jsr digits\n  pha\n{}", after);
-            assert_eq!(common::run_with(&format!("alloc-digits-{name}-{v}"), &program, text), want, "{name} digits({v})");
+            assert_eq!(
+                common::run_with(&format!("alloc-digits-{name}-{v}"), &program, text),
+                want,
+                "{name} digits({v})"
+            );
         }
     }
 }
 
-/// `__csave` and `__crest` link as 34 bytes, so a module takes them only where its users together save
-/// more than that: one function that keeps three cells saved 9 bytes and cost 25 net (digits: 165 linked
-/// at speed, 189 at size with the helpers). Three such functions gain 27, four gain 36.
+/// `__csave` and `__crest` link as 34 bytes, so a module takes them only where
+/// its users together save more than that: one function that keeps three cells
+/// saved 9 bytes and cost 25 net (digits: 165 linked at speed, 189 at size with
+/// the helpers). Three such functions gain 27, four gain 36.
 #[test]
 fn the_save_helpers_are_linked_only_where_their_users_pay_for_them() {
     let digits = |name: &str| {
@@ -1526,17 +1649,26 @@ done:
         }
         for (v, want) in [(5u16, 1), (100, 3), (65535, 5)] {
             for name in &names {
-                let setup = set("rc2", v & 0xFF) + &set("rc3", v >> 8) + &set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3);
+                let setup = set("rc2", v & 0xFF)
+                    + &set("rc3", v >> 8)
+                    + &set("rc8", 0xA1)
+                    + &set("rc9", 0xB2)
+                    + &set("rc10", 0xC3);
                 let after = "  lda rc8\n  cmp #$A1\n  bne bad\n  lda rc9\n  cmp #$B2\n  bne bad\n  lda rc10\n  cmp #$C3\n  bne bad\n  pla\n  rts\nbad:\n  lda #99\n  rts\n";
                 let program = format!("{setup}  jsr {name}\n  pha\n{after}");
-                assert_eq!(common::run_with(&format!("alloc-{users}-{name}-{v}"), &program, &all), want, "{users} users, {name}({v})");
+                assert_eq!(
+                    common::run_with(&format!("alloc-{users}-{name}-{v}"), &program, &all),
+                    want,
+                    "{users} users, {name}({v})"
+                );
             }
         }
     }
 }
 
-/// A rotate (`(x << 1) | (x >> 15)` is `rotl` to opt) was "cannot select Rotl": found by the
-/// differential tests, where every program folds its checksum that way. By constants and by a count.
+/// A rotate (`(x << 1) | (x >> 15)` is `rotl` to opt) was "cannot select Rotl":
+/// found by the differential tests, where every program folds its checksum that
+/// way. By constants and by a count.
 #[test]
 fn a_rotate_is_two_shifts_and_an_or() {
     let ir = "declare i16 @llvm.fshl.i16(i16, i16, i16)
@@ -1558,7 +1690,9 @@ define i8 @rot3(i8 %x) {
     let word = |name: &str, x: u16, n: u8| {
         let text = compile(ir, name);
         let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8) + &set("rc4", u16::from(n));
-        let run = |after: &str| common::run_with(&format!("alloc-{name}-{x}-{n}"), &format!("{setup}  jsr {name}\n{after}"), &text);
+        let run = |after: &str| {
+            common::run_with(&format!("alloc-{name}-{x}-{n}"), &format!("{setup}  jsr {name}\n{after}"), &text)
+        };
         (run(""), run("  txa\n"))
     };
     for x in [0u16, 1, 0x8000, 0x1234, 0xFFFF] {
@@ -1572,12 +1706,16 @@ define i8 @rot3(i8 %x) {
     let text = compile(ir, "rot3");
     for x in [0u16, 1, 0x81, 0xFF, 0x5A] {
         let want = (x as u8).rotate_left(3);
-        assert_eq!(common::run_with(&format!("alloc-rot3-{x}"), &format!("{}  jsr rot3\n", set("rc2", x)), &text), i32::from(want));
+        assert_eq!(
+            common::run_with(&format!("alloc-rot3-{x}"), &format!("{}  jsr rot3\n", set("rc2", x)), &text),
+            i32::from(want)
+        );
     }
 }
 
-/// `llvm.lifetime.start` on a local array reached selection as a node nothing handled: "LifetimeStart is
-/// not a machine node" (differential tests, every program with a local array at -O2).
+/// `llvm.lifetime.start` on a local array reached selection as a node nothing
+/// handled: "LifetimeStart is not a machine node" (differential tests, every
+/// program with a local array at -O2).
 #[test]
 fn lifetime_markers_on_a_local_array_are_ignored() {
     let ir = "declare void @llvm.lifetime.start.p0(i64, ptr)
@@ -1598,19 +1736,29 @@ define i8 @arr(i8 %x) {
     assert_eq!(common::run_with("alloc-arr", &format!("{}  jsr arr\n", set("rc2", 5)), &text), 12);
 }
 
-/// The labels the emitter numbers inside a function (`_cmt1`, `_cmd1`, `_pa1`) were the same in every
-/// function, so two functions in one file defined them twice (differential tests: "Symbol '_far1' is
-/// already defined"). Each function names its own: max of 3 and 9, then of 4 and 2, from one file.
+/// The labels the emitter numbers inside a function (`_cmt1`, `_cmd1`, `_pa1`)
+/// were the same in every function, so two functions in one file defined them
+/// twice (differential tests: "Symbol '_far1' is already defined"). Each
+/// function names its own: max of 3 and 9, then of 4 and 2, from one file.
 #[test]
 fn two_functions_in_one_file_do_not_share_internal_labels() {
-    let one = "define i8 @maxa(i8 %a, i8 %b) {\n  %c = icmp ugt i8 %a, %b\n  %r = select i1 %c, i8 %a, i8 %b\n  ret i8 %r\n}";
-    let two = "define i8 @maxb(i8 %a, i8 %b) {\n  %c = icmp ugt i8 %a, %b\n  %r = select i1 %c, i8 %a, i8 %b\n  ret i8 %r\n}";
+    let one =
+        "define i8 @maxa(i8 %a, i8 %b) {\n  %c = icmp ugt i8 %a, %b\n  %r = select i1 %c, i8 %a, i8 %b\n  ret i8 %r\n}";
+    let two =
+        "define i8 @maxb(i8 %a, i8 %b) {\n  %c = icmp ugt i8 %a, %b\n  %r = select i1 %c, i8 %a, i8 %b\n  ret i8 %r\n}";
     let text = compile(one, "maxa") + &compile(two, "maxb");
-    let main = format!("{}{}  jsr maxa\n  pha\n{}{}  jsr maxb\n  sta rc2\n  pla\n  clc\n  adc rc2\n", set("rc2", 3), set("rc3", 9), set("rc2", 4), set("rc3", 2));
+    let main = format!(
+        "{}{}  jsr maxa\n  pha\n{}{}  jsr maxb\n  sta rc2\n  pla\n  clc\n  adc rc2\n",
+        set("rc2", 3),
+        set("rc3", 9),
+        set("rc2", 4),
+        set("rc3", 2)
+    );
     assert_eq!(common::run_with("alloc-two-files", &main, &text), 13);
 }
-/// A select on a compare of two bits looped the scheduler forever (a `select` on itself, as its
-/// zero-extended condition) and found by the differential tests. Bits compare as bytes of 0 or 1.
+/// A select on a compare of two bits looped the scheduler forever (a `select`
+/// on itself, as its zero-extended condition) and found by the differential
+/// tests. Bits compare as bytes of 0 or 1.
 #[test]
 fn a_select_on_a_compare_of_bits_compiles_and_runs() {
     let ir = "define i8 @eqz(i8 %a, i8 %e) {
@@ -1640,8 +1788,9 @@ define i8 @slt(i8 %a, i8 %e) {
     }
 }
 
-/// A select between two bits, itself a select's condition, looped the scheduler forever: its
-/// zero-extension legalized to a select on the same bit (found by the differential tests, seed 0).
+/// A select between two bits, itself a select's condition, looped the scheduler
+/// forever: its zero-extension legalized to a select on the same bit (found by
+/// the differential tests, seed 0).
 #[test]
 fn a_select_of_bits_as_a_condition_compiles_and_runs() {
     let ir = "define i8 @bitsel(i8 %a, i8 %b, i8 %c) {
@@ -1656,12 +1805,17 @@ fn a_select_of_bits_as_a_condition_compiles_and_runs() {
     for (a, b, c) in [(0u16, 0u16, 0u16), (0, 0, 1), (1, 0, 0), (1, 1, 1), (1, 1, 0), (0, 1, 1)] {
         let setup = set("rc2", a) + &set("rc3", b) + &set("rc4", c);
         let want = if (if a & 1 == 1 { b == 0 } else { c & 1 == 1 }) { 3 } else { 4 };
-        assert_eq!(common::run_with(&format!("alloc-bitsel-{a}{b}{c}"), &format!("{setup}  jsr bitsel\n"), &text), want, "{a} {b} {c}");
+        assert_eq!(
+            common::run_with(&format!("alloc-bitsel-{a}{b}{c}"), &format!("{setup}  jsr bitsel\n"), &text),
+            want,
+            "{a} {b} {c}"
+        );
     }
 }
 
-/// A bit that is a truncation from a word, or frozen, as a select's condition looped the scheduler
-/// forever like the bit selects above (differential seeds 4, 21).
+/// A bit that is a truncation from a word, or frozen, as a select's condition
+/// looped the scheduler forever like the bit selects above (differential seeds
+/// 4, 21).
 #[test]
 fn a_truncated_or_frozen_bit_as_a_condition_compiles_and_runs() {
     let ir = "define i8 @tword(i16 %w) {
@@ -1679,13 +1833,19 @@ define i8 @tfrozen(i8 %a) {
         let text = compile_within_ten_seconds(ir, name);
         let want = if args[0] & 1 == 1 { 3 } else { 4 };
         let setup = set("rc2", args[0] & 0xFF) + &set("rc3", args[0] >> 8);
-        assert_eq!(common::run_with(&format!("alloc-trunc-{name}-{}", args[0]), &format!("{setup}  jsr {name}\n"), &text), want, "{name} {:#x}", args[0]);
+        assert_eq!(
+            common::run_with(&format!("alloc-trunc-{name}-{}", args[0]), &format!("{setup}  jsr {name}\n"), &text),
+            want,
+            "{name} {:#x}",
+            args[0]
+        );
     }
 }
 
-/// A sign-extended byte read through a pointer was `CannotSelect(Load)` (differential seeds 9-11):
-/// the combiner makes an extending load of it, which the legalizer turns back into a load and an
-/// extension. With a constant operation after the extension the combine runs again.
+/// A sign-extended byte read through a pointer was `CannotSelect(Load)`
+/// (differential seeds 9-11): the combiner makes an extending load of it, which
+/// the legalizer turns back into a load and an extension. With a constant
+/// operation after the extension the combine runs again.
 #[test]
 fn a_sign_extended_load_is_a_load_and_an_extension() {
     let ir = "define i16 @sload(ptr %p) {
@@ -1706,15 +1866,16 @@ define i16 @sloadx(ptr %p) {
             let extended = byte as u8 as i8 as i16 as u16;
             let want = i32::from(if name == "sloadx" { extended ^ 1456 } else { extended });
             let low = common::run_with(&format!("alloc-{name}-{byte}"), &format!("{setup}  jsr {name}\n"), &text);
-            let high = common::run_with(&format!("alloc-{name}-h-{byte}"), &format!("{setup}  jsr {name}\n  txa\n"), &text);
+            let high =
+                common::run_with(&format!("alloc-{name}-h-{byte}"), &format!("{setup}  jsr {name}\n  txa\n"), &text);
             assert_eq!((high << 8) | low, want, "{name} {byte:#x}");
         }
     }
 }
 
-/// A constant used where a compare's flags are live was loaded again between the compare and its
-/// `CMOV16`, and the load reset Z: `bne` never branched, and a 0/1 flag was always 1 (differential
-/// seed 36: 255 for 127).
+/// A constant used where a compare's flags are live was loaded again between
+/// the compare and its `CMOV16`, and the load reset Z: `bne` never branched,
+/// and a 0/1 flag was always 1 (differential seed 36: 255 for 127).
 #[test]
 fn a_constant_is_not_loaded_again_between_a_compare_and_its_select() {
     let ir = "declare i16 @llvm.fshl.i16(i16, i16, i16)
@@ -1765,8 +1926,8 @@ done:
     }
 }
 
-/// The low byte of `c ^ (p << 8)` was `c.lo ^ 0`: a zero loaded, stored and xored in (four instructions,
-/// seven bytes, in every crc16 inner loop).
+/// The low byte of `c ^ (p << 8)` was `c.lo ^ 0`: a zero loaded, stored and
+/// xored in (four instructions, seven bytes, in every crc16 inner loop).
 #[test]
 fn a_byte_op_with_its_identity_is_a_copy() {
     let ir = "@buf = external global [16 x i8]
@@ -1788,7 +1949,8 @@ define i8 @idt() {
     assert_eq!(got, 12 ^ 10);
 }
 
-/// The same with the zero first, `(p << 8) ^ c`: crc16 wrote it that way (99 bytes, 6442 cycles; 92 and 6369 now).
+/// The same with the zero first, `(p << 8) ^ c`: crc16 wrote it that way (99
+/// bytes, 6442 cycles; 92 and 6369 now).
 #[test]
 fn a_byte_op_with_its_identity_on_the_left_is_a_copy() {
     let ir = "@buf = external global [16 x i8]
@@ -1810,9 +1972,11 @@ define i8 @idt() {
     assert_eq!(got, 12 ^ 10);
 }
 
-/// A register made by spill code could not be spilled again and was refused the only colours that fit
-/// (callee-saved cells, not "worth" saving for its weight): "no register for v217 ... and nothing to
-/// spill" (differential seed 127, once an unrelated change moved the pressure; needs the 26 cells of sim65).
+/// A register made by spill code could not be spilled again and was refused the
+/// only colours that fit (callee-saved cells, not "worth" saving for its
+/// weight): "no register for v217 ... and nothing to spill" (differential seed
+/// 127, once an unrelated change moved the pressure; needs the 26 cells of
+/// sim65).
 #[test]
 fn a_spill_temporary_takes_a_colour_that_costs_a_save() {
     let ir = "define fastcc i16 @spt(i32 %0, i8 %1, i32 %2, i16 %3, ptr %4) {
@@ -1839,8 +2003,9 @@ fn a_spill_temporary_takes_a_colour_that_costs_a_save() {
     assert!(text.contains("spt:"), "{text}");
 }
 
-/// `(x & 1) == 0 ? 0 : x` combines to a sign extension from one bit, which had no action at `i1`
-/// ("CannotSelect(SignExtendInReg)": differential seed 123 once the programs started from opaque values).
+/// `(x & 1) == 0 ? 0 : x` combines to a sign extension from one bit, which had
+/// no action at `i1` ("CannotSelect(SignExtendInReg)": differential seed 123
+/// once the programs started from opaque values).
 #[test]
 fn a_select_on_the_low_bit_compiles_and_runs() {
     let ir = "@buf = external global [16 x i8]
@@ -1860,9 +2025,9 @@ define i16 @lowbit() {
     }
 }
 
-/// A byte load widened to 32 bits was formed as one extending load of a type that is not a register, and
-/// came out of type legalization as a `Truncate` of it that nothing selects ("CannotSelect(Truncate)":
-/// differential seed 209).
+/// A byte load widened to 32 bits was formed as one extending load of a type
+/// that is not a register, and came out of type legalization as a `Truncate` of
+/// it that nothing selects ("CannotSelect(Truncate)": differential seed 209).
 #[test]
 fn a_byte_load_used_at_32_bits_and_truncated_compiles_and_runs() {
     let ir = "@buf = external global [16 x i8]
@@ -1887,8 +2052,9 @@ define i16 @wide() {
     }
 }
 
-/// An undefined value reached selection as `IMPLICIT_DEF` ("no description of opcode 10": differential
-/// seed 198); until the MIR has `undef` it reads as zero.
+/// An undefined value reached selection as `IMPLICIT_DEF` ("no description of
+/// opcode 10": differential seed 198); until the MIR has `undef` it reads as
+/// zero.
 #[test]
 fn an_undefined_value_is_stored_as_zero() {
     let ir = "define i16 @undef() {
@@ -1904,12 +2070,16 @@ fn an_undefined_value_is_stored_as_zero() {
     assert_eq!(got, 7);
 }
 
-/// `sta m; lda m` reloaded what the register held (97 times in a 3,100-instruction generated function,
-/// differential seed 55), unless a branch reads the flags the load set.
+/// `sta m; lda m` reloaded what the register held (97 times in a
+/// 3,100-instruction generated function, differential seed 55), unless a branch
+/// reads the flags the load set.
 #[test]
 fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
     use llrm_6502::alloc::drop_reloads;
-    assert_eq!(drop_reloads("  lda rc4\n  sta rc2\n  lda rc2\n  ora rc3\n  rts\n"), "  lda rc4\n  sta rc2\n  ora rc3\n  rts\n");
+    assert_eq!(
+        drop_reloads("  lda rc4\n  sta rc2\n  lda rc2\n  ora rc3\n  rts\n"),
+        "  lda rc4\n  sta rc2\n  ora rc3\n  rts\n"
+    );
     assert_eq!(drop_reloads("  stx s_f_3\n  ldx s_f_3\n  inx\n"), "  stx s_f_3\n  inx\n");
     let branch = "  sta rc2\n  lda rc2\n  bne l\n";
     assert_eq!(drop_reloads(branch), branch, "bne reads the zero flag the load set");
@@ -1917,15 +2087,17 @@ fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
     assert_eq!(drop_reloads(other), other, "only the same register and cell");
 }
 
-/// A spilled byte used as the second operand of an ALU op is read from its cell (`eor s_f_3`). Slot
-/// sharing took that read plus the store of its result for a copy of one slot into the other and gave
-/// them one cell: 184 of 240 differential programs miscompiled while the fold was being written.
+/// A spilled byte used as the second operand of an ALU op is read from its cell
+/// (`eor s_f_3`). Slot sharing took that read plus the store of its result for
+/// a copy of one slot into the other and gave them one cell: 184 of 240
+/// differential programs miscompiled while the fold was being written.
 #[test]
 fn spilled_bytes_read_by_alu_ops_keep_their_own_cells() {
     const N: usize = 16;
     let mut ir = String::from("@buf = external global [16 x i8]\ndefine i8 @fold() {\n");
     for i in 0..N {
-        ir += &format!("  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load i8, ptr %p{i}, align 1\n");
+        ir +=
+            &format!("  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load i8, ptr %p{i}, align 1\n");
     }
     for i in 0..N / 2 {
         ir += &format!("  %x{i} = xor i8 %b{i}, %b{}\n  %m{i} = add i8 %x{i}, {}\n", N - 1 - i, 7 * i + 3);
@@ -1941,18 +2113,25 @@ fn spilled_bytes_read_by_alu_ops_keep_their_own_cells() {
         (1..N / 2).fold(m(0), |cur, i| cur.wrapping_add(m(i)) & (255 - i) as u8)
     };
     let text = compile_on(&ir, "fold", 16);
-    for (k, buf) in [[3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3], [200, 17, 99, 250, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]].iter().enumerate() {
+    for (k, buf) in
+        [[3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3], [200, 17, 99, 250, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]
+            .iter()
+            .enumerate()
+    {
         let data = format!(".export buf\nbuf: .byte {}\n", buf.iter().map(u8::to_string).collect::<Vec<_>>().join(","));
         let got = common::run_with(&format!("alloc-fold-{k}"), "  jsr fold\n", &format!("{text}{data}"));
         assert_eq!(got, i32::from(want(buf)), "buf {k}");
     }
     assert!(text.contains("s_fold_"), "the test needs spills:\n{text}");
-    let folded = |l: &&str| ["eor", "and", "adc", "sbc", "ora", "cmp"].iter().any(|m| l.trim_start().starts_with(&format!("{m} s_fold_")));
+    let folded = |l: &&str| {
+        ["eor", "and", "adc", "sbc", "ora", "cmp"].iter().any(|m| l.trim_start().starts_with(&format!("{m} s_fold_")))
+    };
     assert!(text.lines().filter(folded).count() > 0, "a spilled operand is read from its cell:\n{text}");
 }
 
-/// A byte shifted by 7 either way was seven one-bit shifts (1,692 runs of them in 100 differential
-/// programs: the `ck >> 15` of every checksum step); one bit is left, and four bytes make it.
+/// A byte shifted by 7 either way was seven one-bit shifts (1,692 runs of them
+/// in 100 differential programs: the `ck >> 15` of every checksum step); one
+/// bit is left, and four bytes make it.
 #[test]
 fn a_byte_shifted_by_seven_is_four_bytes() {
     let ir = "@buf = external global [16 x i8]
@@ -1972,14 +2151,19 @@ define i8 @left() {
     for (first, right, left) in [(0x80, 1, 0), (0x01, 0, 0x80), (0xFF, 1, 0x80), (0x7E, 0, 0)] {
         let data = format!(".export buf\nbuf: .byte {first},1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\n");
         for (name, want) in [("right", right), ("left", left)] {
-            let got = common::run_with(&format!("alloc-shift7-{name}-{first}"), &format!("  jsr {name}\n"), &format!("{text}{data}"));
+            let got = common::run_with(
+                &format!("alloc-shift7-{name}-{first}"),
+                &format!("  jsr {name}\n"),
+                &format!("{text}{data}"),
+            );
             assert_eq!(got, want, "{name} of {first:#x}");
         }
     }
 }
 
-/// Spills that are not live together share a cell (`StackSlotColoring`): six rounds of the same
-/// pressure took six times the cells of one, 15,973 cells in 98 differential programs (3,158 with it).
+/// Spills that are not live together share a cell (`StackSlotColoring`): six
+/// rounds of the same pressure took six times the cells of one, 15,973 cells in
+/// 98 differential programs (3,158 with it).
 #[test]
 fn spills_that_are_not_live_together_share_cells() {
     let rounds = |groups: usize| {
@@ -2007,8 +2191,9 @@ fn spills_that_are_not_live_together_share_cells() {
     assert!(six <= one + 2, "six rounds took {six} cells, one took {one}");
 }
 
-/// `freeze` selects to the generic `COPY`, which the selector had no description of ("no description
-/// of opcode 20": differential seeds 21 and 26 were rejected for it).
+/// `freeze` selects to the generic `COPY`, which the selector had no
+/// description of ("no description of opcode 20": differential seeds 21 and 26
+/// were rejected for it).
 #[test]
 fn a_frozen_value_is_a_copy() {
     let ir = "@buf = external global [16 x i8]
@@ -2031,8 +2216,9 @@ define i16 @frz() {
     }
 }
 
-/// A 32-bit phi whose join block comes before the blocks that feed it: the copy of its second word
-/// named a register nothing had yet ("phi input is never named": differential seed 28).
+/// A 32-bit phi whose join block comes before the blocks that feed it: the copy
+/// of its second word named a register nothing had yet ("phi input is never
+/// named": differential seed 28).
 #[test]
 fn a_wide_phi_read_before_its_inputs_are_laid_out() {
     let ir = "define i32 @wphi(i32 %n) {
@@ -2062,15 +2248,16 @@ exit:
     for n in [0u32, 0x1234_5678, 0xFFFF_FFFF] {
         let want = ((n ^ 5).wrapping_add(2 * 65537)) as u16;
         let byte = |k: u32| ((n >> (8 * k)) & 0xFF) as u16;
-        let setup = format!("{}{}{}{}", set("rc2", byte(0)), set("rc3", byte(1)), set("rc4", byte(2)), set("rc5", byte(3)));
+        let setup =
+            format!("{}{}{}{}", set("rc2", byte(0)), set("rc3", byte(1)), set("rc4", byte(2)), set("rc5", byte(3)));
         let lo = common::run_with(&format!("alloc-wphi-{n}"), &format!("{setup}  jsr wphi\n"), &text);
         let hi = common::run_with(&format!("alloc-wphih-{n}"), &format!("{setup}  jsr wphi\n  txa\n"), &text);
         assert_eq!(((hi << 8) | lo) as u16, want, "n = {n:#x}");
     }
 }
 
-/// Compile on a thread and fail after ten seconds: a scheduler or allocator loop with no progress
-/// bound shows as a failure here instead of a stuck run.
+/// Compile on a thread and fail after ten seconds: a scheduler or allocator
+/// loop with no progress bound shows as a failure here instead of a stuck run.
 fn compile_within_ten_seconds(
     ir: &str,
     name: &str,
@@ -2081,9 +2268,10 @@ fn compile_within_ten_seconds(
     receive.recv_timeout(std::time::Duration::from_secs(10)).expect("compiles within ten seconds")
 }
 
-/// The call frame's size was read from the wrong operand of `ADJCALLSTACKDOWN` (the bytes popped,
-/// always 0), so a frame with locals had no room for the arguments that do not fit in `rc2..rc7`:
-/// the call wrote them over the first local (differential seed 2).
+/// The call frame's size was read from the wrong operand of `ADJCALLSTACKDOWN`
+/// (the bytes popped, always 0), so a frame with locals had no room for the
+/// arguments that do not fit in `rc2..rc7`: the call wrote them over the first
+/// local (differential seed 2).
 #[test]
 fn outgoing_stack_arguments_do_not_overwrite_locals() {
     let ir = "define i16 @callee(i32 %a, i32 %b) {
@@ -2113,9 +2301,17 @@ define i16 @caller3() {
   %x = xor i16 %v, %r
   ret i16 %x
 }";
-    let text = format!("{}{}{}{}", compile(ir, "caller"), compile(ir, "callee"), compile(ir, "caller3"), compile(ir, "callee3"));
+    let text = format!(
+        "{}{}{}{}",
+        compile(ir, "caller"),
+        compile(ir, "callee"),
+        compile(ir, "caller3"),
+        compile(ir, "callee3")
+    );
     let setup = "  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n";
-    for (name, want) in [("caller", 4660u32 ^ (1450704896 >> 16)), ("caller3", 4660 ^ ((1450704896u32 ^ 305397760) >> 16))] {
+    for (name, want) in
+        [("caller", 4660u32 ^ (1450704896 >> 16)), ("caller3", 4660 ^ ((1450704896u32 ^ 305397760) >> 16))]
+    {
         let lo = common::run_with(&format!("alloc-frame-{name}"), &format!("{setup}  jsr {name}\n"), &text);
         let hi = common::run_with(&format!("alloc-frame-h-{name}"), &format!("{setup}  jsr {name}\n  txa\n"), &text);
         assert_eq!(((hi << 8) | lo) as u32, want, "{name}");

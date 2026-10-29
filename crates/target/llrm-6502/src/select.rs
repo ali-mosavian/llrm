@@ -23,7 +23,6 @@ use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue};
 use llrm_mir::context::GlobalId;
-use crate::dagisel::hooks::Cpu;
 use llrm_mir::module::{BlockId, Module};
 
 use crate::REGISTER_INFO;
@@ -31,6 +30,7 @@ use crate::alloc;
 use crate::dagisel::function::{Selected, Selection};
 use crate::dagisel::generated::ids::{opcode as op, reg as ids};
 use crate::dagisel::generated::instrinfo;
+use crate::dagisel::hooks::Cpu;
 use crate::dagisel::pipeline::MosPins;
 use crate::emit::{MInst, Operand, spill};
 use crate::frame::{Function, Layout, layout};
@@ -59,8 +59,9 @@ struct Cells<'a> {
     words: Vec<String>,
     /// Virtual registers live across blocks, by number.
     virtual_regs: HashMap<u32, Operand>,
-    /// The width in bits of every value's register: a phi input can be read on an edge laid out
-    /// before the block that defines it (a loop's back edge).
+    /// The width in bits of every value's register: a phi input can be read on
+    /// an edge laid out before the block that defines it (a loop's back
+    /// edge).
     widths: HashMap<u32, u32>,
     /// The laid-out frame (`frame.rs`), and how many of its objects are the
     /// fixed ones.
@@ -109,14 +110,20 @@ pub fn function_text(
     name: &str,
     selection: &Selection,
 ) -> Result<String, String> {
-    // a call through a pointer no `!callees` bounds may come back into this function
-    let recursive = module.named(name).is_some_and(|id| {
-        let graph = llrm_mir::callgraph::CallGraph::new(module);
-        graph.recursive(id) || graph.calls_unknown(id)
-    });
+    // a call through a pointer no `!callees` bounds may come back into this
+    // function
+    let recursive = module
+        .named(name)
+        .is_some_and(
+            |id| {
+                let graph = llrm_mir::callgraph::CallGraph::new(module);
+                graph.recursive(id) || graph.calls_unknown(id)
+            },
+        );
     let (items, _) = function_items(module, name, selection)?;
     let (function, labels) = alloc::build(name, &items).map_err(|why| format!("{name}: {}", why.0))?;
-    let (code, slots) = alloc::emit(function, &labels, recursive, selection.cpu == Cpu::W65c02, selection.zero_page, selection.tuning)?;
+    let (code, slots) =
+        alloc::emit(function, &labels, recursive, selection.cpu == Cpu::W65c02, selection.zero_page, selection.tuning)?;
     let mut body = format!(".export {name}\n{code}");
     body.push_str(".segment \"BSS\"\n");
     for (slot, size) in slots {
@@ -126,15 +133,18 @@ pub fn function_text(
     Ok(body)
 }
 
-/// The functions `parts` of `module` as ca65 text, in order. The callee-save helpers are linked once
-/// and cost [`alloc::SAVE_HELPERS_BYTES`], so the functions that would use them keep them only where
-/// together they save more than that; otherwise each saves its cells inline. Break-even: `k` users of
-/// `n = 3` cells (9 bytes each) pay from 4 users; one user of 8 cells (39 bytes) pays alone.
+/// The functions `parts` of `module` as ca65 text, in order. The callee-save
+/// helpers are linked once and cost [`alloc::SAVE_HELPERS_BYTES`], so the
+/// functions that would use them keep them only where together they save more
+/// than that; otherwise each saves its cells inline. Break-even: `k` users of
+/// `n = 3` cells (9 bytes each) pay from 4 users; one user of 8 cells (39
+/// bytes) pays alone.
 pub fn module_text(
     module: &Module,
     parts: &[(&str, &Selection)],
 ) -> Result<Vec<String>, String> {
-    let mut texts = parts.iter().map(|(name, selection)| function_text(module, name, selection)).collect::<Result<Vec<_>, _>>()?;
+    let mut texts =
+        parts.iter().map(|(name, selection)| function_text(module, name, selection)).collect::<Result<Vec<_>, _>>()?;
     let cells = |text: &str| -> Option<u32> {
         let (before, _) = text.split_once("\n  jsr __csave")?;
         before.rsplit_once("ldy #")?.1.trim().parse().ok()
@@ -208,7 +218,10 @@ pub fn function_items(
                     let ISD::Machine(code) = one.dag.nodes()[node as usize].opcode else { unreachable!() };
                     let conditional = ![op::JMP, op::BRA, op::RET].contains(&(code as u16));
                     if !split {
-                        body.extend(phi_copies(one, conditional, &mut cells).map_err(|why| format!("{why} (block {})", one.block.0))?);
+                        body.extend(
+                            phi_copies(one, conditional, &mut cells)
+                                .map_err(|why| format!("{why} (block {})", one.block.0))?,
+                        );
                     }
                 }
                 for inst in lower(module, name, one, node, &mut values, &mut cells)? {
@@ -221,7 +234,8 @@ pub fn function_items(
             // others are blocks after the function.
             for edge in &one.edges {
                 let Some(to) = edge.to else { continue };
-                let copies = parallel_copy(&edge.copies, &mut cells).map_err(|why| format!("{why} (block {} to {})", one.block.0, to.0))?;
+                let copies = parallel_copy(&edge.copies, &mut cells)
+                    .map_err(|why| format!("{why} (block {} to {})", one.block.0, to.0))?;
                 if cells.branched_to.contains(&to.0) {
                     edges.push(Item::Label(edge_label(name, one.block.0, to.0)));
                     edges.extend(copies);
@@ -268,7 +282,8 @@ fn lay_out_frame(
                 ISD::Machine(code) if code as u16 == op::ADJCALLSTACKDOWN
             )
         })
-        // the machine node's operands are the bytes pushed, the bytes popped, then the chain
+        // the machine node's operands are the bytes pushed, the bytes popped,
+        // then the chain
         .filter_map(|(one, node)| match one.dag.nodes()[node.ops[0].node as usize].data {
             NodeData::Const { bits, .. } => Some(bits as i64),
             _ => None,
@@ -454,7 +469,8 @@ fn lower(
     let data_bits = |res: usize| n.values[res].size_in_bits();
     let at = |index: usize| n.ops[index];
     match n.opcode {
-        // the frame objects share nothing here (no stack coloring), so a lifetime marker says nothing
+        // the frame objects share nothing here (no stack coloring), so a
+        // lifetime marker says nothing
         ISD::TokenFactor | ISD::EntryToken | ISD::LifetimeStart | ISD::LifetimeEnd => Ok(Vec::new()),
         ISD::CopyFromReg => {
             let from = location(module, name, one, at(1), values, cells)?;

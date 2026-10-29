@@ -1,13 +1,15 @@
 //! A second select on a compare already made reuses its carry.
 //!
-//! `max = a > b ? b : 0; a -= max; min = a > b ? 0 : a; b -= min` compares twice because the
-//! subtraction between the selects sets the carry again. A select leaves the carry alone (loads do
-//! not touch it), so the second select moves up next to the first and reads the first compare;
-//! the second `lda a; cmp b` goes.
+//! `max = a > b ? b : 0; a -= max; min = a > b ? 0 : a; b -= min` compares
+//! twice because the subtraction between the selects sets the carry again. A
+//! select leaves the carry alone (loads do not touch it), so the second select
+//! moves up next to the first and reads the first compare; the second `lda a;
+//! cmp b` goes.
 //!
-//! DEVIATE: no counterpart in LLVM, whose x86 selects read EFLAGS once per `cmp` and whose
-//! `X86FlagsCopyLowering`/`MachineCSE` find the repeat; this target's flags are not allocated, so
-//! the repeat is found by shape here. Exit: MachineCSE over the flags register.
+//! DEVIATE: no counterpart in LLVM, whose x86 selects read EFLAGS once per
+//! `cmp` and whose `X86FlagsCopyLowering`/`MachineCSE` find the repeat; this
+//! target's flags are not allocated, so the repeat is found by shape here.
+//! Exit: MachineCSE over the flags register.
 
 use llrm_spike_mf::{Inst, Kind, MFunction, Operand, Reg};
 
@@ -20,29 +22,46 @@ fn carry_select(inst: &Inst) -> bool {
 }
 
 fn is_copy_from_a(inst: &Inst) -> bool {
-    matches!(&inst.operands[..], [Operand::Def(Reg::Virt(_)), Operand::Use(Reg::Phys(a))] if inst.kind == Kind::Copy && *a == reg::A)
+    matches!(
+        &inst.operands[..],
+        [Operand::Def(Reg::Virt(_)), Operand::Use(Reg::Phys(a))] if inst.kind == Kind::Copy && *a == reg::A
+    )
 }
 
 /// The `(lhs, rhs)` of a `lda lhs; cmp rhs` pair that ends at `at`.
-fn compare_at(insts: &[Inst], at: usize) -> Option<(Operand, Operand)> {
+fn compare_at(
+    insts: &[Inst],
+    at: usize,
+) -> Option<(Operand, Operand)> {
     let compare = insts.get(at).filter(|i| i.kind == Kind::Op("CMP"))?;
     let copy = insts.get(at.checked_sub(1)?).filter(|i| i.kind == Kind::Copy)?;
     match (&copy.operands[..], &compare.operands[..]) {
-        ([Operand::Def(Reg::Phys(a)), lhs @ Operand::Use(_)], [_, _, rhs @ Operand::Use(Reg::Virt(_))]) if *a == reg::A => {
+        ([Operand::Def(Reg::Phys(a)), lhs @ Operand::Use(_)], [_, _, rhs @ Operand::Use(Reg::Virt(_))])
+            if *a == reg::A =>
+        {
             Some((lhs.clone(), rhs.clone()))
         }
         _ => None,
     }
 }
 
-fn defines(inst: &Inst, operand: &Operand) -> bool {
+fn defines(
+    inst: &Inst,
+    operand: &Operand,
+) -> bool {
     let Operand::Use(register) = operand else { return false };
     inst.operands.iter().any(|o| matches!(o, Operand::Def(d) if d == register))
 }
 
-/// `Some(true)` if `inst` sets `a` without reading it, `Some(false)` if it reads it.
+/// `Some(true)` if `inst` sets `a` without reading it, `Some(false)` if it
+/// reads it.
 fn touches_a(inst: &Inst) -> Option<bool> {
-    let is_a = |o: &Operand| matches!(o, Operand::Use(Reg::Phys(r)) | Operand::Def(Reg::Phys(r)) if *r == reg::A);
+    let is_a = |o: &Operand| {
+        matches!(
+            o,
+            Operand::Use(Reg::Phys(r)) | Operand::Def(Reg::Phys(r)) if *r == reg::A
+        )
+    };
     let reads = inst.operands.iter().any(|o| matches!(o, Operand::Use(_)) && is_a(o));
     let sets = inst.operands.iter().any(|o| matches!(o, Operand::Def(_)) && is_a(o));
     (reads || sets).then_some(!reads)
@@ -56,7 +75,8 @@ pub fn share_compares(function: &mut MFunction<Class>) -> bool {
             let insts = &block.insts;
             for first in 1..insts.len() {
                 let Some(keys) = compare_at(insts, first) else { continue };
-                // the first compare, its select, and the copy of the select's result
+                // the first compare, its select, and the copy of the select's
+                // result
                 let (Some(select), Some(saved)) = (insts.get(first + 1), insts.get(first + 2)) else { continue };
                 if !carry_select(select) || !is_copy_from_a(saved) {
                     continue;
@@ -89,13 +109,18 @@ pub fn share_compares(function: &mut MFunction<Class>) -> bool {
                                 _ => false,
                             })
                     };
-                    // `a` is set before anything in between reads it, and nothing later reads the
+                    // `a` is set before anything in between reads it, and
+                    // nothing later reads the
                     // second compare's flags
                     let a_set_first = between.iter().find_map(touches_a).unwrap_or(true);
                     let flags_later = insts[second + 3..]
                         .iter()
-                        .take_while(|i| !i.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Phys(f)) if *f == reg::FLAGS)))
-                        .any(|i| i.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(f)) if *f == reg::FLAGS)));
+                        .take_while(|i| {
+                            !i.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Phys(f)) if *f == reg::FLAGS))
+                        })
+                        .any(|i| {
+                            i.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(f)) if *f == reg::FLAGS))
+                        });
                     if between.iter().any(moved) || !a_set_first || flags_later {
                         break;
                     }

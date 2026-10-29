@@ -64,8 +64,9 @@ fn multiply_bytes_gives_the_low_byte() {
 /// 65536 + 16960.
 #[test]
 fn multiply_words_gives_the_low_word() {
-    // 0 either side; 65535 * 65535 = 4294836225 = 65534 * 65536 + 1; 300 * 300 = 90000 = 65536 + 24464;
-    // a small multiplier stops the loop early, a multiplier with bit 15 set runs all sixteen
+    // 0 either side; 65535 * 65535 = 4294836225 = 65534 * 65536 + 1; 300 * 300
+    // = 90000 = 65536 + 24464; a small multiplier stops the loop early, a
+    // multiplier with bit 15 set runs all sixteen
     for (a, b, want) in [
         (300, 5, 1500),
         (255, 257, 65535),
@@ -105,7 +106,8 @@ fn unsigned_word_division() {
         (50000, 7, 7142, 6),
         (60000, 40000, 1, 20000),
         (65535, 256, 255, 255),
-        // a byte divisor takes the short remainder path; 129 and up carry out of the shift
+        // a byte divisor takes the short remainder path; 129 and up carry out
+        // of the shift
         (12345, 10, 1234, 5),
         (65535, 1, 65535, 0),
         (65535, 255, 257, 0),
@@ -232,8 +234,9 @@ fn long_shifts_by_a_variable() {
     assert_eq!(long("shl-0", "__ashlsi3", 0x1234_5678, 0), 0x1234_5678);
 }
 
-/// A word multiply by a small multiplier ran all sixteen iterations: 1234 * 56 took about 640
-/// cycles (bench set 2, `mul16`). It stops when the multiplier has no bits left.
+/// A word multiply by a small multiplier ran all sixteen iterations: 1234 * 56
+/// took about 640 cycles (bench set 2, `mul16`). It stops when the multiplier
+/// has no bits left.
 #[test]
 fn a_small_multiplier_stops_the_word_multiply_early() {
     let empty = common::cycles_with("mulhi-empty", "", "");

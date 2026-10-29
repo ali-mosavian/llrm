@@ -11,6 +11,8 @@
 #include "varptr.h"
 #include "rtinit.h"
 
+/* a minute of the clock's ticks, in thousandths */
+#define TICKS_PER_MINUTE 1092390L
 enum {
     LOWEST_OCTAVE = 0,
     HIGHEST_OCTAVE = 6,
@@ -21,9 +23,7 @@ enum {
     HIGHEST_TEMPO = 255,
     LONGEST_NOTE = 64,
     HIGHEST_NOTE = 84,
-    SEMITONES = 12,
-    /* a minute of the clock's ticks, in thousandths */
-    TICKS_PER_MINUTE = 1092390L
+    SEMITONES = 12
 };
 
 /* How much of a note sounds before the silence that ends it, in eighths. */

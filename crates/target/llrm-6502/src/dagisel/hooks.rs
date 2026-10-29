@@ -69,7 +69,8 @@ fn select_indirect<D: Dag>(
     results.push((offset, None));
 }
 
-/// `SelectPlain`: a pointer with no constant to add and no frame object, as itself.
+/// `SelectPlain`: a pointer with no constant to add and no frame object, as
+/// itself.
 fn select_plain<D: AddrDag>(
     dag: &mut D,
     value: SDValue,
@@ -83,8 +84,9 @@ fn select_plain<D: AddrDag>(
     true
 }
 
-/// `SelectIndexed`: `(add pointer, (zext i8 index))` as the pointer and the byte index, either
-/// operand order; a global's address is left to `SelectAbsX`.
+/// `SelectIndexed`: `(add pointer, (zext i8 index))` as the pointer and the
+/// byte index, either operand order; a global's address is left to
+/// `SelectAbsX`.
 fn select_indexed<D: Dag>(
     dag: &mut D,
     value: SDValue,
@@ -194,7 +196,8 @@ impl<D: AddrDag> Hooks<D> for MosHooks {
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool {
-        // the numbers follow the order the table first uses them in, so the name is the key
+        // the numbers follow the order the table first uses them in, so the
+        // name is the key
         let table = match self.cpu {
             Cpu::Mos6502 => mos_mos6502::COMPLEX_PATTERNS,
             Cpu::W65c02 => mos_w65c02::COMPLEX_PATTERNS,

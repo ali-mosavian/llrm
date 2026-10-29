@@ -1,8 +1,9 @@
 //! The host runtime on arm64 Linux: the headless tests of tests/qb_headless.rs
-//! built with clang for aarch64 against a private sysroot
+//! built by llrm-cc for aarch64 against a private sysroot
 //! (tools/targets/build-arm64-sysroot.sh) and run under qemu-aarch64. A machine
-//! without clang, lld or qemu fails here by name; it does not skip. An arm64
-//! Mac runs the same C natively (docs/working/qb-host.md, "Mac session").
+//! without the pinned clang, lld or qemu fails here by name; it does not skip.
+//! An arm64 Mac runs the same C natively (docs/working/qb-host.md, "Mac
+//! session").
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,6 +17,10 @@ fn root() -> &'static Path {
 }
 
 fn sysroot() -> PathBuf {
+    for tool in ["ld.lld", "qemu-aarch64"] {
+        let found = Command::new("which").arg(tool).output().is_ok_and(|out| out.status.success());
+        assert!(found, "qb_arm64 needs `{tool}` on the PATH");
+    }
     let made = Command::new(root().join("tools/targets/build-arm64-sysroot.sh"))
         .output()
         .expect("tools/targets/build-arm64-sysroot.sh runs");
@@ -43,21 +48,12 @@ fn build_and_run_with(
     out: &Path,
     environment: &[(&str, &str)],
 ) -> String {
-    let sysroot = sysroot();
-    let libc = sysroot.join("usr/aarch64-linux-gnu");
-    let gcc = sysroot.join("usr/lib/gcc-cross/aarch64-linux-gnu/15");
     let qb = root().join("runtime/qb");
-    let mut build = Command::new("clang");
-    build.args(["--target=aarch64-linux-gnu", "-fuse-ld=lld", "-static", "-std=gnu11", "-w", "-g", "-pthread"]);
-    // the root, not the libc directory: libm.a is a linker script that names
-    // /usr/aarch64-linux-gnu/lib/libm-2.42.a
-    build.arg(format!("--sysroot={}", sysroot.display())).arg(format!("-B{}", gcc.display()));
-    build
-        .arg(format!("-L{}", gcc.display()))
-        .arg(format!("-L{}", libc.join("lib").display()))
-        .arg("-isystem")
-        .arg(libc.join("include"))
-        .arg("-D__cdecl=");
+    // llrm-cc over the arm64-glibc row: the sysroot's headers, libc, libm and
+    // libgcc by path (targets.toml, tools/targets/arm64-glibc-link.sh)
+    let mut build = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
+    build.args(["-target", "arm64-glibc", "-std=gnu11", "-w", "-D__cdecl="]);
+    build.env("LLRM_ARM64_SYSROOT", sysroot());
     for include in ["posix", ".", "dev", "dev/headless", "dev/host", "../shared/posix"] {
         build.arg("-I").arg(qb.join(include));
     }
@@ -65,8 +61,8 @@ fn build_and_run_with(
         build.arg(root().join(source));
     }
     build.args(object);
-    build.arg("-lm").arg("-o").arg(out);
-    let built = build.output().expect("clang runs");
+    build.arg("-o").arg(out);
+    let built = build.output().expect("llrm-cc runs");
     assert!(built.status.success(), "{name}: {}", String::from_utf8_lossy(&built.stderr));
     let done = Command::new("qemu-aarch64")
         .arg(out)
@@ -265,7 +261,7 @@ fn a_handled_function_may_start_with_a_loop_on_arm64() {
 /// passed `i16 -1` bare: the clang-built runtime read 65535 and NIBBLES died on
 /// VIEW PRINT with "Illegal function call" on the Mac. Only a Mac can run it;
 /// this reads the text the backend gets: Darwin marks the runtime's `i16`
-/// arguments `signext`, Linux (callee extends) does not.
+/// arguments `signext` in the declaration, Linux (callee extends) does not.
 #[test]
 fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
     let dir = std::env::temp_dir().join(format!("signext_{}", std::process::id()));
@@ -285,8 +281,14 @@ fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         std::fs::read_to_string(path).unwrap()
     };
-    assert!(text("darwin").contains("@B_PEI2(i16 signext -1)"));
-    assert!(text("linux").contains("@B_PEI2(i16 -1)"));
+    // The caller extends a 16-bit argument wherever the word is wider (the HIR
+    // marks the call); Darwin adds the mark to the declaration and to any
+    // call the HIR left bare, and none twice.
+    let darwin = text("darwin");
+    assert!(darwin.contains("@B_PEI2(i16 signext -1)") && !darwin.contains("signext signext"), "{darwin}");
+    assert!(darwin.contains("declare void @B_PEI2(i16 signext)"), "{darwin}");
+    let linux = text("linux");
+    assert!(linux.contains("declare void @B_PEI2(i16)"), "{linux}");
     std::fs::remove_dir_all(&dir).ok();
 }
 

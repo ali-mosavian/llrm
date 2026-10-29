@@ -34,8 +34,11 @@ fn a_call_passes_a_byte_in_rc2_and_a_word_in_rs2() {
         &mut dag,
         entry,
         callee,
-        &[Out { value: a, ext: Ext::Any, pointer: false }, Out { value: b, ext: Ext::Any, pointer: false }],
-        &[In { vt: EVT::I16, pointer: false }],
+        &[
+            Out { value: a, ext: Ext::Any, pointer: false, arg_vt: EVT::I8, split: false, variadic: false },
+            Out { value: b, ext: Ext::Any, pointer: false, arg_vt: EVT::I16, split: false, variadic: false },
+        ],
+        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false }],
     )
     .unwrap();
 
@@ -59,8 +62,16 @@ fn a_call_passes_a_byte_in_rc2_and_a_word_in_rs2() {
 fn a_fourth_word_is_stored_on_the_soft_stack() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
-    let words: Vec<Out> =
-        (1..=4).map(|n| Out { value: dag.get_register(EVT::I16, n), ext: Ext::Any, pointer: false }).collect();
+    let words: Vec<Out> = (1..=4)
+        .map(|n| Out {
+            value: dag.get_register(EVT::I16, n),
+            ext: Ext::Any,
+            pointer: false,
+            arg_vt: EVT::I16,
+            split: false,
+            variadic: false,
+        })
+        .collect();
     let callee = dag.get_global_address(EVT::I16, 7, 0);
 
     let (chain, _) = lower_call(&mut dag, entry, callee, &words, &[]).unwrap();
@@ -90,9 +101,14 @@ fn a_fourth_formal_word_is_loaded_from_a_fixed_object() {
         created.len() as i32
     };
 
-    let args =
-        lower_formal_arguments(&mut dag, entry, &[In { vt: EVT::I16, pointer: false }; 4], &mut fixed, &mut |_| 4096)
-            .unwrap();
+    let args = lower_formal_arguments(
+        &mut dag,
+        entry,
+        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false }; 4],
+        &mut fixed,
+        &mut |_| 4096,
+    )
+    .unwrap();
 
     assert_eq!(created, [(2, 0, true)]);
     assert_eq!((dag.opcode(args[3]), dag.value_type(args[3])), (ISD::Load, EVT::I16));
@@ -111,7 +127,10 @@ fn formal_arguments_are_live_in_at_rc2_and_rs2() {
         4095 + live_ins.len() as u32
     };
 
-    let ins = [In { vt: EVT::I8, pointer: false }, In { vt: EVT::I16, pointer: false }];
+    let ins = [
+        In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false },
+        In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false },
+    ];
     let args = lower_formal_arguments(&mut dag, entry, &ins, &mut |_, _, _| 0, &mut live_in).unwrap();
 
     assert_eq!(live_ins, [reg::RC2, reg::RS2]);
@@ -127,7 +146,12 @@ fn a_returned_byte_is_copied_to_a() {
     let entry = dag.entry_node();
     let v = dag.get_register(EVT::I8, 1);
 
-    let ret = lower_return(&mut dag, entry, &[Out { value: v, ext: Ext::Any, pointer: false }]).unwrap();
+    let ret = lower_return(
+        &mut dag,
+        entry,
+        &[Out { value: v, ext: Ext::Any, pointer: false, arg_vt: EVT::I8, split: false, variadic: false }],
+    )
+    .unwrap();
 
     assert_eq!(dag.opcode(ret), RET_GLUE);
     assert_eq!(phys(&dag, dag.operand(ret, 1)), reg::A);

@@ -64,15 +64,19 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
         }
     }
-    // a sign-extending load is a load and a sign extension: no instruction reads one
+    // a sign-extending load is a load and a sign extension: no instruction
+    // reads one
     for (vt, mem) in [(MVT::I16, MVT::I8), (MVT::I32, MVT::I8), (MVT::I32, MVT::I16), (MVT::I64, MVT::I8)]
         .into_iter()
         .chain([(MVT::I64, MVT::I16), (MVT::I64, MVT::I32)])
     {
         tl.set_load_ext_action(LoadExt::SExtLoad, vt, mem, Action::Expand);
     }
-    // and a zero- or any-extending one to a type that is not a register is not formed, to be split again
-    for (vt, mem) in [(MVT::I32, MVT::I8), (MVT::I32, MVT::I16), (MVT::I64, MVT::I8), (MVT::I64, MVT::I16), (MVT::I64, MVT::I32)] {
+    // and a zero- or any-extending one to a type that is not a register is not
+    // formed, to be split again
+    for (vt, mem) in
+        [(MVT::I32, MVT::I8), (MVT::I32, MVT::I16), (MVT::I64, MVT::I8), (MVT::I64, MVT::I16), (MVT::I64, MVT::I32)]
+    {
         for ext in [LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, mem, Action::Expand);
         }
@@ -100,9 +104,11 @@ pub fn target_lowering() -> TargetLowering {
     set(&[Rotl, Rotr], Action::Custom);
     set(&[ZeroExtend, AnyExtend], Action::Custom);
     set(&[SignExtend], Action::Custom);
-    // a sign extension in a register is a pair of shifts (a negated bit for a bit)
+    // a sign extension in a register is a pair of shifts (a negated bit for a
+    // bit)
     set(&[SignExtendInReg], Action::Expand);
-    // an undefined value is a zero of the type (the legalizer builds it) until the MIR has `undef`
+    // an undefined value is a zero of the type (the legalizer builds it) until
+    // the MIR has `undef`
     set(&[Undef, Poison], Action::Expand);
     tl.set_operation_action(Undef, MVT::I1, Action::Expand);
     tl.set_operation_action(Poison, MVT::I1, Action::Expand);
@@ -149,8 +155,9 @@ impl Hooks for MosLowering {
     }
 }
 
-/// `expandROT`: `rotl x, c` is `(x << c) | (x >> (w - c))`, the amounts taken modulo the width. A
-/// constant amount is two shifts by constants (the first is a rotate by nothing when the amount is 0).
+/// `expandROT`: `rotl x, c` is `(x << c) | (x >> (w - c))`, the amounts taken
+/// modulo the width. A constant amount is two shifts by constants (the first is
+/// a rotate by nothing when the amount is 0).
 fn lower_rotate(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -230,7 +237,8 @@ fn lower_extend(
         return node;
     }
     let vt = dag.value_type(node);
-    // a sign-extended bit is all ones (`select c, 1, 2` reaches here as `sext(c) + 2`)
+    // a sign-extended bit is all ones (`select c, 1, 2` reaches here as
+    // `sext(c) + 2`)
     let width = vt.size_in_bits();
     let set = if dag.opcode(node) == ISD::SignExtend { (1u128 << width) - 1 } else { 1 };
     let (one, zero) = (dag.get_constant(set, vt), dag.get_constant(0, vt));
@@ -292,8 +300,9 @@ fn translate_cc(
 ) -> (u128, SDValue, SDValue) {
     use CondCode::*;
     let against_zero = dag.is_null_constant(op1);
-    // `x > C` is `x >= C + 1`: the constant stays the right-hand side, an immediate of the compare
-    // (AArch64's `getAArch64Cmp` adjusts the immediate the same way)
+    // `x > C` is `x >= C + 1`: the constant stays the right-hand side, an
+    // immediate of the compare (AArch64's `getAArch64Cmp` adjusts the
+    // immediate the same way)
     let width = dag.value_type(op0).size_in_bits();
     if let (SetUGt | SetULe | SetGt | SetLe, Some(c)) = (cc, dag.constant(op1)) {
         let top = match cc {
@@ -302,7 +311,13 @@ fn translate_cc(
         };
         if c != top {
             let next = dag.get_constant((c + 1) & ((1u128 << width) - 1), dag.value_type(op0));
-            let wider = if matches!(cc, SetUGt | SetGt) { if cc == SetUGt { SetUGe } else { SetGe } } else if cc == SetULe { SetULt } else { SetLt };
+            let wider = if matches!(cc, SetUGt | SetGt) {
+                if cc == SetUGt { SetUGe } else { SetGe }
+            } else if cc == SetULe {
+                SetULt
+            } else {
+                SetLt
+            };
             return translate_cc(dag, wider, op0, next);
         }
     }
@@ -336,8 +351,8 @@ fn lower_setcc(
     let (mut op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
     let mut cc = cond_of(dag, dag.operand(node, 2));
     if dag.value_type(op0) == EVT::I1 {
-        // Compare the bits as bytes of 0 or 1. A signed order is the unsigned one reversed, since
-        // a set bit is -1.
+        // Compare the bits as bytes of 0 or 1. A signed order is the unsigned
+        // one reversed, since a set bit is -1.
         (op0, op1) = (condition_byte(dag, op0), condition_byte(dag, op1));
         cc = match cc {
             CondCode::SetLt => CondCode::SetUGt,
@@ -394,7 +409,8 @@ fn condition_byte(
             },
             ISD::Truncate if matches!(dag.value_type(dag.operand(value, 0)), EVT::I8 | EVT::I16) => {
                 let wide = dag.operand(value, 0);
-                let byte = if dag.value_type(wide) == EVT::I8 { wide } else { dag.get_node(ISD::Truncate, EVT::I8, &[wide]) };
+                let byte =
+                    if dag.value_type(wide) == EVT::I8 { wide } else { dag.get_node(ISD::Truncate, EVT::I8, &[wide]) };
                 let one = dag.get_constant(1, EVT::I8);
                 dag.get_node(ISD::And, EVT::I8, &[byte, one])
             }

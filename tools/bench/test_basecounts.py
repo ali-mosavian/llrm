@@ -76,6 +76,20 @@ def test_the_base_is_measured_once_per_tree_and_a_missing_level_is_measured_agai
     assert json.loads((tmp_path / "ts1-own.json").read_text())["rows"]["fib/c/Os"]["instructions"] == 1
 
 
+def test_an_expected_output_or_a_generated_listing_added_to_a_program_does_not_make_it_a_different_program(tmp_path):
+    """b7f86c5d53 added `<name>.bcout` to 11 benchmarks and d405319be6 a `grep.asm`: all 12 hashed differently from main, counted as edited, and
+    the judge skipped every row of them (182 rows over main unseen, 0 problems printed). Only what the compilers read is the program."""
+    (tmp_path / "bench/fib").mkdir(parents=True)
+    (tmp_path / "bench/fib/bench.toml").write_text("repetitions = 1\n")
+    (tmp_path / "bench/fib/fib.c").write_text("int a;\n")
+    first = bc.programs(tmp_path)
+    for name in ("fib.bcout", "fib.out", "fib.ci.out", "fib.asm"):
+        (tmp_path / "bench/fib" / name).write_text("5\n")
+        assert bc.programs(tmp_path) == first, f"{name} is not the program"
+    (tmp_path / "bench/fib/bench.toml").write_text("repetitions = 2\n")
+    assert bc.programs(tmp_path) != first, "a setting is"
+
+
 def test_a_program_that_differs_between_the_base_and_the_head_is_not_judged_and_the_baseline_file_is_not_part_of_it(tmp_path):
     """The base is measured by its own harness and programs: a row of an edited program compares two programs, not two compilers."""
     (tmp_path / "bench/fib").mkdir(parents=True)
@@ -207,3 +221,96 @@ def test_stale_waivers_are_one_line_of_file_names():
     stale = [f"a.toml: row{i} instructions to {i}" for i in range(29)] + ["b.toml: x instructions to 1"]
     assert bc.stale_summary(stale) == ["BASE-STALE 30 waivers in 2 files, delete them: a.toml b.toml"]
     assert bc.stale_summary([]) == []
+
+
+SCALAR_BASE = {"bq16": 165}
+
+
+def test_the_scalar_o2_waiver_passes_its_size_and_fails_one_byte_more():
+    """parity/scalar bq16 -O2 is main's loop again after the m16 unroll override (353 B to 171, main 165): waived at exactly 171, so one more byte fails."""
+    waivers = bc.waivers()
+    base = {("parity/scalar", lang, "O2"): {"code_bytes": was} for lang, was in SCALAR_BASE.items()}
+    at = {"bq16": 171}
+    for lang, size in at.items():
+        key = ("parity/scalar", lang, "O2")
+        assert bc.judge({key: {"code_bytes": size}}, base, waivers)[0] == [], lang
+        worse = bc.judge({key: {"code_bytes": size + 1}}, base, waivers)[0]
+        assert worse == [(f"parity/scalar {lang} -O2", "code_bytes", SCALAR_BASE[lang], size + 1)], lang
+
+
+def test_the_scalar_waivers_pass_their_limits_and_fail_one_more():
+    """parity/scalar bq16 data 21 to 23 at -O2 and -Os, and -Os code 165 to 171 (LU2 +3, DAG default +4, the cint(val) data cell): waived at exactly those counts."""
+    waivers = bc.waivers()
+    for opt, rows in {"O2": {"data_bytes": (21, 23)}, "Os": {"code_bytes": (165, 171), "data_bytes": (21, 23)}}.items():
+        key = ("parity/scalar", "bq16", opt)
+        base = {key: {counter: was for counter, (was, _) in rows.items()}}
+        assert bc.judge({key: {counter: to for counter, (_, to) in rows.items()}}, base, waivers)[0] == [], opt
+        for counter, (was, to) in rows.items():
+            at = {c: t for c, (_, t) in rows.items()} | {counter: to + 1}
+            assert bc.judge({key: at}, base, waivers)[0] == [(f"parity/scalar bq16 -{opt}", counter, was, to + 1)], (opt, counter)
+
+
+def test_a_base_stored_under_the_old_hash_is_judged_by_the_new_one_not_skipped_whole(tmp_path):
+    """programs() stopped hashing `.out` files; a base cached under the old hash then differed from the head in EVERY program (main has an `.out` for
+    each): `same` was empty, 424 measurements judged nothing and 218 waivers read stale, with 0 problems printed. A cache that does not say
+    which hash it holds is re-hashed from the base commit."""
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "bench/fib").mkdir(parents=True)
+    (tmp_path / "bench/fib/bench.toml").write_text("repetitions = 1\n")
+    (tmp_path / "bench/fib/fib.c").write_text("int a;\n")
+    (tmp_path / "bench/fib/fib.out").write_text("5\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    sha = git("rev-parse", "HEAD")
+    old = hashlib_of_every_file(tmp_path / "bench/fib")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / f"{sha}-own.json").write_text(json.dumps({"rows": {"fib/c/O2": {"instructions": 1}}, "programs": {"fib": old}}))
+    (tmp_path / "bench/fib/fib.bcout").write_text("5\n")
+    (tmp_path / "bench/fib/fib.out").write_text("6\n")
+    _, hashes = bc.base_counts(sha, ["O2"], lambda s: s, None, None, cache=cache, root=tmp_path)
+    assert hashes == bc.programs(tmp_path), "the head's outputs changed and nothing it compiles"
+
+
+def hashlib_of_every_file(directory):
+    import hashlib
+
+    digest = hashlib.sha256()
+    for one in sorted(directory.iterdir()):
+        digest.update(one.name.encode() + b"\0" + one.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+def test_the_judge_fails_a_run_that_judged_nothing_and_a_program_that_yielded_no_row():
+    """The state of the run above: 424 measurements, `same` empty, no row compared, 0 problems. Every program the head and base share must yield a
+    judged row, and the run must say how many rows it judged and which programs it left out as edited."""
+    base = {("fib", "c", "O2"): row(100), ("sieve", "c", "O2"): {"error": "x"}, ("edited", "c", "O2"): row(1)}
+    got = {("fib", "c", "O2"): row(100), ("sieve", "c", "O2"): row(7), ("edited", "c", "O2"): row(9)}
+    judged, programs, left_out, problems = bc.coverage(got, base, {"fib", "sieve"})
+    assert (judged, programs, left_out) == (1, 1, ["edited"])
+    assert problems == ["COVERAGE sieve: no row was judged (rows skipped: error)"]
+    assert bc.coverage(got, base, set())[3] == ["COVERAGE: no row was judged: no program is the same in the base and the head"]
+    assert bc.coverage(got, base, {"fib", "edited"})[3] == []
+
+
+def test_a_program_edited_since_the_base_is_judged_against_the_base_compiler_on_its_edited_sources(tmp_path):
+    """jpeg_single and 8 more were left out of the judge (their sources differ from main's): their rows grew 11693 vs 6016 unseen. Now the
+    base compiler measures the head's sources and those counts are the base; a row it cannot build is named, not judged."""
+    base = {FIB: row(100), ("jpeg", "nib", "O2"): row(50)}
+    asked = []
+
+    def measure(names):
+        asked.append(names)
+        return {("jpeg", "nib", "O2"): row(60), ("jpeg", "c", "O2"): {"error": "no front end"}}
+
+    got, same, unbuilt = bc.with_edited(base, {"fib": "a", "jpeg": "old"}, {"fib": "a", "jpeg": "new"}, ["O2"], measure, tmp_path, "t")
+    assert same == {"fib", "jpeg"} and asked == [["jpeg"]] and unbuilt == ["jpeg c -O2"]
+    worse, _, _ = bc.judge({FIB: row(100), ("jpeg", "nib", "O2"): row(70)}, got, [], same)
+    assert worse == [("jpeg nib -O2", "instructions", 60, 70)]
+    bc.with_edited(base, {"jpeg": "old"}, {"jpeg": "new"}, ["O2"], measure, tmp_path, "t")
+    assert asked == [["jpeg"]], "measured once per tree and edit"

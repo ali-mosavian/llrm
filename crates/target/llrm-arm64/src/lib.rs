@@ -1,6 +1,8 @@
 //! The arm64 target. Its descriptions are the files beside this one.
 
 pub mod cc;
+pub mod cfi;
+pub mod dag;
 pub mod data;
 pub mod divconst;
 pub mod driver;

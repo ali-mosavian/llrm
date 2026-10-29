@@ -36,9 +36,15 @@ fn test_a_loop_exit_at_minus_one_reads_the_carry_of_the_add() {
     let ours = common::pin::loops(&asm, Some("g"));
     let pin = common::pin::listing(Path::new(&source), &flags);
     let pins = common::pin::loops(&pin, Some("g"));
+    // The pin stores each argument into the reserved call frame (`movl %edi,
+    // (%esp)`); ours pushes it and cleans up with `add esp, 4` (DEVIATE CF1,
+    // docs/working/ci.md call-frame-reserve): a push and an add per call, two
+    // calls here.
+    let calls = 2;
     assert!(
-        pins.len() == 1 && ours.len() == 1 && ours[0] <= pins[0],
-        "loops of {ours:?} instructions, the pin's llc has {pins:?}: {asm}"
+        pins.len() == 1 && ours.len() == 1 && ours[0] <= pins[0] + 2 * calls,
+        "loops of {ours:?} instructions, the pin's llc has {pins:?} (+{} for CF1): {asm}",
+        2 * calls
     );
 }
 

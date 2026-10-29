@@ -261,6 +261,15 @@ pub fn lower_return(
 pub struct MosCalling;
 
 impl TargetCalling for MosCalling {
+    fn places_attribute(
+        &self,
+        name: &str,
+    ) -> bool {
+        // a hidden result pointer is the first parameter, a `byval` one the
+        // address of the caller's copy
+        matches!(name, "sret" | "byval")
+    }
+
     fn byval_by_reference(&self) -> bool {
         true
     }

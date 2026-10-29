@@ -128,7 +128,8 @@ fn a_phi_copies_before_the_terminator() {
 
 thread_local!(static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
 
-/// `any` is called once for each colouring of the function, so it counts the rounds.
+/// `any` is called once for each colouring of the function, so it counts the
+/// rounds.
 struct Spilly;
 
 impl Target for Spilly {
@@ -477,9 +478,10 @@ fn a_phi_copy_is_not_hoisted_above_the_definition_of_its_source() {
     assert!(defines < reads, "{insts:?}");
 }
 
-/// Twenty values live together on two registers needed one colouring for each spill, so the
-/// allocation of a long function took the square of its spills (a generated 2500-instruction
-/// function took minutes). Every value that fails is spilled in the round that finds it.
+/// Twenty values live together on two registers needed one colouring for each
+/// spill, so the allocation of a long function took the square of its spills (a
+/// generated 2500-instruction function took minutes). Every value that fails is
+/// spilled in the round that finds it.
 #[test]
 fn values_that_fail_together_spill_in_one_round() {
     let n = 20u32;
@@ -490,4 +492,19 @@ fn values_that_fail_together_spill_in_one_round() {
     assert!(slots.len() <= n as usize, "{} slots for {n} values", slots.len());
     let rounds = ROUNDS.with(|rounds| rounds.get());
     assert!(rounds <= 12, "{rounds} colourings for {n} values");
+}
+
+/// Twenty values live together on two registers. A colouring round named only
+/// the first value it could not fit, so spilling took a round for each spill
+/// and the allocation of a long function took the square of its spills (a
+/// generated 2500-instruction function took minutes). A round names every value
+/// that fails.
+#[test]
+fn a_colouring_round_names_every_value_it_cannot_fit() {
+    let n = 20u32;
+    let mut insts: Vec<Inst> = (0..n).map(|i| op("def", vec![Operand::Def(v(i))])).collect();
+    insts.extend((0..n).map(|i| use1(v(i))));
+    let function = function(insts, n as usize);
+    let failures = GraphColoring::<Spilly>::default().colour(&function).expect_err("two registers cannot hold twenty");
+    assert!(failures.len() >= 10, "{} failures named", failures.len());
 }

@@ -180,19 +180,27 @@ fn steps(cpu: Cpu) -> String {
 /// place, and on the 65C02 `inc a`/`dec a` for a value that is in `a`. Both
 /// the `sub 1` and the `add -1` forms, and a wrap at 255 and at 0, run on
 /// sim65 and sim65c02. countdown(5) = 5 * 3 = 15; wrap(15) = 16 & 15 = 0;
-/// wrap(255) = 0 & 15 = 0; wrap(6) = 7; drop(0) = 255 | 64 = 255; drop(10) = 9 | 64 = 73;
-/// a byte loaded through a pointer, stepped and stored back (g = 7): 8 and 6.
+/// wrap(255) = 0 & 15 = 0; wrap(6) = 7; drop(0) = 255 | 64 = 255; drop(10) = 9
+/// | 64 = 73; a byte loaded through a pointer, stepped and stored back (g = 7):
+/// 8 and 6.
 #[test]
 fn a_step_of_one_is_done_in_place() {
     for (cpu, target) in [(Cpu::Mos6502, "sim6502"), (Cpu::W65c02, "sim65c02")] {
         let text = steps(cpu);
-        // in a register or a cell a step is one instruction; a value in `a` on NMOS has no better than adc/sbc
+        // in a register or a cell a step is one instruction; a value in `a` on
+        // NMOS has no better than adc/sbc
         let registers = text.split(".export bumpp").next().unwrap();
         assert!(!registers.contains("adc #1") && !registers.contains("sbc #1"), "{target}:\n{text}");
         let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
-        for (function, arg, want) in
-            [("countdown", 5, 15), ("countdown", 1, 3), ("wrap", 15, 0), ("wrap", 255, 0), ("wrap", 6, 7), ("drop", 0, 255), ("drop", 10, 73)]
-        {
+        for (function, arg, want) in [
+            ("countdown", 5, 15),
+            ("countdown", 1, 3),
+            ("wrap", 15, 0),
+            ("wrap", 255, 0),
+            ("wrap", 6, 7),
+            ("drop", 0, 255),
+            ("drop", 10, 73),
+        ] {
             let main = format!("  lda #{arg}\n  sta rc2\n  jsr {function}\n");
             let got = common::run_on(target, &format!("step-{function}-{arg}"), &main, &text).0;
             assert_eq!(got, want, "{function}({arg}) on {target}");

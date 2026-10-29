@@ -13,6 +13,8 @@ use crate::refused;
 const DW_CFA_ADVANCE_LOC: u8 = 0x40;
 const DW_CFA_OFFSET: u8 = 0x80;
 const DW_CFA_RESTORE: u8 = 0xC0;
+const DW_CFA_OFFSET_EXTENDED: u8 = 0x05;
+const DW_CFA_RESTORE_EXTENDED: u8 = 0x06;
 const DW_CFA_ADVANCE_LOC1: u8 = 0x02;
 const DW_CFA_ADVANCE_LOC2: u8 = 0x03;
 const DW_CFA_ADVANCE_LOC4: u8 = 0x04;
@@ -75,9 +77,11 @@ pub(crate) fn changes(
         if !from.saved.iter().any(|(one, was)| one == register && was == at) {
             let register = number(register)?;
             if register >= 0x40 {
-                return refused(format!("register {register} is past the short form of DW_CFA_offset"));
+                buf.u8(DW_CFA_OFFSET_EXTENDED);
+                buf.uleb(register);
+            } else {
+                buf.u8(DW_CFA_OFFSET | register as u8);
             }
-            buf.u8(DW_CFA_OFFSET | register as u8);
             buf.uleb((at / alignment) as u64);
         }
     }
@@ -85,9 +89,11 @@ pub(crate) fn changes(
         if !to.saved.iter().any(|(one, _)| one == register) {
             let register = number(register)?;
             if register >= 0x40 {
-                return refused(format!("register {register} is past the short form of DW_CFA_restore"));
+                buf.u8(DW_CFA_RESTORE_EXTENDED);
+                buf.uleb(register);
+            } else {
+                buf.u8(DW_CFA_RESTORE | register as u8);
             }
-            buf.u8(DW_CFA_RESTORE | register as u8);
         }
     }
     Ok(())

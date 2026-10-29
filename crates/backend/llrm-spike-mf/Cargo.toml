@@ -7,3 +7,4 @@ description = "Spike machine function and graph-colouring allocator shared by th
 
 [dependencies]
 llrm-lir = { workspace = true }
+llrm-mir = { workspace = true }

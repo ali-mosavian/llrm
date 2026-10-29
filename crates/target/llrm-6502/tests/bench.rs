@@ -14,11 +14,10 @@
 
 mod common;
 
-use common::pipeline::{datalayout, reachable_runtime, sanitize, tool};
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use common::pipeline::{datalayout, reachable_runtime, sanitize, tool};
 use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::emit::equates;
@@ -30,7 +29,8 @@ const BUF: [u8; 16] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3];
 /// The loop's `dec cnt` (6) and taken `bne` (3).
 const LOOP_CYCLES: i64 = 9;
 
-/// An argument: a byte, a word, or the address of a driver symbol plus an offset.
+/// An argument: a byte, a word, or the address of a driver symbol plus an
+/// offset.
 #[derive(Clone, Copy)]
 enum Arg {
     B(u16),
@@ -92,9 +92,10 @@ const KERNELS2: &[Kernel] = &[
     k("schr", &[P("str", 0), B(111)], false, 4),
 ];
 
-/// The C of `lz4.s` on `lz`, decompressing to `lzout` (the answer is the length written; `lz4c` also
-/// sums the bytes written, so a wrong byte shows), and loops that keep several variables live in
-/// registers across the iteration; expected values from a Python model.
+/// The C of `lz4.s` on `lz`, decompressing to `lzout` (the answer is the length
+/// written; `lz4c` also sums the bytes written, so a wrong byte shows), and
+/// loops that keep several variables live in registers across the iteration;
+/// expected values from a Python model.
 const KERNELS3: &[Kernel] = &[
     k("lz4", &[P("lz", 0), P("lzout", 0), W(634)], true, 634),
     k("lz4c", &[P("lz", 0), P("lzout", 0), W(634)], true, 52785),
@@ -110,7 +111,6 @@ fn work(name: &str) -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
-
 
 /// What one build reports.
 struct Built {
@@ -192,18 +192,20 @@ fn driver(
     s.push_str("  rts\n.segment \"DATA\"\nbuf:\n_buf:\n");
     s.push_str(&format!("  .byte {}\n", BUF.map(|b| b.to_string()).join(",")));
     s.push_str("str:\n_str:\n  .byte \"hello world\",0\ntab:\n_tab:\n  .byte 2,5,8,11,14,17,20,23\n");
-    // An LZ4 block built from plaintext rules (not by any decoder): "abc" + a 4-byte match at distance
-    // 3, "d" + 5 at distance 2, 20 literals (length extension) + a 300-byte match at distance 7 (extension
-    // 255 and more, overlapping), "xyz" + a match of exactly 19 (extension 0), 270 literals + 6 at
-    // distance 1, and the last literals "end": 634 bytes whose Fletcher sum is 52785.
+    // An LZ4 block built from plaintext rules (not by any decoder): "abc" + a
+    // 4-byte match at distance 3, "d" + 5 at distance 2, 20 literals
+    // (length extension) + a 300-byte match at distance 7 (extension
+    // 255 and more, overlapping), "xyz" + a match of exactly 19 (extension 0),
+    // 270 literals + 6 at distance 1, and the last literals "end": 634
+    // bytes whose Fletcher sum is 52785.
     s.push_str(&format!("lz:\n_lz:\n  .byte {LZ}\n.export lz, _lz\n"));
     s.push_str(".export str, _str, tab, _tab, lzout, _lzout\n");
     s.push_str(".segment \"BSS\"\ncnt: .res 1\nlzout:\n_lzout: .res 640\n");
     s
 }
 
-
-/// A tag ending in `m` builds for the 65C02 (`sim65c02`), any other for the NMOS 6502.
+/// A tag ending in `m` builds for the 65C02 (`sim65c02`), any other for the
+/// NMOS 6502.
 fn cmos(tag: &str) -> bool {
     tag.split('-').next().is_some_and(|t| t.ends_with('m'))
 }
@@ -239,13 +241,15 @@ fn run_sim(bin: &Path) -> Result<(i32, i64), String> {
 struct Row {
     /// The linked program's bytes, library routines the code calls included.
     bytes: i64,
-    /// The function's own code: the object's CODE segment, no library. Equal to `bytes` when it calls none.
+    /// The function's own code: the object's CODE segment, no library. Equal to
+    /// `bytes` when it calls none.
     body: i64,
     cycles: i64,
     bss: usize,
 }
 
-/// The CODE segment of ca65 text `file` in `dir`, assembled alone (`od65 --dump-segsize`).
+/// The CODE segment of ca65 text `file` in `dir`, assembled alone (`od65
+/// --dump-segsize`).
 fn code_bytes(
     dir: &Path,
     file: &str,
@@ -322,9 +326,9 @@ fn cc65_row(
     Ok(row)
 }
 
-
-/// Stands in for the 6502 override-table entry for loop unrolling: bytes over speed on an 8-bit
-/// target, so no full or partial unroll (the table moves these to `opt`'s pipeline entry unchanged).
+/// Stands in for the 6502 override-table entry for loop unrolling: bytes over
+/// speed on an 8-bit target, so no full or partial unroll (the table moves
+/// these to `opt`'s pipeline entry unchanged).
 const UNROLL: [&str; 2] = ["-unroll-threshold=0", "-unroll-full-max-count=0"];
 
 fn ours_row(
@@ -387,7 +391,14 @@ fn ours_row(
     let cpu = if cmos(tag) { Cpu::W65c02 } else { Cpu::Mos6502 };
     let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let selection = select_function(&module, name, cpu)?;
-        { let mut selection = selection; selection.zero_page = Platform::parse(SIM65).unwrap().zero_page; if tag.starts_with("os") { selection.tuning = llrm_6502::alloc::Tuning::SIZE; } module_text(&module, &[(name, &selection)]).map(|texts| texts.concat()) }
+        {
+            let mut selection = selection;
+            selection.zero_page = Platform::parse(SIM65).unwrap().zero_page;
+            if tag.starts_with("os") {
+                selection.tuning = llrm_6502::alloc::Tuning::SIZE;
+            }
+            module_text(&module, &[(name, &selection)]).map(|texts| texts.concat())
+        }
     }));
     let path = {
         let selection = select_function(&module, name, cpu).map_err(|e| format!("{e:?}"))?;
@@ -417,8 +428,9 @@ fn ours_row(
     Ok(Row { body: i64::from(alone.bytes), ..row })
 }
 
-/// cc65's hand-written `libsrc/common/lz4.s` (a162565e) as the best case for the same C: wrapped to
-/// return the length written, and linked with the cc65 library routines it calls (counted).
+/// cc65's hand-written `libsrc/common/lz4.s` (a162565e) as the best case for
+/// the same C: wrapped to return the length written, and linked with the cc65
+/// library routines it calls (counted).
 fn hand_row(kernel: &Kernel) -> Result<Row, String> {
     let dir = work(kernel.name);
     let hand = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench/lz4.s")).unwrap();
@@ -439,7 +451,8 @@ fn table3() {
     };
     for kernel in KERNELS3 {
         let hand = if kernel.name == "lz4" { hand_row(kernel) } else { Err("no hand-written version".into()) };
-        let rows = [cc65_row(kernel, &["-O"], "c1"), hand, ours_row(kernel, "-O2", "o2"), ours_row(kernel, "-O2", "o2m")];
+        let rows =
+            [cc65_row(kernel, &["-O"], "c1"), hand, ours_row(kernel, "-O2", "o2"), ours_row(kernel, "-O2", "o2m")];
         for row in rows.iter().filter(|row| !matches!(row, Err(why) if why.starts_with("no hand"))) {
             if let Err(why) = row {
                 eprintln!("{}: {why}", kernel.name);
@@ -455,8 +468,7 @@ fn table(
     kernels: &[Kernel],
     file: &str,
 ) {
-    let mut out =
-        String::from(
+    let mut out = String::from(
         "| kernel | cc65 | cc65 -O | ours (opt -O2 IR) | ours (opt -Os IR) | cc65 -O 65C02 | ours 65C02 |\n|---|---|---|---|---|---|---|\n",
     );
     let cell = |row: &Result<Row, String>| match row {

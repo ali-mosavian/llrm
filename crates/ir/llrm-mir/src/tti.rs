@@ -67,6 +67,23 @@ impl CostKind {
     }
 }
 
+/// `TTI::AddressingModeKind`: the indexed addressing modes loop strength
+/// reduction favors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AddressingMode {
+    None,
+    PreIndexed,
+    PostIndexed,
+    All,
+}
+
+impl AddressingMode {
+    /// `AMK & AMK_PostIndexed`.
+    pub fn has_post_indexed(self) -> bool {
+        matches!(self, AddressingMode::PostIndexed | AddressingMode::All)
+    }
+}
+
 /// A scalar type as the cost model sees it (T1: vectors are not modelled).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ty {
@@ -388,6 +405,18 @@ pub trait Tti {
         None
     }
 
+    /// The target's `DefaultThreshold` for the inliner (its tuning table);
+    /// none: the pass's own.
+    fn inline_threshold_override(&self) -> Option<i64> {
+        None
+    }
+
+    /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
+    /// unroll (its tuning table); none: the pass's own.
+    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
+        (None, None)
+    }
+
     /// `getUnrollingPreferences` given the loop's shape, which targets read
     /// (nesting depth, exits); by default the loop-blind
     /// `get_unrolling_preferences`.
@@ -590,6 +619,28 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// `getPreferredAddressingMode`: which indexed addressing LSR favors.
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        AddressingMode::None
+    }
+
+    /// `isIndexedLoadLegal(MIM_PostInc, ty)`: a load that steps its pointer by
+    /// the access size after it (`(An)+`).
+    fn is_post_inc_load_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
+    /// `isIndexedStoreLegal(MIM_PostInc, ty)`.
+    fn is_post_inc_store_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
     /// `isNumRegsMajorCostOfLSR`.
     fn is_num_regs_major_cost_of_lsr(&self) -> bool {
         true
@@ -603,6 +654,15 @@ pub trait Tti {
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU5: whether a formula whose base register is a non-affine
+    /// addrec of an enclosing loop is charged the induction variables its
+    /// expansion keeps live across that loop (one for each order past the
+    /// first), not one register. The pin charges one and survives on 7
+    /// registers; with 6 they spill every outer iteration.
+    fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
         false
     }
 
