@@ -374,7 +374,14 @@ impl Builder {
 
     /// `COPY a, lhs; CMP a, rhs` again, as the flags' producer: the operands
     /// must hold what they held at the first compare.
-    fn redo_compare(&mut self) -> Result<(), Unsupported> {
+    ///
+    /// `code` is the condition its reader tests (`cond`): MI and PL against a
+    /// word zero read the sign of the high byte, and the low byte and the
+    /// borrow cannot change it.
+    fn redo_compare(
+        &mut self,
+        code: i64,
+    ) -> Result<(), Unsupported> {
         let Compare { a, b, word, zero } =
             self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
         if self.version(&a.0) != a.1 || self.version(&b.0) != b.1 {
@@ -403,6 +410,14 @@ impl Builder {
             );
             cmp.sets_flags = true;
             self.push(cmp);
+            return Ok(());
+        }
+        if word && matches!(code, 4 | 5) && self.word_constant(&b.0) == Some([0, 0]) {
+            let (_, ah) = self.read_word(&a.0)?;
+            self.copy(acc, ah);
+            let mut test = Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(acc), Operand::Imm(0)]);
+            test.sets_flags = true;
+            self.push(test);
             return Ok(());
         }
         let (lhs, rhs) = if word {
@@ -847,7 +862,7 @@ pub fn build(
                 b.push(Inst::new(Kind::Op("LOADC"), vec![Operand::Def(acc), Operand::Use(acc)]));
             }
             op::SETCC8 => {
-                b.redo_compare()?;
+                b.redo_compare(immediate(&o[1])?)?;
                 b.define(name(&o[0])?);
                 let d = b.byte(name(&o[0])?)?;
                 let mut set = Inst::new(
@@ -863,6 +878,34 @@ pub fn build(
                 set.reads_flags = true;
                 b.push(set);
                 b.copy(d, Reg::Phys(reg::A));
+            }
+            // 8 or more: one byte moves across, shifted by the rest of the count
+            code @ (op::SHL16 | op::SRL16 | op::SRA16) if (8..16).contains(&immediate(&o[2])?) => {
+                let rest = immediate(&o[2])? - 8;
+                let (al, ah) = b.read_word(name(&o[1])?)?;
+                let (dl, dh) = b.write_word(name(&o[0])?)?;
+                let acc = Reg::Phys(reg::A);
+                let shift = |b: &mut Builder, from: Reg, to: Reg, step: &'static str, count: i64| {
+                    b.copy(acc, from);
+                    for _ in 0..count {
+                        b.push(Inst::new(Kind::Op(step), vec![Operand::Def(acc), Operand::Use(acc)]));
+                    }
+                    b.copy(to, acc);
+                };
+                match code {
+                    op::SHL16 => {
+                        shift(&mut b, al, dh, "ASL", rest);
+                        b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(dl), Operand::Imm(0)]));
+                    }
+                    op::SRL16 => {
+                        shift(&mut b, ah, dl, "LSR", rest);
+                        b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(dh), Operand::Imm(0)]));
+                    }
+                    _ => {
+                        shift(&mut b, ah, dl, "ASR", rest);
+                        shift(&mut b, ah, dh, "ASR", 7);
+                    }
+                }
             }
             // in place on zero-page bytes: asl/rol, lsr/ror
             code @ (op::SHL16 | op::SRL16 | op::SRA16) => {
@@ -965,7 +1008,8 @@ pub fn build(
                 );
             }
             code @ (op::BEQ | op::BNE | op::BCC | op::BCS | op::BMI | op::BPL) => {
-                b.redo_compare()?;
+                let condition = [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL].iter().position(|c| *c == code);
+                b.redo_compare(condition.map_or(-1, |c| c as i64))?;
                 let mnemonic = match code {
                     op::BEQ => "BEQ",
                     op::BNE => "BNE",
@@ -988,7 +1032,7 @@ pub fn build(
                 b.push(jump);
             }
             op::CMOV8 => {
-                b.redo_compare()?;
+                b.redo_compare(immediate(&o[3])?)?;
                 b.define(name(&o[0])?);
                 let d = b.byte(name(&o[0])?)?;
                 let value = |b: &mut Builder, operand: &Machine| -> Result<Operand, Unsupported> {
@@ -1016,21 +1060,28 @@ pub fn build(
                 b.push(cmov);
                 b.copy(d, Reg::Phys(reg::A));
             }
+            // d := cc ? t : f, as a pair `n` that starts as `f` (a copy the
+            // allocator joins with `f`'s register when it can) and takes `t`
+            // on the taken path
             op::CMOV16 => {
-                b.redo_compare()?;
                 let (fl, fh) = b.read_word(name(&o[1])?)?;
                 let (tl, th) = b.read_word(name(&o[2])?)?;
-                let (dl, dh) = b.write_word(name(&o[0])?)?;
-                for r in [fl, fh, tl, th] {
+                let (nl, nh) = (b.fresh(), b.fresh());
+                b.copy(nl, fl);
+                b.copy(nh, fh);
+                b.redo_compare(immediate(&o[3])?)?;
+                for r in [nl, nh, tl, th] {
                     b.require(r, Class(Class::X | Class::Y | Class::M))?;
                 }
-                let mut operands = vec![Operand::Def(dl), Operand::Def(dh), Operand::Def(Reg::Phys(reg::A))];
-                operands.extend([fl, fh, tl, th].map(Operand::Use));
+                let (dl, dh) = b.write_word(name(&o[0])?)?;
+                let mut operands = vec![Operand::Def(nl), Operand::Def(nh), Operand::Def(Reg::Phys(reg::A))];
+                operands.extend([nl, nh, tl, th].map(Operand::Use));
                 operands.extend([Operand::Imm(immediate(&o[3])?), Operand::Use(Reg::Phys(reg::FLAGS))]);
                 let mut cmov = Inst::new(Kind::Op("CMOV16"), operands);
                 cmov.reads_flags = true;
-                cmov.early_clobber = true;
                 b.push(cmov);
+                b.copy(dl, nl);
+                b.copy(dh, nh);
             }
             // `ldy #off; lda (p),y` is one instruction, so spill code for the
             // pointer cannot land between the two and clobber `y`
@@ -1531,28 +1582,14 @@ fn emit_with<const STACK: bool>(
                         through_a(&mut out, a_live, &format!("  lda #{part}{symbol}\n  sta {}\n", register_name(d)));
                     }
                 }
-                // both bytes of d := cc ? t : f; every use is read into `a`
-                // before a def is written, and no def shares a register with a
-                // use
+                // n := t when cc, n already holding f: the branch skips the
+                // moves on the other path
                 (Kind::Op("CMOV16"), [.., Operand::Imm(code), _]) => {
                     made += 1;
-                    let (taken, done) = (format!("_cmt{made}"), format!("_cmd{made}"));
-                    let branch = ["beq", "bne", "bcc", "bcs", "bmi", "bpl"][*code as usize];
-                    let load = |out: &mut String, r: RegId| match r {
-                        r if r == reg::X => out.push_str("  txa\n"),
-                        r if r == reg::Y => out.push_str("  tya\n"),
-                        r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
-                    };
-                    writeln!(out, "  {branch} {taken}").unwrap();
-                    for (n, pair) in [[regs[3], regs[4]], [regs[5], regs[6]]].into_iter().enumerate() {
-                        for (d, from) in [regs[0], regs[1]].into_iter().zip(pair) {
-                            load(&mut out, from);
-                            move_byte(&mut out, d, reg::A, false);
-                        }
-                        if n == 0 {
-                            writeln!(out, "  jmp {done}\n{taken}:").unwrap();
-                        }
-                    }
+                    let done = format!("_cmd{made}");
+                    let skip = ["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize];
+                    writeln!(out, "  {skip} {done}").unwrap();
+                    parallel_move(&mut out, &[(regs[0], regs[5]), (regs[1], regs[6])], false);
                     writeln!(out, "{done}:").unwrap();
                 }
                 (Kind::Op("JSR"), [Operand::Symbol(callee, _), ..]) => writeln!(out, "  jsr {callee}").unwrap(),
