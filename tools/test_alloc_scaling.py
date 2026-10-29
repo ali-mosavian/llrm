@@ -16,7 +16,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import llrmbin  # noqa: E402
 
 # Every test here compiles with llrm-c and reads the old allocator's `[instr]` rows. Debt `skip-alloc-scaling` in docs/working/ci.md.
-pytestmark = pytest.mark.skipif(not (llrmbin.bin_dir() / "llrm-c").exists(), reason="llrm-c is not built (debt skip-alloc-scaling)")
+# An llrm-c that is built (--features c-legacy) still has none: the old allocator was deleted, and its tests died with KeyError: 'facts intervals'.
+pytestmark = pytest.mark.usefixtures("old_allocator")
+
+
+@pytest.fixture(scope="module")
+def old_allocator():
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    if not compiler.exists():
+        pytest.skip("llrm-c is not built (debt skip-alloc-scaling)")
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "probe.c"
+        source.write_text(straight(64))
+        with llrmbin.with_object([str(compiler), "-m32", "-march=i486", "-O1", "-o", llrmbin.OBJECT, str(source)]) as command:
+            done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    if "regalloc base" not in done.stderr:
+        pytest.skip("this llrm-c has no old allocator (debt skip-alloc-scaling)")
 
 SMALL, LARGE = 1024, 4096
 # 4x the program may cost this much more (a linear pass costs 4x, a quadratic one 16x). Measured 2026-10-09 on main 61be539b2:
