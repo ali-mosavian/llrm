@@ -1929,6 +1929,12 @@ fn frame_omitted(
     held: bool,
 ) -> Option<Vec<Item>> {
     let omitted = stack_addressed(procedure, number)?;
+    // The exits were made instructions for an omitted frame (`exits_inserted`):
+    // the size comparison below, asked again of the body that now holds them,
+    // may answer the other way and print the entry with a frame register.
+    if procedure.body.frame_exit == Some(true) {
+        return Some(omitted);
+    }
     // Where allocation freed the frame register the pin's `hasFP` said no, and
     // the pin omits it whatever the bytes (BASIC, which never asks, compares).
     if !procedure.size || held || procedure.registers.free {
