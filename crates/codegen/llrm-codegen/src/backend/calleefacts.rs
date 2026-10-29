@@ -72,6 +72,7 @@ use llrm_mir::module::Module;
 
 use crate::model::ir::{self, Loc};
 use crate::model::lir::LirBody;
+use crate::support::hash::IndexMap;
 
 /// What a function leaves different for its caller.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -220,15 +221,30 @@ impl CalleeFacts {
         name: &str,
         body: &LirBody,
         frame: &llrm_target::FrameRegisters,
+        calls: &IndexMap<i64, String>,
     ) {
         if self.takes_part(name) {
             let regs = body.regs();
             let mut whole = written_by(body);
+            // A sibling call is a `jmp`, with no call fact of its own: the
+            // callee's writes are this function's. One that records nothing
+            // leaves this function to its convention.
+            let mut tail_high = BTreeSet::new();
+            for one in body.insns() {
+                if one.what.as_ref().is_some_and(|what| what.is_sibling_call()) {
+                    let Some(callee) = calls.get(&one.at).and_then(|callee| self.written(callee)) else {
+                        self.written.borrow_mut().remove(name);
+                        return;
+                    };
+                    whole.extend(callee.whole);
+                    tail_high.extend(callee.high);
+                }
+            }
             // The frame's own registers are its prologue's and epilogue's.
             for own in [frame.pointer, frame.stack] {
                 whole.remove(&regs.root(own));
             }
-            let mut high = BTreeSet::new();
+            let mut high = tail_high;
             let mut saved_whole = BTreeSet::new();
             for (kept, pushed) in &frame.saved {
                 if kept == pushed {
@@ -383,9 +399,64 @@ mod tests {
             free: false,
         };
         let facts = CalleeFacts::of(&parsed(LEAF)).0;
-        facts.record("leaf", &body, &frame(vec![(RegId::ESI, RegId::SI), (RegId::EDI, RegId::DI)]));
+        facts.record(
+            "leaf",
+            &body,
+            &frame(vec![(RegId::ESI, RegId::SI), (RegId::EDI, RegId::DI)]),
+            &IndexMap::default(),
+        );
         assert_eq!(facts.written("leaf").unwrap().high, BTreeSet::from([RegId::EDI]), "saved by the word");
-        facts.record("leaf", &body, &frame(vec![(RegId::EDI, RegId::EDI)]));
+        facts.record("leaf", &body, &frame(vec![(RegId::EDI, RegId::EDI)]), &IndexMap::default());
         assert!(facts.written("leaf").unwrap().high.is_empty(), "saved whole");
+    }
+
+    /// `heap.trim` ended in a sibling `jmp` to `heap.release`, which writes
+    /// `ecx`; its fact said it wrote no `ecx`, so a caller kept a string
+    /// length there across it and `line.append` gave "01\0" for "012".
+    #[test]
+    fn a_sibling_call_writes_what_its_callee_writes() {
+        use crate::model::ir::{Operation, Semantics};
+        use crate::model::lir::{Insn, LirBlock};
+
+        let module = parsed(&format!(
+            "define internal i16 @trim(i16 %a) {{\nb0:\n  ret i16 %a\n}}\n\
+             define i16 @f(i16 %x) {{\nb0:\n  %r = call i16 @trim(i16 %x)\n  ret i16 %r\n}}\n"
+        ));
+        let facts = CalleeFacts::of(&module).0;
+        facts
+            .written
+            .borrow_mut()
+            .insert("release".to_owned(), Written { whole: BTreeSet::from([RegId::ECX]), high: BTreeSet::new() });
+        let jump = Arc::new(Insn::new(
+            7,
+            Some((1, 1)),
+            Some(Semantics { name: Some("jmp".into()), ..Semantics::new(Operation::Return) }),
+            vec![],
+            vec![],
+        ));
+        let body = LirBody::new(
+            "trim",
+            1,
+            vec![LirBlock::new(1, vec![jump]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let frame = llrm_target::FrameRegisters {
+            pointer: RegId::BP,
+            stack: RegId::SP,
+            saved: vec![],
+            slot: 2,
+            align: 2,
+            optional: false,
+            enter: false,
+            wrap_split_size: false,
+            slot_scratch: None,
+            free: false,
+        };
+        let calls = IndexMap::from_iter([(7, "release".to_owned())]);
+        facts.record("trim", &body, &frame, &calls);
+        assert!(facts.written("trim").unwrap().whole.contains(&RegId::ECX));
+        facts.record("trim", &body, &frame, &IndexMap::default());
+        assert!(facts.written("trim").is_none(), "an unknown tail callee leaves it to the convention");
     }
 }
