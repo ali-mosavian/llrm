@@ -32,3 +32,12 @@ define i32 @slot(i32 %a) { %s = alloca i32
 define i32 @sh(i32 %a, i32 %b) { %s = shl i32 %b, 2
  %r = add i32 %a, %s
  ret i32 %r }
+define i64 @addr() { %s = alloca i32
+ store volatile i32 1, ptr %s
+ %i = ptrtoint ptr %s to i64
+ ret i64 %i }
+define i32 @idx(i32 %i) { %s = alloca [4 x i32]
+ %q = getelementptr [4 x i32], ptr %s, i64 0, i64 1
+ store volatile i32 %i, ptr %q
+ %v = load volatile i32, ptr %q
+ ret i32 %v }
