@@ -1,151 +1,40 @@
 //! The wasm32 matcher table (tblgen's `WebAssemblyGenDAGISel.inc`) against
-//! hand-built DAGs.
+//! hand-built DAGs. The oracle is `llc -mtriple=wasm32 -O0 -fast-isel=false
+//! -print-after=finalize-isel` (system LLVM 20.1.8).
 
-use llrm_dagisel::dag::{Hooks, SDValue};
+use llrm_dagisel::dag::{LoadExt, SDValue};
 use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::interp::{Outcome, Selector};
-use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::testing::{OptSize, TestDag};
+use llrm_dagisel::testing::{Node, TestDag};
 use llrm_wasm::dagisel::generated::wasm_wasm32 as table;
-
-/// Hooks with no complex pattern: `SelectAddrOperands*` match nothing.
-struct NoAddressModes;
-
-impl Hooks<TestDag> for NoAddressModes {
-    fn pointer_type(&self) -> Vt {
-        mvt::i32
-    }
-    fn check_pattern_predicate(
-        &self,
-        predicate: u16,
-    ) -> bool {
-        table::pattern_predicate(&OptSize, predicate)
-    }
-    fn check_node_predicate(
-        &self,
-        dag: &TestDag,
-        value: SDValue,
-        predicate: u16,
-    ) -> bool {
-        table::node_predicate(dag, self, value, predicate)
-    }
-    fn check_complex_pattern(
-        &mut self,
-        _: &mut TestDag,
-        _: u32,
-        _: Option<u32>,
-        _: SDValue,
-        _: u8,
-        _: &mut Vec<(SDValue, Option<u32>)>,
-    ) -> bool {
-        false
-    }
-    fn run_xform(
-        &mut self,
-        _: &mut TestDag,
-        value: SDValue,
-        _: u8,
-    ) -> SDValue {
-        value
-    }
-    fn is_profitable_to_fold(
-        &self,
-        _: &TestDag,
-        _: SDValue,
-        _: u32,
-        _: u32,
-    ) -> bool {
-        true
-    }
-    fn is_legal_to_fold(
-        &self,
-        _: &TestDag,
-        _: SDValue,
-        _: u32,
-        _: u32,
-    ) -> bool {
-        true
-    }
-    fn check_and_mask(
-        &self,
-        _: &TestDag,
-        _: SDValue,
-        _: i64,
-        _: i64,
-    ) -> bool {
-        false
-    }
-    fn check_or_mask(
-        &self,
-        _: &TestDag,
-        _: SDValue,
-        _: i64,
-        _: i64,
-    ) -> bool {
-        false
-    }
-    fn has_sse_unaligned_mem(&self) -> bool {
-        false
-    }
-    fn should_avoid_immediate_inst_forms_for_size(
-        &self,
-        _: &TestDag,
-        _: u32,
-    ) -> bool {
-        false
-    }
-    fn is_unneeded_shift_mask(
-        &self,
-        _: &TestDag,
-        _: u32,
-        _: u32,
-    ) -> bool {
-        false
-    }
-    fn is_sext_absolute_symbol_ref(
-        &self,
-        _: &TestDag,
-        _: u32,
-        _: u32,
-    ) -> bool {
-        false
-    }
-    fn has_no_carry_flag_uses(
-        &self,
-        _: &TestDag,
-        _: SDValue,
-    ) -> bool {
-        false
-    }
-    fn is_def32(
-        &self,
-        _: &TestDag,
-        _: u32,
-    ) -> bool {
-        false
-    }
-    fn check_tc_ret_enough_regs(
-        &self,
-        _: &TestDag,
-        _: u32,
-    ) -> bool {
-        true
-    }
-    fn may_load_store(
-        &self,
-        opcode: u16,
-    ) -> (bool, bool) {
-        llrm_wasm::dagisel::generated::instrinfo::memory_flags(opcode)
-    }
-}
+use llrm_wasm::dagisel::hooks::{Cpu, WasmHooks};
 
 fn machine_name(opcode: u16) -> &'static str {
     table::MACHINE_OPCODES.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
 }
 
-/// The pin's tblgen table, decoded: `i32 add` of two registers is `ADD_I32` and
-/// `i64 add` is `ADD_I64` (the pin's llc: `-print-after=finalize-isel`). Before
-/// the decoder took this table, wasm had none at all.
+fn select(
+    dag: &mut TestDag,
+    node: u32,
+) -> &'static str {
+    let selector = Selector::new(table::TABLE);
+    assert_eq!(selector.select(dag, &mut WasmHooks::new(Cpu::Wasm32, false), node), Outcome::Selected);
+    machine_name(dag.nodes[node as usize].machine.expect("not selected"))
+}
+
+/// The machine node `value` is, as its name and the constant operands (`None`
+/// for an operand that is not a constant).
+fn describe(
+    dag: &TestDag,
+    value: SDValue,
+) -> (&'static str, Vec<Option<i64>>) {
+    let node = &dag.nodes[value.node as usize];
+    let name = node.machine.map_or("?", machine_name);
+    (name, node.ops.iter().map(|op| dag.nodes[op.node as usize].constant).collect())
+}
+
+/// Before the target seam the only table the selector could read was x86's: a
+/// wasm DAG had none. `add` of two registers is `ADD_I32` or `ADD_I64`.
 #[test]
 fn add_of_two_registers_is_add_of_its_width() {
     for (vt, name) in [(mvt::i32, "ADD_I32"), (mvt::i64, "ADD_I64")] {
@@ -153,10 +42,79 @@ fn add_of_two_registers_is_add_of_its_width() {
         let a = dag.input(1, vt);
         let b = dag.input(2, vt);
         let add = dag.node(isd::ADD, &[vt], &[a, b]);
-        let selector = Selector::new(table::TABLE);
 
-        assert_eq!(selector.select(&mut dag, &mut NoAddressModes, add), Outcome::Selected);
-
-        assert_eq!(machine_name(dag.nodes[add as usize].machine.expect("not selected")), name);
+        assert_eq!(select(&mut dag, add), name);
     }
+}
+
+fn load(
+    dag: &mut TestDag,
+    address: SDValue,
+) -> u32 {
+    dag.add(Node {
+        opcode: isd::LOAD,
+        vts: vec![mvt::i32, mvt::Other],
+        ops: vec![SDValue::new(0, 0), address, SDValue::new(0, 0)],
+        load: Some(LoadExt::NonExt),
+        memory_vt: Some(mvt::i32),
+        ..Node::default()
+    })
+}
+
+/// The selected load's `(offset, base)`: the operands that follow `p2align`.
+fn load_address(address: impl FnOnce(&mut TestDag) -> SDValue) -> (Option<i64>, (&'static str, Vec<Option<i64>>)) {
+    let mut dag = TestDag::new();
+    let address = address(&mut dag);
+    let node = load(&mut dag, address);
+    assert_eq!(select(&mut dag, node), "LOAD_I32_A32");
+    let ops = dag.nodes[node as usize].ops.clone();
+    let base = ops[2];
+    (dag.nodes[ops[1].node as usize].constant, describe(&dag, base))
+}
+
+/// The oracle selects `load i32, ptr %p` as `LOAD_I32_A32 _, 0, %p`.
+#[test]
+fn a_load_through_a_register_has_offset_zero() {
+    let (offset, base) = load_address(|dag| dag.input(1, mvt::i32));
+    assert_eq!(offset, Some(0));
+    assert_eq!(base.0, "?", "the base is the register itself");
+}
+
+/// Oracle: `load i32, ptr inttoptr (i32 64 to ptr)` is `CONST_I32 0` as the
+/// base and 64 as the offset.
+#[test]
+fn a_load_at_a_constant_address_puts_it_in_the_offset() {
+    let (offset, base) = load_address(|dag| dag.make_constant(64, mvt::i32));
+    assert_eq!(offset, Some(64));
+    assert_eq!(base, ("CONST_I32", vec![Some(0)]));
+}
+
+/// A store takes the same address operands: `STORE_I32_A32 _, 0, %p, %x`.
+#[test]
+fn a_store_through_a_register_is_store_with_offset_zero() {
+    let mut dag = TestDag::new();
+    let (p, x) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+    let store = dag.add(Node {
+        opcode: isd::STORE,
+        vts: vec![mvt::Other],
+        ops: vec![SDValue::new(0, 0), x, p, SDValue::new(0, 0)],
+        memory_vt: Some(mvt::i32),
+        ..Node::default()
+    });
+
+    assert_eq!(select(&mut dag, store), "STORE_I32_A32");
+    let ops = &dag.nodes[store as usize].ops;
+    assert_eq!(dag.nodes[ops[1].node as usize].constant, Some(0));
+}
+
+/// DEVIATE of `addr.rs`, pinned so it is not forgotten: oracle folds `gep
+/// inbounds i8, %p, 8` (an `add nuw`) into offset 8; until `Dag` has the flag
+/// the add stays a separate node and the offset is 0.
+#[test]
+fn an_add_is_not_folded_until_the_dag_has_the_nuw_flag() {
+    let (offset, _) = load_address(|dag| {
+        let (p, eight) = (dag.input(1, mvt::i32), dag.make_constant(8, mvt::i32));
+        SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[p, eight]), 0)
+    });
+    assert_eq!(offset, Some(0));
 }
