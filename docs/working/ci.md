@@ -76,4 +76,5 @@ A check or waiver that is knowingly missing is a line here, not a silence. Forma
 On the deadline the owner pays it (the check goes red or the test goes) or moves the date in a commit that says why.
 
 - DEBT skip-llrm-pass | limit 2 tests | deadline 2026-11-05 | owner w11 | `tools/difftest/test_difftest.py` skips `llrm-pass is not built`: the python group's pytest step builds no binaries.
+- DEBT skip-readme-c | limit 1 test | deadline 2026-11-05 | owner w9 | `tests/test_readme.py` C case skips `llrm-c is not built`: the readme's C listing is llrm-c's; it moves to llrm-cc (m16 row, needs the pinned m16 clang) or the section goes at the C4 removal.
 - DEBT skip-pindiff-llc | limit 1 test | deadline 2026-11-05 | owner w11 | `tools/pairs/test_pindiff.py` skips `needs LLRM_LLC`: nothing sets it in CI.
