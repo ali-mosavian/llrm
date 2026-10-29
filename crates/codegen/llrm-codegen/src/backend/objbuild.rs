@@ -512,7 +512,10 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
     let mut pending: Vec<usize> = (0..units.len()).filter(|&index| kept[index]).collect();
     while let Some(index) = pending.pop() {
         for item in &units[index].2 {
-            if let masm::Datum::Pointer(masm::Pointer { name, .. }) | masm::Datum::SegmentWord(name) = item {
+            if let masm::Datum::Pointer(masm::Pointer { name, .. })
+                | masm::Datum::SegmentWord(name)
+                | masm::Datum::Difference(masm::Difference { name, .. }) = item
+            {
                 reached.insert(_target(name).to_owned());
             }
         }
@@ -772,6 +775,14 @@ pub fn _data(
             }
             masm::Datum::Bytes(item) => segment.put(item, &[]),
             masm::Datum::SegmentWord(name) => segment.put(&[0, 0], &[Fixup::new(0, BASE, name.clone())]),
+            // `name - base`: the pc-relative fixup is `name - (slot + 4)`, the
+            // field the rest.
+            masm::Datum::Difference(masm::Difference { name, base }) => {
+                let slot = segment.image.len();
+                segment.put(&[0; 4], &[Fixup::new(0, relative(4), name.clone())]);
+                let table = symbols[base].1;
+                pack_into(&mut segment.image, slot, (slot + 4) as i64 - table as i64);
+            }
         }
     }
 }
