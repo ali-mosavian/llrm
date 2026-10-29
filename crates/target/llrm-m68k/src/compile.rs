@@ -14,8 +14,8 @@ use crate::machine::{M68k, M68kMachine};
 use crate::mc;
 use crate::mfunc::{emit, expand_cmov};
 use crate::regalloc::{
-    allocate_spilling, branch_fold, eliminate_phis, fold_reserved_copies, machine_sink, remove_identity_copies,
-    remove_redundant_copies, two_address,
+    allocate_spilling, branch_fold, commute_tied, eliminate_phis_with, fold_reserved_copies, machine_sink,
+    remove_identity_copies, remove_redundant_copies, two_address,
 };
 
 /// A line of the function: a label or an instruction.
@@ -80,11 +80,15 @@ pub fn items_with(
     let mut function = emit(name, &blocks)?;
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
-    eliminate_phis(&mut function);
+    eliminate_phis_with(&mut function, options.overlay);
     fold_reserved_copies(&mut function);
     if options.overlay {
         address_arithmetic(&mut function);
     }
+    if options.overlay {
+        crate::overlay::mark_commutable(&mut function);
+    }
+    commute_tied(&mut function);
     two_address(&mut function);
     let (assignment, slots) = allocate_spilling(&mut function, 0)?;
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();

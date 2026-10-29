@@ -202,3 +202,19 @@ fn a_loop_counter_is_not_copied_out_and_back() {
     let asm = compiled(ir, Options::default());
     assert_eq!(asm.matches("move.l").count(), 2, "{asm}");
 }
+
+fn loop_moves(asm: &str) -> usize {
+    let body = asm.split(".LBB0_1:").nth(1).expect("a loop");
+    body.lines().take_while(|line| !line.contains("blt")).filter(|line| line.contains("move.l")).count()
+}
+
+/// The loop that carries `(a, b) <- (b, a + b)` was three moves: the sum took
+/// `a`'s register and the pair rotated through a temporary. Tying the sum to
+/// `b`, whose old value the carried copy keeps, leaves two (gcc's count).
+#[test]
+fn a_loop_carrying_a_sum_rotates_its_pair_in_two_moves() {
+    let ir = "define i32 @f(i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %a = phi i32 [0, %entry], [%b, %l]\n  %b = phi i32 [1, %entry], [%s, %l]\n  %s = add i32 %a, %b\n  %i1 = add i32 %i, 1\n  %c = icmp slt i32 %i1, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %s\n}";
+    assert_eq!(loop_moves(&compiled(ir, Options::PINNED)), 3, "{}", compiled(ir, Options::PINNED));
+    let ours = compiled(ir, Options::default());
+    assert_eq!(loop_moves(&ours), 2, "{ours}");
+}

@@ -110,7 +110,7 @@ impl Target for M68kRegisters {
 
 pub type GraphColoring = llrm_spike_mf::GraphColoring<M68kRegisters>;
 
-pub use llrm_spike_mf::regalloc::{eliminate_phis, successors, two_address};
+pub use llrm_spike_mf::regalloc::{eliminate_phis, eliminate_phis_with, successors, two_address};
 
 pub fn fold_reserved_copies(function: &mut MFunction) {
     llrm_spike_mf::regalloc::fold_reserved_copies::<M68kRegisters>(function)
@@ -152,6 +152,11 @@ pub fn remove_identity_copies(
     assignment: &Assignment,
 ) {
     llrm_spike_mf::remove_identity_copies::<M68kRegisters>(function, assignment)
+}
+
+/// `TwoAddressInstructionPass`'s choice of the tied source.
+pub fn commute_tied(function: &mut MFunction) {
+    llrm_spike_mf::commute_tied::<M68kRegisters>(function)
 }
 
 /// `MachineCopyPropagation`'s spurious copies; the 8 and 16-bit classes copy

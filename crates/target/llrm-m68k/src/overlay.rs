@@ -391,3 +391,19 @@ pub fn fold_post_increment(lines: Vec<crate::expand::Line>) -> Vec<crate::expand
     }
     lines
 }
+
+/// `add` with a register or address register source commutes like `add` with
+/// a data register (`ADD32dd` is `isCommutable`, `ADD32dr` is not).
+///
+/// DEVIATE from the pin, which selects `ADD32dr` for a value in an `xr32`
+/// register (every phi is) and so never swaps its sources. Reason: swapping
+/// is what lets the result take the register of the source that lives on, and
+/// saves a move on a loop that carries a sum. Exit: never; a target choice,
+/// off with [`crate::compile::Options::overlay`].
+pub fn mark_commutable(function: &mut crate::mfunc::MFunction) {
+    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
+        if matches!(inst.kind, llrm_spike_mf::Kind::Op("ADD16dr" | "ADD32dr")) {
+            inst.commutable = true;
+        }
+    }
+}
