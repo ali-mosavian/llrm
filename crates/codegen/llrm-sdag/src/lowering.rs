@@ -52,6 +52,8 @@ pub struct TargetLoweringInfo {
     far: bool,
     /// `getSetCCResultType` for a scalar: x86 compares into an `i8`, AArch64 into an `i32`.
     set_cc_result: MVT,
+    /// `getScalarShiftAmountTy` returns the shifted type (m68k) and not `i8`.
+    shift_by_value_type: bool,
 }
 
 impl TargetLoweringInfo {
@@ -76,7 +78,18 @@ impl TargetLoweringInfo {
                 integers[below] = (TypeAction::PromoteInteger, nearest_legal);
             }
         }
-        TargetLoweringInfo { integers, far, set_cc_result: MVT::I8 }
+        TargetLoweringInfo { integers, far, set_cc_result: MVT::I8, shift_by_value_type: false }
+    }
+
+    /// A shift's amount has the type of the value shifted
+    /// (`M68kTargetLowering::getScalarShiftAmountTy`).
+    pub fn with_shift_by_value_type(mut self) -> TargetLoweringInfo {
+        self.shift_by_value_type = true;
+        self
+    }
+
+    pub fn shift_by_value_type(&self) -> bool {
+        self.shift_by_value_type
     }
 
     /// m32: `addRegisterClass` of `i8`, `i16`, `i32`; no far pointer.

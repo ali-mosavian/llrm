@@ -14,6 +14,7 @@ use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, b
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
+use llrm_codegen::backend::selectiondag::{BooleanContents, DagConfig};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Module, ValueDef};
 
@@ -29,6 +30,9 @@ static CALLING: LazyLock<M68kCalling> = LazyLock::new(M68kCalling::default);
 /// and the `CALL`/`RET` nodes of the pin.
 pub fn builder_target() -> BuilderTarget {
     BuilderTarget {
+        // `setBooleanContents(ZeroOrNegativeOneBooleanContent)`: `Scc` sets
+        // 0xFF
+        dag: DagConfig { boolean_contents: BooleanContents::ZeroOrNegativeOne, ..BuilderTarget::m32().dag },
         shift_amount: EVT::I32,
         jump_tables: false,
         target_nodes: Some(TargetNodes {

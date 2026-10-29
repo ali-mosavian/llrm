@@ -141,6 +141,9 @@ fn operand_value(
 /// `encodeInstruction`.
 pub fn encode(inst: &Inst) -> Result<Encoded, String> {
     let &(_, width, pieces) = encoding(inst.opcode).ok_or_else(|| format!("no encoding for {}", inst.opcode))?;
+    if width == 0 {
+        return Err(format!("{} is a pseudo-instruction: it has no encoding", inst.opcode));
+    }
     let mut bits: u128 = 0;
     let mut fixups = Vec::new();
     for piece in pieces {

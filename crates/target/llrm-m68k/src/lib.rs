@@ -2,11 +2,15 @@
 //! LLVM's M68k backend.
 
 pub mod abi;
+pub mod amiga;
+pub mod atari;
 pub mod compile;
 pub mod dagisel;
 pub mod encode;
 pub mod expand;
 pub mod frame;
+pub mod kernels;
+pub mod mac;
 pub mod mc;
 pub mod mfunc;
 pub mod object;

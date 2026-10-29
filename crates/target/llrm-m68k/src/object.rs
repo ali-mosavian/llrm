@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 
 use crate::compile::Item;
+use crate::dagisel::enc::encoding;
 use crate::encode::{Encoded, encode};
 use crate::mc::{Inst, Operand};
 use crate::reg;
@@ -30,14 +31,12 @@ fn inst(
     Item::Inst(Inst { opcode, operands })
 }
 
-/// `_start`: push `args` (last first), call `callee`, pop them, and exit with
-/// the result as the status (`exit` is Linux m68k syscall 1: `d0` the number,
-/// `d1` the status, `trap #0`).
-pub fn start(
+/// Push `args` (last first), call `callee` and pop them; the result is in `d0`.
+pub fn call(
     callee: &str,
     args: &[i64],
 ) -> Vec<Item> {
-    let mut out = vec![Item::Label("_start".to_owned())];
+    let mut out = Vec::new();
     for arg in args.iter().rev() {
         out.push(inst("MOV32ei", vec![Operand::Reg(reg::SP), Operand::Imm(*arg)]));
     }
@@ -48,10 +47,29 @@ pub fn start(
             vec![Operand::Reg(reg::SP), Operand::Reg(reg::SP), Operand::Imm(4 * args.len() as i64)],
         ));
     }
+    out
+}
+
+/// `_start` for Linux: [`call`], then exit with the result as the status
+/// (`exit` is m68k syscall 1: `d0` the number, `d1` the status, `trap #0`).
+pub fn start(
+    callee: &str,
+    args: &[i64],
+) -> Vec<Item> {
+    let mut out = vec![Item::Label("_start".to_owned())];
+    out.extend(call(callee, args));
     out.push(inst("MOV32rr", vec![Operand::Reg(reg::D1), Operand::Reg(reg::D0)]));
     out.push(inst("MOVQ", vec![Operand::Reg(reg::D0), Operand::Imm(1)]));
     out.push(inst("TRAP", vec![Operand::Imm(0)]));
     out
+}
+
+/// A one-instruction item.
+pub fn item(
+    opcode: &'static str,
+    operands: Vec<Operand>,
+) -> Item {
+    inst(opcode, operands)
 }
 
 fn put(
@@ -95,17 +113,58 @@ pub fn write_executable(
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
 }
 
-/// The code of `items` placed at `base`, every fixup resolved, and the
-/// address of each label.
+/// Code placed at a base address.
+pub struct Assembled {
+    pub code: Vec<u8>,
+    /// The address of each label, in order.
+    pub labels: Vec<(String, u32)>,
+    /// The offsets of the absolute 32-bit fixups: where a loader that moves
+    /// the code adds its base (Atari relocations, Amiga `HUNK_RELOC32`).
+    pub absolute: Vec<usize>,
+}
+
+/// `getRelaxedOpcodeBranch`: the 16-bit form of an 8-bit branch.
+fn relaxed(opcode: &str) -> Option<&'static str> {
+    let wide = format!("{}16", opcode.strip_suffix('8')?);
+    encoding(&wide).map(|(name, ..)| *name)
+}
+
+/// The code of `items` placed at `base`, every fixup resolved. A branch whose
+/// 8-bit displacement does not fit, or is 0 (which the 8-bit form reads as
+/// "16 bits follow"), becomes its 16-bit form and the code is laid out again
+/// (`fixupNeedsRelaxationAdvanced`, `relaxInstruction`).
+///
+/// DEVIATE: no 16 -> 32 relaxation. Reason: that form is 68020 and this
+/// function is not told the cpu; a branch beyond 32 KiB is an error. Exit:
+/// the object refactor passing the subtarget.
 pub fn assemble(
     items: &[Item],
     base: u32,
-) -> Result<(Vec<u8>, Vec<(String, u32)>), String> {
+) -> Result<Assembled, String> {
+    let mut items = items.to_vec();
+    loop {
+        let (assembled, wide) = place(&items, base)?;
+        if wide.is_empty() {
+            return Ok(assembled);
+        }
+        for at in wide {
+            let Item::Inst(inst) = &mut items[at] else { continue };
+            inst.opcode = relaxed(inst.opcode).ok_or_else(|| format!("{} cannot be relaxed", inst.opcode))?;
+        }
+    }
+}
+
+/// One layout of `items`: the placed code, or the items whose 8-bit branch
+/// needs the 16-bit form.
+fn place(
+    items: &[Item],
+    base: u32,
+) -> Result<(Assembled, Vec<usize>), String> {
     let mut code = Vec::new();
     let mut symbols: HashMap<&str, u32> = HashMap::new();
     let mut order: Vec<&str> = Vec::new();
-    let mut pending: Vec<(usize, Encoded)> = Vec::new();
-    for item in items {
+    let mut pending: Vec<(usize, usize, Encoded)> = Vec::new();
+    for (index, item) in items.iter().enumerate() {
         match item {
             Item::Label(name) => {
                 if symbols.insert(name, base + code.len() as u32).is_some() {
@@ -113,30 +172,53 @@ pub fn assemble(
                 }
                 order.push(name);
             }
+            Item::Bytes(bytes) => code.extend_from_slice(bytes),
             Item::Inst(one) => {
                 let encoded = encode(one)?;
-                pending.push((code.len(), encoded.clone()));
+                pending.push((code.len(), index, encoded.clone()));
                 code.extend_from_slice(&encoded.bytes);
             }
         }
     }
-    for (start, encoded) in &pending {
+    let value_of = |start: usize, fixup: &crate::encode::Fixup| -> Result<i64, String> {
+        let target = *symbols.get(fixup.symbol.as_str()).ok_or_else(|| format!("undefined symbol {}", fixup.symbol))?;
+        let at = start + fixup.offset;
+        Ok(i64::from(target) + fixup.addend - if fixup.pc_rel { i64::from(base) + at as i64 } else { 0 })
+    };
+    let mut wide = Vec::new();
+    for (start, index, encoded) in &pending {
         for fixup in &encoded.fixups {
-            let target =
-                *symbols.get(fixup.symbol.as_str()).ok_or_else(|| format!("undefined symbol {}", fixup.symbol))?;
-            let at = start + fixup.offset;
-            let value = i64::from(target) + fixup.addend - if fixup.pc_rel { i64::from(base) + at as i64 } else { 0 };
-            patch(&mut code, at, fixup.size, value, fixup.pc_rel)?;
+            if fixup.pc_rel && fixup.size == 1 {
+                let value = value_of(*start, fixup)?;
+                if !(-128..128).contains(&value) || value == 0 {
+                    wide.push(*index);
+                }
+            }
         }
     }
-    Ok((code, order.into_iter().map(|name| (name.to_owned(), symbols[name])).collect()))
+    if !wide.is_empty() {
+        let placeholder = Assembled { code: Vec::new(), labels: Vec::new(), absolute: Vec::new() };
+        return Ok((placeholder, wide));
+    }
+    let mut absolute = Vec::new();
+    for (start, _, encoded) in &pending {
+        for fixup in &encoded.fixups {
+            if !fixup.pc_rel && fixup.size == 4 {
+                absolute.push(start + fixup.offset);
+            }
+            let value = value_of(*start, fixup)?;
+            patch(&mut code, start + fixup.offset, fixup.size, value, fixup.pc_rel)?;
+        }
+    }
+    let labels = order.into_iter().map(|name| (name.to_owned(), symbols[name])).collect();
+    Ok((Assembled { code, labels, absolute }, wide))
 }
 
 /// The executable, entered at `_start`, which `items` must define. Function
 /// labels (those without a leading `.`) become symbols.
 pub fn executable(items: &[Item]) -> Result<Vec<u8>, String> {
     let text_at = BASE + EHDR + PHDR;
-    let (code, labels) = assemble(items, text_at)?;
+    let Assembled { code, labels, .. } = assemble(items, text_at)?;
     let symbols: HashMap<&str, u32> = labels.iter().map(|(name, at)| (name.as_str(), *at)).collect();
     let order: Vec<&str> = labels.iter().map(|(name, _)| name.as_str()).collect();
     let entry = *symbols.get("_start").ok_or("no _start")?;
@@ -181,9 +263,9 @@ pub fn executable(items: &[Item]) -> Result<Vec<u8>, String> {
     put(&mut out, 40, 2); // shentsize
     put(&mut out, 5, 2);
     put(&mut out, 4, 2); // shstrndx
-    // PT_LOAD, R+X, the file from its start
+    // PT_LOAD, R+W+X (data rides in the segment), the file from its start
     let filesz = text_off + code.len() as u32;
-    for word in [1u32, 0, BASE, BASE, filesz, filesz, 5, 0x1000] {
+    for word in [1u32, 0, BASE, BASE, filesz, filesz, 7, 0x1000] {
         put(&mut out, u64::from(word), 4);
     }
     out.extend_from_slice(&code);

@@ -33,11 +33,78 @@ pub fn mx_imm_1to8<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
     dag.constant(v).is_some_and(|imm| (1..=8).contains(&imm))
 }
 
-/// `Mxstoreloadi*_safe`: `isSafeStoreLoad(N)`.
-///
-/// DEVIATE: never safe, so a load and a store are never folded into one
-/// memory-to-memory move. Reason: the pin's walk of call-sequence chains
-/// (`getCallSeqChainInfo`) is not translated yet. Exit: M2 (DAGToDAG hooks).
-pub fn mx_store_load_safe<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
-    false
+/// `isCallSeqNode`: `CALLSEQ_START`/`CALLSEQ_END`, or their lowered form.
+fn is_call_seq_node<D: Dag>(
+    dag: &D,
+    node: u32,
+) -> bool {
+    use crate::dagisel::generated::ids::opcode;
+    let code = dag.opcode(node);
+    if dag.is_machine(node) {
+        return code == opcode::ADJCALLSTACKDOWN || code == opcode::ADJCALLSTACKUP;
+    }
+    code == llrm_dagisel::generated::ids::isd::CALLSEQ_START || code == llrm_dagisel::generated::ids::isd::CALLSEQ_END
+}
+
+/// `getCallSeqChainInfo`: the nearest call-sequence node on a chain, or `Err`
+/// when a token factor reaches more than one (or the walk gives up).
+fn call_seq_chain<D: Dag>(
+    dag: &D,
+    chain: SDValue,
+) -> Result<Option<u32>, ()> {
+    use llrm_dagisel::generated::ids::{isd, mvt};
+    let mut work = vec![chain];
+    let mut visited = Vec::new();
+    let mut found: Option<u32> = None;
+    while let Some(value) = work.pop() {
+        let node = value.node;
+        if visited.contains(&node) {
+            continue;
+        }
+        visited.push(node);
+        if is_call_seq_node(dag, node) {
+            match found {
+                None => found = Some(node),
+                Some(first) if first != node => return Err(()),
+                Some(_) => {}
+            }
+        }
+        let chains =
+            (0..dag.num_operands(node)).map(|at| dag.operand(node, at)).filter(|op| dag.value_type(*op) == mvt::Other);
+        if !dag.is_machine(node) && dag.opcode(node) == isd::TokenFactor {
+            work.extend(chains);
+            continue;
+        }
+        if let Some(next) = chains.into_iter().next() {
+            // the walk keeps at most 8 branches, as the pin's does
+            if work.len() == 8 {
+                return Err(());
+            }
+            work.push(next);
+        }
+    }
+    Ok(found)
+}
+
+/// `Mxstoreloadi*_safe`: `isSafeStoreLoad(N)`: a load stored at once is one
+/// move unless either chain depends on a different call sequence.
+pub fn mx_store_load_safe<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
+    use llrm_dagisel::generated::ids::isd;
+    if dag.opcode(v.node) != isd::STORE {
+        return false;
+    }
+    let stored = dag.operand(v.node, 1);
+    if dag.opcode(stored.node) != isd::LOAD {
+        return false;
+    }
+    let (Ok(load), Ok(store)) =
+        (call_seq_chain(dag, dag.operand(stored.node, 0)), call_seq_chain(dag, dag.operand(v.node, 0)))
+    else {
+        return false;
+    };
+    match (load, store) {
+        (None, None) => true,
+        (Some(one), Some(two)) => one == two,
+        _ => false,
+    }
 }
