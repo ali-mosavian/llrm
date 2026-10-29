@@ -793,6 +793,7 @@ fn string_compares_anded_into_a_branch_are_selected() {
         segments: &crate::backend::target::BASIC,
         runtime: true,
         frame_zeroed: false,
+        hole: 0,
         facts: None,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
