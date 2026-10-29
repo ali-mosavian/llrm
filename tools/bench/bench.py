@@ -22,6 +22,7 @@ import tempfile
 import functools
 import argparse
 import subprocess
+import time
 import tomllib
 from datetime import date
 from pathlib import Path
@@ -543,6 +544,14 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
     return {key: counts for key, counts in found.items() if key[0] != "startup"}
 
 
+START = time.monotonic()
+
+
+def stage(text: str) -> None:
+    """A progress line on stderr, which the gate's bench step lets through (its stdout is judged): a shard that hit the job timeout printed nothing for 45 minutes."""
+    print(f"bench: [{time.monotonic() - START:6.0f}s] {text}", file=sys.stderr, flush=True)
+
+
 def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
     """{(benchmark, language, opt): counts or {"error": why} or {"known": issue}}. The levels are independent (a folder each) and are
     measured at once, in a process each; a timed run keeps them one after the other."""
@@ -572,8 +581,10 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
     objects = qbbuild.runtimes(work / f"runtime-{opt}") if any(v.language in OURS_BASIC for _, v in todo) else None
     with ThreadPoolExecutor() as pool:
         built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)], objects), todo))
+    stage(f"{opt}: built {len(todo)} programs")
     basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
     failed = link_basic(basic, folder)
+    stage(f"{opt}: linked {len(basic)} BASIC programs")
     jobs, plain, needs, flat = [], {}, {}, {}
     for (directory, variant), result in zip(todo, built):
         key = (variant.name, variant.language, opt)
@@ -602,10 +613,13 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
     for (_, variant), key in ((one, (one[1].name, one[1].language, opt)) for one in todo):
         if key in out and (flags := float_flags(variant)) and "skip" not in out[key]:
             out[key] = {**out[key], "flags": flags}
+    stage(f"{opt}: counted {len(jobs)} programs")
     out |= measure_flat(flat, folder / "flat")
+    stage(f"{opt}: flat target done")
     jobs = [(key, job if job is not None else (flat[key][0], flat[key][1], None, None, None, None)) for key, job in jobs]
     exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
     run_timed(out, exes, {key: needs[key] for key in exes if needs.get(key)}, folder / "time", timing, already=set(flat))
+    stage(f"{opt}: DOSBox runs done")
     return out
 
 
@@ -955,7 +969,9 @@ def main() -> int:
         args.select = shards.of(index, count)
     if args.bless and not (args.reason and args.references):
         parser.error("--bless records the references, so it needs --references and --reason: every change to expected.toml says why")
+    stage(f"measuring {len(args.select) or 'every'} benchmarks at {' '.join(args.opt)}")
     measured = measure_all(args.select, args.opt, args.work, args.time)
+    stage(f"measured {len(measured)} rows")
     if args.references:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json and not args.shard:
@@ -980,11 +996,13 @@ def main() -> int:
         print(f"blessed {len({key[0] for key in references})} benchmarks, {changed} files changed")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
+    stage("base counts")
     try:
         base, same, base_sha = base_rows(args, args.select) if args.shard else base_rows(args)
     except BaseException as why:  # noqa: BLE001: the reason is the line the gate prints
         print("FAIL BASE: the base could not be measured: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:])
         return 1
+    stage(f"base {base_sha[:9]}: {len(base)} rows")
     problems = judge(measured, args.select, args.opt, base, same)
     if args.shard:  # the rest of the verdict needs every shard: --merge
         for one in problems:
