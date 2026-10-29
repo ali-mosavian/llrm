@@ -100,20 +100,20 @@ pub fn operand_class(
 ) -> Option<Class> {
     let (code, _) = MACHINE_OPCODES.iter().find(|(_, one)| *one == name)?;
     let desc = instrinfo::desc(*code as u16)?;
-    Class::of_pin(desc.operands.get(index)?.reg_class).map(|class| extension_result(name, index, class))
+    Class::of_pin(desc.operands.get(index)?.reg_class).map(|class| extension_result(name, class))
 }
 
-/// DEVIATE from the pin, whose `MOVZXd32d16` and `MOVSXd32d16` define an `XR32` and so may be
-/// given an address register: `ExpandMOVSZX_RR` then does `move.w` into a cleared register
-/// (`movea.w`, which sign-extends) or `ext.l` on it (not encodable). The result of an extension is
-/// a data register, for the emitter and for the passes that widen a class
-/// (`widen_compare_operands` read the table's `XR32` as free).
+/// DEVIATE from the pin, whose `MOVZXd32d16` and `MOVSXd32d16` define and read an `XR32` and so
+/// may be given an address register: `ExpandMOVSZX_RR` then does `move.w` into a cleared register
+/// (`movea.w`, which sign-extends) or `ext.l` on it (not encodable), and its `MOV16dd` encodes a
+/// source `%a0` as `%d0`. The result and the source of an extension are data registers, for the
+/// emitter and for the passes that widen a class (`widen_compare_operands` read the table's
+/// `XR32` as free).
 fn extension_result(
     name: &str,
-    index: usize,
     class: Class,
 ) -> Class {
-    if index == 0 && (name.starts_with("MOVZX") || name.starts_with("MOVSX")) && class == Class::Xr32 { Class::Dr32 } else { class }
+    if (name.starts_with("MOVZX") || name.starts_with("MOVSX")) && class == Class::Xr32 { Class::Dr32 } else { class }
 }
 
 fn opcode_name(code: u32) -> Option<&'static str> {
@@ -178,12 +178,13 @@ impl Emitter<'_> {
     /// copied into a new register of that class, and that is the operand.
     fn constrain(
         &mut self,
+        name: &str,
         operand: Operand,
         wanted: Option<&OperandDesc>,
         into: &mut Vec<Inst>,
     ) -> Operand {
         let (Operand::Use(Reg::Virt(v)), Some(wanted)) = (&operand, wanted) else { return operand };
-        let Some(class) = Class::of_pin(wanted.reg_class) else { return operand };
+        let Some(class) = Class::of_pin(wanted.reg_class).map(|class| extension_result(name, class)) else { return operand };
         let have = self.function.classes[*v as usize];
         match have.meet(class) {
             Some(narrowed) => {
@@ -394,14 +395,14 @@ impl Emitter<'_> {
                         .get(at)
                         .and_then(|one| Class::of_pin(one.reg_class))
                         .unwrap_or_else(|| Class::of_type(*vt));
-                    let class = extension_result(name, at, class);
+                    let class = extension_result(name, class);
                     let reg = self.new_reg(class);
                     self.values.insert((node, at as u8), reg);
                     operands.push(Operand::Def(reg));
                 }
                 for op in n.ops.clone() {
                     if let Some(operand) = self.operand(op)? {
-                        let operand = self.constrain(operand, desc.operands.get(operands.len()), into);
+                        let operand = self.constrain(name, operand, desc.operands.get(operands.len()), into);
                         operands.push(operand);
                     }
                 }

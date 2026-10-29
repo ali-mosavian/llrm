@@ -41,6 +41,35 @@ fn copy_groups(function: &MFunction) -> Vec<usize> {
     parent
 }
 
+/// Where each register is defined: block and instruction.
+fn definitions(function: &MFunction) -> Vec<Option<(usize, usize)>> {
+    let mut defs = vec![None; function.classes.len()];
+    for (at, block) in function.blocks.iter().enumerate() {
+        for (i, inst) in block.insts.iter().enumerate() {
+            for operand in &inst.operands {
+                if let Operand::Def(Reg::Virt(v)) = operand {
+                    defs[*v as usize] = Some((at, i));
+                }
+            }
+        }
+    }
+    defs
+}
+
+/// Whether the instruction that defines `v` may write an address register: the
+/// extensions and the byte and word operations name a data register.
+fn definable_in_address_register(
+    function: &MFunction,
+    defs: &[Option<(usize, usize)>],
+    v: u32,
+) -> bool {
+    let Some((at, i)) = defs[v as usize] else { return true };
+    let inst = &function.blocks[at].insts[i];
+    let Kind::Op(name) = inst.kind else { return true };
+    let slot = inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).position(|o| *o == Operand::Def(Reg::Virt(v)));
+    slot.and_then(|slot| crate::mfunc::operand_class(name, slot)).is_none_or(|class| class.meet(Class::Ar32).is_some())
+}
+
 /// Rewrites the adds and subtracts of constants that are pointer arithmetic.
 pub fn address_arithmetic(function: &mut MFunction) {
     let count = function.classes.len();
@@ -102,6 +131,7 @@ pub fn address_arithmetic(function: &mut MFunction) {
                 // the add is the only non-copy reader of `src`, so the data
                 // class it gave `src` goes with it
                 || other_users[src as usize] != 1
+                || !definable_in_address_register(function, &defs, src)
             {
                 continue;
             }
@@ -141,6 +171,7 @@ fn base_plus_index(
             address_group[find(parent, v)] = true;
         }
     }
+    let defs = definitions(function);
     for at in 0..function.blocks.len() {
         for i in 0..function.blocks[at].insts.len() {
             let inst = &function.blocks[at].insts[i];
@@ -167,7 +198,7 @@ fn base_plus_index(
             else {
                 continue;
             };
-            if base == index {
+            if base == index || !definable_in_address_register(function, &defs, base) {
                 continue;
             }
             function.classes[dst as usize] = Class::Ar32;

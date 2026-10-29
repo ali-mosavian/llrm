@@ -191,3 +191,23 @@ fn a_value_shifted_up_16_round_a_loop_has_its_low_word_cleared_each_trip() {
         assert_eq!(got, want as i32);
     }
 }
+
+/// A word loaded into an address register (`move.w (..), %a0` sign-extends) and zero-extended
+/// read it back with `move.w %a0, %d2`, which the pin's `MOV16dd` encodes as `%d0`: the quotient
+/// came from the wrong register (differential seed 437 gave 0 for 6). Data registers hold the
+/// argument bytes, so the load is given an address register; the word at offset 2 of "hello" is
+/// 0x6c6c, over 3 is 0x2424.
+#[test]
+fn a_word_zero_extended_is_read_from_a_data_register() {
+    let ir = "define i16 @k(ptr %p, i8 %a, i8 %b, i8 %c, i8 %d) {\n\
+        \x20 %ci = zext i8 %c to i32\n  %q = getelementptr [2 x i8], ptr %p, i32 %ci\n  %w = load i16, ptr %q\n\
+        \x20 %bo = or i8 %b, 1\n  %bz = zext i8 %bo to i16\n  %dv = udiv i16 %w, %bz\n  %t = trunc i16 %dv to i8\n\
+        \x20 %a16 = add i8 %a, 16\n  %o = or i8 %a16, %t\n  %cmp = icmp ugt i8 %o, %c\n  %cz = zext i1 %cmp to i16\n\
+        \x20 %oz = zext i8 %o to i16\n  %dz = zext i8 %d to i16\n  %s = shl i16 %dz, 1\n  %s2 = add i16 %s, 272\n\
+        \x20 %x = xor i16 %s2, %oz\n  %r = xor i16 %x, %cz\n  ret i16 %r\n}";
+    let args = [Arg::Data(0), Arg::Imm(5), Arg::Imm(3), Arg::Imm(1), Arg::Imm(2)];
+    if let Some(got) = run_ir_with_runtime(ir, &args) {
+        // 0x114 ^ 0x35 ^ 1, the low byte of the status
+        assert_eq!(got, 0x20);
+    }
+}
