@@ -13,6 +13,7 @@ use std::marker::PhantomData;
 use llrm_lir::registers::RegId;
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
+use crate::sink::{Jump, split_critical_edge};
 
 /// What the allocator needs to know of a register file.
 pub trait Target {
@@ -46,6 +47,14 @@ pub trait Target {
         other: RegId,
     ) -> bool {
         one == other
+    }
+    /// The class the instruction `name` names for operand `index`, where it
+    /// does (`MCInstrDesc::operands`).
+    fn operand_class(
+        _name: &str,
+        _index: usize,
+    ) -> Option<Self::Class> {
+        None
     }
     /// The instruction that stores `register` (of `class`) to frame `slot`;
     /// `None` when the target cannot spill.
@@ -89,15 +98,83 @@ pub trait Allocate<C> {
     ) -> Result<Assignment, String>;
 }
 
-/// Where a predecessor's copies for its successors' phis go: before the
-/// terminators, and before the instruction that sets the flags a terminator
-/// reads, since a copy may set them too.
-fn copy_point(insts: &[Inst]) -> usize {
+/// Where a predecessor's copy of `source` for a successor's phi goes: before
+/// the terminators, and before the instruction that sets the flags a
+/// terminator reads, since a copy may set them too; but not above an
+/// instruction that defines `source`, which must run first.
+fn copy_point(
+    insts: &[Inst],
+    source: Reg,
+) -> usize {
     let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
     if !insts[first..].iter().any(|inst| inst.reads_flags) {
         return first;
     }
-    insts[..first].iter().rposition(|inst| inst.sets_flags).unwrap_or(first)
+    let Some(setter) = insts[..first].iter().rposition(|inst| inst.sets_flags) else { return first };
+    let defines_source = insts[setter..first]
+        .iter()
+        .any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(reg) if *reg == source)));
+    if defines_source { first } else { setter }
+}
+
+/// Where the copy for a phi goes within its block: before the last read of
+/// `source` there when `point` is later, so that read is the one that ends
+/// `source`'s register and the instruction may reuse it in place (the phi's
+/// copy of a value a later `add` consumes is then not the last use that keeps
+/// the register). Not past a flag setter its reader needs.
+///
+/// DEVIATE from `PHIElimination`, which copies at the end of the block.
+/// Reason: with the copy last, a value carried to the next iteration stays in
+/// its register to the end and the loop's rotation of values costs a move
+/// more (fib). Exit: never; a choice, off where the pin's output is wanted.
+fn hoisted_point(
+    insts: &[Inst],
+    source: Reg,
+    point: usize,
+) -> usize {
+    let uses_source = |inst: &Inst| inst.operands.iter().any(|o| matches!(o, Operand::Use(reg) if *reg == source));
+    let Some(last) = insts[..point].iter().rposition(uses_source) else { return point };
+    let strands_reader = (last..point).any(|at| {
+        insts[at].reads_flags
+            && !insts[at].sets_flags
+            && insts[..at].iter().rposition(|i| i.sets_flags).is_some_and(|setter| setter < last)
+    });
+    if strands_reader { point } else { last }
+}
+
+/// A forward critical edge into a phi gets a block of its own where the
+/// copy for the phi would otherwise sit above the instruction that sets the
+/// flags its branch reads (see [`copy_point`]): there the copy's register is
+/// live across the compare, next to the register the compare reads, and the
+/// two cannot share. On the edge the copy follows the compare and the branch.
+///
+/// DEVIATE from `PHIElimination::SplitPHIEdges`, which splits only an edge
+/// whose source is live out past the phis, because the pin puts the copy after
+/// the compare and saves `sr` around it. Reason: `move.w %sr` is privileged
+/// from the 68010 on. Exit: never; a target choice.
+pub fn split_flag_edges<T: Jump, C>(function: &mut MFunction<C>) {
+    'again: loop {
+        let succs = successors(function);
+        for to in 0..function.blocks.len() {
+            let preds: Vec<usize> = (0..function.blocks.len()).filter(|p| succs[*p].contains(&to)).collect();
+            if preds.len() < 2 {
+                continue;
+            }
+            for phi in function.blocks[to].phis.clone() {
+                for (pred, source) in phi.incoming {
+                    let insts = &function.blocks[pred].insts;
+                    let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+                    if pred >= to || succs[pred].len() < 2 || copy_point(insts, source) == first {
+                        continue;
+                    }
+                    if split_critical_edge(function, pred, to, &T::jump).is_some() {
+                        continue 'again;
+                    }
+                }
+            }
+        }
+        return;
+    }
 }
 
 /// `PHIElimination`: a phi becomes a copy of each incoming value into a new
@@ -105,6 +182,15 @@ fn copy_point(insts: &[Inst]) -> usize {
 /// the phi's at the top of its block, so parallel phis do not overwrite each
 /// other. The allocator joins the registers by their copy hints.
 pub fn eliminate_phis<C: Copy>(function: &mut MFunction<C>) {
+    eliminate_phis_with(function, false)
+}
+
+/// [`eliminate_phis`], with each copy hoisted before the last read of its
+/// source in the block where `hoist` (see [`hoisted_point`]).
+pub fn eliminate_phis_with<C: Copy>(
+    function: &mut MFunction<C>,
+    hoist: bool,
+) {
     for at in 0..function.blocks.len() {
         let mut heads = Vec::new();
         for phi in std::mem::take(&mut function.blocks[at].phis) {
@@ -119,7 +205,8 @@ pub fn eliminate_phis<C: Copy>(function: &mut MFunction<C>) {
             let temporary = Reg::Virt(function.classes.len() as u32 - 1);
             for (pred, incoming) in phi.incoming {
                 let insts = &mut function.blocks[pred].insts;
-                let point = copy_point(insts);
+                let point = copy_point(insts, incoming);
+                let point = if hoist { hoisted_point(insts, incoming, point) } else { point };
                 insts.insert(point, Inst::copy(temporary, incoming));
             }
             heads.push(Inst::copy(phi.result, temporary));
@@ -308,11 +395,16 @@ fn liveness<C>(
 }
 
 /// The graph colouring allocator.
-pub struct GraphColoring<T>(PhantomData<T>);
+pub struct GraphColoring<T> {
+    /// Join copies that run on every trip of a loop before the ones in a
+    /// branch of it (see [`GraphColoring::colour`]).
+    pub by_frequency: bool,
+    marker: PhantomData<T>,
+}
 
 impl<T> Default for GraphColoring<T> {
     fn default() -> Self {
-        GraphColoring(PhantomData)
+        GraphColoring { by_frequency: false, marker: PhantomData }
     }
 }
 
@@ -321,7 +413,8 @@ impl<T: Target> Allocate<T::Class> for GraphColoring<T> {
         &self,
         function: &MFunction<T::Class>,
     ) -> Result<Assignment, String> {
-        self.colour(function).map_err(|failed| {
+        self.colour(function).map_err(|failures| {
+            let failed = &failures[0];
             format!(
                 "no register for v{} ({:?}); spilling is not translated",
                 failed.vreg, function.classes[failed.vreg as usize]
@@ -331,11 +424,53 @@ impl<T: Target> Allocate<T::Class> for GraphColoring<T> {
 }
 
 impl<T: Target> GraphColoring<T> {
-    /// Colour every register, or name the first one nothing fits.
+    /// A colourer that joins in the order [`GraphColoring::colour`] describes
+    /// where `by_frequency`.
+    pub fn by_frequency(by_frequency: bool) -> Self {
+        GraphColoring { by_frequency, marker: PhantomData }
+    }
+
+    /// The copies in the order the coalescer tries them. `RegisterCoalescer`
+    /// goes by loop depth, deeper first, then block number
+    /// (`compareMBBPriority`, RegisterCoalescer.cpp L4058). With
+    /// `by_frequency`, within a depth the blocks every trip passes through
+    /// (those that post-dominate the loop's header, or the entry) come before
+    /// the others.
+    ///
+    /// DEVIATE: the second key. Reason: the pin's greedy allocator splits and
+    /// hints around a join that blocks a better one; this one cannot, so a
+    /// copy in one arm of a select joined first (the loaded value into the
+    /// result) keeps the loop-carried copy, run every trip, from joining.
+    /// Exit: the neutral-LIR task.
+    fn copies_in_join_order<'a>(
+        &self,
+        function: &'a MFunction<T::Class>,
+    ) -> Vec<&'a Inst> {
+        let mut keyed: Vec<((std::cmp::Reverse<usize>, bool, usize), &Inst)> = Vec::new();
+        let cfg = crate::cfg::Cfg::new(function);
+        for (at, block) in function.blocks.iter().enumerate() {
+            let depth = cfg.cycle_depth(at);
+            let always = self.by_frequency
+                && match cfg.cycle(at) {
+                    Some(header) => cfg.post_dominates(at, header),
+                    None => cfg.post_dominates(at, 0),
+                };
+            for inst in block.insts.iter().filter(|inst| inst.kind == Kind::Copy) {
+                keyed.push(((std::cmp::Reverse(depth), !always, at), inst));
+            }
+        }
+        if self.by_frequency {
+            keyed.sort_by_key(|(key, _)| *key);
+        }
+        keyed.into_iter().map(|(_, inst)| inst).collect()
+    }
+
+    /// Colour every register, or name each one nothing fits, in colouring order. A register left
+    /// uncoloured constrains no other, so one round names every victim the others still leave.
     pub fn colour(
         &self,
         function: &MFunction<T::Class>,
-    ) -> Result<Assignment, Uncolourable> {
+    ) -> Result<Assignment, Vec<Uncolourable>> {
         let count = function.classes.len();
         let mut nodes = Nodes { count, physical: Vec::new() };
         let effects_of: Vec<Vec<(Vec<usize>, Vec<usize>)>> = function
@@ -419,7 +554,7 @@ impl<T: Target> GraphColoring<T> {
         classes.resize(total, T::any());
         // `RegisterCoalescer`, aggressively: copies joined in program order
         // unless the two interfere
-        for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Copy) {
+        for inst in self.copies_in_join_order(function) {
             let (Operand::Def(a), Operand::Use(b)) = (&inst.operands[0], &inst.operands[1]) else { continue };
             if matches!(a, Reg::Phys(p) if T::reserved(T::root(*p)))
                 || matches!(b, Reg::Phys(p) if T::reserved(T::root(*p)))
@@ -440,6 +575,14 @@ impl<T: Target> GraphColoring<T> {
             let class = if keep >= count {
                 let root = nodes.physical[keep - count];
                 if !T::candidates(classes[drop]).contains(&root) {
+                    continue;
+                }
+                // `drop` is live with another physical register that shares
+                // storage with `root`: joined, both would hold it at once
+                if edges[drop]
+                    .iter()
+                    .any(|n| *n >= count && *n != keep && T::overlaps(nodes.physical[*n - count], root))
+                {
                     continue;
                 }
                 classes[keep]
@@ -465,6 +608,8 @@ impl<T: Target> GraphColoring<T> {
             colour.insert(count + at, *root);
         }
         let mut assigned: Vec<Option<RegId>> = vec![None; count];
+        let mut failures: Vec<Uncolourable> = Vec::new();
+        let mut failed_nodes: HashSet<usize> = HashSet::new();
         // the most constrained class first, so a word is not left with what
         // the bytes took
         let mut order: Vec<usize> = (0..count).collect();
@@ -479,6 +624,9 @@ impl<T: Target> GraphColoring<T> {
             let node = find(&mut parent, v);
             if node >= count {
                 assigned[v] = Some(T::view(colour[&node], function.classes[v]));
+                continue;
+            }
+            if failed_nodes.contains(&node) {
                 continue;
             }
             if !colour.contains_key(&node) {
@@ -500,11 +648,16 @@ impl<T: Target> GraphColoring<T> {
                                     .is_some_and(|c| wanted.iter().any(|candidate| T::overlaps(*c, *candidate)))
                         })
                         .collect();
-                    return Err(Uncolourable { vreg: v as u32, crowd, blockers });
+                    failed_nodes.insert(node);
+                    failures.push(Uncolourable { vreg: v as u32, crowd, blockers });
+                    continue;
                 };
                 colour.insert(node, chosen);
             }
             assigned[v] = Some(T::view(colour[&node], function.classes[v]));
+        }
+        if !failures.is_empty() {
+            return Err(failures);
         }
         Ok(Assignment(assigned.into_iter().map(|one| one.expect("every register is coloured")).collect()))
     }

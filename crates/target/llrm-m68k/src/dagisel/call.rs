@@ -85,7 +85,7 @@ impl M68kCalling {
         pointer: bool,
     ) -> llrm_lir::registers::RegId {
         let names = if pointer {
-            self.convention.results.get("pointer")
+            self.convention.results.get("address")
         } else {
             self.convention.results.get(&(vt.size_in_bits() / 8).max(1).to_string())
         };

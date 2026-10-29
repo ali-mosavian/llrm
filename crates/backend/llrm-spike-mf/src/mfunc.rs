@@ -55,9 +55,14 @@ pub struct Inst {
     pub may_store: bool,
     pub side_effects: bool,
     pub cheap_as_move: bool,
+    /// The spiller may run it again at each use instead of keeping its result
+    /// (`isTriviallyReMaterializable`).
+    pub rematerializable: bool,
     /// It writes a result before it has read every use, so no def may share
     /// a register with a use (`earlyclobber`).
     pub early_clobber: bool,
+    /// Its two register sources may swap places (`isCommutable`).
+    pub commutable: bool,
 }
 
 impl Inst {
@@ -78,7 +83,9 @@ impl Inst {
             may_store: false,
             side_effects: false,
             cheap_as_move: false,
+            rematerializable: false,
             early_clobber: false,
+            commutable: false,
         }
     }
 
@@ -116,11 +123,20 @@ pub struct MFunction<C> {
     /// Each incoming-argument frame index and its offset from the stack
     /// pointer at entry.
     pub fixed: BTreeMap<i32, i64>,
+    /// The function's own stack objects (static allocas): frame index, size
+    /// and alignment in bytes.
+    pub locals: Vec<(i32, i64, i64)>,
 }
 
 impl<C> MFunction<C> {
     pub fn new(name: &str) -> MFunction<C> {
-        MFunction { name: name.to_owned(), blocks: Vec::new(), classes: Vec::new(), fixed: BTreeMap::new() }
+        MFunction {
+            name: name.to_owned(),
+            blocks: Vec::new(),
+            classes: Vec::new(),
+            fixed: BTreeMap::new(),
+            locals: Vec::new(),
+        }
     }
 
     /// Lays `block` out at `at`; the phis name predecessors by index, so those

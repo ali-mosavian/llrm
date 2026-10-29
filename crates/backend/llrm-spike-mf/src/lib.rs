@@ -10,13 +10,18 @@
 //! neutral-LIR task.
 
 pub mod cfg;
+pub mod commute;
 pub mod fold;
 pub mod mfunc;
+pub mod placement;
 pub mod regalloc;
+pub mod reschedule;
 pub mod sink;
 pub mod spill;
 
-pub use fold::{branch_fold, remove_identity_copies};
+pub use commute::commute_tied;
+pub use fold::{branch_fold, remove_identity_copies, remove_redundant_copies};
 pub use mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg};
 pub use regalloc::{Allocate, Assignment, GraphColoring, Target};
+pub use reschedule::reschedule_kills;
 pub use sink::{Jump, machine_sink, split_critical_edge};

@@ -148,9 +148,15 @@ fn print_method(
 
 /// The assembly text of `inst`, as `llc` prints it (without indentation).
 pub fn print(inst: &Inst) -> Result<String, String> {
-    let (_, text, operands) = asm(inst.opcode).ok_or_else(|| format!("no instruction {}", inst.opcode))?;
+    let (text, operands) = match crate::overlay::asm(inst.opcode) {
+        Some(row) => row,
+        None => {
+            let &(_, text, operands) = asm(inst.opcode).ok_or_else(|| format!("no instruction {}", inst.opcode))?;
+            (text, operands)
+        }
+    };
     let mut out = String::new();
-    let mut rest = *text;
+    let mut rest = text;
     while let Some(at) = rest.find('$') {
         out.push_str(&rest[..at]);
         rest = &rest[at + 1..];

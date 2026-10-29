@@ -107,6 +107,10 @@ pub struct TargetLowering {
     keeps_f64_constants: bool,
     /// `canUseCMOV`: the target has the conditional move.
     cmov: bool,
+    /// `getLibcallName` of the integer operations (`RTLIB::MUL_I32` and the
+    /// like): the runtime routine a `LibCall` action calls. Empty unless the
+    /// target fills it.
+    libcall_names: HashMap<(ISD, MVT), &'static str>,
 }
 
 impl TargetLowering {
@@ -123,7 +127,28 @@ impl TargetLowering {
             fp_imm_predicate: None,
             keeps_f64_constants: false,
             cmov: false,
+            libcall_names: HashMap::default(),
         }
+    }
+
+    /// `setLibcallName` for the integer operation `op` of `vt`.
+    pub fn set_libcall_name(
+        &mut self,
+        op: ISD,
+        vt: MVT,
+        name: &'static str,
+    ) {
+        self.libcall_names.insert((op, vt), name);
+    }
+
+    /// `getLibcallName` of the routine `op` of `vt` calls, if the target has one.
+    pub fn libcall_name(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> Option<&'static str> {
+        let EVT::Simple(vt) = vt else { return None };
+        self.libcall_names.get(&(op, vt)).copied()
     }
 
     pub fn set_operation_action(

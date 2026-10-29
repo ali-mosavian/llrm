@@ -95,6 +95,14 @@ impl PinRegisters for M68kPins {
     ) -> Option<u16> {
         REGISTERS.iter().find(|(_, one)| *one == id).map(|(number, _)| *number)
     }
+
+    /// `PC` has no register id here: the addressing-mode matchers still ask whether a base is it.
+    fn is_fixed(
+        &self,
+        register: u16,
+    ) -> bool {
+        register == pin::PC
+    }
 }
 
 /// What the scheduler reads of the instruction descriptions.
@@ -146,8 +154,18 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
+    select_block_with(dag, cpu, false)
+}
+
+/// [`select_block`], with a compare's load put where a pattern folds it where
+/// `load_as_source` (see `lowering::lower_setcc`).
+pub fn select_block_with(
+    dag: &mut SelectionDAG,
+    cpu: Cpu,
+    load_as_source: bool,
+) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
-    let mut lowering = M68kLowering;
+    let mut lowering = M68kLowering { load_as_source };
     let arch = M68k;
     DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     TypeLegalizer::new(dag, &tli)

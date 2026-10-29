@@ -114,6 +114,14 @@ pub struct BuilderTarget {
     /// A target with no string instructions: the most loads and stores of a
     /// constant copy or fill it is inline for. None where x86's rules stand.
     pub mem_limits: Option<MemLimits>,
+    /// The pairs of an inline constant memcpy are chained one after another in
+    /// address order, not left unordered for the scheduler (`getMemcpyLoadsAndStores`
+    /// puts every load and store on the root). DEVIATE: a target that steps a
+    /// pointer with each access wants that order. Off for x86.
+    pub ordered_copies: bool,
+    /// The target has x86's `rep movs` and `rep stos`; without them a copy or
+    /// fill past the inline limit is a call (the pin's `memcpy`, `memset`).
+    pub string_instructions: bool,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -272,6 +280,8 @@ impl BuilderTarget {
             memset_stores_size: 0,
             memcpy_moves_size: 0,
             mem_limits: None,
+            ordered_copies: false,
+            string_instructions: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -304,6 +314,8 @@ impl BuilderTarget {
             memset_stores_size: 0,
             memcpy_moves_size: 0,
             mem_limits: None,
+            ordered_copies: false,
+            string_instructions: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,

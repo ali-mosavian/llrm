@@ -7,7 +7,7 @@
 //! a store through `(%d0)`) and before register-class constraints (the base
 //! in a data register).
 
-use llrm_m68k::compile::text;
+use llrm_m68k::compile::{Options, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
@@ -18,7 +18,7 @@ fn compiled(
 ) -> String {
     let text_in = format!("target datalayout = \"{DATALAYOUT}\"\n{body}");
     let module = llrm_mir::parse::module(&text_in).expect("parses");
-    text(&module, name, Cpu::M68000).expect("compiles")
+    text_with(&module, name, Cpu::M68000, Options::PINNED).expect("compiles")
 }
 
 #[test]
@@ -105,13 +105,15 @@ fn modulo_names_and_copies(text: &str) -> Vec<String> {
     out
 }
 
-/// `llc`'s loop, with a callee-saved `d2` kept across it. The allocators
-/// differ, so the registers are renamed and the copies between them dropped.
+/// `llc`'s loop, less its frame: it keeps `n` in the callee-saved `d2`, which
+/// costs `suba`, two `movem`s and `adda`; the loop here holds `n` in `%a0`
+/// (`cmp.l An, Dn` exists), a register a call clobbers anyway. The allocators
+/// differ, so the data registers are renamed and the copies between them
+/// dropped.
 #[test]
-fn a_counted_loop_is_equal_to_llc_modulo_register_names_and_copies() {
-    let llc = "sum:\n\tsuba.l\t#4, %sp\n\tmovem.l\t%d2, (0,%sp)\n\tmoveq\t#0, %d0\n\tmove.l\t(8,%sp), %d1\n\tmove.l\t%d0, %d2\n\
-               .LBB0_1:\n\tadd.l\t%d2, %d0\n\tadd.l\t#1, %d2\n\tcmp.l\t%d1, %d2\n\tblt\t.LBB0_1\n\
-               \tmovem.l\t(0,%sp), %d2\n\tadda.l\t#4, %sp\n\trts\n";
+fn a_counted_loop_is_llcs_without_the_callee_saved_frame() {
+    let llc = "sum:\n\tmoveq\t#0, %d0\n\tmove.l\t(4,%sp), %a0\n\tmove.l\t%d0, %d2\n\
+               .LBB0_1:\n\tadd.l\t%d2, %d0\n\tadd.l\t#1, %d2\n\tcmp.l\t%a0, %d2\n\tblt\t.LBB0_1\n\trts\n";
     assert_eq!(modulo_names_and_copies(&compiled(SUM, "sum")), modulo_names_and_copies(llc));
 }
 
@@ -172,10 +174,11 @@ fn a_loaded_byte_stored_at_once_is_one_move() {
 #[test]
 fn gcd_subtractions_sink_into_their_arms() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("gcd")).expect("parses");
-    let text = text(&module, "k", Cpu::M68000).expect("compiles");
+    let text =
+        text_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).expect("compiles");
     assert!(!text.contains("movem"), "{text}");
-    let after_compare = text.find("ble").expect("the signed compare");
-    assert!(text.matches("sub.l").count() == 2 && text.find("sub.l").unwrap() > after_compare, "{text}");
+    // block placement may lay an arm above the compare, so the sinking shows in the count and the frame
+    assert_eq!(text.matches("sub.l").count(), 2, "{text}");
 }
 
 /// The loop's join was a block of its own that only jumped back (`bra L5` to
@@ -183,6 +186,92 @@ fn gcd_subtractions_sink_into_their_arms() {
 #[test]
 fn a_loop_does_not_jump_through_a_block_that_only_jumps() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("gcd")).expect("parses");
-    let text = text(&module, "k", Cpu::M68000).expect("compiles");
+    let text =
+        text_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).expect("compiles");
     assert!(!text.contains(":\n\tbra"), "{text}");
+}
+
+/// Twenty live incoming arguments in a loop: each is a load of its slot,
+/// which runs again where the value is read instead of being stored to a
+/// frame slot and reloaded. It stored 18 of them (`movem.l %d0, (N,%sp)`).
+#[test]
+fn spilled_incoming_arguments_are_reloaded_from_their_own_slots() {
+    let params: Vec<String> = (0..20).map(|k| format!("i32 %a{k}")).collect();
+    let mut ir = format!("define i32 @p({}) {{\nentry:\n  br label %l\nl:\n", params.join(", "));
+    ir.push_str("  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n");
+    let mut sum = "%s".to_owned();
+    for k in 0..20 {
+        ir.push_str(&format!("  %m{k} = xor i32 %a{k}, %i\n  %t{k} = add i32 {sum}, %m{k}\n"));
+        sum = format!("%t{k}");
+    }
+    ir.push_str(&format!("  %s1 = add i32 {sum}, 1\n  %i1 = add i32 %i, 1\n  %c = icmp slt i32 %i1, %a0\n"));
+    ir.push_str("  br i1 %c, label %l, label %x\nx:\n  ret i32 %s1\n}\n");
+    let asm = compiled(&ir, "p");
+    let stores = asm.lines().filter(|line| line.starts_with("\tmovem.l\t%d") && !line.contains('-')).count();
+    assert!(stores <= 1, "{asm}");
+}
+
+/// A constant held in an address register is `move.w #1, %a0` (`ExpandMOVI`),
+/// not `moveq #1, %a0`, which has no encoding: `fib` returned 0 when the
+/// allocator first gave its constant an address register.
+#[test]
+fn a_constant_in_an_address_register_is_not_a_moveq() {
+    let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("fib")).expect("parses");
+    let asm = text_with(&module, "k", Cpu::M68000, Options::PINNED).expect("compiles");
+    assert!(asm.contains("%a0") && !asm.lines().any(|l| l.contains("moveq") && l.contains("%a")), "{asm}");
+    assert!(asm.contains("move.w\t#1, %a0"), "{asm}");
+}
+
+/// A pointer also read as an integer sat in one data register and was the
+/// base of the load: `add.l (%d0), %d0`, not an instruction at all. The base
+/// now comes from a copy into an address register.
+#[test]
+fn a_pointer_used_as_an_integer_and_as_a_base_gets_an_address_register() {
+    let ir = "define i32 @k(ptr %p) {\n  %v = load i32, ptr %p\n  %i = ptrtoint ptr %p to i32\n  %r = add i32 %v, %i\n  ret i32 %r\n}";
+    assert_eq!(compiled(ir, "k"), "k:\n\tmove.l\t(4,%sp), %d0\n\tmove.l\t%d0, %a0\n\tadd.l\t(%a0), %d0\n\trts\n");
+}
+
+/// Loop strength reduction prices addressing modes through the target's
+/// `Tti`. With the m68k one the array walk gets a pointer induction variable
+/// (a `phi ptr`, an `(An)+` access); with a scaled index (the 68020's, and
+/// x86's) it stays indexed.
+#[test]
+fn the_m68k_tti_strength_reduces_an_array_walk_and_a_scaled_index_does_not() {
+    let ir = "define i32 @k(ptr %p, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  %s1 = add i32 %s, %v\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %s1\n}";
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).unwrap();
+    let ours = llrm_mir::print::module(&llrm_m68k::compile::mid_end(&module).unwrap());
+    let default = llrm_mir::print::module(
+        &llrm_m68k::compile::mid_end_described_by(
+            &module,
+            &llrm_m68k::machine::M68k { scaled_index: true, ..Default::default() },
+            None,
+        )
+        .unwrap(),
+    );
+    assert!(ours.contains("phi ptr"), "{ours}");
+    assert!(!default.contains("phi ptr"), "{default}");
+}
+
+/// A guard that returns early over a loop branches forward to the cold
+/// return, laid out after the loop. It used to fall into it and jump to the
+/// loop: a taken `bra` before the loop on every call (`strcmp`: `bne; moveq;
+/// bra`).
+#[test]
+fn a_guard_over_a_loop_branches_forward_to_a_cold_return() {
+    let module = llrm_mir::parse::module(&llrm_m68k::kernels::source_in("library", "strcmp")).expect("parses");
+    let text = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
+    let before_loop = &text[..text.find(".LBB0_2:").expect("the loop")];
+    assert!(before_loop.contains("\tbeq\t.LBB0_6"), "{text}");
+    assert!(!before_loop.contains("bra"), "{text}");
+}
+
+/// A `select` expanded to a diamond has equal odds on its arms, so the arm
+/// that falls through stays in place (`EmitLoweredSelect` adds it first).
+/// With the successors in the taken-first order the arms swapped, and `hex`
+/// ran 4 instructions more (66 to 70).
+#[test]
+fn the_arms_of_an_expanded_select_keep_their_order() {
+    let module = llrm_mir::parse::module(&llrm_m68k::kernels::source_in("library", "hex")).expect("parses");
+    let text = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
+    assert!(text.contains("\tcmpi.l\t#10, %d0\n\tbcc\t.LBB0_3\n"), "{text}");
 }
