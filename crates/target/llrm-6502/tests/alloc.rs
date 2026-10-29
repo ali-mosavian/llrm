@@ -1053,3 +1053,34 @@ fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
     let kept = common::run_with("alloc-pushed-void-kept", &format!("{set}{args}  jsr quad\n{check}"), &program);
     assert_eq!(kept, 0, "the void version changed a callee-saved cell");
 }
+
+/// A zero or sign test of a value just loaded or computed in `a` compared it with 0 again
+/// (`lda rc2; cmp #0; beq`, 2 bytes and 2 cycles each, popcount): the load set the flags. Tests of
+/// a byte and of the high byte of a word, equal, not equal and negative, each branching on a value
+/// that reached `a` a different way.
+#[test]
+fn a_zero_or_sign_test_does_not_compare_again() {
+    for (name, ir) in [
+        ("isz", "define i8 @isz(i8 %x) {\n  %c = icmp eq i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
+        ("nz", "define i8 @nz(i8 %x) {\n  %c = icmp ne i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
+        ("neg", "define i8 @neg(i8 %x) {\n  %c = icmp slt i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
+        ("sum", "define i8 @sum(i8 %x, i8 %y) {\n  %s = add i8 %x, %y\n  %c = icmp eq i8 %s, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
+    ] {
+        let text = compile(ir, name);
+        assert!(!text.contains("cmp #0"), "{name}: {text}");
+        let run = |x: u16, y: u16| common::run_with("alloc-nzt", &format!("{}{}  jsr {name}\n", set("rc2", x), set("rc3", y)), &text);
+        let want = |x: u16, y: u16| -> i32 {
+            let (x, y) = (x as u8, y as u8);
+            let yes = match name {
+                "isz" => x == 0,
+                "nz" => x != 0,
+                "neg" => (x as i8) < 0,
+                _ => x.wrapping_add(y) == 0,
+            };
+            if yes { 7 } else { 9 }
+        };
+        for (x, y) in [(0, 0), (1, 0), (0x80, 0), (0x7F, 1), (0xFF, 1), (0x80, 0x80)] {
+            assert_eq!(run(x, y), want(x, y), "{name}({x:#x}, {y:#x})");
+        }
+    }
+}
