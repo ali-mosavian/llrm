@@ -407,7 +407,8 @@ impl Builder<'_> {
     }
 
     /// DEVIATE SD223 (real mode): tuned for size, a constant memset whose
-    /// stores take more bytes than a `rep stosb` fill is the fill. The pin
+    /// stores take more bytes than a `rep stosb` fill is the fill, unless the
+    /// fill's extra clocks outweigh the bytes it saves (`SizeTrade`). The pin
     /// counts stores (`MaxStoresPerMemsetOptSize`); in real mode each dword
     /// store carries a `66` prefix and the fill costs `FILL_BYTES`. Mirrors the
     /// old selector's `stored_bytes` rule. Owner w12. Exit: a store-cost
@@ -421,9 +422,20 @@ impl Builder<'_> {
             return false;
         }
         let dwords = length / 4;
+        let words = u64::from(length % 4 >= 2);
+        let bytes = u64::from(length % 2 == 1);
         let (each, setup) = if dwords > 1 { (4, 6) } else { (8, 0) };
-        let stored = setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 };
-        stored > FILL_BYTES
+        let stored = setup + dwords * each + words * 5 + bytes * 4;
+        if stored <= FILL_BYTES {
+            return false;
+        }
+        let Some(trade) = self.target.size_trade else {
+            return true;
+        };
+        let stores = (dwords * (trade.store + trade.prefix) as u64 + (words + bytes) * trade.store as u64) as i64;
+        let fill = trade.fill + length as i64 * trade.fill_cell;
+        // Tuning constant fitted to sc.c, weapons, mdl and lru, not derived.
+        (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 
     /// `getMemsetStores`: the fill value splatted to the widest operation,

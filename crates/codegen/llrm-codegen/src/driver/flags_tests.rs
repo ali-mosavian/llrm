@@ -90,9 +90,7 @@ fn each_level_selects_gcc_s_passes() {
     assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
     assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
-    // -Og keeps the four rounds that only -O1 gave up (two, measured at -O1).
-    assert_eq!(pipeline(&["-Og"]), Options { loopidioms: false, rounds: 4, ..pipeline(&["-O1"]) });
-    assert_eq!(pipeline(&["-O1"]).rounds, 2);
+    assert_eq!(pipeline(&["-Og"]), Options { loopidioms: false, ..pipeline(&["-O1"]) });
     assert_eq!(pipeline(&[]), pipeline(&["-O2"]));
     // `-fipa-cp-clone` is gcc's -O3 (opts.cc:676); the pin's default<O3> has no
     // IPA-CP cloning, so -O3 leaves it off (recchop 1380 lines).

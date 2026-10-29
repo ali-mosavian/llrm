@@ -26,6 +26,8 @@ typedef struct SD {
 enum { VT_I2 = 0x02, VT_SD = 0x03, VT_R4 = 0x04, VT_R8 = 0x08, VT_I4 = 0x14 };
 
 /* Run-time errors (inc/messages.inc BE_*) and the fatal ones (FE_*). */
+#define FE_CORRUPT 0x9000L
+#define FE_NOSTACK 0x9007L
 enum {
     BE_SYNTAX = 2,
     BE_RETURN = 3,
@@ -57,9 +59,7 @@ enum {
     BE_HANDSOFF = 70,
     BE_RENAMEDISK = 74,
     BE_ACCESS = 75,
-    BE_NOTFOUND = 76,
-    FE_CORRUPT = 0x9000,
-    FE_NOSTACK = 0x9007
+    BE_NOTFOUND = 76
 };
 
 #pragma aux copy_bytes "B$COPY"
