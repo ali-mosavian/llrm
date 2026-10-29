@@ -56,6 +56,17 @@ fn frame_op(
         FrameOp::Save { registers, base: at, offset } => {
             mc::Inst { opcode: "MOVM32pm", operands: vec![Imm(*offset), base(at), Imm(mask(registers))] }
         }
+        FrameOp::Push(registers) | FrameOp::Pop(registers) => {
+            let pushing = matches!(op, FrameOp::Push(_));
+            let mut sorted: Vec<RegId> = registers.clone();
+            sorted.sort_by_key(|one| mask_bit(REGISTER_INFO.root(*one)));
+            match (&sorted[..], pushing) {
+                ([one], true) => mc::Inst { opcode: "PUSH32", operands: vec![R(*one)] },
+                ([one], false) => mc::Inst { opcode: "POP32", operands: vec![R(*one)] },
+                (_, true) => mc::Inst { opcode: "PUSHM32", operands: vec![Imm(mask(registers))] },
+                (_, false) => mc::Inst { opcode: "POPM32", operands: vec![Imm(mask(registers))] },
+            }
+        }
         FrameOp::Restore { registers, base: at, offset } => {
             mc::Inst { opcode: "MOVM32mp", operands: vec![Imm(mask(registers)), Imm(*offset), base(at)] }
         }
@@ -90,6 +101,7 @@ pub fn finish(
     assignment: &Assignment,
     number: usize,
     slots: &[i32],
+    overlay: bool,
 ) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
@@ -153,7 +165,9 @@ pub fn finish(
         ..Function::default()
     });
     let mut out = Vec::new();
-    layout.prologue().iter().for_each(|op| frame_op(op, &mut out));
+    let pushes = overlay && layout.pushes();
+    let opening = if pushes { layout.push_prologue() } else { layout.prologue() };
+    opening.iter().for_each(|op| frame_op(op, &mut out));
     let mut lines = Vec::new();
     let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
     let mut shown = 0usize;
@@ -210,7 +224,8 @@ pub fn finish(
             }
             Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
             Kind::Op("RET") => {
-                layout.epilogue().iter().for_each(|op| frame_op(op, &mut out));
+                let closing = if pushes { layout.pop_epilogue() } else { layout.epilogue() };
+                closing.iter().for_each(|op| frame_op(op, &mut out));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
             }
             Kind::Op("MOVM32pm_P") => {
@@ -237,17 +252,7 @@ pub fn finish(
                 let [mc::Operand::Reg(dst), mc::Operand::Imm(value)] = operands[..] else {
                     return Err("MOVI32ri operands".to_owned());
                 };
-                if (-128..=127).contains(&value) {
-                    out.push(mc::Inst {
-                        opcode: "MOVQ",
-                        operands: vec![mc::Operand::Reg(dst), mc::Operand::Imm(value)],
-                    });
-                } else {
-                    out.push(mc::Inst {
-                        opcode: "MOV32ri",
-                        operands: vec![mc::Operand::Reg(dst), mc::Operand::Imm(value)],
-                    });
-                }
+                out.extend(expand_movi(dst, value)?);
             }
             Kind::Op(name) if extension(name).is_some() => {
                 out.extend(expand_extension(name, &operands)?);
@@ -256,7 +261,48 @@ pub fn finish(
         }
     }
     lines.extend(out.into_iter().map(Line::Inst));
+    if overlay {
+        lines = lines
+            .into_iter()
+            .map(|line| match line {
+                Line::Inst(inst) => Line::Inst(crate::overlay::rewrite(inst)),
+                label => label,
+            })
+            .collect();
+        lines = crate::overlay::merge_masks(lines);
+        lines = crate::overlay::constant_into_destination(lines);
+        lines = crate::overlay::drop_redundant_tests(lines);
+        lines = crate::overlay::fold_post_increment(lines);
+    }
     Ok(lines)
+}
+
+/// `ExpandMOVI` for a long: a clear, a `moveq` where the register is a data
+/// one and the value fits, `moveq` and `not.b` for 128 to 255, `movea.w` for
+/// an address register and a value under 64 KiB, else a `move.l`.
+fn expand_movi(
+    dst: RegId,
+    value: i64,
+) -> Result<Vec<mc::Inst>, String> {
+    use mc::Operand::{Imm, Reg as R};
+    let address = mask_bit(REGISTER_INFO.root(dst)).ok_or("MOVI32ri into a register no move names")? >= 8;
+    Ok(if value == 0 {
+        if address {
+            vec![inst("SUB32ar", vec![R(dst), R(dst), R(dst)])]
+        } else {
+            vec![inst("MOVQ", vec![R(dst), Imm(0)])]
+        }
+    } else if !address && (-128..=127).contains(&value) {
+        vec![inst("MOVQ", vec![R(dst), Imm(value)])]
+    } else if !address && (0..=255).contains(&value) {
+        let low = REGISTER_INFO.view(REGISTER_INFO.root(dst), 8).ok_or("no byte view")?;
+        vec![inst("MOVQ", vec![R(dst), Imm(!value & 0xFF)]), inst("NOT8d", vec![R(low), R(low)])]
+    } else if address && (0..=65535).contains(&value) {
+        let word = REGISTER_INFO.view(REGISTER_INFO.root(dst), 16).ok_or("no word view")?;
+        vec![inst("MOV16ai", vec![R(word), Imm(value)])]
+    } else {
+        vec![inst("MOV32ri", vec![R(dst), Imm(value)])]
+    })
 }
 
 /// `MOVZXd32p8`, `MOVSXd16d8`..: a zero or sign extending move as

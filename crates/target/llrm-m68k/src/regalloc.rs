@@ -39,7 +39,15 @@ impl Target for M68kRegisters {
         match class {
             Class::Dr8 | Class::Dr16 | Class::Dr32 => DATA.to_vec(),
             Class::Ar32 => ADDRESS.to_vec(),
-            Class::Xr32 => DATA.iter().chain(&ADDRESS).copied().collect(),
+            // the registers a call clobbers anyway first, then the saved ones:
+            // a saved register costs a push and a pop (`RegisterClassInfo`
+            // orders the callee-saved last)
+            Class::Xr32 => CALLER_SAVED
+                .iter()
+                .chain(DATA.iter().filter(|one| !CALLER_SAVED.contains(one)))
+                .chain(ADDRESS.iter().filter(|one| !CALLER_SAVED.contains(one)))
+                .copied()
+                .collect(),
         }
     }
 
@@ -102,7 +110,7 @@ impl Target for M68kRegisters {
 
 pub type GraphColoring = llrm_spike_mf::GraphColoring<M68kRegisters>;
 
-pub use llrm_spike_mf::regalloc::{eliminate_phis, successors, two_address};
+pub use llrm_spike_mf::regalloc::{eliminate_phis, eliminate_phis_with, successors, two_address};
 
 pub fn fold_reserved_copies(function: &mut MFunction) {
     llrm_spike_mf::regalloc::fold_reserved_copies::<M68kRegisters>(function)
@@ -115,6 +123,15 @@ pub fn allocate_spilling(
     first_slot: i32,
 ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
     llrm_spike_mf::spill::allocate_spilling::<M68kRegisters>(function, first_slot)
+}
+
+/// [`allocate_spilling`], with the copies a loop runs on every trip joined
+/// first.
+pub fn allocate_spilling_by_frequency(
+    function: &mut MFunction,
+    first_slot: i32,
+) -> Result<(Assignment, Vec<(i32, Class)>), String> {
+    llrm_spike_mf::spill::allocate_spilling_ordered::<M68kRegisters>(function, first_slot, true)
 }
 
 /// `MachineSinking` over the m68k function.
@@ -144,6 +161,27 @@ pub fn remove_identity_copies(
     assignment: &Assignment,
 ) {
     llrm_spike_mf::remove_identity_copies::<M68kRegisters>(function, assignment)
+}
+
+/// An edge the phi's copy would cross a compare on gets a block of its own.
+pub fn split_flag_edges(function: &mut MFunction) {
+    llrm_spike_mf::regalloc::split_flag_edges::<M68kRegisters, _>(function)
+}
+
+/// `TwoAddressInstructionPass`'s choice of the tied source.
+pub fn commute_tied(function: &mut MFunction) {
+    llrm_spike_mf::commute_tied::<M68kRegisters>(function)
+}
+
+/// `MachineCopyPropagation`'s spurious copies; the 8 and 16-bit classes copy
+/// part of a register and do not count.
+pub fn remove_redundant_copies(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    llrm_spike_mf::remove_redundant_copies::<M68kRegisters>(function, assignment, |class| {
+        matches!(class, Class::Dr32 | Class::Ar32 | Class::Xr32)
+    })
 }
 
 impl Jump for M68kRegisters {

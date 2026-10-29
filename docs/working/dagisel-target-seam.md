@@ -23,6 +23,24 @@ A small trait in `llrm-target`/codegen (`DagTarget`: pin ids of target nodes, re
 - Left for S2: the builder's call, return and formal-argument code is X86's `LowerCall`/`LowerReturn` (x86isd::CALL, m16 views); it needs a `BuilderTarget` hook to `llrm-m68k` `call.rs` (thin dispatch lines in `builder.rs`), and a `BuilderTarget::m68k`. The `DagTarget` trait that replaces `selected_in`'s bitness gate is extracted from the two implementations after that (rule of two), not before. `emit.rs` is not part of S2.
 - Root `.td` may live in the target crate (6502: `crates/target/llrm-6502/*.td`, include dir = pin's `llvm/include`); `own_ids.txt` lives in the target crate, read by regen and by the lowering (one source).
 - Left for S2 (2026-10-29): the shared legalizer has no libcall conversion (`RuntimeLibcalls`: mul/div/rem/shift without the instruction become calls in legalize). 6502 emits runtime-call pseudos at emission instead; m68k needs it for 68000 i32 mul/div, wasm does not. After M5. The call/return/argument hook is done: `selectiondag::target_calling::TargetCalling` (a2bcbe44f6).
+- Left for S2 (2026-10-29): the shared legalizer cannot expand an `i64` add or subtract on a 32-bit target without a carry operation. The full `-O2` closes the `sum` loop (`bench/kernels/sum.ll` in llrm-m68k) into `i33` arithmetic (`opt -O2`, pin d1106deb71cc, shown here trimmed); `llc` promotes `i33` to `i64` and expands the add to a carry pair (`UADDO_CARRY`, M68k `ADDX`). Ours stops at the add. Repro, any 32-bit target with `n8:16:32`:
+  ```
+  define i32 @k(i32 %n) {
+    %smax = tail call i32 @llvm.smax.i32(i32 %n, i32 1)
+    %0 = zext nneg i32 %smax to i33
+    %1 = add nsw i33 %0, -1
+    %2 = add nsw i32 %smax, -2
+    %3 = zext i32 %2 to i33
+    %4 = mul i33 %1, %3
+    %5 = lshr i33 %4, 1
+    %6 = trunc nuw i33 %5 to i32
+    %7 = add i32 %smax, %6
+    %8 = add i32 %7, -1
+    ret i32 %8
+  }
+  declare i32 @llvm.smax.i32(i32, i32)
+  ```
+  `cargo run -p llrm-m68k --example asm -- FILE k` (with the datalayout line) fails: `Legalize("Unsupported { op: Add, ty: Simple(I64), what: \"expand add or subtract without a carry operation\" }")`. Not an m68k matter: the target marks no carry op, and the legalizer should expand through `UADDO_CARRY`/`ADDC`/`ADDE` as `llc` does. m68k runs LSR only until this lands (`llrm-m68k` `compile::mid_end`).
 
 ## Probe for M3 (2026-10-28)
 - The DAG vocabulary (`MVT`, `ISD`, `TargetLoweringInfo`, `TargetLowering` action tables) lives in `llrm-x86/src/dag`, re-exported by codegen's `selectiondag.rs`. It is generic in shape (`TargetLowering::empty(types)`, `set_operation_action`, ...) with x86 constructors beside it. A non-x86 target must depend on `llrm-x86` for it until it moves to a neutral crate (layout item for S2).

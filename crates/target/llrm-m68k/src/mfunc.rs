@@ -84,6 +84,15 @@ impl Class {
 /// The machine function over m68k's classes.
 pub type MFunction = mf::MFunction<Class>;
 
+/// Whether the pin marks the instruction `name` `isCommutable`.
+pub fn pin_commutable(name: &str) -> bool {
+    MACHINE_OPCODES
+        .iter()
+        .find(|(_, one)| *one == name)
+        .and_then(|(code, _)| instrinfo::desc(*code as u16))
+        .is_some_and(|desc| desc.has(flag::COMMUTABLE))
+}
+
 fn opcode_name(code: u32) -> Option<&'static str> {
     MACHINE_OPCODES.iter().find(|(value, _)| u32::from(*value) == code).map(|(_, name)| *name)
 }
@@ -131,19 +140,30 @@ impl Emitter<'_> {
         }
     }
 
-    /// `InstrEmitter`'s `constrainRegClass`: a register an instruction reads
-    /// must be in the class the operand names.
+    /// `InstrEmitter`'s `AddRegisterOperand`: a register an instruction reads
+    /// must be in the class the operand names. Where the register's class
+    /// cannot be narrowed to it (`constrainRegClass` fails), the value is
+    /// copied into a new register of that class, and that is the operand.
     fn constrain(
         &mut self,
-        operand: &Operand,
+        operand: Operand,
         wanted: Option<&OperandDesc>,
-    ) -> Result<(), String> {
-        let (Operand::Use(Reg::Virt(v)), Some(wanted)) = (operand, wanted) else { return Ok(()) };
-        let Some(class) = Class::of_pin(wanted.reg_class) else { return Ok(()) };
+        into: &mut Vec<Inst>,
+    ) -> Operand {
+        let (Operand::Use(Reg::Virt(v)), Some(wanted)) = (&operand, wanted) else { return operand };
+        let Some(class) = Class::of_pin(wanted.reg_class) else { return operand };
         let have = self.function.classes[*v as usize];
-        self.function.classes[*v as usize] =
-            have.meet(class).ok_or_else(|| format!("v{v} is {have:?} where {class:?} is read"))?;
-        Ok(())
+        match have.meet(class) {
+            Some(narrowed) => {
+                self.function.classes[*v as usize] = narrowed;
+                operand
+            }
+            None => {
+                let copy = self.new_reg(class);
+                into.push(Inst::copy(copy, Reg::Virt(*v)));
+                Operand::Use(copy)
+            }
+        }
     }
 
     fn operand(
@@ -222,7 +242,7 @@ impl Emitter<'_> {
                 }
                 for op in n.ops.clone() {
                     if let Some(operand) = self.operand(op)? {
-                        self.constrain(&operand, desc.operands.get(operands.len()))?;
+                        let operand = self.constrain(operand, desc.operands.get(operands.len()), into);
                         operands.push(operand);
                     }
                 }
@@ -234,6 +254,14 @@ impl Emitter<'_> {
                     .map(|(at, one)| (one.tied_to as usize, at))
                     .collect();
                 let ccr = pin::CCR;
+                // DEVIATE from the pin, whose M68k marks nothing
+                // rematerializable: a constant move and a load of an incoming
+                // argument slot (immutable) run again where they are read,
+                // which is smaller than a store and a reload.
+                // Exit: never; a target choice, as an override.
+                let loads_argument = desc.has(flag::MAY_LOAD)
+                    && !desc.has(flag::MAY_STORE)
+                    && operands.iter().any(|operand| matches!(operand, Operand::Frame(index) if *index < 0));
                 into.push(Inst {
                     call: desc.has(flag::CALL),
                     ties,
@@ -245,6 +273,8 @@ impl Emitter<'_> {
                     may_store: desc.has(flag::MAY_STORE),
                     side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
                     cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
+                    commutable: desc.has(flag::COMMUTABLE),
+                    rematerializable: desc.has(flag::REMATERIALIZABLE) || desc.has(flag::MOVE_IMM) || loads_argument,
                     ..Inst::new(Kind::Op(name), operands)
                 });
             }

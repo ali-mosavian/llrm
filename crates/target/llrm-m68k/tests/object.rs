@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use llrm_m68k::compile::{Item, items};
+use llrm_m68k::compile::{Item, Options, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::encode::encode;
 use llrm_m68k::object::{assemble, executable, start, write_executable};
@@ -26,7 +26,7 @@ define i32 @caller(i32 %a, i8 %b) {\n  %r = call i32 @callee(i32 %a, i8 %b)\n  r
 
 fn function(name: &str) -> Vec<Item> {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{IR}")).expect("parses");
-    items(&module, name, Cpu::M68000).expect("compiles")
+    items_with(&module, name, Cpu::M68000, Options::PINNED).expect("compiles")
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -57,10 +57,7 @@ fn a_call_encodes_as_llvm_mc_does() {
 #[test]
 fn a_loop_branch_is_resolved_as_llvm_mc_does() {
     let code = assemble(&function("sum"), 0).unwrap().code;
-    assert_eq!(
-        hex(&code),
-        "9ffc0000000448ef000400007200242f00082001d081d2bc00000001b2826df44cef00040000dffc000000044e75"
-    );
+    assert_eq!(hex(&code), "7200206f00042001d081d2bc00000001b2886df44e75");
 }
 
 fn qemu() -> Option<PathBuf> {
