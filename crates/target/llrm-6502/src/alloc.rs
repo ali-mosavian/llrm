@@ -72,9 +72,11 @@ fn is_cell(register: RegId) -> bool {
     register.index() >= reg::RC0.index()
 }
 
-pub struct Mos;
+/// The target; `STACK` keeps spills on the soft stack (a reentrant function)
+/// instead of in static cells, which costs `y` at each spill.
+pub struct Mos<const STACK: bool>;
 
-impl Target for Mos {
+impl<const STACK: bool> Target for Mos<STACK> {
     type Class = Class;
 
     fn meet(
@@ -145,7 +147,13 @@ impl Target for Mos {
         register: Reg,
         slot: i32,
     ) -> Option<Inst> {
-        Some(Inst::new(Kind::Op("SPILL"), vec![Operand::Use(register), Operand::Frame(slot)]))
+        let mut spill = Inst::new(Kind::Op("SPILL"), vec![Operand::Use(register), Operand::Frame(slot)]);
+        if STACK {
+            // `ldy #offset; sta (rc0),y`: it clobbers `y`, even a spilled `y`
+            spill.operands.push(Operand::Def(Reg::Phys(reg::Y)));
+            spill.early_clobber = true;
+        }
+        Some(spill)
     }
 
     fn spill_load(
@@ -153,7 +161,11 @@ impl Target for Mos {
         register: Reg,
         slot: i32,
     ) -> Option<Inst> {
-        Some(Inst::new(Kind::Op("RELOAD"), vec![Operand::Def(register), Operand::Frame(slot)]))
+        let mut reload = Inst::new(Kind::Op("RELOAD"), vec![Operand::Def(register), Operand::Frame(slot)]);
+        if STACK {
+            reload.operands.push(Operand::Def(Reg::Phys(reg::Y)));
+        }
+        Some(reload)
     }
 }
 
@@ -320,7 +332,7 @@ impl Builder {
     ) -> Result<(), Unsupported> {
         match register {
             Reg::Virt(v) => {
-                let met = Mos::meet(self.function.classes[v as usize], class)
+                let met = Mos::<false>::meet(self.function.classes[v as usize], class)
                     .ok_or_else(|| Unsupported("a value needed in two places".into()))?;
                 self.function.classes[v as usize] = met;
                 Ok(())
@@ -796,24 +808,26 @@ pub fn build(
                 cmov.early_clobber = true;
                 b.push(cmov);
             }
+            // `ldy #off; lda (p),y` is one instruction, so spill code for the
+            // pointer cannot land between the two and clobber `y`
             op::LDP8 | op::LDP16 => {
                 let ptr = b.pointer(name(&o[1])?)?;
                 b.require(ptr, Class::PAIR)?;
                 let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
                 let wide = inst.opcode == op::LDP16;
+                let off = immediate(&o[2])?;
                 let (dl, dh) = if wide {
                     b.write_word(name(&o[0])?)?
                 } else {
                     b.define(name(&o[0])?);
                     (b.byte(name(&o[0])?)?, Reg::Phys(reg::A))
                 };
-                b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(y), Operand::Imm(immediate(&o[2])?)]));
-                b.push(Inst::new(Kind::Op("LDPY"), vec![Operand::Def(acc), Operand::Use(ptr), Operand::Use(y)]));
-                b.copy(dl, acc);
-                if wide {
-                    b.push(Inst::new(Kind::Op("INY"), vec![Operand::Def(y), Operand::Use(y)]));
-                    b.push(Inst::new(Kind::Op("LDPY"), vec![Operand::Def(acc), Operand::Use(ptr), Operand::Use(y)]));
-                    b.copy(dh, acc);
+                for (part, to) in [(0, dl), (1, dh)].into_iter().take(if wide { 2 } else { 1 }) {
+                    b.push(Inst::new(
+                        Kind::Op("LDPY"),
+                        vec![Operand::Def(acc), Operand::Use(ptr), Operand::Imm(off + part), Operand::Def(y)],
+                    ));
+                    b.copy(to, acc);
                 }
             }
             op::STP8 | op::STP16 => {
@@ -821,15 +835,15 @@ pub fn build(
                 b.require(ptr, Class::PAIR)?;
                 let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
                 let wide = inst.opcode == op::STP16;
+                let off = immediate(&o[2])?;
                 let (sl, sh) =
                     if wide { b.read_word(name(&o[0])?)? } else { (b.byte(name(&o[0])?)?, Reg::Phys(reg::A)) };
-                b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(y), Operand::Imm(immediate(&o[2])?)]));
-                b.copy(acc, sl);
-                b.push(Inst::new(Kind::Op("STPY"), vec![Operand::Use(acc), Operand::Use(ptr), Operand::Use(y)]));
-                if wide {
-                    b.push(Inst::new(Kind::Op("INY"), vec![Operand::Def(y), Operand::Use(y)]));
-                    b.copy(acc, sh);
-                    b.push(Inst::new(Kind::Op("STPY"), vec![Operand::Use(acc), Operand::Use(ptr), Operand::Use(y)]));
+                for (part, from) in [(0, sl), (1, sh)].into_iter().take(if wide { 2 } else { 1 }) {
+                    b.copy(acc, from);
+                    b.push(Inst::new(
+                        Kind::Op("STPY"),
+                        vec![Operand::Use(acc), Operand::Use(ptr), Operand::Imm(off + part), Operand::Def(y)],
+                    ));
                 }
             }
             op::STZP => {
@@ -841,32 +855,30 @@ pub fn build(
                 if off == 0 {
                     b.push(Inst::new(Kind::Op("STP0"), vec![Operand::Use(acc), Operand::Use(ptr)]));
                 } else {
-                    b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(y), Operand::Imm(off)]));
-                    b.push(Inst::new(Kind::Op("STPY"), vec![Operand::Use(acc), Operand::Use(ptr), Operand::Use(y)]));
+                    b.push(Inst::new(
+                        Kind::Op("STPY"),
+                        vec![Operand::Use(acc), Operand::Use(ptr), Operand::Imm(off), Operand::Def(y)],
+                    ));
                 }
             }
-            // d := rs0 + n; and rs0 := rs0 + n for the frame
-            op::LEASP16 | op::ADJSP => {
-                let (n, to) = if inst.opcode == op::LEASP16 {
-                    (immediate(&o[1])? as u16, Some(b.write_word(name(&o[0])?)?))
-                } else {
-                    (immediate(&o[0])? as u16, None)
-                };
-                let acc = Reg::Phys(reg::A);
-                b.push(Inst::new(Kind::Op("CLC"), vec![]));
-                for (byte, source) in [(n & 0xFF, reg::RC0), (n >> 8, reg::RC1)] {
-                    b.copy(acc, Reg::Phys(source));
-                    b.push(Inst::new(
-                        Kind::Op("ADC"),
-                        vec![Operand::Def(acc), Operand::Use(acc), Operand::Imm(i64::from(byte))],
-                    ));
-                    let into = match (&to, source == reg::RC0) {
-                        (Some((low, _)), true) => *low,
-                        (Some((_, high)), false) => *high,
-                        (None, _) => Reg::Phys(source),
-                    };
-                    b.copy(into, acc);
-                }
+            // d := rs0 + n
+            op::LEASP16 => {
+                let (low, high) = b.write_word(name(&o[0])?)?;
+                let n = immediate(&o[1])? as u16;
+                b.push(Inst::new(
+                    Kind::Op("LEA"),
+                    vec![
+                        Operand::Def(low),
+                        Operand::Def(high),
+                        Operand::Def(Reg::Phys(reg::A)),
+                        Operand::Imm(i64::from(n)),
+                    ],
+                ));
+            }
+            // rs0 := rs0 + n
+            op::ADJSP => {
+                let n = immediate(&o[0])? as u16;
+                b.push(Inst::new(Kind::Op("ADJSP"), vec![Operand::Def(Reg::Phys(reg::A)), Operand::Imm(i64::from(n))]));
             }
             op::JSR => {
                 let Machine::Label(callee) = &o[0] else { return Err(Unsupported("an indirect call".into())) };
@@ -1176,10 +1188,44 @@ fn move_byte(
 /// The function as ca65 lines (no label), with the zero-page slots the spills
 /// used, or an error from the allocator.
 pub fn emit(
+    function: MFunction<Class>,
+    labels: &[Vec<String>],
+    stack: bool,
+) -> Result<(String, Vec<(String, usize)>), String> {
+    if stack { emit_with::<true>(function, labels) } else { emit_with::<false>(function, labels) }
+}
+
+/// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
+fn adjust(
+    out: &mut String,
+    n: i64,
+) {
+    let n = n as u16;
+    writeln!(out, "  clc\n  lda rc0\n  adc #{}\n  sta rc0\n  lda rc1\n  adc #{}\n  sta rc1", n & 0xFF, n >> 8).unwrap();
+}
+
+fn emit_with<const STACK: bool>(
     mut function: MFunction<Class>,
     labels: &[Vec<String>],
 ) -> Result<(String, Vec<(String, usize)>), String> {
-    let (assignment, slots) = allocate_spilling::<Mos>(&mut function, 0)?;
+    let (assignment, slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;
+    let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
+    // On the stack, spills sit above the locals, in the frame: the bytes of
+    // the slots (`spilled`) are added to the frame, and a frame object beyond
+    // the old frame (`old`: an incoming argument) moves up by them.
+    let spilled: i64 = if STACK { slots.iter().map(|(_, class)| size_of(class)).sum::<usize>() as i64 } else { 0 };
+    let all = function.blocks.iter().flat_map(|b| &b.insts);
+    let old: i64 = all
+        .clone()
+        .find_map(|i| match (i.kind, &i.operands[..]) {
+            (Kind::Op("ADJSP"), [_, Operand::Imm(n)]) if (*n as u16 as i16) < 0 => Some(-i64::from(*n as u16 as i16)),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let has_frame = all.clone().any(|i| i.kind == Kind::Op("ADJSP"));
+    let slot_offset = |slot: i32| -> i64 {
+        old + slots.iter().take_while(|(s, _)| *s != slot).map(|(_, class)| size_of(class) as i64).sum::<i64>()
+    };
     let at = |r: Reg| match r {
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(p) => p,
@@ -1202,6 +1248,7 @@ pub fn emit(
     let slot_name = |slot: i32| format!("s_{}_{}", function.name, slot);
     let mut out = String::new();
     let mut made = 0;
+    let mut pending: Option<i64> = None;
     let target = |operand: &Operand| match operand {
         Operand::Block(id) => labels[*id as usize][0].clone(),
         other => unreachable!("{other:?} is not a block"),
@@ -1209,6 +1256,9 @@ pub fn emit(
     for (b, block) in function.blocks.iter().enumerate() {
         for label in &labels[block.id as usize] {
             writeln!(out, "{label}:").unwrap();
+        }
+        if b == 0 && spilled > 0 && !has_frame {
+            adjust(&mut out, -spilled);
         }
         for (i, inst) in block.insts.iter().enumerate() {
             let a_live = after[b][i].contains(&reg::A);
@@ -1235,9 +1285,12 @@ pub fn emit(
                     move_byte(&mut out, lane(regs[0], 0), regs[1], a_live);
                     move_byte(&mut out, lane(regs[0], 1), regs[2], a_live);
                 }
-                (Kind::Op("INY"), _) => out.push_str("  iny\n"),
-                (Kind::Op("LDPY"), _) => writeln!(out, "  lda ({}),y", register_name(lane(regs[1], 0))).unwrap(),
-                (Kind::Op("STPY"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),
+                (Kind::Op("LDPY"), [_, _, Operand::Imm(off), _]) => {
+                    writeln!(out, "  ldy #{off}\n  lda ({}),y", register_name(lane(regs[1], 0))).unwrap()
+                }
+                (Kind::Op("STPY"), [_, _, Operand::Imm(off), _]) => {
+                    writeln!(out, "  ldy #{off}\n  sta ({}),y", register_name(lane(regs[1], 0))).unwrap()
+                }
                 (Kind::Op("STP0"), _) => writeln!(out, "  sta ({})", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("LDI"), [_, Operand::Imm(value)]) => {
                     let d = regs[0];
@@ -1299,7 +1352,33 @@ pub fn emit(
                     };
                     writeln!(out, "  {} {text}", mnemonic.to_lowercase()).unwrap();
                 }
-                (Kind::Op("RTS"), _) => out.push_str("  rts\n"),
+                (Kind::Op("RTS"), _) => {
+                    // on the stack the frame is released last: the result
+                    // copies after the epilogue may still reload spills
+                    let release = pending.take().or((spilled > 0 && !has_frame).then_some(spilled));
+                    if let Some(n) = release {
+                        out.push_str("  pha\n");
+                        adjust(&mut out, n);
+                        out.push_str("  pla\n");
+                    }
+                    out.push_str("  rts\n")
+                }
+                (Kind::Op("ADJSP"), [_, Operand::Imm(n)]) => {
+                    let n = i64::from(*n as u16 as i16);
+                    if n > 0 && spilled > 0 {
+                        pending = Some(n + spilled);
+                    } else {
+                        adjust(&mut out, if n < 0 { n - spilled } else { n });
+                    }
+                }
+                (Kind::Op("LEA"), [_, _, _, Operand::Imm(n)]) => {
+                    let n = i64::from(*n as u16);
+                    let n = if n >= old { n + spilled } else { n };
+                    writeln!(out, "  clc\n  lda rc0\n  adc #{}", n & 0xFF).unwrap();
+                    move_byte(&mut out, regs[0], reg::A, false);
+                    writeln!(out, "  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
+                    move_byte(&mut out, regs[1], reg::A, false);
+                }
                 (Kind::Op("CMP"), [_, _, second]) => {
                     let text = match second {
                         Operand::Imm(value) => format!("#{value}"),
@@ -1350,6 +1429,33 @@ pub fn emit(
                     writeln!(out, "{done}:").unwrap();
                 }
                 // a slot is a byte, or two for a pair
+                (Kind::Op(kind @ ("SPILL" | "RELOAD")), [_, Operand::Frame(slot), ..]) if STACK => {
+                    let register = regs[0];
+                    let lanes: Vec<RegId> =
+                        if is_pair(register) { vec![lane(register, 0), lane(register, 1)] } else { vec![register] };
+                    for (n, byte) in lanes.into_iter().enumerate() {
+                        let offset = slot_offset(*slot) + n as i64;
+                        if offset > 255 {
+                            return Err(format!("{}: a frame beyond 256 bytes", function.name));
+                        }
+                        writeln!(out, "  ldy #{offset}").unwrap();
+                        let name = register_name(byte);
+                        let direct = byte == reg::A;
+                        let body = match (kind, byte) {
+                            ("SPILL", b) if b == reg::A => "  sta (rc0),y\n".to_owned(),
+                            ("SPILL", b) if b == reg::X => "  txa\n  sta (rc0),y\n".to_owned(),
+                            ("SPILL", _) => format!("  lda {name}\n  sta (rc0),y\n"),
+                            (_, b) if b == reg::A => "  lda (rc0),y\n".to_owned(),
+                            (_, b) if b == reg::X => "  lda (rc0),y\n  tax\n".to_owned(),
+                            (_, _) => format!("  lda (rc0),y\n  sta {name}\n"),
+                        };
+                        if direct {
+                            out.push_str(&body);
+                        } else {
+                            through_a(&mut out, a_live, &body);
+                        }
+                    }
+                }
                 (Kind::Op(kind @ ("SPILL" | "RELOAD")), [_, Operand::Frame(slot)]) => {
                     let register = regs[0];
                     let lanes: Vec<RegId> =
@@ -1370,8 +1476,8 @@ pub fn emit(
             }
         }
     }
-    let slots =
-        slots.iter().map(|(slot, class)| (slot_name(*slot), if class.0 & Class::P != 0 { 2 } else { 1 })).collect();
+    let slots: Vec<(String, usize)> =
+        if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
     Ok((crate::emit::relax_bra(&relax(&out)), slots))
 }
 

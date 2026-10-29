@@ -135,14 +135,10 @@ pub fn function_text_with(
     selection: &Selection,
     allocate: bool,
 ) -> Result<String, String> {
-    // DEVIATE: values live across a call are static cells or slots, not frame
-    // objects, so a function in a cycle of calls would clobber its own. Exit:
-    // spills and cells on the soft stack.
-    if let Some(id) = module.named(name)
-        && llrm_mir::callgraph::CallGraph::new(module).recursive(id)
-    {
-        return Err(format!("{name} is recursive: its values live in static cells, so it is not reentrant"));
-    }
+    // DEVIATE: on the cell path values live across a call are static cells,
+    // so a function in a cycle of calls is not reentrant there; the
+    // allocator path spills it to the soft stack. Exit: cells on the stack.
+    let recursive = module.named(name).is_some_and(|id| llrm_mir::callgraph::CallGraph::new(module).recursive(id));
     let (items, cells) = function_items(module, name, selection)?;
     let built = if allocate { Some(alloc::build(name, &items)) } else { None };
     if let Some(Err(why)) = &built
@@ -150,8 +146,11 @@ pub fn function_text_with(
     {
         eprintln!("alloc: {name}: {}", why.0);
     }
+    if recursive && !matches!(built, Some(Ok(_))) {
+        return Err(format!("{name} is recursive: only the allocator path can keep its values on the stack"));
+    }
     if let Some(Ok((function, labels))) = built {
-        let (code, slots) = alloc::emit(function, &labels)?;
+        let (code, slots) = alloc::emit(function, &labels, recursive)?;
         let mut body = format!(".export {name}\n{code}");
         body.push_str(".segment \"BSS\"\n");
         for (slot, size) in slots {

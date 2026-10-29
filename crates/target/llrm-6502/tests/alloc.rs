@@ -163,18 +163,49 @@ go:
   ret i8 %s
 }";
 
-/// Values live across a call are static (cells or spill slots), so a function
-/// that can call itself would read the deepest call's `n` after the return:
-/// rec(4) = 4 + 3 + 2 + 1 = 10 came out as 4 on both paths. It is refused, on
-/// either path, until locals live on the soft stack.
+/// Values live across a call were static (cells or slots), so a function that
+/// calls itself read the deepest call's `n` after the return: rec(4) = 4 + 3 +
+/// 2
+/// + 1 = 10 came out as 4 on both paths. On the allocator path they are spilled
+/// to the soft stack and rec(4) is 10; the cell path still refuses it.
 #[test]
-fn a_recursive_function_is_refused_not_miscompiled() {
+fn a_recursive_function_keeps_its_values_on_the_soft_stack() {
     let text = format!("target datalayout = \"{DATALAYOUT}\"\n{RECURSIVE}");
     let module = llrm_mir::parse::module(&text).expect("parses");
     let selection = select_function(&module, "rec", Cpu::Mos6502).expect("selects");
-    for allocate in [true, false] {
-        let why = function_text_with(&module, "rec", &selection, allocate).expect_err("recursion is refused");
-        assert!(why.contains("recursive"), "{why}");
+    let why = function_text_with(&module, "rec", &selection, false).expect_err("the cell path refuses recursion");
+    assert!(why.contains("recursive"), "{why}");
+    let code = function_text_with(&module, "rec", &selection, true).expect("the allocator path builds it");
+    assert!(!code.contains("s_rec_"), "a static slot in a recursive function:\n{code}");
+    for (n, want) in [(4, 10), (1, 1), (0, 0)] {
+        assert_eq!(common::run_with(&format!("alloc-rec-{n}"), &format!("{}  jsr rec\n", set("rc2", n)), &code), want);
+    }
+}
+
+/// fib(n) = fib(n-1) + fib(n-2): two calls, the first result live across the
+/// second. fib(10) = 55, fib(7) = 13.
+#[test]
+fn a_doubly_recursive_function_runs() {
+    let ir = "define i8 @fibr(i8 %n) {
+entry:
+  %small = icmp ult i8 %n, 2
+  br i1 %small, label %base, label %go
+base:
+  ret i8 %n
+go:
+  %a = sub i8 %n, 1
+  %x = call i8 @fibr(i8 %a)
+  %b = sub i8 %n, 2
+  %y = call i8 @fibr(i8 %b)
+  %s = add i8 %x, %y
+  ret i8 %s
+}";
+    let code = compile(ir, "fibr", true);
+    for (n, want) in [(10, 55), (7, 13)] {
+        assert_eq!(
+            common::run_with(&format!("alloc-fibr-{n}"), &format!("{}  jsr fibr\n", set("rc2", n)), &code),
+            want
+        );
     }
 }
 
@@ -242,4 +273,34 @@ fn a_pointer_live_across_a_call_survives_it() {
     let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #5\n  sta rc4\n";
     assert!(text.contains("s_keep_"), "no spill:\n{text}");
     assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 20);
+}
+
+/// A recursive function with a local array and a value live across the call:
+/// the spill area and the local share one frame and neither overwrites the
+/// other. Each level adds its own `n` twice, once read back from its local
+/// and once from the register that was spilled across the call.
+#[test]
+fn a_recursive_function_with_a_local_array_keeps_both() {
+    let ir = "define i8 @loc(i8 %n) {
+entry:
+  %buf = alloca [2 x i8]
+  store i8 %n, ptr %buf
+  %z = icmp eq i8 %n, 0
+  br i1 %z, label %base, label %go
+base:
+  ret i8 0
+go:
+  %m = sub i8 %n, 1
+  %r = call i8 @loc(i8 %m)
+  %v = load i8, ptr %buf
+  %s = add i8 %r, %v
+  %t = add i8 %s, %n
+  ret i8 %t
+}";
+    let code = compile(ir, "loc", true);
+    assert!(!code.contains("s_loc_"), "{code}");
+    // loc(n) = loc(n-1) + n + n: loc(1) = 2, loc(2) = 6, loc(3) = 12
+    for (n, want) in [(1, 2), (2, 6), (3, 12)] {
+        assert_eq!(common::run_with(&format!("alloc-loc-{n}"), &format!("{}  jsr loc\n", set("rc2", n)), &code), want);
+    }
 }
