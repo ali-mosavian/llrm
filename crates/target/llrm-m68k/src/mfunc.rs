@@ -84,6 +84,15 @@ impl Class {
 /// The machine function over m68k's classes.
 pub type MFunction = mf::MFunction<Class>;
 
+/// Whether the pin marks the instruction `name` `isCommutable`.
+pub fn pin_commutable(name: &str) -> bool {
+    MACHINE_OPCODES
+        .iter()
+        .find(|(_, one)| *one == name)
+        .and_then(|(code, _)| instrinfo::desc(*code as u16))
+        .is_some_and(|desc| desc.has(flag::COMMUTABLE))
+}
+
 fn opcode_name(code: u32) -> Option<&'static str> {
     MACHINE_OPCODES.iter().find(|(value, _)| u32::from(*value) == code).map(|(_, name)| *name)
 }

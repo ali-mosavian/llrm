@@ -42,3 +42,7 @@ At or below both: absdiff, clamp, copy. Smaller than llc on every row except max
 
 Done since the last table: LSR with a proper `Machine`/`Tti`, flags reuse, `preserve_flags`, pointer arithmetic in `An`,
 `(An)+` folding, `add #-n` as `subq`. `MachineCopyPropagation`'s spurious-copy case (strlen 24 to 22). The pin's commute step in two-address, `add` with an address-register source commutable, phi copies before the source's last read (fib 32 to 28, 77 to 67 insns; llc also emits three moves there). Next: the counter against the end pointer.
+
+Limit: the commute and phi-copy placement save a move on a loop that carries a sum (fib, 3 moves to 2). A rotation
+of three values with a sum (tribonacci) stays at 4 moves, as in the pin; `tests/overlay.rs` pins fib's shape only.
+Between the 32 B and 28 B fib tables only fib changed (32 to 28); no other row grew.
