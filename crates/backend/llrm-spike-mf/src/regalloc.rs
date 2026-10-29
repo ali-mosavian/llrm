@@ -108,11 +108,45 @@ fn copy_point(
     if defines_source { first } else { setter }
 }
 
+/// Where the copy for a phi goes within its block: before the last read of
+/// `source` there when `point` is later, so that read is the one that ends
+/// `source`'s register and the instruction may reuse it in place (the phi's
+/// copy of a value a later `add` consumes is then not the last use that keeps
+/// the register). Not past a flag setter its reader needs.
+///
+/// DEVIATE from `PHIElimination`, which copies at the end of the block.
+/// Reason: with the copy last, a value carried to the next iteration stays in
+/// its register to the end and the loop's rotation of values costs a move
+/// more (fib). Exit: never; a choice, off where the pin's output is wanted.
+fn hoisted_point(
+    insts: &[Inst],
+    source: Reg,
+    point: usize,
+) -> usize {
+    let uses_source = |inst: &Inst| inst.operands.iter().any(|o| matches!(o, Operand::Use(reg) if *reg == source));
+    let Some(last) = insts[..point].iter().rposition(uses_source) else { return point };
+    let strands_reader = (last..point).any(|at| {
+        insts[at].reads_flags
+            && !insts[at].sets_flags
+            && insts[..at].iter().rposition(|i| i.sets_flags).is_some_and(|setter| setter < last)
+    });
+    if strands_reader { point } else { last }
+}
+
 /// `PHIElimination`: a phi becomes a copy of each incoming value into a new
 /// register at the end of its predecessor, and a copy of that register into
 /// the phi's at the top of its block, so parallel phis do not overwrite each
 /// other. The allocator joins the registers by their copy hints.
 pub fn eliminate_phis<C: Copy>(function: &mut MFunction<C>) {
+    eliminate_phis_with(function, false)
+}
+
+/// [`eliminate_phis`], with each copy hoisted before the last read of its
+/// source in the block where `hoist` (see [`hoisted_point`]).
+pub fn eliminate_phis_with<C: Copy>(
+    function: &mut MFunction<C>,
+    hoist: bool,
+) {
     for at in 0..function.blocks.len() {
         let mut heads = Vec::new();
         for phi in std::mem::take(&mut function.blocks[at].phis) {
@@ -128,6 +162,7 @@ pub fn eliminate_phis<C: Copy>(function: &mut MFunction<C>) {
             for (pred, incoming) in phi.incoming {
                 let insts = &mut function.blocks[pred].insts;
                 let point = copy_point(insts, incoming);
+                let point = if hoist { hoisted_point(insts, incoming, point) } else { point };
                 insts.insert(point, Inst::copy(temporary, incoming));
             }
             heads.push(Inst::copy(phi.result, temporary));

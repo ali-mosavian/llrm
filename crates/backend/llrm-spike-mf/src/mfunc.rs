@@ -61,6 +61,8 @@ pub struct Inst {
     /// It writes a result before it has read every use, so no def may share
     /// a register with a use (`earlyclobber`).
     pub early_clobber: bool,
+    /// Its two register sources may swap places (`isCommutable`).
+    pub commutable: bool,
 }
 
 impl Inst {
@@ -83,6 +85,7 @@ impl Inst {
             cheap_as_move: false,
             rematerializable: false,
             early_clobber: false,
+            commutable: false,
         }
     }
 

@@ -264,6 +264,7 @@ impl Emitter<'_> {
                     may_store: desc.has(flag::MAY_STORE),
                     side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
                     cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
+                    commutable: desc.has(flag::COMMUTABLE),
                     rematerializable: desc.has(flag::REMATERIALIZABLE) || desc.has(flag::MOVE_IMM) || loads_argument,
                     ..Inst::new(Kind::Op(name), operands)
                 });
