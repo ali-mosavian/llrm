@@ -19,7 +19,7 @@ impl CombineHooks for MosCombines {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::SignExtend)
+        op == ISD::Mul
     }
 
     fn perform_dag_combine(
@@ -28,26 +28,8 @@ impl CombineHooks for MosCombines {
         node: SDValue,
         _level: CombineLevel,
     ) -> Option<SDValue> {
-        match dag.opcode(node) {
-            ISD::SignExtend => sign_extend_bit(dag, node),
-            _ => decompose_mul(dag, node),
-        }
+        decompose_mul(dag, node)
     }
-}
-
-/// A sign-extended condition bit, `0 - zext(bit)`: `select c, 1, 2` is `sext(c) + 2`, and nothing
-/// selects `SignExtend` from `i1`.
-fn sign_extend_bit(
-    dag: &mut SelectionDAG,
-    node: SDValue,
-) -> Option<SDValue> {
-    let (vt, bit) = (dag.value_type(node), dag.operand(node, 0));
-    if dag.value_type(bit) != EVT::I1 || !matches!(vt, EVT::I8 | EVT::I16) {
-        return None;
-    }
-    let wide = dag.get_node(ISD::ZeroExtend, vt, &[bit]);
-    let zero = dag.get_constant(0, vt);
-    Some(dag.get_node(ISD::Sub, vt, &[zero, wide]))
 }
 
 /// `x * c` as `(x << n) +- x`, shifted by the factors of two in `c` and negated for a negative `c`.
