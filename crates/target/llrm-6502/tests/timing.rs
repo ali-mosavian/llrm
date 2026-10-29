@@ -32,8 +32,14 @@ fn trip(
 }
 
 /// What `trip` charges an empty body: `dec cnt` (6) and a taken `bne` (3).
-fn loop_cycles(target: &str) -> i64 {
-    trip(target, "loop", "")
+///
+/// `test` is the calling test's own name: two tests building one work directory at once corrupt it
+/// (`ld65: Read error`, `Unresolved external '_main'`, about two runs in three).
+fn loop_cycles(
+    target: &str,
+    test: &str,
+) -> i64 {
+    trip(target, &format!("loop-{test}"), "")
 }
 
 /// Instructions that can run in a row without harm.
@@ -56,7 +62,7 @@ const CMOS_ONLY: [&str; 6] = ["lda (rc2)", "sta (rc2)", "stz rc5", "stz slot", "
 #[test]
 fn every_row_costs_what_sim65_counts() {
     for (target, cpu) in TARGETS {
-        let overhead = loop_cycles(target);
+        let overhead = loop_cycles(target, "rows");
         assert_eq!(overhead, 9, "{target}: dec abs (6) and a taken bne (3)");
         for (n, text) in STRAIGHT.iter().enumerate() {
             let (mnemonic, operand) = text.split_once(' ').unwrap_or((text, ""));
@@ -74,7 +80,7 @@ fn every_row_costs_what_sim65_counts() {
 #[test]
 fn flow_costs_what_sim65_counts() {
     for (target, cpu) in TARGETS {
-        let overhead = loop_cycles(target);
+        let overhead = loop_cycles(target, "flow");
         let mut cases: Vec<(&str, &str, i64)> = vec![
             ("not taken", "  lda #1\n  beq L\nL:\n", 2 + 2),
             ("taken", "  lda #0\n  beq L\nL:\n", 2 + 3),
