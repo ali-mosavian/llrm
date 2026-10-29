@@ -43,11 +43,39 @@ fn status(
 #[test]
 fn a_mask_is_a_moveq_only_within_its_signed_byte() {
     for (mask, quick) in [(127, true), (128, false), (-128, true), (-129, false)] {
-        let ir = format!("define i32 @f(i32 %a) {{\n  %m = and i32 %a, {mask}\n  %r = add i32 %m, %a\n  ret i32 %r\n}}");
+        let ir =
+            format!("define i32 @f(i32 %a) {{\n  %m = and i32 %a, {mask}\n  %r = add i32 %m, %a\n  ret i32 %r\n}}");
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
         assert_eq!(asm.contains(&format!("moveq\t#{mask},")), quick, "mask {mask}: {asm}");
         if let Some(code) = status(&ir, &[0x85], Options::default()) {
             assert_eq!(code, ((0x85 & mask) + 0x85) & 0xFF, "mask {mask}: {asm}");
+        }
+    }
+}
+
+fn code_size(
+    ir: &str,
+    options: Options,
+) -> usize {
+    let items = items_with(&module(ir), "f", Cpu::M68000, options).unwrap();
+    llrm_m68k::object::assemble(&items, 0).unwrap().code.len()
+}
+
+/// `s + (a > b) + a` was `slt %d2; and.l #1, %d2; add.l %d2, %d0`: 6 bytes and
+/// 16 clocks for the mask. `moveq #0, %d2` before the compare and `neg.b %d2`
+/// after the `slt` are 4 bytes and 8 clocks, and the value is the same for
+/// either outcome.
+#[test]
+fn a_boolean_added_is_negated_not_masked() {
+    let ir = "define i32 @f(i32 %a, i32 %b, i32 %s) {\n  %c = icmp sgt i32 %a, %b\n  %z = zext i1 %c to i32\n  %t = add i32 %s, %z\n  %r = add i32 %t, %a\n  ret i32 %r\n}";
+    let pinned = text_with(&module(ir), "f", Cpu::M68000, Options::PINNED).unwrap();
+    assert!(pinned.contains("and.l\t#1,") && !pinned.contains("neg.b"), "{pinned}");
+    let ours = text_with(&module(ir), "f", Cpu::M68000, Options::default()).unwrap();
+    assert!(ours.contains("neg.b") && !ours.contains("and.l\t#1,"), "{ours}");
+    assert!(code_size(ir, Options::default()) < code_size(ir, Options::PINNED));
+    for (a, b, s) in [(5, 3, 10), (3, 5, 10), (4, 4, 10), (-1, -2, 7), (-2, -1, 7)] {
+        if let Some(code) = status(ir, &[a, b, s], Options::default()) {
+            assert_eq!(code, (s as i32 + i32::from(a > b) + a as i32) & 0xFF, "f({a}, {b}, {s}): {ours}");
         }
     }
 }
