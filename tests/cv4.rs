@@ -90,8 +90,10 @@ fn microsoft_link_and_cvpack_take_the_object_and_codeview_reads_its_variables() 
         return;
     }
     if std::env::var_os("LLRM_BORLAND_INC").is_none() {
-        // llrm-cc compiles for x86_16-bcc against Borland's headers; with the tools above present but these absent the test
-        // was red ("the target needs the environment variable LLRM_BORLAND_INC") instead of skipped.
+        // llrm-cc compiles for x86_16-bcc against Borland's headers; with the
+        // tools above present but these absent the test
+        // was red ("the target needs the environment variable
+        // LLRM_BORLAND_INC") instead of skipped.
         skipped("needs Borland's C headers (LLRM_BORLAND_INC)");
         return;
     }

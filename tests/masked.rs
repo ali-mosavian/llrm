@@ -19,7 +19,8 @@ fn compiled(
     let out = scratch.path().join("out.asm");
     let input = root.join("tests/inputs/masked").join(source);
     let flags = ["--isel=dag", "-O2", "-march=i486", "-S", "-o"];
-    // llrm-c is gone: its command line is served by llrm-cc over the pinned clang.
+    // llrm-c is gone: its command line is served by llrm-cc over the pinned
+    // clang.
     let done = if tool == "llrm-c" {
         common::cc::llrm_c().arg(&input).args(arguments).args(flags).arg(&out).output().unwrap()
     } else {

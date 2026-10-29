@@ -53,7 +53,8 @@ fn the_first_four_arguments_arrive_in_eax_edx_ebx_ecx() {
         "@export(\"watcall32\")\nfn third(a: i32, b: u32, c: i32) -> i32:\n    return c\n@export(\"watcall32\")\nfn fourth(a: i32, b: i32, c: i32, d: i32) -> i32:\n    return d\n",
     );
     // The block label's number is not the point.
-    let body = |name: &str| procedure(&text, name).into_iter().filter(|line| !line.starts_with('L')).collect::<Vec<_>>();
+    let body =
+        |name: &str| procedure(&text, name).into_iter().filter(|line| !line.starts_with('L')).collect::<Vec<_>>();
     assert_eq!(body("third_"), ["mov eax, ebx", "ret"]);
     assert_eq!(body("fourth_"), ["mov eax, ecx", "ret"]);
 }
