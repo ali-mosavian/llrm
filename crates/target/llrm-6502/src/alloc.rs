@@ -204,6 +204,9 @@ struct Compare {
     b: (String, u32),
     /// Over words: `lda; cmp` on the low bytes, then `lda; sbc` on the high.
     word: bool,
+    /// Over words, for Z only: the high bytes are compared when the low are
+    /// equal.
+    zero: bool,
 }
 
 impl Builder {
@@ -360,11 +363,36 @@ impl Builder {
     /// `COPY a, lhs; CMP a, rhs` again, as the flags' producer: the operands
     /// must hold what they held at the first compare.
     fn redo_compare(&mut self) -> Result<(), Unsupported> {
-        let Compare { a, b, word } = self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
+        let Compare { a, b, word, zero } =
+            self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
         if self.version(&a.0) != a.1 || self.version(&b.0) != b.1 {
             return Err(Unsupported("a compare's operand changed before its branch".into()));
         }
         let acc = Reg::Phys(reg::A);
+        if zero {
+            let (al, ah) = self.read_word(&a.0)?;
+            let (bl, bh) = self.read_word(&b.0)?;
+            for r in [al, ah] {
+                self.require(r, Class(Class::X | Class::Y | Class::M))?;
+            }
+            for r in [bl, bh] {
+                self.require(r, Class::MEM)?;
+            }
+            let mut cmp = Inst::new(
+                Kind::Op("CMPZ"),
+                vec![
+                    Operand::Def(Reg::Phys(reg::FLAGS)),
+                    Operand::Def(acc),
+                    Operand::Use(al),
+                    Operand::Use(ah),
+                    Operand::Use(bl),
+                    Operand::Use(bh),
+                ],
+            );
+            cmp.sets_flags = true;
+            self.push(cmp);
+            return Ok(());
+        }
         let (lhs, rhs) = if word {
             let ((al, ah), (bl, bh)) = (self.read_word(&a.0)?, self.read_word(&b.0)?);
             for r in [bl, bh] {
@@ -723,13 +751,154 @@ pub fn build(
             // The flags are made where they are read.
             op::CMP8 => {
                 let (a, c) = (name(&o[1])?, name(&o[2])?);
-                b.pending =
-                    Some(Compare { a: (a.to_owned(), b.version(a)), b: (c.to_owned(), b.version(c)), word: false });
+                b.pending = Some(Compare {
+                    a: (a.to_owned(), b.version(a)),
+                    b: (c.to_owned(), b.version(c)),
+                    word: false,
+                    zero: false,
+                });
+            }
+            op::CMPZ16 => {
+                let (a, c) = (name(&o[1])?, name(&o[2])?);
+                b.pending = Some(Compare {
+                    a: (a.to_owned(), b.version(a)),
+                    b: (c.to_owned(), b.version(c)),
+                    word: true,
+                    zero: true,
+                });
+            }
+            // the carry out of the first goes into the next: the instructions
+            // between move bytes, which leave C alone
+            op::ADDO8 => b.alu("ADC", Some("CLC"), name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
+            op::SUBO8 => b.alu("SBC", Some("SEC"), name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
+            op::ADDOC8 => b.alu("ADC", None, name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
+            op::SUBOC8 => b.alu("SBC", None, name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
+            op::ADDO16 => b.alu16("ADC", Some("CLC"), name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
+            op::SUBO16 => b.alu16("SBC", Some("SEC"), name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
+            op::ADDOC16 => b.alu16("ADC", None, name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
+            op::SUBOC16 => b.alu16("SBC", None, name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
+            // C into a byte and back: `lda #0; rol a` and `lsr a`
+            code if code == spill::SAVE_CARRY => {
+                b.define(name(&o[0])?);
+                let d = b.byte(name(&o[0])?)?;
+                let acc = Reg::Phys(reg::A);
+                b.push(Inst::new(Kind::Op("SAVEC"), vec![Operand::Def(acc)]));
+                b.copy(d, acc);
+            }
+            code if code == spill::LOAD_CARRY => {
+                let s = b.byte(name(&o[0])?)?;
+                let acc = Reg::Phys(reg::A);
+                b.copy(acc, s);
+                b.push(Inst::new(Kind::Op("LOADC"), vec![Operand::Def(acc), Operand::Use(acc)]));
+            }
+            op::SETCC8 => {
+                b.redo_compare()?;
+                b.define(name(&o[0])?);
+                let d = b.byte(name(&o[0])?)?;
+                let mut set = Inst::new(
+                    Kind::Op("CMOV"),
+                    vec![
+                        Operand::Def(Reg::Phys(reg::A)),
+                        Operand::Imm(0),
+                        Operand::Imm(1),
+                        Operand::Imm(immediate(&o[1])?),
+                        Operand::Use(Reg::Phys(reg::FLAGS)),
+                    ],
+                );
+                set.reads_flags = true;
+                b.push(set);
+                b.copy(d, Reg::Phys(reg::A));
+            }
+            // in place on zero-page bytes: asl/rol, lsr/ror
+            code @ (op::SHL16 | op::SRL16 | op::SRA16) => {
+                let (al, ah) = b.read_word(name(&o[1])?)?;
+                let (dl, dh) = b.write_word(name(&o[0])?)?;
+                b.copy(dl, al);
+                b.copy(dh, ah);
+                for r in [dl, dh] {
+                    b.require(r, Class::MEM)?;
+                }
+                for _ in 0..immediate(&o[2])? {
+                    let step = match code {
+                        op::SHL16 => Inst::new(
+                            Kind::Op("SHL1"),
+                            vec![Operand::Def(dl), Operand::Use(dl), Operand::Def(dh), Operand::Use(dh)],
+                        ),
+                        op::SRL16 => Inst::new(
+                            Kind::Op("SRL1"),
+                            vec![Operand::Def(dl), Operand::Use(dl), Operand::Def(dh), Operand::Use(dh)],
+                        ),
+                        _ => Inst::new(
+                            Kind::Op("SRA1"),
+                            vec![
+                                Operand::Def(Reg::Phys(reg::A)),
+                                Operand::Def(dl),
+                                Operand::Use(dl),
+                                Operand::Def(dh),
+                                Operand::Use(dh),
+                            ],
+                        ),
+                    };
+                    b.push(step);
+                }
+            }
+            // 32 bits through `__sa` and `__sb` (runtime/mos_rt.s)
+            code @ (op::MUL32
+            | op::UDIV32
+            | op::SDIV32
+            | op::UREM32
+            | op::SREM32
+            | op::SHL32
+            | op::SRL32
+            | op::SRA32) => {
+                let routine = match code {
+                    op::MUL32 => "__mulsi3",
+                    op::UDIV32 => "__udivsi3",
+                    op::SDIV32 => "__divsi3",
+                    op::UREM32 => "__umodsi3",
+                    op::SREM32 => "__modsi3",
+                    op::SHL32 => "__ashlsi3",
+                    op::SRL32 => "__lshrsi3",
+                    _ => "__ashrsi3",
+                };
+                let acc = Reg::Phys(reg::A);
+                let mut stores = Vec::new();
+                for (at, source) in [name(&o[2])?, name(&o[3])?].into_iter().enumerate() {
+                    let (low, high) = b.read_word(source)?;
+                    stores.push((format!("__sa+{}", 2 * at), low));
+                    stores.push((format!("__sa+{}", 2 * at + 1), high));
+                }
+                if matches!(code, op::SHL32 | op::SRL32 | op::SRA32) {
+                    stores.push(("__sb".to_owned(), b.byte(name(&o[4])?)?));
+                } else {
+                    for (at, source) in [name(&o[4])?, name(&o[5])?].into_iter().enumerate() {
+                        let (low, high) = b.read_word(source)?;
+                        stores.push((format!("__sb+{}", 2 * at), low));
+                        stores.push((format!("__sb+{}", 2 * at + 1), high));
+                    }
+                }
+                for (symbol, value) in stores {
+                    b.copy(acc, value);
+                    b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
+                }
+                let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine.to_owned(), 0)]);
+                jsr.call = true;
+                b.push(jsr);
+                let (first, second) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
+                for (n, to) in [first.0, first.1, second.0, second.1].into_iter().enumerate() {
+                    let symbol = if n == 0 { "__sa".to_owned() } else { format!("__sa+{n}") };
+                    b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
+                    b.copy(to, acc);
+                }
             }
             op::CMP16 => {
                 let (a, c) = (name(&o[1])?, name(&o[2])?);
-                b.pending =
-                    Some(Compare { a: (a.to_owned(), b.version(a)), b: (c.to_owned(), b.version(c)), word: true });
+                b.pending = Some(Compare {
+                    a: (a.to_owned(), b.version(a)),
+                    b: (c.to_owned(), b.version(c)),
+                    word: true,
+                    zero: false,
+                });
             }
             spill_op if spill_op == spill::SAVE_FLAGS => {
                 let compare = b.pending.clone().ok_or_else(|| Unsupported("saved flags with no compare".into()))?;
@@ -1343,6 +1512,30 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("ASR"), _) => out.push_str("  cmp #$80\n  ror a\n"),
                 (Kind::Op("LDAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  lda {symbol},x").unwrap(),
                 (Kind::Op("STAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  sta {symbol},x").unwrap(),
+                (Kind::Op("SAVEC"), _) => out.push_str("  lda #0\n  rol a\n"),
+                (Kind::Op("LOADC"), _) => out.push_str("  lsr a\n"),
+                (Kind::Op("SHL1"), _) => {
+                    writeln!(out, "  asl {}\n  rol {}", register_name(regs[0]), register_name(regs[2])).unwrap()
+                }
+                (Kind::Op("SRL1"), _) => {
+                    writeln!(out, "  lsr {}\n  ror {}", register_name(regs[2]), register_name(regs[0])).unwrap()
+                }
+                (Kind::Op("SRA1"), _) => {
+                    let (lo, hi) = (register_name(regs[1]), register_name(regs[3]));
+                    writeln!(out, "  lda {hi}\n  cmp #$80\n  ror {hi}\n  ror {lo}").unwrap()
+                }
+                (Kind::Op("CMPZ"), _) => {
+                    made += 1;
+                    let load = |out: &mut String, r: RegId| match r {
+                        r if r == reg::X => out.push_str("  txa\n"),
+                        r if r == reg::Y => out.push_str("  tya\n"),
+                        r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
+                    };
+                    load(&mut out, regs[2]);
+                    writeln!(out, "  cmp {}\n  bne _cz{made}", register_name(regs[4])).unwrap();
+                    load(&mut out, regs[3]);
+                    writeln!(out, "  cmp {}\n_cz{made}:", register_name(regs[5])).unwrap();
+                }
                 (Kind::Op("CLC"), _) => out.push_str("  clc\n"),
                 (Kind::Op("SEC"), _) => out.push_str("  sec\n"),
                 (Kind::Op(mnemonic @ ("ADC" | "SBC" | "AND" | "ORA" | "EOR")), [_, _, second, ..]) => {
