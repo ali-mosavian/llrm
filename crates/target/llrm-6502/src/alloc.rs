@@ -1745,6 +1745,32 @@ fn save_preserved<const STACK: bool>(
     true
 }
 
+/// Whether `inst` tests only the zero or sign flag: `beq`, `bne`, `bmi`, `bpl`, or a select or set
+/// whose condition code (the last immediate, before the flags it reads) is one of those.
+fn reads_zero_or_sign_only(inst: &Inst) -> bool {
+    match inst.kind {
+        Kind::Op("BEQ" | "BNE" | "BMI" | "BPL") => true,
+        _ if inst.reads_flags => inst
+            .operands
+            .iter()
+            .rev()
+            .find_map(|o| if let Operand::Imm(code) = o { Some(*code) } else { None })
+            .is_some_and(|code| matches!(code, 0 | 1 | 4 | 5)),
+        _ => false,
+    }
+}
+
+/// Whether the emitted line leaves the zero and sign flags describing what `a` now holds.
+fn sets_nz_of_a(line: &str) -> bool {
+    let line = line.trim();
+    let (mnemonic, operand) = line.split_once(' ').unwrap_or((line, ""));
+    match mnemonic {
+        "lda" | "txa" | "tya" | "pla" | "and" | "ora" | "eor" | "adc" | "sbc" => true,
+        "asl" | "lsr" | "rol" | "ror" | "inc" | "dec" => operand == "a",
+        _ => false,
+    }
+}
+
 fn emit_with<const STACK: bool>(
     mut function: MFunction<Class>,
     labels: &[Vec<String>],
@@ -1986,6 +2012,10 @@ fn emit_with<const STACK: bool>(
                     writeln!(out, "  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
                     move_byte(&mut out, regs[1], reg::A, false, None);
                 }
+                // against zero, a load or an ALU result has already set the flags a zero or sign test reads
+                (Kind::Op("CMP"), [_, _, Operand::Imm(0)])
+                    if block.insts.get(i + 1).is_some_and(reads_zero_or_sign_only)
+                        && out.lines().last().is_some_and(sets_nz_of_a) => {}
                 (Kind::Op("CMP"), [_, _, second]) => {
                     let text = match second {
                         Operand::Imm(value) => format!("#{value}"),
