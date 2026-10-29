@@ -46,14 +46,22 @@ fn rc(n: u8) -> RegId {
     RegId::from_raw(reg::RC0.index() as u8 + n)
 }
 
-/// The zero-page bytes a value may live in: the ones a call clobbers.
+/// The zero-page bytes a value may live in: `rc2`..`rc7`, which a call clobbers, then `rc8`..`rc15`,
+/// which a callee keeps (see [`preserved`]).
 fn cells() -> impl Iterator<Item = RegId> {
-    (2..8).map(rc)
+    (2..16).map(rc)
 }
 
-/// The pairs a pointer may live in: `rs1`..`rs3`, over `rc2`..`rc7`.
+/// The pairs a pointer may live in: `rs1`..`rs3` over `rc2`..`rc7`, then `rs4`..`rs7`.
 fn pairs() -> impl Iterator<Item = RegId> {
-    [reg::RS1, reg::RS2, reg::RS3].into_iter()
+    [reg::RS1, reg::RS2, reg::RS3, reg::RS4, reg::RS5, reg::RS6, reg::RS7].into_iter()
+}
+
+/// A callee-saved zero-page byte or pair (`rc8`..`rc15`, `rs4`..`rs7`): a function that uses one
+/// saves it on entry and restores it before each return, so a value in it survives a call.
+fn preserved(register: RegId) -> bool {
+    let at = register.index();
+    (reg::RC8.index()..=reg::RC15.index()).contains(&at) || (reg::RS4.index()..=reg::RS7.index()).contains(&at)
 }
 
 fn is_pair(register: RegId) -> bool {
@@ -130,7 +138,7 @@ impl<const STACK: bool> Target for Mos<STACK> {
     }
 
     fn caller_saved() -> Vec<RegId> {
-        [reg::A, reg::X, reg::Y].into_iter().chain(cells()).chain(pairs()).collect()
+        [reg::A, reg::X, reg::Y].into_iter().chain(cells()).chain(pairs()).filter(|r| !preserved(*r)).collect()
     }
 
     fn overlaps(
@@ -1641,12 +1649,62 @@ fn adjust(
     writeln!(out, "  clc\n  lda rc0\n  adc #{}\n  sta rc0\n  lda rc1\n  adc #{}\n  sta rc1", n & 0xFF, n >> 8).unwrap();
 }
 
+/// The callee-saved bytes the allocation used are stored to a slot of their own on entry and loaded
+/// back before each `rts` (`PrologEpilogInserter::spillCalleeSavedRegisters`).
+fn save_preserved<const STACK: bool>(
+    function: &mut MFunction<Class>,
+    assignment: &llrm_spike_mf::regalloc::Assignment,
+    slots: &mut Vec<(i32, Class)>,
+) {
+    let mut used: Vec<RegId> = Vec::new();
+    let named = function.blocks.iter().flat_map(|b| &b.insts).flat_map(|i| &i.operands).filter_map(|o| match o {
+        Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => Some(assignment.0[*v as usize]),
+        Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
+        _ => None,
+    });
+    for register in named.collect::<Vec<_>>() {
+        let bytes = if is_pair(register) { vec![lane(register, 0), lane(register, 1)] } else { vec![register] };
+        for byte in bytes.into_iter().filter(|r| preserved(*r)) {
+            if !used.contains(&byte) {
+                used.push(byte);
+            }
+        }
+    }
+    used.sort_by_key(|r| r.index());
+    let mut saves = Vec::new();
+    let mut restores = Vec::new();
+    for byte in used {
+        let slot = slots.iter().map(|(s, _)| s + 1).max().unwrap_or(0);
+        slots.push((slot, Class::MEM));
+        saves.push(Mos::<STACK>::spill_store(Class::MEM, Reg::Phys(byte), slot).expect("a spill"));
+        restores.push(Mos::<STACK>::spill_load(Class::MEM, Reg::Phys(byte), slot).expect("a reload"));
+    }
+    if saves.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        let mut out = Vec::with_capacity(block.insts.len());
+        for inst in std::mem::take(&mut block.insts) {
+            if inst.kind == Kind::Op("RTS") {
+                out.extend(restores.iter().cloned());
+            }
+            out.push(inst);
+        }
+        block.insts = out;
+    }
+    // after the frame is allocated: its slots are addressed from the adjusted stack pointer
+    let entry = &mut function.blocks[0].insts;
+    let at = usize::from(entry.first().is_some_and(|inst| inst.kind == Kind::Op("ADJSP")));
+    entry.splice(at..at, saves);
+}
+
 fn emit_with<const STACK: bool>(
     mut function: MFunction<Class>,
     labels: &[Vec<String>],
     cmos: bool,
 ) -> Result<(String, Vec<(String, usize)>), String> {
-    let (assignment, slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;
+    let (assignment, mut slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;
+    save_preserved::<STACK>(&mut function, &assignment, &mut slots);
     let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
     // On the stack, spills sit above the locals, in the frame: the bytes of
     // the slots (`spilled`) are added to the frame, and a frame object beyond

@@ -760,3 +760,58 @@ fn a_phi_forwarded_on_a_back_edge_is_known_before_its_block_is_laid_out() {
         }
     }
 }
+
+/// Four pointers advance through a table by different strides, with a sum and a counter: more live
+/// values than `rc2`..`rc7` hold. `quad` is a leaf (static save slots); `quadcall` ends in an indirect
+/// call, so it runs on the soft stack. buf = 3 1 4 1 5 9 2 6 5 3 5 8 9 7 9 3; strides 1, 2, 3, 1 from
+/// offsets 1, 2, 3, 4; four trips sum (a + b) + (c ^ d) to 58; `quadcall` doubles that, 116.
+fn quad_ir(name: &str, call: bool) -> String {
+    let (head, tail) = if call {
+        ("ptr %p, i8 %n, ptr %f", "  %out = call i8 %f(i8 %r)\n  ret i8 %out")
+    } else {
+        ("ptr %p, i8 %n", "  ret i8 %r")
+    };
+    format!(
+        "define i8 @{name}({head}) {{\nentry:\n  %p1 = getelementptr i8, ptr %p, i16 1\n  %p2 = getelementptr i8, ptr %p, i16 2\n  \
+           %p3 = getelementptr i8, ptr %p, i16 3\n  %p4 = getelementptr i8, ptr %p, i16 4\n  %z = icmp eq i8 %n, 0\n  \
+           br i1 %z, label %done, label %loop\n\
+         loop:\n  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]\n  %s = phi i8 [ 0, %entry ], [ %s2, %loop ]\n  \
+           %q1 = phi ptr [ %p1, %entry ], [ %n1, %loop ]\n  %q2 = phi ptr [ %p2, %entry ], [ %n2, %loop ]\n  \
+           %q3 = phi ptr [ %p3, %entry ], [ %n3, %loop ]\n  %q4 = phi ptr [ %p4, %entry ], [ %n4, %loop ]\n  \
+           %a = load i8, ptr %q1\n  %b = load i8, ptr %q2\n  %c = load i8, ptr %q3\n  %d = load i8, ptr %q4\n  \
+           %t1 = add i8 %a, %b\n  %t2 = xor i8 %c, %d\n  %t3 = add i8 %t1, %t2\n  %s2 = add i8 %s, %t3\n  \
+           %n1 = getelementptr i8, ptr %q1, i16 1\n  %n2 = getelementptr i8, ptr %q2, i16 2\n  \
+           %n3 = getelementptr i8, ptr %q3, i16 3\n  %n4 = getelementptr i8, ptr %q4, i16 1\n  \
+           %i2 = add i8 %i, 1\n  %e = icmp eq i8 %i2, %n\n  br i1 %e, label %done, label %loop\n\
+         done:\n  %r = phi i8 [ 0, %entry ], [ %s2, %loop ]\n{tail}\n}}\n\
+         define i8 @twice(i8 %x) {{\n  %r = add i8 %x, %x\n  ret i8 %r\n}}"
+    )
+}
+
+/// Callee-saved zero-page bytes (`rc8`..`rc15`): a function that needs more than `rc2`..`rc7` uses
+/// them, saves what it touches on entry and restores it before returning. Before, it spilled; the
+/// caller's `rc8`..`rc15` must come back unchanged and the result be right, in a leaf and in a
+/// function on the soft stack.
+#[test]
+fn a_function_short_of_cells_saves_and_restores_the_callee_saved_ones() {
+    let data = ".segment \"DATA\"\ntab: .byte 3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\n.segment \"CODE\"\n";
+    let keep: [u8; 8] = [0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x17, 0x28];
+    let mut set = String::new();
+    let mut check = String::from("  lda #0\n  sta rc2\n");
+    for (i, v) in keep.iter().enumerate() {
+        set += &format!("  lda #{v}\n  sta rc{}\n", 8 + i);
+        check += &format!("  lda rc{}\n  eor #{v}\n  ora rc2\n  sta rc2\n", 8 + i);
+    }
+    check += "  lda rc2\n";
+    let args = "  lda #<tab\n  sta rc2\n  lda #>tab\n  sta rc3\n  lda #4\n  sta rc4\n  lda #<twice\n  sta rc6\n  lda #>twice\n  sta rc7\n";
+    for (name, call, want) in [("quad", false, 58), ("quadcall", true, 116)] {
+        let ir = quad_ir(name, call);
+        let text = compile(&ir, name) + &compile(&ir, "twice");
+        assert!((8..16).any(|n| text.contains(&format!("rc{n}"))), "uses no callee-saved cell:\n{text}");
+        let program = format!("{text}{data}");
+        let result = common::run_with(&format!("alloc-{name}"), &format!("{set}{args}  jsr {name}\n"), &program);
+        assert_eq!(result, want, "{name}");
+        let kept = common::run_with(&format!("alloc-{name}-kept"), &format!("{set}{args}  jsr {name}\n{check}"), &program);
+        assert_eq!(kept, 0, "{name} changed a callee-saved cell");
+    }
+}
