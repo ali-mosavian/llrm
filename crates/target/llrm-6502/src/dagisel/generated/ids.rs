@@ -5,6 +5,7 @@
 #![allow(non_upper_case_globals)]
 
 pub mod isd {
+    pub const CALL: u16 = 24577;
     pub const RET_GLUE: u16 = 24576;
 }
 

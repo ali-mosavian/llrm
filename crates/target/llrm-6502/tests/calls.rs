@@ -1,0 +1,96 @@
+//! The 6502 call, argument and return lowering on hand-built DAGs. Expected registers are worked
+//! out by hand from `machines/calling.toml`: a byte takes the first free byte from rc2, a word the
+//! first free pair, a byte result leaves in `a`, a word in `a:x`.
+
+use llrm_6502::dagisel::call::{CALL, In, Out, Refused, RET_GLUE, lower_call, lower_formal_arguments, lower_return};
+use llrm_6502::reg;
+use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::{DagConfig, NodeData, SDValue, SelectionDAG};
+use llrm_lir::registers::RegId;
+
+fn phys(
+    dag: &SelectionDAG,
+    node: SDValue,
+) -> RegId {
+    match dag.node(node).data {
+        NodeData::PhysReg(register) => register,
+        _ => panic!("not a physical register"),
+    }
+}
+
+/// `own_ids.txt` numbers the 6502's own nodes; the hand code's constants must match it.
+#[test]
+fn the_own_node_ids_are_the_ones_in_own_ids_txt() {
+    let text = include_str!("../own_ids.txt");
+    let number = |name: &str| -> u16 {
+        text.lines().find_map(|l| l.strip_prefix(name)?.trim().parse().ok()).expect("a row of own_ids.txt")
+    };
+    assert_eq!(CALL, ISD::Target(number("MOSISD::CALL")));
+    assert_eq!(RET_GLUE, ISD::Target(number("MOSISD::RET_GLUE")));
+}
+
+/// `f(i8 a, i16 b)` returning `i16`: `a` goes to rc2, `b` to the first free pair, rc4:rc5 (rs2);
+/// the word comes back as `a` (low) and `x` (high) joined.
+#[test]
+fn a_call_passes_a_byte_in_rc2_and_a_word_in_rs2() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let a = dag.get_register(EVT::I8, 1);
+    let b = dag.get_register(EVT::I16, 2);
+    let callee = dag.get_global_address(EVT::I16, 7, 0);
+
+    let (chain, values) =
+        lower_call(&mut dag, entry, callee, &[Out { value: a }, Out { value: b }], &[In { vt: EVT::I16 }]).unwrap();
+
+    assert_eq!(dag.opcode(values[0]), ISD::BuildPair);
+    let (lo, hi) = (dag.operand(values[0], 0), dag.operand(values[0], 1));
+    assert_eq!((phys(&dag, dag.operand(lo, 1)), phys(&dag, dag.operand(hi, 1))), (reg::A, reg::X));
+    // the chain runs back through the copy of `a` to the end of the call sequence
+    let end = dag.operand(dag.operand(chain, 0), 0);
+    assert_eq!(dag.opcode(end), ISD::CallSeqEnd);
+    let call = dag.operand(end, 0);
+    assert_eq!(dag.opcode(call), CALL);
+    assert_eq!(dag.opcode(dag.operand(call, 1)), ISD::TargetGlobalAddress);
+    // chain, callee, then the two argument registers in order
+    assert_eq!((phys(&dag, dag.operand(call, 2)), phys(&dag, dag.operand(call, 3))), (reg::RC2, reg::RS2));
+}
+
+/// Three words fit rc2..rc7; the fourth fits no register and is refused until the static frame
+/// exists.
+#[test]
+fn a_fourth_word_is_refused() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let words: Vec<Out> = (1..=4).map(|n| Out { value: dag.get_register(EVT::I16, n) }).collect();
+    let callee = dag.get_global_address(EVT::I16, 7, 0);
+
+    assert_eq!(lower_call(&mut dag, entry, callee, &words, &[]).unwrap_err(), Refused::StackArgument(3));
+}
+
+/// `g(i8, i16)` reads rc2 and rs2.
+#[test]
+fn formal_arguments_are_read_from_rc2_and_rs2() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+
+    let args = lower_formal_arguments(&mut dag, entry, &[In { vt: EVT::I8 }, In { vt: EVT::I16 }]).unwrap();
+
+    assert_eq!((phys(&dag, dag.operand(args[0], 1)), phys(&dag, dag.operand(args[1], 1))), (reg::RC2, reg::RS2));
+    assert_eq!((dag.value_type(args[0]), dag.value_type(args[1])), (EVT::I8, EVT::I16));
+}
+
+/// A returned byte is copied to `a` and the return follows the copy, glued to it.
+#[test]
+fn a_returned_byte_is_copied_to_a() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let v = dag.get_register(EVT::I8, 1);
+
+    let ret = lower_return(&mut dag, entry, &[Out { value: v }]).unwrap();
+
+    assert_eq!(dag.opcode(ret), RET_GLUE);
+    assert_eq!(phys(&dag, dag.operand(ret, 1)), reg::A);
+    let copy = dag.operand(ret, 0);
+    assert_eq!((dag.opcode(copy), phys(&dag, dag.operand(copy, 1))), (ISD::CopyToReg, reg::A));
+}
