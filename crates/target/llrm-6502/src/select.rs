@@ -28,6 +28,7 @@ use crate::frame::{Function, Layout, layout};
 use llrm_codegen::backend::frameobjects::Object;
 use crate::dagisel::generated::ids::{opcode as op, reg as ids};
 use crate::dagisel::generated::instrinfo;
+use crate::peep;
 use crate::emit::{MInst, Operand, expand, relax_bra, spill};
 
 const EXTRACT_SUBREG: u16 = 8;
@@ -69,6 +70,24 @@ impl Cells<'_> {
         self.words.push(cell.clone());
         Operand::Reg(cell)
     }
+}
+
+/// The zero-page registers beyond A and X that carry `name`'s result: `rc2`, `rc3` for a 32-bit one.
+fn result_registers(
+    module: &Module,
+    name: &str,
+) -> Vec<usize> {
+    let wide = (|| {
+        let id = module.named(name)?;
+        let ty = module.global(id).function()?.ty;
+        let llrm_mir::types::Type::Function { returns, .. } = module.context.types.get(ty) else { return None };
+        if matches!(module.context.types.get(*returns), llrm_mir::types::Type::Void) {
+            return Some(false);
+        }
+        let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref()?).ok()?;
+        Some(layout.alloc_size(&module.context.types, *returns) > 2)
+    })();
+    if wide.unwrap_or(true) { vec![2, 3] } else { Vec::new() }
 }
 
 fn block_label(
@@ -148,12 +167,16 @@ pub fn function_text(
         }
     }
     body.push_str(&edges);
+    let body = peep::optimize(&body, &result_registers(module, name)).unwrap_or(body);
     let mut body = relax_bra(&body);
     body.push_str(".segment \"BSS\"\n");
-    for cell in &cells.bytes {
+    // the cells the clean-up left in memory
+    let kept = |cell: &str| body.lines().any(|l| l.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|t| t == cell));
+    let (bytes, words): (Vec<_>, Vec<_>) = (cells.bytes.iter().filter(|c| kept(c)).cloned().collect(), cells.words.iter().filter(|c| kept(c)).cloned().collect());
+    for cell in &bytes {
         writeln!(body, "{cell}: .res 1").unwrap();
     }
-    for cell in &cells.words {
+    for cell in &words {
         writeln!(body, "{cell}: .res 2").unwrap();
     }
     body.push_str(".segment \"CODE\"\n");

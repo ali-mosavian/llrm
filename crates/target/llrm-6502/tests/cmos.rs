@@ -22,11 +22,15 @@ fn text(cpu: Cpu) -> String {
         .collect()
 }
 
+/// The tests share work directories by name: one build at a time.
+static BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn run(
     target: &str,
     cpu: Cpu,
     function: &str,
 ) -> (i32, u64) {
+    let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
     let main = format!("  lda #5\n  sta rc2\n  jsr {function}\n");
     common::run_on(target, &format!("cmos-{function}"), &main, &format!("{}{G_DATA}", text(cpu)))
 }
