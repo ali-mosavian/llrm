@@ -116,6 +116,70 @@ pub fn address_arithmetic(function: &mut MFunction) {
     for (at, dst) in converted {
         sink_step(&mut function.blocks[at].insts, &mut function.classes, dst);
     }
+    base_plus_index(function, &mut parent, &copy_users, &other_users);
+}
+
+/// A sum of two registers that is only ever an address is `lea (0,An,Xn), Am`:
+/// the pin selects `ADD32dd`/`ADD32dr` for the `getelementptr` and moves the
+/// sum to an address register for each access (`move.l %d2, %a0; add.l %d1,
+/// %d3; move.l %d3, %a1`). The register that is an address elsewhere is the
+/// base.
+///
+/// DEVIATE from the pin's output. Reason: an instruction and a register
+/// fewer, 2 bytes and 4 clocks for each access, and the callee-saved data
+/// register the sum held (partition: gcc's `lea -4(%a3,%d0.l),%a4`). Exit:
+/// never; a target choice, off with `Options::overlay`.
+fn base_plus_index(
+    function: &mut MFunction,
+    parent: &mut [usize],
+    copy_users: &[usize],
+    other_users: &[usize],
+) {
+    let mut address_group = vec![false; function.classes.len()];
+    for v in 0..function.classes.len() {
+        if function.classes[v] == Class::Ar32 {
+            address_group[find(parent, v)] = true;
+        }
+    }
+    for at in 0..function.blocks.len() {
+        for i in 0..function.blocks[at].insts.len() {
+            let inst = &function.blocks[at].insts[i];
+            if !matches!(inst.kind, Kind::Op("ADD32dd" | "ADD32dr")) {
+                continue;
+            }
+            let [Operand::Def(Reg::Virt(dst)), Operand::Use(Reg::Virt(one)), Operand::Use(Reg::Virt(other))] =
+                inst.operands[..]
+            else {
+                continue;
+            };
+            let flags_read = function.blocks[at].insts[i + 1..]
+                .iter()
+                .find(|later| later.reads_flags || later.sets_flags)
+                .is_some_and(|later| later.reads_flags);
+            if flags_read || other_users[dst as usize] != 0 || copy_users[dst as usize] == 0 {
+                continue;
+            }
+            // the base: an address register elsewhere, whose only other
+            // reader is a copy
+            let Some((base, index)) = [(one, other), (other, one)]
+                .into_iter()
+                .find(|&(base, _)| address_group[find(parent, base as usize)] && other_users[base as usize] == 1)
+            else {
+                continue;
+            };
+            if base == index {
+                continue;
+            }
+            function.classes[dst as usize] = Class::Ar32;
+            function.classes[base as usize] = Class::Ar32;
+            let inst = &mut function.blocks[at].insts[i];
+            inst.kind = Kind::Op("LEA32f");
+            inst.operands = vec![Operand::Def(Reg::Virt(dst)), Operand::Imm(0), Operand::Use(Reg::Virt(base)), Operand::Use(Reg::Virt(index))];
+            inst.ties.clear();
+            inst.sets_flags = false;
+            inst.commutable = false;
+        }
+    }
 }
 
 /// The inverse of [`address_arithmetic`]: a `lea (c,An), Am` whose base is a

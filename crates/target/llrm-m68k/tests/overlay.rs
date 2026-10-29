@@ -797,3 +797,17 @@ mod across_blocks {
         assert_eq!(loop_post_increment(lines.clone()), lines);
     }
 }
+
+/// `&a[n - 1]` read in two later blocks was `add.l %d1, %d3` in a callee-saved
+/// data register and a `move.l %d3, %a1` per access (partition: 5 data
+/// registers saved, 2 instructions and 4 bytes per access more than gcc's
+/// `lea -4(%a3,%d0.l),%a4`). A sum that is only an address is one `lea`.
+#[test]
+fn a_sum_that_is_only_an_address_is_a_lea() {
+    let ir = llrm_m68k::kernels::source_in("library", "partition");
+    let module = llrm_mir::parse::module(&ir).expect("parses");
+    let ours = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
+    assert!(ours.contains("\tlea\t(0,%a") && !ours.contains("add.l\t%d1, %d3"), "{ours}");
+    let pinned = text_with(&module, "k", Cpu::M68000, Options::PINNED).expect("compiles");
+    assert!(!pinned.contains("\tlea\t(0,%a"), "{pinned}");
+}
