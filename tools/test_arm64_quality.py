@@ -112,3 +112,14 @@ def test_mutual_recursion_chain_does_not_multiply_loop_weights():
              "add w0, w0, #1", "bl 0x0", "b.lt 0x20", "ret"]
     m = q.check_and_measure(q.parse_disasm(dis(*lines)), [(0, "_f"), (0x10, "_g"), (0x20, "_h")], 48)
     assert m["exec"] == 3 * 31
+
+
+def test_without_unrolling_adds_each_compilers_own_switch():
+    """gcc's -O2 completely peeled small loops and clang unrolled by cost, so a static count compared unrolling policy."""
+    clang = q.without_unrolling(["/p/bin/clang", "-O2", "-x", "ir", "-c", "a.ll"])
+    assert clang[-1] == "-fno-unroll-loops"
+    ours = q.without_unrolling(["/t/llrm-arm64-llc", "-O2", "a.ll"])
+    assert ours[-2:] == ["-fno-unroll-loops", "-fno-peel-loops"]
+    gcc = q.without_unrolling(["gcc-13", "-O2", "-c", "a.c"])
+    assert "max-completely-peeled-insns=0" in gcc and "-fno-peel-loops" in gcc
+    assert q.without_unrolling(["clang", "--version"]) == ["clang", "--version"], "other commands unchanged"
