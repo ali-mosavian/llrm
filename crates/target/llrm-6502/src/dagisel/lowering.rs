@@ -28,6 +28,14 @@ pub mod mosisd {
 
     pub const CMP: ISD = ISD::Target(ids::CMP);
     pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
+    pub const MUL32: ISD = ISD::Target(ids::MUL32);
+    pub const UDIV32: ISD = ISD::Target(ids::UDIV32);
+    pub const SDIV32: ISD = ISD::Target(ids::SDIV32);
+    pub const UREM32: ISD = ISD::Target(ids::UREM32);
+    pub const SREM32: ISD = ISD::Target(ids::SREM32);
+    pub const SHL32: ISD = ISD::Target(ids::SHL32);
+    pub const SRL32: ISD = ISD::Target(ids::SRL32);
+    pub const SRA32: ISD = ISD::Target(ids::SRA32);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
@@ -73,6 +81,10 @@ pub fn target_lowering() -> TargetLowering {
     set(&[UDivRem, SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], Action::Expand);
     set(&[ZeroExtend, AnyExtend], Action::Custom);
+    // A long multiply, divide or shift by a variable is one node of two words (`lower_long`).
+    for op in [Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra] {
+        tl.set_operation_action(op, MVT::I32, Action::Custom);
+    }
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
     for op in [SetCC, Select] {
@@ -98,9 +110,50 @@ impl Hooks for MosLowering {
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::ZeroExtend | ISD::AnyExtend => Some(lower_extend(dag, node)),
+            ISD::Mul | ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem | ISD::Shl | ISD::Srl | ISD::Sra
+                if dag.value_type(node) == EVT::I32 =>
+            {
+                lower_long(dag, node)
+            }
             _ => None,
         }
     }
+}
+
+/// A long (`i32`) multiply, divide, remainder or shift by a variable: `MOSISD::<op>32` of the
+/// operands' halves, two words joined. A shift by a constant is left to the type legalizer.
+fn lower_long(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let opcode = match dag.opcode(node) {
+        ISD::Mul => mosisd::MUL32,
+        ISD::UDiv => mosisd::UDIV32,
+        ISD::SDiv => mosisd::SDIV32,
+        ISD::URem => mosisd::UREM32,
+        ISD::SRem => mosisd::SREM32,
+        ISD::Shl => mosisd::SHL32,
+        ISD::Srl => mosisd::SRL32,
+        _ => mosisd::SRA32,
+    };
+    let shift = matches!(opcode, mosisd::SHL32 | mosisd::SRL32 | mosisd::SRA32);
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    if shift && dag.constant(b).is_some() {
+        return None;
+    }
+    let sixteen = dag.get_constant(16, EVT::I8);
+    let mut operands = Vec::new();
+    for (at, value) in [a, b].into_iter().enumerate() {
+        if shift && at == 1 {
+            operands.push(dag.get_node(ISD::Truncate, EVT::I8, &[value]));
+            continue;
+        }
+        let high = dag.get_node(ISD::Srl, EVT::I32, &[value, sixteen]);
+        operands.push(dag.get_node(ISD::Truncate, EVT::I16, &[value]));
+        operands.push(dag.get_node(ISD::Truncate, EVT::I16, &[high]));
+    }
+    let pair = dag.get_node_multi(opcode, &[EVT::I16, EVT::I16], &operands);
+    Some(dag.get_node(ISD::BuildPair, EVT::I32, &[SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 }]))
 }
 
 /// A condition widened to a byte or a word is `select cond, 1, 0`; any other extension is selected

@@ -397,3 +397,59 @@ fn a_signed_byte_widens_by_its_sign() {
         assert_eq!(run(&format!("sx-{a}-hi"), ir, "func", &set("rc2", a), "  txa\n"), high);
     }
 }
+
+/// `a op b` on longs through `func(a, b)`: `a` in rs1:rs2, `b` in rs3 and at the top of the soft
+/// stack; the result is read from `a`, `x`, `rc2`, `rc3`.
+fn long_binary(
+    op: &str,
+    a: u32,
+    b: u32,
+) -> u32 {
+    let ir = format!("define i32 @func(i32 %a, i32 %b) {{\n  %r = {op} i32 %a, %b\n  ret i32 %r\n}}");
+    let mut setup = STACK.to_owned();
+    for (at, cell) in ["rc2", "rc3", "rc4", "rc5"].iter().enumerate() {
+        setup += &set(cell, (a >> (8 * at)) as u16);
+    }
+    setup += &(set("rc6", b as u16) + &set("rc7", (b >> 8) as u16));
+    setup += &format!("  lda #{}\n  sta $8000\n  lda #{}\n  sta $8001\n", (b >> 16) & 0xFF, b >> 24);
+    let key = format!("{op}-{a}-{b}");
+    [("", 0), ("  txa\n", 8), ("  lda rc2\n", 16), ("  lda rc3\n", 24)]
+        .iter()
+        .map(|(after, shift)| (run(&format!("long-{key}-{shift}"), &ir, "func", &setup, after) as u32) << shift)
+        .sum()
+}
+
+/// Longs through the 32-bit runtime, expected values from integer arithmetic on paper:
+/// 70000 * 3 = 0x33450; 4000000000 / 7 = 571428571 r 3; -100000 / 7 = -14285 r -5;
+/// 1 << 31 = 0x80000000; 0x80000000 >> 31 is 1 logical, 0xFFFFFFFF arithmetic.
+#[test]
+fn long_operations_run() {
+    for (op, a, b, want) in [
+        ("mul", 70000u32, 3u32, 0x33450u32),
+        ("mul", 100000, 100000, 0x540B_E400),
+        ("udiv", 4_000_000_000, 7, 571_428_571),
+        ("urem", 4_000_000_000, 7, 3),
+        ("sdiv", (-100000i32) as u32, 7, (-14285i32) as u32),
+        ("srem", (-100000i32) as u32, 7, (-5i32) as u32),
+        ("shl", 1, 31, 0x8000_0000),
+        ("lshr", 0x8000_0000, 31, 1),
+        ("ashr", 0x8000_0000, 31, 0xFFFF_FFFF),
+    ] {
+        assert_eq!(long_binary(op, a, b), want, "i32 {op} {a} {b}");
+    }
+}
+
+/// A shift of a long by a constant needs no runtime: 0x12345678 << 4 = 0x23456780.
+#[test]
+fn a_long_shift_by_a_constant_runs() {
+    let ir = "define i32 @func(i32 %a) {\n  %r = shl i32 %a, 4\n  ret i32 %r\n}";
+    let mut setup = STACK.to_owned();
+    for (at, cell) in ["rc2", "rc3", "rc4", "rc5"].iter().enumerate() {
+        setup += &set(cell, (0x1234_5678u32 >> (8 * at)) as u16);
+    }
+    let got: u32 = [("", 0), ("  txa\n", 8), ("  lda rc2\n", 16), ("  lda rc3\n", 24)]
+        .iter()
+        .map(|(after, shift)| (run(&format!("shl4-{shift}"), ir, "func", &setup, after) as u32) << shift)
+        .sum();
+    assert_eq!(got, 0x2345_6780);
+}

@@ -308,3 +308,253 @@ __ashrhi3:                      ; rs1 >> rc4 (arithmetic) -> A:X
   lda rc2
   ldx rc3
   rts
+
+; ---- 32-bit operations -------------------------------------------------------------------------
+; The compiler copies the operands to __sa (first) and __sb (second, or a shift count in its first
+; byte) and reads the result from __sa. The routines change A, X, Y, __sa, __sb, __st, __sr and
+; __sg and nothing else. Division by zero gives the all-ones quotient and the dividend.
+
+.segment "BSS"
+__sa: .res 4
+__sb: .res 4
+__st: .res 4
+__sr: .res 4
+__sg: .res 1
+.segment "CODE"
+
+.export __mulsi3
+__mulsi3:                       ; __sa * __sb -> __sa (the low 32 bits)
+  lda #0
+  sta __st
+  sta __st+1
+  sta __st+2
+  sta __st+3
+  ldx #32
+@next:
+  lsr __sb+3
+  ror __sb+2
+  ror __sb+1
+  ror __sb
+  bcc @skip
+  clc
+  lda __st
+  adc __sa
+  sta __st
+  lda __st+1
+  adc __sa+1
+  sta __st+1
+  lda __st+2
+  adc __sa+2
+  sta __st+2
+  lda __st+3
+  adc __sa+3
+  sta __st+3
+@skip:
+  asl __sa
+  rol __sa+1
+  rol __sa+2
+  rol __sa+3
+  dex
+  bne @next
+  jmp copy_st_to_sa
+
+.macro cmp_sub_32
+  sec
+  lda __sr
+  sbc __sb
+  sta __st
+  lda __sr+1
+  sbc __sb+1
+  sta __st+1
+  lda __sr+2
+  sbc __sb+2
+  sta __st+2
+  lda __sr+3
+  sbc __sb+3
+  sta __st+3
+.endmacro
+
+udivmod32:                      ; __sa / __sb -> __sa, __sa % __sb -> __sr (unsigned)
+  lda #0
+  sta __sr
+  sta __sr+1
+  sta __sr+2
+  sta __sr+3
+  ldx #32
+@next:
+  asl __sa
+  rol __sa+1
+  rol __sa+2
+  rol __sa+3
+  rol __sr
+  rol __sr+1
+  rol __sr+2
+  rol __sr+3
+  bcs @take                     ; the remainder overflowed 32 bits: it is above any divisor
+  cmp_sub_32
+  bcc @skip                     ; borrow: the remainder is below the divisor
+@take:
+  cmp_sub_32
+  lda __st
+  sta __sr
+  lda __st+1
+  sta __sr+1
+  lda __st+2
+  sta __sr+2
+  lda __st+3
+  sta __sr+3
+  inc __sa                      ; the quotient bit (bit 0 of __sa is clear after the shift)
+@skip:
+  dex
+  beq @done                     ; the loop is past a short branch's reach
+  jmp @next
+@done:
+  rts
+
+copy_st_to_sa:
+  lda __st
+  sta __sa
+  lda __st+1
+  sta __sa+1
+  lda __st+2
+  sta __sa+2
+  lda __st+3
+  sta __sa+3
+  rts
+
+copy_sr_to_sa:
+  lda __sr
+  sta __sa
+  lda __sr+1
+  sta __sa+1
+  lda __sr+2
+  sta __sa+2
+  lda __sr+3
+  sta __sa+3
+  rts
+
+neg_sa:
+  sec
+  lda #0
+  sbc __sa
+  sta __sa
+  lda #0
+  sbc __sa+1
+  sta __sa+1
+  lda #0
+  sbc __sa+2
+  sta __sa+2
+  lda #0
+  sbc __sa+3
+  sta __sa+3
+  rts
+
+neg_sb:
+  sec
+  lda #0
+  sbc __sb
+  sta __sb
+  lda #0
+  sbc __sb+1
+  sta __sb+1
+  lda #0
+  sbc __sb+2
+  sta __sb+2
+  lda #0
+  sbc __sb+3
+  sta __sb+3
+  rts
+
+.export __udivsi3
+__udivsi3:                      ; __sa / __sb -> __sa
+  jmp udivmod32
+
+.export __umodsi3
+__umodsi3:                      ; __sa % __sb -> __sa
+  jsr udivmod32
+  jmp copy_sr_to_sa
+
+; Signed: divide the magnitudes, then give the quotient the sign of a xor b and the remainder the
+; sign of a (bit 0 of __sg is the quotient's sign, bit 1 the remainder's).
+divmod32s:
+  lda #0
+  sta __sg
+  lda __sa+3
+  bpl @a
+  lda #3
+  sta __sg
+  jsr neg_sa
+@a:
+  lda __sb+3
+  bpl @b
+  lda __sg
+  eor #1
+  sta __sg
+  jsr neg_sb
+@b:
+  jmp udivmod32
+
+.export __divsi3
+__divsi3:                       ; __sa / __sb -> __sa (signed, truncated toward zero)
+  jsr divmod32s
+  lda __sg
+  and #1
+  beq @done
+  jsr neg_sa
+@done:
+  rts
+
+.export __modsi3
+__modsi3:                       ; __sa % __sb -> __sa (signed, the sign of the dividend)
+  jsr divmod32s
+  jsr copy_sr_to_sa
+  lda __sg
+  and #2
+  beq @done
+  jsr neg_sa
+@done:
+  rts
+
+.export __ashlsi3
+__ashlsi3:                      ; __sa << __sb (low byte) -> __sa
+  ldx __sb
+  beq @done
+@next:
+  asl __sa
+  rol __sa+1
+  rol __sa+2
+  rol __sa+3
+  dex
+  bne @next
+@done:
+  rts
+
+.export __lshrsi3
+__lshrsi3:                      ; __sa >> __sb (logical) -> __sa
+  ldx __sb
+  beq @done
+@next:
+  lsr __sa+3
+  ror __sa+2
+  ror __sa+1
+  ror __sa
+  dex
+  bne @next
+@done:
+  rts
+
+.export __ashrsi3
+__ashrsi3:                      ; __sa >> __sb (arithmetic) -> __sa
+  ldx __sb
+  beq @done
+@next:
+  lda __sa+3
+  cmp #$80
+  ror __sa+3
+  ror __sa+2
+  ror __sa+1
+  ror __sa
+  dex
+  bne @next
+@done:
+  rts

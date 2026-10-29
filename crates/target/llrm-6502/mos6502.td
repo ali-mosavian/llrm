@@ -216,3 +216,39 @@ def : Pat<(i16 frameindex:$fi), (LEASP16 (to_tframeindex $fi))>;
 
 // A signed byte widens by its sign: the high byte is the byte shifted right by 7.
 def : Pat<(i16 (sext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (SRA8 Imag8:$a, 7), sub_hi)>;
+
+// 32-bit multiply, divide, remainder and shifts by a variable: the type legalizer would split them
+// into halves it cannot recombine, so they are one node of two result words, a call of the runtime
+// where emitted (runtime/mos_rt.s, `__sa` and `__sb`).
+def SDTMOSLong : SDTypeProfile<2, 4, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i16>, SDTCisVT<3, i16>,
+                                     SDTCisVT<4, i16>, SDTCisVT<5, i16>]>;
+def SDTMOSLongShift : SDTypeProfile<2, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i16>, SDTCisVT<3, i16>,
+                                          SDTCisVT<4, i8>]>;
+def MOSmul32 : SDNode<"MOSISD::MUL32", SDTMOSLong>;
+def MOSudiv32 : SDNode<"MOSISD::UDIV32", SDTMOSLong>;
+def MOSsdiv32 : SDNode<"MOSISD::SDIV32", SDTMOSLong>;
+def MOSurem32 : SDNode<"MOSISD::UREM32", SDTMOSLong>;
+def MOSsrem32 : SDNode<"MOSISD::SREM32", SDTMOSLong>;
+def MOSshl32 : SDNode<"MOSISD::SHL32", SDTMOSLongShift>;
+def MOSsrl32 : SDNode<"MOSISD::SRL32", SDTMOSLongShift>;
+def MOSsra32 : SDNode<"MOSISD::SRA32", SDTMOSLongShift>;
+
+// No `Defs = [P]`: an implicit result would be a third result type, which the generator rejects.
+let isCodeGenOnly = 0 in {
+  def MUL32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag16:$bl, Imag16:$bh), "mul32",
+      [(set i16:$dl, i16:$dh, (MOSmul32 i16:$al, i16:$ah, i16:$bl, i16:$bh))]>;
+  def UDIV32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag16:$bl, Imag16:$bh), "udiv32",
+      [(set i16:$dl, i16:$dh, (MOSudiv32 i16:$al, i16:$ah, i16:$bl, i16:$bh))]>;
+  def SDIV32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag16:$bl, Imag16:$bh), "sdiv32",
+      [(set i16:$dl, i16:$dh, (MOSsdiv32 i16:$al, i16:$ah, i16:$bl, i16:$bh))]>;
+  def UREM32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag16:$bl, Imag16:$bh), "urem32",
+      [(set i16:$dl, i16:$dh, (MOSurem32 i16:$al, i16:$ah, i16:$bl, i16:$bh))]>;
+  def SREM32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag16:$bl, Imag16:$bh), "srem32",
+      [(set i16:$dl, i16:$dh, (MOSsrem32 i16:$al, i16:$ah, i16:$bl, i16:$bh))]>;
+  def SHL32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag8:$b), "shl32",
+      [(set i16:$dl, i16:$dh, (MOSshl32 i16:$al, i16:$ah, i8:$b))]>;
+  def SRL32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag8:$b), "srl32",
+      [(set i16:$dl, i16:$dh, (MOSsrl32 i16:$al, i16:$ah, i8:$b))]>;
+  def SRA32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag8:$b), "sra32",
+      [(set i16:$dl, i16:$dh, (MOSsra32 i16:$al, i16:$ah, i8:$b))]>;
+}

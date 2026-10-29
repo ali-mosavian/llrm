@@ -332,6 +332,38 @@ pub fn expand(
             copy_byte(&mut out, &dl, "a");
             copy_byte(&mut out, &dh, "x");
         }
+        // A long operation: the operands are copied to `__sa` and `__sb` (runtime/mos_rt.s), the
+        // result comes back in `__sa`.
+        op::MUL32 | op::UDIV32 | op::SDIV32 | op::UREM32 | op::SREM32 | op::SHL32 | op::SRL32 | op::SRA32 => {
+            let routine = match inst.opcode {
+                op::MUL32 => "__mulsi3",
+                op::UDIV32 => "__udivsi3",
+                op::SDIV32 => "__divsi3",
+                op::UREM32 => "__umodsi3",
+                op::SREM32 => "__modsi3",
+                op::SHL32 => "__ashlsi3",
+                op::SRL32 => "__lshrsi3",
+                _ => "__ashrsi3",
+            };
+            let (low, high) = (word(&o[0])?, word(&o[1])?);
+            for (at, source) in [word(&o[2])?, word(&o[3])?].into_iter().enumerate() {
+                copy_byte(&mut out, &format!("__sa+{}", 2 * at), &source.0);
+                copy_byte(&mut out, &format!("__sa+{}", 2 * at + 1), &source.1);
+            }
+            if matches!(inst.opcode, op::SHL32 | op::SRL32 | op::SRA32) {
+                copy_byte(&mut out, "__sb", reg(&o[4])?);
+            } else {
+                for (at, source) in [word(&o[4])?, word(&o[5])?].into_iter().enumerate() {
+                    copy_byte(&mut out, &format!("__sb+{}", 2 * at), &source.0);
+                    copy_byte(&mut out, &format!("__sb+{}", 2 * at + 1), &source.1);
+                }
+            }
+            writeln!(out, "  jsr {routine}").unwrap();
+            copy_byte(&mut out, &low.0, "__sa");
+            copy_byte(&mut out, &low.1, "__sa+1");
+            copy_byte(&mut out, &high.0, "__sa+2");
+            copy_byte(&mut out, &high.1, "__sa+3");
+        }
         op::COPY8 => copy_byte(&mut out, reg(&o[0])?, reg(&o[1])?),
         op::COPY16 => {
             let ((dl, dh), (sl, sh)) = (word(&o[0])?, word(&o[1])?);
