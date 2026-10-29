@@ -275,3 +275,13 @@ fn the_arms_of_an_expanded_select_keep_their_order() {
     let text = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
     assert!(text.contains("\tcmpi.l\t#10, %d0\n\tbcc\t.LBB0_3\n"), "{text}");
 }
+
+/// A stored `zext i8 to i32` of a load matched the store-load fragment, which checks no extension
+/// (the pin's too: `llc` gives `move.l (buf,%pc), (%a0)`), and copied four bytes where one was
+/// meant. Seed 68 of the differential driver.
+#[test]
+fn a_stored_zero_extended_byte_is_not_a_long_move() {
+    let ir = "@buf = external constant [16 x i8], align 1\ndefine void @f(ptr %p) {\n  %v = load i8, ptr @buf, align 1\n  %e = zext i8 %v to i32\n  store i32 %e, ptr %p, align 2\n  ret void\n}";
+    let text = compiled(ir, "f");
+    assert!(!text.contains("move.l\t(buf,%pc), ("), "{text}");
+}
