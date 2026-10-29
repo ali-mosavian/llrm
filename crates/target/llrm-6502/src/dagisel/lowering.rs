@@ -87,6 +87,8 @@ pub fn target_lowering() -> TargetLowering {
     set(&[Rotl, Rotr], Action::Custom);
     set(&[ZeroExtend, AnyExtend], Action::Custom);
     set(&[SignExtend], Action::Custom);
+    // a sign extension in a register is a pair of shifts (a negated bit for a bit)
+    set(&[SignExtendInReg], Action::Expand);
     // A long multiply, divide or shift by a variable is one node of two words
     // (`lower_long`).
     for op in [Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra, Rotl, Rotr] {
@@ -371,9 +373,15 @@ fn condition_byte(
                 Some(lowered) => lowered,
                 None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
             },
-            ISD::Truncate if dag.value_type(dag.operand(value, 0)) == EVT::I8 => {
-                let (byte, one) = (dag.operand(value, 0), dag.get_constant(1, EVT::I8));
+            ISD::Truncate if matches!(dag.value_type(dag.operand(value, 0)), EVT::I8 | EVT::I16) => {
+                let wide = dag.operand(value, 0);
+                let byte = if dag.value_type(wide) == EVT::I8 { wide } else { dag.get_node(ISD::Truncate, EVT::I8, &[wide]) };
+                let one = dag.get_constant(1, EVT::I8);
                 dag.get_node(ISD::And, EVT::I8, &[byte, one])
+            }
+            ISD::Freeze => {
+                let bit = dag.operand(value, 0);
+                condition_byte(dag, bit)
             }
             ISD::Select => {
                 let (test, a, b) = (dag.operand(value, 0), dag.operand(value, 1), dag.operand(value, 2));
