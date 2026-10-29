@@ -280,7 +280,7 @@ needs = [
 [private]
 repo = "ali-mosavian/llrm-private-tools"
 public = { rm-quake = "ali-mosavian/rm-quake" }
-env = { TCPP30_DIR = "tcpp30", TD_DIR = "td", VBDOS_DIR = "vbdos", PDS71_DIR = "pds71", QB45_DIR = "qb45", QB45_DEMOS_DIR = "gor", QCPORT_BORLAND = "qcbcc", QCPORT_INC = "qctc/inc", QCPORT_BCC_LIB = "bcpp31/lib", TOOLCHAINS = ".", TURBO = "." }
+env = { TCPP30_DIR = "tcpp30", TD_DIR = "td", VBDOS_DIR = "vbdos", PDS71_DIR = "pds71", QB45_DIR = "qb45", QB45_DEMOS_DIR = "gor", QCPORT_BORLAND = "qcbcc", QCPORT_INC = "qctc/inc", QCPORT_BCC_LIB = "bcpp31/lib", LLRM_BORLAND_INC = "bcinc", LLRM_BORLAND_LIB = "bcpp31/lib", TOOLCHAINS = ".", TURBO = "." }
 group_env = { reference = { QCPORT = "rm-quake/src" }, cost = { QCPORT = "rm-quake/src" }, python = { QCPORT = "rm-quake/src", DFACES_SRC = "qbq-llrm/src" } }
 
 # What each item needs, one table. A key is a step (`turbo`), a `run` language (`lang:qb`), a cheap test binary (`bin:differential`).
