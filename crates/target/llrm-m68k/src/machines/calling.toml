@@ -1,0 +1,46 @@
+# The m68k C ABI at the pin (M68kCallingConv.td, CC_M68k_C and RetCC_M68k_C): every argument is promoted to a
+# 4-byte stack slot, pushed in order and removed by the caller. A result is in d0 (a pointer in a0).
+# DEVIATE: the `inreg` (d0, d1), `nest` (a1) and byval arguments, and the Fast convention, are not described.
+default = "c"
+private = "c"
+
+[abi.c]
+convention = "c"
+
+[c]
+cc = "cdecl"
+slot_bytes = 4
+order = "right-to-left"
+cleanup = "caller"
+argument_registers = []
+sized_arguments = false
+skip_memory = false
+backfill = false
+return_address_bytes = 4
+# The pin's fixed objects: offset 0 is the first argument, from the stack pointer at entry (frame.rs adds the
+# return address). Not the frame register's, as x86's is.
+first_argument_offset = 0
+frame = "a6"
+frame_optional = true
+stack = "sp"
+preserved = [["d2", "d2"], ["d3", "d3"], ["d4", "d4"], ["d5", "d5"], ["d6", "d6"], ["d7", "d7"],
+             ["a2", "a2"], ["a3", "a3"], ["a4", "a4"], ["a5", "a5"], ["a6", "a6"]]
+clobbered = ["d0", "d1", "a0", "a1", "ccr"]
+entry_state = []
+aggregate = "hidden-pointer"
+aggregate_in_register_bytes = []
+aggregate_pointer = "after-arguments"
+aggregate_pointer_returned = "a0"
+aggregate_pointer_popped_by = "caller"
+promotion = "slot"
+wide_slots = 1
+variadic_float = "double"
+
+[c.symbol]
+elf = "*"
+
+[c.result]
+1 = ["bd0"]
+2 = ["wd0"]
+4 = ["d0"]
+pointer = ["a0"]

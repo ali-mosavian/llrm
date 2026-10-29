@@ -70,6 +70,9 @@
 //!     reach `STI`: redirected first, it names its own block and the records
 //!     stay on the erased branch. Asserted by
 //!     `merging_leaves_the_records_of_the_old_branch_before_the_new_terminator`.
+//! 25. `!llrm.descriptor` (ours, no LLVM kind): kept where both instructions
+//!     carry it, dropped otherwise. LLVM's unknown-kind arm would drop it, and
+//!     the merged `inttoptr` then reads as a forged selector (`forging`).
 //!
 //! # Example
 //! Two phis with the same arms in one block. Before:
@@ -98,7 +101,8 @@ use llrm_mir::facts::Fact;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{
-    BlockId, Function, GlobalKind, InstId, Instruction, MetadataId, MetadataNode, Operand, Use, ValueDef, ValueId,
+    BlockId, DESCRIPTOR_WORD, Function, GlobalKind, InstId, Instruction, MetadataId, MetadataNode, Operand, Use,
+    ValueDef, ValueId,
 };
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::types::{Type, TypeId};
@@ -1331,6 +1335,10 @@ fn combine_metadata(
                 }
             }
             "captures" => set_metadata(function, k, &kind, merged(kmd, jmd)),
+            // Two array selectors stay the arrays' own where K stands for J.
+            // Dropped, the merged `inttoptr` forges a pointer into the data
+            // segment (`forging`).
+            DESCRIPTOR_WORD => set_metadata(function, k, &kind, jmd.map(|_| kmd)),
             // Remove unknown metadata.
             _ => set_metadata(function, k, &kind, None),
         }

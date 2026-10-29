@@ -4,6 +4,9 @@ inputs:
   save:
     description: Save the caches at the end (the build job only).
     default: "false"
+  clang:
+    description: '"required": a clang tree that is missing is an error (the gate jobs); otherwise a warning.'
+    default: ""
 runs:
   using: composite
   steps:
@@ -63,14 +66,15 @@ runs:
         # fail on it: red, not skipped. The pin tree must report the pin's sha (tools/pin_clang.py).
         pin="${{ steps.clang.outputs.pin }}/bin/clang"
         m16="${{ steps.clang.outputs.m16 }}/bin/clang"
-        if [ -x "$pin" ] && LLRM_PIN_CLANG="$pin" python3 tools/pin_clang.py >/dev/null; then echo "LLRM_PIN_CLANG=$pin" >> "$GITHUB_ENV"; else echo "::warning::no pinned clang tree (run the toolchain workflow)"; fi
-        if [ -x "$m16" ]; then echo "LLRM_CLANG_M16=$m16" >> "$GITHUB_ENV"; else echo "::warning::no m16 clang tree (run the toolchain workflow)"; fi
+        miss() { if [ "${{ inputs.clang }}" = required ]; then echo "::error::$1"; exit 1; else echo "::warning::$1"; fi; }
+        if [ -x "$pin" ] && LLRM_PIN_CLANG="$pin" python3 tools/pin_clang.py >/dev/null; then echo "LLRM_PIN_CLANG=$pin" >> "$GITHUB_ENV"; else miss "no pinned clang tree at $pin (the toolchain job builds it)"; fi
+        if [ -x "$m16" ]; then echo "LLRM_CLANG_M16=$m16" >> "$GITHUB_ENV"; else miss "no m16 clang tree at $m16 (the toolchain job builds it)"; fi
     - name: Drop trees whose pin is gone
       shell: bash
       run: |
         for d in ~/.cache/llrm/*-[0-9a-f]*; do
           [ -d "$d" ] || continue
-          grep -rqs "${d##*-}" toolchain/jwbuild.sh toolchain/dosrunbuild.sh toolchain/owshim/ow-commit toolchain/gcctorture.sh || { echo "pruned $d"; rm -rf "$d" "$d.lock"; }
+          grep -rqs "${d##*-}" toolchain/jwbuild.sh toolchain/dosrunbuild.sh toolchain/owshim/ow-commit toolchain/gcctorture.sh toolchain/clang/pin || { echo "pruned $d"; rm -rf "$d" "$d.lock"; }
         done
     - name: wdump (Open Watcom's, built from the tree owshim pins)
       shell: bash

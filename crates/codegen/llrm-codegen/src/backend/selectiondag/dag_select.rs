@@ -157,22 +157,21 @@ pub(crate) fn do_instruction_selection(
     selector: &Selector,
     hooks: &mut X86Hooks,
 ) -> Result<(), Refusal> {
-    do_instruction_selection_with(dag, selector, hooks, &super::dagisel_adapter::X86Ids, |selector, adapter, hooks, node| {
+    do_instruction_selection_with(dag, &super::dagisel_adapter::X86Registers, |adapter, node| {
         select_node(selector, adapter, hooks, node)
     })
 }
 
-/// [`do_instruction_selection`] for any target: `select` tries a node by hand
-/// first (the target's `Select` arms), then the matcher table.
-pub(crate) fn do_instruction_selection_with<H>(
+/// `DoInstructionSelection` for any target: `select` picks the instruction for
+/// one node, as the target's `Select` does, and `registers` names its physical
+/// registers in the pin's numbering.
+pub fn do_instruction_selection_with(
     dag: &mut SelectionDAG,
-    selector: &Selector,
-    hooks: &mut H,
-    ids: &dyn super::dagisel_adapter::TargetIds,
-    select: impl Fn(&Selector, &mut DagisAdapter<'_>, &mut H, u32) -> Outcome,
+    registers: &dyn super::dagisel_adapter::PinRegisters,
+    mut select: impl FnMut(&mut DagisAdapter<'_>, u32) -> Outcome,
 ) -> Result<(), Refusal> {
     let order = users_first(dag);
-    let mut adapter = DagisAdapter::with_ids(dag, ids);
+    let mut adapter = DagisAdapter::with_registers(dag, registers);
     // Nodes a selection makes (a shift amount rewritten, a mask shrunk) are
     // visited next, latest first: the pin inserts them before the node
     // being selected (`insertDAGNode`), and its walk runs toward the front
@@ -198,7 +197,7 @@ pub(crate) fn do_instruction_selection_with<H>(
             adapter.mark_selected(node);
         }
         adapter.dag.cur_order = adapter.dag.nodes()[node as usize].order;
-        if select(selector, &mut adapter, hooks, node) == Outcome::CannotSelect {
+        if select(&mut adapter, node) == Outcome::CannotSelect {
             return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
         }
         if let Some(why) = adapter.refusal() {
