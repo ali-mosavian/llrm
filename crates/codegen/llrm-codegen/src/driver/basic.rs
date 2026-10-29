@@ -968,7 +968,9 @@ pub fn assembled(
                 })
             })?;
         main_frame += statics;
-        for callee in procedure.callees.values() {
+        // A call laid down as inline code (the landing pad's `cld`) names
+        // no routine to link.
+        for callee in procedure.callees.values().filter(|callee| callee.code.is_empty()) {
             referenced.insert(callee.name.clone(), callee.far);
         }
         rows.extend(procedure.body.blocks.first().map(|entry| super::entry_row(procedures.len(), entry.at)));
