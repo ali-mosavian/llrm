@@ -1453,6 +1453,10 @@ fn live_after(
                 _ => {}
             }
         }
+        // a call writes every register it does not preserve, results included
+        if inst.call {
+            defs.extend(Mos::<false>::caller_saved());
+        }
         (defs, reads)
     };
     let mut live_in: Vec<HashSet<RegId>> = vec![HashSet::new(); blocks];
@@ -1481,19 +1485,24 @@ fn live_after(
     }
 }
 
-/// A move that needs the accumulator when neither side is it: bracketed by
-/// `pha`/`pla` when it is live.
+/// A move that needs a register when neither side is one: through `spare`, an
+/// index register nothing reads after it (`lda`/`sta` become `ldx`/`stx`), else
+/// through `a`, bracketed by `pha`/`pla` when it is live. `body` is a plain
+/// `lda`/`sta` pair.
 fn through_a(
     out: &mut String,
     a_live: bool,
+    spare: Option<&str>,
     body: &str,
 ) {
-    if a_live {
-        out.push_str("  pha\n");
-    }
-    out.push_str(body);
-    if a_live {
-        out.push_str("  pla\n");
+    match spare.filter(|_| a_live) {
+        Some(r) => out.push_str(&body.replace("lda ", &format!("ld{r} ")).replace("sta ", &format!("st{r} "))),
+        None if a_live => {
+            out.push_str("  pha\n");
+            out.push_str(body);
+            out.push_str("  pla\n");
+        }
+        None => out.push_str(body),
     }
 }
 
@@ -1535,10 +1544,10 @@ pub fn parallel_move(
             Some(i) => {
                 let (d, s) = pending.remove(i);
                 match s {
-                    Some(s) => move_byte(out, d, s, false),
+                    Some(s) => move_byte(out, d, s, false, None),
                     None => {
                         out.push_str("  pla\n");
-                        move_byte(out, d, reg::A, false);
+                        move_byte(out, d, reg::A, false, None);
                     }
                 }
             }
@@ -1574,6 +1583,7 @@ fn move_byte(
     to: RegId,
     from: RegId,
     a_live: bool,
+    spare: Option<&str>,
 ) {
     let (d, s) = (register_name(to), register_name(from));
     if to == from {
@@ -1586,10 +1596,10 @@ fn move_byte(
             writeln!(out, "  {mnemonic}").unwrap();
         }
         // x to y or y to x: through `a`
-        (true, true) => through_a(out, a_live, &format!("  t{s}a\n  ta{d}\n")),
+        (true, true) => through_a(out, a_live, None, &format!("  t{s}a\n  ta{d}\n")),
         (true, false) => writeln!(out, "  ld{d} {s}").unwrap(),
         (false, true) => writeln!(out, "  st{s} {d}").unwrap(),
-        (false, false) => through_a(out, a_live, &format!("  lda {s}\n  sta {d}\n")),
+        (false, false) => through_a(out, a_live, spare, &format!("  lda {s}\n  sta {d}\n")),
     }
 }
 
@@ -1666,12 +1676,16 @@ fn emit_with<const STACK: bool>(
                     _ => None,
                 })
                 .collect();
+            let spare = [(reg::X, "x"), (reg::Y, "y")]
+                .into_iter()
+                .find(|(r, _)| !after[b][i].contains(r) && !regs.contains(r))
+                .map(|(_, name)| name);
             match (inst.kind, &inst.operands[..]) {
                 (Kind::Copy, _) if is_pair(regs[0]) || is_pair(regs[1]) => {
                     let moves: Vec<_> = (0..2).map(|n| (lane(regs[0], n), lane(regs[1], n))).collect();
                     parallel_move(&mut out, &moves, a_live);
                 }
-                (Kind::Copy, _) => move_byte(&mut out, regs[0], regs[1], a_live),
+                (Kind::Copy, _) => move_byte(&mut out, regs[0], regs[1], a_live, spare),
                 (Kind::Op("UNPACK"), _) => {
                     parallel_move(&mut out, &[(regs[0], lane(regs[2], 0)), (regs[1], lane(regs[2], 1))], a_live);
                 }
@@ -1704,7 +1718,7 @@ fn emit_with<const STACK: bool>(
                     if d == reg::A || d == reg::X || d == reg::Y {
                         writeln!(out, "  ld{} #{value}", register_name(d)).unwrap();
                     } else {
-                        through_a(&mut out, a_live, &format!("  lda #{value}\n  sta {}\n", register_name(d)));
+                        through_a(&mut out, a_live, spare, &format!("  lda #{value}\n  sta {}\n", register_name(d)));
                     }
                 }
                 (Kind::Op("LDS"), [_, Operand::Symbol(symbol, half)]) => {
@@ -1713,7 +1727,7 @@ fn emit_with<const STACK: bool>(
                     if d == reg::A || d == reg::X || d == reg::Y {
                         writeln!(out, "  ld{} #{part}{symbol}", register_name(d)).unwrap();
                     } else {
-                        through_a(&mut out, a_live, &format!("  lda #{part}{symbol}\n  sta {}\n", register_name(d)));
+                        through_a(&mut out, a_live, spare, &format!("  lda #{part}{symbol}\n  sta {}\n", register_name(d)));
                     }
                 }
                 // n := t when cc, n already holding f: the branch skips the
@@ -1803,9 +1817,9 @@ fn emit_with<const STACK: bool>(
                     let n = i64::from(*n as u16);
                     let n = if n >= old { n + spilled } else { n };
                     writeln!(out, "  clc\n  lda rc0\n  adc #{}", n & 0xFF).unwrap();
-                    move_byte(&mut out, regs[0], reg::A, false);
+                    move_byte(&mut out, regs[0], reg::A, false, None);
                     writeln!(out, "  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
-                    move_byte(&mut out, regs[1], reg::A, false);
+                    move_byte(&mut out, regs[1], reg::A, false, None);
                 }
                 (Kind::Op("CMP"), [_, _, second]) => {
                     let text = match second {
@@ -1880,7 +1894,7 @@ fn emit_with<const STACK: bool>(
                         if direct {
                             out.push_str(&body);
                         } else {
-                            through_a(&mut out, a_live, &body);
+                            through_a(&mut out, a_live, None, &body);
                         }
                     }
                 }
@@ -1894,9 +1908,9 @@ fn emit_with<const STACK: bool>(
                         let name = register_name(byte);
                         match (kind, direct) {
                             ("SPILL", true) => writeln!(out, "  st{name} {cell}").unwrap(),
-                            ("SPILL", false) => through_a(&mut out, a_live, &format!("  lda {name}\n  sta {cell}\n")),
+                            ("SPILL", false) => through_a(&mut out, a_live, spare, &format!("  lda {name}\n  sta {cell}\n")),
                             (_, true) => writeln!(out, "  ld{name} {cell}").unwrap(),
-                            (_, false) => through_a(&mut out, a_live, &format!("  lda {cell}\n  sta {name}\n")),
+                            (_, false) => through_a(&mut out, a_live, spare, &format!("  lda {cell}\n  sta {name}\n")),
                         }
                     }
                 }
