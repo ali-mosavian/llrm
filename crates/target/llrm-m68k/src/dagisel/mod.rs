@@ -2,6 +2,7 @@
 //! `tools/dagisel/regen-target.sh`, the address matchers and the hooks.
 
 pub mod addr;
+pub mod call;
 #[rustfmt::skip]
 #[allow(unused_variables)]
 pub mod generated;
