@@ -13,7 +13,7 @@ fn selected(
 ) -> Vec<Vec<&'static str>> {
     let text = format!("target datalayout = \"{DATALAYOUT}\"\n{body}");
     let module = llrm_mir::parse::module(&text).expect("parses");
-    let blocks = select_function(&module, name, Cpu::Mos6502).expect("selects");
+    let blocks = select_function(&module, name, Cpu::Mos6502).expect("selects").blocks;
     blocks.iter().map(names).collect()
 }
 

@@ -19,8 +19,8 @@ fn compile(
     functions
         .iter()
         .map(|name| {
-            let blocks = select_function(&module, name, Cpu::Mos6502).expect("selects");
-            function_text(&module, name, &blocks).expect("emits")
+            let selection = select_function(&module, name, Cpu::Mos6502).expect("selects");
+            function_text(&module, name, &selection).expect("emits")
         })
         .collect()
 }
@@ -263,4 +263,41 @@ fn a_long_return_keeps_the_byte_in_a() {
     for (after, want) in [("", 0x10), ("  txa\n", 0x98), ("  lda rc2\n", 0x02), ("  lda rc3\n", 0x00)] {
         assert_eq!(run(&format!("id32-{want}"), ir, "id32", &setup, after), want, "{after:?}");
     }
+}
+
+/// The soft stack pointer `rs0` set to $8000 before the call.
+const STACK: &str = "  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n";
+
+/// A one-byte local: stored and loaded back through its frame address.
+#[test]
+fn a_local_byte_runs() {
+    let ir = "define i8 @loc(i8 %x) {\n  %p = alloca i8\n  store i8 %x, ptr %p\n  %v = load i8, ptr %p\n  ret i8 %v\n}";
+    let setup = STACK.to_owned() + &set("rc2", 77);
+    assert_eq!(run("loc", ir, "loc", &setup, ""), 77);
+}
+
+/// A four-byte local array filled through offsets 0..3 and summed: 10 + 20 + 30 + 40 = 100.
+#[test]
+fn a_local_array_runs() {
+    let mut ir = String::from("define i8 @arr() {\n  %a = alloca [4 x i8]\n");
+    for (i, v) in [10, 20, 30, 40].iter().enumerate() {
+        ir += &format!("  %p{i} = getelementptr i8, ptr %a, i16 {i}\n  store i8 {v}, ptr %p{i}\n");
+    }
+    for i in 0..4 {
+        ir += &format!("  %v{i} = load i8, ptr %p{i}\n");
+    }
+    ir += "  %s1 = add i8 %v0, %v1\n  %s2 = add i8 %s1, %v2\n  %s3 = add i8 %s2, %v3\n  ret i8 %s3\n}";
+    assert_eq!(run("arr", &ir, "arr", STACK, ""), 100);
+}
+
+/// `outer(5)` keeps 5 in a local across the call to `inner(6)`, which has a local of its own and
+/// returns 6 + 1: 5 + 7 = 12. With overlapping frames `inner` overwrites `outer`'s byte and the sum
+/// is 13.
+#[test]
+fn nested_frames_do_not_overlap() {
+    let ir = "define i8 @inner(i8 %x) {\n  %p = alloca i8\n  store i8 %x, ptr %p\n  %v = load i8, ptr %p\n  %r = add i8 %v, 1\n  ret i8 %r\n}\n\
+define i8 @outer(i8 %x) {\n  %p = alloca i8\n  store i8 %x, ptr %p\n  %y = add i8 %x, 1\n  %c = call i8 @inner(i8 %y)\n  %v = load i8, ptr %p\n  %r = add i8 %v, %c\n  ret i8 %r\n}";
+    let text = compile(ir, &["inner", "outer"]);
+    let main = format!("{STACK}{}  jsr outer\n", set("rc2", 5));
+    assert_eq!(common::run_with("nested", &main, &text), 12);
 }

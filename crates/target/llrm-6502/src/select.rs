@@ -23,7 +23,9 @@ use llrm_mir::module::Module;
 
 use crate::REGISTER_INFO;
 use crate::dagisel::pipeline::MosPins;
-use crate::dagisel::function::Selected;
+use crate::dagisel::function::{Selected, Selection};
+use crate::frame::{Function, Layout, layout};
+use llrm_codegen::backend::frameobjects::Object;
 use crate::dagisel::generated::ids::{opcode as op, reg as ids};
 use crate::dagisel::generated::instrinfo;
 use crate::emit::{MInst, Operand, expand, spill};
@@ -42,8 +44,9 @@ struct Cells<'a> {
     words: Vec<String>,
     /// Virtual registers live across blocks, by number.
     virtual_regs: HashMap<u32, Operand>,
-    /// The outgoing call area the prologue reserves below `rs0`: the largest call sequence.
-    outgoing: i64,
+    /// The laid-out frame (`frame.rs`), and how many of its objects are the fixed ones.
+    frame: Layout,
+    fixed: usize,
     /// The byte cells that hold a spilled carry (`true`) or flags (`false`).
     saved: HashMap<String, bool>,
     /// Copies into `a`, `x` and `y`, held back to the `RET`: every other copy goes through `a`.
@@ -77,13 +80,15 @@ fn block_label(
 pub fn function_text(
     module: &Module,
     name: &str,
-    blocks: &[Selected],
+    selection: &Selection,
 ) -> Result<String, String> {
-    let mut cells = Cells { name, next: 0, bytes: Vec::new(), words: Vec::new(), virtual_regs: HashMap::new(), outgoing: outgoing_area(blocks), saved: HashMap::new(), deferred: Vec::new() };
+    let blocks = &selection.blocks;
+    let (laid_out, fixed) = lay_out_frame(blocks, &selection.locals);
+    let mut cells = Cells { name, next: 0, bytes: Vec::new(), words: Vec::new(), virtual_regs: HashMap::new(), frame: laid_out, fixed, saved: HashMap::new(), deferred: Vec::new() };
     let mut body = format!(".export {name}\n{name}:\n");
     let mut labels = 0;
-    if cells.outgoing > 0 {
-        body.push_str(&expand(&MInst::new(op::ADJSP, vec![Operand::Imm(-cells.outgoing)]), &mut labels)?);
+    for inst in cells.frame.prologue() {
+        body.push_str(&expand(&inst, &mut labels)?);
     }
     for one in blocks {
         writeln!(body, "{}:", block_label(name, one.block.0)).unwrap();
@@ -99,8 +104,8 @@ pub fn function_text(
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
                 if matches!(one.dag.nodes()[node as usize].opcode, ISD::Machine(code) if code as u16 == op::RET) {
-                    if cells.outgoing > 0 {
-                        body.push_str(&expand(&MInst::new(op::ADJSP, vec![Operand::Imm(cells.outgoing)]), &mut labels)?);
+                    for inst in cells.frame.epilogue() {
+                        body.push_str(&expand(&inst, &mut labels)?);
                     }
                     for inst in std::mem::take(&mut cells.deferred) {
                         body.push_str(&expand(&inst, &mut labels)?);
@@ -127,13 +132,24 @@ pub fn function_text(
     Ok(body)
 }
 
-/// The bytes the largest call sequence of the function needs, from its `ADJCALLSTACKDOWN`s.
+/// The frame: the fixed objects (the stack arguments, at the offsets the calling hook gave them)
+/// then the locals, and the largest call sequence of the function reserved at the bottom.
 ///
-/// DEVIATE: the area is reserved for the whole function (`hasReservedCallFrame`), so the sequence
-/// pseudos emit nothing and a frame object is not laid out. Reason: the spike has no locals yet.
-/// Exit: `frame::layout` takes over the whole frame.
-fn outgoing_area(blocks: &[Selected]) -> i64 {
-    blocks
+/// DEVIATE: the call area is reserved for the whole function (`hasReservedCallFrame`), so the
+/// sequence pseudos emit nothing. Reason: the spike has no dynamic allocas. Exit: with them.
+fn lay_out_frame(
+    blocks: &[Selected],
+    locals: &[i64],
+) -> (Layout, usize) {
+    let mut offsets = std::collections::BTreeMap::new();
+    for one in blocks {
+        offsets.extend(one.dag.fixed_offsets.iter().map(|(index, offset)| ((-index - 1) as usize, *offset)));
+    }
+    let fixed = offsets.keys().max().map_or(0, |last| last + 1);
+    let object = |size, offset| Object { size, align: 1, offset, callee_saved: false, dead: false };
+    let mut objects: Vec<Object> = (0..fixed).map(|at| object(1, offsets.get(&at).copied().unwrap_or(0))).collect();
+    objects.extend(locals.iter().map(|&size| object(size, 0)));
+    let max_call_frame = blocks
         .iter()
         .flat_map(|one| one.dag.nodes().iter().map(move |node| (one, node)))
         .filter(|(_, node)| matches!(node.opcode, ISD::Machine(code) if code as u16 == op::ADJCALLSTACKDOWN))
@@ -142,7 +158,9 @@ fn outgoing_area(blocks: &[Selected]) -> i64 {
             _ => None,
         })
         .max()
-        .unwrap_or(0)
+        .unwrap_or(0);
+    let function = Function { objects, fixed, max_call_frame, adjusts_stack: max_call_frame > 0, ..Function::default() };
+    (layout(&function), fixed)
 }
 
 fn is_terminator(opcode: &ISD) -> bool {
@@ -197,10 +215,10 @@ fn location(
     let node = &one.dag.nodes()[value.node as usize];
     match node.data {
         NodeData::Const { bits, .. } => Ok(Operand::Imm(bits as i64)),
-        NodeData::FrameIndex(index) => match one.dag.fixed_offsets.get(&index) {
-            Some(offset) => Ok(Operand::Imm(offset + cells.outgoing)),
-            None => Err("a local frame object needs frame.rs".into()),
-        },
+        NodeData::FrameIndex(index) => {
+            let at = if index < 0 { (-index - 1) as usize } else { cells.fixed + index as usize };
+            Ok(Operand::Imm(cells.frame.address(at)))
+        }
         NodeData::Block(block) => Ok(Operand::Label(block_label(name, block))),
         NodeData::Global { symbol, offset } => {
             let global = module.global(GlobalId(symbol));

@@ -17,8 +17,10 @@ use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, Targ
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
+use llrm_mir::context::ConstantKind;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{BlockId, Module};
+use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef};
+use llrm_mir::opcode::Opcode;
 
 use super::hooks::Cpu;
 use super::call::{CALL, MosCalling, RET_GLUE};
@@ -54,12 +56,21 @@ pub struct Selected {
     pub phi_copies: Vec<(u32, u32)>,
 }
 
+/// A selected function: its blocks and the sizes of its local frame objects, by frame index.
+pub struct Selection {
+    pub blocks: Vec<Selected>,
+    pub locals: Vec<i64>,
+}
+
 /// Function `name` of `module`, block by block in layout order.
+///
+/// DEVIATE: static allocas share no frame object (no stack coloring) and none is aligned: the
+/// 6502 has no alignment. Reason: nothing here needs the saving. Exit: with the shared frame code.
 pub fn select_function(
     module: &Module,
     name: &str,
     cpu: Cpu,
-) -> Result<Vec<Selected>, String> {
+) -> Result<Selection, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
         .global(id)
@@ -72,13 +83,41 @@ pub fn select_function(
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
     let target = builder_target();
     let mut info = FunctionLoweringInfo::new(function);
+    let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
     for &block in function.layout() {
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
         select_built(block, built, cpu, &mut info, &mut selected)?;
     }
-    Ok(selected)
+    // The stack objects the builder made follow the static allocas.
+    locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
+    Ok(Selection { blocks: selected, locals })
+}
+
+/// The size of each static alloca, by the frame index `FunctionLoweringInfo` gave it.
+fn alloca_sizes(
+    module: &Module,
+    function: &Function,
+    layout: &DataLayout,
+    info: &FunctionLoweringInfo,
+) -> Result<Vec<i64>, String> {
+    let mut sizes = vec![0; info.static_allocas.iter().count()];
+    for (value, index) in info.static_allocas.iter() {
+        let ValueDef::Instruction(def) = function.value(value).def else { return Err("an alloca that is not an instruction".into()) };
+        let instruction = function.instruction(def);
+        let Opcode::Alloca { allocated, .. } = instruction.opcode else { return Err("an alloca that is not an alloca".into()) };
+        let count = match instruction.operands.first() {
+            None => 1,
+            Some(Operand::Constant(id)) => match module.context.get(*id).kind {
+                ConstantKind::Int(count) => count as i64,
+                _ => return Err("an alloca whose count is not a number".into()),
+            },
+            Some(_) => return Err("an alloca with a count that is not a constant".into()),
+        };
+        sizes[*index as usize] = layout.alloc_size(&module.context.types, allocated) as i64 * count;
+    }
+    Ok(sizes)
 }
 
 /// One built block selected and scheduled, then the blocks its `switch` lowering made. Every branch
