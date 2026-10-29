@@ -806,6 +806,7 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
                 if grown != seen or burned > used:  # any tick: a loaded host gives a computing step far less than 0.1 s a poll
                     seen, used, active = grown, burned, time.time()
                 elif time.time() - active > stall:
+                    doing = proctree.describe(child.pid)  # before the kill: what it was waiting on is the only evidence of the stall
                     os.killpg(child.pid, signal.SIGKILL)
                     _, status, usage = os.wait4(child.pid, 0)
                     stalled = True
@@ -817,7 +818,7 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
         child.returncode = code = STALL_CODE if stalled else os.waitstatus_to_exitcode(status)
         cpu = usage.ru_utime + usage.ru_stime
     if stalled:
-        path.open("a").write(f"\nSTALLED: no log growth and no CPU in the step's process tree for {stall / 60:g} min; killed\n")
+        path.open("a").write(f"\nSTALLED: no log growth and no CPU in the step's process tree for {stall / 60:g} min; killed\nthe tree when it was killed:\n" + "\n".join(doing) + "\n")
     if code == 0 and check and (why := incomplete(path.read_text(), *check)):
         path.open("a").write(f"\nINCOMPLETE: {why}\n")
         code = 78
