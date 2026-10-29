@@ -58,10 +58,10 @@ static int guess_exponent(const Parts *parts)
     return (int)(((long)(parts->exponent + length - 1) * 1233L) >> 12) + 1;
 }
 
-/* The quick way needs x87's 64-bit extended numbers; a target whose long double
-   is another format (arm64's is 113 bits, software) takes the exact way alone,
-   which gives the same digits. */
-#if __LDBL_MANT_DIG__ == 64
+/* The quick way runs on a hardware long double (x87's 64 bits, or the 53 of the
+   Watcom rows' -mlong-double-64); a software one (arm64's is 113 bits) takes the
+   exact way alone, which gives the same digits. */
+#if __LDBL_MANT_DIG__ <= 64
 #define QUICK_EXTENDED 1
 #else
 #define QUICK_EXTENDED 0
