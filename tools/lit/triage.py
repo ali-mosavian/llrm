@@ -3,7 +3,9 @@
 
     triage.py LLRM.json PIN.json > triage.md
 
-Classes: pass; not-yet-ported (exit 77, names the pass or flag); input-gap
+Classes: legacy-pm (a legacy `-loop-reduce` style flag whose pin output differs
+from the pin's new-pass-manager output: the CHECKs assume a pipeline we do not
+mirror); pass; not-yet-ported (exit 77, names the pass or flag); input-gap
 (exit 78, IR our parser cannot read); target-specific (lit marked it
 UNSUPPORTED, or a target subdirectory we have no Tti for); bug (fails where
 the pin's opt passes); test-assumption (fails with the pin's opt too).
@@ -12,6 +14,12 @@ import collections
 import json
 import re
 import sys
+from pathlib import Path
+
+import pindiff
+
+PIN_OPT = str(Path.home() / "scratch/llvm-build/bin/opt")
+PIN_TESTS = Path.home() / "scratch/llvm-src/llvm/test"
 
 OURS = ("X86", "AArch64")
 
@@ -22,6 +30,23 @@ def load(path):
 
 def where(name):
     return "/".join(name.split(" :: ")[1].split("/")[:-1])
+
+
+def legacy_pm(name):
+    test = PIN_TESTS / name.split(" :: ")[1]
+    for line in pindiff.run_lines(test):
+        built = pindiff.command(line, test, PIN_OPT)
+        if not built:
+            continue
+        words, stdin = built
+        new, legacy = pindiff.new_pm(words)
+        if not legacy:
+            continue
+        old_code, old = pindiff.execute(PIN_OPT, words, stdin)
+        new_code, new = pindiff.execute(PIN_OPT, new, stdin)
+        if old_code == new_code == 0 and pindiff.shape_form(old) != pindiff.shape_form(new):
+            return True
+    return False
 
 
 def classify(name, ours, pin):
@@ -39,6 +64,8 @@ def classify(name, ours, pin):
     sub = name.split(" :: ")[1].split("/")
     if len(sub) > 3 and sub[2] not in OURS and pin.get(name, {}).get("code") != "PASS":
         return "target-specific", sub[2]
+    if legacy_pm(name):
+        return "legacy-pm", ""
     if pin.get(name, {}).get("code") in ("PASS", "XFAIL"):
         return "bug", ""
     return "test-assumption", ""
@@ -52,7 +79,7 @@ def main(llrm_path, pin_path):
         table[where(name)][kind] += 1
         if kind != "pass":
             listed.append((kind, name.split(" :: ")[1], why))
-    kinds = ["pass", "not-yet-ported", "input-gap", "target-specific", "bug", "test-assumption"]
+    kinds = ["pass", "not-yet-ported", "input-gap", "target-specific", "legacy-pm", "bug", "test-assumption"]
     print("| directory | " + " | ".join(kinds) + " |\n|---|" + "---|" * len(kinds))
     total = collections.Counter()
     for directory, counts in sorted(table.items()):
