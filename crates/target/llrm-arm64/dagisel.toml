@@ -1,0 +1,46 @@
+# The AArch64 DAG selector's source: read by tools/dagisel/regen-target.sh and `llrm-dagisel-gen --target`.
+# The tables sit in llrm-dagisel (`in_dagisel`) and list their node predicates by name until the AArch64 hooks exist.
+[target]
+name = "aarch64"
+llvm_build = "llvm-build-aarch64"
+ns = "AArch64::"
+isd = "AArch64ISD::"
+llvm_dir = "AArch64"
+td = "AArch64.td"
+cpus = ["apple-m1"]
+hw_modes = ["i64", "i64"]
+in_dagisel = true
+# The directory of the checked-in tables, from this file.
+out = "../../backend/llrm-dagisel/src/generated/aarch64"
+listed_predicates = true
+ids_includes = [
+  '#include "MCTargetDesc/AArch64MCTargetDesc.h"',
+  '#include "AArch64SelectionDAGInfo.h"',
+]
+
+# AArch64 pattern-predicate atoms for the scalar subset (NEON, SVE and SME off): the dry run of
+# docs/working/arm64-selectiondag-plan.md. `[atom]` rows are what the pin's Subtarget says; an atom nothing states is an error.
+# apple-m1: the pin's `Processor` list, the scalar subset.
+[cpu.apple-m1]
+features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", "RDM"]
+
+[atom]
+"Subtarget->isNeonAvailable()" = false
+"Subtarget->isLittleEndian()" = true
+"Subtarget->isSVEorStreamingSVEAvailable()" = false
+"Subtarget->isSVEAvailable()" = false
+"Subtarget->isStreaming()" = false
+"Subtarget->isNonStreamingSVEorSME2Available()" = false
+"Subtarget->requiresStrictAlign()" = false
+"Subtarget->disableUnpredicatedLdStLower()" = false
+"shouldOptForSize(MF)" = false
+"Subtarget->isSTRQroSlow()" = false
+"Subtarget->useAlternateSExtLoadCVTF32Pattern()" = false
+"Subtarget->useWzrToVecMove()" = false
+"MF->getSubtarget<AArch64Subtarget>().hardenSlsBlr()" = false
+"MF->getInfo<AArch64FunctionInfo>()->branchTargetEnforcement()" = false
+"MF->getInfo<AArch64FunctionInfo>()->branchProtectionPAuthLR()" = false
+"MF->getFunction().hasOptNone()" = false
+
+[types]
+dead_prefixes = ["v", "nxv", "aarch64"]
