@@ -1,0 +1,1066 @@
+reason = "Counts of the integrated parity tree above main 854bb7efc4 (limit = measured, so they cannot grow), dated 2026-10-29. Sections: (1) -Os m16 rows above main, which need the user's yes for main; (2) c -O2 rows, front-end switch Watcom to clang (user 2026-10-26); (3) UNATTRIBUTED -O2, bq16 and bq32 rows, a main-merge blocker due 2026-11-05. Not a rebless of main."
+
+# ===== (1) -Os m16 above main: needs your yes for main. cause class and owner per row; byte delta and clocks delta of the row =====
+
+[[row]]
+label = "crc bas -Os"
+counter = "memory_operands"
+to = 75  # base 71; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 220->207, clocks 2767->2013
+
+[[row]]
+label = "crc c -Os"
+counter = "code_bytes"
+to = 69  # base 68; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 68->69, clocks 1393->1402
+
+[[row]]
+label = "crc c -Os"
+counter = "instructions"
+to = 634  # base 625; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 68->69, clocks 1393->1402
+
+[[row]]
+label = "crc nib -Os"
+counter = "code_bytes"
+to = 102  # base 101; DAG isel/regalloc, w12; code_bytes 101->102, clocks 1411->1420
+
+[[row]]
+label = "crc nib -Os"
+counter = "instructions"
+to = 643  # base 634; DAG isel/regalloc, w12; code_bytes 101->102, clocks 1411->1420
+
+[[row]]
+label = "fib bas -Os"
+counter = "instructions"
+to = 437821  # base 372147; DAG isel/regalloc, w12; code_bytes 176->174, clocks 1116464->1313485
+
+[[row]]
+label = "fib bq16 -Os"
+counter = "instructions"
+to = 470657  # base 404984; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 181->181, clocks 820936->1017956
+
+[[row]]
+label = "fib c -Os"
+counter = "code_bytes"
+to = 60  # base 56; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 56->60, clocks 591071->356059
+
+[[row]]
+label = "fib nib -Os"
+counter = "code_bytes"
+to = 63  # base 54; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 54->63, clocks 415932->356052
+
+[[row]]
+label = "hanoi bas -Os"
+counter = "instructions"
+to = 409579  # base 393196; DAG isel/regalloc, w12; code_bytes 214->211, clocks 1040343->1130452
+
+[[row]]
+label = "hanoi bq16 -Os"
+counter = "instructions"
+to = 442345  # base 409580; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 219->218, clocks 810982->917473
+
+[[row]]
+label = "huge bas -Os"
+counter = "code_bytes"
+to = 334  # base 332; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 332->334, clocks 2986427->2706624
+
+[[row]]
+label = "huge bas -Os"
+counter = "memory_operands"
+to = 163312  # base 162918; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 332->334, clocks 2986427->2706624
+
+[[row]]
+label = "huge bq16 -Os"
+counter = "code_bytes"
+to = 340  # base 336; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 336->340, clocks 3187935->2645775
+
+[[row]]
+label = "nbody_fixed bas -Os"
+counter = "instructions"
+to = 1652138  # base 1446162; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 555->535, clocks 6658133->6298086
+
+[[row]]
+label = "nbody_fixed bas -Os"
+counter = "memory_operands"
+to = 393048  # base 332049; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 555->535, clocks 6658133->6298086
+
+[[row]]
+label = "nbody_fixed bq16 -Os"
+counter = "instructions"
+to = 1652138  # base 1446162; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 560->542, clocks 6658133->6298086
+
+[[row]]
+label = "nbody_fixed bq16 -Os"
+counter = "memory_operands"
+to = 393048  # base 332049; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 560->542, clocks 6658133->6298086
+
+[[row]]
+label = "nbody_fixed c -Os"
+counter = "instructions"
+to = 1472137  # base 1450161; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 468->434, clocks 6584131->5818084
+
+[[row]]
+label = "nbody_fixed c -Os"
+counter = "memory_operands"
+to = 375048  # base 325049; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 468->434, clocks 6584131->5818084
+
+[[row]]
+label = "parity/algebra bq16 -Os"
+counter = "code_bytes"
+to = 229  # base 228; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 228->229, clocks 238->244
+
+[[row]]
+label = "parity/control nib -Os"
+counter = "code_bytes"
+to = 122  # base 115; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 115->122, clocks 333->312
+
+[[row]]
+label = "parity/parity bas -Os"
+counter = "code_bytes"
+to = 213  # base 207; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 207->213, clocks 1021->1012
+
+[[row]]
+label = "parity/parity bas -Os"
+counter = "memory_operands"
+to = 131  # base 128; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 207->213, clocks 1021->1012
+
+[[row]]
+label = "parity/parity bq16 -Os"
+counter = "code_bytes"
+to = 219  # base 217; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 217->219, clocks 1452->1312
+
+[[row]]
+label = "parity/qbsp c -Os"
+counter = "code_bytes"
+to = 312  # base 309; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 309->312, clocks 1020->989
+
+[[row]]
+label = "parity/qbsp c -Os"
+counter = "instructions"
+to = 280  # base 276; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 309->312, clocks 1020->989
+
+[[row]]
+label = "parity/qbsp c -Os"
+counter = "memory_operands"
+to = 91  # base 77; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 309->312, clocks 1020->989
+
+[[row]]
+label = "parity/qbsp nib -Os"
+counter = "memory_operands"
+to = 95  # base 82; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 375->368, clocks 1006->984
+
+[[row]]
+label = "particle bas -Os"
+counter = "instructions"
+to = 147560  # base 129058; LSR masked IV (pin-faithful), w6; code_bytes 520->492, clocks 280330->309245
+
+[[row]]
+label = "particle bq16 -Os"
+counter = "instructions"
+to = 147660  # base 129158; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 525->499, clocks 278930->307845
+
+[[row]]
+label = "particle c -Os"
+counter = "code_bytes"
+to = 165  # base 158; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 158->165, clocks 168983->169089
+
+[[row]]
+label = "particle c -Os"
+counter = "instructions"
+to = 83936  # base 83934; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 158->165, clocks 168983->169089
+
+[[row]]
+label = "particle nib -Os"
+counter = "instructions"
+to = 147770  # base 137880; LSR masked IV (pin-faithful), w6; code_bytes 317->289, clocks 228221->238202
+
+[[row]]
+label = "queens bas -Os"
+counter = "code_bytes"
+to = 428  # base 425; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 425->428, clocks 685825->633496
+
+[[row]]
+label = "queens c -Os"
+counter = "code_bytes"
+to = 172  # base 159; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 159->172, clocks 225189->173895
+
+[[row]]
+label = "queens c -Os"
+counter = "memory_operands"
+to = 33636  # base 19810; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 159->172, clocks 225189->173895
+
+[[row]]
+label = "queens nib -Os"
+counter = "memory_operands"
+to = 44126  # base 36773; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 277->262, clocks 395040->345858
+
+[[row]]
+label = "recchop c -Os"
+counter = "code_bytes"
+to = 169  # base 158; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 158->169, clocks 11594->10466
+
+[[row]]
+label = "recchop c -Os"
+counter = "memory_operands"
+to = 952  # base 889; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 158->169, clocks 11594->10466
+
+[[row]]
+label = "recfloat c -Os"
+counter = "code_bytes"
+to = 91  # base 87; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 87->91, clocks 47103->50104
+
+[[row]]
+label = "recpow c -Os"
+counter = "memory_operands"
+to = 5142  # base 3945; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 188->177, clocks 502789->425796
+
+[[row]]
+label = "recsum c -Os"
+counter = "code_bytes"
+to = 57  # base 52; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 52->57, clocks 82036->82039
+
+[[row]]
+label = "recsum c -Os"
+counter = "instructions"
+to = 14010  # base 14009; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 52->57, clocks 82036->82039
+
+[[row]]
+label = "rectwo c -Os"
+counter = "memory_operands"
+to = 145857  # base 97238; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 80->80, clocks 3889567->2382380
+
+[[row]]
+label = "ring bas -Os"
+counter = "code_bytes"
+to = 201  # base 192; LSR/unroll (pin-faithful), w3; code_bytes 192->201, clocks 74990->76021
+
+[[row]]
+label = "ring bas -Os"
+counter = "instructions"
+to = 43434  # base 42407; LSR/unroll (pin-faithful), w3; code_bytes 192->201, clocks 74990->76021
+
+[[row]]
+label = "ring bas -Os"
+counter = "memory_operands"
+to = 11187  # base 11184; LSR/unroll (pin-faithful), w3; code_bytes 192->201, clocks 74990->76021
+
+[[row]]
+label = "ring bq16 -Os"
+counter = "code_bytes"
+to = 207  # base 203; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 203->207, clocks 85602->86502
+
+[[row]]
+label = "ring bq16 -Os"
+counter = "memory_operands"
+to = 11201  # base 9188; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 203->207, clocks 85602->86502
+
+[[row]]
+label = "ring c -Os"
+counter = "code_bytes"
+to = 75  # base 72; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 72->75, clocks 68220->80220
+
+[[row]]
+label = "ring c -Os"
+counter = "instructions"
+to = 46107  # base 40107; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 72->75, clocks 68220->80220
+
+[[row]]
+label = "scroll bas -Os"
+counter = "code_bytes"
+to = 227  # base 222; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 222->227, clocks 1837271->687176
+
+[[row]]
+label = "scroll bq16 -Os"
+counter = "code_bytes"
+to = 234  # base 227; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 227->234, clocks 1837271->687176
+
+[[row]]
+label = "scroll c -Os"
+counter = "code_bytes"
+to = 153  # base 141; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 141->153, clocks 668279->687174
+
+[[row]]
+label = "scroll c -Os"
+counter = "instructions"
+to = 179059  # base 170762; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 141->153, clocks 668279->687174
+
+[[row]]
+label = "scroll nib -Os"
+counter = "code_bytes"
+to = 156  # base 151; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 151->156, clocks 1837261->687166
+
+[[row]]
+label = "switch bas -Os"
+counter = "data_bytes"
+to = 27  # base 15; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 617->456, clocks 764986->723037
+
+[[row]]
+label = "switch bq16 -Os"
+counter = "data_bytes"
+to = 27  # base 15; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 622->463, clocks 710986->669037
+
+[[row]]
+label = "switch c -Os"
+counter = "instructions"
+to = 68229  # base 68138; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 272->270, clocks 493456->488737
+
+[[row]]
+label = "switch c -Os"
+counter = "memory_operands"
+to = 5706  # base 3708; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 272->270, clocks 493456->488737
+
+[[row]]
+label = "switch nib -Os"
+counter = "data_bytes"
+to = 12  # base 0; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 407->272, clocks 570035->529585
+
+[[row]]
+label = "switch nib -Os"
+counter = "memory_operands"
+to = 5706  # base 2002; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 407->272, clocks 570035->529585
+
+[[row]]
+label = "textfill bas -Os"
+counter = "instructions"
+to = 34045  # base 30045; DAG isel/regalloc, w12; code_bytes 232->231, clocks 58189->64169
+
+[[row]]
+label = "textfill bas -Os"
+counter = "memory_operands"
+to = 12010  # base 8013; DAG isel/regalloc, w12; code_bytes 232->231, clocks 58189->64169
+
+[[row]]
+label = "textfill bq16 -Os"
+counter = "code_bytes"
+to = 238  # base 237; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 237->238, clocks 58207->64176
+
+[[row]]
+label = "textfill bq16 -Os"
+counter = "instructions"
+to = 34063  # base 30073; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 237->238, clocks 58207->64176
+
+[[row]]
+label = "textfill bq16 -Os"
+counter = "memory_operands"
+to = 12010  # base 8013; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 237->238, clocks 58207->64176
+
+[[row]]
+label = "textfill c -Os"
+counter = "instructions"
+to = 32008  # base 30009; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 75->68, clocks 58025->60021
+
+[[row]]
+label = "textfill nib -Os"
+counter = "instructions"
+to = 32011  # base 30024; LSR masked IV (pin-faithful), w6; code_bytes 104->78, clocks 58065->60024
+
+[[row]]
+label = "tile bas -Os"
+counter = "instructions"
+to = 4209  # base 4181; LSR masked IV (pin-faithful), w6; code_bytes 167->167, clocks 10196->10201
+
+[[row]]
+label = "tile bq16 -Os"
+counter = "code_bytes"
+to = 178  # base 172; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 172->174, clocks 10196->10201
+
+[[row]]
+label = "tile bq16 -Os"
+counter = "instructions"
+to = 4209  # base 4181; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 172->174, clocks 10196->10201
+
+[[row]]
+label = "tile c -Os"
+counter = "instructions"
+to = 4208  # base 4155; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 97->94, clocks 10169->10224
+
+[[row]]
+label = "tile nib -Os"
+counter = "instructions"
+to = 4208  # base 4180; LSR masked IV (pin-faithful), w6; code_bytes 101->101, clocks 10186->10216
+
+[[row]]
+label = "tile bas -Os"
+counter = "code_bytes"
+to = 171  # base 167; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+[[row]]
+label = "tile c -Os"
+counter = "code_bytes"
+to = 98  # base 97; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+[[row]]
+label = "tile nib -Os"
+counter = "code_bytes"
+to = 105  # base 101; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+# ===== (2) c -O2: front-end switch Watcom->clang, user 2026-10-26; owner w6 =====
+
+[[row]]
+label = "crc c -O2"
+counter = "code_bytes"
+to = 224  # base 69
+
+[[row]]
+label = "fib c -O2"
+counter = "instructions"
+to = 194440  # base 174385
+
+[[row]]
+label = "frames c -O2"
+counter = "instructions"
+to = 3217791  # base 3036703
+
+[[row]]
+label = "frames c -O2"
+counter = "memory_operands"
+to = 240050  # base 180877
+
+[[row]]
+label = "hanoi c -O2"
+counter = "instructions"
+to = 98  # base 68
+
+[[row]]
+label = "huge c -O2"
+counter = "code_bytes"
+to = 223  # base 203
+
+[[row]]
+label = "huge c -O2"
+counter = "instructions"
+to = 731818  # base 528621
+
+[[row]]
+label = "huge c -O2"
+counter = "memory_operands"
+to = 82800  # base 82005
+
+
+[[row]]
+label = "nbody_fixed c -O2"
+counter = "code_bytes"
+to = 1217  # base 481
+
+[[row]]
+label = "nbody_fixed c -O2"
+counter = "instructions"
+to = 1539103  # base 1450167
+
+[[row]]
+label = "nbody_fixed c -O2"
+counter = "memory_operands"
+to = 406053  # base 325049
+
+[[row]]
+label = "parity/parity c -O2"
+counter = "code_bytes"
+to = 249  # base 89
+
+[[row]]
+label = "parity/qbsp c -O2"
+counter = "code_bytes"
+to = 476  # base 351
+
+[[row]]
+label = "parity/qbsp c -O2"
+counter = "data_bytes"
+to = 8  # base 0
+
+[[row]]
+label = "particle c -O2"
+counter = "code_bytes"
+to = 175  # base 165
+
+[[row]]
+label = "queens c -O2"
+counter = "memory_operands"
+to = 33636  # base 21780
+
+[[row]]
+label = "recchop c -O2"
+counter = "code_bytes"
+to = 175  # base 159
+
+[[row]]
+label = "recchop c -O2"
+counter = "memory_operands"
+to = 952  # base 763
+
+[[row]]
+label = "recfloat c -O2"
+counter = "code_bytes"
+to = 91  # base 87
+
+[[row]]
+label = "recfloat c -O2"
+counter = "instructions"
+to = 9020  # base 6022
+
+[[row]]
+label = "recgcd c -O2"
+counter = "instructions"
+to = 20721  # base 20426
+
+[[row]]
+label = "recmany c -O2"
+counter = "instructions"
+to = 69022  # base 66023
+
+[[row]]
+label = "recmany c -O2"
+counter = "memory_operands"
+to = 13502  # base 13501
+
+[[row]]
+label = "recpow c -O2"
+counter = "instructions"
+to = 100637  # base 81404
+
+[[row]]
+label = "recsum c -O2"
+counter = "code_bytes"
+to = 74  # base 60
+
+[[row]]
+label = "recsum c -O2"
+counter = "instructions"
+to = 26005  # base 14009
+
+[[row]]
+label = "rectwo c -O2"
+counter = "instructions"
+to = 1166875  # base 938297
+
+[[row]]
+label = "ring c -O2"
+counter = "code_bytes"
+to = 75  # base 72
+
+[[row]]
+label = "ring c -O2"
+counter = "instructions"
+to = 46107  # base 40107
+
+[[row]]
+label = "switch c -O2"
+counter = "code_bytes"
+to = 385  # base 329
+
+[[row]]
+label = "switch c -O2"
+counter = "instructions"
+to = 118530  # base 100137
+
+[[row]]
+label = "switch c -O2"
+counter = "memory_operands"
+to = 5706  # base 3708
+
+[[row]]
+label = "tile c -O2"
+counter = "instructions"
+to = 4208  # base 4155
+
+# ===== (2b) lru -O2 bytes: tree-pre + complete unroll/memset, pin-faithful; owner w3 (w2's report) =====
+
+[[row]]
+label = "lru c -O2"
+counter = "code_bytes"
+to = 542  # base 378; tree-pre phis (-62 B) and complete unroll/memset expansion, pin-faithful, w3; ~25 B unsplit (w2: lru-c-o2-bytes-2026-10-29.md)
+
+[[row]]
+label = "lru bas -O2"
+counter = "code_bytes"
+to = 558  # base 493; tree-pre phis (-62 B) and complete unroll/memset expansion, pin-faithful, w3; ~25 B unsplit (w2: lru-c-o2-bytes-2026-10-29.md)
+
+# ===== (3) UNATTRIBUTED: -O2 bas/nib/bq16/bq32 and -Os bq32; deadline 2026-11-05, before the main merge; owner w6 =====
+
+[[row]]
+label = "crc bas -O2"
+counter = "code_bytes"
+to = 366  # base 223; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "crc bas -O2"
+counter = "memory_operands"
+to = 86  # base 71
+
+[[row]]
+label = "crc bq16 -O2"
+counter = "code_bytes"
+to = 371  # base 233; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "crc bq16 -O2"
+counter = "memory_operands"
+to = 69  # base 63
+
+[[row]]
+label = "crc bq32 -O2"
+counter = "code_bytes"
+to = 377  # base 243; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "crc nib -O2"
+counter = "code_bytes"
+to = 255  # base 102; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "fib bas -O2"
+counter = "instructions"
+to = 394037  # base 372147
+
+[[row]]
+label = "fib bq16 -O2"
+counter = "instructions"
+to = 426873  # base 404984
+
+[[row]]
+label = "fib bq32 -O2"
+counter = "instructions"
+to = 383090  # base 372144
+
+[[row]]
+label = "fib nib -O2"
+counter = "code_bytes"
+to = 63  # base 54
+
+[[row]]
+label = "frames bas -O2"
+counter = "instructions"
+to = 5353848  # base 5124953
+
+[[row]]
+label = "frames bq16 -O2"
+counter = "instructions"
+to = 5608921  # base 5380027
+
+[[row]]
+label = "frames bq32 -O2"
+counter = "code_bytes"
+to = 315  # base 302
+
+[[row]]
+label = "frames bq32 -O2"
+counter = "instructions"
+to = 5353712  # base 4674806
+
+[[row]]
+label = "frames nib -O2"
+counter = "memory_operands"
+to = 240050  # base 180050
+
+[[row]]
+label = "hanoi bas -O2"
+counter = "instructions"
+to = 401388  # base 385005
+
+[[row]]
+label = "hanoi bq16 -O2"
+counter = "code_bytes"
+to = 222  # base 221
+
+[[row]]
+label = "hanoi bq16 -O2"
+counter = "instructions"
+to = 434154  # base 401389
+
+[[row]]
+label = "hanoi bq32 -O2"
+counter = "code_bytes"
+to = 244  # base 241
+
+[[row]]
+label = "hanoi bq32 -Os"
+counter = "code_bytes"
+to = 225  # base 223
+
+[[row]]
+label = "huge bas -O2"
+counter = "code_bytes"
+to = 437  # base 355
+
+[[row]]
+label = "huge bas -O2"
+counter = "memory_operands"
+to = 163678  # base 162283
+
+[[row]]
+label = "huge bq16 -O2"
+counter = "code_bytes"
+to = 443  # base 359
+
+[[row]]
+label = "huge bq32 -O2"
+counter = "code_bytes"
+to = 297  # base 256
+
+[[row]]
+label = "huge bq32 -Os"
+counter = "code_bytes"
+to = 265  # base 241
+
+[[row]]
+label = "huge nib -O2"
+counter = "code_bytes"
+to = 229  # base 223
+
+[[row]]
+label = "huge nib -O2"
+counter = "memory_operands"
+to = 82800  # base 81804
+
+
+[[row]]
+label = "lru bq16 -O2"
+counter = "code_bytes"
+to = 565  # base 498
+
+[[row]]
+label = "lru bq32 -O2"
+counter = "code_bytes"
+to = 602  # base 501
+
+[[row]]
+label = "lru nib -O2"
+counter = "code_bytes"
+to = 719  # base 606; +20 from the ss-segment operand fixes f2ad0d72f9, cc78ac71e7 (wrong-code fixes)
+
+[[row]]
+label = "nbody_fixed bas -O2"
+counter = "code_bytes"
+to = 1316  # base 568; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "nbody_fixed bas -O2"
+counter = "instructions"
+to = 1719104  # base 1446168
+
+[[row]]
+label = "nbody_fixed bas -O2"
+counter = "memory_operands"
+to = 424054  # base 332049
+
+[[row]]
+label = "nbody_fixed bq16 -O2"
+counter = "code_bytes"
+to = 1323  # base 573; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "nbody_fixed bq16 -O2"
+counter = "instructions"
+to = 1719104  # base 1446168
+
+[[row]]
+label = "nbody_fixed bq16 -O2"
+counter = "memory_operands"
+to = 424054  # base 332049
+
+[[row]]
+label = "nbody_fixed bq32 -O2"
+counter = "code_bytes"
+to = 1186  # base 536; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "nbody_fixed bq32 -O2"
+counter = "instructions"
+to = 1610109  # base 1446166
+
+[[row]]
+label = "nbody_fixed bq32 -Os"
+counter = "code_bytes"
+to = 529  # base 521
+
+[[row]]
+label = "nbody_fixed bq32 -Os"
+counter = "instructions"
+to = 1581160  # base 1494166
+
+[[row]]
+label = "nbody_fixed nib -O2"
+counter = "code_bytes"
+to = 1028  # base 796; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "parity/algebra bq32 -Os"
+counter = "code_bytes"
+to = 186  # base 184
+
+[[row]]
+label = "parity/algebra bq32 -Os"
+counter = "instructions"
+to = 52  # base 50
+
+[[row]]
+label = "parity/control bq32 -Os"
+counter = "code_bytes"
+to = 213  # base 212
+
+[[row]]
+label = "parity/memory bq32 -Os"
+counter = "code_bytes"
+to = 185  # base 183
+
+[[row]]
+label = "parity/memory bq32 -Os"
+counter = "instructions"
+to = 50  # base 48
+
+[[row]]
+label = "parity/memory nib -O2"
+counter = "data_bytes"
+to = 4  # base 2
+
+[[row]]
+label = "parity/memory nib -O2"
+counter = "memory_operands"
+to = 10  # base 6
+
+[[row]]
+label = "parity/parity bas -O2"
+counter = "code_bytes"
+to = 457  # base 211; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "parity/parity bas -O2"
+counter = "memory_operands"
+to = 118  # base 115
+
+[[row]]
+label = "parity/parity bq16 -O2"
+counter = "code_bytes"
+to = 463  # base 221; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "parity/parity bq32 -O2"
+counter = "code_bytes"
+to = 351  # base 222; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "parity/parity bq32 -Os"
+counter = "code_bytes"
+to = 227  # base 219
+
+[[row]]
+label = "parity/parity nib -O2"
+counter = "code_bytes"
+to = 252  # base 110; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "parity/qbsp bas -O2"
+counter = "code_bytes"
+to = 717  # base 716
+
+[[row]]
+label = "parity/qbsp nib -O2"
+counter = "instructions"
+to = 314  # base 301
+
+[[row]]
+label = "parity/qbsp nib -O2"
+counter = "memory_operands"
+to = 95  # base 82
+
+[[row]]
+label = "particle bas -O2"
+counter = "instructions"
+to = 147560  # base 129060
+
+[[row]]
+label = "particle bq16 -O2"
+counter = "instructions"
+to = 147660  # base 129160
+
+[[row]]
+label = "particle nib -O2"
+counter = "instructions"
+to = 147770  # base 137176
+
+[[row]]
+label = "particle nib -O2"
+counter = "memory_operands"
+to = 113421  # base 112715
+
+[[row]]
+label = "queens bq32 -Os"
+counter = "code_bytes"
+to = 469  # base 442
+
+[[row]]
+label = "queens bq32 -Os"
+counter = "instructions"
+to = 362010  # base 348697
+
+[[row]]
+label = "queens nib -O2"
+counter = "code_bytes"
+to = 686  # base 191; O2 loop unroll (pin-faithful), w3; +8 from the ss override f2ad0d72f9 (wrong-code fix)
+
+[[row]]
+label = "queens nib -O2"
+counter = "instructions"
+to = 218871  # base 167694
+
+[[row]]
+label = "queens nib -O2"
+counter = "memory_operands"
+to = 30607  # base 22849
+
+[[row]]
+label = "ring bas -O2"
+counter = "code_bytes"
+to = 229  # base 197
+
+[[row]]
+label = "ring bas -O2"
+counter = "instructions"
+to = 43414  # base 42392
+
+[[row]]
+label = "ring bas -O2"
+counter = "memory_operands"
+to = 11174  # base 11171
+
+[[row]]
+label = "ring bq16 -O2"
+counter = "code_bytes"
+to = 235  # base 208
+
+[[row]]
+label = "ring bq16 -O2"
+counter = "memory_operands"
+to = 11188  # base 9175
+
+[[row]]
+label = "ring bq32 -O2"
+counter = "code_bytes"
+to = 254  # base 213
+
+[[row]]
+label = "ring bq32 -Os"
+counter = "code_bytes"
+to = 219  # base 210
+
+[[row]]
+label = "ring nib -O2"
+counter = "instructions"
+to = 50210  # base 47138
+
+[[row]]
+label = "ring nib -O2"
+counter = "memory_operands"
+to = 11120  # base 8048
+
+[[row]]
+label = "switch bas -O2"
+counter = "data_bytes"
+to = 27  # base 15
+
+[[row]]
+label = "switch bq16 -O2"
+counter = "data_bytes"
+to = 27  # base 15
+
+[[row]]
+label = "switch bq32 -O2"
+counter = "data_bytes"
+to = 33  # base 21
+
+[[row]]
+label = "switch bq32 -Os"
+counter = "data_bytes"
+to = 33  # base 21
+
+[[row]]
+label = "switch nib -O2"
+counter = "data_bytes"
+to = 12  # base 0
+
+[[row]]
+label = "switch nib -O2"
+counter = "memory_operands"
+to = 5706  # base 2002
+
+[[row]]
+label = "textfill bas -O2"
+counter = "memory_operands"
+to = 12010  # base 8013
+
+[[row]]
+label = "textfill bq16 -O2"
+counter = "memory_operands"
+to = 12010  # base 8013
+
+[[row]]
+label = "textfill bq32 -O2"
+counter = "code_bytes"
+to = 232  # base 209
+
+[[row]]
+label = "textfill bq32 -Os"
+counter = "code_bytes"
+to = 205  # base 204
+
+[[row]]
+label = "tile bas -O2"
+counter = "instructions"
+to = 4209  # base 4181
+
+[[row]]
+label = "tile bq16 -O2"
+counter = "code_bytes"
+to = 178  # base 172
+
+[[row]]
+label = "tile bq16 -O2"
+counter = "instructions"
+to = 4209  # base 4181
+
+[[row]]
+label = "tile bq32 -O2"
+counter = "code_bytes"
+to = 229  # base 187
+
+[[row]]
+label = "tile bq32 -O2"
+counter = "instructions"
+to = 4577  # base 4186
+
+[[row]]
+label = "tile bq32 -Os"
+counter = "instructions"
+to = 4214  # base 4186
+
+[[row]]
+label = "tile nib -O2"
+counter = "instructions"
+to = 4208  # base 4180
+
+[[row]]
+label = "tile bas -O2"
+counter = "code_bytes"
+to = 171  # base 167; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+[[row]]
+label = "tile c -O2"
+counter = "code_bytes"
+to = 98  # base 97; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+[[row]]
+label = "tile nib -O2"
+counter = "code_bytes"
+to = 105  # base 101; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+[[row]]
+label = "shellsort bq16 -O2"
+counter = "memory_operands"
+to = 3914  # base 1925; coordinator-accepted trade: clocks 16894 vs 20044 and instructions 9439 vs 11549 beat main; outer i/ptr spill around the inner loop at 6 regs; owner w15, fix after the main merge
+
+[[row]]
+label = "quicksort nib -O2"
+counter = "memory_operands"
+to = 88760  # base 48774; pending: 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2, drop when w2's fix lands
+
+[[row]]
+label = "quicksort bq16 -O2"
+counter = "memory_operands"
+to = 144846  # base 120768; pending: 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2, drop when w2's fix lands
