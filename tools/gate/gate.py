@@ -148,6 +148,13 @@ def failure_text(log: str, limit: int = 80) -> str:
     return "\n".join(out)
 
 
+def diagnostic_lines(log: str, failed: bool) -> list[str]:
+    """The lines a step tags for the job log: `[diag!] ` ones always (the host's CPU, the emulator, a verdict), `[diag] ` ones only when the step
+    failed (hash tables). The job log shows a failed step's failing tests and the tail of its log, so a line printed before the tests was in
+    the step's own log file and never reached it (run 6's dos step printed neither lscpu nor the x87 verdict)."""
+    return [line for line in log.splitlines() if line.startswith("[diag!] ") or (failed and line.startswith("[diag] "))]
+
+
 def log_head(log: str, lines: int = 12) -> str:
     """The first `lines` non-blank lines of a log: where a script that prints its verdict first (oracle-qcport's) says what failed,
     and the tail shows only the emulator's logs under it."""
@@ -579,7 +586,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport",
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
-        "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; lscpu | grep -E "Vendor ID|Model name"; rustc -vV | head -n 4; rm -f "${CARGO_TARGET_DIR:-target}/gate-logs/demo-hashes.txt"; "${DOSBOX_BIN:-${CARGO_TARGET_DIR:-target}/release/dosbox-x}" --version 2>&1 | grep -m1 "DOSBox-X version"; uv run -q --project tools python -c "import sys; sys.path.insert(0, \'tools/dosbatch\'); import qb32; print(\'demo conf:\', \', \'.join(l for l in qb32.DEMO_CONF.splitlines() if l.startswith((\'core=\', \'cputype=\', \'virtual\'))))"; uv run -q --project tools python tools/dosbatch/x87probe.py || true; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --must-pass tools/dosbatch/test_qbdemos.py --rerun tools/dosbatch/test_qbdemos.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider; rc=$?; cat "${CARGO_TARGET_DIR:-target}/gate-logs/demo-hashes.txt" 2>/dev/null; exit $rc',
+        "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; rm -f "${CARGO_TARGET_DIR:-target}/gate-logs/demo-hashes.txt"; { lscpu | grep -E "Vendor ID|Model name"; rustc -vV | head -n 4; "${DOSBOX_BIN:-${CARGO_TARGET_DIR:-target}/release/dosbox-x}" --version 2>&1 | grep -m1 "DOSBox-X version"; uv run -q --project tools python -c "import sys; sys.path.insert(0, \'tools/dosbatch\'); import qb32; print(\'demo conf:\', \', \'.join(l for l in qb32.DEMO_CONF.splitlines() if l.startswith((\'core=\', \'cputype=\', \'virtual\'))))"; uv run -q --project tools python tools/dosbatch/x87probe.py || true; } 2>&1 | sed \'s/^/[diag!] /\'; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --must-pass tools/dosbatch/test_qbdemos.py --rerun tools/dosbatch/test_qbdemos.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider; rc=$?; sed \'s/^/[diag] /\' "${CARGO_TARGET_DIR:-target}/gate-logs/demo-hashes.txt" 2>/dev/null; exit $rc',
         # What the full tier's pytest step runs but for its slow files: #1765 and #1766 were smoke-green and failed tools/test_identical.py
         # and tests/test_readme.py in the train.
         "pytest-quick": cfg_pytest(skip_py + tuple(cfg["smoke"]["slow_pytest"]), "pytest-quick-durations"),
@@ -887,6 +894,9 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
         results[name] = (code, took, cpu)
         verdict = "ok" if code == 0 else "SKIPPED" if code == 77 else "INCOMPLETE" if code == 78 else "FAIL"
         print(f"[time] {name} {verdict} {took:.0f}s wall {cpu:.0f}s cpu", flush=True)
+        if code != 77 and (logs / f"{name}.log").exists():
+            if tagged := diagnostic_lines((logs / f"{name}.log").read_text(), code != 0):
+                print("\n".join("    " + line for line in tagged), flush=True)
         if code not in (0, 77):
             text = (logs / f"{name}.log").read_text()
             if failures := failure_text(text):

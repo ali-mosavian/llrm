@@ -284,6 +284,29 @@ def test_a_step_run_by_the_gate_does_not_see_a_requirement_for_a_tool_the_host_l
     assert (tmp_path / "t/gate-logs/probe.log").read_text().strip() == "[]"
 
 
+def _fake_step(tmp_path, monkeypatch, body: str):
+    for name, value in {"CARGO_TARGET_DIR": str(tmp_path / "t"), "HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("LLRM_BIN", str(tmp_path / "bin"))
+    monkeypatch.setattr(gate, "commands", lambda *a: {"probe": body})
+    return gate.execute(gate.Plan("fast", "test", steps=["probe"]))[0]
+
+
+def test_a_failed_step_prints_the_lines_it_tagged_for_the_job_log(tmp_path, monkeypatch, capsys):
+    """Run 6's dos step failed and its job log had neither lscpu nor the x87 verdict nor the hashes: they were printed before the tests, into the
+    step's own log file, and the job log shows only a failed step's failing tests and the tail of its log."""
+    body = 'echo "[diag!] Model name: Test CPU"; echo "[diag] hash abc demo conf"; for i in $(seq 60); do echo "filler $i"; done; printf "######## t.py: exit 1\\n___ test_x ___\\nassert 1 == 2\\n"; exit 1'
+    assert _fake_step(tmp_path, monkeypatch, body) == 1
+    shown = capsys.readouterr().out
+    assert "[diag!] Model name: Test CPU" in shown and "[diag] hash abc demo conf" in shown
+
+
+def test_a_passing_step_prints_only_the_always_tagged_lines(tmp_path, monkeypatch, capsys):
+    assert _fake_step(tmp_path, monkeypatch, 'echo "[diag!] x87 probe: all 92 lines match"; echo "[diag] hash abc"; exit 0') == 0
+    shown = capsys.readouterr().out
+    assert "[diag!] x87 probe: all 92 lines match" in shown and "[diag] hash abc" not in shown
+
+
 def test_a_dropped_test_binary_is_named_in_the_run_and_does_not_make_the_step_incomplete(tmp_path):
     """The step reports one binary fewer: the expected count must follow, and the output must say which was left out."""
     cfg, pkgs = gate.load(), gate.packages()
@@ -928,6 +951,7 @@ def test_the_dos_step_prints_the_host_cpu_and_the_emulator_it_ran_on():
     """Run 4 and 5 failed NIBBLES m16 on a hosted runner and the log had no CPU model, no DOSBox build and no core: nothing to compare with a green local run."""
     cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
     assert "lscpu" in cmd and "dosbox-x" in cmd and "qb32.DEMO_CONF" in cmd
+    assert "[diag!] " in cmd and "[diag] " in cmd  # tagged, so the gate copies them into the job log
     assert "rustc -vV" in cmd and "demo-hashes.txt" in cmd and "exit $rc" in cmd  # the build's hashes are printed on green and red
     assert "tools/dosbatch/x87probe.py || true;" in cmd  # the host FPU's verdict is printed, never a red of its own
 
