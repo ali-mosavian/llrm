@@ -1,6 +1,6 @@
-//! A value loaded from an incoming argument slot and read once, by an
-//! instruction that has a memory form, is read from the slot by that
-//! instruction: `move.l (12,%sp), %a1 ... cmp.l %a1, %d1` is `cmp.l (12,%sp),
+//! A value loaded from an incoming argument slot and read once or twice (a copy
+//! chain to each reader), by instructions that have a memory form, is read from the
+//! slot by those instructions: `move.l (12,%sp), %a1 ... cmp.l %a1, %d1` is `cmp.l (12,%sp),
 //! %d1`. The slot is never written, so the read may happen where the value is
 //! used, and the register and the load go.
 //!
@@ -46,6 +46,8 @@ impl Tuning {
 /// `move.l (d,%sp), %rN` is 4 bytes and 16 clocks; the memory form of a `cmp`
 /// or `add` is 2 bytes and about 12 clocks longer than the register form.
 const BYTES_SAVED: i64 = 2;
+const LOAD_BYTES: i64 = 4;
+const FOLD_BYTES: i64 = 2;
 const CLOCKS_LOST: i64 = 12;
 
 /// The memory form of the register form `name`, and how to build its operands
@@ -99,51 +101,101 @@ pub fn fold_argument_loads(
             }
         }
     }
+    // a copy's destination with a second definition (a select's or a phi's) is not the loaded value
+    let mut defined: HashMap<u32, usize> = HashMap::new();
+    for block in &function.blocks {
+        for inst in &block.insts {
+            for operand in &inst.operands {
+                if let Operand::Def(Reg::Virt(v)) = operand {
+                    *defined.entry(*v).or_default() += 1;
+                }
+            }
+        }
+    }
     let mut remove: Vec<(usize, usize)> = Vec::new();
     let mut rewrite: Vec<((usize, usize), Inst)> = Vec::new();
     for (b, block) in function.blocks.iter().enumerate() {
         for (i, inst) in block.insts.iter().enumerate() {
             let Some((dst, slot)) = argument_load(inst) else { continue };
-            // follow single-reader copies to the one instruction that reads the
-            // value
+            // Each reader of the value is the instruction that has the memory form or a
+            // chain of single-reader copies to one. The load goes only when every reader
+            // folds: a reader left behind would keep the register.
             let mut chain = vec![(b, i)];
-            let mut value = dst;
-            let user = loop {
-                let Some([(ub, ui)]) = readers.get(&value).map(Vec::as_slice) else { break None };
-                let reader = &function.blocks[*ub].insts[*ui];
-                if let (Kind::Copy, [Operand::Def(Reg::Virt(next)), Operand::Use(_)]) =
-                    (reader.kind, &reader.operands[..])
+            let mut users: Vec<(usize, usize)> = Vec::new();
+            let mut folded: Vec<((usize, usize), Inst)> = Vec::new();
+            let mut all = true;
+            let mut starts: Vec<(u32, (usize, usize))> = Vec::new();
+            for &(rb, ri) in readers.get(&dst).map(Vec::as_slice).unwrap_or(&[]) {
+                starts.push((dst, (rb, ri)));
+            }
+            if starts.is_empty() {
+                continue;
+            }
+            for (mut value, mut at) in starts {
+                // follow single-reader copies to the one instruction that reads the value
+                let user = loop {
+                    let reader = &function.blocks[at.0].insts[at.1];
+                    if let (Kind::Copy, [Operand::Def(Reg::Virt(next)), Operand::Use(_)]) =
+                        (reader.kind, &reader.operands[..])
+                    {
+                        if defined.get(next) != Some(&1) {
+                            break None;
+                        }
+                        chain.push(at);
+                        value = *next;
+                        let Some([next_at]) = readers.get(&value).map(Vec::as_slice) else { break None };
+                        at = *next_at;
+                    } else {
+                        break Some(at);
+                    }
+                };
+                let Some((ub, ui)) = user else {
+                    all = false;
+                    break;
+                };
+                let reader = &function.blocks[ub].insts[ui];
+                let Kind::Op(name) = reader.kind else {
+                    all = false;
+                    break;
+                };
+                let Some(fold) = fold_of(name) else {
+                    all = false;
+                    break;
+                };
+                // the replaced operand is the loaded value, and not one the result
+                // is tied to
+                let position =
+                    reader.operands.iter().position(|o| matches!(o, Operand::Use(Reg::Virt(v)) if *v == value));
+                let Some(position) = position else {
+                    all = false;
+                    break;
+                };
+                if position != fold.source
+                    || reader.ties.iter().any(|&(_, used)| used == position)
+                    || users.contains(&(ub, ui))
+                    || (cfg.cycle_depth(ub) > cfg.cycle_depth(b) && !in_loops)
                 {
-                    chain.push((*ub, *ui));
-                    value = *next;
-                } else {
-                    break Some((*ub, *ui));
+                    all = false;
+                    break;
                 }
-            };
-            let Some((ub, ui)) = user else { continue };
-            let reader = &function.blocks[ub].insts[ui];
-            let Kind::Op(name) = reader.kind else { continue };
-            let Some(fold) = fold_of(name) else { continue };
-            // the replaced operand is the loaded value, and not one the result
-            // is tied to
-            let position = reader.operands.iter().position(|o| matches!(o, Operand::Use(Reg::Virt(v)) if *v == value));
-            let Some(position) = position else { continue };
-            if position != fold.source || reader.ties.iter().any(|&(_, used)| used == position) {
+                let mut operands = reader.operands.clone();
+                operands.remove(position);
+                let at = fold.at.min(operands.len());
+                operands.insert(at, Operand::Frame(slot));
+                operands.insert(at, Operand::Imm(0));
+                let mut memory = Inst { kind: Kind::Op(fold.memory), operands, ..reader.clone() };
+                memory.may_load = true;
+                debug_assert!(reader.ties.iter().all(|&(def, used)| def < at && used < at));
+                users.push((ub, ui));
+                folded.push(((ub, ui), memory));
+            }
+            // The load is 4 bytes and each reader grows 2 in memory form (a `cmp`, or a `move`
+            // to the outgoing area): two readers tie in bytes and free the register, three lose.
+            if !all || users.len() as i64 * FOLD_BYTES > LOAD_BYTES {
                 continue;
             }
-            if cfg.cycle_depth(ub) > cfg.cycle_depth(b) && !in_loops {
-                continue;
-            }
-            let mut operands = reader.operands.clone();
-            operands.remove(position);
-            let at = fold.at.min(operands.len());
-            operands.insert(at, Operand::Frame(slot));
-            operands.insert(at, Operand::Imm(0));
-            let mut folded = Inst { kind: Kind::Op(fold.memory), operands, ..reader.clone() };
-            folded.may_load = true;
-            debug_assert!(reader.ties.iter().all(|&(def, used)| def < at && used < at));
             remove.extend(chain);
-            rewrite.push(((ub, ui), folded));
+            rewrite.extend(folded);
         }
     }
     for ((b, i), inst) in rewrite {
