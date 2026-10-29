@@ -6,6 +6,8 @@
 //! the stack, so the slice (arithmetic, branches, calls) needs none. Reason:
 //! frame objects wait for the m68k machine function. Exit: M4.
 
+use std::sync::LazyLock;
+
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, build_block};
@@ -13,12 +15,15 @@ use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{BlockId, Module};
+use llrm_mir::module::{BlockId, Module, ValueDef};
 
+use super::call::M68kCalling;
 use super::hooks::Cpu;
 use super::lowering::m68kisd;
 use super::pipeline::select_block;
 use crate::target::M68k;
+
+static CALLING: LazyLock<M68kCalling> = LazyLock::new(M68kCalling::default);
 
 /// The builder's view of m68k: 32-bit pointers, `i8` to `i32` in registers,
 /// and the `CALL`/`RET` nodes of the pin.
@@ -31,9 +36,19 @@ pub fn builder_target() -> BuilderTarget {
             ret: m68kisd::RET,
             stack_pointer: "sp",
             big_endian: true,
+            calling: Some(&*CALLING),
         }),
         ..BuilderTarget::m32()
     }
+}
+
+/// A phi input this block exports: `incoming` is the register its value was
+/// copied to (`PHINodesToUpdate`), `result` the phi's own register.
+#[derive(Clone, Copy, Debug)]
+pub struct PhiUpdate {
+    pub phi_block: BlockId,
+    pub result: u32,
+    pub incoming: u32,
 }
 
 /// One block, selected and scheduled.
@@ -41,6 +56,7 @@ pub struct Selected {
     pub block: BlockId,
     pub dag: SelectionDAG,
     pub units: Vec<Unit>,
+    pub phis: Vec<PhiUpdate>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -62,6 +78,7 @@ pub fn select_function(
     let target = builder_target();
     let mut info = FunctionLoweringInfo::new(function);
     let mut selected = Vec::new();
+    let mut updates = Vec::new();
     for &block in function.layout() {
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
@@ -69,7 +86,18 @@ pub fn select_function(
             return Err("a switch lowering made blocks".to_owned());
         }
         let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
-        selected.push(Selected { block, dag: built.dag, units });
+        updates.push(built.phi_updates);
+        selected.push(Selected { block, dag: built.dag, units, phis: Vec::new() });
+    }
+    for (one, pending) in selected.iter_mut().zip(updates) {
+        for (phi, incoming) in pending {
+            let ValueDef::Instruction(def) = function.value(phi).def else {
+                return Err("a phi that is not an instruction".to_owned());
+            };
+            let phi_block = function.parent(def).ok_or("a phi outside a block")?;
+            let result = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+            one.phis.push(PhiUpdate { phi_block, result, incoming });
+        }
     }
     Ok(selected)
 }

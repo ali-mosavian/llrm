@@ -66,3 +66,9 @@ cat "$OWN" >> "$WORK/ids.txt"
 if [ -n "${DAGISEL_GEN:-}" ]; then GEN=("$DAGISEL_GEN"); else GEN=(cargo run -q --release -p llrm-dagisel-gen --); fi
 mkdir -p "$OUT"
 "${GEN[@]}" --target "$REC" --inc "$WORK/GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --instrinfo "$WORK/instrinfo.txt" --out "$OUT"
+# `asm = "<namespace>"` in the record: the instructions' asm strings and printer methods.
+ASM_NS=$(field asm)
+if [ -n "$ASM_NS" ]; then
+  "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
+  python3 -I "$ROOT/tools/dagisel/asmtable.py" "$WORK/target.json" "$OUT/asm.rs" "${ASM_NS%::}"
+fi

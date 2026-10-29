@@ -25,52 +25,14 @@
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
+pub use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, Out};
+use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, TargetCalling};
 use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_target::calling::{Convention, Kind, Place};
 
 use super::lowering::m68kisd;
 use crate::abi;
 use crate::reg;
-
-/// How a value is widened to the location `CC_M68k` gives it: `CCValAssign`'s
-/// `AExt`, `SExt` and `ZExt`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Ext {
-    Any,
-    Sign,
-    Zero,
-}
-
-impl Ext {
-    fn node(self) -> ISD {
-        match self {
-            Ext::Any => ISD::AnyExtend,
-            Ext::Sign => ISD::SignExtend,
-            Ext::Zero => ISD::ZeroExtend,
-        }
-    }
-}
-
-/// An `ISD::OutputArg` with its value: an argument of a call or a returned
-/// value.
-#[derive(Clone, Copy, Debug)]
-pub struct Out {
-    pub value: SDValue,
-    pub ext: Ext,
-    /// `ArgFlags.isPointer()`: a returned pointer is in `a0`, not `d0`.
-    pub pointer: bool,
-}
-
-/// An `ISD::InputArg`: a formal argument or a call's result.
-#[derive(Clone, Copy, Debug)]
-pub struct In {
-    pub vt: EVT,
-    pub pointer: bool,
-}
-
-/// A fixed stack object, as `MachineFrameInfo::CreateFixedObject` takes it:
-/// size and offset from the first argument, and whether it is immutable.
-pub type FixedObject<'a> = &'a mut dyn FnMut(u32, i64, bool) -> i32;
 
 /// The bytes of the `i32` slot an `i8` or `i16` argument sits in, high end:
 /// m68k is big-endian (`LowerMemArgument`).
@@ -86,6 +48,7 @@ fn slot_offset(
 }
 
 /// The m68k C calling convention applied to DAG nodes.
+#[derive(Debug)]
 pub struct M68kCalling {
     convention: Convention,
 }
@@ -262,6 +225,40 @@ impl M68kCalling {
         operands[0] = chain;
         operands.extend(glue);
         dag.get_node(m68kisd::RET, EVT::OTHER, &operands)
+    }
+}
+
+impl TargetCalling for M68kCalling {
+    fn lower_call(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        callee: SDValue,
+        outs: &[Out],
+        ins: &[In],
+    ) -> (SDValue, Vec<SDValue>) {
+        M68kCalling::lower_call(self, dag, chain, callee, outs, ins)
+    }
+
+    /// Every argument is in memory: `live_in` is not used.
+    fn lower_formal_arguments(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        ins: &[In],
+        fixed: FixedObject,
+        _live_in: LiveIn,
+    ) -> Vec<SDValue> {
+        M68kCalling::lower_formal_arguments(self, dag, chain, ins, fixed)
+    }
+
+    fn lower_return(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        outs: &[Out],
+    ) -> SDValue {
+        M68kCalling::lower_return(self, dag, chain, outs)
     }
 }
 

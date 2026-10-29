@@ -786,6 +786,12 @@ impl Dag for DagisAdapter<'_> {
     ) -> bool {
         self.dag.nodes()[node as usize].flags.has(SDNodeFlags::DISJOINT)
     }
+    fn has_no_unsigned_wrap(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.dag.nodes()[node as usize].flags.has(SDNodeFlags::NO_UNSIGNED_WRAP)
+    }
     fn masked_value_is_zero(
         &self,
         value: PinValue,
