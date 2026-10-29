@@ -935,3 +935,23 @@ fn constants_of_a_division_are_loaded_again_not_stored() {
         assert_eq!(run_word("alloc-cent", &text, "cent", v), (v / 100).wrapping_add(v % 7), "v={v}");
     }
 }
+
+/// A word `==` or `!=` against a constant loaded the constant into two zero-page cells for the
+/// compare (`lda #0; sta rcN` twice before every `x == 0`: 75 bytes of lz4). The constant is two
+/// immediates, and zero is `lda lo; ora hi`.
+#[test]
+fn a_word_equality_against_a_constant_has_no_constant_cells() {
+    for (op, k) in [("eq", 0u16), ("ne", 0), ("eq", 300), ("ne", 0x2C00)] {
+        let ir = format!("define i8 @cmpk(i16 %x) {{\n  %c = icmp {op} i16 %x, {k}\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}}");
+        let text = compile(&ir, "cmpk");
+        assert!(!text.contains("lda #0\n  sta rc") && !text.contains("sta rc4"), "{op} {k}: {text}");
+        if k == 0 {
+            assert!(text.contains("ora rc3"), "{op} {k}: {text}");
+        }
+        for x in [0u16, 1, 0x0100, 300, 0x002C, 0x012D, 0x2C00, 0x2C01, 0xFFFF] {
+            let run = common::run_with("alloc-cmpk", &format!("{}  jsr cmpk\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
+            let equal = x == k;
+            assert_eq!(run, if (op == "eq") == equal { 7 } else { 9 }, "{op} {k} against {x:#06x}");
+        }
+    }
+}
