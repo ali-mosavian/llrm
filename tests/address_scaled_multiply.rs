@@ -59,16 +59,18 @@ fn a_factor_of_a_lea_and_an_address_scale_is_one_lea_at_every_level() {
     }
 }
 
-/// A multiply by 7 is no `lea` factor times a scale: tuned for size the `imul`
-/// is 3 bytes against 9, and for clocks the chain beats it.
+/// A multiply by 7 is no `lea` factor times a scale: the pin's `llc` on the same
+/// IR makes it `lea r, [i*8]` and `sub r, i` at both levels (no `imul`, which the
+/// selector once kept for `-Os` size), and so do we.
 ///
-/// llrm-cc: the `imul` is of the register that holds the index (`ecx`), not
-/// `eax` (pin-shape).
+/// llrm-cc: the register that holds the index is `eax`, as in the pin's
+/// listing (pin-shape).
 #[test]
-fn a_factor_that_is_no_lea_times_a_scale_is_priced_by_its_channel() {
+fn a_factor_that_is_no_lea_times_a_scale_is_the_pins_lea_and_sub() {
     let source = "int a7(char *a, int i) { return a[7 * i]; }\n";
-    let sized = listing(source, "-Os");
-    assert!(sized.lines().any(|line| line.trim().starts_with("imul ") && line.ends_with(", 7")), "{sized}");
-    let text = listing(source, "-O2");
-    assert!(!text.contains("imul"), "{text}");
+    for level in ["-Os", "-O2"] {
+        let text = listing(source, level);
+        assert!(!text.contains("imul"), "{level}: {text}");
+        assert!(text.contains("*8]") && text.lines().any(|line| line.trim().starts_with("sub ")), "{level}: {text}");
+    }
 }
