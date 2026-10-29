@@ -1473,6 +1473,67 @@ done:
     }
 }
 
+/// `__csave` and `__crest` link as 34 bytes, so a module takes them only where its users together save
+/// more than that: one function that keeps three cells saved 9 bytes and cost 25 net (digits: 165 linked
+/// at speed, 189 at size with the helpers). Three such functions gain 27, four gain 36.
+#[test]
+fn the_save_helpers_are_linked_only_where_their_users_pay_for_them() {
+    let digits = |name: &str| {
+        format!(
+            "define i8 @{name}(i16 %v) {{
+entry:
+  %c = icmp ugt i16 %v, 9
+  br i1 %c, label %loop, label %done
+loop:
+  %n = phi i8 [ 1, %entry ], [ %n2, %loop ]
+  %x = phi i16 [ %v, %entry ], [ %q, %loop ]
+  %q = udiv i16 %x, 10
+  %n2 = add i8 %n, 1
+  %g = icmp ugt i16 %x, 99
+  br i1 %g, label %loop, label %out
+out:
+  ret i8 %n2
+done:
+  ret i8 1
+}}\n"
+        )
+    };
+    let module_of = |users: usize| {
+        let names: Vec<String> = (0..users).map(|n| format!("dig{n}")).collect();
+        let ir: String = names.iter().map(|n| digits(n)).collect();
+        let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+        let mut module = llrm_mir::parse::module(&text).expect("parses");
+        llrm_6502::prepare::split_phi_edges(&mut module);
+        let selections: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let mut selection = select_function(&module, n, Cpu::Mos6502).expect("selects");
+                selection.tuning = Tuning::SIZE;
+                selection
+            })
+            .collect();
+        let parts: Vec<(&str, &llrm_6502::dagisel::function::Selection)> =
+            names.iter().map(String::as_str).zip(&selections).collect();
+        (names.clone(), llrm_6502::select::module_text(&module, &parts).expect("emits"))
+    };
+    for (users, shared) in [(1, false), (3, false), (4, true)] {
+        let (names, texts) = module_of(users);
+        let all: String = texts.concat();
+        assert_eq!(all.contains("jsr __csave"), shared, "{users} users:\n{all}");
+        if !shared {
+            assert!(all.contains("pha") && !all.contains("__crest"), "{users} users:\n{all}");
+        }
+        for (v, want) in [(5u16, 1), (100, 3), (65535, 5)] {
+            for name in &names {
+                let setup = set("rc2", v & 0xFF) + &set("rc3", v >> 8) + &set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3);
+                let after = "  lda rc8\n  cmp #$A1\n  bne bad\n  lda rc9\n  cmp #$B2\n  bne bad\n  lda rc10\n  cmp #$C3\n  bne bad\n  pla\n  rts\nbad:\n  lda #99\n  rts\n";
+                let program = format!("{setup}  jsr {name}\n  pha\n{after}");
+                assert_eq!(common::run_with(&format!("alloc-{users}-{name}-{v}"), &program, &all), want, "{users} users, {name}({v})");
+            }
+        }
+    }
+}
+
 /// A rotate (`(x << 1) | (x >> 15)` is `rotl` to opt) was "cannot select Rotl": found by the
 /// differential tests, where every program folds its checksum that way. By constants and by a count.
 #[test]

@@ -126,6 +126,29 @@ pub fn function_text(
     Ok(body)
 }
 
+/// The functions `parts` of `module` as ca65 text, in order. The callee-save helpers are linked once
+/// and cost [`alloc::SAVE_HELPERS_BYTES`], so the functions that would use them keep them only where
+/// together they save more than that; otherwise each saves its cells inline. Break-even: `k` users of
+/// `n = 3` cells (9 bytes each) pay from 4 users; one user of 8 cells (39 bytes) pays alone.
+pub fn module_text(
+    module: &Module,
+    parts: &[(&str, &Selection)],
+) -> Result<Vec<String>, String> {
+    let mut texts = parts.iter().map(|(name, selection)| function_text(module, name, selection)).collect::<Result<Vec<_>, _>>()?;
+    let cells = |text: &str| -> Option<u32> {
+        let (before, _) = text.split_once("\n  jsr __csave")?;
+        before.rsplit_once("ldy #")?.1.trim().parse().ok()
+    };
+    let users: Vec<(usize, u32)> = texts.iter().enumerate().filter_map(|(at, text)| Some((at, cells(text)?))).collect();
+    let gain: i64 = users.iter().map(|(_, n)| alloc::shared_save_gain(*n)).sum();
+    if !users.is_empty() && gain <= alloc::SAVE_HELPERS_BYTES {
+        for (at, _) in users {
+            texts[at] = alloc::with_shared_saves(false, || function_text(module, parts[at].0, parts[at].1))?;
+        }
+    }
+    Ok(texts)
+}
+
 /// The function's lines in order, with the byte and word cells it made.
 pub fn function_items(
     module: &Module,

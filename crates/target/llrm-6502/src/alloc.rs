@@ -67,8 +67,32 @@ impl Tuning {
 }
 
 thread_local! {
+    /// Whether a function may save its callee-saved cells with `__csave`/`__crest` (see [`with_shared_saves`]).
+    static SHARED_SAVES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
+}
+
+/// `f` with the shared callee-save helpers allowed or not. A function that keeps `n >= 3` callee-saved
+/// cells saves `6n - 9` bytes with them, but the runtime that holds them is [`SAVE_HELPERS_BYTES`] a
+/// module: only a module whose users together save more than that should link it (`select::module_text`).
+pub fn with_shared_saves<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = SHARED_SAVES.with(|a| a.replace(allowed));
+    let result = f();
+    SHARED_SAVES.with(|a| a.set(before));
+    result
+}
+
+/// The bytes `__csave` and `__crest` take once linked.
+pub const SAVE_HELPERS_BYTES: i64 = 34;
+
+/// What a function that keeps `n` callee-saved cells saves by calling the helpers: six bytes a cell
+/// inline, and two for the result, against eleven.
+pub fn shared_save_gain(n: u32) -> i64 {
+    6 * i64::from(n) + 2 - 11
 }
 
 fn imaginary() -> u8 {
@@ -1912,8 +1936,9 @@ fn save_preserved<const STACK: bool>(
         // bytes against 6 a cell and 2 for the result, and 57 + 14n clocks more; taken where the level
         // pays that for the bytes
         let n = used.len() as u32;
-        let (saved, slower) = (6 * n as i64 + 2 - 11, 57 + 14 * n);
-        let shared = n >= 3
+        let (saved, slower) = (shared_save_gain(n), 57 + 14 * n);
+        let shared = SHARED_SAVES.with(|a| a.get())
+            && n >= 3
             && used.iter().enumerate().all(|(at, byte)| *byte == rc(8 + at as u8))
             && saved > 0
             && slower <= TUNING.with(|t| t.get()).clocks_per_byte * saved as u32;

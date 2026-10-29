@@ -20,7 +20,7 @@ use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::emit::equates;
 use llrm_6502::platform::{Platform, SIM65};
-use llrm_6502::select::function_text;
+use llrm_6502::select::module_text;
 
 struct Rng(u64);
 
@@ -510,23 +510,28 @@ fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i3
     let platform = Platform::parse(SIM65).unwrap();
     let mut asm = String::new();
     let names: Vec<String> = std::iter::once("test".to_owned()).chain((0..4).map(|n| format!("h{n}"))).chain(["bump".to_owned()]).collect();
-    for name in names.iter().filter(|n| module.named(n).is_some_and(|id| module.global(id).function().is_some_and(|f| !f.is_declaration()))) {
-        if std::env::var("DIFF_TRACE").is_ok() {
-            eprintln!("trace: seed {seed}: compiling {name}");
-        }
-        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let defined: Vec<&String> =
+        names.iter().filter(|n| module.named(n).is_some_and(|id| module.global(id).function().is_some_and(|f| !f.is_declaration()))).collect();
+    if std::env::var("DIFF_TRACE").is_ok() {
+        eprintln!("trace: seed {seed}: compiling {defined:?}");
+    }
+    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut selections = Vec::new();
+        for name in &defined {
             let mut selection = select_function(&module, name, Cpu::Mos6502)?;
             selection.zero_page = platform.zero_page;
             if seed % 3 == 0 || std::env::var("DIFF_SIZE").is_ok() {
                 selection.tuning = Tuning::SIZE;
             }
-            function_text(&module, name, &selection)
-        }));
-        match compiled {
-            Ok(Ok(code)) => asm.push_str(&code),
-            Ok(Err(why)) => return Err(format!("ours: {name}: {}", why.chars().take(160).collect::<String>())),
-            Err(_) => return Err(format!("ours: {name}: panic")),
+            selections.push(selection);
         }
+        let parts: Vec<(&str, &_)> = defined.iter().map(|n| n.as_str()).zip(&selections).collect();
+        module_text(&module, &parts)
+    }));
+    match compiled {
+        Ok(Ok(code)) => asm.push_str(&code.concat()),
+        Ok(Err(why)) => return Err(format!("ours: {}", why.chars().take(160).collect::<String>())),
+        Err(_) => return Err("ours: panic".to_owned()),
     }
     let runtime = reachable_runtime(&asm);
     std::fs::write(dir.join("f.s"), format!("{}.import buf\n.import tab\n.import zero\n{asm}{runtime}", equates(&platform))).unwrap();

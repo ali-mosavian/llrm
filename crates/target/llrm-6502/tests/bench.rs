@@ -23,7 +23,7 @@ use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::emit::equates;
 use llrm_6502::platform::{Platform, SIM65};
-use llrm_6502::select::{function_items, function_text};
+use llrm_6502::select::{function_items, module_text};
 
 const LZ: &str = "48,97,98,99,3,0,17,100,2,0,255,5,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,7,0,255,26,63,120,121,122,40,0,0,242,255,0,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,1,0,48,101,110,100";
 const BUF: [u8; 16] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3];
@@ -387,7 +387,7 @@ fn ours_row(
     let cpu = if cmos(tag) { Cpu::W65c02 } else { Cpu::Mos6502 };
     let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let selection = select_function(&module, name, cpu)?;
-        { let mut selection = selection; selection.zero_page = Platform::parse(SIM65).unwrap().zero_page; if tag.starts_with("os") { selection.tuning = llrm_6502::alloc::Tuning::SIZE; } function_text(&module, name, &selection) }
+        { let mut selection = selection; selection.zero_page = Platform::parse(SIM65).unwrap().zero_page; if tag.starts_with("os") { selection.tuning = llrm_6502::alloc::Tuning::SIZE; } module_text(&module, &[(name, &selection)]).map(|texts| texts.concat()) }
     }));
     let path = {
         let selection = select_function(&module, name, cpu).map_err(|e| format!("{e:?}"))?;
