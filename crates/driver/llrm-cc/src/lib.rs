@@ -54,10 +54,38 @@ pub fn layout_facts(datalayout: &str) -> BTreeMap<String, String> {
     facts
 }
 
+/// The sizes in bytes the C front end lays types out as (`[c]` of the description).
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CAbi {
+    pub int: u32,
+    pub long: u32,
+    pub long_long: u32,
+    pub pointer: u32,
+    pub function_pointer: u32,
+    pub size_t: u32,
+    pub ptrdiff_t: u32,
+    pub wchar_t: u32,
+    pub double: u32,
+    pub long_double: u32,
+    #[serde(rename = "enum")]
+    pub enumeration: u32,
+}
+
 /// Per-target facts; the file's header says what each field is.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Target {
     pub triple: String,
+    /// The crate whose description (`crates/target/llrm-NAME`) states the C sizes; `wchar_bytes` and
+    /// `long_double_bytes` are this row's libc's departures from it.
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub wchar_bytes: Option<u32>,
+    #[serde(default)]
+    pub long_double_bytes: Option<u32>,
+    /// `description`'s sizes with the row's departures applied (filled by `targets`).
+    #[serde(skip)]
+    pub c_abi: Option<CAbi>,
     /// What llrm-llc is told the module's layout is (its target's
     /// `datalayout.toml`).
     pub datalayout: String,
@@ -122,10 +150,23 @@ fn expanded(text: &str) -> Result<String, String> {
     Ok(out)
 }
 
+fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
+    let Some(name) = &target.description else { return Ok(None) };
+    let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
+    let text = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
+    let table: toml::Table = text.parse().map_err(|error| format!("{path}: {error}"))?;
+    let mut sizes: CAbi =
+        table.get("c").cloned().ok_or(format!("{path}: no [c]"))?.try_into().map_err(|error| format!("{path}: {error}"))?;
+    sizes.wchar_t = target.wchar_bytes.unwrap_or(sizes.wchar_t);
+    sizes.long_double = target.long_double_bytes.unwrap_or(sizes.long_double);
+    Ok(Some(sizes))
+}
+
 pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
     let mut table: BTreeMap<String, Target> = toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))?;
     for target in table.values_mut() {
         target.datalayout = expanded(&target.datalayout)?;
+        target.c_abi = c_abi_of(target)?;
         target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
         for word in target.clang.iter_mut().chain(&mut target.llc) {
             *word = word.replace("{root}", ROOT);
