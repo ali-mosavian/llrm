@@ -392,8 +392,10 @@ pub fn fold_post_increment(lines: Vec<crate::expand::Line>) -> Vec<crate::expand
     lines
 }
 
-/// `add` with a register or address register source commutes like `add` with
-/// a data register (`ADD32dd` is `isCommutable`, `ADD32dr` is not).
+/// An instruction whose `dr` form takes a register of either kind as its
+/// source commutes when its `dd` form (data registers only) does: `ADD32dr`
+/// from `ADD32dd`'s `isCommutable`. The swap is checked against the register
+/// classes by `commute_tied`.
 ///
 /// DEVIATE from the pin, which selects `ADD32dr` for a value in an `xr32`
 /// register (every phi is) and so never swaps its sources. Reason: swapping
@@ -402,12 +404,14 @@ pub fn fold_post_increment(lines: Vec<crate::expand::Line>) -> Vec<crate::expand
 /// off with [`crate::compile::Options::overlay`].
 pub fn mark_commutable(function: &mut crate::mfunc::MFunction) {
     for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
-        if matches!(inst.kind, llrm_spike_mf::Kind::Op("ADD16dr" | "ADD32dr")) {
+        if let llrm_spike_mf::Kind::Op(name) = inst.kind
+            && let Some(stem) = name.strip_suffix("dr")
+            && crate::mfunc::pin_commutable(&format!("{stem}dd"))
+        {
             inst.commutable = true;
         }
     }
 }
-
 /// Two masks of one register in a row are one: `and.l #255, %d1; and.l #1,
 /// %d1` is `and.l #1, %d1` (the second leaves the same value and the same
 /// codes). The pin's selection leaves the pair after `sgt` and a `zext`.
