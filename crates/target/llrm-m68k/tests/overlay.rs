@@ -596,6 +596,34 @@ exit:
     assert_eq!(done.lines().filter(|line| line.contains("phi ptr")).count(), 2, "{done}");
 }
 
+/// memcpy's `while (n-- > 0)` leaves `icmp ugt %7, 1`, which LSR cannot turn
+/// into a compare with zero: the loop kept `cmpi #1; bhi` (+4 B and +13 insns
+/// against gcc). Expected: `ne`, which LSR counts to zero (`subq; bne`).
+#[test]
+fn a_down_counter_tested_above_its_floor_is_counted_to_zero() {
+    let done = after_mid_end(
+        "define i32 @k(ptr %0, ptr %1, i32 %2) {
+  %4 = icmp sgt i32 %2, 0
+  br i1 %4, label %5, label %14
+5:
+  %6 = phi ptr [ %12, %5 ], [ %0, %3 ]
+  %7 = phi i32 [ %9, %5 ], [ %2, %3 ]
+  %8 = phi ptr [ %10, %5 ], [ %1, %3 ]
+  %9 = add i32 %7, -1
+  %10 = getelementptr i8, ptr %8, i32 1
+  %11 = load i8, ptr %8, align 1
+  %12 = getelementptr i8, ptr %6, i32 1
+  store i8 %11, ptr %6, align 1
+  %13 = icmp ugt i32 %7, 1
+  br i1 %13, label %5, label %14
+14:
+  ret i32 0
+}",
+    );
+    assert!(done.contains("icmp ne i32 %10, 0"), "{done}");
+    assert!(!done.contains("icmp ugt"), "{done}");
+}
+
 fn walk_with_call(ty: &str) -> String {
     format!(
         "declare void @g(i32)
