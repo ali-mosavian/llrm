@@ -174,6 +174,15 @@ fn gcd_subtractions_sink_into_their_arms() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("gcd")).expect("parses");
     let text = text(&module, "k", Cpu::M68000).expect("compiles");
     assert!(!text.contains("movem"), "{text}");
-    let after_compare = text.find("bgt").expect("the signed compare");
+    let after_compare = text.find("ble").expect("the signed compare");
     assert!(text.matches("sub.l").count() == 2 && text.find("sub.l").unwrap() > after_compare, "{text}");
+}
+
+/// The loop's join was a block of its own that only jumped back (`bra L5` to
+/// `L5: bra L1`), a jump per trip and 4 B. `BranchFolder` skips it.
+#[test]
+fn a_loop_does_not_jump_through_a_block_that_only_jumps() {
+    let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("gcd")).expect("parses");
+    let text = text(&module, "k", Cpu::M68000).expect("compiles");
+    assert!(!text.contains(":\n\tbra"), "{text}");
 }

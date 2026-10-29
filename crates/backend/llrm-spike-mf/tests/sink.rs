@@ -1,72 +1,9 @@
 //! `machine_sink` over small diamonds.
 
-use llrm_lir::registers::RegId;
-use llrm_spike_mf::regalloc::Target;
-use llrm_spike_mf::{Block, Inst, Jump, Kind, MFunction, Operand, Phi, Reg, machine_sink};
+mod common;
 
-struct Two;
-
-impl Target for Two {
-    type Class = ();
-
-    fn meet(
-        _: (),
-        _: (),
-    ) -> Option<()> {
-        Some(())
-    }
-
-    fn any() {}
-
-    fn candidates(_: ()) -> Vec<RegId> {
-        vec![RegId::from_raw(0), RegId::from_raw(1)]
-    }
-
-    fn view(
-        root: RegId,
-        _: (),
-    ) -> RegId {
-        root
-    }
-
-    fn root(register: RegId) -> RegId {
-        register
-    }
-
-    fn reserved(_: RegId) -> bool {
-        false
-    }
-
-    fn caller_saved() -> Vec<RegId> {
-        vec![]
-    }
-}
-
-impl Jump for Two {
-    fn jump(block: u32) -> Inst {
-        let mut inst = Inst::new(Kind::Op("jump"), vec![Operand::Block(block)]);
-        inst.terminator = true;
-        inst.barrier = true;
-        inst
-    }
-}
-
-fn v(n: u32) -> Reg {
-    Reg::Virt(n)
-}
-
-fn op(
-    name: &'static str,
-    operands: Vec<Operand>,
-) -> Inst {
-    Inst::new(Kind::Op(name), operands)
-}
-
-fn branch(to: u32) -> Inst {
-    let mut inst = op("branch", vec![Operand::Block(to)]);
-    inst.terminator = true;
-    inst
-}
+use common::{Two, branch, op, v};
+use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Phi, machine_sink};
 
 /// `b0: x = add a, a; branch b2` falls into `b1`, which falls into
 /// `b2: r = phi [b0: x] [b1: a]; ret r`. `x` is used by the phi only.

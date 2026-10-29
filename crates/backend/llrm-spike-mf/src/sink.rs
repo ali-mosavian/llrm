@@ -43,6 +43,12 @@ const SPLIT_EDGE_PROBABILITY: usize = 40;
 /// How a target spells a jump to a block.
 pub trait Jump {
     fn jump(block: u32) -> Inst;
+
+    /// `reverseBranchCondition`: the conditional branch that goes where
+    /// `branch` falls through and falls through where it goes, if there is one.
+    fn reverse(_branch: &Inst) -> Option<Inst> {
+        None
+    }
 }
 
 /// Where a virtual register is read: the block holding the instruction or

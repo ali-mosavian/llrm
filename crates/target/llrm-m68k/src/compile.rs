@@ -8,7 +8,10 @@ use crate::dagisel::hooks::Cpu;
 use crate::expand::{Line, finish};
 use crate::mc;
 use crate::mfunc::{emit, expand_cmov};
-use crate::regalloc::{Allocate, GraphColoring, eliminate_phis, fold_reserved_copies, machine_sink, two_address};
+use crate::regalloc::{
+    Allocate, GraphColoring, branch_fold, eliminate_phis, fold_reserved_copies, machine_sink, remove_identity_copies,
+    two_address,
+};
 
 /// A line of the function: a label or an instruction.
 #[derive(Clone, Debug)]
@@ -37,6 +40,8 @@ pub fn items(
     fold_reserved_copies(&mut function);
     two_address(&mut function);
     let assignment = GraphColoring::default().allocate(&function)?;
+    remove_identity_copies(&mut function, &assignment);
+    branch_fold(&mut function);
     let mut out = vec![Item::Label(name.to_owned())];
     for line in finish(&function, &assignment, number)? {
         out.push(match line {
