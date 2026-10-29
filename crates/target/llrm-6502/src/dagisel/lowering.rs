@@ -86,6 +86,7 @@ pub fn target_lowering() -> TargetLowering {
     // rotates are shifts and an or, built where they are lowered
     set(&[Rotl, Rotr], Action::Custom);
     set(&[ZeroExtend, AnyExtend], Action::Custom);
+    set(&[SignExtend], Action::Custom);
     // A long multiply, divide or shift by a variable is one node of two words
     // (`lower_long`).
     for op in [Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra, Rotl, Rotr] {
@@ -116,7 +117,7 @@ impl Hooks for MosLowering {
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
-            ISD::ZeroExtend | ISD::AnyExtend => Some(lower_extend(dag, node)),
+            ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
             ISD::Mul | ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem | ISD::Shl | ISD::Srl | ISD::Sra
                 if dag.value_type(node) == EVT::I32 =>
             {
@@ -208,7 +209,10 @@ fn lower_extend(
         return node;
     }
     let vt = dag.value_type(node);
-    let (one, zero) = (dag.get_constant(1, vt), dag.get_constant(0, vt));
+    // a sign-extended bit is all ones (`select c, 1, 2` reaches here as `sext(c) + 2`)
+    let width = vt.size_in_bits();
+    let set = if dag.opcode(node) == ISD::SignExtend { (1u128 << width) - 1 } else { 1 };
+    let (one, zero) = (dag.get_constant(set, vt), dag.get_constant(0, vt));
     let select = dag.get_node(ISD::Select, vt, &[condition, one, zero]);
     lower_select(dag, select)
 }
@@ -308,11 +312,23 @@ fn lower_setcc(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (mut op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let mut cc = cond_of(dag, dag.operand(node, 2));
+    if dag.value_type(op0) == EVT::I1 {
+        // Compare the bits as bytes of 0 or 1. A signed order is the unsigned one reversed, since
+        // a set bit is -1.
+        (op0, op1) = (condition_byte(dag, op0), condition_byte(dag, op1));
+        cc = match cc {
+            CondCode::SetLt => CondCode::SetUGt,
+            CondCode::SetGt => CondCode::SetULt,
+            CondCode::SetLe => CondCode::SetUGe,
+            CondCode::SetGe => CondCode::SetULe,
+            other => other,
+        };
+    }
     if !matches!(dag.value_type(op0), EVT::I8 | EVT::I16) {
         return None;
     }
-    let cc = cond_of(dag, dag.operand(node, 2));
     let (code, a, b) = translate_cc(dag, cc, op0, op1);
     // Equality on a word needs Z over both bytes.
     let compare =

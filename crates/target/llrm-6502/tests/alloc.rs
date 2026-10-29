@@ -1547,3 +1547,33 @@ fn two_functions_in_one_file_do_not_share_internal_labels() {
     let main = format!("{}{}  jsr maxa\n  pha\n{}{}  jsr maxb\n  sta rc2\n  pla\n  clc\n  adc rc2\n", set("rc2", 3), set("rc3", 9), set("rc2", 4), set("rc3", 2));
     assert_eq!(common::run_with("alloc-two-files", &main, &text), 13);
 }
+/// A select on a compare of two bits looped the scheduler forever (a `select` on itself, as its
+/// zero-extended condition) and found by the differential tests. Bits compare as bytes of 0 or 1.
+#[test]
+fn a_select_on_a_compare_of_bits_compiles_and_runs() {
+    let ir = "define i8 @eqz(i8 %a, i8 %e) {
+  %d = and i8 %a, 1
+  %c = icmp eq i8 %d, 0
+  %h = select i1 %c, i8 230, i8 %e
+  ret i8 %h
+}
+define i8 @slt(i8 %a, i8 %e) {
+  %x = trunc i8 %a to i1
+  %y = trunc i8 %e to i1
+  %c = icmp slt i1 %x, %y
+  %h = select i1 %c, i8 7, i8 9
+  ret i8 %h
+}";
+    let run = |name: &str, a: u16, e: u16| {
+        let text = compile(ir, name);
+        let setup = set("rc2", a) + &set("rc3", e);
+        common::run_with(&format!("alloc-bits-{name}-{a}-{e}"), &format!("{setup}  jsr {name}\n"), &text)
+    };
+    for (a, e) in [(0u16, 77u16), (1, 77), (2, 5), (3, 5)] {
+        assert_eq!(run("eqz", a, e), i32::from(if a & 1 == 0 { 230 } else { e }), "eqz {a} {e}");
+    }
+    // a set bit is -1: signed, 1 < 0 and 0 > 1
+    for (a, e) in [(0u16, 0u16), (1, 0), (0, 1), (1, 1)] {
+        assert_eq!(run("slt", a, e), if a == 1 && e == 0 { 7 } else { 9 }, "slt {a} {e}");
+    }
+}
