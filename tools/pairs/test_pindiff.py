@@ -155,7 +155,8 @@ def test_no_row_of_the_corpus_shifts_by_the_width_of_its_type_at_m16():
 
     pindiff = load("pindiff")
     if not (os.environ.get("LLRM_OW") and os.environ.get("LLRM_PIN_CLANG") and os.environ.get("LLRM_CLANG_M16")):
-        pytest.skip("needs LLRM_OW, LLRM_PIN_CLANG and LLRM_CLANG_M16")
+        # The gate sets all three; where it requires the pin's tools (LLRM_REQUIRE_PINTOOLS) a missing one is red, not a skipped check.
+        (pytest.fail if os.environ.get("LLRM_REQUIRE_PINTOOLS") else pytest.skip)("needs LLRM_OW, LLRM_PIN_CLANG and LLRM_CLANG_M16")
     import tempfile
 
     guard = load("irguard")

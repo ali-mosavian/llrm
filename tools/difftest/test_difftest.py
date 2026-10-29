@@ -1,6 +1,7 @@
 """`uv run --project tools python -m pytest tools/difftest/test_difftest.py`: the harness tests its own output on two hand-made inputs, one where
 llrm's answer and LLVM's agree and one where they do not."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -10,7 +11,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import difftest  # noqa: E402
 
-needs_opt = pytest.mark.skipif(not (difftest.LLVM_BIN / "opt").is_file(), reason="no opt at LLVM_BIN")
+# Red, not skipped, where the gate requires the pin's tools (LLRM_REQUIRE_PINTOOLS): a missing opt then fails the test that needs it.
+needs_opt = pytest.mark.skipif(not (difftest.LLVM_BIN / "opt").is_file() and not os.environ.get("LLRM_REQUIRE_PINTOOLS"), reason="no opt at LLVM_BIN")
 
 # `%a` and `%b` are one value: gvn keeps one add.
 INPUT = """define i32 @f(i32 %x) {
