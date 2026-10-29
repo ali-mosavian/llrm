@@ -699,13 +699,21 @@ def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
 SHARDED = {"bench": ("bench", "BENCH_SHARD"), "oracle": ("oracle", "ORACLE_SHARD")}
 
 
+# Slices a sharded group has besides its numbered ones: `bench-base` measures the base once, for every numbered slice's rows to be judged against.
+EXTRA_SLICES = {"bench": ("base",)}
+
+
 def shard_names(group: str) -> list[str]:
-    """`bench` as the CI jobs `bench-1` .. `bench-N` (likewise `oracle`): the step is cut into slices that run on their own runners; any other group as itself."""
-    return [f"{group}-{i}" for i in range(1, load()[SHARDED[group][0]]["shards"] + 1)] if group in SHARDED else [group]
+    """`bench` as the CI jobs `bench-base`, `bench-1` .. `bench-N` (likewise `oracle`, without a base): the step is cut into slices that run on their own runners; any other group as itself."""
+    if group not in SHARDED:
+        return [group]
+    return [f"{group}-{one}" for one in EXTRA_SLICES.get(group, ())] + [f"{group}-{i}" for i in range(1, load()[SHARDED[group][0]]["shards"] + 1)]
 
 
 def shard_of(group: str | None) -> tuple[str | None, str | None]:
-    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`; any other group as it is."""
+    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`, (`bench`, "base") for `bench-base`; any other group as it is."""
+    if group == "bench-base":
+        return "bench", "base"
     if group and (one := re.fullmatch(r"(bench|oracle)-(\d+)", group)):
         return one[1], f"{one[2]}/{load()[SHARDED[one[1]][0]]['shards']}"
     return group, None
