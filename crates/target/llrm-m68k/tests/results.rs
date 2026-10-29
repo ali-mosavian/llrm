@@ -814,3 +814,33 @@ define void @f(ptr %d, ptr %s) {{
         }
     }
 }
+
+/// The `(An)+` chain moves no access and sets the flags as `(An)` does, so a store
+/// between the copy and a read of the same bytes, and a branch on the flags of the
+/// last moved word, give what the unstepped code gives.
+#[test]
+fn a_stepped_copy_keeps_a_later_store_and_a_flag_reader() {
+    let ir = "declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+define i32 @f(i32 %x) {
+  %a = alloca [4 x i32], align 4
+  %b = alloca [4 x i32], align 4
+  %a3 = getelementptr i32, ptr %a, i32 3
+  store i32 %x, ptr %a3, align 4
+  call void @llvm.memcpy.p0.p0.i32(ptr align 4 %b, ptr align 4 %a, i32 16, i1 false)
+  %b1 = getelementptr i32, ptr %b, i32 1
+  store i32 9, ptr %b1, align 4
+  %v1 = load i32, ptr %b1, align 4
+  %b3 = getelementptr i32, ptr %b, i32 3
+  %v3 = load i32, ptr %b3, align 4
+  %z = icmp eq i32 %v3, 0
+  %r = select i1 %z, i32 %v1, i32 77
+  ret i32 %r
+}";
+    for (x, want) in [(0, 9), (5, 77)] {
+        for options in [Options::default(), Options::PINNED] {
+            if let Some(code) = status(ir, &[x], options) {
+                assert_eq!(code, want, "x {x} {options:?}");
+            }
+        }
+    }
+}
