@@ -59,6 +59,26 @@ fn reg(operand: &Operand) -> Result<&str, String> {
     }
 }
 
+fn imm(operand: &Operand) -> Result<u128, String> {
+    match operand {
+        Operand::Imm(v) => Ok(*v as u128),
+        other => Err(format!("{other:?} is not an immediate")),
+    }
+}
+
+/// The branch that is taken when condition code `code` holds (`cond` in `lowering`).
+fn branch_on(code: u128) -> Result<&'static str, String> {
+    Ok(match code {
+        0 => "beq",
+        1 => "bne",
+        2 => "bcc",
+        3 => "bcs",
+        4 => "bmi",
+        5 => "bpl",
+        other => return Err(format!("{other} is not a condition code")),
+    })
+}
+
 fn word(operand: &Operand) -> Result<(String, String), String> {
     halves(reg(operand)?).ok_or_else(|| format!("{operand:?} is not a pair register"))
 }
@@ -81,7 +101,10 @@ fn copy_byte(
 }
 
 /// One instruction as ca65 lines (each with its two-space indent).
-pub fn expand(inst: &MInst) -> Result<String, String> {
+pub fn expand(
+    inst: &MInst,
+    labels: &mut u32,
+) -> Result<String, String> {
     let o = &inst.operands;
     let mut out = String::new();
     let byte3 = |out: &mut String, carry: &str, mnemonic: &str, d: &str, a: &str, b: &str| {
@@ -189,15 +212,33 @@ pub fn expand(inst: &MInst) -> Result<String, String> {
             copy_byte(&mut out, &dl, &sl);
             copy_byte(&mut out, &dh, &sh);
         }
+        // operands: the flags it defines, then a and b
         op::CMP8 => {
-            writeln!(out, "  lda {}\n  cmp {}", reg(&o[0])?, reg(&o[1])?).unwrap();
+            writeln!(out, "  lda {}\n  cmp {}", reg(&o[1])?, reg(&o[2])?).unwrap();
         }
-        op::BEQ | op::BNE | op::BCC | op::BCS | op::JMP | op::JSR => {
+        // The flags are in P; PHP/PLP carry them over the loads, which set N and Z.
+        // SETCC: d := 1, branch on cc over d := 0.
+        // CMOV d, false, true: d := false, branch on !cc over d := true.
+        op::SETCC8 | op::CMOV8 => {
+            *labels += 1;
+            let skip = format!("_cc{labels}");
+            let d = reg(&o[0])?;
+            let (branch, first, second) = if inst.opcode == op::SETCC8 {
+                (branch_on(imm(&o[1])?)?, "#1".to_owned(), "#0".to_owned())
+            } else {
+                (branch_on(imm(&o[3])? ^ 1)?, reg(&o[1])?.to_owned(), reg(&o[2])?.to_owned())
+            };
+            writeln!(out, "  php\n  lda {first}\n  sta {d}\n  plp\n  {branch} {skip}\n  lda {second}\n  sta {d}\n{skip}:")
+                .unwrap();
+        }
+        op::BEQ | op::BNE | op::BCC | op::BCS | op::BMI | op::BPL | op::JMP | op::JSR => {
             let mnemonic = match inst.opcode {
                 op::BEQ => "beq",
                 op::BNE => "bne",
                 op::BCC => "bcc",
                 op::BCS => "bcs",
+                op::BMI => "bmi",
+                op::BPL => "bpl",
                 op::JMP => "jmp",
                 _ => "jsr",
             };
@@ -218,9 +259,10 @@ pub fn function(
     body: &[Result<MInst, &str>],
 ) -> Result<String, String> {
     let mut out = format!(".export {name}\n{name}:\n");
+    let mut labels = 0;
     for item in body {
         match item {
-            Ok(inst) => out.push_str(&expand(inst)?),
+            Ok(inst) => out.push_str(&expand(inst, &mut labels)?),
             Err(label) => writeln!(out, "{label}:").unwrap(),
         }
     }

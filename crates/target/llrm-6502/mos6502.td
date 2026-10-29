@@ -43,6 +43,17 @@ def usubo : SDNode<"ISD::USUBO", SDTOverflowOp>;
 def uaddo_carry : SDNode<"ISD::UADDO_CARRY", SDTOverflowCarryOp>;
 def usubo_carry : SDNode<"ISD::USUBO_CARRY", SDTOverflowCarryOp>;
 
+// Flags (the register P) as an i8 value, as m68k's condition-code register is. The condition code is a
+// constant: EQ 0, NE 1, CC 2 (C clear: unsigned <), CS 3 (C set: unsigned >=), MI 4, PL 5.
+def SDTMOSCmp : SDTypeProfile<1, 2, [SDTCisVT<0, i8>, SDTCisSameAs<1, 2>]>;
+def SDTMOSBrcond : SDTypeProfile<0, 3, [SDTCisVT<0, OtherVT>, SDTCisVT<1, i8>, SDTCisVT<2, i8>]>;
+def SDTMOSSetcc : SDTypeProfile<1, 2, [SDTCisVT<0, i8>, SDTCisVT<1, i8>, SDTCisVT<2, i8>]>;
+def SDTMOSCmov : SDTypeProfile<1, 4, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>, SDTCisVT<3, i8>, SDTCisVT<4, i8>]>;
+def MOScmp : SDNode<"MOSISD::CMP", SDTMOSCmp>;
+def MOSbrcond : SDNode<"MOSISD::BRCOND", SDTMOSBrcond, [SDNPHasChain]>;
+def MOSsetcc : SDNode<"MOSISD::SETCC", SDTMOSSetcc>;
+def MOScmov : SDNode<"MOSISD::CMOV", SDTMOSCmov>;
+
 def MOSretglue : SDNode<"MOSISD::RET_GLUE", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
 class MOSInst<dag outs, dag ins, string asm, list<dag> pattern> : Instruction {
@@ -96,14 +107,20 @@ def calltarget : Operand<i16>;
 // so the emitter is keyed to generated opcode ids.
 def COPY8 : MOSInst<(outs Reg8:$d), (ins Reg8:$s), "copy $d, $s", []>;
 def COPY16 : MOSInst<(outs Imag16:$d), (ins Imag16:$s), "copy $d, $s", []>;
-let Defs = [P] in
-  def CMP8 : MOSInst<(outs), (ins Imag8:$a, Imag8:$b), "cmp $a, $b", []>;
-let isBranch = 1, isTerminator = 1, Uses = [P] in {
-  def BEQ : MOSInst<(outs), (ins brtarget:$t), "beq $t", []>;
-  def BNE : MOSInst<(outs), (ins brtarget:$t), "bne $t", []>;
-  def BCC : MOSInst<(outs), (ins brtarget:$t), "bcc $t", []>;
-  def BCS : MOSInst<(outs), (ins brtarget:$t), "bcs $t", []>;
+// LDA a; CMP b: the flags of a - b.
+def CMP8 : MOSInst<(outs Flags:$f), (ins Imag8:$a, Imag8:$b), "cmp $f, $a, $b", [(set i8:$f, (MOScmp i8:$a, i8:$b))]>;
+let isBranch = 1, isTerminator = 1 in {
+  def BEQ : MOSInst<(outs), (ins brtarget:$t, Flags:$f), "beq $t", [(MOSbrcond bb:$t, (i8 0), i8:$f)]>;
+  def BNE : MOSInst<(outs), (ins brtarget:$t, Flags:$f), "bne $t", [(MOSbrcond bb:$t, (i8 1), i8:$f)]>;
+  def BCC : MOSInst<(outs), (ins brtarget:$t, Flags:$f), "bcc $t", [(MOSbrcond bb:$t, (i8 2), i8:$f)]>;
+  def BCS : MOSInst<(outs), (ins brtarget:$t, Flags:$f), "bcs $t", [(MOSbrcond bb:$t, (i8 3), i8:$f)]>;
+  def BMI : MOSInst<(outs), (ins brtarget:$t, Flags:$f), "bmi $t", [(MOSbrcond bb:$t, (i8 4), i8:$f)]>;
+  def BPL : MOSInst<(outs), (ins brtarget:$t, Flags:$f), "bpl $t", [(MOSbrcond bb:$t, (i8 5), i8:$f)]>;
 }
+// A condition as a byte 0 or 1, and a select: branches in the emitted code, flags saved around the loads.
+def SETCC8 : MOSInst<(outs Imag8:$d), (ins i8imm:$cc, Flags:$f), "setcc $d, $cc, $f", [(set i8:$d, (MOSsetcc imm:$cc, i8:$f))]>;
+def CMOV8 : MOSInst<(outs Imag8:$d), (ins Imag8:$f0, Imag8:$t, i8imm:$cc, Flags:$f), "cmov $d, $f0, $t, $cc, $f",
+                    [(set i8:$d, (MOScmov i8:$f0, i8:$t, imm:$cc, i8:$f))]>;
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in
   def JMP : MOSInst<(outs), (ins brtarget:$t), "jmp $t", []>;
 let isCall = 1 in

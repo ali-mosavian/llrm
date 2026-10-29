@@ -109,8 +109,8 @@ fn a_counted_loop_sums_to_55() {
         Err("loop"),
         i(op::ADD8, vec![reg("rc2"), reg("rc2"), reg("rc3")]),
         i(op::ADD8, vec![reg("rc3"), reg("rc3"), reg("rc5")]),
-        i(op::CMP8, vec![reg("rc3"), reg("rc4")]),
-        i(op::BNE, vec![Operand::Label("loop".into())]),
+        i(op::CMP8, vec![reg("p"), reg("rc3"), reg("rc4")]),
+        i(op::BNE, vec![Operand::Label("loop".into()), reg("p")]),
     ];
     assert_eq!(run("loop", &[main_returning(body, "rc2")]), 55);
 }
@@ -131,4 +131,49 @@ fn a_call_passes_arguments_in_rc2_and_rc3_and_returns_in_a() {
     ];
     let functions = [function("_main", &main).unwrap(), function("add_bytes", &callee).unwrap()];
     assert_eq!(run("call", &functions), 12);
+}
+
+fn compare(
+    a: i64,
+    b: i64,
+) -> Body {
+    vec![
+        i(op::LDI8, vec![reg("rc2"), imm(a)]),
+        i(op::LDI8, vec![reg("rc3"), imm(b)]),
+        i(op::CMP8, vec![reg("p"), reg("rc2"), reg("rc3")]),
+    ]
+}
+
+/// `3 <u 5` is C clear after `cmp`: SETCC with code CC (2) gives 1; `5 <u 3` gives 0.
+#[test]
+fn setcc_materializes_an_unsigned_less_than() {
+    let setcc = |mut body: Body| {
+        body.push(i(op::SETCC8, vec![reg("rc4"), imm(2), reg("p")]));
+        body
+    };
+    assert_eq!(run("setcc-lt", &[main_returning(setcc(compare(3, 5)), "rc4")]), 1);
+    assert_eq!(run("setcc-ge", &[main_returning(setcc(compare(5, 3)), "rc4")]), 0);
+}
+
+/// `-1 <s 1` as the lowering writes it: both sign bits flipped (0xFF -> 0x7F, 1 -> 0x81), then
+/// unsigned: 0x7F < 0x81, so CC holds and the result is 1.
+#[test]
+fn a_signed_compare_through_flipped_sign_bits() {
+    let mut body = compare(0x7F, 0x81);
+    body.push(i(op::SETCC8, vec![reg("rc4"), imm(2), reg("p")]));
+    assert_eq!(run("signed-lt", &[main_returning(body, "rc4")]), 1);
+}
+
+/// CMOV with EQ: equal operands take the true value (20), unequal ones the false value (10).
+#[test]
+fn cmov_picks_the_true_value_only_when_the_condition_holds() {
+    // The values are loaded first: a load sets N and Z, so none may sit between the compare and the CMOV.
+    let cmov = |a, b| {
+        let mut body: Body = vec![i(op::LDI8, vec![reg("rc5"), imm(10)]), i(op::LDI8, vec![reg("rc6"), imm(20)])];
+        body.extend(compare(a, b));
+        body.push(i(op::CMOV8, vec![reg("rc4"), reg("rc5"), reg("rc6"), imm(0), reg("p")]));
+        body
+    };
+    assert_eq!(run("cmov-eq", &[main_returning(cmov(4, 4), "rc4")]), 20);
+    assert_eq!(run("cmov-ne", &[main_returning(cmov(4, 5), "rc4")]), 10);
 }

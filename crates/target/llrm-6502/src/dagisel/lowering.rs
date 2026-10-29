@@ -5,12 +5,42 @@
 //! `USUBO_CARRY`, the carry an `i1` in the `C` register) are too, so the type legalizer expands an `i32` into two words joined by the carry, an
 //! `i64` into four. There is no multiply, divide or shift by a variable: those are library calls.
 //!
-//! DEVIATE: `setcc`, `select` and `brcond` are not lowered yet (they need the flag register and
-//! the branch forms). Exit: the loop slice.
+//! A comparison is `MOSISD::CMP a, b`: the `i8` flags of `a - b`. `SETCC`, `CMOV` and `BRCOND` read a
+//! condition code (a constant, [`cond`]) and those flags. Only the flags the 6502 branches on are
+//! codes: Z (`EQ`, `NE`), C (`CC`, `CS`) and N (`MI`, `PL`). An unsigned greater-than swaps the
+//! operands; a signed compare flips both sign bits and compares unsigned, except against zero,
+//! where N is the sign.
+//!
+//! DEVIATE: `i16` compares and selects are not lowered (they need a chain through Z and C). Exit:
+//! the i16 compare slice.
 
-use llrm_codegen::backend::selectiondag::isd::ISD;
-use llrm_codegen::backend::selectiondag::mvt::MVT;
-use llrm_codegen::backend::selectiondag::{Action, LoadExt, TargetLowering, TargetLoweringInfo};
+use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
+use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
+use llrm_codegen::backend::selectiondag::{Action, LoadExt, NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{TargetLowering, TargetLoweringInfo};
+
+use super::generated::ids::isd as ids;
+
+/// The 6502's own nodes, numbered by `own_ids.txt`.
+pub mod mosisd {
+    use super::{ISD, ids};
+
+    pub const CMP: ISD = ISD::Target(ids::CMP);
+    pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
+    pub const SETCC: ISD = ISD::Target(ids::SETCC);
+    pub const CMOV: ISD = ISD::Target(ids::CMOV);
+}
+
+/// Condition codes; a code and its opposite differ in bit 0.
+pub mod cond {
+    pub const EQ: u128 = 0;
+    pub const NE: u128 = 1;
+    pub const CC: u128 = 2;
+    pub const CS: u128 = 3;
+    pub const MI: u128 = 4;
+    pub const PL: u128 = 5;
+}
 
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
@@ -38,5 +68,143 @@ pub fn target_lowering() -> TargetLowering {
     set(&[Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra], Action::LibCall);
     set(&[UDivRem, SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], Action::Expand);
+    tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
+    for op in [SetCC, Select] {
+        tl.set_operation_action(op, MVT::I8, Action::Custom);
+    }
     tl
+}
+
+/// The custom lowerings.
+pub struct MosLowering;
+
+impl Hooks for MosLowering {
+    fn lower_operation(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        match dag.opcode(node) {
+            ISD::SetCC => lower_setcc(dag, node),
+            ISD::Select => Some(lower_select(dag, node)),
+            ISD::BrCond => Some(lower_brcond(dag, node)),
+            _ => None,
+        }
+    }
+}
+
+fn cc_operand(
+    dag: &mut SelectionDAG,
+    code: u128,
+) -> SDValue {
+    dag.get_constant(code, EVT::I8)
+}
+
+fn cond_of(
+    dag: &SelectionDAG,
+    setcc: SDValue,
+) -> CondCode {
+    match dag.node(setcc).data {
+        NodeData::CondCode(cc) => cc,
+        other => unreachable!("a condition code operand, not {other:?}"),
+    }
+}
+
+/// `x ^ 0x80`: the sign bit flipped, so a signed compare is an unsigned one. A constant folds.
+fn flip_sign(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+) -> SDValue {
+    match dag.constant(value) {
+        Some(bits) => dag.get_constant(bits ^ 0x80, EVT::I8),
+        None => {
+            let sign = dag.get_constant(0x80, EVT::I8);
+            dag.get_node(ISD::Xor, EVT::I8, &[value, sign])
+        }
+    }
+}
+
+/// The code a comparison of `op0` with `op1` branches on, and the operands to compare (possibly
+/// swapped or sign-flipped).
+fn translate_cc(
+    dag: &mut SelectionDAG,
+    cc: CondCode,
+    op0: SDValue,
+    op1: SDValue,
+) -> (u128, SDValue, SDValue) {
+    use CondCode::*;
+    let against_zero = dag.is_null_constant(op1);
+    match cc {
+        SetEq => (cond::EQ, op0, op1),
+        SetNe => (cond::NE, op0, op1),
+        SetULt => (cond::CC, op0, op1),
+        SetUGe => (cond::CS, op0, op1),
+        SetUGt => (cond::CC, op1, op0),
+        SetULe => (cond::CS, op1, op0),
+        SetLt if against_zero => (cond::MI, op0, op1),
+        SetGe if against_zero => (cond::PL, op0, op1),
+        SetLt | SetGe => {
+            let (a, b) = (flip_sign(dag, op0), flip_sign(dag, op1));
+            (if cc == SetLt { cond::CC } else { cond::CS }, a, b)
+        }
+        SetGt | SetLe => {
+            // a > b is b < a, a <= b is b >= a
+            let (a, b) = (flip_sign(dag, op1), flip_sign(dag, op0));
+            (if cc == SetGt { cond::CC } else { cond::CS }, a, b)
+        }
+        other => unreachable!("invalid integer condition {other:?}"),
+    }
+}
+
+/// `LowerSETCC`, integer part: `SETCC cc, (CMP a, b)`.
+fn lower_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.value_type(op0) != EVT::I8 {
+        return None;
+    }
+    let cc = cond_of(dag, dag.operand(node, 2));
+    let (code, a, b) = translate_cc(dag, cc, op0, op1);
+    let flags = dag.get_node(mosisd::CMP, EVT::I8, &[a, b]);
+    let code = cc_operand(dag, code);
+    Some(dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags]))
+}
+
+/// The code and flags a condition value branches on: a lowered compare, or the value tested
+/// against zero (`NE`).
+fn condition(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+) -> (SDValue, SDValue) {
+    let value = if dag.opcode(value) == ISD::SetCC { lower_setcc(dag, value).unwrap_or(value) } else { value };
+    if dag.opcode(value) == mosisd::SETCC {
+        return (dag.operand(value, 0), dag.operand(value, 1));
+    }
+    let byte = if dag.value_type(value) == EVT::I1 { dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]) } else { value };
+    let zero = dag.get_constant(0, EVT::I8);
+    let flags = dag.get_node(mosisd::CMP, EVT::I8, &[byte, zero]);
+    (cc_operand(dag, cond::NE), flags)
+}
+
+/// `LowerSELECT`: `CMOV false, true, cc, flags`.
+fn lower_select(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (test, on_true, on_false) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let (code, flags) = condition(dag, test);
+    let vt = dag.value_type(node);
+    dag.get_node(mosisd::CMOV, vt, &[on_false, on_true, code, flags])
+}
+
+/// `LowerBRCOND`: `BRCOND chain, dest, cc, flags`.
+fn lower_brcond(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (chain, test, dest) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let (code, flags) = condition(dag, test);
+    dag.get_node(mosisd::BRCOND, EVT::OTHER, &[chain, dest, code, flags])
 }
