@@ -48,7 +48,6 @@
 "parity/memory bas -Os" = 243  # main 239
 "parity/qmove bas -Os" = 506  # main 477 (standard)
 "parity/sum_three bas -Os" = 169  # main 165
-"textfill bas -Os" = 64169  # main 58189
 
 # class 6: masked scaled IV (pin SCEV does not move shl through the mask) and the LSR formula sharing it: DEBT bench-clocks-masked-iv
 "textfill c -Os" = 60021  # main 58025
@@ -73,3 +72,6 @@
 # class 10 gcse (-fno-gcse recovers the qmove rows): DEBT bench-clocks-gcse
 "parity/qmove c -Os" = 485  # main 465
 "parity/qmove nib -Os" = 520  # main 503
+
+# class 11 sound alias analysis (main assumed no alias, unsound for BASIC): DEBT bench-clocks-sound-alias
+"textfill bas -Os" = 64169  # main 58189
