@@ -155,3 +155,23 @@ x:
         }
     }
 }
+
+/// The low byte of an `i32` argument used in another block: `EXTRACT_SUBREG`
+/// had no lowering and the function did not compile; narrowed to the argument's
+/// slot the byte read must be the low one (big-endian: the slot's last byte).
+#[test]
+fn the_low_byte_of_an_argument_read_in_another_block_is_the_low_byte() {
+    let ir = "define i32 @f(i32 %c) {
+entry:
+  %b = trunc i32 %c to i8
+  br label %x
+x:
+  %z = zext i8 %b to i32
+  ret i32 %z
+}";
+    for options in [Options::default(), Options::PINNED] {
+        if let Some(code) = status(ir, &[0x1234], options) {
+            assert_eq!(code, 0x34, "{options:?}: {}", text_with(&module(ir), "f", Cpu::M68000, options).unwrap());
+        }
+    }
+}
