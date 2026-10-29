@@ -368,6 +368,14 @@ fn combine_block(
     let mut here: HashSet<u32> = block.phis.iter().map(|phi| phi.result).collect();
     // Depth of the instruction defining each value of the block made so far.
     let mut depth: HashMap<u32, u32> = HashMap::default();
+    // The first instruction defining each value: `hasReassociableSibling`'s
+    // `getVRegDef`, kept up to date where a rebuild moves instructions.
+    let mut first_def: HashMap<u32, usize> = HashMap::default();
+    for (index, one) in insns.iter().enumerate() {
+        for &value in &one.defines {
+            first_def.entry(value).or_insert(index);
+        }
+    }
     let mut changed = false;
     let mut at = 0;
     while at < insns.len() {
@@ -379,9 +387,11 @@ fn combine_block(
             // definition, or the second's where only that one is the root's
             // operation.
             let defined_by = |held: &Held| {
-                insns[..at]
-                    .iter()
-                    .position(|one| one.defines.contains(&held.value))
+                first_def
+                    .get(&held.value)
+                    .inspect(|_| llrm_mir::counts::bump(llrm_mir::counts::Event::DefSearchSteps))
+                    .copied()
+                    .filter(|&index| index < at)
                     .filter(|&index| same_operation(&insns[index], &root))
             };
             let first = defined_by(&left);
@@ -425,8 +435,18 @@ fn combine_block(
         depth.insert(root_value, made.depth);
         here.insert(new_value);
         here.insert(root_value);
+        let taken = insns[index].defines.clone();
         insns.splice(at..=at, [Arc::new(made.inner), Arc::new(made.outer)]);
         insns.remove(index);
+        // From `index` on, everything up to the new root moved down one.
+        for value in taken {
+            first_def.remove(&value);
+        }
+        for (moved, one) in insns.iter().enumerate().take(at + 1).skip(index) {
+            for &value in &one.defines {
+                first_def.insert(value, moved);
+            }
+        }
         // `prev` left before `at`: the new root is one before `at + 1`.
         at += 1;
         changed = true;
@@ -718,5 +738,28 @@ mod tests {
         assert_eq!(facts_made() - before, 0, "tabled for a body with no chain");
         let _ = combined(late_chain("add"));
         assert_eq!(facts_made() - before, 1, "a chain tables once");
+    }
+    /// Every reassociable add looked for its operands' definitions from the
+    /// top of the block: 128 chains in one block took 4x the steps of 64.
+    #[test]
+    fn a_long_block_finds_the_definitions_of_its_chains_without_a_walk_from_the_top() {
+        let steps = |chains: u32| {
+            let mut insns = vec![constant(1), constant(2), constant(3), constant(4), load(9, 1)];
+            for k in 0..chains {
+                let base = 100 + 3 * k;
+                insns.extend([
+                    binary("add", base, 1, 9),
+                    binary("add", base + 1, base, 2),
+                    binary("add", base + 2, base + 1, 3),
+                ]);
+            }
+            insns.push(copy(5000, 4));
+            let before = llrm_mir::counts::get(llrm_mir::counts::Event::DefSearchSteps);
+            let after = combined(body(insns.clone()));
+            assert!(result(&after) != result(&body(insns)), "the chains are rebuilt");
+            llrm_mir::counts::get(llrm_mir::counts::Event::DefSearchSteps) - before
+        };
+        let (small, big) = (steps(64), steps(128));
+        assert!(big * 10 <= small * 25, "{small} steps for 64 chains, {big} for 128");
     }
 }

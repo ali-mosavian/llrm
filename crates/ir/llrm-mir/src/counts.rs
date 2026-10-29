@@ -97,10 +97,10 @@ pub enum Event {
     /// The odds read off a body for the edges of its blocks
     /// (`Graph::edge_probabilities`): a block's edges once, not once for each.
     EdgeOddsLookups,
-    /// Instructions a load fold looked at to find where a value was defined
-    /// (`pushfold::nearest_def`): one for each consumer, not each earlier
-    /// instruction of the block.
-    FoldDefSteps,
+    /// Instructions a pass looked at to find where a value was defined
+    /// (`pushfold::nearest_def`, the combiner's `defined_by`): a few for each
+    /// consumer, not each earlier instruction of the block.
+    DefSearchSteps,
     /// The targets `Function::successors` read off terminators that are not
     /// branches: a switch of n cases read twice is 2n.
     SwitchSuccessorsListed,
@@ -142,7 +142,7 @@ const NAMES: [&str; 35] = [
     "scev_keys_owned",
     "context_clones",
     "edge_odds_lookups",
-    "fold_def_steps",
+    "def_search_steps",
     "switch_successors_listed",
 ];
 

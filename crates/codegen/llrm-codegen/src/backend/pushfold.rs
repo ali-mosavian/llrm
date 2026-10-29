@@ -235,7 +235,7 @@ fn nearest_def(
         .iter()
         .rev()
         .copied()
-        .inspect(|_| llrm_mir::counts::bump(llrm_mir::counts::Event::FoldDefSteps))
+        .inspect(|_| llrm_mir::counts::bump(llrm_mir::counts::Event::DefSearchSteps))
         .find(|&index| !gone[index])
 }
 

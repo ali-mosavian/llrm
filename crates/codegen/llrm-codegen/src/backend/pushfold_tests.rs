@@ -220,10 +220,10 @@ fn test_a_long_block_finds_the_loads_of_its_adds_without_a_walk_over_the_block_f
             ));
             at += 3;
         }
-        let before = llrm_mir::counts::get(llrm_mir::counts::Event::FoldDefSteps);
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::DefSearchSteps);
         let folded = folded(&body(insns));
         assert_eq!(folded.blocks[0].insns.len(), 2 * adds as usize, "one load folds into each add");
-        llrm_mir::counts::get(llrm_mir::counts::Event::FoldDefSteps) - before
+        llrm_mir::counts::get(llrm_mir::counts::Event::DefSearchSteps) - before
     };
     let (small, big) = (steps(128), steps(256));
     assert!(big * 10 <= small * 25, "{small} steps for 128 adds, {big} for 256");
