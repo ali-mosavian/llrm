@@ -38,16 +38,20 @@ const BUF: [u8; 16] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3];
 /// The loop's `dec cnt` (6) and taken `bne` (3).
 const LOOP_CYCLES: i64 = 9;
 
+/// An argument: a byte, a word, or the address of a driver symbol plus an offset.
 #[derive(Clone, Copy)]
-enum Width {
-    Byte,
-    Word,
+enum Arg {
+    B(u16),
+    W(u16),
+    /// `buf`, `str` or `tab` and the offset into it.
+    P(&'static str, u16),
 }
+
+use Arg::{B, P, W};
 
 struct Kernel {
     name: &'static str,
-    args: &'static [u16],
-    width: Width,
+    args: &'static [Arg],
     /// The result is 16 bits: A is the low byte, X the high.
     wide_result: bool,
     expect: u16,
@@ -55,29 +59,45 @@ struct Kernel {
 
 const fn k(
     name: &'static str,
-    args: &'static [u16],
-    width: Width,
+    args: &'static [Arg],
     wide_result: bool,
     expect: u16,
 ) -> Kernel {
-    Kernel { name, args, width, wide_result, expect }
+    Kernel { name, args, wide_result, expect }
 }
 
 /// Every expected value is worked out by hand from the arguments and `BUF`.
 const KERNELS: &[Kernel] = &[
-    k("zero", &[], Width::Byte, false, 0),
-    k("add8", &[200, 100], Width::Byte, false, 44),
-    k("add16", &[300, 5000], Width::Word, true, 5300),
-    k("max8", &[3, 9], Width::Byte, false, 9),
-    k("max16", &[1000, 300], Width::Word, true, 1000),
-    k("sum_arr", &[10], Width::Byte, false, 39),
-    k("find", &[9], Width::Byte, false, 5),
-    k("fill", &[8], Width::Byte, false, 7),
-    k("popcount", &[0xB5], Width::Byte, false, 5),
-    k("mul8", &[7, 6], Width::Byte, false, 42),
-    k("fib", &[12], Width::Byte, true, 144),
-    k("gcd", &[48, 18], Width::Byte, false, 6),
-    k("sum4", &[], Width::Byte, false, 9),
+    k("zero", &[], false, 0),
+    k("add8", &[B(200), B(100)], false, 44),
+    k("add16", &[W(300), W(5000)], true, 5300),
+    k("max8", &[B(3), B(9)], false, 9),
+    k("max16", &[W(1000), W(300)], true, 1000),
+    k("sum_arr", &[B(10)], false, 39),
+    k("find", &[B(9)], false, 5),
+    k("fill", &[B(8)], false, 7),
+    k("popcount", &[B(0xB5)], false, 5),
+    k("mul8", &[B(7), B(6)], false, 42),
+    k("fib", &[B(12)], true, 144),
+    k("gcd", &[B(48), B(18)], false, 6),
+    k("sum4", &[], false, 9),
+];
+
+/// A second set, written after the first was tuned against: library-style
+/// routines on pointers, strings and words, mixed argument widths. `str` is
+/// "hello world", `tab` is 2 5 8 11 14 17 20 23; the expected values come from
+/// a Python model of each routine.
+const KERNELS2: &[Kernel] = &[
+    k("slen", &[P("str", 0)], true, 11),
+    k("scmp", &[P("str", 0), P("str", 6)], true, 0xFFF1),
+    k("mcopy", &[P("buf", 8), P("buf", 0), B(8)], false, 6),
+    k("crc16", &[P("buf", 0), B(12)], true, 0xA166),
+    k("mul16", &[W(1234), W(56)], true, 3568),
+    k("digits", &[W(40000)], false, 5),
+    k("reverse", &[P("buf", 0), B(8)], false, 6),
+    k("bsearch8", &[P("tab", 0), B(8), B(17)], false, 5),
+    k("sum16", &[P("buf", 0), B(16)], true, 80),
+    k("schr", &[P("str", 0), B(111)], false, 4),
 ];
 
 fn work(name: &str) -> PathBuf {
@@ -139,16 +159,36 @@ fn driver(
     }
     s.push_str(&format!("  lda #{calls}\n  sta cnt\nloop:\n"));
     let last = kernel.args.len().wrapping_sub(1);
-    for (i, &value) in kernel.args.iter().enumerate() {
-        let (lo, hi) = (value & 0xFF, value >> 8);
-        match (abi, kernel.width) {
-            (Abi::Cc65, Width::Byte) if i < last => s.push_str(&format!("  lda #{lo}\n  jsr pusha\n")),
-            (Abi::Cc65, Width::Byte) => s.push_str(&format!("  lda #{lo}\n")),
-            (Abi::Cc65, Width::Word) if i < last => s.push_str(&format!("  lda #{lo}\n  ldx #{hi}\n  jsr pushax\n")),
-            (Abi::Cc65, Width::Word) => s.push_str(&format!("  lda #{lo}\n  ldx #{hi}\n")),
-            (Abi::Ours, Width::Byte) => s.push_str(&format!("  lda #{lo}\n  sta rc{}\n", 2 + i)),
-            (Abi::Ours, Width::Word) => {
-                s.push_str(&format!("  lda #{lo}\n  sta rc{}\n  lda #{hi}\n  sta rc{}\n", 2 + 2 * i, 3 + 2 * i));
+    // ours: bytes take the first free `rc` from `rc2`, words and pointers the
+    // first free pair (`backfill`)
+    let mut used = [false; 6];
+    for (i, &arg) in kernel.args.iter().enumerate() {
+        let wide = !matches!(arg, B(_));
+        let (lo, hi) = match arg {
+            B(v) | W(v) => (format!("#{}", v & 0xFF), format!("#{}", v >> 8)),
+            P(symbol, off) => (format!("#<({symbol}+{off})"), format!("#>({symbol}+{off})")),
+        };
+        match abi {
+            Abi::Cc65 => {
+                let load = if wide { format!("  lda {lo}\n  ldx {hi}\n") } else { format!("  lda {lo}\n") };
+                s.push_str(&load);
+                if i < last {
+                    s.push_str(if wide { "  jsr pushax\n" } else { "  jsr pusha\n" });
+                }
+            }
+            Abi::Ours => {
+                let at = if wide {
+                    (0..3).map(|p| 2 * p).find(|&p| !used[p] && !used[p + 1]).expect("a free pair")
+                } else {
+                    (0..6).find(|&p| !used[p]).expect("a free byte")
+                };
+                used[at] = true;
+                if wide {
+                    used[at + 1] = true;
+                    s.push_str(&format!("  lda {lo}\n  sta rc{}\n  lda {hi}\n  sta rc{}\n", 2 + at, 3 + at));
+                } else {
+                    s.push_str(&format!("  lda {lo}\n  sta rc{}\n", 2 + at));
+                }
             }
         }
     }
@@ -158,6 +198,8 @@ fn driver(
     }
     s.push_str("  rts\n.segment \"DATA\"\nbuf:\n_buf:\n");
     s.push_str(&format!("  .byte {}\n", BUF.map(|b| b.to_string()).join(",")));
+    s.push_str("str:\n_str:\n  .byte \"hello world\",0\ntab:\n_tab:\n  .byte 2,5,8,11,14,17,20,23\n");
+    s.push_str(".export str, _str, tab, _tab\n");
     s.push_str(".segment \"BSS\"\ncnt: .res 1\n");
     s
 }
@@ -447,25 +489,44 @@ fn ours_row(
     measure(&dir, kernel, Abi::Ours, tag, bss)
 }
 
-#[test]
-#[ignore = "needs cc65, clang and sim65"]
-fn the_table() {
+fn table(
+    kernels: &[Kernel],
+    file: &str,
+) {
     let mut out =
         String::from("| kernel | cc65 | cc65 -O | ours (opt -O2 IR) | ours (opt -Os IR) |\n|---|---|---|---|---|\n");
     let cell = |row: &Result<Row, String>| match row {
         Ok(r) => format!("{} B, {} cy", r.bytes, r.cycles),
         Err(why) => format!("n/a ({why})"),
     };
-    for kernel in KERNELS {
+    let only = std::env::var("BENCH_ONLY").ok();
+    for kernel in kernels.iter().filter(|k| only.as_deref().is_none_or(|o| o == k.name)) {
         let rows = [
             cc65_row(kernel, &[], "c0"),
             cc65_row(kernel, &["-O"], "c1"),
             ours_row(kernel, "-O2", "o2"),
             ours_row(kernel, "-Os", "os"),
         ];
+        for (tag, row) in ["c0", "c1", "o2", "os"].iter().zip(&rows) {
+            if let Err(why) = row {
+                eprintln!("{} {tag}: {why}", kernel.name);
+            }
+        }
         out.push_str(&format!("| {} | {} |\n", kernel.name, rows.iter().map(cell).collect::<Vec<_>>().join(" | ")));
     }
     println!("{out}");
-    std::fs::write(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bench.md"), &out).unwrap();
+    std::fs::write(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(file), &out).unwrap();
     let _ = common::build; // keep the shared module linked
+}
+
+#[test]
+#[ignore = "needs cc65, clang and sim65"]
+fn the_table() {
+    table(KERNELS, "bench.md");
+}
+
+#[test]
+#[ignore = "needs cc65, clang and sim65"]
+fn the_second_table() {
+    table(KERNELS2, "bench2.md");
 }

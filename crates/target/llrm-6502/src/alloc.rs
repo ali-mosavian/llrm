@@ -240,7 +240,19 @@ impl Builder {
         Ok(r)
     }
 
-    /// The low and high byte of a pair: `rsN`, or a word cell.
+    /// The two bytes of `name` when it is a word loaded once from an
+    /// immediate and never a pointer: an ALU op takes them as immediates.
+    fn word_constant(
+        &self,
+        name: &str,
+    ) -> Option<[i64; 2]> {
+        let name = name.strip_suffix("+1").unwrap_or(name);
+        if self.pointers.contains(name) {
+            return None;
+        }
+        Some([*self.constants.get(name)?, *self.constants.get(&format!("{name}+1"))?])
+    }
+
     /// The low and high byte of a word to read: a pointer cell is unpacked
     /// into two new bytes.
     fn read_word(
@@ -394,11 +406,18 @@ impl Builder {
             return Ok(());
         }
         let (lhs, rhs) = if word {
-            let ((al, ah), (bl, bh)) = (self.read_word(&a.0)?, self.read_word(&b.0)?);
-            for r in [bl, bh] {
-                self.require(r, Class::MEM)?;
-            }
-            ([al, ah], [Operand::Use(bl), Operand::Use(bh)])
+            let (al, ah) = self.read_word(&a.0)?;
+            let rhs = match self.word_constant(&b.0) {
+                Some(bytes) => bytes.map(Operand::Imm),
+                None => {
+                    let (bl, bh) = self.read_word(&b.0)?;
+                    for r in [bl, bh] {
+                        self.require(r, Class::MEM)?;
+                    }
+                    [Operand::Use(bl), Operand::Use(bh)]
+                }
+            };
+            ([al, ah], rhs)
         } else {
             let lhs = self.byte(&a.0)?;
             let rhs = match self.constants.get(&b.0) {
@@ -514,16 +533,24 @@ impl Builder {
         b: &str,
     ) -> Result<(), Unsupported> {
         let (al, ah) = self.read_word(a)?;
-        let (bl, bh) = self.read_word(b)?;
+        let second = match self.word_constant(b) {
+            Some(bytes) => bytes.map(Operand::Imm),
+            None => {
+                let (bl, bh) = self.read_word(b)?;
+                for r in [bl, bh] {
+                    self.require(r, Class::MEM)?;
+                }
+                [Operand::Use(bl), Operand::Use(bh)]
+            }
+        };
         let (dl, dh) = self.write_word(d)?;
         let acc = Reg::Phys(reg::A);
         if let Some(carry) = carry {
             self.push(Inst::new(Kind::Op(carry), vec![]));
         }
-        for ((d, a), b) in [(dl, al), (dh, ah)].into_iter().zip([bl, bh]) {
-            self.require(b, Class::MEM)?;
+        for ((d, a), b) in [(dl, al), (dh, ah)].into_iter().zip(second) {
             self.copy(acc, a);
-            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), Operand::Use(b)]));
+            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
             self.copy(d, acc);
         }
         Ok(())
@@ -566,12 +593,12 @@ fn pointer_cells(items: &[Item]) -> HashSet<String> {
 
 /// The cells defined by exactly one `LDI8`, with their values.
 fn constants(items: &[Item]) -> HashMap<String, i64> {
-    let mut defs: HashMap<&str, usize> = HashMap::new();
+    let mut defs: HashMap<String, usize> = HashMap::new();
     let mut values = HashMap::new();
     for item in items {
         let Item::Inst(MInst { opcode, operands }) = item else { continue };
         let Some(Machine::Reg(d)) = operands.first() else { continue };
-        *defs.entry(d).or_default() += 1;
+        *defs.entry(d.clone()).or_default() += 1;
         if *opcode == op::LDI8
             && let Some(Machine::Imm(value)) = operands.get(1)
         {
@@ -580,8 +607,16 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
         if *opcode == op::STZ8 {
             values.insert(d.clone(), 0);
         }
+        if *opcode == op::LDI16
+            && let Some(Machine::Imm(value)) = operands.get(1)
+        {
+            let high = format!("{d}+1");
+            *defs.entry(high.clone()).or_default() += 1;
+            values.insert(d.clone(), value & 0xFF);
+            values.insert(high, (value >> 8) & 0xFF);
+        }
     }
-    values.retain(|cell, _| defs[cell.as_str()] == 1 && cell.starts_with("v_"));
+    values.retain(|cell, _| defs[cell] == 1 && (cell.starts_with("v_") || cell.starts_with("w_")));
     values
 }
 
@@ -1300,7 +1335,8 @@ pub fn parallel_move(
                 None => true,
             };
             let clobbers_a = scratch && d != reg::A && s != Some(reg::A);
-            free && (!clobbers_a || !a_wanted(i, &pending)) && (d != reg::A || !a_wanted(i, &pending))
+            // a move into `a` is last: the others may use `a` as scratch
+            free && (!clobbers_a || !a_wanted(i, &pending)) && (d != reg::A || pending.len() == 1)
         });
         match ready {
             Some(i) => {
