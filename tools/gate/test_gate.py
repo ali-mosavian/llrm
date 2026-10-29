@@ -895,6 +895,26 @@ def test_all_shards_green_exits_zero_and_records_every_files_seconds(tmp_path):
     assert sorted(_json.loads(rec.read_text())) == ["test_a.py", "test_b.py", "test_c.py"]
 
 
+def test_a_must_pass_file_that_skips_every_test_fails_the_run(tmp_path):
+    """Run 5's NIBBLES red and run 4's 58 s dos PASS: a demo file whose inputs were missing skipped every test and the step went green.
+    A --must-pass file has to pass a test and skip none."""
+    files = {"test_a.py": "def test_fine():\n    pass\n", "test_b.py": "import pytest\n\n\n@pytest.mark.skip(reason='no demos')\ndef test_demo():\n    pass\n", "test_c.py": "def test_ok():\n    pass\n"}
+    assert _shards(tmp_path, files).returncode == 0
+    done = _shards(tmp_path, files, "--must-pass", "test_b.py")
+    assert done.returncode == 1 and "test_b.py is a must-pass file and ran 0 passed, 1 skipped" in done.stdout, done.stdout
+
+
+def test_the_shard_summary_counts_the_tests_passed_and_skipped(tmp_path):
+    """A vacuous green must be visible in the log: the summary says how many tests passed and how many skipped."""
+    done = _shards(tmp_path, {"test_a.py": "def test_fine():\n    pass\n\n\ndef test_two():\n    pass\n", "test_b.py": "import pytest\n\n\n@pytest.mark.skip\ndef test_demo():\n    pass\n", "test_c.py": "def test_ok():\n    pass\n"})
+    assert "3 passed, 1 skipped" in done.stdout, done.stdout
+
+
+def test_the_dos_step_requires_the_demo_tests_to_pass():
+    cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
+    assert "--must-pass tools/dosbatch/test_qbdemos.py" in cmd
+
+
 def test_the_pytest_step_runs_through_the_sharder_with_the_ignores_and_the_cpu_limit():
     cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages(), skip_py=("tests/x.py",))["pytest"]
     assert "pytest_shards.py" in cmd and "--ignore=tests/x.py" in cmd and "-- -q" in cmd and "-p pytest_cpulimit" in cmd
