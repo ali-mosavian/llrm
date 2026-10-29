@@ -27,7 +27,6 @@ const SYMBOL: usize = 18;
 pub struct Relocation {
     pub kind: u16,
     pub width: usize,
-    pub from: usize,
     pub baked: usize,
 }
 
@@ -243,11 +242,11 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut image = section.image.clone();
         let mut entries = Vec::new();
         for one in &section.relocs {
-            let Relocation { kind, width, from, baked } = M::relocation(one)?;
+            let Relocation { kind, width, baked } = M::relocation(one)?;
             let Target::Symbol(target) = one.target else { return Err(unsupported("a reference to a group is OMF's")) };
             // The linker adds S + field (- P - baked, if relative); the model
-            // wants S + addend - (at + from).
-            let field = if one.pc_rel { one.addend - (from as i64 - baked as i64) } else { one.addend };
+            // wants S + addend - (at + pc_bias).
+            let field = one.addend - one.beyond(baked);
             apply_fixup(&mut image, one.at, width, one.pc_rel, field, &section.name)?;
             put32(&mut entries, one.at as u32);
             put32(&mut entries, coff_symbol[target]);

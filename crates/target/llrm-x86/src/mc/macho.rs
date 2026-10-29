@@ -48,7 +48,7 @@ impl MachTargetWriter for X8664MachO {
             // in X86MachObjectWriter (n is 1, 2 or 4), not by the distance
             // alone: equal totals are one object.
             (FixupKind::DATA_4, true) if from >= 4 => {
-                let beyond = from as i64 - 4;
+                let beyond = reloc.beyond(4);
                 let kind = match beyond - reloc.addend {
                     1 => X86_64_RELOC_SIGNED_1,
                     2 => X86_64_RELOC_SIGNED_2,

@@ -233,6 +233,22 @@ impl Reloc {
         Fix { kind: self.kind, pc_rel: self.pc_rel, pc_bias: self.pc_bias, spec: self.spec }
     }
 
+    /// How far past the end of a `width`-byte field the place a pc-relative
+    /// value is relative to lies (0 for an x86 call, whose place is the end);
+    /// 0 for an absolute one.
+    ///
+    /// DEVIATE OB1 (owner reorg-layout, 2026-10-29): LLVM folds this into the
+    /// fixup's value in the assembler; llrm keeps it as [`Fix::pc_bias`] and
+    /// the writers that need the total (COFF's field, Mach-O's `SIGNED_n`)
+    /// add it back here. Exit: fold it into the addend where the encoder
+    /// makes the fixup, and drop `pc_bias`.
+    pub fn beyond(
+        &self,
+        width: usize,
+    ) -> i64 {
+        if self.pc_rel { self.pc_bias as i64 - width as i64 } else { 0 }
+    }
+
     /// Field bytes this relocation patches.
     pub fn width(&self) -> usize {
         self.kind.width()
@@ -460,5 +476,17 @@ mod tests {
     fn an_unsupported_width_is_none() {
         assert_eq!(Fix::abs(3).kind, FixupKind::NONE);
         assert_eq!(FixupKind::NONE.width(), 0);
+    }
+
+    /// The writers each read the bias their own way (COFF baked 4 into the
+    /// field, Mach-O picked `SIGNED_n` from `bias - 4`): `beyond` is the one
+    /// number, 0 for a call and for an absolute value.
+    #[test]
+    fn a_pc_relative_reloc_says_how_far_past_its_field_it_is_relative_to() {
+        let at = |fix: Fix| Reloc::new(0, fix, Target::Symbol(0), 0);
+        assert_eq!(at(Fix::relative(FixupKind::DATA_4, 4)).beyond(4), 0);
+        assert_eq!(at(Fix::relative(FixupKind::DATA_4, 5)).beyond(4), 1);
+        assert_eq!(at(Fix::relative(FixupKind::DATA_4, 8)).beyond(4), 4);
+        assert_eq!(at(Fix::plain(FixupKind::DATA_4)).beyond(4), 0);
     }
 }

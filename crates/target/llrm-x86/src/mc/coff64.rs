@@ -20,19 +20,18 @@ impl Machine for X8664 {
     const NUMBER: u16 = 0x8664;
 
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
-        let from = reloc.pc_bias;
-        let (kind, width, from, baked) = match (reloc.kind, reloc.pc_rel) {
-            (FixupKind::DATA_8, false) => (ADDR64, 8, 0, 0),
+        let (kind, width, baked) = match (reloc.kind, reloc.pc_rel) {
+            (FixupKind::DATA_8, false) => (ADDR64, 8, 0),
             // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/MCTargetDesc/X86WinCOFFObjectWriter.cpp#L83
-            (FixupKind::DATA_4, false) if reloc.spec == Fix::S_IMGREL => (ADDR32NB, 4, 0, 0),
-            (FixupKind::DATA_4, false) => (ADDR32, 4, 0, 0),
+            (FixupKind::DATA_4, false) if reloc.spec == Fix::S_IMGREL => (ADDR32NB, 4, 0),
+            (FixupKind::DATA_4, false) => (ADDR32, 4, 0),
             // LLVM writes REL32 only, never REL32_n: the distance past the
             // field's end goes into the field (`FixedValue += 4` in
             // WinCOFFObjectWriter), so equal totals are one object.
-            (FixupKind::DATA_4, true) => (REL32, 4, from, 4),
-            (fixup::BRANCH_4, true) => (REL32, 4, 4, 4),
-            (FixupKind::SECREL_2, _) => (SECTION, 2, 0, 0),
-            (FixupKind::SECREL_4, _) => (SECREL, 4, 0, 0),
+            (FixupKind::DATA_4, true) => (REL32, 4, 4),
+            (fixup::BRANCH_4, true) => (REL32, 4, 4),
+            (FixupKind::SECREL_2, _) => (SECTION, 2, 0),
+            (FixupKind::SECREL_4, _) => (SECREL, 4, 0),
             (fixup::SEGMENT_BASE, _) => {
                 return Err(Unsupported("a segment selector has no COFF relocation".into()));
             }
@@ -41,7 +40,7 @@ impl Machine for X8664 {
             }
             other => return Err(Unsupported(format!("COFF x86-64 has no relocation for {other:?}"))),
         };
-        Ok(Relocation { kind, width, from, baked })
+        Ok(Relocation { kind, width, baked })
     }
 }
 
