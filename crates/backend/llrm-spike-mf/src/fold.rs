@@ -410,7 +410,10 @@ impl<C, J: Jump> Folder<'_, C, J> {
             }
             if !current_falls {
                 if let Some(cur) = &current {
-                    for succ in [cur.other, cur.taken].into_iter().flatten() {
+                    // `SuccBB = CurFBB ? CurFBB : CurTBB`: the block it jumps
+                    // to, else the one it branches to;
+                    // trying both moved it back and forth forever
+                    for succ in cur.other.or(cur.taken) {
                         let succ_at = position(self.function, succ);
                         if succ != id
                             && succ_at > 0
