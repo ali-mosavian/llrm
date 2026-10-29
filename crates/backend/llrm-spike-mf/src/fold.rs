@@ -529,3 +529,58 @@ pub fn remove_identity_copies<T: Target>(
             );
     }
 }
+
+/// `MachineCopyPropagation`'s elimination of spurious copies: a copy back
+/// into the register another copy filled from it, with neither written
+/// since, changes nothing (`%d1 = COPY %d0; %d0 = COPY %d1`). `wide` says
+/// whether a class copies the whole register; a narrower copy leaves the rest
+/// of the destination as it was.
+///
+/// DEVIATE: only this case of the pass (no forwarding of uses), within a
+/// block. Reason: it is the one the allocator leaves behind (phi and
+/// two-address copies of one value). Exit: the neutral-LIR task.
+pub fn remove_redundant_copies<T: Target>(
+    function: &mut MFunction<T::Class>,
+    assignment: &Assignment,
+    wide: impl Fn(&T::Class) -> bool,
+) {
+    use crate::mfunc::{Kind, Reg};
+    let classes = function.classes.clone();
+    let root = |reg: Reg| match reg {
+        Reg::Virt(v) => T::root(assignment.0[v as usize]),
+        Reg::Phys(id) => T::root(id),
+    };
+    let whole = |reg: Reg| matches!(reg, Reg::Virt(v) if wide(&classes[v as usize]));
+    for block in &mut function.blocks {
+        // `(destination, source)` roots of the copies still in force
+        let mut held: Vec<(_, _)> = Vec::new();
+        let mut keep = Vec::with_capacity(block.insts.len());
+        for inst in std::mem::take(&mut block.insts) {
+            let copy = match inst.operands[..] {
+                [Operand::Def(dst), Operand::Use(src)] if inst.kind == Kind::Copy && whole(dst) && whole(src) => {
+                    Some((root(dst), root(src)))
+                }
+                _ => None,
+            };
+            if let Some((dst, src)) = copy {
+                if held.contains(&(src, dst)) {
+                    continue;
+                }
+            }
+            if inst.call {
+                held.clear();
+            }
+            let written: Vec<_> = inst
+                .operands
+                .iter()
+                .filter_map(|o| if let Operand::Def(r) = o { Some(root(*r)) } else { None })
+                .collect();
+            held.retain(|(to, from)| !written.contains(to) && !written.contains(from));
+            if let Some(pair) = copy {
+                held.push(pair);
+            }
+            keep.push(inst);
+        }
+        block.insts = keep;
+    }
+}

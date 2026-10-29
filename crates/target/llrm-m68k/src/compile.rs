@@ -15,7 +15,7 @@ use crate::mc;
 use crate::mfunc::{emit, expand_cmov};
 use crate::regalloc::{
     allocate_spilling, branch_fold, eliminate_phis, fold_reserved_copies, machine_sink, remove_identity_copies,
-    two_address,
+    remove_redundant_copies, two_address,
 };
 
 /// A line of the function: a label or an instruction.
@@ -89,6 +89,7 @@ pub fn items_with(
     let (assignment, slots) = allocate_spilling(&mut function, 0)?;
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     remove_identity_copies(&mut function, &assignment);
+    remove_redundant_copies(&mut function, &assignment);
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function);
     let mut out = vec![Item::Label(name.to_owned())];

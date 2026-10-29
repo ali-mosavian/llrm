@@ -193,3 +193,12 @@ fn adding_a_small_negative_is_a_subq() {
     assert!(pinned.contains("add.l\t#-1") || pinned.contains("add.l\t#-"), "{pinned}");
     assert!(ours.contains("subq.l") && !ours.contains("add.l\t#-"), "{ours}");
 }
+
+/// strlen's loop ended `move.l %d0, %d1; move.l %d1, %d0; addq.l #1, %d0`: the
+/// second move put the value back where it already was.
+#[test]
+fn a_loop_counter_is_not_copied_out_and_back() {
+    let ir = "define i32 @f(ptr %p) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %q = getelementptr i8, ptr %p, i32 %i\n  %v = load i8, ptr %q\n  %z = icmp eq i8 %v, 0\n  %i1 = add i32 %i, 1\n  br i1 %z, label %x, label %l\nx:\n  ret i32 %i\n}";
+    let asm = compiled(ir, Options::default());
+    assert_eq!(asm.matches("move.l").count(), 2, "{asm}");
+}
