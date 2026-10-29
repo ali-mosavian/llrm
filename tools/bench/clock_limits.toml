@@ -5,36 +5,21 @@
 [clocks]
 
 # class 0: not yet attributed: DEBT bench-clocks-unattributed
-"bintree bas -Os" = 418860  # main 407346
-"crc nib -Os" = 1420  # main 1411
 "floats bas -Os" = 110197  # main 99206
-"histo nib -Os" = 239675  # main 227124
 "mandel bas -Os" = 1140118  # main 1108365
 "mandel nib -Os" = 842924  # main 833809
-"matmul nib -Os" = 24201  # main 23432
 "nbody bas -Os" = 438826  # main 428879 (standard)
 "nbody c -Os" = 371703  # main 358692
 "nbody nib -Os" = 371478  # main 357111
 "parity/algebra bas -Os" = 271  # main 265
-"parity/branch bas -Os" = 208  # main 194
-"parity/memory bas -Os" = 243  # main 239
-"parity/qlight bas -Os" = 621  # main 605
-"parity/qlight c -Os" = 534  # main 516
-"parity/qmove bas -Os" = 506  # main 477 (standard)
 "parity/qmove c -Os" = 485  # main 465
 "parity/qmove nib -Os" = 520  # main 503
-"parity/sum_three bas -Os" = 169  # main 165
 "parity/sum_three nib -Os" = 129  # main 123
-"particle bas -Os" = 309245  # main 280330
 "particle c -Os" = 169089  # main 168983
-"particle nib -Os" = 238202  # main 228221
 "recfloat c -Os" = 50104  # main 47103
 "recsum c -Os" = 82039  # main 82036
 "ring bas -Os" = 76021  # main 74990
-"scroll c -Os" = 687174  # main 668279
 "shellsort c -Os" = 16576  # main 14989
-"textfill bas -Os" = 64169  # main 58189
-"textfill nib -Os" = 60024  # main 58065
 
 # class 1: LSR default (7ee16741c1 class), ablation candidate, first-bad TBD: DEBT bench-clocks-lsr-default
 "sieve bas -Os" = 46421  # main 33601
@@ -60,6 +45,14 @@
 "crc c -Os" = 1402  # main 1393
 "histo c -Os" = 239669  # main 227125
 "parity/branch c -Os" = 146  # main 138
+"crc nib -Os" = 1420  # main 1411
+"histo nib -Os" = 239675  # main 227124
+"matmul nib -Os" = 24201  # main 23432
+"parity/branch bas -Os" = 208  # main 194
+"parity/memory bas -Os" = 243  # main 239
+"parity/qmove bas -Os" = 506  # main 477 (standard)
+"parity/sum_three bas -Os" = 169  # main 165
+"textfill bas -Os" = 64169  # main 58189
 
 # class 6: masked scaled IV (pin SCEV does not move shl through the mask) and the LSR formula sharing it: DEBT bench-clocks-masked-iv
 "textfill c -Os" = 60021  # main 58025
@@ -67,3 +60,16 @@
 "tile c -Os" = 10224  # main 10169
 "tile nib -Os" = 10292  # main 10186
 "ring c -Os" = 80220  # main 68220
+"textfill nib -Os" = 60024  # main 58065
+"particle bas -Os" = 309245  # main 280330
+"particle nib -Os" = 238202  # main 228221
+
+# class 7 fill idiom: pin makes memset only for byte patterns, a 16-bit fill stays a counted loop: DEBT bench-clocks-fill-idiom-stosw
+"scroll c -Os" = 687174  # main 668279
+
+# class 8 call-result add order: the 4th call result goes to a second stack slot instead of the first: DEBT bench-clocks-call-result-add-order
+"parity/qlight bas -Os" = 621  # main 605
+"parity/qlight c -Os" = 534  # main 516
+
+# class 9 imul-const / les: 3 imul and 2 les where main has 2 imul + lea and 2 movs, fewer insns, more clocks: DEBT bench-clocks-imul-const-les
+"bintree bas -Os" = 418860  # main 407346
