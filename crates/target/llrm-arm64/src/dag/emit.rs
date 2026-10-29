@@ -31,7 +31,7 @@ use crate::mc::inst::{
     Width,
 };
 use crate::mc::visit::Reg;
-use crate::mfunc::{MBlock, MFunc, Op, block_label};
+use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, block_label};
 
 /// The machine opcode's name.
 fn opcode_name(code: u32) -> Option<&'static str> {
@@ -41,7 +41,7 @@ fn opcode_name(code: u32) -> Option<&'static str> {
 /// The machine register number of an arm64 register id: `x5` and `w5` are 5.
 fn gpr_of(id: RegId) -> Result<Gpr, String> {
     let name = REGISTER_INFO.name(id).ok_or("a register the arm64 file does not name")?;
-    if matches!(name, "wzr" | "xzr") {
+    if matches!(name, "wzr" | "xzr" | "sp" | "wsp") {
         return Ok(Gpr::R31);
     }
     let number = name
@@ -63,6 +63,8 @@ enum Operand {
     Symbol(u32, i64),
     /// A block by id, as a branch names it.
     Block(u32),
+    /// An incoming argument at this offset into the caller's outgoing area.
+    Fixed(i64),
     /// The flags a compare set: the instruction before this one wrote them.
     Flags,
 }
@@ -357,6 +359,9 @@ impl Emitter<'_> {
             NodeData::Global { symbol, offset } if node.opcode == ISD::TargetGlobalAddress => {
                 Ok(Operand::Symbol(symbol, offset))
             }
+            NodeData::FrameIndex(index) if node.opcode == ISD::TargetFrameIndex && index < 0 => {
+                self.dag.fixed_offsets.get(&index).map(|&offset| Operand::Fixed(offset)).ok_or_else(|| format!("fixed object {index} has no offset"))
+            }
             NodeData::FrameIndex(index) if node.opcode == ISD::TargetFrameIndex => Ok(Operand::Slot(index as u32)),
             _ => self
                 .values
@@ -364,6 +369,49 @@ impl Emitter<'_> {
                 .map(|&g| Operand::Reg(g))
                 .ok_or_else(|| format!("operand {:?} has no register", node.opcode)),
         }
+    }
+
+    /// `BL symbol` or `BLR reg`: the registers it reads are the `Register` operands
+    /// (the arguments), those it writes the physical registers a glued `CopyFromReg`
+    /// after its `CALLSEQ_END` reads (the results).
+    fn call(
+        &mut self,
+        id: u32,
+        name: &str,
+    ) -> Result<(), String> {
+        let node = self.dag.node(SDValue { node: id, res: 0 });
+        let callee = match (name, self.operand(node.ops[0])?) {
+            ("BL", Operand::Symbol(global, _)) => match self.target(global, 0)?.0 {
+                Target::Symbol { name, .. } => Callee::Symbol(name),
+                _ => return Err("a callee that is no symbol".into()),
+            },
+            ("BLR", Operand::Reg(register)) => Callee::Register(register),
+            _ => return Err(format!("{name}: a callee that is neither a symbol nor a register")),
+        };
+        let uses = node.ops[1..]
+            .iter()
+            .filter_map(|op| match self.dag.node(*op).data {
+                NodeData::PhysReg(register) => Some(gpr_of(register).map(Reg::Gpr)),
+                _ => None,
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // The glue out of the call goes to `CALLSEQ_END`, and from it to the result copies.
+        let mut defs = Vec::new();
+        let mut glue = SDValue { node: id, res: self.dag.node(SDValue { node: id, res: 0 }).values.len() as u8 - 1 };
+        while let Some(user) = self.dag.users(glue).next() {
+            let user_node = self.dag.node(SDValue { node: user, res: 0 });
+            match user_node.opcode {
+                ISD::CopyFromReg => {
+                    let NodeData::PhysReg(register) = self.dag.node(user_node.ops[1]).data else { break };
+                    defs.push(Reg::Gpr(gpr_of(register)?));
+                    glue = SDValue { node: user, res: 2 };
+                }
+                _ => glue = SDValue { node: user, res: user_node.values.len() as u8 - 1 },
+            }
+        }
+        self.mf.calls = true;
+        self.ops.push(Op::Call { callee, uses, defs, tail: false });
+        Ok(())
     }
 
     fn is_flags(
@@ -503,6 +551,7 @@ impl Emitter<'_> {
                 match base {
                     Operand::Reg(base) => Addr::Offset { base: *base, imm },
                     Operand::Slot(slot) => Addr::Slot { slot: *slot, offset: imm },
+                    Operand::Fixed(at) => Addr::Slot { slot: INCOMING_ARGUMENTS, offset: at + imm },
                     _ => return Err(format!("{name}: a base that is neither register nor frame object")),
                 }
             }
@@ -561,6 +610,19 @@ impl Emitter<'_> {
                     self.ops.push(Op::Return { uses, tail: None });
                     return Ok(());
                 }
+                match name {
+                    // The outgoing area is laid out by the frame; the pseudos only size it.
+                    "ADJCALLSTACKDOWN" => {
+                        let Some(bytes) = node.ops.first().and_then(|op| self.dag.constant(*op)) else {
+                            return Err("a call sequence of no size".into());
+                        };
+                        self.mf.outgoing = self.mf.outgoing.max(bytes as u64);
+                        return Ok(());
+                    }
+                    "ADJCALLSTACKUP" => return Ok(()),
+                    "BL" | "BLR" => return self.call(id, name),
+                    _ => {}
+                }
                 let operands = node
                     .ops
                     .iter()
@@ -570,7 +632,8 @@ impl Emitter<'_> {
                         (vt != EVT::OTHER || self.dag.opcode(**op) == ISD::BasicBlock) && vt != EVT::GLUE
                     })
                     .map(|&op| self.operand(op))
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|why| format!("{name}: {why}"))?;
                 if let Some(access) = memory_form(name) {
                     return self.memory(id, name, &access, &operands);
                 }
@@ -624,12 +687,17 @@ impl Emitter<'_> {
                     return Ok(());
                 }
                 // `ADDXri` of a frame index is the object's address.
-                if let (Some(Operand::Slot(slot)), "ADDXri", Some(Operand::Imm(offset))) =
-                    (operands.first(), name, operands.get(1))
-                {
-                    self.ops.push(Op::FrameAddress { dst: rd, slot: *slot, offset: *offset as i64 });
-                    self.values.insert((id, 0), rd);
-                    return Ok(());
+                if let (Some(object), "ADDXri", Some(Operand::Imm(offset))) = (operands.first(), name, operands.get(1)) {
+                    let (slot, base) = match object {
+                        Operand::Slot(slot) => (Some(*slot), 0),
+                        Operand::Fixed(at) => (Some(INCOMING_ARGUMENTS), *at),
+                        _ => (None, 0),
+                    };
+                    if let Some(slot) = slot {
+                        self.ops.push(Op::FrameAddress { dst: rd, slot, offset: base + *offset as i64 });
+                        self.values.insert((id, 0), rd);
+                        return Ok(());
+                    }
                 }
                 match (name, operands.as_slice()) {
                     ("ADRP", [Operand::Symbol(global, addend)]) => {

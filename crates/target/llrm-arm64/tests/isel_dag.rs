@@ -5,8 +5,7 @@ use std::process::Command;
 const IR: &str = "target triple = \"arm64-apple-macosx\"\n\
 target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
 define i32 @f(i32 %a, i32 %b) {\n  %r = add i32 %a, %b\n  ret i32 %r\n}\n\
-declare i32 @h(i32)\n\
-define i32 @g(i32 %a, i32 %b) {\n  %r = call i32 @h(i32 %a)\n  ret i32 %r\n}\n";
+define float @g(float %a, float %b) {\n  %r = fadd float %a, %b\n  ret float %r\n}\n";
 
 fn llc(flag: &str) -> (bool, String, String) {
     let dir = tempfile::tempdir().unwrap();
@@ -27,7 +26,7 @@ fn llc(flag: &str) -> (bool, String, String) {
 }
 
 /// `f` comes out of the DAG path as the pin's `add w0, w0, w1` / `ret`; `g`
-/// (a call) is refused by `dag`, and by `shadow` counted and made
+/// (a float add) is refused by `dag`, and by `shadow` counted and made
 /// by the hand selector.
 #[test]
 fn f_is_the_pins_add_and_ret_and_g_falls_back_in_shadow() {
