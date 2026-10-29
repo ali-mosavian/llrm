@@ -407,3 +407,27 @@ pub fn mark_commutable(function: &mut crate::mfunc::MFunction) {
         }
     }
 }
+
+/// Two masks of one register in a row are one: `and.l #255, %d1; and.l #1,
+/// %d1` is `and.l #1, %d1` (the second leaves the same value and the same
+/// codes). The pin's selection leaves the pair after `sgt` and a `zext`.
+pub fn merge_masks(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::Line> {
+    use crate::expand::Line;
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        if let (Some(Line::Inst(before)), Line::Inst(after)) = (out.last_mut(), &line)
+            && before.opcode == "AND32di"
+            && after.opcode == "AND32di"
+            && let [Operand::Reg(d1), Operand::Reg(s1), Operand::Imm(m1)] = before.operands[..]
+            && let [Operand::Reg(d2), Operand::Reg(s2), Operand::Imm(m2)] = after.operands[..]
+            && d1 == s1
+            && d2 == s2
+            && d1 == d2
+        {
+            before.operands[2] = Operand::Imm(m1 & m2);
+            continue;
+        }
+        out.push(line);
+    }
+    out
+}

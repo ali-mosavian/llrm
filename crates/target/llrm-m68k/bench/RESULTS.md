@@ -1,4 +1,4 @@
-# Results, 2026-10-29 13:14 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Results, 2026-10-29 13:17 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 gcc is m68k-linux-gnu-gcc 15 (`-mcpu=68000`), the Debian cross toolchain unpacked without root. Cycles are not
 modelled: "insns" are executed instructions, which price a 68000 `move` and a `muls` the same. "ours" has the
@@ -16,11 +16,11 @@ the full -O2 pipeline closed-forms loops into i33 arithmetic the legalizer canno
 | max | 16 | 16 | 16 | 16 | 16 | 16 | 6 | 6 | 6 | 6 | 5 | 5 | 42 all |
 | absdiff | 22 | 22 | 22 | 22 | 24 | 24 | 7 | 7 | 7 | 7 | 8 | 7 | 42 all |
 | clamp | 26 | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | 9 | 42 all |
-| fib | 22 B gcc -Os, 28 gcc -O2 / 64 gcc -Os | 28 / 67 | equal to gcc -O2; `-Os` keeps the 0 in one register and saves no `d2` |
+| fib | 28 | 28 | 66 | 66 | 22 | 28 | 67 | 67 | 139 | 139 | 64 | 67 | 89 all |
 | gcd | 26 | 26 | 32 | 26 | 26 | 28 | 17 | 17 | 16 | 17 | 17 | 16 | 42 all |
-| arrsum | 32 | 22 | 64 | 64 | 20 | 22 | 103 | 69 | 153 | 153 | 68 | 69 | 80 all |
-| arrmax | 40 | 36 | 92 | 88 | 26 | 32 | 154 | 139 | 248 | 235 | 97 | 100 | 9 all |
-| countgt | 58 | 52 | 86 | 86 | 42 | 42 | 184 | 152 | 234 | 234 | 168 | 123 | 9 all |
+| arrsum | 20 B / 68 gcc | 22 / 69 | gcc compares the counter with `n` in memory (`cmp.l 8(%sp),%d1`), ours loads `n` once into `a1`: 2 bytes more, same loop |
+| arrmax | 26 B / 97 gcc | 36 / 139 | the `(a0)` load and `addq #4` sit in different blocks (no `(a0)+`); `m` is copied on both paths of the select; `n` in callee-saved `d2` |
+| countgt | 42 B / 123 gcc -O2 | 46 / 136 | `sgt` result added as 0/1 (gcc: `slt; ext.w; sub.w`); callee-saved `d2`,`d3` pushed for `n` and the counter |
 | strlen | 20 | 22 | 36 | 36 | 18 | 20 | 59 | 60 | 89 | 89 | 57 | 44 | 13 all |
 | copy | 34 | 34 | 42 | 42 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | 59 | 33 all |
 
