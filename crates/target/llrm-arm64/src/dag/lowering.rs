@@ -13,7 +13,7 @@
 //! `BRCOND` expands to `BR_CC` here (the shared legalizer has no `ExpandNode` arm for it), no
 //! `emitConjunction` (`CCMP` chains), no `getCmpOperandFoldingProfit`
 //! swaps, no zero-extending-load `CMN` trick, no overflow-intrinsic folds, no
-//! `lookThroughSignExtension` `TST` form, no floating-point compare. Reason: the
+//! `lookThroughSignExtension` `TST` form, and for floats no vector-compare mask and no `nsz` zero rewrite. Reason: the
 //! first compares need none; each is its own slice. Owner arm64-quality, review
 //! 2026-11-13, exit B4..B6.
 //!
@@ -41,6 +41,8 @@ mod cc {
     pub const LO: u128 = 3;
     pub const MI: u128 = 4;
     pub const PL: u128 = 5;
+    pub const VS: u128 = 6;
+    pub const VC: u128 = 7;
     pub const HI: u128 = 8;
     pub const LS: u128 = 9;
     pub const GE: u128 = 10;
@@ -68,6 +70,115 @@ fn int_cc(
         CondCode::SetULt => cc::LO,
         CondCode::SetULe => cc::LS,
         other => unreachable!("an integer compare is not {other:?}"),
+    }
+}
+
+/// `changeFPCCToAArch64CC`: the condition, and a second one to OR with it.
+fn fp_cc(code: CondCode) -> (u128, Option<u128>) {
+    match code {
+        CondCode::SetEq | CondCode::SetOEq => (cc::EQ, None),
+        CondCode::SetGt | CondCode::SetOGt => (cc::GT, None),
+        CondCode::SetGe | CondCode::SetOGe => (cc::GE, None),
+        CondCode::SetOLt => (cc::MI, None),
+        CondCode::SetOLe => (cc::LS, None),
+        CondCode::SetONe => (cc::MI, Some(cc::GT)),
+        CondCode::SetO => (cc::VC, None),
+        CondCode::SetUo => (cc::VS, None),
+        CondCode::SetUEq => (cc::EQ, Some(cc::VS)),
+        CondCode::SetUGt => (cc::HI, None),
+        CondCode::SetUGe => (cc::PL, None),
+        CondCode::SetLt | CondCode::SetULt => (cc::LT, None),
+        CondCode::SetLe | CondCode::SetULe => (cc::LE, None),
+        CondCode::SetNe | CondCode::SetUNe => (cc::NE, None),
+        other => unreachable!("a floating-point compare is not {other:?}"),
+    }
+}
+
+/// `emitComparison` for floats: `FCMP`, whose result is the flags.
+fn emit_fcmp(
+    dag: &mut SelectionDAG,
+    lhs: SDValue,
+    rhs: SDValue,
+) -> SDValue {
+    dag.get_node(ISD::Target(a64::FCMP), EVT::I32, &[lhs, rhs])
+}
+
+fn is_float(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    dag.value_type(value).is_floating_point()
+}
+
+/// `LowerSETCC` for floats: one `CSEL` on the inverted condition, or two on the
+/// pair that `changeFPCCToAArch64CC` returns.
+fn lower_fp_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    code: CondCode,
+) -> SDValue {
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(node);
+    let (one, zero) = (dag.get_constant(1, vt), dag.get_constant(0, vt));
+    let flags = emit_fcmp(dag, lhs, rhs);
+    match fp_cc(code) {
+        (_, None) => {
+            let (inverse, _) = fp_cc(code.inverse_float());
+            let ccode = cond_const(dag, inverse);
+            dag.get_node(ISD::Target(a64::CSEL), vt, &[zero, one, ccode, flags])
+        }
+        (first, Some(second)) => {
+            let first = cond_const(dag, first);
+            let one_cc = dag.get_node(ISD::Target(a64::CSEL), vt, &[one, zero, first, flags]);
+            let second = cond_const(dag, second);
+            dag.get_node(ISD::Target(a64::CSEL), vt, &[one, one_cc, second, flags])
+        }
+    }
+}
+
+/// `LowerSELECT_CC` for floats, without the vector-compare form and the
+/// `nsz` rewrite of a zero.
+fn lower_fp_select_cc(
+    dag: &mut SelectionDAG,
+    code: CondCode,
+    lhs: SDValue,
+    rhs: SDValue,
+    tval: SDValue,
+    fval: SDValue,
+) -> SDValue {
+    let flags = emit_fcmp(dag, lhs, rhs);
+    let vt = dag.value_type(tval);
+    let (first, second) = fp_cc(code);
+    let first = cond_const(dag, first);
+    let selected = dag.get_node(ISD::Target(a64::CSEL), vt, &[tval, fval, first, flags]);
+    match second {
+        None => selected,
+        Some(second) => {
+            let second = cond_const(dag, second);
+            dag.get_node(ISD::Target(a64::CSEL), vt, &[tval, selected, second, flags])
+        }
+    }
+}
+
+/// `LowerBR_CC` for floats: a `BRCOND` per condition.
+fn lower_fp_br_cc(
+    dag: &mut SelectionDAG,
+    chain: SDValue,
+    code: CondCode,
+    lhs: SDValue,
+    rhs: SDValue,
+    dest: SDValue,
+) -> SDValue {
+    let flags = emit_fcmp(dag, lhs, rhs);
+    let (first, second) = fp_cc(code);
+    let first = cond_const(dag, first);
+    let branch = dag.get_node(ISD::Target(a64::BRCOND), EVT::OTHER, &[chain, dest, first, flags]);
+    match second {
+        None => branch,
+        Some(second) => {
+            let second = cond_const(dag, second);
+            dag.get_node(ISD::Target(a64::BRCOND), EVT::OTHER, &[branch, dest, second, flags])
+        }
     }
 }
 
@@ -256,10 +367,13 @@ pub fn lower_setcc(
     node: SDValue,
 ) -> Option<SDValue> {
     let (mut lhs, mut rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let mut code = cond_of(dag, dag.operand(node, 2));
+    if is_float(dag, lhs) {
+        return Some(lower_fp_setcc(dag, node, code));
+    }
     if !dag.value_type(lhs).is_integer() {
         return None;
     }
-    let mut code = cond_of(dag, dag.operand(node, 2));
     let vt = dag.value_type(node);
     let (one, zero) = (dag.get_constant(1, vt), dag.get_constant(0, vt));
     simplify_setcc_into_eq(dag, &mut code, &mut lhs, &mut rhs);
@@ -275,7 +389,8 @@ pub fn lower_select(
     node: SDValue,
 ) -> Option<SDValue> {
     let (cond, tval, fval) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
-    if !dag.value_type(node).is_integer() {
+    let result = dag.value_type(node);
+    if !result.is_integer() && !result.is_floating_point() {
         return None;
     }
     let (lhs, rhs, code) = if dag.opcode(cond) == ISD::SetCC {
@@ -306,6 +421,9 @@ fn lower_select_cc(
     mut fval: SDValue,
 ) -> Option<SDValue> {
     let vt = dag.value_type(lhs);
+    if vt.is_floating_point() {
+        return Some(lower_fp_select_cc(dag, code, lhs, rhs, tval, fval));
+    }
     if !vt.is_integer() {
         return None;
     }
@@ -507,6 +625,9 @@ fn lower_br_cc(
     rhs: SDValue,
     dest: SDValue,
 ) -> Option<SDValue> {
+    if is_float(dag, lhs) {
+        return Some(lower_fp_br_cc(dag, chain, code, lhs, rhs, dest));
+    }
     if !dag.value_type(lhs).is_integer() {
         return None;
     }
@@ -572,4 +693,59 @@ pub fn lower_xor(
     let vt = dag.value_type(other);
     let inverted = dag.get_not(other, vt);
     Some(dag.get_node(ISD::Target(a64::CSEL), dag.value_type(sel), &[other, inverted, ccode, flags]))
+}
+
+fn is_double_or_single(vt: EVT) -> bool {
+    vt.is_floating_point() && matches!(vt.size_in_bits(), 32 | 64)
+}
+
+/// `LowerINT_TO_FP`: a scalar `f32`/`f64` from an `i32`/`i64` is legal as it is.
+pub fn lower_int_to_fp(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    (is_double_or_single(to) && matches!(from.size_in_bits(), 32 | 64)).then_some(node)
+}
+
+/// `LowerFP_TO_INT`: a scalar `f32`/`f64` to an `i32`/`i64` is legal as it is.
+pub fn lower_fp_to_int(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    (is_double_or_single(from) && matches!(to.size_in_bits(), 32 | 64)).then_some(node)
+}
+
+/// `LowerFP_EXTEND`: `f32` to `f64` is legal as it is.
+pub fn lower_fp_extend(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    (to.size_in_bits() == 64 && from.size_in_bits() == 32 && to.is_floating_point()).then_some(node)
+}
+
+/// `LowerFP_ROUND`: `f64` to `f32` is legal as it is.
+pub fn lower_fp_round(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    (to.size_in_bits() == 32 && from.size_in_bits() == 64 && to.is_floating_point()).then_some(node)
+}
+
+/// `isFPImmLegal`: a constant an `fmov` immediate holds, positive zero, or one that
+/// at most two `mov`s make (the pin's limit when not optimizing for size).
+pub fn fp_imm_legal(
+    vt: llrm_codegen::backend::selectiondag::mvt::MVT,
+    bits: u128,
+) -> bool {
+    use llrm_codegen::backend::selectiondag::mvt::MVT;
+    let (value, width) = match vt {
+        MVT::F64 => (f64::from_bits(bits as u64), 64),
+        MVT::F32 => (f64::from(f32::from_bits(bits as u32)), 32),
+        _ => return false,
+    };
+    bits == 0 || crate::mc::immediate::fp_immediate(value).is_some() || mov_imm(bits as u64, width, Gpr(0)).len() <= 2
 }

@@ -110,6 +110,8 @@ pub struct PhiCopy {
     pub to: u32,
     pub dst: u32,
     pub src: u32,
+    /// The phi is a float: its registers are of the float class.
+    pub float: bool,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -165,7 +167,8 @@ pub fn select_function_in(
                 };
                 let to = function.parent(def).ok_or("a phi outside a block")?.0;
                 let dst = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
-                Ok(PhiCopy { to, dst, src })
+                let float = matches!(module.context.types.get(function.value(phi).ty), llrm_mir::types::Type::Float(_));
+                Ok(PhiCopy { to, dst, src, float })
             })
             .collect::<Result<Vec<_>, String>>()?;
         selected.push(Selected {

@@ -185,3 +185,120 @@ define i32 @indirect(ptr %fp, i32 %x) {
   %r = call i32 %fp(i32 %x)
   ret i32 %r
 }
+
+declare double @c_fmix(i32, double, float, i64, double, double, double, double, double, double, double, float, i8)
+declare float @c_half(float)
+
+define double @fops(double %a, double %b) {
+  %s = fadd double %a, %b
+  %d = fsub double %a, %b
+  %m = fmul double %s, %d
+  %q = fdiv double %m, %b
+  %n = fneg double %q
+  ret double %n
+}
+
+define i32 @fcmps(double %a, double %b) {
+  %c1 = fcmp olt double %a, %b
+  %c2 = fcmp ole double %a, %b
+  %c3 = fcmp ogt double %a, %b
+  %c4 = fcmp oge double %a, %b
+  %c5 = fcmp oeq double %a, %b
+  %c6 = fcmp one double %a, %b
+  %c7 = fcmp ueq double %a, %b
+  %c8 = fcmp une double %a, %b
+  %c9 = fcmp uno double %a, %b
+  %c10 = fcmp ord double %a, %b
+  %c11 = fcmp ult double %a, %b
+  %c12 = fcmp uge double %a, %b
+  %z1 = zext i1 %c1 to i32
+  %z2 = zext i1 %c2 to i32
+  %z3 = zext i1 %c3 to i32
+  %z4 = zext i1 %c4 to i32
+  %z5 = zext i1 %c5 to i32
+  %z6 = zext i1 %c6 to i32
+  %z7 = zext i1 %c7 to i32
+  %z8 = zext i1 %c8 to i32
+  %z9 = zext i1 %c9 to i32
+  %z10 = zext i1 %c10 to i32
+  %z11 = zext i1 %c11 to i32
+  %z12 = zext i1 %c12 to i32
+  %s2 = shl i32 %z2, 1
+  %s3 = shl i32 %z3, 2
+  %s4 = shl i32 %z4, 3
+  %s5 = shl i32 %z5, 4
+  %s6 = shl i32 %z6, 5
+  %s7 = shl i32 %z7, 6
+  %s8 = shl i32 %z8, 7
+  %s9 = shl i32 %z9, 8
+  %s10 = shl i32 %z10, 9
+  %s11 = shl i32 %z11, 10
+  %s12 = shl i32 %z12, 11
+  %t1 = or i32 %z1, %s2
+  %t2 = or i32 %t1, %s3
+  %t3 = or i32 %t2, %s4
+  %t4 = or i32 %t3, %s5
+  %t5 = or i32 %t4, %s6
+  %t6 = or i32 %t5, %s7
+  %t7 = or i32 %t6, %s8
+  %t8 = or i32 %t7, %s9
+  %t9 = or i32 %t8, %s10
+  %t10 = or i32 %t9, %s11
+  %t11 = or i32 %t10, %s12
+  ret i32 %t11
+}
+
+define double @fmaxd(double %a, double %b) {
+  %c = fcmp ogt double %a, %b
+  %r = select i1 %c, double %a, double %b
+  ret double %r
+}
+
+define double @convert(i32 %a, i64 %b, float %f) {
+  %x = sitofp i32 %a to double
+  %y = uitofp i64 %b to double
+  %z = fpext float %f to double
+  %s = fadd double %x, %y
+  %t = fadd double %s, %z
+  %u = fptrunc double %t to float
+  %v = fpext float %u to double
+  %i = fptosi double %v to i32
+  %j = sitofp i32 %i to double
+  ret double %j
+}
+
+define double @sum_array(ptr %p, i32 %n) {
+entry:
+  br label %h
+h:
+  %i = phi i32 [0, %entry], [%i2, %h]
+  %s = phi double [0.0, %entry], [%s2, %h]
+  %q = getelementptr double, ptr %p, i32 %i
+  %v = load double, ptr %q
+  %s2 = fadd double %s, %v
+  %i2 = add i32 %i, 1
+  %c = icmp ult i32 %i2, %n
+  br i1 %c, label %h, label %x
+x:
+  ret double %s2
+}
+
+define void @scale(ptr %p, float %k) {
+  %v = load float, ptr %p
+  %w = fmul float %v, %k
+  store float %w, ptr %p
+  ret void
+}
+
+define double @fcalls(double %a, i32 %n) {
+  %f = sitofp i32 %n to float
+  %g = call float @c_half(float %f)
+  %r = call double @c_fmix(i32 %n, double %a, float %g, i64 7, double %a, double %a, double %a, double %a, double %a, double %a, double %a, float %g, i8 5)
+  %s = fadd double %r, %a
+  ret double %s
+}
+
+define i32 @fbits(float %a) {
+  %r = bitcast float %a to i32
+  ret i32 %r
+}
