@@ -90,7 +90,11 @@ fn spill<T: Target>(
                 }
             }
             if reads {
-                out.push(T::spill_load(class, temporary, slot).ok_or_else(refuse)?);
+                let load = T::spill_load(class, temporary, slot).ok_or_else(refuse)?;
+                // a load may set the condition codes: it goes before the
+                // compare a flag reader depends on, not between them
+                let at = if inst.reads_flags { flag_sequence_start(&out) } else { out.len() };
+                out.insert(at, load);
             }
             out.push(inst);
             if writes {
@@ -107,6 +111,19 @@ fn temporary_index(register: Reg) -> u32 {
         Reg::Virt(v) => v,
         Reg::Phys(_) => unreachable!("a temporary is virtual"),
     }
+}
+
+/// Where the sequence that produced the flags a reader is about to consume
+/// begins: the run of flag setters and copies into physical registers (the
+/// accumulator loads of a multi-step compare) ending at `insts`' end.
+fn flag_sequence_start(insts: &[Inst]) -> usize {
+    let copies_to_physical =
+        |inst: &Inst| inst.kind == Kind::Copy && matches!(inst.operands.first(), Some(Operand::Def(Reg::Phys(_))));
+    let mut start = insts.len();
+    while start > 0 && !insts[start - 1].terminator && (insts[start - 1].sets_flags || copies_to_physical(&insts[start - 1])) {
+        start -= 1;
+    }
+    start
 }
 
 /// Whether the condition codes are read at or after `at` before an instruction
