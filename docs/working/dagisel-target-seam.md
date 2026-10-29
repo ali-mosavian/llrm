@@ -60,3 +60,29 @@ S1a generator + regen for M68k alone (new files, no x86 file touched) → S1b x8
 - `llrm-dagisel-gen --target crates/target/llrm-m68k/dagisel.toml` decodes the M68k table (6710 items m68000, 6778 m68020); `add` selects ADD32dr, the pin's llc agrees.
 - x86 regen output byte-identical (diff -rq). Stale test for every `crates/target/*/dagisel.toml`.
 - Found: `Hooks` carries x86-only methods (`has_sse_unaligned_mem`, `is_def32`, `check_tc_ret_enough_regs`, ...); every target implements them. S1b: move them into an x86 extension trait or give defaults (dag.rs of llrm-dagisel).
+
+## Pin bug: `a[i]` of a stack array is stored and loaded as `a[0]` (checked 2026-10-29)
+
+Pin d1106deb71cc, `llc -mcpu=M68000`, `-O0` and `-O2` give the same result. Input:
+
+```llvm
+define i32 @f(i32 %i) {
+  %a = alloca [4 x i32], align 4
+  ; four stores of 10, 20, 30, 40 to a[0..3]
+  %q = getelementptr [4 x i32], ptr %a, i32 0, i32 %i
+  %v = load volatile i32, ptr %q
+  ret i32 %v
+}
+```
+
+Output (`-O2`): the four stores to `(0..12,%sp)`, then `move.l (0,%sp), %d0`. `%i` is never read.
+
+Cause: `M68kISelAddressMode::hasIndexReg` is false for a frame-index base
+([L103](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kISelDAGToDAG.cpp#L103),
+it requires `RegBase`), so the matcher accepts an index beside the frame index, and `getFrameIndexAddress`
+([L323](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kISelDAGToDAG.cpp#L323),
+used at [L827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kISelDAGToDAG.cpp#L827))
+returns the displacement and frame index without the index, before the `hasIndexReg` rejection at L832.
+No lit test under `llvm/test/CodeGen/M68k` indexes a stack array. Ours: `match_address_base` in
+`target/llrm-m68k/src/dagisel/addr.rs` (DEVIATE); the run test is `a_local_array_is_a_frame_object` in
+`tests/results.rs`. Whether to report it upstream is the user's call.
