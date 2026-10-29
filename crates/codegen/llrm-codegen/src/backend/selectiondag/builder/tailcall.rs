@@ -45,7 +45,8 @@ impl Builder<'_> {
         let direct = callee.is_some();
         // the callee returns to our caller: a far callee to a far caller and a
         // near one to a near, or the return address is the wrong size
-        let (far, near) = (self.arch.first_argument_offset(true), self.arch.first_argument_offset(false));
+        let Some(full) = self.arch.full() else { return false };
+        let (far, near) = (full.first_argument_offset(true), full.first_argument_offset(false));
         if far != near {
             let callee_far = callee.is_some_and(|id| self.module.global(id).address_space == 1);
             if (caller.first == far) != callee_far {
@@ -92,9 +93,9 @@ impl Builder<'_> {
             return false;
         }
         // the callee keeps every register the caller must
-        let calling = self.arch.calling();
+        let calling = full.calling();
         let preserved = |number: u32| {
-            calling.by_number(number).map(|one| self.arch.convention_callee_saved(one)).unwrap_or_default()
+            calling.by_number(number).map(|one| full.convention_callee_saved(one)).unwrap_or_default()
         };
         let caller_cc = self.function.calling_convention;
         let caller_kept = preserved(caller_cc);
@@ -160,7 +161,8 @@ impl Builder<'_> {
                 let regs = llrm_lir::registers::Regs(self.arch.registers());
                 let native_kept: Vec<RegId> = self
                     .arch
-                    .callee_saved()
+                    .full()
+                    .map_or_else(Vec::new, |arch| arch.callee_saved())
                     .into_iter()
                     .filter(|(full, pushed)| full == pushed)
                     .map(|(full, _)| regs.root(full))

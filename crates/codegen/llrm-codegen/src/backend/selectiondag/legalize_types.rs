@@ -821,6 +821,20 @@ impl<'a> TypeLegalizer<'a> {
                 }
                 self.dag.get_token_factor(&stores)
             }
+            ISD::Store
+                if at == 1
+                    && self.dag.value_type(self.dag.operand(node, 1)).is_integer()
+                    && self.dag.value_type(self.dag.operand(node, 1)).size_in_bits() % 8 == 0 =>
+            {
+                // `PromoteIntOp_STORE`: a truncating store of the promoted value.
+                let (chain, value, ptr) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let NodeData::Mem(info) = self.dag.node(node).data else {
+                    unreachable!("a store has a memory operand")
+                };
+                let promoted = self.promoted_integer(value);
+                self.dag.get_store(chain, promoted, ptr, info)
+            }
             op => {
                 return Err(LegalizeError::Unsupported {
                     op,

@@ -20,7 +20,7 @@ LAYERS = [
         [
             "llrm-object", "llrm-dwarf", "llrm-omf", "llrm-elf",
             "llrm-coff", "llrm-codeview", "llrm-macho", "llrm-target", "llrm-iselgen",
-            "llrm-peepgen",
+            "llrm-peepgen", "llrm-sdag",
         ],
     ),
     ("codegen", ["llrm-codegen", "llrm-dagisel", "llrm-dagisel-gen"]),
@@ -28,7 +28,7 @@ LAYERS = [
         "concrete targets",
         [
             "llrm-x86", "llrm-x86-m16", "llrm-x86-m32", "llrm-x86-m64", "llrm-x86-m16-select", "llrm-x86-m32-select",
-            "llrm-x86-m64-select", "llrm-arm64",
+            "llrm-x86-m64-select", "llrm-arm64", "llrm-m68k",
         ],
     ),
     ("driver", ["llrm-driver", "llrm-cc", "llrm-bcdriver"]),
