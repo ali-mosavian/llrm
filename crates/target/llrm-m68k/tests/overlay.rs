@@ -52,6 +52,8 @@ fn overlay_instructions_encode_as_binutils_does() {
         (t("TST8d", "d0"), "4a00"),
         (t("TST16d", "d5"), "4a45"),
         (t("TST32d", "d1"), "4a81"),
+        (t("NOT16d", "d5"), "4645"),
+        (Inst { opcode: "SWAP", operands: vec![register("d3"), register("d3")] }, "4843"),
         (q("ADDQ32a", "a1", 2), "5489"),
         (q("SUBQ32a", "a3", 7), "5f8b"),
     ];
@@ -968,4 +970,29 @@ x:
     let text = compiled(ir, Options { size: true, ..Options::default() });
     assert!(text.contains("move.l\t(8,%sp), %d"), "{text}");
     assert!(!text.contains("(11,%sp)"), "{text}");
+}
+
+fn constant(value: i64) -> String {
+    compiled(&format!("define i32 @f() {{\n  ret i32 {value}\n}}"), Options::default())
+}
+
+/// crc16 loaded 65535 with `move.l #65535` (6 B) twice, where gcc has `moveq #0; not.w` (4 B). A
+/// constant of 0xFF80..0xFFFF is a `moveq` and a `not.w`; 0xFF7F, one short, and 0x10000 are not.
+#[test]
+fn a_constant_just_under_64k_is_a_moveq_and_not_w() {
+    let text = constant(65535);
+    assert!(text.contains("moveq\t#0, %d0") && text.contains("not.w\t%d0"), "{text}");
+    assert!(constant(65408).contains("moveq\t#127, %d0"));
+    assert!(!constant(65407).contains("not.w"));
+    assert!(!constant(65536 * 128).contains("swap"));
+}
+
+/// A `moveq` value shifted up 16 is a `moveq` and a `swap` (4 B for 6); a value that is not a
+/// multiple of 64 KiB is not.
+#[test]
+fn a_constant_shifted_up_16_is_a_moveq_and_swap() {
+    let text = constant(65536 * 3);
+    assert!(text.contains("moveq\t#3, %d0") && text.contains("swap\t%d0"), "{text}");
+    assert!(!constant(65536 * 3 + 1).contains("swap"));
+    assert!(!constant(0).contains("swap"));
 }
