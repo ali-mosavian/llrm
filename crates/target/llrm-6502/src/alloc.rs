@@ -1713,26 +1713,36 @@ pub fn emit(
     stack: bool,
     cmos: bool,
 ) -> Result<(String, Vec<(String, usize)>), String> {
-    let run = |function: MFunction<Class>, sink: bool| {
+    let run = |function: MFunction<Class>, sink: bool, share: bool| {
         if stack {
-            emit_with::<true>(function, labels, cmos, sink)
+            emit_with::<true>(function, labels, cmos, sink, share)
         } else {
-            emit_with::<false>(function, labels, cmos, sink)
+            emit_with::<false>(function, labels, cmos, sink, share)
         }
     };
-    let (code, slots, sunk) = run(function.clone(), true)?;
-    if !sunk {
+    let (code, slots, sunk, shared) = run(function.clone(), true, true)?;
+    if !sunk && !shared {
         return Ok((code, slots));
     }
     let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
     let price = |code: &str, slots: &[(String, usize)]| {
         crate::timing::estimate(cpu, code).map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
     };
-    let Ok((plain, plain_slots, _)) = run(function, false) else { return Ok((code, slots)) };
-    match (price(&code, &slots), price(&plain, &plain_slots)) {
-        (Ok(sunk), Ok(plain_price)) if sunk.0 > plain_price.0 || sunk.1 > plain_price.1 => Ok((plain, plain_slots)),
-        _ => Ok((code, slots)),
+    // each change is kept only where it is no larger and no slower than the function without it
+    let mut best = (code, slots);
+    let mut variants = vec![(false, false)];
+    if sunk && shared {
+        variants.extend([(true, false), (false, true)]);
     }
+    for (sink, share) in variants {
+        let Ok((other, other_slots, _, _)) = run(function.clone(), sink, share) else { continue };
+        if let (Ok(kept), Ok(candidate)) = (price(&best.0, &best.1), price(&other, &other_slots)) {
+            if kept.0 > candidate.0 || kept.1 > candidate.1 {
+                best = (other, other_slots);
+            }
+        }
+    }
+    Ok(best)
 }
 
 /// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
@@ -1833,10 +1843,12 @@ fn emit_with<const STACK: bool>(
     labels: &[Vec<String>],
     cmos: bool,
     sink: bool,
-) -> Result<(String, Vec<(String, usize)>, bool), String> {
+    share: bool,
+) -> Result<(String, Vec<(String, usize)>, bool, bool), String> {
     // an instruction goes to the one path that reads it; a bump of a pointer is then done in place,
     // and the read of the old pointer that follows it goes first
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
+    let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
     two_address(&mut function);
     let (assignment, mut slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;
@@ -2222,7 +2234,7 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
-    Ok((crate::emit::relax_bra(&relax(&out)), slots, sunk))
+    Ok((crate::emit::relax_bra(&relax(&out)), slots, sunk, shared))
 }
 
 /// A conditional branch reaches 127 bytes. An instruction is at most 3 bytes,

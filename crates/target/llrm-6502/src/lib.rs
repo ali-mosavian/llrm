@@ -8,6 +8,7 @@ pub mod frame;
 pub mod platform;
 pub mod prepare;
 pub mod select;
+pub mod sharecmp;
 pub mod target;
 pub mod timing;
 
