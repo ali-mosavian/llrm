@@ -446,8 +446,7 @@ fn no_call_delivers_two_values_in_one_register() {
     }
 }
 
-const CALL_RETURNING_I64: &str =
-    "target datalayout = \"@m32-datalayout@\"
+const CALL_RETURNING_I64: &str = "target datalayout = \"@m32-datalayout@\"
 define internal cc 1002 i64 @t_(double noundef %0) {
 b1:
   %1 = fptosi double %0 to i64

@@ -634,8 +634,7 @@ fn a_double_copied_between_pinned_xmm_registers_stays_in_xmm() {
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare double @g(double)\n\
                 define double @f(double %a) {\n  %r = call double @g(double %a)\n  ret double %r\n}\n";
-    let (built, _) =
-        compiled(&flags(&["-O1", "--isel=dag", "-fno-optimize-sibling-calls"]), text, "f").unwrap();
+    let (built, _) = compiled(&flags(&["-O1", "--isel=dag", "-fno-optimize-sibling-calls"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     // The call's one-slot frame is `push rax` / `pop rcx`, as the pin's: only a
     // copy touching an xmm register counts.
@@ -981,18 +980,16 @@ fn a_section_names_the_segment_of_a_variable_and_a_function() {
 /// pointers, lowest priority first, in an init-function segment.
 #[test]
 fn global_ctors_become_init_function_pointers_at_x86_64_and_m32() {
-    for (layout, triple) in [
-        ("@m64-datalayout@", "x86_64-unknown-linux-gnu"),
-        ("@m32-datalayout@", "i486-unknown-linux-gnu"),
-    ] {
+    for (layout, triple) in
+        [("@m64-datalayout@", "x86_64-unknown-linux-gnu"), ("@m32-datalayout@", "i486-unknown-linux-gnu")]
+    {
         let text = format!(
             "target datalayout = \"{layout}\"\ntarget triple = \"{triple}\"\n\
              @llvm.global_ctors = appending global [3 x {{ i32, ptr, ptr }}] [{{ i32, ptr, ptr }} {{ i32 200, ptr @late, ptr null }}, \
              {{ i32, ptr, ptr }} {{ i32 100, ptr @early, ptr null }}, {{ i32, ptr, ptr }} {{ i32 150, ptr null, ptr null }}]\n\
              define void @early() {{\n  ret void\n}}\ndefine internal void @late() {{\n  ret void\n}}\n"
         );
-        let (built, _) =
-            compiled(&flags(&[]), &text, "ctors").unwrap_or_else(|error| panic!("{triple}: {error}"));
+        let (built, _) = compiled(&flags(&[]), &text, "ctors").unwrap_or_else(|error| panic!("{triple}: {error}"));
         let (_, items) = built
             .data
             .iter()
@@ -1305,8 +1302,7 @@ fn a_clang_unit_with_decorated_symbols_keeps_its_functions_in_the_debug_info() {
         .lines()
         .map(|line| {
             if line.starts_with("target datalayout") {
-                "target datalayout = \"@m32-datalayout@\""
-                    .to_owned()
+                "target datalayout = \"@m32-datalayout@\"".to_owned()
             } else {
                 line.to_owned()
             }
@@ -1326,8 +1322,7 @@ fn the_debug_flavor_asked_for_reaches_the_object() {
         .lines()
         .map(|line| {
             if line.starts_with("target datalayout") {
-                "target datalayout = \"@m32-datalayout@\""
-                    .to_owned()
+                "target datalayout = \"@m32-datalayout@\"".to_owned()
             } else {
                 line.to_owned()
             }
@@ -1350,16 +1345,14 @@ fn a_dwarf_2_object_from_clang_leaves_out_the_files_md5() {
         .lines()
         .map(|line| {
             if line.starts_with("target datalayout") {
-                "target datalayout = \"@m32-datalayout@\""
-                    .to_owned()
+                "target datalayout = \"@m32-datalayout@\"".to_owned()
             } else {
                 line.to_owned()
             }
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let (built, format) =
-        compiled(&flags(&["-m32", "-gdwarf-2", "-fobject-format=elf"]), &text, "dbgfix").unwrap();
+    let (built, format) = compiled(&flags(&["-m32", "-gdwarf-2", "-fobject-format=elf"]), &text, "dbgfix").unwrap();
     assert_eq!(built.debug.as_ref().expect("debug info").source.as_ref().map(|(_, md5)| md5.is_none()), Some(true));
     llrm_codegen::backend::objbuild::written_in(
         &built,
@@ -1379,16 +1372,14 @@ fn a_variable_in_two_registers_is_written_to_coff_as_subfields() {
         .lines()
         .map(|line| {
             if line.starts_with("target datalayout") {
-                "target datalayout = \"@m32-datalayout@\""
-                    .to_owned()
+                "target datalayout = \"@m32-datalayout@\"".to_owned()
             } else {
                 line.to_owned()
             }
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let (built, format) =
-        compiled(&flags(&["-m32", "-O2", "-g", "-fobject-format=coff"]), &text, "dbgpieces").unwrap();
+    let (built, format) = compiled(&flags(&["-m32", "-O2", "-g", "-fobject-format=coff"]), &text, "dbgpieces").unwrap();
     llrm_codegen::backend::objbuild::written_in(
         &built,
         "dbgpieces.ll",
@@ -1406,8 +1397,7 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
         .lines()
         .map(|line| {
             if line.starts_with("target datalayout") {
-                "target datalayout = \"@m32-datalayout@\""
-                    .to_owned()
+                "target datalayout = \"@m32-datalayout@\"".to_owned()
             } else {
                 line.to_owned()
             }
@@ -1757,9 +1747,7 @@ const ALIGNED_IR: &str = "declare i32 @use(ptr)\n\
 /// stack taken back from the frame register.
 #[test]
 fn m32_over_aligned_local_realigns_the_stack_pointer() {
-    let text = format!(
-        "target datalayout = \"@m32-datalayout@\"\n{ALIGNED_IR}"
-    );
+    let text = format!("target datalayout = \"@m32-datalayout@\"\n{ALIGNED_IR}");
     let (built, _) = compiled(&flags(&["-m32", "-O1"]), &text, "aligned").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
@@ -1772,9 +1760,7 @@ fn m32_over_aligned_local_realigns_the_stack_pointer() {
 /// its reason, not compiled off its alignment.
 #[test]
 fn m16_over_aligned_local_is_refused() {
-    let text = format!(
-        "target datalayout = \"@m16-datalayout@-ni:2:3\"\n{ALIGNED_IR}"
-    );
+    let text = format!("target datalayout = \"@m16-datalayout@-ni:2:3\"\n{ALIGNED_IR}");
     let error = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().unwrap();
     assert!(error.contains("in 16-bit code is not realigned"), "{error}");
 }
