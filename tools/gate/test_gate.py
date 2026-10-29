@@ -904,6 +904,14 @@ def test_a_must_pass_file_that_skips_every_test_fails_the_run(tmp_path):
     assert done.returncode == 1 and "test_b.py is a must-pass file and ran 0 passed, 1 skipped" in done.stdout, done.stdout
 
 
+def test_a_failed_rerun_file_is_run_once_more_and_both_verdicts_are_printed(tmp_path):
+    """NIBBLES m16 failed in CI run 4 and 5 and passed locally: a red that cannot say whether it fails again cannot be told from a flaky one."""
+    marker = tmp_path / "seen"
+    body = f"import pathlib\n\n\ndef test_first_time_only():\n    m = pathlib.Path({str(marker)!r})\n    seen = m.exists()\n    m.write_text('x')\n    assert seen\n"
+    done = _shards(tmp_path, {"test_a.py": "def test_fine():\n    pass\n", "test_b.py": body, "test_c.py": "def test_ok():\n    pass\n"}, "--rerun", "test_b.py")
+    assert done.returncode == 1 and "test_b.py failed, rerun passed" in done.stdout, done.stdout
+
+
 def test_the_shard_summary_counts_the_tests_passed_and_skipped(tmp_path):
     """A vacuous green must be visible in the log: the summary says how many tests passed and how many skipped."""
     done = _shards(tmp_path, {"test_a.py": "def test_fine():\n    pass\n\n\ndef test_two():\n    pass\n", "test_b.py": "import pytest\n\n\n@pytest.mark.skip\ndef test_demo():\n    pass\n", "test_c.py": "def test_ok():\n    pass\n"})
@@ -912,7 +920,7 @@ def test_the_shard_summary_counts_the_tests_passed_and_skipped(tmp_path):
 
 def test_the_dos_step_requires_the_demo_tests_to_pass():
     cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
-    assert "--must-pass tools/dosbatch/test_qbdemos.py" in cmd
+    assert "--must-pass tools/dosbatch/test_qbdemos.py" in cmd and "--rerun tools/dosbatch/test_qbdemos.py" in cmd
 
 
 def test_the_dos_step_prints_the_host_cpu_and_the_emulator_it_ran_on():
