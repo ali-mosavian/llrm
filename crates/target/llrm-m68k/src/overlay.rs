@@ -16,6 +16,7 @@
 //! Encodings are written here by hand from the 68000 manual and checked
 //! against binutils `m68k-linux-gnu-as` in `tests/overlay.rs`.
 
+use crate::REGISTER_INFO;
 use crate::dagisel::asm::AsmOperand;
 use crate::dagisel::enc::{Enc, Piece};
 use crate::mc::{Inst, Operand};
@@ -44,7 +45,7 @@ pub fn asm(name: &str) -> Option<(&'static str, &'static [AsmOperand])> {
         "TST8d" => ("tst.b\t$dst", DST),
         "TST16d" => ("tst.w\t$dst", DST),
         "TST32d" => ("tst.l\t$dst", DST),
-        _ => return None,
+        _ => return post_increment_rows(name).map(|row| row.asm),
     })
 }
 
@@ -109,7 +110,7 @@ pub fn encoding(name: &str) -> Option<(u16, &'static [Piece])> {
         "TST8d" => (16, &TST[0]),
         "TST16d" => (16, &TST[1]),
         "TST32d" => (16, &TST[2]),
-        _ => return None,
+        _ => return post_increment_rows(name).map(|row| row.encoding),
     })
 }
 
@@ -244,4 +245,146 @@ fn is_branch_on_flags(opcode: &str) -> bool {
             | "Bgt8"
             | "Ble8"
     )
+}
+
+type AsmRow = (&'static str, &'static [AsmOperand]);
+type EncodingRow = (u16, &'static [Piece]);
+
+struct PostIncrementRow {
+    asm: AsmRow,
+    encoding: EncodingRow,
+    /// The operand number of the `(An)` it reads or writes through.
+    operand: usize,
+    bytes: i64,
+}
+
+/// The `(An)+` form of every pin instruction that takes an `(An)` operand in
+/// the effective-address field: the same bits with the mode 2 made 3, the text
+/// with `(An)` made `(An)+`. Named after the `(An)` instruction with a `+`.
+/// Where the pin has the form itself (`move`), the pin's is used.
+fn post_increment_table() -> &'static std::collections::HashMap<&'static str, PostIncrementRow> {
+    static TABLE: std::sync::OnceLock<std::collections::HashMap<&'static str, PostIncrementRow>> =
+        std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = std::collections::HashMap::new();
+        for &(name, text, operands) in crate::dagisel::asm::ASM.iter() {
+            let Some(ari) =
+                operands.iter().find(|one| one.method.starts_with("printARI") && one.method.ends_with("Mem"))
+            else {
+                continue;
+            };
+            let bytes = match ari.method {
+                "printARI8Mem" => 1,
+                "printARI16Mem" => 2,
+                "printARI32Mem" => 4,
+                _ => continue,
+            };
+            let Some(&(_, width, pieces)) = crate::dagisel::enc::encoding(name) else { continue };
+            let mode = |piece: &Piece| matches!(piece, Piece::Const { lo: 3, width: 3, value: 2 });
+            if pieces.iter().filter(|piece| mode(piece)).count() != 1 {
+                continue;
+            }
+            let pieces: Vec<Piece> = pieces
+                .iter()
+                .map(|piece| if mode(piece) { Piece::Const { lo: 3, width: 3, value: 3 } } else { *piece })
+                .collect();
+            let operands: Vec<AsmOperand> = operands
+                .iter()
+                .map(|one| AsmOperand {
+                    name: one.name,
+                    at: one.at,
+                    method: match one.method {
+                        "printARI8Mem" => "printARIPI8Mem",
+                        "printARI16Mem" => "printARIPI16Mem",
+                        "printARI32Mem" => "printARIPI32Mem",
+                        other => other,
+                    },
+                })
+                .collect();
+            let key: &'static str = Box::leak(format!("{name}+").into_boxed_str());
+            let row = PostIncrementRow {
+                asm: (text, Box::leak(operands.into_boxed_slice())),
+                encoding: (width, Box::leak(pieces.into_boxed_slice())),
+                operand: usize::from(ari.at),
+                bytes,
+            };
+            table.insert(key, row);
+        }
+        table
+    })
+}
+
+fn post_increment_rows(name: &str) -> Option<&'static PostIncrementRow> {
+    post_increment_table().get(name)
+}
+
+/// The post-increment form of an instruction with an `(An)` operand.
+fn post_increment_form(opcode: &str) -> Option<(&'static str, &'static PostIncrementRow)> {
+    post_increment_table().get_key_value(format!("{opcode}+").as_str()).map(|(name, row)| (*name, row))
+}
+
+/// An access through `(An)` followed by the `addq.l #size, An` that steps the
+/// register past it is one access through `(An)+` (the increment sets no
+/// condition codes, so moving it up changes none): `add.l (%a0), %d0 ...
+/// addq.l #4, %a0` is `add.l (%a0)+, %d0`.
+pub fn fold_post_increment(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::Line> {
+    use crate::expand::Line;
+    let mut lines = lines;
+    let mut at = 0;
+    while at < lines.len() {
+        let Line::Inst(access) = &lines[at] else {
+            at += 1;
+            continue;
+        };
+        let Some((form, row)) = post_increment_form(access.opcode) else {
+            at += 1;
+            continue;
+        };
+        let bytes = row.bytes;
+        let Some(&Operand::Reg(base)) = access.operands.get(row.operand) else {
+            at += 1;
+            continue;
+        };
+        let root = REGISTER_INFO.root(base);
+        let mentions =
+            |inst: &Inst| inst.operands.iter().any(|o| matches!(o, Operand::Reg(r) if REGISTER_INFO.root(*r) == root));
+        let others = access
+            .operands
+            .iter()
+            .enumerate()
+            .any(|(n, o)| n != row.operand && matches!(o, Operand::Reg(r) if REGISTER_INFO.root(*r) == root));
+        if others || (bytes == 1 && base == crate::reg::SP) {
+            at += 1;
+            continue;
+        }
+        let mut step = None;
+        for (later, line) in lines.iter().enumerate().skip(at + 1) {
+            let Line::Inst(inst) = line else { break };
+            let is_step = matches!(inst.opcode, "ADDQ32a" | "ADD32ai")
+                && matches!(
+                    inst.operands[..],
+                    [Operand::Reg(to), ..] if REGISTER_INFO.root(to) == root
+                )
+                && matches!(inst.operands.last(), Some(Operand::Imm(n)) if *n == bytes);
+            if is_step {
+                step = Some(later);
+                break;
+            }
+            if mentions(inst)
+                || is_branch_on_flags(inst.opcode)
+                || inst.opcode.starts_with("BRA")
+                || inst.opcode == "RTS"
+            {
+                break;
+            }
+        }
+        if let Some(step) = step {
+            lines.remove(step);
+            if let Line::Inst(access) = &mut lines[at] {
+                access.opcode = form;
+            }
+        }
+        at += 1;
+    }
+    lines
 }

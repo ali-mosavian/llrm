@@ -473,6 +473,7 @@ dependencies = [
  "llrm-mir",
  "llrm-spike-mf",
  "llrm-target",
+ "llrm-transforms",
 ]
 
 [[package]]

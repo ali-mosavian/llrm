@@ -89,15 +89,23 @@ pub trait Allocate<C> {
     ) -> Result<Assignment, String>;
 }
 
-/// Where a predecessor's copies for its successors' phis go: before the
-/// terminators, and before the instruction that sets the flags a terminator
-/// reads, since a copy may set them too.
-fn copy_point(insts: &[Inst]) -> usize {
+/// Where a predecessor's copy of `source` for a successor's phi goes: before
+/// the terminators, and before the instruction that sets the flags a
+/// terminator reads, since a copy may set them too; but not above an
+/// instruction that defines `source`, which must run first.
+fn copy_point(
+    insts: &[Inst],
+    source: Reg,
+) -> usize {
     let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
     if !insts[first..].iter().any(|inst| inst.reads_flags) {
         return first;
     }
-    insts[..first].iter().rposition(|inst| inst.sets_flags).unwrap_or(first)
+    let Some(setter) = insts[..first].iter().rposition(|inst| inst.sets_flags) else { return first };
+    let defines_source = insts[setter..first]
+        .iter()
+        .any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(reg) if *reg == source)));
+    if defines_source { first } else { setter }
 }
 
 /// `PHIElimination`: a phi becomes a copy of each incoming value into a new
@@ -119,7 +127,7 @@ pub fn eliminate_phis<C: Copy>(function: &mut MFunction<C>) {
             let temporary = Reg::Virt(function.classes.len() as u32 - 1);
             for (pred, incoming) in phi.incoming {
                 let insts = &mut function.blocks[pred].insts;
-                let point = copy_point(insts);
+                let point = copy_point(insts, incoming);
                 insts.insert(point, Inst::copy(temporary, incoming));
             }
             heads.push(Inst::copy(phi.result, temporary));
