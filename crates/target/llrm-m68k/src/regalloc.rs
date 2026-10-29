@@ -125,6 +125,15 @@ pub fn allocate_spilling(
     llrm_spike_mf::spill::allocate_spilling::<M68kRegisters>(function, first_slot)
 }
 
+/// [`allocate_spilling`], with the copies a loop runs on every trip joined
+/// first.
+pub fn allocate_spilling_by_frequency(
+    function: &mut MFunction,
+    first_slot: i32,
+) -> Result<(Assignment, Vec<(i32, Class)>), String> {
+    llrm_spike_mf::spill::allocate_spilling_ordered::<M68kRegisters>(function, first_slot, true)
+}
+
 /// `MachineSinking` over the m68k function.
 pub fn machine_sink(function: &mut MFunction) -> bool {
     llrm_spike_mf::machine_sink::<M68kRegisters>(function)
@@ -152,6 +161,11 @@ pub fn remove_identity_copies(
     assignment: &Assignment,
 ) {
     llrm_spike_mf::remove_identity_copies::<M68kRegisters>(function, assignment)
+}
+
+/// An edge the phi's copy would cross a compare on gets a block of its own.
+pub fn split_flag_edges(function: &mut MFunction) {
+    llrm_spike_mf::regalloc::split_flag_edges::<M68kRegisters, _>(function)
 }
 
 /// `TwoAddressInstructionPass`'s choice of the tied source.

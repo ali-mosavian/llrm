@@ -13,6 +13,7 @@ use std::marker::PhantomData;
 use llrm_lir::registers::RegId;
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
+use crate::sink::{Jump, split_critical_edge};
 
 /// What the allocator needs to know of a register file.
 pub trait Target {
@@ -131,6 +132,41 @@ fn hoisted_point(
             && insts[..at].iter().rposition(|i| i.sets_flags).is_some_and(|setter| setter < last)
     });
     if strands_reader { point } else { last }
+}
+
+/// A forward critical edge into a phi gets a block of its own where the
+/// copy for the phi would otherwise sit above the instruction that sets the
+/// flags its branch reads (see [`copy_point`]): there the copy's register is
+/// live across the compare, next to the register the compare reads, and the
+/// two cannot share. On the edge the copy follows the compare and the branch.
+///
+/// DEVIATE from `PHIElimination::SplitPHIEdges`, which splits only an edge
+/// whose source is live out past the phis, because the pin puts the copy after
+/// the compare and saves `sr` around it. Reason: `move.w %sr` is privileged
+/// from the 68010 on. Exit: never; a target choice.
+pub fn split_flag_edges<T: Jump, C>(function: &mut MFunction<C>) {
+    'again: loop {
+        let succs = successors(function);
+        for to in 0..function.blocks.len() {
+            let preds: Vec<usize> = (0..function.blocks.len()).filter(|p| succs[*p].contains(&to)).collect();
+            if preds.len() < 2 {
+                continue;
+            }
+            for phi in function.blocks[to].phis.clone() {
+                for (pred, source) in phi.incoming {
+                    let insts = &function.blocks[pred].insts;
+                    let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+                    if pred >= to || succs[pred].len() < 2 || copy_point(insts, source) == first {
+                        continue;
+                    }
+                    if split_critical_edge(function, pred, to, &T::jump).is_some() {
+                        continue 'again;
+                    }
+                }
+            }
+        }
+        return;
+    }
 }
 
 /// `PHIElimination`: a phi becomes a copy of each incoming value into a new
@@ -351,11 +387,16 @@ fn liveness<C>(
 }
 
 /// The graph colouring allocator.
-pub struct GraphColoring<T>(PhantomData<T>);
+pub struct GraphColoring<T> {
+    /// Join copies that run on every trip of a loop before the ones in a
+    /// branch of it (see [`GraphColoring::colour`]).
+    pub by_frequency: bool,
+    marker: PhantomData<T>,
+}
 
 impl<T> Default for GraphColoring<T> {
     fn default() -> Self {
-        GraphColoring(PhantomData)
+        GraphColoring { by_frequency: false, marker: PhantomData }
     }
 }
 
@@ -374,6 +415,47 @@ impl<T: Target> Allocate<T::Class> for GraphColoring<T> {
 }
 
 impl<T: Target> GraphColoring<T> {
+    /// A colourer that joins in the order [`GraphColoring::colour`] describes
+    /// where `by_frequency`.
+    pub fn by_frequency(by_frequency: bool) -> Self {
+        GraphColoring { by_frequency, marker: PhantomData }
+    }
+
+    /// The copies in the order the coalescer tries them. `RegisterCoalescer`
+    /// goes by loop depth, deeper first, then block number
+    /// (`compareMBBPriority`, RegisterCoalescer.cpp L4058). With
+    /// `by_frequency`, within a depth the blocks every trip passes through
+    /// (those that post-dominate the loop's header, or the entry) come before
+    /// the others.
+    ///
+    /// DEVIATE: the second key. Reason: the pin's greedy allocator splits and
+    /// hints around a join that blocks a better one; this one cannot, so a
+    /// copy in one arm of a select joined first (the loaded value into the
+    /// result) keeps the loop-carried copy, run every trip, from joining.
+    /// Exit: the neutral-LIR task.
+    fn copies_in_join_order<'a>(
+        &self,
+        function: &'a MFunction<T::Class>,
+    ) -> Vec<&'a Inst> {
+        let mut keyed: Vec<((std::cmp::Reverse<usize>, bool, usize), &Inst)> = Vec::new();
+        let cfg = crate::cfg::Cfg::new(function);
+        for (at, block) in function.blocks.iter().enumerate() {
+            let depth = cfg.cycle_depth(at);
+            let always = self.by_frequency
+                && match cfg.cycle(at) {
+                    Some(header) => cfg.post_dominates(at, header),
+                    None => cfg.post_dominates(at, 0),
+                };
+            for inst in block.insts.iter().filter(|inst| inst.kind == Kind::Copy) {
+                keyed.push(((std::cmp::Reverse(depth), !always, at), inst));
+            }
+        }
+        if self.by_frequency {
+            keyed.sort_by_key(|(key, _)| *key);
+        }
+        keyed.into_iter().map(|(_, inst)| inst).collect()
+    }
+
     /// Colour every register, or name the first one nothing fits.
     pub fn colour(
         &self,
@@ -462,7 +544,7 @@ impl<T: Target> GraphColoring<T> {
         classes.resize(total, T::any());
         // `RegisterCoalescer`, aggressively: copies joined in program order
         // unless the two interfere
-        for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Copy) {
+        for inst in self.copies_in_join_order(function) {
             let (Operand::Def(a), Operand::Use(b)) = (&inst.operands[0], &inst.operands[1]) else { continue };
             if matches!(a, Reg::Phys(p) if T::reserved(T::root(*p)))
                 || matches!(b, Reg::Phys(p) if T::reserved(T::root(*p)))

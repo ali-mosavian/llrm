@@ -341,10 +341,20 @@ pub fn allocate_spilling<T: Target>(
     function: &mut MFunction<T::Class>,
     first_slot: i32,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
+    allocate_spilling_ordered::<T>(function, first_slot, false)
+}
+
+/// [`allocate_spilling`], joining the copies a loop runs on every trip first
+/// where `by_frequency` (see [`GraphColoring::colour`]).
+pub fn allocate_spilling_ordered<T: Target>(
+    function: &mut MFunction<T::Class>,
+    first_slot: i32,
+    by_frequency: bool,
+) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     let mut slots = Vec::new();
     let mut temporaries = HashSet::new();
     loop {
-        let failed = match GraphColoring::<T>::default().colour(function) {
+        let failed = match GraphColoring::<T>::by_frequency(by_frequency).colour(function) {
             Ok(assignment) => return Ok((assignment, slots)),
             Err(failed) => failed,
         };
