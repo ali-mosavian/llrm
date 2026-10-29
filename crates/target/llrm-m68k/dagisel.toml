@@ -10,6 +10,8 @@ isd = "M68kISD::"
 llvm_dir = "M68k"
 td = "M68k.td"
 out = "src/dagisel/generated"
+# The asm strings of the instructions (asm.rs), for the printer.
+asm = "M68k"
 cpus = ["m68000", "m68020"]
 # Named by the hand code (src/dagisel/addr.rs, hooks.rs, pipeline.rs).
 extra_symbols = [
