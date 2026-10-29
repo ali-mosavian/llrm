@@ -264,6 +264,36 @@ pub fn drop_redundant_tests(lines: Vec<crate::expand::Line>) -> Vec<crate::expan
     lines.into_iter().zip(drop).filter(|(_, dropped)| !dropped).map(|(line, _)| line).collect()
 }
 
+/// A compare of the same operands as the one before it, with only conditional
+/// branches between, sets the codes they already hold: `cmp.l %a1, %d2; beq L;
+/// cmp.l %a1, %d2; bge M` is one `cmp`. A fall-through past a branch changes
+/// nothing, and neither does a branch.
+///
+/// DEVIATE from the pin's output, which compares again in the next block (its
+/// peephole `optimizeCompareInstr` works inside one block). Reason: gcc's
+/// `jeq; jge` after one `cmp`: an instruction and 2 bytes per trip (bsearch).
+/// Exit: never; a target choice, off with `Options::overlay`.
+pub fn drop_repeated_compares(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::Line> {
+    use crate::expand::Line;
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len());
+    // the compare whose codes are still in force
+    let mut held: Option<Inst> = None;
+    for line in lines {
+        match &line {
+            Line::Inst(inst) if inst.opcode.starts_with("CMP") || inst.opcode.starts_with("TST") => {
+                if held.as_ref() == Some(inst) {
+                    continue;
+                }
+                held = Some(inst.clone());
+            }
+            Line::Inst(inst) if is_branch_on_flags(inst.opcode) => {}
+            _ => held = None,
+        }
+        out.push(line);
+    }
+    out
+}
+
 /// A conditional branch in its 8-bit form (the form the compiler emits; the
 /// assembler relaxes it later).
 pub(crate) fn is_branch_on_flags(opcode: &str) -> bool {

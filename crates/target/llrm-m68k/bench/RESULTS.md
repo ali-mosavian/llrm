@@ -1,4 +1,4 @@
-# Results, 2026-10-29 18:20 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Results, 2026-10-29 18:22 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 gcc is m68k-linux-gnu-gcc 15 (`-mcpu=68000`), the Debian cross toolchain unpacked without root. Cycles are not
 modelled: "insns" are executed instructions, which price a 68000 `move` and a `muls` the same. "ours" has the
@@ -21,14 +21,14 @@ Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -
 | absdiff | 22 | 22 | 22 | 22 | 22 | 7 | 7 | 7 | 7 | 7 | at or below |
 | clamp | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | at or below |
 | fib | 28 | 28 | 28 | 22 | 22 | 67 | 67 | 67 | 64 | 64 | at or below |
-| gcd | 26 | 26 | 28 | 26 | 26 | 17 | 17 | 16 | 17 | 17 | -O2 +1 insns |
+| gcd | 24 | 24 | 28 | 24 | 26 | 15 | 15 | 16 | 15 | 17 | at or below |
 | arrsum | 32 | 22 | 22 | 20 | 20 | 103 | 69 | 69 | 68 | 68 | at or below |
 | arrmax | 38 | 32 | 32 | 26 | 26 | 130 | 100 | 100 | 97 | 97 | at or below |
 | countgt | 50 | 42 | 42 | 38 | 42 | 152 | 136 | 123 | 134 | 168 | -O2 +13 insns |
 | strlen | 18 | 14 | 20 | 16 | 18 | 59 | 45 | 44 | 45 | 57 | -O2 +1 insns |
 | copy | 34 | 36 | 34 | 34 | 34 | 59 | 62 | 59 | 59 | 59 | -O2 +2 B, -O2 +3 insns |
 
-Rows still above a reference: max, gcd, countgt, strlen, copy.
+Rows still above a reference: max, countgt, strlen, copy.
 
 ## Full table
 
@@ -40,7 +40,7 @@ Rows still above a reference: max, gcd, countgt, strlen, copy.
 | absdiff | 22 | 22 | 22 | 22 | 22 | 24 | 24 | 7 | 7 | 7 | 7 | 7 | 8 | 7 | 42 all |
 | clamp | 26 | 26 | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 42 all |
 | fib | 28 | 28 | 22 | 66 | 66 | 22 | 28 | 67 | 67 | 64 | 139 | 139 | 64 | 67 | 89 all |
-| gcd | 26 | 26 | 26 | 32 | 26 | 26 | 28 | 17 | 17 | 17 | 16 | 17 | 17 | 16 | 42 all |
+| gcd | 24 | 24 | 24 | 32 | 26 | 26 | 28 | 15 | 15 | 15 | 16 | 17 | 17 | 16 | 42 all |
 | arrsum | 32 | 22 | 20 | 64 | 64 | 20 | 22 | 103 | 69 | 68 | 153 | 153 | 68 | 69 | 80 all |
 | arrmax | 38 | 32 | 26 | 92 | 88 | 26 | 32 | 130 | 100 | 97 | 248 | 235 | 97 | 100 | 9 all |
 | countgt | 50 | 42 | 38 | 86 | 86 | 42 | 42 | 152 | 136 | 134 | 234 | 234 | 168 | 123 | 9 all |
@@ -52,7 +52,6 @@ Rows still above a reference: max, gcd, countgt, strlen, copy.
 | kernel | level | reference | ours | gap |
 |---|---|---|---|---|
 | max | both | 5 insns gcc | 6 (= llc) | not a gap: gcc's 5 holds only for the bench's input (a <= b); for a > b gcc runs 6 and ours 5 |
-| gcd | -O2 | 16 insns llc | 17 | llc rotates the loop (loop rotation, neutral-LIR task; tail duplication and block placement held) |
 | countgt | -O2 | 123 insns gcc | 136 | +1 insn per trip by choice: `moveq #0; slt; neg.b` for `slt; and.l #1`, 8 clocks and 2 B less (68000: `and.l #imm,Dn` 16, `moveq` 4, `neg.b Dn` 4); bytes now = gcc (42) |
 | strlen | -O2 | 44 insns gcc | 45 | gcc peels the first test: loop peeling, full -O2 pipeline after the i33 legalizer gap |
 | copy | -O2 | 34 B, 59 insns gcc | 36 B, 62 | by choice: LSR (post-indexed, as the pin does for AArch64) makes two `(An)+` pointers, `d` is live after the loop so one is a copy of it. A trip is 12 clocks less (PRM Table 8-1, byte effective addresses: `(An)+` 4+4 against `(d8,An,Xn)` 10+10); setup is about 38 clocks more (`move.l`, save and restore of `%a2`), so it wins from 4 trips. Off at the size level, where copy stays 34 B |
