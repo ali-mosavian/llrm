@@ -851,11 +851,11 @@ def test_a_row_above_its_clock_limit_fails_the_gate():
 
 
 def test_lru_c_may_not_go_back_to_the_rep_stosb_fill():
-    """lru c -Os ran 377 clocks while a 28-byte `rep stosb` fill replaced its loop; with the loop kept it is 293."""
+    """lru c -Os ran 377 clocks while a 28-byte `rep stosb` fill replaced its loop; with the loop kept it is 289."""
     limits = bench.clock_limits()
-    assert limits["lru c -Os"] == 293
+    assert limits["lru c -Os"] == 289
     assert bench.clock_problems("lru c -Os", {"clocks": 377}, limits) == [
-        "lru c -Os: clocks 377 > limit 293 (tools/bench/clock_limits.toml)"
+        "lru c -Os: clocks 377 > limit 289 (tools/bench/clock_limits.toml)"
     ]
 
 
