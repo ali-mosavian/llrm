@@ -88,6 +88,12 @@ fn sunk_from(
         let Some(first) = function.iter_block(exit).find(|&one| function.instruction(one).opcode != Opcode::Phi) else {
             continue;
         };
+        llrm_support::debug!(
+            "indvars",
+            "sink {} to the exit {:?}",
+            function.instruction(inst).opcode.mnemonic(),
+            function.instruction(inst).result.and_then(|value| function.value(value).name.clone())
+        );
         function.move_to(inst, Position::Before(first)).expect("a placed instruction");
         changed = true;
     }
