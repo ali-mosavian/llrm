@@ -179,6 +179,34 @@ fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
         .collect()
 }
 
+/// Which instruction selector makes the machine function.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IselMode {
+    Hand,
+    Dag,
+    Shadow,
+}
+
+fn isel_mode() -> IselMode {
+    if llrm_support::env_flag!("LLRM_ISEL_DAG") {
+        IselMode::Dag
+    } else if llrm_support::env_flag!("LLRM_ISEL_SHADOW") {
+        IselMode::Shadow
+    } else {
+        IselMode::Hand
+    }
+}
+
+/// `name` through the DAG path: the pin's table and the shared stages.
+fn dag_select(
+    module: &llrm_mir::module::Module,
+    name: &str,
+    layout: &llrm_mir::datalayout::DataLayout,
+) -> Result<crate::mfunc::MFunc, String> {
+    let blocks = crate::dag::function::select_function_in(module, name, layout)?;
+    crate::dag::emit::emit(name, &blocks)
+}
+
 /// Every defined function of `program`'s one module, selected, allocated and
 /// lowered.
 pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String> {
@@ -190,8 +218,16 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
-        let mut machine =
-            crate::isel::select(module, id, &program.layout, platform).map_err(|why| format!("@{name}: {why}"))?;
+        let mut machine = match isel_mode() {
+            IselMode::Hand => crate::isel::select(module, id, &program.layout, platform),
+            IselMode::Dag => dag_select(module, &name, &program.layout),
+            // A refusal of the DAG path falls back to the hand selector, counted.
+            IselMode::Shadow => dag_select(module, &name, &program.layout).or_else(|why| {
+                eprintln!("isel-shadow: @{name}: {why}");
+                crate::isel::select(module, id, &program.layout, platform)
+            }),
+        }
+        .map_err(|why| format!("@{name}: {why}"))?;
         dump("Select", &machine);
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
