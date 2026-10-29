@@ -5,7 +5,7 @@
 //! when the phi's old value is still read on the edge that does not take it. Reason: the spike has
 //! no critical-edge splitting. Exit: the shared machine function.
 //!
-//! DEVIATE: no static allocas, jump tables, switches or live-in registers: the
+//! DEVIATE: no static allocas or jump tables: the
 //! builder makes the frame objects and the C convention passes what the registers do not hold on
 //! the stack, so the slice (arithmetic, branches, calls) needs none. Reason:
 //! frame objects wait for the 6502 machine function. Exit: M4.
@@ -13,7 +13,7 @@
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
-use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, build_block};
+use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
@@ -74,20 +74,33 @@ pub fn select_function(
     let mut info = FunctionLoweringInfo::new(function);
     let mut selected = Vec::new();
     for &block in function.layout() {
-        let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
+        let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        if !built.extra.is_empty() {
-            return Err("a switch lowering made blocks".to_owned());
-        }
-        let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
-        let mut phi_copies = Vec::new();
-        for (at, (phi, input)) in built.phi_updates.iter().enumerate() {
-            let own = *info.value_regs.get(phi).ok_or("a phi with no register")?;
-            // A value of several registers has one entry per part, in order.
-            let part = built.phi_updates[..at].iter().filter(|(one, _)| one == phi).count();
-            phi_copies.push((*input, if part == 0 { own } else { info.part_regs(own, part + 1)[part] }));
-        }
-        selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, phi_copies });
+        select_built(block, built, cpu, &mut info, &mut selected)?;
     }
     Ok(selected)
+}
+
+/// One built block selected and scheduled, then the blocks its `switch` lowering made. Every branch
+/// is to a label, so their position in the text does not matter.
+fn select_built(
+    block: BlockId,
+    mut built: BlockDag,
+    cpu: Cpu,
+    info: &mut FunctionLoweringInfo,
+    selected: &mut Vec<Selected>,
+) -> Result<(), String> {
+    let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
+    let mut phi_copies = Vec::new();
+    for (at, (phi, input)) in built.phi_updates.iter().enumerate() {
+        let own = *info.value_regs.get(phi).ok_or("a phi with no register")?;
+        // A value of several registers has one entry per part, in order.
+        let part = built.phi_updates[..at].iter().filter(|(one, _)| one == phi).count();
+        phi_copies.push((*input, if part == 0 { own } else { info.part_regs(own, part + 1)[part] }));
+    }
+    selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, phi_copies });
+    for (extra, made) in built.extra {
+        select_built(extra, made, cpu, info, selected)?;
+    }
+    Ok(())
 }

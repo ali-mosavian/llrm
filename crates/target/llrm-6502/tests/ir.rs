@@ -233,3 +233,22 @@ fn a_call_with_a_stack_argument_runs() {
         assert_eq!(common::run_with(&format!("pass32-{want}"), &main, &text), want, "{after:?}");
     }
 }
+
+/// Cases 1 and 2 and a default: 1 gives 10, 2 gives 20, 0 and 3 give 30.
+#[test]
+fn a_switch_with_two_cases_runs() {
+    let ir = "define i8 @sw(i8 %x) {\nentry:\n  switch i8 %x, label %d [i8 1, label %a\n i8 2, label %b]\na:\n  ret i8 10\nb:\n  ret i8 20\nd:\n  ret i8 30\n}";
+    for (x, want) in [(1, 10), (2, 20), (0, 30), (3, 30)] {
+        assert_eq!(run(&format!("sw-{x}"), ir, "sw", &set("rc2", x), ""), want, "sw({x})");
+    }
+}
+
+/// Five scattered cases make the builder's binary search over several blocks: 1, 3, 7, 9 and 200
+/// give 1, 3, 7, 9 and 200 doubled mod 256 (144); 2 and 255 are the default 99.
+#[test]
+fn a_switch_with_five_cases_runs() {
+    let ir = "define i8 @sw5(i8 %x) {\nentry:\n  switch i8 %x, label %d [i8 1, label %a\n i8 3, label %b\n i8 7, label %c\n i8 9, label %e\n i8 200, label %f]\na:\n  ret i8 1\nb:\n  ret i8 3\nc:\n  ret i8 7\ne:\n  ret i8 9\nf:\n  ret i8 144\nd:\n  ret i8 99\n}";
+    for (x, want) in [(1, 1), (3, 3), (7, 7), (9, 9), (200, 144), (2, 99), (255, 99)] {
+        assert_eq!(run(&format!("sw5-{x}"), ir, "sw5", &set("rc2", x), ""), want, "sw5({x})");
+    }
+}

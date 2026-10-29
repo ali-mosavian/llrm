@@ -337,17 +337,27 @@ pub fn expand(
             writeln!(out, "  php\n  lda {first}\n  sta {d}\n  plp\n  {branch} {skip}\n  lda {second}\n  sta {d}\n{skip}:")
                 .unwrap();
         }
-        op::BEQ | op::BNE | op::BCC | op::BCS | op::BMI | op::BPL | op::JMP | op::JSR => {
-            let mnemonic = match inst.opcode {
-                op::BEQ => "beq",
-                op::BNE => "bne",
-                op::BCC => "bcc",
-                op::BCS => "bcs",
-                op::BMI => "bmi",
-                op::BPL => "bpl",
-                op::JMP => "jmp",
-                _ => "jsr",
+        // A conditional branch reaches 127 bytes: the opposite branch over a `jmp`.
+        //
+        // DEVIATE: always the long form, no branch relaxation. Reason: the spike does not know the
+        // distance. Exit: the shared branch relaxation.
+        op::BEQ | op::BNE | op::BCC | op::BCS | op::BMI | op::BPL => {
+            let opposite = match inst.opcode {
+                op::BEQ => "bne",
+                op::BNE => "beq",
+                op::BCC => "bcs",
+                op::BCS => "bcc",
+                op::BMI => "bpl",
+                _ => "bmi",
             };
+            *labels += 1;
+            match &o[0] {
+                Operand::Label(l) => writeln!(out, "  {opposite} _br{labels}\n  jmp {l}\n_br{labels}:").unwrap(),
+                other => return Err(format!("a branch takes a label, not {other:?}")),
+            }
+        }
+        op::JMP | op::JSR => {
+            let mnemonic = if inst.opcode == op::JMP { "jmp" } else { "jsr" };
             match &o[0] {
                 Operand::Label(l) => writeln!(out, "  {mnemonic} {l}").unwrap(),
                 other => return Err(format!("{mnemonic} takes a label, not {other:?}")),
