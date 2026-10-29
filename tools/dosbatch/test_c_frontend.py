@@ -206,3 +206,21 @@ def test_the_object_cache_key_names_the_clang(monkeypatch, tmp_path):
         dosbatch.clang_identity.cache_clear()
         keys.append(qbruntime.c_build_key())
     assert keys[0] != keys[1]
+
+
+def test_the_runtime_object_cache_key_follows_the_command_that_builds_the_objects(monkeypatch):
+    """#6025 gave every C compile `-I <generated include>`; its llrm_os.h shadowed the row's and the OS layer lost its stack convention. The cache key
+    named the flags and the compiler binary but not dosbatch.c_compile's command, so a tree whose compiler had not been relinked kept being served
+    the objects of the other command: test_a_flat_programs_count_is_net_of_the_empty_startup_program died with KeyError 426 (a pointer for a DOS
+    handle) in some runs and passed in others, and reverting a PR changed nothing. The key must change with the command."""
+    import qbruntime
+
+    before = qbruntime.c_build_key()
+    real = dosbatch.c_compile
+
+    def with_a_flag(source, obj, target, level, include, abi, extra=()):
+        command, env = real(source, obj, target, level, include, abi, extra)
+        return [*command[:2], "-DSOMETHING_NEW", *command[2:]], env
+
+    monkeypatch.setattr(dosbatch, "c_compile", with_a_flag)
+    assert qbruntime.c_build_key() != before
