@@ -822,6 +822,7 @@ pub(crate) fn fills_pay(
     stores: i64,
     fills: i64,
     kept: i64,
+    clocks: Option<(&OperationCosts, i64, Option<i64>, Option<i64>)>,
 ) -> bool {
     // The loop stays for the stores of computed values: a fill saves one
     // store, less than itself.
@@ -831,8 +832,29 @@ pub(crate) fn fills_pay(
     // The table doubles an operation that becomes more than one instruction;
     // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
     // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
-    stores < 2
-        || fills_cheaper(trip_cost(context, layout, function, callees, blocks.iter(), costs, true), fills, costs.fill)
+    let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
+    (stores < 2 || fills_cheaper(loop_bytes, fills, costs.fill))
+        && clocks.is_none_or(|(clocks, rate, trips, width)| {
+            // The clocks the fill adds against the bytes it saves, as the
+            // backend prices a memset's fill against its stores. The loop
+            // stays when its extra bytes buy fewer clocks than that.
+            let (Some(trips), Some(width)) = (trips, width) else { return true };
+            let each = trip_cost(context, layout, function, callees, blocks.iter(), clocks, true);
+            let fill = fills * clocks.fill + trips * width * clocks.fill_cell;
+            let saved = loop_bytes - 3 * fills * costs.fill / 4;
+            clocks_pay(saved, rate, fill, trips * each)
+        })
+}
+
+/// Whether the `saved` bytes of the fill are worth the clocks it adds over
+/// the loop, at `rate` thousandths of a clock a byte.
+fn clocks_pay(
+    saved: i64,
+    rate: i64,
+    fill: i64,
+    looped: i64,
+) -> bool {
+    saved * rate >= (fill - looped) * 1000
 }
 
 /// Whether a loop of `loop_bytes` is more than `fills` fills of `fill` bytes by

@@ -147,6 +147,10 @@ impl FunctionPass for LoopIdiom {
         let held = analyses.get::<llrm_analysis::scev::analysis::Scevs>(unit.context, unit.layout, unit.function);
         let mut se = held.take();
         let size_costs = self.for_size.then(|| outer.target().size_costs());
+        let clock_costs = self
+            .for_size
+            .then(|| (outer.target().costs(), outer.target().size_milliclocks_per_byte()))
+            .filter(|(_, rate)| *rate > 0);
         let mut changed = false;
         for header in headers {
             let cur_loop = loops.get_loop_for(header).expect("a loop");
@@ -160,6 +164,7 @@ impl FunctionPass for LoopIdiom {
                 declared: &mut *unit.declared,
                 cur_loop,
                 bytes: size_costs.as_ref().map(|costs| (costs, outer.callees())),
+                clocks: clock_costs.as_ref().map(|(costs, rate)| (costs, *rate)),
                 tti: tti.as_deref(),
             };
             let mut idiom = LoopIdiomRecognize::new(self.options, self.library);

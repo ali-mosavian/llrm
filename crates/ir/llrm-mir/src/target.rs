@@ -46,6 +46,13 @@ pub trait Machine {
         None
     }
 
+    /// Clocks a byte of code is worth, in thousandths, where a decision is
+    /// made for size: the smaller form is kept while the clocks it costs are
+    /// under this per byte saved. None: bytes alone decide.
+    fn size_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
     /// What each operation costs in code bytes, for a decision made for
     /// size; by default the same prices.
     fn size_costs(&self) -> OperationCosts {

@@ -63,6 +63,9 @@ pub struct Run<'a> {
     pub cur_loop: Loop<'a>,
     /// The target's code-byte prices and the callees, at `-Os`.
     pub bytes: Option<(&'a OperationCosts, &'a llrm_mir::memory::Callees)>,
+    /// The target's clock prices and what a byte of code is worth in them
+    /// (thousandths of a clock), at `-Os`; none, bytes alone decide.
+    pub clocks: Option<(&'a OperationCosts, i64)>,
     /// `TTI`: the target's costs, where it has them.
     pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
@@ -285,6 +288,12 @@ impl LoopIdiomRecognize {
                 stores,
                 groups.len() as i64,
                 kept,
+                run.clocks.map(|(clocks, rate)| {
+                    let (be, size) = (run.se.match_apint(args.be_count), run.se.match_apint(args.store_size_scev));
+                    let trips = be.filter(|be| be.active_bits() <= 32).map(|be| be.zext_value() as i64 + 1);
+                    let width = size.filter(|size| size.active_bits() <= 32).map(|size| size.zext_value() as i64);
+                    (clocks, rate, trips, width.map(|width| width * stores))
+                }),
             ) {
                 return false;
             }

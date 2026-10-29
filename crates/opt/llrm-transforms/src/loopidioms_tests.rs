@@ -1066,3 +1066,13 @@ fn a_fill_is_priced_at_three_quarters_of_the_table() {
     assert!(!super::fills_cheaper(24, 2, 18));
     assert!(!super::fills_cheaper(42, 4, 18));
 }
+
+/// lru's init at m16 -Os: the loop of two word stores is 5 bytes over the
+/// `rep stosb` the pin makes of it and 87 clocks under it (42 against 129),
+/// 17 clocks a byte against the target's 10. Formed on bytes alone it took
+/// bench lru -Os from 42 to 129 clocks for those 5 bytes.
+#[test]
+fn a_fill_that_saves_five_bytes_for_87_clocks_is_not_worth_it() {
+    assert!(!super::clocks_pay(5, 10_000, 129, 42));
+    assert!(super::clocks_pay(5, 10_000, 90, 42), "48 clocks for 5 bytes pay");
+}
