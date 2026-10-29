@@ -1,0 +1,296 @@
+_sum_to:
+.Lsum_to.0:
+	orr x11, xzr, x0, lsl #0
+	orr x0, xzr, xzr, lsl #0
+	orr x10, xzr, x0, lsl #0
+.Lsum_to.1:
+	add w0, w0, w10, lsl #0
+	add w9, w10, #1
+	orr x10, xzr, x9, lsl #0
+	subs wzr, w9, w11, lsl #0
+	b.lt .Lsum_to.1
+	ret x30
+_masks:
+.Lmasks.0:
+	movz w9, #3, lsl #0
+	subs wzr, w0, w1, lsl #0
+	csel w4, w9, wzr, eq
+	movz w9, #5, lsl #0
+	csel w5, w9, wzr, ne
+	movz w9, #6, lsl #0
+	csel w6, w9, wzr, lt
+	movz w9, #7, lsl #0
+	csel w7, w9, wzr, le
+	movz w9, #9, lsl #0
+	csel w8, w9, wzr, gt
+	movz w9, #10, lsl #0
+	csel w14, w9, wzr, ge
+	movz w9, #11, lsl #0
+	csel w13, w9, wzr, lo
+	movz w9, #12, lsl #0
+	csel w12, w9, wzr, ls
+	movz w9, #13, lsl #0
+	csel w11, w9, wzr, hi
+	movz w9, #14, lsl #0
+	csel w10, w9, wzr, hs
+	add w9, w4, w5, lsl #0
+	add w9, w9, w6, lsl #0
+	add w9, w9, w7, lsl #0
+	add w9, w9, w8, lsl #0
+	add w9, w9, w14, lsl #0
+	add w9, w9, w13, lsl #0
+	add w9, w9, w12, lsl #0
+	add w9, w9, w11, lsl #0
+	add w0, w9, w10, lsl #0
+	ret x30
+_clamp:
+.Lclamp.0:
+	subs xzr, x0, x1, lsl #0
+	csel x9, x1, x0, lt
+	subs xzr, x9, x2, lsl #0
+	csel x0, x2, x9, gt
+	ret x30
+_gcd:
+.Lgcd.0:
+.Lgcd.1:
+	subs wzr, w0, w1, lsl #0
+	b.eq .Lgcd.6
+.Lgcd.2:
+	subs wzr, w0, w1, lsl #0
+	b.ls .Lgcd.4
+.Lgcd.3:
+	subs w0, w0, w1, lsl #0
+	b .Lgcd.1
+.Lgcd.4:
+	subs w1, w1, w0, lsl #0
+	b .Lgcd.1
+.Lgcd.6:
+	ret x30
+_signs:
+.Lsigns.0:
+	orr x9, xzr, x0, lsl #0
+	tbz w0, #31, .Lsigns.2
+.Lsigns.1:
+	movn w0, #0, lsl #0
+	ret x30
+.Lsigns.2:
+	subs wzr, w9, #100
+	movz w9, #1, lsl #0
+	csinc w0, w9, w9, ls
+	ret x30
+_shifts:
+.Lshifts.0:
+	and w9, w1, #0x1f
+	lsl w13, w0, w9
+	lsr w10, w0, w9
+	asr w12, w0, w9
+	movz w9, #3, lsl #0
+	madd w11, w10, w9, wzr
+	movz w9, #5, lsl #0
+	madd w10, w12, w9, wzr
+	add w9, w13, w11, lsl #0
+	add w0, w9, w10, lsl #0
+	ret x30
+_logic:
+.Llogic.0:
+	and w13, w0, w1, lsl #0
+	movz w9, #61680, lsl #0
+	orr w9, w0, w9, lsl #0
+	eor w10, w0, w1, lsl #0
+	orn w11, wzr, w1, lsl #0
+	madd w12, w0, w1, wzr
+	add w9, w13, w9, lsl #0
+	add w9, w9, w10, lsl #0
+	add w9, w9, w11, lsl #0
+	add w9, w9, w12, lsl #0
+	subs w0, w9, w0, lsl #0
+	ret x30
+_divs:
+.Ldivs.0:
+	sdiv w11, w0, w1
+	udiv w12, w0, w1
+	madd w9, w11, w1, wzr
+	subs w10, w0, w9, lsl #0
+	add w9, w11, w12, lsl #0
+	add w0, w9, w10, lsl #0
+	ret x30
+_widen:
+.Lwiden.0:
+	sbfm x12, x0, #0, #7
+	and x9, x0, #0xff
+	sbfm x11, x0, #0, #31
+	orr w10, wzr, w0, lsl #0
+	add x9, x12, x9, lsl #0
+	add x9, x9, x11, lsl #0
+	add x9, x9, x10, lsl #0
+	ubfm x0, x9, #61, #60
+	ret x30
+_call_many:
+.Lcall_many.0:
+	sub sp, sp, #48
+	str x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	orr x19, xzr, x0, lsl #0
+	add x1, x19, #1
+	add x2, x19, #2
+	add x3, x19, #3
+	add x4, x19, #4
+	add x5, x19, #5
+	add x6, x19, #6
+	add x7, x19, #7
+	add x10, x19, #8
+	movz w9, #4, lsl #0
+	str w9, [sp, #12]
+	movz w9, #253, lsl #0
+	strb w9, [sp, #8]
+	str x10, [sp]
+	bl _c_many
+	add x0, x0, x19, lsl #0
+	ldr x19, [sp, #16]
+	ldp x29, x30, [sp, #32]
+	add sp, sp, #48
+	ret x30
+_take_many:
+.Ltake_many.0:
+	ldrb w9, [sp, #8]
+	sbfm x12, x9, #0, #7
+	ldr w11, [sp, #12]
+	ldr x9, [sp]
+	add x10, x0, x9, lsl #0
+	movz w9, #3, lsl #0
+	madd x9, x10, x9, xzr
+	add x9, x9, x12, lsl #0
+	add x0, x9, x11, lsl #0
+	ret x30
+_twice:
+.Ltwice.0:
+	stp x19, x20, [sp, #-32]!
+	stp x29, x30, [sp, #16]
+	add x29, sp, #16
+	orr x20, xzr, x0, lsl #0
+	bl _c_twice
+	orr x19, xzr, x0, lsl #0
+	bl _c_twice
+	add w9, w19, w0, lsl #0
+	add w0, w9, w20, lsl #0
+	ldp x29, x30, [sp, #16]
+	ldp x19, x20, [sp], #32
+	ret x30
+_indirect:
+.Lindirect.0:
+	stp x29, x30, [sp, #-16]!
+	add x29, sp, #0
+	orr x9, xzr, x0, lsl #0
+	orr x0, xzr, x1, lsl #0
+	blr x9
+	ldp x29, x30, [sp], #16
+	ret x30
+_fops:
+.Lfops.0:
+	fadd d17, d0, d1
+	fsub d16, d0, d1
+	fmul d16, d17, d16
+	fdiv d16, d16, d1
+	fneg d0, d16
+	ret x30
+_fcmps:
+.Lfcmps.0:
+	fcmp d0, d1
+	csinc w2, wzr, wzr, pl
+	csinc w6, wzr, wzr, hi
+	csinc w5, wzr, wzr, le
+	csinc w4, wzr, wzr, lt
+	csinc w3, wzr, wzr, ne
+	csinc w9, wzr, wzr, pl
+	csinc w7, w9, wzr, le
+	csinc w9, wzr, wzr, ne
+	csinc w10, w9, wzr, vc
+	csinc w11, wzr, wzr, eq
+	csinc w12, wzr, wzr, vc
+	csinc w13, wzr, wzr, vs
+	csinc w14, wzr, wzr, ge
+	csinc w8, wzr, wzr, mi
+	orr w9, w2, w6, lsl #1
+	orr w9, w9, w5, lsl #2
+	orr w9, w9, w4, lsl #3
+	orr w9, w9, w3, lsl #4
+	orr w9, w9, w7, lsl #5
+	orr w9, w9, w10, lsl #6
+	orr w9, w9, w11, lsl #7
+	orr w9, w9, w12, lsl #8
+	orr w9, w9, w13, lsl #9
+	orr w9, w9, w14, lsl #10
+	orr w0, w9, w8, lsl #11
+	ret x30
+_fmaxd:
+.Lfmaxd.0:
+	fcmp d0, d1
+	fcsel d0, d0, d1, gt
+	ret x30
+_convert:
+.Lconvert.0:
+	scvtf d18, w0
+	ucvtf d16, x1
+	fcvt d17, s0
+	fadd d16, d18, d16
+	fadd d16, d16, d17
+	fcvt s16, d16
+	fcvt d16, s16
+	fcvtzs w9, d16
+	scvtf d0, w9
+	ret x30
+_sum_array:
+.Lsum_array.0:
+	fmov d0, xzr
+	orr x10, xzr, xzr, lsl #0
+.Lsum_array.1:
+	sbfm x9, x10, #0, #31
+	ldr d16, [x0, x9, lsl #3]
+	fadd d0, d0, d16
+	add w9, w10, #1
+	orr x10, xzr, x9, lsl #0
+	subs wzr, w9, w1, lsl #0
+	b.lo .Lsum_array.1
+	ret x30
+_scale:
+.Lscale.0:
+	ldr s16, [x0]
+	fmul s16, s16, s0
+	str s16, [x0]
+	ret x30
+_fcalls:
+.Lfcalls.0:
+	sub sp, sp, #64
+	str x19, [sp, #16]
+	str d8, [sp, #32]
+	stp x29, x30, [sp, #48]
+	add x29, sp, #48
+	fmov d8, d0
+	orr x19, xzr, x0, lsl #0
+	scvtf s0, w19
+	bl _c_half
+	str s0, [sp, #8]
+	str d8, [sp]
+	movz w1, #7, lsl #0
+	movz w2, #5, lsl #0
+	fmov d1, d0
+	fmov d2, d8
+	fmov d3, d8
+	fmov d4, d8
+	fmov d5, d8
+	fmov d6, d8
+	fmov d7, d8
+	orr x0, xzr, x19, lsl #0
+	fmov d0, d8
+	bl _c_fmix
+	fadd d0, d0, d8
+	ldr x19, [sp, #16]
+	ldr d8, [sp, #32]
+	ldp x29, x30, [sp, #48]
+	add sp, sp, #64
+	ret x30
+_fbits:
+.Lfbits.0:
+	fmov w0, s0
+	ret x30

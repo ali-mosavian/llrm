@@ -8,7 +8,8 @@
 //! its operands. `RET_ReallyLR` becomes `Op::Return` over the physical
 //! registers it names.
 //!
-//! DEVIATE: the integer `ADD`/`SUB`/logic, variable shift, `SBFM`/`UBFM`, `MADD`, divide and
+//! DEVIATE: the float arithmetic, compare, select, conversion, move and `LDR`/`STR` `ui` rows, and the integer
+//! `ADD`/`SUB`/logic, variable shift, `SBFM`/`UBFM`, `MADD`, divide and
 //! one-source forms, `MOVi32imm`/`MOVi64imm`, a frame address, the integer `LDR`/`STR` (`ui`, `UR`, `roX`)
 //! forms and the sub-register pseudos only (no `BFM`, no insert into a defined register), with no
 //! memory operand kept (`MemOperand::default`). Reason: each family adds rows
@@ -27,7 +28,7 @@ use super::globals::Globals;
 use crate::REGISTER_INFO;
 use crate::mc::immediate::decode_logical;
 use crate::mc::inst::{
-    Addr, AddSub, Bitfield, Cond, Div, Extend, Gpr, Inst, Logic, Memory, MemOperand, Mul3, Select, Shift, Target, Unary,
+    FpBinary, FpConvert, FpFused, FpSize, FpUnary, Rounding, Vreg, Addr, AddSub, Bitfield, Cond, Div, Extend, Gpr, Inst, Logic, Memory, MemOperand, Mul3, Select, Shift, Target, Unary,
     Width,
 };
 use crate::mc::visit::Reg;
@@ -52,6 +53,25 @@ fn gpr_of(id: RegId) -> Result<Gpr, String> {
     Ok(Gpr(number))
 }
 
+/// The float register an arm64 `s`/`d`/`q`/`v` register id is.
+fn fpr_of(id: RegId) -> Result<Vreg, String> {
+    let name = REGISTER_INFO.name(id).ok_or("a register the arm64 file does not name")?;
+    name.strip_prefix(['s', 'd', 'h', 'q', 'v'])
+        .and_then(|n| n.parse::<u32>().ok())
+        .filter(|&n| n <= 31)
+        .map(Vreg)
+        .ok_or_else(|| format!("register {name} is no float register"))
+}
+
+fn is_fpr(id: RegId) -> bool {
+    fpr_of(id).is_ok()
+}
+
+/// Either class of an arm64 register id.
+fn reg_of(id: RegId) -> Result<Reg, String> {
+    if is_fpr(id) { fpr_of(id).map(Reg::Fpr) } else { gpr_of(id).map(Reg::Gpr) }
+}
+
 /// An operand of a machine node as the instruction builders read it.
 #[derive(Clone, Copy)]
 enum Operand {
@@ -59,6 +79,8 @@ enum Operand {
     Imm(u64),
     /// A frame object, by the builder's frame index.
     Slot(u32),
+    /// A float register.
+    Fpr(Vreg),
     /// A global by id, and the offset into it.
     Symbol(u32, i64),
     /// A block by id, as a branch names it.
@@ -134,6 +156,8 @@ struct MemoryForm {
     sign: bool,
     store: bool,
     form: AddressForm,
+    /// The value is in a float register.
+    fp: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -166,6 +190,8 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
         (rest.strip_suffix("roX")?, AddressForm::Register)
     };
     let (width, bytes, sign) = match element {
+        // `LDRSui` and `LDRDui` move a float
+        "S" | "D" => (Width::W, if element == "S" { 4 } else { 8 }, false),
         "BB" => (Width::W, 1, false),
         "HH" => (Width::W, 2, false),
         "W" => (Width::W, 4, false),
@@ -177,7 +203,7 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
         "SW" => (Width::X, 4, true),
         _ => return None,
     };
-    Some(MemoryForm { width, bytes, sign, store, form })
+    Some(MemoryForm { width, bytes, sign, store, form, fp: matches!(element, "S" | "D") })
 }
 
 /// `CSELWr`, `CSINCXr` and the rest: the select and its width.
@@ -301,6 +327,157 @@ fn build(
     }
 }
 
+/// The size letter of a float opcode: `S` or `D`.
+fn fp_size(letter: &str) -> Option<FpSize> {
+    match letter {
+        "S" => Some(FpSize::S),
+        "D" => Some(FpSize::D),
+        _ => None,
+    }
+}
+
+fn gpr_width(letter: &str) -> Option<Width> {
+    match letter {
+        "W" => Some(Width::W),
+        "X" => Some(Width::X),
+        _ => None,
+    }
+}
+
+/// A float machine node as an instruction: the float arithmetic, compare, select,
+/// conversion and move rows. `None` for any other opcode. The destination is a float
+/// register, or a general one for a conversion to an integer.
+fn float_inst(
+    name: &str,
+    rd: Vreg,
+    gd: Gpr,
+    operands: &[Operand],
+) -> Option<Result<Inst, String>> {
+    let wrong = || Err(format!("{name}: operands are not those of its form"));
+    // The size letter sits before `rr`, `r`, `rrr` or `i`.
+    let binary = [
+        ("FADD", FpBinary::Add),
+        ("FSUB", FpBinary::Sub),
+        ("FMUL", FpBinary::Mul),
+        ("FDIV", FpBinary::Div),
+        ("FNMUL", FpBinary::Nmul),
+        ("FMAXNM", FpBinary::MaxNm),
+        ("FMINNM", FpBinary::MinNm),
+        ("FMAX", FpBinary::Max),
+        ("FMIN", FpBinary::Min),
+    ];
+    for (stem, op) in binary {
+        if let Some(size) = name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("rr")).and_then(fp_size) {
+            return Some(match operands {
+                [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::FpBinary { op, size, rd, rn: *rn, rm: *rm }),
+                _ => wrong(),
+            });
+        }
+    }
+    let unary = [
+        ("FNEG", FpUnary::Neg),
+        ("FABS", FpUnary::Abs),
+        ("FSQRT", FpUnary::Sqrt),
+        ("FMOV", FpUnary::Mov),
+        ("FRINTN", FpUnary::Rint(Rounding::Nearest)),
+        ("FRINTP", FpUnary::Rint(Rounding::Up)),
+        ("FRINTM", FpUnary::Rint(Rounding::Down)),
+        ("FRINTZ", FpUnary::Rint(Rounding::Zero)),
+        ("FRINTA", FpUnary::Rint(Rounding::Away)),
+        ("FRINTX", FpUnary::Rint(Rounding::Exact)),
+        ("FRINTI", FpUnary::Rint(Rounding::Current)),
+    ];
+    for (stem, op) in unary {
+        if let Some(size) = name.strip_prefix(stem).and_then(|rest| rest.strip_suffix('r')).and_then(fp_size) {
+            return Some(match operands {
+                [Operand::Fpr(rn)] => Ok(Inst::FpUnary { op, size, rd, rn: *rn }),
+                _ => wrong(),
+            });
+        }
+    }
+    let fused = [("FMADD", FpFused::Madd), ("FMSUB", FpFused::Msub), ("FNMADD", FpFused::Nmadd), ("FNMSUB", FpFused::Nmsub)];
+    for (stem, op) in fused {
+        if let Some(size) = name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("rrr")).and_then(fp_size) {
+            return Some(match operands {
+                [Operand::Fpr(rn), Operand::Fpr(rm), Operand::Fpr(ra)] => {
+                    Ok(Inst::FpFused { op, size, rd, rn: *rn, rm: *rm, ra: *ra })
+                }
+                _ => wrong(),
+            });
+        }
+    }
+    if let Some(size) = name.strip_prefix("FCSEL").and_then(|rest| rest.strip_suffix("rrr")).and_then(fp_size) {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(cond), ..] => match cond_of(*cond) {
+                Ok(cond) => Ok(Inst::FpSelect { size, rd, rn: *rn, rm: *rm, cond }),
+                Err(why) => Err(why),
+            },
+            _ => wrong(),
+        });
+    }
+    // `SCVTFUWDri`: unscaled, from a `W`, to a `D`.
+    for (stem, signed) in [("SCVTFU", true), ("UCVTFU", false)] {
+        if let Some(rest) = name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("ri")) {
+            let (width, size) = (gpr_width(&rest[..1])?, fp_size(rest.get(1..)?)?);
+            return Some(match operands {
+                [Operand::Reg(gpr)] => Ok(Inst::FpInt { op: FpConvert::ToFp { signed }, width, size, gpr: *gpr, fpr: rd }),
+                _ => wrong(),
+            });
+        }
+    }
+    for (stem, signed) in [("FCVTZSU", true), ("FCVTZUU", false)] {
+        if let Some(rest) = name.strip_prefix(stem).and_then(|rest| rest.strip_suffix('r')) {
+            let (width, size) = (gpr_width(&rest[..1])?, fp_size(rest.get(1..)?)?);
+            return Some(match operands {
+                [Operand::Fpr(fpr)] => {
+                    Ok(Inst::FpInt { op: FpConvert::ToIntZero { signed }, width, size, gpr: gd, fpr: *fpr })
+                }
+                _ => wrong(),
+            });
+        }
+    }
+    // `FCVTSDr`: to `S` from `D`.
+    if let Some(rest) = name.strip_prefix("FCVT").and_then(|rest| rest.strip_suffix('r')) {
+        if let (Some(to), Some(from)) = (rest.get(..1).and_then(fp_size), rest.get(1..).and_then(fp_size)) {
+            return Some(match operands {
+                [Operand::Fpr(rn)] => Ok(Inst::FpToFp { to, from, rd, rn: *rn }),
+                _ => wrong(),
+            });
+        }
+    }
+    if let Some(size) = name.strip_prefix("FMOV").and_then(|rest| rest.strip_suffix('i')).and_then(fp_size) {
+        return Some(match operands {
+            [Operand::Imm(imm8)] => Ok(Inst::FpMoveImm { size, rd, imm8: *imm8 as u8 }),
+            _ => wrong(),
+        });
+    }
+    // `FMOVD0`: zero is the zero register moved across.
+    if let Some(size) = name.strip_prefix("FMOV").and_then(|rest| rest.strip_suffix('0')).and_then(fp_size) {
+        let width = if size == FpSize::D { Width::X } else { Width::W };
+        return Some(Ok(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, width, size, gpr: Gpr::R31, fpr: rd }));
+    }
+    // `FMOVSWr` is a `W` into an `S`, `FMOVWSr` the other way.
+    if let Some(rest) = name.strip_prefix("FMOV").and_then(|rest| rest.strip_suffix('r')) {
+        if let (Some(size), Some(width)) = (rest.get(..1).and_then(fp_size), rest.get(1..).and_then(gpr_width)) {
+            return Some(match operands {
+                [Operand::Reg(gpr)] => {
+                    Ok(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, width, size, gpr: *gpr, fpr: rd })
+                }
+                _ => wrong(),
+            });
+        }
+        if let (Some(width), Some(size)) = (rest.get(..1).and_then(gpr_width), rest.get(1..).and_then(fp_size)) {
+            return Some(match operands {
+                [Operand::Fpr(fpr)] => {
+                    Ok(Inst::FpInt { op: FpConvert::Bits { to_fp: false }, width, size, gpr: gd, fpr: *fpr })
+                }
+                _ => wrong(),
+            });
+        }
+    }
+    None
+}
+
 struct Emitter<'a> {
     dag: &'a SelectionDAG,
     globals: &'a Globals,
@@ -313,6 +490,9 @@ struct Emitter<'a> {
     values: HashMap<(u32, u8), Gpr>,
     /// The machine register each of the builder's virtual registers became.
     vregs: HashMap<u32, Gpr>,
+    /// The same for the float registers, and the values in them.
+    fvregs: HashMap<u32, Vreg>,
+    fvalues: HashMap<(u32, u8), Vreg>,
     ops: Vec<Op>,
 }
 
@@ -326,6 +506,18 @@ impl Emitter<'_> {
         }
         let one = self.mf.gpr();
         self.vregs.insert(number, one);
+        one
+    }
+
+    fn fvreg(
+        &mut self,
+        number: u32,
+    ) -> Vreg {
+        if let Some(&one) = self.fvregs.get(&number) {
+            return one;
+        }
+        let one = self.mf.fpr();
+        self.fvregs.insert(number, one);
         one
     }
 
@@ -349,13 +541,17 @@ impl Emitter<'_> {
         if value.res == 1 && matches!(node.opcode, ISD::Machine(_)) {
             return Ok(Operand::Flags);
         }
+        // `FCMP` has no result but the flags.
+        if matches!(node.opcode, ISD::Machine(code) if opcode_name(code).is_some_and(|name| name.starts_with("FCMP"))) {
+            return Ok(Operand::Flags);
+        }
         match node.data {
             NodeData::Const { bits, .. } if matches!(node.opcode, ISD::TargetConstant | ISD::Constant) => {
                 Ok(Operand::Imm(bits as u64))
             }
             NodeData::Block(id) => Ok(Operand::Block(id)),
             // The zero register as an operand of `CSINC` and the like.
-            NodeData::PhysReg(id) if gpr_of(id)? == Gpr::R31 => Ok(Operand::Reg(Gpr::R31)),
+            NodeData::PhysReg(id) if gpr_of(id).is_ok_and(|g| g == Gpr::R31) => Ok(Operand::Reg(Gpr::R31)),
             NodeData::Global { symbol, offset } if node.opcode == ISD::TargetGlobalAddress => {
                 Ok(Operand::Symbol(symbol, offset))
             }
@@ -367,6 +563,7 @@ impl Emitter<'_> {
                 .values
                 .get(&(value.node, value.res))
                 .map(|&g| Operand::Reg(g))
+                .or_else(|| self.fvalues.get(&(value.node, value.res)).map(|&f| Operand::Fpr(f)))
                 .ok_or_else(|| format!("operand {:?} has no register", node.opcode)),
         }
     }
@@ -391,7 +588,7 @@ impl Emitter<'_> {
         let uses = node.ops[1..]
             .iter()
             .filter_map(|op| match self.dag.node(*op).data {
-                NodeData::PhysReg(register) => Some(gpr_of(register).map(Reg::Gpr)),
+                NodeData::PhysReg(register) => Some(reg_of(register)),
                 _ => None,
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -403,7 +600,7 @@ impl Emitter<'_> {
             match user_node.opcode {
                 ISD::CopyFromReg => {
                     let NodeData::PhysReg(register) = self.dag.node(user_node.ops[1]).data else { break };
-                    defs.push(Reg::Gpr(gpr_of(register)?));
+                    defs.push(reg_of(register)?);
                     glue = SDValue { node: user, res: 2 };
                 }
                 _ => glue = SDValue { node: user, res: user_node.values.len() as u8 - 1 },
@@ -411,6 +608,41 @@ impl Emitter<'_> {
         }
         self.mf.calls = true;
         self.ops.push(Op::Call { callee, uses, defs, tail: false });
+        Ok(())
+    }
+
+    /// `COPY_TO_REGCLASS`: a copy, across the general and float classes by `fmov`.
+    fn copy_to_class(
+        &mut self,
+        id: u32,
+        operands: &[Operand],
+    ) -> Result<(), String> {
+        let to = self.dag.value_type(SDValue { node: id, res: 0 });
+        let bits = to.size_in_bits();
+        let (width, size) = if bits == 64 { (Width::X, FpSize::D) } else { (Width::W, FpSize::S) };
+        match (operands.first(), to.is_floating_point()) {
+            (Some(Operand::Reg(gpr)), true) => {
+                let fpr = self.mf.fpr();
+                self.ops.push(Op::I(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, width, size, gpr: *gpr, fpr }));
+                self.fvalues.insert((id, 0), fpr);
+            }
+            (Some(Operand::Fpr(fpr)), false) => {
+                let gpr = self.mf.gpr();
+                self.ops.push(Op::I(Inst::FpInt { op: FpConvert::Bits { to_fp: false }, width, size, gpr, fpr: *fpr }));
+                self.values.insert((id, 0), gpr);
+            }
+            (Some(Operand::Reg(src)), false) => {
+                let dst = self.mf.gpr();
+                self.ops.push(Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(*src) });
+                self.values.insert((id, 0), dst);
+            }
+            (Some(Operand::Fpr(src)), true) => {
+                let dst = self.mf.fpr();
+                self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(*src) });
+                self.fvalues.insert((id, 0), dst);
+            }
+            _ => return Err("COPY_TO_REGCLASS of something that is no register".into()),
+        }
         Ok(())
     }
 
@@ -444,11 +676,20 @@ impl Emitter<'_> {
                 .phis
                 .iter()
                 .filter(|p| p.to == to)
-                .map(|p| (Reg::Gpr(this.vreg(p.dst)), Reg::Gpr(this.vreg(p.src))))
+                .map(|p| {
+                    if p.float {
+                        (Reg::Fpr(this.fvreg(p.dst)), Reg::Fpr(this.fvreg(p.src)))
+                    } else {
+                        (Reg::Gpr(this.vreg(p.dst)), Reg::Gpr(this.vreg(p.src)))
+                    }
+                })
                 .filter(|(dst, src)| dst != src)
                 .collect();
             let mf = &mut this.mf;
-            crate::mfunc::sequence_copies(moves, |_| Reg::Gpr(mf.gpr()))
+            crate::mfunc::sequence_copies(moves, |like| match like {
+                Reg::Fpr(_) => Reg::Fpr(mf.fpr()),
+                Reg::Gpr(_) => Reg::Gpr(mf.gpr()),
+            })
         };
         if block.successors.len() == 1 {
             let copies = sequence(self, with_phis[0]);
@@ -532,9 +773,10 @@ impl Emitter<'_> {
         access: &MemoryForm,
         operands: &[Operand],
     ) -> Result<(), String> {
-        let (value, address) = match (access.store, operands) {
-            (true, [Operand::Reg(value), rest @ ..]) => (Some(*value), rest),
-            (false, rest) => (None, rest),
+        let (value, fvalue, address) = match (access.store, operands) {
+            (true, [Operand::Reg(value), rest @ ..]) if !access.fp => (Some(*value), None, rest),
+            (true, [Operand::Fpr(value), rest @ ..]) if access.fp => (None, Some(*value), rest),
+            (false, rest) => (None, None, rest),
             _ => return Err(format!("{name}: a store of something that is no register")),
         };
         let size = i64::from(access.bytes);
@@ -557,9 +799,21 @@ impl Emitter<'_> {
             }
             _ => return Err(format!("{name}: operands are not those of its form")),
         };
+        let mmo = MemOperand::default();
+        if access.fp {
+            let reg = match fvalue {
+                Some(reg) => reg,
+                None => self.mf.fpr(),
+            };
+            let mem = Memory::Fp { bytes: access.bytes, reg };
+            self.ops.push(Op::I(if access.store { Inst::Store { mem, addr, mmo } } else { Inst::Load { mem, addr, mmo } }));
+            if !access.store {
+                self.fvalues.insert((id, 0), reg);
+            }
+            return Ok(());
+        }
         let rd = if access.store { None } else { Some(self.mf.gpr()) };
         let mem = Memory::Int { width: access.width, bytes: access.bytes, sign: access.sign, reg: value.or(rd).expect("a value") };
-        let mmo = MemOperand::default();
         self.ops.push(Op::I(if access.store { Inst::Store { mem, addr, mmo } } else { Inst::Load { mem, addr, mmo } }));
         if let Some(rd) = rd {
             self.values.insert((id, 0), rd);
@@ -574,6 +828,19 @@ impl Emitter<'_> {
         let node = self.dag.node(SDValue { node: id, res: 0 });
         match node.opcode {
             ISD::EntryToken | ISD::TokenFactor | ISD::Register => Ok(()),
+            ISD::CopyFromReg if node.values[0].is_floating_point() => {
+                let value = match self.dag.node(node.ops[1]).data {
+                    NodeData::PhysReg(id) => {
+                        let (dst, src) = (self.mf.fpr(), fpr_of(id)?);
+                        self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
+                        dst
+                    }
+                    NodeData::Register(number) => self.fvreg(number),
+                    other => return Err(format!("a register operand that is {other:?}")),
+                };
+                self.fvalues.insert((id, 0), value);
+                Ok(())
+            }
             ISD::CopyFromReg => {
                 let (reg, physical) = self.register_operand(node.ops[1])?;
                 let value = if physical && reg == Gpr::R31 {
@@ -590,6 +857,16 @@ impl Emitter<'_> {
             }
             // The flags are not moved: the compare before the user set them.
             ISD::CopyToReg if self.is_flags(node.ops[1]) => Ok(()),
+            ISD::CopyToReg if self.dag.value_type(node.ops[2]).is_floating_point() => {
+                let dst = match self.dag.node(node.ops[1]).data {
+                    NodeData::PhysReg(id) => fpr_of(id)?,
+                    NodeData::Register(number) => self.fvreg(number),
+                    other => return Err(format!("a register operand that is {other:?}")),
+                };
+                let Operand::Fpr(src) = self.operand(node.ops[2])? else { return Err("a float copy of a constant".into()) };
+                self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
+                Ok(())
+            }
             ISD::CopyToReg => {
                 let (dst, _) = self.register_operand(node.ops[1])?;
                 let Operand::Reg(src) = self.operand(node.ops[2])? else { return Err("a copy of a constant".into()) };
@@ -603,7 +880,7 @@ impl Emitter<'_> {
                         .ops
                         .iter()
                         .filter_map(|op| match self.dag.node(*op).data {
-                            NodeData::PhysReg(id) => Some(gpr_of(id).map(Reg::Gpr)),
+                            NodeData::PhysReg(id) => Some(reg_of(id)),
                             _ => None,
                         })
                         .collect::<Result<Vec<_>, _>>()?;
@@ -634,6 +911,30 @@ impl Emitter<'_> {
                     .map(|&op| self.operand(op))
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|why| format!("{name}: {why}"))?;
+                if let Some(size) = name.strip_prefix("FCMPE").or_else(|| name.strip_prefix("FCMP")).and_then(|rest| rest.get(..1)).and_then(fp_size) {
+                    let compare = match operands.as_slice() {
+                        [Operand::Fpr(rn), Operand::Fpr(rm)] => Inst::FpCompare { signalling: name.starts_with("FCMPE"), size, rn: *rn, rm: Some(*rm) },
+                        [Operand::Fpr(rn), ..] => Inst::FpCompare { signalling: name.starts_with("FCMPE"), size, rn: *rn, rm: None },
+                        _ => return Err(format!("{name}: operands are not those of its form")),
+                    };
+                    self.ops.push(Op::I(compare));
+                    return Ok(());
+                }
+                if name == "COPY_TO_REGCLASS" {
+                    return self.copy_to_class(id, &operands);
+                }
+                if float_inst(name, Vreg(0), Gpr(0), &operands).is_some() {
+                    let float_result = node.values[0].is_floating_point();
+                    let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
+                    let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
+                    self.ops.push(Op::I(inst));
+                    if float_result {
+                        self.fvalues.insert((id, 0), rd);
+                    } else {
+                        self.values.insert((id, 0), gd);
+                    }
+                    return Ok(());
+                }
                 if let Some(access) = memory_form(name) {
                     return self.memory(id, name, &access, &operands);
                 }
@@ -754,6 +1055,8 @@ pub fn emit(
         mf: MFunc::new(name),
         values: HashMap::new(),
         vregs: HashMap::new(),
+        fvregs: HashMap::new(),
+        fvalues: HashMap::new(),
         ops: Vec::new(),
     };
     for &(size, align) in &first.frame {
@@ -763,9 +1066,10 @@ pub fn emit(
     for (at, block) in blocks.iter().enumerate() {
         emitter.dag = &block.dag;
         emitter.values.clear();
+        emitter.fvalues.clear();
         for &(reg, vreg) in &block.live_ins {
-            let dst = emitter.vreg(vreg);
-            emitter.ops.push(Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(gpr_of(reg)?) });
+            let dst = if is_fpr(reg) { Reg::Fpr(emitter.fvreg(vreg)) } else { Reg::Gpr(emitter.vreg(vreg)) };
+            emitter.ops.push(Op::Copy { dst, src: reg_of(reg)? });
         }
         for unit in &block.units {
             for &node in unit.nodes.iter().rev() {

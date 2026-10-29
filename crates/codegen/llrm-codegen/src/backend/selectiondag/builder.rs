@@ -1434,6 +1434,10 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<Vec<EVT>, Refused> {
+        // A float is one part, in a register of its own class: the target's `accepts` says which.
+        if vt.is_floating_point() {
+            return Ok(vec![vt]);
+        }
         if !vt.is_integer() {
             return Err(Refused("a value that is no integer, with a target's calling hook"));
         }

@@ -100,6 +100,8 @@ pub struct TargetLowering {
     cond_code: HashMap<(CondCode, MVT), Action>,
     /// `addLegalFPImmediate`: the float constants an instruction makes.
     legal_fp_immediates: Vec<(MVT, u128)>,
+    /// `isFPImmLegal` as a function of the value, for a target whose answer is not a short list.
+    fp_imm_predicate: Option<fn(MVT, u128) -> bool>,
     /// `ShouldShrinkFPConstant` is false for `f64`: with SSE2 `cvtss2sd` costs
     /// more than a straight `movsd`.
     keeps_f64_constants: bool,
@@ -118,6 +120,7 @@ impl TargetLowering {
             trunc_store: HashMap::default(),
             cond_code: HashMap::default(),
             legal_fp_immediates: Vec::new(),
+            fp_imm_predicate: None,
             keeps_f64_constants: false,
             cmov: false,
         }
@@ -206,7 +209,14 @@ impl TargetLowering {
         vt: MVT,
         bits: u128,
     ) -> bool {
-        self.legal_fp_immediates.contains(&(vt, bits))
+        self.legal_fp_immediates.contains(&(vt, bits)) || self.fp_imm_predicate.is_some_and(|legal| legal(vt, bits))
+    }
+
+    pub fn set_fp_imm_predicate(
+        &mut self,
+        predicate: fn(MVT, u128) -> bool,
+    ) {
+        self.fp_imm_predicate = Some(predicate);
     }
 
     /// `isMultiStoresCheaperThanBitsMerge`: the pin says so for a float and
@@ -427,6 +437,8 @@ impl TargetLowering {
 
         // Scalar floats (`hasFPARMv8()`; `f16`, `bf16` and `f128` are not types here).
         let floats = [MVT::F32, MVT::F64];
+        // `setOperationAction({SETCC, BR_CC, SELECT, SELECT_CC}, {f32, f64}, Custom)`
+        t.set_ops(&[SetCC, BrCC, Select, SelectCC], &floats, Custom);
         t.set_ops(&[FRem], &floats, LibCall);
         t.set_ops(&[FSin, FCos], &floats, Expand);
         t.set_ops(&[FCopySign], &floats, Custom);
@@ -658,6 +670,9 @@ mod tests {
         let t = a64();
         for op in [ISD::SetCC, ISD::BrCC, ISD::SelectCC, ISD::Select] {
             assert_eq!(t.operation_action(op, EVT::I32), Action::Custom, "{op:?}");
+        }
+        for op in [ISD::SetCC, ISD::BrCC, ISD::SelectCC, ISD::Select] {
+            assert_eq!(t.operation_action(op, EVT::Simple(MVT::F64)), Action::Custom, "{op:?} f64");
         }
         assert_eq!(t.operation_action(ISD::SRem, EVT::I32), Action::Expand);
         assert_eq!(t.operation_action(ISD::SDiv, EVT::I32), Action::Legal);
