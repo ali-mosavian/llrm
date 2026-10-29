@@ -6,4 +6,5 @@ name = "nes"
 status = "built"
 load_address = 0x8000
 imag_base = 0x02
+zero_page = 26
 soft_stack = 0x0700

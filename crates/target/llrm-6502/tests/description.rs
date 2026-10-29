@@ -19,10 +19,10 @@ fn pointers_are_two_bytes_near_in_an_8_bit_machine() {
 }
 
 #[test]
-fn ten_registers_hold_values_and_every_class_is_known() {
+fn fifteen_registers_hold_values_and_every_class_is_known() {
     let file = registers::parse(REGISTERS).expect("registers.regs parses");
-    // a, x, y and the pairs rs1..rs7; rs0 is the soft stack pointer.
-    assert_eq!(registers::allocatable(&file), 10);
+    // a, x, y and the pairs rs1..rs12; rs0 is the soft stack pointer.
+    assert_eq!(registers::allocatable(&file), 15);
     registers::source(REGISTERS, "llrm_lir::registers::RegId", &llrm_lir::registers::CLASSES, "rows")
         .expect("every class is in llrm-lir's list");
 }

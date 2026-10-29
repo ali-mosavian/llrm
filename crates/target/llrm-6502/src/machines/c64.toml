@@ -1,8 +1,9 @@
 # Commodore 64: a PRG is a 2-byte load address then the program; BASIC starts it with `10 SYS 2061`.
-# The imaginary registers rc0..rc15 sit in zero page from $02, where KERNAL and BASIC keep nothing a
+# The imaginary registers rc0..rc25 (zero_page = 26 bytes) sit in zero page from $02, where KERNAL and BASIC keep nothing a
 # program that never returns to BASIC needs (to be checked against the C64 memory map at M7).
 [platform]
 name = "c64"
 load_address = 0x0801
 imag_base = 0x02
+zero_page = 26
 soft_stack = 0x9F00

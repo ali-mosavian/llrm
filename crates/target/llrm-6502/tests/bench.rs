@@ -522,7 +522,7 @@ fn ours_row(
     let cpu = if cmos(tag) { Cpu::W65c02 } else { Cpu::Mos6502 };
     let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let selection = select_function(&module, name, cpu)?;
-        function_text(&module, name, &selection)
+        { let mut selection = selection; selection.zero_page = Platform::parse(SIM65).unwrap().zero_page; function_text(&module, name, &selection) }
     }));
     let path = {
         let selection = select_function(&module, name, cpu).map_err(|e| format!("{e:?}"))?;

@@ -13,10 +13,20 @@ fn compile(
     ir: &str,
     name: &str,
 ) -> String {
+    compile_on(ir, name, 16)
+}
+
+/// [`compile`] for a platform that gives the imaginary registers `zero_page` bytes.
+fn compile_on(
+    ir: &str,
+    name: &str,
+    zero_page: u8,
+) -> String {
     let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
     let mut module = llrm_mir::parse::module(&text).expect("parses");
     llrm_6502::prepare::split_phi_edges(&mut module);
-    let selection = select_function(&module, name, Cpu::Mos6502).expect("selects");
+    let mut selection = select_function(&module, name, Cpu::Mos6502).expect("selects");
+    selection.zero_page = zero_page;
     function_text(&module, name, &selection).expect("emits")
 }
 
@@ -1337,4 +1347,53 @@ fn a_select_between_two_consecutive_constants_picks_by_the_condition() {
             assert_eq!(got, i32::from(want), "x = {x}, {yes} or {no}");
         }
     }
+}
+
+/// Ten sums are live at once. With 16 bytes of imaginary registers the allocator spills one (and
+/// saves a kept cell on the stack); with the 26 of a platform that has the room, they fit in scratch
+/// cells that need no save, and the result is the same: 4.
+#[test]
+fn a_platform_with_more_zero_page_keeps_more_values_in_scratch_cells() {
+    let pairs = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "e"), ("e", "f"), ("a", "c"), ("b", "d"), ("c", "e"), ("d", "f"), ("a", "f")];
+    let mut ir = String::from("define i8 @many(i8 %a, i8 %b, i8 %c, i8 %d, i8 %e, i8 %f) {\n");
+    for (n, (x, y)) in pairs.iter().enumerate() {
+        ir += &format!("  %t{n} = add i8 %{x}, %{y}\n");
+    }
+    ir += "  %x0 = xor i8 %t0, %t1\n";
+    for n in 2..pairs.len() {
+        ir += &format!("  %x{} = xor i8 %x{}, %t{n}\n", n - 1, n - 2);
+    }
+    ir += &format!("  ret i8 %x{}\n}}", pairs.len() - 2);
+    let (narrow, wide) = (compile_on(&ir, "many", 16), compile_on(&ir, "many", 26));
+    assert!(narrow.contains("s_many_0") || narrow.contains("pha"), "no pressure at 16:\n{narrow}");
+    assert!(!wide.contains("s_many_") && !wide.contains("pha"), "the wider platform still spills or saves:\n{wide}");
+    let setup: String = (1..=6).map(|n| set(&format!("rc{}", n + 1), n)).collect();
+    assert_eq!(common::run_with("alloc-many-wide", &format!("{setup}  jsr many\n"), &wide), 4);
+}
+
+/// Scratch cells are caller-saved: loop values live across a call stay out of them, because the
+/// callee may use every cell but `rc8`..`rc15`. The callee here fills rc2..rc7 and rc16..rc25 and
+/// returns 3; four calls add up to 12.
+#[test]
+fn loop_values_live_across_a_call_are_not_left_in_a_scratch_cell() {
+    let ir = "declare i8 @clob(i8)
+define i8 @sum(i8 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]
+  %acc = phi i8 [ 0, %entry ], [ %acc2, %loop ]
+  %r = call i8 @clob(i8 %i)
+  %acc2 = add i8 %acc, %r
+  %i2 = add i8 %i, 1
+  %c = icmp ult i8 %i2, %n
+  br i1 %c, label %loop, label %done
+done:
+  ret i8 %acc2
+}";
+    let text = compile_on(ir, "sum", 26);
+    let fill: String = (2..8).chain(16..26).map(|n| format!("  sta rc{n}\n")).collect();
+    let callee = format!("clob:\n  lda #$EE\n{fill}  lda #3\n  rts\n");
+    let setup = set("rc2", 4);
+    assert_eq!(common::run_with("alloc-sum-wide", &format!("{setup}  jsr sum\n"), &format!("{text}{callee}.export clob\n")), 12);
 }
