@@ -39,6 +39,31 @@ pub trait Target {
     fn reserved(root: RegId) -> bool;
     /// The roots a call leaves unspecified.
     fn caller_saved() -> Vec<RegId>;
+    /// The instruction that stores `register` (of `class`) to frame `slot`;
+    /// `None` when the target cannot spill.
+    fn spill_store(
+        _class: Self::Class,
+        _register: Reg,
+        _slot: i32,
+    ) -> Option<Inst> {
+        None
+    }
+    /// The instruction that loads frame `slot` into `register`.
+    fn spill_load(
+        _class: Self::Class,
+        _register: Reg,
+        _slot: i32,
+    ) -> Option<Inst> {
+        None
+    }
+}
+
+/// No register fits `vreg`; `crowd` are the virtual registers (itself
+/// included) that interfere with it or were joined to it.
+#[derive(Clone, Debug)]
+pub struct Uncolourable {
+    pub vreg: u32,
+    pub crowd: Vec<u32>,
 }
 
 /// The physical register of each virtual register.
@@ -285,6 +310,21 @@ impl<T: Target> Allocate<T::Class> for GraphColoring<T> {
         &self,
         function: &MFunction<T::Class>,
     ) -> Result<Assignment, String> {
+        self.colour(function).map_err(|failed| {
+            format!(
+                "no register for v{} ({:?}); spilling is not translated",
+                failed.vreg, function.classes[failed.vreg as usize]
+            )
+        })
+    }
+}
+
+impl<T: Target> GraphColoring<T> {
+    /// Colour every register, or name the first one nothing fits.
+    pub fn colour(
+        &self,
+        function: &MFunction<T::Class>,
+    ) -> Result<Assignment, Uncolourable> {
         let count = function.classes.len();
         let mut nodes = Nodes { count, physical: Vec::new() };
         let effects_of: Vec<Vec<(Vec<usize>, Vec<usize>)>> = function
@@ -417,10 +457,11 @@ impl<T: Target> Allocate<T::Class> for GraphColoring<T> {
             }
             if !colour.contains_key(&node) {
                 let taken: HashSet<RegId> = edges[node].iter().filter_map(|n| colour.get(n).copied()).collect();
-                let chosen = T::candidates(classes[node])
-                    .into_iter()
-                    .find(|root| !taken.contains(root))
-                    .ok_or_else(|| format!("no register for v{v} ({:?}); spilling is not translated", classes[node]))?;
+                let Some(chosen) = T::candidates(classes[node]).into_iter().find(|root| !taken.contains(root)) else {
+                    let near: Vec<usize> = edges[node].iter().copied().chain([node]).collect();
+                    let crowd = (0..count as u32).filter(|u| near.contains(&find(&mut parent, *u as usize))).collect();
+                    return Err(Uncolourable { vreg: v as u32, crowd });
+                };
                 colour.insert(node, chosen);
             }
             assigned[v] = Some(T::view(colour[&node], function.classes[v]));
