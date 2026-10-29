@@ -3805,9 +3805,11 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         Ok(())
     }
 
-    /// Each byte argument's extension to a stack word, as its HIR type's
-    /// signedness says: LLVM's signext and zeroext. `order` is the operands
-    /// in argument order.
+    /// Each argument narrower than the target's word (a near pointer), extended
+    /// to it (the callee, clang's `signext`, trusts the caller's: a word
+    /// zero-extended printed 49536 for -16000 at m32). The extension to a
+    /// stack word, as its HIR type's signedness says: LLVM's signext and
+    /// zeroext. `order` is the operands in argument order.
     fn extensions(
         &self,
         instruction: &model::Instruction,
@@ -3824,7 +3826,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             .enumerate()
             .filter_map(|(index, &at)| {
                 let ty = self.hir_type(operand_type(&instruction.operands[at], values, places));
-                let signed = ty.signed.filter(|_| ty.kind == model::TypeKind::Integer && ty.width == 1)?;
+                let signed = ty.signed.filter(|_| {
+                    ty.kind == model::TypeKind::Integer && ty.width * 8 < i64::from(self.tables.layout.pointer(0).bits)
+                })?;
                 Some((index, Attribute::Flag(if signed { "signext" } else { "zeroext" }.to_owned())))
             })
             .chain(classes)

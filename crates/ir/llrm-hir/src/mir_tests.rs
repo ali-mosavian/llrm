@@ -45,6 +45,27 @@ fn a_function_becomes_its_llvm_ir() {
     );
 }
 
+/// The clang-built runtime takes `short v` as `signext` and trusts the caller
+/// to have widened it: `PRINT b(i)` called B$PSI2 with the word zero-extended
+/// and printed 49536 for -16000 (bc_static_arrays_far, -m32). At a 32-bit word
+/// the 16-bit argument carries `signext`; at a 16-bit word it fills the
+/// register.
+#[test]
+fn a_16_bit_argument_is_widened_by_the_caller_where_the_word_is_wider() {
+    let call = |layout: &str| {
+        let mut function = difference();
+        let mut call = Instruction::new(2, Op::Call, vec![], vec![Operand::value_ref(1)]);
+        call.callee = Some("B$PSI2".to_owned());
+        function.blocks[0].instructions.push(call);
+        let emitted = crate::mir::emit(&program(function), &Layout::parse(layout).unwrap()).remove(0);
+        llrm_mir::print::module(&emitted.module)
+    };
+    let flat = call(FLAT);
+    assert!(flat.contains("B$PSI2(i16 signext %0)"), "{flat}");
+    let real = call(REAL);
+    assert!(real.contains("B$PSI2(i16 %0)"), "{real}");
+}
+
 /// A call carries its callee's calling convention, and a far callee lives
 /// in code address space 1: BASIC's pops its own arguments, pushed left to
 /// right; a near C one is in address space 0.
