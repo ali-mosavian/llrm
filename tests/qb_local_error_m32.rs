@@ -37,11 +37,19 @@ fn test_on_local_error_registers_the_handlers_offset_at_the_pointers_width() {
     };
     for level in ["-O0", "-O2"] {
         let flat = listing("-m32", level);
-        assert!(flat.contains("push offset $QB$LANDING") && !flat.contains("movzx"), "{level}: {flat}");
+        // -O0 stores the offset into the call's argument area, -O2 pushes it.
+        assert!(
+            (flat.contains("push offset $QB$LANDING") || flat.contains("[esp], offset $QB$LANDING"))
+                && !flat.contains("movzx"),
+            "{level}: {flat}"
+        );
+        // The pad's `cld` is laid down at the pseudo-call, which names no
+        // routine to link.
+        assert!(!flat.contains("extern __LANDING"), "{level}: {flat}");
         let real = listing("-m16", level);
-        // Optimized, `mov ax, offset X; push ax` is `push offset X` (#5135).
+        // `mov ax, offset X; push ax` is `push offset X` (#5135), at -O0 too
+        // now that the DAG route selects it.
         let pushed = real.contains("push offset $QB$LANDING");
-        assert_eq!(pushed, level == "-O2", "{level}: {real}");
         assert!(pushed || real.contains("mov ax, offset $QB$LANDING"), "{level}: {real}");
     }
 }

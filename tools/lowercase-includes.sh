@@ -11,3 +11,4 @@ rm -rf "$dst"; mkdir -p "$dst"
   tr -d '\032' <"$src/$file" >"$dst/$lower"
   [ "$lower" = "$file" ] || ln -s "$lower" "$dst/$file"
 done
+[ -n "$(find "$dst" -type f -print -quit)" ] || { echo "lowercase-includes: $src holds no files; $dst is empty" >&2; exit 1; }

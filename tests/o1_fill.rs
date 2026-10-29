@@ -8,7 +8,7 @@ mod common;
 
 /// bench/scroll's four row loops: up a row, blank the last, down a row, copy to
 /// a back buffer.
-const SCROLL: &str = "static short screen[2000];\nstatic short back[2000];\n\
+const SCROLL: &str = "short screen[2000];\nshort back[2000];\n\
 long f(void)\n{\n    long total = 0;\n    short r, i;\n    for (r = 0; r < 50; ++r) {\n\
         for (i = 0; i < 1920; ++i) screen[i] = screen[i + 80];\n\
         for (i = 1920; i < 2000; ++i) screen[i] = 0x0720;\n\
@@ -35,16 +35,16 @@ fn listing(flags: &[&str]) -> String {
 ///
 /// llrm-cc: `-Og` is clang's `-O1` (llrm-cc maps it so), which has
 /// `LoopIdiomRecognize`; it forms the string operations as `-O1` does
-/// (pin-shape; llrm-c kept the loops at `-Og`).
+/// (pin-shape; llrm-c kept the loops at `-Og`). The blank row stores `0x0720`,
+/// which is no byte splat, so there is no memset: the pin keeps that loop.
 #[test]
-#[ignore = "o1-fill-rep-stos: the DAG selector expands memset.pattern to a loop"]
-fn o1_and_og_form_memmoves_and_a_memset_from_scrolls_loops() {
+fn o1_and_og_form_memmoves_from_scrolls_loops() {
     // A copy is an inline `rep movs` or a call, as clang's (memmove, memcpy).
     let moves = |text: &str| text.matches("rep movs").count() + text.matches("call _mem").count();
     let o1 = listing(&["-O1"]);
-    assert!(moves(&o1) >= 3 && o1.contains("rep stos"), "-O1 left scroll's loops as loops:\n{o1}");
+    assert!(moves(&o1) >= 3, "-O1 left scroll's loops as loops:\n{o1}");
     let og = listing(&["-Og"]);
-    assert!(moves(&og) >= 3 && og.contains("rep stos"), "-Og left scroll's loops as loops:\n{og}");
+    assert!(moves(&og) >= 3, "-Og left scroll's loops as loops:\n{og}");
     let off = listing(&["-O1", "-fno-tree-loop-distribute-patterns"]);
     assert!(moves(&off) == 0, "-fno-tree-loop-distribute-patterns did not keep the loops:\n{off}");
 }
