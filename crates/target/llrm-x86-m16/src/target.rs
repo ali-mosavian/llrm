@@ -230,6 +230,12 @@ impl Machine for Dos {
             // Tuning constant fitted to sc.c, weapons, mdl and lru, not
             // derived.
             size_milliclocks_per_byte: 10_000,
+            // DEVIATE: real mode weighs code bytes over clocks at every level, so
+            // the full unroll takes the pin's size threshold (`OptSizeThreshold`,
+            // 0) and no boost: the 8-trip loops of matmul and fpbench were 2045
+            // and 1350 bytes unrolled, 306 and 418 not.
+            unroll_threshold: Some(0),
+            unroll_max_percent_threshold_boost: Some(100),
             ..llrm_mir::target::Tuning::PIN
         }
     }
