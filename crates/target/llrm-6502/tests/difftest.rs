@@ -446,11 +446,17 @@ fn work(seed: u64) -> PathBuf {
     dir
 }
 
-/// sim65 on `bin`: the exit code, or `None` when the cycle cap is hit.
+/// The most cycles sim65 may run (`DIFF_CAP`).
+fn cap() -> String {
+    std::env::var("DIFF_CAP").unwrap_or_else(|_| "30000000".into())
+}
+
+/// sim65 on `bin`: the exit code, or `None` when the cycle cap is hit. sim65 then says "Maximum number of
+/// cycles reached." and exits 126; that was matched as "Max number" and so read as the program's own
+/// exit code 126 (differential seeds 26 and 51: cc65 -O "agreed" with ours on a hang of both).
 fn run(bin: &Path) -> Result<Option<i32>, String> {
-    let out = Command::new("sim65").args(["-x", "6000000"]).arg(bin).output().map_err(|e| e.to_string())?;
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if stderr.contains("Max number of cycles") || stderr.contains("cycles") && out.status.code() != Some(out.status.code().unwrap_or(0)) {
+    let out = Command::new("sim65").args(["-x", &cap()]).arg(bin).output().map_err(|e| e.to_string())?;
+    if String::from_utf8_lossy(&out.stderr).contains("Maximum number of cycles") {
         return Ok(None);
     }
     Ok(out.status.code())
@@ -557,7 +563,7 @@ static ORACLE_DIFFERS: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomi
 
 /// What sim65 counts for `bin` (`-c`), start-up and exit included.
 fn cycles(bin: &Path) -> Option<i64> {
-    let out = Command::new("sim65").args(["-c", "-x", "6000000"]).arg(bin).output().ok()?;
+    let out = Command::new("sim65").args(["-c", "-x", &cap()]).arg(bin).output().ok()?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     text.lines().find_map(|line| line.strip_suffix(" cycles")?.trim().parse().ok())
 }
@@ -738,4 +744,17 @@ fn a_reachable_routine_gets_the_macros_it_uses() {
     let runtime = reachable_runtime("  jsr __umodsi3\n");
     assert!(runtime.contains(".macro cmp_sub_32"), "{runtime}");
     assert!(runtime.contains("__umodsi3:"));
+}
+
+/// A program that runs into the cycle cap is `None`, not an exit code of 126.
+#[test]
+#[ignore = "needs cc65 and sim65"]
+fn a_program_that_hits_the_cycle_cap_has_no_exit_code() {
+    let dir = work(u64::MAX - 2);
+    std::fs::write(dir.join("spin.c"), "int main(void) { for (;;) ; }\n").unwrap();
+    tool(&dir, "cl65", &["-t", "sim6502", "-o", "spin.bin", "spin.c"]).expect("builds");
+    // SAFETY: tests of this file read DIFF_CAP only here
+    unsafe { std::env::set_var("DIFF_CAP", "100000") };
+    assert_eq!(run(&dir.join("spin.bin")), Ok(None));
+    let _ = std::fs::remove_dir_all(&dir);
 }
