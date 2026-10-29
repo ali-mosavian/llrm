@@ -538,3 +538,13 @@ fn phi_copies_on_an_edge_are_parallel() {
         assert_eq!(run(&format!("swap-{n}"), ir, "swap", &set("rc2", n), ""), want);
     }
 }
+
+/// A five-case `switch` (a comparison tree of blocks) to a block with phis is refused: its edges
+/// shared one copy list, so `swapsw(1)` returned 2 instead of 1 (the swap ran on the exit edge).
+#[test]
+fn a_switch_to_a_block_with_phis_is_refused() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\ndefine i8 @swapsw(i8 %n) {\nentry:\n  br label %loop\nloop:\n  %a = phi i8 [ 1, %entry ], [ %b, %loop ]\n  %b = phi i8 [ 2, %entry ], [ %a, %loop ]\n  %k = phi i8 [ %n, %entry ], [ %k1, %loop ]\n  %k1 = sub i8 %k, 1\n  switch i8 %k1, label %loop [ i8 0, label %exit\n  i8 10, label %exit\n  i8 20, label %exit\n  i8 30, label %exit\n  i8 40, label %exit ]\nexit:\n  ret i8 %a\n}";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let refused = select_function(&module, "swapsw", Cpu::Mos6502).err().expect("refused");
+    assert!(refused.contains("switch"), "{refused}");
+}

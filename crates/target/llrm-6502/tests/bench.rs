@@ -67,6 +67,7 @@ const KERNELS: &[Kernel] = &[
     k("mul8", &[7, 6], Width::Byte, false, 42),
     k("fib", &[12], Width::Byte, true, 144),
     k("gcd", &[48, 18], Width::Byte, false, 6),
+    k("sum4", &[], Width::Byte, false, 9),
 ];
 
 fn work(name: &str) -> PathBuf {

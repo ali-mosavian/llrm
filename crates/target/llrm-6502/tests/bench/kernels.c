@@ -38,3 +38,6 @@ unsigned fib(unsigned char n) { unsigned a = 0, b = 1, t; while (n--) { t = a + 
 #ifdef K_gcd
 unsigned char gcd(unsigned char a, unsigned char b) { while (a != b) { if (a > b) a -= b; else b -= a; } return a; }
 #endif
+#ifdef K_sum4
+unsigned char sum4(void) { unsigned char s = 0, i; for (i = 0; i < 4; ++i) s += buf[i]; return s; }
+#endif

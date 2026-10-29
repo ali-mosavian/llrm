@@ -2,9 +2,8 @@
 //! [`super::pipeline`]'s stages, block by block.
 //!
 //! DEVIATE: the phi copies of a block that branches to several blocks are per edge (an edge block
-//! the emitter makes), not placed by a machine-function phi elimination; a `switch`'s blocks keep one
-//! copy list for all edges, wrong when the phi's old value is still read on another edge. Reason: no
-//! shared machine function. Exit: the shared machine function.
+//! the emitter makes), not placed by a machine-function phi elimination; a `switch` to a block with
+//! phis is refused. Reason: no shared machine function. Exit: the shared machine function.
 //!
 //! DEVIATE: no static allocas or jump tables: the
 //! builder makes the frame objects and the C convention passes what the registers do not hold on
@@ -142,6 +141,12 @@ fn select_built(
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
     let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
+    // DEVIATE: refused. A `switch` made of several blocks puts one copy list on all its edges, and a
+    // phi read on another edge is lost. Reason: the edges leave blocks the builder made. Exit: split
+    // the critical edges of the IR first (`llrm-transforms` `split_critical_edge`).
+    if top.is_some() && !built.extra.is_empty() && !built.phi_updates.is_empty() {
+        return Err("a switch to a block with phis: split its critical edges first".into());
+    }
     // The block each phi is in, to split the copies by successor.
     let mut home: HashMap<ValueId, BlockId> = HashMap::new();
     let mut successors = Vec::new();
