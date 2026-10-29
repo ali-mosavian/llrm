@@ -1,110 +1,24 @@
 //! The 6502 matcher tables (tblgen's `GenDAGISel.inc` of `mos6502.td`) against
 //! hand-built DAGs, once per CPU.
 
-use llrm_dagisel::dag::{Hooks, SDValue};
+use llrm_6502::dagisel::hooks::{Cpu, MosHooks};
+use llrm_dagisel::dag::SDValue;
 use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::interp::{Outcome, Selector};
-use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::testing::{OptSize, TestDag};
+use llrm_dagisel::testing::TestDag;
 
 macro_rules! cpu_tests {
-    ($cpu:ident, $table:ident) => {
+    ($cpu:ident, $table:ident, $kind:expr) => {
         mod $cpu {
             use super::*;
             use llrm_6502::dagisel::generated::$table as table;
-
-            /// `SelectIndirect` takes the value as it is: a pointer already in an `Imag16` pair.
-            struct Indirect;
-
-            impl Hooks<TestDag> for Indirect {
-                fn pointer_type(&self) -> Vt {
-                    mvt::i16
-                }
-                fn check_pattern_predicate(
-                    &self,
-                    predicate: u16,
-                ) -> bool {
-                    table::pattern_predicate(&OptSize, predicate)
-                }
-                fn check_node_predicate(
-                    &self,
-                    dag: &TestDag,
-                    value: SDValue,
-                    predicate: u16,
-                ) -> bool {
-                    table::node_predicate(dag, self, value, predicate)
-                }
-                fn check_complex_pattern(
-                    &mut self,
-                    _: &mut TestDag,
-                    _: u32,
-                    _: Option<u32>,
-                    value: SDValue,
-                    _: u8,
-                    results: &mut Vec<(SDValue, Option<u32>)>,
-                ) -> bool {
-                    results.push((value, None));
-                    true
-                }
-                fn run_xform(
-                    &mut self,
-                    _: &mut TestDag,
-                    value: SDValue,
-                    _: u8,
-                ) -> SDValue {
-                    value
-                }
-                fn is_profitable_to_fold(
-                    &self,
-                    _: &TestDag,
-                    _: SDValue,
-                    _: u32,
-                    _: u32,
-                ) -> bool {
-                    true
-                }
-                fn is_legal_to_fold(
-                    &self,
-                    _: &TestDag,
-                    _: SDValue,
-                    _: u32,
-                    _: u32,
-                ) -> bool {
-                    true
-                }
-                fn check_and_mask(
-                    &self,
-                    _: &TestDag,
-                    _: SDValue,
-                    _: i64,
-                    _: i64,
-                ) -> bool {
-                    false
-                }
-                fn check_or_mask(
-                    &self,
-                    _: &TestDag,
-                    _: SDValue,
-                    _: i64,
-                    _: i64,
-                ) -> bool {
-                    false
-                }
-                fn may_load_store(
-                    &self,
-                    opcode: u16,
-                ) -> (bool, bool) {
-                    llrm_6502::dagisel::generated::instrinfo::memory_flags(opcode)
-                }
-            }
-
 
             fn machine_name(opcode: u16) -> &'static str {
                 table::MACHINE_OPCODES.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
             }
 
             fn select(dag: &mut TestDag, root: u32) -> Outcome {
-                Selector::new(table::TABLE).select(dag, &mut Indirect, root)
+                Selector::new(table::TABLE).select(dag, &mut MosHooks::new($kind, false), root)
             }
 
             /// Before the 6502 had a table, an i8 DAG had nothing to select it: `add` of two
@@ -139,6 +53,31 @@ macro_rules! cpu_tests {
                 assert_eq!((name(lo), name(hi)), ("ADDO16", "ADDOC16"));
             }
 
+            /// A load through `ptr + 3` is one `(zp),Y` load: the pair and the offset 3, not an add.
+            #[test]
+            fn a_byte_load_through_pointer_plus_3_is_ldp8_with_offset_3() {
+                let mut dag = TestDag::new();
+                let ptr = dag.input(1, mvt::i16);
+                let three = dag.make_constant(3, mvt::i16);
+                let address = SDValue::new(dag.node(isd::ADD, &[mvt::i16], &[ptr, three]), 0);
+                let undef = SDValue::new(dag.node(isd::UNDEF, &[mvt::i16], &[]), 0);
+                let load = dag.add(llrm_dagisel::testing::Node {
+                    opcode: isd::LOAD,
+                    vts: vec![mvt::i8, mvt::Other],
+                    ops: vec![SDValue::new(0, 0), address, undef],
+                    load: Some(llrm_dagisel::dag::LoadExt::NonExt),
+                    memory_vt: Some(mvt::i8),
+                    ..Default::default()
+                });
+
+                assert_eq!(select(&mut dag, load), Outcome::Selected);
+
+                let node = &dag.nodes[load as usize];
+                assert_eq!(machine_name(node.machine.expect("not selected")), "LDP8");
+                assert_eq!(node.ops[0], ptr);
+                assert_eq!(dag.nodes[node.ops[1].node as usize].constant, Some(3));
+            }
+
             /// A node id no LLVM header defines (`MOSISD::RET_GLUE`, from `own_ids.txt`) reaches
             /// the table: it selects `RET`.
             #[test]
@@ -154,8 +93,8 @@ macro_rules! cpu_tests {
     };
 }
 
-cpu_tests!(mos6502, mos_mos6502);
-cpu_tests!(w65c02, mos_w65c02);
+cpu_tests!(mos6502, mos_mos6502, Cpu::Mos6502);
+cpu_tests!(w65c02, mos_w65c02, Cpu::W65c02);
 
 /// STZ exists on the 65C02 only: the NMOS table must not name it, or it would emit an illegal opcode.
 #[test]

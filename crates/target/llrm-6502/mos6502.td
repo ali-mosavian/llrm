@@ -33,7 +33,9 @@ def Flags : RegisterClass<"MOS", [i8], 8, (add P)> { let CopyCost = -1; }
 def HasCMOS : Predicate<"Subtarget->hasCMOS()">;
 
 // (zp),Y addressing: a pointer in an Imag16 pair.
-def MOSAddr : ComplexPattern<i16, 1, "SelectIndirect", [], []>;
+// The pair and a byte offset (the Y register): `(add ptr, 0..255)` or a bare pointer.
+def memri : Operand<i16> { let MIOperandInfo = (ops Imag16, i8imm); }
+def MOSAddr : ComplexPattern<i16, 2, "SelectIndirect", [], []>;
 
 // The pin's tblgen has no nodes for the overflow forms the type legalizer expands into.
 def SDTOverflowOp : SDTypeProfile<2, 2, [SDTCisSameAs<0, 2>, SDTCisSameAs<0, 3>, SDTCisInt<0>, SDTCisVT<1, i1>]>;
@@ -94,13 +96,17 @@ defm "" : Arith<"16", Imag16, i16>;
 def LDI8 : MOSInst<(outs Imag8:$d), (ins i8imm:$v), "ldi $d, $v", [(set i8:$d, imm:$v)]>;
 def LDI16 : MOSInst<(outs Imag16:$d), (ins i16imm:$v), "ldi $d, $v", [(set i16:$d, imm:$v)]>;
 
-// LDY #0; LDA (p),Y; STA d.
-let mayLoad = 1 in
-  def LDP8 : MOSInst<(outs Imag8:$d), (ins Imag16:$p), "ldp $d, ($p)", [(set i8:$d, (load MOSAddr:$p))]>;
-let mayStore = 1 in
-  def STP8 : MOSInst<(outs), (ins Imag8:$s, Imag16:$p), "stp $s, ($p)", [(store i8:$s, MOSAddr:$p)]>;
+// LDY #off; LDA (p),Y; STA d. A word is two such, with INY between.
+let mayLoad = 1 in {
+  def LDP8 : MOSInst<(outs Imag8:$d), (ins memri:$p), "ldp $d, ($p)", [(set i8:$d, (load MOSAddr:$p))]>;
+  def LDP16 : MOSInst<(outs Imag16:$d), (ins memri:$p), "ldp16 $d, ($p)", [(set i16:$d, (load MOSAddr:$p))]>;
+}
+let mayStore = 1 in {
+  def STP8 : MOSInst<(outs), (ins Imag8:$s, memri:$p), "stp $s, ($p)", [(store i8:$s, MOSAddr:$p)]>;
+  def STP16 : MOSInst<(outs), (ins Imag16:$s, memri:$p), "stp16 $s, ($p)", [(store i16:$s, MOSAddr:$p)]>;
+}
 let mayStore = 1, Predicates = [HasCMOS] in
-  def STZP : MOSInst<(outs), (ins Imag16:$p), "stz ($p)", [(store (i8 0), MOSAddr:$p)]>;
+  def STZP : MOSInst<(outs), (ins memri:$p), "stz ($p)", [(store (i8 0), MOSAddr:$p)]>;
 
 def brtarget : Operand<OtherVT>;
 def calltarget : Operand<i16>;

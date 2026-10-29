@@ -193,18 +193,26 @@ pub fn expand(
             }
             _ => return Err("LDI16 takes a pair and an immediate".into()),
         },
-        // `(zp),y` with y = 0 through the pair's low byte.
+        // `(zp),y` through the pair's low byte, y the byte offset; a word is two bytes, INY between.
         op::LDP8 => {
-            let (lo, _) = word(&o[1])?;
-            writeln!(out, "  ldy #0\n  lda ({lo}),y\n  sta {}", reg(&o[0])?).unwrap();
+            let ((lo, _), off) = (word(&o[1])?, imm(&o[2])?);
+            writeln!(out, "  ldy #{off}\n  lda ({lo}),y\n  sta {}", reg(&o[0])?).unwrap();
+        }
+        op::LDP16 => {
+            let ((dl, dh), (lo, _), off) = (word(&o[0])?, word(&o[1])?, imm(&o[2])?);
+            writeln!(out, "  ldy #{off}\n  lda ({lo}),y\n  sta {dl}\n  iny\n  lda ({lo}),y\n  sta {dh}").unwrap();
         }
         op::STP8 => {
-            let (lo, _) = word(&o[1])?;
-            writeln!(out, "  ldy #0\n  lda {}\n  sta ({lo}),y", reg(&o[0])?).unwrap();
+            let ((lo, _), off) = (word(&o[1])?, imm(&o[2])?);
+            writeln!(out, "  ldy #{off}\n  lda {}\n  sta ({lo}),y", reg(&o[0])?).unwrap();
+        }
+        op::STP16 => {
+            let ((sl, sh), (lo, _), off) = (word(&o[0])?, word(&o[1])?, imm(&o[2])?);
+            writeln!(out, "  ldy #{off}\n  lda {sl}\n  sta ({lo}),y\n  iny\n  lda {sh}\n  sta ({lo}),y").unwrap();
         }
         op::STZP => {
-            let (lo, _) = word(&o[0])?;
-            writeln!(out, "  ldy #0\n  lda #0\n  sta ({lo}),y").unwrap();
+            let ((lo, _), off) = (word(&o[0])?, imm(&o[1])?);
+            writeln!(out, "  ldy #{off}\n  lda #0\n  sta ({lo}),y").unwrap();
         }
         op::COPY8 => copy_byte(&mut out, reg(&o[0])?, reg(&o[1])?),
         op::COPY16 => {

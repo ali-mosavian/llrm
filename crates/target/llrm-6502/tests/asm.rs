@@ -216,3 +216,27 @@ fn a_word_equality_needs_both_bytes() {
 fn a_signed_word_compare_through_flipped_bit_15() {
     assert_eq!(run("cmp16-signed", &[main_returning(word_compare(op::CMP16, 0x7FFF, 0x8001, 2), "rc8")]), 1);
 }
+
+/// A word stored at `$4000 + 2` lands little-endian: the low byte 0xEF at +2, the high byte 0xBE at +3;
+/// loaded back as a word it is the same.
+#[test]
+fn word_memory_is_little_endian_through_a_pointer_and_offset() {
+    let stored = || -> Body {
+        vec![
+            i(op::LDI16, vec![reg("rs1"), imm(0x4000)]),
+            i(op::LDI16, vec![reg("rs2"), imm(0xBEEF)]),
+            i(op::STP16, vec![reg("rs2"), reg("rs1"), imm(2)]),
+        ]
+    };
+    let byte_at = |offset| {
+        let mut body = stored();
+        body.push(i(op::LDP8, vec![reg("rc8"), reg("rs1"), imm(offset)]));
+        main_returning(body, "rc8")
+    };
+    assert_eq!(run("mem-lo", &[byte_at(2)]), 0xEF);
+    assert_eq!(run("mem-hi", &[byte_at(3)]), 0xBE);
+    let mut body = stored();
+    body.push(i(op::LDP16, vec![reg("rs3"), reg("rs1"), imm(2)]));
+    assert_eq!(run("mem-word-hi", &[main_returning(body.clone(), "rc7")]), 0xBE);
+    assert_eq!(run("mem-word-lo", &[main_returning(body, "rc6")]), 0xEF);
+}

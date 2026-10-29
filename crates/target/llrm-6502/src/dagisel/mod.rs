@@ -7,3 +7,4 @@ pub mod generated;
 pub mod predicates;
 pub mod lowering;
 pub mod call;
+pub mod hooks;
