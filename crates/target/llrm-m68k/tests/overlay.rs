@@ -266,6 +266,33 @@ fn a_select_in_a_loop_leaves_one_move_on_the_arm_that_changes_the_value() {
     assert_eq!(loop_register_moves(&ours), 1, "{ours}");
 }
 
+/// The load of the running maximum's array stepped its pointer after the
+/// select's join (`move.l (%a0), %d2 ... addq.l #4, %a0`, 2 bytes more than
+/// `(%a0)+`), because the scan stopped at the branch over the select's arm.
+#[test]
+fn a_step_past_a_branch_over_one_arm_is_still_a_post_increment() {
+    let ours = compiled(arrmax_loop(), Options::default());
+    assert!(ours.contains("move.l\t(%a0)+, %d") && !ours.contains("addq.l\t#4"), "{ours}");
+}
+
+/// A block inside the span that something outside also jumps to would reach
+/// the step with no access before it: the step stays.
+#[test]
+fn a_step_after_a_label_entered_from_outside_the_span_stays() {
+    use llrm_m68k::expand::Line;
+    let inst = |opcode, operands| Line::Inst(Inst { opcode, operands });
+    let lines = vec![
+        inst("Beq8", vec![Operand::Symbol(".LBB0_3".into(), 0)]),
+        Line::Label(1),
+        inst("MOV32rj", vec![register("d2"), register("a0")]),
+        Line::Label(3),
+        inst("ADDQ32a", vec![register("a0"), register("a0"), Operand::Imm(4)]),
+    ];
+    let folded = llrm_m68k::overlay::fold_post_increment(lines);
+    assert!(matches!(&folded[2], Line::Inst(access) if access.opcode == "MOV32rj"));
+    assert_eq!(folded.len(), 5);
+}
+
 fn counted_sum() -> &'static str {
     "define i32 @f(ptr %p, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  %s1 = add i32 %s, %v\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %s1\n}"
 }
