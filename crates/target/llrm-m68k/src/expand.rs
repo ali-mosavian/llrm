@@ -254,6 +254,18 @@ pub fn finish(
                 };
                 out.extend(expand_movi(dst, value)?);
             }
+            Kind::Op(name @ ("MOVI8di" | "MOVI16di")) => {
+                let [mc::Operand::Reg(dst), mc::Operand::Imm(value)] = operands[..] else {
+                    return Err(format!("{name} operands"));
+                };
+                out.extend(expand_small_movi(dst, value, name == "MOVI8di")?);
+            }
+            Kind::Op("MOVXd16d8" | "MOVXd32d8" | "MOVXd32d16") => {
+                let [mc::Operand::Reg(dst), mc::Operand::Reg(src)] = operands[..] else {
+                    return Err("MOVX operands".to_owned());
+                };
+                out.extend(expand_any_extension(dst, src)?);
+            }
             Kind::Op(name) if extension(name).is_some() => {
                 out.extend(expand_extension(name, &operands)?);
             }
@@ -303,6 +315,45 @@ fn expand_movi(
         vec![inst("MOV16ai", vec![R(word), Imm(value)])]
     } else {
         vec![inst("MOV32ri", vec![R(dst), Imm(value)])]
+    })
+}
+
+/// `ExpandMOVI` for a byte or a word, in a data register: a clear for 0, a
+/// `moveq` for a byte (the high bits do not matter) or a word that fits,
+/// else `move.w #imm`.
+fn expand_small_movi(
+    dst: RegId,
+    value: i64,
+    byte: bool,
+) -> Result<Vec<mc::Inst>, String> {
+    use mc::Operand::{Imm, Reg as R};
+    let root = REGISTER_INFO.root(dst);
+    let long = REGISTER_INFO.view(root, 32).ok_or("no long view")?;
+    let value = if byte { i64::from(value as i8) } else { i64::from(value as i16) };
+    Ok(if value == 0 {
+        vec![inst("MOVQ", vec![R(long), Imm(0)])]
+    } else if byte || (-128..=127).contains(&value) {
+        vec![inst("MOVQ", vec![R(long), Imm(value)])]
+    } else {
+        vec![inst("MOV16ri", vec![R(dst), Imm(value)])]
+    })
+}
+
+/// `ExpandMOVX_RR`: the wider view of the source's register, moved unless it
+/// is the destination already.
+fn expand_any_extension(
+    dst: RegId,
+    src: RegId,
+) -> Result<Vec<mc::Inst>, String> {
+    use mc::Operand::Reg as R;
+    let bits = if matches!(REGISTER_INFO.name(dst), Some(name) if name.starts_with("wd")) { 16 } else { 32 };
+    let wide = REGISTER_INFO.view(REGISTER_INFO.root(src), bits).ok_or("no wide view of the source")?;
+    Ok(if wide == dst {
+        vec![]
+    } else if bits == 16 {
+        vec![inst("MOV16rr", vec![R(dst), R(wide)])]
+    } else {
+        vec![inst("MOV32rr", vec![R(dst), R(wide)])]
     })
 }
 
