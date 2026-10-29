@@ -10,7 +10,7 @@ mod common;
 fn test_a_loop_latch_after_a_tail_merge_is_one_branch_back() {
     let source = format!("{}/bench/queens/queens.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-Os", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", &source])
         .output()

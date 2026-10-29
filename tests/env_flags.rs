@@ -8,7 +8,7 @@ mod common;
 /// The oracles llrm-c reached compiling a small program with
 /// `LLRM_CHECK_<name>` set to `value`.
 ///
-/// llrm-cc: the command is `common::cc::llrm_c()`, which names the target and
+/// llrm-cc: the command is `common::cc::llrm_cc()`, which names the target and
 /// keeps `LLRM_OW` and the pinned clang that the old `env_remove` of every
 /// `LLRM_*` variable dropped.
 fn reached(
@@ -19,7 +19,7 @@ fn reached(
     let source = directory.path().join("t.c");
     std::fs::write(&source, "int f(int a) { int s = 0; while (a--) s += a * 3; return s; }\n")
         .expect("writes the source");
-    let mut command = common::cc::llrm_c();
+    let mut command = common::cc::llrm_cc();
     command.args(["-m32", "-O2", "-o", directory.path().join("t.obj").to_str().unwrap()]).arg(&source);
     // The target and the pinned toolchain stay; only the switches under test
     // go.

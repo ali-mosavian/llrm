@@ -10,7 +10,7 @@ fn at_o2_a_nest_of_eight_trip_loops_keeps_its_multiplies_in_a_loop() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     let source = format!("{}/bench/matmul/matmul.c", env!("CARGO_MANIFEST_DIR"));
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-O2", "-m16", "-march=i386", "-S", "-o", "a.s", &source])
         .output()
@@ -33,7 +33,7 @@ fn at_o2_a_32_byte_memset_is_a_fill_not_eight_stores() {
         "extern void use(char *p);\nvoid f(void) { char b[32]; __builtin_memset(b, 0, 32); use(b); }\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-O2", "-m16", "-march=i386", "-S", "-o", "z.s", "z.c"])
         .output()
@@ -60,7 +60,7 @@ fn at_o2_a_mid_sized_callee_with_several_callers_stays_a_call() {
          void f1(int n) {{ g(p, q, n); }}\nvoid f2(int n) {{ g(q, p, n + 1); }}\nvoid f3(int n) {{ g(p, p, n + 2); }}\n"
     );
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-O2", "-m16", "-march=i386", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -82,7 +82,7 @@ fn at_o2_a_1024_byte_zeroing_is_rep_stosd() {
         "extern void use(char *p);\nvoid f(void) { char b[1024]; __builtin_memset(b, 0, 1024); use(b); }\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-O2", "-m16", "-march=i386", "-S", "-o", "z.s", "z.c"])
         .output()
@@ -105,7 +105,7 @@ fn at_os_an_aligned_fill_is_words_and_at_o2_dwords() {
     )
     .unwrap();
     let listing = |level: &str| {
-        let output = common::cc::llrm_c()
+        let output = common::cc::llrm_cc()
             .current_dir(directory)
             .args([level, "-m16", "-march=i386", "-S", "-o", "z.s", "z.c"])
             .output()

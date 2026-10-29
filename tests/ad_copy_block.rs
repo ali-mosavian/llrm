@@ -15,7 +15,7 @@ fn listing(
 ) -> String {
     let root = env!("CARGO_MANIFEST_DIR");
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(flags)
         .args(["-O2", "-S", "-o", "ad.s"])

@@ -25,7 +25,7 @@ long bench_recpow(int n)
 fn a_recolored_range_is_not_pre_split_for_its_first_callee_saved_register() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O1", "--isel=old", "-S", "-o", "a.s", "a.c"])
         .output()

@@ -17,7 +17,7 @@ fn compiled(
 ) -> (Output, String) {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("t.c"), source).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args([target, "-O2", "-S", "-o", "t.s", "t.c"])
         .output()

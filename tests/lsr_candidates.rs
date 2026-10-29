@@ -35,7 +35,7 @@ fn test_an_address_use_adds_no_candidate_for_its_constant_and_the_exit_counts_to
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         // Without the unroller: since the pin's LoopFullUnroll cost
         // (7761d2b672) the `dy` loop may be copied out at -O2, and what this

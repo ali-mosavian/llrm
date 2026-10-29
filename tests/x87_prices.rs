@@ -29,7 +29,7 @@ fn compiled(
     // llrm-c is gone: its command line is served by llrm-cc over the pinned
     // clang.
     let done = if tool == "llrm-c" {
-        common::cc::llrm_c()
+        common::cc::llrm_cc()
             .arg(&path)
             .args(flags)
             .arg("-o")

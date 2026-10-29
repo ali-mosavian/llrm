@@ -10,7 +10,7 @@ mod common;
 fn a_two_trip_loop_whose_tests_fold_is_unrolled_at_os_m16() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/c/float_in_place_update.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m16", "-Os", "-S", "-o", "a.s"])
         .arg(&source)

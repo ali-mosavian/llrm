@@ -177,7 +177,7 @@ fn compiled_c(
     let directory = tempfile::tempdir().expect("a directory");
     let source = directory.path().join("t.c");
     std::fs::write(&source, "int f(int a) { return a * 3 + 1; }\n").expect("writes the source");
-    let mut command = common::cc::llrm_c();
+    let mut command = common::cc::llrm_cc();
     command.args(["-m32", "-O2", "-o", directory.path().join("t.obj").to_str().unwrap()]);
     command.args(flag);
     command.arg(&source);

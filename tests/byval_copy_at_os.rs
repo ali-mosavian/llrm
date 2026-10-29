@@ -13,7 +13,7 @@ fn at_os_a_three_dword_byval_argument_is_three_pushes() {
     let directory = scratch.path();
     let source = "struct S { long a, b, c; } __attribute__((aligned(4)));\nextern struct S g;\nextern void use(struct S s);\nvoid f(void) { use(g); }\n";
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-Os", "-m16", "-march=i386", "-S", "-o", "a.s", "a.c"])
         .output()

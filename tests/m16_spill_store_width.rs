@@ -38,7 +38,7 @@ long scan(long *checksum)
 fn test_a_stored_cell_does_not_cover_the_next_cell() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["a.c", "-m16", "-march=i386", "-O2", "--isel=dag", "-S", "-o", "-"])
         .output()

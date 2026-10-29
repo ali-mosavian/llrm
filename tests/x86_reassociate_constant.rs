@@ -19,7 +19,7 @@ int f(int a, int b, unsigned s)
 fn test_a_constant_is_added_in_the_last_lea() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["--isel=dag", "-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "-", "a.c"])
         .output()

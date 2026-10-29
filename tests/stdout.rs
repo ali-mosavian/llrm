@@ -24,7 +24,7 @@ fn o_dash_writes_standard_output_in_every_frontend_and_no_file_named_dash() {
         // llrm-c is gone: its command line is served by llrm-cc over the pinned
         // clang.
         let made = if tool == "llrm-c" {
-            common::cc::llrm_c()
+            common::cc::llrm_cc()
                 .args(["-m16", "-S"])
                 .arg(source)
                 .args(["-o", "-"])

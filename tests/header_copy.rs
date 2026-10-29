@@ -11,7 +11,7 @@ fn listing(
 ) -> String {
     let source = format!("{}/crates/target/llrm-x86-m32/vsgcc/kernels/{kernel}/{kernel}.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m32", "-mabi=sysv", "-march=i486"])
         .args(flags)
@@ -73,7 +73,7 @@ fn test_fib_with_the_header_copy_on_keeps_its_self_inlined_nest() {
 fn test_a_loop_behind_a_guard_that_rules_out_its_bound_ends_on_the_flags_of_its_step() {
     let source = format!("{}/bench/recsum/recsum.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
         .output()
@@ -170,7 +170,7 @@ void f(int n, int cur, int y)
 ",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O3", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -219,7 +219,7 @@ void g(void) { tab[1] = 2000; }
 ",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -267,7 +267,7 @@ fn test_sum_three_loop_is_five_instructions_by_default() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/parity/sum_three/sum_three.c");
     let flags = ["-O2", "-m32", "-mabi=sysv", "-march=i486"];
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(flags)
         .args(["-S", "-o", "a.s"])
@@ -294,7 +294,7 @@ fn test_sum_three_loop_is_five_instructions_by_default() {
 fn test_tuned_for_size_the_row_loads_still_leave_the_loop() {
     let source = format!("{}/bench/parity/sum_three/sum_three.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-Os", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", &source])
         .output()
@@ -315,7 +315,7 @@ fn test_tuned_for_size_the_row_loads_still_leave_the_loop() {
 fn test_a_counter_tested_in_the_header_after_its_step_is_tested_stepped() {
     let source = format!("{}/bench/mandel/mandel.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
         .output()
@@ -343,7 +343,7 @@ fn test_a_counter_tested_in_the_header_after_its_step_is_tested_stepped() {
 fn test_an_early_return_through_a_spilled_sum_sets_up_nothing() {
     let source = format!("{}/bench/queens/queens.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
         .output()
@@ -397,7 +397,7 @@ fn test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/recchop/recchop.c");
     let flags = ["-O1", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch"];
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(flags)
         .args(["-S", "-o", "a.s"])
@@ -429,7 +429,7 @@ fn test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return() {
 fn test_a_loop_entered_at_its_second_block_is_laid_out_from_it() {
     let source = format!("{}/bench/shellsort/shellsort.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O1", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
         .output()

@@ -12,7 +12,7 @@ fn listing(flags: &[&str]) -> String {
         "unsigned h(unsigned char *p, unsigned char *q, int n) { unsigned s = 0; int i; for (i = 0; i < n; i++) s += p[i] * q[i]; return s; }\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32"])
         .args(flags)

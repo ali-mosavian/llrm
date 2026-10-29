@@ -16,7 +16,7 @@ void centroid(const CPoint *points, unsigned short count, CPoint *out)\n\
 fn a_value_an_instruction_requires_in_one_register_is_not_moved_by_the_greedy_allocator() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), CENTROID).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .env("LLRM_GREEDY_CHECK", "1")
         .args(["-O2", "-march=i486", "-mabi=watcom", "-S", "-o", "a.s", "a.c"])

@@ -11,7 +11,7 @@ fn os_copy_listing(flags: &[&str]) -> String {
         "extern int a[], b[];\nvoid copy(int lo, int mid, int hi)\n{\n    int i = mid, k = lo;\n    while (i < hi) b[k++] = a[i++];\n}\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(flags)
         .args(["-m16", "-march=i386", "-S", "-o", "a.s", "a.c"])

@@ -12,7 +12,7 @@ use std::process::Command;
 fn test_a_folded_copy_that_stores_a_spill_moves_to_the_block_that_reads_it() {
     let source = format!("{}/bench/lru/lru.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-Os", "-m16", "-S", "-o", "a.s", &source])
         .output()

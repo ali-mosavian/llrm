@@ -50,7 +50,7 @@ fn test_a_size_build_with_a_shared_return_pops_what_it_pushed() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32", "-Os", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()

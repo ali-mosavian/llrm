@@ -23,7 +23,7 @@ void walk(char far *p, int n)
 fn test_a_segment_half_nothing_reads_is_not_carried_round_the_loop() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .env("LLRM_CHECK_LIVEINTERVALS", "1")
         .args(["-m16", "-march=i386", "-Os", "-S", "-o", "a.s", "a.c"])

@@ -24,7 +24,7 @@ const SOURCE: &str = "long f(short *a, short *b)
 fn a_frame_laid_again_equals_the_backend_run_again() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let done = common::cc::llrm_c()
+    let done = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
         .env("LLRM_CHECK_FRAME", "1")

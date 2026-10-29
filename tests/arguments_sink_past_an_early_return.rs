@@ -23,7 +23,7 @@ void mv(int n, int from, int to, int via)
 fn an_argument_is_not_loaded_before_the_early_return_that_does_not_use_it() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "--isel=dag", "-S", "-o", "a.s", "a.c"])
         .output()

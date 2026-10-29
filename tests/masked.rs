@@ -22,7 +22,7 @@ fn compiled(
     // llrm-c is gone: its command line is served by llrm-cc over the pinned
     // clang.
     let done = if tool == "llrm-c" {
-        common::cc::llrm_c().arg(&input).args(arguments).args(flags).arg(&out).output().unwrap()
+        common::cc::llrm_cc().arg(&input).args(arguments).args(flags).arg(&out).output().unwrap()
     } else {
         Command::new(bin.join(tool)).arg(&input).args(arguments).args(flags).arg(&out).output().unwrap()
     };

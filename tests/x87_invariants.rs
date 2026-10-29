@@ -57,7 +57,7 @@ fn test_a_stored_loop_carried_float_is_spilled_to_the_cell_the_program_stores_it
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32", "-O3", "-fno-peel-loops", "-fno-unroll-loops", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -85,7 +85,7 @@ fn test_os_does_not_hold_floats_across_a_loop_for_the_release_they_cost() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32", "-Os", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -110,7 +110,7 @@ fn test_a_constant_nothing_reads_is_not_loaded_and_popped() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32", "-O3", "-fno-peel-loops", "-fno-unroll-loops", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -140,7 +140,7 @@ fn test_the_unrolled_nest_stores_no_more_than_it_does_today() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32", "-O3", "-fno-peel-loops", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()

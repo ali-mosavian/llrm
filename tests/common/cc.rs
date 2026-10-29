@@ -14,7 +14,7 @@ use std::process::{Child, Command, Output, Stdio};
 /// A `Command` for `llrm-cc`, built as `llrm-c`'s was: the target is chosen
 /// when it runs, from the arguments added after it was made.
 #[derive(Default)]
-pub struct LlrmC {
+pub struct LlrmCc {
     arguments: Vec<OsString>,
     environment: Vec<(OsString, OsString)>,
     removed: Vec<OsString>,
@@ -24,11 +24,11 @@ pub struct LlrmC {
     stderr: Option<Stdio>,
 }
 
-pub fn llrm_c() -> LlrmC {
-    LlrmC::default()
+pub fn llrm_cc() -> LlrmCc {
+    LlrmCc::default()
 }
 
-impl LlrmC {
+impl LlrmCc {
     pub fn arg(
         &mut self,
         argument: impl AsRef<OsStr>,

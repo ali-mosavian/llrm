@@ -16,7 +16,7 @@ fn test_a_squared_value_below_the_top_is_copied_from_where_it_is() {
         "double f(double x, double y, double z) { double a = x * y, b = y * z; return a * a + b * b + a * b; }\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -42,7 +42,7 @@ fn test_a_value_below_the_top_that_stays_is_copied_for_a_memory_operand() {
         "extern float gx, gy;\nfloat f(float a, float b) { float x = gx - a, y = gy - b; return x * y + a * b; }\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -61,7 +61,7 @@ fn test_fxch_survives_dead_code_elimination() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/run/c/x87rotate.c"), directory.join("a.c")).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()

@@ -11,7 +11,7 @@ fn listing(
 ) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("t.c"), source).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m16", "-Os"])
         .args(flags)

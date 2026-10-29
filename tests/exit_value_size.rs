@@ -17,7 +17,7 @@ const SUM: &str = r#"long b(unsigned short n)
 fn exit_value_listing(level: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SUM).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m16", "-march=i386", level, "-S", "-o", "a.s", "a.c"])
         .output()

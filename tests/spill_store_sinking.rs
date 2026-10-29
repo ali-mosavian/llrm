@@ -41,7 +41,7 @@ fn test_a_spill_store_ahead_of_a_branch_is_made_on_the_path_that_reads_the_slot(
     let source = scratch.path().join("hanoi.c");
     std::fs::write(&source, SOURCE).unwrap();
     let flags = ["-O2", "-m32", "-mabi=sysv", "-march=i486"];
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .env("LLRM_CANDIDATES", "spiller")
         .args(flags)

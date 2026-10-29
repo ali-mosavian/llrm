@@ -22,7 +22,7 @@ fn test_a_32_bit_value_crosses_a_call_in_a_register_the_callee_keeps() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()

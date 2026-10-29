@@ -9,7 +9,7 @@ mod common;
 fn test_no_branch_jumps_over_a_jump_to_the_next_block() {
     let source = format!("{}/bench/hanoi/hanoi.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", &source])
         .output()

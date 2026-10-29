@@ -20,7 +20,7 @@ fn compiled(
 ) -> (Vec<u8>, String) {
     let scratch = tempfile::tempdir().unwrap();
     let source = format!("{}/bench/{program}/{program}.c", env!("CARGO_MANIFEST_DIR"));
-    let mut command = common::cc::llrm_c();
+    let mut command = common::cc::llrm_cc();
     command
         .current_dir(scratch.path())
         .args(flags)

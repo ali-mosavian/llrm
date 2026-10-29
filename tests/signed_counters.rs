@@ -8,7 +8,7 @@ fn listing(source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         // The loops are the premise: at 40 trips the pin's order copies them
         // out.

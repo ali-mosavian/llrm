@@ -76,7 +76,7 @@ impl Lab {
         &self,
         args: &[&str],
     ) {
-        let done = common::cc::llrm_c().args(args).current_dir(self.dir.path()).output().unwrap();
+        let done = common::cc::llrm_cc().args(args).current_dir(self.dir.path()).output().unwrap();
         assert!(
             done.status.success(),
             "llrm-cc {args:?}: {}{}",

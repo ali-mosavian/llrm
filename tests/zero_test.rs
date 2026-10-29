@@ -5,7 +5,7 @@ mod common;
 fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let source = concat!(env!("CARGO_MANIFEST_DIR"), "/bench/parity/sum_three/sum_three.c");
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .args(flags)
         .current_dir(scratch.path())
         .args(["-S", "-o", "a.s", source])

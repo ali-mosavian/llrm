@@ -9,7 +9,7 @@ fn listing(
 ) -> String {
     let source = format!("{}/{source}", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486"])
         .args(if flags.iter().any(|flag| flag.starts_with("-O")) { &[][..] } else { &["-O2"][..] })

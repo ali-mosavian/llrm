@@ -23,7 +23,7 @@ fn a_rotation_of_constants_is_allocated_inline_at_every_level() {
     for level in ["-O1", "-O2", "-Os"] {
         let scratch = tempfile::tempdir().unwrap();
         std::fs::write(scratch.path().join("a.c"), ROTATE).unwrap();
-        let output = common::cc::llrm_c()
+        let output = common::cc::llrm_cc()
             .current_dir(scratch.path())
             .env("LLRM_CHECK_LIVEINTERVALS", "1")
             .env("LLRM_GREEDY_CHECK", "1")
@@ -46,7 +46,7 @@ fn a_rotation_of_constants_is_allocated_inline_at_every_level() {
 fn a_register_an_inline_spill_redefines_gets_its_interval_again() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/c/es_across_copy.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .env("LLRM_CHECK_LIVEINTERVALS", "1")
         .env("LLRM_GREEDY_CHECK", "1")
@@ -112,7 +112,7 @@ long bench_nbr(void)\n\
 fn a_spilled_update_is_stored_back_from_its_slot_not_its_stale_home() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), HOME_UPDATE).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O3", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -154,7 +154,7 @@ fn a_deep_loop_nest_is_allocated_inline() {
     source += "\n    return s;\n}\n";
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .env("LLRM_GREEDY_TRACE", "1")
         .args(["-m32", "-march=i486", "-O2", "-o", "a.o", "a.c"])
@@ -201,7 +201,7 @@ fn a_load_that_can_be_made_again_is_not_kept_in_a_register_at_the_cost_of_a_spil
 fn the_parity_pipeline_allocates_with_greedy() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), "int f(int a, int b) { return a * b + a; }\n").unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .env("LLRM_GREEDY_TRACE", "1")
         .args(["-m32", "-march=i486", "-O2", "-o", "a.o", "a.c"])

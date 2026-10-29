@@ -16,7 +16,7 @@ void g(int x) { f(257, 8, 3); f(x, 8, 3); }
 fn test_a_constant_argument_of_two_calls_is_pushed_as_an_immediate() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args([
             "-m16",

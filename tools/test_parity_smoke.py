@@ -561,12 +561,12 @@ def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
 
 
 def test_a_target_reaches_the_crates_and_compilers_of_the_helpers_it_uses(tmp_path):
-    """95 targets, after C1 moved them to `common::cc::llrm_c()`, imported no crate in their own text and were all unmapped: the helper's imports are the target's."""
+    """95 targets, after C1 moved them to `common::cc::llrm_cc()`, imported no crate in their own text and were all unmapped: the helper's imports are the target's."""
     (tmp_path / "tests" / "common").mkdir(parents=True)
     (tmp_path / "tests" / "common" / "mod.rs").write_text("use llrm_driver::all;")
     (tmp_path / "tests" / "common" / "cc.rs").write_text('env!("CARGO_BIN_EXE_llrm-cc")')
     (tmp_path / "tests" / "common" / "other.rs").write_text("use llrm_nib::x;")
-    text = ps.with_common("mod common;\nfn t() { common::cc::llrm_c(); }", tmp_path)
+    text = ps.with_common("mod common;\nfn t() { common::cc::llrm_cc(); }", tmp_path)
     assert "llrm_driver" in text and "CARGO_BIN_EXE_llrm-cc" in text and "llrm_nib" not in text
     assert "llrm_driver" in ps.with_common("pub mod common;", tmp_path)
     assert ps.with_common("fn t() {}", tmp_path) == "fn t() {}"

@@ -24,7 +24,7 @@ long steps(unsigned x)
 fn test_the_latch_of_a_loop_with_a_diamond_body_falls_into_the_header() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -49,7 +49,7 @@ fn test_a_latch_that_ends_in_a_jump_elsewhere_is_not_priced_as_falling_through()
         .join("crates/target/llrm-x86-m32/vsgcc/kernels/x_binsearch/x_binsearch.c");
     let flags = ["-O2", "-m32", "-mabi=sysv", "-march=i486"];
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(flags)
         .args(["-S", "-o", "a.s"])
@@ -72,7 +72,7 @@ fn test_a_latch_that_ends_in_a_jump_elsewhere_is_not_priced_as_falling_through()
 fn test_a_turn_that_saves_clocks_is_made_whatever_the_share_of_jumps() {
     let source = concat!(env!("CARGO_MANIFEST_DIR"), "/crates/target/llrm-x86-m32/vsgcc/kernels/x_adler/x_adler.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", source])
         .output()

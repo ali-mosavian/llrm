@@ -19,7 +19,7 @@ fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), SCROLL).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .args(["-m32", "-mabi=sysv", "-march=i486"])
         .args(flags)

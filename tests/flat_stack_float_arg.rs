@@ -56,7 +56,7 @@ void fout_digits(double v, int is_double, Decimal *d, int *exponent)\n\
 }\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .env("LLRM_VERIFY", "1")
         .args(["-m32", "-Os", "-o", "a.obj", "a.c"])
@@ -81,7 +81,7 @@ extern void take(struct S s, int n);\n\
 void f(long double x, struct S s) { use(x, 3); take(s, 4); }\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(directory)
         .env("LLRM_VERIFY", "1")
         .args(["-m32", "-mabi=sysv", "-O1", "-o", "a.obj", "a.c"])

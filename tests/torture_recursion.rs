@@ -11,7 +11,7 @@ fn a_recursive_function_with_a_loop_that_becomes_a_copy_compiles() {
     let source = "static int a[64], b[64];\nvoid m(int lo, int hi)\n{\n    int k, mid;\n    if (hi - lo < 2) return;\n    mid = (lo + hi) / 2;\n    m(lo, mid);\n    m(mid, hi);\n    for (k = lo; k < hi; ++k) a[k] = b[k];\n}\nint main(void) { m(0, 64); return a[3]; }\n";
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-O2", "-S", "-o", "a.s", "a.c"])
         .output()

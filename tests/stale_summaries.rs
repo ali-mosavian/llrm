@@ -17,7 +17,7 @@ fn the_passes_after_the_summaries_add_no_memory_operation() {
             for level in ["-O1", "-O2", "-Os"] {
                 let scratch = tempfile::tempdir().unwrap();
                 let source = format!("{}/bench/{program}/{program}.c", env!("CARGO_MANIFEST_DIR"));
-                let output = common::cc::llrm_c()
+                let output = common::cc::llrm_cc()
                     .current_dir(scratch.path())
                     .args(flags)
                     .args([level, "-o", "a.obj", &source])

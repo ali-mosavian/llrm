@@ -13,7 +13,7 @@ fn two_bytes_of_a_swap_share_a_register_and_nothing_spills() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("crates/target/llrm-x86-m32/vsgcc/kernels/x_reverse/x_reverse.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O1", "--isel=dag", "-S", "-o", "a.s"])
         .arg(&source)

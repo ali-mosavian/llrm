@@ -18,7 +18,7 @@ fn test_a_dag_call_keeps_the_registers_its_callee_did_not_write() {
          int caller(int a, int b, int c, int d) { leaf(a); return b + c + d; }\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m16", "-march=i386", "-Os", "--isel=dag", "-S", "-o", "a.s"])
         .arg(&source)

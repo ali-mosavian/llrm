@@ -9,7 +9,7 @@ mod common;
 fn test_a_broken_hint_is_recolored_once_the_register_is_free() {
     let source = format!("{}/bench/matmul/matmul.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "--isel=dag", "-S", "-o", "a.s"])
         .arg(&source)

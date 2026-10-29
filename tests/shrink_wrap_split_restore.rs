@@ -41,7 +41,7 @@ fn listing(
 ) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "--isel=dag", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -88,7 +88,7 @@ fn a_late_path_that_jumps_to_a_join_pops_before_the_jump_and_the_early_exit_pays
 fn at_os_the_registers_are_saved_after_the_test_as_the_pin_does() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), LOOP).unwrap();
-    let output = common::cc::llrm_c()
+    let output = common::cc::llrm_cc()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-Os", "--isel=dag", "-S", "-o", "a.s", "a.c"])
         .output()

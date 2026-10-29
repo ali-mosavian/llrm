@@ -26,9 +26,9 @@ fn a_dump_into_tmpfs_is_refused_by_each_tool() {
     let flag = format!("/dev/shm/dump-dir-flag-{}", std::process::id());
     let variable = format!("/dev/shm/dump-dir-env-{}", std::process::id());
     let object = std::env::temp_dir().join(format!("dump-dir-{}.obj", std::process::id()));
-    let by_flag = common::cc::llrm_c().arg(&source).args(["--dump", &flag, "-o"]).arg(&object).output().unwrap();
+    let by_flag = common::cc::llrm_cc().arg(&source).args(["--dump", &flag, "-o"]).arg(&object).output().unwrap();
     let by_variable =
-        common::cc::llrm_c().arg(&source).arg("-o").arg(&object).env("LLRM_MIR_STAGES", &variable).output().unwrap();
+        common::cc::llrm_cc().arg(&source).arg("-o").arg(&object).env("LLRM_MIR_STAGES", &variable).output().unwrap();
     for (run, directory) in [(&by_flag, &flag), (&by_variable, &variable)] {
         let said = String::from_utf8_lossy(&run.stderr);
         assert_eq!(run.status.code(), Some(2), "{said}");
@@ -59,7 +59,7 @@ fn a_basic_programs_dump_has_the_stage_files_a_c_programs_has() {
     };
     let in_c = scratch.path().join("dump-c");
     let in_bas = scratch.path().join("dump-bas");
-    let done = common::cc::llrm_c()
+    let done = common::cc::llrm_cc()
         .arg(&c)
         .args(["-m16", "-O2", "--dump"])
         .arg(&in_c)
