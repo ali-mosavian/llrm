@@ -410,7 +410,7 @@ def c_flags() -> list[str]:
 
 def c_build_key() -> str:
     """What the runtime's C is compiled with, for the object cache: the row and the flags, the checkout's own path left out."""
-    return RUNTIME_ROW + " " + " ".join(c_flags()).replace(str(dosbatch.ROOT), "")
+    return RUNTIME_ROW + " " + " ".join(c_flags()).replace(str(dosbatch.ROOT), "") + " " + dosbatch.clang_identity()
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
