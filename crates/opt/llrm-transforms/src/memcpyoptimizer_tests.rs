@@ -45,6 +45,17 @@ fn four_byte_stores_are_one_memset() {
     assert!(!after.contains("store i8 0, ptr %p1"), "{after}");
 }
 
+/// Two `double` zeros are one 16-byte memset (`isBytewiseValue` reads float
+/// constants). Left as stores they were 6 `fldz; fst` where the pin's `movl $0`s
+/// are free: nbody's x87 nest stored 18 cells against the pin's 10.
+#[test]
+fn two_double_zeros_are_one_memset() {
+    let text = "@a = global [64 x i8] zeroinitializer\n\ndefine i16 @f(i16 %x) {\nb0:\n  store i16 %x, ptr @a\n  %p1 = getelementptr i8, ptr @a, i16 8\n  store double 0.0, ptr %p1\n  %p2 = getelementptr i8, ptr @a, i16 16\n  store double 0.0, ptr %p2\n  %r = load i16, ptr @a\n  ret i16 %r\n}\n";
+    let after = merged(text, &[&[7]]);
+    assert!(after.contains("i8 0, i16 16, i1 false"), "{after}");
+    assert!(!after.contains("store double"), "{after}");
+}
+
 /// Two stores are what the code generator pairs itself.
 #[test]
 fn two_word_stores_stay() {

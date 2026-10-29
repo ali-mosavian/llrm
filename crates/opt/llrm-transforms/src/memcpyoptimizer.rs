@@ -33,9 +33,9 @@
 //! DEVIATE 2: a call that only accesses inaccessible memory ends the scan
 //! (LLVM steps over it); `memory::of` has no such effect. Exit: model the
 //! effect.
-//! DEVIATE 3: only integer stores are bytewise (LLVM's `isBytewiseValue` also
-//! reads floats, null and aggregates), and `processStore`'s promotion of an
-//! aggregate store to a memset is absent. Exit: S2, with the float constants.
+//! DEVIATE 3: only integer and float stores are bytewise (LLVM's
+//! `isBytewiseValue` also reads null and aggregates), and `processStore`'s
+//! promotion of an aggregate store to a memset is absent. Exit: S2.
 //! DEVIATE 4: unreachable blocks are walked. Exit: none needed.
 //! DEVIATE 5: `processStoreOfLoad`, `processMemCpy` and the rest are stages 2
 //! and 3.
@@ -69,6 +69,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Effects};
 use llrm_mir::module::{Function, InstId, Operand};
+use llrm_mir::types::{FloatKind, Type};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, Outer, PreservedAnalyses};
 
@@ -187,20 +188,46 @@ fn add_range(
     }
 }
 
-/// `isBytewiseValue` of an integer `value`.
+/// The bytes a store of `value` writes: an integer's width, a `float` or
+/// `double`'s size (`getTypeStoreSize`).
+fn store_bytes(
+    unit: &Unit,
+    value: Operand,
+) -> Option<i64> {
+    if let Some(bits) = unit.int_bits(value) {
+        return Some(i64::from(bits / 8));
+    }
+    match unit.context.types.get(unit.operand_type(value)?) {
+        Type::Float(FloatKind::Float) => Some(4),
+        Type::Float(FloatKind::Double) => Some(8),
+        _ => None,
+    }
+}
+
+/// `isBytewiseValue` of an integer or `float`/`double` `value`: a float
+/// constant is read as the integer of its bits.
 fn bytewise(
     unit: &Unit,
     value: Operand,
 ) -> Option<Byte> {
-    let width = unit.int_bits(value)?;
-    if let Some(bits) = unit.int_constant(value) {
-        if width % 8 != 0 || width == 0 {
-            return None;
+    let (bits, width) = match unit.int_bits(value) {
+        Some(width) => (unit.int_constant(value), width),
+        None => {
+            let width = store_bytes(unit, value)? as u32 * 8;
+            let Operand::Constant(id) = value else { return None };
+            match unit.context.get(id).kind {
+                ConstantKind::Float(bits) => (Some(u128::from(bits)), width),
+                ConstantKind::Null => (Some(0), width),
+                _ => return None,
+            }
         }
-        let byte = bits & 0xFF;
-        return (0..width / 8).all(|at| (bits >> (8 * at)) & 0xFF == byte).then_some(Byte::Constant(byte));
+    };
+    let Some(bits) = bits else { return (width == 8).then_some(Byte::Value(value)) };
+    if width % 8 != 0 || width == 0 {
+        return None;
     }
-    (width == 8).then_some(Byte::Value(value))
+    let byte = bits & 0xFF;
+    (0..width / 8).all(|at| (bits >> (8 * at)) & 0xFF == byte).then_some(Byte::Constant(byte))
 }
 
 /// The store `inst` is, when it is simple: its value and pointer.
@@ -329,7 +356,7 @@ fn try_merging_into_memset(
             (found.root.is_some() && found.base.is_none() && found.segment.is_none()).then_some(found)
         };
         let (start_size, start_inst) = match simple_store(function, start) {
-            Some((value, _)) => (i64::from(unit.int_bits(value)? / 8), (start, true)),
+            Some((value, _)) => (store_bytes(&unit, value)?, (start, true)),
             None => (constant_memset(&unit, callees, function, start)?.2, (start, false)),
         };
         let base = reference(start_ptr, start_size)?;
@@ -344,7 +371,7 @@ fn try_merging_into_memset(
             let found = if let Some((value, pointer)) = simple_store(function, at) {
                 // A store of the same byte at a constant offset from the start.
                 (bytewise(&unit, value) == Some(byte))
-                    .then(|| (pointer, i64::from(unit.int_bits(value).unwrap_or(8) / 8), true))
+                    .then(|| (pointer, store_bytes(&unit, value).unwrap_or(1), true))
             } else if let Some((dest, other, length)) = constant_memset(&unit, callees, function, at) {
                 let same = match byte {
                     Byte::Constant(wanted) => unit.int_constant(other) == Some(wanted),
