@@ -86,19 +86,15 @@ fn a_mac_resource_fork_holds_code_0_and_code_1() {
 }
 
 /// vamos (amitools) runs the hunk file; the process's return code is `d0`.
-/// Ignored: this vamos lacks `machine68k` (a pip package; not installed).
 #[test]
-#[ignore = "vamos lacks machine68k, a pip package"]
+#[ignore = "needs vamos: uv tool install amitools --with \"machine68k<0.4\" (0.4.1 breaks vamos 0.8.1)"]
 fn an_amiga_load_file_returns_its_sum_under_vamos() {
-    let Ok(vamos) = which("vamos") else {
-        eprintln!("vamos is not installed: not run");
-        return;
-    };
+    let vamos = which("vamos").expect("vamos is on PATH");
     let path = std::env::temp_dir().join(format!("llrm-m68k-{}.hunk", std::process::id()));
     std::fs::write(&path, amiga::load_file(&program(amiga::start)).unwrap()).unwrap();
     let out = std::process::Command::new(vamos).arg(&path).output().unwrap();
     std::fs::remove_file(&path).ok();
-    eprintln!("{:?} {}{}", out.status, String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    // 40 + 2
     assert_eq!(out.status.code(), Some(42));
 }
 
