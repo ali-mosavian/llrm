@@ -52,9 +52,10 @@ fn the_first_four_arguments_arrive_in_eax_edx_ebx_ecx() {
     let text = listing(
         "@export(\"watcall32\")\nfn third(a: i32, b: u32, c: i32) -> i32:\n    return c\n@export(\"watcall32\")\nfn fourth(a: i32, b: i32, c: i32, d: i32) -> i32:\n    return d\n",
     );
-    // The block label's number is not the point.
-    let body =
-        |name: &str| procedure(&text, name).into_iter().filter(|line| !line.starts_with('L')).collect::<Vec<_>>();
+    // The label's number is the block's id, which the DAG selector starts at 1.
+    let body = |name: &str| -> Vec<String> {
+        procedure(&text, name).into_iter().filter(|line| !line.ends_with(':')).collect()
+    };
     assert_eq!(body("third_"), ["mov eax, ebx", "ret"]);
     assert_eq!(body("fourth_"), ["mov eax, ecx", "ret"]);
 }
@@ -168,8 +169,12 @@ fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_s
     let exported = procedure(&text, "_twice");
     assert!(exported.iter().any(|line| line.contains("[esp+4]")), "{exported:?}");
     let caller = procedure(&text, "_use");
+    // One stack argument per call. The pin stores it into the reserved call
+    // frame (`movl $3, (%esp)`) and pops nothing; ours pushes it and cleans
+    // up with `add esp, 4` (DEVIATE CF1, docs/working/ci.md call-frame-reserve).
     assert!(
-        !caller.iter().any(|line| line.starts_with("push") && line.contains("2")) && !pops_after(&caller),
+        !caller.iter().any(|line| line.starts_with("push") && line.contains("2"))
+            && caller.iter().filter(|line| line.starts_with("pushd")).count() == 2,
         "{caller:?}"
     );
 }
