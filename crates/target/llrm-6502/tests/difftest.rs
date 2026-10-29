@@ -505,6 +505,7 @@ fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i3
     if std::env::var("DIFF_NOLIFETIME").is_ok() {
         text = text.lines().filter(|l| !l.contains("llvm.lifetime")).collect::<Vec<_>>().join("\n");
     }
+    llrm_spike_mf::spill::VERIFY_SLOTS.store(std::env::var("DIFF_NOVERIFY").is_err(), std::sync::atomic::Ordering::Relaxed);
     let mut module = llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e:?}").chars().take(120).collect::<String>())?;
     llrm_6502::prepare::split_phi_edges(&mut module);
     let platform = Platform::parse(SIM65).unwrap();

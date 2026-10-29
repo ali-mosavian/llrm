@@ -33,6 +33,7 @@ fn compile_at(
     zero_page: u8,
     tuning: Tuning,
 ) -> String {
+    llrm_spike_mf::spill::VERIFY_SLOTS.store(true, std::sync::atomic::Ordering::Relaxed);
     let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
     let mut module = llrm_mir::parse::module(&text).expect("parses");
     llrm_6502::prepare::split_phi_edges(&mut module);
@@ -1975,6 +1976,35 @@ define i8 @left() {
             assert_eq!(got, want, "{name} of {first:#x}");
         }
     }
+}
+
+/// Spills that are not live together share a cell (`StackSlotColoring`): six rounds of the same
+/// pressure took six times the cells of one, 15,973 cells in 98 differential programs (3,158 with it).
+#[test]
+fn spills_that_are_not_live_together_share_cells() {
+    let rounds = |groups: usize| {
+        let mut ir = String::from("@g = external global i8\ndefine i8 @fold() {\n  %acc0 = add i8 0, 0\n");
+        for g in 0..groups {
+            for i in 0..16 {
+                ir += &format!("  %b{g}_{i} = load volatile i8, ptr @g\n");
+            }
+            for i in 0..8 {
+                ir += &format!("  %x{g}_{i} = xor i8 %b{g}_{i}, %b{g}_{}\n", 15 - i);
+            }
+            let mut cur = format!("%acc{g}");
+            for i in 0..8 {
+                ir += &format!("  %s{g}_{i} = add i8 {cur}, %x{g}_{i}\n");
+                cur = format!("%s{g}_{i}");
+            }
+            ir += &format!("  %acc{} = add i8 {cur}, 0\n", g + 1);
+        }
+        ir += &format!("  ret i8 %acc{groups}\n}}");
+        let text = compile_on(&ir, "fold", 16);
+        text.lines().filter(|l| l.starts_with("s_fold_") && l.contains(".res")).count()
+    };
+    let (one, six) = (rounds(1), rounds(6));
+    assert!(one > 0, "the test needs spills");
+    assert!(six <= one + 2, "six rounds took {six} cells, one took {one}");
 }
 
 /// `freeze` selects to the generic `COPY`, which the selector had no description of ("no description
