@@ -162,6 +162,27 @@ fn post_increment_forms_encode_as_binutils_does() {
     }
 }
 
+/// `cmpa.l %d0,%a1` b3c0 and `cmpa.l %a2,%a3` b7ca, from binutils.
+#[test]
+fn cmpa_encodes_as_binutils_does() {
+    let cmpa = |lhs: &str, rhs: &str| Inst { opcode: "CMPA32", operands: vec![register(lhs), register(rhs)] };
+    for (inst, golden) in [(cmpa("d0", "a1"), "b3c0"), (cmpa("a2", "a3"), "b7ca")] {
+        assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
+    }
+}
+
+/// The loaded value of the running maximum took `d2`, because the compare
+/// wants a data register, and so a push and a pop (4 bytes). It compares
+/// from an address register with `cmpa.l`, as gcc does.
+#[test]
+fn a_loaded_value_only_compared_may_sit_in_an_address_register() {
+    let marked = arrmax_loop().replace(") {\nentry", ") optsize {\nentry");
+    let ours = compiled(&marked, Options::default());
+    assert!(ours.contains("cmpa.l") && !ours.contains("%d2"), "{ours}");
+    let pinned = compiled(arrmax_loop(), Options::PINNED);
+    assert!(!pinned.contains("cmpa.l"), "{pinned}");
+}
+
 fn sum_loop(step: &str) -> String {
     format!(
         "define i32 @f(ptr %p, i32 %n) {{\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %q = phi ptr [%p, %entry], [%q1, %l]\n  %v = load i32, ptr %q\n  %s1 = add i32 %s, %v\n  %q1 = getelementptr i32, ptr %q, i32 {step}\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %s1\n}}"
