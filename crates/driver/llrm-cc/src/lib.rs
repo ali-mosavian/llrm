@@ -329,6 +329,11 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             if flag == "-mabi=watcom" && !argv.iter().any(|one| one == "-fsigned-char") {
                 build.clang.push("-funsigned-char".to_owned());
             }
+            // Nib's generated header spells the convention `__watcall`; the backend takes the convention from this
+            // flag, and the rows without watcom.h do not know the word.
+            if flag == "-mabi=watcom" {
+                build.clang.push("-D__watcall=".to_owned());
+            }
             build.llc.push(flag.to_owned());
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
