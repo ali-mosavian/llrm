@@ -44,6 +44,7 @@ use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
 use super::legalize_types::LegalizeError;
 use super::mvt::{EVT, MVT};
+use llrm_sdag::lowering::ShiftAmount;
 
 /// What the target supplies (`TLI.LowerOperation`).
 pub trait Hooks {
@@ -181,7 +182,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             _ => return n,
         };
         let amount = self.dag.operand(at, amount_at);
-        let want = if self.tli.types.shift_by_value_type() { self.dag.value_type(at) } else { EVT::I8 };
+        let want = match self.tli.types.shift_amount() {
+            ShiftAmount::I8 => EVT::I8,
+            ShiftAmount::ByValue => self.dag.value_type(at),
+            ShiftAmount::Fixed(vt) => EVT::Simple(vt),
+        };
         if !self.dag.value_type(amount).is_integer() || self.dag.value_type(amount) == want {
             return n;
         }

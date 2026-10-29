@@ -139,6 +139,39 @@ fn loop_exits_select_cbnz_tbnz_and_bcc() {
     assert_eq!(bcc, [vec![], vec!["ADDWri", "SUBSWrr", "Bcc", "B"], vec!["RET_ReallyLR"]]);
 }
 
+/// Logic, shifts, multiply, divide and the integer extensions select the pin's
+/// opcodes; names are its `-stop-after=finalize-isel` for the same IR.
+#[test]
+fn integer_alu_selects_the_pins_opcodes() {
+    let cases: &[(&str, &str, &str, &[&str])] = &[
+        ("i32", "i32 %a, i32 %b", "and i32 %a, %b", &["ANDWrr"]),
+        ("i32", "i32 %a", "and i32 %a, 255", &["ANDWri"]),
+        ("i32", "i32 %a, i32 %b", "or i32 %a, %b", &["ORRWrr"]),
+        ("i64", "i64 %a", "xor i64 %a, 65280", &["EORXri"]),
+        ("i32", "i32 %a", "xor i32 %a, -1", &["ORNWrr"]),
+        ("i32", "i32 %a, i32 %b", "shl i32 %a, %b", &["LSLVWr"]),
+        ("i32", "i32 %a", "shl i32 %a, 3", &["UBFMWri"]),
+        ("i64", "i64 %a", "lshr i64 %a, 5", &["UBFMXri"]),
+        ("i32", "i32 %a, i32 %b", "ashr i32 %a, %b", &["ASRVWr"]),
+        ("i32", "i32 %a, i32 %b", "mul i32 %a, %b", &["MADDWrrr"]),
+        ("i32", "i32 %a, i32 %b", "sdiv i32 %a, %b", &["SDIVWr"]),
+        ("i64", "i64 %a, i64 %b", "udiv i64 %a, %b", &["UDIVXr"]),
+        ("i32", "i32 %a, i32 %b", "srem i32 %a, %b", &["SDIVWr", "MADDWrrr", "SUBSWrr"]),
+        ("i64", "i32 %a", "sext i32 %a to i64", &["IMPLICIT_DEF", "INSERT_SUBREG", "SBFMXri"]),
+        ("i64", "i32 %a", "zext i32 %a to i64", &["ORRWrs", "SUBREG_TO_REG"]),
+        ("i32", "i8 %a", "zext i8 %a to i32", &["ANDWri"]),
+        ("i32", "i16 %a", "sext i16 %a to i32", &["SBFMWri"]),
+        ("i32", "i32 %a", "sub i32 0, %a", &["SUBSWrr"]),
+        ("i32", "i32 %a, i32 %b, i32 %c", "add i32 %a, %c", &["ADDWrr"]),
+    ];
+    for &(ret, params, op, want) in cases {
+        let ir = format!("define {ret} @f({params}) {{\n  %r = {op}\n  ret {ret} %r\n}}");
+        let mut expected: Vec<&str> = want.to_vec();
+        expected.push("RET_ReallyLR");
+        assert_eq!(selected(&ir).unwrap_or_else(|why| panic!("{op}: {why}")), [expected], "{op}");
+    }
+}
+
 mod emitted {
     use llrm_arm64::dag::emit::emit;
     use llrm_arm64::dag::function::select_function;

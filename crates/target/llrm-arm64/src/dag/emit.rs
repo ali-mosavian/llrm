@@ -8,8 +8,9 @@
 //! its operands. `RET_ReallyLR` becomes `Op::Return` over the physical
 //! registers it names.
 //!
-//! DEVIATE: one block; `ADD`/`SUB` register, shifted-register and immediate
-//! forms, `MOVi32imm`/`MOVi64imm`, a frame address and the integer `LDR`/`STR` (`ui`, `UR`, `roX`) forms only, with no
+//! DEVIATE: the integer `ADD`/`SUB`/logic, variable shift, `SBFM`/`UBFM`, `MADD`, divide and
+//! one-source forms, `MOVi32imm`/`MOVi64imm`, a frame address, the integer `LDR`/`STR` (`ui`, `UR`, `roX`)
+//! forms and the sub-register pseudos only (no `BFM`, no insert into a defined register), with no
 //! memory operand kept (`MemOperand::default`). Reason: each family adds rows
 //! to [`build`] with an encoder byte check. Exit: C2..Cn.
 
@@ -24,7 +25,11 @@ use llrm_lir::registers::RegId;
 use super::function::Selected;
 use super::globals::Globals;
 use crate::REGISTER_INFO;
-use crate::mc::inst::{Addr, AddSub, Cond, Extend, Gpr, Inst, Memory, MemOperand, Select, Shift, Target, Width};
+use crate::mc::immediate::decode_logical;
+use crate::mc::inst::{
+    Addr, AddSub, Bitfield, Cond, Div, Extend, Gpr, Inst, Logic, Memory, MemOperand, Mul3, Select, Shift, Target, Unary,
+    Width,
+};
 use crate::mc::visit::Reg;
 use crate::mfunc::{MBlock, MFunc, Op, block_label};
 
@@ -84,6 +89,40 @@ fn add_sub(name: &str) -> Option<(AddSub, Width, bool)> {
         _ => return None,
     };
     Some((op, width, form))
+}
+
+/// `ANDWri`, `ORNXrs`, `BICSWrs` and the rest of the logic family: (operation, inverted
+/// operand, width, form).
+fn logic(name: &str) -> Option<(Logic, bool, Width, &str)> {
+    let (op, invert, rest) = [
+        ("ANDS", Logic::Ands, false),
+        ("AND", Logic::And, false),
+        ("ORR", Logic::Orr, false),
+        ("ORN", Logic::Orr, true),
+        ("EOR", Logic::Eor, false),
+        ("EON", Logic::Eor, true),
+        ("BICS", Logic::Ands, true),
+        ("BIC", Logic::And, true),
+    ]
+    .into_iter()
+    .find_map(|(prefix, op, invert)| name.strip_prefix(prefix).map(|rest| (op, invert, rest)))?;
+    let (width, form) = match rest {
+        "Wrr" | "Wrs" | "Wri" => (Width::W, &rest[1..]),
+        "Xrr" | "Xrs" | "Xri" => (Width::X, &rest[1..]),
+        _ => return None,
+    };
+    Some((op, invert, width, form))
+}
+
+/// The shift a `rs` operand names: the type in bits 6.., the amount below.
+fn shifter(shifter: u64) -> (Shift, u8) {
+    let shift = match shifter >> 6 & 3 {
+        0 => Shift::Lsl,
+        1 => Shift::Lsr,
+        2 => Shift::Asr,
+        _ => Shift::Ror,
+    };
+    (shift, (shifter & 0x3f) as u8)
 }
 
 /// What a load or store opcode moves, how it addresses, and whether it stores.
@@ -177,13 +216,11 @@ fn build(
             }
             // `ADDWrs rn, rm, shifter`: the shift type in bits 6.., the amount below
             (false, [Operand::Reg(rn), Operand::Reg(rm), Operand::Imm(shifter)]) => {
-                let shift = match shifter >> 6 {
-                    0 => Shift::Lsl,
-                    1 => Shift::Lsr,
-                    2 => Shift::Asr,
-                    other => return Err(format!("{name}: shift type {other}")),
-                };
-                Ok(Inst::AddSubShifted { op, width, rd, rn: *rn, rm: *rm, shift, amount: (shifter & 0x3f) as u8 })
+                let (shift, amount) = self::shifter(*shifter);
+                if shift == Shift::Ror {
+                    return Err(format!("{name}: a rotate"));
+                }
+                Ok(Inst::AddSubShifted { op, width, rd, rn: *rn, rm: *rm, shift, amount })
             }
             // `ADDWri rn, imm12, shift` where the shift operand is 0 or 12
             (true, [Operand::Reg(rn), Operand::Imm(imm), Operand::Imm(shift)]) => Ok(Inst::AddSubImm {
@@ -197,7 +234,69 @@ fn build(
             _ => Err(format!("{name}: operands are not those of its form")),
         };
     }
-    Err(format!("machine opcode {name} has no arm64 instruction yet"))
+    if let Some((op, invert, width, form)) = logic(name) {
+        let bits = if width == Width::W { 32 } else { 64 };
+        return match (form, operands) {
+            ("rr", [Operand::Reg(rn), Operand::Reg(rm)]) => {
+                Ok(Inst::LogicShifted { op, invert, width, rd, rn: *rn, rm: *rm, shift: Shift::Lsl, amount: 0 })
+            }
+            ("rs", [Operand::Reg(rn), Operand::Reg(rm), Operand::Imm(by)]) => {
+                let (shift, amount) = shifter(*by);
+                Ok(Inst::LogicShifted { op, invert, width, rd, rn: *rn, rm: *rm, shift, amount })
+            }
+            ("ri", [Operand::Reg(rn), Operand::Imm(code)]) if !invert => {
+                Ok(Inst::LogicImm { op, width, rd, rn: *rn, imm: decode_logical(*code as u32, bits) })
+            }
+            _ => Err(format!("{name}: operands are not those of its form")),
+        };
+    }
+    let width = |suffix: &str| if suffix.starts_with('W') { Width::W } else { Width::X };
+    let (stem, suffix) = name.split_at(name.find(['W', 'X']).unwrap_or(name.len()));
+    let two = |rn: &Operand, rm: &Operand| match (rn, rm) {
+        (Operand::Reg(rn), Operand::Reg(rm)) => Ok((*rn, *rm)),
+        _ => Err(format!("{name}: operands are not registers")),
+    };
+    match (stem, suffix, operands) {
+        ("SDIV" | "UDIV" | "LSLV" | "LSRV" | "ASRV" | "RORV", "Wr" | "Xr", [rn, rm]) => {
+            let op = match stem {
+                "SDIV" => Div::Sdiv,
+                "UDIV" => Div::Udiv,
+                "LSLV" => Div::Lslv,
+                "LSRV" => Div::Lsrv,
+                "ASRV" => Div::Asrv,
+                _ => Div::Rorv,
+            };
+            let (rn, rm) = two(rn, rm)?;
+            Ok(Inst::Divide { op, width: width(suffix), rd, rn, rm })
+        }
+        ("MADD" | "MSUB" | "SMADDL" | "SMSUBL" | "UMADDL" | "UMSUBL", "Wrrr" | "Xrrr", [rn, rm, Operand::Reg(ra)]) => {
+            let op = match stem {
+                "MADD" => Mul3::Madd,
+                "MSUB" => Mul3::Msub,
+                "SMADDL" => Mul3::Smaddl,
+                "SMSUBL" => Mul3::Smsubl,
+                "UMADDL" => Mul3::Umaddl,
+                _ => Mul3::Umsubl,
+            };
+            let (rn, rm) = two(rn, rm)?;
+            Ok(Inst::ThreeSource { op, width: width(suffix), rd, rn, rm, ra: *ra })
+        }
+        ("SBFM" | "UBFM", "Wri" | "Xri", [Operand::Reg(rn), Operand::Imm(immr), Operand::Imm(imms)]) => {
+            let op = if stem == "SBFM" { Bitfield::Sbfm } else { Bitfield::Ubfm };
+            Ok(Inst::BitfieldMove { op, width: width(suffix), rd, rn: *rn, immr: *immr as u8, imms: *imms as u8 })
+        }
+        ("CLZ" | "CLS" | "RBIT" | "REV" | "REV16", "Wr" | "Xr", [Operand::Reg(rn)]) => {
+            let op = match stem {
+                "CLZ" => Unary::Clz,
+                "CLS" => Unary::Cls,
+                "RBIT" => Unary::Rbit,
+                "REV" => Unary::Rev,
+                _ => Unary::Rev16,
+            };
+            Ok(Inst::OneSource { op, width: width(suffix), rd, rn: *rn })
+        }
+        _ => Err(format!("machine opcode {name} has no arm64 instruction yet")),
+    }
 }
 
 struct Emitter<'a> {
@@ -479,8 +578,34 @@ impl Emitter<'_> {
                     self.ops.push(Op::I(branch));
                     return Ok(());
                 }
+                // A 32-bit write clears the upper half, so a sub-register is its register.
+                match (name, operands.as_slice()) {
+                    ("EXTRACT_SUBREG", [Operand::Reg(rn), _]) => {
+                        self.values.insert((id, 0), *rn);
+                        return Ok(());
+                    }
+                    ("SUBREG_TO_REG", [.., Operand::Reg(rn), _]) => {
+                        let dst = self.mf.gpr();
+                        self.ops.push(Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(*rn) });
+                        self.values.insert((id, 0), dst);
+                        return Ok(());
+                    }
+                    // Into an undefined register there is no upper half to keep.
+                    ("INSERT_SUBREG", [_, Operand::Reg(rn), _])
+                        if matches!(self.dag.opcode(node.ops[0]), ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF")) =>
+                    {
+                        self.values.insert((id, 0), *rn);
+                        return Ok(());
+                    }
+                    ("IMPLICIT_DEF", []) => {
+                        let dst = self.mf.gpr();
+                        self.values.insert((id, 0), dst);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
                 let dead = self.dag.users(SDValue { node: id, res: 0 }).next().is_none();
-                let sets_flags = name.starts_with("ADDS") || name.starts_with("SUBS");
+                let sets_flags = ["ADDS", "SUBS", "ANDS", "BICS"].iter().any(|prefix| name.starts_with(prefix));
                 // A compare writes the zero register: `cmp` is `subs xzr`.
                 let rd = if sets_flags && dead { Gpr::R31 } else { self.mf.gpr() };
                 if let Some((op, width)) = cond_select(name) {

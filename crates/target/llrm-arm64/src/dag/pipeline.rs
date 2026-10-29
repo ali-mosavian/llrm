@@ -50,6 +50,7 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::SetCC => super::lowering::lower_setcc(dag, node),
             ISD::Select => super::lowering::lower_select(dag, node),
             ISD::SelectCC => super::lowering::lower_select_cc_node(dag, node),
+            ISD::Xor => super::lowering::lower_xor(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
             _ => None,
@@ -150,10 +151,37 @@ pub fn select_block(
     let selector = Selector::new(table::TABLE);
     let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone());
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
-        select_frame_index(adapter, node).unwrap_or_else(|| selector.select(adapter, &mut hooks, node))
+        select_frame_index(adapter, node)
+            .or_else(|| select_zero(adapter, node))
+            .unwrap_or_else(|| selector.select(adapter, &mut hooks, node))
     })?;
     let root: SDValue = dag.get_root();
     Ok(schedule(dag, root, &Aarch64Sched))
+}
+
+/// `AArch64DAGToDAGISel::Select`, `case ISD::Constant`: zero is `WZR`/`XZR`, which the
+/// coalescer propagates into the user. `None` for any other node.
+fn select_zero(
+    dag: &mut impl AddrDag,
+    node: u32,
+) -> Option<Outcome> {
+    use llrm_dagisel::generated::aarch64::ids::reg;
+    if dag.opcode(node) != isd::Constant {
+        return None;
+    }
+    let value = PinValue::new(node, 0);
+    let vt = dag.value_type(value);
+    let register = match vt {
+        mvt::i32 => reg::WZR,
+        mvt::i64 => reg::XZR,
+        _ => return None,
+    };
+    if dag.constant(value) != Some(0) {
+        return None;
+    }
+    let zero = dag.register(register, vt);
+    dag.replace_node(node, zero.node);
+    Some(Outcome::Selected)
 }
 
 /// `AArch64DAGToDAGISel::Select`, `case ISD::FrameIndex`: `ADDXri TFI, 0, 0`.
