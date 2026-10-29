@@ -218,12 +218,15 @@ fn adding_a_small_negative_is_a_subq() {
 }
 
 /// strlen's loop ended `move.l %d0, %d1; move.l %d1, %d0; addq.l #1, %d0`: the
-/// second move put the value back where it already was.
+/// second move put the value back where it already was. Then `move.l %d0,
+/// %d1; addq.l #1, %d0; tst.b (1,%a0,%d1)` kept the counter and its successor
+/// apart, a move more every trip than gcc's: the access reads the successor
+/// with the step taken from the displacement, and only the argument is loaded.
 #[test]
 fn a_loop_counter_is_not_copied_out_and_back() {
     let ir = "define i32 @f(ptr %p) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %q = getelementptr i8, ptr %p, i32 %i\n  %v = load i8, ptr %q\n  %z = icmp eq i8 %v, 0\n  %i1 = add i32 %i, 1\n  br i1 %z, label %x, label %l\nx:\n  ret i32 %i\n}";
     let asm = compiled(ir, Options::default());
-    assert_eq!(asm.matches("move.l").count(), 2, "{asm}");
+    assert_eq!(asm.matches("move.l").count(), 1, "{asm}");
 }
 
 fn loop_moves(asm: &str) -> usize {
