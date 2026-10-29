@@ -1845,4 +1845,3 @@ established = false
 evidence = '''
 rt/grview.asm: `cProc B$PCPY,<PUBLIC,FAR>` with two ParmW (FromPage, ToPage), so it returns with `ret 4`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
 '''
-
