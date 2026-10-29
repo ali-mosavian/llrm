@@ -64,3 +64,9 @@ Hosted VMs have no `perf` instruction counter. Steps that read one: `measure`, a
 4. The private repository, the secret, the private jobs (needs the owner of the repository: it holds files whose licences the repository does not).
 5. The counter backend and `measure` as a matrix.
 6. Owners merge main into their open PRs.
+
+## Debt
+
+| id | what | limit | deadline | owner |
+|---|---|---|---|---|
+| call-frame-reserve | The pin reserves the call frame and stores each argument (`movl %edi,(%esp)`); ours pushes and cleans up with `add esp, N` (DEVIATE CF1, pushfold.rs). Every 32-bit object differs from the pin's call sequence; tests x86_add_carry_loop and register_convention allow it. | translate `X86CallFrameOptimization` and the reserved frame | 2026-11-13 | w10 |
