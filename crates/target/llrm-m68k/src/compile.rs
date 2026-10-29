@@ -226,6 +226,9 @@ pub fn mid_end_described_by(
     let mut declared = Declared::of(&module);
     for name in names {
         let (context, function) = module.function_mut(&name).ok_or("a function that vanished")?;
+        if llrm_transforms::exitne::enabled() {
+            llrm_transforms::exitne::strengthened(context, &layout, function, &outer);
+        }
         llrm_transforms::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, tti, false);
     }
     Ok(module)

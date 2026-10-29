@@ -20,7 +20,8 @@
 //!    `LLRM_NO_SCEV_CONGRUENT`): header phis SCEV proves equal, a narrow one a
 //!    truncation of a wide one included, are one, and `dead` removes the rest.
 //! 3. `canonexit::canonicalized` (`canonicalizeExitCondition`;
-//!    `LLRM_NO_SCEV_CANONEXIT`), `exitopt::optimized` (`optimizeLoopExits`;
+//!    `LLRM_NO_SCEV_CANONEXIT`), `exitne::strengthened` (beyond the pin;
+//!    `LLRM_NO_SCEV_EXITNE`), `exitopt::optimized` (`optimizeLoopExits`;
 //!    `LLRM_NO_SCEV_EXITOPT`), `exitpredicate::predicated`
 //!    (`predicateLoopExits`; `LLRM_NO_SCEV_PREDICATE`), and the exits their
 //!    counts decide are folded by those.
@@ -277,6 +278,8 @@ impl FunctionPass for IndVars {
                 crate::canonexit::canonicalized_in(&mut session, unit.context, unit.layout, unit.function, &outer);
             settled(&mut session, &mut mark, unit, &outer, changed, false)
         };
+        let strengthened = crate::exitne::enabled()
+            && crate::exitne::strengthened_in(&mut session, unit.context, unit.layout, unit.function, &outer);
         let optimized = crate::exitopt::enabled() && {
             let changed = crate::exitopt::optimized_in(
                 &mut session,
@@ -307,7 +310,7 @@ impl FunctionPass for IndVars {
         let sunk = crate::exitsink::sunk(unit.function, &loops);
         // The pin deletes what an edit stopped reading as it goes; a sweep of
         // the function (0.8 M Ir on d_faces' largest body) found the same.
-        let dead = (compared || rewrote || canonical || optimized || predicated || tested || sunk || merged) && {
+        let dead = (compared || rewrote || canonical || strengthened || optimized || predicated || tested || sunk || merged) && {
             match unit.function.touched_since(start) {
                 Some(touched) => {
                     let seeds: Vec<_> = touched.named.iter().collect();
