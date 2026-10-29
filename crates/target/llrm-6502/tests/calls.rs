@@ -19,17 +19,6 @@ fn phys(
     }
 }
 
-/// `own_ids.txt` numbers the 6502's own nodes; the hand code's constants must match it.
-#[test]
-fn the_own_node_ids_are_the_ones_in_own_ids_txt() {
-    let text = include_str!("../own_ids.txt");
-    let number = |name: &str| -> u16 {
-        text.lines().find_map(|l| l.strip_prefix(name)?.trim().parse().ok()).expect("a row of own_ids.txt")
-    };
-    assert_eq!(CALL, ISD::Target(number("MOSISD::CALL")));
-    assert_eq!(RET_GLUE, ISD::Target(number("MOSISD::RET_GLUE")));
-}
-
 /// `f(i8 a, i16 b)` returning `i16`: `a` goes to rc2, `b` to the first free pair, rc4:rc5 (rs2);
 /// the word comes back as `a` (low) and `x` (high) joined.
 #[test]

@@ -18,12 +18,12 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 use llrm_target::calling::{Convention, Kind, Place};
 
+use super::generated::ids::isd as ids;
 use crate::abi;
 
-/// `MOSISD::CALL`, numbered by `own_ids.txt`.
-pub const CALL: ISD = ISD::Target(24577);
-/// `MOSISD::RET_GLUE`.
-pub const RET_GLUE: ISD = ISD::Target(24576);
+/// `MOSISD::CALL` and `MOSISD::RET_GLUE`, numbered by `own_ids.txt`.
+pub const CALL: ISD = ISD::Target(ids::CALL);
+pub const RET_GLUE: ISD = ISD::Target(ids::RET_GLUE);
 
 /// A value of a call or return: `i8` or `i16`.
 #[derive(Clone, Copy, Debug)]
