@@ -1,8 +1,9 @@
 //! The host runtime on arm64 Linux: the headless tests of tests/qb_headless.rs
 //! built by llrm-cc for aarch64 against a private sysroot
 //! (tools/targets/build-arm64-sysroot.sh) and run under qemu-aarch64. A machine
-//! without the pinned clang, lld or qemu fails here by name; it does not skip. An arm64
-//! Mac runs the same C natively (docs/working/qb-host.md, "Mac session").
+//! without the pinned clang, lld or qemu fails here by name; it does not skip.
+//! An arm64 Mac runs the same C natively (docs/working/qb-host.md, "Mac
+//! session").
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -44,8 +45,8 @@ fn build_and_run_with(
     environment: &[(&str, &str)],
 ) -> String {
     let qb = root().join("runtime/qb");
-    // llrm-cc over the arm64-glibc row: the sysroot's headers, libc, libm and libgcc by path
-    // (targets.toml, tools/targets/arm64-glibc-link.sh)
+    // llrm-cc over the arm64-glibc row: the sysroot's headers, libc, libm and
+    // libgcc by path (targets.toml, tools/targets/arm64-glibc-link.sh)
     let mut build = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
     build.args(["-target", "arm64-glibc", "-std=gnu11", "-w", "-D__cdecl="]);
     build.env("LLRM_ARM64_SYSROOT", sysroot());
