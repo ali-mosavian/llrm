@@ -934,3 +934,38 @@ fn an_argument_read_three_times_keeps_its_register() {
     let text = compiled(&library("muldiv"), Options::default());
     assert!(!text.contains(",%sp), ("), "{text}");
 }
+
+/// memset stored the low byte of its `c` argument from a register: the 4 B load, the register and,
+/// at `-Os`, the callee-saved register the index then needed (46 B against gcc's 44). A byte
+/// read of an argument is the last byte of its slot (big-endian): `move.b (11,%sp), (%a1)+`.
+#[test]
+fn a_byte_of_an_argument_is_read_from_the_end_of_its_slot() {
+    let size = Options { size: true, ..Options::default() };
+    let text = compiled(&library("memset"), size);
+    assert!(text.contains("move.b\t(11,%sp), "), "{text}");
+    assert!(code_size(&library("memset"), size) <= 40);
+}
+
+/// The same argument also read as a whole value keeps its register: the load is not given up for
+/// the byte store alone.
+#[test]
+fn an_argument_also_read_whole_keeps_its_register() {
+    let ir = "define i32 @f(ptr %p, i32 %c, i32 %n) {
+entry:
+  br label %l
+l:
+  %i = phi i32 [0, %entry], [%i1, %l]
+  %q = getelementptr i8, ptr %p, i32 %i
+  %b = trunc i32 %c to i8
+  store i8 %b, ptr %q
+  %i1 = add i32 %i, 1
+  %d = icmp ne i32 %i1, %n
+  br i1 %d, label %l, label %x
+x:
+  %r = shl i32 %c, %i1
+  ret i32 %r
+}";
+    let text = compiled(ir, Options { size: true, ..Options::default() });
+    assert!(text.contains("move.l\t(8,%sp), %d"), "{text}");
+    assert!(!text.contains("(11,%sp)"), "{text}");
+}

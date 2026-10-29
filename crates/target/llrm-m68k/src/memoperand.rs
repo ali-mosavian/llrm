@@ -59,10 +59,20 @@ struct Fold {
     source: usize,
     /// Where the displacement and base go in the memory form.
     at: usize,
+    /// The displacement from the slot's start: the bytes before the part the instruction reads.
+    offset: i64,
 }
 
 fn fold_of(name: &str) -> Option<Fold> {
-    let stem = name.strip_suffix('r')?;
+    // `OPWWxy`: the operation, its width, the destination's mode and the source's. A source in
+    // a register (`r`, or `d` for a data register) has its memory form with `p` there.
+    let stem = name.strip_suffix('r').or_else(|| name.strip_suffix('d'))?;
+    let digits: String = stem.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
+    let bits: i64 = digits.parse().ok()?;
+    let tail = stem.trim_start_matches(|c: char| !c.is_ascii_digit()).trim_start_matches(|c: char| c.is_ascii_digit());
+    if !matches!(bits, 8 | 16 | 32) || tail.len() != 1 {
+        return None;
+    }
     let &(_, reg_text, reg_operands) = crate::dagisel::asm::asm(name)?;
     let &(memory_name, _, memory_operands) = crate::dagisel::asm::asm(&format!("{stem}p"))?;
     let slot = memory_operands.iter().find(|one| one.method.starts_with("printARID") && one.method.ends_with("Mem"))?;
@@ -70,7 +80,8 @@ fn fold_of(name: &str) -> Option<Fold> {
     let first = reg_text.find('$')? + 1;
     let word: String = reg_text[first..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
     let source = reg_operands.iter().find(|one| one.name == word)?;
-    Some(Fold { memory: memory_name, source: usize::from(source.at), at: usize::from(slot.at) })
+    // the slot holds the whole 32-bit argument, big-endian: a narrower read is its last bytes
+    Some(Fold { memory: memory_name, source: usize::from(source.at), at: usize::from(slot.at), offset: (32 - bits) / 8 })
 }
 
 /// A load of an incoming argument: `MOV32rp dst, 0, Frame(-n)`.
@@ -182,7 +193,7 @@ pub fn fold_argument_loads(
                 operands.remove(position);
                 let at = fold.at.min(operands.len());
                 operands.insert(at, Operand::Frame(slot));
-                operands.insert(at, Operand::Imm(0));
+                operands.insert(at, Operand::Imm(fold.offset));
                 let mut memory = Inst { kind: Kind::Op(fold.memory), operands, ..reader.clone() };
                 memory.may_load = true;
                 debug_assert!(reader.ties.iter().all(|&(def, used)| def < at && used < at));
