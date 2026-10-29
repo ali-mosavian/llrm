@@ -1,4 +1,4 @@
-# Library routines, 2026-10-29 20:39 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Library routines, 2026-10-29 20:52 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 Ten routines written after the first set was tuned (`bench/library/*.c`; IR from `gen.py`: clang -O2 without
 unrolling, as gcc -O2 does, with the lines MIR's subset does not take dropped). `cargo run -p llrm-m68k --release
@@ -13,7 +13,7 @@ Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -
 | kernel | raw B | ours B | best -O2 B | ours -Os B | best -Os B | raw insns | ours insns | best -O2 insns | ours -Os insns | best -Os insns | status |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | memcpy | 44 | 36 | 40 | 36 | 40 | 76 | 50 | 51 | 50 | 102 | at or below |
-| memset | 48 | 46 | 52 | 46 | 44 | 79 | 64 | 64 | 64 | 93 | -Os +2 B |
+| memset | 48 | 46 | 52 | 40 | 44 | 79 | 64 | 64 | 61 | 93 | at or below |
 | strcmp | 50 | 48 | 82 | 48 | 48 | 90 | 80 | 102 | 80 | 104 | at or below |
 | hex | 102 | 96 | 78 | 96 | 72 | 73 | 66 | 54 | 66 | 57 | -O2 +18 B, -O2 +12 insns, -Os +24 B, -Os +9 insns |
 | crc16 | 90 | 92 | 86 | 92 | 76 | 699 | 628 | 629 | 628 | 630 | -O2 +6 B, -Os +16 B |
@@ -23,14 +23,14 @@ Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -
 | structcopy | 34 | 34 | 38 | 34 | 42 | - | - | - | - | - | at or below |
 | fnptr | 40 | 40 | 46 | 40 | 46 | 16 | 16 | 16 | 16 | 16 | at or below |
 
-Rows still above a reference: memset, hex, crc16, partition, muldiv.
+Rows still above a reference: hex, crc16, partition, muldiv.
 
 ## Full table
 
 | kernel | raw B | ours B | ours -Os B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | raw insns | ours insns | ours -Os insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | memcpy | 44 | 36 | 36 | 106 | 106 | 40 | 40 | 76 | 50 | 50 | 197 | 197 | 102 | 51 | 33 all |
-| memset | 48 | 46 | 46 | 90 | 90 | 44 | 52 | 79 | 64 | 64 | 147 | 147 | 93 | 64 | 14 all |
+| memset | 48 | 46 | 40 | 90 | 90 | 44 | 52 | 79 | 64 | 61 | 147 | 147 | 93 | 64 | 14 all |
 | strcmp | 50 | 48 | 48 | 114 | 114 | 48 | 82 | 90 | 80 | 80 | 196 | 196 | 104 | 102 | 32 all |
 | hex | 102 | 96 | 96 | 142 | 140 | 72 | 78 | 73 | 66 | 66 | 94 | 97 | 57 | 54 | 204 all |
 | crc16 | 90 | 92 | 92 | 158 | 154 | 76 | 86 | 699 | 628 | 628 | 744 | 704 | 630 | 629 | 152 all |
@@ -44,7 +44,7 @@ Rows still above a reference: memset, hex, crc16, partition, muldiv.
 
 | routine | gap | cause |
 |---|---|---|
-| memset | +2 B (-Os) | its exit is already `eq`, so `exitne` does not touch it; pointer is `(An)+`. memcpy is below gcc: `exitne` turns its `ugt %i, 1` into `ne`, so LSR counts to zero (`subq; bne`; 36 B, 50 insns against gcc's 40 B, 51) |
+| memset | at or below | the value to store is read from its argument slot, a byte at `+3` (big-endian), by `move.b (11,%sp), (%a1)+` (`memoperand.rs`: a sub-word read of an argument folds at its end), so no register holds it and none is saved: 46 to 40 B at -Os (gcc 44). memcpy is below gcc: `exitne` turns its `ugt %i, 1` into `ne`, so LSR counts to zero (`subq; bne`; 36 B, 50 insns against gcc's 40 B, 51) |
 | hex | +24 B, +9 insns | the `or disjoint` of `'0' + d` is a `lea` through an address register (the pin has `ADD32di` for `add` only); kept for a constant over 8, where `add.l #c` is no better (8 B and 16 clocks either way; `addq` for 1 to 8 is 2 B, `lea_on_data`). The bench input (`0xBEEF`) never takes the digit arm. What is left: gcc's `add.b #48` (4 B; the high bits are known zero and the sum is under 256), and the loop test `cmpi.l #16` on the old value where gcc tests the shifted value's codes. Not a missing mid-end pass: the pin's `opt -passes=aggressive-instcombine,instcombine` leaves it alone (`TruncInstCombine::getBestTruncatedType` refuses a select with a wide user, here the sum), and `llc` emits `add.l #87` the same way; gcc narrows at tree level |
 | crc16 | +16 B | `and.l #32768` + `tst.l` of one bit where `btst #15` is 4 bytes. The pin does not emit it for a constant mask (`LowerAndToBTST` only for `(1 << n) & x`, `(x >> n) & 1` and masks past 32 bits) and gcc -O2 does not either; `btst #15` tried as an overlay cost crc16 +40 insns and +2 B: the shifted copy of the loop-carried value lands in a second register and both arms of the select copy it back (two-address copy on the shift rather than on the test; allocator, neutral-LIR). The 8-trip counter |
 | partition | see summary | block placement rotates the loop (151 to 141 insns), the latch's step becomes the header's `(%a1)+` (141 to 126), and `&a[n-1]` is a `lea (0,%a0,%d1)` instead of an `add.l` in a callee-saved data register (126 to 121; `address.rs::base_plus_index`). What is left: the prologue's `movem` of d2-d5 and a2, repeated `lsl.l #2` of one index, two LSR index registers |
