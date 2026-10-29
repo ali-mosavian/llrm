@@ -303,6 +303,7 @@ pub fn finish(
         lines = crate::overlay::merge_masks(lines);
         lines = crate::overlay::constant_into_destination(lines);
         lines = crate::overlay::boolean_by_negation(lines);
+        lines = crate::overlay::narrow_immediates(lines);
         lines = crate::overlay::drop_redundant_tests(lines);
         lines = crate::overlay::drop_repeated_compares(lines);
         lines = crate::overlay::fold_post_increment(lines);

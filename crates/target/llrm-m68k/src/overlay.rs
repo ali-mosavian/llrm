@@ -697,6 +697,99 @@ pub fn constant_into_destination(lines: Vec<crate::expand::Line>) -> Vec<crate::
     out
 }
 
+/// What the instruction after a point does to the condition codes: reads them,
+/// sets them whatever they were, or neither (`lea`, `movem`, a move into an
+/// address register). `None` where it is not known.
+fn flags_effect(inst: &Inst) -> Option<FlagsEffect> {
+    if is_branch_on_flags(inst.opcode) || inst.opcode.starts_with("SETd8") {
+        return Some(FlagsEffect::Reads);
+    }
+    let text = asm(inst.opcode).map(|(text, _)| text).or_else(|| crate::dagisel::asm::asm(inst.opcode).map(|row| row.1))?;
+    let base = text.split('\t').next()?.split('.').next()?;
+    let address_destination = matches!(inst.operands.first(), Some(Operand::Reg(dst)) if is_address(*dst));
+    Some(match base {
+        "lea" | "movem" | "movea" | "pea" | "exg" | "link" | "unlk" => FlagsEffect::Neither,
+        "move" | "add" | "sub" | "addq" | "subq" if address_destination => FlagsEffect::Neither,
+        "move" | "moveq" | "and" | "or" | "eor" | "andi" | "ori" | "eori" | "add" | "sub" | "addi" | "subi"
+        | "addq" | "subq" | "cmp" | "cmpa" | "cmpi" | "tst" | "neg" | "not" | "clr" | "ext" | "lsl" | "lsr"
+        | "asl" | "asr" | "rol" | "ror" | "swap" | "mulu" | "muls" | "divu" | "divs" => FlagsEffect::Sets,
+        // nothing after a return or a call reads them
+        "rts" | "jsr" | "bsr" => FlagsEffect::Sets,
+        _ => return None,
+    })
+}
+
+enum FlagsEffect {
+    Reads,
+    Sets,
+    Neither,
+}
+
+/// Whether the codes `lines[at]` leaves are overwritten before anything reads
+/// them, going on past labels along the fall-through. A branch away is not
+/// followed: the codes are taken as live.
+fn flags_dead_after(
+    lines: &[crate::expand::Line],
+    at: usize,
+) -> bool {
+    use crate::expand::Line;
+    for line in &lines[at + 1..] {
+        match line {
+            Line::Label(_) => {}
+            Line::Inst(inst) => match flags_effect(inst) {
+                Some(FlagsEffect::Sets) => return true,
+                Some(FlagsEffect::Neither) => {}
+                Some(FlagsEffect::Reads) | None => return false,
+            },
+        }
+    }
+    false
+}
+
+/// `eori.l #c, %d` with `c` under 64 KiB is `eori.w #c, %d`: the high half is
+/// xored with zeros, so the register comes out the same; likewise `ori`, and
+/// `andi` where the high half of the mask is all ones. 4 bytes and 8 clocks
+/// for 6 and 16. `N` and `Z` come from the word, not the long, so it is kept
+/// where the codes are read (crc16's `eori.l #4129`, gcc's `eor.w`).
+///
+/// DEVIATE from the pin, whose patterns take the long form. Exit: never; a
+/// target choice, off with [`crate::compile::Options::overlay`].
+pub fn narrow_immediates(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::Line> {
+    use crate::expand::Line;
+    let narrowed: Vec<Option<Inst>> = (0..lines.len())
+        .map(|at| {
+            let Line::Inst(inst) = &lines[at] else { return None };
+            let (name, value) = match (inst.opcode, &inst.operands[..]) {
+                ("XOR32di", [Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value)]) if dst == src => {
+                    ("XOR16di", u32::try_from(*value).ok().filter(|&value| value <= 0xFFFF)?)
+                }
+                ("OR32di", [Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value)]) if dst == src => {
+                    ("OR16di", u32::try_from(*value).ok().filter(|&value| value <= 0xFFFF)?)
+                }
+                ("AND32di", [Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value)]) if dst == src => {
+                    let value = *value as u32;
+                    ("AND16di", Some(value).filter(|&value| value >> 16 == 0xFFFF)? & 0xFFFF)
+                }
+                _ => return None,
+            };
+            let Some(Operand::Reg(dst)) = inst.operands.first() else { return None };
+            if is_address(*dst) || !flags_dead_after(&lines, at) {
+                return None;
+            }
+            let word = REGISTER_INFO.view(REGISTER_INFO.root(*dst), 16)?;
+            Some(Inst {
+                opcode: name,
+                operands: vec![Operand::Reg(word), Operand::Reg(word), Operand::Imm(i64::from(value))],
+            })
+        })
+        .collect();
+    lines
+        .into_iter()
+        .zip(narrowed)
+        .map(|(line, narrow)| narrow.map_or(line, Line::Inst))
+        .collect()
+}
+
 /// `cmp; scc %d; and.l #1, %d` is `moveq #0, %d; cmp; scc %d; neg.b %d`: the
 /// byte `scc` leaves is 0 or 255, and `neg.b` makes it 0 or 1 over the zeros
 /// `moveq` put in the rest. The `moveq` goes before the compare, which sets
