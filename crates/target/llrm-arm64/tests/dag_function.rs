@@ -76,6 +76,35 @@ fn arithmetic_folds_immediates_and_shifted_registers() {
     assert_eq!(one("i32", "i32 %a, i32 %b", shifted), [["ADDWrs", "RET_ReallyLR"]]);
 }
 
+/// Loads and stores select the pin's addressing forms: scaled offset (`ui`),
+/// unscaled (`UR`) and register offset (`roX`); names are the pin's
+/// `-stop-after=finalize-isel`.
+#[test]
+fn loads_and_stores_select_the_pins_addressing_forms() {
+    let one = |ret: &str, params: &str, body: &str| {
+        let ir = format!("define {ret} @f({params}) {{\n{body}\n}}");
+        selected(&ir).unwrap()
+    };
+    let load = |name: &'static str| [vec![name, "RET_ReallyLR"]];
+    assert_eq!(one("i32", "ptr %p", "  %r = load i32, ptr %p\n  ret i32 %r"), load("LDRWui"));
+    let gep = "  %q = getelementptr i64, ptr %p, i64 3\n  %r = load i64, ptr %q\n  ret i64 %r";
+    assert_eq!(one("i64", "ptr %p", gep), load("LDRXui"));
+    let gep = "  %q = getelementptr i8, ptr %p, i64 -9\n  %r = load i64, ptr %q\n  ret i64 %r";
+    assert_eq!(one("i64", "ptr %p", gep), load("LDURXi"));
+    let zext = "  %v = load i8, ptr %p\n  %r = zext i8 %v to i32\n  ret i32 %r";
+    assert_eq!(one("i32", "ptr %p", zext), load("LDRBBui"));
+    let sext = "  %v = load i8, ptr %p\n  %r = sext i8 %v to i32\n  ret i32 %r";
+    assert_eq!(one("i32", "ptr %p", sext), load("LDRSBWui"));
+    let sext = "  %v = load i32, ptr %p\n  %r = sext i32 %v to i64\n  ret i64 %r";
+    assert_eq!(one("i64", "ptr %p", sext), load("LDRSWui"));
+    let indexed = "  %q = getelementptr i64, ptr %p, i64 %i\n  %r = load i64, ptr %q\n  ret i64 %r";
+    assert_eq!(one("i64", "ptr %p, i64 %i", indexed), load("LDRXroX"));
+    let store = "  store i32 %v, ptr %p\n  ret void";
+    assert_eq!(one("void", "ptr %p, i32 %v", store), [vec!["STRWui", "RET_ReallyLR"]]);
+    let half = "  %t = trunc i32 %v to i16\n  store i16 %t, ptr %p\n  ret void";
+    assert_eq!(one("void", "ptr %p, i32 %v", half), [vec!["STRHHui", "RET_ReallyLR"]]);
+}
+
 mod emitted {
     use llrm_arm64::dag::emit::emit;
     use llrm_arm64::dag::function::select_function;
