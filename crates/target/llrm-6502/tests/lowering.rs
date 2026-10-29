@@ -39,19 +39,15 @@ fn an_i32_add_is_a_word_uaddo_and_a_word_uaddo_carry() {
     assert_eq!((carry.node, carry.res), (lo.node, 1));
 }
 
-/// No multiply or divide exists on the 6502: a library call, at every width. A shift is custom: an
-/// instruction for a constant count, refused otherwise.
+/// Multiply, divide, remainder and shifts are instructions at every width: the ones the 6502 lacks
+/// expand to runtime calls where they are emitted, not in the legalizer (which has no libcall
+/// conversion).
 #[test]
-fn multiply_and_divide_are_library_calls_and_shifts_are_custom() {
+fn multiply_divide_and_shifts_are_legal_instructions() {
     let tli = target_lowering();
-    for (ops, action) in [
-        (&[ISD::Mul, ISD::SDiv, ISD::UDiv, ISD::SRem, ISD::URem][..], Action::LibCall),
-        (&[ISD::Shl, ISD::Srl, ISD::Sra][..], Action::Custom),
-    ] {
-        for &op in ops {
-            for vt in [EVT::I8, EVT::I16] {
-                assert_eq!(tli.operation_action(op, vt), action, "{op:?} {vt:?}");
-            }
+    for op in [ISD::Mul, ISD::SDiv, ISD::UDiv, ISD::SRem, ISD::URem, ISD::Shl, ISD::Srl, ISD::Sra] {
+        for vt in [EVT::I8, EVT::I16] {
+            assert_eq!(tli.operation_action(op, vt), Action::Legal, "{op:?} {vt:?}");
         }
     }
 }
