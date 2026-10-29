@@ -1,6 +1,8 @@
-//! The Watcom rows follow Open Watcom's libc: `wchar_t` and wide literals are 2 bytes (m32 had literals of 4 beside a
-//! 2-byte `wchar_t`, so `wcslen(L"ab")` did not compile) and `long double` is 8 (clang gave 12 at m32, 10 at m16, to a
-//! libc that reads 8). Needs the fork's clang (`LLRM_CLANG_M16`) and the Open Watcom headers (`LLRM_OW`).
+//! The Watcom rows follow Open Watcom's libc: `wchar_t` and wide literals are 2
+//! bytes (m32 had literals of 4 beside a 2-byte `wchar_t`, so `wcslen(L"ab")`
+//! did not compile) and `long double` is 8 (clang gave 12 at m32, 10 at m16, to
+//! a libc that reads 8). Needs the fork's clang (`LLRM_CLANG_M16`) and the Open
+//! Watcom headers (`LLRM_OW`).
 
 use std::path::Path;
 use std::process::Command;
@@ -55,7 +57,11 @@ fn a_long_double_is_8_bytes_on_the_watcom_rows() {
     let source = "int size = sizeof(long double);\n";
     for target in ["x86_32-wat", "x86_16-wat"] {
         let text = listing("ld", target, source).unwrap();
-        let line = text.lines().skip_while(|line| !line.starts_with("_size ")).nth(1).unwrap_or_default().trim().to_owned();
-        assert!(line.starts_with("db 008h") || line.starts_with("dd 8") || line.starts_with("dw 8"), "{target}: {text}");
+        let line =
+            text.lines().skip_while(|line| !line.starts_with("_size ")).nth(1).unwrap_or_default().trim().to_owned();
+        assert!(
+            line.starts_with("db 008h") || line.starts_with("dd 8") || line.starts_with("dw 8"),
+            "{target}: {text}"
+        );
     }
 }
