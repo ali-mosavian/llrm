@@ -338,7 +338,6 @@ pub mod simplifyindvar;
 pub mod simplifylibcalls;
 pub mod sinkcast;
 pub mod sinkcommon;
-pub mod sinkinvariants;
 pub mod slpcompares;
 pub mod spares;
 pub mod speculate;

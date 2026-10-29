@@ -29,10 +29,8 @@
 //! 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
 //!    exit tests a counter against the value it has at the last trip.
 //! 5. `exitsink::sunk`: final updates only exit phis read move to the exits;
-//!    `sinkinvariants::sunk` (`sinkUnusedInvariants`): preheader values the
-//!    loop never reads move to its exit block; `firstiterexit::rewritten`
-//!    (`rewriteFirstIterationLoopExitValues`): an exit on a loop-invariant
-//!    condition reads a header phi's preheader value.
+//!    `firstiterexit::rewritten` (`rewriteFirstIterationLoopExitValues`): an
+//!    exit on a loop-invariant condition reads a header phi's preheader value.
 //!
 //! # Example
 //! Step 1, the widening, on `for (unsigned short i = 0; i < n; ++i) a[i] = 1`
@@ -319,8 +317,6 @@ impl FunctionPass for IndVars {
         let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
         let loops = cfg::natural(unit.function, &found);
         let sunk = crate::exitsink::sunk(unit.function, &loops);
-        // `sinkUnusedInvariants`, the pin's last step but one.
-        let sunk_invariants = crate::sinkinvariants::sunk(unit.context, outer.callees(), unit.function, &loops);
         // `rewriteFirstIterationLoopExitValues`, the last.
         let tree = analyses.get::<passes::Dominators>(unit.context, unit.layout, unit.function);
         let first_trip = crate::firstiterexit::rewritten(unit.function, &loops, &tree);
@@ -334,7 +330,6 @@ impl FunctionPass for IndVars {
             || predicated
             || tested
             || sunk
-            || sunk_invariants
             || first_trip
             || merged)
             && {
@@ -370,7 +365,6 @@ impl FunctionPass for IndVars {
             || predicated
             || tested
             || sunk
-            || sunk_invariants
             || first_trip
             || merged
             || dead
