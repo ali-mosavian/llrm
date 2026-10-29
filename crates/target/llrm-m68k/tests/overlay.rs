@@ -188,6 +188,45 @@ fn a_test_after_a_copy_of_the_tested_register_is_dropped() {
     assert_eq!(opcodes(&drop_redundant_tests(other)), ["MOV32rr", "TST32d", "Bpl8"]);
 }
 
+/// An add of a constant to a zero-extended byte went to an address register, because a copy of the
+/// sum reached one (`adda`), and gave the extension a destination with no byte view: "MOVZXd32d8:
+/// no 8-bit view" (differential seeds 495 and 532). The extension's result stays in a data register.
+#[test]
+fn the_result_of_an_extension_is_not_made_an_address_register() {
+    let ir = "@zero = external global i8\n\
+@buf = external global [16 x i8]\n\
+define i16 @f() {\n\
+entry:\n\
+  %v8 = load volatile i8, ptr @zero, align 1\n\
+  br label %v25\n\
+v25:\n\
+  %v26 = zext i8 %v8 to i32\n\
+  %v27 = add i32 %v26, 1\n\
+  %v29 = add i16 0, 1\n\
+  %v30 = load i8, ptr getelementptr (i8, ptr @buf, i32 13), align 1\n\
+  %v31 = zext i8 %v30 to i32\n\
+  %v32 = add i32 %v27, %v31\n\
+  %v33 = trunc i32 %v27 to i8\n\
+  %v34 = icmp eq i8 0, %v33\n\
+  %v35 = select i1 %v34, i32 0, i32 4\n\
+  %v36 = getelementptr i8, ptr null, i32 %v35\n\
+  %v37 = load i32, ptr %v36, align 2\n\
+  %v38 = and i32 %v37, 254\n\
+  %v39 = icmp eq i32 %v38, 0\n\
+  %v40 = shl i32 %v32, 11\n\
+  %v41 = select i1 %v39, i32 %v40, i32 0\n\
+  %v43 = add i32 0, -2147483647\n\
+  %v44 = xor i32 %v41, %v43\n\
+  %v45 = icmp eq i32 %v44, 2147483647\n\
+  %v46 = zext i1 %v45 to i16\n\
+  %v47 = shl i16 %v29, %v46\n\
+  %v53 = xor i16 %v47, 0\n\
+  %v54 = and i16 %v53, 3\n\
+  ret i16 %v54\n\
+}";
+    compiled(ir, Options { mid_end: false, ..Options::default() });
+}
+
 /// Post-increment forms derived from the pin's `(An)` rows, bytes from
 /// binutils: `add.l (%a1)+,%d0` d099, `add.b (%a1)+,%d3` d619, `and.l
 /// (%a1)+,%d1` c299.
