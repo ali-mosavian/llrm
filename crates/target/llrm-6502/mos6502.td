@@ -104,6 +104,12 @@ multiclass Arith<string n, RegisterClass rc, ValueType vt> {
 }
 defm "" : Arith<"8", Imag8, i8>;
 defm "" : Arith<"16", Imag16, i16>;
+// x + 1 and x - 1 in place: INX/INY/INC on a cell, INC A on the 65C02 (CLC; ADC #1 otherwise). The allocator
+// tells the register apart; the instruction is the same on every CPU.
+let Defs = [P], AddedComplexity = 10 in {
+  def INC8 : MOSInst<(outs Imag8:$d), (ins Imag8:$a), "inc $d, $a", [(set i8:$d, (add i8:$a, (i8 1)))]>;
+  def DEC8 : MOSInst<(outs Imag8:$d), (ins Imag8:$a), "dec $d, $a", [(set i8:$d, (add i8:$a, (i8 -1)))]>;
+}
 
 // Shifts by a constant: one ASL/LSR/ROR step per bit.
 multiclass Shift<string n, RegisterClass rc, ValueType vt> {
