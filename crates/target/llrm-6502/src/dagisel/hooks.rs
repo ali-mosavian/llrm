@@ -1,10 +1,10 @@
-//! The 6502's DAG-to-DAG hooks as the interpreter's [`Hooks`]: the one complex pattern the table
-//! names, fold legality and the node predicates.
+//! The 6502's DAG-to-DAG hooks as the interpreter's [`Hooks`]: the one complex
+//! pattern the table names, fold legality and the node predicates.
 //!
 //! # How it works
-//! `SelectIndirect` is the `(zp),Y` address: a pointer in an `Imag16` pair and a byte offset for Y.
-//! `(add ptr, c)` with `0 <= c < 256` gives `ptr` and `c`; any other address is its own pointer at
-//! offset 0.
+//! `SelectIndirect` is the `(zp),Y` address: a pointer in an `Imag16` pair and
+//! a byte offset for Y. `(add ptr, c)` with `0 <= c < 256` gives `ptr` and `c`;
+//! any other address is its own pointer at offset 0.
 
 use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue};
 use llrm_dagisel::generated::ids::{isd, mvt};
@@ -69,8 +69,8 @@ fn select_indirect<D: Dag>(
     results.push((offset, None));
 }
 
-/// `SelectAbsX`: `(add (wrapper global), (zext i8 index))` as the symbol and the byte index, either
-/// operand order.
+/// `SelectAbsX`: `(add (wrapper global), (zext i8 index))` as the symbol and
+/// the byte index, either operand order.
 fn select_absx<D: Dag>(
     dag: &mut D,
     value: SDValue,

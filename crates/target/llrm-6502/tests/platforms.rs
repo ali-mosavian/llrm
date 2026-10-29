@@ -1,4 +1,5 @@
-//! The platform rows: every one parses, and its sixteen imaginary registers fit in zero page.
+//! The platform rows: every one parses, and its sixteen imaginary registers fit
+//! in zero page.
 
 use llrm_6502::platform::{Platform, ROWS};
 

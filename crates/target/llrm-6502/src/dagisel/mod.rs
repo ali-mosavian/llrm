@@ -4,9 +4,9 @@
 #[rustfmt::skip]
 #[allow(unused_variables)]
 pub mod generated;
-pub mod predicates;
-pub mod lowering;
 pub mod call;
 pub mod function;
 pub mod hooks;
+pub mod lowering;
 pub mod pipeline;
+pub mod predicates;

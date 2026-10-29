@@ -19,8 +19,8 @@ pub fn register(name: &str) -> RegId {
         .unwrap_or_else(|| panic!("calling.toml names no register {name}"))
 }
 
-/// The pair register that holds a zero-page byte (`rc4` is half of `rs2`): the 16-bit view a
-/// word argument is copied through.
+/// The pair register that holds a zero-page byte (`rc4` is half of `rs2`): the
+/// 16-bit view a word argument is copied through.
 pub fn pair_of(byte: &str) -> RegId {
     let file = llrm_target::registers::parse(crate::REGISTERS).expect("registers.regs");
     let root = file.iter().find(|one| one.name == byte).map(|one| one.root.clone()).expect("a register of the file");

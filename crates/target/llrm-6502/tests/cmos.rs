@@ -1,5 +1,6 @@
-//! The 65C02 table selects STZ and BRA; the NMOS table must not. Same IR on both CPUs, run on
-//! sim65 and sim65c02. Expected values are worked out by hand.
+//! The 65C02 table selects STZ and BRA; the NMOS table must not. Same IR on
+//! both CPUs, run on sim65 and sim65c02. Expected values are worked out by
+//! hand.
 
 mod common;
 
@@ -18,7 +19,9 @@ fn text(cpu: Cpu) -> String {
     let module = llrm_mir::parse::module(IR).expect("parses");
     ["clr", "zero", "pick"]
         .iter()
-        .map(|name| function_text(&module, name, &select_function(&module, name, cpu).expect("selects")).expect("emits"))
+        .map(|name| {
+            function_text(&module, name, &select_function(&module, name, cpu).expect("selects")).expect("emits")
+        })
         .collect()
 }
 
@@ -35,8 +38,8 @@ fn run(
     common::run_on(target, &format!("cmos-{function}"), &main, &format!("{}{G_DATA}", text(cpu)))
 }
 
-/// `clr(5)` zeroes `g` and returns 0 + 5; `zero()` returns 0; `pick(5)` takes the `b` side, 20.
-/// Both CPUs must agree.
+/// `clr(5)` zeroes `g` and returns 0 + 5; `zero()` returns 0; `pick(5)` takes
+/// the `b` side, 20. Both CPUs must agree.
 #[test]
 fn both_cpus_run_the_same_ir_to_the_same_result() {
     for (function, want) in [("clr", 5), ("zero", 0), ("pick", 20)] {
@@ -45,8 +48,9 @@ fn both_cpus_run_the_same_ir_to_the_same_result() {
     }
 }
 
-/// The NMOS text has no `stz`, `bra` or `(zp)` store; the 65C02 text has all three, and the
-/// binary is smaller. A table that leaked `stz` into NMOS would emit an illegal opcode.
+/// The NMOS text has no `stz`, `bra` or `(zp)` store; the 65C02 text has all
+/// three, and the binary is smaller. A table that leaked `stz` into NMOS would
+/// emit an illegal opcode.
 #[test]
 fn only_the_65c02_selection_uses_stz_and_bra() {
     let (nmos, cmos) = (text(Cpu::Mos6502), text(Cpu::W65c02));
@@ -67,8 +71,8 @@ fn the_65c02_text_does_not_assemble_as_nmos() {
     assert_eq!(code, -1);
 }
 
-/// A `bra` over 60 instructions is out of range (60 x 3 > 127). Unrelaxed, ca65 refuses it; relaxed
-/// it is a `jmp`, and a near `bra` stays.
+/// A `bra` over 60 instructions is out of range (60 x 3 > 127). Unrelaxed, ca65
+/// refuses it; relaxed it is a `jmp`, and a near `bra` stays.
 #[test]
 fn a_far_bra_becomes_jmp_and_a_near_one_stays() {
     let far = format!("  bra far\n{}far:\n  rts\n", "  lda $1234\n".repeat(60));
@@ -77,7 +81,12 @@ fn a_far_bra_becomes_jmp_and_a_near_one_stays() {
     std::fs::create_dir_all(&dir).unwrap();
     let assembles = |text: &str| {
         std::fs::write(dir.join("p.s"), text).unwrap();
-        std::process::Command::new("ca65").args(["--cpu", "65C02", "p.s", "-o", "p.o"]).current_dir(&dir).status().unwrap().success()
+        std::process::Command::new("ca65")
+            .args(["--cpu", "65C02", "p.s", "-o", "p.o"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success()
     };
     assert!(!assembles(&far), "the unrelaxed far bra assembled; the range check measures nothing");
     let relaxed = llrm_6502::emit::relax_bra(&far);
@@ -85,9 +94,10 @@ fn a_far_bra_becomes_jmp_and_a_near_one_stays() {
     assert!(llrm_6502::emit::relax_bra(near).starts_with("  bra near\n"));
 }
 
-/// `a` jumps over a block `b` of 38 ops (t0 = x + 1, t1 = t0 + x, t_n = t_(n-1) + (t_(n-2) ^ x), which the
-/// combiner cannot reduce): far more than 127 bytes. Unrelaxed, the `bra` fails to
-/// assemble; relaxed it is a `jmp`. `far(0)` takes `a` (10); `far(5)` is t19 = 159, worked out above in 8-bit arithmetic.
+/// `a` jumps over a block `b` of 38 ops (t0 = x + 1, t1 = t0 + x, t_n = t_(n-1)
+/// + (t_(n-2) ^ x), which the combiner cannot reduce): far more than 127 bytes.
+/// Unrelaxed, the `bra` fails to assemble; relaxed it is a `jmp`. `far(0)`
+/// takes `a` (10); `far(5)` is t19 = 159, worked out above in 8-bit arithmetic.
 #[test]
 fn a_far_bra_in_a_function_becomes_jmp_and_runs() {
     let mut ir = String::from(
@@ -100,7 +110,8 @@ fn a_far_bra_in_a_function_becomes_jmp_and_runs() {
     }
     ir.push_str("  br label %join\njoin:\n  %r = phi i8 [ 10, %a ], [ %t19, %b ]\n  ret i8 %r\n}");
     let module = llrm_mir::parse::module(&ir).expect("parses");
-    let text = function_text(&module, "far", &select_function(&module, "far", Cpu::W65c02).expect("selects")).expect("emits");
+    let text =
+        function_text(&module, "far", &select_function(&module, "far", Cpu::W65c02).expect("selects")).expect("emits");
     assert!(!text.contains("  bra far_b3"), "the far bra survived:\n{text}");
     assert!(text.contains("  jmp far_b3"), "no jmp to the join:\n{text}");
     for (x, want) in [(0, 10), (5, 159)] {

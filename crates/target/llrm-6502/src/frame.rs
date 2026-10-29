@@ -1,17 +1,21 @@
-//! The 6502 frame: where the frame objects go, the prologue and epilogue, and the address of an
-//! object. The soft stack is `rs0` (`rc0:rc1`) and grows down; the hardware stack holds only
-//! return addresses, so there is no return slot and no alignment.
+//! The 6502 frame: where the frame objects go, the prologue and epilogue, and
+//! the address of an object. The soft stack is `rs0` (`rc0:rc1`) and grows
+//! down; the hardware stack holds only return addresses, so there is no return
+//! slot and no alignment.
 //!
 //! # How it works
-//! The layout is the generic `calculate_frame_object_offsets`: fixed objects (the stack arguments,
-//! at offsets from the stack pointer at entry), the saved registers, the locals, then the outgoing
-//! call area the frame reserves. The prologue is one `ADJSP -size`; objects are addressed from
-//! `rs0` at `offset + size`, which the `(zp),Y` forms take as a byte (at most 255). The call
-//! sequence is reserved in the frame, so `CALLSEQ_START` and `CALLSEQ_END` expand to nothing; a
-//! frame with variable-sized objects adjusts `rs0` around each call instead.
+//! The layout is the generic `calculate_frame_object_offsets`: fixed objects
+//! (the stack arguments, at offsets from the stack pointer at entry), the saved
+//! registers, the locals, then the outgoing call area the frame reserves. The
+//! prologue is one `ADJSP -size`; objects are addressed from `rs0` at `offset +
+//! size`, which the `(zp),Y` forms take as a byte (at most 255). The call
+//! sequence is reserved in the frame, so `CALLSEQ_START` and `CALLSEQ_END`
+//! expand to nothing; a frame with variable-sized objects adjusts `rs0` around
+//! each call instead.
 //!
-//! DEVIATE: not translated are a frame pointer, dynamic allocas, an object past offset 255 (it
-//! needs the address in a pair), tail calls and shrink wrapping. Exit: when a program needs them.
+//! DEVIATE: not translated are a frame pointer, dynamic allocas, an object past
+//! offset 255 (it needs the address in a pair), tail calls and shrink wrapping.
+//! Exit: when a program needs them.
 //!
 //! # See also
 //! `crates/target/llrm-m68k/src/frame.rs`, the same shape for m68k.
@@ -24,12 +28,13 @@ use crate::emit::{MInst, Operand};
 /// What the frame depends on.
 #[derive(Clone, Debug, Default)]
 pub struct Function {
-    /// Fixed objects (incoming arguments) first, then the locals; an offset is given for the fixed
-    /// ones only.
+    /// Fixed objects (incoming arguments) first, then the locals; an offset is
+    /// given for the fixed ones only.
     pub objects: Vec<Object>,
     /// How many of `objects` are fixed.
     pub fixed: usize,
-    /// The callee-saved pairs the allocator used (`rs4`.. in `calling.toml`'s `preserved`).
+    /// The callee-saved pairs the allocator used (`rs4`.. in `calling.toml`'s
+    /// `preserved`).
     pub saved: Vec<String>,
     pub max_call_frame: i64,
     pub adjusts_stack: bool,
@@ -40,7 +45,8 @@ pub struct Function {
 #[derive(Clone, Debug)]
 pub struct Layout {
     pub stack_size: i64,
-    /// `objects` with every offset set (from the stack pointer at entry), the saved-pair slots last.
+    /// `objects` with every offset set (from the stack pointer at entry), the
+    /// saved-pair slots last.
     pub objects: Vec<Object>,
     saved: Vec<String>,
     first_save: usize,
@@ -86,7 +92,8 @@ impl Layout {
         self.saved.iter().enumerate().map(|(n, name)| (name, self.address(self.first_save + n)))
     }
 
-    /// `emitPrologue` with the register saves: the frame opened, then each pair stored.
+    /// `emitPrologue` with the register saves: the frame opened, then each pair
+    /// stored.
     pub fn prologue(&self) -> Vec<MInst> {
         let mut insts = Vec::new();
         if self.stack_size != 0 {
@@ -110,8 +117,9 @@ impl Layout {
         insts
     }
 
-    /// `eliminateCallFramePseudoInstr`: nothing when the call frame is reserved, else `rs0` moves by
-    /// the bytes of the call sequence (`down` opens it).
+    /// `eliminateCallFramePseudoInstr`: nothing when the call frame is
+    /// reserved, else `rs0` moves by the bytes of the call sequence (`down`
+    /// opens it).
     pub fn call_sequence(
         &self,
         down: bool,
@@ -123,8 +131,9 @@ impl Layout {
         vec![adjust(if down { -bytes } else { bytes })]
     }
 
-    /// `eliminateFrameIndex`: a frame object in the pointer operand of a memory instruction, or in
-    /// a `LEASP16`, becomes `rs0` and the offset from it.
+    /// `eliminateFrameIndex`: a frame object in the pointer operand of a memory
+    /// instruction, or in a `LEASP16`, becomes `rs0` and the offset from
+    /// it.
     pub fn eliminate(
         &self,
         inst: &MInst,

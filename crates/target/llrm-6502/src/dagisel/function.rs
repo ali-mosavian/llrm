@@ -1,14 +1,18 @@
 //! A function from IR to scheduled machine nodes: the shared builder, then
 //! [`super::pipeline`]'s stages, block by block.
 //!
-//! DEVIATE: the phi copies of a block that branches to several blocks are per edge (an edge block
-//! the emitter makes), not placed by a machine-function phi elimination; a `switch` to a block with
-//! phis is refused. Reason: no shared machine function. Exit: the shared machine function.
+//! DEVIATE: the phi copies of a block that branches to several blocks are per
+//! edge (an edge block the emitter makes), not placed by a machine-function phi
+//! elimination; a `switch` to a block with phis is refused. Reason: no shared
+//! machine function. Exit: the shared machine function.
 //!
 //! DEVIATE: no static allocas or jump tables: the
-//! builder makes the frame objects and the C convention passes what the registers do not hold on
-//! the stack, so the slice (arithmetic, branches, calls) needs none. Reason:
-//! frame objects wait for the 6502 machine function. Exit: M4.
+//! builder makes the frame objects and the C convention passes what the
+//! registers do not hold on the stack, so the slice (arithmetic, branches,
+//! calls) needs none. Reason: frame objects wait for the 6502 machine function.
+//! Exit: M4.
+
+use std::collections::HashMap;
 
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
@@ -19,18 +23,17 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::datalayout::DataLayout;
-use std::collections::HashMap;
-
 use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
-use super::hooks::Cpu;
 use super::call::{CALL, MosCalling, RET_GLUE};
+use super::hooks::Cpu;
 use super::pipeline::select_block;
 use crate::target::Mos;
 
-/// The builder's view of the 6502: 16-bit pointers, `i8` and `i16` in registers, a byte shift
-/// count, and the `CALL`/`RET_GLUE` nodes of `own_ids.txt`.
+/// The builder's view of the 6502: 16-bit pointers, `i8` and `i16` in
+/// registers, a byte shift count, and the `CALL`/`RET_GLUE` nodes of
+/// `own_ids.txt`.
 pub fn builder_target() -> BuilderTarget {
     BuilderTarget {
         shift_amount: EVT::I8,
@@ -52,21 +55,24 @@ pub struct Selected {
     pub block: BlockId,
     pub dag: SelectionDAG,
     pub units: Vec<Unit>,
-    /// The registers the block reads on arrival, with the virtual register each is copied to.
+    /// The registers the block reads on arrival, with the virtual register each
+    /// is copied to.
     pub live_ins: Vec<(RegId, u32)>,
-    /// The phi inputs this block exports, by successor: the register the value was copied to, and the
-    /// phi's own. One entry with no successor when they all go together (a single successor, or a
-    /// `switch`).
+    /// The phi inputs this block exports, by successor: the register the value
+    /// was copied to, and the phi's own. One entry with no successor when
+    /// they all go together (a single successor, or a `switch`).
     pub edges: Vec<Edge>,
 }
 
-/// The phi copies on the edge to `to` (a parallel copy), or on every edge when `to` is `None`.
+/// The phi copies on the edge to `to` (a parallel copy), or on every edge when
+/// `to` is `None`.
 pub struct Edge {
     pub to: Option<BlockId>,
     pub copies: Vec<(u32, u32)>,
 }
 
-/// A selected function: its blocks and the sizes of its local frame objects, by frame index.
+/// A selected function: its blocks and the sizes of its local frame objects, by
+/// frame index.
 pub struct Selection {
     pub blocks: Vec<Selected>,
     pub locals: Vec<i64>,
@@ -74,8 +80,9 @@ pub struct Selection {
 
 /// Function `name` of `module`, block by block in layout order.
 ///
-/// DEVIATE: static allocas share no frame object (no stack coloring) and none is aligned: the
-/// 6502 has no alignment. Reason: nothing here needs the saving. Exit: with the shared frame code.
+/// DEVIATE: static allocas share no frame object (no stack coloring) and none
+/// is aligned: the 6502 has no alignment. Reason: nothing here needs the
+/// saving. Exit: with the shared frame code.
 pub fn select_function(
     module: &Module,
     name: &str,
@@ -105,7 +112,8 @@ pub fn select_function(
     Ok(Selection { blocks: selected, locals })
 }
 
-/// The size of each static alloca, by the frame index `FunctionLoweringInfo` gave it.
+/// The size of each static alloca, by the frame index `FunctionLoweringInfo`
+/// gave it.
 fn alloca_sizes(
     module: &Module,
     function: &Function,
@@ -114,9 +122,13 @@ fn alloca_sizes(
 ) -> Result<Vec<i64>, String> {
     let mut sizes = vec![0; info.static_allocas.iter().count()];
     for (value, index) in info.static_allocas.iter() {
-        let ValueDef::Instruction(def) = function.value(value).def else { return Err("an alloca that is not an instruction".into()) };
+        let ValueDef::Instruction(def) = function.value(value).def else {
+            return Err("an alloca that is not an instruction".into());
+        };
         let instruction = function.instruction(def);
-        let Opcode::Alloca { allocated, .. } = instruction.opcode else { return Err("an alloca that is not an alloca".into()) };
+        let Opcode::Alloca { allocated, .. } = instruction.opcode else {
+            return Err("an alloca that is not an alloca".into());
+        };
         let count = match instruction.operands.first() {
             None => 1,
             Some(Operand::Constant(id)) => match module.context.get(*id).kind {
@@ -130,8 +142,9 @@ fn alloca_sizes(
     Ok(sizes)
 }
 
-/// One built block selected and scheduled, then the blocks its `switch` lowering made. Every branch
-/// is to a label, so their position in the text does not matter.
+/// One built block selected and scheduled, then the blocks its `switch`
+/// lowering made. Every branch is to a label, so their position in the text
+/// does not matter.
 fn select_built(
     top: Option<(&Function, BlockId)>,
     block: BlockId,
@@ -141,9 +154,10 @@ fn select_built(
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
     let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
-    // DEVIATE: refused. A `switch` made of several blocks puts one copy list on all its edges, and a
-    // phi read on another edge is lost. Reason: the edges leave blocks the builder made. Exit: split
-    // the critical edges of the IR first (`llrm-transforms` `split_critical_edge`).
+    // DEVIATE: refused. A `switch` made of several blocks puts one copy list on
+    // all its edges, and a phi read on another edge is lost. Reason: the
+    // edges leave blocks the builder made. Exit: split the critical edges
+    // of the IR first (`llrm-transforms` `split_critical_edge`).
     if top.is_some() && !built.extra.is_empty() && !built.phi_updates.is_empty() {
         return Err("a switch to a block with phis: split its critical edges first".into());
     }
@@ -153,7 +167,9 @@ fn select_built(
     if let Some((function, block)) = top.filter(|_| built.extra.is_empty()) {
         successors = function.successors(block).iter().copied().collect::<Vec<_>>();
         for &successor in &successors {
-            for phi in function.iter_block(successor).take_while(|inst| function.instruction(*inst).opcode == Opcode::Phi) {
+            for phi in
+                function.iter_block(successor).take_while(|inst| function.instruction(*inst).opcode == Opcode::Phi)
+            {
                 home.extend(function.instruction(phi).result.map(|result| (result, successor)));
             }
         }

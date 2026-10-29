@@ -1,5 +1,6 @@
-//! The 6502 description files against the parsers that read them. Expected values are worked out
-//! by hand from the rules in the file comments, not read back from the code.
+//! The 6502 description files against the parsers that read them. Expected
+//! values are worked out by hand from the rules in the file comments, not read
+//! back from the code.
 
 use llrm_6502::{CALLING, LAYOUT, REGISTERS};
 use llrm_target::calling::{Calling, Kind, Place};
@@ -26,7 +27,8 @@ fn ten_registers_hold_values_and_every_class_is_known() {
         .expect("every class is in llrm-lir's list");
 }
 
-/// An i8 takes the first free byte, an i16 the first free pair: f(i8, i16, i8) is rc2, rc4:rc5, rc3.
+/// An i8 takes the first free byte, an i16 the first free pair: f(i8, i16, i8)
+/// is rc2, rc4:rc5, rc3.
 #[test]
 fn arguments_fill_bytes_and_pairs_from_rc2() {
     let calling = Calling::parse(CALLING).expect("calling.toml parses");
@@ -35,7 +37,8 @@ fn arguments_fill_bytes_and_pairs_from_rc2() {
     assert_eq!(placed.stack_bytes, 0);
 }
 
-/// Three pairs fit rc2..rc7; the fourth i16 goes to the static frame, two bytes.
+/// Three pairs fit rc2..rc7; the fourth i16 goes to the static frame, two
+/// bytes.
 #[test]
 fn a_fourth_word_argument_goes_to_the_frame() {
     let calling = Calling::parse(CALLING).expect("calling.toml parses");

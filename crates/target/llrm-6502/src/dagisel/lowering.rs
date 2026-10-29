@@ -1,18 +1,21 @@
 //! The 6502's action table: what the DAG legalizers do with each operation.
 //!
-//! `i8` and `i16` are register types (`Imag8`, `Imag16`: the pair is what a pointer lives in). Byte
-//! and word add, subtract and logic are instructions; the carry forms (`UADDO`, `UADDO_CARRY`, `USUBO`,
-//! `USUBO_CARRY`, the carry an `i1` in the `C` register) are too, so the type legalizer expands an `i32` into two words joined by the carry, an
-//! `i64` into four. There is no multiply, divide or shift by a variable: those are library calls.
+//! `i8` and `i16` are register types (`Imag8`, `Imag16`: the pair is what a
+//! pointer lives in). Byte and word add, subtract and logic are instructions;
+//! the carry forms (`UADDO`, `UADDO_CARRY`, `USUBO`, `USUBO_CARRY`, the carry
+//! an `i1` in the `C` register) are too, so the type legalizer expands an `i32`
+//! into two words joined by the carry, an `i64` into four. There is no
+//! multiply, divide or shift by a variable: those are library calls.
 //!
-//! A comparison is `MOSISD::CMP a, b`: the `i8` flags of `a - b`. `SETCC`, `CMOV` and `BRCOND` read a
-//! condition code (a constant, [`cond`]) and those flags. Only the flags the 6502 branches on are
-//! codes: Z (`EQ`, `NE`), C (`CC`, `CS`) and N (`MI`, `PL`). An unsigned greater-than swaps the
-//! operands; a signed compare flips both sign bits and compares unsigned, except against zero,
-//! where N is the sign.
+//! A comparison is `MOSISD::CMP a, b`: the `i8` flags of `a - b`. `SETCC`,
+//! `CMOV` and `BRCOND` read a condition code (a constant, [`cond`]) and those
+//! flags. Only the flags the 6502 branches on are codes: Z (`EQ`, `NE`), C
+//! (`CC`, `CS`) and N (`MI`, `PL`). An unsigned greater-than swaps the
+//! operands; a signed compare flips both sign bits and compares unsigned,
+//! except against zero, where N is the sign.
 //!
-//! A word compare is `CMP` too (C and N come out of the high byte's subtract-with-borrow); equality
-//! is `CMPZ`, whose Z covers both bytes.
+//! A word compare is `CMP` too (C and N come out of the high byte's
+//! subtract-with-borrow); equality is `CMPZ`, whose Z covers both bytes.
 
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
@@ -75,13 +78,14 @@ pub fn target_lowering() -> TargetLowering {
         }
     };
     set(&[Add, Sub, And, Or, Xor, UAddO, USubO, UAddOCarry, USubOCarry], Action::Legal);
-    // Multiply, divide, remainder and every shift are instructions; the variable ones expand to
-    // runtime calls where they are emitted.
+    // Multiply, divide, remainder and every shift are instructions; the
+    // variable ones expand to runtime calls where they are emitted.
     set(&[Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra], Action::Legal);
     set(&[UDivRem, SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], Action::Expand);
     set(&[ZeroExtend, AnyExtend], Action::Custom);
-    // A long multiply, divide or shift by a variable is one node of two words (`lower_long`).
+    // A long multiply, divide or shift by a variable is one node of two words
+    // (`lower_long`).
     for op in [Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra] {
         tl.set_operation_action(op, MVT::I32, Action::Custom);
     }
@@ -120,8 +124,9 @@ impl Hooks for MosLowering {
     }
 }
 
-/// A long (`i32`) multiply, divide, remainder or shift by a variable: `MOSISD::<op>32` of the
-/// operands' halves, two words joined. A shift by a constant is left to the type legalizer.
+/// A long (`i32`) multiply, divide, remainder or shift by a variable:
+/// `MOSISD::<op>32` of the operands' halves, two words joined. A shift by a
+/// constant is left to the type legalizer.
 fn lower_long(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -153,11 +158,15 @@ fn lower_long(
         operands.push(dag.get_node(ISD::Truncate, EVT::I16, &[high]));
     }
     let pair = dag.get_node_multi(opcode, &[EVT::I16, EVT::I16], &operands);
-    Some(dag.get_node(ISD::BuildPair, EVT::I32, &[SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 }]))
+    Some(dag.get_node(
+        ISD::BuildPair,
+        EVT::I32,
+        &[SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 }],
+    ))
 }
 
-/// A condition widened to a byte or a word is `select cond, 1, 0`; any other extension is selected
-/// as it is.
+/// A condition widened to a byte or a word is `select cond, 1, 0`; any other
+/// extension is selected as it is.
 fn lower_extend(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -172,7 +181,8 @@ fn lower_extend(
     lower_select(dag, select)
 }
 
-/// `LowerGlobalAddress`: `WRAPPER` of the address, an immediate the linker fills in.
+/// `LowerGlobalAddress`: `WRAPPER` of the address, an immediate the linker
+/// fills in.
 fn lower_global_address(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -215,8 +225,8 @@ fn flip_sign(
     }
 }
 
-/// The code a comparison of `op0` with `op1` branches on, and the operands to compare (possibly
-/// swapped or sign-flipped).
+/// The code a comparison of `op0` with `op1` branches on, and the operands to
+/// compare (possibly swapped or sign-flipped).
 fn translate_cc(
     dag: &mut SelectionDAG,
     cc: CondCode,
@@ -259,14 +269,15 @@ fn lower_setcc(
     let cc = cond_of(dag, dag.operand(node, 2));
     let (code, a, b) = translate_cc(dag, cc, op0, op1);
     // Equality on a word needs Z over both bytes.
-    let compare = if dag.value_type(a) == EVT::I16 && matches!(code, cond::EQ | cond::NE) { mosisd::CMPZ } else { mosisd::CMP };
+    let compare =
+        if dag.value_type(a) == EVT::I16 && matches!(code, cond::EQ | cond::NE) { mosisd::CMPZ } else { mosisd::CMP };
     let flags = dag.get_node(compare, EVT::I8, &[a, b]);
     let code = cc_operand(dag, code);
     Some(dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags]))
 }
 
-/// The code and flags a condition value branches on: a lowered compare, or the value tested
-/// against zero (`NE`).
+/// The code and flags a condition value branches on: a lowered compare, or the
+/// value tested against zero (`NE`).
 fn condition(
     dag: &mut SelectionDAG,
     value: SDValue,

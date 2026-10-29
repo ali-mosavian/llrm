@@ -1,18 +1,22 @@
-//! Calls, returns and formal arguments over the `mos` convention (`machines/calling.toml`), the
-//! counterpart of LLVM's `LowerCall`, `LowerCallResult`, `LowerFormalArguments` and `LowerReturn`.
+//! Calls, returns and formal arguments over the `mos` convention
+//! (`machines/calling.toml`), the counterpart of LLVM's `LowerCall`,
+//! `LowerCallResult`, `LowerFormalArguments` and `LowerReturn`.
 //!
 //! # How it works
-//! A byte argument takes the first free byte register from `rc2`, a word the first free pair
-//! (`rc4:rc5` is `rs2`), as `Convention::place` says. A byte result leaves in `a`, a word in
-//! `a:x`. The values arrive already split into legal `i8` and `i16` parts, so an `i32` is two words.
+//! A byte argument takes the first free byte register from `rc2`, a word the
+//! first free pair (`rc4:rc5` is `rs2`), as `Convention::place` says. A byte
+//! result leaves in `a`, a word in `a:x`. The values arrive already split into
+//! legal `i8` and `i16` parts, so an `i32` is two words.
 //!
-//! An argument that fits no register goes on the soft stack (`rs0`): the caller stores it at `rs0 +
-//! offset` inside the call sequence, the callee loads it from a fixed object. The adjustment of `rs0`
-//! itself belongs to the frame lowering, as the call-sequence pseudos' expansion.
+//! An argument that fits no register goes on the soft stack (`rs0`): the caller
+//! stores it at `rs0 + offset` inside the call sequence, the callee loads it
+//! from a fixed object. The adjustment of `rs0` itself belongs to the frame
+//! lowering, as the call-sequence pseudos' expansion.
 //!
 //! # See also
-//! `llvm/lib/Target/AVR/AVRISelLowering.cpp`: `LowerCall` (L1311), `LowerCallResult` (L1448),
-//! `LowerFormalArguments` (L1122), `LowerReturn` (L1495).
+//! `llvm/lib/Target/AVR/AVRISelLowering.cpp`: `LowerCall` (L1311),
+//! `LowerCallResult` (L1448), `LowerFormalArguments` (L1122), `LowerReturn`
+//! (L1495).
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -51,8 +55,8 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
     }
 }
 
-/// The location of each argument and the bytes the stack ones take; a word's two bytes are named
-/// as their pair.
+/// The location of each argument and the bytes the stack ones take; a word's
+/// two bytes are named as their pair.
 fn locations(
     convention: &Convention,
     vts: &[EVT],
@@ -72,8 +76,8 @@ fn locations(
     Ok((places, placement.stack_bytes))
 }
 
-/// The registers the parts `vts` of one result leave in, in order: the convention's row for the
-/// whole width, `a`, `x`, `rc2`, `rc3` for a long.
+/// The registers the parts `vts` of one result leave in, in order: the
+/// convention's row for the whole width, `a`, `x`, `rc2`, `rc3` for a long.
 fn result_registers(
     convention: &Convention,
     vts: &[EVT],
@@ -107,8 +111,8 @@ fn read_result(
     }
 }
 
-/// `LowerCall`: the arguments copied to their registers, the `CALL`, and the results read back.
-/// Returns the chain and the result values.
+/// `LowerCall`: the arguments copied to their registers, the `CALL`, and the
+/// results read back. Returns the chain and the result values.
 pub fn lower_call(
     dag: &mut SelectionDAG,
     chain: SDValue,
@@ -125,10 +129,18 @@ pub fn lower_call(
     let mut stack_pointer = None;
     for ((out, &vt), &target) in outs.iter().zip(&vts).zip(&targets) {
         let Location::Stack(offset) = target else { continue };
-        let sp = *stack_pointer.get_or_insert_with(|| dag.get_copy_from_phys_reg_plain(chain, abi::register("rs0"), EVT::I16));
+        let sp = *stack_pointer
+            .get_or_insert_with(|| dag.get_copy_from_phys_reg_plain(chain, abi::register("rs0"), EVT::I16));
         let slot = dag.get_constant(offset as u128, EVT::I16);
         let address = dag.get_node(ISD::Add, EVT::I16, &[sp, slot]);
-        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::CallArgument(offset as i32), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: vt,
+            align: 1,
+            volatile: false,
+            base: MemBase::CallArgument(offset as i32),
+            ext: None,
+            space: 0,
+        };
         stores.push(dag.get_store(chain, out.value, address, info));
     }
     if !stores.is_empty() {
@@ -156,12 +168,8 @@ pub fn lower_call(
     operands.push(dag.get_register_mask());
     operands.extend(glue);
     let call = dag.get_node_multi(CALL, &[EVT::OTHER, EVT::GLUE], &operands);
-    let end = dag.get_callseq_end(
-        SDValue { node: call.node, res: 0 },
-        bytes as u64,
-        0,
-        SDValue { node: call.node, res: 1 },
-    );
+    let end =
+        dag.get_callseq_end(SDValue { node: call.node, res: 0 }, bytes as u64, 0, SDValue { node: call.node, res: 1 });
     let mut chain = SDValue { node: end.node, res: 0 };
     let mut glue = SDValue { node: end.node, res: 1 };
     let vts: Vec<EVT> = ins.iter().map(|result| result.vt).collect();
@@ -170,8 +178,9 @@ pub fn lower_call(
     Ok((chain, values))
 }
 
-/// `LowerFormalArguments`: each argument read from the virtual register its register is live-in
-/// to, or loaded from its fixed stack object (`fixed` creates it).
+/// `LowerFormalArguments`: each argument read from the virtual register its
+/// register is live-in to, or loaded from its fixed stack object (`fixed`
+/// creates it).
 pub fn lower_formal_arguments(
     dag: &mut SelectionDAG,
     chain: SDValue,
@@ -208,7 +217,8 @@ pub fn lower_formal_arguments(
         .collect())
 }
 
-/// `LowerReturn`: the value split into bytes and copied to `a` (and `x`), then `RET_GLUE`.
+/// `LowerReturn`: the value split into bytes and copied to `a` (and `x`), then
+/// `RET_GLUE`.
 pub fn lower_return(
     dag: &mut SelectionDAG,
     chain: SDValue,
@@ -245,8 +255,8 @@ pub fn lower_return(
     Ok(dag.get_node(RET_GLUE, EVT::OTHER, &operands))
 }
 
-/// The builder's hook: the shared builder splits values into legal parts, so a refusal here is a
-/// builder bug.
+/// The builder's hook: the shared builder splits values into legal parts, so a
+/// refusal here is a builder bug.
 #[derive(Debug, Default)]
 pub struct MosCalling;
 

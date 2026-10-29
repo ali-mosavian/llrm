@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use llrm_6502::RUNTIME;
 use llrm_6502::dagisel::generated::ids::opcode as op;
 use llrm_6502::emit::{MInst, Operand, equates, function};
-use llrm_6502::RUNTIME;
 use llrm_6502::platform::{C64, C64_LD65, Platform, SIM65, c64_startup};
 
 /// A PRG whose `_main` returns 7, and its ld65 label file.
@@ -20,7 +20,8 @@ pub fn build() -> (Vec<u8>, String, PathBuf) {
     link("prg", &function("_main", &body).unwrap())
 }
 
-/// The C64 PRG of `code` (ca65 text defining `_main`): startup, `code`, then the runtime.
+/// The C64 PRG of `code` (ca65 text defining `_main`): startup, `code`, then
+/// the runtime.
 pub fn link(
     name: &str,
     code: &str,
@@ -40,9 +41,8 @@ pub fn link(
     (std::fs::read(dir.join("p.prg")).unwrap(), std::fs::read_to_string(dir.join("p.lbl")).unwrap(), dir.join("p.prg"))
 }
 
-
-/// Assembles the sim65 platform's equates, the runtime and `main` (raw ca65), runs it on sim65 and
-/// returns the exit code, which is A when `main` returns.
+/// Assembles the sim65 platform's equates, the runtime and `main` (raw ca65),
+/// runs it on sim65 and returns the exit code, which is A when `main` returns.
 pub fn run_with_runtime(
     name: &str,
     main: &str,
@@ -50,7 +50,8 @@ pub fn run_with_runtime(
     run_with(name, main, "")
 }
 
-/// [`run_with_runtime`] with more ca65 text (compiled functions, hand-written callees) after `main`.
+/// [`run_with_runtime`] with more ca65 text (compiled functions, hand-written
+/// callees) after `main`.
 pub fn run_with(
     name: &str,
     main: &str,
@@ -59,8 +60,8 @@ pub fn run_with(
     run_on("sim6502", name, main, extra).0
 }
 
-/// [`run_with`] on the cc65 target `target` (`sim6502` or `sim65c02`): the exit code and the size of
-/// the linked binary.
+/// [`run_with`] on the cc65 target `target` (`sim6502` or `sim65c02`): the exit
+/// code and the size of the linked binary.
 pub fn run_on(
     target: &str,
     name: &str,
@@ -79,13 +80,19 @@ pub fn run_on(
         .output()
         .expect("cl65");
     assert!(built.status.success(), "cl65: {}", String::from_utf8_lossy(&built.stderr));
-    let code = Command::new("sim65").args(["-x", "50000000"]).arg(dir.join("p.bin")).status().expect("sim65").code().expect("exit code");
+    let code = Command::new("sim65")
+        .args(["-x", "50000000"])
+        .arg(dir.join("p.bin"))
+        .status()
+        .expect("sim65")
+        .code()
+        .expect("exit code");
     (code, std::fs::metadata(dir.join("p.bin")).unwrap().len())
 }
 
-/// Runs `prg` in VICE's `x64sc` without a display and returns the monitor's answer to each of
-/// `commands` (`m 0400 0400`) once the program has run. Needs `x64sc`, `xvfb-run` and the C64 ROMs
-/// in ~/.local/share/vice/C64.
+/// Runs `prg` in VICE's `x64sc` without a display and returns the monitor's
+/// answer to each of `commands` (`m 0400 0400`) once the program has run. Needs
+/// `x64sc`, `xvfb-run` and the C64 ROMs in ~/.local/share/vice/C64.
 pub fn vice(
     prg: &std::path::Path,
     commands: &[&str],
@@ -105,10 +112,14 @@ pub fn vice(
         .expect("xvfb-run x64sc");
     let mut monitor = (0..60)
         .find_map(|_| {
-            TcpStream::connect("127.0.0.1:6510").ok().or_else(|| {
-                std::thread::sleep(Duration::from_millis(500));
-                None
-            })
+            TcpStream::connect("127.0.0.1:6510")
+                .ok()
+                .or_else(
+                    || {
+                        std::thread::sleep(Duration::from_millis(500));
+                        None
+                    },
+                )
         })
         .expect("VICE's monitor");
     // boot, the injected RUN, the program

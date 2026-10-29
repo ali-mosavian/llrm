@@ -1,35 +1,38 @@
-//! A selected function to ca65: each scheduled node becomes `MInst`s for [`emit::expand`].
+//! A selected function to ca65: each scheduled node becomes `MInst`s for
+//! [`emit::expand`].
 //!
 //! # How it works
-//! Every value gets a memory cell: `v_<fn>_<n>` for a byte, `w_<fn>_<n>` for a word, defined in
-//! the BSS. A `CopyFromReg` copies a register into its cell, a `CopyToReg` copies a cell into the
-//! register, a machine node reads and writes cells, `EXTRACT_SUBREG` names a half of a word cell
-//! and `REG_SEQUENCE` copies two bytes into one. The carry and the flags stay in the hardware
+//! Every value gets a memory cell: `v_<fn>_<n>` for a byte, `w_<fn>_<n>` for a
+//! word, defined in the BSS. A `CopyFromReg` copies a register into its cell, a
+//! `CopyToReg` copies a cell into the register, a machine node reads and writes
+//! cells, `EXTRACT_SUBREG` names a half of a word cell and `REG_SEQUENCE`
+//! copies two bytes into one. The carry and the flags stay in the hardware
 //! (`c`, `p`): the scheduler keeps them adjacent to their user.
 //!
-//! DEVIATE: no register allocator; every value is spilled. Reason: the spike checks selection and
-//! emission, not allocation. Exit: the shared allocator takes the 6502 (post-parity).
+//! DEVIATE: no register allocator; every value is spilled. Reason: the spike
+//! checks selection and emission, not allocation. Exit: the shared allocator
+//! takes the 6502 (post-parity).
 
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::frameobjects::Object;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::function_lowering::FIRST_VIRTUAL;
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue};
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{BlockId, Module};
 
 use crate::REGISTER_INFO;
-use crate::dagisel::pipeline::MosPins;
 use crate::dagisel::function::{Selected, Selection};
-use crate::frame::{Function, Layout, layout};
-use llrm_codegen::backend::frameobjects::Object;
 use crate::dagisel::generated::ids::{opcode as op, reg as ids};
 use crate::dagisel::generated::instrinfo;
-use crate::peep;
+use crate::dagisel::pipeline::MosPins;
 use crate::emit::{MInst, Operand, expand, relax_bra, spill};
+use crate::frame::{Function, Layout, layout};
+use crate::peep;
 
 const EXTRACT_SUBREG: u16 = 8;
 const REG_SEQUENCE: u16 = 19;
@@ -38,7 +41,8 @@ const CARRY: i16 = ids::CarryRegClassID as i16;
 const FLAGS: i16 = ids::FlagsRegClassID as i16;
 const IMAG16: i16 = ids::Imag16RegClassID as i16;
 
-/// A line of a function before it is text: a label, a machine instruction, or raw ca65.
+/// A line of a function before it is text: a label, a machine instruction, or
+/// raw ca65.
 #[derive(Clone, Debug)]
 pub enum Item {
     Label(String),
@@ -53,14 +57,17 @@ struct Cells<'a> {
     words: Vec<String>,
     /// Virtual registers live across blocks, by number.
     virtual_regs: HashMap<u32, Operand>,
-    /// The laid-out frame (`frame.rs`), and how many of its objects are the fixed ones.
+    /// The laid-out frame (`frame.rs`), and how many of its objects are the
+    /// fixed ones.
     frame: Layout,
     fixed: usize,
     /// The byte cells that hold a spilled carry (`true`) or flags (`false`).
     saved: HashMap<String, bool>,
-    /// Copies into `a`, `x` and `y`, held back to the `RET`: every other copy goes through `a`.
+    /// Copies into `a`, `x` and `y`, held back to the `RET`: every other copy
+    /// goes through `a`.
     deferred: Vec<MInst>,
-    /// The successors the current block branches to by label, for the edge blocks.
+    /// The successors the current block branches to by label, for the edge
+    /// blocks.
     branched_to: std::collections::HashSet<u32>,
 }
 
@@ -80,7 +87,8 @@ impl Cells<'_> {
     }
 }
 
-/// The zero-page registers beyond A and X that carry `name`'s result: `rc2`, `rc3` for a 32-bit one.
+/// The zero-page registers beyond A and X that carry `name`'s result: `rc2`,
+/// `rc3` for a 32-bit one.
 fn result_registers(
     module: &Module,
     name: &str,
@@ -89,7 +97,10 @@ fn result_registers(
         let id = module.named(name)?;
         let ty = module.global(id).function()?.ty;
         let llrm_mir::types::Type::Function { returns, .. } = module.context.types.get(ty) else { return None };
-        if matches!(module.context.types.get(*returns), llrm_mir::types::Type::Void) {
+        if matches!(
+            module.context.types.get(*returns),
+            llrm_mir::types::Type::Void
+        ) {
             return Some(false);
         }
         let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref()?).ok()?;
@@ -105,7 +116,8 @@ fn block_label(
     format!("{name}_b{block}")
 }
 
-/// The function `name` of `module` as ca65 text: its blocks, selected, in layout order.
+/// The function `name` of `module` as ca65 text: its blocks, selected, in
+/// layout order.
 pub fn function_text(
     module: &Module,
     name: &str,
@@ -126,8 +138,10 @@ pub fn function_text(
     let mut body = relax_bra(&body);
     body.push_str(".segment \"BSS\"\n");
     // the cells the clean-up left in memory
-    let kept = |cell: &str| body.lines().any(|l| l.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|t| t == cell));
-    let (bytes, words): (Vec<_>, Vec<_>) = (cells.0.iter().filter(|c| kept(c)).cloned().collect(), cells.1.iter().filter(|c| kept(c)).cloned().collect());
+    let kept =
+        |cell: &str| body.lines().any(|l| l.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|t| t == cell));
+    let (bytes, words): (Vec<_>, Vec<_>) =
+        (cells.0.iter().filter(|c| kept(c)).cloned().collect(), cells.1.iter().filter(|c| kept(c)).cloned().collect());
     for cell in &bytes {
         writeln!(body, "{cell}: .res 1").unwrap();
     }
@@ -146,7 +160,18 @@ pub fn function_items(
 ) -> Result<(Vec<Item>, (Vec<String>, Vec<String>)), String> {
     let blocks = &selection.blocks;
     let (laid_out, fixed) = lay_out_frame(blocks, &selection.locals);
-    let mut cells = Cells { name, next: 0, bytes: Vec::new(), words: Vec::new(), virtual_regs: HashMap::new(), frame: laid_out, fixed, saved: HashMap::new(), deferred: Vec::new(), branched_to: Default::default() };
+    let mut cells = Cells {
+        name,
+        next: 0,
+        bytes: Vec::new(),
+        words: Vec::new(),
+        virtual_regs: HashMap::new(),
+        frame: laid_out,
+        fixed,
+        saved: HashMap::new(),
+        deferred: Vec::new(),
+        branched_to: Default::default(),
+    };
     let mut body: Vec<Item> = vec![Item::Label(name.to_owned())];
     let mut edges: Vec<Item> = Vec::new();
     for inst in cells.frame.prologue() {
@@ -163,12 +188,16 @@ pub fn function_items(
             body.push(Item::Inst(copy(bits, cell, Operand::reg(from))));
         }
         let mut phis_done = false;
-        // A block that branches to several blocks puts each edge's copies on the edge.
+        // A block that branches to several blocks puts each edge's copies on
+        // the edge.
         let split = one.edges.iter().any(|edge| edge.to.is_some());
         cells.branched_to.clear();
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
-                if matches!(one.dag.nodes()[node as usize].opcode, ISD::Machine(code) if code as u16 == op::RET) {
+                if matches!(
+                    one.dag.nodes()[node as usize].opcode,
+                    ISD::Machine(code) if code as u16 == op::RET
+                ) {
                     for inst in cells.frame.epilogue() {
                         body.push(Item::Inst(inst));
                     }
@@ -190,8 +219,8 @@ pub fn function_items(
             }
         }
         if split {
-            // The edge taken by falling into the next block copies in line; the others are blocks
-            // after the function.
+            // The edge taken by falling into the next block copies in line; the
+            // others are blocks after the function.
             for edge in &one.edges {
                 let Some(to) = edge.to else { continue };
                 let copies = parallel_copy(&edge.copies, &mut cells)?;
@@ -204,7 +233,8 @@ pub fn function_items(
                 }
             }
         } else if !phis_done {
-            // A `br` to the next block is dropped by layout: the block ends with no terminator.
+            // A `br` to the next block is dropped by layout: the block ends
+            // with no terminator.
             body.extend(phi_copies(one, false, &mut cells)?);
         }
     }
@@ -212,11 +242,13 @@ pub fn function_items(
     Ok((body, (cells.bytes, cells.words)))
 }
 
-/// The frame: the fixed objects (the stack arguments, at the offsets the calling hook gave them)
-/// then the locals, and the largest call sequence of the function reserved at the bottom.
+/// The frame: the fixed objects (the stack arguments, at the offsets the
+/// calling hook gave them) then the locals, and the largest call sequence of
+/// the function reserved at the bottom.
 ///
-/// DEVIATE: the call area is reserved for the whole function (`hasReservedCallFrame`), so the
-/// sequence pseudos emit nothing. Reason: the spike has no dynamic allocas. Exit: with them.
+/// DEVIATE: the call area is reserved for the whole function
+/// (`hasReservedCallFrame`), so the sequence pseudos emit nothing. Reason: the
+/// spike has no dynamic allocas. Exit: with them.
 fn lay_out_frame(
     blocks: &[Selected],
     locals: &[i64],
@@ -232,23 +264,33 @@ fn lay_out_frame(
     let max_call_frame = blocks
         .iter()
         .flat_map(|one| one.dag.nodes().iter().map(move |node| (one, node)))
-        .filter(|(_, node)| matches!(node.opcode, ISD::Machine(code) if code as u16 == op::ADJCALLSTACKDOWN))
+        .filter(|(_, node)| {
+            matches!(
+                node.opcode,
+                ISD::Machine(code) if code as u16 == op::ADJCALLSTACKDOWN
+            )
+        })
         .filter_map(|(one, node)| match one.dag.nodes()[node.ops[1].node as usize].data {
             NodeData::Const { bits, .. } => Some(bits as i64),
             _ => None,
         })
         .max()
         .unwrap_or(0);
-    let function = Function { objects, fixed, max_call_frame, adjusts_stack: max_call_frame > 0, ..Function::default() };
+    let function =
+        Function { objects, fixed, max_call_frame, adjusts_stack: max_call_frame > 0, ..Function::default() };
     (layout(&function), fixed)
 }
 
 fn is_terminator(opcode: &ISD) -> bool {
-    matches!(opcode, ISD::Machine(code) if [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL, op::JMP, op::BRA, op::RET].contains(&(*code as u16)))
+    matches!(
+        opcode,
+        ISD::Machine(code) if [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL, op::JMP, op::BRA, op::RET].contains(&(*code as u16))
+    )
 }
 
-/// The copies into the phis of the successors, placed before the block's first terminator. A
-/// conditional branch reads the flags, which the copies' loads change: they are saved around.
+/// The copies into the phis of the successors, placed before the block's first
+/// terminator. A conditional branch reads the flags, which the copies' loads
+/// change: they are saved around.
 ///
 /// DEVIATE: see `dagisel::function`.
 fn phi_copies(
@@ -271,15 +313,18 @@ fn phi_copies(
     Ok(out)
 }
 
-/// `copies` (input register, phi's register) done at once: a copy whose destination another still
-/// reads waits, and a cycle (a swap) is broken by saving one old value in a cell.
+/// `copies` (input register, phi's register) done at once: a copy whose
+/// destination another still reads waits, and a cycle (a swap) is broken by
+/// saving one old value in a cell.
 fn parallel_copy(
     copies: &[(u32, u32)],
     cells: &mut Cells,
 ) -> Result<Vec<Item>, String> {
     let mut pending: Vec<(Operand, Operand, u32)> = Vec::new();
     for &(input, own) in copies {
-        let Some(from) = cells.virtual_regs.get(&input).cloned() else { return Err(format!("phi input {input} was never written")) };
+        let Some(from) = cells.virtual_regs.get(&input).cloned() else {
+            return Err(format!("phi input {input} was never written"));
+        };
         let Operand::Reg(name) = &from else { unreachable!() };
         let bits = if name.starts_with("w_") { 16 } else { 8 };
         let to = match cells.virtual_regs.get(&own) {
@@ -296,7 +341,8 @@ fn parallel_copy(
     }
     let mut out = Vec::new();
     while !pending.is_empty() {
-        let free = (0..pending.len()).find(|&at| !pending.iter().enumerate().any(|(other, p)| other != at && p.0 == pending[at].1));
+        let free = (0..pending.len())
+            .find(|&at| !pending.iter().enumerate().any(|(other, p)| other != at && p.0 == pending[at].1));
         if let Some(at) = free {
             let (from, to, bits) = pending.remove(at);
             out.push(Item::Inst(copy(bits, to, from)));
@@ -337,19 +383,22 @@ fn location(
             Ok(Operand::Imm(cells.frame.address(at)))
         }
         NodeData::Block(block) => {
-            // A branch to a successor with phi copies from this block goes through its edge block.
+            // A branch to a successor with phi copies from this block goes
+            // through its edge block.
             let edge = one.edges.iter().find(|edge| edge.to == Some(BlockId(block)) && !edge.copies.is_empty());
             cells.branched_to.insert(block);
-            Ok(Operand::Label(if edge.is_some() { edge_label(name, one.block.0, block) } else { block_label(name, block) }))
+            Ok(Operand::Label(if edge.is_some() {
+                edge_label(name, one.block.0, block)
+            } else {
+                block_label(name, block)
+            }))
         }
         NodeData::Global { symbol, offset } => {
             let global = module.global(GlobalId(symbol));
             let text = global.name.as_deref().ok_or("an unnamed global")?;
             Ok(Operand::Label(if offset == 0 { text.to_owned() } else { format!("{text}{offset:+}") }))
         }
-        NodeData::PhysReg(id) => {
-            Ok(Operand::Reg(REGISTER_INFO.name(id).ok_or("a register with no name")?.to_owned()))
-        }
+        NodeData::PhysReg(id) => Ok(Operand::Reg(REGISTER_INFO.name(id).ok_or("a register with no name")?.to_owned())),
         NodeData::Register(number) if number < FIRST_VIRTUAL => {
             let id = MosPins.phys_reg(number as u16).ok_or_else(|| format!("pin register {number} is not ours"))?;
             Ok(Operand::Reg(REGISTER_INFO.name(id).ok_or("a register with no name")?.to_owned()))
@@ -366,7 +415,9 @@ fn location(
             cells.virtual_regs.insert(number, cell.clone());
             Ok(cell)
         }
-        _ => values.get(&(value.node, value.res)).cloned().ok_or_else(|| format!("node {} has no value yet", value.node)),
+        _ => {
+            values.get(&(value.node, value.res)).cloned().ok_or_else(|| format!("node {} has no value yet", value.node))
+        }
     }
 }
 
@@ -411,7 +462,10 @@ fn lower(
             let from = location(module, name, one, at(2), values, cells)?;
             let bits = one.dag.value_type(at(2)).size_in_bits();
             let copy = copy(bits, to.clone(), from);
-            if matches!(&to, Operand::Reg(text) if ["a", "x", "y"].contains(&text.as_str())) {
+            if matches!(
+                &to,
+                Operand::Reg(text) if ["a", "x", "y"].contains(&text.as_str())
+            ) {
                 cells.deferred.push(copy);
                 return Ok(Vec::new());
             }
@@ -438,7 +492,10 @@ fn lower(
                 }
                 REG_SEQUENCE => {
                     let (low, high) = (at(1), at(3));
-                    let (low, high) = (location(module, name, one, low, values, cells)?, location(module, name, one, high, values, cells)?);
+                    let (low, high) = (
+                        location(module, name, one, low, values, cells)?,
+                        location(module, name, one, high, values, cells)?,
+                    );
                     let cell = cells.word();
                     let Operand::Reg(word) = &cell else { unreachable!() };
                     values.insert((node, 0), cell.clone());
@@ -447,12 +504,10 @@ fn lower(
                         MInst::new(op::COPY8, vec![Operand::Reg(format!("{word}+1")), high]),
                     ])
                 }
-                op::ADJCALLSTACKDOWN | op::ADJCALLSTACKUP => {
-                    match location(module, name, one, at(1), values, cells)? {
-                        Operand::Imm(0) => Ok(Vec::new()),
-                        _ => Err("a call with stack arguments needs frame.rs".into()),
-                    }
-                }
+                op::ADJCALLSTACKDOWN | op::ADJCALLSTACKUP => match location(module, name, one, at(1), values, cells)? {
+                    Operand::Imm(0) => Ok(Vec::new()),
+                    _ => Err("a call with stack arguments needs frame.rs".into()),
+                },
                 _ => {
                     let desc = instrinfo::desc(code).ok_or_else(|| format!("no description of opcode {code}"))?;
                     let mut operands = Vec::new();
@@ -499,7 +554,11 @@ fn lower(
                         }
                     }
                     if operands.len() - usize::from(desc.num_defs) != wanted {
-                        return Err(format!("opcode {code}: {} operands, {} wanted", operands.len(), desc.num_operands));
+                        return Err(format!(
+                            "opcode {code}: {} operands, {} wanted",
+                            operands.len(),
+                            desc.num_operands
+                        ));
                     }
                     let mut all = before;
                     all.push(MInst::new(code, operands));

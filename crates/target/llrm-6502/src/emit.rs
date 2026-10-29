@@ -1,16 +1,19 @@
-//! Machine instructions to ca65 text: the pseudo-instructions of `mos6502.td` expanded into 6502
-//! code. Spike-local: a machine instruction is the generated opcode id and its operands in the
-//! `.td` order (outs, then ins); swap for the neutral machine function when that exists.
+//! Machine instructions to ca65 text: the pseudo-instructions of `mos6502.td`
+//! expanded into 6502 code. Spike-local: a machine instruction is the generated
+//! opcode id and its operands in the `.td` order (outs, then ins); swap for the
+//! neutral machine function when that exists.
 //!
 //! # How it works
-//! A byte operand is a register name: `a`, `x`, `y` or `rcN` (a zero-page byte). A word is a pair
-//! `rsN`, the bytes `rc{2N}` and `rc{2N+1}`. The carry is the hardware C flag: the instructions that
-//! define or use a `Carry` operand leave it there, so nothing may be scheduled between a carry's
+//! A byte operand is a register name: `a`, `x`, `y` or `rcN` (a zero-page
+//! byte). A word is a pair `rsN`, the bytes `rc{2N}` and `rc{2N+1}`. The carry
+//! is the hardware C flag: the instructions that define or use a `Carry`
+//! operand leave it there, so nothing may be scheduled between a carry's
 //! producer and its user.
 //!
-//! DEVIATE: the borrow of `USUBO` is the inverse of C (`SBC` clears it on a borrow). A chain of
-//! `SUBO*` to `SUBOC*` is exact; an `i1` borrow read as a value is not, and is not selected yet.
-//! Exit: when a `zext` of an overflow flag is selected.
+//! DEVIATE: the borrow of `USUBO` is the inverse of C (`SBC` clears it on a
+//! borrow). A chain of `SUBO*` to `SUBOC*` is exact; an `i1` borrow read as a
+//! value is not, and is not selected yet. Exit: when a `zext` of an overflow
+//! flag is selected.
 
 use std::fmt::Write;
 
@@ -21,7 +24,8 @@ use crate::platform::Platform;
 pub enum Operand {
     Reg(String),
     Imm(i64),
-    /// A frame object, until the frame is laid out (`frame::Layout::eliminate`).
+    /// A frame object, until the frame is laid out
+    /// (`frame::Layout::eliminate`).
     FrameIndex(usize),
     /// A label or a symbol.
     Label(String),
@@ -33,8 +37,9 @@ impl Operand {
     }
 }
 
-/// Pseudo-opcodes outside the generated range: `select.rs` keeps the carry and the flags in memory
-/// between a producer and its user, because nothing in the DAG keeps the hardware flags alive.
+/// Pseudo-opcodes outside the generated range: `select.rs` keeps the carry and
+/// the flags in memory between a producer and its user, because nothing in the
+/// DAG keeps the hardware flags alive.
 pub mod spill {
     /// `cell := C` and `C := cell`.
     pub const SAVE_CARRY: u16 = 0xF000;
@@ -59,8 +64,8 @@ impl MInst {
     }
 }
 
-/// The two bytes of a pair register: `rs2` is `rc4` (low) and `rc5` (high). A word cell `w_..`
-/// (`select.rs`) is two bytes in memory, `w_..` and `w_..+1`.
+/// The two bytes of a pair register: `rs2` is `rc4` (low) and `rc5` (high). A
+/// word cell `w_..` (`select.rs`) is two bytes in memory, `w_..` and `w_..+1`.
 fn halves(name: &str) -> Option<(String, String)> {
     if name.starts_with("w_") {
         return Some((name.to_owned(), format!("{name}+1")));
@@ -83,7 +88,8 @@ fn imm(operand: &Operand) -> Result<u128, String> {
     }
 }
 
-/// The branch that is taken when condition code `code` holds (`cond` in `lowering`).
+/// The branch that is taken when condition code `code` holds (`cond` in
+/// `lowering`).
 fn branch_on(code: u128) -> Result<&'static str, String> {
     Ok(match code {
         0 => "beq",
@@ -100,9 +106,9 @@ fn word(operand: &Operand) -> Result<(String, String), String> {
     halves(reg(operand)?).ok_or_else(|| format!("{operand:?} is not a pair register"))
 }
 
-/// The zero-page byte `(zp),y` can use for a pointer whose low byte is `lo`: itself when it is an
-/// `rcN`, else the pair is copied to `rs3` (`rc6`, `rc7`), which the convention lets any routine
-/// clobber.
+/// The zero-page byte `(zp),y` can use for a pointer whose low byte is `lo`:
+/// itself when it is an `rcN`, else the pair is copied to `rs3` (`rc6`, `rc7`),
+/// which the convention lets any routine clobber.
 fn zero_page_pointer(
     out: &mut String,
     lo: &str,
@@ -115,7 +121,8 @@ fn zero_page_pointer(
     "rc6".to_owned()
 }
 
-/// A byte copy `d := s` through the accumulator where neither side is a register that can do it.
+/// A byte copy `d := s` through the accumulator where neither side is a
+/// register that can do it.
 fn copy_byte(
     out: &mut String,
     d: &str,
@@ -151,26 +158,30 @@ pub fn expand(
     let simple = |o: &[Operand]| -> Result<(String, String, String), String> {
         Ok((reg(&o[0])?.to_owned(), reg(&o[1])?.to_owned(), reg(&o[2])?.to_owned()))
     };
-    // The same on pairs, low byte then high byte; the carry runs from the first to the second.
-    let wide = |out: &mut String,
-                first: &str,
-                next: &str,
-                d: &Operand,
-                a: &Operand,
-                b: &Operand|
-     -> Result<(), String> {
-        let ((dl, dh), (al, ah), (bl, bh)) = (word(d)?, word(a)?, word(b)?);
-        byte3(out, if first == "adc" { "clc" } else { "sec" }, first, &dl, &al, &bl);
-        byte3(out, "", next, &dh, &ah, &bh);
-        Ok(())
-    };
+    // The same on pairs, low byte then high byte; the carry runs from the first
+    // to the second.
+    let wide =
+        |out: &mut String, first: &str, next: &str, d: &Operand, a: &Operand, b: &Operand| -> Result<(), String> {
+            let ((dl, dh), (al, ah), (bl, bh)) = (word(d)?, word(a)?, word(b)?);
+            byte3(out, if first == "adc" { "clc" } else { "sec" }, first, &dl, &al, &bl);
+            byte3(out, "", next, &dh, &ah, &bh);
+            Ok(())
+        };
     match inst.opcode {
         op::ADD8 | op::ADDO8 => {
-            let (d, a, b) = if inst.opcode == op::ADD8 { simple(o)? } else { (reg(&o[0])?.into(), reg(&o[2])?.into(), reg(&o[3])?.into()) };
+            let (d, a, b) = if inst.opcode == op::ADD8 {
+                simple(o)?
+            } else {
+                (reg(&o[0])?.into(), reg(&o[2])?.into(), reg(&o[3])?.into())
+            };
             byte3(&mut out, "clc", "adc", &d, &a, &b);
         }
         op::SUB8 | op::SUBO8 => {
-            let (d, a, b) = if inst.opcode == op::SUB8 { simple(o)? } else { (reg(&o[0])?.into(), reg(&o[2])?.into(), reg(&o[3])?.into()) };
+            let (d, a, b) = if inst.opcode == op::SUB8 {
+                simple(o)?
+            } else {
+                (reg(&o[0])?.into(), reg(&o[2])?.into(), reg(&o[3])?.into())
+            };
             byte3(&mut out, "sec", "sbc", &d, &a, &b);
         }
         // The carry in is already in C.
@@ -230,7 +241,8 @@ pub fn expand(
             }
             _ => return Err("LDI16 takes a pair and an immediate".into()),
         },
-        // `(zp),y` through the pair's low byte, y the byte offset; a word is two bytes, INY between.
+        // `(zp),y` through the pair's low byte, y the byte offset; a word is
+        // two bytes, INY between.
         op::LDP8 => {
             let ((lo, hi), off) = (word(&o[1])?, imm(&o[2])?);
             let lo = zero_page_pointer(&mut out, &lo, &hi);
@@ -254,7 +266,9 @@ pub fn expand(
         op::LDAX | op::STAX => {
             let load = inst.opcode == op::LDAX;
             let (value, symbol, index) = if load { (&o[0], &o[1], &o[2]) } else { (&o[0], &o[1], &o[2]) };
-            let Operand::Label(symbol) = symbol else { return Err(format!("an indexed access takes a symbol, not {symbol:?}")) };
+            let Operand::Label(symbol) = symbol else {
+                return Err(format!("an indexed access takes a symbol, not {symbol:?}"));
+            };
             let (value, index) = (reg(value)?, reg(index)?);
             if load {
                 writeln!(out, "  ldx {index}\n  lda {symbol},x\n  sta {value}").unwrap();
@@ -271,7 +285,8 @@ pub fn expand(
                 writeln!(out, "  ldy #{off}\n  lda #0\n  sta ({lo}),y").unwrap();
             }
         }
-        // A shift by a constant: copy to the destination, then one step per bit in place.
+        // A shift by a constant: copy to the destination, then one step per bit
+        // in place.
         op::SHL8 | op::SRL8 | op::SRA8 => {
             let (d, a, k) = (reg(&o[0])?, reg(&o[1])?, imm(&o[2])?);
             copy_byte(&mut out, d, a);
@@ -303,8 +318,13 @@ pub fn expand(
         }
         op::LEASP16 => {
             let ((dl, dh), n) = (word(&o[0])?, imm(&o[1])? as u16);
-            writeln!(out, "  clc\n  lda rc0\n  adc #{}\n  sta {dl}\n  lda rc1\n  adc #{}\n  sta {dh}", n & 0xFF, n >> 8)
-                .unwrap();
+            writeln!(
+                out,
+                "  clc\n  lda rc0\n  adc #{}\n  sta {dl}\n  lda rc1\n  adc #{}\n  sta {dh}",
+                n & 0xFF,
+                n >> 8
+            )
+            .unwrap();
         }
         op::MUL8 | op::UDIV8 | op::SDIV8 | op::UREM8 | op::SREM8 | op::SHLV8 | op::SRLV8 | op::SRAV8 => {
             let routine = match inst.opcode {
@@ -336,7 +356,8 @@ pub fn expand(
             let ((dl, dh), (al, ah)) = (word(&o[0])?, word(&o[1])?);
             copy_byte(&mut out, "rc2", &al);
             copy_byte(&mut out, "rc3", &ah);
-            // A shift count is a byte in `rc4`; the other operations take a second word.
+            // A shift count is a byte in `rc4`; the other operations take a
+            // second word.
             if matches!(inst.opcode, op::SHLV16 | op::SRLV16 | op::SRAV16) {
                 copy_byte(&mut out, "rc4", reg(&o[2])?);
             } else {
@@ -348,8 +369,8 @@ pub fn expand(
             copy_byte(&mut out, &dl, "a");
             copy_byte(&mut out, &dh, "x");
         }
-        // A long operation: the operands are copied to `__sa` and `__sb` (runtime/mos_rt.s), the
-        // result comes back in `__sa`.
+        // A long operation: the operands are copied to `__sa` and `__sb`
+        // (runtime/mos_rt.s), the result comes back in `__sa`.
         op::MUL32 | op::UDIV32 | op::SDIV32 | op::UREM32 | op::SREM32 | op::SHL32 | op::SRL32 | op::SRA32 => {
             let routine = match inst.opcode {
                 op::MUL32 => "__mulsi3",
@@ -390,7 +411,8 @@ pub fn expand(
         op::CMP8 => {
             writeln!(out, "  lda {}\n  cmp {}", reg(&o[1])?, reg(&o[2])?).unwrap();
         }
-        // lda alo; cmp blo; lda ahi; sbc bhi: C is a >= b over the word, N the sign of the difference.
+        // lda alo; cmp blo; lda ahi; sbc bhi: C is a >= b over the word, N the
+        // sign of the difference.
         op::CMP16 => {
             let ((al, ah), (bl, bh)) = (word(&o[1])?, word(&o[2])?);
             writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}").unwrap();
@@ -412,8 +434,8 @@ pub fn expand(
             )
             .unwrap();
         }
-        // The flags are in P; PHP/PLP carry them over the loads, which set N and Z.
-        // SETCC: d := 1, branch on cc over d := 0.
+        // The flags are in P; PHP/PLP carry them over the loads, which set N
+        // and Z. SETCC: d := 1, branch on cc over d := 0.
         // CMOV d, false, true: d := false, branch on !cc over d := true.
         op::SETCC8 | op::CMOV8 => {
             *labels += 1;
@@ -424,13 +446,17 @@ pub fn expand(
             } else {
                 (branch_on(imm(&o[3])? ^ 1)?, reg(&o[1])?.to_owned(), reg(&o[2])?.to_owned())
             };
-            writeln!(out, "  php\n  lda {first}\n  sta {d}\n  plp\n  {branch} {skip}\n  lda {second}\n  sta {d}\n{skip}:")
-                .unwrap();
+            writeln!(
+                out,
+                "  php\n  lda {first}\n  sta {d}\n  plp\n  {branch} {skip}\n  lda {second}\n  sta {d}\n{skip}:"
+            )
+            .unwrap();
         }
-        // A conditional branch reaches 127 bytes: the opposite branch over a `jmp`.
+        // A conditional branch reaches 127 bytes: the opposite branch over
+        // a `jmp`.
         //
-        // DEVIATE: always the long form, no branch relaxation. Reason: the spike does not know the
-        // distance. Exit: the shared branch relaxation.
+        // DEVIATE: always the long form, no branch relaxation. Reason: the
+        // spike does not know the distance. Exit: the shared branch relaxation.
         op::BEQ | op::BNE | op::BCC | op::BCS | op::BMI | op::BPL => {
             let opposite = match inst.opcode {
                 op::BEQ => "bne",
@@ -467,7 +493,8 @@ pub fn expand(
     Ok(out)
 }
 
-/// A function: its label, then each instruction; a `Label` pseudo is `None` and prints a label line.
+/// A function: its label, then each instruction; a `Label` pseudo is `None` and
+/// prints a label line.
 pub fn function(
     name: &str,
     body: &[Result<MInst, &str>],
@@ -483,10 +510,11 @@ pub fn function(
     Ok(out)
 }
 
-/// `bra` reaches 127 bytes. An instruction is at most 3 bytes, so a `bra` whose target is within
-/// 40 instruction lines stays and any other becomes `jmp`.
+/// `bra` reaches 127 bytes. An instruction is at most 3 bytes, so a `bra` whose
+/// target is within 40 instruction lines stays and any other becomes `jmp`.
 ///
-/// DEVIATE: line counting, not sizes. Reason: the spike has no branch relaxation. Exit: the shared one.
+/// DEVIATE: line counting, not sizes. Reason: the spike has no branch
+/// relaxation. Exit: the shared one.
 pub fn relax_bra(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let is_instruction = |l: &str| l.starts_with("  ") && !l.trim_start().starts_with('.');
@@ -497,16 +525,22 @@ pub fn relax_bra(text: &str) -> String {
             continue;
         };
         let label = format!("{target}:");
-        let near = lines.iter().position(|l| *l == label).is_some_and(|to| {
-            let (from, until) = if to > at { (at + 1, to) } else { (to, at) };
-            lines[from..until].iter().filter(|l| is_instruction(l)).count() <= 40
-        });
+        let near = lines
+            .iter()
+            .position(|l| *l == label)
+            .is_some_and(
+                |to| {
+                    let (from, until) = if to > at { (at + 1, to) } else { (to, at) };
+                    lines[from..until].iter().filter(|l| is_instruction(l)).count() <= 40
+                },
+            );
         writeln!(out, "  {} {target}", if near { "bra" } else { "jmp" }).unwrap();
     }
     out
 }
 
-/// The equates for the imaginary registers on `platform`: `rc0 = $80` and so on.
+/// The equates for the imaginary registers on `platform`: `rc0 = $80` and so
+/// on.
 pub fn equates(platform: &Platform) -> String {
     (0..16).map(|n| format!("rc{n} = ${:02X}\n", platform.imag_base as usize + n)).collect()
 }

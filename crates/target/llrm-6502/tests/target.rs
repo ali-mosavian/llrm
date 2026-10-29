@@ -4,7 +4,8 @@ use llrm_6502::reg;
 use llrm_6502::target::Mos;
 use llrm_target::Target;
 
-/// A byte result leaves in `a`, a word in `a:x`; `rs0` is the frame and stack register.
+/// A byte result leaves in `a`, a word in `a:x`; `rs0` is the frame and stack
+/// register.
 #[test]
 fn the_target_states_the_register_roles() {
     let target = Mos;

@@ -10,19 +10,23 @@ use llrm_dagisel::testing::TestDag;
 macro_rules! cpu_tests {
     ($cpu:ident, $table:ident, $kind:expr) => {
         mod $cpu {
-            use super::*;
             use llrm_6502::dagisel::generated::$table as table;
+
+            use super::*;
 
             fn machine_name(opcode: u16) -> &'static str {
                 table::MACHINE_OPCODES.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
             }
 
-            fn select(dag: &mut TestDag, root: u32) -> Outcome {
+            fn select(
+                dag: &mut TestDag,
+                root: u32,
+            ) -> Outcome {
                 Selector::new(table::TABLE).select(dag, &mut MosHooks::new($kind, false), root)
             }
 
-            /// Before the 6502 had a table, an i8 DAG had nothing to select it: `add` of two
-            /// imaginary registers is `ADD8`.
+            /// Before the 6502 had a table, an i8 DAG had nothing to select
+            /// it: `add` of two imaginary registers is `ADD8`.
             #[test]
             fn add_of_two_registers_is_add8() {
                 let mut dag = TestDag::new();
@@ -35,8 +39,10 @@ macro_rules! cpu_tests {
                 assert_eq!(machine_name(dag.nodes[add as usize].machine.expect("not selected")), "ADD8");
             }
 
-            /// The type legalizer splits an `i32` add into `UADDO` on the low words and `UADDO_CARRY`
-            /// on the high ones; the carry is an `i1` in `C`. They select `ADDO16` and `ADDOC16`.
+            /// The type legalizer splits an `i32` add into `UADDO` on the low
+            /// words and
+            /// `UADDO_CARRY` on the high ones; the carry is an `i1` in `C`.
+            /// They select `ADDO16` and `ADDOC16`.
             #[test]
             fn word_add_with_carry_out_and_in_select_addo16_and_addoc16() {
                 let mut dag = TestDag::new();
@@ -53,7 +59,8 @@ macro_rules! cpu_tests {
                 assert_eq!((name(lo), name(hi)), ("ADDO16", "ADDOC16"));
             }
 
-            /// A load through `ptr + 3` is one `(zp),Y` load: the pair and the offset 3, not an add.
+            /// A load through `ptr + 3` is one `(zp),Y` load: the pair and the
+            /// offset 3, not an add.
             #[test]
             fn a_byte_load_through_pointer_plus_3_is_ldp8_with_offset_3() {
                 let mut dag = TestDag::new();
@@ -91,12 +98,13 @@ macro_rules! cpu_tests {
                 assert_eq!(machine_name(dag.nodes[shl as usize].machine.expect("not selected")), "SHL8");
             }
 
-            /// A node id no LLVM header defines (`MOSISD::RET_GLUE`, from `own_ids.txt`) reaches
-            /// the table: it selects `RET`.
+            /// A node id no LLVM header defines (`MOSISD::RET_GLUE`, from
+            /// `own_ids.txt`) reaches the table: it selects `RET`.
             #[test]
             fn ret_glue_is_ret() {
                 let mut dag = TestDag::new();
-                let ret = dag.node(llrm_6502::dagisel::generated::ids::isd::RET_GLUE, &[mvt::Other], &[SDValue::new(0, 0)]);
+                let ret =
+                    dag.node(llrm_6502::dagisel::generated::ids::isd::RET_GLUE, &[mvt::Other], &[SDValue::new(0, 0)]);
 
                 assert_eq!(select(&mut dag, ret), Outcome::Selected);
 
@@ -109,7 +117,8 @@ macro_rules! cpu_tests {
 cpu_tests!(mos6502, mos_mos6502, Cpu::Mos6502);
 cpu_tests!(w65c02, mos_w65c02, Cpu::W65c02);
 
-/// STZ and BRA exist on the 65C02 only: the NMOS table must not name them, or it would emit an illegal opcode.
+/// STZ and BRA exist on the 65C02 only: the NMOS table must not name them, or
+/// it would emit an illegal opcode.
 #[test]
 fn cmos_instructions_are_in_the_65c02_table_only() {
     use llrm_6502::dagisel::generated::{mos_mos6502 as nmos, mos_w65c02 as cmos};

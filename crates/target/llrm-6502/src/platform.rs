@@ -1,5 +1,5 @@
-//! A platform row (`machines/<name>.toml`): where the program loads and where the imaginary
-//! registers live in zero page.
+//! A platform row (`machines/<name>.toml`): where the program loads and where
+//! the imaginary registers live in zero page.
 
 pub const C64: &str = include_str!("machines/c64.toml");
 /// The ld65 memory layout of a C64 PRG.
@@ -48,8 +48,9 @@ impl Platform {
     }
 }
 
-/// What the C64 PRG starts with: the load address, `10 SYS 2061`, and `start`, which sets the soft
-/// stack pointer, calls `_main`, shows its result in the top-left screen cell and stops.
+/// What the C64 PRG starts with: the load address, `10 SYS 2061`, and `start`,
+/// which sets the soft stack pointer, calls `_main`, shows its result in the
+/// top-left screen cell and stops.
 pub fn c64_startup(platform: &Platform) -> String {
     format!(
         ".segment \"LOADADDR\"\n.word $0801\n\
@@ -60,9 +61,10 @@ pub fn c64_startup(platform: &Platform) -> String {
     )
 }
 
-/// What an Apple II binary starts with: the DOS 3.3 header (load address and length), then `start`,
-/// which sets the soft stack pointer, calls `_main` and shows its result in the top-left cell of
-/// text page 1 (`$0400`, the same cell as on the C64).
+/// What an Apple II binary starts with: the DOS 3.3 header (load address and
+/// length), then `start`, which sets the soft stack pointer, calls `_main` and
+/// shows its result in the top-left cell of text page 1 (`$0400`, the same cell
+/// as on the C64).
 pub fn apple2_startup(platform: &Platform) -> String {
     format!(
         ".import __MAIN_START__, __MAIN_LAST__\n.segment \"HEADER\"\n.word __MAIN_START__\n.word __MAIN_LAST__ - __MAIN_START__\n\
@@ -72,9 +74,10 @@ pub fn apple2_startup(platform: &Platform) -> String {
     )
 }
 
-/// What an NES image starts with: the iNES header (2 x 16K PRG, 1 x 8K CHR, mapper 0), then `start`,
-/// the reset vector, which sets the soft stack pointer, calls `_main` and keeps its result in
-/// `$0000`. `nmi` and `irq` are `rti`.
+/// What an NES image starts with: the iNES header (2 x 16K PRG, 1 x 8K CHR,
+/// mapper 0), then `start`, the reset vector, which sets the soft stack
+/// pointer, calls `_main` and keeps its result in `$0000`. `nmi` and `irq` are
+/// `rti`.
 pub fn nes_startup(platform: &Platform) -> String {
     format!(
         ".segment \"HEADER\"\n.byte \"NES\", $1A, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n\
@@ -86,9 +89,10 @@ pub fn nes_startup(platform: &Platform) -> String {
     )
 }
 
-/// What an Atari XEX file starts with: `$FFFF`, the load chunk header (start and inclusive end),
-/// then `start`, which sets the soft stack pointer, calls `_main` and keeps its result in `$0600`;
-/// the RUNAD chunk (`$02E0`) at the end points at `start`.
+/// What an Atari XEX file starts with: `$FFFF`, the load chunk header (start
+/// and inclusive end), then `start`, which sets the soft stack pointer, calls
+/// `_main` and keeps its result in `$0600`; the RUNAD chunk (`$02E0`) at the
+/// end points at `start`.
 pub fn atari8_startup(platform: &Platform) -> String {
     format!(
         ".import __MAIN_START__, __MAIN_LAST__\n.segment \"HEADER\"\n.word $FFFF\n\

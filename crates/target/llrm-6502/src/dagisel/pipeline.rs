@@ -1,9 +1,10 @@
-//! The shared DAG stages run for the 6502: the pin's `CodeGenAndEmitDAG` order (combine, legalize
-//! types, combine, legalize the DAG, combine, select, schedule) over a built block, with the 6502's
-//! tables and hooks. The same stages as m68k's `pipeline.rs`; `DagTarget` will replace the pair.
+//! The shared DAG stages run for the 6502: the pin's `CodeGenAndEmitDAG` order
+//! (combine, legalize types, combine, legalize the DAG, combine, select,
+//! schedule) over a built block, with the 6502's tables and hooks. The same
+//! stages as m68k's `pipeline.rs`; `DagTarget` will replace the pair.
 //!
-//! DEVIATE: no target combines and no `PreprocessISelDAG`. Reason: the slice does not reach them.
-//! Exit: M7.
+//! DEVIATE: no target combines and no `PreprocessISelDAG`. Reason: the slice
+//! does not reach them. Exit: M7.
 
 use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
@@ -23,8 +24,8 @@ use super::lowering::{MosLowering, target_lowering};
 use crate::reg;
 use crate::target::Mos;
 
-/// Every register the pin numbers (the toy `.td` has eight zero-page bytes), with ours. `P` and `C`
-/// are both our `flags`; the first match names it.
+/// Every register the pin numbers (the toy `.td` has eight zero-page bytes),
+/// with ours. `P` and `C` are both our `flags`; the first match names it.
 const REGISTERS: [(u16, RegId); 17] = [
     (pin::A, reg::A),
     (pin::X, reg::X),

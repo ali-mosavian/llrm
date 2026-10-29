@@ -18,7 +18,8 @@ pub const LAYOUT: &str = include_str!("machines/datalayout.toml");
 /// `machines/calling.toml`: arguments in rc2.., results in A:X.
 pub const CALLING: &str = include_str!("machines/calling.toml");
 
-/// `runtime/mos_rt.s`: multiply, divide, remainder and variable shifts, for ca65.
+/// `runtime/mos_rt.s`: multiply, divide, remainder and variable shifts, for
+/// ca65.
 pub const RUNTIME: &str = include_str!("../runtime/mos_rt.s");
 
 /// The register ids, numbered by `registers.regs`'s lines: `reg::RC2`.

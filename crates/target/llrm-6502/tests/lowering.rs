@@ -1,5 +1,6 @@
-//! The 6502 action table on hand-built DAGs. Expected shapes are worked out by hand: an `i32`
-//! add is a word add with carry out (`UADDO`) and a word add with carry in (`UADDO_CARRY`).
+//! The 6502 action table on hand-built DAGs. Expected shapes are worked out by
+//! hand: an `i32` add is a word add with carry out (`UADDO`) and a word add
+//! with carry in (`UADDO_CARRY`).
 
 use llrm_6502::dagisel::lowering::target_lowering;
 use llrm_codegen::backend::selectiondag::isd::ISD;
@@ -19,8 +20,9 @@ fn load(
     dag.get_load(vt, chain, ptr, info)
 }
 
-/// Before the 6502 had a table, an `i32` add had nowhere to go: no type was legal. The halves of the
-/// add are `UADDO` on the low words and `UADDO_CARRY` on the high words, joined by the carry (result 1).
+/// Before the 6502 had a table, an `i32` add had nowhere to go: no type was
+/// legal. The halves of the add are `UADDO` on the low words and `UADDO_CARRY`
+/// on the high words, joined by the carry (result 1).
 #[test]
 fn an_i32_add_is_a_word_uaddo_and_a_word_uaddo_carry() {
     let tli = target_lowering();
@@ -39,9 +41,9 @@ fn an_i32_add_is_a_word_uaddo_and_a_word_uaddo_carry() {
     assert_eq!((carry.node, carry.res), (lo.node, 1));
 }
 
-/// Multiply, divide, remainder and shifts are instructions at every width: the ones the 6502 lacks
-/// expand to runtime calls where they are emitted, not in the legalizer (which has no libcall
-/// conversion).
+/// Multiply, divide, remainder and shifts are instructions at every width: the
+/// ones the 6502 lacks expand to runtime calls where they are emitted, not in
+/// the legalizer (which has no libcall conversion).
 #[test]
 fn multiply_divide_and_shifts_are_legal_instructions() {
     let tli = target_lowering();

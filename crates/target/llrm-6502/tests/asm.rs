@@ -1,6 +1,7 @@
-//! The 6502 emitter's output assembled by ca65, linked for cc65's `sim65` and run. Each program
-//! returns a byte in A, which is the exit code; the expected values are worked out by hand from the
-//! 6502 instruction set (ADC adds the carry in, SBC clears C on a borrow), not from the emitter.
+//! The 6502 emitter's output assembled by ca65, linked for cc65's `sim65` and
+//! run. Each program returns a byte in A, which is the exit code; the expected
+//! values are worked out by hand from the 6502 instruction set (ADC adds the
+//! carry in, SBC clears C on a borrow), not from the emitter.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -26,7 +27,8 @@ fn imm(v: i64) -> Operand {
     Operand::Imm(v)
 }
 
-/// Assembles `functions` after the platform's equates, runs `_main` and returns its exit code.
+/// Assembles `functions` after the platform's equates, runs `_main` and returns
+/// its exit code.
 fn run(
     name: &str,
     functions: &[String],
@@ -51,8 +53,8 @@ fn main_returning(
     function("_main", &body).expect("expands")
 }
 
-/// 0x12F0 + 0x0020 = 0x1310: the low byte 0x10, the high byte 0x13 (the carry from the low bytes
-/// is 0, so the high bytes add to 0x13).
+/// 0x12F0 + 0x0020 = 0x1310: the low byte 0x10, the high byte 0x13 (the carry
+/// from the low bytes is 0, so the high bytes add to 0x13).
 #[test]
 fn a_word_add_gives_both_bytes() {
     let prefix = || -> Body {
@@ -66,8 +68,9 @@ fn a_word_add_gives_both_bytes() {
     assert_eq!(run("add16-hi", &[main_returning(prefix(), "rc7")]), 0x13);
 }
 
-/// An `i32` add as two words joined by the carry: 0x0001FFFF + 0x00000001 = 0x00020000. The low
-/// words 0xFFFF + 1 wrap to 0 with a carry out; the high words 1 + 0 + carry = 2.
+/// An `i32` add as two words joined by the carry: 0x0001FFFF + 0x00000001 =
+/// 0x00020000. The low words 0xFFFF + 1 wrap to 0 with a carry out; the high
+/// words 1 + 0 + carry = 2.
 #[test]
 fn a_dword_add_carries_between_words() {
     let body: Body = vec![
@@ -82,8 +85,8 @@ fn a_dword_add_carries_between_words() {
     assert_eq!(run("add32-lo", &[main_returning(body, "rc6")]), 0);
 }
 
-/// 0x00020000 - 1 = 0x0001FFFF: the low words 0 - 1 borrow and wrap to 0xFFFF, the high words
-/// 2 - 0 - borrow = 1.
+/// 0x00020000 - 1 = 0x0001FFFF: the low words 0 - 1 borrow and wrap to 0xFFFF,
+/// the high words 2 - 0 - borrow = 1.
 #[test]
 fn a_dword_subtract_borrows_between_words() {
     let body: Body = vec![
@@ -144,7 +147,8 @@ fn compare(
     ]
 }
 
-/// `3 <u 5` is C clear after `cmp`: SETCC with code CC (2) gives 1; `5 <u 3` gives 0.
+/// `3 <u 5` is C clear after `cmp`: SETCC with code CC (2) gives 1; `5 <u 3`
+/// gives 0.
 #[test]
 fn setcc_materializes_an_unsigned_less_than() {
     let setcc = |mut body: Body| {
@@ -155,8 +159,8 @@ fn setcc_materializes_an_unsigned_less_than() {
     assert_eq!(run("setcc-ge", &[main_returning(setcc(compare(5, 3)), "rc4")]), 0);
 }
 
-/// `-1 <s 1` as the lowering writes it: both sign bits flipped (0xFF -> 0x7F, 1 -> 0x81), then
-/// unsigned: 0x7F < 0x81, so CC holds and the result is 1.
+/// `-1 <s 1` as the lowering writes it: both sign bits flipped (0xFF -> 0x7F, 1
+/// -> 0x81), then unsigned: 0x7F < 0x81, so CC holds and the result is 1.
 #[test]
 fn a_signed_compare_through_flipped_sign_bits() {
     let mut body = compare(0x7F, 0x81);
@@ -164,10 +168,12 @@ fn a_signed_compare_through_flipped_sign_bits() {
     assert_eq!(run("signed-lt", &[main_returning(body, "rc4")]), 1);
 }
 
-/// CMOV with EQ: equal operands take the true value (20), unequal ones the false value (10).
+/// CMOV with EQ: equal operands take the true value (20), unequal ones the
+/// false value (10).
 #[test]
 fn cmov_picks_the_true_value_only_when_the_condition_holds() {
-    // The values are loaded first: a load sets N and Z, so none may sit between the compare and the CMOV.
+    // The values are loaded first: a load sets N and Z, so none may sit between
+    // the compare and the CMOV.
     let cmov = |a, b| {
         let mut body: Body = vec![i(op::LDI8, vec![reg("rc5"), imm(10)]), i(op::LDI8, vec![reg("rc6"), imm(20)])];
         body.extend(compare(a, b));
@@ -192,8 +198,9 @@ fn word_compare(
     ]
 }
 
-/// 0x1234 <u 0x1300 (the high bytes differ: 0x12 < 0x13) is 1; 0x1300 <u 0x1234 is 0; 0x12FF <u
-/// 0x1300 (the low bytes alone say otherwise, the borrow decides) is 1.
+/// 0x1234 <u 0x1300 (the high bytes differ: 0x12 < 0x13) is 1; 0x1300 <u 0x1234
+/// is 0; 0x12FF <u 0x1300 (the low bytes alone say otherwise, the borrow
+/// decides) is 1.
 #[test]
 fn a_word_compare_orders_by_the_high_byte_then_the_low() {
     let ult = |a, b| main_returning(word_compare(op::CMP16, a, b, 2), "rc8");
@@ -202,7 +209,8 @@ fn a_word_compare_orders_by_the_high_byte_then_the_low() {
     assert_eq!(run("cmp16-borrow", &[ult(0x12FF, 0x1300)]), 1);
 }
 
-/// Equal words give Z; words that differ in only the high byte, or in only the low byte, do not.
+/// Equal words give Z; words that differ in only the high byte, or in only the
+/// low byte, do not.
 #[test]
 fn a_word_equality_needs_both_bytes() {
     let eq = |a, b| main_returning(word_compare(op::CMPZ16, a, b, 0), "rc8");
@@ -211,14 +219,15 @@ fn a_word_equality_needs_both_bytes() {
     assert_eq!(run("cmpz16-lo", &[eq(0x1234, 0x1235)]), 0);
 }
 
-/// `-1 <s 1` on words as lowered: bit 15 flipped, 0xFFFF -> 0x7FFF and 1 -> 0x8001; 0x7FFF <u 0x8001.
+/// `-1 <s 1` on words as lowered: bit 15 flipped, 0xFFFF -> 0x7FFF and 1 ->
+/// 0x8001; 0x7FFF <u 0x8001.
 #[test]
 fn a_signed_word_compare_through_flipped_bit_15() {
     assert_eq!(run("cmp16-signed", &[main_returning(word_compare(op::CMP16, 0x7FFF, 0x8001, 2), "rc8")]), 1);
 }
 
-/// A word stored at `$4000 + 2` lands little-endian: the low byte 0xEF at +2, the high byte 0xBE at +3;
-/// loaded back as a word it is the same.
+/// A word stored at `$4000 + 2` lands little-endian: the low byte 0xEF at +2,
+/// the high byte 0xBE at +3; loaded back as a word it is the same.
 #[test]
 fn word_memory_is_little_endian_through_a_pointer_and_offset() {
     let stored = || -> Body {
@@ -248,17 +257,14 @@ fn shifted(
     wide: bool,
 ) -> Body {
     if wide {
-        vec![
-            i(op::LDI16, vec![reg("rs1"), imm(value)]),
-            i(opcode, vec![reg("rs2"), reg("rs1"), imm(k)]),
-        ]
+        vec![i(op::LDI16, vec![reg("rs1"), imm(value)]), i(opcode, vec![reg("rs2"), reg("rs1"), imm(k)])]
     } else {
         vec![i(op::LDI8, vec![reg("rc2"), imm(value)]), i(opcode, vec![reg("rc3"), reg("rc2"), imm(k)])]
     }
 }
 
-/// 0x81 << 1 = 0x02 (the top bit falls off); 0x05 << 3 = 0x28; 0x81 >>u 1 = 0x40; 0x81 >>s 1 = 0xC0
-/// (the sign is shifted in).
+/// 0x81 << 1 = 0x02 (the top bit falls off); 0x05 << 3 = 0x28; 0x81 >>u 1 =
+/// 0x40; 0x81 >>s 1 = 0xC0 (the sign is shifted in).
 #[test]
 fn byte_shifts_by_constants() {
     let r = |name: &str, opcode, value, k| run(name, &[main_returning(shifted(opcode, value, k, false), "rc3")]);
@@ -268,8 +274,8 @@ fn byte_shifts_by_constants() {
     assert_eq!(r("sra8", op::SRA8, 0x81, 1), 0xC0);
 }
 
-/// 0x1234 << 4 = 0x2340 (the bits cross the byte boundary); 0x8002 >>u 1 = 0x4001; 0x8001 >>s 1 =
-/// 0xC000.
+/// 0x1234 << 4 = 0x2340 (the bits cross the byte boundary); 0x8002 >>u 1 =
+/// 0x4001; 0x8001 >>s 1 = 0xC000.
 #[test]
 fn word_shifts_by_constants() {
     let hi_lo = |name: &str, opcode, value, k| {
@@ -285,9 +291,10 @@ fn word_shifts_by_constants() {
 use llrm_6502::frame::{Function, layout};
 use llrm_codegen::backend::frameobjects::Object;
 
-/// A function with a 10-byte local, a saved pair and a 4-byte call area (16 bytes), entered with
-/// `rs0 = $4100`. It opens the frame (`rs0` = $4100 - 16), stores 0x5A in local byte 1 and reads it back,
-/// clobbers `rs4`, and closes the frame. After the return `rs0` is $4100 again, `rs4` is what the
+/// A function with a 10-byte local, a saved pair and a 4-byte call area (16
+/// bytes), entered with `rs0 = $4100`. It opens the frame (`rs0` = $4100 - 16),
+/// stores 0x5A in local byte 1 and reads it back, clobbers `rs4`, and closes
+/// the frame. After the return `rs0` is $4100 again, `rs4` is what the
 /// caller had, and the byte is in memory at $4100 - 16 + 4 + 1.
 fn framed_call() -> (Body, String) {
     let frame = layout(&Function {
@@ -299,10 +306,7 @@ fn framed_call() -> (Body, String) {
     });
     let mut f: Body = frame.prologue().into_iter().map(Ok).collect();
     let local = |opcode: u16, byte: &str| {
-        frame
-            .eliminate(&MInst::new(opcode, vec![reg(byte), Operand::FrameIndex(0), imm(1)]))
-            .map(Ok)
-            .expect("resolves")
+        frame.eliminate(&MInst::new(opcode, vec![reg(byte), Operand::FrameIndex(0), imm(1)])).map(Ok).expect("resolves")
     };
     f.push(i(op::LDI8, vec![reg("rc2"), imm(0x5A)]));
     f.push(local(op::STP8, "rc2"));
@@ -335,7 +339,8 @@ fn after_framed_call(
 
 #[test]
 fn a_frame_restores_rs0_and_the_saved_pair_and_keeps_its_locals() {
-    // the function returned the byte it stored; rs0 is $4100 again; rs4 is $ABCD; memory holds 0x5A
+    // the function returned the byte it stored; rs0 is $4100 again; rs4 is
+    // $ABCD; memory holds 0x5A
     for (name, register, want) in [
         ("frame-ret", "rc12", 0x5A),
         ("frame-mem", "rc10", 0x5A),

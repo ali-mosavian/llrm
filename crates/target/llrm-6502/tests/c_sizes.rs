@@ -1,7 +1,8 @@
-//! The C data model of the 6502 is cc65's. The bench compiles the same C with cc65 and, for our
-//! backend, with clang's msp430 front end: this measures cc65 and checks that clang with the flags
-//! the bench uses gives the same sizes, signedness and struct layout, and that both agree with the
-//! 6502 description's pointer width. Needs clang and cc65.
+//! The C data model of the 6502 is cc65's. The bench compiles the same C with
+//! cc65 and, for our backend, with clang's msp430 front end: this measures cc65
+//! and checks that clang with the flags the bench uses gives the same sizes,
+//! signedness and struct layout, and that both agree with the 6502 description'
+//! s pointer width. Needs clang and cc65.
 
 use std::process::Command;
 
@@ -28,9 +29,10 @@ unsigned s_char_const = sizeof('a'), s_int_const = sizeof(40000), s_long_const =
 unsigned s_char_unsigned = !(((char)-1) < 0);
 ";
 
-/// Measured on cc65 and not reproducible with clang's msp430: `double` is 32 bits in cc65 and 64 in
-/// clang; a bit-field that crosses a byte is laid out differently (cc65: `{unsigned a:9, b:9}` is 4
-/// bytes, clang packed: 3); cc65 has no `long long`. Kernels using them are not comparable.
+/// Measured on cc65 and not reproducible with clang's msp430: `double` is 32
+/// bits in cc65 and 64 in clang; a bit-field that crosses a byte is laid out
+/// differently (cc65: `{unsigned a:9, b:9}` is 4 bytes, clang packed: 3); cc65
+/// has no `long long`. Kernels using them are not comparable.
 pub const NOT_COMPARABLE: [&str; 3] = ["double", "bit-fields wider than a byte", "long long"];
 
 fn dir() -> std::path::PathBuf {
@@ -43,7 +45,11 @@ fn dir() -> std::path::PathBuf {
 fn cc65() -> Vec<(String, u64)> {
     let dir = dir();
     std::fs::write(dir.join("probe.c"), PROBE).unwrap();
-    let out = Command::new("cc65").args(["-t", "sim6502", "-o", "probe-cc65.s", "probe.c"]).current_dir(&dir).output().unwrap();
+    let out = Command::new("cc65")
+        .args(["-t", "sim6502", "-o", "probe-cc65.s", "probe.c"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let asm = std::fs::read_to_string(dir.join("probe-cc65.s")).unwrap();
     let mut out = Vec::new();
@@ -62,7 +68,12 @@ fn cc65() -> Vec<(String, u64)> {
 fn clang(flags: &[&str]) -> Vec<(String, u64)> {
     let dir = dir();
     std::fs::write(dir.join("probe.c"), PROBE).unwrap();
-    let out = Command::new("clang").args(flags).args(["-S", "-emit-llvm", "-o", "-", "probe.c"]).current_dir(&dir).output().unwrap();
+    let out = Command::new("clang")
+        .args(flags)
+        .args(["-S", "-emit-llvm", "-o", "-", "probe.c"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|l| {
@@ -75,12 +86,19 @@ fn clang(flags: &[&str]) -> Vec<(String, u64)> {
 
 fn pointer_bytes() -> u64 {
     let layout = LAYOUT.lines().find_map(|l| l.strip_prefix("datalayout = ")).expect("a datalayout").trim_matches('"');
-    let bits: u64 = layout.split('-').find_map(|f| f.strip_prefix("p:")).and_then(|f| f.split(':').next()).unwrap().parse().unwrap();
+    let bits: u64 = layout
+        .split('-')
+        .find_map(|f| f.strip_prefix("p:"))
+        .and_then(|f| f.split(':').next())
+        .unwrap()
+        .parse()
+        .unwrap();
     bits / 8
 }
 
-/// cc65's table: the 6502 data model. Pointers, `size_t` and `ptrdiff_t` have the description's
-/// width; `char` is unsigned; structs are packed (alignment 1).
+/// cc65's table: the 6502 data model. Pointers, `size_t` and `ptrdiff_t` have
+/// the description's width; `char` is unsigned; structs are packed (alignment
+/// 1).
 #[test]
 #[ignore = "needs cc65"]
 fn cc65_is_the_6502_data_model() {
@@ -90,26 +108,45 @@ fn cc65_is_the_6502_data_model() {
         assert_eq!(get(name), pointer_bytes(), "{name}");
     }
     let want = [
-        ("char", 1), ("short", 2), ("int", 2), ("long", 4), ("float", 4), ("enum_small", 2), ("enum_big", 2),
-        ("b1", 1), ("s1", 3), ("s2", 5), ("s3", 3), ("char_const", 2), ("int_const", 4), ("long_const", 4), ("char_unsigned", 1),
+        ("char", 1),
+        ("short", 2),
+        ("int", 2),
+        ("long", 4),
+        ("float", 4),
+        ("enum_small", 2),
+        ("enum_big", 2),
+        ("b1", 1),
+        ("s1", 3),
+        ("s2", 5),
+        ("s3", 3),
+        ("char_const", 2),
+        ("int_const", 4),
+        ("long_const", 4),
+        ("char_unsigned", 1),
     ];
     for (name, value) in want {
         assert_eq!(get(name), value, "cc65 {name}");
     }
 }
 
-/// clang with the bench's flags gives cc65's table for everything but `NOT_COMPARABLE`.
+/// clang with the bench's flags gives cc65's table for everything but
+/// `NOT_COMPARABLE`.
 #[test]
 #[ignore = "needs clang and cc65"]
 fn clang_with_the_bench_flags_matches_cc65() {
     assert_eq!(clang(&CLANG_FLAGS), cc65());
 }
 
-/// The probe sees each flag: without it clang differs from cc65 (a dropped flag must fail the match).
+/// The probe sees each flag: without it clang differs from cc65 (a dropped flag
+/// must fail the match).
 #[test]
 #[ignore = "needs clang and cc65"]
 fn dropping_a_flag_breaks_the_match() {
     let cc65 = cc65();
     assert_ne!(clang(&["--target=msp430", "-funsigned-char"]), cc65, "-fpack-struct=1 changes nothing");
-    assert_ne!(clang(&["--target=msp430", "-fsigned-char", "-fpack-struct=1"]), cc65, "-funsigned-char changes nothing");
+    assert_ne!(
+        clang(&["--target=msp430", "-fsigned-char", "-fpack-struct=1"]),
+        cc65,
+        "-funsigned-char changes nothing"
+    );
 }

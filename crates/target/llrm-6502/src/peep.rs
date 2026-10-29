@@ -1,12 +1,15 @@
-//! Cleanup of a function's ca65 text: values tracked through A, X, Y and the cells, dead loads and
-//! stores removed by liveness, and the cells packed into zero-page registers.
+//! Cleanup of a function's ca65 text: values tracked through A, X, Y and the
+//! cells, dead loads and stores removed by liveness, and the cells packed into
+//! zero-page registers.
 //!
-//! DEVIATE: spike-local, on the text `select.rs` emits, standing in for register allocation, copy
-//! coalescing and the post-allocation clean-up (`MOSCopyOpt`). Reason: values live in memory cells
-//! until there is a shared allocator for A, X, Y and `rc2..`. Exit: the allocator.
+//! DEVIATE: spike-local, on the text `select.rs` emits, standing in for
+//! register allocation, copy coalescing and the post-allocation clean-up
+//! (`MOSCopyOpt`). Reason: values live in memory cells until there is a shared
+//! allocator for A, X, Y and `rc2..`. Exit: the allocator.
 //!
-//! A cell is a virtual byte (`v_f_3`, one half `w_f_4` or `w_f_4+1` of a word); `rcN` is a physical
-//! zero-page register. Anything the pass does not know makes it give the function back unchanged.
+//! A cell is a virtual byte (`v_f_3`, one half `w_f_4` or `w_f_4+1` of a word);
+//! `rcN` is a physical zero-page register. Anything the pass does not know
+//! makes it give the function back unchanged.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -130,8 +133,9 @@ fn loc(i: usize) -> String {
     ["A", "X", "Y", "Z", "C", "V"][i].to_owned()
 }
 
-/// `ctx` is what the call or return needs beyond the instruction: for `jsr` the argument registers
-/// written since the block began, for `rts` the result registers beyond A and X.
+/// `ctx` is what the call or return needs beyond the instruction: for `jsr` the
+/// argument registers written since the block began, for `rts` the result
+/// registers beyond A and X.
 fn effect(
     op: &str,
     arg: &str,
@@ -284,7 +288,10 @@ fn effect(
 }
 
 fn is_branch(op: &str) -> bool {
-    matches!(op, "beq" | "bne" | "bmi" | "bpl" | "bcc" | "bcs" | "bvc" | "bvs" | "bra" | "jmp")
+    matches!(
+        op,
+        "beq" | "bne" | "bmi" | "bpl" | "bcc" | "bcs" | "bvc" | "bvs" | "bra" | "jmp"
+    )
 }
 
 fn ends_block(op: &str) -> bool {
@@ -296,7 +303,10 @@ fn pure(
     op: &str,
     arg: &str,
 ) -> bool {
-    matches!(op, "lda" | "ldx" | "ldy" | "tax" | "tay" | "txa" | "tya" | "cmp" | "cpx" | "cpy") && !arg.contains('(')
+    matches!(
+        op,
+        "lda" | "ldx" | "ldy" | "tax" | "tay" | "txa" | "tya" | "cmp" | "cpx" | "cpy"
+    ) && !arg.contains('(')
 }
 
 /// One instruction's liveness, over the whole function.
@@ -306,8 +316,8 @@ struct Flow {
     live_out: Vec<HashSet<String>>,
 }
 
-/// Every instruction's effect. A call reads the argument registers (`rc2..rc7`) written since the
-/// block began or the last call.
+/// Every instruction's effect. A call reads the argument registers (`rc2..rc7`)
+/// written since the block began or the last call.
 fn effects(
     lines: &[Line],
     result_rcs: &[usize],
@@ -343,8 +353,11 @@ fn liveness(
     result_rcs: &[usize],
 ) -> Option<Flow> {
     let effects = effects(lines, result_rcs)?;
-    let labels: HashMap<&str, usize> =
-        lines.iter().enumerate().filter_map(|(i, l)| if let Line::Label(n) = l { Some((n.as_str(), i)) } else { None }).collect();
+    let labels: HashMap<&str, usize> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| if let Line::Label(n) = l { Some((n.as_str(), i)) } else { None })
+        .collect();
     // successors by instruction index
     let successors = |i: usize| -> Vec<usize> {
         let mut out = Vec::new();
@@ -390,8 +403,8 @@ fn liveness(
     Some(Flow { effects, live_out })
 }
 
-/// Dead loads and stores out. A store to a cell nothing reads, a load or transfer into registers
-/// nothing reads.
+/// Dead loads and stores out. A store to a cell nothing reads, a load or
+/// transfer into registers nothing reads.
 fn remove_dead(
     lines: &mut Vec<Line>,
     result_rcs: &[usize],
@@ -477,7 +490,8 @@ fn call_ahead(
     false
 }
 
-/// Redundant loads out or turned into transfers, redundant stores out. Per block: a label forgets.
+/// Redundant loads out or turned into transfers, redundant stores out. Per
+/// block: a label forgets.
 fn track_values(lines: &mut Vec<Line>) -> bool {
     let mut values = Values::default();
     let mut changed = false;
@@ -530,9 +544,15 @@ fn track_values(lines: &mut Vec<Line>) -> bool {
             values.flags = Some(v);
         };
         match op.as_str() {
-            "lda" if !matches!(p, Place::Memory | Place::Pointer(..)) => load(A, &mut values, &mut out, line, &mut changed),
-            "ldx" if !matches!(p, Place::Memory | Place::Pointer(..)) => load(X, &mut values, &mut out, line, &mut changed),
-            "ldy" if !matches!(p, Place::Memory | Place::Pointer(..)) => load(Y, &mut values, &mut out, line, &mut changed),
+            "lda" if !matches!(p, Place::Memory | Place::Pointer(..)) => {
+                load(A, &mut values, &mut out, line, &mut changed)
+            }
+            "ldx" if !matches!(p, Place::Memory | Place::Pointer(..)) => {
+                load(X, &mut values, &mut out, line, &mut changed)
+            }
+            "ldy" if !matches!(p, Place::Memory | Place::Pointer(..)) => {
+                load(Y, &mut values, &mut out, line, &mut changed)
+            }
             "lda" | "ldx" | "ldy" => {
                 let reg = match op.as_str() {
                     "lda" => A,
@@ -552,8 +572,9 @@ fn track_values(lines: &mut Vec<Line>) -> bool {
                 };
                 if let Place::Cell(c) = &p {
                     match values.regs[reg] {
-                        // a store to a physical register stays when a call follows in the block: it may be an
-                        // argument, which `jsr` reads
+                        // a store to a physical register stays when a call
+                        // follows in the block: it may be an argument,
+                        // which `jsr` reads
                         Some(v) if values.cells.get(c) == Some(&v) && (is_virtual(c) || !call_ahead(lines, here)) => {
                             changed = true;
                             continue;
@@ -587,8 +608,9 @@ fn track_values(lines: &mut Vec<Line>) -> bool {
                     out.push(line.clone());
                     continue;
                 };
-                // each register or cell the instruction writes holds a new value; N and Z describe
-                // the first of them, unless the instruction only compares
+                // each register or cell the instruction writes holds a new
+                // value; N and Z describe the first of them,
+                // unless the instruction only compares
                 let mut primary = None;
                 for d in &e.defs {
                     let fresh = values.fresh();
@@ -604,7 +626,11 @@ fn track_values(lines: &mut Vec<Line>) -> bool {
                     primary.get_or_insert(fresh);
                 }
                 if e.defs.iter().any(|d| d == "Z") {
-                    values.flags = if matches!(op.as_str(), "cmp" | "cpx" | "cpy" | "bit" | "plp" | "jsr") { None } else { primary };
+                    values.flags = if matches!(op.as_str(), "cmp" | "cpx" | "cpy" | "bit" | "plp" | "jsr") {
+                        None
+                    } else {
+                        primary
+                    };
                 }
                 if op == "jsr" {
                     values.cells.retain(|c, _| is_virtual(c));
@@ -627,8 +653,11 @@ fn assign(
 ) -> Option<()> {
     let flow = liveness(lines, result_rcs)?;
     // loop weight: an instruction between a label and a later branch back to it
-    let labels: HashMap<&str, usize> =
-        lines.iter().enumerate().filter_map(|(i, l)| if let Line::Label(n) = l { Some((n.as_str(), i)) } else { None }).collect();
+    let labels: HashMap<&str, usize> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| if let Line::Label(n) = l { Some((n.as_str(), i)) } else { None })
+        .collect();
     let mut depth = vec![0u32; lines.len()];
     for (i, line) in lines.iter().enumerate() {
         if let Line::Ins(op, arg) = line {
@@ -675,7 +704,17 @@ fn assign(
         let taken = |reg: &str, color: &HashMap<String, &str>| {
             edges.get(cell).is_some_and(|n| n.iter().any(|o| o == reg || color.get(o) == Some(&reg)))
         };
-        let preferred = copies.get(cell).into_iter().flatten().filter_map(|o| if physical(o).is_some() { POOL.iter().find(|r| **r == o) } else { color.get(o).and_then(|c| POOL.iter().find(|r| *r == c)) });
+        let preferred = copies
+            .get(cell)
+            .into_iter()
+            .flatten()
+            .filter_map(
+                |o| if physical(o).is_some() {
+                    POOL.iter().find(|r| **r == o)
+                } else {
+                    color.get(o).and_then(|c| POOL.iter().find(|r| *r == c))
+                },
+            );
         let choice = preferred.chain(POOL.iter()).find(|reg| !taken(reg, &color));
         if let Some(reg) = choice {
             color.insert(cell.clone(), reg);
@@ -715,8 +754,8 @@ fn rename(
     Some(format!("{reg}{tail}"))
 }
 
-/// `x + 1` and `x - 1` in place (`clc; lda c; adc #1; sta c`) as `inc c` / `dec c`, when A and the
-/// carry are not read afterwards.
+/// `x + 1` and `x - 1` in place (`clc; lda c; adc #1; sta c`) as `inc c` / `dec
+/// c`, when A and the carry are not read afterwards.
 fn in_place_steps(
     lines: &mut Vec<Line>,
     result_rcs: &[usize],
@@ -731,8 +770,18 @@ fn in_place_steps(
     for at in 0..lines.len().saturating_sub(3) {
         let window: Vec<_> = (0..4).map(|k| ins(&lines[at + k])).collect();
         let (carry, load, step, store) = match window[..] {
-            [Some((c @ ("clc" | "sec"), _)), Some(("lda", cell)), Some((a @ ("adc" | "sbc"), k)), Some(("sta", to))] => (c, cell, (a, k), to),
-            [Some(("lda", cell)), Some((c @ ("clc" | "sec"), _)), Some((a @ ("adc" | "sbc"), k)), Some(("sta", to))] => (c, cell, (a, k), to),
+            [
+                Some((c @ ("clc" | "sec"), _)),
+                Some(("lda", cell)),
+                Some((a @ ("adc" | "sbc"), k)),
+                Some(("sta", to)),
+            ] => (c, cell, (a, k), to),
+            [
+                Some(("lda", cell)),
+                Some((c @ ("clc" | "sec"), _)),
+                Some((a @ ("adc" | "sbc"), k)),
+                Some(("sta", to)),
+            ] => (c, cell, (a, k), to),
             _ => continue,
         };
         let (op, k) = step;
@@ -752,9 +801,10 @@ fn in_place_steps(
     Some(false)
 }
 
-/// A flag spill (`php; pla; sta f` after a compare, `lda f; pha; plp` before the branch) replaced by
-/// doing the compare again at the branch, when its two operands are not written in between and
-/// `f` is read nowhere else: three instructions and three more become two.
+/// A flag spill (`php; pla; sta f` after a compare, `lda f; pha; plp` before
+/// the branch) replaced by doing the compare again at the branch, when its two
+/// operands are not written in between and `f` is read nowhere else: three
+/// instructions and three more become two.
 fn redo_compares(lines: &mut Vec<Line>) -> bool {
     fn ins(l: &Line) -> Option<(&str, &str)> {
         match l {
@@ -763,31 +813,52 @@ fn redo_compares(lines: &mut Vec<Line>) -> bool {
         }
     }
     for save in 2..lines.len().saturating_sub(2) {
-        let (Some(("php", _)), Some(("pla", _)), Some(("sta", cell))) = (ins(&lines[save]), ins(&lines[save + 1]), ins(&lines[save + 2])) else { continue };
+        let (Some(("php", _)), Some(("pla", _)), Some(("sta", cell))) =
+            (ins(&lines[save]), ins(&lines[save + 1]), ins(&lines[save + 2]))
+        else {
+            continue;
+        };
         if !is_virtual(cell) {
             continue;
         }
-        let (Some(("lda", source)), Some(("cmp", other))) = (ins(&lines[save - 2]), ins(&lines[save - 1])) else { continue };
+        let (Some(("lda", source)), Some(("cmp", other))) = (ins(&lines[save - 2]), ins(&lines[save - 1])) else {
+            continue;
+        };
         let reads: Vec<usize> = (0..lines.len())
             .filter(|&i| matches!(ins(&lines[i]), Some((op, arg)) if arg == cell && op != "sta"))
             .collect();
         let stores = (0..lines.len()).filter(|&i| matches!(ins(&lines[i]), Some(("sta", arg)) if arg == cell)).count();
         let [load] = reads[..] else { continue };
-        if stores != 1 || load < save + 3 || !matches!((ins(&lines[load]), ins(&lines[load + 1]), ins(&lines[load + 2])), (Some(("lda", _)), Some(("pha", _)), Some(("plp", _)))) {
+        if stores != 1
+            || load < save + 3
+            || !matches!(
+                (ins(&lines[load]), ins(&lines[load + 1]), ins(&lines[load + 2])),
+                (Some(("lda", _)), Some(("pha", _)), Some(("plp", _)))
+            )
+        {
             continue;
         }
         // straight line between, and neither operand written
-        let watched: Vec<String> = [source, other].iter().filter_map(|a| match place(a) {
-            Some(Place::Cell(c)) => Some(c),
-            _ => None,
-        }).collect();
-        let clean = lines[save + 3..load].iter().all(|l| match l {
-            Line::Label(_) => false,
-            Line::Ins(op, arg) => {
-                !is_branch(op) && !matches!(op.as_str(), "jsr" | "rts") && effect(op, arg, &[]).is_some_and(|e| e.defs.iter().all(|d| !watched.contains(d)))
-            }
-            Line::Dir(_) => true,
-        });
+        let watched: Vec<String> = [source, other]
+            .iter()
+            .filter_map(|a| match place(a) {
+                Some(Place::Cell(c)) => Some(c),
+                _ => None,
+            })
+            .collect();
+        let clean = lines[save + 3..load]
+            .iter()
+            .all(
+                |l| match l {
+                    Line::Label(_) => false,
+                    Line::Ins(op, arg) => {
+                        !is_branch(op)
+                            && !matches!(op.as_str(), "jsr" | "rts")
+                            && effect(op, arg, &[]).is_some_and(|e| e.defs.iter().all(|d| !watched.contains(d)))
+                    }
+                    Line::Dir(_) => true,
+                },
+            );
         if !clean {
             continue;
         }
@@ -799,8 +870,9 @@ fn redo_compares(lines: &mut Vec<Line>) -> bool {
     false
 }
 
-/// The function text `body` (labels and instructions) cleaned up; `result_rcs` are the registers
-/// beyond A and X that carry the result. `None` if it holds anything this pass does not model.
+/// The function text `body` (labels and instructions) cleaned up; `result_rcs`
+/// are the registers beyond A and X that carry the result. `None` if it holds
+/// anything this pass does not model.
 pub fn optimize(
     body: &str,
     result_rcs: &[usize],

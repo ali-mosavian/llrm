@@ -1,6 +1,7 @@
-//! The 6502 lowering of conditions on hand-built DAGs. Expected nodes are worked out by hand from
-//! the flags a `CMP a, b` leaves: Z set when equal, C set when `a >= b` unsigned (SBC convention:
-//! no borrow), N the top bit of `a - b`.
+//! The 6502 lowering of conditions on hand-built DAGs. Expected nodes are
+//! worked out by hand from the flags a `CMP a, b` leaves: Z set when equal, C
+//! set when `a >= b` unsigned (SBC convention: no borrow), N the top bit of `a
+//! - b`.
 
 use llrm_6502::dagisel::lowering::{MosLowering, cond, mosisd, target_lowering};
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
@@ -37,7 +38,8 @@ fn branch_on_not_equal_is_bne_on_cmp() {
     assert_eq!((dag.opcode(cmp), dag.operand(cmp, 0), dag.operand(cmp, 1)), (mosisd::CMP, a, b));
 }
 
-/// `a <u b` is "no carry" (CC) on `cmp a, b`; `a >u b` is `b <u a`: the same code, operands swapped.
+/// `a <u b` is "no carry" (CC) on `cmp a, b`; `a >u b` is `b <u a`: the same
+/// code, operands swapped.
 #[test]
 fn unsigned_less_is_carry_clear_and_greater_swaps_the_operands() {
     for (cc, swapped) in [(CondCode::SetULt, false), (CondCode::SetUGt, true)] {
@@ -55,7 +57,8 @@ fn unsigned_less_is_carry_clear_and_greater_swaps_the_operands() {
     }
 }
 
-/// A signed compare against zero is the sign of the byte: `a <s 0` is "minus" (MI) on `cmp a, 0`.
+/// A signed compare against zero is the sign of the byte: `a <s 0` is "minus"
+/// (MI) on `cmp a, 0`.
 #[test]
 fn signed_less_than_zero_is_minus() {
     let mut dag = SelectionDAG::new(DagConfig::default());
@@ -71,8 +74,8 @@ fn signed_less_than_zero_is_minus() {
     assert_eq!((dag.operand(cmp, 0), dag.is_null_constant(dag.operand(cmp, 1))), (a, true));
 }
 
-/// Any other signed compare flips both sign bits and compares unsigned: `a <s 5` is
-/// `(a ^ 0x80) <u (5 ^ 0x80)`, the constant folded to 0x85.
+/// Any other signed compare flips both sign bits and compares unsigned: `a <s
+/// 5` is `(a ^ 0x80) <u (5 ^ 0x80)`, the constant folded to 0x85.
 #[test]
 fn signed_less_than_a_constant_flips_the_sign_bits() {
     let mut dag = SelectionDAG::new(DagConfig::default());
@@ -90,7 +93,8 @@ fn signed_less_than_a_constant_flips_the_sign_bits() {
     assert_eq!(dag.constant(dag.operand(cmp, 1)), Some(0x85));
 }
 
-/// `select (setuge a, b), x, y` is `CMOV y, x, CS, (cmp a, b)`: the false value first.
+/// `select (setuge a, b), x, y` is `CMOV y, x, CS, (cmp a, b)`: the false value
+/// first.
 #[test]
 fn select_on_unsigned_greater_equal_is_cmov_on_carry_set() {
     let mut dag = SelectionDAG::new(DagConfig::default());
@@ -111,7 +115,8 @@ fn words(dag: &mut SelectionDAG) -> [SDValue; 2] {
     [1, 2].map(|n| dag.get_register(EVT::I16, n))
 }
 
-/// A word `<u` compares like a byte: C clear after `cmp a, b`, on the word operands.
+/// A word `<u` compares like a byte: C clear after `cmp a, b`, on the word
+/// operands.
 #[test]
 fn a_word_unsigned_less_is_carry_clear_on_a_word_cmp() {
     let mut dag = SelectionDAG::new(DagConfig::default());
@@ -126,7 +131,8 @@ fn a_word_unsigned_less_is_carry_clear_on_a_word_cmp() {
     assert_eq!((dag.opcode(cmp), dag.operand(cmp, 0), dag.operand(cmp, 1)), (mosisd::CMP, a, b));
 }
 
-/// `cmp`'s Z covers only the high byte of a word, so a word `==` is `CMPZ`, which compares both.
+/// `cmp`'s Z covers only the high byte of a word, so a word `==` is `CMPZ`,
+/// which compares both.
 #[test]
 fn a_word_equality_is_cmpz() {
     let mut dag = SelectionDAG::new(DagConfig::default());
@@ -140,7 +146,8 @@ fn a_word_equality_is_cmpz() {
     assert_eq!(dag.opcode(dag.operand(root, 1)), mosisd::CMPZ);
 }
 
-/// A signed word compare against a constant flips bit 15: `a <s 5` is `(a ^ 0x8000) <u 0x8005`.
+/// A signed word compare against a constant flips bit 15: `a <s 5` is `(a ^
+/// 0x8000) <u 0x8005`.
 #[test]
 fn a_signed_word_compare_flips_bit_15() {
     let mut dag = SelectionDAG::new(DagConfig::default());
@@ -158,8 +165,9 @@ fn a_signed_word_compare_flips_bit_15() {
     assert_eq!(dag.constant(dag.operand(cmp, 1)), Some(0x8005));
 }
 
-/// Shifts stay shifts for the selector, by a constant (an instruction per bit) or by a register (a
-/// runtime call where emitted). Before the pseudos the variable one was refused by the legalizer.
+/// Shifts stay shifts for the selector, by a constant (an instruction per bit)
+/// or by a register (a runtime call where emitted). Before the pseudos the
+/// variable one was refused by the legalizer.
 #[test]
 fn constant_and_variable_shifts_are_kept() {
     for by_register in [false, true] {
