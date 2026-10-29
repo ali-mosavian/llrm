@@ -235,6 +235,20 @@ fn translate_cc(
 ) -> (u128, SDValue, SDValue) {
     use CondCode::*;
     let against_zero = dag.is_null_constant(op1);
+    // `x > C` is `x >= C + 1`: the constant stays the right-hand side, an immediate of the compare
+    // (AArch64's `getAArch64Cmp` adjusts the immediate the same way)
+    let width = dag.value_type(op0).size_in_bits();
+    if let (SetUGt | SetULe | SetGt | SetLe, Some(c)) = (cc, dag.constant(op1)) {
+        let top = match cc {
+            SetUGt | SetULe => (1u128 << width) - 1,
+            _ => (1u128 << (width - 1)) - 1,
+        };
+        if c != top {
+            let next = dag.get_constant((c + 1) & ((1u128 << width) - 1), dag.value_type(op0));
+            let wider = if matches!(cc, SetUGt | SetGt) { if cc == SetUGt { SetUGe } else { SetGe } } else if cc == SetULe { SetULt } else { SetLt };
+            return translate_cc(dag, wider, op0, next);
+        }
+    }
     match cc {
         SetEq => (cond::EQ, op0, op1),
         SetNe => (cond::NE, op0, op1),
