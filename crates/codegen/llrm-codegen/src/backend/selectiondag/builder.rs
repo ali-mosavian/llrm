@@ -1951,6 +1951,14 @@ impl Builder<'_> {
         self.dag.lines[at] = crate::backend::isel::dbg_line(self.module, self.function, inst).filter(|at| at.line != 0);
         self.dag.inst_order.push((inst, self.dag.cur_order));
         if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
+            // a compare settled with its call's flags is read in other blocks
+            // through its register all the same
+            if self.prelowered.contains(&inst)
+                && let Some(result) = self.function.instruction(inst).result
+                && let Some(reg) = self.info.value_regs.get(&result).copied()
+            {
+                self.copy_value_to_register(Operand::Value(result), reg, ISD::AnyExtend)?;
+            }
             return Ok(());
         }
         let instruction = self.function.instruction(inst).clone();

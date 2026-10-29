@@ -25,9 +25,7 @@ def found(tmp_path_factory):
     work = tmp_path_factory.mktemp("gfxscan")
     include = dosbatch.c_include(qb32.TARGET, work)
     obj, stub, exe = work / "s32.obj", work / "dirty.obj", work / "s32.exe"
-    dosbatch._host(
-        [str(dosbatch.BIN / "llrm-c"), str(SOURCES / "scan_ecx.c"), dosbatch.m_flag(qb32.TARGET), "-Os", "-I", str(include), "-I", str(qbruntime.RUNTIME), "-I", str(qb32.PLATFORM), *qbruntime.device_includes(qb32.PLATFORM), "-o", str(obj)]
-    )
+    dosbatch._host(*dosbatch.c_compile(SOURCES / "scan_ecx.c", obj, qb32.TARGET, "-Os", include, [], ["-I", str(qbruntime.RUNTIME), "-I", str(qb32.PLATFORM), *qbruntime.device_includes(qb32.PLATFORM)]))
     dosbatch.assemble(SOURCES / "scan_ecx.asm", stub)
     runtime = qb32.build(work / "rt32")
     loaders = dosbatch.link_target(qb32.TARGET, obj, exe, work, objects_after=(stub, *(runtime[name] for name in NEEDED)))
