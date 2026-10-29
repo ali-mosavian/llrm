@@ -564,8 +564,50 @@ fn native(dir: &Path, source: &str) -> Option<i32> {
     );
     std::fs::write(dir.join("n.c"), program).ok()?;
     tool(dir, "gcc", &["-O0", "-fwrapv", "-fpack-struct=1", "-w", "-o", "n.bin", "n.c"]).ok()?;
-    let out = Command::new(dir.join("n.bin")).output().ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+    host_run(&dir.join("n.bin"), HOST_SECONDS)?.trim().parse().ok()
+}
+
+/// Wall-clock limit for a host-built program.
+const HOST_SECONDS: u32 = 20;
+
+/// What a host-built `bin` prints, or `None` when it fails or outlives `seconds`. It runs in its own
+/// process group, killed on every way out, under a CPU limit (`ulimit -t`) that holds even if this
+/// harness is gone: bare `Command::output` left 14 `n.bin` loops at 97% CPU for an hour after their
+/// parents died. (uutils `timeout -s KILL` never fired, so it is not the guard.)
+fn host_run(bin: &Path, seconds: u32) -> Option<String> {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    struct Group(u32);
+    impl Drop for Group {
+        fn drop(&mut self) {
+            let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", self.0)]).stderr(Stdio::null()).status();
+        }
+    }
+
+    let mut child = Command::new("sh")
+        .args(["-c", &format!("ulimit -t {seconds}; exec \"$0\"")])
+        .arg(bin)
+        .process_group(0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let _group = Group(child.id());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds.into());
+    let status = loop {
+        if let Some(status) = child.try_wait().ok()? {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let mut text = String::new();
+    child.stdout.take()?.read_to_string(&mut text).ok()?;
+    status.success().then_some(text)
 }
 
 /// Programs on which cc65 and ours agree and the host gcc does not.
@@ -754,6 +796,26 @@ fn a_reachable_routine_gets_the_macros_it_uses() {
     let runtime = reachable_runtime("  jsr __umodsi3\n");
     assert!(runtime.contains(".macro cmp_sub_32"), "{runtime}");
     assert!(runtime.contains("__umodsi3:"));
+}
+
+/// A host program that loops forever is killed at the limit and leaves no process behind. It was run
+/// with no limit, and the loops of differential seeds piled up at 97% CPU for an hour.
+#[test]
+fn a_host_program_that_never_exits_is_killed() {
+    let dir = work(u64::MAX - 3);
+    std::fs::write(dir.join("spin.c"), "int main(void) { for (;;) ; }\n").unwrap();
+    tool(&dir, "gcc", &["-O0", "-o", "spin.bin", "spin.c"]).expect("builds");
+    let bin = dir.join("spin.bin").canonicalize().unwrap();
+    let start = std::time::Instant::now();
+    assert_eq!(host_run(&bin, 1), None);
+    assert!(start.elapsed().as_secs() < 10, "took {:?}", start.elapsed());
+    let alive = std::fs::read_dir("/proc")
+        .unwrap()
+        .flatten()
+        .filter(|entry| std::fs::read_link(entry.path().join("exe")).is_ok_and(|exe| exe == bin))
+        .count();
+    assert_eq!(alive, 0, "{alive} copies of {} still running", bin.display());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A program that runs into the cycle cap is `None`, not an exit code of 126.
