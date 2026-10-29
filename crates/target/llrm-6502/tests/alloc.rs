@@ -1565,7 +1565,7 @@ define i8 @slt(i8 %a, i8 %e) {
   ret i8 %h
 }";
     let run = |name: &str, a: u16, e: u16| {
-        let text = compile(ir, name);
+        let text = compile_within_ten_seconds(ir, name);
         let setup = set("rc2", a) + &set("rc3", e);
         common::run_with(&format!("alloc-bits-{name}-{a}-{e}"), &format!("{setup}  jsr {name}\n"), &text)
     };
@@ -1590,10 +1590,22 @@ fn a_select_of_bits_as_a_condition_compiles_and_runs() {
   %r = select i1 %s, i8 3, i8 4
   ret i8 %r
 }";
-    let text = compile(ir, "bitsel");
+    let text = compile_within_ten_seconds(ir, "bitsel");
     for (a, b, c) in [(0u16, 0u16, 0u16), (0, 0, 1), (1, 0, 0), (1, 1, 1), (1, 1, 0), (0, 1, 1)] {
         let setup = set("rc2", a) + &set("rc3", b) + &set("rc4", c);
         let want = if (if a & 1 == 1 { b == 0 } else { c & 1 == 1 }) { 3 } else { 4 };
         assert_eq!(common::run_with(&format!("alloc-bitsel-{a}{b}{c}"), &format!("{setup}  jsr bitsel\n"), &text), want, "{a} {b} {c}");
     }
+}
+
+/// Compile on a thread and fail after ten seconds: a scheduler or allocator loop with no progress
+/// bound shows as a failure here instead of a stuck run.
+fn compile_within_ten_seconds(
+    ir: &str,
+    name: &str,
+) -> String {
+    let (ir, name) = (ir.to_owned(), name.to_owned());
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || send.send(compile(&ir, &name)).ok());
+    receive.recv_timeout(std::time::Duration::from_secs(10)).expect("compiles within ten seconds")
 }
