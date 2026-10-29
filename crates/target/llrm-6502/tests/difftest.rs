@@ -630,3 +630,13 @@ fn random_programs_agree_with_cc65() {
     println!("{count} programs from seed {first}: {agree} agree, {bad} mismatch, {cc65_bugs} cc65 bugs, {skipped} skipped");
     assert_eq!(bad, 0, "miscompiles; programs kept in target/tmp/difftest/<seed>");
 }
+
+/// A macro the runtime defines after one routine and another uses was left out when only the other
+/// was reached: `__umodsi3` reached `cmp_sub_32` and ca65 stopped at `':' expected` (differential
+/// seeds 14, 24, 33 were rejected for it).
+#[test]
+fn a_reachable_routine_gets_the_macros_it_uses() {
+    let runtime = reachable_runtime("  jsr __umodsi3\n");
+    assert!(runtime.contains(".macro cmp_sub_32"), "{runtime}");
+    assert!(runtime.contains("__umodsi3:"));
+}
