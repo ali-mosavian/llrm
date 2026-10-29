@@ -163,6 +163,15 @@ pub fn branch_fold(function: &mut MFunction) -> bool {
     llrm_spike_mf::branch_fold::<M68kRegisters>(function)
 }
 
+/// `MachineBlockPlacement` over the m68k function.
+pub fn place_blocks(
+    function: &mut MFunction,
+    odds: &llrm_spike_mf::placement::Odds,
+    size: bool,
+) -> bool {
+    llrm_spike_mf::placement::place_blocks::<_, M68kRegisters>(function, odds, size)
+}
+
 pub fn remove_identity_copies(
     function: &mut MFunction,
     assignment: &Assignment,
