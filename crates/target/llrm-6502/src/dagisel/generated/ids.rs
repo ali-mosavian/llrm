@@ -46,17 +46,23 @@ pub mod opcode {
     pub const OR8: u16 = 363;
     pub const RET: u16 = 364;
     pub const SETCC8: u16 = 365;
-    pub const STP16: u16 = 366;
-    pub const STP8: u16 = 367;
-    pub const STZP: u16 = 368;
-    pub const SUB16: u16 = 369;
-    pub const SUB8: u16 = 370;
-    pub const SUBO16: u16 = 371;
-    pub const SUBO8: u16 = 372;
-    pub const SUBOC16: u16 = 373;
-    pub const SUBOC8: u16 = 374;
-    pub const XOR16: u16 = 375;
-    pub const XOR8: u16 = 376;
+    pub const SHL16: u16 = 366;
+    pub const SHL8: u16 = 367;
+    pub const SRA16: u16 = 368;
+    pub const SRA8: u16 = 369;
+    pub const SRL16: u16 = 370;
+    pub const SRL8: u16 = 371;
+    pub const STP16: u16 = 372;
+    pub const STP8: u16 = 373;
+    pub const STZP: u16 = 374;
+    pub const SUB16: u16 = 375;
+    pub const SUB8: u16 = 376;
+    pub const SUBO16: u16 = 377;
+    pub const SUBO8: u16 = 378;
+    pub const SUBOC16: u16 = 379;
+    pub const SUBOC8: u16 = 380;
+    pub const XOR16: u16 = 381;
+    pub const XOR8: u16 = 382;
 }
 
 pub mod reg {

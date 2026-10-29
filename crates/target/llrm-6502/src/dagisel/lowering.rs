@@ -66,7 +66,9 @@ pub fn target_lowering() -> TargetLowering {
         }
     };
     set(&[Add, Sub, And, Or, Xor, UAddO, USubO, UAddOCarry, USubOCarry], Action::Legal);
-    set(&[Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra], Action::LibCall);
+    set(&[Mul, SDiv, UDiv, SRem, URem], Action::LibCall);
+    // A constant shift is an instruction; a variable one is a library call.
+    set(&[Shl, Srl, Sra], Action::Custom);
     set(&[UDivRem, SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], Action::Expand);
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
@@ -88,12 +90,24 @@ impl Hooks for MosLowering {
         node: SDValue,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
+            ISD::Shl | ISD::Srl | ISD::Sra => lower_shift(dag, node),
             ISD::SetCC => lower_setcc(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             _ => None,
         }
     }
+}
+
+/// A shift by a constant of 1..width stays as it is, for the shift instructions; any other shift is
+/// not lowered here (a library call, which the legalizer does not convert yet).
+fn lower_shift(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let bits = dag.value_type(node).size_in_bits() as i64;
+    let amount = dag.constant(dag.operand(node, 1))?;
+    ((1..bits).contains(&(amount as i64)) && dag.value_type(dag.operand(node, 1)) == EVT::I8).then_some(node)
 }
 
 fn cc_operand(

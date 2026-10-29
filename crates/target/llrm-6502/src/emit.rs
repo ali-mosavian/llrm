@@ -214,6 +214,30 @@ pub fn expand(
             let ((lo, _), off) = (word(&o[0])?, imm(&o[1])?);
             writeln!(out, "  ldy #{off}\n  lda #0\n  sta ({lo}),y").unwrap();
         }
+        // A shift by a constant: copy to the destination, then one step per bit in place.
+        op::SHL8 | op::SRL8 | op::SRA8 => {
+            let (d, a, k) = (reg(&o[0])?, reg(&o[1])?, imm(&o[2])?);
+            copy_byte(&mut out, d, a);
+            for _ in 0..k {
+                match inst.opcode {
+                    op::SHL8 => writeln!(out, "  asl {d}").unwrap(),
+                    op::SRL8 => writeln!(out, "  lsr {d}").unwrap(),
+                    _ => writeln!(out, "  lda {d}\n  cmp #$80\n  ror {d}").unwrap(),
+                }
+            }
+        }
+        op::SHL16 | op::SRL16 | op::SRA16 => {
+            let ((dl, dh), (al, ah), k) = (word(&o[0])?, word(&o[1])?, imm(&o[2])?);
+            copy_byte(&mut out, &dl, &al);
+            copy_byte(&mut out, &dh, &ah);
+            for _ in 0..k {
+                match inst.opcode {
+                    op::SHL16 => writeln!(out, "  asl {dl}\n  rol {dh}").unwrap(),
+                    op::SRL16 => writeln!(out, "  lsr {dh}\n  ror {dl}").unwrap(),
+                    _ => writeln!(out, "  lda {dh}\n  cmp #$80\n  ror {dh}\n  ror {dl}").unwrap(),
+                }
+            }
+        }
         op::COPY8 => copy_byte(&mut out, reg(&o[0])?, reg(&o[1])?),
         op::COPY16 => {
             let ((dl, dh), (sl, sh)) = (word(&o[0])?, word(&o[1])?);

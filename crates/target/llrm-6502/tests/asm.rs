@@ -240,3 +240,44 @@ fn word_memory_is_little_endian_through_a_pointer_and_offset() {
     assert_eq!(run("mem-word-hi", &[main_returning(body.clone(), "rc7")]), 0xBE);
     assert_eq!(run("mem-word-lo", &[main_returning(body, "rc6")]), 0xEF);
 }
+
+fn shifted(
+    opcode: u16,
+    value: i64,
+    k: i64,
+    wide: bool,
+) -> Body {
+    if wide {
+        vec![
+            i(op::LDI16, vec![reg("rs1"), imm(value)]),
+            i(opcode, vec![reg("rs2"), reg("rs1"), imm(k)]),
+        ]
+    } else {
+        vec![i(op::LDI8, vec![reg("rc2"), imm(value)]), i(opcode, vec![reg("rc3"), reg("rc2"), imm(k)])]
+    }
+}
+
+/// 0x81 << 1 = 0x02 (the top bit falls off); 0x05 << 3 = 0x28; 0x81 >>u 1 = 0x40; 0x81 >>s 1 = 0xC0
+/// (the sign is shifted in).
+#[test]
+fn byte_shifts_by_constants() {
+    let r = |name: &str, opcode, value, k| run(name, &[main_returning(shifted(opcode, value, k, false), "rc3")]);
+    assert_eq!(r("shl8-1", op::SHL8, 0x81, 1), 0x02);
+    assert_eq!(r("shl8-3", op::SHL8, 0x05, 3), 0x28);
+    assert_eq!(r("srl8", op::SRL8, 0x81, 1), 0x40);
+    assert_eq!(r("sra8", op::SRA8, 0x81, 1), 0xC0);
+}
+
+/// 0x1234 << 4 = 0x2340 (the bits cross the byte boundary); 0x8002 >>u 1 = 0x4001; 0x8001 >>s 1 =
+/// 0xC000.
+#[test]
+fn word_shifts_by_constants() {
+    let hi_lo = |name: &str, opcode, value, k| {
+        let hi = run(&format!("{name}-hi"), &[main_returning(shifted(opcode, value, k, true), "rc5")]);
+        let lo = run(&format!("{name}-lo"), &[main_returning(shifted(opcode, value, k, true), "rc4")]);
+        (hi, lo)
+    };
+    assert_eq!(hi_lo("shl16", op::SHL16, 0x1234, 4), (0x23, 0x40));
+    assert_eq!(hi_lo("srl16", op::SRL16, 0x8002, 1), (0x40, 0x01));
+    assert_eq!(hi_lo("sra16", op::SRA16, 0x8001, 1), (0xC0, 0x00));
+}

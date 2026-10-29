@@ -93,6 +93,17 @@ multiclass Arith<string n, RegisterClass rc, ValueType vt> {
 defm "" : Arith<"8", Imag8, i8>;
 defm "" : Arith<"16", Imag16, i16>;
 
+// Shifts by a constant: one ASL/LSR/ROR step per bit (variable shifts and large counts are library calls).
+multiclass Shift<string n, RegisterClass rc, ValueType vt> {
+  let Defs = [P] in {
+    def SHL#n : MOSInst<(outs rc:$d), (ins rc:$a, i8imm:$k), "shl $d, $a, $k", [(set vt:$d, (shl vt:$a, (i8 imm:$k)))]>;
+    def SRL#n : MOSInst<(outs rc:$d), (ins rc:$a, i8imm:$k), "srl $d, $a, $k", [(set vt:$d, (srl vt:$a, (i8 imm:$k)))]>;
+    def SRA#n : MOSInst<(outs rc:$d), (ins rc:$a, i8imm:$k), "sra $d, $a, $k", [(set vt:$d, (sra vt:$a, (i8 imm:$k)))]>;
+  }
+}
+defm "" : Shift<"8", Imag8, i8>;
+defm "" : Shift<"16", Imag16, i16>;
+
 def LDI8 : MOSInst<(outs Imag8:$d), (ins i8imm:$v), "ldi $d, $v", [(set i8:$d, imm:$v)]>;
 def LDI16 : MOSInst<(outs Imag16:$d), (ins i16imm:$v), "ldi $d, $v", [(set i16:$d, imm:$v)]>;
 

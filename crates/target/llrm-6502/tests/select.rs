@@ -78,6 +78,19 @@ macro_rules! cpu_tests {
                 assert_eq!(dag.nodes[node.ops[1].node as usize].constant, Some(3));
             }
 
+            /// `x << 3` on a byte is one shift instruction with the count 3.
+            #[test]
+            fn a_byte_shift_by_3_is_shl8() {
+                let mut dag = TestDag::new();
+                let x = dag.input(1, mvt::i8);
+                let three = dag.make_constant(3, mvt::i8);
+                let shl = dag.node(isd::SHL, &[mvt::i8], &[x, three]);
+
+                assert_eq!(select(&mut dag, shl), Outcome::Selected);
+
+                assert_eq!(machine_name(dag.nodes[shl as usize].machine.expect("not selected")), "SHL8");
+            }
+
             /// A node id no LLVM header defines (`MOSISD::RET_GLUE`, from `own_ids.txt`) reaches
             /// the table: it selects `RET`.
             #[test]

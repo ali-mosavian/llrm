@@ -2,7 +2,7 @@
 //! out by hand from `machines/calling.toml`: a byte takes the first free byte from rc2, a word the
 //! first free pair, a byte result leaves in `a`, a word in `a:x`.
 
-use llrm_6502::dagisel::call::{CALL, In, Out, Refused, RET_GLUE, lower_call, lower_formal_arguments, lower_return};
+use llrm_6502::dagisel::call::{CALL, In, Out, RET_GLUE, lower_call, lower_formal_arguments, lower_return};
 use llrm_6502::reg;
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -45,16 +45,45 @@ fn a_call_passes_a_byte_in_rc2_and_a_word_in_rs2() {
     assert_eq!((phys(&dag, dag.operand(call, 2)), phys(&dag, dag.operand(call, 3))), (reg::RC2, reg::RS2));
 }
 
-/// Three words fit rc2..rc7; the fourth fits no register and is refused until the static frame
-/// exists.
+/// Three words fit rc2..rc7; the fourth fits no register and is stored on the soft stack at `rs0 +
+/// 0` inside a call sequence of two bytes.
 #[test]
-fn a_fourth_word_is_refused() {
+fn a_fourth_word_is_stored_on_the_soft_stack() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let words: Vec<Out> = (1..=4).map(|n| Out { value: dag.get_register(EVT::I16, n) }).collect();
     let callee = dag.get_global_address(EVT::I16, 7, 0);
 
-    assert_eq!(lower_call(&mut dag, entry, callee, &words, &[]).unwrap_err(), Refused::StackArgument(3));
+    let (chain, _) = lower_call(&mut dag, entry, callee, &words, &[]).unwrap();
+
+    assert_eq!((dag.opcode(chain), dag.constant(dag.operand(chain, 1))), (ISD::CallSeqEnd, Some(2)));
+    let stores: Vec<SDValue> =
+        (0..dag.node_count() as u32).map(|node| SDValue { node, res: 0 }).filter(|&v| dag.opcode(v) == ISD::Store).collect();
+    assert_eq!(stores.len(), 1);
+    assert_eq!(dag.operand(stores[0], 1), words[3].value);
+    // the address is `rs0` (plus the offset 0, which may fold away)
+    let address = dag.operand(stores[0], 2);
+    let base = if dag.opcode(address) == ISD::Add { dag.operand(address, 0) } else { address };
+    assert_eq!((dag.opcode(base), phys(&dag, dag.operand(base, 1))), (ISD::CopyFromReg, reg::RS0));
+}
+
+/// A word that reaches the callee on the stack is loaded from a fixed object of two bytes at the
+/// offset the convention gave it.
+#[test]
+fn a_fourth_formal_word_is_loaded_from_a_fixed_object() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let mut created = Vec::new();
+    let mut fixed = |size: u32, offset: i64, immutable: bool| {
+        created.push((size, offset, immutable));
+        created.len() as i32
+    };
+
+    let args = lower_formal_arguments(&mut dag, entry, &[In { vt: EVT::I16 }; 4], &mut fixed).unwrap();
+
+    assert_eq!(created, [(2, 0, true)]);
+    assert_eq!((dag.opcode(args[3]), dag.value_type(args[3])), (ISD::Load, EVT::I16));
+    assert_eq!(dag.opcode(args[0]), ISD::CopyFromReg);
 }
 
 /// `g(i8, i16)` reads rc2 and rs2.
@@ -63,7 +92,7 @@ fn formal_arguments_are_read_from_rc2_and_rs2() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
 
-    let args = lower_formal_arguments(&mut dag, entry, &[In { vt: EVT::I8 }, In { vt: EVT::I16 }]).unwrap();
+    let args = lower_formal_arguments(&mut dag, entry, &[In { vt: EVT::I8 }, In { vt: EVT::I16 }], &mut |_, _, _| 0).unwrap();
 
     assert_eq!((phys(&dag, dag.operand(args[0], 1)), phys(&dag, dag.operand(args[1], 1))), (reg::RC2, reg::RS2));
     assert_eq!((dag.value_type(args[0]), dag.value_type(args[1])), (EVT::I8, EVT::I16));

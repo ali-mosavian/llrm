@@ -39,13 +39,19 @@ fn an_i32_add_is_a_word_uaddo_and_a_word_uaddo_carry() {
     assert_eq!((carry.node, carry.res), (lo.node, 1));
 }
 
-/// No multiply, divide or variable shift exists on the 6502: a library call, at every width.
+/// No multiply or divide exists on the 6502: a library call, at every width. A shift is custom: an
+/// instruction for a constant count, refused otherwise.
 #[test]
-fn multiply_divide_and_shifts_are_library_calls() {
+fn multiply_and_divide_are_library_calls_and_shifts_are_custom() {
     let tli = target_lowering();
-    for op in [ISD::Mul, ISD::SDiv, ISD::UDiv, ISD::SRem, ISD::URem, ISD::Shl, ISD::Srl, ISD::Sra] {
-        for vt in [EVT::I8, EVT::I16] {
-            assert_eq!(tli.operation_action(op, vt), Action::LibCall, "{op:?} {vt:?}");
+    for (ops, action) in [
+        (&[ISD::Mul, ISD::SDiv, ISD::UDiv, ISD::SRem, ISD::URem][..], Action::LibCall),
+        (&[ISD::Shl, ISD::Srl, ISD::Sra][..], Action::Custom),
+    ] {
+        for &op in ops {
+            for vt in [EVT::I8, EVT::I16] {
+                assert_eq!(tli.operation_action(op, vt), action, "{op:?} {vt:?}");
+            }
         }
     }
 }
