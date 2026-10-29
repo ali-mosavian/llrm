@@ -20,13 +20,15 @@
 //!    `LLRM_NO_SCEV_CONGRUENT`): header phis SCEV proves equal, a narrow one a
 //!    truncation of a wide one included, are one, and `dead` removes the rest.
 //! 3. `canonexit::canonicalized` (`canonicalizeExitCondition`;
-//!    `LLRM_NO_SCEV_CANONEXIT`), `exitne::strengthened` (beyond the pin;
-//!    `LLRM_NO_SCEV_EXITNE`), `exitopt::optimized` (`optimizeLoopExits`;
+//!    `LLRM_NO_SCEV_CANONEXIT`), `exitopt::optimized` (`optimizeLoopExits`;
 //!    `LLRM_NO_SCEV_EXITOPT`), `exitpredicate::predicated`
 //!    (`predicateLoopExits`; `LLRM_NO_SCEV_PREDICATE`), and the exits their
 //!    counts decide are folded by those.
 //! 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
 //!    exit tests a counter against the value it has at the last trip.
+//!    `exitne::strengthened` (beyond the pin; `LLRM_NO_SCEV_EXITNE`) then makes
+//!    `!=` the strict compare of a unit-stride counter that never passes its
+//!    bound, which LFTR left.
 //! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
 //!
 //! # Example
@@ -278,8 +280,6 @@ impl FunctionPass for IndVars {
                 crate::canonexit::canonicalized_in(&mut session, unit.context, unit.layout, unit.function, &outer);
             settled(&mut session, &mut mark, unit, &outer, changed, false)
         };
-        let strengthened = crate::exitne::enabled()
-            && crate::exitne::strengthened_in(&mut session, unit.context, unit.layout, unit.function, &outer);
         let optimized = crate::exitopt::enabled() && {
             let changed = crate::exitopt::optimized_in(
                 &mut session,
@@ -305,6 +305,10 @@ impl FunctionPass for IndVars {
         let tested = self.lftr
             && crate::lftr::enabled()
             && crate::lftr::replaced_in(&mut session, unit.context, unit.layout, unit.function, unit.declared, &outer);
+        // After LFTR, which owns the exits it can rewrite against a trip count.
+        settled(&mut session, &mut mark, unit, &outer, tested, false);
+        let strengthened = crate::exitne::enabled()
+            && crate::exitne::strengthened_in(&mut session, unit.context, unit.layout, unit.function, &outer);
         let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
         let loops = cfg::natural(unit.function, &found);
         let sunk = crate::exitsink::sunk(unit.function, &loops);
