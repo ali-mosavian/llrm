@@ -2,6 +2,8 @@
 //! registers live in zero page.
 
 pub const C64: &str = include_str!("machines/c64.toml");
+/// The ld65 memory layout of a C64 PRG.
+pub const C64_LD65: &str = include_str!("machines/c64.cfg");
 pub const SIM65: &str = include_str!("machines/sim65.toml");
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,4 +27,13 @@ impl Platform {
             imag_base: u8::try_from(number("imag_base")?).map_err(|_| "imag_base is not 8 bits")?,
         })
     }
+}
+
+/// What the C64 PRG starts with: the load address, `10 SYS 2061`, and `start`, which calls `_main`,
+/// shows its result in the top-left screen cell and stops.
+pub fn c64_startup() -> String {
+    ".segment \"LOADADDR\"\n.word $0801\n\
+     .segment \"BASIC\"\n.word next\n.word 10\n.byte $9E, \"2061\", 0\nnext:\n.word 0\n\
+     .segment \"CODE\"\n.export start\nstart:\n  jsr _main\n  sta $0400\nhalt:\n  jmp halt\n"
+        .to_owned()
 }
