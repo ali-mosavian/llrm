@@ -17,7 +17,7 @@ import qbbuild  # noqa: E402
 import qbruntime  # noqa: E402
 
 from qbrt_programs import BC_KNOWN, real_bc_text, not_real_bc  # noqa: E402
-from qbrt_programs import ALL_SOURCES, CHUNKS, EXAMPLES, KNOWN, LLRM_ONLY, PROBES, SOURCES, differential  # noqa: E402,F401
+from qbrt_programs import ALL_SOURCES, CHUNKS, EXAMPLES, INTERACTIVE, KNOWN, LLRM_ONLY, PROBES, SOURCES, differential  # noqa: E402,F401
 
 
 @pytest.fixture(scope="module")
@@ -48,6 +48,23 @@ def test_program_matches_bcom45_byte_for_byte(results, name: str):
         assert result.candidate.status == "ok", f"{target}: {result.candidate.detail}"
         assert result.difference == "", f"{target}: {result.difference}"
         assert result.screen_difference == "", f"{target}: {result.screen_difference}"
+
+
+@pytest.fixture(scope="module")
+def games(tmp_path_factory):
+    """The interactive examples, built and run for the oracle and each target: they never end, so the run is stopped at the limit."""
+    if not qbruntime.dosbatch.QB45.is_dir():
+        pytest.skip("QB45_DIR is unavailable")
+    return differential({name: ALL_SOURCES[name] for name in INTERACTIVE}, tmp_path_factory.mktemp("games"))
+
+
+@pytest.mark.parametrize("name", INTERACTIVE)
+def test_an_interactive_game_draws_what_bcom45_draws(games, name: str):
+    """Compiled and run for the oracle and every target; stopped at the limit, the screens must agree (as the Microsoft demos' introductions do)."""
+    for target, result in games[name].items():
+        assert result.candidate.status in ("ok", "stopped"), f"{target}: {result.candidate.detail}"
+        assert result.reference.status in ("ok", "stopped")
+        assert result.screen_difference == "", target
 
 
 def test_no_game_that_waits_for_a_key_is_compared_byte_for_byte():
