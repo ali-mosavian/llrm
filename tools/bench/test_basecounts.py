@@ -223,14 +223,14 @@ def test_stale_waivers_are_one_line_of_file_names():
     assert bc.stale_summary([]) == []
 
 
-SCALAR_BASE = {"bq16": 165, "bq32": 159, "c": 66, "nib": 69}
+SCALAR_BASE = {"bq16": 165}
 
 
-def test_the_scalar_o2_waiver_passes_the_unrolled_size_and_fails_one_byte_more():
-    """parity/scalar -O2 went from main's loop to the pin's full unroll (bq16 165 B to 353): waived at exactly that size, so one more byte fails."""
+def test_the_scalar_o2_waiver_passes_its_size_and_fails_one_byte_more():
+    """parity/scalar bq16 -O2 is main's loop again after the m16 unroll override (353 B to 171, main 165): waived at exactly 171, so one more byte fails."""
     waivers = bc.waivers()
     base = {("parity/scalar", lang, "O2"): {"code_bytes": was} for lang, was in SCALAR_BASE.items()}
-    at = {"bq16": 353, "bq32": 249, "c": 249, "nib": 252}
+    at = {"bq16": 171}
     for lang, size in at.items():
         key = ("parity/scalar", lang, "O2")
         assert bc.judge({key: {"code_bytes": size}}, base, waivers)[0] == [], lang
