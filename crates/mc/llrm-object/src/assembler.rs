@@ -36,10 +36,24 @@ pub trait AsmBackend {
 /// register is saved.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Cfi {
-    DefCfa { register: u16, offset: i64 },
-    DefCfaRegister { register: u16 },
-    DefCfaOffset { offset: i64 },
-    Offset { register: u16, offset: i64 },
+    DefCfa {
+        register: u16,
+        offset: i64,
+    },
+    DefCfaRegister {
+        register: u16,
+    },
+    DefCfaOffset {
+        offset: i64,
+    },
+    Offset {
+        register: u16,
+        offset: i64,
+    },
+    /// The register is back where the caller left it (`.cfi_restore`).
+    Restore {
+        register: u16,
+    },
 }
 
 /// A piece of a section as the assembler lays it out (`MCFragment`): a label,
