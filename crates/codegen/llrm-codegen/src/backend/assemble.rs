@@ -139,7 +139,7 @@ pub struct Registers {
 
 /// The address spaces the i8086 target gives far and huge pointers (clang's
 /// `address_space(1)` and `(3)`).
-const FAR_SPACE: u32 = 1;
+pub(crate) const FAR_SPACE: u32 = 1;
 const HUGE_SPACE: u32 = 3;
 
 /// `module` as masm, its code in the segment `code`, selected by the 16-bit x86
