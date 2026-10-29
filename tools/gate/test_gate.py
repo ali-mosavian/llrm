@@ -915,6 +915,12 @@ def test_the_dos_step_requires_the_demo_tests_to_pass():
     assert "--must-pass tools/dosbatch/test_qbdemos.py" in cmd
 
 
+def test_the_dos_step_prints_the_host_cpu_and_the_emulator_it_ran_on():
+    """Run 4 and 5 failed NIBBLES m16 on a hosted runner and the log had no CPU model, no DOSBox build and no core: nothing to compare with a green local run."""
+    cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
+    assert "lscpu" in cmd and "dosbox-x" in cmd and "qb32.DEMO_CONF" in cmd
+
+
 def test_the_pytest_step_runs_through_the_sharder_with_the_ignores_and_the_cpu_limit():
     cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages(), skip_py=("tests/x.py",))["pytest"]
     assert "pytest_shards.py" in cmd and "--ignore=tests/x.py" in cmd and "-- -q" in cmd and "-p pytest_cpulimit" in cmd
