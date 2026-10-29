@@ -1056,3 +1056,39 @@ fn word_immediates_encode_as_binutils_does() {
         assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
     }
 }
+
+const GLOBALS: &str = "@g = global i32 5\n@t = constant [4 x i8] c\"\\01\\02\\03\\04\"\n@a = global [4 x i32] zeroinitializer\n\
+    define i32 @load() {\n  %v = load i32, ptr @g\n  ret i32 %v\n}\n\
+    define void @store(i32 %x) {\n  store i32 %x, ptr @g\n  ret void\n}\n\
+    define ptr @addr() {\n  ret ptr @g\n}\n\
+    define i32 @fold() {\n  %p = getelementptr [4 x i32], ptr @a, i32 0, i32 2\n  %v = load i32, ptr %p\n  ret i32 %v\n}\n\
+    define i32 @index(i32 %i) {\n  %p = getelementptr i8, ptr @t, i32 %i\n  %b = load i8, ptr %p\n  %z = zext i8 %b to i32\n  ret i32 %z\n}";
+
+fn global_function(name: &str) -> String {
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{GLOBALS}")).expect("parses");
+    text_with(&module, name, Cpu::M68000, Options::PINNED).expect("compiles")
+}
+
+/// A load of a global was `move.l (g,%a0), %d0`: the matcher did not know `PC` (no register id), took
+/// the symbol for an address-register displacement and read `%a0`, which nothing set. The pin's
+/// output (`llc -mtriple=m68k`) is pc-relative: `move.l (g,%pc), %d0`.
+#[test]
+fn a_global_is_loaded_pc_relative() {
+    assert_eq!(global_function("load"), "load:\n\tmove.l\t(g,%pc), %d0\n\trts\n");
+    assert_eq!(global_function("fold"), "fold:\n\tmove.l\t(a+8,%pc), %d0\n\trts\n");
+}
+
+/// Stores cannot go to a pc-relative destination: the pin takes the address into a register.
+#[test]
+fn a_global_is_stored_through_its_address() {
+    assert_eq!(global_function("store"), "store:\n\tlea\t(g,%pc), %a0\n\tmove.l\t(4,%sp), (%a0)\n\trts\n");
+    assert_eq!(global_function("addr"), "addr:\n\tlea\t(g,%pc), %a0\n\trts\n");
+}
+
+/// An array in read-only data indexed by a register was `CannotSelect(Load)`; the pin's output is
+/// `lea (t,%pc), %a0; move.b (0,%a0,%d0), %d0`.
+#[test]
+fn a_constant_array_is_indexed_through_its_address() {
+    let text = global_function("index");
+    assert!(text.contains("lea\t(t,%pc), %a0") && text.contains("move.b\t(0,%a0,%d0), %d0"), "{text}");
+}
