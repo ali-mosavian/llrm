@@ -6,6 +6,7 @@ pub mod dagisel;
 pub mod emit;
 pub mod explicit_locals;
 pub mod mir;
+pub mod object;
 pub mod print;
 pub mod reg_numbering;
 pub mod set_p2align;
