@@ -32,10 +32,10 @@ use crate::sink::Jump;
 
 /// `analyzeBranch`: where a block's terminators go.
 #[derive(Clone, Debug)]
-struct Branches {
-    taken: Option<u32>,
-    other: Option<u32>,
-    cond: Option<Inst>,
+pub(crate) struct Branches {
+    pub(crate) taken: Option<u32>,
+    pub(crate) other: Option<u32>,
+    pub(crate) cond: Option<Inst>,
 }
 
 fn target(inst: &Inst) -> Option<u32> {
@@ -66,7 +66,7 @@ fn same_branch(
 
 /// `TargetInstrInfo::analyzeBranch`; `None` for a terminator it does not know
 /// (a return).
-fn analyze<C>(
+pub(crate) fn analyze<C>(
     function: &MFunction<C>,
     at: usize,
 ) -> Option<Branches> {
@@ -84,7 +84,7 @@ fn analyze<C>(
 }
 
 /// `removeBranch`.
-fn remove_branch<C>(
+pub(crate) fn remove_branch<C>(
     function: &mut MFunction<C>,
     at: usize,
 ) {
@@ -109,7 +109,7 @@ fn retarget(
 
 /// `insertBranch`: `cond` to `taken` and a jump to `other`, or a jump to
 /// `taken`.
-fn insert_branch<C, J: Jump>(
+pub(crate) fn insert_branch<C, J: Jump>(
     function: &mut MFunction<C>,
     at: usize,
     taken: u32,
