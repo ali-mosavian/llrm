@@ -213,6 +213,37 @@ impl Emitter<'_> {
         }))
     }
 
+    /// `SUBREG_TO_REG (CLR16dd (EXTRACT_SUBREG (SWAP x)))` as `x & 0xFFFF0000` (see [`Emitter::emit`]).
+    fn subreg_to_reg(
+        &mut self,
+        node: u32,
+        into: &mut Vec<Inst>,
+    ) -> Result<(), String> {
+        let name_of = |emitter: &Self, value: SDValue| match emitter.dag.opcode(value) {
+            ISD::Machine(code) => opcode_name(code),
+            _ => None,
+        };
+        let n = self.dag.node(SDValue { node, res: 0 });
+        let unsupported = || "SUBREG_TO_REG of anything but a cleared low word".to_owned();
+        let clear = n.ops.iter().copied().find(|op| name_of(self, *op) == Some("CLR16dd")).ok_or_else(unsupported)?;
+        let extract = *self.dag.node(clear).ops.first().ok_or_else(unsupported)?;
+        let swap = *self.dag.node(extract).ops.first().ok_or_else(unsupported)?;
+        if name_of(self, extract) != Some("EXTRACT_SUBREG") || name_of(self, swap) != Some("SWAP") {
+            return Err(unsupported());
+        }
+        let swapped = *self.values.get(&(swap.node, swap.res)).ok_or("SUBREG_TO_REG of a swap not emitted yet")?;
+        // the clear and the extract were emitted on the way here: drop them
+        let dead: Vec<Reg> = [clear, extract].iter().filter_map(|v| self.values.get(&(v.node, v.res)).copied()).collect();
+        into.retain(|inst| !matches!(inst.operands.first(), Some(Operand::Def(reg)) if dead.contains(reg)));
+        let dst = self.new_reg(Class::Dr32);
+        self.values.insert((node, 0), dst);
+        into.push(Inst::copy(dst, swapped));
+        let mut mask = Inst::new(Kind::Op("AND32di"), vec![Operand::Def(dst), Operand::Use(dst), Operand::Imm(-65536)]);
+        mask.sets_flags = true;
+        into.push(mask);
+        Ok(())
+    }
+
     fn emit(
         &mut self,
         node: u32,
@@ -268,6 +299,13 @@ impl Emitter<'_> {
                     };
                     into.push(Inst::copy(dst, src));
                     return Ok(());
+                }
+                // `SUBREG_TO_REG (CLR16dd (EXTRACT_SUBREG (SWAP x))))`, the pin's `shl x, 16`: the word
+                // swapped up with the low word cleared. Partial writes of one register are the pin's
+                // coalescer's (sub-register lanes), not this allocator's: it is `x & 0xFFFF0000` of the
+                // swapped register, and the dead clear and extract are dropped.
+                if name == "SUBREG_TO_REG" {
+                    return self.subreg_to_reg(node, into);
                 }
                 let desc = instrinfo::desc(code as u16).ok_or_else(|| format!("{name}: no description"))?;
                 let mut operands = Vec::new();

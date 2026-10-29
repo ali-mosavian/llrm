@@ -1139,3 +1139,14 @@ fn a_zero_extension_defines_a_data_register() {
     }
     assert!(seen > 0, "no zero extension was selected");
 }
+
+/// `shl x, 16` is selected as `SUBREG_TO_REG (CLR16dd (EXTRACT_SUBREG (SWAP x)))`, which the emitter
+/// had no case for ("no encoding for SUBREG_TO_REG"): every generated program with a shift by 16 was
+/// rejected. The pin's `swap; clr.w`; a shift by 15 stays a shift.
+#[test]
+fn a_shift_left_by_16_is_swap_and_clear_word() {
+    let text = compiled("define i32 @f(i32 %x) {\n  %r = shl i32 %x, 16\n  ret i32 %r\n}", Options::default());
+    assert!(text.contains("swap\t%d0\n\tclr.w\t%d0"), "{text}");
+    let other = compiled("define i32 @f(i32 %x) {\n  %r = shl i32 %x, 15\n  ret i32 %r\n}", Options::default());
+    assert!(!other.contains("swap"), "{other}");
+}

@@ -777,6 +777,11 @@ pub fn narrow_immediates(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::
                 return None;
             }
             let word = REGISTER_INFO.view(REGISTER_INFO.root(*dst), 16)?;
+            // a mask that keeps the high half and clears the low is `clr.w` (the pin's `shl x, 16`:
+            // `swap; clr.w`)
+            if name == "AND16di" && value == 0 {
+                return Some(Inst { opcode: "CLR16dd", operands: vec![Operand::Reg(word)] });
+            }
             Some(Inst {
                 opcode: name,
                 operands: vec![Operand::Reg(word), Operand::Reg(word), Operand::Imm(i64::from(value))],
