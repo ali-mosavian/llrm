@@ -480,8 +480,17 @@ fn _simplified(
     }
     let mut changed = false;
     let headers = visit_order(function, &shape.loops);
+    let at: HashMap<i64, usize> = shape.loops.iter().enumerate().map(|(index, loop_)| (loop_.header, index)).collect();
+    // The loops each block is in, kept through the bridges: a bridge touches
+    // only the loops around its target.
+    let mut around: HashMap<i64, Vec<usize>> = HashMap::default();
+    for (index, loop_) in shape.loops.iter().enumerate() {
+        for &block in &loop_.body {
+            around.entry(block).or_default().push(index);
+        }
+    }
     for header in headers {
-        let original = shape.loops.iter().find(|loop_| loop_.header == header).expect("StopIteration").clone();
+        let original = shape.loops[at[&header]].clone();
         // A loop that is already in the form has nothing to group.
         if !_needs_grouping(function, &original) {
             continue;
@@ -536,10 +545,12 @@ fn _simplified(
             bridges.push((cfg::id(bridge), target, sources));
         }
         changed = true;
-        for loop_ in &mut shape.loops {
-            for (bridge, target, sources) in &bridges {
+        for (bridge, target, sources) in &bridges {
+            for index in around.get(target).cloned().unwrap_or_default() {
                 BRIDGE_PROBES.with(|one| one.set(one.get() + 1));
-                _bridged(loop_, *bridge, *target, sources);
+                if _bridged(&mut shape.loops[index], *bridge, *target, sources) {
+                    around.entry(*bridge).or_default().push(index);
+                }
             }
         }
         if cfg!(test) || llrm_support::env_flag!("LLRM_CHECK_SHAPE") {
@@ -558,14 +569,15 @@ fn _bridged(
     bridge: i64,
     target: i64,
     sources: &BTreeSet<i64>,
-) {
+) -> bool {
     if !loop_.body.contains(&target) || !sources.iter().any(|at| loop_.body.contains(at)) {
-        return;
+        return false;
     }
     loop_.body.insert(bridge);
     if loop_.header == target {
         loop_.latches = BTreeSet::from([bridge]);
     }
+    true
 }
 
 /// `LLRM_CHECK_SHAPE`: the loops kept up to date are those of a new shape of
