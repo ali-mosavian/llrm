@@ -175,21 +175,37 @@ impl Layout {
         ops
     }
 
-    /// Whether the frame is nothing but the saved registers, so pushing and
-    /// popping them opens and closes it with no `suba`/`adda` and no offsets
-    /// (the same addresses result: the stack size is the bytes pushed).
+    /// Whether the saved registers are the top of the frame, so pushing and
+    /// popping them opens and closes that part with no offsets (the same
+    /// addresses result: they are the highest words, whose total is the bytes
+    /// pushed), and `suba`/`adda` take only the rest.
     pub fn pushes(&self) -> bool {
-        !self.has_fp && !self.saved.is_empty() && self.stack_size == SLOT * self.saved.len() as i64
+        let pushed = SLOT * self.saved.len() as i64;
+        !self.has_fp && !self.saved.is_empty() && self.save_base() == Some((Base::Sp, self.stack_size - pushed))
+    }
+
+    /// The bytes below the pushed registers.
+    fn rest(&self) -> i64 {
+        self.stack_size - SLOT * self.saved.len() as i64
     }
 
     /// The prologue of a frame that [`pushes`](Layout::pushes).
     pub fn push_prologue(&self) -> Vec<FrameOp> {
-        vec![FrameOp::Push(self.saved.clone())]
+        let mut ops = vec![FrameOp::Push(self.saved.clone())];
+        if self.rest() != 0 {
+            ops.push(FrameOp::SubSp(self.rest()));
+        }
+        ops
     }
 
     /// The epilogue of a frame that [`pushes`](Layout::pushes).
     pub fn pop_epilogue(&self) -> Vec<FrameOp> {
-        vec![FrameOp::Pop(self.saved.clone())]
+        let mut ops = Vec::new();
+        if self.rest() != 0 {
+            ops.push(FrameOp::AddSp(self.rest()));
+        }
+        ops.push(FrameOp::Pop(self.saved.clone()));
+        ops
     }
 
     /// `emitEpilogue` with `restoreCalleeSavedRegisters`.
