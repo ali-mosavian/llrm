@@ -598,7 +598,7 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
 /// or 4, are `calll memcpy`; X86 `getMaxInlineSizeThreshold` is 128). This test
 /// asserted `rep movsd` for a 300 B copy, which the call replaced. llrm-cc: the
 /// 300 B clear is `call memset` (the pin's llc on the same C), the 100 B copy
-/// `rep movsd`; m16 has no library to call and fills with `rep stosb`.
+/// `rep movsd`; m16 has no library to call and fills with `rep stosd` (the dword fill of a multiple of 4).
 #[test]
 fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     let scratch = tempfile::tempdir().unwrap();
@@ -623,7 +623,7 @@ fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
         "{flat}"
     );
     let real = listing("x86-m16");
-    assert!(real.contains("rep stosb") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
+    assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
 }
 
 /// A program the repository ships as an example or a benchmark compiles without
