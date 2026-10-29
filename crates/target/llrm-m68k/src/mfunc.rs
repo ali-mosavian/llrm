@@ -131,19 +131,30 @@ impl Emitter<'_> {
         }
     }
 
-    /// `InstrEmitter`'s `constrainRegClass`: a register an instruction reads
-    /// must be in the class the operand names.
+    /// `InstrEmitter`'s `AddRegisterOperand`: a register an instruction reads
+    /// must be in the class the operand names. Where the register's class
+    /// cannot be narrowed to it (`constrainRegClass` fails), the value is
+    /// copied into a new register of that class, and that is the operand.
     fn constrain(
         &mut self,
-        operand: &Operand,
+        operand: Operand,
         wanted: Option<&OperandDesc>,
-    ) -> Result<(), String> {
-        let (Operand::Use(Reg::Virt(v)), Some(wanted)) = (operand, wanted) else { return Ok(()) };
-        let Some(class) = Class::of_pin(wanted.reg_class) else { return Ok(()) };
+        into: &mut Vec<Inst>,
+    ) -> Operand {
+        let (Operand::Use(Reg::Virt(v)), Some(wanted)) = (&operand, wanted) else { return operand };
+        let Some(class) = Class::of_pin(wanted.reg_class) else { return operand };
         let have = self.function.classes[*v as usize];
-        self.function.classes[*v as usize] =
-            have.meet(class).ok_or_else(|| format!("v{v} is {have:?} where {class:?} is read"))?;
-        Ok(())
+        match have.meet(class) {
+            Some(narrowed) => {
+                self.function.classes[*v as usize] = narrowed;
+                operand
+            }
+            None => {
+                let copy = self.new_reg(class);
+                into.push(Inst::copy(copy, Reg::Virt(*v)));
+                Operand::Use(copy)
+            }
+        }
     }
 
     fn operand(
@@ -222,7 +233,7 @@ impl Emitter<'_> {
                 }
                 for op in n.ops.clone() {
                     if let Some(operand) = self.operand(op)? {
-                        self.constrain(&operand, desc.operands.get(operands.len()))?;
+                        let operand = self.constrain(operand, desc.operands.get(operands.len()), into);
                         operands.push(operand);
                     }
                 }

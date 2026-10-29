@@ -1,11 +1,16 @@
 //! A function from IR to assembly text: the shared DAG stages, then the
 //! m68k machine function, allocation, expansion and printing.
 
+use std::rc::Rc;
+
 use llrm_mir::module::Module;
 
+use crate::address::address_arithmetic;
 use crate::dagisel::function::select_function;
 use crate::dagisel::hooks::Cpu;
 use crate::expand::{Line, finish};
+use crate::flags::preserve_flags;
+use crate::machine::{M68k, M68kMachine};
 use crate::mc;
 use crate::mfunc::{emit, expand_cmov};
 use crate::regalloc::{
@@ -27,17 +32,20 @@ pub enum Item {
 pub struct Options {
     /// Use the instructions of [`crate::overlay`] (`addq`, `subq`, `tst`).
     pub overlay: bool,
+    /// Run the shared IR mid-end (`-O2`) first, as `llc -O2` is given
+    /// optimized IR by `opt`.
+    pub mid_end: bool,
 }
 
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
-    pub const PINNED: Options = Options { overlay: false };
+    pub const PINNED: Options = Options { overlay: false, mid_end: false };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { overlay: true }
+        Options { overlay: true, mid_end: true }
     }
 }
 
@@ -58,6 +66,13 @@ pub fn items_with(
     cpu: Cpu,
     options: Options,
 ) -> Result<Vec<Item>, String> {
+    let optimized;
+    let module = if options.mid_end {
+        optimized = mid_end(module)?;
+        &optimized
+    } else {
+        module
+    };
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let number =
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
@@ -67,10 +82,14 @@ pub fn items_with(
     machine_sink(&mut function);
     eliminate_phis(&mut function);
     fold_reserved_copies(&mut function);
+    if options.overlay {
+        address_arithmetic(&mut function);
+    }
     two_address(&mut function);
     let (assignment, slots) = allocate_spilling(&mut function, 0)?;
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     remove_identity_copies(&mut function, &assignment);
+    preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function);
     let mut out = vec![Item::Label(name.to_owned())];
     for line in finish(&function, &assignment, number, &slots, options.overlay)? {
@@ -108,4 +127,29 @@ pub fn text_with(
         }
     }
     Ok(out)
+}
+
+/// `module` through the IR pass `llc` runs before selection that matters here,
+/// loop strength reduction, priced by [`M68k`]. (`llc` runs no `opt` pipeline;
+/// the bench's reference does not either.)
+pub fn mid_end(module: &Module) -> Result<Module, String> {
+    use llrm_mir::datalayout::DataLayout;
+    use llrm_mir::passes::{Declared, Outer};
+    let mut module = module.clone();
+    let layout = match module.datalayout.as_deref() {
+        Some(text) => DataLayout::parse(text)?,
+        None => DataLayout::default(),
+    };
+    let names: Vec<String> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter_map(|(_, global, _)| global.name.as_deref().map(str::to_owned))
+        .collect();
+    let outer = Outer::of(&module, Some(Rc::new(M68kMachine)));
+    let mut declared = Declared::of(&module);
+    for name in names {
+        let (context, function) = module.function_mut(&name).ok_or("a function that vanished")?;
+        llrm_transforms::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &M68k, false);
+    }
+    Ok(module)
 }

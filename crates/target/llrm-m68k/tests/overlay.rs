@@ -142,3 +142,44 @@ fn a_test_after_an_add_stays_for_a_signed_ordering_and_goes_for_equality() {
     let equal = branches("%s = add i32 %a, %b\n  %c = icmp ne i32 %s, 0");
     assert!(!equal.contains("tst.l"), "{equal}");
 }
+
+/// Post-increment forms derived from the pin's `(An)` rows, bytes from
+/// binutils: `add.l (%a1)+,%d0` d099, `add.b (%a1)+,%d3` d619, `and.l
+/// (%a1)+,%d1` c299.
+#[test]
+fn post_increment_forms_encode_as_binutils_does() {
+    let load =
+        |opcode, to: &str, from: &str| Inst { opcode, operands: vec![register(to), register(to), register(from)] };
+    let cases = [
+        (load("ADD32dj+", "d0", "a1"), "d099"),
+        (load("ADD8dj+", "d3", "a1"), "d619"),
+        (load("AND32dj+", "d1", "a1"), "c299"),
+    ];
+    for (inst, golden) in cases {
+        assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
+    }
+}
+
+fn sum_loop(step: &str) -> String {
+    format!(
+        "define i32 @f(ptr %p, i32 %n) {{\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %q = phi ptr [%p, %entry], [%q1, %l]\n  %v = load i32, ptr %q\n  %s1 = add i32 %s, %v\n  %q1 = getelementptr i32, ptr %q, i32 {step}\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %s1\n}}"
+    )
+}
+
+/// A load through a pointer that steps by the load's size was `add.l (%a0),
+/// %d0` and `addq.l #4, %a0`, two instructions for `add.l (%a0)+, %d0`.
+#[test]
+fn a_load_and_the_step_of_its_pointer_are_one_post_increment() {
+    let pinned = compiled(&sum_loop("1"), Options::PINNED);
+    let ours = compiled(&sum_loop("1"), Options::default());
+    assert!(!pinned.contains(")+"), "{pinned}");
+    assert!(ours.contains("add.l\t(%a0)+, %d0"), "{ours}");
+    assert!(!ours.contains("addq.l\t#4"), "{ours}");
+}
+
+/// A step that is not the size of the access cannot be folded.
+#[test]
+fn a_step_of_another_size_is_not_a_post_increment() {
+    let ours = compiled(&sum_loop("2"), Options::default());
+    assert!(!ours.contains(")+"), "{ours}");
+}

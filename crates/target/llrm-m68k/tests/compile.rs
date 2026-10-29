@@ -7,7 +7,7 @@
 //! a store through `(%d0)`) and before register-class constraints (the base
 //! in a data register).
 
-use llrm_m68k::compile::{Options, text, text_with};
+use llrm_m68k::compile::{Options, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
@@ -174,7 +174,8 @@ fn a_loaded_byte_stored_at_once_is_one_move() {
 #[test]
 fn gcd_subtractions_sink_into_their_arms() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("gcd")).expect("parses");
-    let text = text(&module, "k", Cpu::M68000).expect("compiles");
+    let text =
+        text_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).expect("compiles");
     assert!(!text.contains("movem"), "{text}");
     let after_compare = text.find("ble").expect("the signed compare");
     assert!(text.matches("sub.l").count() == 2 && text.find("sub.l").unwrap() > after_compare, "{text}");
@@ -185,7 +186,8 @@ fn gcd_subtractions_sink_into_their_arms() {
 #[test]
 fn a_loop_does_not_jump_through_a_block_that_only_jumps() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("gcd")).expect("parses");
-    let text = text(&module, "k", Cpu::M68000).expect("compiles");
+    let text =
+        text_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).expect("compiles");
     assert!(!text.contains(":\n\tbra"), "{text}");
 }
 
