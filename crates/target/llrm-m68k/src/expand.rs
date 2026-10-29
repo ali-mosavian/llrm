@@ -152,10 +152,18 @@ pub fn finish(
         .iter()
         .map(|index| Object { size: 4, align: 4, offset: function.fixed[index], callee_saved: false, dead: false })
         .collect();
-    // the spill slots are locals, after the fixed objects (`getStackSlotRange`:
-    // one long each)
+    // the static allocas, then the spill slots, are locals after the fixed
+    // objects (`getStackSlotRange`: one long each)
+    objects.extend(function.locals.iter().map(|&(_, size, align)| Object {
+        size,
+        align,
+        offset: 0,
+        callee_saved: false,
+        dead: false,
+    }));
     objects.extend(slots.iter().map(|_| Object { size: 4, align: 4, offset: 0, callee_saved: false, dead: false }));
-    let frame_indices: Vec<i32> = fixed.iter().chain(slots).copied().collect();
+    let frame_indices: Vec<i32> =
+        fixed.iter().copied().chain(function.locals.iter().map(|local| local.0)).chain(slots.iter().copied()).collect();
     let layout = frame::layout(&Function {
         fixed: fixed.len(),
         objects,
