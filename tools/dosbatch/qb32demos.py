@@ -162,6 +162,31 @@ def difference_mask(want: Path, got: Path, cols: int = 64, rows: int = 25) -> st
     return f"{len(hits)} pixels in x {min(xs)}-{max(xs)}, y {min(ys)}-{max(ys)} of {width}x{height}\n" + "\n".join("|" + "".join(row) + "|" for row in grid)
 
 
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def hash_lines(name: str, target: str, built, objects: dict[str, Path]) -> list[str]:
+    """`sha256 label` for each file a demo's build of `target` is made of: its object, the runtime objects it links, the EXE, and (once per run)
+    the DOSBox-X binary and the demo conf. A hosted run's table against a local run's of the same commit says whether the build is the
+    same (then the host's emulator is the difference) or not (then the compiler's output depends on the host)."""
+    obj = built.exe.with_suffix(".obj")
+    files = {f"{name}.{target}.obj": obj, **{f"runtime/{one.name}": one for one in qbbuild.needed((obj,), objects)}, f"{name}.{target}.EXE": built.exe}
+    return [f"{sha256(path)} {label}" for label, path in sorted(files.items())]
+
+
+def record_hashes(name: str, built: dict, objects: dict[str, dict[str, Path]]) -> None:
+    """Print the hash table of each target's build and keep it in the gate's logs beside the screens."""
+    lines = [f"{hashlib.sha256(qb32.DEMO_CONF.encode()).hexdigest()} demo conf", f"{sha256(Path(dosbatch.DOSBOX).resolve())} dosbox-x"]
+    for target, one in built.items():
+        lines += hash_lines(name, target, one, objects[target])
+    print("\n".join(f"hash {line}" for line in lines))
+    if logs := os.environ.get("CARGO_TARGET_DIR"):
+        (kept := Path(logs) / "gate-logs").mkdir(parents=True, exist_ok=True)
+        with (kept / "demo-hashes.txt").open("a") as out:
+            out.write("\n".join(f"{name} {line}" for line in lines) + "\n")
+
+
 def keep_screens(name: str, target: str, checkpoint: str, want: Path, got: Path) -> None:
     """Both screens of a mismatch into the gate's logs (CI uploads them): the pixel count alone cannot say what drew wrong."""
     if logs := os.environ.get("CARGO_TARGET_DIR"):
@@ -225,6 +250,7 @@ def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]] 
 
     def one(name: str) -> dict[str, list[str]]:
         built = qbbuild.build(sources[name], work / name / "build", objects)
+        record_hashes(name, built, objects)
         with ThreadPoolExecutor(2) as pool:
             reference = pool.submit(reference_shots, name, sources[name], work / name / "ref")
             candidate = pool.submit(candidate_shots, name, built, work / name / "cand")

@@ -927,6 +927,7 @@ def test_the_dos_step_prints_the_host_cpu_and_the_emulator_it_ran_on():
     """Run 4 and 5 failed NIBBLES m16 on a hosted runner and the log had no CPU model, no DOSBox build and no core: nothing to compare with a green local run."""
     cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
     assert "lscpu" in cmd and "dosbox-x" in cmd and "qb32.DEMO_CONF" in cmd
+    assert "rustc -vV" in cmd and "demo-hashes.txt" in cmd and "exit $rc" in cmd  # the build's hashes are printed on green and red
     assert "tools/dosbatch/x87probe.py || true;" in cmd  # the host FPU's verdict is printed, never a red of its own
 
 

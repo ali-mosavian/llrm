@@ -32,3 +32,23 @@ def test_a_mismatching_checkpoint_prints_where_the_screens_differ(tmp_path, caps
     assert qb32demos.differences(name, {checkpoint: want}, {checkpoint: got}, "x86-m16") == [f"{checkpoint}: 40 pixels"]
     shown = capsys.readouterr().out
     assert "40 pixels in x 0-39, y 49-49 of 80x50" in shown and "|" + "#" * 32 + " " * 32 + "|" in shown.splitlines()[-1]
+
+
+def test_a_demo_build_prints_and_keeps_the_hash_of_every_file_it_is_made_of(tmp_path, monkeypatch, capsys):
+    """Run 6's NIBBLES m16 red is told from a local green by its inputs: the table is the same build or it is not."""
+    import hashlib
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "target"))
+    exe = tmp_path / "NIBBLES.x86-m16.EXE"
+    exe.write_bytes(b"exe")
+    (tmp_path / "NIBBLES.x86-m16.obj").write_bytes(b"obj")
+    monkeypatch.setattr(qb32demos.qbbuild, "needed", lambda roots, objects: [objects["B$IN"]])
+    runtime = tmp_path / "bin.obj"
+    runtime.write_bytes(b"rt")
+    qb32demos.record_hashes("NIBBLES", {"x86-m16": SimpleNamespace(exe=exe)}, {"x86-m16": {"B$IN": runtime}})
+    shown = capsys.readouterr().out
+    assert f"hash {hashlib.sha256(b'obj').hexdigest()} NIBBLES.x86-m16.obj" in shown
+    assert f"hash {hashlib.sha256(b'rt').hexdigest()} runtime/bin.obj" in shown
+    assert f"hash {hashlib.sha256(b'exe').hexdigest()} NIBBLES.x86-m16.EXE" in shown and " dosbox-x" in shown and " demo conf" in shown
+    assert (tmp_path / "target/gate-logs/demo-hashes.txt").read_text().count("NIBBLES ") == 5
