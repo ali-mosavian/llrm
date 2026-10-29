@@ -137,8 +137,10 @@ fn test_nib_passes_a_global_array_slice_as_its_offset() {
 }
 
 /// Queens' `q` is a local array, so its far pointer is SS:offset: a callee
-/// given only that reads it through `ss:`, one word on the stack, where `les`
-/// loaded a segment for it at every call.
+/// given only that takes the offset (in a register) and reads it through the
+/// default segment (SS is DS in DGROUP), where `les` loaded a segment for it at
+/// every call. The old listing read `ss:[bp+..]`; the DAG selector keeps the
+/// offset in `bx` and needs no override.
 #[test]
 fn test_nib_reads_a_local_array_slice_through_ss() {
     let asm = compiled(
@@ -148,5 +150,5 @@ fn test_nib_reads_a_local_array_slice_through_ss() {
         &["-fno-inline-functions", "-fno-inline-functions-called-once"],
     );
     let body = procedure(&asm, "_safe");
-    assert!(body.contains("ss:[") && !body.contains("les "), "{asm}");
+    assert!(body.contains("word ptr [bx]") && !body.contains("les ") && !body.contains("es:["), "{asm}");
 }
