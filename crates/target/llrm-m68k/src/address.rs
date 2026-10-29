@@ -91,3 +91,81 @@ pub fn address_arithmetic(function: &mut MFunction) {
         }
     }
 }
+
+/// Where an instruction's `(d8,An,Xn)` operand starts: the displacement, then
+/// the base and the index.
+fn indexed_operand(inst: &llrm_spike_mf::Inst) -> Option<usize> {
+    let Kind::Op(name) = inst.kind else { return None };
+    let &(_, _, operands) = crate::dagisel::asm::asm(name)?;
+    let slot = operands.iter().find(|one| one.method.starts_with("printARII") && one.method.ends_with("Mem"))?;
+    Some(usize::from(slot.at))
+}
+
+/// An index read after the add that steps it is the add's result with the
+/// step taken from the displacement: `d1 = d0; d0 += 1; tst.b (1,%a0,%d1)` is
+/// `d0 += 1; tst.b (%a0,%d0)`. The old index is then dead at the add, which
+/// takes its register, and the copy goes.
+///
+/// DEVIATE from the pin, which leaves the address on the old index. Reason: a
+/// loop that tests `p[i + 1]` after counting `i` moved the counter every trip.
+/// Exit: never; a target choice, off with `Options::overlay`.
+pub fn reassociate_indexed_displacement(function: &mut MFunction) {
+    let count = function.classes.len();
+    let mut readers = vec![0usize; count];
+    for block in &function.blocks {
+        for inst in &block.insts {
+            for operand in &inst.operands {
+                if let Operand::Use(Reg::Virt(v)) = operand {
+                    readers[*v as usize] += 1;
+                }
+            }
+        }
+        for phi in &block.phis {
+            for (_, reg) in &phi.incoming {
+                if let Reg::Virt(v) = reg {
+                    readers[*v as usize] += 1;
+                }
+            }
+        }
+    }
+    for block in &mut function.blocks {
+        for i in 0..block.insts.len() {
+            let Some(at) = indexed_operand(&block.insts[i]) else { continue };
+            let [Operand::Imm(disp), Operand::Use(Reg::Virt(_)), Operand::Use(Reg::Virt(index))] =
+                block.insts[i].operands[at..at + 3]
+            else {
+                continue;
+            };
+            // the step before it, the only other reader of the index
+            let Some(step) = (0..i).rev().find(|&j| {
+                block.insts[j].operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(d)) if *d == index))
+                    || block.insts[j].operands.iter().any(|o| matches!(o, Operand::Use(Reg::Virt(u)) if *u == index))
+            }) else {
+                continue;
+            };
+            let (sign, [Operand::Def(Reg::Virt(next)), Operand::Use(Reg::Virt(from)), Operand::Imm(amount)]) = (
+                match block.insts[step].kind {
+                    Kind::Op("ADD32di") => 1,
+                    Kind::Op("SUB32di") => -1,
+                    _ => continue,
+                },
+                &block.insts[step].operands[..],
+            ) else {
+                continue;
+            };
+            let (next, from, moved) = (*next, *from, disp - sign * amount);
+            if from != index || readers[index as usize] != 2 || !(-128..=127).contains(&moved) {
+                continue;
+            }
+            // `next` must not be written again before the access
+            if block.insts[step + 1..i]
+                .iter()
+                .any(|between| between.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(d)) if *d == next)))
+            {
+                continue;
+            }
+            block.insts[i].operands[at] = Operand::Imm(moved);
+            block.insts[i].operands[at + 2] = Operand::Use(Reg::Virt(next));
+        }
+    }
+}
