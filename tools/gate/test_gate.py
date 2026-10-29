@@ -927,6 +927,7 @@ def test_the_dos_step_prints_the_host_cpu_and_the_emulator_it_ran_on():
     """Run 4 and 5 failed NIBBLES m16 on a hosted runner and the log had no CPU model, no DOSBox build and no core: nothing to compare with a green local run."""
     cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
     assert "lscpu" in cmd and "dosbox-x" in cmd and "qb32.DEMO_CONF" in cmd
+    assert "tools/dosbatch/x87probe.py || true;" in cmd  # the host FPU's verdict is printed, never a red of its own
 
 
 def test_the_pytest_step_runs_through_the_sharder_with_the_ignores_and_the_cpu_limit():
