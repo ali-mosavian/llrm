@@ -390,6 +390,9 @@ pub fn compiled_module(
     let mut assembled = assembled;
     options.describe_debug(&mut assembled);
     data::zero_to_bss(&mut assembled, &program.modules[0], program.segments.data_space, options.machine.bss_begin);
+    if options.machine.far_bss {
+        data::zero_far_to_bss(&mut assembled, &program.modules[0]);
+    }
     stage_files(options, "", &assembled)?;
     Ok(assembled)
 }
