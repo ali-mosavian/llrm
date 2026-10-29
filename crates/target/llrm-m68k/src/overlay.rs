@@ -435,3 +435,51 @@ pub fn merge_masks(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::Line> 
     }
     out
 }
+
+/// `move.l %a, %d; and.l #c, %d` with `c` in `moveq`'s range is `moveq #c,
+/// %d; and.l %a, %d`: the same value and codes in 4 bytes, not 8. Likewise
+/// `or` and `add` (an address register may be the source of an `add`).
+/// `x & 1` of a copy is popcount's loop.
+///
+/// DEVIATE from the pin, whose patterns take the immediate form. Reason: bytes
+/// and a clock (`and.l #1` is 6 bytes and 16 clocks, `moveq` and `and.l d,d`
+/// 4 and 12). Exit: never; a target choice, off with
+/// [`crate::compile::Options::overlay`].
+pub fn constant_into_destination(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::Line> {
+    use crate::expand::Line;
+    use crate::reg;
+    let data = |register| {
+        [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7]
+            .contains(&crate::REGISTER_INFO.root(register))
+    };
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        if let (Some(Line::Inst(copy)), Line::Inst(op)) = (out.last(), &line)
+            && copy.opcode == "MOV32rr"
+            && let [Operand::Reg(dst), Operand::Reg(source)] = copy.operands[..]
+            && let [Operand::Reg(d1), Operand::Reg(d2), Operand::Imm(value)] = op.operands[..]
+            && d1 == dst
+            && d2 == dst
+            && data(dst)
+            && (-128..=127).contains(&value)
+            && let Some(register_form) = match (op.opcode, data(source)) {
+                ("AND32di", true) => Some("AND32dd"),
+                ("OR32di", true) => Some("OR32dd"),
+                // 1..=8 is an `addq`, which is already 4 bytes
+                ("ADD32di", true) if !(-8..=8).contains(&value) => Some("ADD32dd"),
+                ("ADD32di", false) if !(-8..=8).contains(&value) => Some("ADD32dr"),
+                _ => None,
+            }
+        {
+            out.pop();
+            out.push(Line::Inst(Inst { opcode: "MOVQ", operands: vec![Operand::Reg(dst), Operand::Imm(value)] }));
+            out.push(Line::Inst(Inst {
+                opcode: register_form,
+                operands: vec![Operand::Reg(dst), Operand::Reg(dst), Operand::Reg(source)],
+            }));
+            continue;
+        }
+        out.push(line);
+    }
+    out
+}
