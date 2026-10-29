@@ -279,7 +279,12 @@ fn build(
         };
     }
     let width = |suffix: &str| if suffix.starts_with('W') { Width::W } else { Width::X };
-    let (stem, suffix) = name.split_at(name.find(['W', 'X']).unwrap_or(name.len()));
+    // `SMADDLrrr`, `UMULHrr`: a 64-bit result, no width letter.
+    let long = ["SMADDL", "SMSUBL", "UMADDL", "UMSUBL"].iter().find_map(|stem| name.strip_prefix(stem).map(|rest| (*stem, rest)));
+    let (stem, suffix) = match long {
+        Some((stem, "rrr")) => (stem, "Xrrr"),
+        _ => name.split_at(name.find(['W', 'X']).unwrap_or(name.len())),
+    };
     let two = |rn: &Operand, rm: &Operand| match (rn, rm) {
         (Operand::Reg(rn), Operand::Reg(rm)) => Ok((*rn, *rm)),
         _ => Err(format!("{name}: operands are not registers")),
@@ -743,7 +748,7 @@ impl Emitter<'_> {
             ("Bcc", [Operand::Imm(cond), Operand::Block(to), ..]) => {
                 Inst::BranchCond { cond: cond_of(*cond)?, target: self.label(*to)? }
             }
-            (_, [Operand::Reg(rt), Operand::Block(to)]) if name.starts_with("CB") && name.len() == 5 => {
+            (_, [Operand::Reg(rt), Operand::Block(to)]) if matches!(name, "CBZW" | "CBZX" | "CBNZW" | "CBNZX") => {
                 let (nonzero, suffix) = (name.starts_with("CBNZ"), &name[name.len() - 1..]);
                 Inst::CompareBranch { nonzero, width: width(suffix), rt: *rt, target: self.label(*to)? }
             }
@@ -827,7 +832,8 @@ impl Emitter<'_> {
     ) -> Result<(), String> {
         let node = self.dag.node(SDValue { node: id, res: 0 });
         match node.opcode {
-            ISD::EntryToken | ISD::TokenFactor | ISD::Register => Ok(()),
+            // Lifetime markers make no code; stack coloring would read them.
+            ISD::EntryToken | ISD::TokenFactor | ISD::Register | ISD::LifetimeStart | ISD::LifetimeEnd => Ok(()),
             ISD::CopyFromReg if node.values[0].is_floating_point() => {
                 let value = match self.dag.node(node.ops[1]).data {
                     NodeData::PhysReg(id) => {

@@ -13,7 +13,7 @@ fn out(
     value: SDValue,
     pointer: bool,
 ) -> Out {
-    Out { value, ext: Ext::Any, pointer, arg_vt: EVT::I32, split: false }
+    Out { value, ext: Ext::Any, pointer, arg_vt: EVT::I32, split: false, variadic: false }
 }
 
 fn register_of(
