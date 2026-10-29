@@ -694,15 +694,26 @@ exit:
   ret i8 %r
 }";
 
-/// The arguments spilled in the entry block were copied slot to slot through
-/// a register, each copy in a slot of its own: eight slots and a load and a
-/// store per copy (bsearch8, 152 bytes, set 2). Copies of one value share its
-/// slot.
+fn slot_count(text: &str) -> usize {
+    text.lines().filter(|line| line.contains(": .res")).count()
+}
+
+/// Copies of a spilled value were moved slot to slot through a register, each
+/// in a slot of its own: bsearch8 had eight slots and 152 bytes (set 2), now
+/// four and 128. Slots never live together share one.
 #[test]
 fn spilled_copies_of_an_argument_share_its_slot() {
     let text = compile(BSEARCH8, "bsearch8");
-    let slots = text.lines().filter(|line| line.contains(": .res")).count();
-    assert!(slots <= 5, "{slots} slots\n{text}");
+    assert!(slot_count(&text) <= 4, "{}\n{text}", slot_count(&text));
+}
+
+/// digits kept the loop's word and counter in fifteen slots, copying each
+/// from the last (269 bytes); the copies whose source is not written while
+/// they live share its slot.
+#[test]
+fn a_loop_variable_and_its_copy_share_a_slot() {
+    let text = compile(DIGITS, "digits");
+    assert!(slot_count(&text) <= 8, "{}\n{text}", slot_count(&text));
 }
 
 /// A call defined no register, so the accumulator looked live from the entry
