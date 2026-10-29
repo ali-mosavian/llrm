@@ -4,7 +4,7 @@
 
     tools/compile-cost.py [--noise] [llrm-cc]     print the measurement (tools/measure.py compares it with the merge-base's)
 
-Files: the 66 vsgcc programs (bench/ and the x_ kernels, wrapped as vsgcc compiles them) and, when QCPORT and QCPORT_INC
+Files: the 66 vsgcc programs (bench/ and the x_ kernels, wrapped as vsgcc compiles them) and, when QCPORT and LLRM_BORLAND_INC
 are set, QCport's modules. Instructions come from `perf stat -e instructions:u`, one process per compile: a count of
 work done, not of time taken, so host load does not move it. Exit 77 if perf cannot count (no permission, a VM with no
 counter), never a pass on a zero. `--noise` measures twice and prints the spread: the same build differs by 0.0001 in
@@ -63,9 +63,11 @@ def files(work: Path) -> dict[str, tuple[Path, list[str]]]:
         wrapped = work / f"{name}.c"
         wrapped.write_text(wrap.wrapped(name, source.read_text()))
         found[name] = (wrapped, [*llrmbin.c_args(32), *programs.CC_FLAGS])
-    if (qcport := os.environ.get("QCPORT")) and (headers := os.environ.get("QCPORT_INC")):
+    if (qcport := os.environ.get("QCPORT")) and (headers := os.environ.get("LLRM_BORLAND_INC")):
         base = Path(qcport).expanduser()
-        include = [*llrmbin.c_args(16), *(flag for d in (*MODULES, "qgl") for flag in ("-I", str(base / d))), "-I", str(Path(headers).expanduser())]
+        # QCport is Borland-dialect C: the cdecl row, Borland's headers as their lower-case mirror (no DOS ^Z), `_asm` blocks (qcport-run-cc.py's line).
+        include = ["--target=x86_16-dos", llrmbin.C_ROWS[16][1], "-fasm-blocks", "-D_asm=__asm", "-nostdinc", "-isystem", str(Path(headers).expanduser()),
+                   *(flag for d in (*MODULES, "qgl") for flag in ("-I", str(base / d)))]
         for d in MODULES:
             for source in sorted((base / d).glob("*.c")):
                 found[f"qcport/{source.stem}"] = (source, include)

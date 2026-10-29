@@ -21,7 +21,5 @@ if len(args) < 3:
 target, exe, first, *rest = args[0], Path(args[1]).resolve(), Path(args[2]).resolve(), *args[3:]
 with tempfile.TemporaryDirectory() as work:
     # LLRM_NEAR_CODE: the program's code is near (small and compact models): the start-up and the externals are linked near.
-    defines = (*dosbatch.os_defines(target, "c"), "NEAR_CODE=1") if os.environ.get("LLRM_NEAR_CODE") else None
-    if entry:
-        defines = (*(defines if defines is not None else dosbatch.os_defines(target, "c")), f"LL_MAIN={entry}")
+    defines = dosbatch.entry_defines(target, entry, near=bool(os.environ.get("LLRM_NEAR_CODE")))
     dosbatch.link_target(target, first, exe, Path(work), objects_after=tuple(Path(one).resolve() for one in rest), defines=defines)

@@ -4,11 +4,17 @@
    Constant-length memcpy, memmove and memset, expanded in place for lengths within budget, at every
    size around the access widths: each byte copied once, a memmove of overlapping ranges both ways, and
    no byte outside the range written. */
-#include <stdio.h>
-#include <string.h>
+/* The harness has no C library: results go through report(), a failing size as its length. */
+extern void report(long value);
 
 static unsigned char src[1200], dst[1200], ref[1200];
 static int bad;
+
+static int differ(const unsigned char *a, const unsigned char *b, int n) {
+    for (int i = 0; i < n; i++)
+        if (a[i] != b[i]) return 1;
+    return 0;
+}
 
 #define SIZES(X) X(1) X(2) X(3) X(5) X(7) X(8) X(9) X(15) X(16) X(17) X(24) X(31) X(32) X(33) X(40) X(63) X(64) \
     X(65) X(100) X(127) X(128) X(129) X(200) X(255) X(256) X(257) X(300) X(511) X(512) X(513) X(600)
@@ -56,8 +62,8 @@ SIZES(DEFINE)
     }
 
 static void check(const char *what, int n, int at) {
-    if (memcmp(dst, ref, sizeof dst)) {
-        printf("bad %s %d at %d\n", what, n, at);
+    if (differ(dst, ref, sizeof dst)) {
+        report(n);
         bad = 1;
     }
 }
@@ -65,7 +71,7 @@ static void check(const char *what, int n, int at) {
 static void reset(void) {
     for (int i = 0; i < 1200; i++)
         src[i] = (unsigned char)(i * 7 + 3), dst[i] = 0xEE;
-    memcpy(ref, dst, sizeof ref);
+    for (int i = 0; i < 1200; i++) ref[i] = dst[i];
 }
 
 #define RUN(n) \
@@ -85,8 +91,8 @@ static void check_locals(int n, void (*under)(unsigned char *, const unsigned ch
     static unsigned char x[700], y[700];
     under(x, src);
     reference(y, src);
-    if (memcmp(x, y, sizeof x)) {
-        printf("bad locals %d\n", n);
+    if (differ(x, y, sizeof x)) {
+        report(-n);
         bad = 1;
     }
 }
@@ -96,6 +102,6 @@ static void check_locals(int n, void (*under)(unsigned char *, const unsigned ch
 int main(void) {
     SIZES(RUN)
     SIZES(RUN_LOCAL)
-    puts(bad ? "FAIL" : "ok");
+    report(bad);
     return bad;
 }

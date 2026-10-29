@@ -77,3 +77,4 @@ On the deadline the owner pays it (the check goes red or the test goes) or moves
 
 - DEBT skip-llrm-pass | limit 2 tests | deadline 2026-11-05 | owner w11 | `tools/difftest/test_difftest.py` skips `llrm-pass is not built`: the python group's pytest step builds no binaries.
 - DEBT skip-pindiff-llc | limit 1 test | deadline 2026-11-05 | owner w11 | `tools/pairs/test_pindiff.py` skips `needs LLRM_LLC`: nothing sets it in CI.
+- DEBT turbo-near-function | limit 1 test (tests/turbo.rs tdump_names_the_type_of_a_function_pointer..., _INNER and _NP) | deadline 2026-11-02 | owner clang-frontend | `near` on a function is ignored by the i8086 clang fork / llrm-llc CV4 path: Turbo Debugger shows `function far C` and a far pointer where Turbo C++ shows `near`; the test pins the gap and fails when it closes. Issue #5970.

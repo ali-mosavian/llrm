@@ -44,3 +44,15 @@ def test_a_run_that_drew_nothing_is_no_pass():
     assert oracle_qcport.drew(good) == (300, 12000)
     assert oracle_qcport.drew(good.replace("12000 polys", "0 polys")) is None
     assert oracle_qcport.drew("a run did not finish: llrm") is None
+
+
+def test_a_module_is_compiled_by_llrm_cc_for_the_borland_row_and_flags(tmp_path):
+    """tools/oracle_qcport.py ran target/gate-bins/llrm-c, which is gone: gate run 2 died with FileNotFoundError before one module."""
+    fake = compiler(tmp_path, 'echo "$LLRM_CC_TARGET $*" > "$0.said"\n')
+    oracle_qcport.compile_module(fake, tmp_path / "sc.c", "-O2", oracle_qcport.flags(tmp_path, tmp_path / "bcinc"), tmp_path / "sc.obj")
+    said = (tmp_path / "llrm-c.said").read_text()
+    assert said.startswith("x86_16-dos -O2 -c ") and f"-nostdinc -isystem {tmp_path / 'bcinc'}" in said
+
+
+def test_the_compiler_is_llrm_cc():
+    assert oracle_qcport.llrmbin.compiler(Path("/b")).name == "llrm-cc"
