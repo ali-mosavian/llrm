@@ -17,7 +17,9 @@ use llrm_lir::registers::{Info, RegId};
 use llrm_target::BuilderArch;
 
 use super::call::{Aarch64Calling, RET_GLUE};
+use super::globals::Globals;
 use super::pipeline::select_block;
+use crate::machine::Platform;
 use crate::REGISTER_INFO;
 
 static CALLING: LazyLock<Aarch64Calling> = LazyLock::new(Aarch64Calling::default);
@@ -27,6 +29,9 @@ pub fn builder_target() -> BuilderTarget {
         dag: DagConfig {
             pointer: EVT::I64,
             offset_folding: true,
+            // DEVIATE: `isOffsetFoldingLegal` is false for a GOT symbol; here its offset
+            // folds too and `LowerGlobalAddress` splits it again. Exit: a per-symbol hook.
+            dso_local_symbols: true,
             boolean_contents: BooleanContents::ZeroOrOne,
             ..DagConfig::default()
         },
@@ -89,6 +94,7 @@ pub struct Selected {
     /// The (size, alignment) of each frame object, by frame index: the
     /// function's allocas, then what the builder made.
     pub frame: Vec<(u64, u64)>,
+    pub globals: Globals,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -97,7 +103,7 @@ pub fn select_function(
     name: &str,
 ) -> Result<Vec<Selected>, String> {
     let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
-    select_function_in(module, name, &layout)
+    select_function_in(module, name, &layout, Platform::Darwin)
 }
 
 /// [`select_function`] under the data layout the program was compiled with.
@@ -105,7 +111,9 @@ pub fn select_function_in(
     module: &Module,
     name: &str,
     layout: &DataLayout,
+    platform: Platform,
 ) -> Result<Vec<Selected>, String> {
+    let globals = Globals::of(module, layout, platform);
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
         .global(id)
@@ -132,8 +140,8 @@ pub fn select_function_in(
         if !built.extra.is_empty() {
             return Err("a switch lowering made blocks".to_owned());
         }
-        let units = select_block(&mut built.dag).map_err(|why| format!("{why:?}"))?;
-        selected.push(Selected { dag: built.dag, units, live_ins: built.live_ins, frame: Vec::new() });
+        let units = select_block(&mut built.dag, &globals).map_err(|why| format!("{why:?}"))?;
+        selected.push(Selected { dag: built.dag, units, live_ins: built.live_ins, frame: Vec::new(), globals: globals.clone() });
     }
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
     for block in &mut selected {

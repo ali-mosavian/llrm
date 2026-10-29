@@ -41,3 +41,13 @@ define i32 @idx(i32 %i) { %s = alloca [4 x i32]
  store volatile i32 %i, ptr %q
  %v = load volatile i32, ptr %q
  ret i32 %v }
+@g = global [4 x i32] zeroinitializer
+@e = external global i32
+define i32 @gload() { %v = load i32, ptr @g
+ ret i32 %v }
+define ptr @gaddr() { ret ptr @g }
+define ptr @gaddro() { ret ptr getelementptr ([4 x i32], ptr @g, i64 0, i64 2) }
+define i32 @gext() { %v = load i32, ptr @e
+ ret i32 %v }
+define void @gst(i32 %x) { store i32 %x, ptr getelementptr ([4 x i32], ptr @g, i64 0, i64 1)
+ ret void }

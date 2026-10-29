@@ -105,6 +105,17 @@ fn loads_and_stores_select_the_pins_addressing_forms() {
     assert_eq!(one("void", "ptr %p, i32 %v", half), [vec!["STRHHui", "RET_ReallyLR"]]);
 }
 
+/// Globals: `ADRP` + `LDRWui` with a page offset, `MOVaddr` for the address,
+/// `LOADgot` for a symbol from another object; names are the pin's.
+#[test]
+fn global_addresses_select_adrp_movaddr_and_loadgot() {
+    let head = "@g = global [4 x i32] zeroinitializer\n@e = external global i32\n";
+    let one = |ret: &str, body: &str| selected(&format!("{head}define {ret} @f() {{\n{body}\n}}")).unwrap();
+    assert_eq!(one("i32", "  %v = load i32, ptr @g\n  ret i32 %v"), [["ADRP", "LDRWui", "RET_ReallyLR"]]);
+    assert_eq!(one("ptr", "  ret ptr @g"), [["MOVaddr", "RET_ReallyLR"]]);
+    assert_eq!(one("i32", "  %v = load i32, ptr @e\n  ret i32 %v"), [["LOADgot", "LDRWui", "RET_ReallyLR"]]);
+}
+
 mod emitted {
     use llrm_arm64::dag::emit::emit;
     use llrm_arm64::dag::function::select_function;

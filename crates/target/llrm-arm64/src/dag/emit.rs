@@ -22,8 +22,9 @@ use llrm_dagisel::generated::aarch64::aarch64_apple_m1::MACHINE_OPCODES;
 use llrm_lir::registers::RegId;
 
 use super::function::Selected;
+use super::globals::Globals;
 use crate::REGISTER_INFO;
-use crate::mc::inst::{Addr, AddSub, Extend, Gpr, Inst, Memory, MemOperand, Shift, Width};
+use crate::mc::inst::{Addr, AddSub, Extend, Gpr, Inst, Memory, MemOperand, Shift, Target, Width};
 use crate::mc::visit::Reg;
 use crate::mfunc::{MBlock, MFunc, Op, block_label};
 
@@ -50,6 +51,8 @@ enum Operand {
     Imm(u64),
     /// A frame object, by the builder's frame index.
     Slot(u32),
+    /// A global by id, and the offset into it.
+    Symbol(u32, i64),
 }
 
 /// `ADDWrr`, `SUBSXri` and the rest of the add/sub family: (subtract, set
@@ -167,6 +170,7 @@ fn build(
 
 struct Emitter<'a> {
     dag: &'a SelectionDAG,
+    globals: &'a Globals,
     mf: MFunc,
     /// The virtual register each value is in.
     values: HashMap<(u32, u8), Gpr>,
@@ -209,6 +213,9 @@ impl Emitter<'_> {
             NodeData::Const { bits, .. } if matches!(node.opcode, ISD::TargetConstant | ISD::Constant) => {
                 Ok(Operand::Imm(bits as u64))
             }
+            NodeData::Global { symbol, offset } if node.opcode == ISD::TargetGlobalAddress => {
+                Ok(Operand::Symbol(symbol, offset))
+            }
             NodeData::FrameIndex(index) if node.opcode == ISD::TargetFrameIndex => Ok(Operand::Slot(index as u32)),
             _ => self
                 .values
@@ -216,6 +223,16 @@ impl Emitter<'_> {
                 .map(|&g| Operand::Reg(g))
                 .ok_or_else(|| format!("operand {:?} has no register", node.opcode)),
         }
+    }
+
+    /// The relocation target of global `id` at `addend`, and whether it is a GOT slot.
+    fn target(
+        &self,
+        id: u32,
+        addend: i64,
+    ) -> Result<(Target, bool), String> {
+        let global = self.globals.get(id).ok_or("a global the module does not have")?;
+        Ok((Target::Symbol { name: global.name.clone(), addend }, global.got))
     }
 
     /// A load or store: operands are `[value,] base, offset...` without chains.
@@ -237,12 +254,15 @@ impl Emitter<'_> {
                 Addr::Register { base: *base, index: *index, extend: Extend::Uxtx, shifted: *shifted != 0 }
             }
             (AddressForm::Register, _) => return Err(format!("{name}: a register offset that is not base and index")),
+            (AddressForm::Scaled, [Operand::Reg(base), Operand::Symbol(id, offset)]) => {
+                Addr::PageOffset { base: *base, target: self.target(*id, *offset)?.0, got: false }
+            }
             (form, [base, Operand::Imm(imm)]) => {
                 let imm = *imm as i64 * if form == AddressForm::Scaled { size } else { 1 };
                 match base {
                     Operand::Reg(base) => Addr::Offset { base: *base, imm },
                     Operand::Slot(slot) => Addr::Slot { slot: *slot, offset: imm },
-                    Operand::Imm(_) => return Err(format!("{name}: a base that is a constant")),
+                    _ => return Err(format!("{name}: a base that is neither register nor frame object")),
                 }
             }
             _ => return Err(format!("{name}: operands are not those of its form")),
@@ -323,7 +343,38 @@ impl Emitter<'_> {
                     self.values.insert((id, 0), rd);
                     return Ok(());
                 }
-                self.ops.push(Op::I(build(name, rd, &operands)?));
+                match (name, operands.as_slice()) {
+                    ("ADRP", [Operand::Symbol(global, addend)]) => {
+                        let (target, _) = self.target(*global, *addend)?;
+                        self.ops.push(Op::I(Inst::Adr { page: true, rd, target, got: false }));
+                    }
+                    // `ADDXri page, :lo12:symbol, 0`
+                    ("ADDXri", [Operand::Reg(rn), Operand::Symbol(global, addend), _]) => {
+                        let (target, _) = self.target(*global, *addend)?;
+                        self.ops.push(Op::I(Inst::AddPageOffset { rd, rn: *rn, target }));
+                    }
+                    // `ADRP` and `ADDXri` of one symbol.
+                    ("MOVaddr", [Operand::Symbol(global, addend), _]) => {
+                        let (target, _) = self.target(*global, *addend)?;
+                        let page = self.mf.gpr();
+                        self.ops.push(Op::I(Inst::Adr { page: true, rd: page, target: target.clone(), got: false }));
+                        self.ops.push(Op::I(Inst::AddPageOffset { rd, rn: page, target }));
+                    }
+                    // `ADRP` of the GOT slot and the load from it.
+                    ("LOADgot", [Operand::Symbol(global, _)]) => {
+                        let (target, _) = self.target(*global, 0)?;
+                        let page = self.mf.gpr();
+                        self.ops.push(Op::I(Inst::Adr { page: true, rd: page, target: target.clone(), got: true }));
+                        self.ops.push(Op::I(Inst::Load {
+                            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: rd },
+                            addr: Addr::PageOffset { base: page, target, got: true },
+                            mmo: MemOperand::default(),
+                        }));
+                    }
+                    _ => {
+                        self.ops.push(Op::I(build(name, rd, &operands)?));
+                    }
+                }
                 self.values.insert((id, 0), rd);
                 Ok(())
             }
@@ -339,7 +390,7 @@ pub fn emit(
 ) -> Result<MFunc, String> {
     let [block] = blocks else { return Err("more than one block: branches are not translated".into()) };
     let mut emitter =
-        Emitter { dag: &block.dag, mf: MFunc::new(name), values: HashMap::new(), vregs: HashMap::new(), ops: Vec::new() };
+        Emitter { dag: &block.dag, globals: &block.globals, mf: MFunc::new(name), values: HashMap::new(), vregs: HashMap::new(), ops: Vec::new() };
     for &(size, align) in &block.frame {
         emitter.mf.slot(size, align);
     }
