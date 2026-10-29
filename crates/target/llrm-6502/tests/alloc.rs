@@ -141,15 +141,15 @@ fn a_word_select_returns_the_larger_word() {
 }
 
 /// A value live across a runtime call cannot stay in a register the routine
-/// clobbers: it goes to a slot and comes back. a = 5: t = 6, r = 5 * 3 = 15,
-/// t + r = 21.
+/// clobbers: it goes to a slot and comes back. a = 5: t = 6, r = 5 * 11 = 55,
+/// t + r = 61; 11 is not `2^n +- 1` times a power of two, so it stays a call.
 #[test]
 fn a_value_live_across_a_call_survives_it() {
     let ir =
-        "define i8 @across(i8 %a) {\n  %t = add i8 %a, 1\n  %r = mul i8 %a, 3\n  %s = add i8 %r, %t\n  ret i8 %s\n}";
+        "define i8 @across(i8 %a) {\n  %t = add i8 %a, 1\n  %r = mul i8 %a, 11\n  %s = add i8 %r, %t\n  ret i8 %s\n}";
     let text = compile(ir, "across");
     assert!(text.contains("jsr __mulqi3") && text.contains("s_across_"), "{text}");
-    assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 21);
+    assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 61);
 }
 
 const RECURSIVE: &str = "define i8 @rec(i8 %n) {
@@ -254,13 +254,13 @@ fn a_sum_through_a_pointer_runs_on_the_allocator() {
 
 /// A pointer live across a call is spilled as a pair and comes back whole:
 /// the second read through it sees the same bytes. data = 3 1 4 1:
-/// 4 + 15 + 1 = 20.
+/// 4 + 55 + 1 = 60.
 #[test]
 fn a_pointer_live_across_a_call_survives_it() {
     let ir = "define i8 @keep(ptr %p, i8 %a) {
   %x = getelementptr i8, ptr %p, i16 2
   %u = load i8, ptr %x
-  %m = mul i8 %a, 3
+  %m = mul i8 %a, 11
   %y = getelementptr i8, ptr %p, i16 3
   %w = load i8, ptr %y
   %s = add i8 %u, %m
@@ -272,7 +272,7 @@ fn a_pointer_live_across_a_call_survives_it() {
     let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
     let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #5\n  sta rc4\n";
     assert!(text.contains("s_keep_"), "no spill:\n{text}");
-    assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 20);
+    assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 60);
 }
 
 /// A recursive function with a local array and a value live across the call:
