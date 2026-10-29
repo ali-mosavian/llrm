@@ -1279,3 +1279,62 @@ fn a_word_times_another_constant_still_multiplies() {
     let text = compile(ir, "m100");
     assert!(text.contains("__mulhi3"), "{text}");
 }
+
+/// `x > C` and `x <= C` against a constant compared the constant first (`lda #99; ldx #0; cmp lo;
+/// txa; sbc hi`, 11 bytes in digits' loop test). They are `x >= C + 1` and `x < C + 1` with the
+/// constant an immediate (10 bytes), and the edges where `C + 1` wraps keep their meaning.
+#[test]
+fn a_greater_than_a_constant_compares_against_the_next_constant() {
+    let cases: [(&str, &str, i32); 8] = [
+        ("ugt", "i16", 99),
+        ("ule", "i16", 99),
+        ("sgt", "i16", -2),
+        ("sle", "i16", 7),
+        ("ugt", "i16", 65535),
+        ("sgt", "i16", 32767),
+        ("ugt", "i8", 254),
+        ("sle", "i8", -1),
+    ];
+    for (n, (pred, ty, c)) in cases.into_iter().enumerate() {
+        let bits = if ty == "i16" { 16 } else { 8 };
+        let ir = format!(
+            "define i8 @t{n}({ty} %x) {{\n  %c = icmp {pred} {ty} %x, {c}\n  %r = zext i1 %c to i8\n  ret i8 %r\n}}"
+        );
+        let text = compile(&ir, &format!("t{n}"));
+        if (pred, c) == ("ugt", 99) {
+            assert!(text.contains("cmp #100") && !text.contains("lda #99"), "{text}");
+        }
+        let wrap = |v: i32| (v & ((1 << bits) - 1)) as u32;
+        let signed = |v: u32| if v >> (bits - 1) == 1 { v as i32 - (1 << bits) } else { v as i32 };
+        for x in [0u32, 1, 7, 8, 98, 99, 100, 254, 255, 256, 32767, 32768, 65534, 65535] {
+            let x = x & wrap(-1);
+            let (sx, ux, sc, uc) = (signed(x), x, c, wrap(c));
+            let truth = match pred {
+                "ugt" => ux > uc,
+                "ule" => ux <= uc,
+                "sgt" => sx > sc,
+                _ => sx <= sc,
+            };
+            let setup = set("rc2", (x & 0xFF) as u16) + &set("rc3", (x >> 8) as u16);
+            let got = common::run_with(&format!("alloc-cc{n}-{x}"), &format!("{setup}  jsr t{n}\n"), &text);
+            assert_eq!(got, i32::from(truth), "{pred} {ty} {x} vs {c}");
+        }
+    }
+}
+
+/// `select c, 1, 2` is `sext(c) + 2` to the combiner, and nothing selected a sign extension from
+/// a bit: "cannot select SignExtend". Both orders of two consecutive constants pick by `c`.
+#[test]
+fn a_select_between_two_consecutive_constants_picks_by_the_condition() {
+    for (n, (yes, no)) in [(1u16, 2u16), (7, 8), (2, 1), (9, 8), (255, 0)].into_iter().enumerate() {
+        let ir = format!(
+            "define i8 @k{n}(i16 %x) {{\n  %c = icmp ult i16 %x, 99\n  %r = select i1 %c, i8 {yes}, i8 {no}\n  ret i8 %r\n}}"
+        );
+        let text = compile(&ir, &format!("k{n}"));
+        for (x, want) in [(0u16, yes), (98, yes), (99, no), (1000, no)] {
+            let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
+            let got = common::run_with(&format!("alloc-k{n}-{x}"), &format!("{setup}  jsr k{n}\n"), &text);
+            assert_eq!(got, i32::from(want), "x = {x}, {yes} or {no}");
+        }
+    }
+}
