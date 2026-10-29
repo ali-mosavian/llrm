@@ -1012,6 +1012,7 @@ fn staged(
         runtime: abi.runtime_contracts(),
         frame_zeroed: zeroed,
         facts: Some(target.facts),
+        hole,
     });
     let dag = match target.selector {
         Selector::Old => None,

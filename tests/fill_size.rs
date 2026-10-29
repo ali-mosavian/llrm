@@ -19,13 +19,14 @@ const CLEAR: &str =
     "int g(int *);\nint f(void) { int t[903]; int i; for (i = 0; i < 903; ++i) t[i] = 0; return g(t); }\n";
 
 /// A frame array of 903 ints cleared at -Os was `mov al, 0; mov ecx, 3612; rep
-/// stosb`, 3612 iterations of the string move where `xor eax, eax; mov ecx,
-/// 903; rep stosd` is as many bytes and a quarter of the iterations: bintree
-/// -Os cost 120145 clocks to gcc's 112830 and clang's 68349.
+/// stosb`, 3612 iterations of the string move: bintree -Os cost 120145 clocks
+/// to gcc's 112830 and clang's 68349. The pin calls `memset` for a fill past
+/// `X86Subtarget::getMaxInlineSizeThreshold` (128 bytes), `pushl $3612; pushl
+/// $0; calll memset`, and so do we: the library's loop is the fast one.
 #[test]
-fn a_zero_fill_of_dwords_at_size_in_a_32_bit_segment_is_stosd() {
+fn a_zero_fill_of_dwords_at_size_in_a_32_bit_segment_is_the_memset_call() {
     let text = listing(CLEAR, &["-m32", "-Os", "-march=i486"]);
-    assert!(text.contains("rep stosd") && !text.contains("rep stosb"), "{text}");
+    assert!(text.contains("call memset_") && !text.contains("rep stos"), "{text}");
 }
 
 /// In a 16-bit segment `stosd` and `xor eax, eax` each take an operand-size
