@@ -19,7 +19,7 @@ use llrm_codegen::backend::selectiondag::function_lowering::FIRST_VIRTUAL;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue};
 use llrm_mir::context::GlobalId;
-use llrm_mir::module::Module;
+use llrm_mir::module::{BlockId, Module};
 
 use crate::REGISTER_INFO;
 use crate::dagisel::pipeline::MosPins;
@@ -51,6 +51,8 @@ struct Cells<'a> {
     saved: HashMap<String, bool>,
     /// Copies into `a`, `x` and `y`, held back to the `RET`: every other copy goes through `a`.
     deferred: Vec<MInst>,
+    /// The successors the current block branches to by label, for the edge blocks.
+    branched_to: std::collections::HashSet<u32>,
 }
 
 impl Cells<'_> {
@@ -84,9 +86,10 @@ pub fn function_text(
 ) -> Result<String, String> {
     let blocks = &selection.blocks;
     let (laid_out, fixed) = lay_out_frame(blocks, &selection.locals);
-    let mut cells = Cells { name, next: 0, bytes: Vec::new(), words: Vec::new(), virtual_regs: HashMap::new(), frame: laid_out, fixed, saved: HashMap::new(), deferred: Vec::new() };
+    let mut cells = Cells { name, next: 0, bytes: Vec::new(), words: Vec::new(), virtual_regs: HashMap::new(), frame: laid_out, fixed, saved: HashMap::new(), deferred: Vec::new(), branched_to: Default::default() };
     let mut body = format!(".export {name}\n{name}:\n");
     let mut labels = 0;
+    let mut edges = String::new();
     for inst in cells.frame.prologue() {
         body.push_str(&expand(&inst, &mut labels)?);
     }
@@ -101,6 +104,9 @@ pub fn function_text(
             body.push_str(&expand(&copy(bits, cell, Operand::reg(from)), &mut labels)?);
         }
         let mut phis_done = false;
+        // A block that branches to several blocks puts each edge's copies on the edge.
+        let split = one.edges.iter().any(|edge| edge.to.is_some());
+        cells.branched_to.clear();
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
                 if matches!(one.dag.nodes()[node as usize].opcode, ISD::Machine(code) if code as u16 == op::RET) {
@@ -115,18 +121,33 @@ pub fn function_text(
                     phis_done = true;
                     let ISD::Machine(code) = one.dag.nodes()[node as usize].opcode else { unreachable!() };
                     let conditional = ![op::JMP, op::BRA, op::RET].contains(&(code as u16));
-                    body.push_str(&phi_copies(one, conditional, &mut cells, &mut labels)?);
+                    if !split {
+                        body.push_str(&phi_copies(one, conditional, &mut cells, &mut labels)?);
+                    }
                 }
                 for inst in lower(module, name, one, node, &mut values, &mut cells)? {
                     body.push_str(&expand(&inst, &mut labels)?);
                 }
             }
         }
-        // A `br` to the next block is dropped by layout: the block ends with no terminator.
-        if !phis_done {
+        if split {
+            // The edge taken by falling into the next block copies in line; the others are blocks
+            // after the function.
+            for edge in &one.edges {
+                let Some(to) = edge.to else { continue };
+                let copies = parallel_copy(&edge.copies, &mut cells, &mut labels)?;
+                if cells.branched_to.contains(&to.0) {
+                    writeln!(edges, "{}:\n{copies}  jmp {}", edge_label(name, one.block.0, to.0), block_label(name, to.0)).unwrap();
+                } else {
+                    body.push_str(&copies);
+                }
+            }
+        } else if !phis_done {
+            // A `br` to the next block is dropped by layout: the block ends with no terminator.
             body.push_str(&phi_copies(one, false, &mut cells, &mut labels)?);
         }
     }
+    body.push_str(&edges);
     let mut body = relax_bra(&body);
     body.push_str(".segment \"BSS\"\n");
     for cell in &cells.bytes {
@@ -184,11 +205,27 @@ fn phi_copies(
     cells: &mut Cells,
     labels: &mut u32,
 ) -> Result<String, String> {
-    if one.phi_copies.is_empty() {
+    let copies: Vec<(u32, u32)> = one.edges.iter().flat_map(|edge| edge.copies.iter().copied()).collect();
+    if copies.is_empty() {
         return Ok(String::new());
     }
     let mut text = if conditional { "  php\n".to_owned() } else { String::new() };
-    for &(input, own) in &one.phi_copies {
+    text.push_str(&parallel_copy(&copies, cells, labels)?);
+    if conditional {
+        text.push_str("  plp\n");
+    }
+    Ok(text)
+}
+
+/// `copies` (input register, phi's register) done at once: a copy whose destination another still
+/// reads waits, and a cycle (a swap) is broken by saving one old value in a cell.
+fn parallel_copy(
+    copies: &[(u32, u32)],
+    cells: &mut Cells,
+    labels: &mut u32,
+) -> Result<String, String> {
+    let mut pending: Vec<(Operand, Operand, u32)> = Vec::new();
+    for &(input, own) in copies {
         let Some(from) = cells.virtual_regs.get(&input).cloned() else { return Err(format!("phi input {input} was never written")) };
         let Operand::Reg(name) = &from else { unreachable!() };
         let bits = if name.starts_with("w_") { 16 } else { 8 };
@@ -200,12 +237,34 @@ fn phi_copies(
                 cell
             }
         };
-        text.push_str(&expand(&copy(bits, to, from), labels)?);
+        if from != to {
+            pending.push((from, to, bits));
+        }
     }
-    if conditional {
-        text.push_str("  plp\n");
+    let mut text = String::new();
+    while !pending.is_empty() {
+        let free = (0..pending.len()).find(|&at| !pending.iter().enumerate().any(|(other, p)| other != at && p.0 == pending[at].1));
+        if let Some(at) = free {
+            let (from, to, bits) = pending.remove(at);
+            text.push_str(&expand(&copy(bits, to, from), labels)?);
+        } else {
+            let (_, to, bits) = pending[0].clone();
+            let saved = cell_for(cells, bits);
+            text.push_str(&expand(&copy(bits, saved.clone(), to.clone()), labels)?);
+            for p in pending.iter_mut().filter(|p| p.0 == to) {
+                p.0 = saved.clone();
+            }
+        }
     }
     Ok(text)
+}
+
+fn edge_label(
+    name: &str,
+    from: u32,
+    to: u32,
+) -> String {
+    format!("{name}_e{from}_{to}")
 }
 
 /// Where `value` is: a constant, a label, a register or a cell.
@@ -224,7 +283,12 @@ fn location(
             let at = if index < 0 { (-index - 1) as usize } else { cells.fixed + index as usize };
             Ok(Operand::Imm(cells.frame.address(at)))
         }
-        NodeData::Block(block) => Ok(Operand::Label(block_label(name, block))),
+        NodeData::Block(block) => {
+            // A branch to a successor with phi copies from this block goes through its edge block.
+            let edge = one.edges.iter().find(|edge| edge.to == Some(BlockId(block)) && !edge.copies.is_empty());
+            cells.branched_to.insert(block);
+            Ok(Operand::Label(if edge.is_some() { edge_label(name, one.block.0, block) } else { block_label(name, block) }))
+        }
         NodeData::Global { symbol, offset } => {
             let global = module.global(GlobalId(symbol));
             let text = global.name.as_deref().ok_or("an unnamed global")?;

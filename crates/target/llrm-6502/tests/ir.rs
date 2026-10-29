@@ -518,3 +518,23 @@ fn a_phi_copy_in_a_fall_through_block_runs() {
         assert_eq!(run(&format!("pick-{x}"), ir, "pick", &set("rc2", x), ""), want);
     }
 }
+
+/// `lost(5)` returns the phi `%i` as the loop exits: `%i` runs 0..4 and `%next` = 5 ends it, so 4.
+/// The phi copy `%i := %next` ran before the branch on both edges, so the exit saw 5 (clang's
+/// `find(9)` over `buf` returned 6, not 5).
+#[test]
+fn a_phi_copy_does_not_run_on_the_exit_edge() {
+    let ir = "define i8 @lost(i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [ 0, %entry ], [ %next, %loop ]\n  %next = add i8 %i, 1\n  %done = icmp eq i8 %next, %n\n  br i1 %done, label %exit, label %loop\nexit:\n  ret i8 %i\n}";
+    assert_eq!(run("lost", ir, "lost", &set("rc2", 5), ""), 4);
+}
+
+/// `swap(n)` swaps `%a` and `%b` on each back edge and returns `%a`: n = 1 returns 1 (no swap yet),
+/// n = 3 two swaps, back to 1. Sequential copies turned `a, b` into `b, b` (clang's `fib(12)` over
+/// 16-bit phis returned 0).
+#[test]
+fn phi_copies_on_an_edge_are_parallel() {
+    let ir = "define i8 @swap(i8 %n) {\nentry:\n  br label %loop\nloop:\n  %a = phi i8 [ 1, %entry ], [ %b, %loop ]\n  %b = phi i8 [ 2, %entry ], [ %a, %loop ]\n  %k = phi i8 [ %n, %entry ], [ %k1, %loop ]\n  %k1 = sub i8 %k, 1\n  %z = icmp eq i8 %k1, 0\n  br i1 %z, label %exit, label %loop\nexit:\n  ret i8 %a\n}";
+    for (n, want) in [(1, 1), (2, 2), (3, 1)] {
+        assert_eq!(run(&format!("swap-{n}"), ir, "swap", &set("rc2", n), ""), want);
+    }
+}

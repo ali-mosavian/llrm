@@ -1,9 +1,10 @@
 //! A function from IR to scheduled machine nodes: the shared builder, then
 //! [`super::pipeline`]'s stages, block by block.
 //!
-//! DEVIATE: a phi is a copy at the end of each predecessor, not a parallel copy per edge: wrong
-//! when the phi's old value is still read on the edge that does not take it. Reason: the spike has
-//! no critical-edge splitting. Exit: the shared machine function.
+//! DEVIATE: the phi copies of a block that branches to several blocks are per edge (an edge block
+//! the emitter makes), not placed by a machine-function phi elimination; a `switch`'s blocks keep one
+//! copy list for all edges, wrong when the phi's old value is still read on another edge. Reason: no
+//! shared machine function. Exit: the shared machine function.
 //!
 //! DEVIATE: no static allocas or jump tables: the
 //! builder makes the frame objects and the C convention passes what the registers do not hold on
@@ -19,7 +20,9 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef};
+use std::collections::HashMap;
+
+use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
 use super::hooks::Cpu;
@@ -52,8 +55,16 @@ pub struct Selected {
     pub units: Vec<Unit>,
     /// The registers the block reads on arrival, with the virtual register each is copied to.
     pub live_ins: Vec<(RegId, u32)>,
-    /// The phi inputs this block exports: the register its value was copied to, and the phi's own.
-    pub phi_copies: Vec<(u32, u32)>,
+    /// The phi inputs this block exports, by successor: the register the value was copied to, and the
+    /// phi's own. One entry with no successor when they all go together (a single successor, or a
+    /// `switch`).
+    pub edges: Vec<Edge>,
+}
+
+/// The phi copies on the edge to `to` (a parallel copy), or on every edge when `to` is `None`.
+pub struct Edge {
+    pub to: Option<BlockId>,
+    pub copies: Vec<(u32, u32)>,
 }
 
 /// A selected function: its blocks and the sizes of its local frame objects, by frame index.
@@ -88,7 +99,7 @@ pub fn select_function(
     for &block in function.layout() {
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        select_built(block, built, cpu, &mut info, &mut selected)?;
+        select_built(Some((function, block)), block, built, cpu, &mut info, &mut selected)?;
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
@@ -123,6 +134,7 @@ fn alloca_sizes(
 /// One built block selected and scheduled, then the blocks its `switch` lowering made. Every branch
 /// is to a label, so their position in the text does not matter.
 fn select_built(
+    top: Option<(&Function, BlockId)>,
     block: BlockId,
     mut built: BlockDag,
     cpu: Cpu,
@@ -130,16 +142,32 @@ fn select_built(
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
     let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
-    let mut phi_copies = Vec::new();
+    // The block each phi is in, to split the copies by successor.
+    let mut home: HashMap<ValueId, BlockId> = HashMap::new();
+    let mut successors = Vec::new();
+    if let Some((function, block)) = top.filter(|_| built.extra.is_empty()) {
+        successors = function.successors(block).iter().copied().collect::<Vec<_>>();
+        for &successor in &successors {
+            for phi in function.iter_block(successor).take_while(|inst| function.instruction(*inst).opcode == Opcode::Phi) {
+                home.extend(function.instruction(phi).result.map(|result| (result, successor)));
+            }
+        }
+    }
+    let mut edges: Vec<Edge> = Vec::new();
     for (at, (phi, input)) in built.phi_updates.iter().enumerate() {
         let own = *info.value_regs.get(phi).ok_or("a phi with no register")?;
         // A value of several registers has one entry per part, in order.
         let part = built.phi_updates[..at].iter().filter(|(one, _)| one == phi).count();
-        phi_copies.push((*input, if part == 0 { own } else { info.part_regs(own, part + 1)[part] }));
+        let copy = (*input, if part == 0 { own } else { info.part_regs(own, part + 1)[part] });
+        let to = if successors.len() > 1 { home.get(phi).copied() } else { None };
+        match edges.iter_mut().find(|edge| edge.to == to) {
+            Some(edge) => edge.copies.push(copy),
+            None => edges.push(Edge { to, copies: vec![copy] }),
+        }
     }
-    selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, phi_copies });
+    selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(extra, made, cpu, info, selected)?;
+        select_built(None, extra, made, cpu, info, selected)?;
     }
     Ok(())
 }
