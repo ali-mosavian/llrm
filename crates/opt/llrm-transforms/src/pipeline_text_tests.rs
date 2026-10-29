@@ -75,3 +75,15 @@ fn legacy_flags_name_the_same_passes() {
     assert_eq!(legacy("loop-reduce"), Some("loop-reduce"));
     assert_eq!(legacy("gvn"), None);
 }
+
+const EXIT_USE: &str = "define i32 @f(i32 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i32 [ 0, %entry ], [ %next, %loop ]\n  %next = add i32 %i, 1\n  %c = icmp ult i32 %next, %n\n  br i1 %c, label %loop, label %exit\nexit:\n  ret i32 %next\n}\n";
+
+/// `-passes=loop-reduce` on the pin runs LoopSimplify and LCSSA first (the loop
+/// adaptor's canonicalisation), so the pin's output keeps a phi for the value
+/// read after the loop; without it a test's `phi` CHECKs saw none.
+#[test]
+fn a_run_of_loop_passes_is_canonicalised_into_lcssa_form_first() {
+    let phis = |out: &str| out.matches(" = phi ").count();
+    assert_eq!(phis(&run("loop(loop-instsimplify)", EXIT_USE).unwrap()), 2);
+    assert_eq!(phis(&run("function(dce)", EXIT_USE).unwrap()), 1);
+}

@@ -73,16 +73,40 @@ fn sequence(
 /// passes here do.
 const ADAPTORS: &[&str] = &["module", "function", "loop", "loop-mssa"];
 
-/// Adds the passes of `elements` to `manager`.
+/// The passes `FunctionToLoopPassAdaptor` runs loops under: they want
+/// `LoopSimplify` and LCSSA form first.
+const LOOP_PASSES: &[&str] = &["loop-reduce", "indvars", "loop-rotate", "loop-deletion", "loop-instsimplify"];
+
+/// Adds the passes of `elements` to `manager`. As `PassBuilder` does, a run of
+/// loop passes gets one adaptor, which canonicalises the function
+/// (loop-simplify and LCSSA) before it.
 pub fn build(
     elements: &[Element],
     manager: &mut PassManager,
 ) -> Result<(), Unsupported> {
+    build_in(elements, manager, &mut false)
+}
+
+fn build_in(
+    elements: &[Element],
+    manager: &mut PassManager,
+    in_loops: &mut bool,
+) -> Result<(), Unsupported> {
     for element in elements {
         match element {
-            Element::Nested { name, inner } if ADAPTORS.contains(&name.as_str()) => build(inner, manager)?,
+            Element::Nested { name, inner } if ADAPTORS.contains(&name.as_str()) => build_in(inner, manager, in_loops)?,
             Element::Nested { name, .. } => return Err(Unsupported(format!("pass adaptor {name}"))),
-            Element::Pass { name, params } => add(name, params.as_deref(), manager)?,
+            Element::Pass { name, params } => {
+                let is_loop_pass = LOOP_PASSES.contains(&name.as_str());
+                if is_loop_pass && !*in_loops {
+                    manager.add(crate::loopsimplify::LoopSimplify);
+                    manager.add(crate::lcssa::LoopClosedSSA);
+                }
+                if !matches!(name.as_str(), "require" | "invalidate" | "verify") {
+                    *in_loops = is_loop_pass;
+                }
+                add(name, params.as_deref(), manager)?
+            }
         }
     }
     Ok(())

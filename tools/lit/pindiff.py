@@ -31,6 +31,8 @@ def text_form(output):
         if not line.strip() or line.startswith(("source_filename", "attributes #", "target ")) or re.match(r"^%[-\w.$\"]+ = type\b", line):
             continue
         line = re.sub(r"\s#\d+", "", line)
+        # The pin prints the ABI alignment of an access that gave none; we do not.
+        line = re.sub(r", align \d+", "", line)
         line = re.sub(r"(?<![\w.])(" + ATTRS + r")(?![\w.])", "", line)
         lines.append(re.sub(r"\s+", " ", line).strip())
     return "\n".join(lines)
@@ -74,6 +76,16 @@ def command(line, test, opt):
     return words, stdin
 
 
+LEGACY = {"-loop-reduce": "loop-reduce", "-indvars": "indvars", "-lcssa": "lcssa", "-loop-simplify": "loop-simplify"}
+
+
+def new_pm(words):
+    """`words` with a legacy pass flag spelled as `-passes=`: llrm mirrors the new pass manager."""
+    passes = [LEGACY[w] for w in words if w in LEGACY]
+    rest = [w for w in words if w not in LEGACY]
+    return ([f"-passes={','.join(passes)}"] if passes else []) + rest, bool(passes)
+
+
 def execute(binary, words, stdin):
     try:
         done = subprocess.run(
@@ -95,6 +107,7 @@ def compare(test, args):
         if not built:
             continue
         words, stdin = built
+        words, legacy = new_pm(words)
         pin_code, pin_out = execute(args.pin_opt, words, stdin)
         code, out = execute(args.llrm_opt, words, stdin)
         if pin_code != 0:
