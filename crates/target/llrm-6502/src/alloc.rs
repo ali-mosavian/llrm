@@ -653,6 +653,10 @@ impl Builder {
                 Operand::Use(b)
             }
         };
+        if is_identity(mnemonic, &second) {
+            self.copy(d, a);
+            return Ok(());
+        }
         if let Some(carry) = carry {
             self.push(Inst::new(Kind::Op(carry), vec![]));
         }
@@ -660,6 +664,22 @@ impl Builder {
         self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second]));
         self.copy(d, acc);
         Ok(())
+    }
+
+    /// How many halves of the pair `name` are the identity of `mnemonic` (a known `0`, or `255` for `AND`).
+    fn identity_halves(
+        &self,
+        mnemonic: &str,
+        name: &str,
+    ) -> usize {
+        let base = name.strip_suffix("+1").unwrap_or(name);
+        if self.pointers.contains(base) {
+            return 0;
+        }
+        [base.to_owned(), format!("{base}+1")]
+            .iter()
+            .filter(|cell| self.constants.get(*cell).is_some_and(|v| is_identity(mnemonic, &Operand::Imm(*v & 0xFF))))
+            .count()
     }
 
     /// The same on a pair, the carry running from the low byte to the high.
@@ -690,6 +710,12 @@ impl Builder {
             self.push(bump);
             return Ok(());
         }
+        // a commutative op reads the operand with the known identity half as its second
+        let (a, b) = if matches!(mnemonic, "EOR" | "ORA" | "AND") && self.identity_halves(mnemonic, a) > self.identity_halves(mnemonic, b) {
+            (b, a)
+        } else {
+            (a, b)
+        };
         let (al, ah) = self.read_word(a)?;
         let second = match self.word_constant(b) {
             Some(bytes) => bytes.map(Operand::Imm),
@@ -717,12 +743,24 @@ impl Builder {
             self.push(Inst::new(Kind::Op(carry), vec![]));
         }
         for ((d, a), b) in [(dl, al), (dh, ah)].into_iter().zip(second) {
+            if is_identity(mnemonic, &b) {
+                self.copy(d, a);
+                continue;
+            }
             self.copy(acc, a);
             self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
             self.copy(d, acc);
         }
         Ok(())
     }
+}
+
+/// A logical op whose immediate leaves the byte as it was: `x ^ 0`, `x | 0`, `x & 255`.
+fn is_identity(
+    mnemonic: &str,
+    second: &Operand,
+) -> bool {
+    matches!((mnemonic, second), ("EOR" | "ORA", Operand::Imm(0)) | ("AND", Operand::Imm(255)))
 }
 
 fn name(operand: &Machine) -> Result<&str, Unsupported> {
@@ -830,6 +868,12 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
         {
             values.insert(d.clone(), *value);
         }
+        // a shift by a byte or more leaves one half zero
+        if let (op::SHL16 | op::SRL16, Some(Machine::Imm(8..16))) = (*opcode, operands.get(2)) {
+            let zero = if *opcode == op::SHL16 { d.clone() } else { format!("{d}+1") };
+            *defs.entry(zero.clone()).or_default() += usize::from(*opcode == op::SRL16);
+            values.insert(zero, 0);
+        }
         if *opcode == op::LDI16
             && let Some(Machine::Imm(value)) = operands.get(1)
         {
@@ -839,7 +883,10 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
             values.insert(high, (value >> 8) & 0xFF);
         }
     }
-    values.retain(|cell, _| defs[cell] == 1 && (cell.starts_with("v_") || cell.starts_with("w_")));
+    values.retain(|cell, _| {
+        let word = cell.strip_suffix("+1").unwrap_or(cell);
+        defs[cell] == 1 && defs[word] == 1 && (cell.starts_with("v_") || cell.starts_with("w_"))
+    });
     // a byte copied once from a constant is that constant (the zero high half of a widened byte)
     for item in items {
         let Item::Inst(MInst { opcode: op::COPY8, operands }) = item else { continue };
