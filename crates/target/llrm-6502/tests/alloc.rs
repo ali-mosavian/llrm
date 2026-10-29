@@ -429,3 +429,36 @@ fn a_reload_between_a_compare_and_its_branch_keeps_the_flags() {
     assert_eq!(run(""), 0x66);
     assert_eq!(run("  txa\n"), 0xA1);
 }
+
+const SCHR: &str = "define i8 @schr(ptr %0, i8 %1)  {\n\
+  br label %3\n\
+\n\
+3:                                                ; preds = %3, %2\n\
+  %.0 = phi ptr [ %0, %2 ], [ %5, %3 ]\n\
+  %4 = load i8, ptr %.0, align 1\n\
+  %.not = icmp eq i8 %4, 0\n\
+  %.not8 = icmp eq i8 %4, %1\n\
+  %or.cond = or i1 %.not, %.not8\n\
+  %5 = getelementptr inbounds nuw i8, ptr %.0, i16 1\n\
+  br i1 %or.cond, label %.critedge, label %3\n\
+\n\
+.critedge:                                        ; preds = %3\n\
+  %6 = ptrtoint ptr %.0 to i16\n\
+  %7 = ptrtoint ptr %0 to i16\n\
+  %8 = sub i16 %6, %7\n\
+  %extract.t = trunc i16 %8 to i8\n\
+  %.off0 = select i1 %.not, i8 -1, i8 %extract.t\n\
+  ret i8 %.off0\n\
+}\n\
+";
+
+/// A loop leaving on `c == 0 || c == k`, then selecting on one of the two
+/// tests, never finished compiling (bench set 2, `schr`): the process spun.
+#[test]
+fn a_loop_leaving_on_either_of_two_tests_compiles() {
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(compile(SCHR, "schr").len());
+    });
+    wait.recv_timeout(std::time::Duration::from_secs(10)).expect("compiling schr does not return");
+}
