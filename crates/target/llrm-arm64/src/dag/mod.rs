@@ -2,6 +2,7 @@
 //! rest of what the shared stages ask of a target.
 
 pub mod call;
+pub mod emit;
 pub mod function;
 pub mod ids;
 pub mod pipeline;
