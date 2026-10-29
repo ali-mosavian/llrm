@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 LAYERS = [
-    ("support", ["llrm-env", "llrm-support", "llrm-alloc", "llrm-adt"]),
+    ("support", ["llrm-env", "llrm-support", "llrm-alloc", "llrm-adt", "llrm-cgen"]),
     ("ir", ["llrm-mir", "llrm-lir", "llrm-hir"]),
     ("analysis", ["llrm-analysis"]),
     ("transforms", ["llrm-transforms", "llrm-sroa-poc"]),
