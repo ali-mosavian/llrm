@@ -34,6 +34,8 @@ const HOST_MAIN: &str = "#include <stdio.h>\nconst unsigned char buf[16] = {3,1,
 enum Outcome {
     Ok,
     Differs { ours: i32, reference: i32, host: i32 },
+    /// Right once and different on a stack that starts elsewhere: a read of what was never written.
+    Unstable { first: i32, second: i32 },
     Hang,
     Reject(String),
     Reference(String),
@@ -70,6 +72,7 @@ fn guarded(
     program: &Path,
     args: &[&str],
     seconds: u32,
+    env: &[(&str, &str)],
 ) -> Option<Guarded> {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
@@ -86,6 +89,7 @@ fn guarded(
         .args(["-c", &format!("ulimit -t {seconds}; exec \"$0\" \"$@\"")])
         .arg(program)
         .args(args)
+        .envs(env.iter().copied())
         .process_group(0)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -207,13 +211,17 @@ fn image(functions: Vec<Item>) -> Vec<Item> {
     all
 }
 
+/// `exe` under qemu, with `pad` bytes more of environment: the stack it starts with is different.
 fn qemu(
     exe: &Path,
     limit: &str,
     cpu: &str,
+    pad: usize,
 ) -> Result<i32, bool> {
     let seconds: u32 = limit.trim_end_matches('s').parse().unwrap_or(10);
-    match guarded(Path::new("qemu-m68k"), &["-cpu", cpu, &exe.display().to_string()], seconds) {
+    let padding = "x".repeat(pad);
+    let env: Vec<(&str, &str)> = if pad == 0 { Vec::new() } else { vec![("LLRM_PAD", &padding)] };
+    match guarded(Path::new("qemu-m68k"), &["-cpu", cpu, &exe.display().to_string()], seconds, &env) {
         Some(Guarded::TimedOut) => Err(true),
         Some(Guarded::Exited(Some(code), _)) => Ok(code),
         _ => Err(false),
@@ -246,7 +254,7 @@ fn gcc_m68k(
     if !ok {
         return None;
     }
-    qemu(&exe, "10", "m68020").ok()
+    qemu(&exe, "10", "m68020", 0).ok()
 }
 
 fn check(
@@ -299,7 +307,7 @@ fn check_text(
     if let Err(why) = built {
         return Outcome::Reference(why);
     }
-    let host: i32 = match guarded(&dir.join("host"), &[], 10) {
+    let host: i32 = match guarded(&dir.join("host"), &[], 10, &[]) {
         Some(Guarded::Exited(Some(0), text)) => text.trim().parse().unwrap_or(-1),
         Some(Guarded::TimedOut) => return Outcome::Reference("host run: timed out".into()),
         _ => return Outcome::Reference("host run: failed".into()),
@@ -346,8 +354,12 @@ fn check_text(
     };
     let exe = dir.join("ours");
     write_executable(&exe, &bytes).unwrap();
-    match qemu(&exe, "10", "m68000") {
-        Ok(code) if code == reference => Outcome::Ok,
+    match qemu(&exe, "10", "m68000", 0) {
+        // the same program on a stack that starts elsewhere: an answer that moves read garbage
+        Ok(code) if code == reference => match qemu(&exe, "10", "m68000", 4001) {
+            Ok(other) if other != code => Outcome::Unstable { first: code, second: other },
+            _ => Outcome::Ok,
+        },
         Ok(code) => Outcome::Differs { ours: code, reference, host },
         Err(true) => Outcome::Hang,
         Err(false) => Outcome::Reject("qemu did not run".to_owned()),
@@ -424,6 +436,10 @@ fn main() {
     for (seed, outcome) in &results {
         match outcome {
             Outcome::Ok => ok += 1,
+            Outcome::Unstable { first, second } => {
+                differs += 1;
+                println!("seed {seed}: MISMATCH ours {first}, then {second} on another stack (reads garbage)");
+            }
             Outcome::Differs { ours, reference, host } => {
                 differs += 1;
                 println!("seed {seed}: MISMATCH ours {ours}, m68k gcc -O2 {reference}, host gcc -O0 {host}");
@@ -451,6 +467,24 @@ fn main() {
 mod tests {
     use super::*;
 
+    /// The environment pads the stack, so a program that reads its stack address shows it: the
+    /// second run of `check` relies on it. A read of an unwritten slot gave a plausible answer
+    /// that moved with the stack (seed 86), and the driver took it for right.
+    #[test]
+    fn an_environment_pad_moves_the_stack() {
+        let dir = std::env::temp_dir().join(format!("llrm-m68k-pad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = "unsigned char k(void) { volatile int x = 0; return (unsigned)&x >> 4; }\n";
+        if gcc_m68k(&dir, source).is_none() {
+            return; // no m68k gcc or qemu here
+        }
+        let exe = dir.join("m68k-gcc");
+        let usual = qemu(&exe, "10", "m68020", 0).unwrap();
+        let padded = qemu(&exe, "10", "m68020", 4001).unwrap();
+        assert_ne!(usual, padded);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_program_that_never_exits_is_killed() {
         let dir = std::env::temp_dir().join(format!("llrm-m68k-guard-{}", std::process::id()));
@@ -459,7 +493,7 @@ mod tests {
         assert!(Command::new("gcc").current_dir(&dir).args(["-O0", "-o", "spin", "spin.c"]).status().unwrap().success());
         let bin = dir.join("spin").canonicalize().unwrap();
         let start = std::time::Instant::now();
-        assert!(matches!(guarded(&bin, &[], 1), Some(Guarded::TimedOut)));
+        assert!(matches!(guarded(&bin, &[], 1, &[]), Some(Guarded::TimedOut)));
         assert!(start.elapsed().as_secs() < 10, "took {:?}", start.elapsed());
         let alive = std::fs::read_dir("/proc")
             .unwrap()
