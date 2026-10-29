@@ -25,6 +25,8 @@ pub(crate) struct Graph<'a> {
     blocks: Vec<BlockId>,
     succs: Vec<BlockList>,
     preds: Vec<BlockList>,
+    /// Each block's edge probabilities, worked out when first asked.
+    odds: std::cell::RefCell<Vec<Option<std::rc::Rc<[BranchProbability]>>>>,
 }
 
 thread_local! {
@@ -50,7 +52,8 @@ impl<'a> Graph<'a> {
                 }
             }
         }
-        Self { body, blocks: (0..body.blocks.len() as u32).map(BlockId).collect(), succs, preds }
+        let odds = std::cell::RefCell::new(vec![None; body.blocks.len()]);
+        Self { body, blocks: (0..body.blocks.len() as u32).map(BlockId).collect(), succs, preds, odds }
     }
 }
 
@@ -58,6 +61,36 @@ impl Graph<'_> {
     /// `MachineCycleInfo` of this graph.
     pub(crate) fn cycle_info(&self) -> CycleInfo {
         CycleInfo::compute(self)
+    }
+
+    /// The probability of each of `src`'s edges, in the order of its
+    /// successors: the odds isel gave, the rest shared by the edges it did
+    /// not.
+    fn edge_probabilities(
+        &self,
+        src: BlockId,
+    ) -> Vec<BranchProbability> {
+        let from = &self.body.blocks[src.0 as usize];
+        let succs = &self.succs[src.0 as usize];
+        llrm_mir::counts::bump_by(llrm_mir::counts::Event::EdgeOddsLookups, succs.len());
+        let probs: Vec<Option<u32>> = succs
+            .iter()
+            .map(|to| self.body.odds.taken.get(&(from.at, self.body.blocks[to.0 as usize].at)).copied())
+            .collect();
+        if probs.iter().all(Option::is_none) {
+            return vec![BranchProbability::new(1, succs.len() as u32); succs.len()];
+        }
+        let mut sum = BranchProbability::get_zero();
+        let mut known = 0u32;
+        for prob in probs.iter().flatten() {
+            sum += BranchProbability::get_raw(*prob);
+            known += 1;
+        }
+        let rest = (known as usize != probs.len()).then(|| sum.get_compl().div_u32(probs.len() as u32 - known));
+        probs
+            .iter()
+            .map(|prob| prob.map_or_else(|| rest.expect("an edge without odds"), BranchProbability::get_raw))
+            .collect()
     }
 }
 
@@ -100,25 +133,13 @@ impl EdgeProbabilities for Graph<'_> {
         src: BlockId,
         index: usize,
     ) -> BranchProbability {
-        let from = &self.body.blocks[src.0 as usize];
-        let succs = &self.succs[src.0 as usize];
-        let probs: Vec<Option<u32>> = succs
-            .iter()
-            .map(|to| self.body.odds.taken.get(&(from.at, self.body.blocks[to.0 as usize].at)).copied())
-            .collect();
-        if probs.iter().all(Option::is_none) {
-            return BranchProbability::new(1, succs.len() as u32);
+        if let Some(odds) = &self.odds.borrow()[src.0 as usize] {
+            return odds[index];
         }
-        if let Some(prob) = probs[index] {
-            return BranchProbability::get_raw(prob);
-        }
-        let mut sum = BranchProbability::get_zero();
-        let mut known = 0u32;
-        for prob in probs.iter().flatten() {
-            sum += BranchProbability::get_raw(*prob);
-            known += 1;
-        }
-        sum.get_compl().div_u32(probs.len() as u32 - known)
+        let odds: std::rc::Rc<[BranchProbability]> = self.edge_probabilities(src).into();
+        let found = odds[index];
+        self.odds.borrow_mut()[src.0 as usize] = Some(odds);
+        found
     }
 }
 

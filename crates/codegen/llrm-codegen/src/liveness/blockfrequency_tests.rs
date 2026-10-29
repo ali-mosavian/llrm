@@ -120,3 +120,27 @@ fn test_the_frequencies_of_one_cfg_are_worked_out_once_and_odds_make_another() {
     let skewed = MachineBlockFrequencyInfo::of(&body(succs, &[((0, 1), HALF / 2), ((0, 2), HALF + HALF / 2)]));
     assert_eq!(skewed.get_block_freq_relative_to_entry_block(1), 0.25, "other odds are worked out afresh");
 }
+
+/// A block's edges were worked out again for each edge asked, with the odds of
+/// all its successors read each time: a dispatch of 128 cases read 4x the odds
+/// of 64, and `lir machinesink` of the cases input was x2.69 per doubling.
+#[test]
+fn test_a_block_of_many_edges_has_its_odds_read_once() {
+    let read = |cases: i64| {
+        let mut succs: Vec<Vec<i64>> = vec![(1..=cases).collect()];
+        succs.extend((0..cases).map(|_| vec![cases + 1]));
+        succs.push(vec![]);
+        let succs: Vec<&[i64]> = succs.iter().map(Vec::as_slice).collect();
+        let body = body(&succs, &[]);
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::EdgeOddsLookups);
+        let mbfi = MachineBlockFrequencyInfo::of(&body);
+        let mbpi = MachineBranchProbabilityInfo::of(&body);
+        for edge in 0..cases as usize {
+            assert_eq!(mbpi.get_edge_probability(0, edge), BranchProbability::new(1, cases as u32));
+        }
+        assert!(mbfi.get_block_freq(0).get_frequency() > 0);
+        llrm_mir::counts::get(llrm_mir::counts::Event::EdgeOddsLookups) - before
+    };
+    let (small, big) = (read(64), read(128));
+    assert!(big * 10 <= small * 25, "{small} odds read for 64 cases, {big} for 128");
+}
