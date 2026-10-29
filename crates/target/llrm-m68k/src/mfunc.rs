@@ -100,19 +100,20 @@ pub fn operand_class(
 ) -> Option<Class> {
     let (code, _) = MACHINE_OPCODES.iter().find(|(_, one)| *one == name)?;
     let desc = instrinfo::desc(*code as u16)?;
-    Class::of_pin(desc.operands.get(index)?.reg_class).map(|class| zero_extension_result(name, index, class))
+    Class::of_pin(desc.operands.get(index)?.reg_class).map(|class| extension_result(name, index, class))
 }
 
-/// DEVIATE from the pin, whose `MOVZXd32d16` defines an `XR32` and so may be given an address
-/// register: `ExpandMOVSZX_RR` then clears it and `move.w`s into it, which is `movea.w` and
-/// sign-extends. The result of a zero extension is a data register, for the emitter and for the
-/// passes that widen a class (`widen_compare_operands` read the table's `XR32` as free).
-fn zero_extension_result(
+/// DEVIATE from the pin, whose `MOVZXd32d16` and `MOVSXd32d16` define an `XR32` and so may be
+/// given an address register: `ExpandMOVSZX_RR` then does `move.w` into a cleared register
+/// (`movea.w`, which sign-extends) or `ext.l` on it (not encodable). The result of an extension is
+/// a data register, for the emitter and for the passes that widen a class
+/// (`widen_compare_operands` read the table's `XR32` as free).
+fn extension_result(
     name: &str,
     index: usize,
     class: Class,
 ) -> Class {
-    if index == 0 && name.starts_with("MOVZX") && class == Class::Xr32 { Class::Dr32 } else { class }
+    if index == 0 && (name.starts_with("MOVZX") || name.starts_with("MOVSX")) && class == Class::Xr32 { Class::Dr32 } else { class }
 }
 
 fn opcode_name(code: u32) -> Option<&'static str> {
@@ -340,7 +341,7 @@ impl Emitter<'_> {
                         .get(at)
                         .and_then(|one| Class::of_pin(one.reg_class))
                         .unwrap_or_else(|| Class::of_type(*vt));
-                    let class = zero_extension_result(name, at, class);
+                    let class = extension_result(name, at, class);
                     let reg = self.new_reg(class);
                     self.values.insert((node, at as u8), reg);
                     operands.push(Operand::Def(reg));

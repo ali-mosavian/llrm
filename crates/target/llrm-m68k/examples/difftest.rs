@@ -39,12 +39,13 @@ enum Outcome {
     Reference(String),
 }
 
-/// `$DIFF_OPTIONS`: `raw` (no mid-end), `size`, `pinned` (no overlay) or `os-raw`; which layer a failure is in.
+/// `$DIFF_OPTIONS`: `raw` (no mid-end), `size`, `pinned` (neither), `mid-end-only` or `os-raw`; which layer a failure is in.
 fn options() -> Options {
     match std::env::var("DIFF_OPTIONS").as_deref() {
         Ok("raw") => Options { mid_end: false, ..Options::default() },
         Ok("size") => Options { size: true, ..Options::default() },
         Ok("pinned") => Options::PINNED,
+        Ok("mid-end-only") => Options { overlay: false, ..Options::default() },
         _ => Options::default(),
     }
 }
