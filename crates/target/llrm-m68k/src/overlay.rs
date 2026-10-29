@@ -221,7 +221,8 @@ fn writes_flags(inst: &Inst) -> Option<(crate::mc::Operand, bool)> {
     data.then(|| (Operand::Reg(*dst), clears_overflow))
 }
 
-/// A `tst.l Dn` right after the instruction that wrote `Dn` is dropped when
+/// A `tst.l Dn` right after the instruction that wrote `Dn` (or a `move.l Dn,
+/// Dm`, which moves the value whose codes it leaves) is dropped when
 /// the branches after it read only what that instruction left the same:
 /// `eq`/`ne`/`mi`/`pl` always, and the signed orderings when `V` is cleared.
 /// `lsr.l #1, %d1; tst.l %d1; bne` is `lsr.l #1, %d1; bne`.
@@ -243,7 +244,9 @@ pub fn drop_redundant_tests(lines: Vec<crate::expand::Line>) -> Vec<crate::expan
             continue;
         }
         let Some((written, clears_overflow)) = writes_flags(before) else { continue };
-        if test.operands.first() != Some(&written) {
+        // `move.l %d2, %d0` leaves the codes of `%d2` too: one value, tested
+        let copied = matches!(before.opcode, "MOV32dd" | "MOV32rr") && before.operands.get(1) == test.operands.first();
+        if test.operands.first() != Some(&written) && !copied {
             continue;
         }
         let branches = readers_after(at + 1);
@@ -704,15 +707,19 @@ fn flags_effect(inst: &Inst) -> Option<FlagsEffect> {
     if is_branch_on_flags(inst.opcode) || inst.opcode.starts_with("SETd8") {
         return Some(FlagsEffect::Reads);
     }
-    let text = asm(inst.opcode).map(|(text, _)| text).or_else(|| crate::dagisel::asm::asm(inst.opcode).map(|row| row.1))?;
+    let text =
+        asm(inst.opcode).map(|(text, _)| text).or_else(|| crate::dagisel::asm::asm(inst.opcode).map(|row| row.1))?;
     let base = text.split('\t').next()?.split('.').next()?;
-    let address_destination = matches!(inst.operands.first(), Some(Operand::Reg(dst)) if is_address(*dst));
+    let address_destination = matches!(
+        inst.operands.first(),
+        Some(Operand::Reg(dst)) if is_address(*dst)
+    );
     Some(match base {
         "lea" | "movem" | "movea" | "pea" | "exg" | "link" | "unlk" => FlagsEffect::Neither,
         "move" | "add" | "sub" | "addq" | "subq" if address_destination => FlagsEffect::Neither,
         "move" | "moveq" | "and" | "or" | "eor" | "andi" | "ori" | "eori" | "add" | "sub" | "addi" | "subi"
-        | "addq" | "subq" | "cmp" | "cmpa" | "cmpi" | "tst" | "neg" | "not" | "clr" | "ext" | "lsl" | "lsr"
-        | "asl" | "asr" | "rol" | "ror" | "swap" | "mulu" | "muls" | "divu" | "divs" => FlagsEffect::Sets,
+        | "addq" | "subq" | "cmp" | "cmpa" | "cmpi" | "tst" | "neg" | "not" | "clr" | "ext" | "lsl" | "lsr" | "asl"
+        | "asr" | "rol" | "ror" | "swap" | "mulu" | "muls" | "divu" | "divs" => FlagsEffect::Sets,
         // nothing after a return or a call reads them
         "rts" | "jsr" | "bsr" => FlagsEffect::Sets,
         _ => return None,
@@ -777,8 +784,8 @@ pub fn narrow_immediates(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::
                 return None;
             }
             let word = REGISTER_INFO.view(REGISTER_INFO.root(*dst), 16)?;
-            // a mask that keeps the high half and clears the low is `clr.w` (the pin's `shl x, 16`:
-            // `swap; clr.w`)
+            // a mask that keeps the high half and clears the low is `clr.w`
+            // (the pin's `shl x, 16`: `swap; clr.w`)
             if name == "AND16di" && value == 0 {
                 return Some(Inst { opcode: "CLR16dd", operands: vec![Operand::Reg(word)] });
             }
@@ -788,11 +795,7 @@ pub fn narrow_immediates(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::
             })
         })
         .collect();
-    lines
-        .into_iter()
-        .zip(narrowed)
-        .map(|(line, narrow)| narrow.map_or(line, Line::Inst))
-        .collect()
+    lines.into_iter().zip(narrowed).map(|(line, narrow)| narrow.map_or(line, Line::Inst)).collect()
 }
 
 /// `cmp; scc %d; and.l #1, %d` is `moveq #0, %d; cmp; scc %d; neg.b %d`: the

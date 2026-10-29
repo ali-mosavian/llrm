@@ -65,13 +65,18 @@ fn a_copy_of_the_setters_result_is_followed_by_a_test_of_it() {
 }
 
 /// A copy that overwrites an operand of the compare leaves nothing to compare
-/// again: an error, not a branch on the wrong codes.
+/// again: the codes are pushed before it and popped after (the pin's save and
+/// restore), not branched on wrong.
 #[test]
-fn a_copy_over_the_compares_operand_is_an_error() {
+fn a_copy_over_the_compares_operand_pushes_and_pops_the_codes() {
     let mut f = function(vec![
         op("CMP32dr", vec![Operand::Use(v(0)), Operand::Use(v(1))], true, false),
         Inst::copy(v(0), v(3)),
         op("Bne8", vec![], false, true),
     ]);
-    assert!(preserve_flags(&mut f, &assignment()).is_err());
+    preserve_flags(&mut f, &assignment()).unwrap();
+    assert_eq!(
+        kinds(&f),
+        [Kind::Op("CMP32dr"), Kind::Op("CCR_PUSH"), Kind::Copy, Kind::Op("CCR_POP"), Kind::Op("Bne8")]
+    );
 }

@@ -15,20 +15,30 @@
 //! Runs after allocation and phi elimination: blocks have no phis and the
 //! copies the allocation made no-ops are gone ([`remove_identity_copies`]).
 //!
-//! DEVIATE: `TailMergeBlocks`, `HoistCommonCode`, tail calls, EH pads, jump
-//! tables and debug instructions are not translated. Reason: tail merging
-//! needs the live-in bookkeeping of the pin's `LiveRegs`, and the spike has no
-//! other three. Exit: the neutral-LIR task, where `llrm-codegen`'s port takes
-//! over.
+//! With the allocation ([`branch_fold_hoisting`]) it also runs
+//! `HoistCommonCodeInSuccs`: the instructions both ways of a conditional
+//! branch begin with run ahead of it.
+//!
+//! DEVIATE: `TailMergeBlocks`, tail calls, EH pads, jump tables and debug
+//! instructions are not translated. Reason: tail merging is its own pass of
+//! about 700 lines (`ProfitableToMerge`, `SplitBlockAt`, the block
+//! frequencies), and the spike has no other three. Exit: the neutral-LIR task,
+//! where `llrm-codegen`'s port takes over.
+//! DEVIATE: `HoistCommonCodeInSuccs` knows no `dead` marks, so an instruction
+//! that defines a register the compare or branch also defines is not hoisted
+//! (the pin hoists it where the def is dead), and flags are dead at a block's
+//! end ([`crate::sink`] assumes the same). Exit: the neutral-LIR task.
 //! DEVIATE: an empty block that is dead is removed when its last referencing
 //! branch is rewritten, and block numbers for the reordering test are the
 //! layout indices when the sweep began, as `RenumberBlocks` leaves them.
 
 use std::collections::HashMap;
 
-use crate::mfunc::{Inst, MFunction, Operand};
+use llrm_lir::registers::RegId;
+
+use crate::mfunc::{Inst, MFunction, Operand, Reg};
 use crate::regalloc::{Assignment, Target};
-use crate::sink::Jump;
+use crate::sink::{Jump, flags_live_after, safe_to_move};
 
 /// `analyzeBranch`: where a block's terminators go.
 #[derive(Clone, Debug)]
@@ -229,6 +239,8 @@ enum Step {
 
 struct Folder<'a, C, J> {
     function: &'a mut MFunction<C>,
+    /// Where the registers are, for `HoistCommonCodeInSuccs`.
+    assignment: Option<&'a Assignment>,
     /// `getNumber` of each block, by id, as the sweep began.
     number: HashMap<u32, usize>,
     jump: std::marker::PhantomData<J>,
@@ -493,12 +505,212 @@ fn is_branching<C>(
     function.blocks[at].insts.last().is_some_and(|last| last.terminator && target(last).is_some())
 }
 
-/// `BranchFolder::OptimizeFunction` without tail merging: true when anything
-/// changed.
+/// A register or the status flags, as an instruction reads or writes them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Place {
+    Root(RegId),
+    Flags,
+}
+
+/// What an instruction reads and writes.
+#[derive(Default)]
+struct Effects {
+    uses: Vec<Place>,
+    defs: Vec<Place>,
+}
+
+impl Effects {
+    fn of<T: Target>(
+        inst: &Inst,
+        assignment: &Assignment,
+    ) -> Effects {
+        let mut effects = Effects::default();
+        for operand in &inst.operands {
+            match operand {
+                Operand::Def(reg) => effects.defs.push(Place::Root(T::root(resolve(*reg, assignment)))),
+                Operand::Use(reg) => effects.uses.push(Place::Root(T::root(resolve(*reg, assignment)))),
+                _ => {}
+            }
+        }
+        if inst.sets_flags {
+            effects.defs.push(Place::Flags);
+        }
+        if inst.reads_flags {
+            effects.uses.push(Place::Flags);
+        }
+        effects
+    }
+}
+
+fn resolve(
+    reg: Reg,
+    assignment: &Assignment,
+) -> RegId {
+    match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    }
+}
+
+/// `set` holds `place` or a register sharing storage with it.
+fn touches<T: Target>(
+    set: &[Place],
+    place: Place,
+) -> bool {
+    set.iter().any(|one| match (one, place) {
+        (Place::Root(a), Place::Root(b)) => *a == b || T::overlaps(*a, b),
+        (Place::Flags, Place::Flags) => true,
+        _ => false,
+    })
+}
+
+/// `isIdenticalTo`: the same instruction on the same registers, as allocated.
+fn identical(
+    one: &Inst,
+    other: &Inst,
+    assignment: &Assignment,
+) -> bool {
+    one.kind == other.kind
+        && one.sets_flags == other.sets_flags
+        && one.reads_flags == other.reads_flags
+        && one.operands.len() == other.operands.len()
+        && one.operands.iter().zip(&other.operands).all(|pair| match pair {
+            (Operand::Def(a), Operand::Def(b)) | (Operand::Use(a), Operand::Use(b)) => {
+                resolve(*a, assignment) == resolve(*b, assignment)
+            }
+            (a, b) => a == b,
+        })
+}
+
+impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
+    /// `findHoistingInsertPosAndDeps`: where the common instructions go, and
+    /// what the instructions from there to the end of the block read and
+    /// write. The first terminator, or the instruction before it where that
+    /// sets what the terminator reads (the compare of a branch). `None` where
+    /// the pin returns `MBB->end()`.
+    fn hoisting_position(
+        &self,
+        at: usize,
+        assignment: &Assignment,
+    ) -> Option<(usize, Effects)> {
+        let insts = &self.function.blocks[at].insts;
+        let loc = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+        let mut effects = Effects::of::<T>(&insts[loc], assignment);
+        if !effects.defs.is_empty() {
+            // a terminator that writes a register: the pin looks for `dead`
+            return None;
+        }
+        if effects.uses.is_empty() || loc == 0 {
+            return Some((loc, effects));
+        }
+        let previous = &insts[loc - 1];
+        if previous.call {
+            return Some((loc, effects));
+        }
+        let before = Effects::of::<T>(previous, assignment);
+        if !before.defs.iter().any(|place| touches::<T>(&effects.uses, *place)) {
+            return Some((loc, effects));
+        }
+        if !safe_to_move(&self.function.fixed, previous, &mut true) {
+            return None;
+        }
+        effects.uses.retain(|used| !before.defs.iter().any(|place| touches::<T>(&[*place], *used)));
+        effects.uses.extend(before.uses);
+        effects.defs.extend(before.defs);
+        Some((loc - 1, effects))
+    }
+
+    /// `HoistCommonCodeInSuccs`.
+    fn hoist_common(
+        &mut self,
+        at: usize,
+        assignment: &Assignment,
+    ) -> bool {
+        let Some(branches) = analyze(self.function, at) else { return false };
+        let (Some(taken), Some(_)) = (branches.taken, &branches.cond) else { return false };
+        let Some(other) =
+            branches.other.or_else(|| can_fall_through(self.function, at).then(|| self.function.blocks[at + 1].id))
+        else {
+            return false;
+        };
+        if taken == other || taken == self.function.blocks[at].id || other == self.function.blocks[at].id {
+            return false;
+        }
+        // only this block enters either: an obvious win
+        if predecessors(self.function, taken).len() > 1 || predecessors(self.function, other).len() > 1 {
+            return false;
+        }
+        let Some((loc, effects)) = self.hoisting_position(at, assignment) else { return false };
+        let (one, two) = (position(self.function, taken), position(self.function, other));
+        let (first, second) = (&self.function.blocks[one].insts, &self.function.blocks[two].insts);
+        let mut run = 0;
+        while let (Some(head), Some(tail)) = (first.get(run), second.get(run)) {
+            if !identical(head, tail, assignment) || !safe_to_move(&self.function.fixed, head, &mut true) {
+                break;
+            }
+            let own = Effects::of::<T>(head, assignment);
+            let defs_flags = own.defs.contains(&Place::Flags);
+            // the flags it sets are nobody's: the compare sets them again
+            let flags_dead = !defs_flags || (!flags_live_after(first, run) && !flags_live_after(second, run));
+            let safe = own.defs.iter().all(|place| {
+                !touches::<T>(&effects.uses, *place)
+                    && (*place == Place::Flags || !touches::<T>(&effects.defs, *place))
+                    && !matches!(place, Place::Root(root) if T::reserved(*root))
+            }) && own.uses.iter().all(|place| !touches::<T>(&effects.defs, *place))
+                && flags_dead;
+            if !safe {
+                break;
+            }
+            run += 1;
+        }
+        if run == 0 {
+            return false;
+        }
+        let hoisted: Vec<Inst> = self.function.blocks[one].insts.drain(..run).collect();
+        self.function.blocks[two].insts.drain(..run);
+        self.function.blocks[at].insts.splice(loc..loc, hoisted);
+        true
+    }
+
+    /// `HoistCommonCode`.
+    fn hoist_common_code(&mut self) -> bool {
+        let Some(assignment) = self.assignment else { return false };
+        let mut changed = false;
+        for at in 0..self.function.blocks.len() {
+            changed |= self.hoist_common(at, assignment);
+        }
+        changed
+    }
+}
+
+/// `BranchFolder::OptimizeFunction` without tail merging or hoisting: true
+/// when anything changed.
 pub fn branch_fold<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
-    let mut folder = Folder::<T::Class, T> { function, number: HashMap::new(), jump: std::marker::PhantomData };
+    fold::<T>(function, None)
+}
+
+/// [`branch_fold`] with `HoistCommonCodeInSuccs`, which needs to know which
+/// register each virtual register is.
+pub fn branch_fold_hoisting<T: Target + Jump>(
+    function: &mut MFunction<T::Class>,
+    assignment: &Assignment,
+) -> bool {
+    fold::<T>(function, Some(assignment))
+}
+
+fn fold<T: Target + Jump>(
+    function: &mut MFunction<T::Class>,
+    assignment: Option<&Assignment>,
+) -> bool {
+    let mut folder =
+        Folder::<T::Class, T> { function, assignment, number: HashMap::new(), jump: std::marker::PhantomData };
     let mut ever = false;
-    while folder.optimize_branches() {
+    loop {
+        let mut changed = folder.optimize_branches();
+        changed |= folder.hoist_common_code();
+        if !changed {
+            break;
+        }
         ever = true;
     }
     ever

@@ -28,7 +28,7 @@
 //! and ordered access it could pass (the pin's `AA` is null for this target's
 //! machine operands).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::cfg::Cfg;
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
@@ -59,6 +59,52 @@ struct Use {
     holder: usize,
     at: usize,
     phi: bool,
+}
+
+/// `isDereferenceableInvariantLoad`: a load of an incoming argument slot.
+pub(crate) fn invariant_load(
+    fixed: &BTreeMap<i32, i64>,
+    inst: &Inst,
+) -> bool {
+    inst.may_load
+        && !inst.may_store
+        && inst.operands.iter().any(|operand| matches!(operand, Operand::Frame(index) if fixed.contains_key(index)))
+}
+
+/// `MachineInstr::isSafeToMove`: `saw_store` learns of a store passed.
+pub(crate) fn safe_to_move(
+    fixed: &BTreeMap<i32, i64>,
+    inst: &Inst,
+    saw_store: &mut bool,
+) -> bool {
+    if inst.may_store || inst.call || inst.side_effects {
+        *saw_store = true;
+        return false;
+    }
+    if inst.terminator {
+        return false;
+    }
+    if inst.may_load && !invariant_load(fixed, inst) && *saw_store {
+        return false;
+    }
+    true
+}
+
+/// Whether the condition codes `insts[at]` sets are read before the next
+/// instruction sets them again.
+pub(crate) fn flags_live_after(
+    insts: &[Inst],
+    at: usize,
+) -> bool {
+    for later in &insts[at + 1..] {
+        if later.reads_flags {
+            return true;
+        }
+        if later.sets_flags {
+            return false;
+        }
+    }
+    false
 }
 
 struct Sink<'a, T: Target> {
@@ -159,58 +205,6 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
                 }
             }
         }
-    }
-
-    /// `isDereferenceableInvariantLoad`: a load of an incoming argument slot.
-    fn invariant_load(
-        &self,
-        inst: &Inst,
-    ) -> bool {
-        inst.may_load
-            && !inst.may_store
-            && inst.operands.iter().any(|operand| {
-                matches!(
-                    operand,
-                    Operand::Frame(index) if self.function.fixed.contains_key(index)
-                )
-            })
-    }
-
-    /// `MachineInstr::isSafeToMove`: `saw_store` learns of a store passed.
-    fn safe_to_move(
-        &self,
-        inst: &Inst,
-        saw_store: &mut bool,
-    ) -> bool {
-        if inst.may_store || inst.call || inst.side_effects {
-            *saw_store = true;
-            return false;
-        }
-        if inst.terminator {
-            return false;
-        }
-        if inst.may_load && !self.invariant_load(inst) && *saw_store {
-            return false;
-        }
-        true
-    }
-
-    /// Whether the condition codes `inst` sets are read before the next
-    /// instruction sets them again.
-    fn flags_live_after(
-        &self,
-        block: usize,
-        at: usize,
-    ) -> bool {
-        for later in &self.function.blocks[block].insts[at + 1..] {
-            if later.reads_flags {
-                return true;
-            }
-            if later.sets_flags {
-                return false;
-            }
-        }
-        false
     }
 
     /// `AllUsesDominatedByBlock`.
@@ -657,10 +651,10 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         cache: &mut HashMap<usize, Vec<usize>>,
     ) -> bool {
         let inst = self.function.blocks[block].insts[at].clone();
-        if !self.safe_to_move(&inst, saw_store) {
+        if !safe_to_move(&self.function.fixed, &inst, saw_store) {
             return false;
         }
-        if inst.reads_flags || (inst.sets_flags && self.flags_live_after(block, at)) {
+        if inst.reads_flags || (inst.sets_flags && flags_live_after(&self.function.blocks[block].insts, at)) {
             return false;
         }
         let mut break_phi_edge = false;
@@ -670,7 +664,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         if self.cfg.preds[to].len() > 1 {
             let store = if inst.may_load { self.has_store_between(block, to) } else { true };
             let mut copy = store;
-            let mut break_edge = !self.safe_to_move(&inst, &mut copy);
+            let mut break_edge = !safe_to_move(&self.function.fixed, &inst, &mut copy);
             if !break_edge && !self.cfg.dominates(block, to) {
                 break_edge = true;
             }
