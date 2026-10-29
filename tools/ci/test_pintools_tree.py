@@ -102,3 +102,9 @@ def test_the_prune_step_keeps_the_tree():
     sha12 = (ROOT / "toolchain/clang/pin").read_text().split()[0][:12]
     out = subprocess.run(["sh", "toolchain/pintoolsbuild.sh", "--print"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
     assert out.endswith(f"pintools-{sha12}")
+
+
+def test_the_pintools_job_can_be_dispatched_without_the_hour_long_clang_builds():
+    flow = (ROOT / ".github/workflows/toolchain.yml").read_text()
+    assert "jobs:\n        description:" in flow and "if: ${{ inputs.jobs != 'pintools' }}" in flow.split("  clang:\n")[1].split("    runs-on")[0]
+    assert "  pintools:\n    runs-on" in flow
