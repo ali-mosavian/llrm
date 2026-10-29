@@ -21,3 +21,15 @@ def test_the_quick_path_is_on_at_the_x86_row(row):
         cwd=ROOT, capture_output=True, text=True, check=True,
     ).stdout
     assert "#define QUICK_EXTENDED 1" in out
+
+
+@pytest.mark.parametrize("row,quick", [("x86_16-wat", False), ("x86_32-wat", False), ("x86_16-dos", True), ("x86_32-dos", True)])
+def test_the_float_input_quick_path_runs_only_on_a_64_bit_long_double(row, quick):
+    """fin.c's quick way with a 53-bit long double (the Watcom rows) gave a wrong double; gate run 4's NIBBLES m16 demo lost a row of its box (4752 pixels)."""
+    if not CC.is_file() or not os.environ.get("LLRM_CLANG_M16"):
+        pytest.skip("needs target/release/llrm-cc and LLRM_CLANG_M16 (the pinned m16 clang)")
+    out = subprocess.run(
+        [CC, "-target", row, "-E", "-I", "runtime/qb", "-I", "runtime/qb/dos/m16", "-I", "runtime/qb/dos/m32", "-I", "runtime/qb/dos", "runtime/qb/fin.c"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout
+    assert ("long double ten_power" in out) == quick
