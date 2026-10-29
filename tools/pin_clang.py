@@ -7,7 +7,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-PIN = "d1106deb71cc"
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def pin() -> str:
+    """The pin's sha12: line 1 of toolchain/clang/pin (TOOLCHAIN_PIN names another file, as toolchain/clangbuild.sh reads it)."""
+    file = Path(os.environ.get("TOOLCHAIN_PIN") or ROOT / "toolchain/clang/pin")
+    return file.read_text().split()[0][:12]
 
 
 def path() -> str:
@@ -17,8 +23,8 @@ def path() -> str:
         version = subprocess.run([clang, "--version"], capture_output=True, text=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError) as error:
         sys.exit(f"pin_clang: {clang} does not run: {error}")
-    if PIN not in version:
-        sys.exit(f"pin_clang: {clang} is not the pin ({PIN}): {version.splitlines()[0]}")
+    if pin() not in version:
+        sys.exit(f"pin_clang: {clang} is not the pin ({pin()}): {version.splitlines()[0]}")
     print(version.splitlines()[0], file=sys.stderr)
     return clang
 
