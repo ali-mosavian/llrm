@@ -655,3 +655,16 @@ fn a_widened_byte_loaded_at_a_byte_index_uses_y() {
     // 1 + 2 + 3 + 200 = 206
     assert_eq!((run(""), run("  txa\n")), (206, 0));
 }
+
+const DIGITS: &str = "define i8 @digits(i16 %v) {\nentry:\n  %big = icmp ugt i16 %v, 9\n  br i1 %big, label %loop, label %done\nloop:\n  \
+    %n = phi i8 [ %n2, %loop ], [ 1, %entry ]\n  %x = phi i16 [ %q, %loop ], [ %v, %entry ]\n  %q = udiv i16 %x, 10\n  %n2 = add i8 %n, 1\n  \
+    %more = icmp ugt i16 %x, 99\n  br i1 %more, label %loop, label %done\ndone:\n  %r = phi i8 [ 1, %entry ], [ %n2, %loop ]\n  ret i8 %r\n}";
+
+/// The constants 10 and 0 of `v / 10` were stored to static slots and loaded back before the call
+/// (`ldx #10; stx s_digits_5`): they are loaded again where they are read.
+#[test]
+fn a_constant_is_loaded_again_not_stored_to_a_slot() {
+    let text = compile(DIGITS, "digits");
+    assert!(!text.contains("ldx #10\n  stx s_"), "{text}");
+    assert!(!text.contains("ldx #0\n  stx s_digits_4"), "{text}");
+}

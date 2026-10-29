@@ -73,6 +73,28 @@ udivmod8:
 
 ; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X only.
 udivmod16:
+  lda rc5
+  bne @wide
+  ; a divisor under 256: the remainder is a byte, in A, with the carry of the shift as its ninth bit
+  ldx #16
+@next8:
+  asl rc2
+  rol rc3
+  rol a
+  bcs @sub8
+  cmp rc4
+  bcc @keep8
+@sub8:
+  sbc rc4
+  inc rc2
+@keep8:
+  dex
+  bne @next8
+  sta rc6
+  lda #0
+  sta rc7
+  rts
+@wide:
   lda #0
   sta rc6
   sta rc7
