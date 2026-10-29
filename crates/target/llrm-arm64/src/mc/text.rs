@@ -297,6 +297,20 @@ impl fmt::Display for Inst {
             Inst::BranchReg { link, rn } => {
                 write!(out, "{} {}", if *link { "blr" } else { "br" }, gpr(*rn, Width::X, false))
             }
+            Inst::Cfi(cfi) => {
+                use llrm_object::assembler::Cfi;
+                let name = |register: &u16| super::unwind::register_label(*register).replace('x', "w");
+                match cfi {
+                    Cfi::DefCfa { register, offset } => {
+                        let name = if *register == super::unwind::SP { "wsp".to_owned() } else { name(register) };
+                        write!(out, ".cfi_def_cfa {name}, {offset}")
+                    }
+                    Cfi::DefCfaRegister { register } => write!(out, ".cfi_def_cfa_register {}", name(register)),
+                    Cfi::DefCfaOffset { offset } => write!(out, ".cfi_def_cfa_offset {offset}"),
+                    Cfi::Offset { register, offset } => write!(out, ".cfi_offset {}, {offset}", name(register)),
+                    Cfi::Restore { register } => write!(out, ".cfi_restore {}", name(register)),
+                }
+            }
             Inst::Ret { rn } => write!(out, "ret {}", gpr(*rn, Width::X, false)),
             Inst::Load { mem, addr, .. } => memory_text(out, mem, addr, true),
             Inst::Store { mem, addr, .. } => memory_text(out, mem, addr, false),

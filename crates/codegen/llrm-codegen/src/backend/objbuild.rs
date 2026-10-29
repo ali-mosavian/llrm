@@ -1300,6 +1300,7 @@ fn declared_frames(
                     Cfi::DefCfaRegister { register } => state.cfa_register = name(register),
                     Cfi::DefCfaOffset { offset } => state.cfa_offset = offset,
                     Cfi::Offset { register, offset } => state.saved.push((name(register), offset)),
+                    Cfi::Restore { register } => state.saved.retain(|(one, _)| *one != name(register)),
                 }
                 state.offset = at - start;
                 if rows.last().is_some_and(|row| row.offset == state.offset) {
