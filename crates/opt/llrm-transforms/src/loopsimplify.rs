@@ -401,12 +401,19 @@ fn place_carefully(
 
 thread_local! {
     static PARENT_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BRIDGE_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The blocks looked at to find the loops' parents on this thread: a test
 /// bounds it by the size of the function.
 pub fn parent_probes() -> usize {
     PARENT_PROBES.with(std::cell::Cell::get)
+}
+
+/// The loops looked at to keep them up to date through the bridges made on this
+/// thread: a test bounds it by the loops around the blocks a bridge joins.
+pub fn bridge_probes() -> usize {
+    BRIDGE_PROBES.with(std::cell::Cell::get)
 }
 
 /// The headers in the order `simplifyLoop` works through them: the top-level
@@ -531,6 +538,7 @@ fn _simplified(
         changed = true;
         for loop_ in &mut shape.loops {
             for (bridge, target, sources) in &bridges {
+                BRIDGE_PROBES.with(|one| one.set(one.get() + 1));
                 _bridged(loop_, *bridge, *target, sources);
             }
         }
