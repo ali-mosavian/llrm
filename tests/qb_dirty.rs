@@ -7,8 +7,9 @@
 use std::path::Path;
 use std::process::Command;
 
-/// `program` with the soft data limit raised to the hard one: `prlimit --data=unlimited` raises the hard limit too, which a
-/// runner with a finite hard limit refuses ("Operation not permitted") before the program starts.
+/// `program` with the soft data limit raised to the hard one: `prlimit
+/// --data=unlimited` raises the hard limit too, which a runner with a finite
+/// hard limit refuses ("Operation not permitted") before the program starts.
 fn uncapped(program: &Path) -> Command {
     let mut command = Command::new("sh");
     command.arg("-c").arg("ulimit -Sd \"$(ulimit -Hd)\"; exec \"$0\"").arg(program);
@@ -19,10 +20,19 @@ fn stress(sanitize: Option<&str>) {
     stress_under(sanitize, None);
 }
 
-/// With `hard`, the whole run sits under a finite hard data limit of that many bytes, as the gate's runners are.
-fn stress_under(sanitize: Option<&str>, hard: Option<&str>) {
+/// With `hard`, the whole run sits under a finite hard data limit of that many
+/// bytes, as the gate's runners are.
+fn stress_under(
+    sanitize: Option<&str>,
+    hard: Option<&str>,
+) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let out = std::env::temp_dir().join(format!("dirty_stress_{}_{}_{}", sanitize.unwrap_or("plain"), hard.map_or("soft", |_| "hard"), std::process::id()));
+    let out = std::env::temp_dir().join(format!(
+        "dirty_stress_{}_{}_{}",
+        sanitize.unwrap_or("plain"),
+        hard.map_or("soft", |_| "hard"),
+        std::process::id()
+    ));
     let mut build = Command::new("cc");
     build.args(["-std=gnu11", "-w", "-g", "-pthread", "-D__cdecl="]);
     if let Some(kind) = sanitize {
@@ -76,8 +86,9 @@ fn the_dirty_line_protocol_is_race_free_under_thread_sanitizer() {
     stress(Some("thread"));
 }
 
-/// The old `prlimit --data=unlimited` wrapper died with "failed to set the DATA resource limit: Operation not permitted" under
-/// any finite hard data limit, so qb_dirty was red on every runner that has one.
+/// The old `prlimit --data=unlimited` wrapper died with "failed to set the DATA
+/// resource limit: Operation not permitted" under any finite hard data limit,
+/// so qb_dirty was red on every runner that has one.
 #[test]
 fn the_presenter_never_sees_a_torn_line_under_a_finite_hard_data_limit() {
     stress_under(None, Some("8000000000"));

@@ -25,7 +25,8 @@ fn listing(flags: &[&str]) -> String {
 
 /// The pin extends a byte load with `movzx` on a 486 and a Pentium alike
 /// (clang -O2 -m32 -march=i486: `movzbl (%esi,%edi), %ebx`); the `xor r,r; mov
-/// rl,m8` pair that x_life used was a tuning of the old selector, not the pin's.
+/// rl,m8` pair that x_life used was a tuning of the old selector, not the
+/// pin's.
 #[test]
 fn a_486_extends_a_byte_load_with_movzx_as_the_pin_does() {
     for cpu in ["-march=i486", "-march=pentium"] {

@@ -1,12 +1,11 @@
 //! The object: the functions' machine code in one text section, the globals in
 //! data sections, the symbols and the relocations between them.
 
-use llrm_support::hash::HashMap;
-
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{GlobalKind, Linkage, Module};
 use llrm_object::assembler::{Fragment, layout as place};
 use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Symbol, Target as RelocTarget};
+use llrm_support::hash::HashMap;
 
 use crate::data::{self, DataReloc};
 use crate::frame::Lowered;
