@@ -1585,6 +1585,58 @@ mod tests {
         );
     }
 
+    /// A position-independent jump table's entry is `name - table` in four
+    /// bytes: the slot is a pc-relative fixup to the code label, and its field
+    /// carries `slot + 4 - table`, so the linker's `S + A - P` is `name -
+    /// table`. A pointer-wide absolute entry (a PIE refuses) was all there was.
+    #[test]
+    fn test_a_table_entry_is_a_pc_relative_difference_from_the_table() {
+        let mut segment = Segment::new(".rodata", Role::Data, true);
+        let mut symbols = IndexMap::default();
+        let entry = |name: &str| masm::Datum::Difference(masm::Difference { name: name.into(), base: "$J1".into() });
+        let items = [masm::Datum::Bytes(vec![9, 9]), masm::Datum::Align(masm::Align { to: 4 }), label("$J1"), entry("L0"), entry("L1")];
+        _data(&mut segment, 0, &items, &mut symbols, CodeModel::Flat64);
+        assert_eq!(symbols["$J1"], (0, 4));
+        assert_eq!(segment.image.len(), 12);
+        let fixups: Vec<_> = segment.fixups.iter().map(|f| (f.at, f.name.as_str())).collect();
+        assert_eq!(fixups, [(4, "L0"), (8, "L1")]);
+        assert_eq!(&segment.image[4..12], &[4, 0, 0, 0, 8, 0, 0, 0]);
+    }
+
+    /// A table jump through a register names its table by the jump's
+    /// `table_id` (no memory cell to take it from) and gets entries that are
+    /// differences from the table: `jump_tables` found none and the symbol was
+    /// a `KeyError` at print. A jump through a cell keeps pointer-wide entries.
+    #[test]
+    fn test_a_register_table_jump_gets_a_table_of_differences() {
+        let held = Loc::Held(llrm_lir::Held { value: 1, width: 8 });
+        let jump = Semantics {
+            indirect: true,
+            table: vec![1, 2],
+            table_id: Some(7),
+            ..semantics(Operation::Jump, "jmp", vec![], vec![held])
+        };
+        let procedure = procedure(
+            "_f",
+            false,
+            body("f", vec![block(0, vec![insn(0, jump)], vec![1, 2]).into(), block(1, vec![], vec![]).into(), block(2, vec![], vec![]).into()]),
+            0,
+            vec![],
+        );
+        let module = llrm_mir::parse::module("target datalayout = \"e-p:64:64\"\n").unwrap();
+        let mut names = IndexMap::default();
+        let data = masm::jump_tables(&[procedure], &mut names, &module);
+        assert_eq!(names[&(Space::Segment, 7)], "$J7");
+        let entries: Vec<_> = data
+            .iter()
+            .filter_map(|datum| match datum {
+                masm::Datum::Difference(masm::Difference { base, .. }) => Some(base.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(entries, ["$J7", "$J7"]);
+    }
+
     /// Fresh QB D_SURF retained 83 jumps whose target label was physically
     /// next.
     ///
