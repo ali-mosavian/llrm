@@ -78,8 +78,10 @@ fn a_dense_switch_is_a_jump_through_a_table() {
     assert!(listing(&["-m32", "-Os"]).contains("jmp dword ptr $J"));
 }
 
-/// At -O0 the pass does not run: the switch is the chain of compares it was.
+/// At -O0 the DAG still builds a jump table, as the pin does (`clang -O0
+/// -target i486` emits `jmpl *%eax` for this switch); `-fno-jump-tables` stops it.
 #[test]
-fn at_o0_a_switch_is_not_a_table() {
-    assert!(!listing(&["-m32", "-O0"]).contains("$J"));
+fn at_o0_a_dense_switch_is_a_table_unless_tables_are_off() {
+    assert!(listing(&["-m32", "-O0"]).contains("$J"));
+    assert!(!listing(&["-m32", "-O0", "-fno-jump-tables"]).contains("$J"));
 }
