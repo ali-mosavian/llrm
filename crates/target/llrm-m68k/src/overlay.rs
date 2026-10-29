@@ -121,29 +121,28 @@ pub fn rewrite(inst: Inst) -> Inst {
         operands: vec![Operand::Reg(register), Operand::Imm(amount)],
     };
     match (inst.opcode, &inst.operands[..]) {
-        ("ADD8di", &[Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value @ 1..=8)]) if dst == src => {
-            quickly("ADDQ8d", dst, value)
-        }
-        ("ADD16di", &[Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value @ 1..=8)]) if dst == src => {
-            quickly("ADDQ16d", dst, value)
-        }
-        ("ADD32di", &[Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value @ 1..=8)]) if dst == src => {
-            quickly("ADDQ32d", dst, value)
-        }
-        ("ADD32ai", &[Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value @ 1..=8)]) if dst == src => {
-            quickly("ADDQ32a", dst, value)
-        }
-        ("SUB8di", &[Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value @ 1..=8)]) if dst == src => {
-            quickly("SUBQ8d", dst, value)
-        }
-        ("SUB16di", &[Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value @ 1..=8)]) if dst == src => {
-            quickly("SUBQ16d", dst, value)
-        }
-        ("SUB32di", &[Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value @ 1..=8)]) if dst == src => {
-            quickly("SUBQ32d", dst, value)
-        }
-        ("SUB32ai", &[Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value @ 1..=8)]) if dst == src => {
-            quickly("SUBQ32a", dst, value)
+        (
+            "ADD8di" | "ADD16di" | "ADD32di" | "ADD32ai" | "SUB8di" | "SUB16di" | "SUB32di" | "SUB32ai",
+            &[Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value @ (-8..=-1 | 1..=8))],
+        ) if dst == src => {
+            // adding -n is subtracting n and the reverse: the quick forms
+            // reach 1..=8 only, and `N`, `Z` and `V` come out the same (`C`
+            // does not, which no branch the compiler emits after them reads)
+            let subtract = inst.opcode.starts_with("SUB") != (value < 0);
+            // the name is `ADD`/`SUB`, the size, the register kind, then `i`
+            let size = &inst.opcode[3..inst.opcode.len() - 2];
+            let register = inst.opcode.as_bytes()[inst.opcode.len() - 2] as char;
+            let name = match (subtract, size, register) {
+                (false, "8", _) => "ADDQ8d",
+                (false, "16", _) => "ADDQ16d",
+                (false, _, 'a') => "ADDQ32a",
+                (false, _, _) => "ADDQ32d",
+                (true, "8", _) => "SUBQ8d",
+                (true, "16", _) => "SUBQ16d",
+                (true, _, 'a') => "SUBQ32a",
+                (true, _, _) => "SUBQ32d",
+            };
+            quickly(name, dst, value.abs())
         }
         ("CMP8di", &[Operand::Imm(0), Operand::Reg(register)]) => {
             Inst { opcode: "TST8d", operands: vec![Operand::Reg(register)] }

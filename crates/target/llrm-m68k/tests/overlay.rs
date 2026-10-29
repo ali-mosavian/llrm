@@ -183,3 +183,13 @@ fn a_step_of_another_size_is_not_a_post_increment() {
     let ours = compiled(&sum_loop("2"), Options::default());
     assert!(!ours.contains(")+"), "{ours}");
 }
+
+/// `add.l #-1` took 6 bytes where `subq.l #1` takes 2: strlen ended with it.
+#[test]
+fn adding_a_small_negative_is_a_subq() {
+    let ir = "define i32 @f(i32 %a) {\nentry:\n  %r = add i32 %a, -1\n  %c = add i32 %r, -8\n  %d = sub i32 %c, -3\n  ret i32 %d\n}";
+    let pinned = compiled(ir, Options::PINNED);
+    let ours = compiled(ir, Options::default());
+    assert!(pinned.contains("add.l\t#-1") || pinned.contains("add.l\t#-"), "{pinned}");
+    assert!(ours.contains("subq.l") && !ours.contains("add.l\t#-"), "{ours}");
+}
