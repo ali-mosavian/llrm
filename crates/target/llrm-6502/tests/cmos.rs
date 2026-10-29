@@ -120,3 +120,14 @@ fn a_far_bra_in_a_function_becomes_jmp_and_runs() {
         assert_eq!(common::run_on("sim65c02", &format!("cmos-far-{x}"), &main, &text).0, want);
     }
 }
+
+/// A zero constant selected as `stz` was pinned to a zero-page cell: `zero()`
+/// became `stz rc2; lda rc2` (5 bytes against NMOS's 3), and scmp's pointers
+/// spilled for want of cells (175 bytes against 92). A zero stays a constant;
+/// only one that lands in a cell is stored with `stz`.
+#[test]
+fn a_zero_constant_is_not_pinned_to_a_cell() {
+    let module = llrm_mir::parse::module(IR).expect("parses");
+    let text = |cpu| function_text(&module, "zero", &select_function(&module, "zero", cpu).expect("selects")).unwrap();
+    assert_eq!(text(Cpu::W65c02), text(Cpu::Mos6502));
+}

@@ -23,6 +23,7 @@ use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue};
 use llrm_mir::context::GlobalId;
+use crate::dagisel::hooks::Cpu;
 use llrm_mir::module::{BlockId, Module};
 
 use crate::REGISTER_INFO;
@@ -111,7 +112,7 @@ pub fn function_text(
     });
     let (items, _) = function_items(module, name, selection)?;
     let (function, labels) = alloc::build(name, &items).map_err(|why| format!("{name}: {}", why.0))?;
-    let (code, slots) = alloc::emit(function, &labels, recursive)?;
+    let (code, slots) = alloc::emit(function, &labels, recursive, selection.cpu == Cpu::W65c02)?;
     let mut body = format!(".export {name}\n{code}");
     body.push_str(".segment \"BSS\"\n");
     for (slot, size) in slots {

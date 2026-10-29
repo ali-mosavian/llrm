@@ -161,10 +161,9 @@ let mayStore = 1 in {
 }
 let mayStore = 1, AddedComplexity = 10 in
   def STPI8 : MOSInst<(outs), (ins Imag8:$s, memrr:$a), "stpi $s, ($a)", [(store i8:$s, MOSIdx:$a)]>;
-// 65C02 only: STZ on a cell, and the unindexed (zp) mode for a store of zero at offset 0.
+// 65C02 only: the unindexed (zp) mode and absolute STZ for a store of zero. A zero constant is not a pattern here:
+// it stays LDI8 and emission makes the one that lands in a cell `stz`, since a pattern would pin every zero to a cell.
 let Predicates = [HasCMOS] in {
-  let AddedComplexity = 10 in
-    def STZ8 : MOSInst<(outs Imag8:$d), (ins), "stz $d", [(set i8:$d, (i8 0))]>;
   let mayStore = 1 in
     def STZP : MOSInst<(outs), (ins memri:$p), "stzp ($p)", [(store (i8 0), MOSAddr:$p)]>;
   let mayStore = 1, AddedComplexity = 30 in

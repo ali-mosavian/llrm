@@ -272,6 +272,11 @@ fn reachable_runtime(text: &str) -> String {
     out
 }
 
+/// A tag ending in `m` builds for the 65C02 (`sim65c02`), any other for the NMOS 6502.
+fn cmos(tag: &str) -> bool {
+    tag.split('-').next().is_some_and(|t| t.ends_with('m'))
+}
+
 fn link(
     dir: &Path,
     kernel: &Kernel,
@@ -286,7 +291,8 @@ fn link(
     let bin = format!("p-{tag}.bin");
     let function_file = format!("f-{}.s", tag.split('-').next().unwrap());
     let _ = function;
-    tool(dir, "cl65", &["-t", "sim6502", "-o", &bin, &drv, &function_file])?;
+    let target = if cmos(tag) { "sim65c02" } else { "sim6502" };
+    tool(dir, "cl65", &["-t", target, "-o", &bin, &drv, &function_file])?;
     Ok(dir.join(bin))
 }
 
@@ -347,7 +353,7 @@ fn cc65_row(
     tag: &str,
 ) -> Result<Row, String> {
     let dir = work(kernel.name);
-    let mut args = vec!["-t", "sim6502"];
+    let mut args = vec!["-t", if cmos(tag) { "sim65c02" } else { "sim6502" }];
     args.extend_from_slice(flags);
     let define = format!("-DK_{}", kernel.name);
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench/kernels.c");
@@ -463,12 +469,13 @@ fn ours_row(
         llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e:?}").chars().take(100).collect::<String>())?;
     llrm_6502::prepare::split_phi_edges(&mut module);
     let name = kernel.name;
+    let cpu = if cmos(tag) { Cpu::W65c02 } else { Cpu::Mos6502 };
     let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let selection = select_function(&module, name, Cpu::Mos6502)?;
+        let selection = select_function(&module, name, cpu)?;
         function_text(&module, name, &selection)
     }));
     let path = {
-        let selection = select_function(&module, name, Cpu::Mos6502).map_err(|e| format!("{e:?}"))?;
+        let selection = select_function(&module, name, cpu).map_err(|e| format!("{e:?}"))?;
         let (items, _) = function_items(&module, name, &selection)?;
         if llrm_6502::alloc::build(name, &items).is_ok() { "allocator" } else { "cell" }
     };
@@ -495,7 +502,9 @@ fn table(
     file: &str,
 ) {
     let mut out =
-        String::from("| kernel | cc65 | cc65 -O | ours (opt -O2 IR) | ours (opt -Os IR) |\n|---|---|---|---|---|\n");
+        String::from(
+        "| kernel | cc65 | cc65 -O | ours (opt -O2 IR) | ours (opt -Os IR) | cc65 -O 65C02 | ours 65C02 |\n|---|---|---|---|---|---|---|\n",
+    );
     let cell = |row: &Result<Row, String>| match row {
         Ok(r) => format!("{} B, {} cy", r.bytes, r.cycles),
         Err(why) => format!("n/a ({why})"),
@@ -507,8 +516,10 @@ fn table(
             cc65_row(kernel, &["-O"], "c1"),
             ours_row(kernel, "-O2", "o2"),
             ours_row(kernel, "-Os", "os"),
+            cc65_row(kernel, &["-O"], "c1m"),
+            ours_row(kernel, "-O2", "o2m"),
         ];
-        for (tag, row) in ["c0", "c1", "o2", "os"].iter().zip(&rows) {
+        for (tag, row) in ["c0", "c1", "o2", "os", "c1m", "o2m"].iter().zip(&rows) {
             if let Err(why) = row {
                 eprintln!("{} {tag}: {why}", kernel.name);
             }

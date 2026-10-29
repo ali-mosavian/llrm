@@ -238,7 +238,6 @@ pub fn expand(
             }
             _ => return Err("LDI8 takes a register and an immediate".into()),
         },
-        op::STZ8 => writeln!(out, "  stz {}", reg(&o[0])?).unwrap(),
         op::LDI16 => match &o[1] {
             Operand::Imm(v) => {
                 let (lo, hi) = word(&o[0])?;
