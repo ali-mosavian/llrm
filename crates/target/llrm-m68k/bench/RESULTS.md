@@ -1,4 +1,4 @@
-# Results, 2026-10-29 13:24 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Results, 2026-10-29 13:29 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 gcc is m68k-linux-gnu-gcc 15 (`-mcpu=68000`), the Debian cross toolchain unpacked without root. Cycles are not
 modelled: "insns" are executed instructions, which price a 68000 `move` and a `muls` the same. "ours" has the
@@ -9,42 +9,42 @@ from the pin's output.
 columns include theirs). Compare ours with llc, raw with nothing. The mid-end is LSR only, priced by the m68k `Tti`:
 the full -O2 pipeline closed-forms loops into i33 arithmetic the legalizer cannot lower yet.
 
-## Summary: every row against the best reference
+## Summary: every row against the best reference at its level
 
-| kernel | raw B | ours B | best ref B | raw insns | ours insns | best ref insns | status |
-|---|---|---|---|---|---|---|---|
-| sum | 18 | 18 | 16 (gcc -Os) | 44 | 44 | 43 (gcc -Os) | +2 B, +1 insns |
-| popcount | 26 | 26 | 22 (gcc -O2) | 85 | 85 | 85 (gcc -O2) | +4 B |
-| max | 16 | 16 | 16 (gcc -O2) | 6 | 6 | 5 (gcc -O2) | +1 insns |
-| absdiff | 22 | 22 | 22 (llc -O2) | 7 | 7 | 7 (gcc -O2) | at or below |
-| clamp | 26 | 26 | 26 (gcc -O2) | 9 | 9 | 9 (gcc -O2) | at or below |
-| fib | 28 | 28 | 22 (gcc -Os) | 67 | 67 | 64 (gcc -Os) | +6 B, +3 insns |
-| gcd | 26 | 26 | 26 (gcc -Os) | 17 | 17 | 16 (gcc -O2) | +1 insns |
-| arrsum | 32 | 22 | 20 (gcc -Os) | 103 | 69 | 68 (gcc -Os) | +2 B, +1 insns |
-| arrmax | 38 | 34 | 26 (gcc -Os) | 130 | 115 | 97 (gcc -Os) | +8 B, +18 insns |
-| countgt | 52 | 46 | 42 (gcc -O2) | 168 | 136 | 123 (gcc -O2) | +4 B, +13 insns |
-| strlen | 20 | 22 | 18 (gcc -Os) | 59 | 60 | 44 (gcc -O2) | +4 B, +16 insns |
-| copy | 34 | 34 | 34 (gcc -O2) | 59 | 59 | 59 (gcc -O2) | at or below |
+Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -Os`: `optsize`/`minsize` or `Options::size`) against `llc -Os` and `gcc -Os`.
 
-Rows still above the best reference: sum, popcount, max, fib, gcd, arrsum, arrmax, countgt, strlen.
+| kernel | raw B | ours B | best -O2 B | ours -Os B | best -Os B | raw insns | ours insns | best -O2 insns | ours -Os insns | best -Os insns | status |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| sum | 18 | 18 | 18 | 16 | 16 | 44 | 44 | 44 | 43 | 43 | at or below |
+| popcount | 26 | 26 | 22 | 26 | 22 | 85 | 85 | 85 | 85 | 85 | -O2 +4 B, -Os +4 B |
+| max | 16 | 16 | 16 | 16 | 16 | 6 | 6 | 5 | 6 | 5 | -O2 +1 insns, -Os +1 insns |
+| absdiff | 22 | 22 | 22 | 22 | 22 | 7 | 7 | 7 | 7 | 7 | at or below |
+| clamp | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | at or below |
+| fib | 28 | 28 | 28 | 26 | 22 | 67 | 67 | 67 | 66 | 64 | -Os +4 B, -Os +2 insns |
+| gcd | 26 | 26 | 28 | 26 | 26 | 17 | 17 | 16 | 17 | 17 | -O2 +1 insns |
+| arrsum | 32 | 22 | 22 | 20 | 20 | 103 | 69 | 69 | 68 | 68 | at or below |
+| arrmax | 38 | 34 | 32 | 32 | 26 | 130 | 115 | 100 | 114 | 97 | -O2 +2 B, -O2 +15 insns, -Os +6 B, -Os +17 insns |
+| countgt | 52 | 46 | 42 | 38 | 42 | 168 | 136 | 123 | 134 | 168 | -O2 +4 B, -O2 +13 insns |
+| strlen | 20 | 22 | 20 | 22 | 18 | 59 | 60 | 44 | 60 | 57 | -O2 +2 B, -O2 +16 insns, -Os +4 B, -Os +3 insns |
+| copy | 34 | 34 | 34 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | at or below |
 
+Rows still above a reference: popcount, max, fib, gcd, arrmax, countgt, strlen.
 ## Full table
 
-| kernel | raw B | ours B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | raw insns | ours insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| sum | 18 | 18 | 46 | 46 | 16 | 18 | 44 | 44 | 48 | 48 | 43 | 44 | 45 all |
-| popcount | 26 | 26 | 52 | 52 | 22 | 22 | 85 | 85 | 103 | 103 | 85 | 85 | 8 all |
-| max | 16 | 16 | 16 | 16 | 16 | 16 | 6 | 6 | 6 | 6 | 5 | 5 | 42 all |
-| absdiff | 22 | 22 | 22 | 22 | 24 | 24 | 7 | 7 | 7 | 7 | 8 | 7 | 42 all |
-| clamp | 26 | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | 9 | 42 all |
-| fib | 28 | 28 | 66 | 66 | 22 | 28 | 67 | 67 | 139 | 139 | 64 | 67 | 89 all |
-| gcd | 26 | 26 | 32 | 26 | 26 | 28 | 17 | 17 | 16 | 17 | 17 | 16 | 42 all |
-| arrsum | 32 | 22 | 64 | 64 | 20 | 22 | 103 | 69 | 153 | 153 | 68 | 69 | 80 all |
-| arrmax | 26 B / 97 gcc | 34 / 115 | the `(a0)` load and `addq #4` sit in different blocks (no `(a0)+`); the loaded value and `n` need callee-saved `d2` pushed (gcc compares with `n` in memory) |
-| countgt | 52 | 46 | 86 | 86 | 42 | 42 | 168 | 136 | 234 | 234 | 168 | 123 | 9 all |
-| strlen | 20 | 22 | 36 | 36 | 18 | 20 | 59 | 60 | 89 | 89 | 57 | 44 | 13 all |
-| copy | 34 | 34 | 42 | 42 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | 59 | 33 all |
-
+| kernel | raw B | ours B | ours -Os B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | raw insns | ours insns | ours -Os insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| sum | 18 | 18 | 16 | 46 | 46 | 16 | 18 | 44 | 44 | 43 | 48 | 48 | 43 | 44 | 45 all |
+| popcount | 26 | 26 | 26 | 52 | 52 | 22 | 22 | 85 | 85 | 85 | 103 | 103 | 85 | 85 | 8 all |
+| max | 16 | 16 | 16 | 16 | 16 | 16 | 16 | 6 | 6 | 6 | 6 | 6 | 5 | 5 | 42 all |
+| absdiff | 22 | 22 | 22 | 22 | 22 | 24 | 24 | 7 | 7 | 7 | 7 | 7 | 8 | 7 | 42 all |
+| clamp | 26 | 26 | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 42 all |
+| fib | 28 | 28 | 26 | 66 | 66 | 22 | 28 | 67 | 67 | 66 | 139 | 139 | 64 | 67 | 89 all |
+| gcd | 26 | 26 | 26 | 32 | 26 | 26 | 28 | 17 | 17 | 17 | 16 | 17 | 17 | 16 | 42 all |
+| arrsum | 32 | 22 | 20 | 64 | 64 | 20 | 22 | 103 | 69 | 68 | 153 | 153 | 68 | 69 | 80 all |
+| arrmax | 38 | 34 | 32 | 92 | 88 | 26 | 32 | 130 | 115 | 114 | 248 | 235 | 97 | 100 | 9 all |
+| countgt | 52 | 46 | 38 | 86 | 86 | 42 | 42 | 168 | 136 | 134 | 234 | 234 | 168 | 123 | 9 all |
+| strlen | 20 | 22 | 22 | 36 | 36 | 18 | 20 | 59 | 60 | 60 | 89 | 89 | 57 | 44 | 13 all |
+| copy | 34 | 34 | 34 | 42 | 42 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | 59 | 59 | 33 all |
 ## Above llc -Os or gcc -Os (bytes / insns, best reference)
 
 | kernel | best reference | ours | gap |

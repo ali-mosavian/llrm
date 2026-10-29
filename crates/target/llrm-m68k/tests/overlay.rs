@@ -252,3 +252,42 @@ fn a_select_in_a_loop_leaves_one_move_on_the_arm_that_changes_the_value() {
     let ours = compiled(arrmax_loop(), Options::default());
     assert_eq!(loop_register_moves(&ours), 1, "{ours}");
 }
+
+fn counted_sum() -> &'static str {
+    "define i32 @f(ptr %p, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  %s1 = add i32 %s, %v\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %s1\n}"
+}
+
+fn code_size(
+    ir: &str,
+    options: Options,
+) -> usize {
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).unwrap();
+    let items = llrm_m68k::compile::items_with(&module, "f", Cpu::M68000, options).unwrap();
+    llrm_m68k::object::assemble(&items, 0).unwrap().code.len()
+}
+
+/// `n` was loaded into `a1` once and compared with in the register: 2 bytes
+/// more than comparing with the argument slot. In the loop that costs clocks
+/// on every trip, so only where size is wanted (`-Os`, or `optsize`).
+#[test]
+fn an_argument_read_once_in_a_loop_is_read_from_its_slot_where_size_is_wanted() {
+    let speed = compiled(counted_sum(), Options::default());
+    assert!(!speed.contains("cmp.l\t(8,%sp)"), "{speed}");
+    let size = compiled(counted_sum(), Options { size: true, ..Options::default() });
+    assert!(size.contains("cmp.l\t(8,%sp), %d"), "{size}");
+    assert!(
+        code_size(counted_sum(), Options { size: true, ..Options::default() })
+            < code_size(counted_sum(), Options::default())
+    );
+    let marked = counted_sum().replace(") {\nentry", ") optsize {\nentry");
+    assert!(compiled(&marked, Options::default()).contains("cmp.l\t(8,%sp), %d"));
+}
+
+/// Outside a loop the memory form is smaller and no slower: always.
+#[test]
+fn an_argument_read_once_outside_a_loop_is_read_from_its_slot() {
+    let ir = "define i32 @f(i32 %a, i32 %b) {\nentry:\n  %c = icmp slt i32 %a, 5\n  br i1 %c, label %y, label %n\ny:\n  %r = add i32 %a, %b\n  ret i32 %r\nn:\n  ret i32 0\n}";
+    let ours = compiled(ir, Options::default());
+    assert!(ours.contains("add.l\t(8,%sp), %d"), "{ours}");
+    assert!(!ours.contains("move.l\t(8,%sp)"), "{ours}");
+}
