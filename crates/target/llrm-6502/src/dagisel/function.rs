@@ -7,6 +7,7 @@
 //! frame objects wait for the 6502 machine function. Exit: M4.
 
 use llrm_codegen::backend::isel;
+use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
@@ -37,6 +38,8 @@ pub struct Selected {
     pub block: BlockId,
     pub dag: SelectionDAG,
     pub units: Vec<Unit>,
+    /// The registers the block reads on arrival, with the virtual register each is copied to.
+    pub live_ins: Vec<(RegId, u32)>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -65,7 +68,7 @@ pub fn select_function(
             return Err("a switch lowering made blocks".to_owned());
         }
         let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
-        selected.push(Selected { block, dag: built.dag, units });
+        selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins });
     }
     Ok(selected)
 }

@@ -40,10 +40,19 @@ pub fn run_with_runtime(
     name: &str,
     main: &str,
 ) -> i32 {
+    run_with(name, main, "")
+}
+
+/// [`run_with_runtime`] with more ca65 text (compiled functions, hand-written callees) after `main`.
+pub fn run_with(
+    name: &str,
+    main: &str,
+    extra: &str,
+) -> i32 {
     let platform = Platform::parse(SIM65).expect("sim65 row");
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("rt-{name}"));
     std::fs::create_dir_all(&dir).unwrap();
-    let source = format!("{}.export _main\n_main:\n{main}  rts\n{RUNTIME}", equates(&platform));
+    let source = format!("{}.export _main\n_main:\n{main}  rts\n{extra}{RUNTIME}", equates(&platform));
     std::fs::write(dir.join("p.s"), source).unwrap();
     let built = Command::new("cl65")
         .args(["-t", "sim6502", "-o"])

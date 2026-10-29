@@ -48,8 +48,12 @@ impl MInst {
     }
 }
 
-/// The two bytes of a pair register: `rs2` is `rc4` (low) and `rc5` (high).
+/// The two bytes of a pair register: `rs2` is `rc4` (low) and `rc5` (high). A word cell `w_..`
+/// (`select.rs`) is two bytes in memory, `w_..` and `w_..+1`.
 fn halves(name: &str) -> Option<(String, String)> {
+    if name.starts_with("w_") {
+        return Some((name.to_owned(), format!("{name}+1")));
+    }
     let n: usize = name.strip_prefix("rs")?.parse().ok()?;
     Some((format!("rc{}", 2 * n), format!("rc{}", 2 * n + 1)))
 }
