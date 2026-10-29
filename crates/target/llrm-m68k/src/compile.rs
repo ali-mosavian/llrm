@@ -124,6 +124,9 @@ pub fn items_with(
     remove_redundant_copies(&mut function, &assignment);
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function);
+    if options.overlay {
+        crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
+    }
     let mut out = vec![Item::Label(name.to_owned())];
     for line in finish(&function, &assignment, number, &slots, options.overlay)? {
         out.push(match line {
@@ -132,6 +135,37 @@ pub fn items_with(
         });
     }
     Ok(out)
+}
+
+/// The IR's branch probabilities by `(from, to)` block number
+/// (`BranchProbabilityInfo`) and where `to` is among `from`'s successors, for
+/// block placement.
+fn edge_odds(
+    module: &Module,
+    name: &str,
+) -> Result<llrm_spike_mf::placement::Odds, String> {
+    let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
+    let function = module.global(id).function().ok_or_else(|| format!("@{name} is a declaration"))?;
+    let text = module.datalayout.as_deref().ok_or("a module with no datalayout")?;
+    let layout = llrm_mir::datalayout::DataLayout::parse(text)?;
+    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+        llrm_analysis::bpi::Module {
+            context: &module.context,
+            declarations: &module.globals,
+            metadata: &module.metadata,
+            layout: &layout,
+        },
+        function,
+    );
+    let mut odds = std::collections::HashMap::new();
+    for &block in function.layout() {
+        for (index, to) in llrm_mir::loopinfo::children(function, block).enumerate() {
+            let probability = bpi.get_edge_probability(function, block, index);
+            let entry = odds.entry((block.0, to.0)).or_insert((llrm_mir::blockfrequency::BranchProbability::get_zero(), index));
+            entry.0 = entry.0 + probability;
+        }
+    }
+    Ok(odds)
 }
 
 /// The function as `llc` prints it, less the directives: the label, then each

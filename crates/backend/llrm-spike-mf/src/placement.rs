@@ -840,6 +840,10 @@ pub fn place<L: Layout>(layout: &L) -> Vec<usize> {
     if whole { order } else { (0..count).collect() }
 }
 
+/// The IR's branch probabilities by `(from, to)` block number, with the
+/// position of `to` among `from`'s successors.
+pub type Odds = HashMap<(u32, u32), (BranchProbability, usize)>;
+
 /// A function's blocks as [`Layout`] asks for them.
 pub struct Graph {
     succs: Vec<Vec<usize>>,
@@ -892,9 +896,9 @@ impl DomGraph for Machine<'_> {
 
 impl FlowGraph for Machine<'_> {}
 
-struct Odds<'a>(&'a [Vec<BranchProbability>]);
+struct Probabilities<'a>(&'a [Vec<BranchProbability>]);
 
-impl EdgeProbabilities for Odds<'_> {
+impl EdgeProbabilities for Probabilities<'_> {
     fn get_edge_probability(
         &self,
         src: BlockId,
@@ -905,23 +909,36 @@ impl EdgeProbabilities for Odds<'_> {
 }
 
 impl Graph {
-    /// The graph of `function`. `odds` are the IR's edge probabilities by
-    /// `(from, to)` block number; an edge it lacks shares what the others
-    /// leave.
+    /// The graph of `function`. `odds` are the IR's edge probabilities and
+    /// positions among the branch's successors by `(from, to)` block number;
+    /// an edge it lacks shares what the others leave. Successors are in the
+    /// IR's order, then the order a pass that made blocks adds them in: the
+    /// one that falls through first (`EmitLoweredSelect`). A tie goes to the
+    /// first.
     pub fn of<C, J: Jump>(
         function: &MFunction<C>,
-        odds: &HashMap<(u32, u32), BranchProbability>,
+        odds: &Odds,
         size: bool,
     ) -> Graph {
         let cfg = Cfg::new(function);
         let count = function.blocks.len();
-        let succs = cfg.succs.clone();
+        let id = |at: usize| function.blocks[at].id;
+        let succs: Vec<Vec<usize>> = (0..count)
+            .map(|from| {
+                let mut list = cfg.succs[from].clone();
+                // the fall-through successor is listed last; made blocks name it first
+                list.sort_by_key(|&to| match odds.get(&(id(from), id(to))) {
+                    Some(&(_, rank)) => (0, rank),
+                    None => (1, usize::from(to != from + 1)),
+                });
+                list
+            })
+            .collect();
         let preds = cfg.preds.clone();
+        let odds_of = |from: usize, to: usize| odds.get(&(id(from), id(to))).map(|one| one.0);
         let probs: Vec<Vec<BranchProbability>> = (0..count)
             .map(|from| {
-                let id = function.blocks[from].id;
-                let known: Vec<Option<BranchProbability>> =
-                    succs[from].iter().map(|&to| odds.get(&(id, function.blocks[to].id)).copied()).collect();
+                let known: Vec<Option<BranchProbability>> = succs[from].iter().map(|&to| odds_of(from, to)).collect();
                 let given = known.iter().flatten().fold(BranchProbability::get_zero(), |sum, &one| sum + one);
                 let missing = known.iter().filter(|one| one.is_none()).count() as u32;
                 let share = if missing == 0 {
@@ -939,7 +956,7 @@ impl Graph {
             Vec::new()
         } else {
             let ci = CycleInfo::compute(&machine);
-            let info = BlockFrequencyInfo::calculate(&machine, &Odds(&probs), &ci);
+            let info = BlockFrequencyInfo::calculate(&machine, &Probabilities(&probs), &ci);
             (0..count).map(|block| info.get_block_freq(BlockId(block as u32))).collect()
         };
         let pinned = (0..count)
@@ -1145,7 +1162,7 @@ fn optimize_branches<C, J: Jump>(
 /// [`place`]'s order and fixes the branches. True when the order changed.
 pub fn place_blocks<C, J: Jump>(
     function: &mut MFunction<C>,
-    odds: &HashMap<(u32, u32), BranchProbability>,
+    odds: &Odds,
     size: bool,
 ) -> bool {
     if function.blocks.len() < 2 || function.blocks.iter().any(|block| !block.phis.is_empty()) {
@@ -1154,14 +1171,23 @@ pub fn place_blocks<C, J: Jump>(
     let graph = Graph::of::<C, J>(function, odds, size);
     let order = place(&graph);
     let identity = order.iter().enumerate().all(|(at, &block)| at == block);
+    let ids: Vec<u32> = function.blocks.iter().map(|block| block.id).collect();
+    let edge_odds: HashMap<(u32, u32), BranchProbability> = graph
+        .succs
+        .iter()
+        .enumerate()
+        .flat_map(|(from, list)| list.iter().enumerate().map(move |(at, &to)| (from, to, at)))
+        .map(|(from, to, at)| ((ids[from], ids[to]), graph.probs[from][at]))
+        .collect();
     if !identity {
-        let ids: Vec<u32> = function.blocks.iter().map(|block| block.id).collect();
         let successors: Vec<Vec<u32>> =
             graph.succs.iter().map(|list| list.iter().map(|&to| ids[to]).collect()).collect();
-        let old_next: HashMap<u32, Option<u32>> = ids.iter().enumerate().map(|(at, &id)| (id, ids.get(at + 1).copied())).collect();
-        let mut blocks: Vec<Option<crate::mfunc::Block>> = std::mem::take(&mut function.blocks).into_iter().map(Some).collect();
+        let old_next: HashMap<u32, Option<u32>> =
+            ids.iter().enumerate().map(|(at, &id)| (id, ids.get(at + 1).copied())).collect();
+        let mut blocks: Vec<Option<crate::mfunc::Block>> =
+            std::mem::take(&mut function.blocks).into_iter().map(Some).collect();
         function.blocks = order.iter().map(|&at| blocks[at].take().expect("each block once")).collect();
-        // the previous block's terminators, then the last block's
+        // `updateTerminator` of every block: its layout successor changed
         for at in 0..function.blocks.len() {
             let id = function.blocks[at].id;
             let original = ids.iter().position(|&one| one == id).expect("a block that was there");
@@ -1169,7 +1195,7 @@ pub fn place_blocks<C, J: Jump>(
         }
     }
     if !size {
-        optimize_branches::<C, J>(function, odds);
+        optimize_branches::<C, J>(function, &edge_odds);
     }
     !identity
 }

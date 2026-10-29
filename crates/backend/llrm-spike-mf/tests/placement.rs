@@ -2,11 +2,9 @@
 
 mod common;
 
-use std::collections::HashMap;
-
 use common::{Two, op};
 use llrm_mir::blockfrequency::{BlockFrequency, BranchProbability};
-use llrm_spike_mf::placement::{Layout, Loop, place, place_blocks};
+use llrm_spike_mf::placement::{Layout, Loop, Odds, place, place_blocks};
 use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand};
 
 /// A hand-made layout: successors with odds, block frequencies, loops.
@@ -163,8 +161,8 @@ fn names(items: &[&str]) -> Vec<String> {
     items.iter().map(|one| (*one).to_owned()).collect()
 }
 
-fn odds(edges: &[(u32, u32, u32)]) -> HashMap<(u32, u32), BranchProbability> {
-    edges.iter().map(|&(from, to, percent)| ((from, to), BranchProbability::new(percent, 100))).collect()
+fn odds(edges: &[(u32, u32, u32)]) -> Odds {
+    edges.iter().enumerate().map(|(rank, &(from, to, percent))| ((from, to), (BranchProbability::new(percent, 100), rank))).collect()
 }
 
 /// The cold block between a branch and its likely target goes to the end, and
