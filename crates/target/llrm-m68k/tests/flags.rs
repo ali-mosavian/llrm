@@ -80,3 +80,39 @@ fn a_copy_over_the_compares_operand_pushes_and_pops_the_codes() {
         [Kind::Op("CMP32dr"), Kind::Op("CCR_PUSH"), Kind::Copy, Kind::Op("CCR_POP"), Kind::Op("Bne8")]
     );
 }
+
+/// The displacement of the spill store the function holds, with or without a push of the codes
+/// round it.
+fn spill_displacement(pushed: bool) -> i64 {
+    use llrm_m68k::dagisel::hooks::Cpu;
+    use llrm_m68k::expand::{Line, finish};
+    use llrm_m68k::mc::Operand as Mc;
+    let mut insts = Vec::new();
+    if pushed {
+        insts.push(op("CCR_PUSH", vec![], false, true));
+    }
+    insts.push(op("MOVM32pm_P", vec![Operand::Imm(0), Operand::Frame(0), Operand::Use(v(0))], false, false));
+    if pushed {
+        insts.push(op("CCR_POP", vec![], true, false));
+    }
+    insts.push(op("RET", vec![Operand::Imm(0)], false, false));
+    let lines = finish(&function(insts), &assignment(), 0, &[0], true, Cpu::M68000).unwrap();
+    lines
+        .iter()
+        .find_map(|line| match line {
+            Line::Inst(inst) if inst.opcode.starts_with("MOVM32pm") => inst.operands.iter().find_map(|o| match o {
+                Mc::Imm(disp) => Some(*disp),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("the spill store")
+}
+
+/// A slot named from the stack pointer between `move %sr, -(%sp)` and `move (%sp)+, %ccr` is two
+/// bytes further: the store of a spilled copy landed on the saved codes, and the pop restored
+/// garbage (differential seed 673 gave 242 for 247).
+#[test]
+fn a_frame_slot_between_a_push_and_a_pop_of_the_codes_is_two_bytes_further() {
+    assert_eq!(spill_displacement(true), spill_displacement(false) + 2);
+}
