@@ -39,6 +39,8 @@ def memrr : Operand<i16> { let MIOperandInfo = (ops Imag16, Imag8); }
 def MOSAddr : ComplexPattern<i16, 2, "SelectIndirect", [], []>;
 // (add pointer, (zext i8 index)): LDA (p),Y with the index in Y.
 def MOSIdx : ComplexPattern<i16, 2, "SelectIndexed", [], []>;
+// A pointer with no offset to add (and no frame object, which the frame code turns into an offset).
+def MOSPtr : ComplexPattern<i16, 1, "SelectPlain", [], []>;
 
 // The pin's tblgen has no nodes for the overflow forms the type legalizer expands into.
 def SDTOverflowOp : SDTypeProfile<2, 2, [SDTCisSameAs<0, 2>, SDTCisSameAs<0, 3>, SDTCisInt<0>, SDTCisVT<1, i1>]>;
@@ -158,6 +160,15 @@ let mayStore = 1, AddedComplexity = 20 in
 let mayStore = 1 in {
   def STP8 : MOSInst<(outs), (ins Imag8:$s, memri:$p), "stp $s, ($p)", [(store i8:$s, MOSAddr:$p)]>;
   def STP16 : MOSInst<(outs), (ins Imag16:$s, memri:$p), "stp16 $s, ($p)", [(store i16:$s, MOSAddr:$p)]>;
+}
+// 65C02 only: the unindexed (zp) mode, `lda (p)` / `sta (p)`, for an offset of 0.
+let Predicates = [HasCMOS], AddedComplexity = 10 in {
+  let mayLoad = 1 in
+    def LDPZ : MOSInst<(outs Imag8:$d), (ins Imag16:$p), "ldpz $d, ($p)", [(set i8:$d, (load MOSPtr:$p))]>;
+  let mayStore = 1 in
+    def STPZ : MOSInst<(outs), (ins Imag8:$s, Imag16:$p), "stpz $s, ($p)", [(store i8:$s, MOSPtr:$p)]>;
+  def : Pat<(i16 (zextloadi8 MOSPtr:$p)), (REG_SEQUENCE Imag16, (LDPZ MOSPtr:$p), sub_lo, (LDI8 0), sub_hi)>;
+  def : Pat<(i16 (extloadi8 MOSPtr:$p)), (REG_SEQUENCE Imag16, (LDPZ MOSPtr:$p), sub_lo, (LDI8 0), sub_hi)>;
 }
 let mayStore = 1, AddedComplexity = 10 in
   def STPI8 : MOSInst<(outs), (ins Imag8:$s, memrr:$a), "stpi $s, ($a)", [(store i8:$s, MOSIdx:$a)]>;

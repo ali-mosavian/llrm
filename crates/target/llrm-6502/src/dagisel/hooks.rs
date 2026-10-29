@@ -69,6 +69,20 @@ fn select_indirect<D: Dag>(
     results.push((offset, None));
 }
 
+/// `SelectPlain`: a pointer with no constant to add and no frame object, as itself.
+fn select_plain<D: AddrDag>(
+    dag: &mut D,
+    value: SDValue,
+    results: &mut Vec<(SDValue, Option<u32>)>,
+) -> bool {
+    let offset = dag.opcode(value.node) == isd::ADD && dag.constant(dag.operand(value.node, 1)).is_some();
+    if offset || dag.frame_index(value).is_some() {
+        return false;
+    }
+    results.push((value, None));
+    true
+}
+
 /// `SelectIndexed`: `(add pointer, (zext i8 index))` as the pointer and the byte index, either
 /// operand order; a global's address is left to `SelectAbsX`.
 fn select_indexed<D: Dag>(
@@ -191,6 +205,7 @@ impl<D: AddrDag> Hooks<D> for MosHooks {
                 select_indirect(dag, value, results);
                 true
             }
+            Some("SelectPlain") => select_plain(dag, value, results),
             Some("SelectAbs") => select_abs(dag, value, results),
             Some("SelectAbsX") => select_absx(dag, value, results),
             Some("SelectIndexed") => select_indexed(dag, value, results),

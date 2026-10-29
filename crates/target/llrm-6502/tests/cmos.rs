@@ -12,13 +12,15 @@ const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a
     @g = global i8 7\n\
     define i8 @clr(i8 %x) {\nentry:\n  store i8 0, ptr @g\n  br label %next\nnext:\n  %v = load i8, ptr @g\n  %r = add i8 %v, %x\n  ret i8 %r\n}\n\
     define void @clrp(ptr %p) {\n  store i8 0, ptr %p\n  ret void\n}\n\
+    define i8 @getp(ptr %p) {\n  %v = load i8, ptr %p\n  ret i8 %v\n}\n\
+    define void @putp(ptr %p, i8 %v) {\n  store i8 %v, ptr %p\n  ret void\n}\n\
     define i8 @zero() {\n  ret i8 0\n}\n\
     define i8 @pick(i8 %x) {\nentry:\n  %c = icmp eq i8 %x, 0\n  br i1 %c, label %a, label %b\na:\n  br label %join\nb:\n  br label %join\njoin:\n  %r = phi i8 [ 10, %a ], [ 20, %b ]\n  ret i8 %r\n}";
 const G_DATA: &str = ".segment \"DATA\"\ng: .byte 7\n.segment \"CODE\"\n";
 
 fn text(cpu: Cpu) -> String {
     let module = llrm_mir::parse::module(IR).expect("parses");
-    ["clr", "clrp", "zero", "pick"]
+    ["clr", "clrp", "zero", "pick", "getp", "putp"]
         .iter()
         .map(|name| {
             function_text(&module, name, &select_function(&module, name, cpu).expect("selects")).expect("emits")
@@ -130,4 +132,24 @@ fn a_zero_constant_is_not_pinned_to_a_cell() {
     let module = llrm_mir::parse::module(IR).expect("parses");
     let text = |cpu| function_text(&module, "zero", &select_function(&module, "zero", cpu).expect("selects")).unwrap();
     assert_eq!(text(Cpu::W65c02), text(Cpu::Mos6502));
+}
+
+/// A byte through a pointer at offset 0 used `ldy #0; lda (p),y` on both CPUs.
+/// The 65C02 has `lda (p)` and `sta (p)`: no `ldy`, two bytes and two cycles
+/// less each. `g` holds 7; `putp` stores 9 into it.
+#[test]
+fn a_byte_through_a_pointer_uses_the_unindexed_mode_on_the_65c02() {
+    let (nmos, cmos) = (text(Cpu::Mos6502), text(Cpu::W65c02));
+    assert!(nmos.contains("  ldy #0\n  lda (rc2),y\n") && nmos.contains("  sta (rc2),y\n"), "{nmos}");
+    assert!(cmos.contains("  lda (rc2)\n") && cmos.contains("  sta (rc2)\n"), "{cmos}");
+    let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
+    let point = "  lda #<g\n  sta rc2\n  lda #>g\n  sta rc3\n";
+    let get = format!("{point}  jsr getp\n");
+    let put = format!("{point}  lda #9\n  sta rc4\n  jsr putp\n  lda g\n");
+    for (name, main, want) in [("cmos-getp", get, 7), ("cmos-putp", put, 9)] {
+        for (target, cpu) in [("sim6502", Cpu::Mos6502), ("sim65c02", Cpu::W65c02)] {
+            let got = common::run_on(target, name, &main, &format!("{}{G_DATA}", text(cpu))).0;
+            assert_eq!(got, want, "{name} on {target}");
+        }
+    }
 }
