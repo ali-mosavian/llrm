@@ -165,8 +165,12 @@ fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_s
     let exported = procedure(&text, "_twice");
     assert!(exported.iter().any(|line| line.contains("[esp+4]")), "{exported:?}");
     let caller = procedure(&text, "_use");
+    // One stack argument per call. The pin stores it into the reserved call
+    // frame (`movl $3, (%esp)`) and pops nothing; ours pushes it and cleans
+    // up with `add esp, 4` (DEVIATE CF1, docs/working/ci.md call-frame-reserve).
     assert!(
-        !caller.iter().any(|line| line.starts_with("push") && line.contains("2")) && !pops_after(&caller),
+        !caller.iter().any(|line| line.starts_with("push") && line.contains("2"))
+            && caller.iter().filter(|line| line.starts_with("pushd")).count() == 2,
         "{caller:?}"
     );
 }
