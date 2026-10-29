@@ -136,15 +136,15 @@ pub fn function_text_with(
     allocate: bool,
 ) -> Result<String, String> {
     let (items, cells) = function_items(module, name, selection)?;
-    if allocate && let Ok(function) = alloc::build(name, &items) {
-        let (code, slots) = alloc::emit(function)?;
-        let mut body = format!(".export {name}\n");
-        for item in &items {
-            if let Item::Label(l) = item {
-                writeln!(body, "{l}:").unwrap();
-            }
-        }
-        body.push_str(&code);
+    let built = if allocate { Some(alloc::build(name, &items)) } else { None };
+    if let Some(Err(why)) = &built
+        && std::env::var_os("LLRM_6502_WHY").is_some()
+    {
+        eprintln!("alloc: {name}: {}", why.0);
+    }
+    if let Some(Ok((function, labels))) = built {
+        let (code, slots) = alloc::emit(function, &labels)?;
+        let mut body = format!(".export {name}\n{code}");
         body.push_str(".segment \"BSS\"\n");
         for slot in slots {
             writeln!(body, "{slot}: .res 1").unwrap();

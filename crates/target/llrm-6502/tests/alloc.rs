@@ -75,3 +75,36 @@ fn more_live_values_than_registers_spill_and_still_compute() {
     let setup: String = (1..=6).map(|n| set(&format!("rc{}", n + 1), n)).collect();
     assert_eq!(common::run_with("alloc-many", &format!("{setup}  jsr many\n"), &text), 4);
 }
+
+const GCD: &str = "define i8 @gcd(i8 %0, i8 %1) {
+  %e = icmp eq i8 %0, %1
+  br i1 %e, label %done, label %loop
+loop:
+  %b = phi i8 [ %b2, %loop ], [ %1, %2 ]
+  %a = phi i8 [ %a2, %loop ], [ %0, %2 ]
+  %gt = icmp ugt i8 %a, %b
+  %narrow = select i1 %gt, i8 %b, i8 0
+  %a2 = sub i8 %a, %narrow
+  %z = select i1 %gt, i8 0, i8 %a
+  %b2 = sub i8 %b, %z
+  %same = icmp eq i8 %a2, %b2
+  br i1 %same, label %done, label %loop
+done:
+  %r = phi i8 [ %0, %2 ], [ %a2, %loop ]
+  ret i8 %r
+}";
+
+/// A loop with phis, selects and two exits: a block that only jumps is
+/// threaded away (the cell path kept `beq`, `jmp` and an edge block; 109 bytes,
+/// now 72) and gcd(12, 18) = 6, gcd(7, 13) = 1, gcd(9, 9) = 9.
+#[test]
+fn a_loop_with_selects_and_phis_runs_without_edge_jumps() {
+    let ir =
+        GCD.replace("%2", "%entry").replace("define i8 @gcd(i8 %0, i8 %1) {", "define i8 @gcd(i8 %0, i8 %1) {\nentry:");
+    let text = compile(&ir, "gcd", true);
+    assert!(!text.contains("gcd_e0_2"), "an edge block that only jumps is still there:\n{text}");
+    for (a, b, want) in [(12, 18, 6), (7, 13, 1), (9, 9, 9)] {
+        let setup = set("rc2", a) + &set("rc3", b);
+        assert_eq!(common::run_with(&format!("alloc-gcd-{a}"), &format!("{setup}  jsr gcd\n"), &text), want);
+    }
+}

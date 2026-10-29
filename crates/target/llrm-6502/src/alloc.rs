@@ -20,7 +20,7 @@ use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Reg, Target};
 
 use crate::dagisel::generated::ids::opcode as op;
-use crate::emit::{MInst, Operand as Machine};
+use crate::emit::{MInst, Operand as Machine, spill};
 use crate::reg;
 use crate::select::Item;
 
@@ -134,6 +134,25 @@ struct Builder {
     bytes: HashMap<String, Reg>,
     /// Cells defined once, by an immediate load: they fold into the user.
     constants: HashMap<String, i64>,
+    /// The block each label names.
+    block_of: HashMap<String, u32>,
+    /// How many times each cell or register has been defined so far.
+    versions: HashMap<String, u32>,
+    /// The compare whose flags the next branch reads, and the ones saved to
+    /// cells for later.
+    pending: Option<Compare>,
+    saved: HashMap<String, Compare>,
+    /// Compares are redone where the flags are read: nothing keeps `P` alive.
+    /// The block instructions go to.
+    current: usize,
+}
+
+/// A compare not yet emitted: the operands and the version of each when it
+/// was made, so a later redo can tell they have not changed.
+#[derive(Clone, Debug)]
+struct Compare {
+    a: (String, u32),
+    b: (String, u32),
 }
 
 impl Builder {
@@ -198,11 +217,64 @@ impl Builder {
         }
     }
 
+    /// `name` is defined here.
+    fn define(
+        &mut self,
+        name: &str,
+    ) {
+        *self.versions.entry(name.to_owned()).or_default() += 1;
+    }
+
+    fn version(
+        &self,
+        name: &str,
+    ) -> u32 {
+        self.versions.get(name).copied().unwrap_or(0)
+    }
+
+    /// `COPY a, lhs; CMP a, rhs` again, as the flags' producer: the operands
+    /// must hold what they held at the first compare.
+    fn redo_compare(&mut self) -> Result<(), Unsupported> {
+        let Compare { a, b } = self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
+        if self.version(&a.0) != a.1 || self.version(&b.0) != b.1 {
+            return Err(Unsupported("a compare's operand changed before its branch".into()));
+        }
+        let acc = Reg::Phys(reg::A);
+        let lhs = self.byte(&a.0)?;
+        let rhs = match self.constants.get(&b.0) {
+            Some(value) => Operand::Imm(*value & 0xFF),
+            None => {
+                let r = self.byte(&b.0)?;
+                self.require(r, Class::MEM)?;
+                Operand::Use(r)
+            }
+        };
+        self.copy(acc, lhs);
+        let mut cmp = Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(acc), rhs]);
+        cmp.sets_flags = true;
+        self.push(cmp);
+        Ok(())
+    }
+
+    fn block(
+        &self,
+        label: &Machine,
+    ) -> Result<Operand, Unsupported> {
+        match label {
+            Machine::Label(l) => self
+                .block_of
+                .get(l)
+                .map(|id| Operand::Block(*id))
+                .ok_or_else(|| Unsupported(format!("a branch to {l}, outside the function"))),
+            other => Err(Unsupported(format!("operand {other:?}"))),
+        }
+    }
+
     fn push(
         &mut self,
         inst: Inst,
     ) {
-        self.function.blocks.last_mut().expect("a block").insts.push(inst);
+        self.function.blocks[self.current].insts.push(inst);
     }
 
     fn copy(
@@ -224,6 +296,7 @@ impl Builder {
         b: &str,
     ) -> Result<(), Unsupported> {
         let acc = Reg::Phys(reg::A);
+        self.define(d);
         let (d, a) = (self.byte(d)?, self.byte(a)?);
         let second = match self.constants.get(b) {
             Some(value) => Operand::Imm(*value & 0xFF),
@@ -298,44 +371,77 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
     values
 }
 
-/// `items` as a machine function on virtual registers: one block, or an error
-/// naming what is not built.
+/// `items` as a machine function on virtual registers, with the labels of each
+/// block; or an error naming what is not built.
 pub fn build(
     name_of_function: &str,
     items: &[Item],
-) -> Result<MFunction<Class>, Unsupported> {
-    let mut b =
-        Builder { function: MFunction::new(name_of_function), bytes: HashMap::new(), constants: constants(items) };
-    b.function.blocks.push(Block { id: 0, ..Block::default() });
-    let mut labels = 0;
+) -> Result<(MFunction<Class>, Vec<Vec<String>>), Unsupported> {
+    // A block starts at a label that follows an instruction (or the first).
+    let mut labels: Vec<Vec<String>> = vec![Vec::new()];
+    let mut block_of = HashMap::new();
+    let mut after_inst = false;
+    for item in items {
+        match item {
+            Item::Label(l) => {
+                if after_inst {
+                    labels.push(Vec::new());
+                    after_inst = false;
+                }
+                block_of.insert(l.clone(), labels.len() as u32 - 1);
+                labels.last_mut().expect("a block").push(l.clone());
+            }
+            _ => after_inst = true,
+        }
+    }
+    let mut b = Builder {
+        function: MFunction::new(name_of_function),
+        bytes: HashMap::new(),
+        constants: constants(items),
+        block_of,
+        versions: HashMap::new(),
+        pending: None,
+        saved: HashMap::new(),
+        current: 0,
+    };
+    for id in 0..labels.len() {
+        b.function.blocks.push(Block { id: id as u32, ..Block::default() });
+    }
+    let mut after_inst = false;
     for item in items {
         let inst = match item {
             Item::Label(_) => {
-                labels += 1;
-                if labels > 2 {
-                    return Err(Unsupported("more than one block".into()));
+                if after_inst {
+                    b.current += 1;
+                    after_inst = false;
+                    b.pending = None;
                 }
                 continue;
             }
             Item::Text(_) => return Err(Unsupported("raw text".into())),
             Item::Inst(inst) => inst,
         };
+        after_inst = true;
         let o = &inst.operands;
         match inst.opcode {
             op::COPY8 => {
+                b.define(name(&o[0])?);
                 let (d, s) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?);
                 b.copy(d, s);
             }
             op::COPY16 => {
+                b.define(name(&o[0])?);
                 let ((dl, dh), (sl, sh)) = (b.word(name(&o[0])?)?, b.word(name(&o[1])?)?);
                 b.copy(dl, sl);
                 b.copy(dh, sh);
             }
             op::LDI8 => {
+                b.define(name(&o[0])?);
                 let d = b.byte(name(&o[0])?)?;
                 b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(d), Operand::Imm(immediate(&o[1])? & 0xFF)]));
             }
             op::LDI16 => {
+                b.define(name(&o[0])?);
                 let (low, high) = b.word(name(&o[0])?)?;
                 let value = immediate(&o[1])?;
                 for (d, byte) in [(low, value & 0xFF), (high, (value >> 8) & 0xFF)] {
@@ -352,8 +458,74 @@ pub fn build(
             op::AND16 => b.alu16("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR16 => b.alu16("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::XOR16 => b.alu16("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            // The flags are made where they are read.
+            op::CMP8 => {
+                let (a, c) = (name(&o[1])?, name(&o[2])?);
+                b.pending = Some(Compare { a: (a.to_owned(), b.version(a)), b: (c.to_owned(), b.version(c)) });
+            }
+            spill_op if spill_op == spill::SAVE_FLAGS => {
+                let compare = b.pending.clone().ok_or_else(|| Unsupported("saved flags with no compare".into()))?;
+                b.saved.insert(name(&o[0])?.to_owned(), compare);
+            }
+            spill_op if spill_op == spill::LOAD_FLAGS => {
+                b.pending = Some(
+                    b.saved.get(name(&o[0])?).cloned().ok_or_else(|| Unsupported("loaded flags never saved".into()))?,
+                );
+            }
+            code @ (op::BEQ | op::BNE | op::BCC | op::BCS | op::BMI | op::BPL) => {
+                b.redo_compare()?;
+                let mnemonic = match code {
+                    op::BEQ => "BEQ",
+                    op::BNE => "BNE",
+                    op::BCC => "BCC",
+                    op::BCS => "BCS",
+                    op::BMI => "BMI",
+                    _ => "BPL",
+                };
+                let target = b.block(&o[0])?;
+                let mut branch = Inst::new(Kind::Op(mnemonic), vec![target, Operand::Use(Reg::Phys(reg::FLAGS))]);
+                branch.terminator = true;
+                branch.reads_flags = true;
+                b.push(branch);
+            }
+            op::JMP | op::BRA => {
+                let target = b.block(&o[0])?;
+                let mut jump = Inst::new(Kind::Op("JMP"), vec![target]);
+                jump.terminator = true;
+                jump.barrier = true;
+                b.push(jump);
+            }
+            op::CMOV8 => {
+                b.redo_compare()?;
+                b.define(name(&o[0])?);
+                let d = b.byte(name(&o[0])?)?;
+                let value = |b: &mut Builder, operand: &Machine| -> Result<Operand, Unsupported> {
+                    match b.constants.get(name(operand)?) {
+                        Some(v) => Ok(Operand::Imm(*v & 0xFF)),
+                        None => {
+                            let r = b.byte(name(operand)?)?;
+                            b.require(r, Class(Class::X | Class::Y | Class::M))?;
+                            Ok(Operand::Use(r))
+                        }
+                    }
+                };
+                let (if_false, if_true) = (value(&mut b, &o[1])?, value(&mut b, &o[2])?);
+                let mut cmov = Inst::new(
+                    Kind::Op("CMOV"),
+                    vec![
+                        Operand::Def(Reg::Phys(reg::A)),
+                        if_false,
+                        if_true,
+                        Operand::Imm(immediate(&o[3])?),
+                        Operand::Use(Reg::Phys(reg::FLAGS)),
+                    ],
+                );
+                cmov.reads_flags = true;
+                b.push(cmov);
+                b.copy(d, Reg::Phys(reg::A));
+            }
             op::RET => {
-                let results = results(&b.function);
+                let results = results(&b.function.blocks[b.current].insts);
                 let mut ret =
                     Inst::new(Kind::Op("RTS"), results.into_iter().map(|r| Operand::Use(Reg::Phys(r))).collect());
                 ret.terminator = true;
@@ -363,15 +535,105 @@ pub fn build(
             other => return Err(Unsupported(format!("opcode {other}"))),
         }
     }
+    fold_branches(&mut b.function);
     remove_dead(&mut b.function);
-    Ok(b.function)
+    Ok((b.function, labels))
+}
+
+/// The branch with the opposite condition.
+fn opposite(kind: Kind) -> Option<Kind> {
+    Some(Kind::Op(match kind {
+        Kind::Op("BEQ") => "BNE",
+        Kind::Op("BNE") => "BEQ",
+        Kind::Op("BCC") => "BCS",
+        Kind::Op("BCS") => "BCC",
+        Kind::Op("BMI") => "BPL",
+        Kind::Op("BPL") => "BMI",
+        _ => return None,
+    }))
+}
+
+/// `BranchFolder`'s simple cases: a branch to a block that only jumps goes to
+/// where it jumps, a block nothing reaches goes, and a conditional branch over
+/// the jump that follows it, to the next block, becomes the opposite branch.
+///
+/// DEVIATE: spike-local, in the 6502 only. Reason: it needs the opposite of a
+/// branch. Exit: a `Target` hook, in `llrm-spike-mf`.
+fn fold_branches(function: &mut MFunction<Class>) {
+    // threading, to a fixed point (a loop of empty jumps stays)
+    loop {
+        let only_jump: HashMap<u32, u32> = function
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.insts[..] {
+                [Inst { kind: Kind::Op("JMP"), operands, .. }] => match operands[..] {
+                    [Operand::Block(to)] if to != block.id => Some((block.id, to)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let mut changed = false;
+        for operand in function.blocks.iter_mut().flat_map(|b| &mut b.insts).flat_map(|i| &mut i.operands) {
+            if let Operand::Block(to) = operand
+                && let Some(next) = only_jump.get(to)
+            {
+                *to = *next;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // unreachable blocks
+    let reached = {
+        let next = successors(function);
+        let mut seen = vec![false; function.blocks.len()];
+        let mut work = vec![0usize];
+        while let Some(at) = work.pop() {
+            if !std::mem::replace(&mut seen[at], true) {
+                work.extend(next[at].iter().copied());
+            }
+        }
+        seen
+    };
+    let mut at = 0;
+    function
+        .blocks
+        .retain(
+            |_| {
+                at += 1;
+                reached[at - 1]
+            },
+        );
+    // the condition over a jump, to the block that follows
+    for at in 0..function.blocks.len() {
+        let next_id = function.blocks.get(at + 1).map(|b| b.id);
+        let insts = &mut function.blocks[at].insts;
+        let n = insts.len();
+        if n < 2 {
+            continue;
+        }
+        let (Some(flipped), [Operand::Block(skipped), _], [Operand::Block(to)]) =
+            (opposite(insts[n - 2].kind), &insts[n - 2].operands[..], &insts[n - 1].operands[..])
+        else {
+            continue;
+        };
+        if insts[n - 1].kind == Kind::Op("JMP") && Some(*skipped) == next_id {
+            let to = *to;
+            insts[n - 2].kind = flipped;
+            insts[n - 2].operands[0] = Operand::Block(to);
+            insts.pop();
+        }
+    }
 }
 
 /// The physical registers the run of copies just before the return sets: the
 /// result.
-fn results(function: &MFunction<Class>) -> Vec<RegId> {
+fn results(insts: &[Inst]) -> Vec<RegId> {
     let mut out = Vec::new();
-    for inst in function.blocks[0].insts.iter().rev() {
+    for inst in insts.iter().rev() {
         match (inst.kind, inst.operands.first()) {
             (Kind::Copy, Some(Operand::Def(Reg::Phys(p)))) => out.push(*p),
             _ => break,
@@ -512,16 +774,41 @@ fn move_byte(
 
 /// The function as ca65 lines (no label), with the zero-page slots the spills
 /// used, or an error from the allocator.
-pub fn emit(mut function: MFunction<Class>) -> Result<(String, Vec<String>), String> {
+pub fn emit(
+    mut function: MFunction<Class>,
+    labels: &[Vec<String>],
+) -> Result<(String, Vec<String>), String> {
     let (assignment, slots) = allocate_spilling::<Mos>(&mut function, 0)?;
     let at = |r: Reg| match r {
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(p) => p,
     };
+    // copies the allocator joined are gone; blocks that held only those now
+    // just jump
+    for block in &mut function.blocks {
+        block
+            .insts
+            .retain(
+                |inst| !(inst.kind == Kind::Copy
+                    && matches!(
+                        inst.operands[..],
+                        [Operand::Def(d), Operand::Use(s)] if at(d) == at(s)
+                    )),
+            );
+    }
+    fold_branches(&mut function);
     let after = live_after(&function, &at);
     let slot_name = |slot: i32| format!("s_{}_{}", function.name, slot);
     let mut out = String::new();
+    let mut made = 0;
+    let target = |operand: &Operand| match operand {
+        Operand::Block(id) => labels[*id as usize][0].clone(),
+        other => unreachable!("{other:?} is not a block"),
+    };
     for (b, block) in function.blocks.iter().enumerate() {
+        for label in &labels[block.id as usize] {
+            writeln!(out, "{label}:").unwrap();
+        }
         for (i, inst) in block.insts.iter().enumerate() {
             let a_live = after[b][i].contains(&reg::A);
             let regs: Vec<RegId> = inst
@@ -552,6 +839,55 @@ pub fn emit(mut function: MFunction<Class>) -> Result<(String, Vec<String>), Str
                     writeln!(out, "  {} {text}", mnemonic.to_lowercase()).unwrap();
                 }
                 (Kind::Op("RTS"), _) => out.push_str("  rts\n"),
+                (Kind::Op("CMP"), [_, _, second]) => {
+                    let text = match second {
+                        Operand::Imm(value) => format!("#{value}"),
+                        _ => register_name(regs[2]),
+                    };
+                    writeln!(out, "  cmp {text}").unwrap();
+                }
+                (Kind::Op(branch @ ("BEQ" | "BNE" | "BCC" | "BCS" | "BMI" | "BPL")), [to, _]) => {
+                    writeln!(out, "  {} {}", branch.to_lowercase(), target(to)).unwrap();
+                }
+                // a jump to the block that follows is the layout
+                (Kind::Op("JMP"), [to @ Operand::Block(id)]) => {
+                    if function.blocks.get(b + 1).map(|next| next.id) != Some(*id) {
+                        writeln!(out, "  jmp {}", target(to)).unwrap();
+                    }
+                }
+                // a := cc ? if_true : if_false, the branch first: loads set N
+                // and Z
+                (Kind::Op("CMOV"), [_, if_false, if_true, Operand::Imm(code), _]) => {
+                    made += 1;
+                    let (taken, done) = (format!("_cmt{made}"), format!("_cmd{made}"));
+                    let branch = ["beq", "bne", "bcc", "bcs", "bmi", "bpl"][*code as usize];
+                    let load = |out: &mut String, value: &Operand, at: Option<RegId>| match (value, at) {
+                        (Operand::Imm(v), _) => writeln!(out, "  lda #{v}").unwrap(),
+                        (_, Some(r)) if r == reg::X => out.push_str("  txa\n"),
+                        (_, Some(r)) if r == reg::Y => out.push_str("  tya\n"),
+                        (_, Some(r)) => writeln!(out, "  lda {}", register_name(r)).unwrap(),
+                        (_, None) => unreachable!(),
+                    };
+                    let mut read = inst
+                        .operands
+                        .iter()
+                        .filter_map(
+                            |o| match o {
+                                Operand::Use(Reg::Virt(_)) => Some(at(match o {
+                                    Operand::Use(r) => *r,
+                                    _ => unreachable!(),
+                                })),
+                                _ => None,
+                            },
+                        );
+                    let false_at = matches!(if_false, Operand::Use(_)).then(|| read.next()).flatten();
+                    let true_at = matches!(if_true, Operand::Use(_)).then(|| read.next()).flatten();
+                    writeln!(out, "  {branch} {taken}").unwrap();
+                    load(&mut out, if_false, false_at);
+                    writeln!(out, "  jmp {done}\n{taken}:").unwrap();
+                    load(&mut out, if_true, true_at);
+                    writeln!(out, "{done}:").unwrap();
+                }
                 (Kind::Op("SPILL"), [_, Operand::Frame(slot)]) => {
                     if regs[0] == reg::A || regs[0] == reg::X || regs[0] == reg::Y {
                         writeln!(out, "  st{} {}", register_name(regs[0]), slot_name(*slot)).unwrap();
@@ -578,5 +914,50 @@ pub fn emit(mut function: MFunction<Class>) -> Result<(String, Vec<String>), Str
             }
         }
     }
-    Ok((out, slots.iter().map(|(slot, _)| slot_name(*slot)).collect()))
+    Ok((relax(&out), slots.iter().map(|(slot, _)| slot_name(*slot)).collect()))
+}
+
+/// A conditional branch reaches 127 bytes. An instruction is at most 3 bytes,
+/// so one whose target is within 40 instruction lines stays and any other
+/// becomes the opposite branch over a `jmp`.
+///
+/// DEVIATE: line counting, not sizes (as `emit::relax_bra`). Exit: the shared
+/// branch relaxation.
+fn relax(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let is_instruction = |l: &str| l.starts_with("  ") && !l.trim_start().starts_with('.');
+    let mut out = String::new();
+    let mut far = 0;
+    for (at, line) in lines.iter().enumerate() {
+        let parts: Vec<&str> = line.trim_start().split(' ').collect();
+        let opposite = match parts[..] {
+            ["beq", _] => "bne",
+            ["bne", _] => "beq",
+            ["bcc", _] => "bcs",
+            ["bcs", _] => "bcc",
+            ["bmi", _] => "bpl",
+            ["bpl", _] => "bmi",
+            _ => {
+                writeln!(out, "{line}").unwrap();
+                continue;
+            }
+        };
+        let label = format!("{}:", parts[1]);
+        let near = lines
+            .iter()
+            .position(|l| *l == label)
+            .is_some_and(
+                |to| {
+                    let (from, until) = if to > at { (at + 1, to) } else { (to, at) };
+                    lines[from..until].iter().filter(|l| is_instruction(l)).count() <= 40
+                },
+            );
+        if near {
+            writeln!(out, "{line}").unwrap();
+        } else {
+            far += 1;
+            writeln!(out, "  {opposite} _far{far}\n  jmp {}\n_far{far}:", parts[1]).unwrap();
+        }
+    }
+    out
 }
