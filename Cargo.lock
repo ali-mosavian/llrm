@@ -224,6 +224,7 @@ dependencies = [
  "llrm-dagisel",
  "llrm-lir",
  "llrm-target",
+ "toml",
 ]
 
 [[package]]

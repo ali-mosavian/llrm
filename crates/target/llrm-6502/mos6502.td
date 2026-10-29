@@ -13,12 +13,17 @@ class MOSPair<string n, list<Register> parts> : RegisterWithSubRegs<n, parts> {
   let SubRegIndices = [sub_lo, sub_hi];
 }
 
+def A : MOSReg<"a">;
+def X : MOSReg<"x">;
+def Y : MOSReg<"y">;
 foreach i = 0-7 in def RC#i : MOSReg<"rc"#i>;
 foreach i = 0-3 in def RS#i : MOSPair<"rs"#i, [!cast<Register>("RC"#!mul(i, 2)), !cast<Register>("RC"#!add(!mul(i, 2), 1))]>;
 def P : MOSReg<"p">;
 def C : MOSReg<"c">;
 
 def Imag8 : RegisterClass<"MOS", [i8], 8, (sequence "RC%u", 0, 7)>;
+// Every byte a copy may name: the three real registers and the zero-page bytes.
+def Reg8 : RegisterClass<"MOS", [i8], 8, (add A, X, Y, Imag8)>;
 def Imag16 : RegisterClass<"MOS", [i16], 8, (sequence "RS%u", 0, 3)>;
 // The carry flag as an i1 value: one register, so the allocator sees the 6502's single carry.
 def Carry : RegisterClass<"MOS", [i1], 8, (add C)>;
@@ -83,6 +88,26 @@ let mayStore = 1 in
   def STP8 : MOSInst<(outs), (ins Imag8:$s, Imag16:$p), "stp $s, ($p)", [(store i8:$s, MOSAddr:$p)]>;
 let mayStore = 1, Predicates = [HasCMOS] in
   def STZP : MOSInst<(outs), (ins Imag16:$p), "stz ($p)", [(store (i8 0), MOSAddr:$p)]>;
+
+def brtarget : Operand<OtherVT>;
+def calltarget : Operand<i16>;
+
+// Instructions the selector does not match from a pattern: copies, compare, branches, call. They exist
+// so the emitter is keyed to generated opcode ids.
+def COPY8 : MOSInst<(outs Reg8:$d), (ins Reg8:$s), "copy $d, $s", []>;
+def COPY16 : MOSInst<(outs Imag16:$d), (ins Imag16:$s), "copy $d, $s", []>;
+let Defs = [P] in
+  def CMP8 : MOSInst<(outs), (ins Imag8:$a, Imag8:$b), "cmp $a, $b", []>;
+let isBranch = 1, isTerminator = 1, Uses = [P] in {
+  def BEQ : MOSInst<(outs), (ins brtarget:$t), "beq $t", []>;
+  def BNE : MOSInst<(outs), (ins brtarget:$t), "bne $t", []>;
+  def BCC : MOSInst<(outs), (ins brtarget:$t), "bcc $t", []>;
+  def BCS : MOSInst<(outs), (ins brtarget:$t), "bcs $t", []>;
+}
+let isBranch = 1, isTerminator = 1, isBarrier = 1 in
+  def JMP : MOSInst<(outs), (ins brtarget:$t), "jmp $t", []>;
+let isCall = 1 in
+  def JSR : MOSInst<(outs), (ins calltarget:$t), "jsr $t", []>;
 
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
   def RET : MOSInst<(outs), (ins), "rts", [(MOSretglue)]>;

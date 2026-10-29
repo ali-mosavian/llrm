@@ -1,0 +1,6 @@
+# cc65's `sim65`, target sim6502: 64K of RAM, cc65's own zero page is $00..$19, the program at $0200.
+# The oracle the spike checks its output against.
+[platform]
+name = "sim65"
+load_address = 0x0200
+imag_base = 0x80

@@ -2,6 +2,8 @@
 
 pub mod abi;
 pub mod dagisel;
+pub mod emit;
+pub mod platform;
 
 use llrm_lir::registers::{RegId, Row};
 

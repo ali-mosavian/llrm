@@ -1,0 +1,28 @@
+//! A platform row (`machines/<name>.toml`): where the program loads and where the imaginary
+//! registers live in zero page.
+
+pub const C64: &str = include_str!("machines/c64.toml");
+pub const SIM65: &str = include_str!("machines/sim65.toml");
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Platform {
+    pub name: String,
+    pub load_address: u16,
+    /// The zero-page address of `rc0`.
+    pub imag_base: u8,
+}
+
+impl Platform {
+    pub fn parse(text: &str) -> Result<Platform, String> {
+        let doc: toml::Table = text.parse().map_err(|e: toml::de::Error| e.to_string())?;
+        let table = doc.get("platform").and_then(|t| t.as_table()).ok_or("no [platform]")?;
+        let number = |key: &str| {
+            table.get(key).and_then(|v| v.as_integer()).ok_or_else(|| format!("platform.{key} is not a number"))
+        };
+        Ok(Platform {
+            name: table.get("name").and_then(|v| v.as_str()).ok_or("platform.name is not a string")?.to_owned(),
+            load_address: u16::try_from(number("load_address")?).map_err(|_| "load_address is not 16 bits")?,
+            imag_base: u8::try_from(number("imag_base")?).map_err(|_| "imag_base is not 8 bits")?,
+        })
+    }
+}

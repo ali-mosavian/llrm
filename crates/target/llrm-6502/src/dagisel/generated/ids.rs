@@ -18,29 +18,39 @@ pub mod opcode {
     pub const ADDOC8: u16 = 340;
     pub const AND16: u16 = 341;
     pub const AND8: u16 = 342;
-    pub const LDI16: u16 = 343;
-    pub const LDI8: u16 = 344;
-    pub const LDP8: u16 = 345;
-    pub const OR16: u16 = 346;
-    pub const OR8: u16 = 347;
-    pub const RET: u16 = 348;
-    pub const STP8: u16 = 349;
-    pub const STZP: u16 = 350;
-    pub const SUB16: u16 = 351;
-    pub const SUB8: u16 = 352;
-    pub const SUBO16: u16 = 353;
-    pub const SUBO8: u16 = 354;
-    pub const SUBOC16: u16 = 355;
-    pub const SUBOC8: u16 = 356;
-    pub const XOR16: u16 = 357;
-    pub const XOR8: u16 = 358;
+    pub const BCC: u16 = 343;
+    pub const BCS: u16 = 344;
+    pub const BEQ: u16 = 345;
+    pub const BNE: u16 = 346;
+    pub const CMP8: u16 = 347;
+    pub const COPY16: u16 = 348;
+    pub const COPY8: u16 = 349;
+    pub const JMP: u16 = 350;
+    pub const JSR: u16 = 351;
+    pub const LDI16: u16 = 352;
+    pub const LDI8: u16 = 353;
+    pub const LDP8: u16 = 354;
+    pub const OR16: u16 = 355;
+    pub const OR8: u16 = 356;
+    pub const RET: u16 = 357;
+    pub const STP8: u16 = 358;
+    pub const STZP: u16 = 359;
+    pub const SUB16: u16 = 360;
+    pub const SUB8: u16 = 361;
+    pub const SUBO16: u16 = 362;
+    pub const SUBO8: u16 = 363;
+    pub const SUBOC16: u16 = 364;
+    pub const SUBOC8: u16 = 365;
+    pub const XOR16: u16 = 366;
+    pub const XOR8: u16 = 367;
 }
 
 pub mod reg {
     pub const CarryRegClassID: u16 = 0;
-    pub const Imag16RegClassID: u16 = 3;
-    pub const Imag8RegClassID: u16 = 1;
-    pub const P: u16 = 2;
+    pub const Imag16RegClassID: u16 = 4;
+    pub const Imag8RegClassID: u16 = 2;
+    pub const P: u16 = 3;
+    pub const Reg8RegClassID: u16 = 1;
 }
 
 pub mod generic {
