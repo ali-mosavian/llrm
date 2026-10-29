@@ -832,3 +832,106 @@ fn a_callee_saved_cell_is_taken_only_when_it_is_the_smaller_code() {
     let looped = compile(DIGITS, "digits");
     assert!((8..16).any(|n| looped.contains(&format!("rc{n}"))), "a loop of calls keeps its values in a cell:\n{looped}");
 }
+
+/// The word result of `name` for a word argument in rc2:rc3 (low byte in A, high byte in X).
+fn run_word(
+    tag: &str,
+    text: &str,
+    name: &str,
+    x: u16,
+) -> u16 {
+    let setup = set("rc2", x) + &set("rc3", x >> 8);
+    let low = common::run_with(tag, &format!("{setup}  jsr {name}\n"), text);
+    let high = common::run_with(tag, &format!("{setup}  jsr {name}\n  txa\n"), text);
+    ((high as u16) << 8) | (low as u16 & 0xFF)
+}
+
+/// A word shifted right by 8 or more moves one byte across (`shl 8` was the only count tested):
+/// both right shifts, a count of exactly 8 and past it. The arithmetic one fills the high byte with
+/// the sign (`ashr 9` through `ashr 15`); that was seven `cmp #$80; ror a` for the sign alone.
+#[test]
+fn word_shifts_right_of_eight_or_more_move_one_byte() {
+    for (op, count, f) in [
+        ("lshr", 8u32, (|x: u16, k: u32| x >> k) as fn(u16, u32) -> u16),
+        ("lshr", 13, |x, k| x >> k),
+        ("ashr", 8, |x, k| ((x as i16) >> k) as u16),
+        ("ashr", 12, |x, k| ((x as i16) >> k) as u16),
+        ("ashr", 15, |x, k| ((x as i16) >> k) as u16),
+    ] {
+        let ir = format!("define i16 @sh(i16 %x) {{\n  %r = {op} i16 %x, {count}\n  ret i16 %r\n}}");
+        let text = compile(&ir, "sh");
+        assert!(!text.contains("rol"), "{op} {count}: {text}");
+        // the sign of the high byte takes no `ror`; the low byte takes `count - 8`, and is the sign too at 15
+        let rors = text.matches("ror").count();
+        assert_eq!(rors, if op == "ashr" && count != 15 { count as usize - 8 } else { 0 }, "{op} {count}: {text}");
+        for x in [0x1234u16, 0x80FF, 0xFFFF, 0x0001, 0x7FFF] {
+            assert_eq!(run_word("alloc-shn", &text, "sh", x), f(x, count), "{op} {count} of {x:#06x}");
+        }
+    }
+}
+
+/// Sign extension is the sign alone in the high byte: seven `cmp #$80; ror a` (21 bytes, 28
+/// cycles) for `sext i8 to i16`; an `ashr i8 x, 7` is the same value.
+#[test]
+fn a_sign_extension_is_the_sign_splatted_not_seven_rotates() {
+    let ir = "define i16 @ext(i8 %x) {\n  %r = sext i8 %x to i16\n  ret i16 %r\n}\n\
+              define i8 @sign(i8 %x) {\n  %r = ashr i8 %x, 7\n  ret i8 %r\n}";
+    let ext = compile(ir, "ext");
+    assert!(!ext.contains("ror"), "{ext}");
+    for x in [0u16, 1, 127, 128, 200, 255] {
+        let want = x as u8 as i8 as i16 as u16;
+        let setup = set("rc2", x);
+        let low = common::run_with("alloc-ext", &format!("{setup}  jsr ext\n"), &ext);
+        let high = common::run_with("alloc-ext", &format!("{setup}  jsr ext\n  txa\n"), &ext);
+        assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), want, "sext {x}");
+    }
+    let sign = compile(ir, "sign");
+    assert!(!sign.contains("ror"), "{sign}");
+    for x in [0u16, 1, 127, 128, 255] {
+        let got = common::run_with("alloc-sign", &format!("{}  jsr sign\n", set("rc2", x)), &sign);
+        assert_eq!(got, if x >= 128 { 255 } else { 0 }, "ashr {x}, 7");
+    }
+}
+
+/// `x >= 0` on a word reads the sign of the high byte alone, like `x < 0` (PL beside MI).
+#[test]
+fn a_word_non_negative_test_reads_only_the_high_byte() {
+    let ir = "define i8 @pos(i16 %x) {\n  %c = icmp sge i16 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}";
+    let text = compile(ir, "pos");
+    assert!(!text.contains("sbc"), "{text}");
+    let run = |x: u16| common::run_with("alloc-pos", &format!("{}  jsr pos\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
+    assert_eq!((run(0xFFFF), run(0x8000), run(0x7FFF), run(0), run(5)), (9, 9, 7, 7, 7));
+}
+
+/// A branch on `c == 3 || c == 0` is two compare-and-branches (the shape of `schr`, with the
+/// operands the other way round and no loop): no `ora` of two 0/1 bytes.
+#[test]
+fn a_branch_on_an_or_of_two_compares_is_two_branches() {
+    let ir = "define i8 @either(i8 %c) {\nentry:\n  %a = icmp eq i8 %c, 3\n  %b = icmp eq i8 %c, 0\n  %o = or i1 %a, %b\n  \
+              br i1 %o, label %yes, label %no\nyes:\n  ret i8 1\nno:\n  ret i8 2\n}";
+    let text = compile(ir, "either");
+    assert!(!text.contains("  ora rc"), "{text}");
+    let run = |c: u16| common::run_with("alloc-either", &format!("{}  jsr either\n", set("rc2", c)), &text);
+    assert_eq!((run(3), run(0), run(1), run(255)), (1, 1, 2, 2));
+}
+
+/// No `pha`/`pla` round a move when a call is in the function: two calls with values live across
+/// them (the digits kernel had one call in a loop).
+#[test]
+fn nothing_is_pushed_around_moves_between_two_calls() {
+    let ir = "define i16 @two(i16 %a, i16 %b) {\n  %q = udiv i16 %a, 10\n  %r = urem i16 %b, 7\n  %s = add i16 %q, %r\n  \
+              %t = add i16 %s, %a\n  ret i16 %t\n}";
+    let text = compile(ir, "two");
+    assert!(!text.contains("  pha\n"), "{text}");
+}
+
+/// Constants 100 and 7 (not the 10 and 0 of digits) are loaded where read, not stored to a slot.
+#[test]
+fn constants_of_a_division_are_loaded_again_not_stored() {
+    let ir = "define i16 @cent(i16 %v) {\n  %q = udiv i16 %v, 100\n  %r = urem i16 %v, 7\n  %s = add i16 %q, %r\n  ret i16 %s\n}";
+    let text = compile(ir, "cent");
+    assert!(!text.contains("ldx #100\n  stx s_") && !text.contains("ldx #7\n  stx s_"), "{text}");
+    for v in [0u16, 99, 100, 12345, 65535] {
+        assert_eq!(run_word("alloc-cent", &text, "cent", v), (v / 100).wrapping_add(v % 7), "v={v}");
+    }
+}
