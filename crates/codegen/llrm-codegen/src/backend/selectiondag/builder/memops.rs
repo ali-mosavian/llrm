@@ -1156,8 +1156,10 @@ impl Builder<'_> {
         size: u64,
         align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        // The pin's own limits, not the target's: a separate item (the m16
-        // override does not reach a byval copy today).
+        // The pin's own limits, not the target's: m16's override is for the
+        // load and store pairs of a `memcpy` (SD225); a byval argument is
+        // three dword pushes where the table's 2 would make it `rep movs`
+        // (tests/byval_copy_at_os.rs).
         let pin = llrm_mir::target::Tuning::PIN;
         let limit = if self.has_opt_size() { pin.max_stores_per_memcpy_opt_size } else { pin.max_stores_per_memcpy };
         if let Some(copy) = self.inline_memcpy(chain, dst, src, size, limit, align, align)? {
