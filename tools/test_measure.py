@@ -335,6 +335,18 @@ def test_check_names_the_binary_it_measured_on_a_pass_as_on_a_failure(monkeypatc
         assert "abc123def456" in out.splitlines()[-1] or verdict == 1
 
 
+def test_the_cost_step_does_not_build_a_base_that_has_no_llrm_cc(monkeypatch):
+    """Gate run 3's cost step: the base was main (llrm-c only) and `cargo build --bin llrm-cc` died with "no bin target named llrm-cc"; the
+    base is now the nearest first-parent ancestor that has llrm-cc, and none is a named skip, not a build failure."""
+    with_cc = {"c" * 40, "d" * 40}
+    monkeypatch.setattr(measure, "has_cc", lambda sha: sha in with_cc)
+    monkeypatch.setattr(measure, "git", lambda *a, **k: "\n".join(["h" * 40, "b" * 40, "c" * 40, "d" * 40]))
+    assert measure.base_with_cc("h" * 40, "m" * 40) == "c" * 40
+    assert measure.base_with_cc("h" * 40, "d" * 40) == "d" * 40
+    monkeypatch.setattr(measure, "has_cc", lambda sha: False)
+    assert measure.base_with_cc("h" * 40, "m" * 40) is None
+
+
 def test_a_measurement_is_of_one_profile_and_the_dist_base_is_built_with_the_dist_profile(tmp_path, monkeypatch):
     """The creep run on main measures the shipped build (`dist`: one codegen unit, fat LTO, 11-13% fewer instructions than `release`); a
     release measurement is not comparable with it, and its base must be built the same way."""
