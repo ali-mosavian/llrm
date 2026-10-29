@@ -105,7 +105,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
 # tree it built in. Calls are Watcom's register convention, as the library's.
 [x86_16-wat]
 description = "x86-m16"
-# Open Watcom libc: wchar_t 2, long double 8.
+# Open Watcom libc: wchar_t 2 (unsigned short), long double 8.
 long_double_bytes = 8
 triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
@@ -113,7 +113,7 @@ clang_env = "LLRM_CLANG_M16"
 clang = ["-ffp-contract=off",
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-fhosted", "-fpack-struct=1", "-fno-pic",
   "-D__I86__=1", "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall",
-  "-fborland-extensions", "-mlong-double-64", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-array-bounds", "-Wno-unknown-attributes", "-Wno-error=incompatible-function-pointer-types", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m16", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h",
+  "-fborland-extensions", "-fshort-wchar", "-mlong-double-64", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-array-bounds", "-Wno-unknown-attributes", "-Wno-error=incompatible-function-pointer-types", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m16", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h",
 ]
 llc = ["-mregcall-default"]
 object = "omf"

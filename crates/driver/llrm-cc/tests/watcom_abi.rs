@@ -37,12 +37,14 @@ fn configured() -> bool {
 }
 
 #[test]
-fn a_wide_string_literal_is_a_wchar_t_array_at_m32() {
+fn a_wide_string_literal_is_a_wchar_t_array_on_the_watcom_rows() {
     if !configured() {
         return;
     }
     let source = "#include <wchar.h>\nint n(void) { return (int)wcslen(L\"ab\"); }\n";
-    listing("wide", "x86_32-wat", source).unwrap();
+    for target in ["x86_32-wat", "x86_16-wat"] {
+        listing("wide", target, source).unwrap_or_else(|why| panic!("{target}: {why}"));
+    }
 }
 
 #[test]
