@@ -212,8 +212,18 @@ pub fn estimate(
     }
     let mut out = Estimate::default();
     let mut in_data = false;
+    // a macro's body is text for ca65, not code until it is used
+    let mut in_macro = false;
     for (at, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
+        if in_macro {
+            in_macro = !trimmed.starts_with(".endmacro");
+            continue;
+        }
+        if trimmed.starts_with(".macro") {
+            in_macro = true;
+            continue;
+        }
         if trimmed.is_empty() || trimmed.ends_with(':') {
             continue;
         }

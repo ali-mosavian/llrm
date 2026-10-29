@@ -118,3 +118,12 @@ fn every_row_takes_the_bytes_the_assembler_writes() {
         }
     }
 }
+
+/// A macro definition in the text (the runtime keeps the ones its routines use) was priced as code:
+/// `mul16`'s priced size was 98 bytes against 44 linked once the runtime carried its macros.
+#[test]
+fn a_macro_body_is_not_priced_as_code() {
+    let text = ".macro twice\n  asl a\n  asl a\n.endmacro\nf:\n  lda #1\n  rts\n";
+    let priced = llrm_6502::timing::estimate(Cpu::Mos6502, text).expect("prices");
+    assert_eq!(priced.bytes, 3, "lda #1 and rts only");
+}
