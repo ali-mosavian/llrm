@@ -1397,3 +1397,24 @@ done:
     let setup = set("rc2", 4);
     assert_eq!(common::run_with("alloc-sum-wide", &format!("{setup}  jsr sum\n"), &format!("{text}{callee}.export clob\n")), 12);
 }
+
+/// A word shifted by four to seven bits was that many `asl`/`rol` pairs (4 bytes each, 20 for the
+/// shift by 5 in hash16). With an index register free it is a counted loop of 9 bytes. Both bytes of
+/// each result are checked, the shifted word added to the word so that the shift stays in cells.
+#[test]
+fn a_word_shift_of_four_or_more_bits_is_a_counted_loop() {
+    for (op, k) in [("shl", 4u32), ("shl", 5), ("shl", 7), ("lshr", 4), ("lshr", 6)] {
+        let name = format!("{op}{k}");
+        let ir = format!("define i16 @{name}(i16 %x) {{\n  %p = {op} i16 %x, {k}\n  %q = add i16 %p, %x\n  ret i16 %q\n}}");
+        let text = compile(&ir, &name);
+        assert!(text.contains("dex") || text.contains("dey"), "{op} {k}:\n{text}");
+        for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
+            let shifted = if op == "shl" { x << k } else { x >> k };
+            let want = shifted.wrapping_add(x);
+            let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
+            let run = |after: &str| common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n{after}"), &text);
+            assert_eq!(run(""), i32::from(want & 0xFF), "{op} {k} of {x:#x}, low byte");
+            assert_eq!(run("  txa\n"), i32::from(want >> 8), "{op} {k} of {x:#x}, high byte");
+        }
+    }
+}
