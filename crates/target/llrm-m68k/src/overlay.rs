@@ -106,6 +106,24 @@ static ADDQ: [[Piece; 6]; 3] = [quick(0, 0), quick(0, 1), quick(0, 2)];
 static SUBQ: [[Piece; 6]; 3] = [quick(1, 0), quick(1, 1), quick(1, 2)];
 static TST: [[Piece; 4]; 3] = [test(0), test(1), test(2)];
 
+// `divu.l`/`divs.l %src, %dq` (32 / 32 -> 32): the pin's rows leave the extension word's remainder
+// register at 0, which makes the form that stores the remainder in `%d0`. Dr = Dq stores none.
+const fn divide_long(signed: u64) -> [Piece; 9] {
+    [
+        field(0, 3, 2, 0),
+        bits(3, 3, 0),
+        bits(6, 10, 305),
+        field(16, 3, 0, 0),
+        bits(19, 7, 0),
+        bits(26, 1, 0),
+        bits(27, 1, signed),
+        field(28, 3, 0, 0),
+        bits(31, 1, 0),
+    ]
+}
+
+static DIVL: [[Piece; 9]; 2] = [divide_long(0), divide_long(1)];
+
 /// `(width in bits, pieces)`, as the pin's `enc` rows.
 pub fn encoding(name: &str) -> Option<(u16, &'static [Piece])> {
     Some(match name {
@@ -123,6 +141,8 @@ pub fn encoding(name: &str) -> Option<(u16, &'static [Piece])> {
         "TST16d" => (16, &TST[1]),
         "TST32d" => (16, &TST[2]),
         "CMPA32" => (16, &CMPA),
+        "UDIVd32d32" => (32, &DIVL[0]),
+        "SDIVd32d32" => (32, &DIVL[1]),
         _ => {
             return post_increment_rows(name)
                 .map(|row| row.encoding)

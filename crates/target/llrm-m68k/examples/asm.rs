@@ -11,5 +11,5 @@ fn main() {
         Some("size") => Options { size: true, ..Options::default() },
         _ => Options::default(),
     };
-    print!("{}", text_with(&module, &std::env::args().nth(2).unwrap(), Cpu::M68000, options).unwrap());
+    print!("{}", text_with(&module, &std::env::args().nth(2).unwrap(), if std::env::var("CPU").is_ok_and(|c| c == "m68020") { Cpu::M68020 } else { Cpu::M68000 }, options).unwrap());
 }
