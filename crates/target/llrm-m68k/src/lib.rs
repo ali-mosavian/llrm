@@ -4,6 +4,7 @@
 pub mod abi;
 pub mod dagisel;
 pub mod frame;
+pub mod target;
 
 use llrm_lir::registers::{RegId, Row};
 

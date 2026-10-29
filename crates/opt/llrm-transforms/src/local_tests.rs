@@ -1529,3 +1529,13 @@ fn a_block_of_few_phis_is_compared_pair_by_pair_and_a_block_of_many_is_hashed() 
     assert_eq!(run(32), (true, 2, 0), "32 phis are still compared");
     assert_eq!(run(33), (true, 2, 1), "33 phis are hashed, with the same result");
 }
+
+/// Two array selectors merged lost `!llrm.descriptor`; the survivor read as a
+/// forged data-segment pointer and `LLRM_CHECK_STALE` failed bintree.bas -O2
+/// -m16.
+#[test]
+fn merged_array_selectors_keep_their_descriptor_mark() {
+    assert_eq!(combined("!llrm.descriptor !6", "!llrm.descriptor !2", true), ["llrm.descriptor"]);
+    assert_eq!(combined("!llrm.descriptor !6", "!llrm.descriptor !2", false), ["llrm.descriptor"]);
+    assert_eq!(combined("!llrm.descriptor !6", "!tbaa !4", true), Vec::<String>::new());
+}

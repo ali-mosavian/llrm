@@ -195,7 +195,7 @@ The allocator is slower on every attempt and is given more to do. LLVM edits the
 
 ## Measured
 
-Input `tools/ladder/gen.py diamond 800`, `clang -O2 -m32 -march=i486`; LLVM `llc -O2` under callgrind, llrm `LLRM_DEBUG=time`.
+Input `tools/ladder/ladder_gen.py diamond 800`, `clang -O2 -m32 -march=i486`; LLVM `llc -O2` under callgrind, llrm `LLRM_DEBUG=time`.
 
 | step | LLVM (M instr) | llrm (M instr) |
 |---|---:|---:|

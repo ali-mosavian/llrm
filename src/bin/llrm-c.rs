@@ -25,7 +25,10 @@ fn main() {
         llrm_mir::counts::per_pass();
     }
     let code = llrm_codegen::support::debug::run_main(|| llrm_c::compile::main(&argv));
-    llrm_codegen::support::debug::report_checks(&[("STALE", llrm_mir::passes::stale_checks_run())]);
+    llrm_codegen::support::debug::report_checks(&[
+        ("STALE", llrm_mir::passes::stale_checks_run()),
+        ("REPLAY", llrm_mir::passes::replay_checks_run()),
+    ]);
     if llrm_codegen::support::debug::enabled("counts") {
         llrm_mir::counts::lines().iter().for_each(|line| eprintln!("{line}"));
         llrm_transforms::parity::tally_lines().iter().for_each(|line| eprintln!("{line}"));

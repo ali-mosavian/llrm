@@ -10,14 +10,16 @@ convention = "c"
 [c]
 cc = "cdecl"
 slot_bytes = 4
-order = "left-to-right"
+order = "right-to-left"
 cleanup = "caller"
 argument_registers = []
 sized_arguments = false
 skip_memory = false
 backfill = false
 return_address_bytes = 4
-first_argument_offset = 4
+# The pin's fixed objects: offset 0 is the first argument, from the stack pointer at entry (frame.rs adds the
+# return address). Not the frame register's, as x86's is.
+first_argument_offset = 0
 frame = "a6"
 frame_optional = true
 stack = "sp"
