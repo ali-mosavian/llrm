@@ -9,6 +9,7 @@ pub mod mir;
 pub mod object;
 pub mod print;
 pub mod reg_numbering;
+pub mod reg_stackify;
 pub mod set_p2align;
 
 use llrm_target::layout::Layout;
