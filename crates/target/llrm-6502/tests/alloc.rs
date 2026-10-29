@@ -704,3 +704,12 @@ fn spilled_copies_of_an_argument_share_its_slot() {
     let slots = text.lines().filter(|line| line.contains(": .res")).count();
     assert!(slots <= 5, "{slots} slots\n{text}");
 }
+
+/// A call defined no register, so the accumulator looked live from the entry
+/// to the call's result and every slot-to-cell move was wrapped in `pha`/`pla`
+/// (digits, set 2: 289 bytes, 2804 cycles; now 273 and 2577).
+#[test]
+fn nothing_is_pushed_around_moves_before_a_call() {
+    let text = compile(DIGITS, "digits");
+    assert!(!text.contains("  pha\n"), "{text}");
+}
