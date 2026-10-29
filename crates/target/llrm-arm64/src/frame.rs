@@ -5,6 +5,14 @@
 //! arguments, frame objects, the callee-saved registers in pairs, and the frame
 //! record (`x29`, `x30`) at the top. Offsets are from the stack pointer, which
 //! does not move in the body.
+//!
+//! A frame of only saved registers moves the stack pointer in the first pair's
+//! store and last load (`stp [sp, #-N]!`, `ldp [sp], #N`). A `Return` that
+//! carries a callee is a sibling call ([`crate::sibcall`]): the epilogue, then
+//! `b`.
+//!
+//! Shrink wrapping: where the prologue and epilogue go is
+//! [`crate::shrinkwrap`]'s.
 
 use crate::mc::inst::*;
 use crate::mc::visit::Reg;
@@ -62,19 +70,25 @@ fn layout(
         saves.push((Save::FprPair(first, second), top));
         top += 16;
     }
-    let frame_record = function
-        .calls
-        .then(
-            || {
-                let at = top;
-                top += 16;
-                at
-            },
-        );
+    // A moving stack pointer is addressed from, and put back by, the frame
+    // pointer: a leaf with a dynamic alloca too.
+    let frame_record = (function.calls || function.dynamic).then(|| {
+        let at = top;
+        top += 16;
+        at
+    });
     Layout { size: top, dynamic: function.dynamic, slots, saves, frame_record }
 }
 
 impl Layout {
+    /// The bytes the first saved pair's store takes off the stack pointer
+    /// (`stp [sp, #-N]!`) where the frame is only saved registers and fits the
+    /// pair's offset (`AArch64FrameLowering`, the first CSR push).
+    fn folded_bump(&self) -> Option<i64> {
+        let first = self.saves.first().map(|(_, at)| *at).or(self.frame_record)?;
+        (first == 0 && self.size <= 512).then_some(self.size as i64)
+    }
+
     /// The register and the offset from it that address byte `offset` of frame
     /// object `slot` (or of the caller's argument area): the stack pointer, or
     /// the frame pointer where the stack pointer moves.
@@ -163,12 +177,18 @@ pub fn lower(
     allocation: &Allocation,
 ) -> Result<Vec<Lowered>, String> {
     let frame = layout(function, allocation);
+    let wrapped = crate::shrinkwrap::place(function).filter(|_| frame.size > 0);
+    let save = wrapped.as_ref().map_or(0, |one| one.save);
     let mut out = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
         let mut emitter = Emitter { insts: Vec::new() };
-        if index == 0 {
+        if index == save {
             prologue(&frame, &mut emitter);
         }
+        // Without a placement every return takes the frame down; with one, the
+        // Restore's return does, or the blocks that end the frame at
+        // their end.
+        let framed = wrapped.as_ref().is_none_or(|one| !one.at_end && one.restores.contains(&index));
         for op in &block.ops {
             match op {
                 Op::I(inst) => lower_inst(inst, &frame, &mut emitter)?,
@@ -195,15 +215,42 @@ pub fn lower(
                     }
                     Callee::Register(register) => Inst::BranchReg { link: true, rn: *register },
                 }),
-                Op::Return { .. } => {
-                    epilogue(&frame, &mut emitter);
-                    emitter.insts.push(Inst::Ret { rn: Gpr::LR });
+                Op::Return { tail, .. } => {
+                    if framed {
+                        epilogue(&frame, &mut emitter);
+                    }
+                    emitter.insts.push(match tail {
+                        None => Inst::Ret { rn: Gpr::LR },
+                        Some(Callee::Symbol(name)) => {
+                            Inst::Branch { link: false, target: Target::Symbol { name: name.clone(), addend: 0 } }
+                        }
+                        Some(Callee::Register(register)) => Inst::BranchReg { link: false, rn: *register },
+                    });
                 }
                 Op::FrameAddress { dst, slot, offset } => {
                     let (base, total) = frame.place(*slot, *offset);
                     emitter.add_to(*dst, base, total < 0, total.unsigned_abs(), Gpr(16));
                 }
             }
+        }
+        if wrapped.as_ref().is_some_and(|one| one.at_end && one.restores.contains(&index)) {
+            // Before the branches that leave.
+            let at = emitter
+                .insts
+                .iter()
+                .rposition(|inst| {
+                    !matches!(
+                        inst,
+                        Inst::Branch { link: false, .. }
+                            | Inst::BranchCond { .. }
+                            | Inst::CompareBranch { .. }
+                            | Inst::TestBranch { .. }
+                    )
+                })
+                .map_or(0, |i| i + 1);
+            let mut tail = Emitter { insts: Vec::new() };
+            epilogue(&frame, &mut tail);
+            emitter.insts.splice(at..at, tail.insts);
         }
         out.push(Lowered { label: block.label.clone(), insts: emitter.insts });
     }
@@ -214,8 +261,11 @@ fn prologue(
     frame: &Layout,
     emitter: &mut Emitter,
 ) {
-    emitter.adjust_sp(-(frame.size as i64));
-    save_registers(frame, emitter, true);
+    let bump = frame.folded_bump();
+    if bump.is_none() {
+        emitter.adjust_sp(-(frame.size as i64));
+    }
+    save_registers(frame, emitter, true, bump);
     if let Some(at) = frame.frame_record {
         emitter.add_to(Gpr::FP, Gpr::R31, false, at, Gpr(16));
     }
@@ -229,8 +279,11 @@ fn epilogue(
     if let (true, Some(record)) = (frame.dynamic, frame.frame_record) {
         emitter.add_to(Gpr::R31, Gpr::FP, true, record, Gpr(16));
     }
-    save_registers(frame, emitter, false);
-    emitter.adjust_sp(frame.size as i64);
+    let bump = frame.folded_bump();
+    save_registers(frame, emitter, false, bump);
+    if bump.is_none() {
+        emitter.adjust_sp(frame.size as i64);
+    }
 }
 
 /// The stores (`store`) or loads of the saved pairs and the frame record.
@@ -238,6 +291,7 @@ fn save_registers(
     frame: &Layout,
     emitter: &mut Emitter,
     store: bool,
+    bump: Option<i64>,
 ) {
     let mut accesses: Vec<(Memory, Option<Memory>, u64, i64)> = Vec::new();
     for (save, offset) in &frame.saves {
@@ -261,8 +315,28 @@ fn save_registers(
             8,
         ));
     }
+    // The access at the lowest address also moves the stack pointer: first in
+    // the prologue (`stp [sp, #-N]!`), last in the epilogue (`ldp [sp], #N`).
+    if bump.is_some() && !store {
+        accesses.rotate_left(1);
+    }
     for (first, second, offset, _) in accesses {
-        let addr = Addr::Offset { base: Gpr::R31, imm: offset as i64 };
+        let moves = bump.filter(|_| offset == 0);
+        let addr = match moves {
+            Some(by) if store => Addr::Pre { base: Gpr::R31, imm: -by },
+            Some(by) => Addr::Post { base: Gpr::R31, imm: by },
+            None => Addr::Offset { base: Gpr::R31, imm: offset as i64 },
+        };
+        if moves.is_some() {
+            let inst = match (second, store) {
+                (Some(second), true) => Inst::StorePair { first, second, addr },
+                (Some(second), false) => Inst::LoadPair { first, second, addr },
+                (None, true) => Inst::Store { mem: first, addr, mmo: MemOperand::default() },
+                (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
+            };
+            emitter.insts.push(inst);
+            continue;
+        }
         // A pair reaches 504 bytes from the base; further, the address is made.
         let (base, imm) = if offset <= 504 {
             (Gpr::R31, offset as i64)
@@ -275,8 +349,8 @@ fn save_registers(
         let inst = match (second, store) {
             (Some(second), true) => Inst::StorePair { first, second, addr },
             (Some(second), false) => Inst::LoadPair { first, second, addr },
-            (None, true) => Inst::Store { mem: first, addr },
-            (None, false) => Inst::Load { mem: first, addr },
+            (None, true) => Inst::Store { mem: first, addr, mmo: MemOperand::default() },
+            (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
         };
         emitter.insts.push(inst);
     }
@@ -291,7 +365,7 @@ fn lower_inst(
 ) -> Result<(), String> {
     let mut inst = inst.clone();
     match &mut inst {
-        Inst::Load { mem, addr } | Inst::Store { mem, addr } => {
+        Inst::Load { mem, addr, .. } | Inst::Store { mem, addr, .. } => {
             if let Addr::Slot { slot, offset } = *addr {
                 let bytes = accessed_bytes(mem);
                 let (base, total) = frame.place(slot, offset);

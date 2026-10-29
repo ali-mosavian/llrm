@@ -127,6 +127,7 @@ fn gep_cost(
     function: &Function,
     operands: &[Operand],
     source: TypeId,
+    access_bytes: Option<u64>,
 ) -> Cost {
     let base_global = matches!(
         operands[0],
@@ -160,11 +161,33 @@ fn gep_cost(
     // A scaled index that costs instructions of its own (real mode's prefixed
     // form) is not free in the address.
     let folds = scale <= 1 || tti.scaled_index_insns() == 0;
-    if folds && tti.is_legal_addressing_mode(base_global, offset as i64, !base_global, scale) {
-        Cost::FREE
-    } else {
-        Cost::BASIC
-    }
+    let legal = match access_bytes {
+        Some(bytes) => tti.is_legal_addressing_mode_for(bytes, base_global, offset as i64, !base_global, scale),
+        None => tti.is_legal_addressing_mode(base_global, offset as i64, !base_global, scale),
+    };
+    if folds && legal { Cost::FREE } else { Cost::BASIC }
+}
+
+/// The bytes the load or store that is the only user of the GEP `inst`
+/// accesses, as the `AccessType` `getInstructionCost` gives `getGEPCost` ("only
+/// in the simple case where the GEP has one user"); none for any other user.
+fn sole_access_bytes(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    inst: InstId,
+) -> Option<u64> {
+    let value = function.instruction(inst).result?;
+    let user = function.users(value).only()?.user;
+    let reader = function.instruction(user);
+    let accessed = match reader.opcode {
+        Opcode::Load { .. } if reader.operands[0] == Operand::Value(value) => reader.ty,
+        Opcode::Store { .. } if reader.operands[1] == Operand::Value(value) => {
+            operand_type(context, function, reader.operands[0])?
+        }
+        _ => return None,
+    };
+    Some(layout.store_size(&context.types, accessed))
 }
 
 /// Whether `pointer` is a GEP with an index that is not a constant.
@@ -254,7 +277,10 @@ pub fn instruction_cost_with(
                 Cost::BASIC
             }
         }
-        Opcode::GetElementPtr { source } => gep_cost(tti, context, layout, function, operands, *source),
+        Opcode::GetElementPtr { source } => {
+            let access = sole_access_bytes(context, layout, function, inst);
+            gep_cost(tti, context, layout, function, operands, *source, access)
+        }
         Opcode::Binary(op) => match result {
             Some(ty) => tti.arithmetic_cost(arith_of(*op), ty, kind, info(0), info(1)),
             None => Cost::INVALID,

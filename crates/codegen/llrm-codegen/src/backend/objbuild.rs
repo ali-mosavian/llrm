@@ -1905,7 +1905,7 @@ mod tests {
         segment.seh.push((llrm_object::Seh::StackAlloc(32), 13));
         let symbols: IndexMap<String, (usize, usize)> = [("f".to_owned(), (0, 8))].into_iter().collect();
         let sizes: IndexMap<String, usize> = [("f".to_owned(), 20)].into_iter().collect();
-        let frames = declared_frames(&[segment], &symbols, &sizes);
+        let frames = declared_frames(64, &[segment], &symbols, &sizes);
         assert_eq!(
             frames.iter().map(|frame| (frame.offset, frame.seh.clone())).collect::<Vec<_>>(),
             vec![(8, vec![(1, llrm_object::Seh::PushReg(6)), (5, llrm_object::Seh::StackAlloc(32))])]

@@ -357,6 +357,11 @@ pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     if has_flag(&call.attrs, "noinline") {
         return Some(Err("noinline call site attribute".into()));
     }
+    // Don't inline what can be interposed at link time: the body is not the
+    // definition that runs.
+    if site.module.global(site.callee_id).linkage.is_interposable() {
+        return Some(Err("interposable".into()));
+    }
     None
 }
 
@@ -1858,6 +1863,7 @@ impl<'a> Analyzer<'a> {
                 self.site.module.global(self.site.callee_id).name.as_deref().unwrap_or("?"),
                 self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or("?")
             );
+            eprint!("{}", llrm_mir::print::body(self.context, self.callee));
         }
         self.start()?;
         if self.callee.layout().is_empty() {
@@ -2019,7 +2025,7 @@ impl<'a> Analyzer<'a> {
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        let grows = self.site.caller_size == CallerSize::OptSize
+        let grows = self.site.caller_size != CallerSize::Speed
             && !self.site.sole_call_to_local
             && self.site.tti.is_some_and(|tti| tti.opt_size_inline_by_code_size())
             && self.size_units > self.call_size();

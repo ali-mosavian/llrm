@@ -51,10 +51,10 @@
 17 crates/codegen/llrm-codegen/src/backend/selectiondag/dagisel_adapter.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/div_combine.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dump.rs
-60 crates/codegen/llrm-codegen/src/backend/selectiondag/emit.rs
+57 crates/codegen/llrm-codegen/src/backend/selectiondag/emit.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/opcodes.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/schedule.rs
-4 crates/codegen/llrm-codegen/src/backend/selectiondag/x86_lowering.rs
+2 crates/codegen/llrm-codegen/src/backend/selectiondag/x86_lowering.rs
 1 crates/codegen/llrm-codegen/src/backend/slots.rs
 2 crates/codegen/llrm-codegen/src/backend/storecombine.rs
 1 crates/codegen/llrm-codegen/src/backend/upperzero.rs

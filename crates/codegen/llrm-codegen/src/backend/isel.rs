@@ -596,7 +596,8 @@ pub fn convention_for(
     }
     // A float leaves in st(0), which no register names.
     let described = entry(arch, calling_convention, variadic);
-    let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) {
+    let answer = lone_float(types, result);
+    let returns = if types.is_void(result) || matches!(types.get(answer), Type::Float(_)) {
         Vec::new()
     } else {
         results(arch, described, size_of(module, layout, result)?)
@@ -622,7 +623,7 @@ pub fn convention_for(
         .and_then(|one| one.float_result_register())
         .filter(|_| {
             matches!(
-                types.get(result),
+                types.get(answer),
                 Type::Float(llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)
             )
         })
@@ -631,6 +632,18 @@ pub fn convention_for(
             llrm_lir::registers::Regs(arch.registers()).in_class(*register, llrm_lir::registers::class::XMM)
         });
     Ok(Convention { parameters, returns, float_result, popped, saved, stack_arguments: cursor, first })
+}
+
+/// What a result is answered as: a struct of one float is that float
+/// (`ComputeValueVTs` gives it one leaf, which leaves where a lone float does).
+fn lone_float(
+    types: &llrm_mir::types::Types,
+    ty: TypeId,
+) -> TypeId {
+    match (types.get(ty), types.fields(ty)) {
+        (Type::Struct { .. } | Type::Named(_), Some([only])) if matches!(types.get(*only), Type::Float(_)) => *only,
+        _ => ty,
+    }
 }
 
 /// The stack bytes the address of a struct result takes where `entry` passes it
@@ -670,7 +683,12 @@ fn argument_of(
         bytes: i64::from(size),
         integer: types.int_bits(ty).is_some(),
         pointer: matches!(types.get(ty), Type::Pointer(_)),
-        floating: matches!(types.get(ty), Type::Float(_)),
+        // An extended real is not a vector-register float: it travels in
+        // memory.
+        floating: matches!(
+            types.get(ty),
+            Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
+        ),
         memory: class == Some(llrm_mir::opcode::MEMORY),
     }
 }
@@ -745,6 +763,9 @@ pub struct Selected {
     /// `depth` and are handed to the frame as spill slots, which
     /// `slots::slots_colored` shares by their live ranges.
     pub temporaries: usize,
+    /// The locals wanting more than the stack's alignment: (displacement,
+    /// alignment).
+    pub over_aligned: Vec<(i64, i64)>,
     /// The `at` of what starts the landing pad, which the runtime enters.
     pub landing: Option<i64>,
 }
@@ -843,6 +864,13 @@ pub(super) fn width_of(
         // it is two halves (`is_wide`).
         (TypeClass::I64, _) if layout.largest_legal_integer() >= 64 => Ok(8),
         (TypeClass::Ptr, Type::Pointer(space)) => Ok(layout.pointer(*space).bits / 8),
+        // An integer between the legal widths (`i24`, a three-byte struct
+        // coerced) is promoted to the next one.
+        (TypeClass::Other, Type::Int(bits))
+            if *bits > 0 && bits.next_power_of_two() <= layout.largest_legal_integer() =>
+        {
+            Ok(bits.next_power_of_two().max(8) / 8)
+        }
         // An x87 register holds any float, extended.
         (TypeClass::Float, Type::Float(FloatKind::Float | FloatKind::Double | FloatKind::X86Fp80)) => Ok(FLOAT),
         _ => refuse(format!("a {} value", types.display(ty))),
@@ -949,7 +977,7 @@ pub(super) fn size_of(
         (TypeClass::Float, Type::Float(FloatKind::X86Fp80)) => Ok(10),
         // An aggregate of scalars answered in registers is as big as it is in
         // memory.
-        (_, Type::Struct { .. }) => {
+        (_, Type::Struct { .. } | Type::Named(_)) => {
             u32::try_from(layout.store_size(&module.context.types, ty)).map_err(|_| Unselected("a struct".into()))
         }
         _ => width_of(module, layout, ty),
@@ -1114,6 +1142,7 @@ pub fn selected_with<'c>(
         extents: Vec::new(),
         allocas: 0,
         frame_objects: Vec::new(),
+        over_aligned: Vec::new(),
         scratch: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
@@ -1189,8 +1218,12 @@ pub fn selected_with<'c>(
     }
     body.variables = parameters(module, function, name, &convention, &selector.homes);
     body.cfa_variables = true;
-    let mut body =
-        noted(module, function, name, &selector.ats, &selector.values, &selector.wides, &selector.variables, body);
+    let mut body = {
+        let ats = selector.ats.iter().map(|(&inst, &at)| (inst, at)).collect();
+        let values = selector.values.iter().map(|(&id, &vreg)| (id, vreg)).collect();
+        let wides = selector.wides.iter().map(|(&id, &pair)| (id, pair)).collect();
+        noted(module, function, name, &ats, &values, &wides, &selector.variables, body)
+    };
     // An argument the caller pushed is in its cell from the entry.
     let named = body.named_values();
     let cells: Vec<(u32, i64, u32)> = function
@@ -1231,9 +1264,13 @@ pub fn selected_with<'c>(
         depth: selector.depth,
         extents: selector.extents,
         temporaries: 0,
+        over_aligned: selector.over_aligned,
         landing: selector.landing,
     })
 }
+
+/// The alignment the frame keeps a local to without realigning the stack.
+pub(crate) const OVER_ALIGNED: i64 = 16;
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes
 /// them in.
@@ -1455,9 +1492,9 @@ pub(crate) fn noted(
     module: &Module,
     function: &Function,
     name: &str,
-    ats: &IndexMap<InstId, i64>,
-    values: &IndexMap<ValueId, u32>,
-    wides: &IndexMap<ValueId, (Held, Held)>,
+    ats: &llrm_mir::dense::IdMap<InstId, i64>,
+    values: &llrm_mir::dense::IdMap<ValueId, u32>,
+    wides: &llrm_mir::dense::IdMap<ValueId, (Held, Held)>,
     declared: &[(String, DebugVariable)],
     body: LirBody,
 ) -> LirBody {
@@ -1781,6 +1818,8 @@ pub struct Selector<'m, 'c, 'p> {
     allocas: i64,
     /// Each alloca's frame displacement and size.
     frame_objects: Vec<(i64, i64)>,
+    /// The groups' slots wanting more than the stack's alignment.
+    over_aligned: Vec<(i64, i64)>,
     /// The temporaries' bytes the instruction being selected has taken:
     /// a temporary lives only within the instruction that made it.
     scratch: i64,
@@ -1963,13 +2002,17 @@ impl Selector<'_, '_, '_> {
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
             for inst in function.iter_block(block) {
-                if let (&Opcode::Alloca { allocated, .. }, Some(size)) =
+                if let (&Opcode::Alloca { allocated, align: wanted, .. }, Some(size)) =
                     (&function.instruction(inst).opcode, self.alloca_bytes(inst))
                 {
                     let align = natural_align(&self.module.context.types, &self.layout, allocated)
                         .max(size & size.wrapping_neg())
                         .min(kept.max(i64::from(self.arch.stack_slot_bytes())))
                         .max(1);
+                    // More than the frame keeps the stack aligned to: the frame
+                    // realigns the stack pointer for it.
+                    let wanted = wanted.map_or(0, |one| one as i64);
+                    let align = if wanted > OVER_ALIGNED { wanted } else { align };
                     let widest = align_of.entry(group_of[&inst]).or_insert(1);
                     *widest = (*widest).max(align);
                 }
@@ -2001,6 +2044,9 @@ impl Selector<'_, '_, '_> {
                 -self.depth
             };
             self.extents.push((disp, size));
+            if align > OVER_ALIGNED {
+                self.over_aligned.push((disp, align));
+            }
             homes.insert(group, disp);
         }
         for &block in layout {

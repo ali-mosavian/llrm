@@ -155,11 +155,11 @@ impl Inst {
             | Inst::Nop => {}
             Inst::CompareBranch { rt, .. } | Inst::TestBranch { rt, .. } => f(G(rt), Role::Use),
             Inst::BranchReg { rn, .. } | Inst::Ret { rn } => f(G(rn), Role::Use),
-            Inst::Load { mem, addr } => {
+            Inst::Load { mem, addr, .. } => {
                 memory(mem, Role::Def, f);
                 address(addr, f);
             }
-            Inst::Store { mem, addr } => {
+            Inst::Store { mem, addr, .. } => {
                 memory(mem, Role::Use, f);
                 address(addr, f);
             }
@@ -174,7 +174,8 @@ impl Inst {
                 address(addr, f);
             }
             Inst::Adr { rd, .. } => f(G(rd), Role::Def),
-            Inst::FpUnary { rd, rn, .. } | Inst::FpToFp { rd, rn, .. } => {
+            Inst::Prefetch { base, .. } => f(G(base), Role::Use),
+            Inst::FpUnary { rd, rn, .. } | Inst::FpToFp { rd, rn, .. } | Inst::VectorMov { rd, rn } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }
@@ -196,7 +197,13 @@ impl Inst {
                 }
             }
             Inst::FpMoveImm { rd, .. } => f(Fpr(rd), Role::Def),
-            Inst::FpInt { op, gpr, fpr, .. } => {
+            Inst::VectorFill { rd, fill } => {
+                f(Fpr(rd), Role::Def);
+                if let Fill::Gpr(source) = fill {
+                    f(G(source), Role::Use);
+                }
+            }
+            Inst::FpInt { op, gpr, fpr, .. } | Inst::FpFixed { op, gpr, fpr, .. } => {
                 let to_fp = matches!(op, FpConvert::ToFp { .. } | FpConvert::Bits { to_fp: true });
                 if to_fp {
                     f(Fpr(fpr), Role::Def);

@@ -1137,6 +1137,19 @@ pub enum Linkage {
     Appending,
 }
 
+impl Linkage {
+    /// `GlobalValue::isInterposable` by linkage: another definition of the name
+    /// may replace this one at link time, so no pass may rely on its body
+    /// (`weak`, `linkonce`, `common`, `extern_weak`; the `_odr` forms
+    /// promise an equivalent body).
+    pub fn is_interposable(self) -> bool {
+        matches!(
+            self,
+            Linkage::Weak | Linkage::LinkOnce | Linkage::Common | Linkage::ExternWeak
+        )
+    }
+}
+
 pub const LINKAGE: [(Linkage, &str); 10] = [
     (Linkage::Internal, "internal"),
     (Linkage::Private, "private"),
@@ -1304,6 +1317,14 @@ pub struct Special {
     pub fields: Vec<String>,
 }
 
+/// The metadata of a [`Module`] borrowed apart from its functions, so a pass
+/// can read it while it edits one.
+#[derive(Clone, Copy)]
+pub struct Metadata<'a> {
+    pub nodes: &'a [MetadataNode],
+    pub special: &'a std::collections::BTreeMap<MetadataId, Special>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Module {
     pub context: Context,
@@ -1415,6 +1436,19 @@ impl Module {
         let global = self.globals.iter_mut().find(|one| one.name.as_deref() == Some(name))?;
         match &mut global.kind {
             GlobalKind::Function(function) => Some((&mut self.context, function)),
+            GlobalKind::Variable(_) => None,
+        }
+    }
+
+    /// `function_mut`, with the module's metadata apart from it.
+    pub fn function_and_metadata_mut(
+        &mut self,
+        name: &str,
+    ) -> Option<(&mut Context, &mut Function, Metadata<'_>)> {
+        let Module { context, globals, metadata, special, .. } = self;
+        let global = globals.iter_mut().find(|one| one.name.as_deref() == Some(name))?;
+        match &mut global.kind {
+            GlobalKind::Function(function) => Some((context, function, Metadata { nodes: metadata, special })),
             GlobalKind::Variable(_) => None,
         }
     }

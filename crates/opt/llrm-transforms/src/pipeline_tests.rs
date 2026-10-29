@@ -1591,6 +1591,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "loop-load-elim@1400",
             "combine@1403",
             "simplifycfg@1438",
+            "slp@1455",
             "combine@1464",
             "unroll@1476",
             "sroa@1494",
@@ -2449,6 +2450,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "loop-load-elim@1400",
             "combine@1403",
             "simplifycfg@1438",
+            "slp@1455",
             "combine@1464",
             "unroll@1476",
             "sroa@1494",
@@ -2950,8 +2952,11 @@ fn lsr_runs_on_simplified_loops_after_the_closing_instsimplify() {
 /// x_strlen at -O2: the end of a scan was read through an exit phi, which
 /// stops IVUsers where the pin's walk goes on, so LSR kept the pointer IV
 /// (`lea eax,_buf-1`, a copy of it in the loop) where the pin has an index.
+/// IVUsers now walks on and LSR finds the index, but in real mode its own
+/// model rates that rewrite worse (one more register) and DEVIATE LU4 drops
+/// it: the scan stays one pointer phi.
 #[test]
-fn a_scan_whose_end_is_read_after_the_loop_is_an_index_not_a_pointer() {
+fn a_scan_whose_end_is_read_after_the_loop_stays_a_pointer_in_real_mode() {
     let mut module = llrm_analysis::testing::parsed(&format!(
         "{}@buf = global [64 x i8] zeroinitializer
 define i16 @f(i16 %k) {{
@@ -2982,7 +2987,8 @@ b2:
     .and_then(|done| done)
     .unwrap();
     let text = llrm_mir::print::module(&module);
-    assert!(!text.contains("phi ptr"), "{text}");
+    assert_eq!(text.matches("phi ").count(), 1, "{text}");
+    assert!(text.contains("phi ptr"), "{text}");
 }
 
 /// `Spares` and `Homes` are llrm-only (the pin has no counterpart for either)

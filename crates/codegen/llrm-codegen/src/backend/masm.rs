@@ -1023,7 +1023,7 @@ pub(crate) fn wrap_of(
     frame: bool,
     stack_addressed: bool,
 ) -> Option<crate::backend::shrinkwrap::Wrap> {
-    if moves_stack(body) {
+    if moves_stack(body) || realign_of(body) != 0 {
         return None;
     }
     let lows = saved_of(procedure);
@@ -1043,6 +1043,66 @@ pub(crate) fn wrap_of(
         stack_addressed,
         procedure.size && !registers.wrap_split_size,
     )
+}
+
+/// The alignment the stack pointer is realigned to for `body`'s over-aligned
+/// locals; 0 where none.
+fn realign_of(body: &lir::LirBody) -> i64 {
+    body.over_aligned.iter().map(|&(_, align)| align).max().unwrap_or(0)
+}
+
+/// Why `procedure` cannot have its stack pointer realigned, if it cannot: it
+/// is refused rather than compiled with a local off its alignment.
+///
+/// DEVIATE RA1 (owner w4, 2026-10-28): a dynamic `alloca` beside an
+/// over-aligned local is refused; the pin addresses the locals through a base
+/// pointer (`X86RegisterInfo::hasBasePointer`). DEVIATE RA2 (owner w4,
+/// 2026-10-28): `-g` variables are refused; their locations need the canonical
+/// frame address, which a realigned frame moves. Exit for both: the pin's
+/// base pointer and CFA locations in `lowered`.
+pub fn realign_refusal(procedure: &Procedure) -> Option<String> {
+    if realign_of(&procedure.body) == 0 {
+        return None;
+    }
+    let body = &procedure.body;
+    // No pin alignment exists at 16 bits (real mode has no `and sp` frame the
+    // pin builds).
+    let why = if !matches!(body.bits, 32 | 64) {
+        "in 16-bit code"
+    } else if procedure.entry != 0
+        || procedure.interrupt.is_some()
+        || procedure.far
+        || procedure.stack_check.is_some()
+        || procedure.callees.values().any(|one| !one.code.is_empty())
+    {
+        "in a frame the entry or inline code builds"
+    } else if moves_stack(body) {
+        "with a dynamic alloca"
+    } else if !body.variables.is_empty() {
+        "with debug variables"
+    } else if body.insns().iter().any(|one| {
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| (what.dests.iter().any(writes_stack_pointer) && stack_adjustment(what).is_none())
+                    || matches!(
+                        what.op,
+                        Operation::Pop if matches!(what.dests[..], [Loc::Mem(_)])
+                    ),
+            )
+    }) {
+        "with the stack pointer written in the body"
+    } else {
+        return None;
+    };
+    Some(format!("{}: an over-aligned local {why} is not realigned", procedure.name))
+}
+
+/// `procedure` set up as a realigned frame where it has over-aligned locals,
+/// and as it is otherwise (unoptimized code keeps its registers after the
+/// locals' space).
+pub fn realigned(procedure: Procedure) -> Procedure {
+    if realign_of(&procedure.body) == 0 { procedure } else { saved_first(procedure) }
 }
 
 /// `procedure` with its callee-saved registers pushed before the space for its
@@ -1076,7 +1136,16 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // A frame with no register to push is still the pin's where it keeps the
     // frame register and moves the stack pointer (`alloca`): `mov rsp, rbp;
     // pop rbp`, not `lea rsp, [rbp - N]; leave`.
-    let rebuilt = procedure.body.bits == 64 && moves_stack(&procedure.body);
+    let rebuilt = matches!(procedure.body.bits, 64) && moves_stack(&procedure.body);
+    // The locals of a realigned stack lie below its aligned top, not below the
+    // registers: nothing moves them.
+    if realign_of(&procedure.body) != 0 {
+        return if eligible {
+            Procedure { body: lir::LirBody { saved_first: true, ..procedure.body.clone() }, ..procedure }
+        } else {
+            procedure
+        };
+    }
     if !eligible || (pushed == 0 && !rebuilt) {
         return procedure;
     }
@@ -1208,7 +1277,7 @@ fn lowered(
         slot_size: slot as u64,
         saved: (0..saved.len() as u32).collect(),
         frame_pointer: FP,
-        realign_to: None,
+        realign_to: Some(realign_of(&procedure.body)).filter(|&align| align != 0).map(|align| align as u64),
         has_var_sized_objects: !omit && framed && moves_stack(&procedure.body),
     };
     let register = |reg_number: u32| if reg_number == FP { reg(FRAME) } else { reg(saved[reg_number as usize]) };
@@ -1230,7 +1299,12 @@ fn lowered(
             let from = ir::Mem { through: FRAME, offset, disp_width: 2, ..ir::Mem::new(None, 2) };
             semantics(Operation::Address, "lea", vec![sp_reg()], vec![Loc::Mem(from)])
         }
-        Op::AndSp(_) => unreachable!("no frame here is realigned"),
+        Op::AndSp(align) => semantics(
+            Operation::Binary,
+            "and",
+            vec![sp_reg()],
+            vec![sp_reg(), Loc::Imm(ir::Imm { value: -(align as i64), width: 2, address: None })],
+        ),
         Op::SubSp(bytes) => adjust("sub", bytes),
         Op::AddSp(bytes) => adjust("add", bytes),
     };
@@ -1881,6 +1955,56 @@ fn built(
         out.push(Item::Label(Label { name: label(number, cold_at(&procedure.body)) }));
         out.push(Item::Callee(Callee::new(check.handler.clone(), check.far)));
     }
+    if realign_of(&procedure.body) != 0 {
+        // The cells lie below the aligned top the `and` makes, `bytes` above
+        // the stack pointer once the entry has taken them: addressed through
+        // it, not the frame register, which the arguments keep.
+        let entry = &sequences.entry;
+        let bytes = (0..entry.len().saturating_sub(1))
+            .find(|&at| entry[at].name.as_deref() == Some("and"))
+            .and_then(|at| match entry[at + 1].sources.get(1) {
+                Some(Loc::Imm(imm)) if entry[at + 1].name.as_deref() == Some("sub") => Some(imm.value),
+                _ => None,
+            })
+            .ok_or_else(|| Unprintable(format!("{}: a realigned frame with no stack adjustment", procedure.name)))?;
+        // What the body has pushed since the entry (a call's arguments) lies
+        // between the stack pointer and the top: a block's pushes are taken
+        // back before it ends.
+        let kept = |why: &str| Unprintable(format!("{}: a realigned frame {why}", procedure.name));
+        let (mut pushed, mut leaving) = (0, false);
+        for item in out[body_from..].iter_mut() {
+            match item {
+                Item::Label(_) | Item::Align(_) if pushed != 0 => return Err(kept("with pushes across a block")),
+                Item::Label(_) => leaving = false,
+                Item::Callee(callee) => pushed -= callee.pops,
+                Item::Semantics(what) => {
+                    for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
+                        if let Some(placed) = below_top(place, bytes + pushed) {
+                            *place = placed;
+                        }
+                    }
+                    match what.op {
+                        // The stack pointer taken from the frame register: what
+                        // follows is the epilogue's pops.
+                        _ if what.dests.iter().any(writes_stack_pointer) && stack_adjustment(what).is_none() => {
+                            (pushed, leaving) = (0, true);
+                        }
+                        // A push is a slot in 64-bit code, whatever width the
+                        // immediate is spelled with.
+                        Operation::Push if !leaving => pushed += procedure.registers.slot,
+                        Operation::Pop if !leaving => pushed -= procedure.registers.slot,
+                        Operation::Call if what.indirect => pushed -= what.pops.unwrap_or(0),
+                        _ if stack_adjustment(what).is_some() => pushed += stack_adjustment(what).unwrap_or(0),
+                        Operation::Return | Operation::Jump | Operation::Branch if pushed != 0 => {
+                            return Err(kept(&format!("with {pushed} bytes pushed at {what:?}")));
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
     // The stack moves wherever the code moves it, whether the sequences or the
     // body wrote the instruction; what follows a return or a jump is the
     // frame the prologue left.
@@ -1912,6 +2036,40 @@ fn built(
         }
     }
     Ok(out)
+}
+
+/// The bytes `what` takes off the stack pointer (`sub sp, n`; `add sp, n` is
+/// negative), if it is just that.
+fn stack_adjustment(what: &Semantics) -> Option<i64> {
+    let ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(ir::Imm { value, address: None, .. })]) =
+        (&what.dests[..], &what.sources[..])
+    else {
+        return None;
+    };
+    if ir::root(dest.register) != ir::root(STACK) || ir::root(source.register) != ir::root(STACK) {
+        return None;
+    }
+    match what.name.as_deref() {
+        Some("sub") => Some(*value),
+        Some("add") => Some(-*value),
+        _ => None,
+    }
+}
+
+/// `place`, a frame cell below the frame register, as `bytes` above the stack
+/// pointer from the aligned top the frame's `and` made.
+fn below_top(
+    place: &Loc,
+    bytes: i64,
+) -> Option<Loc> {
+    let at = place.address()?;
+    let addr = at.addr.filter(|addr| addr.space == Space::Frame && addr.disp < 0)?;
+    Some(place.map_address(|one| ir::AddressRef {
+        through: STACK,
+        addr: Some(Addr { disp: addr.disp + bytes, ..addr }),
+        disp_width: 0,
+        ..one
+    }))
 }
 
 /// `stack_addressed`, but tuned for size only where it is no longer: `[esp+d]`
@@ -1997,6 +2155,7 @@ fn stack_addressed(
         || procedure.entry != 0
         || procedure.body.bits < 32
         || (!procedure.body.variables.is_empty() && !procedure.body.cfa_variables)
+        || realign_of(&procedure.body) != 0
         || procedure.callees.values().any(|one| !inert(one))
     {
         llrm_support::debug!(

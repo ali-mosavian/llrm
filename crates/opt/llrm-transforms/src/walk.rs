@@ -197,11 +197,7 @@ impl ProgramPass for Walk {
             last_call_to_static: self.inline.last,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
-        let size = if self.inline.single {
-            crate::inlinecost::CallerSize::OptSize
-        } else {
-            crate::inlinecost::CallerSize::Speed
-        };
+        let size = self.inline.caller_size();
         for at in 0..program.modules.len() {
             let wanted: BTreeSet<GlobalId> = procedures(program, at).into_iter().collect();
             let private = private(program, at);
@@ -257,12 +253,12 @@ impl ProgramPass for Walk {
                                 self.inline.limit == 0,
                                 tti.as_deref(),
                                 decided.as_mut(),
-                                (tti.is_some() && size == crate::inlinecost::CallerSize::OptSize)
-                                    .then_some(&mut trials),
+                                (tti.is_some() && size != crate::inlinecost::CallerSize::Speed).then_some(&mut trials),
                             )
                         };
                         let mut declared = declared(&mut modules[at], module);
-                        let (context, function) = function_mut(module, id);
+                        let (context, function, metadata) =
+                            crate::interprocedural::function_and_metadata_mut(module, id);
                         let was = calls_of(context, function);
                         // DEVIATE (recursion): a recursive callee inlined here
                         // has its own calls peeled in
@@ -286,6 +282,7 @@ impl ProgramPass for Walk {
                             &peeled,
                             Some(&constant),
                             &mut declared,
+                            metadata,
                         )? > 0;
                         // A recursive callee's peeled copies spliced here make
                         // this body one with self-copies too (`SELF_COPIED`).
@@ -375,7 +372,8 @@ impl ProgramPass for Walk {
                                     chosen.iter().map(|one| (*one, trials[one].clone())).collect();
                                 *function_mut(module, id).1 = before.clone();
                                 let mut declared = crate::interprocedural::declared(&mut modules[at], module);
-                                let (context, function) = function_mut(module, id);
+                                let (context, function, metadata) =
+                                    crate::interprocedural::function_and_metadata_mut(module, id);
                                 crate::inline::expanded_all(
                                     context,
                                     function,
@@ -383,6 +381,7 @@ impl ProgramPass for Walk {
                                     &peeled,
                                     Some(&available),
                                     &mut declared,
+                                    metadata,
                                 )?;
                                 if declared.place(module)? > 0 {
                                     modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
@@ -424,21 +423,27 @@ impl ProgramPass for Walk {
                         // elimination makes a recursive body a loop), as
                         // CGSCC updates its call graph.
                         let now = calls_of(&module.context, module.global(id).function().expect("a procedure"));
+                        // A callee the splices or the simplification added,
+                        // with a body: a parameter that
+                        // was a function became the copy's callee, or the call
+                        // was devirtualized (a table of
+                        // functions made a switch of calls by
+                        // `jumptableswitch`).
+                        // Or more calls of a callee with a body than before the
+                        // splices: the copies
+                        // brought call sites that `InlineFunction` hands to the
+                        // inliner's worklist.
+                        let exposed = now.iter().any(|(callee, count)| {
+                            let before = was.iter().find(|(seen, _)| seen == callee).map_or(0, |&(_, count)| count);
+                            (before == 0 || (spliced && *count > before && !recursive.contains(callee)))
+                                && module.global(*callee).function().is_some_and(|one| !one.layout().is_empty())
+                        });
                         live.spliced(module, &mut modules[at], was, now.clone());
                         if recursive.contains(&id) {
                             recursive = crate::inline::recursive(module);
                         }
-                        // A callee the simplification added, with a body: the
-                        // call was devirtualized (a table of functions made a
-                        // switch of calls by `jumptableswitch`).
                         repeats += 1;
-                        let devirtualized = now
-                            .iter()
-                            .any(
-                                |(callee, _)| !mid.iter().any(|(seen, _)| seen == callee)
-                                    && module.global(*callee).function().is_some_and(|one| !one.layout().is_empty()),
-                            );
-                        if repeats >= DEVIRT_REPEATS || !devirtualized {
+                        if repeats >= DEVIRT_REPEATS || !exposed {
                             break;
                         }
                     }
@@ -458,7 +463,8 @@ impl ProgramPass for Walk {
                     }
                     // What it stated reaches the next body's callees.
                     if stated {
-                        modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                        // Each body stated was reported to `changed`.
+                        modules[at].invalidate_logged(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
                 }
             }
@@ -574,7 +580,7 @@ impl SelfInline {
                 let frequencies = self_calls(module, &program.layout, id, self.for_size);
                 if let Some(frequencies) = frequencies {
                     let mut declared = declared(&mut modules[at], module);
-                    let (context, function) = function_mut(module, id);
+                    let (context, function, metadata) = crate::interprocedural::function_and_metadata_mut(module, id);
                     let itself = crate::inline::Candidate {
                         body: std::rc::Rc::new(function.clone()),
                         frame: crate::inline::grown(context, &program.layout, function),
@@ -591,7 +597,8 @@ impl SelfInline {
                         self_inlining: Some(&frequencies),
                         peeling: false,
                     };
-                    copies = crate::inline::expanded_all(context, function, &by, &available, None, &mut declared)?;
+                    copies =
+                        crate::inline::expanded_all(context, function, &by, &available, None, &mut declared, metadata)?;
                     if declared.place(module)? > 0 {
                         modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/typebasedaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/typebasedaa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/typebasedaa.rs sha256:bdeac6596845d0ad5e12c468ba8dba6eb853f1cd078d2ec8ee05cce0668382db -->
+<!-- src: crates/opt/llrm-analysis/src/typebasedaa.rs sha256:86d82aa2a4d4d59cc10afb12106c2f22a64fee4d2a985ecb006053435d0cd2d8 -->
 
 # typebasedaa
 
@@ -7,22 +7,18 @@
 types are unrelated cannot alias.
 
 ## How it works
-A tag names an access type; a type node names its parent, up to a root.
-Two accesses may alias unless their types hang under one root and neither
-type is an ancestor of (or equal to) the other (`matchAccessTags`,
-`getLeastCommonType`). A type of another root, or an access with no tag,
+A tag names a base type, an access type and an offset; a type node names
+its parent, or its fields, up to a root. Two accesses may alias unless their
+access types hang under one root and neither access may be to a subobject of
+the other (`matchAccessTags`, `getLeastCommonType`,
+`mayBeAccessToSubobjectOf`: the path from one base type, by offset, reaches
+the other's base type). A type of another root, or an access with no tag,
 says nothing. `TypeBasedAA` is an `AAResults`: `alias` answers `NoAlias`
 for such a pair and `MayAlias` otherwise; a tag marked immutable makes its
 location constant memory (`getModRefInfoMask`); a call that carries a
 `!tbaa` tag of its own does not touch a location of an unrelated type
 (`getModRefInfo(Call, Loc)`). Everything else is the top of the lattice, for
 [`crate::aggregate::AggregateAA`](aggregate.md) to meet with the other providers.
-
-DEVIATE F1: only scalar tags are understood: base type equal to the access
-type, offset 0, and a type node of a name, a parent and an offset of 0.
-The C front end emits only these, as clang does for C. A struct-path tag
-or a type node with fields answers `MayAlias`, and a test pins that.
-Exit: a front end that emits struct-path tags.
 
 ## Example
 An `int` and a `float` under one root: apart. An `int` and the

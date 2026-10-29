@@ -978,7 +978,7 @@ pub fn stamped(
 /// the counts.
 fn shadow_globalsmodref(
     module: &Module,
-    known: &llrm_support::hash::IndexMap<String, llrm_analysis::alias::Summary>,
+    known: &llrm_support::hash::IndexMap<String, std::rc::Rc<llrm_analysis::alias::Summary>>,
 ) {
     use llrm_analysis::memory::{Key, MemoryKind};
     let found = llrm_analysis::globalsmodref::compute(module);
@@ -1026,7 +1026,7 @@ fn shadow_globalsmodref(
 /// alone. `tighter` is an attribute that states less than the summary found.
 fn shadow_attributes(
     module: &Module,
-    known: &llrm_support::hash::IndexMap<String, llrm_analysis::alias::Summary>,
+    known: &llrm_support::hash::IndexMap<String, std::rc::Rc<llrm_analysis::alias::Summary>>,
 ) {
     use llrm_analysis::aa::{IRMemLocation, MemoryEffects};
     use llrm_analysis::memory::MemoryKind;
@@ -1084,6 +1084,18 @@ pub(crate) fn function_mut(
     let Module { context, globals, .. } = module;
     match &mut globals[id.0 as usize].kind {
         GlobalKind::Function(function) => (context, function),
+        GlobalKind::Variable(_) => unreachable!("a procedure is a function"),
+    }
+}
+
+/// `function_mut`, with the module's metadata apart from it.
+pub(crate) fn function_and_metadata_mut(
+    module: &mut Module,
+    id: GlobalId,
+) -> (&mut llrm_mir::context::Context, &mut llrm_mir::module::Function, llrm_mir::module::Metadata<'_>) {
+    let Module { context, globals, metadata, special, .. } = module;
+    match &mut globals[id.0 as usize].kind {
+        GlobalKind::Function(function) => (context, function, llrm_mir::module::Metadata { nodes: metadata, special }),
         GlobalKind::Variable(_) => unreachable!("a procedure is a function"),
     }
 }

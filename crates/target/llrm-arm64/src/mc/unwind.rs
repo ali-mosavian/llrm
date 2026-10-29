@@ -139,7 +139,7 @@ pub fn frame(
                 state.cfa_register = "sp".into();
                 change(&mut state, &mut rows, after);
             }
-            Inst::Store { mem, addr: Addr::Offset { base, imm } } if *base == Gpr::R31 => {
+            Inst::Store { mem, addr: Addr::Offset { base, imm }, .. } if *base == Gpr::R31 => {
                 if let Some(name) = saved_name(mem).filter(|_| state.cfa_register == "sp") {
                     state.saved.push((name, imm - state.cfa_offset));
                     change(&mut state, &mut rows, after);

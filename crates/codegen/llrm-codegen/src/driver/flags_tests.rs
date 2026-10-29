@@ -118,7 +118,7 @@ fn each_level_selects_gcc_s_passes() {
     let oz = pipeline(&["-Oz"]);
     assert_eq!(
         (oz.limits.grows, oz.inline, oz.unroll, oz.peel),
-        (false, Threshold::default().for_size(), false, false)
+        (false, Threshold::default().for_min_size(), false, false)
     );
     assert!(parsed(&["-O4"]).is_err());
 }
@@ -398,7 +398,7 @@ fn test_no_inline_names_each_function_and_is_not_the_inline_functions_pass() {
 
 /// `--isel=` takes `dag`, `old` and `shadow`, inline or as the next argument;
 /// anything else is an error. With none, a target gets the DAG selector where
-/// it selects (16- and 32-bit x86) and the old one elsewhere.
+/// it selects (x86 at every width) and the old one elsewhere.
 #[test]
 fn test_isel_names_the_selector() {
     assert_eq!(parsed(&[]).unwrap().isel, None);
@@ -408,7 +408,7 @@ fn test_isel_names_the_selector() {
     assert!(parsed(&["--isel=fast"]).unwrap_err().contains("unknown --isel=fast"));
     assert_eq!(Selector::for_target(&llrm_x86_m16::M16), Selector::Dag);
     assert_eq!(Selector::for_target(&llrm_x86_m32::M32), Selector::Dag);
-    assert_eq!(Selector::for_target(&llrm_x86_m64::M64), Selector::Old);
+    assert_eq!(Selector::for_target(&llrm_x86_m64::M64), Selector::Dag);
 }
 
 /// `-fallocation-routes` chose between the allocator alone and a second route

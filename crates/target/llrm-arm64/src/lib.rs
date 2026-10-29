@@ -6,6 +6,7 @@ pub mod divconst;
 pub mod driver;
 pub mod emit;
 pub mod expand_imm;
+pub mod flagcse;
 pub mod frame;
 pub mod isel;
 pub mod layout;
@@ -15,6 +16,9 @@ pub mod mfunc;
 pub mod pairs;
 pub mod prepass;
 pub mod regalloc;
+pub mod shrinkwrap;
+pub mod sibcall;
+pub mod storecluster;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;

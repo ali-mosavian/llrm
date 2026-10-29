@@ -193,6 +193,11 @@ pub struct Declared {
     pending: Vec<Pending>,
     /// Metadata nodes made, numbered after the module's.
     nodes: Vec<crate::module::MetadataNode>,
+    /// What the nodes made that are specialized (`DILocation`) are.
+    special: std::collections::BTreeMap<crate::module::MetadataId, crate::module::Special>,
+    /// The location made of an inlined body's location and the call it was
+    /// inlined at.
+    located: HashMap<(crate::module::MetadataId, crate::module::MetadataId), crate::module::MetadataId>,
     first_node: u32,
     /// The live instructions of the functions a constant names, while a pass
     /// that `wants_sizes` runs (`size_of`).
@@ -242,6 +247,8 @@ impl Declared {
             next: module.globals.len() as u32,
             pending: Vec::new(),
             nodes: Vec::new(),
+            special: Default::default(),
+            located: HashMap::default(),
             first_node: module.metadata.len() as u32,
             sizes: HashMap::default(),
         }
@@ -261,6 +268,8 @@ impl Declared {
             held: Some(held),
             pending: Vec::new(),
             nodes: Vec::new(),
+            special: Default::default(),
+            located: HashMap::default(),
             first_node: metadata as u32,
             sizes: HashMap::default(),
         }
@@ -353,6 +362,55 @@ impl Declared {
     ) -> crate::module::MetadataId {
         self.nodes.push(node);
         crate::module::MetadataId(self.first_node + self.nodes.len() as u32 - 1)
+    }
+
+    /// `loc`, a `DILocation` of an inlined body, as seen from the call it was
+    /// inlined at, `call`: the same line, column and scope with `inlinedAt`
+    /// ending in `call` (`fixupLineNumbers`, LLVM's inliner), one node per
+    /// pair. Not a `DILocation` with named fields: `call` alone.
+    pub fn inlined_at(
+        &mut self,
+        module: crate::module::Metadata<'_>,
+        loc: crate::module::MetadataId,
+        call: crate::module::MetadataId,
+    ) -> crate::module::MetadataId {
+        use crate::module::{MetadataId, MetadataNode, MetadataOperand, Special};
+        if let Some(&made) = self.located.get(&(loc, call)) {
+            return made;
+        }
+        let made_here = loc.0.checked_sub(self.first_node);
+        let (node, special): (&MetadataNode, &Special) = match made_here {
+            Some(at) => match (self.nodes.get(at as usize), self.special.get(&loc)) {
+                (Some(node), Some(special)) => (node, special),
+                _ => return loc,
+            },
+            None => match (module.nodes.get(loc.0 as usize), module.special.get(&loc)) {
+                (Some(node), Some(special)) => (node, special),
+                _ => return loc,
+            },
+        };
+        if special.kind != "DILocation" || special.fields.len() != node.operands.len() {
+            return loc;
+        }
+        let mut fields = special.fields.clone();
+        let mut operands = node.operands.clone();
+        let distinct = node.distinct;
+        let at = fields.iter().position(|one| one == "inlinedAt");
+        let outer = match at.and_then(|at| operands.get(at).cloned()) {
+            Some(MetadataOperand::Node(prev)) => self.inlined_at(module, prev, call),
+            _ => call,
+        };
+        match at {
+            Some(at) => operands[at] = MetadataOperand::Node(outer),
+            None => {
+                fields.push("inlinedAt".to_owned());
+                operands.push(MetadataOperand::Node(outer));
+            }
+        }
+        let id: MetadataId = self.node(MetadataNode { distinct, operands });
+        self.special.insert(id, Special { kind: "DILocation".to_owned(), fields });
+        self.located.insert((loc, call), id);
+        id
     }
 
     /// `Module::getFunction`: the global `name`, declared by the module or by
@@ -472,6 +530,8 @@ impl Declared {
         }
         assert_eq!(module.metadata.len() as u32, self.first_node, "nodes numbered after the module's");
         module.metadata.append(&mut self.nodes);
+        module.special.append(&mut self.special);
+        self.located.clear();
         self.first_node = module.metadata.len() as u32;
         Ok(made)
     }
@@ -1413,7 +1473,19 @@ fn check_captures() -> bool {
 
 fn check_replay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_REPLAY"))
+    let on = *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_REPLAY"));
+    if on {
+        REPLAY_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    on
+}
+
+static REPLAY_CHECKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// How many times a `LLRM_CHECK_REPLAY` site asked and found it on: reported by
+/// `LLRM_DEBUG=checks` like `stale_checks_run`, which the premise step reads.
+pub fn replay_checks_run() -> u32 {
+    REPLAY_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Whether `changes` only keep every live value's meaning, as a result that
@@ -2161,6 +2233,9 @@ pub struct ModuleAnalyses {
     /// Results dropped, reused when computed again the same, so that an
     /// outer proxy holding them stays the same.
     dropped: HashMap<TypeId, Rc<dyn Any>>,
+    /// The results `take_dropped` handed over, for `why` to tell a result
+    /// brought up to date from one made from nothing.
+    taken: HashSet<TypeId>,
     outer: Option<Rc<Outer>>,
     functions: HashMap<GlobalId, Analyses>,
     /// The bodies reported edited since the declarations were last checked
@@ -2176,6 +2251,9 @@ pub struct ModuleAnalyses {
     /// analyses made over it, not to ones carried from before.
     log_epoch: u64,
     declarations_open: bool,
+    /// How often `invalidate` has said anything may have changed: a result that
+    /// trusts the log of edits for what moved must be of the same count.
+    resets: u64,
     metadata_open: bool,
     /// What an analysis keeps for its next run, by its type: the working of an
     /// update that reuses the last.
@@ -2214,12 +2292,14 @@ impl ModuleAnalyses {
             stateless: Vec::new(),
             results: HashMap::default(),
             dropped: HashMap::default(),
+            taken: HashSet::default(),
             outer: None,
             functions: HashMap::default(),
             edited: BTreeSet::new(),
             edit_log: Vec::new(),
             log_epoch: NEXT_LOG_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             declarations_open: true,
+            resets: 0,
             metadata_open: true,
             memos: HashMap::default(),
             scratch: false,
@@ -2313,6 +2393,15 @@ impl ModuleAnalyses {
         }
     }
 
+    /// The result of `M` a pass dropped, handed over to the run that brings it
+    /// up to date: not kept, so that it is the only holder where nothing else
+    /// holds it. A run that does not take it leaves it to be compared.
+    pub fn take_dropped<M: ModuleAnalysis>(&mut self) -> Option<Rc<M::Result>> {
+        let one = self.dropped.remove(&TypeId::of::<M>())?;
+        self.taken.insert(TypeId::of::<M>());
+        Some(one.downcast::<M::Result>().expect("keyed by its type"))
+    }
+
     /// Whether `M` is made only at its points (`PassManager::require_cached`).
     pub fn is_stateless<M: ModuleAnalysis>(&self) -> bool {
         self.stateless.iter().any(|one| one.id == TypeId::of::<M>())
@@ -2371,10 +2460,12 @@ impl ModuleAnalyses {
                         "diff"
                     }
                 }
+                None if self.taken.contains(&kind.id) => "diff",
                 None => "first",
             };
             record("mod", kind.name, class);
         }
+        self.taken.remove(&kind.id);
         let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
         self.results.insert(kind.id, (kind, Rc::clone(&result)));
         result
@@ -2382,6 +2473,19 @@ impl ModuleAnalyses {
 
     /// Drops what `preserved` does not keep.
     pub fn invalidate(
+        &mut self,
+        preserved: &PreservedAnalyses,
+    ) {
+        self.declarations_open = true;
+        self.resets += 1;
+        self.metadata_open = true;
+        self.invalidate_bodies(preserved);
+    }
+
+    /// `invalidate` for a pass that changed the declarations of the bodies it
+    /// reported to `changed` and of no other global: what trusts the log of
+    /// edits for what moved may go on trusting it.
+    pub fn invalidate_logged(
         &mut self,
         preserved: &PreservedAnalyses,
     ) {
@@ -2476,6 +2580,11 @@ impl ModuleAnalyses {
     /// The bodies reported edited so far, oldest first.
     pub fn edit_log(&self) -> &[GlobalId] {
         &self.edit_log
+    }
+
+    /// How often a pass has said anything may have changed (`invalidate`).
+    pub fn resets(&self) -> u64 {
+        self.resets
     }
 
     /// Which `edit_log` this is, for an analysis that keeps a position in it: a

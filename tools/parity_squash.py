@@ -627,6 +627,13 @@ def error_files(text: str) -> set[str]:
     return set(re.findall(r"[\w./-]+\.rs(?=:\d)", text))
 
 
+def integration_probe(failed_units: set[str], red_on_base: set[str]) -> tuple[set[str], list[str]]:
+    """(the `integration <target>::<test>` names the batch failed and the base passes, their targets). The names stay in the form `integration_failures` returns: stripped of
+    `integration `, `probe & integration_failures(...)` was always empty, no PR was ever red alone or with its half, and the 16:17 batch cleared #5784 (target_facts) in 37 s."""
+    probe = {name for name in failed_units if name.startswith("integration ")} - red_on_base
+    return probe, sorted({name[len("integration ") :].split("::", 1)[0] for name in probe})
+
+
 def build_offenders(group: list[str], merge_alone, check, errors: dict[str, str] | None = None, suspects=None) -> list[str]:
     """The PRs of `group` whose own merge on the head does not build: `merge_alone(number)` merges one onto a clean head (False when it cannot), `check()` is the build error or "". A batch that
     fails to build with no PR at fault alone (two halves that compile apart) names none and is halved. The 21:02 batch (#3763's new ISD variants against #3806's) refused every PR.
@@ -939,13 +946,16 @@ def timed(took: dict[str, float], name: str, call):
 MAX_BATCH = int(os.environ.get("BATCH_CAP") or (16 if FAST else 8))  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
-def batch(prs: list, passes, land, refuse, offenders=None) -> None:
+def batch(prs: list, passes, land, refuse, offenders=None, pending=None) -> None:
     """Land `prs` (up to MAX_BATCH, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
     set is halved (2+2, then singles): the passing half lands, then the other half is tested on top of what landed. `refuse(pr)` names a PR that fails alone. `offenders(prs)`,
-    when given, names the PRs that fail the failing unit alone: they are refused and the rest are tested once."""
+    when given, names the PRs that fail the failing unit alone: they are refused and the rest are tested once. `pending` is the list `land` appends to when it does not push
+    (PUSH_MODE): those PRs are not on the base yet, so a later half is tested on top of them; without that two halves that build apart land together and the push fails
+    on the pair (#5784 x #5830, "missing seh", 15:57 and 16:11: every PR passed alone, the set was assembled again each pass)."""
     if not prs:
         return
-    if passes(prs):
+    under = [pr for pr in (pending or ()) if pr not in prs]
+    if passes([*under, *prs]):
         try:
             land.group = list(prs)  # the members that land together: a rescan after a drop covers them once
         except AttributeError:  # a builtin as `land` (tests) has no attributes
@@ -954,17 +964,19 @@ def batch(prs: list, passes, land, refuse, offenders=None) -> None:
             land(pr)
         return
     if len(prs) == 1:
+        if under:
+            print(f"interaction: #{prs[0]} fails on top of {' '.join('#' + pr for pr in under)}")
         refuse(prs[0])
         return
     # A unit the head passes fails on the merged tree: the PRs that fail it alone are dropped by name and the rest are tested once, instead of a smoke per half.
     if offenders and (named := [pr for pr in offenders(prs) if pr in prs]) and len(named) < len(prs):
         for pr in named:
             refuse(pr)
-        batch([pr for pr in prs if pr not in named], passes, land, refuse, offenders)
+        batch([pr for pr in prs if pr not in named], passes, land, refuse, offenders, pending)
         return
     middle = len(prs) // 2
-    batch(prs[:middle], passes, land, refuse, offenders)
-    batch(prs[middle:], passes, land, refuse, offenders)
+    batch(prs[:middle], passes, land, refuse, offenders, pending)
+    batch(prs[middle:], passes, land, refuse, offenders, pending)
 
 
 SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
@@ -1265,6 +1277,48 @@ def pre_merge_behavioural(files: list[str], build=None, run=None) -> list[str]:
         red = [program for program in behavioural.red_programs((run or _run_behavioural)()) if program in red]
     print(f"behavioural: {len(behavioural.PROGRAMS)} programs, {len(red)} wrong, {time.time() - started:.0f}s{red_env_cause() if red else ''}")
     return red
+
+
+def pre_merge_stale(files: list[str], build=None, run=None) -> list[str]:
+    """The finding lines of tools/oracle_sweep.py with `LLRM_CHECK_STALE` alone (every sweep program, -O2, both machines) on the merged tree's release bins, when the batch changes
+    crate source; none, and nothing built or run, otherwise (the build is the one behavioural made for this tree: cargo no-ops). The sweep ran at the gate only: 798dba289 landed and bintree, fpbench and jpeg_single failed it for ~2989 commits."""
+    if not any(f.startswith("crates/") and f.endswith(".rs") and "_tests" not in f and "/tests/" not in f for f in files):
+        print("stale: skipped (no crate source changed)")
+        return []
+    started = time.time()
+    (build or _build_release)()
+    try:
+        done = (run or _run_stale)()
+    except subprocess.TimeoutExpired:  # uncaught, it escaped release_pass and refused every member as a tool fault (#5696)
+        return ["the stale oracle ran past 900 s"]
+    print(f"stale: {done.stdout.strip().splitlines()[0] if done.stdout.strip() else 'no report'}, {time.time() - started:.0f}s")
+    if done.returncode == 0:
+        return []
+    return [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip() and not line.startswith("wall ")][:8] or [f"oracle_sweep exited {done.returncode} with no output"]
+
+
+def stale_culprits(group: list[str], files_of, on_base: set[str], merge_all, merge_alone, check=None) -> list[str]:
+    """The PRs of `group` that add a stale finding kind the base lacks: crate-touching PRs asked first, by halving, then each alone. A red base with nothing added names nobody."""
+    check = check or pre_merge_stale
+    added = lambda files: bool(stale_kinds(check(files)) - on_base)  # noqa: E731
+    crate_prs = [number for number in group if any(f.startswith("crates/") for f in files_of(number))]
+    return red_members_suspects_first(
+        group,
+        crate_prs,
+        lambda subset: merge_all(subset) and added(sorted({f for n in subset for f in files_of(n)})),
+        lambda number: merge_alone(number) and added(files_of(number)),
+    )
+
+
+def stale_kinds(lines: list[str]) -> set[str]:
+    """The finding kinds of a stale report, counts and example lists dropped: what a batch adds to a base that already fails."""
+    return {line.strip().split(None, 1)[1] for line in lines if line.strip()[:1].isdigit() and " compiles / " not in line and len(line.split(None, 1)) == 2}
+
+
+def _run_stale() -> subprocess.CompletedProcess:
+    target = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "release"
+    command = [sys.executable, "tools/oracle_sweep.py", "--bin", str(target), "--checks", "STALE", "--levels=-O2", "--no-premise"]
+    return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, errors="replace", timeout=900)
 
 
 def red_env_cause() -> str:
@@ -2084,6 +2138,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         failed_units.clear()
         failed_build.clear()
         stage("fast-merge")
+        print(f"members {len(group)}: {' '.join('#' + number for number in group)}")
         gate = docs_gated(merge_one, docs_stale(ROOT))
         kept, out = fast_merge(group, gate)
         docs_synced.update(gate.synced & set(kept))
@@ -2144,19 +2199,23 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 return False
             return True
 
-        def release_pass() -> tuple[list[str], list[str]]:
-            """The link check, then the behavioural programs unless something does not link: (unlinked, red)."""
+        def release_pass() -> tuple[list[str], list[str], list[str]]:
+            """The link check, then the behavioural programs unless something does not link, then the stale oracle: (unlinked, red, stale)."""
             files = git("diff", "--name-only", BASE, "HEAD").split()
             stage("link")
             if unlinked := new_link_failures(files):
-                return unlinked, []
+                return unlinked, [], []
             stage("behavioural")
-            return [], pre_merge_behavioural(files)
+            red = pre_merge_behavioural(files)
+            if red:
+                return [], red, []
+            stage("stale")
+            return [], [], pre_merge_stale(files)
 
         if OVERLAP:
             if broken := _workspace_check(ROOT):
                 return build_refused(broken)
-            tests_ok, (unlinked, red) = beside(release_pass, tests_pass)
+            tests_ok, (unlinked, red, stale) = beside(release_pass, tests_pass)
         else:
             # the dev-profile check (its own target dir) and the release scanner build share nothing: 60 s + 100 s in a row in sqb-5342
             why_serial = overlap_verdict()
@@ -2168,7 +2227,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 tests_ok = not broken and tests_pass()
             if broken:
                 return build_refused(broken)
-            unlinked, red = release_pass() if tests_ok else ([], [])
+            unlinked, red, stale = release_pass() if tests_ok else ([], [], [])
         if not tests_ok:
             return False
         if unlinked:
@@ -2178,6 +2237,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if red:
             print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}{red_env_cause()}")
             failed_units.update(f"behavioural {program}" for program in red)
+            return False
+        if stale:
+            print(f"REFUSED: the batch fails LLRM_CHECK_STALE: {' / '.join(stale)[:600]}")
+            failed_units.add("stale oracle")
             return False
         return True
 
@@ -2224,15 +2287,22 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}{red_env_cause()}"
                 print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}{red_env_cause()}")
             return culprits
+        if "stale oracle" in failed_units:
+            # a finding the base has too is no PR's: only the kinds a PR adds name it
+            clean_checkout(BASE)
+            on_base = stale_kinds(pre_merge_stale(["crates/_base.rs"]))
+            culprits = stale_culprits(group, lambda number: head_files(infos[number]['headRefOid']), on_base, merge_all, merge_alone)
+            for number in culprits:
+                named[number] = "LLRM_CHECK_STALE fails with it"
+                print(f"STALE RED pre-merge: #{number}")
+            return culprits
         integration = {name[len("integration ") :].split("::", 1)[0] for name in failed_units if name.startswith("integration ")}
         if integration:
             # a test the base fails too is no PR's: every PR merged on a red base fails it alone
             clean_checkout(BASE)
-            failed_names = {name[len("integration ") :] for name in failed_units if name.startswith("integration ")}
-            probe = failed_names - parity_smoke_module().integration_failures(sorted(integration))
+            probe, targets = integration_probe(failed_units, parity_smoke_module().integration_failures(sorted(integration)))
             if not probe:
                 return []
-            targets = sorted({name.split("::", 1)[0] for name in probe})
             red_with = lambda subset: merge_all(subset) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
             alone_red = lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
             failure_files = files_named_in(parity_smoke_module().causes_of(failed_units))
@@ -2385,7 +2455,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
         try:
-            batch(list(numbers), passes, land, refuse, offending if FAST else None)
+            batch(list(numbers), passes, land, refuse, offending if FAST else None, pending)
             if pending:
                 tip, why = push_tip({n: infos[n]["headRefOid"] for n in pending})
                 if tip:

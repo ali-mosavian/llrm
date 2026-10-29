@@ -330,11 +330,11 @@ impl Hooks for X86Lowering {
             ISD::DynamicStackAlloc => lower_dynamic_stackalloc(dag, node),
             ISD::StackSave => {
                 let (chain, vt) = (dag.operand(node, 0), dag.value_type(node));
-                Some(dag.get_copy_from_phys_reg_plain(chain, llrm_lir::registers::RegId::SP, vt))
+                Some(dag.get_copy_from_phys_reg_plain(chain, stack_register(vt), vt))
             }
             ISD::StackRestore => {
                 let (chain, saved) = (dag.operand(node, 0), dag.operand(node, 1));
-                let sp = dag.get_phys_register(dag.value_type(saved), llrm_lir::registers::RegId::SP);
+                let sp = dag.get_phys_register(dag.value_type(saved), stack_register(dag.value_type(saved)));
                 Some(dag.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, sp, saved]))
             }
             // `LowerFP_EXTEND`: the Custom arm exists for `f16`; a scalar
@@ -1094,7 +1094,7 @@ fn combine_add(
     }
     // `m_Add` matches either operand as the difference.
     let hidden_lea = |difference: SDValue, z: SDValue| {
-        if dag.opcode(difference) != ISD::Sub || dag.use_count(difference.node) != 1 || dag.constant(z).is_some() {
+        if dag.opcode(difference) != ISD::Sub || !dag.has_one_use(difference.node) || dag.constant(z).is_some() {
             return None;
         }
         let (shift, y) = (dag.operand(difference, 0), dag.operand(difference, 1));
@@ -1221,11 +1221,11 @@ fn combine_sub_setcc(
     let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
     let vt = dag.value_type(node);
     let constant = dag.constant(op0).filter(|c| *c != 0)?;
-    if dag.opcode(op1) != ISD::ZeroExtend || dag.use_count(op1.node) != 1 {
+    if dag.opcode(op1) != ISD::ZeroExtend || !dag.has_one_use(op1.node) {
         return None;
     }
     let setcc = dag.operand(op1, 0);
-    if dag.opcode(setcc) != x86isd::SETCC || dag.use_count(setcc.node) != 1 {
+    if dag.opcode(setcc) != x86isd::SETCC || !dag.has_one_use(setcc.node) {
         return None;
     }
     let code = dag.constant(dag.operand(setcc, 0))?;
@@ -2024,6 +2024,12 @@ fn lower_fcopysign(
     Some(dag.get_node(x86isd::FOR, vt, &[magnitude, sign_bit]))
 }
 
+/// The stack pointer a pointer of type `vt` is saved from and restored to
+/// (`getStackPointerRegisterToSaveRestore`): `rsp` at 64 bits.
+fn stack_register(vt: EVT) -> llrm_lir::registers::RegId {
+    if vt == EVT::I64 { llrm_lir::registers::RegId::RSP } else { llrm_lir::registers::RegId::SP }
+}
+
 /// `LowerDYNAMIC_STACKALLOC` without probes or split stacks: the stack pointer
 /// lowered by the size, rounded down to the alignment when that is more than
 /// the stack's (operand 2, else 0), is the address. Bracketed by a
@@ -2036,14 +2042,14 @@ fn lower_dynamic_stackalloc(
     let (chain, size) = (dag.operand(node, 0), dag.operand(node, 1));
     let alignment = dag.constant(dag.operand(node, 2)).unwrap_or(0);
     let start = dag.get_callseq_start(chain, 0);
-    let sp = dag.get_copy_from_phys_reg_plain(SDValue { node: start.node, res: 0 }, llrm_lir::registers::RegId::SP, vt);
+    let sp = dag.get_copy_from_phys_reg_plain(SDValue { node: start.node, res: 0 }, stack_register(vt), vt);
     let mut result = dag.get_node(ISD::Sub, vt, &[sp, size]);
     let mut chain = SDValue { node: sp.node, res: 1 };
     if alignment != 0 {
         let mask = dag.get_constant(!(alignment - 1) & ((1u128 << vt.size_in_bits()) - 1), vt);
         result = dag.get_node(ISD::And, vt, &[result, mask]);
     }
-    chain = dag.get_copy_to_phys_reg(chain, llrm_lir::registers::RegId::SP, result, None);
+    chain = dag.get_copy_to_phys_reg(chain, stack_register(vt), result, None);
     let chain = SDValue { node: chain.node, res: 0 };
     let end = dag.get_callseq_end(chain, 0, 0, SDValue { node: chain.node, res: 1 });
     Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[result, SDValue { node: end.node, res: 0 }]))

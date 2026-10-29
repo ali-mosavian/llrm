@@ -165,3 +165,89 @@ fn a_not_and_xored_with_its_operand_is_an_or_and_a_not_or_a_nand() {
 fn a_xor_constant_moves_out_of_the_inner_xor() {
     check(XY, "  %e = xor i32 %x, 77\n  %r = xor i32 %e, %y\n", &["xor i32 %x, %y", ", 77"], &[]);
 }
+
+/// `foldNot`: `not (cmp A, B)` is the inverse compare. Left as `xor (icmp eq
+/// (and x, 1), 0), true`, the `zext` of it never became `and x, 1`, and QB
+/// `rounded()` was 28 instructions against the pin's 14.
+#[test]
+fn a_not_of_a_one_use_compare_is_the_inverse_compare() {
+    let mut module = parsed(
+        "define i32 @f(i32 %x) {
+b0:
+  %a = and i32 %x, 1
+  %c = icmp eq i32 %a, 0
+  %n = xor i1 %c, true
+  %z = zext i1 %n to i32
+  ret i32 %z
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let out = printed(&module);
+    assert!(out.contains("icmp ne i32 %a, 0") && !out.contains("xor i1"), "{out}");
+}
+
+/// `foldNot`'s DeMorgan arms: `~(~X & Y)` is `X | ~Y`, `~(~X | Y)` is `X & ~Y`.
+#[test]
+fn a_not_of_a_logic_op_over_a_not_is_demorgan() {
+    check(XY, "  %n = xor i32 %x, -1\n  %a = and i32 %n, %y\n  %r = xor i32 %a, -1\n", &[" or i32 %x,"], &[" and i32"]);
+    check(XY, "  %n = xor i32 %x, -1\n  %a = or i32 %n, %y\n  %r = xor i32 %a, -1\n", &[" and i32 %x,"], &[" or i32"]);
+}
+
+/// `~((-X) | Y)` is `(X - 1) & ~Y`.
+#[test]
+fn a_not_of_a_negated_or_is_a_decrement_and_mask() {
+    check(
+        XY,
+        "  %g = sub i32 0, %x\n  %o = or i32 %g, %y\n  %r = xor i32 %o, -1\n",
+        &["add i32 %x, -1", " and i32"],
+        &[" or i32", "sub i32 0"],
+    );
+}
+
+/// The shift arms: `~(~X >>s Y)` is `X >>s Y`; `~(X >>s 31)` is `sext (X >
+/// -1)`; `~(C >>s Y)` for a negative `C` is `~C >>u Y`.
+#[test]
+fn a_not_of_a_shift_inverts_the_shift_or_becomes_a_sign_test() {
+    check(XY, "  %n = xor i32 %x, -1\n  %s = ashr i32 %n, %y\n  %r = xor i32 %s, -1\n", &["ashr i32 %x, %y"], &["xor"]);
+    check(X, "  %s = ashr i32 %x, 31\n  %r = xor i32 %s, -1\n", &["icmp sgt i32 %x, -1", "sext i1"], &["xor", "ashr"]);
+    check("i32 %y", "  %s = ashr i32 -8, %y\n  %r = xor i32 %s, -1\n", &["lshr i32 7, %y"], &["xor", "ashr"]);
+}
+
+/// `~(X + C)` is `~C - X`; `~(X - Y)` is `~X + Y`; `~(~X + Y)` is `X - Y`.
+#[test]
+fn a_not_of_an_add_or_sub_moves_into_the_operands() {
+    check(X, "  %a = add i32 %x, 5\n  %r = xor i32 %a, -1\n", &["sub i32 -6, %x"], &["xor", "add"]);
+    check(XY, "  %a = sub i32 %x, %y\n  %r = xor i32 %a, -1\n", &["add i32", ", %y"], &["sub"]);
+    check(
+        XY,
+        "  %n = xor i32 %x, -1\n  %a = add i32 %n, %y\n  %r = xor i32 %a, -1\n",
+        &["sub i32 %x, %y"],
+        &["xor", "add"],
+    );
+}
+
+/// `~select(c, cmp1, cmp2)` of one-use compares inverts both.
+#[test]
+fn a_not_of_a_select_of_compares_inverts_the_compares() {
+    let mut module = parsed(
+        "define i1 @f(i1 %c, i32 %x, i32 %y) {
+b0:
+  %p = icmp slt i32 %x, %y
+  %q = icmp eq i32 %x, 0
+  %s = select i1 %c, i1 %p, i1 %q
+  %r = xor i1 %s, true
+  ret i1 %r
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let out = printed(&module);
+    assert!(out.contains("icmp sge i32 %x, %y") && out.contains("icmp ne i32 %x, 0") && !out.contains("xor"), "{out}");
+}

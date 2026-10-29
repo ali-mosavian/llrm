@@ -72,7 +72,7 @@ impl Combiner<'_> {
     }
 
     /// The value of the instruction `inst` made.
-    fn value_of(
+    pub(crate) fn value_of(
         &self,
         inst: InstId,
     ) -> Operand {
@@ -109,10 +109,22 @@ impl Combiner<'_> {
         ty: TypeId,
         args: &[Operand],
     ) -> Operand {
+        let width = self.context.types.int_bits(ty).expect("an integer");
+        self.create_intrinsic_named(at, &format!("llvm.{base}.i{width}"), ty, args)
+    }
+
+    /// `Builder.CreateIntrinsic` of an intrinsic overloaded on more than one
+    /// type (`llvm.scmp.i8.i16`): the call of the declaration `name`.
+    pub fn create_intrinsic_named(
+        &mut self,
+        at: InstId,
+        name: &str,
+        ty: TypeId,
+        args: &[Operand],
+    ) -> Operand {
         let parameters: Vec<TypeId> = args.iter().map(|&arg| self.type_of(arg)).collect();
         let function_type = self.context.types.intern(Type::Function { returns: ty, parameters, variadic: false });
-        let width = self.context.types.int_bits(ty).expect("an integer");
-        let callee = self.declared.declare(&format!("llvm.{base}.i{width}"), function_type);
+        let callee = self.declared.declare(name, function_type);
         let pointer = self.context.types.ptr(0);
         let callee =
             Operand::Constant(self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));

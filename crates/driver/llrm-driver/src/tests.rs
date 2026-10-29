@@ -254,6 +254,153 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// A `{ i64, i48 }` (a packed struct of 14 bytes) crossed the DAG selector as
+/// an `i48`, which nothing legalized: torture 20131127-1 was refused at -m64,
+/// "Unsupported CopyToReg Int(48) promote operand".
+#[test]
+fn a_struct_with_an_i48_member_is_returned_loaded_and_stored_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare { i64, i48 } @g()\n\
+                define { i64, i48 } @get(ptr %p) {\n  %v = load { i64, i48 }, ptr %p\n  ret { i64, i48 } %v\n}\n\
+                define void @put(ptr %p) {\n  %v = call { i64, i48 } @g()\n  store { i64, i48 } %v, ptr %p\n  ret void\n}\n";
+    for function in ["get", "put"] {
+        let made = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, function);
+        assert!(made.is_ok(), "{function}: {:?}", made.err());
+    }
+}
+
+/// The verifier read a 64-bit use of a register whose low word the entry
+/// delivers as 64 bits unwritten: `foo(unsigned short)` at m64 was
+/// "floatalloc: foo reads edi before every path writes it" under LLRM_VERIFY,
+/// ~50 torture m64 builds. A register with some lane defined is read whole, and
+/// "whole" is the register, not the view that was read.
+#[test]
+fn a_short_argument_read_as_a_quadword_is_no_undefined_read_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @foo(i16 zeroext %0) {\n\
+                  %2 = alloca i16\n  %3 = alloca i16\n  store i16 %0, ptr %2\n  %4 = load i16, ptr %2\n  %5 = zext i16 %4 to i32\n\
+                  %6 = icmp sgt i32 %5, 32767\n  br i1 %6, label %7, label %11\n7:\n  %8 = load i16, ptr %2\n  %9 = zext i16 %8 to i32\n\
+                  %10 = sub nsw i32 %9, 32768\n  br label %12\n11:\n  br label %12\n12:\n  %13 = phi i32 [ %10, %7 ], [ 0, %11 ]\n\
+                  %14 = trunc i32 %13 to i16\n  store i16 %14, ptr %3\n  %15 = load i16, ptr %3\n  %16 = zext i16 %15 to i32\n  ret i32 %16\n}\n";
+    for isel in ["--isel=old", "--isel=dag"] {
+        let made = crate::llc::compiled(&flags(&["-m64", "-O2", "-fverify-ir", isel]), text, "foo");
+        assert!(made.is_ok(), "{isel}: {:?}", made.err());
+    }
+}
+
+/// `(float)u` read `rdi` whole: the dword move that zeroes its upper half was
+/// taken for a copy and coalesced away, so garbage above `edi` was converted.
+#[test]
+fn an_unsigned_dword_converted_at_m64_is_zero_extended_first() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define float @f(i32 %u) {\n  %r = uitofp i32 %u to float\n  ret float %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let convert = lines.iter().position(|line| line.starts_with("cvtsi2ss")).expect("the convert");
+    assert!(lines[..convert].iter().any(|line| line.starts_with("movzx r")), "{listing}");
+}
+
+/// A `zeroext` argument arrives with its high bits clear, so `x / 10` of an
+/// `unsigned short` multiplies the register as it is; ours `movzx`ed it first
+/// (3 instructions where the pin has 2 at -m64). A `signext` one is its own
+/// `movsx`.
+#[test]
+fn a_zeroext_or_signext_argument_is_not_extended_again_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i16 @d(i16 zeroext %x) {\n  %r = udiv i16 %x, 10\n  ret i16 %r\n}\n\
+                define i32 @s(i8 signext %c) {\n  %r = sext i8 %c to i32\n  ret i32 %r\n}\n";
+    for function in ["d", "s"] {
+        let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, function).unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(!listing.contains("movzx") && !listing.contains("movsx"), "{function}: {listing}");
+    }
+}
+
+/// `x >> (64 - n)` masked the count with 31, the dword's mask: a rotate by
+/// 1..31 of a quadword came out wrong (`rotl64(x, 1)` gave `x` with the top bit
+/// lost) at -m64, 32 of 63 counts.
+#[test]
+fn a_quadword_shift_by_64_minus_n_is_not_masked_to_31_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @rotl64(i64 %x, i32 %n) {\n  %a = zext nneg i32 %n to i64\n  %l = shl i64 %x, %a\n\
+                  %s = sub nsw i32 64, %n\n  %b = zext nneg i32 %s to i64\n  %r = lshr i64 %x, %b\n  %o = or i64 %r, %l\n  ret i64 %o\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "rotl64").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("and cl, 31"), "{listing}");
+}
+
+/// `(x << n) | (x >> (64 - n))` is one `rol r, cl` in the pin; `MatchRotate`
+/// took constant amounts only, so it stayed shl/neg/shr/or (8 instructions
+/// against 4 at -m64).
+#[test]
+fn a_rotate_by_a_variable_amount_is_one_rotate_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @rotl64(i64 %x, i32 %n) {\n  %a = zext nneg i32 %n to i64\n  %l = shl i64 %x, %a\n\
+                  %s = sub nsw i32 64, %n\n  %b = zext nneg i32 %s to i64\n  %r = lshr i64 %x, %b\n  %o = or i64 %r, %l\n  ret i64 %o\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "rotl64").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rol rax, cl"), "{listing}");
+}
+
+/// `x < 0 ? -x : x` is `neg; cmovs` in the pin (`LowerABS`, custom wherever
+/// `canUseCMOV`). The DAG path was built with `cmov: false` at -m64 as well, so
+/// it expanded to `sar; xor; sub`, one instruction more.
+///
+/// C's `abs` is `llvm.abs(x, true)` (ABS_MIN_POISON): it had no legalization
+/// and failed with `CannotSelect("AbsMinPoison")`.
+#[test]
+fn an_abs_is_a_negate_and_a_cmov_at_m64() {
+    for poison in ["false", "true"] {
+        let text = format!(
+            "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             declare i32 @llvm.abs.i32(i32, i1)\n\
+             define i32 @f(i32 %x) {{\n  %r = call i32 @llvm.abs.i32(i32 %x, i1 {poison})\n  ret i32 %r\n}}\n"
+        );
+        let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains("neg ") && listing.contains("cmov") && !listing.contains("sar "), "{listing}");
+    }
+}
+
+/// The pin's TwoAddress commutes a `cmov` (swapping its sources and taking the
+/// opposite condition) so the result reuses the source that dies: `abs` is
+/// `mov eax, edi; neg eax; cmovs eax, edi`. Only add/and/or/xor/imul commuted,
+/// so `abs` was `mov; mov; neg; cmovns`, one copy more.
+#[test]
+fn a_cmov_commutes_so_abs_needs_one_copy() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @llvm.abs.i32(i32, i1)\n\
+                define i32 @f(i32 %x) {\n  %r = call i32 @llvm.abs.i32(i32 %x, i1 true)\n  ret i32 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let copies = listing.lines().filter(|line| line.trim_start().starts_with("mov ")).count();
+    assert!(copies == 1 && listing.contains("cmovs"), "{listing}");
+}
+
+/// `add` overflow selecting 0 is `xor; add; cmovno`: the commute lets the
+/// zero stay in the tied register. It was one `mov` more.
+#[test]
+fn an_overflow_select_needs_no_copy() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)\n\
+                define i32 @f(i32 %a, i32 %b) {\n  %p = call {i32, i1} @llvm.sadd.with.overflow.i32(i32 %a, i32 %b)\n\
+                  %v = extractvalue {i32, i1} %p, 0\n  %o = extractvalue {i32, i1} %p, 1\n\
+                  %r = select i1 %o, i32 0, i32 %v\n  ret i32 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.lines().any(|line| line.trim_start().starts_with("mov ")), "{listing}");
+}
+
 /// A call of a variadic function tells the callee in `al` how many vector
 /// registers carry arguments: SysV AMD64's callee saves them by it. It was
 /// never set, so `printf` read whatever the register held.
@@ -265,7 +412,8 @@ fn a_variadic_call_sets_al_to_the_vector_registers_it_uses() {
                 define i32 @f(ptr %s, i32 %a) {\n  %r = call i32 (ptr, ...) @printf(ptr %s, i32 %a)\n  ret i32 %r\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let call = listing.lines().position(|line| line.trim() == "call printf").expect("the call");
+    // a sibling call, as the pin makes it, is a `jmp`
+    let call = listing.lines().position(|line| matches!(line.trim(), "call printf" | "jmp printf")).expect("the call");
     let before: Vec<&str> = listing.lines().take(call).map(str::trim).collect();
     assert!(
         before.iter().any(|line| *line == "mov eax, 0" || *line == "xor eax, eax" || *line == "mov al, 0"),
@@ -374,8 +522,17 @@ fn an_alloca_with_a_variable_count_lowers_the_stack_pointer() {
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
-    assert!(lines.iter().any(|line| line.starts_with("sub rsp, r")), "the run-time size is subtracted\n{listing}");
-    assert!(lines.contains(&"push rbp") && lines.contains(&"leave"), "the frame register is kept\n{listing}");
+    // the pin subtracts in a scratch register and moves the result to `rsp`
+    assert!(lines.iter().any(|line| line.starts_with("sub r")), "the run-time size is subtracted\n{listing}");
+    assert!(lines.iter().any(|line| line.starts_with("mov rsp, r")), "the stack pointer is lowered\n{listing}");
+    // The pin takes the stack back through the frame register and a pop, not
+    // `leave`.
+    let at = lines.iter().position(|line| *line == "mov rsp, rbp");
+    assert!(
+        lines.contains(&"push rbp") && at.is_some_and(|at| lines[at + 1] == "pop rbp"),
+        "the frame register is kept\n{listing}"
+    );
+    assert!(!lines.contains(&"leave"), "{listing}");
 }
 
 /// A constant count above one reserved one element's bytes.
@@ -577,15 +734,34 @@ fn values_live_across_a_call_take_the_callee_saved_registers() {
     assert!(!listing.contains("[rsp"), "no value goes to the stack\n{listing}");
 }
 
+/// A zero live across a call stayed in a callee-saved register under
+/// `--isel=dag` (`xor ebx, ebx; mov rdi, rbx; call g; mov rax, rbx`): the
+/// allocator did not rematerialize `MOV32r0` where the pin does, a `xor` at
+/// each use (`isTriviallyReMaterializable`).
+#[test]
+fn a_zero_used_around_a_call_is_a_xor_at_each_use_under_the_dag_selector() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i64 @g(i64)\n\
+                define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(
+        listing.contains("xor edi, edi") && listing.contains("xor eax, eax") && !listing.contains("rbx"),
+        "{listing}"
+    );
+}
+
 /// A quadword zero stayed `mov rax, 0` (7 bytes): the zero idiom took only
-/// words and dwords. It is `xor eax, eax`.
+/// words and dwords. It is `xor eax, eax`. Old selector: the DAG route keeps
+/// one zero in `ebx` across the call where the pin rematerializes it.
 #[test]
 fn a_quadword_zero_is_a_dword_xor() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare i64 @g(i64)\n\
                 define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n";
-    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=old"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("xor edi, edi") && !listing.contains(", 0\n"), "{listing}");
 }
@@ -1564,6 +1740,20 @@ fn a_big_coff_frame_is_probed_before_it_is_allocated() {
     assert!(!elf.windows(3).any(|bytes| bytes == [0x48, 0x29, 0xC4]), "ELF is not probed: {elf:02x?}");
 }
 
+/// A probed frame that ends in a sibling call gives its stack back before the
+/// `jmp`: the probe and the omitted-frame exit must agree on the size.
+#[test]
+fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndefine i32 @f(i32 %x) {{\n  %a = alloca [20040 x i8]\n  %q = getelementptr i8, ptr %a, i64 20000\n  store volatile i8 1, ptr %q\n  %r = tail call i32 @g(i32 %x)\n  ret i32 %r\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O0"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let jmp = lines.iter().position(|line| line.starts_with("jmp ")).unwrap_or_else(|| panic!("{listing}"));
+    assert!(lines[jmp - 1].starts_with("add rsp, 20") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
+}
+
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
 /// layout: the frames the compiler declared (`.seh_*`) against the bytes read
 /// back from the same code agree.
@@ -1583,6 +1773,87 @@ fn the_declared_win64_prologue_is_what_the_code_bytes_say() {
     let declared = llrm_x86::mc::win64unwind::from_seh("f", &frame.seh).unwrap();
     let read = llrm_x86::mc::win64unwind::from_prologue("f", body).unwrap();
     assert_eq!(declared, read, "{:?}", frame.seh);
+}
+
+/// The pin pushes the callee-saved registers `ebp, ebx, edi, esi`
+/// (`clang -target i386-unknown-linux-gnu -O2` on this function, with and
+/// without `-fno-omit-frame-pointer`): the last of CSR_32 (`esi, edi, ebx,
+/// ebp`) first. llrm pushed `esi, edi, ebp` here, the order of its own list
+/// (`ebx, esi, edi, ebp`). The allocator takes no `ebx` for this function, so
+/// the three it pushes are those of the pin's order.
+#[test]
+fn m32_callee_saved_registers_are_pushed_in_the_pins_order() {
+    let text = "\
+         target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+         target triple = \"i386-unknown-linux-gnu\"\n\
+         declare i32 @g(i32)\n\
+         define i32 @six(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f) {\n\
+           %s1 = call i32 @g(i32 %a)\n\
+           %s2 = call i32 @g(i32 %b)\n\
+           %s3 = call i32 @g(i32 %c)\n\
+           %s4 = call i32 @g(i32 %d)\n\
+           %s5 = call i32 @g(i32 %e)\n\
+           %s6 = call i32 @g(i32 %f)\n\
+           %p1 = call i32 @g(i32 %s1)\n\
+           %p2 = call i32 @g(i32 %s2)\n\
+           %p3 = call i32 @g(i32 %s3)\n\
+           %p4 = call i32 @g(i32 %s4)\n\
+           %p5 = call i32 @g(i32 %s5)\n\
+           %p6 = call i32 @g(i32 %s6)\n\
+           %t0 = add i32 %s1, %p1\n\
+           %x2 = add i32 %s2, %p2\n\
+           %t1 = add i32 %t0, %x2\n\
+           %x3 = add i32 %s3, %p3\n\
+           %t2 = add i32 %t1, %x3\n\
+           %x4 = add i32 %s4, %p4\n\
+           %t3 = add i32 %t2, %x4\n\
+           %x5 = add i32 %s5, %p5\n\
+           %t4 = add i32 %t3, %x5\n\
+           %x6 = add i32 %s6, %p6\n\
+           %t5 = add i32 %t4, %x6\n\
+           ret i32 %t5\n\
+         }\n\
+         ";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O2"]), text, "six").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let pushed: Vec<&str> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| matches!(*line, "push ebp" | "push ebx" | "push edi" | "push esi"))
+        .collect();
+    assert_eq!(pushed, ["push ebp", "push edi", "push esi"], "{listing}");
+}
+
+const ALIGNED_IR: &str = "declare i32 @use(ptr)\n\
+    define i32 @aligned(i32 %n) {\n  %v = alloca [4 x i32], align 64\n  store i32 %n, ptr %v\n  \
+    %r = call i32 @use(ptr %v)\n  ret i32 %r\n}\n";
+
+/// A 32-bit local wanting 64 bytes of alignment lay wherever the stack was. The
+/// frame is the pin's `push ebp; mov ebp, esp; and esp, -64; sub esp, N` (the
+/// pin's `clang -target i386-unknown-linux-gnu` on the same function), the
+/// stack taken back from the frame register.
+#[test]
+fn m32_over_aligned_local_realigns_the_stack_pointer() {
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n{ALIGNED_IR}"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O1"]), &text, "aligned").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let at = lines.iter().position(|line| *line == "and esp, -64").unwrap_or_else(|| panic!("{listing}"));
+    assert_eq!(lines[at - 1], "mov ebp, esp", "{listing}");
+    assert!(lines.contains(&"mov esp, ebp"), "{listing}");
+}
+
+/// There is no pin alignment at 16 bits: an over-aligned local is refused with
+/// its reason, not compiled off its alignment.
+#[test]
+fn m16_over_aligned_local_is_refused() {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n{ALIGNED_IR}"
+    );
+    let error = crate::llc::compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().unwrap();
+    assert!(error.contains("in 16-bit code is not realigned"), "{error}");
 }
 
 /// A callee-saved register pushed before the stack `sub` (the pin's order,
@@ -1661,6 +1932,39 @@ fn a_cleaned_up_argument_push_gives_the_frame_address_back() {
     assert_eq!(frame[frame.len() - 7..], hex("440e08480e0400"));
 }
 
+/// A frame whose registers are pushed before the locals' space (`saved_first`,
+/// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
+/// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
+/// add rsp, 32; pop rbx; ret`.
+#[test]
+fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
+    let text = format!(
+        "{SYSV}declare i32 @g(ptr, i32)\ndeclare i32 @h(i32)\n\
+         define i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %buf = alloca [6 x i32]\n  \
+         %x = call i32 @g(ptr %buf, i32 %a)\n  %y = call i32 @h(i32 %x)\n  %z = add i32 %y, %x\n  ret i32 %z\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_of(&text),
+        hex("1400000000000000017a5200017810011b0c07089001000\
+             01c0000001c000000000000002200000000410e10440e3083025b0e10410e0800")
+    );
+}
+
+/// An `i32` call argument goes in the dword register, as the pin's
+/// `CCPromoteToType` leaves it (only a byte or a word is promoted): the DAG
+/// extended it to the convention's quadword register, `mov rdi, rbx` (3 bytes)
+/// for `mov edi, ebx`.
+#[test]
+fn an_i32_call_argument_is_passed_in_the_dword_register_at_m64() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndeclare i32 @h(i32)\n\
+         define i32 @f(i32 %a) {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @h(i32 %x)\n  %z = add i32 %y, %x\n  ret i32 %z\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov edi, ") && !listing.contains("mov rdi, r"), "{listing}");
+}
+
 /// `fptoui double to i64` on a target with no conditional move
 /// (`double_to_uint64.c` at i486 -Os) was two branches before the DAG: the high
 /// word was `mov edx, -2147483648 / xor eax, eax` in the arms and the threshold
@@ -1675,4 +1979,36 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("setbe") && listing.contains("shl edx, 31"), "{listing}");
     assert!(!listing.contains("-2147483648"), "{listing}");
+}
+
+/// A 72-byte zero fill and copy at m64 -Os (`pattern_fill.c`,
+/// `huffman_decode.c`, `idioms.c`): `rep stosq` took its value from EAX where
+/// its form reads RAX, and the assembler had no `stosq`/`movsq`: "a division
+/// operand (RAX) not set by a glued CopyToReg" refused the function.
+#[test]
+fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr, ptr)\n\
+                declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %s) optsize {\n  %b = alloca [72 x i8], align 16\n  %c = alloca [72 x i8], align 16\n\
+                \x20 call void @llvm.memset.p0.i64(ptr align 16 %c, i8 0, i64 72, i1 false)\n\
+                \x20 call void @llvm.memcpy.p0.p0.i64(ptr align 16 %b, ptr align 16 %s, i64 72, i1 false)\n\
+                \x20 call void @use(ptr %b, ptr %c)\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rep stosq") && listing.contains("rep movsq"), "{listing}");
+}
+
+/// A variable `alloca` at m64 under `--isel=dag` named the 16-bit `sp` at
+/// quadword width (`isel: 0x0004 names 25 at width 8`, the verifier): the
+/// lowering took `RegId::SP` for every pointer width. It is `rsp`.
+#[test]
+fn a_variable_alloca_at_m64_names_the_quadword_stack_pointer() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                define void @f(i64 %n) {\n  %p = alloca i32, i64 %n, align 16\n  call void @use(ptr %p)\n  ret void\n}\n";
+    crate::llc::compiled(&flags(&["-O1", "--isel=dag", "-fverify-ir"]), text, "f").unwrap();
 }
