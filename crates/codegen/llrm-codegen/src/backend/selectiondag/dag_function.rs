@@ -109,8 +109,11 @@ pub(super) struct Frame {
 }
 
 impl Frame {
-    pub(super) fn new(params: Vec<i64>) -> Frame {
-        Frame { params, locals: Default::default(), depth: Default::default() }
+    pub(super) fn new(
+        params: Vec<i64>,
+        hole: i64,
+    ) -> Frame {
+        Frame { params, locals: Default::default(), depth: std::cell::Cell::new(hole) }
     }
 }
 
@@ -216,6 +219,9 @@ pub struct RuntimeContracts<'a> {
     /// What the module's finished callees wrote, which a call of one destroys
     /// and no more (`isel`'s `written`).
     pub facts: Option<&'a crate::backend::calleefacts::CalleeFacts>,
+    /// Bytes below BP left free above the allocas, for spill slots
+    /// (`relayout`'s second layout): the frame's objects start under them.
+    pub hole: i64,
 }
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
@@ -808,7 +814,7 @@ fn selected_in(
     if module.signature(function.ty).2 {
         cells.push(convention.stack_arguments);
     }
-    let frame = Frame::new(cells);
+    let frame = Frame::new(cells, contracts.map_or(0, |one| one.hole));
     // The function's static allocas are frame objects 0, 1, ... in the order
     // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
     // type's alignment. Locals whose lifetime markers say they are never live
