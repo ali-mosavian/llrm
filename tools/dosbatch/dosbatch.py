@@ -11,6 +11,7 @@ stopping comes from the launch's events.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import re
@@ -285,6 +286,23 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
 REAL_MODE = linkrecipe.named(16)
 
 _COMPILERS = {"nib": "llrm-nib"}
+
+
+@functools.cache
+def clang_identity() -> str:
+    """Which clangs llrm-cc will run (`LLRM_PIN_CLANG`, `LLRM_CLANG_M16`): each one's real path and `--version`, for the keys of cached objects."""
+    parts = []
+    for variable in ("LLRM_PIN_CLANG", "LLRM_CLANG_M16"):
+        path = os.environ.get(variable)
+        if not path:
+            continue
+        real = os.path.realpath(path)
+        try:
+            version = subprocess.run([real, "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            version = "unreadable"
+        parts.append(f"{variable}={real} {version}")
+    return "|".join(parts)
 
 
 def c_frontend() -> str:
