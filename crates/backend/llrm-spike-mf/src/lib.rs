@@ -23,4 +23,4 @@ pub use fold::{branch_fold, remove_identity_copies, remove_redundant_copies, rem
 pub use mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg};
 pub use regalloc::{Allocate, Assignment, GraphColoring, Target};
 pub use reschedule::reschedule_kills;
-pub use sink::{Jump, machine_sink, split_critical_edge};
+pub use sink::{Jump, machine_sink, machine_sink_in_place, split_critical_edge};

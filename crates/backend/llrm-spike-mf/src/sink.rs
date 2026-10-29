@@ -73,6 +73,10 @@ struct Sink<'a, T: Target> {
     merge: HashMap<(u32, u32), u32>,
     to_split: Vec<(u32, u32)>,
     live_out: Option<Vec<HashSet<u32>>>,
+    /// Whether an edge may get a block of its own for an instruction to land in.
+    allow_split: bool,
+    /// Whether a copy or a rematerializable instruction stays where it is.
+    keep_cheap: bool,
 }
 
 fn virt(reg: Reg) -> Option<u32> {
@@ -117,6 +121,8 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             merge: HashMap::new(),
             to_split: Vec::new(),
             live_out: None,
+            allow_split: true,
+            keep_cheap: false,
         };
         sink.index();
         sink
@@ -569,6 +575,9 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         to: usize,
         break_phi_edge: bool,
     ) -> bool {
+        if !self.allow_split {
+            return false;
+        }
         let mut deferred = None;
         if !self.worth_breaking(inst, from, to, &mut deferred) {
             return false;
@@ -657,6 +666,9 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         cache: &mut HashMap<usize, Vec<usize>>,
     ) -> bool {
         let inst = self.function.blocks[block].insts[at].clone();
+        if self.keep_cheap && (inst.kind == Kind::Copy || inst.rematerializable) {
+            return false;
+        }
         if !self.safe_to_move(&inst, saw_store) {
             return false;
         }
@@ -828,4 +840,17 @@ pub fn split_critical_edge<C>(
 /// `MachineSinking`: true when anything moved.
 pub fn machine_sink<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
     Sink::<T>::new(function).run()
+}
+
+/// [`machine_sink`] where no edge is split and a copy or a rematerializable instruction stays.
+/// DEVIATE: the pin splits when `PostponeSplitCriticalEdge` finds it worth it, and sinks a copy
+/// or a constant into the one successor that reads it. Reason: on a target whose jump costs
+/// bytes (the 6502's `jmp` is three) a block made for a one-move instruction costs more than the
+/// move saves on the other path (lz4 grew 16 bytes). Exit: the neutral-LIR task, with a
+/// block-cost hook.
+pub fn machine_sink_in_place<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
+    let mut sink = Sink::<T>::new(function);
+    sink.allow_split = false;
+    sink.keep_cheap = true;
+    sink.run()
 }
