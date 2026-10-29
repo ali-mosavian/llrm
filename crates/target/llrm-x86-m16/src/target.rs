@@ -219,6 +219,9 @@ impl Machine for Dos {
 
     fn tuning(&self) -> llrm_mir::target::Tuning {
         llrm_mir::target::Tuning {
+            max_stores_per_memset: 4,
+            max_stores_per_memcpy: 2,
+            max_stores_per_memmove: 2,
             // DEVIATE SD223/SD225 (real mode): a dword store is 4 bytes
             // (prefix, opcode, ModRM, disp8) against 13 for the fill (`lea di`,
             // `mov es,ss`, `mov cx`, `rep stos`, the zero) that also takes ax,
