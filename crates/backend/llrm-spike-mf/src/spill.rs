@@ -531,25 +531,42 @@ pub fn allocate_spilling_ordered<T: Target>(
     let mut slots = Vec::new();
     let mut temporaries = HashSet::new();
     loop {
-        let failed = match GraphColoring::<T>::by_frequency(by_frequency).colour(function) {
+        let failures = match GraphColoring::<T>::by_frequency(by_frequency).colour(function) {
             Ok(assignment) => {
                 share_slots(function, &mut slots);
                 return Ok((assignment, slots));
             }
-            Err(failed) => failed,
+            Err(failures) => failures,
         };
-        let v = victim::<T>(function, &failed, &temporaries).ok_or_else(|| {
-            format!(
-                "no register for v{} ({:?}) and nothing to spill",
-                failed.vreg, function.classes[failed.vreg as usize]
-            )
-        })?;
-        if let Some(made) = rematerialize(function, v) {
-            temporaries.extend(made);
-            continue;
+        // A victim relieves the failures near it, so a victim per failure can spill more than the
+        // function needs; one per round made the cost the square of the spills. The round spills
+        // at most a quarter more than the function has spilled so far: the first spills are
+        // chosen one at a time, a long function's in O(log) rounds.
+        let mut victims: Vec<u32> = Vec::new();
+        let mut excluded = temporaries.clone();
+        for failed in failures.iter().take(slots.len() / 4 + 1) {
+            match victim::<T>(function, failed, &excluded) {
+                Some(v) => {
+                    excluded.insert(v);
+                    victims.push(v);
+                }
+                None if victims.is_empty() => {
+                    return Err(format!(
+                        "no register for v{} ({:?}) and nothing to spill",
+                        failed.vreg, function.classes[failed.vreg as usize]
+                    ));
+                }
+                None => {}
+            }
         }
-        let slot = first_slot + slots.len() as i32;
-        slots.push((slot, function.classes[v as usize]));
-        temporaries.extend(spill::<T>(function, v, slot)?);
+        for v in victims {
+            if let Some(made) = rematerialize(function, v) {
+                temporaries.extend(made);
+                continue;
+            }
+            let slot = first_slot + slots.len() as i32;
+            slots.push((slot, function.classes[v as usize]));
+            temporaries.extend(spill::<T>(function, v, slot)?);
+        }
     }
 }
