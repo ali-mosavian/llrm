@@ -9,6 +9,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod common;
+
 fn bin(name: &str) -> PathBuf {
     Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join(name)
 }
@@ -24,14 +26,26 @@ fn compiled(
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join(format!("x87.{extension}"));
     std::fs::write(&path, source).unwrap();
-    let done = Command::new(bin(tool))
-        .arg(&path)
-        .args(flags)
-        .arg("-o")
-        .arg(scratch.path().join("x87.obj"))
-        .env("LLRM_VERIFY", "1")
-        .output()
-        .unwrap();
+    // llrm-c is gone: its command line is served by llrm-cc over the pinned clang.
+    let done = if tool == "llrm-c" {
+        common::cc::llrm_c()
+            .arg(&path)
+            .args(flags)
+            .arg("-o")
+            .arg(scratch.path().join("x87.obj"))
+            .env("LLRM_VERIFY", "1")
+            .output()
+            .unwrap()
+    } else {
+        Command::new(bin(tool))
+            .arg(&path)
+            .args(flags)
+            .arg("-o")
+            .arg(scratch.path().join("x87.obj"))
+            .env("LLRM_VERIFY", "1")
+            .output()
+            .unwrap()
+    };
     if done.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&done.stderr).into_owned()) }
 }
 
