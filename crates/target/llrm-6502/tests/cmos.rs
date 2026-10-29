@@ -80,3 +80,27 @@ fn a_far_bra_becomes_jmp_and_a_near_one_stays() {
     assert!(relaxed.starts_with("  jmp far\n") && assembles(&relaxed));
     assert!(llrm_6502::emit::relax_bra(near).starts_with("  bra near\n"));
 }
+
+/// `a` jumps over a block `b` of 38 ops (t0 = x + 1, t1 = t0 + x, t_n = t_(n-1) + (t_(n-2) ^ x), which the
+/// combiner cannot reduce): far more than 127 bytes. Unrelaxed, the `bra` fails to
+/// assemble; relaxed it is a `jmp`. `far(0)` takes `a` (10); `far(5)` is t19 = 159, worked out above in 8-bit arithmetic.
+#[test]
+fn a_far_bra_in_a_function_becomes_jmp_and_runs() {
+    let mut ir = String::from(
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
+         define i8 @far(i8 %x) {\nentry:\n  %c = icmp eq i8 %x, 0\n  br i1 %c, label %a, label %b\na:\n  br label %join\nb:\n  %t0 = add i8 %x, 1\n",
+    );
+    ir.push_str("  %t1 = add i8 %t0, %x\n");
+    for n in 2..20 {
+        ir.push_str(&format!("  %u{n} = xor i8 %t{}, %x\n  %t{n} = add i8 %t{}, %u{n}\n", n - 2, n - 1));
+    }
+    ir.push_str("  br label %join\njoin:\n  %r = phi i8 [ 10, %a ], [ %t19, %b ]\n  ret i8 %r\n}");
+    let module = llrm_mir::parse::module(&ir).expect("parses");
+    let text = function_text(&module, "far", &select_function(&module, "far", Cpu::W65c02).expect("selects")).expect("emits");
+    assert!(!text.contains("  bra far_b3"), "the far bra survived:\n{text}");
+    assert!(text.contains("  jmp far_b3"), "no jmp to the join:\n{text}");
+    for (x, want) in [(0, 10), (5, 159)] {
+        let main = format!("  lda #{x}\n  sta rc2\n  jsr far\n");
+        assert_eq!(common::run_on("sim65c02", &format!("cmos-far-{x}"), &main, &text).0, want);
+    }
+}
