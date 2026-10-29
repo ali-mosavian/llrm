@@ -795,3 +795,45 @@ pub mod opcode {
     pub const uint_to_fp_F16x8: u16 = 1977;
     pub const uint_to_fp_F32x4: u16 = 1979;
 }
+
+pub mod reg {
+    pub const ARGUMENTS: u16 = 1;
+    pub const EXNREFRegClassID: u16 = 0;
+    pub const EXTERNREFRegClassID: u16 = 1;
+    pub const F32RegClassID: u16 = 4;
+    pub const F64RegClassID: u16 = 6;
+    pub const FUNCREFRegClassID: u16 = 2;
+    pub const I32RegClassID: u16 = 3;
+    pub const I64RegClassID: u16 = 5;
+    pub const OPERAND_BASIC_BLOCK: u16 = 15;
+    pub const OPERAND_BRLIST: u16 = 33;
+    pub const OPERAND_CATCH_LIST: u16 = 35;
+    pub const OPERAND_F32IMM: u16 = 20;
+    pub const OPERAND_F64IMM: u16 = 21;
+    pub const OPERAND_FUNCTION32: u16 = 26;
+    pub const OPERAND_GLOBAL: u16 = 17;
+    pub const OPERAND_I32IMM: u16 = 18;
+    pub const OPERAND_I64IMM: u16 = 19;
+    pub const OPERAND_LOCAL: u16 = 16;
+    pub const OPERAND_MEMORDER: u16 = 36;
+    pub const OPERAND_OFFSET32: u16 = 27;
+    pub const OPERAND_OFFSET64: u16 = 28;
+    pub const OPERAND_P2ALIGN: u16 = 29;
+    pub const OPERAND_SIGNATURE: u16 = 30;
+    pub const OPERAND_TABLE: u16 = 34;
+    pub const OPERAND_TAG: u16 = 32;
+    pub const OPERAND_TYPEINDEX: u16 = 31;
+    pub const OPERAND_VALTYPE_LIST: u16 = 37;
+    pub const OPERAND_VEC_I16IMM: u16 = 23;
+    pub const OPERAND_VEC_I32IMM: u16 = 24;
+    pub const OPERAND_VEC_I64IMM: u16 = 25;
+    pub const OPERAND_VEC_I8IMM: u16 = 22;
+    pub const SP32: u16 = 8;
+    pub const SP64: u16 = 9;
+    pub const V128RegClassID: u16 = 7;
+    pub const VALUE_STACK: u16 = 2;
+    pub const wasm_ptr_rc: u16 = 0;
+}
+
+pub mod generic {
+}
