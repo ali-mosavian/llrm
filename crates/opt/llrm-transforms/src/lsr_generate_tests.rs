@@ -167,7 +167,7 @@ fn every_generated_formula_is_legal_canonical_and_distinct() {
             for f in &lu.formulae {
                 assert!(f.is_canonical(se, header), "{f:?}");
                 assert!(
-                    is_legal_use_formula(&tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space, f),
+                    is_legal_use_formula(&tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f),
                     "{f:?}"
                 );
                 let mut key = f.base_regs.clone();
