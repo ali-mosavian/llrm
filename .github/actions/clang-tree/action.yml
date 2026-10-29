@@ -4,6 +4,9 @@ inputs:
   kind:
     description: pin or m16.
     required: true
+  artifact:
+    description: '"true": also upload the tree as an artifact (toolchain.yml), for a pull request into main, which cannot read the caches saved on feat/parity (toolchain/clangfetch.sh).'
+    default: "false"
 runs:
   using: composite
   steps:
@@ -39,3 +42,13 @@ runs:
         key: llrm-${{ steps.tree.outputs.name }}
     - shell: bash
       run: ${{ steps.tree.outputs.dir }}/bin/clang --version
+    - if: inputs.artifact == 'true'
+      shell: bash
+      run: tar -C "${{ steps.tree.outputs.dir }}" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/tree.tar.zst"
+    - if: inputs.artifact == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: llrm-${{ steps.tree.outputs.name }}
+        path: ${{ runner.temp }}/tree.tar.zst
+        compression-level: 0
+        retention-days: 90
