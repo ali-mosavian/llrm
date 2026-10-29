@@ -8,4 +8,5 @@ pub mod hooks;
 pub mod function;
 pub mod globals;
 pub mod ids;
+pub mod lowering;
 pub mod pipeline;
