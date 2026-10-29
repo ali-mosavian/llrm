@@ -15,6 +15,7 @@ use llrm_wasm::emit::emit;
 use llrm_wasm::explicit_locals::explicit_locals;
 use llrm_wasm::mir::Function;
 use llrm_wasm::mir::ValType::I32;
+use llrm_wasm::reg_stackify::reg_stackify;
 use llrm_wasm::set_p2align::set_p2align_operands;
 
 pub const ENTRY: SDValue = SDValue { node: 0, res: 0 };
@@ -77,10 +78,21 @@ pub fn schedule(
 /// Selects every node reachable from `root` (operands first), then prints the
 /// function.
 pub fn function(
+    dag: TestDag,
+    name: &str,
+    params: usize,
+    root: u32,
+) -> Function {
+    pipeline(dag, name, params, root, false)
+}
+
+/// With `stackify`, the pin's -O0 order: RegStackify before ExplicitLocals.
+pub fn pipeline(
     mut dag: TestDag,
     name: &str,
     params: usize,
     root: u32,
+    stackify: bool,
 ) -> Function {
     let selector = Selector::new(table::TABLE);
     let mut hooks = WasmHooks::new(Cpu::Wasm32, false);
@@ -114,6 +126,9 @@ pub fn function(
     let mut f = emit(&dag, name, &vec![I32; params], &vec![I32; results], &order);
     argument_move(&mut f);
     set_p2align_operands(&mut f);
+    if stackify {
+        reg_stackify(&mut f);
+    }
     explicit_locals(&mut f);
     f
 }
@@ -121,18 +136,23 @@ pub fn function(
 /// `ld`, `st`, `addr` and `sum3` of `tests/golden/four.ll`, selected and
 /// through the passes.
 pub fn four() -> Vec<Function> {
+    four_with(false)
+}
+
+/// The same four functions through [`pipeline`].
+pub fn four_with(stackify: bool) -> Vec<Function> {
     let mut dag = TestDag::new();
     let p = argument(&mut dag, 0);
     let load =
         dag.add(memory(isd::LOAD, &[mvt::i32, mvt::Other], &[ENTRY, p, SDValue::new(0, 0)], Some(LoadExt::NonExt)));
     let r = ret(&mut dag, SDValue::new(load, 1), &[SDValue::new(load, 0)]);
-    let ld = function(dag, "ld", 1, r);
+    let ld = pipeline(dag, "ld", 1, r, stackify);
 
     let mut dag = TestDag::new();
     let (p, x) = (argument(&mut dag, 0), argument(&mut dag, 1));
     let store = dag.add(memory(isd::STORE, &[mvt::Other], &[ENTRY, x, p, SDValue::new(0, 0)], None));
     let r = ret(&mut dag, SDValue::new(store, 0), &[]);
-    let st = function(dag, "st", 2, r);
+    let st = pipeline(dag, "st", 2, r, stackify);
 
     let mut dag = TestDag::new();
     let address = dag.make_constant(64, mvt::i32);
@@ -143,14 +163,14 @@ pub fn four() -> Vec<Function> {
         Some(LoadExt::NonExt),
     ));
     let r = ret(&mut dag, SDValue::new(load, 1), &[SDValue::new(load, 0)]);
-    let addr = function(dag, "addr", 0, r);
+    let addr = pipeline(dag, "addr", 0, r, stackify);
 
     let mut dag = TestDag::new();
     let (a, b, c) = (argument(&mut dag, 0), argument(&mut dag, 1), argument(&mut dag, 2));
     let x = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[a, b]), 0);
     let y = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[x, c]), 0);
     let r = ret(&mut dag, ENTRY, &[y]);
-    let sum3 = function(dag, "sum3", 3, r);
+    let sum3 = pipeline(dag, "sum3", 3, r, stackify);
 
     vec![ld, st, addr, sum3]
 }

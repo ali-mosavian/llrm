@@ -19,3 +19,14 @@ fn the_four_functions_print_as_llc_does() {
         assert_eq!(print::function(&f), golden(&f.name), "{}", f.name);
     }
 }
+
+/// No golden (the pin's -O0 order has no oracle here): the text of the
+/// stackified functions, dumped for reading.
+#[test]
+fn the_stackified_functions_print() {
+    let text: String = common::four_with(true).iter().map(print::function).collect();
+    if let Some(path) = std::env::var_os("WASM_DUMP_TEXT") {
+        std::fs::write(path, &text).expect("dump");
+    }
+    assert!(!text.contains("local.set"), "the single-use values stay on the stack");
+}

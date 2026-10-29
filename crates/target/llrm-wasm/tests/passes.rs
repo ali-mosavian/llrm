@@ -276,3 +276,80 @@ fn a_copy_is_replaced_by_its_source() {
 
     assert_eq!(dump(&f), ["%1 = LOCAL_GET_I32 0", "RETURN %1"].map(String::from));
 }
+
+use llrm_wasm::reg_stackify::reg_stackify;
+
+/// From the pin's source (`Optimize == false`): a definition directly above its
+/// only use stays on the stack, so the load's result needs no local. The
+/// pin's -O0 differs from LLVM 20's here, which does not run the pass.
+#[test]
+fn a_load_feeding_the_return_stays_on_the_stack() {
+    let mut f = function(
+        1,
+        2,
+        vec![
+            arg(0, 0),
+            Inst::new(op::LOAD_I32_A32, &[Def(1), Imm(2), Imm(0), Use(0)]),
+            Inst::new(op::RETURN, &[Use(1)]),
+        ],
+    );
+
+    assert!(reg_stackify(&mut f));
+    explicit_locals(&mut f);
+
+    assert_eq!(dump(&f), ["%2 = LOCAL_GET_I32 0", "%1 = LOAD_I32_A32 2, 0, %2", "RETURN %1"].map(String::from));
+    assert!(f.locals.is_empty());
+}
+
+#[test]
+fn a_chain_of_adds_is_one_tree() {
+    let mut f = function(
+        3,
+        5,
+        vec![
+            arg(0, 2),
+            arg(1, 1),
+            arg(2, 0),
+            Inst::new(op::ADD_I32, &[Def(3), Use(2), Use(1)]),
+            Inst::new(op::ADD_I32, &[Def(4), Use(3), Use(0)]),
+            Inst::new(op::RETURN, &[Use(4)]),
+        ],
+    );
+
+    reg_stackify(&mut f);
+    explicit_locals(&mut f);
+
+    assert_eq!(
+        dump(&f),
+        [
+            "%6 = LOCAL_GET_I32 0",
+            "%5 = LOCAL_GET_I32 1",
+            "%3 = ADD_I32 %6, %5",
+            "%7 = LOCAL_GET_I32 2",
+            "%4 = ADD_I32 %3, %7",
+            "RETURN %4",
+        ]
+        .map(String::from)
+    );
+}
+
+/// The first operand's definition is not adjacent, the second's is: the add is
+/// commuted once so both stay on the stack.
+#[test]
+fn an_add_is_commuted_to_stackify_both_operands() {
+    let mut f = function(
+        0,
+        3,
+        vec![
+            Inst::new(op::CONST_I32, &[Def(0), Imm(7)]),
+            Inst::new(op::CONST_I32, &[Def(1), Imm(9)]),
+            Inst::new(op::ADD_I32, &[Def(2), Use(1), Use(0)]),
+            Inst::new(op::RETURN, &[Use(2)]),
+        ],
+    );
+
+    reg_stackify(&mut f);
+
+    assert!((0..3).all(|r| f.is_stackified(r)));
+    assert_eq!(f.blocks[0][2].operands, [Def(2), Use(0), Use(1)], "the operands swapped");
+}
