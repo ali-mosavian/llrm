@@ -466,7 +466,14 @@ def test_a_formatter_change_runs_its_tests_and_neither_step_needs_the_compiler_b
 
 
 def test_the_formatter_helper_tests_run_after_the_formatter():
-    assert gate.SERIAL_STEPS == frozenset({"rfmt-post"})
+    assert "rfmt-post" in gate.SERIAL_STEPS
+
+
+def test_the_qcport_runs_wait_for_the_other_steps_to_finish():
+    """Gate 4 ran qcport and oracle-qcport beside cv4 (541 CPU-s) and turbo: the emulator was starved and the runs drew differently from
+    Borland's (oracle-qcport: 219 frames, 0 polys against 62 and 37637) or stalled for 300 s (qcport). Pinned to two cores under busy
+    loops the run draws 0 frames on both sides. Their verdict is a count of frames in real time, so nothing else runs beside them."""
+    assert {"qcport", "oracle-qcport"} <= gate.SERIAL_STEPS
 
 
 def test_the_fmt_step_fails_only_once_enforced_and_the_switch_is_one_line_of_tiers_toml():
