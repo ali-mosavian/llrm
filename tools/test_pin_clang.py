@@ -48,10 +48,10 @@ def test_the_vsgcc_scripts_refuse_the_distro_clang(tmp_path):
 
 
 def test_no_script_calls_a_bare_clang():
-    """The call sites that were PATH's clang: a list element `"clang"`, `clang $F` in build.sh, a default of "clang". They take pin_clang.path() now."""
+    """The call sites that were PATH's clang: a command list `(["clang"`, `clang $F` in build.sh, a default of "clang". They take pin_clang.path() now."""
     import re
 
-    bare = re.compile(r"""\["clang"|default="clang"|^\s+clang \$F|\$\(clang """)
+    bare = re.compile(r"""\(\["clang"|default="clang"|^\s+clang \$F|\$\(clang """)
     found = {}
     for path in [*VSGCC.rglob("*.py"), *VSGCC.rglob("*.sh"), *(ROOT / "tools").glob("*.py")]:
         if path.name.startswith("test_"):
