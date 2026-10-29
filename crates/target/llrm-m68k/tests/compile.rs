@@ -153,3 +153,15 @@ fn selects_print_as_llc_does() {
         "m:\n\tmove.l\t(4,%sp), %d0\n\tmove.l\t(8,%sp), %d1\n\tcmp.l\t%d1, %d0\n\tbgt\t.LBB0_2\n\tmove.l\t%d1, %d0\n.LBB0_2:\n\trts\n"
     );
 }
+
+/// A load stored at once is one `move.b (src), (dst)` as `llc` has it
+/// (`isSafeStoreLoad`). It was never folded: two moves through `%d2`, which
+/// also cost a `movem` and a frame.
+#[test]
+fn a_loaded_byte_stored_at_once_is_one_move() {
+    let ir = "define void @c(ptr %d, ptr %s) {\n  %v = load i8, ptr %s\n  store i8 %v, ptr %d\n  ret void\n}";
+    assert_eq!(
+        compiled(ir, "c"),
+        "c:\n\tmove.l\t(8,%sp), %a0\n\tmove.l\t(4,%sp), %a1\n\tmove.b\t(%a0), (%a1)\n\trts\n"
+    );
+}
