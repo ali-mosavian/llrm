@@ -3046,3 +3046,51 @@ fn test_the_o1_and_o2_simplify_lists_both_match_the_registry() {
         let _ = pipeline::Fixed::linear(&applied, crate::parity::Phase::Simplify);
     }
 }
+
+/// Changes the body (an unused add is erased) and says it kept the dominators.
+struct KeepsDominators;
+
+impl llrm_mir::passes::FunctionPass for KeepsDominators {
+    fn name(&self) -> &'static str {
+        "keeps-dominators"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        let dead =
+            unit.function.walk().map(|(_, one)| one).find(|&one| unit.function.instruction(one).result.is_some());
+        if let Some(dead) =
+            dead.filter(|&one| unit.function.users(unit.function.instruction(one).result.unwrap()).is_empty())
+        {
+            unit.function.erase(dead).expect("unused");
+        }
+        llrm_mir::passes::PreservedAnalyses::none().preserve::<llrm_mir::passes::Dominators>().preserve_cfg()
+    }
+}
+
+/// A slot of several passes answered "everything changed" when one part
+/// changed the body, whatever the parts kept: the dominators a combine kept
+/// were recomputed by the next pass that asked, and the chain axis at N=512
+/// cost 45.6 G instructions, not 32.1 G (`mir combine` 29.0 G, 15.5 G). The
+/// slot keeps what every part kept, as LLVM's pass manager intersects them.
+#[test]
+fn a_slot_keeps_the_analyses_every_part_kept() {
+    let text = "define i16 @f(i16 %x) {\nb0:\n  %d = add i16 %x, 1\n  ret i16 %x\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(llrm_mir::passes::Outer::of(&module, None)));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let llrm_mir::module::Module { context, globals, metadata, .. } = &mut module;
+    let llrm_mir::module::GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    let mut unit =
+        llrm_mir::passes::Unit { context, layout: &layout, function, id: None, metadata, declared: &mut declared };
+    let mut slot =
+        super::Together { name: "slot@1", parts: vec![Box::new(KeepsDominators), Box::new(KeepsDominators)] };
+    let preserved = llrm_mir::passes::FunctionPass::run(&mut slot, &mut unit, &mut analyses);
+    assert!(!preserved.are_all_preserved(), "premise: the first part changed the body");
+    assert!(preserved.kept::<llrm_mir::passes::Dominators>(), "the slot dropped what both parts kept");
+    assert!(preserved.cfg_preserved());
+}
