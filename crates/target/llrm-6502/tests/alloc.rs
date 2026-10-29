@@ -955,3 +955,19 @@ fn a_word_equality_against_a_constant_has_no_constant_cells() {
         }
     }
 }
+
+/// Saving a callee-saved cell costs a save and a restore (ten bytes), so it goes to a value that is
+/// used in a loop and not to one read once after it: `i`, `n` and `hot` live across a call in the
+/// loop, `cold` across all of it. The choice was all or none for the function, so `cold` took a
+/// fourth cell; it is a spill slot.
+#[test]
+fn a_callee_saved_cell_goes_to_the_loop_values_only() {
+    let ir = "declare i8 @ext(i8)\n\
+              define i8 @mix(i8 %cold, i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]\n  \
+              %hot = phi i8 [ 0, %entry ], [ %hot2, %loop ]\n  %r = call i8 @ext(i8 %i)\n  %hot2 = add i8 %hot, %r\n  %i2 = add i8 %i, 1\n  \
+              %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  %out = add i8 %hot2, %cold\n  ret i8 %out\n}";
+    let text = compile(ir, "mix");
+    let saved = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  sta s_mix"))).count();
+    assert_eq!(saved, 3, "{text}");
+    assert!(text.contains("  lda rc2\n  sta s_mix"), "cold is in a slot: {text}");
+}
