@@ -761,7 +761,7 @@ name = "mir combine@1242"
 ratio = 3.6
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
-why = "measured 33.9 -> 114.3 Minstr (x3.38)"
+why = "measured 33.9 -> 114.3 Minstr (x3.38). The pin's instcombine on the same input, net of parse, reads x2.91 (N=128 -> 256) and x3.25 (256 -> 512): 23.1 -> 67.3 -> 219.0 Minstr; ours 23.6 -> 74.0 -> 256.0. Same shape, ours 1.0-1.17x the pin"
 
 [[debt]]
 kind = "steps"
@@ -780,15 +780,6 @@ ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 21.1 -> 57.6 Minstr (x2.73)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir gvn@787"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 22.4 -> 57.6 Minstr (x2.57)"
 
 [[debt]]
 kind = "steps"

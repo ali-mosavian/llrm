@@ -332,16 +332,15 @@ fn depth_first(
 ) -> Vec<BlockId> {
     let mut seen = llrm_mir::dense::IdSet::new();
     let mut order = Vec::new();
-    let mut stack = vec![(entry, 0_usize)];
+    let mut stack = vec![(function.successors(entry), 0_usize)];
     seen.insert(entry);
     order.push(entry);
-    while let Some((block, next)) = stack.last_mut() {
-        let successors = function.successors(*block);
+    while let Some((successors, next)) = stack.last_mut() {
         if let Some(&successor) = successors.get(*next) {
             *next += 1;
             if seen.insert(successor) {
                 order.push(successor);
-                stack.push((successor, 0));
+                stack.push((function.successors(successor), 0));
             }
         } else {
             stack.pop();

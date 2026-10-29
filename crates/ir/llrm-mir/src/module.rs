@@ -864,6 +864,7 @@ impl Function {
         #[cfg(test)]
         GENERIC_SUCCESSOR_SCANS.with(|count| count.set(count.get() + 1));
         let operands = instruction.operands.as_slice();
+        crate::counts::bump_by(crate::counts::Event::SwitchSuccessorsListed, operands.len());
         if operands.len() > SCAN {
             return Self::listed_once(operands);
         }
