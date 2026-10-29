@@ -657,7 +657,7 @@ fn pointer_cells(
                 && match *opcode {
                     op::COPY16 => true,
                     op::ADD16 => matches!(&operands[2], Machine::Reg(b) if constant(b)),
-                    op::LDP8 | op::LDP16 | op::STP8 | op::STP16 => at == 1,
+                    op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 => at == 1,
                     op::STZP | op::LEASP16 | op::JSRI => at == 0,
                     _ => false,
                 };
@@ -695,7 +695,7 @@ fn pointer_bases(items: &[Item]) -> HashSet<String> {
     for item in items {
         let Item::Inst(MInst { opcode, operands }) = item else { continue };
         let at = match *opcode {
-            op::LDP8 | op::LDP16 | op::STP8 | op::STP16 => 1,
+            op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 => 1,
             op::STZP | op::LEASP16 | op::JSRI => 0,
             _ => continue,
         };
@@ -1217,6 +1217,28 @@ pub fn build(
                     ));
                 }
             }
+            // `lda (p),y` with the index byte in `y`
+            op::LDPI8 => {
+                let ptr = b.pointer(name(&o[1])?)?;
+                b.require(ptr, Class::PAIR)?;
+                let index = b.byte(name(&o[2])?)?;
+                b.define(name(&o[0])?);
+                let d = b.byte(name(&o[0])?)?;
+                let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+                b.copy(y, index);
+                b.push(Inst::new(Kind::Op("LDPX"), vec![Operand::Def(acc), Operand::Use(ptr), Operand::Use(y)]));
+                b.copy(d, acc);
+            }
+            op::STPI8 => {
+                let ptr = b.pointer(name(&o[1])?)?;
+                b.require(ptr, Class::PAIR)?;
+                let index = b.byte(name(&o[2])?)?;
+                let value = b.byte(name(&o[0])?)?;
+                let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+                b.copy(acc, value);
+                b.copy(y, index);
+                b.push(Inst::new(Kind::Op("STPX"), vec![Operand::Use(acc), Operand::Use(ptr), Operand::Use(y)]));
+            }
             op::STZP => {
                 let ptr = b.pointer(name(&o[0])?)?;
                 b.require(ptr, Class::PAIR)?;
@@ -1666,6 +1688,8 @@ fn emit_with<const STACK: bool>(
                         writeln!(out, "  clc\n  lda {low}\n  adc #{k}\n  sta {low}\n  bcc _pa{made}\n  inc {high}\n_pa{made}:").unwrap();
                     }
                 }
+                (Kind::Op("LDPX"), _) => writeln!(out, "  lda ({}),y", register_name(lane(regs[1], 0))).unwrap(),
+                (Kind::Op("STPX"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("LDPY"), [_, _, Operand::Imm(off), _]) => {
                     writeln!(out, "  ldy #{off}\n  lda ({}),y", register_name(lane(regs[1], 0))).unwrap()
                 }

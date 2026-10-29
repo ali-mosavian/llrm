@@ -621,3 +621,37 @@ fn a_widened_byte_added_to_a_word_adds_an_immediate_zero() {
         assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), a + b);
     }
 }
+
+/// `p[i]` with `i` a byte did a word add of `p` and `i` into a scratch pair before the load; it is
+/// `lda (p),y` with `i` in `y`.
+#[test]
+fn a_byte_index_into_a_pointer_loads_and_stores_through_y() {
+    let ir = "define i8 @bump(ptr %p, i8 %i) {\n  %w = zext i8 %i to i16\n  %q = getelementptr i8, ptr %p, i16 %w\n  \
+              %v = load i8, ptr %q\n  %n = add i8 %v, 1\n  store i8 %n, ptr %q\n  ret i8 %v\n}";
+    let text = compile(ir, "bump");
+    assert!(text.contains("),y"), "{text}");
+    assert!(!text.contains("adc rc"), "{text}");
+    // table[3] = 7 becomes 8 and 7 comes back
+    let data = ".segment \"DATA\"\ntable: .byte 1, 2, 3, 7, 5\n.segment \"CODE\"\n";
+    let setup = "  lda #<table\n  sta rc2\n  lda #>table\n  sta rc3\n  lda #3\n  sta rc4\n";
+    let run = |after: &str| common::run_with("alloc-index", &format!("{setup}  jsr bump\n{after}"), &format!("{text}{data}"));
+    assert_eq!(run(""), 7);
+    assert_eq!(run("  ldy #3\n  lda table,y\n"), 8);
+}
+
+/// The sum of a byte table (`s += p[i]`) took the word-add path for the address on every trip: the
+/// widened load is the same indexed load.
+#[test]
+fn a_widened_byte_loaded_at_a_byte_index_uses_y() {
+    let ir = "define i16 @sum(ptr %p, i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]\n  \
+              %s = phi i16 [ 0, %entry ], [ %s2, %loop ]\n  %w = zext i8 %i to i16\n  %q = getelementptr i8, ptr %p, i16 %w\n  \
+              %v = load i8, ptr %q\n  %x = zext i8 %v to i16\n  %s2 = add i16 %s, %x\n  %i2 = add i8 %i, 1\n  \
+              %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  ret i16 %s2\n}";
+    let text = compile(ir, "sum");
+    assert!(!text.contains("adc rc2") && !text.contains("sta rc3"), "{text}");
+    let data = ".segment \"DATA\"\ntable: .byte 1, 2, 3, 200, 5\n.segment \"CODE\"\n";
+    let setup = "  lda #<table\n  sta rc2\n  lda #>table\n  sta rc3\n  lda #4\n  sta rc4\n";
+    let run = |after: &str| common::run_with("alloc-at", &format!("{setup}  jsr sum\n{after}"), &format!("{text}{data}"));
+    // 1 + 2 + 3 + 200 = 206
+    assert_eq!((run(""), run("  txa\n")), (206, 0));
+}
