@@ -62,11 +62,7 @@ impl Level {
             Self::O0 => pipeline::Options::none(),
             Self::O1 => pipeline::Options::basic(),
             // -O1 less what rewrites a loop a debugger steps through.
-            Self::Og => pipeline::Options {
-                loopidioms: false,
-                rounds: pipeline::Options::default().rounds,
-                ..pipeline::Options::basic()
-            },
+            Self::Og => pipeline::Options { loopidioms: false, ..pipeline::Options::basic() },
             Self::O2 => pipeline::Options::standard(),
             Self::O3 => pipeline::Options::speed(),
             Self::Omax => pipeline::Options::aggressive(),

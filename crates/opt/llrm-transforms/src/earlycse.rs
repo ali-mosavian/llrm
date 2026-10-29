@@ -65,9 +65,7 @@
 //! ```
 //!
 //! # Used by
-//! [`crate::pipeline`]'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`),
-//! under `Options::llvm_order`, on by default (`LLRM_NO_LLVM_ORDER` turns it
-//! off).
+//! [`crate::pipeline`]'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`).
 
 use std::rc::Rc;
 

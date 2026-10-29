@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/earlycse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/earlycse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:711bc783b6d6e60c378ee6ee68a5e220341fffc64082fddf71772b0f23873086 -->
+<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:ebe6013fb3dc975c51946718ee7804809735d676c6069f87117ffcf60d7855dc -->
 
 # earlycse
 
@@ -70,6 +70,4 @@ b0:
 ```
 
 ## Used by
-[`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`),
-under `Options::llvm_order`, on by default (`LLRM_NO_LLVM_ORDER` turns it
-off).
+[`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`).
