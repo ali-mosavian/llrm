@@ -95,6 +95,14 @@ impl PinRegisters for M68kPins {
     ) -> Option<u16> {
         REGISTERS.iter().find(|(_, one)| *one == id).map(|(number, _)| *number)
     }
+
+    /// `PC` has no register id here: the addressing-mode matchers still ask whether a base is it.
+    fn is_fixed(
+        &self,
+        register: u16,
+    ) -> bool {
+        register == pin::PC
+    }
 }
 
 /// What the scheduler reads of the instruction descriptions.
