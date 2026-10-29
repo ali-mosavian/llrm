@@ -227,18 +227,14 @@ pub struct Options {
     /// (`enable-unroll-and-jam`); it is on at -O3 and -Omax, where the
     /// particle row gains from it.
     pub unroll_and_jam: bool,
-    /// The passes run in LLVM's order, once each (`Fixed::linear`:
-    /// [`llvm_order`]), not in the rounds; on by default, `LLRM_NO_LLVM_ORDER`
-    /// turns it off.
-    pub llvm_order: bool,
-    /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
+    /// LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
     /// in the pin.
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
     pub mem2reg: bool,
-    /// Under `llvm_order` the SROA slots run the translated unit (`SROA.cpp`,
+    /// The SROA slots run the translated unit (`SROA.cpp`,
     /// [`crate::sroa`], with [`crate::mem2reg`]); on by default,
     /// `LLRM_NO_SROA` turns it off.
     pub sroa: bool,
@@ -286,7 +282,6 @@ impl Default for Options {
         Self {
             library: Vec::new(),
             optimize: true,
-            llvm_order: llvm_order_default(),
             rotate_slot: true,
             limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
@@ -560,7 +555,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
 /// stood in for MachineLICM and gcc's `pass_sink_code` (`hoist` again) have no
 /// counterpart there, and run only without the order or the LICM.
 pub fn llvm_motion(applied: &Applied) -> bool {
-    applied.options.llvm_order && applied.options.licm
+    applied.options.licm
 }
 
 /// Translations that have not joined the pipeline yet: `llrm-pass` and
@@ -661,12 +656,6 @@ impl FunctionPass for Together {
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
-}
-
-/// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
-/// default (PassBuilderPipelines.cpp at d1106deb71cc is the order otherwise).
-fn llvm_order_default() -> bool {
-    !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER")
 }
 
 /// The passes of `phase`, each once in the place LLVM runs it (the line is the
@@ -1010,8 +999,7 @@ pub fn slot_built(
     applied: &Applied,
     slot: &str,
 ) -> bool {
-    let mut options = applied.options.clone();
-    options.llvm_order = true;
+    let options = applied.options.clone();
     crate::parity::describe(slot).is_some_and(|(phase, ..)| {
         llvm_order(&Applied { options, ..Applied::default() }, phase).iter().any(|one| one.name() == slot)
     })
@@ -1047,20 +1035,16 @@ pub fn applied(
 
 /// What runs on each body before the interprocedural step: the rounds, or
 /// LLVM's early function pipeline, GlobalCleanup and function simplification
-/// once each (`Options::llvm_order`).
+/// once each.
 pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
-    if applied.options.llvm_order {
-        vec![
-            Fixed::linear(applied, Phase::Early),
-            Fixed::linear(applied, Phase::Cleanup),
-            Fixed::linear(applied, Phase::Simplify),
-            // DEVIATE: LLVM runs it after the interprocedural passes; here it
-            // closes the function stages.
-            Fixed::linear(applied, Phase::Late),
-        ]
-    } else {
-        vec![Fixed::new(applied)]
-    }
+    vec![
+        Fixed::linear(applied, Phase::Early),
+        Fixed::linear(applied, Phase::Cleanup),
+        Fixed::linear(applied, Phase::Simplify),
+        // DEVIATE: LLVM runs it after the interprocedural passes; here it
+        // closes the function stages.
+        Fixed::linear(applied, Phase::Late),
+    ]
 }
 
 /// `applied`, with what the pipeline did to each function.
@@ -1077,17 +1061,10 @@ pub fn recorded(
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
     }
-    let llvm_order = applied.options.llvm_order;
     // LLVM's GlobalsAA is made at `RequireAnalysisPass<GlobalsAA>` and
-    // `RecomputeGlobalsAAPass` alone, read cached in between; the rounds make
-    // it before each function pass.
-    if llvm_order {
-        manager.require_cached::<GlobalsAA>();
-        manager.require_cached::<GlobalsModRefAnalysis>();
-    } else {
-        manager.require::<GlobalsAA>();
-        manager.require::<GlobalsModRefAnalysis>();
-    }
+    // `RecomputeGlobalsAAPass` alone, read cached in between.
+    manager.require_cached::<GlobalsAA>();
+    manager.require_cached::<GlobalsModRefAnalysis>();
     manager.require::<Summaries>();
     manager.require_program::<ProgramSummaries>();
     // As LLVM's module pipeline starts with InferFunctionAttrs
@@ -1103,12 +1080,12 @@ pub fn recorded(
     let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
         // The walk simplifies each body: not a module-wide stage.
-        if at != 2 || !applied.options.llvm_order {
+        if at != 2 {
             manager.add(stage);
         }
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
         // first. `Phase::Simplify` runs there and not module-wide.
-        if at == 1 && applied.options.llvm_order {
+        if at == 1 {
             // `buildInlinerPipeline` (PassBuilderPipelines.cpp:997,
             // d1106deb71cc).
             manager.compute::<GlobalsAA>();
@@ -1126,7 +1103,7 @@ pub fn recorded(
         }
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
-        if at == 0 && applied.options.llvm_order {
+        if at == 0 {
             manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline });
         }
     }
@@ -1134,14 +1111,10 @@ pub fn recorded(
     // driver's whole-module step: a body it changes goes back through.
     let again_applied =
         Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
-    let mut again = if applied.options.llvm_order {
-        Fixed::linear(&again_applied, Phase::Simplify)
-    } else {
-        Fixed::new(&again_applied)
-    };
+    let mut again = Fixed::linear(&again_applied, Phase::Simplify);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
-    let late = (applied.options.llvm_order && applied.options.inline.recursive).then(|| {
+    let late = applied.options.inline.recursive.then(|| {
         let mut simplify = Fixed::linear(&again_applied, Phase::Simplify);
         crate::walk::SelfInline {
             simplify: Box::new(move |module, analyses, id, stage| {
@@ -1187,38 +1160,22 @@ pub fn recorded(
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
     // `ReversePostOrderFunctionAttrsPass` (PassBuilderPipelines.cpp:1542).
-    if llvm_order {
-        manager.add_module(crate::rpoattrs::ReversePostOrderFunctionAttrs);
-    }
+    manager.add_module(crate::rpoattrs::ReversePostOrderFunctionAttrs);
     // Once the callers that remain are the ones that stay: an internal function
     // they all call directly pops its own arguments.
     if applied.options.wanted("calleepop") {
         manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
     }
-    if llvm_order {
-        // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
-        // d1106deb71cc). DEVIATE: made even where not held, as GlobalDCE, which
-        // LLVM runs after this point, abandoned it here.
-        manager.recompute::<GlobalsAA>();
-        manager.recompute::<GlobalsModRefAnalysis>();
-    } else {
-        manager.freeze::<GlobalsAA>();
-        manager.freeze::<GlobalsModRefAnalysis>();
-    }
+    // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
+    // d1106deb71cc). DEVIATE: made even where not held, as GlobalDCE, which
+    // LLVM runs after this point, abandoned it here.
+    manager.recompute::<GlobalsAA>();
+    manager.recompute::<GlobalsModRefAnalysis>();
     // The summaries are made. The passes below move and rewrite what a function
     // does and add nothing to it, so they read these and do not make them
     // again after each edit, as gcc's passes after IPA read the modref
     // summaries it made there.
     manager.freeze::<Summaries>();
-    // gcc's `pass_ch` (passes.def:232, in `pass_all_optimizations`) runs after
-    // `pass_ipa_inline`: the inliner sizes a body before its header is copied.
-    // The loops it guards are re-simplified for the passes that follow. Not at
-    // -Os (`optimize_loop_for_size_p`): there only a loop proven to run is
-    // entered at its body, which the last `Rotate` does.
-    let guarded = copies_headers_after_ipa(applied);
-    for pass in header_copied(applied) {
-        manager.add_boxed(pass);
-    }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
     if applied.options.wanted("fixednarrow") {
@@ -1238,7 +1195,7 @@ pub fn recorded(
     manager.add(rotate::Rotate { proven: true, copy: false });
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
-    if !guarded && applied.options.wanted("hoist") && !llvm_motion(applied) {
+    if applied.options.wanted("hoist") && !llvm_motion(applied) {
         manager.add(crate::licm::Licm { apply: true, speculate: true });
     }
     // After hoist, which would move a constant `gep` out of its loop.
@@ -1276,7 +1233,7 @@ pub fn recorded(
     }
     // The pin's last module pass (PassBuilderPipelines.cpp#L1714), after every
     // body is final.
-    if applied.options.llvm_order && applied.options.optimize {
+    if applied.options.optimize {
         manager.add_program(constmerge::ConstantMerge);
     }
     // Last: what it names are the instructions selection sees.
@@ -1293,15 +1250,6 @@ pub fn recorded(
         }
     }
     done
-}
-
-/// Whether gcc's `pass_ch` stage (`header_copied`) runs after the
-/// interprocedural step. Not under LLVM's order: its LoopRotate copies the
-/// headers in its own slots (`duplicate_headers`), and the pin has no second
-/// pass over the loops there (d_faces: 52 M instructions at -O1, 41 M at -O2,
-/// 72 M at -O3).
-fn copies_headers_after_ipa(applied: &Applied) -> bool {
-    applied.options.copy_headers && !applied.options.prefers_size() && !applied.options.llvm_order
 }
 
 /// Each loop's counters chosen once, on the loop the passes before leave. LSR
@@ -1325,34 +1273,6 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // The remainder LSR wrote out as a quotient and a product, back to one
         // where the divide stays.
         passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));
-    }
-    passes
-}
-
-/// What `pass_ch` runs and what it leaves to clean: the loops' headers copied,
-/// the loops simplified again, what the copy leaves in the latch cleaned as
-/// gcc's DOM, forwprop and DCE do, and what a loop entered at its body runs
-/// at least once loads unchanged moved out before its counters are chosen, as
-/// LLVM runs LICM before LoopStrengthReduce. Only the copy has entered loops at
-/// their body by here; without it the last `Rotate` has not, and hoist follows
-/// it. Not at -Os (`optimize_loop_for_size_p`): there only a loop proven to run
-/// is entered at its body.
-pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
-    let mut passes: Vec<Box<dyn FunctionPass>> = Vec::new();
-    if !copies_headers_after_ipa(applied) {
-        return passes;
-    }
-    passes.push(Box::new(rotate::Rotate { proven: false, copy: true }));
-    passes.push(Box::new(loopsimplify::LoopSimplify));
-    passes.push(Box::new(lcssa::LoopClosedSSA));
-    passes.push(Box::new(fold::Fold));
-    passes.push(Box::new(algebraic::Algebraic { size: false, llvm: false }));
-    // A counted exit's values are numbers where the copy made its test the one
-    // that leaves.
-    passes.push(Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size: false }));
-    passes.push(Box::new(dead::Dead));
-    if applied.options.wanted("hoist") {
-        passes.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));
     }
     passes
 }
@@ -1463,7 +1383,6 @@ impl Fixed {
         let (phase, ..) = crate::parity::describe(slot).expect("a slot of the registry");
         let mut quiet = applied.clone();
         quiet.only = None;
-        quiet.options.llvm_order = true;
         let mut one = Self::linear(&quiet, phase);
         one.passes.retain(|pass| pass.name() == slot);
         one.only = true;
@@ -1471,7 +1390,7 @@ impl Fixed {
     }
 
     /// `passes` once each in order, no fixed point: LLVM's function pipelines
-    /// run a pass where it stands (`Options::llvm_order`).
+    /// run a pass where it stands.
     fn linear(
         applied: &Applied,
         phase: Phase,
