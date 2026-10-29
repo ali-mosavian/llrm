@@ -612,6 +612,24 @@ fn finding_the_parents_of_loops_looks_at_each_block_once_per_loop_around_it() {
     assert!(b * 100 <= a * 450, "32 loops: {a}, 128 loops: {b}");
 }
 
+/// The loops were kept up to date through each bridge by asking every loop
+/// whether the bridge joins it: with the loops in a row, `mir loopsimplify`
+/// read 10 / 27 / 84 Minstr for 512 / 1024 / 2048 branches at -O2 (steps of 2.7
+/// and 3.1: the square of the loops). A bridge is offered to the loops around
+/// its target only.
+#[test]
+fn a_bridge_is_offered_to_the_loops_around_its_target_not_to_every_loop() {
+    let probes = |n: usize| {
+        let before = super::bridge_probes();
+        let (_, after) = simplify(&entered_twice(n));
+        assert_eq!(shape(&after, "h0"), (1, 1, true));
+        super::bridge_probes() - before
+    };
+    let (a, b) = (probes(32), probes(128));
+    assert!(a > 0, "premise: bridges were made");
+    assert!(b * 100 <= a * 450, "32 loops: {a}, 128 loops: {b}");
+}
+
 /// Two latches that end in `invoke` kept the loop at two latches: the pass only
 /// regrouped `br` edges (`opt -passes=loop-simplify` gives `%head.backedge`).
 /// `qb-bounds` `@__main` kept 18 latches.
