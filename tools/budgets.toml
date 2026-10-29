@@ -731,10 +731,10 @@ why = "measured 124.6 -> 322.6 -> 15.2 (4N) Minstr (x2.59)"
 kind = "steps"
 axis = "cases"
 name = "mir decide@1244"
-ratio = 3.8
+ratio = 2.5
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
-why = "measured 53.4 -> 189.6 Minstr (x3.55)"
+why = "measured 4.7 -> 10.8 Minstr (x2.31) in the pipeline; alone on its input net of parse x2.04/2.02 at N=128/256/512 on input x2.0: linear, the rest is analysis state"
 
 [[debt]]
 kind = "steps"
@@ -812,10 +812,10 @@ why = "measured 14.8 -> 37.1 Minstr (x2.50)"
 kind = "steps"
 axis = "cases"
 name = "mir sroa@1179"
-ratio = 2.89
+ratio = 2.4
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: measured 7.3 -> 20.1 Minstr (x2.75); N=128/256/512: 7.3 / 20.1 / 62.8 Minstr (x2.7, x3.1), no event counter grows; cause not located"
+why = "measured 5.1 -> 11.5 Minstr (x2.27) in the pipeline; alone on its input net of parse x1.93/1.96 at N=128/256/512 on input x2.0 (pin sroa x2.0/2.03, ours 1.3x the pin): linear, the rest is analysis state"
 
 [[debt]]
 kind = "steps"
@@ -830,10 +830,10 @@ why = "measured 14.7 -> 36.8 Minstr (x2.50)"
 kind = "steps"
 axis = "cases"
 name = "mir decide@1178"
-ratio = 2.89
+ratio = 2.4
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
+why = "measured 5.1 -> 11.5 Minstr (x2.24) in the pipeline; same pass and shape as decide@1244, linear alone"
 
 [[debt]]
 kind = "steps"
