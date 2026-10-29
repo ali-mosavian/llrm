@@ -43,7 +43,7 @@ use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{IntPredicate, Opcode};
-use llrm_mir::tti::Tti;
+use llrm_mir::tti::{AddressingMode, Tti};
 use llrm_mir::types::Type as MirType;
 use llrm_support::hash::{HashMap, HashSet, IndexSet};
 
@@ -909,6 +909,11 @@ impl<'a, 'b> Collection<'a, 'b> {
         &mut self,
         se: &mut ScalarEvolution,
     ) {
+        // Outside uses are not collected when post-indexed addressing is
+        // favored: the instructions in the loop matter more.
+        if self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed {
+            return;
+        }
         let cx = self.cx;
         let lp = cx.loops.get_loop_for(self.l).expect("a loop");
         let mut worklist: Vec<Scev> = self.reg_uses.registers().to_vec();

@@ -72,6 +72,9 @@ pub enum Matcher {
     RecordChild(u8),
     RecordMemRef,
     CaptureGlueInput,
+    /// `OPC_CaptureDeactivationSymbol`: a trailing `ISD::DEACTIVATION_SYMBOL`
+    /// operand (PAuth).
+    CaptureDeactivationSymbol,
     MoveChild(u8),
     MoveSibling(u8),
     MoveParent,
@@ -96,6 +99,11 @@ pub enum Matcher {
         opcode: Opcode,
     },
     CheckType(Vt),
+    /// `OPC_CheckTypeRes`: the type of result `res` of the node.
+    CheckTypeRes {
+        res: u8,
+        vt: Vt,
+    },
     SwitchType,
     TypeCase {
         size: u32,
