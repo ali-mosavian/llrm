@@ -844,6 +844,14 @@ pub fn build(
             }
             op::ADD8 => b.alu("ADC", Some("CLC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::SUB8 => b.alu("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            // one register read and written: `d := a`, then `d` in place
+            op::INC8 | op::DEC8 => {
+                b.define(name(&o[0])?);
+                let (d, a) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?);
+                let step = if inst.opcode == op::INC8 { "INC" } else { "DEC" };
+                b.copy(d, a);
+                b.push(Inst::new(Kind::Op(step), vec![Operand::Def(d), Operand::Use(d)]));
+            }
             op::AND8 => b.alu("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR8 => b.alu("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::XOR8 => b.alu("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
@@ -1798,6 +1806,19 @@ fn emit_with<const STACK: bool>(
                     writeln!(out, "  cmp {}\n  bne _cz{made}", register_name(regs[4])).unwrap();
                     load(&mut out, regs[3]);
                     writeln!(out, "  cmp {}\n_cz{made}:", register_name(regs[5])).unwrap();
+                }
+                (Kind::Op(step @ ("INC" | "DEC")), _) => {
+                    let (inc, r) = (step == "INC", regs[0]);
+                    let (short, long) = if inc { ("in", "adc #1") } else { ("de", "sbc #1") };
+                    if r == reg::X || r == reg::Y {
+                        writeln!(out, "  {short}{}", register_name(r)).unwrap();
+                    } else if r != reg::A {
+                        writeln!(out, "  {short}c {}", register_name(r)).unwrap();
+                    } else if cmos {
+                        writeln!(out, "  {short}c a").unwrap();
+                    } else {
+                        writeln!(out, "  {}\n  {long}", if inc { "clc" } else { "sec" }).unwrap();
+                    }
                 }
                 (Kind::Op("CLC"), _) => out.push_str("  clc\n"),
                 (Kind::Op("SEC"), _) => out.push_str("  sec\n"),

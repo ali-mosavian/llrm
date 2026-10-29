@@ -153,3 +153,58 @@ fn a_byte_through_a_pointer_uses_the_unindexed_mode_on_the_65c02() {
         }
     }
 }
+
+const STEPS: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
+    define i8 @countdown(i8 %n) {\nentry:\n  %z = icmp eq i8 %n, 0\n  br i1 %z, label %done, label %loop\n\
+    loop:\n  %i = phi i8 [ %n, %entry ], [ %j, %loop ]\n  %steps = phi i8 [ 0, %entry ], [ %s2, %loop ]\n\
+      %j = sub i8 %i, 1\n  %s2 = add i8 %steps, 3\n  %c = icmp ne i8 %j, 0\n  br i1 %c, label %loop, label %done\n\
+    done:\n  %r = phi i8 [ 0, %entry ], [ %s2, %loop ]\n  ret i8 %r\n}\n\
+    define i8 @wrap(i8 %x) {\n  %a = add i8 %x, 1\n  %b = and i8 %a, 15\n  ret i8 %b\n}\n\
+    define i8 @drop(i8 %x) {\n  %a = add i8 %x, -1\n  %b = or i8 %a, 64\n  ret i8 %b\n}\n\
+    define void @bumpp(ptr %p) {\n  %v = load i8, ptr %p\n  %r = add i8 %v, 1\n  store i8 %r, ptr %p\n  ret void\n}\n\
+    define void @dropp(ptr %p) {\n  %v = load i8, ptr %p\n  %r = sub i8 %v, 1\n  store i8 %r, ptr %p\n  ret void\n}";
+
+fn steps(cpu: Cpu) -> String {
+    let module = llrm_mir::parse::module(STEPS).expect("parses");
+    ["countdown", "wrap", "drop", "bumpp", "dropp"]
+        .iter()
+        .map(|name| {
+            function_text(&module, name, &select_function(&module, name, cpu).expect("selects")).expect("emits")
+        })
+        .collect()
+}
+
+/// `x + 1` and `x - 1` went through the accumulator, `clc; adc #1` and
+/// `sec; sbc #1`, wherever the value lived: a counter in `x` was moved to `a`
+/// and back. They are `inx`/`dex`, `iny`/`dey`, `inc cell`/`dec cell` in
+/// place, and on the 65C02 `inc a`/`dec a` for a value that is in `a`. Both
+/// the `sub 1` and the `add -1` forms, and a wrap at 255 and at 0, run on
+/// sim65 and sim65c02. countdown(5) = 5 * 3 = 15; wrap(15) = 16 & 15 = 0;
+/// wrap(255) = 0 & 15 = 0; wrap(6) = 7; drop(0) = 255 | 64 = 255; drop(10) = 9 | 64 = 73;
+/// a byte loaded through a pointer, stepped and stored back (g = 7): 8 and 6.
+#[test]
+fn a_step_of_one_is_done_in_place() {
+    for (cpu, target) in [(Cpu::Mos6502, "sim6502"), (Cpu::W65c02, "sim65c02")] {
+        let text = steps(cpu);
+        // in a register or a cell a step is one instruction; a value in `a` on NMOS has no better than adc/sbc
+        let registers = text.split(".export bumpp").next().unwrap();
+        assert!(!registers.contains("adc #1") && !registers.contains("sbc #1"), "{target}:\n{text}");
+        let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
+        for (function, arg, want) in
+            [("countdown", 5, 15), ("countdown", 1, 3), ("wrap", 15, 0), ("wrap", 255, 0), ("wrap", 6, 7), ("drop", 0, 255), ("drop", 10, 73)]
+        {
+            let main = format!("  lda #{arg}\n  sta rc2\n  jsr {function}\n");
+            let got = common::run_on(target, &format!("step-{function}-{arg}"), &main, &text).0;
+            assert_eq!(got, want, "{function}({arg}) on {target}");
+        }
+        for (function, want) in [("bumpp", 8), ("dropp", 6)] {
+            let main = format!("  lda #<g\n  sta rc2\n  lda #>g\n  sta rc3\n  jsr {function}\n  lda g\n");
+            let got = common::run_on(target, &format!("step-{function}"), &main, &format!("{text}{G_DATA}")).0;
+            assert_eq!(got, want, "{function} on {target}");
+        }
+    }
+    let (nmos, cmos) = (steps(Cpu::Mos6502), steps(Cpu::W65c02));
+    assert!(nmos.contains("adc #1") && !nmos.contains("inc a") && !nmos.contains("dec a"), "{nmos}");
+    assert!(cmos.contains("  inc a\n") && cmos.contains("  dec a\n"), "{cmos}");
+    assert!(!cmos.contains("adc #1") && !cmos.contains("sbc #1"), "{cmos}");
+}
