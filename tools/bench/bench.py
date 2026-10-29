@@ -200,21 +200,9 @@ def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     return flags
 
 
-FLOAT_FLAG = "-fexcess-precision=standard"
-
-
-def float_flags(variant: "Variant") -> list[str]:
-    """The flag a float row is measured with: Nib's f32 is C's fast mode (only memory stores round), so a program's result may differ by an ulp with what stays in an x87
-    register across a loop (nbody_single printed 86015 for 86016 once LoopRotate was on, #3218); a row against a reference is measured with the rounding on, and records it
-    (docs/architecture/redesign-plan.md, floats)."""
-    if variant.language == "nib" and re.search(r"\bf(?:32|64)\b", variant.source.read_text()):
-        return [FLOAT_FLAG]
-    return []
-
-
-def nib_flags(variant: "Variant | None" = None) -> list[str]:
+def nib_flags() -> list[str]:
     """What nib-build.sh is given for a Nib benchmark's compile."""
-    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *(float_flags(variant) if variant else []), *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
 
 
 def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[str, list[str], Path]]:
@@ -223,7 +211,7 @@ def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[st
     nib-build.sh gives llrm-nib; its runtime and foreign parts do not depend on the program."""
     obj = work / f"{stem}.obj"
     if variant.language == "nib":
-        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags(variant)], obj)]
+        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags()], obj)]
     if variant.language == FLAT:
         source = qbbuild.flat_source(variant.source)
         return [("llrm-qb", qbbuild.compile_arguments(source, (*compile_flags(variant, opt), "-g"), qbbuild.FLAT, obj), obj)]
@@ -257,7 +245,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
             done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
-                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags(variant))})
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags())})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
             # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
@@ -594,9 +582,6 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
         counted = [(key, job) for key, job in jobs if job is not None]
         for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
             out[key] = counts
-    for (_, variant), key in ((one, (one[1].name, one[1].language, opt)) for one in todo):
-        if key in out and (flags := float_flags(variant)) and "skip" not in out[key]:
-            out[key] = {**out[key], "flags": flags}
     stage(f"{opt}: counted {len(jobs)} programs")
     out |= measure_flat(flat, folder / "flat")
     stage(f"{opt}: flat target done")
@@ -744,6 +729,27 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -
     return problems
 
 
+def clock_limits() -> dict[str, int]:
+    """The -Os m16 rows whose 486 clocks are above main's and may not grow (clock_limits.toml, one debt class each in docs/working/ci.md):
+    row label -> clocks it may reach. A row with none is not judged."""
+    return tomllib.loads((Path(__file__).parent / "clock_limits.toml").read_text()).get("clocks", {})
+
+
+def main_clocks() -> dict[str, int]:
+    """Main's -Os m16 clocks per row (main_clocks.toml): what a row may reach without an entry in clock_limits.toml."""
+    return tomllib.loads((Path(__file__).parent / "main_clocks.toml").read_text()).get("clocks", {})
+
+
+def clock_problems(label: str, got: dict, limits: dict[str, int], main: dict[str, int] | None = None) -> list[str]:
+    """A listed row above its limit fails: the clocks the step measured already, the same harness as main's. A row above main's with
+    no entry fails too: without it the first run of a regressed row would be red only by luck of the list."""
+    if label in limits and got.get("clocks", 0) > limits[label]:
+        return [f"{label}: clocks {got['clocks']} > limit {limits[label]} (tools/bench/clock_limits.toml)"]
+    if label not in limits and main and got.get("clocks", 0) > main.get(label, float("inf")):
+        return [f"{label}: clocks {got['clocks']} > main's {main[label]} and no entry in tools/bench/clock_limits.toml"]
+    return []
+
+
 def time_against(label: str, got: dict, want: dict | None) -> list[str]:
     """A timed-only program has no count to gate: its own kernel time does, with the time tolerance, against the base's (worse only)."""
     if want is None or "kernel_ms" not in got or "kernel_ms" not in want:
@@ -790,6 +796,8 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
     each benchmark's expected.toml."""
     problems = []
     waived = basecounts.waivers(ROOT)
+    limits = clock_limits()
+    main = main_clocks()
     for directory in benchmarks(selected):
         name = str(directory.relative_to(BENCH))
         baseline = read_expected(directory)
@@ -808,13 +816,12 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                     problems.append(f"{label}: works; remove its known mark ({got['xpass']})")
                 elif "error" in got:
                     problems.append(f"{label}: {got['error']}")
-                elif float_flags(variant) and got.get("flags") != float_flags(variant):
-                    problems.append(f"{label}: a float row is measured with {FLOAT_FLAG} and records it in the row; this one records {got.get('flags')}")
                 else:
                     if variant.language == "bq32" and got.get("instructions", 0) >= qb32.BENCH_RATE * 55:
                         problems.append(f"{label}: {got['instructions']} instructions run long enough for a timer tick (55 ms at the flat rate): the extender's handler lands inside the count")
                     want = baseline.get(variant.language, {}).get(opt)
                     problems += against(label, got, want, waived)
+                    problems += clock_problems(label, got, limits, main)
                     if variant.timed_only:
                         problems += time_against(label, got, want)
                     for reference in REFERENCES.get(variant.language, ()):
