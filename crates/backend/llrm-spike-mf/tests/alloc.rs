@@ -332,6 +332,22 @@ impl Target for Words {
     ) -> bool {
         one == other || [(W, R0), (W, R1), (R0, W), (R1, W)].contains(&(one, other))
     }
+
+    fn spill_store(
+        _: bool,
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(op("spill_store", vec![Operand::Use(register), Operand::Frame(slot)]))
+    }
+
+    fn spill_load(
+        _: bool,
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(op("spill_load", vec![Operand::Def(register), Operand::Frame(slot)]))
+    }
 }
 
 /// A word and a byte live together may not share storage: the byte does not
@@ -357,4 +373,40 @@ fn a_word_and_a_byte_live_together_do_not_share_storage() {
     let assignment = GraphColoring::<Words>::default().allocate(&function).unwrap().0;
     assert_eq!(assignment[0], W);
     assert_eq!(assignment[1], R2, "the byte takes the register the word does not cover");
+}
+
+/// Three bytes fill `r0`, `r1` and `r2`; a word defined meanwhile needs `w`,
+/// which covers `r0` and `r1`, so two bytes must go to slots. The victims are
+/// bytes that overlap `w` (no byte's candidates *contain* it), and not the word
+/// itself, whose range is its definition and one use. Before the overlap rule
+/// the allocation failed with "nothing to spill".
+#[test]
+fn a_word_that_does_not_fit_spills_a_byte_it_overlaps() {
+    let mut function: MFunction<bool> = MFunction::new("f");
+    function.classes = vec![false, false, false, true];
+    let uses = |regs: &[u32]| op("use", regs.iter().map(|r| Operand::Use(v(*r))).collect());
+    function
+        .blocks
+        .push(
+            Block {
+                id: 0,
+                insts: vec![
+                    op("def", vec![Operand::Def(v(0))]),
+                    op("def", vec![Operand::Def(v(1))]),
+                    op("def", vec![Operand::Def(v(2))]),
+                    op("defw", vec![Operand::Def(v(3))]),
+                    uses(&[3]),
+                    uses(&[0]),
+                    uses(&[0]),
+                    uses(&[1]),
+                    uses(&[1]),
+                    uses(&[2]),
+                    uses(&[2]),
+                ],
+                phis: vec![],
+            },
+        );
+    let (assignment, slots) = allocate_spilling::<Words>(&mut function, 0).unwrap();
+    assert_eq!(slots.len(), 2);
+    assert_eq!(assignment.0[3], W);
 }

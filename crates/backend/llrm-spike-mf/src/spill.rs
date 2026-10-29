@@ -109,23 +109,53 @@ fn temporary_index(register: Reg) -> u32 {
     }
 }
 
-/// The register to spill for `failed`: of the registers crowding it that share
-/// a candidate with it, the cheapest to spill that is not itself a spill
-/// temporary.
+/// Whether every definition and use of `v` is in one run of instructions of
+/// one block: spilling it leaves the same run, so frees nothing.
+fn already_minimal<C>(
+    function: &MFunction<C>,
+    v: u32,
+) -> bool {
+    let mut places = function
+        .blocks
+        .iter()
+        .enumerate()
+        .flat_map(
+            |(at, block)| block
+                .insts
+                .iter()
+                .enumerate()
+                .filter(move |(_, inst)| mentions(inst, v) != (false, false))
+                .map(move |(i, _)| (at, i)),
+        );
+    let Some((block, first)) = places.next() else { return true };
+    let mut last = first;
+    for (at, i) in places {
+        if at != block || i != last + 1 {
+            return false;
+        }
+        last = i;
+    }
+    true
+}
+
+/// The register to spill for `failed`: the cheapest that spilling can free
+/// (not a spill temporary, not already as short as a range gets) of those
+/// holding a register `failed` could have used and `failed` itself; failing
+/// that, of the crowd.
 fn victim<T: Target>(
     function: &MFunction<T::Class>,
     failed: &Uncolourable,
     temporaries: &HashSet<u32>,
 ) -> Option<u32> {
-    let wanted = T::candidates(function.classes[failed.vreg as usize]);
     let cost = costs(function);
-    failed
-        .crowd
-        .iter()
-        .copied()
-        .filter(|u| !temporaries.contains(u))
-        .filter(|u| T::candidates(function.classes[*u as usize]).iter().any(|root| wanted.contains(root)))
-        .min_by_key(|u| (cost[*u as usize], std::cmp::Reverse(*u)))
+    let cheapest = |from: &[u32]| {
+        from.iter()
+            .copied()
+            .filter(|u| !temporaries.contains(u) && !already_minimal(function, *u))
+            .min_by_key(|u| (cost[*u as usize], std::cmp::Reverse(*u)))
+    };
+    let near: Vec<u32> = failed.blockers.iter().copied().chain([failed.vreg]).collect();
+    cheapest(&near).or_else(|| cheapest(&failed.crowd))
 }
 
 /// Allocate `function`, spilling until it fits; slot numbers start at

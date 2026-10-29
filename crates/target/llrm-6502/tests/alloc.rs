@@ -177,3 +177,69 @@ fn a_recursive_function_is_refused_not_miscompiled() {
         assert!(why.contains("recursive"), "{why}");
     }
 }
+
+fn on_the_allocator(
+    ir: &str,
+    name: &str,
+) -> bool {
+    let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let selection = select_function(&module, name, Cpu::Mos6502).expect("selects");
+    let (items, _) = llrm_6502::select::function_items(&module, name, &selection).expect("items");
+    llrm_6502::alloc::build(name, &items).is_ok()
+}
+
+const SUMP: &str = "define i8 @sump(ptr %p, i8 %n) {
+entry:
+  %z = icmp eq i8 %n, 0
+  br i1 %z, label %done, label %loop
+loop:
+  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]
+  %s = phi i8 [ 0, %entry ], [ %s2, %loop ]
+  %w = zext i8 %i to i16
+  %q = getelementptr i8, ptr %p, i16 %w
+  %v = load i8, ptr %q
+  %s2 = add i8 %s, %v
+  %i2 = add i8 %i, 1
+  %c = icmp eq i8 %i2, %n
+  br i1 %c, label %done, label %loop
+done:
+  %r = phi i8 [ 0, %entry ], [ %s2, %loop ]
+  ret i8 %r
+}";
+
+/// A byte sum through a pointer argument: the pointer is a zero-page pair
+/// (`lda (rc),y`), and the function is built by the allocator, not the cell
+/// path (which had no pair class). data = 3 1 4 1, n = 4: 9.
+#[test]
+fn a_sum_through_a_pointer_runs_on_the_allocator() {
+    assert!(on_the_allocator(SUMP, "sump"));
+    let text = compile(SUMP, "sump", true);
+    assert!(text.contains("),y"), "{text}");
+    let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
+    let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #4\n  sta rc4\n";
+    assert_eq!(common::run_with("alloc-sump", &format!("{setup}  jsr sump\n"), &format!("{text}{data}")), 9);
+}
+
+/// A pointer live across a call is spilled as a pair and comes back whole:
+/// the second read through it sees the same bytes. data = 3 1 4 1:
+/// 4 + 15 + 1 = 20.
+#[test]
+fn a_pointer_live_across_a_call_survives_it() {
+    let ir = "define i8 @keep(ptr %p, i8 %a) {
+  %x = getelementptr i8, ptr %p, i16 2
+  %u = load i8, ptr %x
+  %m = mul i8 %a, 3
+  %y = getelementptr i8, ptr %p, i16 3
+  %w = load i8, ptr %y
+  %s = add i8 %u, %m
+  %t = add i8 %s, %w
+  ret i8 %t
+}";
+    assert!(on_the_allocator(ir, "keep"));
+    let text = compile(ir, "keep", true);
+    let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
+    let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #5\n  sta rc4\n";
+    assert!(text.contains("s_keep_"), "no spill:\n{text}");
+    assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 20);
+}

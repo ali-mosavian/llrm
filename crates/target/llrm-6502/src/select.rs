@@ -154,8 +154,8 @@ pub fn function_text_with(
         let (code, slots) = alloc::emit(function, &labels)?;
         let mut body = format!(".export {name}\n{code}");
         body.push_str(".segment \"BSS\"\n");
-        for slot in slots {
-            writeln!(body, "{slot}: .res 1").unwrap();
+        for (slot, size) in slots {
+            writeln!(body, "{slot}: .res {size}").unwrap();
         }
         body.push_str(".segment \"CODE\"\n");
         return Ok(body);

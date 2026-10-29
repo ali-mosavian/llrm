@@ -34,7 +34,10 @@ impl Class {
     const X: u8 = 2;
     const Y: u8 = 4;
     const M: u8 = 8;
+    const P: u8 = 16;
     pub const ANY: Class = Class(15);
+    /// A zero-page pair, for `(zp),y`.
+    pub const PAIR: Class = Class(Class::P);
     /// What an ALU instruction reads as its second operand.
     pub const MEM: Class = Class(Class::M);
 }
@@ -46,6 +49,23 @@ fn rc(n: u8) -> RegId {
 /// The zero-page bytes a value may live in: the ones a call clobbers.
 fn cells() -> impl Iterator<Item = RegId> {
     (2..8).map(rc)
+}
+
+/// The pairs a pointer may live in: `rs1`..`rs3`, over `rc2`..`rc7`.
+fn pairs() -> impl Iterator<Item = RegId> {
+    [reg::RS1, reg::RS2, reg::RS3].into_iter()
+}
+
+fn is_pair(register: RegId) -> bool {
+    pairs().any(|one| one == register)
+}
+
+/// The zero-page byte of a pair: lane 0 is the low byte.
+fn lane(
+    pair: RegId,
+    lane: u8,
+) -> RegId {
+    rc(2 * (pair.index() as u8 - reg::RS0.index() as u8) + lane)
 }
 
 fn is_cell(register: RegId) -> bool {
@@ -85,6 +105,9 @@ impl Target for Mos {
         if class.0 & Class::A != 0 {
             out.push(reg::A);
         }
+        if class.0 & Class::P != 0 {
+            out.extend(pairs());
+        }
         out
     }
 
@@ -105,7 +128,16 @@ impl Target for Mos {
     }
 
     fn caller_saved() -> Vec<RegId> {
-        [reg::A, reg::X, reg::Y].into_iter().chain(cells()).collect()
+        [reg::A, reg::X, reg::Y].into_iter().chain(cells()).chain(pairs()).collect()
+    }
+
+    fn overlaps(
+        one: RegId,
+        other: RegId,
+    ) -> bool {
+        one == other
+            || (is_pair(one) && (lane(one, 0) == other || lane(one, 1) == other))
+            || (is_pair(other) && (lane(other, 0) == one || lane(other, 1) == one))
     }
 
     fn spill_store(
@@ -132,6 +164,11 @@ pub struct Unsupported(pub String);
 struct Builder {
     function: MFunction<Class>,
     bytes: HashMap<String, Reg>,
+    /// Word cells used as pointers: one pair register, not two bytes.
+    pointers: HashSet<String>,
+    /// Pointers written as two bytes, packed into their pair after the
+    /// instruction.
+    packs: Vec<(Reg, Reg, Reg)>,
     /// Cells defined once, by an immediate load: they fold into the user.
     constants: HashMap<String, i64>,
     /// The block each label names.
@@ -189,6 +226,80 @@ impl Builder {
     }
 
     /// The low and high byte of a pair: `rsN`, or a word cell.
+    /// The low and high byte of a word to read: a pointer cell is unpacked
+    /// into two new bytes.
+    fn read_word(
+        &mut self,
+        name: &str,
+    ) -> Result<(Reg, Reg), Unsupported> {
+        if !self.pointers.contains(name) {
+            return self.word(name);
+        }
+        let pair = self.pointer(name)?;
+        let (low, high) = (self.fresh(), self.fresh());
+        let mut unpack = Inst::new(Kind::Op("UNPACK"), vec![Operand::Def(low), Operand::Def(high), Operand::Use(pair)]);
+        unpack.early_clobber = true;
+        self.push(unpack);
+        Ok((low, high))
+    }
+
+    /// The bytes to write a word through: a pointer cell gets two new bytes
+    /// and is packed after the instruction.
+    fn write_word(
+        &mut self,
+        name: &str,
+    ) -> Result<(Reg, Reg), Unsupported> {
+        self.define(name);
+        if !self.pointers.contains(name) {
+            return self.word(name);
+        }
+        let pair = self.pointer(name)?;
+        let (low, high) = (self.fresh(), self.fresh());
+        self.packs.push((pair, low, high));
+        Ok((low, high))
+    }
+
+    fn flush_packs(&mut self) {
+        for (pair, low, high) in std::mem::take(&mut self.packs) {
+            let mut pack = Inst::new(Kind::Op("PACK"), vec![Operand::Def(pair), Operand::Use(low), Operand::Use(high)]);
+            pack.early_clobber = true;
+            self.push(pack);
+        }
+    }
+
+    /// The pair register of a pointer cell or of `rsN`.
+    fn pointer(
+        &mut self,
+        name: &str,
+    ) -> Result<Reg, Unsupported> {
+        if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()) {
+            return match n {
+                1 => Ok(Reg::Phys(reg::RS1)),
+                2 => Ok(Reg::Phys(reg::RS2)),
+                3 => Ok(Reg::Phys(reg::RS3)),
+                _ => Err(Unsupported(format!("pair {name}"))),
+            };
+        }
+        if !self.pointers.contains(name) {
+            return Err(Unsupported(format!("{name} is not a pointer cell")));
+        }
+        if let Some(r) = self.bytes.get(name) {
+            return Ok(*r);
+        }
+        self.function.classes.push(Class::PAIR);
+        let r = Reg::Virt(self.function.classes.len() as u32 - 1);
+        self.bytes.insert(name.to_owned(), r);
+        Ok(r)
+    }
+
+    /// Whether `name` is held as a pair register.
+    fn in_pair(
+        &self,
+        name: &str,
+    ) -> bool {
+        self.pointers.contains(name) || matches!(name, "rs1" | "rs2" | "rs3")
+    }
+
     fn word(
         &mut self,
         name: &str,
@@ -243,7 +354,7 @@ impl Builder {
         }
         let acc = Reg::Phys(reg::A);
         let (lhs, rhs) = if word {
-            let ((al, ah), (bl, bh)) = (self.word(&a.0)?, self.word(&b.0)?);
+            let ((al, ah), (bl, bh)) = (self.read_word(&a.0)?, self.read_word(&b.0)?);
             for r in [bl, bh] {
                 self.require(r, Class::MEM)?;
             }
@@ -362,8 +473,9 @@ impl Builder {
         a: &str,
         b: &str,
     ) -> Result<(), Unsupported> {
-        self.define(d);
-        let ((dl, dh), (al, ah), (bl, bh)) = (self.word(d)?, self.word(a)?, self.word(b)?);
+        let (al, ah) = self.read_word(a)?;
+        let (bl, bh) = self.read_word(b)?;
+        let (dl, dh) = self.write_word(d)?;
         let acc = Reg::Phys(reg::A);
         if let Some(carry) = carry {
             self.push(Inst::new(Kind::Op(carry), vec![]));
@@ -390,6 +502,26 @@ fn immediate(operand: &Machine) -> Result<i64, Unsupported> {
         Machine::Imm(value) => Ok(*value),
         other => Err(Unsupported(format!("operand {other:?}"))),
     }
+}
+
+/// The word cells that are a pointer somewhere: the base of a `(zp),y`
+/// access, or the address of a frame object.
+fn pointer_cells(items: &[Item]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for item in items {
+        let Item::Inst(MInst { opcode, operands }) = item else { continue };
+        let at = match *opcode {
+            op::LDP8 | op::LDP16 | op::STP8 | op::STP16 => 1,
+            op::STZP | op::LEASP16 => 0,
+            _ => continue,
+        };
+        if let Some(Machine::Reg(cell)) = operands.get(at)
+            && cell.starts_with("w_")
+        {
+            out.insert(cell.clone());
+        }
+    }
+    out
 }
 
 /// The cells defined by exactly one `LDI8`, with their values.
@@ -439,6 +571,8 @@ pub fn build(
     let mut b = Builder {
         function: MFunction::new(name_of_function),
         bytes: HashMap::new(),
+        pointers: pointer_cells(items),
+        packs: Vec::new(),
         constants: constants(items),
         block_of,
         versions: HashMap::new(),
@@ -472,10 +606,17 @@ pub fn build(
                 b.copy(d, s);
             }
             op::COPY16 => {
-                b.define(name(&o[0])?);
-                let ((dl, dh), (sl, sh)) = (b.word(name(&o[0])?)?, b.word(name(&o[1])?)?);
-                b.copy(dl, sl);
-                b.copy(dh, sh);
+                let (d, src) = (name(&o[0])?, name(&o[1])?);
+                if b.in_pair(d) && b.in_pair(src) {
+                    b.define(d);
+                    let (to, from) = (b.pointer(d)?, b.pointer(src)?);
+                    b.copy(to, from);
+                } else {
+                    let (sl, sh) = b.read_word(src)?;
+                    let (dl, dh) = b.write_word(d)?;
+                    b.copy(dl, sl);
+                    b.copy(dh, sh);
+                }
             }
             op::LDI8 => {
                 b.define(name(&o[0])?);
@@ -484,15 +625,13 @@ pub fn build(
             }
             op::LDI16 if matches!(&o[1], Machine::Label(_)) => {
                 let Machine::Label(symbol) = &o[1] else { unreachable!() };
-                b.define(name(&o[0])?);
-                let (low, high) = b.word(name(&o[0])?)?;
+                let (low, high) = b.write_word(name(&o[0])?)?;
                 for (d, half) in [(low, 0), (high, 1)] {
                     b.push(Inst::new(Kind::Op("LDS"), vec![Operand::Def(d), Operand::Symbol(symbol.clone(), half)]));
                 }
             }
             op::LDI16 => {
-                b.define(name(&o[0])?);
-                let (low, high) = b.word(name(&o[0])?)?;
+                let (low, high) = b.write_word(name(&o[0])?)?;
                 let value = immediate(&o[1])?;
                 for (d, byte) in [(low, value & 0xFF), (high, (value >> 8) & 0xFF)] {
                     b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(d), Operand::Imm(byte)]));
@@ -643,9 +782,9 @@ pub fn build(
             }
             op::CMOV16 => {
                 b.redo_compare()?;
-                b.define(name(&o[0])?);
-                let ((dl, dh), (fl, fh), (tl, th)) =
-                    (b.word(name(&o[0])?)?, b.word(name(&o[1])?)?, b.word(name(&o[2])?)?);
+                let (fl, fh) = b.read_word(name(&o[1])?)?;
+                let (tl, th) = b.read_word(name(&o[2])?)?;
+                let (dl, dh) = b.write_word(name(&o[0])?)?;
                 for r in [fl, fh, tl, th] {
                     b.require(r, Class(Class::X | Class::Y | Class::M))?;
                 }
@@ -656,6 +795,78 @@ pub fn build(
                 cmov.reads_flags = true;
                 cmov.early_clobber = true;
                 b.push(cmov);
+            }
+            op::LDP8 | op::LDP16 => {
+                let ptr = b.pointer(name(&o[1])?)?;
+                b.require(ptr, Class::PAIR)?;
+                let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+                let wide = inst.opcode == op::LDP16;
+                let (dl, dh) = if wide {
+                    b.write_word(name(&o[0])?)?
+                } else {
+                    b.define(name(&o[0])?);
+                    (b.byte(name(&o[0])?)?, Reg::Phys(reg::A))
+                };
+                b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(y), Operand::Imm(immediate(&o[2])?)]));
+                b.push(Inst::new(Kind::Op("LDPY"), vec![Operand::Def(acc), Operand::Use(ptr), Operand::Use(y)]));
+                b.copy(dl, acc);
+                if wide {
+                    b.push(Inst::new(Kind::Op("INY"), vec![Operand::Def(y), Operand::Use(y)]));
+                    b.push(Inst::new(Kind::Op("LDPY"), vec![Operand::Def(acc), Operand::Use(ptr), Operand::Use(y)]));
+                    b.copy(dh, acc);
+                }
+            }
+            op::STP8 | op::STP16 => {
+                let ptr = b.pointer(name(&o[1])?)?;
+                b.require(ptr, Class::PAIR)?;
+                let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+                let wide = inst.opcode == op::STP16;
+                let (sl, sh) =
+                    if wide { b.read_word(name(&o[0])?)? } else { (b.byte(name(&o[0])?)?, Reg::Phys(reg::A)) };
+                b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(y), Operand::Imm(immediate(&o[2])?)]));
+                b.copy(acc, sl);
+                b.push(Inst::new(Kind::Op("STPY"), vec![Operand::Use(acc), Operand::Use(ptr), Operand::Use(y)]));
+                if wide {
+                    b.push(Inst::new(Kind::Op("INY"), vec![Operand::Def(y), Operand::Use(y)]));
+                    b.copy(acc, sh);
+                    b.push(Inst::new(Kind::Op("STPY"), vec![Operand::Use(acc), Operand::Use(ptr), Operand::Use(y)]));
+                }
+            }
+            op::STZP => {
+                let ptr = b.pointer(name(&o[0])?)?;
+                b.require(ptr, Class::PAIR)?;
+                let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+                let off = immediate(&o[1])?;
+                b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(acc), Operand::Imm(0)]));
+                if off == 0 {
+                    b.push(Inst::new(Kind::Op("STP0"), vec![Operand::Use(acc), Operand::Use(ptr)]));
+                } else {
+                    b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(y), Operand::Imm(off)]));
+                    b.push(Inst::new(Kind::Op("STPY"), vec![Operand::Use(acc), Operand::Use(ptr), Operand::Use(y)]));
+                }
+            }
+            // d := rs0 + n; and rs0 := rs0 + n for the frame
+            op::LEASP16 | op::ADJSP => {
+                let (n, to) = if inst.opcode == op::LEASP16 {
+                    (immediate(&o[1])? as u16, Some(b.write_word(name(&o[0])?)?))
+                } else {
+                    (immediate(&o[0])? as u16, None)
+                };
+                let acc = Reg::Phys(reg::A);
+                b.push(Inst::new(Kind::Op("CLC"), vec![]));
+                for (byte, source) in [(n & 0xFF, reg::RC0), (n >> 8, reg::RC1)] {
+                    b.copy(acc, Reg::Phys(source));
+                    b.push(Inst::new(
+                        Kind::Op("ADC"),
+                        vec![Operand::Def(acc), Operand::Use(acc), Operand::Imm(i64::from(byte))],
+                    ));
+                    let into = match (&to, source == reg::RC0) {
+                        (Some((low, _)), true) => *low,
+                        (Some((_, high)), false) => *high,
+                        (None, _) => Reg::Phys(source),
+                    };
+                    b.copy(into, acc);
+                }
             }
             op::JSR => {
                 let Machine::Label(callee) = &o[0] else { return Err(Unsupported("an indirect call".into())) };
@@ -697,15 +908,15 @@ pub fn build(
                     op::SRLV16 => "__lshrhi3",
                     _ => "__ashrhi3",
                 };
-                b.define(name(&o[0])?);
-                let ((dl, dh), (xl, xh)) = (b.word(name(&o[0])?)?, b.word(name(&o[1])?)?);
+                let (xl, xh) = b.read_word(name(&o[1])?)?;
+                let (dl, dh) = b.write_word(name(&o[0])?)?;
                 b.copy(Reg::Phys(rc(2)), xl);
                 b.copy(Reg::Phys(rc(3)), xh);
                 if matches!(code, op::SHLV16 | op::SRLV16 | op::SRAV16) {
                     let count = b.byte(name(&o[2])?)?;
                     b.copy(Reg::Phys(rc(4)), count);
                 } else {
-                    let (yl, yh) = b.word(name(&o[2])?)?;
+                    let (yl, yh) = b.read_word(name(&o[2])?)?;
                     b.copy(Reg::Phys(rc(4)), yl);
                     b.copy(Reg::Phys(rc(5)), yh);
                 }
@@ -723,6 +934,7 @@ pub fn build(
             }
             other => return Err(Unsupported(format!("opcode {other}"))),
         }
+        b.flush_packs();
     }
     fold_branches(&mut b.function);
     remove_dead(&mut b.function);
@@ -966,7 +1178,7 @@ fn move_byte(
 pub fn emit(
     mut function: MFunction<Class>,
     labels: &[Vec<String>],
-) -> Result<(String, Vec<String>), String> {
+) -> Result<(String, Vec<(String, usize)>), String> {
     let (assignment, slots) = allocate_spilling::<Mos>(&mut function, 0)?;
     let at = |r: Reg| match r {
         Reg::Virt(v) => assignment.0[v as usize],
@@ -1009,7 +1221,24 @@ pub fn emit(
                 })
                 .collect();
             match (inst.kind, &inst.operands[..]) {
+                (Kind::Copy, _) if is_pair(regs[0]) || is_pair(regs[1]) => {
+                    for n in 0..2 {
+                        move_byte(&mut out, lane(regs[0], n), lane(regs[1], n), a_live);
+                    }
+                }
                 (Kind::Copy, _) => move_byte(&mut out, regs[0], regs[1], a_live),
+                (Kind::Op("UNPACK"), _) => {
+                    move_byte(&mut out, regs[0], lane(regs[2], 0), a_live);
+                    move_byte(&mut out, regs[1], lane(regs[2], 1), a_live);
+                }
+                (Kind::Op("PACK"), _) => {
+                    move_byte(&mut out, lane(regs[0], 0), regs[1], a_live);
+                    move_byte(&mut out, lane(regs[0], 1), regs[2], a_live);
+                }
+                (Kind::Op("INY"), _) => out.push_str("  iny\n"),
+                (Kind::Op("LDPY"), _) => writeln!(out, "  lda ({}),y", register_name(lane(regs[1], 0))).unwrap(),
+                (Kind::Op("STPY"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),
+                (Kind::Op("STP0"), _) => writeln!(out, "  sta ({})", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("LDI"), [_, Operand::Imm(value)]) => {
                     let d = regs[0];
                     if d == reg::A || d == reg::X || d == reg::Y {
@@ -1120,33 +1349,30 @@ pub fn emit(
                     load(&mut out, if_true, true_at);
                     writeln!(out, "{done}:").unwrap();
                 }
-                (Kind::Op("SPILL"), [_, Operand::Frame(slot)]) => {
-                    if regs[0] == reg::A || regs[0] == reg::X || regs[0] == reg::Y {
-                        writeln!(out, "  st{} {}", register_name(regs[0]), slot_name(*slot)).unwrap();
-                    } else {
-                        through_a(
-                            &mut out,
-                            a_live,
-                            &format!("  lda {}\n  sta {}\n", register_name(regs[0]), slot_name(*slot)),
-                        );
-                    }
-                }
-                (Kind::Op("RELOAD"), [_, Operand::Frame(slot)]) => {
-                    if regs[0] == reg::A || regs[0] == reg::X || regs[0] == reg::Y {
-                        writeln!(out, "  ld{} {}", register_name(regs[0]), slot_name(*slot)).unwrap();
-                    } else {
-                        through_a(
-                            &mut out,
-                            a_live,
-                            &format!("  lda {}\n  sta {}\n", slot_name(*slot), register_name(regs[0])),
-                        );
+                // a slot is a byte, or two for a pair
+                (Kind::Op(kind @ ("SPILL" | "RELOAD")), [_, Operand::Frame(slot)]) => {
+                    let register = regs[0];
+                    let lanes: Vec<RegId> =
+                        if is_pair(register) { vec![lane(register, 0), lane(register, 1)] } else { vec![register] };
+                    for (n, byte) in lanes.into_iter().enumerate() {
+                        let cell = if n == 0 { slot_name(*slot) } else { format!("{}+{n}", slot_name(*slot)) };
+                        let direct = byte == reg::A || byte == reg::X || byte == reg::Y;
+                        let name = register_name(byte);
+                        match (kind, direct) {
+                            ("SPILL", true) => writeln!(out, "  st{name} {cell}").unwrap(),
+                            ("SPILL", false) => through_a(&mut out, a_live, &format!("  lda {name}\n  sta {cell}\n")),
+                            (_, true) => writeln!(out, "  ld{name} {cell}").unwrap(),
+                            (_, false) => through_a(&mut out, a_live, &format!("  lda {cell}\n  sta {name}\n")),
+                        }
                     }
                 }
                 (other, _) => return Err(format!("{other:?} has no expansion")),
             }
         }
     }
-    Ok((crate::emit::relax_bra(&relax(&out)), slots.iter().map(|(slot, _)| slot_name(*slot)).collect()))
+    let slots =
+        slots.iter().map(|(slot, class)| (slot_name(*slot), if class.0 & Class::P != 0 { 2 } else { 1 })).collect();
+    Ok((crate::emit::relax_bra(&relax(&out)), slots))
 }
 
 /// A conditional branch reaches 127 bytes. An instruction is at most 3 bytes,

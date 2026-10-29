@@ -72,6 +72,9 @@ pub trait Target {
 pub struct Uncolourable {
     pub vreg: u32,
     pub crowd: Vec<u32>,
+    /// The virtual registers already coloured with a register that covers one
+    /// `vreg` could have used: giving one up makes room.
+    pub blockers: Vec<u32>,
 }
 
 /// The physical register of each virtual register.
@@ -462,7 +465,17 @@ impl<T: Target> GraphColoring<T> {
             colour.insert(count + at, *root);
         }
         let mut assigned: Vec<Option<RegId>> = vec![None; count];
-        for v in 0..count {
+        // the most constrained class first, so a word is not left with what
+        // the bytes took
+        let mut order: Vec<usize> = (0..count).collect();
+        let reach: Vec<usize> = (0..count)
+            .map(|v| {
+                let node = find(&mut parent, v);
+                T::candidates(classes[node]).len()
+            })
+            .collect();
+        order.sort_by_key(|v| reach[*v]);
+        for v in order {
             let node = find(&mut parent, v);
             if node >= count {
                 assigned[v] = Some(T::view(colour[&node], function.classes[v]));
@@ -476,7 +489,18 @@ impl<T: Target> GraphColoring<T> {
                 else {
                     let near: Vec<usize> = edges[node].iter().copied().chain([node]).collect();
                     let crowd = (0..count as u32).filter(|u| near.contains(&find(&mut parent, *u as usize))).collect();
-                    return Err(Uncolourable { vreg: v as u32, crowd });
+                    let wanted = T::candidates(classes[node]);
+                    let blockers = (0..count as u32)
+                        .filter(|u| {
+                            let other = find(&mut parent, *u as usize);
+                            other != node
+                                && edges[node].contains(&other)
+                                && colour
+                                    .get(&other)
+                                    .is_some_and(|c| wanted.iter().any(|candidate| T::overlaps(*c, *candidate)))
+                        })
+                        .collect();
+                    return Err(Uncolourable { vreg: v as u32, crowd, blockers });
                 };
                 colour.insert(node, chosen);
             }
