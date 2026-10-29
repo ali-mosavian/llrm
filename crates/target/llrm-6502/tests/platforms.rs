@@ -9,6 +9,7 @@ fn every_row_parses_and_fits_zero_page() {
         .map(|text| {
             let row = Platform::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
             assert!(usize::from(row.imag_base) + 16 <= 0x100, "{}: rc15 leaves zero page", row.name);
+            assert!(row.soft_stack > 0x100, "{}: the soft stack is in zero page or the hardware stack", row.name);
             row.name
         })
         .collect();

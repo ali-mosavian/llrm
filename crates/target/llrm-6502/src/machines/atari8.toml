@@ -5,3 +5,4 @@ name = "atari8"
 status = "stub"
 load_address = 0x2000
 imag_base = 0x82
+soft_stack = 0x8000

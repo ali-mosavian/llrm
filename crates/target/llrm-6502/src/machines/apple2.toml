@@ -5,3 +5,4 @@ name = "apple2"
 status = "stub"
 load_address = 0x0803
 imag_base = 0x80
+soft_stack = 0x9600

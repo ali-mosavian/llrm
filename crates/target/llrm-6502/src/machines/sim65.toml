@@ -4,3 +4,4 @@
 name = "sim65"
 load_address = 0x0200
 imag_base = 0x80
+soft_stack = 0x8000

@@ -5,3 +5,4 @@
 name = "c64"
 load_address = 0x0801
 imag_base = 0x02
+soft_stack = 0x9F00

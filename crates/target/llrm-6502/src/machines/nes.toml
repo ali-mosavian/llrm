@@ -5,3 +5,4 @@ name = "nes"
 status = "stub"
 load_address = 0x8000
 imag_base = 0x02
+soft_stack = 0x0700
