@@ -2398,7 +2398,7 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
-    Ok((own_labels(&crate::emit::relax_bra(&relax(&out)), &function.name), slots, sunk, shared))
+    Ok((own_labels(&crate::emit::relax_bra(&relax(&drop_reloads(&out))), &function.name), slots, sunk, shared))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`, `_far1`) get the
@@ -2439,6 +2439,50 @@ fn own_labels(
 ///
 /// DEVIATE: line counting, not sizes (as `emit::relax_bra`). Exit: the shared
 /// branch relaxation.
+/// `sta m` then `lda m` (likewise `x` and `y`) of a zero-page or spill cell: the register still holds it,
+/// so the load goes. It also set the zero and sign flags, so it stays when a branch reads them before
+/// anything sets them again.
+pub fn drop_reloads(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let cell = |operand: &str| operand.starts_with("rc") || operand.starts_with("s_");
+    let sets_flags = |mnemonic: &str| {
+        matches!(
+            mnemonic,
+            "lda" | "ldx" | "ldy" | "adc" | "sbc" | "cmp" | "cpx" | "cpy" | "and" | "ora" | "eor" | "asl" | "lsr" | "rol" | "ror"
+                | "inc" | "dec" | "inx" | "iny" | "dex" | "dey" | "tax" | "tay" | "txa" | "tya" | "pla" | "bit" | "jsr" | "rts"
+        )
+    };
+    let flags_unread_after = |from: usize| {
+        for line in &lines[from..] {
+            let mnemonic = line.trim().split(' ').next().unwrap_or("");
+            if !line.starts_with("  ") {
+                return false;
+            }
+            if sets_flags(mnemonic) {
+                return true;
+            }
+            if !matches!(mnemonic, "sta" | "stx" | "sty" | "stz" | "clc" | "sec" | "pha" | "nop") {
+                return false;
+            }
+        }
+        false
+    };
+    let mut out = String::with_capacity(text.len());
+    for (at, line) in lines.iter().enumerate() {
+        let reload = at > 0
+            && lines[at - 1].starts_with("  st")
+            && line.starts_with("  ld")
+            && lines[at - 1].trim()[2..] == line.trim()[2..]
+            && line.trim().split(' ').nth(1).is_some_and(cell)
+            && flags_unread_after(at + 1);
+        if !reload {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 fn relax(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let is_instruction = |l: &str| l.starts_with("  ") && !l.trim_start().starts_with('.');

@@ -1842,6 +1842,19 @@ fn an_undefined_value_is_stored_as_zero() {
     assert_eq!(got, 7);
 }
 
+/// `sta m; lda m` reloaded what the register held (97 times in a 3,100-instruction generated function,
+/// differential seed 55), unless a branch reads the flags the load set.
+#[test]
+fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
+    use llrm_6502::alloc::drop_reloads;
+    assert_eq!(drop_reloads("  lda rc4\n  sta rc2\n  lda rc2\n  ora rc3\n  rts\n"), "  lda rc4\n  sta rc2\n  ora rc3\n  rts\n");
+    assert_eq!(drop_reloads("  stx s_f_3\n  ldx s_f_3\n  inx\n"), "  stx s_f_3\n  inx\n");
+    let branch = "  sta rc2\n  lda rc2\n  bne l\n";
+    assert_eq!(drop_reloads(branch), branch, "bne reads the zero flag the load set");
+    let other = "  sta rc2\n  lda rc3\n  ldx rc2\n  sta (rc2),y\n  lda (rc2),y\n  sty rc2\n  lda rc2\n  rts\n";
+    assert_eq!(drop_reloads(other), other, "only the same register and cell");
+}
+
 /// `freeze` selects to the generic `COPY`, which the selector had no description of ("no description
 /// of opcode 20": differential seeds 21 and 26 were rejected for it).
 #[test]
