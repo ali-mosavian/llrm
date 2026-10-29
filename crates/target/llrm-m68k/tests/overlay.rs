@@ -135,12 +135,15 @@ fn a_test_right_after_the_instruction_that_set_the_flags_is_dropped() {
     assert!(asm.contains("lsr.l") && !asm.contains("tst.l"), "{asm}");
 }
 
-/// `add` can overflow, so after it `lt` (N xor V) is not what `tst` gives:
-/// the `tst.l` stays for a signed ordering, and goes for `ne`.
+/// `add` can overflow, so after it `gt` (Z clear and N = V) is not what `tst`
+/// gives: the `tst.l` stays for it, and goes for `ne`. `slt 0` is `N` alone (the
+/// sign of the wrapped sum, as the pin selects it: `add; bmi`), which needs none.
 #[test]
 fn a_test_after_an_add_stays_for_a_signed_ordering_and_goes_for_equality() {
-    let signed = branches("%s = add i32 %a, %b\n  %c = icmp slt i32 %s, 0");
+    let signed = branches("%s = add i32 %a, %b\n  %c = icmp sgt i32 %s, 0");
     assert!(signed.contains("tst.l"), "{signed}");
+    let sign = branches("%s = add i32 %a, %b\n  %c = icmp slt i32 %s, 0");
+    assert!(!sign.contains("tst.l") && sign.contains("add.l"), "{sign}");
     let equal = branches("%s = add i32 %a, %b\n  %c = icmp ne i32 %s, 0");
     assert!(!equal.contains("tst.l"), "{equal}");
 }

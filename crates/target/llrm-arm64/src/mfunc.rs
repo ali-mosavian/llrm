@@ -237,3 +237,33 @@ pub fn successors_of(
     }
     out
 }
+
+/// The copies `moves` (`dst, src`) as a parallel copy: no copy reads a register an earlier one
+/// wrote, and a cycle is broken through a register made by `temporary`.
+pub fn sequence_copies(
+    mut moves: Vec<(Reg, Reg)>,
+    mut temporary: impl FnMut(Reg) -> Reg,
+) -> Vec<Op> {
+    let mut out = Vec::new();
+    while !moves.is_empty() {
+        // A move whose destination no other move reads.
+        match moves.iter().position(|(dst, _)| !moves.iter().any(|(_, src)| src == dst)) {
+            Some(at) => {
+                let (dst, src) = moves.remove(at);
+                out.push(Op::Copy { dst, src });
+            }
+            None => {
+                // A cycle: park one source in a new register.
+                let (_, src) = moves[0];
+                let parked = temporary(src);
+                out.push(Op::Copy { dst: parked, src });
+                for (_, reader) in moves.iter_mut() {
+                    if *reader == src {
+                        *reader = parked;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
