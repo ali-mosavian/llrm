@@ -137,12 +137,11 @@ pub fn preserve_flags(
             let setter = block.insts[s].clone();
             let reader = block.insts[r].clone();
             let (base, size) = mnemonic(&setter).ok_or("a flag setter with no mnemonic")?;
-            let clobbered: Vec<RegId> = stay
-                .iter()
-                .filter_map(|&i| {
-                    if let Operand::Def(to) = block.insts[i].operands[0] { Some(root(to, assignment)) } else { None }
-                })
-                .collect();
+            // everything the instructions between the setter and the reader
+            // define, not only the copies: the setter's operands must still
+            // hold what it read
+            let clobbered: Vec<RegId> =
+                block.insts[s + 1..r].iter().flat_map(|inst| defs(inst, assignment)).collect();
             let again = if base.starts_with("cmp") {
                 let reads_clobbered = uses(&setter, assignment).any(|u| clobbered.contains(&u));
                 (!reads_clobbered).then(|| setter.clone())

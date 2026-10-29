@@ -81,6 +81,32 @@ fn a_copy_over_the_compares_operand_pushes_and_pops_the_codes() {
     );
 }
 
+/// A load into the compare's operand register between the compare and the branch, then a copy
+/// that cannot move above it: the compare was issued again with the new value in its operand
+/// (differential seed 1260 compared an address register that held another value and crashed).
+/// The codes are saved instead.
+#[test]
+fn an_instruction_that_overwrites_the_compares_operand_prevents_issuing_it_again() {
+    let mut f = function(vec![
+        op("CMP32dr", vec![Operand::Use(v(0)), Operand::Use(v(1))], true, false),
+        op("MOV32ri", vec![Operand::Def(v(1))], false, false),
+        Inst::copy(v(2), v(1)),
+        op("Bne8", vec![], false, true),
+    ]);
+    preserve_flags(&mut f, &assignment()).unwrap();
+    assert_eq!(
+        kinds(&f),
+        [
+            Kind::Op("CMP32dr"),
+            Kind::Op("MOV32ri"),
+            Kind::Op("CCR_PUSH"),
+            Kind::Copy,
+            Kind::Op("CCR_POP"),
+            Kind::Op("Bne8")
+        ]
+    );
+}
+
 /// The displacement of the spill store the function holds, with or without a push of the codes
 /// round it.
 fn spill_displacement(pushed: bool) -> i64 {
