@@ -72,7 +72,7 @@ fn log2_floor(n: usize) -> u32 {
 }
 
 /// The cost model's view of a SCEV type.
-fn tti_ty(ty: Ty) -> TtiTy {
+pub(crate) fn tti_ty(ty: Ty) -> TtiTy {
     match ty {
         Ty::Int(bits) => TtiTy::Int(bits),
         Ty::Ptr(_) => TtiTy::Pointer,

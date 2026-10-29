@@ -70,6 +70,7 @@ pub fn address_arithmetic(function: &mut MFunction) {
             address_group[root] = true;
         }
     }
+    let mut converted = Vec::new();
     let mut from_address = |_: &MFunction, v: u32| address_group[find(&mut parent, v as usize)];
     for at in 0..function.blocks.len() {
         for i in 0..function.blocks[at].insts.len() {
@@ -91,11 +92,9 @@ pub fn address_arithmetic(function: &mut MFunction) {
                 || other_users[dst as usize] != 0
                 || copy_users[dst as usize] == 0
                 || !from_address(function, src)
-                // the add is the only reader of `src`, so the data class it
-                // gave
-                // `src` goes with it
+                // the add is the only non-copy reader of `src`, so the data
+                // class it gave `src` goes with it
                 || other_users[src as usize] != 1
-                || copy_users[src as usize] != 0
             {
                 continue;
             }
@@ -104,7 +103,56 @@ pub fn address_arithmetic(function: &mut MFunction) {
             let inst = &mut function.blocks[at].insts[i];
             inst.kind = Kind::Op(wide);
             inst.sets_flags = false;
+            converted.push((at, dst));
         }
+    }
+    for (at, dst) in converted {
+        sink_step(&mut function.blocks[at].insts, dst);
+    }
+}
+
+/// Moves the step that defines `dst`, with the copies of its result that
+/// follow it, below the accesses of the pointer it steps: up to the next
+/// instruction that writes or reads one of them or ends the block. The
+/// access then reads the old pointer and the step is the last use of it,
+/// which a post-increment folds and the allocator coalesces.
+fn sink_step(
+    insts: &mut [llrm_spike_mf::Inst],
+    dst: u32,
+) {
+    let defines = |inst: &llrm_spike_mf::Inst, reg: u32| {
+        inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(d)) if *d == reg))
+    };
+    let reads = |inst: &llrm_spike_mf::Inst, reg: u32| {
+        inst.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Virt(u)) if *u == reg))
+    };
+    let Some(at) = insts.iter().position(|inst| {
+        defines(inst, dst) && matches!(inst.kind, Kind::Op("ADD32ai" | "SUB32ai"))
+    }) else {
+        return;
+    };
+    let Operand::Use(Reg::Virt(src)) = insts[at].operands[1] else { return };
+    let mut moved = vec![dst];
+    let mut len = 1;
+    while let Some(next) = insts.get(at + len) {
+        let [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))] = next.operands[..] else { break };
+        if next.kind != Kind::Copy || !moved.contains(&from) || to == src {
+            break;
+        }
+        moved.push(to);
+        len += 1;
+    }
+    let mut at = at;
+    while let Some(next) = insts.get(at + len) {
+        if next.terminator
+            || next.call
+            || defines(next, src)
+            || moved.iter().any(|&reg| defines(next, reg) || reads(next, reg))
+        {
+            break;
+        }
+        insts[at..=at + len].rotate_right(1);
+        at += 1;
     }
 }
 
