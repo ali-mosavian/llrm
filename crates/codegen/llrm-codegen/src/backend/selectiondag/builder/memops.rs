@@ -702,10 +702,12 @@ impl Builder<'_> {
         }
         let chain = match which {
             Intrinsic::MemCpy | Intrinsic::MemMove => {
-                let limit = match (opt_size, self.target.memcpy_moves_size) {
-                    (true, 1..) => self.target.memcpy_moves_size,
-                    (true, _) => 4,
-                    _ => 8,
+                let tuning = &self.target.tuning;
+                let limit = match (which, opt_size) {
+                    (Intrinsic::MemMove, true) => tuning.max_stores_per_memmove_opt_size,
+                    (Intrinsic::MemMove, false) => tuning.max_stores_per_memmove,
+                    (_, true) => tuning.max_stores_per_memcpy_opt_size,
+                    (_, false) => tuning.max_stores_per_memcpy,
                 };
                 // DEVIATE SD225 (real mode): tuned for size, a copy of more
                 // than `limit` pieces (dwords, then a word and
@@ -778,10 +780,10 @@ impl Builder<'_> {
                 }
             }
             _ => {
-                let limit = match (opt_size, self.target.memset_stores_size) {
-                    (true, 1..) => self.target.memset_stores_size,
-                    (true, _) => 8,
-                    _ => 16,
+                let limit = if opt_size {
+                    self.target.tuning.max_stores_per_memset_opt_size
+                } else {
+                    self.target.tuning.max_stores_per_memset
                 };
                 let inline = match constant {
                     Some(bytes) if !self.fill_is_smaller(bytes, opt_size) => {
@@ -1154,7 +1156,10 @@ impl Builder<'_> {
         size: u64,
         align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let limit = if self.has_opt_size() { 4 } else { 8 };
+        // The pin's own limits, not the target's: a separate item (the m16
+        // override does not reach a byval copy today).
+        let pin = llrm_mir::target::Tuning::PIN;
+        let limit = if self.has_opt_size() { pin.max_stores_per_memcpy_opt_size } else { pin.max_stores_per_memcpy };
         if let Some(copy) = self.inline_memcpy(chain, dst, src, size, limit, align, align)? {
             return Ok(Some(copy));
         }
