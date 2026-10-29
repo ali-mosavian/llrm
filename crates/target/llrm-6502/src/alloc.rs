@@ -2349,7 +2349,39 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
-    Ok((crate::emit::relax_bra(&relax(&out)), slots, sunk, shared))
+    Ok((own_labels(&crate::emit::relax_bra(&relax(&out)), &function.name), slots, sunk, shared))
+}
+
+/// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`, `_far1`) get the
+/// function's name, so two functions in one file do not define one label twice.
+fn own_labels(
+    text: &str,
+    name: &str,
+) -> String {
+    const KINDS: [&str; 6] = ["_pa", "_cmt", "_cmd", "_cz", "_sh", "_far"];
+    let mut out = String::with_capacity(text.len() + 64);
+    let mut rest = text;
+    while let Some(at) = rest.find('_') {
+        let (before, here) = rest.split_at(at);
+        out.push_str(before);
+        let boundary = before.chars().last().is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+        let kind = KINDS.iter().find(|kind| {
+            here.strip_prefix(**kind).is_some_and(|after| after.starts_with(|c: char| c.is_ascii_digit()))
+        });
+        match kind {
+            Some(kind) if boundary => {
+                out.push_str(name);
+                out.push_str(kind);
+                rest = &here[kind.len()..];
+            }
+            _ => {
+                out.push('_');
+                rest = &here[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A conditional branch reaches 127 bytes. An instruction is at most 3 bytes,
