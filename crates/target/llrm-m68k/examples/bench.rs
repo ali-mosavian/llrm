@@ -133,9 +133,9 @@ fn main() {
     std::fs::create_dir_all(&dir).unwrap();
     let kernel_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/kernels");
     println!(
-        "| kernel | raw B | ours B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | raw insns | ours insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |"
+        "| kernel | raw B | ours B | ours -Os B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | raw insns | ours insns | ours -Os insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |"
     );
-    println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+    println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
     for (name, args, expected) in table() {
         let ir = kernel_dir.join(format!("{name}.ll"));
         let module = llrm_mir::parse::module(&source(name)).unwrap();
@@ -150,6 +150,11 @@ fn main() {
                 (code, size)
             }),
             items(&module, "k", Cpu::M68000).map(|code| {
+                let size = assemble(&code, 0).map(|one| one.code.len()).unwrap_or(0);
+                (code, size)
+            }),
+            // size wanted over clocks, as `-Os` or an `optsize` function
+            items_with(&module, "k", Cpu::M68000, Options { size: true, ..Options::default() }).map(|code| {
                 let size = assemble(&code, 0).map(|one| one.code.len()).unwrap_or(0);
                 (code, size)
             }),

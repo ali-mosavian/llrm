@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+use llrm_mir::memory::has;
 use llrm_mir::module::Module;
 
 use crate::address::address_arithmetic;
@@ -12,6 +13,7 @@ use crate::expand::{Line, finish};
 use crate::flags::preserve_flags;
 use crate::machine::{M68k, M68kMachine};
 use crate::mc;
+use crate::memoperand::fold_argument_loads;
 use crate::mfunc::{emit, expand_cmov};
 use crate::regalloc::{
     allocate_spilling, branch_fold, commute_tied, eliminate_phis_with, fold_reserved_copies, machine_sink,
@@ -35,17 +37,20 @@ pub struct Options {
     /// Run the shared IR mid-end (`-O2`) first, as `llc -O2` is given
     /// optimized IR by `opt`.
     pub mid_end: bool,
+    /// Size is wanted over clocks in every function (`-Os`; the x86 path's
+    /// `Cpu::size`). A function marked `optsize` or `minsize` wants it too.
+    pub size: bool,
 }
 
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
-    pub const PINNED: Options = Options { overlay: false, mid_end: false };
+    pub const PINNED: Options = Options { overlay: false, mid_end: false, size: false };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { overlay: true, mid_end: true }
+        Options { overlay: true, mid_end: true, size: false }
     }
 }
 
@@ -92,6 +97,11 @@ pub fn items_with(
         crate::overlay::mark_commutable(&mut function);
     }
     commute_tied(&mut function);
+    if options.overlay {
+        let marked =
+            module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
+        fold_argument_loads(&mut function, options.size || marked, crate::memoperand::M68K);
+    }
     two_address(&mut function);
     let (assignment, slots) = if options.overlay {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, 0)?

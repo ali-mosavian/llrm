@@ -15,6 +15,7 @@ pub mod kernels;
 pub mod mac;
 pub mod machine;
 pub mod mc;
+pub mod memoperand;
 pub mod mfunc;
 pub mod object;
 pub mod overlay;
