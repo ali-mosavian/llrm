@@ -126,6 +126,9 @@ fn a_phi_copies_before_the_terminator() {
     assert_eq!(function.blocks[1].insts[0].kind, Kind::Copy);
 }
 
+thread_local!(static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
+
+/// `any` is called once for each colouring of the function, so it counts the rounds.
 struct Spilly;
 
 impl Target for Spilly {
@@ -138,7 +141,9 @@ impl Target for Spilly {
         Some(())
     }
 
-    fn any() {}
+    fn any() {
+        ROUNDS.with(|rounds| rounds.set(rounds.get() + 1));
+    }
 
     fn candidates(_: ()) -> Vec<RegId> {
         vec![R0, R1]
@@ -470,4 +475,19 @@ fn a_phi_copy_is_not_hoisted_above_the_definition_of_its_source() {
     let defines = insts.iter().position(|i| i.operands.first() == Some(&Operand::Def(v(1)))).unwrap();
     let reads = insts.iter().position(|i| i.operands.get(1) == Some(&Operand::Use(v(1)))).unwrap();
     assert!(defines < reads, "{insts:?}");
+}
+
+/// Twenty values live together on two registers needed one colouring for each spill, so the
+/// allocation of a long function took the square of its spills (a generated 2500-instruction
+/// function took minutes). Every value that fails is spilled in the round that finds it.
+#[test]
+fn values_that_fail_together_spill_in_one_round() {
+    let n = 20u32;
+    let mut insts: Vec<Inst> = (0..n).map(|i| op("def", vec![Operand::Def(v(i))])).collect();
+    insts.extend((0..n).map(|i| use1(v(i))));
+    let mut function = function(insts, n as usize);
+    let (_, slots) = allocate_spilling::<Spilly>(&mut function, 0).unwrap();
+    assert!(slots.len() <= n as usize, "{} slots for {n} values", slots.len());
+    let rounds = ROUNDS.with(|rounds| rounds.get());
+    assert!(rounds <= 12, "{rounds} colourings for {n} values");
 }
