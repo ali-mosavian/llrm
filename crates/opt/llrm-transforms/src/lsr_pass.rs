@@ -398,6 +398,7 @@ pub fn reduced_held(
                     // Expand and rewrite.
                     let mut rewriter = Expander::new("lsr");
                     rewriter.set_canonical_mode(false);
+                    rewriter.set_widen_odd_width(tti.lsr_widens_odd_width_induction());
                     rewriter.enable_lsr_mode();
                     let mut run = Implement {
                         context,

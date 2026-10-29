@@ -2751,3 +2751,55 @@ fn test_the_o1_and_o2_simplify_lists_both_match_the_registry() {
         let _ = pipeline::Fixed::linear(&applied, crate::parity::Phase::Simplify);
     }
 }
+
+/// bench/tile -Os: `(y + 61) & 63` was kept by LSR as an `i6` phi, and real
+/// mode paid `movzx bx,cl; and bx,63` on every row (4208 instructions against
+/// 4155 before LSR was the default). The pin's LSR makes the same `phi i6`;
+/// real mode writes it over the loop's `i16` phi (DEVIATE LU6).
+#[test]
+fn a_masked_row_index_is_not_an_odd_width_phi_in_real_mode() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}@t = global [64 x [64 x i16]] zeroinitializer
+define i32 @f() optsize {{
+  br label %b1
+
+b1:
+  %y = phi i16 [ 0, %0 ], [ %yn, %b3 ]
+  %s = phi i32 [ 0, %0 ], [ %t, %b3 ]
+  %a = add nuw nsw i16 %y, 61
+  %m = and i16 %a, 63
+  %row = getelementptr inbounds nuw [128 x i8], ptr @t, i16 %m
+  br label %b2
+
+b2:
+  %x = phi i16 [ 0, %b1 ], [ %xn, %b2 ]
+  %acc = phi i32 [ %s, %b1 ], [ %t, %b2 ]
+  %p = getelementptr inbounds nuw [2 x i8], ptr %row, i16 %x
+  %q = getelementptr inbounds nuw i8, ptr %p, i16 14
+  %v = load i16, ptr %q, align 2
+  %e = sext i16 %v to i32
+  %t = add nsw i32 %acc, %e
+  %xn = add nuw nsw i16 %x, 1
+  %xc = icmp eq i16 %xn, 40
+  br i1 %xc, label %b3, label %b2
+
+b3:
+  %yn = add nuw nsw i16 %y, 1
+  %yc = icmp eq i16 %yn, 25
+  br i1 %yc, label %b4, label %b1
+
+b4:
+  ret i32 %t
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let text = llrm_mir::print::module(&module);
+    assert!(!text.contains("phi i6"), "{text}");
+}
