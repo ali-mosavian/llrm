@@ -329,6 +329,21 @@ def load_parity():
     return mod
 
 
+def without_unrolling(cmd):
+    """`cmd` with loop unrolling and peeling off, as each compiler spells it. The three have different unroll
+    defaults (gcc's -O2 completely peels small loops, clang unrolls by cost, ours follows clang), so static counts
+    of unrolled code compare unrolling policy, not selection or allocation."""
+    tool = Path(str(cmd[0])).name
+    if tool.endswith("clang") and "ir" in cmd:
+        return [*cmd, "-fno-unroll-loops"]
+    if tool == "llrm-arm64-llc":
+        return [*cmd, "-fno-unroll-loops", "-fno-peel-loops"]
+    if tool.startswith("gcc") and "-c" in cmd:
+        return [*cmd, "-fno-unroll-loops", "-fno-peel-loops", "--param", "max-completely-peeled-insns=0",
+                "--param", "max-completely-peel-times=0"]
+    return list(cmd)
+
+
 def ratio(metric, ours, a, b):
     best = min(a, b)
     return (ours + 1) / (best + 1) if metric in SMOOTHED else (ours / best if best else (1.0 if ours == 0 else math.inf))
@@ -383,8 +398,13 @@ def main(argv=None):
     ap.add_argument("-O", default=LEVELS_DEFAULT)
     ap.add_argument("--bench", action="store_true", help="bench/*/*.c from the current directory, minus lru")
     ap.add_argument("--json")
+    ap.add_argument("--unroll", choices=["default", "off"], default="default",
+                    help="off: no loop unrolling or peeling in any compiler (equal footing for static counts)")
     a = ap.parse_args(argv)
     par = load_parity()
+    if a.unroll == "off":
+        run = par.sh
+        par.sh = lambda cmd, **kw: run(without_unrolling(cmd), **kw)
     files = [Path(f) for f in a.files]
     if a.bench:
         sys.path.insert(0, str(HERE))

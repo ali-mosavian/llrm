@@ -156,6 +156,19 @@ pub fn optimized(program: &mut Program) -> Result<(), String> {
     optimized_at(program, Level::O2)
 }
 
+/// The `-f[no-]PASS` switches of the command line (`-fno-unroll-loops`), applied
+/// to every mid-end run of the process.
+static PASS_FLAGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Records `flag` if it names a mid-end pass; false when it does not.
+pub fn pass_flag(flag: &str) -> bool {
+    if !llrm_codegen::driver::flags::apply_pass_flag(&mut Options::default(), flag) {
+        return false;
+    }
+    PASS_FLAGS.lock().unwrap().push(flag.to_owned());
+    true
+}
+
 /// `program` through the shared mid-end at `level`.
 pub fn optimized_at(
     program: &mut Program,
@@ -163,6 +176,9 @@ pub fn optimized_at(
 ) -> Result<(), String> {
     let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
     let mut options = level.options();
+    for flag in PASS_FLAGS.lock().unwrap().iter() {
+        llrm_codegen::driver::flags::apply_pass_flag(&mut options, flag);
+    }
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
     // The pin's PreISelIntrinsicLowering: the selector never sees the
