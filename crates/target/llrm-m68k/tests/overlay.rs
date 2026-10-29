@@ -529,7 +529,12 @@ fn a_pointer_stepped_before_the_compare_that_reads_it_is_post_incremented() {
 fn after_mid_end(ir: &str) -> String {
     use std::rc::Rc;
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    let tti = llrm_m68k::machine::M68k { indexed_displacement: true, post_indexed: true, ..Default::default() };
+    let tti = llrm_m68k::machine::M68k {
+        indexed_displacement: true,
+        post_indexed: true,
+        exit_ne: true,
+        ..Default::default()
+    };
     let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine)))
         .expect("the mid-end runs");
     llrm_mir::print::module(&done)
@@ -596,13 +601,7 @@ exit:
     assert_eq!(done.lines().filter(|line| line.contains("phi ptr")).count(), 2, "{done}");
 }
 
-/// memcpy's `while (n-- > 0)` leaves `icmp ugt %7, 1`, which LSR cannot turn
-/// into a compare with zero: the loop kept `cmpi #1; bhi` (+4 B and +13 insns
-/// against gcc). Expected: `ne`, which LSR counts to zero (`subq; bne`).
-#[test]
-fn a_down_counter_tested_above_its_floor_is_counted_to_zero() {
-    let done = after_mid_end(
-        "define i32 @k(ptr %0, ptr %1, i32 %2) {
+const MEMCPY: &str = "define i32 @k(ptr %0, ptr %1, i32 %2) {
   %4 = icmp sgt i32 %2, 0
   br i1 %4, label %5, label %14
 5:
@@ -618,10 +617,30 @@ fn a_down_counter_tested_above_its_floor_is_counted_to_zero() {
   br i1 %13, label %5, label %14
 14:
   ret i32 0
-}",
-    );
+}";
+
+/// memcpy's `while (n-- > 0)` leaves `icmp ugt %7, 1`, which LSR cannot turn
+/// into a compare with zero: the loop kept `cmpi #1; bhi` (+4 B and +13 insns
+/// against gcc). Expected: `ne`, which LSR counts to zero (`subq; bne`).
+#[test]
+fn a_down_counter_tested_above_its_floor_is_counted_to_zero() {
+    let done = after_mid_end(MEMCPY);
     assert!(done.contains("icmp ne i32 %10, 0"), "{done}");
     assert!(!done.contains("icmp ugt"), "{done}");
+}
+
+/// `exitne` is the target's preference (`Tti::prefers_exit_ne`): a target
+/// description without it keeps the strict compare, as x86 must.
+#[test]
+fn the_strict_compare_stays_where_the_target_does_not_prefer_exit_ne() {
+    use std::rc::Rc;
+    let module =
+        llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{MEMCPY}")).expect("parses");
+    let tti = llrm_m68k::machine::M68k { indexed_displacement: true, post_indexed: true, ..Default::default() };
+    let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine)))
+        .expect("the mid-end runs");
+    let done = llrm_mir::print::module(&done);
+    assert!(!done.contains("icmp ne"), "{done}");
 }
 
 fn walk_with_call(ty: &str) -> String {

@@ -93,11 +93,24 @@ pub struct M68k {
     /// loop. `Options::PINNED` leaves it off. Exit: never; a target
     /// description, set with the overlay.
     pub post_indexed: bool,
+    /// A strict exit compare of a unit-stride counter that never passes its
+    /// bound is `!=` (`exitne`), which LSR counts to zero.
+    ///
+    /// DEVIATE from the pin, which has no such rewrite. Reason: `subq #1, Dn;
+    /// bne` sets the flags and branches in two instructions where `cmpi #1,
+    /// Dn; bhi` needs the compare. Evidence: bench/library memcpy, 44 to 36 B
+    /// and 64 to 50 insns. `Options::PINNED` leaves it off. Exit: never; a
+    /// target description, set with the overlay.
+    pub exit_ne: bool,
 }
 
 impl Tti for M68k {
     fn name(&self) -> &'static str {
         "M68k"
+    }
+
+    fn prefers_exit_ne(&self) -> bool {
+        self.exit_ne
     }
 
     /// `TargetLoweringBase::isLegalAddressingMode`.
