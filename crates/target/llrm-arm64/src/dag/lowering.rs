@@ -536,3 +536,40 @@ fn lower_br_cc(
     let ccode = cond_const(dag, ccode);
     branch(dag, a64::BRCOND, &[chain, dest, ccode, flags])
 }
+
+/// `LowerXOR`: the node itself, but `xor x, (select_cc a, b, cc, 0, -1)` is a `CSINV`.
+/// DEVIATE 1 also leaves out the overflow-intrinsic form.
+pub fn lower_xor(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (mut sel, mut other) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.opcode(sel) != ISD::SelectCC {
+        std::mem::swap(&mut sel, &mut other);
+    }
+    if dag.opcode(sel) != ISD::SelectCC {
+        return Some(node);
+    }
+    let ops: Vec<SDValue> = (0..5).map(|i| dag.operand(sel, i)).collect();
+    let (lhs, rhs, mut tval, mut fval) = (ops[0], ops[1], ops[2], ops[3]);
+    let mut code = cond_of(dag, ops[4]);
+    if dag.value_type(lhs) != EVT::I32 && dag.value_type(lhs) != EVT::I64 {
+        return Some(node);
+    }
+    let (Some(mut ct), Some(mut cf)) = (signed_constant(dag, tval), signed_constant(dag, fval)) else {
+        return Some(node);
+    };
+    if ct == -1 && cf == 0 {
+        std::mem::swap(&mut tval, &mut fval);
+        std::mem::swap(&mut ct, &mut cf);
+        code = code.inverse_integer();
+    }
+    if ct != 0 || cf != -1 {
+        return Some(node);
+    }
+    let (flags, ccode) = get_cmp(dag, lhs, rhs, code);
+    let ccode = cond_const(dag, ccode);
+    let vt = dag.value_type(other);
+    let inverted = dag.get_not(other, vt);
+    Some(dag.get_node(ISD::Target(a64::CSEL), dag.value_type(sel), &[other, inverted, ccode, flags]))
+}
