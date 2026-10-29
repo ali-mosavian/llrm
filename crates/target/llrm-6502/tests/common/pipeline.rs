@@ -141,6 +141,8 @@ pub fn tool(
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        Err(format!("{program}: {}", String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("")))
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let line = stderr.lines().find(|l| l.contains("rror")).or_else(|| stderr.lines().next()).unwrap_or("");
+        Err(format!("{program}: {line}"))
     }
 }
