@@ -716,9 +716,9 @@ mod tests {
     use super::root;
     use super::*;
 
-    /// Only a `jmp` return is a sibling call: a plain `ret`, and a `jmp` that is
-    /// a jump, are not (a copy of the first has no callee; neither of the
-    /// others needs one).
+    /// Only a `jmp` return is a sibling call: a plain `ret`, and a `jmp` that
+    /// is a jump, are not (a copy of the first has no callee; neither of
+    /// the others needs one).
     #[test]
     fn only_a_jmp_return_is_a_sibling_call() {
         let named = |op, name: &str| Semantics { name: Some(name.into()), ..Semantics::new(op) };
