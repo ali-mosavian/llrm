@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import functools
 import json
 import math
 import shutil
@@ -896,15 +897,14 @@ def base_rows(args) -> tuple[dict, set[str], str]:
 
     head = measure.git("rev-parse", "HEAD")
     base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
+    built = functools.cache(lambda sha: measure.built(sha, measure.BENCH_BASE_PROFILE))  # a cache miss and the edited programs both need it: one build
     with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
         base, was = basecounts.base_counts(
-            base_sha, args.opt, basecounts.compiler_key, lambda sha: measure.built(sha, measure.BENCH_BASE_PROFILE), lambda directory, opts, names=None: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time, names), args.time
+            base_sha, args.opt, basecounts.compiler_key, built, lambda directory, opts, names=None: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time, names), args.time
         )
-    now = basecounts.programs(ROOT)
-    with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
-        directory = measure.built(base_sha, measure.BENCH_BASE_PROFILE)
+        now = basecounts.programs(ROOT)
         base, same, unbuilt = basecounts.with_edited(
-            base, was, now, args.opt, lambda names: basecounts.measure_head_sources(directory, args.opt, args.work / "base-edited", names), tree=measure.tree_of(base_sha) or base_sha
+            base, was, now, args.opt, lambda names: basecounts.measure_head_sources(built(base_sha), args.opt, args.work / "base-edited", names), tree=measure.tree_of(base_sha) or base_sha
         )
     if unbuilt:
         print("edited programs the base compiler could not build, not judged: " + " ".join(unbuilt), flush=True)
