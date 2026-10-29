@@ -114,7 +114,8 @@ fn dwarfdump_verifies_every_bench_program_at_both_ends_of_the_optimiser() {
                 let frames = Command::new(&dump).arg("--debug-frame").arg(&object).output().unwrap();
                 let (fdes, functions) = (
                     String::from_utf8_lossy(&frames.stdout).matches(" FDE ").count(),
-                    shown.matches("DW_TAG_subprogram").count(),
+                    // An inlined function's abstract subprogram has no code.
+                    shown.matches("DW_TAG_subprogram").count() - shown.matches("DW_AT_inline\t").count(),
                 );
                 assert_eq!(fdes, functions, "{} {level} {flag}: frame rules for every function", source.display());
             }
@@ -1201,4 +1202,31 @@ fn a_function_inlined_twice_has_two_inlined_subroutines_with_their_calls() {
     assert!(dump.contains("DW_AT_call_line\t(2)") && dump.contains("DW_AT_call_column\t(48)"), "{dump}");
     assert!(dump.contains("DW_AT_call_column\t(68)"), "{dump}");
     assert_eq!(dump.matches("DW_AT_inline\t(DW_INL_inlined)").count(), 1, "one abstract sq: {dump}");
+}
+
+/// llrm's inliner kept the callee's locations unchanged: an inlined `sq` was
+/// `sq`'s lines in `f`, with no `DW_TAG_inlined_subroutine` and no call line.
+#[test]
+fn a_call_the_optimizer_inlines_becomes_an_inlined_subroutine_at_its_call() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("candidate.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/inline_candidate.ll");
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-llc"))
+        .args(["-O2", "-march=i486", "-fobject-format=elf", "-mabi=sysv", "-o"])
+        .arg(&object)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let dumped = Command::new(&dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let dump = String::from_utf8_lossy(&dumped.stdout).into_owned();
+    assert_eq!(dump.matches("DW_TAG_inlined_subroutine").count(), 2, "{dump}");
+    assert!(dump.contains("DW_AT_call_line\t(2)") && dump.contains("DW_AT_call_column\t(48)"), "{dump}");
+    assert!(dump.contains("DW_AT_call_column\t(68)"), "{dump}");
+    let verified = Command::new(dwarfdump).arg("--verify").arg(&object).output().unwrap();
+    assert!(verified.status.success(), "{}", String::from_utf8_lossy(&verified.stdout));
 }

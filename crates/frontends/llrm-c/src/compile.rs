@@ -2940,7 +2940,11 @@ mod tests {
             .iter()
             .filter(|one| one.starts_with("mov") && one.contains("ptr [bp-") && one.contains("],"))
             .collect();
-        assert!(stored.len() >= 3, "{body:#?}");
+        // Or the array is the constant table it was copied from, read where it
+        // lies (`visitAllocaInst`, 77fa49769a): its bytes are the initializer.
+        let table = asm.lines().any(|one| one.trim() == "db 001h,001h,001h,002h,001h,004h,007h,000h,001h,007h");
+        let from_table = body.iter().any(|one| one.contains("word ptr G$"));
+        assert!(stored.len() >= 3 || (table && from_table), "{body:#?}");
     }
 
     /// Each float-to-int conversion switched the rounding mode to chop and

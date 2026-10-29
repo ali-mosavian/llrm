@@ -172,3 +172,22 @@ def test_a_run_that_logs_a_fault_without_end_cannot_fill_the_disk():
         src, work = fake_qcport(Path(raw), "head -c 8388608 /dev/zero >> dosbox.log\n")
         qcport_run.run(work, src, stall=30, cap=30, tick=0.1, file_limit=1 << 20)  # the script writes 8 MiB
         assert (work / "dosbox.log").stat().st_size <= 1 << 20
+
+
+def test_an_attract_loop_that_played_all_three_demos_and_then_faulted_is_a_problem(tmp_path):
+    """302389dd83 let the program execute garbage: CPU exception 6 looped after the demos started, and the run was judged only by 'never started'."""
+    run = _attract_run(tmp_path, PLAYED)
+    (run / "dosbox.log").write_text("CPU_Exception: Calling CPU_Interrupt for exception 5\nCPU_Exception: Calling CPU_Interrupt for exception 6\nCPU_Exception: Calling CPU_Interrupt for exception 6\n")
+    assert qcport_run.attract_problems(run) == ["CPU exception 5", "CPU exception 6"]
+    assert qcport_run.attract_over(run)
+
+
+def test_a_fault_is_found_in_the_start_of_a_log_that_never_ends(tmp_path):
+    (tmp_path / "dosbox.log").write_text("CPU_Exception: Calling CPU_Interrupt for exception 6\n" + "x" * (qcport_run.LOG_READ + 10))
+    assert qcport_run.faults(tmp_path) == ["CPU exception 6"]
+
+
+def test_the_pinned_drawing_is_no_difference_and_any_other_is():
+    built = {"frames": "62", "polys": "37637", "md5": "ba64e86d5de8b0adb94f2fe3e76ffeea"}
+    assert qcport_run.pinned(65, built) == []
+    assert qcport_run.pinned(64, {**built, "polys": "23434"}) == ["modules: pinned 65, llrm 64", "polys: pinned 37637, llrm 23434"]

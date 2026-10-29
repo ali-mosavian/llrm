@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """C source of `f` with about N statements in one of five shapes, for compile-cost ladders.
 
-    gen.py SHAPE N        SHAPE: arith | mem | loop | diamond | calls | float | mixed
+    ladder_gen.py SHAPE N        SHAPE: arith | mem | loop | diamond | calls | float | mixed
 
 Same C89 text goes to every compiler (wccq takes no C99 declarations); unsigned arithmetic only, so there is no UB to
 fold differently. Every value reaches the return or a store, so none is dead.

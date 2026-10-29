@@ -164,7 +164,7 @@ Inside `lir peephole` (11 bodies, inclusive M, calls in brackets):
 
 Inside `lir floatassign` (4 bodies with floats): `_allocnos` 18.1, `allocate::live` 12.8 (5 calls), `Plan::rewritten` 5.7, `_crowded` 4.4. Inside `lir floatalloc`: `allocate::live` 12.9 (5 calls), the conversion closure 3.3.
 
-Slope, `LLRM_DEBUG=time` (M instructions, N = 100, 400, 1600 statements): `lir peephole` `arith` 14.7, 59.7, 216.4; `mem` 10.9, 26.4, 107.0; `diamond` 12.4, 58.0, 254.7; `calls` 11.4, 39.8, 154.5 (exponent 0.9 to 1.0). The `float` shape of `tools/ladder/gen.py` (arithmetic on four `double`s): `floatassign` 4.9, 18.7, 69.0 and `floatalloc` 1.0, 4.6, 18.1, against LLVM's whole `llc` of 21, 92 and 455 M and its stackifier at 2.0 M (N=400). Linear too: the x87 passes are 11.6x the stackifier on straight-line floats at N=400, 17x on `d_faces`, where control flow makes the live rows bigger.
+Slope, `LLRM_DEBUG=time` (M instructions, N = 100, 400, 1600 statements): `lir peephole` `arith` 14.7, 59.7, 216.4; `mem` 10.9, 26.4, 107.0; `diamond` 12.4, 58.0, 254.7; `calls` 11.4, 39.8, 154.5 (exponent 0.9 to 1.0). The `float` shape of `tools/ladder/ladder_gen.py` (arithmetic on four `double`s): `floatassign` 4.9, 18.7, 69.0 and `floatalloc` 1.0, 4.6, 18.1, against LLVM's whole `llc` of 21, 92 and 455 M and its stackifier at 2.0 M (N=400). Linear too: the x87 passes are 11.6x the stackifier on straight-line floats at N=400, 17x on `d_faces`, where control flow makes the live rows bigger.
 
 ## Facts the peephole derives, and what one table would remove
 

@@ -9,7 +9,7 @@ convention the target does not define, a literal that does not fit) is not a fai
 prints each distinct panic with its programs and exits 1 if there is one. Repeat it before a change to a pass or an analysis lands.
 
 A sweep that finds nothing proves nothing unless the oracles ran. Before the sweep each oracle is run alone on the largest programs
-and must cost the compile at least 0.05% more instructions (`perf stat`, user mode) than the same compile with a variable of the same length that no oracle reads; one that does not is named and
+and must have its hook reached (`LLRM_DEBUG=checks`) and cost the compile more instructions (`perf stat`, user mode) than the same compile with a variable of the same length that no oracle reads, at m16 and m32; one that does not is named and
 the sweep stops with exit 2 (`--allow-unexercised NAME` for one the target cannot reach, said aloud in the output).
 """
 
@@ -31,7 +31,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import llrmbin  # noqa: E402
 
-CHECKS = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
+# COALESCE: its hook went with the old coalescer (902b535761). SKIPPED: no corpus program skips a pass in a fixed-point round (846 compiles at
+# -O1/-O3/-Os, -O2/-Omax on bench and examples, m16 and m32, reached its hook in none), so it never runs here.
+CHECKS = ("DATAFLOW", "FACTS", "CLOBBERED", "REPLAY", "INTERN", "STALE")
+PROBE_MACHINES = ("-m16", "-m32")  # DATAFLOW and CLOBBERED hooks are reached at m16 only
+RAN_FLOOR = 1000  # instructions: what the old rule asked at least, whatever the program size
+NOTABLE = 0.0005  # the old bar, a fraction of the control's instructions: printed, no longer a verdict
 # What a front end says in words and exits 1/2 for: not an oracle's finding.
 REFUSED = re.compile(
     r"entry function '.*' does not exist|this target defines no|is not available: the block is|past DGROUP's|does not fit|"
@@ -61,54 +66,74 @@ def classify(returncode: int, stderr: str) -> str | None:
     return "exit %d: %s" % (returncode, lines[-1][:100] if lines else "no message")
 
 
-def instructions(binaries: Path, job: tuple[str, Path, str, str], env_extra: dict[str, str]) -> int | None:
-    """User-mode instructions of one compile with `env_extra` added, or None where `perf` cannot say."""
+def instructions(binaries: Path, job: tuple[str, Path, str, str], env_extra: dict[str, str]) -> tuple[int | None, dict[str, int]]:
+    """(user-mode instructions of one compile with `env_extra` added, or None where `perf` cannot say or the compile failed; the oracles its
+    hooks reached)."""
     tool, source, level, machine = job
     out = Path(os.environ.get("TMPDIR", "/tmp")) / f"probe-{os.getpid()}-{abs(hash((job, tuple(env_extra))))}.o"
     command = ["perf", "stat", "-x,", "-e", "instructions:u", str(binaries / tool), str(source), level, machine, "-o", str(out)]
+    env = {**os.environ, "LLRM_DEBUG": ",".join(filter(None, [os.environ.get("LLRM_DEBUG"), "checks"])), **env_extra}
     try:
-        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, **env_extra})
+        done = subprocess.run(command, capture_output=True, text=True, env=env)
     except FileNotFoundError:
-        return None
+        return None, {}
     out.unlink(missing_ok=True)
+    reached = {name: int(sites) for name, sites in REACHED.findall(done.stderr)}
+    if done.returncode != 0:
+        return None, reached
     for line in done.stderr.splitlines():
         if "instructions" in line and line.split(",")[0].isdigit():
-            return int(line.split(",")[0])
-    return None
+            return int(line.split(",")[0]), reached
+    return None, reached
 
 
-def exercised(binaries: Path, probes: list[tuple[str, Path, str, str]]) -> dict[str, tuple[int, int] | None]:
-    """For each oracle: (instructions with a variable of the same length that no oracle reads, with the oracle) over `probes`; None
-    where perf cannot say. The control carries the cost of the variable's presence, which a compiler ignoring the oracle also pays."""
-    found: dict[str, tuple[int, int] | None] = {}
-    for name in CHECKS:
-        control = [instructions(binaries, job, {"LLRM_CHECK_" + "X" * len(name): "1"}) for job in probes]
-        with_it = [instructions(binaries, job, {f"LLRM_CHECK_{name}": "1"}) for job in probes]
-        found[name] = None if None in control or None in with_it else (sum(control), sum(with_it))
+def exercised(
+    binaries: Path, probes: list[tuple[str, Path, str, str]], checks: tuple[str, ...] = CHECKS
+) -> dict[str, dict[str, tuple[int, int, int]] | None]:
+    """For each oracle and machine: (instructions with a variable of the same length that no oracle reads, with the oracle, call sites of its
+    hook reached) summed over that machine's `probes`; None for an oracle where perf cannot say or a probe failed. The control carries the cost
+    of the variable's presence, which a compiler ignoring the oracle also pays."""
+    found: dict[str, dict[str, tuple[int, int, int]] | None] = {}
+    for name in checks:
+        rows: dict[str, tuple[int, int, int]] = {}
+        for machine in dict.fromkeys(job[3] for job in probes):
+            jobs = [job for job in probes if job[3] == machine]
+            control = [instructions(binaries, job, {"LLRM_CHECK_" + "X" * len(name): "1"})[0] for job in jobs]
+            with_it = [instructions(binaries, job, {f"LLRM_CHECK_{name}": "1"}) for job in jobs]
+            if None in control or any(count is None for count, _ in with_it):
+                rows = {}
+                break
+            rows[machine] = (sum(control), sum(count for count, _ in with_it), sum(reached.get(name, 0) for _, reached in with_it))
+        found[name] = rows or None
     return found
+
+
+def ran(rows: dict[str, tuple[int, int, int]] | None) -> bool:
+    """An oracle ran where, on one machine, its hook was reached and it cost at least RAN_FLOOR instructions more than the control."""
+    return rows is not None and any(sites >= 1 and with_it - control >= RAN_FLOOR for control, with_it, sites in rows.values())
 
 
 REACHED = re.compile(r"^\[checks\] (\w+) (\d+)$", re.M)
 
 
-def compile_one(job: tuple[str, Path, str, str], binaries: Path) -> tuple[tuple[str, Path, str, str], str | None, dict[str, int]]:
+def compile_one(job: tuple[str, Path, str, str], binaries: Path, checks: tuple[str, ...] = CHECKS) -> tuple[tuple[str, Path, str, str], str | None, dict[str, int]]:
     """(the job, its finding or None, the oracles its compile reached and the call sites of each: `LLRM_DEBUG=checks`)."""
     tool, source, level, machine = job
     out = Path(os.environ.get("TMPDIR", "/tmp")) / f"sweep-{os.getpid()}-{abs(hash(job))}.o"
     debug = ",".join(filter(None, [os.environ.get("LLRM_DEBUG"), "checks"]))
-    env = {**os.environ, **{f"LLRM_CHECK_{name}": "1" for name in CHECKS}, "LLRM_DEBUG": debug}
+    env = {**os.environ, **{f"LLRM_CHECK_{name}": "1" for name in checks}, "LLRM_DEBUG": debug}
     done = subprocess.run([str(binaries / tool), str(source), level, machine, "-o", str(out)], capture_output=True, text=True, env=env)
     out.unlink(missing_ok=True)
     reached = {name: int(sites) for name, sites in REACHED.findall(done.stderr)}
     return job, classify(done.returncode, REACHED.sub("", done.stderr)), reached
 
 
-def unreached(results: list[tuple], allowed: list[str]) -> list[str]:
+def unreached(results: list[tuple], allowed: list[str], checks: tuple[str, ...] = CHECKS) -> list[str]:
     """The oracles no compile of the run reached (no call site asked them while on): a run that finds nothing proves nothing about them."""
     reached = collections.Counter()
     for _, _, sites in results:
         reached.update(sites)
-    return [name for name in CHECKS if reached[name] == 0 and name not in allowed]
+    return [name for name in checks if reached[name] == 0 and name not in allowed]
 
 
 def judge(findings: dict[str, set[str]], expected: list[dict]) -> tuple[list[str], list[str], list[str]]:
@@ -132,6 +157,7 @@ def main() -> int:
     parser.add_argument("--bin", type=Path, default=None, help="the llrm-qb and llrm-nib directory (default: LLRM_BIN, else the target dir's release)")
     parser.add_argument("--expected", type=Path, default=None, help="the expected failures (tools/oracle_expected.toml): findings that may stay until their fix lands")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "8")))
+    parser.add_argument("--checks", default=",".join(CHECKS), help="the oracles to turn on (the landing stage runs STALE alone)")
     parser.add_argument("--levels", default="-O1,-O2,-O3,-Os,-Omax")
     parser.add_argument("--machines", default="-m16,-m32")
     parser.add_argument("--shard", metavar="I/N", help="only slice I of N of the programs (the gate's oracle-I job): no entry is judged paid by a slice")
@@ -140,6 +166,7 @@ def main() -> int:
     parser.add_argument("--premise-only", action="store_true", help="only the check that each oracle ran")
     parser.add_argument("--allow-unexercised", action="append", default=[], metavar="NAME", help="an oracle the sweep may skip")
     args = parser.parse_args()
+    checks = tuple(args.checks.split(","))
     args.bin = args.bin or llrmbin.bin_dir()
     expected = tomllib.loads(args.expected.read_text()).get("expected", []) if args.expected else []
     started = time.perf_counter()
@@ -148,14 +175,17 @@ def main() -> int:
     if args.shard:
         index, count = (int(x) for x in args.shard.split("/"))
         found = [one for at, one in enumerate(found) if at % count == index - 1]
-    ran = {} if args.no_premise else exercised(args.bin, [(t, p, "-O2", "-m32") for t, p in biggest])
+    measured = {} if args.no_premise else exercised(args.bin, [(t, p, "-O2", m) for t, p in biggest for m in PROBE_MACHINES], checks)
     unexercised = []
-    for name, counts in ran.items():
-        if counts is None:
-            print(f"oracle {name}: not measurable (no perf, or a probe did not compile)")
-        else:
-            print(f"oracle {name}: {counts[0]} -> {counts[1]} instructions on the {len(biggest)} largest programs")
-        if (counts is None or counts[1] - counts[0] < max(1000, counts[0] // 2000)) and name not in args.allow_unexercised:
+    for name, rows in measured.items():
+        if rows is None:
+            print(f"oracle {name}: not measurable (no perf, or a probe failed)")
+        for machine, (control, with_it, sites) in (rows or {}).items():
+            gain = with_it - control
+            print(f"oracle {name} {machine}: {control} -> {with_it} instructions ({gain / control:+.4%}), {sites} hook sites reached, on the {len(biggest)} largest programs")
+            if 0 < gain < control * NOTABLE:
+                print(f"  (under the old {NOTABLE:.2%} bar; a cheap oracle that ran is exercised)")
+        if not ran(rows) and name not in args.allow_unexercised:
             unexercised.append(name)
     if unexercised:
         print("never exercised: " + ", ".join(unexercised) + " (a sweep where an oracle did not run proves nothing about it)")
@@ -165,9 +195,9 @@ def main() -> int:
         return 0
     jobs = [(t, p, l, m) for t, p in found for l in args.levels.split(",") for m in args.machines.split(",")]
     with ThreadPoolExecutor(args.jobs) as pool:
-        results = list(pool.map(lambda job: compile_one(job, args.bin), jobs))
+        results = list(pool.map(lambda job: compile_one(job, args.bin, checks), jobs))
     findings: dict[str, set[str]] = collections.defaultdict(set)
-    silent = [] if args.no_reach else unreached(results, args.allow_unexercised)
+    silent = [] if args.no_reach else unreached(results, args.allow_unexercised, checks)
     for (tool, source, level, machine), why, _ in results:
         if why:
             findings[why].add(f"{source.name} {level} {machine}")
