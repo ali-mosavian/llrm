@@ -1,0 +1,124 @@
+//! The builder's view of arm64: 64-bit pointers, `i32` and `i64` in registers,
+//! `RET_GLUE` for a return.
+
+use std::sync::LazyLock;
+
+use llrm_codegen::backend::isel::Convention;
+use llrm_codegen::backend::selectiondag::SelectionDAG;
+use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, build_block};
+use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::schedule::Unit;
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::module::Module;
+use llrm_codegen::backend::selectiondag::{BooleanContents, DagConfig};
+use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_lir::registers::{Info, RegId};
+use llrm_target::BuilderArch;
+
+use super::call::{Aarch64Calling, RET_GLUE};
+use super::pipeline::select_block;
+use crate::REGISTER_INFO;
+
+static CALLING: LazyLock<Aarch64Calling> = LazyLock::new(Aarch64Calling::default);
+
+pub fn builder_target() -> BuilderTarget {
+    BuilderTarget {
+        dag: DagConfig {
+            pointer: EVT::I64,
+            offset_folding: true,
+            boolean_contents: BooleanContents::ZeroOrOne,
+            ..DagConfig::default()
+        },
+        shift_amount: EVT::I64,
+        legal_ints: vec![32, 64],
+        stack_align: Some(16),
+        jump_tables: false,
+        target_nodes: Some(TargetNodes {
+            call: ISD::Target(0),
+            ret: ISD::Target(RET_GLUE),
+            stack_pointer: "sp",
+            big_endian: false,
+            calling: Some(&*CALLING),
+        }),
+        ..BuilderTarget::m64()
+    }
+}
+
+/// What the builder asks of arm64.
+pub struct Aarch64Arch;
+
+impl BuilderArch for Aarch64Arch {
+    fn registers(&self) -> &'static Info {
+        &REGISTER_INFO
+    }
+
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId {
+        (0..=u8::MAX)
+            .map(RegId::from_raw)
+            .find(|&id| REGISTER_INFO.name(id) == Some(name))
+            .unwrap_or_else(|| panic!("no arm64 register {name}"))
+    }
+
+    fn stack_slot_bytes(&self) -> i64 {
+        8
+    }
+
+    fn stack_alignment(&self) -> i64 {
+        16
+    }
+
+    fn roles(&self) -> llrm_mir::spaces::Spaces {
+        llrm_mir::spaces::Spaces::default()
+    }
+
+    fn full(&self) -> Option<&dyn llrm_target::Target> {
+        None
+    }
+}
+
+/// One block, selected and scheduled.
+pub struct Selected {
+    pub dag: SelectionDAG,
+    pub units: Vec<Unit>,
+}
+
+/// Function `name` of `module`, block by block in layout order.
+pub fn select_function(
+    module: &Module,
+    name: &str,
+) -> Result<Vec<Selected>, String> {
+    let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
+    let function = module
+        .global(id)
+        .function()
+        .filter(|one| !one.is_declaration())
+        .ok_or_else(|| format!("@{name} has no body"))?;
+    let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    // The target's `TargetCalling` places every value; the builder reads none of this.
+    let convention = Convention {
+        parameters: Vec::new(),
+        returns: Vec::new(),
+        float_result: None,
+        popped: 0,
+        saved: Vec::new(),
+        stack_arguments: 0,
+        first: 0,
+    };
+    let target = builder_target();
+    let mut info = FunctionLoweringInfo::new(function);
+    let mut selected = Vec::new();
+    for &block in function.layout() {
+        let mut built = build_block(module, function, &layout, &target, &Aarch64Arch, &convention, &mut info, block)
+            .map_err(|why| why.0.to_owned())?;
+        if !built.extra.is_empty() {
+            return Err("a switch lowering made blocks".to_owned());
+        }
+        let units = select_block(&mut built.dag).map_err(|why| format!("{why:?}"))?;
+        selected.push(Selected { dag: built.dag, units });
+    }
+    Ok(selected)
+}
