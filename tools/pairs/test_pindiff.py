@@ -403,3 +403,10 @@ def test_a_tail_call_of_an_intrinsic_is_in_space_zero_too():
     out = pin.retarget("  %r = tail call cc 1005 addrspace(1) ptr @llvm.x.p0(ptr %p)\n", pin.target("m16"))
     line = next(line for line in out.splitlines() if "@llvm.x" in line)
     assert "addrspace(1)" not in line, line
+
+
+def test_the_m16_row_datalayout_is_the_machines_string_not_its_template():
+    """targets.toml states `{datalayout:x86-m16}`; pindiff wrote it into the IR as is, and llrm-llc refused all 70 m16 programs
+    (`{datalayout:x86` in the datalayout), so no m16 figure existed on 2026-10-29."""
+    pindiff = load("pindiff")
+    assert "{" not in pindiff.cc_entry("m16")["datalayout"]
