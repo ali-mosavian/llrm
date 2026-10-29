@@ -133,7 +133,7 @@ pub fn items_with(
         crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
     }
     let mut out = vec![Item::Label(name.to_owned())];
-    for line in finish(&function, &assignment, number, &slots, options.overlay)? {
+    for line in finish(&function, &assignment, number, &slots, options.overlay, cpu)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),

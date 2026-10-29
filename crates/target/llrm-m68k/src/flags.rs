@@ -161,7 +161,16 @@ pub fn preserve_flags(
                 None
             };
             let Some(again) = again else {
-                return Err(format!("no way to keep the flags of {:?} past a copy for {:?}", setter.kind, reader.kind));
+                // `copyPhysReg`'s last resort, a push and a pop of the codes round the copies
+                let (first, last) = (stay[0], r);
+                let mut pop = Inst::new(Kind::Op("CCR_POP"), vec![]);
+                pop.sets_flags = true;
+                let mut push = Inst::new(Kind::Op("CCR_PUSH"), vec![]);
+                push.reads_flags = true;
+                block.insts.insert(last, pop);
+                block.insts.insert(first, push);
+                r += 3;
+                continue;
             };
             block.insts.insert(r, again);
             r += 2;

@@ -103,6 +103,7 @@ pub fn finish(
     number: usize,
     slots: &[i32],
     overlay: bool,
+    cpu: crate::dagisel::hooks::Cpu,
 ) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
@@ -230,6 +231,35 @@ pub fn finish(
                         operands: vec![mc::Operand::Reg(dst), mc::Operand::Reg(src)],
                     });
                 }
+            }
+            // `copyPhysReg` of `CCR`: the 68000 reads the codes with `move from SR`, which is
+            // privileged from the 68010 on, where `move from CCR` takes its place
+            Kind::Op("CCR_SAVE") => {
+                let [mc::Operand::Reg(dst), _] = operands[..] else { return Err("CCR_SAVE operands".to_owned()) };
+                let word = REGISTER_INFO.view(REGISTER_INFO.root(dst), 16).ok_or("no word view")?;
+                let (opcode, from) = match cpu {
+                    crate::dagisel::hooks::Cpu::M68000 => ("MOV16ds", mc::Operand::Symbol("%sr".to_owned(), 0)),
+                    _ => ("MOV16dc", mc::Operand::Reg(reg::CCR)),
+                };
+                out.push(mc::Inst { opcode, operands: vec![mc::Operand::Reg(word), from] });
+            }
+            Kind::Op("CCR_PUSH") => {
+                let (opcode, from) = match cpu {
+                    crate::dagisel::hooks::Cpu::M68000 => ("MOV16es", mc::Operand::Symbol("%sr".to_owned(), 0)),
+                    _ => ("MOV16ec", mc::Operand::Reg(reg::CCR)),
+                };
+                out.push(mc::Inst { opcode, operands: vec![mc::Operand::Reg(reg::SP), from] });
+            }
+            Kind::Op("CCR_POP") => {
+                out.push(mc::Inst {
+                    opcode: "MOV16co",
+                    operands: vec![mc::Operand::Reg(reg::CCR), mc::Operand::Reg(reg::SP)],
+                });
+            }
+            Kind::Op("CCR_RESTORE") => {
+                let [_, mc::Operand::Reg(src)] = operands[..] else { return Err("CCR_RESTORE operands".to_owned()) };
+                let word = REGISTER_INFO.view(REGISTER_INFO.root(src), 16).ok_or("no word view")?;
+                out.push(mc::Inst { opcode: "MOV16cd", operands: vec![mc::Operand::Reg(reg::CCR), mc::Operand::Reg(word)] });
             }
             Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
             Kind::Op("RET") => {
