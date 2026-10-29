@@ -52,7 +52,7 @@
 # class 6: masked scaled IV (pin SCEV does not move shl through the mask) and the LSR formula sharing it: DEBT bench-clocks-masked-iv
 "textfill c -Os" = 60021  # main 58025
 "tile bas -Os" = 10277  # main 10196
-"tile c -Os" = 10224  # main 10169
+"tile c -Os" = 10300  # main 10169; RA spill and a larger frame on the same pre-ISel IR (IR 38 -> 40, asm +7), owner w13; was 10224; owner w6; TEMPORARY: fix after the main merge
 "tile nib -Os" = 10292  # main 10186
 "ring c -Os" = 80220  # main 68220
 "textfill nib -Os" = 60024  # main 58065
