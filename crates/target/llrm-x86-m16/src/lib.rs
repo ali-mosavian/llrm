@@ -571,3 +571,30 @@ mod pressure_tests {
         assert_eq!((limit("GR8"), limit("GR16"), limit("GR32_BPSP")), (10, 10, 6));
     }
 }
+
+#[cfg(test)]
+mod tuning_tests {
+    use llrm_mir::target::{Machine, Tuning};
+
+    /// m16's table overrides the size limits and the clock price of a byte and
+    /// nothing else: before the table they were sentinels in the DAG builder
+    /// (4 and 2) and a trait method (10_000), the pin's numbers literals beside
+    /// them.
+    #[test]
+    fn m16_overrides_only_the_size_limits_and_the_rate() {
+        let table = super::Dos::default().tuning();
+        assert_eq!(table.max_stores_per_memset_opt_size, 4);
+        assert_eq!((table.max_stores_per_memcpy_opt_size, table.max_stores_per_memmove_opt_size), (2, 2));
+        assert_eq!(table.size_milliclocks_per_byte, 10_000);
+        assert_eq!(
+            Tuning {
+                max_stores_per_memset_opt_size: 8,
+                max_stores_per_memcpy_opt_size: 4,
+                max_stores_per_memmove_opt_size: 4,
+                size_milliclocks_per_byte: 0,
+                ..table
+            },
+            Tuning::PIN
+        );
+    }
+}

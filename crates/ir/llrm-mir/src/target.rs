@@ -6,6 +6,39 @@ use std::collections::BTreeSet;
 
 use crate::spaces::Spaces;
 
+/// The tuning limits of a target: one default (the pin's value, which every
+/// target without an entry takes) and the overrides a target description
+/// states. The names are the pin's `TargetLoweringBase` fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tuning {
+    /// `MaxStoresPerMemset`, and at size `MaxStoresPerMemsetOptSize`.
+    pub max_stores_per_memset: usize,
+    pub max_stores_per_memset_opt_size: usize,
+    /// `MaxStoresPerMemcpy` and `...OptSize`: the load and store pairs of a
+    /// constant copy.
+    pub max_stores_per_memcpy: usize,
+    pub max_stores_per_memcpy_opt_size: usize,
+    /// `MaxStoresPerMemmove` and `...OptSize`.
+    pub max_stores_per_memmove: usize,
+    pub max_stores_per_memmove_opt_size: usize,
+    /// Clocks a byte of code is worth, in thousandths, where a decision is
+    /// made for size; 0: bytes alone decide.
+    pub size_milliclocks_per_byte: i64,
+}
+
+impl Tuning {
+    /// X86ISelLowering.cpp: 16/8, 8/4, 8/4 stores; no clock price for a byte.
+    pub const PIN: Tuning = Tuning {
+        max_stores_per_memset: 16,
+        max_stores_per_memset_opt_size: 8,
+        max_stores_per_memcpy: 8,
+        max_stores_per_memcpy_opt_size: 4,
+        max_stores_per_memmove: 8,
+        max_stores_per_memmove_opt_size: 4,
+        size_milliclocks_per_byte: 0,
+    };
+}
+
 /// Where the target keeps no program data, as linear addresses: old
 /// `abi::machine::Machine::foreign_span`. A real-mode target has some (its
 /// video memory and ROM); any other none.
@@ -46,11 +79,17 @@ pub trait Machine {
         None
     }
 
+    /// The target's tuning limits: the pin's values, with this target's
+    /// overrides. A target with no entry here takes `Tuning::PIN`.
+    fn tuning(&self) -> Tuning {
+        Tuning::PIN
+    }
+
     /// Clocks a byte of code is worth, in thousandths, where a decision is
     /// made for size: the smaller form is kept while the clocks it costs are
     /// under this per byte saved. None: bytes alone decide.
     fn size_milliclocks_per_byte(&self) -> i64 {
-        0
+        self.tuning().size_milliclocks_per_byte
     }
 
     /// What each operation costs in code bytes, for a decision made for
@@ -588,5 +627,21 @@ mod operand_size_tests {
         let real = [form(2, false, 0), form(4, true, 1)];
         assert_eq!(three_operand(&costs, &real, 4, 2, 2, false), Some(2 + 1 + 1));
         assert_eq!(three_operand(&costs, &real, 2, 2, 1, true), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Tuning;
+
+    /// X86ISelLowering.cpp:2936-2941 and the clock-free default: a target with
+    /// no entry in its description takes exactly these.
+    #[test]
+    fn the_default_tuning_is_the_pins() {
+        let pin = Tuning::PIN;
+        assert_eq!((pin.max_stores_per_memset, pin.max_stores_per_memset_opt_size), (16, 8));
+        assert_eq!((pin.max_stores_per_memcpy, pin.max_stores_per_memcpy_opt_size), (8, 4));
+        assert_eq!((pin.max_stores_per_memmove, pin.max_stores_per_memmove_opt_size), (8, 4));
+        assert_eq!(pin.size_milliclocks_per_byte, 0);
     }
 }
