@@ -200,16 +200,29 @@ fn print_hello_runs_on_arm64() {
     assert_eq!(run_basic("hello", b"PRINT \"HELLO\"\nEND\n").trim_end(), "HELLO");
 }
 
+/// NIBBLES and GORILLA come from `QB45_DEMOS_DIR`; where it is unset the test
+/// is a no-op locally and an error in CI, which has them (both returned Ok
+/// without running when gate run 4 had the directory, and the crash they would
+/// have shown went unseen here).
+fn demos_dir(name: &str) -> Option<std::ffi::OsString> {
+    let dir = std::env::var_os("QB45_DEMOS_DIR");
+    assert!(
+        dir.is_some() || std::env::var_os("GITHUB_ACTIONS").is_none(),
+        "QB45_DEMOS_DIR is not set in CI: {name} would not run"
+    );
+    if dir.is_none() {
+        eprintln!("QB45_DEMOS_DIR is not set: {name} is not in the tree");
+    }
+    dir
+}
+
 /// NIBBLES (QB 4.5's demo, from `QB45_DEMOS_DIR`) typed through its questions
 /// on arm64: its READ/DATA colour table, the SINGLE and DOUBLE arithmetic of
 /// its speed calibration, INPUT and the graphics-free screen. The level screen
 /// it reaches says "Level 1, Push Space".
 #[test]
 fn nibbles_reaches_its_first_level_on_arm64() {
-    let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {
-        eprintln!("QB45_DEMOS_DIR is not set: NIBBLES is not in the tree");
-        return;
-    };
+    let Some(dir) = demos_dir("NIBBLES") else { return };
     let source = std::fs::read(Path::new(&dir).join("NIBBLES.BAS")).expect("NIBBLES.BAS");
     let screen = run_basic_with(
         "nibbles",
@@ -224,10 +237,7 @@ fn nibbles_reaches_its_first_level_on_arm64() {
 /// text. A shot in the city (SCREEN 9, floats) was checked by eye, not here.
 #[test]
 fn gorilla_reaches_its_menu_on_arm64() {
-    let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {
-        eprintln!("QB45_DEMOS_DIR is not set: GORILLA is not in the tree");
-        return;
-    };
+    let Some(dir) = demos_dir("GORILLA") else { return };
     let source = std::fs::read(Path::new(&dir).join("GORILLA.BAS")).expect("GORILLA.BAS");
     let screen = run_basic_with(
         "gorilla",
@@ -304,4 +314,17 @@ fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
 fn int_of_a_single_sum_over_a_constant_keeps_the_sum() {
     let source = b"row = 3\r\nPRINT INT((row + 1) / 2); INT((row - 1) / 2); INT((row + 1) / 4)\r\nEND\r\n";
     assert_eq!(run_basic("intsum", source).split_whitespace().collect::<Vec<_>>(), ["2", "1", "1"]);
+}
+
+/// COLOR, LOCATE, SCREEN, CLOSE and DIM pass their words to the runtime as a
+/// block, in memory order (count first). arm64 reversed them a second time:
+/// COLOR 15 arrived as count 1 with a flag and no value, `arguments()` ran off
+/// the block and NIBBLES and GORILLA died with SIGSEGV under qemu.
+#[test]
+fn statements_with_a_block_of_words_run_on_arm64() {
+    let source = b"SCREEN 0\r\nCOLOR 15, 1\r\nLOCATE 3, 5\r\nPRINT \"AB\"\r\nDIM a(5)\r\na(3) = 7\r\nPRINT a(3)\r\nCLOSE\r\nPRINT \"done\"\r\nEND\r\n";
+    let screen = run_basic("blocks", source);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert_eq!(rows.first().map(|row| row.trim_end()), Some("    AB"), "{screen}");
+    assert_eq!(rows[1..].iter().flat_map(|row| row.split_whitespace()).collect::<Vec<_>>(), ["7", "done"], "{screen}");
 }
