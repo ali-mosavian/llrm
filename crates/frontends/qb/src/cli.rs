@@ -242,8 +242,9 @@ mod tests {
     }
 
     /// The default was BC's rounding on every store, which cost fpbench/bas
-    /// 28% of its clocks against main; the default is C's fast mode, and
-    /// `standard` brings BC's 86016 for nbody_single back (fast prints 86015).
+    /// 28% of its clocks against main; the default is C's fast mode.
+    /// nbody_single/bas still prints BC's 86016 under it (bench.py's output
+    /// check fails the row otherwise).
     #[test]
     fn a_single_assignment_is_not_rounded_unless_standard_excess_precision_is_asked() {
         assert_eq!(float_stores(&["p.bas"]), (false, false));
