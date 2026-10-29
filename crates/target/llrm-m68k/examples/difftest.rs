@@ -1,6 +1,6 @@
-//! `difftest FIRST COUNT [JOBS]`: random C programs (`llrm-cgen`, 32-bit `int`) compiled by the pin's
+//! `difftest FIRST COUNT [JOBS]` (or `DIFF_SEEDS=first:count`, `DIFF_JOBS`, `DIFF_FILE`): random C programs (`llrm-cgen`, 32-bit `int`) compiled by the pin's
 //! clang to IR, by this compiler to a static m68k executable run under `qemu-m68k`, against the same
-//! program built by the host gcc at -O0 (and, on a difference, by m68k gcc -O2 under qemu). The 8-bit
+//! program built by the host gcc at -O0 (and, on a difference, by m68k gcc -O2 for the 68020 under qemu: the toolchain has no libgcc, so no 68000 divide). The 8-bit
 //! fold of the 16-bit checksum must agree.
 //!
 //! Each seed ends `ok`, `differs`, `hang` (ours ran past the time limit), `reject` (clang, the
@@ -141,8 +141,9 @@ fn image(functions: Vec<Item>) -> Vec<Item> {
 fn qemu(
     exe: &Path,
     limit: &str,
+    cpu: &str,
 ) -> Result<i32, bool> {
-    let status = Command::new("timeout").args([limit, "qemu-m68k", "-cpu", "m68000"]).arg(exe).status().map_err(|_| false)?;
+    let status = Command::new("timeout").args([limit, "qemu-m68k", "-cpu", cpu]).arg(exe).status().map_err(|_| false)?;
     match status.code() {
         Some(124) | Some(137) => Err(true),
         Some(code) => Ok(code),
@@ -165,7 +166,7 @@ fn gcc_m68k(
         .env("LD_LIBRARY_PATH", root.join("usr/lib/x86_64-linux-gnu"))
         .arg(format!("-B{}/usr/lib/gcc-cross/m68k-linux-gnu/15/", root.display()))
         .arg(format!("-B{}/usr/m68k-linux-gnu/bin/", root.display()))
-        .args(["-ffreestanding", "-nostdlib", "-static", "-fno-asynchronous-unwind-tables", "-mcpu=68000", "-O2", "-w"])
+        .args(["-ffreestanding", "-nostdlib", "-static", "-fno-asynchronous-unwind-tables", "-mcpu=68020", "-O2", "-w"])
         .arg(dir.join("m.c"))
         .arg("-o")
         .arg(&exe)
@@ -176,7 +177,7 @@ fn gcc_m68k(
     if !ok {
         return None;
     }
-    qemu(&exe, "10").ok()
+    qemu(&exe, "10", "m68020").ok()
 }
 
 fn check(
@@ -185,9 +186,32 @@ fn check(
 ) -> Outcome {
     let dir = work.join(seed.to_string());
     std::fs::create_dir_all(&dir).unwrap();
-    let source = program(seed, &Gen { opaque: true, ..Gen::new(DataModel::INT32) });
+    // `$DIFF_FILE` runs a hand-written program (with a `test`), the way `llrm-cgen/reduce.py` cuts one down
+    let source = match std::env::var("DIFF_FILE") {
+        Ok(path) => std::fs::read_to_string(path).unwrap(),
+        Err(_) => program(seed, &Gen { opaque: true, ..Gen::new(DataModel::INT32) }),
+    };
     let full = format!("{source}{FOLD}");
     std::fs::write(dir.join("p.c"), &full).unwrap();
+
+    // a reduced program must stay defined: no missing return, no read of a local before it is set
+    if std::env::var_os("DIFF_STRICT").is_some() {
+        let strict = run(
+            Command::new(clang()).current_dir(&dir).args([
+                "--target=m68k-linux-gnu",
+                "-fsyntax-only",
+                "-Werror=return-type",
+                "-Werror=uninitialized",
+                "-Werror=sometimes-uninitialized",
+                "-Werror=conditional-uninitialized",
+                "p.c",
+            ]),
+            "not a defined program",
+        );
+        if let Err(why) = strict {
+            return Outcome::Reject(why);
+        }
+    }
 
     // the reference: the host's gcc at -O0
     std::fs::write(dir.join("main.c"), HOST_MAIN).unwrap();
@@ -241,7 +265,7 @@ fn check(
     };
     let exe = dir.join("ours");
     write_executable(&exe, &bytes).unwrap();
-    match qemu(&exe, "10") {
+    match qemu(&exe, "10", "m68000") {
         Ok(code) if code == reference => Outcome::Ok,
         Ok(code) => Outcome::Differs { ours: code, reference, gcc_m68k: gcc_m68k(&dir, &full) },
         Err(true) => Outcome::Hang,
@@ -251,9 +275,18 @@ fn check(
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let first: u64 = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(0);
-    let count: u64 = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(100);
-    let jobs: usize = args.get(3).and_then(|a| a.parse().ok()).unwrap_or(2);
+    // `$DIFF_SEEDS=first:count` and `$DIFF_JOBS` are what the reducer sets
+    let (first, count) = std::env::var("DIFF_SEEDS")
+        .ok()
+        .and_then(|spec| spec.split_once(':').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))))
+        .unwrap_or_else(|| {
+            (args.get(1).and_then(|a| a.parse().ok()).unwrap_or(0), args.get(2).and_then(|a| a.parse().ok()).unwrap_or(100))
+        });
+    let jobs: usize = std::env::var("DIFF_JOBS")
+        .ok()
+        .and_then(|j| j.parse().ok())
+        .or_else(|| args.get(3).and_then(|a| a.parse().ok()))
+        .unwrap_or(2);
     let work = PathBuf::from(
         std::env::var("DIFF_KEEP").unwrap_or_else(|_| format!("{}/llrm-m68k-difftest", std::env::temp_dir().display())),
     );
@@ -285,7 +318,7 @@ fn main() {
             Outcome::Ok => ok += 1,
             Outcome::Differs { ours, reference, gcc_m68k } => {
                 differs += 1;
-                println!("seed {seed}: DIFFERS ours {ours}, host gcc -O0 {reference}, m68k gcc -O2 {gcc_m68k:?}");
+                println!("seed {seed}: MISMATCH ours {ours}, host gcc -O0 {reference}, m68k gcc -O2 {gcc_m68k:?}");
             }
             Outcome::Hang => {
                 hang += 1;

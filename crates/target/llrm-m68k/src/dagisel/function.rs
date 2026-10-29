@@ -126,12 +126,17 @@ pub fn select_function_ordered(
     for &block in function.layout() {
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        if !built.extra.is_empty() {
-            return Err("a switch lowering made blocks".to_owned());
-        }
+        // the blocks a `switch` lowering made (`CreateMachineBasicBlock`) follow the block that made
+        // them, as x86's driver lays them out
+        let extras = std::mem::take(&mut built.extra);
         let units = select_block_with(&mut built.dag, cpu, load_as_source).map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
         selected.push(Selected { block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
+        for (id, mut extra) in extras {
+            let units = select_block_with(&mut extra.dag, cpu, load_as_source).map_err(|why| format!("{why:?}"))?;
+            updates.push(extra.phi_updates);
+            selected.push(Selected { block: id, dag: extra.dag, units, phis: Vec::new(), locals: Vec::new() });
+        }
     }
     // `FunctionLoweringInfo`: a static alloca is a frame object of the type's
     // size (times a constant count) on the larger of the alignment asked for
