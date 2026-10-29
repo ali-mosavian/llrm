@@ -3,10 +3,9 @@
 //! (an unwinder's reader, not ours) and, where the pinned AArch64 LLVM is
 //! built, against what it states at the same calls.
 
+use llrm_arm64::machine::Platform;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-const DATALAYOUT: &str = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32";
 
 fn llc() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
@@ -20,7 +19,10 @@ fn object(
     let ir = directory.join("t.ll");
     std::fs::write(
         &ir,
-        format!("target datalayout = \"{DATALAYOUT}\"\ntarget triple = \"aarch64-unknown-linux-gnu\"\n{source}"),
+        format!(
+            "target datalayout = \"{}\"\ntarget triple = \"aarch64-unknown-linux-gnu\"\n{source}",
+            Platform::Linux.datalayout()
+        ),
     )
     .unwrap();
     let out = directory.join("t.o");
