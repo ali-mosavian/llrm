@@ -41,6 +41,10 @@ pub mod m68kisd {
     pub const AND: ISD = ISD::Target(ids::AND);
     pub const OR: ISD = ISD::Target(ids::OR);
     pub const XOR: ISD = ISD::Target(ids::XOR);
+    pub const CALL: ISD = ISD::Target(ids::CALL);
+    pub const RET: ISD = ISD::Target(ids::RET);
+    pub const WRAPPER: ISD = ISD::Target(ids::Wrapper);
+    pub const WRAPPER_PC: ISD = ISD::Target(ids::WrapperPC);
 }
 
 /// `M68k::CondCode`.
@@ -135,6 +139,7 @@ impl Hooks for M68kLowering {
             ISD::SetCC => lower_setcc(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
+            ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
             _ => None,
         }
     }
