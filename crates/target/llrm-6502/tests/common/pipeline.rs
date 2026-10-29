@@ -23,7 +23,19 @@ pub fn reachable_runtime(text: &str) -> String {
     let mut bss = String::new();
     let mut in_bss = false;
     let mut pending = String::new();
+    // macros are not routines: every one is kept, whichever routine uses it
+    let mut macros = String::new();
+    let mut in_macro = false;
     for line in RUNTIME.lines() {
+        if line.starts_with(".macro") {
+            in_macro = true;
+        }
+        if in_macro {
+            macros.push_str(line);
+            macros.push('\n');
+            in_macro = !line.starts_with(".endmacro");
+            continue;
+        }
         if line.starts_with(".segment \"BSS\"") {
             in_bss = true;
         }
@@ -81,7 +93,7 @@ pub fn reachable_runtime(text: &str) -> String {
     if any && (out.contains("__sa") || out.contains("__ra")) {
         out.push_str(&bss);
     }
-    out
+    if any { format!("{macros}{out}") } else { out }
 }
 
 /// clang's IR in MIR's subset: our datalayout, no attributes, linkage or
