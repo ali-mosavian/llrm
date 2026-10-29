@@ -129,6 +129,8 @@ fn a_global_at_a_constant_offset_is_an_absolute_load() {
 fn a_word_select_returns_the_larger_word() {
     let ir = "define i16 @max16(i16 %a, i16 %b) {\n  %c = icmp ugt i16 %a, %b\n  %r = select i1 %c, i16 %a, i16 %b\n  ret i16 %r\n}";
     let text = compile(ir, "max16");
+    // the result starts as one operand and the other is moved in on one path: no jump over arms
+    assert!(!text.contains("jmp _cmd"), "{text}");
     for (a, b, lo, hi) in [(300u16, 5000u16, 0x88, 0x13), (700, 20, 0xBC, 0x02)] {
         let setup = set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8);
         let run = |after: &str| common::run_with("alloc-max16", &format!("{setup}  jsr max16\n{after}"), &text);
@@ -540,4 +542,28 @@ fn a_struct_passed_byval_and_returned_through_sret_round_trips() {
         let run = common::run_with("alloc-struct", &format!("{}  jsr {entry}\n", set("rc2", 5) + &set("rc3", 0)), &text);
         assert_eq!(run, 11, "{entry}");
     }
+}
+
+/// `x < 0` on a word did `cmp #0; sbc #0` over both bytes: the sign is the high byte alone.
+#[test]
+fn a_word_sign_test_reads_only_the_high_byte() {
+    let ir = "define i8 @neg(i16 %x) {\n  %c = icmp slt i16 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}";
+    let text = compile(ir, "neg");
+    assert!(!text.contains("sbc"), "{text}");
+    let run = |x: u16| common::run_with("alloc-neg", &format!("{}  jsr neg\n", set("rc2", x) + &set("rc3", x >> 8)), &text);
+    assert_eq!((run(0xFFFF), run(0x8000), run(0x7FFF), run(0), run(5)), (7, 7, 9, 9, 9));
+}
+
+/// `(b << 8) ^ c` with `b` a widened byte (crc16's `c ^= p[i] << 8`) was eight `asl`/`rol` pairs
+/// on a word: the byte is the high half.
+#[test]
+fn a_widened_byte_shifted_by_eight_and_xored_is_a_byte_move() {
+    let ir = "define i16 @sh(i8 %b, i16 %c) {\n  %w = zext i8 %b to i16\n  %s = shl nuw i16 %w, 8\n  %r = xor i16 %s, %c\n  ret i16 %r\n}";
+    let text = compile(ir, "sh");
+    assert!(!text.contains("rol"), "{text}");
+    // b in rc2, c in rc4:rc5
+    let setup = set("rc2", 0x34) + &set("rc4", 0x1234) + &set("rc5", 0x12);
+    let low = common::run_with("alloc-sh", &format!("{setup}  jsr sh\n"), &text);
+    let high = common::run_with("alloc-sh", &format!("{setup}  jsr sh\n  txa\n"), &text);
+    assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), 0x3400 ^ 0x1234);
 }
