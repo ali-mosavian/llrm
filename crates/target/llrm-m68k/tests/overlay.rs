@@ -489,3 +489,35 @@ done:
     assert!(ours.contains("move.b\t(%a0)+, (%a2)+"), "{ours}");
     assert!(!ours.contains("addq.l\t#1, %a"), "{ours}");
 }
+
+fn counted_scan(ty: &str, step: &str) -> String {
+    format!(
+        "define i32 @f(ptr %p) {{
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i1, %loop ]
+  %q = getelementptr {ty}, ptr %p, i32 %i
+  %v = load {ty}, ptr %q
+  %i1 = add i32 %i, {step}
+  %c = icmp ne {ty} %v, 0
+  br i1 %c, label %loop, label %done
+done:
+  ret i32 %i
+}}"
+    )
+}
+
+/// A loop that counts and reads through a pointer it also steps: the step
+/// came before the load of the old pointer (a copy of it), then the compare
+/// that reads it, so the step stayed apart (`addq.l #1, %a0` and a copy) and
+/// the loop ran four instructions a trip. The step goes after the access and
+/// folds into it, for a byte and for a word.
+#[test]
+fn a_pointer_stepped_before_the_compare_that_reads_it_is_post_incremented() {
+    for (ty, access, bytes) in [("i8", "tst.b\t(%a0)+", 1), ("i16", "tst.w\t(%a0)+", 2)] {
+        let ours = compiled(&counted_scan(ty, "1"), Options::default());
+        assert!(ours.contains(access), "{ty}: {ours}");
+        assert!(!ours.contains(&format!("addq.l\t#{bytes}, %a")), "{ty}: {ours}");
+    }
+}

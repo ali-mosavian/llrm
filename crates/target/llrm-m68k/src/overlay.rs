@@ -306,22 +306,21 @@ fn post_increment_table() -> &'static std::collections::HashMap<&'static str, Po
         std::sync::OnceLock::new();
     TABLE.get_or_init(|| {
         let mut table = std::collections::HashMap::new();
-        for &(name, text, operands) in crate::dagisel::asm::ASM.iter() {
+        let mut add = |name: &str, text: &'static str, operands: &[AsmOperand], width: u16, pieces: &[Piece]| {
             let Some(ari) =
                 operands.iter().find(|one| one.method.starts_with("printARI") && one.method.ends_with("Mem"))
             else {
-                continue;
+                return;
             };
             let bytes = match ari.method {
                 "printARI8Mem" => 1,
                 "printARI16Mem" => 2,
                 "printARI32Mem" => 4,
-                _ => continue,
+                _ => return,
             };
-            let Some(&(_, width, pieces)) = crate::dagisel::enc::encoding(name) else { continue };
             let mode = |piece: &Piece| matches!(piece, Piece::Const { lo: 3, width: 3, value: 2 });
             if pieces.iter().filter(|piece| mode(piece)).count() != 1 {
-                continue;
+                return;
             }
             let pieces: Vec<Piece> = pieces
                 .iter()
@@ -332,12 +331,16 @@ fn post_increment_table() -> &'static std::collections::HashMap<&'static str, Po
                 .map(|one| AsmOperand {
                     name: one.name,
                     at: one.at,
-                    method: if one.at != ari.at { one.method } else { match one.method {
-                        "printARI8Mem" => "printARIPI8Mem",
-                        "printARI16Mem" => "printARIPI16Mem",
-                        "printARI32Mem" => "printARIPI32Mem",
-                        other => other,
-                    } },
+                    method: if one.at != ari.at {
+                        one.method
+                    } else {
+                        match one.method {
+                            "printARI8Mem" => "printARIPI8Mem",
+                            "printARI16Mem" => "printARIPI16Mem",
+                            "printARI32Mem" => "printARIPI32Mem",
+                            other => other,
+                        }
+                    },
                 })
                 .collect();
             let key: &'static str = Box::leak(format!("{name}+").into_boxed_str());
@@ -348,6 +351,14 @@ fn post_increment_table() -> &'static std::collections::HashMap<&'static str, Po
                 bytes,
             };
             table.insert(key, row);
+        };
+        for &(name, text, operands) in crate::dagisel::asm::ASM.iter() {
+            let Some(&(_, width, pieces)) = crate::dagisel::enc::encoding(name) else { continue };
+            add(name, text, operands, width, pieces);
+        }
+        // `tst` of memory, which the overlay derives from `cmpi #0`
+        for (name, row) in tst_memory_table().values() {
+            add(name, row.asm.0, row.asm.1, row.encoding.0, row.encoding.1);
         }
         table
     })

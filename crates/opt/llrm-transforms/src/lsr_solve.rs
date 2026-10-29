@@ -19,7 +19,6 @@
 //! Nothing runs it yet: stage 5 of the translation of LSR.
 //!
 //! # Limits
-//! DEVIATE: `AMK_PostIndexed` (x86 prefers none) is not ported.
 //! DEVIATE LU3: see `solve`, the drop of a rewrite that spills (real mode).
 
 use llrm_analysis::scev::ScalarEvolution;
@@ -27,7 +26,7 @@ use llrm_analysis::scev::expr::Scev;
 use llrm_support::hash::HashSet;
 
 use crate::lsr_collect::Collection;
-use crate::lsr_use::Cost;
+use crate::lsr_use::{Cost, Kind};
 
 impl Collection<'_, '_> {
     /// `SolveRecurse`: decide use `workspace.len()`, then the rest.
@@ -51,17 +50,21 @@ impl Collection<'_, '_> {
             // Formulae that do not use the required registers before new ones
             // are ignored. If no formula satisfied them LLVM could clear the
             // set and try again; it gives up.
-            let mut to_find = f.num_regs().min(req_regs.len());
-            for reg in &req_regs {
-                if f.scaled_reg == Some(*reg) || f.base_regs.contains(reg) {
-                    to_find -= 1;
-                    if to_find == 0 {
-                        break;
+            // Favoring post-increment, an address use is left to the cost
+            // model: the required registers can mislead it.
+            if !self.tti.preferred_addressing_mode().has_post_indexed() || lu.kind != Kind::Address {
+                let mut to_find = f.num_regs().min(req_regs.len());
+                for reg in &req_regs {
+                    if f.scaled_reg == Some(*reg) || f.base_regs.contains(reg) {
+                        to_find -= 1;
+                        if to_find == 0 {
+                            break;
+                        }
                     }
                 }
-            }
-            if to_find != 0 {
-                continue;
+                if to_find != 0 {
+                    continue;
+                }
             }
             // The cost with this formula: a branch no better than the best is
             // pruned.

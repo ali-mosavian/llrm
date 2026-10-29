@@ -107,17 +107,22 @@ pub fn address_arithmetic(function: &mut MFunction) {
         }
     }
     for (at, dst) in converted {
-        sink_step(&mut function.blocks[at].insts, dst);
+        sink_step(&mut function.blocks[at].insts, &mut function.classes, dst);
     }
 }
 
-/// Moves the step that defines `dst`, with the copies of its result that
-/// follow it, below the accesses of the pointer it steps: up to the next
-/// instruction that writes or reads one of them or ends the block. The
-/// access then reads the old pointer and the step is the last use of it,
-/// which a post-increment folds and the allocator coalesces.
+/// Moves the step that defines `dst`, with the chain of copies of its result
+/// (the phi's, for the next trip), below the accesses of the pointer it
+/// steps: up to the next instruction that writes `src`, writes or reads one
+/// of the moved registers, or ends the block. The access then reads the old
+/// pointer and the step is the last use of it, which a post-increment folds
+/// and the allocator coalesces. Where a branch reads the flags, the chain
+/// lands after the instruction that set them and not before it (the step
+/// sets none, and nor does a copy between address registers), so an access
+/// that is the compare itself is passed.
 fn sink_step(
-    insts: &mut [llrm_spike_mf::Inst],
+    insts: &mut Vec<llrm_spike_mf::Inst>,
+    classes: &mut [Class],
     dst: u32,
 ) {
     let defines = |inst: &llrm_spike_mf::Inst, reg: u32| {
@@ -133,26 +138,60 @@ fn sink_step(
     };
     let Operand::Use(Reg::Virt(src)) = insts[at].operands[1] else { return };
     let mut moved = vec![dst];
-    let mut len = 1;
-    while let Some(next) = insts.get(at + len) {
-        let [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))] = next.operands[..] else { break };
-        if next.kind != Kind::Copy || !moved.contains(&from) || to == src {
+    let mut unit = vec![at];
+    let mut stop = insts.len();
+    for (j, inst) in insts.iter().enumerate().skip(at + 1) {
+        if inst.terminator || inst.call {
+            stop = j;
             break;
         }
-        moved.push(to);
-        len += 1;
-    }
-    let mut at = at;
-    while let Some(next) = insts.get(at + len) {
-        if next.terminator
-            || next.call
-            || defines(next, src)
-            || moved.iter().any(|&reg| defines(next, reg) || reads(next, reg))
+        if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) =
+            (inst.kind, &inst.operands[..])
+            && moved.contains(from)
+            && *to != src
         {
+            moved.push(*to);
+            unit.push(j);
+            continue;
+        }
+        if defines(inst, src) || moved.iter().any(|&reg| defines(inst, reg) || reads(inst, reg)) {
+            stop = j;
             break;
         }
-        insts[at..=at + len].rotate_right(1);
-        at += 1;
+    }
+    // a branch on the flags: the chain goes after the last instruction that
+    // sets them, which is where the branch wants them
+    let landing = match insts.get(stop) {
+        Some(branch) if branch.reads_flags => {
+            match insts[..stop].iter().rposition(|inst| inst.sets_flags || inst.call) {
+                Some(setter) if setter > at => setter + 1,
+                _ => stop,
+            }
+        }
+        _ => stop,
+    };
+    let landing = landing.min(stop);
+    // the chain keeps its place before the instructions it cannot pass
+    let first_blocked = unit.iter().position(|&j| j >= landing).unwrap_or(unit.len());
+    if first_blocked == 0 {
+        return;
+    }
+    let unit = &unit[..first_blocked];
+    // the copies of the chain are address registers, so none sets the flags
+    for &j in &unit[1..] {
+        if let Operand::Def(Reg::Virt(to)) = insts[j].operands[0] {
+            if let Some(class) = classes[to as usize].meet(Class::Ar32) {
+                classes[to as usize] = class;
+            }
+        }
+    }
+    let chain: Vec<llrm_spike_mf::Inst> = unit.iter().map(|&j| insts[j].clone()).collect();
+    for &j in unit.iter().rev() {
+        insts.remove(j);
+    }
+    let landing = landing - unit.len();
+    for (n, inst) in chain.into_iter().enumerate() {
+        insts.insert(landing + n, inst);
     }
 }
 

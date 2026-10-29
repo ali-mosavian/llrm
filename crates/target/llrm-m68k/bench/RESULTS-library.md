@@ -1,4 +1,4 @@
-# Library routines, 2026-10-29 15:25 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Library routines, 2026-10-29 15:33 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 Ten routines written after the first set was tuned (`bench/library/*.c`; IR from `gen.py`: clang -O2 without
 unrolling, as gcc -O2 does, with the lines MIR's subset does not take dropped). `cargo run -p llrm-m68k --release
@@ -12,7 +12,7 @@ Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -
 
 | kernel | raw B | ours B | best -O2 B | ours -Os B | best -Os B | raw insns | ours insns | best -O2 insns | ours -Os insns | best -Os insns | status |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| memcpy | 44 | 44 | 40 | 44 | 40 | 76 | 64 | 51 | 64 | 102 | -O2 +4 B, -O2 +13 insns, -Os +4 B |
+| memcpy | 44 | 44 | 40 | 46 | 40 | 76 | 64 | 51 | 75 | 102 | -O2 +4 B, -O2 +13 insns, -Os +6 B |
 | memset | 48 | 46 | 52 | 46 | 44 | 79 | 64 | 64 | 64 | 93 | -Os +2 B |
 | strcmp | 50 | 48 | 82 | 48 | 48 | 89 | 79 | 102 | 79 | 104 | at or below |
 | hex | 102 | 96 | 78 | 96 | 72 | 73 | 66 | 54 | 66 | 57 | -O2 +18 B, -O2 +12 insns, -Os +24 B, -Os +9 insns |
@@ -29,7 +29,7 @@ Rows still above a reference: memcpy, memset, hex, crc16, bsearch, partition, mu
 
 | kernel | raw B | ours B | ours -Os B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | raw insns | ours insns | ours -Os insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| memcpy | 44 | 44 | 44 | 106 | 106 | 40 | 40 | 76 | 64 | 64 | 197 | 197 | 102 | 51 | 33 all |
+| memcpy | 44 | 44 | 46 | 106 | 106 | 40 | 40 | 76 | 64 | 75 | 197 | 197 | 102 | 51 | 33 all |
 | memset | 48 | 46 | 46 | 90 | 90 | 44 | 52 | 79 | 64 | 64 | 147 | 147 | 93 | 64 | 14 all |
 | strcmp | 50 | 48 | 48 | 114 | 114 | 48 | 82 | 89 | 79 | 79 | 196 | 196 | 104 | 102 | 32 all |
 | hex | 102 | 96 | 96 | 142 | 140 | 72 | 78 | 73 | 66 | 66 | 94 | 97 | 57 | 54 | 204 all |

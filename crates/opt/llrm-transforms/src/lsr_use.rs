@@ -758,6 +758,32 @@ impl Cost {
     }
 }
 
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L3960
+/// `mayUsePostIncMode`: `s` steps by a constant from a start invariant in the
+/// loop, and the target has a post-indexed access of its type, for an integer
+/// address use.
+pub fn may_use_post_inc_mode(
+    tti: &dyn Tti,
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    lu: &Use,
+    s: Scev,
+    l: BlockId,
+) -> bool {
+    let int_access = lu.access_ty.mem_ty.is_some_and(|ty| cx.context.types.int_bits(ty).is_some());
+    if lu.kind != Kind::Address || !int_access {
+        return false;
+    }
+    let Some((start, step, _)) = se.match_affine_add_rec(s) else { return false };
+    if se.as_constant(step).is_none() {
+        return false;
+    }
+    let ty = crate::lsr_generate::tti_ty(se.type_of(s));
+    (tti.is_post_inc_load_legal(ty) || tti.is_post_inc_store_legal(ty))
+        && se.as_constant(start).is_none()
+        && se.is_loop_invariant(cx, start, Some(l))
+}
+
 /// Whether the loop of header `outer` contains the loop of header `inner`.
 fn cx_loop_contains(
     cx: &Cx,
