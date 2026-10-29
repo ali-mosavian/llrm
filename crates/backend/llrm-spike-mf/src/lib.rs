@@ -19,7 +19,7 @@ pub mod sink;
 pub mod spill;
 
 pub use commute::commute_tied;
-pub use fold::{branch_fold, remove_identity_copies, remove_redundant_copies};
+pub use fold::{branch_fold, remove_identity_copies, remove_redundant_copies, remove_redundant_copies_between};
 pub use mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg};
 pub use regalloc::{Allocate, Assignment, GraphColoring, Target};
 pub use reschedule::reschedule_kills;
