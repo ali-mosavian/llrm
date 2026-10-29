@@ -1777,6 +1777,27 @@ fn a_spill_temporary_takes_a_colour_that_costs_a_save() {
     assert!(text.contains("spt:"), "{text}");
 }
 
+/// `(x & 1) == 0 ? 0 : x` combines to a sign extension from one bit, which had no action at `i1`
+/// ("CannotSelect(SignExtendInReg)": differential seed 123 once the programs started from opaque values).
+#[test]
+fn a_select_on_the_low_bit_compiles_and_runs() {
+    let ir = "@buf = external global [16 x i8]
+define i16 @lowbit() {
+  %x = load i8, ptr @buf, align 1
+  %m = and i8 %x, 1
+  %c = icmp eq i8 %m, 0
+  %r = select i1 %c, i8 0, i8 %x
+  %w = zext i8 %r to i16
+  ret i16 %w
+}";
+    let text = compile_within_ten_seconds(ir, "lowbit");
+    for (first, want) in [(3, 3), (4, 0), (255, 255)] {
+        let data = format!(".export buf\nbuf: .byte {first},1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\n");
+        let got = common::run_with(&format!("alloc-lowbit-{first}"), "  jsr lowbit\n", &format!("{text}{data}"));
+        assert_eq!(got, want, "buf[0] = {first}");
+    }
+}
+
 /// `freeze` selects to the generic `COPY`, which the selector had no description of ("no description
 /// of opcode 20": differential seeds 21 and 26 were rejected for it).
 #[test]
