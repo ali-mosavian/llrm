@@ -811,3 +811,40 @@ fn a_sum_that_is_only_an_address_is_a_lea() {
     let pinned = text_with(&module, "k", Cpu::M68000, Options::PINNED).expect("compiles");
     assert!(!pinned.contains("\tlea\t(0,%a"), "{pinned}");
 }
+
+mod repeated_compares {
+    use llrm_m68k::expand::Line;
+    use llrm_m68k::overlay::drop_repeated_compares;
+
+    use super::*;
+
+    fn cmp() -> Line {
+        Line::Inst(Inst { opcode: "CMP32dr", operands: vec![register("d2"), register("a1")] })
+    }
+
+    fn branch(opcode: &'static str) -> Line {
+        Line::Inst(Inst { opcode, operands: vec![Operand::Symbol(".LBB0_9".into(), 0)] })
+    }
+
+    /// `a[m] == key`, then `a[m] < key` on the next block: one `cmp` for both
+    /// branches (bsearch ran `cmp; beq; cmp; bge` each trip).
+    #[test]
+    fn a_compare_again_after_a_branch_is_dropped() {
+        let lines = vec![cmp(), branch("Beq8"), cmp(), branch("Bge8")];
+        assert_eq!(drop_repeated_compares(lines), vec![cmp(), branch("Beq8"), branch("Bge8")]);
+    }
+
+    /// A label in between has another way in; a write between changes the
+    /// operands; a different compare is a different compare.
+    #[test]
+    fn a_compare_after_a_label_a_write_or_other_operands_stays() {
+        let with_label = vec![cmp(), branch("Beq8"), Line::Label(3), cmp(), branch("Bge8")];
+        assert_eq!(drop_repeated_compares(with_label.clone()), with_label);
+        let write = Line::Inst(Inst { opcode: "ADDQ32d", operands: vec![register("d2"), register("d2"), Operand::Imm(1)] });
+        let after_write = vec![cmp(), branch("Beq8"), write, cmp(), branch("Bge8")];
+        assert_eq!(drop_repeated_compares(after_write.clone()), after_write);
+        let other = Line::Inst(Inst { opcode: "CMP32dr", operands: vec![register("d3"), register("a1")] });
+        let different = vec![cmp(), branch("Beq8"), other, branch("Bge8")];
+        assert_eq!(drop_repeated_compares(different.clone()), different);
+    }
+}
