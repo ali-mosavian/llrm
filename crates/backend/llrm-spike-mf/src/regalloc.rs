@@ -567,6 +567,11 @@ impl<T: Target> GraphColoring<T> {
                 if !T::candidates(classes[drop]).contains(&root) {
                     continue;
                 }
+                // `drop` is live with another physical register that shares
+                // storage with `root`: joined, both would hold it at once
+                if edges[drop].iter().any(|n| *n >= count && *n != keep && T::overlaps(nodes.physical[*n - count], root)) {
+                    continue;
+                }
                 classes[keep]
             } else {
                 match T::meet(classes[keep], classes[drop]) {
