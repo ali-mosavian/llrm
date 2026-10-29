@@ -382,6 +382,11 @@ impl<T: Target> GraphColoring<T> {
                         connect(*d, *other, &mut edges);
                     }
                 }
+                if block.insts[i].early_clobber {
+                    for (d, u) in defs.iter().flat_map(|d| uses.iter().map(move |u| (d, u))) {
+                        connect(*d, *u, &mut edges);
+                    }
+                }
                 for d in defs {
                     live.remove(d);
                 }

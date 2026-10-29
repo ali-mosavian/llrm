@@ -122,3 +122,18 @@ fn a_global_at_a_constant_offset_is_an_absolute_load() {
     let data = ".segment \"DATA\"\nbuf: .byte 1, 2, 3, 4\n.segment \"CODE\"\n";
     assert_eq!(common::run_with("alloc-pair", "  jsr pair\n", &format!("{text}{data}")), 6);
 }
+
+/// A word select keeps both bytes of the winner whichever side it is: max(300,
+/// 5000) = 5000 = 0x1388 and max(700, 20) = 700 = 0x02BC, low byte in `a`,
+/// high in `x`.
+#[test]
+fn a_word_select_returns_the_larger_word() {
+    let ir = "define i16 @max16(i16 %a, i16 %b) {\n  %c = icmp ugt i16 %a, %b\n  %r = select i1 %c, i16 %a, i16 %b\n  ret i16 %r\n}";
+    let text = compile(ir, "max16", true);
+    for (a, b, lo, hi) in [(300u16, 5000u16, 0x88, 0x13), (700, 20, 0xBC, 0x02)] {
+        let setup = set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8);
+        let run = |after: &str| common::run_with("alloc-max16", &format!("{setup}  jsr max16\n{after}"), &text);
+        assert_eq!(run(""), lo);
+        assert_eq!(run("  txa\n"), hi);
+    }
+}

@@ -624,6 +624,22 @@ pub fn build(
                 b.push(cmov);
                 b.copy(d, Reg::Phys(reg::A));
             }
+            op::CMOV16 => {
+                b.redo_compare()?;
+                b.define(name(&o[0])?);
+                let ((dl, dh), (fl, fh), (tl, th)) =
+                    (b.word(name(&o[0])?)?, b.word(name(&o[1])?)?, b.word(name(&o[2])?)?);
+                for r in [fl, fh, tl, th] {
+                    b.require(r, Class(Class::X | Class::Y | Class::M))?;
+                }
+                let mut operands = vec![Operand::Def(dl), Operand::Def(dh), Operand::Def(Reg::Phys(reg::A))];
+                operands.extend([fl, fh, tl, th].map(Operand::Use));
+                operands.extend([Operand::Imm(immediate(&o[3])?), Operand::Use(Reg::Phys(reg::FLAGS))]);
+                let mut cmov = Inst::new(Kind::Op("CMOV16"), operands);
+                cmov.reads_flags = true;
+                cmov.early_clobber = true;
+                b.push(cmov);
+            }
             op::RET => {
                 let results = results(&b.function.blocks[b.current].insts);
                 let mut ret =
@@ -937,6 +953,30 @@ pub fn emit(
                     } else {
                         through_a(&mut out, a_live, &format!("  lda #{part}{symbol}\n  sta {}\n", register_name(d)));
                     }
+                }
+                // both bytes of d := cc ? t : f; every use is read into `a`
+                // before a def is written, and no def shares a register with a
+                // use
+                (Kind::Op("CMOV16"), [.., Operand::Imm(code), _]) => {
+                    made += 1;
+                    let (taken, done) = (format!("_cmt{made}"), format!("_cmd{made}"));
+                    let branch = ["beq", "bne", "bcc", "bcs", "bmi", "bpl"][*code as usize];
+                    let load = |out: &mut String, r: RegId| match r {
+                        r if r == reg::X => out.push_str("  txa\n"),
+                        r if r == reg::Y => out.push_str("  tya\n"),
+                        r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
+                    };
+                    writeln!(out, "  {branch} {taken}").unwrap();
+                    for (n, pair) in [[regs[3], regs[4]], [regs[5], regs[6]]].into_iter().enumerate() {
+                        for (d, from) in [regs[0], regs[1]].into_iter().zip(pair) {
+                            load(&mut out, from);
+                            move_byte(&mut out, d, reg::A, false);
+                        }
+                        if n == 0 {
+                            writeln!(out, "  jmp {done}\n{taken}:").unwrap();
+                        }
+                    }
+                    writeln!(out, "{done}:").unwrap();
                 }
                 (Kind::Op("STZ"), _) => writeln!(out, "  stz {}", register_name(regs[0])).unwrap(),
                 (Kind::Op("STZM"), [Operand::Symbol(symbol, _)]) => writeln!(out, "  stz {symbol}").unwrap(),

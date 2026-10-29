@@ -50,6 +50,9 @@ pub struct Inst {
     pub sets_flags: bool,
     /// It reads the status flags.
     pub reads_flags: bool,
+    /// It writes a result before it has read every use, so no def may share
+    /// a register with a use (`earlyclobber`).
+    pub early_clobber: bool,
 }
 
 impl Inst {
@@ -66,6 +69,7 @@ impl Inst {
             barrier: false,
             sets_flags: false,
             reads_flags: false,
+            early_clobber: false,
         }
     }
 

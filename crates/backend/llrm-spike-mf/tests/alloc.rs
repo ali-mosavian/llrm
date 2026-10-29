@@ -264,3 +264,19 @@ fn a_value_used_in_a_loop_outlives_one_used_after_it() {
     assert_eq!(count(&function, 1, "spill_store") + count(&function, 1, "spill_load"), 0, "none in the loop");
     assert_eq!(count(&function, 2, "spill_load"), 3);
 }
+
+/// An instruction that writes its result before it has read every operand
+/// must not get a use's register for it: a value that dies at an ordinary
+/// instruction hands over its register, at an early-clobber one it does not.
+#[test]
+fn an_early_clobber_def_does_not_take_a_dying_uses_register() {
+    let build = |early: bool| {
+        let mut both = op("both", vec![Operand::Def(v(1)), Operand::Use(v(0))]);
+        both.early_clobber = early;
+        function(vec![op("def", vec![Operand::Def(v(0))]), both, use1(v(1))], 2)
+    };
+    let shared = GraphColoring::<Two>::default().allocate(&build(false)).unwrap().0;
+    assert_eq!(shared[0], shared[1], "an ordinary def reuses the dying use's register");
+    let apart = GraphColoring::<Two>::default().allocate(&build(true)).unwrap().0;
+    assert_ne!(apart[0], apart[1]);
+}
