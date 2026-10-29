@@ -20,6 +20,11 @@ pub struct EhTarget<'a> {
     pub address: usize,
     /// The column of the return address.
     pub return_column: u64,
+    /// Whether the return address is in memory at entry (a call pushes it);
+    /// otherwise it is in the register of `return_column`.
+    pub return_saved: bool,
+    /// The bytes an advance of the location is counted in.
+    pub code_alignment: u64,
     /// The rule at a function's entry: the frame address and where the return
     /// address is.
     pub entry: FrameRow,
@@ -42,7 +47,7 @@ pub fn expanded(
     buf.u32(0);
     buf.u8(1);
     buf.string("zR");
-    buf.uleb(1);
+    buf.uleb(target.code_alignment);
     buf.sleb(alignment);
     buf.u8(target.return_column as u8);
     buf.uleb(1);
@@ -50,8 +55,10 @@ pub fn expanded(
     buf.u8(DW_CFA_DEF_CFA);
     buf.uleb(number(&target.entry.cfa_register)?);
     buf.uleb(target.entry.cfa_offset as u64);
-    buf.u8(DW_CFA_OFFSET | target.return_column as u8);
-    buf.uleb(target.entry.cfa_offset as u64 / target.address as u64);
+    if target.return_saved {
+        buf.u8(DW_CFA_OFFSET | target.return_column as u8);
+        buf.uleb(target.entry.cfa_offset as u64 / target.address as u64);
+    }
     pad(&mut buf, target.address);
     buf.patch32(0, buf.at() as u32 - 4);
     let initial = FrameRow { offset: 0, saved: Vec::new(), ..target.entry.clone() };
@@ -66,7 +73,7 @@ pub fn expanded(
         buf.uleb(0);
         let mut state = &initial;
         for row in &frame.rows {
-            advance(&mut buf, row.offset - state.offset.min(row.offset));
+            advance(&mut buf, (row.offset - state.offset.min(row.offset)) / target.code_alignment as usize);
             changes(&number, &mut buf, state, row, alignment)?;
             state = row;
         }
