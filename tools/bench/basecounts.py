@@ -30,6 +30,10 @@ COUNTERS = ("instructions", "memory_operands", "code_bytes", "data_bytes", "bss_
 WAIVERS = "tools/bench/waivers"
 
 
+# Files in a benchmark directory no compiler reads: the output a run is checked against (`.out`, `.ci.out`, BC's `.bcout`) and a listing.
+NOT_INPUT = {".out", ".bcout", ".asm"}
+
+
 # What changes nothing a count is made of: a commit that touches only these has its parent's counts.
 INERT = {"docs", "editors", ".github", ".zed", ".gitignore", "license"}  # and every top-level .md
 
@@ -54,12 +58,12 @@ def record(rows: dict, cache: Path, key: str, root: Path = ROOT) -> Path:
 
 
 def programs(root: Path = ROOT) -> dict[str, str]:
-    """Each benchmark's hash: its sources and settings (not its baseline or the waivers). A row of a program that differs between the base
-    and the head compares two programs, not two compilers, and is not judged."""
+    """Each benchmark's hash: its sources and settings (not its baseline, the waivers or what a run is checked against). A row of a program
+    that differs between the base and the head compares two programs, not two compilers, and is not judged."""
     out = {}
     for settings in sorted((root / "bench").glob("**/bench.toml")):
         digest = hashlib.sha256()
-        for one in sorted(path for path in settings.parent.iterdir() if path.is_file() and path.name != "expected.toml"):
+        for one in sorted(path for path in settings.parent.iterdir() if path.is_file() and path.name != "expected.toml" and path.suffix not in NOT_INPUT):
             digest.update(one.name.encode() + b"\0" + one.read_bytes())
         out[str(settings.parent.relative_to(root / "bench"))] = digest.hexdigest()[:12]
     return out

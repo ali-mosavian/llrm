@@ -76,6 +76,20 @@ def test_the_base_is_measured_once_per_tree_and_a_missing_level_is_measured_agai
     assert json.loads((tmp_path / "ts1-own.json").read_text())["rows"]["fib/c/Os"]["instructions"] == 1
 
 
+def test_an_expected_output_or_a_generated_listing_added_to_a_program_does_not_make_it_a_different_program(tmp_path):
+    """b7f86c5d53 added `<name>.bcout` to 11 benchmarks and d405319be6 a `grep.asm`: all 12 hashed differently from main, counted as edited, and
+    the judge skipped every row of them (182 rows over main unseen, 0 problems printed). Only what the compilers read is the program."""
+    (tmp_path / "bench/fib").mkdir(parents=True)
+    (tmp_path / "bench/fib/bench.toml").write_text("repetitions = 1\n")
+    (tmp_path / "bench/fib/fib.c").write_text("int a;\n")
+    first = bc.programs(tmp_path)
+    for name in ("fib.bcout", "fib.out", "fib.ci.out", "fib.asm"):
+        (tmp_path / "bench/fib" / name).write_text("5\n")
+        assert bc.programs(tmp_path) == first, f"{name} is not the program"
+    (tmp_path / "bench/fib/bench.toml").write_text("repetitions = 2\n")
+    assert bc.programs(tmp_path) != first, "a setting is"
+
+
 def test_a_program_that_differs_between_the_base_and_the_head_is_not_judged_and_the_baseline_file_is_not_part_of_it(tmp_path):
     """The base is measured by its own harness and programs: a row of an edited program compares two programs, not two compilers."""
     (tmp_path / "bench/fib").mkdir(parents=True)
