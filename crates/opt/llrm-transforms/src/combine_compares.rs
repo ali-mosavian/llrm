@@ -28,11 +28,6 @@
 //! the lead). `(a & -4) == C` folds at C = 0 and signmin only
 //! (`a s< -32764` at i16); `((b + M) & M) u< b` is `b != 0` for M = 3, 7.
 //!
-//! DEVIATE 1 (permanent): `samesign` is not a flag of MIR's `icmp`; the folds
-//! that read or set it are left out (the unsigned-to-`samesign` step of
-//! `foldICmpUsingKnownBits`; the signed-to-unsigned step is made, which is what
-//! sets the flag in LLVM).
-//!
 //! DEVIATE 2 (temporary): `foldICmpUsingKnownBits` computes the known bits of
 //! the operands, where LLVM first runs `SimplifyDemandedBits` on them
 //! (InstCombineSimplifyDemanded.cpp, not translated): the same facts or fewer.
@@ -889,7 +884,7 @@ fn ceil_log2(
 
 /// `foldICmpUsingKnownBits`
 /// ([:7106](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L7106)).
-/// DEVIATE 2: no `SimplifyDemandedBits` first; DEVIATE 1: no `samesign`.
+/// DEVIATE 2: no `SimplifyDemandedBits` first.
 fn fold_icmp_using_known_bits(
     c: &mut Combiner,
     inst: InstId,
@@ -1090,12 +1085,16 @@ fn fold_icmp_using_known_bits(
         _ => {}
     }
     // Turn a signed comparison into an unsigned one if both operands are known
-    // to have the same sign.
+    // to have the same sign. Set samesign if possible (not for equality).
     let sign = 1u128 << (width - 1);
-    if is_signed(pred)
+    let mut flags = c.function.instruction(inst).flags;
+    let is_unsigned = !is_signed(pred) && !matches!(pred, IntPredicate::Eq | IntPredicate::Ne);
+    if (is_signed(pred) || (is_unsigned && !flags.contains(Flags::SAMESIGN)))
         && ((known0.zero & sign != 0 && known1.zero & sign != 0) || (known0.one & sign != 0 && known1.one & sign != 0))
     {
         c.function.set_icmp_predicate(inst, unsigned_predicate(pred));
+        flags.insert(Flags::SAMESIGN);
+        c.function.set_flags(inst, flags);
         c.add_to_worklist(inst);
         return Some(Visit::Changed);
     }

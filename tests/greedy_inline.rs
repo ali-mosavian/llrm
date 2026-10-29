@@ -201,7 +201,6 @@ fn the_parity_pipeline_allocates_with_greedy() {
     std::fs::write(scratch.path().join("a.c"), "int f(int a, int b) { return a * b + a; }\n").unwrap();
     let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .env_remove("LLRM_NO_LLVM_ORDER")
         .env("LLRM_GREEDY_TRACE", "1")
         .args(["-m32", "-march=i486", "-O2", "-o", "a.o", "a.c"])
         .output()

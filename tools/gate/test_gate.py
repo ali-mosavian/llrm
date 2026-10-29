@@ -13,6 +13,12 @@ import gate  # noqa: E402
 ROOT = gate.ROOT
 
 
+
+def ci_needs(workflow: str) -> list[str]:
+    """The last three jobs `ci:` waits for: the ones before them (static, toolchain, pintools, build) come and go."""
+    return re.search(r"\n  ci:\n    needs: \[([^\]]*)\]", workflow)[1].split(", ")[-3:]
+
+
 def test_a_change_in_the_c_frontend_runs_the_c_programs_and_qcport_not_the_debugger_sessions():
     p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     assert p.tier == "fast"
@@ -1063,6 +1069,14 @@ def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
                 os.kill(int(sleeper_pid.read_text()), signal.SIGKILL)
 
 
+def test_a_gate_without_a_user_bus_refuses_with_the_hint_instead_of_exiting_on_a_dbus_line():
+    """Under `env -i` the gate re-executed itself into systemd-run, which failed with one dbus line and no verdict (bare-environment repro, 2026-10-29)."""
+    assert "GATE_SCOPED=1" in gate.scope_refusal({}, "/usr/bin/systemd-run")
+    assert gate.scope_refusal({"XDG_RUNTIME_DIR": "/run/user/1"}, "/usr/bin/systemd-run") is None
+    assert gate.scope_refusal({"GATE_SCOPED": "1"}, "/usr/bin/systemd-run") is None
+    assert gate.scope_refusal({}, "") is None
+
+
 def test_the_gate_scope_is_omitted_from_systemd_oomd(tmp_path):
     """systemd-oomd SIGKILLed two fast gates at 13:56 on memory pressure (58%, then 78%, over 50% for 20 s) with 174 G free: a gate in its
     own scope was a victim. The scope carries user.oomd_omit, which oomd honours."""
@@ -1234,7 +1248,7 @@ def test_the_checks_that_build_nothing_run_alone_before_the_build():
     assert not {"fmt", "docs", "products"} & {s for g, steps in cfg["groups"].items() if g != "static" for s in steps}
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "  build:\n    needs: [plan, static]" in workflow and 'if g != "static"' in workflow, "the matrix never runs the static group"
-    assert "needs: [plan, build]\n    # A skipped ancestor" in workflow and "needs.build.result == 'success' }}" in workflow, "a skipped static job must not skip the gate"
+    assert re.search(r"needs: \[plan, build[^\]]*\]\n    # A skipped ancestor", workflow) and "needs.build.result == 'success'" in workflow, "a skipped static job must not skip the gate"
 
 
 def test_a_draft_runs_plan_and_static_only_and_is_never_reported_as_a_pass():
@@ -1309,7 +1323,7 @@ def test_the_bench_step_runs_as_shards_and_a_merge_judges_the_whole_and_records_
     assert "actions/cache/restore@v4" in workflow and "bench-base-$(python3 tools/bench/basecounts.py key HEAD^1" in workflow
     merge = workflow[workflow.index("  bench-merge:") : workflow.index("\n  ci:")]
     assert "bench.py --merge" in merge and "'--record'" in merge and "key: ${{ steps.basecounts.outputs.head }}" in merge
-    assert "needs: [plan, static, build, gate, bench-merge, setup-check]" in workflow
+    assert ci_needs(workflow) == ["gate", "bench-merge", "setup-check"], "ci waits for the gate, the merge and the set-up check, after any jobs before them"
     assert "if: always() && github.event_name == 'push' && steps.merge.outputs.recorded == 'true'" in merge, "saved even when the verdict is a failure"
 
 
@@ -1317,8 +1331,9 @@ def test_the_bench_step_is_cut_into_the_configured_shards_each_with_its_own_slic
     p = gate.plan(["bench/fib/fib.c"], "full")
     groups = gate.groups_of(p, {})
     n = gate.load()["bench"]["shards"]
-    assert [g for g in groups if g.startswith("bench")] == [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
+    assert [g for g in groups if g.startswith("bench")] == ["bench-base"] + [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
     assert gate.shard_of("bench-3") == ("bench", f"3/{n}") and gate.shard_of("tools") == ("tools", None)
+    assert gate.shard_of("bench-base") == ("bench", "base"), "the base is measured once, by its own job, for every slice to be judged against"
     assert "--shard" in gate.commands(p, gate.load(), gate.packages())["bench"]
 
 
@@ -1389,7 +1404,7 @@ def test_a_change_to_the_setup_action_is_run_on_tinytim_before_it_merges():
     """#1987 fixed the set-up there and its own diff planned no tinytim job: the live proof is a job for any change to the action."""
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "setup-check:" in workflow and "runs-on: [self-hosted, tinytim]" in workflow.split("setup-check:")[1].split("static:")[0]
-    assert "\\.github/actions/setup/" in workflow and "needs: [plan, static, build, gate, bench-merge, setup-check]" in workflow
+    assert "\\.github/actions/setup/" in workflow and ci_needs(workflow) == ["gate", "bench-merge", "setup-check"]
 
 
 def test_a_push_to_main_makes_no_perf_or_cost_job():
