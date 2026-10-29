@@ -602,6 +602,20 @@ def test_a_worse_count_fails_the_gate_and_nothing_else_does(monkeypatch, capsys,
     assert code == 0 and "BETTER" not in out and "0 problems" in out
 
 
+def test_the_run_tells_its_stages_on_stderr_and_keeps_stdout_for_the_verdict(monkeypatch, capsys, tmp_path):
+    """bench-3 of gate run 2 printed nothing for 45 minutes before the job timeout cancelled it: nobody could tell the build from the base pass from a DOSBox run."""
+    monkeypatch.setattr(sys, "argv", ["bench.py", "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
+    monkeypatch.setattr(bench, "judge", lambda *a: [])
+    monkeypatch.setattr(bench, "base_rows", lambda args: ({}, set(), "0" * 40))
+    monkeypatch.setattr(bench, "standing", lambda *a: [])
+    monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
+    bench.main()
+    seen = capsys.readouterr()
+    assert [word for word in ("measuring", "measured", "base counts", "base 000000000") if word not in seen.err] == []
+    assert "bench:" not in seen.out
+
+
 def test_record_keeps_the_heads_counts_without_measuring_a_base(monkeypatch, capsys, tmp_path):
     """The counts were recorded after the base was measured: a main push saved them 40 minutes in, and five pull requests measured the base alone."""
     def no_base(args):
