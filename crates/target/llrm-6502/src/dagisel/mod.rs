@@ -5,6 +5,7 @@
 #[allow(unused_variables)]
 pub mod generated;
 pub mod call;
+pub mod combine;
 pub mod function;
 pub mod hooks;
 pub mod lowering;
