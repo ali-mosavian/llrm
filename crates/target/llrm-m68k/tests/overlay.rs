@@ -218,3 +218,14 @@ fn a_loop_carrying_a_sum_rotates_its_pair_in_two_moves() {
     let ours = compiled(ir, Options::default());
     assert_eq!(loop_moves(&ours), 2, "{ours}");
 }
+
+/// `s += p[i] > t` ended `sgt %d1; and.l #255, %d1; and.l #1, %d1`: the second
+/// mask makes the first one dead.
+#[test]
+fn two_masks_of_one_register_in_a_row_are_one() {
+    let ir = "define i32 @f(i32 %a, i32 %b, i32 %s) {\n  %c = icmp sgt i32 %a, %b\n  %z = zext i1 %c to i32\n  %r = add i32 %s, %z\n  ret i32 %r\n}";
+    let pinned = compiled(ir, Options::PINNED);
+    assert!(pinned.contains("and.l\t#255") && pinned.contains("and.l\t#1,"), "{pinned}");
+    let ours = compiled(ir, Options::default());
+    assert!(ours.contains("and.l\t#1,") && !ours.contains("and.l\t#255"), "{ours}");
+}
