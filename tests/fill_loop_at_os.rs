@@ -38,11 +38,14 @@ fn at_o2_the_same_loop_is_fills() {
     assert!(text.contains("rep stos"), "{text}");
 }
 
-/// qcport sc.c: three stores of -1 into one object merge into one fill; the
-/// first version of the rule priced three and left sc_reset_lists a call
-/// (+38 bytes over the module).
+/// bdb4328bed: a size-only fill pays its clocks in the bytes it saves (10
+/// clocks a byte at m16 -Os). This 64-trip loop is 19 B against the fill's 16,
+/// and the rule prices the fill's extra clocks above 3 B x 10, so
+/// the loop stays. It was one fill before the rule; QCport
+/// -Os modules are 41 B smaller in all with it (sc.c 11499 to 11484).
 #[test]
-fn at_os_stores_of_one_value_into_one_object_are_one_fill() {
+fn at_os_stores_into_one_object_stay_a_loop_when_the_fill_saves_too_little() {
     let text = fill_listing(ONE_OBJECT, &["-Os"]);
-    assert!(text.contains("rep stos"), "{text}");
+    assert!(!text.contains("rep stos"), "{text}");
+    assert!(text.contains("jne"), "{text}");
 }
