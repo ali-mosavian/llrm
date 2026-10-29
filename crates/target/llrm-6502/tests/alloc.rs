@@ -722,7 +722,9 @@ fn a_loop_variable_and_its_copy_share_a_slot() {
 #[test]
 fn nothing_is_pushed_around_moves_before_a_call() {
     let text = compile(DIGITS, "digits");
-    assert!(!text.contains("  pha\n"), "{text}");
+    // the only pushes are the callee-saved cells on entry
+    let saves = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha\n"))).count();
+    assert_eq!(text.matches("  pha\n").count(), saves, "{text}");
 }
 
 /// A loop whose latch comes first in the layout: the latch's phi is read only on the edge back to
@@ -922,7 +924,8 @@ fn nothing_is_pushed_around_moves_between_two_calls() {
     let ir = "define i16 @two(i16 %a, i16 %b) {\n  %q = udiv i16 %a, 10\n  %r = urem i16 %b, 7\n  %s = add i16 %q, %r\n  \
               %t = add i16 %s, %a\n  ret i16 %t\n}";
     let text = compile(ir, "two");
-    assert!(!text.contains("  pha\n"), "{text}");
+    let saves = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha\n"))).count();
+    assert_eq!(text.matches("  pha\n").count(), saves, "{text}");
 }
 
 /// Constants 100 and 7 (not the 10 and 0 of digits) are loaded where read, not stored to a slot.
@@ -967,7 +970,7 @@ fn a_callee_saved_cell_goes_to_the_loop_values_only() {
               %hot = phi i8 [ 0, %entry ], [ %hot2, %loop ]\n  %r = call i8 @ext(i8 %i)\n  %hot2 = add i8 %hot, %r\n  %i2 = add i8 %i, 1\n  \
               %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  %out = add i8 %hot2, %cold\n  ret i8 %out\n}";
     let text = compile(ir, "mix");
-    let saved = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  sta s_mix"))).count();
+    let saved = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
     assert_eq!(saved, 3, "{text}");
     assert!(text.contains("  lda rc2\n  sta s_mix"), "cold is in a slot: {text}");
 }
@@ -1007,4 +1010,46 @@ fn a_read_of_the_old_pointer_goes_before_its_bump() {
         let bumped = text.lines().find_map(|l| l.trim().strip_prefix("inc rc")).map(str::to_owned).expect("an inc rc");
         assert!(text.contains(&format!("(rc{bumped})")), "{name}: {text}");
     }
+}
+
+/// A leaf saves its callee-saved cells on the hardware stack and pops them before `rts`; the result
+/// waiting in `a` (and `x`) must come through the pops, and the caller's cells must be as they were.
+/// A byte result (the quad test), a word result in `a` and `x`, and no result at all.
+#[test]
+fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
+    let data = ".segment \"DATA\"\ntab: .byte 3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\nout: .res 1\n.segment \"CODE\"\n";
+    let keep: [u8; 8] = [0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x17, 0x28];
+    let mut set = String::new();
+    let mut check = String::from("  lda #0\n  sta rc2\n");
+    for (i, v) in keep.iter().enumerate() {
+        set += &format!("  lda #{v}\n  sta rc{}\n", 8 + i);
+        check += &format!("  lda rc{}\n  eor #{v}\n  ora rc2\n  sta rc2\n", 8 + i);
+    }
+    check += "  lda rc2\n";
+    let args = "  lda #<tab\n  sta rc2\n  lda #>tab\n  sta rc3\n  lda #4\n  sta rc4\n";
+    let base = quad_ir("quad", false);
+    let word = base
+        .replace("define i8 @quad(", "define i16 @quad(")
+        .replacen("  ret i8 %r\n}", "  %w = zext i8 %r to i16\n  %h = shl i16 %w, 8\n  %o = or i16 %h, %w\n  ret i16 %o\n}", 1);
+    let void = base
+        .replace("define i8 @quad(", "define void @quad(ptr %o, ")
+        .replacen("  ret i8 %r\n}", "  store i8 %r, ptr %o\n  ret void\n}", 1);
+    // the word: 58 in both halves
+    let text = compile(&word, "quad");
+    assert!(text.contains("  pla\n") && text.contains("  tay\n"), "pops with a result live:\n{text}");
+    let program = format!("{text}{data}");
+    let low = common::run_with("alloc-pushed-lo", &format!("{set}{args}  jsr quad\n"), &program);
+    let high = common::run_with("alloc-pushed-hi", &format!("{set}{args}  jsr quad\n  txa\n"), &program);
+    assert_eq!((low, high), (58, 58));
+    let kept = common::run_with("alloc-pushed-kept", &format!("{set}{args}  jsr quad\n{check}"), &program);
+    assert_eq!(kept, 0, "the word version changed a callee-saved cell");
+    // no result: the output byte arrives through a pointer in rc2:rc3, the table in rc4:rc5, the count in rc6
+    let text = compile(&void, "quad");
+    assert!(!text.contains("  tay\n  pla"), "no result to keep:\n{text}");
+    let program = format!("{text}{data}");
+    let args = "  lda #<out\n  sta rc2\n  lda #>out\n  sta rc3\n  lda #<tab\n  sta rc4\n  lda #>tab\n  sta rc5\n  lda #4\n  sta rc6\n";
+    let result = common::run_with("alloc-pushed-void", &format!("{set}{args}  jsr quad\n  lda out\n"), &program);
+    assert_eq!(result, 58);
+    let kept = common::run_with("alloc-pushed-void-kept", &format!("{set}{args}  jsr quad\n{check}"), &program);
+    assert_eq!(kept, 0, "the void version changed a callee-saved cell");
 }
