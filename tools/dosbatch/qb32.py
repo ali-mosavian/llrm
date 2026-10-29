@@ -129,7 +129,7 @@ def build(work: Path) -> dict[str, Path]:
     include = dosbatch.c_include(TARGET, work)
     made: dict[str, Path] = {}
     failures = []
-    tree, tools = _tree(), _stamp(dosbatch.c_frontend(), "jwasm", "jwlink")
+    tree, tools = _tree(), _stamp(dosbatch.c_frontend(), "jwasm", "jwlink") + "|" + dosbatch.clang_identity()
     for source in sorted([*RUNTIME.glob("*.c"), *qbruntime.platform_sources_of(PLATFORM)]):
         if source.name == "start.asm":
             continue

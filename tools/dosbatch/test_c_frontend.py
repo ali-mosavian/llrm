@@ -188,3 +188,21 @@ def test_a_program_linked_without_an_entry_calls_the_start_ups_default_main(monk
     monkeypatch.setattr(dosbatch, "os_layer", lambda target, field, language: "A=1")
     assert dosbatch.entry_defines("x86-m16", None) == ("A=1",)
     assert dosbatch.entry_defines("x86-m16", "main_", near=True) == ("A=1", "NEAR_CODE=1", "LL_MAIN=main_")
+
+
+def test_the_object_cache_key_names_the_clang(monkeypatch, tmp_path):
+    """w13: the key ignored the compiler, so swapping LLRM_CLANG_M16 served objects another clang built and the results looked valid."""
+    import qbruntime
+
+    def clang(name, version):
+        path = tmp_path / name
+        path.write_text(f"#!/bin/sh\necho 'clang version {version}'\n")
+        path.chmod(0o755)
+        return str(path)
+
+    keys = []
+    for name, version in (("a", "1"), ("b", "2")):
+        monkeypatch.setenv("LLRM_CLANG_M16", clang(name, version))
+        dosbatch.clang_identity.cache_clear()
+        keys.append(qbruntime.c_build_key())
+    assert keys[0] != keys[1]
