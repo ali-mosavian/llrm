@@ -886,3 +886,22 @@ b0:
     );
     assert!(after.contains("icmp samesign ult"), "{after}");
 }
+
+/// InstCombine's queries read no metadata, so a load's `!range` told it
+/// nothing: `icmp ult %i, %len` never got `samesign` and quicksort's `a[j]`
+/// check stayed in the loop.
+#[test]
+fn test_a_load_range_makes_an_unsigned_compare_samesign() {
+    let after = combined(
+        "define i1 @f(ptr %p, ptr %q) {
+b0:
+  %a = load i16, ptr %p, !range !0
+  %b = load i16, ptr %q, !range !0
+  %c = icmp ult i16 %a, %b
+  ret i1 %c
+}
+!0 = !{i16 0, i16 -32768}
+",
+    );
+    assert!(after.contains("icmp samesign ult"), "{after}");
+}
