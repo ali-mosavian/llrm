@@ -2,11 +2,14 @@
 # triple. `clang` are the arguments the pinned clang gets (triple, headers, macros), `llc` the ones llrm-llc gets.
 # `datalayout` is what clang must print for the triple: a mismatch is refused before llrm sees the IR. `{datalayout:x86-m16}` stands for
 # that target's `datalayout.toml` string (stated once, there); a suffix after it is the row's own.
+# `description` names the crate whose `[c]` states sizeof(int, long, void *, ...); `wchar_bytes` and `long_double_bytes` are the row's libc's departures from it (tests/c_abi.rs
+# holds the front end to them; the triple's default decides nothing).
 # `llc_program` (default llrm-llc) and `llc_level` (default true: it takes -O<n>) say how the backend is run.
 # `clang_env` names an environment variable holding a clang for the target (m16's carries the i8086 patch).
 # `link` is the recipe for objects to an executable; `{objects}` and `{flags}` stand for lists, `{output}` for a path, `{root}` for the llrm checkout.
 
 [x86_64-linux]
+description = "x86-m64"
 triple = "x86_64-unknown-linux-gnu"
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 clang = ["-ffp-contract=off", "-target", "x86_64-unknown-linux-gnu"]
@@ -19,10 +22,11 @@ link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
 # Flat DOS under DOS/32A. Clang's i386 layout differs from llrm's only in preferred alignments, so the module's layout
 # is replaced by `datalayout` once the facts that matter are equal. Functions are cdecl (`-mabi=sysv`).
 [x86_32-dos]
+description = "x86-m32"
 # The i8086 fork's clang reads `#pragma aux NAME "LINK"`, which the OS layer's header (llrm_os.h) names its routines with.
 clang_env = "LLRM_CLANG_M16"
 triple = "i486-unknown-linux-gnu"
-datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
+datalayout = "{datalayout:x86-m32}"
 clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-ffreestanding", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables",
   "-U__linux__", "-U__linux", "-U__gnu_linux__", "-Ulinux", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-include", "{root}/toolchain/clang/flat.h"]
 llc = ["-fobject-format=omf", "-mabi=sysv"]
@@ -33,6 +37,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 
 # arm64 Linux, run under qemu-aarch64 against the freestanding runtime of the arm64 tests (tools/targets/arm64-link.sh).
 [arm64-linux]
+description = "arm64"
 triple = "aarch64-unknown-linux-gnu"
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
 clang = ["-ffp-contract=off", "-target", "aarch64-unknown-linux-gnu", "-ffreestanding"]
@@ -47,6 +52,7 @@ run = ["qemu-aarch64"]
 # structs. `far`, `huge`, `near` are Borland's keywords on clang's address spaces.
 # Needs the patched clang: tools/build-clang-m16.sh, then LLRM_CLANG_M16=<its path>.
 [x86_16-dos]
+description = "x86-m16"
 triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
@@ -65,8 +71,9 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
 # x86_16-dos with the register convention llrm-c had at m16 (regparm3, `name@3`): the all-llrm configuration. x86_16-dos stays cdecl for
 # programs linked with Borland objects.
 [x86_16-dos-rp3]
+description = "x86-m16"
 triple = "i386-unknown-unknown-code16"
-datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
+datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = ["-ffp-contract=off", 
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
@@ -80,6 +87,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
 # The same compiler against Borland C++ 3.1's headers and library, as its programs are written: LLRM_BORLAND_INC is the
 # lower-case mirror tools/lowercase-includes.sh makes of its INCLUDE, LLRM_BORLAND_LIB its LIB.
 [x86_16-bcc]
+description = "x86-m16"
 triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
@@ -96,6 +104,9 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
 # The i8086 and i386 targets on Open Watcom's headers and the C library tools/build-ow-clib.sh builds: LLRM_OW is the
 # tree it built in. Calls are Watcom's register convention, as the library's.
 [x86_16-wat]
+description = "x86-m16"
+# Open Watcom libc: wchar_t 2, long double 8.
+long_double_bytes = 8
 triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
@@ -110,9 +121,13 @@ link = ["python3", "-I", "{root}/tools/wat_link.py", "m16", "{env:LLRM_OW}", "{o
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
 
 [x86_32-wat]
+description = "x86-m32"
+# Open Watcom libc: wchar_t 2, long double 8.
+wchar_bytes = 2
+long_double_bytes = 8
 # The i8086 fork's clang: only it reads `#pragma aux NAME "LINK"`, which the runtime's symbols (B$COPY) need.
 triple = "i486-unknown-linux-gnu"
-datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
+datalayout = "{datalayout:x86-m32}"
 clang_env = "LLRM_CLANG_M16"
 clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fhosted", "-fshort-wchar", "-mlong-double-64", "-fno-pic", "-fno-stack-protector",
   "-fno-asynchronous-unwind-tables", "-D__386__=1", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall", "-fdeclspec", "-Wno-error=incompatible-function-pointer-types", "-Wno-unknown-attributes", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/flat.h", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m32", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h"]
@@ -123,6 +138,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 
 # arm64 Linux on glibc, for qemu-aarch64: LLRM_ARM64_SYSROOT is the unpacked *-arm64-cross packages.
 [arm64-glibc]
+description = "arm64"
 triple = "aarch64-unknown-linux-gnu"
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
 clang = ["-ffp-contract=off", "-target", "aarch64-unknown-linux-gnu", "-nostdinc", "-isystem", "{env:LLRM_ARM64_SYSROOT}/usr/aarch64-linux-gnu/include"]
@@ -135,6 +151,8 @@ run = ["qemu-aarch64"]
 
 # arm64 macOS, on an Apple-silicon Mac only; headers from SDKROOT (`export SDKROOT=$(xcrun --show-sdk-path)`). Untested.
 [arm64-macos]
+description = "arm64"
+long_double_bytes = 8
 triple = "arm64-apple-macosx"
 datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32"
 clang = ["-ffp-contract=off", "-target", "arm64-apple-macos"]
@@ -147,8 +165,9 @@ run = []
 
 # 32-bit Linux on the host's glibc (multilib), ELF32 objects linked by the system clang.
 [x86_32-linux]
+description = "x86-m32"
 triple = "i486-unknown-linux-gnu"
-datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
+datalayout = "{datalayout:x86-m32}"
 clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables"]
 llc = ["-fobject-format=elf", "-mabi=sysv"]
 object = "elf"
