@@ -1798,6 +1798,50 @@ define i16 @lowbit() {
     }
 }
 
+/// A byte load widened to 32 bits was formed as one extending load of a type that is not a register, and
+/// came out of type legalization as a `Truncate` of it that nothing selects ("CannotSelect(Truncate)":
+/// differential seed 209).
+#[test]
+fn a_byte_load_used_at_32_bits_and_truncated_compiles_and_runs() {
+    let ir = "@buf = external global [16 x i8]
+define i16 @wide() {
+  %slot = alloca i32, align 2
+  %a = load i8, ptr @buf, align 1
+  %z = zext i8 %a to i32
+  %m = and i32 %z, 1
+  store i32 %m, ptr %slot, align 2
+  %b = load i8, ptr getelementptr inbounds nuw (i8, ptr @buf, i16 1), align 1
+  %e = icmp eq i8 %a, %b
+  %ez = zext i1 %e to i32
+  %x = or i32 %ez, %z
+  %t = trunc i32 %x to i16
+  ret i16 %t
+}";
+    let text = compile_within_ten_seconds(ir, "wide");
+    for (first, second, want) in [(3, 3, 3), (4, 4, 5), (4, 5, 4)] {
+        let data = format!(".export buf\nbuf: .byte {first},{second},4,1,5,9,2,6,5,3,5,8,9,7,9,3\n");
+        let got = common::run_with(&format!("alloc-wide-{first}-{second}"), "  jsr wide\n", &format!("{text}{data}"));
+        assert_eq!(got, want, "buf = {first}, {second}");
+    }
+}
+
+/// An undefined value reached selection as `IMPLICIT_DEF` ("no description of opcode 10": differential
+/// seed 198); until the MIR has `undef` it reads as zero.
+#[test]
+fn an_undefined_value_is_stored_as_zero() {
+    let ir = "define i16 @undef() {
+  %slot = alloca i32, align 2
+  store i32 poison, ptr %slot, align 2
+  %v = load i32, ptr %slot, align 2
+  %t = trunc i32 %v to i16
+  %r = add i16 %t, 7
+  ret i16 %r
+}";
+    let text = compile_within_ten_seconds(ir, "undef");
+    let got = common::run_with("alloc-undef", "  jsr undef\n", &text);
+    assert_eq!(got, 7);
+}
+
 /// `freeze` selects to the generic `COPY`, which the selector had no description of ("no description
 /// of opcode 20": differential seeds 21 and 26 were rejected for it).
 #[test]

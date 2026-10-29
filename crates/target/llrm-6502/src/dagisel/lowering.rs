@@ -71,6 +71,12 @@ pub fn target_lowering() -> TargetLowering {
     {
         tl.set_load_ext_action(LoadExt::SExtLoad, vt, mem, Action::Expand);
     }
+    // and a zero- or any-extending one to a type that is not a register is not formed, to be split again
+    for (vt, mem) in [(MVT::I32, MVT::I8), (MVT::I32, MVT::I16), (MVT::I64, MVT::I8), (MVT::I64, MVT::I16), (MVT::I64, MVT::I32)] {
+        for ext in [LoadExt::ZExtLoad, LoadExt::ExtLoad] {
+            tl.set_load_ext_action(ext, vt, mem, Action::Expand);
+        }
+    }
     for (vt, mem) in [(MVT::I64, MVT::I32), (MVT::I64, MVT::I16), (MVT::I64, MVT::I8), (MVT::I32, MVT::I16)]
         .into_iter()
         .chain([(MVT::I32, MVT::I8), (MVT::I16, MVT::I8)])
@@ -96,6 +102,10 @@ pub fn target_lowering() -> TargetLowering {
     set(&[SignExtend], Action::Custom);
     // a sign extension in a register is a pair of shifts (a negated bit for a bit)
     set(&[SignExtendInReg], Action::Expand);
+    // an undefined value is a zero of the type (the legalizer builds it) until the MIR has `undef`
+    set(&[Undef, Poison], Action::Expand);
+    tl.set_operation_action(Undef, MVT::I1, Action::Expand);
+    tl.set_operation_action(Poison, MVT::I1, Action::Expand);
     // its action is read at the type it extends from, a bit among them
     tl.set_operation_action(SignExtendInReg, MVT::I1, Action::Expand);
     // A long multiply, divide or shift by a variable is one node of two words
