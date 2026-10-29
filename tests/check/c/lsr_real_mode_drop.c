@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m16 -Os -S -o /dev/stdout
+// RUN: llrm-cc %s -m16 -Os -S -o /dev/stdout
 // matmul's fill nest at -Os in real mode: LSR's own model rates the rewrite of `(i + j) % 3` worse than the loop as written, which the
 // 16-bit target keeps (`shouldDropLSRSolutionIfLessProfitable`). Rewritten, the loop carries a second counter and rebuilds the remainder
 // with `div` then `imul` and `sub`: +13 B and +355 executed instructions on bench matmul.

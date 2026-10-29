@@ -23,13 +23,14 @@ fn listing(flags: &[&str]) -> String {
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-/// x_life has fewer instructions than gcc's but more clocks: every byte load
-/// was `movzx` (3 clocks on the 486) where `xor ecx,ecx; mov cl,[m]` is 2.
+/// The pin extends a byte load with `movzx` on a 486 and a Pentium alike
+/// (clang -O2 -m32 -march=i486: `movzbl (%esi,%edi), %ebx`); the `xor r,r; mov
+/// rl,m8` pair that x_life used was a tuning of the old selector, not the pin's.
 #[test]
-fn a_486_clears_the_register_and_loads_its_low_byte() {
+fn a_486_extends_a_byte_load_with_movzx_as_the_pin_does() {
     for cpu in ["-march=i486", "-march=pentium"] {
         let text = listing(&["-O2", cpu]);
-        assert!(text.contains("xor ecx, ecx\n    mov cl, byte ptr"), "{cpu}: {text}");
+        assert!(text.contains("movzx") && !text.contains("mov cl, byte ptr"), "{cpu}: {text}");
     }
 }
 
