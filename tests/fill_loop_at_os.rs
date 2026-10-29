@@ -38,11 +38,12 @@ fn at_o2_the_same_loop_is_fills() {
     assert!(text.contains("rep stos"), "{text}");
 }
 
-/// qcport sc.c: three stores of -1 into one object merge into one fill; the
-/// first version of the rule priced three and left sc_reset_lists a call
-/// (+38 bytes over the module).
+/// The pin's loop-idiom pass makes no fill of two stores a trip into the
+/// fields of one struct (clang -Os leaves `mov [eax+s+128], cx` /
+/// `mov [eax+s+256], cx` in a loop); neither do we. Was expected to be one
+/// `rep stos`, from before the pin's pass was ported.
 #[test]
-fn at_os_stores_of_one_value_into_one_object_are_one_fill() {
+fn at_os_stores_into_two_fields_of_one_object_stay_a_loop() {
     let text = fill_listing(ONE_OBJECT, &["-Os"]);
-    assert!(text.contains("rep stos"), "{text}");
+    assert!(!text.contains("rep stos") && text.matches("mov word ptr _s+").count() == 2, "{text}");
 }
