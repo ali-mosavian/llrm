@@ -64,3 +64,15 @@ Hosted VMs have no `perf` instruction counter. Steps that read one: `measure`, a
 4. The private repository, the secret, the private jobs (needs the owner of the repository: it holds files whose licences the repository does not).
 5. The counter backend and `measure` as a matrix.
 6. Owners merge main into their open PRs.
+
+## Debt
+
+A check or waiver that is knowingly missing is a line here, not a silence. Format, one line each, parsed by `tools/ci/test_debt.py` (red on a malformed line or a passed deadline):
+
+`- DEBT <id> | limit <what is allowed to stay> | deadline YYYY-MM-DD | owner <name> | <what and why>`
+
+On the deadline the owner pays it (the check goes red or the test goes) or moves the date in a commit that says why.
+
+- DEBT skip-llrm-pass | limit 2 tests | deadline 2026-11-05 | owner w11 | `tools/difftest/test_difftest.py` skips `llrm-pass is not built`: the python group's pytest step builds no binaries.
+- DEBT skip-pindiff-llc | limit 1 test | deadline 2026-11-05 | owner w11 | `tools/pairs/test_pindiff.py` skips `needs LLRM_LLC`: nothing sets it in CI.
+- DEBT turbo-near-function | limit 1 test (tests/turbo.rs tdump_names_the_type_of_a_function_pointer..., _INNER and _NP) | deadline 2026-11-02 | owner clang-frontend | `near` on a function is ignored by the i8086 clang fork / llrm-llc CV4 path: Turbo Debugger shows `function far C` and a far pointer where Turbo C++ shows `near`; the test pins the gap and fails when it closes. PLACEHOLDER issue #1338.
