@@ -54,8 +54,9 @@
 //!
 //! DEVIATE: the target hooks have no access type or address space on the
 //! legality call, and no per-instruction query (`LSRWithInstrQueries`); x86 has
-//! neither. `getPreferredAddressingMode` is none on x86, so the pre- and
-//! post-indexed branches of `RateRegister` never apply and are not ported. A
+//! neither. `getPreferredAddressingMode` is none on x86; the post-indexed
+//! branch of `RateRegister` is ported (m68k prefers it), the pre-indexed one
+//! is not, nor are the post-indexed sites in the other LSR modules. A
 //! scalable `Immediate` does not exist (see [`crate::lsr_formula`]).
 
 use llrm_analysis::scev::expr::{Scev, Type};
