@@ -220,6 +220,7 @@ dependencies = [
 name = "llrm-6502"
 version = "0.1.0"
 dependencies = [
+ "llrm-cgen",
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-lir",
@@ -339,6 +340,10 @@ dependencies = [
  "serde",
  "toml",
 ]
+
+[[package]]
+name = "llrm-cgen"
+version = "0.1.0"
 
 [[package]]
 name = "llrm-codegen"

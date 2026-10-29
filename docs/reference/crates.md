@@ -34,7 +34,7 @@ flowchart LR
 
 *The pipeline and the crate of each stage*
 
-An arrow reads "depends on" (normal dependencies only; an edge implied by a path through other drawn crates is left out). `llrm-support`, `llrm-alloc`, `llrm-env` and `llrm-object` have no workspace dependencies; `llrm-mir` has only `llrm-env`.
+An arrow reads "depends on" (normal dependencies only; an edge implied by a path through other drawn crates is left out). `llrm-support`, `llrm-alloc`, `llrm-env`, `llrm-cgen` and `llrm-object` have no workspace dependencies; `llrm-mir` has only `llrm-env`.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -166,6 +166,7 @@ reaches it only through `llrm-driver`, which is why `llrm-x86-m16-select` and `l
 | Crate | Purpose |
 |---|---|
 | `llrm-env` | The one reader of an `LLRM_*` switch; no dependencies |
+| `llrm-cgen` | Random C programs free of undefined behaviour for differential tests (a data model for `int` width); no dependencies |
 | `llrm-support` | Code shared by every crate: bit helpers, hashing, diagnostics, registers, a code page |
 | `llrm-alloc` | The compilers' global allocator: a free list for each small size class over mimalloc; declared by the binaries only |
 | `llrm-object` | The format-neutral object model: what the backend lays out and each writer writes |
