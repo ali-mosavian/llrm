@@ -531,6 +531,67 @@ fn after_mid_end(ir: &str) -> String {
     llrm_mir::print::module(&done)
 }
 
+/// The mid-end with the pin's addressing mode (none): `post_indexed` off.
+fn after_pinned_mid_end(ir: &str) -> String {
+    use std::rc::Rc;
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
+    let tti = llrm_m68k::machine::M68k::default();
+    let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine)))
+        .expect("the mid-end runs");
+    llrm_mir::print::module(&done)
+}
+
+/// LSR ranked solutions by instruction count before the target's order, though
+/// the pin does so only when `-lsr-insns-cost` is given on the command line. On
+/// m68k (registers first) a two-pointer copy then traded a pointer for a shared
+/// index: 2 instructions and 4 registers where the pin's 3 and 3. Expected: the
+/// loop keeps one stepping pointer per array (`opt -passes=loop-reduce`).
+#[test]
+fn copy_loops_keep_a_pointer_per_array_when_registers_rank_first() {
+    for (step, ty, align) in [(2, "i16", 2), (4, "i32", 4)] {
+        let done = after_pinned_mid_end(&format!(
+            "define void @k(ptr %d, ptr %s, i32 %n) {{
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %sp = getelementptr {ty}, ptr %s, i32 %i
+  %dp = getelementptr {ty}, ptr %d, i32 %i
+  %v = load {ty}, ptr %sp, align {align}
+  store {ty} %v, ptr %dp, align {align}
+  %next = add nuw i32 %i, 1
+  %c = icmp ult i32 %next, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  ret void
+}}"
+        ));
+        let pointer_phis = done.lines().filter(|line| line.contains("phi ptr")).count();
+        assert_eq!(pointer_phis, 2, "step {step}: a stepping pointer per array\n{done}");
+    }
+    // bench/library/memcpy.ll: pointers and a down counter, and the pin keeps them
+    let done = after_pinned_mid_end(
+        "define i32 @k(ptr %0, ptr %1, i32 %2) {
+  %4 = icmp sgt i32 %2, 0
+  br i1 %4, label %5, label %14
+5:
+  %6 = phi ptr [ %12, %5 ], [ %0, %3 ]
+  %7 = phi i32 [ %9, %5 ], [ %2, %3 ]
+  %8 = phi ptr [ %10, %5 ], [ %1, %3 ]
+  %9 = add i32 %7, -1
+  %10 = getelementptr i8, ptr %8, i32 1
+  %11 = load i8, ptr %8, align 1
+  %12 = getelementptr i8, ptr %6, i32 1
+  store i8 %11, ptr %6, align 1
+  %13 = icmp ugt i32 %7, 1
+  br i1 %13, label %5, label %14
+14:
+  ret i32 0
+}",
+    );
+    assert_eq!(done.lines().filter(|line| line.contains("phi ptr")).count(), 2, "{done}");
+}
+
 fn walk_with_call(ty: &str) -> String {
     format!(
         "declare void @g(i32)
