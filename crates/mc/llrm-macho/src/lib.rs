@@ -28,6 +28,10 @@ const LC_SEGMENT_64: u32 = 0x19;
 pub const LC_BUILD_VERSION: u32 = 0x32;
 pub const PLATFORM_MACOS: u32 = 1;
 const S_ZEROFILL: u32 = 1;
+const S_COALESCED: u32 = 0xB;
+const S_ATTR_NO_TOC: u32 = 0x4000_0000;
+const S_ATTR_STRIP_STATIC_SYMS: u32 = 0x2000_0000;
+const S_ATTR_LIVE_SUPPORT: u32 = 0x0800_0000;
 const S_MOD_INIT_FUNC_POINTERS: u32 = 9;
 const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
 const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x0000_0400;
@@ -107,6 +111,12 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
         // `.debug_info` is `__debug_info` of the segment `__DWARF`.
         Role::InitFunctions => ("__DATA", "__mod_init_func", S_MOD_INIT_FUNC_POINTERS),
         Role::Debug(_) => ("__DWARF", debug_name(&section.name)?, S_ATTR_DEBUG),
+        // `__eh_frame` is coalesced, the linker drops what nothing keeps live;
+        // `__compact_unwind` is the linker's input and not part of the image.
+        Role::Unwind if section.name == "__eh_frame" => {
+            ("__TEXT", "__eh_frame", S_COALESCED | S_ATTR_NO_TOC | S_ATTR_STRIP_STATIC_SYMS | S_ATTR_LIVE_SUPPORT)
+        }
+        Role::Unwind if section.name == "__compact_unwind" => ("__LD", "__compact_unwind", S_ATTR_DEBUG),
         Role::Unwind => {
             return Err(unsupported(format!("{}: Mach-O unwind is __compact_unwind and __eh_frame", section.name)));
         }
@@ -255,6 +265,16 @@ pub fn write<W: MachTargetWriter>(
         let mut image = section.image.clone();
         let mut made: Vec<(usize, [u32; 2])> = Vec::new();
         for one in &section.relocs {
+            // The unwind sections name code by its place in the object: a
+            // pc-relative reference from them to a section is resolved here, as
+            // LLVM resolves a difference of two sections' symbols (no entry).
+            if section.role == Role::Unwind && one.pc_rel && matches!(one.target, Target::Section(_)) {
+                let Target::Section(home) = one.target else { unreachable!("matched") };
+                let width = one.width();
+                let value = address[home] as i64 + one.addend - (address[index] + one.at) as i64;
+                image[one.at..one.at + width].copy_from_slice(&value.to_le_bytes()[..width]);
+                continue;
+            }
             let Described { kind, length, pcrel, beyond, addend_in_field } = flavor.relocation(one)?;
             let width = one.width();
             // A section's start is a local symbol at offset 0 of it.
