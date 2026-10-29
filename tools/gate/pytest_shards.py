@@ -1,11 +1,12 @@
 """pytest over many files at once: one pytest process per file, a few at a time, longest first.
 
-    pytest_shards.py [-j N] [--ignore F]... [--must-pass F]... [--durations FILE] PATH... [-- PYTEST_FLAGS]
+    pytest_shards.py [-j N] [--ignore F]... [--must-pass F]... [--rerun F]... [--durations FILE] PATH... [-- PYTEST_FLAGS]
 
 The files come from `pytest --collect-only`, so a path pytest would not run is not run here. A file with a failing test, a collection
 error, or no test (a file that collected tests and ran none) fails the run; the output of every failed file is printed whole, then one
 summary line, which counts the tests passed and skipped. Exit 0 only when every collected test file ran and passed or skipped, and
-every --must-pass file passed at least one test and skipped none: a file that skips everything (its inputs missing) is not a pass."""
+every --must-pass file passed at least one test and skipped none: a file that skips everything (its inputs missing) is not a pass. A failed
+--rerun file is run once more and both verdicts are printed (the run stays red): a red that passes again is a flaky one, one that fails again is not."""
 import os
 import re
 import math
@@ -82,6 +83,7 @@ def main() -> int:
     ap.add_argument("-j", type=int, default=int(os.environ.get("PYTEST_SHARDS") or min(16, os.cpu_count() or 4)))
     ap.add_argument("--ignore", action="append", default=[])
     ap.add_argument("--must-pass", action="append", default=[], help="a test file that must pass a test and skip none")
+    ap.add_argument("--rerun", action="append", default=[], help="a test file run once more when it fails, to tell flaky from deterministic")
     ap.add_argument("--durations", help="JSON {file: seconds}, read for the order (longest first) and rewritten after the run")
     ap.add_argument("paths", nargs="+")
     argv = sys.argv[1:]
@@ -96,7 +98,8 @@ def main() -> int:
         print("pytest shards: no test file collected")
         return 1
     known = json.loads(Path(args.durations).read_text()) if args.durations and Path(args.durations).exists() else {}
-    results = run_all(units(tests, known), flags, args.j)
+    work = units(tests, known)
+    results = run_all(work, flags, args.j)
     bad = {n: r for n, r in results.items() if r[0] != 0}
     counts = {n: tally(out) for n, (_, _, out) in results.items()}
     ran = sum(sum(c.values()) for c in counts.values())
@@ -107,6 +110,10 @@ def main() -> int:
     vacuous = [n for n, c in counts.items() if any(n.partition(" [")[0].endswith(f) for f in args.must_pass) and (c.get("skipped") or not c.get("passed"))]
     for name in vacuous:
         print(f"pytest shards: {name} is a must-pass file and ran {counts[name].get('passed', 0)} passed, {counts[name].get('skipped', 0)} skipped")
+    for name in sorted(bad):
+        if any(name.partition(" [")[0].endswith(f) for f in args.rerun):
+            again = pytest(*dict(work)[name], *flags)
+            print(f"pytest shards: {name} failed, rerun {'passed' if again.returncode == 0 else 'failed again'}: {(again.stdout.strip().splitlines() or [''])[-1]}")
     for name, (code, _, out) in sorted(bad.items()):
         print(f"\n######## {name}: exit {code}\n{out}")
     if args.durations and not bad:
