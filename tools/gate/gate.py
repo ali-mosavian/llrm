@@ -1011,11 +1011,12 @@ def default_jobs(environ: dict, cpus: int | None = None) -> int:
 
 def scoped(argv: list[str], environ: dict | None = None, have: str | None = None) -> list[str] | None:
     """`argv` under its own systemd user scope with a high CPU weight, or None when it already is (GATE_SCOPED) or the host has no
-    systemd-run. Session builds share one scope with the gate by default and starve it; the weight is GATE_CPU_WEIGHT (1000). The scope is
+    systemd-run, or runs under GitHub Actions (a runner is no dev box: the self-hosted podman ones have no user bus, and the gate refused in 0 s).
+    Session builds share one scope with the gate by default and starve it; the weight is GATE_CPU_WEIGHT (1000). The scope is
     omitted from systemd-oomd: it killed two gates (SIGKILL, no verdict) for the host's memory pressure, not for their memory."""
     environ = os.environ if environ is None else environ
     have = shutil.which("systemd-run") if have is None else have
-    if environ.get("GATE_SCOPED") or not have or environ.get("GATE_CPU_WEIGHT") == "0":
+    if environ.get("GATE_SCOPED") or environ.get("GITHUB_ACTIONS") or not have or environ.get("GATE_CPU_WEIGHT") == "0":
         return None
     weight = environ.get("GATE_CPU_WEIGHT") or "1000"
     return [have, "--user", "--scope", "-q", "-p", f"CPUWeight={weight}", "-p", "ManagedOOMPreference=omit", "--setenv=GATE_SCOPED=1", *argv]
