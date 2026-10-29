@@ -115,7 +115,7 @@ pub fn function_text(
     });
     let (items, _) = function_items(module, name, selection)?;
     let (function, labels) = alloc::build(name, &items).map_err(|why| format!("{name}: {}", why.0))?;
-    let (code, slots) = alloc::emit(function, &labels, recursive, selection.cpu == Cpu::W65c02, selection.zero_page)?;
+    let (code, slots) = alloc::emit(function, &labels, recursive, selection.cpu == Cpu::W65c02, selection.zero_page, selection.tuning)?;
     let mut body = format!(".export {name}\n{code}");
     body.push_str(".segment \"BSS\"\n");
     for (slot, size) in slots {

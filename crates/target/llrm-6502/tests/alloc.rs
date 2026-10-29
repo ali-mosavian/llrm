@@ -3,6 +3,7 @@
 
 mod common;
 
+use llrm_6502::alloc::Tuning;
 use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::select::function_text;
@@ -22,11 +23,22 @@ fn compile_on(
     name: &str,
     zero_page: u8,
 ) -> String {
+    compile_at(ir, name, zero_page, Tuning::SPEED)
+}
+
+/// [`compile_on`] at a level: `Tuning::SIZE` takes a byte saved at up to eight clocks.
+fn compile_at(
+    ir: &str,
+    name: &str,
+    zero_page: u8,
+    tuning: Tuning,
+) -> String {
     let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
     let mut module = llrm_mir::parse::module(&text).expect("parses");
     llrm_6502::prepare::split_phi_edges(&mut module);
     let mut selection = select_function(&module, name, Cpu::Mos6502).expect("selects");
     selection.zero_page = zero_page;
+    selection.tuning = tuning;
     function_text(&module, name, &selection).expect("emits")
 }
 
@@ -1398,23 +1410,29 @@ done:
     assert_eq!(common::run_with("alloc-sum-wide", &format!("{setup}  jsr sum\n"), &format!("{text}{callee}.export clob\n")), 12);
 }
 
-/// A word shifted by four to seven bits was that many `asl`/`rol` pairs (4 bytes each, 20 for the
-/// shift by 5 in hash16). With an index register free it is a counted loop of 9 bytes. Both bytes of
-/// each result are checked, the shifted word added to the word so that the shift stays in cells.
+/// A word shifted by n bits is n `asl`/`rol` pairs (4 bytes each, 20 for the shift by 5 in hash16) or,
+/// with an index register free, a counted loop of 9 bytes that takes 5 more clocks a bit. The level
+/// decides: at size (8 clocks a byte) every shift of 3 to 7 bits is the loop; at speed (1 clock a
+/// byte) none is. Both bytes of each result are checked, the shifted word added to the word so that
+/// the shift stays in cells.
 #[test]
-fn a_word_shift_of_four_or_more_bits_is_a_counted_loop() {
-    for (op, k) in [("shl", 4u32), ("shl", 5), ("shl", 7), ("lshr", 4), ("lshr", 6)] {
+fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
+    for (op, k) in [("shl", 3u32), ("shl", 4), ("shl", 5), ("shl", 7), ("lshr", 3), ("lshr", 6)] {
         let name = format!("{op}{k}");
         let ir = format!("define i16 @{name}(i16 %x) {{\n  %p = {op} i16 %x, {k}\n  %q = add i16 %p, %x\n  ret i16 %q\n}}");
-        let text = compile(&ir, &name);
-        assert!(text.contains("dex") || text.contains("dey"), "{op} {k}:\n{text}");
-        for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
-            let shifted = if op == "shl" { x << k } else { x >> k };
-            let want = shifted.wrapping_add(x);
-            let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
-            let run = |after: &str| common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n{after}"), &text);
-            assert_eq!(run(""), i32::from(want & 0xFF), "{op} {k} of {x:#x}, low byte");
-            assert_eq!(run("  txa\n"), i32::from(want >> 8), "{op} {k} of {x:#x}, high byte");
+        let looped = compile_at(&ir, &name, 16, Tuning::SIZE);
+        let unrolled = compile_at(&ir, &name, 16, Tuning::SPEED);
+        assert!(looped.contains("dex") || looped.contains("dey"), "{op} {k} at size:\n{looped}");
+        assert!(!unrolled.contains("dex") && !unrolled.contains("dey"), "{op} {k} at speed:\n{unrolled}");
+        for text in [&looped, &unrolled] {
+            for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
+                let shifted = if op == "shl" { x << k } else { x >> k };
+                let want = shifted.wrapping_add(x);
+                let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
+                let run = |after: &str| common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n{after}"), text);
+                assert_eq!(run(""), i32::from(want & 0xFF), "{op} {k} of {x:#x}, low byte");
+                assert_eq!(run("  txa\n"), i32::from(want >> 8), "{op} {k} of {x:#x}, high byte");
+            }
         }
     }
 }
