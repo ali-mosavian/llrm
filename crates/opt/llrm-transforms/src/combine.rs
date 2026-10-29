@@ -387,6 +387,13 @@ impl Combiner<'_> {
     ) -> InstId {
         let new = self.function.create_instruction(opcode, ty, operands, flags, None);
         self.function.insert(new, Position::Before(at)).expect("a placed instruction");
+        // The builder's insertion point is `at`: `Builder.SetInsertPoint(&I)`
+        // takes its debug location.
+        let place =
+            self.function.instruction(at).metadata.iter().find(|(kind, _)| kind == "dbg").map(|&(_, node)| node);
+        if place.is_some() {
+            self.function.set_metadata(new, "dbg", place);
+        }
         self.worklist.add(new);
         new
     }

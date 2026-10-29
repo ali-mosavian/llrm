@@ -706,7 +706,7 @@ mod tests {
 
     /// watcall32 (calling.toml): EBP and ESP frame, every register but EAX kept
     /// by a callee that is not given one in an argument, first stack
-    /// argument at [ebp+8]; cdecl32 keeps EBX/ESI/EDI.
+    /// argument at [ebp+8]; cdecl32 keeps ESI/EDI/EBX (the pin's `CSR_32`).
     #[test]
     fn test_m32_answers_watcall32() {
         let frame = M32.frame_registers();
@@ -722,7 +722,7 @@ mod tests {
         assert_eq!([4, 8].map(|width| M32.results(width)), [vec![EAX], vec![EAX, EDX]]);
         assert_eq!(
             llrm_x86::calling::callee_saved(CALLING.named("cdecl32").unwrap()),
-            [(EBX, EBX), (ESI, ESI), (EDI, EDI)]
+            [(ESI, ESI), (EDI, EDI), (EBX, EBX)]
         );
     }
 

@@ -102,6 +102,21 @@ pub struct BuilderTarget {
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
     pub runtime_calls: Option<IdMap<InstId, Result<RuntimeAnswer, &'static str>>>,
+    /// The nodes and facts of a target that is not x86: none for x86, whose
+    /// `CALL`, `RET_GLUE` and stack pointer the builder names itself.
+    pub target_nodes: Option<TargetNodes>,
+}
+
+/// What the builder asks of a target other than x86 to lower calls and
+/// returns: its `CALL` and `RET` nodes (the pin's numbers), the stack pointer
+/// by name, and whether a narrow argument sits at the high end of its stack
+/// slot.
+#[derive(Clone, Copy, Debug)]
+pub struct TargetNodes {
+    pub call: ISD,
+    pub ret: ISD,
+    pub stack_pointer: &'static str,
+    pub big_endian: bool,
 }
 
 impl BuilderTarget {
@@ -240,6 +255,7 @@ impl BuilderTarget {
             tail_calls: false,
             tti: None,
             runtime_calls: None,
+            target_nodes: None,
         }
     }
 
@@ -270,6 +286,7 @@ impl BuilderTarget {
             tail_calls: false,
             tti: None,
             runtime_calls: None,
+            target_nodes: None,
         }
     }
 }
@@ -819,7 +836,12 @@ impl Builder<'_> {
                         fixed += 1;
                         self.dag
                             .fixed_offsets
-                            .insert(-fixed, offset + part as i64 * i64::from(part_vt.size_in_bits() / 8));
+                            .insert(
+                                -fixed,
+                                offset
+                                    + part as i64 * i64::from(part_vt.size_in_bits() / 8)
+                                    + self.slot_end_adjust(part_vt),
+                            );
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
                         // The fixed object is a whole stack slot
                         // (`CreateFixedObject`),
@@ -1308,6 +1330,35 @@ impl Builder<'_> {
         value
     }
 
+    /// The stack pointer register: x86's by pointer width, else the target's.
+    fn stack_pointer_register(&self) -> RegId {
+        let name =
+            self.target.target_nodes.map_or_else(|| stack_pointer_name(self.target.dag.pointer), |t| t.stack_pointer);
+        self.arch.register_named(name)
+    }
+
+    fn call_node(&self) -> ISD {
+        self.target.target_nodes.map_or(super::x86isd::CALL, |t| t.call)
+    }
+
+    fn ret_node(&self) -> ISD {
+        self.target.target_nodes.map_or(super::x86isd::RET_GLUE, |t| t.ret)
+    }
+
+    /// Where a narrow argument sits in its stack slot: the high end on a
+    /// big-endian target (`LowerMemArgument`: +3 for a byte, +2 for a word).
+    fn slot_end_adjust(
+        &self,
+        vt: EVT,
+    ) -> i64 {
+        match self.target.target_nodes {
+            Some(TargetNodes { big_endian: true, .. }) => {
+                (self.arch.stack_slot_bytes() - i64::from(vt.size_in_bits() / 8)).max(0)
+            }
+            _ => 0,
+        }
+    }
+
     pub(super) fn lower_call(
         &mut self,
         callee_node: SDValue,
@@ -1350,7 +1401,7 @@ impl Builder<'_> {
                             *piece
                         };
                         let sp = *stack_pointer.get_or_insert_with(|| {
-                            let sp = self.arch.register_named(stack_pointer_name(self.target.dag.pointer));
+                            let sp = self.stack_pointer_register();
                             self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
                         });
                         let part_bytes = i64::from(part_vt.size_in_bits() / 8);
@@ -1379,7 +1430,7 @@ impl Builder<'_> {
                     let (size, align) =
                         byvals.get(at).copied().flatten().ok_or(Refused("byval argument of an unknown size"))?;
                     let sp = *stack_pointer.get_or_insert_with(|| {
-                        let sp = self.arch.register_named(stack_pointer_name(self.target.dag.pointer));
+                        let sp = self.stack_pointer_register();
                         self.dag.get_copy_from_phys_reg_plain(chain, sp, self.target.dag.pointer)
                     });
                     let offset = self.dag.get_constant((displacement - first) as u128, self.target.dag.pointer);
@@ -1482,7 +1533,7 @@ impl Builder<'_> {
             self.had_tail_call = true;
             return Ok(None);
         }
-        let call = self.dag.get_node_multi(super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &ops);
+        let call = self.dag.get_node_multi(self.call_node(), &[EVT::OTHER, EVT::GLUE], &ops);
         let end = self
             .dag
             .get_callseq_end(
@@ -1708,7 +1759,7 @@ impl Builder<'_> {
         let mut all = vec![chain, popped];
         all.extend(ops);
         all.extend(glue);
-        let node = self.dag.get_node(super::x86isd::RET_GLUE, EVT::OTHER, &all);
+        let node = self.dag.get_node(self.ret_node(), EVT::OTHER, &all);
         self.dag.set_root(node);
         Ok(())
     }

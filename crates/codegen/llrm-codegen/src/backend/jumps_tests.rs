@@ -1222,6 +1222,55 @@ fn test_return_duplication_rejects_growth_and_source_owned_tails() {
     assert_eq!(duplicated_returns(owned.clone(), &|| 1), owned);
 }
 
+/// A sibling call (a `jmp` return) names its callee by the instruction's id,
+/// which a copy takes from the jump it replaces: copied into two parents it
+/// had none, and `$QB$MAIN` of examples/dot/dot.bas -m32 failed with "a call
+/// with no callee". The tail stays shared.
+#[test]
+fn test_return_duplication_keeps_a_sibling_call_shared() {
+    let sibling = _inserted(_insn(30, Operation::Return, "jmp", vec![], vec![], None));
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, imm(8))], vec![30]).into(),
+            block(30, vec![sibling], vec![]).into(),
+            block(20, vec![_move(20, imm(10)), _inserted(_jump(21, 30))], vec![30]).into(),
+        ],
+    );
+
+    assert_eq!(duplicated_returns(source.clone(), &|| 1), source);
+}
+
+/// Placement copied a sibling call's tail into the parents that jump to it,
+/// under the jump's id, and the callee table names the call by the original:
+/// `$QB$MAIN` of examples/dot/dot.bas -m32 failed with "a call with no
+/// callee". Every sibling call keeps the id it was selected with.
+#[test]
+fn test_placement_keeps_a_sibling_call_under_its_own_id() {
+    let sibling = _insn(30, Operation::Return, "jmp", vec![], vec![], None);
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, imm(8)), _jump(11, 30)], vec![30]).into(),
+            block(30, vec![sibling], vec![]).into(),
+            block(20, vec![_move(20, imm(10)), _jump(21, 30)], vec![30]).into(),
+        ],
+    );
+    let ids: Vec<i64> = placed(&source)
+        .unwrap()
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Return))
+        .map(|one| one.at)
+        .collect();
+    assert!(ids.iter().all(|at| *at == 30), "{ids:?}");
+}
+
 /// The raise lays a C loop out test first, so entered at its body the
 /// latch still jumped back to the test every pass.
 #[test]

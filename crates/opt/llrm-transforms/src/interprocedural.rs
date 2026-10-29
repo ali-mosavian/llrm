@@ -1088,6 +1088,18 @@ pub(crate) fn function_mut(
     }
 }
 
+/// `function_mut`, with the module's metadata apart from it.
+pub(crate) fn function_and_metadata_mut(
+    module: &mut Module,
+    id: GlobalId,
+) -> (&mut llrm_mir::context::Context, &mut llrm_mir::module::Function, llrm_mir::module::Metadata<'_>) {
+    let Module { context, globals, metadata, special, .. } = module;
+    match &mut globals[id.0 as usize].kind {
+        GlobalKind::Function(function) => (context, function, llrm_mir::module::Metadata { nodes: metadata, special }),
+        GlobalKind::Variable(_) => unreachable!("a procedure is a function"),
+    }
+}
+
 /// Procedures a surviving direct call reaches from `roots`; all of them
 /// when there are no roots.
 fn reachable(

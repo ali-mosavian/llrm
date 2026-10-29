@@ -274,6 +274,37 @@ pub fn pin_register(id: llrm_lir::registers::RegId) -> Option<u16> {
     (0..=u16::MAX.min(200)).find(|&number| phys_reg(number) == Some(id))
 }
 
+/// A target's physical registers in the pin's numbering: the ids the builder
+/// names them by, and back.
+pub trait PinRegisters {
+    fn phys_reg(
+        &self,
+        register: u16,
+    ) -> Option<llrm_lir::registers::RegId>;
+    fn pin_register(
+        &self,
+        id: llrm_lir::registers::RegId,
+    ) -> Option<u16>;
+}
+
+/// x86's registers (the default of an adapter).
+pub struct X86Registers;
+
+impl PinRegisters for X86Registers {
+    fn phys_reg(
+        &self,
+        register: u16,
+    ) -> Option<llrm_lir::registers::RegId> {
+        phys_reg(register)
+    }
+    fn pin_register(
+        &self,
+        id: llrm_lir::registers::RegId,
+    ) -> Option<u16> {
+        pin_register(id)
+    }
+}
+
 impl DagisAdapter<'_> {
     /// The `Register` node for the pin's register number: physical when the
     /// builder names it so.
@@ -282,7 +313,7 @@ impl DagisAdapter<'_> {
         vt: EVT,
         register: u16,
     ) -> SDValue {
-        match phys_reg(register) {
+        match self.registers.phys_reg(register) {
             Some(id) => self.dag.get_phys_register(vt, id),
             None => self.dag.get_register(vt, u32::from(register)),
         }
@@ -310,10 +341,20 @@ pub struct DagisAdapter<'a> {
     /// made, and `-(id + 1)` for an unselected successor of a selected node
     /// (`InvalidateNodeId`): topological pruning looks at positive ids only.
     node_id: Vec<i32>,
+    /// The target's registers in the pin's numbering.
+    registers: &'a dyn PinRegisters,
 }
 
 impl<'a> DagisAdapter<'a> {
     pub fn new(dag: &'a mut SelectionDAG) -> DagisAdapter<'a> {
+        Self::with_registers(dag, &X86Registers)
+    }
+
+    /// An adapter of another target's registers.
+    pub fn with_registers(
+        dag: &'a mut SelectionDAG,
+        registers: &'a dyn PinRegisters,
+    ) -> DagisAdapter<'a> {
         // A node nothing reaches from the root is no user of what it read
         // (`hasOneUse`): the combiner deleted it, or it is a chain node it
         // replaced (a `brcond` the lowering turned into `X86ISD::BRCOND`).
@@ -331,7 +372,7 @@ impl<'a> DagisAdapter<'a> {
         for (position, node) in super::dag_select::users_first(dag).into_iter().rev().enumerate() {
             node_id[node as usize] = position as i32;
         }
-        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id }
+        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id, registers }
     }
 
     /// `Node->setNodeId(-1)`.
@@ -491,7 +532,7 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<u16> {
         match self.dag.nodes()[node as usize].data {
-            NodeData::PhysReg(id) => pin_register(id),
+            NodeData::PhysReg(id) => self.registers.pin_register(id),
             // `$noreg`
             NodeData::Register(0) => Some(0),
             _ => None,
@@ -744,6 +785,12 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> bool {
         self.dag.nodes()[node as usize].flags.has(SDNodeFlags::DISJOINT)
+    }
+    fn has_no_unsigned_wrap(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.dag.nodes()[node as usize].flags.has(SDNodeFlags::NO_UNSIGNED_WRAP)
     }
     fn masked_value_is_zero(
         &self,

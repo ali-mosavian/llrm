@@ -86,8 +86,8 @@ pub use edit::Position;
 pub use lexer::ParseError;
 pub use module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId,
-    Instruction, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, UnnamedAddr, Use, ValueData,
-    ValueDef, ValueId,
+    Instruction, Linkage, Metadata, MetadataId, MetadataNode, MetadataOperand, Module, Operand, UnnamedAddr, Use,
+    ValueData, ValueDef, ValueId,
 };
 pub use opcode::{Attribute, BinaryOp, CallInfo, CastOp, Clause, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 pub use types::{FloatKind, Type, TypeId, Types};
