@@ -72,28 +72,29 @@ fn locations(
     Ok((places, placement.stack_bytes))
 }
 
-/// The registers a result of `vt` leaves in: `a`, or `a:x` for a word.
+/// The registers the parts `vts` of one result leave in, in order: the convention's row for the
+/// whole width, `a`, `x`, `rc2`, `rc3` for a long.
 fn result_registers(
     convention: &Convention,
-    vt: EVT,
+    vts: &[EVT],
 ) -> Vec<llrm_lir::registers::RegId> {
-    let width = vt.size_in_bits() / 8;
-    convention.result_registers(width as i64).expect("calling.toml has a result row")[..width as usize]
+    let width: u32 = vts.iter().map(|vt| vt.size_in_bits() / 8).sum();
+    convention.result_registers(i64::from(width)).expect("calling.toml has a result row")[..width as usize]
         .iter()
         .map(|name| abi::register(name))
         .collect()
 }
 
-/// A result value: each byte read from its register, joined into a word.
+/// A result part: each byte read from its register, joined into a word.
 fn read_result(
     dag: &mut SelectionDAG,
-    convention: &Convention,
     vt: EVT,
+    registers: &mut impl Iterator<Item = llrm_lir::registers::RegId>,
     chain: &mut SDValue,
     glue: &mut SDValue,
 ) -> SDValue {
     let mut bytes = Vec::new();
-    for register in result_registers(convention, vt) {
+    for register in registers.take(vt.size_in_bits() as usize / 8) {
         let copy = dag.get_copy_from_phys_reg(*chain, register, EVT::I8, *glue);
         *chain = SDValue { node: copy.node, res: 1 };
         *glue = SDValue { node: copy.node, res: 2 };
@@ -102,7 +103,7 @@ fn read_result(
     match bytes[..] {
         [one] => one,
         [lo, hi] => dag.get_node(ISD::BuildPair, vt, &[lo, hi]),
-        _ => unreachable!("a result is a byte or a word"),
+        _ => unreachable!("a result part is a byte or a word"),
     }
 }
 
@@ -163,7 +164,9 @@ pub fn lower_call(
     );
     let mut chain = SDValue { node: end.node, res: 0 };
     let mut glue = SDValue { node: end.node, res: 1 };
-    let values = ins.iter().map(|result| read_result(dag, &convention, result.vt, &mut chain, &mut glue)).collect();
+    let vts: Vec<EVT> = ins.iter().map(|result| result.vt).collect();
+    let mut registers = result_registers(&convention, &vts).into_iter();
+    let values = vts.iter().map(|&vt| read_result(dag, vt, &mut registers, &mut chain, &mut glue)).collect();
     Ok((chain, values))
 }
 
@@ -215,9 +218,12 @@ pub fn lower_return(
     let mut chain = chain;
     let mut glue = None;
     let mut operands = vec![chain];
-    for out in outs {
-        let vt = dag.value_type(out.value);
+    let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
+    for &vt in &vts {
         kind(vt)?;
+    }
+    let mut registers = result_registers(&convention, &vts).into_iter();
+    for (out, &vt) in outs.iter().zip(&vts) {
         let bytes = match vt {
             EVT::I8 => vec![out.value],
             _ => {
@@ -226,7 +232,8 @@ pub fn lower_return(
                 vec![dag.get_node(ISD::Truncate, EVT::I8, &[out.value]), dag.get_node(ISD::Truncate, EVT::I8, &[high])]
             }
         };
-        for (byte, register) in bytes.into_iter().zip(result_registers(&convention, vt)) {
+        for byte in bytes {
+            let register = registers.next().expect("a register for every byte");
             let copy = dag.get_copy_to_phys_reg(chain, register, byte, glue);
             chain = SDValue { node: copy.node, res: 0 };
             glue = Some(SDValue { node: copy.node, res: 1 });

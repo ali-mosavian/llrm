@@ -62,15 +62,3 @@ fn an_unsigned_compare_branches_on_carry() {
     let ir = "define i8 @f(i8 %a, i8 %b) {\nentry:\n  %c = icmp ult i8 %a, %b\n  br i1 %c, label %t, label %f\nt:\n  ret i8 1\nf:\n  ret i8 2\n}";
     assert_eq!(selected(ir, "f"), [vec!["CMP8", "BCS", "JMP"], vec!["LDI8", "RET"], vec!["LDI8", "RET"]]);
 }
-
-/// Known gap (plan row S2): the shared builder returns a value in the registers the way x86 does,
-/// so a long (A:X:rc2:rc3) is refused until the builder calls the target's `lower_return`.
-#[test]
-fn a_long_result_is_refused_until_the_builder_calls_the_target() {
-    let text = format!(
-        "target datalayout = \"{DATALAYOUT}\"\ndefine i32 @f(i32 %a, i32 %b) {{\n  %r = add i32 %a, %b\n  ret i32 %r\n}}"
-    );
-    let module = llrm_mir::parse::module(&text).expect("parses");
-    let refused = select_function(&module, "f", Cpu::Mos6502).err().expect("refused");
-    assert_eq!(refused, "result in registers the value does not fill");
-}

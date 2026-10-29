@@ -26,7 +26,7 @@ use crate::dagisel::pipeline::MosPins;
 use crate::dagisel::function::Selected;
 use crate::dagisel::generated::ids::{opcode as op, reg as ids};
 use crate::dagisel::generated::instrinfo;
-use crate::emit::{MInst, Operand, expand};
+use crate::emit::{MInst, Operand, expand, spill};
 
 const EXTRACT_SUBREG: u16 = 8;
 const REG_SEQUENCE: u16 = 19;
@@ -42,6 +42,12 @@ struct Cells<'a> {
     words: Vec<String>,
     /// Virtual registers live across blocks, by number.
     virtual_regs: HashMap<u32, Operand>,
+    /// The outgoing call area the prologue reserves below `rs0`: the largest call sequence.
+    outgoing: i64,
+    /// The byte cells that hold a spilled carry (`true`) or flags (`false`).
+    saved: HashMap<String, bool>,
+    /// Copies into `a`, `x` and `y`, held back to the `RET`: every other copy goes through `a`.
+    deferred: Vec<MInst>,
 }
 
 impl Cells<'_> {
@@ -73,9 +79,12 @@ pub fn function_text(
     name: &str,
     blocks: &[Selected],
 ) -> Result<String, String> {
-    let mut cells = Cells { name, next: 0, bytes: Vec::new(), words: Vec::new(), virtual_regs: HashMap::new() };
+    let mut cells = Cells { name, next: 0, bytes: Vec::new(), words: Vec::new(), virtual_regs: HashMap::new(), outgoing: outgoing_area(blocks), saved: HashMap::new(), deferred: Vec::new() };
     let mut body = format!(".export {name}\n{name}:\n");
     let mut labels = 0;
+    if cells.outgoing > 0 {
+        body.push_str(&expand(&MInst::new(op::ADJSP, vec![Operand::Imm(-cells.outgoing)]), &mut labels)?);
+    }
     for one in blocks {
         writeln!(body, "{}:", block_label(name, one.block.0)).unwrap();
         let mut values: HashMap<(u32, u8), Operand> = HashMap::new();
@@ -89,6 +98,14 @@ pub fn function_text(
         let mut phis_done = false;
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
+                if matches!(one.dag.nodes()[node as usize].opcode, ISD::Machine(code) if code as u16 == op::RET) {
+                    if cells.outgoing > 0 {
+                        body.push_str(&expand(&MInst::new(op::ADJSP, vec![Operand::Imm(cells.outgoing)]), &mut labels)?);
+                    }
+                    for inst in std::mem::take(&mut cells.deferred) {
+                        body.push_str(&expand(&inst, &mut labels)?);
+                    }
+                }
                 if !phis_done && is_terminator(&one.dag.nodes()[node as usize].opcode) {
                     phis_done = true;
                     body.push_str(&phi_copies(one, node, &mut cells, &mut labels)?);
@@ -108,6 +125,24 @@ pub fn function_text(
     }
     body.push_str(".segment \"CODE\"\n");
     Ok(body)
+}
+
+/// The bytes the largest call sequence of the function needs, from its `ADJCALLSTACKDOWN`s.
+///
+/// DEVIATE: the area is reserved for the whole function (`hasReservedCallFrame`), so the sequence
+/// pseudos emit nothing and a frame object is not laid out. Reason: the spike has no locals yet.
+/// Exit: `frame::layout` takes over the whole frame.
+fn outgoing_area(blocks: &[Selected]) -> i64 {
+    blocks
+        .iter()
+        .flat_map(|one| one.dag.nodes().iter().map(move |node| (one, node)))
+        .filter(|(_, node)| matches!(node.opcode, ISD::Machine(code) if code as u16 == op::ADJCALLSTACKDOWN))
+        .filter_map(|(one, node)| match one.dag.nodes()[node.ops[1].node as usize].data {
+            NodeData::Const { bits, .. } => Some(bits as i64),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 fn is_terminator(opcode: &ISD) -> bool {
@@ -162,6 +197,10 @@ fn location(
     let node = &one.dag.nodes()[value.node as usize];
     match node.data {
         NodeData::Const { bits, .. } => Ok(Operand::Imm(bits as i64)),
+        NodeData::FrameIndex(index) => match one.dag.fixed_offsets.get(&index) {
+            Some(offset) => Ok(Operand::Imm(offset + cells.outgoing)),
+            None => Err("a local frame object needs frame.rs".into()),
+        },
         NodeData::Block(block) => Ok(Operand::Label(block_label(name, block))),
         NodeData::Global { symbol, offset } => {
             let global = module.global(GlobalId(symbol));
@@ -231,7 +270,12 @@ fn lower(
             let to = location(module, name, one, at(1), values, cells)?;
             let from = location(module, name, one, at(2), values, cells)?;
             let bits = one.dag.value_type(at(2)).size_in_bits();
-            Ok(vec![copy(bits, to, from)])
+            let copy = copy(bits, to.clone(), from);
+            if matches!(&to, Operand::Reg(text) if ["a", "x", "y"].contains(&text.as_str())) {
+                cells.deferred.push(copy);
+                return Ok(Vec::new());
+            }
+            Ok(vec![copy])
         }
         ISD::Machine(code) => {
             let code = code as u16;
@@ -272,10 +316,21 @@ fn lower(
                 _ => {
                     let desc = instrinfo::desc(code).ok_or_else(|| format!("no description of opcode {code}"))?;
                     let mut operands = Vec::new();
+                    let (mut before, mut after) = (Vec::new(), Vec::new());
                     for (index, out) in desc.operands[..usize::from(desc.num_defs)].iter().enumerate() {
                         let cell = match out.reg_class {
-                            CARRY => Operand::reg("c"),
-                            FLAGS => Operand::reg("p"),
+                            CARRY | FLAGS => {
+                                let cell = cells.byte();
+                                let Operand::Reg(text) = &cell else { unreachable!() };
+                                cells.saved.insert(text.clone(), out.reg_class == CARRY);
+                                after.push(MInst::new(
+                                    if out.reg_class == CARRY { spill::SAVE_CARRY } else { spill::SAVE_FLAGS },
+                                    vec![cell.clone()],
+                                ));
+                                values.insert((node, index as u8), cell.clone());
+                                operands.push(Operand::reg(if out.reg_class == CARRY { "c" } else { "p" }));
+                                continue;
+                            }
                             IMAG16 => cells.word(),
                             _ => cells.byte(),
                         };
@@ -290,12 +345,26 @@ fn lower(
                         if plumbing || operands.len() == usize::from(desc.num_operands) {
                             continue;
                         }
-                        operands.push(location(module, name, one, input, values, cells)?);
+                        let at = location(module, name, one, input, values, cells)?;
+                        match &at {
+                            Operand::Reg(text) if cells.saved.contains_key(text) => {
+                                let carry = cells.saved[text];
+                                before.push(MInst::new(
+                                    if carry { spill::LOAD_CARRY } else { spill::LOAD_FLAGS },
+                                    vec![at.clone()],
+                                ));
+                                operands.push(Operand::reg(if carry { "c" } else { "p" }));
+                            }
+                            _ => operands.push(at),
+                        }
                     }
                     if operands.len() - usize::from(desc.num_defs) != wanted {
                         return Err(format!("opcode {code}: {} operands, {} wanted", operands.len(), desc.num_operands));
                     }
-                    Ok(vec![MInst::new(code, operands)])
+                    let mut all = before;
+                    all.push(MInst::new(code, operands));
+                    all.extend(after);
+                    Ok(all)
                 }
             }
         }

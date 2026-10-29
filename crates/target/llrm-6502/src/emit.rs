@@ -33,6 +33,17 @@ impl Operand {
     }
 }
 
+/// Pseudo-opcodes outside the generated range: `select.rs` keeps the carry and the flags in memory
+/// between a producer and its user, because nothing in the DAG keeps the hardware flags alive.
+pub mod spill {
+    /// `cell := C` and `C := cell`.
+    pub const SAVE_CARRY: u16 = 0xF000;
+    pub const LOAD_CARRY: u16 = 0xF001;
+    /// `cell := P` and `P := cell`.
+    pub const SAVE_FLAGS: u16 = 0xF002;
+    pub const LOAD_FLAGS: u16 = 0xF003;
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MInst {
     pub opcode: u16,
@@ -343,6 +354,10 @@ pub fn expand(
             }
         }
         op::RET => out.push_str("  rts\n"),
+        spill::SAVE_CARRY => writeln!(out, "  lda #0\n  rol a\n  sta {}", reg(&o[0])?).unwrap(),
+        spill::LOAD_CARRY => writeln!(out, "  lda {}\n  lsr a", reg(&o[0])?).unwrap(),
+        spill::SAVE_FLAGS => writeln!(out, "  php\n  pla\n  sta {}", reg(&o[0])?).unwrap(),
+        spill::LOAD_FLAGS => writeln!(out, "  lda {}\n  pha\n  plp", reg(&o[0])?).unwrap(),
         other => return Err(format!("opcode {other} has no expansion")),
     }
     Ok(out)

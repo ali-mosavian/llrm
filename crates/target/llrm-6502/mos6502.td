@@ -193,3 +193,6 @@ def : Pat<(i16 (or (ext8 Imag8:$lo), (shl (ext8 Imag8:$hi), (i8 8)))),
 
 // A global's address is a 16-bit immediate the linker fills in.
 def : Pat<(i16 (MOSwrapper tglobaladdr:$a)), (LDI16 tglobaladdr:$a)>;
+
+// The address of a frame object: rs0 plus its offset, once the frame is laid out.
+def : Pat<(i16 frameindex:$fi), (LEASP16 (to_tframeindex $fi))>;

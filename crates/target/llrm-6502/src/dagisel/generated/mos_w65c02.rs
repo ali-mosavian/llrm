@@ -8,7 +8,7 @@ use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue};
 use llrm_dagisel::matcher::{Emit, Matcher::*, Slice, Table, Vt};
 use crate::dagisel::predicates;
 
-pub static ITEMS: [llrm_dagisel::matcher::Matcher; 492] = [
+pub static ITEMS: [llrm_dagisel::matcher::Matcher; 497] = [
     SwitchOpcode,
     OpcodeCase { size: 36, opcode: 317 },
     RecordMemRef,
@@ -480,6 +480,11 @@ pub static ITEMS: [llrm_dagisel::matcher::Matcher; 492] = [
     CaptureGlueInput,
     EmitMergeInputChains(Slice { start: 0, len: 1 }),
     MorphNodeTo(Emit { opcode: 368, flags: 19, vts: [Vt(0), Vt(0)], num_vts: 0, operands: Slice { start: 32, len: 0 } }),
+    OpcodeCase { size: 4, opcode: 16 },
+    RecordNode,
+    CheckType(Vt(6)),
+    EmitNodeXForm { xform: 0, record: 0 },
+    MorphNodeTo(Emit { opcode: 365, flags: 0, vts: [Vt(6), Vt(5)], num_vts: 2, operands: Slice { start: 28, len: 1 } }),
     OpcodeCase { size: 9, opcode: 228 },
     RecordChild(0),
     CheckChildType { child: 0, vt: Vt(5) },
@@ -533,6 +538,7 @@ pub const COMPLEX_PATTERNS: &[(u8, &str, u8)] = &[
 
 /// The node transforms the table runs: `(number, the pin's C++ call)`.
 pub const XFORMS: &[(u8, &str)] = &[
+    (0, "CurDAG->getTargetFrameIndex(N->getIndex(), N->getValueType(0))"),
 ];
 
 /// The machine opcodes the table emits, with the pin's names (`MOS::` and `TargetOpcode::`).
@@ -566,6 +572,7 @@ pub const MACHINE_OPCODES: &[(u16, &str)] = &[
     (362, "LDI8"),
     (363, "LDP16"),
     (364, "LDP8"),
+    (365, "LEASP16"),
     (366, "OR16"),
     (367, "OR8"),
     (368, "RET"),

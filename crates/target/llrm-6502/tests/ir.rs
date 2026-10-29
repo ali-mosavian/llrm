@@ -203,3 +203,33 @@ fn a_phi_loop_runs() {
         assert_eq!(run(&format!("sum-{n}"), ir, "sum", &set("rc2", n), ""), want, "sum({n})");
     }
 }
+
+const ADD32: &str = "define i32 @add32(i32 %a, i32 %b) {\n  %r = add i32 %a, %b\n  ret i32 %r\n}";
+const PASS32: &str = "define i32 @pass32(i32 %a, i32 %b) {\n  %r = call i32 @add32(i32 %a, i32 %b)\n  ret i32 %r\n}";
+
+/// `a` = 70000 = 0x00011170 in rs1:rs2, `b` = 100000 = 0x000186A0 with its low word in rs3 and its
+/// high word, 0x0001, at the top of the soft stack (`rs0` = $8000). The sum is 170000 = 0x00029810.
+const LONG_ARGS: &str = "  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  lda #1\n  sta $8000\n  lda #0\n  sta $8001\n\
+  lda #$70\n  sta rc2\n  lda #$11\n  sta rc3\n  lda #1\n  sta rc4\n  lda #0\n  sta rc5\n\
+  lda #$A0\n  sta rc6\n  lda #$86\n  sta rc7\n";
+
+/// The long comes back as `a`, `x`, `rc2`, `rc3`: 0x10, 0x98, 0x02, 0x00. Before the result parts
+/// shared one row the second word was read from `a:x` again, and before the frame-index pattern the
+/// stack argument could not be selected.
+#[test]
+fn a_long_add_with_a_stack_argument_runs() {
+    for (after, want) in [("", 0x10), ("  txa\n", 0x98), ("  lda rc2\n", 0x02), ("  lda rc3\n", 0x00)] {
+        assert_eq!(run(&format!("add32-{want}"), ADD32, "add32", LONG_ARGS, after), want, "{after:?}");
+    }
+}
+
+/// `pass32` re-passes both longs to `add32`: it reserves two bytes below `rs0`, copies its own stack
+/// argument there and the callee reads it at `rs0 + 0`. The same sum.
+#[test]
+fn a_call_with_a_stack_argument_runs() {
+    let text = compile(&format!("{ADD32}\n{PASS32}"), &["add32", "pass32"]);
+    for (after, want) in [("", 0x10), ("  txa\n", 0x98), ("  lda rc2\n", 0x02), ("  lda rc3\n", 0x00)] {
+        let main = format!("{LONG_ARGS}  jsr pass32\n{after}");
+        assert_eq!(common::run_with(&format!("pass32-{want}"), &main, &text), want, "{after:?}");
+    }
+}

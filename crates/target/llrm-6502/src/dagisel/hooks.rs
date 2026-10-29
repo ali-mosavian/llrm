@@ -110,13 +110,15 @@ impl<D: AddrDag> Hooks<D> for MosHooks {
         true
     }
 
+    /// The one transform of the table is `to_tframeindex`.
     fn run_xform(
         &mut self,
-        _dag: &mut D,
+        dag: &mut D,
         value: SDValue,
         _xform: u8,
     ) -> SDValue {
-        value
+        let index = dag.frame_index(value).expect("to_tframeindex takes a frame index");
+        dag.target_frame_index(index, mvt::i16)
     }
 
     fn is_profitable_to_fold(
