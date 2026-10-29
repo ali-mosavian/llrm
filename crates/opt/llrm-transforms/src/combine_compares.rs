@@ -623,11 +623,12 @@ fn fold_icmp_with_pointer_cast(
         Operand::Constant(id) => matches!(c.context.get(id).kind, ConstantKind::Null),
         _ => false,
     };
-    let compatible = |c: &Combiner, ptr: llrm_mir::types::TypeId, int: llrm_mir::types::TypeId| {
-        match (c.context.types.get(ptr), c.context.types.int_bits(int)) {
-            (Type::Pointer(space), Some(bits)) => c.env.layout.pointer(*space).bits == bits,
-            _ => false,
-        }
+    let compatible = |c: &Combiner, ptr: llrm_mir::types::TypeId, int: llrm_mir::types::TypeId| match (
+        c.context.types.get(ptr),
+        c.context.types.int_bits(int),
+    ) {
+        (Type::Pointer(space), Some(bits)) => c.env.layout.pointer(*space).bits == bits,
+        _ => false,
     };
     if let Some((_, _, x)) = pattern::cast(&q, op0, CastOp::IntToPtr) {
         let ptr = c.type_of(op0);
