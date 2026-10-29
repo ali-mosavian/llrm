@@ -1465,3 +1465,68 @@ to = 31  # base 26; 2-6 IR insns differ from the pin in BENCH/main, so not pin-e
 label = "parity/parity bas -O2"
 counter = "instructions"
 to = 384  # base 377; 2-6 IR insns differ from the pin in BENCH/main, so not pin-equal; owner w10, fix after the merge; fix after the main merge
+
+[[row]]
+label = "bintree bq32 -O2"
+counter = "code_bytes"
+to = 639  # base 635; noise-level, +4 B; owner w10; fix after the main merge
+
+[[row]]
+label = "bintree nib -O2"
+counter = "memory_operands"
+to = 18833  # base 12727; inlined like the pin; the extra memory traffic is RA; owner w10; fix after the main merge
+
+[[row]]
+label = "floats bq32 -O2"
+counter = "instructions"
+to = 5046  # base 5043; noise-level, +3 insns; owner w10; fix after the main merge
+
+[[row]]
+label = "jpeg_fixed bas -O2"
+counter = "data_bytes"
+to = 29203  # base 29147; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; fix after the main merge
+
+[[row]]
+label = "jpeg_fixed bq16 -O2"
+counter = "data_bytes"
+to = 29203  # base 29147; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; fix after the main merge
+
+[[row]]
+label = "jpeg_fixed bq32 -O2"
+counter = "code_bytes"
+to = 8661  # base 6445; -O2 inline and unroll, pin-faithful (the pin's IR is larger); owner w10; fix after the main merge
+
+[[row]]
+label = "jpeg_fixed bq32 -O2"
+counter = "data_bytes"
+to = 29321  # base 29209; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; fix after the main merge
+
+[[row]]
+label = "jpeg_fixed nib -O2"
+counter = "data_bytes"
+to = 17214  # base 17158; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; fix after the main merge
+
+[[row]]
+label = "jpeg_single bas -O2"
+counter = "data_bytes"
+to = 29691  # base 29635; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; fix after the main merge
+
+[[row]]
+label = "jpeg_single bq16 -O2"
+counter = "data_bytes"
+to = 29691  # base 29635; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; fix after the main merge
+
+[[row]]
+label = "jpeg_single bq32 -O2"
+counter = "code_bytes"
+to = 8341  # base 6210; -O2 inline and unroll, pin-faithful (the pin's IR is larger); owner w10; fix after the main merge
+
+[[row]]
+label = "jpeg_single bq32 -O2"
+counter = "data_bytes"
+to = 29809  # base 29697; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; fix after the main merge
+
+[[row]]
+label = "jpeg_single nib -O2"
+counter = "data_bytes"
+to = 17254  # base 17198; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; fix after the main merge
