@@ -35,7 +35,10 @@ def HasCMOS : Predicate<"Subtarget->hasCMOS()">;
 // (zp),Y addressing: a pointer in an Imag16 pair.
 // The pair and a byte offset (the Y register): `(add ptr, 0..255)` or a bare pointer.
 def memri : Operand<i16> { let MIOperandInfo = (ops Imag16, i8imm); }
+def memrr : Operand<i16> { let MIOperandInfo = (ops Imag16, Imag8); }
 def MOSAddr : ComplexPattern<i16, 2, "SelectIndirect", [], []>;
+// (add pointer, (zext i8 index)): LDA (p),Y with the index in Y.
+def MOSIdx : ComplexPattern<i16, 2, "SelectIndexed", [], []>;
 
 // The pin's tblgen has no nodes for the overflow forms the type legalizer expands into.
 def SDTOverflowOp : SDTypeProfile<2, 2, [SDTCisSameAs<0, 2>, SDTCisSameAs<0, 3>, SDTCisInt<0>, SDTCisVT<1, i1>]>;
@@ -136,6 +139,8 @@ let mayLoad = 1 in {
   def LDP8 : MOSInst<(outs Imag8:$d), (ins memri:$p), "ldp $d, ($p)", [(set i8:$d, (load MOSAddr:$p))]>;
   def LDP16 : MOSInst<(outs Imag16:$d), (ins memri:$p), "ldp16 $d, ($p)", [(set i16:$d, (load MOSAddr:$p))]>;
 }
+let mayLoad = 1, AddedComplexity = 10 in
+  def LDPI8 : MOSInst<(outs Imag8:$d), (ins memrr:$a), "ldpi $d, ($a)", [(set i8:$d, (load MOSIdx:$a))]>;
 // A global indexed by a byte: LDX i; LDA g,X. The address is the symbol plus the zero-extended index.
 def absx : Operand<i16> { let MIOperandInfo = (ops i16imm, Imag8); }
 def MOSAbsX : ComplexPattern<i16, 2, "SelectAbsX", [], []>;
@@ -154,6 +159,8 @@ let mayStore = 1 in {
   def STP8 : MOSInst<(outs), (ins Imag8:$s, memri:$p), "stp $s, ($p)", [(store i8:$s, MOSAddr:$p)]>;
   def STP16 : MOSInst<(outs), (ins Imag16:$s, memri:$p), "stp16 $s, ($p)", [(store i16:$s, MOSAddr:$p)]>;
 }
+let mayStore = 1, AddedComplexity = 10 in
+  def STPI8 : MOSInst<(outs), (ins Imag8:$s, memrr:$a), "stpi $s, ($a)", [(store i8:$s, MOSIdx:$a)]>;
 // 65C02 only: STZ on a cell, and the unindexed (zp) mode for a store of zero at offset 0.
 let Predicates = [HasCMOS] in {
   let AddedComplexity = 10 in
@@ -232,6 +239,10 @@ def : Pat<(i16 (anyext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (LDI8
 // A byte loaded and widened: the load, and a zero high byte.
 def : Pat<(i16 (zextloadi8 MOSAddr:$p)), (REG_SEQUENCE Imag16, (LDP8 MOSAddr:$p), sub_lo, (LDI8 0), sub_hi)>;
 def : Pat<(i16 (extloadi8 MOSAddr:$p)), (REG_SEQUENCE Imag16, (LDP8 MOSAddr:$p), sub_lo, (LDI8 0), sub_hi)>;
+let AddedComplexity = 10 in {
+  def : Pat<(i16 (zextloadi8 MOSIdx:$a)), (REG_SEQUENCE Imag16, (LDPI8 MOSIdx:$a), sub_lo, (LDI8 0), sub_hi)>;
+  def : Pat<(i16 (extloadi8 MOSIdx:$a)), (REG_SEQUENCE Imag16, (LDPI8 MOSIdx:$a), sub_lo, (LDI8 0), sub_hi)>;
+}
 // The builder joins two bytes as `lo | (hi << 8)` over either kind of extension: that is the pair.
 def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;
 def : Pat<(i16 (or (ext8 Imag8:$lo), (shl (ext8 Imag8:$hi), (i8 8)))),

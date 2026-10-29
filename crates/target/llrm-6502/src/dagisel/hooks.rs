@@ -69,6 +69,31 @@ fn select_indirect<D: Dag>(
     results.push((offset, None));
 }
 
+/// `SelectIndexed`: `(add pointer, (zext i8 index))` as the pointer and the byte index, either
+/// operand order; a global's address is left to `SelectAbsX`.
+fn select_indexed<D: Dag>(
+    dag: &mut D,
+    value: SDValue,
+    results: &mut Vec<(SDValue, Option<u32>)>,
+) -> bool {
+    if dag.opcode(value.node) != isd::ADD {
+        return false;
+    }
+    let operands = [dag.operand(value.node, 0), dag.operand(value.node, 1)];
+    for (base, extend) in [(operands[0], operands[1]), (operands[1], operands[0])] {
+        if dag.opcode(extend.node) != isd::ZERO_EXTEND || dag.opcode(base.node) == own::WRAPPER {
+            continue;
+        }
+        let index = dag.operand(extend.node, 0);
+        if dag.value_type(index) == mvt::i8 && dag.value_type(base) == mvt::i16 {
+            results.push((base, None));
+            results.push((index, None));
+            return true;
+        }
+    }
+    false
+}
+
 /// `SelectAbsX`: `(add (wrapper global), (zext i8 index))` as the symbol and
 /// the byte index, either operand order.
 fn select_absx<D: Dag>(
@@ -155,15 +180,21 @@ impl<D: AddrDag> Hooks<D> for MosHooks {
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool {
-        match pattern {
-            0 => {
+        // the numbers follow the order the table first uses them in, so the name is the key
+        let table = match self.cpu {
+            Cpu::Mos6502 => mos_mos6502::COMPLEX_PATTERNS,
+            Cpu::W65c02 => mos_w65c02::COMPLEX_PATTERNS,
+        };
+        let name = table.iter().find(|(number, ..)| *number == pattern).map(|(_, name, _)| *name);
+        match name {
+            Some("SelectIndirect") => {
                 select_indirect(dag, value, results);
                 true
             }
-            // numbered by name, as `COMPLEX_PATTERNS` lists them
-            1 => select_abs(dag, value, results),
-            2 => select_absx(dag, value, results),
-            _ => unreachable!("the table has three complex patterns"),
+            Some("SelectAbs") => select_abs(dag, value, results),
+            Some("SelectAbsX") => select_absx(dag, value, results),
+            Some("SelectIndexed") => select_indexed(dag, value, results),
+            other => unreachable!("the table has no complex pattern {other:?}"),
         }
     }
 
