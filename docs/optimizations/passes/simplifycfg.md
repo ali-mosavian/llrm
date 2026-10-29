@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifycfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifycfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:ea9eb328fab50d729bbeffeb0188f5bb65719b87cd9a11ee2aa5019b550e3db5 -->
+<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:796f62714b2575236f9b1e7ea08edeb82494e1248614cd51a5837d0d61e5dda1 -->
 
 # simplifycfg
 
@@ -160,8 +160,8 @@ the defaults). `MIRROR` unless a line below says `DEVIATE`.
   while `Options::loop_form_kept` is on, because rounds repeat until nothing
   changes and `loopsimplify` runs in them: LLVM's passes run once, and
   without this the two undid each other each round ("cycle after 3 rounds"
-  on the `deedlines` demo). The LLVM-order pipeline turns it
-  off at every slot.
+  on the `deedlines` demo). The LLVM-order pipeline turns it off at every
+  slot.
 
 ## Runs
 Once per round of the function fixed point, before `decide`: the branches
