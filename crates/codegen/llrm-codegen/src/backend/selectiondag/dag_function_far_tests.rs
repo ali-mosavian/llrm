@@ -1115,3 +1115,35 @@ entry:
         }
     }
 }
+
+/// `c.x = a; c.y = b` with `a` and `b` near data and `c` far pointers: each
+/// pointer's segment word was `mov ax, DGROUP` and a store of `ax` (six
+/// instructions, main's lru -Os listing had it four times over); a constant's
+/// store is the immediate's, so the segment's is `mov [c+2], DGROUP`.
+#[test]
+fn the_segment_word_of_a_far_pointer_is_stored_as_an_immediate() {
+    let ir = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+@a = internal global [3 x i16] zeroinitializer, align 2
+@b = internal global [3 x i16] zeroinitializer, align 2
+@c = internal global { ptr addrspace(1), ptr addrspace(1) } zeroinitializer, align 2
+define void @f() {
+  store ptr addrspace(1) addrspacecast (ptr @a to ptr addrspace(1)), ptr @c, align 2
+  store ptr addrspace(1) addrspacecast (ptr @b to ptr addrspace(1)), ptr getelementptr inbounds nuw (i8, ptr @c, i16 4), align 2
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let stores: Vec<_> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .collect();
+    assert_eq!(stores.len(), 4, "two offsets and two segments");
+    assert!(
+        stores.iter().all(|w| matches!(w.sources.as_slice(), [crate::model::ir::Loc::Imm(_)])),
+        "each store is an immediate's: {stores:?}"
+    );
+}

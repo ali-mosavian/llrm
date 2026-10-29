@@ -431,7 +431,10 @@ pub fn popped_arguments(
     let unit = i64::from(body.bits / 8);
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
-    let sp = Loc::Reg(reg(RegId::SP, 2));
+    // DEVIATE: the pin pops only at -Oz; the legacy -Os pop keeps -Os m16 <=
+    // main. The target's stack register: `add sp, n` at 16 bits,
+    // selection's `add esp, n` at 32.
+    let sp = Loc::Reg(reg(regs.named(regs.stack, unit), unit as u32));
     // The words an `add sp, n` takes back, or 0.
     let words_of = |one: &Insn| match &one.what {
         Some(what)

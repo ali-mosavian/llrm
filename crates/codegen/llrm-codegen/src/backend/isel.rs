@@ -776,6 +776,9 @@ pub struct Selected {
     /// The bytes below BP its allocas and stack temporaries take: an
     /// indexed access names no frame slot the frame could find it by.
     pub depth: i64,
+    /// The widest alignment of what it laid out below BP: the hole above them
+    /// is a multiple of it, or laying them again moves them further.
+    pub align: i64,
     /// The slots it laid out below BP, as (first byte, size): allocas, homes of
     /// arguments, stack temporaries. Temporaries of different statements
     /// may share bytes.
@@ -1162,6 +1165,7 @@ pub fn selected_with<'c>(
         folded: BTreeSet::new(),
         depth: hole,
         extents: Vec::new(),
+        alloca_align: 1,
         allocas: 0,
         frame_objects: Vec::new(),
         over_aligned: Vec::new(),
@@ -1284,6 +1288,7 @@ pub fn selected_with<'c>(
         far: selector.far,
         pops: selector.pops,
         depth: selector.depth,
+        align: selector.alloca_align,
         extents: selector.extents,
         temporaries: 0,
         over_aligned: selector.over_aligned,
@@ -1814,6 +1819,8 @@ pub struct Selector<'m, 'c, 'p> {
     folded: BTreeSet<u32>,
     depth: i64,
     extents: Vec<(i64, i64)>,
+    /// The widest alignment of the groups laid out.
+    alloca_align: i64,
     /// Where the allocas end, below which the stack temporaries go.
     allocas: i64,
     /// Each alloca's frame displacement and size.
@@ -2023,6 +2030,7 @@ impl Selector<'_, '_, '_> {
         // gap; a later, smaller one takes it.
         let mut holes = Vec::<(i64, i64)>::new();
         for (group, align) in order {
+            self.alloca_align = self.alloca_align.max(align);
             let size = capacity[group];
             let fit = holes.iter().position(|&(low, high)| (high - size).div_euclid(align) * align >= low);
             let disp = if let Some(at) = fit {

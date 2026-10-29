@@ -166,3 +166,40 @@ fn the_object_file_carries_pdata_and_xdata_with_addr32nb_relocations() {
         (0..3).map(|n| u16::from_le_bytes([bytes[relocs + 10 * n + 8], bytes[relocs + 10 * n + 9]])).collect();
     assert_eq!(types, [3, 3, 3]);
 }
+
+/// Directives a producer declares give the `.xdata` the pin's assembler writes
+/// for the same `.seh_*`: a pushed register and a stack allocation, a frame
+/// register with a push of the frame's own, and xmm saves below an allocation.
+#[test]
+fn declared_directives_are_encoded_as_the_pins_assembler_does() {
+    use llrm_object::Seh::*;
+    let cases: [(&str, Vec<(usize, llrm_object::Seh)>, &str); 3] = [
+        ("plain", vec![(1, PushReg(6)), (5, StackAlloc(64))], "0105020005720160"),
+        (
+            "frame",
+            vec![(1, PushReg(5)), (2, PushReg(6)), (6, StackAlloc(72)), (0xb, SetFrame(5, 64))],
+            "010b04450b03068202600150",
+        ),
+        (
+            "xmm",
+            vec![(7, StackAlloc(168)), (0x10, SaveXmm(7, 0x90)), (0x19, SaveXmm(6, 0x80))],
+            "01190600196808001078090007011500",
+        ),
+    ];
+    for (name, directives, expected) in cases {
+        let info = from_seh(name, &directives).unwrap();
+        assert_eq!(info.bytes().unwrap(), bytes(expected), "{name}");
+    }
+}
+
+/// A declared prologue wins over the bytes: code whose bytes say nothing
+/// (here a lone `ret`) still gets the declared codes.
+#[test]
+fn a_declared_prologue_is_not_read_back_from_the_bytes() {
+    use llrm_object::{Frame, Seh};
+    let mut object = with(&[0xC3]);
+    object.frames.push(Frame { section: 0, offset: 0, length: 1, rows: Vec::new(), seh: vec![(1, Seh::PushReg(6))] });
+    let written = expanded(&object).unwrap();
+    let xdata = written.sections.iter().find(|one| one.name == ".xdata").unwrap();
+    assert_eq!(xdata.image, bytes("0101010001600000"));
+}
