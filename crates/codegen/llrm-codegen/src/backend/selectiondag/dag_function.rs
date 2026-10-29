@@ -1284,6 +1284,21 @@ fn selected_in(
     let mut body =
         crate::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &noted_wides, &[], body);
     set_odds(&mut body, &info.edge_probs, &block_at);
+    // The loops whose trips `induction` proves, as the old route states them:
+    // the executed-work estimate (the route choice's, `LLRM_DEBUG=cost`) reads
+    // 31 in 32 for a loop without them.
+    {
+        let shape = llrm_analysis::cfg::Shape::of(function);
+        let unit = llrm_analysis::memory::Unit::of(module, &layout, function)
+            .with_spaces(arch.layout().spaces.roles)
+            .with_shape(&shape);
+        let exposed = llrm_analysis::memory::exposed_frames(&unit);
+        let unit = unit.with_exposed(&exposed);
+        let registers = llrm_analysis::consts::known(&unit);
+        let unit = unit.with_registers(&registers);
+        body.loop_trip_counts =
+            crate::backend::isel::proven_trips(&unit, &shape, &registers, |block| block_at.get(&block.0).copied());
+    }
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
     // their bytes are laid down at the call, as the old route did.
