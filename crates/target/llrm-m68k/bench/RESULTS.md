@@ -11,7 +11,7 @@ modelled: "insns" are executed instructions, which price a 68000 `move` and a `m
 | absdiff | 22 | 22 | 22 | 24 | 24 | 7 | 7 | 7 | 8 | 7 | 42 all |
 | clamp | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | 42 all |
 | fib | 54 | 66 | 66 | 22 | 28 | 79 | 139 | 139 | 64 | 67 | 89 all |
-| gcd | 58 | 32 | 26 | 26 | 28 | 31 | 16 | 17 | 17 | 16 | 42 all |
+| gcd | 28 | 32 | 26 | 26 | 28 | 19 | 16 | 17 | 17 | 16 | 42 all |
 | arrsum | 56 | 64 | 64 | 20 | 22 | 105 | 153 | 153 | 68 | 69 | 80 all |
 | arrmax | 64 | 92 | 88 | 26 | 32 | 156 | 248 | 235 | 97 | 100 | 9 all |
 | countgt | 78 | 86 | 86 | 42 | 42 | 186 | 234 | 234 | 168 | 123 | 9 all |
@@ -26,7 +26,7 @@ modelled: "insns" are executed instructions, which price a 68000 `move` and a `m
 | popcount | 22 B / 85 gcc | 52 / 103 | not yet diagnosed |
 | max | 16 B / 5 gcc | 16 / 6 | one insn |
 | fib | 22 B / 64 gcc | 54 / 79 | not yet diagnosed |
-| gcd | 26 B / 16 llc | 58 / 31 | no machine sink / tail duplication / branch folding |
+| gcd | 26 B / 16 llc | 28 / 19 | sink done (was 58 / 31); no tail duplication, branch folding or block placement: `bra` to a `bra` |
 | arrsum | 20 B / 68 gcc | 56 / 105 | callee-saved spills; `lsl`+indexed load for a post-increment; `add #1` |
 | arrmax | 26 B / 97 gcc | 64 / 156 | as arrsum |
 | countgt | 42 B / 123 gcc -O2 | 78 / 186 | as arrsum |

@@ -8,7 +8,7 @@ use crate::dagisel::hooks::Cpu;
 use crate::expand::{Line, finish};
 use crate::mc;
 use crate::mfunc::{emit, expand_cmov};
-use crate::regalloc::{Allocate, GraphColoring, eliminate_phis, fold_reserved_copies, two_address};
+use crate::regalloc::{Allocate, GraphColoring, eliminate_phis, fold_reserved_copies, machine_sink, two_address};
 
 /// A line of the function: a label or an instruction.
 #[derive(Clone, Debug)]
@@ -32,6 +32,7 @@ pub fn items(
     let blocks = select_function(module, name, cpu)?;
     let mut function = emit(name, &blocks)?;
     expand_cmov(&mut function)?;
+    machine_sink(&mut function);
     eliminate_phis(&mut function);
     fold_reserved_copies(&mut function);
     two_address(&mut function);

@@ -241,6 +241,10 @@ impl Emitter<'_> {
                     barrier: desc.has(flag::BARRIER),
                     sets_flags: desc.implicit_defs.contains(&ccr),
                     reads_flags: desc.implicit_uses.contains(&ccr),
+                    may_load: desc.has(flag::MAY_LOAD),
+                    may_store: desc.has(flag::MAY_STORE),
+                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
+                    cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
                     ..Inst::new(Kind::Op(name), operands)
                 });
             }

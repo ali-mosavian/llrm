@@ -165,3 +165,15 @@ fn a_loaded_byte_stored_at_once_is_one_move() {
         "c:\n\tmove.l\t(8,%sp), %a0\n\tmove.l\t(4,%sp), %a1\n\tmove.b\t(%a0), (%a1)\n\trts\n"
     );
 }
+
+/// `x2 = select (x > y), x - y, x` computed both subtractions before the
+/// branch, so both results stayed live and took the callee-saved `d2`/`d3`
+/// (a `movem` pair, 58 B). `MachineSink` moves each into the arm that uses it.
+#[test]
+fn gcd_subtractions_sink_into_their_arms() {
+    let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("gcd")).expect("parses");
+    let text = text(&module, "k", Cpu::M68000).expect("compiles");
+    assert!(!text.contains("movem"), "{text}");
+    let after_compare = text.find("bgt").expect("the signed compare");
+    assert!(text.matches("sub.l").count() == 2 && text.find("sub.l").unwrap() > after_compare, "{text}");
+}

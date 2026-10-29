@@ -50,6 +50,11 @@ pub struct Inst {
     pub sets_flags: bool,
     /// It reads the status flags.
     pub reads_flags: bool,
+    /// `mayLoad`, `mayStore`, `hasUnmodeledSideEffects`, `isAsCheapAsAMove`.
+    pub may_load: bool,
+    pub may_store: bool,
+    pub side_effects: bool,
+    pub cheap_as_move: bool,
 }
 
 impl Inst {
@@ -66,6 +71,10 @@ impl Inst {
             barrier: false,
             sets_flags: false,
             reads_flags: false,
+            may_load: false,
+            may_store: false,
+            side_effects: false,
+            cheap_as_move: false,
         }
     }
 
@@ -108,5 +117,29 @@ pub struct MFunction<C> {
 impl<C> MFunction<C> {
     pub fn new(name: &str) -> MFunction<C> {
         MFunction { name: name.to_owned(), blocks: Vec::new(), classes: Vec::new(), fixed: BTreeMap::new() }
+    }
+
+    /// Lays `block` out at `at`; the phis name predecessors by index, so those
+    /// from `at` on move down one.
+    pub fn insert_block(
+        &mut self,
+        at: usize,
+        block: Block,
+    ) {
+        for other in &mut self.blocks {
+            for phi in &mut other.phis {
+                for (pred, _) in &mut phi.incoming {
+                    if *pred >= at {
+                        *pred += 1;
+                    }
+                }
+            }
+        }
+        self.blocks.insert(at, block);
+    }
+
+    /// The number a block added now gets for its [`Block::id`].
+    pub fn fresh_block_id(&self) -> u32 {
+        self.blocks.iter().map(|block| block.id + 1).max().unwrap_or(0)
     }
 }

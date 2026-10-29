@@ -7,6 +7,7 @@
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::Target;
 pub use llrm_spike_mf::regalloc::{Allocate, Assignment};
+use llrm_spike_mf::{Jump, Kind, Operand};
 
 use crate::mfunc::{Class, MFunction};
 use crate::{REGISTER_INFO, reg};
@@ -74,4 +75,18 @@ pub use llrm_spike_mf::regalloc::{eliminate_phis, successors, two_address};
 
 pub fn fold_reserved_copies(function: &mut MFunction) {
     llrm_spike_mf::regalloc::fold_reserved_copies::<M68kRegisters>(function)
+}
+
+/// `MachineSinking` over the m68k function.
+pub fn machine_sink(function: &mut MFunction) -> bool {
+    llrm_spike_mf::machine_sink::<M68kRegisters>(function)
+}
+
+impl Jump for M68kRegisters {
+    fn jump(block: u32) -> llrm_spike_mf::Inst {
+        let mut inst = llrm_spike_mf::Inst::new(Kind::Op("BRA8"), vec![Operand::Block(block)]);
+        inst.terminator = true;
+        inst.barrier = true;
+        inst
+    }
 }
