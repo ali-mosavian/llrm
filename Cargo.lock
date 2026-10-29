@@ -221,6 +221,8 @@ name = "llrm-6502"
 version = "0.1.0"
 dependencies = [
  "llrm-dagisel",
+ "llrm-lir",
+ "llrm-target",
 ]
 
 [[package]]

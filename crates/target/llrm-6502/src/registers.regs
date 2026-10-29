@@ -1,0 +1,35 @@
+# 6502 registers, in the format of x86-m32's registers.regs.
+# A, X and Y are the only real registers. rc0..rc15 are zero-page bytes used as registers (llvm-mos's
+# "imaginary" registers); rs<n> is the 16-bit pair rc<2n>:rc<2n+1>, the view a pointer lives in.
+# rs0 is the software stack pointer; the 8-bit hardware stack (page 1) holds return addresses only.
+#
+# name bits root lane classes dwarf codeview
+a      8   a    0   gpr,int        - -
+x      8   x    0   gpr,int,index  - -
+y      8   y    0   gpr,int,index  - -
+sp     8   sp   0   reserved,int   - -
+flags  8   flags 0  reserved       - -
+rs0    16  rs0  0   reserved,frame,stack,int,base  - -
+rs1    16  rs1  0   gpr,int,base   - -
+rs2    16  rs2  0   gpr,int,base   - -
+rs3    16  rs3  0   gpr,int,base   - -
+rs4    16  rs4  0   gpr,int,base   - -
+rs5    16  rs5  0   gpr,int,base   - -
+rs6    16  rs6  0   gpr,int,base   - -
+rs7    16  rs7  0   gpr,int,base   - -
+rc0    8   rs0  0   int            - -
+rc1    8   rs0  8   int            - -
+rc2    8   rs1  0   int            - -
+rc3    8   rs1  8   int            - -
+rc4    8   rs2  0   int            - -
+rc5    8   rs2  8   int            - -
+rc6    8   rs3  0   int            - -
+rc7    8   rs3  8   int            - -
+rc8    8   rs4  0   int            - -
+rc9    8   rs4  8   int            - -
+rc10   8   rs5  0   int            - -
+rc11   8   rs5  8   int            - -
+rc12   8   rs6  0   int            - -
+rc13   8   rs6  8   int            - -
+rc14   8   rs7  0   int            - -
+rc15   8   rs7  8   int            - -

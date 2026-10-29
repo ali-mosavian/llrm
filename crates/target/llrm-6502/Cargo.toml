@@ -7,3 +7,7 @@ description = "The 6502 target: its descriptions and DAG selector tables, genera
 
 [dependencies]
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
+llrm-target = { workspace = true }
+
+[dev-dependencies]
+llrm-lir = { workspace = true }
