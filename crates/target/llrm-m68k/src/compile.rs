@@ -107,6 +107,7 @@ pub fn items_with(
     commute_tied(&mut function);
     if options.overlay {
         fold_argument_loads(&mut function, wants_size, crate::memoperand::M68K);
+        crate::overlay::widen_compare_operands(&mut function);
     }
     two_address(&mut function);
     let (assignment, slots) = if options.overlay {

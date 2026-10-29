@@ -29,6 +29,10 @@ const IMM_THEN_DST: &[AsmOperand] = &[
     AsmOperand { name: "imm", at: 1, method: "printImmediate" },
     AsmOperand { name: "dst", at: 0, method: "printOperand" },
 ];
+const CMP_OPERANDS: &[AsmOperand] = &[
+    AsmOperand { name: "lhs", at: 0, method: "printOperand" },
+    AsmOperand { name: "rhs", at: 1, method: "printOperand" },
+];
 const SRC: &[AsmOperand] = &[AsmOperand { name: "src", at: 0, method: "printOperand" }];
 const MASK: &[AsmOperand] = &[AsmOperand { name: "mask", at: 0, method: "printMoveMask" }];
 const DST: &[AsmOperand] = &[AsmOperand { name: "dst", at: 0, method: "printOperand" }];
@@ -49,6 +53,7 @@ pub fn asm(name: &str) -> Option<(&'static str, &'static [AsmOperand])> {
         "TST8d" => ("tst.b\t$dst", DST),
         "TST16d" => ("tst.w\t$dst", DST),
         "TST32d" => ("tst.l\t$dst", DST),
+        "CMPA32" => ("cmpa.l\t$lhs, $rhs", CMP_OPERANDS),
         _ => return post_increment_rows(name).map(|row| row.asm).or_else(|| tst_memory_rows(name).map(|row| row.asm)),
     })
 }
@@ -94,6 +99,9 @@ static PUSHM: [Piece; 2] =
 // `movem.l (%sp)+, regs`: 0x4CDF, then the mask with d0 as bit 0
 static POPM: [Piece; 2] = [bits(0, 16, 0x4CDF), field(16, 16, 0, 0)];
 
+// `cmpa.l ea, An`: 1011 aaa 111 mmm rrr (`cmp.l` has 010 in the middle)
+static CMPA: [Piece; 5] = [field(0, 4, 0, 0), bits(4, 2, 0), bits(6, 3, 7), field(9, 3, 1, 0), bits(12, 4, 0b1011)];
+
 static ADDQ: [[Piece; 6]; 3] = [quick(0, 0), quick(0, 1), quick(0, 2)];
 static SUBQ: [[Piece; 6]; 3] = [quick(1, 0), quick(1, 1), quick(1, 2)];
 static TST: [[Piece; 4]; 3] = [test(0), test(1), test(2)];
@@ -114,12 +122,28 @@ pub fn encoding(name: &str) -> Option<(u16, &'static [Piece])> {
         "TST8d" => (16, &TST[0]),
         "TST16d" => (16, &TST[1]),
         "TST32d" => (16, &TST[2]),
+        "CMPA32" => (16, &CMPA),
         _ => {
             return post_increment_rows(name)
                 .map(|row| row.encoding)
                 .or_else(|| tst_memory_rows(name).map(|row| row.encoding));
         }
     })
+}
+
+fn is_address(register: llrm_lir::registers::RegId) -> bool {
+    let root = REGISTER_INFO.root(register);
+    [
+        crate::reg::A0,
+        crate::reg::A1,
+        crate::reg::A2,
+        crate::reg::A3,
+        crate::reg::A4,
+        crate::reg::A5,
+        crate::reg::A6,
+        crate::reg::SP,
+    ]
+    .contains(&root)
 }
 
 /// The smaller instruction for `inst`, if it has one.
@@ -134,6 +158,9 @@ pub fn rewrite(inst: Inst) -> Inst {
         return Inst { opcode: name, operands: memory.to_vec() };
     }
     match (inst.opcode, &inst.operands[..]) {
+        ("CMP32dr", [lhs, Operand::Reg(rhs)]) if is_address(*rhs) => {
+            Inst { opcode: "CMPA32", operands: vec![lhs.clone(), Operand::Reg(*rhs)] }
+        }
         (
             "ADD8di" | "ADD16di" | "ADD32di" | "ADD32ai" | "SUB8di" | "SUB16di" | "SUB32di" | "SUB32ai",
             &[Operand::Reg(dst), Operand::Reg(src), Operand::Imm(value @ (-8..=-1 | 1..=8))],
@@ -469,6 +496,59 @@ pub fn mark_commutable(function: &mut crate::mfunc::MFunction) {
         }
     }
 }
+/// The second register of a `cmp.l` may be an address register (`cmpa.l`,
+/// the same codes): a value read from memory only to be compared and moved
+/// need not take a data register. A register nothing else restricts to data
+/// registers gets the class of either; its other mentions (the pin's operand
+/// classes) say.
+///
+/// DEVIATE from the pin, which has no `CMPA`. Reason: with the data
+/// registers taken by the loop's counter and maximum, the loaded value
+/// took callee-saved `d2` and a push and a pop (4 bytes); gcc uses `a1`.
+/// Exit: never; a target choice, off with
+/// [`crate::compile::Options::overlay`].
+pub fn widen_compare_operands(function: &mut crate::mfunc::MFunction) {
+    use crate::mfunc::{Class, Kind};
+    let mut widen: Vec<u32> = Vec::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if let Kind::Op("CMP32dr") = inst.kind
+            && let [_, llrm_spike_mf::Operand::Use(llrm_spike_mf::Reg::Virt(rhs))] = inst.operands[..]
+            && function.classes[rhs as usize] == Class::Dr32
+        {
+            widen.push(rhs);
+        }
+    }
+    for v in widen {
+        let mut class = Some(Class::Xr32);
+        'mentions: for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+            for (at, operand) in inst.operands.iter().enumerate() {
+                let (llrm_spike_mf::Operand::Def(llrm_spike_mf::Reg::Virt(r))
+                | llrm_spike_mf::Operand::Use(llrm_spike_mf::Reg::Virt(r))) = operand
+                else {
+                    continue;
+                };
+                if *r != v {
+                    continue;
+                }
+                match inst.kind {
+                    Kind::Copy => {}
+                    Kind::Op("CMP32dr") if at == 1 => {}
+                    Kind::Op(name) => match crate::mfunc::operand_class(name, at) {
+                        Some(wanted) => class = class.and_then(|have| have.meet(wanted)),
+                        None => {
+                            class = None;
+                            break 'mentions;
+                        }
+                    },
+                }
+            }
+        }
+        if let Some(class) = class {
+            function.classes[v as usize] = class;
+        }
+    }
+}
+
 /// Two masks of one register in a row are one: `and.l #255, %d1; and.l #1,
 /// %d1` is `and.l #1, %d1` (the second leaves the same value and the same
 /// codes). The pin's selection leaves the pair after `sgt` and a `zext`.
