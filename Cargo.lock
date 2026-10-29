@@ -250,6 +250,7 @@ dependencies = [
  "llrm-macho",
  "llrm-mir",
  "llrm-object",
+ "llrm-sdag",
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
