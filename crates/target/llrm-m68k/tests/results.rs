@@ -79,3 +79,46 @@ fn a_boolean_added_is_negated_not_masked() {
         }
     }
 }
+
+/// Binary search over `a[m] = 2m + 1`, no memory: two selects on one compare,
+/// the second reading a loop-carried copy.
+const SEARCH: &str = "define i32 @f(i32 %n, i32 %key) {
+entry:
+  %n1 = add i32 %n, -1
+  %e = icmp slt i32 %n, 1
+  br i1 %e, label %none, label %loop
+loop:
+  %hi = phi i32 [%h0, %next], [%n1, %entry]
+  %lo = phi i32 [%lo2, %next], [0, %entry]
+  %s = add i32 %hi, %lo
+  %m = lshr i32 %s, 1
+  %w = shl i32 %m, 1
+  %v = add i32 %w, 1
+  %hit = icmp eq i32 %v, %key
+  br i1 %hit, label %found, label %next
+next:
+  %lt = icmp slt i32 %v, %key
+  %up = add i32 %m, 1
+  %down = add i32 %m, -1
+  %lo2 = select i1 %lt, i32 %up, i32 %lo
+  %h0 = select i1 %lt, i32 %hi, i32 %down
+  %done = icmp sgt i32 %lo2, %h0
+  br i1 %done, label %none, label %loop
+found:
+  ret i32 %m
+none:
+  ret i32 -1
+}";
+
+/// Two selects on one compare, the second naming a copy of a value from before
+/// the compare, were lowered as two diamonds, and the first diamond's arm
+/// (`addq`) cleared the codes the second branched on: the search returned -1
+/// for a key that is there.
+#[test]
+fn two_selects_on_one_compare_share_one_branch() {
+    for (key, index) in [(21, 10), (1, 0), (31, 15), (22, -1)] {
+        if let Some(code) = status(SEARCH, &[16, key], Options::default()) {
+            assert_eq!(code, index & 0xFF, "key {key}");
+        }
+    }
+}
