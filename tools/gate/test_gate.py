@@ -1518,3 +1518,9 @@ def test_a_github_actions_runner_without_a_user_bus_runs_the_gate_unscoped():
     assert gate.scoped(["x"], ci, "/usr/bin/systemd-run") is None
     assert gate.scope_refusal(ci, "/usr/bin/systemd-run") is None
     assert gate.scope_refusal({}, "/usr/bin/systemd-run") is not None, "a dev box without a bus still refuses"
+
+
+def test_a_public_repo_the_gate_clones_is_pinned_to_a_sha():
+    """rm-quake was cloned at its HEAD: its 047e7a8 (lit faces with no lightmap) turned oracle-qcport red with no change in this repository. A push there must not move the gate."""
+    public = gate.load()["private"]["public"]
+    assert public and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", spec) for spec in public.values()), public
