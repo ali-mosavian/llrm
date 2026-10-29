@@ -33,13 +33,8 @@
 1 tests/fixtures/pin-pipeline/O2.txt
 1 tests/fixtures/pin-pipeline/O3.txt
 1 tests/fixtures/pin-pipeline/Os.txt
-1 tests/late_unroll.rs
-1 tests/m16_backward_move_es.rs
 1 tests/m16_pair_compare_constant.rs
 1 tests/m16_return_undef.rs
-1 tests/m16_string_tail.rs
-1 tests/m32_global_alignment.rs
-1 tests/m32_split_restore.rs
 1 tools/aliascompare.py
 1 tools/cc_cost.py
 1 tools/llvmport/dsecompare.py
