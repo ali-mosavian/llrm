@@ -796,6 +796,14 @@ impl Builder<'_> {
                     (None, Some(bytes)) if self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4) => {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
+                    // no `memset` to call: dwords, as the old selector fills;
+                    // x86 takes them unaligned. Only a size of whole dwords (a
+                    // tail costs the bytes the dwords save, and a far one
+                    // cannot be named) and not for size: `xor eax, eax` is a
+                    // byte more than `xor al, al`.
+                    (None, Some(bytes)) if !opt_size && !self.runtime_has("memset") && bytes % 4 == 0 => {
+                        self.rep_stos(root, dst, other, bytes, 4)?
+                    }
                     _ if !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
                 }
@@ -1156,8 +1164,10 @@ impl Builder<'_> {
         size: u64,
         align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        // The pin's own limits, not the target's: a separate item (the m16
-        // override does not reach a byval copy today).
+        // The pin's own limits, not the target's: m16's override is for the
+        // load and store pairs of a `memcpy` (SD225); a byval argument is
+        // three dword pushes where the table's 2 would make it `rep movs`
+        // (tests/byval_copy_at_os.rs).
         let pin = llrm_mir::target::Tuning::PIN;
         let limit = if self.has_opt_size() { pin.max_stores_per_memcpy_opt_size } else { pin.max_stores_per_memcpy };
         if let Some(copy) = self.inline_memcpy(chain, dst, src, size, limit, align, align)? {
@@ -1274,7 +1284,10 @@ impl Builder<'_> {
                 _ => (1, size, value),
             }
         } else if let Some(byte) = self.dag.constant(value) {
-            let block = alignment.min(word);
+            // `getOptimalRepType`: a dword at most on a target with 32-bit
+            // registers, whatever its pointers; for size the pointer's width
+            // (`mov eax, 0` is more bytes: fpbench.nib +3 at -Os).
+            let block = alignment.min(if self.has_opt_size() { word } else { word.max(4) });
             let mut pattern = byte as u64 & 255;
             if block >= 2 {
                 pattern |= pattern << 8;

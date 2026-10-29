@@ -14,7 +14,10 @@
 //! Shrink wrapping: where the prologue and epilogue go is
 //! [`crate::shrinkwrap`]'s.
 
+use llrm_object::assembler::Cfi;
+
 use crate::mc::inst::*;
+use crate::mc::unwind;
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MFunc, Op};
 use crate::regalloc::Allocation;
@@ -113,6 +116,13 @@ struct Emitter {
 }
 
 impl Emitter {
+    fn cfi(
+        &mut self,
+        cfi: Cfi,
+    ) {
+        self.insts.push(Inst::Cfi(cfi));
+    }
+
     /// `sp = sp + delta` (a multiple of 16).
     fn adjust_sp(
         &mut self,
@@ -262,12 +272,14 @@ fn prologue(
     emitter: &mut Emitter,
 ) {
     let bump = frame.folded_bump();
-    if bump.is_none() {
+    if bump.is_none() && frame.size > 0 {
         emitter.adjust_sp(-(frame.size as i64));
+        emitter.cfi(Cfi::DefCfaOffset { offset: frame.size as i64 });
     }
     save_registers(frame, emitter, true, bump);
     if let Some(at) = frame.frame_record {
         emitter.add_to(Gpr::FP, Gpr::R31, false, at, Gpr(16));
+        emitter.cfi(Cfi::DefCfa { register: unwind::FP, offset: (frame.size - at) as i64 });
     }
 }
 
@@ -279,10 +291,16 @@ fn epilogue(
     if let (true, Some(record)) = (frame.dynamic, frame.frame_record) {
         emitter.add_to(Gpr::R31, Gpr::FP, true, record, Gpr(16));
     }
+    // The frame address is the stack pointer's again, before the registers
+    // come back from under it.
+    if frame.frame_record.is_some() {
+        emitter.cfi(Cfi::DefCfa { register: unwind::SP, offset: frame.size as i64 });
+    }
     let bump = frame.folded_bump();
     save_registers(frame, emitter, false, bump);
-    if bump.is_none() {
+    if bump.is_none() && frame.size > 0 {
         emitter.adjust_sp(frame.size as i64);
+        emitter.cfi(Cfi::DefCfaOffset { offset: 0 });
     }
 }
 
@@ -335,6 +353,7 @@ fn save_registers(
                 (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
             };
             emitter.insts.push(inst);
+            declare(frame, emitter, store, &first, second.as_ref(), offset, true);
             continue;
         }
         // A pair reaches 504 bytes from the base; further, the address is made.
@@ -353,6 +372,41 @@ fn save_registers(
             (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
         };
         emitter.insts.push(inst);
+        declare(frame, emitter, store, &first, second.as_ref(), offset, false);
+    }
+}
+
+/// The call frame information of a save (`store`) or a restore of `first` and
+/// `second` at `offset` from the bottom of the frame; `moves` where the access
+/// also moved the stack pointer.
+fn declare(
+    frame: &Layout,
+    emitter: &mut Emitter,
+    store: bool,
+    first: &Memory,
+    second: Option<&Memory>,
+    offset: u64,
+    moves: bool,
+) {
+    let number = |memory: &Memory| match memory {
+        Memory::Int { reg, .. } => reg.0 as u16,
+        Memory::Fp { reg, .. } => 64 + reg.0 as u16,
+    };
+    let size = frame.size as i64;
+    if store && moves {
+        emitter.cfi(Cfi::DefCfaOffset { offset: size });
+    }
+    for (index, memory) in std::iter::once(first).chain(second).enumerate() {
+        let register = number(memory);
+        let cfi = if store {
+            Cfi::Offset { register, offset: offset as i64 + 8 * index as i64 - size }
+        } else {
+            Cfi::Restore { register }
+        };
+        emitter.cfi(cfi);
+    }
+    if !store && moves {
+        emitter.cfi(Cfi::DefCfaOffset { offset: 0 });
     }
 }
 

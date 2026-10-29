@@ -712,13 +712,15 @@ fn test_counted_struct_loop_uses_its_record_width_as_the_byte_stride() {
 
 #[test]
 fn test_os_copies_no_loop_into_larger_code() {
-    // -O2 copies the five-record update loop; -Os must not grow the code doing
-    // so.
-    let directory = tempfile::tempdir().expect("a directory");
-    let source = written(
-        &directory,
-        "stride.nib",
-        "\
+    // The pin's thresholds: m16's table states its own.
+    llrm_x86_m16::with_pin_tuning(|| {
+        // -O2 copies the five-record update loop; -Os must not grow the code
+        // doing so.
+        let directory = tempfile::tempdir().expect("a directory");
+        let source = written(
+            &directory,
+            "stride.nib",
+            "\
 struct sample:
     tag: i16
     mut value: i32
@@ -747,19 +749,26 @@ fn main() -> i16:
     update(&v)
     return 0
 ",
-    );
-    let bytes = |options: &Options| -> usize {
-        object_of(&parsed(&source), "main", &source, options, llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
+        );
+        let bytes = |options: &Options| -> usize {
+            object_of(
+                &parsed(&source),
+                "main",
+                &source,
+                options,
+                llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            )
             .expect("writes")
             .len()
-    };
-    let uncopied = unrolled_or_peeled_none();
-    assert_ne!(
-        listing(&parsed(&source), "main", &level("O3")),
-        listing(&parsed(&source), "main", &uncopied),
-        "premise: -O3 copies the loop"
-    );
-    assert!(bytes(&level("Os")) <= bytes(&uncopied));
+        };
+        let uncopied = unrolled_or_peeled_none();
+        assert_ne!(
+            listing(&parsed(&source), "main", &level("O3")),
+            listing(&parsed(&source), "main", &uncopied),
+            "premise: -O3 copies the loop"
+        );
+        assert!(bytes(&level("Os")) <= bytes(&uncopied));
+    });
 }
 
 #[test]
@@ -1100,19 +1109,22 @@ fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
 
 #[test]
 fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
-    // FILL had no price, so any function holding one refused every unroll: the
-    // 4-trip sum stayed a loop.
-    let directory = tempfile::tempdir().expect("a directory");
-    let source = written(
-        &directory,
-        "priced_fill.nib",
-        "fn value(v: &[i16]) -> i32:\n    let mut a: i32[64] = [0] * 64\n    let mut total: i16 = 0\n    unsafe:\n        for i in 0..4:\n            total += v[i]\n        a[total] = 5\n    return a[1]\nfn main() -> i16:\n    let v: i16[4] = [1, 2, 3, 4]\n    return i16(value(&v))\n",
-    );
-    let assembly = listing(&parsed(&source), "main", &O3_calls_kept());
-    let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
+    // The pin's thresholds: m16's table states its own.
+    llrm_x86_m16::with_pin_tuning(|| {
+        // FILL had no price, so any function holding one refused every unroll:
+        // the 4-trip sum stayed a loop.
+        let directory = tempfile::tempdir().expect("a directory");
+        let source = written(
+            &directory,
+            "priced_fill.nib",
+            "fn value(v: &[i16]) -> i32:\n    let mut a: i32[64] = [0] * 64\n    let mut total: i16 = 0\n    unsafe:\n        for i in 0..4:\n            total += v[i]\n        a[total] = 5\n    return a[1]\nfn main() -> i16:\n    let v: i16[4] = [1, 2, 3, 4]\n    return i16(value(&v))\n",
+        );
+        let assembly = listing(&parsed(&source), "main", &O3_calls_kept());
+        let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
-    assert!(body.contains("rep stosd"));
-    assert!(!Regex::new(r"\bj\w+\s").unwrap().is_match(body));
+        assert!(body.contains("rep stosd"));
+        assert!(!Regex::new(r"\bj\w+\s").unwrap().is_match(body));
+    });
 }
 
 #[test]
@@ -1261,17 +1273,20 @@ fn test_ranked_arrays_index_fill_and_borrow_row_major() {
 /// From `tests/test_hir_execute.py`, less its `execute.run`.
 #[test]
 fn test_borrowed_struct_arrays_and_reborrows_keep_scoped_mutation() {
-    let directory = tempfile::tempdir().expect("a directory");
-    let source = written(
-        &directory,
-        "struct_array_borrow.nib",
-        "struct point:\n    mut x: i16\n    y: i16\nfn nudge(point: &mut point) -> void:\n    point.x += point.y\nfn update(points: &mut [point]) -> void:\n    for point in &mut points:\n        nudge(&mut point)\nfn calculate() -> i16:\n    let mut points: point[2] = [point(1, 2), point(10, 20)]\n    update(&mut points)\n    return points[0].x + points[1].x\n",
-    );
+    // The pin's thresholds: m16's table states its own.
+    llrm_x86_m16::with_pin_tuning(|| {
+        let directory = tempfile::tempdir().expect("a directory");
+        let source = written(
+            &directory,
+            "struct_array_borrow.nib",
+            "struct point:\n    mut x: i16\n    y: i16\nfn nudge(point: &mut point) -> void:\n    point.x += point.y\nfn update(points: &mut [point]) -> void:\n    for point in &mut points:\n        nudge(&mut point)\nfn calculate() -> i16:\n    let mut points: point[2] = [point(1, 2), point(10, 20)]\n    update(&mut points)\n    return points[0].x + points[1].x\n",
+        );
 
-    // Each nudge reaches the caller's array: 1 + 2 and 10 + 20.
-    let assembly = listing(&parsed(&source), "calculate", &O2());
-    let calculate = between(&assembly, "_calculate proc far", "_calculate endp");
-    assert!(calculate.contains("mov ax, 33"), "{calculate}");
+        // Each nudge reaches the caller's array: 1 + 2 and 10 + 20.
+        let assembly = listing(&parsed(&source), "calculate", &O2());
+        let calculate = between(&assembly, "_calculate proc far", "_calculate endp");
+        assert!(calculate.contains("mov ax, 33"), "{calculate}");
+    });
 }
 
 #[test]
@@ -1297,20 +1312,25 @@ fn test_ranked_arrays_reject_the_wrong_rank_or_shape() {
 
 #[test]
 fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
-    // Copies were built for any trip count the simulation priced as folding:
-    // deedlines' 16384-trip loops became 360K operations. LLVM's full unroll
-    // is priced against its threshold (the loop below stays rolled from about
-    // 100 trips at -O3), not gcc's cap of 16 trips.
-    let directory = tempfile::tempdir().expect("a directory");
-    let rolled = |trips: i16| {
-        // `total * 3 + i` has no closed form, so only peeling removes the loop.
-        let text = format!(
-            "@export(\"cdecl16\")\nfn value(k: i16) -> i16:\n    let mut total: i16 = k\n    for i in 0..{trips}:\n        total = total * 3 + i\n    return total\n"
-        );
-        optimized_mir(&parsed(&written(&directory, "settled.nib", &text)), &O3()).contains(" = phi ")
-    };
-    assert!(!rolled(16), "a short loop is copied out");
-    assert!(rolled(16384));
+    // The pin's thresholds: m16's table states its own.
+    llrm_x86_m16::with_pin_tuning(|| {
+        // Copies were built for any trip count the simulation priced as
+        // folding: deedlines' 16384-trip loops became 360K operations.
+        // LLVM's full unroll is priced against its threshold (the loop
+        // below stays rolled from about 100 trips at -O3), not gcc's
+        // cap of 16 trips.
+        let directory = tempfile::tempdir().expect("a directory");
+        let rolled = |trips: i16| {
+            // `total * 3 + i` has no closed form, so only peeling removes the
+            // loop.
+            let text = format!(
+                "@export(\"cdecl16\")\nfn value(k: i16) -> i16:\n    let mut total: i16 = k\n    for i in 0..{trips}:\n        total = total * 3 + i\n    return total\n"
+            );
+            optimized_mir(&parsed(&written(&directory, "settled.nib", &text)), &O3()).contains(" = phi ")
+        };
+        assert!(!rolled(16), "a short loop is copied out");
+        assert!(rolled(16384));
+    });
 }
 
 /// `_sum_three proc near` .. `endp` for the 486.
@@ -1571,7 +1591,10 @@ fn test_standard_mode_rounds_an_f32_variable_per_assignment() {
 #[test]
 /// Fast mode, the default, leaves the sum in the register.
 fn test_fast_mode_keeps_an_f32_variable_extended() {
-    assert!(mean_stores(false) < 4);
+    // The pin's thresholds: m16's table states its own.
+    llrm_x86_m16::with_pin_tuning(|| {
+        assert!(mean_stores(false) < 4);
+    });
 }
 
 #[test]
@@ -2195,19 +2218,22 @@ fn reads_cx(line: &str) -> bool {
 /// gave each copy new values: spin(3) read its `cx` output from ax.
 #[test]
 fn test_inline_assembly_outputs_survive_unrolling() {
-    let directory = tempfile::tempdir().expect("a directory");
-    let source = written(
-        &directory,
-        "spin.nib",
-        "fn spin(n: u16) -> u16:\n    let mut total: u16 = 0\n    let mut i: u16 = 0\n    while i < n:\n        \
+    // The pin's thresholds: m16's table states its own.
+    llrm_x86_m16::with_pin_tuning(|| {
+        let directory = tempfile::tempdir().expect("a directory");
+        let source = written(
+            &directory,
+            "spin.nib",
+            "fn spin(n: u16) -> u16:\n    let mut total: u16 = 0\n    let mut i: u16 = 0\n    while i < n:\n        \
          unsafe:\n            asm(bx=i, out=(cx=let got), clobbers=[]):\n                mov cx, bx\n            \
          total += got\n        i += 1\n    return total\n\nfn main() -> i16:\n    return i16(spin(3))\n",
-    );
-    let assembly = listing(&parsed(&source), "main", &O2());
-    let after: Vec<&str> =
-        assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
-    assert_eq!(after.len(), 3, "{assembly}");
-    assert!(after.iter().all(|line| reads_cx(line)), "{assembly}");
+        );
+        let assembly = listing(&parsed(&source), "main", &O2());
+        let after: Vec<&str> =
+            assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
+        assert_eq!(after.len(), 3, "{assembly}");
+        assert!(after.iter().all(|line| reads_cx(line)), "{assembly}");
+    });
 }
 
 /// `source` through the rich MIR, as masm.
@@ -2291,15 +2317,18 @@ fn test_the_rich_mir_loads_each_input_into_its_register() {
 /// of the three copies reads cx.
 #[test]
 fn test_the_rich_mir_reads_a_block_output_from_its_register_when_unrolled() {
-    let directory = tempfile::tempdir().expect("a directory");
-    let source = "fn spin(n: u16) -> u16:\n    let mut total: u16 = 0\n    let mut i: u16 = 0\n    while i < n:\n        \
+    // The pin's thresholds: m16's table states its own.
+    llrm_x86_m16::with_pin_tuning(|| {
+        let directory = tempfile::tempdir().expect("a directory");
+        let source = "fn spin(n: u16) -> u16:\n    let mut total: u16 = 0\n    let mut i: u16 = 0\n    while i < n:\n        \
          unsafe:\n            asm(bx=i, out=(cx=let got), clobbers=[]):\n                mov cx, bx\n            \
          total += got\n        i += 1\n    return total\n\nfn main() -> i16:\n    return i16(spin(3))\n";
-    let assembly = rich(&directory, "spin.nib", source);
-    let after: Vec<&str> =
-        assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
-    assert_eq!(after.len(), 3, "{assembly}");
-    assert!(after.iter().all(|line| reads_cx(line)), "{assembly}");
+        let assembly = rich(&directory, "spin.nib", source);
+        let after: Vec<&str> =
+            assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
+        assert_eq!(after.len(), 3, "{assembly}");
+        assert!(after.iter().all(|line| reads_cx(line)), "{assembly}");
+    });
 }
 
 /// A raw pointer walk (#105): `p != e` of far pointers was refused "a ptr
@@ -2435,38 +2464,41 @@ fn test_a_program_compiles_through_the_rich_mir() {
 /// shrank the body, so that pair is gone.
 #[test]
 fn test_the_inliners_verdict_is_the_same_on_every_cpu() {
-    let directory = tempfile::tempdir().expect("a directory");
-    let calls = |levels: usize, cpu: &'static str| {
-        let mut body = "a".to_owned();
-        for level in 1..=levels {
-            body = format!("(({body}) * (b + {level}) + a * {})", level + 4);
-        }
-        let source = written(
-            &directory,
-            "logic.nib",
-            &format!(
-                "@extern(\"cdecl16\")\nfn get(number: i16) -> i16\n\nfn logic(a: i16, b: i16) -> i16:\n    return {body}\n\nfn main() -> i16:\n    unsafe:\n        print(f\"{{logic(get(1), get(2))}} {{logic(get(3), get(4))}} {{logic(get(5), get(6))}} {{logic(get(7), get(8))}}\")\n    return 0\n"
-            ),
-        );
-        let module = nib_compile::assembled(
-            &parsed(&source),
-            "main",
-            &llrm_driver::m16_options_old(llrm_codegen::abi::machine::Machine {
-                cpu: cpu.to_owned(),
-                ..nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)
-            }),
-            &crate::real_mode().os,
-        )
-        .expect("assembles");
-        masm::text(&module)
-            .expect("prints")
-            .lines()
-            .filter(|line| line.contains("call") && line.contains("_logic"))
-            .count()
-    };
-    // The arguments come from `get`: constants would fold the calls whole.
-    assert_eq!((calls(12, "486"), calls(12, "386"), calls(12, "P5")), (0, 0, 0), "a short body is inlined");
-    assert_eq!((calls(40, "486"), calls(40, "386"), calls(40, "P5")), (4, 4, 4), "a long body stays a call");
+    // The pin's thresholds: m16's table states its own.
+    llrm_x86_m16::with_pin_tuning(|| {
+        let directory = tempfile::tempdir().expect("a directory");
+        let calls = |levels: usize, cpu: &'static str| {
+            let mut body = "a".to_owned();
+            for level in 1..=levels {
+                body = format!("(({body}) * (b + {level}) + a * {})", level + 4);
+            }
+            let source = written(
+                &directory,
+                "logic.nib",
+                &format!(
+                    "@extern(\"cdecl16\")\nfn get(number: i16) -> i16\n\nfn logic(a: i16, b: i16) -> i16:\n    return {body}\n\nfn main() -> i16:\n    unsafe:\n        print(f\"{{logic(get(1), get(2))}} {{logic(get(3), get(4))}} {{logic(get(5), get(6))}} {{logic(get(7), get(8))}}\")\n    return 0\n"
+                ),
+            );
+            let module = nib_compile::assembled(
+                &parsed(&source),
+                "main",
+                &llrm_driver::m16_options_old(llrm_codegen::abi::machine::Machine {
+                    cpu: cpu.to_owned(),
+                    ..nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)
+                }),
+                &crate::real_mode().os,
+            )
+            .expect("assembles");
+            masm::text(&module)
+                .expect("prints")
+                .lines()
+                .filter(|line| line.contains("call") && line.contains("_logic"))
+                .count()
+        };
+        // The arguments come from `get`: constants would fold the calls whole.
+        assert_eq!((calls(12, "486"), calls(12, "386"), calls(12, "P5")), (0, 0, 0), "a short body is inlined");
+        assert_eq!((calls(40, "486"), calls(40, "386"), calls(40, "P5")), (4, 4, 4), "a long body stays a call");
+    });
 }
 
 /// runtime.nib's floats.assign: affine rewrote `at * 2 + copy(a)`, its own

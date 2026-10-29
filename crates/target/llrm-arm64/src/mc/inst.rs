@@ -420,6 +420,9 @@ pub enum FpConvert {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Inst {
+    /// A `.cfi_*` directive (`CFI_INSTRUCTION`): no bytes, it states what the
+    /// instructions before it did to the frame.
+    Cfi(llrm_object::assembler::Cfi),
     AddSubImm {
         op: AddSub,
         width: Width,
