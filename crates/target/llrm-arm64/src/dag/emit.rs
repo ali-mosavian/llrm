@@ -9,7 +9,7 @@
 //! registers it names.
 //!
 //! DEVIATE: one block; `ADD`/`SUB` register, shifted-register and immediate
-//! forms and the integer `LDR`/`STR` (`ui`, `UR`, `roX`) forms only, with no
+//! forms, `MOVi32imm`/`MOVi64imm`, a frame address and the integer `LDR`/`STR` (`ui`, `UR`, `roX`) forms only, with no
 //! memory operand kept (`MemOperand::default`). Reason: each family adds rows
 //! to [`build`] with an encoder byte check. Exit: C2..Cn.
 
@@ -309,6 +309,20 @@ impl Emitter<'_> {
                     return self.memory(id, name, &access, &operands);
                 }
                 let rd = self.mf.gpr();
+                if let ("MOVi32imm" | "MOVi64imm", [Operand::Imm(value)]) = (name, operands.as_slice()) {
+                    let bits = if name == "MOVi32imm" { 32 } else { 64 };
+                    self.ops.push(Op::Imm { dst: rd, bits, value: *value });
+                    self.values.insert((id, 0), rd);
+                    return Ok(());
+                }
+                // `ADDXri` of a frame index is the object's address.
+                if let (Some(Operand::Slot(slot)), "ADDXri", Some(Operand::Imm(offset))) =
+                    (operands.first(), name, operands.get(1))
+                {
+                    self.ops.push(Op::FrameAddress { dst: rd, slot: *slot, offset: *offset as i64 });
+                    self.values.insert((id, 0), rd);
+                    return Ok(());
+                }
                 self.ops.push(Op::I(build(name, rd, &operands)?));
                 self.values.insert((id, 0), rd);
                 Ok(())

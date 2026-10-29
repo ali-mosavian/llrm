@@ -17,6 +17,12 @@ use llrm_dagisel::interp::Selector;
 use llrm_lir::registers::RegId;
 use llrm_sdag::actions::{Aarch64Features, TargetLowering};
 
+use llrm_dagisel::dag::SDValue as PinValue;
+use llrm_dagisel::generated::aarch64::ids::opcode as aarch64_ids;
+use llrm_dagisel::generated::ids::{isd, mvt};
+use llrm_dagisel::interp::Outcome;
+use llrm_dagisel::x86_addr::AddrDag;
+
 use super::ids::Aarch64Ids;
 
 /// Combine hooks and legalizer hooks of arm64: none. A Custom operation the
@@ -96,7 +102,25 @@ pub fn select_block(dag: &mut SelectionDAG) -> Result<Vec<Unit>, Refusal> {
     legal?;
     let selector = Selector::new(table::TABLE);
     let mut hooks = super::hooks::Aarch64Hooks::default();
-    do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| selector.select(adapter, &mut hooks, node))?;
+    do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
+        select_frame_index(adapter, node).unwrap_or_else(|| selector.select(adapter, &mut hooks, node))
+    })?;
     let root: SDValue = dag.get_root();
     Ok(schedule(dag, root, &Aarch64Sched))
+}
+
+/// `AArch64DAGToDAGISel::Select`, `case ISD::FrameIndex`: `ADDXri TFI, 0, 0`.
+/// `None` for any other node.
+fn select_frame_index(
+    dag: &mut impl AddrDag,
+    node: u32,
+) -> Option<Outcome> {
+    if dag.opcode(node) != isd::FrameIndex {
+        return None;
+    }
+    let index = dag.frame_index(PinValue::new(node, 0))?;
+    let frame = dag.target_frame_index(index, mvt::i64);
+    let (offset, shifter) = (dag.target_constant(0, mvt::i32), dag.target_constant(0, mvt::i32));
+    dag.morph_node_to(node, aarch64_ids::ADDXri, &[mvt::i64], &[frame, offset, shifter]);
+    Some(Outcome::Selected)
 }
