@@ -1295,7 +1295,7 @@ pub fn ends_program(
             if let Some(what) = instruction.what.as_ref().filter(|what| what.op == Operation::Return) {
                 exits = true;
                 let mut replaced = (*instruction).clone();
-                if what.name.as_deref() == Some("jmp") {
+                if what.is_sibling_call() {
                     // A sibling call (the DAG selector's, for a last statement
                     // that calls the runtime) is a call
                     // here: the exit follows it.

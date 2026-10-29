@@ -226,6 +226,28 @@ pub mod api {
 mod unwind;
 
 pub use matcher::Compiled;
+/// Each loop of `shape` with a trip count `induction` proves, as (the LIR
+/// address of its header, the trips): what the executed-work estimate scales
+/// the loop by. `header_at` names the LIR block a MIR block became.
+pub(crate) fn proven_trips(
+    unit: &Unit,
+    shape: &llrm_analysis::cfg::Shape,
+    facts: &IndexMap<llrm_mir::module::ValueId, llrm_analysis::consts::Known>,
+    header_at: impl Fn(BlockId) -> Option<i64>,
+) -> Vec<(i64, i64)> {
+    let mut counts: Vec<(i64, i64)> = shape
+        .loops
+        .iter()
+        .filter_map(|one| {
+            let header = header_at(cfg::block(one.header))?;
+            let count = llrm_analysis::induction::trip_count(unit, one, facts)?;
+            Some((header, i64::try_from(count).expect("a trip count fits an int64")))
+        })
+        .collect();
+    counts.sort();
+    counts
+}
+
 #[cfg(test)]
 pub(crate) use matcher::OPCODE_SCANS;
 pub(crate) use matcher::reads_invariant_memory;
@@ -2527,19 +2549,7 @@ impl Selector<'_, '_, '_> {
             .with_shape(&self.shape);
         let exposed = llrm_analysis::memory::exposed_frames(&unit);
         let unit = unit.with_exposed(&exposed);
-        let facts = unit.registers();
-        let mut counts: Vec<(i64, i64)> = self
-            .shape
-            .loops
-            .iter()
-            .filter_map(|one| {
-                let header = block_at.get(&cfg::block(one.header))?;
-                let count = llrm_analysis::induction::trip_count(&unit, one, &facts)?;
-                Some((*header, i64::try_from(count).expect("a trip count fits an int64")))
-            })
-            .collect();
-        counts.sort();
-        counts
+        proven_trips(&unit, &self.shape, &self.registers, |block| block_at.get(&block).copied())
     }
 
     /// Blocks from which every path ends in `unreachable`, as the old
