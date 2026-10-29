@@ -8,8 +8,7 @@
 //! register. `setcc`, `select` and `brcond` on a value that is not a compare
 //! test it against zero.
 //!
-//! DEVIATE: not translated yet are the `trunc` forms of `LowerToBTST`, overflow arithmetic
-//! (`LowerXALUO`), the `SETCC_CARRY` folds of `LowerSELECT`, the
+//! DEVIATE: not translated yet are the `trunc` forms of `LowerToBTST`, the `SETCC_CARRY` folds of `LowerSELECT`, the
 //! and/or-of-setcc and xor-1 folds of `LowerBRCOND`, `EmitTest`'s narrowing of
 //! a truncated arithmetic result, and floating-point conditions. Reason: each
 //! needs DAG queries or nodes the slice does not reach. Exit: M3b.
@@ -39,6 +38,8 @@ pub mod m68kisd {
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
     pub const ADD: ISD = ISD::Target(ids::ADD);
     pub const SUB: ISD = ISD::Target(ids::SUB);
+    pub const UMUL: ISD = ISD::Target(ids::UMUL);
+    pub const SMUL: ISD = ISD::Target(ids::SMUL);
     pub const AND: ISD = ISD::Target(ids::AND);
     pub const OR: ISD = ISD::Target(ids::OR);
     pub const XOR: ISD = ISD::Target(ids::XOR);
@@ -156,6 +157,7 @@ impl Hooks for M68kLowering {
             ISD::Select => Some(lower_select(dag, node, self.load_as_source)),
             ISD::BrCond => Some(lower_brcond(dag, node, self.load_as_source)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
+            ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             _ => None,
         }
     }
@@ -190,6 +192,38 @@ impl Hooks for M68kLowering {
             super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &[In { vt: ret, pointer: false, arg_vt: ret, split: false }]);
         values.first().copied()
     }
+}
+
+/// `LowerXALUO` (with `lowerOverflowArithmetic`): the arithmetic as one node
+/// that also sets the codes, and the overflow as a `SETCC` of them.
+///
+/// DEVIATE: a multiply of 8 or 16 bits is refused. Reason: the pin promotes it
+/// and reports the constant zero as its overflow, so `255 * 2` in a byte
+/// overflows nothing. Exit: never, while the pin does; the legalizer then
+/// reports the operation as unsupported.
+fn lower_xalu(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    if matches!(dag.opcode(node), ISD::SMulO | ISD::UMulO) && dag.value_type(SDValue { node: node.node, res: 0 }) != EVT::I32 {
+        return None;
+    }
+    let result_vt = dag.value_type(SDValue { node: node.node, res: 0 });
+    let overflow_vt = dag.value_type(SDValue { node: node.node, res: 1 });
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (base, code) = match dag.opcode(node) {
+        ISD::SAddO => (m68kisd::ADD, cond::VS),
+        ISD::UAddO => (m68kisd::ADD, cond::CS),
+        ISD::SSubO => (m68kisd::SUB, cond::VS),
+        ISD::USubO => (m68kisd::SUB, cond::CS),
+        ISD::UMulO => (m68kisd::UMUL, cond::VS),
+        ISD::SMulO => (m68kisd::SMUL, cond::VS),
+        other => unreachable!("not an overflow operation: {other:?}"),
+    };
+    let arith = dag.get_node_multi(base, &[result_vt, EVT::I8], &[lhs, rhs]);
+    let code = cc_operand(dag, code);
+    let overflow = dag.get_node(m68kisd::SETCC, overflow_vt, &[code, SDValue { node: arith.node, res: 1 }]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[result_vt, overflow_vt], &[SDValue { node: arith.node, res: 0 }, overflow]))
 }
 
 /// A condition-code operand: `DAG.getConstant(code, DL, MVT::i8)`.
