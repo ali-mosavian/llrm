@@ -135,6 +135,14 @@ pub fn function_text_with(
     selection: &Selection,
     allocate: bool,
 ) -> Result<String, String> {
+    // DEVIATE: values live across a call are static cells or slots, not frame
+    // objects, so a function in a cycle of calls would clobber its own. Exit:
+    // spills and cells on the soft stack.
+    if let Some(id) = module.named(name)
+        && llrm_mir::callgraph::CallGraph::new(module).recursive(id)
+    {
+        return Err(format!("{name} is recursive: its values live in static cells, so it is not reentrant"));
+    }
     let (items, cells) = function_items(module, name, selection)?;
     let built = if allocate { Some(alloc::build(name, &items)) } else { None };
     if let Some(Err(why)) = &built

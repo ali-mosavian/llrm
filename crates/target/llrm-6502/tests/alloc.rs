@@ -149,3 +149,31 @@ fn a_value_live_across_a_call_survives_it() {
     assert!(text.contains("jsr __mulqi3") && text.contains("s_across_"), "{text}");
     assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 21);
 }
+
+const RECURSIVE: &str = "define i8 @rec(i8 %n) {
+entry:
+  %z = icmp eq i8 %n, 0
+  br i1 %z, label %base, label %go
+base:
+  ret i8 0
+go:
+  %m = sub i8 %n, 1
+  %r = call i8 @rec(i8 %m)
+  %s = add i8 %r, %n
+  ret i8 %s
+}";
+
+/// Values live across a call are static (cells or spill slots), so a function
+/// that can call itself would read the deepest call's `n` after the return:
+/// rec(4) = 4 + 3 + 2 + 1 = 10 came out as the wrong sum. It is refused, on
+/// either path, until locals live on the soft stack.
+#[test]
+fn a_recursive_function_is_refused_not_miscompiled() {
+    let text = format!("target datalayout = \"{DATALAYOUT}\"\n{RECURSIVE}");
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let selection = select_function(&module, "rec", Cpu::Mos6502).expect("selects");
+    for allocate in [true, false] {
+        let why = function_text_with(&module, "rec", &selection, allocate).expect_err("recursion is refused");
+        assert!(why.contains("recursive"), "{why}");
+    }
+}

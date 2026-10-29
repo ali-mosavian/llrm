@@ -23,7 +23,7 @@ use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::emit::equates;
 use llrm_6502::platform::{Platform, SIM65};
-use llrm_6502::select::function_text;
+use llrm_6502::select::{function_items, function_text};
 
 /// The 6502 description's datalayout: n8 and 16-bit pointers.
 fn datalayout() -> String {
@@ -278,12 +278,14 @@ fn measure(
     if code != i32::from(kernel.expect & 0xFF) {
         return Err(format!("wrong result: A = {code}, want {}", kernel.expect & 0xFF));
     }
+    println!("check {tag:<9} {:<9} A = {code:<3} want {:<3} pass", kernel.name, kernel.expect & 0xFF);
     if kernel.wide_result {
         let high = link(dir, kernel, abi, kernel.name, 1, true, &format!("{tag}-hi"))?;
         let (code, _) = run_sim(&high)?;
         if code != i32::from(kernel.expect >> 8) {
             return Err(format!("wrong result: X = {code}, want {}", kernel.expect >> 8));
         }
+        println!("check {tag:<9} {:<9} X = {code:<3} want {:<3} pass", kernel.name, kernel.expect >> 8);
     }
     let many = link(dir, kernel, abi, kernel.name, 101, false, &format!("{tag}-n"))?;
     let (_, t1) = run_sim(&low)?;
@@ -422,6 +424,12 @@ fn ours_row(
         let selection = select_function(&module, name, Cpu::Mos6502)?;
         function_text(&module, name, &selection)
     }));
+    let path = {
+        let selection = select_function(&module, name, Cpu::Mos6502).map_err(|e| format!("{e:?}"))?;
+        let (items, _) = function_items(&module, name, &selection)?;
+        if llrm_6502::alloc::build(name, &items).is_ok() { "allocator" } else { "cell" }
+    };
+    println!("path  {tag:<9} {name:<9} {path}");
     let function = match compiled {
         Ok(Ok(text)) => text,
         Ok(Err(why)) => return Err(format!("select: {why}").chars().take(100).collect::<String>()),
