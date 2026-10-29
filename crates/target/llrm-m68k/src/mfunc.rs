@@ -277,6 +277,10 @@ impl Emitter<'_> {
                         .get(at)
                         .and_then(|one| Class::of_pin(one.reg_class))
                         .unwrap_or_else(|| Class::of_type(*vt));
+                    // DEVIATE from the pin, whose `MOVZXd32d16` defines an `XR32` and so may be given an
+                    // address register: `ExpandMOVSZX_RR` then clears it and `move.w`s into it, which
+                    // is `movea.w`, and sign-extends. A zero extension is a data register.
+                    let class = if name.starts_with("MOVZX") && class == Class::Xr32 { Class::Dr32 } else { class };
                     let reg = self.new_reg(class);
                     self.values.insert((node, at as u8), reg);
                     operands.push(Operand::Def(reg));

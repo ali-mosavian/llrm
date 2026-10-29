@@ -1115,3 +1115,27 @@ fn a_narrow_global_is_zero_extended_from_its_pc_relative_address() {
     assert!(word.contains("move.w\t(w+2,%pc), %d0"), "{word}");
     assert!(narrow_global("zbi").expect("compiles").contains("move.b\t(0,%a0,%d0), %d0"));
 }
+
+/// `MOVZXd32d16` defines an `XR32` register in the pin, so the allocator could give it an address
+/// register: the expansion cleared it with `moveq #0, %a1` (a `moveq` into `d1` in the bits) and
+/// `move.w %d4, %a1` is `movea.w`, which sign-extends. A generated program (a `zext i16` kept in a register) came out 4 where gcc has 3. The result of a zero extension is a data register.
+#[test]
+fn a_zero_extension_defines_a_data_register() {
+    let module = llrm_mir::parse::module(&format!(
+        "target datalayout = \"{DATALAYOUT}\"\ndefine void @f(i16 %a, i16 %b, ptr %p) {{\n  %s = add i16 %a, %b\n  %e = zext i16 %s to i32\n  store i32 %e, ptr %p\n  ret void\n}}"
+    ))
+    .expect("parses");
+    let blocks = llrm_m68k::dagisel::function::select_function(&module, "f", Cpu::M68000).expect("selects");
+    let function = llrm_m68k::mfunc::emit("f", &blocks).expect("emits");
+    let mut seen = 0;
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if let (llrm_spike_mf::Kind::Op(name), Some(llrm_spike_mf::Operand::Def(llrm_spike_mf::Reg::Virt(v)))) =
+            (inst.kind, inst.operands.first())
+            && name.starts_with("MOVZX")
+        {
+            seen += 1;
+            assert_eq!(function.classes[*v as usize], llrm_m68k::mfunc::Class::Dr32, "{name}");
+        }
+    }
+    assert!(seen > 0, "no zero extension was selected");
+}
