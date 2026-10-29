@@ -17,6 +17,7 @@ fn register(name: &str) -> Operand {
         "d1" => reg::D1,
         "d2" => reg::D2,
         "d3" => reg::D3,
+        "d4" => reg::D4,
         "d5" => reg::D5,
         "a0" => reg::A0,
         "a1" => reg::A1,
@@ -656,4 +657,143 @@ done:
 }";
     let ours = compiled(ir, Options::default());
     assert!(!ours.contains("-(%a"), "{ours}");
+}
+
+mod across_blocks {
+    use llrm_m68k::chain::loop_post_increment;
+    use llrm_m68k::expand::Line;
+
+    use super::*;
+
+    fn inst(
+        opcode: &'static str,
+        operands: Vec<Operand>,
+    ) -> Line {
+        Line::Inst(Inst { opcode, operands })
+    }
+
+    fn branch(
+        opcode: &'static str,
+        label: usize,
+    ) -> Line {
+        inst(opcode, vec![Operand::Symbol(format!(".LBB0_{label}"), 0)])
+    }
+
+    fn load() -> Line {
+        inst("MOV32rj", vec![register("d2"), register("a0")])
+    }
+
+    fn store() -> Line {
+        inst("MOV32jr", vec![register("a0"), register("d3")])
+    }
+
+    fn step() -> Line {
+        inst("ADDQ32a", vec![register("a0"), register("a0"), Operand::Imm(4)])
+    }
+
+    fn opcodes(lines: &[Line]) -> Vec<&'static str> {
+        lines
+            .iter()
+            .map(|line| match line {
+                Line::Inst(inst) => inst.opcode,
+                Line::Label(_) => "label",
+            })
+            .collect()
+    }
+
+    /// `p[0]` read in the header, written in an arm, the pointer stepped in
+    /// the latch that both paths reach: one `(An)+` and a store 4 back
+    /// (partition: the latch's `addq.l #4` and the `bra` it hid behind).
+    #[test]
+    fn a_step_in_the_latch_every_path_reaches_goes_into_the_first_access() {
+        let lines = vec![
+            Line::Label(1),
+            load(),
+            branch("Beq8", 3),
+            store(),
+            Line::Label(3),
+            step(),
+            branch("Bne8", 1),
+            inst("RTS", vec![]),
+        ];
+        let folded = loop_post_increment(lines);
+        assert_eq!(opcodes(&folded), ["label", "MOV32ro", "Beq8", "MOV32pr", "label", "Bne8", "RTS"]);
+        let Line::Inst(store) = &folded[3] else { panic!() };
+        assert_eq!(store.operands[0], Operand::Imm(-4));
+    }
+
+    /// A second step on the other path would run with the first: both stay.
+    #[test]
+    fn a_second_latch_keeps_both_steps() {
+        let lines = vec![
+            Line::Label(1),
+            load(),
+            branch("Beq8", 3),
+            store(),
+            step(),
+            branch("BRA8", 1),
+            Line::Label(3),
+            step(),
+            branch("Bne8", 1),
+            inst("RTS", vec![]),
+        ];
+        assert_eq!(loop_post_increment(lines.clone()), lines);
+    }
+
+    /// A branch out of the span before the step would leave the register
+    /// stepped on one path only.
+    #[test]
+    fn a_conditional_arm_that_skips_the_step_keeps_it() {
+        let lines = vec![
+            Line::Label(1),
+            load(),
+            branch("Beq8", 4),
+            store(),
+            step(),
+            branch("Bne8", 1),
+            Line::Label(4),
+            inst("RTS", vec![]),
+        ];
+        assert_eq!(loop_post_increment(lines.clone()), lines);
+    }
+
+    /// The access run twice before the step (a branch back to it).
+    #[test]
+    fn an_access_reached_again_before_the_step_keeps_it() {
+        let lines = vec![Line::Label(1), load(), branch("Beq8", 1), step(), branch("Bne8", 1), inst("RTS", vec![])];
+        assert_eq!(loop_post_increment(lines.clone()), lines);
+    }
+
+    /// Something that jumps to the step from outside reaches it with no
+    /// access before it.
+    #[test]
+    fn a_step_entered_from_outside_the_span_keeps_it() {
+        let lines = vec![
+            branch("Beq8", 3),
+            Line::Label(1),
+            load(),
+            store(),
+            Line::Label(3),
+            step(),
+            branch("Bne8", 1),
+            inst("RTS", vec![]),
+        ];
+        assert_eq!(loop_post_increment(lines.clone()), lines);
+    }
+
+    /// The pointer read as a value in the span would see it 4 on.
+    #[test]
+    fn a_pointer_copied_in_the_span_keeps_the_step() {
+        let lines = vec![
+            Line::Label(1),
+            load(),
+            branch("Beq8", 3),
+            inst("MOV32rr", vec![register("d4"), register("a0")]),
+            Line::Label(3),
+            step(),
+            branch("Bne8", 1),
+            inst("RTS", vec![]),
+        ];
+        assert_eq!(loop_post_increment(lines.clone()), lines);
+    }
 }

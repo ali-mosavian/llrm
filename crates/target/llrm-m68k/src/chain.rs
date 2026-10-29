@@ -281,3 +281,210 @@ pub fn chain_post_increment(
     }
     lines
 }
+
+/// The lines of one basic block, and where control goes after it.
+struct BlockLines {
+    start: usize,
+    end: usize,
+    /// `None`: it leaves the function or goes somewhere the parse does not follow.
+    succs: Option<Vec<usize>>,
+}
+
+/// Basic blocks of `lines`: a label starts one, a branch or return ends one.
+fn parse_blocks(lines: &[Line]) -> Vec<BlockLines> {
+    let mut starts = vec![0];
+    for (at, line) in lines.iter().enumerate() {
+        match line {
+            Line::Label(_) if at > 0 => starts.push(at),
+            Line::Inst(inst) if leaves_straight_line(inst.opcode) || inst.opcode == "RTS" => starts.push(at + 1),
+            _ => {}
+        }
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    starts.retain(|&at| at < lines.len());
+    let label_block = |label: usize| {
+        starts.iter().position(|&at| matches!(lines[at], Line::Label(one) if one == label))
+    };
+    let mut blocks: Vec<BlockLines> = Vec::new();
+    for (n, &start) in starts.iter().enumerate() {
+        let end = starts.get(n + 1).copied().unwrap_or(lines.len());
+        let last = lines[start..end].iter().rev().find_map(|line| match line {
+            Line::Inst(inst) => Some(inst),
+            Line::Label(_) => None,
+        });
+        let next = (n + 1 < starts.len()).then_some(n + 1);
+        let succs = match last {
+            None => Some(next.into_iter().collect()),
+            Some(inst) if crate::overlay::is_branch_on_flags(inst.opcode) => {
+                crate::overlay::branch_target(inst).and_then(label_block).map(|to| next.into_iter().chain([to]).collect())
+            }
+            Some(inst) if inst.opcode.starts_with("BRA") => {
+                crate::overlay::branch_target(inst).and_then(label_block).map(|to| vec![to])
+            }
+            Some(inst) if leaves_straight_line(inst.opcode) && !["JSR", "BSR", "CALL"].iter().any(|p| inst.opcode.starts_with(p)) => {
+                None
+            }
+            Some(inst) if inst.opcode == "RTS" => None,
+            Some(_) => Some(next.into_iter().collect()),
+        };
+        blocks.push(BlockLines { start, end, succs });
+    }
+    blocks
+}
+
+fn is_step(
+    inst: &Inst,
+    root: RegId,
+    bytes: i64,
+) -> bool {
+    matches!(inst.opcode, "ADDQ32a" | "ADD32ai")
+        && matches!(inst.operands.first(), Some(Operand::Reg(r)) if REGISTER_INFO.root(*r) == root)
+        && matches!(inst.operands.last(), Some(Operand::Imm(n)) if *n == bytes)
+}
+
+/// Edits for the mentions of `root` in `lines[range]`, each an access that
+/// can take its displacement `bytes` less; none if one cannot.
+fn adjustments(
+    lines: &[Line],
+    range: std::ops::Range<usize>,
+    root: RegId,
+    bytes: i64,
+    out: &mut Vec<Edit>,
+) -> bool {
+    for at in range {
+        let Line::Inst(inst) = &lines[at] else { continue };
+        if mention_count(inst, root) == 0 {
+            continue;
+        }
+        if mention_count(inst, root) != 1 {
+            return false;
+        }
+        let Some(slot) = slots(inst.opcode).into_iter().find(|slot| base_register(inst, *slot).is_some_and(|r| REGISTER_INFO.root(r) == root))
+        else {
+            return false;
+        };
+        let Some(disp) = displacement(inst, slot) else { return false };
+        let moved = disp - bytes;
+        let fits = match slot.mode {
+            Mode::Ari => with_mode(inst.opcode, slot, 'p').is_some() && i16::try_from(moved).is_ok(),
+            Mode::Arid => i16::try_from(moved).is_ok(),
+            Mode::Arii => i8::try_from(moved).is_ok(),
+        };
+        if !fits {
+            return false;
+        }
+        out.push(Edit::Back(at, slot, bytes));
+    }
+    true
+}
+
+/// The access at line `at` of block `home` steps the register `step` lines
+/// later in block `tail`, with nothing but adjustable accesses between: the
+/// edits, and the line of the step to drop.
+fn across(
+    lines: &[Line],
+    blocks: &[BlockLines],
+    home: usize,
+    at: usize,
+    first: Slot,
+    tail: usize,
+    step: usize,
+) -> Option<(Vec<Edit>, usize)> {
+    let Line::Inst(head) = &lines[at] else { return None };
+    let root = REGISTER_INFO.root(base_register(head, first)?);
+    let bytes = first.bytes;
+    // the blocks control passes through from the access to the step
+    let mut between: Vec<usize> = Vec::new();
+    let mut work: Vec<usize> = blocks[home].succs.clone()?;
+    let mut reached = false;
+    while let Some(block) = work.pop() {
+        if block == tail {
+            reached = true;
+        } else if block == home {
+            // the access would run twice before the step
+            return None;
+        } else if !between.contains(&block) {
+            between.push(block);
+            work.extend(blocks[block].succs.clone()?);
+        }
+    }
+    if !reached {
+        return None;
+    }
+    // nothing else enters: every way into the step and the blocks before it
+    // comes from the access
+    let mut preds = vec![Vec::new(); blocks.len()];
+    for (from, one) in blocks.iter().enumerate() {
+        for &to in one.succs.iter().flatten() {
+            preds[to].push(from);
+        }
+    }
+    for &block in between.iter().chain([&tail]) {
+        if block == 0 || preds[block].iter().any(|from| *from != home && !between.contains(from)) {
+            return None;
+        }
+    }
+    let mut edits = vec![Edit::Step(at, first)];
+    if !adjustments(lines, at + 1..blocks[home].end, root, bytes, &mut edits) {
+        return None;
+    }
+    for &block in &between {
+        if !adjustments(lines, blocks[block].start..blocks[block].end, root, bytes, &mut edits) {
+            return None;
+        }
+    }
+    if !adjustments(lines, blocks[tail].start..step, root, bytes, &mut edits) {
+        return None;
+    }
+    Some((edits, step))
+}
+
+/// The step of a pointer in a later block becomes the post-increment of its
+/// first access: `move.l (%a1), %d5` ... `move.l %d6, (%a1)` ...
+/// `addq.l #4, %a1` in the latch is `move.l (%a1)+, %d5` ... `move.l %d6,
+/// (-4,%a1)`, with the step gone. The step must be reached from the access on
+/// every path, by nothing else, and the register mentioned in between only by
+/// accesses that can take the displacement; a way out of that span, a second
+/// step or a second pass over the access keeps the code as it was.
+///
+/// DEVIATE from the pin, as [`chain_post_increment`]. Exit: never.
+pub fn loop_post_increment(mut lines: Vec<Line>) -> Vec<Line> {
+    'again: loop {
+        let blocks = parse_blocks(&lines);
+        for (home, block) in blocks.iter().enumerate() {
+            for at in block.start..block.end {
+                let Line::Inst(inst) = &lines[at] else { continue };
+                for first in slots(inst.opcode) {
+                    let Some(base) = base_register(inst, first) else { continue };
+                    let root = REGISTER_INFO.root(base);
+                    if !is_address_register(root)
+                        || mention_count(inst, root) != 1
+                        || displacement(inst, first) != Some(0)
+                        || first.mode == Mode::Arii
+                        || post_increment(inst.opcode, first).is_none()
+                    {
+                        continue;
+                    }
+                    for (tail, other) in blocks.iter().enumerate() {
+                        if tail == home {
+                            continue;
+                        }
+                        for step in other.start..other.end {
+                            let Line::Inst(candidate) = &lines[step] else { continue };
+                            if !is_step(candidate, root, first.bytes) {
+                                continue;
+                            }
+                            if let Some((edits, drop)) = across(&lines, &blocks, home, at, first, tail, step) {
+                                apply(&mut lines, edits);
+                                lines.remove(drop);
+                                continue 'again;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return lines;
+    }
+}

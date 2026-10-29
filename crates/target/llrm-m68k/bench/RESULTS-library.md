@@ -1,4 +1,4 @@
-# Library routines, 2026-10-29 17:56 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Library routines, 2026-10-29 18:01 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 Ten routines written after the first set was tuned (`bench/library/*.c`; IR from `gen.py`: clang -O2 without
 unrolling, as gcc -O2 does, with the lines MIR's subset does not take dropped). `cargo run -p llrm-m68k --release
@@ -16,9 +16,9 @@ Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -
 | memset | 48 | 46 | 52 | 46 | 44 | 79 | 64 | 64 | 64 | 93 | -Os +2 B |
 | strcmp | 50 | 48 | 82 | 48 | 48 | 90 | 80 | 102 | 80 | 104 | at or below |
 | hex | 102 | 96 | 78 | 96 | 72 | 73 | 66 | 54 | 66 | 57 | -O2 +18 B, -O2 +12 insns, -Os +24 B, -Os +9 insns |
-| crc16 | 92 | 94 | 86 | 94 | 76 | 708 | 637 | 629 | 637 | 630 | -O2 +8 B, -O2 +8 insns, -Os +18 B, -Os +7 insns |
+| crc16 | 90 | 92 | 86 | 92 | 76 | 699 | 628 | 629 | 628 | 630 | -O2 +6 B, -Os +16 B |
 | bsearch | 72 | 72 | 76 | 72 | 66 | 63 | 63 | 61 | 63 | 64 | -O2 +2 insns, -Os +6 B |
-| partition | 124 | 112 | 92 | 108 | 94 | 196 | 141 | 124 | 138 | 199 | -O2 +20 B, -O2 +17 insns, -Os +14 B |
+| partition | 124 | 112 | 92 | 108 | 94 | 196 | 126 | 124 | 123 | 199 | -O2 +20 B, -O2 +2 insns, -Os +14 B |
 | muldiv | 80 | 80 | 64 | 80 | 64 | - | - | - | - | - | -O2 +16 B, -Os +16 B |
 | structcopy | 34 | 34 | 38 | 34 | 42 | - | - | - | - | - | at or below |
 | fnptr | 52 | 52 | 46 | 52 | 46 | 16 | 16 | 16 | 16 | 16 | -O2 +6 B, -Os +6 B |
@@ -33,9 +33,9 @@ Rows still above a reference: memcpy, memset, hex, crc16, bsearch, partition, mu
 | memset | 48 | 46 | 46 | 90 | 90 | 44 | 52 | 79 | 64 | 64 | 147 | 147 | 93 | 64 | 14 all |
 | strcmp | 50 | 48 | 48 | 114 | 114 | 48 | 82 | 90 | 80 | 80 | 196 | 196 | 104 | 102 | 32 all |
 | hex | 102 | 96 | 96 | 142 | 140 | 72 | 78 | 73 | 66 | 66 | 94 | 97 | 57 | 54 | 204 all |
-| crc16 | 92 | 94 | 94 | 158 | 154 | 76 | 86 | 708 | 637 | 637 | 744 | 704 | 630 | 629 | 152 all |
+| crc16 | 90 | 92 | 92 | 158 | 154 | 76 | 86 | 699 | 628 | 628 | 744 | 704 | 630 | 629 | 152 all |
 | bsearch | 72 | 72 | 72 | 106 | 102 | 66 | 76 | 63 | 63 | 63 | 64 | 64 | 68 | 61 | 10 all |
-| partition | 124 | 112 | 108 | 150 | 146 | 94 | 92 | 196 | 141 | 138 | 202 | 199 | 219 | 124 | 19 all |
+| partition | 124 | 112 | 108 | 150 | 146 | 94 | 92 | 196 | 126 | 123 | 202 | 199 | 219 | 124 | 19 all |
 | muldiv | 80 | 80 | 80 | 82 | 82 | 64 | 64 | - | - | - | - | - | - | - | 236 all |
 | structcopy | 34 | 34 | 34 | 76 | 66 | 42 | 38 | - | - | - | - | - | - | - | 40 all |
 | fnptr | 52 | 52 | 52 | 56 | 56 | 46 | 46 | 16 | 16 | 16 | 16 | 16 | 16 | 16 | 36 all |
@@ -47,12 +47,12 @@ Rows still above a reference: memcpy, memset, hex, crc16, bsearch, partition, mu
 | memcpy, memset | +4 / +2 B (-Os) | both pointers are now `(An)+` (LSR `AMK_PostIndexed`, m68k overlay). What is left is the counter: `addq #1; subq #1; cmpi #1; bhi` where gcc counts to zero |
 | hex | +24 B, +9 insns | the `or disjoint` of `'0' + d` is a `lea` through an address register (the pin has `ADD32di` for `add` only); kept for a constant over 8, where `add.l #c` is no better (8 B and 16 clocks either way; `addq` for 1 to 8 is 2 B, `lea_on_data`). The bench input (`0xBEEF`) never takes the digit arm. What is left: gcc's `add.b #48` (4 B; the high bits are known zero and the sum is under 256), and the loop test `cmpi.l #16` on the old value where gcc tests the shifted value's codes |
 | crc16 | +18 B, +6 insns | `and.l #32768` + `tst.l` of one bit where `btst #15` is 4 bytes; the 8-trip inner loop counter |
-| partition | +14 B, +17 insns | block placement now rotates the loop (the latch falls into the header; 151 to 141 insns). What is left: pointer arithmetic through data registers, repeated `lsl.l #2` of one index, two LSR index registers, a second `(An)+` across blocks |
+| partition | see summary | block placement rotates the loop (the latch falls into the header; 151 to 141 insns) and the latch's step becomes the header's `(%a1)+` (141 to 126; `chain.rs::loop_post_increment`). What is left: pointer arithmetic through data registers, repeated `lsl.l #2` of one index, two LSR index registers |
 | bsearch | +6 B | the compare of a loaded value with the key through a register |
 | fnptr | +6 B | the pin's reserved call frame stores arguments at `(sp)`; gcc pushes them |
 | muldiv | +16 B | three calls: `__mulsi3`, `__divsi3`, and `__mulsi3` again for the remainder (llc 82, gcc 64); argument stores and the frame, not looked at yet. Its result is checked against `rt.ll`, which this compiler builds |
 
-Block placement (`MachineBlockPlacement`, `llrm-spike-mf/src/placement.rs`) moved three rows against the same build without it: partition -10 insns (-13 at -Os, +2 B at -O2, -2 B at -Os), strcmp and crc16 +1 insn each. Both +1 are the pin's choice: a guard over a loop is 37.5% likely (`x == 0` heuristic), so the cold return is laid out before the join and the loop exit jumps over it; `llc` lays strcmp out the same way.
+Block placement (`MachineBlockPlacement`, `llrm-spike-mf/src/placement.rs`) moved three rows against the same build without it: partition -10 insns (-13 at -Os, +2 B at -O2, -2 B at -Os), strcmp +1 insn and crc16 +1 insn from placement alone (crc16 then -9 from the cross-block `(An)+`). Both +1 are the pin's choice: a guard over a loop is 37.5% likely (`x == 0` heuristic), so the cold return is laid out before the join and the loop exit jumps over it; `llc` lays strcmp out the same way.
 
 Fixed since this set was first run (the 32-bit multiply, divide and remainder call the runtime through a libcall table; a flag reader past a select; a compare read again after a call) (each with a run-checked test in `tests/results.rs`): two selects on one compare
 (bsearch returned -1), a join phi read only by other phis (partition returned its start value), `EXTRACT_SUBREG`,
