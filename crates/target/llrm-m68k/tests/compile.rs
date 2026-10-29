@@ -221,3 +221,29 @@ fn a_constant_in_an_address_register_is_not_a_moveq() {
     assert!(asm.contains("%a0") && !asm.lines().any(|l| l.contains("moveq") && l.contains("%a")), "{asm}");
     assert!(asm.contains("move.w\t#1, %a0"), "{asm}");
 }
+
+/// A pointer also read as an integer sat in one data register and was the
+/// base of the load: `add.l (%d0), %d0`, not an instruction at all. The base
+/// now comes from a copy into an address register.
+#[test]
+fn a_pointer_used_as_an_integer_and_as_a_base_gets_an_address_register() {
+    let ir = "define i32 @k(ptr %p) {\n  %v = load i32, ptr %p\n  %i = ptrtoint ptr %p to i32\n  %r = add i32 %v, %i\n  ret i32 %r\n}";
+    assert_eq!(compiled(ir, "k"), "k:\n\tmove.l\t(4,%sp), %d0\n\tmove.l\t%d0, %a0\n\tadd.l\t(%a0), %d0\n\trts\n");
+}
+
+/// Loop strength reduction prices addressing modes through the target's
+/// `Tti`. With the m68k one the array walk gets a pointer induction variable
+/// (a `phi ptr`, an `(An)+` access); with a scaled index (the 68020's, and
+/// x86's) it stays indexed.
+#[test]
+fn the_m68k_tti_strength_reduces_an_array_walk_and_a_scaled_index_does_not() {
+    let ir = "define i32 @k(ptr %p, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  %s1 = add i32 %s, %v\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %s1\n}";
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).unwrap();
+    let ours = llrm_mir::print::module(&llrm_m68k::compile::mid_end(&module).unwrap());
+    let default = llrm_mir::print::module(
+        &llrm_m68k::compile::mid_end_described_by(&module, &llrm_m68k::machine::M68k { scaled_index: true }, None)
+            .unwrap(),
+    );
+    assert!(ours.contains("phi ptr"), "{ours}");
+    assert!(!default.contains("phi ptr"), "{default}");
+}
