@@ -85,7 +85,11 @@ pub fn items_with(
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let number =
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
-    let blocks = select_function_with(module, name, cpu, options.overlay)?;
+    let wants_size = options.size
+        || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
+    // at the size level a compare's argument is read from its slot, which the
+    // load put on the foldable side would make a register's
+    let blocks = select_function_with(module, name, cpu, options.overlay && !wants_size)?;
     let mut function = emit(name, &blocks)?;
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
@@ -102,9 +106,7 @@ pub fn items_with(
     }
     commute_tied(&mut function);
     if options.overlay {
-        let marked =
-            module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
-        fold_argument_loads(&mut function, options.size || marked, crate::memoperand::M68K);
+        fold_argument_loads(&mut function, wants_size, crate::memoperand::M68K);
     }
     two_address(&mut function);
     let (assignment, slots) = if options.overlay {
