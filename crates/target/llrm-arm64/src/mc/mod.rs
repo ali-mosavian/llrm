@@ -10,6 +10,7 @@ pub mod immediate;
 pub mod inst;
 pub mod macho;
 mod text;
+pub mod unwind;
 pub mod visit;
 
 #[cfg(test)]
@@ -36,6 +37,11 @@ impl ObjectTarget for Arm64Objects {
         };
         match format {
             "macho" => llrm_macho::write(object, &macho::Arm64MachO),
+            "elf" if !object.frames.is_empty() => {
+                // `.eh_frame` goes in whether or not `-g` is on, for the frames
+                // the backend declared.
+                elf::write(&llrm_dwarf::eh_frame::expanded(object, &unwind::eh_target())?)
+            }
             "elf" => elf::write(object),
             _ => Err(Unsupported(format!("no {format} writer for arm64 yet"))),
         }

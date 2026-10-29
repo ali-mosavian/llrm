@@ -606,6 +606,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LU5: whether a formula whose base register is a non-affine
+    /// addrec of an enclosing loop is charged the induction variables its
+    /// expansion keeps live across that loop (one for each order past the
+    /// first), not one register. The pin charges one and survives on 7
+    /// registers; with 6 they spill every outer iteration.
+    fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
+        false
+    }
+
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.
     fn can_macro_fuse_cmp(&self) -> bool {
         false

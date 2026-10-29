@@ -217,9 +217,21 @@ impl Machine for Dos {
         llrm_target::keeps_division(i64::from(bits / 8), size)
     }
 
-    fn size_milliclocks_per_byte(&self) -> i64 {
-        // Tuning constant fitted to sc.c, weapons, mdl and lru, not derived.
-        10_000
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        llrm_mir::target::Tuning {
+            // DEVIATE SD223/SD225 (real mode): a dword store is 4 bytes
+            // (prefix, opcode, ModRM, disp8) against 13 for the fill (`lea di`,
+            // `mov es,ss`, `mov cx`, `rep stos`, the zero) that also takes ax,
+            // cx and di from the code around it, so four; a dword load and
+            // store pair is 8 bytes against about 16 for `rep movs`, so two.
+            max_stores_per_memset_opt_size: 4,
+            max_stores_per_memcpy_opt_size: 2,
+            max_stores_per_memmove_opt_size: 2,
+            // Tuning constant fitted to sc.c, weapons, mdl and lru, not
+            // derived.
+            size_milliclocks_per_byte: 10_000,
+            ..llrm_mir::target::Tuning::PIN
+        }
     }
 
     fn size_costs(&self) -> OperationCosts {

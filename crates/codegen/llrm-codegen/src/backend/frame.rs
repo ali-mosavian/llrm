@@ -177,6 +177,9 @@ pub struct Frame {
     /// dword or a quad is not left across a doubleword boundary, which a 486
     /// charges 3 clocks for (`WORD` where BC's frame is word-aligned).
     pub align: i64,
+    /// The widest alignment of an alloca or stack temporary: a hole above them
+    /// that is not a multiple of it moves them by more than itself.
+    pub alloca_align: i64,
     /// The largest outgoing-argument area of a call, reserved in the
     /// prologue where no call is pushed
     /// (`backend::callframe::ReserveCallFrame`;
@@ -202,6 +205,7 @@ impl Frame {
             defer_colours: false,
             stacks: IndexMap::default(),
             align: WORD,
+            alloca_align: 1,
             call_area: 0,
             scratch: Default::default(),
         }

@@ -905,3 +905,29 @@ b0:
     );
     assert!(after.contains("icmp samesign ult"), "{after}");
 }
+
+/// `foldICmpWithCastOp`'s pointer arms (pinned by `opt -passes=instcombine`):
+/// `icmp eq (inttoptr %x), null` stays a pointer compare here, so QCport's
+/// `sprite_load` carried a far-pointer null test (`%p = inttoptr i32; icmp eq
+/// ptr addrspace(1) %p, null`) where the pin tests the integer: +10
+/// instructions.
+#[test]
+fn test_a_compare_of_a_same_width_inttoptr_is_the_integer_compare() {
+    let out = combined(
+        "define i1 @f(i64 %x, i64 %y) {\nb0:\n  %p = inttoptr i64 %x to ptr\n  %q = inttoptr i64 %y to ptr\n  %a = icmp eq ptr %p, null\n  %b = icmp ult ptr %p, %q\n  %r = and i1 %a, %b\n  ret i1 %r\n}\n",
+    );
+    assert!(out.contains("icmp eq i64 %x, 0") && out.contains("icmp ult i64 %x, %y"), "{out}");
+    let out = combined(
+        "define i1 @f(ptr %p) {\nb0:\n  %i = ptrtoint ptr %p to i64\n  %r = icmp eq i64 %i, 0\n  ret i1 %r\n}\n",
+    );
+    assert!(out.contains("icmp eq ptr %p, null"), "{out}");
+}
+
+/// A narrower integer than the pointer is not the same compare.
+#[test]
+fn test_a_compare_of_a_narrower_inttoptr_is_kept() {
+    let out = combined(
+        "define i1 @f(i32 %x) {\nb0:\n  %p = inttoptr i32 %x to ptr\n  %r = icmp eq ptr %p, null\n  ret i1 %r\n}\n",
+    );
+    assert!(out.contains("icmp eq ptr"), "{out}");
+}
