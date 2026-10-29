@@ -224,6 +224,7 @@ dependencies = [
  "llrm-dagisel",
  "llrm-lir",
  "llrm-mir",
+ "llrm-spike-mf",
  "llrm-target",
  "toml",
 ]

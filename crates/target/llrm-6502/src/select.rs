@@ -26,6 +26,7 @@ use llrm_mir::context::GlobalId;
 use llrm_mir::module::{BlockId, Module};
 
 use crate::REGISTER_INFO;
+use crate::alloc;
 use crate::dagisel::function::{Selected, Selection};
 use crate::dagisel::generated::ids::{opcode as op, reg as ids};
 use crate::dagisel::generated::instrinfo;
@@ -123,7 +124,34 @@ pub fn function_text(
     name: &str,
     selection: &Selection,
 ) -> Result<String, String> {
+    function_text_with(module, name, selection, true)
+}
+
+/// [`function_text`], with the register allocator (`alloc.rs`) or without: the
+/// cells of every value, cleaned up by `peep.rs`.
+pub fn function_text_with(
+    module: &Module,
+    name: &str,
+    selection: &Selection,
+    allocate: bool,
+) -> Result<String, String> {
     let (items, cells) = function_items(module, name, selection)?;
+    if allocate && let Ok(function) = alloc::build(name, &items) {
+        let (code, slots) = alloc::emit(function)?;
+        let mut body = format!(".export {name}\n");
+        for item in &items {
+            if let Item::Label(l) = item {
+                writeln!(body, "{l}:").unwrap();
+            }
+        }
+        body.push_str(&code);
+        body.push_str(".segment \"BSS\"\n");
+        for slot in slots {
+            writeln!(body, "{slot}: .res 1").unwrap();
+        }
+        body.push_str(".segment \"CODE\"\n");
+        return Ok(body);
+    }
     let mut labels = 0;
     let mut body = String::new();
     for item in &items {
