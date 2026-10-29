@@ -8,7 +8,7 @@ inputs:
     description: '"required": a clang tree that is missing is an error (the gate jobs); otherwise a warning.'
     default: ""
   pintools:
-    description: '"required": the pin tools tree (the pintools job builds it) must exist and is exported as LLVM_BIN, LLVM_SRC and LLVM_BUILD (the unit and integration groups).'
+    description: '"required": the pin tools tree (the pintools job builds it) must exist and is exported as LLVM_BIN, LLVM_SRC and LLVM_BUILD (the unit, integration and python groups).'
     default: ""
 runs:
   using: composite
@@ -84,7 +84,13 @@ runs:
         for t in llc opt llvm-tblgen; do [ -x "$dir/build/bin/$t" ] || { echo "::error::no pin tools tree at $dir: $t is missing (the pintools job builds it)"; exit 1; }; done
         echo "LLVM_SRC=$dir/src" >> "$GITHUB_ENV"
         echo "LLVM_BUILD=$dir/build" >> "$GITHUB_ENV"
+        # LLVM_BIN is the pin's whole bin directory for pinclocks.sh, clang-oracle.sh and the difftest tools: clang is the clang tree's, linked in.
+        clang="$(sh toolchain/clangbuild.sh --print pin)/bin/clang"
+        [ -x "$clang" ] || { echo "::error::no pinned clang at $clang to link into LLVM_BIN (the toolchain job builds it)"; exit 1; }
+        ln -sf "$clang" "$dir/build/bin/clang"
         echo "LLVM_BIN=$dir/build/bin" >> "$GITHUB_ENV"
+        # A test that needs the tools is red, not skipped, where they are required (tools/difftest/test_*.py).
+        echo "LLRM_REQUIRE_PINTOOLS=1" >> "$GITHUB_ENV"
     - name: The clang trees (built by the toolchain workflow)
       shell: bash
       run: |
