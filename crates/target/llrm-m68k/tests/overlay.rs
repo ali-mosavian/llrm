@@ -1383,6 +1383,25 @@ fn a_reload_of_the_chained_register_ends_the_chain() {
     assert_eq!(last.operands, vec![Reg(D3), Imm(4), Reg(A3)], "{out:?}");
 }
 
+/// `ir` (a function `f()` that reads the volatile byte `@zero`) built for the 68000 and run under
+/// qemu with `zero` at offset 14 of the data block, as the status byte it returns.
+fn run_reading_zero(ir: &str) -> Option<i32> {
+    use llrm_m68k::kernels::{Arg, program};
+    use llrm_m68k::object::{executable, write_executable};
+    if !std::path::Path::new("/usr/bin/qemu-m68k").exists() {
+        return None;
+    }
+    let ir = ir.replace("ptr @zero", "ptr %z").replace("define i16 @f()", "define i16 @k(ptr %z)");
+    let ir: String = ir.lines().filter(|line| !line.starts_with("@zero =") && !line.starts_with("@buf =")).collect::<Vec<_>>().join("\n");
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
+    let code = llrm_m68k::compile::items(&module, "k", Cpu::M68000).expect("compiles");
+    let exe = std::env::temp_dir().join(format!("llrm-m68k-zero-{}-{}", std::process::id(), ir.len()));
+    write_executable(&exe, &executable(&program(&[Arg::Data(14)], code)).unwrap()).unwrap();
+    let status = std::process::Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
+    std::fs::remove_file(&exe).ok();
+    status.code()
+}
+
 /// Two compares, each read by two `scc`, with the second compare between them:
 /// the codes of the first were gone when its second reader came (the compare
 /// has a folded volatile load, so it cannot run again), and the function was
@@ -1435,6 +1454,10 @@ define i16 @f() {
 "#;
     let text = compiled(ir, Options::default());
     assert!(text.contains("move.w\t%sr, %d") && text.contains("move.w\t%d") && text.contains(", %ccr"), "{text}");
+    // the same function built for x86 by the pin's clang returns 143
+    if let Some(got) = run_reading_zero(ir) {
+        assert_eq!(got, 143);
+    }
 }
 
 /// A compare read by a branch with a phi's copy between them that overwrites a
@@ -1490,4 +1513,8 @@ define i16 @f() {
 "#;
     let text = compiled(ir, Options::default());
     assert!(text.contains("move.w\t%sr, -(%sp)") && text.contains("move.w\t(%sp)+, %ccr"), "{text}");
+    // the same function built for x86 by the pin's clang returns 55
+    if let Some(got) = run_reading_zero(ir) {
+        assert_eq!(got, 55);
+    }
 }
