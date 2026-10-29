@@ -1472,3 +1472,66 @@ done:
         }
     }
 }
+
+/// A rotate (`(x << 1) | (x >> 15)` is `rotl` to opt) was "cannot select Rotl": found by the
+/// differential tests, where every program folds its checksum that way. By constants and by a count.
+#[test]
+fn a_rotate_is_two_shifts_and_an_or() {
+    let ir = "declare i16 @llvm.fshl.i16(i16, i16, i16)
+declare i8 @llvm.fshl.i8(i8, i8, i8)
+define i16 @rot1(i16 %x) {
+  %r = call i16 @llvm.fshl.i16(i16 %x, i16 %x, i16 1)
+  ret i16 %r
+}
+define i16 @rotv(i16 %x, i8 %n) {
+  %c = zext i8 %n to i16
+  %r = call i16 @llvm.fshl.i16(i16 %x, i16 %x, i16 %c)
+  ret i16 %r
+}
+define i8 @rot3(i8 %x) {
+  %r = call i8 @llvm.fshl.i8(i8 %x, i8 %x, i8 3)
+  ret i8 %r
+}";
+    let rotl16 = |x: u16, n: u32| x.rotate_left(n);
+    let word = |name: &str, x: u16, n: u8| {
+        let text = compile(ir, name);
+        let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8) + &set("rc4", u16::from(n));
+        let run = |after: &str| common::run_with(&format!("alloc-{name}-{x}-{n}"), &format!("{setup}  jsr {name}\n{after}"), &text);
+        (run(""), run("  txa\n"))
+    };
+    for x in [0u16, 1, 0x8000, 0x1234, 0xFFFF] {
+        let want = rotl16(x, 1);
+        assert_eq!(word("rot1", x, 0), (i32::from(want & 0xFF), i32::from(want >> 8)), "rotl {x:#x} by 1");
+        for n in [0u8, 1, 5, 15, 16, 21] {
+            let want = rotl16(x, u32::from(n) % 16);
+            assert_eq!(word("rotv", x, n), (i32::from(want & 0xFF), i32::from(want >> 8)), "rotl {x:#x} by {n}");
+        }
+    }
+    let text = compile(ir, "rot3");
+    for x in [0u16, 1, 0x81, 0xFF, 0x5A] {
+        let want = (x as u8).rotate_left(3);
+        assert_eq!(common::run_with(&format!("alloc-rot3-{x}"), &format!("{}  jsr rot3\n", set("rc2", x)), &text), i32::from(want));
+    }
+}
+
+/// `llvm.lifetime.start` on a local array reached selection as a node nothing handled: "LifetimeStart is
+/// not a machine node" (differential tests, every program with a local array at -O2).
+#[test]
+fn lifetime_markers_on_a_local_array_are_ignored() {
+    let ir = "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i8 @arr(i8 %x) {
+  %a = alloca [4 x i8]
+  call void @llvm.lifetime.start.p0(i64 4, ptr %a)
+  store i8 %x, ptr %a
+  %p = getelementptr i8, ptr %a, i16 1
+  store i8 7, ptr %p
+  %u = load i8, ptr %a
+  %w = load i8, ptr %p
+  %s = add i8 %u, %w
+  call void @llvm.lifetime.end.p0(i64 4, ptr %a)
+  ret i8 %s
+}";
+    let text = compile(ir, "arr");
+    assert_eq!(common::run_with("alloc-arr", &format!("{}  jsr arr\n", set("rc2", 5)), &text), 12);
+}
