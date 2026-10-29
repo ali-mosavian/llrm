@@ -106,3 +106,58 @@ fn a_call_passes_a_byte_and_a_word() {
     let text = compile(ir, &["caller"]);
     assert_eq!(common::run_with("call-word", &format!("{setup}  jsr caller\n"), &format!("{text}{g}")), 54);
 }
+
+/// Five bytes the memory tests point at; `rc2:rc3` gets their address.
+const BUFFER: &str = ".segment \"DATA\"\nbuf: .byte $10, $20, $30, $40, $50\n.segment \"CODE\"\n";
+const POINT: &str = "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n";
+
+fn memory(
+    name: &str,
+    ir: &str,
+    function: &str,
+    setup: &str,
+    after: &str,
+) -> i32 {
+    let text = compile(ir, &[function]);
+    common::run_with(name, &format!("{POINT}{setup}  jsr {function}\n{after}"), &format!("{text}{BUFFER}"))
+}
+
+/// A byte through a pointer argument: `buf[0]` = 0x10 = 16.
+#[test]
+fn a_byte_load_runs() {
+    let ir = "define i8 @ld(ptr %p) {\n  %v = load i8, ptr %p\n  ret i8 %v\n}";
+    assert_eq!(memory("ld", ir, "ld", "", ""), 16);
+}
+
+/// `p + 3` is the `(zp),y` offset: `buf[3]` = 0x40 = 64.
+#[test]
+fn a_load_at_an_offset_runs() {
+    let ir = "define i8 @ldo(ptr %p) {\n  %q = getelementptr i8, ptr %p, i16 3\n  %v = load i8, ptr %q\n  ret i8 %v\n}";
+    assert_eq!(memory("ldo", ir, "ldo", "", ""), 64);
+}
+
+/// A word load is two bytes, little endian: 0x10, 0x20 is 0x2010.
+#[test]
+fn a_word_load_runs() {
+    let ir = "define i16 @ld16(ptr %p) {\n  %v = load i16, ptr %p\n  ret i16 %v\n}";
+    assert_eq!(memory("ld16-lo", ir, "ld16", "", ""), 0x10);
+    assert_eq!(memory("ld16-hi", ir, "ld16", "", "  txa\n"), 0x20);
+}
+
+/// `st(buf, 0x5A)` leaves 0x5A in `buf[0]` and the rest alone.
+#[test]
+fn a_byte_store_runs() {
+    let ir = "define void @st(ptr %p, i8 %v) {\n  store i8 %v, ptr %p\n  ret void\n}";
+    let setup = set("rc4", 0x5A);
+    assert_eq!(memory("st-0", ir, "st", &setup, "  lda buf\n"), 0x5A);
+    assert_eq!(memory("st-1", ir, "st", &setup, "  lda buf+1\n"), 0x20);
+}
+
+/// `st16(buf, 0x1234)` stores the low byte first: `buf[0]` = 0x34, `buf[1]` = 0x12.
+#[test]
+fn a_word_store_runs() {
+    let ir = "define void @st16(ptr %p, i16 %v) {\n  store i16 %v, ptr %p\n  ret void\n}";
+    let setup = set("rc4", 0x1234) + &set("rc5", 0x12);
+    assert_eq!(memory("st16-0", ir, "st16", &setup, "  lda buf\n"), 0x34);
+    assert_eq!(memory("st16-1", ir, "st16", &setup, "  lda buf+1\n"), 0x12);
+}

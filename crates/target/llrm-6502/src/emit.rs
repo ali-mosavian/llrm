@@ -89,6 +89,21 @@ fn word(operand: &Operand) -> Result<(String, String), String> {
     halves(reg(operand)?).ok_or_else(|| format!("{operand:?} is not a pair register"))
 }
 
+/// The zero-page byte `(zp),y` can use for a pointer whose low byte is `lo`: itself when it is an
+/// `rcN`, else the pair is copied to `rs3` (`rc6`, `rc7`), which the convention lets any routine
+/// clobber.
+fn zero_page_pointer(
+    out: &mut String,
+    lo: &str,
+    hi: &str,
+) -> String {
+    if lo.starts_with("rc") {
+        return lo.to_owned();
+    }
+    writeln!(out, "  lda {lo}\n  sta rc6\n  lda {hi}\n  sta rc7").unwrap();
+    "rc6".to_owned()
+}
+
 /// A byte copy `d := s` through the accumulator where neither side is a register that can do it.
 fn copy_byte(
     out: &mut String,
@@ -201,23 +216,28 @@ pub fn expand(
         },
         // `(zp),y` through the pair's low byte, y the byte offset; a word is two bytes, INY between.
         op::LDP8 => {
-            let ((lo, _), off) = (word(&o[1])?, imm(&o[2])?);
+            let ((lo, hi), off) = (word(&o[1])?, imm(&o[2])?);
+            let lo = zero_page_pointer(&mut out, &lo, &hi);
             writeln!(out, "  ldy #{off}\n  lda ({lo}),y\n  sta {}", reg(&o[0])?).unwrap();
         }
         op::LDP16 => {
-            let ((dl, dh), (lo, _), off) = (word(&o[0])?, word(&o[1])?, imm(&o[2])?);
+            let ((dl, dh), (lo, hi), off) = (word(&o[0])?, word(&o[1])?, imm(&o[2])?);
+            let lo = zero_page_pointer(&mut out, &lo, &hi);
             writeln!(out, "  ldy #{off}\n  lda ({lo}),y\n  sta {dl}\n  iny\n  lda ({lo}),y\n  sta {dh}").unwrap();
         }
         op::STP8 => {
-            let ((lo, _), off) = (word(&o[1])?, imm(&o[2])?);
+            let ((lo, hi), off) = (word(&o[1])?, imm(&o[2])?);
+            let lo = zero_page_pointer(&mut out, &lo, &hi);
             writeln!(out, "  ldy #{off}\n  lda {}\n  sta ({lo}),y", reg(&o[0])?).unwrap();
         }
         op::STP16 => {
-            let ((sl, sh), (lo, _), off) = (word(&o[0])?, word(&o[1])?, imm(&o[2])?);
+            let ((sl, sh), (lo, hi), off) = (word(&o[0])?, word(&o[1])?, imm(&o[2])?);
+            let lo = zero_page_pointer(&mut out, &lo, &hi);
             writeln!(out, "  ldy #{off}\n  lda {sl}\n  sta ({lo}),y\n  iny\n  lda {sh}\n  sta ({lo}),y").unwrap();
         }
         op::STZP => {
-            let ((lo, _), off) = (word(&o[0])?, imm(&o[1])?);
+            let ((lo, hi), off) = (word(&o[0])?, imm(&o[1])?);
+            let lo = zero_page_pointer(&mut out, &lo, &hi);
             writeln!(out, "  ldy #{off}\n  lda #0\n  sta ({lo}),y").unwrap();
         }
         // A shift by a constant: copy to the destination, then one step per bit in place.
