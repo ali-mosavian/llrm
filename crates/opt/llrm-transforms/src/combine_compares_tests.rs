@@ -909,7 +909,8 @@ b0:
 /// `foldICmpWithCastOp`'s pointer arms (pinned by `opt -passes=instcombine`):
 /// `icmp eq (inttoptr %x), null` stays a pointer compare here, so QCport's
 /// `sprite_load` carried a far-pointer null test (`%p = inttoptr i32; icmp eq
-/// ptr addrspace(1) %p, null`) where the pin tests the integer: +10 instructions.
+/// ptr addrspace(1) %p, null`) where the pin tests the integer: +10
+/// instructions.
 #[test]
 fn test_a_compare_of_a_same_width_inttoptr_is_the_integer_compare() {
     let out = combined(
