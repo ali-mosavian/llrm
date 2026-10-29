@@ -38,6 +38,14 @@ const CARRY: i16 = ids::CarryRegClassID as i16;
 const FLAGS: i16 = ids::FlagsRegClassID as i16;
 const IMAG16: i16 = ids::Imag16RegClassID as i16;
 
+/// A line of a function before it is text: a label, a machine instruction, or raw ca65.
+#[derive(Clone, Debug)]
+pub enum Item {
+    Label(String),
+    Inst(MInst),
+    Text(String),
+}
+
 struct Cells<'a> {
     name: &'a str,
     next: usize,
@@ -103,24 +111,56 @@ pub fn function_text(
     name: &str,
     selection: &Selection,
 ) -> Result<String, String> {
+    let (items, cells) = function_items(module, name, selection)?;
+    let mut labels = 0;
+    let mut body = String::new();
+    for item in &items {
+        match item {
+            Item::Label(l) => writeln!(body, "{l}:").unwrap(),
+            Item::Inst(inst) => body.push_str(&expand(inst, &mut labels)?),
+            Item::Text(t) => body.push_str(t),
+        }
+    }
+    let body = format!(".export {name}\n{body}");
+    let body = peep::optimize(&body, &result_registers(module, name)).unwrap_or(body);
+    let mut body = relax_bra(&body);
+    body.push_str(".segment \"BSS\"\n");
+    // the cells the clean-up left in memory
+    let kept = |cell: &str| body.lines().any(|l| l.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|t| t == cell));
+    let (bytes, words): (Vec<_>, Vec<_>) = (cells.0.iter().filter(|c| kept(c)).cloned().collect(), cells.1.iter().filter(|c| kept(c)).cloned().collect());
+    for cell in &bytes {
+        writeln!(body, "{cell}: .res 1").unwrap();
+    }
+    for cell in &words {
+        writeln!(body, "{cell}: .res 2").unwrap();
+    }
+    body.push_str(".segment \"CODE\"\n");
+    Ok(body)
+}
+
+/// The function's lines in order, with the byte and word cells it made.
+pub fn function_items(
+    module: &Module,
+    name: &str,
+    selection: &Selection,
+) -> Result<(Vec<Item>, (Vec<String>, Vec<String>)), String> {
     let blocks = &selection.blocks;
     let (laid_out, fixed) = lay_out_frame(blocks, &selection.locals);
     let mut cells = Cells { name, next: 0, bytes: Vec::new(), words: Vec::new(), virtual_regs: HashMap::new(), frame: laid_out, fixed, saved: HashMap::new(), deferred: Vec::new(), branched_to: Default::default() };
-    let mut body = format!(".export {name}\n{name}:\n");
-    let mut labels = 0;
-    let mut edges = String::new();
+    let mut body: Vec<Item> = vec![Item::Label(name.to_owned())];
+    let mut edges: Vec<Item> = Vec::new();
     for inst in cells.frame.prologue() {
-        body.push_str(&expand(&inst, &mut labels)?);
+        body.push(Item::Inst(inst));
     }
     for one in blocks {
-        writeln!(body, "{}:", block_label(name, one.block.0)).unwrap();
+        body.push(Item::Label(block_label(name, one.block.0)));
         let mut values: HashMap<(u32, u8), Operand> = HashMap::new();
         for &(register, vreg) in &one.live_ins {
             let from = REGISTER_INFO.name(register).ok_or("a live-in with no name")?;
             let bits = if from.starts_with("rs") { 16 } else { 8 };
             let cell = cell_for(&mut cells, bits);
             cells.virtual_regs.insert(vreg, cell.clone());
-            body.push_str(&expand(&copy(bits, cell, Operand::reg(from)), &mut labels)?);
+            body.push(Item::Inst(copy(bits, cell, Operand::reg(from))));
         }
         let mut phis_done = false;
         // A block that branches to several blocks puts each edge's copies on the edge.
@@ -130,10 +170,10 @@ pub fn function_text(
             for &node in unit.nodes.iter().rev() {
                 if matches!(one.dag.nodes()[node as usize].opcode, ISD::Machine(code) if code as u16 == op::RET) {
                     for inst in cells.frame.epilogue() {
-                        body.push_str(&expand(&inst, &mut labels)?);
+                        body.push(Item::Inst(inst));
                     }
                     for inst in std::mem::take(&mut cells.deferred) {
-                        body.push_str(&expand(&inst, &mut labels)?);
+                        body.push(Item::Inst(inst));
                     }
                 }
                 if !phis_done && is_terminator(&one.dag.nodes()[node as usize].opcode) {
@@ -141,11 +181,11 @@ pub fn function_text(
                     let ISD::Machine(code) = one.dag.nodes()[node as usize].opcode else { unreachable!() };
                     let conditional = ![op::JMP, op::BRA, op::RET].contains(&(code as u16));
                     if !split {
-                        body.push_str(&phi_copies(one, conditional, &mut cells, &mut labels)?);
+                        body.extend(phi_copies(one, conditional, &mut cells)?);
                     }
                 }
                 for inst in lower(module, name, one, node, &mut values, &mut cells)? {
-                    body.push_str(&expand(&inst, &mut labels)?);
+                    body.push(Item::Inst(inst));
                 }
             }
         }
@@ -154,33 +194,22 @@ pub fn function_text(
             // after the function.
             for edge in &one.edges {
                 let Some(to) = edge.to else { continue };
-                let copies = parallel_copy(&edge.copies, &mut cells, &mut labels)?;
+                let copies = parallel_copy(&edge.copies, &mut cells)?;
                 if cells.branched_to.contains(&to.0) {
-                    writeln!(edges, "{}:\n{copies}  jmp {}", edge_label(name, one.block.0, to.0), block_label(name, to.0)).unwrap();
+                    edges.push(Item::Label(edge_label(name, one.block.0, to.0)));
+                    edges.extend(copies);
+                    edges.push(Item::Inst(MInst::new(op::JMP, vec![Operand::Label(block_label(name, to.0))])));
                 } else {
-                    body.push_str(&copies);
+                    body.extend(copies);
                 }
             }
         } else if !phis_done {
             // A `br` to the next block is dropped by layout: the block ends with no terminator.
-            body.push_str(&phi_copies(one, false, &mut cells, &mut labels)?);
+            body.extend(phi_copies(one, false, &mut cells)?);
         }
     }
-    body.push_str(&edges);
-    let body = peep::optimize(&body, &result_registers(module, name)).unwrap_or(body);
-    let mut body = relax_bra(&body);
-    body.push_str(".segment \"BSS\"\n");
-    // the cells the clean-up left in memory
-    let kept = |cell: &str| body.lines().any(|l| l.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|t| t == cell));
-    let (bytes, words): (Vec<_>, Vec<_>) = (cells.bytes.iter().filter(|c| kept(c)).cloned().collect(), cells.words.iter().filter(|c| kept(c)).cloned().collect());
-    for cell in &bytes {
-        writeln!(body, "{cell}: .res 1").unwrap();
-    }
-    for cell in &words {
-        writeln!(body, "{cell}: .res 2").unwrap();
-    }
-    body.push_str(".segment \"CODE\"\n");
-    Ok(body)
+    body.extend(edges);
+    Ok((body, (cells.bytes, cells.words)))
 }
 
 /// The frame: the fixed objects (the stack arguments, at the offsets the calling hook gave them)
@@ -226,18 +255,20 @@ fn phi_copies(
     one: &Selected,
     conditional: bool,
     cells: &mut Cells,
-    labels: &mut u32,
-) -> Result<String, String> {
+) -> Result<Vec<Item>, String> {
     let copies: Vec<(u32, u32)> = one.edges.iter().flat_map(|edge| edge.copies.iter().copied()).collect();
     if copies.is_empty() {
-        return Ok(String::new());
+        return Ok(Vec::new());
     }
-    let mut text = if conditional { "  php\n".to_owned() } else { String::new() };
-    text.push_str(&parallel_copy(&copies, cells, labels)?);
+    let mut out = Vec::new();
     if conditional {
-        text.push_str("  plp\n");
+        out.push(Item::Text("  php\n".into()));
     }
-    Ok(text)
+    out.extend(parallel_copy(&copies, cells)?);
+    if conditional {
+        out.push(Item::Text("  plp\n".into()));
+    }
+    Ok(out)
 }
 
 /// `copies` (input register, phi's register) done at once: a copy whose destination another still
@@ -245,8 +276,7 @@ fn phi_copies(
 fn parallel_copy(
     copies: &[(u32, u32)],
     cells: &mut Cells,
-    labels: &mut u32,
-) -> Result<String, String> {
+) -> Result<Vec<Item>, String> {
     let mut pending: Vec<(Operand, Operand, u32)> = Vec::new();
     for &(input, own) in copies {
         let Some(from) = cells.virtual_regs.get(&input).cloned() else { return Err(format!("phi input {input} was never written")) };
@@ -264,22 +294,22 @@ fn parallel_copy(
             pending.push((from, to, bits));
         }
     }
-    let mut text = String::new();
+    let mut out = Vec::new();
     while !pending.is_empty() {
         let free = (0..pending.len()).find(|&at| !pending.iter().enumerate().any(|(other, p)| other != at && p.0 == pending[at].1));
         if let Some(at) = free {
             let (from, to, bits) = pending.remove(at);
-            text.push_str(&expand(&copy(bits, to, from), labels)?);
+            out.push(Item::Inst(copy(bits, to, from)));
         } else {
             let (_, to, bits) = pending[0].clone();
             let saved = cell_for(cells, bits);
-            text.push_str(&expand(&copy(bits, saved.clone(), to.clone()), labels)?);
+            out.push(Item::Inst(copy(bits, saved.clone(), to.clone())));
             for p in pending.iter_mut().filter(|p| p.0 == to) {
                 p.0 = saved.clone();
             }
         }
     }
-    Ok(text)
+    Ok(out)
 }
 
 fn edge_label(
