@@ -14,7 +14,8 @@ fn compile(
     name: &str,
 ) -> String {
     let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
-    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut module = llrm_mir::parse::module(&text).expect("parses");
+    llrm_6502::prepare::split_phi_edges(&mut module);
     let selection = select_function(&module, name, Cpu::Mos6502).expect("selects");
     function_text(&module, name, &selection).expect("emits")
 }
@@ -566,4 +567,57 @@ fn a_widened_byte_shifted_by_eight_and_xored_is_a_byte_move() {
     let low = common::run_with("alloc-sh", &format!("{setup}  jsr sh\n"), &text);
     let high = common::run_with("alloc-sh", &format!("{setup}  jsr sh\n  txa\n"), &text);
     assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), 0x3400 ^ 0x1234);
+}
+
+/// A pointer walked through a loop (`p += 1`, `p += 3`) went UNPACK, a word add, PACK on every
+/// trip: a dozen moves and a clobbered `a`. It is the low byte bumped and the high one on carry,
+/// in the pair.
+#[test]
+fn a_pointer_bumped_in_a_loop_stays_a_pair() {
+    for k in [1u16, 3] {
+        let ir = format!(
+            "define i16 @walk(ptr %p, i8 %n) {{\nentry:\n  br label %loop\nloop:\n  %q = phi ptr [ %p, %entry ], [ %q2, %loop ]\n  \
+             %i = phi i8 [ 0, %entry ], [ %i2, %loop ]\n  %v = load volatile i8, ptr %q\n  %q2 = getelementptr i8, ptr %q, i16 {k}\n  \
+             %i2 = add i8 %i, 1\n  %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  \
+             %r = ptrtoint ptr %q2 to i16\n  ret i16 %r\n}}"
+        );
+        let text = compile(&ir, "walk");
+        assert!(text.contains(if k == 1 { "inc rc" } else { "bcc _pa" }), "k={k}: {text}");
+        assert!(!text.contains("tay") && !text.contains("s_walk"), "k={k}: {text}");
+        for (p, n) in [(0x0100u16, 4u16), (0x01FE, 2), (0x01FF, 3), (0x12FF, 1)] {
+            let setup = set("rc2", p) + &set("rc3", p >> 8) + &set("rc4", n);
+            let low = common::run_with("alloc-walk", &format!("{setup}  jsr walk\n"), &text);
+            let high = common::run_with("alloc-walk", &format!("{setup}  jsr walk\n  txa\n"), &text);
+            assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), p + k * n, "k={k} p={p:#06x} n={n}");
+        }
+    }
+}
+
+/// A branch on `c == 0 || c == k` was two 0/1 bytes through two selects, an `and` and a test
+/// (schr, 20 bytes over): it is one compare and branch per test, no `and` of two bytes.
+#[test]
+fn a_branch_on_two_compares_is_two_branches() {
+    let text = compile(SCHR, "schr");
+    assert!(!text.contains("  and rc"), "{text}");
+    let run = |c: u16| {
+        // "ab\0" at the pointer in rc2:rc3 = data, c in rc4: returns the index of c, or -1 at the end
+        let data = ".segment \"DATA\"\ns: .byte 97, 98, 0\n.segment \"CODE\"\n";
+        let setup = "  lda #<s\n  sta rc2\n  lda #>s\n  sta rc3\n".to_owned() + &set("rc4", c);
+        common::run_with("alloc-schr", &format!("{setup}  jsr schr\n"), &format!("{text}{data}"))
+    };
+    assert_eq!((run(97), run(98), run(99)), (0, 1, 255));
+}
+
+/// `p + zext(i)` kept a cell holding zero just for the high byte's `adc`: the zero is an immediate.
+#[test]
+fn a_widened_byte_added_to_a_word_adds_an_immediate_zero() {
+    let ir = "define i16 @addb(i16 %a, i8 %b) {\n  %w = zext i8 %b to i16\n  %r = add i16 %a, %w\n  ret i16 %r\n}";
+    let text = compile(ir, "addb");
+    assert!(text.contains("adc #0"), "{text}");
+    for (a, b) in [(0x01FFu16, 1u16), (0x1234, 0xFF), (0, 0)] {
+        let setup = set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b);
+        let low = common::run_with("alloc-addb", &format!("{setup}  jsr addb\n"), &text);
+        let high = common::run_with("alloc-addb", &format!("{setup}  jsr addb\n  txa\n"), &text);
+        assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), a + b);
+    }
 }

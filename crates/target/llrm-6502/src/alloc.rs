@@ -564,15 +564,42 @@ impl Builder {
         a: &str,
         b: &str,
     ) -> Result<(), Unsupported> {
+        // a pointer plus a small constant stays a pair, bumped in place
+        if mnemonic == "ADC"
+            && self.in_pair(d)
+            && self.in_pair(a)
+            && let Some([k, 0]) = self.word_constant(b)
+            && k > 0
+        {
+            let source = self.pointer(a)?;
+            self.define(d);
+            let dest = self.pointer(d)?;
+            let mut operands = vec![Operand::Def(dest), Operand::Use(source), Operand::Imm(k)];
+            if k != 1 {
+                operands.push(Operand::Def(Reg::Phys(reg::A)));
+            }
+            self.push(Inst::new(Kind::Op("PADD"), operands));
+            return Ok(());
+        }
         let (al, ah) = self.read_word(a)?;
         let second = match self.word_constant(b) {
             Some(bytes) => bytes.map(Operand::Imm),
             None => {
                 let (bl, bh) = self.read_word(b)?;
-                for r in [bl, bh] {
-                    self.require(r, Class::MEM)?;
+                // a half known to be a constant (the zero of a widened byte) is an immediate
+                let bname = b.strip_suffix("+1").unwrap_or(b);
+                let known = |halves: &HashMap<String, i64>, half: usize| {
+                    let cell = if half == 0 { bname.to_owned() } else { format!("{bname}+1") };
+                    halves.get(&cell).copied()
+                };
+                let mut second = [Operand::Use(bl), Operand::Use(bh)];
+                for (half, register) in [bl, bh].into_iter().enumerate() {
+                    match known(&self.constants, half).filter(|_| !self.pointers.contains(bname)) {
+                        Some(value) => second[half] = Operand::Imm(value & 0xFF),
+                        None => self.require(register, Class::MEM)?,
+                    }
                 }
-                [Operand::Use(bl), Operand::Use(bh)]
+                second
             }
         };
         let (dl, dh) = self.write_word(d)?;
@@ -605,7 +632,65 @@ fn immediate(operand: &Machine) -> Result<i64, Unsupported> {
 
 /// The word cells that are a pointer somewhere: the base of a `(zp),y`
 /// access, or the address of a frame object.
-fn pointer_cells(items: &[Item]) -> HashSet<String> {
+///
+/// A pointer stays one through a copy and through an add of a constant 1..=255
+/// (`p++`, `p += k`), in both directions, so a pointer walked round a loop is
+/// bumped in its pair instead of unpacked, added and packed every trip.
+fn pointer_cells(
+    items: &[Item],
+    constants: &HashMap<String, i64>,
+) -> HashSet<String> {
+    let mut out = pointer_bases(items);
+    let constant = |cell: &String| {
+        let low = constants.get(cell).copied();
+        let high = constants.get(&format!("{cell}+1")).copied();
+        matches!((low, high), (Some(1..=255), Some(0)))
+    };
+    // a cell read or written as plain bytes anywhere stays a word cell
+    let mut plain: HashSet<String> = HashSet::new();
+    for item in items {
+        let Item::Inst(MInst { opcode, operands }) = item else { continue };
+        for (at, operand) in operands.iter().enumerate() {
+            let Machine::Reg(cell) = operand else { continue };
+            let word = cell.strip_suffix("+1").unwrap_or(cell);
+            let pointer_use = cell == word
+                && match *opcode {
+                    op::COPY16 => true,
+                    op::ADD16 => matches!(&operands[2], Machine::Reg(b) if constant(b)),
+                    op::LDP8 | op::LDP16 | op::STP8 | op::STP16 => at == 1,
+                    op::STZP | op::LEASP16 | op::JSRI => at == 0,
+                    _ => false,
+                };
+            if !pointer_use {
+                plain.insert(word.to_owned());
+            }
+        }
+    }
+    loop {
+        let before = out.len();
+        for item in items {
+            let Item::Inst(MInst { opcode, operands }) = item else { continue };
+            let (d, a) = match (*opcode, &operands[..]) {
+                (op::COPY16, [Machine::Reg(d), Machine::Reg(a)]) => (d, a),
+                (op::ADD16, [Machine::Reg(d), Machine::Reg(a), Machine::Reg(b)]) if constant(b) => (d, a),
+                _ => continue,
+            };
+            let pointer = |cell: &String| cell.starts_with("w_") && out.contains(cell);
+            let tied = (pointer(d) || pointer(a))
+                && [d, a].iter().all(|cell| cell.starts_with("w_") && (out.contains(*cell) || !plain.contains(*cell)));
+            if tied {
+                out.insert(d.clone());
+                out.insert(a.clone());
+            }
+        }
+        if out.len() == before {
+            return out;
+        }
+    }
+}
+
+/// The cells that are the base of a pointer access or an address.
+fn pointer_bases(items: &[Item]) -> HashSet<String> {
     let mut out = HashSet::new();
     for item in items {
         let Item::Inst(MInst { opcode, operands }) = item else { continue };
@@ -649,6 +734,17 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
         }
     }
     values.retain(|cell, _| defs[cell] == 1 && (cell.starts_with("v_") || cell.starts_with("w_")));
+    // a byte copied once from a constant is that constant (the zero high half of a widened byte)
+    for item in items {
+        let Item::Inst(MInst { opcode: op::COPY8, operands }) = item else { continue };
+        if let [Machine::Reg(d), Machine::Reg(source)] = &operands[..]
+            && defs[d] == 1
+            && (d.starts_with("v_") || d.starts_with("w_"))
+            && let Some(value) = values.get(source).copied()
+        {
+            values.insert(d.clone(), value);
+        }
+    }
     values
 }
 
@@ -678,7 +774,7 @@ pub fn build(
     let mut b = Builder {
         function: MFunction::new(name_of_function),
         bytes: HashMap::new(),
-        pointers: pointer_cells(items),
+        pointers: pointer_cells(items, &constants(items)),
         packs: Vec::new(),
         constants: constants(items),
         block_of,
@@ -1557,6 +1653,18 @@ fn emit_with<const STACK: bool>(
                 }
                 (Kind::Op("PACK"), _) => {
                     parallel_move(&mut out, &[(lane(regs[0], 0), regs[1]), (lane(regs[0], 1), regs[2])], a_live);
+                }
+                // d := s + k on a pair: the low byte bumped, the high on carry
+                (Kind::Op("PADD"), [_, _, Operand::Imm(k), ..]) => {
+                    let (d, s) = (regs[0], regs[1]);
+                    parallel_move(&mut out, &[(lane(d, 0), lane(s, 0)), (lane(d, 1), lane(s, 1))], a_live && *k == 1);
+                    made += 1;
+                    let (low, high) = (register_name(lane(d, 0)), register_name(lane(d, 1)));
+                    if *k == 1 {
+                        writeln!(out, "  inc {low}\n  bne _pa{made}\n  inc {high}\n_pa{made}:").unwrap();
+                    } else {
+                        writeln!(out, "  clc\n  lda {low}\n  adc #{k}\n  sta {low}\n  bcc _pa{made}\n  inc {high}\n_pa{made}:").unwrap();
+                    }
                 }
                 (Kind::Op("LDPY"), [_, _, Operand::Imm(off), _]) => {
                     writeln!(out, "  ldy #{off}\n  lda ({}),y", register_name(lane(regs[1], 0))).unwrap()

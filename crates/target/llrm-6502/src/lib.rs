@@ -6,6 +6,7 @@ pub mod dagisel;
 pub mod emit;
 pub mod frame;
 pub mod platform;
+pub mod prepare;
 pub mod select;
 pub mod target;
 
