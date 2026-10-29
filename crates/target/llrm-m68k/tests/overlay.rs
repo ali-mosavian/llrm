@@ -457,3 +457,35 @@ fn an_index_with_a_byte_displacement_is_priced_legal_for_the_loop_pass() {
     };
     assert!(pinned_pricing.contains("add i32") && pinned_pricing.contains("-1"), "{pinned_pricing}");
 }
+
+/// A byte copy walked two pointers by one shared index register and a `move.b
+/// (%a0,%d1), (%a1,%d1)`, 46 bytes; the loop is `move.b (%a0)+, (%a2)+` with
+/// neither pointer stepped apart (once the text printed `(%a2)+` while the
+/// code stepped it again).
+#[test]
+fn a_byte_copy_loop_steps_both_pointers_in_the_move() {
+    let ir = "define i32 @f(ptr %d, ptr %s, i32 %n) {
+entry:
+  %c = icmp sgt i32 %n, 0
+  br i1 %c, label %loop, label %done
+loop:
+  %p = phi ptr [ %pn, %loop ], [ %d, %entry ]
+  %i = phi i32 [ %in, %loop ], [ %n, %entry ]
+  %q = phi ptr [ %qn, %loop ], [ %s, %entry ]
+  %in = add i32 %i, -1
+  %qn = getelementptr i8, ptr %q, i32 1
+  %v = load i8, ptr %q
+  %pn = getelementptr i8, ptr %p, i32 1
+  store i8 %v, ptr %p
+  %again = icmp ugt i32 %i, 1
+  br i1 %again, label %loop, label %done
+done:
+  %e = getelementptr i8, ptr %d, i32 12
+  %r = load i8, ptr %e
+  %x = sext i8 %r to i32
+  ret i32 %x
+}";
+    let ours = compiled(ir, Options::default());
+    assert!(ours.contains("move.b\t(%a0)+, (%a2)+"), "{ours}");
+    assert!(!ours.contains("addq.l\t#1, %a"), "{ours}");
+}

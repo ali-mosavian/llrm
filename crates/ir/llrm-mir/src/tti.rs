@@ -67,6 +67,23 @@ impl CostKind {
     }
 }
 
+/// `TTI::AddressingModeKind`: the indexed addressing modes loop strength
+/// reduction favors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AddressingMode {
+    None,
+    PreIndexed,
+    PostIndexed,
+    All,
+}
+
+impl AddressingMode {
+    /// `AMK & AMK_PostIndexed`.
+    pub fn has_post_indexed(self) -> bool {
+        matches!(self, AddressingMode::PostIndexed | AddressingMode::All)
+    }
+}
+
 /// A scalar type as the cost model sees it (T1: vectors are not modelled).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ty {
@@ -588,6 +605,28 @@ pub trait Tti {
             (c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    /// `getPreferredAddressingMode`: which indexed addressing LSR favors.
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        AddressingMode::None
+    }
+
+    /// `isIndexedLoadLegal(MIM_PostInc, ty)`: a load that steps its pointer by
+    /// the access size after it (`(An)+`).
+    fn is_post_inc_load_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
+    /// `isIndexedStoreLegal(MIM_PostInc, ty)`.
+    fn is_post_inc_store_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
     }
 
     /// `isNumRegsMajorCostOfLSR`.

@@ -302,3 +302,17 @@ x:
         assert_eq!(code, (313 * 3) & 0xFF, "{asm}");
     }
 }
+
+/// A byte copy that steps both pointers inside its `move` ran, once its text
+/// said `(%a2)+` for the destination, with a second step on the destination
+/// the text did not show; the copy must land byte for byte.
+#[test]
+fn a_byte_copy_through_two_post_incremented_pointers_copies_every_byte() {
+    use llrm_m68k::kernels::Arg::{Data, Imm};
+    let ir = include_str!("../bench/library/memcpy.ll");
+    for options in [Options::default(), Options::PINNED] {
+        if let Some(code) = status_with_data(ir, &[Data(128), Data(0), Imm(14)], options) {
+            assert_eq!(code, i32::from(b'!'), "{options:?}");
+        }
+    }
+}

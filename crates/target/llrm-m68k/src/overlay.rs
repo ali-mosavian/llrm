@@ -332,12 +332,12 @@ fn post_increment_table() -> &'static std::collections::HashMap<&'static str, Po
                 .map(|one| AsmOperand {
                     name: one.name,
                     at: one.at,
-                    method: match one.method {
+                    method: if one.at != ari.at { one.method } else { match one.method {
                         "printARI8Mem" => "printARIPI8Mem",
                         "printARI16Mem" => "printARIPI16Mem",
                         "printARI32Mem" => "printARIPI32Mem",
                         other => other,
-                    },
+                    } },
                 })
                 .collect();
             let key: &'static str = Box::leak(format!("{name}+").into_boxed_str());
@@ -360,6 +360,31 @@ fn post_increment_rows(name: &str) -> Option<&'static PostIncrementRow> {
 /// The post-increment form of an instruction with an `(An)` operand.
 fn post_increment_form(opcode: &str) -> Option<(&'static str, &'static PostIncrementRow)> {
     post_increment_table().get_key_value(format!("{opcode}+").as_str()).map(|(name, row)| (*name, row))
+}
+
+/// The pin's own `move` forms with a post-incremented side: `MOV8jj` is
+/// `move.b (An), (An)`, named destination then source, `o` for `(An)+`.
+/// Returns the form that steps the destination (operand 0) or the source
+/// (operand 1), and the access size.
+fn move_post_increment(
+    opcode: &str,
+    operand: usize,
+) -> Option<(&'static str, i64)> {
+    let rest = opcode.strip_prefix("MOV")?;
+    let (bits, modes) = rest.split_at(rest.len().checked_sub(2)?);
+    let bytes = match bits {
+        "8" => 1,
+        "16" => 2,
+        "32" => 4,
+        _ => return None,
+    };
+    let mut modes: Vec<char> = modes.chars().collect();
+    if modes[operand] != 'j' {
+        return None;
+    }
+    modes[operand] = 'o';
+    let name = format!("MOV{bits}{}{}", modes[0], modes[1]);
+    crate::dagisel::asm::ASM.iter().find(|row| row.0 == name).map(|row| (row.0, bytes))
 }
 
 /// The block a branch names, by layout index (`.LBB<function>_<index>`).
@@ -391,23 +416,34 @@ fn jumps_to(
 /// conditional branch, when every way from the access reaches it and nothing
 /// else does: a loop whose select skips one move.
 pub fn fold_post_increment(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::Line> {
-    use crate::expand::Line;
     let mut lines = lines;
     let mut at = 0;
     while at < lines.len() {
-        let Line::Inst(access) = &lines[at] else {
-            at += 1;
-            continue;
-        };
-        let Some((form, row)) = post_increment_form(access.opcode) else {
-            at += 1;
-            continue;
-        };
-        let bytes = row.bytes;
-        let Some(&Operand::Reg(base)) = access.operands.get(row.operand) else {
-            at += 1;
-            continue;
-        };
+        // a `move` may step both of its pointers
+        while fold_one(&mut lines, at) {}
+        at += 1;
+    }
+    lines
+}
+
+/// Folds one step into the access at `at`; whether it did.
+fn fold_one(
+    lines: &mut Vec<crate::expand::Line>,
+    at: usize,
+) -> bool {
+    use crate::expand::Line;
+    let Line::Inst(access) = &lines[at] else { return false };
+    let mut candidates: Vec<(&'static str, usize, i64)> = Vec::new();
+    for operand in [1, 0] {
+        if let Some((form, bytes)) = move_post_increment(access.opcode, operand) {
+            candidates.push((form, operand, bytes));
+        }
+    }
+    if let Some((form, row)) = post_increment_form(access.opcode) {
+        candidates.push((form, row.operand, row.bytes));
+    }
+    for (form, operand, bytes) in candidates {
+        let Some(&Operand::Reg(base)) = access.operands.get(operand) else { continue };
         let root = REGISTER_INFO.root(base);
         let mentions =
             |inst: &Inst| inst.operands.iter().any(|o| matches!(o, Operand::Reg(r) if REGISTER_INFO.root(*r) == root));
@@ -415,9 +451,8 @@ pub fn fold_post_increment(lines: Vec<crate::expand::Line>) -> Vec<crate::expand
             .operands
             .iter()
             .enumerate()
-            .any(|(n, o)| n != row.operand && matches!(o, Operand::Reg(r) if REGISTER_INFO.root(*r) == root));
+            .any(|(n, o)| n != operand && matches!(o, Operand::Reg(r) if REGISTER_INFO.root(*r) == root));
         if others || (bytes == 1 && base == crate::reg::SP) {
-            at += 1;
             continue;
         }
         let mut step = None;
@@ -428,7 +463,7 @@ pub fn fold_post_increment(lines: Vec<crate::expand::Line>) -> Vec<crate::expand
                 Line::Label(label) => {
                     // a way in from outside the span would reach the step
                     // without the access
-                    if jumps_to(&lines, *label).any(|from| from <= at || from >= later) {
+                    if jumps_to(lines, *label).any(|from| from <= at || from >= later) {
                         break;
                     }
                     pending.retain(|one| one != label);
@@ -470,10 +505,10 @@ pub fn fold_post_increment(lines: Vec<crate::expand::Line>) -> Vec<crate::expand
             if let Line::Inst(access) = &mut lines[at] {
                 access.opcode = form;
             }
+            return true;
         }
-        at += 1;
     }
-    lines
+    false
 }
 
 /// An instruction whose `dr` form takes a register of either kind as its

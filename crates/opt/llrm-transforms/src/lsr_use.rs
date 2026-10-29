@@ -696,8 +696,9 @@ impl Cost {
             // An addrec of another loop is invariant in `l` (LSR handles
             // innermost loops only).
             if header != r.l {
-                // One that exists as a phi is free.
-                if is_existing_phi(r.se, r.cx, reg) {
+                // One that exists as a phi is free (unless post-indexed
+                // addressing is favored).
+                if is_existing_phi(r.se, r.cx, reg) && !r.tti.preferred_addressing_mode().has_post_indexed() {
                     return;
                 }
                 // A sibling's induction variable is not for this loop to add.
@@ -711,6 +712,20 @@ impl Cost {
             }
 
             let mut loop_cost = 1;
+            // A pointer that steps by a constant from an invariant start is a
+            // post-indexed access's own increment: free where every fixup of
+            // the use runs each trip.
+            let ty = crate::lsr_generate::tti_ty(r.se.type_of(reg));
+            if r.tti.preferred_addressing_mode().has_post_indexed()
+                && (r.tti.is_post_inc_load_legal(ty) || r.tti.is_post_inc_store_legal(ty))
+                && let Some((start, step, _)) = r.se.match_affine_add_rec(reg)
+                && r.se.as_constant(step).is_some()
+                && r.se.as_constant(start).is_none()
+                && r.se.is_loop_invariant(r.cx, start, Some(r.l))
+                && lu.all_fixups_unconditional
+            {
+                loop_cost = 0;
+            }
             // A loop that counts down to zero under a hardware loop folds its
             // addrec into the loop instruction.
             if lu.kind == Kind::ICmpZero && f.counts_down_to_zero(r.se) && r.hardware_loop_profitable {

@@ -75,7 +75,7 @@ pub fn items_with(
     let module = if options.mid_end {
         optimized = mid_end_described_by(
             module,
-            &M68k { indexed_displacement: options.overlay, ..M68k::default() },
+            &M68k { indexed_displacement: options.overlay, post_indexed: options.overlay, ..M68k::default() },
             Some(Rc::new(M68kMachine)),
         )?;
         &optimized

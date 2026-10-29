@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use llrm_mir::spaces::Spaces;
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
-use llrm_mir::tti::{ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty};
+use llrm_mir::tti::{AddressingMode, ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty};
 
 /// The m68k cost model the passes of the mid-end read.
 #[derive(Clone, Debug, Default)]
@@ -84,6 +84,15 @@ pub struct M68k {
     /// `Options::PINNED` leaves it off. Exit: never; a target description, set
     /// with the overlay.
     pub indexed_displacement: bool,
+    /// LSR favors a pointer stepped after each access, `(An)+`.
+    ///
+    /// DEVIATE from the pin's M68k, which has no `getPreferredAddressingMode`
+    /// override. Reason: `move.b (%a0)+, (%a1)+` steps a pointer for free, so
+    /// two pointers beat one shared index register. Evidence: the PRM's
+    /// "Address Register Indirect with Postincrement Mode"; gcc's `memcpy`
+    /// loop. `Options::PINNED` leaves it off. Exit: never; a target
+    /// description, set with the overlay.
+    pub post_indexed: bool,
 }
 
 impl Tti for M68k {
@@ -112,6 +121,24 @@ impl Tti for M68k {
             2 | 4 | 8 => self.scaled_index,
             _ => false,
         }
+    }
+
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        if self.post_indexed { AddressingMode::PostIndexed } else { AddressingMode::None }
+    }
+
+    fn is_post_inc_load_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        self.post_indexed
+    }
+
+    fn is_post_inc_store_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        self.post_indexed
     }
 
     fn cmp_sel_cost(
