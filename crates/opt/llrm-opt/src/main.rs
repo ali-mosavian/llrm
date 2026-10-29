@@ -13,6 +13,9 @@ use llrm_mir::tti::Tti;
 
 const UNSUPPORTED: u8 = 77;
 const UNREAD: u8 = 78;
+/// What `opt` targets when neither `-mtriple` nor the module says (the pin's
+/// build is x86-64 Linux).
+const HOST_TRIPLE: &str = "x86_64-unknown-linux-gnu";
 
 /// `Neutral` with the cost model of the triple's target.
 struct Opt(Option<Rc<dyn Tti>>);
@@ -40,7 +43,7 @@ impl Machine for Opt {
 
 /// The cost model of `triple`'s architecture; none for the ones without.
 fn tti_of(triple: &str) -> Option<Rc<dyn Tti>> {
-    let arch = triple.split('-').next().unwrap_or("");
+    let arch = triple.split('-').next().unwrap_or(HOST_TRIPLE);
     let cpu = match arch {
         "x86_64" => "x86-64",
         "i386" => "i386",
@@ -134,7 +137,7 @@ fn main() -> ExitCode {
             return ExitCode::from(UNREAD);
         }
     };
-    let target = Rc::new(Opt(triple.as_deref().or_else(|| triple_of(&text)).and_then(tti_of)));
+    let target = Rc::new(Opt(tti_of(triple.as_deref().or_else(|| triple_of(&text)).unwrap_or(HOST_TRIPLE))));
     if let Err(error) = manager.run_module(&mut module, target) {
         // A datalayout spec the layout parser lacks is input it cannot read.
         let unread = error.contains("in the datalayout");

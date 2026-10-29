@@ -23,5 +23,6 @@ config.available_features.update(
 )
 if config.llrm_asserts:
     config.available_features.add("asserts")
+config.targets = frozenset(config.llrm_targets)
 for target in config.llrm_targets:
     config.available_features.add(target.lower() + "-registered-target")

@@ -46,3 +46,18 @@ fn text_the_parser_cannot_read_is_78_not_a_pass() {
     let (code, _, err) = run(&["-passes=dce"], "this is not IR\n");
     assert_eq!(code, Some(78), "{err}");
 }
+
+/// 2008-08-13-CmpStride from the pin: a module with no triple is x86-64 to
+/// `opt`. With a neutral cost model LSR left the `shl` in the loop and
+/// the test's `grep add | count 2` saw one add.
+const CMP_STRIDE: &str = "target datalayout = \"n8:16:32:64\"\n@g = common global i16 0\n\
+define void @func_1() nounwind {\nentry:\n  br label %bb\nbb:\n  %i = phi i16 [ 0, %entry ], [ %t1, %bb ]\n  \
+%t0 = shl i16 %i, 1\n  store volatile i16 %t0, ptr @g, align 2\n  %t1 = add i16 %i, -3\n  \
+%t2 = icmp slt i16 %t1, 1\n  br i1 %t2, label %bb, label %return\nreturn:\n  ret void\n}\n";
+
+#[test]
+fn a_module_without_a_triple_is_reduced_with_the_x86_64_cost_model() {
+    let (code, out, err) = run(&["-S", "-loop-reduce"], CMP_STRIDE);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!out.contains("shl"), "{out}");
+}
