@@ -22,8 +22,16 @@ FIXTURES = sorted((HERE.parent / "tests/run/c").glob("*.c"))
 LLRM_CC_UNBUILT = frozenset(('bench_io.c', 'div_constants_long.c', 'div_constants_short.c', 'div_constants_ulong.c', 'far_return.c', 'fixed_point.c', 'frame_address_stack_args.c', 'huge_runs.c', 'inline_emit.c', 'inlined_calls_keep_stores_through_far_alias.c', 'logical_value.c', 'memcpy_libcall.c', 'os_console.c', 'os_console_in.c', 'os_execute.c', 'os_exit.c', 'os_files.c', 'os_find.c', 'os_more.c', 'os_names.c', 'os_screen.c', 'wc16_mixed.c', 'wc_mixed.c', 'wrapv_overflow_check.c'))
 
 
+LOCATORS = ("LLRM_PIN_CLANG", "LLRM_CLANG_M16", "LLRM_OW")  # where llrm-cc finds its clang and libc: CI sets them, not ~/scratch
+
+
+def oracle_env(base: dict[str, str]) -> dict[str, str]:
+    """`base` without the LLRM_* switches, with the toolchain locators kept and every oracle on."""
+    return {**{k: v for k, v in base.items() if not k.startswith("LLRM_") or k in LOCATORS}, **{f"LLRM_CHECK_{one}": "1" for one in identical.CHECKS}}
+
+
 def compiled(source: Path) -> str | None:
-    env = {**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_")}, **{f"LLRM_CHECK_{one}": "1" for one in identical.CHECKS}}
+    env = oracle_env(dict(os.environ))
     with tempfile.TemporaryDirectory() as work:  # an object, not /dev/null: the compiler encodes only for `.obj`, so the null device never reached the encoder
         out = str(Path(work) / "out.obj")
         done = subprocess.run([str(llrmbin.bin_dir() / "llrm-cc"), "-O2", "-c", "-o", out, str(source)], capture_output=True, text=True, env={**env, "LLRM_CC_TARGET": "x86_32-dos"})
@@ -52,3 +60,11 @@ def test_a_known_unbuilt_program_is_not_an_oracle_failure():
     """fixed_point.c's `_Sat` refused #6040 (14:3x)."""
     shown = ["fixed_point.c: tests/run/c/fixed_point.c:33:1: error: unknown type name '_Sat'", "other.c: an oracle fired"]
     assert not_known_unbuilt(shown) == [shown[1]]
+
+
+def test_the_oracle_environment_keeps_the_clang_llrm_cc_is_told_of():
+    """The filter dropped LLRM_PIN_CLANG and LLRM_CLANG_M16 with the other LLRM_*: llrm-cc fell back to ~/scratch/llvm-build, which only a
+    developer's machine has, and every program failed 'No such file' on CI (gate 3, 15:10) while it passed here."""
+    env = oracle_env({"LLRM_PIN_CLANG": "/pin/clang", "LLRM_CLANG_M16": "/m16/clang", "LLRM_DEBUG": "checks", "PATH": "/bin"})
+    assert env["LLRM_PIN_CLANG"] == "/pin/clang" and env["LLRM_CLANG_M16"] == "/m16/clang" and env["PATH"] == "/bin"
+    assert "LLRM_DEBUG" not in env and env["LLRM_CHECK_REPLAY"] == "1"
