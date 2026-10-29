@@ -1,15 +1,16 @@
-//! `bench [DIR]`: each kernel in `bench/kernels` compiled by this compiler and
-//! by the pin's `llc` (-O2 and -O2 with `optsize`), run under `qemu-m68k` with
-//! the same `_start` and data, and its size and executed instruction count
-//! printed as a Markdown table. Needs the pin's m68k build (`$LLVM_M68K`,
-//! default `~/scratch/llvm-build-m68k/bin`) and `qemu-m68k`.
+//! `bench [SET]`: each kernel in `bench/<SET>` (`kernels`, or `library`)
+//! compiled by this compiler and by the pin's `llc` (-O2 and -O2 with
+//! `optsize`), run under `qemu-m68k` with the same `_start` and data, and its
+//! size and executed instruction count printed as a Markdown table. Needs the
+//! pin's m68k build (`$LLVM_M68K`, default `~/scratch/llvm-build-m68k/bin`) and
+//! `qemu-m68k`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use llrm_m68k::compile::{Item, Options, items, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
-use llrm_m68k::kernels::{program, source, table};
+use llrm_m68k::kernels::{Arg, data, library_data, library_table, program_with_data, source_in, table};
 use llrm_m68k::object::{assemble, executable, write_executable};
 
 /// Executed instructions counted before a run is called runaway.
@@ -62,7 +63,11 @@ fn text_of(
 fn leaf_text(
     llvm: &Path,
     object: &Path,
+    leaf: bool,
 ) -> Vec<u8> {
+    if !leaf {
+        return text_of(llvm, object);
+    }
     let relocations = Command::new(llvm.join("llvm-objdump")).arg("-r").arg(object).output().unwrap();
     let listing = String::from_utf8_lossy(&relocations.stdout).to_string();
     let in_text = listing.split("RELOCATION RECORDS FOR").find(|part| part.trim_start().starts_with("[.text]"));
@@ -79,6 +84,7 @@ fn llc(
     ir: &Path,
     dir: &Path,
     optsize: bool,
+    leaf: bool,
 ) -> Vec<u8> {
     let source = std::fs::read_to_string(ir).unwrap();
     let source = if optsize { source.replace(") {", ") optsize {") } else { source };
@@ -93,7 +99,7 @@ fn llc(
         .status()
         .unwrap();
     assert!(status.success(), "llc failed on {}", ir.display());
-    leaf_text(llvm, &object)
+    leaf_text(llvm, &object, leaf)
 }
 
 /// The `.text` of the C kernel compiled by m68k gcc, unpacked without root into
@@ -104,6 +110,7 @@ fn gcc(
     source: &Path,
     dir: &Path,
     opt: &str,
+    leaf: bool,
 ) -> Option<Vec<u8>> {
     let root = PathBuf::from(
         std::env::var("GCC_M68K").unwrap_or(format!("{}/scratch/gcc-m68k/root", std::env::var("HOME").ok()?)),
@@ -123,7 +130,7 @@ fn gcc(
         .arg(&object)
         .status()
         .ok()?;
-    status.success().then(|| leaf_text(llvm, &object))
+    status.success().then(|| leaf_text(llvm, &object, leaf))
 }
 
 fn main() {
@@ -131,47 +138,59 @@ fn main() {
     let llvm = PathBuf::from(std::env::var("LLVM_M68K").unwrap_or(format!("{home}/scratch/llvm-build-m68k/bin")));
     let dir = std::env::temp_dir().join(format!("llrm-m68k-bench-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let kernel_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/kernels");
+    let set = std::env::args().nth(1).unwrap_or_else(|| "kernels".to_owned());
+    let kernel_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench").join(&set);
+    let (rows, block): (Vec<(&str, Vec<Arg>, i32, bool)>, Vec<u8>) = if set == "library" {
+        (library_table(), library_data())
+    } else {
+        (table().into_iter().map(|(name, args, expected)| (name, args, expected, true)).collect(), data())
+    };
+    // the routine `fnptr` is given a pointer to, compiled by this compiler for
+    // every variant
+    let helper = (set == "library").then(|| {
+        let module = llrm_mir::parse::module(&source_in(&set, "h")).unwrap();
+        items(&module, "h", Cpu::M68000).unwrap()
+    });
     println!(
         "| kernel | raw B | ours B | ours -Os B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | raw insns | ours insns | ours -Os insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |"
     );
     println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
-    for (name, args, expected) in table() {
+    for (name, args, expected, leaf) in rows {
         let ir = kernel_dir.join(format!("{name}.ll"));
-        let module = llrm_mir::parse::module(&source(name)).unwrap();
+        let module = llrm_mir::parse::module(&source_in(&set, name)).unwrap();
         let mut cells = Vec::new();
         let mut verdicts = Vec::new();
         let mut counts = Vec::new();
         let variants: Vec<Result<(Vec<Item>, usize), String>> = vec![
             // the raw IR, as the overlay compiles it without the LSR pass `llc`
             // runs
-            items_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).map(|code| {
-                let size = assemble(&code, 0).map(|one| one.code.len()).unwrap_or(0);
-                (code, size)
+            items_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).and_then(|code| {
+                let size = assemble(&code, 0)?.code.len();
+                Ok((code, size))
             }),
-            items(&module, "k", Cpu::M68000).map(|code| {
-                let size = assemble(&code, 0).map(|one| one.code.len()).unwrap_or(0);
-                (code, size)
+            items(&module, "k", Cpu::M68000).and_then(|code| {
+                let size = assemble(&code, 0)?.code.len();
+                Ok((code, size))
             }),
             // size wanted over clocks, as `-Os` or an `optsize` function
-            items_with(&module, "k", Cpu::M68000, Options { size: true, ..Options::default() }).map(|code| {
-                let size = assemble(&code, 0).map(|one| one.code.len()).unwrap_or(0);
-                (code, size)
+            items_with(&module, "k", Cpu::M68000, Options { size: true, ..Options::default() }).and_then(|code| {
+                let size = assemble(&code, 0)?.code.len();
+                Ok((code, size))
             }),
             Ok({
-                let bytes = llc(&llvm, &ir, &dir, false);
+                let bytes = llc(&llvm, &ir, &dir, false, leaf);
                 let size = bytes.len();
                 (vec![Item::Label("k".to_owned()), Item::Bytes(bytes)], size)
             }),
             Ok({
-                let bytes = llc(&llvm, &ir, &dir, true);
+                let bytes = llc(&llvm, &ir, &dir, true, leaf);
                 let size = bytes.len();
                 (vec![Item::Label("k".to_owned()), Item::Bytes(bytes)], size)
             }),
         ];
         let mut variants = variants;
         for opt in ["-Os", "-O2"] {
-            variants.push(match gcc(&llvm, &kernel_dir.join(format!("{name}.c")), &dir, opt) {
+            variants.push(match gcc(&llvm, &kernel_dir.join(format!("{name}.c")), &dir, opt, leaf) {
                 Some(bytes) => {
                     let size = bytes.len();
                     Ok((vec![Item::Label("k".to_owned()), Item::Bytes(bytes)], size))
@@ -182,10 +201,17 @@ fn main() {
         for variant in variants {
             match variant {
                 Ok((code, size)) => {
-                    let exe = dir.join(format!("{name}.elf"));
-                    write_executable(&exe, &executable(&program(&args, code)).unwrap()).unwrap();
-                    let (status, executed) = run(&exe);
                     cells.push(size.to_string());
+                    if !leaf {
+                        counts.push("-".to_owned());
+                        verdicts.push("ok".to_owned());
+                        continue;
+                    }
+                    let mut code = code;
+                    code.extend(helper.clone().unwrap_or_default());
+                    let exe = dir.join(format!("{name}.elf"));
+                    write_executable(&exe, &executable(&program_with_data(&args, code, &block)).unwrap()).unwrap();
+                    let (status, executed) = run(&exe);
                     counts.push(executed.to_string());
                     verdicts.push(if status == expected { "ok".to_owned() } else { format!("got {status}") });
                 }

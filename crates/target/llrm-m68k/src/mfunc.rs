@@ -391,26 +391,30 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         let (_, _, _, first) = cmov_parts(&tail[0])?;
         let same =
             |inst: &Inst| is_cmov(inst) && cmov_parts(inst).is_ok_and(|(.., cond)| cond == first || cond == first ^ 1);
-        // The run may hold copies between the `CMOV`s (the exports of phi
-        // inputs); they move to the join, which is where their sources are.
+        // The run may hold copies between the `CMOV`s. A copy of a `CMOV`'s
+        // result (the export of a phi input) moves to the join, where its
+        // source is; a copy of a value from before the run moves to the head,
+        // where a later `CMOV` may read it.
         let mut cmovs: Vec<Inst> = Vec::new();
         let mut copies: Vec<Inst> = Vec::new();
+        let mut hoisted: Vec<Inst> = Vec::new();
         let mut taken = 0;
         for inst in &tail {
-            let uses_copied = |inst: &Inst| {
-                inst.operands
-                    .iter()
-                    .any(
-                        |operand| matches!(
-                            operand,
-                            Operand::Use(reg) if copies.iter().any(|copy| copy.operands[0] == Operand::Def(*reg))
-                        ),
-                    )
+            let copied = |reg: &Reg| copies.iter().any(|copy| copy.operands[0] == Operand::Def(*reg));
+            let uses_copied =
+                |inst: &Inst| inst.operands.iter().any(|operand| matches!(operand, Operand::Use(reg) if copied(reg)));
+            let from_run = |inst: &Inst| {
+                matches!(
+                    &inst.operands[1],
+                    Operand::Use(source) if copied(source) || cmovs.iter().any(|cmov| cmov.operands[0] == Operand::Def(*source))
+                )
             };
             if same(inst) && !uses_copied(inst) {
                 cmovs.push(inst.clone());
-            } else if inst.kind == Kind::Copy {
+            } else if inst.kind == Kind::Copy && from_run(inst) {
                 copies.push(inst.clone());
+            } else if inst.kind == Kind::Copy {
+                hoisted.push(inst.clone());
             } else {
                 break;
             }
@@ -436,6 +440,7 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         let mut jump = Inst::new(Kind::Op(branch), vec![Operand::Block(join)]);
         jump.terminator = true;
         jump.reads_flags = true;
+        function.blocks[at].insts.extend(hoisted);
         function.blocks[at].insts.push(jump);
         function.blocks.insert(at + 1, Block { id: otherwise, insts: Vec::new(), phis: Vec::new() });
         function.blocks.insert(at + 2, Block { id: join, insts: tail, phis });
