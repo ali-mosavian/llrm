@@ -20,6 +20,11 @@ import llrmbin  # noqa: E402
 pytestmark = pytest.mark.usefixtures("old_allocator")
 
 
+# The rows the old allocator's passes print and the tests read: the new allocator still prints `regalloc base`, and an llrm-c with
+# that row alone made the runner's batches die with KeyError: 'facts intervals'.
+OLD_ALLOCATOR_ROWS = ("facts intervals", "facts slots", "intervals homes", "regalloc base")
+
+
 @pytest.fixture(scope="module")
 def old_allocator():
     compiler = llrmbin.bin_dir() / "llrm-c"
@@ -27,11 +32,12 @@ def old_allocator():
         pytest.skip("llrm-c is not built (debt skip-alloc-scaling)")
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "probe.c"
-        source.write_text(straight(64))
+        source.write_text(straight(1024))
         with llrmbin.with_object([str(compiler), "-m32", "-march=i486", "-O1", "-o", llrmbin.OBJECT, str(source)]) as command:
             done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
-    if "regalloc base" not in done.stderr:
-        pytest.skip("this llrm-c has no old allocator (debt skip-alloc-scaling)")
+    missing = [row for row in OLD_ALLOCATOR_ROWS if not re.search(rf"^\[instr\].* {re.escape(row)}$", done.stderr, re.M)]
+    if missing:
+        pytest.skip(f"this llrm-c has no old allocator: no {', '.join(missing)} row (debt skip-alloc-scaling)")
 
 SMALL, LARGE = 1024, 4096
 # 4x the program may cost this much more (a linear pass costs 4x, a quadratic one 16x). Measured 2026-10-09 on main 61be539b2:
