@@ -389,6 +389,23 @@ impl Builder {
         self.versions.get(name).copied().unwrap_or(0)
     }
 
+    /// `count` single-bit steps of `step` on the accumulator. An arithmetic shift right by 7 leaves
+    /// only the sign, all ones or all zeros, which is cheaper than seven `cmp #$80; ror a`.
+    fn shift_a(
+        &mut self,
+        step: &'static str,
+        count: i64,
+    ) {
+        let acc = Reg::Phys(reg::A);
+        if step == "ASR" && count == 7 {
+            self.push(Inst::new(Kind::Op("SPLAT"), vec![Operand::Def(acc), Operand::Use(acc)]));
+            return;
+        }
+        for _ in 0..count {
+            self.push(Inst::new(Kind::Op(step), vec![Operand::Def(acc), Operand::Use(acc)]));
+        }
+    }
+
     /// `COPY a, lhs; CMP a, rhs` again, as the flags' producer: the operands
     /// must hold what they held at the first compare.
     ///
@@ -887,9 +904,7 @@ pub fn build(
                 b.define(name(&o[0])?);
                 let (d, a) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?);
                 b.copy(acc, a);
-                for _ in 0..immediate(&o[2])? {
-                    b.push(Inst::new(Kind::Op(step), vec![Operand::Def(acc), Operand::Use(acc)]));
-                }
+                b.shift_a(step, immediate(&o[2])?);
                 b.copy(d, acc);
             }
             op::STZABS => {
@@ -1001,9 +1016,7 @@ pub fn build(
                 let acc = Reg::Phys(reg::A);
                 let shift = |b: &mut Builder, from: Reg, to: Reg, step: &'static str, count: i64| {
                     b.copy(acc, from);
-                    for _ in 0..count {
-                        b.push(Inst::new(Kind::Op(step), vec![Operand::Def(acc), Operand::Use(acc)]));
-                    }
+                    b.shift_a(step, count);
                     b.copy(to, acc);
                 };
                 match code {
@@ -1874,6 +1887,9 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("ASL"), _) => out.push_str("  asl a\n"),
                 (Kind::Op("LSR"), _) => out.push_str("  lsr a\n"),
                 (Kind::Op("ASR"), _) => out.push_str("  cmp #$80\n  ror a\n"),
+                // the sign into every bit: the carry out of `asl` is the sign, `sbc #0` turns it into 0 or $FF
+                // and `eor` flips it
+                (Kind::Op("SPLAT"), _) => out.push_str("  asl a\n  lda #0\n  sbc #0\n  eor #$ff\n"),
                 (Kind::Op("LDAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  lda {symbol},x").unwrap(),
                 (Kind::Op("STAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  sta {symbol},x").unwrap(),
                 (Kind::Op("SAVEC"), _) => out.push_str("  lda #0\n  rol a\n"),
