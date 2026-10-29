@@ -98,13 +98,40 @@ pub struct BuilderTarget {
     /// The same for the load and store pairs of a constant memcpy: a dword
     /// pair is 8 bytes against about 16 for `rep movs`, so two.
     pub memcpy_moves_size: usize,
+    /// What a size-only pick gives up in clocks for a byte; none: bytes alone
+    /// decide.
+    pub size_trade: Option<SizeTrade>,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
     pub runtime_calls: Option<IdMap<InstId, Result<RuntimeAnswer, &'static str>>>,
 }
 
+/// The clock side of a size-only pick (`fill_is_smaller`): the longer form
+/// is taken only while the bytes it saves, at `milliclocks_per_byte` each,
+/// pay for the clocks it adds. All prices come from the target description.
+#[derive(Clone, Copy, Debug)]
+pub struct SizeTrade {
+    /// Clocks a byte of code is worth, in thousandths.
+    pub milliclocks_per_byte: i64,
+    /// A `rep stos` fill: its fixed clocks, and each byte it stores.
+    pub fill: i64,
+    pub fill_cell: i64,
+    /// One store of a register-sized and of a wide (prefixed) value.
+    pub store: i64,
+    pub prefix: i64,
+}
+
 impl BuilderTarget {
+    /// This target with its clock price of a byte of code.
+    pub fn with_size_trade(
+        mut self,
+        trade: Option<SizeTrade>,
+    ) -> BuilderTarget {
+        self.size_trade = trade;
+        self
+    }
+
     /// This target with the cost model of its CPU.
     pub fn with_tti(
         mut self,
@@ -237,6 +264,7 @@ impl BuilderTarget {
             min_size: false,
             memset_stores_size: 0,
             memcpy_moves_size: 0,
+            size_trade: None,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -267,6 +295,7 @@ impl BuilderTarget {
             min_size: false,
             memset_stores_size: 0,
             memcpy_moves_size: 0,
+            size_trade: None,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
