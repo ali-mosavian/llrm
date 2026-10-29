@@ -25,6 +25,24 @@ def test_the_distro_clang_is_refused_as_the_pin():
     assert "d1106deb71cc" in done.stderr
 
 
+def fake_clang(tmp_path, sha12):
+    clang = tmp_path / f"clang-{sha12}"
+    clang.write_text(f"#!/bin/sh\necho 'clang version 99 (https://github.com/llvm/llvm-project.git {sha12}abcdef)'\n")
+    clang.chmod(0o755)
+    return clang
+
+
+def test_the_pin_is_read_from_the_toolchain_pin_file_so_a_bump_cannot_leave_the_old_clang_accepted(tmp_path):
+    """tools/pin_clang.py held the sha as a constant: a bump of toolchain/clang/pin left an oracle on the old clang, and a tree of the new pin was refused."""
+    pin = tmp_path / "pin"
+    pin.write_text("0123456789abcdef0123456789abcdef01234567\n" + "f" * 40 + "\n")
+    env = {"PATH": "/usr/bin:/bin", "TOOLCHAIN_PIN": str(pin)}
+    new = subprocess.run([sys.executable, str(TOOL)], env={**env, "LLRM_PIN_CLANG": str(fake_clang(tmp_path, "0123456789ab"))}, capture_output=True, text=True)
+    assert new.returncode == 0, new.stderr
+    old = subprocess.run([sys.executable, str(TOOL)], env={**env, "LLRM_PIN_CLANG": str(fake_clang(tmp_path, "d1106deb71cc"))}, capture_output=True, text=True)
+    assert old.returncode != 0 and "0123456789ab" in old.stderr
+
+
 def test_a_missing_binary_is_refused():
     assert run("/nonexistent/clang").returncode != 0
 
