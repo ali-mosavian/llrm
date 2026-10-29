@@ -238,6 +238,7 @@ fn run_on_loop(
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let mut run = Run {
         bytes: None,
+        clocks: None,
         name,
         env: &env,
         context: &mut context,

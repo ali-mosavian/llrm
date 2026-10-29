@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/walk.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/walk.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/walk.rs sha256:1b6be9907e8e0e61e1e0556aac686a38368ca59d25863a6f65c0b67a332cf495 -->
+<!-- src: crates/opt/llrm-transforms/src/walk.rs sha256:9c4e424a153085560c372058f5314218ab26d6169ca668a4a66767f9d3ccaa5c -->
 
 # walk
 
@@ -58,7 +58,7 @@ From unit test
 `walk_tests.rs`.
 
 ## Runs
-Once per compile under `Options::llvm_order`, after the Early stage.
+Once per compile, after the Early stage.
 
 ## See also
 LLVM `PassBuilderPipelines.cpp` (`buildModuleSimplificationPipeline`:
