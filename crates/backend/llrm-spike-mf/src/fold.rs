@@ -413,7 +413,7 @@ impl<C, J: Jump> Folder<'_, C, J> {
                     // `SuccBB = CurFBB ? CurFBB : CurTBB`: the block it jumps
                     // to, else the one it branches to;
                     // trying both moved it back and forth forever
-                    for succ in cur.other.or(cur.taken) {
+                    if let Some(succ) = cur.other.or(cur.taken) {
                         let succ_at = position(self.function, succ);
                         if succ != id
                             && succ_at > 0
