@@ -42,7 +42,7 @@ impl Placer {
                             what.op,
                             Operation::Barrier | Operation::Data | Operation::Call
                         )
-                            && !(what.op == Operation::Return && what.name.as_deref() == Some("jmp"))
+                            && !what.is_sibling_call()
                             && !(matches!(what.op, Operation::Jump | Operation::Branch) && what.indirect),
                     ),
             );
