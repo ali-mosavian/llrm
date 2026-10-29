@@ -156,6 +156,19 @@ pub fn optimized(program: &mut Program) -> Result<(), String> {
     optimized_at(program, Level::O2)
 }
 
+/// The `-f[no-]PASS` switches of the command line (`-fno-unroll-loops`), applied
+/// to every mid-end run of the process.
+static PASS_FLAGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Records `flag` if it names a mid-end pass; false when it does not.
+pub fn pass_flag(flag: &str) -> bool {
+    if !llrm_codegen::driver::flags::apply_pass_flag(&mut Options::default(), flag) {
+        return false;
+    }
+    PASS_FLAGS.lock().unwrap().push(flag.to_owned());
+    true
+}
+
 /// `program` through the shared mid-end at `level`.
 pub fn optimized_at(
     program: &mut Program,
@@ -163,6 +176,9 @@ pub fn optimized_at(
 ) -> Result<(), String> {
     let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
     let mut options = level.options();
+    for flag in PASS_FLAGS.lock().unwrap().iter() {
+        llrm_codegen::driver::flags::apply_pass_flag(&mut options, flag);
+    }
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
     // The pin's PreISelIntrinsicLowering: the selector never sees the
@@ -179,6 +195,35 @@ fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
         .collect()
 }
 
+/// Which instruction selector makes the machine function.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IselMode {
+    Hand,
+    Dag,
+    Shadow,
+}
+
+fn isel_mode() -> IselMode {
+    if llrm_support::env_flag!("LLRM_ISEL_DAG") {
+        IselMode::Dag
+    } else if llrm_support::env_flag!("LLRM_ISEL_SHADOW") {
+        IselMode::Shadow
+    } else {
+        IselMode::Hand
+    }
+}
+
+/// `name` through the DAG path: the pin's table and the shared stages.
+fn dag_select(
+    module: &llrm_mir::module::Module,
+    name: &str,
+    layout: &llrm_mir::datalayout::DataLayout,
+    platform: Platform,
+) -> Result<crate::mfunc::MFunc, String> {
+    let blocks = crate::dag::function::select_function_in(module, name, layout, platform)?;
+    crate::dag::emit::emit(name, &blocks)
+}
+
 /// Every defined function of `program`'s one module, selected, allocated and
 /// lowered.
 pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String> {
@@ -190,8 +235,16 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
-        let mut machine =
-            crate::isel::select(module, id, &program.layout, platform).map_err(|why| format!("@{name}: {why}"))?;
+        let mut machine = match isel_mode() {
+            IselMode::Hand => crate::isel::select(module, id, &program.layout, platform),
+            IselMode::Dag => dag_select(module, &name, &program.layout, platform),
+            // A refusal of the DAG path falls back to the hand selector, counted.
+            IselMode::Shadow => dag_select(module, &name, &program.layout, platform).or_else(|why| {
+                eprintln!("isel-shadow: @{name}: {why}");
+                crate::isel::select(module, id, &program.layout, platform)
+            }),
+        }
+        .map_err(|why| format!("@{name}: {why}"))?;
         dump("Select", &machine);
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);

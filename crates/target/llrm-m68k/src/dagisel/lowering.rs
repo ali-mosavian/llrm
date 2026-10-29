@@ -172,11 +172,21 @@ impl Hooks for M68kLowering {
     ) -> Option<SDValue> {
         use super::call::{Ext, In, Out};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
-        let outs: Vec<Out> = args.iter().map(|&value| Out { value, ext, pointer: false }).collect();
+        let outs: Vec<Out> = args
+            .iter()
+            .map(|&value| Out {
+                value,
+                ext,
+                pointer: false,
+                arg_vt: dag.value_type(value),
+                split: false,
+                variadic: false,
+            })
+            .collect();
         let callee = dag.get_target_external_symbol(EVT::I32, name);
         let root = dag.entry_node();
         let (_chain, values) =
-            super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &[In { vt: ret, pointer: false }]);
+            super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &[In { vt: ret, pointer: false, arg_vt: ret, split: false }]);
         values.first().copied()
     }
 }

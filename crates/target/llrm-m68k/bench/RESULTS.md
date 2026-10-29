@@ -1,4 +1,4 @@
-# Results, 2026-10-29 16:20 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Results, 2026-10-29 17:11 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 gcc is m68k-linux-gnu-gcc 15 (`-mcpu=68000`), the Debian cross toolchain unpacked without root. Cycles are not
 modelled: "insns" are executed instructions, which price a 68000 `move` and a `muls` the same. "ours" has the

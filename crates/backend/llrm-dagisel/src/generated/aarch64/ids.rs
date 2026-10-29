@@ -6740,6 +6740,7 @@ pub mod reg {
     pub const DDDRegClassID: u16 = 89;
     pub const DDRegClassID: u16 = 61;
     pub const FFR: u16 = 1;
+    pub const FP: u16 = 2;
     pub const FPCR: u16 = 3;
     pub const FPMR: u16 = 4;
     pub const FPR128RegClassID: u16 = 77;
@@ -6788,14 +6789,68 @@ pub mod reg {
     pub const QQRegClassID: u16 = 107;
     pub const SP: u16 = 8;
     pub const VG: u16 = 9;
+    pub const W0: u16 = 208;
+    pub const W1: u16 = 209;
+    pub const W10: u16 = 218;
+    pub const W11: u16 = 219;
+    pub const W12: u16 = 220;
+    pub const W13: u16 = 221;
+    pub const W14: u16 = 222;
+    pub const W15: u16 = 223;
+    pub const W16: u16 = 224;
+    pub const W17: u16 = 225;
+    pub const W18: u16 = 226;
+    pub const W19: u16 = 227;
+    pub const W2: u16 = 210;
+    pub const W20: u16 = 228;
+    pub const W21: u16 = 229;
+    pub const W22: u16 = 230;
+    pub const W23: u16 = 231;
+    pub const W24: u16 = 232;
+    pub const W25: u16 = 233;
+    pub const W26: u16 = 234;
+    pub const W27: u16 = 235;
+    pub const W28: u16 = 236;
+    pub const W29: u16 = 237;
+    pub const W3: u16 = 211;
+    pub const W30: u16 = 238;
+    pub const W4: u16 = 212;
+    pub const W5: u16 = 213;
+    pub const W6: u16 = 214;
+    pub const W7: u16 = 215;
+    pub const W8: u16 = 216;
+    pub const W9: u16 = 217;
+    pub const WSP: u16 = 10;
     pub const WSeqPairsClassRegClassID: u16 = 38;
     pub const WZR: u16 = 12;
     pub const X0: u16 = 239;
     pub const X1: u16 = 240;
+    pub const X10: u16 = 249;
+    pub const X11: u16 = 250;
+    pub const X12: u16 = 251;
+    pub const X13: u16 = 252;
+    pub const X14: u16 = 253;
     pub const X15: u16 = 254;
     pub const X16: u16 = 255;
     pub const X17: u16 = 256;
+    pub const X18: u16 = 257;
+    pub const X19: u16 = 258;
+    pub const X2: u16 = 241;
     pub const X20: u16 = 259;
+    pub const X21: u16 = 260;
+    pub const X22: u16 = 261;
+    pub const X23: u16 = 262;
+    pub const X24: u16 = 263;
+    pub const X25: u16 = 264;
+    pub const X26: u16 = 265;
+    pub const X27: u16 = 266;
+    pub const X28: u16 = 267;
+    pub const X3: u16 = 242;
+    pub const X4: u16 = 243;
+    pub const X5: u16 = 244;
+    pub const X6: u16 = 245;
+    pub const X7: u16 = 246;
+    pub const X8: u16 = 247;
     pub const X9: u16 = 248;
     pub const XSeqPairsClassRegClassID: u16 = 64;
     pub const XZR: u16 = 14;
@@ -6844,6 +6899,76 @@ pub mod reg {
     pub const zsub1: u16 = 45;
     pub const zsub2: u16 = 46;
     pub const zsub3: u16 = 47;
+    /// The record's `registers`, by number.
+    pub const REGISTERS: &[(u16, &str)] = &[
+        (2, "FP"),
+        (6, "LR"),
+        (7, "NZCV"),
+        (8, "SP"),
+        (10, "WSP"),
+        (12, "WZR"),
+        (14, "XZR"),
+        (208, "W0"),
+        (209, "W1"),
+        (210, "W2"),
+        (211, "W3"),
+        (212, "W4"),
+        (213, "W5"),
+        (214, "W6"),
+        (215, "W7"),
+        (216, "W8"),
+        (217, "W9"),
+        (218, "W10"),
+        (219, "W11"),
+        (220, "W12"),
+        (221, "W13"),
+        (222, "W14"),
+        (223, "W15"),
+        (224, "W16"),
+        (225, "W17"),
+        (226, "W18"),
+        (227, "W19"),
+        (228, "W20"),
+        (229, "W21"),
+        (230, "W22"),
+        (231, "W23"),
+        (232, "W24"),
+        (233, "W25"),
+        (234, "W26"),
+        (235, "W27"),
+        (236, "W28"),
+        (237, "W29"),
+        (238, "W30"),
+        (239, "X0"),
+        (240, "X1"),
+        (241, "X2"),
+        (242, "X3"),
+        (243, "X4"),
+        (244, "X5"),
+        (245, "X6"),
+        (246, "X7"),
+        (247, "X8"),
+        (248, "X9"),
+        (249, "X10"),
+        (250, "X11"),
+        (251, "X12"),
+        (252, "X13"),
+        (253, "X14"),
+        (254, "X15"),
+        (255, "X16"),
+        (256, "X17"),
+        (257, "X18"),
+        (258, "X19"),
+        (259, "X20"),
+        (260, "X21"),
+        (261, "X22"),
+        (262, "X23"),
+        (263, "X24"),
+        (264, "X25"),
+        (265, "X26"),
+        (266, "X27"),
+        (267, "X28"),
+    ];
 }
 
 pub mod generic {

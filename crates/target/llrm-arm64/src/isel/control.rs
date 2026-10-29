@@ -102,30 +102,15 @@ impl Selector<'_> {
                 PhiSource::Value(src) => loads.push((copy.dst, src)),
             }
         }
-        while !moves.is_empty() {
-            // A move whose destination no other move reads.
-            let ready = moves.iter().position(|(dst, _)| !moves.iter().any(|(_, src)| src == dst));
-            match ready {
-                Some(at) => {
-                    let (dst, src) = moves.remove(at);
-                    self.emit(Op::Copy { dst, src });
-                }
-                None => {
-                    // A cycle: park one source in a new register.
-                    let (dst, src) = moves[0];
-                    let temporary = match src {
-                        Reg::Gpr(_) => Reg::Gpr(self.mf.gpr()),
-                        Reg::Fpr(_) => Reg::Fpr(self.mf.fpr()),
-                    };
-                    self.emit(Op::Copy { dst: temporary, src });
-                    for (_, reader) in moves.iter_mut() {
-                        if *reader == src {
-                            *reader = temporary;
-                        }
-                    }
-                    let _ = dst;
-                }
-            }
+        let ops = crate::mfunc::sequence_copies(moves, |src| {
+            let made = match src {
+                Reg::Gpr(_) => Reg::Gpr(self.mf.gpr()),
+                Reg::Fpr(_) => Reg::Fpr(self.mf.fpr()),
+            };
+            made
+        });
+        for op in ops {
+            self.emit(op);
         }
         for (dst, src) in loads {
             self.load_into(dst, src)?;
