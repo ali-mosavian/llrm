@@ -1,4 +1,5 @@
-//! `difftest FIRST COUNT [JOBS]` (or `DIFF_SEEDS=first:count`, `DIFF_JOBS`, `DIFF_FILE`): random C programs (`llrm-cgen`, 32-bit `int`) compiled by the pin's
+//! `difftest FIRST COUNT [JOBS]` (or `DIFF_SEEDS=first:count`, `DIFF_JOBS`, `DIFF_FILE`), or `difftest DIR` for
+//! the reduced programs of `tests/difftest/`: random C programs (`llrm-cgen`, 32-bit `int`) compiled by the pin's
 //! clang to IR, by this compiler to a static m68k executable run under `qemu-m68k`, against the same
 //! program built by m68k gcc -O2 for the 68020 under qemu (the toolchain has no libgcc, so no 68000 divide)
 //! and by the host's gcc at -O0, whose 64-bit `long` can differ. The 8-bit
@@ -195,13 +196,21 @@ fn check(
     seed: u64,
     work: &Path,
 ) -> Outcome {
-    let dir = work.join(seed.to_string());
-    std::fs::create_dir_all(&dir).unwrap();
     // `$DIFF_FILE` runs a hand-written program (with a `test`), the way `llrm-cgen/reduce.py` cuts one down
     let source = match std::env::var("DIFF_FILE") {
         Ok(path) => std::fs::read_to_string(path).unwrap(),
         Err(_) => program(seed, &Gen { opaque: true, ..Gen::new(DataModel::INT32) }),
     };
+    check_text(&seed.to_string(), &source, work)
+}
+
+fn check_text(
+    name: &str,
+    source: &str,
+    work: &Path,
+) -> Outcome {
+    let dir = work.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
     let full = format!("{source}{FOLD}");
     std::fs::write(dir.join("p.c"), &full).unwrap();
 
@@ -287,8 +296,35 @@ fn check(
     }
 }
 
+/// `difftest DIR`: every `DIR/*.c` (a reduced program that once failed, with a `test`) must agree.
+fn corpus(dir: &Path) -> bool {
+    let work = std::env::temp_dir().join(format!("llrm-m68k-corpus-{}", std::process::id()));
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "c"))
+        .collect();
+    files.sort();
+    let mut bad = 0;
+    for file in &files {
+        let name = file.file_stem().unwrap().to_string_lossy().into_owned();
+        match check_text(&name, &std::fs::read_to_string(file).unwrap(), &work) {
+            Outcome::Ok => println!("{name}: ok"),
+            other => {
+                bad += 1;
+                println!("{name}: {other:?}");
+            }
+        }
+    }
+    println!("{} programs: {} not ok", files.len(), bad);
+    bad == 0
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(dir) = args.get(1).map(Path::new).filter(|path| path.is_dir()) {
+        std::process::exit(i32::from(!corpus(dir)));
+    }
     // `$DIFF_SEEDS=first:count` and `$DIFF_JOBS` are what the reducer sets
     let (first, count) = std::env::var("DIFF_SEEDS")
         .ok()
