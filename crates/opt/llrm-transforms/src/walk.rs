@@ -53,7 +53,7 @@
 //! `walk_tests.rs`.
 //!
 //! # Runs
-//! Once per compile under `Options::llvm_order`, after the Early stage.
+//! Once per compile, after the Early stage.
 //!
 //! # See also
 //! LLVM `PassBuilderPipelines.cpp` (`buildModuleSimplificationPipeline`:
