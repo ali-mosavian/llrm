@@ -1,4 +1,4 @@
-# Results, 2026-10-29 12:59 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Results, 2026-10-29 13:02 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 gcc is m68k-linux-gnu-gcc 15 (`-mcpu=68000`), the Debian cross toolchain unpacked without root. Cycles are not
 modelled: "insns" are executed instructions, which price a 68000 `move` and a `muls` the same. "ours" has the
@@ -21,7 +21,7 @@ the full -O2 pipeline closed-forms loops into i33 arithmetic the legalizer canno
 | arrsum | 32 | 22 | 64 | 64 | 20 | 22 | 103 | 69 | 153 | 153 | 68 | 69 | 80 all |
 | arrmax | 40 | 36 | 92 | 88 | 26 | 32 | 154 | 139 | 248 | 235 | 97 | 100 | 9 all |
 | countgt | 58 | 52 | 86 | 86 | 42 | 42 | 184 | 152 | 234 | 234 | 168 | 123 | 9 all |
-| strlen | 22 | 24 | 36 | 36 | 18 | 20 | 73 | 74 | 89 | 89 | 57 | 44 | 13 all |
+| strlen | 18 B / 44 gcc -O2 | 22 / 60 | LSR adds one `subq` after the loop (the exit uses the pre-increment value); gcc -O2 unrolls the test |
 | copy | 34 | 34 | 42 | 42 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | 59 | 33 all |
 
 ## Above llc -Os or gcc -Os (bytes / insns, best reference)
@@ -41,4 +41,4 @@ the full -O2 pipeline closed-forms loops into i33 arithmetic the legalizer canno
 At or below both: absdiff, clamp, copy. Smaller than llc on every row except max, absdiff, clamp, gcd (equal).
 
 Done since the last table: LSR with a proper `Machine`/`Tti`, flags reuse, `preserve_flags`, pointer arithmetic in `An`,
-`(An)+` folding, `add #-n` as `subq`. Next: phi-copy coalescing (fib, strlen), then the counter against the end pointer.
+`(An)+` folding, `add #-n` as `subq`. `MachineCopyPropagation`'s spurious-copy case (strlen 24 to 22). Next: fib's phi copies, then the counter against the end pointer.

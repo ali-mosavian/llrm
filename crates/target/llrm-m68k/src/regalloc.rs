@@ -154,6 +154,17 @@ pub fn remove_identity_copies(
     llrm_spike_mf::remove_identity_copies::<M68kRegisters>(function, assignment)
 }
 
+/// `MachineCopyPropagation`'s spurious copies; the 8 and 16-bit classes copy
+/// part of a register and do not count.
+pub fn remove_redundant_copies(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    llrm_spike_mf::remove_redundant_copies::<M68kRegisters>(function, assignment, |class| {
+        matches!(class, Class::Dr32 | Class::Ar32 | Class::Xr32)
+    })
+}
+
 impl Jump for M68kRegisters {
     fn reverse(branch: &llrm_spike_mf::Inst) -> Option<llrm_spike_mf::Inst> {
         let Kind::Op(name) = branch.kind else { return None };
