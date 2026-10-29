@@ -39,7 +39,7 @@ import envflag  # noqa: E402
 LANGUAGES = ("qb", "c", "nib")
 TREE_ONLY = {"fmt", "docs", "products"}  # steps that read the tree and build nothing: the `static` group
 NO_BINARIES = {"pytest", "pytest-perf", "fmt", "rfmt-post", "docs", "facts"}  # steps that do not run the release binaries, so need no build first
-SERIAL_STEPS = frozenset({"rfmt-post"})
+SERIAL_STEPS = frozenset({"rfmt-post", "qcport", "oracle-qcport"})  # the last two count frames in real time: starved by a step beside them, their runs differ from Borland's
 
 
 @functools.cache  # read once: a bisect checks out commits that predate this file
@@ -925,7 +925,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     jobs = default_jobs(os.environ)
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
-        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "oracle-qcport", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
+        order = sorted(rest, key=lambda s: s not in ("run", "identity", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
         for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env, checks.get(s), unset) for s in order]):
             report(*future.result())
     for name in alone:
