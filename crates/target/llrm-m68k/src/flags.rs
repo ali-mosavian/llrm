@@ -8,10 +8,10 @@
 //! the flags are set again after it: a `tst` of the setter's result where the
 //! branch reads only what `tst` gives, or the same compare again.
 //!
-//! DEVIATE: not `sr` save and restore. Reason: `move.w %sr, -(%sp)` is
-//! privileged from the 68010 on, and the Mac, Amiga and Atari programs this
-//! backend is for run in user mode; and the copies it protects are mostly
-//! avoidable. Exit: never; a target choice.
+//! DEVIATE: not the pin's save and restore (`move %sr` on the 68000, `move
+//! %ccr` from the 68010 on, both legal in user mode). Reason: the copies it
+//! protects are mostly avoidable, and a `tst` or a repeated compare is
+//! cheaper than a push and a pop. Exit: where neither re-issue works.
 
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
