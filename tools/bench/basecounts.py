@@ -53,8 +53,22 @@ def record(rows: dict, cache: Path, key: str, root: Path = ROOT) -> Path:
     rows = {k: v for k, v in rows.items() if k[1] in OURS}
     cache.mkdir(parents=True, exist_ok=True)
     path = cache / f"{key}-own.json"
-    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root)}))
+    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root), "hash_version": HASH_VERSION}))
     return path
+
+
+HASH_VERSION = 2  # 1: every file of the directory but expected.toml; 2: and not NOT_INPUT
+
+
+def _is_input(name: str) -> bool:
+    return name != "expected.toml" and Path(name).suffix not in NOT_INPUT
+
+
+def _hash(files: list[tuple[str, bytes]]) -> str:
+    digest = hashlib.sha256()
+    for name, data in sorted(files):
+        digest.update(name.encode() + b"\0" + data)
+    return digest.hexdigest()[:12]
 
 
 def programs(root: Path = ROOT) -> dict[str, str]:
@@ -62,10 +76,23 @@ def programs(root: Path = ROOT) -> dict[str, str]:
     that differs between the base and the head compares two programs, not two compilers, and is not judged."""
     out = {}
     for settings in sorted((root / "bench").glob("**/bench.toml")):
-        digest = hashlib.sha256()
-        for one in sorted(path for path in settings.parent.iterdir() if path.is_file() and path.name != "expected.toml" and path.suffix not in NOT_INPUT):
-            digest.update(one.name.encode() + b"\0" + one.read_bytes())
-        out[str(settings.parent.relative_to(root / "bench"))] = digest.hexdigest()[:12]
+        files = [(path.name, path.read_bytes()) for path in settings.parent.iterdir() if path.is_file() and _is_input(path.name)]
+        out[str(settings.parent.relative_to(root / "bench"))] = _hash(files)
+    return out
+
+
+def programs_at(sha: str, root: Path = ROOT) -> dict[str, str]:
+    """`programs()` of the tree of commit `sha`, read from git: the hash of a base that was stored under another HASH_VERSION."""
+    listing = subprocess.run(["git", "ls-tree", "-r", "--name-only", sha, "--", "bench"], cwd=root, capture_output=True, text=True, check=True).stdout.splitlines()
+    by_dir: dict[str, list[str]] = {}
+    for path in listing:
+        by_dir.setdefault(str(Path(path).parent), []).append(path)
+    out = {}
+    for directory, paths in sorted(by_dir.items()):
+        if f"{directory}/bench.toml" not in paths:
+            continue
+        files = [(Path(path).name, subprocess.run(["git", "cat-file", "blob", f"{sha}:{path}"], cwd=root, capture_output=True, check=True).stdout) for path in paths if _is_input(Path(path).name)]
+        out[str(Path(directory).relative_to("bench"))] = _hash(files)
     return out
 
 
@@ -83,7 +110,7 @@ def label(key: tuple[str, str, str]) -> str:
 
 
 def base_counts(
-    sha: str, opts: list[str], tree_of, build, measure_with, timed: bool = False, cache: Path | None = None, only: list[str] | None = None
+    sha: str, opts: list[str], tree_of, build, measure_with, timed: bool = False, cache: Path | None = None, only: list[str] | None = None, root: Path = ROOT
 ) -> tuple[dict[tuple[str, str, str], dict], dict[str, str]]:
     """(`sha`'s rows (ours only), its programs' hashes): stored by its tree, else measured with the compiler `build(sha)` names (a release
     directory) by `measure_with(directory, opts)`, which returns (bench.py's rows, programs()) of the base's own tree: its harness and its
@@ -95,6 +122,8 @@ def base_counts(
     stored = json.loads(path.read_text()) if path.is_file() else {"rows": {}, "programs": {}}
     have = rows_of(stored["rows"])
     if all(any(key[2] == opt for key in have) for opt in opts):
+        if stored.get("hash_version") != HASH_VERSION:  # counts do not depend on the hash; the programs' hashes do
+            return have, programs_at(sha, root)
         return have, stored["programs"]
     if only:
         rows, hashes = measure_with(build(sha), opts, only)
@@ -103,7 +132,7 @@ def base_counts(
     have |= {key: value for key, value in rows.items() if key[1] in OURS}
     cache.mkdir(parents=True, exist_ok=True)
     part = path.with_suffix(".part")
-    part.write_text(json.dumps({"rows": {"/".join(key): value for key, value in have.items()}, "programs": hashes}))
+    part.write_text(json.dumps({"rows": {"/".join(key): value for key, value in have.items()}, "programs": hashes, "hash_version": HASH_VERSION}))
     os.replace(part, path)
     return have, hashes
 
@@ -141,6 +170,33 @@ def judge(measured: dict, base: dict, waived: list[dict], same: set[str] | None 
                 better.append((label(key), counter, then, now))
     stale = [f"{w['file']}: {w['label']} {w['counter']} to {w['to']}" for w in waived if (w["file"], w["label"], w["counter"]) not in used]
     return worse, better, stale
+
+
+def coverage(measured: dict, base: dict, same: set[str]) -> tuple[int, int, list[str], list[str]]:
+    """(rows judged, programs judged, programs left out as edited, problems): what `judge` looked at. A program the base and the head share
+    that yields no judged row is a problem, and so is a run that judged none: 424 measurements once passed with `same` empty, 218 waivers
+    stale and nothing compared. The left-out programs are named so that a growing list is seen."""
+    rows: dict[str, int] = {}
+    skipped: dict[str, set[str]] = {}
+    for key, got in measured.items():
+        if key[1] not in OURS:
+            continue
+        was = base.get(key)
+        why = "no base" if was is None else next((one for row in (got, was) for one in ("error", "skip", "known", "xpass") if one in row), None)
+        if key[0] in same and why is None:
+            rows[key[0]] = rows.get(key[0], 0) + 1
+        elif key[0] in same:
+            skipped.setdefault(key[0], set()).add(why)
+    programs = sorted({key[0] for key in measured if key[1] in OURS})
+    left_out = [name for name in programs if name not in same]
+    problems = [f"COVERAGE {name}: no row was judged (rows skipped: {', '.join(sorted(skipped.get(name, {'none measured'})))})" for name in programs if name in same and name not in rows]
+    if not same and programs:
+        problems = ["COVERAGE: no row was judged: no program is the same in the base and the head"]
+    return sum(rows.values()), len(rows), left_out, problems
+
+
+def coverage_lines(judged: int, programs: int, left_out: list[str]) -> list[str]:
+    return [f"JUDGED {judged} rows of {programs} programs" + (f"; left out, edited since the base: {' '.join(left_out)}" if left_out else "")]
 
 
 def stale_summary(stale: list[str]) -> list[str]:

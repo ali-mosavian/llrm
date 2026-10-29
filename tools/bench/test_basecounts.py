@@ -248,3 +248,51 @@ def test_the_scalar_waivers_pass_their_limits_and_fail_one_more():
         for counter, (was, to) in rows.items():
             at = {c: t for c, (_, t) in rows.items()} | {counter: to + 1}
             assert bc.judge({key: at}, base, waivers)[0] == [(f"parity/scalar bq16 -{opt}", counter, was, to + 1)], (opt, counter)
+
+
+def test_a_base_stored_under_the_old_hash_is_judged_by_the_new_one_not_skipped_whole(tmp_path):
+    """programs() stopped hashing `.out` files; a base cached under the old hash then differed from the head in EVERY program (main has an `.out` for
+    each): `same` was empty, 424 measurements judged nothing and 218 waivers read stale, with 0 problems printed. A cache that does not say
+    which hash it holds is re-hashed from the base commit."""
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "bench/fib").mkdir(parents=True)
+    (tmp_path / "bench/fib/bench.toml").write_text("repetitions = 1\n")
+    (tmp_path / "bench/fib/fib.c").write_text("int a;\n")
+    (tmp_path / "bench/fib/fib.out").write_text("5\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    sha = git("rev-parse", "HEAD")
+    old = hashlib_of_every_file(tmp_path / "bench/fib")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / f"{sha}-own.json").write_text(json.dumps({"rows": {"fib/c/O2": {"instructions": 1}}, "programs": {"fib": old}}))
+    (tmp_path / "bench/fib/fib.bcout").write_text("5\n")
+    (tmp_path / "bench/fib/fib.out").write_text("6\n")
+    _, hashes = bc.base_counts(sha, ["O2"], lambda s: s, None, None, cache=cache, root=tmp_path)
+    assert hashes == bc.programs(tmp_path), "the head's outputs changed and nothing it compiles"
+
+
+def hashlib_of_every_file(directory):
+    import hashlib
+
+    digest = hashlib.sha256()
+    for one in sorted(directory.iterdir()):
+        digest.update(one.name.encode() + b"\0" + one.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+def test_the_judge_fails_a_run_that_judged_nothing_and_a_program_that_yielded_no_row():
+    """The state of the run above: 424 measurements, `same` empty, no row compared, 0 problems. Every program the head and base share must yield a
+    judged row, and the run must say how many rows it judged and which programs it left out as edited."""
+    base = {("fib", "c", "O2"): row(100), ("sieve", "c", "O2"): {"error": "x"}, ("edited", "c", "O2"): row(1)}
+    got = {("fib", "c", "O2"): row(100), ("sieve", "c", "O2"): row(7), ("edited", "c", "O2"): row(9)}
+    judged, programs, left_out, problems = bc.coverage(got, base, {"fib", "sieve"})
+    assert (judged, programs, left_out) == (1, 1, ["edited"])
+    assert problems == ["COVERAGE sieve: no row was judged (rows skipped: error)"]
+    assert bc.coverage(got, base, set())[3] == ["COVERAGE: no row was judged: no program is the same in the base and the head"]
+    assert bc.coverage(got, base, {"fib", "edited"})[3] == []
