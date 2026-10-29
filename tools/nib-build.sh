@@ -40,7 +40,7 @@ for part in "$@"; do
     case $part in
     *.asm) "$toolchain/jwasm" -q -c -Cp -Zg $omf $defines "-Fo$work/$name.obj" "$part" ;;
     # llrm-cc compiles the foreign C by clang (LLRM_CLANG_M16 names the i8086 build).
-    *) LLRM_CC_TARGET=x86_16-dos "$bin/llrm-cc" -c "$part" -I "$work" -o "$work/$name.obj" "$level" -mabi="${abi_name:-regparm3}" >/dev/null ;;
+    *) LLRM_CC_TARGET=x86_16-dos "$bin/llrm-cc" $isel -c "$part" -I "$work" -o "$work/$name.obj" "$level" -mabi="${abi_name:-regparm3}" >/dev/null ;;
     esac
     objects="$objects file $work/$name.obj"
     used="$used --used-by $work/$name.obj"

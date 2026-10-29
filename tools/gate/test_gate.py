@@ -97,6 +97,19 @@ def test_every_root_test_binary_is_in_exactly_one_step():
         assert in_integration != (name in whole), name
 
 
+def test_a_root_test_named_like_a_members_runs_only_the_root_one():
+    """gate run 3 (c1d651c7b976) said "INCOMPLETE: 2 results of 1 test binaries": a bare `cargo test --test run` also ran llrm-arm64's
+    tests/run.rs (24 tests, all filtered out by the step's filter), and the step counts one binary."""
+    pkgs = gate.packages()
+    cmds = gate.commands(gate.plan(["crates/ir/llrm-mir/src/lib.rs"]), gate.load(), pkgs)
+    shared = {t for _, t in gate.crate_tests(pkgs)} & set(gate.root_tests())
+    assert "run" in shared, shared
+    for name in shared:
+        for step, cmd in cmds.items():
+            if step != "crate-tests" and re.search(rf"--test {name}(\s|$)", cmd):
+                assert f"-p llrm --test {name}" in cmd or re.search(rf"-p llrm (--test \w+ )*--test {name}(\s|$)", cmd), (step, cmd)
+
+
 def test_the_test_that_writes_into_the_tree_runs_alone_after_the_run_test_could_see_it():
     """It left crates/target/llrm-x86-m32/.rerun-probe in the tree while `run` compared the tree: `run` failed, 'the run left files'."""
     cfg = gate.load()
@@ -302,7 +315,7 @@ def test_without_the_opt_in_the_plan_and_the_commands_are_what_they_were(tmp_pat
 def test_a_python_test_file_that_needs_a_missing_probe_is_left_out_of_pytest_by_name():
     """test_scaling_gate.py read float('<not supported>') on a runner without counters and failed the python group on main; test_scaling.py failed 'Access to performance monitoring ... is limited' on a runner whose VM has no instruction counters."""
     missing = {"perf": "perf: `perf stat` fails here"}
-    assert sorted(gate.python_tests_unusable(missing)) == ["crates/target/llrm-x86-m32/vsgcc/test_scaling.py", "crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py"]
+    assert sorted(gate.python_tests_unusable(missing)) == ["crates/target/llrm-x86-m32/vsgcc/test_scaling.py", "crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py", "tools/test_parity_smoke_perf.py", "tools/test_scoreboard_perf.py"]  # by name: a new counter test is a new name here
     p = gate.plan(["tools/linkrecipe.py"])
     cmds = gate.commands(p, gate.load(), gate.packages(), frozenset(), tuple(gate.python_tests_unusable(missing)))
     assert "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling.py" in cmds["pytest"] and "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py" in cmds["pytest"]
@@ -1348,7 +1361,7 @@ def test_the_scaling_tests_run_in_their_own_step_in_their_own_group():
     """Only they need hardware counters, so only their job needs tinytim: the python group, with them in it, ran on tinytim for 12 minutes."""
     cfg = gate.load()
     assert cfg["groups"]["perf"] == ["pytest-perf", "oracle-premise"] and cfg["groups"]["oracle"] == ["oracle-sweep"] and "pytest-perf" not in cfg["groups"]["python"]
-    assert gate.perf_files() == sorted(f for f, needs in gate.declared_requirements().items() if "perf" in needs) and len(gate.perf_files()) == 2
+    assert gate.perf_files() == sorted(f for f, needs in gate.declared_requirements().items() if "perf" in needs) and len(gate.perf_files()) == 4
     assert cfg["requires"]["pytest-perf"] == ["perf"], "skipped whole, and allowed to be, where there are no counters"
     assert cfg["requires"]["oracle-premise"] == ["perf"], "which oracle ran at all is measured with perf; the sharded compiles need none"
 

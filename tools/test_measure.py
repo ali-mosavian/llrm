@@ -832,7 +832,7 @@ def test_the_build_the_bench_takes_its_base_from_makes_every_tool_the_bench_runs
     import re
 
     ran = set(re.findall(r'"(llrm-[a-z]+)"', (HERE / "bench" / "bench.py").read_text()))
-    assert {"llrm-c", "llrm-qb", "llrm-nib"} <= ran, ran
+    assert {"llrm-cc", "llrm-qb", "llrm-nib"} <= ran, ran
     recipe = measure.MEASURE_BUILDS[measure.BENCH_BASE_PROFILE]
     named = set(re.findall(r"--bin (llrm-[a-z]+)", recipe))
     assert "--bins" in recipe or ran <= named, (measure.BENCH_BASE_PROFILE, recipe, ran)
