@@ -121,13 +121,15 @@ pub fn address_arithmetic(function: &mut MFunction) {
 /// The inverse of [`address_arithmetic`]: a `lea (c,An), Am` whose base is a
 /// copy of a data register and whose result goes only to data registers
 /// (`move.l %d0, %a1; lea (48,%a1), %a1; move.l %a1, %d3`) is
-/// `add.l #c, %d`. The pin has `ADD32di` patterns for `add` only, so the
-/// `add_like` `or disjoint` is selected as the `lea`. The flags the add sets
-/// must not be read from before it.
+/// `addq.l #c, %d`, for a `c` of 1 to 8 (-8 to -1). The pin has `ADD32di`
+/// patterns for `add` only, so the `add_like` `or disjoint` is selected as the
+/// `lea`. The flags the add sets must not be read from before it. A larger
+/// constant is kept: `add.l #c` is 6 bytes and 16 clocks against the three
+/// instructions' 8 and 16, and `(c,An,Xn)` for data + data + c is 8 and 20
+/// against 8 and 24.
 ///
-/// DEVIATE from the pin's output. Reason: smaller (6 bytes against 8) and no
-/// moves through an address register. Exit: never; a target choice, off with
-/// `Options::overlay`.
+/// DEVIATE from the pin's output. Reason: 2 bytes and 8 clocks against 8 and
+/// 16. Exit: never; a target choice, off with `Options::overlay`.
 pub fn lea_on_data(function: &mut MFunction) {
     let count = function.classes.len();
     let mut defs: Vec<Option<(usize, usize)>> = vec![None; count];
@@ -203,7 +205,7 @@ pub fn lea_on_data(function: &mut MFunction) {
                 || other_users[dst as usize] != 0
                 || other_users[base as usize] != 1
                 || copy_users[base as usize] != 0
-                || i32::try_from(disp).is_err()
+                || !matches!(disp, -8..=-1 | 1..=8)
             {
                 continue;
             }
