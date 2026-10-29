@@ -70,6 +70,4 @@ b0:
 ```
 
 ## Used by
-[`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`),
-under `Options::llvm_order`, on by default (`LLRM_NO_LLVM_ORDER` turns it
-off).
+[`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`).
