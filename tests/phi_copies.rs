@@ -83,7 +83,10 @@ fn test_a_crc_step_keeps_the_accumulator_in_one_register() {
     let pin = common::pin::listing(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/crc/crc.c"), &flags);
     let (ours, pins) = (common::pin::loops(&text, Some("bench_crc")), common::pin::loops(&pin, Some("bench_crc")));
     assert!(!ours.is_empty() && ours.len() == pins.len(), "loops {ours:?} against the pin\'s {pins:?}:\n{text}");
-    assert!(ours.iter().zip(&pins).all(|(one, other)| one <= other), "loops {ours:?} against the pin\'s {pins:?}:\n{text}");
+    assert!(
+        ours.iter().zip(&pins).all(|(one, other)| one <= other),
+        "loops {ours:?} against the pin\'s {pins:?}:\n{text}"
+    );
 }
 
 /// x_rle's run length leaves at 255: the number the exit's phi takes was made
