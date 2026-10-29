@@ -6,6 +6,8 @@
 //! the stack, so the slice (arithmetic, branches, calls) needs none. Reason:
 //! frame objects wait for the m68k machine function. Exit: M4.
 
+use std::sync::LazyLock;
+
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, build_block};
@@ -15,10 +17,13 @@ use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Module};
 
+use super::call::M68kCalling;
 use super::hooks::Cpu;
 use super::lowering::m68kisd;
 use super::pipeline::select_block;
 use crate::target::M68k;
+
+static CALLING: LazyLock<M68kCalling> = LazyLock::new(M68kCalling::default);
 
 /// The builder's view of m68k: 32-bit pointers, `i8` to `i32` in registers,
 /// and the `CALL`/`RET` nodes of the pin.
@@ -31,6 +36,7 @@ pub fn builder_target() -> BuilderTarget {
             ret: m68kisd::RET,
             stack_pointer: "sp",
             big_endian: true,
+            calling: Some(&*CALLING),
         }),
         ..BuilderTarget::m32()
     }

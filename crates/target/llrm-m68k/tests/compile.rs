@@ -1,6 +1,11 @@
 //! IR to assembly text, against the pin's `llc -mtriple=m68k-linux-gnu
 //! -mcpu=M68000 -relocation-model=static -O2` (directives and comments
-//! dropped).
+//! dropped). The oracle is `~/scratch/llvm-build-m68k/bin/llc`, LLVM
+//! d1106deb71cc built with the M68k target; not the system llc.
+//!
+//! The call tests failed before the reserved-copy fold (`move.l %sp, %d0` and
+//! a store through `(%d0)`) and before register-class constraints (the base
+//! in a data register).
 
 use llrm_m68k::compile::text;
 use llrm_m68k::dagisel::hooks::Cpu;
