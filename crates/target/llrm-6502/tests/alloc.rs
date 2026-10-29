@@ -604,7 +604,7 @@ fn a_pointer_bumped_in_a_loop_stays_a_pair() {
              %r = ptrtoint ptr %q2 to i16\n  ret i16 %r\n}}"
         );
         let text = compile(&ir, "walk");
-        assert!(text.contains(if k == 1 { "inc rc" } else { "bcc _pa" }), "k={k}: {text}");
+        assert!(text.contains(if k == 1 { "inc rc" } else { "bcc walk_pa" }), "k={k}: {text}");
         assert!(!text.contains("tay") && !text.contains("s_walk"), "k={k}: {text}");
         for (p, n) in [(0x0100u16, 4u16), (0x01FE, 2), (0x01FF, 3), (0x12FF, 1)] {
             let setup = set("rc2", p) + &set("rc3", p >> 8) + &set("rc4", n);
