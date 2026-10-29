@@ -26,3 +26,4 @@ Nothing runs it yet: stage 5 of the translation of LSR.
 ## Limits
 DEVIATE: `AMK_PostIndexed` (x86 prefers none) is not ported.
 DEVIATE LU3: see `solve`, the drop of a rewrite that spills (real mode).
+DEVIATE LU6: in real mode the expander writes an add-recurrence of a non-power-of-two width (the `i6` of `(y + 61) & 63`) over the loop's wider `{0,+,1}` phi instead of making a phi of that width (`lsr_widens_odd_width_induction`; the pin makes the `phi i6`). bench tile c -Os 4208 -> 4182 instructions, 98 -> 94 B (main 4155 / 97); QCport 65 modules -Os m16 unchanged.

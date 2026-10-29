@@ -71,6 +71,9 @@ pub struct Expander {
     pub(super) relevant_loops: HashMap<Scev, Option<BlockId>>,
     /// `CanonicalMode`: add recurrences are written over one `{0,+,1}` phi.
     pub(super) canonical_mode: bool,
+    /// DEVIATE LU6: an add recurrence of a width that is no power of two is
+    /// written over a wider canonical phi even where `canonical_mode` is off.
+    pub(super) widen_odd_width: bool,
     /// `LSRMode`.
     pub(super) lsr_mode: bool,
     /// `PostIncLoops`, as the headers.
@@ -96,6 +99,7 @@ impl Expander {
             expressions: HashMap::default(),
             relevant_loops: HashMap::default(),
             canonical_mode: true,
+            widen_odd_width: false,
             lsr_mode: false,
             post_inc_loops: Vec::new(),
             iv_inc_insert: None,
@@ -119,6 +123,14 @@ impl Expander {
         on: bool,
     ) {
         self.canonical_mode = on;
+    }
+
+    /// DEVIATE LU6: see [`Expander::widen_odd_width`].
+    pub fn set_widen_odd_width(
+        &mut self,
+        on: bool,
+    ) {
+        self.widen_odd_width = on;
     }
 
     /// `enableLSRMode`.
