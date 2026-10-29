@@ -265,7 +265,7 @@ fn a_handled_function_may_start_with_a_loop_on_arm64() {
 /// passed `i16 -1` bare: the clang-built runtime read 65535 and NIBBLES died on
 /// VIEW PRINT with "Illegal function call" on the Mac. Only a Mac can run it;
 /// this reads the text the backend gets: Darwin marks the runtime's `i16`
-/// arguments `signext`, Linux (callee extends) does not.
+/// arguments `signext` in the declaration, Linux (callee extends) does not.
 #[test]
 fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
     let dir = std::env::temp_dir().join(format!("signext_{}", std::process::id()));
@@ -285,8 +285,14 @@ fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         std::fs::read_to_string(path).unwrap()
     };
-    assert!(text("darwin").contains("@B_PEI2(i16 signext -1)"));
-    assert!(text("linux").contains("@B_PEI2(i16 -1)"));
+    // The caller extends a 16-bit argument wherever the word is wider (the HIR
+    // marks the call); Darwin adds the mark to the declaration and to any
+    // call the HIR left bare, and none twice.
+    let darwin = text("darwin");
+    assert!(darwin.contains("@B_PEI2(i16 signext -1)") && !darwin.contains("signext signext"), "{darwin}");
+    assert!(darwin.contains("declare void @B_PEI2(i16 signext)"), "{darwin}");
+    let linux = text("linux");
+    assert!(linux.contains("declare void @B_PEI2(i16)"), "{linux}");
     std::fs::remove_dir_all(&dir).ok();
 }
 

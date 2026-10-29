@@ -43,3 +43,19 @@ address_bits = 32
 scales = [1, 2, 4, 8]
 # Cost: the `lea` and memory-form keys of `timings`; no per-form surcharge is
 # described until it is measured.
+
+# What the C front end lays types out as, in bytes: the one place sizeof(int), sizeof(void *) and the rest are stated
+# (llrm-cc checks its clang against it; the triple's default decides nothing). A row names its libc's departures
+# (`wchar_bytes`, `long_double_bytes` in targets.toml).
+[c]
+int = 4
+long = 4
+long_long = 8
+pointer = 4
+function_pointer = 4
+size_t = 4
+ptrdiff_t = 4
+wchar_t = 4
+double = 8
+long_double = 12
+enum = 4
