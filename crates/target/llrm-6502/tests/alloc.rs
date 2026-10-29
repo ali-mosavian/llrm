@@ -1252,3 +1252,30 @@ fn two_selects_on_an_equality_still_pick_by_it() {
         assert_eq!(common::run_with(&format!("alloc-same-{a}-{b}"), &format!("{setup}  jsr same\n"), &text), want.into());
     }
 }
+
+/// A word times `2^n +- 1` (and the negative, and with factors of two) called `__mulhi3`:
+/// hash16's `h * 33` was 17 bytes of setup and a routine of 300 cycles a byte. It is a shift and an
+/// add or subtract. The high byte of the product is checked as well as the low.
+#[test]
+fn a_word_times_a_power_of_two_plus_or_minus_one_is_a_shift_and_add() {
+    for (c, name) in [(33i32, "m33"), (15, "m15"), (-9, "mneg9"), (12, "m12"), (40, "m40")] {
+        let ir = format!(
+            "define i8 @{name}(i16 %x) {{\n  %p = mul i16 %x, {c}\n  %h = lshr i16 %p, 8\n  %t = trunc i16 %h to i8\n  ret i8 %t\n}}"
+        );
+        let text = compile(&ir, name);
+        assert!(!text.contains("__mulhi3"), "{c}: a call to the multiply:\n{text}");
+        for x in [0u16, 1, 7, 300, 1234, 65535] {
+            let want = (x.wrapping_mul(c as u16) >> 8) as i32;
+            let setup = set("rc2", x & 0xFF) + &set("rc3", x >> 8);
+            assert_eq!(common::run_with(&format!("alloc-{name}-{x}"), &format!("{setup}  jsr {name}\n"), &text), want, "{x} * {c}");
+        }
+    }
+}
+
+/// Sibling: a constant that is not of that form (100 = 0b1100100) still multiplies, by the routine.
+#[test]
+fn a_word_times_another_constant_still_multiplies() {
+    let ir = "define i8 @m100(i16 %x) {\n  %p = mul i16 %x, 100\n  %h = lshr i16 %p, 8\n  %t = trunc i16 %h to i8\n  ret i8 %t\n}";
+    let text = compile(ir, "m100");
+    assert!(text.contains("__mulhi3"), "{text}");
+}

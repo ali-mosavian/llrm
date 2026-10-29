@@ -8,6 +8,8 @@
 
 use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
+
+use super::combine::MosCombines;
 use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_with;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
@@ -117,7 +119,7 @@ pub fn select_block(
     let tli = target_lowering();
     let mut lowering = MosLowering;
     let arch = Mos;
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut MosCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     TypeLegalizer::new(dag, &tli)
         .with_target(&arch)
         .with_hooks(&mut lowering)
