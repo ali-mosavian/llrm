@@ -1150,3 +1150,36 @@ fn a_shift_left_by_16_is_swap_and_clear_word() {
     let other = compiled("define i32 @f(i32 %x) {\n  %r = shl i32 %x, 15\n  ret i32 %r\n}", Options::default());
     assert!(!other.contains("swap"), "{other}");
 }
+
+/// `widen_compare_operands` let a compare's second operand take an address register where nothing
+/// else restricts it; it read the table's `XR32` for the result of `MOVZXd32d16` as free, so a
+/// zero-extended word was given `a0` again (`moveq #0, %a0; move.w %d3, %a0`: a sign extension).
+/// Seed 12 of the differential driver.
+#[test]
+fn a_compare_does_not_widen_a_zero_extension_to_an_address_register() {
+    let module = llrm_mir::parse::module(&format!(
+        "target datalayout = \"{DATALAYOUT}\"\ndefine i32 @f(i16 %a, i16 %b, i32 %y) {{\n  %x = lshr i16 %a, %b\n  %e = zext i16 %x to i32\n  %n = sub i32 0, %y\n  %c = icmp sgt i32 %e, %n\n  %r = select i1 %c, i32 1, i32 2\n  ret i32 %r\n}}"
+    ))
+    .expect("parses");
+    let blocks = llrm_m68k::dagisel::function::select_function(&module, "f", Cpu::M68000).expect("selects");
+    let mut function = llrm_m68k::mfunc::emit("f", &blocks).expect("emits");
+    llrm_m68k::overlay::widen_compare_operands(&mut function);
+    let compared = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter_map(|inst| match (inst.kind, &inst.operands[..]) {
+            (llrm_spike_mf::Kind::Op("CMP32dr"), [_, llrm_spike_mf::Operand::Use(llrm_spike_mf::Reg::Virt(rhs))]) => Some(*rhs),
+            _ => None,
+        })
+        .count();
+    assert_eq!(compared, 1, "the compare is the premise");
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if let (llrm_spike_mf::Kind::Op(name), Some(llrm_spike_mf::Operand::Def(llrm_spike_mf::Reg::Virt(v)))) =
+            (inst.kind, inst.operands.first())
+            && name.starts_with("MOVZXd32d16")
+        {
+            assert_eq!(function.classes[*v as usize], llrm_m68k::mfunc::Class::Dr32, "{name}");
+        }
+    }
+}
