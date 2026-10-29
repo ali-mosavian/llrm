@@ -301,3 +301,99 @@ define i8 @outer(i8 %x) {\n  %p = alloca i8\n  store i8 %x, ptr %p\n  %y = add i
     let main = format!("{STACK}{}  jsr outer\n", set("rc2", 5));
     assert_eq!(common::run_with("nested", &main, &text), 12);
 }
+
+/// `a op b` on bytes or words through `f(a, b)`; the result is `a` (and `x` for a word).
+fn binary(
+    ty: &str,
+    op: &str,
+    a: u16,
+    b: u16,
+) -> u32 {
+    let ir = format!("define {ty} @func({ty} %a, {ty} %b) {{\n  %r = {op} {ty} %a, %b\n  ret {ty} %r\n}}");
+    let word = ty == "i16";
+    let setup = if word {
+        set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8)
+    } else {
+        set("rc2", a) + &set("rc3", b)
+    };
+    let key = format!("{ty}-{op}-{a}-{b}");
+    let low = run(&format!("{key}-lo"), &ir, "func", &setup, "") as u32;
+    if word { (run(&format!("{key}-hi"), &ir, "func", &setup, "  txa\n") as u32) << 8 | low } else { low }
+}
+
+/// Subtraction and the runtime operations on bytes, worked out by hand: 50 - 8 = 42, 5 - 10 = 251;
+/// 7 * 6 = 42, 200 * 2 = 400 = 0x190; 200 / 7 = 28 r 4; -7 / 2 = -3 r -1 (249, 253, 255);
+/// 3 << 4 = 48, 0xF0 >> 4 = 15 logical and 255 arithmetic.
+#[test]
+fn byte_operations_run() {
+    for (op, a, b, want) in [
+        ("sub", 50, 8, 42),
+        ("sub", 5, 10, 251),
+        ("mul", 7, 6, 42),
+        ("mul", 200, 2, 0x90),
+        ("udiv", 200, 7, 28),
+        ("urem", 200, 7, 4),
+        ("sdiv", 249, 2, 253),
+        ("srem", 249, 2, 255),
+        ("shl", 3, 4, 48),
+        ("lshr", 0xF0, 4, 15),
+        ("ashr", 0xF0, 4, 255),
+    ] {
+        assert_eq!(binary("i8", op, a, b), want, "i8 {op} {a} {b}");
+    }
+}
+
+/// The same on words: 5000 - 300 = 4700 = 0x125C; 300 * 5 = 1500; 50000 / 7 = 7142 = 0x1BE6;
+/// -1000 % 7 = -6 = 0xFFFA; 0x0123 << 4 = 0x1230; 0x8100 >> 7 = 0x0102 logical, 0xFF02 arithmetic.
+#[test]
+fn word_operations_run() {
+    for (op, a, b, want) in [
+        ("sub", 5000, 300, 0x125C),
+        ("mul", 300, 5, 1500),
+        ("udiv", 50000, 7, 0x1BE6),
+        ("srem", 64536, 7, 0xFFFA),
+        ("shl", 0x0123, 4, 0x1230),
+        ("lshr", 0x8100, 7, 0x0102),
+        ("ashr", 0x8100, 7, 0xFF02),
+    ] {
+        assert_eq!(binary("i16", op, a, b), want, "i16 {op} {a} {b}");
+    }
+}
+
+/// A comparison as a value (`zext i1`): 0 or 1, signed and unsigned, byte and word.
+#[test]
+fn comparisons_as_values_run() {
+    for (ty, cc, a, b, want) in [
+        ("i8", "eq", 5, 5, 1),
+        ("i8", "eq", 5, 6, 0),
+        ("i16", "ne", 300, 300, 0),
+        ("i16", "ne", 300, 301, 1),
+        ("i8", "slt", 253, 2, 1),
+        ("i8", "slt", 2, 253, 0),
+        ("i16", "sge", 64536, 5, 0),
+        ("i16", "sge", 5, 64536, 1),
+        ("i16", "sge", 7, 7, 1),
+        ("i8", "ugt", 200, 100, 1),
+        ("i8", "ugt", 100, 200, 0),
+        ("i16", "ule", 60000, 60000, 1),
+        ("i16", "ule", 60001, 60000, 0),
+    ] {
+        let ir = format!("define i8 @func({ty} %a, {ty} %b) {{\n  %c = icmp {cc} {ty} %a, %b\n  %r = zext i1 %c to i8\n  ret i8 %r\n}}");
+        let setup = if ty == "i16" {
+            set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8)
+        } else {
+            set("rc2", a) + &set("rc3", b)
+        };
+        assert_eq!(run(&format!("cmp-{ty}-{cc}-{a}-{b}"), &ir, "func", &setup, ""), want, "{ty} {cc} {a} {b}");
+    }
+}
+
+/// A byte widened by its sign: 0x80 gives 0xFF80, 5 gives 0x0005.
+#[test]
+fn a_signed_byte_widens_by_its_sign() {
+    let ir = "define i16 @func(i8 %a) {\n  %r = sext i8 %a to i16\n  ret i16 %r\n}";
+    for (a, low, high) in [(0x80, 0x80, 0xFF), (5, 5, 0)] {
+        assert_eq!(run(&format!("sx-{a}-lo"), ir, "func", &set("rc2", a), ""), low);
+        assert_eq!(run(&format!("sx-{a}-hi"), ir, "func", &set("rc2", a), "  txa\n"), high);
+    }
+}

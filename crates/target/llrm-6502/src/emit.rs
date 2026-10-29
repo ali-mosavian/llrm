@@ -290,6 +290,48 @@ pub fn expand(
             writeln!(out, "  clc\n  lda rc0\n  adc #{}\n  sta {dl}\n  lda rc1\n  adc #{}\n  sta {dh}", n & 0xFF, n >> 8)
                 .unwrap();
         }
+        op::MUL8 | op::UDIV8 | op::SDIV8 | op::UREM8 | op::SREM8 | op::SHLV8 | op::SRLV8 | op::SRAV8 => {
+            let routine = match inst.opcode {
+                op::MUL8 => "__mulqi3",
+                op::UDIV8 => "__udivqi3",
+                op::SDIV8 => "__divqi3",
+                op::UREM8 => "__umodqi3",
+                op::SREM8 => "__modqi3",
+                op::SHLV8 => "__ashlqi3",
+                op::SRLV8 => "__lshrqi3",
+                _ => "__ashrqi3",
+            };
+            copy_byte(&mut out, "rc2", reg(&o[1])?);
+            copy_byte(&mut out, "rc3", reg(&o[2])?);
+            writeln!(out, "  jsr {routine}").unwrap();
+            copy_byte(&mut out, reg(&o[0])?, "a");
+        }
+        op::MUL16 | op::UDIV16 | op::SDIV16 | op::UREM16 | op::SREM16 | op::SHLV16 | op::SRLV16 | op::SRAV16 => {
+            let routine = match inst.opcode {
+                op::MUL16 => "__mulhi3",
+                op::UDIV16 => "__udivhi3",
+                op::SDIV16 => "__divhi3",
+                op::UREM16 => "__umodhi3",
+                op::SREM16 => "__modhi3",
+                op::SHLV16 => "__ashlhi3",
+                op::SRLV16 => "__lshrhi3",
+                _ => "__ashrhi3",
+            };
+            let ((dl, dh), (al, ah)) = (word(&o[0])?, word(&o[1])?);
+            copy_byte(&mut out, "rc2", &al);
+            copy_byte(&mut out, "rc3", &ah);
+            // A shift count is a byte in `rc4`; the other operations take a second word.
+            if matches!(inst.opcode, op::SHLV16 | op::SRLV16 | op::SRAV16) {
+                copy_byte(&mut out, "rc4", reg(&o[2])?);
+            } else {
+                let (bl, bh) = word(&o[2])?;
+                copy_byte(&mut out, "rc4", &bl);
+                copy_byte(&mut out, "rc5", &bh);
+            }
+            writeln!(out, "  jsr {routine}").unwrap();
+            copy_byte(&mut out, &dl, "a");
+            copy_byte(&mut out, &dh, "x");
+        }
         op::COPY8 => copy_byte(&mut out, reg(&o[0])?, reg(&o[1])?),
         op::COPY16 => {
             let ((dl, dh), (sl, sh)) = (word(&o[0])?, word(&o[1])?);

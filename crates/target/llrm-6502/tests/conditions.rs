@@ -158,22 +158,17 @@ fn a_signed_word_compare_flips_bit_15() {
     assert_eq!(dag.constant(dag.operand(cmp, 1)), Some(0x8005));
 }
 
-/// A shift by a constant stays a shift for the instruction; one by a register has no instruction
-/// and no library-call conversion in the legalizer yet, so it is refused rather than mis-selected.
+/// Shifts stay shifts for the selector, by a constant (an instruction per bit) or by a register (a
+/// runtime call where emitted). Before the pseudos the variable one was refused by the legalizer.
 #[test]
-fn a_constant_shift_is_kept_and_a_variable_one_is_refused() {
-    let mut dag = SelectionDAG::new(DagConfig::default());
-    let [a, n] = inputs(&mut dag);
-    let three = dag.get_constant(3, EVT::I8);
-    let by_constant = dag.get_node(ISD::Shl, EVT::I8, &[a, three]);
-    dag.set_root(by_constant);
-    let root = legalize(&mut dag);
-    assert_eq!(dag.opcode(root), ISD::Shl);
-
-    let mut dag = SelectionDAG::new(DagConfig::default());
-    let [a, n] = inputs(&mut dag);
-    let by_register = dag.get_node(ISD::Shl, EVT::I8, &[a, n]);
-    dag.set_root(by_register);
-    let tli = target_lowering();
-    assert!(DagLegalizer::new(&mut dag, &tli, &mut MosLowering).run().is_err());
+fn constant_and_variable_shifts_are_kept() {
+    for by_register in [false, true] {
+        let mut dag = SelectionDAG::new(DagConfig::default());
+        let [a, n] = inputs(&mut dag);
+        let amount = if by_register { n } else { dag.get_constant(3, EVT::I8) };
+        let shift = dag.get_node(ISD::Shl, EVT::I8, &[a, amount]);
+        dag.set_root(shift);
+        let root = legalize(&mut dag);
+        assert_eq!(dag.opcode(root), ISD::Shl, "by_register = {by_register}");
+    }
 }

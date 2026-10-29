@@ -100,7 +100,7 @@ multiclass Arith<string n, RegisterClass rc, ValueType vt> {
 defm "" : Arith<"8", Imag8, i8>;
 defm "" : Arith<"16", Imag16, i16>;
 
-// Shifts by a constant: one ASL/LSR/ROR step per bit (variable shifts and large counts are library calls).
+// Shifts by a constant: one ASL/LSR/ROR step per bit.
 multiclass Shift<string n, RegisterClass rc, ValueType vt> {
   let Defs = [P] in {
     def SHL#n : MOSInst<(outs rc:$d), (ins rc:$a, i8imm:$k), "shl $d, $a, $k", [(set vt:$d, (shl vt:$a, (i8 imm:$k)))]>;
@@ -110,6 +110,23 @@ multiclass Shift<string n, RegisterClass rc, ValueType vt> {
 }
 defm "" : Shift<"8", Imag8, i8>;
 defm "" : Shift<"16", Imag16, i16>;
+
+// Multiply, divide, remainder and shifts by a variable are calls of the runtime (runtime/mos_rt.s),
+// expanded where the instruction is emitted: arguments in rc2.., the result in A (and X).
+multiclass Runtime<string n, RegisterClass rc, ValueType vt> {
+  let Defs = [P] in {
+    def MUL#n : MOSInst<(outs rc:$d), (ins rc:$a, rc:$b), "mul $d, $a, $b", [(set vt:$d, (mul vt:$a, vt:$b))]>;
+    def UDIV#n : MOSInst<(outs rc:$d), (ins rc:$a, rc:$b), "udiv $d, $a, $b", [(set vt:$d, (udiv vt:$a, vt:$b))]>;
+    def SDIV#n : MOSInst<(outs rc:$d), (ins rc:$a, rc:$b), "sdiv $d, $a, $b", [(set vt:$d, (sdiv vt:$a, vt:$b))]>;
+    def UREM#n : MOSInst<(outs rc:$d), (ins rc:$a, rc:$b), "urem $d, $a, $b", [(set vt:$d, (urem vt:$a, vt:$b))]>;
+    def SREM#n : MOSInst<(outs rc:$d), (ins rc:$a, rc:$b), "srem $d, $a, $b", [(set vt:$d, (srem vt:$a, vt:$b))]>;
+    def SHLV#n : MOSInst<(outs rc:$d), (ins rc:$a, Imag8:$b), "shlv $d, $a, $b", [(set vt:$d, (shl vt:$a, i8:$b))]>;
+    def SRLV#n : MOSInst<(outs rc:$d), (ins rc:$a, Imag8:$b), "srlv $d, $a, $b", [(set vt:$d, (srl vt:$a, i8:$b))]>;
+    def SRAV#n : MOSInst<(outs rc:$d), (ins rc:$a, Imag8:$b), "srav $d, $a, $b", [(set vt:$d, (sra vt:$a, i8:$b))]>;
+  }
+}
+defm "" : Runtime<"8", Imag8, i8>;
+defm "" : Runtime<"16", Imag16, i16>;
 
 def LDI8 : MOSInst<(outs Imag8:$d), (ins i8imm:$v), "ldi $d, $v", [(set i8:$d, imm:$v)]>;
 def LDI16 : MOSInst<(outs Imag16:$d), (ins i16imm:$v), "ldi $d, $v", [(set i16:$d, imm:$v)]>;
@@ -196,3 +213,6 @@ def : Pat<(i16 (MOSwrapper tglobaladdr:$a)), (LDI16 tglobaladdr:$a)>;
 
 // The address of a frame object: rs0 plus its offset, once the frame is laid out.
 def : Pat<(i16 frameindex:$fi), (LEASP16 (to_tframeindex $fi))>;
+
+// A signed byte widens by its sign: the high byte is the byte shifted right by 7.
+def : Pat<(i16 (sext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (SRA8 Imag8:$a, 7), sub_hi)>;
