@@ -21,6 +21,7 @@ use llrm_dagisel::x86_addr::AddrDag;
 use llrm_dagisel::x86_hooks::find_non_imm_use;
 
 use super::addr;
+use super::globals::Globals;
 
 #[derive(Clone, Copy)]
 enum Complex {
@@ -61,10 +62,11 @@ impl PatternContext for NoContext {
 
 pub struct Aarch64Hooks {
     complex: Vec<Complex>,
+    globals: Globals,
 }
 
-impl Default for Aarch64Hooks {
-    fn default() -> Aarch64Hooks {
+impl Aarch64Hooks {
+    pub fn new(globals: Globals) -> Aarch64Hooks {
         let patterns = table::COMPLEX_PATTERNS;
         let mut complex = vec![Complex::Never; patterns.iter().map(|&(n, ..)| usize::from(n) + 1).max().unwrap_or(0)];
         for &(number, function, _) in patterns {
@@ -86,7 +88,7 @@ impl Default for Aarch64Hooks {
                 other => panic!("complex pattern `{other}` is not translated"),
             };
         }
-        Aarch64Hooks { complex }
+        Aarch64Hooks { complex, globals }
     }
 }
 
@@ -126,7 +128,7 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
             Complex::NegArithImmed => addr::neg_arith_immed(dag, value).map(|v| push(&v)).is_some(),
             Complex::ArithShiftedRegister => addr::shifted_register(dag, value, false).map(|v| push(&v)).is_some(),
             Complex::LogicalShiftedRegister => addr::shifted_register(dag, value, true).map(|v| push(&v)).is_some(),
-            Complex::Indexed(size) => addr::addr_mode_indexed(dag, value, size).map(|v| push(&v)).is_some(),
+            Complex::Indexed(size) => addr::addr_mode_indexed(dag, &self.globals, value, size).map(|v| push(&v)).is_some(),
             Complex::Unscaled => addr::addr_mode_unscaled(dag, value).map(|v| push(&v)).is_some(),
             Complex::Xro(size) => addr::addr_mode_xro(dag, value, size).map(|v| push(&v)).is_some(),
             Complex::Never => false,

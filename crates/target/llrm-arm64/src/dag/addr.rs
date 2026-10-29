@@ -8,8 +8,7 @@
 //! signature (`SelectAddrModeIndexed`: base, scaled offset).
 //!
 //! DEVIATE: not translated, and answering false (the pattern after it, or a
-//! refusal, follows): `SelectShiftedRegisterFromAnd`, `ADDlow` (the page
-//! offset of a global) in `SelectAddrModeIndexed`, `SelectArithExtendedRegister`,
+//! refusal, follows): `SelectShiftedRegisterFromAnd`, `SelectArithExtendedRegister`,
 //! `SelectArithUXTXRegister`, `SelectCVTFixedPos*`, `SelectExtractHigh`,
 //! `SelectDupZero`, and `SelectAddrModeIndexed7S*`. `isWorthNegatingImm` is
 //! false. Reason: the first loads and stores need none. Exit: pairs and
@@ -23,6 +22,8 @@ use llrm_dagisel::generated::aarch64::ids::isd as a64_isd;
 use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::matcher::Vt;
 use llrm_dagisel::x86_addr::AddrDag;
+
+use super::globals::Globals;
 
 /// The width of an integer value type, 0 for any other.
 fn bits(vt: Vt) -> u32 {
@@ -159,15 +160,34 @@ fn valid_as_scaled_immediate(
     (offset & (i64::from(size) - 1)) == 0 && offset >= 0 && (offset as u64) < (range << log2(size))
 }
 
+/// `isWorthFoldingADDlow`: every user is a plain load or store.
+fn worth_folding_addlow<D: AddrDag>(
+    dag: &D,
+    n: SDValue,
+) -> bool {
+    dag.users(n).into_iter().all(|(user, _)| matches!(dag.opcode(user), o if o == isd::LOAD || o == isd::STORE))
+}
+
 /// `SelectAddrModeIndexed`: base and 12-bit scaled offset.
 pub fn addr_mode_indexed<D: AddrDag>(
     dag: &mut D,
+    globals: &Globals,
     n: SDValue,
     size: u32,
 ) -> Option<[SDValue; 2]> {
     if let Some(index) = dag.frame_index(n) {
         let base = dag.target_frame_index(index, mvt::i64);
         return Some([base, dag.target_constant(0, mvt::i64)]);
+    }
+    if dag.opcode(n.node) == a64_isd::ADDlow && worth_folding_addlow(dag, n) {
+        let (base, low) = (dag.operand(n.node, 0), dag.operand(n.node, 1));
+        // A symbol the access is aligned to, at an offset it divides, folds as a page offset.
+        let aligned = dag.wrapped_symbol(low).map(|w| {
+            w.offset % i64::from(size) == 0 && globals.get(w.symbol.id).is_some_and(|g| g.align >= u64::from(size))
+        });
+        if aligned != Some(false) {
+            return Some([base, low]);
+        }
     }
     if base_with_constant_offset(dag, n) {
         if let Some(offset) = zext(dag, dag.operand(n.node, 1)).map(|c| c as i64) {

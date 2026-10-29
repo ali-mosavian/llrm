@@ -23,13 +23,18 @@ use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::interp::Outcome;
 use llrm_dagisel::x86_addr::AddrDag;
 
+use llrm_dagisel::generated::aarch64::ids::isd as aarch64_isd;
+use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::NodeData;
+
+use super::globals::Globals;
 use super::ids::Aarch64Ids;
 
 /// Combine hooks and legalizer hooks of arm64: none. A Custom operation the
 /// table asks for is recorded, and the block refused after legalization.
-#[derive(Default)]
 pub struct Aarch64Lowering {
     pub custom: Option<String>,
+    globals: Globals,
 }
 
 impl CombineHooks for Aarch64Lowering {}
@@ -40,8 +45,38 @@ impl LegalizeHooks for Aarch64Lowering {
         dag: &mut SelectionDAG,
         node: SDValue,
     ) -> Option<SDValue> {
+        if let Some(lowered) = self.global_address(dag, node) {
+            return Some(lowered);
+        }
         self.custom.get_or_insert_with(|| format!("custom lowering of {:?}", dag.node(node).opcode));
         None
+    }
+}
+
+impl Aarch64Lowering {
+    /// `LowerGlobalAddress` for the small code model: a GOT load for a symbol
+    /// from another object, else `ADRP` and `ADDlow` of the symbol.
+    fn global_address(
+        &self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let data = dag.node(node);
+        let (ISD::GlobalAddress, NodeData::Global { symbol, offset }) = (data.opcode, data.data) else { return None };
+        let vt = dag.value_type(node);
+        if self.globals.get(symbol)?.got {
+            let target = dag.get_target_global_address(vt, symbol, 0);
+            let loaded = dag.get_node(ISD::Target(aarch64_isd::LOADgot), vt, &[target]);
+            return Some(if offset == 0 {
+                loaded
+            } else {
+                let by = dag.get_constant(offset as u128, vt);
+                dag.get_node(ISD::Add, vt, &[loaded, by])
+            });
+        }
+        let target = dag.get_target_global_address(vt, symbol, offset);
+        let page = dag.get_node(ISD::Target(aarch64_isd::ADRP), vt, &[target]);
+        Some(dag.get_node(ISD::Target(aarch64_isd::ADDlow), vt, &[page, target]))
     }
 }
 
@@ -91,9 +126,12 @@ impl SchedInfo for Aarch64Sched {
 }
 
 /// `CodeGenAndEmitDAG` up to the end of scheduling: the units, in order.
-pub fn select_block(dag: &mut SelectionDAG) -> Result<Vec<Unit>, Refusal> {
+pub fn select_block(
+    dag: &mut SelectionDAG,
+    globals: &Globals,
+) -> Result<Vec<Unit>, Refusal> {
     let tli = TargetLowering::aarch64(Aarch64Features::default());
-    let mut lowering = Aarch64Lowering::default();
+    let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone() };
     let legal = legalized_with(dag, &tli, &mut lowering, None);
     // The reason the legalizer stopped is the Custom operation it could not lower.
     if let Some(why) = lowering.custom {
@@ -101,7 +139,7 @@ pub fn select_block(dag: &mut SelectionDAG) -> Result<Vec<Unit>, Refusal> {
     }
     legal?;
     let selector = Selector::new(table::TABLE);
-    let mut hooks = super::hooks::Aarch64Hooks::default();
+    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone());
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
         select_frame_index(adapter, node).unwrap_or_else(|| selector.select(adapter, &mut hooks, node))
     })?;
