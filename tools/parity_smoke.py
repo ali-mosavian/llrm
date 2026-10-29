@@ -595,7 +595,6 @@ RUNTIME_C = {
     "qb_dev_interface": "the device interface headers",
     "qb_sdl": "the SDL device",
     "qb_dirty": "the dirty-line protocol under ThreadSanitizer (its child lifts testcap's soft data limit)",
-    "qb_chk": "the range checks of EXP, ^ and LOG on a host",
     "qb_runtime_pin_clang": "the runtime's C sources through the pinned clang",
 }
 # Targets that read files, not crates: scans of sources and docs, run on every PR (all together about 2 s).

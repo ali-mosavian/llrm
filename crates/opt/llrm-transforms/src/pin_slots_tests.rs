@@ -128,13 +128,12 @@ fn group_of(slot: &str) -> String {
 }
 
 fn applied(level: &str) -> Applied {
-    let mut options = match level {
+    let options = match level {
         "-O1" => Options::basic(),
         "-O3" => Options::speed(),
         "-Os" => Options::size(),
         _ => Options::standard(),
     };
-    options.llvm_order = true;
     Applied { options, ..Applied::default() }
 }
 
