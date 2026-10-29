@@ -267,6 +267,9 @@ pub fn ordered(
     let moves = Moves { frame: Some(frame), homes: &homes, hole: 0 };
     let mut machined = shifted(first, frame, &moves)?;
     machined.reserve = first.reserve;
+    if llrm_support::env_flag!("LLRM_CHECK_SLOTS") && llrm_support::env_flag!("LLRM_COUNT_RELAYOUT_SKIPS") {
+        eprintln!("RELAYOUT-CHECKED");
+    }
     if llrm_support::env_flag!("LLRM_CHECK_SLOTS")
         && let Some(cell) = reaching_past_its_slot(&machined.body, &again)
     {
