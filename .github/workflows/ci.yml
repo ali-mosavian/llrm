@@ -225,10 +225,21 @@ jobs:
         with:
           kind: ${{ matrix.kind }}
 
+  # The pin's llc, opt, llvm-tblgen and source (toolchain/pintoolsbuild.sh): the unit group's table-staleness test regenerates from them, the integration group's pin-comparison tests run them. Beside toolchain,
+  # not in it: the clang trees' cache keys stay as they are. Cold minutes, cached after.
+  pintools:
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.draft != 'true' && needs.plan.outputs.any == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/pintools-tree
+
   gate:
-    needs: [plan, build, toolchain]
+    needs: [plan, build, toolchain, pintools]
     # A skipped ancestor (static, when nothing it checks changed) would skip this job too: success() looks at every job upstream.
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.toolchain.result == 'success' }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.toolchain.result == 'success' && needs.pintools.result == 'success' }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_groups)[matrix.group] }}
     timeout-minutes: 60
     strategy:
@@ -242,6 +253,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           clang: "required"
+          pintools: ${{ (matrix.group == 'unit' || matrix.group == 'integration' || matrix.group == 'python') && 'required' || '' }}
       # tinytim has perf (the sysctl and a seccomp profile allowing perf_event_open): nothing may be missing there.
       - if: runner.environment == 'self-hosted'
         run: echo "GATE_ALLOW_MISSING=" >> "$GITHUB_ENV"
@@ -268,6 +280,8 @@ jobs:
           shred -u "$RUNNER_TEMP/key" 2>/dev/null || rm -f "$RUNNER_TEMP/key"
           rm -rf "$dir/.git"
           for pair in $(python3 tools/gate/gate.py private-public); do git clone -q --depth 1 "https://github.com/${pair#*=}.git" "$dir/${pair%%=*}"; done
+          # LLRM_BORLAND_INC (tiers.toml [private]): the lower-case mirror of QCport's Borland headers that llrm-cc's x86_16-bcc row and qcport-run-cc read.
+          sh tools/lowercase-includes.sh "$dir/qctc/inc" "$dir/bcinc"
           python3 tools/gate/gate.py private-env "$dir" --group "${{ matrix.group }}" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
@@ -353,7 +367,7 @@ jobs:
           key: ${{ steps.basecounts.outputs.head }}
 
   ci:
-    needs: [plan, static, toolchain, build, gate, bench-merge, setup-check]
+    needs: [plan, static, toolchain, pintools, build, gate, bench-merge, setup-check]
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.label.name == 'merge-candidate') }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_small || '"ubuntu-24.04"') }}
     env:
@@ -388,7 +402,7 @@ jobs:
             echo "$line  [runners: ${{ needs.plan.outputs.runner_summary }}]" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.setup-check.result }}" != failure ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.toolchain.result }}" != failure ] && [ "${{ needs.toolchain.result }}" != cancelled ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
+          if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.setup-check.result }}" != failure ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.toolchain.result }}" != failure ] && [ "${{ needs.toolchain.result }}" != cancelled ] && [ "${{ needs.pintools.result }}" != failure ] && [ "${{ needs.pintools.result }}" != cancelled ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
             line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}$on"
             # A pull request's run is the merge candidate's, the full gate: its line says so.
             if [ "${{ github.event_name }}" = pull_request ]; then

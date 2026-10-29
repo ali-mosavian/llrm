@@ -125,7 +125,6 @@
 //! `LLRM_DEBUG=time` times each step, `runs` counts rounds, skips and the
 //! work of passes that changed nothing.
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use llrm_analysis::cfg;
@@ -134,7 +133,6 @@ use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, PassManager, PreservedAnalyses, Stage, Unit};
-use llrm_mir::print;
 use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
@@ -227,18 +225,14 @@ pub struct Options {
     /// (`enable-unroll-and-jam`); it is on at -O3 and -Omax, where the
     /// particle row gains from it.
     pub unroll_and_jam: bool,
-    /// The passes run in LLVM's order, once each (`Fixed::linear`:
-    /// [`llvm_order`]), not in the rounds; on by default, `LLRM_NO_LLVM_ORDER`
-    /// turns it off.
-    pub llvm_order: bool,
-    /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
+    /// LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
     /// in the pin.
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
     pub mem2reg: bool,
-    /// Under `llvm_order` the SROA slots run the translated unit (`SROA.cpp`,
+    /// The SROA slots run the translated unit (`SROA.cpp`,
     /// [`crate::sroa`], with [`crate::mem2reg`]); on by default,
     /// `LLRM_NO_SROA` turns it off.
     pub sroa: bool,
@@ -269,30 +263,18 @@ pub struct Options {
     /// With `search`, every shape rather than the one the spills suggest
     /// (`-fallocation-search-all`; -Omax).
     pub exhaustive: bool,
-    /// How many rounds of the body's passes run at most. A round after the
-    /// third found nothing on the 71 programs of the vsgcc tables and
-    /// QCport (the objects are the same), and the fourth and fifth of
-    /// d_faces were 354 Minstr; -Omax runs to the fixed point. A round that
-    /// follows an unroll which changed the body runs past the budget, to clean
-    /// the straight line it made.
-    pub rounds: usize,
 }
-
-/// The rounds a body's passes run, short of -Omax's fixed point.
-const ROUNDS: usize = 4;
 
 impl Default for Options {
     fn default() -> Self {
         Self {
             library: Vec::new(),
             optimize: true,
-            llvm_order: llvm_order_default(),
             rotate_slot: true,
             limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
             lcssa: true,
             floatloop: true,
-            rounds: ROUNDS,
             fold: true,
             simplifycfg: true,
             decide: true,
@@ -355,7 +337,6 @@ impl Options {
             inline: inline::Threshold::default(),
             // gcc runs each pass once: the third round changed five passes of
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
-            rounds: 2,
             pre: false,
             peel: false,
             loop_unrolling: false,
@@ -406,7 +387,6 @@ impl Options {
             unroll_and_jam: true,
             search: true,
             exhaustive: true,
-            rounds: usize::MAX,
             ..Self::default()
         }
     }
@@ -560,7 +540,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
 /// stood in for MachineLICM and gcc's `pass_sink_code` (`hoist` again) have no
 /// counterpart there, and run only without the order or the LICM.
 pub fn llvm_motion(applied: &Applied) -> bool {
-    applied.options.llvm_order && applied.options.licm
+    applied.options.licm
 }
 
 /// Translations that have not joined the pipeline yet: `llrm-pass` and
@@ -661,12 +641,6 @@ impl FunctionPass for Together {
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
-}
-
-/// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
-/// default (PassBuilderPipelines.cpp at d1106deb71cc is the order otherwise).
-fn llvm_order_default() -> bool {
-    !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER")
 }
 
 /// The passes of `phase`, each once in the place LLVM runs it (the line is the
@@ -1010,8 +984,7 @@ pub fn slot_built(
     applied: &Applied,
     slot: &str,
 ) -> bool {
-    let mut options = applied.options.clone();
-    options.llvm_order = true;
+    let options = applied.options.clone();
     crate::parity::describe(slot).is_some_and(|(phase, ..)| {
         llvm_order(&Applied { options, ..Applied::default() }, phase).iter().any(|one| one.name() == slot)
     })
@@ -1047,20 +1020,16 @@ pub fn applied(
 
 /// What runs on each body before the interprocedural step: the rounds, or
 /// LLVM's early function pipeline, GlobalCleanup and function simplification
-/// once each (`Options::llvm_order`).
+/// once each.
 pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
-    if applied.options.llvm_order {
-        vec![
-            Fixed::linear(applied, Phase::Early),
-            Fixed::linear(applied, Phase::Cleanup),
-            Fixed::linear(applied, Phase::Simplify),
-            // DEVIATE: LLVM runs it after the interprocedural passes; here it
-            // closes the function stages.
-            Fixed::linear(applied, Phase::Late),
-        ]
-    } else {
-        vec![Fixed::new(applied)]
-    }
+    vec![
+        Fixed::linear(applied, Phase::Early),
+        Fixed::linear(applied, Phase::Cleanup),
+        Fixed::linear(applied, Phase::Simplify),
+        // DEVIATE: LLVM runs it after the interprocedural passes; here it
+        // closes the function stages.
+        Fixed::linear(applied, Phase::Late),
+    ]
 }
 
 /// `applied`, with what the pipeline did to each function.
@@ -1077,17 +1046,10 @@ pub fn recorded(
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
     }
-    let llvm_order = applied.options.llvm_order;
     // LLVM's GlobalsAA is made at `RequireAnalysisPass<GlobalsAA>` and
-    // `RecomputeGlobalsAAPass` alone, read cached in between; the rounds make
-    // it before each function pass.
-    if llvm_order {
-        manager.require_cached::<GlobalsAA>();
-        manager.require_cached::<GlobalsModRefAnalysis>();
-    } else {
-        manager.require::<GlobalsAA>();
-        manager.require::<GlobalsModRefAnalysis>();
-    }
+    // `RecomputeGlobalsAAPass` alone, read cached in between.
+    manager.require_cached::<GlobalsAA>();
+    manager.require_cached::<GlobalsModRefAnalysis>();
     manager.require::<Summaries>();
     manager.require_program::<ProgramSummaries>();
     // As LLVM's module pipeline starts with InferFunctionAttrs
@@ -1103,12 +1065,12 @@ pub fn recorded(
     let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
         // The walk simplifies each body: not a module-wide stage.
-        if at != 2 || !applied.options.llvm_order {
+        if at != 2 {
             manager.add(stage);
         }
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
         // first. `Phase::Simplify` runs there and not module-wide.
-        if at == 1 && applied.options.llvm_order {
+        if at == 1 {
             // `buildInlinerPipeline` (PassBuilderPipelines.cpp:997,
             // d1106deb71cc).
             manager.compute::<GlobalsAA>();
@@ -1126,7 +1088,7 @@ pub fn recorded(
         }
         // LLVM's IPSCCP and DeadArgumentElimination run after the early
         // function pipeline, before the Simplify list.
-        if at == 0 && applied.options.llvm_order {
+        if at == 0 {
             manager.add_program(crate::walk::ModuleIpo { inline: applied.options.inline });
         }
     }
@@ -1134,14 +1096,10 @@ pub fn recorded(
     // driver's whole-module step: a body it changes goes back through.
     let again_applied =
         Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
-    let mut again = if applied.options.llvm_order {
-        Fixed::linear(&again_applied, Phase::Simplify)
-    } else {
-        Fixed::new(&again_applied)
-    };
+    let mut again = Fixed::linear(&again_applied, Phase::Simplify);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
-    let late = (applied.options.llvm_order && applied.options.inline.recursive).then(|| {
+    let late = applied.options.inline.recursive.then(|| {
         let mut simplify = Fixed::linear(&again_applied, Phase::Simplify);
         crate::walk::SelfInline {
             simplify: Box::new(move |module, analyses, id, stage| {
@@ -1187,38 +1145,22 @@ pub fn recorded(
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
     // `ReversePostOrderFunctionAttrsPass` (PassBuilderPipelines.cpp:1542).
-    if llvm_order {
-        manager.add_module(crate::rpoattrs::ReversePostOrderFunctionAttrs);
-    }
+    manager.add_module(crate::rpoattrs::ReversePostOrderFunctionAttrs);
     // Once the callers that remain are the ones that stay: an internal function
     // they all call directly pops its own arguments.
     if applied.options.wanted("calleepop") {
         manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
     }
-    if llvm_order {
-        // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
-        // d1106deb71cc). DEVIATE: made even where not held, as GlobalDCE, which
-        // LLVM runs after this point, abandoned it here.
-        manager.recompute::<GlobalsAA>();
-        manager.recompute::<GlobalsModRefAnalysis>();
-    } else {
-        manager.freeze::<GlobalsAA>();
-        manager.freeze::<GlobalsModRefAnalysis>();
-    }
+    // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
+    // d1106deb71cc). DEVIATE: made even where not held, as GlobalDCE, which
+    // LLVM runs after this point, abandoned it here.
+    manager.recompute::<GlobalsAA>();
+    manager.recompute::<GlobalsModRefAnalysis>();
     // The summaries are made. The passes below move and rewrite what a function
     // does and add nothing to it, so they read these and do not make them
     // again after each edit, as gcc's passes after IPA read the modref
     // summaries it made there.
     manager.freeze::<Summaries>();
-    // gcc's `pass_ch` (passes.def:232, in `pass_all_optimizations`) runs after
-    // `pass_ipa_inline`: the inliner sizes a body before its header is copied.
-    // The loops it guards are re-simplified for the passes that follow. Not at
-    // -Os (`optimize_loop_for_size_p`): there only a loop proven to run is
-    // entered at its body, which the last `Rotate` does.
-    let guarded = copies_headers_after_ipa(applied);
-    for pass in header_copied(applied) {
-        manager.add_boxed(pass);
-    }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
     if applied.options.wanted("fixednarrow") {
@@ -1238,7 +1180,7 @@ pub fn recorded(
     manager.add(rotate::Rotate { proven: true, copy: false });
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
-    if !guarded && applied.options.wanted("hoist") && !llvm_motion(applied) {
+    if applied.options.wanted("hoist") && !llvm_motion(applied) {
         manager.add(crate::licm::Licm { apply: true, speculate: true });
     }
     // After hoist, which would move a constant `gep` out of its loop.
@@ -1276,7 +1218,7 @@ pub fn recorded(
     }
     // The pin's last module pass (PassBuilderPipelines.cpp#L1714), after every
     // body is final.
-    if applied.options.llvm_order && applied.options.optimize {
+    if applied.options.optimize {
         manager.add_program(constmerge::ConstantMerge);
     }
     // Last: what it names are the instructions selection sees.
@@ -1293,15 +1235,6 @@ pub fn recorded(
         }
     }
     done
-}
-
-/// Whether gcc's `pass_ch` stage (`header_copied`) runs after the
-/// interprocedural step. Not under LLVM's order: its LoopRotate copies the
-/// headers in its own slots (`duplicate_headers`), and the pin has no second
-/// pass over the loops there (d_faces: 52 M instructions at -O1, 41 M at -O2,
-/// 72 M at -O3).
-fn copies_headers_after_ipa(applied: &Applied) -> bool {
-    applied.options.copy_headers && !applied.options.prefers_size() && !applied.options.llvm_order
 }
 
 /// Each loop's counters chosen once, on the loop the passes before leave. LSR
@@ -1325,34 +1258,6 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // The remainder LSR wrote out as a quotient and a product, back to one
         // where the divide stays.
         passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));
-    }
-    passes
-}
-
-/// What `pass_ch` runs and what it leaves to clean: the loops' headers copied,
-/// the loops simplified again, what the copy leaves in the latch cleaned as
-/// gcc's DOM, forwprop and DCE do, and what a loop entered at its body runs
-/// at least once loads unchanged moved out before its counters are chosen, as
-/// LLVM runs LICM before LoopStrengthReduce. Only the copy has entered loops at
-/// their body by here; without it the last `Rotate` has not, and hoist follows
-/// it. Not at -Os (`optimize_loop_for_size_p`): there only a loop proven to run
-/// is entered at its body.
-pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
-    let mut passes: Vec<Box<dyn FunctionPass>> = Vec::new();
-    if !copies_headers_after_ipa(applied) {
-        return passes;
-    }
-    passes.push(Box::new(rotate::Rotate { proven: false, copy: true }));
-    passes.push(Box::new(loopsimplify::LoopSimplify));
-    passes.push(Box::new(lcssa::LoopClosedSSA));
-    passes.push(Box::new(fold::Fold));
-    passes.push(Box::new(algebraic::Algebraic { size: false, llvm: false }));
-    // A counted exit's values are numbers where the copy made its test the one
-    // that leaves.
-    passes.push(Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size: false }));
-    passes.push(Box::new(dead::Dead));
-    if applied.options.wanted("hoist") {
-        passes.push(Box::new(crate::licm::Licm { apply: true, speculate: true }));
     }
     passes
 }
@@ -1414,7 +1319,6 @@ pub struct Fixed {
     unswitch: Option<simpleloopunswitch::SimpleLoopUnswitch>,
     interchange: Option<loopinterchange::Interchange>,
     only: bool,
-    rounds: usize,
     dump: Option<PathBuf>,
     /// Bodies run, naming each one's dump.
     runs: usize,
@@ -1447,7 +1351,6 @@ impl Fixed {
             unswitch,
             interchange: (applied.options.interchange && only.is_none()).then(loopinterchange::Interchange::default),
             only: only.is_some(),
-            rounds: applied.options.rounds,
             dump: applied.dump.clone(),
             runs: 0,
         }
@@ -1463,7 +1366,6 @@ impl Fixed {
         let (phase, ..) = crate::parity::describe(slot).expect("a slot of the registry");
         let mut quiet = applied.clone();
         quiet.only = None;
-        quiet.options.llvm_order = true;
         let mut one = Self::linear(&quiet, phase);
         one.passes.retain(|pass| pass.name() == slot);
         one.only = true;
@@ -1471,7 +1373,7 @@ impl Fixed {
     }
 
     /// `passes` once each in order, no fixed point: LLVM's function pipelines
-    /// run a pass where it stands (`Options::llvm_order`).
+    /// run a pass where it stands.
     fn linear(
         applied: &Applied,
         phase: Phase,
@@ -1501,7 +1403,6 @@ impl Fixed {
             &held,
         );
         debug_assert!(checked.is_ok(), "{checked:?}");
-        linear.rounds = 1;
         // The slot of the order unswitches, where the pin does.
         linear.unswitch = None;
         // It has its own slot (`loop-interchange@1631`) in `Phase::Late`.
@@ -1557,96 +1458,17 @@ impl Fixed {
         run: &mut Run,
         prefix: &str,
     ) -> Result<(), String> {
-        // A monotone chain may expose one simplification per operation.
-        let size = unit.function.layout().len() + unit.function.walk().count();
-        let limit = std::cmp::max(16, size + 1);
-        // The change each pass last left the body at, unchanged: handed that
-        // body again it would change nothing, so it is skipped.
-        let mut settled: Vec<Option<(usize, usize)>> = vec![None; self.passes.len()];
-        // Separately reject a repeated state, so an oscillator fails at once
-        // instead of consuming the limit.
-        // Only a list that rounds more than once can come back to a state, so
-        // only that one hashes the body (LLVM's order runs its lists once).
-        let mut history = (self.rounds > 1).then(|| BTreeSet::from([print::fingerprint(unit.function)]));
-
         run.fixed += 1;
-        for iteration in 0..limit {
-            if iteration >= self.rounds {
-                self.report_unspent(unit, analyses, iteration);
-                run.settled(unit, analyses);
-                return Ok(());
-            }
-            // A named point: what was kept as sound is worked out afresh.
-            analyses.refresh_soft();
-            let before = run.version;
-            run.rounds += 1;
-            for (one, settled) in self.passes.iter_mut().zip(&mut settled) {
-                if let Some((version, stretches)) = *settled {
-                    if version == run.version {
-                        run.skipped += 1;
-                        run.check_skipped(&mut **one, unit, analyses);
-                        continue;
-                    }
-                    // Edits since it found nothing to do, none of which reaches
-                    // what it reads.
-                    run.classify(unit);
-                    let reached = run.reached_since(stretches);
-                    if !reached.meets(one.reads()) {
-                        run.unreached += 1;
-                        run.check_skipped(&mut **one, unit, analyses);
-                        continue;
-                    }
-                }
-                let pass = one.name();
-                let name = format_args!("{prefix}r{:02}-{pass}", iteration + 1);
-                *settled = (!run.step(&mut **one, &name, unit, analyses)).then(|| (run.version, run.stretches.len()));
-            }
-            if self.only || run.version == before {
-                run.settled(unit, analyses);
-                return Ok(());
-            }
-            // A list that runs once (LLVM's order) may end where it began:
-            // EarlyCSE drops the LCSSA phis that `lcssa` makes
-            // again.
-            if history.as_mut().is_some_and(|seen| !seen.insert(print::fingerprint(unit.function))) {
-                return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
-            }
+        // A named point: what was kept as sound is worked out afresh.
+        analyses.refresh_soft();
+        run.rounds += 1;
+        for one in &mut self.passes {
+            let pass = one.name();
+            let name = format_args!("{prefix}r01-{pass}");
+            run.step(&mut **one, &name, unit, analyses);
         }
-        Err(format!("MIR optimization did not converge after {limit} size-scaled rounds"))
-    }
-}
-
-impl Fixed {
-    /// `LLRM_CHECK_ROUNDS`: the pass that a round after the budget would have
-    /// changed the body with, said on stderr; nothing fails, as the budget is a
-    /// choice and a body may need more.
-    fn report_unspent(
-        &mut self,
-        unit: &Unit,
-        analyses: &Analyses,
-        rounds: usize,
-    ) {
-        if !llrm_support::env_flag!("LLRM_CHECK_ROUNDS") {
-            return;
-        }
-        let mut context = unit.context.clone();
-        let mut function = unit.function.clone();
-        let mut declared = unit.declared.clone();
-        let mut copy = Unit {
-            context: &mut context,
-            layout: unit.layout,
-            function: &mut function,
-            id: unit.id,
-            metadata: unit.metadata,
-            declared: &mut declared,
-        };
-        for pass in &mut self.passes {
-            let preserved = pass.run(&mut copy, &mut analyses.fresh());
-            if !preserved.are_all_preserved() {
-                eprintln!("LLRM_CHECK_ROUNDS: round {} would change the body with {}", rounds + 1, pass.name());
-                return;
-            }
-        }
+        run.settled(unit, analyses);
+        Ok(())
     }
 }
 
@@ -1681,16 +1503,12 @@ impl FunctionPass for Fixed {
             dump,
             rounds: 0,
             steps: 0,
-            skipped: 0,
             fixed: 0,
             billing: runs_billed(),
             idle: 0,
             useful: 0,
             idle_with_analyses: 0,
             useful_with_analyses: 0,
-            classified: unit.function.mark(),
-            stretches: Vec::new(),
-            unreached: 0,
             slice: None,
             persisted: 0,
             records: unit.context.extension::<Settled>(),
@@ -1701,14 +1519,12 @@ impl FunctionPass for Fixed {
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));
         run.remember(unit, analyses);
         runs_line(format_args!(
-            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} skipped as unreached, {} skipped as settled in an earlier run, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {}) name {}",
+            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled in an earlier run, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {}) name {}",
             unit.id.map_or(-1, |id| i64::from(id.0)),
             TRIGGER.with(|trigger| trigger.borrow().clone()),
             run.fixed,
             run.rounds,
             run.steps,
-            run.skipped,
-            run.unreached,
             run.persisted,
             run.version,
             run.idle,
@@ -1766,12 +1582,10 @@ struct Run {
     dump: Option<PathBuf>,
     /// `LLRM_DUMP_INPUTS`: the body at the input of every pass run is dumped.
     inputs: bool,
-    /// For `LLRM_DEBUG=runs`: fixed points reached, rounds in them, passes run,
-    /// passes skipped as settled.
+    /// For `LLRM_DEBUG=runs`: fixed points reached, rounds in them, passes run.
     fixed: usize,
     rounds: usize,
     steps: usize,
-    skipped: usize,
     /// The work of passes that changed nothing, and of those that did (only
     /// where `runs` is on).
     billing: bool,
@@ -1781,13 +1595,6 @@ struct Run {
     /// a pass would not save, since the next pass to ask would pay it.
     idle_with_analyses: u64,
     useful_with_analyses: u64,
-    /// Where the log of edits has been classified to, and what each stretch of
-    /// it reached (`footprint::of`), found once for every pass that asks.
-    classified: llrm_mir::module::Mark,
-    stretches: Vec<llrm_mir::footprint::Footprint>,
-    /// Passes not run because no edit since they found nothing reached what
-    /// they read.
-    unreached: usize,
     /// The facts outside the body, as of a point in its history
     /// (`settled::slice`).
     slice: Option<(llrm_mir::module::Mark, settled::Slice)>,
@@ -1803,36 +1610,6 @@ struct Run {
 }
 
 impl Run {
-    /// The edits made since the last stretch, classified as one: after every
-    /// pass, so that no stretch holds the edits of two passes. A function
-    /// put in place of the body (a copy has a history of its own) is every
-    /// part changed.
-    fn classify(
-        &mut self,
-        unit: &Unit,
-    ) {
-        let now = unit.function.mark();
-        let reached = if !now.same_history(self.classified) {
-            llrm_mir::footprint::Footprint::ALL
-        } else if now.position() != self.classified.position() {
-            unit.function
-                .changes_since(self.classified)
-                .map_or(llrm_mir::footprint::Footprint::ALL, |changes| llrm_mir::footprint::of(unit.function, changes))
-        } else {
-            return;
-        };
-        self.stretches.push(reached);
-        self.classified = now;
-    }
-
-    /// What the stretches since the `len`th reached.
-    fn reached_since(
-        &self,
-        len: usize,
-    ) -> llrm_mir::footprint::Footprint {
-        self.stretches[len..].iter().fold(llrm_mir::footprint::Footprint::NONE, |all, reached| all | *reached)
-    }
-
     /// The passes that found nothing are recorded as settled on the body as
     /// they found it: a later run starts none of them where what they read is
     /// as it was (`settled`), which the edits since are asked of then, not
@@ -1917,7 +1694,6 @@ impl Run {
         analyses.declared(unit.context, unit.declared);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
-        self.classify(unit);
         if let Some((billed, analysed, entering)) = billed {
             let with_analyses = llrm_support::debug::work() - billed;
             let own = with_analyses.saturating_sub(llrm_support::debug::analysed_work() - analysed);
@@ -1950,34 +1726,6 @@ impl Run {
         analyses.check_kept(pass.name(), unit.context, unit.layout, unit.function);
         self.changed(stage, unit, analyses);
         true
-    }
-
-    /// `LLRM_CHECK_SKIPPED`: a pass skipped as settled or as reading nothing
-    /// the edits since reached is run on a copy, and finds nothing to do.
-    fn check_skipped(
-        &self,
-        pass: &mut dyn FunctionPass,
-        unit: &Unit,
-        analyses: &Analyses,
-    ) {
-        if !llrm_support::env_flag!("LLRM_CHECK_SKIPPED")
-            || (!self.promotes && matches!(base(pass.name()), "sroa" | "promote"))
-        {
-            return;
-        }
-        let mut context = unit.context.clone();
-        let mut function = unit.function.clone();
-        let mut declared = unit.declared.clone();
-        let mut copy = Unit {
-            context: &mut context,
-            layout: unit.layout,
-            function: &mut function,
-            id: unit.id,
-            metadata: unit.metadata,
-            declared: &mut declared,
-        };
-        let preserved = pass.run(&mut copy, &mut analyses.fresh());
-        assert!(preserved.are_all_preserved(), "{} was skipped and would have changed the body", pass.name());
     }
 
     /// The body a pipeline hands out, with its unreachable blocks settled.

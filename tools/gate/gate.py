@@ -699,13 +699,21 @@ def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
 SHARDED = {"bench": ("bench", "BENCH_SHARD"), "oracle": ("oracle", "ORACLE_SHARD")}
 
 
+# Slices a sharded group has besides its numbered ones: `bench-base` measures the base once, for every numbered slice's rows to be judged against.
+EXTRA_SLICES = {"bench": ("base",)}
+
+
 def shard_names(group: str) -> list[str]:
-    """`bench` as the CI jobs `bench-1` .. `bench-N` (likewise `oracle`): the step is cut into slices that run on their own runners; any other group as itself."""
-    return [f"{group}-{i}" for i in range(1, load()[SHARDED[group][0]]["shards"] + 1)] if group in SHARDED else [group]
+    """`bench` as the CI jobs `bench-base`, `bench-1` .. `bench-N` (likewise `oracle`, without a base): the step is cut into slices that run on their own runners; any other group as itself."""
+    if group not in SHARDED:
+        return [group]
+    return [f"{group}-{one}" for one in EXTRA_SLICES.get(group, ())] + [f"{group}-{i}" for i in range(1, load()[SHARDED[group][0]]["shards"] + 1)]
 
 
 def shard_of(group: str | None) -> tuple[str | None, str | None]:
-    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`; any other group as it is."""
+    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`, (`bench`, "base") for `bench-base`; any other group as it is."""
+    if group == "bench-base":
+        return "bench", "base"
     if group and (one := re.fullmatch(r"(bench|oracle)-(\d+)", group)):
         return one[1], f"{one[2]}/{load()[SHARDED[one[1]][0]]['shards']}"
     return group, None
@@ -1000,6 +1008,14 @@ def scoped(argv: list[str], environ: dict | None = None, have: str | None = None
     return [have, "--user", "--scope", "-q", "-p", f"CPUWeight={weight}", "-p", "ManagedOOMPreference=omit", "--setenv=GATE_SCOPED=1", *argv]
 
 
+def scope_refusal(environ: dict | None = None, have: str | None = None) -> str | None:
+    """Why `scoped` would fail: systemd-run --user needs a user bus. Without one it exited with only a dbus line and no verdict."""
+    environ = os.environ if environ is None else environ
+    if scoped(["x"], environ, have) is None or environ.get("XDG_RUNTIME_DIR") or environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        return None
+    return "no systemd user bus (XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS unset): set GATE_SCOPED=1 to run without the scope"
+
+
 def main() -> int:
     kill_on_term()
     ap = argparse.ArgumentParser()
@@ -1038,6 +1054,9 @@ def main() -> int:
     if args.command == "run":
         head, dirty = head_state()
         if (why := refusal(head, dirty, args.expect, args.allow_dirty)) is not None:
+            print(f"gate: {why}")
+            return 2
+        if not args.json and (why := scope_refusal()):
             print(f"gate: {why}")
             return 2
         if not args.json and (wrapped := scoped([sys.executable, *sys.argv])):

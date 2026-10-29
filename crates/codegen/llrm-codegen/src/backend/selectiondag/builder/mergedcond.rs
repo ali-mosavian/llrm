@@ -159,7 +159,17 @@ impl Builder<'_> {
             false,
             &mut cases,
         )?;
-        if !self.should_emit_as_branches(&cases) {
+        // A runtime routine's flags answer lives only until the next call: a
+        // case block would export it, so the compares stay in this block.
+        let flags_read = cases
+            .iter()
+            .any(
+                |case| matches!(
+                    case.lhs,
+                    Operand::Value(value) if self.node_map.get(&value).is_some_and(|one| self.dag.opcode(*one) == super::super::x86isd::LLRM_CALL_FLAGS)
+                ),
+            );
+        if flags_read || !self.should_emit_as_branches(&cases) {
             // remove the blocks the walk made
             self.order = order;
             self.next_synthetic = next;
