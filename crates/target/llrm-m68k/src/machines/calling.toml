@@ -43,4 +43,4 @@ elf = "*"
 1 = ["bd0"]
 2 = ["wd0"]
 4 = ["d0"]
-pointer = ["a0"]
+address = ["a0"]
