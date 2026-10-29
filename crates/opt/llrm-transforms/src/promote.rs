@@ -390,7 +390,7 @@ fn run(
 /// The alloca nothing loads, deleted with its stores, as a pass of its own:
 /// LLVM's PromoteMemToReg and SROA leave none (`removeIntrinsicUsers`, and
 /// `deleteDeadInstructions` for a slot whose loads were all forwarded). It runs
-/// with the slots of `llvm_order` (`Options::llvm_order`).
+/// with the slots of `llvm_order`.
 pub struct DeadSlots;
 
 impl FunctionPass for DeadSlots {
