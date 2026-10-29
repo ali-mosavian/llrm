@@ -69,6 +69,15 @@ pub trait Target {
     ) -> Option<Inst> {
         None
     }
+    /// `foldMemoryOperand`: `inst` with its only read of the spilled `register` taken straight from frame
+    /// `slot`, where the target has an instruction form for that; the reload then goes.
+    fn fold_spill(
+        _inst: &Inst,
+        _register: Reg,
+        _slot: i32,
+    ) -> Option<Inst> {
+        None
+    }
     /// The instruction that loads frame `slot` into `register`.
     fn spill_load(
         _class: Self::Class,

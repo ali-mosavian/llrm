@@ -207,6 +207,27 @@ impl<const STACK: bool> Target for Mos<STACK> {
         Some(spill)
     }
 
+    /// The second operand of an ALU op or a compare is a memory operand: a spilled byte is read from
+    /// its cell as it is (`ora s_f_3`), not loaded into a zero-page cell first.
+    fn fold_spill(
+        inst: &Inst,
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        let ([_, _, Operand::Use(second), ..], Kind::Op("ADC" | "SBC" | "AND" | "ORA" | "EOR" | "CMP")) =
+            (&inst.operands[..], inst.kind)
+        else {
+            return None;
+        };
+        let once = inst.operands.iter().filter(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == register)).count() == 1;
+        if STACK || *second != register || !once {
+            return None;
+        }
+        let mut folded = inst.clone();
+        folded.operands[2] = Operand::Frame(slot);
+        Some(folded)
+    }
+
     fn spill_load(
         _: Class,
         register: Reg,
@@ -2189,6 +2210,7 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op(mnemonic @ ("ADC" | "SBC" | "AND" | "ORA" | "EOR")), [_, _, second, ..]) => {
                     let text = match second {
                         Operand::Imm(value) => format!("#{value}"),
+                        Operand::Frame(slot) => slot_name(*slot),
                         _ => register_name(regs[2]),
                     };
                     writeln!(out, "  {} {text}", mnemonic.to_lowercase()).unwrap();
@@ -2227,6 +2249,7 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("CMP"), [_, _, second]) => {
                     let text = match second {
                         Operand::Imm(value) => format!("#{value}"),
+                        Operand::Frame(slot) => slot_name(*slot),
                         _ => register_name(regs[2]),
                     };
                     writeln!(out, "  cmp {text}").unwrap();

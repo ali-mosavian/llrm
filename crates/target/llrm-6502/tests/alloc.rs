@@ -1855,6 +1855,40 @@ fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
     assert_eq!(drop_reloads(other), other, "only the same register and cell");
 }
 
+/// A spilled byte used as the second operand of an ALU op is read from its cell (`eor s_f_3`). Slot
+/// sharing took that read plus the store of its result for a copy of one slot into the other and gave
+/// them one cell: 184 of 240 differential programs miscompiled while the fold was being written.
+#[test]
+fn spilled_bytes_read_by_alu_ops_keep_their_own_cells() {
+    const N: usize = 16;
+    let mut ir = String::from("@buf = external global [16 x i8]\ndefine i8 @fold() {\n");
+    for i in 0..N {
+        ir += &format!("  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load i8, ptr %p{i}, align 1\n");
+    }
+    for i in 0..N / 2 {
+        ir += &format!("  %x{i} = xor i8 %b{i}, %b{}\n  %m{i} = add i8 %x{i}, {}\n", N - 1 - i, 7 * i + 3);
+    }
+    let mut cur = "%m0".to_owned();
+    for i in 1..N / 2 {
+        ir += &format!("  %s{i} = add i8 {cur}, %m{i}\n  %c{i} = and i8 %s{i}, {}\n", 255 - i);
+        cur = format!("%c{i}");
+    }
+    ir += &format!("  ret i8 {cur}\n}}");
+    let want = |buf: &[u8; 16]| {
+        let m = |i: usize| (buf[i] ^ buf[N - 1 - i]).wrapping_add((7 * i + 3) as u8);
+        (1..N / 2).fold(m(0), |cur, i| cur.wrapping_add(m(i)) & (255 - i) as u8)
+    };
+    let text = compile_on(&ir, "fold", 16);
+    for (k, buf) in [[3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3], [200, 17, 99, 250, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]].iter().enumerate() {
+        let data = format!(".export buf\nbuf: .byte {}\n", buf.iter().map(u8::to_string).collect::<Vec<_>>().join(","));
+        let got = common::run_with(&format!("alloc-fold-{k}"), "  jsr fold\n", &format!("{text}{data}"));
+        assert_eq!(got, i32::from(want(buf)), "buf {k}");
+    }
+    assert!(text.contains("s_fold_"), "the test needs spills:\n{text}");
+    let folded = |l: &&str| ["eor", "and", "adc", "sbc", "ora", "cmp"].iter().any(|m| l.trim_start().starts_with(&format!("{m} s_fold_")));
+    assert!(text.lines().filter(folded).count() > 0, "a spilled operand is read from its cell:\n{text}");
+}
+
 /// `freeze` selects to the generic `COPY`, which the selector had no description of ("no description
 /// of opcode 20": differential seeds 21 and 26 were rejected for it).
 #[test]

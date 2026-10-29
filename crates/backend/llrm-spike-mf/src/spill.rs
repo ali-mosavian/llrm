@@ -79,6 +79,13 @@ fn spill<T: Target>(
                 }
                 continue;
             }
+            if reads
+                && !writes
+                && let Some(folded) = T::fold_spill(&inst, Reg::Virt(v), slot)
+            {
+                out.push(folded);
+                continue;
+            }
             let temporary = Reg::Virt(function.classes.len() as u32);
             function.classes.push(class);
             made.push(temporary_index(temporary));
@@ -398,7 +405,10 @@ fn share_slots<C: Copy + PartialEq>(
                     Some((slot, true)) => {
                         // the copy's source holds the same value: no clash
                         let loaded = |p: usize| match (slot_access(&insts[p], slots), insts[p].operands.first()) {
-                            (Some((from, false)), Some(Operand::Def(r))) => Some((from, *r)),
+                            // a load only: a read of the slot folded into an instruction is not a copy source
+                            (Some((from, false)), Some(Operand::Def(r))) if matches!(insts[p].operands.get(1), Some(Operand::Frame(_))) => {
+                                Some((from, *r))
+                            }
                             _ => None,
                         };
                         let source = match (i.checked_sub(1).and_then(loaded), insts[i].operands.first()) {
