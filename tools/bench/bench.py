@@ -901,7 +901,14 @@ def base_rows(args) -> tuple[dict, set[str], str]:
             base_sha, args.opt, basecounts.compiler_key, lambda sha: measure.built(sha, measure.BENCH_BASE_PROFILE), lambda directory, opts, names=None: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time, names), args.time
         )
     now = basecounts.programs(ROOT)
-    return base, {name for name in now if was.get(name) == now[name]}, base_sha
+    with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
+        directory = measure.built(base_sha, measure.BENCH_BASE_PROFILE)
+        base, same, unbuilt = basecounts.with_edited(
+            base, was, now, args.opt, lambda names: basecounts.measure_head_sources(directory, args.opt, args.work / "base-edited", names), tree=measure.tree_of(base_sha) or base_sha
+        )
+    if unbuilt:
+        print("edited programs the base compiler could not build, not judged: " + " ".join(unbuilt), flush=True)
+    return base, same, base_sha
 
 
 def base_leg(args) -> int:

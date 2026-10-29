@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import json
+import shutil
 import hashlib
 import tomllib
 import subprocess
@@ -205,11 +206,11 @@ def stale_summary(stale: list[str]) -> list[str]:
     return [f"BASE-STALE {len(stale)} waivers in {len(files)} files, delete them: {' '.join(files)}"] if stale else []
 
 
-def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: bool = False, only: list[str] | None = None) -> tuple[dict, dict[str, str]]:
+def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: bool = False, only: list[str] | None = None, tree: Path | None = None) -> tuple[dict, dict[str, str]]:
     """(bench.py's rows, programs()) of the tree `directory` (a release directory of measure.py's build tree, `<build>/target/release`) was
     built from, by that tree's own bench.py with its compiler: the harness and the programs as the base had them (the head's harness may
     pass flags the base's compiler does not know). A subprocess: the harness binds its compiler's directory at import."""
-    tree = directory.parents[1] / "tree"
+    tree = tree or directory.parents[1] / "tree"
     out = work / "base.json"
     work.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "LLRM_BIN": str(directory)}
@@ -224,6 +225,40 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: b
     if not out.is_file():
         raise SystemExit("the base did not measure: " + " | ".join(line.strip() for line in (done.stdout + done.stderr).splitlines()[-4:] if line.strip()))
     return rows_of(json.loads(out.read_text())), programs(tree)
+
+
+def measure_head_sources(directory: Path, opts: list[str], work: Path, names: list[str], head: Path = ROOT) -> dict:
+    """The base compiler's rows for `names` built from the head's sources: a copy of the base's tree whose bench/NAME directories are the
+    head's, measured by that tree's own bench.py."""
+    tree = directory.parents[1] / "tree"
+    overlay = work / "overlay"
+    shutil.rmtree(overlay, ignore_errors=True)
+    shutil.copytree(tree, overlay, symlinks=True, ignore=lambda directory, names: [n for n in names if n == ".git" or (n == "target" and Path(directory) == tree)])  # crates/target is source
+    for name in names:
+        shutil.rmtree(overlay / "bench" / name, ignore_errors=True)
+        shutil.copytree(head / "bench" / name, overlay / "bench" / name)
+    return measure_in_subprocess(directory, opts, work, False, names, overlay)[0]
+
+
+def with_edited(base: dict, was: dict[str, str], now: dict[str, str], opts: list[str], measure_with, cache: Path | None = None, tree: str = "") -> tuple[dict, set[str], list[str]]:
+    """(the base's rows with those of the programs edited since the base, the programs the base and the head have alike, the edited rows the
+    base compiler could not build): an edited program is judged too, its base being the base compiler's counts on the head's sources.
+    `measure_with(names)` returns those rows; stored by the base's tree and the edited programs' hashes, so measured once."""
+    same = {name for name in now if was.get(name) == now[name]}
+    edited = sorted(name for name in now if name in was and was[name] != now[name])
+    if not edited:
+        return base, same, []
+    cache = cache or CACHE
+    key = hashlib.sha256(json.dumps([tree, opts, [(name, now[name]) for name in edited]]).encode()).hexdigest()[:20]
+    path = cache / f"{tree}-edited-{key}.json"
+    if path.is_file():
+        rows = rows_of(json.loads(path.read_text()))
+    else:
+        rows = {k: v for k, v in measure_with(edited).items() if k[1] in OURS}
+        cache.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"/".join(k): v for k, v in rows.items()}))
+    unbuilt = sorted(label(k) for k, v in rows.items() if "error" in v or "skip" in v)
+    return base | rows, same | {name for name in edited if any(k[0] == name for k in rows)}, unbuilt
 
 
 if __name__ == "__main__":
