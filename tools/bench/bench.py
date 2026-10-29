@@ -949,10 +949,13 @@ def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
     judged, judged_programs, left_out, uncovered = basecounts.coverage(measured, base, same)
     problems += uncovered
     stale = basecounts.judge(measured, base, basecounts.waivers(), same)[2]
+    applied, more = basecounts.waived_lines(basecounts.waived_rows(measured, base, basecounts.waivers(), same), basecounts.waivers(), stale)
+    problems += more
     print(*standing(measured, [], opts), sep="\n")
     print(f"BASE {base_sha[:9]}: {len(base)} rows")
     print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
     print(*basecounts.stale_summary(stale), sep="\n")
+    print(*applied, sep="\n")
     if record:
         import measure
 
@@ -1043,6 +1046,10 @@ def main() -> int:
     stale = [] if args.select else basecounts.judge(measured, base, basecounts.waivers(), same)[2]  # a selection leaves the other rows' waivers unused
     print(f"BASE {base_sha[:9]}: {len(base)} rows")
     print(*basecounts.stale_summary(stale), sep="\n")
+    if not args.select:
+        applied, more = basecounts.waived_lines(basecounts.waived_rows(measured, base, basecounts.waivers(), same), basecounts.waivers(), stale)
+        print(*applied, sep="\n")
+        problems += more
     for one in problems:  # last: the tail of the log is what a reader sees
         print("FAIL", one)
     print(f"{len(measured)} measurements: {len(problems)} problems")

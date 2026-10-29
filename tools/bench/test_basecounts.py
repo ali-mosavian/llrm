@@ -314,3 +314,18 @@ def test_a_program_edited_since_the_base_is_judged_against_the_base_compiler_on_
     assert worse == [("jpeg nib -O2", "instructions", 60, 70)]
     bc.with_edited(base, {"jpeg": "old"}, {"jpeg": "new"}, ["O2"], measure, tmp_path, "t")
     assert asked == [["jpeg"]], "measured once per tree and edit"
+
+
+def test_the_judge_counts_the_rows_its_waivers_excused_and_fails_waivers_it_never_read():
+    """424 measurements: 0 problems said nothing of the 267 rows that passed under a waiver, so a judge that read no waiver at all looked the
+    same. The summary names how many rows ran under which file; waivers on file with none applied and none stale are a problem."""
+    base = {FIB: row(100), ("sieve", "c", "O2"): row(10)}
+    got = {FIB: row(120), ("sieve", "c", "O2"): row(10)}
+    waivers = [{"label": "fib bq32 -O2", "counter": "instructions", "to": 120, "reason": "r", "file": "a.toml"}]
+    rows = bc.waived_rows(got, base, waivers)
+    assert rows == [("a.toml", "fib bq32 -O2", "instructions", 100, 120)]
+    lines, problems = bc.waived_lines(rows, waivers, [])
+    assert lines == ["WAIVED 1 rows of 1 waivers (limit = measured): a.toml 1"] and problems == []
+    lines, problems = bc.waived_lines([], waivers, [])
+    assert problems == ["WAIVERS: none was applied and none is stale: the waivers are not being read"]
+    assert bc.waived_lines([], waivers, ["a.toml: x"])[1] == [] and bc.waived_lines([], [], [])[1] == []
