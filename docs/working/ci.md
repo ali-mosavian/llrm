@@ -64,3 +64,9 @@ Hosted VMs have no `perf` instruction counter. Steps that read one: `measure`, a
 4. The private repository, the secret, the private jobs (needs the owner of the repository: it holds files whose licences the repository does not).
 5. The counter backend and `measure` as a matrix.
 6. Owners merge main into their open PRs.
+
+## Debt
+
+One line per debt: `- DEBT <id> | limit <text> | deadline YYYY-MM-DD | owner <name> | <what and why>`.
+
+- DEBT OS-UNROLL-3 | limit parity/scalar -O2 code 353 B bq16, 249 bq32 and c, 252 nib | deadline 2026-11-12 | owner w3 | the pin's full unroll of the 8-trip loop is 2x main's bytes (and 45% fewer instructions); m16 DEVIATE no full unroll at -O2 past a growth bar, then the waiver goes.

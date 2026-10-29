@@ -207,3 +207,18 @@ def test_stale_waivers_are_one_line_of_file_names():
     stale = [f"a.toml: row{i} instructions to {i}" for i in range(29)] + ["b.toml: x instructions to 1"]
     assert bc.stale_summary(stale) == ["BASE-STALE 30 waivers in 2 files, delete them: a.toml b.toml"]
     assert bc.stale_summary([]) == []
+
+
+SCALAR_BASE = {"bq16": 165, "bq32": 159, "c": 66, "nib": 69}
+
+
+def test_the_scalar_o2_waiver_passes_the_unrolled_size_and_fails_one_byte_more():
+    """parity/scalar -O2 went from main's loop to the pin's full unroll (bq16 165 B to 353): waived at exactly that size, so one more byte fails."""
+    waivers = bc.waivers()
+    base = {("parity/scalar", lang, "O2"): {"code_bytes": was} for lang, was in SCALAR_BASE.items()}
+    at = {"bq16": 353, "bq32": 249, "c": 249, "nib": 252}
+    for lang, size in at.items():
+        key = ("parity/scalar", lang, "O2")
+        assert bc.judge({key: {"code_bytes": size}}, base, waivers)[0] == [], lang
+        worse = bc.judge({key: {"code_bytes": size + 1}}, base, waivers)[0]
+        assert worse == [(f"parity/scalar {lang} -O2", "code_bytes", SCALAR_BASE[lang], size + 1)], lang
