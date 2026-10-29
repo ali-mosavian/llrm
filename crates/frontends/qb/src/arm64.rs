@@ -179,11 +179,17 @@ fn framed(text: &str) -> String {
 
 fn framed_function(lines: &[&str]) -> String {
     let mut out = String::new();
-    let landing = lines.iter().any(|line| line.trim_start().starts_with("%landed = landingpad"));
-    let entry = lines.iter().position(|line| line.ends_with(':')).filter(|_| landing);
-    let Some(entry) = entry else {
+    let landing = lines.iter().position(|line| line.trim_start().starts_with("%landed = landingpad"));
+    let entry = lines.iter().position(|line| line.ends_with(':')).filter(|_| landing.is_some());
+    let (Some(entry), Some(landing)) = (entry, landing) else {
         return lines.iter().map(|line| format!("{line}\n")).collect();
     };
+    // The pad's block, whatever the optimizer called it.
+    let pad = lines[..landing]
+        .iter()
+        .rev()
+        .find(|line| line.ends_with(':'))
+        .map_or("landing", |line| line.trim_end_matches(':'));
     let mut at = entry + 1;
     while lines[at].contains(" = alloca ") {
         at += 1;
@@ -200,9 +206,9 @@ fn framed_function(lines: &[&str]) -> String {
             out.push_str(
                 "  %qb.prev = call ptr @qb_host_frame(ptr %qb.jb)\n  %qb.rc = call i32 @_setjmp(ptr %qb.jb)\n",
             );
-            out.push_str(
-                "  %qb.back = icmp ne i32 %qb.rc, 0\n  br i1 %qb.back, label %landing, label %qb.body\n\nqb.body:\n",
-            );
+            out.push_str(&format!(
+                "  %qb.back = icmp ne i32 %qb.rc, 0\n  br i1 %qb.back, label %{pad}, label %qb.body\n\nqb.body:\n"
+            ));
         }
         if line.contains("= load i16, ptr @Q_QB$LANDED") {
             // DOS lands in `$QB$LANDING`, which stores ERR there; here the jump
@@ -379,4 +385,21 @@ fn aligned(line: &str) -> String {
         None => line,
     };
     format!("{body}, align 16")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::framed;
+
+    /// The optimizer drops block names, so the pad is `0:` and not `landing:`;
+    /// the jump back branched to `%landing`, which no block defined
+    /// ("block %landing is used but never defined": ON ERROR programs at -O2
+    /// on arm64, qb_arm64 `on_error_lands_in_its_handler`).
+    #[test]
+    fn the_jump_back_branches_to_the_pad_whatever_it_is_called() {
+        let text = "define void @f() personality ptr @p {\nframe:\n  %a = alloca i16\n  call void @g()\n  ret void\n\n0:\n  %landed = landingpad { ptr, i32 }\n    cleanup\n  ret void\n}\n";
+        let framed = framed(text);
+        assert!(framed.contains("label %0, label %qb.body"), "{framed}");
+        assert!(!framed.contains("%landing"), "{framed}");
+    }
 }

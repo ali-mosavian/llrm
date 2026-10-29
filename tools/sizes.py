@@ -2,7 +2,7 @@
 
     python3 tools/sizes.py BASE_BIN_DIR [NEW_BIN_DIR] [-O2|-Os|-Oz|-O3]... [--frames]
 
-Each directory holds llrm-qb, llrm-c and llrm-nib, each one whole compiler (NEW
+Each directory holds llrm-qb, llrm-cc (with llrm-llc) and llrm-nib, each one whole compiler (NEW
 defaults to target/release). A program is tests/run/qb, bench and examples, plus the
 QuickBASIC demos in $QBDEMOS (~/work/qbdemos/orig). Bytes are the OMF object's code segments' (`code_bytes`).
 There is no instruction or memory-operand column: the backend's per-call `cost` estimate, summed, moved 3x between
@@ -50,8 +50,15 @@ def isel() -> list[str]:
     return [f"--isel={environ['SIZES_ISEL']}"] if environ.get("SIZES_ISEL") else []
 
 
+def c_command(compiler: str, source: str) -> list[str]:
+    """llrm-cc's line for a C program: the Watcom row of the width its header asks for (`-m32`), the rest of its flags as they are."""
+    flags = settings(source)
+    wide = "-m32" in flags
+    return [compiler, f"--target={llrmbin.C_ROWS[32 if wide else 16][0]}", str(source), *(one for one in flags if one not in ("-m16", "-m32")), *isel()]
+
+
 def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
-    qb, cc, nib = (str(bins / name) for name in ("llrm-qb", "llrm-c", "llrm-nib"))
+    qb, cc, nib = (str(bins / name) for name in ("llrm-qb", "llrm-cc", "llrm-nib"))
     out = []
     if demos:
         if not DEMOS.is_dir():
@@ -59,7 +66,7 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
         out = [(f"demo-{one}", [qb, str(DEMOS / one / "TSC.BAS"), "--dialect", "qb45", "--runtime", "qb45"]) for one in ("qbdemo", "oimad", "deedlines")]
     for files, tool in ((sorted(glob.glob(str(ROOT / "tests/run/qb/*.bas"))), qb), (benchlist.sources(".bas", ROOT / "bench"), qb), (benchlist.sources(".c", ROOT / "bench"), cc),
                         (benchlist.sources(".nib", ROOT / "bench"), nib), (sorted(glob.glob(str(ROOT / "examples/*.nib"))), nib)):
-        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, str(file), *dialect(tool == qb, str(file)), *settings(str(file)), *excess(tool == qb), *isel()]) for file in files]
+        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, str(file), *dialect(tool == qb, str(file)), *settings(str(file)), *excess(tool == qb), *isel()] if tool != cc else c_command(tool, file)) for file in files]
     return out
 
 
@@ -179,11 +186,21 @@ def selected(command: list[str]) -> list[str]:
     return [command[0], f"--isel={mode}", *command[1:]] if mode else command
 
 
+def stop(command: list[str]) -> list[str]:
+    """llrm-cc links unless told `-c`; the object is what is measured."""
+    return ["-c"] if Path(command[0]).name == "llrm-cc" else []
+
+
+def environment(command: list[str]) -> dict[str, str]:
+    """The caller's, with llrm-cc's variables (its clang, Open Watcom's headers) for llrm-cc."""
+    return {**environ, **(llrmbin.cc_environment() if Path(command[0]).name == "llrm-cc" else {})}
+
+
 def measure(command: list[str], level: str) -> int | None:
     """The code bytes of the program's object, or None where it does not compile."""
     with tempfile.TemporaryDirectory() as directory:
         obj = f"{directory}/x.obj"
-        cpulimit.run(selected([*command, level, "-o", obj]), 300, capture_output=True, text=True)
+        cpulimit.run(selected([*command, level, *stop(command), "-o", obj]), 300, capture_output=True, text=True, env=environment(command))
         return code_bytes(Path(obj)) if Path(obj).exists() else None
 
 
@@ -194,7 +211,7 @@ def frame(command: list[str], level: str) -> int | None:
     """Bytes the program's procedures reserve below BP: every `sub sp, N` of its listing."""
     with tempfile.TemporaryDirectory() as directory:
         listing = f"{directory}/x.s"
-        cpulimit.run(selected([*command, level, "-S", "-o", listing]), 300, capture_output=True, text=True)
+        cpulimit.run(selected([*command, level, "-S", "-o", listing]), 300, capture_output=True, text=True, env=environment(command))
         return sum(int(one) for one in SUB_SP.findall(Path(listing).read_text())) if Path(listing).exists() else None
 
 
