@@ -62,6 +62,14 @@ fn cpu() -> Cpu {
     }
 }
 
+/// The qemu model that runs what this compiler made.
+fn qemu_cpu() -> &'static str {
+    match cpu() {
+        Cpu::M68020 => "m68020",
+        _ => "m68000",
+    }
+}
+
 fn clang() -> PathBuf {
     std::env::var_os("LLRM_PIN_CLANG").map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(std::env::var("HOME").unwrap()).join("scratch/llvm-build/bin/clang")
@@ -364,9 +372,9 @@ fn check_text(
     };
     let exe = dir.join("ours");
     write_executable(&exe, &bytes).unwrap();
-    match qemu(&exe, "10", "m68000", 0) {
+    match qemu(&exe, "10", qemu_cpu(), 0) {
         // the same program on a stack that starts elsewhere: an answer that moves read garbage
-        Ok(code) if code == reference => match qemu(&exe, "10", "m68000", 4001) {
+        Ok(code) if code == reference => match qemu(&exe, "10", qemu_cpu(), 4001) {
             Ok(other) if other != code => Outcome::Unstable { first: code, second: other },
             _ => Outcome::Ok,
         },

@@ -1,4 +1,4 @@
-# Library routines, 2026-10-29 21:18 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Library routines, 2026-10-29 23:44 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 Ten routines written after the first set was tuned (`bench/library/*.c`; IR from `gen.py`: clang -O2 without
 unrolling, as gcc -O2 does, with the lines MIR's subset does not take dropped). `cargo run -p llrm-m68k --release
