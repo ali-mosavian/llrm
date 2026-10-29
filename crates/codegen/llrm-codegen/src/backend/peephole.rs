@@ -431,6 +431,7 @@ pub fn popped_arguments(
     let unit = i64::from(body.bits / 8);
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
+    // DEVIATE: the pin pops only at -Oz; the legacy -Os pop keeps -Os m16 <= main.
     // 32-bit code (selection's `add esp, n`) and 16-bit code (`add sp, n`).
     let sp = Loc::Reg(if unit == 4 { reg(RegId::ESP, 4) } else { reg(RegId::SP, 2) });
     // The words an `add sp, n` takes back, or 0.
