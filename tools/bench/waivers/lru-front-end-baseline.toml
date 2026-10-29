@@ -8,7 +8,7 @@ to = 402
 [[row]]
 label = "lru c -Os"
 counter = "instructions"
-to = 141
+to = 137
 
 [[row]]
 label = "lru c -Os"

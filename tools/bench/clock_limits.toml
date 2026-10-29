@@ -16,8 +16,8 @@
 "sieve nib -Os" = 29274  # main 24538
 
 # class 2: loop-header copy (tree-ch), ablation candidate, first-bad TBD: DEBT bench-clocks-loop-header-copy
-"lru c -Os" = 293  # main 279
-"lru nib -Os" = 663  # main 571
+"lru c -Os" = 289  # main 279
+"lru nib -Os" = 659  # main 571
 "ring bas -Os" = 76021  # main 74990
 "shellsort c -Os" = 16576  # main 14989
 
