@@ -281,3 +281,69 @@ fn word_shifts_by_constants() {
     assert_eq!(hi_lo("srl16", op::SRL16, 0x8002, 1), (0x40, 0x01));
     assert_eq!(hi_lo("sra16", op::SRA16, 0x8001, 1), (0xC0, 0x00));
 }
+
+use llrm_6502::frame::{Function, layout};
+use llrm_codegen::backend::frameobjects::Object;
+
+/// A function with a 10-byte local, a saved pair and a 4-byte call area (16 bytes), entered with
+/// `rs0 = $4100`. It opens the frame (`rs0` = $4100 - 16), stores 0x5A in local byte 1 and reads it back,
+/// clobbers `rs4`, and closes the frame. After the return `rs0` is $4100 again, `rs4` is what the
+/// caller had, and the byte is in memory at $4100 - 16 + 4 + 1.
+fn framed_call() -> (Body, String) {
+    let frame = layout(&Function {
+        objects: vec![Object { size: 10, align: 1, offset: 0, callee_saved: false, dead: false }],
+        saved: vec!["rs4".into()],
+        max_call_frame: 4,
+        adjusts_stack: true,
+        ..Function::default()
+    });
+    let mut f: Body = frame.prologue().into_iter().map(Ok).collect();
+    let local = |opcode: u16, byte: &str| {
+        frame
+            .eliminate(&MInst::new(opcode, vec![reg(byte), Operand::FrameIndex(0), imm(1)]))
+            .map(Ok)
+            .expect("resolves")
+    };
+    f.push(i(op::LDI8, vec![reg("rc2"), imm(0x5A)]));
+    f.push(local(op::STP8, "rc2"));
+    f.push(local(op::LDP8, "rc3"));
+    f.push(i(op::LDI16, vec![reg("rs2"), imm(0x1234)]));
+    f.push(i(op::COPY16, vec![reg("rs4"), reg("rs2")]));
+    f.extend(frame.epilogue().into_iter().map(Ok));
+    f.push(i(op::COPY8, vec![reg("a"), reg("rc3")]));
+    f.push(i(op::RET, vec![]));
+    let callee = function("framed", &f).expect("expands");
+    let main: Body = vec![
+        i(op::LDI16, vec![reg("rs0"), imm(0x4100)]),
+        i(op::LDI16, vec![reg("rs4"), imm(0xABCD)]),
+        i(op::JSR, vec![Operand::Label("framed".into())]),
+        i(op::COPY8, vec![reg("rc12"), reg("a")]),
+        // the byte, read from where the frame put it
+        i(op::LDI16, vec![reg("rs1"), imm(0x4100 - 16 + 4)]),
+        i(op::LDP8, vec![reg("rc10"), reg("rs1"), imm(1)]),
+    ];
+    (main, callee)
+}
+
+fn after_framed_call(
+    name: &str,
+    byte: &str,
+) -> i32 {
+    let (main, callee) = framed_call();
+    run(name, &[main_returning(main, byte), callee])
+}
+
+#[test]
+fn a_frame_restores_rs0_and_the_saved_pair_and_keeps_its_locals() {
+    // the function returned the byte it stored; rs0 is $4100 again; rs4 is $ABCD; memory holds 0x5A
+    for (name, register, want) in [
+        ("frame-ret", "rc12", 0x5A),
+        ("frame-mem", "rc10", 0x5A),
+        ("frame-rs0-hi", "rc1", 0x41),
+        ("frame-rs0-lo", "rc0", 0x00),
+        ("frame-rs4-hi", "rc9", 0xAB),
+        ("frame-rs4-lo", "rc8", 0xCD),
+    ] {
+        assert_eq!(after_framed_call(name, register), want, "{name}");
+    }
+}

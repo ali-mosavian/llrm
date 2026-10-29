@@ -21,6 +21,8 @@ use crate::platform::Platform;
 pub enum Operand {
     Reg(String),
     Imm(i64),
+    /// A frame object, until the frame is laid out (`frame::Layout::eliminate`).
+    FrameIndex(usize),
     /// A label or a symbol.
     Label(String),
 }
@@ -237,6 +239,17 @@ pub fn expand(
                     _ => writeln!(out, "  lda {dh}\n  cmp #$80\n  ror {dh}\n  ror {dl}").unwrap(),
                 }
             }
+        }
+        // rs0 += n; the carry runs from the low byte to the high.
+        op::ADJSP => {
+            let n = imm(&o[0])? as u16;
+            writeln!(out, "  clc\n  lda rc0\n  adc #{}\n  sta rc0\n  lda rc1\n  adc #{}\n  sta rc1", n & 0xFF, n >> 8)
+                .unwrap();
+        }
+        op::LEASP16 => {
+            let ((dl, dh), n) = (word(&o[0])?, imm(&o[1])? as u16);
+            writeln!(out, "  clc\n  lda rc0\n  adc #{}\n  sta {dl}\n  lda rc1\n  adc #{}\n  sta {dh}", n & 0xFF, n >> 8)
+                .unwrap();
         }
         op::COPY8 => copy_byte(&mut out, reg(&o[0])?, reg(&o[1])?),
         op::COPY16 => {

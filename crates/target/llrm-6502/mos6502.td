@@ -151,6 +151,13 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1 in
 let isCall = 1 in
   def JSR : MOSInst<(outs), (ins calltarget:$t), "jsr $t", []>;
 
+// rs0 += n, two's complement: the prologue, the epilogue and a call sequence that is not reserved.
+let Defs = [P] in
+  def ADJSP : MOSInst<(outs), (ins i16imm:$n), "adjsp $n", []>;
+// d := rs0 + off: the address of a frame object once its frame index is resolved.
+let Defs = [P] in
+  def LEASP16 : MOSInst<(outs Imag16:$d), (ins i16imm:$off), "leasp $d, $off", []>;
+
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
   def RET : MOSInst<(outs), (ins), "rts", [(MOSretglue)]>;
 

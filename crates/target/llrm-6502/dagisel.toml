@@ -11,7 +11,7 @@ out = "src/dagisel/generated"
 cpus = ["mos6502", "w65c02"]
 own_ids = "own_ids.txt"
 # Named by the hand code (src/emit.rs): instructions no pattern selects.
-extra_symbols = ["MOSISD::CALL", "MOS::COPY8", "MOS::COPY16", "MOS::CMP8", "MOS::BEQ", "MOS::BNE", "MOS::BCC", "MOS::BCS", "MOS::JMP", "MOS::JSR"]
+extra_symbols = ["MOSISD::CALL", "MOS::COPY8", "MOS::COPY16", "MOS::CMP8", "MOS::BEQ", "MOS::BNE", "MOS::BCC", "MOS::BCS", "MOS::JMP", "MOS::JSR", "MOS::ADJSP", "MOS::LEASP16"]
 ids_includes = [
   "#define GET_INSTRINFO_ENUM",
   '#include "GenInstrInfo.inc"',
