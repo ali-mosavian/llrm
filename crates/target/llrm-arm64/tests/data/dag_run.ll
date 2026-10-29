@@ -145,3 +145,43 @@ define i64 @widen(i32 %a) {
   %w = shl i64 %v, 3
   ret i64 %w
 }
+
+declare i64 @c_many(i64, i64, i64, i64, i64, i64, i64, i64, i64, i8, i32)
+declare i32 @c_twice(i32)
+
+define i64 @call_many(i64 %a) {
+  %b = add i64 %a, 1
+  %c = add i64 %a, 2
+  %d = add i64 %a, 3
+  %e = add i64 %a, 4
+  %f = add i64 %a, 5
+  %g = add i64 %a, 6
+  %h = add i64 %a, 7
+  %i = add i64 %a, 8
+  %r = call i64 @c_many(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f, i64 %g, i64 %h, i64 %i, i8 -3, i32 4)
+  %s = add i64 %r, %a
+  ret i64 %s
+}
+
+define i64 @take_many(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f, i64 %g, i64 %h, i64 %i, i8 %j, i32 %k) {
+  %jx = sext i8 %j to i64
+  %kx = zext i32 %k to i64
+  %s = add i64 %a, %i
+  %t = mul i64 %s, 3
+  %u = add i64 %t, %jx
+  %v = add i64 %u, %kx
+  ret i64 %v
+}
+
+define i32 @twice(i32 %x) {
+  %r = call i32 @c_twice(i32 %x)
+  %s = call i32 @c_twice(i32 %r)
+  %t = add i32 %r, %s
+  %u = add i32 %t, %x
+  ret i32 %u
+}
+
+define i32 @indirect(ptr %fp, i32 %x) {
+  %r = call i32 %fp(i32 %x)
+  ret i32 %r
+}
