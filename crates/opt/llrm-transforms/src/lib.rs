@@ -194,6 +194,8 @@ pub mod emptyblocks;
 pub mod exitopt;
 pub mod exitpredicate;
 pub mod exitsink;
+pub mod sinkinvariants;
+pub mod firstiterexit;
 pub mod exitvalues;
 pub mod expand;
 pub mod expansion;
