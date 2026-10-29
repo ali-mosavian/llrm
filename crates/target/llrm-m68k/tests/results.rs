@@ -263,3 +263,42 @@ s:
         }
     }
 }
+
+/// A pointer stepped in another block than the load through it (copies in
+/// between, the phi's) went `move.l %a0, %d2; addq.l #1, %d2; move.l %d2, %a0`
+/// for want of seeing the copies as one value: now `addq.l #1, %a0`.
+#[test]
+fn a_pointer_stepped_in_another_block_is_stepped_in_its_address_register() {
+    use llrm_m68k::kernels::Arg::{Data, Imm};
+    let ir = "define i32 @k(ptr %p, i32 %n) {
+entry:
+  br label %o
+o:
+  %q = phi ptr [%p, %entry], [%q1, %c]
+  %m = phi i32 [%n, %entry], [%m1, %c]
+  %s = phi i32 [0, %entry], [%a1, %c]
+  %v = load i8, ptr %q
+  %z = zext i8 %v to i32
+  br label %in
+in:
+  %j = phi i32 [0, %o], [%j1, %in]
+  %a = phi i32 [%s, %o], [%a1, %in]
+  %a1 = add i32 %a, %z
+  %j1 = add i32 %j, 1
+  %d = icmp eq i32 %j1, 3
+  br i1 %d, label %c, label %in
+c:
+  %q1 = getelementptr i8, ptr %q, i32 1
+  %m1 = add i32 %m, -1
+  %e = icmp eq i32 %m1, 0
+  br i1 %e, label %x, label %o
+x:
+  ret i32 %a1
+}";
+    let options = Options { mid_end: false, ..Options::default() };
+    let asm = text_with(&module(ir), "k", Cpu::M68000, options).unwrap();
+    assert!(asm.contains("addq.l\t#1, %a") && !asm.contains("move.l\t%a0, %d"), "{asm}");
+    if let Some(code) = status_with_data(ir, &[Data(0), Imm(3)], options) {
+        assert_eq!(code, (313 * 3) & 0xFF, "{asm}");
+    }
+}

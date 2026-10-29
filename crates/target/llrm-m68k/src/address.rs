@@ -39,22 +39,38 @@ pub fn address_arithmetic(function: &mut MFunction) {
             }
         }
     }
-    // whether `v` is, through copies, a register the memory operands put in an
-    // address register
-    let from_address = |function: &MFunction, mut v: u32| {
-        for _ in 0..8 {
-            if function.classes[v as usize] == Class::Ar32 {
-                return true;
-            }
-            let Some((at, i)) = defs[v as usize] else { return false };
-            let inst = &function.blocks[at].insts[i];
-            match (inst.kind, &inst.operands[..]) {
-                (Kind::Copy, [_, Operand::Use(Reg::Virt(from))]) => v = *from,
-                _ => return false,
+    // whether `v` is, through copies (and so through the phis that became
+    // copies), a register the memory operands put in an address register: the
+    // registers one copy joins are one value
+    let mut parent: Vec<usize> = (0..count).collect();
+    fn find(
+        parent: &mut [usize],
+        mut at: usize,
+    ) -> usize {
+        while parent[at] != at {
+            parent[at] = parent[parent[at]];
+            at = parent[at];
+        }
+        at
+    }
+    for block in &function.blocks {
+        for inst in &block.insts {
+            if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) =
+                (inst.kind, &inst.operands[..])
+            {
+                let (a, b) = (find(&mut parent, *to as usize), find(&mut parent, *from as usize));
+                parent[a] = b;
             }
         }
-        false
-    };
+    }
+    let mut address_group = vec![false; count];
+    for v in 0..count {
+        if function.classes[v] == Class::Ar32 {
+            let root = find(&mut parent, v);
+            address_group[root] = true;
+        }
+    }
+    let mut from_address = |_: &MFunction, v: u32| address_group[find(&mut parent, v as usize)];
     for at in 0..function.blocks.len() {
         for i in 0..function.blocks[at].insts.len() {
             let inst = &function.blocks[at].insts[i];

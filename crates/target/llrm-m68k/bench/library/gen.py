@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerates NAME.ll from NAME.c: clang -O2 for m68k, then the lines MIR's
+"""Regenerates NAME.ll from NAME.c: clang -O2 (no unrolling, as gcc -O2 does) for m68k, then the lines MIR's
 subset of LLVM does not take are dropped (module identity, metadata, function
 and parameter attributes). The IR is otherwise clang's own."""
 import glob
@@ -9,7 +9,7 @@ import subprocess
 for source in sorted(glob.glob("*.c")):
     name = source[:-2]
     text = subprocess.check_output(
-        ["clang", "--target=m68k-linux-gnu", "-mcpu=M68000", "-O2", "-ffreestanding", "-fno-unwind-tables",
+        ["clang", "--target=m68k-linux-gnu", "-mcpu=M68000", "-O2", "-fno-unroll-loops", "-ffreestanding", "-fno-unwind-tables",
          "-fno-asynchronous-unwind-tables", "-S", "-emit-llvm", source, "-o", "-"], text=True)
     out = []
     for line in text.splitlines():
