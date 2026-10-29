@@ -175,3 +175,63 @@ x:
         }
     }
 }
+
+/// Exit status of `k(args)` over the library data block.
+fn status_with_data(
+    ir: &str,
+    args: &[llrm_m68k::kernels::Arg],
+    options: Options,
+) -> Option<i32> {
+    let qemu = qemu()?;
+    let code = items_with(&module(ir), "k", Cpu::M68000, options).expect("compiles");
+    let program = llrm_m68k::kernels::program_with_data(args, code, &llrm_m68k::kernels::library_data());
+    let path = std::env::temp_dir().join(format!("llrm-m68k-results-data-{}-{}", std::process::id(), ir.len()));
+    write_executable(&path, &executable(&program).unwrap()).unwrap();
+    let status = Command::new("timeout").args(["10"]).arg(qemu).arg(&path).status().unwrap().code();
+    std::fs::remove_file(&path).ok();
+    status
+}
+
+/// A byte loaded from the address a long was just stored to is the long's
+/// first byte, its most significant: the store was forwarded as if the byte
+/// were the least significant one (the struct copy of a library routine added
+/// the wrong byte).
+#[test]
+fn a_byte_loaded_back_from_a_stored_long_is_its_most_significant_byte() {
+    use llrm_m68k::kernels::Arg::{Data, Imm};
+    let ir = "define i32 @k(ptr %p, i32 %x) {
+  store i32 %x, ptr %p
+  %v = load i8, ptr %p
+  %z = zext i8 %v to i32
+  ret i32 %z
+}";
+    for options in [Options::default(), Options::PINNED] {
+        if let Some(code) = status_with_data(ir, &[Data(16), Imm(0x11223344)], options) {
+            assert_eq!(code, 0x11, "{options:?}: {}", text_with(&module(ir), "k", Cpu::M68000, options).unwrap());
+        }
+    }
+}
+
+/// A byte constant moved in another block (`MOVI8di`) had no expansion, and a
+/// 200 must stay 200 after the zero extension.
+#[test]
+fn a_byte_constant_chosen_in_a_branch_keeps_its_value() {
+    let ir = "define i32 @f(i32 %a) {
+entry:
+  %c = icmp eq i32 %a, 0
+  br i1 %c, label %x, label %y
+x:
+  br label %j
+y:
+  br label %j
+j:
+  %v = phi i8 [200, %x], [7, %y]
+  %z = zext i8 %v to i32
+  ret i32 %z
+}";
+    for (arg, want) in [(0, 200), (1, 7)] {
+        if let Some(code) = status(ir, &[arg], Options::default()) {
+            assert_eq!(code, want, "f({arg})");
+        }
+    }
+}
