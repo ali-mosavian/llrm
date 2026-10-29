@@ -1503,3 +1503,11 @@ def test_the_integration_step_waits_for_the_clang_trees_the_pins_name(tmp_path):
         (Path(tree) / "bin/clang").write_text("#!/bin/sh\n")
         (Path(tree) / "bin/clang").chmod(0o755)
     assert "clang" not in gate.missing_capabilities(env)
+
+
+def test_a_github_actions_runner_without_a_user_bus_runs_the_gate_unscoped():
+    """Run 4's gate (cost) and gate (perf) on the self-hosted podman runners died in 0 s: "no systemd user bus ... set GATE_SCOPED=1". A runner is no dev box, so it neither scopes nor refuses."""
+    ci = {"GITHUB_ACTIONS": "true"}
+    assert gate.scoped(["x"], ci, "/usr/bin/systemd-run") is None
+    assert gate.scope_refusal(ci, "/usr/bin/systemd-run") is None
+    assert gate.scope_refusal({}, "/usr/bin/systemd-run") is not None, "a dev box without a bus still refuses"
