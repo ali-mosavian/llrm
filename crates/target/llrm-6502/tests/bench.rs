@@ -23,7 +23,10 @@ use llrm_6502::emit::equates;
 use llrm_6502::platform::{Platform, SIM65};
 use llrm_6502::select::function_text;
 
-const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8";
+/// The 6502 description's datalayout: n8 and 16-bit pointers.
+fn datalayout() -> String {
+    llrm_6502::LAYOUT.lines().find_map(|l| l.strip_prefix("datalayout = ")).expect("a datalayout").trim_matches('"').to_owned()
+}
 const BUF: [u8; 16] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3];
 /// The loop's `dec cnt` (6) and taken `bne` (3).
 const LOOP_CYCLES: i64 = 9;
@@ -307,7 +310,7 @@ fn sanitize(ir: &str) -> String {
             continue;
         }
         if line.starts_with("target datalayout") {
-            out.push(format!("target datalayout = \"{DATALAYOUT}\""));
+            out.push(format!("target datalayout = \"{}\"", datalayout()));
             continue;
         }
         let mut line = line.to_owned();
@@ -350,7 +353,7 @@ fn ours_row(
         .unwrap()
         .lines()
         .filter(|l| !l.starts_with("target triple"))
-        .map(|l| if l.starts_with("target datalayout") { format!("target datalayout = \"{DATALAYOUT}\"") } else { l.to_owned() })
+        .map(|l| if l.starts_with("target datalayout") { format!("target datalayout = \"{}\"", datalayout()) } else { l.to_owned() })
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(dir.join(&raw), retargeted).unwrap();
