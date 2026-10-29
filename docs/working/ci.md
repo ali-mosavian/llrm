@@ -69,9 +69,6 @@ Hosted VMs have no `perf` instruction counter. Steps that read one: `measure`, a
 
 ## Debt
 
-| id | what | limit | deadline | owner |
-|---|---|---|---|---|
-| call-frame-reserve | The pin reserves the call frame and stores each argument (`movl %edi,(%esp)`); ours pushes and cleans up with `add esp, N` (DEVIATE CF1, pushfold.rs). Every 32-bit object differs from the pin's call sequence; tests x86_add_carry_loop and register_convention allow it. | translate `X86CallFrameOptimization` and the reserved frame | 2026-11-13 | w10 |
 A check or waiver that is knowingly missing is a line here, not a silence. Format, one line each, parsed by `tools/ci/test_debt.py` (red on a malformed line or a passed deadline):
 
 `- DEBT <id> | limit <what is allowed to stay> | deadline YYYY-MM-DD | owner <name> | <what and why>`
