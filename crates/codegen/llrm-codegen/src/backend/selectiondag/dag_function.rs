@@ -106,6 +106,8 @@ pub(super) struct Frame {
     /// (displacement, size) of each object made, by index.
     locals: std::cell::RefCell<Vec<(i64, i64)>>,
     depth: std::cell::Cell<i64>,
+    /// The widest alignment any object was made with.
+    align: std::cell::Cell<i64>,
 }
 
 impl Frame {
@@ -113,7 +115,7 @@ impl Frame {
         params: Vec<i64>,
         hole: i64,
     ) -> Frame {
-        Frame { params, locals: Default::default(), depth: std::cell::Cell::new(hole) }
+        Frame { params, locals: Default::default(), depth: std::cell::Cell::new(hole), align: std::cell::Cell::new(1) }
     }
 }
 
@@ -159,6 +161,7 @@ impl FrameObjects for Temporaries<'_> {
         let (size, align) = (i64::from(size), i64::from(align.max(1)));
         let depth = (self.0.depth.get() + size + align - 1).div_euclid(align) * align;
         self.0.depth.set(depth);
+        self.0.align.set(self.0.align.get().max(align));
         let mut locals = self.0.locals.borrow_mut();
         locals.push((-depth, size));
         (locals.len() - 1) as i32
@@ -1349,6 +1352,7 @@ fn selected_in(
         far,
         pops,
         depth: fixed_depth,
+        align: frame.align.get(),
         extents: frame.locals.borrow().clone(),
         temporaries: frame.locals.borrow().len() - fixed_objects,
         over_aligned,
