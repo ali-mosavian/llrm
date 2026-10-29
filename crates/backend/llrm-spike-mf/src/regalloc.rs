@@ -413,7 +413,8 @@ impl<T: Target> Allocate<T::Class> for GraphColoring<T> {
         &self,
         function: &MFunction<T::Class>,
     ) -> Result<Assignment, String> {
-        self.colour(function).map_err(|failed| {
+        self.colour(function).map_err(|failures| {
+            let failed = &failures[0];
             format!(
                 "no register for v{} ({:?}); spilling is not translated",
                 failed.vreg, function.classes[failed.vreg as usize]
@@ -464,11 +465,12 @@ impl<T: Target> GraphColoring<T> {
         keyed.into_iter().map(|(_, inst)| inst).collect()
     }
 
-    /// Colour every register, or name the first one nothing fits.
+    /// Colour every register, or name each one nothing fits, in colouring order. A register left
+    /// uncoloured constrains no other, so one round names every victim the others still leave.
     pub fn colour(
         &self,
         function: &MFunction<T::Class>,
-    ) -> Result<Assignment, Uncolourable> {
+    ) -> Result<Assignment, Vec<Uncolourable>> {
         let count = function.classes.len();
         let mut nodes = Nodes { count, physical: Vec::new() };
         let effects_of: Vec<Vec<(Vec<usize>, Vec<usize>)>> = function
@@ -606,6 +608,8 @@ impl<T: Target> GraphColoring<T> {
             colour.insert(count + at, *root);
         }
         let mut assigned: Vec<Option<RegId>> = vec![None; count];
+        let mut failures: Vec<Uncolourable> = Vec::new();
+        let mut failed_nodes: HashSet<usize> = HashSet::new();
         // the most constrained class first, so a word is not left with what
         // the bytes took
         let mut order: Vec<usize> = (0..count).collect();
@@ -620,6 +624,9 @@ impl<T: Target> GraphColoring<T> {
             let node = find(&mut parent, v);
             if node >= count {
                 assigned[v] = Some(T::view(colour[&node], function.classes[v]));
+                continue;
+            }
+            if failed_nodes.contains(&node) {
                 continue;
             }
             if !colour.contains_key(&node) {
@@ -641,11 +648,16 @@ impl<T: Target> GraphColoring<T> {
                                     .is_some_and(|c| wanted.iter().any(|candidate| T::overlaps(*c, *candidate)))
                         })
                         .collect();
-                    return Err(Uncolourable { vreg: v as u32, crowd, blockers });
+                    failed_nodes.insert(node);
+                    failures.push(Uncolourable { vreg: v as u32, crowd, blockers });
+                    continue;
                 };
                 colour.insert(node, chosen);
             }
             assigned[v] = Some(T::view(colour[&node], function.classes[v]));
+        }
+        if !failures.is_empty() {
+            return Err(failures);
         }
         Ok(Assignment(assigned.into_iter().map(|one| one.expect("every register is coloured")).collect()))
     }
