@@ -724,3 +724,39 @@ fn nothing_is_pushed_around_moves_before_a_call() {
     let text = compile(DIGITS, "digits");
     assert!(!text.contains("  pha\n"), "{text}");
 }
+
+/// A loop whose latch comes first in the layout: the latch's phi is read only on the edge back to
+/// the header, a block laid out right after it and before the body that writes the phi. It failed
+/// with "phi input was never written" (lz4, set 3). `fwd8` carries a byte, `fwd16` a word.
+fn forwarding(width: &str, extra: &str) -> String {
+    format!(
+        "define i8 @fwd{width}(i8 %n) {{\nentry:\n  %z = icmp eq i8 %n, 0\n  br i1 %z, label %done, label %head\n\
+         latch:\n  %f = phi {t} [ %g, %body ]\n  %k = phi i8 [ %h, %body ]\n  %c = icmp ult i8 %k, 100\n  \
+           br i1 %c, label %head, label %done\n\
+         head:\n  %fw = phi {t} [ %f, %latch ], [ 1, %entry ]\n  %kk = phi i8 [ %k, %latch ], [ 0, %entry ]\n  br label %body\n\
+         body:\n{ext}  %g = add {t} %fw, {kx}\n  %h = add i8 %kk, 7\n  br label %latch\n\
+         done:\n  %fe = phi {t} [ 0, %entry ], [ %f, %latch ]\n  %ke = phi i8 [ 0, %entry ], [ %k, %latch ]\n{tail}\
+           ret i8 %r\n}}",
+        t = if width == "8" { "i8" } else { "i16" },
+        ext = if width == "8" { "" } else { "  %kz = zext i8 %kk to i16\n" },
+        kx = if width == "8" { "%kk" } else { "%kz" },
+        tail = extra,
+    )
+}
+
+#[test]
+fn a_phi_forwarded_on_a_back_edge_is_known_before_its_block_is_laid_out() {
+    let byte = forwarding("8", "  %r = xor i8 %fe, %ke\n");
+    let word = forwarding(
+        "16",
+        "  %lo = trunc i16 %fe to i8\n  %hi16 = lshr i16 %fe, 8\n  %hi = trunc i16 %hi16 to i8\n  %x = xor i8 %lo, %ke\n  %r = xor i8 %x, %hi\n",
+    );
+    // n = 5 runs the body until k reaches 105; n = 0 skips the loop
+    for (ir, name, want) in [(&byte, "fwd8", 137), (&word, "fwd16", 139)] {
+        let text = compile(ir, name);
+        for (arg, expected) in [(5, want), (0, 0)] {
+            let setup = format!("  lda #{arg}\n  sta rc2\n");
+            assert_eq!(common::run_with(&format!("alloc-{name}-{arg}"), &format!("{setup}  jsr {name}\n"), &text), expected, "{name}({arg})");
+        }
+    }
+}
