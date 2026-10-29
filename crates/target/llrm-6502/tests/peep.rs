@@ -49,3 +49,35 @@ fn a_call_argument_store_is_kept() {
     let call = lines(&out).iter().position(|l| *l == "jsr g").unwrap();
     assert!(lines(&out)[..call].contains(&"sta rc2"), "{out}");
 }
+
+/// A compare whose flags are saved and restored around other loads is done again at the branch:
+/// `php; pla; sta f` and `lda f; pha; plp` go (the max8 loop spent 6 instructions and 12 cycles).
+#[test]
+fn a_saved_compare_is_redone_at_the_branch() {
+    let out = opt("f:\n  lda rc2\n  cmp rc3\n  php\n  pla\n  sta v_f_1\n  lda #9\n  sta rc4\n  lda v_f_1\n  pha\n  plp\n  bne f_x\n  rts\nf_x:\n  rts\n");
+    assert!(!out.contains("php") && !out.contains("plp"), "{out}");
+    let l = lines(&out);
+    let branch = l.iter().position(|x| *x == "bne f_x").unwrap();
+    assert_eq!(&l[branch - 2..branch], ["lda rc2", "cmp rc3"], "{out}");
+}
+
+/// ... but not when an operand is written in between: the redone compare would see the new value.
+#[test]
+fn a_saved_compare_is_kept_when_an_operand_changes() {
+    let out = opt("f:\n  lda rc2\n  cmp rc3\n  php\n  pla\n  sta v_f_1\n  lda #9\n  sta rc3\n  lda v_f_1\n  pha\n  plp\n  bne f_x\n  rts\nf_x:\n  rts\n");
+    assert!(out.contains("php") && out.contains("plp"), "{out}");
+}
+
+/// `x + 1` and `x - 1` in place are `inc` and `dec` (the `fib` and `popcount` counters).
+#[test]
+fn an_in_place_step_is_inc_or_dec() {
+    let out = opt("f:\n  clc\n  lda rc3\n  adc #1\n  sta rc3\n  sec\n  lda rc4\n  sbc #1\n  sta rc4\n  lda #0\n  rts\n");
+    assert_eq!(lines(&out), ["f:", "inc rc3", "dec rc4", "lda #0", "rts"]);
+}
+
+/// A step whose result is read from A (here by `rts`) keeps the add: `inc` would leave A unchanged.
+#[test]
+fn a_step_whose_a_is_read_is_kept() {
+    let out = opt("f:\n  clc\n  lda rc3\n  adc #1\n  sta rc3\n  rts\n");
+    assert!(out.contains("adc #1"), "{out}");
+}

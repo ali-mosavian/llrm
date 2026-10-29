@@ -698,6 +698,90 @@ fn rename(
     Some(format!("{reg}{tail}"))
 }
 
+/// `x + 1` and `x - 1` in place (`clc; lda c; adc #1; sta c`) as `inc c` / `dec c`, when A and the
+/// carry are not read afterwards.
+fn in_place_steps(
+    lines: &mut Vec<Line>,
+    result_rcs: &[usize],
+) -> Option<bool> {
+    fn ins(l: &Line) -> Option<(&str, &str)> {
+        match l {
+            Line::Ins(op, arg) => Some((op.as_str(), arg.as_str())),
+            _ => None,
+        }
+    }
+    let flow = liveness(lines, result_rcs)?;
+    for at in 0..lines.len().saturating_sub(3) {
+        let window: Vec<_> = (0..4).map(|k| ins(&lines[at + k])).collect();
+        let (carry, load, step, store) = match window[..] {
+            [Some((c @ ("clc" | "sec"), _)), Some(("lda", cell)), Some((a @ ("adc" | "sbc"), k)), Some(("sta", to))] => (c, cell, (a, k), to),
+            [Some(("lda", cell)), Some((c @ ("clc" | "sec"), _)), Some((a @ ("adc" | "sbc"), k)), Some(("sta", to))] => (c, cell, (a, k), to),
+            _ => continue,
+        };
+        let (op, k) = step;
+        let inc = carry == "clc" && op == "adc" && k == "#1";
+        let dec = carry == "sec" && op == "sbc" && k == "#1" || carry == "clc" && op == "adc" && k == "#255";
+        if store != load || !matches!(place(load), Some(Place::Cell(_))) || !(inc || dec) {
+            continue;
+        }
+        let out = &flow.live_out[at + 3];
+        if out.contains("A") || out.contains("C") || out.contains("V") {
+            continue;
+        }
+        let instruction = Line::Ins((if inc { "inc" } else { "dec" }).into(), load.to_owned());
+        lines.splice(at..at + 4, [instruction]);
+        return Some(true);
+    }
+    Some(false)
+}
+
+/// A flag spill (`php; pla; sta f` after a compare, `lda f; pha; plp` before the branch) replaced by
+/// doing the compare again at the branch, when its two operands are not written in between and
+/// `f` is read nowhere else: three instructions and three more become two.
+fn redo_compares(lines: &mut Vec<Line>) -> bool {
+    fn ins(l: &Line) -> Option<(&str, &str)> {
+        match l {
+            Line::Ins(op, arg) => Some((op.as_str(), arg.as_str())),
+            _ => None,
+        }
+    }
+    for save in 2..lines.len().saturating_sub(2) {
+        let (Some(("php", _)), Some(("pla", _)), Some(("sta", cell))) = (ins(&lines[save]), ins(&lines[save + 1]), ins(&lines[save + 2])) else { continue };
+        if !is_virtual(cell) {
+            continue;
+        }
+        let (Some(("lda", source)), Some(("cmp", other))) = (ins(&lines[save - 2]), ins(&lines[save - 1])) else { continue };
+        let reads: Vec<usize> = (0..lines.len())
+            .filter(|&i| matches!(ins(&lines[i]), Some((op, arg)) if arg == cell && op != "sta"))
+            .collect();
+        let stores = (0..lines.len()).filter(|&i| matches!(ins(&lines[i]), Some(("sta", arg)) if arg == cell)).count();
+        let [load] = reads[..] else { continue };
+        if stores != 1 || load < save + 3 || !matches!((ins(&lines[load]), ins(&lines[load + 1]), ins(&lines[load + 2])), (Some(("lda", _)), Some(("pha", _)), Some(("plp", _)))) {
+            continue;
+        }
+        // straight line between, and neither operand written
+        let watched: Vec<String> = [source, other].iter().filter_map(|a| match place(a) {
+            Some(Place::Cell(c)) => Some(c),
+            _ => None,
+        }).collect();
+        let clean = lines[save + 3..load].iter().all(|l| match l {
+            Line::Label(_) => false,
+            Line::Ins(op, arg) => {
+                !is_branch(op) && !matches!(op.as_str(), "jsr" | "rts") && effect(op, arg, &[]).is_some_and(|e| e.defs.iter().all(|d| !watched.contains(d)))
+            }
+            Line::Dir(_) => true,
+        });
+        if !clean {
+            continue;
+        }
+        let redo = [Line::Ins("lda".into(), source.to_owned()), Line::Ins("cmp".into(), other.to_owned())];
+        lines.splice(load..load + 3, redo);
+        lines.drain(save..save + 3);
+        return true;
+    }
+    false
+}
+
 /// The function text `body` (labels and instructions) cleaned up; `result_rcs` are the registers
 /// beyond A and X that carry the result. `None` if it holds anything this pass does not model.
 pub fn optimize(
@@ -706,6 +790,7 @@ pub fn optimize(
 ) -> Option<String> {
     let mut lines = parse(body);
     effects(&lines, result_rcs)?;
+    while redo_compares(&mut lines) {}
     for _ in 0..6 {
         let mut changed = track_values(&mut lines);
         changed |= remove_dead(&mut lines, result_rcs)?;
@@ -717,6 +802,9 @@ pub fn optimize(
     for _ in 0..6 {
         let mut changed = track_values(&mut lines);
         changed |= remove_dead(&mut lines, result_rcs)?;
+        while in_place_steps(&mut lines, result_rcs)? {
+            changed = true;
+        }
         if !changed {
             break;
         }
