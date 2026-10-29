@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import shutil
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -733,8 +735,8 @@ def test_the_crates_whose_prs_blew_the_instruction_budget_have_a_ranking():
 
 def test_a_cut_step_reports_the_instructions_it_ran(tmp_path, monkeypatch):
     """The budget read 0 G for a unit step that run_cut killed and ~120 G for one that finished (llrm-codegen, twice): SIGKILL took perf's counts with it."""
-    if shutil.which("perf") is None:
-        pytest.skip("no perf")
+    if not ps.perf_counts():
+        pytest.skip("no perf counters")
     monkeypatch.undo()  # the real Meter: the autouse fixture swaps in a stub
     with ps.Meter() as counted:
         code, _ = ps.run_cut([sys.executable, "-c", "while True: pass"], 1.0, tmp_path)
@@ -751,3 +753,15 @@ def test_an_unranked_unit_step_runs_one_test_thread(monkeypatch):
     ps.unit_step("unranked", 5.0)(Path("."))
     ps.unit_step("ranked", 5.0)(Path("."))
     assert seen[0]["RUST_TEST_THREADS"] == "1" and seen[1] is None, seen
+
+
+def test_a_runner_whose_perf_cannot_count_still_runs_the_commands(tmp_path, monkeypatch):
+    """Gate run 3: perf installed, `instructions:u event is not supported`; every command the Meter wrapped died with perf's exit 255 before it ran."""
+    fake = tmp_path / "perf"
+    fake.write_text("#!/bin/sh\necho 'The instructions:u event is not supported.' >&2\nexit 255\n")
+    fake.chmod(0o755)
+    monkeypatch.undo()  # the real Meter: the autouse fixture swaps in a stub
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    with ps.Meter() as counted:
+        done = subprocess.run([sys.executable, "-c", "print(7)"], capture_output=True, text=True)
+    assert (done.returncode, done.stdout.strip(), counted.value) == (0, "7", None)
