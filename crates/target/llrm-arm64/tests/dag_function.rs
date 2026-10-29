@@ -190,6 +190,33 @@ fn integer_alu_selects_the_pins_opcodes() {
     }
 }
 
+/// Darwin passes every variadic argument on the stack, widened to 8 bytes: the
+/// pin's `-stop-after=finalize-isel` for `printf(s, i32, float, i8 signext)` has
+/// three `STR`s and no register argument but the format. The DAG path once put
+/// the `i32` in `w1`, and every `printf` of a value printed zero.
+#[test]
+fn variadic_arguments_go_on_the_stack_as_eight_bytes() {
+    let ir = "declare i32 @printf(ptr, ...)\n\
+define i32 @f(ptr %s, i32 %x, float %y, i8 %z) {\n  %r = call i32 (ptr, ...) @printf(ptr %s, i32 %x, float %y, i8 signext %z)\n  ret i32 %r\n}";
+    let mut got = selected(ir).unwrap().remove(0);
+    got.retain(|name| !matches!(*name, "IMPLICIT_DEF" | "INSERT_SUBREG"));
+    got.sort_unstable();
+    assert_eq!(got, ["ADJCALLSTACKDOWN", "ADJCALLSTACKUP", "BL", "FCVTDSr", "RET_ReallyLR", "SBFMXri", "STRDui", "STRXui", "STRXui"]);
+}
+
+/// An `sret` parameter is in `x8`, not `x0`; a `byval` one is in memory. The hook
+/// placed both as plain pointers, so `scale(sret %0, ptr %1, i64)` read its source
+/// from `x0` while the caller passed the result slot in `x8`. They are refused.
+#[test]
+fn sret_and_byval_arguments_are_refused_not_placed_as_pointers() {
+    let sret = "%t = type { i64, i64, i64 }\n\
+define void @f(ptr sret(%t) %r, ptr %s) {\n  store i64 1, ptr %r\n  ret void\n}";
+    assert!(selected(sret).expect_err("refused").contains("moves it"));
+    let call = "%t = type { i64, i64, i64 }\ndeclare void @g(ptr sret(%t), ptr)\n\
+define void @f(ptr %r, ptr %s) {\n  call void @g(ptr sret(%t) %r, ptr %s)\n  ret void\n}";
+    assert!(selected(call).expect_err("refused").contains("moves it"));
+}
+
 /// Scalar floats: arithmetic, compares, conversions, loads and stores select the
 /// pin's opcodes; names are its `-stop-after=finalize-isel` for the same IR.
 #[test]
@@ -242,6 +269,17 @@ fn float_constants_are_fmov_immediates_or_mov_pairs_and_a_pool_is_refused() {
     assert!(why.contains("ConstantPool"), "{why}");
 }
 
+/// `memcpy` once reached the x86 `rep movs` expansion and panicked with `no arm64
+/// register rcx`, which killed the whole compile in shadow mode. A target with no
+/// string instructions refuses it.
+#[test]
+fn memcpy_is_refused_not_expanded_with_x86_registers() {
+    let ir = "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 100, i1 false)\n  ret void\n}";
+    let why = selected(ir).expect_err("refused");
+    assert!(why.contains("mem"), "{why}");
+}
+
 mod emitted {
     use llrm_arm64::dag::emit::emit;
     use llrm_arm64::dag::function::select_function;
@@ -270,5 +308,16 @@ mod emitted {
         assert!(matches!(&ops[2], Op::I(Inst::AddSubShifted { width: Width::W, amount: 0, .. })), "{ops:?}");
         assert!(matches!(&ops[3], Op::Copy { dst: Reg::Gpr(g), .. } if g.0 == 0), "{ops:?}");
         assert!(matches!(&ops[4], Op::Return { uses, .. } if uses.len() == 1), "{ops:?}");
+    }
+
+    /// Real loops tested a 64-bit count with `CBZX`, a widening multiply with
+    /// `UMADDLrrr`, and an alloca with lifetime markers: the emitter had no row for
+    /// the first two and refused the third, so shadow mode fell back to the hand selector.
+    #[test]
+    fn cbz_x_umaddl_and_lifetime_markers_emit() {
+        machine("define i64 @f(i64 %a) {\nentry:\n  %c = icmp eq i64 %a, 0\n  br i1 %c, label %x, label %y\nx:\n  ret i64 1\ny:\n  ret i64 2\n}");
+        machine("define i64 @f(i32 %a, i32 %b) {\n  %x = zext i32 %a to i64\n  %y = zext i32 %b to i64\n  %r = mul i64 %x, %y\n  ret i64 %r\n}");
+        machine("declare void @llvm.lifetime.start.p0(i64, ptr)\ndeclare void @llvm.lifetime.end.p0(i64, ptr)\n\
+define i32 @f(i32 %a) {\n  %p = alloca i32\n  call void @llvm.lifetime.start.p0(i64 4, ptr %p)\n  store i32 %a, ptr %p\n  %v = load i32, ptr %p\n  call void @llvm.lifetime.end.p0(i64 4, ptr %p)\n  ret i32 %v\n}");
     }
 }

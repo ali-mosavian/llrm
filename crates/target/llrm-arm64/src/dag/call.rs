@@ -65,16 +65,23 @@ enum Location {
     Stack { offset: i64, bytes: u32 },
 }
 
-/// A part to place: its register type, the type of the whole value, and
-/// whether the value was split.
-type Part = (EVT, EVT, bool);
+/// A part to place: its register type, the type of the whole value, whether the
+/// value was split, and whether it is a variadic argument (`CC_AArch64_DarwinPCS_VarArg`:
+/// everything on the stack, in 8-byte slots).
+type Part = (EVT, EVT, bool, bool);
 
 /// The location of each part, and the bytes of stack they take.
 fn place(parts: &[Part]) -> (Vec<Location>, u64) {
     let (mut next, mut next_float, mut stack) = (0, 0, 0u64);
     let locations = parts
         .iter()
-        .map(|&(vt, arg_vt, split)| {
+        .map(|&(vt, arg_vt, split, variadic)| {
+            if variadic {
+                let align = if split { 16 } else { 8 };
+                let offset = stack.next_multiple_of(align);
+                stack = offset + 8;
+                return Location::Stack { offset: offset as i64, bytes: 8 };
+            }
             if vt.is_floating_point() {
                 if next_float < 8 {
                     next_float += 1;
@@ -139,9 +146,9 @@ impl TargetCalling for Aarch64Calling {
         let known = |arg_vt: EVT, split: bool| {
             if split { arg_vt == EVT::integer(128) } else { arg_vt.size_in_bits() <= 64 && (arg_vt.is_integer() || arg_vt.is_floating_point()) }
         };
-        let outs: Vec<Part> = outs.iter().map(|o| (dag.value_type(o.value), o.arg_vt, o.split)).collect();
-        let ins: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split)).collect();
-        if !outs.iter().chain(&ins).all(|&(vt, arg_vt, split)| integer(vt) && known(arg_vt, split)) {
+        let outs: Vec<Part> = outs.iter().map(|o| (dag.value_type(o.value), o.arg_vt, o.split, o.variadic)).collect();
+        let ins: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false)).collect();
+        if !outs.iter().chain(&ins).all(|&(vt, arg_vt, split, _)| integer(vt) && known(arg_vt, split)) {
             return Err("an arm64 argument or result that is no integer or float");
         }
         // A result is in registers.
@@ -162,28 +169,37 @@ impl TargetCalling for Aarch64Calling {
         outs: &[Out],
         ins: &[In],
     ) -> (SDValue, Vec<SDValue>) {
-        let parts: Vec<Part> = outs.iter().map(|o| (dag.value_type(o.value), o.arg_vt, o.split)).collect();
+        // A variadic argument is an `i64` or an `f64` (`CCPromoteToType`).
+        let values: Vec<SDValue> = outs
+            .iter()
+            .map(|out| match (out.variadic, dag.value_type(out.value)) {
+                (true, EVT::I32) => dag.get_node(out.ext.node(), EVT::I64, &[out.value]),
+                (true, EVT::Simple(MVT::F32)) => dag.get_node(ISD::FpExtend, EVT::Simple(MVT::F64), &[out.value]),
+                _ => out.value,
+            })
+            .collect();
+        let parts: Vec<Part> = outs.iter().zip(&values).map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic)).collect();
         let (locations, stack) = place(&parts);
         let bytes = stack.next_multiple_of(16);
         let mut chain = dag.get_callseq_start(chain, bytes);
         let (mut stores, mut registers, mut stack_pointer) = (Vec::new(), Vec::new(), None);
-        for (out, location) in outs.iter().zip(&locations) {
+        for (value, location) in values.iter().copied().zip(&locations) {
             match *location {
-                Location::Register(register) => registers.push((register, out.value)),
+                Location::Register(register) => registers.push((register, value)),
                 Location::Stack { offset, bytes } => {
                     // `LowerCall`: a store of the part at SP + offset
                     let sp = *stack_pointer.get_or_insert_with(|| dag.get_copy_from_phys_reg_plain(chain, reg::SP, EVT::I64));
                     let at = dag.get_constant(offset as u128, EVT::I64);
                     let address = dag.get_node(ISD::Add, EVT::I64, &[sp, at]);
                     let info = MemInfo {
-                        mem_vt: memory_type(bytes),
+                        mem_vt: if dag.value_type(value).is_floating_point() { dag.value_type(value) } else { memory_type(bytes) },
                         align: bytes,
                         volatile: false,
                         base: MemBase::CallArgument(offset as i32),
                         ext: None,
                         space: 0,
                     };
-                    stores.push(dag.get_store(chain, out.value, address, info));
+                    stores.push(dag.get_store(chain, value, address, info));
                 }
             }
         }
@@ -233,7 +249,7 @@ impl TargetCalling for Aarch64Calling {
         fixed: FixedObject,
         live_in: LiveIn,
     ) -> Vec<SDValue> {
-        let parts: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split)).collect();
+        let parts: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false)).collect();
         let (locations, _) = place(&parts);
         ins.iter()
             .zip(locations)
@@ -246,7 +262,7 @@ impl TargetCalling for Aarch64Calling {
                     // `LowerFormalArguments`: a load from the fixed object, extended to the part
                     let index = fixed(bytes, offset, true);
                     let address = dag.get_frame_index(EVT::I64, index);
-                    let mem_vt = memory_type(bytes);
+                    let mem_vt = if part.vt.is_floating_point() { part.vt } else { memory_type(bytes) };
                     let info = MemInfo {
                         mem_vt,
                         align: bytes,
