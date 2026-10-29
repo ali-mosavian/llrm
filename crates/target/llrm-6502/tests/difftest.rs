@@ -455,7 +455,11 @@ fn cap() -> String {
 /// cycles reached." and exits 126; that was matched as "Max number" and so read as the program's own
 /// exit code 126 (differential seeds 26 and 51: cc65 -O "agreed" with ours on a hang of both).
 fn run(bin: &Path) -> Result<Option<i32>, String> {
-    let out = Command::new("sim65").args(["-x", &cap()]).arg(bin).output().map_err(|e| e.to_string())?;
+    run_within(bin, &cap())
+}
+
+fn run_within(bin: &Path, cycles: &str) -> Result<Option<i32>, String> {
+    let out = Command::new("sim65").args(["-x", cycles]).arg(bin).output().map_err(|e| e.to_string())?;
     if String::from_utf8_lossy(&out.stderr).contains("Maximum number of cycles") {
         return Ok(None);
     }
@@ -513,7 +517,7 @@ fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i3
         let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut selection = select_function(&module, name, Cpu::Mos6502)?;
             selection.zero_page = platform.zero_page;
-            if seed % 3 == 0 {
+            if seed % 3 == 0 || std::env::var("DIFF_SIZE").is_ok() {
                 selection.tuning = Tuning::SIZE;
             }
             function_text(&module, name, &selection)
@@ -753,8 +757,6 @@ fn a_program_that_hits_the_cycle_cap_has_no_exit_code() {
     let dir = work(u64::MAX - 2);
     std::fs::write(dir.join("spin.c"), "int main(void) { for (;;) ; }\n").unwrap();
     tool(&dir, "cl65", &["-t", "sim6502", "-o", "spin.bin", "spin.c"]).expect("builds");
-    // SAFETY: tests of this file read DIFF_CAP only here
-    unsafe { std::env::set_var("DIFF_CAP", "100000") };
-    assert_eq!(run(&dir.join("spin.bin")), Ok(None));
+    assert_eq!(run_within(&dir.join("spin.bin"), "100000"), Ok(None));
     let _ = std::fs::remove_dir_all(&dir);
 }
