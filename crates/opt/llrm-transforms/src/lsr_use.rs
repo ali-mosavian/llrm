@@ -535,16 +535,15 @@ impl Cost {
         self.c.num_regs == u32::MAX
     }
 
-    /// `isLess`: fewer instructions first (`-lsr-insns-cost` is on), then the
-    /// target's order.
+    /// `isLess`: the target's order. The pin ranks by instructions first only
+    /// when `-lsr-insns-cost` is on the command line
+    /// (`getNumOccurrences() > 0`), which nothing here passes; x86 puts them
+    /// first in its own `isLSRCostLess`, AArch64 second.
     pub fn is_less(
         &self,
         tti: &dyn Tti,
         other: &Cost,
     ) -> bool {
-        if self.c.insns != other.c.insns {
-            return self.c.insns < other.c.insns;
-        }
         tti.is_lsr_cost_less(&self.c, &other.c)
     }
 
