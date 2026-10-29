@@ -21,7 +21,7 @@ use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_wi
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
-use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
+use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::interp::Selector;
 
@@ -137,8 +137,18 @@ impl SchedInfo for M68kSched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
-    fn source_order(&self) -> bool {
-        true
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKDOWN))
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKUP))
+    }
+
+    /// M68k does not enable the machine scheduler: `createDefaultScheduler`
+    /// gives it the ILP list scheduler.
+    fn preference(&self) -> Preference {
+        if std::env::var_os("LLRM_M68K_SOURCE_SCHED").is_some() { Preference::Source } else { Preference::Ilp }
     }
 }
 
