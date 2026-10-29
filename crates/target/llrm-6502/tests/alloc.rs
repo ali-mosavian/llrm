@@ -668,3 +668,39 @@ fn a_constant_is_loaded_again_not_stored_to_a_slot() {
     assert!(!text.contains("ldx #10\n  stx s_"), "{text}");
     assert!(!text.contains("ldx #0\n  stx s_digits_4"), "{text}");
 }
+
+const BSEARCH8: &str = "define i8 @bsearch8(ptr %0, i8 %1, i8 %2) {
+entry:
+  %.not = icmp eq i8 %1, 0
+  br i1 %.not, label %exit, label %loop
+loop:
+  %lo = phi i8 [ %lo2, %loop ], [ 0, %entry ]
+  %hi = phi i8 [ %hi2, %loop ], [ %1, %entry ]
+  %t4 = zext i8 %hi to i16
+  %t5 = zext i8 %lo to i16
+  %t6 = add nuw nsw i16 %t5, %t4
+  %t7 = lshr i16 %t6, 1
+  %t8 = getelementptr inbounds nuw i8, ptr %0, i16 %t7
+  %t9 = load i8, ptr %t8
+  %t10 = icmp ult i8 %t9, %2
+  %t11 = trunc nuw i16 %t7 to i8
+  %t12 = add nuw i8 %t11, 1
+  %hi2 = select i1 %t10, i8 %hi, i8 %t11
+  %lo2 = select i1 %t10, i8 %t12, i8 %lo
+  %t13 = icmp ult i8 %lo2, %hi2
+  br i1 %t13, label %loop, label %exit
+exit:
+  %r = phi i8 [ 0, %entry ], [ %lo2, %loop ]
+  ret i8 %r
+}";
+
+/// The arguments spilled in the entry block were copied slot to slot through
+/// a register, each copy in a slot of its own: eight slots and a load and a
+/// store per copy (bsearch8, 152 bytes, set 2). Copies of one value share its
+/// slot.
+#[test]
+fn spilled_copies_of_an_argument_share_its_slot() {
+    let text = compile(BSEARCH8, "bsearch8");
+    let slots = text.lines().filter(|line| line.contains(": .res")).count();
+    assert!(slots <= 5, "{slots} slots\n{text}");
+}
