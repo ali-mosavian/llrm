@@ -13,6 +13,12 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: No build slot on a hosted runner
+      if: runner.environment == 'github-hosted'
+      shell: bash
+      run: |
+        # tools/buildslot.py refuses cargo where ~/.local/bin/buildslot is missing; only tinytim (self-hosted) has it, and keeps the rule.
+        echo "BUILDSLOT_BYPASS=1" >> "$GITHUB_ENV"
     - name: apt
       shell: bash
       run: |
@@ -74,6 +80,14 @@ runs:
       with:
         path: ${{ steps.clang.outputs.m16 }}
         key: llrm-${{ steps.clang.outputs.m16_name }}
+    - name: The clang trees, from the toolchain workflow's artifacts where the cache missed
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # A pull request into main cannot read the caches saved on feat/parity (toolchain/clangfetch.sh). A tree with no artifact either stays missing.
+        sh toolchain/clangfetch.sh "llrm-${{ steps.clang.outputs.pin_name }}" "${{ steps.clang.outputs.pin }}" || true
+        sh toolchain/clangfetch.sh "llrm-${{ steps.clang.outputs.m16_name }}" "${{ steps.clang.outputs.m16 }}" || true
     - name: The pin's tools tree (built by the pintools job)
       if: inputs.pintools == 'required'
       shell: bash
