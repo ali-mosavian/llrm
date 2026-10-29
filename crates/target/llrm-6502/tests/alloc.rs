@@ -986,3 +986,25 @@ fn a_word_shift_left_of_nine_or_more_shifts_one_byte() {
         }
     }
 }
+
+/// `q = p + 1; x = *p`: the read of the old pointer follows the bump in the IR, so `p` stayed live
+/// across it and the bump took a copy of the pair (`lda rc2; sta rc6; lda rc3; sta rc7`, then `inc
+/// rc6`: 170 bytes of lz4). The read goes first and the bump is done in `p`'s own cells. A load
+/// and a store through the old pointer, in a loop.
+#[test]
+fn a_read_of_the_old_pointer_goes_before_its_bump() {
+    for (name, body, result) in [
+        ("rd", "%v = load volatile i8, ptr %q\n  %s2 = add i8 %s, %v\n", "%s2"),
+        ("wr", "store volatile i8 %i, ptr %q\n  %s2 = add i8 %s, %i\n", "%s2"),
+    ] {
+        let ir = format!(
+            "define i8 @{name}(ptr %p, i8 %n) {{\nentry:\n  br label %loop\nloop:\n  %q = phi ptr [ %p, %entry ], [ %q2, %loop ]\n  \
+             %i = phi i8 [ 0, %entry ], [ %i2, %loop ]\n  %s = phi i8 [ 0, %entry ], [ %s2, %loop ]\n  %q2 = getelementptr i8, ptr %q, i16 1\n  \
+             {body}  %i2 = add i8 %i, 1\n  %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  ret i8 {result}\n}}"
+        );
+        let text = compile(&ir, name);
+        // the cell that is bumped is the one the pointer was read through
+        let bumped = text.lines().find_map(|l| l.trim().strip_prefix("inc rc")).map(str::to_owned).expect("an inc rc");
+        assert!(text.contains(&format!("(rc{bumped})")), "{name}: {text}");
+    }
+}

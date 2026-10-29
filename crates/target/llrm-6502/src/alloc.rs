@@ -15,9 +15,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 use llrm_lir::registers::RegId;
-use llrm_spike_mf::regalloc::successors;
+use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
-use llrm_spike_mf::{Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, remove_identity_copies};
+use llrm_spike_mf::{Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, remove_identity_copies, reschedule_kills};
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::emit::{MInst, Operand as Machine, address, spill};
@@ -623,7 +623,9 @@ impl Builder {
             if k != 1 {
                 operands.push(Operand::Def(Reg::Phys(reg::A)));
             }
-            self.push(Inst::new(Kind::Op("PADD"), operands));
+            let mut bump = Inst::new(Kind::Op("PADD"), operands);
+            bump.ties = vec![(0, 1)];
+            self.push(bump);
             return Ok(());
         }
         let (al, ah) = self.read_word(a)?;
@@ -1740,6 +1742,9 @@ fn emit_with<const STACK: bool>(
     labels: &[Vec<String>],
     cmos: bool,
 ) -> Result<(String, Vec<(String, usize)>, bool), String> {
+    // a bump of a pointer is done in place; the read of the old pointer that follows it goes first
+    reschedule_kills::<Mos<STACK>>(&mut function);
+    two_address(&mut function);
     let (assignment, mut slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;
     let saved = save_preserved::<STACK>(&mut function, &assignment, &mut slots);
     let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
