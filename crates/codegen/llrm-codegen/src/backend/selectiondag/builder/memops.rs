@@ -796,6 +796,14 @@ impl Builder<'_> {
                     (None, Some(bytes)) if self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4) => {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
+                    // no `memset` to call: dwords, as the old selector fills; x86
+                    // takes them unaligned. Only a size of whole dwords (a tail
+                    // costs the bytes the dwords save, and a far one cannot be
+                    // named) and not for size: `xor eax, eax` is a byte more
+                    // than `xor al, al`.
+                    (None, Some(bytes)) if !opt_size && !self.runtime_has("memset") && bytes % 4 == 0 => {
+                        self.rep_stos(root, dst, other, bytes, 4)?
+                    }
                     _ if !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
                 }
@@ -1276,7 +1284,9 @@ impl Builder<'_> {
                 _ => (1, size, value),
             }
         } else if let Some(byte) = self.dag.constant(value) {
-            let block = alignment.min(word);
+            // `getOptimalRepType`: a dword at most on a target with 32-bit
+            // registers, whatever its pointers.
+            let block = alignment.min(word.max(4));
             let mut pattern = byte as u64 & 255;
             if block >= 2 {
                 pattern |= pattern << 8;

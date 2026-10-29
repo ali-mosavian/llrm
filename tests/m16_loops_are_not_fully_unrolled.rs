@@ -69,3 +69,25 @@ fn at_o2_a_mid_sized_callee_with_several_callers_stays_a_call() {
     let text = std::fs::read_to_string(directory.join("a.s")).unwrap();
     assert!(text.matches("call ").count() >= 3, "{text}");
 }
+
+/// With no `memset` in the runtime a constant zeroing is dword fills: 1024
+/// bytes were `mov cx, 1024; rep stosb` (4 times the clocks of the old
+/// selector's `mov cx, 256; rep stosd`; sieve).
+#[test]
+fn at_o2_a_1024_byte_zeroing_is_rep_stosd() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(
+        directory.join("z.c"),
+        "extern void use(char *p);\nvoid f(void) { char b[1024]; __builtin_memset(b, 0, 1024); use(b); }\n",
+    )
+    .unwrap();
+    let output = common::cc::llrm_c()
+        .current_dir(directory)
+        .args(["-O2", "-m16", "-march=i386", "-S", "-o", "z.s", "z.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(directory.join("z.s")).unwrap();
+    assert!(text.contains("rep stosd") && text.contains("mov cx, 256"), "{text}");
+}
