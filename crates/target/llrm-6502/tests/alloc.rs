@@ -1206,3 +1206,49 @@ fn a_byte_select_loads_once_when_a_holds_a_value_or_the_condition_is_the_carry()
         }
     }
 }
+
+/// Two selects on one compare with a subtraction between them compared twice (`lda b; cmp a`
+/// again, 4 bytes, in gcd's loop), because the subtraction sets the carry. The second select now
+/// follows the first and reads its carry.
+#[test]
+fn two_selects_on_one_carry_compare_make_the_compare_once() {
+    let ir = "define i8 @split(i8 %a, i8 %b) {
+  %gt = icmp ugt i8 %a, %b
+  %x = select i1 %gt, i8 %b, i8 0
+  %p = sub i8 %a, %x
+  %y = select i1 %gt, i8 0, i8 %a
+  %q = sub i8 %b, %y
+  %r = xor i8 %p, %q
+  ret i8 %r
+}";
+    let text = compile(ir, "split");
+    assert_eq!(text.matches("cmp ").count(), 1, "the compare is made twice:\n{text}");
+    for (a, b) in [(5u8, 3u8), (3, 5), (4, 4), (200, 7), (0, 9), (255, 0)] {
+        let (x, y) = if a > b { (b, 0) } else { (0, a) };
+        let want = (a - x) ^ (b - y);
+        let setup = set("rc2", a.into()) + &set("rc3", b.into());
+        assert_eq!(common::run_with(&format!("alloc-split-{a}-{b}"), &format!("{setup}  jsr split\n"), &text), want.into());
+    }
+}
+
+/// Sibling: a select on a zero flag is not shared (its loads set the zero flag, so a second
+/// select would read the wrong one); both selects still pick by the one compare.
+#[test]
+fn two_selects_on_an_equality_still_pick_by_it() {
+    let ir = "define i8 @same(i8 %a, i8 %b) {
+  %eq = icmp eq i8 %a, %b
+  %x = select i1 %eq, i8 7, i8 %b
+  %p = sub i8 %a, %x
+  %y = select i1 %eq, i8 %a, i8 9
+  %q = add i8 %b, %y
+  %r = xor i8 %p, %q
+  ret i8 %r
+}";
+    let text = compile(ir, "same");
+    for (a, b) in [(5u8, 3u8), (4, 4), (0, 0), (200, 7), (9, 9)] {
+        let (x, y) = if a == b { (7u8, a) } else { (b, 9) };
+        let want = a.wrapping_sub(x) ^ b.wrapping_add(y);
+        let setup = set("rc2", a.into()) + &set("rc3", b.into());
+        assert_eq!(common::run_with(&format!("alloc-same-{a}-{b}"), &format!("{setup}  jsr same\n"), &text), want.into());
+    }
+}
