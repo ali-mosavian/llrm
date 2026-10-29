@@ -100,6 +100,9 @@ const KERNELS2: &[Kernel] = &[
     k("schr", &[P("str", 0), B(111)], false, 4),
 ];
 
+/// The C of `lz4.s` on `lz`, decompressing to `buf`; the answer is the length written.
+const KERNELS3: &[Kernel] = &[k("lz4", &[P("lz", 0), P("buf", 0), W(14)], true, 14)];
+
 fn work(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bench").join(name);
     std::fs::create_dir_all(&dir).unwrap();
@@ -199,6 +202,9 @@ fn driver(
     s.push_str("  rts\n.segment \"DATA\"\nbuf:\n_buf:\n");
     s.push_str(&format!("  .byte {}\n", BUF.map(|b| b.to_string()).join(",")));
     s.push_str("str:\n_str:\n  .byte \"hello world\",0\ntab:\n_tab:\n  .byte 2,5,8,11,14,17,20,23\n");
+    // an LZ4 stream: "abc" and a 4-byte match at distance 3 ("abcabca"), "d" and a 5-byte match at
+    // distance 2 ("abcabcad" + "adada"), then the literal "e": 14 bytes
+    s.push_str("lz:\n_lz:\n  .byte $30,97,98,99,3,0,$11,100,2,0,$10,101\n.export lz, _lz\n");
     s.push_str(".export str, _str, tab, _tab\n");
     s.push_str(".segment \"BSS\"\ncnt: .res 1\n");
     s
@@ -501,6 +507,35 @@ fn ours_row(
     measure(&dir, kernel, Abi::Ours, tag, bss)
 }
 
+/// cc65's hand-written `libsrc/common/lz4.s` (a162565e) as the best case for the same C: wrapped to
+/// return the length written, and linked with the cc65 library routines it calls (counted).
+fn hand_row(kernel: &Kernel) -> Result<Row, String> {
+    let dir = work(kernel.name);
+    let hand = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench/lz4.s")).unwrap();
+    let wrapper = ".export _lz4\n_lz4:\n  jsr _decompress_lz4\n  lda regsave\n  sec\n  sbc #<buf\n  tay\n  lda regsave+1\n  sbc #>buf\n  tax\n  tya\n  rts\n.import buf\n";
+    std::fs::write(dir.join("f-h.s"), format!("{wrapper}{hand}")).unwrap();
+    measure(&dir, kernel, Abi::Cc65, "h", 0)
+}
+
+fn table3() {
+    let mut out = String::from("| kernel | cc65 -O | cc65 lz4.s (hand) | ours | ours 65C02 |\n|---|---|---|---|---|\n");
+    let cell = |row: &Result<Row, String>| match row {
+        Ok(r) => format!("{} B, {} cy", r.bytes, r.cycles),
+        Err(why) => format!("n/a ({why})"),
+    };
+    for kernel in KERNELS3 {
+        let rows = [cc65_row(kernel, &["-O"], "c1"), hand_row(kernel), ours_row(kernel, "-O2", "o2"), ours_row(kernel, "-O2", "o2m")];
+        for row in &rows {
+            if let Err(why) = row {
+                eprintln!("{}: {why}", kernel.name);
+            }
+        }
+        out.push_str(&format!("| {} | {} |\n", kernel.name, rows.iter().map(cell).collect::<Vec<_>>().join(" | ")));
+    }
+    println!("{out}");
+    std::fs::write(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bench3.md"), &out).unwrap();
+}
+
 fn table(
     kernels: &[Kernel],
     file: &str,
@@ -545,4 +580,10 @@ fn the_table() {
 #[ignore = "needs cc65, clang and sim65"]
 fn the_second_table() {
     table(KERNELS2, "bench2.md");
+}
+
+#[test]
+#[ignore = "needs cc65, clang and sim65"]
+fn the_third_table() {
+    table3();
 }

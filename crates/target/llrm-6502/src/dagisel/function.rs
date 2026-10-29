@@ -81,6 +81,9 @@ pub struct Selection {
     pub locals: Vec<i64>,
     /// The subtarget it was selected for: emission expands to the same CPU.
     pub cpu: Cpu,
+    /// The width in bits of the register of every value that has one: a phi input is read on an
+    /// edge laid out before any block that names it (a loop's back edge).
+    pub widths: HashMap<u32, u32>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -114,7 +117,12 @@ pub fn select_function(
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
-    Ok(Selection { blocks: selected, locals, cpu })
+    let widths = info
+        .value_regs
+        .iter()
+        .map(|(value, reg)| (*reg, 8 * layout.alloc_size(&module.context.types, function.value(value).ty) as u32))
+        .collect();
+    Ok(Selection { blocks: selected, locals, cpu, widths })
 }
 
 /// The size of each static alloca, by the frame index `FunctionLoweringInfo`

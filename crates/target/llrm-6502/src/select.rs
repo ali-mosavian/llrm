@@ -58,6 +58,9 @@ struct Cells<'a> {
     words: Vec<String>,
     /// Virtual registers live across blocks, by number.
     virtual_regs: HashMap<u32, Operand>,
+    /// The width in bits of every value's register: a phi input can be read on an edge laid out
+    /// before the block that defines it (a loop's back edge).
+    widths: HashMap<u32, u32>,
     /// The laid-out frame (`frame.rs`), and how many of its objects are the
     /// fixed ones.
     frame: Layout,
@@ -136,6 +139,7 @@ pub fn function_items(
         bytes: Vec::new(),
         words: Vec::new(),
         virtual_regs: HashMap::new(),
+        widths: selection.widths.clone(),
         frame: laid_out,
         fixed,
         saved: HashMap::new(),
@@ -180,7 +184,7 @@ pub fn function_items(
                     let ISD::Machine(code) = one.dag.nodes()[node as usize].opcode else { unreachable!() };
                     let conditional = ![op::JMP, op::BRA, op::RET].contains(&(code as u16));
                     if !split {
-                        body.extend(phi_copies(one, conditional, &mut cells)?);
+                        body.extend(phi_copies(one, conditional, &mut cells).map_err(|why| format!("{why} (block {})", one.block.0))?);
                     }
                 }
                 for inst in lower(module, name, one, node, &mut values, &mut cells)? {
@@ -193,7 +197,7 @@ pub fn function_items(
             // others are blocks after the function.
             for edge in &one.edges {
                 let Some(to) = edge.to else { continue };
-                let copies = parallel_copy(&edge.copies, &mut cells)?;
+                let copies = parallel_copy(&edge.copies, &mut cells).map_err(|why| format!("{why} (block {} to {})", one.block.0, to.0))?;
                 if cells.branched_to.contains(&to.0) {
                     edges.push(Item::Label(edge_label(name, one.block.0, to.0)));
                     edges.extend(copies);
@@ -205,7 +209,7 @@ pub fn function_items(
         } else if !phis_done {
             // A `br` to the next block is dropped by layout: the block ends
             // with no terminator.
-            body.extend(phi_copies(one, false, &mut cells)?);
+            body.extend(phi_copies(one, false, &mut cells).map_err(|why| format!("{why} (block {})", one.block.0))?);
         }
     }
     body.extend(edges);
@@ -292,8 +296,14 @@ fn parallel_copy(
 ) -> Result<Vec<Item>, String> {
     let mut pending: Vec<(Operand, Operand, u32)> = Vec::new();
     for &(input, own) in copies {
-        let Some(from) = cells.virtual_regs.get(&input).cloned() else {
-            return Err(format!("phi input {input} was never written"));
+        let from = match cells.virtual_regs.get(&input) {
+            Some(cell) => cell.clone(),
+            None => {
+                let bits = *cells.widths.get(&input).ok_or_else(|| format!("phi input {input} is never named"))?;
+                let cell = cell_for(cells, bits);
+                cells.virtual_regs.insert(input, cell.clone());
+                cell
+            }
         };
         let Operand::Reg(name) = &from else { unreachable!() };
         let bits = if name.starts_with("w_") { 16 } else { 8 };

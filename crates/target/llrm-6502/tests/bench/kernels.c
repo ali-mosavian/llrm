@@ -89,3 +89,32 @@ unsigned sum16(const unsigned char *p, unsigned char n) { unsigned s = 0; unsign
 #ifdef K_schr
 unsigned char schr(const char *s, unsigned char c) { const char *p = s; while (*p && *p != (char)c) ++p; return *p ? p - s : 255; }
 #endif
+#ifdef K_lz4
+/* The C of cc65's libsrc/common/lz4.s (a162565e), with its memcpy as forward byte loops. */
+unsigned lz4(const unsigned char *in, unsigned char *out, unsigned outlen) {
+  unsigned char token, tmp;
+  unsigned offset;
+  unsigned char *start = out, *end = out + outlen, *src;
+  while (out < end) {
+    token = *in++;
+    offset = token >> 4;
+    token &= 0x0f;
+    token += 4;
+    if (offset == 15) {
+      do { tmp = *in++; offset += tmp; } while (tmp == 255);
+    }
+    while (offset) { *out++ = *in++; --offset; }
+    if (out >= end) break;
+    offset = *in++;
+    tmp = *in++;
+    offset += (unsigned)tmp << 8;
+    src = out - offset;
+    offset = token;
+    if (token == 19) {
+      do { tmp = *in++; offset += tmp; } while (tmp == 255);
+    }
+    while (offset) { *out++ = *src++; --offset; }
+  }
+  return out - start;
+}
+#endif
