@@ -1,5 +1,6 @@
-//! `-o -` writes standard output, as gcc's does: llrm-cc (llrm-c's command line), llrm-nib and llrm-qb
-//! each wrote a file named `-` in the working directory and printed nothing.
+//! `-o -` writes standard output, as gcc's does: llrm-cc (llrm-c's command
+//! line), llrm-nib and llrm-qb each wrote a file named `-` in the working
+//! directory and printed nothing.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,7 +21,8 @@ fn o_dash_writes_standard_output_in_every_frontend_and_no_file_named_dash() {
     for (tool, source, text) in sources {
         let scratch = tempfile::tempdir().unwrap();
         std::fs::write(scratch.path().join(source), text).unwrap();
-        // llrm-c is gone: its command line is served by llrm-cc over the pinned clang.
+        // llrm-c is gone: its command line is served by llrm-cc over the pinned
+        // clang.
         let made = if tool == "llrm-c" {
             common::cc::llrm_c()
                 .args(["-m16", "-S"])
