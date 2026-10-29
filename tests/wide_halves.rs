@@ -43,7 +43,8 @@ fn a_subtraction_borrows_through_the_halves() {
 
 /// `a << (n & 31)` on an i64 made the branchless fix-up for counts from 32
 /// (about 22 instructions: `shl; sar 31; xor -1; and; or` around the shifts)
-/// though bit five of the count is known zero. A count not masked keeps it.
+/// though bit five of the count is known zero. A count not masked keeps the
+/// test of bit five (`test cl, 32; je`, as the pin's i486 listing: no `cmov`).
 #[test]
 fn a_masked_i64_shift_count_needs_no_fixup_for_counts_from_32() {
     let masked = listing(
@@ -55,5 +56,5 @@ fn a_masked_i64_shift_count_needs_no_fixup_for_counts_from_32() {
         "unsigned long long f(unsigned long long a, unsigned long long n) { return a << n; }\n",
         &["-m32", "-O2"],
     );
-    assert!(free.contains("sar "), "{free}");
+    assert!(free.contains("shld") && free.contains(", 32") && free.contains("je "), "{free}");
 }

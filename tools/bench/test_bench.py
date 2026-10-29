@@ -431,7 +431,7 @@ def test_a_c_benches_os_layer_header_is_the_rows_not_a_stale_one(tmp_path):
         pytest.skip("no llrm-cc in the dist")
     variant = next(one for one in bench.variants(bench.BENCH / "stft_fixed") if one.language == "c")
     (_, arguments, _), *_ = bench.compiles(variant, "Os", tmp_path, "stft")
-    done = subprocess.run([str(bench.BIN / "llrm-cc"), *arguments, "-E", "-H", "-o", "/dev/null"], env=bench.c_environment(variant), capture_output=True, text=True)
+    done = subprocess.run([str(bench.BIN / "llrm-cc"), *arguments, "-E", "-H", "-o", str(tmp_path / "stft.i")], env=bench.c_environment(variant), capture_output=True, text=True)
     headers = [line for line in done.stderr.splitlines() if line.endswith("llrm_os.h")]
     assert headers and not any(str(tmp_path) in line for line in headers), done.stderr
 
@@ -602,6 +602,20 @@ def test_a_worse_count_fails_the_gate_and_nothing_else_does(monkeypatch, capsys,
     assert code == 0 and "BETTER" not in out and "0 problems" in out
 
 
+def test_the_run_tells_its_stages_on_stderr_and_keeps_stdout_for_the_verdict(monkeypatch, capsys, tmp_path):
+    """bench-3 of gate run 2 printed nothing for 45 minutes before the job timeout cancelled it: nobody could tell the build from the base pass from a DOSBox run."""
+    monkeypatch.setattr(sys, "argv", ["bench.py", "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
+    monkeypatch.setattr(bench, "judge", lambda *a: [])
+    monkeypatch.setattr(bench, "base_rows", lambda args: ({}, set(), "0" * 40))
+    monkeypatch.setattr(bench, "standing", lambda *a: [])
+    monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
+    bench.main()
+    seen = capsys.readouterr()
+    assert [word for word in ("measuring", "measured", "base counts", "base 000000000") if word not in seen.err] == []
+    assert "bench:" not in seen.out
+
+
 def test_record_keeps_the_heads_counts_without_measuring_a_base(monkeypatch, capsys, tmp_path):
     """The counts were recorded after the base was measured: a main push saved them 40 minutes in, and five pull requests measured the base alone."""
     def no_base(args):
@@ -613,36 +627,60 @@ def test_record_keeps_the_heads_counts_without_measuring_a_base(monkeypatch, cap
     assert code == 0 and list((tmp_path / "cache").glob("*-own.json")) and "problems" not in out
 
 
-def shard_file(folder, index, problems=(), measured=None):
+def shard_file(folder, index, measured=None):
     folder.mkdir(parents=True, exist_ok=True)
-    data = {"measured": measured or {}, "base": {}, "same": [], "problems": list(problems), "base_sha": "a" * 40}
-    (folder / f"shard-{index}.json").write_text(json.dumps(data))
+    (folder / f"shard-{index}.json").write_text(json.dumps({"measured": measured or {}}))
+
+
+def base_file(folder):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "base.json").write_text(json.dumps({"base": {}, "same": [], "base_sha": "a" * 40}))
 
 
 def test_the_merge_names_a_shard_that_left_no_result_and_fails(tmp_path, capsys):
     """A shard that died before writing its file would otherwise leave its rows unjudged and the run green."""
     shard_file(tmp_path, 1)
     shard_file(tmp_path, 3)
+    base_file(tmp_path)
     assert bench.merge(tmp_path, 3, ["O2"], False) == 1
     assert "bench shard 2 of 3" in capsys.readouterr().out
 
 
-def test_the_merge_prints_every_shards_problems_last_and_fails_on_one(tmp_path, capsys):
-    shard_file(tmp_path, 1, problems=[WORSE])
+def test_the_merge_names_a_missing_base_and_fails_instead_of_measuring_one(tmp_path, capsys, monkeypatch):
+    """Every shard built the base compiler and measured its slice of the base when the cache missed (gate run 2: bench-3 cancelled at 60 minutes, no output). The base is the bench-base leg's: without its file the merge fails, and measures nothing."""
+    shard_file(tmp_path, 1)
+    monkeypatch.setattr(bench, "base_rows", lambda args: (_ for _ in ()).throw(AssertionError("the merge measures no base")))
+    assert bench.merge(tmp_path, 1, ["O2"], False) == 1
+    assert "no result from bench-base" in capsys.readouterr().out
+
+
+def test_the_merge_prints_every_problem_last_and_fails_on_one(tmp_path, capsys, monkeypatch):
+    shard_file(tmp_path, 1)
     shard_file(tmp_path, 2)
+    base_file(tmp_path)
+    monkeypatch.setattr(bench, "judge", lambda *a: [WORSE])
+    monkeypatch.setattr(bench, "standing", lambda *a: [])
     assert bench.merge(tmp_path, 2, ["O2"], False) == 1
     lines = capsys.readouterr().out.splitlines()
     assert lines[-2] == f"FAIL {WORSE}" and lines[-1].endswith("1 problems")
 
 
-def test_a_shard_judges_and_writes_only_its_own_slice(monkeypatch, capsys, tmp_path):
+def test_a_shard_measures_and_writes_only_its_own_slice_and_never_touches_the_base(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(bench.shards, "of", lambda index, count: ["fib"])
     monkeypatch.setattr(sys, "argv", ["bench.py", "--shard", "2/3", "--json", str(tmp_path / "out"), "--work", str(tmp_path)])
     monkeypatch.setattr(bench, "measure_all", lambda select, *a, **k: {("fib", "c", "O2"): {"instructions": 5}} if select == ["fib"] else {})
-    monkeypatch.setattr(bench, "judge", lambda *a: [])
-    monkeypatch.setattr(bench, "base_rows", lambda args, only=None: ({("fib", "c", "O2"): {"instructions": 5}}, {"fib"}, "b" * 40))
+    monkeypatch.setattr(bench, "base_rows", lambda args: (_ for _ in ()).throw(AssertionError("a slice measures no base")))
     assert bench.main() == 0
-    assert json.loads((tmp_path / "out/shard-2.json").read_text())["measured"] == {"fib/c/O2": {"instructions": 5}}
+    assert json.loads((tmp_path / "out/shard-2.json").read_text()) == {"measured": {"fib/c/O2": {"instructions": 5}}}
+
+
+def test_the_base_leg_measures_the_base_once_and_writes_it_for_the_merge(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(sys, "argv", ["bench.py", "--shard", "base", "--json", str(tmp_path / "out"), "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda *a, **k: (_ for _ in ()).throw(AssertionError("the base leg measures no head")))
+    monkeypatch.setattr(bench, "base_rows", lambda args: ({("fib", "c", "O2"): {"instructions": 4}}, {"fib"}, "b" * 40))
+    assert bench.main() == 0
+    assert json.loads((tmp_path / "out/base.json").read_text()) == {"base": {"fib/c/O2": {"instructions": 4}}, "same": ["fib"], "base_sha": "b" * 40}
+    assert capsys.readouterr().out.splitlines()[-1].endswith(" 0 problems")
 
 
 def test_a_bless_records_references_only_and_needs_a_reason():
@@ -679,11 +717,10 @@ def test_two_prs_that_each_change_one_rows_count_are_judged_each_on_its_own_delt
     assert "instructions 95 > 90 (worse)" in judged(second, base_b)[0]  # rebased onto the first, it is judged on that base
 
 
-def _c_build_commands(monkeypatch, tmp_path, name, reads_attribute=True):
-    """The llrm-c commands `bench.build` runs for the C benchmark `name` at -O2."""
+def _c_build_commands(monkeypatch, tmp_path, name):
+    """The llrm-cc commands `bench.build` runs for the C benchmark `name` at -O2."""
     variant = next(one for directory in bench.benchmarks([name]) for one in bench.variants(directory) if one.language == "c")
     seen = []
-    monkeypatch.setattr(bench, "reads_noinline_attribute", lambda compiler: reads_attribute)
 
     def run(command, *args, **kwargs):
         seen.append(command)
@@ -710,13 +747,6 @@ def test_the_object_that_is_sized_has_no_pointer_in_it(monkeypatch, tmp_path):
     text = Path(sized[1]).read_text()
     assert "__attribute__((noinline)) long bench_rectwo(" in text and "volatile" not in text
     assert sized[sized.index("-o") + 1].endswith("x.obj") and counted[counted.index("-o") + 1].endswith("x.counted.obj")
-
-
-def test_a_compiler_that_cannot_read_the_noinline_attribute_gets_the_flag_not_a_failing_source(monkeypatch, tmp_path):
-    """The main dist's llrm-c hands C to wccq, which fails `__attribute__((noinline))` as E1169: all 48 C rows of the m16 -Os table were errors on main
-    and the C kernels went uncompared. Such a compiler is given the plain source and -fno-inline-functions."""
-    (sized,) = _c_build_commands(monkeypatch, tmp_path, "rectwo", reads_attribute=False)
-    assert "__attribute__" not in Path(sized[1]).read_text() and "-fno-inline-functions" in sized
 
 
 def test_the_m32_table_builds_llrm_with_no_inlining_flag_either():
