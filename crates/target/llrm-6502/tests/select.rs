@@ -123,7 +123,7 @@ cpu_tests!(w65c02, mos_w65c02, Cpu::W65c02);
 fn cmos_instructions_are_in_the_65c02_table_only() {
     use llrm_6502::dagisel::generated::{mos_mos6502 as nmos, mos_w65c02 as cmos};
     let has = |ops: &[(u16, &str)], name: &str| ops.iter().any(|(_, n)| *n == name);
-    for name in ["STZ8", "STZP", "BRA"] {
+    for name in ["STZP", "STZABS", "BRA"] {
         assert!(has(cmos::MACHINE_OPCODES, name), "{name} missing from the 65C02 table");
         assert!(!has(nmos::MACHINE_OPCODES, name), "{name} leaked into the NMOS table");
     }

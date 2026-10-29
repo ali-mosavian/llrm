@@ -79,6 +79,8 @@ pub struct Edge {
 pub struct Selection {
     pub blocks: Vec<Selected>,
     pub locals: Vec<i64>,
+    /// The subtarget it was selected for: emission expands to the same CPU.
+    pub cpu: Cpu,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -112,7 +114,7 @@ pub fn select_function(
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
-    Ok(Selection { blocks: selected, locals })
+    Ok(Selection { blocks: selected, locals, cpu })
 }
 
 /// The size of each static alloca, by the frame index `FunctionLoweringInfo`

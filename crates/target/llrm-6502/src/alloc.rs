@@ -723,9 +723,6 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
         {
             values.insert(d.clone(), *value);
         }
-        if *opcode == op::STZ8 {
-            values.insert(d.clone(), 0);
-        }
         if *opcode == op::LDI16
             && let Some(Machine::Imm(value)) = operands.get(1)
         {
@@ -869,12 +866,6 @@ pub fn build(
                     b.push(Inst::new(Kind::Op(step), vec![Operand::Def(acc), Operand::Use(acc)]));
                 }
                 b.copy(d, acc);
-            }
-            op::STZ8 => {
-                b.define(name(&o[0])?);
-                let d = b.byte(name(&o[0])?)?;
-                b.require(d, Class::MEM)?;
-                b.push(Inst::new(Kind::Op("STZ"), vec![Operand::Def(d)]));
             }
             op::STZABS => {
                 let symbol = address(&o[0], &o[1]).map_err(Unsupported)?;
@@ -1407,7 +1398,7 @@ fn remove_dead(function: &mut MFunction<Class>) {
                 .insts
                 .retain(
                     |inst| {
-                        let pure = matches!(inst.kind, Kind::Copy | Kind::Op("LDI" | "LDS" | "STZ"));
+                        let pure = matches!(inst.kind, Kind::Copy | Kind::Op("LDI" | "LDS"));
                         !(pure
                             && matches!(
                                 inst.operands.first(),
@@ -1604,13 +1595,15 @@ fn move_byte(
 }
 
 /// The function as ca65 lines (no label), with the zero-page slots the spills
-/// used, or an error from the allocator.
+/// used, or an error from the allocator. `cmos` is the 65C02 subtarget: a zero
+/// loaded into a cell is `stz`.
 pub fn emit(
     function: MFunction<Class>,
     labels: &[Vec<String>],
     stack: bool,
+    cmos: bool,
 ) -> Result<(String, Vec<(String, usize)>), String> {
-    if stack { emit_with::<true>(function, labels) } else { emit_with::<false>(function, labels) }
+    if stack { emit_with::<true>(function, labels, cmos) } else { emit_with::<false>(function, labels, cmos) }
 }
 
 /// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
@@ -1625,6 +1618,7 @@ fn adjust(
 fn emit_with<const STACK: bool>(
     mut function: MFunction<Class>,
     labels: &[Vec<String>],
+    cmos: bool,
 ) -> Result<(String, Vec<(String, usize)>), String> {
     let (assignment, slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;
     let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
@@ -1717,6 +1711,8 @@ fn emit_with<const STACK: bool>(
                     let d = regs[0];
                     if d == reg::A || d == reg::X || d == reg::Y {
                         writeln!(out, "  ld{} #{value}", register_name(d)).unwrap();
+                    } else if cmos && *value == 0 {
+                        writeln!(out, "  stz {}", register_name(d)).unwrap();
                     } else {
                         through_a(&mut out, a_live, spare, &format!("  lda #{value}\n  sta {}\n", register_name(d)));
                     }
@@ -1752,7 +1748,6 @@ fn emit_with<const STACK: bool>(
                     )
                     .unwrap();
                 }
-                (Kind::Op("STZ"), _) => writeln!(out, "  stz {}", register_name(regs[0])).unwrap(),
                 (Kind::Op("STZM"), [Operand::Symbol(symbol, _)]) => writeln!(out, "  stz {symbol}").unwrap(),
                 (Kind::Op("LDM"), [_, Operand::Symbol(symbol, _)]) => writeln!(out, "  lda {symbol}").unwrap(),
                 (Kind::Op("STM"), [_, Operand::Symbol(symbol, _)]) => writeln!(out, "  sta {symbol}").unwrap(),
