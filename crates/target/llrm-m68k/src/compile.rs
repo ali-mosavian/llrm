@@ -133,6 +133,16 @@ pub fn text_with(
 /// loop strength reduction, priced by [`M68k`]. (`llc` runs no `opt` pipeline;
 /// the bench's reference does not either.)
 pub fn mid_end(module: &Module) -> Result<Module, String> {
+    mid_end_described_by(module, &M68k::default(), Some(Rc::new(M68kMachine)))
+}
+
+/// [`mid_end`] with another target description: what a test compares the
+/// m68k one with.
+pub fn mid_end_described_by(
+    module: &Module,
+    tti: &dyn llrm_mir::tti::Tti,
+    machine: Option<Rc<dyn llrm_mir::target::Machine>>,
+) -> Result<Module, String> {
     use llrm_mir::datalayout::DataLayout;
     use llrm_mir::passes::{Declared, Outer};
     let mut module = module.clone();
@@ -145,11 +155,11 @@ pub fn mid_end(module: &Module) -> Result<Module, String> {
         .filter(|(_, _, function)| !function.is_declaration())
         .filter_map(|(_, global, _)| global.name.as_deref().map(str::to_owned))
         .collect();
-    let outer = Outer::of(&module, Some(Rc::new(M68kMachine)));
+    let outer = Outer::of(&module, machine);
     let mut declared = Declared::of(&module);
     for name in names {
         let (context, function) = module.function_mut(&name).ok_or("a function that vanished")?;
-        llrm_transforms::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &M68k, false);
+        llrm_transforms::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, tti, false);
     }
     Ok(module)
 }

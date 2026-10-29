@@ -33,7 +33,7 @@ impl Machine for M68kMachine {
     }
 
     fn tti(&self) -> Option<Rc<dyn Tti>> {
-        Some(Rc::new(M68k))
+        Some(Rc::new(M68k::default()))
     }
 
     fn spaces(&self) -> Spaces {
@@ -69,7 +69,10 @@ impl Machine for M68kMachine {
 
 /// The m68k `TargetTransformInfo`: the base class's answers.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct M68k;
+pub struct M68k {
+    /// The 68020's scaled index, `(d8, An, Xn*2/4/8)`; the 68000 has none.
+    pub scaled_index: bool,
+}
 
 impl Tti for M68k {
     fn name(&self) -> &'static str {
@@ -90,7 +93,8 @@ impl Tti for M68k {
         match scale {
             0 => true,
             1 => !(has_base_reg && base_offset != 0),
-            2 => !(has_base_reg || base_offset != 0),
+            2 if !self.scaled_index => !(has_base_reg || base_offset != 0),
+            2 | 4 | 8 => self.scaled_index,
             _ => false,
         }
     }

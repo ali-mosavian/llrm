@@ -13,6 +13,10 @@
 //! target choice, switched off by [`crate::compile::Options::overlay`] for the
 //! tests that compare with `llc`.
 //!
+//! The `(An)+` fold is one too: LLVM forms post-increment accesses in the
+//! indexed-load/store combines when the target marks them legal, and the pin's
+//! M68k marks none. Same exit, same switch.
+//!
 //! Encodings are written here by hand from the 68000 manual and checked
 //! against binutils `m68k-linux-gnu-as` in `tests/overlay.rs`.
 
