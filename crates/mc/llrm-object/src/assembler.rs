@@ -60,6 +60,7 @@ pub enum Cfi {
     DefCfaRegister { register: u16 },
     DefCfaOffset { offset: i64 },
     Offset { register: u16, offset: i64 },
+    Restore { register: u16 },
 }
 
 /// A piece of a section as the assembler lays it out (`MCFragment`): a label,

@@ -1261,3 +1261,34 @@ fn a_value_plus_a_constant_is_written_with_its_constant() {
     let dump = String::from_utf8_lossy(&dumped.stdout).into_owned();
     assert!(dump.contains("DW_OP_breg0 EAX+8, DW_OP_stack_value"), "{dump}");
 }
+
+/// A function that sets its frame up in a block past the entry (shrink-wrapped:
+/// bintree's `walk` at -O0 pushes `ecx` and `esi` where the early return does
+/// not) had no `.eh_frame` entry: 2 FDEs for 4 functions, where the pin has 4.
+/// Every entry starts and ends in the frame address the caller had
+/// (`CFA=ESP+4`): the exit of one function had opened the next one's at `16`
+/// (crc -Os), and a call that popped its own arguments left the address
+/// `8` too high at the exit (recmany -O0).
+#[test]
+fn every_function_of_an_m32_object_has_an_eh_frame_entry_from_and_back_to_the_callers_frame() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    for (program, level, functions) in [("bintree", "-O0", 4), ("crc", "-Os", 2), ("recmany", "-O0", 3)] {
+        let object = scratch.path().join("x.o");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("bench/{program}/{program}.c"));
+        let made = compile(&source, &["-m32", level, "-fobject-format=elf"], &object);
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        let dumped = Command::new(&dwarfdump).arg("--eh-frame").arg(&object).output().unwrap();
+        let dump = String::from_utf8_lossy(&dumped.stdout).into_owned();
+        let frames: Vec<&str> = dump.split(" FDE ").skip(1).collect();
+        assert_eq!(frames.len(), functions, "{program} {level}: {dump}");
+        for frame in frames {
+            let rows: Vec<&str> = frame.lines().filter(|line| line.contains(": CFA=ESP")).collect();
+            let (first, last) = (rows.first().unwrap(), rows.last().unwrap());
+            assert!(first.contains("CFA=ESP+4:") && last.contains("CFA=ESP+4:"), "{program} {level}: {frame}");
+        }
+    }
+}
