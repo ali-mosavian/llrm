@@ -911,3 +911,26 @@ fn saved_registers_are_pushed_and_the_rest_of_the_frame_follows() {
     let pinned = text_with(&module, "k", Cpu::M68000, Options::PINNED).expect("compiles");
     assert!(pinned.contains("suba.l\t#20, %sp\n\tmovem.l\t%d2-%d3/%a2, (8,%sp)"), "{pinned}");
 }
+
+fn library(name: &str) -> String {
+    let text = std::fs::read_to_string(format!("{}/bench/library/{name}.ll", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    text.lines().filter(|line| !line.starts_with("target datalayout")).collect::<Vec<_>>().join("\n").replace("@k(", "@f(")
+}
+
+/// bsearch's key is compared twice per trip (`==`, then `<`): two readers, so the argument fold
+/// (one reader only) kept the load, the register and, at `-Os`, a second callee-saved register
+/// to save (+4 B over gcc, 70 B). Expected: both compares read the slot, 64 B.
+#[test]
+fn an_argument_compared_twice_in_a_loop_is_read_from_its_slot_at_the_size_level() {
+    let size = Options { size: true, ..Options::default() };
+    assert!(compiled(&library("bsearch"), size).contains("cmp.l\t(16,%sp), %d"));
+    assert!(code_size(&library("bsearch"), size) <= 64);
+}
+
+/// muldiv reads `b` three times, as the outgoing arguments of three calls: folded, each is a 6 B
+/// memory-to-memory `move` where the register form is 4, and the function grew from 68 to 78 B.
+#[test]
+fn an_argument_read_three_times_keeps_its_register() {
+    let text = compiled(&library("muldiv"), Options::default());
+    assert!(!text.contains(",%sp), ("), "{text}");
+}
