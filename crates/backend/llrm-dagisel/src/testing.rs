@@ -27,6 +27,9 @@ pub struct Node {
 #[derive(Default)]
 pub struct TestDag {
     pub nodes: Vec<Node>,
+    /// The uses `users` and `each_user` have handed out, for a test that a
+    /// question about two uses does not list them all.
+    pub listed: std::cell::Cell<usize>,
 }
 
 impl TestDag {
@@ -215,9 +218,26 @@ impl Dag for TestDag {
         &self,
         value: SDValue,
     ) -> Vec<(u32, usize)> {
-        self.live()
+        let all: Vec<(u32, usize)> = self
+            .live()
             .flat_map(|(i, n)| n.ops.iter().enumerate().filter(move |(_, o)| **o == value).map(move |(k, _)| (i, k)))
-            .collect()
+            .collect();
+        self.listed.set(self.listed.get() + all.len());
+        all
+    }
+    fn each_user(
+        &self,
+        value: SDValue,
+        visit: &mut dyn FnMut(u32, usize) -> bool,
+    ) {
+        for (i, n) in self.live() {
+            for (k, _) in n.ops.iter().enumerate().filter(|(_, o)| **o == value) {
+                self.listed.set(self.listed.get() + 1);
+                if !visit(i, k) {
+                    return;
+                }
+            }
+        }
     }
     fn glued_user(
         &self,

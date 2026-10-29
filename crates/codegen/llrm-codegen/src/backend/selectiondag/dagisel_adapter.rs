@@ -553,6 +553,35 @@ impl Dag for DagisAdapter<'_> {
     ) -> Vec<(u32, usize)> {
         self.live_users(value)
     }
+    fn each_user(
+        &self,
+        value: PinValue,
+        visit: &mut dyn FnMut(u32, usize) -> bool,
+    ) {
+        // The use list in its own order, a user it names twice once: the users
+        // a question stops at are the first few, and only they are remembered.
+        let candidates = self.dag.use_candidates(value.node);
+        let mut seen: Vec<u32> = Vec::new();
+        let mut many: crate::support::hash::HashSet<u32> = Default::default();
+        for &user in candidates {
+            if self.dead.contains(&user) {
+                continue;
+            }
+            if seen.contains(&user) {
+                continue;
+            }
+            if seen.len() < 16 {
+                seen.push(user);
+            } else if !many.insert(user) {
+                continue;
+            }
+            for (operand, op) in self.dag.nodes()[user as usize].ops.iter().enumerate() {
+                if op.node == value.node && op.res == value.res && !visit(user, operand) {
+                    return;
+                }
+            }
+        }
+    }
     fn glued_user(
         &self,
         node: u32,

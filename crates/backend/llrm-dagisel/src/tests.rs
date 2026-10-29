@@ -2010,3 +2010,43 @@ mod x64_table {
         assert_eq!(options.pointer_type(), mvt::i64);
     }
 }
+
+mod x86_hooks_uses {
+    use super::*;
+    use crate::dag::Hooks;
+    use crate::testing::{Node, TestDag};
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+
+    /// A constant read by 200 selected nodes:
+    /// `shouldAvoidImmediateInstFormsForSize` stops at the second, where
+    /// the list of all of them was made for each constant asked (`equal` at
+    /// m16 -Os: `sd select` 6.8 -> 127.6 Minstr over 512 -> 1024
+    /// expressions).
+    #[test]
+    fn test_the_size_check_of_an_immediate_stops_at_its_second_use() {
+        let hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: true,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        let mut dag = TestDag::new();
+        let five = dag.make_constant(5, mvt::i32);
+        for _ in 0..200 {
+            dag.add(Node {
+                opcode: isd::ADD,
+                machine: Some(1),
+                vts: vec![mvt::i32],
+                ops: vec![five, five],
+                ..Node::default()
+            });
+        }
+        assert!(
+            hooks.should_avoid_immediate_inst_forms_for_size(&dag, five.node),
+            "two machine users argue for the register"
+        );
+        assert!(dag.listed.get() <= 8, "{} uses listed for a question about two", dag.listed.get());
+    }
+}

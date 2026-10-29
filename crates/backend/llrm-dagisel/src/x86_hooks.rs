@@ -562,31 +562,38 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         }
         let constant = (dag.opcode(node) == isd::Constant).then(|| dag.constant(SDValue::new(node, 0))).flatten();
         let mut use_count = 0;
-        let users: Vec<_> = (0..dag.num_values(node)).flat_map(|r| dag.users(SDValue::new(node, r as u8))).collect();
-        for (user, operand) in users {
-            if use_count >= 2 {
-                break;
-            }
-            // DEVIATE SD221 (m16): the pin has no 16-bit target. A call
-            // argument stored at real mode becomes `push imm`, 2 to 3 bytes
-            // against the register's `push r` (1 or 2) and the `mov` that
-            // makes it, held across the calls in a register the function
-            // saves; the store is not a use that argues for the register.
-            if self.options.address_mode == AddrMode::Real16 && dag.is_call_argument_store(user) {
-                continue;
-            }
-            // A machine node, or a store of the value: counts.
-            if dag.is_machine(user) || (dag.opcode(user) == isd::STORE && operand == 1) {
+        'values: for result in 0..dag.num_values(node) {
+            let mut stopped = false;
+            dag.each_user(SDValue::new(node, result as u8), &mut |user, operand| {
+                if use_count >= 2 {
+                    stopped = true;
+                    return false;
+                }
+                // DEVIATE SD221 (m16): the pin has no 16-bit target. A call
+                // argument stored at real mode becomes `push imm`, 2 to 3 bytes
+                // against the register's `push r` (1 or 2) and the `mov` that
+                // makes it, held across the calls in a register the function
+                // saves; the store is not a use that argues for the register.
+                if self.options.address_mode == AddrMode::Real16 && dag.is_call_argument_store(user) {
+                    return true;
+                }
+                // A machine node, or a store of the value: counts.
+                if dag.is_machine(user) || (dag.opcode(user) == isd::STORE && operand == 1) {
+                    use_count += 1;
+                    return true;
+                }
+                if dag.num_operands(user) != 2 {
+                    return true;
+                }
+                if constant.is_some_and(|c| i8::try_from(c).is_ok()) {
+                    return true;
+                }
                 use_count += 1;
-                continue;
+                true
+            });
+            if stopped {
+                break 'values;
             }
-            if dag.num_operands(user) != 2 {
-                continue;
-            }
-            if constant.is_some_and(|c| i8::try_from(c).is_ok()) {
-                continue;
-            }
-            use_count += 1;
         }
         use_count > 1
     }

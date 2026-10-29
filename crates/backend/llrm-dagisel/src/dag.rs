@@ -156,6 +156,19 @@ pub trait Dag {
         &self,
         value: SDValue,
     ) -> Vec<(u32, usize)>;
+    /// `for (SDNode *U : V->uses())`: the uses one by one until `visit` says
+    /// stop, where `users` lists them all first.
+    fn each_user(
+        &self,
+        value: SDValue,
+        visit: &mut dyn FnMut(u32, usize) -> bool,
+    ) {
+        for (user, operand) in self.users(value) {
+            if !visit(user, operand) {
+                break;
+            }
+        }
+    }
     /// `SDNode::getGluedUser`.
     fn glued_user(
         &self,
