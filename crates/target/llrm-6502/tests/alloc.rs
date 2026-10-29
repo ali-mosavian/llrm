@@ -1889,6 +1889,33 @@ fn spilled_bytes_read_by_alu_ops_keep_their_own_cells() {
     assert!(text.lines().filter(folded).count() > 0, "a spilled operand is read from its cell:\n{text}");
 }
 
+/// A byte shifted by 7 either way was seven one-bit shifts (1,692 runs of them in 100 differential
+/// programs: the `ck >> 15` of every checksum step); one bit is left, and four bytes make it.
+#[test]
+fn a_byte_shifted_by_seven_is_four_bytes() {
+    let ir = "@buf = external global [16 x i8]
+define i8 @right() {
+  %b = load i8, ptr @buf, align 1
+  %r = lshr i8 %b, 7
+  ret i8 %r
+}
+define i8 @left() {
+  %b = load i8, ptr @buf, align 1
+  %r = shl i8 %b, 7
+  ret i8 %r
+}";
+    let text = compile_within_ten_seconds(ir, "right") + &compile_within_ten_seconds(ir, "left");
+    assert!(!text.contains("lsr a\n  lsr a"), "{text}");
+    assert!(!text.contains("asl a\n  asl a"), "{text}");
+    for (first, right, left) in [(0x80, 1, 0), (0x01, 0, 0x80), (0xFF, 1, 0x80), (0x7E, 0, 0)] {
+        let data = format!(".export buf\nbuf: .byte {first},1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\n");
+        for (name, want) in [("right", right), ("left", left)] {
+            let got = common::run_with(&format!("alloc-shift7-{name}-{first}"), &format!("  jsr {name}\n"), &format!("{text}{data}"));
+            assert_eq!(got, want, "{name} of {first:#x}");
+        }
+    }
+}
+
 /// `freeze` selects to the generic `COPY`, which the selector had no description of ("no description
 /// of opcode 20": differential seeds 21 and 26 were rejected for it).
 #[test]

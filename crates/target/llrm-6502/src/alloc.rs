@@ -484,6 +484,12 @@ impl Builder {
             self.push(Inst::new(Kind::Op("SPLAT"), vec![Operand::Def(acc), Operand::Use(acc)]));
             return;
         }
+        // a logical shift by 7 leaves one bit: the carry out of the other end, rotated into a zero
+        if let ("LSR" | "ASL", 7) = (step, count) {
+            let one = if step == "LSR" { "TOPBIT" } else { "LOWBIT" };
+            self.push(Inst::new(Kind::Op(one), vec![Operand::Def(acc), Operand::Use(acc)]));
+            return;
+        }
         for _ in 0..count {
             self.push(Inst::new(Kind::Op(step), vec![Operand::Def(acc), Operand::Use(acc)]));
         }
@@ -2133,6 +2139,9 @@ fn emit_with<const STACK: bool>(
                 // the sign into every bit: the carry out of `asl` is the sign, `sbc #0` turns it into 0 or $FF
                 // and `eor` flips it
                 (Kind::Op("SPLAT"), _) => out.push_str("  asl a\n  lda #0\n  sbc #0\n  eor #$ff\n"),
+                // `x >> 7` and `x << 7` of a byte: four bytes, not seven shifts
+                (Kind::Op("TOPBIT"), _) => out.push_str("  asl a\n  lda #0\n  rol a\n"),
+                (Kind::Op("LOWBIT"), _) => out.push_str("  lsr a\n  lda #0\n  ror a\n"),
                 (Kind::Op("LDAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  lda {symbol},x").unwrap(),
                 (Kind::Op("STAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  sta {symbol},x").unwrap(),
                 (Kind::Op("SAVEC"), _) => out.push_str("  lda #0\n  rol a\n"),
