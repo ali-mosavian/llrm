@@ -43,3 +43,14 @@ def test_the_gcc_comparison_leaves_out_benches_that_read_files():
     """stft_* include bench_io.h, which needs llrm's OS layer: the 66-program comparison compiled them as plain C and stopped on `bench_create`."""
     included = [name for name, source in cc.programs.sources().items() if "bench_io.h" in source.read_text(errors="replace")]
     assert included == []
+
+
+def test_qcports_modules_are_compiled_as_borland_c_on_the_mirror_of_its_headers(tmp_path, monkeypatch):
+    """The cost gate (run 2) gave QCport the Watcom row and -I qctc/inc: dos.h's ^Z and `_asm { mov sp_now, sp }` were errors and `measure` failed."""
+    (tmp_path / "src/host").mkdir(parents=True)
+    (tmp_path / "src/host/dbg.c").write_text("int x;\n")
+    monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
+    monkeypatch.setenv("LLRM_BORLAND_INC", str(tmp_path / "bcinc"))
+    flags = cc.files(tmp_path)["qcport/dbg"][1]
+    assert "--target=x86_16-dos" in flags and "-fasm-blocks" in flags and "-D_asm=__asm" in flags
+    assert flags[flags.index("-isystem") + 1] == str(tmp_path / "bcinc") and "-nostdinc" in flags
