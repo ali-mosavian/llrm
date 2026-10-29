@@ -7,13 +7,19 @@ use crate::dagisel::function::select_function;
 use crate::dagisel::hooks::Cpu;
 use crate::expand::{Line, finish};
 use crate::mc;
-use crate::mfunc::emit;
-use crate::regalloc::{Allocate, GraphColoring, eliminate_phis, fold_reserved_copies, two_address};
+use crate::mfunc::{emit, expand_cmov};
+use crate::regalloc::{
+    allocate_spilling, branch_fold, eliminate_phis, fold_reserved_copies, machine_sink, remove_identity_copies,
+    two_address,
+};
 
 /// A line of the function: a label or an instruction.
+#[derive(Clone, Debug)]
 pub enum Item {
     Label(String),
     Inst(mc::Inst),
+    /// Bytes placed as they are: code assembled elsewhere, or data.
+    Bytes(Vec<u8>),
 }
 
 /// The function after selection, allocation and expansion: its label, then
@@ -28,12 +34,17 @@ pub fn items(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let blocks = select_function(module, name, cpu)?;
     let mut function = emit(name, &blocks)?;
+    expand_cmov(&mut function)?;
+    machine_sink(&mut function);
     eliminate_phis(&mut function);
     fold_reserved_copies(&mut function);
     two_address(&mut function);
-    let assignment = GraphColoring.allocate(&function)?;
+    let (assignment, slots) = allocate_spilling(&mut function, 0)?;
+    let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    remove_identity_copies(&mut function, &assignment);
+    branch_fold(&mut function);
     let mut out = vec![Item::Label(name.to_owned())];
-    for line in finish(&function, &assignment, number)? {
+    for line in finish(&function, &assignment, number, &slots)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
@@ -54,6 +65,7 @@ pub fn text(
         match item {
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
+            Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
         }
     }
     Ok(out)

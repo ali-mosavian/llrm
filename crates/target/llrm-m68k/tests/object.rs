@@ -35,7 +35,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[test]
 fn an_add_encodes_as_llvm_mc_does() {
-    let (code, _) = assemble(&function("add"), 0).unwrap();
+    let code = assemble(&function("add"), 0).unwrap().code;
     assert_eq!(hex(&code), "202f0004d0af00084e75");
 }
 
@@ -46,7 +46,7 @@ fn a_call_encodes_as_llvm_mc_does() {
         .iter()
         .filter_map(|item| match item {
             Item::Inst(inst) => Some(encode(inst).unwrap().bytes),
-            Item::Label(_) => None,
+            Item::Label(_) | Item::Bytes(_) => None,
         })
         .flatten()
         .collect();
@@ -56,7 +56,7 @@ fn a_call_encodes_as_llvm_mc_does() {
 /// The loop's `blt` is pc-relative, to a label two instructions in.
 #[test]
 fn a_loop_branch_is_resolved_as_llvm_mc_does() {
-    let (code, _) = assemble(&function("sum"), 0).unwrap();
+    let code = assemble(&function("sum"), 0).unwrap().code;
     assert_eq!(
         hex(&code),
         "9ffc0000000448ef000400007200242f00082001d081d2bc00000001b2826df44cef00040000dffc000000044e75"
@@ -108,4 +108,34 @@ fn a_call_with_a_byte_argument_exits_with_the_sum() {
     if let Some(code) = status("caller", &[40, 2], &["callee"]) {
         assert_eq!(code, 42);
     }
+}
+
+/// A pseudo-instruction has an empty encoding row; it encoded as zero bytes,
+/// so a select (`CMOV32r`) left no code and `max(7, 42)` exited with 7.
+#[test]
+fn a_pseudo_instruction_has_no_encoding() {
+    use llrm_m68k::mc::{Inst, Operand};
+    let pseudo = Inst { opcode: "CMOV32r", operands: vec![Operand::Reg(llrm_m68k::reg::D0)] };
+    assert!(encode(&pseudo).is_err());
+}
+
+/// A branch past 127 bytes, and a branch to the next instruction, take the
+/// 16-bit form as `llvm-mc` gives them (`beq.w`, `bra.w`). They stopped at
+/// "-202 does not fit 1 bytes" and encoded a zero displacement that reads as
+/// "16 bits follow".
+#[test]
+fn far_and_zero_displacement_branches_take_the_16_bit_form_as_llvm_mc_does() {
+    use llrm_m68k::mc::Operand::Symbol;
+    use llrm_m68k::object::item;
+    let items = vec![
+        Item::Label("k".to_owned()),
+        item("Beq8", vec![Symbol(".L1".to_owned(), 0)]),
+        Item::Bytes(vec![0; 200]),
+        Item::Label(".L1".to_owned()),
+        item("BRA8", vec![Symbol(".L2".to_owned(), 0)]),
+        Item::Label(".L2".to_owned()),
+        item("RTS", vec![]),
+    ];
+    let code = assemble(&items, 0).unwrap().code;
+    assert_eq!(hex(&code), format!("670000ca{}600000024e75", "00".repeat(200)));
 }
