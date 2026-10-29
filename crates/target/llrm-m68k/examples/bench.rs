@@ -58,6 +58,22 @@ fn text_of(
     bytes
 }
 
+/// The `.text` of `object`, which must hold leaf code: no relocation in it.
+fn leaf_text(
+    llvm: &Path,
+    object: &Path,
+) -> Vec<u8> {
+    let relocations = Command::new(llvm.join("llvm-objdump")).arg("-r").arg(object).output().unwrap();
+    let listing = String::from_utf8_lossy(&relocations.stdout).to_string();
+    let in_text = listing.split("RELOCATION RECORDS FOR").find(|part| part.trim_start().starts_with("[.text]"));
+    assert!(
+        !in_text.is_some_and(|part| part.contains("R_68K")),
+        "{} needs relocations: the bench kernels are leaf code",
+        object.display()
+    );
+    text_of(llvm, object)
+}
+
 fn llc(
     llvm: &Path,
     ir: &Path,
@@ -77,15 +93,37 @@ fn llc(
         .status()
         .unwrap();
     assert!(status.success(), "llc failed on {}", ir.display());
-    let relocations = Command::new(llvm.join("llvm-objdump")).arg("-r").arg(&object).output().unwrap();
-    let listing = String::from_utf8_lossy(&relocations.stdout).to_string();
-    let in_text = listing.split("RELOCATION RECORDS FOR").find(|part| part.trim_start().starts_with("[.text]"));
-    assert!(
-        !in_text.is_some_and(|part| part.contains("R_68K")),
-        "{} needs relocations: the bench kernels are leaf code",
-        ir.display()
+    leaf_text(llvm, &object)
+}
+
+/// The `.text` of the C kernel compiled by m68k gcc, unpacked without root into
+/// `$GCC_M68K` (default `~/scratch/gcc-m68k/root`); `None` when it is not
+/// there.
+fn gcc(
+    llvm: &Path,
+    source: &Path,
+    dir: &Path,
+    opt: &str,
+) -> Option<Vec<u8>> {
+    let root = PathBuf::from(
+        std::env::var("GCC_M68K").unwrap_or(format!("{}/scratch/gcc-m68k/root", std::env::var("HOME").ok()?)),
     );
-    text_of(llvm, &object)
+    let driver = root.join("usr/bin/m68k-linux-gnu-gcc");
+    if !driver.exists() {
+        return None;
+    }
+    let object = dir.join(format!("gcc{opt}.o"));
+    let status = Command::new(&driver)
+        .env("LD_LIBRARY_PATH", root.join("usr/lib/x86_64-linux-gnu"))
+        .arg(format!("-B{}/usr/lib/gcc-cross/m68k-linux-gnu/15/", root.display()))
+        .arg(format!("-B{}/usr/m68k-linux-gnu/bin/", root.display()))
+        .args(["-ffreestanding", "-nostdlib", "-fno-asynchronous-unwind-tables", "-mcpu=68000", opt, "-c"])
+        .arg(source)
+        .arg("-o")
+        .arg(&object)
+        .status()
+        .ok()?;
+    status.success().then(|| leaf_text(llvm, &object))
 }
 
 fn main() {
@@ -94,8 +132,10 @@ fn main() {
     let dir = std::env::temp_dir().join(format!("llrm-m68k-bench-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let kernel_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/kernels");
-    println!("| kernel | ours B | -O2 B | -Os B | ours insns | -O2 insns | -Os insns | result |");
-    println!("|---|---|---|---|---|---|---|---|");
+    println!(
+        "| kernel | ours B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | ours insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |"
+    );
+    println!("|---|---|---|---|---|---|---|---|---|---|---|---|");
     for (name, args, expected) in table() {
         let ir = kernel_dir.join(format!("{name}.ll"));
         let module = llrm_mir::parse::module(&source(name)).unwrap();
@@ -118,6 +158,16 @@ fn main() {
                 (vec![Item::Label("k".to_owned()), Item::Bytes(bytes)], size)
             }),
         ];
+        let mut variants = variants;
+        for opt in ["-Os", "-O2"] {
+            variants.push(match gcc(&llvm, &kernel_dir.join(format!("{name}.c")), &dir, opt) {
+                Some(bytes) => {
+                    let size = bytes.len();
+                    Ok((vec![Item::Label("k".to_owned()), Item::Bytes(bytes)], size))
+                }
+                None => Err("no gcc".to_owned()),
+            });
+        }
         for variant in variants {
             match variant {
                 Ok((code, size)) => {

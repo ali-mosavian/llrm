@@ -1,19 +1,40 @@
-# Results, 2026-10-29 11:28 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Results, 2026-10-29 11:37 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
-| kernel | ours B | -O2 B | -Os B | ours insns | -O2 insns | -Os insns | result |
-|---|---|---|---|---|---|---|---|
-| sum | 46 | 46 | 46 | 48 | 48 | 48 | 45 all |
-| popcount | 52 | 52 | 52 | 103 | 103 | 103 | 8 all |
-| max | 16 | 16 | 16 | 6 | 6 | 6 | 42 all |
-| absdiff | 22 | 22 | 22 | 7 | 7 | 7 | 42 all |
-| clamp | 26 | 26 | 26 | 9 | 9 | 9 | 42 all |
-| fib | 54 | 66 | 66 | 79 | 139 | 139 | 89 all |
-| gcd | 58 | 32 | 26 | 31 | 16 | 17 | 42 all |
-| arrsum | 56 | 64 | 64 | 105 | 153 | 153 | 80 all |
-| arrmax | 64 | 92 | 88 | 156 | 248 | 235 | 9 all |
-| countgt | 78 | 86 | 86 | 186 | 234 | 234 | 9 all |
-| strlen | 26 | 36 | 36 | 73 | 89 | 89 | 13 all |
-| copy | 64 | 42 | 42 | 76 | 59 | 59 | 33 all |
+gcc is m68k-linux-gnu-gcc 15 (`-mcpu=68000`), the Debian cross toolchain unpacked without root. Cycles are not
+modelled: "insns" are executed instructions, which price a 68000 `move` and a `muls` the same.
 
-Equal to llc: sum, popcount, max, absdiff, clamp. Smaller and faster: fib, arrsum, arrmax, countgt, strlen.
-Bigger and slower than llc: gcd (58 B vs 32/26; 31 vs 16 insns), copy (64 B vs 42; 76 vs 59 insns).
+| kernel | ours B | llc -O2 B | llc -Os B | gcc -Os B | gcc -O2 B | ours insns | llc -O2 | llc -Os | gcc -Os | gcc -O2 | result |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| sum | 46 | 46 | 46 | 16 | 18 | 48 | 48 | 48 | 43 | 44 | 45 all |
+| popcount | 52 | 52 | 52 | 22 | 22 | 103 | 103 | 103 | 85 | 85 | 8 all |
+| max | 16 | 16 | 16 | 16 | 16 | 6 | 6 | 6 | 5 | 5 | 42 all |
+| absdiff | 22 | 22 | 22 | 24 | 24 | 7 | 7 | 7 | 8 | 7 | 42 all |
+| clamp | 26 | 26 | 26 | 26 | 26 | 9 | 9 | 9 | 9 | 9 | 42 all |
+| fib | 54 | 66 | 66 | 22 | 28 | 79 | 139 | 139 | 64 | 67 | 89 all |
+| gcd | 58 | 32 | 26 | 26 | 28 | 31 | 16 | 17 | 17 | 16 | 42 all |
+| arrsum | 56 | 64 | 64 | 20 | 22 | 105 | 153 | 153 | 68 | 69 | 80 all |
+| arrmax | 64 | 92 | 88 | 26 | 32 | 156 | 248 | 235 | 97 | 100 | 9 all |
+| countgt | 78 | 86 | 86 | 42 | 42 | 186 | 234 | 234 | 168 | 123 | 9 all |
+| strlen | 26 | 36 | 36 | 18 | 20 | 73 | 89 | 89 | 57 | 44 | 13 all |
+| copy | 38 | 42 | 42 | 34 | 34 | 59 | 59 | 59 | 59 | 59 | 33 all |
+
+## Above llc -Os or gcc -Os (bytes / insns)
+
+| kernel | best reference | ours | gap |
+|---|---|---|---|
+| sum | 16 B gcc / 43 gcc | 46 / 48 | callee-saved `d2` kept for `n` (movem + suba/adda); `add.l #1` for `addq` |
+| popcount | 22 B / 85 gcc | 52 / 103 | not yet diagnosed |
+| max | 16 B / 5 gcc | 16 / 6 | one insn |
+| fib | 22 B / 64 gcc | 54 / 79 | not yet diagnosed |
+| gcd | 26 B / 16 llc | 58 / 31 | no machine sink / tail duplication / branch folding |
+| arrsum | 20 B / 68 gcc | 56 / 105 | callee-saved spills; `lsl`+indexed load for a post-increment; `add #1` |
+| arrmax | 26 B / 97 gcc | 64 / 156 | as arrsum |
+| countgt | 42 B / 123 gcc -O2 | 78 / 186 | as arrsum |
+| strlen | 18 B / 44 gcc -O2 | 26 / 73 | copy `d0`->`d1` kept; `cmpi.b #0` for `tst.b`; `add #1` |
+| copy | 34 B / 59 | 38 / 59 | 4 B |
+
+At or below both: absdiff, clamp.
+
+Causes seen in the asm (sum, arrsum, strlen): the pin's M68k .td has no `ADDQ`/`SUBQ` (its header marks them
+`[ ]`), so llc is no better; `tst` is not selected for a compare with 0; no loop strength reduction (gcc uses
+`(%a0)+`); loop invariants take callee-saved registers whose save/restore costs more than gcc's memory operand.
