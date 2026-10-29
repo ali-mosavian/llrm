@@ -75,6 +75,7 @@ fn frame_op(
 
 /// A line of the function: a block's label (its layout index) or an
 /// instruction.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Line {
     Label(usize),
     Inst(mc::Inst),
@@ -305,6 +306,7 @@ pub fn finish(
         lines = crate::overlay::drop_redundant_tests(lines);
         lines = crate::overlay::fold_post_increment(lines);
         lines = crate::chain::chain_post_increment(lines, &returned);
+        lines = crate::chain::loop_post_increment(lines);
     }
     Ok(lines)
 }
