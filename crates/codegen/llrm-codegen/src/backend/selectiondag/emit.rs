@@ -3630,6 +3630,15 @@ impl Emitter<'_, '_> {
         let base = self.address_register(group[0], Role::Base)?;
         let scale = self.constant(group[1])?;
         let index = self.address_register(group[2], Role::Index)?;
+        // A near pointer into the stack segment: `ss:[base+index*scale+disp]`.
+        let stack_segment = self.ctx.registers.stack_segment_register();
+        let through_ss = self.dag.node(group[4]).data == NodeData::PhysReg(stack_segment);
+        let overridden = |mut addr: Addr| {
+            if through_ss {
+                addr.segment = stack_segment.iced();
+            }
+            addr
+        };
         // A cell through ES is a far cell: the selector is the one loaded with
         // the offset it is based on.
         if self.is_es(group[4]) {
@@ -3677,8 +3686,8 @@ impl Emitter<'_, '_> {
             });
         }
         if let NodeData::Global { symbol, offset } = self.dag.node(group[3]).data {
-            let addr = self.ctx.globals.address(symbol, offset);
-            if self.address_register(group[4], Role::Segment)?.is_some() {
+            let addr = overridden(self.ctx.globals.address(symbol, offset));
+            if !through_ss && self.address_register(group[4], Role::Segment)?.is_some() {
                 return Err(EmitError::Unsupported("a segment override".to_owned()));
             }
             // A symbol takes a displacement field to carry its relocation, as
@@ -3689,10 +3698,10 @@ impl Emitter<'_, '_> {
             let table = self.jump_table(table)?;
             let mut address = Addr::new(crate::model::ir::Space::Segment, 0);
             address.index = table.id;
-            return Ok(Mem { base, index, scale, disp_width: 2, ..Mem::new(Some(address), cell_width) });
+            return Ok(Mem { base, index, scale, disp_width: 2, ..Mem::new(Some(overridden(address)), cell_width) });
         }
         if let NodeData::PoolIndex(entry, shift) = self.dag.node(group[3]).data {
-            if self.address_register(group[4], Role::Segment)?.is_some() {
+            if !through_ss && self.address_register(group[4], Role::Segment)?.is_some() {
                 return Err(EmitError::Unsupported("a segment override".to_owned()));
             }
             let pooled = self.pool_cell(entry)?;
@@ -3713,18 +3722,22 @@ impl Emitter<'_, '_> {
                 .map(
                     |mut addr| {
                         addr.disp += i64::from(shift);
-                        addr
+                        overridden(addr)
                     },
                 );
             return Ok(Mem { base, index, scale, width: cell_width, addr, ..pooled });
         }
         let disp = self.displacement(group[3])?;
-        if self.address_register(group[4], Role::Segment)?.is_some() {
+        if through_ss && (base.is_some() || index.is_some()) {
+            let address = overridden(Addr::new(crate::model::ir::Space::Literal, disp));
+            return Ok(Mem { base, index, scale, offset: disp, disp_width: 2, ..Mem::new(Some(address), cell_width) });
+        }
+        if !through_ss && self.address_register(group[4], Role::Segment)?.is_some() {
             return Err(EmitError::Unsupported("a segment override".to_owned()));
         }
         // An absolute address (`[0xB8000]`) is a literal address of four bytes.
         if base.is_none() && index.is_none() {
-            let address = Addr::new(crate::model::ir::Space::Literal, disp);
+            let address = overridden(Addr::new(crate::model::ir::Space::Literal, disp));
             return Ok(Mem { disp_width: 4, ..Mem::new(Some(address), cell_width) });
         }
         // An indexed cell's displacement is a literal address, as the old
@@ -3746,7 +3759,6 @@ impl Emitter<'_, '_> {
         Ok(Mem { base, index, scale, offset: disp, ..Mem::new(None, cell_width) })
     }
 
-    /// A cell addressed through the register `through` (the stack pointer):
     /// Whether the segment operand of a cell moves it off its own segment: an
     /// override, except ES holding SS (a pointer to the frame made far), which
     /// reads what the frame register's default does.
@@ -3755,6 +3767,10 @@ impl Emitter<'_, '_> {
         segment: SDValue,
     ) -> Result<bool, EmitError> {
         if self.is_es(segment) && self.es_is_ss {
+            return Ok(false);
+        }
+        // The frame and the stack pointer select it already.
+        if self.dag.node(segment).data == NodeData::PhysReg(self.ctx.registers.stack_segment_register()) {
             return Ok(false);
         }
         Ok(self.address_register(segment, Role::Segment)?.is_some())
