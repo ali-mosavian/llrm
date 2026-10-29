@@ -3,22 +3,12 @@ reason = "parity/scalar. -O2: the 8-trip loop is fully unrolled, as the pin's ow
 [[row]]
 label = "parity/scalar bq16 -O2"
 counter = "code_bytes"
-to = 353
+to = 171
 
 [[row]]
 label = "parity/scalar bq32 -O2"
 counter = "code_bytes"
 to = 249
-
-[[row]]
-label = "parity/scalar c -O2"
-counter = "code_bytes"
-to = 249
-
-[[row]]
-label = "parity/scalar nib -O2"
-counter = "code_bytes"
-to = 252
 
 [[row]]
 label = "parity/scalar bq16 -O2"
