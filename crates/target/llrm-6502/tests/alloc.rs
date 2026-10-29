@@ -1714,3 +1714,44 @@ fn compile_within_ten_seconds(
     std::thread::spawn(move || send.send(compile(&ir, &name)).ok());
     receive.recv_timeout(std::time::Duration::from_secs(10)).expect("compiles within ten seconds")
 }
+
+/// The call frame's size was read from the wrong operand of `ADJCALLSTACKDOWN` (the bytes popped,
+/// always 0), so a frame with locals had no room for the arguments that do not fit in `rc2..rc7`:
+/// the call wrote them over the first local (differential seed 2).
+#[test]
+fn outgoing_stack_arguments_do_not_overwrite_locals() {
+    let ir = "define i16 @callee(i32 %a, i32 %b) {
+  %h = lshr i32 %b, 16
+  %t = trunc i32 %h to i16
+  ret i16 %t
+}
+define i16 @callee3(i32 %a, i32 %b, i32 %c) {
+  %x = xor i32 %b, %c
+  %h = lshr i32 %x, 16
+  %t = trunc i32 %h to i16
+  ret i16 %t
+}
+define i16 @caller() {
+  %l = alloca [4 x i16], align 2
+  store i16 4660, ptr %l, align 2
+  %r = call i16 @callee(i32 1, i32 1450704896)
+  %v = load i16, ptr %l, align 2
+  %x = xor i16 %v, %r
+  ret i16 %x
+}
+define i16 @caller3() {
+  %l = alloca [4 x i16], align 2
+  store i16 4660, ptr %l, align 2
+  %r = call i16 @callee3(i32 1, i32 1450704896, i32 305397760)
+  %v = load i16, ptr %l, align 2
+  %x = xor i16 %v, %r
+  ret i16 %x
+}";
+    let text = format!("{}{}{}{}", compile(ir, "caller"), compile(ir, "callee"), compile(ir, "caller3"), compile(ir, "callee3"));
+    let setup = "  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n";
+    for (name, want) in [("caller", 4660u32 ^ (1450704896 >> 16)), ("caller3", 4660 ^ ((1450704896u32 ^ 305397760) >> 16))] {
+        let lo = common::run_with(&format!("alloc-frame-{name}"), &format!("{setup}  jsr {name}\n"), &text);
+        let hi = common::run_with(&format!("alloc-frame-h-{name}"), &format!("{setup}  jsr {name}\n  txa\n"), &text);
+        assert_eq!(((hi << 8) | lo) as u32, want, "{name}");
+    }
+}

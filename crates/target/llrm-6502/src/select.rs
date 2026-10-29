@@ -244,7 +244,8 @@ fn lay_out_frame(
                 ISD::Machine(code) if code as u16 == op::ADJCALLSTACKDOWN
             )
         })
-        .filter_map(|(one, node)| match one.dag.nodes()[node.ops[1].node as usize].data {
+        // the machine node's operands are the bytes pushed, the bytes popped, then the chain
+        .filter_map(|(one, node)| match one.dag.nodes()[node.ops[0].node as usize].data {
             NodeData::Const { bits, .. } => Some(bits as i64),
             _ => None,
         })
