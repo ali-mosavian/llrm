@@ -31,9 +31,8 @@ use crate::dagisel::function::{Selected, Selection};
 use crate::dagisel::generated::ids::{opcode as op, reg as ids};
 use crate::dagisel::generated::instrinfo;
 use crate::dagisel::pipeline::MosPins;
-use crate::emit::{MInst, Operand, expand, relax_bra, spill};
+use crate::emit::{MInst, Operand, spill};
 use crate::frame::{Function, Layout, layout};
-use crate::peep;
 
 const EXTRACT_SUBREG: u16 = 8;
 const REG_SEQUENCE: u16 = 19;
@@ -88,28 +87,6 @@ impl Cells<'_> {
     }
 }
 
-/// The zero-page registers beyond A and X that carry `name`'s result: `rc2`,
-/// `rc3` for a 32-bit one.
-fn result_registers(
-    module: &Module,
-    name: &str,
-) -> Vec<usize> {
-    let wide = (|| {
-        let id = module.named(name)?;
-        let ty = module.global(id).function()?.ty;
-        let llrm_mir::types::Type::Function { returns, .. } = module.context.types.get(ty) else { return None };
-        if matches!(
-            module.context.types.get(*returns),
-            llrm_mir::types::Type::Void
-        ) {
-            return Some(false);
-        }
-        let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref()?).ok()?;
-        Some(layout.alloc_size(&module.context.types, *returns) > 2)
-    })();
-    if wide.unwrap_or(true) { vec![2, 3] } else { Vec::new() }
-}
-
 fn block_label(
     name: &str,
     block: u32,
@@ -117,71 +94,24 @@ fn block_label(
     format!("{name}_b{block}")
 }
 
-/// The function `name` of `module` as ca65 text: its blocks, selected, in
-/// layout order.
+/// The function `name` of `module` as ca65 text: its blocks, selected, on
+/// virtual registers and allocated (`alloc.rs`), in layout order.
+///
+/// DEVIATE: a function in a cycle of calls keeps its spills on the soft stack;
+/// its other values stay in registers or spill slots. Exit: none needed.
 pub fn function_text(
     module: &Module,
     name: &str,
     selection: &Selection,
 ) -> Result<String, String> {
-    function_text_with(module, name, selection, true)
-}
-
-/// [`function_text`], with the register allocator (`alloc.rs`) or without: the
-/// cells of every value, cleaned up by `peep.rs`.
-pub fn function_text_with(
-    module: &Module,
-    name: &str,
-    selection: &Selection,
-    allocate: bool,
-) -> Result<String, String> {
-    // DEVIATE: on the cell path values live across a call are static cells,
-    // so a function in a cycle of calls is not reentrant there; the
-    // allocator path spills it to the soft stack. Exit: cells on the stack.
     let recursive = module.named(name).is_some_and(|id| llrm_mir::callgraph::CallGraph::new(module).recursive(id));
-    let (items, cells) = function_items(module, name, selection)?;
-    let built = if allocate { Some(alloc::build(name, &items)) } else { None };
-    if let Some(Err(why)) = &built
-        && std::env::var_os("LLRM_6502_WHY").is_some()
-    {
-        eprintln!("alloc: {name}: {}", why.0);
-    }
-    if recursive && !matches!(built, Some(Ok(_))) {
-        return Err(format!("{name} is recursive: only the allocator path can keep its values on the stack"));
-    }
-    if let Some(Ok((function, labels))) = built {
-        let (code, slots) = alloc::emit(function, &labels, recursive)?;
-        let mut body = format!(".export {name}\n{code}");
-        body.push_str(".segment \"BSS\"\n");
-        for (slot, size) in slots {
-            writeln!(body, "{slot}: .res {size}").unwrap();
-        }
-        body.push_str(".segment \"CODE\"\n");
-        return Ok(body);
-    }
-    let mut labels = 0;
-    let mut body = String::new();
-    for item in &items {
-        match item {
-            Item::Label(l) => writeln!(body, "{l}:").unwrap(),
-            Item::Inst(inst) => body.push_str(&expand(inst, &mut labels)?),
-            Item::Text(t) => body.push_str(t),
-        }
-    }
-    let body = format!(".export {name}\n{body}");
-    let body = peep::optimize(&body, &result_registers(module, name)).unwrap_or(body);
-    let mut body = relax_bra(&body);
+    let (items, _) = function_items(module, name, selection)?;
+    let (function, labels) = alloc::build(name, &items).map_err(|why| format!("{name}: {}", why.0))?;
+    let (code, slots) = alloc::emit(function, &labels, recursive)?;
+    let mut body = format!(".export {name}\n{code}");
     body.push_str(".segment \"BSS\"\n");
-    // the cells the clean-up left in memory
-    let kept =
-        |cell: &str| body.lines().any(|l| l.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|t| t == cell));
-    let (bytes, words): (Vec<_>, Vec<_>) =
-        (cells.0.iter().filter(|c| kept(c)).cloned().collect(), cells.1.iter().filter(|c| kept(c)).cloned().collect());
-    for cell in &bytes {
-        writeln!(body, "{cell}: .res 1").unwrap();
-    }
-    for cell in &words {
-        writeln!(body, "{cell}: .res 2").unwrap();
+    for (slot, size) in slots {
+        writeln!(body, "{slot}: .res {size}").unwrap();
     }
     body.push_str(".segment \"CODE\"\n");
     Ok(body)

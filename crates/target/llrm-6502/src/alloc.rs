@@ -634,6 +634,9 @@ pub fn build(
                 }
                 continue;
             }
+            // the flags are not kept across the phi copies: a compare is redone
+            // at its branch
+            Item::Text(text) if matches!(text.as_str(), "  php\n" | "  plp\n") => continue,
             Item::Text(_) => return Err(Unsupported("raw text".into())),
             Item::Inst(inst) => inst,
         };

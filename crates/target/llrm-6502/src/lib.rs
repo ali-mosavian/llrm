@@ -5,7 +5,6 @@ pub mod alloc;
 pub mod dagisel;
 pub mod emit;
 pub mod frame;
-pub mod peep;
 pub mod platform;
 pub mod select;
 pub mod target;

@@ -5,19 +5,18 @@ mod common;
 
 use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
-use llrm_6502::select::function_text_with;
+use llrm_6502::select::function_text;
 
 const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8";
 
 fn compile(
     ir: &str,
     name: &str,
-    allocate: bool,
 ) -> String {
     let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
     let module = llrm_mir::parse::module(&text).expect("parses");
     let selection = select_function(&module, name, Cpu::Mos6502).expect("selects");
-    function_text_with(&module, name, &selection, allocate).expect("emits")
+    function_text(&module, name, &selection).expect("emits")
 }
 
 fn set(
@@ -33,7 +32,7 @@ const ADD16: &str = "define i16 @add16(i16 %a, i16 %b) {\n  %r = add i16 %a, %b\
 /// path stored it to `rc2` and loaded it back (18 bytes, now 13).
 #[test]
 fn a_word_add_keeps_its_low_byte_in_a_register() {
-    let text = compile(ADD16, "add16", true);
+    let text = compile(ADD16, "add16");
     assert!(text.contains("  tay\n") && text.contains("  tya\n"), "{text}");
     assert!(!text.contains("sta rc"), "{text}");
     // 300 + 5000 = 5300 = 0x14B4
@@ -70,7 +69,7 @@ fn more_live_values_than_registers_spill_and_still_compute() {
         ir += &format!("  %x{} = xor i8 %x{}, %t{n}\n", n - 1, n - 2);
     }
     ir += &format!("  ret i8 %x{}\n}}", pairs.len() - 2);
-    let text = compile(&ir, "many", true);
+    let text = compile(&ir, "many");
     assert!(text.contains("s_many_0"), "no spill in:\n{text}");
     let setup: String = (1..=6).map(|n| set(&format!("rc{}", n + 1), n)).collect();
     assert_eq!(common::run_with("alloc-many", &format!("{setup}  jsr many\n"), &text), 4);
@@ -101,7 +100,7 @@ done:
 fn a_loop_with_selects_and_phis_runs_without_edge_jumps() {
     let ir =
         GCD.replace("%2", "%entry").replace("define i8 @gcd(i8 %0, i8 %1) {", "define i8 @gcd(i8 %0, i8 %1) {\nentry:");
-    let text = compile(&ir, "gcd", true);
+    let text = compile(&ir, "gcd");
     assert!(!text.contains("gcd_e0_2"), "an edge block that only jumps is still there:\n{text}");
     for (a, b, want) in [(12, 18, 6), (7, 13, 1), (9, 9, 9)] {
         let setup = set("rc2", a) + &set("rc3", b);
@@ -116,7 +115,7 @@ fn a_loop_with_selects_and_phis_runs_without_edge_jumps() {
 fn a_global_at_a_constant_offset_is_an_absolute_load() {
     let ir = "@buf = global [4 x i8] [i8 1, i8 2, i8 3, i8 4]\n\
         define i8 @pair() {\n  %p = getelementptr i8, ptr @buf, i16 1\n  %a = load i8, ptr %p\n  %q = getelementptr i8, ptr @buf, i16 3\n  %b = load i8, ptr %q\n  %r = add i8 %a, %b\n  ret i8 %r\n}";
-    let text = compile(ir, "pair", true);
+    let text = compile(ir, "pair");
     assert!(text.contains("lda buf+1") && text.contains("buf+3"), "{text}");
     assert!(!text.contains("),y"), "{text}");
     let data = ".segment \"DATA\"\nbuf: .byte 1, 2, 3, 4\n.segment \"CODE\"\n";
@@ -129,7 +128,7 @@ fn a_global_at_a_constant_offset_is_an_absolute_load() {
 #[test]
 fn a_word_select_returns_the_larger_word() {
     let ir = "define i16 @max16(i16 %a, i16 %b) {\n  %c = icmp ugt i16 %a, %b\n  %r = select i1 %c, i16 %a, i16 %b\n  ret i16 %r\n}";
-    let text = compile(ir, "max16", true);
+    let text = compile(ir, "max16");
     for (a, b, lo, hi) in [(300u16, 5000u16, 0x88, 0x13), (700, 20, 0xBC, 0x02)] {
         let setup = set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8);
         let run = |after: &str| common::run_with("alloc-max16", &format!("{setup}  jsr max16\n{after}"), &text);
@@ -145,7 +144,7 @@ fn a_word_select_returns_the_larger_word() {
 fn a_value_live_across_a_call_survives_it() {
     let ir =
         "define i8 @across(i8 %a) {\n  %t = add i8 %a, 1\n  %r = mul i8 %a, 3\n  %s = add i8 %r, %t\n  ret i8 %s\n}";
-    let text = compile(ir, "across", true);
+    let text = compile(ir, "across");
     assert!(text.contains("jsr __mulqi3") && text.contains("s_across_"), "{text}");
     assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 21);
 }
@@ -166,16 +165,14 @@ go:
 /// Values live across a call were static (cells or slots), so a function that
 /// calls itself read the deepest call's `n` after the return: rec(4) = 4 + 3 +
 /// 2
-/// + 1 = 10 came out as 4 on both paths. On the allocator path they are spilled
-/// to the soft stack and rec(4) is 10; the cell path still refuses it.
+/// + 1 = 10 came out as 4. They are spilled
+/// to the soft stack and rec(4) is 10.
 #[test]
 fn a_recursive_function_keeps_its_values_on_the_soft_stack() {
     let text = format!("target datalayout = \"{DATALAYOUT}\"\n{RECURSIVE}");
     let module = llrm_mir::parse::module(&text).expect("parses");
     let selection = select_function(&module, "rec", Cpu::Mos6502).expect("selects");
-    let why = function_text_with(&module, "rec", &selection, false).expect_err("the cell path refuses recursion");
-    assert!(why.contains("recursive"), "{why}");
-    let code = function_text_with(&module, "rec", &selection, true).expect("the allocator path builds it");
+    let code = function_text(&module, "rec", &selection).expect("it builds");
     assert!(!code.contains("s_rec_"), "a static slot in a recursive function:\n{code}");
     for (n, want) in [(4, 10), (1, 1), (0, 0)] {
         assert_eq!(common::run_with(&format!("alloc-rec-{n}"), &format!("{}  jsr rec\n", set("rc2", n)), &code), want);
@@ -200,7 +197,7 @@ go:
   %s = add i8 %x, %y
   ret i8 %s
 }";
-    let code = compile(ir, "fibr", true);
+    let code = compile(ir, "fibr");
     for (n, want) in [(10, 55), (7, 13)] {
         assert_eq!(
             common::run_with(&format!("alloc-fibr-{n}"), &format!("{}  jsr fibr\n", set("rc2", n)), &code),
@@ -245,7 +242,7 @@ done:
 #[test]
 fn a_sum_through_a_pointer_runs_on_the_allocator() {
     assert!(on_the_allocator(SUMP, "sump"));
-    let text = compile(SUMP, "sump", true);
+    let text = compile(SUMP, "sump");
     assert!(text.contains("),y"), "{text}");
     let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
     let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #4\n  sta rc4\n";
@@ -268,7 +265,7 @@ fn a_pointer_live_across_a_call_survives_it() {
   ret i8 %t
 }";
     assert!(on_the_allocator(ir, "keep"));
-    let text = compile(ir, "keep", true);
+    let text = compile(ir, "keep");
     let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
     let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #5\n  sta rc4\n";
     assert!(text.contains("s_keep_"), "no spill:\n{text}");
@@ -297,7 +294,7 @@ go:
   %t = add i8 %s, %n
   ret i8 %t
 }";
-    let code = compile(ir, "loc", true);
+    let code = compile(ir, "loc");
     assert!(!code.contains("s_loc_"), "{code}");
     // loc(n) = loc(n-1) + n + n: loc(1) = 2, loc(2) = 6, loc(3) = 12
     for (n, want) in [(1, 2), (2, 6), (3, 12)] {
