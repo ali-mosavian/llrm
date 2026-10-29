@@ -41,7 +41,7 @@ fn toolchain() -> Option<(PathBuf, PathBuf)> {
 /// variables' kinds, names and types (not where they are), each sorted, and its
 /// source lines.
 fn module(dump: &str) -> (Vec<String>, Vec<String>, BTreeSet<u32>) {
-    let table = &dump[dump.find("Module Table").expect("a module table")..];
+    let table = &dump[dump.find("Module Table").unwrap_or_else(|| panic!("a module table in:\n{}", &dump[..dump.len().min(1500)]))..];
     let part = |from: &str, to: &str| -> Vec<String> {
         let start = table.find(from).map_or(0, |at| at + from.len());
         let end = table[start..].find(to).map_or(table.len(), |at| start + at);
@@ -99,8 +99,11 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
     let scratch = tempfile::tempdir().unwrap();
     // DOS names are 8.3: each program is a short name.
     for (short, source) in [("obs", "observed.c"), ("lst", "list.c")] {
-        std::fs::copy(fixtures.join(source), scratch.path().join(format!("{short}.c"))).unwrap();
+        // Turbo C++ 3.0 does not read `__attribute__`; at -O0 `noinline` changes nothing.
+        let text = std::fs::read_to_string(fixtures.join(source)).unwrap().replace("__attribute__((noinline)) ", "");
+        std::fs::write(scratch.path().join(format!("{short}.c")), text).unwrap();
         let made = common::cc::llrm_c()
+            .env("LLRM_CC_TARGET", "x86_16-dos")
             .args(["-m16", "-gtd", "-O0"])
             .arg(scratch.path().join(format!("{short}.c")))
             .arg("-o")
@@ -129,6 +132,10 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
             )))
             .unwrap_or_else(|error| panic!("DOS made no {prefix}{short}.tx: {error}"))
         };
+        for prefix in ["t", "l"] {
+            let log = std::fs::read_to_string(scratch.path().join(format!("{}{}.TL", prefix.to_uppercase(), short.to_uppercase()))).unwrap_or_default();
+            assert!(read(prefix).contains("Module Table"), "{short}: {prefix}link said: {log}");
+        }
         let (theirs, ours) = (module(&read("t")), module(&read("l")));
         assert!(
             !theirs.0.is_empty() && !theirs.1.is_empty(),
@@ -204,7 +211,8 @@ fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
     // Turbo C++'s own convention, whose symbols the table is compared by:
     // cdecl.
     let made = common::cc::llrm_c()
-        .args(["-m16", "-mabi=cdecl", "-gtd", "-O0"])
+        .env("LLRM_CC_TARGET", "x86_16-dos")
+        .args(["-m16", "-gtd", "-O0"])
         .arg(scratch.path().join("fnp.c"))
         .arg("-o")
         .arg(scratch.path().join("lfnp.obj"))
@@ -368,6 +376,7 @@ fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::copy(fixtures.join("list.c"), scratch.path().join("lst.c")).unwrap();
     let made = common::cc::llrm_c()
+        .env("LLRM_CC_TARGET", "x86_16-dos")
         .args(["-m16", "-gtd", "-O0"])
         .arg(scratch.path().join("lst.c"))
         .arg("-o")
@@ -418,6 +427,7 @@ fn tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register() {
     )
     .unwrap();
     let made = common::cc::llrm_c()
+        .env("LLRM_CC_TARGET", "x86_16-dos")
         .args(["-m16", "-gtd", "-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"])
         .arg(scratch.path().join("rv.c"))
         .arg("-o")
@@ -452,17 +462,17 @@ fn tlink_builds_turbo_debuggers_table_from_nib_and_from_optimised_c() {
     let bins = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().to_path_buf();
     let matrix = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix");
     let scratch = tempfile::tempdir().unwrap();
-    for (short, tool, source, level) in [("nib", "llrm-nib", "known.nib", "-O0"), ("cfast", "llrm-c", "known.c", "-O2")]
-    {
-        let made = Command::new(bins.join(tool))
-            .args(["-m16", "-gtd", level])
-            .arg(matrix.join(source))
-            .arg("-o")
-            .arg(scratch.path().join(format!("{short}.obj")))
-            .output()
-            .unwrap();
-        assert!(made.status.success(), "{short}: {}", String::from_utf8_lossy(&made.stderr));
-    }
+    let object = |short: &str| scratch.path().join(format!("{short}.obj"));
+    let made = Command::new(bins.join("llrm-nib"))
+        .args(["-m16", "-gtd", "-O0"])
+        .arg(matrix.join("known.nib"))
+        .arg("-o")
+        .arg(object("nib"))
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "nib: {}", String::from_utf8_lossy(&made.stderr));
+    let made = common::cc::llrm_c().env("LLRM_CC_TARGET", "x86_16-dos").args(["-m16", "-gtd", "-O2"]).arg(matrix.join("known.c")).arg("-o").arg(object("cfast")).output().unwrap();
+    assert!(made.status.success(), "cfast: {}", String::from_utf8_lossy(&made.stderr));
     let mut commands = Vec::new();
     for short in ["nib", "cfast"] {
         commands.push(format!("tlink /v c:\\lib\\c0m {short}.obj, {short}.exe,, c:\\lib\\cm > {short}.tl"));
