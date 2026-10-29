@@ -971,7 +971,8 @@ impl Builder<'_> {
             let pointer = self.is_pointer_type(ty);
             let parts = self.calling_parts(vt)?;
             shapes.push((vt, parts.len()));
-            ins.extend(parts.into_iter().map(|vt| In { vt, pointer }));
+            let split = parts.len() > 1;
+            ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
         }
         calling.accepts(&self.dag, Site::Arguments, &[], &ins).map_err(Refused)?;
         let entry = self.dag.entry_node();
@@ -1204,21 +1205,36 @@ impl Builder<'_> {
             arg_types
                 .push(self.function.operand_type(&self.module.context, *argument).ok_or(Refused("block argument"))?);
         }
-        let first = self.full_arch()?.first_argument_offset(false);
         let (result_type, _, variadic) = self.module.signature(info.function_type);
-        let plan = convention_for(
-            self.module,
-            self.layout,
-            self.full_arch()?,
-            first,
-            info.calling_convention,
-            result_type,
-            variadic,
-            &arg_types,
-            &info.argument_attrs,
-        )
-        .map_err(|_| Refused("call the convention does not describe"))?;
+        // A target with a calling hook places every part itself: it reads no plan.
+        let hooked = self.calling().is_some();
+        let first = if hooked { 0 } else { self.full_arch()?.first_argument_offset(false) };
+        let plan = if hooked {
+            Convention {
+                parameters: Vec::new(),
+                returns: Vec::new(),
+                float_result: None,
+                popped: 0,
+                saved: Vec::new(),
+                stack_arguments: 0,
+                first: 0,
+            }
+        } else {
+            convention_for(
+                self.module,
+                self.layout,
+                self.full_arch()?,
+                first,
+                info.calling_convention,
+                result_type,
+                variadic,
+                &arg_types,
+                &info.argument_attrs,
+            )
+            .map_err(|_| Refused("call the convention does not describe"))?
+        };
         if let Some(tail) = self.tail_candidate.take()
+            && !hooked
             && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
         {
             self.tail_calls.push(tail);
@@ -1495,8 +1511,11 @@ impl Builder<'_> {
                 Some(ISD::ZeroExtend) => Ext::Zero,
                 _ => Ext::Any,
             };
-            for piece in self.split_for_calling(*value, ext)? {
-                outs.push(Out { value: piece, ext, pointer: false });
+            let arg_vt = self.dag.value_type(*value);
+            let pieces = self.split_for_calling(*value, ext)?;
+            let split = pieces.len() > 1;
+            for piece in pieces {
+                outs.push(Out { value: piece, ext, pointer: false, arg_vt, split });
             }
         }
         let void = self.module.context.types.is_void(result_type);
@@ -1508,7 +1527,9 @@ impl Builder<'_> {
             }
             let vt = self.type_of(result_type)?;
             let pointer = self.is_pointer_type(result_type);
-            (vt, self.calling_parts(vt)?.into_iter().map(|vt| In { vt, pointer }).collect())
+            let parts = self.calling_parts(vt)?;
+            let split = parts.len() > 1;
+            (vt, parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }).collect())
         };
         calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
@@ -1855,8 +1876,11 @@ impl Builder<'_> {
                 Ext::Any
             };
             let pointer = self.is_pointer_type(ty);
-            for piece in self.split_for_calling(value, ext)? {
-                outs.push(Out { value: piece, ext, pointer });
+            let arg_vt = self.dag.value_type(value);
+            let pieces = self.split_for_calling(value, ext)?;
+            let split = pieces.len() > 1;
+            for piece in pieces {
+                outs.push(Out { value: piece, ext, pointer, arg_vt, split });
             }
         }
         calling.accepts(&self.dag, Site::Return, &outs, &[]).map_err(Refused)?;

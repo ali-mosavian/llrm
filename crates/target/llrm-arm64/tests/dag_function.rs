@@ -41,14 +41,32 @@ fn i64_add_and_i32_sub_select_as_the_pin_does() {
     assert_eq!(selected(ir).unwrap(), [["SUBSWrr", "RET_ReallyLR"]]);
 }
 
-/// More than eight integer arguments would need stack slots, which the
-/// convention does not translate: the block is refused, not mis-placed.
+/// The ninth integer argument and a byte after it are loads from the caller's
+/// outgoing area (`LDRWui`, `LDRBBui` of fixed objects), as in the pin; a
+/// float argument is refused, not mis-placed.
 #[test]
-fn a_ninth_argument_is_refused() {
-    let params = (0..9).map(|i| format!("i32 %a{i}")).collect::<Vec<_>>().join(", ");
-    let ir = format!("define i32 @f({params}) {{\n  ret i32 %a8\n}}");
-    let why = selected(&ir).expect_err("refused");
-    assert!(why.contains("x0..x7"), "{why}");
+fn stack_arguments_are_loads_and_a_float_is_refused() {
+    let params = (0..9).map(|i| format!("i32 %a{i}")).chain(["i8 %b".to_owned()]).collect::<Vec<_>>().join(", ");
+    let ir = format!("define i32 @f({params}) {{\n  %z = zext i8 %b to i32\n  %r = add i32 %a8, %z\n  ret i32 %r\n}}");
+    assert_eq!(selected(&ir).unwrap(), [["LDRBBui", "LDRWui", "ADDWrr", "RET_ReallyLR"]]);
+    let why = selected("define float @f(float %a) {\n  ret float %a\n}").expect_err("refused");
+    assert!(why.contains("no integer"), "{why}");
+}
+
+/// Calls: `ADJCALLSTACKDOWN`, the stack stores, `BL` or `BLR`, `ADJCALLSTACKUP`;
+/// names are the pin's `-stop-after=finalize-isel` for the same IR.
+#[test]
+fn calls_select_adjcallstack_bl_and_blr() {
+    let decls = "declare i32 @h(i32, i32)\ndeclare i64 @many(i64, i64, i64, i64, i64, i64, i64, i64, i64, i8, i32)\n";
+    let one = |body: &str| selected(&format!("{decls}{body}")).unwrap();
+    let direct = "define i32 @f(i32 %a, i32 %b) {\n  %r = call i32 @h(i32 %a, i32 %b)\n  ret i32 %r\n}";
+    assert_eq!(one(direct), [["ADJCALLSTACKDOWN", "BL", "ADJCALLSTACKUP", "RET_ReallyLR"]]);
+    let indirect = "define void @f(ptr %p) {\n  call void %p()\n  ret void\n}";
+    assert_eq!(one(indirect), [["ADJCALLSTACKDOWN", "BLR", "ADJCALLSTACKUP", "RET_ReallyLR"]]);
+    let stacked = "define i64 @f(i64 %a) {\n  %r = call i64 @many(i64 %a, i64 %a, i64 %a, i64 %a, i64 %a, i64 %a, i64 %a, i64 %a, i64 %a, i8 3, i32 4)\n  ret i64 %r\n}";
+    let mut got = one(stacked).remove(0);
+    got.sort_unstable();
+    assert_eq!(got, ["ADJCALLSTACKDOWN", "ADJCALLSTACKUP", "BL", "MOVi32imm", "MOVi32imm", "RET_ReallyLR", "STRBBui", "STRWui", "STRXui"]);
 }
 
 /// `AArch64TargetLowering` makes `ctpop` Custom, which is not translated.

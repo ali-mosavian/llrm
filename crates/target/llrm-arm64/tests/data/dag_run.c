@@ -9,6 +9,15 @@ int shifts(int, int);
 int logic(int, int);
 int divs(int, int);
 int64_t widen(int);
+int64_t call_many(int64_t);
+int64_t take_many(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, signed char, int);
+int twice(int);
+int indirect(int (*)(int), int);
+
+int64_t c_many(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g, int64_t h, int64_t i, signed char j, int k) {
+  return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h + 9 * i + 10 * j + 11 * k;
+}
+int c_twice(int x) { return 2 * x + 1; }
 
 static int ref_masks(int a, int b) {
   unsigned ua = a, ub = b;
@@ -61,6 +70,17 @@ int main(void) {
       unsigned d = (unsigned)(vals[i] / vals[j]) + a / b + (unsigned)(vals[i] % vals[j]);
       if ((unsigned)divs(vals[i], vals[j]) != d) { printf("divs(%d,%d)\n", vals[i], vals[j]); bad++; }
     }
+  }
+  for (int64_t a = -3; a < 5; a++) {
+    int64_t sum = c_many(a, a + 1, a + 2, a + 3, a + 4, a + 5, a + 6, a + 7, a + 8, -3, 4);
+    if (call_many(a) != sum + a) { printf("call_many(%ld)\n", (long)a); bad++; }
+    int64_t want = (a + (a + 8)) * 3 + -5 + 7;
+    if (take_many(a, 0, 0, 0, 0, 0, 0, 0, a + 8, -5, 7) != want) { printf("take_many(%ld)\n", (long)a); bad++; }
+  }
+  for (int x = -4; x < 9; x++) {
+    int r = 2 * x + 1, s = 2 * r + 1;
+    if (twice(x) != r + s + x) { printf("twice(%d)\n", x); bad++; }
+    if (indirect(c_twice, x) != r) { printf("indirect(%d)\n", x); bad++; }
   }
   if (bad) printf("%d bad\n", bad);
   return bad != 0;

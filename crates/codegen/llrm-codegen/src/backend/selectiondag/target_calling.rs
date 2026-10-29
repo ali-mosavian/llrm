@@ -46,6 +46,10 @@ pub struct Out {
     pub ext: Ext,
     /// `ArgFlags.isPointer()`.
     pub pointer: bool,
+    /// `OutputArg::ArgVT`: the type of the whole value this is a part of.
+    pub arg_vt: EVT,
+    /// `ArgFlags.isSplit()`: one of several parts of a value.
+    pub split: bool,
 }
 
 /// An `ISD::InputArg`: a part of a formal argument or of a call's result.
@@ -53,6 +57,10 @@ pub struct Out {
 pub struct In {
     pub vt: EVT,
     pub pointer: bool,
+    /// `InputArg::ArgVT`: the type of the whole value this is a part of.
+    pub arg_vt: EVT,
+    /// `ArgFlags.isSplit()`.
+    pub split: bool,
 }
 
 /// `MachineFrameInfo::CreateFixedObject`: size, offset from the first
