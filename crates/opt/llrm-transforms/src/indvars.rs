@@ -7,10 +7,12 @@
 //! # How it works
 //! One run is these steps.
 //!
-//! 0. `exitvalues::rewritten`: a value read after a loop becomes an expression
-//!    of the loop's count where the loop is left (`rewriteLoopExitValues`,
-//!    ScalarEvolution's exit values, from every exit of the loop, a rotated
-//!    loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
+//! 0. `floativ::rewritten` (`rewriteNonIntegerIVs`): a float counter with whole
+//!    bounds becomes an `i32` one. `exitvalues::rewritten`: a value read after
+//!    a loop becomes an expression of the loop's count where the loop is left
+//!    (`rewriteLoopExitValues`, ScalarEvolution's exit values, from every exit
+//!    of the loop, a rotated loop's latch included); `LLRM_NO_SCEV_EXITVALUES`
+//!    turns it off.
 //! 1. `simplifyindvar::simplified_and_extended` (`simplifyAndExtend`): the IV
 //!    users simplified and a counter read through `zext` or `sext` at a wider
 //!    index becomes a counter of that width (`WidenIV`). C's `unsigned short i`
@@ -240,6 +242,14 @@ impl FunctionPass for IndVars {
         session.adopt(held.take());
         let mut mark = unit.function.mark();
         let start = mark;
+        // `rewriteNonIntegerIVs`, the pin's first step: a float counter is an
+        // integer one before the expressions are worked out.
+        let floats = {
+            let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
+            let loops = cfg::natural(unit.function, &found);
+            let changed = crate::floativ::rewritten(unit.context, outer.callees(), unit.function, &loops);
+            settled(&mut session, &mut mark, unit, &outer, changed, false)
+        };
         let compared = crate::simplifyindvar::simplified_and_extended_in(
             &mut session,
             unit.context,
@@ -316,7 +326,8 @@ impl FunctionPass for IndVars {
         let first_trip = crate::firstiterexit::rewritten(unit.function, &loops, &tree);
         // The pin deletes what an edit stopped reading as it goes; a sweep of
         // the function (0.8 M Ir on d_faces' largest body) found the same.
-        let dead = (compared
+        let dead = (floats
+            || compared
             || rewrote
             || canonical
             || optimized
@@ -351,7 +362,8 @@ impl FunctionPass for IndVars {
             true,
         );
         held.put(session.into_scev());
-        if compared
+        if floats
+            || compared
             || rewrote
             || canonical
             || optimized
