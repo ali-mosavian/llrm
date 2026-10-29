@@ -34,6 +34,7 @@ fn datalayout() -> String {
         .trim_matches('"')
         .to_owned()
 }
+const LZ: &str = "48,97,98,99,3,0,17,100,2,0,255,5,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,7,0,255,26,63,120,121,122,40,0,0,242,255,0,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,1,0,48,101,110,100";
 const BUF: [u8; 16] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3];
 /// The loop's `dec cnt` (6) and taken `bne` (3).
 const LOOP_CYCLES: i64 = 9;
@@ -100,10 +101,12 @@ const KERNELS2: &[Kernel] = &[
     k("schr", &[P("str", 0), B(111)], false, 4),
 ];
 
-/// The C of `lz4.s` on `lz`, decompressing to `buf` (the answer is the length written), and loops that
-/// keep several variables live in registers across the iteration; expected values from a Python model.
+/// The C of `lz4.s` on `lz`, decompressing to `lzout` (the answer is the length written; `lz4c` also
+/// sums the bytes written, so a wrong byte shows), and loops that keep several variables live in
+/// registers across the iteration; expected values from a Python model.
 const KERNELS3: &[Kernel] = &[
-    k("lz4", &[P("lz", 0), P("buf", 0), W(14)], true, 14),
+    k("lz4", &[P("lz", 0), P("lzout", 0), W(634)], true, 634),
+    k("lz4c", &[P("lz", 0), P("lzout", 0), W(634)], true, 52785),
     k("xs8", &[B(0xA5), B(5)], false, 107),
     k("minmax", &[P("buf", 0), B(16)], false, 8),
     k("fletcher", &[P("buf", 0), B(16)], true, 15952),
@@ -210,11 +213,13 @@ fn driver(
     s.push_str("  rts\n.segment \"DATA\"\nbuf:\n_buf:\n");
     s.push_str(&format!("  .byte {}\n", BUF.map(|b| b.to_string()).join(",")));
     s.push_str("str:\n_str:\n  .byte \"hello world\",0\ntab:\n_tab:\n  .byte 2,5,8,11,14,17,20,23\n");
-    // an LZ4 stream: "abc" and a 4-byte match at distance 3 ("abcabca"), "d" and a 5-byte match at
-    // distance 2 ("abcabcad" + "adada"), then the literal "e": 14 bytes
-    s.push_str("lz:\n_lz:\n  .byte $30,97,98,99,3,0,$11,100,2,0,$10,101\n.export lz, _lz\n");
-    s.push_str(".export str, _str, tab, _tab\n");
-    s.push_str(".segment \"BSS\"\ncnt: .res 1\n");
+    // An LZ4 block built from plaintext rules (not by any decoder): "abc" + a 4-byte match at distance
+    // 3, "d" + 5 at distance 2, 20 literals (length extension) + a 300-byte match at distance 7 (extension
+    // 255 and more, overlapping), "xyz" + a match of exactly 19 (extension 0), 270 literals + 6 at
+    // distance 1, and the last literals "end": 634 bytes whose Fletcher sum is 52785.
+    s.push_str(&format!("lz:\n_lz:\n  .byte {LZ}\n.export lz, _lz\n"));
+    s.push_str(".export str, _str, tab, _tab, lzout, _lzout\n");
+    s.push_str(".segment \"BSS\"\ncnt: .res 1\nlzout:\n_lzout: .res 640\n");
     s
 }
 
@@ -320,9 +325,34 @@ fn run_sim(bin: &Path) -> Result<(i32, i64), String> {
 }
 
 struct Row {
+    /// The linked program's bytes, library routines the code calls included.
     bytes: i64,
+    /// The function's own code: the object's CODE segment, no library. Equal to `bytes` when it calls none.
+    body: i64,
     cycles: i64,
     bss: usize,
+}
+
+/// The CODE segment of ca65 text `file` in `dir`, assembled alone (`od65 --dump-segsize`).
+fn code_bytes(
+    dir: &Path,
+    file: &str,
+) -> Result<i64, String> {
+    let object = dir.join(format!("{file}.body.o"));
+    let built = Command::new("ca65")
+        .args(["-t", "sim65c02", "-o"])
+        .arg(&object)
+        .arg(dir.join(file))
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !built.status.success() {
+        return Err(format!("ca65 {file}: {}", String::from_utf8_lossy(&built.stderr)));
+    }
+    let dump = Command::new("od65").arg("--dump-segsize").arg(&object).output().map_err(|e| e.to_string())?;
+    String::from_utf8_lossy(&dump.stdout)
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("CODE:").and_then(|n| n.trim().parse::<i64>().ok()))
+        .ok_or_else(|| format!("no CODE size for {file}"))
 }
 
 /// Builds and measures one kernel with the function text in `f-<tag>.s` (and
@@ -358,7 +388,7 @@ fn measure(
     std::fs::write(dir.join(format!("f-{tag}stub.s")), format!(".export {stub_name}\n{stub_name}:\n  rts\n")).unwrap();
     let stub = link(dir, kernel, abi, kernel.name, 1, false, &format!("{tag}stub-lo"))?;
     let bytes = std::fs::metadata(&low).unwrap().len() as i64 - std::fs::metadata(&stub).unwrap().len() as i64 + 1;
-    Ok(Row { bytes, cycles, bss })
+    Ok(Row { bytes, body: bytes, cycles, bss })
 }
 
 fn cc65_row(
@@ -375,7 +405,9 @@ fn cc65_row(
     let output = format!("f-{tag}.s");
     args.extend_from_slice(&[&define, "-o", &output, source]);
     tool(&dir, "cc65", &args)?;
-    measure(&dir, kernel, Abi::Cc65, tag, 0)
+    let mut row = measure(&dir, kernel, Abi::Cc65, tag, 0)?;
+    row.body = code_bytes(&dir, &output)?;
+    Ok(row)
 }
 
 /// clang's IR in MIR's subset: our datalayout, no attributes, linkage or
@@ -516,7 +548,8 @@ fn ours_row(
     // the table's bytes are the linked binary's, to the byte
     let priced = llrm_6502::timing::estimate(cpu, &format!("{function}{runtime}"))?;
     assert_eq!(i64::from(priced.bytes), row.bytes, "{name} {tag}: timing.rs against the linked size");
-    Ok(row)
+    let alone = llrm_6502::timing::estimate(cpu, &function)?;
+    Ok(Row { body: i64::from(alone.bytes), ..row })
 }
 
 /// cc65's hand-written `libsrc/common/lz4.s` (a162565e) as the best case for the same C: wrapped to
@@ -524,14 +557,17 @@ fn ours_row(
 fn hand_row(kernel: &Kernel) -> Result<Row, String> {
     let dir = work(kernel.name);
     let hand = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench/lz4.s")).unwrap();
-    let wrapper = ".export _lz4\n_lz4:\n  jsr _decompress_lz4\n  lda regsave\n  sec\n  sbc #<buf\n  tay\n  lda regsave+1\n  sbc #>buf\n  tax\n  tya\n  rts\n.import buf\n";
+    let wrapper = ".export _lz4\n_lz4:\n  jsr _decompress_lz4\n  lda regsave\n  sec\n  sbc #<lzout\n  tay\n  lda regsave+1\n  sbc #>lzout\n  tax\n  tya\n  rts\n.import lzout\n";
     std::fs::write(dir.join("f-h.s"), format!("{wrapper}{hand}")).unwrap();
-    measure(&dir, kernel, Abi::Cc65, "h", 0)
+    let mut row = measure(&dir, kernel, Abi::Cc65, "h", 0)?;
+    row.body = code_bytes(&dir, "f-h.s")?;
+    Ok(row)
 }
 
 fn table3() {
     let mut out = String::from("| kernel | cc65 -O | cc65 lz4.s (hand) | ours | ours 65C02 |\n|---|---|---|---|---|\n");
     let cell = |row: &Result<Row, String>| match row {
+        Ok(r) if r.body != r.bytes => format!("{} B linked, {} B body, {} cy", r.bytes, r.body, r.cycles),
         Ok(r) => format!("{} B, {} cy", r.bytes, r.cycles),
         Err(why) if why.starts_with("no hand") => "-".to_owned(),
         Err(why) => format!("n/a ({why})"),
@@ -559,6 +595,7 @@ fn table(
         "| kernel | cc65 | cc65 -O | ours (opt -O2 IR) | ours (opt -Os IR) | cc65 -O 65C02 | ours 65C02 |\n|---|---|---|---|---|---|---|\n",
     );
     let cell = |row: &Result<Row, String>| match row {
+        Ok(r) if r.body != r.bytes => format!("{} B linked, {} B body, {} cy", r.bytes, r.body, r.cycles),
         Ok(r) => format!("{} B, {} cy", r.bytes, r.cycles),
         Err(why) => format!("n/a ({why})"),
     };
