@@ -25,7 +25,19 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  # The pin clang tree tools/identical.py drives for the C programs (as ci.yml's toolchain job): restored or built, and saved under this ref.
+  # Without it the C programs were skipped and the run failed (feat/parity).
+  toolchain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/clang-tree
+        with:
+          kind: pin
+
   pgo:
+    needs: toolchain
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -33,6 +45,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
+        with:
+          clang: "required"
       - run: rustup component add llvm-tools
       - id: key
         run: echo "tree=$(python3 tools/bench/basecounts.py key HEAD)" >> "$GITHUB_OUTPUT"

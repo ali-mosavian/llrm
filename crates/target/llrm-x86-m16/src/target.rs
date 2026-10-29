@@ -217,6 +217,11 @@ impl Machine for Dos {
         llrm_target::keeps_division(i64::from(bits / 8), size)
     }
 
+    fn size_milliclocks_per_byte(&self) -> i64 {
+        // Tuning constant fitted to sc.c, weapons, mdl and lru, not derived.
+        10_000
+    }
+
     fn size_costs(&self) -> OperationCosts {
         // The by-pieces ratios are the CPU's, whichever table prices the rest.
         OperationCosts {
