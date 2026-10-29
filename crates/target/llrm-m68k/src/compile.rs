@@ -235,6 +235,8 @@ pub fn mid_end_described_by(
             llrm_transforms::exitne::strengthened(context, &layout, function, &outer);
         }
         llrm_transforms::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, tti, false);
+        // the ids the pass handed out for declarations name nothing until they are placed
+        declared.place(&mut module)?;
     }
     Ok(module)
 }

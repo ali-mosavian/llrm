@@ -1186,3 +1186,55 @@ fn a_compare_does_not_widen_an_extension_to_an_address_register() {
         }
     }
 }
+
+/// The mid-end handed out an id for a declaration a pass made (`llvm.umin.i1`) and never added the
+/// declaration to the module, so selecting the call panicked with an index out of range
+/// (`Module::global`). Seed 57 of the differential driver.
+#[test]
+fn a_declaration_the_mid_end_makes_is_in_the_module() {
+    let ir = r#"@zero = external constant i8, align 1
+define i16 @f() {
+  %1 = load volatile i8, ptr @zero, align 1
+  %2 = load volatile i8, ptr @zero, align 1
+  %3 = load volatile i8, ptr @zero, align 1
+  %4 = load volatile i8, ptr @zero, align 1
+  %5 = load volatile i8, ptr @zero, align 1
+  %6 = load volatile i8, ptr @zero, align 1
+  %7 = add i8 %4, -41
+  %8 = zext i8 %5 to i16
+  %9 = add i16 %8, 31052
+  %10 = add i8 %6, -66
+  %11 = icmp eq i8 %2, -1
+  %12 = icmp eq i8 %1, -57
+  %13 = select i1 %11, i1 true, i1 %12
+  %14 = zext i1 %13 to i8
+  %15 = add i8 %7, %14
+  %16 = select i1 %13, i16 8, i16 0
+  %17 = xor i16 %9, %16
+  %18 = select i1 %13, i8 %15, i8 0
+  %19 = add i8 %10, %18
+  br label %20
+
+20:                                               ; preds = %0, %20
+  %21 = phi i8 [ %25, %20 ], [ 4, %0 ]
+  %22 = phi i8 [ %26, %20 ], [ %15, %0 ]
+  %23 = phi i8 [ %28, %20 ], [ %19, %0 ]
+  %24 = phi i16 [ %27, %20 ], [ %17, %0 ]
+  %25 = add i8 %21, -1
+  %26 = add i8 %22, -1
+  %27 = xor i16 %24, 2040
+  %28 = add i8 %26, %23
+  %29 = icmp eq i8 %25, 0
+  br i1 %29, label %30, label %20
+
+30:                                               ; preds = %20
+  %31 = xor i8 %26, %28
+  %32 = zext i8 %31 to i16
+  %33 = xor i16 %27, %32
+  ret i16 %33
+}
+"#;
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
+    let module = llrm_m68k::compile::mid_end(&module).expect("mid-end");
+    llrm_m68k::dagisel::function::select_function(&module, "f", Cpu::M68000).expect("selects");
+}
