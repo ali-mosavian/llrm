@@ -801,7 +801,12 @@ fn selected_in(
         // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
         // 5095 B against the pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
-        .with_jump_tables(cpu.target().costs().jump_table != 0)
+        .with_jump_tables(
+            cpu.target().costs().jump_table != 0
+                && !function.attrs.iter().any(|attr| {
+                    matches!(attr, llrm_mir::Attribute::Str(name, Some(value)) if name == "no-jump-tables" && value == "true")
+                }),
+        )
         .with_opt_size(cpu.size || cpu.min_size)
         .with_min_size(cpu.min_size)
         .with_size_trade(size_trade(cpu))
