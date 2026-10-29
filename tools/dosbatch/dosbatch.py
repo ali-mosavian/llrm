@@ -175,12 +175,13 @@ def target_bits(target: str) -> int:
 WATCOM_ROWS = {16: "x86_16-wat", 32: "x86_32-wat"}
 
 
-def c_compile(source: Path, obj: Path, target: str, level: str, include: Path, abi: list[str], extra: list[str] = ()) -> tuple[list[str], dict[str, str]]:
+def c_compile(source: Path, obj: Path, target: str, level: str, include: Path | None, abi: list[str], extra: list[str] = ()) -> tuple[list[str], dict[str, str]]:
     """(command, environment) that builds the C `source` for `target`: llrm-cc over clang, the target a row of its table, not a flag.
-    `include` is searched too: a Nib program's exports are declared there as NAME.h; llrm_os.h is the row's -isystem."""
+    `include`, when given, is searched too: a Nib program's exports are declared there as NAME.h; llrm_os.h is the row's -isystem. The
+    runtime's own C gives none: the generated directory holds llrm-c's llrm_os.h, which shadows the row's and drops the OS layer's stack convention."""
     if target_bits(target) not in WATCOM_ROWS:
         raise BuildError(f"llrm-cc has no row for {target}")
-    return [str(BIN / "llrm-cc"), level, "-c", "-I", str(include), *abi, *extra, str(source), "-o", str(obj)], {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
+    return [str(BIN / "llrm-cc"), level, "-c", *(["-I", str(include)] if include else []), *abi, *extra, str(source), "-o", str(obj)], {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
 
 
 def m_flag(target: str) -> str:

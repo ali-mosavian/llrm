@@ -414,7 +414,7 @@ def c_build_key() -> str:
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
-    dosbatch._host(*dosbatch.c_compile(source, obj, dosbatch.REAL_MODE, "-Os", include, [], c_flags()))
+    dosbatch._host(*dosbatch.c_compile(source, obj, dosbatch.REAL_MODE, "-Os", None, [], c_flags()))
 
 
 def remove_existing_archive(work: Path) -> None:
