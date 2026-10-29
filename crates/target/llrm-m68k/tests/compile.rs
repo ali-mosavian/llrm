@@ -44,3 +44,88 @@ fn a_pointer_call_prints_as_llc_does() {
         "p:\n\tsuba.l\t#4, %sp\n\tmove.l\t(8,%sp), %d0\n\tmove.l\t%d0, (%sp)\n\tjsr\th\n\tadda.l\t#4, %sp\n\trts\n";
     assert_eq!(compiled(CALLS, "p"), expected);
 }
+
+const SUM: &str = "define i32 @sum(i32 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i32 [0, %entry], [%i1, %loop]\n  %s = phi i32 [0, %entry], [%s1, %loop]\n  %s1 = add i32 %s, %i\n  %i1 = add i32 %i, 1\n  %c = icmp slt i32 %i1, %n\n  br i1 %c, label %loop, label %exit\nexit:\n  ret i32 %s1\n}";
+
+/// The comparison `llc` and a different allocator can meet on: registers a
+/// register-to-register move joins are one name, such moves are dropped, the
+/// names are numbered by first appearance, and a `movem` shows only how many
+/// registers it moves.
+fn modulo_names_and_copies(text: &str) -> Vec<String> {
+    fn registers(line: &str) -> Vec<String> {
+        line.split(|c: char| !c.is_alphanumeric() && c != '%')
+            .filter(|w| w.starts_with("%d"))
+            .map(str::to_owned)
+            .collect()
+    }
+    let mut joined: Vec<Vec<String>> = Vec::new();
+    for line in text.lines() {
+        if let Some(operands) = line.trim_start().strip_prefix("move.l\t")
+            && operands.split(", ").all(|one| one.starts_with("%d"))
+        {
+            let [from, to] = [0, 1].map(|at| operands.split(", ").nth(at).unwrap().to_owned());
+            let (a, b) =
+                (joined.iter().position(|set| set.contains(&from)), joined.iter().position(|set| set.contains(&to)));
+            match (a, b) {
+                (Some(a), Some(b)) if a != b => {
+                    let moved = joined.remove(a.max(b));
+                    joined[a.min(b)].extend(moved);
+                }
+                (Some(a), None) => joined[a].push(to),
+                (None, Some(b)) => joined[b].push(from),
+                (None, None) => joined.push(vec![from, to]),
+                _ => {}
+            }
+        }
+    }
+    let mut numbered: Vec<String> = Vec::new();
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let bare = line.trim_start();
+        if let Some(operands) = bare.strip_prefix("move.l\t")
+            && operands.split(", ").all(|one| one.starts_with("%d"))
+        {
+            continue;
+        }
+        if bare.starts_with("movem.l") {
+            out.push(format!("{} <{} registers>", bare.split('\t').next().unwrap(), registers(line).len()));
+            continue;
+        }
+        let mut renamed = line.to_owned();
+        for register in registers(line) {
+            let name = joined.iter().find(|set| set.contains(&register)).map_or(register.clone(), |set| set[0].clone());
+            if !numbered.contains(&name) {
+                numbered.push(name.clone());
+            }
+            let at = numbered.iter().position(|one| *one == name).unwrap();
+            renamed = renamed.replace(&register, &format!("%R{at}"));
+        }
+        out.push(renamed.replace("%R", "%r"));
+    }
+    out
+}
+
+/// `llc`'s loop, with a callee-saved `d2` kept across it. The allocators
+/// differ, so the registers are renamed and the copies between them dropped.
+#[test]
+fn a_counted_loop_is_equal_to_llc_modulo_register_names_and_copies() {
+    let llc = "sum:\n\tsuba.l\t#4, %sp\n\tmovem.l\t%d2, (0,%sp)\n\tmoveq\t#0, %d0\n\tmove.l\t(8,%sp), %d1\n\tmove.l\t%d0, %d2\n\
+               .LBB0_1:\n\tadd.l\t%d2, %d0\n\tadd.l\t#1, %d2\n\tcmp.l\t%d1, %d2\n\tblt\t.LBB0_1\n\
+               \tmovem.l\t(0,%sp), %d2\n\tadda.l\t#4, %sp\n\trts\n";
+    assert_eq!(modulo_names_and_copies(&compiled(SUM, "sum")), modulo_names_and_copies(llc));
+}
+
+/// The instrument: a different immediate, operand order or branch must not be
+/// hidden by the renaming and the dropped copies.
+#[test]
+fn the_loop_comparison_sees_a_changed_instruction() {
+    let base = "f:\n\tmoveq\t#0, %d0\n.LBB0_1:\n\tadd.l\t#1, %d0\n\tcmp.l\t%d1, %d0\n\tblt\t.LBB0_1\n\trts\n";
+    for changed in [
+        base.replace("#1", "#2"),
+        base.replace("cmp.l\t%d1, %d0", "cmp.l\t%d0, %d1"),
+        base.replace("blt", "bgt"),
+        base.replace("add.l", "sub.l"),
+    ] {
+        assert_ne!(modulo_names_and_copies(&changed), modulo_names_and_copies(base), "{changed}");
+    }
+}

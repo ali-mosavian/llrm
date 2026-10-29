@@ -9,10 +9,13 @@
 //! physical one (a `Register` node), an immediate, a frame index, a symbol or
 //! a block.
 //!
+//! A phi is the successor block's [`Phi`]: the register the phi reads, and per
+//! predecessor the register that block copied its value to.
+//!
 //! DEVIATE: spike-local, not `llrm-lir`'s function (its `RegId` is numbered by
-//! iced's x86 registers). One block; no PHIs, jump tables or variadics. Reason:
-//! there is no neutral machine function yet (neutral-lir-need.md). Exit: the
-//! neutral-LIR task; M4c for blocks and PHIs.
+//! iced's x86 registers). No jump tables, switches or variadics. Reason: there
+//! is no neutral machine function yet (neutral-lir-need.md). Exit: the
+//! neutral-LIR task.
 //!
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`, pin d1106deb71cc.
@@ -22,7 +25,7 @@ use std::collections::{BTreeMap, HashMap};
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
-use llrm_dagisel::instr::OperandDesc;
+use llrm_dagisel::instr::{InstrDesc, OperandDesc};
 use llrm_lir::registers::RegId;
 
 use crate::dagisel::function::Selected;
@@ -63,7 +66,7 @@ impl Class {
     }
 
     /// The class both `self` and `other` allow (`constrainRegClass`), if any.
-    fn meet(
+    pub fn meet(
         self,
         other: Class,
     ) -> Option<Class> {
@@ -112,10 +115,31 @@ pub struct Inst {
     pub ties: Vec<(usize, usize)>,
 }
 
+/// `PHI result, (incoming, predecessor)..`: a predecessor is a block index.
+#[derive(Clone, Debug)]
+pub struct Phi {
+    pub result: Reg,
+    pub incoming: Vec<(usize, Reg)>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Block {
-    pub label: String,
+    /// The IR block's number: what a [`Operand::Block`] names.
+    pub id: u32,
     pub insts: Vec<Inst>,
+    pub phis: Vec<Phi>,
+}
+
+impl Inst {
+    /// The pin's description of the instruction, if it is one.
+    pub fn desc(&self) -> Option<&'static InstrDesc> {
+        let Kind::Op(name) = self.kind else { return None };
+        MACHINE_OPCODES.iter().find(|(_, one)| *one == name).and_then(|(code, _)| instrinfo::desc(*code as u16))
+    }
+
+    pub fn is_terminator(&self) -> bool {
+        self.desc().is_some_and(|desc| desc.has(flag::TERMINATOR))
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -139,6 +163,7 @@ fn is_value(vt: EVT) -> bool {
 }
 
 struct Emitter<'a> {
+    /// The block being emitted.
     dag: &'a SelectionDAG,
     function: MFunction,
     /// The virtual register each defined result is in.
@@ -230,6 +255,15 @@ impl Emitter<'_> {
         match n.opcode {
             ISD::CopyToReg => {
                 let dst = self.register(n.ops[1]).ok_or("CopyToReg of no register")?;
+                // a result the instruction defines implicitly (the condition
+                // codes of a compare) is already in that register
+                let source = n.ops[2];
+                if matches!(dst, Reg::Phys(_))
+                    && matches!(self.dag.opcode(source), ISD::Machine(_))
+                    && !self.values.contains_key(&(source.node, source.res))
+                {
+                    return Ok(());
+                }
                 let Some(Operand::Use(src)) = self.operand(n.ops[2])? else {
                     return Err("CopyToReg of a value that is no register".to_owned());
                 };
@@ -291,21 +325,42 @@ pub fn emit(
     name: &str,
     blocks: &[Selected],
 ) -> Result<MFunction, String> {
-    let [one] = blocks else { return Err("more than one block is not translated (M4c)".to_owned()) };
+    let first = blocks.first().ok_or("a function with no block")?;
     let mut emitter = Emitter {
-        dag: &one.dag,
+        dag: &first.dag,
         function: MFunction { name: name.to_owned(), ..MFunction::default() },
         values: HashMap::new(),
         builder: HashMap::new(),
     };
-    let mut insts = Vec::new();
-    // A unit lists its glued nodes last first.
-    for unit in &one.units {
-        for &node in unit.nodes.iter().rev() {
-            emitter.emit(node, &mut insts)?;
+    for one in blocks {
+        emitter.dag = &one.dag;
+        emitter.values.clear();
+        let mut insts = Vec::new();
+        // A unit lists its glued nodes last first.
+        for unit in &one.units {
+            for &node in unit.nodes.iter().rev() {
+                emitter.emit(node, &mut insts)?;
+            }
+        }
+        emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
+        emitter.function.blocks.push(Block { id: one.block.0, insts, phis: Vec::new() });
+    }
+    // `HandlePHINodesInSuccessorBlocks`: each export is an input of a phi in
+    // the block the phi is in.
+    for (pred, one) in blocks.iter().enumerate() {
+        for update in &one.phis {
+            let at = blocks.iter().position(|other| other.block == update.phi_block).ok_or("a phi in no block")?;
+            let (Some(&result), Some(&incoming)) =
+                (emitter.builder.get(&update.result), emitter.builder.get(&update.incoming))
+            else {
+                continue;
+            };
+            let phis = &mut emitter.function.blocks[at].phis;
+            match phis.iter_mut().find(|phi| phi.result == result) {
+                Some(phi) => phi.incoming.push((pred, incoming)),
+                None => phis.push(Phi { result, incoming: vec![(pred, incoming)] }),
+            }
         }
     }
-    emitter.function.fixed = one.dag.fixed_offsets.clone();
-    emitter.function.blocks.push(Block { label: name.to_owned(), insts });
     Ok(emitter.function)
 }

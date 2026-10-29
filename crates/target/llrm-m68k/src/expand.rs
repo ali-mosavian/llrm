@@ -62,12 +62,53 @@ fn frame_op(
     });
 }
 
-/// The function as printable instructions.
+/// A line of the function: a block's label (its layout index) or an
+/// instruction.
+pub enum Line {
+    Label(usize),
+    Inst(mc::Inst),
+}
+
+/// A branch to the block laid out next is not kept (`BranchFolding`'s
+/// fall-through, which the builder leaves to the emitter).
+fn falls_through(
+    function: &MFunction,
+    at: usize,
+    inst: &crate::mfunc::Inst,
+) -> bool {
+    matches!(inst.kind, Kind::Op(name) if name.starts_with("BRA"))
+        && matches!(
+            inst.operands.first(),
+            Some(Operand::Block(id)) if function.blocks.get(at + 1).is_some_and(|next| next.id == *id)
+        )
+}
+
+/// The function as lines; `number` is the function's number in the module,
+/// which names the labels.
 pub fn finish(
     function: &MFunction,
     assignment: &Assignment,
-) -> Result<Vec<mc::Inst>, String> {
-    let insts: Vec<_> = function.blocks.iter().flat_map(|block| block.insts.iter()).collect();
+    number: usize,
+) -> Result<Vec<Line>, String> {
+    let kept: Vec<(usize, &crate::mfunc::Inst)> = function
+        .blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(at, block)| block.insts.iter().map(move |inst| (at, inst)))
+        .filter(|(at, inst)| {
+            let last = function.blocks[*at].insts.last().is_some_and(|last| std::ptr::eq(last, *inst));
+            !(last && falls_through(function, *at, inst))
+        })
+        .collect();
+    let insts: Vec<_> = kept.iter().map(|(_, inst)| *inst).collect();
+    let targeted: Vec<usize> = insts
+        .iter()
+        .flat_map(|inst| &inst.operands)
+        .filter_map(|operand| match operand {
+            Operand::Block(id) => function.blocks.iter().position(|block| block.id == *id),
+            _ => None,
+        })
+        .collect();
     let has_calls = insts.iter().any(|inst| inst.call);
     let max_call_frame = insts
         .iter()
@@ -108,7 +149,18 @@ pub fn finish(
     });
     let mut out = Vec::new();
     layout.prologue().iter().for_each(|op| frame_op(op, &mut out));
+    let mut lines = Vec::new();
+    let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
+    let mut shown = 0usize;
     for inst in insts {
+        let at = block_of.next().expect("a block per instruction");
+        while shown <= at {
+            if targeted.contains(&shown) {
+                lines.extend(out.drain(..).map(Line::Inst));
+                lines.push(Line::Label(shown));
+            }
+            shown += 1;
+        }
         let operands: Vec<mc::Operand> = {
             let mut converted = Vec::new();
             let mut it = inst.operands.iter().peekable();
@@ -128,7 +180,11 @@ pub fn finish(
                         mc::Operand::Imm(*value)
                     }
                     Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
-                    Operand::Block(id) => mc::Operand::Symbol(format!(".LBB{id}"), 0),
+                    Operand::Block(id) => {
+                        let at =
+                            function.blocks.iter().position(|block| block.id == *id).ok_or("a branch to no block")?;
+                        mc::Operand::Symbol(format!(".LBB{number}_{at}"), 0)
+                    }
                     Operand::Frame(_) => return Err("a frame index with no displacement".to_owned()),
                 });
             }
@@ -178,5 +234,6 @@ pub fn finish(
             Kind::Op(name) => out.push(mc::Inst { opcode: name, operands }),
         }
     }
-    Ok(out)
+    lines.extend(out.into_iter().map(Line::Inst));
+    Ok(lines)
 }
