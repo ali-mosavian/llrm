@@ -898,7 +898,7 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     return lines
 
 
-def base_rows(args, only: list[str] | None = None) -> tuple[dict, set[str], str]:
+def base_rows(args) -> tuple[dict, set[str], str]:
     """(the base's rows of ours, the programs the base and this tree have alike, the base's commit): the base is the merge-base with
     origin/main, built and measured by its own tree (basecounts.py), once per tree."""
     import measure
@@ -907,32 +907,50 @@ def base_rows(args, only: list[str] | None = None) -> tuple[dict, set[str], str]
     base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
     with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
         base, was = basecounts.base_counts(
-            base_sha, args.opt, basecounts.compiler_key, lambda sha: measure.built(sha, measure.BENCH_BASE_PROFILE), lambda directory, opts, names=None: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time, names), args.time, only=only
+            base_sha, args.opt, basecounts.compiler_key, lambda sha: measure.built(sha, measure.BENCH_BASE_PROFILE), lambda directory, opts, names=None: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time, names), args.time
         )
     now = basecounts.programs(ROOT)
     return base, {name for name in now if was.get(name) == now[name]}, base_sha
 
 
+def base_leg(args) -> int:
+    """`--shard base`: the base's counts, measured (or restored) once for the whole run and written to `base.json` for --merge. The numbered slices
+    measure only the head: each of them built the base and measured its part of it (bench-3 of gate run 2 was cancelled at 60 minutes in it)."""
+    stage("base counts")
+    try:
+        base, same, base_sha = base_rows(args)
+    except BaseException as why:  # noqa: BLE001: the reason is the line the gate prints
+        print("FAIL BASE: the base could not be measured: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:])
+        return 1
+    stage(f"base {base_sha[:9]}: {len(base)} rows")
+    if args.json:
+        args.json.mkdir(parents=True, exist_ok=True)
+        (args.json / "base.json").write_text(json.dumps({"base": {"/".join(key): value for key, value in base.items()}, "same": sorted(same), "base_sha": base_sha}))
+    print(f"base {base_sha[:9]}: {len(base)} rows: 0 problems")
+    return 0
+
+
 def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
-    """The verdict of the `count` shard files in `folder` (bench.py --shard writes them): the lines the whole run prints that a shard
-    cannot (the standing against each reference, the waivers nothing needed, the problems last), and with `record` the head's counts as
-    the base of the next pull requests. A missing shard is a failure, named: its rows were not judged."""
+    """The verdict of the `count` shard files in `folder` (bench.py --shard writes them) judged against `base.json` (--shard base): the lines the
+    whole run prints that a shard cannot (the standing against each reference, the waivers nothing needed, the problems last), and with `record`
+    the head's counts as the base of the next pull requests. A missing shard, or no base, is a failure, named: its rows were not judged."""
     files = sorted(folder.glob("shard-*.json"))
     have = {int(one.stem.split("-")[1]) for one in files}
     if missing := sorted(set(range(1, count + 1)) - have):
         print(f"FAIL BASE: no result from bench shard {' '.join(map(str, missing))} of {count}: its rows were not judged")
         return 1
-    measured, base, same, problems, heads = {}, {}, set(), [], set()
+    if not (folder / "base.json").is_file():
+        print("FAIL BASE: no result from bench-base: no row was judged against the base")
+        return 1
+    measured = {}
     for one in files:
-        data = json.loads(one.read_text())
-        measured |= basecounts.rows_of(data["measured"])
-        base |= basecounts.rows_of(data["base"])
-        same |= set(data["same"])
-        problems += data["problems"]
-        heads.add(data["base_sha"])
+        measured |= basecounts.rows_of(json.loads(one.read_text())["measured"])
+    data = json.loads((folder / "base.json").read_text())
+    base, same, base_sha = basecounts.rows_of(data["base"]), set(data["same"]), data["base_sha"]
+    problems = judge(measured, [], opts, base, same)
     stale = basecounts.judge(measured, base, basecounts.waivers(), same)[2]
     print(*standing(measured, [], opts), sep="\n")
-    print(f"BASE {' '.join(sorted(h[:9] for h in heads))}: {len(base)} rows")
+    print(f"BASE {base_sha[:9]}: {len(base)} rows")
     print(*basecounts.stale_summary(stale), sep="\n")
     if record:
         import measure
@@ -964,6 +982,8 @@ def main() -> int:
     ONLY = args.lang
     if args.merge:
         return merge(Path(args.merge[0]), int(args.merge[1]), args.opt, args.record)
+    if args.shard == "base":
+        return base_leg(args)
     if args.shard:
         index, count = map(int, args.shard.split("/"))
         args.select = shards.of(index, count)
@@ -972,6 +992,12 @@ def main() -> int:
     stage(f"measuring {len(args.select) or 'every'} benchmarks at {' '.join(args.opt)}")
     measured = measure_all(args.select, args.opt, args.work, args.time)
     stage(f"measured {len(measured)} rows")
+    if args.shard:  # a slice only measures: --merge judges every row against the base that `--shard base` measured once
+        print(f"shard {args.shard}: {len(measured)} measurements: 0 problems")
+        if args.json:
+            args.json.mkdir(parents=True, exist_ok=True)
+            (args.json / f"shard-{index}.json").write_text(json.dumps({"measured": {"/".join(key): value for key, value in measured.items()}}))
+        return 0
     if args.references:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json and not args.shard:
@@ -998,23 +1024,12 @@ def main() -> int:
         return 0
     stage("base counts")
     try:
-        base, same, base_sha = base_rows(args, args.select) if args.shard else base_rows(args)
+        base, same, base_sha = base_rows(args)
     except BaseException as why:  # noqa: BLE001: the reason is the line the gate prints
         print("FAIL BASE: the base could not be measured: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:])
         return 1
     stage(f"base {base_sha[:9]}: {len(base)} rows")
     problems = judge(measured, args.select, args.opt, base, same)
-    if args.shard:  # the rest of the verdict needs every shard: --merge
-        for one in problems:
-            print("FAIL", one)
-        print(f"shard {args.shard}: {len(measured)} measurements: {len(problems)} problems")
-        if args.json:
-            args.json.mkdir(parents=True, exist_ok=True)
-            mine = {"/".join(key): value for key, value in measured.items()}
-            (args.json / f"shard-{index}.json").write_text(
-                json.dumps({"measured": mine, "base": {"/".join(key): value for key, value in base.items() if key[0] in args.select}, "same": sorted(same), "problems": problems, "base_sha": base_sha})
-            )
-        return 1 if problems else 0
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
