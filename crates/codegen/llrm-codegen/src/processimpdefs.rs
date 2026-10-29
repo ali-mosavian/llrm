@@ -210,6 +210,16 @@ pub fn processed(body: &LirBody) -> LirBody {
     loop {
         let defined: HashSet<u32> =
             current.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| implicit_def_of(one)).collect();
+        // After phi elimination a register has several definitions: one a path
+        // writes does not make it undefined where the others reach.
+        let written: HashSet<u32> = current
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| implicit_def_of(one).is_none())
+            .flat_map(|one| one.defines.iter().copied())
+            .collect();
+        let undefined: HashSet<u32> = defined.iter().copied().filter(|value| !written.contains(value)).collect();
         if defined.is_empty() {
             return current;
         }
@@ -261,7 +271,7 @@ pub fn processed(body: &LirBody) -> LirBody {
                     .insns
                     .iter()
                     .filter_map(|one| {
-                        let flagged: Vec<u32> = one.uses.iter().copied().filter(|v| defined.contains(v)).collect();
+                        let flagged: Vec<u32> = one.uses.iter().copied().filter(|v| undefined.contains(v)).collect();
                         if flagged.is_empty() {
                             return Some(Arc::clone(one));
                         }
@@ -459,6 +469,38 @@ mod tests {
     fn test_the_zero_stays_where_it_is_waited_for_or_read_otherwise() {
         assert_eq!(names(&pass_over(false, vec![zero(1), sbb(2, 1)])), ["mov", "sbb"]);
         assert_eq!(names(&pass_over(true, vec![zero(1), sbb(2, 1), add(3, 4, 1)])), ["mov", "sbb", "add"]);
+    }
+
+    /// A spill store of `value` to a frame cell.
+    fn spill(value: u32) -> Arc<Insn> {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem {
+            through: llrm_lir::registers::RegId::BP,
+            disp_width: 2,
+            ..Mem::new(Some(Addr::new(Space::Frame, -4)), 4)
+        };
+        let what = Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Mem(cell)],
+            sources: vec![held(value)],
+            ..Semantics::new(Operation::Move)
+        };
+        Arc::new(Insn::new(0, None, Some(what), Vec::new(), vec![value]))
+    }
+
+    /// entries.nib at m32 -O2 printed a line length of 959394096: a register
+    /// one path leaves undefined (`implicit_def`) and another writes was
+    /// spilled, and every spill store of it was dropped as a store of
+    /// nothing, the written path's too. Only a value with no other
+    /// definition is undefined.
+    #[test]
+    fn test_a_spill_of_a_value_one_path_writes_is_kept() {
+        let got = processed(&body(vec![def(1), copy(1, 5), spill(1)], Vec::new()));
+        assert_eq!(
+            names(&got).iter().filter(|name| *name == "mov").count(),
+            2,
+            "the spill store went with the undefined path"
+        );
     }
 
     /// The use becomes an undef read and the definition goes.
