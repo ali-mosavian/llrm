@@ -226,6 +226,7 @@ pub fn object(
             offset,
             length: function.blocks.iter().map(|block| words(block) * 4).sum(),
             rows: crate::cfi::rows(&function.blocks),
+            seh: Vec::new(),
         })
         .collect();
     let mut sections = vec![section(".text", Role::Text, 4, text, text_relocs)];
