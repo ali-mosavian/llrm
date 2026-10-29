@@ -1164,3 +1164,16 @@ fn a_bump_the_exit_does_not_need_is_made_only_on_the_looping_path() {
         assert_eq!(run, 11, "{name}");
     }
 }
+
+/// The sink moves an instruction into the one path that reads it, which can cost a jump and a
+/// callee-saved cell on the path that stays hot: in the two-exit loops of lz4 it made the function
+/// 13 bytes larger and 666 cycles slower. The sunk form is kept only if it is no larger and no
+/// slower. lz4 (clang -O2 IR of `tests/bench/kernels.c`) stays at its 447 bytes and 37224 cycles
+/// of before; the walk above, where the sink pays, still sinks.
+#[test]
+fn the_sink_is_kept_only_where_it_is_no_larger_and_no_slower() {
+    let ir = include_str!("bench/lz4.ll");
+    let text = compile(ir, "lz4");
+    let priced = llrm_6502::timing::estimate(Cpu::Mos6502, &text).expect("prices");
+    assert!(priced.bytes <= 447, "lz4 is {} bytes:\n{text}", priced.bytes);
+}
