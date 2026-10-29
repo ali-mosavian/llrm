@@ -227,19 +227,56 @@ pub fn zero_to_bss(
     data_space: u32,
     bss_begin: bool,
 ) {
+    let bss = zeros_out(built, module, 0, |space| space == data_space);
+    if bss.is_empty() {
+        return;
+    }
+    if bss_begin {
+        built.data.push(("BSSB".to_owned(), Vec::new()));
+    }
+    built.data.push(("_BSS".to_owned(), bss));
+}
+
+/// Under `far_bss` the far variables of zeros move out of the far data segment
+/// (`<code>_FARDATA`) to one beside it that the object stores no bytes for, as
+/// `lay_out` does for a frontend's far variables: the start-up zeroes far
+/// uninitialised data. Huge objects, which have segments of their own, stay.
+pub fn zero_far_to_bss(
+    built: &mut masm::Module,
+    module: &Module,
+) {
+    let Some(at) = built.data.iter().position(|(name, _)| name.ends_with("_FARDATA")) else { return };
+    let bss = zeros_out(built, module, at, |space| space == crate::backend::assemble::FAR_SPACE);
+    if bss.is_empty() {
+        return;
+    }
+    let name = format!("{}_BSS", built.data[at].0);
+    built.private.insert(name.clone());
+    built.far_bss.insert(name.clone());
+    built.data.push((name, bss));
+}
+
+/// The objects of zeros of `module`'s variables in address space `wanted`,
+/// taken out of segment `at` of `built` and returned as labels with fills.
+fn zeros_out(
+    built: &mut masm::Module,
+    module: &Module,
+    at: usize,
+    wanted: impl Fn(u32) -> bool,
+) -> Vec<masm::Datum> {
     let mut bss: Vec<masm::Datum> = Vec::new();
-    for (at, global) in module.globals.iter().enumerate() {
+    for (index, global) in module.globals.iter().enumerate() {
         let GlobalKind::Variable(variable) = &global.kind else { continue };
-        let id = GlobalId(at as u32);
-        if variable.initializer.is_none() || variable.constant || global.address_space != data_space {
+        let id = GlobalId(index as u32);
+        if variable.initializer.is_none() || variable.constant || !wanted(global.address_space) {
             continue;
         }
         // A variable nothing emitted has no label, and no data to move.
-        let Some(label) = built.names.get(&(Space::Segment, at as i64)).cloned() else { continue };
+        let Some(label) = built.names.get(&(Space::Segment, index as i64)).cloned() else { continue };
         if !stored_zero(module, id, &built.names) {
             continue;
         }
-        let items = &mut built.data[0].1;
+        let items = &mut built.data[at].1;
         let Some(first) = items.iter().position(|one| matches!(one, masm::Datum::Label(l) if l.name == label)) else {
             continue;
         };
@@ -254,13 +291,7 @@ pub fn zero_to_bss(
         bss.extend(object.into_iter().filter(|one| matches!(one, masm::Datum::Align(_) | masm::Datum::Label(_))));
         bss.push(masm::Datum::Fill(masm::Fill { size: size as i64, byte: None }));
     }
-    if bss.is_empty() {
-        return;
-    }
-    if bss_begin {
-        built.data.push(("BSSB".to_owned(), Vec::new()));
-    }
-    built.data.push(("_BSS".to_owned(), bss));
+    bss
 }
 
 /// What one segment can hold: a 16-bit offset's range.
