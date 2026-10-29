@@ -692,3 +692,125 @@ define i32 @f(i32 %x) {
         assert_eq!(code, 5 + 7 + 5, "{asm}");
     }
 }
+
+fn copy_of(
+    bytes: u32,
+    after: &str,
+) -> String {
+    format!(
+        "declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+define i32 @f(ptr %d, ptr %s) {{
+  call void @llvm.memcpy.p0.p0.i32(ptr align 4 %d, ptr align 4 %s, i32 {bytes}, i1 false)
+{after}
+}}"
+    )
+}
+
+/// An inline struct copy walks both pointers with `(An)+`: 2 bytes a move where
+/// the later ones were 6 (`move.l (4,%a0), (4,%a1)`), and what is read from the
+/// destination afterwards is the same bytes, at the displacement less the chain.
+#[test]
+fn an_inline_copy_steps_both_pointers_and_later_reads_see_the_copy() {
+    for bytes in [8, 24, 32] {
+        let after = format!(
+            "  %p = getelementptr i8, ptr %d, i32 {}
+  %v = load i32, ptr %p, align 4
+  %q = getelementptr i8, ptr %d, i32 4
+  %w = load i32, ptr %q, align 4
+  %r = add i32 %v, %w
+  ret i32 %r",
+            bytes - 4
+        );
+        let ir = copy_of(bytes, &after);
+        let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
+        assert_eq!(asm.matches("(%a0)+").count(), bytes as usize / 4, "{bytes}: {asm}");
+        assert_eq!(asm.matches("(%a1)+").count(), bytes as usize / 4, "{bytes}: {asm}");
+        assert!(!asm.contains("(4,%a0)") && !asm.contains("(8,%a0)"), "{bytes}: {asm}");
+        let pinned = text_with(&module(&ir), "f", Cpu::M68000, Options::PINNED).unwrap();
+        assert!(!pinned.contains(")+"), "{pinned}");
+    }
+}
+
+/// Not a chain: the destination is read as a value between two accesses, or
+/// it is the pointer the function returns. The copy must still be right.
+#[test]
+fn a_copy_whose_pointer_is_used_whole_is_not_stepped_past_the_use() {
+    let between = "declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+define i32 @f(ptr %d, ptr %s) {
+  call void @llvm.memcpy.p0.p0.i32(ptr align 4 %d, ptr align 4 %s, i32 12, i1 false)
+  %x = ptrtoint ptr %d to i32
+  %p = getelementptr i8, ptr %d, i32 8
+  %v = load i32, ptr %p, align 4
+  %r = add i32 %v, %x
+  ret i32 %r
+}";
+    let asm = text_with(&module(between), "f", Cpu::M68000, Options::default()).unwrap();
+    assert!(asm.contains("move.l"), "{asm}");
+    let returned = "declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+define ptr @f(ptr %d, ptr %s) {
+  call void @llvm.memcpy.p0.p0.i32(ptr align 4 %d, ptr align 4 %s, i32 12, i1 false)
+  %q = getelementptr i8, ptr %d, i32 4
+  ret ptr %q
+}";
+    let asm = text_with(&module(returned), "f", Cpu::M68000, Options::default()).unwrap();
+    assert!(asm.contains("rts"), "{asm}");
+}
+
+/// Run: a 24-byte copy between two frame arrays, then fields read back.
+#[test]
+fn a_stepped_copy_copies_every_word() {
+    let ir = "declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+define i32 @f(i32 %x) {
+  %a = alloca [6 x i32], align 4
+  %b = alloca [6 x i32], align 4
+  %a0 = getelementptr i32, ptr %a, i32 0
+  %a5 = getelementptr i32, ptr %a, i32 5
+  %a2 = getelementptr i32, ptr %a, i32 2
+  store i32 %x, ptr %a0, align 4
+  %y = add i32 %x, 1
+  store i32 %y, ptr %a2, align 4
+  %z = add i32 %x, 2
+  store i32 %z, ptr %a5, align 4
+  call void @llvm.memcpy.p0.p0.i32(ptr align 4 %b, ptr align 4 %a, i32 24, i1 false)
+  %b0 = load i32, ptr %b, align 4
+  %b2p = getelementptr i32, ptr %b, i32 2
+  %b2 = load i32, ptr %b2p, align 4
+  %b5p = getelementptr i32, ptr %b, i32 5
+  %b5 = load i32, ptr %b5p, align 4
+  %s1 = add i32 %b0, %b2
+  %s2 = add i32 %s1, %b5
+  ret i32 %s2
+}";
+    for options in [Options::default(), Options::PINNED] {
+        if let Some(code) = status(ir, &[10], options) {
+            assert_eq!(code, 10 + 11 + 12, "{options:?}");
+        }
+    }
+}
+
+/// A copy or fill past the inline limit (eight moves; four at size) panicked with
+/// "calling.toml names no register ecx": the builder took x86's `rep movs` and
+/// `rep stos` for any target. A target with no string instructions calls
+/// `memcpy`, `memmove`, `memset`, as the pin does.
+#[test]
+fn a_copy_or_fill_past_the_inline_limit_is_a_call() {
+    for (name, call) in [
+        ("memcpy", "call void @llvm.memcpy.p0.p0.i32(ptr align 4 %d, ptr align 4 %s, i32 40, i1 false)"),
+        ("memmove", "call void @llvm.memmove.p0.p0.i32(ptr align 4 %d, ptr align 4 %s, i32 40, i1 false)"),
+        ("memset", "call void @llvm.memset.p0.i32(ptr align 4 %d, i8 1, i32 96, i1 false)"),
+    ] {
+        let ir = format!(
+            "declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+declare void @llvm.memmove.p0.p0.i32(ptr, ptr, i32, i1)
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+define void @f(ptr %d, ptr %s) {{
+  {call}
+  ret void
+}}"
+        );
+        for options in [Options::default(), Options::PINNED] {
+            let asm = text_with(&module(&ir), "f", Cpu::M68000, options).unwrap();
+            assert!(asm.contains(&format!("jsr\t{name}")) || asm.contains(name), "{name} {options:?}: {asm}");
+        }
+    }
+}

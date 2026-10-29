@@ -1,4 +1,4 @@
-# Library routines, 2026-10-29 17:11 (pin d1106deb71cc, qemu-m68k -cpu m68000)
+# Library routines, 2026-10-29 17:27 (pin d1106deb71cc, qemu-m68k -cpu m68000)
 
 Ten routines written after the first set was tuned (`bench/library/*.c`; IR from `gen.py`: clang -O2 without
 unrolling, as gcc -O2 does, with the lines MIR's subset does not take dropped). `cargo run -p llrm-m68k --release
@@ -20,10 +20,10 @@ Speed level (`ours`, `raw`) against `llc -O2` and `gcc -O2`; size level (`ours -
 | bsearch | 72 | 72 | 76 | 72 | 66 | 63 | 63 | 61 | 63 | 64 | -O2 +2 insns, -Os +6 B |
 | partition | 120 | 110 | 92 | 110 | 94 | 192 | 151 | 124 | 151 | 199 | -O2 +18 B, -O2 +27 insns, -Os +16 B |
 | muldiv | 80 | 80 | 64 | 80 | 64 | - | - | - | - | - | -O2 +16 B, -Os +16 B |
-| structcopy | 54 | 54 | 38 | 54 | 42 | - | - | - | - | - | -O2 +16 B, -Os +12 B |
+| structcopy | 34 | 34 | 38 | 34 | 42 | - | - | - | - | - | at or below |
 | fnptr | 52 | 52 | 46 | 52 | 46 | 16 | 16 | 16 | 16 | 16 | -O2 +6 B, -Os +6 B |
 
-Rows still above a reference: memcpy, memset, hex, crc16, bsearch, partition, muldiv, structcopy, fnptr.
+Rows still above a reference: memcpy, memset, hex, crc16, bsearch, partition, muldiv, fnptr.
 
 ## Full table
 
@@ -37,7 +37,7 @@ Rows still above a reference: memcpy, memset, hex, crc16, bsearch, partition, mu
 | bsearch | 72 | 72 | 72 | 106 | 102 | 66 | 76 | 63 | 63 | 63 | 64 | 64 | 68 | 61 | 10 all |
 | partition | 120 | 110 | 110 | 150 | 146 | 94 | 92 | 192 | 151 | 151 | 202 | 199 | 219 | 124 | 19 all |
 | muldiv | 80 | 80 | 80 | 82 | 82 | 64 | 64 | - | - | - | - | - | - | - | 236 all |
-| structcopy | 54 | 54 | 54 | 76 | 66 | 42 | 38 | - | - | - | - | - | - | - | 40 all |
+| structcopy | 34 | 34 | 34 | 76 | 66 | 42 | 38 | - | - | - | - | - | - | - | 40 all |
 | fnptr | 52 | 52 | 52 | 56 | 56 | 46 | 46 | 16 | 16 | 16 | 16 | 16 | 16 | 16 | 36 all |
 
 ## Above the best reference (bytes / insns)
@@ -48,7 +48,6 @@ Rows still above a reference: memcpy, memset, hex, crc16, bsearch, partition, mu
 | hex | +24 B, +9 insns | the `or disjoint` of `'0' + d` is a `lea` through an address register (the pin has `ADD32di` for `add` only); kept for a constant over 8, where `add.l #c` is no better (8 B and 16 clocks either way; `addq` for 1 to 8 is 2 B, `lea_on_data`). The bench input (`0xBEEF`) never takes the digit arm. What is left: gcc's `add.b #48` (4 B; the high bits are known zero and the sum is under 256), and the loop test `cmpi.l #16` on the old value where gcc tests the shifted value's codes |
 | crc16 | +18 B, +6 insns | `and.l #32768` + `tst.l` of one bit where `btst #15` is 4 bytes; the 8-trip inner loop counter |
 | partition | +16 B, +27 insns | pointer arithmetic through data registers, repeated `lsl.l #2` of one index; two LSR index registers |
-| structcopy | +12 B | the pin's memcpy expansion stores with displacements (6 B a pair); gcc walks both pointers with `(An)+` (2 B a pair) |
 | bsearch | +6 B | the compare of a loaded value with the key through a register |
 | fnptr | +6 B | the pin's reserved call frame stores arguments at `(sp)`; gcc pushes them |
 | muldiv | +16 B | three calls: `__mulsi3`, `__divsi3`, and `__mulsi3` again for the remainder (llc 82, gcc 64); argument stores and the frame, not looked at yet. Its result is checked against `rt.ll`, which this compiler builds |
