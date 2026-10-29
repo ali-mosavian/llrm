@@ -45,7 +45,7 @@ sed -n '/MatcherTable\[\] = {/,/^  };/p' "$WORK/GenDAGISel.inc" |
   grep -oE "\\b($PREFIXES)::[A-Za-z0-9_]+" | sort -u | grep -vxFf <(cut -d' ' -f1 "$OWN") > "$WORK/symbols.txt" || true
 
 grep -oE '\bOPC_[A-Za-z0-9_]+|\bOPFL_[A-Za-z0-9_]+' "$S/include/llvm/CodeGen/SelectionDAGISel.h" | grep -v OPFL_VariadicN | sort -u > "$WORK/members.txt"
-{ cat "$WORK/symbols.txt" "$WORK/instr_symbols.txt"; field extra_symbols; } | grep . | sort -u | sed 's/.*/P(&);/' > "$WORK/symbols.cpp"
+{ cat "$WORK/symbols.txt" "$WORK/instr_symbols.txt"; field extra_symbols; field registers | sed "s/^/$NS/"; } | grep . | sort -u | sed 's/.*/P(&);/' > "$WORK/symbols.cpp"
 sed -n '/enum BuiltinOpcodes {/,/^  };/p;/^  enum {/,/^  };/p' "$S/include/llvm/CodeGen/SelectionDAGISel.h" > "$WORK/enums.cpp"
 sed 's/.*/P(&);/' "$WORK/members.txt" > "$WORK/members.cpp"
 field ids_includes > "$WORK/includes.cpp"

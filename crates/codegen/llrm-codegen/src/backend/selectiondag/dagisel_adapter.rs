@@ -238,6 +238,51 @@ fn our_vt(vt: Vt) -> EVT {
 /// raw id.
 pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::from_raw(255);
 
+/// What the pin's register number `register` is to the builder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinRegister {
+    /// A register the builder names (`NodeData::PhysReg`).
+    Physical(llrm_lir::registers::RegId),
+    /// `$noreg`, or a register the target lets the selector make virtual.
+    Virtual,
+    /// A register the target's map does not know. Selection refuses: reading
+    /// it as virtual reads the wrong register.
+    Unknown,
+}
+
+/// How one target's pin register numbers meet our nodes.
+pub trait TargetIds {
+    fn register(
+        &self,
+        pin: u16,
+    ) -> PinRegister;
+
+    /// The pin's number of the register the builder names `id`.
+    fn pin_register(
+        &self,
+        id: llrm_lir::registers::RegId,
+    ) -> Option<u16>;
+}
+
+/// The x86 numbers (`phys_reg`, `pin_register`); a register they lack is virtual.
+pub struct X86Ids;
+
+impl TargetIds for X86Ids {
+    fn register(
+        &self,
+        pin: u16,
+    ) -> PinRegister {
+        phys_reg(pin).map_or(PinRegister::Virtual, PinRegister::Physical)
+    }
+
+    fn pin_register(
+        &self,
+        id: llrm_lir::registers::RegId,
+    ) -> Option<u16> {
+        pin_register(id)
+    }
+}
+
 /// The register of the pin's register number `register` that the builder names
 /// as a physical register (`NodeData::PhysReg`); `None` for `$noreg` (0) and
 /// the ones with no id.
@@ -279,15 +324,20 @@ pub fn pin_register(id: llrm_lir::registers::RegId) -> Option<u16> {
 
 impl DagisAdapter<'_> {
     /// The `Register` node for the pin's register number: physical when the
-    /// builder names it so.
+    /// builder names it so. A number the target does not know is a virtual
+    /// register for now and a [`DagisAdapter::refusal`].
     fn register_node(
         &mut self,
         vt: EVT,
         register: u16,
     ) -> SDValue {
-        match phys_reg(register) {
-            Some(id) => self.dag.get_phys_register(vt, id),
-            None => self.dag.get_register(vt, u32::from(register)),
+        match self.ids.register(register) {
+            PinRegister::Physical(id) => self.dag.get_phys_register(vt, id),
+            PinRegister::Virtual => self.dag.get_register(vt, u32::from(register)),
+            PinRegister::Unknown => {
+                self.refusal.get_or_insert_with(|| format!("pin register {register} has no id on this target"));
+                self.dag.get_register(vt, u32::from(register))
+            }
         }
     }
 }
@@ -313,10 +363,19 @@ pub struct DagisAdapter<'a> {
     /// made, and `-(id + 1)` for an unselected successor of a selected node
     /// (`InvalidateNodeId`): topological pruning looks at positive ids only.
     node_id: Vec<i32>,
+    ids: &'a dyn TargetIds,
+    refusal: Option<String>,
 }
 
 impl<'a> DagisAdapter<'a> {
     pub fn new(dag: &'a mut SelectionDAG) -> DagisAdapter<'a> {
+        DagisAdapter::with_ids(dag, &X86Ids)
+    }
+
+    pub fn with_ids(
+        dag: &'a mut SelectionDAG,
+        ids: &'a dyn TargetIds,
+    ) -> DagisAdapter<'a> {
         // A node nothing reaches from the root is no user of what it read
         // (`hasOneUse`): the combiner deleted it, or it is a chain node it
         // replaced (a `brcond` the lowering turned into `X86ISD::BRCOND`).
@@ -334,7 +393,13 @@ impl<'a> DagisAdapter<'a> {
         for (position, node) in super::dag_select::users_first(dag).into_iter().rev().enumerate() {
             node_id[node as usize] = position as i32;
         }
-        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id }
+        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id, ids, refusal: None }
+    }
+
+    /// Why selection must be refused, if the selector named something the target
+    /// cannot map.
+    pub fn refusal(&self) -> Option<&str> {
+        self.refusal.as_deref()
     }
 
     /// `Node->setNodeId(-1)`.
@@ -494,7 +559,7 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<u16> {
         match self.dag.nodes()[node as usize].data {
-            NodeData::PhysReg(id) => pin_register(id),
+            NodeData::PhysReg(id) => self.ids.pin_register(id),
             // `$noreg`
             NodeData::Register(0) => Some(0),
             _ => None,
