@@ -34,7 +34,8 @@ runs:
         sudo apt-get update -qq
         sudo apt-get install -y -qq ninja-build cmake ccache lld
         sh toolchain/clangbuild.sh ${{ inputs.kind }}
-    # Saved here, not by the cache action's post step: a superseded run is cancelled and a cancelled job saves nothing, so the ~1 h build was lost.
+    # Saved here, right after the build, not by the cache action's post step: a cancelled job runs no post step, so a run superseded after the build
+    # (during the artifact upload, say) lost its ~1 h tree. One cancelled DURING the build still saves nothing: the build is one step.
     - if: steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
