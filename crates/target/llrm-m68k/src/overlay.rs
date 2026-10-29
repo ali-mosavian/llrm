@@ -266,7 +266,7 @@ pub fn drop_redundant_tests(lines: Vec<crate::expand::Line>) -> Vec<crate::expan
 
 /// A conditional branch in its 8-bit form (the form the compiler emits; the
 /// assembler relaxes it later).
-fn is_branch_on_flags(opcode: &str) -> bool {
+pub(crate) fn is_branch_on_flags(opcode: &str) -> bool {
     matches!(
         opcode,
         "Bhi8"
@@ -289,11 +289,11 @@ fn is_branch_on_flags(opcode: &str) -> bool {
 type AsmRow = (&'static str, &'static [AsmOperand]);
 type EncodingRow = (u16, &'static [Piece]);
 
-struct PostIncrementRow {
+pub(crate) struct PostIncrementRow {
     asm: AsmRow,
     encoding: EncodingRow,
     /// The operand number of the `(An)` it reads or writes through.
-    operand: usize,
+    pub(crate) operand: usize,
     bytes: i64,
 }
 
@@ -369,7 +369,7 @@ fn post_increment_rows(name: &str) -> Option<&'static PostIncrementRow> {
 }
 
 /// The post-increment form of an instruction with an `(An)` operand.
-fn post_increment_form(opcode: &str) -> Option<(&'static str, &'static PostIncrementRow)> {
+pub(crate) fn post_increment_form(opcode: &str) -> Option<(&'static str, &'static PostIncrementRow)> {
     post_increment_table().get_key_value(format!("{opcode}+").as_str()).map(|(name, row)| (*name, row))
 }
 
@@ -399,7 +399,7 @@ fn move_post_increment(
 }
 
 /// The block a branch names, by layout index (`.LBB<function>_<index>`).
-fn branch_target(inst: &Inst) -> Option<usize> {
+pub(crate) fn branch_target(inst: &Inst) -> Option<usize> {
     let [Operand::Symbol(name, 0)] = &inst.operands[..] else { return None };
     name.strip_prefix(".LBB")?.rsplit('_').next()?.parse().ok()
 }

@@ -7,7 +7,7 @@ use llrm_mir::memory::has;
 use llrm_mir::module::Module;
 
 use crate::address::{address_arithmetic, lea_on_data};
-use crate::dagisel::function::select_function_with;
+use crate::dagisel::function::select_function_ordered;
 use crate::dagisel::hooks::Cpu;
 use crate::expand::{Line, finish};
 use crate::flags::preserve_flags;
@@ -89,7 +89,7 @@ pub fn items_with(
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     // at the size level a compare's argument is read from its slot, which the
     // load put on the foldable side would make a register's
-    let blocks = select_function_with(module, name, cpu, options.overlay && !wants_size)?;
+    let blocks = select_function_ordered(module, name, cpu, options.overlay && !wants_size, options.overlay)?;
     let mut function = emit(name, &blocks)?;
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
