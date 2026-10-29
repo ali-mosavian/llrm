@@ -153,7 +153,7 @@ fn is_hosted(object_format: &str) -> bool {
 }
 
 pub fn main(argv: &[String]) -> i32 {
-    let args = match parse_args(argv) {
+    let args = match llrm_codegen::support::debug::timed("parse args", || parse_args(argv)) {
         Ok(args) => args,
         Err(message) => {
             eprintln!("{}\nllrm-qb: error: {message}", usage());
@@ -206,6 +206,7 @@ pub fn main(argv: &[String]) -> i32 {
         } else if args.dump.is_none() {
             print!("{}", codec::encode(&program, None).map_err(|error| error.0)?);
         }
+        llrm_codegen::support::debug::timed("drop program", || drop(program));
         Ok(())
     })();
     match result {
