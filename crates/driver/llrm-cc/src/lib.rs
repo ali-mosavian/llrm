@@ -55,7 +55,7 @@ pub fn layout_facts(datalayout: &str) -> BTreeMap<String, String> {
 }
 
 /// The sizes in bytes the C front end lays types out as (`[c]` of the description).
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CAbi {
     pub int: u32,
     pub long: u32,
@@ -67,7 +67,6 @@ pub struct CAbi {
     pub wchar_t: u32,
     pub double: u32,
     pub long_double: u32,
-    #[serde(rename = "enum")]
     pub enumeration: u32,
 }
 
@@ -155,8 +154,26 @@ fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
     let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
     let text = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
     let table: toml::Table = text.parse().map_err(|error| format!("{path}: {error}"))?;
-    let mut sizes: CAbi =
-        table.get("c").cloned().ok_or(format!("{path}: no [c]"))?.try_into().map_err(|error| format!("{path}: {error}"))?;
+    let c = table.get("c").and_then(toml::Value::as_table).ok_or(format!("{path}: no [c]"))?;
+    let size = |key: &str| -> Result<u32, String> {
+        c.get(key)
+            .and_then(toml::Value::as_integer)
+            .and_then(|bytes| u32::try_from(bytes).ok())
+            .ok_or(format!("{path}: [c] has no byte count `{key}`"))
+    };
+    let mut sizes = CAbi {
+        int: size("int")?,
+        long: size("long")?,
+        long_long: size("long_long")?,
+        pointer: size("pointer")?,
+        function_pointer: size("function_pointer")?,
+        size_t: size("size_t")?,
+        ptrdiff_t: size("ptrdiff_t")?,
+        wchar_t: size("wchar_t")?,
+        double: size("double")?,
+        long_double: size("long_double")?,
+        enumeration: size("enum")?,
+    };
     sizes.wchar_t = target.wchar_bytes.unwrap_or(sizes.wchar_t);
     sizes.long_double = target.long_double_bytes.unwrap_or(sizes.long_double);
     Ok(Some(sizes))
