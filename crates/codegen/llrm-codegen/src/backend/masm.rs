@@ -847,9 +847,10 @@ fn sp_reg() -> Loc {
 
 /// Whether a return of `body` is a sibling call (`jmp`).
 fn sibling_calls(body: &lir::LirBody) -> bool {
-    body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| {
-        one.what.as_ref().is_some_and(|what| what.is_sibling_call())
-    })
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .any(|one| one.what.as_ref().is_some_and(|what| what.is_sibling_call()))
 }
 
 /// Whether a call in `body` leaves SP somewhere else (`alloca`). The registers

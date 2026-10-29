@@ -318,10 +318,15 @@ pub fn processed(body: &LirBody) -> LirBody {
 
 /// A plain store of a register to a frame cell.
 fn stores_to_frame(one: &Insn) -> bool {
-    one.what.as_ref().is_some_and(|what| {
-        what.op == Operation::Move
-            && matches!(what.dests.as_slice(), [Loc::Mem(cell)] if cell.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame))
-    })
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.op == Operation::Move
+                && matches!(
+                    what.dests.as_slice(),
+                    [Loc::Mem(cell)] if cell.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
+                ),
+        )
 }
 
 #[cfg(test)]

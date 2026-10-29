@@ -804,7 +804,10 @@ fn selected_in(
         .with_jump_tables(
             cpu.target().costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
-                    matches!(attr, llrm_mir::Attribute::Str(name, Some(value)) if name == "no-jump-tables" && value == "true")
+                    matches!(
+                        attr,
+                        llrm_mir::Attribute::Str(name, Some(value)) if name == "no-jump-tables" && value == "true"
+                    )
                 }),
         )
         .with_opt_size(cpu.size || cpu.min_size)
