@@ -1,8 +1,9 @@
 //! The host runtime on arm64 Linux: the headless tests of tests/qb_headless.rs
-//! built with clang for aarch64 against a private sysroot
+//! built by llrm-cc for aarch64 against a private sysroot
 //! (tools/targets/build-arm64-sysroot.sh) and run under qemu-aarch64. A machine
-//! without clang, lld or qemu fails here by name; it does not skip. An arm64
-//! Mac runs the same C natively (docs/working/qb-host.md, "Mac session").
+//! without the pinned clang, lld or qemu fails here by name; it does not skip.
+//! An arm64 Mac runs the same C natively (docs/working/qb-host.md, "Mac
+//! session").
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,7 +17,7 @@ fn root() -> &'static Path {
 }
 
 fn sysroot() -> PathBuf {
-    for tool in ["clang", "ld.lld", "qemu-aarch64"] {
+    for tool in ["ld.lld", "qemu-aarch64"] {
         let found = Command::new("which").arg(tool).output().is_ok_and(|out| out.status.success());
         assert!(found, "qb_arm64 needs `{tool}` on the PATH");
     }
@@ -25,30 +26,6 @@ fn sysroot() -> PathBuf {
         .expect("tools/targets/build-arm64-sysroot.sh runs");
     assert!(made.status.success(), "no arm64 sysroot: {}", String::from_utf8_lossy(&made.stderr));
     PathBuf::from(String::from_utf8_lossy(&made.stdout).trim())
-}
-
-/// The sysroot's libgcc directory, whatever gcc version the package carried.
-fn gcc_dir(sysroot: &Path) -> PathBuf {
-    let versions = sysroot.join("usr/lib/gcc-cross/aarch64-linux-gnu");
-    let mut found: Vec<PathBuf> = std::fs::read_dir(&versions)
-        .unwrap_or_else(|e| panic!("{}: {e}", versions.display()))
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    found.sort_by_key(|path| path.file_name().and_then(|n| n.to_str()).and_then(|n| n.parse::<u32>().ok()));
-    found.pop().unwrap_or_else(|| panic!("no gcc version under {}", versions.display()))
-}
-
-/// The directory was `.../15` in the source; the runner's Ubuntu 24.04 carries
-/// 14 and every arm64 test failed to link.
-#[test]
-fn the_libgcc_directory_is_the_newest_version_in_the_sysroot() {
-    let root = std::env::temp_dir().join(format!("gcc_dir_arm64_{}", std::process::id()));
-    let versions = root.join("usr/lib/gcc-cross/aarch64-linux-gnu");
-    for version in ["9", "14"] {
-        std::fs::create_dir_all(versions.join(version)).unwrap();
-    }
-    assert_eq!(gcc_dir(&root), versions.join("14"));
-    std::fs::remove_dir_all(&root).ok();
 }
 
 /// Builds `sources` for aarch64 Linux, runs the program under qemu; its
@@ -71,21 +48,12 @@ fn build_and_run_with(
     out: &Path,
     environment: &[(&str, &str)],
 ) -> String {
-    let sysroot = sysroot();
-    let libc = sysroot.join("usr/aarch64-linux-gnu");
-    let gcc = gcc_dir(&sysroot);
     let qb = root().join("runtime/qb");
-    let mut build = Command::new("clang");
-    build.args(["--target=aarch64-linux-gnu", "-fuse-ld=lld", "-static", "-std=gnu11", "-w", "-g", "-pthread"]);
-    // the root, not the libc directory: libm.a is a linker script that names
-    // /usr/aarch64-linux-gnu/lib/libm-2.42.a
-    build.arg(format!("--sysroot={}", sysroot.display())).arg(format!("-B{}", gcc.display()));
-    build
-        .arg(format!("-L{}", gcc.display()))
-        .arg(format!("-L{}", libc.join("lib").display()))
-        .arg("-isystem")
-        .arg(libc.join("include"))
-        .arg("-D__cdecl=");
+    // llrm-cc over the arm64-glibc row: the sysroot's headers, libc, libm and
+    // libgcc by path (targets.toml, tools/targets/arm64-glibc-link.sh)
+    let mut build = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
+    build.args(["-target", "arm64-glibc", "-std=gnu11", "-w", "-D__cdecl="]);
+    build.env("LLRM_ARM64_SYSROOT", sysroot());
     for include in ["posix", ".", "dev", "dev/headless", "dev/host", "../shared/posix"] {
         build.arg("-I").arg(qb.join(include));
     }
@@ -93,8 +61,8 @@ fn build_and_run_with(
         build.arg(root().join(source));
     }
     build.args(object);
-    build.arg("-lm").arg("-o").arg(out);
-    let built = build.output().expect("clang runs");
+    build.arg("-o").arg(out);
+    let built = build.output().expect("llrm-cc runs");
     assert!(built.status.success(), "{name}: {}", String::from_utf8_lossy(&built.stderr));
     let done = Command::new("qemu-aarch64")
         .arg(out)
