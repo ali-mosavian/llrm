@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import build  # noqa: E402
 
-NAMES = ("llrm-c", "llrm-qb", "llrm-nib", "llrm-mir")
+NAMES = build.FRONTENDS
 
 
 def tree(where: Path, binaries: float, source: float) -> None:
@@ -58,3 +58,17 @@ class FromTheDescriptionTests(unittest.TestCase):
         source = (build.HERE / "build.py").read_text()
         self.assertNotIn('CPUS = ("386"', source)
         self.assertNotIn('cpu: str = "486"', source)
+
+
+class CompilerTests(unittest.TestCase):
+    def test_a_c_loop_is_compiled_by_llrm_cc_on_the_register_convention_row(self):
+        """tools/loops ran target/gate-bins/llrm-c, which is gone: gate run 2's test_a_case_s_quality_does_not_depend_on_its_batch died on it."""
+        seen = []
+        original = build._run
+        build._run = lambda command, env=None, cwd=None, timeout=600: seen.append(command)
+        try:
+            build.llrm("c", Path("p.c"), Path("p.obj"), build.Config("486", "-O2", False, False))
+        finally:
+            build._run = original
+        self.assertEqual(Path(seen[0][0]).name, "llrm-cc")
+        self.assertIn("--target=x86_16-dos-rp3", seen[0])
