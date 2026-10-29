@@ -8,6 +8,7 @@ pub const DROP_F32: u16 = 831;
 pub const DROP_F64: u16 = 833;
 pub const DROP_I32: u16 = 837;
 pub const DROP_I64: u16 = 839;
+pub const END_FUNCTION: u16 = 848;
 pub const LOCAL_TEE_F32: u16 = 1341;
 pub const LOCAL_TEE_F64: u16 = 1343;
 pub const LOCAL_TEE_I32: u16 = 1347;
