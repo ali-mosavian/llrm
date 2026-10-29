@@ -50,6 +50,8 @@ pub enum Refusal {
     Legalize(String),
     /// No pattern selected the node (`CannotYetSelect`).
     CannotSelect(String),
+    /// The selector named a register the target has no id for.
+    UnknownRegister(String),
     Emit(super::emit::EmitError),
 }
 
@@ -155,7 +157,7 @@ pub(crate) fn do_instruction_selection(
     selector: &Selector,
     hooks: &mut X86Hooks,
 ) -> Result<(), Refusal> {
-    do_instruction_selection_with(dag, selector, hooks, |selector, adapter, hooks, node| {
+    do_instruction_selection_with(dag, selector, hooks, &super::dagisel_adapter::X86Ids, |selector, adapter, hooks, node| {
         select_node(selector, adapter, hooks, node)
     })
 }
@@ -166,10 +168,11 @@ pub(crate) fn do_instruction_selection_with<H>(
     dag: &mut SelectionDAG,
     selector: &Selector,
     hooks: &mut H,
+    ids: &dyn super::dagisel_adapter::TargetIds,
     select: impl Fn(&Selector, &mut DagisAdapter<'_>, &mut H, u32) -> Outcome,
 ) -> Result<(), Refusal> {
     let order = users_first(dag);
-    let mut adapter = DagisAdapter::new(dag);
+    let mut adapter = DagisAdapter::with_ids(dag, ids);
     // Nodes a selection makes (a shift amount rewritten, a mask shrunk) are
     // visited next, latest first: the pin inserts them before the node
     // being selected (`insertDAGNode`), and its walk runs toward the front
@@ -197,6 +200,9 @@ pub(crate) fn do_instruction_selection_with<H>(
         adapter.dag.cur_order = adapter.dag.nodes()[node as usize].order;
         if select(selector, &mut adapter, hooks, node) == Outcome::CannotSelect {
             return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
+        }
+        if let Some(why) = adapter.refusal() {
+            return Err(Refusal::UnknownRegister(why.to_owned()));
         }
         made.extend(before as u32..adapter.dag.nodes().len() as u32);
     }
