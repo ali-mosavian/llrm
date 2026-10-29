@@ -64,7 +64,23 @@ fn multiply_bytes_gives_the_low_byte() {
 /// 65536 + 16960.
 #[test]
 fn multiply_words_gives_the_low_word() {
-    for (a, b, want) in [(300, 5, 1500), (255, 257, 65535), (1000, 1000, 16960)] {
+    // 0 either side; 65535 * 65535 = 4294836225 = 65534 * 65536 + 1; 300 * 300 = 90000 = 65536 + 24464;
+    // a small multiplier stops the loop early, a multiplier with bit 15 set runs all sixteen
+    for (a, b, want) in [
+        (300, 5, 1500),
+        (255, 257, 65535),
+        (1000, 1000, 16960),
+        (0, 500, 0),
+        (500, 0, 0),
+        (65535, 65535, 1),
+        (300, 300, 24464),
+        (1, 40000, 40000),
+        (40000, 1, 40000),
+        (1234, 56, 3568),
+        (56, 1234, 3568),
+        (65535, 2, 65534),
+        (2, 65535, 65534),
+    ] {
         assert_eq!(word(&format!("mulhi-{a}-{b}"), &two_words(a, b), "__mulhi3"), want, "{a} * {b}");
     }
 }
@@ -214,4 +230,15 @@ fn long_shifts_by_a_variable() {
     assert_eq!(long("ashr-31", "__ashrsi3", 0x8000_0000, 31), 0xFFFF_FFFF);
     assert_eq!(long("lshr-8", "__lshrsi3", 0x1234_5678, 8), 0x0012_3456);
     assert_eq!(long("shl-0", "__ashlsi3", 0x1234_5678, 0), 0x1234_5678);
+}
+
+/// A word multiply by a small multiplier ran all sixteen iterations: 1234 * 56 took about 640
+/// cycles (bench set 2, `mul16`). It stops when the multiplier has no bits left.
+#[test]
+fn a_small_multiplier_stops_the_word_multiply_early() {
+    let empty = common::cycles_with("mulhi-empty", "", "");
+    let setup = two_words(1234, 56);
+    let cycles = common::cycles_with("mulhi-cycles", &format!("{setup}  jsr __mulhi3\n"), "") - empty;
+    let setup_only = common::cycles_with("mulhi-setup", &setup, "") - empty;
+    assert!(cycles - setup_only < 330, "1234 * 56 took {} cycles", cycles - setup_only);
 }
