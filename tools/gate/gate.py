@@ -511,6 +511,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     # (with another crate that has one, the root crate stays in the scope: it turns on the features the others need)
     libs = scope if p.packages is None or any((ROOT / pkgs[n]["dir"] / "src/lib.rs").exists() for n in p.packages) else ""
     cargo = "cargo test --release -q --no-fail-fast"
+    # The root tests are named with -p llrm: a workspace member's test target of the same name (llrm-arm64's `run`) runs under a bare `--test run` too.
     split = cfg["split"]
     whole = set(cfg["whole"].values()) | set(cfg["exclusive"].values())
     skips = " ".join(f"--skip {s['filter']}" for s in split)
@@ -530,7 +531,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
 
     steps = {
         "build": BUILD,
-        "facts": f"{cargo} --test target_facts",
+        "facts": f"{cargo} -p llrm --test target_facts",
         # #1777 tracked d1.o, d4.o and d8.o and was smoke-green: the check of tests/tracked_build_products.rs, without a build.
         "products": "python3 -c \"import sys; sys.path.insert(0, 'tools/gate'); import gate; sys.exit(gate.products_main())\"",
         "docs": "python3 tools/docs/docsbuild/build.py --check && python3 tools/docs/passdocs.py --check",
@@ -538,7 +539,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         "lib": f"{cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
         # rustdoc over every crate costs 456 CPU-s to find no test: it runs when a doc comment has a fence to run.
         "doc": f"if python3 tools/gate/doctests.py crates src tests; then {cargo} {libs} --doc; else {SKIPPED_DOC}; fi" if libs else "true",
-        "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
+        "integration": f"{cargo} -p llrm {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",
         # Every scan runs, and any failing fails the step: the first red must not hide the others.
         "scans": "rc=0; "
@@ -576,12 +577,12 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         "qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/qcport-run-cc.py',
         "oracle-qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/oracle_qcport.py --jobs ${JOBS:-8}',
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
-        "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} --test run -- test_every_program_under_tests_run_prints_its_out",
+        "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} -p llrm --test run -- test_every_program_under_tests_run_prints_its_out",
     }
     for s in split:
-        steps[s["step"]] = f"{cargo} --test {s['bin']} -- {s['filter']}"
+        steps[s["step"]] = f"{cargo} -p llrm --test {s['bin']} -- {s['filter']}"
     for step, binary in {**cfg["whole"], **cfg["exclusive"]}.items():
-        steps[step] = f"{cargo} --test {binary}"
+        steps[step] = f"{cargo} -p llrm --test {binary}"
     return steps
 
 
