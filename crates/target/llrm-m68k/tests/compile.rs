@@ -129,3 +129,60 @@ fn the_loop_comparison_sees_a_changed_instruction() {
         assert_ne!(modulo_names_and_copies(&changed), modulo_names_and_copies(base), "{changed}");
     }
 }
+
+/// Constant and variable shifts print as `llc` does. Every shift was
+/// `CannotSelect`: the legalizer cut the amount to `i8`, and m68k's amount has
+/// the type of the value shifted (`getScalarShiftAmountTy`).
+#[test]
+fn shifts_print_as_llc_does() {
+    let shift = |op: &str| compiled(&format!("define i32 @s(i32 %x) {{\n  %r = {op}\n  ret i32 %r\n}}"), "s");
+    let load = "s:\n\tmove.l\t(4,%sp), %d0\n";
+    assert_eq!(shift("shl i32 %x, 2"), format!("{load}\tlsl.l\t#2, %d0\n\trts\n"));
+    assert_eq!(shift("lshr i32 %x, 1"), format!("{load}\tlsr.l\t#1, %d0\n\trts\n"));
+    assert_eq!(shift("ashr i32 %x, 3"), format!("{load}\tasr.l\t#3, %d0\n\trts\n"));
+    assert_eq!(shift("shl i32 %x, 9"), "s:\n\tmoveq\t#9, %d1\n\tmove.l\t(4,%sp), %d0\n\tlsl.l\t%d1, %d0\n\trts\n");
+}
+
+/// A select is a diamond: the `CMOV` pseudo of the pin, expanded as
+/// `EmitLoweredSelect` does. Text equal to `llc`, labels aside.
+#[test]
+fn selects_print_as_llc_does() {
+    let max = "define i32 @m(i32 %a, i32 %b) {\n  %c = icmp sgt i32 %a, %b\n  %r = select i1 %c, i32 %a, i32 %b\n  ret i32 %r\n}";
+    assert_eq!(
+        compiled(max, "m"),
+        "m:\n\tmove.l\t(4,%sp), %d0\n\tmove.l\t(8,%sp), %d1\n\tcmp.l\t%d1, %d0\n\tbgt\t.LBB0_2\n\tmove.l\t%d1, %d0\n.LBB0_2:\n\trts\n"
+    );
+}
+
+/// A load stored at once is one `move.b (src), (dst)` as `llc` has it
+/// (`isSafeStoreLoad`). It was never folded: two moves through `%d2`, which
+/// also cost a `movem` and a frame.
+#[test]
+fn a_loaded_byte_stored_at_once_is_one_move() {
+    let ir = "define void @c(ptr %d, ptr %s) {\n  %v = load i8, ptr %s\n  store i8 %v, ptr %d\n  ret void\n}";
+    assert_eq!(
+        compiled(ir, "c"),
+        "c:\n\tmove.l\t(8,%sp), %a0\n\tmove.l\t(4,%sp), %a1\n\tmove.b\t(%a0), (%a1)\n\trts\n"
+    );
+}
+
+/// `x2 = select (x > y), x - y, x` computed both subtractions before the
+/// branch, so both results stayed live and took the callee-saved `d2`/`d3`
+/// (a `movem` pair, 58 B). `MachineSink` moves each into the arm that uses it.
+#[test]
+fn gcd_subtractions_sink_into_their_arms() {
+    let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("gcd")).expect("parses");
+    let text = text(&module, "k", Cpu::M68000).expect("compiles");
+    assert!(!text.contains("movem"), "{text}");
+    let after_compare = text.find("ble").expect("the signed compare");
+    assert!(text.matches("sub.l").count() == 2 && text.find("sub.l").unwrap() > after_compare, "{text}");
+}
+
+/// The loop's join was a block of its own that only jumped back (`bra L5` to
+/// `L5: bra L1`), a jump per trip and 4 B. `BranchFolder` skips it.
+#[test]
+fn a_loop_does_not_jump_through_a_block_that_only_jumps() {
+    let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("gcd")).expect("parses");
+    let text = text(&module, "k", Cpu::M68000).expect("compiles");
+    assert!(!text.contains(":\n\tbra"), "{text}");
+}

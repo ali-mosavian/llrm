@@ -9,9 +9,14 @@
 //! is no neutral machine function yet (neutral-lir-need.md). Exit: the
 //! neutral-LIR task.
 
+pub mod cfg;
+pub mod fold;
 pub mod mfunc;
 pub mod regalloc;
+pub mod sink;
 pub mod spill;
 
+pub use fold::{branch_fold, remove_identity_copies};
 pub use mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg};
 pub use regalloc::{Allocate, Assignment, GraphColoring, Target};
+pub use sink::{Jump, machine_sink, split_critical_edge};

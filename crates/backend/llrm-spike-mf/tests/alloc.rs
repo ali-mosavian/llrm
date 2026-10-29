@@ -54,7 +54,11 @@ fn op(
     name: &'static str,
     operands: Vec<Operand>,
 ) -> Inst {
-    Inst::new(Kind::Op(name), operands)
+    let mut inst = Inst::new(Kind::Op(name), operands);
+    // a `def*` stands for an instruction that cannot run twice: it is not
+    // rematerialized, so pressure spills it
+    inst.side_effects = name.starts_with("def");
+    inst
 }
 
 fn function(
