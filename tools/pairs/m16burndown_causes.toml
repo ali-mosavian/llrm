@@ -306,3 +306,31 @@ owner = "w-5"
 match = "qb/*"
 cause = "correctness-driven: `call B$CENP` ends $QB$MAIN as BC's does (+17 B per program against main, i.e. parity with BC)"
 owner = "w-9"
+
+[[program]]
+match = "fib/fib.nib"
+cause = "tail-recursion elimination of fib(n-2) (accumulator loop), the pin's TRE"
+owner = "w-10"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "scroll/scroll.*"
+cause = "loop-idiom memmove to rep movsd; setup (cx, si, di, es) costs more than main's two-instruction loop"
+owner = "w-10"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "ring/ring.bas"
+cause = "RA: frame sub sp 18 -> 22"
+owner = "w-10"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "control/control.nib"
+cause = "loop guard from rotation (test dx,dx; jle)"
+owner = "w-10"
+status = "cause known"
+oracle = "none"
