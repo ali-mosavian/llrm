@@ -1924,7 +1924,13 @@ fn emit_with<const STACK: bool>(
         if b == 0 && spilled > 0 && !has_frame {
             adjust(&mut out, -spilled);
         }
+        let mut repeated = 0;
         for (i, inst) in block.insts.iter().enumerate() {
+            // the rest of a run of one-bit shifts a loop has emitted
+            if repeated > 0 {
+                repeated -= 1;
+                continue;
+            }
             let a_live = after[b][i].contains(&reg::A);
             let regs: Vec<RegId> = inst
                 .operands
@@ -2027,11 +2033,22 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("STAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  sta {symbol},x").unwrap(),
                 (Kind::Op("SAVEC"), _) => out.push_str("  lda #0\n  rol a\n"),
                 (Kind::Op("LOADC"), _) => out.push_str("  lsr a\n"),
-                (Kind::Op("SHL1"), _) => {
-                    writeln!(out, "  asl {}\n  rol {}", register_name(regs[0]), register_name(regs[2])).unwrap()
-                }
-                (Kind::Op("SRL1"), _) => {
-                    writeln!(out, "  lsr {}\n  ror {}", register_name(regs[2]), register_name(regs[0])).unwrap()
+                (Kind::Op(step @ ("SHL1" | "SRL1")), _) => {
+                    let (first, second) =
+                        if step == "SHL1" { ("asl", "rol") } else { ("lsr", "ror") };
+                    let (low, high) = (register_name(regs[0]), register_name(regs[2]));
+                    let (one, two) = if step == "SHL1" { (low, high) } else { (high, low) };
+                    // a run of four or more shifts is shorter as a counted loop (nine bytes, against
+                    // four a shift) when an index register is free to count
+                    let run = block.insts[i..].iter().take_while(|next| next.kind == inst.kind && next.operands == inst.operands).count();
+                    match spare {
+                        Some(index) if run >= 4 => {
+                            made += 1;
+                            writeln!(out, "  ld{index} #{run}\n_sh{made}:\n  {first} {one}\n  {second} {two}\n  de{index}\n  bne _sh{made}").unwrap();
+                            repeated = run - 1;
+                        }
+                        _ => writeln!(out, "  {first} {one}\n  {second} {two}").unwrap(),
+                    }
                 }
                 (Kind::Op("SRA1"), _) => {
                     let (lo, hi) = (register_name(regs[1]), register_name(regs[3]));
