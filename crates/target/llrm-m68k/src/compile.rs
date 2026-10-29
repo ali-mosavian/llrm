@@ -31,7 +31,7 @@ pub fn items(
     eliminate_phis(&mut function);
     fold_reserved_copies(&mut function);
     two_address(&mut function);
-    let assignment = GraphColoring.allocate(&function)?;
+    let assignment = GraphColoring::default().allocate(&function)?;
     let mut out = vec![Item::Label(name.to_owned())];
     for line in finish(&function, &assignment, number)? {
         out.push(match line {
