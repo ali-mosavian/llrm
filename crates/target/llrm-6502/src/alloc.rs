@@ -20,6 +20,7 @@ use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, remove_identity_copies, remove_redundant_copies_between, reschedule_kills, machine_sink_in_place};
 
 use crate::dagisel::generated::ids::opcode as op;
+use crate::dagisel::hooks::Cpu;
 use crate::emit::{MInst, Operand as Machine, address, spill};
 use crate::reg;
 use crate::select::Item;
@@ -1701,15 +1702,37 @@ fn move_byte(
 ///
 /// A callee-saved cell costs a save and a restore, so [`Mos::worth_taking`] gives one only to a
 /// register that gains that back; the rest are spilled.
+///
+/// An instruction the sink moved into another block (`machine_sink_in_place`) may cost a jump or a
+/// callee-saved cell the allocation then needs, so a function the sink changed is also emitted
+/// without it, and the sunk form is kept only if it is no larger and no slower by the timing table
+/// (`MachineSink` weighs the move by block frequency; the table is this target's).
 pub fn emit(
     function: MFunction<Class>,
     labels: &[Vec<String>],
     stack: bool,
     cmos: bool,
 ) -> Result<(String, Vec<(String, usize)>), String> {
-    let (code, slots, _) =
-        if stack { emit_with::<true>(function, labels, cmos) } else { emit_with::<false>(function, labels, cmos) }?;
-    Ok((code, slots))
+    let run = |function: MFunction<Class>, sink: bool| {
+        if stack {
+            emit_with::<true>(function, labels, cmos, sink)
+        } else {
+            emit_with::<false>(function, labels, cmos, sink)
+        }
+    };
+    let (code, slots, sunk) = run(function.clone(), true)?;
+    if !sunk {
+        return Ok((code, slots));
+    }
+    let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
+    let price = |code: &str, slots: &[(String, usize)]| {
+        crate::timing::estimate(cpu, code).map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
+    };
+    let Ok((plain, plain_slots, _)) = run(function, false) else { return Ok((code, slots)) };
+    match (price(&code, &slots), price(&plain, &plain_slots)) {
+        (Ok(sunk), Ok(plain_price)) if sunk.0 > plain_price.0 || sunk.1 > plain_price.1 => Ok((plain, plain_slots)),
+        _ => Ok((code, slots)),
+    }
 }
 
 /// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
@@ -1809,13 +1832,15 @@ fn emit_with<const STACK: bool>(
     mut function: MFunction<Class>,
     labels: &[Vec<String>],
     cmos: bool,
+    sink: bool,
 ) -> Result<(String, Vec<(String, usize)>, bool), String> {
-    // a bump of a pointer is done in place; the read of the old pointer that follows it goes first
-    machine_sink_in_place::<Mos<STACK>>(&mut function);
+    // an instruction goes to the one path that reads it; a bump of a pointer is then done in place,
+    // and the read of the old pointer that follows it goes first
+    let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
     two_address(&mut function);
     let (assignment, mut slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;
-    let saved = save_preserved::<STACK>(&mut function, &assignment, &mut slots);
+    save_preserved::<STACK>(&mut function, &assignment, &mut slots);
     let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
     // On the stack, spills sit above the locals, in the frame: the bytes of
     // the slots (`spilled`) are added to the frame, and a frame object beyond
@@ -2173,7 +2198,7 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
-    Ok((crate::emit::relax_bra(&relax(&out)), slots, saved))
+    Ok((crate::emit::relax_bra(&relax(&out)), slots, sunk))
 }
 
 /// A conditional branch reaches 127 bytes. An instruction is at most 3 bytes,
