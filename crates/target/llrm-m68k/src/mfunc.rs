@@ -238,6 +238,17 @@ impl Emitter<'_> {
             }
             ISD::Machine(code) => {
                 let name = opcode_name(code).ok_or("a machine node with no name")?;
+                // `EXTRACT_SUBREG`: the low byte or word of a register is the
+                // register narrowed, which the narrower class's view names
+                if name == "EXTRACT_SUBREG" {
+                    let dst = self.new_reg(Class::of_type(n.values[0]));
+                    self.values.insert((node, 0), dst);
+                    let Some(Operand::Use(src)) = self.operand(n.ops[0])? else {
+                        return Err("EXTRACT_SUBREG of a value that is no register".to_owned());
+                    };
+                    into.push(Inst::copy(dst, src));
+                    return Ok(());
+                }
                 let desc = instrinfo::desc(code as u16).ok_or_else(|| format!("{name}: no description"))?;
                 let mut operands = Vec::new();
                 for (at, vt) in n.values.iter().enumerate().take(usize::from(desc.num_defs)) {

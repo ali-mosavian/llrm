@@ -32,7 +32,11 @@ pub fn builder_target() -> BuilderTarget {
     BuilderTarget {
         // `setBooleanContents(ZeroOrNegativeOneBooleanContent)`: `Scc` sets
         // 0xFF
-        dag: DagConfig { boolean_contents: BooleanContents::ZeroOrNegativeOne, ..BuilderTarget::m32().dag },
+        dag: DagConfig {
+            boolean_contents: BooleanContents::ZeroOrNegativeOne,
+            big_endian: true,
+            ..BuilderTarget::m32().dag
+        },
         shift_amount: EVT::I32,
         jump_tables: false,
         target_nodes: Some(TargetNodes {

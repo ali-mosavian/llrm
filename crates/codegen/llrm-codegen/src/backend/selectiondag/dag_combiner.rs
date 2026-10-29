@@ -897,7 +897,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
-        let narrow = super::dag::MemInfo { mem_vt: vt, ..info };
+        // `AdjustBigEndianShift`: the low bytes of a big-endian value are its
+        // last bytes
+        let offset =
+            if self.dag.config().big_endian { i64::from((wide.size_in_bits() - vt.size_in_bits()) / 8) } else { 0 };
+        let ptr = if offset == 0 { ptr } else { self.dag.get_object_ptr_offset(ptr, offset) };
+        let base = match info.base {
+            super::dag::MemBase::Stack(at) => super::dag::MemBase::Stack(at + offset as i32),
+            super::dag::MemBase::CallArgument(at) => super::dag::MemBase::CallArgument(at + offset as i32),
+            other => other,
+        };
+        let align = if offset == 0 { info.align } else { info.align.min(1 << (offset as u32).trailing_zeros()) };
+        let narrow = super::dag::MemInfo { mem_vt: vt, align, base, ..info };
         let new = self.dag.get_load(vt, chain, ptr, narrow);
         if self.dag.invariant_loads.contains(&load.node) {
             self.dag.invariant_loads.insert(new.node);
