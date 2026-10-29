@@ -884,6 +884,12 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    /// DEVIATE LU6: the pin keeps `(y + 61) & 63` as an `i6` phi; real mode
+    /// pays a `movzx` and an `and` on every read of it, and a byte register.
+    fn lsr_widens_odd_width_induction(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()
