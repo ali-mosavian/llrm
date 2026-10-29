@@ -93,7 +93,9 @@ def llrm(lang: str, source: Path, obj: Path, config: Config, stages: Path | None
     if not config.inline:
         common.insert(-2, "-fno-inline-functions")
     if lang == "c":
-        command = [str(BIN / "llrm-c"), str(source), *common]
+        # llrm-c's m16 convention (regparm3) is the x86_16-dos-rp3 row of llrm-cc.
+        command = [str(BIN / "llrm-cc"), "-c", "--target=x86_16-dos-rp3", str(source), *common]
+        env.update(llrmbin.cc_environment())
     elif lang == "bas":
         command = [str(BIN / "llrm-qb"), str(source), "--dialect", "qb45", "--runtime", "qb45", *common]
     else:
@@ -105,10 +107,10 @@ def llrm(lang: str, source: Path, obj: Path, config: Config, stages: Path | None
 
 def binaries_stamp() -> float:
     """The newest frontend binary's mtime: a stale build is a stale answer."""
-    return max((BIN / one).stat().st_mtime for one in ("llrm-c", "llrm-qb", "llrm-nib", "llrm-mir"))
+    return max((BIN / one).stat().st_mtime for one in FRONTENDS)
 
 
-FRONTENDS = ("llrm-c", "llrm-qb", "llrm-nib", "llrm-mir")
+FRONTENDS = ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "llrm-mir")
 
 
 def stale_binaries(root: Path = ROOT, bin: Path = BIN) -> list[str]:

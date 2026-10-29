@@ -645,6 +645,7 @@ declare cc 1000 void @llrm.qb.B$RDIM() addrspace(1)
 fn a_runtime_call_pops_every_argument_it_is_given() {
     let module = crate::testing::module(RUNTIME_CALL_MORE_ARGS_THAN_DECLARED).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: true,
@@ -938,6 +939,7 @@ declare cc 1000 void @user(i16) addrspace(1)
     }
     let module = crate::testing::module(IR).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
         abi: &Keeps,
         segments: &crate::backend::target::BASIC,
         runtime: false,
@@ -1203,6 +1205,7 @@ entry:
     let written = facts.written("leaf").expect("leaf takes part");
     assert!(!written.whole.contains(&RegId::ECX), "the leaf writes no CX: {:?}", written.whole);
     let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: false,

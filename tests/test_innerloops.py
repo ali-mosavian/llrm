@@ -123,7 +123,8 @@ def _sieve(tmp_path, *flags):
     source = tmp_path / "sieve.c"
     source.write_text("extern void report(long v);\nstatic unsigned char s[4096];\nlong bench_sieve(int n) {\n    long c = 0; int i, j;\n    for (i = 2; i < n; i++) if (!s[i]) { c++; for (j = i + i; j < 4096; j += i) s[j] = 1; }\n    return c;\n}\n")
     out = tmp_path / "sieve.obj"
-    subprocess.run([str(llrmbin.bin_dir() / "llrm-c"), "-m32", "-mabi=sysv", "-march=i486", "-O2", *flags, str(source), "-o", str(out)], check=True, capture_output=True)
+    command = [str(llrmbin.compiler(llrmbin.bin_dir())), "--target=x86_32-dos", "-c", "-march=i486", "-O2", *flags, str(source), "-o", str(out)]
+    subprocess.run(command, check=True, capture_output=True, env={**__import__("os").environ, **llrmbin.cc_environment()})
     return out.read_bytes()
 
 
