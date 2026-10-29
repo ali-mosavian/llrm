@@ -280,3 +280,81 @@ fn an_early_clobber_def_does_not_take_a_dying_uses_register() {
     let apart = GraphColoring::<Two>::default().allocate(&build(true)).unwrap().0;
     assert_ne!(apart[0], apart[1]);
 }
+
+/// `r0` is the word `r0:r1`'s own low half in a three-register file: the word
+/// `r2` overlaps nothing; the word `w` (id 2) overlaps both `r0` and `r1`.
+struct Words;
+
+const W: RegId = RegId::from_raw(2);
+const R2: RegId = RegId::from_raw(3);
+
+impl Target for Words {
+    type Class = bool;
+
+    fn meet(
+        one: bool,
+        other: bool,
+    ) -> Option<bool> {
+        (one == other).then_some(one)
+    }
+
+    fn any() -> bool {
+        false
+    }
+
+    /// `true` is the word class.
+    fn candidates(word: bool) -> Vec<RegId> {
+        if word { vec![W] } else { vec![R0, R1, R2] }
+    }
+
+    fn view(
+        root: RegId,
+        _: bool,
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        register
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+
+    fn overlaps(
+        one: RegId,
+        other: RegId,
+    ) -> bool {
+        one == other || [(W, R0), (W, R1), (R0, W), (R1, W)].contains(&(one, other))
+    }
+}
+
+/// A word and a byte live together may not share storage: the byte does not
+/// get `r0` or `r1` while the word holds `w`. Before the overlap hook the
+/// colouring compared register ids only and handed out `w` and `r0` together.
+#[test]
+fn a_word_and_a_byte_live_together_do_not_share_storage() {
+    let mut function: MFunction<bool> = MFunction::new("f");
+    function.classes = vec![true, false];
+    function
+        .blocks
+        .push(
+            Block {
+                id: 0,
+                insts: vec![
+                    op("defw", vec![Operand::Def(v(0))]),
+                    op("defb", vec![Operand::Def(v(1))]),
+                    op("use", vec![Operand::Use(v(0)), Operand::Use(v(1))]),
+                ],
+                phis: vec![],
+            },
+        );
+    let assignment = GraphColoring::<Words>::default().allocate(&function).unwrap().0;
+    assert_eq!(assignment[0], W);
+    assert_eq!(assignment[1], R2, "the byte takes the register the word does not cover");
+}

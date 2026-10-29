@@ -39,6 +39,14 @@ pub trait Target {
     fn reserved(root: RegId) -> bool;
     /// The roots a call leaves unspecified.
     fn caller_saved() -> Vec<RegId>;
+    /// Whether two allocatable registers share storage (a pair and its
+    /// bytes); a register overlaps itself.
+    fn overlaps(
+        one: RegId,
+        other: RegId,
+    ) -> bool {
+        one == other
+    }
     /// The instruction that stores `register` (of `class`) to frame `slot`;
     /// `None` when the target cannot spill.
     fn spill_store(
@@ -462,7 +470,10 @@ impl<T: Target> GraphColoring<T> {
             }
             if !colour.contains_key(&node) {
                 let taken: HashSet<RegId> = edges[node].iter().filter_map(|n| colour.get(n).copied()).collect();
-                let Some(chosen) = T::candidates(classes[node]).into_iter().find(|root| !taken.contains(root)) else {
+                let Some(chosen) = T::candidates(classes[node])
+                    .into_iter()
+                    .find(|root| !taken.iter().any(|one| T::overlaps(*one, *root)))
+                else {
                     let near: Vec<usize> = edges[node].iter().copied().chain([node]).collect();
                     let crowd = (0..count as u32).filter(|u| near.contains(&find(&mut parent, *u as usize))).collect();
                     return Err(Uncolourable { vreg: v as u32, crowd });
