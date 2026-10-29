@@ -18,7 +18,9 @@ fn register(name: &str) -> Operand {
         "d2" => reg::D2,
         "d3" => reg::D3,
         "d5" => reg::D5,
+        "a0" => reg::A0,
         "a1" => reg::A1,
+        "a2" => reg::A2,
         "a3" => reg::A3,
         "sp" => reg::SP,
         _ => panic!("register {name}"),
@@ -323,4 +325,51 @@ fn a_loaded_value_read_again_is_not_swapped_into_the_compare() {
     let ir = "define i32 @f(ptr %p, i32 %t) {\n  %v = load i32, ptr %p\n  %c = icmp sgt i32 %v, %t\n  %z = zext i1 %c to i32\n  %r = add i32 %z, %v\n  ret i32 %r\n}";
     let ours = compiled(ir, Options::default());
     assert!(!ours.contains("cmp.l\t(%a0)"), "{ours}");
+}
+
+/// `tst` of memory, bytes from binutils: `tst.b (0,%a0,%d1.l)` 4a301800,
+/// `tst.w (4,%a1)` 4a690004, `tst.l (%a2)` 4a92, `tst.l (8,%a0,%d2.l)`
+/// 4ab02808.
+#[test]
+fn tst_of_memory_encodes_as_binutils_does() {
+    let tst = |opcode, operands| Inst { opcode, operands };
+    let imm = Operand::Imm;
+    let cases = [
+        (tst("TST8f", vec![imm(0), register("a0"), register("d1")]), "4a301800"),
+        (tst("TST16p", vec![imm(4), register("a1")]), "4a690004"),
+        (tst("TST32j", vec![register("a2")]), "4a92"),
+        (tst("TST32f", vec![imm(8), register("a0"), register("d2")]), "4ab02808"),
+    ];
+    for (inst, golden) in cases {
+        assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
+    }
+}
+
+/// strlen's test of the byte was `cmpi.b #0, (0,%a0,%d1)`, 6 bytes; `tst.b` of
+/// the same operand is 4.
+#[test]
+fn a_compare_of_memory_with_zero_is_a_tst() {
+    let ir = "define i32 @f(ptr %p, i32 %i) {\n  %q = getelementptr i8, ptr %p, i32 %i\n  %v = load i8, ptr %q\n  %z = icmp eq i8 %v, 0\n  %r = zext i1 %z to i32\n  ret i32 %r\n}";
+    let pinned = compiled(ir, Options::PINNED);
+    assert!(pinned.contains("cmpi.b\t#0,"), "{pinned}");
+    let ours = compiled(ir, Options::default());
+    assert!(ours.contains("tst.b\t(") && !ours.contains("cmpi.b"), "{ours}");
+    assert!(code_size(ir, Options::default()) < code_size(ir, Options::PINNED));
+}
+
+/// The loop strength reduction priced `(d8, An, Xn)` with a displacement as
+/// illegal, as the pin's base class does, so strlen's counter was fixed up
+/// after the loop (`subq.l #1`) and the test read `(0,%a0,%d1)` from a copy.
+/// With the byte displacement priced the fix-up folds into the address.
+#[test]
+fn an_index_with_a_byte_displacement_is_priced_legal_for_the_loop_pass() {
+    let ir = "define i32 @f(ptr %p) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %q = getelementptr i8, ptr %p, i32 %i\n  %v = load i8, ptr %q\n  %z = icmp eq i8 %v, 0\n  %i1 = add i32 %i, 1\n  br i1 %z, label %x, label %l\nx:\n  ret i32 %i\n}";
+    let ours = compiled(ir, Options::default());
+    assert!(!ours.contains("subq.l\t#1"), "{ours}");
+    let pinned_pricing = {
+        let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).unwrap();
+        let reduced = llrm_m68k::compile::mid_end_described_by(&module, &llrm_m68k::machine::M68k::default(), None);
+        llrm_mir::print::module(&reduced.unwrap())
+    };
+    assert!(pinned_pricing.contains("add i32") && pinned_pricing.contains("-1"), "{pinned_pricing}");
 }

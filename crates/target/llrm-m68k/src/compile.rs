@@ -73,7 +73,11 @@ pub fn items_with(
 ) -> Result<Vec<Item>, String> {
     let optimized;
     let module = if options.mid_end {
-        optimized = mid_end(module)?;
+        optimized = mid_end_described_by(
+            module,
+            &M68k { indexed_displacement: options.overlay, ..M68k::default() },
+            Some(Rc::new(M68kMachine)),
+        )?;
         &optimized
     } else {
         module
