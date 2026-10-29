@@ -17,6 +17,10 @@ fn root() -> &'static Path {
 }
 
 fn sysroot() -> PathBuf {
+    for tool in ["ld.lld", "qemu-aarch64"] {
+        let found = Command::new("which").arg(tool).output().is_ok_and(|out| out.status.success());
+        assert!(found, "qb_arm64 needs `{tool}` on the PATH");
+    }
     let made = Command::new(root().join("tools/targets/build-arm64-sysroot.sh"))
         .output()
         .expect("tools/targets/build-arm64-sysroot.sh runs");
