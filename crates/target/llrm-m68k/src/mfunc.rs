@@ -120,6 +120,9 @@ struct Emitter<'a> {
     values: HashMap<(u32, u8), Reg>,
     /// The builder's virtual registers, by number.
     builder: HashMap<u32, Reg>,
+    /// The node whose condition codes are the ones in `CCR` now: the last
+    /// instruction emitted that sets them, none after a call.
+    flags_from: Option<u32>,
 }
 
 impl Emitter<'_> {
@@ -198,6 +201,10 @@ impl Emitter<'_> {
                 let name = self.dag.global_names.get(symbol as usize).ok_or("a global with no name")?;
                 Operand::Symbol(name.clone(), offset)
             }
+            (ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, NodeData::Symbol(id)) => {
+                let name = self.dag.symbol_names.get(id as usize).ok_or("an external symbol with no name")?;
+                Operand::Symbol(name.clone(), 0)
+            }
             (ISD::BasicBlock, NodeData::Block(id)) => Operand::Block(id),
             _ => match self.values.get(&(value.node, value.res)) {
                 Some(reg) => Operand::Use(*reg),
@@ -223,6 +230,19 @@ impl Emitter<'_> {
                     && matches!(self.dag.opcode(source), ISD::Machine(_))
                     && !self.values.contains_key(&(source.node, source.res))
                 {
+                    // Several readers of one compare's codes (two selects on
+                    // one condition) are separate `CopyToReg`s of it. Where
+                    // something between has set the codes again, as a call
+                    // does, the compare runs again for this reader, as the
+                    // pin's scheduler clones it.
+                    if self.flags_from != Some(source.node) {
+                        if self.dag.node(source).values.len() != 1 {
+                            return Err("the condition codes of an arithmetic result are read past an instruction \
+                                        that sets them"
+                                .to_owned());
+                        }
+                        self.emit(source.node, into)?;
+                    }
                     return Ok(());
                 }
                 let Some(Operand::Use(src)) = self.operand(n.ops[2])? else {
@@ -283,12 +303,16 @@ impl Emitter<'_> {
                 let loads_argument = desc.has(flag::MAY_LOAD)
                     && !desc.has(flag::MAY_STORE)
                     && operands.iter().any(|operand| matches!(operand, Operand::Frame(index) if *index < 0));
+                let sets_flags = desc.implicit_defs.contains(&ccr);
+                if sets_flags || desc.has(flag::CALL) {
+                    self.flags_from = (sets_flags && !desc.has(flag::CALL)).then_some(node);
+                }
                 into.push(Inst {
                     call: desc.has(flag::CALL),
                     ties,
                     terminator: desc.has(flag::TERMINATOR),
                     barrier: desc.has(flag::BARRIER),
-                    sets_flags: desc.implicit_defs.contains(&ccr),
+                    sets_flags,
                     reads_flags: desc.implicit_uses.contains(&ccr),
                     may_load: desc.has(flag::MAY_LOAD),
                     may_store: desc.has(flag::MAY_STORE),
@@ -312,11 +336,12 @@ pub fn emit(
 ) -> Result<MFunction, String> {
     let first = blocks.first().ok_or("a function with no block")?;
     let mut emitter =
-        Emitter { dag: &first.dag, function: MFunction::new(name), values: HashMap::new(), builder: HashMap::new() };
+        Emitter { dag: &first.dag, function: MFunction::new(name), values: HashMap::new(), builder: HashMap::new(), flags_from: None };
     emitter.function.locals.extend(first.locals.iter().copied());
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
+        emitter.flags_from = None;
         let mut insts = Vec::new();
         // A unit lists its glued nodes last first.
         for unit in &one.units {
@@ -394,6 +419,42 @@ fn cmov_parts(inst: &Inst) -> Result<(Reg, Reg, Reg, i64), String> {
     Ok((result, on_false, on_true, cond))
 }
 
+/// The condition codes the compare set reach the join only through an arm
+/// whose phi copies are `move`s, which set them; so what reads them past the
+/// diamond must read them before the branch. The instructions of `tail` that
+/// read the flags before anything sets them again and are not the block's
+/// terminator, by position: each is movable above the run when it uses nothing
+/// the instructions before it define. A terminator that reads them cannot be
+/// moved, and is refused.
+///
+/// DEVIATE from the pin, whose scheduler orders a second reader of one compare
+/// before the pseudo (glue) and whose arms are empty. Exit: never; this
+/// expansion is ours.
+fn flag_readers_to_hoist(tail: &[Inst]) -> Result<Vec<usize>, String> {
+    let mut readers = Vec::new();
+    for (at, inst) in tail.iter().enumerate() {
+        if inst.reads_flags {
+            if inst.terminator {
+                return Err("a branch reads the flags of a compare past the select that follows it".to_owned());
+            }
+            let defined_before: Vec<&Operand> =
+                tail[..at].iter().flat_map(|before| before.operands.iter()).filter(|o| matches!(o, Operand::Def(_))).collect();
+            let blocked = inst.operands.iter().any(|operand| match operand {
+                Operand::Use(reg) => defined_before.contains(&&Operand::Def(*reg)),
+                _ => false,
+            });
+            if blocked {
+                return Err("a flag reader past a select uses a value the select defines".to_owned());
+            }
+            readers.push(at);
+        }
+        if inst.sets_flags {
+            break;
+        }
+    }
+    Ok(readers)
+}
+
 /// `M68kTargetLowering::EmitLoweredSelect`: a run of `CMOV` pseudos on one
 /// condition (or its opposite) becomes one diamond. The block branches to a
 /// new block on the condition; the new block that falls through is empty; the
@@ -446,6 +507,11 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         }
         tail.drain(..taken);
         tail.splice(0..0, copies);
+        let readers = flag_readers_to_hoist(&tail)?;
+        hoisted.extend(readers.iter().map(|&one| tail[one].clone()));
+        for &one in readers.iter().rev() {
+            tail.remove(one);
+        }
         let branch = branch_for(first).ok_or_else(|| format!("a CMOV on condition {first}"))?;
         let mut head_value: HashMap<Reg, Reg> = HashMap::new();
         let mut other_value: HashMap<Reg, Reg> = HashMap::new();

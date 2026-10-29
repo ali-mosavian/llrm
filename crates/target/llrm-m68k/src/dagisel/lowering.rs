@@ -123,6 +123,17 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     set(&[VAStart], &[MVT::Other], Action::Custom);
     set(&[VAEnd, VACopy, StackSave, StackRestore], &[MVT::Other], Action::Expand);
     set(&[DynamicStackAlloc], &[MVT::I32], Action::Custom);
+    // `RTLIB::MUL_I32` and the others: libgcc's names, the pin's defaults
+    // (`RuntimeLibcalls.def`)
+    for (op, name) in [
+        (Mul, "__mulsi3"),
+        (SDiv, "__divsi3"),
+        (UDiv, "__udivsi3"),
+        (SRem, "__modsi3"),
+        (URem, "__umodsi3"),
+    ] {
+        tl.set_libcall_name(op, MVT::I32, name);
+    }
     tl
 }
 
@@ -146,6 +157,27 @@ impl Hooks for M68kLowering {
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
             _ => None,
         }
+    }
+
+    /// `makeLibCall` through `LowerCall`: the routine's address is a target
+    /// external symbol, the chain is the entry node (the result is the value,
+    /// nothing orders the call after a store).
+    fn make_lib_call(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+    ) -> Option<SDValue> {
+        use super::call::{Ext, In, Out};
+        let ext = if signed { Ext::Sign } else { Ext::Zero };
+        let outs: Vec<Out> = args.iter().map(|&value| Out { value, ext, pointer: false }).collect();
+        let callee = dag.get_target_external_symbol(EVT::I32, name);
+        let root = dag.entry_node();
+        let (_chain, values) =
+            super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &[In { vt: ret, pointer: false }]);
+        values.first().copied()
     }
 }
 
