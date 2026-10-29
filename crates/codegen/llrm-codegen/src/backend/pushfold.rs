@@ -28,7 +28,9 @@
 //! DEVIATE CF1 (no number): the pin's input is `mov [esp+k], r` stores into a
 //! reserved frame, converted to pushes and folded in one pass; ours has pushes
 //! from selection, so the conversion has no input and `isProfitable` (its
-//! reserved-frame accounting) no question. Pin llc -m32 i486, -Os and -Oz: `movl %edi,(%esp); calll g`, no push, no cleanup per call. Exit: none, the form is not made (debt row call-frame-reserve, docs/working/ci.md).
+//! reserved-frame accounting) no question. Pin llc -m32 i486, -Os and -Oz:
+//! `movl %edi,(%esp); calll g`, no push, no cleanup per call. Exit: none, the
+//! form is not made (debt row call-frame-reserve, docs/working/ci.md).
 //!
 //! # Example
 //! `f(p->a, p->b, p->c)`, before (after `FloatFold`):
