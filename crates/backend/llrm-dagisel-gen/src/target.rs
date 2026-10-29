@@ -31,6 +31,8 @@ struct Target {
     registers: Vec<String>,
     /// The tables sit in llrm-dagisel itself, not in the target's crate.
     in_dagisel: bool,
+    /// The module of the node predicate functions, where not the default.
+    predicates: Option<String>,
     /// The node predicates are listed, not called (`Style::listed_predicates`).
     listed_predicates: bool,
 }
@@ -63,6 +65,7 @@ impl Target {
             hw_modes: strings(table, "hw_modes")?,
             extra_symbols: strings(table, "extra_symbols")?,
             registers: strings(table, "registers")?,
+            predicates: table.get("predicates").and_then(|v| v.as_str()).map(str::to_string),
             in_dagisel: table.get("in_dagisel").and_then(|v| v.as_bool()).unwrap_or(false),
             listed_predicates: table.get("listed_predicates").and_then(|v| v.as_bool()).unwrap_or(false),
         };
@@ -106,7 +109,11 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         inputs.instrinfo.lines().filter_map(|l| l.split(' ').next()).map(str::to_string).collect();
     let style = emit::Style {
         dagisel: if target.in_dagisel { "crate" } else { "llrm_dagisel" },
-        predicates: if target.in_dagisel { "crate::predicates" } else { "crate::dagisel::predicates" },
+        predicates: match &target.predicates {
+            Some(path) => leak(path.clone()),
+            None if target.in_dagisel => "crate::predicates",
+            None => "crate::dagisel::predicates",
+        },
         ns: leak(target.ns.clone()),
         title: leak(target.name.clone()),
         regen: "tools/dagisel/regen-target.sh",
