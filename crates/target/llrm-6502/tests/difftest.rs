@@ -309,13 +309,13 @@ impl Gen {
                     let e = self.expr(Ty::U8, 2, scope);
                     writeln!(out, "{pad}switch ({e} & 3) {{").unwrap();
                     for case in 0..self.rng.below(4) {
-                        writeln!(out, "{pad}case {case}:").unwrap();
+                        writeln!(out, "{pad}case {case}: ;").unwrap();
                         self.some(2, 0, scope, indent + 1, out);
                         if self.rng.chance(80) {
                             writeln!(out, "{pad}  break;").unwrap();
                         }
                     }
-                    writeln!(out, "{pad}default:").unwrap();
+                    writeln!(out, "{pad}default: ;").unwrap();
                     self.stmts(1, 0, scope, indent + 1, out);
                     writeln!(out, "{pad}}}").unwrap();
                 }
@@ -376,9 +376,16 @@ impl Gen {
             writeln!(head, "  struct S s;").unwrap();
             writeln!(init, "  s.a = {}; s.b = {}; s.c = {};", self.rng.below(256), self.rng.below(65536), self.rng.below(256)).unwrap();
         }
-        let mut body = String::new();
         let count = if top { 6 + self.rng.below(8) } else { 2 + self.rng.below(4) };
-        self.stmts(count, 2, &mut scope, 1, &mut body);
+        let mut pieces = Vec::new();
+        for _ in 0..count {
+            let mut piece = String::new();
+            self.stmts(1, 2, &mut scope, 1, &mut piece);
+            pieces.push(piece);
+        }
+        // `DIFF_LIMIT=k` keeps the first k statements of `test`: the way a mismatch is cut down
+        let keep = std::env::var("DIFF_LIMIT").ok().and_then(|k| k.parse().ok()).filter(|_| top).unwrap_or(pieces.len());
+        let body: String = pieces[..keep.min(pieces.len())].concat();
         let mut tail = String::new();
         for v in scope.vars.clone() {
             writeln!(tail, "  ck = (ck << 1 | ck >> 15) ^ (unsigned){0} ^ (unsigned)({0} >> 8);", v.name).unwrap();
@@ -431,14 +438,14 @@ fn run(bin: &Path) -> Result<Option<i32>, String> {
     Ok(out.status.code())
 }
 
-fn cc65(dir: &Path, source: &str) -> Result<Option<i32>, String> {
+fn cc65(dir: &Path, source: &str, optimize: bool) -> Result<Option<i32>, String> {
     std::fs::write(dir.join("c.c"), format!("{source}\nint main(void) {{ unsigned r = test(); return (r ^ (r >> 8)) & 255; }}\n")).unwrap();
     std::fs::write(dir.join("data.s"), DATA).unwrap();
-    tool(dir, "cl65", &["-t", "sim6502", "-O", "-o", "c.bin", "c.c", "data.s"])?;
+    tool(dir, "cl65", &["-t", "sim6502", if optimize { "-O" } else { "-g0" }, "-o", "c.bin", "c.c", "data.s"])?;
     run(&dir.join("c.bin"))
 }
 
-fn ours(dir: &Path, source: &str, seed: u64) -> Result<Option<i32>, String> {
+fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i32>, String> {
     std::fs::write(dir.join("o.c"), source).unwrap();
     tool(
         dir,
@@ -457,18 +464,28 @@ fn ours(dir: &Path, source: &str, seed: u64) -> Result<Option<i32>, String> {
         .join("\n");
     std::fs::write(dir.join("raw.ll"), raw).unwrap();
     let inline = if seed % 2 == 0 { "-inline-threshold=0" } else { "-inline-threshold=225" };
+    if !optimize {
+        std::fs::copy(dir.join("raw.ll"), dir.join("k.ll")).unwrap();
+    } else {
     tool(
         dir,
         "/usr/lib/llvm-20/bin/opt",
         &["-O2", inline, "-unroll-threshold=0", "-unroll-full-max-count=0", "-vectorize-loops=false", "-vectorize-slp=false", "-S", "raw.ll", "-o", "k.ll"],
     )?;
-    let text = sanitize(&std::fs::read_to_string(dir.join("k.ll")).unwrap());
+    }
+    let mut text = sanitize(&std::fs::read_to_string(dir.join("k.ll")).unwrap());
+    if std::env::var("DIFF_NOLIFETIME").is_ok() {
+        text = text.lines().filter(|l| !l.contains("llvm.lifetime")).collect::<Vec<_>>().join("\n");
+    }
     let mut module = llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e:?}").chars().take(120).collect::<String>())?;
     llrm_6502::prepare::split_phi_edges(&mut module);
     let platform = Platform::parse(SIM65).unwrap();
     let mut asm = String::new();
     let names: Vec<String> = std::iter::once("test".to_owned()).chain((0..4).map(|n| format!("h{n}"))).chain(["bump".to_owned()]).collect();
     for name in names.iter().filter(|n| module.named(n).is_some_and(|id| module.global(id).function().is_some_and(|f| !f.is_declaration()))) {
+        if std::env::var("DIFF_TRACE").is_ok() {
+            eprintln!("trace: seed {seed}: compiling {name}");
+        }
         let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut selection = select_function(&module, name, Cpu::Mos6502)?;
             selection.zero_page = platform.zero_page;
@@ -499,24 +516,47 @@ enum Outcome {
     Agree,
     /// A program the harness could not compare: the reason.
     Skipped(String),
-    Mismatch(i32, i32),
+    /// cc65 -O, ours -O2, and the two cross-checks: cc65 without -O and ours on the unoptimized IR.
+    Mismatch(i32, i32, Option<i32>, Option<i32>),
+    /// cc65 -O disagrees with ours and cc65 without -O agrees with ours: a bug in cc65's optimizer.
+    Cc65(i32, i32),
 }
 
 fn check(seed: u64) -> Outcome {
     let dir = work(seed);
-    let source = program(seed);
+    // `DIFF_FILE=<path>` runs a hand-written program (with a `test`) in place of the generated one
+    let source = std::env::var("DIFF_FILE").map(|path| std::fs::read_to_string(path).unwrap()).unwrap_or_else(|_| program(seed));
     std::fs::write(dir.join("p.c"), &source).unwrap();
-    let reference = match cc65(&dir, &source) {
+    // a reduced program must stay defined: no missing return, no read of a local before it is set
+    if std::env::var("DIFF_STRICT").is_ok() {
+        let strict = tool(
+            &dir,
+            "clang",
+            &["--target=msp430", "-funsigned-char", "-fsyntax-only", "-Werror=return-type", "-Werror=uninitialized", "-Werror=sometimes-uninitialized", "-Werror=conditional-uninitialized", "p.c"],
+        );
+        if let Err(why) = strict {
+            return Outcome::Skipped(format!("not a defined program: {why}"));
+        }
+    }
+    let reference = match cc65(&dir, &source, true) {
         Ok(Some(code)) => code,
         Ok(None) => return Outcome::Skipped("cc65 run hit the cycle cap".into()),
         Err(why) => return Outcome::Skipped(format!("cc65 side: {why}")),
     };
-    match ours(&dir, &source, seed) {
+    match ours(&dir, &source, seed, true) {
         Ok(Some(code)) if code == reference => {
             let _ = std::fs::remove_dir_all(&dir);
             Outcome::Agree
         }
-        Ok(Some(code)) => Outcome::Mismatch(reference, code),
+        Ok(Some(code)) => {
+            let plain = cc65(&dir, &source, false).ok().flatten();
+            let unoptimized = ours(&dir, &source, seed, false).ok().flatten();
+            if plain == Some(code) {
+                Outcome::Cc65(reference, code)
+            } else {
+                Outcome::Mismatch(reference, code, plain, unoptimized)
+            }
+        }
         Ok(None) => Outcome::Skipped("ours hit the cycle cap".into()),
         Err(why) => Outcome::Skipped(format!("ours: {why}")),
     }
@@ -545,7 +585,7 @@ fn random_programs_agree_with_cc65() {
     });
     let mut results = results.into_inner().unwrap();
     results.sort_by_key(|(seed, _)| *seed);
-    let (mut agree, mut skipped, mut bad) = (0, 0, 0);
+    let (mut agree, mut skipped, mut bad, mut cc65_bugs) = (0, 0, 0, 0);
     for (seed, outcome) in &results {
         match outcome {
             Outcome::Agree => agree += 1,
@@ -553,12 +593,16 @@ fn random_programs_agree_with_cc65() {
                 skipped += 1;
                 println!("seed {seed}: skipped: {why}");
             }
-            Outcome::Mismatch(want, got) => {
+            Outcome::Cc65(want, got) => {
+                cc65_bugs += 1;
+                println!("seed {seed}: cc65 -O bug: cc65 -O {want}, cc65 plain and ours {got}");
+            }
+            Outcome::Mismatch(want, got, plain, unoptimized) => {
                 bad += 1;
-                println!("seed {seed}: MISMATCH cc65 {want}, ours {got}");
+                println!("seed {seed}: MISMATCH cc65 -O {want}, ours -O2 {got}; cc65 plain {plain:?}, ours unoptimized {unoptimized:?}");
             }
         }
     }
-    println!("{count} programs from seed {first}: {agree} agree, {bad} mismatch, {skipped} skipped");
+    println!("{count} programs from seed {first}: {agree} agree, {bad} mismatch, {cc65_bugs} cc65 -O bugs, {skipped} skipped");
     assert_eq!(bad, 0, "miscompiles; programs kept in target/tmp/difftest/<seed>");
 }
