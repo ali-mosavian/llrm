@@ -253,6 +253,11 @@ impl Cfg {
         self.loops.iter().rev().find(|(_, body)| body[block]).map(|(header, _)| *header)
     }
 
+    /// The natural loops: header and member flags, outermost first.
+    pub fn loops(&self) -> &[(usize, Vec<bool>)] {
+        &self.loops
+    }
+
     /// `isReducible` of any cycle.
     pub fn reducible(&self) -> bool {
         self.reducible
