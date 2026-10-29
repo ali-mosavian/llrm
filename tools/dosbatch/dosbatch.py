@@ -310,6 +310,12 @@ def os_defines(target: str, language: str, abi: str | None = None) -> tuple[str,
     return (*defines, "LL_MAIN=main_") if language == "c" and watcom else defines
 
 
+def entry_defines(target: str, entry: str | None, near: bool = False) -> tuple[str, ...]:
+    """The assembler's defines for a program linked by name: the start-up calls `entry`, `_main` when none is named (cdecl and sysv programs)."""
+    defines = os_defines(target, "c", "cdecl")
+    return (*defines, *(("NEAR_CODE=1",) if near else ()), *((f"LL_MAIN={entry}",) if entry else ()))
+
+
 def os_start(target: str, language: str) -> list[str]:
     """The files that start a `language` program on `target`: the layer's start-up, then the language's own hook."""
     directory = Path(os_layer(target, "directory", language))

@@ -180,3 +180,11 @@ def test_an_initializer_lands_in_the_xi_segments_start_up_walks(tmp_path, model)
     dosbatch._host(*dosbatch.c_compile(dosbatch.ROOT / "runtime/qb/nheap.c", obj, target, "-Os", include, [], flags))
     names = obj.read_bytes()
     assert all(bytes([len(name)]) + name in names for name in (b"XIB", b"XI", b"XIE"))
+
+
+def test_a_program_linked_without_an_entry_calls_the_start_ups_default_main(monkeypatch):
+    """The x86_16-dos and x86_32-dos rows (cdecl, sysv) name no --entry; link_objects took os_defines' llrm-cc default, `main_`, and gate run 2
+    failed a_program_runs_in_each_model and a_static_huge_object... with 'E2028: main_ is an undefined reference'."""
+    monkeypatch.setattr(dosbatch, "os_layer", lambda target, field, language: "A=1")
+    assert dosbatch.entry_defines("x86-m16", None) == ("A=1",)
+    assert dosbatch.entry_defines("x86-m16", "main_", near=True) == ("A=1", "NEAR_CODE=1", "LL_MAIN=main_")
