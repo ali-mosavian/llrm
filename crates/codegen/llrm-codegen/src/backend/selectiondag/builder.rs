@@ -58,6 +58,18 @@ impl std::fmt::Debug for TtiHandle {
     }
 }
 
+/// The pin's `MaxStoresPerMem{cpy,move,set}` and their `OptSize` forms
+/// (`TargetLoweringBase`), for a target that copies by loads and stores.
+#[derive(Clone, Copy, Debug)]
+pub struct MemLimits {
+    pub memcpy: usize,
+    pub memcpy_opt_size: usize,
+    pub memmove: usize,
+    pub memmove_opt_size: usize,
+    pub memset: usize,
+    pub memset_opt_size: usize,
+}
+
 /// The target facts the builder asks (`TLI->` in the pin).
 #[derive(Clone, Debug)]
 pub struct BuilderTarget {
@@ -99,6 +111,9 @@ pub struct BuilderTarget {
     /// The same for the load and store pairs of a constant memcpy: a dword
     /// pair is 8 bytes against about 16 for `rep movs`, so two.
     pub memcpy_moves_size: usize,
+    /// A target with no string instructions: the most loads and stores of a
+    /// constant copy or fill it is inline for. None where x86's rules stand.
+    pub mem_limits: Option<MemLimits>,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -256,6 +271,7 @@ impl BuilderTarget {
             min_size: false,
             memset_stores_size: 0,
             memcpy_moves_size: 0,
+            mem_limits: None,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -287,6 +303,7 @@ impl BuilderTarget {
             min_size: false,
             memset_stores_size: 0,
             memcpy_moves_size: 0,
+            mem_limits: None,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -1234,15 +1251,7 @@ impl Builder<'_> {
         let hooked = self.calling().is_some();
         let first = if hooked { 0 } else { self.full_arch()?.first_argument_offset(false) };
         let plan = if hooked {
-            Convention {
-                parameters: Vec::new(),
-                returns: Vec::new(),
-                float_result: None,
-                popped: 0,
-                saved: Vec::new(),
-                stack_arguments: 0,
-                first: 0,
-            }
+            Convention::empty()
         } else {
             convention_for(
                 self.module,

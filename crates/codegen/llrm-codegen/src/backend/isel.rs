@@ -272,6 +272,21 @@ pub struct Convention {
     pub first: i64,
 }
 
+impl Convention {
+    /// The plan of a target whose calling hook places every part itself.
+    pub fn empty() -> Convention {
+        Convention {
+            parameters: Vec::new(),
+            returns: Vec::new(),
+            float_result: None,
+            popped: 0,
+            saved: Vec::new(),
+            stack_arguments: 0,
+            first: 0,
+        }
+    }
+}
+
 /// A variadic function's `va_list` under `sysv-amd64`: what `va_start` writes.
 #[derive(Clone, Copy, Debug)]
 struct VaList {

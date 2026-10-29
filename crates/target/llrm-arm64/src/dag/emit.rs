@@ -83,6 +83,8 @@ enum Operand {
     Fpr(Vreg),
     /// A global by id, and the offset into it.
     Symbol(u32, i64),
+    /// A symbol the module does not declare, by the DAG's symbol id: a library routine.
+    External(u32),
     /// A block by id, as a branch names it.
     Block(u32),
     /// An incoming argument at this offset into the caller's outgoing area.
@@ -560,6 +562,9 @@ impl Emitter<'_> {
             NodeData::Global { symbol, offset } if node.opcode == ISD::TargetGlobalAddress => {
                 Ok(Operand::Symbol(symbol, offset))
             }
+            NodeData::Symbol(id) if node.opcode == ISD::TargetExternalSymbolNode => {
+                Ok(Operand::External(id))
+            }
             NodeData::FrameIndex(index) if node.opcode == ISD::TargetFrameIndex && index < 0 => {
                 self.dag.fixed_offsets.get(&index).map(|&offset| Operand::Fixed(offset)).ok_or_else(|| format!("fixed object {index} has no offset"))
             }
@@ -587,6 +592,7 @@ impl Emitter<'_> {
                 Target::Symbol { name, .. } => Callee::Symbol(name),
                 _ => return Err("a callee that is no symbol".into()),
             },
+            ("BL", Operand::External(id)) => Callee::Symbol(self.globals.external(&self.dag.symbol_names[id as usize])),
             ("BLR", Operand::Reg(register)) => Callee::Register(register),
             _ => return Err(format!("{name}: a callee that is neither a symbol nor a register")),
         };

@@ -21,6 +21,14 @@ double sum_array(const double *, int);
 void scale(float *, float);
 double fcalls(double, int);
 int fbits(float);
+void cp15(void *, const void *);
+void cp300(void *, const void *);
+void cpn(void *, const void *, int64_t);
+void mv32(void *, const void *);
+void mvn(void *, const void *, int64_t);
+void z24(void *);
+void fill12(void *, signed char);
+void setn(void *, signed char, int64_t);
 
 double c_fmix(int n, double a, float f, int64_t i, double d, double e, double g, double h, double j, double k, double l, float m, signed char c) {
   return n + 2 * a + 3 * f + 4 * i + 5 * d + 6 * e + 7 * g + 8 * h + 9 * j + 10 * k + 11 * l + 12 * m + 13 * c;
@@ -132,6 +140,47 @@ int main(void) {
     for (int i = 0; i < 3; i++) {
       int bits; __builtin_memcpy(&bits, &bf[i], 4);
       if (fbits(bf[i]) != bits) { printf("fbits\n"); bad++; }
+    }
+  }
+  {
+    unsigned char src[320], dst[320], ref[320];
+    for (int i = 0; i < 320; i++) src[i] = (unsigned char)(i * 7 + 1);
+    for (int i = 0; i < 320; i++) dst[i] = ref[i] = 0xEE;
+    cp15(dst + 1, src + 3);
+    for (int i = 0; i < 15; i++) ref[1 + i] = src[3 + i];
+    if (__builtin_memcmp(dst, ref, 320)) { printf("cp15\n"); bad++; }
+    cp300(dst, src);
+    if (__builtin_memcmp(dst, src, 300) || dst[300] != ref[300]) { printf("cp300\n"); bad++; }
+    for (int n = 0; n < 40; n += 7) {
+      for (int i = 0; i < 320; i++) dst[i] = 0xEE;
+      cpn(dst + 2, src, n);
+      for (int i = 0; i < 320; i++) ref[i] = (i >= 2 && i < 2 + n) ? src[i - 2] : 0xEE;
+      if (__builtin_memcmp(dst, ref, 320)) { printf("cpn(%d)\n", n); bad++; }
+    }
+    // overlapping moves, both directions
+    for (int off = -9; off <= 9; off += 6) {
+      for (int i = 0; i < 80; i++) dst[i] = ref[i] = (unsigned char)i;
+      mv32(dst + 20 + off, dst + 20);
+      __builtin_memmove(ref + 20 + off, ref + 20, 32);
+      if (__builtin_memcmp(dst, ref, 80)) { printf("mv32(%d)\n", off); bad++; }
+      for (int i = 0; i < 80; i++) dst[i] = ref[i] = (unsigned char)i;
+      mvn(dst + 20 + off, dst + 20, 45);
+      __builtin_memmove(ref + 20 + off, ref + 20, 45);
+      if (__builtin_memcmp(dst, ref, 80)) { printf("mvn(%d)\n", off); bad++; }
+    }
+    for (int i = 0; i < 40; i++) dst[i] = 0xEE;
+    z24(dst + 5);
+    for (int i = 0; i < 40; i++) ref[i] = (i >= 5 && i < 29) ? 0 : 0xEE;
+    if (__builtin_memcmp(dst, ref, 40)) { printf("z24\n"); bad++; }
+    for (int i = 0; i < 40; i++) dst[i] = 0xEE;
+    fill12(dst + 3, -91);
+    for (int i = 0; i < 40; i++) ref[i] = (i >= 3 && i < 15) ? 0xA5 : 0xEE;
+    if (__builtin_memcmp(dst, ref, 40)) { printf("fill12\n"); bad++; }
+    for (int n = 0; n < 70; n += 23) {
+      for (int i = 0; i < 100; i++) dst[i] = 0xEE;
+      setn(dst + 1, 7, n);
+      for (int i = 0; i < 100; i++) ref[i] = (i >= 1 && i < 1 + n) ? 7 : 0xEE;
+      if (__builtin_memcmp(dst, ref, 100)) { printf("setn(%d)\n", n); bad++; }
     }
   }
   if (bad) printf("%d bad\n", bad);

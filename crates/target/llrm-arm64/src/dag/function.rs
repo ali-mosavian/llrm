@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use llrm_codegen::backend::isel::Convention;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
-use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, build_block};
+use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, MemLimits, TargetNodes, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_mir::datalayout::DataLayout;
@@ -39,6 +39,18 @@ pub fn builder_target() -> BuilderTarget {
         legal_ints: vec![32, 64],
         stack_align: Some(16),
         jump_tables: false,
+        // DEVIATE (1): the pin's `MaxStoresPerMemcpy` (16, `OptSize` 4), `Memmove` (16, 4) and
+        // `Memset` (32, 8) count 16-byte vector steps (`getOptimalMemOpType`); here a step is
+        // eight bytes, as no vector type is selected yet, so a copy of more than 128 bytes calls
+        // `memcpy` where the pin copies up to 256 inline. Owner mac2, 2026-10-29. Exit: vector moves.
+        mem_limits: Some(MemLimits {
+            memcpy: 16,
+            memcpy_opt_size: 4,
+            memmove: 16,
+            memmove_opt_size: 4,
+            memset: 32,
+            memset_opt_size: 8,
+        }),
         target_nodes: Some(TargetNodes {
             call: ISD::Target(0),
             ret: ISD::Target(RET_GLUE),

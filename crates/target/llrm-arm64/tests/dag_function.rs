@@ -269,15 +269,39 @@ fn float_constants_are_fmov_immediates_or_mov_pairs_and_a_pool_is_refused() {
     assert!(why.contains("ConstantPool"), "{why}");
 }
 
-/// `memcpy` once reached the x86 `rep movs` expansion and panicked with `no arm64
-/// register rcx`, which killed the whole compile in shadow mode. A target with no
-/// string instructions refuses it.
+/// A constant `memcpy` or `memset` is loads and stores while it fits the pin's limit, and a
+/// call of the library routine past it or for a size unknown at compile time. The names are the
+/// pin's `llc -O2 -stop-after=finalize-isel` for each, in a fixed order. Before, the intrinsic
+/// panicked with x86's `rcx`, and then fell back to the hand selector for the whole function.
 #[test]
-fn memcpy_is_refused_not_expanded_with_x86_registers() {
-    let ir = "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
-define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 100, i1 false)\n  ret void\n}";
-    let why = selected(ir).expect_err("refused");
-    assert!(why.contains("mem"), "{why}");
+fn mem_intrinsics_are_loads_and_stores_within_the_limit_and_a_call_past_it() {
+    let sorted = |ir: &str| {
+        let mut names = selected(ir).unwrap().concat();
+        names.sort_unstable();
+        names
+    };
+    let mem = |call: &str| {
+        format!(
+            "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)\n\
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+define void @f(ptr %d, ptr %s, i64 %n) {{\n  {call}\n  ret void\n}}"
+        )
+    };
+    // 15 bytes: two eight-byte pairs, the second overlapping the first
+    let copy15 = mem("call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 15, i1 false)");
+    assert_eq!(sorted(&copy15), ["LDRXui", "LDURXi", "RET_ReallyLR", "STRXui", "STURXi"]);
+    // 24 zero bytes: three stores of `xzr`
+    let zero24 = mem("call void @llvm.memset.p0.i64(ptr %d, i8 0, i64 24, i1 false)");
+    assert_eq!(sorted(&zero24), ["RET_ReallyLR", "STRXui", "STRXui", "STRXui"]);
+    // a size known only at run time: `memcpy(d, s, n)`
+    let copy_n = mem("call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 %n, i1 false)");
+    assert_eq!(sorted(&copy_n), ["ADJCALLSTACKDOWN", "ADJCALLSTACKUP", "BL", "RET_ReallyLR"]);
+    let set_n = mem("call void @llvm.memset.p0.i64(ptr %d, i8 1, i64 %n, i1 false)");
+    assert!(sorted(&set_n).contains(&"BL"), "{:?}", sorted(&set_n));
+    // past the limit of 16 eight-byte steps
+    let big = mem("call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 200, i1 false)");
+    assert!(sorted(&big).contains(&"BL"), "{:?}", sorted(&big));
 }
 
 mod emitted {

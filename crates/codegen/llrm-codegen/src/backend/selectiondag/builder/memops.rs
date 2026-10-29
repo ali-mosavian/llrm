@@ -33,7 +33,9 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         match intrinsic {
             // The expansion is x86's `rep movs` and `rep stos` and its registers.
-            Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove if self.arch.full().is_none() => {
+            Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove
+                if self.arch.full().is_none() && self.target.mem_limits.is_none() =>
+            {
                 Err(Refused("a mem intrinsic for a target with no string instructions"))
             }
             Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove => {
@@ -663,6 +665,9 @@ impl Builder<'_> {
         info: &CallInfo,
         which: &Intrinsic,
     ) -> Result<(), Refused> {
+        if let Some(limits) = self.target.mem_limits {
+            return self.lower_mem_by_moves(instruction, info, which, limits);
+        }
         let operands = &instruction.operands;
         let proved = |kind: &str| instruction.metadata.iter().any(|(one, _)| one == kind);
         let forward = proved(llrm_mir::intrinsics::FORWARD) && !proved(llrm_mir::intrinsics::BACKWARD);
@@ -793,6 +798,78 @@ impl Builder<'_> {
         };
         self.dag.set_root(chain);
         Ok(())
+    }
+
+    /// `getMemcpy`, `getMemmove` and `getMemset` for a target that copies by
+    /// loads and stores: those while they fit the limit, else a call of the
+    /// library routine.
+    fn lower_mem_by_moves(
+        &mut self,
+        instruction: &Instruction,
+        info: &CallInfo,
+        which: &Intrinsic,
+        limits: super::MemLimits,
+    ) -> Result<(), Refused> {
+        let operands = &instruction.operands;
+        let dst = self.get_value(operands[0])?;
+        let other = self.get_value(operands[1])?;
+        let size = self.get_value(operands[2])?;
+        let dst_align = Self::argument_alignment(info, 0);
+        let src_align = if matches!(which, Intrinsic::MemSet) { dst_align } else { Self::argument_alignment(info, 1) };
+        let root = self.memory_root();
+        let opt_size = self.has_opt_size();
+        let constant = self.constant_size(size);
+        if constant == Some(0) {
+            return Ok(());
+        }
+        let (name, limit) = match (which, opt_size) {
+            (Intrinsic::MemCpy, false) => ("memcpy", limits.memcpy),
+            (Intrinsic::MemCpy, true) => ("memcpy", limits.memcpy_opt_size),
+            (Intrinsic::MemMove, false) => ("memmove", limits.memmove),
+            (Intrinsic::MemMove, true) => ("memmove", limits.memmove_opt_size),
+            (_, false) => ("memset", limits.memset),
+            (_, true) => ("memset", limits.memset_opt_size),
+        };
+        let inline = match (constant, which) {
+            (Some(bytes), Intrinsic::MemCpy) => {
+                self.inline_memcpy(root, dst, other, bytes, limit, dst_align, src_align)?
+            }
+            (Some(bytes), Intrinsic::MemMove) => {
+                self.inline_memmove(root, dst, other, bytes, limit, dst_align, src_align)?
+            }
+            (Some(bytes), _) => self.inline_memset(root, dst, other, bytes, limit, dst_align)?,
+            _ => None,
+        };
+        let chain = match inline {
+            Some(chain) => chain,
+            None => self.mem_libcall(name, root, &[dst, other], size)?,
+        };
+        self.dag.set_root(chain);
+        Ok(())
+    }
+
+    /// `name(dst, other, size)` through the target's calling hook: `memset`'s
+    /// byte is an `int` there.
+    fn hooked_mem_libcall(
+        &mut self,
+        name: &str,
+        chain_in: SDValue,
+        first_two: &[SDValue],
+        size: SDValue,
+    ) -> Result<SDValue, Refused> {
+        let pointer = self.target.dag.pointer;
+        let callee = self.dag.get_target_external_symbol(pointer, name);
+        let second = if name == "memset" {
+            self.dag.get_node(ISD::AnyExtend, EVT::I32, &[first_two[1]])
+        } else {
+            first_two[1]
+        };
+        let size = self.dag.get_zext_or_trunc(size, pointer);
+        self.dag.set_root(chain_in);
+        let void = self.module.context.types.void();
+        let extends = [ISD::AnyExtend; 3];
+        self.lower_call(callee, vec![first_two[0], second, size], &extends, &[], &Convention::empty(), 0, void, false)?;
+        Ok(self.dag.get_root())
     }
 
     /// Whether the target's runtime has the library routine `name`: its
@@ -1074,6 +1151,9 @@ impl Builder<'_> {
         first_two: &[SDValue],
         size: SDValue,
     ) -> Result<SDValue, Refused> {
+        if self.calling().is_some() {
+            return self.hooked_mem_libcall(name, chain_in, first_two, size);
+        }
         // The routine's symbol and calling convention are the target fact's
         // (`options.libcalls`), as `memcpycall` applies them to a `memcpy`.
         let Some((_, convention, routine_symbol)) =

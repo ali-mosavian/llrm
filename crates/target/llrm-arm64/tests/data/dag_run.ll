@@ -302,3 +302,47 @@ define i32 @fbits(float %a) {
   %r = bitcast float %a to i32
   ret i32 %r
 }
+
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+
+define void @cp15(ptr %d, ptr %s) {
+  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 15, i1 false)
+  ret void
+}
+
+define void @cp300(ptr %d, ptr %s) {
+  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 300, i1 false)
+  ret void
+}
+
+define void @cpn(ptr %d, ptr %s, i64 %n) {
+  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 %n, i1 false)
+  ret void
+}
+
+define void @mv32(ptr %d, ptr %s) {
+  call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 32, i1 false)
+  ret void
+}
+
+define void @mvn(ptr %d, ptr %s, i64 %n) {
+  call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 %n, i1 false)
+  ret void
+}
+
+define void @z24(ptr %d) {
+  call void @llvm.memset.p0.i64(ptr %d, i8 0, i64 24, i1 false)
+  ret void
+}
+
+define void @fill12(ptr %d, i8 %c) {
+  call void @llvm.memset.p0.i64(ptr %d, i8 %c, i64 12, i1 false)
+  ret void
+}
+
+define void @setn(ptr %d, i8 %c, i64 %n) {
+  call void @llvm.memset.p0.i64(ptr %d, i8 %c, i64 %n, i1 false)
+  ret void
+}

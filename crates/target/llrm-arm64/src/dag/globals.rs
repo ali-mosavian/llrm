@@ -20,7 +20,10 @@ pub struct Global {
 }
 
 #[derive(Clone, Default)]
-pub struct Globals(Rc<HashMap<u32, Global>>);
+pub struct Globals {
+    by_id: Rc<HashMap<u32, Global>>,
+    platform: Option<Platform>,
+}
 
 impl Globals {
     pub fn of(
@@ -47,13 +50,21 @@ impl Globals {
                 },
             );
         }
-        Globals(Rc::new(by_id))
+        Globals { by_id: Rc::new(by_id), platform: Some(platform) }
     }
 
     pub fn get(
         &self,
         id: u32,
     ) -> Option<&Global> {
-        self.0.get(&id)
+        self.by_id.get(&id)
+    }
+
+    /// The linker's name of a library routine the module does not declare.
+    pub fn external(
+        &self,
+        name: &str,
+    ) -> String {
+        self.platform.map_or_else(|| name.to_owned(), |platform| crate::data::symbol_name(platform, name))
     }
 }
