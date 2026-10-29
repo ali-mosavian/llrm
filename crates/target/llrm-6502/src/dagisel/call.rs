@@ -261,6 +261,10 @@ pub fn lower_return(
 pub struct MosCalling;
 
 impl TargetCalling for MosCalling {
+    fn byval_by_reference(&self) -> bool {
+        true
+    }
+
     fn lower_call(
         &self,
         dag: &mut SelectionDAG,

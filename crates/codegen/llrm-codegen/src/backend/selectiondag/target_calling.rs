@@ -63,6 +63,14 @@ pub type FixedObject<'a> = &'a mut dyn FnMut(u32, i64, bool) -> i32;
 pub type LiveIn<'a> = &'a mut dyn FnMut(RegId) -> u32;
 
 pub trait TargetCalling: Debug + Sync {
+    /// Whether a `byval` argument is passed as the address of a copy the
+    /// caller makes in its own frame, the callee reading through the pointer.
+    /// A target that puts the bytes in the argument area says no, and a call
+    /// with one is refused.
+    fn byval_by_reference(&self) -> bool {
+        false
+    }
+
     /// `LowerCall`: the call sequence and the call; returns the chain and the
     /// result parts.
     fn lower_call(
