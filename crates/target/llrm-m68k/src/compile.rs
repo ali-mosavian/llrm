@@ -6,7 +6,7 @@ use std::rc::Rc;
 use llrm_mir::memory::has;
 use llrm_mir::module::Module;
 
-use crate::address::address_arithmetic;
+use crate::address::{address_arithmetic, lea_on_data};
 use crate::dagisel::function::select_function_with;
 use crate::dagisel::hooks::Cpu;
 use crate::expand::{Line, finish};
@@ -100,6 +100,7 @@ pub fn items_with(
     fold_reserved_copies(&mut function);
     if options.overlay {
         address_arithmetic(&mut function);
+        lea_on_data(&mut function);
     }
     if options.overlay {
         crate::overlay::mark_commutable(&mut function);
