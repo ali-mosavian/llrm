@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_gep_base.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_gep_base.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_gep_base.rs sha256:d8641e0f0cd4c4b1267ec2aa5e076887107e83ac10ca4b2c2ba926f20637bdc6 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_gep_base.rs sha256:85fa2febdac8d9a2b4ffb0810567de9627ad9ca6668e7ed6fc22cf07c8682250 -->
 
 # combine_gep_base
 
@@ -23,6 +23,9 @@ DEVIATE 1: no vector GEPs: MIR has none.
 
 DEVIATE 2: `RewriteGEPs` is always true, the only way `foldGEPICmp` calls
 it. Exit: `OptimizePointerDifference`, which passes false.
+
+## Used by
+`foldGEPICmp` (`combine_compares.rs`).
 
 ## Example
 ```text
