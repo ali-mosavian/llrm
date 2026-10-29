@@ -1112,3 +1112,28 @@ fn a_product_takes_its_operands_as_they_arrive() {
         }
     }
 }
+
+/// A value kept in a callee-saved pair across a call was copied there from `rc2:rc3` and straight
+/// back into `rc2:rc3` for the call (`lda rc2; sta rc8; ...; lda rc8; sta rc2`: 8 bytes a trip in
+/// digits). The copy back changes nothing. A loop dividing by 7 and counting until the value is
+/// small, and the same with a remainder.
+#[test]
+fn a_copy_back_into_the_register_it_came_from_is_dropped() {
+    for (name, op) in [("steps", "udiv"), ("rems", "urem")] {
+        let ir = format!(
+            "define i8 @{name}(i16 %v) {{\nentry:\n  br label %loop\nloop:\n  %x = phi i16 [ %v, %entry ], [ %q, %loop ]\n  \
+             %n = phi i8 [ 0, %entry ], [ %n2, %loop ]\n  %q = {op} i16 %x, 7\n  %n2 = add i8 %n, 1\n  %more = icmp ugt i16 %x, 200\n  \
+             br i1 %more, label %loop, label %done\ndone:\n  ret i8 %n2\n}}"
+        );
+        let text = compile(&ir, name);
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        for at in 0..lines.len().saturating_sub(1) {
+            if let (Some(from), Some(to)) = (lines[at].strip_prefix("lda "), lines[at + 1].strip_prefix("sta ")) {
+                let back = [format!("lda {to}"), format!("sta {from}")];
+                let returned = (at + 2..(at + 10).min(lines.len().saturating_sub(1)))
+                    .any(|i| lines[i] == back[0] && lines[i + 1] == back[1]);
+                assert!(!returned || from.starts_with('#'), "{name}: {from} -> {to} and back:\n{text}");
+            }
+        }
+    }
+}

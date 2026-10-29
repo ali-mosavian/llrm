@@ -17,7 +17,7 @@ use std::fmt::Write;
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
-use llrm_spike_mf::{Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, remove_identity_copies, reschedule_kills};
+use llrm_spike_mf::{Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, remove_identity_copies, remove_redundant_copies_between, reschedule_kills};
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::emit::{MInst, Operand as Machine, address, spill};
@@ -1799,7 +1799,7 @@ fn sets_nz_of_a(line: &str) -> bool {
     let line = line.trim();
     let (mnemonic, operand) = line.split_once(' ').unwrap_or((line, ""));
     match mnemonic {
-        "lda" | "txa" | "tya" | "pla" | "and" | "ora" | "eor" | "adc" | "sbc" => true,
+        "lda" | "txa" | "tya" | "tax" | "tay" | "pla" | "and" | "ora" | "eor" | "adc" | "sbc" => true,
         "asl" | "lsr" | "rol" | "ror" | "inc" | "dec" => operand == "a",
         _ => false,
     }
@@ -1837,6 +1837,7 @@ fn emit_with<const STACK: bool>(
         Reg::Phys(p) => p,
     };
     remove_identity_copies::<Mos<STACK>>(&mut function, &assignment);
+    remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     branch_fold::<Mos<STACK>>(&mut function);
     let after = live_after(&function, &at);
     let slot_name = |slot: i32| format!("s_{}_{}", function.name, slot);
