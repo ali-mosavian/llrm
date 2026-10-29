@@ -165,7 +165,7 @@ go:
 
 /// Values live across a call are static (cells or spill slots), so a function
 /// that can call itself would read the deepest call's `n` after the return:
-/// rec(4) = 4 + 3 + 2 + 1 = 10 came out as the wrong sum. It is refused, on
+/// rec(4) = 4 + 3 + 2 + 1 = 10 came out as 4 on both paths. It is refused, on
 /// either path, until locals live on the soft stack.
 #[test]
 fn a_recursive_function_is_refused_not_miscompiled() {
