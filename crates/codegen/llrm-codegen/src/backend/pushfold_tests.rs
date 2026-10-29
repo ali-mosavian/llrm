@@ -195,3 +195,36 @@ fn test_a_load_is_not_an_operand_where_the_other_operand_is_not_made_here() {
     let kept = folded(&body(vec![load(1, 2, 1, 8), add(2, 3, 9, 2, "add")]));
     assert_eq!(names(&kept), ["mov", "add"]);
 }
+
+/// Every add of two loaded values looked back over the whole block for the
+/// loads that made them: a straight-line block of 512 adds was 4x the steps
+/// of one of 256, and `lir pushfold` and `lir loadfold` ran x3.6 per doubling
+/// on the `straight`, `mulconst` and `live` inputs.
+#[test]
+fn test_a_long_block_finds_the_loads_of_its_adds_without_a_walk_over_the_block_for_each() {
+    let steps = |adds: u32| {
+        let mut insns = Vec::new();
+        let mut at = 0;
+        for k in 0..adds {
+            let (a, b, sum) = (3 * k + 10, 3 * k + 11, 3 * k + 12);
+            insns.push(load(at, a, 1, 4 * i64::from(k)));
+            insns.push(load(at + 1, b, 1, 4 * i64::from(k) + 4096));
+            insns.push(insn(
+                at + 2,
+                Operation::Binary,
+                "add",
+                vec![Loc::Held(held(sum))],
+                vec![Loc::Held(held(a)), Loc::Held(held(b))],
+                vec![sum],
+                vec![a, b],
+            ));
+            at += 3;
+        }
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::FoldDefSteps);
+        let folded = folded(&body(insns));
+        assert_eq!(folded.blocks[0].insns.len(), 2 * adds as usize, "one load folds into each add");
+        llrm_mir::counts::get(llrm_mir::counts::Event::FoldDefSteps) - before
+    };
+    let (small, big) = (steps(128), steps(256));
+    assert!(big * 10 <= small * 25, "{small} steps for 128 adds, {big} for 256");
+}

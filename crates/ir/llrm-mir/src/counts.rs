@@ -97,6 +97,10 @@ pub enum Event {
     /// The odds read off a body for the edges of its blocks
     /// (`Graph::edge_probabilities`): a block's edges once, not once for each.
     EdgeOddsLookups,
+    /// Instructions a load fold looked at to find where a value was defined
+    /// (`pushfold::nearest_def`): one for each consumer, not each earlier
+    /// instruction of the block.
+    FoldDefSteps,
     /// The targets `Function::successors` read off terminators that are not
     /// branches: a switch of n cases read twice is 2n.
     SwitchSuccessorsListed,
@@ -104,7 +108,7 @@ pub enum Event {
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 34] = [
+const NAMES: [&str; 35] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -138,6 +142,7 @@ const NAMES: [&str; 34] = [
     "scev_keys_owned",
     "context_clones",
     "edge_odds_lookups",
+    "fold_def_steps",
     "switch_successors_listed",
 ];
 
@@ -155,7 +160,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 34] = const { [const { Cell::new(0) }; 34] };
+    static EVENTS: [Cell<u64>; 35] = const { [const { Cell::new(0) }; 35] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };

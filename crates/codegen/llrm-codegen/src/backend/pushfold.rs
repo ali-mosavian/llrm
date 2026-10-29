@@ -147,9 +147,19 @@ pub fn folded(body: &LirBody) -> LirBody {
     let mut changed = false;
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
+        // Where each value is defined, ascending, and which instructions a fold
+        // took out: the nearest earlier definition is a search of the list, not
+        // a walk back over the block for each consumer.
+        let mut defs: HashMap<u32, Vec<usize>> = HashMap::default();
+        for (index, one) in insns.iter().enumerate() {
+            for value in defined(one) {
+                defs.entry(value).or_default().push(index);
+            }
+        }
+        let mut gone = vec![false; insns.len()];
         let mut at = 0;
         while at < insns.len() {
-            let Some((home, value)) = candidate(&insns, at, &reads) else {
+            let Some((home, value)) = candidate(&insns, &gone, &defs, at, &reads) else {
                 at += 1;
                 continue;
             };
@@ -192,10 +202,11 @@ pub fn folded(body: &LirBody) -> LirBody {
                 .into_iter()
                 .collect();
             insns[at] = Arc::new(fused);
-            insns.remove(home);
+            gone[home] = true;
             changed = true;
-            // `at` now names the instruction after the fused push.
+            at += 1;
         }
+        let insns = insns.into_iter().zip(gone).filter(|(_, gone)| !gone).map(|(one, _)| one).collect();
         blocks.push(block.with_insns(insns));
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
@@ -203,8 +214,35 @@ pub fn folded(body: &LirBody) -> LirBody {
 
 /// The load `insns[at]`, a push of one value, may take its cell from: its
 /// position and the value.
+/// The values `one` defines.
+fn defined(one: &Insn) -> impl Iterator<Item = u32> + '_ {
+    one.what
+        .iter()
+        .flat_map(|made| made.dests.iter())
+        .filter_map(|dest| if let Loc::Held(other) = dest { Some(other.value) } else { None })
+}
+
+/// The nearest instruction before `at` that defines `value` and that no fold
+/// took out.
+fn nearest_def(
+    defs: &HashMap<u32, Vec<usize>>,
+    gone: &[bool],
+    value: u32,
+    at: usize,
+) -> Option<usize> {
+    let list = defs.get(&value)?;
+    list[..list.partition_point(|&index| index < at)]
+        .iter()
+        .rev()
+        .copied()
+        .inspect(|_| llrm_mir::counts::bump(llrm_mir::counts::Event::FoldDefSteps))
+        .find(|&index| !gone[index])
+}
+
 fn candidate(
     insns: &[Arc<Insn>],
+    gone: &[bool],
+    defs: &HashMap<u32, Vec<usize>>,
     at: usize,
     reads: &HashMap<u32, usize>,
 ) -> Option<(usize, u32)> {
@@ -218,9 +256,8 @@ fn candidate(
         (Operation::Binary, [Loc::Held(first), Loc::Held(second)]) if what.dests.len() == 1 => {
             let name = what.name.as_deref().unwrap_or_default();
             let commutative = matches!(name, "add" | "and" | "or" | "xor");
-            let loaded = |held: &Held| {
-                reads.get(&held.value) == Some(&1) && insns[..at].iter().any(|one| defines(one, held.value))
-            };
+            let loaded =
+                |held: &Held| reads.get(&held.value) == Some(&1) && nearest_def(defs, gone, held.value, at).is_some();
             let Loc::Held(dest) = &what.dests[0] else { return None };
             if !matches!(name, "add" | "sub" | "and" | "or" | "xor")
                 || first.value == second.value
@@ -235,10 +272,8 @@ fn candidate(
             // its two-address pass (`mov t,[m]; add t,r` over `mov
             // t,r; add t,[m]`: x_transpose +7.6% clocks).
             let from_memory = |held: &Held| {
-                insns[..at]
-                    .iter()
-                    .rev()
-                    .find(|one| defines(one, held.value))
+                nearest_def(defs, gone, held.value, at)
+                    .map(|index| &insns[index])
                     .is_some_and(
                         |one| one.what
                             .as_ref()
@@ -266,16 +301,7 @@ fn candidate(
     if !plain || !matches!(held.width, 2 | 4) || reads.get(&held.value) != Some(&1) {
         return None;
     }
-    let home = (0..at)
-        .rev()
-        .find(
-            |&back| insns[back]
-                .what
-                .as_ref()
-                .is_some_and(
-                    |made| made.dests.iter().any(|dest| matches!(dest, Loc::Held(other) if other.value == held.value)),
-                ),
-        )?;
+    let home = nearest_def(defs, gone, held.value, at)?;
     let load = &insns[home];
     let made = load.what.as_ref()?;
     let [Loc::Held(defined)] = made.dests.as_slice() else { return None };
@@ -297,8 +323,9 @@ fn candidate(
     {
         return None;
     }
-    let blocked = insns[home + 1..at]
-        .iter()
+    let blocked = (home + 1..at)
+        .filter(|&between| !gone[between])
+        .map(|between| &insns[between])
         .any(
             |between| between.volatile
                 || between.call.is_some()
@@ -309,16 +336,6 @@ fn candidate(
                     .is_none_or(|w| matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape)),
         );
     (!blocked).then_some((home, held.value))
-}
-
-/// Whether `one` defines the value.
-fn defines(
-    one: &Insn,
-    value: u32,
-) -> bool {
-    one.what
-        .as_ref()
-        .is_some_and(|made| made.dests.iter().any(|dest| matches!(dest, Loc::Held(other) if other.value == value)))
 }
 
 #[cfg(test)]
