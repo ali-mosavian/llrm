@@ -7,6 +7,9 @@ pub mod addr;
 pub mod asm;
 pub mod call;
 #[rustfmt::skip]
+#[path = "generated/enc.rs"]
+pub mod enc;
+#[rustfmt::skip]
 #[allow(unused_variables)]
 pub mod generated;
 pub mod function;

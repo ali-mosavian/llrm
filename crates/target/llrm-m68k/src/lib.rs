@@ -4,10 +4,12 @@
 pub mod abi;
 pub mod compile;
 pub mod dagisel;
+pub mod encode;
 pub mod expand;
 pub mod frame;
 pub mod mc;
 pub mod mfunc;
+pub mod object;
 pub mod regalloc;
 pub mod target;
 
