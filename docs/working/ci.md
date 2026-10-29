@@ -80,3 +80,4 @@ On the deadline the owner pays it (the check goes red or the test goes) or moves
 
 - DEBT skip-llrm-pass | limit 2 tests | deadline 2026-11-05 | owner w11 | `tools/difftest/test_difftest.py` skips `llrm-pass is not built`: the python group's pytest step builds no binaries.
 - DEBT skip-pindiff-llc | limit 1 test | deadline 2026-11-05 | owner w11 | `tools/pairs/test_pindiff.py` skips `needs LLRM_LLC`: nothing sets it in CI.
+- DEBT call-frame-reserve | limit tests x86_add_carry_loop and register_convention allow push and `add esp` | deadline 2026-11-13 | owner w10 | The pin reserves the call frame and stores each argument (`movl %edi,(%esp)`); ours pushes and cleans up (DEVIATE CF1, pushfold.rs), so every 32-bit object differs from the pin's call sequence. Exit: translate X86CallFrameOptimization and the reserved frame.
