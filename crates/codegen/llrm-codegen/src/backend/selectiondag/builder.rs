@@ -1277,6 +1277,11 @@ impl Builder<'_> {
             let byte = self.dag.get_node(ISD::ZeroExtend, EVT::I8, &[settled]);
             let tied = self.dag.get_copy_to_reg(root, reg, byte);
             self.dag.set_root(tied);
+            // Later users read the saved byte: the compare itself would be
+            // selected where it is used, from flags a later call has rewritten.
+            let saved = self.dag.get_copy_from_reg(tied, reg, EVT::I8);
+            let kept = self.dag.get_node(ISD::Truncate, self.dag.value_type(settled), &[saved]);
+            self.set_value(result, kept);
             self.prelowered.insert(one.user);
         }
         Ok(())
