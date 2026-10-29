@@ -375,6 +375,11 @@ fn condition_byte(
                 let (byte, one) = (dag.operand(value, 0), dag.get_constant(1, EVT::I8));
                 dag.get_node(ISD::And, EVT::I8, &[byte, one])
             }
+            ISD::Select => {
+                let (test, a, b) = (dag.operand(value, 0), dag.operand(value, 1), dag.operand(value, 2));
+                let (a, b) = (condition_byte(dag, a), condition_byte(dag, b));
+                dag.get_node(ISD::Select, EVT::I8, &[test, a, b])
+            }
             op @ (ISD::And | ISD::Or | ISD::Xor) => {
                 let (a, b) = (dag.operand(value, 0), dag.operand(value, 1));
                 let (a, b) = (condition_byte(dag, a), condition_byte(dag, b));

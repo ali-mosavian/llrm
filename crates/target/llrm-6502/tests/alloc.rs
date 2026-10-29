@@ -1577,3 +1577,23 @@ define i8 @slt(i8 %a, i8 %e) {
         assert_eq!(run("slt", a, e), if a == 1 && e == 0 { 7 } else { 9 }, "slt {a} {e}");
     }
 }
+
+/// A select between two bits, itself a select's condition, looped the scheduler forever: its
+/// zero-extension legalized to a select on the same bit (found by the differential tests, seed 0).
+#[test]
+fn a_select_of_bits_as_a_condition_compiles_and_runs() {
+    let ir = "define i8 @bitsel(i8 %a, i8 %b, i8 %c) {
+  %x = trunc i8 %a to i1
+  %y = icmp eq i8 %b, 0
+  %z = trunc i8 %c to i1
+  %s = select i1 %x, i1 %y, i1 %z
+  %r = select i1 %s, i8 3, i8 4
+  ret i8 %r
+}";
+    let text = compile(ir, "bitsel");
+    for (a, b, c) in [(0u16, 0u16, 0u16), (0, 0, 1), (1, 0, 0), (1, 1, 1), (1, 1, 0), (0, 1, 1)] {
+        let setup = set("rc2", a) + &set("rc3", b) + &set("rc4", c);
+        let want = if (if a & 1 == 1 { b == 0 } else { c & 1 == 1 }) { 3 } else { 4 };
+        assert_eq!(common::run_with(&format!("alloc-bitsel-{a}{b}{c}"), &format!("{setup}  jsr bitsel\n"), &text), want, "{a} {b} {c}");
+    }
+}
