@@ -20,7 +20,7 @@
 use llrm_lir::registers::RegId;
 
 use crate::commute::Facts;
-use crate::mfunc::{Inst, MFunction, Operand, Reg};
+use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::regalloc::Target;
 
 /// The instructions after the tied one the walk looks through (`rescheduleKillAboveMI`'s limit).
@@ -74,6 +74,21 @@ fn can_pass<T: Target>(
     !phys_defs(kill).any(|r| clash(r, &other_phys_defs) || clash(r, &other_phys_uses))
 }
 
+/// Whether `copy` puts a value into a register that one of `readers` reads: a fixed register
+/// (`lda v` before a store through `(p),y`) or a virtual one that copy came through.
+fn feeds<T: Target>(
+    copy: &Inst,
+    readers: &[Inst],
+) -> bool {
+    let (Kind::Copy, [Operand::Def(into), Operand::Use(Reg::Virt(_))]) = (copy.kind, &copy.operands[..]) else {
+        return false;
+    };
+    match into {
+        Reg::Phys(into) => readers.iter().flat_map(phys_uses).any(|r| T::overlaps(*into, r)),
+        Reg::Virt(into) => readers.iter().flat_map(virt_uses).any(|u| u == *into),
+    }
+}
+
 /// Moves the last read of a tied source above the tied instruction, where it is the only read left
 /// and the walk between them is safe.
 pub fn reschedule_kills<T: Target>(function: &mut MFunction<T::Class>) {
@@ -103,16 +118,24 @@ pub fn reschedule_kills<T: Target>(function: &mut MFunction<T::Class>) {
                 if kill.call || kill.terminator || kill.barrier || kill.side_effects || !kill.ties.is_empty() {
                     continue;
                 }
-                if matches!(kill.kind, crate::mfunc::Kind::Copy) {
+                if matches!(kill.kind, Kind::Copy) {
                     // a copy is left to the coalescer
                     continue;
                 }
-                if !insts[at..last].iter().all(|other| can_pass::<T>(kill, other)) {
+                // the copies that feed it go with it (a value into the fixed register of a store
+                // through `(p),y`): they are one instruction to the allocator
+                let mut start = last;
+                while start > at + 1 && feeds::<T>(&insts[start - 1], &insts[start..=last]) {
+                    start -= 1;
+                }
+                let moving = &insts[start..=last];
+                if !insts[at..start].iter().all(|other| moving.iter().all(|one| can_pass::<T>(one, other))) {
                     continue;
                 }
-                let moved = function.blocks[b].insts.remove(last);
-                function.blocks[b].insts.insert(at, moved);
-                at += 1;
+                let bundle: Vec<Inst> = function.blocks[b].insts.drain(start..=last).collect();
+                let count = bundle.len();
+                function.blocks[b].insts.splice(at..at, bundle);
+                at += count;
                 break;
             }
             at += 1;
