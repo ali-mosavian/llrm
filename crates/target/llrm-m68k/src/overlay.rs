@@ -49,7 +49,7 @@ pub fn asm(name: &str) -> Option<(&'static str, &'static [AsmOperand])> {
         "TST8d" => ("tst.b\t$dst", DST),
         "TST16d" => ("tst.w\t$dst", DST),
         "TST32d" => ("tst.l\t$dst", DST),
-        _ => return post_increment_rows(name).map(|row| row.asm),
+        _ => return post_increment_rows(name).map(|row| row.asm).or_else(|| tst_memory_rows(name).map(|row| row.asm)),
     })
 }
 
@@ -114,7 +114,11 @@ pub fn encoding(name: &str) -> Option<(u16, &'static [Piece])> {
         "TST8d" => (16, &TST[0]),
         "TST16d" => (16, &TST[1]),
         "TST32d" => (16, &TST[2]),
-        _ => return post_increment_rows(name).map(|row| row.encoding),
+        _ => {
+            return post_increment_rows(name)
+                .map(|row| row.encoding)
+                .or_else(|| tst_memory_rows(name).map(|row| row.encoding));
+        }
     })
 }
 
@@ -124,6 +128,11 @@ pub fn rewrite(inst: Inst) -> Inst {
         opcode: name,
         operands: vec![Operand::Reg(register), Operand::Imm(amount)],
     };
+    if let [Operand::Imm(0), memory @ ..] = &inst.operands[..]
+        && let Some((name, _)) = tst_memory_form(inst.opcode)
+    {
+        return Inst { opcode: name, operands: memory.to_vec() };
+    }
     match (inst.opcode, &inst.operands[..]) {
         (
             "ADD8di" | "ADD16di" | "ADD32di" | "ADD32ai" | "SUB8di" | "SUB16di" | "SUB32di" | "SUB32ai",
@@ -482,4 +491,82 @@ pub fn constant_into_destination(lines: Vec<crate::expand::Line>) -> Vec<crate::
         out.push(line);
     }
     out
+}
+
+struct TstRow {
+    asm: AsmRow,
+    encoding: EncodingRow,
+}
+
+/// `tst` of memory, derived from the pin's `cmpi #imm, ea` rows: the same
+/// effective-address fields with the opcode `0100 1010` and the immediate's
+/// words gone. Named `TST{size}{mode}` after `CMP{size}{mode}i`. The
+/// pc-relative modes have no `tst`.
+fn tst_memory_table() -> &'static std::collections::HashMap<&'static str, (&'static str, TstRow)> {
+    static TABLE: std::sync::OnceLock<std::collections::HashMap<&'static str, (&'static str, TstRow)>> =
+        std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = std::collections::HashMap::new();
+        for &(name, text, operands) in crate::dagisel::asm::ASM.iter() {
+            let Some(rest) = name.strip_prefix("CMP") else { continue };
+            let Some(rest) = rest.strip_suffix('i') else { continue };
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            let mode = &rest[digits.len()..];
+            let Ok(bits) = digits.parse::<u16>() else { continue };
+            if mode.len() != 1 || mode == "d" || !text.starts_with("cmpi.") {
+                continue;
+            }
+            let Some(memory) = operands.iter().find(|one| one.name != "imm") else { continue };
+            if memory.method.starts_with("printPC") {
+                continue;
+            }
+            let Some(&(_, width, pieces)) = crate::dagisel::enc::encoding(name) else { continue };
+            let dropped: u16 = if bits == 32 { 32 } else { 16 };
+            let moved = |piece: &Piece| -> Option<Piece> {
+                let (lo, at_least) = match piece {
+                    Piece::Const { lo, .. } | Piece::Operand { lo, .. } => (*lo, 16),
+                };
+                if lo >= at_least && lo < at_least + dropped {
+                    return None;
+                }
+                let shifted = if lo >= at_least + dropped { lo - dropped } else { lo };
+                Some(match *piece {
+                    Piece::Const { width, value, .. } if lo == 8 && width == 8 && value == 12 => {
+                        Piece::Const { lo: shifted, width, value: 0x4A }
+                    }
+                    Piece::Const { width, value, .. } => Piece::Const { lo: shifted, width, value },
+                    Piece::Operand { width, at, from, enc, .. } => {
+                        Piece::Operand { lo: shifted, width, at: at - 1, from, enc }
+                    }
+                })
+            };
+            let pieces: Vec<Piece> = pieces.iter().filter_map(moved).collect();
+            let size = match bits {
+                8 => "b",
+                16 => "w",
+                _ => "l",
+            };
+            let tst: &'static str = Box::leak(format!("TST{bits}{mode}").into_boxed_str());
+            let text: &'static str = Box::leak(format!("tst.{size}\t$mem").into_boxed_str());
+            let operands: &'static [AsmOperand] = Box::leak(
+                vec![AsmOperand { name: "mem", at: memory.at - 1, method: memory.method }].into_boxed_slice(),
+            );
+            let row =
+                TstRow { asm: (text, operands), encoding: (width - dropped, Box::leak(pieces.into_boxed_slice())) };
+            table.insert(name, (tst, row));
+        }
+        // keyed by the name of the `cmpi` row; the `tst` rows by their own name
+        let named: Vec<_> = table.values().map(|(tst, _)| *tst).collect();
+        let _ = named;
+        table
+    })
+}
+
+/// The `tst` of memory that `cmpi.s #0, ea` is, and its rows.
+fn tst_memory_form(cmpi: &str) -> Option<(&'static str, &'static TstRow)> {
+    tst_memory_table().get(cmpi).map(|(name, row)| (*name, row))
+}
+
+fn tst_memory_rows(tst: &str) -> Option<&'static TstRow> {
+    tst_memory_table().values().find(|(name, _)| *name == tst).map(|(_, row)| row)
 }
