@@ -260,10 +260,10 @@ pub fn processed(body: &LirBody) -> LirBody {
                 let insns: Vec<Arc<Insn>> = block
                     .insns
                     .iter()
-                    .map(|one| {
+                    .filter_map(|one| {
                         let flagged: Vec<u32> = one.uses.iter().copied().filter(|v| defined.contains(v)).collect();
                         if flagged.is_empty() {
-                            return Arc::clone(one);
+                            return Some(Arc::clone(one));
                         }
                         changed = true;
                         let mut made = (**one).clone();
@@ -277,9 +277,15 @@ pub fn processed(body: &LirBody) -> LirBody {
                         if made.uses.is_empty()
                             && let Some((dst, _)) = full_copy(one)
                         {
-                            return made_implicit(&made, dst.value);
+                            return Some(made_implicit(&made, dst.value));
                         }
-                        Arc::new(made)
+                        // A spill slot written from nothing holds nothing to
+                        // reload: the pin's spiller makes the defining
+                        // `IMPLICIT_DEF` again where it is read.
+                        if made.uses.is_empty() && made.defines.is_empty() && stores_to_frame(&made) {
+                            return None;
+                        }
+                        Some(Arc::new(made))
                     })
                     .collect();
                 block.with_insns(insns)
@@ -308,6 +314,19 @@ pub fn processed(body: &LirBody) -> LirBody {
         }
         current = current.with_blocks(blocks);
     }
+}
+
+/// A plain store of a register to a frame cell.
+fn stores_to_frame(one: &Insn) -> bool {
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.op == Operation::Move
+                && matches!(
+                    what.dests.as_slice(),
+                    [Loc::Mem(cell)] if cell.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
+                ),
+        )
 }
 
 #[cfg(test)]

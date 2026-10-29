@@ -30,7 +30,7 @@ _spec = importlib.util.spec_from_file_location("compile_cost", HERE / "compile-c
 compile_cost = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(compile_cost)
 
-RUN = re.compile(r'^\[runs\] body (-?\d+) trigger "([^"]*)": (\d+) fixed points, (\d+) rounds, (\d+) pass runs, (\d+) skipped as settled, (\d+) changes')
+RUN = re.compile(r'^\[runs\] body (-?\d+) trigger "([^"]*)": (\d+) fixed points, (\d+) rounds, (\d+) pass runs, (\d+) skipped as settled in an earlier run, (\d+) changes')
 STEP = re.compile(r"^\[runs\] step (\S+) (idle|changed) (\d+)")
 TOTAL = re.compile(r"^\[instr\] total ([\d.]+) Minstr")
 SPAN = re.compile(r"^\[instr\]\s+([\d.]+) Minstr own\s+([\d.]+) Minstr total\s+(\d+)x (.+)$")
