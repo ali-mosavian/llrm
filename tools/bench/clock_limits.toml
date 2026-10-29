@@ -9,14 +9,11 @@
 "bintree bas -Os" = 418860  # main 407346
 "crc c -Os" = 1402  # main 1393
 "crc nib -Os" = 1420  # main 1411
-"fib bas -Os" = 1313485  # main 1116464
 "floats bas -Os" = 110197  # main 99206
-"hanoi bas -Os" = 1130452  # main 1040343
 "histo c -Os" = 239669  # main 227125
 "histo nib -Os" = 239675  # main 227124
 "mandel bas -Os" = 1140118  # main 1108365
 "mandel nib -Os" = 842924  # main 833809
-"matmul c -Os" = 21851  # main 20480
 "matmul nib -Os" = 24201  # main 23432
 "nbody bas -Os" = 438826  # main 428879 (standard)
 "nbody c -Os" = 371703  # main 358692
@@ -64,3 +61,9 @@
 # class 4: float rows: QB standard-precision default is deliberate (BC); compare like with like (bas rows: main under the same flag; nib rows: fast, as main): DEBT bench-clocks-float
 "fpbench bas -Os" = 209619  # main 208600 (standard)
 "fpbench c -Os" = 156214  # main 156169
+
+
+# class 5: DAG selection, rows that fall below main under --isel=old: DEBT bench-clocks-dag-isel
+"fib bas -Os" = 1313485  # main 1116464
+"hanoi bas -Os" = 1130452  # main 1040343
+"matmul c -Os" = 21851  # main 20480
