@@ -412,6 +412,10 @@ fn sanitize(ir: &str) -> String {
     out.join("\n")
 }
 
+/// Stands in for the 6502 override-table entry for loop unrolling: bytes over speed on an 8-bit
+/// target, so no full or partial unroll (the table moves these to `opt`'s pipeline entry unchanged).
+const UNROLL: [&str; 2] = ["-unroll-threshold=0", "-unroll-full-max-count=0"];
+
 fn ours_row(
     kernel: &Kernel,
     clang_flag: &str,
@@ -462,7 +466,7 @@ fn ours_row(
     tool(
         &dir,
         "/usr/lib/llvm-20/bin/opt",
-        &[clang_flag, "-vectorize-loops=false", "-vectorize-slp=false", "-S", &raw, "-o", &ll],
+        &[clang_flag, UNROLL[0], UNROLL[1], "-vectorize-loops=false", "-vectorize-slp=false", "-S", &raw, "-o", &ll],
     )?;
     let text = sanitize(&std::fs::read_to_string(dir.join(&ll)).unwrap());
     let mut module =
