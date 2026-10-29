@@ -22,12 +22,41 @@ pub enum Item {
     Bytes(Vec<u8>),
 }
 
+/// What the compiler may do beyond the pin's output.
+#[derive(Clone, Copy, Debug)]
+pub struct Options {
+    /// Use the instructions of [`crate::overlay`] (`addq`, `subq`, `tst`).
+    pub overlay: bool,
+}
+
+impl Options {
+    /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
+    /// can be compared with.
+    pub const PINNED: Options = Options { overlay: false };
+}
+
+impl Default for Options {
+    fn default() -> Options {
+        Options { overlay: true }
+    }
+}
+
 /// The function after selection, allocation and expansion: its label, then
 /// each block's label where a branch names it, and the instructions.
 pub fn items(
     module: &Module,
     name: &str,
     cpu: Cpu,
+) -> Result<Vec<Item>, String> {
+    items_with(module, name, cpu, Options::default())
+}
+
+/// [`items`] with `options`.
+pub fn items_with(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    options: Options,
 ) -> Result<Vec<Item>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let number =
@@ -44,7 +73,7 @@ pub fn items(
     remove_identity_copies(&mut function, &assignment);
     branch_fold(&mut function);
     let mut out = vec![Item::Label(name.to_owned())];
-    for line in finish(&function, &assignment, number, &slots)? {
+    for line in finish(&function, &assignment, number, &slots, options.overlay)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
@@ -60,8 +89,18 @@ pub fn text(
     name: &str,
     cpu: Cpu,
 ) -> Result<String, String> {
+    text_with(module, name, cpu, Options::default())
+}
+
+/// [`text`] with `options`.
+pub fn text_with(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    options: Options,
+) -> Result<String, String> {
     let mut out = String::new();
-    for item in items(module, name, cpu)? {
+    for item in items_with(module, name, cpu, options)? {
         match item {
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
