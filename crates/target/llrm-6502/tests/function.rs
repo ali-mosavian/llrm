@@ -36,15 +36,14 @@ fn a_byte_add_is_one_instruction() {
     assert_eq!(selected(ir, "f"), [["ADD8", "RET"]]);
 }
 
-/// Hand-read: each word argument is its two bytes joined into a pair (`REG_SEQUENCE`), the add is
-/// `ADD16`, and the result leaves as two bytes. Before the join pattern each argument cost a
-/// zero-extend, a `SHL16` by 8 and an `OR16` (eight shift steps in the emitted code).
+/// Hand-read: a word argument is one value in a pair, the add is `ADD16`, and the result leaves as
+/// two bytes. Before the target's calling hook the builder joined each argument from its bytes.
 #[test]
 fn a_word_add_joins_and_splits_the_bytes() {
     let ir = "define i16 @f(i16 %a, i16 %b) {\n  %r = add i16 %a, %b\n  ret i16 %r\n}";
     assert_eq!(
         selected(ir, "f"),
-        [["REG_SEQUENCE", "REG_SEQUENCE", "ADD16", "EXTRACT_SUBREG", "EXTRACT_SUBREG", "RET"]]
+        [["ADD16", "EXTRACT_SUBREG", "EXTRACT_SUBREG", "RET"]]
     );
 }
 

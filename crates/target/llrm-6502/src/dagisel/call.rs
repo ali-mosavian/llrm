@@ -26,27 +26,14 @@ use crate::abi;
 pub const CALL: ISD = ISD::Target(ids::CALL);
 pub const RET_GLUE: ISD = ISD::Target(ids::RET_GLUE);
 
-/// A value of a call or return: `i8` or `i16`.
-#[derive(Clone, Copy, Debug)]
-pub struct Out {
-    pub value: SDValue,
-}
-
-/// A formal argument or a result: its type.
-#[derive(Clone, Copy, Debug)]
-pub struct In {
-    pub vt: EVT,
-}
+pub use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, Out};
+use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, TargetCalling};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Refused {
     /// A type other than `i8` or `i16`.
     Type(EVT),
 }
-
-/// A fixed stack object, as `MachineFrameInfo::CreateFixedObject` takes it: size, offset from the
-/// first stack argument, immutable.
-pub type FixedObject<'a> = &'a mut dyn FnMut(u32, i64, bool) -> i32;
 
 /// Where an argument is.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -180,13 +167,14 @@ pub fn lower_call(
     Ok((chain, values))
 }
 
-/// `LowerFormalArguments`: each argument read from its register, or loaded from its fixed stack
-/// object (`fixed` creates it).
+/// `LowerFormalArguments`: each argument read from the virtual register its register is live-in
+/// to, or loaded from its fixed stack object (`fixed` creates it).
 pub fn lower_formal_arguments(
     dag: &mut SelectionDAG,
     chain: SDValue,
     ins: &[In],
     fixed: FixedObject,
+    live_in: LiveIn,
 ) -> Result<Vec<SDValue>, Refused> {
     let convention = abi::mos();
     let vts: Vec<EVT> = ins.iter().map(|arg| arg.vt).collect();
@@ -195,7 +183,10 @@ pub fn lower_formal_arguments(
         .iter()
         .zip(sources)
         .map(|(arg, location)| match location {
-            Location::Register(register) => dag.get_copy_from_phys_reg_plain(chain, register, arg.vt),
+            Location::Register(register) => {
+                let copy = dag.get_copy_from_reg(chain, live_in(register), arg.vt);
+                SDValue { node: copy.node, res: 0 }
+            }
             Location::Stack(offset) => {
                 // `LowerMemArgument`
                 let index = fixed(arg.vt.size_in_bits() / 8, offset, true);
@@ -245,4 +236,42 @@ pub fn lower_return(
     operands[0] = chain;
     operands.extend(glue);
     Ok(dag.get_node(RET_GLUE, EVT::OTHER, &operands))
+}
+
+/// The builder's hook: the shared builder splits values into legal parts, so a refusal here is a
+/// builder bug.
+#[derive(Debug, Default)]
+pub struct MosCalling;
+
+impl TargetCalling for MosCalling {
+    fn lower_call(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        callee: SDValue,
+        outs: &[Out],
+        ins: &[In],
+    ) -> (SDValue, Vec<SDValue>) {
+        lower_call(dag, chain, callee, outs, ins).expect("legal parts")
+    }
+
+    fn lower_formal_arguments(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        ins: &[In],
+        fixed: FixedObject,
+        live_in: LiveIn,
+    ) -> Vec<SDValue> {
+        lower_formal_arguments(dag, chain, ins, fixed, live_in).expect("legal parts")
+    }
+
+    fn lower_return(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        outs: &[Out],
+    ) -> SDValue {
+        lower_return(dag, chain, outs).expect("legal parts")
+    }
 }

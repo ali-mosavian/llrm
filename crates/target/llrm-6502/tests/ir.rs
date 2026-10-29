@@ -82,11 +82,9 @@ fn a_call_passes_a_byte() {
 }
 
 /// `caller(10, 30)` calls `g(i8, i8)`, written by hand to return `rc2 + rc3` = 40.
-/// Plan row S2: the shared builder names a call's argument registers as x86 does (a register by
-/// its root and size), so `rc3` becomes `rc2` and the run returns 60. Passes when the builder
-/// calls the target's `lower_call`.
+/// Before the builder called the target's `lower_call` (plan row S2) it named argument registers
+/// by root and size, so `rc3` became `rc2` and the run returned 60.
 #[test]
-#[ignore = "S2: the builder's call lowering is x86's"]
 fn a_call_passes_two_bytes() {
     let ir = "declare i8 @g(i8, i8)\ndefine i8 @caller(i8 %a, i8 %b) {\n  %r = call i8 @g(i8 %a, i8 %b)\n  ret i8 %r\n}";
     let g = ".export g\ng:\n  clc\n  lda rc2\n  adc rc3\n  rts\n";
@@ -96,9 +94,8 @@ fn a_call_passes_two_bytes() {
 }
 
 /// `caller(10, 300)` calls `g(i8, i16)`, written by hand to return `rc2 + rc4` = 10 + 0x2C = 54.
-/// Plan row S2, as above: both bytes of the word go to `rc4`, `rc5` is never set, the run returns 11.
+/// Before the hook both bytes of the word went to `rc4`, `rc5` was never set, and the run returned 11.
 #[test]
-#[ignore = "S2: the builder's call lowering is x86's"]
 fn a_call_passes_a_byte_and_a_word() {
     let ir = "declare i8 @g(i8, i16)\ndefine i8 @caller(i8 %a, i16 %b) {\n  %r = call i8 @g(i8 %a, i16 %b)\n  ret i8 %r\n}";
     let g = ".export g\ng:\n  clc\n  lda rc2\n  adc rc4\n  rts\n";

@@ -21,7 +21,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Module};
 
 use super::hooks::Cpu;
-use super::call::{CALL, RET_GLUE};
+use super::call::{CALL, MosCalling, RET_GLUE};
 use super::pipeline::select_block;
 use crate::target::Mos;
 
@@ -32,7 +32,13 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
         jump_tables: false,
-        target_nodes: Some(TargetNodes { call: CALL, ret: RET_GLUE, stack_pointer: "rs0", big_endian: false }),
+        target_nodes: Some(TargetNodes {
+            call: CALL,
+            ret: RET_GLUE,
+            stack_pointer: "rs0",
+            big_endian: false,
+            calling: Some(&MosCalling),
+        }),
         ..BuilderTarget::m16()
     }
 }
