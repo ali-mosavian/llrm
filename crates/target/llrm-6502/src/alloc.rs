@@ -17,7 +17,7 @@ use std::fmt::Write;
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
-use llrm_spike_mf::{Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, remove_identity_copies, remove_redundant_copies_between, reschedule_kills};
+use llrm_spike_mf::{Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, remove_identity_copies, remove_redundant_copies_between, reschedule_kills, machine_sink_in_place};
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::emit::{MInst, Operand as Machine, address, spill};
@@ -1811,6 +1811,7 @@ fn emit_with<const STACK: bool>(
     cmos: bool,
 ) -> Result<(String, Vec<(String, usize)>, bool), String> {
     // a bump of a pointer is done in place; the read of the old pointer that follows it goes first
+    machine_sink_in_place::<Mos<STACK>>(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
     two_address(&mut function);
     let (assignment, mut slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;

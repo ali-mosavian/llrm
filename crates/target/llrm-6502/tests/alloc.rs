@@ -1137,3 +1137,27 @@ fn a_copy_back_into_the_register_it_came_from_is_dropped() {
         }
     }
 }
+
+/// A walk that returns the pointer it stopped at (the old one, not the bumped one) kept both
+/// pointers: the bump was made before the exit test, so the old pointer lived on beside it and the
+/// loop copied back (slen 67 B against cc65's 47). The bump sinks into the block that loops and is
+/// done in place. A scan for a zero byte returning its address, and one returning the distance.
+#[test]
+fn a_bump_the_exit_does_not_need_is_made_only_on_the_looping_path() {
+    let end = "define ptr @endp(ptr %p) {\nentry:\n  br label %loop\nloop:\n  %q = phi ptr [ %p, %entry ], [ %q2, %loop ]\n  \
+               %c = load i8, ptr %q\n  %q2 = getelementptr i8, ptr %q, i16 1\n  %z = icmp eq i8 %c, 0\n  br i1 %z, label %done, label %loop\n\
+               done:\n  ret ptr %q\n}";
+    let dist = "define i16 @dist(ptr %p) {\nentry:\n  br label %loop\nloop:\n  %q = phi ptr [ %p, %entry ], [ %q2, %loop ]\n  \
+                %c = load i8, ptr %q\n  %q2 = getelementptr i8, ptr %q, i16 1\n  %z = icmp eq i8 %c, 0\n  br i1 %z, label %done, label %loop\n\
+                done:\n  %a = ptrtoint ptr %q to i16\n  %b = ptrtoint ptr %p to i16\n  %d = sub i16 %a, %b\n  ret i16 %d\n}";
+    let data = ".segment \"DATA\"\ns: .byte \"hello world\",0\n.segment \"CODE\"\n";
+    let setup = "  lda #<s\n  sta rc2\n  lda #>s\n  sta rc3\n";
+    for (name, ir, tail) in [("endp", end, "  sec\n  sbc #<s\n"), ("dist", dist, "")] {
+        let text = compile(ir, name);
+        // the cell that is bumped is the one the byte was read through: no copy of the pointer
+        let bumped = text.lines().find_map(|l| l.trim().strip_prefix("inc rc")).map(str::to_owned).expect("an inc rc");
+        assert!(text.contains(&format!("(rc{bumped}),y")) || text.contains(&format!("(rc{bumped})")), "{name}: {text}");
+        let run = common::run_with(&format!("alloc-{name}"), &format!("{setup}  jsr {name}\n{tail}"), &format!("{text}{data}"));
+        assert_eq!(run, 11, "{name}");
+    }
+}
