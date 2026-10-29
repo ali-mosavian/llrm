@@ -2120,10 +2120,34 @@ fn emit_with<const STACK: bool>(
                         );
                     let false_at = matches!(if_false, Operand::Use(_)).then(|| read.next()).flatten();
                     let true_at = matches!(if_true, Operand::Use(_)).then(|| read.next()).flatten();
-                    writeln!(out, "  {branch} {taken}").unwrap();
-                    load(&mut out, if_false, false_at);
-                    writeln!(out, "  jmp {done}\n{taken}:").unwrap();
-                    load(&mut out, if_true, true_at);
+                    // `a` holds the compare's left side: `lda lhs; cmp rhs` just before
+                    let held = i.checked_sub(2).and_then(|first| match (&block.insts[first], &block.insts[i - 1]) {
+                        (copy, compare) if compare.kind == Kind::Op("CMP") => match (copy.kind, &copy.operands[..]) {
+                            (Kind::Copy, [Operand::Def(Reg::Phys(a)), Operand::Use(lhs)]) if *a == reg::A => Some(at(*lhs)),
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+                    let opposite = ["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize];
+                    if held.is_some() && held == true_at {
+                        // the value to keep is already in `a`: skip the load of the other
+                        writeln!(out, "  {branch} {done}").unwrap();
+                        load(&mut out, if_false, false_at);
+                    } else if held.is_some() && held == false_at {
+                        writeln!(out, "  {opposite} {done}").unwrap();
+                        load(&mut out, if_true, true_at);
+                    } else if matches!(code, 2 | 3) {
+                        // a load leaves the carry alone: the value for a true condition goes in first,
+                        // and the branch skips the other
+                        load(&mut out, if_true, true_at);
+                        writeln!(out, "  {branch} {done}").unwrap();
+                        load(&mut out, if_false, false_at);
+                    } else {
+                        writeln!(out, "  {branch} {taken}").unwrap();
+                        load(&mut out, if_false, false_at);
+                        writeln!(out, "  jmp {done}\n{taken}:").unwrap();
+                        load(&mut out, if_true, true_at);
+                    }
                     writeln!(out, "{done}:").unwrap();
                 }
                 // a slot is a byte, or two for a pair

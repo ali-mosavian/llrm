@@ -1177,3 +1177,32 @@ fn the_sink_is_kept_only_where_it_is_no_larger_and_no_slower() {
     let priced = llrm_6502::timing::estimate(Cpu::Mos6502, &text).expect("prices");
     assert!(priced.bytes <= 447, "lz4 is {} bytes:\n{text}", priced.bytes);
 }
+
+/// A byte select jumped over one of two loads (`bcc t; lda f; jmp d; t: lda t; d:`, gcd). When the
+/// value to keep is the compare's left side it is already in `a` and one load goes; on a carry
+/// condition the load leaves the carry alone, so the value for a true condition goes in first and
+/// the branch skips the other. Both ways, with a constant arm, on registers, and on an equality
+/// (neither: it keeps the jump).
+#[test]
+fn a_byte_select_loads_once_when_a_holds_a_value_or_the_condition_is_the_carry() {
+    let select = |name: &str, cmp: &str, t: &str, f: &str| {
+        format!("define i8 @{name}(i8 %x, i8 %y) {{\n  %c = icmp {cmp} i8 %x, %y\n  %r = select i1 %c, i8 {t}, i8 {f}\n  ret i8 %r\n}}")
+    };
+    let cases: [(&str, String, bool, fn(u8, u8) -> u8); 5] = [
+        ("keeplhs", select("keeplhs", "ult", "%x", "0"), true, |x, y| if x < y { x } else { 0 }),
+        ("keepfalse", select("keepfalse", "ult", "0", "%x"), true, |x, y| if x < y { 0 } else { x }),
+        ("carryk", select("carryk", "uge", "5", "9"), true, |x, y| if x >= y { 5 } else { 9 }),
+        ("carryr", select("carryr", "ult", "%y", "%x"), true, |x, y| if x < y { y } else { x }),
+        ("equal", select("equal", "eq", "%y", "3"), false, |x, y| if x == y { y } else { 3 }),
+    ];
+    for (name, ir, no_jump, f) in cases {
+        let text = compile(&ir, name);
+        if no_jump {
+            assert!(!text.contains("jmp _cmd"), "{name}: {text}");
+        }
+        for (x, y) in [(0u8, 0u8), (1, 2), (2, 1), (200, 100), (100, 200), (255, 255), (7, 7)] {
+            let main = format!("{}{}  jsr {name}\n", set("rc2", u16::from(x)), set("rc3", u16::from(y)));
+            assert_eq!(common::run_with(&format!("alloc-{name}"), &main, &text), i32::from(f(x, y)), "{name}({x}, {y}):\n{text}");
+        }
+    }
+}
