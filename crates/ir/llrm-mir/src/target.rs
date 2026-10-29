@@ -46,6 +46,13 @@ pub trait Machine {
         None
     }
 
+    /// Whether a loop that stores one word or dword to every cell of an object
+    /// is a `memset.pattern` fill at -Os, which isel makes `rep stosw` or
+    /// `rep stosd` (DEVIATE: the pin leaves it a loop).
+    fn fills_by_pattern(&self) -> bool {
+        false
+    }
+
     /// Clocks a byte of code is worth, in thousandths, where a decision is
     /// made for size: the smaller form is kept while the clocks it costs are
     /// under this per byte saved. None: bytes alone decide.

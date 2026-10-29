@@ -217,6 +217,10 @@ impl Machine for Dos {
         llrm_target::keeps_division(i64::from(bits / 8), size)
     }
 
+    fn fills_by_pattern(&self) -> bool {
+        true
+    }
+
     fn size_milliclocks_per_byte(&self) -> i64 {
         // Tuning constant fitted to sc.c, weapons, mdl and lru, not derived.
         10_000
