@@ -901,7 +901,14 @@ def base_rows(args) -> tuple[dict, set[str], str]:
             base_sha, args.opt, basecounts.compiler_key, lambda sha: measure.built(sha, measure.BENCH_BASE_PROFILE), lambda directory, opts, names=None: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time, names), args.time
         )
     now = basecounts.programs(ROOT)
-    return base, {name for name in now if was.get(name) == now[name]}, base_sha
+    with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
+        directory = measure.built(base_sha, measure.BENCH_BASE_PROFILE)
+        base, same, unbuilt = basecounts.with_edited(
+            base, was, now, args.opt, lambda names: basecounts.measure_head_sources(directory, args.opt, args.work / "base-edited", names), tree=measure.tree_of(base_sha) or base_sha
+        )
+    if unbuilt:
+        print("edited programs the base compiler could not build, not judged: " + " ".join(unbuilt), flush=True)
+    return base, same, base_sha
 
 
 def base_leg(args) -> int:
@@ -939,9 +946,12 @@ def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
     data = json.loads((folder / "base.json").read_text())
     base, same, base_sha = basecounts.rows_of(data["base"]), set(data["same"]), data["base_sha"]
     problems = judge(measured, [], opts, base, same)
+    judged, judged_programs, left_out, uncovered = basecounts.coverage(measured, base, same)
+    problems += uncovered
     stale = basecounts.judge(measured, base, basecounts.waivers(), same)[2]
     print(*standing(measured, [], opts), sep="\n")
     print(f"BASE {base_sha[:9]}: {len(base)} rows")
+    print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
     print(*basecounts.stale_summary(stale), sep="\n")
     if record:
         import measure
@@ -1021,6 +1031,10 @@ def main() -> int:
         return 1
     stage(f"base {base_sha[:9]}: {len(base)} rows")
     problems = judge(measured, args.select, args.opt, base, same)
+    if not args.select:
+        judged, judged_programs, left_out, uncovered = basecounts.coverage(measured, base, same)
+        problems += uncovered
+        print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")

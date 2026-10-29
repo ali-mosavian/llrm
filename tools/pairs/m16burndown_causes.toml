@@ -47,8 +47,8 @@ oracle = "none"
 
 [[program]]
 match = "*/mandel*"
-cause = "untriaged"
-owner = "w-2"
+cause = "LSR"
+owner = "w-15"
 
 [[program]]
 match = "*/range_exp*"
@@ -79,8 +79,8 @@ owner = "w-1"
 
 [[program]]
 match = "*/quicksort*"
-cause = "untriaged"
-owner = "w-1"
+cause = "LSR"
+owner = "w-15"
 
 [[program]]
 match = "*/udt*"
@@ -119,6 +119,16 @@ cause = "same pre-ISel IR shape as grep.bas (IR 158 vs 155, 12 fewer phis, asm +
 owner = "w-13"
 status = "cause known"
 oracle = "none"
+
+[[program]]
+match = "*/histo*"
+cause = "LSR"
+owner = "w-15"
+
+[[program]]
+match = "*/grep*"
+cause = "LSR"
+owner = "w-15"
 
 [[program]]
 match = "*/particle.nib"
