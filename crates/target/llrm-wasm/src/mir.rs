@@ -75,10 +75,19 @@ pub enum Operand {
     Imm(i64),
 }
 
+/// The one `MachineMemOperand` of a load or store: its size and alignment in
+/// bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mem {
+    pub size: u64,
+    pub align: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Inst {
     pub opcode: u16,
     pub operands: Vec<Operand>,
+    pub mem: Option<Mem>,
 }
 
 impl Inst {
@@ -86,7 +95,15 @@ impl Inst {
         opcode: u16,
         operands: &[Operand],
     ) -> Inst {
-        Inst { opcode, operands: operands.to_vec() }
+        Inst { opcode, operands: operands.to_vec(), mem: None }
+    }
+
+    pub fn with_mem(
+        mut self,
+        mem: Mem,
+    ) -> Inst {
+        self.mem = Some(mem);
+        self
     }
 
     /// `MI.defs()`.

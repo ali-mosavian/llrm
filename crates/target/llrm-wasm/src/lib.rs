@@ -1,10 +1,14 @@
 //! The WebAssembly target. Its descriptions are the files in `machines/`.
 
 pub mod argument_move;
+pub mod asm_strings;
 pub mod dagisel;
+pub mod emit;
 pub mod explicit_locals;
 pub mod mir;
+pub mod print;
 pub mod reg_numbering;
+pub mod set_p2align;
 
 use llrm_target::layout::Layout;
 
