@@ -21,6 +21,10 @@ double sum_array(const double *, int);
 void scale(float *, float);
 double fcalls(double, int);
 int fbits(float);
+unsigned char urem8(unsigned char, unsigned char);
+signed char sdiv8(signed char, signed char);
+unsigned char shr8(unsigned char, unsigned char);
+int64_t mulhs(int64_t, int64_t);
 void cp15(void *, const void *);
 void cp300(void *, const void *);
 void cpn(void *, const void *, int64_t);
@@ -182,6 +186,18 @@ int main(void) {
       for (int i = 0; i < 100; i++) ref[i] = (i >= 1 && i < 1 + n) ? 7 : 0xEE;
       if (__builtin_memcmp(dst, ref, 100)) { printf("setn(%d)\n", n); bad++; }
     }
+  }
+  for (int a = -128; a < 128; a += 5)
+    for (int b = 1; b < 128; b += 9) {
+      if (urem8((unsigned char)a, (unsigned char)b) != (unsigned char)((unsigned char)a % (unsigned char)b)) { printf("urem8(%d,%d)\n", a, b); bad++; }
+      if (sdiv8((signed char)a, (signed char)(-b - 1)) != (signed char)((signed char)a / (signed char)(-b - 1))) { printf("sdiv8(%d,%d)\n", a, b); bad++; }
+      if (shr8((unsigned char)a, (unsigned char)(b & 7)) != (unsigned char)((unsigned char)a >> (b & 7))) { printf("shr8(%d,%d)\n", a, b); bad++; }
+    }
+  {
+    int64_t xs[] = {0, 1, -1, 123456789012345LL, -987654321098765LL, INT64_MIN, INT64_MAX};
+    for (int i = 0; i < 7; i++)
+      for (int j = 0; j < 7; j++)
+        if (mulhs(xs[i], xs[j]) != (int64_t)(((__int128)xs[i] * xs[j]) >> 64)) { printf("mulhs(%d,%d)\n", i, j); bad++; }
   }
   if (bad) printf("%d bad\n", bad);
   return bad != 0;

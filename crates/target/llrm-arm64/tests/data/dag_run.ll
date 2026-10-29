@@ -346,3 +346,27 @@ define void @setn(ptr %d, i8 %c, i64 %n) {
   call void @llvm.memset.p0.i64(ptr %d, i8 %c, i64 %n, i1 false)
   ret void
 }
+
+define i8 @urem8(i8 %a, i8 %b) {
+  %r = urem i8 %a, %b
+  ret i8 %r
+}
+
+define i8 @sdiv8(i8 %a, i8 %b) {
+  %r = sdiv i8 %a, %b
+  ret i8 %r
+}
+
+define i8 @shr8(i8 %a, i8 %s) {
+  %r = lshr i8 %a, %s
+  ret i8 %r
+}
+
+define i64 @mulhs(i64 %a, i64 %b) {
+  %x = sext i64 %a to i128
+  %y = sext i64 %b to i128
+  %m = mul i128 %x, %y
+  %h = lshr i128 %m, 64
+  %r = trunc i128 %h to i64
+  ret i64 %r
+}

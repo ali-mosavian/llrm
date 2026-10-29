@@ -481,6 +481,26 @@ impl<'a> TypeLegalizer<'a> {
                 };
                 self.dag.get_node(op, wide, &[lhs, amount])
             }
+            op @ (ISD::SDiv | ISD::SRem | ISD::UDiv | ISD::URem) => {
+                // `PromoteIntRes_SDIV` and `_UDIV`: the operands extended in
+                // their registers by the operation's signedness.
+                let bits = vt.size_in_bits();
+                let signed = matches!(op, ISD::SDiv | ISD::SRem);
+                let mut extended = Vec::new();
+                for at in 0..2 {
+                    let promoted = self.promoted_integer(self.dag.operand(value, at));
+                    let wide = self.dag.value_type(promoted);
+                    extended.push(if signed {
+                        let ty = self.dag.get_value_type_node(vt);
+                        self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
+                    } else {
+                        let mask = self.dag.get_constant(super::fold::mask(bits), wide);
+                        self.dag.get_node(ISD::And, wide, &[promoted, mask])
+                    });
+                }
+                let wide = self.dag.value_type(extended[0]);
+                self.dag.get_node(op, wide, &extended)
+            }
             ISD::Select => {
                 // `PromoteIntRes_SELECT`: the arms promoted, the condition as
                 // is.
@@ -711,6 +731,17 @@ impl<'a> TypeLegalizer<'a> {
                     super::dag::MemInfo { mem_vt: extra, align: info.align.min(round.size_in_bits() / 8), ..info };
                 let high_store = self.dag.get_store(chain, upper, high_ptr, high_info);
                 self.dag.get_token_factor(&[low_store, high_store])
+            }
+            ISD::Shl | ISD::Srl | ISD::Sra if at == 1 => {
+                // `PromoteIntOp_Shift`: the amount zero extended in its register.
+                let amount = self.dag.operand(node, 1);
+                let bits = self.dag.value_type(amount).size_in_bits();
+                let promoted = self.promoted_integer(amount);
+                let wide = self.dag.value_type(promoted);
+                let mask = self.dag.get_constant(super::fold::mask(bits), wide);
+                let amount = self.dag.get_node(ISD::And, wide, &[promoted, mask]);
+                let updated = self.dag.update_node_operands(n, &[self.dag.operand(node, 0), amount]);
+                SDValue { node: updated, res: 0 }
             }
             ISD::Select if at == 0 => {
                 // The condition becomes the target's boolean type

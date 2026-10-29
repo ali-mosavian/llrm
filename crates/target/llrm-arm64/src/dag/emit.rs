@@ -304,6 +304,11 @@ fn build(
             let (rn, rm) = two(rn, rm)?;
             Ok(Inst::Divide { op, width: width(suffix), rd, rn, rm })
         }
+        ("SMULHrr" | "UMULHrr", "", [rn, rm]) => {
+            let op = if stem == "SMULHrr" { Mul3::Smulh } else { Mul3::Umulh };
+            let (rn, rm) = two(rn, rm)?;
+            Ok(Inst::ThreeSource { op, width: Width::X, rd, rn, rm, ra: Gpr::R31 })
+        }
         ("MADD" | "MSUB" | "SMADDL" | "SMSUBL" | "UMADDL" | "UMSUBL", "Wrrr" | "Xrrr", [rn, rm, Operand::Reg(ra)]) => {
             let op = match stem {
                 "MADD" => Mul3::Madd,
