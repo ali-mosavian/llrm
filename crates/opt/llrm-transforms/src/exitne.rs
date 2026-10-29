@@ -22,12 +22,11 @@
 //! -1`, `br (icmp ugt %i, 1), loop, exit` becomes `icmp ne %i, 1`.
 //!
 //! # Used by
-//! [`crate::indvars`] runs [`strengthened_in`] after the exit
-//! canonicalization. The m68k mid-end runs [`strengthened`] before loop
-//! strength reduction.
+//! [`crate::indvars`] runs [`strengthened_in`] after LFTR. The m68k mid-end
+//! runs [`strengthened`] before loop strength reduction.
 //!
 //! # See also
-//! [`crate::canonexit`], `docs/architecture/scev-port.md`.
+//! [`crate::lftr`], `docs/architecture/scev-port.md`.
 
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::expr::Kind;
