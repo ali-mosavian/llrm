@@ -815,3 +815,20 @@ fn a_function_short_of_cells_saves_and_restores_the_callee_saved_ones() {
         assert_eq!(kept, 0, "{name} changed a callee-saved cell");
     }
 }
+
+/// A value live across one call: a callee-saved cell costs a save and a restore (about eight bytes), a
+/// slot a store and a load; with both allocations priced by the timing table the smaller is kept. A
+/// loop that calls on every trip (digits) keeps the cell, which saves a reload per trip.
+const ACROSS: &str = "define i8 @g(i8 %x) {\n  %r = add i8 %x, 3\n  ret i8 %r\n}\n\
+    define i8 @across(i8 %x) {\n  %a = call i8 @g(i8 %x)\n  %b = add i8 %a, %x\n  ret i8 %b\n}";
+
+#[test]
+fn a_callee_saved_cell_is_taken_only_when_it_is_the_smaller_code() {
+    let single = compile(ACROSS, "across") + &compile(ACROSS, "g");
+    assert!(!single.contains("rc8"), "one call, one value:\n{single}");
+    // across(5) = g(5) + 5 = 8 + 5
+    let program = format!("{single}");
+    assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &program), 13);
+    let looped = compile(DIGITS, "digits");
+    assert!((8..16).any(|n| looped.contains(&format!("rc{n}"))), "a loop of calls keeps its values in a cell:\n{looped}");
+}

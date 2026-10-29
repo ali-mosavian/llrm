@@ -512,7 +512,11 @@ fn ours_row(
     let runtime = reachable_runtime(&function);
     let file = format!("{}.import buf\n{function}{runtime}", equates(&platform));
     std::fs::write(dir.join(format!("f-{tag}.s")), file).unwrap();
-    measure(&dir, kernel, Abi::Ours, tag, bss)
+    let row = measure(&dir, kernel, Abi::Ours, tag, bss)?;
+    // the table's bytes are the linked binary's, to the byte
+    let priced = llrm_6502::timing::estimate(cpu, &format!("{function}{runtime}"))?;
+    assert_eq!(i64::from(priced.bytes), row.bytes, "{name} {tag}: timing.rs against the linked size");
+    Ok(row)
 }
 
 /// cc65's hand-written `libsrc/common/lz4.s` (a162565e) as the best case for the same C: wrapped to
