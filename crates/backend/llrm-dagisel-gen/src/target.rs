@@ -26,6 +26,10 @@ struct Target {
     /// Symbols the target's hand code names (`ISD::ATOMIC_CMP_SWAP`,
     /// `M68k::PC`).
     extra_symbols: Vec<String>,
+    /// The tables sit in llrm-dagisel itself, not in the target's crate.
+    in_dagisel: bool,
+    /// The node predicates are listed, not called (`Style::listed_predicates`).
+    listed_predicates: bool,
 }
 
 fn strings(
@@ -55,6 +59,8 @@ impl Target {
             cpus: strings(table, "cpus")?,
             hw_modes: strings(table, "hw_modes")?,
             extra_symbols: strings(table, "extra_symbols")?,
+            in_dagisel: table.get("in_dagisel").and_then(|v| v.as_bool()).unwrap_or(false),
+            listed_predicates: table.get("listed_predicates").and_then(|v| v.as_bool()).unwrap_or(false),
         };
         // The name prefixes the generated modules (`<name>_<cpu>`).
         let mut chars = target.name.chars();
@@ -95,13 +101,16 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
     let instructions: BTreeSet<String> =
         inputs.instrinfo.lines().filter_map(|l| l.split(' ').next()).map(str::to_string).collect();
     let style = emit::Style {
-        dagisel: "llrm_dagisel",
-        predicates: "crate::dagisel::predicates",
+        dagisel: if target.in_dagisel { "crate" } else { "llrm_dagisel" },
+        predicates: if target.in_dagisel { "crate::predicates" } else { "crate::dagisel::predicates" },
         ns: leak(target.ns.clone()),
         title: leak(target.name.clone()),
         regen: "tools/dagisel/regen-target.sh",
         desc: "desc",
         local_desc: true,
+        dag_imports: "Dag, Hooks, PatternContext, SDValue",
+        listed_predicates: target.listed_predicates,
+        predicate_bound: "Hooks<D>",
     };
     let write = |name: &str, text: String| {
         let path = inputs.out.join(name);
@@ -133,7 +142,7 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
             Matcher::EmitNode(e) | Matcher::MorphNodeTo(e) => Some(e.opcode),
             _ => None,
         }));
-        let module = format!("{}_{cpu_name}", target.name);
+        let module = format!("{}_{}", target.name, cpu_name.replace('-', "_"));
         write(&format!("{module}.rs"), emit::render(&source)?)?;
         modules.push_str(&format!("pub mod {module};\n"));
         eprintln!("{cpu_name}: {} items, {} operand entries", flat.items.len(), flat.operands.len());

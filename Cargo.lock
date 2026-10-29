@@ -353,6 +353,7 @@ dependencies = [
  "llrm-omf",
  "llrm-peepgen",
  "llrm-qbruntime",
+ "llrm-sdag",
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
@@ -475,6 +476,7 @@ dependencies = [
 name = "llrm-m68k"
 version = "0.1.0"
 dependencies = [
+ "llrm-codegen",
  "llrm-dagisel",
 ]
 
@@ -587,6 +589,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-sdag"
+version = "0.1.0"
+dependencies = [
+ "llrm-support",
+]
+
+[[package]]
 name = "llrm-sroa-poc"
 version = "0.1.0"
 dependencies = [
@@ -651,6 +660,7 @@ dependencies = [
  "llrm-mir",
  "llrm-object",
  "llrm-omf",
+ "llrm-sdag",
  "llrm-support",
  "llrm-target",
  "tempfile",

@@ -209,60 +209,6 @@ impl<D: AddrDag> Hooks<D> for M68kHooks {
         false
     }
 
-    fn has_sse_unaligned_mem(&self) -> bool {
-        false
-    }
-
-    fn should_avoid_immediate_inst_forms_for_size(
-        &self,
-        _: &D,
-        _: u32,
-    ) -> bool {
-        false
-    }
-
-    fn is_unneeded_shift_mask(
-        &self,
-        _: &D,
-        _: u32,
-        _: u32,
-    ) -> bool {
-        false
-    }
-
-    fn is_sext_absolute_symbol_ref(
-        &self,
-        _: &D,
-        _: u32,
-        _: u32,
-    ) -> bool {
-        false
-    }
-
-    fn has_no_carry_flag_uses(
-        &self,
-        _: &D,
-        _: SDValue,
-    ) -> bool {
-        false
-    }
-
-    fn is_def32(
-        &self,
-        _: &D,
-        _: u32,
-    ) -> bool {
-        false
-    }
-
-    fn check_tc_ret_enough_regs(
-        &self,
-        _: &D,
-        _: u32,
-    ) -> bool {
-        true
-    }
-
     fn may_load_store(
         &self,
         opcode: u16,

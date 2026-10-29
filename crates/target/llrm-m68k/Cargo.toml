@@ -7,3 +7,4 @@ description = "The m68k target: its descriptions and DAG selector tables, genera
 
 [dependencies]
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
+llrm-codegen = { workspace = true }

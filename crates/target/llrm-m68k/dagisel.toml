@@ -4,10 +4,12 @@
 # The cpu, atom, dynamic, types and node_predicate tables are features.toml's (llrm-dagisel-gen).
 [target]
 name = "m68k"
+llvm_build = "llvm-build-m68k"
 ns = "M68k::"
 isd = "M68kISD::"
 llvm_dir = "M68k"
 td = "M68k.td"
+out = "src/dagisel/generated"
 cpus = ["m68000", "m68020"]
 # Named by the hand code (src/dagisel/addr.rs, hooks.rs).
 extra_symbols = ["ISD::ATOMIC_CMP_SWAP", "M68k::PC", "M68kISD::GLOBAL_BASE_REG", "M68kISD::Wrapper", "M68kISD::WrapperPC", "M68kISD::SUB"]
