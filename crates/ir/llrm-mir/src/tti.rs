@@ -618,6 +618,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LU6: whether a rewrite that adds an induction variable to the
+    /// enclosing loop is dropped when the loop as written already needs every
+    /// register. The new variable is held through the loop and spills.
+    fn lsr_drops_outer_iv_in_full_loop(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LU5: whether a formula whose base register is a non-affine
     /// addrec of an enclosing loop is charged the induction variables its
     /// expansion keeps live across that loop (one for each order past the

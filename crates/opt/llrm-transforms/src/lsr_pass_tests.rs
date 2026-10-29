@@ -1055,3 +1055,74 @@ fn a_quadratic_start_is_expanded_into_the_outer_loop_on_a_flat_target() {
     let after = printed(&module);
     assert!(after.contains("[ 5, %b1 ]"), "{after}");
 }
+
+/// shellsort's gap pass: the inner loop's address starts at the outer `i`.
+const GAP_PASS: &str = "define i32 @f(i16 %g) {
+b1:
+  %a = alloca [64 x i32]
+  br label %outer
+outer:
+  %i = phi i16 [ %g, %b1 ], [ %i2, %place ]
+  %io = shl i16 %i, 2
+  %pi = getelementptr i8, ptr %a, i16 %io
+  %v = load i32, ptr %pi
+  br label %inner
+inner:
+  %at = phi i16 [ %i, %outer ], [ %at2, %move ]
+  %at2 = sub i16 %at, %g
+  %lo = shl i16 %at2, 2
+  %pl = getelementptr i8, ptr %a, i16 %lo
+  %w = load i32, ptr %pl
+  %gt = icmp sgt i32 %w, %v
+  br i1 %gt, label %move, label %place
+move:
+  %ao = shl i16 %at, 2
+  %pa = getelementptr i8, ptr %a, i16 %ao
+  store i32 %w, ptr %pa
+  %more = icmp sge i16 %at2, %g
+  br i1 %more, label %inner, label %place
+place:
+  %end = phi i16 [ %at, %inner ], [ %at2, %move ]
+  %eo = shl i16 %end, 2
+  %pe = getelementptr i8, ptr %a, i16 %eo
+  store i32 %v, ptr %pe
+  %i2 = add i16 %i, 1
+  %done = icmp eq i16 %i2, 64
+  br i1 %done, label %exit, label %outer
+exit:
+  ret i32 %v
+}
+";
+
+/// The phis at the top of block `label` in a printed function.
+fn phis_in(
+    text: &str,
+    label: &str,
+) -> usize {
+    let head = format!("{label}:");
+    text.lines().skip_while(|line| line.trim() != head).skip(1).take_while(|line| line.contains(" phi ")).count()
+}
+
+/// shellsort bq16 -O2 took 3914 memory operands to main's 1925: the inner
+/// loop's address was reduced to a pointer that starts at a new induction
+/// variable of the outer loop, a second register held through the inner loop,
+/// which already fills six, so both outer values spilled on every outer
+/// iteration.
+#[test]
+fn the_inner_loop_does_not_add_an_induction_variable_to_the_outer_loop_in_real_mode() {
+    let after = reduced_real(GAP_PASS, &six_registers());
+    assert_eq!(phis_in(&after, "outer"), 1, "{after}");
+}
+
+/// The flat target keeps the pin's choice.
+#[test]
+fn the_inner_loop_adds_an_induction_variable_to_the_outer_loop_on_a_flat_target() {
+    let mut module = parsed(&format!("{}{}", DOS, GAP_PASS));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    assert!(phis_in(&after, "outer") > 1, "{after}");
+}
