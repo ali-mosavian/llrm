@@ -241,6 +241,16 @@ impl TargetCalling for Aarch64Calling {
     /// Each register part is read from the virtual register its live-in
     /// register is copied to (`CopyFromReg`); a stack part is loaded from a
     /// fixed object in the caller's outgoing area.
+    /// `LowerFormalArguments`' `VarArgsStackIndex` on Darwin: past the named stack
+    /// arguments, rounded up to 8.
+    fn var_args_offset(
+        &self,
+        ins: &[In],
+    ) -> Option<i64> {
+        let parts: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false)).collect();
+        Some(place(&parts).1.next_multiple_of(8) as i64)
+    }
+
     fn lower_formal_arguments(
         &self,
         dag: &mut SelectionDAG,

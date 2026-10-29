@@ -749,3 +749,23 @@ pub fn fp_imm_legal(
     };
     bits == 0 || crate::mc::immediate::fp_immediate(value).is_some() || mov_imm(bits as u64, width, Gpr(0)).len() <= 2
 }
+
+/// `LowerDarwin_VASTART`: the address of the first unnamed argument stored to the `va_list`.
+pub fn lower_va_start(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let index = dag.var_args_frame_index?;
+    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
+    let pointer = dag.value_type(list);
+    let address = dag.get_frame_index(pointer, index);
+    let info = llrm_codegen::backend::selectiondag::MemInfo {
+        mem_vt: pointer,
+        align: 8,
+        volatile: false,
+        base: llrm_codegen::backend::selectiondag::MemBase::Unknown,
+        ext: None,
+        space: 0,
+    };
+    Some(dag.get_store(chain, address, list, info))
+}

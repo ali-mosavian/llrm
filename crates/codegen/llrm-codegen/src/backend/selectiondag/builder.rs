@@ -1053,7 +1053,10 @@ impl Builder<'_> {
             }
         }
         if self.module.signature(self.function.ty).2 {
-            self.dag.var_args_frame_index = Some(-(offsets.len() as i32 + 1));
+            let index = -(offsets.len() as i32 + 1);
+            let offset = calling.var_args_offset(&ins).ok_or(Refused("a variadic function with a target's calling hook"))?;
+            self.dag.fixed_offsets.insert(index, offset);
+            self.dag.var_args_frame_index = Some(index);
         }
         Ok(())
     }

@@ -114,6 +114,16 @@ pub trait TargetCalling: Debug + Sync {
         live_in: LiveIn,
     ) -> Vec<SDValue>;
 
+    /// Where a variadic function's first unnamed argument lies on the stack, by the
+    /// offset from the incoming arguments (`VarArgsStackIndex`); None where
+    /// the target's `va_list` is not that pointer.
+    fn var_args_offset(
+        &self,
+        _ins: &[In],
+    ) -> Option<i64> {
+        None
+    }
+
     /// `LowerReturn`: the return node.
     fn lower_return(
         &self,

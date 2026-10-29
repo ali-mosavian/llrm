@@ -133,6 +133,7 @@ impl Builder<'_> {
         // (`LowerVASTART`), not the stack pointer the 32-bit one is; the entry
         // block's lowering of the arguments made the area.
         if self.target.dag.pointer == EVT::I64
+            && self.calling().is_none()
             && matches!(intrinsic, Intrinsic::VaStart)
             && self.dag.var_args_save.is_none()
         {

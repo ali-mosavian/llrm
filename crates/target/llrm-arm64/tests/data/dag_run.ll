@@ -370,3 +370,29 @@ define i64 @mulhs(i64 %a, i64 %b) {
   %r = trunc i128 %h to i64
   ret i64 %r
 }
+
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+
+; sum of the n int arguments after n, as clang expands va_arg on Darwin
+define i64 @vsum(i32 %n, ...) {
+entry:
+  %ap = alloca ptr, align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %s = phi i64 [ 0, %entry ], [ %sum, %loop ]
+  %p = load ptr, ptr %ap, align 8
+  %q = getelementptr inbounds i8, ptr %p, i64 8
+  store ptr %q, ptr %ap, align 8
+  %v = load i32, ptr %p, align 8
+  %w = sext i32 %v to i64
+  %sum = add i64 %s, %w
+  %next = add i32 %i, 1
+  %more = icmp slt i32 %next, %n
+  br i1 %more, label %loop, label %done
+done:
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i64 %sum
+}

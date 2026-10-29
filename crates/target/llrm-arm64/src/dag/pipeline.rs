@@ -57,6 +57,7 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::FpToSInt | ISD::FpToUInt => super::lowering::lower_fp_to_int(dag, node),
             ISD::FpExtend => super::lowering::lower_fp_extend(dag, node),
             ISD::FpRound => super::lowering::lower_fp_round(dag, node),
+            ISD::VAStart => super::lowering::lower_va_start(dag, node),
             _ => None,
         };
         if lowered.is_some() {
