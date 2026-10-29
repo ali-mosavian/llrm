@@ -61,8 +61,9 @@ pub struct Tuning {
 impl Tuning {
     /// Speed: a byte saved is not worth a clock.
     pub const SPEED: Tuning = Tuning { clocks_per_byte: 1 };
-    /// Size: a byte saved is worth up to eight clocks (a shift loop of 3 bits is 3 bytes and 16 clocks).
-    pub const SIZE: Tuning = Tuning { clocks_per_byte: 8 };
+    /// Size: a byte saved is worth up to twelve clocks (a shift loop of 3 bits is 3 bytes and 16 clocks; three
+    /// shared callee-saved cells are 9 bytes and 99 clocks).
+    pub const SIZE: Tuning = Tuning { clocks_per_byte: 12 };
 }
 
 thread_local! {
@@ -1831,9 +1832,24 @@ fn save_preserved<const STACK: bool>(
     // against five and five through a slot of its own (and no RAM). The soft stack keeps its slots:
     // a recursive function would run the hardware stack out.
     if !STACK && !used.is_empty() {
-        saves.extend(used.iter().map(|byte| Inst::new(Kind::Op("PUSHC"), vec![Operand::Use(Reg::Phys(*byte))])));
-        let popped = used.iter().rev().map(|byte| Operand::Def(Reg::Phys(*byte))).collect();
-        restores.push(Inst::new(Kind::Op("POPS"), popped));
+        // `rc8`.. up to `n` of them: one call saves and one jump restores (`__csave`, `__crest`), 11
+        // bytes against 6 a cell and 2 for the result, and 57 + 14n clocks more; taken where the level
+        // pays that for the bytes
+        let n = used.len() as u32;
+        let (saved, slower) = (6 * n as i64 + 2 - 11, 57 + 14 * n);
+        let shared = n >= 3
+            && used.iter().enumerate().all(|(at, byte)| *byte == rc(8 + at as u8))
+            && saved > 0
+            && slower <= TUNING.with(|t| t.get()).clocks_per_byte * saved as u32;
+        if shared {
+            saves.push(Inst::new(Kind::Op("CSAVE"), used.iter().map(|byte| Operand::Use(Reg::Phys(*byte))).collect()));
+            let popped = used.iter().rev().map(|byte| Operand::Def(Reg::Phys(*byte))).collect();
+            restores.push(Inst::new(Kind::Op("CREST"), popped));
+        } else {
+            saves.extend(used.iter().map(|byte| Inst::new(Kind::Op("PUSHC"), vec![Operand::Use(Reg::Phys(*byte))])));
+            let popped = used.iter().rev().map(|byte| Operand::Def(Reg::Phys(*byte))).collect();
+            restores.push(Inst::new(Kind::Op("POPS"), popped));
+        }
     }
     for byte in used.into_iter().filter(|_| STACK) {
         let slot = slots.iter().map(|(s, _)| s + 1).max().unwrap_or(0);
@@ -2240,6 +2256,35 @@ fn emit_with<const STACK: bool>(
                         return Err("a is live where a callee-saved cell is pushed".into());
                     }
                     writeln!(out, "  lda {}\n  pha", register_name(regs[0])).unwrap();
+                }
+                (Kind::Op("CSAVE"), _) => {
+                    if after[b][i].contains(&reg::Y) || after[b][i].contains(&reg::X) || a_live {
+                        return Err("a register is live where the callee-saved cells are saved".into());
+                    }
+                    writeln!(out, "  ldy #{}\n  jsr __csave", regs.len()).unwrap();
+                }
+                // the restore is the function's return: `jmp` to the routine that pops and returns,
+                // unless x holds a result, when the cells are popped here
+                (Kind::Op("CREST"), _) if !after[b][i].contains(&reg::X) && !after[b][i].contains(&reg::Y) => {
+                    if a_live {
+                        out.push_str("  tay\n");
+                    }
+                    writeln!(out, "  ldx #{}\n  jmp __crest", regs.len()).unwrap();
+                    repeated = 1;
+                }
+                (Kind::Op("CREST"), _) => {
+                    if a_live && after[b][i].contains(&reg::Y) {
+                        return Err("a and y are live where callee-saved cells are popped".into());
+                    }
+                    if a_live {
+                        out.push_str("  tay\n");
+                    }
+                    for r in &regs {
+                        writeln!(out, "  pla\n  sta {}", register_name(*r)).unwrap();
+                    }
+                    if a_live {
+                        out.push_str("  tya\n");
+                    }
                 }
                 (Kind::Op("POPS"), _) => {
                     if a_live && after[b][i].contains(&reg::Y) {
