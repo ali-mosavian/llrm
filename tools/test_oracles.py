@@ -33,6 +33,12 @@ def compiled(source: Path) -> str | None:
     return None if done.returncode == 0 else f"{source.name}: {done.stderr.strip().splitlines()[0][:200] if done.stderr.strip() else done.returncode}"
 
 
+def not_known_unbuilt(failed: list[str]) -> list[str]:
+    """The failures that are not a program of LLRM_CC_UNBUILT. Whether llrm-c is built does not matter: a c-legacy llrm-c is clang under
+    the Watcom flags and fails these the same way (`unknown type name '_Sat'` refused the runner's batches, whose target has one)."""
+    return [one for one in failed if one.split(":")[0] not in LLRM_CC_UNBUILT]
+
+
 def test_a_program_llrm_c_cannot_compile_goes_through_llrm_cc():
     """float_bits.c includes <stdint.h>, which llrm-c's wccq lacks: the oracle test failed on it for days."""
     assert compiled(FIXTURES[0].parent / "float_bits.c") is None
@@ -42,6 +48,13 @@ def test_every_run_program_compiles_with_every_oracle_on():
     assert len(FIXTURES) >= 90, f"{len(FIXTURES)} programs in tests/run/c"
     with ThreadPoolExecutor(int(os.environ.get("JOBS", "6"))) as pool:
         failed = [one for one in pool.map(compiled, FIXTURES) if one]
-    if not (llrmbin.bin_dir() / "llrm-c").exists():
-        failed = [one for one in failed if one.split(":")[0] not in LLRM_CC_UNBUILT]
+    failed = not_known_unbuilt(failed)
     assert not failed, "an oracle fired: " + "; ".join(failed)
+
+
+def test_a_known_unbuilt_program_is_not_an_oracle_failure_with_llrm_c_built(tmp_path, monkeypatch):
+    """The filter ran only without llrm-c: the runner's target has one, and fixed_point.c's `_Sat` refused #6040 (14:3x)."""
+    (tmp_path / "llrm-c").write_text("")
+    monkeypatch.setattr(llrmbin, "bin_dir", lambda: tmp_path)
+    shown = ["fixed_point.c: tests/run/c/fixed_point.c:33:1: error: unknown type name '_Sat'", "other.c: an oracle fired"]
+    assert not_known_unbuilt(shown) == [shown[1]]
