@@ -848,3 +848,28 @@ def test_a_c_bench_row_builds_and_links(tmp_path):
     variant = next(one for one in bench.variants(bench.BENCH / "bintree") if one.language == "c")
     built = bench.build(variant, "Os", tmp_path, "bintree")
     assert not isinstance(built, str), built
+
+
+def test_a_row_above_its_clock_limit_fails_the_gate():
+    """tile c -Os ran 10300 clocks against main's 10169 and nothing in the gate said so: only counts and sizes were judged."""
+    limits = {"tile c -Os": 10224}
+    assert bench.clock_problems("tile c -Os", {"clocks": 10225}, limits) == ["tile c -Os: clocks 10225 > limit 10224 (tools/bench/clock_limits.toml)"]
+    assert bench.clock_problems("tile c -Os", {"clocks": 10224}, limits) == []
+    assert bench.clock_problems("fib c -Os", {"clocks": 10**9}, limits) == []
+
+
+def test_every_clock_limit_names_a_real_row():
+    """A typo in a row label would leave its row unjudged."""
+    names = {one.name for directory in bench.benchmarks([]) for one in bench.variants(directory)}
+    for label in bench.clock_limits():
+        name, language, level = label.split()
+        assert (name in names or name.startswith("parity/")) and language in ("c", "bas", "nib") and level == "-Os", label
+
+
+def test_the_gate_judges_a_rows_clocks_against_its_limit(monkeypatch):
+    """judge() ran the count and size gate only: a row over its clock limit passed it."""
+    monkeypatch.setattr(bench, "clock_limits", lambda: {"tile c -Os": 100})
+    row = {"instructions": 1, "memory_operands": 1, "code_bytes": 1, "data_bytes": 0, "bss_bytes": 0}
+    got = {("tile", one.language, "Os"): {**row, "clocks": 101 if one.language == "c" else 1} for one in bench.variants(bench.BENCH / "tile")}
+    problems = bench.judge(got, ["tile"], ["Os"], base={})
+    assert problems == ["tile c -Os: clocks 101 > limit 100 (tools/bench/clock_limits.toml)"]

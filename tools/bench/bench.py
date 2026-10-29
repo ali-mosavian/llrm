@@ -746,6 +746,19 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -
     return problems
 
 
+def clock_limits() -> dict[str, int]:
+    """The -Os m16 rows whose 486 clocks are above main's and may not grow (clock_limits.toml, one debt class each in docs/working/ci.md):
+    row label -> clocks it may reach. A row with none is not judged."""
+    return tomllib.loads((Path(__file__).parent / "clock_limits.toml").read_text()).get("clocks", {})
+
+
+def clock_problems(label: str, got: dict, limits: dict[str, int]) -> list[str]:
+    """A listed row above its limit fails: the clocks the step measured already, the same harness as main's."""
+    if label in limits and got.get("clocks", 0) > limits[label]:
+        return [f"{label}: clocks {got['clocks']} > limit {limits[label]} (tools/bench/clock_limits.toml)"]
+    return []
+
+
 def time_against(label: str, got: dict, want: dict | None) -> list[str]:
     """A timed-only program has no count to gate: its own kernel time does, with the time tolerance, against the base's (worse only)."""
     if want is None or "kernel_ms" not in got or "kernel_ms" not in want:
@@ -792,6 +805,7 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
     each benchmark's expected.toml."""
     problems = []
     waived = basecounts.waivers(ROOT)
+    limits = clock_limits()
     for directory in benchmarks(selected):
         name = str(directory.relative_to(BENCH))
         baseline = read_expected(directory)
@@ -817,6 +831,7 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                         problems.append(f"{label}: {got['instructions']} instructions run long enough for a timer tick (55 ms at the flat rate): the extender's handler lands inside the count")
                     want = baseline.get(variant.language, {}).get(opt)
                     problems += against(label, got, want, waived)
+                    problems += clock_problems(label, got, limits)
                     if variant.timed_only:
                         problems += time_against(label, got, want)
                     for reference in REFERENCES.get(variant.language, ()):
