@@ -60,3 +60,9 @@ issue = 4932
 owner = "w6"
 date = "2026-11-02"
 why = "main forwards the stored 5 (1 instr fewer); tip and the pin reload g; first bad 26d6c9e9a3"
+[[xfail]]
+id = "integration turbo::tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does"
+issue = 1338
+owner = "clang-frontend"
+date = "2026-11-02"
+why = "PLACEHOLDER ISSUE (#1338, the -g matrix; a dedicated one is requested): `int near inner(int)` reaches Turbo Debugger's table as `function far C` (Turbo C++: near). The `near` function attribute is ignored on the i8086 clang fork / llrm-llc CV4 path; llrm-c honoured it"
