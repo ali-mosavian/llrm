@@ -1007,7 +1007,10 @@ fn a_read_of_the_old_pointer_goes_before_its_bump() {
         );
         let text = compile(&ir, name);
         // the cell that is bumped is the one the pointer was read through
-        let bumped = text.lines().find_map(|l| l.trim().strip_prefix("inc rc")).map(str::to_owned).expect("an inc rc");
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let bumped = (0..lines.len() - 1)
+            .find_map(|i| lines[i].strip_prefix("inc rc").filter(|_| lines[i + 1].starts_with("bne")))
+            .expect("a pointer bump (inc, then bne for the carry)");
         assert!(text.contains(&format!("(rc{bumped})")), "{name}: {text}");
     }
 }
