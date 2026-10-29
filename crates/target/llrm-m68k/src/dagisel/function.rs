@@ -21,7 +21,7 @@ use llrm_mir::module::{BlockId, Module, ValueDef};
 use super::call::M68kCalling;
 use super::hooks::Cpu;
 use super::lowering::m68kisd;
-use super::pipeline::select_block;
+use super::pipeline::select_block_with;
 use crate::target::M68k;
 
 static CALLING: LazyLock<M68kCalling> = LazyLock::new(M68kCalling::default);
@@ -69,6 +69,17 @@ pub fn select_function(
     name: &str,
     cpu: Cpu,
 ) -> Result<Vec<Selected>, String> {
+    select_function_with(module, name, cpu, false)
+}
+
+/// [`select_function`], with `load_as_source` (see
+/// [`super::pipeline::select_block_with`]).
+pub fn select_function_with(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    load_as_source: bool,
+) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
         .global(id)
@@ -89,7 +100,7 @@ pub fn select_function(
         if !built.extra.is_empty() {
             return Err("a switch lowering made blocks".to_owned());
         }
-        let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
+        let units = select_block_with(&mut built.dag, cpu, load_as_source).map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
         selected.push(Selected { block, dag: built.dag, units, phis: Vec::new() });
     }

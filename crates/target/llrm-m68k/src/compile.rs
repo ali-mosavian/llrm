@@ -7,7 +7,7 @@ use llrm_mir::memory::has;
 use llrm_mir::module::Module;
 
 use crate::address::address_arithmetic;
-use crate::dagisel::function::select_function;
+use crate::dagisel::function::select_function_with;
 use crate::dagisel::hooks::Cpu;
 use crate::expand::{Line, finish};
 use crate::flags::preserve_flags;
@@ -81,7 +81,7 @@ pub fn items_with(
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let number =
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
-    let blocks = select_function(module, name, cpu)?;
+    let blocks = select_function_with(module, name, cpu, options.overlay)?;
     let mut function = emit(name, &blocks)?;
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
