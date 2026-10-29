@@ -2549,7 +2549,12 @@ pub fn _flag_effect(
         let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == RegId::None).collect::<Lanes>();
         return (flags(&effect.reads), flags(&effect.writes));
     }
-    if one.what.as_ref().is_some_and(|what| [Operation::Call, Operation::Return].contains(&what.op)) {
+    // A sibling call's `jmp` leaves the function as `ret` does: it reads no
+    // flag and the caller's flags are gone (the pin's `TAILJMPd`).
+    if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
+        return (Lanes::new(), every);
+    }
+    if one.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
         return (_exit_flags(), Lanes::new());
     }
     // Bytes this cannot encode -- a relocated operand, an x87 form --

@@ -19,6 +19,9 @@
 //! DEVIATE 2: `RewriteGEPs` is always true, the only way `foldGEPICmp` calls
 //! it. Exit: `OptimizePointerDifference`, which passes false.
 //!
+//! # Used by
+//! `foldGEPICmp` (`combine_compares.rs`).
+//!
 //! # Example
 //! ```text
 //! %b = getelementptr inbounds nuw i8, ptr %p, i64 %x
