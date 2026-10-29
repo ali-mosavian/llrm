@@ -71,7 +71,7 @@ impl Combiner<'_> {
             return base;
         }
         // Every pointer the left chain passes through.
-        let mut pointers = std::collections::HashSet::new();
+        let mut pointers = llrm_support::hash::HashSet::default();
         let mut at = lhs;
         loop {
             pointers.insert(at);
