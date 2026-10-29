@@ -1,5 +1,6 @@
 # -Os m16 clocks that may not grow: rows whose clocks are above main's (854bb7efc4, same harness) at parity c6635d4759.
 # Limit = the clocks at that parity. Lower a limit when a row improves; a row below main needs no entry.
+# Float bas rows are limited at their standard-mode clocks, float nib rows at fast-mode (nbody_single, fpbench/nib and floats are at or below main like with like and have no entry).
 # nib and c rows rest on the bas check that the harness reproduces main's clocks (36 of 36).
 
 [clocks]
@@ -17,18 +18,16 @@
 "mandel nib -Os" = 842924  # main 833809
 "matmul c -Os" = 21851  # main 20480
 "matmul nib -Os" = 24201  # main 23432
-"nbody bas -Os" = 438826  # main 389279
+"nbody bas -Os" = 438826  # main 428879 (standard)
 "nbody c -Os" = 371703  # main 358692
 "nbody nib -Os" = 371478  # main 357111
-"nbody_single bas -Os" = 10247160  # main 8104085
-"nbody_single nib -Os" = 10663580  # main 8617769
 "parity/algebra bas -Os" = 271  # main 265
 "parity/branch bas -Os" = 208  # main 194
 "parity/branch c -Os" = 146  # main 138
 "parity/memory bas -Os" = 243  # main 239
 "parity/qlight bas -Os" = 621  # main 605
 "parity/qlight c -Os" = 534  # main 516
-"parity/qmove bas -Os" = 506  # main 433
+"parity/qmove bas -Os" = 506  # main 477 (standard)
 "parity/qmove c -Os" = 485  # main 465
 "parity/qmove nib -Os" = 520  # main 503
 "parity/sum_three bas -Os" = 169  # main 165
@@ -62,7 +61,6 @@
 "quicksort c -Os" = 325239  # main 309284
 "quicksort nib -Os" = 447484  # main 316122
 
-# class 4: fpbench, cause unexplained (not lsr/tree-ch/peel/unswitch/gcse/pre): DEBT bench-clocks-fpbench
-"fpbench bas -Os" = 209619  # main 163360
+# class 4: float rows: QB standard-precision default is deliberate (BC); compare like with like (bas rows: main under the same flag; nib rows: fast, as main): DEBT bench-clocks-float
+"fpbench bas -Os" = 209619  # main 208600 (standard)
 "fpbench c -Os" = 156214  # main 156169
-"fpbench nib -Os" = 203869  # main 156348
