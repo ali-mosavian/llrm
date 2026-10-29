@@ -112,6 +112,7 @@ pub(super) fn verdicts(flags: bool) -> Vec<Result<super::builder::RuntimeAnswer,
 pub(super) fn select_with_contracts(text: &str) -> Result<crate::backend::isel::Selected, String> {
     let module = llrm_mir::parse::module(text).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: true,
@@ -1293,6 +1294,7 @@ define cc 1000 i32 @f(i32 %a) {
 ";
     let module = llrm_mir::parse::module(ir).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: true,
@@ -1331,6 +1333,7 @@ define cc 1000 i16 @f(i16 %a) {
 ";
     let module = llrm_mir::parse::module(ir).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: true,
@@ -1369,6 +1372,7 @@ define cc 1000 i16 @f(i16 %a) {
 ";
     let module = llrm_mir::parse::module(ir).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: true,
