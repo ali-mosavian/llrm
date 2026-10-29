@@ -235,8 +235,44 @@ pub fn commute_tied<T: Target>(function: &mut MFunction<T::Class>) {
             let commute = (!base_killed && other_killed) || profitable(&facts, function, b, at, dist, a, base, c);
             if commute {
                 function.blocks[b].insts[at].operands.swap(used, other);
+                relax_demoted::<T>(function, &facts, b, at, base, other);
             }
         }
+    }
+}
+
+/// `base` was the tied source, so its class was narrowed to the result's; it
+/// is now the other source, which may take more. Where it is only a copy of
+/// another register, read nowhere else, it takes that register's class met
+/// with the operand's, so the allocator may put it where the tied one cannot
+/// go (a temporary in an address register, not a data register).
+///
+/// DEVIATE from the pin, whose class stays narrowed (`constrainRegClass`
+/// never widens). Reason: the swap is ours, and the narrowing it leaves
+/// costs a data register on a rotation. Exit: the neutral-LIR task, where
+/// the commute is the pin's own.
+fn relax_demoted<T: Target>(
+    function: &mut MFunction<T::Class>,
+    facts: &Facts,
+    b: usize,
+    at: usize,
+    base: u32,
+    slot: usize,
+) {
+    let Kind::Op(name) = function.blocks[b].insts[at].kind else { return };
+    let Some(wanted) = T::operand_class(name, slot) else { return };
+    let Some([(def_block, def_at)]) = facts.defs.get(&base).map(Vec::as_slice) else { return };
+    let (Kind::Copy, [Operand::Def(_), Operand::Use(Reg::Virt(source))]) =
+        (function.blocks[*def_block].insts[*def_at].kind, &function.blocks[*def_block].insts[*def_at].operands[..])
+    else {
+        return;
+    };
+    let reads = function.blocks.iter().flat_map(|block| &block.insts).flat_map(uses).filter(|u| *u == base).count();
+    if reads != 1 {
+        return;
+    }
+    if let Some(class) = T::meet(function.classes[*source as usize], wanted) {
+        function.classes[base as usize] = class;
     }
 }
 

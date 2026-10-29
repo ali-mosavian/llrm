@@ -93,6 +93,16 @@ pub fn pin_commutable(name: &str) -> bool {
         .is_some_and(|desc| desc.has(flag::COMMUTABLE))
 }
 
+/// The class the pin's description of `name` gives operand `index`.
+pub fn operand_class(
+    name: &str,
+    index: usize,
+) -> Option<Class> {
+    let (code, _) = MACHINE_OPCODES.iter().find(|(_, one)| *one == name)?;
+    let desc = instrinfo::desc(*code as u16)?;
+    Class::of_pin(desc.operands.get(index)?.reg_class)
+}
+
 fn opcode_name(code: u32) -> Option<&'static str> {
     MACHINE_OPCODES.iter().find(|(value, _)| u32::from(*value) == code).map(|(_, name)| *name)
 }

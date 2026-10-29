@@ -221,6 +221,17 @@ fn a_loop_carrying_a_sum_rotates_its_pair_in_two_moves() {
     assert_eq!(loop_moves(&ours), 2, "{ours}");
 }
 
+/// The rotation's temporary was a copy of `a` narrowed to a data register by
+/// the add's tied slot it no longer sat in, so the pair took `d0`, `d1`, the
+/// counter took callee-saved `d2`, and the function pushed and popped it (4
+/// bytes). The temporary may take an address register.
+#[test]
+fn the_rotation_temporary_does_not_cost_a_saved_data_register() {
+    let ir = "define i32 @f(i32 %n) optsize {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %a = phi i32 [0, %entry], [%b, %l]\n  %b = phi i32 [1, %entry], [%s, %l]\n  %s = add i32 %a, %b\n  %i1 = add i32 %i, 1\n  %c = icmp slt i32 %i1, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %s\n}";
+    let ours = compiled(ir, Options::default());
+    assert!(!ours.contains("%d2") && !ours.contains("(%sp)+"), "{ours}");
+}
+
 /// `s += p[i] > t` ended `sgt %d1; and.l #255, %d1; and.l #1, %d1`: the second
 /// mask makes the first one dead.
 #[test]

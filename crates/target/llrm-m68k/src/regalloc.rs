@@ -51,6 +51,13 @@ impl Target for M68kRegisters {
         }
     }
 
+    fn operand_class(
+        name: &str,
+        index: usize,
+    ) -> Option<Class> {
+        crate::mfunc::operand_class(name, index)
+    }
+
     /// `bd0` for a byte class, `wd0` for a word.
     fn view(
         root: RegId,
