@@ -90,53 +90,6 @@ macro_rules! cpu_tests {
                 ) -> bool {
                     false
                 }
-                fn has_sse_unaligned_mem(&self) -> bool {
-                    false
-                }
-                fn should_avoid_immediate_inst_forms_for_size(
-                    &self,
-                    _: &TestDag,
-                    _: u32,
-                ) -> bool {
-                    false
-                }
-                fn is_unneeded_shift_mask(
-                    &self,
-                    _: &TestDag,
-                    _: u32,
-                    _: u32,
-                ) -> bool {
-                    false
-                }
-                fn is_sext_absolute_symbol_ref(
-                    &self,
-                    _: &TestDag,
-                    _: u32,
-                    _: u32,
-                ) -> bool {
-                    false
-                }
-                fn has_no_carry_flag_uses(
-                    &self,
-                    _: &TestDag,
-                    _: SDValue,
-                ) -> bool {
-                    false
-                }
-                fn is_def32(
-                    &self,
-                    _: &TestDag,
-                    _: u32,
-                ) -> bool {
-                    false
-                }
-                fn check_tc_ret_enough_regs(
-                    &self,
-                    _: &TestDag,
-                    _: u32,
-                ) -> bool {
-                    true
-                }
                 fn may_load_store(
                     &self,
                     opcode: u16,
@@ -166,6 +119,24 @@ macro_rules! cpu_tests {
                 assert_eq!(select(&mut dag, add), Outcome::Selected);
 
                 assert_eq!(machine_name(dag.nodes[add as usize].machine.expect("not selected")), "ADD8");
+            }
+
+            /// The type legalizer splits an `i32` add into `UADDO` on the low words and `UADDO_CARRY`
+            /// on the high ones; the carry is an `i1` in `C`. They select `ADDO16` and `ADDOC16`.
+            #[test]
+            fn word_add_with_carry_out_and_in_select_addo16_and_addoc16() {
+                let mut dag = TestDag::new();
+                let a = dag.input(1, mvt::i16);
+                let b = dag.input(2, mvt::i16);
+                let carry = dag.input(3, mvt::i1);
+                let lo = dag.node(isd::UADDO, &[mvt::i16, mvt::i1], &[a, b]);
+                let hi = dag.node(isd::UADDO_CARRY, &[mvt::i16, mvt::i1], &[a, b, carry]);
+
+                assert_eq!(select(&mut dag, lo), Outcome::Selected);
+                assert_eq!(select(&mut dag, hi), Outcome::Selected);
+
+                let name = |node: u32| machine_name(dag.nodes[node as usize].machine.expect("not selected"));
+                assert_eq!((name(lo), name(hi)), ("ADDO16", "ADDOC16"));
             }
 
             /// A node id no LLVM header defines (`MOSISD::RET_GLUE`, from `own_ids.txt`) reaches

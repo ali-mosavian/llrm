@@ -2,10 +2,12 @@
 # The cpu, atom, dynamic, types and node_predicate tables are features.toml's (llrm-dagisel-gen).
 [target]
 name = "mos"
+llvm_build = "llvm-build"
 ns = "MOS::"
 isd = "MOSISD::"
 llvm_dir = ""
 td = "mos6502.td"
+out = "src/dagisel/generated"
 cpus = ["mos6502", "w65c02"]
 own_ids = "own_ids.txt"
 ids_includes = [

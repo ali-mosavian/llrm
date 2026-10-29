@@ -5,3 +5,4 @@
 #[allow(unused_variables)]
 pub mod generated;
 pub mod predicates;
+pub mod lowering;
