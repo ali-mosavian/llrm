@@ -11,7 +11,6 @@
 //! here; `select::function_text` falls back to the cell path. Exit: every
 //! opcode built.
 
-use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
@@ -21,7 +20,6 @@ use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, remove_identity_copies};
 
 use crate::dagisel::generated::ids::opcode as op;
-use crate::dagisel::hooks::Cpu;
 use crate::emit::{MInst, Operand as Machine, address, spill};
 use crate::reg;
 use crate::select::Item;
@@ -57,12 +55,6 @@ fn cells() -> impl Iterator<Item = RegId> {
 /// The pairs a pointer may live in: `rs1`..`rs3` over `rc2`..`rc7`, then `rs4`..`rs7`.
 fn pairs() -> impl Iterator<Item = RegId> {
     [reg::RS1, reg::RS2, reg::RS3, reg::RS4, reg::RS5, reg::RS6, reg::RS7].into_iter()
-}
-
-thread_local! {
-    /// Whether the allocator may take a callee-saved cell: [`emit`] runs the allocation both ways and
-    /// keeps the cheaper (the `Target` has no state to carry it).
-    static SAVES_ALLOWED: Cell<bool> = const { Cell::new(true) };
 }
 
 /// A callee-saved zero-page byte or pair (`rc8`..`rc15`, `rs4`..`rs7`): a function that uses one
@@ -117,15 +109,14 @@ impl<const STACK: bool> Target for Mos<STACK> {
         if class.0 & Class::Y != 0 {
             out.push(reg::Y);
         }
-        let saves = SAVES_ALLOWED.with(Cell::get);
         if class.0 & Class::M != 0 {
-            out.extend(cells().filter(|r| saves || !preserved(*r)));
+            out.extend(cells());
         }
         if class.0 & Class::A != 0 {
             out.push(reg::A);
         }
         if class.0 & Class::P != 0 {
-            out.extend(pairs().filter(|r| saves || !preserved(*r)));
+            out.extend(pairs());
         }
         out
     }
@@ -157,6 +148,17 @@ impl<const STACK: bool> Target for Mos<STACK> {
         one == other
             || (is_pair(one) && (lane(one, 0) == other || lane(one, 1) == other))
             || (is_pair(other) && (lane(other, 0) == one || lane(other, 1) == one))
+    }
+
+    // saving and restoring a callee-saved cell is five bytes each way; a spilled value costs about
+    // three bytes a mention (the reload) over a direct use, and a mention in a loop weighs ten
+    fn worth_taking(
+        root: RegId,
+        first_use: bool,
+        weight: u64,
+    ) -> bool {
+        let bytes = if is_pair(root) { 20 } else { 10 };
+        !preserved(root) || !first_use || weight * 2 >= bytes
     }
 
     fn spill_store(
@@ -1661,36 +1663,17 @@ fn move_byte(
 /// used, or an error from the allocator. `cmos` is the 65C02 subtarget: a zero
 /// loaded into a cell is `stz`.
 ///
-/// A function that takes a callee-saved cell is also allocated without one, and the one that is
-/// smaller by the timing table (bytes first, then cycles) is kept: saving a cell costs bytes that a
-/// small function does not win back.
+/// A callee-saved cell costs a save and a restore, so [`Mos::worth_taking`] gives one only to a
+/// register that gains that back; the rest are spilled.
 pub fn emit(
     function: MFunction<Class>,
     labels: &[Vec<String>],
     stack: bool,
     cmos: bool,
 ) -> Result<(String, Vec<(String, usize)>), String> {
-    let run = |function: MFunction<Class>| {
-        if stack { emit_with::<true>(function, labels, cmos) } else { emit_with::<false>(function, labels, cmos) }
-    };
-    let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
-    let price = |code: &str, slots: &[(String, usize)]| {
-        crate::timing::estimate(cpu, code).map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
-    };
-    SAVES_ALLOWED.with(|allowed| allowed.set(true));
-    let (code, slots, saved) = run(function.clone())?;
-    if !saved {
-        return Ok((code, slots));
-    }
-    SAVES_ALLOWED.with(|allowed| allowed.set(false));
-    let without = run(function);
-    SAVES_ALLOWED.with(|allowed| allowed.set(true));
-    let Ok((plain, plain_slots, _)) = without else { return Ok((code, slots)) };
-    // RAM counts as bytes: a slot is a byte of the program's footprint
-    match (price(&code, &slots), price(&plain, &plain_slots)) {
-        (Ok(with), Ok(without)) if without < with => Ok((plain, plain_slots)),
-        _ => Ok((code, slots)),
-    }
+    let (code, slots, _) =
+        if stack { emit_with::<true>(function, labels, cmos) } else { emit_with::<false>(function, labels, cmos) }?;
+    Ok((code, slots))
 }
 
 /// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
