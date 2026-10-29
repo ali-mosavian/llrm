@@ -315,6 +315,9 @@ pub fn finish(
 /// `ExpandMOVI` for a long: a clear, a `moveq` where the register is a data
 /// one and the value fits, `moveq` and `not.b` for 128 to 255, `movea.w` for
 /// an address register and a value under 64 KiB, else a `move.l`.
+/// DEVIATE: in a data register `moveq` and `not.w` for 0xFF80 to 0xFFFF and
+/// `moveq` and `swap` for a `moveq` value shifted up 16, 4 bytes and 8 clocks
+/// where `move.l #imm` is 6 and 12.
 fn expand_movi(
     dst: RegId,
     value: i64,
@@ -332,6 +335,11 @@ fn expand_movi(
     } else if !address && (0..=255).contains(&value) {
         let low = REGISTER_INFO.view(REGISTER_INFO.root(dst), 8).ok_or("no byte view")?;
         vec![inst("MOVQ", vec![R(dst), Imm(!value & 0xFF)]), inst("NOT8d", vec![R(low), R(low)])]
+    } else if !address && (0xFF80..=0xFFFF).contains(&value) {
+        let word = REGISTER_INFO.view(REGISTER_INFO.root(dst), 16).ok_or("no word view")?;
+        vec![inst("MOVQ", vec![R(dst), Imm(!value & 0xFFFF)]), inst("NOT16d", vec![R(word), R(word)])]
+    } else if !address && value % 65536 == 0 && (1..=127).contains(&(value / 65536)) {
+        vec![inst("MOVQ", vec![R(dst), Imm(value / 65536)]), inst("SWAP", vec![R(dst), R(dst)])]
     } else if address && (0..=65535).contains(&value) {
         let word = REGISTER_INFO.view(REGISTER_INFO.root(dst), 16).ok_or("no word view")?;
         vec![inst("MOV16ai", vec![R(word), Imm(value)])]
