@@ -50,6 +50,8 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::SetCC => super::lowering::lower_setcc(dag, node),
             ISD::Select => super::lowering::lower_select(dag, node),
             ISD::SelectCC => super::lowering::lower_select_cc_node(dag, node),
+            ISD::BrCond => super::lowering::lower_brcond(dag, node),
+            ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
             _ => None,
         };
         if lowered.is_some() {
