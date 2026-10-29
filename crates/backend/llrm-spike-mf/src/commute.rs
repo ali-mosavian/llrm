@@ -25,7 +25,7 @@ use crate::regalloc::{Target, successors};
 /// `MaxDataFlowEdge`.
 const MAX_DATA_FLOW_EDGE: usize = 10;
 
-struct Facts {
+pub(crate) struct Facts {
     /// Registers live out of each block.
     live_out: Vec<Vec<bool>>,
     /// Every definition of a register: `(block, instruction)`.
@@ -45,7 +45,7 @@ fn defines(inst: &Inst) -> impl Iterator<Item = u32> + '_ {
 }
 
 impl Facts {
-    fn of<C>(function: &MFunction<C>) -> Facts {
+    pub(crate) fn of<C>(function: &MFunction<C>) -> Facts {
         let count = function.classes.len();
         let blocks = function.blocks.len();
         let succs = successors(function);
@@ -87,7 +87,7 @@ impl Facts {
 
     /// `isPlainlyKilled`: nothing reads `reg` after instruction `at` of block
     /// `b`, and it does not leave the block.
-    fn plainly_killed<C>(
+    pub(crate) fn plainly_killed<C>(
         &self,
         function: &MFunction<C>,
         b: usize,
