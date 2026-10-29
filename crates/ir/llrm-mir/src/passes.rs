@@ -1473,7 +1473,19 @@ fn check_captures() -> bool {
 
 fn check_replay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_REPLAY"))
+    let on = *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_REPLAY"));
+    if on {
+        REPLAY_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    on
+}
+
+static REPLAY_CHECKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// How many times a `LLRM_CHECK_REPLAY` site asked and found it on: reported by
+/// `LLRM_DEBUG=checks` like `stale_checks_run`, which the premise step reads.
+pub fn replay_checks_run() -> u32 {
+    REPLAY_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Whether `changes` only keep every live value's meaning, as a result that

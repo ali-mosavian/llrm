@@ -19,6 +19,9 @@ fn main() {
         std::process::exit(2);
     }
     let code = llrm_codegen::support::debug::run_main(|| llrm_nib::cli::main(&argv));
-    llrm_codegen::support::debug::report_checks(&[("STALE", llrm_mir::passes::stale_checks_run())]);
+    llrm_codegen::support::debug::report_checks(&[
+        ("STALE", llrm_mir::passes::stale_checks_run()),
+        ("REPLAY", llrm_mir::passes::replay_checks_run()),
+    ]);
     std::process::exit(code);
 }
