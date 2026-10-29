@@ -1,6 +1,6 @@
 # The clang trees the llrm-cc tests need, built once per sha and cached (toolchain/clangbuild.sh): `pin` (LLRM_PIN_CLANG) and `m16`
-# (LLRM_CLANG_M16). One job per tree: a tree is ~5.8 CPU-hours, about 3 h on 4 hosted vCPUs (an ESTIMATE, from the m16 tree's
-# .ninja_log; not yet measured on a runner), so both in one job would meet the 6 h limit. The setup action restores them; a missing one is red.
+# (LLRM_CLANG_M16). One job per tree: cold, a tree is 3127 ninja steps, 74-76 min on a hosted runner (run 40785285056, no ccache hit), so both in one job
+# would take 2.5 h. The setup action restores them; a missing one is red.
 name: toolchain
 on:
   workflow_dispatch:
