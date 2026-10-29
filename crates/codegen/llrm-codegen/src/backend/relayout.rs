@@ -317,6 +317,19 @@ fn replayed(
     again.extents = frame.extents.iter().map(|(start, size)| (start - hole, *size)).collect();
     let mut homes: IndexMap<i64, i64> = IndexMap::default();
     for (key, home) in &frame.slots {
+        // A rounding temporary is laid with the allocas, below them: it moves
+        // by the hole as they do, and is no filler of it.
+        if matches!(
+            key,
+            crate::backend::frame::SlotKey::Named(name, _) if name == "temporary"
+        ) {
+            let moved = home - hole;
+            again.slots.insert(key.clone(), moved);
+            again.capacities.insert(moved, *frame.capacities.get(home)?);
+            again.scratch.insert(moved);
+            homes.insert(*home, moved);
+            continue;
+        }
         match homes.get(home) {
             Some(found) => {
                 again.slots.insert(key.clone(), *found);

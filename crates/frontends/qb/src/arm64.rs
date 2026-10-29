@@ -51,6 +51,9 @@ fn signext_i16_arguments(line: &str) -> String {
     let arguments: Vec<String> = line[open + 1..close]
         .split(", ")
         .map(|argument| match argument.strip_prefix("i16") {
+            // already extended: the HIR marks the narrow argument of a call at
+            // a 32-bit word
+            Some(rest) if rest.trim_start().starts_with("signext") => argument.to_owned(),
             Some(rest) if rest.is_empty() || rest.starts_with(' ') => format!("i16 signext{rest}"),
             _ => argument.to_owned(),
         })
@@ -389,7 +392,20 @@ fn aligned(line: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::framed;
+    use super::{framed, signext_i16_arguments};
+
+    /// The call already carried `signext` (the HIR extends a 16-bit argument at
+    /// a 32-bit word), and Darwin's pass added a second: `i16 signext signext
+    /// -1` (qb_arm64 darwin_callers_extend_narrow_arguments_to_the_runtime).
+    #[test]
+    fn an_argument_already_extended_is_not_extended_twice() {
+        let line = "  tail call void @B_PEI2(i16 signext -1)";
+        assert_eq!(signext_i16_arguments(line), line);
+        assert_eq!(
+            signext_i16_arguments("  tail call void @B_PEI2(i16 -1, i16 signext 2)"),
+            "  tail call void @B_PEI2(i16 signext -1, i16 signext 2)"
+        );
+    }
 
     /// The optimizer drops block names, so the pad is `0:` and not `landing:`;
     /// the jump back branched to `%landing`, which no block defined

@@ -249,10 +249,10 @@ pub struct SelectionDAG {
 
     /// The (low, high) halves type legalization expanded each integer value
     /// into (`ExpandedIntegers`): where a debug record's value went.
-    pub expanded_integers: std::collections::HashMap<SDValue, (SDValue, SDValue)>,
+    pub expanded_integers: llrm_support::hash::HashMap<SDValue, (SDValue, SDValue)>,
     /// Each value `replace_all_uses_with` replaced, by what replaced it: where
     /// a debug record's value went (`transferDbgValues`).
-    forwarded: std::collections::HashMap<SDValue, SDValue>,
+    forwarded: llrm_support::hash::HashMap<SDValue, SDValue>,
     /// `CombineTo` calls a target hook made: the combiner replaces each and
     /// looks at the users again.
     replacements: Vec<(SDValue, SDValue)>,

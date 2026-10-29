@@ -1,12 +1,11 @@
 //! The object: the functions' machine code in one text section, the globals in
 //! data sections, the symbols and the relocations between them.
 
-use std::collections::HashMap;
-
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{GlobalKind, Linkage, Module};
 use llrm_object::assembler::{Fragment, layout as place};
 use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Symbol, Target as RelocTarget};
+use llrm_support::hash::HashMap;
 
 use crate::data::{self, DataReloc};
 use crate::frame::Lowered;
@@ -127,7 +126,7 @@ pub fn object(
     functions: &[Function],
 ) -> Result<Object, String> {
     let placed = data::globals(module, layout, platform)?;
-    let mut symbols = Symbols { list: Vec::new(), index: HashMap::new() };
+    let mut symbols = Symbols { list: Vec::new(), index: HashMap::default() };
     // Section indices: text, then each data role that has contents.
     let text_index = 0;
     let mut text_offsets = Vec::new();
