@@ -403,12 +403,15 @@ pub struct GraphColoring<T> {
     /// Join copies that run on every trip of a loop before the ones in a
     /// branch of it (see [`GraphColoring::colour`]).
     pub by_frequency: bool,
+    /// Registers that cannot be spilled again (made by spill code), so a colour that costs more than
+    /// the register is worth is better than none.
+    unspillable: HashSet<u32>,
     marker: PhantomData<T>,
 }
 
 impl<T> Default for GraphColoring<T> {
     fn default() -> Self {
-        GraphColoring { by_frequency: false, marker: PhantomData }
+        GraphColoring { by_frequency: false, unspillable: HashSet::new(), marker: PhantomData }
     }
 }
 
@@ -431,7 +434,16 @@ impl<T: Target> GraphColoring<T> {
     /// A colourer that joins in the order [`GraphColoring::colour`] describes
     /// where `by_frequency`.
     pub fn by_frequency(by_frequency: bool) -> Self {
-        GraphColoring { by_frequency, marker: PhantomData }
+        GraphColoring { by_frequency, unspillable: HashSet::new(), marker: PhantomData }
+    }
+
+    /// The same, where the registers in `unspillable` take any colour that fits.
+    pub fn with_unspillable(
+        mut self,
+        unspillable: &HashSet<u32>,
+    ) -> Self {
+        self.unspillable = unspillable.clone();
+        self
     }
 
     /// The copies in the order the coalescer tries them. `RegisterCoalescer`
@@ -643,7 +655,7 @@ impl<T: Target> GraphColoring<T> {
                 let candidates = T::candidates(classes[node]);
                 // a register the spill code made (one short run) cannot be spilled again
                 let chosen = candidates.iter().copied().find(|root| {
-                    fits(root) && (crate::spill::already_minimal(function, v as u32) || T::worth_taking(*root, first_use(root), weight[node]))
+                    fits(root) && (self.unspillable.contains(&(v as u32)) || crate::spill::already_minimal(function, v as u32) || T::worth_taking(*root, first_use(root), weight[node]))
                 });
                 if chosen.is_none() && candidates.iter().any(|root| fits(root)) {
                     let crowd = (0..count as u32).filter(|u| find(&mut parent, *u as usize) == node).collect();

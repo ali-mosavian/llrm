@@ -528,7 +528,7 @@ pub fn allocate_spilling_ordered<T: Target>(
     let mut slots = Vec::new();
     let mut temporaries = HashSet::new();
     loop {
-        let failures = match GraphColoring::<T>::by_frequency(by_frequency).colour(function) {
+        let failures = match GraphColoring::<T>::by_frequency(by_frequency).with_unspillable(&temporaries).colour(function) {
             Ok(assignment) => {
                 share_slots(function, &mut slots);
                 return Ok((assignment, slots));
