@@ -96,6 +96,8 @@ pub fn target_lowering() -> TargetLowering {
     set(&[SignExtend], Action::Custom);
     // a sign extension in a register is a pair of shifts (a negated bit for a bit)
     set(&[SignExtendInReg], Action::Expand);
+    // its action is read at the type it extends from, a bit among them
+    tl.set_operation_action(SignExtendInReg, MVT::I1, Action::Expand);
     // A long multiply, divide or shift by a variable is one node of two words
     // (`lower_long`).
     for op in [Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra, Rotl, Rotr] {
