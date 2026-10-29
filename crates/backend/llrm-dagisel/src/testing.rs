@@ -1,7 +1,7 @@
 //! A small DAG for the tests and for pricing: nodes in a vector, uses found by
 //! scanning.
 
-use crate::dag::{Dag, FpClass, Hooks, LoadExt, MemRef, SDValue};
+use crate::dag::{Dag, FpClass, Hooks, LoadExt, MemRef, SDValue, X86Predicates};
 use crate::generated::ids::{isd, mvt};
 use crate::matcher::{Opcode, Vt};
 use crate::x86_addr::{AddrDag, Symbol, Wrapped};
@@ -638,6 +638,15 @@ impl Hooks<TestDag> for TestHooks {
     ) -> bool {
         false
     }
+    fn may_load_store(
+        &self,
+        _: u16,
+    ) -> (bool, bool) {
+        (true, true)
+    }
+}
+
+impl X86Predicates<TestDag> for TestHooks {
     fn has_sse_unaligned_mem(&self) -> bool {
         false
     }
@@ -684,12 +693,6 @@ impl Hooks<TestDag> for TestHooks {
         _: u32,
     ) -> bool {
         true
-    }
-    fn may_load_store(
-        &self,
-        _: u16,
-    ) -> (bool, bool) {
-        (true, true)
     }
 }
 

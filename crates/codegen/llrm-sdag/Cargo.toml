@@ -1,0 +1,9 @@
+[package]
+name = "llrm-sdag"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The SelectionDAG's type and action tables, one per target, below every pass that reads them"
+
+[dependencies]
+llrm-support = { workspace = true }

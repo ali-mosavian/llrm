@@ -36,6 +36,8 @@ pub mod x86_select;
 pub mod x86_shift;
 pub mod x86_test;
 
+#[cfg(test)]
+mod aarch64_tests;
 /// A small DAG and hooks for the tests and for `examples/price.rs`.
 pub mod testing;
 #[cfg(test)]

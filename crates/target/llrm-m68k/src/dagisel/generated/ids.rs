@@ -13,6 +13,7 @@ pub mod isd {
     pub const CALL: u16 = 480;
     pub const CMOV: u16 = 481;
     pub const CMP: u16 = 482;
+    pub const GLOBAL_BASE_REG: u16 = 483;
     pub const OR: u16 = 484;
     pub const RET: u16 = 485;
     pub const SEG_ALLOCA: u16 = 486;
@@ -664,4 +665,33 @@ pub mod opcode {
     pub const XOR32di: u16 = 1354;
     pub const XOR8dd: u16 = 1355;
     pub const XOR8di: u16 = 1356;
+}
+
+pub mod reg {
+    pub const AR16RegClassID: u16 = 3;
+    pub const AR32RegClassID: u16 = 12;
+    pub const AR32_TCRegClassID: u16 = 18;
+    pub const CCR: u16 = 1;
+    pub const CCRCRegClassID: u16 = 1;
+    pub const DR16RegClassID: u16 = 4;
+    pub const DR32RegClassID: u16 = 13;
+    pub const DR8RegClassID: u16 = 0;
+    pub const FPC: u16 = 2;
+    pub const FPCSCRegClassID: u16 = 20;
+    pub const FPDR32RegClassID: u16 = 14;
+    pub const FPDR64RegClassID: u16 = 24;
+    pub const FPDR80RegClassID: u16 = 25;
+    pub const FPICRegClassID: u16 = 21;
+    pub const FPS: u16 = 4;
+    pub const MxSubRegIndex16Lo: u16 = 2;
+    pub const MxSubRegIndex8Lo: u16 = 1;
+    pub const PC: u16 = 5;
+    pub const SP: u16 = 6;
+    pub const SRCRegClassID: u16 = 8;
+    pub const XR16RegClassID: u16 = 2;
+    pub const XR32RegClassID: u16 = 11;
+}
+
+pub mod generic {
+    pub const ATOMIC_CMP_SWAP: u16 = 358;
 }
