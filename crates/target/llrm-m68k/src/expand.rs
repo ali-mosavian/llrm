@@ -179,6 +179,8 @@ pub fn finish(
     let opening = if pushes { layout.push_prologue() } else { layout.prologue() };
     opening.iter().for_each(|op| frame_op(op, &mut out));
     let mut lines = Vec::new();
+    // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack pointer is that much further
+    let mut pushed = 0i64;
     let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
     let mut shown = 0usize;
     for inst in insts.iter().copied() {
@@ -203,7 +205,7 @@ pub fn finish(
                                 frame_indices.iter().position(|one| one == index).ok_or("an unknown frame index")?;
                             let (base, disp) = layout.address(at);
                             it.next();
-                            converted.push(mc::Operand::Imm(value + disp));
+                            converted.push(mc::Operand::Imm(value + disp + if base == Base::Sp { pushed } else { 0 }));
                             converted.push(mc::Operand::Reg(if base == Base::Sp { reg::SP } else { reg::A6 }));
                             continue;
                         }
@@ -249,12 +251,14 @@ pub fn finish(
                     _ => ("MOV16ec", mc::Operand::Reg(reg::CCR)),
                 };
                 out.push(mc::Inst { opcode, operands: vec![mc::Operand::Reg(reg::SP), from] });
+                pushed += 2;
             }
             Kind::Op("CCR_POP") => {
                 out.push(mc::Inst {
                     opcode: "MOV16co",
                     operands: vec![mc::Operand::Reg(reg::CCR), mc::Operand::Reg(reg::SP)],
                 });
+                pushed -= 2;
             }
             Kind::Op("CCR_RESTORE") => {
                 let [_, mc::Operand::Reg(src)] = operands[..] else { return Err("CCR_RESTORE operands".to_owned()) };
