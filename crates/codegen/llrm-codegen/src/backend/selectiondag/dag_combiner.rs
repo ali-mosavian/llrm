@@ -454,6 +454,35 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_setcc(vt, x, value, cond));
             }
         }
+        // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >= c` is
+        // `x > c - 1` and `x <= c` is `x < c + 1`, with the always-true extremes folded.
+        if self.level < CombineLevel::AfterLegalizeVectorOps {
+            let bits = op_type.size_in_bits();
+            let (unsigned, ge) = match cond {
+                CondCode::SetGe => (false, true),
+                CondCode::SetUGe => (true, true),
+                CondCode::SetLe => (false, false),
+                CondCode::SetULe => (true, false),
+                _ => (false, matches!(cond, CondCode::SetEq)),
+            };
+            if matches!(cond, CondCode::SetGe | CondCode::SetUGe | CondCode::SetLe | CondCode::SetULe) {
+                let mask = super::fold::mask(bits);
+                let (min, max) = if unsigned { (0, mask) } else { (1u128 << (bits - 1), mask >> 1) };
+                let edge = if ge { min } else { max };
+                if c1 & mask == edge {
+                    return Some(self.dag.get_bool_constant(true, vt));
+                }
+                let moved = if ge { c1.wrapping_sub(1) } else { c1.wrapping_add(1) } & mask;
+                let new_cond = match (ge, unsigned) {
+                    (true, false) => CondCode::SetGt,
+                    (true, true) => CondCode::SetUGt,
+                    (false, false) => CondCode::SetLt,
+                    (false, true) => CondCode::SetULt,
+                };
+                let rhs = self.dag.get_constant(moved, op_type);
+                return Some(self.dag.get_setcc(vt, n0, rhs, new_cond));
+            }
+        }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
             || self.level != CombineLevel::BeforeLegalizeTypes
             || !self.dag.has_one_use(n0.node)

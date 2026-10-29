@@ -24,7 +24,7 @@ use llrm_lir::registers::RegId;
 use super::function::Selected;
 use super::globals::Globals;
 use crate::REGISTER_INFO;
-use crate::mc::inst::{Addr, AddSub, Extend, Gpr, Inst, Memory, MemOperand, Shift, Target, Width};
+use crate::mc::inst::{Addr, AddSub, Cond, Extend, Gpr, Inst, Memory, MemOperand, Select, Shift, Target, Width};
 use crate::mc::visit::Reg;
 use crate::mfunc::{MBlock, MFunc, Op, block_label};
 
@@ -36,6 +36,9 @@ fn opcode_name(code: u32) -> Option<&'static str> {
 /// The machine register number of an arm64 register id: `x5` and `w5` are 5.
 fn gpr_of(id: RegId) -> Result<Gpr, String> {
     let name = REGISTER_INFO.name(id).ok_or("a register the arm64 file does not name")?;
+    if matches!(name, "wzr" | "xzr") {
+        return Ok(Gpr::R31);
+    }
     let number = name
         .strip_prefix(['x', 'w'])
         .and_then(|n| n.parse::<u32>().ok())
@@ -53,6 +56,8 @@ enum Operand {
     Slot(u32),
     /// A global by id, and the offset into it.
     Symbol(u32, i64),
+    /// The flags a compare set: the instruction before this one wrote them.
+    Flags,
 }
 
 /// `ADDWrr`, `SUBSXri` and the rest of the add/sub family: (subtract, set
@@ -132,6 +137,31 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
     Some(MemoryForm { width, bytes, sign, store, form })
 }
 
+/// `CSELWr`, `CSINCXr` and the rest: the select and its width.
+fn cond_select(name: &str) -> Option<(Select, Width)> {
+    let (op, rest) = if let Some(rest) = name.strip_prefix("CSEL") {
+        (Select::Csel, rest)
+    } else if let Some(rest) = name.strip_prefix("CSINC") {
+        (Select::Csinc, rest)
+    } else if let Some(rest) = name.strip_prefix("CSINV") {
+        (Select::Csinv, rest)
+    } else {
+        (Select::Csneg, name.strip_prefix("CSNEG")?)
+    };
+    match rest {
+        "Wr" => Some((op, Width::W)),
+        "Xr" => Some((op, Width::X)),
+        _ => None,
+    }
+}
+
+/// The `AArch64CC` number as the condition field.
+fn cond_of(code: u64) -> Result<Cond, String> {
+    use Cond::*;
+    const ALL: [Cond; 16] = [Eq, Ne, Hs, Lo, Mi, Pl, Vs, Vc, Hi, Ls, Ge, Lt, Gt, Le, Al, Nv];
+    ALL.get(code as usize).copied().ok_or_else(|| format!("condition code {code}"))
+}
+
 /// The instruction of machine opcode `name` writing `rd`.
 fn build(
     name: &str,
@@ -209,10 +239,15 @@ impl Emitter<'_> {
         value: SDValue,
     ) -> Result<Operand, String> {
         let node = self.dag.node(value);
+        if value.res == 1 && matches!(node.opcode, ISD::Machine(_)) {
+            return Ok(Operand::Flags);
+        }
         match node.data {
             NodeData::Const { bits, .. } if matches!(node.opcode, ISD::TargetConstant | ISD::Constant) => {
                 Ok(Operand::Imm(bits as u64))
             }
+            // The zero register as an operand of `CSINC` and the like.
+            NodeData::PhysReg(id) if gpr_of(id)? == Gpr::R31 => Ok(Operand::Reg(Gpr::R31)),
             NodeData::Global { symbol, offset } if node.opcode == ISD::TargetGlobalAddress => {
                 Ok(Operand::Symbol(symbol, offset))
             }
@@ -223,6 +258,13 @@ impl Emitter<'_> {
                 .map(|&g| Operand::Reg(g))
                 .ok_or_else(|| format!("operand {:?} has no register", node.opcode)),
         }
+    }
+
+    fn is_flags(
+        &self,
+        register: SDValue,
+    ) -> bool {
+        matches!(self.dag.node(register).data, NodeData::PhysReg(id) if id == llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
     }
 
     /// The relocation target of global `id` at `addend`, and whether it is a GOT slot.
@@ -286,7 +328,9 @@ impl Emitter<'_> {
             ISD::EntryToken | ISD::TokenFactor | ISD::Register => Ok(()),
             ISD::CopyFromReg => {
                 let (reg, physical) = self.register_operand(node.ops[1])?;
-                let value = if physical {
+                let value = if physical && reg == Gpr::R31 {
+                    reg
+                } else if physical {
                     let dst = self.mf.gpr();
                     self.ops.push(Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(reg) });
                     dst
@@ -296,6 +340,8 @@ impl Emitter<'_> {
                 self.values.insert((id, 0), value);
                 Ok(())
             }
+            // The flags are not moved: the compare before the user set them.
+            ISD::CopyToReg if self.is_flags(node.ops[1]) => Ok(()),
             ISD::CopyToReg => {
                 let (dst, _) = self.register_operand(node.ops[1])?;
                 let Operand::Reg(src) = self.operand(node.ops[2])? else { return Err("a copy of a constant".into()) };
@@ -328,7 +374,19 @@ impl Emitter<'_> {
                 if let Some(access) = memory_form(name) {
                     return self.memory(id, name, &access, &operands);
                 }
-                let rd = self.mf.gpr();
+                let dead = self.dag.users(SDValue { node: id, res: 0 }).next().is_none();
+                let sets_flags = name.starts_with("ADDS") || name.starts_with("SUBS");
+                // A compare writes the zero register: `cmp` is `subs xzr`.
+                let rd = if sets_flags && dead { Gpr::R31 } else { self.mf.gpr() };
+                if let Some((op, width)) = cond_select(name) {
+                    // The flags arrive as a glued copy to NZCV, or as a value.
+                    let [Operand::Reg(rn), Operand::Reg(rm), Operand::Imm(cond), ..] = operands.as_slice() else {
+                        return Err(format!("{name}: operands are not those of a conditional select"));
+                    };
+                    self.ops.push(Op::I(Inst::CondSelect { op, width, rd, rn: *rn, rm: *rm, cond: cond_of(*cond)? }));
+                    self.values.insert((id, 0), rd);
+                    return Ok(());
+                }
                 if let ("MOVi32imm" | "MOVi64imm", [Operand::Imm(value)]) = (name, operands.as_slice()) {
                     let bits = if name == "MOVi32imm" { 32 } else { 64 };
                     self.ops.push(Op::Imm { dst: rd, bits, value: *value });

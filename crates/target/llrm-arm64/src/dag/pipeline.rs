@@ -45,8 +45,15 @@ impl LegalizeHooks for Aarch64Lowering {
         dag: &mut SelectionDAG,
         node: SDValue,
     ) -> Option<SDValue> {
-        if let Some(lowered) = self.global_address(dag, node) {
-            return Some(lowered);
+        let lowered = match dag.opcode(node) {
+            ISD::GlobalAddress => self.global_address(dag, node),
+            ISD::SetCC => super::lowering::lower_setcc(dag, node),
+            ISD::Select => super::lowering::lower_select(dag, node),
+            ISD::SelectCC => super::lowering::lower_select_cc_node(dag, node),
+            _ => None,
+        };
+        if lowered.is_some() {
+            return lowered;
         }
         self.custom.get_or_insert_with(|| format!("custom lowering of {:?}", dag.node(node).opcode));
         None
