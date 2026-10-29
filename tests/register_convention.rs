@@ -52,8 +52,12 @@ fn the_first_four_arguments_arrive_in_eax_edx_ebx_ecx() {
     let text = listing(
         "@export(\"watcall32\")\nfn third(a: i32, b: u32, c: i32) -> i32:\n    return c\n@export(\"watcall32\")\nfn fourth(a: i32, b: i32, c: i32, d: i32) -> i32:\n    return d\n",
     );
-    assert_eq!(procedure(&text, "third_"), ["L0_0:", "mov eax, ebx", "ret"]);
-    assert_eq!(procedure(&text, "fourth_"), ["L1_0:", "mov eax, ecx", "ret"]);
+    // The label's number is the block's id, which the DAG selector starts at 1.
+    let body = |name: &str| -> Vec<String> {
+        procedure(&text, name).into_iter().filter(|line| !line.ends_with(':')).collect()
+    };
+    assert_eq!(body("third_"), ["mov eax, ebx", "ret"]);
+    assert_eq!(body("fourth_"), ["mov eax, ecx", "ret"]);
 }
 
 /// `wcc386` took the fifth and sixth from the stack, lowest first, and popped
