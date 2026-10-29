@@ -1598,6 +1598,29 @@ fn a_select_of_bits_as_a_condition_compiles_and_runs() {
     }
 }
 
+/// A bit that is a truncation from a word, or frozen, as a select's condition looped the scheduler
+/// forever like the bit selects above (differential seeds 4, 21).
+#[test]
+fn a_truncated_or_frozen_bit_as_a_condition_compiles_and_runs() {
+    let ir = "define i8 @tword(i16 %w) {
+  %b = trunc i16 %w to i1
+  %r = select i1 %b, i8 3, i8 4
+  ret i8 %r
+}
+define i8 @tfrozen(i8 %a) {
+  %b = trunc i8 %a to i1
+  %f = freeze i1 %b
+  %r = select i1 %f, i8 3, i8 4
+  ret i8 %r
+}";
+    for (name, args) in [("tword", [0x0100u16, 0]), ("tword", [0x0001, 0]), ("tfrozen", [2, 0]), ("tfrozen", [3, 0])] {
+        let text = compile_within_ten_seconds(ir, name);
+        let want = if args[0] & 1 == 1 { 3 } else { 4 };
+        let setup = set("rc2", args[0] & 0xFF) + &set("rc3", args[0] >> 8);
+        assert_eq!(common::run_with(&format!("alloc-trunc-{name}-{}", args[0]), &format!("{setup}  jsr {name}\n"), &text), want, "{name} {:#x}", args[0]);
+    }
+}
+
 /// Compile on a thread and fail after ten seconds: a scheduler or allocator loop with no progress
 /// bound shows as a failure here instead of a stuck run.
 fn compile_within_ten_seconds(
