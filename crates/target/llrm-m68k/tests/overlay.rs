@@ -1092,3 +1092,26 @@ fn a_constant_array_is_indexed_through_its_address() {
     let text = global_function("index");
     assert!(text.contains("lea\t(t,%pc), %a0") && text.contains("move.b\t(0,%a0,%d0), %d0"), "{text}");
 }
+
+const NARROW_GLOBALS: &str = "@buf = constant [16 x i8] zeroinitializer\n@w = constant [4 x i16] zeroinitializer\n\
+    define i16 @zb() {\n  %v = load i8, ptr getelementptr (i8, ptr @buf, i32 6)\n  %z = zext i8 %v to i16\n  ret i16 %z\n}\n\
+    define i32 @zw() {\n  %v = load i16, ptr getelementptr (i16, ptr @w, i32 1)\n  %z = zext i16 %v to i32\n  ret i32 %z\n}\n\
+    define i32 @zbi(i32 %i) {\n  %p = getelementptr i8, ptr @buf, i32 %i\n  %v = load i8, ptr %p\n  %z = zext i8 %v to i32\n  ret i32 %z\n}";
+
+fn narrow_global(name: &str) -> Result<String, String> {
+    let module =
+        llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{NARROW_GLOBALS}")).expect("parses");
+    text_with(&module, name, Cpu::M68000, Options::PINNED)
+}
+
+/// A byte or word of a global, zero-extended, was `MOVZXd16q8: addressing mode q is not translated`
+/// (the generated programs read `buf` and `tab` this way). The pin: `move.b (buf+6,%pc), %d0` after
+/// a clear, and through an index register `lea (buf,%pc), %a0; move.b (0,%a0,%d0), %d0`.
+#[test]
+fn a_narrow_global_is_zero_extended_from_its_pc_relative_address() {
+    let byte = narrow_global("zb").expect("compiles");
+    assert!(byte.contains("move.b\t(buf+6,%pc), %d0"), "{byte}");
+    let word = narrow_global("zw").expect("compiles");
+    assert!(word.contains("move.w\t(w+2,%pc), %d0"), "{word}");
+    assert!(narrow_global("zbi").expect("compiles").contains("move.b\t(0,%a0,%d0), %d0"));
+}

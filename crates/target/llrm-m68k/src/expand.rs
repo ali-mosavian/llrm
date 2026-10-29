@@ -414,8 +414,8 @@ fn inst(
 /// `ExpandMOVSZX_RR` and `ExpandMOVSZX_RM`: clear the destination and move
 /// into its low part, or move and then extend (`AddSExt`, `AddZExt`).
 ///
-/// DEVIATE: the `q` and `k` modes and 16-bit destinations are not translated.
-/// Reason: nothing selected them yet. Exit: when a kernel needs them.
+/// DEVIATE: 16-bit destinations are not translated. Reason: nothing selected them yet. Exit: when a
+/// kernel needs them.
 fn expand_extension(
     name: &str,
     operands: &[mc::Operand],
@@ -462,9 +462,13 @@ fn expand_extension(
         (8, 'j') => "MOV8dj",
         (8, 'p') => "MOV8dp",
         (8, 'f') => "MOV8df",
+        (8, 'q') => "MOV8dq",
+        (8, 'k') => "MOV8dk",
         (16, 'j') => "MOV16rj",
         (16, 'p') => "MOV16rp",
         (16, 'f') => "MOV16rf",
+        (16, 'q') => "MOV16rq",
+        (16, 'k') => "MOV16rk",
         _ => return Err(format!("{name}: addressing mode {mode} is not translated")),
     };
     let reads_dst = operands[1..].iter().any(|one| matches!(one, R(reg) if REGISTER_INFO.root(*reg) == root));
