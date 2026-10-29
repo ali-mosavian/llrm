@@ -155,7 +155,8 @@ def test_no_row_of_the_corpus_shifts_by_the_width_of_its_type_at_m16():
 
     pindiff = load("pindiff")
     if not (os.environ.get("LLRM_OW") and os.environ.get("LLRM_PIN_CLANG") and os.environ.get("LLRM_CLANG_M16")):
-        pytest.skip("needs LLRM_OW, LLRM_PIN_CLANG and LLRM_CLANG_M16")
+        # The gate sets all three; where it requires the pin's tools (LLRM_REQUIRE_PINTOOLS) a missing one is red, not a skipped check.
+        (pytest.fail if os.environ.get("LLRM_REQUIRE_PINTOOLS") else pytest.skip)("needs LLRM_OW, LLRM_PIN_CLANG and LLRM_CLANG_M16")
     import tempfile
 
     guard = load("irguard")
@@ -372,3 +373,10 @@ def test_an_m16_row_whose_pin_object_calls_an_i64_divide_is_marked_not_compared(
     row = {"name": "x", "ins": 5, "pin_ins": 5, "bytes": 9, "pin_bytes": 9, "free": 9, "pin_free": 9, "lib": [], "nolib": ["__udivdi3"]}
     line = pindiff.table([{**row, "ins": 50}], False)[1]
     assert "no pin comparison (no 16-bit libgcc)" in line and "INS>pin" not in line
+
+
+def test_the_m16_row_datalayout_is_the_machines_string_not_its_template():
+    """targets.toml states `{datalayout:x86-m16}`; pindiff wrote it into the IR as is, and llrm-llc refused all 70 m16 programs
+    (`{datalayout:x86` in the datalayout), so no m16 figure existed on 2026-10-29."""
+    pindiff = load("pindiff")
+    assert "{" not in pindiff.cc_entry("m16")["datalayout"]

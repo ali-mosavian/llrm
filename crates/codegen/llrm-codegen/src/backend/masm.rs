@@ -998,9 +998,10 @@ fn sp_reg() -> Loc {
 
 /// Whether a return of `body` is a sibling call (`jmp`).
 fn sibling_calls(body: &lir::LirBody) -> bool {
-    body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| {
-        one.what.as_ref().is_some_and(|what| what.op == Operation::Return && what.name.as_deref() == Some("jmp"))
-    })
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .any(|one| one.what.as_ref().is_some_and(|what| what.is_sibling_call()))
 }
 
 /// Whether a call in `body` leaves SP somewhere else (`alloca`). The registers
@@ -1897,12 +1898,12 @@ fn built(
                     // an indirect sibling call: the epilogue, then a jump
                     // through the register the callee's
                     // address is in
-                    if what.name.as_deref() == Some("jmp") && what.indirect {
+                    if what.is_sibling_call() && what.indirect {
                         out.push(Item::Semantics(Semantics { op: Operation::Jump, ..what.clone() }));
                         continue;
                     }
                     // a sibling call: the epilogue, then a jump to the callee
-                    if what.name.as_deref() == Some("jmp")
+                    if what.is_sibling_call()
                         && let Some(callee) = procedure.callees.get(&one.at)
                     {
                         out.push(Item::Callee(Callee { tail: true, ..callee.clone() }));
