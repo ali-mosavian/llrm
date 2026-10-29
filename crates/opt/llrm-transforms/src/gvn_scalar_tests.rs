@@ -764,3 +764,26 @@ b3:
 ",
     );
 }
+
+/// A switch of n cases is one block with n successors: the depth-first walk
+/// of scalar PRE listed them again for each one it visited, so 128 cases read
+/// 4x the targets of 64 and a 512-way switch made `gvn` x2.96 per doubling.
+#[test]
+fn test_a_switch_of_many_cases_is_listed_once_by_the_walk_of_the_blocks() {
+    let listed = |cases: usize| {
+        let arms: String = (0..cases).map(|case| format!("    i16 {case}, label %c{case}\n")).collect();
+        let blocks: String = (0..cases).map(|case| format!("c{case}:\n  ret i16 {case}\n")).collect();
+        let text = format!(
+            "define i16 @f(i16 %x) {{\nentry:\n  switch i16 %x, label %d [\n{arms}  ]\nd:\n  ret i16 -1\n{blocks}}}\n"
+        );
+        let mut module: Module = parsed(&text);
+        let layout = llrm_analysis::testing::layout(&module);
+        let outer = Outer::of(&module, None);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::SwitchSuccessorsListed);
+        run_impl(context, &layout, function, &outer);
+        llrm_mir::counts::get(llrm_mir::counts::Event::SwitchSuccessorsListed) - before
+    };
+    let (small, big) = (listed(64), listed(128));
+    assert!(big * 10 <= small * 25, "{small} targets listed for 64 cases, {big} for 128");
+}

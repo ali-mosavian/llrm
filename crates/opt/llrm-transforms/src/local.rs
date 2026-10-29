@@ -811,8 +811,7 @@ pub fn merge_block_into_predecessor(
     }
 
     // Can't merge if there are multiple distinct successors.
-    let successors = function.successors(pred_bb);
-    if !predecessor_with_two_successors && !(successors.len() == 1 && successors[0] == bb) {
+    if !predecessor_with_two_successors && function.sole_successor(pred_bb) != Some(bb) {
         return false;
     }
 
