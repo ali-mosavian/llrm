@@ -282,6 +282,14 @@ pub struct Symbol {
     pub group: Option<usize>,
 }
 
+impl Symbol {
+    /// A name the compiler gave what the source did not name (`G$n`, an unnamed
+    /// global): the pin's `.L` names, which an ELF symbol table leaves out.
+    pub fn is_private(&self) -> bool {
+        self.name.starts_with("G$")
+    }
+}
+
 /// An OMF group: segments addressed by one selector.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OmfGroup {

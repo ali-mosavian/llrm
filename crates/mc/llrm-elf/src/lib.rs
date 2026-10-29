@@ -198,7 +198,24 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     for index in 0..object.sections.len() {
         symbol(&mut symtab, 0, 0, 0, STB_LOCAL << 4 | STT_SECTION, index as u16 + 1);
     }
-    let first_global = 2 + object.sections.len();
+    // The locals come before the globals (`sh_info` is the first global), as
+    // `ELFObjectWriter` lists them; relocations name a local through its
+    // section's symbol.
+    let mut locals = 0;
+    for one in &object.symbols {
+        if let (Definition::Defined { section, offset }, Binding::Local) = (one.definition, one.binding) {
+            // A label inside a function has no size: it is private, as `.L`
+            // ones are.
+            if one.is_private() || (object.sections[section].role == Role::Text && one.size == 0) {
+                continue;
+            }
+            let kind = if object.sections[section].role == Role::Text { STT_FUNC } else { STT_OBJECT };
+            let name = strings.add(&one.name);
+            symbol(&mut symtab, name, offset as u64, one.size as u64, STB_LOCAL << 4 | kind, section as u16 + 1);
+            locals += 1;
+        }
+    }
+    let first_global = 2 + object.sections.len() + locals;
     // The ELF symbol of each object symbol that is global.
     let mut elf_symbol: Vec<Option<u32>> = vec![None; object.symbols.len()];
     let mut next = first_global as u32;
