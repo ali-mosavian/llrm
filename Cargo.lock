@@ -329,6 +329,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-cgen"
+version = "0.1.0"
+
+[[package]]
 name = "llrm-codegen"
 version = "0.1.0"
 dependencies = [
@@ -470,6 +474,7 @@ name = "llrm-m68k"
 version = "0.1.0"
 dependencies = [
  "llrm-analysis",
+ "llrm-cgen",
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-lir",
