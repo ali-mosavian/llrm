@@ -51,23 +51,18 @@ fn mentions(
 /// Keep `v` in `slot`: each instruction that reads it loads it first, each that
 /// writes it stores afterwards, through a new register of `v`'s class. A copy
 /// to or from `v` becomes the load or the store itself. Returns the new
-/// registers. `dropped` is an instruction of the entry block that only defines
-/// `v` and is not kept (see [`shared_slot`]).
+/// registers.
 fn spill<T: Target>(
     function: &mut MFunction<T::Class>,
     v: u32,
     slot: i32,
-    dropped: Option<usize>,
 ) -> Result<Vec<u32>, String> {
     let class = function.classes[v as usize];
     let refuse = || format!("the target cannot spill v{v} ({class:?})");
     let mut made = Vec::new();
     for at in 0..function.blocks.len() {
         let mut out = Vec::with_capacity(function.blocks[at].insts.len());
-        for (index, mut inst) in std::mem::take(&mut function.blocks[at].insts).into_iter().enumerate() {
-            if at == 0 && dropped == Some(index) {
-                continue;
-            }
+        for mut inst in std::mem::take(&mut function.blocks[at].insts) {
             let (reads, writes) = mentions(&inst, v);
             if !reads && !writes {
                 out.push(inst);
@@ -359,78 +354,160 @@ fn victim<T: Target>(
     cheapest(&near).or_else(|| cheapest(&failed.crowd))
 }
 
-/// The index in the entry block of the only instruction that defines `v`, when
-/// nothing branches back to the entry: after it `v` never changes.
-fn entry_definition<C>(
-    function: &MFunction<C>,
-    v: u32,
-) -> Option<usize> {
-    let entry = function.blocks.first()?;
-    let defines = |inst: &Inst| inst.operands.contains(&Operand::Def(Reg::Virt(v)));
-    let mut found = None;
-    for (at, block) in function.blocks.iter().enumerate() {
-        for (i, inst) in block.insts.iter().enumerate() {
-            if defines(inst) && (at != 0 || found.replace(i).is_some()) {
-                return None;
+/// Whether `inst` stores to (`true`) or loads from a spill slot in `slots`: a
+/// store reads its register first, a load defines it.
+fn slot_access<C>(
+    inst: &Inst,
+    slots: &[(i32, C)],
+) -> Option<(usize, bool)> {
+    let slot = inst.operands.iter().find_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None })?;
+    let at = slots.iter().position(|(s, _)| *s == slot)?;
+    match inst.operands.first()? {
+        Operand::Use(_) => Some((at, true)),
+        Operand::Def(_) => Some((at, false)),
+        _ => None,
+    }
+}
+
+/// `StackSlotColoring` with copy coalescing: slots that are never live
+/// together share one, and a copy from a slot to another that ends up the same
+/// slot moves nothing, so it goes. A copy is a load into a register followed
+/// at once by a store of that register.
+fn share_slots<C: Copy + PartialEq>(
+    function: &mut MFunction<C>,
+    slots: &mut Vec<(i32, C)>,
+) {
+    let n = slots.len();
+    if n < 2 {
+        return;
+    }
+    let next = successors(function);
+    // slots live into each block, by backward dataflow
+    let mut live_in = vec![vec![false; n]; function.blocks.len()];
+    let mut interferes = vec![vec![false; n]; n];
+    let mut copies = Vec::new();
+    for round in 0.. {
+        let mut changed = false;
+        for b in (0..function.blocks.len()).rev() {
+            let mut live = vec![false; n];
+            for s in &next[b] {
+                for (x, l) in live_in[*s].iter().enumerate() {
+                    live[x] |= l;
+                }
+            }
+            let insts = &function.blocks[b].insts;
+            for i in (0..insts.len()).rev() {
+                match slot_access(&insts[i], slots) {
+                    Some((slot, true)) => {
+                        // the copy's source holds the same value: no clash
+                        let loaded = |p: usize| match (slot_access(&insts[p], slots), insts[p].operands.first()) {
+                            (Some((from, false)), Some(Operand::Def(r))) => Some((from, *r)),
+                            _ => None,
+                        };
+                        let source = match (i.checked_sub(1).and_then(loaded), insts[i].operands.first()) {
+                            (Some((from, r)), Some(Operand::Use(stored))) if r == *stored => {
+                                if round == 0 {
+                                    copies.push((from, slot));
+                                }
+                                Some(from)
+                            }
+                            _ => None,
+                        };
+                        for x in (0..n).filter(|x| live[*x] && *x != slot && Some(*x) != source) {
+                            interferes[slot][x] = true;
+                            interferes[x][slot] = true;
+                        }
+                        live[slot] = false;
+                    }
+                    Some((slot, false)) => live[slot] = true,
+                    None => {}
+                }
+            }
+            if live != live_in[b] {
+                live_in[b] = live;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    copies.sort_unstable();
+    copies.dedup();
+    let mut rep: Vec<usize> = (0..n).collect();
+    let find = |rep: &Vec<usize>, mut x: usize| {
+        while rep[x] != x {
+            x = rep[x];
+        }
+        x
+    };
+    for (from, to) in copies {
+        let (a, b) = (find(&rep, from), find(&rep, to));
+        if a == b || slots[a].1 != slots[b].1 || interferes[a][b] {
+            continue;
+        }
+        rep[b] = a;
+        for x in 0..n {
+            if interferes[b][x] {
+                interferes[a][x] = true;
+                interferes[x][a] = true;
             }
         }
     }
-    let branched_to = function.blocks.iter().any(|b| b.insts.iter().any(|i| i.operands.contains(&Operand::Block(entry.id))));
-    if branched_to { None } else { found }
-}
-
-/// The slot of an `unchanging` value that `v`, a copy of it made in the entry
-/// block, can use instead of a slot of its own (`StackSlotColoring` for the
-/// one case that needs no live ranges): the entry instruction `at` that
-/// defines `v` is then the reload of that slot, and is dropped.
-fn shared_slot<C>(
-    function: &MFunction<C>,
-    at: usize,
-    unchanging: &HashSet<i32>,
-) -> Option<i32> {
-    let inst = &function.blocks[0].insts[at];
-    let mut frames = inst.operands.iter().filter_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None });
-    let slot = frames.next().filter(|s| unchanging.contains(s))?;
-    let reads_register = inst.operands.iter().any(|o| matches!(o, Operand::Use(_)));
-    (frames.next().is_none() && !reads_register).then_some(slot)
-}
-
-/// `v` has just been given `slot`, and a copy of it was stored to a slot of
-/// its own earlier: that store moves nothing, so those slots become `slot`.
-fn merge_stores_into<C>(
-    function: &mut MFunction<C>,
-    v: u32,
-    slot: i32,
-    unchanging: &mut HashSet<i32>,
-) {
-    let stores_v = |inst: &Inst, unchanging: &HashSet<i32>| {
-        inst.kind != Kind::Copy
-            && inst.operands.contains(&Operand::Use(Reg::Virt(v)))
-            && inst.operands.iter().any(|o| matches!(o, Operand::Frame(s) if unchanging.contains(s)))
-    };
-    let mut merged = Vec::new();
-    for block in &mut function.blocks {
-        block.insts.retain(|inst| {
-            if !stores_v(inst, unchanging) {
-                return true;
-            }
-            merged.extend(inst.operands.iter().filter_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None }));
-            false
-        });
+    if (0..n).all(|x| rep[x] == x) {
+        return;
     }
+    let numbers: Vec<i32> = (0..n).map(|x| slots[find(&rep, x)].0).collect();
+    let originals: Vec<i32> = slots.iter().map(|(s, _)| *s).collect();
+    let renumber = |slot: i32| numbers[originals.iter().position(|s| *s == slot).unwrap()];
     for block in &mut function.blocks {
         for inst in &mut block.insts {
-            for operand in &mut inst.operands {
-                if let Operand::Frame(s) = operand
-                    && merged.contains(s)
-                {
-                    *s = slot;
+            if slot_access(inst, slots).is_some() {
+                for operand in &mut inst.operands {
+                    if let Operand::Frame(s) = operand {
+                        *s = renumber(*s);
+                    }
                 }
             }
         }
     }
-    for s in merged {
-        unchanging.remove(&s);
+    slots.retain(|(s, _)| renumber(*s) == *s);
+    drop_self_copies(function, slots);
+}
+
+/// A load of a slot followed by a store of the register back to it: the store
+/// goes, and the load with it when nothing else reads the register.
+fn drop_self_copies<C>(
+    function: &mut MFunction<C>,
+    slots: &[(i32, C)],
+) {
+    let mut mentions = std::collections::HashMap::<Reg, usize>::new();
+    for inst in function.blocks.iter().flat_map(|b| &b.insts) {
+        for operand in &inst.operands {
+            if let Operand::Def(r) | Operand::Use(r) = operand {
+                *mentions.entry(*r).or_default() += 1;
+            }
+        }
+    }
+    let frame = |inst: &Inst| inst.operands.iter().find_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None });
+    for block in &mut function.blocks {
+        let mut out: Vec<Inst> = Vec::with_capacity(block.insts.len());
+        for inst in std::mem::take(&mut block.insts) {
+            if let Some(load) = out.last()
+                && slot_access(load, slots).is_some_and(|(_, stores)| !stores)
+                && slot_access(&inst, slots).is_some_and(|(_, stores)| stores)
+                && frame(load) == frame(&inst)
+                && let (Some(Operand::Def(d)), Some(Operand::Use(r))) = (load.operands.first(), inst.operands.first())
+                && d == r
+            {
+                if mentions[r] == 2 {
+                    out.pop();
+                }
+                continue;
+            }
+            out.push(inst);
+        }
+        block.insts = out;
     }
 }
 
@@ -453,11 +530,12 @@ pub fn allocate_spilling_ordered<T: Target>(
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     let mut slots = Vec::new();
     let mut temporaries = HashSet::new();
-    // slots written once, in the entry block
-    let mut unchanging = HashSet::new();
     loop {
         let failed = match GraphColoring::<T>::by_frequency(by_frequency).colour(function) {
-            Ok(assignment) => return Ok((assignment, slots)),
+            Ok(assignment) => {
+                share_slots(function, &mut slots);
+                return Ok((assignment, slots));
+            }
             Err(failed) => failed,
         };
         let v = victim::<T>(function, &failed, &temporaries).ok_or_else(|| {
@@ -470,19 +548,8 @@ pub fn allocate_spilling_ordered<T: Target>(
             temporaries.extend(made);
             continue;
         }
-        let entry = entry_definition(function, v);
-        if let Some(at) = entry
-            && let Some(slot) = shared_slot(function, at, &unchanging)
-        {
-            temporaries.extend(spill::<T>(function, v, slot, Some(at))?);
-            continue;
-        }
         let slot = first_slot + slots.len() as i32;
         slots.push((slot, function.classes[v as usize]));
-        if entry.is_some() {
-            merge_stores_into(function, v, slot, &mut unchanging);
-            unchanging.insert(slot);
-        }
-        temporaries.extend(spill::<T>(function, v, slot, None)?);
+        temporaries.extend(spill::<T>(function, v, slot)?);
     }
 }
