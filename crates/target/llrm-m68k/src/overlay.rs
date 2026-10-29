@@ -156,3 +156,92 @@ pub fn rewrite(inst: Inst) -> Inst {
         _ => inst,
     }
 }
+
+/// What an instruction that writes a data register leaves in the condition
+/// codes, from its mnemonic: `N` and `Z` from the result, and whether `V` is
+/// cleared as `tst` clears it.
+fn writes_flags(inst: &Inst) -> Option<(crate::mc::Operand, bool)> {
+    let text =
+        asm(inst.opcode).map(|(text, _)| text).or_else(|| crate::dagisel::asm::asm(inst.opcode).map(|row| row.1))?;
+    let mnemonic = text.split('\t').next()?;
+    let (name, size) = mnemonic.split_once('.').unwrap_or((mnemonic, "l"));
+    if size != "l" && name != "moveq" {
+        return None;
+    }
+    let clears_overflow = match name {
+        "move" | "moveq" | "and" | "or" | "eor" | "not" | "lsr" | "asr" | "ext" | "clr" => true,
+        "add" | "sub" | "addq" | "subq" | "neg" | "lsl" | "asl" => false,
+        _ => return None,
+    };
+    let Some(Operand::Reg(dst)) = inst.operands.first() else { return None };
+    // an address register is not changed in its codes (`movea`, `adda`)
+    use crate::reg;
+    let data = [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7]
+        .contains(&crate::REGISTER_INFO.root(*dst));
+    data.then(|| (Operand::Reg(*dst), clears_overflow))
+}
+
+/// A `tst.l Dn` right after the instruction that wrote `Dn` is dropped when
+/// the branches after it read only what that instruction left the same:
+/// `eq`/`ne`/`mi`/`pl` always, and the signed orderings when `V` is cleared.
+/// `lsr.l #1, %d1; tst.l %d1; bne` is `lsr.l #1, %d1; bne`.
+pub fn drop_redundant_tests(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::Line> {
+    use crate::expand::Line;
+    let readers_after = |from: usize| {
+        lines[from..]
+            .iter()
+            .map_while(|line| match line {
+                Line::Inst(inst) if is_branch_on_flags(inst.opcode) => Some(inst.opcode),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut drop = vec![false; lines.len()];
+    for at in 1..lines.len() {
+        let (Line::Inst(before), Line::Inst(test)) = (&lines[at - 1], &lines[at]) else { continue };
+        if test.opcode != "TST32d" || drop[at - 1] {
+            continue;
+        }
+        let Some((written, clears_overflow)) = writes_flags(before) else { continue };
+        if test.operands.first() != Some(&written) {
+            continue;
+        }
+        let branches = readers_after(at + 1);
+        let safe = |name: &str| match name {
+            "Bne8" | "Beq8" | "Bmi8" | "Bpl8" => true,
+            "Bgt8" | "Bge8" | "Blt8" | "Ble8" => clears_overflow,
+            _ => false,
+        };
+        // the codes must be read by a branch at all, and by nothing else
+        let next_is_branch = matches!(
+            lines.get(at + 1),
+            Some(Line::Inst(next)) if is_branch_on_flags(next.opcode)
+        );
+        if next_is_branch && branches.iter().all(|name| safe(name)) {
+            drop[at] = true;
+        }
+    }
+    lines.into_iter().zip(drop).filter(|(_, dropped)| !dropped).map(|(line, _)| line).collect()
+}
+
+/// A conditional branch in its 8-bit form (the form the compiler emits; the
+/// assembler relaxes it later).
+fn is_branch_on_flags(opcode: &str) -> bool {
+    matches!(
+        opcode,
+        "Bhi8"
+            | "Bls8"
+            | "Bcc8"
+            | "Bcs8"
+            | "Bne8"
+            | "Beq8"
+            | "Bvc8"
+            | "Bvs8"
+            | "Bpl8"
+            | "Bmi8"
+            | "Bge8"
+            | "Blt8"
+            | "Bgt8"
+            | "Ble8"
+    )
+}

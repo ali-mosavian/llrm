@@ -269,6 +269,7 @@ pub fn finish(
                 label => label,
             })
             .collect();
+        lines = crate::overlay::drop_redundant_tests(lines);
     }
     Ok(lines)
 }

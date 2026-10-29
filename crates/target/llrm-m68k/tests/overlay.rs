@@ -117,3 +117,28 @@ fn a_frame_of_saved_registers_is_pushed_not_carved() {
     assert!(pinned.contains("suba.l") && pinned.contains("movem.l\t%d2"), "{pinned}");
     assert!(ours.contains("-(%sp)") && ours.contains("(%sp)+") && !ours.contains("suba.l"), "{ours}");
 }
+
+fn branches(body: &str) -> String {
+    let ir = format!(
+        "define i32 @f(i32 %a, i32 %b) {{\nentry:\n  {body}\n  br i1 %c, label %y, label %n\ny:\n  ret i32 1\nn:\n  ret i32 2\n}}"
+    );
+    compiled(&ir, Options::default())
+}
+
+/// `lsr` sets Z from its result, so the `tst.l` after it only repeats it: the
+/// popcount loop ended `lsr.l #1, %d1; tst.l %d1; bne`.
+#[test]
+fn a_test_right_after_the_instruction_that_set_the_flags_is_dropped() {
+    let asm = branches("%s = lshr i32 %a, 1\n  %c = icmp ne i32 %s, 0");
+    assert!(asm.contains("lsr.l") && !asm.contains("tst.l"), "{asm}");
+}
+
+/// `add` can overflow, so after it `lt` (N xor V) is not what `tst` gives:
+/// the `tst.l` stays for a signed ordering, and goes for `ne`.
+#[test]
+fn a_test_after_an_add_stays_for_a_signed_ordering_and_goes_for_equality() {
+    let signed = branches("%s = add i32 %a, %b\n  %c = icmp slt i32 %s, 0");
+    assert!(signed.contains("tst.l"), "{signed}");
+    let equal = branches("%s = add i32 %a, %b\n  %c = icmp ne i32 %s, 0");
+    assert!(!equal.contains("tst.l"), "{equal}");
+}
