@@ -1,8 +1,9 @@
-//! The translated greedy allocator run beside the allocator in
-//! `backend::allocate`, on the same input, to compare decisions and cost. It
-//! allocates nothing and rewrites nothing the caller sees: it reports what the
-//! LLVM-shaped allocator would have decided (how many ranges it assigned,
-//! evicted, waited, spilled) and the caller measures the cost.
+//! The driver of the translated greedy allocator: it builds the inputs
+//! `RAGreedy` reads (intervals, spill weights, the matrix) from the caller's
+//! body and runs it. It is the allocator `backend::allocate` runs on every
+//! function (`Mode::Inline`, spills written by `InlineSpiller`); the other
+//! modes only count (`Record`, `Simple`). The name is from when it ran
+//! beside the old allocator.
 //!
 //! # How it works
 //! `run` numbers the body, computes its live intervals and spill weights, puts
@@ -18,11 +19,11 @@
 //! intervals here; rematerializable definitions are not recognised.
 //!
 //! # Example
-//! `LLRM_SHADOW_GREEDY=1 llrm-c -O2 f.c` prints one line per allocation with
-//! the counts.
+//! `LLRM_GREEDY_TRACE=1 llrm-cc -O2 -c f.c` prints one line per allocation
+//! with the counts.
 //!
 //! # Used by
-//! `backend::allocate` (behind `LLRM_SHADOW_GREEDY`).
+//! `backend::allocate::greedy_rewritten`.
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
