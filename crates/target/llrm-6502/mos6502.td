@@ -226,6 +226,9 @@ def : Pat<(i8 (trunc Imag16:$a)), (EXTRACT_SUBREG Imag16:$a, sub_lo)>;
 def : Pat<(i8 (trunc (srl Imag16:$a, (i8 8)))), (EXTRACT_SUBREG Imag16:$a, sub_hi)>;
 def : Pat<(i16 (zext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (LDI8 0), sub_hi)>;
 def : Pat<(i16 (anyext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (LDI8 0), sub_hi)>;
+// A byte loaded and widened: the load, and a zero high byte.
+def : Pat<(i16 (zextloadi8 MOSAddr:$p)), (REG_SEQUENCE Imag16, (LDP8 MOSAddr:$p), sub_lo, (LDI8 0), sub_hi)>;
+def : Pat<(i16 (extloadi8 MOSAddr:$p)), (REG_SEQUENCE Imag16, (LDP8 MOSAddr:$p), sub_lo, (LDI8 0), sub_hi)>;
 // The builder joins two bytes as `lo | (hi << 8)` over either kind of extension: that is the pair.
 def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;
 def : Pat<(i16 (or (ext8 Imag8:$lo), (shl (ext8 Imag8:$hi), (i8 8)))),

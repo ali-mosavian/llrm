@@ -314,13 +314,14 @@ fn moved(
         "a" => llrm_6502::reg::A,
         "x" => llrm_6502::reg::X,
         "rc2" => llrm_6502::reg::RC2,
+        "rc4" => llrm_6502::reg::RC4,
         _ => llrm_6502::reg::RC3,
     };
     let moves: Vec<_> = moves.iter().map(|(d, s)| (id(d), id(s))).collect();
     let mut code = String::from("pmove:\n");
     parallel_move(&mut code, &moves, a_live);
     code.push_str(&format!("  {}\n  rts\n", if read == "a" { "nop".to_owned() } else { format!("lda {read}") }));
-    let main = "  lda #1\n  sta rc2\n  lda #2\n  sta rc3\n  ldx #5\n  lda #9\n  jsr pmove\n";
+    let main = "  lda #1\n  sta rc2\n  lda #2\n  sta rc3\n  lda #3\n  sta rc4\n  ldx #5\n  lda #9\n  jsr pmove\n";
     common::run_with(&format!("pm-{}", code.len()), main, &code)
 }
 
@@ -337,6 +338,94 @@ fn parallel_moves_swap_and_keep_a() {
     let through = [("rc3", "a"), ("rc2", "rc3")];
     assert_eq!(moved(&through, false, "rc3"), 9);
     assert_eq!(moved(&through, false, "rc2"), 2);
+    // `a := rc2` must come after `rc3 := rc4`, which goes through `a`: the
+    // unpack of a pointer into `a` and a cell returned `rc4` in `a` (slen looped
+    // forever)
+    let into_a = [("a", "rc2"), ("rc3", "rc4")];
+    assert_eq!(moved(&into_a, false, "a"), 1);
+    assert_eq!(moved(&into_a, false, "rc3"), 3);
     let to_x = [("rc2", "x"), ("x", "rc2")];
     assert_eq!(moved(&to_x, true, "rc2"), 5);
+}
+
+/// A byte loaded, widened and used in a word subtract was a zero-extending
+/// load no pattern selected (`CannotSelect(Load)`): scmp, crc16 and sum16 of
+/// the second bench set, and any `s += p[i]` on an `unsigned`. k = 1000, the
+/// byte 7: 1000 - 7 = 993 = 0x03E1.
+#[test]
+fn a_loaded_byte_widened_into_a_word_subtract_runs() {
+    let ir = "define i16 @widen(ptr %p, i16 %k) {\n  %b = load i8, ptr %p\n  %w = zext i8 %b to i16\n  %r = sub i16 %k, %w\n  ret i16 %r\n}";
+    let text = compile(ir, "widen");
+    let data = ".segment \"DATA\"\nval: .byte 7\n.segment \"CODE\"\n";
+    let setup = "  lda #<val\n  sta rc2\n  lda #>val\n  sta rc3\n  lda #<1000\n  sta rc4\n  lda #>1000\n  sta rc5\n";
+    let run = |after: &str| common::run_with("alloc-widen", &format!("{setup}  jsr widen\n{after}"), &format!("{text}{data}"));
+    assert_eq!(run(""), 0xE1);
+    assert_eq!(run("  txa\n"), 0x03);
+}
+
+const CRC16: &str = "define i16 @crc16(ptr %p, i8 %n) {\n\
+entry:\n\
+  %z = icmp eq i8 %n, 0\n\
+  br i1 %z, label %done, label %loop\n\
+loop:\n\
+  %i = phi i8 [ %i2, %loop ], [ 0, %entry ]\n\
+  %c = phi i16 [ %c8, %loop ], [ -1, %entry ]\n\
+  %iw = zext i8 %i to i16\n\
+  %q = getelementptr i8, ptr %p, i16 %iw\n\
+  %b = load i8, ptr %q\n\
+  %bw = zext i8 %b to i16\n\
+  %sh = shl i16 %bw, 8\n\
+  %x0 = xor i16 %sh, %c\n\
+  %s0 = shl i16 %x0, 1\n\
+  %e0 = xor i16 %s0, 4129\n\
+  %neg0 = icmp slt i16 %x0, 0\n\
+  %v0 = select i1 %neg0, i16 %e0, i16 %s0\n\
+  %s1 = shl i16 %v0, 1\n\
+  %e1 = xor i16 %s1, 4129\n\
+  %neg1 = icmp slt i16 %v0, 0\n\
+  %v1 = select i1 %neg1, i16 %e1, i16 %s1\n\
+  %s2 = shl i16 %v1, 1\n\
+  %e2 = xor i16 %s2, 4129\n\
+  %neg2 = icmp slt i16 %v1, 0\n\
+  %v2 = select i1 %neg2, i16 %e2, i16 %s2\n\
+  %s3 = shl i16 %v2, 1\n\
+  %e3 = xor i16 %s3, 4129\n\
+  %neg3 = icmp slt i16 %v2, 0\n\
+  %v3 = select i1 %neg3, i16 %e3, i16 %s3\n\
+  %s4 = shl i16 %v3, 1\n\
+  %e4 = xor i16 %s4, 4129\n\
+  %neg4 = icmp slt i16 %v3, 0\n\
+  %v4 = select i1 %neg4, i16 %e4, i16 %s4\n\
+  %s5 = shl i16 %v4, 1\n\
+  %e5 = xor i16 %s5, 4129\n\
+  %neg5 = icmp slt i16 %v4, 0\n\
+  %v5 = select i1 %neg5, i16 %e5, i16 %s5\n\
+  %s6 = shl i16 %v5, 1\n\
+  %e6 = xor i16 %s6, 4129\n\
+  %neg6 = icmp slt i16 %v5, 0\n\
+  %v6 = select i1 %neg6, i16 %e6, i16 %s6\n\
+  %s7 = shl i16 %v6, 1\n\
+  %e7 = xor i16 %s7, 4129\n\
+  %neg7 = icmp slt i16 %v6, 0\n\
+  %v7 = select i1 %neg7, i16 %e7, i16 %s7\n\
+  %c8 = add i16 %v7, 0\n\
+  %i2 = add i8 %i, 1\n\
+  %more = icmp eq i8 %i2, %n\n\
+  br i1 %more, label %done, label %loop\n\
+done:\n\
+  %r = phi i16 [ -1, %entry ], [ %c8, %loop ]\n\
+  ret i16 %r\n\
+}";
+
+/// Spill reloads (`ldx`, `ldy`) set N and Z, and one sat between a compare and
+/// the `bmi` of a word select that reads it: the select chose by the reload's
+/// flags and crc16 over 12 bytes returned 0x3E66 for 0xA166 (bench set 2).
+#[test]
+fn a_reload_between_a_compare_and_its_branch_keeps_the_flags() {
+    let text = compile(CRC16, "crc16");
+    let data = ".segment \"DATA\"\nbytes: .byte 3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8\n.segment \"CODE\"\n";
+    let setup = "  lda #<bytes\n  sta rc2\n  lda #>bytes\n  sta rc3\n  lda #12\n  sta rc4\n";
+    let run = |after: &str| common::run_with("alloc-crc16", &format!("{setup}  jsr crc16\n{after}"), &format!("{text}{data}"));
+    assert_eq!(run(""), 0x66);
+    assert_eq!(run("  txa\n"), 0xA1);
 }
