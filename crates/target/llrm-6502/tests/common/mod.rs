@@ -56,19 +56,31 @@ pub fn run_with(
     main: &str,
     extra: &str,
 ) -> i32 {
+    run_on("sim6502", name, main, extra).0
+}
+
+/// [`run_with`] on the cc65 target `target` (`sim6502` or `sim65c02`): the exit code and the size of
+/// the linked binary.
+pub fn run_on(
+    target: &str,
+    name: &str,
+    main: &str,
+    extra: &str,
+) -> (i32, u64) {
     let platform = Platform::parse(SIM65).expect("sim65 row");
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("rt-{name}"));
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("rt-{target}-{name}"));
     std::fs::create_dir_all(&dir).unwrap();
     let source = format!("{}.export _main\n_main:\n{main}  rts\n{extra}{RUNTIME}", equates(&platform));
     std::fs::write(dir.join("p.s"), source).unwrap();
     let built = Command::new("cl65")
-        .args(["-t", "sim6502", "-o"])
+        .args(["-t", target, "-o"])
         .arg(dir.join("p.bin"))
         .arg(dir.join("p.s"))
         .output()
         .expect("cl65");
     assert!(built.status.success(), "cl65: {}", String::from_utf8_lossy(&built.stderr));
-    Command::new("sim65").args(["-x", "50000000"]).arg(dir.join("p.bin")).status().expect("sim65").code().expect("exit code")
+    let code = Command::new("sim65").args(["-x", "50000000"]).arg(dir.join("p.bin")).status().expect("sim65").code().expect("exit code");
+    (code, std::fs::metadata(dir.join("p.bin")).unwrap().len())
 }
 
 /// Runs `prg` in VICE's `x64sc` without a display and returns the monitor's answer to each of

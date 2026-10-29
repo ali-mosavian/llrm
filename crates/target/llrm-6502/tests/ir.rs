@@ -507,3 +507,14 @@ define i8 @func() {\n  %p0 = getelementptr [3 x { i8, i8 }], ptr @tab, i16 0, i1
     let data = ".segment \"DATA\"\ntab: .byte 1, 2, 3, 4, 5, 6\n.segment \"CODE\"\n";
     assert_eq!(common::run_with("tab", &format!("{STACK}  jsr func\n"), &format!("{text}{data}")), 10);
 }
+
+/// `pick(0)` takes the `a` side, 10; `pick(5)` falls through `b`, 20. Block `b` ends in a `br` that
+/// layout turns into a fall-through, so it has no terminator node: its phi copy was dropped and
+/// `pick(5)` returned the stale cell, 0.
+#[test]
+fn a_phi_copy_in_a_fall_through_block_runs() {
+    let ir = "define i8 @pick(i8 %x) {\nentry:\n  %c = icmp eq i8 %x, 0\n  br i1 %c, label %a, label %b\na:\n  br label %join\nb:\n  br label %join\njoin:\n  %r = phi i8 [ 10, %a ], [ 20, %b ]\n  ret i8 %r\n}";
+    for (x, want) in [(0, 10), (5, 20)] {
+        assert_eq!(run(&format!("pick-{x}"), ir, "pick", &set("rc2", x), ""), want);
+    }
+}

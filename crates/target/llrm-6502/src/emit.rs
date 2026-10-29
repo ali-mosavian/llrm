@@ -215,6 +215,7 @@ pub fn expand(
             }
             _ => return Err("LDI8 takes a register and an immediate".into()),
         },
+        op::STZ8 => writeln!(out, "  stz {}", reg(&o[0])?).unwrap(),
         op::LDI16 => match &o[1] {
             Operand::Imm(v) => {
                 let (lo, hi) = word(&o[0])?;
@@ -253,7 +254,11 @@ pub fn expand(
         op::STZP => {
             let ((lo, hi), off) = (word(&o[0])?, imm(&o[1])?);
             let lo = zero_page_pointer(&mut out, &lo, &hi);
-            writeln!(out, "  ldy #{off}\n  lda #0\n  sta ({lo}),y").unwrap();
+            if off == 0 {
+                writeln!(out, "  lda #0\n  sta ({lo})").unwrap();
+            } else {
+                writeln!(out, "  ldy #{off}\n  lda #0\n  sta ({lo}),y").unwrap();
+            }
         }
         // A shift by a constant: copy to the destination, then one step per bit in place.
         op::SHL8 | op::SRL8 | op::SRA8 => {
@@ -430,6 +435,10 @@ pub fn expand(
                 other => return Err(format!("a branch takes a label, not {other:?}")),
             }
         }
+        op::BRA => match &o[0] {
+            Operand::Label(l) => writeln!(out, "  bra {l}").unwrap(),
+            other => return Err(format!("bra takes a label, not {other:?}")),
+        },
         op::JMP | op::JSR => {
             let mnemonic = if inst.opcode == op::JMP { "jmp" } else { "jsr" };
             match &o[0] {
@@ -461,6 +470,29 @@ pub fn function(
         }
     }
     Ok(out)
+}
+
+/// `bra` reaches 127 bytes. An instruction is at most 3 bytes, so a `bra` whose target is within
+/// 40 instruction lines stays and any other becomes `jmp`.
+///
+/// DEVIATE: line counting, not sizes. Reason: the spike has no branch relaxation. Exit: the shared one.
+pub fn relax_bra(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let is_instruction = |l: &str| l.starts_with("  ") && !l.trim_start().starts_with('.');
+    let mut out = String::new();
+    for (at, line) in lines.iter().enumerate() {
+        let Some(target) = line.strip_prefix("  bra ") else {
+            writeln!(out, "{line}").unwrap();
+            continue;
+        };
+        let label = format!("{target}:");
+        let near = lines.iter().position(|l| *l == label).is_some_and(|to| {
+            let (from, until) = if to > at { (at + 1, to) } else { (to, at) };
+            lines[from..until].iter().filter(|l| is_instruction(l)).count() <= 40
+        });
+        writeln!(out, "  {} {target}", if near { "bra" } else { "jmp" }).unwrap();
+    }
+    out
 }
 
 /// The equates for the imaginary registers on `platform`: `rc0 = $80` and so on.

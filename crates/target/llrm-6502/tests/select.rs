@@ -109,11 +109,13 @@ macro_rules! cpu_tests {
 cpu_tests!(mos6502, mos_mos6502, Cpu::Mos6502);
 cpu_tests!(w65c02, mos_w65c02, Cpu::W65c02);
 
-/// STZ exists on the 65C02 only: the NMOS table must not name it, or it would emit an illegal opcode.
+/// STZ and BRA exist on the 65C02 only: the NMOS table must not name them, or it would emit an illegal opcode.
 #[test]
-fn stz_is_in_the_65c02_table_only() {
+fn cmos_instructions_are_in_the_65c02_table_only() {
     use llrm_6502::dagisel::generated::{mos_mos6502 as nmos, mos_w65c02 as cmos};
-    let has = |ops: &[(u16, &str)]| ops.iter().any(|(_, n)| *n == "STZP");
-    assert!(has(cmos::MACHINE_OPCODES));
-    assert!(!has(nmos::MACHINE_OPCODES));
+    let has = |ops: &[(u16, &str)], name: &str| ops.iter().any(|(_, n)| *n == name);
+    for name in ["STZ8", "STZP", "BRA"] {
+        assert!(has(cmos::MACHINE_OPCODES, name), "{name} missing from the 65C02 table");
+        assert!(!has(nmos::MACHINE_OPCODES, name), "{name} leaked into the NMOS table");
+    }
 }

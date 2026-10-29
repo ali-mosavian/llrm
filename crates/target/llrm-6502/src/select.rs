@@ -28,7 +28,7 @@ use crate::frame::{Function, Layout, layout};
 use llrm_codegen::backend::frameobjects::Object;
 use crate::dagisel::generated::ids::{opcode as op, reg as ids};
 use crate::dagisel::generated::instrinfo;
-use crate::emit::{MInst, Operand, expand, spill};
+use crate::emit::{MInst, Operand, expand, relax_bra, spill};
 
 const EXTRACT_SUBREG: u16 = 8;
 const REG_SEQUENCE: u16 = 19;
@@ -113,14 +113,21 @@ pub fn function_text(
                 }
                 if !phis_done && is_terminator(&one.dag.nodes()[node as usize].opcode) {
                     phis_done = true;
-                    body.push_str(&phi_copies(one, node, &mut cells, &mut labels)?);
+                    let ISD::Machine(code) = one.dag.nodes()[node as usize].opcode else { unreachable!() };
+                    let conditional = ![op::JMP, op::BRA, op::RET].contains(&(code as u16));
+                    body.push_str(&phi_copies(one, conditional, &mut cells, &mut labels)?);
                 }
                 for inst in lower(module, name, one, node, &mut values, &mut cells)? {
                     body.push_str(&expand(&inst, &mut labels)?);
                 }
             }
         }
+        // A `br` to the next block is dropped by layout: the block ends with no terminator.
+        if !phis_done {
+            body.push_str(&phi_copies(one, false, &mut cells, &mut labels)?);
+        }
     }
+    let mut body = relax_bra(&body);
     body.push_str(".segment \"BSS\"\n");
     for cell in &cells.bytes {
         writeln!(body, "{cell}: .res 1").unwrap();
@@ -164,7 +171,7 @@ fn lay_out_frame(
 }
 
 fn is_terminator(opcode: &ISD) -> bool {
-    matches!(opcode, ISD::Machine(code) if [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL, op::JMP, op::RET].contains(&(*code as u16)))
+    matches!(opcode, ISD::Machine(code) if [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL, op::JMP, op::BRA, op::RET].contains(&(*code as u16)))
 }
 
 /// The copies into the phis of the successors, placed before the block's first terminator. A
@@ -173,15 +180,13 @@ fn is_terminator(opcode: &ISD) -> bool {
 /// DEVIATE: see `dagisel::function`.
 fn phi_copies(
     one: &Selected,
-    terminator: u32,
+    conditional: bool,
     cells: &mut Cells,
     labels: &mut u32,
 ) -> Result<String, String> {
     if one.phi_copies.is_empty() {
         return Ok(String::new());
     }
-    let ISD::Machine(code) = one.dag.nodes()[terminator as usize].opcode else { unreachable!() };
-    let conditional = ![op::JMP, op::RET].contains(&(code as u16));
     let mut text = if conditional { "  php\n".to_owned() } else { String::new() };
     for &(input, own) in &one.phi_copies {
         let Some(from) = cells.virtual_regs.get(&input).cloned() else { return Err(format!("phi input {input} was never written")) };

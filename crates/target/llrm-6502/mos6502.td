@@ -140,8 +140,13 @@ let mayStore = 1 in {
   def STP8 : MOSInst<(outs), (ins Imag8:$s, memri:$p), "stp $s, ($p)", [(store i8:$s, MOSAddr:$p)]>;
   def STP16 : MOSInst<(outs), (ins Imag16:$s, memri:$p), "stp16 $s, ($p)", [(store i16:$s, MOSAddr:$p)]>;
 }
-let mayStore = 1, Predicates = [HasCMOS] in
-  def STZP : MOSInst<(outs), (ins memri:$p), "stz ($p)", [(store (i8 0), MOSAddr:$p)]>;
+// 65C02 only: STZ on a cell, and the unindexed (zp) mode for a store of zero at offset 0.
+let Predicates = [HasCMOS] in {
+  let AddedComplexity = 10 in
+    def STZ8 : MOSInst<(outs Imag8:$d), (ins), "stz $d", [(set i8:$d, (i8 0))]>;
+  let mayStore = 1 in
+    def STZP : MOSInst<(outs), (ins memri:$p), "stzp ($p)", [(store (i8 0), MOSAddr:$p)]>;
+}
 
 def brtarget : Operand<OtherVT>;
 def calltarget : Operand<i16>;
@@ -172,6 +177,8 @@ def CMOV8 : MOSInst<(outs Imag8:$d), (ins Imag8:$f0, Imag8:$t, i8imm:$cc, Flags:
                     [(set i8:$d, (MOScmov i8:$f0, i8:$t, imm:$cc, i8:$f))]>;
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in
   def JMP : MOSInst<(outs), (ins brtarget:$t), "jmp $t", [(br bb:$t)]>;
+let isBranch = 1, isTerminator = 1, isBarrier = 1, Predicates = [HasCMOS], AddedComplexity = 10 in
+  def BRA : MOSInst<(outs), (ins brtarget:$t), "bra $t", [(br bb:$t)]>;
 let isCall = 1 in
   def JSR : MOSInst<(outs), (ins calltarget:$t), "jsr $t", [(MOScall tglobaladdr:$t)]>;
 
