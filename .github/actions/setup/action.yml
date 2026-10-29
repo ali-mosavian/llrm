@@ -27,6 +27,9 @@ runs:
         echo "deb https://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm20.list
         sudo apt-get update -qq
         sudo apt-get install -y -qq build-essential gcc-multilib autoconf automake libtool pkg-config nasm valgrind libpng-dev zlib1g-dev libncurses-dev gdb binutils llvm-20 clang-20 lld-20 zstd
+        # qb_arm64: qemu and the arm64 cross libraries only (no cross compiler); the newest libgcc-N-dev the image lists.
+        libgcc=$(apt-cache pkgnames libgcc- | grep -E '^libgcc-[0-9]+-dev-arm64-cross$' | sort -t- -k2,2n | tail -n 1)
+        sudo apt-get install -y -qq qemu-user libc6-dev-arm64-cross libc6-arm64-cross linux-libc-dev-arm64-cross libgcc-s1-arm64-cross "$libgcc"
         # gcc-multilib: the vsgcc harness links gcc -m32 programs, which need the 32-bit libgcc (__divdi3).
         # ubuntu-24.04 is a fixed image: gdb 15.1, binutils 2.42 (printed below).
         echo /usr/lib/llvm-20/bin >> "$GITHUB_PATH"
