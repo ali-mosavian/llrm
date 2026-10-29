@@ -507,3 +507,77 @@ fn a_loop_over_three_pointers_steps_each_in_its_access() {
     let text = text_with(&module(THREE_POINTERS), "k", Cpu::M68000, Options::default()).unwrap();
     assert!(text.matches(")+").count() >= 3, "{text}");
 }
+
+/// A phi only other phis read had no register and its inputs were dropped
+/// (`partition` returned its start value). Another shape than the motivating
+/// one, at every width a phi can have: a value carried through a chain of two
+/// joins to a loop.
+#[test]
+fn a_phi_read_only_by_other_phis_keeps_its_inputs_at_every_width() {
+    for ty in ["i8", "i16", "i32"] {
+        let narrow = if ty == "i32" { "add i32 %a, 0".to_owned() } else { format!("trunc i32 %a to {ty}") };
+        let ir = format!(
+            "define i32 @f(i32 %a, i32 %n) {{
+entry:
+  %t = {narrow}
+  %c = icmp sgt i32 %a, 5
+  br i1 %c, label %left, label %right
+left:
+  %l = add {ty} %t, 1
+  br label %join
+right:
+  br label %join
+join:
+  %v = phi {ty} [ %l, %left ], [ %t, %right ]
+  br label %loop
+loop:
+  %w = phi {ty} [ %v, %join ], [ %w, %loop ]
+  %i = phi i32 [ 0, %join ], [ %i1, %loop ]
+  %i1 = add i32 %i, 1
+  %more = icmp ult i32 %i1, %n
+  br i1 %more, label %loop, label %done
+done:
+  %z = zext {ty} %w to i32
+  ret i32 %z
+}}"
+        );
+        for (a, n) in [(9, 3), (2, 3), (200, 2)] {
+            let t = (a as u32) & if ty == "i8" { 255 } else if ty == "i16" { 65535 } else { u32::MAX };
+            let want = if a > 5 { t.wrapping_add(1) } else { t } & if ty == "i8" { 255 } else if ty == "i16" { 65535 } else { u32::MAX };
+            for options in [Options::default(), Options::PINNED] {
+                if let Some(code) = status(&ir, &[a, n], options) {
+                    assert_eq!(code, (want & 255) as i32, "{ty} {a} {n} {options:?}");
+                }
+            }
+        }
+    }
+}
+
+/// `zext (icmp)` where the register the compare reads is the one the `scc`
+/// writes, at each width and from memory: the shapes the `neg.b` rewrite does
+/// not take must still be right.
+#[test]
+fn a_compare_widened_to_each_width_is_zero_or_one() {
+    for (ty, cond) in [("i8", "ult"), ("i16", "slt"), ("i32", "eq")] {
+        let ir = format!(
+            "define i32 @f(i32 %a, i32 %b) {{
+  %c = icmp {cond} i32 %a, %b
+  %z = zext i1 %c to {ty}
+  %r = zext {ty} %z to i32
+  ret i32 %r
+}}"
+        );
+        for (a, b) in [(1, 2), (2, 1), (3, 3), (-1, 1)] {
+            let holds = match cond {
+                "ult" => (a as u32) < (b as u32),
+                "slt" => a < b,
+                _ => a == b,
+            };
+            for options in [Options::default(), Options::PINNED] {
+                if let Some(code) = status(&ir, &[a, b], options) {
+                    assert_eq!(code, i32::from(holds), "{ty} {cond} {a} {b} {options:?}");
+                }
+            }
+        }
+    }
+}
