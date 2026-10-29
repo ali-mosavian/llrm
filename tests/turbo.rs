@@ -41,7 +41,9 @@ fn toolchain() -> Option<(PathBuf, PathBuf)> {
 /// variables' kinds, names and types (not where they are), each sorted, and its
 /// source lines.
 fn module(dump: &str) -> (Vec<String>, Vec<String>, BTreeSet<u32>) {
-    let table = &dump[dump.find("Module Table").unwrap_or_else(|| panic!("a module table in:\n{}", &dump[..dump.len().min(1500)]))..];
+    let table = &dump[dump
+        .find("Module Table")
+        .unwrap_or_else(|| panic!("a module table in:\n{}", &dump[..dump.len().min(1500)]))..];
     let part = |from: &str, to: &str| -> Vec<String> {
         let start = table.find(from).map_or(0, |at| at + from.len());
         let end = table[start..].find(to).map_or(table.len(), |at| start + at);
@@ -99,7 +101,8 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
     let scratch = tempfile::tempdir().unwrap();
     // DOS names are 8.3: each program is a short name.
     for (short, source) in [("obs", "observed.c"), ("lst", "list.c")] {
-        // Turbo C++ 3.0 does not read `__attribute__`; at -O0 `noinline` changes nothing.
+        // Turbo C++ 3.0 does not read `__attribute__`; at -O0 `noinline`
+        // changes nothing.
         let text = std::fs::read_to_string(fixtures.join(source)).unwrap().replace("__attribute__((noinline)) ", "");
         std::fs::write(scratch.path().join(format!("{short}.c")), text).unwrap();
         let made = common::cc::llrm_c()
@@ -133,7 +136,12 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
             .unwrap_or_else(|error| panic!("DOS made no {prefix}{short}.tx: {error}"))
         };
         for prefix in ["t", "l"] {
-            let log = std::fs::read_to_string(scratch.path().join(format!("{}{}.TL", prefix.to_uppercase(), short.to_uppercase()))).unwrap_or_default();
+            let log = std::fs::read_to_string(scratch.path().join(format!(
+                "{}{}.TL",
+                prefix.to_uppercase(),
+                short.to_uppercase()
+            )))
+            .unwrap_or_default();
             assert!(read(prefix).contains("Module Table"), "{short}: {prefix}link said: {log}");
         }
         let (theirs, ours) = (module(&read("t")), module(&read("l")));
@@ -238,8 +246,11 @@ fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
     };
     let (theirs, ours) = (types("t"), types("l"));
     assert_eq!(theirs.len(), 5, "premise: Turbo C++'s table names the five: {theirs:?}");
-    // DEBT (issue #5970, due 2026-11-02): the i8086 clang fork / llrm-llc CV4 path ignores `near` on a function, so `_INNER` is
-    // `function far C` where Turbo C++ says `function near C`, and `_NP` a far pointer to a far function. The test pins the gap; when ours matches Turbo it fails, and the pin goes.
+    // DEBT (issue #5970, due 2026-11-02): the i8086 clang fork / llrm-llc CV4
+    // path ignores `near` on a function, so `_INNER` is `function far C`
+    // where Turbo C++ says `function near C`, and `_NP` a far pointer to a far
+    // function. The test pins the gap; when ours matches Turbo it fails, and
+    // the pin goes.
     assert_ne!(
         ours, theirs,
         "_INNER now matches Turbo C++: the `near` gap is fixed; delete the pin below and assert_eq!(ours, theirs) (debt #5970)"
@@ -486,7 +497,14 @@ fn tlink_builds_turbo_debuggers_table_from_nib_and_from_optimised_c() {
         .output()
         .unwrap();
     assert!(made.status.success(), "nib: {}", String::from_utf8_lossy(&made.stderr));
-    let made = common::cc::llrm_c().env("LLRM_CC_TARGET", "x86_16-dos").args(["-m16", "-gtd", "-O2"]).arg(matrix.join("known.c")).arg("-o").arg(object("cfast")).output().unwrap();
+    let made = common::cc::llrm_c()
+        .env("LLRM_CC_TARGET", "x86_16-dos")
+        .args(["-m16", "-gtd", "-O2"])
+        .arg(matrix.join("known.c"))
+        .arg("-o")
+        .arg(object("cfast"))
+        .output()
+        .unwrap();
     assert!(made.status.success(), "cfast: {}", String::from_utf8_lossy(&made.stderr));
     let mut commands = Vec::new();
     for short in ["nib", "cfast"] {
