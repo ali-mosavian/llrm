@@ -307,6 +307,7 @@ impl FunctionPass for IndVars {
             && crate::lftr::replaced_in(&mut session, unit.context, unit.layout, unit.function, unit.declared, &outer);
         // After LFTR, which owns the exits it can rewrite against a trip count.
         let strengthened = crate::exitne::enabled()
+            && outer.target().tti().is_some_and(|tti| tti.prefers_exit_ne())
             && crate::exitne::strengthened_in(&mut session, unit.context, unit.layout, unit.function, &outer);
         let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
         let loops = cfg::natural(unit.function, &found);
