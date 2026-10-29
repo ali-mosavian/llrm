@@ -203,7 +203,8 @@ pub fn render(src: &Source) -> Result<String, String> {
     writeln!(w, "#![allow(clippy::all, unused_imports)]\n").unwrap();
     writeln!(w, "use {dagisel}::dag::{{{}}};", style.dag_imports).unwrap();
     writeln!(w, "use {dagisel}::matcher::{{Emit, Matcher::*, Slice, Table, Vt}};").unwrap();
-    writeln!(w, "use {};\n", style.predicates).unwrap();
+    let alias = if style.predicates.ends_with("::predicates") { "" } else { " as predicates" };
+    writeln!(w, "use {}{alias};\n", style.predicates).unwrap();
 
     writeln!(w, "pub static ITEMS: [{dagisel}::matcher::Matcher; {}] = [", flat.items.len()).unwrap();
     for m in &flat.items {

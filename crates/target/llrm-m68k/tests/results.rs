@@ -660,3 +660,35 @@ fn a_disjoint_or_with_a_wide_constant_keeps_its_value() {
         assert_eq!(code, (((0x95 & 15) | 48) + 0x95) & 0xFF, "{asm}");
     }
 }
+
+/// The shared builder refuses `llvm.mem*` for a target with no `full()` description (arm64's
+/// adapter). m68k has one, so its inline expansions must keep compiling and running: a
+/// 24-byte copy, a fill and an overlapping move.
+#[test]
+fn memory_intrinsics_compile_and_run_on_m68k() {
+    let ir = "declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+declare void @llvm.memmove.p0.p0.i32(ptr, ptr, i32, i1)
+define i32 @f(i32 %x) {
+  %a = alloca [6 x i32], align 4
+  %b = alloca [6 x i32], align 4
+  %a2 = getelementptr i32, ptr %a, i32 2
+  store i32 %x, ptr %a2, align 4
+  call void @llvm.memcpy.p0.p0.i32(ptr align 4 %b, ptr align 4 %a, i32 24, i1 false)
+  %b2 = getelementptr i32, ptr %b, i32 2
+  %v = load i32, ptr %b2, align 4
+  call void @llvm.memset.p0.i32(ptr align 4 %a, i8 7, i32 8, i1 false)
+  %f = load i8, ptr %a, align 4
+  %fz = zext i8 %f to i32
+  call void @llvm.memmove.p0.p0.i32(ptr align 4 %b, ptr align 4 %b2, i32 12, i1 false)
+  %m = load i32, ptr %b, align 4
+  %r = add i32 %v, %fz
+  %q = add i32 %r, %m
+  ret i32 %q
+}";
+    let asm = text_with(&module(ir), "f", Cpu::M68000, Options::default()).unwrap();
+    assert!(!asm.is_empty(), "{asm}");
+    if let Some(code) = status(ir, &[5], Options::default()) {
+        assert_eq!(code, 5 + 7 + 5, "{asm}");
+    }
+}
