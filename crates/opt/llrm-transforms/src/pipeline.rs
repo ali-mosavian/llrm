@@ -631,15 +631,17 @@ impl FunctionPass for Together {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let mut changed = false;
+        // As LLVM's `PassManager::run`: what survives the slot is what every
+        // part kept, not nothing because one part changed the body.
+        let mut kept = PreservedAnalyses::all();
         for part in &mut self.parts {
             let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
             if !preserved.are_all_preserved() {
-                changed = true;
                 analyses.invalidate(unit.function, &preserved);
             }
+            kept.intersect(preserved);
         }
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        kept
     }
 }
 

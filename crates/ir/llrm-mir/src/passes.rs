@@ -1048,6 +1048,25 @@ impl PreservedAnalyses {
         self.all
     }
 
+    /// `PreservedAnalyses::intersect`: what is kept after this pass and then
+    /// `other`, one pass or a slot of several: an analysis stands only if both
+    /// kept it, and `all` only if both changed nothing.
+    pub fn intersect(
+        &mut self,
+        other: Self,
+    ) {
+        if other.all {
+            return;
+        }
+        if self.all {
+            *self = other;
+            return;
+        }
+        self.cfg &= other.cfg;
+        self.kept.retain(|analysis| other.kept.contains(analysis));
+        self.updated.retain(|analysis| other.updated.contains(analysis));
+    }
+
     /// Whether `A` is kept, named or with everything.
     pub fn kept<A: Analysis>(&self) -> bool {
         self.keeps(TypeId::of::<A>())
