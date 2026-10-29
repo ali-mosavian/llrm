@@ -107,14 +107,40 @@ fn a_store_through_a_register_is_store_with_offset_zero() {
     assert_eq!(dag.nodes[ops[1].node as usize].constant, Some(0));
 }
 
-/// DEVIATE of `addr.rs`, pinned so it is not forgotten: oracle folds `gep
-/// inbounds i8, %p, 8` (an `add nuw`) into offset 8; until `Dag` has the flag
-/// the add stays a separate node and the offset is 0.
+/// Oracle: `gep inbounds i8, %p, 8` is an `add nuw`, folded into offset 8.
 #[test]
-fn an_add_is_not_folded_until_the_dag_has_the_nuw_flag() {
+fn an_add_nuw_folds_its_constant_into_the_offset() {
+    let (offset, base) = load_address(|dag| {
+        let (p, eight) = (dag.input(1, mvt::i32), dag.make_constant(8, mvt::i32));
+        let add = dag.node(isd::ADD, &[mvt::i32], &[p, eight]);
+        dag.nodes[add as usize].no_unsigned_wrap = true;
+        SDValue::new(add, 0)
+    });
+    assert_eq!(offset, Some(8));
+    assert_eq!(base.0, "?", "the base is the register itself");
+}
+
+/// The offset is unsigned with infinite precision: an add that may wrap does
+/// not fold. Before the nuw query the fold fired never, so this pins the
+/// other side of it.
+#[test]
+fn an_add_that_may_wrap_keeps_its_offset_zero() {
     let (offset, _) = load_address(|dag| {
         let (p, eight) = (dag.input(1, mvt::i32), dag.make_constant(8, mvt::i32));
         SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[p, eight]), 0)
     });
     assert_eq!(offset, Some(0));
+}
+
+/// `or p, 8` where `p` is masked to `0x100`: the bits are disjoint, so it is
+/// an add and the offset folds.
+#[test]
+fn an_or_of_disjoint_bits_folds_the_offset() {
+    let (offset, _) = load_address(|dag| {
+        let (p, mask) = (dag.input(1, mvt::i32), dag.make_constant(0x100, mvt::i32));
+        let and = dag.node(isd::AND, &[mvt::i32], &[p, mask]);
+        let eight = dag.make_constant(8, mvt::i32);
+        SDValue::new(dag.node(isd::OR, &[mvt::i32], &[SDValue::new(and, 0), eight]), 0)
+    });
+    assert_eq!(offset, Some(8));
 }

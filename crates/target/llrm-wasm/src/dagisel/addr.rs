@@ -1,16 +1,13 @@
 //! `SelectAddrOperands32` and `SelectAddrOperands64`: a load or store address
 //! as an offset immediate and a base.
 //!
-//! DEVIATE: an `add` is never folded into the offset, and an `or` of unknown
-//! bits is not folded either. Reason: `Dag` has no `nuw` query (the pin folds
-//! only `add nuw`) and no `computeKnownBits`. The address is still correct, the
-//! add stays a separate instruction. Exit: `Dag::has_no_unsigned_wrap`.
+//! DEVIATE: an `or` with a non-constant right side is not folded into the
+//! offset. Reason: `Dag` has no `computeKnownBits`. The address is still
+//! correct, the `or` stays a separate instruction. Exit: known bits in `Dag`.
 //!
 //! # See also
 //! `WebAssemblyISelDAGToDAG.cpp`, pin d1106deb71cc: `SelectAddrOperands`
 //! (L531), `SelectAddrAddOperands` (L493).
-//!
-//! The `or` fold is untested: `TestDag::masked_value_is_zero` is always false.
 
 use llrm_dagisel::dag::{Dag, SDValue};
 use llrm_dagisel::generated::ids::isd;
@@ -50,12 +47,16 @@ fn zero_base<D: Dag>(
     SDValue::new(dag.machine_node(width.const_opcode, &[width.vt], &[zero]), 0)
 }
 
-/// `SelectAddrAddOperands` for an `or`: a constant operand, or a global.
+/// `SelectAddrAddOperands`: a constant operand, or a global. An `add` folds
+/// only with `nuw`: the offset is unsigned with infinite precision.
 fn select_add_operands<D: Dag>(
     dag: &mut D,
     width: Width,
     n: SDValue,
 ) -> Option<(SDValue, SDValue)> {
+    if dag.opcode(n.node) == isd::ADD && !dag.has_no_unsigned_wrap(n.node) {
+        return None;
+    }
     for i in 0..2 {
         let (op, other) = (dag.operand(n.node, i), dag.operand(n.node, 1 - i));
         if let Some(constant) = dag.constant(op) {
@@ -85,6 +86,11 @@ pub fn select_addr_operands<D: Dag>(
 ) -> (SDValue, SDValue) {
     if let Some(global) = global_address(dag, n) {
         return (global, zero_base(dag, width));
+    }
+    if dag.opcode(n.node) == isd::ADD {
+        if let Some(folded) = select_add_operands(dag, width, n) {
+            return folded;
+        }
     }
     if dag.opcode(n.node) == isd::OR {
         let disjoint = dag
