@@ -69,4 +69,4 @@ Hosted VMs have no `perf` instruction counter. Steps that read one: `measure`, a
 
 One line per debt: `- DEBT <id> | limit <text> | deadline YYYY-MM-DD | owner <name> | <what and why>`.
 
-- DEBT OS-UNROLL-3 | limit parity/scalar -O2 code 353 B bq16, 249 bq32 and c, 252 nib | deadline 2026-11-12 | owner w3 | the pin's full unroll of the 8-trip loop is 2x main's bytes (and 45% fewer instructions); m16 DEVIATE no full unroll at -O2 past a growth bar, then the waiver goes.
+- DEBT OS-UNROLL-3 | limit parity/scalar -O2 code 353 B bq16, 249 bq32 and c, 252 nib; bq16 data 23 at -O2 and -Os; bq16 -Os code 171 | deadline 2026-11-05 | owner w3 | -O2: the pin's full unroll of the 8-trip loop is 2x main's bytes (45% fewer instructions); m16 DEVIATE no full unroll past a growth bar. -Os bq16 +6 B: LU2 #3646 (+3), DAG default 97096c07c (+4). Data +2: the cint(val) by-ref second cell, closed by w13's fist-to-store fold. Fix is general (unroll cost at -Os, DAG default tuning), not a bq16 patch; bisect: ~/scratch/w3/bisect-scalar.sh. Then the waiver goes.
