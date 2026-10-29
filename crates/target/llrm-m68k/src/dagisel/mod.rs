@@ -8,4 +8,5 @@ pub mod call;
 pub mod generated;
 pub mod hooks;
 pub mod lowering;
+pub mod pipeline;
 pub mod predicates;
