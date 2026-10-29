@@ -99,6 +99,14 @@ pub struct BuilderTarget {
     /// The same for the load and store pairs of a constant memcpy: a dword
     /// pair is 8 bytes against about 16 for `rep movs`, so two.
     pub memcpy_moves_size: usize,
+    /// The pairs of an inline constant memcpy are chained one after another in
+    /// address order, not left unordered for the scheduler (`getMemcpyLoadsAndStores`
+    /// puts every load and store on the root). DEVIATE: a target that steps a
+    /// pointer with each access wants that order. Off for x86.
+    pub ordered_copies: bool,
+    /// The target has x86's `rep movs` and `rep stos`; without them a copy or
+    /// fill past the inline limit is a call (the pin's `memcpy`, `memset`).
+    pub string_instructions: bool,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -256,6 +264,8 @@ impl BuilderTarget {
             min_size: false,
             memset_stores_size: 0,
             memcpy_moves_size: 0,
+            ordered_copies: false,
+            string_instructions: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -287,6 +297,8 @@ impl BuilderTarget {
             min_size: false,
             memset_stores_size: 0,
             memcpy_moves_size: 0,
+            ordered_copies: false,
+            string_instructions: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,

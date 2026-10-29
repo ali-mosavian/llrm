@@ -39,6 +39,13 @@ pub fn builder_target() -> BuilderTarget {
         },
         shift_amount: EVT::I32,
         jump_tables: false,
+        string_instructions: false,
+        // past the inline limit a copy or a fill is a call (the pin: `memcpy`, `memmove`, `memset`)
+        libcalls: Some(vec![
+            ("memcpy".to_owned(), 0, "memcpy".to_owned()),
+            ("memmove".to_owned(), 0, "memmove".to_owned()),
+            ("memset".to_owned(), 0, "memset".to_owned()),
+        ]),
         target_nodes: Some(TargetNodes {
             call: m68kisd::CALL,
             ret: m68kisd::RET,
@@ -89,6 +96,18 @@ pub fn select_function_with(
     cpu: Cpu,
     load_as_source: bool,
 ) -> Result<Vec<Selected>, String> {
+    select_function_ordered(module, name, cpu, load_as_source, false)
+}
+
+/// [`select_function_with`], with `ordered_copies`: the pairs of an inline
+/// copy in address order, which the overlay's `(An)+` chains need.
+pub fn select_function_ordered(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    load_as_source: bool,
+    ordered_copies: bool,
+) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
         .global(id)
@@ -99,7 +118,8 @@ pub fn select_function_with(
     let layout = DataLayout::parse(text)?;
     let arch = M68k;
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
-    let target = builder_target();
+    let mut target = builder_target();
+    target.ordered_copies = ordered_copies;
     let mut info = FunctionLoweringInfo::new(function);
     let mut selected = Vec::new();
     let mut updates = Vec::new();

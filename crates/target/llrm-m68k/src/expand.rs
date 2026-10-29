@@ -30,7 +30,7 @@ fn physical(
     }
 }
 
-fn mask_bit(root: RegId) -> Option<u32> {
+pub(crate) fn mask_bit(root: RegId) -> Option<u32> {
     let index = |all: [RegId; 8]| all.iter().position(|one| *one == root);
     index([reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7])
         .map(|at| at as u32)
@@ -179,7 +179,7 @@ pub fn finish(
     let mut lines = Vec::new();
     let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
     let mut shown = 0usize;
-    for inst in insts {
+    for inst in insts.iter().copied() {
         let at = block_of.next().expect("a block per instruction");
         while shown <= at {
             if targeted.contains(&shown) {
@@ -281,6 +281,16 @@ pub fn finish(
         }
     }
     lines.extend(out.into_iter().map(Line::Inst));
+    // the registers a `ret` reads: the result, live at the `rts`
+    let returned: Vec<RegId> = insts
+        .iter()
+        .filter(|inst| inst.kind == Kind::Op("RET"))
+        .flat_map(|inst| &inst.operands)
+        .filter_map(|operand| match operand {
+            Operand::Use(Reg::Phys(register)) => Some(*register),
+            _ => None,
+        })
+        .collect();
     if overlay {
         lines = lines
             .into_iter()
@@ -294,6 +304,7 @@ pub fn finish(
         lines = crate::overlay::boolean_by_negation(lines);
         lines = crate::overlay::drop_redundant_tests(lines);
         lines = crate::overlay::fold_post_increment(lines);
+        lines = crate::chain::chain_post_increment(lines, &returned);
     }
     Ok(lines)
 }
