@@ -26,7 +26,8 @@ fn compiled(
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join(format!("x87.{extension}"));
     std::fs::write(&path, source).unwrap();
-    // llrm-c is gone: its command line is served by llrm-cc over the pinned clang.
+    // llrm-c is gone: its command line is served by llrm-cc over the pinned
+    // clang.
     let done = if tool == "llrm-c" {
         common::cc::llrm_c()
             .arg(&path)

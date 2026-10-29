@@ -1,6 +1,7 @@
-//! Compares of two runtime routines' flags answers, joined by `and` and branched on,
-//! were `CannotSelect(Target(24585))` under `--isel=dag`: the merged-branch split
-//! exported each compare's flags to a register (qb45/strings, udt, data, intrinsics).
+//! Compares of two runtime routines' flags answers, joined by `and` and
+//! branched on, were `CannotSelect(Target(24585))` under `--isel=dag`: the
+//! merged-branch split exported each compare's flags to a register
+//! (qb45/strings, udt, data, intrinsics).
 
 use std::path::Path;
 use std::process::Command;
