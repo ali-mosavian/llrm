@@ -160,7 +160,7 @@ impl Machine for Dos {
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)
-            .map(|one| std::rc::Rc::new(one.in_real_mode(real)) as std::rc::Rc<dyn llrm_mir::tti::Tti>)
+            .map(|one| std::rc::Rc::new(one.in_real_mode(real).with_tuning(self.tuning())) as std::rc::Rc<dyn llrm_mir::tti::Tti>)
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {

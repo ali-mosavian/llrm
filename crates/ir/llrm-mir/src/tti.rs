@@ -388,6 +388,12 @@ pub trait Tti {
         None
     }
 
+    /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
+    /// unroll (its tuning table); none: the pass's own.
+    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
+        (None, None)
+    }
+
     /// `getUnrollingPreferences` given the loop's shape, which targets read
     /// (nesting depth, exits); by default the loop-blind
     /// `get_unrolling_preferences`.
