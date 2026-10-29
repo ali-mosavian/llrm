@@ -62,3 +62,17 @@ fn an_unsigned_compare_branches_on_carry() {
     let ir = "define i8 @f(i8 %a, i8 %b) {\nentry:\n  %c = icmp ult i8 %a, %b\n  br i1 %c, label %t, label %f\nt:\n  ret i8 1\nf:\n  ret i8 2\n}";
     assert_eq!(selected(ir, "f"), [vec!["CMP8", "BCS", "JMP"], vec!["LDI8", "RET"], vec!["LDI8", "RET"]]);
 }
+
+/// Known gap (shared builder): an aggregate passed or returned by value is refused while a target
+/// states its calling convention through the hook; the 6502 passes aggregates by pointer.
+#[test]
+fn aggregates_by_value_are_refused() {
+    for (ir, name) in [
+        ("define i8 @f({ i8, i8 } %s) {\n  %r = extractvalue { i8, i8 } %s, 0\n  ret i8 %r\n}", "f"),
+        ("define { i8, i8 } @g() {\n  ret { i8, i8 } zeroinitializer\n}", "g"),
+    ] {
+        let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        assert!(select_function(&module, name, Cpu::Mos6502).is_err(), "@{name} should be refused");
+    }
+}

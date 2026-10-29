@@ -453,3 +453,57 @@ fn a_long_shift_by_a_constant_runs() {
         .sum();
     assert_eq!(got, 0x2345_6780);
 }
+
+/// A local struct `{ i8, i16, i8 }` (offsets 0, 1, 3: the layout aligns nothing), its fields stored
+/// through constant GEPs and read back: 5 + 0x1234 + 7, the low byte of which is 5 + 0x34 + 7 = 0x40.
+#[test]
+fn a_local_struct_runs() {
+    let ir = "define i8 @func() {\n  %s = alloca { i8, i16, i8 }\n\
+  %a = getelementptr { i8, i16, i8 }, ptr %s, i32 0, i32 0\n  store i8 5, ptr %a\n\
+  %b = getelementptr { i8, i16, i8 }, ptr %s, i32 0, i32 1\n  store i16 4660, ptr %b\n\
+  %c = getelementptr { i8, i16, i8 }, ptr %s, i32 0, i32 2\n  store i8 7, ptr %c\n\
+  %x = load i8, ptr %a\n  %y = load i16, ptr %b\n  %z = load i8, ptr %c\n\
+  %yl = trunc i16 %y to i8\n  %t = add i8 %x, %yl\n  %r = add i8 %t, %z\n  ret i8 %r\n}";
+    assert_eq!(run("struct", ir, "func", STACK, ""), 0x40);
+}
+
+/// An `[4 x i16]` filled and read through a variable index (scaled by 2): `a[i] = i * 3 + 1`, then
+/// `a[2] + a[3]` = 7 + 10 = 17 (the index loop is a phi).
+#[test]
+fn a_local_array_with_a_variable_index_runs() {
+    let ir = "define i8 @func() {\nentry:\n  %a = alloca [4 x i16]\n  br label %fill\n\
+fill:\n  %i = phi i16 [0, %entry], [%n, %fill]\n  %m = mul i16 %i, 3\n  %v = add i16 %m, 1\n\
+  %p = getelementptr [4 x i16], ptr %a, i16 0, i16 %i\n  store i16 %v, ptr %p\n  %n = add i16 %i, 1\n\
+  %c = icmp ult i16 %n, 4\n  br i1 %c, label %fill, label %sum\n\
+sum:\n  %p2 = getelementptr [4 x i16], ptr %a, i16 0, i16 2\n  %p3 = getelementptr [4 x i16], ptr %a, i16 0, i16 3\n\
+  %x = load i16, ptr %p2\n  %y = load i16, ptr %p3\n  %s = add i16 %x, %y\n  %r = trunc i16 %s to i8\n  ret i8 %r\n}";
+    assert_eq!(run("array", ir, "func", STACK, ""), 17);
+}
+
+/// A struct passed by pointer, not by value: `bump` adds 1 to field 0 and 2 to field 1 of a
+/// `{ i8, i8 }`; the caller's local goes in as (3, 4) and comes out (4, 6): the sum is 10.
+#[test]
+fn a_struct_passed_by_pointer_runs() {
+    let ir = "define void @bump(ptr %p) {\n  %q = getelementptr { i8, i8 }, ptr %p, i32 0, i32 1\n\
+  %a = load i8, ptr %p\n  %b = load i8, ptr %q\n  %a1 = add i8 %a, 1\n  %b2 = add i8 %b, 2\n\
+  store i8 %a1, ptr %p\n  store i8 %b2, ptr %q\n  ret void\n}\n\
+define i8 @func() {\n  %s = alloca { i8, i8 }\n  %q = getelementptr { i8, i8 }, ptr %s, i32 0, i32 1\n\
+  store i8 3, ptr %s\n  store i8 4, ptr %q\n  call void @bump(ptr %s)\n\
+  %a = load i8, ptr %s\n  %b = load i8, ptr %q\n  %r = add i8 %a, %b\n  ret i8 %r\n}";
+    let text = compile(ir, &["bump", "func"]);
+    assert_eq!(common::run_with("bump", &format!("{STACK}  jsr func\n"), &text), 10);
+}
+
+/// A global table of pairs summed through a scaled index: `{ 1, 2 }, { 3, 4 }, { 5, 6 }` give
+/// `t[0].a + t[1].b + t[2].a` = 1 + 4 + 5 = 10.
+#[test]
+fn a_global_array_of_structs_runs() {
+    let ir = "@tab = global [3 x { i8, i8 }] zeroinitializer\n\
+define i8 @func() {\n  %p0 = getelementptr [3 x { i8, i8 }], ptr @tab, i16 0, i16 0, i32 0\n\
+  %p1 = getelementptr [3 x { i8, i8 }], ptr @tab, i16 0, i16 1, i32 1\n\
+  %p2 = getelementptr [3 x { i8, i8 }], ptr @tab, i16 0, i16 2, i32 0\n\
+  %a = load i8, ptr %p0\n  %b = load i8, ptr %p1\n  %c = load i8, ptr %p2\n  %s = add i8 %a, %b\n  %r = add i8 %s, %c\n  ret i8 %r\n}";
+    let text = compile(ir, &["func"]);
+    let data = ".segment \"DATA\"\ntab: .byte 1, 2, 3, 4, 5, 6\n.segment \"CODE\"\n";
+    assert_eq!(common::run_with("tab", &format!("{STACK}  jsr func\n"), &format!("{text}{data}")), 10);
+}
