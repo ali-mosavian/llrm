@@ -77,8 +77,12 @@ pub struct M68k {
     ///
     /// DEVIATE from the pin's M68k, which overrides no hook. Reason: the
     /// hardware has the mode, and with it a loop's `p[i + 1]` needs no
-    /// address arithmetic. Exit: never; a target description, set with the
-    /// overlay.
+    /// address arithmetic. Evidence: the 68000 Programmer's Reference Manual,
+    /// "Address Register Indirect with Index (8-Bit Displacement) Mode"
+    /// (`EA = (An) + (Xn) + d8`, all 68k); binutils encodes `tst.b
+    /// 1(%a0,%d1.l)` as `4a30 1801`; the pin's own `CMP8fi` prints `(d,An,Xn)`.
+    /// `Options::PINNED` leaves it off. Exit: never; a target description, set
+    /// with the overlay.
     pub indexed_displacement: bool,
 }
 
