@@ -996,3 +996,63 @@ fn a_constant_shifted_up_16_is_a_moveq_and_swap() {
     assert!(!constant(65536 * 3 + 1).contains("swap"));
     assert!(!constant(0).contains("swap"));
 }
+
+fn long_op(
+    opcode: &'static str,
+    immediate: i64,
+) -> llrm_m68k::expand::Line {
+    llrm_m68k::expand::Line::Inst(Inst {
+        opcode,
+        operands: vec![register("d0"), register("d0"), Operand::Imm(immediate)],
+    })
+}
+
+fn after(opcode: &'static str) -> llrm_m68k::expand::Line {
+    llrm_m68k::expand::Line::Inst(Inst { opcode, operands: vec![register("d0")] })
+}
+
+fn opcodes(lines: &[llrm_m68k::expand::Line]) -> Vec<&'static str> {
+    lines
+        .iter()
+        .filter_map(|line| match line {
+            llrm_m68k::expand::Line::Inst(inst) => Some(inst.opcode),
+            _ => None,
+        })
+        .collect()
+}
+
+/// crc16's `eori.l #4129` (6 B) against gcc's `eor.w` (4 B): the high half is xored with zeros. The
+/// narrow form is taken where a `tst` or a return follows, not where a branch reads the codes
+/// (`N` and `Z` would come from the word), and not for a constant over 16 bits.
+#[test]
+fn an_xor_with_a_word_constant_is_a_word_xor_unless_its_codes_are_read() {
+    use llrm_m68k::overlay::narrow_immediates;
+    assert_eq!(opcodes(&narrow_immediates(vec![long_op("XOR32di", 4129), after("TST32d")])), ["XOR16di", "TST32d"]);
+    assert_eq!(opcodes(&narrow_immediates(vec![long_op("OR32di", 40000), after("RTS")])), ["OR16di", "RTS"]);
+    assert_eq!(opcodes(&narrow_immediates(vec![long_op("XOR32di", 4129), after("Bne8")])), ["XOR32di", "Bne8"]);
+    assert_eq!(opcodes(&narrow_immediates(vec![long_op("XOR32di", 65536), after("RTS")])), ["XOR32di", "RTS"]);
+    assert_eq!(opcodes(&narrow_immediates(vec![long_op("XOR32di", -1), after("RTS")])), ["XOR32di", "RTS"]);
+}
+
+/// `andi` narrows only where the mask's high half is all ones (the high half of the register is
+/// kept); `and.l #255` clears it and must stay long.
+#[test]
+fn an_and_keeps_its_long_form_unless_the_mask_keeps_the_high_half() {
+    use llrm_m68k::overlay::narrow_immediates;
+    assert_eq!(opcodes(&narrow_immediates(vec![long_op("AND32di", -65536 | 0x1234), after("RTS")])), ["AND16di", "RTS"]);
+    assert_eq!(opcodes(&narrow_immediates(vec![long_op("AND32di", 255), after("RTS")])), ["AND32di", "RTS"]);
+}
+
+#[test]
+fn word_immediates_encode_as_binutils_does() {
+    let word = |opcode, value| Inst { opcode, operands: vec![register("d0"), register("d0"), Operand::Imm(value)] };
+    // eori.w #4129,%d0; or.w #40000,%d0 (the pin's `or` with a source of #imm: binutils
+    // assembles the same text as `ori`, 0040 9c40, as long and as quick); and.w #4660,%d0 (c07c 1234)
+    for (inst, golden) in [
+        (word("XOR16di", 4129), "0a401021"),
+        (word("OR16di", 40000), "807c9c40"),
+        (word("AND16di", 0x1234), "c07c1234"),
+    ] {
+        assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
+    }
+}
