@@ -8979,16 +8979,6 @@ impl Compiler {
         type_id: u32,
     ) -> Result<Operand, SemanticError> {
         let Some(check) = intrinsics::argument_check(routine) else { return Ok(operand) };
-        if std::env::var_os("QB_POC_CHK").is_some() && check.range != intrinsics::Range::AbsAbove {
-            let name = match routine {
-                "fln" => "B$CHKLOG",
-                "fexp" => "B$CHKEXP",
-                _ => "B$CHKEX2",
-            };
-            let result = self.value(type_id);
-            self.emit_runtime_call(name, vec![result], vec![operand]);
-            return Ok(Operand::Value(result));
-        }
         // The operand is compared where it is and read again after the branch:
         // a cell would round it to the variable's width (D-RFP5).
         let mut tested = operand.clone();
