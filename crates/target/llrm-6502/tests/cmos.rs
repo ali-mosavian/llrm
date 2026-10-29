@@ -208,3 +208,31 @@ fn a_step_of_one_is_done_in_place() {
     assert!(cmos.contains("  inc a\n") && cmos.contains("  dec a\n"), "{cmos}");
     assert!(!cmos.contains("adc #1") && !cmos.contains("sbc #1"), "{cmos}");
 }
+
+const THROUGH: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"\n\
+    define i8 @twice(i8 %x) {\n  %r = add i8 %x, %x\n  ret i8 %r\n}\n\
+    define i8 @thrice(ptr %f, i8 %x) {\n  %a = call i8 %f(i8 %x)\n  %b = call i8 %f(i8 %a)\n  %c = call i8 %f(i8 %b)\n  ret i8 %c\n}";
+
+/// An indirect call pushes the callee's address minus one low byte last: the
+/// low byte went through `a` (`txa; pha`), and is `phx` on the 65C02. Three
+/// calls in a row, so three return labels: `thrice(&twice, 3)` is 3 * 8 = 24.
+#[test]
+fn an_indirect_call_pushes_x_directly_on_the_65c02() {
+    let module = llrm_mir::parse::module(THROUGH).expect("parses");
+    let text = |cpu| -> String {
+        ["twice", "thrice"]
+            .iter()
+            .map(|name| {
+                function_text(&module, name, &select_function(&module, name, cpu).expect("selects")).expect("emits")
+            })
+            .collect()
+    };
+    let (nmos, cmos) = (text(Cpu::Mos6502), text(Cpu::W65c02));
+    assert!(nmos.contains("  txa\n  pha\n  rts") && !nmos.contains("phx"), "{nmos}");
+    assert!(cmos.contains("  phx\n  rts") && !cmos.contains("  txa\n  pha\n  rts"), "{cmos}");
+    let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
+    let main = "  lda #<twice\n  sta rc2\n  lda #>twice\n  sta rc3\n  lda #3\n  sta rc4\n  jsr thrice\n";
+    for (target, text) in [("sim6502", nmos), ("sim65c02", cmos)] {
+        assert_eq!(common::run_on(target, "cmos-thrice", main, &text).0, 24, "{target}");
+    }
+}

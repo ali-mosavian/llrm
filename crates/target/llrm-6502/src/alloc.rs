@@ -1769,9 +1769,10 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("JSRI"), _) => {
                     made += 1;
                     let (lo, hi) = (register_name(lane(regs[0], 0)), register_name(lane(regs[0], 1)));
+                    let push_low = if cmos { "phx" } else { "txa\n  pha" };
                     writeln!(
                         out,
-                        "  lda #>(_ci{made}-1)\n  pha\n  lda #<(_ci{made}-1)\n  pha\n  lda {lo}\n  sec\n  sbc #1\n  tax\n  lda {hi}\n  sbc #0\n  pha\n  txa\n  pha\n  rts\n_ci{made}:"
+                        "  lda #>(_ci{made}-1)\n  pha\n  lda #<(_ci{made}-1)\n  pha\n  lda {lo}\n  sec\n  sbc #1\n  tax\n  lda {hi}\n  sbc #0\n  pha\n  {push_low}\n  rts\n_ci{made}:"
                     )
                     .unwrap();
                 }
