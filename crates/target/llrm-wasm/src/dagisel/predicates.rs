@@ -72,11 +72,6 @@ pub fn bool_node<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
 }
 
 /// `add_nuw`: `N->getFlags().hasNoUnsignedWrap()`.
-///
-/// DEVIATE: never, so the SIMD average patterns do not fire. Reason: `Dag` has
-/// no `nuw` flag query yet (only `has_disjoint_flag`); the pattern is
-/// SIMD-only. Exit: m68k's seam owner adds `has_no_unsigned_wrap`, or SIMD
-/// lands.
-pub fn add_nuw<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
-    false
+pub fn add_nuw<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
+    dag.has_no_unsigned_wrap(v.node)
 }
