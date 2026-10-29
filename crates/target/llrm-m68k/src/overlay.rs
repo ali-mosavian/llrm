@@ -335,10 +335,34 @@ fn post_increment_form(opcode: &str) -> Option<(&'static str, &'static PostIncre
     post_increment_table().get_key_value(format!("{opcode}+").as_str()).map(|(name, row)| (*name, row))
 }
 
+/// The block a branch names, by layout index (`.LBB<function>_<index>`).
+fn branch_target(inst: &Inst) -> Option<usize> {
+    let [Operand::Symbol(name, 0)] = &inst.operands[..] else { return None };
+    name.strip_prefix(".LBB")?.rsplit('_').next()?.parse().ok()
+}
+
+/// The lines that branch to block `label`.
+fn jumps_to(
+    lines: &[crate::expand::Line],
+    label: usize,
+) -> impl Iterator<Item = usize> + '_ {
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(
+            move |(at, line)| match line {
+                crate::expand::Line::Inst(inst) if branch_target(inst) == Some(label) => Some(at),
+                _ => None,
+            },
+        )
+}
+
 /// An access through `(An)` followed by the `addq.l #size, An` that steps the
 /// register past it is one access through `(An)+` (the increment sets no
 /// condition codes, so moving it up changes none): `add.l (%a0), %d0 ...
-/// addq.l #4, %a0` is `add.l (%a0)+, %d0`.
+/// addq.l #4, %a0` is `add.l (%a0)+, %d0`. The step may be past a forward
+/// conditional branch, when every way from the access reaches it and nothing
+/// else does: a loop whose select skips one move.
 pub fn fold_post_increment(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::Line> {
     use crate::expand::Line;
     let mut lines = lines;
@@ -370,9 +394,23 @@ pub fn fold_post_increment(lines: Vec<crate::expand::Line>) -> Vec<crate::expand
             continue;
         }
         let mut step = None;
+        // forward branches taken inside the span, whose labels are still ahead
+        let mut pending: Vec<usize> = Vec::new();
         for (later, line) in lines.iter().enumerate().skip(at + 1) {
-            let Line::Inst(inst) = line else { break };
-            let is_step = matches!(inst.opcode, "ADDQ32a" | "ADD32ai")
+            let inst = match line {
+                Line::Label(label) => {
+                    // a way in from outside the span would reach the step
+                    // without the access
+                    if jumps_to(&lines, *label).any(|from| from <= at || from >= later) {
+                        break;
+                    }
+                    pending.retain(|one| one != label);
+                    continue;
+                }
+                Line::Inst(inst) => inst,
+            };
+            let is_step = pending.is_empty()
+                && matches!(inst.opcode, "ADDQ32a" | "ADD32ai")
                 && matches!(
                     inst.operands[..],
                     [Operand::Reg(to), ..] if REGISTER_INFO.root(to) == root
@@ -382,9 +420,19 @@ pub fn fold_post_increment(lines: Vec<crate::expand::Line>) -> Vec<crate::expand
                 step = Some(later);
                 break;
             }
+            if is_branch_on_flags(inst.opcode)
+                && let Some(label) = branch_target(inst)
+                && !mentions(inst)
+            {
+                pending.push(label);
+                continue;
+            }
             if mentions(inst)
                 || is_branch_on_flags(inst.opcode)
                 || inst.opcode.starts_with("BRA")
+                || inst.opcode.starts_with("JSR")
+                || inst.opcode.starts_with("BSR")
+                || inst.opcode.starts_with("CALL")
                 || inst.opcode == "RTS"
             {
                 break;
