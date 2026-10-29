@@ -291,6 +291,23 @@ impl Builder {
         }
     }
 
+    /// `jsr callee`: it reads the registers just copied into, and clobbers
+    /// what the convention lets a routine clobber.
+    fn call(
+        &mut self,
+        callee: &str,
+    ) {
+        let arguments = results(&self.function.blocks[self.current].insts);
+        let mut jsr = Inst::new(
+            Kind::Op("JSR"),
+            std::iter::once(Operand::Symbol(callee.to_owned(), 0))
+                .chain(arguments.into_iter().map(|r| Operand::Use(Reg::Phys(r))))
+                .collect(),
+        );
+        jsr.call = true;
+        self.push(jsr);
+    }
+
     fn push(
         &mut self,
         inst: Inst,
@@ -640,6 +657,62 @@ pub fn build(
                 cmov.early_clobber = true;
                 b.push(cmov);
             }
+            op::JSR => {
+                let Machine::Label(callee) = &o[0] else { return Err(Unsupported("an indirect call".into())) };
+                b.call(callee);
+            }
+            code @ (op::MUL8 | op::UDIV8 | op::SDIV8 | op::UREM8 | op::SREM8 | op::SHLV8 | op::SRLV8 | op::SRAV8) => {
+                let routine = match code {
+                    op::MUL8 => "__mulqi3",
+                    op::UDIV8 => "__udivqi3",
+                    op::SDIV8 => "__divqi3",
+                    op::UREM8 => "__umodqi3",
+                    op::SREM8 => "__modqi3",
+                    op::SHLV8 => "__ashlqi3",
+                    op::SRLV8 => "__lshrqi3",
+                    _ => "__ashrqi3",
+                };
+                b.define(name(&o[0])?);
+                let (d, x, y) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?, b.byte(name(&o[2])?)?);
+                b.copy(Reg::Phys(rc(2)), x);
+                b.copy(Reg::Phys(rc(3)), y);
+                b.call(routine);
+                b.copy(d, Reg::Phys(reg::A));
+            }
+            code @ (op::MUL16
+            | op::UDIV16
+            | op::SDIV16
+            | op::UREM16
+            | op::SREM16
+            | op::SHLV16
+            | op::SRLV16
+            | op::SRAV16) => {
+                let routine = match code {
+                    op::MUL16 => "__mulhi3",
+                    op::UDIV16 => "__udivhi3",
+                    op::SDIV16 => "__divhi3",
+                    op::UREM16 => "__umodhi3",
+                    op::SREM16 => "__modhi3",
+                    op::SHLV16 => "__ashlhi3",
+                    op::SRLV16 => "__lshrhi3",
+                    _ => "__ashrhi3",
+                };
+                b.define(name(&o[0])?);
+                let ((dl, dh), (xl, xh)) = (b.word(name(&o[0])?)?, b.word(name(&o[1])?)?);
+                b.copy(Reg::Phys(rc(2)), xl);
+                b.copy(Reg::Phys(rc(3)), xh);
+                if matches!(code, op::SHLV16 | op::SRLV16 | op::SRAV16) {
+                    let count = b.byte(name(&o[2])?)?;
+                    b.copy(Reg::Phys(rc(4)), count);
+                } else {
+                    let (yl, yh) = b.word(name(&o[2])?)?;
+                    b.copy(Reg::Phys(rc(4)), yl);
+                    b.copy(Reg::Phys(rc(5)), yh);
+                }
+                b.call(routine);
+                b.copy(dl, Reg::Phys(reg::A));
+                b.copy(dh, Reg::Phys(reg::X));
+            }
             op::RET => {
                 let results = results(&b.function.blocks[b.current].insts);
                 let mut ret =
@@ -978,6 +1051,7 @@ pub fn emit(
                     }
                     writeln!(out, "{done}:").unwrap();
                 }
+                (Kind::Op("JSR"), [Operand::Symbol(callee, _), ..]) => writeln!(out, "  jsr {callee}").unwrap(),
                 (Kind::Op("STZ"), _) => writeln!(out, "  stz {}", register_name(regs[0])).unwrap(),
                 (Kind::Op("STZM"), [Operand::Symbol(symbol, _)]) => writeln!(out, "  stz {symbol}").unwrap(),
                 (Kind::Op("LDM"), [_, Operand::Symbol(symbol, _)]) => writeln!(out, "  lda {symbol}").unwrap(),

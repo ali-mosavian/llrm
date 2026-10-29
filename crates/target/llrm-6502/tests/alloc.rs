@@ -137,3 +137,15 @@ fn a_word_select_returns_the_larger_word() {
         assert_eq!(run("  txa\n"), hi);
     }
 }
+
+/// A value live across a runtime call cannot stay in a register the routine
+/// clobbers: it goes to a slot and comes back. a = 5: t = 6, r = 5 * 3 = 15,
+/// t + r = 21.
+#[test]
+fn a_value_live_across_a_call_survives_it() {
+    let ir =
+        "define i8 @across(i8 %a) {\n  %t = add i8 %a, 1\n  %r = mul i8 %a, 3\n  %s = add i8 %r, %t\n  ret i8 %s\n}";
+    let text = compile(ir, "across", true);
+    assert!(text.contains("jsr __mulqi3") && text.contains("s_across_"), "{text}");
+    assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 21);
+}
