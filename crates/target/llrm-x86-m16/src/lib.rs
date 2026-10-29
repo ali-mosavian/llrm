@@ -586,12 +586,15 @@ mod tuning_tests {
         assert_eq!(table.max_stores_per_memset_opt_size, 4);
         assert_eq!((table.max_stores_per_memcpy_opt_size, table.max_stores_per_memmove_opt_size), (2, 2));
         assert_eq!(table.size_milliclocks_per_byte, 10_000);
+        assert_eq!((table.unroll_threshold, table.unroll_max_percent_threshold_boost), (Some(0), Some(100)));
         assert_eq!(
             Tuning {
                 max_stores_per_memset_opt_size: 8,
                 max_stores_per_memcpy_opt_size: 4,
                 max_stores_per_memmove_opt_size: 4,
                 size_milliclocks_per_byte: 0,
+                unroll_threshold: None,
+                unroll_max_percent_threshold_boost: None,
                 ..table
             },
             Tuning::PIN
