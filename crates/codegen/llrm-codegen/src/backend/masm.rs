@@ -847,9 +847,10 @@ fn sp_reg() -> Loc {
 
 /// Whether a return of `body` is a sibling call (`jmp`).
 fn sibling_calls(body: &lir::LirBody) -> bool {
-    body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| {
-        one.what.as_ref().is_some_and(|what| what.op == Operation::Return && what.name.as_deref() == Some("jmp"))
-    })
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .any(|one| one.what.as_ref().is_some_and(|what| what.is_sibling_call()))
 }
 
 /// Whether a call in `body` leaves SP somewhere else (`alloca`). The registers
@@ -1715,12 +1716,12 @@ fn built(
                     // an indirect sibling call: the epilogue, then a jump
                     // through the register the callee's
                     // address is in
-                    if what.name.as_deref() == Some("jmp") && what.indirect {
+                    if what.is_sibling_call() && what.indirect {
                         out.push(Item::Semantics(Semantics { op: Operation::Jump, ..what.clone() }));
                         continue;
                     }
                     // a sibling call: the epilogue, then a jump to the callee
-                    if what.name.as_deref() == Some("jmp")
+                    if what.is_sibling_call()
                         && let Some(callee) = procedure.callees.get(&one.at)
                     {
                         out.push(Item::Callee(Callee { tail: true, ..callee.clone() }));
@@ -1928,6 +1929,12 @@ fn frame_omitted(
     held: bool,
 ) -> Option<Vec<Item>> {
     let omitted = stack_addressed(procedure, number)?;
+    // The exits were made instructions for an omitted frame (`exits_inserted`):
+    // the size comparison below, asked again of the body that now holds them,
+    // may answer the other way and print the entry with a frame register.
+    if procedure.body.frame_exit == Some(true) {
+        return Some(omitted);
+    }
     // Where allocation freed the frame register the pin's `hasFP` said no, and
     // the pin omits it whatever the bytes (BASIC, which never asks, compares).
     if !procedure.size || held || procedure.registers.free {
@@ -3246,6 +3253,41 @@ mod tests {
             stack_check: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         };
+        let lines: Vec<String> =
+            _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
+        assert!(lines.iter().any(|one| one == "jmp _other"), "{lines:?}");
+        assert!(!lines.iter().any(|one| one == "ret"), "{lines:?}");
+    }
+
+    /// A sibling call in a body whose frame register was omitted: the exits
+    /// inserted ahead of the return (`frame_exit` set) must still end in the
+    /// jump to the callee, not a `ret`.
+    #[test]
+    fn a_sibling_call_in_an_omitted_frame_still_jumps() {
+        let bx = Loc::Reg(ir::Reg { register: RegId::EBX, width: 4 });
+        let si = Loc::Reg(ir::Reg { register: RegId::ESI, width: 4 });
+        let r#move = insn(0, semantics(Operation::Move, "mov", vec![si], vec![bx]));
+        let leave = insn(1, semantics(Operation::Return, "jmp", vec![], vec![]));
+        let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
+        let body = lir::LirBody {
+            bits: 32,
+            ..lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default())
+        };
+        let procedure = Procedure {
+            name: "_get".into(),
+            public: true,
+            far: false,
+            body,
+            reserve: 0,
+            callees: IndexMap::from_iter([(1, Callee::new("_other", false))]),
+            interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: None,
+            registers: llrm_target::Target::frame_registers(&llrm_x86_m32::M32),
+        };
+        let procedure = exits_inserted(procedure);
+        assert_eq!(procedure.body.frame_exit, Some(true), "premise: the frame is omitted and its exits inserted");
         let lines: Vec<String> =
             _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         assert!(lines.iter().any(|one| one == "jmp _other"), "{lines:?}");
