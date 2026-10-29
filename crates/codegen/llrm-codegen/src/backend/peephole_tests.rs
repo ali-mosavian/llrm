@@ -1578,6 +1578,34 @@ fn test_zeroing_before_a_jump_asks_what_the_target_reads() {
     }
 }
 
+/// `mov ecx, 0; mov edx, 64; jmp _chop` (a sibling call) stayed five bytes: the
+/// jump that returns was taken to read the flags, which the pin's `TAILJMPd`
+/// does not (m32 -O2 recchop, +3 B over the pin's `xor`).
+#[test]
+fn test_a_zero_before_a_sibling_call_is_xor() {
+    let (ecx, edx) = (rl(RegId::ECX, 4), rl(RegId::EDX, 4));
+    let insns = vec![
+        Arc::new(insn(
+            0,
+            Some((0, 5)),
+            Some(sem(Operation::Move, "mov", vec![ecx.clone()], vec![im(0, 4)])),
+            vec![],
+            vec![],
+        )),
+        Arc::new(insn(5, Some((5, 10)), Some(sem(Operation::Move, "mov", vec![edx], vec![im(64, 4)])), vec![], vec![])),
+        Arc::new(insn(
+            10,
+            Some((10, 15)),
+            Some(semt(Operation::Return, "jmp", vec![], vec![], Some(99))),
+            vec![],
+            vec![],
+        )),
+    ];
+    let result =
+        zeroes(&body("sibling", 0, crate::model::lir::shared(vec![block(0, insns, vec![])]))).insns()[0].clone();
+    assert_eq!(result.what.as_ref().unwrap().name.as_deref(), Some("xor"));
+}
+
 #[test]
 fn test_zero_compare_before_its_branch_is_test() {
     // `cmp ax,0; jl` is three bytes where `test ax,ax; jl` is two, and writes

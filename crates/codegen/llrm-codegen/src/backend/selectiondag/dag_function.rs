@@ -46,7 +46,7 @@ use llrm_target::Target;
 use llrm_target::routines::Used;
 
 use super::actions::{Features, TargetLowering};
-use super::builder::{BuilderTarget, RuntimeAnswer, build_block};
+use super::builder::{BuilderTarget, RuntimeAnswer, SizeTrade, build_block};
 use super::dag_select::select_block;
 use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
 use super::function_lowering::FunctionLoweringInfo;
@@ -717,6 +717,23 @@ impl super::emit::ConstantCells for PoolCells<'_> {
     }
 }
 
+/// The clock prices a size-only pick weighs against bytes (m16: the fill it
+/// prices is real mode's).
+fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
+    let rate = cpu.size_milliclocks_per_byte();
+    if rate == 0 {
+        return None;
+    }
+    let costs = cpu.target().costs();
+    Some(SizeTrade {
+        milliclocks_per_byte: rate,
+        fill: costs.fill,
+        fill_cell: costs.fill_cell,
+        store: costs.store,
+        prefix: costs.prefix,
+    })
+}
+
 fn selected_in(
     module: &Module,
     name: &str,
@@ -793,9 +810,18 @@ fn selected_in(
         // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
         // 5095 B against the pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
-        .with_jump_tables(cpu.target().costs().jump_table != 0)
+        .with_jump_tables(
+            cpu.target().costs().jump_table != 0
+                && !function.attrs.iter().any(|attr| {
+                    matches!(
+                        attr,
+                        llrm_mir::Attribute::Str(name, Some(value)) if name == "no-jump-tables" && value == "true"
+                    )
+                }),
+        )
         .with_opt_size(cpu.size || cpu.min_size)
         .with_min_size(cpu.min_size)
+        .with_size_trade(size_trade(cpu))
         .with_tail_calls(tail_calls_on())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
@@ -1293,6 +1319,21 @@ fn selected_in(
     let mut body =
         crate::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &noted_wides, &[], body);
     set_odds(&mut body, &info.edge_probs, &block_at);
+    // The loops whose trips `induction` proves, as the old route states them:
+    // the executed-work estimate (the route choice's, `LLRM_DEBUG=cost`) reads
+    // 31 in 32 for a loop without them.
+    {
+        let shape = llrm_analysis::cfg::Shape::of(function);
+        let unit = llrm_analysis::memory::Unit::of(module, &layout, function)
+            .with_spaces(arch.layout().spaces.roles)
+            .with_shape(&shape);
+        let exposed = llrm_analysis::memory::exposed_frames(&unit);
+        let unit = unit.with_exposed(&exposed);
+        let registers = llrm_analysis::consts::known(&unit);
+        let unit = unit.with_registers(&registers);
+        body.loop_trip_counts =
+            crate::backend::isel::proven_trips(&unit, &shape, &registers, |block| block_at.get(&block.0).copied());
+    }
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
     // their bytes are laid down at the call, as the old route did.
