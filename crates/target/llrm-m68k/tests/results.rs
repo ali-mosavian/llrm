@@ -465,3 +465,45 @@ fn a_second_select_on_a_compare_after_a_call_compares_again() {
         }
     }
 }
+
+const THREE_POINTERS: &str = "define i32 @k(ptr %c, ptr %a, ptr %b, i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i2, %loop ]
+  %pc = phi ptr [ %c, %entry ], [ %pc2, %loop ]
+  %pa = phi ptr [ %a, %entry ], [ %pa2, %loop ]
+  %pb = phi ptr [ %b, %entry ], [ %pb2, %loop ]
+  %x = load i8, ptr %pa
+  %y = load i8, ptr %pb
+  %s = add i8 %x, %y
+  store i8 %s, ptr %pc
+  %pa2 = getelementptr i8, ptr %pa, i32 1
+  %pb2 = getelementptr i8, ptr %pb, i32 1
+  %pc2 = getelementptr i8, ptr %pc, i32 1
+  %i2 = add i32 %i, 1
+  %more = icmp ult i32 %i2, %n
+  br i1 %more, label %loop, label %done
+done:
+  %q = getelementptr i8, ptr %c, i32 1
+  %r = load i8, ptr %q
+  %z = zext i8 %r to i32
+  ret i32 %z
+}";
+
+/// A loop over three byte pointers and a count: LSR kept one shared index
+/// register for the pointers, `move.b (%a0,%d1), ...`; with post-indexed
+/// addressing each pointer steps in its own access. Runs, and no pointer is
+/// stepped apart from its access.
+#[test]
+fn a_loop_over_three_pointers_steps_each_in_its_access() {
+    use llrm_m68k::kernels::Arg::{Data, Imm};
+    let args = [Data(128), Data(0), Data(0), Imm(5)];
+    for options in [Options::default(), Options::PINNED] {
+        if let Some(code) = status_with_data(THREE_POINTERS, &args, options) {
+            assert_eq!(code, 2 * i32::from(b'e'), "{options:?}");
+        }
+    }
+    let text = text_with(&module(THREE_POINTERS), "k", Cpu::M68000, Options::default()).unwrap();
+    assert!(text.matches(")+").count() >= 3, "{text}");
+}
