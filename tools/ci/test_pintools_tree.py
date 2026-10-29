@@ -83,6 +83,12 @@ def test_the_difftest_tests_that_need_opt_are_red_not_skipped_where_the_gate_req
     assert "matrix.group == 'python'" in CI
 
 
+def test_the_pindiff_corpus_check_is_red_not_skipped_where_the_gate_requires_the_tools():
+    """test_pindiff.py's corpus check skipped on CI when LLRM_OW, LLRM_PIN_CLANG or LLRM_CLANG_M16 was unset."""
+    text = (ROOT / "tools/pairs/test_pindiff.py").read_text()
+    assert 'pytest.fail if os.environ.get("LLRM_REQUIRE_PINTOOLS") else pytest.skip' in text and "LLRM_CLANG_M16" in text
+
+
 def test_a_present_tree_exports_llvm_src_and_build(tmp_path):
     done = run_step(tmp_path, tools=TOOLS)
     env = (tmp_path / "env").read_text()
