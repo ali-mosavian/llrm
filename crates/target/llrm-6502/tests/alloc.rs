@@ -971,3 +971,18 @@ fn a_callee_saved_cell_goes_to_the_loop_values_only() {
     assert_eq!(saved, 3, "{text}");
     assert!(text.contains("  lda rc2\n  sta s_mix"), "cold is in a slot: {text}");
 }
+
+/// `shl i16 x, k` for k from 9 to 15 ran k - 8 asl/rol pairs over the whole word and then moved the
+/// low byte up (the high byte of every `rol` was dead). The result's high byte is the low byte
+/// shifted by k - 8: no `rol`.
+#[test]
+fn a_word_shift_left_of_nine_or_more_shifts_one_byte() {
+    for count in [9u32, 11, 15] {
+        let ir = format!("define i16 @shl(i16 %x) {{\n  %r = shl i16 %x, {count}\n  ret i16 %r\n}}");
+        let text = compile(&ir, "shl");
+        assert!(!text.contains("rol"), "shl {count}: {text}");
+        for x in [0x1234u16, 0x80FF, 0xFFFF, 0x0001] {
+            assert_eq!(run_word("alloc-shl", &text, "shl", x), x << count, "shl {count} of {x:#06x}");
+        }
+    }
+}
