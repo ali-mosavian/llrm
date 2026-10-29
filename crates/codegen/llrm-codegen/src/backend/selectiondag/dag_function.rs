@@ -807,7 +807,7 @@ fn selected_in(
         // i16 %x,3` costs +59 B in 4 spill slots). Cost: an idiv is ~40 clocks
         // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
         // 5095 B against the pin's 5463 (2026-10-27).
-        .with_int_div_cheap(cpu.size || cpu.min_size)
+        .with_int_div_cheap(cpu.size || cpu.min_size || cpu.target().tuning().int_div_cheap)
         .with_jump_tables(
             cpu.target().costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
