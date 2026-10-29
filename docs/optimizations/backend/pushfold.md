@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/pushfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/pushfold.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/pushfold.rs sha256:f194625d5061cfaaa028a80c6e0da2d3946160b96db274351e3c7900c61f132a -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/pushfold.rs sha256:9f3b5a7c6cfce923e57849417076a292d553b2d52a2cd3dadc0401af81367493 -->
 
 # pushfold
 
@@ -33,7 +33,9 @@ not set it.
 DEVIATE CF1 (no number): the pin's input is `mov [esp+k], r` stores into a
 reserved frame, converted to pushes and folded in one pass; ours has pushes
 from selection, so the conversion has no input and `isProfitable` (its
-reserved-frame accounting) no question. Pin llc -m32 i486, -Os and -Oz: `movl %edi,(%esp); calll g`, no push, no cleanup per call. Exit: none, the form is not made (debt row call-frame-reserve, docs/working/ci.md).
+reserved-frame accounting) no question. Pin llc -m32 i486, -Os and -Oz:
+`movl %edi,(%esp); calll g`, no push, no cleanup per call. Exit: none, the
+form is not made (debt row call-frame-reserve, docs/working/ci.md).
 
 ## Example
 `f(p->a, p->b, p->c)`, before (after `FloatFold`):

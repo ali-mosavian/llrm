@@ -13,11 +13,8 @@ fn at_o0_saved_registers_are_pushed_before_the_call_area_is_reserved() {
         int __cdecl f(int *p, int n) {\n    int a = p[0], b = p[1], c = p[2], d = p[3];\n    \
         int r = rd(a, b, c);\n    sink(r);\n    return a + b + c + d + r + n;\n}\n";
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = common::cc::llrm_c()
-        .current_dir(directory)
-        .args(["-O0", "-m32", "-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(directory).args(["-O0", "-m32", "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(directory.join("a.s")).unwrap();
     let body = &text[text.find("_f proc").unwrap()..];

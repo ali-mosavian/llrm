@@ -67,9 +67,11 @@ fn the_watcom_abi_makes_char_unsigned() {
     assert!(!unsigned("-mabi=watcom -fsigned-char -c x.c"));
 }
 
-/// The header Nib generates for `-mabi=watcom` says `extern short __far __watcall weight(...)`; the rows without
-/// watcom.h (x86_16-dos) did not know `__watcall` ("expected ';'"), so the interop example's C library did not
-/// compile. The backend's convention is the Watcom one: the keyword adds nothing for clang.
+/// The header Nib generates for `-mabi=watcom` says `extern short __far
+/// __watcall weight(...)`; the rows without watcom.h (x86_16-dos) did not know
+/// `__watcall` ("expected ';'"), so the interop example's C library did not
+/// compile. The backend's convention is the Watcom one: the keyword adds
+/// nothing for clang.
 #[test]
 fn the_watcom_abi_defines_the_watcall_keyword_away() {
     let defines = |args: &str| built(args).clang.iter().any(|one| one == "-D__watcall=");
