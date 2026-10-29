@@ -117,3 +117,22 @@ fn at_os_an_aligned_fill_is_words_and_at_o2_dwords() {
     assert!(size.contains("rep stosw") && !size.contains("stosd"), "{size}");
     assert!(listing("-O2").contains("rep stosd"));
 }
+
+/// `x / 120` at -O2 became a 32-bit multiply by a magic number and four more
+/// instructions (about 32 bytes, against 11 for `idiv`): qlight.c was 391
+/// bytes against `idiv`'s 279, recpow.c 275 against 178. m16 keeps the divide
+/// at every level.
+#[test]
+fn at_o2_a_divide_by_a_constant_stays_a_divide() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(directory.join("d.c"), "long f(long x) { return x / 120; }\n").unwrap();
+    let output = common::cc::llrm_c()
+        .current_dir(directory)
+        .args(["-O2", "-m16", "-march=i386", "-S", "-o", "d.s", "d.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(directory.join("d.s")).unwrap();
+    assert!(text.contains("idiv"), "{text}");
+}

@@ -31,6 +31,9 @@ pub struct Tuning {
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
+    /// `isIntDivCheap` at every level, not only at minsize: a divide by a
+    /// constant stays a divide instead of becoming a multiply and shifts.
+    pub int_div_cheap: bool,
 }
 
 impl Tuning {
@@ -46,6 +49,7 @@ impl Tuning {
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         inline_threshold: None,
+        int_div_cheap: false,
     };
 }
 
