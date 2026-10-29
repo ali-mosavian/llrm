@@ -136,3 +136,12 @@ fn a_switch_takes_the_case_it_names() {
         }
     }
 }
+
+/// The low word moved up: 0x00AB1234 << 16 is 0x12340000, whose top byte is 0x12.
+#[test]
+fn a_shift_left_by_16_moves_the_low_word_up_and_clears_the_rest() {
+    let ir = "define i32 @k(i32 %x) {\n  %s = shl i32 %x, 16\n  %r = lshr i32 %s, 24\n  ret i32 %r\n}";
+    if let Some(got) = run_ir(ir, &[Arg::Imm(0x00AB1234)]) {
+        assert_eq!(got, 0x12);
+    }
+}

@@ -1,6 +1,7 @@
 //! `difftest FIRST COUNT [JOBS]` (or `DIFF_SEEDS=first:count`, `DIFF_JOBS`, `DIFF_FILE`): random C programs (`llrm-cgen`, 32-bit `int`) compiled by the pin's
 //! clang to IR, by this compiler to a static m68k executable run under `qemu-m68k`, against the same
-//! program built by the host gcc at -O0 (and, on a difference, by m68k gcc -O2 for the 68020 under qemu: the toolchain has no libgcc, so no 68000 divide). The 8-bit
+//! program built by m68k gcc -O2 for the 68020 under qemu (the toolchain has no libgcc, so no 68000 divide)
+//! and by the host's gcc at -O0, whose 64-bit `long` can differ. The 8-bit
 //! fold of the 16-bit checksum must agree.
 //!
 //! Each seed ends `ok`, `differs`, `hang` (ours ran past the time limit), `reject` (clang, the
@@ -31,7 +32,7 @@ const HOST_MAIN: &str = "#include <stdio.h>\nconst unsigned char buf[16] = {3,1,
 #[derive(Debug)]
 enum Outcome {
     Ok,
-    Differs { ours: i32, reference: i32, gcc_m68k: Option<i32> },
+    Differs { ours: i32, reference: i32, host: i32 },
     Hang,
     Reject(String),
     Reference(String),
@@ -232,10 +233,13 @@ fn check(
     if let Err(why) = built {
         return Outcome::Reference(why);
     }
-    let reference: i32 = match run(&mut Command::new("timeout").arg("10").arg(dir.join("host")), "host run") {
+    let host: i32 = match run(&mut Command::new("timeout").arg("10").arg(dir.join("host")), "host run") {
         Ok(text) => text.trim().parse().unwrap_or(-1),
         Err(why) => return Outcome::Reference(why),
     };
+    // m68k gcc has the 32-bit `long` of the target; the host's is 64 bits, so it is the second opinion
+    let gcc_m68k = gcc_m68k(&dir, &full);
+    let reference = gcc_m68k.unwrap_or(host);
 
     // ours
     let ir = match run(
@@ -277,7 +281,7 @@ fn check(
     write_executable(&exe, &bytes).unwrap();
     match qemu(&exe, "10", "m68000") {
         Ok(code) if code == reference => Outcome::Ok,
-        Ok(code) => Outcome::Differs { ours: code, reference, gcc_m68k: gcc_m68k(&dir, &full) },
+        Ok(code) => Outcome::Differs { ours: code, reference, host },
         Err(true) => Outcome::Hang,
         Err(false) => Outcome::Reject("qemu did not run".to_owned()),
     }
@@ -326,9 +330,9 @@ fn main() {
     for (seed, outcome) in &results {
         match outcome {
             Outcome::Ok => ok += 1,
-            Outcome::Differs { ours, reference, gcc_m68k } => {
+            Outcome::Differs { ours, reference, host } => {
                 differs += 1;
-                println!("seed {seed}: MISMATCH ours {ours}, host gcc -O0 {reference}, m68k gcc -O2 {gcc_m68k:?}");
+                println!("seed {seed}: MISMATCH ours {ours}, m68k gcc -O2 {reference}, host gcc -O0 {host}");
             }
             Outcome::Hang => {
                 hang += 1;
