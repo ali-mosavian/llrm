@@ -153,6 +153,8 @@ struct Builder {
 struct Compare {
     a: (String, u32),
     b: (String, u32),
+    /// Over words: `lda; cmp` on the low bytes, then `lda; sbc` on the high.
+    word: bool,
 }
 
 impl Builder {
@@ -235,24 +237,43 @@ impl Builder {
     /// `COPY a, lhs; CMP a, rhs` again, as the flags' producer: the operands
     /// must hold what they held at the first compare.
     fn redo_compare(&mut self) -> Result<(), Unsupported> {
-        let Compare { a, b } = self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
+        let Compare { a, b, word } = self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
         if self.version(&a.0) != a.1 || self.version(&b.0) != b.1 {
             return Err(Unsupported("a compare's operand changed before its branch".into()));
         }
         let acc = Reg::Phys(reg::A);
-        let lhs = self.byte(&a.0)?;
-        let rhs = match self.constants.get(&b.0) {
-            Some(value) => Operand::Imm(*value & 0xFF),
-            None => {
-                let r = self.byte(&b.0)?;
+        let (lhs, rhs) = if word {
+            let ((al, ah), (bl, bh)) = (self.word(&a.0)?, self.word(&b.0)?);
+            for r in [bl, bh] {
                 self.require(r, Class::MEM)?;
-                Operand::Use(r)
             }
+            ([al, ah], [Operand::Use(bl), Operand::Use(bh)])
+        } else {
+            let lhs = self.byte(&a.0)?;
+            let rhs = match self.constants.get(&b.0) {
+                Some(value) => Operand::Imm(*value & 0xFF),
+                None => {
+                    let r = self.byte(&b.0)?;
+                    self.require(r, Class::MEM)?;
+                    Operand::Use(r)
+                }
+            };
+            ([lhs, lhs], [rhs.clone(), rhs])
         };
-        self.copy(acc, lhs);
-        let mut cmp = Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(acc), rhs]);
+        self.copy(acc, lhs[0]);
+        let mut cmp =
+            Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(acc), rhs[0].clone()]);
         cmp.sets_flags = true;
         self.push(cmp);
+        if word {
+            self.copy(acc, lhs[1]);
+            let mut sbc = Inst::new(
+                Kind::Op("SBC"),
+                vec![Operand::Def(acc), Operand::Use(acc), rhs[1].clone(), Operand::Def(Reg::Phys(reg::FLAGS))],
+            );
+            sbc.sets_flags = true;
+            self.push(sbc);
+        }
         Ok(())
     }
 
@@ -324,6 +345,7 @@ impl Builder {
         a: &str,
         b: &str,
     ) -> Result<(), Unsupported> {
+        self.define(d);
         let ((dl, dh), (al, ah), (bl, bh)) = (self.word(d)?, self.word(a)?, self.word(b)?);
         let acc = Reg::Phys(reg::A);
         if let Some(carry) = carry {
@@ -440,6 +462,14 @@ pub fn build(
                 let d = b.byte(name(&o[0])?)?;
                 b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(d), Operand::Imm(immediate(&o[1])? & 0xFF)]));
             }
+            op::LDI16 if matches!(&o[1], Machine::Label(_)) => {
+                let Machine::Label(symbol) = &o[1] else { unreachable!() };
+                b.define(name(&o[0])?);
+                let (low, high) = b.word(name(&o[0])?)?;
+                for (d, half) in [(low, 0), (high, 1)] {
+                    b.push(Inst::new(Kind::Op("LDS"), vec![Operand::Def(d), Operand::Symbol(symbol.clone(), half)]));
+                }
+            }
             op::LDI16 => {
                 b.define(name(&o[0])?);
                 let (low, high) = b.word(name(&o[0])?)?;
@@ -458,10 +488,53 @@ pub fn build(
             op::AND16 => b.alu16("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR16 => b.alu16("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::XOR16 => b.alu16("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            op::SHL8 | op::SRL8 | op::SRA8 => {
+                let step = match inst.opcode {
+                    op::SHL8 => "ASL",
+                    op::SRL8 => "LSR",
+                    _ => "ASR",
+                };
+                let acc = Reg::Phys(reg::A);
+                b.define(name(&o[0])?);
+                let (d, a) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?);
+                b.copy(acc, a);
+                for _ in 0..immediate(&o[2])? {
+                    b.push(Inst::new(Kind::Op(step), vec![Operand::Def(acc), Operand::Use(acc)]));
+                }
+                b.copy(d, acc);
+            }
+            op::LDAX | op::STAX => {
+                let Machine::Label(symbol) = &o[1] else { return Err(Unsupported("an indexed access".into())) };
+                let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
+                let index = b.byte(name(&o[2])?)?;
+                b.copy(x, index);
+                if inst.opcode == op::LDAX {
+                    b.define(name(&o[0])?);
+                    let d = b.byte(name(&o[0])?)?;
+                    b.push(Inst::new(
+                        Kind::Op("LDAX"),
+                        vec![Operand::Def(acc), Operand::Symbol(symbol.clone(), 0), Operand::Use(x)],
+                    ));
+                    b.copy(d, acc);
+                } else {
+                    let value = b.byte(name(&o[0])?)?;
+                    b.copy(acc, value);
+                    b.push(Inst::new(
+                        Kind::Op("STAX"),
+                        vec![Operand::Use(acc), Operand::Symbol(symbol.clone(), 0), Operand::Use(x)],
+                    ));
+                }
+            }
             // The flags are made where they are read.
             op::CMP8 => {
                 let (a, c) = (name(&o[1])?, name(&o[2])?);
-                b.pending = Some(Compare { a: (a.to_owned(), b.version(a)), b: (c.to_owned(), b.version(c)) });
+                b.pending =
+                    Some(Compare { a: (a.to_owned(), b.version(a)), b: (c.to_owned(), b.version(c)), word: false });
+            }
+            op::CMP16 => {
+                let (a, c) = (name(&o[1])?, name(&o[2])?);
+                b.pending =
+                    Some(Compare { a: (a.to_owned(), b.version(a)), b: (c.to_owned(), b.version(c)), word: true });
             }
             spill_op if spill_op == spill::SAVE_FLAGS => {
                 let compare = b.pending.clone().ok_or_else(|| Unsupported("saved flags with no compare".into()))?;
@@ -654,18 +727,14 @@ fn remove_dead(function: &mut MFunction<Class>) {
         let mut changed = false;
         for block in &mut function.blocks {
             let before = block.insts.len();
-            block
-                .insts
-                .retain(
-                    |inst| {
-                        let pure = inst.kind == Kind::Copy || inst.kind == Kind::Op("LDI");
-                        !(pure
-                            && matches!(
-                                inst.operands.first(),
-                                Some(Operand::Def(Reg::Virt(v))) if !read.contains(v)
-                            ))
-                    },
-                );
+            block.insts.retain(|inst| {
+                let pure = inst.kind == Kind::Copy || inst.kind == Kind::Op("LDI") || inst.kind == Kind::Op("LDS");
+                !(pure
+                    && matches!(
+                        inst.operands.first(),
+                        Some(Operand::Def(Reg::Virt(v))) if !read.contains(v)
+                    ))
+            });
             changed |= block.insts.len() != before;
         }
         if !changed {
@@ -829,9 +898,23 @@ pub fn emit(
                         through_a(&mut out, a_live, &format!("  lda #{value}\n  sta {}\n", register_name(d)));
                     }
                 }
+                (Kind::Op("LDS"), [_, Operand::Symbol(symbol, half)]) => {
+                    let d = regs[0];
+                    let part = if *half == 0 { '<' } else { '>' };
+                    if d == reg::A || d == reg::X || d == reg::Y {
+                        writeln!(out, "  ld{} #{part}{symbol}", register_name(d)).unwrap();
+                    } else {
+                        through_a(&mut out, a_live, &format!("  lda #{part}{symbol}\n  sta {}\n", register_name(d)));
+                    }
+                }
+                (Kind::Op("ASL"), _) => out.push_str("  asl a\n"),
+                (Kind::Op("LSR"), _) => out.push_str("  lsr a\n"),
+                (Kind::Op("ASR"), _) => out.push_str("  cmp #$80\n  ror a\n"),
+                (Kind::Op("LDAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  lda {symbol},x").unwrap(),
+                (Kind::Op("STAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  sta {symbol},x").unwrap(),
                 (Kind::Op("CLC"), _) => out.push_str("  clc\n"),
                 (Kind::Op("SEC"), _) => out.push_str("  sec\n"),
-                (Kind::Op(mnemonic @ ("ADC" | "SBC" | "AND" | "ORA" | "EOR")), [_, _, second]) => {
+                (Kind::Op(mnemonic @ ("ADC" | "SBC" | "AND" | "ORA" | "EOR")), [_, _, second, ..]) => {
                     let text = match second {
                         Operand::Imm(value) => format!("#{value}"),
                         _ => register_name(regs[2]),
