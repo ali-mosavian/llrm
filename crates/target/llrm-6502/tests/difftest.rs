@@ -122,6 +122,12 @@ fn signed_view(byte: bool) -> &'static str {
     }
 }
 
+/// ` + zero` when `DIFF_OPAQUE` is set: `zero` is a volatile byte that reads 0, so the compiler cannot
+/// fold the starting values (and with them the whole program) into a checksum.
+fn opaque() -> &'static str {
+    if std::env::var("DIFF_OPAQUE").is_ok() { " + zero" } else { "" }
+}
+
 struct Gen {
     rng: Rng,
     helpers: Vec<Helper>,
@@ -372,21 +378,21 @@ impl Gen {
             let ty = TYPES[self.rng.below(3)];
             let v = Var { name: format!("v{n}"), ty };
             let c = self.constant(ty);
-            writeln!(head, "  {} {} = {c};", ty.c(), v.name).unwrap();
+            writeln!(head, "  {} {} = {};", ty.c(), v.name, if opaque().is_empty() { c } else { format!("({})({c}{})", ty.c(), opaque()) }).unwrap();
             scope.vars.push(v);
         }
         for n in 0..self.rng.below(3) {
             let ty = TYPES[self.rng.below(3)];
             let len = [4, 8, 16][self.rng.below(3)];
             writeln!(head, "  {} a{n}[{len}];", ty.c()).unwrap();
-            writeln!(init, "  for (j = 0; j < {len}; j++) a{n}[j] = ({})(j * {}U + {});", ty.c(), 1 + 2 * self.rng.below(5), self.rng.below(7))
+            writeln!(init, "  for (j = 0; j < {len}; j++) a{n}[j] = ({})(j * {}U + {}{});", ty.c(), 1 + 2 * self.rng.below(5), self.rng.below(7), opaque())
                 .unwrap();
             scope.arrays.push(Array { name: format!("a{n}"), ty, len });
         }
-        writeln!(head, "  unsigned char j, i0, i1, i2, i3;\n  unsigned ck = {};", self.rng.below(1000)).unwrap();
+        writeln!(head, "  unsigned char j, i0, i1, i2, i3;\n  unsigned ck = {}{};", self.rng.below(1000), opaque()).unwrap();
         if top {
             writeln!(head, "  struct S s;").unwrap();
-            writeln!(init, "  s.a = {}; s.b = {}; s.c = {};", self.rng.below(256), self.rng.below(65536), self.rng.below(256)).unwrap();
+            writeln!(init, "  s.a = {}{o}; s.b = {}{o}; s.c = {}{o};", self.rng.below(256), self.rng.below(65536), self.rng.below(256), o = opaque()).unwrap();
         }
         let count = if top { 6 + self.rng.below(8) } else { 2 + self.rng.below(4) };
         let mut pieces = Vec::new();
@@ -417,7 +423,7 @@ impl Gen {
 fn program(seed: u64) -> String {
     let mut g = Gen { rng: Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1), helpers: Vec::new(), text: String::new() };
     g.text.push_str(
-        "extern const unsigned char buf[16];\nextern const unsigned char tab[8];\nstruct S { unsigned char a; unsigned b; unsigned char c; };\n\
+        "extern const unsigned char buf[16];\nextern const unsigned char tab[8];\nextern const volatile unsigned char zero;\nstruct S { unsigned char a; unsigned b; unsigned char c; };\n\
          static void bump(struct S *p, unsigned char x) { p->a = (unsigned char)(p->a + x); p->b = (unsigned)(p->b ^ ((unsigned)x << 3)); if (x & 1) p->c = (unsigned char)(p->c + p->a); }\n\n",
     );
     for n in 0..g.rng.below(4) {
@@ -431,7 +437,7 @@ fn program(seed: u64) -> String {
     g.text
 }
 
-const DATA: &str = ".export buf, _buf, tab, _tab\n.segment \"RODATA\"\nbuf:\n_buf:\n  .byte 3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\ntab:\n_tab:\n  .byte 2,5,8,11,14,17,20,23\n";
+const DATA: &str = ".export buf, _buf, tab, _tab, zero, _zero\n.segment \"RODATA\"\nzero:\n_zero:\n  .byte 0\nbuf:\n_buf:\n  .byte 3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\ntab:\n_tab:\n  .byte 2,5,8,11,14,17,20,23\n";
 
 fn work(seed: u64) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("difftest").join(seed.to_string());
@@ -513,7 +519,7 @@ fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i3
         }
     }
     let runtime = reachable_runtime(&asm);
-    std::fs::write(dir.join("f.s"), format!("{}.import buf\n.import tab\n{asm}{runtime}", equates(&platform))).unwrap();
+    std::fs::write(dir.join("f.s"), format!("{}.import buf\n.import tab\n.import zero\n{asm}{runtime}", equates(&platform))).unwrap();
     let driver = format!(
         ".export _main\n{}.import test\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  jsr test\n  stx fold\n  eor fold\n  ldx #0\n  rts\n.segment \"BSS\"\nfold: .res 1\n",
         equates(&platform)
@@ -529,7 +535,7 @@ fn ours(dir: &Path, source: &str, seed: u64, optimize: bool) -> Result<Option<i3
 fn native(dir: &Path, source: &str) -> Option<i32> {
     let text = source
         .lines()
-        .filter(|line| !line.starts_with("extern const unsigned char"))
+        .filter(|line| !line.starts_with("extern const"))
         .collect::<Vec<_>>()
         .join("\n")
         .replace("(int)", "(int16_t)")
@@ -538,7 +544,7 @@ fn native(dir: &Path, source: &str) -> Option<i32> {
         .replace("signed char", "int8_t")
         .replace("unsigned", "uint16_t");
     let program = format!(
-        "#include <stdint.h>\n#include <stdio.h>\nconst uint8_t buf[16]={{3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3}};\nconst uint8_t tab[8]={{2,5,8,11,14,17,20,23}};\n{text}\nint main(void){{ uint16_t r = test(); printf(\"%d\\n\", (r ^ (r >> 8)) & 255); return 0; }}\n"
+        "#include <stdint.h>\n#include <stdio.h>\nconst uint8_t buf[16]={{3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3}};\nconst uint8_t tab[8]={{2,5,8,11,14,17,20,23}};\nconst volatile uint8_t zero=0;\n{text}\nint main(void){{ uint16_t r = test(); printf(\"%d\\n\", (r ^ (r >> 8)) & 255); return 0; }}\n"
     );
     std::fs::write(dir.join("n.c"), program).ok()?;
     tool(dir, "gcc", &["-O0", "-fwrapv", "-fpack-struct=1", "-w", "-o", "n.bin", "n.c"]).ok()?;
