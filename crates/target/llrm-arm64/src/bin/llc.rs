@@ -5,7 +5,8 @@
 //! that name) through the mid-end and the arm64 backend to an object (`-S`: its
 //! instructions as text; `-O<n>`: the mid-end's level, -O2 by default, as
 //! clang's `-O` of the same IR; `--no-opt`: no mid-end, for IR that is already
-//! optimized; `--isel=hand|dag|shadow`: the hand selector, the DAG path from the
+//! optimized; `-f[no-]PASS`: a mid-end pass as gcc names it, `-fno-unroll-loops`;
+//! `--isel=hand|dag|shadow`: the hand selector, the DAG path from the
 //! pin's AArch64 table, or the DAG path with the hand selector for what it
 //! refuses, counted on stderr). The platform is the module's `target triple`.
 
@@ -36,6 +37,7 @@ fn run() -> i32 {
             "--isel=dag" => llrm_env::preset("LLRM_ISEL_DAG"),
             "--isel=shadow" => llrm_env::preset("LLRM_ISEL_SHADOW"),
             "--isel=hand" => {}
+            other if other.starts_with("-f") && driver::pass_flag(other) => {}
             other if other.starts_with("-O") => match driver::Level::parse(&other[2..]) {
                 Ok(parsed) => level = parsed,
                 Err(why) => {
