@@ -40,7 +40,7 @@ def test_a_compile_with_instruction_counts_has_a_total_and_one_without_has_none(
     assert pr.parsed(header + "[instr] total 5.0 Mcpu-ns\n")["total"] == 0.0
 
 
-def test_the_runs_lines_a_compile_prints_are_the_lines_the_tool_reads():
+def test_the_runs_lines_a_compile_prints_are_the_lines_the_tool_reads(tmp_path):
     """The tool's pattern named "N skipped as settled, M changes" while the compiler printed three skipped counts between them, so no
     real `[runs] body` line matched and every table read empty; the fixture above had the shape the pattern wanted, not the compiler's."""
     import os
@@ -48,7 +48,7 @@ def test_the_runs_lines_a_compile_prints_are_the_lines_the_tool_reads():
 
     binary = pr.llrmbin.target_dir(os.environ, pr.llrmbin.REPO) / "release/llrm-qb"
     source = pr.llrmbin.REPO / "bench/bintree/bintree.bas"
-    done = subprocess.run([str(binary), str(source), "-O2", "-m32", "-o", "/dev/null"], capture_output=True, text=True,
+    done = subprocess.run([str(binary), str(source), "-O2", "-m32", "-o", str(tmp_path / "x.o")], capture_output=True, text=True,
                           env={**os.environ, "LLRM_DEBUG": "runs"})
     bodies = [line for line in done.stderr.splitlines() if line.startswith("[runs] body ")]
     assert bodies and all(pr.RUN.match(line) for line in bodies), bodies[:2]
