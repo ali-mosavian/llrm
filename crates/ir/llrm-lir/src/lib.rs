@@ -550,6 +550,13 @@ impl Semantics {
             && same(&self.sources, &other.sources)
     }
 
+    /// A call that is also the return: the epilogue, then a `jmp` to the
+    /// callee. The callee is named by the instruction's id in a side table, so
+    /// a copy of it has none (DEVIATE TD1).
+    pub fn is_sibling_call(&self) -> bool {
+        self.op == Operation::Return && self.name.as_deref() == Some("jmp")
+    }
+
     /// The blocks a branch or jump names (its target, or each index of its
     /// table) are `to` of themselves: the same instruction going where `to`
     /// says; `None` where it names none of them differently.
@@ -708,6 +715,17 @@ pub fn barrier(semantics: &Semantics) -> bool {
 mod tests {
     use super::root;
     use super::*;
+
+    /// Only a `jmp` return is a sibling call: a plain `ret`, and a `jmp` that is
+    /// a jump, are not (a copy of the first has no callee; neither of the
+    /// others needs one).
+    #[test]
+    fn only_a_jmp_return_is_a_sibling_call() {
+        let named = |op, name: &str| Semantics { name: Some(name.into()), ..Semantics::new(op) };
+        assert!(named(Operation::Return, "jmp").is_sibling_call());
+        assert!(!named(Operation::Return, "ret").is_sibling_call());
+        assert!(!named(Operation::Jump, "jmp").is_sibling_call());
+    }
 
     /// An indexed access through a register that holds a value (`[ebp+edx-16]`,
     /// the frame register freed) is not a frame cell: relayout moved its
