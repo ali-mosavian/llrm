@@ -3,9 +3,10 @@
 //! (an unwinder's reader, not ours) and, where the pinned AArch64 LLVM is
 //! built, against what it states at the same calls.
 
-use llrm_arm64::machine::Platform;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use llrm_arm64::machine::Platform;
 
 fn llc() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
