@@ -67,6 +67,9 @@ pub struct Selected {
     pub dag: SelectionDAG,
     pub units: Vec<Unit>,
     pub phis: Vec<PhiUpdate>,
+    /// On the entry block: the function's static allocas, `(frame index, size,
+    /// alignment)`.
+    pub locals: Vec<(i32, i64, i64)>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -108,7 +111,37 @@ pub fn select_function_with(
         }
         let units = select_block_with(&mut built.dag, cpu, load_as_source).map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
-        selected.push(Selected { block, dag: built.dag, units, phis: Vec::new() });
+        selected.push(Selected { block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
+    }
+    // `FunctionLoweringInfo`: a static alloca is a frame object of the type's
+    // size (times a constant count) on the larger of the alignment asked for
+    // and the type's preferred one
+    let types = &module.context.types;
+    let mut locals = Vec::new();
+    for (value, &index) in info.static_allocas.iter() {
+        let ValueDef::Instruction(def) = function.value(value).def else {
+            return Err("an alloca that is no instruction".to_owned());
+        };
+        let instruction = function.instruction(def);
+        let llrm_mir::opcode::Opcode::Alloca { allocated, align: wanted, .. } = instruction.opcode else {
+            return Err("an alloca that is not an alloca".to_owned());
+        };
+        let count = match instruction.operands.first() {
+            None => 1,
+            Some(llrm_mir::module::Operand::Constant(id)) => match module.context.get(*id).kind {
+                llrm_mir::context::ConstantKind::Int(count) => i64::try_from(count).map_err(|_| "an alloca count")?,
+                _ => return Err("an alloca whose count is not a number".to_owned()),
+            },
+            Some(_) => return Err("an alloca with a count that is not a constant".to_owned()),
+        };
+        let size = i64::try_from(layout.alloc_size(types, allocated)).map_err(|_| "an alloca too large")? * count;
+        let align =
+            i64::try_from(layout.pref_align(types, allocated)).unwrap_or(1).max(wanted.map_or(1, |one| one as i64));
+        locals.push((index, size, align));
+    }
+    locals.sort();
+    if let Some(entry) = selected.first_mut() {
+        entry.locals = locals;
     }
     for (one, pending) in selected.iter_mut().zip(updates) {
         for (phi, incoming) in pending {

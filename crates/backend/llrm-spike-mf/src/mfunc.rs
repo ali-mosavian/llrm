@@ -123,11 +123,20 @@ pub struct MFunction<C> {
     /// Each incoming-argument frame index and its offset from the stack
     /// pointer at entry.
     pub fixed: BTreeMap<i32, i64>,
+    /// The function's own stack objects (static allocas): frame index, size
+    /// and alignment in bytes.
+    pub locals: Vec<(i32, i64, i64)>,
 }
 
 impl<C> MFunction<C> {
     pub fn new(name: &str) -> MFunction<C> {
-        MFunction { name: name.to_owned(), blocks: Vec::new(), classes: Vec::new(), fixed: BTreeMap::new() }
+        MFunction {
+            name: name.to_owned(),
+            blocks: Vec::new(),
+            classes: Vec::new(),
+            fixed: BTreeMap::new(),
+            locals: Vec::new(),
+        }
     }
 
     /// Lays `block` out at `at`; the phis name predecessors by index, so those

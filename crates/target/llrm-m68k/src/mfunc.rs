@@ -313,6 +313,7 @@ pub fn emit(
     let first = blocks.first().ok_or("a function with no block")?;
     let mut emitter =
         Emitter { dag: &first.dag, function: MFunction::new(name), values: HashMap::new(), builder: HashMap::new() };
+    emitter.function.locals.extend(first.locals.iter().copied());
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();

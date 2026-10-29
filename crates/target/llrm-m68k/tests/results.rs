@@ -235,3 +235,31 @@ j:
         }
     }
 }
+
+/// A function with a stack array: the frame had no room for static allocas
+/// ("an unknown frame index"), so no routine with a local buffer compiled.
+#[test]
+fn a_local_array_is_a_frame_object() {
+    let ir = "define i32 @f(i32 %n) {
+entry:
+  %a = alloca [4 x i32]
+  br label %l
+l:
+  %i = phi i32 [0, %entry], [%i1, %l]
+  %p = getelementptr [4 x i32], ptr %a, i32 0, i32 %i
+  %v = add i32 %n, %i
+  store i32 %v, ptr %p
+  %i1 = add i32 %i, 1
+  %c = icmp ult i32 %i1, 4
+  br i1 %c, label %l, label %s
+s:
+  %q = getelementptr [4 x i32], ptr %a, i32 0, i32 3
+  %r = load i32, ptr %q
+  ret i32 %r
+}";
+    for options in [Options::default(), Options::PINNED] {
+        if let Some(code) = status(ir, &[10], options) {
+            assert_eq!(code, 13, "{options:?}: {}", text_with(&module(ir), "f", Cpu::M68000, options).unwrap());
+        }
+    }
+}
