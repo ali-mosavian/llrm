@@ -303,3 +303,24 @@ fn a_small_constant_mask_of_a_copy_is_a_moveq_and_a_register_and() {
     assert!(ours.contains("moveq\t#1,") && !ours.contains("and.l\t#1,"), "{ours}");
     assert!(code_size(ir, Options::default()) < code_size(ir, Options::PINNED));
 }
+
+/// `p[i] > t` loaded the element into a register to compare it: the load was
+/// the right side of the `cmp`, which has no memory form. Swapped (with the
+/// condition) the load is the source and the `cmp` reads it from memory.
+#[test]
+fn a_loaded_value_compared_with_a_register_is_read_by_the_compare() {
+    let ir = "define i32 @f(ptr %p, i32 %t) {\nentry:\n  %v = load i32, ptr %p\n  %u = add i32 %t, 100000\n  %c = icmp sgt i32 %v, %u\n  br i1 %c, label %y, label %n\ny:\n  ret i32 1\nn:\n  ret i32 2\n}";
+    let pinned = compiled(ir, Options::PINNED);
+    assert!(pinned.contains("move.l\t(%a0), %d") && pinned.contains("cmp.l\t%d"), "{pinned}");
+    let ours = compiled(ir, Options::default());
+    assert!(ours.contains("cmp.l\t(%a0), %d") && !ours.contains("move.l\t(%a0)"), "{ours}");
+    assert!(code_size(ir, Options::default()) <= code_size(ir, Options::PINNED));
+}
+
+/// A load read twice is loaded once: swapping would load it again.
+#[test]
+fn a_loaded_value_read_again_is_not_swapped_into_the_compare() {
+    let ir = "define i32 @f(ptr %p, i32 %t) {\n  %v = load i32, ptr %p\n  %c = icmp sgt i32 %v, %t\n  %z = zext i1 %c to i32\n  %r = add i32 %z, %v\n  ret i32 %r\n}";
+    let ours = compiled(ir, Options::default());
+    assert!(!ours.contains("cmp.l\t(%a0)"), "{ours}");
+}

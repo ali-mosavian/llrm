@@ -146,8 +146,18 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
+    select_block_with(dag, cpu, false)
+}
+
+/// [`select_block`], with a compare's load put where a pattern folds it where
+/// `load_as_source` (see `lowering::lower_setcc`).
+pub fn select_block_with(
+    dag: &mut SelectionDAG,
+    cpu: Cpu,
+    load_as_source: bool,
+) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
-    let mut lowering = M68kLowering;
+    let mut lowering = M68kLowering { load_as_source };
     let arch = M68k;
     DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     TypeLegalizer::new(dag, &tli)
