@@ -215,21 +215,9 @@ def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     return flags
 
 
-FLOAT_FLAG = "-fexcess-precision=standard"
-
-
-def float_flags(variant: "Variant") -> list[str]:
-    """The flag a float row is measured with: Nib's f32 is C's fast mode (only memory stores round), so a program's result may differ by an ulp with what stays in an x87
-    register across a loop (nbody_single printed 86015 for 86016 once LoopRotate was on, #3218); a row against a reference is measured with the rounding on, and records it
-    (docs/architecture/redesign-plan.md, floats)."""
-    if variant.language == "nib" and re.search(r"\bf(?:32|64)\b", variant.source.read_text()):
-        return [FLOAT_FLAG]
-    return []
-
-
-def nib_flags(variant: "Variant | None" = None) -> list[str]:
+def nib_flags() -> list[str]:
     """What nib-build.sh is given for a Nib benchmark's compile."""
-    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *(float_flags(variant) if variant else []), *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
 
 
 def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[str, list[str], Path]]:
@@ -238,7 +226,7 @@ def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[st
     nib-build.sh gives llrm-nib; its runtime and foreign parts do not depend on the program."""
     obj = work / f"{stem}.obj"
     if variant.language == "nib":
-        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags(variant)], obj)]
+        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags()], obj)]
     if variant.language == FLAT:
         source = qbbuild.flat_source(variant.source)
         return [("llrm-qb", qbbuild.compile_arguments(source, (*compile_flags(variant, opt), "-g"), qbbuild.FLAT, obj), obj)]
@@ -272,7 +260,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
             done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
-                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags(variant))})
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags())})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
             # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
@@ -599,9 +587,6 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
         counted = [(key, job) for key, job in jobs if job is not None]
         for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
             out[key] = counts
-    for (_, variant), key in ((one, (one[1].name, one[1].language, opt)) for one in todo):
-        if key in out and (flags := float_flags(variant)) and "skip" not in out[key]:
-            out[key] = {**out[key], "flags": flags}
     out |= measure_flat(flat, folder / "flat")
     jobs = [(key, job if job is not None else (flat[key][0], flat[key][1], None, None, None, None)) for key, job in jobs]
     exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
@@ -824,8 +809,6 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                     problems.append(f"{label}: works; remove its known mark ({got['xpass']})")
                 elif "error" in got:
                     problems.append(f"{label}: {got['error']}")
-                elif float_flags(variant) and got.get("flags") != float_flags(variant):
-                    problems.append(f"{label}: a float row is measured with {FLOAT_FLAG} and records it in the row; this one records {got.get('flags')}")
                 else:
                     if variant.language == "bq32" and got.get("instructions", 0) >= qb32.BENCH_RATE * 55:
                         problems.append(f"{label}: {got['instructions']} instructions run long enough for a timer tick (55 ms at the flat rate): the extender's handler lands inside the count")
