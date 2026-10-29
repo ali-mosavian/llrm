@@ -181,7 +181,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             _ => return n,
         };
         let amount = self.dag.operand(at, amount_at);
-        let want = EVT::I8;
+        let want = if self.tli.types.shift_by_value_type() { self.dag.value_type(at) } else { EVT::I8 };
         if !self.dag.value_type(amount).is_integer() || self.dag.value_type(amount) == want {
             return n;
         }

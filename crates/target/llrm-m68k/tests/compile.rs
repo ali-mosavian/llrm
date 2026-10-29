@@ -129,3 +129,16 @@ fn the_loop_comparison_sees_a_changed_instruction() {
         assert_ne!(modulo_names_and_copies(&changed), modulo_names_and_copies(base), "{changed}");
     }
 }
+
+/// Constant and variable shifts print as `llc` does. Every shift was
+/// `CannotSelect`: the legalizer cut the amount to `i8`, and m68k's amount has
+/// the type of the value shifted (`getScalarShiftAmountTy`).
+#[test]
+fn shifts_print_as_llc_does() {
+    let shift = |op: &str| compiled(&format!("define i32 @s(i32 %x) {{\n  %r = {op}\n  ret i32 %r\n}}"), "s");
+    let load = "s:\n\tmove.l\t(4,%sp), %d0\n";
+    assert_eq!(shift("shl i32 %x, 2"), format!("{load}\tlsl.l\t#2, %d0\n\trts\n"));
+    assert_eq!(shift("lshr i32 %x, 1"), format!("{load}\tlsr.l\t#1, %d0\n\trts\n"));
+    assert_eq!(shift("ashr i32 %x, 3"), format!("{load}\tasr.l\t#3, %d0\n\trts\n"));
+    assert_eq!(shift("shl i32 %x, 9"), "s:\n\tmoveq\t#9, %d1\n\tmove.l\t(4,%sp), %d0\n\tlsl.l\t%d1, %d0\n\trts\n");
+}
