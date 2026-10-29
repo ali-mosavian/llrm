@@ -32,6 +32,18 @@ pub enum FixupKind {
 }
 
 impl FixupKind {
+    /// The object's kind of a field a label of the function fills.
+    pub fn label_kind(self) -> Option<llrm_object::FixupKind> {
+        use super::fixup;
+        Some(match self {
+            FixupKind::Branch26 => fixup::BRANCH26,
+            FixupKind::Branch19 => fixup::BRANCH19,
+            FixupKind::Branch14 => fixup::BRANCH14,
+            FixupKind::Adr21 => fixup::ADR21,
+            _ => return None,
+        })
+    }
+
     /// The relocation the object format holds, for the kinds it has one for.
     pub fn relocation(self) -> Option<llrm_object::Fix> {
         use super::fixup;

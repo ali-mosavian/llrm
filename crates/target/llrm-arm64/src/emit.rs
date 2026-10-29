@@ -5,13 +5,14 @@ use std::collections::HashMap;
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{GlobalKind, Linkage, Module};
-use llrm_object::assembler::{Fragment, layout as place};
+use llrm_object::assembler::{AsmBackend, Fragment, layout as place};
 use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Symbol, Target as RelocTarget};
 
 use crate::data::{self, DataReloc};
 use crate::frame::Lowered;
 use crate::machine::Platform;
-use crate::mc::encode::{FixupKind, encode, resolve};
+use crate::mc::backend::Arm64Backend;
+use crate::mc::encode::{FixupKind, encode};
 use crate::mc::inst::{Inst, Target};
 
 /// One lowered function.
@@ -198,8 +199,17 @@ pub fn object(
                             let Some(&target) = labels.get(label.as_str()) else {
                                 return Err(format!("{}: no block {label}", function.symbol));
                             };
-                            word = resolve(word, fixup.kind, target as i64 - cursor as i64)
-                                .map_err(|error| format!("{}: {inst}: {error}", function.symbol))?;
+                            let kind = fixup
+                                .kind
+                                .label_kind()
+                                .ok_or_else(
+                                    || format!("{}: {inst}: {:?} does not name a label", function.symbol, fixup.kind),
+                                )?;
+                            let mut bytes = word.to_le_bytes();
+                            Arm64Backend
+                                .apply_fixup(&mut bytes, 0, kind, true, target as i64 - cursor as i64, &function.symbol)
+                                .map_err(|error| format!("{}: {inst}: {}", function.symbol, error.0))?;
+                            word = u32::from_le_bytes(bytes);
                         }
                         Target::Symbol { name, addend } => {
                             let Some(fix) = fixup.kind.relocation() else {

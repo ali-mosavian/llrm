@@ -387,20 +387,16 @@ pub fn pack_into(
     buffer[at..at + 2].copy_from_slice(&(value as u16).to_le_bytes());
 }
 
-/// `value` into the bytes of a relocated field at `at` that hold an offset.
+/// `value` into the bytes of a relocated field at `at` that hold an offset (a
+/// far pointer's are its first two), refused where it does not fit them.
 fn pack_field(
     buffer: &mut [u8],
     at: usize,
     kind: Fix,
     value: i64,
-) {
-    if width(kind) == 8 {
-        buffer[at..at + 8].copy_from_slice(&value.to_le_bytes());
-    } else if width(kind) == 4 && kind != POINTER {
-        buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
-    } else {
-        pack_into(buffer, at, i64::from(value as u16));
-    }
+) -> Result<(), llrm_object::Unsupported> {
+    let bytes = if kind == POINTER { 2 } else { width(kind) };
+    llrm_object::apply_fixup(buffer, at, bytes, kind.pc_rel, value, "")
 }
 
 /// What a relocated field holds, sign-extended from the bytes that hold an
@@ -720,7 +716,7 @@ pub fn _data(
                 segment.put(&vec![0; width(loc)], &[Fixup::new(0, loc, name.clone())]);
                 let at = segment.image.len() - width(loc);
                 if loc == OFFSET64 {
-                    pack_field(&mut segment.image, at, loc, *offset);
+                    segment.image[at..at + 8].copy_from_slice(&offset.to_le_bytes());
                 } else {
                     pack_into(&mut segment.image, at, offset & ((1_i64 << (8 * (*bytes).min(4))) - 1));
                 }
@@ -978,7 +974,7 @@ pub fn _encoded(
         } else {
             loc
         };
-        pack_field(&mut code, at, loc, addend);
+        pack_field(&mut code, at, loc, addend).map_err(|error| Unencodable(error.0))?;
         let name = names
             .get(&(addr.space, addr.index))
             .unwrap_or_else(|| panic!("KeyError: ({}, {})", addr.space.repr(), addr.index));
@@ -1280,7 +1276,7 @@ pub fn object_of(
         }
         for one in &relocs {
             if one.fix() != BASE {
-                pack_field(&mut image, one.at, one.fix(), 0);
+                pack_field(&mut image, one.at, one.fix(), 0)?;
             }
         }
         sections.push(Section { name, role, near, align, image, spans, relocs });
@@ -1891,6 +1887,19 @@ mod tests {
         assert_eq!(items[at], masm::Item::Align(masm::CodeAlign { log2: 4, max_skip: 7 }));
         assert!(matches!(&items[at + 1], masm::Item::Label(label) if label.name == "L0_2"), "{items:?}");
         assert_eq!(items.iter().filter(|one| matches!(one, masm::Item::Align(_))).count(), 1);
+    }
+
+    /// An addend past its field's two bytes was wrapped into the field and
+    /// written (`0x12345` as `0x2345`); it is refused, and the ones that fit
+    /// (`-1`, `0xFFFF`) are written as before.
+    #[test]
+    fn an_addend_a_near_field_cannot_hold_is_refused() {
+        let mut image = [0xAA; 4];
+        assert!(pack_field(&mut image, 0, OFFSET, 0x12345).is_err());
+        assert_eq!(image, [0xAA; 4]);
+        pack_field(&mut image, 0, OFFSET, -1).unwrap();
+        pack_field(&mut image, 2, OFFSET, 0xFFFF).unwrap();
+        assert_eq!(image, [0xFF; 4]);
     }
 
     /// A procedure's `.seh_*` directives reached `Object.frames` only through
