@@ -577,7 +577,10 @@ impl<T: Target> GraphColoring<T> {
                 }
                 // `drop` is live with another physical register that shares
                 // storage with `root`: joined, both would hold it at once
-                if edges[drop].iter().any(|n| *n >= count && *n != keep && T::overlaps(nodes.physical[*n - count], root)) {
+                if edges[drop]
+                    .iter()
+                    .any(|n| *n >= count && *n != keep && T::overlaps(nodes.physical[*n - count], root))
+                {
                     continue;
                 }
                 classes[keep]

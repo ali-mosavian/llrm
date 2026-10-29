@@ -271,6 +271,7 @@ pub fn finish(
             .collect();
         lines = crate::overlay::merge_masks(lines);
         lines = crate::overlay::constant_into_destination(lines);
+        lines = crate::overlay::boolean_by_negation(lines);
         lines = crate::overlay::drop_redundant_tests(lines);
         lines = crate::overlay::fold_post_increment(lines);
     }

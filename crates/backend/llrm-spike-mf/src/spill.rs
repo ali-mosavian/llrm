@@ -120,7 +120,10 @@ fn flag_sequence_start(insts: &[Inst]) -> usize {
     let copies_to_physical =
         |inst: &Inst| inst.kind == Kind::Copy && matches!(inst.operands.first(), Some(Operand::Def(Reg::Phys(_))));
     let mut start = insts.len();
-    while start > 0 && !insts[start - 1].terminator && (insts[start - 1].sets_flags || copies_to_physical(&insts[start - 1])) {
+    while start > 0
+        && !insts[start - 1].terminator
+        && (insts[start - 1].sets_flags || copies_to_physical(&insts[start - 1]))
+    {
         start -= 1;
     }
     start
