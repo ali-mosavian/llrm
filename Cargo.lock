@@ -588,6 +588,7 @@ name = "llrm-spike-mf"
 version = "0.1.0"
 dependencies = [
  "llrm-lir",
+ "llrm-mir",
 ]
 
 [[package]]
