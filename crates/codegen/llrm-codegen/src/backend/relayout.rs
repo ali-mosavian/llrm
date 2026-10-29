@@ -267,7 +267,41 @@ pub fn ordered(
     let moves = Moves { frame: Some(frame), homes: &homes, hole: 0 };
     let mut machined = shifted(first, frame, &moves)?;
     machined.reserve = first.reserve;
+    if llrm_support::env_flag!("LLRM_CHECK_SLOTS")
+        && let Some(cell) = reaching_past_its_slot(&machined.body, &again)
+    {
+        panic!("the frame laid again has a cell reaching past its spill slot: {cell:?}");
+    }
     Some((machined, again))
+}
+
+/// A frame cell of `body` longer than the spill slot it is tagged with in
+/// `frame`: it reads or writes the bytes of the next slot.
+fn reaching_past_its_slot(
+    body: &LirBody,
+    frame: &Frame,
+) -> Option<Mem> {
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter_map(|one| one.what.as_ref())
+        .flat_map(|what| what.dests.iter().chain(&what.sources))
+        .filter_map(|place| match place {
+            Loc::Mem(cell) => Some(cell),
+            _ => None,
+        })
+        .find(|cell| {
+            cell.addr.is_some_and(|addr| {
+                addr.space == Space::Frame
+                    && addr.slot_home().is_some_and(|home| {
+                        frame
+                            .capacities
+                            .get(&home)
+                            .is_some_and(|capacity| home != 0 && addr.disp - home + i64::from(cell.width) > *capacity)
+                    })
+            })
+        })
+        .cloned()
 }
 
 /// `body` with every cell moved by `moved`.
@@ -423,6 +457,9 @@ impl Moves<'_> {
             && let Some(capacity) = frame.capacities.get(&home).filter(|_| self.homes.contains_key(&home))
             && addr.disp - home + i64::from(cell.width) > *capacity
         {
+            if llrm_support::env_flag!("LLRM_COUNT_RELAYOUT_SKIPS") {
+                eprintln!("RELAYOUT-SKIP");
+            }
             return None;
         }
         let (addr, offset) = self.addr(addr, cell.offset)?;
@@ -744,6 +781,19 @@ mod tests {
         let (moved, made) = llrm_support::alloc_count::counted(|| moves.insn(&one));
         assert!(Arc::ptr_eq(&moved.expect("nothing to refuse"), &one));
         assert!(made <= 2, "{made} allocations for an instruction that does not move");
+    }
+
+    /// `LLRM_CHECK_SLOTS` finds a dword read of a word slot, and passes one of
+    /// a dword slot.
+    #[test]
+    fn test_the_slot_check_finds_a_cell_reaching_past_its_slot() {
+        use crate::backend::frame::Frame;
+        let body = reading(&[(-12, -12)]);
+        let mut frame = Frame::new(0);
+        frame.capacities.insert(-12, 4);
+        assert_eq!(super::reaching_past_its_slot(&body, &frame), None);
+        frame.capacities.insert(-12, 2);
+        assert!(super::reaching_past_its_slot(&body, &frame).is_some());
     }
 
     /// The body of one block that reads each of `disps` once, tagged with the
