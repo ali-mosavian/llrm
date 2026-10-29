@@ -646,6 +646,14 @@ pub fn finalized(
 ) -> Result<Finalized, String> {
     let body = masm::cleaned_returns(body, parameter_bytes, 2)?;
     let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
+    // A site is found by its instruction's address, which the DAG route gives
+    // every instruction of one statement alike: `fcos` and `fln` of two
+    // statements' one address were both the later one's bytes.
+    let mut shared: IndexMap<i64, usize> = IndexMap::default();
+    for instruction in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        *shared.entry(instruction.at).or_default() += 1;
+    }
+    let mut next_at = shared.keys().copied().max().unwrap_or(0);
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut instructions = Vec::new();
@@ -662,8 +670,14 @@ pub fn finalized(
             if what.op != Operation::FloatUnary || what.dests != st0 || what.sources != st0 {
                 return Err(format!("{name} must be allocated as st(0) -> st(0)"));
             }
+            let at = if shared[&instruction.at] > 1 {
+                next_at += 1;
+                next_at
+            } else {
+                instruction.at
+            };
             sites.insert(
-                instruction.at,
+                at,
                 masm::Callee {
                     name: format!("$inline_{name}"),
                     far: false,
@@ -673,6 +687,7 @@ pub fn finalized(
                 },
             );
             let mut replaced = (**instruction).clone();
+            replaced.at = at;
             replaced.what = Some(Semantics { name: Some(name), ..Semantics::new(Operation::Call) });
             instructions.push(Arc::new(replaced));
         }

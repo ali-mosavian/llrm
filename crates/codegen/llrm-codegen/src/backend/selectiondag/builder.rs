@@ -2465,11 +2465,15 @@ impl Builder<'_> {
         };
         // a far access goes through the offset half after `LES`, so `ES`
         // (llrm's own space 259); the pin's 256..258 are `gs`, `fs`, `ss`
+        // A near pointer into the stack segment, where it is not the data
+        // segment's space, is read through `SS`.
+        let roles = self.arch.layout().spaces.roles;
         let space =
             match self.function.operand_type(&self.module.context, pointer).map(|ty| self.module.context.types.get(ty))
             {
                 Some(Type::Pointer(_)) if self.operand_type(pointer)? == MVT::Far.into() => 259,
                 Some(Type::Pointer(space)) if (256..259).contains(space) => *space,
+                Some(Type::Pointer(space)) if *space == roles.stack && roles.stack != roles.near => 258,
                 _ => 0,
             };
         Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space })

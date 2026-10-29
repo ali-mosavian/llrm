@@ -19,7 +19,6 @@ import json
 import math
 import shutil
 import tempfile
-import functools
 import argparse
 import subprocess
 import time
@@ -170,28 +169,13 @@ def c_environment(variant: Variant) -> dict[str, str]:
     return {**os.environ, "LLRM_CC_TARGET": dosbatch.WATCOM_ROWS[dosbatch.target_bits(dosbatch.REAL_MODE)]} if variant.language == "c" else dict(os.environ)
 
 
-@functools.cache
-def reads_noinline_attribute(compiler: str) -> bool:
-    """False where `compiler` rejects `__attribute__((noinline))` (a build before the native C front end hands the source to wccq, which reads it as
-    `__declspec`): all 48 C rows of the main dist were then "wccq failed", and the C kernels went uncompared. True where it cannot be run."""
-    if not Path(compiler).is_file():
-        return True
-    with tempfile.TemporaryDirectory() as directory:
-        probe = Path(directory) / "probe.c"
-        probe.write_text("__attribute__((noinline)) int f(int a) { return a; }\nint main(void) { return f(0); }\n")
-        done = subprocess.run([compiler, str(probe), "-O2", "-o", f"{directory}/probe.obj"], capture_output=True, text=True)
-        return done.returncode == 0 or "__declspec" not in done.stderr
-
-
 def kept_a_call(variant: Variant, work: Path, stem: str) -> tuple[Path, Path] | None:
     """A C kernel's sources that keep it a call without `-fno-inline-functions`, which also kept a recursive function from inlining
     itself, as gcc and clang do (`rectwo` ran 4.2x gcc's clocks, 2.6x with it on): `main` calling it through a volatile pointer
     (vsgcc's `wrap.py`, which a kernel of constants cannot be folded out of), to run and count, and the kernel `noinline` with `main` as
     it was, whose object is the one sized: the pointer is 18 bytes of code and 4 of data no reference compiler's object has. The
-    attribute is added to what llrm-c reads; the reference compilers read the source as it is. None where the source has no such kernel
-    (the build then keeps the flag), and where the compiler cannot read the attribute."""
-    if not reads_noinline_attribute(str(BIN / "llrm-c")):
-        return None
+    attribute is added to what llrm-cc reads; the reference compilers read the source as it is. None where the source has no such kernel
+    (the build then keeps the flag)."""
     text = variant.source.read_text()
     found = re.search(rf"^([a-z][a-z ]*[ *]){re.escape(variant.region)}\(", text, re.M)
     if found is None:
