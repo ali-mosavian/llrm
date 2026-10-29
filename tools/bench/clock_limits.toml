@@ -5,21 +5,10 @@
 [clocks]
 
 # class 0: not yet attributed: DEBT bench-clocks-unattributed
-"floats bas -Os" = 110197  # main 99206
-"mandel bas -Os" = 1140118  # main 1108365
-"mandel nib -Os" = 842924  # main 833809
-"nbody bas -Os" = 438826  # main 428879 (standard)
-"nbody c -Os" = 371703  # main 358692
-"nbody nib -Os" = 371478  # main 357111
 "parity/algebra bas -Os" = 271  # main 265
-"parity/qmove c -Os" = 485  # main 465
-"parity/qmove nib -Os" = 520  # main 503
 "parity/sum_three nib -Os" = 129  # main 123
 "particle c -Os" = 169089  # main 168983
-"recfloat c -Os" = 50104  # main 47103
 "recsum c -Os" = 82039  # main 82036
-"ring bas -Os" = 76021  # main 74990
-"shellsort c -Os" = 16576  # main 14989
 
 # class 1: LSR default (7ee16741c1 class), ablation candidate, first-bad TBD: DEBT bench-clocks-lsr-default
 "sieve bas -Os" = 46421  # main 33601
@@ -29,14 +18,23 @@
 # class 2: loop-header copy (tree-ch), ablation candidate, first-bad TBD: DEBT bench-clocks-loop-header-copy
 "lru c -Os" = 377  # main 279
 "lru nib -Os" = 663  # main 571
+"ring bas -Os" = 76021  # main 74990
+"shellsort c -Os" = 16576  # main 14989
 
 # class 3: PRE / loop-header copy, ablation candidate, first-bad TBD: DEBT bench-clocks-pre
 "quicksort c -Os" = 325239  # main 309284
 "quicksort nib -Os" = 447484  # main 316122
+"recfloat c -Os" = 50104  # main 47103
 
 # class 4: float rows: QB standard-precision default is deliberate (BC); compare like with like (bas rows: main under the same flag; nib rows: fast, as main): DEBT bench-clocks-float
 "fpbench bas -Os" = 209619  # main 208600 (standard)
 "fpbench c -Os" = 156214  # main 156169
+"floats bas -Os" = 110197  # main 99206
+"mandel bas -Os" = 1140118  # main 1108365
+"mandel nib -Os" = 842924  # main 833809
+"nbody bas -Os" = 438826  # main 428879 (standard)
+"nbody c -Os" = 371703  # main 358692
+"nbody nib -Os" = 371478  # main 357111
 
 # class 5: DAG selection, rows that fall below main under --isel=old: DEBT bench-clocks-dag-isel
 "fib bas -Os" = 1313485  # main 1116464
@@ -73,3 +71,7 @@
 
 # class 9 imul-const / les: 3 imul and 2 les where main has 2 imul + lea and 2 movs, fewer insns, more clocks: DEBT bench-clocks-imul-const-les
 "bintree bas -Os" = 418860  # main 407346
+
+# class 10 gcse (-fno-gcse recovers the qmove rows): DEBT bench-clocks-gcse
+"parity/qmove c -Os" = 485  # main 465
+"parity/qmove nib -Os" = 520  # main 503
