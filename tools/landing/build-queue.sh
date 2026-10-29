@@ -5,7 +5,10 @@
 R=${R:-ali-mosavian/llrm}; HERE=$(cd "$(dirname "$0")" && pwd)
 PRIORITY=${PRIORITY:-$HERE/priority.txt}; WAITS=${WAITS:-$HERE/waits.txt}
 nums() { sed 's/#.*//' "$1" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$'; }
-ready=$(gh pr list --repo "$R" --state open --base feat/parity --limit 1000 --json number,isDraft,mergeable,body,headRefOid -q '.[]|select(.isDraft==false)|"\(.number) \(.mergeable) \((.body // "")|capture("(^|\n)Owner: *(?<o>[A-Za-z0-9_.-]+)")?.o // "-") \(.headRefOid // "-")"') || exit 1
+ready=$(gh pr list --repo "$R" --state open --base feat/parity --limit 1000 --json number,isDraft,mergeable,body,headRefOid,labels -q '.[]|select(.isDraft==false)|"\(.number) \(if any(.labels[]?; .name=="hold") then "HOLD" else .mergeable end) \((.body // "")|capture("(^|\n)Owner: *(?<o>[A-Za-z0-9_.-]+)")?.o // "-") \(.headRefOid // "-")"') || exit 1
+# a PR labelled `hold` is never queued, ready or not, priority.txt or not (its mergeable column carries HOLD from the query)
+echo "$ready" | awk '$2=="HOLD"{printf "%s: REFUSED: label hold\n", $1}' >&2
+ready=$(echo "$ready" | awk '$2!="HOLD"')
 # a PR the last landing refused is not tried again until its head or feat/parity moves (refused.state, written by land.sh): the runner re-queued it every second
 STATE=${REFUSED_STATE:-${LAND_TMP:-/tmp/landing}/refused.state}
 # an If-None-Match request (pr_state.py parity): an unchanged ref answers 304, which costs no quota
