@@ -6,5 +6,6 @@ pub mod call;
 pub mod emit;
 pub mod hooks;
 pub mod function;
+pub mod globals;
 pub mod ids;
 pub mod pipeline;
