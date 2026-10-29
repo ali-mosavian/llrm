@@ -265,6 +265,8 @@ pub enum Encoded {
     Mark(masm::Mark, Option<String>),
     /// A `.cfi_*` directive: no bytes.
     Cfi(llrm_object::assembler::Cfi),
+    /// A `.seh_*` directive: no bytes.
+    Seh(llrm_object::Seh),
     /// `MCAlignFragment`: nops up to the alignment.
     Align(masm::CodeAlign),
     /// `.prefalign` (`MCAssembler::relaxPrefAlign`): a function aligned to
@@ -296,6 +298,8 @@ pub struct Segment {
     pub bodies: Vec<(masm::Mark, usize)>,
     /// The declared call frame information and where it stands.
     pub cfi: Vec<(llrm_object::assembler::Cfi, usize)>,
+    /// The declared `.seh_*` directives and the offset after each.
+    pub seh: Vec<(llrm_object::Seh, usize)>,
     /// Where a procedure that declares call frame information starts.
     pub declared: Vec<usize>,
     /// The widest alignment a data item in it asks for.
@@ -318,6 +322,7 @@ impl Segment {
             lines: Vec::new(),
             bodies: Vec::new(),
             cfi: Vec::new(),
+            seh: Vec::new(),
             declared: Vec::new(),
             align: 1,
         }
@@ -444,6 +449,7 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
                     | Encoded::Jump(_)
                     | Encoded::Mark(..)
                     | Encoded::Cfi(_)
+                    | Encoded::Seh(_)
                     | Encoded::Align(_)
                     | Encoded::Prefer { .. }
                     | Encoded::End(_) => {}
@@ -760,6 +766,7 @@ pub fn _code_by(
                 symbols.insert(name.clone(), (index, at));
             }
             Encoded::Cfi(cfi) => segment.cfi.push((*cfi, segment.image.len())),
+            Encoded::Seh(seh) => segment.seh.push((*seh, segment.image.len())),
             Encoded::Mark(mark, name) => {
                 segment.mark(*mark);
                 if let Some(name) = name {
@@ -823,6 +830,7 @@ pub fn _items(
         }
         masm::Item::Mark(mark) => vec![Encoded::Mark(*mark, None)],
         masm::Item::Cfi(cfi) => vec![Encoded::Cfi(*cfi)],
+        masm::Item::Seh(seh) => vec![Encoded::Seh(*seh)],
         masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => code
             .iter()
             .map(|part| _part(part, model))
@@ -1104,7 +1112,7 @@ pub fn _length(
     model: CodeModel,
 ) -> usize {
     match item {
-        Encoded::Label(_) | Encoded::Mark(..) | Encoded::Cfi(_) | Encoded::End(_) => 0,
+        Encoded::Label(_) | Encoded::Mark(..) | Encoded::Cfi(_) | Encoded::Seh(_) | Encoded::End(_) => 0,
         // Padding depends on where it lands: see `_size`.
         Encoded::Align(_) | Encoded::Prefer { .. } => 0,
         Encoded::Piece(Piece { code, .. }) => code.len(),
@@ -1310,7 +1318,8 @@ fn declared_frames(
                     kept.push(row);
                 }
             }
-            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept });
+            let seh = segment.seh.iter().filter(|(_, at)| within(at)).map(|&(seh, at)| (at - start, seh)).collect();
+            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept, seh });
         }
     }
     frames
