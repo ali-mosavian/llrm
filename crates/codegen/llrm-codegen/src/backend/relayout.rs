@@ -416,6 +416,15 @@ impl Moves<'_> {
         cell: &Mem,
     ) -> Option<Mem> {
         let Some(addr) = cell.addr else { return Some(cell.clone()) };
+        // The replay hands each spill slot out alone, so a cell reaching past
+        // its slot (a `les` over the two word slots of a far pointer) would
+        // read whatever lies next to it in the new layout.
+        if let (Some(frame), Space::Frame, Some(home)) = (self.frame, addr.space, addr.slot_home())
+            && let Some(capacity) = frame.capacities.get(&home).filter(|_| self.homes.contains_key(&home))
+            && addr.disp - home + i64::from(cell.width) > *capacity
+        {
+            return None;
+        }
         let (addr, offset) = self.addr(addr, cell.offset)?;
         Some(Mem { addr: Some(addr), offset, ..cell.clone() })
     }
@@ -688,6 +697,24 @@ mod tests {
         assert_eq!((laid.disp, laid.slot_home()), (-98, Some(-108)));
         let (incoming, _) = moves.addr(cell(8, 0), 0).expect("an incoming argument stays");
         assert_eq!((incoming.disp, incoming.slot_home()), (8, Some(0)));
+    }
+
+    /// A `les` over the two word spill slots of a far pointer was moved by its
+    /// first slot alone, so the second layout read its selector from whatever
+    /// lay after the offset slot: d_faces -O2 loaded ES from an unwritten
+    /// slot and drew the wrong picture (oracle-qcport).
+    #[test]
+    fn test_a_cell_reaching_past_its_spill_slot_is_not_moved() {
+        use super::Moves;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(0);
+        frame.capacities.insert(-12, 2);
+        let homes = [(-12, -20)].into_iter().collect();
+        let moves = Moves { frame: Some(&frame), homes: &homes, hole: 8 };
+        let cell =
+            |width| Mem { through: RegId::EBP, ..Mem::new(Some(Addr::new(Space::Frame, -12).in_slot(-12)), width) };
+        assert!(moves.mem(&cell(2)).is_some(), "premise: a word in its word slot moves");
+        assert_eq!(moves.mem(&cell(4)), None);
     }
 
     #[global_allocator]
