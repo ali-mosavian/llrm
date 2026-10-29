@@ -1,8 +1,9 @@
-# Apple II, DOS 3.3 binary. STUB: values from cc65's apple2 config (ZP at $80, program at $0803), not
-# yet checked against a run.
+# Apple II, DOS 3.3 binary. Values from the installed cc65 apple2.cfg (zero page $80..$99, program at
+# $0803, HIMEM $9600). CHECKED BY BUILD ONLY: the binary is assembled, linked and its header and
+# entry bytes are tested, but nothing here runs an Apple II.
 [platform]
 name = "apple2"
-status = "stub"
+status = "built"
 load_address = 0x0803
 imag_base = 0x80
 soft_stack = 0x9600

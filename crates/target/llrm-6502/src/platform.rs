@@ -4,6 +4,8 @@
 pub const C64: &str = include_str!("machines/c64.toml");
 /// The ld65 memory layout of a C64 PRG.
 pub const C64_LD65: &str = include_str!("machines/c64.cfg");
+/// The ld65 memory layout of an Apple II DOS 3.3 binary.
+pub const APPLE2_LD65: &str = include_str!("machines/apple2.cfg");
 pub const SIM65: &str = include_str!("machines/sim65.toml");
 
 /// Every platform row; the stubs are marked `status = "stub"` in their file.
@@ -48,6 +50,18 @@ pub fn c64_startup(platform: &Platform) -> String {
     format!(
         ".segment \"LOADADDR\"\n.word $0801\n\
          .segment \"BASIC\"\n.word next\n.word 10\n.byte $9E, \"2061\", 0\nnext:\n.word 0\n\
+         .segment \"CODE\"\n.export start\nstart:\n  lda #${:02X}\n  sta rc0\n  lda #${:02X}\n  sta rc1\n  jsr _main\n  sta $0400\nhalt:\n  jmp halt\n",
+        platform.soft_stack & 0xFF,
+        platform.soft_stack >> 8
+    )
+}
+
+/// What an Apple II binary starts with: the DOS 3.3 header (load address and length), then `start`,
+/// which sets the soft stack pointer, calls `_main` and shows its result in the top-left cell of
+/// text page 1 (`$0400`, the same cell as on the C64).
+pub fn apple2_startup(platform: &Platform) -> String {
+    format!(
+        ".import __MAIN_START__, __MAIN_LAST__\n.segment \"HEADER\"\n.word __MAIN_START__\n.word __MAIN_LAST__ - __MAIN_START__\n\
          .segment \"CODE\"\n.export start\nstart:\n  lda #${:02X}\n  sta rc0\n  lda #${:02X}\n  sta rc1\n  jsr _main\n  sta $0400\nhalt:\n  jmp halt\n",
         platform.soft_stack & 0xFF,
         platform.soft_stack >> 8
