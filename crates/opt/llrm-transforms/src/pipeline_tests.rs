@@ -65,56 +65,6 @@ fn keeps_verifying_and_computing_the_same(
     true
 }
 
-/// Commutes @f's add so that its constant comes first or last.
-struct Commute {
-    name: &'static str,
-    constant_first: bool,
-}
-
-impl llrm_mir::passes::FunctionPass for Commute {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
-    fn run(
-        &mut self,
-        unit: &mut llrm_mir::passes::Unit,
-        _: &mut llrm_mir::passes::Analyses,
-    ) -> llrm_mir::passes::PreservedAnalyses {
-        use llrm_mir::module::Operand;
-        let (_, add) = unit
-            .function
-            .walk()
-            .find(|&(_, one)| {
-                unit.function.instruction(one).opcode
-                    == llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Add)
-            })
-            .expect("an add");
-        let operands = unit.function.instruction(add).operands.clone();
-        if matches!(operands[0], Operand::Constant(_)) == self.constant_first {
-            return llrm_mir::passes::PreservedAnalyses::all();
-        }
-        unit.function.set_operands(add, vec![operands[1], operands[0]]);
-        llrm_mir::passes::PreservedAnalyses::none()
-    }
-}
-
-/// Arenas never shrink, so before bodies were compared by their text two
-/// passes undoing each other ran the whole size-scaled limit.
-#[test]
-#[should_panic(expected = "cycle after 1 rounds")]
-fn passes_that_undo_each_other_stop_after_one_cycle() {
-    let mut module =
-        llrm_analysis::testing::parsed("define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n");
-    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
-    fixed.only = false;
-    fixed.passes = vec![
-        Box::new(Commute { name: "first", constant_first: true }),
-        Box::new(Commute { name: "last", constant_first: false }),
-    ];
-    crate::testing::managed(&mut module, fixed);
-}
-
 /// A loop counted in an internal global no code outside names, a
 /// `nocallback` routine called each trip: the count is proven and the
 /// loop copied out. GlobalsAA was never required, so every call wrote the
@@ -928,16 +878,12 @@ fn billed_asking_for_costly(trips: u64) -> (super::Run, u64) {
         inputs: false,
         rounds: 0,
         steps: 0,
-        skipped: 0,
         fixed: 0,
         billing: true,
         idle: 0,
         useful: 0,
         idle_with_analyses: 0,
         useful_with_analyses: 0,
-        classified: unit.function.mark(),
-        stretches: Vec::new(),
-        unreached: 0,
         slice: None,
         persisted: 0,
         records: unit.context.extension::<crate::settled::Settled>(),
@@ -1021,140 +967,8 @@ impl llrm_mir::passes::FunctionPass for Watch {
     }
 }
 
-/// Changes the constant of @f's add, once: an arithmetic value that only a
-/// `ret` reads.
-struct Fold {
-    done: bool,
-}
-
-impl llrm_mir::passes::FunctionPass for Fold {
-    fn name(&self) -> &'static str {
-        "fold-once"
-    }
-
-    fn run(
-        &mut self,
-        unit: &mut llrm_mir::passes::Unit,
-        _: &mut llrm_mir::passes::Analyses,
-    ) -> llrm_mir::passes::PreservedAnalyses {
-        if std::mem::replace(&mut self.done, true) {
-            return llrm_mir::passes::PreservedAnalyses::all();
-        }
-        let (_, add) = unit
-            .function
-            .walk()
-            .find(|&(_, one)| {
-                unit.function.instruction(one).opcode
-                    == llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Add)
-            })
-            .expect("an add");
-        let ty = unit.function.instruction(add).ty;
-        let operands = unit.function.instruction(add).operands.clone();
-        let two = llrm_mir::module::Operand::Constant(unit.context.int(ty, 2));
-        unit.function.set_operands(add, vec![operands[0], two]);
-        llrm_mir::passes::PreservedAnalyses::none()
-    }
-}
-
 /// A fold in one function made every pass before it run again, the whole round,
 /// though what it changed was an arithmetic value only a `ret` reads: 13.6% of
-/// x_popcount -O2's compile was passes that found nothing (decide alone 3.4 of
-/// 94 Minstr), and a late fold (`& 3` over a sum masked again) cost it x1.024.
-/// A pass says what it reads (`FunctionPass::reads`), the driver what the edits
-/// reached (`footprint::of`): decide, which reads conditions, memory and
-/// the CFG, is not run again; one that reads everything is.
-#[test]
-fn a_fold_does_not_rerun_the_passes_that_read_nothing_it_reached() {
-    use llrm_mir::footprint::Footprint;
-    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
-    let mut module = llrm_analysis::testing::parsed(text);
-    let (narrow, wide) = (std::rc::Rc::new(std::cell::Cell::new(0)), std::rc::Rc::new(std::cell::Cell::new(0)));
-    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
-    fixed.only = false;
-    fixed.passes = vec![
-        Box::new(Watch {
-            name: "narrow",
-            reads: Footprint::CONTROL | Footprint::MEMORY | Footprint::STRUCTURE,
-            runs: std::rc::Rc::clone(&narrow),
-        }),
-        Box::new(Watch { name: "wide", reads: Footprint::ALL, runs: std::rc::Rc::clone(&wide) }),
-        Box::new(Fold { done: false }),
-    ];
-    crate::testing::managed(&mut module, fixed);
-    assert_eq!(wide.get(), 2, "a pass that reads everything is run again after the fold");
-    assert_eq!(narrow.get(), 1, "decide-like: the fold reached no condition, no memory and no block");
-}
-
-/// Changes the constant of @f's add on each of its first `left` runs, the way a
-/// chain of folds does one step per round.
-struct Chain {
-    left: usize,
-    runs: std::rc::Rc<std::cell::Cell<usize>>,
-}
-
-impl llrm_mir::passes::FunctionPass for Chain {
-    fn name(&self) -> &'static str {
-        "chain"
-    }
-
-    fn run(
-        &mut self,
-        unit: &mut llrm_mir::passes::Unit,
-        _: &mut llrm_mir::passes::Analyses,
-    ) -> llrm_mir::passes::PreservedAnalyses {
-        self.runs.set(self.runs.get() + 1);
-        if self.left == 0 {
-            return llrm_mir::passes::PreservedAnalyses::all();
-        }
-        self.left -= 1;
-        let (_, add) = unit
-            .function
-            .walk()
-            .find(|&(_, one)| {
-                unit.function.instruction(one).opcode
-                    == llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Add)
-            })
-            .expect("an add");
-        let ty = unit.function.instruction(add).ty;
-        let operands = unit.function.instruction(add).operands.clone();
-        let constant = llrm_mir::module::Operand::Constant(unit.context.int(ty, 10 + self.left as i128));
-        unit.function.set_operands(add, vec![operands[0], constant]);
-        llrm_mir::passes::PreservedAnalyses::none()
-    }
-}
-
-/// The rounds of a body's passes were bounded by its size (`max(16, blocks +
-/// insts + 1)`) and nothing else: the fourth and fifth round of d_faces'
-/// hottest body were 354 of its 6,246 Minstr, and found nothing the 284 rows of
-/// the vsgcc tables and the 65 QCport modules show (the objects are the same).
-/// `Options::rounds` bounds them; -Omax runs to the fixed point.
-#[test]
-fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
-    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
-    let through = |options: pipeline::Options| {
-        let mut module = llrm_analysis::testing::parsed(text);
-        let count = std::rc::Rc::new(std::cell::Cell::new(0));
-        let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), options, ..Applied::default() });
-        fixed.only = false;
-        fixed.passes = vec![Box::new(Chain { left: 8, runs: std::rc::Rc::clone(&count) })];
-        crate::testing::managed(&mut module, fixed);
-        count.get()
-    };
-    let runs = |rounds: usize| through(pipeline::Options { rounds, ..pipeline::Options::standard() });
-    assert_eq!(runs(4), 4, "the budget ends the rounds");
-    assert_eq!(runs(usize::MAX), 9, "premise: the chain runs to its end when nothing bounds it");
-    // -O1 ran four rounds, the third of which changed five passes of d_faces
-    // and the fourth none: 253 of 3,084 Minstr for the rounds after the
-    // second, and 5 of the 71 vsgcc objects differ without them (+0.18%
-    // clocks).
-    assert_eq!(through(pipeline::Options::basic()), 2, "-O1 runs two rounds");
-    assert_eq!(pipeline::Options::basic().rounds, 2);
-    assert_eq!(pipeline::Options::standard().rounds, 4);
-    assert_eq!(pipeline::Options::speed().rounds, 4);
-    assert_eq!(pipeline::Options::size().rounds, 4);
-    assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
-}
-
 /// Sixty sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them
 /// (six sweeps are completely unrolled by `LoopFullUnroll`, which LLVM's order
 /// runs before the jam, and leave no nest to jam),
@@ -1670,16 +1484,12 @@ fn test_a_run_that_changes_nothing_leaves_its_input_and_a_manifest_line() {
         dump: Some(directory.clone()),
         rounds: 0,
         steps: 0,
-        skipped: 0,
         fixed: 0,
         billing: false,
         idle: 0,
         useful: 0,
         idle_with_analyses: 0,
         useful_with_analyses: 0,
-        classified: unit.function.mark(),
-        stretches: Vec::new(),
-        unreached: 0,
         slice: None,
         persisted: 0,
         records: unit.context.extension::<crate::settled::Settled>(),
@@ -1713,16 +1523,12 @@ fn test_a_step_that_dumps_and_logs_nothing_formats_no_stage_name() {
         dump: None,
         rounds: 0,
         steps: 0,
-        skipped: 0,
         fixed: 0,
         billing: false,
         idle: 0,
         useful: 0,
         idle_with_analyses: 0,
         useful_with_analyses: 0,
-        classified: unit.function.mark(),
-        stretches: Vec::new(),
-        unreached: 0,
         slice: None,
         persisted: 0,
         records: unit.context.extension::<crate::settled::Settled>(),
@@ -1793,7 +1599,7 @@ fn test_the_runs_lines_carry_the_sizes_a_step_enters_and_leaves_and_the_body_nam
     );
     let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
     fixed.only = false;
-    fixed.passes = vec![Box::new(EraseUnused)];
+    fixed.passes = vec![Box::new(EraseUnused), Box::new(EraseUnused)];
     let (_, lines) = pipeline::capturing_runs(|| crate::testing::managed(&mut module, fixed));
     let steps: Vec<&String> = lines.iter().filter(|line| line.starts_with("step ")).collect();
     assert!(steps.first().is_some_and(|line| line.contains(" changed ") && line.ends_with(" in=3 out=2")), "{lines:?}");

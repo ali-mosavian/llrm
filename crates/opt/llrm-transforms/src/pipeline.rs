@@ -125,7 +125,6 @@
 //! `LLRM_DEBUG=time` times each step, `runs` counts rounds, skips and the
 //! work of passes that changed nothing.
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use llrm_analysis::cfg;
@@ -134,7 +133,6 @@ use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, PassManager, PreservedAnalyses, Stage, Unit};
-use llrm_mir::print;
 use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
@@ -265,17 +263,7 @@ pub struct Options {
     /// With `search`, every shape rather than the one the spills suggest
     /// (`-fallocation-search-all`; -Omax).
     pub exhaustive: bool,
-    /// How many rounds of the body's passes run at most. A round after the
-    /// third found nothing on the 71 programs of the vsgcc tables and
-    /// QCport (the objects are the same), and the fourth and fifth of
-    /// d_faces were 354 Minstr; -Omax runs to the fixed point. A round that
-    /// follows an unroll which changed the body runs past the budget, to clean
-    /// the straight line it made.
-    pub rounds: usize,
 }
-
-/// The rounds a body's passes run, short of -Omax's fixed point.
-const ROUNDS: usize = 4;
 
 impl Default for Options {
     fn default() -> Self {
@@ -287,7 +275,6 @@ impl Default for Options {
             inline: inline::Threshold::default(),
             lcssa: true,
             floatloop: true,
-            rounds: ROUNDS,
             fold: true,
             simplifycfg: true,
             decide: true,
@@ -350,7 +337,6 @@ impl Options {
             inline: inline::Threshold::default(),
             // gcc runs each pass once: the third round changed five passes of
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
-            rounds: 2,
             pre: false,
             peel: false,
             loop_unrolling: false,
@@ -401,7 +387,6 @@ impl Options {
             unroll_and_jam: true,
             search: true,
             exhaustive: true,
-            rounds: usize::MAX,
             ..Self::default()
         }
     }
@@ -1334,7 +1319,6 @@ pub struct Fixed {
     unswitch: Option<simpleloopunswitch::SimpleLoopUnswitch>,
     interchange: Option<loopinterchange::Interchange>,
     only: bool,
-    rounds: usize,
     dump: Option<PathBuf>,
     /// Bodies run, naming each one's dump.
     runs: usize,
@@ -1367,7 +1351,6 @@ impl Fixed {
             unswitch,
             interchange: (applied.options.interchange && only.is_none()).then(loopinterchange::Interchange::default),
             only: only.is_some(),
-            rounds: applied.options.rounds,
             dump: applied.dump.clone(),
             runs: 0,
         }
@@ -1420,7 +1403,6 @@ impl Fixed {
             &held,
         );
         debug_assert!(checked.is_ok(), "{checked:?}");
-        linear.rounds = 1;
         // The slot of the order unswitches, where the pin does.
         linear.unswitch = None;
         // It has its own slot (`loop-interchange@1631`) in `Phase::Late`.
@@ -1476,96 +1458,17 @@ impl Fixed {
         run: &mut Run,
         prefix: &str,
     ) -> Result<(), String> {
-        // A monotone chain may expose one simplification per operation.
-        let size = unit.function.layout().len() + unit.function.walk().count();
-        let limit = std::cmp::max(16, size + 1);
-        // The change each pass last left the body at, unchanged: handed that
-        // body again it would change nothing, so it is skipped.
-        let mut settled: Vec<Option<(usize, usize)>> = vec![None; self.passes.len()];
-        // Separately reject a repeated state, so an oscillator fails at once
-        // instead of consuming the limit.
-        // Only a list that rounds more than once can come back to a state, so
-        // only that one hashes the body (LLVM's order runs its lists once).
-        let mut history = (self.rounds > 1).then(|| BTreeSet::from([print::fingerprint(unit.function)]));
-
         run.fixed += 1;
-        for iteration in 0..limit {
-            if iteration >= self.rounds {
-                self.report_unspent(unit, analyses, iteration);
-                run.settled(unit, analyses);
-                return Ok(());
-            }
-            // A named point: what was kept as sound is worked out afresh.
-            analyses.refresh_soft();
-            let before = run.version;
-            run.rounds += 1;
-            for (one, settled) in self.passes.iter_mut().zip(&mut settled) {
-                if let Some((version, stretches)) = *settled {
-                    if version == run.version {
-                        run.skipped += 1;
-                        run.check_skipped(&mut **one, unit, analyses);
-                        continue;
-                    }
-                    // Edits since it found nothing to do, none of which reaches
-                    // what it reads.
-                    run.classify(unit);
-                    let reached = run.reached_since(stretches);
-                    if !reached.meets(one.reads()) {
-                        run.unreached += 1;
-                        run.check_skipped(&mut **one, unit, analyses);
-                        continue;
-                    }
-                }
-                let pass = one.name();
-                let name = format_args!("{prefix}r{:02}-{pass}", iteration + 1);
-                *settled = (!run.step(&mut **one, &name, unit, analyses)).then(|| (run.version, run.stretches.len()));
-            }
-            if self.only || run.version == before {
-                run.settled(unit, analyses);
-                return Ok(());
-            }
-            // A list that runs once (LLVM's order) may end where it began:
-            // EarlyCSE drops the LCSSA phis that `lcssa` makes
-            // again.
-            if history.as_mut().is_some_and(|seen| !seen.insert(print::fingerprint(unit.function))) {
-                return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
-            }
+        // A named point: what was kept as sound is worked out afresh.
+        analyses.refresh_soft();
+        run.rounds += 1;
+        for one in &mut self.passes {
+            let pass = one.name();
+            let name = format_args!("{prefix}r01-{pass}");
+            run.step(&mut **one, &name, unit, analyses);
         }
-        Err(format!("MIR optimization did not converge after {limit} size-scaled rounds"))
-    }
-}
-
-impl Fixed {
-    /// `LLRM_CHECK_ROUNDS`: the pass that a round after the budget would have
-    /// changed the body with, said on stderr; nothing fails, as the budget is a
-    /// choice and a body may need more.
-    fn report_unspent(
-        &mut self,
-        unit: &Unit,
-        analyses: &Analyses,
-        rounds: usize,
-    ) {
-        if !llrm_support::env_flag!("LLRM_CHECK_ROUNDS") {
-            return;
-        }
-        let mut context = unit.context.clone();
-        let mut function = unit.function.clone();
-        let mut declared = unit.declared.clone();
-        let mut copy = Unit {
-            context: &mut context,
-            layout: unit.layout,
-            function: &mut function,
-            id: unit.id,
-            metadata: unit.metadata,
-            declared: &mut declared,
-        };
-        for pass in &mut self.passes {
-            let preserved = pass.run(&mut copy, &mut analyses.fresh());
-            if !preserved.are_all_preserved() {
-                eprintln!("LLRM_CHECK_ROUNDS: round {} would change the body with {}", rounds + 1, pass.name());
-                return;
-            }
-        }
+        run.settled(unit, analyses);
+        Ok(())
     }
 }
 
@@ -1600,16 +1503,12 @@ impl FunctionPass for Fixed {
             dump,
             rounds: 0,
             steps: 0,
-            skipped: 0,
             fixed: 0,
             billing: runs_billed(),
             idle: 0,
             useful: 0,
             idle_with_analyses: 0,
             useful_with_analyses: 0,
-            classified: unit.function.mark(),
-            stretches: Vec::new(),
-            unreached: 0,
             slice: None,
             persisted: 0,
             records: unit.context.extension::<Settled>(),
@@ -1620,14 +1519,12 @@ impl FunctionPass for Fixed {
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));
         run.remember(unit, analyses);
         runs_line(format_args!(
-            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} skipped as unreached, {} skipped as settled in an earlier run, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {}) name {}",
+            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled in an earlier run, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {}) name {}",
             unit.id.map_or(-1, |id| i64::from(id.0)),
             TRIGGER.with(|trigger| trigger.borrow().clone()),
             run.fixed,
             run.rounds,
             run.steps,
-            run.skipped,
-            run.unreached,
             run.persisted,
             run.version,
             run.idle,
@@ -1685,12 +1582,10 @@ struct Run {
     dump: Option<PathBuf>,
     /// `LLRM_DUMP_INPUTS`: the body at the input of every pass run is dumped.
     inputs: bool,
-    /// For `LLRM_DEBUG=runs`: fixed points reached, rounds in them, passes run,
-    /// passes skipped as settled.
+    /// For `LLRM_DEBUG=runs`: fixed points reached, rounds in them, passes run.
     fixed: usize,
     rounds: usize,
     steps: usize,
-    skipped: usize,
     /// The work of passes that changed nothing, and of those that did (only
     /// where `runs` is on).
     billing: bool,
@@ -1700,13 +1595,6 @@ struct Run {
     /// a pass would not save, since the next pass to ask would pay it.
     idle_with_analyses: u64,
     useful_with_analyses: u64,
-    /// Where the log of edits has been classified to, and what each stretch of
-    /// it reached (`footprint::of`), found once for every pass that asks.
-    classified: llrm_mir::module::Mark,
-    stretches: Vec<llrm_mir::footprint::Footprint>,
-    /// Passes not run because no edit since they found nothing reached what
-    /// they read.
-    unreached: usize,
     /// The facts outside the body, as of a point in its history
     /// (`settled::slice`).
     slice: Option<(llrm_mir::module::Mark, settled::Slice)>,
@@ -1722,36 +1610,6 @@ struct Run {
 }
 
 impl Run {
-    /// The edits made since the last stretch, classified as one: after every
-    /// pass, so that no stretch holds the edits of two passes. A function
-    /// put in place of the body (a copy has a history of its own) is every
-    /// part changed.
-    fn classify(
-        &mut self,
-        unit: &Unit,
-    ) {
-        let now = unit.function.mark();
-        let reached = if !now.same_history(self.classified) {
-            llrm_mir::footprint::Footprint::ALL
-        } else if now.position() != self.classified.position() {
-            unit.function
-                .changes_since(self.classified)
-                .map_or(llrm_mir::footprint::Footprint::ALL, |changes| llrm_mir::footprint::of(unit.function, changes))
-        } else {
-            return;
-        };
-        self.stretches.push(reached);
-        self.classified = now;
-    }
-
-    /// What the stretches since the `len`th reached.
-    fn reached_since(
-        &self,
-        len: usize,
-    ) -> llrm_mir::footprint::Footprint {
-        self.stretches[len..].iter().fold(llrm_mir::footprint::Footprint::NONE, |all, reached| all | *reached)
-    }
-
     /// The passes that found nothing are recorded as settled on the body as
     /// they found it: a later run starts none of them where what they read is
     /// as it was (`settled`), which the edits since are asked of then, not
@@ -1836,7 +1694,6 @@ impl Run {
         analyses.declared(unit.context, unit.declared);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
-        self.classify(unit);
         if let Some((billed, analysed, entering)) = billed {
             let with_analyses = llrm_support::debug::work() - billed;
             let own = with_analyses.saturating_sub(llrm_support::debug::analysed_work() - analysed);
@@ -1869,34 +1726,6 @@ impl Run {
         analyses.check_kept(pass.name(), unit.context, unit.layout, unit.function);
         self.changed(stage, unit, analyses);
         true
-    }
-
-    /// `LLRM_CHECK_SKIPPED`: a pass skipped as settled or as reading nothing
-    /// the edits since reached is run on a copy, and finds nothing to do.
-    fn check_skipped(
-        &self,
-        pass: &mut dyn FunctionPass,
-        unit: &Unit,
-        analyses: &Analyses,
-    ) {
-        if !llrm_support::env_flag!("LLRM_CHECK_SKIPPED")
-            || (!self.promotes && matches!(base(pass.name()), "sroa" | "promote"))
-        {
-            return;
-        }
-        let mut context = unit.context.clone();
-        let mut function = unit.function.clone();
-        let mut declared = unit.declared.clone();
-        let mut copy = Unit {
-            context: &mut context,
-            layout: unit.layout,
-            function: &mut function,
-            id: unit.id,
-            metadata: unit.metadata,
-            declared: &mut declared,
-        };
-        let preserved = pass.run(&mut copy, &mut analyses.fresh());
-        assert!(preserved.are_all_preserved(), "{} was skipped and would have changed the body", pass.name());
     }
 
     /// The body a pipeline hands out, with its unreachable blocks settled.
