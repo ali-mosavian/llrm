@@ -544,13 +544,27 @@ pub fn remove_redundant_copies<T: Target>(
     assignment: &Assignment,
     wide: impl Fn(&T::Class) -> bool,
 ) {
+    remove_redundant_copies_between::<T>(function, assignment, wide, |_| false)
+}
+
+/// [`remove_redundant_copies`] where a copy into or out of a fixed register (`whole_fixed`) counts
+/// too, as an argument register of a call does.
+pub fn remove_redundant_copies_between<T: Target>(
+    function: &mut MFunction<T::Class>,
+    assignment: &Assignment,
+    wide: impl Fn(&T::Class) -> bool,
+    whole_fixed: impl Fn(llrm_lir::registers::RegId) -> bool,
+) {
     use crate::mfunc::{Kind, Reg};
     let classes = function.classes.clone();
     let root = |reg: Reg| match reg {
         Reg::Virt(v) => T::root(assignment.0[v as usize]),
         Reg::Phys(id) => T::root(id),
     };
-    let whole = |reg: Reg| matches!(reg, Reg::Virt(v) if wide(&classes[v as usize]));
+    let whole = |reg: Reg| match reg {
+        Reg::Virt(v) => wide(&classes[v as usize]),
+        Reg::Phys(id) => whole_fixed(id),
+    };
     for block in &mut function.blocks {
         // `(destination, source)` roots of the copies still in force
         let mut held: Vec<(_, _)> = Vec::new();
@@ -575,7 +589,7 @@ pub fn remove_redundant_copies<T: Target>(
                 .iter()
                 .filter_map(|o| if let Operand::Def(r) = o { Some(root(*r)) } else { None })
                 .collect();
-            held.retain(|(to, from)| !written.contains(to) && !written.contains(from));
+            held.retain(|(to, from)| !written.iter().any(|w| T::overlaps(*w, *to) || T::overlaps(*w, *from)));
             if let Some(pair) = copy {
                 held.push(pair);
             }
