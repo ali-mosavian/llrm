@@ -4,7 +4,8 @@
 #include "llrm_os.h"
 #include "qb.h"
 
-enum { HUNDREDTHS = 100, DAY = 8640000L };
+#define DAY 8640000L
+enum { HUNDREDTHS = 100 };
 
 static long elapsed(long since)
 {

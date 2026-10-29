@@ -8,7 +8,8 @@
 #include "dev.h"
 #include "llrm_os.h"
 
-enum { STREAM_WIDTH = 80, CHUNK = 64, BEEP_HERTZ = 800, BEEP_LENGTH = 25 /* hundredths of a second */, DAY = 8640000L };
+#define DAY 8640000L
+enum { STREAM_WIDTH = 80, CHUNK = 64, BEEP_HERTZ = 800, BEEP_LENGTH = 25 /* hundredths of a second */ };
 
 const Driver *cn_text_driver;
 const Driver *cn_gfx_driver;

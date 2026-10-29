@@ -28,7 +28,7 @@ typedef struct AD {
 } AD;
 
 /* The most bytes an array may have unless it is huge: a segment's. */
-enum { AD_MAX_BYTES = 0x10000UL };
+#define AD_MAX_BYTES 0x10000UL
 
 enum {
     FADF_NEAR = 0,
