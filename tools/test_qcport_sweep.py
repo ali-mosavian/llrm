@@ -242,6 +242,8 @@ def test_qcport_console_encodes_at_every_level():
     if not source.is_file() or not include.is_dir():
         pytest.skip("QCport is not on this host")
     compiler = q.llrmbin.bin_dir() / "llrm-c"
+    if not compiler.exists():
+        pytest.skip("llrm-c is not built (debt skip-qcport-console)")
     flags = [f for part in (*q.MODULES, "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
     failed = {}
     for level in q.LEVELS:

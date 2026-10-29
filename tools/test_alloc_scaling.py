@@ -15,6 +15,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import llrmbin  # noqa: E402
 
+# Every test here compiles with llrm-c and reads the old allocator's `[instr]` rows. Debt `skip-alloc-scaling` in docs/working/ci.md.
+pytestmark = pytest.mark.skipif(not (llrmbin.bin_dir() / "llrm-c").exists(), reason="llrm-c is not built (debt skip-alloc-scaling)")
+
 SMALL, LARGE = 1024, 4096
 # 4x the program may cost this much more (a linear pass costs 4x, a quadratic one 16x). Measured 2026-10-09 on main 61be539b2:
 # 4.09, 4.05 and 12.42, repeating to 0.01%. regalloc base is allowed more: it rebuilds the facts of the body (every interval)

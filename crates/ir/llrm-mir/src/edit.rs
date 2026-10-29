@@ -1217,6 +1217,7 @@ impl Function {
         node: MetadataId,
     ) {
         self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));
+        self.log(Change::Rewritten(inst));
     }
 
     /// `Instruction::setMetadata`: `inst` has `node` as its metadata of `kind`
@@ -1228,9 +1229,13 @@ impl Function {
         node: Option<MetadataId>,
     ) {
         let metadata = &mut self.instructions[inst.0 as usize].metadata;
+        let before = metadata.clone();
         metadata.retain(|(one, _)| one != kind);
         if let Some(node) = node {
             metadata.push((kind.to_owned(), node));
+        }
+        if self.instructions[inst.0 as usize].metadata != before {
+            self.log(Change::Rewritten(inst));
         }
     }
 
