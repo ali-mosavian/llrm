@@ -1084,3 +1084,31 @@ fn a_zero_or_sign_test_does_not_compare_again() {
         }
     }
 }
+
+/// `b * a` swapped the two words in place (`ldx rc2; ldy rc3; ...; stx rc4; sty rc5`, 8 bytes)
+/// because the routine takes its first operand in rc2:rc3 and `a` arrives there but was named
+/// second. A product goes either way round: the call takes them as they arrive, whichever order the
+/// IR names, and with one operand computed.
+#[test]
+fn a_product_takes_its_operands_as_they_arrive() {
+    let product = |first: &str, second: &str| {
+        format!("define i16 @mulk(i16 %a, i16 %b) {{\n  %r = mul i16 {first}, {second}\n  ret i16 %r\n}}")
+    };
+    let straight = compile(&product("%a", "%b"), "mulk");
+    let swapped = compile(&product("%b", "%a"), "mulk");
+    assert_eq!(straight, swapped);
+    assert!(!swapped.contains("stx rc4"), "{swapped}");
+    // a computed operand and an argument: (a + 1) * b either way
+    let sum = |first: &str, second: &str| {
+        format!("define i16 @mulk(i16 %a, i16 %b) {{\n  %s = add i16 %a, 1\n  %r = mul i16 {first}, {second}\n  ret i16 %r\n}}")
+    };
+    for (first, second) in [("%s", "%b"), ("%b", "%s")] {
+        let text = compile(&sum(first, second), "mulk");
+        for (a, b, want) in [(5u16, 7u16, 42u16), (299, 200, 60000), (0xFFFF, 9, 0)] {
+            let setup = set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8);
+            let low = common::run_with("alloc-mulk", &format!("{setup}  jsr mulk\n"), &text);
+            let high = common::run_with("alloc-mulk", &format!("{setup}  jsr mulk\n  txa\n"), &text);
+            assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), want, "({first}) * ({second}) at a={a} b={b}");
+        }
+    }
+}

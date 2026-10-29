@@ -391,6 +391,34 @@ impl Builder {
         self.versions.get(name).copied().unwrap_or(0)
     }
 
+    /// The fixed register an incoming argument's value arrived in, followed back through copies and
+    /// the unpacking of a pair into its bytes.
+    fn arrives_in(
+        &self,
+        register: Reg,
+    ) -> Option<RegId> {
+        let Reg::Virt(mut v) = register else { return None };
+        let mut lane_of: Option<u8> = None;
+        for _ in 0..8 {
+            let def = self.function.blocks.iter().flat_map(|block| &block.insts).find(|inst| {
+                inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(d)) if *d == v))
+            })?;
+            let source = match (def.kind, &def.operands[..]) {
+                (Kind::Copy, [Operand::Def(_), Operand::Use(source)]) => *source,
+                (Kind::Op("UNPACK"), [Operand::Def(low), Operand::Def(_), Operand::Use(source)]) => {
+                    lane_of = Some(u8::from(*low != Reg::Virt(v)));
+                    *source
+                }
+                _ => return None,
+            };
+            match source {
+                Reg::Phys(p) => return Some(lane_of.map_or(p, |n| lane(p, n))),
+                Reg::Virt(next) => v = next,
+            }
+        }
+        None
+    }
+
     /// `count` single-bit steps of `step` on the accumulator. An arithmetic shift right by 7 leaves
     /// only the sign, all ones or all zeros, which is cheaper than seven `cmp #$80; ror a`.
     fn shift_a(
@@ -1378,15 +1406,21 @@ pub fn build(
                     op::SRLV16 => "__lshrhi3",
                     _ => "__ashrhi3",
                 };
-                let (xl, xh) = b.read_word(name(&o[1])?)?;
+                let (mut xl, mut xh) = b.read_word(name(&o[1])?)?;
                 let (dl, dh) = b.write_word(name(&o[0])?)?;
+                let counted = matches!(code, op::SHLV16 | op::SRLV16 | op::SRAV16);
+                let second = if counted { None } else { Some(b.read_word(name(&o[2])?)?) };
+                let (mut yl, mut yh) = second.unwrap_or((xl, xh));
+                // a product goes either way round: the operand that arrives in `rc4` is the second
+                if code == op::MUL16 && (b.arrives_in(xl) == Some(rc(4)) || b.arrives_in(yl) == Some(rc(2))) {
+                    (xl, xh, yl, yh) = (yl, yh, xl, xh);
+                }
                 b.copy(Reg::Phys(rc(2)), xl);
                 b.copy(Reg::Phys(rc(3)), xh);
-                if matches!(code, op::SHLV16 | op::SRLV16 | op::SRAV16) {
+                if counted {
                     let count = b.byte(name(&o[2])?)?;
                     b.copy(Reg::Phys(rc(4)), count);
                 } else {
-                    let (yl, yh) = b.read_word(name(&o[2])?)?;
                     b.copy(Reg::Phys(rc(4)), yl);
                     b.copy(Reg::Phys(rc(5)), yh);
                 }
