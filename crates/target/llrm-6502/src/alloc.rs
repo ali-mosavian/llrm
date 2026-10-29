@@ -512,8 +512,10 @@ impl Builder {
 
     fn push(
         &mut self,
-        inst: Inst,
+        mut inst: Inst,
     ) {
+        // a constant or a symbol's address is cheaper to load again than to keep in a slot
+        inst.rematerializable |= matches!(inst.kind, Kind::Op("LDI" | "LDS"));
         self.function.blocks[self.current].insts.push(inst);
     }
 

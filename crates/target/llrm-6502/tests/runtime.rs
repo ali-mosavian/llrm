@@ -85,7 +85,20 @@ fn unsigned_byte_division() {
 /// 256 = 255 r 255.
 #[test]
 fn unsigned_word_division() {
-    for (a, b, quotient, remainder) in [(50000, 7, 7142, 6), (60000, 40000, 1, 20000), (65535, 256, 255, 255)] {
+    for (a, b, quotient, remainder) in [
+        (50000, 7, 7142, 6),
+        (60000, 40000, 1, 20000),
+        (65535, 256, 255, 255),
+        // a byte divisor takes the short remainder path; 129 and up carry out of the shift
+        (12345, 10, 1234, 5),
+        (65535, 1, 65535, 0),
+        (65535, 255, 257, 0),
+        (40000, 200, 200, 0),
+        (65535, 129, 508, 3),
+        (65535, 128, 511, 127),
+        (255, 255, 1, 0),
+        (0, 9, 0, 0),
+    ] {
         let n = format!("{a}-{b}");
         assert_eq!(word(&format!("udivhi-{n}"), &two_words(a, b), "__udivhi3"), quotient, "{a} / {b}");
         assert_eq!(word(&format!("umodhi-{n}"), &two_words(a, b), "__umodhi3"), remainder, "{a} % {b}");
