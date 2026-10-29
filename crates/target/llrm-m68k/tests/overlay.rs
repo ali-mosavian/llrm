@@ -317,6 +317,24 @@ fn a_step_after_a_label_entered_from_outside_the_span_stays() {
     assert_eq!(folded.len(), 5);
 }
 
+/// `p[i + 1]` through `(d8,An,Xn)`: the base class's `isLegalAddressingMode`
+/// refuses a base, an index and a displacement together, the hardware does
+/// not. The description of the pin's output keeps the refusal; the overlay's
+/// takes the byte displacement, and only that range.
+#[test]
+fn the_indexed_displacement_is_priced_only_in_the_overlay_description() {
+    use llrm_m68k::machine::M68k;
+    use llrm_mir::tti::Tti;
+    let pinned = M68k::default();
+    let ours = M68k { indexed_displacement: true, ..M68k::default() };
+    assert!(!pinned.is_legal_addressing_mode(false, 1, true, 1));
+    assert!(ours.is_legal_addressing_mode(false, 1, true, 1));
+    assert!(ours.is_legal_addressing_mode(false, -128, true, 1) && ours.is_legal_addressing_mode(false, 127, true, 1));
+    assert!(
+        !ours.is_legal_addressing_mode(false, 128, true, 1) && !ours.is_legal_addressing_mode(false, -129, true, 1)
+    );
+}
+
 fn counted_sum() -> &'static str {
     "define i32 @f(ptr %p, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  %s1 = add i32 %s, %v\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %s1\n}"
 }
