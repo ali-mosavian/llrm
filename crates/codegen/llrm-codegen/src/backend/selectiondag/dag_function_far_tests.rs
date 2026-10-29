@@ -212,8 +212,9 @@ entry:
 }
 ";
 
-/// At real mode `rep stosb` names the segment its pointer is in (a value: the
+/// At real mode `rep stos` names the segment its pointer is in (a value: the
 /// group's selector for a global); `REP_STOSB_16` was a refusal in 9 functions.
+/// (A hundred bytes are dwords here: the runtime has no `memset`.)
 #[test]
 fn an_m16_fill_names_its_segment() {
     use crate::model::ir::Operation;
@@ -224,8 +225,8 @@ fn an_m16_fill_names_its_segment() {
     let fill = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
-        .find(|w| w.op == Operation::Fill && w.name.as_deref() == Some("stosb"))
-        .expect("a stosb");
+        .find(|w| w.op == Operation::Fill && w.name.as_deref() == Some("stosd"))
+        .expect("a stosd");
     assert_eq!(fill.sources.len(), 4, "value, count, destination and its segment: {fill:?}");
 }
 

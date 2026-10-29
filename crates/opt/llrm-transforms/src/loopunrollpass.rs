@@ -406,6 +406,10 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     };
     // Override with any target specific settings.
     run.tti.get_unrolling_preferences(has_calls, &mut up);
+    // The target's tuning table.
+    let (threshold, boost) = run.tti.unroll_threshold_overrides();
+    up.threshold = threshold.unwrap_or(up.threshold);
+    up.max_percent_threshold_boost = boost.unwrap_or(up.max_percent_threshold_boost);
     // Apply size attributes.
     if run.options.opt_size {
         up.threshold = up.opt_size_threshold;

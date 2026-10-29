@@ -1201,7 +1201,7 @@ entry:
     };
     let leaf = selected(&module, "leaf", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
-    facts.record("leaf", &leaf.body, &frame);
+    facts.record("leaf", &leaf.body, &frame, &Default::default());
     let written = facts.written("leaf").expect("leaf takes part");
     assert!(!written.whole.contains(&RegId::ECX), "the leaf writes no CX: {:?}", written.whole);
     let contracts = super::dag_function::RuntimeContracts {

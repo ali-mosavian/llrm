@@ -57,7 +57,7 @@ fn keeps_verifying_and_computing_the_same(
         program.exports.entries.insert("main".to_owned());
         pipeline::applied(program, &applied)
     };
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered)
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
         .and_then(|done| done)
         .unwrap_or_else(|error| panic!("{name}: {error}"));
     let Some(Ok(before)) = before else { return false };
@@ -101,7 +101,7 @@ b3:
 !1 = !{!\"llvm.loop.unroll.full\"}
 ",
     );
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         pipeline::applied(program, &Applied::default())
     })
     .and_then(|done| done)
@@ -150,7 +150,7 @@ b3:
 !1 = !{!\"llvm.loop.unroll.full\"}
 ",
     );
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         pipeline::applied(program, &Applied::default())
     })
     .and_then(|done| done)
@@ -191,7 +191,7 @@ b2:
 ",
         llrm_analysis::testing::DOS
     ));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         program.exports.entries.insert("main".to_owned());
         pipeline::applied(program, &Applied::default())
     })
@@ -240,7 +240,7 @@ b3:
 ",
         llrm_analysis::testing::DOS
     ));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         pipeline::applied(program, &Applied::default())
     })
     .and_then(|done| done)
@@ -291,7 +291,7 @@ b4:
 ",
         llrm_analysis::testing::DOS
     ));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         program.exports.entries.insert("main".to_owned());
         pipeline::applied(program, &Applied::default())
     })
@@ -358,7 +358,7 @@ done:
 ";
     let mut module = llrm_analysis::testing::parsed(text);
     let before = interpret::run(&module, "main", Vec::new(), FUEL);
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         pipeline::applied(program, &Applied::default())
     })
     .and_then(|done| done)
@@ -416,7 +416,7 @@ b3:
         llrm_analysis::testing::DOS
     );
     let mut module = crate::testing::parsed(&text);
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         pipeline::applied(program, &Applied::default())
     })
     .and_then(|done| done)
@@ -458,7 +458,7 @@ b3:
 ",
         llrm_analysis::testing::DOS
     ));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         pipeline::applied(program, &Applied::default())
     })
     .and_then(|done| done)
@@ -498,7 +498,7 @@ b2:
         llrm_analysis::testing::DOS
     );
     let mut module = crate::testing::parsed(&text);
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         pipeline::applied(program, &Applied::default())
     })
     .and_then(|done| done)
@@ -530,7 +530,7 @@ b0:
 ";
     assert!(text.contains("store i8 1, ptr %q"), "the shape that was forwarded over");
     let mut module = llrm_analysis::testing::parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         pipeline::applied(program, &Applied::default())
     })
     .and_then(|done| done)
@@ -577,7 +577,7 @@ b3:
         options: pipeline::Options { inline: crate::inline::Threshold::none(), ..pipeline::Options::default() },
         ..Applied::default()
     };
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &applied)
     })
@@ -615,7 +615,7 @@ b:
             program.exports.entries.insert("main".to_owned());
             pipeline::applied(program, &applied)
         };
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered)
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
             .and_then(|done| done)
             .unwrap();
         crate::testing::printed(&module).contains("range(")
@@ -656,7 +656,7 @@ done:
             program.exports.entries.insert("f".to_owned());
             pipeline::applied(program, &applied)
         };
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered)
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
             .and_then(|done| done)
             .unwrap();
         let runs = llrm_mir::passes::recomputes();
@@ -713,7 +713,9 @@ fn pipelined(
         program.exports.entries.insert("main".to_owned());
         pipeline::applied(program, &applied)
     };
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+        .and_then(|done| done)
+        .unwrap();
     let runs = llrm_mir::passes::recomputes();
     llrm_mir::passes::trace_recomputes(false);
     let mut by_how: Vec<(&'static str, &'static str, usize)> = Vec::new();
@@ -1027,7 +1029,7 @@ done:
     ));
     let through = |options: pipeline::Options| {
         let mut module = llrm_analysis::testing::parsed(&text);
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
             pipeline::applied(program, &Applied { options, ..Applied::default() })
         })
         .and_then(|done| done)
@@ -1242,7 +1244,7 @@ x:
 ";
     let looped = |options: pipeline::Options| {
         let mut module = llrm_analysis::testing::parsed(text);
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
             pipeline::applied(program, &Applied { options, ..Applied::default() })
         })
         .and_then(|done| done)
@@ -1351,7 +1353,7 @@ fn test_llvm_order_keeps_a_loop_computing_the_same() {
     let mut module = llrm_analysis::testing::parsed(text);
     let before = interpret::run(&module, "f", vec![interpret::Val::Int { bits: 6, width: 16 }], FUEL);
     let applied = Applied { options: pipeline::Options { ..Default::default() }, ..Applied::default() };
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &applied)
     })
@@ -1370,7 +1372,7 @@ fn test_a_switched_off_pass_does_not_fail_the_slot_check() {
     let text = "define i16 @f(i16 %n) {\nb0:\n  ret i16 %n\n}\n";
     let mut module = llrm_analysis::testing::parsed(text);
     let applied = Applied { options: pipeline::Options { unroll: false, ..Default::default() }, ..Applied::default() };
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &applied)
     })
@@ -2007,7 +2009,7 @@ fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() 
     let mut module = parse_corpus_entry(name, path);
     let before = llrm_mir::counts::analysed("globals-aa").1;
     let applied = Applied::default();
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
         pipeline::applied(program, &applied)
     })
     .and_then(|done| done)
@@ -2027,7 +2029,7 @@ fn test_the_llvm_order_hashes_no_body_for_a_cycle_history_it_never_reads() {
         let mut module = parse_corpus_entry(name, path);
         let before = llrm_mir::counts::get(llrm_mir::counts::Event::Fingerprints);
         let done =
-            Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+            Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
                 pipeline::applied(program, applied)
             })
             .and_then(|done| done);
@@ -2078,7 +2080,7 @@ fn test_a_rerun_of_a_body_names_its_own_function_on_the_runs_line() {
     let mut module = llrm_analysis::testing::parsed(
         "define i16 @f(i16 %x) {\nb0:\n  %d = add i16 %x, 1\n  ret i16 %x\n}\n\ndefine i16 @g(i16 %x) {\nb0:\n  ret i16 %x\n}\n",
     );
-    let mut analyses = llrm_mir::passes::ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_x86_m16::Dos::default()));
+    let mut analyses = llrm_mir::passes::ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()));
     let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
     fixed.only = false;
     fixed.passes = vec![Box::new(EraseUnused)];
@@ -2181,7 +2183,7 @@ fn test_the_llvm_order_runs_licm_in_the_pins_four_slots_and_not_after_a_header_c
         let mut module = llrm_analysis::testing::parsed(text);
         let applied = Applied { options: pipeline::Options { licm, ..Default::default() }, ..Applied::default() };
         let before = llrm_mir::counts::lines();
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
             pipeline::applied(program, &applied)
         })
         .and_then(|done| done)
@@ -2424,7 +2426,7 @@ declare cc 1005 i16 @"_report@3"(i32) addrspace(1)
 "#,
     ));
     let applied = Applied { options: pipeline::Options::default(), ..Applied::default() };
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         program.exports.entries.insert("_main".to_owned());
         pipeline::applied(program, &applied)
     })
@@ -2522,7 +2524,7 @@ b3:
 ",
         llrm_analysis::testing::DOS
     ));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &Applied::default())
     })
@@ -2538,7 +2540,7 @@ fn four_trips_under(options: pipeline::Options) -> bool {
     let text = "define i16 @f(i16 %x) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %h ]\n  %t = phi i16 [ %x, %b0 ], [ %u, %h ]\n  %m = mul i16 %t, 3\n  %u = add i16 %m, %i\n  %j = add i16 %i, 1\n  %c = icmp slt i16 %j, 4\n  br i1 %c, label %h, label %x\nx:\n  ret i16 %u\n}\n";
     let mut module = llrm_analysis::testing::parsed(text);
     let applied = Applied { options: pipeline::Options { ..options }, ..Applied::default() };
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &applied)
     })
@@ -2568,7 +2570,7 @@ fn rotated_under(options: pipeline::Options) -> bool {
     let text = "define i32 @f(i16 %n, ptr %p) {\nb0:\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp ult i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %k = zext i16 %i to i32\n  %a = getelementptr i32, ptr %p, i32 %k\n  store i32 %k, ptr %a\n  %j = add i16 %i, 1\n  br label %h\nx:\n  ret i32 0\n}\n";
     let mut module = llrm_analysis::testing::parsed(text);
     let applied = Applied { options: pipeline::Options { ..options }, ..Applied::default() };
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &applied)
     })
@@ -2626,7 +2628,7 @@ b2:
 ",
         llrm_analysis::testing::DOS
     ));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &Applied::default())
     })
@@ -2683,7 +2685,7 @@ b2:
 ",
         llrm_analysis::testing::DOS
     ));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &Applied::default())
     })
