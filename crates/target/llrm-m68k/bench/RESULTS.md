@@ -55,5 +55,10 @@ Rows still above a reference: max, gcd, countgt, strlen, copy.
 | gcd | -O2 | 16 insns llc | 17 | llc rotates the loop (loop rotation, neutral-LIR task; tail duplication and block placement held) |
 | countgt | -O2 | 123 insns gcc | 136 | +1 insn per trip by choice: `moveq #0; slt; neg.b` for `slt; and.l #1`, 8 clocks and 2 B less (68000: `and.l #imm,Dn` 16, `moveq` 4, `neg.b Dn` 4); bytes now = gcc (42) |
 | strlen | -O2 | 44 insns gcc | 45 | gcc peels the first test: loop peeling, full -O2 pipeline after the i33 legalizer gap |
+| copy | -O2 | 34 B, 59 insns gcc | 36 B, 62 | by choice: LSR (post-indexed, as the pin does for AArch64) makes two `(An)+` pointers, `d` is live after the loop so one is a copy of it. A trip is 12 clocks less (PRM Table 8-1, byte effective addresses: `(An)+` 4+4 against `(d8,An,Xn)` 10+10); setup is about 38 clocks more (`move.l`, save and restore of `%a2`), so it wins from 4 trips. Off at the size level, where copy stays 34 B |
 
-At or below both: sum, popcount, absdiff, clamp, fib, arrsum, arrmax, copy; strlen in bytes and at -Os.
+At or below both: sum, popcount, absdiff, clamp, fib, arrsum, arrmax; copy at -Os; strlen in bytes and at -Os.
+
+## Open: the `neg.b` rewrite
+
+`boolean_by_negation` (countgt) is register-choice dependent: it needs `cmp; scc; and.l #1` adjacent and a compare that does not read the register `scc` writes, so it misses when the allocator picks one register for both (`slt %d0` after `cmp.l (8,%sp), %d0`) and when a move sits between. It is never wrong, only sometimes missed (run tests in `tests/results.rs`). The fix is MIR-level, before the allocator: `SETcc` into a fresh byte register of a pre-zeroed long, then `neg.b`, so no register choice is involved.
