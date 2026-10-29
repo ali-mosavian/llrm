@@ -111,6 +111,17 @@ struct Scope {
     has_struct: bool,
 }
 
+/// The signed type a generated program views a value through; `DIFF_NOSIGNED` keeps the program's shape but
+/// makes the view unsigned, to tell which failures come from signed forms.
+fn signed_view(byte: bool) -> &'static str {
+    match (std::env::var("DIFF_NOSIGNED").is_ok(), byte) {
+        (false, true) => "signed char",
+        (false, false) => "int",
+        (true, true) => "unsigned char",
+        (true, false) => "unsigned",
+    }
+}
+
 struct Gen {
     rng: Rng,
     helpers: Vec<Helper>,
@@ -201,7 +212,7 @@ impl Gen {
             11 => {
                 // a signed view of an unsigned value: arithmetic shift, or a sign-extending cast
                 let from = TYPES[self.rng.below(2)];
-                let signed = if from == Ty::U8 { "signed char" } else { "int" };
+                let signed = signed_view(from == Ty::U8);
                 let e = self.expr(from, depth - 1, scope);
                 if self.rng.chance(50) {
                     let k = self.rng.below(from.bits());
@@ -235,7 +246,8 @@ impl Gen {
             }
             4 => {
                 // signed compare of unsigned values
-                let (ty, signed) = if self.rng.chance(50) { (Ty::U8, "signed char") } else { (Ty::U16, "int") };
+                let byte = self.rng.chance(50);
+                let (ty, signed) = if byte { (Ty::U8, signed_view(true)) } else { (Ty::U16, signed_view(false)) };
                 let op = ["<", "<=", ">", ">="][self.rng.below(4)];
                 let (l, r) = (self.expr(ty, depth.min(1), scope), self.expr(ty, depth.min(1), scope));
                 format!("({signed}){l} {op} ({signed}){r}")
@@ -534,15 +546,47 @@ fn native(dir: &Path, source: &str) -> Option<i32> {
     String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
+/// Programs on which cc65 and ours agree and the host gcc does not.
+static ORACLE_DIFFERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// What sim65 counts for `bin` (`-c`), start-up and exit included.
+fn cycles(bin: &Path) -> Option<i64> {
+    let out = Command::new("sim65").args(["-c", "-x", "6000000"]).arg(bin).output().ok()?;
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    text.lines().find_map(|line| line.strip_suffix(" cycles")?.trim().parse().ok())
+}
+
+/// The linked size and cycles of the two builds in `dir`: cc65 -O (`c.bin`) and ours (`o.bin`).
+fn measure(dir: &Path) -> Option<[i64; 4]> {
+    let bytes = |name: &str| std::fs::metadata(dir.join(name)).ok().map(|m| m.len() as i64);
+    Some([bytes("c.bin")?, bytes("o.bin")?, cycles(&dir.join("c.bin"))?, cycles(&dir.join("o.bin"))?])
+}
+
+/// [`measure`] of a program that does nothing: what both builds cost before the program's own code.
+fn baseline() -> [i64; 4] {
+    static BASE: std::sync::OnceLock<[i64; 4]> = std::sync::OnceLock::new();
+    *BASE.get_or_init(|| {
+        let dir = work(u64::MAX - 1);
+        let source = "extern const unsigned char buf[16];\nunsigned test(void) { return 0; }\n";
+        cc65(&dir, source, true).expect("the empty program builds with cc65");
+        ours(&dir, source, 0, true).expect("the empty program builds with ours");
+        let base = measure(&dir).expect("the empty program runs");
+        let _ = std::fs::remove_dir_all(&dir);
+        base
+    })
+}
+
 enum Outcome {
-    Agree,
+    /// The programs' [`measure`] when `DIFF_SIZES` is set.
+    Agree(Option<[i64; 4]>),
     /// A program the harness could not compare: the reason.
     Skipped(String),
     /// cc65 -O, ours -O2, and the cross-checks: cc65 without -O, ours on the unoptimized IR and the
     /// host gcc.
     Mismatch(i32, i32, Option<i32>, Option<i32>, Option<i32>),
     /// cc65 -O disagrees with ours and the host gcc agrees with ours: a bug in cc65.
-    Cc65(i32, i32),
+    /// cc65 -O, ours and the host gcc, and cc65 without -O
+    Cc65(i32, i32, Option<i32>),
 }
 
 fn check(seed: u64) -> Outcome {
@@ -568,15 +612,27 @@ fn check(seed: u64) -> Outcome {
     };
     match ours(&dir, &source, seed, true) {
         Ok(Some(code)) if code == reference => {
+            let sizes = std::env::var("DIFF_SIZES").ok().and_then(|_| measure(&dir));
+            if std::env::var("DIFF_ORACLE").is_ok() {
+                // cc65 and ours agree: the host model disagreeing is a hole in the model
+                match native(&dir, &source) {
+                    Some(host) if host != code => {
+                        ORACLE_DIFFERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        println!("seed {seed}: cc65 -O and ours {code}, host gcc {host}");
+                    }
+                    Some(_) => {}
+                    None => println!("seed {seed}: host gcc could not build the program"),
+                }
+            }
             let _ = std::fs::remove_dir_all(&dir);
-            Outcome::Agree
+            Outcome::Agree(sizes)
         }
         Ok(Some(code)) => {
             let plain = cc65(&dir, &source, false).ok().flatten();
             let unoptimized = ours(&dir, &source, seed, false).ok().flatten();
             let third = native(&dir, &source);
             if third == Some(code) {
-                Outcome::Cc65(reference, code)
+                Outcome::Cc65(reference, code, plain)
             } else {
                 Outcome::Mismatch(reference, code, plain, unoptimized, third)
             }
@@ -609,17 +665,24 @@ fn random_programs_agree_with_cc65() {
     });
     let mut results = results.into_inner().unwrap();
     results.sort_by_key(|(seed, _)| *seed);
-    let (mut agree, mut skipped, mut bad, mut cc65_bugs) = (0, 0, 0, 0);
+    let (mut agree, mut skipped, mut bad, mut cc65_bugs, mut cc65_o_only) = (0, 0, 0, 0, 0);
+    let mut measured: Vec<(u64, [i64; 4])> = Vec::new();
     for (seed, outcome) in &results {
         match outcome {
-            Outcome::Agree => agree += 1,
+            Outcome::Agree(sizes) => {
+                agree += 1;
+                measured.extend(sizes.map(|m| (*seed, m)));
+            }
             Outcome::Skipped(why) => {
                 skipped += 1;
                 println!("seed {seed}: skipped: {why}");
             }
-            Outcome::Cc65(want, got) => {
+            Outcome::Cc65(want, got, plain) => {
                 cc65_bugs += 1;
-                println!("seed {seed}: cc65 bug: cc65 -O {want}, ours and the host gcc {got}");
+                if *plain == Some(*got) {
+                    cc65_o_only += 1;
+                }
+                println!("seed {seed}: cc65 bug: cc65 -O {want}, ours and the host gcc {got}; cc65 without -O {plain:?}");
             }
             Outcome::Mismatch(want, got, plain, unoptimized, third) => {
                 bad += 1;
@@ -627,7 +690,35 @@ fn random_programs_agree_with_cc65() {
             }
         }
     }
-    println!("{count} programs from seed {first}: {agree} agree, {bad} mismatch, {cc65_bugs} cc65 bugs, {skipped} skipped");
+    if !measured.is_empty() {
+        // net of the empty program's start-up, ours against cc65 -O
+        let base = baseline();
+        let (mut smaller, mut same, mut larger, mut faster, mut slower, mut equal) = (0, 0, 0, 0, 0, 0);
+        let mut totals = [0i64; 4];
+        for (seed, m) in &measured {
+            let net = [m[0] - base[0], m[1] - base[1], m[2] - base[2], m[3] - base[3]];
+            totals.iter_mut().zip(net).for_each(|(t, n)| *t += n);
+            match net[1].cmp(&net[0]) {
+                std::cmp::Ordering::Less => smaller += 1,
+                std::cmp::Ordering::Equal => same += 1,
+                std::cmp::Ordering::Greater => larger += 1,
+            }
+            match net[3].cmp(&net[2]) {
+                std::cmp::Ordering::Less => faster += 1,
+                std::cmp::Ordering::Equal => equal += 1,
+                std::cmp::Ordering::Greater => slower += 1,
+            }
+            println!("seed {seed}: net bytes cc65 -O {} ours {}; net cycles cc65 -O {} ours {}", net[0], net[1], net[2], net[3]);
+        }
+        println!(
+            "{} agreeing programs, net of an empty one: bytes ours smaller {smaller} / equal {same} / larger {larger} (totals cc65 -O {}, ours {}); cycles ours fewer {faster} / equal {equal} / more {slower} (totals cc65 -O {}, ours {})",
+            measured.len(), totals[0], totals[1], totals[2], totals[3]
+        );
+    }
+    if std::env::var("DIFF_ORACLE").is_ok() {
+        println!("host gcc differs from cc65 -O and ours on {} of {agree} agreeing programs", ORACLE_DIFFERS.load(std::sync::atomic::Ordering::Relaxed));
+    }
+    println!("{count} programs from seed {first}: {agree} agree, {bad} mismatch, {cc65_bugs} cc65 bugs ({cc65_o_only} of them only with -O), {skipped} skipped");
     assert_eq!(bad, 0, "miscompiles; programs kept in target/tmp/difftest/<seed>");
 }
 
