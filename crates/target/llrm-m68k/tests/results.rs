@@ -581,3 +581,35 @@ fn a_compare_widened_to_each_width_is_zero_or_one() {
         }
     }
 }
+
+/// `or disjoint x, c` on a data value was `move.l d, a; lea (c,a), a; move.l a, d`
+/// (the pin has `add` patterns for `ADD32di` but only `lea` ones match the
+/// `add_like` or): 8 bytes and two moves where `add.l #c, d` is 6 and none.
+/// The value is the same, and a real pointer step stays an address add.
+#[test]
+fn an_or_of_disjoint_bits_on_a_data_value_is_a_data_add() {
+    for (mask, bits) in [(15, 48), (7, 64), (255, 256), (3, 8)] {
+        let ir = format!(
+            "define i32 @f(i32 %a) {{
+  %m = and i32 %a, {mask}
+  %o = or disjoint i32 %m, {bits}
+  %r = xor i32 %o, %a
+  ret i32 %r
+}}"
+        );
+        let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
+        assert!(!asm.contains("lea"), "mask {mask} bits {bits}: {asm}");
+        if let Some(code) = status(&ir, &[0x95], Options::default()) {
+            assert_eq!(code, (((0x95 & mask) | bits) ^ 0x95) & 0xFF, "mask {mask} bits {bits}: {asm}");
+        }
+    }
+    // a pointer step is still an address add, and right
+    let ir = "define i32 @f(ptr %p) {
+  %q = getelementptr i8, ptr %p, i32 1
+  %v = load i8, ptr %q, align 1
+  %z = zext i8 %v to i32
+  ret i32 %z
+}";
+    let asm = text_with(&module(ir), "f", Cpu::M68000, Options::default()).unwrap();
+    assert!(asm.contains("(1,") || asm.contains("addq"), "{asm}");
+}

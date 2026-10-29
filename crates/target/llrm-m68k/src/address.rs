@@ -14,6 +14,33 @@ use llrm_spike_mf::{Kind, Operand, Reg};
 
 use crate::mfunc::{Class, MFunction};
 
+fn find(
+    parent: &mut [usize],
+    mut at: usize,
+) -> usize {
+    while parent[at] != at {
+        parent[at] = parent[parent[at]];
+        at = parent[at];
+    }
+    at
+}
+
+/// The registers one copy joins, as a union-find forest.
+fn copy_groups(function: &MFunction) -> Vec<usize> {
+    let mut parent: Vec<usize> = (0..function.classes.len()).collect();
+    for block in &function.blocks {
+        for inst in &block.insts {
+            if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) =
+                (inst.kind, &inst.operands[..])
+            {
+                let (a, b) = (find(&mut parent, *to as usize), find(&mut parent, *from as usize));
+                parent[a] = b;
+            }
+        }
+    }
+    parent
+}
+
 /// Rewrites the adds and subtracts of constants that are pointer arithmetic.
 pub fn address_arithmetic(function: &mut MFunction) {
     let count = function.classes.len();
@@ -42,27 +69,7 @@ pub fn address_arithmetic(function: &mut MFunction) {
     // whether `v` is, through copies (and so through the phis that became
     // copies), a register the memory operands put in an address register: the
     // registers one copy joins are one value
-    let mut parent: Vec<usize> = (0..count).collect();
-    fn find(
-        parent: &mut [usize],
-        mut at: usize,
-    ) -> usize {
-        while parent[at] != at {
-            parent[at] = parent[parent[at]];
-            at = parent[at];
-        }
-        at
-    }
-    for block in &function.blocks {
-        for inst in &block.insts {
-            if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) =
-                (inst.kind, &inst.operands[..])
-            {
-                let (a, b) = (find(&mut parent, *to as usize), find(&mut parent, *from as usize));
-                parent[a] = b;
-            }
-        }
-    }
+    let mut parent = copy_groups(function);
     let mut address_group = vec![false; count];
     for v in 0..count {
         if function.classes[v] == Class::Ar32 {
@@ -108,6 +115,107 @@ pub fn address_arithmetic(function: &mut MFunction) {
     }
     for (at, dst) in converted {
         sink_step(&mut function.blocks[at].insts, &mut function.classes, dst);
+    }
+}
+
+/// The inverse of [`address_arithmetic`]: a `lea (c,An), Am` whose base is a
+/// copy of a data register and whose result goes only to data registers
+/// (`move.l %d0, %a1; lea (48,%a1), %a1; move.l %a1, %d3`) is
+/// `add.l #c, %d`. The pin has `ADD32di` patterns for `add` only, so the
+/// `add_like` `or disjoint` is selected as the `lea`. The flags the add sets
+/// must not be read from before it.
+///
+/// DEVIATE from the pin's output. Reason: smaller (6 bytes against 8) and no
+/// moves through an address register. Exit: never; a target choice, off with
+/// `Options::overlay`.
+pub fn lea_on_data(function: &mut MFunction) {
+    let count = function.classes.len();
+    let mut defs: Vec<Option<(usize, usize)>> = vec![None; count];
+    let mut copy_targets: Vec<Vec<u32>> = vec![Vec::new(); count];
+    let mut parent = copy_groups(function);
+    let mut other_users = vec![0usize; count];
+    let mut copy_users = vec![0usize; count];
+    for (at, block) in function.blocks.iter().enumerate() {
+        for (i, inst) in block.insts.iter().enumerate() {
+            for operand in &inst.operands {
+                match operand {
+                    Operand::Def(Reg::Virt(v)) => defs[*v as usize] = Some((at, i)),
+                    Operand::Use(Reg::Virt(v)) if inst.kind == Kind::Copy => copy_users[*v as usize] += 1,
+                    Operand::Use(Reg::Virt(v)) => other_users[*v as usize] += 1,
+                    _ => {}
+                }
+            }
+            if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) =
+                (inst.kind, &inst.operands[..])
+            {
+                copy_targets[*from as usize].push(*to);
+            }
+        }
+        for phi in &block.phis {
+            for (_, reg) in &phi.incoming {
+                if let Reg::Virt(v) = reg {
+                    other_users[*v as usize] += 1;
+                }
+            }
+        }
+    }
+    // the registers in an address class, by group
+    let mut address_members = vec![0usize; count];
+    for v in 0..count {
+        if function.classes[v] == Class::Ar32 {
+            address_members[find(&mut parent, v)] += 1;
+        }
+    }
+    for at in 0..function.blocks.len() {
+        for i in 0..function.blocks[at].insts.len() {
+            let inst = &function.blocks[at].insts[i];
+            if inst.kind != Kind::Op("LEA32p") {
+                continue;
+            }
+            let [Operand::Def(Reg::Virt(dst)), Operand::Imm(disp), Operand::Use(Reg::Virt(base))] = inst.operands[..]
+            else {
+                continue;
+            };
+            let from_data = defs[base as usize].is_some_and(|(b, j)| {
+                matches!(
+                    &function.blocks[b].insts[j],
+                    copy if copy.kind == Kind::Copy
+                        && matches!(copy.operands[..], [_, Operand::Use(Reg::Virt(x))] if function.classes[x as usize] == Class::Dr32)
+                )
+            });
+            // the result reaches no address register: no register joined to it
+            // by copies is in that class but the lea's own base and result
+            let root = find(&mut parent, dst as usize);
+            let own = usize::from(function.classes[dst as usize] == Class::Ar32)
+                + usize::from(
+                    base != dst
+                        && function.classes[base as usize] == Class::Ar32
+                        && find(&mut parent, base as usize) == root,
+                );
+            let to_data = !copy_targets[dst as usize].is_empty() && address_members[root] == own;
+            let flags_read = function.blocks[at].insts[i + 1..]
+                .iter()
+                .find(|later| later.reads_flags || later.sets_flags)
+                .is_some_and(|later| later.reads_flags);
+            if !from_data
+                || !to_data
+                || flags_read
+                || other_users[dst as usize] != 0
+                || other_users[base as usize] != 1
+                || copy_users[base as usize] != 0
+                || i32::try_from(disp).is_err()
+            {
+                continue;
+            }
+            address_members[root] -= own;
+            function.classes[dst as usize] = Class::Dr32;
+            function.classes[base as usize] = Class::Dr32;
+            let inst = &mut function.blocks[at].insts[i];
+            inst.kind = Kind::Op("ADD32di");
+            inst.operands = vec![Operand::Def(Reg::Virt(dst)), Operand::Use(Reg::Virt(base)), Operand::Imm(disp)];
+            inst.ties = vec![(0, 1)];
+            inst.sets_flags = true;
+        }
     }
 }
 
