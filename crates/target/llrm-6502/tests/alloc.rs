@@ -828,7 +828,7 @@ fn a_callee_saved_cell_is_taken_only_when_it_is_the_smaller_code() {
     assert!(!single.contains("rc8"), "one call, one value:\n{single}");
     // across(5) = g(5) + 5 = 8 + 5
     let program = format!("{single}");
-    assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &program), 13);
+    assert_eq!(common::run_with("alloc-single-call", &format!("{}  jsr across\n", set("rc2", 5)), &program), 13);
     let looped = compile(DIGITS, "digits");
     assert!((8..16).any(|n| looped.contains(&format!("rc{n}"))), "a loop of calls keeps its values in a cell:\n{looped}");
 }
