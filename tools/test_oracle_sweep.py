@@ -53,7 +53,7 @@ def test_a_slice_runs_only_its_programs_and_never_calls_an_expected_entry_paid(t
         path.write_text("x")
     monkeypatch.setattr(oracle_sweep, "programs", lambda: programs)
     seen = []
-    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: seen.append(job[1].name) or (job, None, {}))
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries, checks=None: seen.append(job[1].name) or (job, None, {}))
     expected = tmp_path / "e.toml"
     expected.write_text('[[expected]]\nmatch = "x"\nfix = "#1"\nowner = "o"\n')
     import sys
@@ -68,7 +68,7 @@ def test_a_new_finding_kind_turns_the_sweep_red_and_the_first_line_says_so(tmp_p
     path = tmp_path / "p.nib"
     path.write_text("x")
     monkeypatch.setattr(oracle_sweep, "programs", lambda: [("llrm-nib", path)])
-    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: (job, "dataflow: a new kind of panic", {}))
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries, checks=None: (job, "dataflow: a new kind of panic", {}))
     import sys
 
     monkeypatch.setattr(sys, "argv", ["oracle_sweep.py", "--bin", str(tmp_path), "--no-premise", "--no-reach", "--levels=-O2", "--machines=-m32"])
@@ -83,13 +83,13 @@ def test_an_oracle_whose_hook_was_never_reached_stops_the_sweep_naming_it(tmp_pa
     path.write_text("x")
     monkeypatch.setattr(oracle_sweep, "programs", lambda: [("llrm-nib", path)])
     everything = {name: 3 for name in oracle_sweep.CHECKS}
-    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: (job, None, {k: v for k, v in everything.items() if k != "REPLAY"}))
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries, checks=None: (job, None, {k: v for k, v in everything.items() if k != "REPLAY"}))
     import sys
 
     monkeypatch.setattr(sys, "argv", ["oracle_sweep.py", "--bin", str(tmp_path), "--no-premise", "--levels=-O2", "--machines=-m32"])
     assert oracle_sweep.main() == 2
     assert "never reached: REPLAY" in capsys.readouterr().out
-    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: (job, None, everything))
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries, checks=None: (job, None, everything))
     assert oracle_sweep.main() == 0
 
 
@@ -99,40 +99,69 @@ def test_the_checks_lines_are_not_the_findings_last_line():
     assert oracle_sweep.classify(1, oracle_sweep.REACHED.sub("", stderr)) is None
 
 
-def _premise(monkeypatch, tmp_path, reach, extra=None, control=100_000):
-    """The premise step over a stand-in `instructions`: an oracle costs `extra[name]` (default 10) more than the control and reaches `reach[name]` (default 1) sites."""
+def _premise(monkeypatch, tmp_path, sites=None, cost=None, exits=None, control=100_000_000):
+    """The premise step over a stand-in `subprocess.run` printing what perf and `LLRM_DEBUG=checks` print. For (oracle, machine): `sites` hook
+    sites reached (default 1), `cost` instructions over the control (default 100000), `exits` the compile's exit code (default 0)."""
     import sys
+    from types import SimpleNamespace
 
     path = tmp_path / "p.nib"
     path.write_text("x")
     monkeypatch.setattr(oracle_sweep, "programs", lambda: [("llrm-nib", path)])
 
-    def fake(binaries, job, env_extra):
-        name = next((key.removeprefix("LLRM_CHECK_") for key in env_extra if not key.endswith("X")), None)
-        if name is None:
-            return control, {}
-        return control + (extra or {}).get(name, 10), {name: reach.get(name, 1)}
+    def run(command, capture_output, text, env):
+        machine = command[8]
+        name = next((key.removeprefix("LLRM_CHECK_") for key in env if key.startswith("LLRM_CHECK_") and set(key[11:]) != {"X"}), None)
+        extra = (cost or {}).get((name, machine), 100_000) if name else 0
+        reached = f"[checks] {name} {(sites or {}).get((name, machine), 1)}\n" if name else ""
+        return SimpleNamespace(returncode=(exits or {}).get((name, machine), 0), stderr=f"{reached}{control + extra},,instructions:u,1,100.00,,\n")
 
-    monkeypatch.setattr(oracle_sweep, "instructions", fake)
+    monkeypatch.setattr(oracle_sweep.subprocess, "run", run)
     monkeypatch.setattr(sys, "argv", ["oracle_sweep.py", "--bin", str(tmp_path), "--premise-only"])
+
+
+def _unexercised(capsys):
+    return capsys.readouterr().out.split("never exercised:")[1].split("(")[0].strip()
 
 
 def test_an_oracle_that_costs_instructions_but_reached_no_hook_is_not_exercised(tmp_path, monkeypatch, capsys):
     """The old premise read only the cost: REPLAY showed +0.5% and 0 hook sites (its count was never reported), so a reach of zero must stay red."""
-    _premise(monkeypatch, tmp_path, {"REPLAY": 0})
+    _premise(monkeypatch, tmp_path, sites={("REPLAY", "-m16"): 0, ("REPLAY", "-m32"): 0})
     assert oracle_sweep.main() == 2
-    assert capsys.readouterr().out.split("never exercised:")[1].split("(")[0].strip() == "REPLAY"
+    assert _unexercised(capsys) == "REPLAY"
 
 
 def test_an_oracle_that_reached_its_hook_and_changed_nothing_is_not_exercised(tmp_path, monkeypatch, capsys):
-    _premise(monkeypatch, tmp_path, {}, extra={"INTERN": 0})
+    _premise(monkeypatch, tmp_path, cost={("INTERN", "-m16"): 0, ("INTERN", "-m32"): 0})
     assert oracle_sweep.main() == 2
-    assert capsys.readouterr().out.split("never exercised:")[1].split("(")[0].strip() == "INTERN"
+    assert _unexercised(capsys) == "INTERN"
+
+
+def test_a_cost_under_the_floor_of_a_thousand_instructions_is_not_exercised(tmp_path, monkeypatch, capsys):
+    """Reach and a positive cost alone would pass a few instructions of noise on a 100 M-instruction compile."""
+    _premise(monkeypatch, tmp_path, cost={("CLOBBERED", "-m16"): 5, ("CLOBBERED", "-m32"): 5})
+    assert oracle_sweep.main() == 2
+    assert _unexercised(capsys) == "CLOBBERED"
+
+
+def test_reach_on_one_machine_and_cost_on_the_other_is_not_exercised(tmp_path, monkeypatch, capsys):
+    """Summed over both machines, a hook reached only at m16 and a cost seen only at m32 passed: the two must meet on one machine."""
+    _premise(monkeypatch, tmp_path, sites={("DATAFLOW", "-m32"): 0}, cost={("DATAFLOW", "-m16"): 0})
+    assert oracle_sweep.main() == 2
+    assert _unexercised(capsys) == "DATAFLOW"
+
+
+def test_a_probe_that_fails_to_compile_is_not_measurable_not_exercised(tmp_path, monkeypatch, capsys):
+    """The exit code of a probe was ignored: a compile that died after the counters started still read as a cost."""
+    _premise(monkeypatch, tmp_path, exits={("FACTS", "-m32"): 101})
+    assert oracle_sweep.main() == 2
+    out = capsys.readouterr().out
+    assert "oracle FACTS: not measurable" in out and out.split("never exercised:")[1].split("(")[0].strip() == "FACTS"
 
 
 def test_a_cheap_oracle_that_ran_is_exercised_and_the_old_bar_is_only_printed(tmp_path, monkeypatch, capsys):
-    """INTERN costs +0.0085% on the largest programs (the old 0.05% bar failed it, #5663's gate red): reach and a positive cost pass it."""
-    _premise(monkeypatch, tmp_path, {})
+    """INTERN costs +0.0080% on the largest programs (the old 0.05% bar failed it, #5663's gate red): reach and a cost over the floor pass it."""
+    _premise(monkeypatch, tmp_path, cost={("INTERN", "-m16"): 8000, ("INTERN", "-m32"): 8000})
     assert oracle_sweep.main() == 0
     assert "under the old 0.05% bar" in capsys.readouterr().out
 

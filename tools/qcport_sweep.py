@@ -77,7 +77,7 @@ def sweep(compiler: Path, qcport: Path, include: Path, levels=LEVELS, jobs: int 
         return [r for r in pool.map(one, todo) if r]
 
 
-ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "REPLAY", "INTERN", "SKIPPED", "STALE")
+ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "REPLAY", "INTERN", "STALE")
 def qb_flat_programs(root: Path = ROOT) -> list[Path]:
     """tests/run/qb programs that name no target of their own: tests/run runs a BASIC program on its default target only, so nothing else compiles them for the flat one
     (ownf_local_pds71 and ownf_local_vbdos failed there with `@TOP: ptrtoint` while every run reported 0 fail)."""

@@ -48,7 +48,7 @@ INSTRUCTIONS = 60_000_000_000  # user-space instructions of the steps. Today's s
 CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
 MAX_CRATES = 2  # a merge touching more is tested in the 3 crates with most changed files: each crate costs its cargo start before any test
 UNIT_FLOOR = 2.0  # the seconds the fixed steps always leave for unit tests
-ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "REPLAY", "INTERN", "SKIPPED", "STALE")
+ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "REPLAY", "INTERN", "STALE")
 PROGRAM = ROOT / "bench" / "bintree"
 # d_faces.c as the scoreboard reads it (sha256 prefix), and the six reports `env.c` printed for gcc -O0: an llrm build must print the same.
 DFACES_SHA = "1ab72e38cab4fbd2"
