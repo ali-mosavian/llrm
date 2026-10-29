@@ -7,6 +7,9 @@ inputs:
   clang:
     description: '"required": a clang tree that is missing is an error (the gate jobs); otherwise a warning.'
     default: ""
+  tblgen:
+    description: '"required": the pin tblgen tree (the tblgen job builds it) must exist and is exported as LLVM_SRC and LLVM_BUILD (the unit group).'
+    default: ""
 runs:
   using: composite
   steps:
@@ -51,6 +54,18 @@ runs:
           echo "$kind=$dir" >> "$GITHUB_OUTPUT"
           echo "${kind}_name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
         done
+    - id: tblgen
+      if: inputs.tblgen == 'required'
+      shell: bash
+      run: |
+        dir=$(sh toolchain/tblgenbuild.sh --print)
+        echo "dir=$dir" >> "$GITHUB_OUTPUT"
+        echo "name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      if: inputs.tblgen == 'required'
+      with:
+        path: ${{ steps.tblgen.outputs.dir }}
+        key: llrm-${{ steps.tblgen.outputs.name }}
     - uses: actions/cache/restore@v4
       with:
         path: ${{ steps.clang.outputs.pin }}
@@ -59,6 +74,16 @@ runs:
       with:
         path: ${{ steps.clang.outputs.m16 }}
         key: llrm-${{ steps.clang.outputs.m16_name }}
+    - name: The pin's tblgen tree (built by the tblgen job)
+      if: inputs.tblgen == 'required'
+      shell: bash
+      run: |
+        # tools/dagisel/regen.sh reads LLVM_SRC (at the pin) and LLVM_BUILD (bin/llvm-tblgen, the generated headers): the unit group's
+        # llrm-dagisel-gen stale test fails on a tree that is missing, as it would on a stale table.
+        dir="${{ steps.tblgen.outputs.dir }}"
+        [ -x "$dir/build/bin/llvm-tblgen" ] || { echo "::error::no pin tblgen tree at $dir (the tblgen job builds it)"; exit 1; }
+        echo "LLVM_SRC=$dir/src" >> "$GITHUB_ENV"
+        echo "LLVM_BUILD=$dir/build" >> "$GITHUB_ENV"
     - name: The clang trees (built by the toolchain workflow)
       shell: bash
       run: |
