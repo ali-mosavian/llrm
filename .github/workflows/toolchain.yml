@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: [feat/parity, main]
-    paths: [toolchain/clang/pin, toolchain/clangbuild.sh, toolchain/cache.sh, .github/workflows/toolchain.yml]
+    paths: [toolchain/clang/pin, toolchain/clangbuild.sh, toolchain/cache.sh, toolchain/pintoolsbuild.sh, .github/actions/pintools-tree/action.yml, .github/workflows/toolchain.yml]
 jobs:
   clang:
     runs-on: ubuntu-24.04
@@ -20,3 +20,10 @@ jobs:
       - uses: ./.github/actions/clang-tree
         with:
           kind: ${{ matrix.kind }}
+  # The pin's llc, opt and llvm-tblgen with its source (toolchain/pintoolsbuild.sh), the tree ci.yml's pintools job restores. Dispatchable on its own.
+  pintools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/pintools-tree
