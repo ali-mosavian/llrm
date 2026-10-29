@@ -207,19 +207,20 @@ fn a_phi_loop_runs() {
 const ADD32: &str = "define i32 @add32(i32 %a, i32 %b) {\n  %r = add i32 %a, %b\n  ret i32 %r\n}";
 const PASS32: &str = "define i32 @pass32(i32 %a, i32 %b) {\n  %r = call i32 @add32(i32 %a, i32 %b)\n  ret i32 %r\n}";
 
-/// `a` = 70000 = 0x00011170 in rs1:rs2, `b` = 100000 = 0x000186A0 with its low word in rs3 and its
-/// high word, 0x0001, at the top of the soft stack (`rs0` = $8000). The sum is 170000 = 0x00029810.
+/// `a` = 0x0001F234 in rs1:rs2, `b` = 0x00011100 with its low word in rs3 and its high word,
+/// 0x0001, at the top of the soft stack (`rs0` = $8000). The low words carry (0xF234 + 0x1100 =
+/// 0x10334), so the sum is 0x00030334; without the carry it would be 0x00020334.
 const LONG_ARGS: &str = "  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  lda #1\n  sta $8000\n  lda #0\n  sta $8001\n\
-  lda #$70\n  sta rc2\n  lda #$11\n  sta rc3\n  lda #1\n  sta rc4\n  lda #0\n  sta rc5\n\
-  lda #$A0\n  sta rc6\n  lda #$86\n  sta rc7\n";
+  lda #$34\n  sta rc2\n  lda #$F2\n  sta rc3\n  lda #1\n  sta rc4\n  lda #0\n  sta rc5\n\
+  lda #$00\n  sta rc6\n  lda #$11\n  sta rc7\n";
 
-/// The long comes back as `a`, `x`, `rc2`, `rc3`: 0x10, 0x98, 0x02, 0x00. Before the result parts
-/// shared one row the second word was read from `a:x` again, and before the frame-index pattern the
-/// stack argument could not be selected.
+/// The long comes back as `a`, `x`, `rc2`, `rc3`: 0x34, 0x03, 0x03, 0x00. The carry out of the low
+/// word crosses the stack argument's address arithmetic, which once clobbered it (the high word was
+/// one short); before the result parts shared one row the second word was read from `a:x` again.
 #[test]
 fn a_long_add_with_a_stack_argument_runs() {
-    for (after, want) in [("", 0x10), ("  txa\n", 0x98), ("  lda rc2\n", 0x02), ("  lda rc3\n", 0x00)] {
-        assert_eq!(run(&format!("add32-{want}"), ADD32, "add32", LONG_ARGS, after), want, "{after:?}");
+    for (after, want) in [("", 0x34), ("  txa\n", 0x03), ("  lda rc2\n", 0x03), ("  lda rc3\n", 0x00)] {
+        assert_eq!(run(&format!("add32-{want}-{}", after.len()), ADD32, "add32", LONG_ARGS, after), want, "{after:?}");
     }
 }
 
@@ -228,9 +229,9 @@ fn a_long_add_with_a_stack_argument_runs() {
 #[test]
 fn a_call_with_a_stack_argument_runs() {
     let text = compile(&format!("{ADD32}\n{PASS32}"), &["add32", "pass32"]);
-    for (after, want) in [("", 0x10), ("  txa\n", 0x98), ("  lda rc2\n", 0x02), ("  lda rc3\n", 0x00)] {
+    for (after, want) in [("", 0x34), ("  txa\n", 0x03), ("  lda rc2\n", 0x03), ("  lda rc3\n", 0x00)] {
         let main = format!("{LONG_ARGS}  jsr pass32\n{after}");
-        assert_eq!(common::run_with(&format!("pass32-{want}"), &main, &text), want, "{after:?}");
+        assert_eq!(common::run_with(&format!("pass32-{want}-{}", after.len()), &main, &text), want, "{after:?}");
     }
 }
 
@@ -250,5 +251,16 @@ fn a_switch_with_five_cases_runs() {
     let ir = "define i8 @sw5(i8 %x) {\nentry:\n  switch i8 %x, label %d [i8 1, label %a\n i8 3, label %b\n i8 7, label %c\n i8 9, label %e\n i8 200, label %f]\na:\n  ret i8 1\nb:\n  ret i8 3\nc:\n  ret i8 7\ne:\n  ret i8 9\nf:\n  ret i8 144\nd:\n  ret i8 99\n}";
     for (x, want) in [(1, 1), (3, 3), (7, 7), (9, 9), (200, 144), (2, 99), (255, 99)] {
         assert_eq!(run(&format!("sw5-{x}"), ir, "sw5", &set("rc2", x), ""), want, "sw5({x})");
+    }
+}
+
+/// A long returned in `a`, `x`, `rc2`, `rc3`: the copies into `rc2` and `rc3` go through `a`, which
+/// once overwrote the result byte in `a` (the run returned 0 for 0x10).
+#[test]
+fn a_long_return_keeps_the_byte_in_a() {
+    let ir = "define i32 @id32(i32 %a) {\n  ret i32 %a\n}";
+    let setup = set("rc2", 0x9810) + &set("rc3", 0x98) + &set("rc4", 0x02) + &set("rc5", 0);
+    for (after, want) in [("", 0x10), ("  txa\n", 0x98), ("  lda rc2\n", 0x02), ("  lda rc3\n", 0x00)] {
+        assert_eq!(run(&format!("id32-{want}"), ir, "id32", &setup, after), want, "{after:?}");
     }
 }
