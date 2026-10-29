@@ -37,6 +37,16 @@ pub fn expanded(
     object: &Object,
     target: &EhTarget,
 ) -> Result<Object, Unsupported> {
+    Ok(expanded_as(object, target, ".eh_frame")?.0)
+}
+
+/// `object` with the section `name` added (`__eh_frame` in Mach-O), and the
+/// offset in it of each frame's FDE, which a compact unwind entry can name.
+pub fn expanded_as(
+    object: &Object,
+    target: &EhTarget,
+    name: &str,
+) -> Result<(Object, Vec<usize>), Unsupported> {
     let number = |name: &str| {
         (target.register)(name)
             .ok_or_else(|| Unsupported(format!("DWARF: register {name} has no number, which a frame rule names")))
@@ -62,8 +72,10 @@ pub fn expanded(
     pad(&mut buf, target.address);
     buf.patch32(0, buf.at() as u32 - 4);
     let initial = FrameRow { offset: 0, saved: Vec::new(), ..target.entry.clone() };
+    let mut entries = Vec::new();
     for frame in &object.frames {
         let start = buf.at();
+        entries.push(start);
         buf.u32(0);
         buf.u32((buf.at() - 0) as u32);
         let field = buf.at();
@@ -83,7 +95,7 @@ pub fn expanded(
     let part = buf.done();
     let mut sections = object.sections.clone();
     sections.push(Section {
-        name: ".eh_frame".to_owned(),
+        name: name.to_owned(),
         role: Role::Unwind,
         near: true,
         align: target.address,
@@ -91,7 +103,7 @@ pub fn expanded(
         image: part.bytes,
         relocs: part.relocs,
     });
-    Ok(Object { sections, frames: Vec::new(), ..object.clone() })
+    Ok((Object { sections, frames: Vec::new(), ..object.clone() }, entries))
 }
 
 /// `DW_CFA_nop` to the next multiple of `to`.
