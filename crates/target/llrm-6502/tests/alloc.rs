@@ -1703,6 +1703,68 @@ done:
     }
 }
 
+/// `freeze` selects to the generic `COPY`, which the selector had no description of ("no description
+/// of opcode 20": differential seeds 21 and 26 were rejected for it).
+#[test]
+fn a_frozen_value_is_a_copy() {
+    let ir = "@buf = external global [16 x i8]
+define i16 @frz() {
+  %a = load i8, ptr getelementptr inbounds nuw (i8, ptr @buf, i16 13), align 1
+  %f = freeze i8 %a
+  %c = icmp ne i8 %f, -1
+  %z = zext i1 %c to i16
+  %q = getelementptr inbounds nuw [16 x i8], ptr @buf, i16 0, i16 %z
+  %r = load i8, ptr %q, align 1
+  %w = zext i8 %r to i16
+  ret i16 %w
+}";
+    let text = compile_within_ten_seconds(ir, "frz");
+    // buf[13] is 255: the load is buf[0]; otherwise buf[1]
+    for (last, want) in [(255u16, 3), (7, 1)] {
+        let data = format!(".export buf\nbuf: .byte 3,1,4,1,5,9,2,6,5,3,5,8,9,{last},9,3\n");
+        let got = common::run_with(&format!("alloc-frz-{last}"), "  jsr frz\n", &format!("{text}{data}"));
+        assert_eq!(got, want, "buf[13] = {last}");
+    }
+}
+
+/// A 32-bit phi whose join block comes before the blocks that feed it: the copy of its second word
+/// named a register nothing had yet ("phi input is never named": differential seed 28).
+#[test]
+fn a_wide_phi_read_before_its_inputs_are_laid_out() {
+    let ir = "define i32 @wphi(i32 %n) {
+entry:
+  br label %head
+head:
+  %acc = phi i32 [ %n, %entry ], [ %p, %join ]
+  %i = phi i8 [ 0, %entry ], [ %i1, %join ]
+  %c = icmp eq i8 %i, 0
+  br i1 %c, label %a, label %b
+join:
+  %p = phi i32 [ %x, %a ], [ %y, %b ]
+  %i1 = add i8 %i, 1
+  %d = icmp eq i8 %i1, 3
+  br i1 %d, label %exit, label %head
+a:
+  %x = xor i32 %acc, 5
+  br label %join
+b:
+  %y = add i32 %acc, 65537
+  br label %join
+exit:
+  ret i32 %p
+}";
+    let text = compile_within_ten_seconds(ir, "wphi");
+    // n ^ 5, then + 0x10001 twice
+    for n in [0u32, 0x1234_5678, 0xFFFF_FFFF] {
+        let want = ((n ^ 5).wrapping_add(2 * 65537)) as u16;
+        let byte = |k: u32| ((n >> (8 * k)) & 0xFF) as u16;
+        let setup = format!("{}{}{}{}", set("rc2", byte(0)), set("rc3", byte(1)), set("rc4", byte(2)), set("rc5", byte(3)));
+        let lo = common::run_with(&format!("alloc-wphi-{n}"), &format!("{setup}  jsr wphi\n"), &text);
+        let hi = common::run_with(&format!("alloc-wphih-{n}"), &format!("{setup}  jsr wphi\n  txa\n"), &text);
+        assert_eq!(((hi << 8) | lo) as u16, want, "n = {n:#x}");
+    }
+}
+
 /// Compile on a thread and fail after ten seconds: a scheduler or allocator loop with no progress
 /// bound shows as a failure here instead of a stuck run.
 fn compile_within_ten_seconds(
