@@ -26,7 +26,9 @@
 //!    counts decide are folded by those.
 //! 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
 //!    exit tests a counter against the value it has at the last trip.
-//! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
+//! 5. `exitsink::sunk`: final updates only exit phis read move to the exits;
+//!    `sinkinvariants::sunk` (`sinkUnusedInvariants`): preheader values the
+//!    loop never reads move to its exit block.
 //!
 //! # Example
 //! Step 1, the widening, on `for (unsigned short i = 0; i < n; ++i) a[i] = 1`
@@ -305,17 +307,28 @@ impl FunctionPass for IndVars {
         let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
         let loops = cfg::natural(unit.function, &found);
         let sunk = crate::exitsink::sunk(unit.function, &loops);
+        // `sinkUnusedInvariants`, the pin's last step but one.
+        let sunk_invariants = crate::sinkinvariants::sunk(unit.context, outer.callees(), unit.function, &loops);
         // The pin deletes what an edit stopped reading as it goes; a sweep of
         // the function (0.8 M Ir on d_faces' largest body) found the same.
-        let dead = (compared || rewrote || canonical || optimized || predicated || tested || sunk || merged) && {
-            match unit.function.touched_since(start) {
-                Some(touched) => {
-                    let seeds: Vec<_> = touched.named.iter().collect();
-                    dead::dead_from(unit.context, outer.callees(), unit.function, seeds)
+        let dead = (compared
+            || rewrote
+            || canonical
+            || optimized
+            || predicated
+            || tested
+            || sunk
+            || sunk_invariants
+            || merged)
+            && {
+                match unit.function.touched_since(start) {
+                    Some(touched) => {
+                        let seeds: Vec<_> = touched.named.iter().collect();
+                        dead::dead_from(unit.context, outer.callees(), unit.function, seeds)
+                    }
+                    None => dead::dead(unit.context, outer.callees(), unit.function),
                 }
-                None => dead::dead(unit.context, outer.callees(), unit.function),
-            }
-        };
+            };
         // The edits after the last step (lftr, the sinking, the dead code).
         // The sinking moves instructions no count reads, LFTR keeps the exit
         // count it was built from and the dead code is values
@@ -332,7 +345,17 @@ impl FunctionPass for IndVars {
             true,
         );
         held.put(session.into_scev());
-        if compared || rewrote || canonical || optimized || predicated || tested || sunk || merged || dead {
+        if compared
+            || rewrote
+            || canonical
+            || optimized
+            || predicated
+            || tested
+            || sunk
+            || sunk_invariants
+            || merged
+            || dead
+        {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>().preserve::<Scevs>()
         } else {
