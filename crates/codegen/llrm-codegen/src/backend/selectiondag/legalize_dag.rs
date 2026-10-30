@@ -116,6 +116,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 any = true;
                 self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
                 self.legalize_op(n)?;
+                // `ReplaceAllUsesWith` deletes the node it replaced, and what only it read.
+                self.dag.delete_replaced(n);
             }
             // A sweep that built no node leaves nothing new to legalize.
             if !any || self.dag.nodes().len() == nodes {

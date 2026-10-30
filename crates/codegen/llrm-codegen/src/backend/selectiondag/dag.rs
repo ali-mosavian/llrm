@@ -506,7 +506,7 @@ impl SelectionDAG {
         if node == self.root.node
             || node == self.entry.node
             || self.is_deleted(node)
-            || !matches!(self.nodes[node as usize].opcode, ISD::Load | ISD::Store)
+            || !matches!(self.nodes[node as usize].opcode, ISD::Load | ISD::Store | ISD::BrCond)
         {
             return;
         }

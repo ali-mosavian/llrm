@@ -837,3 +837,12 @@ fn a_zeroext_argument_passed_on_needs_no_mask() {
     let ir = "declare void @draw(i8 zeroext)\ndefine void @f(i8 zeroext %a) {\n  tail call void @draw(i8 zeroext %a)\n  ret void\n}";
     assert_eq!(selected(ir).unwrap(), [["TCRETURNdi"]]);
 }
+
+/// `(a & 1) == 0 || b < c` selected `ANDSXri`, `SUBSXrr`, `CCMPXi`: the legalizer kept the
+/// `brcond` it had lowered, so the `setcc` of the `and` was still read and was lowered to an
+/// `ANDS` that took over the `and`. The pin has `ANDXri` (`ReplaceAllUsesWith` deletes the node).
+#[test]
+fn a_replaced_brcond_does_not_keep_its_compares_alive() {
+    let ir = "declare void @other()\ndefine void @f(i64 %a, i64 %b, i64 %c) {\n  %m = and i64 %a, 1\n  %z = icmp eq i64 %m, 0\n  %lt = icmp ult i64 %b, %c\n  %o = select i1 %z, i1 true, i1 %lt\n  br i1 %o, label %t, label %x\nt:\n  tail call void @other()\n  ret void\nx:\n  ret void\n}";
+    assert_eq!(selected(ir).unwrap()[0], ["ANDXri", "SUBSXrr", "CCMPXi", "Bcc", "B"]);
+}
