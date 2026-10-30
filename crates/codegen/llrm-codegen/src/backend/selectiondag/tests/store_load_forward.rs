@@ -13,7 +13,7 @@ fn info(
     vt: EVT,
     slot: i32,
 ) -> MemInfo {
-    MemInfo { mem_vt: vt, align: 4, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 }
+    MemInfo { mem_vt: vt, align: 4, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0, ordering: None }
 }
 
 /// `store value -> [slot_store]; x = load [slot_load]; store x -> [out]`: the
