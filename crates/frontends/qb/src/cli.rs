@@ -182,6 +182,20 @@ pub fn main(argv: &[String]) -> i32 {
         // a host (an ELF or Mach-O object) has no memory at the PC's low
         // addresses: the object format states it, whatever the pointer width
         program.promises.hosted = is_hosted(&args.codegen.object_format);
+        // The Microsoft runtimes are 16-bit code with far pointers: on a wider
+        // target the object only failed later, "overlapping or pre-added
+        // relocations".
+        if !program.runtime.calls_natively() {
+            let layout = args.codegen.arch.layout();
+            let datalayout =
+                llrm_mir::datalayout::DataLayout::parse(&layout.datalayout).map_err(|error| error.to_string())?;
+            if datalayout.pointer(layout.spaces.near).bits > 16 {
+                return Err(format!(
+                    "the {} runtime is 16-bit code: build for a 32-bit target with -fqb-runtime=llrm",
+                    args.frontend.runtime
+                ));
+            }
+        }
         if program.runtime.calls_natively() {
             // the `-mabi=` family's convention, else the target's default
             let native = args.codegen.arch.calling().chosen(args.codegen.abi.as_deref())?;
