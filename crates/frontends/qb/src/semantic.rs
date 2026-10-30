@@ -7,6 +7,7 @@ mod absolute;
 mod assignment;
 mod bounds;
 mod debug;
+mod exclusive;
 mod format_spec;
 mod invariance;
 mod merging;
@@ -291,6 +292,8 @@ struct Function {
     elements: BTreeSet<u32>,
     // Each descriptor-word load nothing rewrites: `!invariant.load`.
     invariant: BTreeSet<u32>,
+    // Reference parameters (by index) nothing else reaches: `noalias`.
+    no_alias: BTreeSet<usize>,
     // Each POKE's far pointer whose DEF SEG is a literal on every path in:
     // the place of the segment cell, which names the memory it addresses.
     absolute: BTreeMap<u32, u32>,
@@ -617,6 +620,7 @@ pub fn compile_debugged(
     }
     shapes::applied(&mut compiler);
     invariance::applied(&mut compiler);
+    exclusive::applied(&mut compiler);
     absolute::applied(&mut compiler);
     absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
@@ -1943,6 +1947,7 @@ impl Compiler {
             allocations: BTreeMap::new(),
             elements: BTreeSet::new(),
             invariant: BTreeSet::new(),
+            no_alias: BTreeSet::new(),
             absolute: BTreeMap::new(),
         });
     }
@@ -10849,6 +10854,9 @@ impl Compiler {
                 // never null, never an undefined value.
                 let at = llrm_hir::facts::Subject::Param { function: i64::from(function.id), index };
                 facts.state(at, llrm_hir::facts::Fact::NonNull).state(at, llrm_hir::facts::Fact::NoUndef);
+                if function.no_alias.contains(&(index as usize)) {
+                    facts.state(at, llrm_hir::facts::Fact::NoAlias);
+                }
             }
         }
         // `mustprogress` deletes a side-effect-free loop it cannot prove ends,

@@ -4068,3 +4068,31 @@ fn test_mustprogress_is_stated_only_of_routines_without_loops() {
     assert!(!define("FOR i% = 1 TO 30000: NEXT", "DELAYS").contains("mustprogress"));
     assert!(!define("DO WHILE flag = 0: LOOP", "WAITS").contains("mustprogress"));
 }
+
+/// `noalias` of a reference parameter is stated only where every call passes
+/// it a local no other argument names. `CALL Add(x, x)` hands one variable
+/// twice and a SHARED variable is also the callee's own name for it: stating
+/// `noalias` there would let a pass reorder `a = a + 1` past `b = 2`.
+#[test]
+fn test_noalias_is_stated_only_for_distinct_locals() {
+    let define = |calls: &str, whole_program: bool| {
+        let directory = tempfile::TempDir::new().unwrap();
+        let basic = format!(
+            "DECLARE SUB Add (a AS INTEGER, b AS INTEGER)\nDECLARE SUB Caller ()\nDIM SHARED g AS INTEGER\nCaller\nSUB Caller\nDIM p AS INTEGER, q AS INTEGER\n{calls}\nEND SUB\nSUB Add (a AS INTEGER, b AS INTEGER)\na = a + 1\nb = 2\ng = g + 1\nEND SUB\n"
+        );
+        let source = written(&directory, "na.bas", basic.as_bytes());
+        let frontend = qb_driver::Frontend { whole_program, ..qb_driver::Frontend::new("qb45", "qb45") };
+        let program = qb_driver::parsed(&source, &frontend, None).expect("parses");
+        let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        text.lines()
+            .find(|line| line.starts_with("define") && line.contains("ADD"))
+            .unwrap_or_else(|| panic!("{text}"))
+            .to_owned()
+    };
+    let count = |call: &str, whole_program| define(call, whole_program).matches("noalias").count();
+    assert_eq!(count("Add p, q", true), 2);
+    assert_eq!(count("Add p, p", true), 0, "one variable passed twice");
+    assert_eq!(count("Add p, g", true), 1, "only the local; the SHARED one is also the callee's name for it");
+    assert_eq!(count("Add p, q", false), 0, "an exported callee has callers this module does not see");
+}
