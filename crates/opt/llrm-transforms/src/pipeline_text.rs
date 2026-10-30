@@ -1,6 +1,14 @@
 //! The pass pipeline text of `opt -passes=`: `a,b(c,d),e<x;y>`. `parse` reads
 //! the syntax (`PassBuilder::parsePassPipeline`); `build` adds the passes this
 //! crate has to a manager and names the first it does not have.
+//!
+//! # Example
+//! `loop(indvars,loop-reduce),dce` parses to a nested `loop` adaptor holding
+//! two passes, then `dce`:
+//!
+//! ```text
+//! Nested loop [ Pass indvars, Pass loop-reduce ], Pass dce
+//! ```
 
 use llrm_mir::passes::PassManager;
 
