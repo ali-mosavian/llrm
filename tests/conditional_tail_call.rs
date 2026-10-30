@@ -71,3 +71,17 @@ fn test_m64_callee_reached_from_two_blocks_is_not_folded_at_os() {
     let text = compiled_at("cond_tail_call_shared_m64.ll", "-Os");
     assert!(text.contains("je h") && !text.contains("je f") && text.contains("jmp f"), "{text}");
 }
+
+/// The pin's form behind the switch: the callee reached from a branch and a
+/// fall-through folds at -Os too.
+#[test]
+fn test_m64_pin_form_of_tc1_folds_at_os() {
+    let path = format!("{}/tests/check/mir/cond_tail_call_shared_m64.ll", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-llc"))
+        .env("LLRM_TC1_PIN", "1")
+        .args(["-Os", "-S", "-o", "-", &path])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("je f") && text.contains("je h"), "{text}");
+}
