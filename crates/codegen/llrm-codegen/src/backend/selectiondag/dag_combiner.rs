@@ -86,6 +86,12 @@ pub trait CombineHooks {
     }
 
 
+    /// `visitORCommutative`'s absorption folds, `(or (and x, y), x)` is `x`. Default false until
+    /// x86 is judged.
+    fn fold_or_absorption(&self) -> bool {
+        false
+    }
+
     /// `convertSetCCLogicToBitwiseLogic`: `and (seteq a, b), (seteq c, d)` as one compare of
     /// `or (xor a, b), (xor c, d)`. Default true, as X86's (the pin's default is false).
     fn convert_setcc_logic_to_bitwise_logic(&self) -> bool {

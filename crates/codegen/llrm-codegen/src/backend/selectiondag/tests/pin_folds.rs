@@ -21,6 +21,9 @@ impl CombineHooks for Asks {
     fn merge_stores_via_trunc_store(&self) -> bool {
         true
     }
+    fn fold_or_absorption(&self) -> bool {
+        true
+    }
 }
 
 fn xor_of_masked(dag: &mut SelectionDAG) {
@@ -200,4 +203,29 @@ fn a_default_target_joins_the_two_equalities_in_one_compare() {
     and_of_equalities(&mut dag);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.get_root()), ISD::SetCC);
+}
+
+fn or_of_and_with_one_operand(dag: &mut SelectionDAG) -> SDValue {
+    let (a, b) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6));
+    let masked = dag.get_node(ISD::And, EVT::I32, &[a, b]);
+    let root = dag.get_node(ISD::Or, EVT::I32, &[masked, a]);
+    dag.set_root(root);
+    a
+}
+
+/// `(a & b) | a` stayed an `and` and an `or`; the pin's `visitORCommutative` makes it `a`.
+#[test]
+fn an_or_of_an_and_with_one_of_its_operands_is_that_operand() {
+    let mut dag = dag();
+    let a = or_of_and_with_one_operand(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.get_root(), a);
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_or_of_the_and() {
+    let mut dag = dag();
+    or_of_and_with_one_operand(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Or);
 }
