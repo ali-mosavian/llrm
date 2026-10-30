@@ -1293,8 +1293,8 @@ impl Builder<'_> {
             )
             .map_err(|_| Refused("call the convention does not describe"))?
         };
-        if let Some(tail) = self.tail_candidate.take()
-            && !hooked
+        if !hooked
+            && let Some(tail) = self.tail_candidate.take()
             && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
         {
             self.tail_calls.push(tail);
@@ -1571,9 +1571,8 @@ impl Builder<'_> {
         result_type: TypeId,
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
-        let sibling = std::mem::take(&mut self.sibcall);
-        if sibling || flags_answer || byvals.iter().any(Option::is_some) {
-            return Err(Refused("tail call, flags answer or byval with a target's calling hook"));
+        if flags_answer || byvals.iter().any(Option::is_some) {
+            return Err(Refused("flags answer or byval with a target's calling hook"));
         }
         if std::mem::take(&mut self.call_attrs_move_arguments) {
             return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
@@ -1608,6 +1607,15 @@ impl Builder<'_> {
         };
         calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
+        // `IsTailCall`: the call in tail position, if the target takes it, ends the block
+        if let Some(tail) = self.tail_candidate.take()
+            && let Some(node) = calling.lower_tail_call(&mut self.dag, root, callee_node, &outs)
+        {
+            self.tail_calls.push(tail);
+            self.dag.set_root(node);
+            self.had_tail_call = true;
+            return Ok(None);
+        }
         let (chain, parts) = calling.lower_call(&mut self.dag, root, callee_node, &outs, &ins);
         self.dag.set_root(chain);
         Ok((!void).then(|| self.join_from_calling(&parts, vt)))

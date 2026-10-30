@@ -37,6 +37,8 @@ pub const RET_GLUE: u16 = llrm_dagisel::generated::aarch64::ids::isd::RET_GLUE;
 
 /// `AArch64ISD::CALL`, the pin's number.
 pub const CALL: u16 = llrm_dagisel::generated::aarch64::ids::isd::CALL;
+/// `AArch64ISD::TC_RETURN`.
+pub const TC_RETURN: u16 = llrm_dagisel::generated::aarch64::ids::isd::TC_RETURN;
 
 const X: [RegId; 8] = [reg::X0, reg::X1, reg::X2, reg::X3, reg::X4, reg::X5, reg::X6, reg::X7];
 const W: [RegId; 8] = [reg::W0, reg::W1, reg::W2, reg::W3, reg::W4, reg::W5, reg::W6, reg::W7];
@@ -212,11 +214,7 @@ impl TargetCalling for Aarch64Calling {
             chain = SDValue { node: copy.node, res: 0 };
             glue = Some(SDValue { node: copy.node, res: 1 });
         }
-        // A direct callee is the symbol itself; a register is called through `BLR`.
-        let callee = match (dag.opcode(callee), dag.node(callee).data) {
-            (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => dag.get_target_global_address(EVT::I64, symbol, offset),
-            _ => callee,
-        };
+        let callee = target_callee(dag, callee);
         let mut operands = vec![chain, callee];
         for &(register, value) in &registers {
             operands.push(dag.get_phys_register(dag.value_type(value), register));
@@ -236,6 +234,48 @@ impl TargetCalling for Aarch64Calling {
             values.push(SDValue { node: copy.node, res: 0 });
         }
         (chain, values)
+    }
+
+    /// `LowerCall` with `IsTailCall` for a sibling call: `isEligibleForTailCallOptimization` here is
+    /// that every argument is in a register (the callee reuses the caller's frame, so a stack argument
+    /// has no place). `TC_RETURN chain, callee, fpdiff, registers.., mask, glue`; there is no call
+    /// sequence.
+    fn lower_tail_call(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        callee: SDValue,
+        outs: &[Out],
+    ) -> Option<SDValue> {
+        if outs.iter().any(|out| out.variadic) {
+            return None;
+        }
+        let parts: Vec<Part> = outs.iter().map(|o| (dag.value_type(o.value), o.arg_vt, o.split, o.variadic)).collect();
+        let (locations, _) = place(&parts);
+        let registers: Vec<(RegId, SDValue)> = locations
+            .iter()
+            .zip(outs)
+            .map(|(location, out)| match *location {
+                Location::Register(register) => Some((register, out.value)),
+                Location::Stack { .. } => None,
+            })
+            .collect::<Option<_>>()?;
+        let (mut chain, mut glue) = (chain, None);
+        for &(register, value) in &registers {
+            let copy = dag.get_copy_to_phys_reg(chain, register, value, glue);
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = Some(SDValue { node: copy.node, res: 1 });
+        }
+        let callee = target_callee(dag, callee);
+        // The stack adjustment of an ABI-changing tail call: none for a sibling.
+        let fpdiff = dag.get_constant_with(0, EVT::I32, true, false);
+        let mut operands = vec![chain, callee, fpdiff];
+        for &(register, value) in &registers {
+            operands.push(dag.get_phys_register(dag.value_type(value), register));
+        }
+        operands.push(dag.get_register_mask());
+        operands.extend(glue);
+        Some(dag.get_node(ISD::Target(TC_RETURN), EVT::OTHER, &operands))
     }
 
     /// Each register part is read from the virtual register its live-in
@@ -307,5 +347,16 @@ impl TargetCalling for Aarch64Calling {
         operands[0] = chain;
         operands.extend(glue);
         dag.get_node(llrm_codegen::backend::selectiondag::isd::ISD::Target(RET_GLUE), EVT::OTHER, &operands)
+    }
+}
+
+/// A direct callee is the symbol itself; a register is called through `BLR`.
+fn target_callee(
+    dag: &mut SelectionDAG,
+    callee: SDValue,
+) -> SDValue {
+    match (dag.opcode(callee), dag.node(callee).data) {
+        (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => dag.get_target_global_address(EVT::I64, symbol, offset),
+        _ => callee,
     }
 }

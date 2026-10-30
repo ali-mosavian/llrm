@@ -71,3 +71,39 @@ define i64 @u(i64 %a, i64 %b) {\n  %r = sub i64 %a, %b\n  ret i64 %r\n}\n";
         assert!(asm.contains(want), "{want}:\n{asm}");
     }
 }
+
+/// A `tail call` whose arguments are all in registers is the jump to the callee (`LowerCall`'s
+/// `TC_RETURN`): the DAG path made `bl _strcmp` inside a frame, 7 instructions for the pin's 3.
+/// An argument on the stack has no place in the caller's frame, so that call stays a call.
+#[test]
+fn a_tail_call_with_register_arguments_is_a_jump_and_one_with_stack_arguments_is_a_call() {
+    let ir = "target triple = \"arm64-apple-macosx\"\n\
+target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+declare i32 @strcmp(ptr, ptr)\n\
+declare i32 @many(i32, i32, i32, i32, i32, i32, i32, i32, i32)\n\
+define i32 @direct(ptr %a, ptr %b) {\n  %r = tail call i32 @strcmp(ptr %a, ptr %b)\n  ret i32 %r\n}\n\
+define i32 @indirect(ptr %f, i32 %a) {\n  %r = tail call i32 %f(i32 %a)\n  ret i32 %r\n}\n\
+define i32 @stack(i32 %a) {\n  %r = tail call i32 @many(i32 %a, i32 %a, i32 %a, i32 %a, i32 %a, i32 %a, i32 %a, i32 %a, i32 %a)\n  ret i32 %r\n}\n";
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("t.ll");
+    std::fs::write(&input, ir).unwrap();
+    let output = dir.path().join("t.s");
+    let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .output()
+        .unwrap();
+    assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+    let asm = std::fs::read_to_string(&output).unwrap();
+    let function = |name: &str, next: &str| {
+        let from = asm.find(&format!("{name}:")).unwrap();
+        asm[from..asm[from..].find(next).map_or(asm.len(), |at| from + at)].to_owned()
+    };
+    let direct = function("_direct", "_indirect:");
+    assert!(direct.contains("\tb _strcmp") && !direct.contains("bl "), "{direct}");
+    let indirect = function("_indirect", "_stack:");
+    assert!(indirect.contains("\tbr x9") && !indirect.contains("blr"), "{indirect}");
+    let stack = function("_stack", "\u{0}");
+    assert!(stack.contains("bl _many"), "{stack}");
+}

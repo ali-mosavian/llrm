@@ -39,7 +39,7 @@ fn origin(
 }
 
 /// Where an indirect callee waits for the epilogue.
-const TARGET: Gpr = Gpr(9);
+pub(crate) const TARGET: Gpr = Gpr(9);
 
 pub fn run(function: &mut MFunc) {
     for block in &mut function.blocks {

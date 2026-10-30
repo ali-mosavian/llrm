@@ -396,3 +396,21 @@ done:
   call void @llvm.va_end.p0(ptr %ap)
   ret i64 %sum
 }
+
+define i32 @tc_twice(i32 %x) {
+  %r = tail call i32 @c_twice(i32 %x)
+  ret i32 %r
+}
+
+define i32 @tc_indirect(ptr %f, i32 %x) {
+  %r = tail call i32 %f(i32 %x)
+  ret i32 %r
+}
+
+; a frame to take down before the jump: the callee-saved registers and the link register come back first
+define i32 @tc_frame(i32 %x) {
+  %a = call i32 @c_twice(i32 %x)
+  %b = add i32 %a, 1
+  %r = tail call i32 @c_twice(i32 %b)
+  ret i32 %r
+}

@@ -25,6 +25,9 @@ unsigned char urem8(unsigned char, unsigned char);
 signed char sdiv8(signed char, signed char);
 unsigned char shr8(unsigned char, unsigned char);
 int64_t mulhs(int64_t, int64_t);
+int tc_twice(int);
+int tc_indirect(int (*)(int), int);
+int tc_frame(int);
 int64_t vsum(int, ...);
 void cp15(void *, const void *);
 void cp300(void *, const void *);
@@ -201,6 +204,8 @@ int main(void) {
         if (mulhs(xs[i], xs[j]) != (int64_t)(((__int128)xs[i] * xs[j]) >> 64)) { printf("mulhs(%d,%d)\n", i, j); bad++; }
   }
   if (vsum(1, 7) != 7 || vsum(3, 10, -20, 30) != 20 || vsum(10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10) != 55) { printf("vsum\n"); bad++; }
+  for (int x = -5; x < 40; x += 7)
+    if (tc_twice(x) != c_twice(x) || tc_indirect(c_twice, x) != c_twice(x) || tc_frame(x) != c_twice(c_twice(x) + 1)) { printf("tail(%d)\n", x); bad++; }
   if (bad) printf("%d bad\n", bad);
   return bad != 0;
 }

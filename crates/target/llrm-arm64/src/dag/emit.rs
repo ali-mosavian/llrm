@@ -627,6 +627,37 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// `TCRETURNdi symbol, fpdiff, args..` or `TCRETURNri reg, fpdiff, args..`: the jump to the callee in
+    /// place of the return; an indirect callee waits in the register the epilogue leaves alone.
+    fn tail_call(
+        &mut self,
+        id: u32,
+        name: &str,
+    ) -> Result<(), String> {
+        let node = self.dag.node(SDValue { node: id, res: 0 });
+        let target = match (name, self.operand(node.ops[0])?) {
+            ("TCRETURNdi", Operand::Symbol(global, _)) => match self.target(global, 0)?.0 {
+                Target::Symbol { name, .. } => Callee::Symbol(name),
+                _ => return Err("a callee that is no symbol".into()),
+            },
+            ("TCRETURNdi", Operand::External(id)) => Callee::Symbol(self.globals.external(&self.dag.symbol_names[id as usize])),
+            (_, Operand::Reg(register)) if name.starts_with("TCRETURNri") => {
+                self.ops.push(Op::Copy { dst: Reg::Gpr(crate::sibcall::TARGET), src: Reg::Gpr(register) });
+                Callee::Register(crate::sibcall::TARGET)
+            }
+            _ => return Err(format!("{name}: a callee that is neither a symbol nor a register")),
+        };
+        let uses = node.ops[1..]
+            .iter()
+            .filter_map(|op| match self.dag.node(*op).data {
+                NodeData::PhysReg(register) => Some(reg_of(register)),
+                _ => None,
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.ops.push(Op::Return { uses, tail: Some(target) });
+        Ok(())
+    }
+
     /// `COPY_TO_REGCLASS`: a copy, across the general and float classes by `fmov`.
     fn copy_to_class(
         &mut self,
@@ -915,6 +946,7 @@ impl Emitter<'_> {
                     }
                     "ADJCALLSTACKUP" => return Ok(()),
                     "BL" | "BLR" => return self.call(id, name),
+                    _ if name.starts_with("TCRETURN") => return self.tail_call(id, name),
                     _ => {}
                 }
                 let operands = node

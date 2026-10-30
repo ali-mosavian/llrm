@@ -211,3 +211,5 @@ First step unchanged: dry-run `llrm-dagisel-gen` on `AArch64GenDAGISel.inc`.
 LSR on AArch64 asks the addressing mode of a use with the access size (`MemAccessTy.bytes`, `Tti::*_at`), as the pin does: `i16` and `i32` loops keep one index scaled by the access (`[x, i, lsl #n]`) instead of one stepping pointer per access. `tools/lsr_shadow/*.ll` equal `llc -O2 -print-after=loop-reduce` of the pin (4 of 4; was 1 of 4).
 
 An add or sub whose flags nothing reads is the plain instruction (`optimizeCompareInstr`, `convertToNonFlagSettingOpc`): the table selects `sub` as `SUBS*` with a dead `$nzcv`, and `dag/emit.rs` drops the `S` when the flags result has no user and the value is used. A compare (dead value) keeps it.
+
+A call in tail position (the builder's `isInTailCallPosition`) whose arguments are all in registers is `TC_RETURN` (`TargetCalling::lower_tail_call`, `LowerCall`'s `IsTailCall`), selected as `TCRETURNdi`/`TCRETURNri` and emitted as the `Op::Return { tail }` the hand selector's `sibcall` makes: `b _f`, or `br x9` for a register callee. A stack argument has no place in the caller's frame, so that call stays a call.
