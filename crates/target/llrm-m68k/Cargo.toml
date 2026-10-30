@@ -21,3 +21,7 @@ llrm-cgen = { workspace = true }
 [build-dependencies]
 llrm-target = { workspace = true }
 llrm-lir = { workspace = true }
+
+[[bin]]
+name = "llrm-m68k-llc"
+path = "src/bin/llc.rs"
