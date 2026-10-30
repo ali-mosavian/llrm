@@ -65,6 +65,9 @@ use llrm_lir::registers::Regs;
 use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::{CodeModel, Format};
 
+use llrm_object::assembler::AsmBackend;
+use llrm_x86::mc::backend::X86Backend;
+
 use crate::backend::masm;
 use crate::backend::select;
 use crate::model::ir::{self, Loc, Operation, Semantics, Space};
@@ -83,7 +86,16 @@ pub const POINTER: Fix = Fix::plain(llrm_x86::mc::fixup::FAR_POINTER);
 /// says 0 for x86's, which made a far pointer in a 16-bit object trip the
 /// width assertion.
 fn width(fix: Fix) -> usize {
-    usize::from(llrm_x86::mc::fixup::kind_info(fix.kind).bits).div_ceil(8)
+    usize::from(backend(false, 0).kind_info(fix.kind).bits).div_ceil(8)
+}
+
+/// x86's assembler backend for `sixteen`-bit mode and a longest no-operation of
+/// `longest` bytes (its fixup table needs neither).
+fn backend(
+    sixteen: bool,
+    longest: usize,
+) -> X86Backend {
+    X86Backend { sixteen, wide: false, longest }
 }
 pub const OFFSET32: Fix = Fix::abs(4);
 pub const OFFSET64: Fix = Fix::abs(8);
@@ -563,10 +575,7 @@ pub fn serialized(
     object: &Object,
     format: Format,
 ) -> Result<Vec<u8>, Error> {
-    match format {
-        Format::Omf => Ok(llrm_omf::write::write(object, &llrm_x86::mc::omf::X86Omf)?),
-        other => Ok(llrm_x86::mc::X86Objects.write_object(other.name(), object)?),
-    }
+    Ok(llrm_x86::mc::X86Objects.write_object(format.name(), object)?)
 }
 
 /// `module` laid out as an object.
@@ -809,7 +818,9 @@ pub fn _code_by(
             }
             Encoded::Align(_) | Encoded::Prefer { .. } => {
                 let pad = _size(item, at as i64, model);
-                segment.put(&llrm_x86::mc::backend::nops(pad, usize::from(module.padding.nop), model.segmented()), &[]);
+                let mut nops = Vec::new();
+                backend(model.segmented(), usize::from(module.padding.nop)).write_nop_data(&mut nops, pad);
+                segment.put(&nops, &[]);
                 let log2 = match item {
                     Encoded::Align(masm::CodeAlign { log2, .. }) => *log2,
                     Encoded::Prefer { computed, .. } => *computed,

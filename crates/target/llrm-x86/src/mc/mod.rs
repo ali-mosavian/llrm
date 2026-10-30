@@ -65,6 +65,7 @@ impl ObjectTarget for X86Objects {
             object
         };
         match (format, object.bits) {
+            ("omf", _) => llrm_omf::write::write(object, &omf::X86Omf).map_err(|one| Unsupported(one.to_string())),
             ("elf", 32) => elf32::write(object),
             ("elf", 64) => elf64::write(object),
             ("macho", 64) => llrm_macho::write(object, &macho::X8664MachO),
@@ -120,6 +121,24 @@ mod tests {
             [kind("omf"), kind("elf"), kind("macho"), kind("coff")],
             [UnwindKind::None, UnwindKind::EhFrame, UnwindKind::Compact, UnwindKind::Win64]
         );
+    }
+
+    /// OMF was written outside the table, so a caller needed a second dispatch
+    /// for it: `write_object("omf", ..)` said "no omf writer".
+    #[test]
+    fn the_table_writes_omf_as_the_omf_writer_does() {
+        let object = Object {
+            name: "t.c".to_owned(),
+            bits: 16,
+            sections: Vec::new(),
+            symbols: Vec::new(),
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            debug: None,
+            frames: Vec::new(),
+        };
+        let direct = llrm_omf::write::write(&object, &omf::X86Omf).unwrap();
+        assert_eq!(X86Objects.write_object("omf", &object).unwrap(), direct);
     }
 
     #[test]
