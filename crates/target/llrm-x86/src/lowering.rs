@@ -17,10 +17,9 @@
 use std::sync::OnceLock;
 
 use llrm_mir::lowering::{Isd, LoadExt, Lowering};
-
-use crate::dag::actions::{Features, TargetLowering};
-use crate::dag::isd::ISD;
-use crate::dag::mvt::MVT;
+use llrm_sdag::actions::{Features, TargetLowering};
+use llrm_sdag::isd::ISD;
+use llrm_sdag::mvt::MVT;
 
 /// The DAG's tables for i486, built once.
 fn table() -> &'static TargetLowering {
