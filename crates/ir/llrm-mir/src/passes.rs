@@ -1466,7 +1466,7 @@ fn check_modules() -> bool {
     *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
 }
 
-fn check_captures() -> bool {
+pub(crate) fn check_captures() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CAPTURES").is_some())
 }
