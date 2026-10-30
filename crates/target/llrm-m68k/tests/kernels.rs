@@ -214,10 +214,12 @@ fn a_word_zero_extended_is_read_from_a_data_register() {
 
 /// `llvm.{u,s}{add,sub}.with.overflow` was refused in every width ("convert node to libcall",
 /// differential seed 452). The value plus the overflow bit, per case, as `LowerXALUO` gives them.
+/// The multiplies of 8 and 16 bits were refused (differential seed 2039, "Unsupported UMulO i8"); the pin
+/// answers them with a constant zero overflow, which is wrong: `200 * 2` in a byte overflows.
 #[test]
 fn arithmetic_with_overflow_gives_the_wrapped_value_and_the_carry_or_overflow() {
     // (intrinsic, width, a, b, value + overflow bit, modulo the status byte)
-    let cases: [(&str, u32, i64, i64, i64); 9] = [
+    let cases: [(&str, u32, i64, i64, i64); 15] = [
         ("uadd", 8, 200, 100, 44 + 1),
         ("uadd", 16, 60000, 10000, (4464 + 1) & 255),
         ("uadd", 32, 0xFFFF_FFFF, 2, 1 + 1),
@@ -227,6 +229,12 @@ fn arithmetic_with_overflow_gives_the_wrapped_value_and_the_carry_or_overflow() 
         ("usub", 8, 3, 5, 254 + 1),
         ("ssub", 8, 156, 100, 56 + 1),
         ("ssub", 32, 0x8000_0000, 1, 0x7FFF_FFFF + 1),
+        ("umul", 8, 200, 2, 144 + 1),
+        ("umul", 8, 3, 4, 12),
+        ("umul", 16, 300, 300, (24464 + 1) & 255),
+        ("smul", 8, 100, 2, 200 + 1),
+        ("smul", 8, 253, 4, 244),
+        ("smul", 16, 200, 200, (40000 + 1) & 255),
     ];
     for (name, bits, a, b, want) in cases {
         let ty = format!("i{bits}");
@@ -242,7 +250,7 @@ fn arithmetic_with_overflow_gives_the_wrapped_value_and_the_carry_or_overflow() 
              \x20 %v = extractvalue {{ {ty}, i1 }} %r, 0\n  %o = extractvalue {{ {ty}, i1 }} %r, 1\n\
              \x20 %oo = zext i1 %o to i32\n{wide}  ret i32 %s\n}}"
         );
-        if let Some(got) = run_ir(&ir, &[Arg::Imm(a), Arg::Imm(b)]) {
+        if let Some(got) = run_ir_with_runtime(&ir, &[Arg::Imm(a), Arg::Imm(b)]) {
             assert_eq!(got, (want & 255) as i32, "{name} i{bits} {a} {b}");
         }
     }

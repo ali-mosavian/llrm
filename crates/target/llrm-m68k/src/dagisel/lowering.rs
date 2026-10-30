@@ -197,16 +197,16 @@ impl Hooks for M68kLowering {
 /// `LowerXALUO` (with `lowerOverflowArithmetic`): the arithmetic as one node
 /// that also sets the codes, and the overflow as a `SETCC` of them.
 ///
-/// DEVIATE: a multiply of 8 or 16 bits is refused. Reason: the pin promotes it
-/// and reports the constant zero as its overflow, so `255 * 2` in a byte
-/// overflows nothing. Exit: never, while the pin does; the legalizer then
-/// reports the operation as unsupported.
+/// DEVIATE: a multiply of 8 or 16 bits is the wide multiply of
+/// `expandMULO`, not the pin's `LowerXALUO`: the pin promotes it and reports
+/// the constant zero as its overflow, so `255 * 2` in a byte overflows
+/// nothing. Exit: never, while the pin does.
 fn lower_xalu(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
     if matches!(dag.opcode(node), ISD::SMulO | ISD::UMulO) && dag.value_type(SDValue { node: node.node, res: 0 }) != EVT::I32 {
-        return None;
+        return Some(expand_narrow_mulo(dag, node));
     }
     let result_vt = dag.value_type(SDValue { node: node.node, res: 0 });
     let overflow_vt = dag.value_type(SDValue { node: node.node, res: 1 });
@@ -224,6 +224,37 @@ fn lower_xalu(
     let code = cc_operand(dag, code);
     let overflow = dag.get_node(m68kisd::SETCC, overflow_vt, &[code, SDValue { node: arith.node, res: 1 }]);
     Some(dag.get_node_multi(ISD::MergeValues, &[result_vt, overflow_vt], &[SDValue { node: arith.node, res: 0 }, overflow]))
+}
+
+/// `TargetLowering::expandMULO` through the type twice as wide: the product
+/// of the extended operands, whose low half is the result and whose high half
+/// is empty (unsigned) or the sign of the result (signed) when nothing
+/// overflowed.
+fn expand_narrow_mulo(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let signed = dag.opcode(node) == ISD::SMulO;
+    let result_vt = dag.value_type(SDValue { node: node.node, res: 0 });
+    let overflow_vt = dag.value_type(SDValue { node: node.node, res: 1 });
+    let bits = result_vt.size_in_bits();
+    let wide = EVT::integer(bits * 2);
+    let extend = if signed { ISD::SignExtend } else { ISD::ZeroExtend };
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (lhs, rhs) = (dag.get_node(extend, wide, &[lhs]), dag.get_node(extend, wide, &[rhs]));
+    let product = dag.get_node(ISD::Mul, wide, &[lhs, rhs]);
+    let result = dag.get_node(ISD::Truncate, result_vt, &[product]);
+    let by = dag.get_constant(u128::from(bits), EVT::I8);
+    let high = dag.get_node(ISD::Srl, wide, &[product, by]);
+    let high = dag.get_node(ISD::Truncate, result_vt, &[high]);
+    let expected = if signed {
+        let sign = dag.get_constant(u128::from(bits - 1), EVT::I8);
+        dag.get_node(ISD::Sra, result_vt, &[result, sign])
+    } else {
+        dag.get_constant(0, result_vt)
+    };
+    let overflow = dag.get_setcc(overflow_vt, high, expected, CondCode::SetNe);
+    dag.get_node_multi(ISD::MergeValues, &[result_vt, overflow_vt], &[result, overflow])
 }
 
 /// A condition-code operand: `DAG.getConstant(code, DL, MVT::i8)`.
