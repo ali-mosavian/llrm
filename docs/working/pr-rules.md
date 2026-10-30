@@ -18,9 +18,10 @@ Read with [agents.md](../../agents.md): the seven rules and the method. These ar
 - A PR that waits for evidence or for the user stays DRAFT. A ready PR lands through the runner at once. A hold is an entry in tools/landing/waits.txt, not a draft toggle: land.sh marks a draft ready again, so a PR the runner already picked lands anyway (#3352 did). Open such a PR with `gh pr create --draft`: the runner lands a non-draft PR within seconds of its creation (#3390 went from created to merged in 41 s, before a hold could be written). A change to QB handling or semantics (ON ERROR, RESUME, float rounding) stays draft until oversight's QB sweep has passed on its head.
 
 ## Landing
+- Every PR targets `release/next`, the integration branch; `LAND_BRANCH` (tools/landing/branch.sh) is its one configurable name, and a PR on another base is refused.
 - The owner lands through `tools/landing/land.sh` when its session may; never `gh pr merge` by hand; never land another session's PR.
 - An owner may mark its own evidence-complete PR ready (the runner then lands it) only after running the fast gate on its own host (user, 2026-10-20: "The workers may do it after running the gate locally"). One gate at a time per host. Mark no one else's PR ready.
-- A refused PR: read the REFUSED line, fix, merge fresh feat/parity (never force-push), tell the owner.
+- A refused PR: read the REFUSED line, fix, merge fresh release/next (never force-push), tell the owner.
 - A fast gate on your own host, one at a time (buildslot). Build the compiler with `cargo build --release -p llrm --bin llrm-c`, check the exit code and the md5 before any A/B. Compare the full list of passing and failing test names against a clean run of the parent, not the failure lines: a test red only on your head can hide behind an unchanged failure count.
 
 ## Measuring
