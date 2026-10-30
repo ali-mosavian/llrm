@@ -108,7 +108,7 @@ fn program(
         Some(stated) => return Err(format!("the module's datalayout `{stated}` is not the 6502's `{layout}`")),
         None => return Err(format!("the module states no datalayout; the 6502's is `{layout}`")),
     }
-    let mut program = Program::new(vec![module], Rc::new(Mos6502Machine))?;
+    let mut program = Program::new(vec![module], machine())?;
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
@@ -164,6 +164,10 @@ fn llrm_6502_prepare(program: &mut Program) {
 /// the loop-idiom, inline and strength-reduction decisions. Without it (`tti() = None`) those passes price by
 /// generic rules and the recognizer of CRC loops never runs. Everything else is `Neutral`'s: no register
 /// pressure, unit prices.
+pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
+    Rc::new(Mos6502Machine)
+}
+
 struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {

@@ -198,3 +198,10 @@ exit:
     };
     assert_eq!(sum("i8 %i2, %n"), sum("i8 %n, %i2"));
 }
+
+/// The machine handed to the mid-end has a cost model; with none the CRC recognizer and the other passes that
+/// price by it silently did not run (see `a_crc_loop_becomes_a_table_lookup`).
+#[test]
+fn the_machine_handed_to_the_mid_end_has_a_tti() {
+    assert!(llrm_6502::driver::machine().tti().is_some());
+}
