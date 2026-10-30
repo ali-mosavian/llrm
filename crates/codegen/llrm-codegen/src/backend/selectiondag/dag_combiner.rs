@@ -43,6 +43,7 @@ use super::actions::{Action, LoadExt, TargetLowering};
 use super::dag::{MemInfo, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
 use super::mvt::{EVT, MVT};
+use llrm_sdag::lowering::ShiftAmount;
 
 /// `CombineLevel`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -146,6 +147,8 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     combined: NodeSet,
     /// The action table, for the folds that ask what the target can do.
     pub(super) tli: Option<&'a TargetLowering>,
+    /// `OptLevel == CodeGenOptLevel::None`: the chain, store and load combines the pin skips at `-O0` are skipped.
+    pub(super) opt_none: bool,
 }
 
 fn op_is_srl(op: ISD) -> bool {
@@ -166,6 +169,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             queued: NodeSet::default(),
             combined: NodeSet::default(),
             tli: None,
+            opt_none: false,
         }
     }
 
@@ -175,6 +179,25 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         tli: &'a TargetLowering,
     ) -> DagCombiner<'a, H> {
         self.tli = Some(tli);
+        self
+    }
+
+    /// `getShiftAmountConstant`'s type: what the target shifts `vt` by (`i8`
+    /// with no table, as on x86).
+    fn shift_amount_vt(
+        &self,
+        vt: EVT,
+    ) -> EVT {
+        match self.tli.map(|tli| tli.types.shift_amount()) {
+            None | Some(ShiftAmount::I8) => EVT::I8,
+            Some(ShiftAmount::ByValue) => vt,
+            Some(ShiftAmount::Fixed(fixed)) => EVT::Simple(fixed),
+        }
+    }
+
+    /// The pin's `-O0` combiner (`OptLevel == None`).
+    pub fn with_opt_none(mut self) -> DagCombiner<'a, H> {
+        self.opt_none = true;
         self
     }
 
@@ -454,6 +477,35 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_setcc(vt, x, value, cond));
             }
         }
+        // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >= c` is
+        // `x > c - 1` and `x <= c` is `x < c + 1`, with the always-true extremes folded.
+        if self.level < CombineLevel::AfterLegalizeVectorOps {
+            let bits = op_type.size_in_bits();
+            let (unsigned, ge) = match cond {
+                CondCode::SetGe => (false, true),
+                CondCode::SetUGe => (true, true),
+                CondCode::SetLe => (false, false),
+                CondCode::SetULe => (true, false),
+                _ => (false, matches!(cond, CondCode::SetEq)),
+            };
+            if matches!(cond, CondCode::SetGe | CondCode::SetUGe | CondCode::SetLe | CondCode::SetULe) {
+                let mask = super::fold::mask(bits);
+                let (min, max) = if unsigned { (0, mask) } else { (1u128 << (bits - 1), mask >> 1) };
+                let edge = if ge { min } else { max };
+                if c1 & mask == edge {
+                    return Some(self.dag.get_bool_constant(true, vt));
+                }
+                let moved = if ge { c1.wrapping_sub(1) } else { c1.wrapping_add(1) } & mask;
+                let new_cond = match (ge, unsigned) {
+                    (true, false) => CondCode::SetGt,
+                    (true, true) => CondCode::SetUGt,
+                    (false, false) => CondCode::SetLt,
+                    (false, true) => CondCode::SetULt,
+                };
+                let rhs = self.dag.get_constant(moved, op_type);
+                return Some(self.dag.get_setcc(vt, n0, rhs, new_cond));
+            }
+        }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
             || self.level != CombineLevel::BeforeLegalizeTypes
             || !self.dag.has_one_use(n0.node)
@@ -581,6 +633,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (c1, c2) = (self.dag.constant(then)?, self.dag.constant(other)?);
         let mask = super::fold::mask(vt.size_in_bits());
         let (c1, c2) = (c1 & mask, c2 & mask);
+        let amount_vt = self.shift_amount_vt(vt);
         let dag = &mut *self.dag;
         if c1 == 1 && c2 == 0 {
             return Some(dag.get_zext_or_trunc(cond, vt));
@@ -602,7 +655,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if c1.is_power_of_two() && c2 == 0 {
             let cond = dag.get_zext_or_trunc(cond, vt);
-            let amount = dag.get_constant(u128::from(c1.trailing_zeros()), EVT::I8);
+            let amount = dag.get_constant(u128::from(c1.trailing_zeros()), amount_vt);
             return Some(dag.get_node(ISD::Shl, vt, &[cond, amount]));
         }
         if c1 == mask {
@@ -645,7 +698,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             CondCode::SetLt if bound == 0 => true,
             _ => return None,
         };
-        let shift = self.dag.get_constant(u128::from(x_vt.size_in_bits() - 1), EVT::I8);
+        let shift = self.dag.get_constant(u128::from(x_vt.size_in_bits() - 1), self.shift_amount_vt(x_vt));
         let sra = self.dag.get_node(ISD::Sra, x_vt, &[x, shift]);
         let mask = self.dag.get_sext_or_trunc(sra, vt);
         if c2 == !c3 & arm_mask {
@@ -682,9 +735,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let width = vt.size_in_bits();
-        let up = self.dag.get_constant(u128::from(width - 1 - mask.trailing_zeros()), EVT::I8);
+        let amount_vt = self.shift_amount_vt(vt);
+        let up = self.dag.get_constant(u128::from(width - 1 - mask.trailing_zeros()), amount_vt);
         let shl = self.dag.get_node(ISD::Shl, vt, &[x, up]);
-        let down = self.dag.get_constant(u128::from(width - 1), EVT::I8);
+        let down = self.dag.get_constant(u128::from(width - 1), amount_vt);
         let sra = self.dag.get_node(ISD::Sra, vt, &[shl, down]);
         Some(self.dag.get_node(ISD::And, vt, &[sra, other]))
     }
@@ -897,7 +951,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
-        let narrow = super::dag::MemInfo { mem_vt: vt, ..info };
+        // `AdjustBigEndianShift`: the low bytes of a big-endian value are its
+        // last bytes
+        let offset =
+            if self.dag.config().big_endian { i64::from((wide.size_in_bits() - vt.size_in_bits()) / 8) } else { 0 };
+        let ptr = if offset == 0 { ptr } else { self.dag.get_object_ptr_offset(ptr, offset) };
+        let base = match info.base {
+            super::dag::MemBase::Stack(at) => super::dag::MemBase::Stack(at + offset as i32),
+            super::dag::MemBase::CallArgument(at) => super::dag::MemBase::CallArgument(at + offset as i32),
+            other => other,
+        };
+        let align = if offset == 0 { info.align } else { info.align.min(1 << (offset as u32).trailing_zeros()) };
+        let narrow = super::dag::MemInfo { mem_vt: vt, align, base, ..info };
         let new = self.dag.get_load(vt, chain, ptr, narrow);
         if self.dag.invariant_loads.contains(&load.node) {
             self.dag.invariant_loads.insert(new.node);
@@ -1721,6 +1786,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        if self.opt_none {
+            return None;
+        }
         let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let NodeData::Mem(info) = self.dag.node(node).data else { return None };
         if self.dag.opcode(value) != ISD::BuildPair
@@ -1771,7 +1839,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             Some(c) if c == ones => return Some(self.dag.get_negative(n0, vt)),
             _ => {}
         }
-        let shift_vt = EVT::I8;
+        let shift_vt = self.shift_amount_vt(vt);
         if let (Some(c), false) = (c1, opaque) {
             if c.is_power_of_two() {
                 let amount = self.dag.get_constant(u128::from(c.trailing_zeros()), shift_vt);

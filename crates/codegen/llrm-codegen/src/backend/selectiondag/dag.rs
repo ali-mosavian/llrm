@@ -169,6 +169,9 @@ pub struct DagConfig {
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
     pub fp_extended: bool,
+    /// `DataLayout::isBigEndian`: a narrowed load's offset counts from the
+    /// other end.
+    pub big_endian: bool,
 }
 
 impl Default for DagConfig {
@@ -182,6 +185,7 @@ impl Default for DagConfig {
             pointer: EVT::I32,
             int_div_cheap: false,
             fp_extended: false,
+            big_endian: false,
         }
     }
 }
@@ -929,7 +933,7 @@ impl SelectionDAG {
         }
         let index = self.nodes.len() as u32;
         self.nodes.push(SDNode {
-            order: self.cur_order,
+            order: if has_no_ir_order(opcode) { 0 } else { self.cur_order },
             opcode,
             values: values.to_vec(),
             ops: ops.to_vec(),
@@ -1603,4 +1607,34 @@ impl Iterator for LiveUsers<'_> {
             }
         }
     }
+}
+
+/// The nodes the pin makes with `IROrder` 0 whatever instruction is being visited (`ConstantSDNode`, `FrameIndexSDNode`,
+/// `RegisterSDNode`, `BasicBlockSDNode`, .. take no `SDLoc`; `getUNDEF` and `getPOISON` pass an empty one). The scheduler
+/// reads 0 as "no order" and ranks such a node differently from an ordered one.
+fn has_no_ir_order(opcode: ISD) -> bool {
+    use ISD::*;
+    matches!(
+        opcode,
+        Constant
+            | TargetConstant
+            | ConstantFP
+            | TargetConstantFP
+            | Register
+            | RegisterMask
+            | JumpTable
+            | TargetJumpTable
+            | SrcValue
+            | ExternalSymbol
+            | TargetExternalSymbolNode
+            | FrameIndex
+            | TargetFrameIndex
+            | ConstantPool
+            | TargetConstantPool
+            | BasicBlock
+            | ValueType
+            | CondCodeNode
+            | Undef
+            | Poison
+    )
 }

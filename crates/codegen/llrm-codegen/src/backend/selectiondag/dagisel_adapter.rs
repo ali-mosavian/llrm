@@ -169,6 +169,9 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         Load => pin::LOAD,
         Store => pin::STORE,
         AtomicSwap => pin::ATOMIC_SWAP,
+        // No x86 table names these; a target whose table does gets its own id map (B2).
+        AtomicCmpSwap | AtomicLoadAdd | AtomicLoadSub | AtomicLoadAnd | AtomicLoadOr | AtomicLoadXor
+        | AtomicLoadClr | AtomicLoad | AtomicStore => u16::MAX,
         CallSeqStart => pin::CALLSEQ_START,
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
@@ -274,16 +277,70 @@ pub fn pin_register(id: llrm_lir::registers::RegId) -> Option<u16> {
     (0..=u16::MAX.min(200)).find(|&number| phys_reg(number) == Some(id))
 }
 
+/// A target's physical registers in the pin's numbering: the ids the builder
+/// names them by, and back.
+pub trait PinRegisters {
+    fn phys_reg(
+        &self,
+        register: u16,
+    ) -> Option<llrm_lir::registers::RegId>;
+    fn pin_register(
+        &self,
+        id: llrm_lir::registers::RegId,
+    ) -> Option<u16>;
+
+    /// Whether `register` is a fixed register of the pin's with no id here (m68k's `PC`, which no
+    /// instruction names): `register_of` then answers it, so a matcher can tell it from a virtual one.
+    fn is_fixed(
+        &self,
+        _register: u16,
+    ) -> bool {
+        false
+    }
+
+    /// Whether `register` is one the target cannot map. Selection then refuses
+    /// ([`DagisAdapter::refusal`]); the default reads it as virtual.
+    fn unmapped(
+        &self,
+        _register: u16,
+    ) -> bool {
+        false
+    }
+}
+
+/// x86's registers (the default of an adapter).
+pub struct X86Registers;
+
+impl PinRegisters for X86Registers {
+    fn phys_reg(
+        &self,
+        register: u16,
+    ) -> Option<llrm_lir::registers::RegId> {
+        phys_reg(register)
+    }
+    fn pin_register(
+        &self,
+        id: llrm_lir::registers::RegId,
+    ) -> Option<u16> {
+        pin_register(id)
+    }
+}
+
 impl DagisAdapter<'_> {
     /// The `Register` node for the pin's register number: physical when the
-    /// builder names it so.
+    /// builder names it so. A number the target does not know is a virtual
+    /// register for now and a [`DagisAdapter::refusal`].
     fn register_node(
         &mut self,
         vt: EVT,
         register: u16,
     ) -> SDValue {
-        match phys_reg(register) {
+        match self.registers.phys_reg(register) {
             Some(id) => self.dag.get_phys_register(vt, id),
+            None if self.registers.unmapped(register) => {
+                self.refusal.get_or_insert_with(|| format!("pin register {register} has no id on this target"));
+                self.dag.get_register(vt, u32::from(register))
+            }
             None => self.dag.get_register(vt, u32::from(register)),
         }
     }
@@ -310,10 +367,21 @@ pub struct DagisAdapter<'a> {
     /// made, and `-(id + 1)` for an unselected successor of a selected node
     /// (`InvalidateNodeId`): topological pruning looks at positive ids only.
     node_id: Vec<i32>,
+    /// The target's registers in the pin's numbering.
+    registers: &'a dyn PinRegisters,
+    refusal: Option<String>,
 }
 
 impl<'a> DagisAdapter<'a> {
     pub fn new(dag: &'a mut SelectionDAG) -> DagisAdapter<'a> {
+        Self::with_registers(dag, &X86Registers)
+    }
+
+    /// An adapter of another target's registers.
+    pub fn with_registers(
+        dag: &'a mut SelectionDAG,
+        registers: &'a dyn PinRegisters,
+    ) -> DagisAdapter<'a> {
         // A node nothing reaches from the root is no user of what it read
         // (`hasOneUse`): the combiner deleted it, or it is a chain node it
         // replaced (a `brcond` the lowering turned into `X86ISD::BRCOND`).
@@ -331,7 +399,13 @@ impl<'a> DagisAdapter<'a> {
         for (position, node) in super::dag_select::users_first(dag).into_iter().rev().enumerate() {
             node_id[node as usize] = position as i32;
         }
-        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id }
+        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id, registers, refusal: None }
+    }
+
+    /// Why selection must be refused: the selector named a register the target
+    /// cannot map.
+    pub fn refusal(&self) -> Option<&str> {
+        self.refusal.as_deref()
     }
 
     /// `Node->setNodeId(-1)`.
@@ -491,9 +565,10 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<u16> {
         match self.dag.nodes()[node as usize].data {
-            NodeData::PhysReg(id) => pin_register(id),
+            NodeData::PhysReg(id) => self.registers.pin_register(id),
             // `$noreg`
             NodeData::Register(0) => Some(0),
+            NodeData::Register(number) => u16::try_from(number).ok().filter(|&number| self.registers.is_fixed(number)),
             _ => None,
         }
     }
@@ -715,6 +790,15 @@ impl Dag for DagisAdapter<'_> {
             _ => false,
         }
     }
+    fn fp_bits(
+        &self,
+        value: PinValue,
+    ) -> Option<u128> {
+        match self.dag.node(ours(value)).data {
+            NodeData::ConstFp { bits } => Some(bits),
+            _ => None,
+        }
+    }
     fn fp_class(
         &self,
         value: PinValue,
@@ -744,6 +828,12 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> bool {
         self.dag.nodes()[node as usize].flags.has(SDNodeFlags::DISJOINT)
+    }
+    fn has_no_unsigned_wrap(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.dag.nodes()[node as usize].flags.has(SDNodeFlags::NO_UNSIGNED_WRAP)
     }
     fn masked_value_is_zero(
         &self,
@@ -877,7 +967,15 @@ impl Dag for DagisAdapter<'_> {
     ) -> (u32, Vec<u32>) {
         let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
+        let old_operands: Vec<u32> = self.dag.nodes()[node as usize].ops.iter().map(|o| o.node).collect();
         let morphed = self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops);
+        // `SelectionDAG::MorphNodeTo` deletes the operands the new node no longer
+        // reads, and what only they read (a folded shift and its amount).
+        for operand in old_operands {
+            if operand != self.dag.entry_node().node && !self.has_live_users(operand) {
+                self.remove(operand);
+            }
+        }
         // `MorphNodeTo` reuses the node with new operands and resets its id
         // ("to the isel this is a newly allocated machine node"): left small
         // it would be pruned from a walk toward the later nodes it now reads.

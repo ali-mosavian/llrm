@@ -175,7 +175,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD | Owner | What | Where |
 |---|---|---|---|
 | SD1 | plan | MIR, not LLVM IR, is the builder's input | §2 |
-| SD2 | sdag-b | `far` is a value type, expanded into two `i16` | §2, `llrm-x86/src/dag/lowering.rs` |
+| SD2 | sdag-b | `far` is a value type, expanded into two `i16` | §2, `llrm-sdag/src/lowering.rs` |
 | SD3 | sdag-c | 16-bit real-mode address components | §2 |
 | SD4 | sdag-c | BX/SI/DI/BP address classes on virtual registers | §2 |
 | SD5 | sdag-a | calling conventions from `Convention::place` | §2 |
@@ -187,7 +187,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD11 | sdag-a | no FP constant folding | `selectiondag.rs` |
 | SD12 | sdag-a | folds needing known bits are the combiner's | `selectiondag.rs` |
 | SD13 | sdag-a | no vector types or nodes | `selectiondag.rs` |
-| SD14 | sdag-b | floating types always legal (no soften/expand) | `llrm-x86/src/dag/lowering.rs` |
+| SD14 | sdag-b | floating types always legal (no soften/expand) | `llrm-sdag/src/lowering.rs` |
 | SD15 | sdag-a | `FindMergedConditions` ported without edge probabilities | builder |
 | SD16 | sdag-a | no `LiveOutRegInfo` | builder |
 | SD17 | sdag-a | vreg numbers differ from the pin's | builder |
@@ -199,7 +199,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD23 | sdag-c | vector immediate checks never match | `llrm-dagisel/src/interp.rs` |
 | SD30 | sdag-d | scheduler: no physical-register interference, `ClusterNodes`, vreg-cycle check | `selectiondag/schedule.rs` |
 | SD31 | sdag-d | scheduler: no IR order for the call tie break | `selectiondag/schedule.rs` |
-| SD32 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `llrm-x86/src/dag/actions.rs` |
+| SD32 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `llrm-sdag/src/actions.rs` |
 | SD33 | sdag-b | no `NodeUpdateListener`; RAUW returns what it did | `selectiondag/legalize_types.rs` |
 | SD34 | sdag-c | address folds not translated: BEXTR, x32 `any_extend`, sign/zero-extend re-association | `llrm-dagisel/src/x86_addr.rs` |
 | SD35 | sdag-c | no 64-bit, x32, RIP, TLS or vector address forms | `llrm-dagisel/src/x86_addr.rs` |
@@ -221,7 +221,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD203 | sdag-b | `ExpandConstantFP`: no f80 shrinking (no APFloat), alignment by type | `selectiondag/legalize_dag.rs` |
 | SD206 | sdag-b | division by constant: register-held types only, no exact/promoted forms, generic `sdiv` pow2 sequence (no cmov form) | `selectiondag/div_combine.rs` |
 | SD207 | sdag-b | logic-of-setcc fold: `SETCC` only (no `SELECT_CC`), power-of-two query knows constants and `shl 1, x` | `selectiondag/logic_setcc.rs` |
-| SD208 | sdag-b | far call through a stack cell: `X86ISD::LLRM_FARCALL`, the pin has no far call | `llrm-x86/src/dag/x86isd.rs` |
+| SD208 | sdag-b | far call through a stack cell: `X86ISD::LLRM_FARCALL`, the pin has no far call | `llrm-sdag/src/x86isd.rs` |
 | SD209 | sdag-b | far access: `ES` set by a `CopyToReg` ordered by the chain only (no glue binds it to its access) | `selectiondag/legalize_types.rs` |
 | SD210 | sdag-b | `reassociationCanBreakAddressingModePattern`: the vscale half, the global-address offset test and `hasUniqueMemOperand` are not translated; an offset is legal when it fits 32 bits | `selectiondag/reassociate.rs` |
 | SD205 | sdag-b | ext-of-load fold: simple non-extending loads before operations are legal; every integer truncate is free (no `isTruncateFree`) | `selectiondag/dag_combiner.rs` |
@@ -279,7 +279,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD303 | sdag-c | MUL_LOHI skips `orderRegForMul` (no live-in physical registers in the DAG) and handles i32 only | `crates/backend/llrm-dagisel/src/x86_mul.rs` |
 | SD304 | sdag-c | `isKnownNeverZero` is the known-bits part only (a known set bit); the cttz `cmov` stays for values the pin proves non-zero by other means | `selectiondag/x86_lowering.rs` |
 | SD306 | sdag-c | `expandABS` leaves out the `FREEZE` of its operand (selection deletes it again; same machine code) | `selectiondag/legalize_dag.rs` |
-| SD307 | sdag-c | the m16 action table is the 32-bit one kept to the old selector's coverage, not derived from the pin (the pin has no 16-bit model); `tests/m16_coverage.rs` lists the functions that must stay selectable | `crates/target/llrm-x86/src/dag/actions.rs` |
+| SD307 | sdag-c | the m16 action table is the 32-bit one kept to the old selector's coverage, not derived from the pin (the pin has no 16-bit model); `tests/m16_coverage.rs` lists the functions that must stay selectable | `crates/codegen/llrm-sdag/src/actions.rs` |
 | SD308 | sdag-c | the second half of a split access through a far pointer moves the offset word only (no carry into the selector); a huge pointer crossing a segment would wrap | `selectiondag/legalize_types.rs` |
 | SD321 | sdag-c | `MatchRotate` matches constant shift amounts only: no `extractShiftForRotate`, disguised rotate, variable amounts (`MatchRotatePosNeg`/`MatchFunnelPosNeg`) or truncated rotate | `selectiondag/match_rotate.rs` |
 | SD252 | sdag-b | `visitIMINMAX` has no FP-to-saturate folds, no `reassociateReduction`, no `vscale` fold and no flip to the opposite signedness (no min/max is legal on this target) | `selectiondag/iminmax_combine.rs` |
@@ -291,7 +291,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD256 | sdag-b | w6: at optsize an `f32` call argument that is only a memory load (one IR user) is cast to its bits so the load folds to an integer load and the argument is `push dword ptr [m]`, where the pin does `fld; fstp` to the slot; a load shared in the DAG is read again as the integer, its old chain and the new one joined by a `TokenFactor`; the store combine undoes the cast only for a volatile or extending load. QCport -Os m16 dag -1017 B | `selectiondag/builder.rs` (`pass_float_bits`), `dag_combiner.rs` (`visit_store`) |
 | SD312 | sdag-c | DIV-OPTSIZE-1: `isIntDivCheap` is `size \|\| minsize`, the pin's is `minsize`: a constant divide stays `div`/`idiv` at -Os (~40 clocks on a 486 against ~13 for the multiply; div_constants_long m32 -Os 5095 B against the pin's 5463) | `selectiondag/dag_function.rs` |
 | SD311 | sdag-c | a fill or copy through a huge pointer calls the target's stepped routine inline with its operands in the registers it reads (the pin has no huge pointers); a `memmove` of no proven direction, or a huge pointer beside a near one, is refused | `selectiondag/builder/memops.rs` |
-| SD310 | sdag-c | a QB runtime routine's answer in the flags is `LLRM_CALL_FLAGS(CopyFromReg EFLAGS)`, read only by a compare with zero; the pin's calls answer in registers | `llrm-x86/src/dag/x86isd.rs` |
+| SD310 | sdag-c | a QB runtime routine's answer in the flags is `LLRM_CALL_FLAGS(CopyFromReg EFLAGS)`, read only by a compare with zero; the pin's calls answer in registers | `llrm-sdag/src/x86isd.rs` |
 | SD305 | sdag-c | `llrm.ia16.*` nodes (`LLRM_ASM`/`_WINDOW`/`_CODE`) pass through selection as the pseudo opcode 30010, `SEGMENT_OF` as 30011 and `LLRM_FARCALL` (24584) as 30012 and `LLRM_CODE` (24582) as 30013; not the pin's `INLINEASM` | `crates/backend/llrm-dagisel/src/x86_llrm.rs` |
 
 Next free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400 (next free per owner in their rows). A PR that takes a number adds its row in the owner's block; `tests/selectiondag_registry.rs` fails on a number declared twice, without a row, in the closed range or outside its owner's block.

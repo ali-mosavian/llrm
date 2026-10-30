@@ -157,6 +157,62 @@ pub struct Tuned {
     pub folds_masks: bool,
     /// `Machine::two_address`.
     pub two_address: bool,
+    /// `Tti::prefers_exit_ne`.
+    pub exit_ne: bool,
+}
+
+use llrm_mir::tti;
+
+struct PrefersExitNe;
+
+/// `Basic`'s prices, with `prefers_exit_ne` on.
+impl llrm_mir::tti::Tti for PrefersExitNe {
+    fn prefers_exit_ne(&self) -> bool {
+        true
+    }
+
+    fn cmp_sel_cost(&self, kind: tti::CmpSel, ty: tti::Ty, cost: tti::CostKind) -> tti::Cost {
+        tti::Basic.cmp_sel_cost(kind, ty, cost)
+    }
+
+    fn memory_op_cost(&self, op: tti::MemoryOp, ty: tti::Ty, cost: tti::CostKind, volatile: bool) -> tti::Cost {
+        tti::Basic.memory_op_cost(op, ty, cost, volatile)
+    }
+
+    fn cf_instr_cost(&self, phi: bool, kind: tti::CostKind) -> tti::Cost {
+        tti::Basic.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(&self, value: i128, bits: u32) -> tti::Cost {
+        tti::Basic.int_imm_cost(value, bits)
+    }
+
+    fn int_imm_cost_inst(&self, user: tti::ImmUser, index: u32, value: i128, bits: u32) -> tti::Cost {
+        tti::Basic.int_imm_cost_inst(user, index, value, bits)
+    }
+
+    fn is_truncate_free(&self, from: tti::Ty, to: tti::Ty) -> bool {
+        tti::Basic.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(&self, global: bool, offset: i64, base: bool, scale: i64) -> bool {
+        tti::Basic.is_legal_addressing_mode(global, offset, base, scale)
+    }
+
+    fn cast_cost(&self, kind: tti::CastKind, from: tti::Ty, to: tti::Ty, cost: tti::CostKind) -> tti::Cost {
+        tti::Basic.cast_cost(kind, from, to, cost)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: tti::ArithOp,
+        ty: tti::Ty,
+        cost: tti::CostKind,
+        lhs: tti::OperandInfo,
+        rhs: tti::OperandInfo,
+    ) -> tti::Cost {
+        tti::Basic.arithmetic_cost(op, ty, cost, lhs, rhs)
+    }
 }
 
 struct FoldsMasks;
@@ -168,6 +224,10 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 }
 
 impl llrm_mir::target::Machine for Tuned {
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        self.exit_ne.then(|| std::rc::Rc::new(PrefersExitNe) as _)
+    }
+
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
         self.folds_masks.then(|| std::rc::Rc::new(FoldsMasks) as _)
     }

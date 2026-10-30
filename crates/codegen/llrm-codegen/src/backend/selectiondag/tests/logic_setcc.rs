@@ -105,13 +105,14 @@ fn tests_against_zero_share_one_or() {
     }
 }
 
-/// `x != 0 && x != -1` is `x + 1 >=u 2`.
+/// `x != 0 && x != -1` is `x + 1 >=u 2`, which `SimplifySetCC` makes `x + 1 >u 1`.
 #[test]
 fn not_zero_and_not_all_ones_is_an_unsigned_range() {
     let zero = |dag: &mut SelectionDAG, x, _| (x, dag.get_constant(0, EVT::I32));
     let ones = |dag: &mut SelectionDAG, x, _| (x, dag.get_constant(0xFFFF_FFFF, EVT::I32));
     let (dag, root) = fold(ISD::And, (&zero, &ones), (CondCode::SetNe, CondCode::SetNe));
-    assert_eq!(dag.node(dag.operand(root, 2)).data, NodeData::CondCode(CondCode::SetUGe));
+    assert_eq!(dag.node(dag.operand(root, 2)).data, NodeData::CondCode(CondCode::SetUGt));
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(1));
 }
 
 /// Two compares of the same pair combine their codes: `x <u y && x != y` is

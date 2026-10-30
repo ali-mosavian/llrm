@@ -241,6 +241,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-analysis",
  "llrm-codegen",
+ "llrm-dagisel",
  "llrm-dwarf",
  "llrm-elf",
  "llrm-env",
@@ -249,6 +250,7 @@ dependencies = [
  "llrm-macho",
  "llrm-mir",
  "llrm-object",
+ "llrm-sdag",
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
@@ -327,6 +329,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-cgen"
+version = "0.1.0"
+
+[[package]]
 name = "llrm-codegen"
 version = "0.1.0"
 dependencies = [
@@ -344,6 +350,7 @@ dependencies = [
  "llrm-omf",
  "llrm-peepgen",
  "llrm-qbruntime",
+ "llrm-sdag",
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
@@ -463,6 +470,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-m68k"
+version = "0.1.0"
+dependencies = [
+ "llrm-analysis",
+ "llrm-cgen",
+ "llrm-codegen",
+ "llrm-dagisel",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-spike-mf",
+ "llrm-target",
+ "llrm-transforms",
+]
+
+[[package]]
 name = "llrm-macho"
 version = "0.1.0"
 dependencies = [
@@ -574,6 +596,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-sdag"
+version = "0.1.0"
+dependencies = [
+ "llrm-support",
+]
+
+[[package]]
+name = "llrm-spike-mf"
+version = "0.1.0"
+dependencies = [
+ "llrm-lir",
+ "llrm-mir",
+]
+
+[[package]]
 name = "llrm-sroa-poc"
 version = "0.1.0"
 dependencies = [
@@ -625,6 +662,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-wasm"
+version = "0.1.0"
+dependencies = [
+ "llrm-codegen",
+ "llrm-dagisel",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-target",
+]
+
+[[package]]
 name = "llrm-x86"
 version = "0.1.0"
 dependencies = [
@@ -638,6 +686,7 @@ dependencies = [
  "llrm-mir",
  "llrm-object",
  "llrm-omf",
+ "llrm-sdag",
  "llrm-support",
  "llrm-target",
  "tempfile",
