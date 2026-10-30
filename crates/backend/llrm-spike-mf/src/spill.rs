@@ -369,10 +369,9 @@ fn slot_access<C>(
 ) -> Option<(usize, bool)> {
     let slot = inst.operands.iter().find_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None })?;
     let at = slots.iter().position(|(s, _)| *s == slot)?;
-    match inst.operands.first()? {
+    match inst.operands.iter().find(|o| matches!(o, Operand::Use(_) | Operand::Def(_)))? {
         Operand::Use(_) => Some((at, true)),
-        Operand::Def(_) => Some((at, false)),
-        _ => None,
+        _ => Some((at, false)),
     }
 }
 
