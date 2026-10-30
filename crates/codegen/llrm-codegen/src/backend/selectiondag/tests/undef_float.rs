@@ -14,7 +14,15 @@ fn an_undef_float_is_zero() {
         let mut dag = dag();
         let (ptr, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
         let undef = dag.get_undef(vt);
-        let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base: MemBase::Stack(1), ext: None, space: 0, ordering: None };
+        let info = MemInfo {
+            mem_vt: vt,
+            align: 4,
+            volatile: false,
+            base: MemBase::Stack(1),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let store = dag.get_store(chain, undef, ptr, info);
         dag.set_root(store);
         DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false })

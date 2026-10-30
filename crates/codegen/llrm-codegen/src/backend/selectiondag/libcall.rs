@@ -84,8 +84,15 @@ pub fn lib_call(
                 let offset = dag.get_constant(offset as u128, env.pointer);
                 let address = dag.get_node(ISD::Add, env.pointer, &[sp, offset]);
                 let vt = dag.value_type(*value);
-                let mem =
-                    MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Unknown, ext: None, space: 0, ordering: None };
+                let mem = MemInfo {
+                    mem_vt: vt,
+                    align: 1,
+                    volatile: false,
+                    base: MemBase::Unknown,
+                    ext: None,
+                    space: 0,
+                    ordering: None,
+                };
                 stores.push(dag.get_store(chain, *value, address, mem));
             }
             Place::Register(reg) => copies.push((reg, *value)),

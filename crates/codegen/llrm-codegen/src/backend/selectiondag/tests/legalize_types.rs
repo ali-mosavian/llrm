@@ -9,7 +9,15 @@ fn load(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0, ordering: None };
+    let info = MemInfo {
+        mem_vt: vt,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(slot),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     dag.get_load(vt, chain, ptr, info)
 }
 
@@ -106,7 +114,15 @@ fn a_zero_extending_i64_load_from_a_dword_has_a_zero_high_half() {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut dag = dag();
     let (ptr, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
-    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(1), ext: None, space: 0, ordering: None };
+    let info = MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(1),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let wide = dag.get_ext_load(super::super::actions::LoadExt::ZExtLoad, EVT::I64, chain, ptr, info);
     let thirty_two = dag.get_constant(32, EVT::I8);
     let shifted = dag.get_node(ISD::Srl, EVT::I64, &[wide, thirty_two]);
@@ -127,7 +143,15 @@ fn the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector() {
     let mut dag = dag();
     let (chain, offset, selector) = (dag.entry_node(), dag.get_register(EVT::I16, 7), dag.get_register(EVT::I16, 8));
     let far = dag.get_node(ISD::BuildPair, EVT::Simple(MVT::Far), &[offset, selector]);
-    let info = MemInfo { mem_vt: EVT::I64, align: 2, volatile: false, base: MemBase::Unknown, ext: None, space: 259, ordering: None };
+    let info = MemInfo {
+        mem_vt: EVT::I64,
+        align: 2,
+        volatile: false,
+        base: MemBase::Unknown,
+        ext: None,
+        space: 259,
+        ordering: None,
+    };
     let wide = dag.get_load(EVT::I64, chain, far, info);
     let zero = dag.get_constant(0, EVT::I8);
     let shifted = dag.get_node(ISD::Srl, EVT::I64, &[wide, zero]);

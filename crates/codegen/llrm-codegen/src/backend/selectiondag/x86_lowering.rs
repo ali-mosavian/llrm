@@ -1496,8 +1496,15 @@ fn lower_fp_to_int(
         value = shifted;
         adjust = Some(flip);
     }
-    let info =
-        MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0, ordering: None };
+    let info = MemInfo {
+        mem_vt: stored_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let fist = dag.intern(
         x86isd::FP_TO_INT_IN_MEM,
         &[EVT::OTHER],
@@ -1526,8 +1533,15 @@ fn lower_lrint(
     let index = dag.create_stack_temporary(size, size);
     let slot = dag.get_frame_index(dag.config().pointer, index);
     let chain = dag.entry_node();
-    let info =
-        MemInfo { mem_vt: result_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0, ordering: None };
+    let info = MemInfo {
+        mem_vt: result_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let fist =
         dag.intern(x86isd::FIST, &[EVT::OTHER], &[chain, value, slot], SDNodeFlags::default(), NodeData::Mem(info));
     Some(dag.get_load(result_vt, fist, slot, info))
@@ -1661,8 +1675,15 @@ fn lower_vastart(
     };
     if pointer != EVT::I64 {
         let first = dag.get_frame_index(pointer, index);
-        let info =
-            MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0, ordering: None };
+        let info = MemInfo {
+            mem_vt: pointer,
+            align: pointer.size_in_bits() / 8,
+            volatile: false,
+            base,
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         return Some(dag.get_store(chain, first, list, info));
     }
     let (save, gp_offset) = dag.var_args_save?;

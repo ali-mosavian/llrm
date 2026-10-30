@@ -308,7 +308,15 @@ mod tests {
     use crate::backend::selectiondag::dag_combiner::{CombineLevel, NoCombines, combine};
 
     fn info() -> MemInfo {
-        MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0, ordering: None }
+        MemInfo {
+            mem_vt: EVT::I32,
+            align: 4,
+            volatile: false,
+            base: MemBase::Unknown,
+            ext: None,
+            space: 0,
+            ordering: None,
+        }
     }
 
     /// The root after one combine, from a token factor made of `build`'s

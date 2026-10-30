@@ -237,8 +237,9 @@ fn an_inexact_single_quotient_is_not_folded_under_extended_evaluation() {
 /// plain load its twin is.
 #[test]
 fn loads_that_differ_in_ordering_are_not_merged() {
-    use crate::backend::selectiondag::{MemBase, MemInfo};
     use llrm_mir::opcode::AtomicOrdering;
+
+    use crate::backend::selectiondag::{MemBase, MemInfo};
     let mut dag = dag();
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();

@@ -129,8 +129,15 @@ pub fn preprocess(
         let size = mem.size_in_bits().div_ceil(8);
         let index = frame.create_stack_temporary(size, size);
         let slot = dag.get_frame_index(dag.config().pointer, index);
-        let info =
-            MemInfo { mem_vt: mem, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0, ordering: None };
+        let info = MemInfo {
+            mem_vt: mem,
+            align: size,
+            volatile: false,
+            base: MemBase::Stack(index),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let chain = dag.entry_node();
         let store = dag.get_store(chain, source, slot, info);
         let reloaded = if mem == to {
