@@ -44,11 +44,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
     }
 
+    /// `getShiftAmountConstant`: `count` in the type the target shifts `vt` by.
     fn shift_amount(
         &mut self,
         count: u32,
+        vt: EVT,
     ) -> SDValue {
-        self.dag.get_constant(u128::from(count), EVT::I8)
+        let amount_vt = self.shift_amount_vt(vt);
+        self.dag.get_constant(u128::from(count), amount_vt)
     }
 
     /// The high half of `x * y` (`GetMULHS`/`GetMULHU`): the node, or the
@@ -79,7 +82,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let extend = if signed { ISD::SignExtend } else { ISD::ZeroExtend };
             let (x, y) = (self.dag.get_node(extend, wide, &[x]), self.dag.get_node(extend, wide, &[y]));
             let product = self.dag.get_node(ISD::Mul, wide, &[x, y]);
-            let amount = self.shift_amount(bits);
+            let amount = self.shift_amount(bits, wide);
             let high = self.dag.get_node(ISD::Srl, wide, &[product, amount]);
             return Some(self.dag.get_node(ISD::Truncate, vt, &[high]));
         }
@@ -150,12 +153,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if let Some(c) = divisor.filter(|&c| c != 0 && !exact) {
             let negated = c.wrapping_neg() & super::fold::mask(bits);
             if c.is_power_of_two() || negated.is_power_of_two() {
+                // `BuildSDIVPow2` of the default hook: `SDValue(N, 0)`, the divide as it is.
+                if self.dag.config().sdiv_pow2_stays {
+                    return Some(node);
+                }
                 // `Sign = x >> (bits-1)`, add `Sign >>> (bits - log2 |d|)`,
                 // shift right by `log2 |d|`; a negative divisor
                 // negates.
                 let log = c.trailing_zeros();
                 let (top, inexact, by) =
-                    (self.shift_amount(bits - 1), self.shift_amount(bits - log), self.shift_amount(log));
+                    (self.shift_amount(bits - 1, vt), self.shift_amount(bits - log, vt), self.shift_amount(log, vt));
                 let sign = self.dag.get_node(ISD::Sra, vt, &[n0, top]);
                 let srl = self.dag.get_node(ISD::Srl, vt, &[sign, inexact]);
                 let sum = self.dag.get_node(ISD::Add, vt, &[n0, srl]);
@@ -204,9 +211,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let factor = self.dag.get_constant(factor, vt);
         let scaled = self.dag.get_node(ISD::Mul, vt, &[n0, factor]);
         let sum = self.dag.get_node(ISD::Add, vt, &[high, scaled]);
-        let by = self.shift_amount(shift);
+        let by = self.shift_amount(shift, vt);
         let quotient = self.dag.get_node(ISD::Sra, vt, &[sum, by]);
-        let top = self.shift_amount(bits - 1);
+        let top = self.shift_amount(bits - 1, vt);
         let sign = self.dag.get_node(ISD::Srl, vt, &[quotient, top]);
         let sign_mask = self.dag.get_constant(sign_mask, vt);
         let sign = self.dag.get_node(ISD::And, vt, &[sign, sign_mask]);
@@ -241,7 +248,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let vt = self.dag.value_type(node);
         if let Some(c) = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1)) {
             if c.is_power_of_two() {
-                let by = self.shift_amount(c.trailing_zeros());
+                let by = self.shift_amount(c.trailing_zeros(), vt);
                 return Some(self.dag.get_node(ISD::Srl, vt, &[n0, by]));
             }
         }
@@ -284,19 +291,19 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let found = unsigned_magic(d, bits, leading, true, false);
         let mut quotient = n0;
         if found.pre_shift != 0 {
-            let by = self.shift_amount(found.pre_shift);
+            let by = self.shift_amount(found.pre_shift, vt);
             quotient = self.dag.get_node(ISD::Srl, vt, &[quotient, by]);
         }
         let magic = self.dag.get_constant(found.magic, vt);
         quotient = self.multiply_high(false, vt, quotient, magic)?;
         if found.is_add {
             let difference = self.dag.get_node(ISD::Sub, vt, &[n0, quotient]);
-            let one = self.shift_amount(1);
+            let one = self.shift_amount(1, vt);
             let half = self.dag.get_node(ISD::Srl, vt, &[difference, one]);
             quotient = self.dag.get_node(ISD::Add, vt, &[half, quotient]);
         }
         if found.post_shift != 0 {
-            let by = self.shift_amount(found.post_shift);
+            let by = self.shift_amount(found.post_shift, vt);
             quotient = self.dag.get_node(ISD::Srl, vt, &[quotient, by]);
         }
         Some(quotient)

@@ -140,3 +140,10 @@ fn internal_functions_are_not_global() {
 fn promoted_loads_are_any_extending() {
     check("anyext_load");
 }
+
+/// Division by a power of two or a constant combined to a shift whose amount was an `i8`; wasm shifts by the
+/// type's own width, so type legalization stopped on "Srl promote operand".
+#[test]
+fn division_by_constants() {
+    check("div_pow2");
+}

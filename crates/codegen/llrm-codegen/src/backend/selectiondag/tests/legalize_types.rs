@@ -90,11 +90,11 @@ fn an_unhandled_node_is_refused_by_name() {
     let mut dag = dag();
     let a = load(&mut dag, EVT::Int(12), 1);
     let b = load(&mut dag, EVT::Int(12), 2);
-    let shifted = dag.get_node(ISD::UDiv, EVT::Int(12), &[a, b]);
+    let shifted = dag.get_node(ISD::Rotl, EVT::Int(12), &[a, b]);
     let byte = dag.get_node(ISD::Truncate, EVT::I8, &[shifted]);
     dag.set_root(byte);
     let error = legalize(&mut dag, &tli).unwrap_err();
-    assert!(matches!(error, LegalizeError::Unsupported { op: ISD::UDiv, .. }), "{error:?}");
+    assert!(matches!(error, LegalizeError::Unsupported { op: ISD::Rotl, .. }), "{error:?}");
 }
 
 /// A zero-extending `i64` load from a dword expanded as two dword loads (the

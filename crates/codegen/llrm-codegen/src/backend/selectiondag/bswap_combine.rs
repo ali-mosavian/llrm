@@ -50,7 +50,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 || self.tli.is_some_and(|tli| tli.is_operation_legal(shift, vt));
             if legal {
                 let by = leading.abs_diff(trailing);
-                let by = self.dag.get_constant(u128::from(by), EVT::I8);
+                let amount_vt = self.shift_amount_vt(vt);
+                let by = self.dag.get_constant(u128::from(by), amount_vt);
                 return Some(self.dag.get_node(shift, vt, &[src, by]));
             }
         }

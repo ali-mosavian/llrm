@@ -182,10 +182,11 @@ pub fn select_block(
     let tli = target_lowering(cpu);
     let mut lowering = WasmLowering { tables };
     DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).with_opt_none().run();
-    TypeLegalizer::new(dag, &tli)
-        .with_hooks(&mut lowering)
-        .run()
-        .map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
+    let legalized = TypeLegalizer::new(dag, &tli).with_hooks(&mut lowering).run();
+    if legalized.is_err() && llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some() {
+        eprintln!("{}", dag.dump());
+    }
+    legalized.map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
     DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).with_opt_none().run();
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
     DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).with_opt_none().run();

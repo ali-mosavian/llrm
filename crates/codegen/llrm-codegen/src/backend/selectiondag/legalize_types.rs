@@ -37,6 +37,7 @@
 //! `ReplaceValueWith`
 //! ([L636](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeTypes.cpp#L636)).
 
+use llrm_sdag::lowering::ShiftAmount;
 use llrm_mir::hash::HashSet;
 use llrm_support::hash::HashMap;
 
@@ -81,6 +82,20 @@ pub struct TypeLegalizer<'a> {
 }
 
 impl<'a> TypeLegalizer<'a> {
+    /// `getShiftAmountConstant`: `k` in the type the target shifts `vt` by (`i8` on x86).
+    fn shift_const(
+        &mut self,
+        k: u128,
+        vt: EVT,
+    ) -> SDValue {
+        let amount_vt = match self.tli.types.shift_amount() {
+            ShiftAmount::I8 => EVT::I8,
+            ShiftAmount::ByValue => vt,
+            ShiftAmount::Fixed(fixed) => EVT::Simple(fixed),
+        };
+        self.dag.get_constant(k, amount_vt)
+    }
+
     pub fn new(
         dag: &'a mut SelectionDAG,
         tli: &'a TargetLowering,
@@ -449,6 +464,27 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
+            op @ (ISD::SDiv | ISD::SRem | ISD::UDiv | ISD::URem) => {
+                // `PromoteIntRes_SDIV/UDIV`: both operands extended in the register, signed for a signed
+                // divide, zero for an unsigned one.
+                let signed = matches!(op, ISD::SDiv | ISD::SRem);
+                let mut extended = Vec::with_capacity(2);
+                for at in 0..2 {
+                    let operand = self.dag.operand(value, at);
+                    let bits = self.dag.value_type(operand).size_in_bits();
+                    let promoted = self.promoted_integer(operand);
+                    let wide = self.dag.value_type(promoted);
+                    extended.push(if signed {
+                        let ty = self.dag.get_value_type_node(self.dag.value_type(operand));
+                        self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
+                    } else {
+                        let mask = self.dag.get_constant(super::fold::mask(bits), wide);
+                        self.dag.get_node(ISD::And, wide, &[promoted, mask])
+                    });
+                }
+                let wide = self.dag.value_type(extended[0]);
+                self.dag.get_node(op, wide, &extended)
+            }
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => {
                 // `PromoteIntRes_SHL/SRL/SRA`: the value promoted, with the
                 // bits above its width cleared (srl) or sign-filled (sra); a
@@ -464,7 +500,7 @@ impl<'a> TypeLegalizer<'a> {
                         self.dag.get_node(ISD::And, wide, &[promoted, mask])
                     }
                     _ => {
-                        let by = self.dag.get_constant(u128::from(wide.size_in_bits() - bits), EVT::I8);
+                        let by = self.shift_const(u128::from(wide.size_in_bits() - bits), wide);
                         let high = self.dag.get_node(ISD::Shl, wide, &[promoted, by]);
                         self.dag.get_node(ISD::Sra, wide, &[high, by])
                     }
@@ -704,7 +740,7 @@ impl<'a> TypeLegalizer<'a> {
                 let promoted = self.promoted_integer(self.dag.operand(node, 1));
                 let wide = self.dag.value_type(promoted);
                 let low = self.dag.get_node(ISD::Truncate, round, &[promoted]);
-                let by = self.dag.get_constant(u128::from(round.size_in_bits()), EVT::I8);
+                let by = self.shift_const(u128::from(round.size_in_bits()), wide);
                 let upper = self.dag.get_node(ISD::Srl, wide, &[promoted, by]);
                 let upper = self.dag.get_node(ISD::Truncate, extra, &[upper]);
                 let high_ptr = self.address_plus(ptr, u128::from(round.size_in_bits() / 8));
@@ -745,7 +781,7 @@ impl<'a> TypeLegalizer<'a> {
                     let promoted = legalizer.promoted_integer(value);
                     let wide = legalizer.dag.value_type(promoted);
                     if code.is_signed_int() {
-                        let by = legalizer.dag.get_constant(u128::from(wide.size_in_bits() - bits), EVT::I8);
+                        let by = legalizer.shift_const(u128::from(wide.size_in_bits() - bits), wide);
                         let high = legalizer.dag.get_node(ISD::Shl, wide, &[promoted, by]);
                         legalizer.dag.get_node(ISD::Sra, wide, &[high, by])
                     } else {
@@ -812,7 +848,7 @@ impl<'a> TypeLegalizer<'a> {
                     let shifted = if at_bit == 0 {
                         promoted
                     } else {
-                        let by = self.dag.get_constant(u128::from(at_bit), EVT::I8);
+                        let by = self.shift_const(u128::from(at_bit), wide);
                         self.dag.get_node(ISD::Srl, wide, &[promoted, by])
                     };
                     let part = self.dag.get_node(ISD::Truncate, vt, &[shifted]);
@@ -1529,7 +1565,7 @@ impl<'a> TypeLegalizer<'a> {
         let wide = self.dag.value_type(value);
         let bits = wide.size_in_bits();
         let (product_lo, product_hi) = super::expand_fixed::force_expand_multiply(self.dag, true, lhs, rhs);
-        let sign_shift = self.dag.get_constant(u128::from(bits - 1), EVT::I8);
+        let sign_shift = self.shift_const(u128::from(bits - 1), wide);
         let sign = self.dag.get_node(ISD::Sra, wide, &[product_lo, sign_shift]);
         let overflow_vt = self.dag.node(value).values[1];
         let overflow = self.dag.get_setcc(overflow_vt, product_hi, sign, CondCode::SetNe);

@@ -184,7 +184,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
 
     /// `getShiftAmountConstant`'s type: what the target shifts `vt` by (`i8`
     /// with no table, as on x86).
-    fn shift_amount_vt(
+    pub(super) fn shift_amount_vt(
         &self,
         vt: EVT,
     ) -> EVT {
