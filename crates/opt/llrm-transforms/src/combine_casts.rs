@@ -812,7 +812,7 @@ pub fn common_cast_transforms(
         let cmp = def_of(c, c.function.instruction(select).operands[0])
             .filter(|&def| matches!(
                 c.function.instruction(def).opcode,
-                Opcode::ICmp(_) | Opcode::FCmp(_)
+                Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::Cast(CastOp::Trunc)
             ));
         let compares_select_type =
             cmp.is_some_and(|cmp| c.type_of(c.function.instruction(cmp).operands[0]) == c.type_of(src));
