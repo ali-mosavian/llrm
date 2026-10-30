@@ -152,3 +152,21 @@ fn play_hands_its_tones_to_the_host() {
     assert_eq!(hertz, [524, 0, 588, 0, 0]);
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// The page's worker (runtime/wasm/web/worker.mjs) on a thread of its own: a key from the page's ring ends an INPUT, the
+/// program's tune reaches the page as tones, and frames come back. `check.mjs` drives it as main.mjs does.
+#[test]
+fn the_pages_worker_takes_keys_and_sends_frames_and_tones() {
+    let dir = built("page", "INPUT \"key\"; k$\nPLAY \"T120 L16 CDE\"\nEND\n");
+    let ran = Command::new("timeout")
+        .args(["-k", "5", "90", "node"])
+        .arg(root().join("runtime/wasm/web/check.mjs"))
+        .arg(dir.join("page.wasm"))
+        .args(["--keys", "x\\r"])
+        .output()
+        .expect("node runs");
+    let out = String::from_utf8_lossy(&ran.stdout);
+    assert!(out.contains("\"tones\":[524,0,588,0,0]") && out.contains("\"size\":[640,400]") && out.contains("\"code\":0"), "{out} {}", String::from_utf8_lossy(&ran.stderr));
+    assert!(!out.contains("\"frames\":0,"), "{out}");
+    std::fs::remove_dir_all(dir).ok();
+}
