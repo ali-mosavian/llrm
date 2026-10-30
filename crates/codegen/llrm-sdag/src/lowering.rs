@@ -63,6 +63,8 @@ pub enum ShiftAmount {
     I8,
     /// The shifted type (m68k).
     ByValue,
+    /// The pointer-sized integer, the default (AArch64: `i64`).
+    Fixed(MVT),
 }
 
 impl TargetLoweringInfo {
@@ -94,6 +96,12 @@ impl TargetLoweringInfo {
     /// (`M68kTargetLowering::getScalarShiftAmountTy`).
     pub fn with_shift_by_value_type(mut self) -> TargetLoweringInfo {
         self.shift_amount = ShiftAmount::ByValue;
+        self
+    }
+
+    /// A shift's amount is a constant of `vt` (`getScalarShiftAmountTy`).
+    pub fn with_shift_amount_type(mut self, vt: MVT) -> TargetLoweringInfo {
+        self.shift_amount = ShiftAmount::Fixed(vt);
         self
     }
 

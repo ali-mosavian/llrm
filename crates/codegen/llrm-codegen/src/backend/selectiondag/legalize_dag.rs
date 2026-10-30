@@ -199,6 +199,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let want = match self.tli.types.shift_amount() {
             ShiftAmount::I8 => EVT::I8,
             ShiftAmount::ByValue => self.dag.value_type(at),
+            ShiftAmount::Fixed(vt) => EVT::Simple(vt),
         };
         if !self.dag.value_type(amount).is_integer() || self.dag.value_type(amount) == want {
             return n;
