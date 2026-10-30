@@ -115,11 +115,12 @@ fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
 /// fix-by 2026-11-07): the checks
 /// are folded. The pin keeps them: its ArgumentPromotion refuses a recursive
 /// function's descriptor that holds a pointer (ArgumentPromotion.cpp#L581 at
-/// d1106deb71cc), so `opt -O2` keeps the descriptor argument and all three
-/// `call @N$EBND` (one in `safe`, two in `place`). Ours promotes the length,
+/// d1106deb71cc), so `opt -O2` keeps the descriptor argument and both
+/// `call @N$EBND` (one in `safe`, one in `place`; measured with the pin's
+/// `opt -passes='default<O2>'` over queens' IR, with and without `noinline`). Ours promotes the length,
 /// the extra IPSCCP folds it (queens -O2: 225467 to 182177 instructions).
 /// Exit: by-value slice parameters (#6140) remove the descriptor, then #6159
-/// lands and this returns to the pin shape: the three calls.
+/// lands and this returns to the pin shape: the two calls.
 #[test]
 fn test_nib_queens_folds_its_bounds_checks_where_the_pin_keeps_them() {
     let asm = compiled(
@@ -158,10 +159,9 @@ fn test_nib_reads_a_local_array_slice_through_ss() {
     assert!(body.contains("ss:[") && !body.contains("les "), "{asm}");
 }
 
-/// The exit of the DEVIATE above: the pin's shape, the checks stay. Run it with
-/// `--ignored`; #6159 turns it on and the test above goes. (#6159's build has
-/// two calls; the three the pin's `opt -O2` keeps were counted in a0ed5eb43,
-/// not re-measured.)
+/// The exit of the DEVIATE above: the pin's shape, the two checks stay (the pin's
+/// `opt -O2` and #6159's build both have two; a0ed5eb43's "three" was wrong).
+/// Run it with `--ignored`; #6159 turns it on and the test above goes.
 #[test]
 #[ignore = "the pin shape: on when #6159 lands (exit of the extra IPSCCP DEVIATE)"]
 fn test_nib_queens_keeps_its_bounds_checks_as_the_pin_does() {
@@ -171,5 +171,5 @@ fn test_nib_queens_keeps_its_bounds_checks_as_the_pin_does() {
         include_str!("../bench/queens/queens.nib"),
         &["-fno-inline-functions", "-fno-inline-functions-called-once"],
     );
-    assert!(asm.contains("call far ptr N$EBND"), "{asm}");
+    assert_eq!(asm.matches("call far ptr N$EBND").count(), 2, "{asm}");
 }
