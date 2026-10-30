@@ -186,6 +186,8 @@ pub enum ISD {
     /// `ATOMIC_LOAD` and `ATOMIC_STORE`.
     AtomicLoad,
     AtomicStore,
+    /// `ATOMIC_FENCE`: `(chain, ordering, scope)` as target constants, to a chain.
+    AtomicFence,
     CallSeqStart,
     CallSeqEnd,
     DynamicStackAlloc,
@@ -360,6 +362,7 @@ impl ISD {
             AtomicLoadClr => "atomic_load_clr",
             AtomicLoad => "atomic_load",
             AtomicStore => "atomic_store",
+            AtomicFence => "atomic_fence",
             CallSeqStart => "callseq_start",
             CallSeqEnd => "callseq_end",
             DynamicStackAlloc => "dynamic_stackalloc",
@@ -590,5 +593,6 @@ mod tests {
         assert_eq!(ISD::AtomicCmpSwap.name(), "atomic_cmp_swap");
         assert_eq!(ISD::AtomicCmpSwapWithSuccess.name(), "atomic_cmp_swap_with_success");
         assert_eq!(ISD::AtomicStore.name(), "atomic_store");
+        assert_eq!(ISD::AtomicFence.name(), "atomic_fence");
     }
 }

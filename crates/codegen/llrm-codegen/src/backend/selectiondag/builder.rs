@@ -1233,6 +1233,21 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         use llrm_mir::opcode::{AtomicKind, RmwOp};
         let arguments = &instruction.operands[..instruction.operands.len() - 1];
+        if info.kind == AtomicKind::Fence {
+            use llrm_mir::opcode::AtomicOrdering::*;
+            let ordering = match info.ordering {
+                Unordered => 1,
+                Monotonic => 2,
+                Acquire => 4,
+                Release => 5,
+                AcqRel => 6,
+                SeqCst => 7,
+            };
+            let root = self.root();
+            let fence = self.dag.get_atomic_fence(root, ordering, info.single_thread);
+            self.dag.set_root(fence);
+            return Ok(());
+        }
         let (pointer, value) = match info.kind {
             AtomicKind::Load => (arguments[0], None),
             AtomicKind::Store => (arguments[1], Some(arguments[0])),

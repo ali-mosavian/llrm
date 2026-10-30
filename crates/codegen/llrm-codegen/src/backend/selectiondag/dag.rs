@@ -1279,6 +1279,19 @@ impl SelectionDAG {
         node
     }
 
+    /// `ATOMIC_FENCE`: only a chain. The ordering (LLVM's numbering) and the scope are target
+    /// constants, as `SelectionDAGBuilder::visitFence` builds them.
+    pub fn get_atomic_fence(
+        &mut self,
+        chain: SDValue,
+        ordering: u8,
+        single_thread: bool,
+    ) -> SDValue {
+        let ordering = self.get_constant_with(u128::from(ordering), EVT::I64, true, false);
+        let scope = self.get_constant_with(u128::from(!single_thread), EVT::I64, true, false);
+        self.intern(ISD::AtomicFence, &[EVT::OTHER], &[chain, ordering, scope], SDNodeFlags::default(), NodeData::None)
+    }
+
     /// `getAtomic` of `ATOMIC_LOAD`: the value at `ptr` and a chain.
     pub fn get_atomic_load(
         &mut self,

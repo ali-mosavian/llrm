@@ -818,3 +818,14 @@ fn a_cmpxchg_selects_the_cas_of_its_ordering_and_a_flag_from_the_compare() {
         assert_eq!(selected(&ir(order, "i32")).unwrap(), [[cas, "SUBSWrr", "CSINCWr", "RET_ReallyLR"]], "{order}");
     }
 }
+
+/// A `fence` was refused (no `ATOMIC_FENCE` node). The pin selects `DMB ishld` for an acquire
+/// fence, `DMB ish` for the others, and `MEMBARRIER` for a single-thread one.
+#[test]
+fn a_fence_selects_a_dmb_by_its_ordering() {
+    let ir = |scope: &str, order: &str| format!("define void @f() {{\n  fence {scope}{order}\n  ret void\n}}");
+    for (order, expect) in [("acquire", "DMB"), ("release", "DMB"), ("seq_cst", "DMB")] {
+        assert_eq!(selected(&ir("", order)).unwrap(), [[expect, "RET_ReallyLR"]], "{order}");
+    }
+    assert_eq!(selected(&ir("syncscope(\"singlethread\") ", "seq_cst")).unwrap(), [["MEMBARRIER", "RET_ReallyLR"]]);
+}
