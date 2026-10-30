@@ -1359,3 +1359,32 @@ fn minsize_constant_arguments_are_pushed_not_stored() {
     assert_eq!(&names[call - 2..call], ["push", "push"], "both arguments are pushed: {names:?}");
     assert!(!names.iter().any(|n| n == "and" || n == "or"), "no constant store is left: {names:?}");
 }
+
+const MINSIZE_CONSTANT_STORES: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+@a = global i16 7
+@b = global i32 7
+define void @f() minsize {
+entry:
+  store i16 0, ptr @a
+  store i32 -1, ptr @b
+  ret void
+}
+";
+
+/// The pin's `OptForMinSize` store patterns (X86InstrCompiler.td:1308) key on
+/// the function's `minsize`, which the selector ignored: `mov dword [b], -1`
+/// (9 B at m16) stayed where `or dword [b], -1` is 6.
+#[test]
+fn minsize_stores_of_zero_and_minus_one_are_and_or() {
+    let module = crate::testing::module(MINSIZE_CONSTANT_STORES).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    assert!(names.iter().any(|n| n == "and") && names.iter().any(|n| n == "or"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "mov"), "no mov of an immediate is left: {names:?}");
+}
