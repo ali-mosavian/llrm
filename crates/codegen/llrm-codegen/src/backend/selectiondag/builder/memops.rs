@@ -1082,6 +1082,10 @@ impl Builder<'_> {
         let count = self.dag.get_zext_or_trunc(size, pointer);
         let whole = super::super::known_bits::known_bits(&self.dag, size).zero.trailing_ones();
         let block = match self.dag.constant(value) {
+            // A constant size keeps the byte fill: its wider unit moved a store
+            // and grew matmul and bintree by 4 bytes; the gain is a dynamic
+            // one.
+            Some(_) if self.dag.constant(size).is_some() => 1,
             // A word in 32-bit code is an operand-size prefix and no gain.
             Some(_) => match (1u64 << whole.min(2)).min(if self.has_opt_size() { word } else { word.max(4) }) {
                 2 if word == 4 => 1,

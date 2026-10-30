@@ -1563,3 +1563,10 @@ entry:
         .count();
     assert_eq!(shifts, 0);
 }
+
+/// matmul bas/bq16 -O2 grew 4 bytes when a 66-byte constant `memset` took
+/// `rep stosw`: only a size that is not a constant widens.
+#[test]
+fn a_fill_of_a_constant_size_that_is_not_a_dword_multiple_stays_bytes() {
+    assert_eq!(dynamic_fill_unit_of("%s = add i16 66, 0", 0, "486").as_deref(), Some("1"));
+}
