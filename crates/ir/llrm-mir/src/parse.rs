@@ -390,6 +390,10 @@ impl Parser {
                     map(&mut record.variable);
                     record.expression.iter_mut().for_each(map);
                     record.location.iter_mut().for_each(map);
+                    if let DebugWhat::Assign { id, address_expression, .. } = &mut record.what {
+                        map(id);
+                        map(address_expression);
+                    }
                 }
                 for instruction in &mut function.instructions {
                     instruction.metadata.iter_mut().for_each(|(_, id)| map(id));
@@ -1233,6 +1237,25 @@ impl Parser {
 
     /// A debug record's expression or location: `!N` or a node written in
     /// place.
+    /// `operand`, unless it is `poison` or `undef`: what a record says of a
+    /// value that is gone.
+    fn live(
+        &self,
+        operand: Operand,
+    ) -> Option<Operand> {
+        match operand {
+            Operand::Constant(id)
+                if matches!(
+                    self.module.context.get(id).kind,
+                    ConstantKind::Poison | ConstantKind::Undef
+                ) =>
+            {
+                None
+            }
+            other => Some(other),
+        }
+    }
+
     fn record_node(&mut self) -> Parsed<MetadataId> {
         match self.metadata_operand()? {
             MetadataOperand::Node(id) => Ok(id),
@@ -1661,6 +1684,14 @@ impl Parser {
                     _ => DebugWhat::Piece { value: at, offset: 0, bytes: 0 },
                 }
             }
+            "#dbg_assign" => {
+                let (_, value) = self.typed_value(local)?;
+                let value = self.live(value);
+                self.expect_punct(',')?;
+                // The assignment's id, address and their expression follow
+                // the variable and the value's expression.
+                DebugWhat::Assign { value, address: None, id: MetadataId(0), address_expression: MetadataId(0) }
+            }
             "#dbg_gonepiece" => DebugWhat::GonePiece { offset: 0, bytes: 0 },
             "#dbg_gone" => DebugWhat::Gone,
             other => return self.fail(format!("`{other}` is not a debug record")),
@@ -1681,9 +1712,25 @@ impl Parser {
             }
             other => other,
         };
+        let (mut expression, mut location) = (None, None);
+        let mut what = what;
+        if let DebugWhat::Assign { value, .. } = what {
+            // `, !DIExpression(), !id, ptr %a, !DIExpression(), !loc`
+            self.expect_punct(',')?;
+            expression = Some(self.record_node()?);
+            self.expect_punct(',')?;
+            let id = self.record_node()?;
+            self.expect_punct(',')?;
+            let (_, address) = self.typed_value(local)?;
+            let address = self.live(address);
+            self.expect_punct(',')?;
+            let address_expression = self.record_node()?;
+            self.expect_punct(',')?;
+            location = Some(self.record_node()?);
+            what = DebugWhat::Assign { value, address, id, address_expression };
+        }
         // clang's `, !DIExpression(), !loc` after a declare or value's
         // variable.
-        let (mut expression, mut location) = (None, None);
         if matches!(
             what,
             DebugWhat::Declare(_) | DebugWhat::Value(_) | DebugWhat::Args(_)

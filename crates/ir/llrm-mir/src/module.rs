@@ -271,6 +271,11 @@ pub enum DebugWhat {
     GonePiece { offset: u32, bytes: u32 },
     /// Nothing says where it is: its value was deleted.
     Gone,
+    /// The variable's assignment `id` stored `value`, or is in memory at
+    /// `address` (`#dbg_assign`, assignment tracking): `value` is the
+    /// record's value and the expression the record's own; a deleted value or
+    /// address, or one written `poison` or `undef`, is none.
+    Assign { value: Option<Operand>, address: Option<Operand>, id: MetadataId, address_expression: MetadataId },
 }
 
 /// One such statement, standing before the instruction it names. The variable

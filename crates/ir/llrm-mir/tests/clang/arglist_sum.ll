@@ -1,10 +1,9 @@
 ; ModuleID = 'al.c'
 source_filename = "al.c"
 target datalayout = "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-i128:128-f64:32:64-f80:32-n8:16:32-S128"
-target triple = "i386-pc-linux-gnu"
 
 ; Function Attrs: nounwind uwtable
-define dso_local noundef i32 @f(i32 noundef %a, i32 noundef %b, i32 noundef %c) local_unnamed_addr #0 !dbg !11 {
+define noundef i32 @f(i32 noundef %a, i32 noundef %b, i32 noundef %c) local_unnamed_addr #0 !dbg !11 {
 entry:
     #dbg_value(i32 %a, !16, !DIExpression(), !23)
     #dbg_value(i32 %b, !17, !DIExpression(), !23)

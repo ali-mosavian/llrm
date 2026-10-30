@@ -1,10 +1,9 @@
 ; ModuleID = 'ev.c'
 source_filename = "ev.c"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-pc-linux-gnu"
 
 ; Function Attrs: nounwind uwtable
-define dso_local i64 @f(i64 noundef %a, i64 noundef %b) local_unnamed_addr #0 !dbg !10 {
+define i64 @f(i64 noundef %a, i64 noundef %b) local_unnamed_addr #0 !dbg !10 {
 entry:
     #dbg_value(i64 %a, !15, !DIExpression(), !18)
     #dbg_value(i64 %b, !16, !DIExpression(), !18)

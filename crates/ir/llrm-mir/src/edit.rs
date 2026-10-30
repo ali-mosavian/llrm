@@ -845,6 +845,13 @@ impl Function {
             {
                 *at = with;
             }
+            if let DebugWhat::Assign { value: at, address, .. } = &mut record.what {
+                for one in [at, address] {
+                    if *one == Some(Operand::Value(value)) {
+                        *one = Some(with);
+                    }
+                }
+            }
         }
         for one in self.debug_arglists.iter_mut().flatten() {
             if *one == Operand::Value(value) {
@@ -875,6 +882,12 @@ impl Function {
                 }
                 DebugWhat::Piece { value: at, offset, bytes } if at == Operand::Value(value) => {
                     record.what = DebugWhat::GonePiece { offset, bytes }
+                }
+                // The assignment stays (its id is what ties it to the store),
+                // with nothing where the value or the address was.
+                DebugWhat::Assign { value: at, address, id, address_expression } => {
+                    let gone = |one: Option<Operand>| one.filter(|&one| one != Operand::Value(value));
+                    record.what = DebugWhat::Assign { value: gone(at), address: gone(address), id, address_expression };
                 }
                 _ => {}
             }
@@ -1320,6 +1333,12 @@ impl Function {
         for one in said {
             let what = match one.what {
                 DebugWhat::Value(operand) if !same_everywhere(self, operand) => DebugWhat::Gone,
+                DebugWhat::Assign { value, address, id, address_expression } => DebugWhat::Assign {
+                    value: value.filter(|&one| same_everywhere(self, one)),
+                    address,
+                    id,
+                    address_expression,
+                },
                 DebugWhat::Piece { value, offset, bytes } if !same_everywhere(self, value) => {
                     DebugWhat::GonePiece { offset, bytes }
                 }

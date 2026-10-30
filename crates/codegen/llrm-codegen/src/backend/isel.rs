@@ -1667,6 +1667,8 @@ pub(crate) fn noted(
         }
         let (value, piece) = match record.what {
             llrm_mir::DebugWhat::Declare(_) => continue,
+            // Read by the assignment tracking analysis, not by the notes.
+            llrm_mir::DebugWhat::Assign { .. } => continue,
             llrm_mir::DebugWhat::Value(one) => {
                 // What the expression does to the value: nothing, add to it, or
                 // say a part of the variable; any other is not read, and the
