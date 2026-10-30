@@ -2101,3 +2101,14 @@ def test_a_pr_with_the_judge_line_for_its_head_passes_that_check_and_an_edited_d
     kwargs = dict(cache=cache, base_sha="base")
     assert "no judge line" in ps.precheck("1", info={**info, "body": ""}, **kwargs)
     assert "no judge line" not in ps.precheck("1", info={**info, "body": "problems: 0 @ " + "h" * 40}, **{**kwargs, "checks": Tree(set(), set()).checks(), "merge": Tree(set(), set()).merge, "deletions": lambda *a: [], "dev": tmp_path})
+
+
+def test_a_pr_that_touches_no_compiler_path_needs_no_judge_line(tmp_path, monkeypatch):
+    """Without the exemption #6102 and every tools-only or docs-only PR would be refused by the rule: they cannot move the bench judge."""
+    head = "c" * 40
+    info = {"headRefOid": head, "baseRefName": "feat/parity", "body": ""}
+    tools_only = [{"path": "tools/parity_squash.py"}, {"path": "docs/working/pr-rules.md"}]
+    assert ps.judge_line_refusal("1", {**info, "files": tools_only}) is None
+    assert ps.judge_line_refusal("1", {**info, "files": [*tools_only, {"path": "crates/opt/src/lib.rs"}]}).startswith("1: REFUSED: the description has no judge line"), "one compiler file brings the rule back"
+    assert ps.judge_line_refusal("1", {**info, "files": [{"path": "Cargo.lock"}]}) is not None
+    assert ps.judge_line_refusal("1", info) is not None, "no file list read: the rule applies"
