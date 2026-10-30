@@ -164,3 +164,40 @@ fn a_target_that_does_not_ask_keeps_the_two_byte_stores() {
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     assert!(!is_one_halfword_store(&dag));
 }
+
+
+/// Declines the bitwise form of a logic of compares, as AArch64 does.
+struct Declines;
+
+impl CombineHooks for Declines {
+    fn convert_setcc_logic_to_bitwise_logic(&self) -> bool {
+        false
+    }
+}
+
+fn and_of_equalities(dag: &mut SelectionDAG) {
+    let (a, b) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6));
+    let (c1, c2) = (dag.get_constant(65, EVT::I32), dag.get_constant(66, EVT::I32));
+    let left = dag.get_setcc(EVT::I1, a, c1, CondCode::SetEq);
+    let right = dag.get_setcc(EVT::I1, b, c2, CondCode::SetEq);
+    let root = dag.get_node(ISD::And, EVT::I1, &[left, right]);
+    dag.set_root(root);
+}
+
+/// Two byte compares joined by `and` were one `xor`/`or` compare on AArch64 (x86's
+/// `convertSetCCLogicToBitwiseLogic`); the pin's AArch64 leaves them two compares.
+#[test]
+fn a_target_that_declines_keeps_the_and_of_two_equalities() {
+    let mut dag = dag();
+    and_of_equalities(&mut dag);
+    DagCombiner::new(&mut dag, &mut Declines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::And);
+}
+
+#[test]
+fn a_default_target_joins_the_two_equalities_in_one_compare() {
+    let mut dag = dag();
+    and_of_equalities(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::SetCC);
+}

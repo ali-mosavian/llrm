@@ -85,6 +85,13 @@ pub trait CombineHooks {
         false
     }
 
+
+    /// `convertSetCCLogicToBitwiseLogic`: `and (seteq a, b), (seteq c, d)` as one compare of
+    /// `or (xor a, b), (xor c, d)`. Default true, as X86's (the pin's default is false).
+    fn convert_setcc_logic_to_bitwise_logic(&self) -> bool {
+        true
+    }
+
     fn has_target_combine(
         &self,
         _op: ISD,

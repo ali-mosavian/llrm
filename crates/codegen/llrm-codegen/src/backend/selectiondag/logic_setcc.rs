@@ -127,7 +127,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return Some(self.dag.get_setcc(vt, add, two, cc));
         }
         // The more general forms, if the compares have no other user.
-        if integer && cc0 == cc1 && self.has_one_use(n0) && self.has_one_use(n1) {
+        if integer
+            && self.hooks.convert_setcc_logic_to_bitwise_logic()
+            && cc0 == cc1
+            && self.has_one_use(n0)
+            && self.has_one_use(n1)
+        {
             if (is_and && cc1 == CondCode::SetEq) || (!is_and && cc1 == CondCode::SetNe) {
                 let xor_left = self.dag.get_node(ISD::Xor, op_vt, &[ll, lr]);
                 let xor_right = self.dag.get_node(ISD::Xor, op_vt, &[rl, rr]);
