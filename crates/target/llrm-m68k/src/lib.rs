@@ -8,6 +8,7 @@ pub mod amiga;
 pub mod atari;
 pub mod compile;
 pub mod dagisel;
+pub mod driver;
 pub mod encode;
 pub mod expand;
 pub mod flags;
