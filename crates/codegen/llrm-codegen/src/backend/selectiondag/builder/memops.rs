@@ -32,6 +32,11 @@ impl Builder<'_> {
         intrinsic: &Intrinsic,
     ) -> Result<(), Refused> {
         match intrinsic {
+            // The expansion is x86's `rep movs` and `rep stos` and its
+            // registers.
+            Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove if self.arch.full().is_none() => {
+                Err(Refused("a mem intrinsic for a target with no string instructions"))
+            }
             Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove => {
                 self.visit_mem_intrinsic(instruction, info, intrinsic)
             }
@@ -305,6 +310,7 @@ impl Builder<'_> {
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
         let (mut src_off, mut dst_off, mut left) = (0u64, 0u64, size);
         let mut chains = Vec::new();
+        let mut order = chain;
         for width in ops {
             if width > left {
                 src_off -= width - left;
@@ -344,7 +350,7 @@ impl Builder<'_> {
                 ext: None,
                 space: self.space_of(src),
             };
-            let value = self.dag.get_load(vt, chain, from, info);
+            let value = self.dag.get_load(vt, order, from, info);
             let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
             let info = MemInfo {
                 mem_vt: vt,
@@ -354,7 +360,10 @@ impl Builder<'_> {
                 ext: None,
                 space: self.space_of(dst),
             };
-            let store = self.dag.get_store(chain, value, to, info);
+            let store = self.dag.get_store(order, value, to, info);
+            if self.target.ordered_copies {
+                order = store;
+            }
             chains.push(SDValue { node: value.node, res: 1 });
             chains.push(store);
             src_off += width;
@@ -708,6 +717,9 @@ impl Builder<'_> {
         let root = self.memory_root();
 
         let opt_size = self.has_opt_size();
+        // `rep movs` and `rep stos` are x86's: a target without string
+        // instructions copies past the inline limit with a call
+        let strings_exist = self.target.string_instructions;
         let constant = self.constant_size(size);
         if constant == Some(0) {
             return Ok(());
@@ -741,16 +753,28 @@ impl Builder<'_> {
                 };
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
-                    (None, Intrinsic::MemCpy, Some(bytes)) if self.has_min_size() => {
+                    (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.has_min_size() => {
                         self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
                     }
-                    (None, Intrinsic::MemCpy, Some(bytes)) if bytes <= MAX_INLINE_SIZE && alignment >= 4 => self
-                        .rep_movs(root, dst, other, bytes, alignment.min(self.string_block()), dst_align, src_align)?,
+                    (None, Intrinsic::MemCpy, Some(bytes))
+                        if strings_exist && bytes <= MAX_INLINE_SIZE && alignment >= 4 =>
+                    {
+                        self.rep_movs(
+                            root,
+                            dst,
+                            other,
+                            bytes,
+                            alignment.min(self.string_block()),
+                            dst_align,
+                            src_align,
+                        )?
+                    }
                     // no `memcpy` to call for a copy the pin leaves to one
                     // (alignment under 4): dwords, as the old selector copies;
                     // x86 takes them unaligned
                     (None, Intrinsic::MemCpy, Some(bytes))
-                        if !self.runtime_has("memcpy")
+                        if strings_exist
+                            && !self.runtime_has("memcpy")
                             // the tail of a far copy is made from the far
                             // pointers moved on, which the string tail at size
                             // is not
@@ -758,18 +782,26 @@ impl Builder<'_> {
                     {
                         self.rep_movs(root, dst, other, bytes, 4, dst_align, src_align)?
                     }
-                    _ if matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
+                    _ if strings_exist && matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
                     // a move a pass proved forward, past the inline limit: `rep
                     // movs` ascends, as the move needs (DEVIATE: the pin calls
                     // `memmove`; at m16 the old selector inlines it, 2.2x on
                     // scroll.c)
-                    _ if forward && matches!(which, Intrinsic::MemMove) && self.inline_string_move(dst, other) => {
+                    _ if strings_exist
+                        && forward
+                        && matches!(which, Intrinsic::MemMove)
+                        && self.inline_string_move(dst, other) =>
+                    {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
                     // proved backward: from the last dword down
-                    _ if backward && matches!(which, Intrinsic::MemMove) && self.inline_string_move(dst, other) => {
+                    _ if strings_exist
+                        && backward
+                        && matches!(which, Intrinsic::MemMove)
+                        && self.inline_string_move(dst, other) =>
+                    {
                         self.backward_rep_movs_dwords(root, dst, other, size)
                     }
                     _ if !self.runtime_has(if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" }) => {
@@ -805,7 +837,9 @@ impl Builder<'_> {
                 };
                 match (inline, constant) {
                     (Some(chain), _) => chain,
-                    (None, Some(bytes)) if self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4) => {
+                    (None, Some(bytes))
+                        if strings_exist && (self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4)) =>
+                    {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
                     // no `memset` to call: dwords, as the old selector fills;
@@ -813,10 +847,12 @@ impl Builder<'_> {
                     // tail costs the bytes the dwords save, and a far one
                     // cannot be named) and not for size: `xor eax, eax` is a
                     // byte more than `xor al, al`.
-                    (None, Some(bytes)) if !opt_size && !self.runtime_has("memset") && bytes % 4 == 0 => {
+                    (None, Some(bytes))
+                        if strings_exist && !opt_size && !self.runtime_has("memset") && bytes % 4 == 0 =>
+                    {
                         self.rep_stos(root, dst, other, bytes, 4)?
                     }
-                    _ if !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
+                    _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
                 }
             }

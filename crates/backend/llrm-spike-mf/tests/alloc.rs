@@ -54,7 +54,11 @@ fn op(
     name: &'static str,
     operands: Vec<Operand>,
 ) -> Inst {
-    Inst::new(Kind::Op(name), operands)
+    let mut inst = Inst::new(Kind::Op(name), operands);
+    // a `def*` stands for an instruction that cannot run twice: it is not
+    // rematerialized, so pressure spills it
+    inst.side_effects = name.starts_with("def");
+    inst
 }
 
 fn function(
@@ -122,6 +126,10 @@ fn a_phi_copies_before_the_terminator() {
     assert_eq!(function.blocks[1].insts[0].kind, Kind::Copy);
 }
 
+thread_local!(static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
+
+/// `any` is called once for each colouring of the function, so it counts the
+/// rounds.
 struct Spilly;
 
 impl Target for Spilly {
@@ -134,7 +142,9 @@ impl Target for Spilly {
         Some(())
     }
 
-    fn any() {}
+    fn any() {
+        ROUNDS.with(|rounds| rounds.set(rounds.get() + 1));
+    }
 
     fn candidates(_: ()) -> Vec<RegId> {
         vec![R0, R1]
@@ -481,4 +491,92 @@ fn a_colouring_round_names_every_value_it_cannot_fit() {
     let function = function(insts, n as usize);
     let failures = GraphColoring::<Spilly>::default().colour(&function).expect_err("two registers cannot hold twenty");
     assert!(failures.len() >= 10, "{} failures named", failures.len());
+}
+
+/// `Spilly` with the store shaped like m68k's, `[Imm, Frame, Use]`: the
+/// register is not the first operand.
+struct ImmFirst;
+
+impl Target for ImmFirst {
+    type Class = ();
+
+    fn meet(
+        _: (),
+        _: (),
+    ) -> Option<()> {
+        Some(())
+    }
+
+    fn any() {}
+
+    fn candidates(_: ()) -> Vec<RegId> {
+        vec![R0, R1]
+    }
+
+    fn view(
+        root: RegId,
+        _: (),
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        register
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+
+    fn spill_store(
+        _: (),
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(op("spill_store", vec![Operand::Imm(0), Operand::Frame(slot), Operand::Use(register)]))
+    }
+
+    fn spill_load(
+        _: (),
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(op("spill_load", vec![Operand::Def(register), Operand::Frame(slot)]))
+    }
+}
+
+/// Two spills a block apart share one slot. `slot_access` read operand 0 only,
+/// so a store whose register comes after an `Imm` kept its old slot number
+/// while the other slot was dropped: m68k's expansion failed with "an unknown
+/// frame index" on 290 of 300 fuzz programs.
+#[test]
+fn slot_sharing_renames_a_store_whose_register_is_not_its_first_operand() {
+    let group = |a: u32, b: u32, c: u32| {
+        vec![
+            op("def", vec![Operand::Def(v(c))]),
+            op("def", vec![Operand::Def(v(a))]),
+            op("def", vec![Operand::Def(v(b))]),
+            use1(v(a)),
+            use1(v(a)),
+            use1(v(b)),
+            use1(v(b)),
+            use1(v(c)),
+        ]
+    };
+    let mut insts = group(0, 1, 2);
+    insts.extend(group(3, 4, 5));
+    let mut function = function(insts, 6);
+    let (_, slots) = allocate_spilling::<ImmFirst>(&mut function, 10).unwrap();
+    assert_eq!(slots.len(), 1, "the two spills share a slot");
+    for inst in &function.blocks[0].insts {
+        for operand in &inst.operands {
+            if let Operand::Frame(slot) = operand {
+                assert!(slots.iter().any(|(kept, _)| kept == slot), "frame {slot} is not among {slots:?}");
+            }
+        }
+    }
 }
