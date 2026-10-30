@@ -321,7 +321,7 @@ pub fn build_block(
     function: &Function,
     layout: &DataLayout,
     target: &BuilderTarget,
-    arch: &dyn llrm_target::Target,
+    arch: &dyn llrm_target::BuilderArch,
     convention: &Convention,
     info: &mut FunctionLoweringInfo,
     block: BlockId,
@@ -411,13 +411,24 @@ fn dag_name(
 }
 
 impl<'a> Builder<'a> {
+    /// The whole target description, for the paths that read x86-style
+    /// `calling.toml` conventions, string registers and runtime routines.
+    /// `Target::string_registers`; none for a target with no x86-style description.
+    fn string_instructions(&self) -> Option<llrm_target::StringRegisters> {
+        self.arch.full().and_then(|arch| arch.string_registers())
+    }
+
+    fn full_arch(&self) -> Result<&'a dyn llrm_target::Target, Refused> {
+        self.arch.full().ok_or(Refused("a target with no x86-style description"))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         module: &'a Module,
         function: &'a Function,
         layout: &'a DataLayout,
         target: &'a BuilderTarget,
-        arch: &'a dyn llrm_target::Target,
+        arch: &'a dyn llrm_target::BuilderArch,
         convention: &'a Convention,
         info: &'a mut FunctionLoweringInfo,
         block: BlockId,
@@ -516,7 +527,7 @@ struct Builder<'a> {
     function: &'a Function,
     layout: &'a DataLayout,
     target: &'a BuilderTarget,
-    arch: &'a dyn llrm_target::Target,
+    arch: &'a dyn llrm_target::BuilderArch,
     convention: &'a Convention,
     live_ins: Vec<(RegId, u32)>,
     info: &'a mut FunctionLoweringInfo,
@@ -931,7 +942,7 @@ impl Builder<'_> {
     /// unwritten until floating point is selected at m64 (DEVIATE SD238: a
     /// `double` passed to such a function is not read back).
     fn save_variadic_registers(&mut self) -> Result<(), Refused> {
-        let calling = self.arch.calling();
+        let calling = self.full_arch()?.calling();
         let Some(found) = calling.by_number(self.function.calling_convention) else {
             return Err(Refused("va_start at m64 in a function with no convention"));
         };
@@ -1123,12 +1134,12 @@ impl Builder<'_> {
             arg_types
                 .push(self.function.operand_type(&self.module.context, *argument).ok_or(Refused("block argument"))?);
         }
-        let first = self.arch.first_argument_offset(false);
+        let first = self.full_arch()?.first_argument_offset(false);
         let (result_type, _, variadic) = self.module.signature(info.function_type);
         let plan = convention_for(
             self.module,
             self.layout,
-            self.arch,
+            self.full_arch()?,
             first,
             info.calling_convention,
             result_type,
@@ -1157,7 +1168,7 @@ impl Builder<'_> {
             plan.popped = convention_for(
                 self.module,
                 self.layout,
-                self.arch,
+                self.full_arch()?,
                 first,
                 info.calling_convention,
                 result_type,
@@ -2175,7 +2186,7 @@ impl Builder<'_> {
         to: TypeId,
     ) -> Result<SDValue, Refused> {
         let types = &self.module.context.types;
-        let roles = self.arch.layout().spaces.roles;
+        let roles = self.arch.roles();
         let from_ty = self.function.operand_type(&self.module.context, pointer).ok_or(Refused("block operand"))?;
         let far: EVT = MVT::Far.into();
         let word = self.target.dag.pointer;
@@ -2458,7 +2469,7 @@ impl Builder<'_> {
         // (llrm's own space 259); the pin's 256..258 are `gs`, `fs`, `ss`
         // A near pointer into the stack segment, where it is not the data
         // segment's space, is read through `SS`.
-        let roles = self.arch.layout().spaces.roles;
+        let roles = self.arch.roles();
         let space =
             match self.function.operand_type(&self.module.context, pointer).map(|ty| self.module.context.types.get(ty))
             {

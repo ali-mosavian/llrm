@@ -298,3 +298,58 @@ fn an_i32_returned_in_dx_ax_is_two_halves_at_m16() {
         .collect();
     assert_eq!(returned, ["ax", "dx"], "the result's low half in ax, the high in dx:\n{dump}");
 }
+
+/// A target that is no x86-style `Target` (arm64) reached `Target::calling`
+/// and `convention_for` through the builder's `&dyn Target`. With only the
+/// narrow `BuilderArch` it must refuse a call it has no `TargetCalling` for.
+#[test]
+fn a_target_with_no_full_description_refuses_a_call_instead_of_panicking() {
+    use llrm_target::BuilderArch;
+
+    struct Narrow;
+    impl BuilderArch for Narrow {
+        fn registers(&self) -> &'static llrm_lir::registers::Info {
+            llrm_target::Target::registers(&llrm_x86_m32::M32)
+        }
+        fn register_named(
+            &self,
+            name: &str,
+        ) -> llrm_lir::registers::RegId {
+            llrm_target::Target::register_named(&llrm_x86_m32::M32, name)
+        }
+        fn stack_slot_bytes(&self) -> i64 {
+            4
+        }
+        fn stack_alignment(&self) -> i64 {
+            16
+        }
+        fn roles(&self) -> llrm_mir::spaces::Spaces {
+            BuilderArch::roles(&llrm_x86_m32::M32)
+        }
+        fn full(&self) -> Option<&dyn llrm_target::Target> {
+            None
+        }
+    }
+
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n\
+        declare i32 @g(i32)\n\
+        define i32 @f(i32 %a) {\n  %r = call i32 @g(i32 %a)\n  ret i32 %r\n}\n";
+    let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+    let mut info = FunctionLoweringInfo::new(function);
+    let refused = build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::m32(),
+        &Narrow,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .err()
+    .expect("a call needs the x86-style description");
+    assert!(refused.0.contains("no x86-style description"), "{}", refused.0);
+}
