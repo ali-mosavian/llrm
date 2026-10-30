@@ -1364,6 +1364,38 @@ fn a_dwarf_2_object_from_clang_leaves_out_the_files_md5() {
     .unwrap();
 }
 
+/// A 16-bit object with debug information asked of the ELF writer said "DWARF:
+/// a segmented address needs the target's segment fixup", because the debug
+/// information named no target kinds unless an OMF writer added them. It
+/// carries the target's now, so the ELF writer refuses the object itself
+/// ("no elf writer for a 16-bit object yet"); the OMF object is written.
+#[test]
+fn a_16_bit_object_with_debug_info_is_refused_by_the_elf_writer_not_by_dwarf() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/dbg.ll")
+        .lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") { "target datalayout = \"@m16-datalayout@-ni:2:3\"" } else { line }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, _) = compiled(&flags(&["-m16", "-g"]), &text, "dbgfix").unwrap();
+    assert!(built.debug.is_some(), "premise: debug information");
+    let write = |format| {
+        llrm_codegen::backend::objbuild::written_in(
+            &built,
+            "dbgfix.ll",
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            format,
+            llrm_target::Target::objects(&llrm_x86_m16::M16),
+        )
+    };
+    assert!(write(llrm_target::object::Format::Omf).is_ok());
+    for format in [llrm_target::object::Format::Elf, llrm_target::object::Format::MachO] {
+        let why = write(format).unwrap_err().to_string();
+        assert!(why.contains("a 16-bit object yet"), "{why}");
+    }
+}
+
 /// A 64-bit variable kept in `esi:edx` is two register pieces, which CodeView
 /// writes as subfields; the writer refused the unit ("a location list holds
 /// only registers and frame cells") and no object came out.
