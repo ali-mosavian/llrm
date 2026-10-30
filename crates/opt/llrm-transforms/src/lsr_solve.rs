@@ -84,6 +84,80 @@ impl Collection<'_, '_> {
         }
     }
 
+    /// Every complete choice of one formula per use, rated as `solve_recurse`
+    /// does but never pruned by the best: the candidates `lsr-all` prints,
+    /// cheapest registers first. Debugging only.
+    fn trace_candidates(
+        &self,
+        se: &mut ScalarEvolution,
+    ) -> Vec<(Cost, Vec<usize>)> {
+        #[allow(clippy::too_many_arguments)]
+        fn walk(
+            this: &Collection<'_, '_>,
+            se: &mut ScalarEvolution,
+            workspace: &mut Vec<usize>,
+            cur_cost: &Cost,
+            cur_regs: &HashSet<Scev>,
+            visited: &mut HashSet<Scev>,
+            found: &mut Vec<(Cost, Vec<usize>)>,
+        ) {
+            if found.len() >= 20_000 {
+                return;
+            }
+            let lu_idx = workspace.len();
+            let lu = &this.uses[lu_idx];
+            let req_regs: Vec<Scev> = cur_regs.iter().copied().filter(|reg| lu.regs.contains(reg)).collect();
+            for (f_idx, f) in lu.formulae.iter().enumerate() {
+                let mut to_find = f.num_regs().min(req_regs.len());
+                for reg in &req_regs {
+                    if f.scaled_reg == Some(*reg) || f.base_regs.contains(reg) {
+                        to_find -= 1;
+                        if to_find == 0 {
+                            break;
+                        }
+                    }
+                }
+                if to_find != 0 {
+                    continue;
+                }
+                let mut new_cost = cur_cost.clone();
+                let mut new_regs = cur_regs.clone();
+                this.rate(se, &mut new_cost, f, &mut new_regs, visited, lu_idx, None);
+                if new_cost.is_loser() {
+                    continue;
+                }
+                workspace.push(f_idx);
+                if workspace.len() == this.uses.len() {
+                    found.push((new_cost, workspace.clone()));
+                } else {
+                    walk(this, se, workspace, &new_cost, &new_regs, visited, found);
+                }
+                workspace.pop();
+            }
+        }
+        let mut found = Vec::new();
+        walk(self, se, &mut Vec::new(), &Cost::new(), &HashSet::default(), &mut HashSet::default(), &mut found);
+        found.sort_by_key(|(cost, _)| (cost.c.num_regs, cost.c.insns, cost.c.setup_cost));
+        llrm_support::debug!("lsr-all", "{} candidates, baseline {:?}", found.len(), self.baseline_cost.c);
+        let mut shown = 0;
+        let mut last = None;
+        for (cost, choice) in &found {
+            if last.as_ref() == Some(&cost.c) {
+                continue;
+            }
+            last = Some(cost.c.clone());
+            if shown == 12 {
+                break;
+            }
+            shown += 1;
+            llrm_support::debug!("lsr-all", "  {:?}", cost.c);
+            for (at, &chosen) in choice.iter().enumerate() {
+                llrm_support::debug!("lsr-all", "    use {at} {:?}: {:?}", self.uses[at].kind, self.uses[at].formulae[chosen]);
+            }
+        }
+        found
+    }
+
     /// `Solve`: the index of the formula chosen for each use, none if there is
     /// no satisfactory solution or the baseline is better and the target would
     /// drop the solution.
@@ -91,6 +165,9 @@ impl Collection<'_, '_> {
         &self,
         se: &mut ScalarEvolution,
     ) -> Vec<usize> {
+        if llrm_support::debug::enabled("lsr-all") {
+            self.trace_candidates(se);
+        }
         for (at, lu) in self.uses.iter().enumerate() {
             for formula in &lu.formulae {
                 llrm_support::debug!("lsr", "  candidate use {at} {:?}: {:?}", lu.kind, formula);
