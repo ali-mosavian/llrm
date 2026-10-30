@@ -9,6 +9,9 @@ use crate::backend::selectiondag::{MemBase, MemInfo};
 struct Asks;
 
 impl CombineHooks for Asks {
+    fn should_transform_signed_truncation_check(&self, _vt: EVT, _kept_bits: u32) -> bool {
+        true
+    }
     fn fold_sra_of_trunc_of_shift(&self) -> bool {
         true
     }
@@ -383,4 +386,33 @@ fn a_target_that_does_not_ask_keeps_the_sra_of_the_truncated_half() {
     sra_of_truncated_high_half(&mut dag);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.get_root()), ISD::Sra);
+}
+
+fn fits_in_a_byte(dag: &mut SelectionDAG) {
+    let x = dag.get_register(EVT::I32, 5);
+    let (half, full) = (dag.get_constant(128, EVT::I32), dag.get_constant(256, EVT::I32));
+    let sum = dag.get_node(ISD::Add, EVT::I32, &[x, half]);
+    let root = dag.get_setcc(EVT::I8, sum, full, CondCode::SetULt);
+    dag.set_root(root);
+}
+
+/// `(x + 128) u< 256` stayed an add and an unsigned compare; the pin asks
+/// "does `x` survive a sign-extension from `i8`": `sext_inreg x, i8 == x`.
+#[test]
+fn a_range_check_on_a_biased_value_is_a_sign_extension_compare() {
+    let mut dag = dag();
+    fits_in_a_byte(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::SetCC);
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::SignExtendInReg);
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_biased_range_check() {
+    let mut dag = dag();
+    fits_in_a_byte(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_ne!(dag.opcode(dag.operand(root, 0)), ISD::SignExtendInReg);
 }

@@ -115,6 +115,16 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TargetLowering::shouldTransformSignedTruncationCheck`: `(add x, 1<<(k-1)) u< 1<<k` is
+    /// `sext_inreg x, k == x`. The pin's default is false. Default false until x86 is judged.
+    fn should_transform_signed_truncation_check(
+        &self,
+        _vt: EVT,
+        _kept_bits: u32,
+    ) -> bool {
+        false
+    }
+
     /// `visitORCommutative`'s absorption folds, `(or (and x, y), x)` is `x`. Default false until
     /// x86 is judged.
     fn fold_or_absorption(&self) -> bool {
@@ -543,6 +553,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_setcc(vt, x, value, cond));
             }
         }
+        if let Some(folded) = self.signed_truncation_check(vt, n0, c1, cond) {
+            return Some(folded);
+        }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
             || self.level != CombineLevel::BeforeLegalizeTypes
             || !self.dag.has_one_use(n0.node)
@@ -585,6 +598,59 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             (self.dag.get_constant(c1, min_vt), cond)
         };
         Some(self.dag.get_setcc(vt, trunc, rhs, cond))
+    }
+
+    /// `optimizeSetCCOfSignedTruncationCheck`: `(add x, 1<<(k-1)) u< 1<<k`, or its inverse form
+    /// `(add x, -(1<<(k-1))) u>= -(1<<k)`, is `(sext_inreg x, k) == x` (`!=` for the inverse).
+    fn signed_truncation_check(
+        &mut self,
+        vt: EVT,
+        n0: SDValue,
+        c1: u128,
+        cond: CondCode,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(n0) != ISD::Add {
+            return None;
+        }
+        let (x, add) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+        let c01 = self.dag.constant(add).filter(|_| !self.dag.is_opaque(add))?;
+        let xvt = self.dag.value_type(x);
+        let width = xvt.size_in_bits();
+        let mask = super::fold::mask(width);
+        let (mut i1, mut i01) = (c1 & mask, c01 & mask);
+        let mut equal = match cond {
+            CondCode::SetULt => true,
+            CondCode::SetULe => {
+                i1 = i1.wrapping_add(1) & mask;
+                true
+            }
+            CondCode::SetUGt => {
+                i1 = i1.wrapping_add(1) & mask;
+                false
+            }
+            CondCode::SetUGe => false,
+            _ => return None,
+        };
+        let fits = |i1: u128, i01: u128| i1 > i01 && i1.is_power_of_two() && i01.is_power_of_two();
+        if !fits(i1, i01) {
+            i1 = i1.wrapping_neg() & mask;
+            i01 = i01.wrapping_neg() & mask;
+            equal = !equal;
+            if !fits(i1, i01) {
+                return None;
+            }
+        }
+        let (kept, kept_minus_one) = (i1.trailing_zeros(), i01.trailing_zeros());
+        if kept != kept_minus_one + 1 || kept == 0 || kept >= width {
+            return None;
+        }
+        if !self.hooks.should_transform_signed_truncation_check(xvt, kept) {
+            return None;
+        }
+        let ty = self.dag.get_value_type_node(EVT::integer(kept));
+        let extended = self.dag.get_node(ISD::SignExtendInReg, xvt, &[x, ty]);
+        let new_cond = if equal { CondCode::SetEq } else { CondCode::SetNe };
+        Some(self.dag.get_setcc(vt, extended, x, new_cond))
     }
 
     /// `visitSELECT` ([L13507][pin]) up to the setcc folds: a flipped
