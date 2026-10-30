@@ -694,6 +694,29 @@ fn a_node_morphed_to_read_a_later_node_is_walked_through() {
     );
 }
 
+/// `setcc a, b, cc` morphed to an instruction that reads only `a` and `b` left
+/// the condition-code node live, and selection then refused it
+/// (`CannotSelect("CondCodeNode")`: 6 of wasm's 29 IR tests).
+#[test]
+fn a_morphed_node_deletes_the_operands_it_stops_reading() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
+    use llrm_dagisel::generated::ids::mvt;
+
+    use super::isd::CondCode;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let (a, b) = (input(&mut dag, 40), input(&mut dag, 41));
+    let cc = dag.get_cond_code(CondCode::SetEq);
+    let setcc = dag.get_node(ISD::SetCC, EVT::I1, &[a, b, cc]);
+    let root = dag.get_node(ISD::Truncate, EVT::I1, &[setcc]);
+    dag.set_root(root);
+    let mut adapter = DagisAdapter::new(&mut dag);
+    assert!(!adapter.is_dead(cc.node), "the premise: the code is live before");
+    let operands = [a, b].map(|v| PinValue { node: v.node, res: 0 });
+    adapter.morph_node_to(setcc.node, 1, &[mvt::i1], &operands);
+    assert!(adapter.is_dead(cc.node), "the code node outlived the node that read it");
+    assert!(!adapter.is_dead(a.node), "an operand still read was deleted");
+}
+
 /// A node marked selected (`setNodeId(-1)`) ends the spread of
 /// `EnforceNodeIdInvariant`: a replacement invalidates the unselected users
 /// above it, not everything after the selected node.

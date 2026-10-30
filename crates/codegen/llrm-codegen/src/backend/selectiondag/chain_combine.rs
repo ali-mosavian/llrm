@@ -139,6 +139,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
         old: SDValue,
     ) -> SDValue {
+        if self.opt_none {
+            return old;
+        }
         let aliases = self.gather_all_aliases(node, old);
         match aliases[..] {
             [] => self.dag.entry_node(),
@@ -276,6 +279,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         store: SDValue,
     ) -> Option<SDValue> {
+        if self.opt_none {
+            return None;
+        }
         let base_ptr = BaseIndexOffset::matching(self.dag, store);
         let base = base_ptr.base?;
         if self.dag.is_undef(base) {

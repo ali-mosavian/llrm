@@ -22,6 +22,8 @@ pub struct Node {
     /// The segment register the memory node addresses through.
     pub segment: Option<u16>,
     pub dead: bool,
+    /// `SDNodeFlags::hasNoUnsignedWrap` (`add nuw`).
+    pub no_unsigned_wrap: bool,
 }
 
 #[derive(Default)]
@@ -341,12 +343,29 @@ impl Dag for TestDag {
     ) -> bool {
         false
     }
+    fn has_no_unsigned_wrap(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.nodes[node as usize].no_unsigned_wrap
+    }
+    /// Known bits of the two shapes a pattern asks about: a constant, and an
+    /// `and` with a constant (a bit the constant clears is zero). Anything else
+    /// is not known to be zero.
     fn masked_value_is_zero(
         &self,
-        _: SDValue,
-        _: u64,
+        value: SDValue,
+        mask: u64,
     ) -> bool {
-        false
+        let node = &self.nodes[value.node as usize];
+        let zeros = |constant: i64| constant as u64 & mask == 0;
+        match (node.opcode, node.constant) {
+            (_, Some(constant)) => zeros(constant),
+            (op, None) if op == isd::AND => {
+                node.ops.iter().any(|operand| self.nodes[operand.node as usize].constant.is_some_and(|c| zeros(c)))
+            }
+            _ => false,
+        }
     }
     fn have_no_common_bits_set(
         &self,
