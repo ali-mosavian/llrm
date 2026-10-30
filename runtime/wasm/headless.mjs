@@ -34,7 +34,7 @@ for (let at = 0, n = 1; at < script.length; at++, n++) {
 }
 mkdirSync(out, { recursive: true });
 
-let exports;
+let exports, scratch;
 let now = 0; // virtual milliseconds
 const started = Date.now();
 const calls = {};
@@ -48,7 +48,6 @@ class Exit extends Error { constructor(code) { super(`exit ${code}`); this.code 
 function dump(name) {
   const w = exports.host_width(), h = exports.host_height();
   const rgb = new Uint8Array(768);
-  const scratch = exports.__heap_base.value - 1024; // below the heap, inside the stack's reach: not touched while paused
   exports.host_colors(scratch);
   rgb.set(mem().subarray(scratch, scratch + 768));
   const pixels = mem().subarray(exports.host_pixels(), exports.host_pixels() + w * h);
@@ -66,13 +65,15 @@ function typeKey(k) {
   k.done = true;
   lastKey = now;
   keyTimes.push(now);
-  const p = exports.__heap_base.value - 64;
+  const p = scratch;
   mem().set(Buffer.from(k.text + '\0', 'latin1'), p);
   exports.headless_type(p);
 }
 
 function keyPoll(ready) {
   if (!onWait || ready || now < lastKey + settle) return;
+  // a frame wanted after this many keys is taken before the next is typed
+  if (dumps.some((d) => !d.done && d.afterKeys === keyTimes.length)) return;
   const next = keys.find((k) => !k.done);
   if (next) typeKey(next);
 }
@@ -113,13 +114,16 @@ const imports = { env: {
 
 const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), imports);
 exports = instance.exports;
+// The harness's own memory: a page after the program's. `__heap_base` is the top of the program's stack, whose
+// outermost frames anything written below it would overwrite.
+scratch = exports.memory.grow(1) * 65536;
 exports.__wasm_call_ctors();
 let code = 0;
 try { code = exports.llrm_wasm_start(); } catch (error) { if (error instanceof Exit) code = error.code; else throw error; }
 dump('final');
 {
   // The text screen, the rows that are not blank, as runtime/qb/dev/headless/main.c prints it.
-  const row = exports.__heap_base.value - 256;
+  const row = scratch;
   const lines = [];
   for (let r = 0; r < 25; r++) {
     exports.host_text_row(r, row);

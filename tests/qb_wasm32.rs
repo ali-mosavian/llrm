@@ -51,7 +51,9 @@ fn run(
     name: &str,
     flags: &[&str],
 ) -> (String, Option<i32>) {
-    let ran = Command::new("node")
+    // A program that spins without asking the host anything is never stopped by the harness's own limit.
+    let ran = Command::new("timeout")
+        .args(["-k", "5", "60", "node"])
         .arg(root().join("runtime/wasm/headless.mjs"))
         .arg(dir.join(format!("{name}.wasm")))
         .args(["--limit-ms", "30000", "--out"])
@@ -94,6 +96,23 @@ fn play_finishes_on_wasm32() {
     let dir = built("play", "PLAY \"T255 L64 CDEFG\"\nPRINT \"played\"\nEND\n");
     let (text, code) = run(&dir, "play", &[]);
     assert_eq!(text.trim_end(), "played");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// The harness wrote its frame colours and typed keys at `__heap_base - 1024` and `- 64`: the top of the program's
+/// stack, under its outermost frames. A frame taken while a program waited for a key corrupted its locals (Gorillas lost
+/// the player names on the next turn and later trapped in MAKECITYSCAPE).
+#[test]
+fn a_frame_and_a_key_leave_the_programs_locals_alone() {
+    // A SUB with 120 string temporaries: a frame of about a kilobyte under the program's entry, the range written.
+    let temps: String = (1..=120).map(|n| format!("  t{n}$ = LEFT$(keep$, {}) + a$ + RIGHT$(keep$, 2)\n", 1 + n % 5)).collect();
+    let source = format!(
+        "DECLARE SUB Echo (a$)\nEcho \"alpha\"\nEND\nSUB Echo (a$)\n  keep$ = a$ + \"!\"\n  INPUT \"key\"; k$\n{temps}  PRINT keep$; LEFT$(t120$, 3)\nEND SUB\n"
+    );
+    let dir = built("locals", &source);
+    let (text, code) = run(&dir, "locals", &["--dump-at", "300=mid", "--keys", "x\\r@600"]);
+    assert!(text.trim_end().ends_with("alpha!aal"), "{text:?}");
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
