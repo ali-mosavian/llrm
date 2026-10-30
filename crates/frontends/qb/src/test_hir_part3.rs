@@ -4173,3 +4173,38 @@ fn test_a_flat_arrays_origin_is_not_an_invariant_load() {
     assert!(invariant_facts(false, FILLED) > 0, "segmented origin is invariant");
     assert_eq!(invariant_facts(true, FILLED), 0);
 }
+
+/// The `Invariant` facts of a whole-program compile of `main` as written: the
+/// code runs in the main program, so its DIMs are in `__main`'s entry block.
+fn main_invariant_facts(
+    flat: bool,
+    main: &str,
+) -> usize {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let frontend = qb_driver::Frontend {
+        whole_program: true,
+        near_bytes: if flat { 4 } else { 0 },
+        far_bytes: if flat { 4 } else { 0 },
+        ..qb_driver::Frontend::new("qb45", "llrm")
+    };
+    let text = format!("DEFINT A-Z\r\nREM $DYNAMIC\r\n{main}\r\n");
+    let program = qb_driver::parsed(&written(&directory, "T.BAS", text.as_bytes()), &frontend, None).expect("parses");
+    program
+        .modules
+        .iter()
+        .flat_map(|module| &module.facts)
+        .filter(|stated| matches!(stated.fact, llrm_hir::facts::Fact::Invariant))
+        .count()
+}
+
+/// A flat target keeps every array in the local heap, which CLOSE and FRE
+/// slide: the data pointer and origin of a DIM at the program's start change
+/// with them. Only the shape words are invariant there; on the segmented
+/// target a far array's words all are.
+#[test]
+fn test_a_flat_arrays_location_words_are_not_invariant_loads() {
+    let program =
+        "n = VAL(COMMAND$)\r\nDIM a(0 TO n) AS INTEGER\r\nFOR i = 0 TO n\r\na(i) = i\r\nNEXT\r\nCLOSE\r\nPRINT a(n)";
+    assert!(main_invariant_facts(false, program) > 0, "far words are invariant");
+    assert_eq!(main_invariant_facts(true, program), 0);
+}

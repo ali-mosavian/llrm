@@ -29,6 +29,7 @@ pub(super) fn applied(compiler: &mut Compiler) {
     if !proven(compiler) {
         return;
     }
+    let located = !compiler.options.one_space() && all_far(compiler);
     for function in &mut compiler.functions {
         let main = function.name == "__main";
         function
@@ -39,10 +40,38 @@ pub(super) fn applied(compiler: &mut Compiler) {
                     .iter()
                     .filter(|block| !(main && block.id == ENTRY))
                     .flat_map(|block| &block.instructions)
-                    .filter(|one| one.op == "load" && matches!(one.tag, Some(Tag::DescriptorField { .. })))
+                    .filter(|one| {
+                        one.op == "load"
+                            && matches!(
+                                &one.tag,
+                                Some(Tag::DescriptorField { field, .. }) if located || shape(*field)
+                            )
+                    })
                     .map(|one| one.id),
             );
     }
+}
+
+/// Whether the word is of the array's shape, which only its own DIM, REDIM and
+/// ERASE write; the others locate it.
+fn shape(field: Slot) -> bool {
+    matches!(
+        field,
+        Slot::Rank | Slot::Count(_) | Slot::Lower(_) | Slot::CountOf(_) | Slot::LowerOf(_)
+    )
+}
+
+/// Whether every array the program DIMs is far on a segmented target. The
+/// far heap moves arrays only at DIM, REDIM, ERASE and SHELL; the near heap
+/// slides its arrays at FRE and CLOSE (`lh_compact`), and a flat target
+/// keeps every array there, moving their data pointer and origin with them.
+fn all_far(compiler: &Compiler) -> bool {
+    compiler
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .all(|one| !matches!(one.tag, Some(Tag::Allocate(_) | Tag::Reallocate(_))) || super::shapes::far(&one.operands))
 }
 
 fn proven(compiler: &Compiler) -> bool {
