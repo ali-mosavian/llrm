@@ -405,12 +405,12 @@ jobs:
           path: ${{ runner.temp }}/shards
           merge-multiple: true
       - run: PYTHONPATH=tools/gate uv run -q --project tools python tools/gate/pytest_shards.py --merge "$RUNNER_TEMP/shards" "$(python3 tools/gate/gate.py shards python)"
-      # What each file took on this run: the next hosted table, to commit as tools/gate/pytest_hosted.json.
+      # What each file took on this run: the next hosted table, to commit as tools/gate/pytest_hosted.toml.
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pytest-hosted-refreshed
-          path: ${{ runner.temp }}/shards/pytest_hosted.refreshed.json
+          path: ${{ runner.temp }}/shards/pytest_hosted.refreshed.toml
           if-no-files-found: ignore
           retention-days: 14
 

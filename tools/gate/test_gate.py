@@ -1742,4 +1742,6 @@ def test_the_merge_prints_each_shards_wall_against_the_tables_prediction_and_the
     out = _sharded(tmp_path, 2)
     done = _merge(out, 2)
     assert "pytest shard 1: wall " in done.stdout and "table predicted " in done.stdout and "workers" in done.stdout
-    assert sorted(json.loads((out / "pytest_hosted.refreshed.json").read_text())) == ["test_a.py", "test_b.py", "test_c.py"]
+    import tomllib
+
+    assert sorted(tomllib.loads((out / "pytest_hosted.refreshed.toml").read_text())) == ["test_a.py", "test_b.py", "test_c.py"]
