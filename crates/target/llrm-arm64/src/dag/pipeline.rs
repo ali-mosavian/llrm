@@ -257,6 +257,7 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::FpToSInt | ISD::FpToUInt => super::lowering::lower_fp_to_int(dag, node),
             ISD::FpExtend => super::lowering::lower_fp_extend(dag, node),
             ISD::FpRound => super::lowering::lower_fp_round(dag, node),
+            ISD::AtomicLoadAnd => super::lowering::lower_atomic_load_and(dag, node),
             _ => None,
         };
         if lowered.is_some() {
@@ -372,13 +373,16 @@ impl SchedInfo for Aarch64Sched {
     }
 }
 
+/// The subtarget features of `apple-m1` that the action table reads (`dagisel.toml` `cpus`).
+const APPLE_M1: Aarch64Features = Aarch64Features { cssc: false, lse: true, outline_atomics: false, lse2: true };
+
 /// `CodeGenAndEmitDAG` up to the end of scheduling: the units, in order.
 pub fn select_block(
     dag: &mut SelectionDAG,
     globals: &Globals,
     info: &mut llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo,
 ) -> Result<Vec<Unit>, Refusal> {
-    let mut tli = TargetLowering::aarch64(Aarch64Features::default());
+    let mut tli = TargetLowering::aarch64(APPLE_M1);
     tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone() };

@@ -772,3 +772,18 @@ fn an_atomic_access_selects_the_instruction_of_its_ordering() {
         }
     }
 }
+
+/// LSE has `ldadd` and `ldclr` but no `ldsub` or `ldand`: a fetch-sub is a negation and an `ldadd`,
+/// a fetch-and a complement (`orn wzr`) and an `ldclr` (the pin's `ExpandNode` and
+/// `LowerATOMIC_LOAD_AND`). Both were refused (`convert node to libcall`, `custom lowering of
+/// AtomicLoadAnd`).
+#[test]
+fn a_fetch_sub_negates_and_adds_and_a_fetch_and_complements_and_clears() {
+    let rmw = |op: &str, ordering: &str| {
+        selected(&format!(
+            "define i32 @f(ptr %p, i32 %v) {{\n  %a = atomicrmw {op} ptr %p, i32 %v {ordering}, align 4\n  ret i32 %a\n}}"
+        ))
+    };
+    assert_eq!(rmw("sub", "monotonic").unwrap(), [["SUBSWrr", "LDADDW", "RET_ReallyLR"]]);
+    assert_eq!(rmw("and", "release").unwrap(), [["ORNWrr", "LDCLRLW", "RET_ReallyLR"]]);
+}

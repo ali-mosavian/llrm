@@ -1245,7 +1245,12 @@ impl SelectionDAG {
     ) -> SDValue {
         debug_assert!(matches!(
             op,
-            ISD::AtomicLoadAdd | ISD::AtomicLoadSub | ISD::AtomicLoadAnd | ISD::AtomicLoadOr | ISD::AtomicLoadXor
+            ISD::AtomicLoadAdd
+                | ISD::AtomicLoadSub
+                | ISD::AtomicLoadAnd
+                | ISD::AtomicLoadClr
+                | ISD::AtomicLoadOr
+                | ISD::AtomicLoadXor
         ));
         let vt = self.value_type(value);
         let node = self.intern(op, &[vt, EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));

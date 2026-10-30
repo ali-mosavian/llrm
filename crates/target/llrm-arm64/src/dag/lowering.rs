@@ -859,3 +859,19 @@ pub fn fp_imm_legal(
     };
     bits == 0 || crate::mc::immediate::fp_immediate(value).is_some() || mov_imm(bits as u64, width, Gpr(0)).len() <= 2
 }
+
+/// `LowerATOMIC_LOAD_AND`: LSE has an atomic load-clear but no load-and, so the operand is
+/// complemented and the node is `ATOMIC_LOAD_CLR` ([pin][pin]).
+///
+/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18512
+pub fn lower_atomic_load_and(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let (chain, ptr, rhs) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let ones = dag.get_constant(u128::MAX, vt);
+    let complement = dag.get_node(ISD::Xor, vt, &[ones, rhs]);
+    Some(dag.get_atomic_rmw(ISD::AtomicLoadClr, chain, ptr, complement, info))
+}

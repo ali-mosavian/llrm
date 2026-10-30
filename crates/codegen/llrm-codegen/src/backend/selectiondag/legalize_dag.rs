@@ -462,6 +462,21 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let up = self.dag.get_node(ISD::Shl, vt, &[x, by]);
                 Some(vec![self.dag.get_node(ISD::Sra, vt, &[up, by])])
             }
+            ISD::AtomicLoadSub => {
+                // `ExpandNode`: a subtract is an add of the negation (a sign-extension of the
+                // operand from the memory type is dropped first).
+                let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+                let (chain, ptr, mut rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                if self.dag.opcode(rhs) == ISD::SignExtendInReg
+                    && matches!(self.dag.node(self.dag.operand(rhs, 1)).data, NodeData::ValueType(inner) if inner == info.mem_vt)
+                {
+                    rhs = self.dag.operand(rhs, 0);
+                }
+                let zero = self.dag.get_constant(0, vt);
+                let negated = self.dag.get_node(ISD::Sub, vt, &[zero, rhs]);
+                let added = self.dag.get_atomic_rmw(ISD::AtomicLoadAdd, chain, ptr, negated, info);
+                Some(vec![added, SDValue { node: added.node, res: 1 }])
+            }
             ISD::UDiv | ISD::SDiv => {
                 let divrem = if op == ISD::SDiv { ISD::SDivRem } else { ISD::UDivRem };
                 if !ready(self, divrem) {
