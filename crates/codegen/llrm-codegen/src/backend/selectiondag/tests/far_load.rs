@@ -12,8 +12,15 @@ fn a_far_load_is_les_and_a_read_of_es() {
     let mut dag = dag();
     let ptr = dag.get_register(EVT::I16, 7);
     let chain = dag.entry_node();
-    let info =
-        MemInfo { mem_vt: MVT::Far.into(), align: 2, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 , ordering: None };
+    let info = MemInfo {
+        mem_vt: MVT::Far.into(),
+        align: 2,
+        volatile: false,
+        base: MemBase::Stack(1),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let far = dag.get_load(MVT::Far.into(), chain, ptr, info);
     let offset = dag.get_node(ISD::Truncate, EVT::I16, &[far]);
     dag.set_root(offset);

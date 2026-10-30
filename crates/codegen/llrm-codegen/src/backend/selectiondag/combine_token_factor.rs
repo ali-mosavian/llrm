@@ -40,6 +40,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        if self.opt_none {
+            return None;
+        }
         let ops = self.dag.node(node).ops.clone();
         if let [a, b] = ops[..] {
             if self.input_chain(a) == Some(b) {

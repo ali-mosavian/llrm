@@ -12,7 +12,15 @@ fn a_node_reading_two_results_of_one_producer_is_still_legalized() {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut dag = dag();
     let (ptr, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
-    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 , ordering: None };
+    let info = MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(1),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let load = dag.get_load(EVT::I32, chain, ptr, info);
     let store = dag.get_store(SDValue { node: load.node, res: 1 }, load, ptr, info);
     let (a, b) = (dag.get_register(EVT::I32, 8), dag.get_register(EVT::I32, 9));

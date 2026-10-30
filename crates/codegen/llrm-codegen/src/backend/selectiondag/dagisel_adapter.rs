@@ -994,8 +994,9 @@ impl Dag for DagisAdapter<'_> {
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
         let old_operands: Vec<u32> = self.dag.nodes()[node as usize].ops.iter().map(|o| o.node).collect();
         let morphed = self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops);
-        // `SelectionDAG::MorphNodeTo` deletes the operands the new node no longer
-        // reads, and what only they read (a folded shift and its amount).
+        // `SelectionDAG::MorphNodeTo` deletes the operands the new node no
+        // longer reads, and what only they read (a folded shift and its
+        // amount).
         for operand in old_operands {
             if operand != self.dag.entry_node().node && !self.has_live_users(operand) {
                 self.remove(operand);

@@ -9,7 +9,15 @@ fn a_load_in_another_address_space_is_another_node() {
     let mut dag = dag();
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let near = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0 , ordering: None };
+    let near = MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Unknown,
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let far = MemInfo { space: 256, ..near };
     let (a, b) = (dag.get_load(EVT::I32, chain, ptr, near), dag.get_load(EVT::I32, chain, ptr, far));
     assert_ne!(a, b);

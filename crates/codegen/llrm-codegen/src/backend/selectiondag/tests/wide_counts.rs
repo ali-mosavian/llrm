@@ -8,8 +8,15 @@ fn counted(op: ISD) -> (SelectionDAG, SDValue) {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
     let mut dword = |slot: i32| {
-        let info =
-            MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 , ordering: None };
+        let info = MemInfo {
+            mem_vt: EVT::I32,
+            align: 4,
+            volatile: false,
+            base: MemBase::Stack(slot),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         dag.get_load(EVT::I32, chain, ptr, info)
     };
     let (lo, hi) = (dword(1), dword(2));

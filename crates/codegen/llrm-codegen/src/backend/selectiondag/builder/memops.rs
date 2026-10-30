@@ -334,7 +334,6 @@ impl Builder<'_> {
                     base: MemBase::Unknown,
                     ext: None,
                     space: self.space_of(dst),
-                
                     ordering: None,
                 };
                 chains.push(self.dag.get_store(chain, value, to, info));
@@ -351,7 +350,6 @@ impl Builder<'_> {
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(src),
-            
                 ordering: None,
             };
             let value = self.dag.get_load(vt, order, from, info);
@@ -363,7 +361,6 @@ impl Builder<'_> {
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(dst),
-            
                 ordering: None,
             };
             let store = self.dag.get_store(order, value, to, info);
@@ -409,7 +406,6 @@ impl Builder<'_> {
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(src),
-            
                 ordering: None,
             };
             let value = self.dag.get_load(vt, chain, from, info);
@@ -429,7 +425,6 @@ impl Builder<'_> {
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(dst),
-            
                 ordering: None,
             };
             stores.push(self.dag.get_store(joined, value, to, info));
@@ -501,7 +496,6 @@ impl Builder<'_> {
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(dst),
-            
                 ordering: None,
             };
             chains.push(self.dag.get_store(chain, fill, to, info));

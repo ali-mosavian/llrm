@@ -18,7 +18,7 @@ fn load(
         vt,
         chain,
         ptr,
-        MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 , ordering: None },
+        MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(1), ext: None, space: 0, ordering: None },
     )
 }
 

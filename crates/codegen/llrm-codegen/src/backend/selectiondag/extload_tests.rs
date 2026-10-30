@@ -11,7 +11,15 @@ fn an_extending_load_dumps_its_extension() {
     let entry = dag.entry_node();
     let ptr = dag.get_global_address(EVT::I32, 0, 0);
     dag.global_names = vec!["g".to_string()].into();
-    let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Global(0), ext: None, space: 0 , ordering: None };
+    let info = MemInfo {
+        mem_vt: EVT::I8,
+        align: 1,
+        volatile: false,
+        base: MemBase::Global(0),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let plain = dag.get_load(EVT::I8, entry, ptr, info);
     let wide = dag.get_ext_load(LoadExt::ZExtLoad, EVT::I32, entry, ptr, info);
     assert_ne!(plain, wide, "the extension is part of the node");

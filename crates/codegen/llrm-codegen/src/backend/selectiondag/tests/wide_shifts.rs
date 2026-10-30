@@ -74,7 +74,15 @@ fn a_variable_shift_is_shl_parts() {
     let x = dag.get_constant_with(0x1122_3344_5566_7788, EVT::I64, false, true);
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 , ordering: None };
+    let info = MemInfo {
+        mem_vt: EVT::I8,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(1),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let amount = dag.get_load(EVT::I8, chain, ptr, info);
     let moved = dag.get_node(ISD::Shl, EVT::I64, &[x, amount]);
     let low = dag.get_node(ISD::Truncate, EVT::I32, &[moved]);
@@ -94,7 +102,15 @@ fn shl_parts_is_a_funnel_shift_a_shift_and_a_cmov_on_bit_five() {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
     let load = |dag: &mut SelectionDAG, vt: EVT, slot: i32| {
-        let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 , ordering: None };
+        let info = MemInfo {
+            mem_vt: vt,
+            align: 1,
+            volatile: false,
+            base: MemBase::Stack(slot),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         dag.get_load(vt, chain, ptr, info)
     };
     let (lo, hi, amount) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I32, 2), load(&mut dag, EVT::I8, 3));
@@ -119,7 +135,15 @@ fn a_variable_shift_without_the_parts_node_is_refused() {
     let x = dag.get_constant_with(5, EVT::I64, false, true);
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 , ordering: None };
+    let info = MemInfo {
+        mem_vt: EVT::I8,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(1),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let amount = dag.get_load(EVT::I8, chain, ptr, info);
     let moved = dag.get_node(ISD::Shl, EVT::I64, &[x, amount]);
     let low = dag.get_node(ISD::Truncate, EVT::I32, &[moved]);

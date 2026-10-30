@@ -10,7 +10,15 @@ use crate::backend::selectiondag::{MemBase, MemInfo};
 fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue) -> (SelectionDAG, SDValue) {
     let mut dag = dag();
     let (ptr, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
-    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(0), ext: None, space: 0 , ordering: None };
+    let info = MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(0),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let load = dag.get_load(EVT::I32, chain, ptr, info);
     let root = build(&mut dag, load);
     dag.set_root(root);
