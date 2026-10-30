@@ -15,11 +15,12 @@ use crate::argument_move::argument_move;
 use crate::cfg::Cfg;
 use crate::cfg_sort::cfg_sort;
 use crate::cfg_stackify::cfg_stackify;
+use crate::custom_inserter::lower_memory_pseudos;
 use crate::explicit_locals::explicit_locals;
 use crate::fix_br_table_defaults::fix_br_table_defaults;
 use crate::frame::frame_lowering;
 use crate::lower_br_unless::lower_br_unless;
-use crate::mir::{Function, ValType};
+use crate::mir::{Function, Operand, ValType};
 use crate::phi_elimination::phi_elimination;
 use crate::reg_stackify::reg_stackify;
 use crate::set_p2align::set_p2align_operands;
@@ -90,6 +91,10 @@ pub fn compile_function(
     // The pin's order after instruction selection: `-print-after-all` of `llc
     // -O0`.
     f.local = module.named(name).is_some_and(|id| module.global(id).linkage != llrm_mir::module::Linkage::External);
+    lower_memory_pseudos(&mut f);
+    // A routine the legalizer or the builder calls (`fmod`, `memcpy`) is in no module: its signature
+    // is what the call passes and returns.
+    let library_calls = library_callees(&f, module);
     argument_move(&mut f);
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
@@ -113,7 +118,34 @@ pub fn compile_function(
         if module.named(&symbol).is_some_and(|id| module.global(id).function().is_some()) {
             let (params, results) = signature(module, &symbol, width)?;
             f.callees.push((symbol, params, results));
+        } else if let Some((params, results)) = library_calls.get(&symbol) {
+            f.callees.push((symbol, params.clone(), results.clone()));
         }
     }
     Ok(f)
+}
+
+/// The signature of each called symbol that is no function of `module`, from its first call.
+fn library_callees(
+    f: &Function,
+    module: &Module,
+) -> std::collections::HashMap<String, (Vec<ValType>, Vec<ValType>)> {
+    let mut found = std::collections::HashMap::new();
+    for inst in f.blocks.iter().flatten().filter(|inst| inst.opcode == crate::dagisel::post_ids::CALL) {
+        let Some(&Operand::Sym(at)) = inst.operands.iter().find(|operand| matches!(operand, Operand::Sym(_))) else {
+            continue;
+        };
+        let name = &f.symbols[at as usize].0;
+        if module.named(name).is_some_and(|id| module.global(id).function().is_some()) {
+            continue;
+        }
+        let results = inst.defs().map(|reg| f.vreg_type(reg)).collect();
+        let params = inst
+            .operands
+            .iter()
+            .filter_map(|operand| if let Operand::Use(reg) = operand { Some(f.vreg_type(*reg)) } else { None })
+            .collect();
+        found.entry(name.clone()).or_insert((params, results));
+    }
+    found
 }

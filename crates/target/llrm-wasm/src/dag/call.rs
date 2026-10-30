@@ -87,6 +87,36 @@ impl TargetCalling for WasmCalling {
         (SDValue { node: call.node, res: ins.len() as u8 }, values)
     }
 
+    /// `WebAssemblySelectionDAGInfo::EmitTargetCodeForMemcpy`: `MEMCPY` rather than `MEMORY_COPY`,
+    /// since `memory.copy` traps on a bad pointer even for no bytes; the custom inserter guards it.
+    fn emit_memcpy(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+    ) -> Option<SDValue> {
+        let memory = dag.get_constant(0, EVT::I32);
+        let length = dag.get_zext_or_trunc(size, self.pointer);
+        Some(dag.get_node(ISD::Target(isd::MEMCPY), EVT::OTHER, &[chain, memory, memory, dst, src, length]))
+    }
+
+    /// `EmitTargetCodeForMemset`: only the low byte of the value matters.
+    fn emit_memset(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        value: SDValue,
+        size: SDValue,
+    ) -> Option<SDValue> {
+        let memory = dag.get_constant(0, EVT::I32);
+        let value = dag.get_any_ext_or_trunc(value, EVT::I32);
+        let length = dag.get_zext_or_trunc(size, self.pointer);
+        Some(dag.get_node(ISD::Target(isd::MEMSET), EVT::OTHER, &[chain, memory, dst, value, length]))
+    }
+
     fn lower_formal_arguments(
         &self,
         dag: &mut SelectionDAG,

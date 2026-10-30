@@ -114,6 +114,32 @@ pub trait TargetCalling: Debug + Sync {
         live_in: LiveIn,
     ) -> Vec<SDValue>;
 
+    /// `SelectionDAGTargetInfo::EmitTargetCodeForMemcpy` (and `Memmove`, which
+    /// the pin routes to it on wasm): the node that copies `size` bytes, or
+    /// none to leave it to the inline expansion and the library call.
+    fn emit_memcpy(
+        &self,
+        _dag: &mut SelectionDAG,
+        _chain: SDValue,
+        _dst: SDValue,
+        _src: SDValue,
+        _size: SDValue,
+    ) -> Option<SDValue> {
+        None
+    }
+
+    /// `SelectionDAGTargetInfo::EmitTargetCodeForMemset`.
+    fn emit_memset(
+        &self,
+        _dag: &mut SelectionDAG,
+        _chain: SDValue,
+        _dst: SDValue,
+        _value: SDValue,
+        _size: SDValue,
+    ) -> Option<SDValue> {
+        None
+    }
+
     /// `LowerReturn`: the return node.
     fn lower_return(
         &self,

@@ -6,6 +6,7 @@ pub mod branch;
 pub mod cfg;
 pub mod cfg_sort;
 pub mod cfg_stackify;
+pub mod custom_inserter;
 pub mod dag;
 pub mod dagisel;
 pub mod driver;

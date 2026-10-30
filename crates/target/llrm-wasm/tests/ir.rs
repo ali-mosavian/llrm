@@ -168,3 +168,11 @@ fn float_conversions_and_calls() {
 fn float_libcalls() {
     check("float_libcalls");
 }
+
+/// `memcpy`, `memset` and `memmove` were refused ("a mem intrinsic for a target with no string
+/// instructions"). The pin copies a small constant size with `i64` loads and stores, anything else
+/// with `memory.copy` or `memory.fill` behind a zero-length test (a constant length needs none).
+#[test]
+fn memory_intrinsics() {
+    check("mem_intrinsics");
+}
