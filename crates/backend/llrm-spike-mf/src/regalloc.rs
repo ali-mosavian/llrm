@@ -657,6 +657,7 @@ impl<T: Target> GraphColoring<T> {
         let mut failed_nodes: HashSet<usize> = HashSet::new();
         // the most constrained class first, so a word is not left with what
         // the bytes took
+        let minimal = crate::spill::minimal_vregs(function);
         let mut order: Vec<usize> = (0..count).collect();
         let reach: Vec<usize> = (0..count)
             .map(|v| {
@@ -687,7 +688,7 @@ impl<T: Target> GraphColoring<T> {
                     .find(
                         |root| fits(root)
                             && (self.unspillable.contains(&(v as u32))
-                                || crate::spill::already_minimal(function, v as u32)
+                                || minimal[v]
                                 || T::worth_taking(*root, first_use(root), weight[node])),
                     );
                 if chosen.is_none() && candidates.iter().any(|root| fits(root)) {
