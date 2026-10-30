@@ -199,7 +199,6 @@ fn laid(
 pub fn ordered(
     first: &Machined,
     frame: &Frame,
-    basic: bool,
 ) -> Option<(Machined, Frame)> {
     if frame.native.is_some() || frame.hole != 0 {
         return None;
@@ -218,7 +217,7 @@ pub fn ordered(
     for (start, size) in extents {
         objects.push(Object { home: start, size: if size == 0 { 4 } else { size }, align: align_of(start), uses: 0 });
     }
-    if !basic {
+    {
         let mut spills = std::collections::BTreeSet::new();
         for home in frame.slots.values() {
             if spills.insert(*home) {
@@ -251,9 +250,13 @@ pub fn ordered(
     let old_low = objects.iter().map(|one| one.home).min()?;
     let placed = order(&objects);
     let mut homes: IndexMap<i64, i64> = laid(&objects, &placed, top.max(0)).into_iter().collect();
-    if homes.values().copied().min()? < old_low || homes.iter().all(|(old, new)| old == new) {
+    // The pin's order pads each object to its alignment and the frame grows to
+    // hold it (`calculateFrameObjectOffsets`); the reserve follows.
+    if homes.iter().all(|(old, new)| old == new) {
         return None;
     }
+    let grown = (old_low - homes.values().copied().min()?).max(0);
+    let grown = (grown + reach.max(4) - 1).div_euclid(reach.max(4)) * reach.max(4);
     // spill slots the order leaves where they are
     for home in frame.slots.values() {
         homes.entry(*home).or_insert(*home);
@@ -266,7 +269,8 @@ pub fn ordered(
     again.stacks = frame.stacks.iter().map(|(home, ranges)| (moved(home), ranges.clone())).collect();
     let moves = Moves { frame: Some(frame), homes: &homes, hole: 0 };
     let mut machined = shifted(first, frame, &moves)?;
-    machined.reserve = first.reserve;
+    machined.reserve = first.reserve + grown;
+    again.floor -= grown;
     if llrm_support::env_flag!("LLRM_CHECK_SLOTS") && llrm_support::env_flag!("LLRM_COUNT_RELAYOUT_SKIPS") {
         eprintln!("RELAYOUT-CHECKED");
     }
@@ -873,7 +877,7 @@ mod tests {
         let body =
             reading(&[(-46, -46), (-132, -132), (-132, -132), (-132, -132), (-132, -132), (-132, -132), (-132, -132)]);
         assert_eq!(far_cells(&body), 6, "the premise");
-        let (done, again) = ordered(&machined(body), &frame, true).expect("the order fits");
+        let (done, again) = ordered(&machined(body), &frame).expect("the order fits");
         assert_eq!(far_cells(&done.body), 0);
         let word = again.extents.iter().find(|(_, size)| *size == 2).expect("the word");
         assert_eq!(word.0, -2);
@@ -898,9 +902,11 @@ mod tests {
         assert_eq!(done.reserve, -lowest + 12, "the locals lie above the outgoing area");
     }
 
-    /// An order that would need more room than the objects have is not taken.
+    /// An order that needs more room than the objects have (padding) grows
+    /// the reserve instead of being dropped: jpeg_fixed bq32 -Os kept 294 far
+    /// operands and 342 bytes over the pin when the order was refused.
     #[test]
-    fn test_an_order_that_does_not_fit_leaves_the_frame_alone() {
+    fn test_an_order_that_needs_padding_grows_the_frame() {
         use super::ordered;
         use crate::backend::frame::Frame;
         let mut frame = Frame::new(-7);
@@ -908,8 +914,29 @@ mod tests {
         // laid densest first, byte, word, dword need 8 bytes with the padding;
         // the three lie in 7
         frame.extents = vec![(-4, 4), (-6, 2), (-7, 1)];
-        let body = reading(&[(-7, -7), (-7, -7), (-7, -7), (-6, -6), (-6, -6), (-6, -6), (-4, -4)]);
-        assert!(ordered(&machined(body), &frame, true).is_none());
+        let first = machined(reading(&[(-7, -7), (-7, -7), (-7, -7), (-6, -6), (-6, -6), (-6, -6), (-4, -4)]));
+        let reserve = first.reserve;
+        let (done, again) = ordered(&first, &frame).expect("the order is taken");
+        assert_eq!(done.reserve, reserve + 4);
+        assert_eq!(again.floor, frame.floor - 4);
+    }
+
+    /// A spill slot read often lies past the one-byte displacement behind a
+    /// large array (jpeg_fixed bq32 -Os: spill slots at `[ebp-300]`); the pin
+    /// orders them with the other frame objects and puts the hot slot nearest.
+    #[test]
+    fn test_a_hot_spill_slot_is_laid_within_the_short_displacement() {
+        use super::ordered;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(-304);
+        frame.align = 4;
+        frame.extents = vec![(-300, 300)];
+        let home = frame.slot(7_i64, 4).expect("a spill slot");
+        assert!(home < -128, "the premise: {home}");
+        let first = machined(reading(&[(home, home), (home, home), (home, home), (-300, -300)]));
+        assert_eq!(far_cells(&first.body), 4, "the premise");
+        let (done, _) = ordered(&first, &frame).expect("the order fits");
+        assert_eq!(far_cells(&done.body), 1, "only the array is far");
     }
 
     /// The pin's comparator: uses per byte, highest first; a tie by alignment,
