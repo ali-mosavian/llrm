@@ -292,7 +292,11 @@ impl LoopIdiomRecognize {
                     let (be, size) = (run.se.match_apint(args.be_count), run.se.match_apint(args.store_size_scev));
                     let trips = be.filter(|be| be.active_bits() <= 32).map(|be| be.zext_value() as i64 + 1);
                     let width = size.filter(|size| size.active_bits() <= 32).map(|size| size.zext_value() as i64);
-                    (clocks, rate, trips, width.map(|width| width * stores))
+                    // A value no byte repeats is a pattern fill: `rep stos` of
+                    // cells, one a store, not of bytes.
+                    let cells = is_bytewise_value(&cx.query(Some(args.the_store)), args.stored_val).is_none()
+                        && self.options.force_memset_pattern_intrinsic;
+                    (clocks, rate, trips, width.map(|width| if cells { stores } else { width * stores }))
                 }),
             ) {
                 return false;

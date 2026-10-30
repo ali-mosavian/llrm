@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:a0b07b16185bdc703c25365d90b8a67992b3601e048b975d10caa77336e22089 -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:eb06cd776387ab32e3c5cc2553a78c37fcfb5774a1564a7b413cc35547066ac5 -->
 
 # indvars
 
@@ -31,6 +31,9 @@ One run is these steps.
    counts decide are folded by those.
 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
    exit tests a counter against the value it has at the last trip.
+   `exitne::strengthened` (beyond the pin; `LLRM_NO_SCEV_EXITNE`) then makes
+   `!=` the strict compare of a unit-stride counter that never passes its
+   bound, which LFTR left.
 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
 
 ## Example

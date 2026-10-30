@@ -168,6 +168,11 @@ impl Collection<'_, '_> {
         if llrm_support::debug::enabled("lsr-all") {
             self.trace_candidates(se);
         }
+        for (at, lu) in self.uses.iter().enumerate() {
+            for formula in &lu.formulae {
+                llrm_support::debug!("lsr", "  candidate use {at} {:?}: {:?}", lu.kind, formula);
+            }
+        }
         let mut solution = Vec::new();
         let mut solution_cost = Cost::new();
         solution_cost.lose();

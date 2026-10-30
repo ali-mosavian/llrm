@@ -1,4 +1,4 @@
-"""One-push landing: a verified batch is merged into a tip and pushed to feat/parity as a plain fast-forward, so GitHub marks each PR merged."""
+"""One-push landing: a verified batch is merged into a tip and pushed to release/next as a plain fast-forward, so GitHub marks each PR merged."""
 
 import subprocess
 import sys
@@ -37,7 +37,7 @@ def scratch(tmp_path):
 
 
 def test_the_tip_holds_every_head_and_feat_parity_moves_by_one_fast_forward(tmp_path):
-    """Per-PR squash cost 24 s each (700 s of a 29-PR batch): one push of the merged tip lands the batch, and each head is an ancestor of the new feat/parity."""
+    """Per-PR squash cost 24 s each (700 s of a 29-PR batch): one push of the merged tip lands the batch, and each head is an ancestor of the new release/next."""
     origin, repo, heads = scratch(tmp_path)
     old = sh(repo, "rev-parse", f"origin/{ps.BRANCH}")
     tip, why = ps.push_tip(heads, cwd=repo, prepare=lambda cwd: False, verify=lambda cwd: "")
@@ -49,7 +49,7 @@ def test_the_tip_holds_every_head_and_feat_parity_moves_by_one_fast_forward(tmp_
 
 
 def test_a_rejected_push_names_why_and_moves_nothing(tmp_path):
-    """feat/parity moved under the batch: the push must not be forced; the caller squashes per PR instead."""
+    """release/next moved under the batch: the push must not be forced; the caller squashes per PR instead."""
     origin, repo, heads = scratch(tmp_path)
     other = tmp_path / "other"
     sh(tmp_path, "clone", "-q", str(origin), str(other))
