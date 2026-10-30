@@ -2277,13 +2277,13 @@ fn emit_with<const STACK: bool>(
                     let d = regs[0];
                     let part = if *half == 0 { '<' } else { '>' };
                     if d == reg::A || d == reg::X || d == reg::Y {
-                        writeln!(out, "  ld{} #{part}{symbol}", register_name(d)).unwrap();
+                        writeln!(out, "  ld{} #{part}({symbol})", register_name(d)).unwrap();
                     } else {
                         through_a(
                             &mut out,
                             a_live,
                             spare,
-                            &format!("  lda #{part}{symbol}\n  sta {}\n", register_name(d)),
+                            &format!("  lda #{part}({symbol})\n  sta {}\n", register_name(d)),
                         );
                     }
                 }

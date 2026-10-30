@@ -324,3 +324,40 @@ define ptr @fun() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert!(!text.contains("__r_"), "the string was rewritten:\n{text}");
 }
+
+/// `ldx #<src+198` is `(<src) + 198` to ca65, not the low byte of `src+198`:
+/// ld65 stopped with "Range error" (copy_runs, split_loops, memcpy_libcall of
+/// tests/run/c), and where the sum fitted, `ldy #>src+198` added 198 to the
+/// high byte. A word stored at an odd address through `(rc2),y` takes its
+/// pointer from the symbol and the offset.
+#[test]
+fn the_address_of_a_global_plus_an_offset_is_one_expression_to_the_assembler() {
+    let ir = module(
+        "@pad = internal global [250 x i8] zeroinitializer
+@src = internal global [300 x i8] zeroinitializer
+@dst = internal global [300 x i8] zeroinitializer
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+declare void @report(i32)
+define void @put() {
+  store i16 7, ptr @src, align 1
+  store i16 9, ptr getelementptr (i8, ptr @src, i16 198), align 1
+  call void @llvm.memcpy.p0.p0.i16(ptr align 1 @dst, ptr align 1 @src, i16 200, i1 false)
+  %v = load i16, ptr getelementptr (i8, ptr @dst, i16 198), align 1
+  %c = icmp ne i16 %v, 9
+  %z = zext i1 %c to i32
+  call void @report(i32 %z)
+  ret void
+}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let dir = std::env::temp_dir().join(format!("llrm6502-offset-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("t.s"),
+        format!("{text}\n.export _main, memcpy, report\nmemcpy:\nreport:\n_main:\n  jsr put\n  rts\n"),
+    )
+    .unwrap();
+    common::pipeline::tool(&dir, "cl65", &["-t", "sim6502", "-o", "t.bin", "t.s"])
+        .unwrap_or_else(|e| panic!("{e}\n{text}"));
+    std::fs::remove_dir_all(dir).ok();
+}

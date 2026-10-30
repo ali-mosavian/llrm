@@ -248,7 +248,7 @@ pub fn expand(
             }
             Operand::Label(symbol) => {
                 let (lo, hi) = word(&o[0])?;
-                writeln!(out, "  lda #<{symbol}\n  sta {lo}\n  lda #>{symbol}\n  sta {hi}").unwrap();
+                writeln!(out, "  lda #<({symbol})\n  sta {lo}\n  lda #>({symbol})\n  sta {hi}").unwrap();
             }
             _ => return Err("LDI16 takes a pair and an immediate".into()),
         },
