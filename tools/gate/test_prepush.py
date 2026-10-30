@@ -135,7 +135,7 @@ def test_the_diff_check_looks_at_the_prs_own_delta_not_at_what_parity_has_over_m
     (repo / "old.tsv").write_text("row \n")  # trailing whitespace that parity has and main does not
     git("add", "-A")
     git("commit", "-qm", "parity")
-    git("update-ref", "refs/remotes/origin/feat/parity", "HEAD")
+    git("update-ref", "refs/remotes/origin/release/next", "HEAD")
     run = lambda: subprocess.run(command, shell=True, cwd=repo, capture_output=True, text=True)  # noqa: E731
     assert run().returncode == 0, run().stdout
     (repo / "marker.txt").write_text("a\n<<<<<<< HEAD\nb\n")

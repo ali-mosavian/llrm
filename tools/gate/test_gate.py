@@ -1,5 +1,6 @@
 """The gate's path map: a change in an area selects that area's tests, and nothing is left out by omission."""
 
+import os
 import re
 import pytest
 import sys
@@ -282,6 +283,29 @@ def test_a_step_run_by_the_gate_does_not_see_a_requirement_for_a_tool_the_host_l
     monkeypatch.setattr(gate, "commands", lambda *a: {"probe": 'echo "[$LLRM_REQUIRE_TURBO]"'})
     assert gate.execute(gate.Plan("fast", "test", steps=["probe"]))[0] == 0
     assert (tmp_path / "t/gate-logs/probe.log").read_text().strip() == "[]"
+
+
+def _fake_step(tmp_path, monkeypatch, body: str):
+    for name, value in {"CARGO_TARGET_DIR": str(tmp_path / "t"), "HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("LLRM_BIN", str(tmp_path / "bin"))
+    monkeypatch.setattr(gate, "commands", lambda *a: {"probe": body})
+    return gate.execute(gate.Plan("fast", "test", steps=["probe"]))[0]
+
+
+def test_a_failed_step_prints_the_lines_it_tagged_for_the_job_log(tmp_path, monkeypatch, capsys):
+    """Run 6's dos step failed and its job log had neither lscpu nor the x87 verdict nor the hashes: they were printed before the tests, into the
+    step's own log file, and the job log shows only a failed step's failing tests and the tail of its log."""
+    body = 'echo "[diag!] Model name: Test CPU"; echo "[diag] hash abc demo conf"; for i in $(seq 60); do echo "filler $i"; done; printf "######## t.py: exit 1\\n___ test_x ___\\nassert 1 == 2\\n"; exit 1'
+    assert _fake_step(tmp_path, monkeypatch, body) == 1
+    shown = capsys.readouterr().out
+    assert "[diag!] Model name: Test CPU" in shown and "[diag] hash abc demo conf" in shown
+
+
+def test_a_passing_step_prints_only_the_always_tagged_lines(tmp_path, monkeypatch, capsys):
+    assert _fake_step(tmp_path, monkeypatch, 'echo "[diag!] x87 probe: all 92 lines match"; echo "[diag] hash abc"; exit 0') == 0
+    shown = capsys.readouterr().out
+    assert "[diag!] x87 probe: all 92 lines match" in shown and "[diag] hash abc" not in shown
 
 
 def test_a_dropped_test_binary_is_named_in_the_run_and_does_not_make_the_step_incomplete(tmp_path):
@@ -721,6 +745,7 @@ def test_a_step_with_no_log_growth_and_no_cpu_is_killed_with_its_last_lines(tmp_
     assert code == gate.STALL_CODE and wall < 120 and _time.time() - began < 120, (code, wall)
     log = (tmp_path / "hang.failed.log").read_text()
     assert "before the hang" in log and "STALLED" in log
+    assert "the tree when it was killed:" in log and sleeper in log and "WCHAN" in log and "PPID" in log, "run 5's bench-base was killed and the log said not what it waited on"
     # writing keeps a step alive without CPU; computing keeps it alive without writing
     assert gate.run_step("chatty", "for i in 1 2 3 4 5 6; do echo $i; sleep 0.5; done", tmp_path, env, stall=2)[1] == 0
     spin = 'python3 -c "import time; t = time.process_time()\nwhile time.process_time() - t < 4: pass"'
@@ -893,6 +918,51 @@ def test_all_shards_green_exits_zero_and_records_every_files_seconds(tmp_path):
     import json as _json
 
     assert sorted(_json.loads(rec.read_text())) == ["test_a.py", "test_b.py", "test_c.py"]
+
+
+def test_a_must_pass_file_that_skips_every_test_fails_the_run(tmp_path):
+    """Run 5's NIBBLES red and run 4's 58 s dos PASS: a demo file whose inputs were missing skipped every test and the step went green.
+    A --must-pass file has to pass a test and skip none."""
+    files = {"test_a.py": "def test_fine():\n    pass\n", "test_b.py": "import pytest\n\n\n@pytest.mark.skip(reason='no demos')\ndef test_demo():\n    pass\n", "test_c.py": "def test_ok():\n    pass\n"}
+    assert _shards(tmp_path, files).returncode == 0
+    done = _shards(tmp_path, files, "--must-pass", "test_b.py")
+    assert done.returncode == 1 and "test_b.py is a must-pass file and ran 0 passed, 1 skipped" in done.stdout, done.stdout
+
+
+def test_a_failed_rerun_file_is_run_once_more_and_both_verdicts_are_printed(tmp_path):
+    """NIBBLES m16 failed in CI run 4 and 5 and passed locally: a red that cannot say whether it fails again cannot be told from a flaky one."""
+    marker = tmp_path / "seen"
+    body = f"import pathlib\n\n\ndef test_first_time_only():\n    m = pathlib.Path({str(marker)!r})\n    seen = m.exists()\n    m.write_text('x')\n    assert seen\n"
+    done = _shards(tmp_path, {"test_a.py": "def test_fine():\n    pass\n", "test_b.py": body, "test_c.py": "def test_ok():\n    pass\n"}, "--rerun", "test_b.py")
+    assert done.returncode == 1 and "test_b.py failed, rerun passed" in done.stdout, done.stdout
+
+
+def test_the_shard_summary_counts_the_tests_passed_and_skipped(tmp_path):
+    """A vacuous green must be visible in the log: the summary says how many tests passed and how many skipped."""
+    done = _shards(tmp_path, {"test_a.py": "def test_fine():\n    pass\n\n\ndef test_two():\n    pass\n", "test_b.py": "import pytest\n\n\n@pytest.mark.skip\ndef test_demo():\n    pass\n", "test_c.py": "def test_ok():\n    pass\n"})
+    assert "3 passed, 1 skipped" in done.stdout, done.stdout
+
+
+def test_the_dos_step_requires_the_demo_tests_to_pass():
+    cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
+    assert "--must-pass tools/dosbatch/test_qbdemos.py" in cmd and "--rerun tools/dosbatch/test_qbdemos.py" in cmd
+
+
+def test_the_dos_step_prints_the_host_cpu_and_the_emulator_it_ran_on():
+    """Run 4 and 5 failed NIBBLES m16 on a hosted runner and the log had no CPU model, no DOSBox build and no core: nothing to compare with a green local run."""
+    cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
+    assert "lscpu" in cmd and "dosbox-x" in cmd and "qb32.DEMO_CONF" in cmd
+    assert "[diag!] " in cmd and "[diag] " in cmd  # tagged, so the gate copies them into the job log
+    assert "rustc -vV" in cmd and "demo-hashes.txt" in cmd and "exit $rc" in cmd  # the build's hashes are printed on green and red
+    assert "tools/dosbatch/x87probe.py || true;" in cmd  # the host FPU's verdict is printed, never a red of its own
+
+
+def test_the_dos_step_plays_nibbles_under_a_conf_matrix_after_the_tests_and_names_the_emulators_compiler():
+    """Run 6 died at 38 pixels with nothing to say whether the emulator or the compiler did it: the matrix lines and the compiler of the
+    CI's dosbox-x go to the job log, and the matrix runs after the tests so their verdict stays the step's."""
+    cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
+    assert cmd.index("pytest_shards.py") < cmd.index("rc=$?") < cmd.index("tools/dosbatch/nibprobe.py") < cmd.index("exit $rc")
+    assert "nibprobe.py 2>&1 | sed" in cmd and "readelf -p .comment" in cmd  # the .comment section names the build's compiler; a `strings` grep found a bundled library's
 
 
 def test_the_pytest_step_runs_through_the_sharder_with_the_ignores_and_the_cpu_limit():
@@ -1363,9 +1433,9 @@ def test_the_bench_step_is_cut_into_the_configured_shards_each_with_its_own_slic
     p = gate.plan(["bench/fib/fib.c"], "full")
     groups = gate.groups_of(p, {})
     n = gate.load()["bench"]["shards"]
-    assert [g for g in groups if g.startswith("bench")] == ["bench-base"] + [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
+    assert [g for g in groups if g.startswith("bench")] == [f"bench-base-{i}" for i in range(1, n + 1)] + [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
     assert gate.shard_of("bench-3") == ("bench", f"3/{n}") and gate.shard_of("tools") == ("tools", None)
-    assert gate.shard_of("bench-base") == ("bench", "base"), "the base is measured once, by its own job, for every slice to be judged against"
+    assert gate.shard_of("bench-base-2") == ("bench", f"base:2/{n}"), "the base is measured in slices, one job each (the one leg outlasted the 90-minute job timeout in gate run 7)"
     assert "--shard" in gate.commands(p, gate.load(), gate.packages())["bench"]
 
 
@@ -1518,3 +1588,32 @@ def test_a_github_actions_runner_without_a_user_bus_runs_the_gate_unscoped():
     assert gate.scoped(["x"], ci, "/usr/bin/systemd-run") is None
     assert gate.scope_refusal(ci, "/usr/bin/systemd-run") is None
     assert gate.scope_refusal({}, "/usr/bin/systemd-run") is not None, "a dev box without a bus still refuses"
+
+
+def test_a_public_repo_the_gate_clones_is_pinned_to_a_sha():
+    """rm-quake was cloned at its HEAD: its 047e7a8 (lit faces with no lightmap) turned oracle-qcport red with no change in this repository. A push there must not move the gate."""
+    public = gate.load()["private"]["public"]
+    assert public and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", spec) for spec in public.values()), public
+
+
+def test_a_streamed_steps_lines_reach_the_job_log_while_it_runs_and_a_cut_step_keeps_them(tmp_path, capsys):
+    """Gate run 7: bench-base was cancelled at 90 minutes and the job log held none of its stage lines (a step's log was printed at its end)."""
+    tail = gate.LogTail(tmp_path / "bench.log", "bench")
+    tail.pump()
+    (tmp_path / "bench.log").write_text("bench: [0s] base counts\nbench: [12s] half a li")
+    tail.pump()
+    assert capsys.readouterr().out == "[bench] bench: [0s] base counts\n", "a line is printed once it is whole"
+    (tmp_path / "bench.log").write_text("bench: [0s] base counts\nbench: [12s] half a line\n")
+    tail.pump()
+    assert capsys.readouterr().out == "[bench] bench: [12s] half a line\n"
+    gate.run_step("bench", "echo 'bench: [1s] stage' >&2", tmp_path, os.environ.copy())
+    assert "[bench] bench: [1s] stage" in capsys.readouterr().out
+    gate.run_step("pytest", "echo 'a test line'", tmp_path, os.environ.copy())
+    assert "[pytest]" not in capsys.readouterr().out, "only the steps that print little and run long are streamed"
+
+
+def test_a_streamed_step_cut_mid_run_leaves_its_stage_lines_in_the_output(tmp_path, capsys):
+    """Gate run 7: the job timeout cut bench-base after 73 minutes of work and the job log held no stage line, so nobody could say where it was."""
+    done = gate.run_step("bench", "echo 'bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores' >&2; sleep 60", tmp_path, os.environ.copy(), stall=2)
+    assert done[1] == gate.STALL_CODE
+    assert "[bench] bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores" in capsys.readouterr().out
