@@ -1,0 +1,38 @@
+reason = "TEMPORARY trade-off (owner w2; ruled by coordinator 2026-10-30). A recursive function that loads a pointer from a slice descriptor keeps the descriptor: ArgumentPromotion.cpp#L581 `if (IsRecursive && Ty->isPointerTy()) return false` (pin d1106deb71cc), which ours lacked. bintree and queens nib -O2 reload the length and data pointer through it; quicksort nib -O2 improves. Removal: a pin-faithful pass that recovers the loads, or the 2026-11-06 re-judge."
+exception = true
+
+[[row]]
+label = "bintree nib -O2"
+counter = "instructions"
+tip = 69845
+to = 71223
+
+[[row]]
+label = "bintree nib -O2"
+counter = "memory_operands"
+tip = 18533
+to = 20211
+
+[[row]]
+label = "bintree nib -O2"
+counter = "code_bytes"
+tip = 342
+to = 382
+
+[[row]]
+label = "queens nib -O2"
+counter = "instructions"
+tip = 225467
+to = 241808
+
+[[row]]
+label = "queens nib -O2"
+counter = "memory_operands"
+tip = 36834
+to = 50686
+
+[[row]]
+label = "queens nib -O2"
+counter = "code_bytes"
+tip = 228
+to = 273
