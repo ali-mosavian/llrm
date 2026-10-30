@@ -1,0 +1,98 @@
+reason = "TEMPORARY trade-off (owner w2; ruled by coordinator 2026-10-30). MemCpyOpt merges nbody's zero stores of doubles into a memset (the pin's own gate, MemCpyOptimizer.cpp:112), and the memset lowers to `xor ecx, ecx` plus dword stores where the base had `fldz` and one `fst qword` per double: the pin's own llc for i386 without SSE does the same for 32 bytes (8 stores, optsize too; rep stos from 64 bytes). Clocks fall 35-52 on every nbody row. Removal: an x87 zero-store lowering in the memset expander, or the 2026-11-06 re-judge."
+exception = true
+
+[[row]]
+label = "nbody bq32 -O2"
+counter = "instructions"
+tip = 57621
+to = 57628
+
+[[row]]
+label = "nbody bq32 -O2"
+counter = "code_bytes"
+tip = 827
+to = 923
+
+[[row]]
+label = "nbody bq32 -Os"
+counter = "instructions"
+tip = 46034
+to = 46045
+
+[[row]]
+label = "nbody bq32 -Os"
+counter = "code_bytes"
+tip = 613
+to = 655
+
+[[row]]
+label = "nbody c -O2"
+counter = "instructions"
+tip = 51062
+to = 51066
+
+[[row]]
+label = "nbody c -O2"
+counter = "memory_operands"
+tip = 20633
+to = 20641
+
+[[row]]
+label = "nbody c -O2"
+counter = "code_bytes"
+tip = 362
+to = 460
+
+[[row]]
+label = "nbody c -Os"
+counter = "instructions"
+tip = 50265
+to = 50270
+
+[[row]]
+label = "nbody c -Os"
+counter = "memory_operands"
+tip = 20633
+to = 20641
+
+[[row]]
+label = "nbody c -Os"
+counter = "code_bytes"
+tip = 344
+to = 381
+
+[[row]]
+label = "nbody nib -O2"
+counter = "instructions"
+tip = 51057
+to = 51064
+
+[[row]]
+label = "nbody nib -O2"
+counter = "memory_operands"
+tip = 20434
+to = 20442
+
+[[row]]
+label = "nbody nib -O2"
+counter = "code_bytes"
+tip = 354
+to = 457
+
+[[row]]
+label = "nbody nib -Os"
+counter = "instructions"
+tip = 50260
+to = 50267
+
+[[row]]
+label = "nbody nib -Os"
+counter = "memory_operands"
+tip = 20434
+to = 20442
+
+[[row]]
+label = "nbody nib -Os"
+counter = "code_bytes"
+tip = 336
+to = 376
