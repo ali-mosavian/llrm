@@ -936,6 +936,8 @@ impl<'a> TypeLegalizer<'a> {
             return Ok(true);
         }
         self.replace_value_with(node, result);
+        // `ReplaceNodeWith` deletes the node it replaced, so what it read no longer counts it as a user.
+        self.dag.delete_replaced(n);
         Ok(false)
     }
 

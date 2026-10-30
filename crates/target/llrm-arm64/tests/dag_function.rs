@@ -863,3 +863,12 @@ fn a_mask_the_store_reads_only_low_bits_of_becomes_a_bitmask_immediate() {
     let ir = "@a = global i8 0\ndefine void @f() {\n  %l = load i8, ptr @a, align 1\n  %z = zext i8 %l to i32\n  %m = and i32 %z, 143\n  %r = trunc i32 %m to i8\n  store i8 %r, ptr @a, align 1\n  ret void\n}";
     assert_eq!(selected(ir).unwrap(), [["ADRP", "LDRBBui", "ANDWri", "STRBBui", "RET_ReallyLR"]]);
 }
+
+/// A promoted store left the store it replaced alive, so the `or` it stored counted two users and
+/// `SimplifyDemandedBits` demanded every bit of it: `143` stayed a `MOVi32imm` and `ANDWrr`.
+#[test]
+fn a_replaced_store_does_not_hide_the_bits_its_value_needs() {
+    let ir = "@a = global i8 0\ndefine void @f(i32 %y) {\n  %l = load i8, ptr @a, align 1\n  %z = zext i8 %l to i32\n  %m = and i32 %z, 143\n  %s = shl i32 %y, 4\n  %t = and i32 %s, 112\n  %o = or disjoint i32 %m, %t\n  %r = trunc nuw i32 %o to i8\n  store i8 %r, ptr @a, align 1\n  ret void\n}";
+    let ops = &selected(ir).unwrap()[0];
+    assert!(!ops.contains(&"MOVi32imm"), "{ops:?}");
+}
