@@ -375,13 +375,14 @@ impl Profile {
     /// off the stack in place of `add sp,2*words`: shorter for one or two
     /// words, and where size is not wanted, only if no slower.
     ///
-    /// DEVIATE PO1 (owner w10, 2026-10-31): the pin pops only at `minsize`
+    /// DEVIATE PO1 (owner w10, 2026-10-30): the pin pops only at `minsize`
     /// (`X86FrameLowering::eliminateCallFramePseudoInstr`,
     /// X86FrameLowering.cpp:4116, `F.hasMinSize() && adjustStackWithPops`; pin
     /// llc -mcpu=i486 keeps `add esp,8` at `optsize`). Here -Os pops too: one
     /// byte shorter per two-word site, two memory operands more (qmove bas
-    /// -Os memops 32 against 29, bytes equal). Exit: -Os is held to the pin's
-    /// size and clocks, then this is `self.min_size` only.
+    /// -Os memops 32 against 29, bytes equal). Main 65098fd950 has this same
+    /// function, so no row moves against main. Exit: -Os is at or below main
+    /// without it, then this is `self.min_size` only.
     pub fn pops_arguments(
         &self,
         words: i64,
