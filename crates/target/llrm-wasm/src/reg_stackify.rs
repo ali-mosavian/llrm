@@ -22,8 +22,9 @@
 //! `isSafeToMove` (L296), `hasSingleUse` (L248), `TreeWalkerState` (L735),
 //! `CommutingState` (L797).
 
+use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::generated::instrinfo::{desc, flag};
-use crate::mir::{DefUse, Function, Inst, Operand, VReg, is_argument};
+use crate::mir::{DefUse, Function, IMPLICIT_DEF, Inst, Operand, VReg, ValType, is_argument};
 
 /// `TreeWalkerState`: ranges of the operands still to visit, last first.
 struct TreeWalker {
@@ -184,6 +185,16 @@ fn stackify_block(
             if can_move && uses == 1 {
                 f.stackify(reg);
                 insert = def;
+                // `convertImplicitDefToConstZero`: the push must be explicit.
+                if f.blocks[b][def].opcode == IMPLICIT_DEF {
+                    let (opcode, zero) = match f.vreg_type(reg) {
+                        ValType::I32 => (op::CONST_I32, Operand::Imm(0)),
+                        ValType::I64 => (op::CONST_I64, Operand::Imm(0)),
+                        ValType::F32 => (op::CONST_F32, Operand::F32(0)),
+                        ValType::F64 => (op::CONST_F64, Operand::F64(0)),
+                    };
+                    f.blocks[b][def] = Inst::new(opcode, &[Operand::Def(reg), zero]);
+                }
             } else {
                 if !can_move {
                     commuting.maybe_commute(f, insert, &mut walker);

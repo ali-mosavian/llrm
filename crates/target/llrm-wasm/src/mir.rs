@@ -17,6 +17,9 @@ use crate::dagisel::post_ids as post;
 /// the predecessors.
 pub const PHI: u16 = u16::MAX;
 
+/// `TargetOpcode::IMPLICIT_DEF`: `IMPLICIT_DEF dst`.
+pub const IMPLICIT_DEF: u16 = u16::MAX - 1;
+
 /// A virtual register, by index.
 pub type VReg = u32;
 

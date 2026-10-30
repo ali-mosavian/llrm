@@ -9,18 +9,6 @@ fn refusal(text: &str) -> String {
     assembly(text, Width::W32, Options::default()).expect_err("refused")
 }
 
-/// A loop with two entries (`a` and `b` jump to each other, `entry` reaches
-/// both) went through `CFGSort` and `CFGStackify`, which assume natural loops,
-/// and came out as wasm for another program.
-#[test]
-fn irreducible_control_flow_is_refused_by_name() {
-    let why = refusal(
-        "define i32 @f(i1 %c, i1 %d, i1 %e) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br i1 %d, label %b, label %out\n\
-         b:\n  br i1 %e, label %a, label %out\nout:\n  ret i32 0\n}\n",
-    );
-    assert!(why.contains("irreducible control flow"), "{why}");
-}
-
 /// An `invoke`'s unwind edge was a successor of its block, so a pad nothing
 /// else branches to stayed in the function: `i32.const 2; return` after the
 /// normal path's `return`. The pin drops it (`LowerInvoke`).

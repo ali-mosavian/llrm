@@ -230,3 +230,11 @@ fn variadic_calls_pass_a_buffer() {
 fn variadic_functions_read_their_buffer() {
     check("varargs_body");
 }
+
+/// A loop entered at two blocks was refused ("irreducible control flow ... is not supported yet"), and
+/// Gorillas' `@QB_MAIN` with it. The loop gets one entry, a `br_table` on a label register, and the
+/// registers whose definitions now miss a path are defined at the top.
+#[test]
+fn a_loop_with_two_entries_gets_one() {
+    check("irreducible");
+}

@@ -2,7 +2,7 @@
 //! becomes a local, read by `local.get` before its user and written by
 //! `local.set` after its definer.
 //!
-//! DEVIATE: not translated are inline asm operands, `IMPLICIT_DEF`,
+//! DEVIATE: not translated are inline asm operands,
 //! `FAKE_USE`, debug values and the virtual frame base. Reason: the slice has
 //! none. Exit: with the frame lowering (W8).
 //!
@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::mir::{Function, Inst, Operand, VReg, is_argument, is_copy, is_tee};
+use crate::mir::{Function, IMPLICIT_DEF, Inst, Operand, VReg, is_argument, is_copy, is_tee};
 
 /// `findStartOfTree`: the index in `block` of the first instruction of the
 /// stackified tree whose root defines `reg`, which a use before `before` reads.
@@ -91,6 +91,12 @@ pub fn explicit_locals(f: &mut Function) -> bool {
         let mut i = 0;
         while i < f.blocks[block].len() {
             let mut at = i;
+            // The local keeps the default zero the engine gives it.
+            if f.blocks[block][at].opcode == IMPLICIT_DEF {
+                f.blocks[block].remove(at);
+                changed = true;
+                continue;
+            }
             if is_tee(f.blocks[block][at].opcode) {
                 changed = true;
                 i = tee(f, &mut locals, block, at);

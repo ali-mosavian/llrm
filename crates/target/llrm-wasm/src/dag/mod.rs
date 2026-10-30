@@ -12,12 +12,12 @@ use llrm_mir::types::Type;
 
 use crate::Width;
 use crate::argument_move::argument_move;
-use crate::cfg::Cfg;
 use crate::cfg_sort::cfg_sort;
 use crate::cfg_stackify::cfg_stackify;
 use crate::custom_inserter::lower_memory_pseudos;
 use crate::explicit_locals::explicit_locals;
 use crate::fix_br_table_defaults::fix_br_table_defaults;
+use crate::fix_irreducible::fix_irreducible_control_flow;
 use crate::frame::frame_lowering;
 use crate::lower_br_unless::lower_br_unless;
 use crate::mir::{Function, Operand, ValType};
@@ -105,12 +105,7 @@ pub fn compile_function(
     phi_elimination(&mut f);
     frame_lowering(&mut f, if width == Width::W32 { ValType::I32 } else { ValType::I64 })?;
     remove_unreachable_blocks(&mut f);
-    let cfg = Cfg::of(&f);
-    if let Some((from, to)) = cfg.irreducible_edge(&cfg.analyses().0) {
-        // DEVIATE: the pin runs `FixIrreducibleControlFlow` here. Exit:
-        // translate it.
-        return Err(format!("@{name}: irreducible control flow (block {from} to {to}) is not supported yet"));
-    }
+    fix_irreducible_control_flow(&mut f);
     if options.stackify {
         reg_stackify(&mut f);
     }
