@@ -55,6 +55,17 @@ pub enum CombineLevel {
 
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
+    /// `TLI.convertSelectOfConstantsToMath`: a select of two constants is an
+    /// extend of the condition plus a constant. The pin's default is false;
+    /// DEVIATE: true here because this combiner was written for x86, which
+    /// asks for it. Exit: x86 returns true and the default is the pin's.
+    fn convert_select_of_constants_to_math(
+        &self,
+        _vt: EVT,
+    ) -> bool {
+        true
+    }
+
     /// `visitXOR`'s `(xor (and x, y), y)` is `(and (not x), y)`. DEVIATE: off
     /// by default so x86's rows stay as they are until the judge has seen
     /// them. Exit: x86 judged.
@@ -871,7 +882,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         other: SDValue,
         vt: EVT,
     ) -> Option<SDValue> {
-        if !vt.is_integer() || self.level >= CombineLevel::AfterLegalizeVectorOps {
+        if !vt.is_integer()
+            || self.level >= CombineLevel::AfterLegalizeVectorOps
+            || !self.hooks.convert_select_of_constants_to_math(vt)
+        {
             return None;
         }
         let (c1, c2) = (self.dag.constant(then)?, self.dag.constant(other)?);

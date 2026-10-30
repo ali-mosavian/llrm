@@ -705,3 +705,37 @@ fn a_target_that_says_nothing_of_its_node_keeps_the_mask() {
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.get_root()), ISD::And);
 }
+
+/// Keeps a select of two constants a select, as AArch64's `csel` wants.
+struct KeepsConstantSelects;
+
+impl CombineHooks for KeepsConstantSelects {
+    fn convert_select_of_constants_to_math(
+        &self,
+        _vt: EVT,
+    ) -> bool {
+        false
+    }
+}
+
+fn select_of_constants(dag: &mut SelectionDAG) {
+    let (a, b) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6));
+    let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetLt);
+    let (t, f) = (dag.get_constant(8, EVT::I32), dag.get_constant(0, EVT::I32));
+    let pick = dag.get_select(EVT::I32, test, t, f);
+    dag.set_root(pick);
+}
+
+/// `c ? 8 : 0` became `zext(c) << 3` for every target; the pin's default
+/// (`convertSelectOfConstantsToMath` false) leaves the select to a `csel`.
+#[test]
+fn a_target_that_declines_keeps_a_select_of_two_constants() {
+    let mut dag = dag();
+    select_of_constants(&mut dag);
+    DagCombiner::new(&mut dag, &mut KeepsConstantSelects, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Select);
+    let mut dag = self::dag();
+    select_of_constants(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Shl, "the default is x86's");
+}
