@@ -7,8 +7,8 @@
 //! tables: (operation, type) to [`Action`], (extending load, type, memory
 //! type), (type, memory type) for truncating stores, and (condition code,
 //! type). Everything starts `Legal`; `init_actions` makes the pin's
-//! `initActions` defaults and `x86_32` the constructor's calls, in the pin's
-//! order, because a later call overwrites an earlier one. `operation_action`
+//! `initActions` defaults and `x86_32` (or `aarch64`, the scalar integer arms
+//! of `AArch64TargetLowering`, with the scalar float and atomic ones) the constructor's calls, in the pin's order, because a later call overwrites an earlier one. `operation_action`
 //! is `getOperationAction`: an integer with no simple type is `Expand`.
 //! `type_to_promote_to` is `getTypeToPromoteTo`: the recorded type, else the
 //! next wider legal type that handles the operation.
@@ -65,6 +65,19 @@ pub struct Features {
     pub sse2: bool,
 }
 
+/// The CPU features the AArch64 constructor's scalar arms test.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Aarch64Features {
+    /// `hasCSSC()`: scalar `ctpop`, `cttz`, `abs`, `smax` and the like are instructions.
+    pub cssc: bool,
+    /// `hasLSE()`: the atomic read-modify-writes are instructions.
+    pub lse: bool,
+    /// `outlineAtomics()`: without LSE they call the `__aarch64_*` helpers.
+    pub outline_atomics: bool,
+    /// `hasLSE2()`: a 128-bit atomic load or store is one access.
+    pub lse2: bool,
+}
+
 /// `ISD::LoadExtType`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LoadExt {
@@ -87,11 +100,17 @@ pub struct TargetLowering {
     cond_code: HashMap<(CondCode, MVT), Action>,
     /// `addLegalFPImmediate`: the float constants an instruction makes.
     legal_fp_immediates: Vec<(MVT, u128)>,
+    /// `isFPImmLegal` as a function of the value, for a target whose answer is not a short list.
+    fp_imm_predicate: Option<fn(MVT, u128) -> bool>,
     /// `ShouldShrinkFPConstant` is false for `f64`: with SSE2 `cvtss2sd` costs
     /// more than a straight `movsd`.
     keeps_f64_constants: bool,
     /// `canUseCMOV`: the target has the conditional move.
     cmov: bool,
+    /// `getLibcallName` of the integer operations (`RTLIB::MUL_I32` and the
+    /// like): the runtime routine a `LibCall` action calls. Empty unless the
+    /// target fills it.
+    libcall_names: HashMap<(ISD, MVT), &'static str>,
 }
 
 impl TargetLowering {
@@ -105,9 +124,31 @@ impl TargetLowering {
             trunc_store: HashMap::default(),
             cond_code: HashMap::default(),
             legal_fp_immediates: Vec::new(),
+            fp_imm_predicate: None,
             keeps_f64_constants: false,
             cmov: false,
+            libcall_names: HashMap::default(),
         }
+    }
+
+    /// `setLibcallName` for the integer operation `op` of `vt`.
+    pub fn set_libcall_name(
+        &mut self,
+        op: ISD,
+        vt: MVT,
+        name: &'static str,
+    ) {
+        self.libcall_names.insert((op, vt), name);
+    }
+
+    /// `getLibcallName` of the routine `op` of `vt` calls, if the target has one.
+    pub fn libcall_name(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> Option<&'static str> {
+        let EVT::Simple(vt) = vt else { return None };
+        self.libcall_names.get(&(op, vt)).copied()
     }
 
     pub fn set_operation_action(
@@ -193,7 +234,14 @@ impl TargetLowering {
         vt: MVT,
         bits: u128,
     ) -> bool {
-        self.legal_fp_immediates.contains(&(vt, bits))
+        self.legal_fp_immediates.contains(&(vt, bits)) || self.fp_imm_predicate.is_some_and(|legal| legal(vt, bits))
+    }
+
+    pub fn set_fp_imm_predicate(
+        &mut self,
+        predicate: fn(MVT, u128) -> bool,
+    ) {
+        self.fp_imm_predicate = Some(predicate);
     }
 
     /// `isMultiStoresCheaperThanBitsMerge`: the pin says so for a float and
@@ -293,7 +341,7 @@ impl TargetLowering {
     }
 
     /// `TargetLoweringBase::initActions`, for the opcodes [`ISD`] has.
-    fn init_actions(&mut self) {
+    pub fn init_actions(&mut self) {
         use ISD::*;
         for vt in ALL {
             self.set_ops(
@@ -365,6 +413,87 @@ impl TargetLowering {
         ptr: MVT,
     ) -> TargetLowering {
         Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false)
+    }
+
+    /// AArch64: `initActions`, then the scalar integer arms of
+    /// `AArch64TargetLowering::AArch64TargetLowering`
+    /// ([L481](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L481)),
+    /// in the pin's order. Floats, vectors, atomics, `i128` and the arms whose
+    /// [`ISD`] node does not exist yet are not translated.
+    ///
+    /// A `Custom` arm names an operation the pin's `LowerOperation` handles;
+    /// the legalizer must refuse it until that is translated, not expand it.
+    pub fn aarch64(features: Aarch64Features) -> TargetLowering {
+        use Action::*;
+        use ISD::*;
+        let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+        t.init_actions();
+        let words = [MVT::I32, MVT::I64];
+        // Custom lowerings (`LowerOperation`).
+        t.set_ops(&[GlobalAddress, ConstantPool, JumpTable, DynamicStackAlloc], &[MVT::I64], Custom);
+        t.set_ops(&[SetCC, BrCC, Select, SelectCC, Xor], &words, Custom);
+        t.set_ops(&[BrCond, BrJT, BrInd], &[MVT::Other], Custom);
+        t.set_ops(&[SetCCCarry], &[MVT::I64], Custom);
+        t.set_ops(&[ShlParts, SraParts, SrlParts], &[MVT::I64], Custom);
+        t.set_ops(&[BitReverse, CtLs], &words, Legal);
+        t.set_ops(&[BuildPair], &[MVT::I64], Expand);
+        t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
+        t.set_ops(&[VAStart, VACopy], &[MVT::Other], Custom);
+        t.set_ops(&[VAEnd, StackSave, StackRestore], &[MVT::Other], Expand);
+        t.set_ops(&[FShr, FShl], &words, Custom);
+        t.set_ops(&[Rotl], &words, Expand);
+        t.set_ops(&[MulHU, MulHS], &[MVT::I32], Expand);
+        t.set_ops(&[UMulLoHi, SMulLoHi], &words, Expand);
+        if features.cssc {
+            t.set_ops(&[CtPop, CtTz, Abs, SMax, UMax, SMin, UMin], &words, Legal);
+            t.set_ops(&[CtPop, Parity], &[MVT::I128], Expand);
+            t.set_ops(&[CtTz], &[MVT::I128], Expand);
+        } else {
+            t.set_ops(&[CtPop, Abs], &words, Custom);
+            t.set_ops(&[CtPop, Parity], &[MVT::I128], Custom);
+            t.set_ops(&[Parity], &[MVT::I64], Custom);
+        }
+        t.set_ops(&[SDivRem, SRem, UDivRem, URem], &words, Expand);
+        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO], &words, Custom);
+        t.set_ops(&[UAddOCarry, USubOCarry], &words, Custom);
+        for vt in INTS {
+            t.set_load_ext_action(LoadExt::SExtLoad, vt, MVT::I1, Expand);
+        }
+
+        // Scalar floats (`hasFPARMv8()`; `f16`, `bf16` and `f128` are not types here).
+        let floats = [MVT::F32, MVT::F64];
+        // `setOperationAction({SETCC, BR_CC, SELECT, SELECT_CC}, {f32, f64}, Custom)`
+        t.set_ops(&[SetCC, BrCC, Select, SelectCC], &floats, Custom);
+        t.set_ops(&[FRem], &floats, LibCall);
+        t.set_ops(&[FSin, FCos], &floats, Expand);
+        t.set_ops(&[FCopySign], &floats, Custom);
+        t.set_ops(&[FpExtend], &[MVT::F32], Legal);
+        t.set_ops(&[FpExtend], &[MVT::F64], Custom);
+        t.set_ops(&[FpRound], &floats, Custom);
+        t.set_ops(&[FRint, LRint], &floats, Legal);
+        t.set_ops(&[BitCast], &[MVT::I16], Custom);
+        for vt in floats {
+            for mem in floats {
+                t.set_load_ext_action(LoadExt::ExtLoad, vt, mem, Expand);
+            }
+        }
+        t.set_trunc_store_action(MVT::F64, MVT::F32, Expand);
+
+        // Atomics.
+        let narrow = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];
+        t.set_ops(&[AtomicCmpSwap], &[MVT::I128], Custom);
+        let sub = if !features.lse && !features.outline_atomics { LibCall } else { Expand };
+        t.set_ops(&[AtomicLoadSub], &words, sub);
+        t.set_ops(&[AtomicLoadAnd], &words, Custom);
+        if features.outline_atomics && !features.lse {
+            t.set_ops(&[AtomicCmpSwap], &[MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128], LibCall);
+            t.set_ops(&[AtomicSwap, AtomicLoadAdd, AtomicLoadOr, AtomicLoadClr, AtomicLoadXor], &narrow, LibCall);
+        }
+        t.set_ops(&[Load, Store], &[MVT::I128], Custom);
+        if features.lse2 {
+            t.set_ops(&[AtomicLoad, AtomicStore], &[MVT::I128], Custom);
+        }
+        t
     }
 
     fn x86(
@@ -540,6 +669,75 @@ impl TargetLowering {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lowering::TypeAction;
+
+    fn a64() -> TargetLowering {
+        TargetLowering::aarch64(Aarch64Features::default())
+    }
+
+    /// An x86 table's `i8` set-cc result and `i8` register class were the
+    /// only ones: AArch64 compares into an `i32` and has no `i8` register.
+    #[test]
+    fn aarch64_has_only_word_registers_and_an_i32_compare() {
+        let t = a64();
+        assert_eq!(t.types.type_conversion(EVT::I8), (TypeAction::PromoteInteger, EVT::I32));
+        assert_eq!(t.types.type_conversion(EVT::I16), (TypeAction::PromoteInteger, EVT::I32));
+        assert_eq!(t.types.type_conversion(EVT::I64).0, TypeAction::Legal);
+        assert_eq!(t.types.type_conversion(EVT::Simple(MVT::I128)).0, TypeAction::ExpandInteger);
+        assert_eq!(t.types.set_cc_result_type(EVT::I64), EVT::I32);
+    }
+
+    /// The pin marks SETCC, BR_CC and SELECT_CC `Custom` for `i32` and `i64`.
+    /// A table that left them `Legal` would let the legalizer pass them on
+    /// to a selector that has no pattern for them.
+    #[test]
+    fn aarch64_compares_are_custom_and_division_remainders_expand() {
+        let t = a64();
+        for op in [ISD::SetCC, ISD::BrCC, ISD::SelectCC, ISD::Select] {
+            assert_eq!(t.operation_action(op, EVT::I32), Action::Custom, "{op:?}");
+        }
+        for op in [ISD::SetCC, ISD::BrCC, ISD::SelectCC, ISD::Select] {
+            assert_eq!(t.operation_action(op, EVT::Simple(MVT::F64)), Action::Custom, "{op:?} f64");
+        }
+        assert_eq!(t.operation_action(ISD::SRem, EVT::I32), Action::Expand);
+        assert_eq!(t.operation_action(ISD::SDiv, EVT::I32), Action::Legal);
+        assert_eq!(t.operation_action(ISD::Add, EVT::I64), Action::Legal);
+        assert_eq!(t.operation_action(ISD::MulHU, EVT::I32), Action::Expand);
+        assert_eq!(t.operation_action(ISD::MulHU, EVT::I64), Action::Legal);
+    }
+
+    /// Without LSE the read-modify-writes are helper calls (or an LL/SC loop
+    /// when outlining is off); with it they are instructions.
+    #[test]
+    fn aarch64_atomics_follow_lse_and_outlining() {
+        let plain = a64();
+        assert_eq!(plain.operation_action(ISD::AtomicLoadSub, EVT::I32), Action::LibCall);
+        assert_eq!(plain.operation_action(ISD::AtomicLoadAnd, EVT::I64), Action::Custom);
+        let lse = TargetLowering::aarch64(Aarch64Features { lse: true, ..Default::default() });
+        assert_eq!(lse.operation_action(ISD::AtomicLoadSub, EVT::I32), Action::Expand);
+        let outlined = TargetLowering::aarch64(Aarch64Features { outline_atomics: true, ..Default::default() });
+        assert_eq!(outlined.operation_action(ISD::AtomicCmpSwap, EVT::I8), Action::LibCall);
+        assert_eq!(outlined.operation_action(ISD::AtomicSwap, EVT::I64), Action::LibCall);
+    }
+
+    /// Scalar float arms: `frem` is a libcall, `fsin` expands, a double
+    /// extends by hand and a single is free.
+    #[test]
+    fn aarch64_float_arms() {
+        let t = a64();
+        assert_eq!(t.operation_action(ISD::FRem, EVT::Simple(MVT::F64)), Action::LibCall);
+        assert_eq!(t.operation_action(ISD::FSin, EVT::Simple(MVT::F32)), Action::Expand);
+        assert_eq!(t.operation_action(ISD::FpExtend, EVT::Simple(MVT::F32)), Action::Legal);
+        assert_eq!(t.operation_action(ISD::FpExtend, EVT::Simple(MVT::F64)), Action::Custom);
+    }
+
+    /// CSSC turns scalar `ctpop` from a vector sequence into one instruction.
+    #[test]
+    fn aarch64_ctpop_follows_cssc() {
+        assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Custom);
+        let cssc = TargetLowering::aarch64(Aarch64Features { cssc: true, ..Default::default() });
+        assert_eq!(cssc.operation_action(ISD::CtPop, EVT::I32), Action::Legal);
+    }
 
     /// The action tables were std maps: SipHash on every `(op, type)` asked.
     /// Does not compile for any other hasher.

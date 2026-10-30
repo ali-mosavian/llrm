@@ -228,6 +228,13 @@ pub fn num_sign_bits(
         let extra = u32::from(dag.opcode(value) == ISD::AssertSext);
         return width - asserted.size_in_bits() + extra;
     }
+    // `ComputeNumSignBits` of `SETCC`: all bits where it returns 0 or -1.
+    if dag.opcode(value) == ISD::SetCC
+        && value.res == 0
+        && dag.config().boolean_contents == BooleanContents::ZeroOrNegativeOne
+    {
+        return width;
+    }
     if dag.opcode(value) == ISD::SignExtendInReg
         && let super::dag::NodeData::ValueType(inner) = dag.node(dag.operand(value, 1)).data
     {

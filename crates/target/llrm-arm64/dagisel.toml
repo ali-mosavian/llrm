@@ -1,0 +1,155 @@
+# The AArch64 DAG selector's source: read by tools/dagisel/regen-target.sh and `llrm-dagisel-gen --target`.
+# The tables sit in llrm-dagisel (`in_dagisel`); their node predicates are in its `aarch64_predicates`.
+[target]
+name = "aarch64"
+llvm_build = "llvm-build-aarch64"
+ns = "AArch64::"
+isd = "AArch64ISD::"
+llvm_dir = "AArch64"
+td = "AArch64.td"
+cpus = ["apple-m1"]
+hw_modes = ["i64", "i64"]
+in_dagisel = true
+# The directory of the checked-in tables, from this file.
+out = "../../backend/llrm-dagisel/src/generated/aarch64"
+predicates = "crate::aarch64_predicates"
+# The scalar registers the hand code maps to the arm64 file by name.
+registers = ["X0", "X1", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10", "X11", "X12", "X13", "X14", "X15", "X16", "X17", "X18", "X19", "X20", "X21", "X22", "X23", "X24", "X25", "X26", "X27", "X28", "FP", "LR", "SP", "XZR", "W0", "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "W10", "W11", "W12", "W13", "W14", "W15", "W16", "W17", "W18", "W19", "W20", "W21", "W22", "W23", "W24", "W25", "W26", "W27", "W28", "W29", "W30", "WSP", "WZR", "NZCV"]
+# Selected by hand (tryIndexedLoad), so no pattern names them.
+extra_symbols = [
+  "AArch64::LDRXpre",
+  "AArch64::LDRWpre",
+  "AArch64::LDRSWpre",
+  "AArch64::LDRSHXpre",
+  "AArch64::LDRSHWpre",
+  "AArch64::LDRHHpre",
+  "AArch64::LDRSBXpre",
+  "AArch64::LDRSBWpre",
+  "AArch64::LDRBBpre",
+  "AArch64::LDRHpre",
+  "AArch64::LDRSpre",
+  "AArch64::LDRDpre",
+  "AArch64::LDRQpre",
+  "AArch64::LDRXpost",
+  "AArch64::LDRWpost",
+  "AArch64::LDRSWpost",
+  "AArch64::LDRSHXpost",
+  "AArch64::LDRSHWpost",
+  "AArch64::LDRHHpost",
+  "AArch64::LDRSBXpost",
+  "AArch64::LDRSBWpost",
+  "AArch64::LDRBBpost",
+  "AArch64::LDRHpost",
+  "AArch64::LDRSpost",
+  "AArch64::LDRDpost",
+  "AArch64::LDRQpost",
+]
+ids_includes = [
+  '#include "MCTargetDesc/AArch64MCTargetDesc.h"',
+  '#include "AArch64SelectionDAGInfo.h"',
+]
+
+# AArch64 pattern-predicate atoms for the scalar subset (NEON, SVE and SME off): the dry run of
+# docs/working/arm64-selectiondag-plan.md. `[atom]` rows are what the pin's Subtarget says; an atom nothing states is an error.
+# apple-m1: the pin's `Processor` list, the scalar subset.
+[cpu.apple-m1]
+features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", "RDM"]
+
+[atom]
+"Subtarget->isNeonAvailable()" = false
+"Subtarget->isLittleEndian()" = true
+"Subtarget->isSVEorStreamingSVEAvailable()" = false
+"Subtarget->isSVEAvailable()" = false
+"Subtarget->isStreaming()" = false
+"Subtarget->isNonStreamingSVEorSME2Available()" = false
+"Subtarget->requiresStrictAlign()" = false
+"Subtarget->disableUnpredicatedLdStLower()" = false
+"shouldOptForSize(MF)" = false
+"Subtarget->isSTRQroSlow()" = false
+"Subtarget->useAlternateSExtLoadCVTF32Pattern()" = false
+"Subtarget->useWzrToVecMove()" = false
+"MF->getSubtarget<AArch64Subtarget>().hardenSlsBlr()" = false
+"MF->getInfo<AArch64FunctionInfo>()->branchTargetEnforcement()" = false
+"MF->getInfo<AArch64FunctionInfo>()->branchProtectionPAuthLR()" = false
+"MF->getFunction().hasOptNone()" = false
+
+[types]
+dead_prefixes = ["v", "nxv", "aarch64"]
+
+[node_predicate]
+# One name per predicate number is enough (the pin groups equal bodies). `never` is a query the Dag lacks (see aarch64_predicates.rs).
+extloadi8 = "memory_vt_i8"
+extloadi16 = "memory_vt_i16"
+extloadi32 = "memory_vt_i32"
+atomic_cmp_swap_i64 = "memory_vt_i64"
+extloadi1 = "memory_vt_i1"
+unindexedload = "unindexed_load"
+zextload = "zext_load"
+sextload = "sext_load"
+store = "non_truncating_store"
+unindexedstore = "unindexed_store"
+load = "non_extending_load"
+extload = "ext_load"
+truncstore = "truncating_store"
+or_disjoint = "or_disjoint"
+VectorIndexS = "imm_u64_lt_4"
+VectorIndexD = "imm_u64_lt_2"
+vecshiftR16 = "imm_u32_1_to_16"
+vecshiftR32 = "imm_u32_1_to_32"
+vecshiftR64 = "imm_u32_1_to_64"
+imm0_127 = "imm_u32_lt_128"
+imm32_0_7 = "imm_u32_lt_8"
+imm0_31 = "imm_u64_lt_32"
+vecshiftL32 = "imm_u32_lt_32"
+imm32_0_15 = "imm_u32_lt_16"
+imm0_255 = "imm_u32_lt_256"
+imm0_63 = "imm_u64_lt_64"
+timm32_0_65535 = "imm_u32_lt_65536"
+imm0_7 = "imm_u64_lt_8"
+imm0_15 = "imm_u64_lt_16"
+tbz_imm32_63 = "imm_u32_32_to_63"
+imm64_0_65535 = "imm_u64_lt_65536"
+ubsan_trap_imm = "imm_u8"
+rprfop = "imm_u32_le_63"
+simm9 = "simm9"
+s64imm_32bit = "simm32"
+i64imm_32bit = "zimm32"
+fpimm0 = "fp_imm_pos_zero"
+fpimm32 = "fp_imm_fmov32"
+fpimm64 = "fp_imm_fmov64"
+top32Zero = "top32_zero"
+topbitsallzero64 = "topbits_all_zero64"
+topbitsallzero32 = "topbits_all_zero32"
+top16Zero = "top16_zero"
+logical_imm32 = "logical_imm32"
+logical_imm64 = "logical_imm64"
+copyFromSP = "copy_from_sp"
+nontemporalstore = "non_temporal_store"
+anonymous_23203 = "never"
+anonymous_23211 = "never"
+atomic_cmp_swap_i16_monotonic = "never"
+atomic_cmp_swap_i16_release = "never"
+atomic_cmp_swap_i16_acq_rel = "never"
+anonymous_23315 = "never"
+anonymous_23320 = "never"
+anonymous_23214 = "never"
+anonymous_23253 = "never"
+anonymous_23251 = "never"
+anonymous_23350 = "never"
+anonymous_23364 = "never"
+atomic_load_aext = "never"
+atomic_load_zext = "never"
+atomic_load_nonext = "never"
+ldaxr_1 = "never"
+ldaxr_2 = "never"
+ldaxr_4 = "never"
+ldaxr_8 = "never"
+post_store = "post_indexed"
+pre_store = "pre_indexed"
+smullwithsignbits = "never"
+svcr_op = "never"
+trunc_isWorthFoldingALU = "has_one_use"
+neg_cheaper_imm32 = "never"
+alignedglobal = "never"
+fpimm16 = "never"
+sve_incdec_imm = "never"

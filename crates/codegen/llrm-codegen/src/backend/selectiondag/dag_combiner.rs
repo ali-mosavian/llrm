@@ -55,6 +55,26 @@ pub enum CombineLevel {
 
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
+    /// `SimplifySetCC`'s "Canonicalize GE/LE comparisons to use GT/LT" (`x >= c`
+    /// is `x > c - 1`). DEVIATE: off by default. x86's rows are the old
+    /// selector's, which keeps a range check as `cmp n; jae`; the rewrite
+    /// turns it into `cmp n - 1; ja` and moved 35 of its 424 judged rows
+    /// (`switch` in every language). Exit: re-bless the x86 rows.
+    fn canonicalize_ge_le(&self) -> bool {
+        false
+    }
+
+    /// `TLI.convertSelectOfConstantsToMath`: a select of two constants is an
+    /// extend of the condition plus a constant. The pin's default is false;
+    /// DEVIATE: true here because this combiner was written for x86, which
+    /// asks for it. Exit: x86 returns true and the default is the pin's.
+    fn convert_select_of_constants_to_math(
+        &self,
+        _vt: EVT,
+    ) -> bool {
+        true
+    }
+
     /// `visitXOR`'s `(xor (and x, y), y)` is `(and (not x), y)`. DEVIATE: off
     /// by default so x86's rows stay as they are until the judge has seen
     /// them. Exit: x86 judged.
@@ -627,6 +647,30 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(folded) = self.signed_truncation_check(vt, n0, c1, cond) {
             return Some(folded);
         }
+        // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >= c` is
+        // `x > c - 1` and `x <= c` is `x < c + 1`, with the always-true extremes folded.
+        if self.level < CombineLevel::AfterLegalizeVectorOps && self.hooks.canonicalize_ge_le() {
+            let bits = op_type.size_in_bits();
+            if matches!(cond, CondCode::SetGe | CondCode::SetUGe | CondCode::SetLe | CondCode::SetULe) {
+                let unsigned = matches!(cond, CondCode::SetUGe | CondCode::SetULe);
+                let ge = matches!(cond, CondCode::SetGe | CondCode::SetUGe);
+                let mask = super::fold::mask(bits);
+                let (min, max) = if unsigned { (0, mask) } else { (1u128 << (bits - 1), mask >> 1) };
+                let edge = if ge { min } else { max };
+                if c1 & mask == edge {
+                    return Some(self.dag.get_bool_constant(true, vt));
+                }
+                let moved = if ge { c1.wrapping_sub(1) } else { c1.wrapping_add(1) } & mask;
+                let new_cond = match (ge, unsigned) {
+                    (true, false) => CondCode::SetGt,
+                    (true, true) => CondCode::SetUGt,
+                    (false, false) => CondCode::SetLt,
+                    (false, true) => CondCode::SetULt,
+                };
+                let rhs = self.dag.get_constant(moved, op_type);
+                return Some(self.dag.get_setcc(vt, n0, rhs, new_cond));
+            }
+        }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
             || self.level != CombineLevel::BeforeLegalizeTypes
             || !self.dag.has_one_use(n0.node)
@@ -829,7 +873,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         other: SDValue,
         vt: EVT,
     ) -> Option<SDValue> {
-        if !vt.is_integer() || self.level >= CombineLevel::AfterLegalizeVectorOps {
+        if !vt.is_integer()
+            || self.level >= CombineLevel::AfterLegalizeVectorOps
+            || !self.hooks.convert_select_of_constants_to_math(vt)
+        {
             return None;
         }
         let (c1, c2) = (self.dag.constant(then)?, self.dag.constant(other)?);
