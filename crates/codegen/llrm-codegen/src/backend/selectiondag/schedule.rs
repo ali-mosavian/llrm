@@ -131,6 +131,14 @@ pub trait SchedInfo {
     fn call_frame_destroy(&self) -> Option<u32> {
         None
     }
+    /// DEVIATE: the register a copy of a virtual register may clobber, as the
+    /// move it can become after allocation does (M68k's `MOVE` sets CCR). A
+    /// copy is then held back from between a flag-setter and its reader, where
+    /// the pin leaves it and the flags are saved around it. None: copies
+    /// clobber nothing.
+    fn copy_clobbers(&self) -> Option<u16> {
+        None
+    }
     /// `TRI->regsOverlap`.
     fn regs_overlap(
         &self,
@@ -1120,6 +1128,11 @@ impl<'a> Graph<'a> {
             }
         }
         for &node in &self.sus[su].nodes {
+            if let Some(reg) = self.info.copy_clobbers()
+                && self.is_virtual_copy(node)
+            {
+                self.check_for_live_reg_def(su, reg, &mut live);
+            }
             let Some(op) = self.machine(node) else { continue };
             // In the middle of a call sequence, another one does not begin.
             if self.is_call_frame(node, true)
@@ -1138,6 +1151,15 @@ impl<'a> Graph<'a> {
             }
         }
         live
+    }
+
+    /// A `CopyToReg` into, or `CopyFromReg` out of, a virtual register.
+    fn is_virtual_copy(
+        &self,
+        node: u32,
+    ) -> bool {
+        matches!(self.opcode(node), ISD::CopyToReg | ISD::CopyFromReg)
+            && virtual_register(self, self.ops(node)[1])
     }
 
     /// `CheckForLiveRegDef`.

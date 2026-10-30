@@ -145,6 +145,10 @@ impl SchedInfo for M68kSched {
         Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKUP))
     }
 
+    fn copy_clobbers(&self) -> Option<u16> {
+        Some(pin::CCR)
+    }
+
     /// M68k does not enable the machine scheduler: `createDefaultScheduler`
     /// gives it the ILP list scheduler.
     fn preference(&self) -> Preference {
