@@ -50,7 +50,8 @@ pub struct Out {
     pub arg_vt: EVT,
     /// `ArgFlags.isSplit()`: one of several parts of a value.
     pub split: bool,
-    /// The argument is one of a call's variadic ones (`CallLoweringInfo::IsVarArg` past `NumFixedArgs`).
+    /// The argument is one of a call's variadic ones
+    /// (`CallLoweringInfo::IsVarArg` past `NumFixedArgs`).
     pub variadic: bool,
 }
 

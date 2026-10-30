@@ -32,7 +32,8 @@ impl Builder<'_> {
         intrinsic: &Intrinsic,
     ) -> Result<(), Refused> {
         match intrinsic {
-            // The expansion is x86's `rep movs` and `rep stos` and its registers.
+            // The expansion is x86's `rep movs` and `rep stos` and its
+            // registers.
             Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove if self.arch.full().is_none() => {
                 Err(Refused("a mem intrinsic for a target with no string instructions"))
             }
@@ -755,8 +756,19 @@ impl Builder<'_> {
                     (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.has_min_size() => {
                         self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
                     }
-                    (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && bytes <= MAX_INLINE_SIZE && alignment >= 4 => self
-                        .rep_movs(root, dst, other, bytes, alignment.min(self.string_block()), dst_align, src_align)?,
+                    (None, Intrinsic::MemCpy, Some(bytes))
+                        if strings_exist && bytes <= MAX_INLINE_SIZE && alignment >= 4 =>
+                    {
+                        self.rep_movs(
+                            root,
+                            dst,
+                            other,
+                            bytes,
+                            alignment.min(self.string_block()),
+                            dst_align,
+                            src_align,
+                        )?
+                    }
                     // no `memcpy` to call for a copy the pin leaves to one
                     // (alignment under 4): dwords, as the old selector copies;
                     // x86 takes them unaligned
@@ -777,11 +789,19 @@ impl Builder<'_> {
                     // movs` ascends, as the move needs (DEVIATE: the pin calls
                     // `memmove`; at m16 the old selector inlines it, 2.2x on
                     // scroll.c)
-                    _ if strings_exist && forward && matches!(which, Intrinsic::MemMove) && self.inline_string_move(dst, other) => {
+                    _ if strings_exist
+                        && forward
+                        && matches!(which, Intrinsic::MemMove)
+                        && self.inline_string_move(dst, other) =>
+                    {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
                     // proved backward: from the last dword down
-                    _ if strings_exist && backward && matches!(which, Intrinsic::MemMove) && self.inline_string_move(dst, other) => {
+                    _ if strings_exist
+                        && backward
+                        && matches!(which, Intrinsic::MemMove)
+                        && self.inline_string_move(dst, other) =>
+                    {
                         self.backward_rep_movs_dwords(root, dst, other, size)
                     }
                     _ if !self.runtime_has(if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" }) => {
@@ -817,7 +837,9 @@ impl Builder<'_> {
                 };
                 match (inline, constant) {
                     (Some(chain), _) => chain,
-                    (None, Some(bytes)) if strings_exist && (self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4)) => {
+                    (None, Some(bytes))
+                        if strings_exist && (self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4)) =>
+                    {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
                     // no `memset` to call: dwords, as the old selector fills;
@@ -825,7 +847,9 @@ impl Builder<'_> {
                     // tail costs the bytes the dwords save, and a far one
                     // cannot be named) and not for size: `xor eax, eax` is a
                     // byte more than `xor al, al`.
-                    (None, Some(bytes)) if strings_exist && !opt_size && !self.runtime_has("memset") && bytes % 4 == 0 => {
+                    (None, Some(bytes))
+                        if strings_exist && !opt_size && !self.runtime_has("memset") && bytes % 4 == 0 =>
+                    {
                         self.rep_stos(root, dst, other, bytes, 4)?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),

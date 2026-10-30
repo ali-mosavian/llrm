@@ -125,7 +125,8 @@ impl TargetLowering {
         self.libcall_names.insert((op, vt), name);
     }
 
-    /// `getLibcallName` of the routine `op` of `vt` calls, if the target has one.
+    /// `getLibcallName` of the routine `op` of `vt` calls, if the target has
+    /// one.
     pub fn libcall_name(
         &self,
         op: ISD,

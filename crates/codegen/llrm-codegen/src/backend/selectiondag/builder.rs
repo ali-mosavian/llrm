@@ -97,9 +97,10 @@ pub struct BuilderTarget {
     /// decide.
     pub size_trade: Option<SizeTrade>,
     /// The pairs of an inline constant memcpy are chained one after another in
-    /// address order, not left unordered for the scheduler (`getMemcpyLoadsAndStores`
-    /// puts every load and store on the root). DEVIATE: a target that steps a
-    /// pointer with each access wants that order. Off for x86.
+    /// address order, not left unordered for the scheduler
+    /// (`getMemcpyLoadsAndStores` puts every load and store on the root).
+    /// DEVIATE: a target that steps a pointer with each access wants that
+    /// order. Off for x86.
     pub ordered_copies: bool,
     /// The target has x86's `rep movs` and `rep stos`; without them a copy or
     /// fill past the inline limit is a call (the pin's `memcpy`, `memset`).
@@ -444,17 +445,21 @@ fn dag_name(
 }
 
 /// An attribute that moves an argument out of the place its type gives it
-/// (`sret` to `x8`, `byval` to memory, `inreg`, `nest`, the Swift ones): a target's calling
-/// hook that does not place them refuses.
+/// (`sret` to `x8`, `byval` to memory, `inreg`, `nest`, the Swift ones): a
+/// target's calling hook that does not place them refuses.
 fn relocating_attribute(attrs: &[llrm_mir::opcode::Attribute]) -> Option<&'static str> {
     use llrm_mir::opcode::Attribute;
     const TYPED: [&str; 5] = ["sret", "byval", "byref", "inalloca", "preallocated"];
     const FLAGS: [&str; 5] = ["inreg", "nest", "swiftself", "swifterror", "swiftasync"];
-    attrs.iter().find_map(|attr| match attr {
-        Attribute::Type(name, _) => TYPED.into_iter().find(|one| name == one),
-        Attribute::Flag(name) => FLAGS.into_iter().find(|one| name == one),
-        _ => None,
-    })
+    attrs
+        .iter()
+        .find_map(
+            |attr| match attr {
+                Attribute::Type(name, _) => TYPED.into_iter().find(|one| name == one),
+                Attribute::Flag(name) => FLAGS.into_iter().find(|one| name == one),
+                _ => None,
+            },
+        )
 }
 
 impl<'a> Builder<'a> {
@@ -597,9 +602,11 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is to a variadic function: at m64
     /// `lower_call` sets `al` to the vector registers it uses.
     variadic_call: bool,
-    /// The call being lowered has an argument whose attribute moves it (`relocating_attribute`).
+    /// The call being lowered has an argument whose attribute moves it
+    /// (`relocating_attribute`).
     call_attrs_move_arguments: bool,
-    /// The parameters the callee declares: the arguments after them are variadic.
+    /// The parameters the callee declares: the arguments after them are
+    /// variadic.
     fixed_args: usize,
     /// A `TC_RETURN` ended the block: nothing after the call is built.
     had_tail_call: bool,
@@ -1255,7 +1262,8 @@ impl Builder<'_> {
         }
         let (result_type, named, variadic) = self.module.signature(info.function_type);
         let named = named.len();
-        // A target with a calling hook places every part itself: it reads no plan.
+        // A target with a calling hook places every part itself: it reads no
+        // plan.
         let hooked = self.calling().is_some();
         let first = if hooked { 0 } else { self.full_arch()?.first_argument_offset(false) };
         let plan = if hooked {
@@ -1490,7 +1498,8 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<Vec<EVT>, Refused> {
-        // A float is one part, in a register of its own class: the target's `accepts` says which.
+        // A float is one part, in a register of its own class: the target's
+        // `accepts` says which.
         if vt.is_floating_point() {
             return Ok(vec![vt]);
         }

@@ -34,10 +34,10 @@ use llrm_support::hash::HashSet;
 
 use super::actions::TargetLowering;
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
-use super::legalize_dag;
 use super::dagisel_adapter::DagisAdapter;
 use super::emit::{EmitContext, EmitState, Emitted, emit_in};
 use super::isd::ISD;
+use super::legalize_dag;
 use super::legalize_dag::DagLegalizer;
 use super::legalize_types::TypeLegalizer;
 use super::schedule::{SchedInfo, schedule};

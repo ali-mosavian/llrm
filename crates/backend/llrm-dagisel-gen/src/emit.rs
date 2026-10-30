@@ -201,7 +201,8 @@ pub fn render(src: &Source) -> Result<String, String> {
     writeln!(w, "pub const TABLE: Table = Table {{ items: &ITEMS, operands: &OPERANDS }};\n").unwrap();
 
     writeln!(w, "/// The pattern predicates still checked when a function is selected.").unwrap();
-    // With no open predicate nothing reads the context: the name says so (`-D warnings` refuses `ctx` unused).
+    // With no open predicate nothing reads the context: the name says so (`-D
+    // warnings` refuses `ctx` unused).
     let ctx = if src.open.is_empty() { "_ctx" } else { "ctx" };
     writeln!(w, "pub fn pattern_predicate<C: PatternContext>({ctx}: &C, id: u16) -> bool {{\n    match id {{").unwrap();
     for (id, e) in src.open {

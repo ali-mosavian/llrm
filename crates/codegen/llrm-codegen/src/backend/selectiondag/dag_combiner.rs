@@ -157,8 +157,8 @@ pub trait CombineHooks {
         false
     }
 
-    /// `SimplifySetCC`'s "Canonicalize GE/LE comparisons to use GT/LT" (`x >= c`
-    /// is `x > c - 1`). DEVIATE: off by default. x86's rows are the old
+    /// `SimplifySetCC`'s "Canonicalize GE/LE comparisons to use GT/LT" (`x >=
+    /// c` is `x > c - 1`). DEVIATE: off by default. x86's rows are the old
     /// selector's, which keeps a range check as `cmp n; jae`; the rewrite
     /// turns it into `cmp n - 1; ja` and moved 35 of its 424 judged rows
     /// (`switch` in every language). Exit: re-bless the x86 rows.
@@ -568,8 +568,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(folded) = self.signed_truncation_check(vt, n0, c1, cond) {
             return Some(folded);
         }
-        // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >= c` is
-        // `x > c - 1` and `x <= c` is `x < c + 1`, with the always-true extremes folded.
+        // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >=
+        // c` is `x > c - 1` and `x <= c` is `x < c + 1`, with the
+        // always-true extremes folded.
         if self.level < CombineLevel::AfterLegalizeVectorOps && self.hooks.canonicalize_ge_le() {
             let bits = op_type.size_in_bits();
             let (unsigned, ge) = match cond {
@@ -579,7 +580,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 CondCode::SetULe => (true, false),
                 _ => (false, matches!(cond, CondCode::SetEq)),
             };
-            if matches!(cond, CondCode::SetGe | CondCode::SetUGe | CondCode::SetLe | CondCode::SetULe) {
+            if matches!(
+                cond,
+                CondCode::SetGe | CondCode::SetUGe | CondCode::SetLe | CondCode::SetULe
+            ) {
                 let mask = super::fold::mask(bits);
                 let (min, max) = if unsigned { (0, mask) } else { (1u128 << (bits - 1), mask >> 1) };
                 let edge = if ge { min } else { max };

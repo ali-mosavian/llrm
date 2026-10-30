@@ -1,5 +1,6 @@
-//! A generated table with no open pattern predicate must not bind `ctx`: the checked-in AArch64 table failed
-//! `-D warnings` (CI's setting) on the unused binding. Generated here from the M68k fixture record, which has none.
+//! A generated table with no open pattern predicate must not bind `ctx`: the
+//! checked-in AArch64 table failed `-D warnings` (CI's setting) on the unused
+//! binding. Generated here from the M68k fixture record, which has none.
 //! `DAGISEL_SKIP_PIN=1` skips the test where the pin is not installed.
 
 use std::path::Path;
