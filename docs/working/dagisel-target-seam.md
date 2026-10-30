@@ -99,3 +99,20 @@ No lit test under `llvm/test/CodeGen/M68k` indexes a stack array. Ours: `match_a
 - Not looked at: `match_rotate.rs`, `bswap_combine.rs` and `combine_funnel.rs` (load-based forms).
 
 Each is a bug on m68k the moment a kernel uses i64 or merged stores; none is hit by the two bench sets.
+
+## S2 plan: `DagTarget` (2026-10-30)
+**Goal.** One shared IR -> scheduled-units driver, generic over a target; x86 is the first implementation, output byte-identical. Emission stays per target.
+
+**Why now.** Two drivers do the same walk: `dag_function.rs::selected_in` (x86) and `llrm-m68k/src/dagisel/{function,pipeline}.rs`. Both look the function up, parse the datalayout, build the convention, `build_block` each block (and its `extra` blocks), then combine, legalize, select and schedule it.
+
+**Trait** (in `selectiondag/`, one file): `lowering_info() -> TargetLowering`, `builder() -> BuilderTarget`, `selector() -> Selector`, `hooks() -> impl Hooks`, `legalizer() -> impl legalize Hooks + CombineHooks`, `pins() -> &dyn PinRegisters`, `sched_info()`, and `preprocess(dag, frame)` with a no-op default (x86: `x86_preprocess`).
+
+**Shared driver.** `select_units(dag, &T)`: today's `select_block` minus `emit_in` (legalize, scratch slots, preprocess, assertions, select, schedule). x86's `select_block` becomes `select_units` + `emit_in`. `selected_in` keeps alloca layout, frame, emission and the bitness gate, which picks `X86Target::{m16,m32,m64}`.
+
+**Files.** New: `selectiondag/dag_target.rs`. Edited: `dag_select.rs` (generic `select_units`), `dag_function.rs` (build the `X86Target`, call the driver; about 60 lines move), `x86_lowering.rs` (impl the trait pieces; no logic change). Not touched: `emit.rs`, `dagisel_adapter.rs` (no S2 hunk).
+
+**Second implementation.** The m68k crate is not on release/next, so the PR ships the trait and x86 only. The m68k impl is checked on `feat/m68k-spike` (it replaces `pipeline.rs`'s body) and lands with the m68k backend PR.
+
+**Overlap.** w15's unpushed `w15/shared-legalizer` (fc2230f1f3, stack #2-#4) edits `dagisel_adapter.rs`, `builder.rs`, `target_calling.rs`, `dag_combiner.rs`, `legalize_types.rs`, `llrm-sdag/src/{isd,lowering}.rs`. S2 does not touch those files; `dag_select.rs` and `dag_function.rs` are in neither diff (checked with `git diff --stat`). Textual conflict: none expected. Semantic: `ShiftAmount::Fixed` and the compare-type hook are read from `TargetLowering`, which the trait only forwards.
+
+**Proof.** The sweep (`~/scratch/handoff/sweep/`, 1472 rows) against the parent, md5-stamped. Control: same tree with the x86 scheduler preference flipped (`Info { source_order }`), which must move rows. Tests: `llrm-codegen` lib tests and a unit test that `select_units` over a hand-built DAG equals today's `select_block` units for x86.
