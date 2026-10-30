@@ -153,6 +153,7 @@ pub mod combine_select_bools;
 pub mod combine_select_ext_const;
 pub mod combine_select_into_op;
 pub mod combine_select_op_op;
+pub mod combine_select_sign_bit;
 pub mod combine_select_spf;
 #[cfg(test)]
 mod combine_semantics_tests;

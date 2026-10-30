@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 224 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 225 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -70,13 +70,14 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_select_ext_const | `foldSelectExtConst`: `select c, (ext x), C` as `ext (select c, x, C')`. | Named by `combine_visit_select`. | [combine_select_ext_const](combine_select_ext_const.md) |
 | combine_select_into_op | `foldSelectIntoOp`: `select c, (op x, y), x` as `op x, (select c, y, identity)`. | Named by `combine_visit_select`. | [combine_select_into_op](combine_select_into_op.md) |
 | combine_select_op_op | `foldSelectOpOp`: `select c, (op x, a), (op x, b)` as `op x, (select c, a, b)`. | Named by `combine_visit_select`. | [combine_select_op_op](combine_select_op_op.md) |
+| combine_select_sign_bit | `foldSelectInstWithICmp`'s sign-bit step: a select on `x > -1` tests `x < 0` with its arms swapped. | `visitSelectInst`, right after `canonicalizeSPF`. | [combine_select_sign_bit](combine_select_sign_bit.md) |
 | combine_select_spf | `foldSelectInstWithICmp`'s first step: a select that is a min, a max or an absolute value of a compare becomes the intrinsic. | `visitSelectInst`. | [combine_select_spf](combine_select_spf.md) |
 | combine_shared | What InstCombine's integer `visit*` functions share from `InstructionCombining.cpp`: the complexity order that puts constants on the right, and the reassociation of an associative or commutative operation. | `combine_addsub` (`visitAdd`, `visitSub`) and the families after it. | [combine_shared](combine_shared.md) |
 | combine_shift_binop | `InstCombinerImpl::foldBinOpShiftWithShift`: a shift of each arm of a bitwise operator or `add` is one shift of the operator. | `visit_and`, `visit_or`, `visit_xor`, `visit_add`. | [combine_shift_binop](combine_shift_binop.md) |
 | combine_shifts | InstCombine's `visitShl`, `visitLShr` and `visitAShr` and the helpers they call, from [`InstCombineShifts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineShifts.cpp) at d1106deb71cc. | Not a pass: called by the combine driver once its slot is flipped. | [combine_shifts](combine_shifts.md) |
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
 | combine_sub | `InstCombinerImpl::visitSub`: the integer subtraction folds. | `combine::visit` (the `Sub` arm). | [combine_sub](combine_sub.md) |
-| combine_visit_select | `visitSelectInst`: the canonical forms of a `select`. | Named by `combine_select_bit_test`, `combine_select_bools`, `combine_select_ext_const`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`. | [combine_visit_select](combine_visit_select.md) |
+| combine_visit_select | `visitSelectInst`: the canonical forms of a `select`. | Named by `combine_select_bit_test`, `combine_select_bools`, `combine_select_ext_const`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_sign_bit`, `combine_select_spf`. | [combine_visit_select](combine_visit_select.md) |
 | combine_xor | `InstCombinerImpl::visitXor`: the integer `xor` folds. | Named by `combine`. | [combine_xor](combine_xor.md) |
 | condstores | Two conditional stores to one address, one in each of two if-then-else diamonds or triangles in a row, are one store after them, predicated on either condition: SimplifyCFG's `mergeConditionalStores`. | Named by `condtocond`, `simplifycfg`. | [condstores](condstores.md) |
 | condtocond | A conditional branch in an empty block that a conditional branch predecessor shares a destination with, folded into the predecessor: LLVM's [`SimplifyCondBranchToCondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4773). | Named by `simplifycfg`. | [condtocond](condtocond.md) |

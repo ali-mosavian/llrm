@@ -50,6 +50,7 @@ use crate::combine_select_bools::select_of_bools;
 use crate::combine_select_ext_const::select_ext_const;
 use crate::combine_select_into_op::select_into_op;
 use crate::combine_select_op_op::select_op_op;
+use crate::combine_select_sign_bit::select_sign_bit_condition;
 use crate::combine_select_spf::select_with_icmp;
 use crate::combine_shared::{has_one_use, query, replace_operand};
 
@@ -70,6 +71,7 @@ const FOLDS: &[Fold] = &[
     select_of_bools,
     bool_to_extension,
     select_with_icmp,
+    select_sign_bit_condition,
     select_icmp_and_and,
     select_bit_test,
     select_op_op,
