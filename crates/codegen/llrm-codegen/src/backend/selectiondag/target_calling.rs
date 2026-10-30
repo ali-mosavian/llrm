@@ -93,6 +93,15 @@ pub trait TargetCalling: Debug + Sync {
         Ok(())
     }
 
+    /// Whether an argument with this attribute (`sret`, `byval`, ...) is placed like any other: the
+    /// builder refuses the ones the hook would have to move.
+    fn passes_in_place(
+        &self,
+        _attribute: &str,
+    ) -> bool {
+        false
+    }
+
     /// `LowerCall`: the call sequence and the call; returns the chain and the
     /// result parts.
     fn lower_call(

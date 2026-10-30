@@ -1043,7 +1043,7 @@ impl Builder<'_> {
         outside: &llrm_support::hash::HashSet<ValueId>,
     ) -> Result<(), Refused> {
         let parameters = self.function.parameters().to_vec();
-        if self.function.parameter_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()) {
+        if self.function.parameter_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)) {
             return Err(Refused("a parameter attribute that moves it, with a target's calling hook"));
         }
         let mut ins = Vec::new();
@@ -1427,7 +1427,10 @@ impl Builder<'_> {
         self.variadic_call = variadic;
         self.result_assert = ext_assert(&info.return_attrs);
         self.fixed_args = named;
-        self.call_attrs_move_arguments = info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some());
+        self.call_attrs_move_arguments = match self.calling() {
+            Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
+            None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
+        };
         let result =
             self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
         if let (true, Some(answer)) = (flags_answer, result) {
@@ -1518,6 +1521,16 @@ impl Builder<'_> {
         let name =
             self.target.target_nodes.map_or_else(|| stack_pointer_name(self.target.dag.pointer), |t| t.stack_pointer);
         self.arch.register_named(name)
+    }
+
+    /// Whether an attribute of `attrs` moves its argument out of the ordinary place, for a target
+    /// whose hook leaves some (`sret` on wasm: a pointer like any other) where they are.
+    fn moves_argument(
+        &self,
+        calling: &dyn TargetCalling,
+        attrs: &[llrm_mir::opcode::Attribute],
+    ) -> bool {
+        relocating_attribute(attrs).is_some_and(|name| !calling.passes_in_place(name))
     }
 
     fn calling(&self) -> Option<&'static dyn TargetCalling> {

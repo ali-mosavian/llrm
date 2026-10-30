@@ -198,3 +198,17 @@ fn extension_attributes_assert_the_register() {
 fn indirect_calls() {
     check("indirect");
 }
+
+/// An atomic load or store was refused ("instruction load"). Without the `atomics` feature the pin
+/// makes them plain, and a fence disappears.
+#[test]
+fn atomics_without_the_feature_are_plain() {
+    check("atomics");
+}
+
+/// A function or call with an `sret` argument was refused ("a parameter attribute that moves it"); on
+/// wasm it is an ordinary pointer.
+#[test]
+fn sret_is_an_ordinary_pointer() {
+    check("sret");
+}

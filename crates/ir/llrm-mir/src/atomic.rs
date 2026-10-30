@@ -222,6 +222,43 @@ pub fn lowered(
     Ok(())
 }
 
+/// `LowerAtomicPass`, which a target without atomics runs before selection (wasm without the `atomics`
+/// feature): an atomic load or store is a plain one, a fence is nothing. A read-modify-write and a
+/// compare-exchange are refused until the pass's expansion into a load, an operation and a store is
+/// translated.
+pub fn lowered_single_thread(module: &mut Module) -> Result<(), String> {
+    let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let GlobalKind::Function(function) = &global.kind else { continue };
+        for (_, inst) in function.walk() {
+            if let Opcode::Atomic(info) = function.instruction(inst).opcode {
+                found.push((at, inst, info));
+            }
+        }
+    }
+    for (at, inst, info) in found {
+        let GlobalKind::Function(function) = &mut module.globals[at].kind else { continue };
+        let instruction = function.instruction(inst).clone();
+        let plain = match info.kind {
+            AtomicKind::Fence => {
+                function.erase(inst).map_err(|why| why.to_string())?;
+                continue;
+            }
+            AtomicKind::Load => Opcode::Load { align: info.align, volatile: info.volatile },
+            AtomicKind::Store => Opcode::Store { align: info.align, volatile: info.volatile },
+            _ => return Err(format!("`{}` is not lowered without atomics yet", kind_name(info.kind))),
+        };
+        let made =
+            function.create_instruction(plain, instruction.ty, instruction.operands.clone(), Flags::default(), None);
+        function.insert(made, crate::edit::Position::Before(inst)).map_err(|why| why.to_string())?;
+        if let (Some(old), Some(new)) = (instruction.result, function.instruction(made).result) {
+            function.replace_all_uses_with(old, Operand::Value(new));
+        }
+        function.erase(inst).map_err(|why| why.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "atomic_tests.rs"]
 mod tests;

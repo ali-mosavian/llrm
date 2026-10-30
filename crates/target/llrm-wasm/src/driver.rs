@@ -39,6 +39,8 @@ pub fn module(
     }
     let mut module = llrm_mir::parse::module(&kept).map_err(|error| error.to_string())?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
+    // No `atomics` feature: the pin's `LowerAtomicPass` makes the accesses plain.
+    llrm_mir::atomic::lowered_single_thread(&mut module)?;
     // `llc` takes the target's layout when the module states none.
     match module.datalayout.as_deref() {
         Some(stated) if stated != datalayout(width) => {

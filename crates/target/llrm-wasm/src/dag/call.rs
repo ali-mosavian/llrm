@@ -62,6 +62,14 @@ impl TargetCalling for WasmCalling {
         }
     }
 
+    /// An `sret` pointer is an ordinary first argument; `byval` is not translated.
+    fn passes_in_place(
+        &self,
+        attribute: &str,
+    ) -> bool {
+        attribute == "sret"
+    }
+
     fn lower_call(
         &self,
         dag: &mut SelectionDAG,
