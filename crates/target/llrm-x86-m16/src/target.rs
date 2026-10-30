@@ -274,6 +274,7 @@ impl Machine for Dos {
             // instructions in 6 procedures at 225, 1559 in 10 at 50 (main
             // 1703).
             inline_threshold: Some(50),
+            int_div_cheap: true,
             // DEVIATE: byte registers are scarce at every level, not only at
             // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
             // `setcc` pair and an `or` that took `bp` addressing out of the
