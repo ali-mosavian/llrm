@@ -2,6 +2,7 @@
 
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::driver::{Level, assembly};
+use llrm_mir::target::Machine;
 
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
 
@@ -30,4 +31,10 @@ fn another_targets_datalayout_is_refused() {
     let ir = "target datalayout = \"e-m:e-p:32:32-i64:64-n8:16:32-S128\"\ndefine i32 @f() {\n  ret i32 0\n}\n";
     let why = assembly(ir, Cpu::M68000, Level::O2).unwrap_err();
     assert!(why.contains("datalayout"), "{why}");
+}
+
+/// With no cost model the passes that price by it (the CRC recognizer) silently did not run.
+#[test]
+fn the_machine_handed_to_the_mid_end_has_a_tti() {
+    assert!(llrm_m68k::driver::machine().tti().is_some());
 }

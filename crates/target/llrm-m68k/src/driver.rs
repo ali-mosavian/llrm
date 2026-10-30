@@ -5,6 +5,7 @@
 use std::rc::Rc;
 
 use llrm_mir::program::Program;
+use llrm_mir::target::Machine;
 use llrm_transforms::pipeline::{Applied, Options as MidEnd};
 
 use crate::compile::{Options, text_with};
@@ -57,6 +58,12 @@ pub fn cpu_of(name: &str) -> Result<Cpu, String> {
     }
 }
 
+/// The machine the mid-end is handed: its cost model prices the passes that need one (loop strength reduction,
+/// the CRC recognizer).
+pub fn machine() -> Rc<dyn Machine> {
+    Rc::new(M68kMachine)
+}
+
 /// `text`, LLVM IR from clang, as a program: the lines and words MIR's reader
 /// leaves out of LLVM dropped, the datalayout checked against the target's.
 pub fn program(text: &str) -> Result<Program, String> {
@@ -76,7 +83,7 @@ pub fn program(text: &str) -> Result<Program, String> {
         Some(stated) => return Err(format!("the module's datalayout `{stated}` is not m68k's `{expected}`")),
         None => return Err(format!("the module states no datalayout; m68k's is `{expected}`")),
     }
-    Program::new(vec![module], Rc::new(M68kMachine))
+    Program::new(vec![module], machine())
 }
 
 /// `text` through the shared mid-end at `level` and the m68k backend, as
