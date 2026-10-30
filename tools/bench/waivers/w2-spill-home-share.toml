@@ -1,0 +1,21 @@
+reason = "TEMPORARY, fix after the pointer-twin pass (owner w2). Siblings of a one-value original share one spill home (pin InlineSpiller.cpp#L1466): the frame shrinks, but the allocator then reloads a shared base per access in nib `_sort`/bintree where the old homes kept it in a register. Memory operands fall."
+
+[[row]]
+label = "bintree nib -O2"
+counter = "instructions"
+to = 70290
+
+[[row]]
+label = "bintree nib -O2"
+counter = "memory_operands"
+to = 18978
+
+[[row]]
+label = "quicksort nib -O2"
+counter = "instructions"
+to = 205231
+
+[[row]]
+label = "quicksort nib -O2"
+counter = "code_bytes"
+to = 363
