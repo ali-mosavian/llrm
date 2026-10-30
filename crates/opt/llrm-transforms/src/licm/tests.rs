@@ -1012,6 +1012,226 @@ fn test_an_invariant_start_that_does_not_cover_or_ends_or_sits_in_the_loop_keeps
     assert!(load_of_q_in(&unknown, "b2"), "-1 is skipped: {unknown}");
 }
 
+const SCOPE_DECLS: &str = "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)
+";
+const START: &str = "%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)";
+const END: &str = "call void @llvm.invariant.end.p0(ptr %s, i64 2, ptr %q)";
+
+/// A loop `b1`/`b2` around the load of `%q` and a store the load cannot be
+/// ruled out of, entered from `b0` and left to `b3`, with `{b0}` ahead of the
+/// branch, `{b1}` and `{b2}` in the loop and `{b3}` after it.
+fn scoped_loop(
+    b0: &str,
+    b1: &str,
+    b2: &str,
+    b3: &str,
+) -> String {
+    licm_printed(&format!(
+        "{SCOPE_DECLS}
+define i16 @f(i16 %n, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {b0}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  {b1}
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  {b2}
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  {b3}
+  ret i16 %i
+}}
+"
+    ))
+}
+
+/// DEVIATE from LICM.cpp#L1086 (`II->use_empty()`): an `invariant.end` that
+/// cannot run between the start and the loop leaves the scope open at the
+/// header. The load stayed, the pin's answer for any end at all.
+#[test]
+fn test_an_invariant_end_after_the_loop_keeps_the_scope_open_for_the_load() {
+    let after = scoped_loop(START, "", "", END);
+    assert!(!load_of_q_in(&after, "b2") && load_of_q_in(&after, "b0"), "{after}");
+}
+
+/// The ends that do run between the start and the header close the scope the
+/// load needs: right after the start, in the header, in the body, on the
+/// entry path of a join, and when an outer loop runs the end again before the
+/// inner loop. Each hoisted the load past the store.
+#[test]
+fn test_an_invariant_end_that_can_run_before_the_header_keeps_the_load() {
+    let entry = scoped_loop(&format!("{START}\n  {END}"), "", "", "");
+    assert!(load_of_q_in(&entry, "b2"), "end right after the start: {entry}");
+    let header = scoped_loop(START, END, "", "");
+    assert!(load_of_q_in(&header, "b2"), "end in the header: {header}");
+    let body = scoped_loop(START, "", END, "");
+    assert!(load_of_q_in(&body, "b2"), "end in the body: {body}");
+}
+
+/// A side path that ends the scope and rejoins the loop's entry runs the end
+/// before the header; one that leaves the function does not.
+#[test]
+fn test_an_invariant_end_on_a_side_path_matters_only_if_it_rejoins_the_loop() {
+    let side = |leave: &str| {
+        licm_printed(&format!(
+            "{SCOPE_DECLS}
+define i16 @f(i16 %n, i1 %k, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {START}
+  br i1 %k, label %e, label %pre
+
+e:
+  {END}
+  {leave}
+
+pre:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %pre ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  ret i16 %i
+}}
+"
+        ))
+    };
+    let leaves = side("ret i16 0");
+    assert!(!load_of_q_in(&leaves, "b2"), "an end on a path that returns: {leaves}");
+    let rejoins = side("br label %pre");
+    assert!(load_of_q_in(&rejoins, "b2"), "an end on a path into the header: {rejoins}");
+}
+
+/// The start outside an outer loop and the end after the inner loop, in the
+/// outer body, runs before the inner header on the next outer round; with the
+/// start in the outer body too, it reopens the scope first.
+#[test]
+fn test_an_invariant_end_after_an_inner_loop_matters_if_the_outer_loop_repeats_it() {
+    let nest = |outer_entry: &str, outer_head: &str| {
+        licm_printed(&format!(
+            "{SCOPE_DECLS}
+define i16 @f(i16 %n, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {outer_entry}
+  br label %o
+
+o:
+  %j = phi i16 [ 0, %b0 ], [ %j1, %t ]
+  {outer_head}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %o ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %t
+
+b2:
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+t:
+  {END}
+  %j1 = add i16 %j, 1
+  %d = icmp slt i16 %j1, %n
+  br i1 %d, label %o, label %x
+
+x:
+  ret i16 %j
+}}
+"
+        ))
+    };
+    let outside = nest(START, "");
+    assert!(load_of_q_in(&outside, "b2"), "the end runs again before the inner header: {outside}");
+    let restarted = nest("", START);
+    assert!(!load_of_q_in(&restarted, "b2"), "the start comes after the end each round: {restarted}");
+}
+
+/// Two starts on one pointer: the one ended in the body no longer covers the
+/// load, the one never ended still does. Each is judged by its own ends.
+#[test]
+fn test_one_of_two_starts_on_a_pointer_ended_in_the_loop_leaves_the_other_to_cover() {
+    let two = |second_ended: bool| {
+        let end = if second_ended { "call void @llvm.invariant.end.p0(ptr %t, i64 2, ptr %q)" } else { "" };
+        scoped_loop(
+            &format!("{START}\n  %t = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)"),
+            "",
+            &format!("call void @llvm.invariant.end.p0(ptr %s, i64 2, ptr %q)\n  {end}"),
+            "",
+        )
+    };
+    let one_open = two(false);
+    assert!(!load_of_q_in(&one_open, "b2"), "the second start is still open: {one_open}");
+    let both_ended = two(true);
+    assert!(load_of_q_in(&both_ended, "b2"), "both ended in the body: {both_ended}");
+}
+
+/// A scope that two starts reach through a phi is ended through the phi, which
+/// names neither start. The load stayed in the loop.
+#[test]
+fn test_an_invariant_end_through_a_phi_keeps_the_load() {
+    let printed = licm_printed(&format!(
+        "{SCOPE_DECLS}
+define i16 @f(i16 %n, i1 %k, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  br i1 %k, label %a, label %c
+
+a:
+  %s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)
+  br label %j
+
+c:
+  %t = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)
+  br label %j
+
+j:
+  %u = phi ptr [ %s, %a ], [ %t, %c ]
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %j ], [ %i1, %b2 ]
+  %cc = icmp slt i16 %i, %n
+  br i1 %cc, label %b2, label %b3
+
+b2:
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  call void @llvm.invariant.end.p0(ptr %u, i64 2, ptr %q)
+  ret i16 %i
+}}
+"
+    ));
+    assert!(load_of_q_in(&printed, "b2"), "{printed}");
+}
+
 /// A GEP the target folds into the loop's load, also read by an exit phi: LLVM
 /// copies it into the exit and keeps it in the loop. llrm left the exit phi
 /// reading the loop's pointer, where `opt -passes=licm` re-forms the address

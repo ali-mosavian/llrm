@@ -71,6 +71,7 @@ use llrm_mir::memory::{self, Effects};
 use llrm_mir::module::{Function, InstId, Operand};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, Outer, PreservedAnalyses};
+use llrm_mir::types::{FloatKind, Type};
 
 use crate::counting;
 use crate::loopidioms::_memset;
@@ -187,20 +188,51 @@ fn add_range(
     }
 }
 
-/// `isBytewiseValue` of an integer `value`.
+/// `isBytewiseValue` of an integer or float `value`: a float is the integer
+/// of its bits (`+0.0` is the zero byte, `-0.0` is not).
 fn bytewise(
     unit: &Unit,
     value: Operand,
 ) -> Option<Byte> {
-    let width = unit.int_bits(value)?;
-    if let Some(bits) = unit.int_constant(value) {
-        if width % 8 != 0 || width == 0 {
-            return None;
-        }
+    let repeated = |bits: u128, width: u32| {
         let byte = bits & 0xFF;
-        return (0..width / 8).all(|at| (bits >> (8 * at)) & 0xFF == byte).then_some(Byte::Constant(byte));
+        (width % 8 == 0 && width != 0 && (0..width / 8).all(|at| (bits >> (8 * at)) & 0xFF == byte))
+            .then_some(Byte::Constant(byte))
+    };
+    if let Some(width) = unit.int_bits(value) {
+        if let Some(bits) = unit.int_constant(value) {
+            return repeated(bits, width);
+        }
+        return (width == 8).then_some(Byte::Value(value));
     }
-    (width == 8).then_some(Byte::Value(value))
+    let Operand::Constant(id) = value else { return None };
+    let ty = unit.operand_type(value)?;
+    let width = match unit.context.types.get(ty) {
+        Type::Float(FloatKind::Float) => 32,
+        Type::Float(FloatKind::Double) => 64,
+        _ => return None,
+    };
+    match unit.context.get(id).kind {
+        ConstantKind::Float(bits) => repeated(u128::from(bits), width),
+        ConstantKind::Null | ConstantKind::Zero => repeated(0, width),
+        _ => None,
+    }
+}
+
+/// The bytes a store of `value` writes: an integer's or a `float`'s or
+/// `double`'s.
+fn stored_bytes(
+    unit: &Unit,
+    value: Operand,
+) -> Option<i64> {
+    if let Some(bits) = unit.int_bits(value) {
+        return Some(i64::from(bits / 8));
+    }
+    match unit.context.types.get(unit.operand_type(value)?) {
+        Type::Float(FloatKind::Float) => Some(4),
+        Type::Float(FloatKind::Double) => Some(8),
+        _ => None,
+    }
 }
 
 /// The store `inst` is, when it is simple: its value and pointer.
@@ -329,7 +361,7 @@ fn try_merging_into_memset(
             (found.root.is_some() && found.base.is_none() && found.segment.is_none()).then_some(found)
         };
         let (start_size, start_inst) = match simple_store(function, start) {
-            Some((value, _)) => (i64::from(unit.int_bits(value)? / 8), (start, true)),
+            Some((value, _)) => (stored_bytes(&unit, value)?, (start, true)),
             None => (constant_memset(&unit, callees, function, start)?.2, (start, false)),
         };
         let base = reference(start_ptr, start_size)?;
@@ -343,8 +375,7 @@ fn try_merging_into_memset(
             }
             let found = if let Some((value, pointer)) = simple_store(function, at) {
                 // A store of the same byte at a constant offset from the start.
-                (bytewise(&unit, value) == Some(byte))
-                    .then(|| (pointer, i64::from(unit.int_bits(value).unwrap_or(8) / 8), true))
+                (bytewise(&unit, value) == Some(byte)).then(|| (pointer, stored_bytes(&unit, value).unwrap_or(1), true))
             } else if let Some((dest, other, length)) = constant_memset(&unit, callees, function, at) {
                 let same = match byte {
                     Byte::Constant(wanted) => unit.int_constant(other) == Some(wanted),
