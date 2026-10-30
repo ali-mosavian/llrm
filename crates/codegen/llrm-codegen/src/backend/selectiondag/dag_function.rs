@@ -761,7 +761,6 @@ fn selected_in(
     // narrower than the widest native integer (m16), -Os keeps `imul` as well:
     // the chains grow its objects (27 of 175 by 3550 B, tests/run/c -Os).
     let bytes_beat_clocks = cpu.size && layout.pointer(0).bits < layout.largest_legal_integer();
-    let i16_mul_chains = cpu.target().tuning().i16_multiply_chains;
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
     if contracts.is_some_and(|contracts| contracts.frame_zeroed) {
@@ -1028,7 +1027,7 @@ fn selected_in(
                 cmov: tli.can_use_cmov(),
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
-                i16_mul_chains,
+                i16_mul_chains: tli.types.has_far_pointer(),
             },
             &selector,
             &mut hooks,

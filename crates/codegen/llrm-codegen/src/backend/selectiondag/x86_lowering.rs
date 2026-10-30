@@ -136,13 +136,14 @@ pub struct X86Lowering {
     pub sse2: bool,
     /// `hasMinSize`: llrm's `-Os` as well as `-Oz`.
     pub min_size: bool,
-    /// DEVIATE: the pin's `combineMul` leaves an `i16` multiply to `imul`
-    /// ([L51209][pin]); a target whose `imul` costs more than a short
-    /// shift/`lea` chain (`OperationCosts::multiply`) sets this and the
-    /// `i32` decomposition below applies to `i16` as well.
+    /// The pin chains an `i16` multiply by a constant: it promotes it to `i32`
+    /// ([L64277][promote]) and `combineMul` builds the `lea`/shift chain there.
+    /// Where `i16` is not promoted (m16, `is_desirable_to_promote_op`) the same
+    /// chain is built at `i16`, without the promotion's `66h`/`67h` prefixes.
+    /// DEVIATE: exit is `i16` promotion at m16, which grows every `i16` op.
     ///
-    /// [pin]:
-    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51209
+    /// [promote]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L64277
     pub i16_mul_chains: bool,
 }
 

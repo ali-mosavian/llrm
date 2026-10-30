@@ -587,8 +587,6 @@ mod tuning_tests {
         assert_eq!(table.max_stores_per_memset_opt_size, 4);
         assert_eq!((table.max_stores_per_memcpy_opt_size, table.max_stores_per_memmove_opt_size), (2, 2));
         assert_eq!(table.size_milliclocks_per_byte, 10_000);
-        // The 486's `imul r16,imm` is 13 clocks: histo -O2 `x*7+3` lost 26%.
-        assert!(table.i16_multiply_chains && !Tuning::PIN.i16_multiply_chains);
         assert_eq!((table.unroll_threshold, table.unroll_max_percent_threshold_boost), (Some(0), Some(100)));
         assert_eq!(
             Tuning {
@@ -603,7 +601,6 @@ mod tuning_tests {
                 unroll_max_percent_threshold_boost: None,
                 inline_threshold: None,
                 split_merged_conditions: false,
-                i16_multiply_chains: false,
                 ..table
             },
             Tuning::PIN
