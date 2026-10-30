@@ -1,0 +1,14 @@
+reason = "TEMPORARY trade-off (owner w12; accepted by coordinator 2026-10-30, pair #6103 + #6140 judged by w6 vs a7640235ca: 59 rows move, nearly all better). quicksort nib -Os: the by-value slice base is one register (bx, ss:) instead of es:bx; the partition loop keeps 7 values live at 6 GPRs, each swap spills the bound index and reloads the base and n: outer-loop spill class. Exit: the outer-loop spill card (owner w12)."
+exception = true
+
+[[row]]
+label = "quicksort nib -Os"
+counter = "instructions"
+tip = 193986
+to = 195244
+
+[[row]]
+label = "quicksort nib -Os"
+counter = "memory_operands"
+tip = 74446
+to = 79768
