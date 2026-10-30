@@ -608,8 +608,20 @@ impl<'a> InlineSpiller<'a> {
             })
             .collect();
         if let Some(folded) = folded {
-            for (key, one) in members.iter().zip(folded) {
-                lis.rewrite_instr(block, *key, one);
+            for ((key, one), before) in members.iter().zip(folded).zip(&old) {
+                // A copy into `reg` that folds to a store of its source is a
+                // mergeable spill.
+                // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InlineSpiller.cpp#L1058-L1066>
+                let was_copy = before.defines.contains(&reg)
+                    && before.what.as_ref().is_some_and(|what| {
+                        what.op == Operation::Move
+                            && what.name.as_deref() == Some("mov")
+                            && matches!(what.sources.as_slice(), [Loc::Held(_)])
+                    });
+                lis.rewrite_instr(block, *key, Arc::clone(&one));
+                if was_copy && one.id() != before.id() {
+                    self.note_store(lis, &one, &cell, before);
+                }
             }
             self.folded += 1;
             return Some(Vec::new());
@@ -2079,5 +2091,64 @@ mod tests {
     #[test]
     fn test_a_sibling_of_another_width_is_no_source_for_a_hoisted_store() {
         assert_eq!(stores_after_hoisting(2).len(), 2, "both arm stores stay");
+    }
+
+    /// `%2` is a copy of `%1`, which lives on, and is spilled: the copy folds
+    /// to a store of `%1`. The pin records that store as a mergeable spill
+    /// (`InlineSpiller.cpp#L1058`); it was not recorded, so `hoistAllSpills`
+    /// never saw it and bintree.nib -O2 kept a store dominated by another
+    /// (+300 memory operands).
+    #[test]
+    fn test_a_copy_folded_to_a_store_is_a_mergeable_spill() {
+        use crate::model::ir::Imm;
+        let word = |value: u32| Loc::Held(Held { value, width: 2 });
+        let mov = |at: i64, dest: Loc, source: Loc, defines: Vec<u32>, uses: Vec<u32>| {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![dest],
+                sources: vec![source],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(at, Some((at, at + 1)), Some(what), defines, uses))
+        };
+        let imm = Loc::Imm(Imm { value: 5, width: 2, address: None });
+        let global = Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 0)), 2));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let insns = vec![
+            mov(0, word(1), imm, vec![1], vec![]),
+            mov(1, word(2), word(1), vec![2], vec![1]),
+            mov(2, global, word(2), vec![], vec![2]),
+            mov(3, Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 2)), 2)), word(1), vec![], vec![1]),
+            Arc::new(Insn::new(4, Some((4, 5)), Some(ret), vec![], vec![])),
+        ];
+        let body = LirBody::new(
+            "copyspill",
+            0,
+            vec![crate::model::lir::Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        for value in 1..=2 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        matrix.vrm.set_is_split_from_reg(2, 1);
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let tables = Rc::new(Tables::default());
+        for value in 1..=2 {
+            tables.orders.borrow_mut().insert(value, vec![RegId::AX]);
+            tables.widths.borrow_mut().insert(value, 2);
+        }
+        let order_of = |_: u32| Vec::new();
+        let mut spiller = InlineSpiller::new(&body, &mut frame, &classes, &order_of, tables);
+        let (env, original) = (Env, Default::default());
+        let mut vrai = VirtRegAuxInfo::new(&env, &original);
+        let (mut shrunk, mut made) = (Vec::new(), Vec::new());
+        let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
+        spiller.spill(ctx, 2, &mut made);
+        assert_eq!(spiller.stored.len(), 1, "the store %1 -> home is a mergeable spill");
     }
 }
