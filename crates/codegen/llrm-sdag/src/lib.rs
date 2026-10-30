@@ -1,7 +1,8 @@
 //! The SelectionDAG's type and action tables, below the passes that ask them:
-//! the pin's `MVT`, `ISD`, `TargetLoweringInfo` and each target's `TargetLowering`
-//! action tables (x86 today, AArch64 next). `llrm-codegen`'s `selectiondag` re-exports them; `Lowering`
-//! reads the same tables, so there is one copy.
+//! the pin's `MVT`, `ISD`, `TargetLoweringInfo` and each target's
+//! `TargetLowering` action tables (x86 today, AArch64 next). `llrm-codegen`'s
+//! `selectiondag` re-exports them; `Lowering` reads the same tables, so there
+//! is one copy.
 //!
 //! # Example
 //! ```
