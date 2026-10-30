@@ -264,6 +264,23 @@ def base_of(head: str, ref: str = "origin/main") -> str:
     return git("rev-parse", f"{head}^1") if base == git("rev-parse", head) else base
 
 
+def has_cc(sha: str) -> bool:
+    """Whether `sha` has the clang front end (llrm-cc): main has not, so a measurement of llrm-cc has no base there."""
+    try:
+        git("cat-file", "-e", f"{sha}:crates/driver/llrm-cc/Cargo.toml")
+    except subprocess.CalledProcessError:
+        return False
+    return True
+
+
+def base_with_cc(head: str, base_sha: str) -> str | None:
+    """`base_sha` if it can be built and measured as llrm-cc; else the nearest first-parent ancestor of `head` that can (gate run 3: the
+    cost step built main, which has llrm-c only: "no bin target named llrm-cc"); None where there is none."""
+    if has_cc(base_sha):
+        return base_sha
+    return next((sha for sha in git("rev-list", "--first-parent", "-n", "300", head).split()[1:] if has_cc(sha)), None)
+
+
 def checked_out(sha: str, tree: Path, source: Path = ROOT) -> Path:
     """`sha` checked out in `tree`, a clone of `source` that measure.py owns (made once, never a worktree of anyone's repository): the
     commit is fetched from `source`, then from `source`'s own origin, so one that exists only on the remote is built too."""
@@ -653,7 +670,10 @@ def creep(jobs: int, ref: str) -> int:
 
 def check(jobs: int, ref: str, build=built, head_dir=lambda: None) -> int:
     head = git("rev-parse", "HEAD")
-    base_sha = base_of(head, ref)
+    base_sha = base_with_cc(head, base_of(head, ref))
+    if base_sha is None:
+        print(f"SKIPPED: no ancestor of {head[:9]} has llrm-cc to measure it against")
+        return 77
     # Both compilers are dist builds (fat LTO: minutes of one thread each): the base is built beside the head, not after it.
     with concurrent.futures.ThreadPoolExecutor(1) as pool:
         future = pool.submit(build, base_sha) if stored(base_sha, method()) is None else None

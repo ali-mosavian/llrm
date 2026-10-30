@@ -210,8 +210,9 @@ impl Builder<'_> {
         on_false: BlockId,
     ) -> bool {
         // DEVIATE SD103: at optsize two compares stay two branches; merged they
-        // cost a `setcc` pair and a logic op, and byte registers are scarce.
-        if self.has_opt_size() {
+        // cost a `setcc` pair and a logic op, and byte registers are scarce;
+        // the target table asks the same at every level (m16).
+        if self.has_opt_size() || self.target.tuning.split_merged_conditions {
             return false;
         }
         let Some(tti) = self.target.tti.clone() else { return true };
@@ -543,6 +544,14 @@ mod tests {
         body: &str,
         tti: bool,
     ) -> usize {
+        split_blocks_with(body, tti, llrm_mir::target::Tuning::PIN)
+    }
+
+    fn split_blocks_with(
+        body: &str,
+        tti: bool,
+        tuning: llrm_mir::target::Tuning,
+    ) -> usize {
         let text = format!(
             "target datalayout = \"e-p:32:32-n8:16:32\"\ndefine i32 @f(i32 %a, i32 %b, i32 %c, i32 %d, ptr %p, i8 %e) {{\nentry:\n  %x = icmp slt i32 %a, %b\n{body}\n  br i1 %o, label %t, label %e2\nt:\n  ret i32 1\ne2:\n  ret i32 2\n}}\n"
         );
@@ -553,7 +562,7 @@ mod tests {
         let convention =
             crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
-        let mut target = BuilderTarget::m32();
+        let mut target = BuilderTarget::m32().with_tuning(tuning);
         if tti {
             target = target.with_tti(Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap())));
         }
@@ -668,6 +677,17 @@ mod tests {
         };
         assert_eq!(split_blocks(&chain(3), true), 1, "alloca at the sixth level");
         assert_eq!(split_blocks(&chain(2), true), 0, "alloca one level up");
+    }
+
+    /// m16's `split_merged_conditions` splits a cheap `||` the pin's cost rule
+    /// keeps (`a < b || c + 1 > 7`): sieve bq16 -O2 merged
+    /// `i*i >= n || i >= 32` into a `setcc` pair and an `or`, 8780 memory
+    /// operands against 8436 split.
+    #[test]
+    fn the_split_knob_splits_a_cheap_or_the_pin_keeps() {
+        let knob = llrm_mir::target::Tuning { split_merged_conditions: true, ..llrm_mir::target::Tuning::PIN };
+        assert_eq!(split_blocks(CHEAP, true), 0, "the pin keeps it");
+        assert_eq!(split_blocks_with(CHEAP, true, knob), 1, "the knob splits it");
     }
 
     /// Without a cost model the conditions stay together, as before.
