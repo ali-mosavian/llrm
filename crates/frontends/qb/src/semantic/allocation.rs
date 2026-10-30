@@ -8,20 +8,27 @@
 //! this module does not define. Any error handler in the program voids the
 //! fact: its RESUME may run past the allocation it handled.
 //!
-//! The segmented target only: a flat target keeps every array in the local
-//! heap, which FRE and CLOSE slide.
+//! The llrm runtime on the segmented target only. The MS runtime may move a
+//! descriptor's location at any call (`tags.rs`); a flat target keeps every
+//! array in the local heap, which FRE and CLOSE slide. So does a near array
+//! on the segmented target: unless every DIM is far, CLOSE, FRE(string) and
+//! FRE(number) (`file_close`, `B_FRSD`, `B_FRI2`: `lh_compact`) allocate.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::invariance::{dominators, reaches};
+use super::invariance::{all_far, dominators, reaches};
 use super::tags::Tag;
 use super::{Compiler, Function};
 
 pub(super) fn applied(compiler: &mut Compiler) {
-    if compiler.options.one_space() || compiler.functions.iter().any(|function| function.error_handler.is_some()) {
+    if compiler.runtime != "llrm"
+        || compiler.options.one_space()
+        || compiler.functions.iter().any(|function| function.error_handler.is_some())
+    {
         return;
     }
-    let allocating = allocating(compiler);
+    let near_moves = !all_far(compiler);
+    let allocating = allocating(compiler, near_moves);
     let defined: BTreeSet<u32> = compiler
         .functions
         .iter()
@@ -30,7 +37,7 @@ pub(super) fn applied(compiler: &mut Compiler) {
     let quiet =
         |callee: Option<u32>| callee.is_some_and(|symbol| defined.contains(&symbol) && !allocating.contains(&symbol));
     let found: Vec<(u32, BTreeSet<u32>)> =
-        compiler.functions.iter().map(|function| (function.id, loops(function, quiet))).collect();
+        compiler.functions.iter().map(|function| (function.id, loops(function, near_moves, quiet))).collect();
     for (function, latches) in found {
         if let Some(one) = compiler.functions.iter_mut().find(|one| one.id == function) {
             one.quiet_loops = latches;
@@ -39,7 +46,10 @@ pub(super) fn applied(compiler: &mut Compiler) {
 }
 
 /// The symbols of the routines that may allocate, directly or through a call.
-fn allocating(compiler: &Compiler) -> BTreeSet<u32> {
+fn allocating(
+    compiler: &Compiler,
+    near_moves: bool,
+) -> BTreeSet<u32> {
     let symbol = |function: &Function| compiler.signatures.get(super::canonical(&function.name)).map(|one| one.symbol);
     let mut out: BTreeSet<u32> = BTreeSet::new();
     let mut calls: BTreeMap<u32, Vec<Option<u32>>> = BTreeMap::new();
@@ -47,7 +57,7 @@ fn allocating(compiler: &Compiler) -> BTreeSet<u32> {
         let Some(own) = symbol(function) else { continue };
         let mut direct = false;
         for one in function.blocks.iter().flat_map(|block| &block.instructions) {
-            direct |= allocates(one);
+            direct |= allocates(one, near_moves);
             if matches!(one.tag, Some(Tag::Invoke { .. })) {
                 let callee = function.calls.iter().find(|call| call.instruction == one.id).and_then(|call| call.callee);
                 calls.entry(own).or_default().push(callee);
@@ -78,19 +88,25 @@ fn allocating(compiler: &Compiler) -> BTreeSet<u32> {
 }
 
 /// Whether the instruction allocates, moves or frees a far array, or runs a
-/// child process.
-fn allocates(one: &super::Instruction) -> bool {
+/// child process; with `near_moves`, whether it slides the local heap, where a
+/// near array lives.
+fn allocates(
+    one: &super::Instruction,
+    near_moves: bool,
+) -> bool {
     matches!(
         one.tag,
         Some(Tag::Allocate(_) | Tag::Reallocate(_) | Tag::Release { .. })
     )
         || one.callee.as_deref() == Some("B$SSHL")
+        || (near_moves && matches!(one.callee.as_deref(), Some("B$CLOS" | "B$FRSD" | "B$FRI2")))
 }
 
 /// The back-edge blocks of `function`'s loops that contain no allocating
 /// instruction and call only what `quiet` says.
 fn loops(
     function: &Function,
+    near_moves: bool,
     quiet: impl Fn(Option<u32>) -> bool,
 ) -> BTreeSet<u32> {
     let dominated = dominators(function);
@@ -122,7 +138,7 @@ fn loops(
                                 .instructions
                                 .iter()
                                 .all(
-                                    |one| !allocates(one)
+                                    |one| !allocates(one, near_moves)
                                         && (!matches!(one.tag, Some(Tag::Invoke { .. }))
                                             || quiet(
                                                 function

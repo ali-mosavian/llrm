@@ -4214,12 +4214,20 @@ fn quiet_loops(
     flat: bool,
     text: &str,
 ) -> usize {
+    quiet_loops_on(flat, "llrm", text)
+}
+
+fn quiet_loops_on(
+    flat: bool,
+    runtime: &str,
+    text: &str,
+) -> usize {
     let directory = tempfile::tempdir().expect("a temporary directory");
     let frontend = qb_driver::Frontend {
         whole_program: true,
         near_bytes: if flat { 4 } else { 0 },
         far_bytes: if flat { 4 } else { 0 },
-        ..qb_driver::Frontend::new("qb45", "llrm")
+        ..qb_driver::Frontend::new("qb45", runtime)
     };
     let program = qb_driver::parsed(&written(&directory, "T.BAS", text.as_bytes()), &frontend, None).expect("parses");
     program
@@ -4261,4 +4269,16 @@ fn test_no_far_allocation_is_not_stated_with_a_handler_or_on_a_flat_target() {
     assert_eq!(quiet_loops(true, SORTING), 0);
     let handled = SORTING.replace("sort v(), 0, 9", "ON ERROR GOTO h\r\nsort v(), 0, 9\r\nEND\r\nh:\r\nRESUME NEXT");
     assert_eq!(quiet_loops(false, &handled), 0);
+}
+
+/// The MS runtime may move a descriptor's location at any call, and the local
+/// heap slides near arrays at CLOSE and FRE: neither premise is the llrm
+/// runtime's far heap's, so a loop over them states nothing.
+#[test]
+fn test_no_far_allocation_needs_the_llrm_runtime_and_far_arrays() {
+    assert_eq!(quiet_loops_on(false, "qb45", SORTING), 0, "the MS runtime");
+    let closing = SORTING.replace("a(i) = hi - i", "a(i) = hi - i: CLOSE");
+    assert_eq!(quiet_loops(false, &closing), 1, "CLOSE does not move a far array");
+    let near = closing.replace("DIM v(0 TO 9) AS INTEGER", "DIM v(0 TO 9) AS INTEGER, names$(0 TO 3)");
+    assert_eq!(quiet_loops(false, &near), 0, "CLOSE slides the local heap, where a string array lives");
 }

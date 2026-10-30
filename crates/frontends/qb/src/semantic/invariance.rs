@@ -65,7 +65,7 @@ fn shape(field: Slot) -> bool {
 /// far heap moves arrays only at DIM, REDIM, ERASE and SHELL; the near heap
 /// slides its arrays at FRE and CLOSE (`lh_compact`), and a flat target
 /// keeps every array there, moving their data pointer and origin with them.
-fn all_far(compiler: &Compiler) -> bool {
+pub(super) fn all_far(compiler: &Compiler) -> bool {
     compiler
         .functions
         .iter()
