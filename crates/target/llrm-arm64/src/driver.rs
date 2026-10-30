@@ -309,7 +309,8 @@ pub fn assembly(
         out.push_str(&format!("{}:\n", function.symbol));
         for block in &function.blocks {
             out.push_str(&format!("{}:\n", block.label));
-            for inst in &block.insts {
+            // A frame mark is for the line table, not the assembler.
+            for inst in block.insts.iter().filter(|inst| !matches!(inst, crate::mc::inst::Inst::Mark(_))) {
                 out.push_str(&format!("\t{inst}\n"));
             }
         }

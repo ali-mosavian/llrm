@@ -304,6 +304,9 @@ pub struct Info {
     /// Variables of the module, in data.
     pub globals: Vec<Variable>,
     pub lines: Vec<Line>,
+    /// Rows of `lines` that are not the start of a statement, by (section,
+    /// offset): the rest are (`is_stmt`).
+    pub not_stmt: std::collections::BTreeSet<(usize, usize)>,
 }
 
 impl Info {

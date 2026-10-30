@@ -37,7 +37,7 @@ fn apply(
 /// Whether control goes on to the next block after `block`.
 fn falls_through(block: &Lowered) -> bool {
     !matches!(
-        block.insts.iter().rev().find(|inst| !matches!(inst, Inst::Cfi(_))),
+        block.insts.iter().rev().find(|inst| !inst.is_directive()),
         Some(Inst::Ret { .. } | Inst::Branch { link: false, .. } | Inst::BranchReg { link: false, .. })
     )
 }
@@ -91,6 +91,7 @@ pub fn rows(blocks: &[Lowered]) -> Vec<FrameRow> {
                     apply(&mut state, *cfi);
                     row(offset, &state, &mut out);
                 }
+                Inst::Mark(_) => {}
                 _ => offset += 4,
             }
         }

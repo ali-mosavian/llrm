@@ -783,3 +783,23 @@ fn call_sites_are_dies_with_origin_return_pc_and_arguments() {
         }
     }
 }
+
+/// A row in `Info::not_stmt` is written without `is_stmt`: the table made
+/// every row a statement, so a debugger stopped at each column of a line.
+#[test]
+fn a_row_that_is_not_a_statement_is_written_without_the_flag() {
+    let Some(dump) = dwarfdump() else {
+        skipped("llvm-dwarfdump is not installed");
+        return;
+    };
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 5 });
+    made.debug.as_mut().unwrap().not_stmt.insert((0, 8));
+    let scratch = tempfile::tempdir().unwrap();
+    let path = scratch.path().join("x.o");
+    std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+    let shown = std::process::Command::new(&dump).arg("--debug-line").arg(&path).output().unwrap();
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    let rows: Vec<&str> = shown.lines().filter(|one| one.starts_with("0x")).collect();
+    assert!(rows[0].contains("is_stmt"), "{rows:?}");
+    assert!(rows.iter().any(|one| one.contains(" 4 ") && !one.contains("is_stmt")), "{rows:?}");
+}

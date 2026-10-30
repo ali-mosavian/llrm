@@ -85,7 +85,9 @@ pub fn info(
         let length: usize = function.blocks.iter().map(|block| words(block) * 4).sum();
         let (start, symbol) = (at, id_of(&function.symbol));
         at += length;
-        info.lines.extend(lines(function, start, declared(&function.symbol)));
+        let (rows, body, not_stmt) = lines(function, start, declared(&function.symbol));
+        info.lines.extend(rows);
+        info.not_stmt.extend(not_stmt.into_iter().map(|offset| (0, offset)));
         let (Some(procedure), Some(symbol)) = (debug.procedures.get(&function.symbol), symbol) else { continue };
         let mut variables = Vec::new();
         for &(node, disp) in &function.variables {
@@ -106,7 +108,7 @@ pub fn info(
             symbol,
             r#type: procedure.r#type,
             ranges: vec![Range { section: 0, offset: start, length }],
-            body: None,
+            body,
             far: false,
             module: procedure.module,
             variables,
@@ -139,28 +141,65 @@ fn subprogram_line(
 
 /// The line table rows of `function`, whose code starts at `start`: one where
 /// the source place changes, and one at its start for the line it is declared
-/// at (the prologue is from no instruction).
+/// at (the prologue is from no instruction); and where its body begins and its
+/// first epilogue starts, as offsets from `start`.
+///
+/// The pin flags the first row after the frame is built `prologue_end`, and the
+/// row of the first instruction that takes the frame down `epilogue_begin`,
+/// which has the place of the return that follows
+/// (`DwarfDebug::beginInstruction`).
 fn lines(
     function: &emit::Function,
     start: usize,
     declared: Option<u32>,
-) -> Vec<model::Line> {
-    use crate::mc::inst::Inst;
+) -> (Vec<model::Line>, Option<(usize, usize)>, Vec<usize>) {
+    use crate::mc::inst::{FrameMark, Inst};
     let mut out = Vec::new();
     let mut at = start;
     let mut last: Option<(u32, u32)> = None;
     let row = |offset: usize, (line, column): (u32, u32)| model::Line { section: 0, offset, file: 0, line, column };
+    let (mut body_start, mut body_end) = (None, None);
+    let (mut after_frame, mut taking_down) = (false, None);
+    // A row starts a statement when its line is not the one before it
+    // (`DwarfDebug::beginInstruction`, for a function without key
+    // instructions).
+    let mut previous = declared;
+    let mut not_stmt = Vec::new();
+    let mut push = |out: &mut Vec<model::Line>, offset: usize, place: (u32, u32)| {
+        if previous == Some(place.0) {
+            not_stmt.push(offset);
+        }
+        previous = Some(place.0);
+        out.push(row(offset, place));
+    };
     for block in &function.blocks {
         debug_assert_eq!(block.insts.len(), block.locs.len(), "a place for each instruction");
         for (inst, place) in block.insts.iter().zip(&block.locs) {
-            if matches!(inst, Inst::Cfi(_)) {
+            match inst {
+                Inst::Mark(FrameMark::PrologueEnd) => after_frame = true,
+                Inst::Mark(FrameMark::EpilogueBegin) => taking_down = taking_down.or(Some(at)),
+                _ => {}
+            }
+            if inst.is_directive() {
                 continue;
             }
-            if let Some(place) = *place
-                && last != Some(place)
-            {
-                out.push(row(at, place));
-                last = Some(place);
+            if let Some(place) = *place {
+                if after_frame {
+                    body_start.get_or_insert(at - start);
+                    after_frame = false;
+                }
+                if let Some(mark) = taking_down.take() {
+                    // The epilogue's row has the return's place.
+                    body_end.get_or_insert(mark - start);
+                    if out.last().is_none_or(|one: &model::Line| one.offset != mark) {
+                        push(&mut out, mark, place);
+                    }
+                    last = Some(place);
+                }
+                if last != Some(place) {
+                    push(&mut out, at, place);
+                    last = Some(place);
+                }
             }
             at += 4;
         }
@@ -170,5 +209,6 @@ fn lines(
     {
         out.insert(0, row(start, (line, 0)));
     }
-    out
+    let length = at - start;
+    (out, body_start.map(|first| (first, body_end.unwrap_or(length))), not_stmt)
 }

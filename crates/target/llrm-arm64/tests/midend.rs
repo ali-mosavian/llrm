@@ -722,3 +722,49 @@ fn debug_information_leaves_the_code_as_it_was() {
         assert_eq!(text_of(false), text_of(true));
     }
 }
+
+/// The pin flags the first row after the frame is built `prologue_end` and the
+/// first row that takes it down `epilogue_begin`. The arm64 line table had
+/// neither: the functions had no body bounds, so gdb stepped into the prologue
+/// and a debugger could not tell where the epilogue began.
+#[test]
+fn an_arm64_function_has_its_body_bounds_and_the_line_table_flags_them() {
+    for (text, level) in
+        [(include_str!("data/debug_o0.ll"), driver::Level::O0), (include_str!("data/debug_o2.ll"), driver::Level::O2)]
+    {
+        let object = driver::object_with(text, Platform::Linux, "flags", level, true).expect("lowers");
+        let info = object.debug.as_ref().expect("debug information");
+        let function = info.functions.first().expect("a function");
+        let (start, end) = function.body.expect("the body's bounds");
+        let range = &function.ranges[0];
+        assert!(0 < start && start < end && end < range.length, "{start}..{end} of {}", range.length);
+        assert_eq!((start % 4, end % 4), (0, 0));
+        assert!(
+            info.lines.iter().any(|one| one.offset == range.offset + start)
+                && info.lines.iter().any(|one| one.offset == range.offset + end),
+            "a row at each bound: {:?}",
+            info.lines
+        );
+    }
+}
+
+/// A row is a statement where its line is not the line before it (the pin's
+/// rule for a function without key instructions); the arm64 table made every
+/// row a statement, so a debugger stopped at each column of a line.
+#[test]
+fn an_arm64_row_on_the_line_before_it_is_not_a_statement() {
+    let object =
+        driver::object_with(include_str!("data/debug_o0.ll"), Platform::Linux, "stmt", driver::Level::O0, true)
+            .expect("lowers");
+    let info = object.debug.as_ref().expect("debug information");
+    let mut previous = None;
+    let mut expected = std::collections::BTreeSet::new();
+    for row in &info.lines {
+        if previous == Some(row.line) {
+            expected.insert((0, row.offset));
+        }
+        previous = Some(row.line);
+    }
+    assert!(!expected.is_empty(), "premise: a line with more than one row");
+    assert_eq!(info.not_stmt, expected);
+}

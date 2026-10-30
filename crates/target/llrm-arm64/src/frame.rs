@@ -233,6 +233,11 @@ pub fn lower(
         if index == save {
             prologue(&frame, &mut emitter);
         }
+        // The entry block is where the source begins, whichever block the
+        // frame is built in.
+        if index == 0 {
+            emitter.insts.push(Inst::Mark(FrameMark::PrologueEnd));
+        }
         emitter.from_place(None);
         // Without a placement every return takes the frame down; with one, the
         // Restore's return does, or the blocks that end the frame at
@@ -327,6 +332,18 @@ fn prologue(
 }
 
 fn epilogue(
+    frame: &Layout,
+    emitter: &mut Emitter,
+) {
+    let first = emitter.insts.len();
+    take_down(frame, emitter);
+    // Only an epilogue that does something is marked.
+    if emitter.insts.len() > first {
+        emitter.insts.insert(first, Inst::Mark(FrameMark::EpilogueBegin));
+    }
+}
+
+fn take_down(
     frame: &Layout,
     emitter: &mut Emitter,
 ) {

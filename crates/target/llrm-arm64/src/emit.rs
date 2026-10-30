@@ -12,11 +12,11 @@ use crate::frame::Lowered;
 use crate::machine::Platform;
 use crate::mc::backend::Arm64Backend;
 use crate::mc::encode::{FixupKind, encode};
-use crate::mc::inst::{Inst, Target};
+use crate::mc::inst::Target;
 
 /// The words a block's instructions encode to (a directive has none).
 pub(crate) fn words(block: &Lowered) -> usize {
-    block.insts.iter().filter(|inst| !matches!(inst, Inst::Cfi(_))).count()
+    block.insts.iter().filter(|inst| !inst.is_directive()).count()
 }
 
 /// One lowered function.
@@ -194,7 +194,7 @@ pub fn object(
             placed.into_iter().map(|(name, at)| (name, function_offset + at as usize)).collect();
         let mut cursor = *function_offset;
         for block in &function.blocks {
-            for inst in block.insts.iter().filter(|inst| !matches!(inst, Inst::Cfi(_))) {
+            for inst in block.insts.iter().filter(|inst| !inst.is_directive()) {
                 let encoded = encode(inst).map_err(|error| format!("{}: {inst}: {error}", function.symbol))?;
                 let mut word = encoded.word;
                 if let Some(fixup) = encoded.fixup {
