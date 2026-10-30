@@ -332,6 +332,13 @@ class StartupTests(unittest.TestCase):
         have = {one.language for one in bench.variants(bench.STARTUP)}
         self.assertEqual(have, {"bas", "bq16", "bq32", "c", "nib"})
 
+@pytest.fixture(autouse=True)
+def no_waivers(monkeypatch):
+    """The repo's own waivers (tools/bench/waivers) are not these tests' fixtures: every exception whose row the one-row base lacks is stale, so the
+    gate failed ("FAIL EXCEPTION ... delete it") on 10 tests the day an exception file landed."""
+    monkeypatch.setattr(bench.basecounts, "waivers", lambda root=None: [])
+
+
 
 def test_every_basic_benchmark_has_a_variant_on_our_runtime_with_the_same_kernel():
     """BASIC on our runtime (bq16: llrm runtime, real mode, jwlink) runs beside the Microsoft-runtime `bas` and needs no QB45."""
