@@ -63,6 +63,7 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 use crate::combine::{Combiner, Visit};
 use crate::combine_icmp_binop::fold_icmp_bin_op;
 use crate::combine_icmp_const::fold_icmp_inst_with_constant;
+use crate::combine_icmp_equality::fold_icmp_equality;
 use crate::combine_shared::{get_complexity, has_one_use, query};
 
 /// `ICmpInst::isSigned`.
@@ -122,7 +123,7 @@ fn binary_of(
 }
 
 /// A new compare in place of `inst`: `new ICmpInst(pred, a, b)`.
-fn new_icmp(
+pub(crate) fn new_icmp(
     c: &mut Combiner,
     inst: InstId,
     pred: IntPredicate,
@@ -257,7 +258,12 @@ pub fn visit_icmp(
         return r;
     }
     // OWED: foldICmpInstWithConstantNotInt, the rest of foldICmpCommutative,
-    // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold.
+    // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold,
+    // and the pin's free-to-invert, uadd-overflow and sign-bit-test arms that
+    // come before foldICmpEquality.
+    if let Some(r) = fold_icmp_equality(c, inst, pred, op0, op1) {
+        return r;
+    }
     if changed { Visit::Changed } else { Visit::None }
 }
 
