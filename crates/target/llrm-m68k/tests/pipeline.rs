@@ -36,10 +36,10 @@ fn an_add_of_two_stack_arguments_is_a_move_and_an_add_with_a_memory_operand() {
             -made
         }
     };
-    let ins = [In { vt: EVT::I32, pointer: false }, In { vt: EVT::I32, pointer: false }];
+    let ins = [In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false }, In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false }];
     let args = calling.lower_formal_arguments(&mut dag, entry, &ins, &mut fixed);
     let sum = dag.get_node(ISD::Add, EVT::I32, &[args[0], args[1]]);
-    let ret = calling.lower_return(&mut dag, entry, &[Out { value: sum, ext: Ext::Any, pointer: false }]);
+    let ret = calling.lower_return(&mut dag, entry, &[Out { value: sum, ext: Ext::Any, pointer: false, arg_vt: EVT::I32, split: false, variadic: false }]);
     dag.set_root(ret);
 
     let units = select_block(&mut dag, Cpu::M68000).expect("selects");

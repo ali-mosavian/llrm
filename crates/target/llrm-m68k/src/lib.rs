@@ -2,8 +2,26 @@
 //! LLVM's M68k backend.
 
 pub mod abi;
+pub mod address;
+pub mod chain;
+pub mod amiga;
+pub mod atari;
+pub mod compile;
 pub mod dagisel;
+pub mod driver;
+pub mod encode;
+pub mod expand;
+pub mod flags;
 pub mod frame;
+pub mod kernels;
+pub mod mac;
+pub mod machine;
+pub mod mc;
+pub mod memoperand;
+pub mod mfunc;
+pub mod object;
+pub mod overlay;
+pub mod regalloc;
 pub mod target;
 
 use llrm_lir::registers::{RegId, Row};

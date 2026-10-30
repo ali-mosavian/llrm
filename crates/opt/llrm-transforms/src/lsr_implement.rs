@@ -147,6 +147,9 @@ pub struct Implement<'a, 'e> {
     pub iv_inc_insert_pos: InstId,
     /// The values whose uses were replaced: what may be dead now.
     pub dead: Vec<ValueId>,
+    /// The blocks an increment was hoisted to for a post-indexed access
+    /// (`getFixupInsertPos`): `move_increments` leaves them there.
+    pub hoisted: Vec<BlockId>,
     pub changed: bool,
 }
 
@@ -735,6 +738,38 @@ impl Implement<'_, '_> {
         }
     }
 
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L6190
+    /// `getFixupInsertPos`: the increment of a load that can be post-indexed
+    /// goes at the end of the load's block, when that block dominates the
+    /// default position, so the target's post-increment can be formed there.
+    /// A store has no result type, so it keeps the default, as in the pin.
+    fn fixup_insert_pos(
+        &self,
+        lu: &Use,
+        lf: &Fixup,
+    ) -> InstId {
+        let default = self.iv_inc_insert_pos;
+        let user = self.function.instruction(lf.user);
+        if lu.kind != Kind::Address || !matches!(user.opcode, Opcode::Load { .. }) {
+            return default;
+        }
+        let ty = match self.context.types.get(user.ty) {
+            MirType::Int(bits) => llrm_mir::tti::Ty::Int(*bits),
+            MirType::Pointer(_) => llrm_mir::tti::Ty::Pointer,
+            _ => return default,
+        };
+        if !self.tti.is_post_inc_load_legal(ty) {
+            return default;
+        }
+        let (Some(block), Some(iv_block)) = (self.function.parent(lf.user), self.function.parent(default)) else {
+            return default;
+        };
+        if !self.env.tree.dominates(block, iv_block) {
+            return default;
+        }
+        self.function.terminator(block).unwrap_or(default)
+    }
+
     /// `ImplementSolution`: every fixup rewritten by the chosen formula of its
     /// use.
     pub fn implement_solution(
@@ -751,9 +786,11 @@ impl Implement<'_, '_> {
         for (lu, &chosen) in plan.uses.iter().zip(&plan.solution) {
             let f = &lu.formulae[chosen];
             for lf in &lu.fixups {
-                // The increment goes at the default point (only an address that
-                // can be post-indexed hoists it, and x86 has none).
-                self.rewriter.set_iv_inc_insert_pos(self.l, self.iv_inc_insert_pos);
+                let at = self.fixup_insert_pos(lu, lf);
+                if at != self.iv_inc_insert_pos {
+                    self.hoisted.extend(self.function.parent(at));
+                }
+                self.rewriter.set_iv_inc_insert_pos(self.l, at);
                 self.rewrite(lu, lf, f);
                 self.changed = true;
             }
@@ -807,6 +844,10 @@ impl Implement<'_, '_> {
             };
             // A step that is not a constant may cost a register.
             if !matches!(step, Operand::Constant(_)) {
+                continue;
+            }
+            // Hoisted for a post-indexed access: it stays beside it.
+            if self.function.parent(bo).is_some_and(|block| self.hoisted.contains(&block)) {
                 continue;
             }
             // Only across blocks: isel can do the block-local case.

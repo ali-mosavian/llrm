@@ -21,7 +21,7 @@ use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_wi
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
-use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
+use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::interp::Selector;
 
@@ -95,6 +95,14 @@ impl PinRegisters for M68kPins {
     ) -> Option<u16> {
         REGISTERS.iter().find(|(_, one)| *one == id).map(|(number, _)| *number)
     }
+
+    /// `PC` has no register id here: the addressing-mode matchers still ask whether a base is it.
+    fn is_fixed(
+        &self,
+        register: u16,
+    ) -> bool {
+        register == pin::PC
+    }
 }
 
 /// What the scheduler reads of the instruction descriptions.
@@ -129,8 +137,22 @@ impl SchedInfo for M68kSched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
-    fn source_order(&self) -> bool {
-        true
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKDOWN))
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKUP))
+    }
+
+    fn copy_clobbers(&self) -> Option<u16> {
+        Some(pin::CCR)
+    }
+
+    /// M68k does not enable the machine scheduler: `createDefaultScheduler`
+    /// gives it the ILP list scheduler.
+    fn preference(&self) -> Preference {
+        if std::env::var_os("LLRM_M68K_SOURCE_SCHED").is_some() { Preference::Source } else { Preference::Ilp }
     }
 }
 
@@ -146,8 +168,18 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
+    select_block_with(dag, cpu, false)
+}
+
+/// [`select_block`], with a compare's load put where a pattern folds it where
+/// `load_as_source` (see `lowering::lower_setcc`).
+pub fn select_block_with(
+    dag: &mut SelectionDAG,
+    cpu: Cpu,
+    load_as_source: bool,
+) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
-    let mut lowering = M68kLowering;
+    let mut lowering = M68kLowering { load_as_source };
     let arch = M68k;
     DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     TypeLegalizer::new(dag, &tli)

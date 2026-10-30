@@ -8,8 +8,7 @@
 //! register. `setcc`, `select` and `brcond` on a value that is not a compare
 //! test it against zero.
 //!
-//! DEVIATE: not translated yet are `LowerToBTST`, overflow arithmetic
-//! (`LowerXALUO`), the `SETCC_CARRY` folds of `LowerSELECT`, the
+//! DEVIATE: not translated yet are the `trunc` forms of `LowerToBTST`, the `SETCC_CARRY` folds of `LowerSELECT`, the
 //! and/or-of-setcc and xor-1 folds of `LowerBRCOND`, `EmitTest`'s narrowing of
 //! a truncated arithmetic result, and floating-point conditions. Reason: each
 //! needs DAG queries or nodes the slice does not reach. Exit: M3b.
@@ -33,11 +32,14 @@ pub mod m68kisd {
     use super::{ISD, ids};
 
     pub const CMP: ISD = ISD::Target(ids::CMP);
+    pub const BTST: ISD = ISD::Target(ids::BTST);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
     pub const ADD: ISD = ISD::Target(ids::ADD);
     pub const SUB: ISD = ISD::Target(ids::SUB);
+    pub const UMUL: ISD = ISD::Target(ids::UMUL);
+    pub const SMUL: ISD = ISD::Target(ids::SMUL);
     pub const AND: ISD = ISD::Target(ids::AND);
     pub const OR: ISD = ISD::Target(ids::OR);
     pub const XOR: ISD = ISD::Target(ids::XOR);
@@ -76,7 +78,7 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     use ISD::*;
     let int = [MVT::I8, MVT::I16, MVT::I32];
     let m68020 = cpu == Cpu::M68020;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&int, false));
+    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type());
     tl.init_actions();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -123,11 +125,26 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     set(&[VAStart], &[MVT::Other], Action::Custom);
     set(&[VAEnd, VACopy, StackSave, StackRestore], &[MVT::Other], Action::Expand);
     set(&[DynamicStackAlloc], &[MVT::I32], Action::Custom);
+    // `RTLIB::MUL_I32` and the others: libgcc's names, the pin's defaults
+    // (`RuntimeLibcalls.def`)
+    for (op, name) in [
+        (Mul, "__mulsi3"),
+        (SDiv, "__divsi3"),
+        (UDiv, "__udivsi3"),
+        (SRem, "__modsi3"),
+        (URem, "__umodsi3"),
+    ] {
+        tl.set_libcall_name(op, MVT::I32, name);
+    }
     tl
 }
 
 /// The custom lowerings.
-pub struct M68kLowering;
+pub struct M68kLowering {
+    /// Put a compare's single-use load on the side a pattern folds
+    /// (`lower_setcc`).
+    pub load_as_source: bool,
+}
 
 impl Hooks for M68kLowering {
     fn lower_operation(
@@ -136,13 +153,108 @@ impl Hooks for M68kLowering {
         node: SDValue,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::SetCC => lower_setcc(dag, node),
-            ISD::Select => Some(lower_select(dag, node)),
-            ISD::BrCond => Some(lower_brcond(dag, node)),
+            ISD::SetCC => lower_setcc(dag, node, self.load_as_source),
+            ISD::Select => Some(lower_select(dag, node, self.load_as_source)),
+            ISD::BrCond => Some(lower_brcond(dag, node, self.load_as_source)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
+            ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             _ => None,
         }
     }
+
+    /// `makeLibCall` through `LowerCall`: the routine's address is a target
+    /// external symbol, the chain is the entry node (the result is the value,
+    /// nothing orders the call after a store).
+    fn make_lib_call(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+    ) -> Option<SDValue> {
+        use super::call::{Ext, In, Out};
+        let ext = if signed { Ext::Sign } else { Ext::Zero };
+        let outs: Vec<Out> = args
+            .iter()
+            .map(|&value| Out {
+                value,
+                ext,
+                pointer: false,
+                arg_vt: dag.value_type(value),
+                split: false,
+                variadic: false,
+            })
+            .collect();
+        let callee = dag.get_target_external_symbol(EVT::I32, name);
+        let root = dag.entry_node();
+        let (_chain, values) =
+            super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &[In { vt: ret, pointer: false, arg_vt: ret, split: false }]);
+        values.first().copied()
+    }
+}
+
+/// `LowerXALUO` (with `lowerOverflowArithmetic`): the arithmetic as one node
+/// that also sets the codes, and the overflow as a `SETCC` of them.
+///
+/// DEVIATE: a multiply of 8 or 16 bits is the wide multiply of
+/// `expandMULO`, not the pin's `LowerXALUO`: the pin promotes it and reports
+/// the constant zero as its overflow, so `255 * 2` in a byte overflows
+/// nothing. Exit: never, while the pin does.
+fn lower_xalu(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    if matches!(dag.opcode(node), ISD::SMulO | ISD::UMulO) && dag.value_type(SDValue { node: node.node, res: 0 }) != EVT::I32 {
+        return Some(expand_narrow_mulo(dag, node));
+    }
+    let result_vt = dag.value_type(SDValue { node: node.node, res: 0 });
+    let overflow_vt = dag.value_type(SDValue { node: node.node, res: 1 });
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (base, code) = match dag.opcode(node) {
+        ISD::SAddO => (m68kisd::ADD, cond::VS),
+        ISD::UAddO => (m68kisd::ADD, cond::CS),
+        ISD::SSubO => (m68kisd::SUB, cond::VS),
+        ISD::USubO => (m68kisd::SUB, cond::CS),
+        ISD::UMulO => (m68kisd::UMUL, cond::VS),
+        ISD::SMulO => (m68kisd::SMUL, cond::VS),
+        other => unreachable!("not an overflow operation: {other:?}"),
+    };
+    let arith = dag.get_node_multi(base, &[result_vt, EVT::I8], &[lhs, rhs]);
+    let code = cc_operand(dag, code);
+    let overflow = dag.get_node(m68kisd::SETCC, overflow_vt, &[code, SDValue { node: arith.node, res: 1 }]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[result_vt, overflow_vt], &[SDValue { node: arith.node, res: 0 }, overflow]))
+}
+
+/// `TargetLowering::expandMULO` through the type twice as wide: the product
+/// of the extended operands, whose low half is the result and whose high half
+/// is empty (unsigned) or the sign of the result (signed) when nothing
+/// overflowed.
+fn expand_narrow_mulo(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let signed = dag.opcode(node) == ISD::SMulO;
+    let result_vt = dag.value_type(SDValue { node: node.node, res: 0 });
+    let overflow_vt = dag.value_type(SDValue { node: node.node, res: 1 });
+    let bits = result_vt.size_in_bits();
+    let wide = EVT::integer(bits * 2);
+    let extend = if signed { ISD::SignExtend } else { ISD::ZeroExtend };
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (lhs, rhs) = (dag.get_node(extend, wide, &[lhs]), dag.get_node(extend, wide, &[rhs]));
+    let product = dag.get_node(ISD::Mul, wide, &[lhs, rhs]);
+    let result = dag.get_node(ISD::Truncate, result_vt, &[product]);
+    let by = dag.get_constant(u128::from(bits), EVT::I8);
+    let high = dag.get_node(ISD::Srl, wide, &[product, by]);
+    let high = dag.get_node(ISD::Truncate, result_vt, &[high]);
+    let expected = if signed {
+        let sign = dag.get_constant(u128::from(bits - 1), EVT::I8);
+        dag.get_node(ISD::Sra, result_vt, &[result, sign])
+    } else {
+        dag.get_constant(0, result_vt)
+    };
+    let overflow = dag.get_setcc(overflow_vt, high, expected, CondCode::SetNe);
+    dag.get_node_multi(ISD::MergeValues, &[result_vt, overflow_vt], &[result, overflow])
 }
 
 /// A condition-code operand: `DAG.getConstant(code, DL, MVT::i8)`.
@@ -272,16 +384,92 @@ fn emit_cmp(
     dag.get_node(m68kisd::CMP, EVT::I8, &[op1, op0])
 }
 
+/// `getBitTestCondition`: the `BTST` of bit `bit_no` of `src`, read as `cc`
+/// (`EQ` or `NE`); `BTST` sets `Z` when the bit is clear, as an `and` does.
+fn bit_test(
+    dag: &mut SelectionDAG,
+    src: SDValue,
+    bit_no: SDValue,
+    cc: CondCode,
+) -> SDValue {
+    let mut src = src;
+    if matches!(dag.value_type(src), EVT::I8 | EVT::I16) {
+        src = dag.get_node(ISD::AnyExtend, EVT::I32, &[src]);
+    }
+    let vt = dag.value_type(src);
+    let bit_no = if dag.value_type(bit_no) == vt { bit_no } else { dag.get_node(ISD::AnyExtend, vt, &[bit_no]) };
+    let test = dag.get_node(m68kisd::BTST, EVT::I8, &[src, bit_no]);
+    let code = cc_operand(dag, if cc == CondCode::SetEq { cond::EQ } else { cond::NE });
+    dag.get_node(m68kisd::SETCC, EVT::I8, &[code, test])
+}
+
+/// `LowerAndToBTST`: `(1 << n) & x` and `(x >> n) & 1` against zero are a bit
+/// test.
+fn lower_and_to_btst(
+    dag: &mut SelectionDAG,
+    and: SDValue,
+    cc: CondCode,
+) -> Option<SDValue> {
+    if dag.value_type(and) != EVT::I32 {
+        return None;
+    }
+    let (mut op0, mut op1) = (dag.operand(and, 0), dag.operand(and, 1));
+    if dag.opcode(op1) == ISD::Shl {
+        std::mem::swap(&mut op0, &mut op1);
+    }
+    if dag.opcode(op0) == ISD::Shl {
+        if dag.constant(dag.operand(op0, 0)) == Some(1) {
+            return Some(bit_test(dag, op1, dag.operand(op0, 1), cc));
+        }
+        return None;
+    }
+    let mask = dag.constant(op1)?;
+    if mask == 1 && dag.opcode(op0) == ISD::Srl {
+        return Some(bit_test(dag, dag.operand(op0, 0), dag.operand(op0, 1), cc));
+    }
+    None
+}
+
 /// `LowerSETCC`, integer part.
+///
+/// DEVIATE from the pin: with `load_as_source`, a compare whose left side is a
+/// load nothing else reads and whose right side is no load is swapped (and its
+/// condition with it), so the load is the source of the `cmp` and a pattern
+/// folds it: `cmp.l (%a0)+, %d0` where the pin loads into a register first.
+/// Reason: a register and an instruction fewer. Exit: never; a target choice.
 fn lower_setcc(
     dag: &mut SelectionDAG,
     node: SDValue,
+    load_as_source: bool,
 ) -> Option<SDValue> {
-    let (op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (mut op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
     if !dag.value_type(op0).is_integer() {
         return None;
     }
-    let cc = cond_of(dag, dag.operand(node, 2));
+    let mut cc = cond_of(dag, dag.operand(node, 2));
+    let plain_load = |dag: &SelectionDAG, value: SDValue| {
+        dag.opcode(value) == ISD::Load
+            && value.res == 0
+            && matches!(&dag.node(value).data, NodeData::Mem(info) if !info.volatile)
+    };
+    if load_as_source
+        && plain_load(dag, op0)
+        && !plain_load(dag, op1)
+        && dag.constant(op1).is_none()
+        && dag.users(op0).count() == 1
+    {
+        (op0, op1) = (op1, op0);
+        cc = cc.swapped_operands();
+    }
+    // `(1 << n) & x == 0`, `((x >> n) & 1) != 0`: a bit test
+    if matches!(cc, CondCode::SetEq | CondCode::SetNe)
+        && dag.is_null_constant(op1)
+        && dag.opcode(op0) == ISD::And
+        && dag.has_one_use(op0.node)
+        && let Some(test) = lower_and_to_btst(dag, op0, cc)
+    {
+        return Some(test);
+    }
     // `setcc (setcc c), 0|1` with `==` or `!=` is the inner condition or its
     // opposite.
     if matches!(cc, CondCode::SetEq | CondCode::SetNe)
@@ -312,10 +500,11 @@ fn opposite(code: u128) -> u128 {
 fn lower_select(
     dag: &mut SelectionDAG,
     node: SDValue,
+    load_as_source: bool,
 ) -> SDValue {
     let (mut cond_value, op1, op2) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.opcode(cond_value) == ISD::SetCC {
-        if let Some(lowered) = lower_setcc(dag, cond_value) {
+        if let Some(lowered) = lower_setcc(dag, cond_value, load_as_source) {
             cond_value = lowered;
         }
     }
@@ -338,10 +527,11 @@ fn lower_select(
 fn lower_brcond(
     dag: &mut SelectionDAG,
     node: SDValue,
+    load_as_source: bool,
 ) -> SDValue {
     let (chain, mut cond_value, dest) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.opcode(cond_value) == ISD::SetCC {
-        if let Some(lowered) = lower_setcc(dag, cond_value) {
+        if let Some(lowered) = lower_setcc(dag, cond_value, load_as_source) {
             cond_value = lowered;
         }
     }

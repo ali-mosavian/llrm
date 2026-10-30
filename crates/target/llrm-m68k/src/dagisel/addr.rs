@@ -159,6 +159,14 @@ fn match_address_base(
     am: &mut AddressMode,
 ) -> bool {
     if am.has_base() {
+        // DEVIATE from the pin, which sets an index beside a frame index base
+        // that `getFrameIndexAddress` then drops: `a[i]` of a stack array is
+        // stored to `a[0]` (the pin's `llc` does the same, at every level).
+        // The frame index goes in a register instead. Exit: never; a fix the
+        // pin lacks.
+        if am.base_type == Base::FrameIndex {
+            return false;
+        }
         if !am.has_index_reg() {
             am.index_reg = Some(n);
             return true;

@@ -19,6 +19,7 @@
 pub mod dag;
 #[rustfmt::skip]
 pub mod generated;
+pub mod aarch64_predicates;
 pub mod instr;
 pub mod interp;
 pub mod matcher;
