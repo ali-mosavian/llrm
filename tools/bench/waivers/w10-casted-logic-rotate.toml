@@ -1,4 +1,4 @@
-reason = "TEMPORARY (owner w10): foldCastedBitwiseLogic (#6185) leaves a cleaner `or i1` condition, so LoopRotate (looprotate.rs, the translation) rotates headers it left before on jpeg; the pin rotates more on the same inputs (+38 IR insts against ours +4/+15). Every -Os m16 row stays below main. Exit: the 2026-11-06 re-judge; no row may pass its measured count. queens memory operands rise (regalloc spill of the boolean) while its clocks and instructions fall."
+reason = "TEMPORARY (owner w10): pin-faithful LoopRotate (looprotate.rs, the translation) rotates loops the cleaner `or i1` condition of foldCastedBitwiseLogic (#6185) now allows on jpeg; the pin rotates more on the same inputs. All -Os m16 rows stay below main. queens memory operands rise (spill of the boolean) while its clocks and instructions fall. Exit: a re-judge on 2026-11-06, not a fix; no row may pass its measured count."
 exception = true
 
 [[row]]
