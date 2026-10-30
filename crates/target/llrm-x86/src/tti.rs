@@ -54,6 +54,8 @@ pub struct X86 {
     /// What real mode's addressing and register file make of the hooks LSR
     /// reads (T6); none: the 32-bit mode's.
     pub real_mode: Option<RealMode>,
+    /// The target's tuning table (`Machine::tuning`); the pin's by default.
+    pub tuning: llrm_mir::target::Tuning,
 }
 
 /// T6: the 16-bit target's address forms and registers, from its description
@@ -104,13 +106,32 @@ impl X86 {
     /// The profile of a `-march` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<X86> {
         match cpu {
-            "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => {
-                Some(X86 { sse1: false, sse2: false, macro_fusion: false, quad: false, real_mode: None })
-            }
-            "core2" => Some(X86 { sse1: true, sse2: true, macro_fusion: true, quad: false, real_mode: None }),
+            "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => Some(X86 {
+                sse1: false,
+                sse2: false,
+                macro_fusion: false,
+                quad: false,
+                real_mode: None,
+                tuning: llrm_mir::target::Tuning::PIN,
+            }),
+            "core2" => Some(X86 {
+                sse1: true,
+                sse2: true,
+                macro_fusion: true,
+                quad: false,
+                real_mode: None,
+                tuning: llrm_mir::target::Tuning::PIN,
+            }),
             // `-march=x86-64`: the baseline of long mode, SSE2
             // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
-            "x86-64" => Some(X86 { sse1: true, sse2: true, macro_fusion: true, quad: true, real_mode: None }),
+            "x86-64" => Some(X86 {
+                sse1: true,
+                sse2: true,
+                macro_fusion: true,
+                quad: true,
+                real_mode: None,
+                tuning: llrm_mir::target::Tuning::PIN,
+            }),
             _ => None,
         }
     }
@@ -133,6 +154,14 @@ impl X86 {
         real_mode: RealMode,
     ) -> X86 {
         X86 { real_mode: Some(real_mode), ..self.clone() }
+    }
+
+    /// The target's tuning table.
+    pub fn with_tuning(
+        &self,
+        tuning: llrm_mir::target::Tuning,
+    ) -> X86 {
+        X86 { tuning, ..self.clone() }
     }
 }
 
@@ -478,6 +507,14 @@ fn intrinsic_price(
 impl Tti for X86 {
     fn name(&self) -> &'static str {
         "X86"
+    }
+
+    fn inline_threshold_override(&self) -> Option<i64> {
+        self.tuning.inline_threshold
+    }
+
+    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
+        (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
 
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
@@ -881,6 +918,10 @@ impl Tti for X86 {
     /// the pin's X86 leaves off). Six registers and a prefix on every scaled
     /// index make the model's best answer a loss in bytes and clocks too.
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
         self.real_mode.is_some()
     }
 

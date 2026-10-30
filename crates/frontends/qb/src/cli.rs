@@ -50,10 +50,10 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     // The runtime is llrm's unless `--runtime` or `-fqb-runtime=` names a
     // Microsoft one.
     let mut frontend = Frontend::new("vbdos", "llrm");
-    // BC stores every assignment to a SINGLE or DOUBLE variable rounded to its
-    // type, whatever the level: `-fexcess-precision=fast` asks for the other.
+    // An assignment to a SINGLE or DOUBLE variable is not rounded to its type,
+    // as in C: `-fexcess-precision=standard` asks for BC's rounding.
     let mut flags = Flags::default();
-    flags.float_store = true;
+    flags.float_store = false;
     let (mut dump_hir, mut dump) = (None, None);
     let mut arm64 = None;
     let mut at = 0;
@@ -153,7 +153,7 @@ fn is_hosted(object_format: &str) -> bool {
 }
 
 pub fn main(argv: &[String]) -> i32 {
-    let args = match parse_args(argv) {
+    let args = match llrm_codegen::support::debug::timed("parse args", || parse_args(argv)) {
         Ok(args) => args,
         Err(message) => {
             eprintln!("{}\nllrm-qb: error: {message}", usage());
@@ -206,6 +206,7 @@ pub fn main(argv: &[String]) -> i32 {
         } else if args.dump.is_none() {
             print!("{}", codec::encode(&program, None).map_err(|error| error.0)?);
         }
+        llrm_codegen::support::debug::timed("drop program", || drop(program));
         Ok(())
     })();
     match result {
@@ -241,12 +242,13 @@ mod tests {
         (parsed.frontend.float_store, parsed.flags.float_store)
     }
 
-    /// BC rounds what is stored to a SINGLE variable, so llrm-qb did not: the
-    /// promoted copies of nbody_single's positions kept the x87's precision
-    /// and the program printed 86015 where BC prints 86016.
+    /// The default was BC's rounding on every store, which cost fpbench/bas
+    /// 28% of its clocks against main; the default is C's fast mode.
+    /// nbody_single/bas still prints BC's 86016 under it (bench.py's output
+    /// check fails the row otherwise).
     #[test]
-    fn a_single_assignment_rounds_unless_fast_excess_precision_is_asked() {
-        assert_eq!(float_stores(&["p.bas"]), (true, true));
+    fn a_single_assignment_is_not_rounded_unless_standard_excess_precision_is_asked() {
+        assert_eq!(float_stores(&["p.bas"]), (false, false));
         assert_eq!(float_stores(&["p.bas", "-fexcess-precision=fast"]), (false, false));
         assert_eq!(float_stores(&["p.bas", "-fexcess-precision=standard"]), (true, true));
     }

@@ -25,27 +25,32 @@ cargo build -p llrm-cc -p llrm-arm64                               # target/debu
 - LSR vs the pin: `cargo build --example lsr -p llrm-arm64; python3 tools/lsr_shadow.py tools/pin_llc_loop_reduce.sh target/debug/examples/lsr --triple arm64-apple-macosx tools/lsr_shadow/*.ll`. `LLRM_DEBUG=lsr` prints our candidates.
 - Regenerate tables: `tools/dagisel/regen-target.sh crates/target/llrm-arm64/dagisel.toml`.
 - Debug a pass: `--dump DIR` or `LLRM_MIR_STAGES=DIR` (docs/working/debugging.md).
-- Needs macOS: running Mach-O, `LLRM_PIN_CLANG` (the pin is built for the Mac). Does not: `cargo test -p llrm-arm64 --test dag_function --test lsr_scaled_index`, the tests under `llrm-transforms`. A qemu ELF run was never set up for this line. Run on the Mac, because the pin build and native execution are here.
+- Needs macOS: running Mach-O, `LLRM_PIN_CLANG` (the pin is built for the Mac). Does not: `cargo test -p llrm-arm64 --test dag_function --test lsr_scaled_index`, the tests under `llrm-transforms`. A qemu ELF run was never set up for this line. **Recommendation: start on the Mac.** The pin build, native Mach-O execution and the GORILLAS re-run exist only here; tinytim has no pin and the Linux qemu ELF path was never set up for this line. Text files for the runtime line are in `docs/working/arm64/`; `tools/arm64_shadow_cov.sh` is the shadow loop; `tools/lsr_shadow_control.sh` is the LSR control.
 
 ## 3. Evidence for each number
 
 | claim | reproduce | control |
 |---|---|---|
 | shadow fallbacks 22 of 23 programs clean; 1 left (`vla.c` `@main`: StackRestore) | the shadow loop above, re-run 2026-10-30: `fallbacks: 1 panics: 0` | the remaining fallback is printed, so the instrument does report them; the earlier 7 were real (the history is in git: 394f7de49, 12a59e57d, 42dc52298) |
-| LSR 4 of 4 loops equal the pin (was 1 of 4) | `lsr_shadow.py` line above, re-run 2026-10-30: 4 `same` | `lsr_scaled_index` fails with the `Tti` override reverted (seen). The `lsr_shadow.py` shape check has no control of its own: with `--triple x86_64-apple-macosx` it also says `same` on `copy16.ll`, so the 4/4 rests on the test, not on the script alone |
+| LSR 4 of 4 loops equal the pin (was 1 of 4) | `lsr_shadow.py` line above, re-run 2026-10-30: 4 `same` | `lsr_scaled_index` fails with the `Tti` override reverted (seen). `lsr_shadow.py` said `same` for an x86 triple on `copy16.ll`, so alone it could not discriminate; `tools/lsr_shadow_control.sh` (ours = `cat`, the unreduced input) must give 4 of 4 `DIFFERS`, and fails (0 of 4) with the comparison forced to `same` (seen). Both hold: the 4/4 stands |
 | string_instructions fix | `cargo test -p llrm-arm64 --test dag_function arm64_has_no_string` | seen failing with the fix removed |
-| GORILLAS runs, 36/37, the 14 runtime failures | not measured by this session | no evidence from here: ask mac1 |
+
+### UNVERIFIED (never measured by this session; do not quote)
+
+- GORILLAS runs. The first measured task of the new session: re-run it on the Mac with a control (`docs/working/arm64/build.sh`, `hl.sh`).
+- "Shadow 36/37": superseded by the 22 of 23 programs above.
+- The 14 llrm-cc runtime failures (8 appending ctors, 6 atomics, `LC_BUILD_VERSION`): mac1's finding, text in `docs/working/arm64/README.md`. Status unknown. mac1 is not reachable; do not wait for it.
 
 ## 4. Base branch and PRs
 
-- Oversight's order (10-30): base is `release/next` (`origin/release/next` exists, tip `f59fc7a77`). Merge it into the spike lineage, never rebase. Not done yet. Keep merging `origin/feat/m68k-spike`; never `origin/seam/m68k-shared`.
+- Oversight's order (10-30): base is `release/next` (`origin/release/next` exists, tip `f59fc7a77`). Merge it into the spike lineage, never rebase. Merged into this branch 2026-10-30 (conflicts: `selectiondag/builder.rs` struct and literals, where `release/next`'s `tuning`/`size_trade` replace `memset_stores_size`/`memcpy_moves_size` and the spike's `mem_limits`, `ordered_copies`, `string_instructions` stay; `builder/memops.rs` memset fallback, guarded by `string_instructions`; plus `self.arch.roles()` for the builder-arch trait). Keep merging `origin/feat/m68k-spike`; never `origin/seam/m68k-shared`.
 - #6105 has the user's go. Draft + WIP stays until the PR body quotes the x86 judge line (424 rows, `problems: 0`) from a run on the PR head SHA, with that SHA, plus the x86 objects identical/moved list. Not run. #6080 edits the same lsr files: rebase on whichever lands first.
 - #6060 re-check list: done and accepted.
 - Session rename and the sessionbus-hook edit of `~/.claude/settings.json`: oversight says both are answered. No settings edit was made; ask the user before any.
 
 ## 5. Open work, in order, first command and expected result
 
-1. **Merge `release/next`**: `git fetch && git merge origin/release/next`, then `cargo check --workspace`. Expect conflicts only in shared crates; resolve, run the two narrow tests above.
+1. ~~Merge `release/next`~~ done; re-merge when it moves: `git fetch && git merge origin/release/next`, `cargo check --workspace --all-targets`, then `cargo test -p llrm-arm64`.
 2. **x86 judge on #6105's head** and put the line in the body. The runner is oversight's (w6); ask which command.
 3. **DAG-function quality vs the pin and the hand selector** (instructions, memory ops, spills, executed instructions): `llc -O2 -mtriple=arm64-apple-macosx F.ll` with the pin versus `target/debug/llrm-arm64-llc --isel=dag`; diff per function, check each count by reading the assembly before it counts. Not started.
 4. vla / dynamic SP (StackSave/StackRestore/DynamicStackAlloc, FP-based locals): first command is the shadow loop; expect `vla: ... StackRestore` to disappear. A design slice.

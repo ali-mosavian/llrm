@@ -1,18 +1,22 @@
 //! The object: the functions' machine code in one text section, the globals in
 //! data sections, the symbols and the relocations between them.
 
-use std::collections::HashMap;
-
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{GlobalKind, Linkage, Module};
 use llrm_object::assembler::{Fragment, layout as place};
 use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Symbol, Target as RelocTarget};
+use llrm_support::hash::HashMap;
 
 use crate::data::{self, DataReloc};
 use crate::frame::Lowered;
 use crate::machine::Platform;
 use crate::mc::encode::{FixupKind, encode, resolve};
-use crate::mc::inst::Target;
+use crate::mc::inst::{Inst, Target};
+
+/// The words a block's instructions encode to (a directive has none).
+fn words(block: &Lowered) -> usize {
+    block.insts.iter().filter(|inst| !matches!(inst, Inst::Cfi(_))).count()
+}
 
 /// One lowered function.
 pub struct Function {
@@ -122,18 +126,18 @@ pub fn object(
     functions: &[Function],
 ) -> Result<Object, String> {
     let placed = data::globals(module, layout, platform)?;
-    let mut symbols = Symbols { list: Vec::new(), index: HashMap::new() };
+    let mut symbols = Symbols { list: Vec::new(), index: HashMap::default() };
     // Section indices: text, then each data role that has contents.
     let text_index = 0;
     let mut text_offsets = Vec::new();
     let mut at = 0usize;
     for function in functions {
         text_offsets.push(at);
-        at += function.blocks.iter().map(|block| block.insts.len() * 4).sum::<usize>();
+        at += function.blocks.iter().map(|block| words(block) * 4).sum::<usize>();
     }
     let text_size = at;
     for (function, offset) in functions.iter().zip(&text_offsets) {
-        let size = function.blocks.iter().map(|block| block.insts.len() * 4).sum();
+        let size = function.blocks.iter().map(|block| words(block) * 4).sum();
         symbols.defined(&function.symbol, function.binding, text_index, *offset, size);
     }
     // Data sections: constants, writable data, zero-filled.
@@ -179,14 +183,14 @@ pub fn object(
         let mut fragments = Vec::new();
         for block in &function.blocks {
             fragments.push(Laid::Label(block.label.as_str()));
-            fragments.push(Laid::Words(block.insts.len()));
+            fragments.push(Laid::Words(words(block)));
         }
         let placed = place(&mut fragments, &()).map_err(|error| format!("{}: {}", function.symbol, error.0))?;
         let labels: HashMap<String, usize> =
             placed.into_iter().map(|(name, at)| (name, function_offset + at as usize)).collect();
         let mut cursor = *function_offset;
         for block in &function.blocks {
-            for inst in &block.insts {
+            for inst in block.insts.iter().filter(|inst| !matches!(inst, Inst::Cfi(_))) {
                 let encoded = encode(inst).map_err(|error| format!("{}: {inst}: {error}", function.symbol))?;
                 let mut word = encoded.word;
                 if let Some(fixup) = encoded.fixup {
@@ -214,6 +218,17 @@ pub fn object(
         }
     }
     let _ = FixupKind::Branch26;
+    let frames = functions
+        .iter()
+        .zip(&text_offsets)
+        .map(|(function, &offset)| llrm_object::Frame {
+            section: text_index,
+            offset,
+            length: function.blocks.iter().map(|block| words(block) * 4).sum(),
+            rows: crate::cfi::rows(&function.blocks),
+            seh: Vec::new(),
+        })
+        .collect();
     let mut sections = vec![section(".text", Role::Text, 4, text, text_relocs)];
     for (role, section_name, image, members, align) in data_sections {
         let mut relocs = Vec::new();
@@ -237,7 +252,7 @@ pub fn object(
         symbols: symbols.list,
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
-        frames: Vec::new(),
+        frames,
         debug: None,
     })
 }

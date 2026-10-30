@@ -23,7 +23,7 @@ entry:
 /// (ADJCALLSTACKDOWN32)`: 114 + 86 functions of the corpora.
 #[test]
 fn a_call_is_a_sequence_around_a_call_instruction() {
-    let module = llrm_mir::parse::module(CALL).expect("parses");
+    let module = crate::testing::module(CALL).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -57,7 +57,7 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
 /// block.
 #[test]
 fn source_order_keeps_the_ir_order_around_a_call() {
-    let module = llrm_mir::parse::module(CALL).expect("parses");
+    let module = crate::testing::module(CALL).expect("parses");
     let order = |on: bool| {
         super::schedule::SRC_ORDER.set(on);
         let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
@@ -91,7 +91,7 @@ entry:
 /// 71 modules of the vsgcc corpus stopped compiling.
 #[test]
 fn an_indirect_call_names_its_target() {
-    let module = llrm_mir::parse::module(INDIRECT).expect("parses");
+    let module = crate::testing::module(INDIRECT).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let call = done
@@ -120,7 +120,7 @@ entry:
 /// (`es_across_copy`).
 #[test]
 fn a_call_names_the_registers_it_takes_arguments_in() {
-    let module = llrm_mir::parse::module(REGISTER_CALL).expect("parses");
+    let module = crate::testing::module(REGISTER_CALL).expect("parses");
     let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -142,7 +142,7 @@ entry:
 /// return was named `ret` and printed as a near return in a far procedure.
 #[test]
 fn an_m16_function_takes_register_arguments_and_returns_unnamed() {
-    let module = llrm_mir::parse::module(M16_SUM).expect("parses");
+    let module = crate::testing::module(M16_SUM).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -170,7 +170,7 @@ entry:
 #[test]
 fn a_call_destroys_what_its_conventions_says() {
     use llrm_target::Target;
-    let module = llrm_mir::parse::module(BOTH_CALLS).expect("parses");
+    let module = crate::testing::module(BOTH_CALLS).expect("parses");
     let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -203,7 +203,7 @@ entry:
 #[test]
 fn a_variadic_call_destroys_what_the_variadic_convention_says() {
     use llrm_target::Target;
-    let module = llrm_mir::parse::module(VARIADIC_CALL).expect("parses");
+    let module = crate::testing::module(VARIADIC_CALL).expect("parses");
     let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -227,7 +227,7 @@ entry:
 /// up (byvalue_struct_address passed `y`'s place to `bar`).
 #[test]
 fn a_byval_parameter_is_a_fixed_object_of_its_own() {
-    let module = llrm_mir::parse::module(BYVAL_ADDRESS).expect("parses");
+    let module = crate::testing::module(BYVAL_ADDRESS).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -255,7 +255,7 @@ entry:
 /// call.
 #[test]
 fn an_i64_divide_carries_the_routines_code_at_its_call() {
-    let module = llrm_mir::parse::module(DIV64).expect("parses");
+    let module = crate::testing::module(DIV64).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let routine = llrm_target::Target::divide_routine(&llrm_x86_m32::M32, true, true).expect("a routine");
@@ -278,7 +278,7 @@ entry:
 /// programs).
 #[test]
 fn va_start_finds_the_first_variadic_argument() {
-    let module = llrm_mir::parse::module(VARIADIC).expect("parses");
+    let module = crate::testing::module(VARIADIC).expect("parses");
     let why = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .err()
         .map(|e| e.0);
@@ -299,7 +299,7 @@ entry:
 /// m16 execution run (79 programs).
 #[test]
 fn an_m16_call_of_a_symbol_is_a_direct_call() {
-    let module = llrm_mir::parse::module(M16_DIRECT).expect("parses");
+    let module = crate::testing::module(M16_DIRECT).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.calls.values().collect::<Vec<_>>(), ["g"]);
@@ -313,7 +313,7 @@ fn an_m16_call_of_a_symbol_is_a_direct_call() {
 /// into the area stopped 32 QCport modules from assembling.
 #[test]
 fn an_m16_call_pushes_its_stack_arguments() {
-    let module = llrm_mir::parse::module(M16_STACK_ARGS).expect("parses");
+    let module = crate::testing::module(M16_STACK_ARGS).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -374,7 +374,7 @@ entry:
 /// allocator saw no claim on EAX. The `ret` requires both return registers.
 #[test]
 fn a_ret_requires_the_registers_it_returns_in() {
-    let module = llrm_mir::parse::module(PAIR).expect("parses");
+    let module = crate::testing::module(PAIR).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -399,7 +399,7 @@ entry:
 /// (old_style_extra_args -m32: exception 0Dh).
 #[test]
 fn the_caller_removes_the_arguments_the_callee_does_not_declare() {
-    let module = llrm_mir::parse::module(EXTRA_ARGS).expect("parses");
+    let module = crate::testing::module(EXTRA_ARGS).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let text = format!("{:?}", done.body.insns().iter().filter_map(|i| i.what.as_ref()).collect::<Vec<_>>());
@@ -434,7 +434,7 @@ entry:
 /// regparm3 matrix callees 4, 22 and 31 under `--isel=dag`).
 #[test]
 fn no_call_delivers_two_values_in_one_register() {
-    let module = llrm_mir::parse::module(REMAINDER_EXTENDED).expect("parses");
+    let module = crate::testing::module(REMAINDER_EXTENDED).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     for insn in done.body.insns().iter().filter(|i| !i.delivers.is_empty()) {
@@ -446,8 +446,7 @@ fn no_call_delivers_two_values_in_one_register() {
     }
 }
 
-const CALL_RETURNING_I64: &str =
-    "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+const CALL_RETURNING_I64: &str = "target datalayout = \"@m32-datalayout@\"
 define internal cc 1002 i64 @t_(double noundef %0) {
 b1:
   %1 = fptosi double %0 to i64
@@ -467,7 +466,7 @@ b1:
 /// writes it`, double_to_int64.c -O0 under `--isel=dag`).
 #[test]
 fn a_call_delivers_both_halves_of_an_i64_result() {
-    let module = llrm_mir::parse::module(CALL_RETURNING_I64).expect("parses");
+    let module = crate::testing::module(CALL_RETURNING_I64).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -489,7 +488,7 @@ entry:
   ret i32 %a
 }
 ";
-    let module = llrm_mir::parse::module(text).expect("parses");
+    let module = crate::testing::module(text).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let flags: Vec<bool> = done
@@ -644,8 +643,9 @@ declare cc 1000 void @llrm.qb.B$RDIM() addrspace(1)
 /// pads were selected.
 #[test]
 fn a_runtime_call_pops_every_argument_it_is_given() {
-    let module = llrm_mir::parse::module(RUNTIME_CALL_MORE_ARGS_THAN_DECLARED).expect("parses");
+    let module = crate::testing::module(RUNTIME_CALL_MORE_ARGS_THAN_DECLARED).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: true,
@@ -711,7 +711,7 @@ j:
 /// the second, the phi takes its inputs from every block that branches to it.
 #[test]
 fn a_split_condition_exports_what_the_later_blocks_read() {
-    let module = llrm_mir::parse::module(MERGED_WITH_PHI).expect("parses");
+    let module = crate::testing::module(MERGED_WITH_PHI).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.body.blocks.len(), 5, "entry, the second compare, then, else, join");
@@ -869,7 +869,7 @@ define cc 1005 void @f(i16 %p) {
 #[test]
 fn a_word_argument_is_required_in_the_word_register() {
     use llrm_lir::registers::RegId;
-    let module = llrm_mir::parse::module(WORD_ARGUMENTS).expect("parses");
+    let module = crate::testing::module(WORD_ARGUMENTS).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -891,7 +891,7 @@ entry:
 /// refused ("call of a constant expression"); the pin calls the value.
 #[test]
 fn a_call_of_a_constant_expression_calls_its_value() {
-    let module = llrm_mir::parse::module(CALL_AT_ADDRESS).expect("parses");
+    let module = crate::testing::module(CALL_AT_ADDRESS).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -937,8 +937,9 @@ declare cc 1000 void @user(i16) addrspace(1)
             name.to_owned()
         }
     }
-    let module = llrm_mir::parse::module(IR).expect("parses");
+    let module = crate::testing::module(IR).expect("parses");
     let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
         abi: &Keeps,
         segments: &crate::backend::target::BASIC,
         runtime: false,
@@ -982,7 +983,7 @@ entry:
 /// (SD240). QCport -Os: 131 stack arguments.
 #[test]
 fn a_far_pointer_pushed_as_a_long_is_two_word_pushes() {
-    let module = llrm_mir::parse::module(M16_FAR_POINTER_AS_LONG_ARGUMENT).expect("parses");
+    let module = crate::testing::module(M16_FAR_POINTER_AS_LONG_ARGUMENT).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -1016,7 +1017,7 @@ fn a_register_convention_call_changes_fs_and_gs() {
 /// the DAG path refused every QB program that prints a number.
 #[test]
 fn a_runtime_call_the_caller_cleans_up_is_modelled() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+    let text = "target datalayout = \"@m64-datalayout@\"
 define void @f() {
 entry:
   tail call void @llrm.qb.B$PER4(float 7.0)
@@ -1024,7 +1025,7 @@ entry:
 }
 declare void @llrm.qb.B$PER4(float) nocallback
 ";
-    let module = llrm_mir::parse::module(text).expect("parses");
+    let module = crate::testing::module(text).expect("parses");
     let function = module.global(module.named("f").expect("f")).function().expect("a body");
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let verdicts = super::dag_function::runtime_call_verdicts(
@@ -1076,7 +1077,7 @@ entry:
 /// by 28 B.
 #[test]
 fn a_select_before_a_call_stays_above_the_call_frame() {
-    let module = llrm_mir::parse::module(SELECT_BEFORE_CALL).expect("parses");
+    let module = crate::testing::module(SELECT_BEFORE_CALL).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let names: Vec<String> = done
@@ -1184,7 +1185,7 @@ entry:
   ret i16 %r
 }
 ";
-    let module = llrm_mir::parse::module(IR).expect("parses");
+    let module = crate::testing::module(IR).expect("parses");
     let (facts, _) = crate::backend::calleefacts::CalleeFacts::of(&module);
     let frame = llrm_target::FrameRegisters {
         pointer: RegId::BP,
@@ -1200,10 +1201,11 @@ entry:
     };
     let leaf = selected(&module, "leaf", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
-    facts.record("leaf", &leaf.body, &frame);
+    facts.record("leaf", &leaf.body, &frame, &Default::default());
     let written = facts.written("leaf").expect("leaf takes part");
     assert!(!written.whole.contains(&RegId::ECX), "the leaf writes no CX: {:?}", written.whole);
     let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: false,
@@ -1239,7 +1241,7 @@ entry:
 /// keeps the call at `-Os`.
 #[test]
 fn an_i64_udiv_by_a_constant_is_inline_at_speed_and_a_call_at_size() {
-    let module = llrm_mir::parse::module(M16_UDIV_TEN).expect("parses");
+    let module = crate::testing::module(M16_UDIV_TEN).expect("parses");
     let calls = |size: bool| {
         let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
         cpu.size = size;
@@ -1250,8 +1252,10 @@ fn an_i64_udiv_by_a_constant_is_inline_at_speed_and_a_call_at_size() {
             .filter(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call))
             .count()
     };
-    assert_eq!(calls(false), 0, "speed: multiplied by the magic number");
-    assert_eq!(calls(true), 1, "-Os: the divide routine");
+    llrm_x86_m16::with_pin_tuning(|| {
+        assert_eq!(calls(false), 0, "speed: multiplied by the magic number");
+        assert_eq!(calls(true), 1, "-Os: the divide routine");
+    });
 }
 
 /// An indirect call with no stack arguments said nothing of what its callee
@@ -1262,13 +1266,13 @@ fn an_i64_udiv_by_a_constant_is_inline_at_speed_and_a_call_at_size() {
 /// `-Os`, which broke the runtime build).
 #[test]
 fn an_indirect_call_with_no_arguments_says_it_pops_none() {
-    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+    let ir = "target datalayout = \"@m32-datalayout@\"
 define void @f(ptr %fp) {
   call void %fp()
   ret void
 }
 ";
-    let module = llrm_mir::parse::module(ir).expect("parses");
+    let module = crate::testing::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.body.call_pops.values().copied().collect::<Vec<_>>(), vec![0], "{:?}", done.body.call_pops);
@@ -1292,7 +1296,7 @@ entry:
 /// edi where the old selector pushed nothing, +57% executed instructions).
 #[test]
 fn a_call_of_a_basic_function_disturbs_what_its_convention_says() {
-    let module = llrm_mir::parse::module(BASIC_CALL).expect("parses");
+    let module = crate::testing::module(BASIC_CALL).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -1318,7 +1322,7 @@ entry:
 #[test]
 fn a_call_disturbs_the_registers_its_arguments_arrive_in() {
     use llrm_target::Target;
-    let module = llrm_mir::parse::module(WATCALL_ARGUMENTS).expect("parses");
+    let module = crate::testing::module(WATCALL_ARGUMENTS).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();

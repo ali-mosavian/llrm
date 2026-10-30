@@ -431,7 +431,10 @@ pub fn popped_arguments(
     let unit = i64::from(body.bits / 8);
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
-    let sp = Loc::Reg(reg(RegId::SP, 2));
+    // DEVIATE: the pin pops only at -Oz; the legacy -Os pop keeps -Os m16 <=
+    // main. The target's stack register: `add sp, n` at 16 bits,
+    // selection's `add esp, n` at 32.
+    let sp = Loc::Reg(reg(regs.named(regs.stack, unit), unit as u32));
     // The words an `add sp, n` takes back, or 0.
     let words_of = |one: &Insn| match &one.what {
         Some(what)
@@ -2549,7 +2552,12 @@ pub fn _flag_effect(
         let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == RegId::None).collect::<Lanes>();
         return (flags(&effect.reads), flags(&effect.writes));
     }
-    if one.what.as_ref().is_some_and(|what| [Operation::Call, Operation::Return].contains(&what.op)) {
+    // A sibling call's `jmp` leaves the function as `ret` does: it reads no
+    // flag and the caller's flags are gone (the pin's `TAILJMPd`).
+    if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
+        return (Lanes::new(), every);
+    }
+    if one.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
         return (_exit_flags(), Lanes::new());
     }
     // Bytes this cannot encode -- a relocated operand, an x87 form --

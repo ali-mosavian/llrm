@@ -17,8 +17,13 @@ fn compiled(
     let scratch = tempfile::tempdir().unwrap();
     let (input, out) = (scratch.path().join(name), scratch.path().join("out.asm"));
     std::fs::write(&input, source).unwrap();
-    let done =
-        Command::new(bin.join(tool)).arg(&input).args(arguments).args(["-O2", "-S", "-o"]).arg(&out).output().unwrap();
+    // llrm-c is gone: its command line is served by llrm-cc over the pinned
+    // clang.
+    let done = if tool == "llrm-c" {
+        common::cc::llrm_c().arg(&input).args(arguments).args(["-O2", "-S", "-o"]).arg(&out).output().unwrap()
+    } else {
+        Command::new(bin.join(tool)).arg(&input).args(arguments).args(["-O2", "-S", "-o"]).arg(&out).output().unwrap()
+    };
     assert!(done.status.success(), "{tool}: {}", String::from_utf8_lossy(&done.stderr));
     std::fs::read_to_string(out).unwrap()
 }
