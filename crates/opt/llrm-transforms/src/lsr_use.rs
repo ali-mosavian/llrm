@@ -277,7 +277,14 @@ pub fn is_am_completely_folded_at(
     scale: i64,
 ) -> bool {
     match kind {
-        Kind::Address => tti.is_legal_addressing_mode_at(access.addr_space, access.bytes, base_gv, base_offset.0, has_base_reg, scale),
+        Kind::Address => tti.is_legal_addressing_mode_at(
+            access.addr_space,
+            access.bytes,
+            base_gv,
+            base_offset.0,
+            has_base_reg,
+            scale,
+        ),
         Kind::ICmpZero => {
             // There is no hook for folding a global into a compare.
             if base_gv {
@@ -406,17 +413,7 @@ pub fn is_legal_use(
         has_base_reg,
         scale,
     ) || (scale == 1
-        && is_am_completely_folded_between(
-            tti,
-            min_offset,
-            max_offset,
-            kind,
-            access,
-            base_gv,
-            base_offset,
-            true,
-            0,
-        ))
+        && is_am_completely_folded_between(tti, min_offset, max_offset, kind, access, base_gv, base_offset, true, 0))
 }
 
 /// `isLegalUse(TTI, MinOffset, MaxOffset, Kind, AccessTy, F)`.
@@ -428,17 +425,7 @@ pub fn is_legal_use_formula(
     access: MemAccessTy,
     f: &Formula,
 ) -> bool {
-    is_legal_use(
-        tti,
-        min_offset,
-        max_offset,
-        kind,
-        access,
-        f.base_gv.is_some(),
-        f.base_offset,
-        f.has_base_reg,
-        f.scale,
-    )
+    is_legal_use(tti, min_offset, max_offset, kind, access, f.base_gv.is_some(), f.base_offset, f.has_base_reg, f.scale)
 }
 
 /// `isLegalAddImmediate`.

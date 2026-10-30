@@ -19,10 +19,10 @@
 //!   reciprocal throughput 1/2 (what the Cyclone scheduling model gives `LDR`);
 //!   the scheduling model is not read. `generic` has the formula's fixed
 //!   latency 4 (`FeatureFixedLoadLatency4`).
-//! - DEVIATE 3: `isLegalAddressingMode` takes the access type; the trait's typed
-//!   queries (`*_at`, which LSR asks of a use) take its size in bytes, but the
-//!   untyped ones (`is_legal_addressing_mode`) assume 8 bytes, a register
-//!   ([`AArch64::is_legal_addressing_mode_for`] takes the size).
+//! - DEVIATE 3: `isLegalAddressingMode` takes the access type; the trait's
+//!   typed queries (`*_at`, which LSR asks of a use) take its size in bytes,
+//!   but the untyped ones (`is_legal_addressing_mode`) assume 8 bytes, a
+//!   register ([`AArch64::is_legal_addressing_mode_for`] takes the size).
 //! - DEVIATE 4: `isMaskAndCmp0FoldingBeneficial` takes the mask; the trait does
 //!   not, so the answer is the base class's `false`
 //!   ([`AArch64Lowering::is_mask_and_cmp0_folding_beneficial_for`] takes the

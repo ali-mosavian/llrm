@@ -988,8 +988,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                             continue;
                         }
 
-                        let (lu_idx, offset, stripped) =
-                            self.get_use(se, s, Kind::Basic, MemAccessTy::unknown(0));
+                        let (lu_idx, offset, stripped) = self.get_use(se, s, Kind::Basic, MemAccessTy::unknown(0));
                         let _ = stripped;
                         let mut fixup = Fixup::new(u.user, Operand::Value(value));
                         fixup.offset = offset;
