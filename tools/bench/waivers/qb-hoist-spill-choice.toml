@@ -8,19 +8,3 @@ counter = "code_bytes"
 tip = 572
 main = 585
 to = 588
-
-# Better than main (503), worse than the tip by 2; instructions -3, clocks -20.
-[[row]]
-label = "parity/qbsp bas -O2"
-counter = "memory_operands"
-tip = 420
-main = 503
-to = 422
-
-# Better than main (593), worse than the tip by 2; instructions -6, clocks -26.
-[[row]]
-label = "parity/qbsp bas -Os"
-counter = "memory_operands"
-tip = 456
-main = 593
-to = 458
