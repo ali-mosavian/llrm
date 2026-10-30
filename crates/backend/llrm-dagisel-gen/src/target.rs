@@ -23,6 +23,9 @@ struct Target {
     cpus: Vec<String>,
     /// `ByHwMode` types by mode (`getValueTypeForHwMode`), as `MVT` names.
     hw_modes: Vec<String>,
+    /// Symbols the target's hand code names (`ISD::ATOMIC_CMP_SWAP`,
+    /// `M68k::PC`).
+    extra_symbols: Vec<String>,
 }
 
 fn strings(
@@ -51,7 +54,15 @@ impl Target {
             isd: string(table, "isd")?,
             cpus: strings(table, "cpus")?,
             hw_modes: strings(table, "hw_modes")?,
+            extra_symbols: strings(table, "extra_symbols")?,
         };
+        // The name prefixes the generated modules (`<name>_<cpu>`).
+        let mut chars = target.name.chars();
+        if !chars.next().is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+            || !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        {
+            return Err(format!("[target] name `{}` is not a Rust module name", target.name));
+        }
         if target.cpus.is_empty() {
             return Err("[target] cpus is empty".into());
         }
@@ -127,7 +138,7 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         modules.push_str(&format!("pub mod {module};\n"));
         eprintln!("{cpu_name}: {} items, {} operand entries", flat.items.len(), flat.operands.len());
     }
-    write("ids.rs", ids_rs::render_target(&ids, &target.isd, &target.ns, &instructions))?;
+    write("ids.rs", ids_rs::render_target(&ids, &target.isd, &target.ns, &instructions, &target.extra_symbols))?;
     write("instrinfo.rs", emit::render_instr_info(inputs.instrinfo, &ids, &emitted, &style)?)?;
     write("mod.rs", modules)
 }
@@ -135,4 +146,21 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
 /// `Style` holds `&'static str`; a run makes a handful of these.
 fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(name: &str) -> String {
+        format!("[target]\nname = \"{name}\"\nns = \"X::\"\nisd = \"XISD::\"\ncpus = [\"a\"]\n")
+    }
+
+    /// `name = "6502"` produced `pub mod 6502_mos6502;`, which does not
+    /// compile.
+    #[test]
+    fn a_name_that_is_no_module_name_is_refused() {
+        assert!(Target::parse(&record("6502")).err().unwrap().contains("module name"));
+        assert!(Target::parse(&record("mos6502")).is_ok());
+    }
 }

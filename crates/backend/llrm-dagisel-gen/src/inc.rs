@@ -216,10 +216,13 @@ fn node_predicates(after: &str) -> Result<Vec<Vec<String>>, String> {
 }
 
 fn complex_patterns(after: &str) -> Result<Vec<ComplexPattern>, String> {
-    let body = function_body(
+    // tblgen leaves the function out when the target has no complex pattern.
+    let Ok(body) = function_body(
         after,
         "CheckComplexPattern(SDNode *Root, SDNode *Parent,\n      SDValue N, unsigned PatternNo,\n      SmallVectorImpl<std::pair<SDValue, SDNode *>> &Result)\n",
-    )?;
+    ) else {
+        return Ok(Vec::new());
+    };
     let mut out = Vec::new();
     for (number, lines) in cases(body) {
         if number != out.len() {
@@ -261,6 +264,13 @@ mod tests {
 
     fn ids() -> Ids {
         Ids::parse("OPC_Scope 0\nOPC_RecordNode 1\nOPFL_Chain 1\nOPFL_MemRefs 8\nISD::STORE 317\nMVT::i32 7\n").unwrap()
+    }
+
+    /// A td with no `ComplexPattern` (the 6502 toy) made the whole table refuse
+    /// with "no CheckComplexPattern(...) in the .inc".
+    #[test]
+    fn a_table_without_complex_patterns_has_none() {
+        assert!(complex_patterns("").unwrap().is_empty());
     }
 
     #[test]
