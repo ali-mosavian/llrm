@@ -229,12 +229,78 @@ pub struct Estimate {
     pub cycles: u64,
 }
 
+/// `text` with each use of a `.macro` replaced by its body, the parameters by the arguments; the definitions stay,
+/// for the loop below to skip.
+fn expand_macros(text: &str) -> String {
+    let mut macros: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+    let mut open: Option<(String, Vec<String>, Vec<String>)> = None;
+    for line in text.lines() {
+        let code = line.split(';').next().unwrap_or("").trim();
+        if let Some(header) = code.strip_prefix(".macro") {
+            let mut names = header.split(|c: char| c == ',' || c.is_whitespace()).filter(|name| !name.is_empty());
+            open = names.next().map(|name| (name.to_owned(), names.map(str::to_owned).collect(), Vec::new()));
+        } else if code.starts_with(".endmacro") {
+            macros.extend(open.take());
+        } else if let Some((_, _, body)) = &mut open {
+            body.push(line.to_owned());
+        }
+    }
+    let substitute = |line: &str, parameters: &[String], arguments: &[&str]| -> String {
+        let mut out = String::new();
+        let mut word = String::new();
+        let mut flush = |word: &mut String, out: &mut String| {
+            match parameters.iter().position(|parameter| parameter == word) {
+                Some(at) => out.push_str(arguments.get(at).copied().unwrap_or("")),
+                None => out.push_str(word),
+            }
+            word.clear();
+        };
+        for c in line.chars() {
+            if c.is_alphanumeric() || c == '_' {
+                word.push(c);
+            } else {
+                flush(&mut word, &mut out);
+                out.push(c);
+            }
+        }
+        flush(&mut word, &mut out);
+        out
+    };
+    let mut out = String::new();
+    let mut in_macro = false;
+    for line in text.lines() {
+        let code = line.split(';').next().unwrap_or("").trim();
+        if in_macro || code.starts_with(".macro") {
+            in_macro = !code.starts_with(".endmacro");
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        let (word, rest) = code.split_once(char::is_whitespace).unwrap_or((code, ""));
+        match macros.iter().find(|(name, ..)| name == word) {
+            Some((_, parameters, body)) => {
+                let arguments: Vec<&str> = rest.split(',').map(str::trim).collect();
+                for body_line in body {
+                    out.push_str(&substitute(body_line, parameters, &arguments));
+                    out.push('\n');
+                }
+            }
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
 /// [`Estimate`] of `text`, or the first line it cannot price.
 pub fn estimate(
     cpu: Cpu,
     text: &str,
 ) -> Result<Estimate, String> {
-    let lines: Vec<&str> = text.lines().map(|l| l.split(';').next().unwrap_or("")).collect();
+    let expanded = expand_macros(text);
+    let lines: Vec<&str> = expanded.lines().map(|l| l.split(';').next().unwrap_or("")).collect();
     let label_at =
         |name: &str| lines.iter().position(|l| l.trim_end().strip_suffix(':').is_some_and(|label| label == name));
     // a backward branch makes the lines from its label to it a loop

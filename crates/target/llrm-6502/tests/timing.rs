@@ -196,3 +196,16 @@ fn a_macro_body_is_not_priced_as_code() {
     let priced = llrm_6502::timing::estimate(Cpu::Mos6502, text).expect("prices");
     assert_eq!(priced.bytes, 3, "lda #1 and rts only");
 }
+
+/// A macro use was a line the estimator could not price ("cannot price `neg16 rc2, rc3`"), so the signed word
+/// division and modulo kernels of the hand corpus had no row. It costs what its body costs.
+#[test]
+fn a_macro_use_is_priced_as_its_body() {
+    let macros = ".macro neg16 lo, hi\n  sec\n  lda #0\n  sbc lo\n  sta lo\n  lda #0\n  sbc hi\n  sta hi\n.endmacro\n";
+    let used = format!("{macros}f:\n  neg16 rc2, rc3\n  rts\n");
+    let written = "f:\n  sec\n  lda #0\n  sbc rc2\n  sta rc2\n  lda #0\n  sbc rc3\n  sta rc3\n  rts\n";
+
+    let used = llrm_6502::timing::estimate(Cpu::Mos6502, &used).expect("prices the macro use");
+
+    assert_eq!(used, llrm_6502::timing::estimate(Cpu::Mos6502, written).unwrap());
+}
