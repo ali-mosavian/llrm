@@ -104,6 +104,8 @@ fn sext_in_reg_of_extload(dag: &mut SelectionDAG) {
         base: MemBase::Stack(0),
         ext: Some(LoadExt::ExtLoad),
         space: 0,
+    
+        ordering: None,
     };
     let load = dag.get_ext_load(LoadExt::ExtLoad, EVT::I32, chain, ptr, info);
     let narrow = dag.get_value_type_node(EVT::I8);
@@ -171,6 +173,8 @@ fn two_byte_stores(dag: &mut SelectionDAG) {
         base: MemBase::Stack(offset),
         ext: None,
         space: 0,
+    
+        ordering: None,
     };
     let (lo, hi) = (dag.get_constant(1, EVT::I8), dag.get_constant(0, EVT::I8));
     let one = dag.get_constant(1, EVT::I64);
@@ -295,6 +299,8 @@ fn masked_frozen_extload(dag: &mut SelectionDAG) {
         base: MemBase::Stack(0),
         ext: Some(LoadExt::ExtLoad),
         space: 0,
+    
+        ordering: None,
     };
     let load = dag.get_ext_load(LoadExt::ExtLoad, EVT::I32, chain, ptr, info);
     let frozen = dag.get_node(ISD::Freeze, EVT::I32, &[load]);
@@ -572,7 +578,7 @@ fn a_target_that_does_not_ask_keeps_the_addend() {
 fn volatile_double_store(dag: &mut SelectionDAG) {
     let (ptr, chain) = (dag.get_register(EVT::I64, 7), dag.entry_node());
     let one = dag.get_constant_fp(u128::from(1.0f64.to_bits()), EVT::Simple(MVT::F64));
-    let info = MemInfo { mem_vt: EVT::Simple(MVT::F64), align: 8, volatile: true, base: MemBase::Stack(0), ext: None, space: 0 };
+    let info = MemInfo { mem_vt: EVT::Simple(MVT::F64), align: 8, volatile: true, base: MemBase::Stack(0), ext: None, space: 0 , ordering: None };
     let root = dag.get_store(chain, one, ptr, info);
     dag.set_root(root);
 }
@@ -637,7 +643,7 @@ fn store_then_store_of_the_address(dag: &mut SelectionDAG) {
     let p = dag.get_node(ISD::Or, EVT::I64, &[r, q]);
     let sixteen = dag.get_constant(16, EVT::I64);
     let a = dag.get_node(ISD::Add, EVT::I64, &[p, sixteen]);
-    let info = |vt| MemInfo { mem_vt: vt, align: 8, volatile: false, base: MemBase::Stack(0), ext: None, space: 0 };
+    let info = |vt| MemInfo { mem_vt: vt, align: 8, volatile: false, base: MemBase::Stack(0), ext: None, space: 0 , ordering: None };
     let value = dag.get_register(EVT::I32, 8);
     let first = dag.get_store(chain, value, a, info(EVT::I32));
     let second = dag.get_store(first, a, p, info(EVT::I64));

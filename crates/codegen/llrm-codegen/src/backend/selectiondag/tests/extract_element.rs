@@ -14,7 +14,7 @@ fn extract_element_of_a_wide_value_is_one_of_its_halves() {
         let mut dag = dag();
         let ptr = dag.get_register(EVT::I32, 7);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: wide_vt, align: 4, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 };
+        let info = MemInfo { mem_vt: wide_vt, align: 4, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 , ordering: None };
         let wide = dag.get_load(wide_vt, chain, ptr, info);
         let (zero, one) = (dag.get_constant(0, EVT::I32), dag.get_constant(1, EVT::I32));
         let low = dag.get_node(ISD::ExtractElement, half_vt, &[wide, zero]);

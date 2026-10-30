@@ -23,7 +23,7 @@ fn hooks() -> X86Hooks {
 }
 
 fn mem_info() -> MemInfo {
-    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0 }
+    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0, ordering: None }
 }
 
 fn input(
@@ -420,7 +420,7 @@ fn an_x87_fist_to_a_stack_slot_is_an_ist_pseudo() {
         };
         let slot = dag.get_frame_index(EVT::I32, 3);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: int, align: 4, volatile: false, base: MemBase::Stack(3), ext: None, space: 0 };
+        let info = MemInfo { mem_vt: int, align: 4, volatile: false, base: MemBase::Stack(3), ext: None, space: 0 , ordering: None };
         let fist = dag.intern(
             super::x86_lowering::x86isd::FIST,
             &[EVT::OTHER],
@@ -457,7 +457,7 @@ fn a_float_load_from_the_constant_pool_folds_the_entry_into_the_address() {
     let address = dag.get_node(super::x86_lowering::x86isd::WRAPPER, EVT::I32, &[entry]);
     let chain = dag.entry_node();
     let info =
-        MemInfo { mem_vt: f64_vt, align: 8, volatile: false, base: MemBase::ConstantPool(0), ext: None, space: 0 };
+        MemInfo { mem_vt: f64_vt, align: 8, volatile: false, base: MemBase::ConstantPool(0), ext: None, space: 0 , ordering: None };
     let load = dag.get_load(f64_vt, chain, address, info);
     let mut adapter = DagisAdapter::new(&mut dag);
 

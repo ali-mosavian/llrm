@@ -1497,7 +1497,7 @@ fn lower_fp_to_int(
         adjust = Some(flip);
     }
     let info =
-        MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+        MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 , ordering: None };
     let fist = dag.intern(
         x86isd::FP_TO_INT_IN_MEM,
         &[EVT::OTHER],
@@ -1527,7 +1527,7 @@ fn lower_lrint(
     let slot = dag.get_frame_index(dag.config().pointer, index);
     let chain = dag.entry_node();
     let info =
-        MemInfo { mem_vt: result_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+        MemInfo { mem_vt: result_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 , ordering: None };
     let fist =
         dag.intern(x86isd::FIST, &[EVT::OTHER], &[chain, value, slot], SDNodeFlags::default(), NodeData::Mem(info));
     Some(dag.get_load(result_vt, fist, slot, info))
@@ -1591,6 +1591,8 @@ fn lower_int_to_fp(
         base: MemBase::Stack(index),
         ext: None,
         space: 0,
+    
+        ordering: None,
     };
     if signed || (src_vt != EVT::I32 && src_vt != EVT::I64) {
         let size = src_vt.size_in_bits() / 8;
@@ -1631,6 +1633,8 @@ fn lower_int_to_fp(
         base: MemBase::ConstantPool(entry),
         ext: Some(super::actions::LoadExt::ExtLoad),
         space: 0,
+    
+        ordering: None,
     };
     let fudge_value = dag.get_load(EVT::Simple(MVT::F80), SDValue { node: fild.node, res: 1 }, fudge_ptr, fudge_info);
     let sum = dag.get_node(ISD::FAdd, EVT::Simple(MVT::F80), &[fild, fudge_value]);
@@ -1660,7 +1664,7 @@ fn lower_vastart(
     if pointer != EVT::I64 {
         let first = dag.get_frame_index(pointer, index);
         let info =
-            MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 };
+            MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 , ordering: None };
         return Some(dag.get_store(chain, first, list, info));
     }
     let (save, gp_offset) = dag.var_args_save?;
@@ -1675,7 +1679,7 @@ fn lower_vastart(
     for (offset, vt, value) in fields {
         let at = dag.get_constant(offset, pointer);
         let address = dag.get_node(ISD::Add, pointer, &[list, at]);
-        let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base, ext: None, space: 0 };
+        let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base, ext: None, space: 0 , ordering: None };
         stores.push(dag.get_store(chain, value, address, info));
     }
     Some(dag.get_node(ISD::TokenFactor, EVT::OTHER, &stores))

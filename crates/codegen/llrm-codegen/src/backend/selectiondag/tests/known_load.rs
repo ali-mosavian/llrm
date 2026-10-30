@@ -13,7 +13,7 @@ fn extending(
 ) -> SDValue {
     let (ptr, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
     let info =
-        MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(0), ext: Some(ext), space: 0 };
+        MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(0), ext: Some(ext), space: 0 , ordering: None };
     dag.get_ext_load(ext, EVT::I64, chain, ptr, info)
 }
 

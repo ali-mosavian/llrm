@@ -14,7 +14,7 @@ fn a_branch_on_an_i1_compare_reads_an_i8_condition() {
     let chain = dag.entry_node();
     let load = |dag: &mut SelectionDAG, slot: i32| {
         let info =
-            MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
+            MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 , ordering: None };
         dag.get_load(EVT::I32, chain, ptr, info)
     };
     let (a, b) = (load(&mut dag, 1), load(&mut dag, 2));

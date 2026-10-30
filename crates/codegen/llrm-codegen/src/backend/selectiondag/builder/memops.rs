@@ -334,6 +334,8 @@ impl Builder<'_> {
                     base: MemBase::Unknown,
                     ext: None,
                     space: self.space_of(dst),
+                
+                    ordering: None,
                 };
                 chains.push(self.dag.get_store(chain, value, to, info));
                 src_off += width;
@@ -349,6 +351,8 @@ impl Builder<'_> {
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(src),
+            
+                ordering: None,
             };
             let value = self.dag.get_load(vt, order, from, info);
             let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
@@ -359,6 +363,8 @@ impl Builder<'_> {
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(dst),
+            
+                ordering: None,
             };
             let store = self.dag.get_store(order, value, to, info);
             if self.target.ordered_copies {
@@ -403,6 +409,8 @@ impl Builder<'_> {
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(src),
+            
+                ordering: None,
             };
             let value = self.dag.get_load(vt, chain, from, info);
             placed.push((value, off, vt));
@@ -421,6 +429,8 @@ impl Builder<'_> {
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(dst),
+            
+                ordering: None,
             };
             stores.push(self.dag.get_store(joined, value, to, info));
         }
@@ -491,6 +501,8 @@ impl Builder<'_> {
                 base: MemBase::Unknown,
                 ext: None,
                 space: self.space_of(dst),
+            
+                ordering: None,
             };
             chains.push(self.dag.get_store(chain, fill, to, info));
             off += width;

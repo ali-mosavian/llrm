@@ -15,7 +15,7 @@ fn legalized_add(tli: &TargetLowering) -> (SelectionDAG, SDValue) {
             EVT::I64,
             chain,
             ptr,
-            MemInfo { mem_vt: EVT::I64, align: 1, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 },
+            MemInfo { mem_vt: EVT::I64, align: 1, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 , ordering: None },
         )
     };
     let (a, b) = (load(&mut dag, 7), load(&mut dag, 8));

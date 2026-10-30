@@ -239,6 +239,8 @@ impl TargetCalling for Aarch64Calling {
                         base: MemBase::CallArgument(offset as i32),
                         ext: None,
                         space: 0,
+                    
+                        ordering: None,
                     };
                     stores.push(dag.get_store(chain, value, address, info));
                 }
@@ -311,6 +313,8 @@ impl TargetCalling for Aarch64Calling {
                         base: MemBase::Stack(index),
                         ext: (mem_vt != part.vt).then_some(LoadExt::ExtLoad),
                         space: 0,
+                    
+                        ordering: None,
                     };
                     dag.get_load(part.vt, chain, address, info)
                 }

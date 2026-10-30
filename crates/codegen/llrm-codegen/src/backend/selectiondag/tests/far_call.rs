@@ -82,6 +82,8 @@ fn the_start_is_found_behind_the_argument_stores() {
         base: MemBase::Stack(0),
         ext: None,
         space: 0,
+    
+        ordering: None,
     };
     let argument = dag.get_store(SDValue { node: start.node, res: 0 }, offset, slot, info);
     let joined = dag.get_token_factor(&[argument]);
