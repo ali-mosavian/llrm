@@ -542,6 +542,16 @@ fn program(seed: u64) -> String {
 
 const DATA: &str = ".export buf, _buf, tab, _tab, zero, _zero\n.segment \"RODATA\"\nzero:\n_zero:\n  .byte 0\nbuf:\n_buf:\n  .byte 3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\ntab:\n_tab:\n  .byte 2,5,8,11,14,17,20,23\n";
 
+/// Whether `seed` builds at the size level: the backend's `Tuning::SIZE` and LLVM's `-Oz` inline
+/// threshold (25), against the speed level and the `-O2` one (225). One in three seeds is a size
+/// build; `DIFF_SIZE` makes every one, `DIFF_SPEED` none.
+fn size_level(seed: u64) -> bool {
+    if std::env::var("DIFF_SPEED").is_ok() {
+        return false;
+    }
+    seed % 3 == 0 || std::env::var("DIFF_SIZE").is_ok()
+}
+
 fn work(seed: u64) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("difftest").join(seed.to_string());
     let _ = std::fs::remove_dir_all(&dir);
@@ -628,7 +638,11 @@ fn ours(
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(dir.join("raw.ll"), raw).unwrap();
-    let inline = if seed % 2 == 0 { "-inline-threshold=0" } else { "-inline-threshold=225" };
+    let inline = match std::env::var("DIFF_INLINE") {
+        Ok(threshold) => format!("-inline-threshold={threshold}"),
+        Err(_) if size_level(seed) => "-inline-threshold=25".to_string(),
+        Err(_) => "-inline-threshold=225".to_string(),
+    };
     if !optimize {
         std::fs::copy(dir.join("raw.ll"), dir.join("k.ll")).unwrap();
     } else {
@@ -637,7 +651,7 @@ fn ours(
             "/usr/lib/llvm-20/bin/opt",
             &[
                 "-O2",
-                inline,
+                &inline,
                 "-unroll-threshold=0",
                 "-unroll-full-max-count=0",
                 "-vectorize-loops=false",
@@ -674,7 +688,7 @@ fn ours(
         for name in &defined {
             let mut selection = select_function(&module, name, Cpu::Mos6502)?;
             selection.zero_page = platform.zero_page;
-            if seed % 3 == 0 || std::env::var("DIFF_SIZE").is_ok() {
+            if size_level(seed) {
                 selection.tuning = Tuning::SIZE;
             }
             selections.push(selection);
@@ -896,7 +910,10 @@ fn random_programs_agree_with_cc65() {
     let (first, count) =
         spec.split_once(':').map(|(a, b)| (a.parse::<u64>().unwrap(), b.parse::<u64>().unwrap())).unwrap();
     let jobs: usize = std::env::var("DIFF_JOBS").ok().and_then(|j| j.parse().ok()).unwrap_or(4);
-    let seeds: Vec<u64> = (first..first + count).collect();
+    let seeds: Vec<u64> = match std::env::var("DIFF_LIST") {
+        Ok(list) => list.split(',').map(|seed| seed.trim().parse().unwrap()).collect(),
+        Err(_) => (first..first + count).collect(),
+    };
     let results = std::sync::Mutex::new(Vec::new());
     let next = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|scope| {
