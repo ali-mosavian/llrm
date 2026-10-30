@@ -159,6 +159,7 @@ impl Fact {
             | Fact::MustProgress
             | Fact::NoRecurse
             | Fact::NoIpa
+            | Fact::Access(_)
             | Fact::Range(_) => true,
         }
     }

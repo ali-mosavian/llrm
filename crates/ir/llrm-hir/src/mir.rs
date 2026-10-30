@@ -11,7 +11,7 @@ use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
 use llrm_mir::datalayout::{DataLayout, float_bits};
-use llrm_mir::facts::{Fact, Inlining};
+use llrm_mir::facts::{Fact, Inlining, Region};
 use llrm_mir::{
     Attribute, BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, Flags, FloatKind,
     FloatPredicate, Function, GlobalId, GlobalVariable, IntPredicate, Linkage, MetadataId, MetadataNode,
@@ -449,6 +449,9 @@ struct Tables<'h> {
     /// The flags facts state of each instruction's operands, by function,
     /// instruction and operand index.
     operand_flags: HashMap<(i64, i64, i64), Flags>,
+    /// The region of memory a load or store reaches, by function and
+    /// instruction.
+    regions: HashMap<(i64, i64), Region>,
     array_order: model::ArrayOrder,
     /// The module body's ON ERROR GOTO handlers, which every procedure's pad
     /// calls.
@@ -650,6 +653,12 @@ fn emit_module<'h>(
             flags.insert(one.fact.flags());
         }
     }
+    let mut regions: HashMap<(i64, i64), Region> = HashMap::default();
+    for one in &hir.facts {
+        if let (Subject::Instruction { function, id }, Fact::Access(region)) = (one.subject, one.fact) {
+            regions.insert((function, id), region);
+        }
+    }
     let mut argument_facts: HashMap<(i64, i64), Vec<(i64, Fact)>> = HashMap::default();
     let mut operand_flags: HashMap<(i64, i64, i64), Flags> = HashMap::default();
     for one in &hir.facts {
@@ -673,6 +682,7 @@ fn emit_module<'h>(
         instruction_flags,
         argument_facts,
         operand_flags,
+        regions,
         array_order,
         module_handler: None,
         zeroed,
@@ -2943,7 +2953,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                             .copied()
                             .unwrap_or(self.tables.tags.allocation),
                     ),
-                    None => inside.then_some(self.tables.tags.place),
+                    None => match self.tables.regions.get(&(self.function.id, self.at_instruction)) {
+                        // The array is a parameter's: any caller's, so the
+                        // generic tag covers it.
+                        Some(Region::Element) => Some(self.tables.tags.allocation),
+                        Some(Region::Descriptor) => Some(self.tables.tags.place),
+                        None => inside.then_some(self.tables.tags.place),
+                    },
                 };
                 Ok((
                     self.offset(base, one.offset, self.operand_flags(operand).contains(Flags::INBOUNDS)),

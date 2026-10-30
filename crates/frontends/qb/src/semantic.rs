@@ -286,6 +286,8 @@ struct Function {
     // Each element pointer into a far array: the place of the descriptor
     // owning the allocation it stays inside.
     allocations: BTreeMap<u32, u32>,
+    // Each element pointer of any array, whichever descriptor it came from.
+    elements: BTreeSet<u32>,
     // Each POKE's far pointer whose DEF SEG is a literal on every path in:
     // the place of the segment cell, which names the memory it addresses.
     absolute: BTreeMap<u32, u32>,
@@ -1935,6 +1937,7 @@ impl Compiler {
             promises: Vec::new(),
             origins: BTreeMap::new(),
             allocations: BTreeMap::new(),
+            elements: BTreeSet::new(),
             absolute: BTreeMap::new(),
         });
     }
@@ -10608,6 +10611,15 @@ impl Compiler {
                             );
                         }
                     }
+                    if let Some(region) = region(instruction, function) {
+                        facts.state(
+                            llrm_hir::facts::Subject::Instruction {
+                                function: i64::from(function.id),
+                                id: i64::from(instruction.id),
+                            },
+                            llrm_hir::facts::Fact::Access(region),
+                        );
+                    }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
                     out.push(']');
@@ -11432,6 +11444,32 @@ fn numbers(
         }
         write!(out, "{value}").unwrap();
     }
+}
+
+/// The region of memory a load or store reaches, where the frontend knows it:
+/// a descriptor's field, or an element of an array (its subscripts are in
+/// range, which an access promises).
+fn region(
+    instruction: &Instruction,
+    function: &Function,
+) -> Option<llrm_hir::facts::Region> {
+    use llrm_hir::facts::Region;
+    if !matches!(instruction.op, "load" | "store") {
+        return None;
+    }
+    if matches!(instruction.tag, Some(Tag::DescriptorField { .. })) {
+        return Some(Region::Descriptor);
+    }
+    instruction
+        .operands
+        .iter()
+        .any(|operand| {
+            matches!(
+                operand,
+                Operand::Indirect { base, inbounds: true, .. } if function.elements.contains(base)
+            )
+        })
+        .then_some(Region::Element)
 }
 
 fn operand_json(

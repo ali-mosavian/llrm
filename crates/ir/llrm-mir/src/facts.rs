@@ -237,6 +237,29 @@ pub enum Effect {
     Inaccessible,
 }
 
+/// What a language says an access reaches, for the alias analysis: the
+/// descriptor that describes an array, or an element of the array's own
+/// allocation. The two never overlap, whatever pointer reaches either.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum Region {
+    #[default]
+    Descriptor,
+    Element,
+}
+
+impl Wire for Region {
+    fn wire(self) -> (i64, Option<i64>) {
+        (self as i64, None)
+    }
+
+    fn unwire(
+        value: i64,
+        second: Option<i64>,
+    ) -> Option<Region> {
+        [Region::Descriptor, Region::Element].into_iter().find(|one| *one as i64 == value && second.is_none())
+    }
+}
+
 /// What the language says of inlining a routine; `Never` outranks the rest.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Inlining {
@@ -356,6 +379,9 @@ facts! {
         // Of a routine, its result.
         Range(Bounds) range "range" on [Param, Callable, Instruction, Place, Field];
         Inline(Inlining) inline "inline" on [Callable];
+        // Of a load or store: the region of memory it reaches, which `!tbaa`
+        // carries.
+        Access(Region) access "access" on [Instruction];
     }
     bits {
         NoSignedWrap no_signed_wrap "nsw" Flags::NSW, on [Instruction];
@@ -388,6 +414,7 @@ impl Fact {
             Fact::Invariant
             | Fact::Unroll(_)
             | Fact::Range(_)
+            | Fact::Access(_)
             | Fact::NoSignedWrap
             | Fact::NoUnsignedWrap
             | Fact::InBounds
@@ -404,7 +431,10 @@ impl Fact {
     /// width of what it bounds, where it is neither an attribute nor an
     /// instruction flag.
     pub fn is_metadata(self) -> bool {
-        matches!(self, Fact::Range(_) | Fact::Invariant | Fact::Unroll(_))
+        matches!(
+            self,
+            Fact::Range(_) | Fact::Invariant | Fact::Unroll(_) | Fact::Access(_)
+        )
     }
 
     /// Whether, stated of a routine, it is of the routine's result.

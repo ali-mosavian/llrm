@@ -161,6 +161,13 @@ const COVERAGE: &[(&str, Shown)] = &[
             "a_loops_unroll_hint_is_read_from_its_metadata",
         ]),
     ),
+    (
+        "access",
+        By(&[
+            "a_parameter_arrays_descriptor_and_elements_are_tagged_apart",
+            "test_an_array_parameters_descriptor_is_read_once_outside_its_loop",
+        ]),
+    ),
 ];
 
 /// The facts a row is owed for: every one the table declares.

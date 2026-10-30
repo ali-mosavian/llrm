@@ -3899,3 +3899,42 @@ fn test_a_program_ending_in_a_runtime_call_still_calls_the_exit_under_the_dag_se
     let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     assert!(main.trim_end().ends_with("call B$CENP"), "{main}");
 }
+
+/// A loop over a dynamic array's elements, the array a parameter: the
+/// descriptor words are read in the loop only if an element store might write
+/// them.
+const ARRAY_LOOP: &str = "DEFINT A-Z\r\nDECLARE SUB fill (a() AS INTEGER, lo AS INTEGER, hi AS INTEGER)\r\n\
+DIM v(0 TO 9) AS INTEGER\r\nfill v(), 0, 9\r\n\
+SUB fill (a() AS INTEGER, lo AS INTEGER, hi AS INTEGER)\r\nDIM j AS INTEGER, p AS INTEGER\r\np = a(hi)\r\n\
+FOR j = lo TO hi - 1\r\nIF a(j) < p THEN a(j) = p\r\nNEXT\r\nEND SUB\r\n";
+
+/// The loads of a descriptor's words (offsets 2 and 10 of the array pointer
+/// `%0`) in the function's text.
+fn descriptor_loads(function: &str) -> usize {
+    function.lines().filter(|line| line.contains("getelementptr") && line.contains("ptr %0, i16 ")).count()
+}
+
+/// SORT of the quicksort bench read its array's descriptor on every trip
+/// (bq16 108282 memory operands against 85305 for the same loop in Nib): the
+/// element accesses and the descriptor loads carried no `!tbaa`, so the
+/// element store kept the loads in the loop. They are read once, before it.
+#[test]
+fn test_an_array_parameters_descriptor_is_read_once_outside_its_loop() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let source = parsed_as(&written(&directory, "T.BAS", ARRAY_LOOP.as_bytes()), "qb45", "qb45");
+    let function = function_text(&optimized_mir(&source), "FILL");
+    assert_eq!(descriptor_loads(&function), 2, "{function}");
+}
+
+/// A REDIM in the loop may move the array and rewrite its descriptor: the
+/// loads stay in the loop, after it.
+#[test]
+fn test_a_redim_in_the_loop_keeps_the_descriptor_loads_in_it() {
+    let text = "DEFINT A-Z\r\nDECLARE SUB fill ()\r\nfill\r\nSUB fill\r\nREDIM a(0 TO 9) AS INTEGER\r\n\
+DIM j AS INTEGER\r\nFOR j = 0 TO 8\r\na(j) = j\r\nREDIM a(0 TO 9) AS INTEGER\r\nNEXT\r\nEND SUB\r\n";
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let source = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
+    let function = function_text(&optimized_mir(&source), "FILL");
+    let looped = blocks(&function).into_iter().find(|block| block.contains(" = phi ")).expect("the loop");
+    assert!(looped.contains("ptr %0, i16 2"), "{function}");
+}

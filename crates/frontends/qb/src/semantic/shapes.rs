@@ -538,6 +538,7 @@ pub(super) fn applied(compiler: &mut Compiler) {
                         {
                             function.origins.extend(one.results.iter().map(|result| (*result, origin)));
                         }
+                        function.elements.extend(one.results.iter().copied());
                         // An element is in its own array's allocation.
                         if let Some(place) = owner(descriptor) {
                             function.allocations.extend(one.results.iter().map(|result| (*result, place)));
@@ -562,6 +563,9 @@ pub(super) fn applied(compiler: &mut Compiler) {
             }
             if let Some(place) = function.allocations.get(&offset).copied() {
                 function.allocations.insert(result, place);
+            }
+            if function.elements.contains(&offset) {
+                function.elements.insert(result);
             }
         }
     }
