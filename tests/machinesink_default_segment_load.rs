@@ -26,4 +26,7 @@ fn a_load_of_a_global_sinks_below_the_branch_that_guards_its_use() {
     let branch = body.iter().position(|line| line.trim_start().starts_with('j')).expect("a branch in f");
     let load = body.iter().position(|line| line.contains("_g") && !line.contains("label")).expect("a use of g in f");
     assert!(load > branch, "the load of g is above the first branch:\n{}", body.join("\n"));
+    // Below the branch it is the pin's `cmp [g], 0`, not `mov r,[g]; test r,r`
+    // (`foldMemoryOperand` of a `test r, r` of a once-read load).
+    assert!(body.iter().any(|line| line.trim() == "cmp dword ptr _g, 0"), "no `cmp [g], 0`:\n{}", body.join("\n"));
 }
