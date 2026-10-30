@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 224 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 225 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -136,10 +136,10 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | lftr | A loop's exit test is rewritten to compare a counter with the value it has when the loop's trip count is spent. | [`crate::indvars`](indvars.md) runs `replaced` after the exit steps, as | [lftr](lftr.md) |
 | local | The utilities GVN calls on a CSE: patching the surviving instruction, replacing the uses a dominator tree allows, dead and duplicate-phi cleanup, block merging, and the pointer-equality replacement checks. | Nothing yet; `gvn` is the caller this is for. | [local](local.md) |
 | loopclone | Clones loop iterations as CFG, for the passes that peel a loop: `peeled` copies whole iterations ahead of it. | Called by [`crate::loopunrollpass`](loopunrollpass.md) (`peeled_any_latch`); not a pass. | [loopclone](loopclone.md) |
-| loopdeletion | `LoopDeletion`: a loop that computes nothing the rest of the function reads is removed, and a loop whose backedge is never taken is made straight code. | Named by `loopinstsimplify`, `loopsimplifycfg`, `nontrivial`, `pipeline`. | [loopdeletion](loopdeletion.md) |
+| loopdeletion | `LoopDeletion`: a loop that computes nothing the rest of the function reads is removed, and a loop whose backedge is never taken is made straight code. | Named by `loopinstsimplify`, `loopsimplifycfg`, `nontrivial`, `pipeline`, `pipeline_text`. | [loopdeletion](loopdeletion.md) |
 | loopfilter | Which loops a loop pass visits: the loop pass manager's worklist, for the passes that walk every loop of a function. | `indvars` (its steps), `loopunrollpass` (the loops it makes), `pipeline`. | [loopfilter](loopfilter.md) |
 | loopidioms | Loop idiom recognition and store merging: a counted loop that fills or copies memory becomes one `llvm.memset`, `llvm.memcpy` or `llvm.memmove` (LLVM's LoopIdiomRecognize; gcc's loop distribution patterns), and straight-line adjacent stores become one memset or wider stores (LLVM's MemCpyOpt `tryMergingIntoMemset`, MergeConsecutiveStores; gcc's store merging). | Last in the function fixed point: `LoopIdioms`, then `Merge`, after the | [loopidioms](loopidioms.md) |
-| loopinstsimplify | LoopInstSimplify: the instructions of a loop that equal an operand or a constant are replaced by it, and what that leaves dead goes. | Named by `pipeline`. | [loopinstsimplify](loopinstsimplify.md) |
+| loopinstsimplify | LoopInstSimplify: the instructions of a loop that equal an operand or a constant are replaced by it, and what that leaves dead goes. | Named by `pipeline`, `pipeline_text`. | [loopinstsimplify](loopinstsimplify.md) |
 | loopinterchange | Loop interchange: a loop of a perfect nest swaps places with the loop around it when the dependences allow and the access order says the inner loop should walk the other index (`LoopInterchange.cpp` at `d1106deb71cc`). | -O3 and -Omax, once per body, before the vectorizer's rounds. | [loopinterchange](loopinterchange.md) |
 | loopinterchange_transform | `LoopInterchangeTransform` of `LoopInterchange.cpp` at `d1106deb71cc`: the rewrite that swaps the roles of two adjacent loops of a perfect nest. | Named by `loopinterchange`. | [loopinterchange_transform](loopinterchange_transform.md) |
 | looploadelim | `LoopLoadElimination`: a load of what the previous iteration stored is replaced by the stored value, carried round the loop in a phi. | In the parity pipeline at `loop-load-elim` (l.1400 of | [looploadelim](looploadelim.md) |
@@ -172,6 +172,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | mldstmotion | Stores to one address on both arms of a diamond become one store below it, as LLVM's `MergedLoadStoreMotion` (`mldst-motion<no-split-footer-bb>`). | Named by `pipeline`. | [mldstmotion](mldstmotion.md) |
 | narrowspace | A far pointer parameter that every call fills from one near space becomes a near pointer parameter: the caller passes the offset, and neither segment is pushed or loaded. | In [`crate::interprocedural`](../analyses/interprocedural.md) as stage `narrow.`, after argument promotion | [narrowspace](narrowspace.md) |
 | parity | The parity pipeline's slot registry: for each slot of LLVM's function pipeline that `Options::llvm_order` builds, whether llrm's pass there is translated from LLVM's, an older stand-in, or missing. | `pipeline` (`Fixed::linear`), the registry tests. | [parity](parity.md) |
+| pipeline_text | The pass pipeline text of `opt -passes=`: `a,b(c,d),e<x;y>`. | Named by `main`. | [pipeline_text](pipeline_text.md) |
 | ports | Each I/O port call narrowed to the memory its device reaches, as the target describes the port. | Twice: once over every body before the per-body pipeline, so a caller's | [ports](ports.md) |
 | predicateinfo | PredicateInfo: what a branch, switch or assume says about a value where it holds, as a copy of the value that only the code it holds for reads. | Named by `ipsccp`, `sccp`, `sccpsolver`. | [predicateinfo](predicateinfo.md) |
 | profit | Machine-neutral profitability shared by the MIR transforms: what an instruction, a block and a function cost under a target's prices, how often each block runs, and what registers cost past the target's. | Each of [`crate::lsr_pass`](lsr_pass.md), [`crate::hoist`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/hoist.rs), [`crate::gvn`](gvn.md), | [profit](profit.md) |
