@@ -9,3 +9,13 @@ description = "The WebAssembly target: its descriptions and DAG selector tables,
 llrm-target = { workspace = true }
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 llrm-codegen = { workspace = true }
+llrm-lir = { workspace = true }
+llrm-mir = { workspace = true }
+
+[build-dependencies]
+llrm-target = { workspace = true }
+llrm-lir = { workspace = true }
+
+[[bin]]
+name = "llrm-wasm-llc"
+path = "src/bin/llc.rs"

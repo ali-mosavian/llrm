@@ -128,6 +128,17 @@ impl TargetLoweringInfo {
         }
     }
 
+    /// WebAssembly: `addRegisterClass` of `i32` and `i64`; a compare makes an `i32`
+    /// (`WebAssemblyTargetLowering::getSetCCResultType`) and a shift's amount has the
+    /// type of the value shifted (`getScalarShiftAmountTy`, up to 64 bits).
+    pub fn wasm() -> TargetLoweringInfo {
+        TargetLoweringInfo {
+            set_cc_result: MVT::I32,
+            shift_amount: ShiftAmount::ByValue,
+            ..TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false)
+        }
+    }
+
     /// `getTypeConversion`: the action for `vt` and the type it becomes.
     pub fn type_conversion(
         &self,

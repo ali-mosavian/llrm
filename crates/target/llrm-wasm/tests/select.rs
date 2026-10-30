@@ -144,3 +144,22 @@ fn an_or_of_disjoint_bits_folds_the_offset() {
     });
     assert_eq!(offset, Some(8));
 }
+
+/// A shift by a register of its own width: `llc` gives `SHL_I32`, `SHR_S_I32`,
+/// `SHR_U_I32` and the `_I64` forms.
+#[test]
+fn a_shift_is_the_shift_of_its_width() {
+    for (opcode, vt, name) in [
+        (isd::SHL, mvt::i32, "SHL_I32"),
+        (isd::SRA, mvt::i32, "SHR_S_I32"),
+        (isd::SRL, mvt::i32, "SHR_U_I32"),
+        (isd::SHL, mvt::i64, "SHL_I64"),
+    ] {
+        let mut dag = TestDag::new();
+        let a = dag.input(1, vt);
+        let b = dag.input(2, vt);
+        let shift = dag.node(opcode, &[vt], &[a, b]);
+
+        assert_eq!(select(&mut dag, shift), name);
+    }
+}

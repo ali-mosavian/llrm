@@ -2,7 +2,9 @@
 
 pub mod argument_move;
 pub mod asm_strings;
+pub mod dag;
 pub mod dagisel;
+pub mod driver;
 pub mod emit;
 pub mod explicit_locals;
 pub mod mir;
@@ -12,7 +14,25 @@ pub mod reg_numbering;
 pub mod reg_stackify;
 pub mod set_p2align;
 
+use llrm_lir::registers::{RegId, Row};
 use llrm_target::layout::Layout;
+
+/// The register ids, numbered by `registers.regs`'s lines: `reg::SP32`.
+pub mod reg {
+    use super::RegId;
+    include!(concat!(env!("OUT_DIR"), "/register_ids.rs"));
+}
+
+/// Instruction effect rows: none until wasm's forms are described.
+fn rows(
+    _name: &str,
+    _dests: usize,
+    _sources: usize,
+) -> &'static [Row] {
+    &[]
+}
+
+include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
 
 /// The pointer width of a module: `wasm32` or `wasm64`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

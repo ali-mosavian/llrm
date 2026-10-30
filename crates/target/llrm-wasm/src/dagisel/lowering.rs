@@ -48,7 +48,7 @@ fn pointer(cpu: Cpu) -> MVT {
 pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     use ISD::*;
     let words = [MVT::I32, MVT::I64];
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&words, false));
+    let mut tl = TargetLowering::empty(TargetLoweringInfo::wasm());
     tl.init_actions();
     let mut set = |ops: &[ISD], vts: &[MVT], action: Action| {
         for &op in ops {

@@ -40,15 +40,32 @@ fn with_comment(
 
 /// One instruction after the passes: its stack-form string with the operands
 /// filled in.
-pub fn instruction(inst: &Inst) -> String {
+pub fn instruction(
+    f: &Function,
+    inst: &Inst,
+) -> String {
     let asm = find(inst.opcode).unwrap_or_else(|| panic!("opcode {} has no assembly string", inst.opcode));
-    let immediates = inst.operands.iter().filter_map(|o| if let Operand::Imm(v) = o { Some(*v) } else { None });
     let mut text = asm.text.to_string();
-    for (name, value) in asm.names.iter().zip(immediates) {
-        let shown = if *name == "p2align" {
-            if default_p2align(inst.opcode) == Some(value as u64) { String::new() } else { format!(":p2align={value}") }
-        } else {
-            value.to_string()
+    for (name, operand) in asm.names.iter().zip(inst.operands.iter().filter(|o| o.is_immediate())) {
+        let shown = match *operand {
+            Operand::Imm(value) if *name == "p2align" => {
+                if default_p2align(inst.opcode) == Some(value as u64) {
+                    String::new()
+                } else {
+                    format!(":p2align={value}")
+                }
+            }
+            Operand::Imm(value) => value.to_string(),
+            Operand::Sym(at) => {
+                let (symbol, offset) = &f.symbols[at as usize];
+                match offset {
+                    0 => symbol.clone(),
+                    offset if *offset > 0 => format!("{symbol}+{offset}"),
+                    offset => format!("{symbol}{offset}"),
+                }
+            }
+            Operand::Block(block) => format!(".LBB{block}"),
+            Operand::Def(_) | Operand::Use(_) => unreachable!("filtered as non-immediate"),
         };
         text = text.replace(&format!("${{{name}}}"), &shown).replace(&format!("${name}"), &shown);
     }
@@ -69,7 +86,7 @@ pub fn function(f: &Function) -> String {
         out.push(format!("\t.local  \t{}", type_list(&f.locals)));
     }
     out.push("# %bb.0:".to_string());
-    out.extend(f.blocks[0].iter().map(|i| format!("\t{}", instruction(i))));
+    out.extend(f.blocks[0].iter().map(|i| format!("\t{}", instruction(f, i))));
     out.push(with_comment("", "# -- End function"));
     out.join("\n") + "\n"
 }
