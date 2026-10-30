@@ -75,6 +75,7 @@ fn arm64_text(
         }
         let mut line =
             line.replace(" cc 1000", "").replace(" \"llrm-fp-eval\"=\"x87-extended\"", "").replace(" frame_bound", "");
+        line = without_llrm_attributes(&line);
         line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
         line = block_entry(&line);
         // a variadic call has no prototype to extend its arguments: on every
@@ -229,6 +230,28 @@ fn framed_function(lines: &[&str]) -> String {
         out.push('\n');
     }
     without_unwinding(&out)
+}
+
+/// The attributes only llrm reads (its facts about a routine or a pointer),
+/// which the pinned LLVM's parser refuses; the optimizer has used them by the
+/// time the text is handed over.
+fn without_llrm_attributes(line: &str) -> String {
+    const ONLY_LLRM: [&str; 6] = ["noretain", "releases", "threeway", "flagsresult", "stackcheck", "noipa"];
+    let mut line = line.to_owned();
+    for name in ONLY_LLRM {
+        let word = format!(" {name}");
+        let mut from = 0;
+        while let Some(at) = line[from..].find(&word).map(|at| at + from) {
+            let end = at + word.len();
+            if line[end..].starts_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '$')) {
+                from = end;
+            } else {
+                line.replace_range(at..end, "");
+                from = at;
+            }
+        }
+    }
+    line
 }
 
 /// The function with no unwinding left in it: the pad is reached by the jump
