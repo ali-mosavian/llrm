@@ -1,21 +1,6 @@
 reason = "TEMPORARY trade-off (owner w2; oversight ruled 2026-10-30). Siblings of a one-value original share one spill home (pin InlineSpiller.cpp#L1466): the frame shrinks and 30 m16 rows improve, but nib `_sort`/bintree reload the shared base per access. Removal: the pointer-twin PR landing, or fix the instruction and code rows within 3 days; no row may pass its measured count."
 exception = true
 
-# tip = 65098fd950; main = 854bb7efc4. The bintree memory_operands row stays in parity-vs-main-2026-10-29.toml at its old limit.
-[[row]]
-label = "bintree nib -O2"
-counter = "memory_operands"
-tip = 18833
-main = 12727
-to = 18978
-
-# Worse than the tip by 145, not comparable to main (unmeasured); fill `main` from w6's frozen baseline.
-[[row]]
-label = "bintree nib -O2"
-counter = "instructions"
-tip = 70145
-to = 70290
-
 # The pointer twin's setup and step (a pointer init and `add si, 2`) cost bytes the shorter swap block does not repay; better than main (318).
 [[row]]
 label = "quicksort c -O2"
