@@ -99,6 +99,6 @@ to = 900
 label = "grep bq32 -O2"
 counter = "instructions"
 tip = 632330591
-to = 632330704
+to = 632330703
 
 # 18. mixed
