@@ -86,6 +86,12 @@ pub trait CombineHooks {
     }
 
 
+    /// `ReduceLoadWidth` looks through a `freeze` between an `and` mask and its load, and puts
+    /// the freeze back on the narrowed load. Default false until x86 is judged.
+    fn reduce_load_width_through_freeze(&self) -> bool {
+        false
+    }
+
     /// `visitORCommutative`'s absorption folds, `(or (and x, y), x)` is `x`. Default false until
     /// x86 is judged.
     fn fold_or_absorption(&self) -> bool {

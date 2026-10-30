@@ -24,6 +24,9 @@ impl CombineHooks for Asks {
     fn fold_or_absorption(&self) -> bool {
         true
     }
+    fn reduce_load_width_through_freeze(&self) -> bool {
+        true
+    }
 }
 
 fn xor_of_masked(dag: &mut SelectionDAG) {
@@ -228,4 +231,43 @@ fn a_target_that_does_not_ask_keeps_the_or_of_the_and() {
     or_of_and_with_one_operand(&mut dag);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.get_root()), ISD::Or);
+}
+
+fn masked_frozen_extload(dag: &mut SelectionDAG) {
+    // a pointer that may be poison, so the freeze is not dropped
+    let (base, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
+    let one = dag.get_constant(1, EVT::I32);
+    let ptr = dag.get_node_flags(ISD::Add, EVT::I32, &[base, one], SDNodeFlags::default().with(SDNodeFlags::NO_UNSIGNED_WRAP, true));
+    let info =
+        MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(0), ext: Some(LoadExt::ExtLoad), space: 0 };
+    let load = dag.get_ext_load(LoadExt::ExtLoad, EVT::I32, chain, ptr, info);
+    let frozen = dag.get_node(ISD::Freeze, EVT::I32, &[load]);
+    let mask = dag.get_constant(0xff, EVT::I32);
+    let root = dag.get_node(ISD::And, EVT::I32, &[frozen, mask]);
+    dag.set_root(root);
+}
+
+/// `and (freeze (extload i8)), 255` kept the load wide and the mask (`LDURWi` and `ANDWri` where
+/// the pin has `LDRBBui`): the pin's `ReduceLoadWidth` looks through the freeze, narrows the
+/// load to a zero-extending one and puts the freeze, and an `AssertZext`, back on it.
+#[test]
+fn an_and_mask_of_a_frozen_extending_load_is_a_frozen_zero_extending_load() {
+    let mut dag = dag();
+    masked_frozen_extload(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::AssertZext);
+    let frozen = dag.operand(root, 0);
+    assert_eq!(dag.opcode(frozen), ISD::Freeze);
+    let load = dag.operand(frozen, 0);
+    let NodeData::Mem(info) = dag.node(load).data else { panic!("a memory node") };
+    assert_eq!(info.ext, Some(LoadExt::ZExtLoad));
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_mask_over_the_frozen_load() {
+    let mut dag = dag();
+    masked_frozen_extload(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::And);
 }
