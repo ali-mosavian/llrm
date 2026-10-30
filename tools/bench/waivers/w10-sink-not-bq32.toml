@@ -1,64 +1,85 @@
 reason = "TEMPORARY trade-off (owner w10, 2026-10-30). foldICmpEquality's sibling, sinkNotIntoLogicalOp, now gives the pin's IR: in jpeg_fixed/jpeg_single's parser `(x>207) | !((x!=204) & (x>200))` is `x==204 | (x-208) u< -7`, equal to pinned `opt -passes=instcombine` on that condition. The bq32 rows below move by 1-6 instructions, jpeg -Os by 12 B, through the register allocation downstream of the fewer-compare IR. Removal: the jpeg bq32 -Os allocation fixed (own goal), or this file deleted by 2026-11-06; no row may pass its measured count."
 exception = true
 
-# base = 65098fd950 (main after the merge); to = measured at 81d6c9f882. The parent 31493da6d5 passes all of these.
+# old-main = 854bb7efc4; base = 65098fd950 (main after the merge); tip = parent 31493da6d5; to = measured at 81d6c9f882 (and 33f0457e86).
+# jpeg_fixed/jpeg_single bq32 -Os code_bytes are above old-main: named post-merge rows of w10, deadline 2026-11-06.
 
 [[row]]
 label = "jpeg_fixed bq32 -O2"
 counter = "instructions"
+old_main = 83887581
+tip = 76025599
 main = 76025599
 to = 76025604
 
 [[row]]
 label = "jpeg_fixed bq32 -Os"
 counter = "instructions"
+old_main = 87566477
+tip = 85146591
 main = 85146591
 to = 85146593
 
 [[row]]
 label = "jpeg_fixed bq32 -Os"
 counter = "code_bytes"
+old_main = 6008
+tip = 6364
 main = 6364
 to = 6376
 
 [[row]]
 label = "jpeg_single bq32 -O2"
 counter = "instructions"
+old_main = 61569936
+tip = 55380125
 main = 55380125
 to = 55380126
 
 [[row]]
 label = "jpeg_single bq32 -Os"
 counter = "code_bytes"
+old_main = 5811
+tip = 6207
 main = 6207
 to = 6219
 
 [[row]]
 label = "scroll bq32 -Os"
 counter = "instructions"
+old_main = 58319
+tip = 55167
 main = 55167
 to = 55168
 
 [[row]]
 label = "sieve bq32 -O2"
 counter = "instructions"
+old_main = 22781
+tip = 15616
 main = 15616
 to = 15617
 
 [[row]]
 label = "stft_fixed bq32 -O2"
 counter = "instructions"
+old_main = 100030197
+tip = 94357645
 main = 94357645
 to = 94357651
 
 [[row]]
 label = "stft_single bq32 -O2"
 counter = "instructions"
+old_main = 71255906
+tip = 70159752
 main = 70159752
 to = 70159754
 
 [[row]]
 label = "stft_single bq32 -Os"
 counter = "instructions"
+old_main = 71586013
+tip = 69845981
 main = 69845981
 to = 69845983
