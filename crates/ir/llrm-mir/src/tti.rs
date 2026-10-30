@@ -849,10 +849,12 @@ pub fn base_intrinsic_cost(name: &str) -> Option<Cost> {
 }
 
 pub fn is_free_intrinsic(name: &str) -> bool {
-    const FREE: [&str; 6] = [
+    const FREE: [&str; 8] = [
         "llvm.assume",
         "llvm.lifetime.start",
         "llvm.lifetime.end",
+        "llvm.invariant.start",
+        "llvm.invariant.end",
         "llvm.noalias.scope.decl",
         "llvm.experimental.noalias.scope.decl",
         "llrm.noalias.scope.decl",
