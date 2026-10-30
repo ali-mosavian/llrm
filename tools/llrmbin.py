@@ -30,6 +30,10 @@ def cc_environment() -> dict[str, str]:
     """The variables llrm-cc needs, from the caller's, with the usual default for the Open Watcom tree."""
     env = {name: os.environ[name] for name in CC_ENV if name in os.environ}
     env.setdefault("LLRM_OW", str(Path.home() / "scratch/ow-src"))
+    pin = REPO / "toolchain/clang/pin"
+    lines = pin.read_text().splitlines() if pin.exists() else []
+    if len(lines) > 1 and "LLRM_CLANG_M16" not in env and (m16 := Path.home() / "scratch/clang-by-sha" / lines[1].split()[0] / "bin/clang").exists():
+        env["LLRM_CLANG_M16"] = str(m16)
     return env
 
 

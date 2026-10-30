@@ -37,3 +37,16 @@ def test_an_object_compiled_on_one_side_fails():
 def test_a_seeded_bad_object_is_caught():
     """The control: one flipped byte must be a different object, and a leg that saw it must fail."""
     assert gate.seeded(b"\x7fELF\x01\x02") is None
+
+
+def test_the_m16_clang_of_the_pin_reaches_llrm_cc(tmp_path, monkeypatch):
+    """Without LLRM_CLANG_M16 every m16 cell failed on both sides: the m16 legs measured nothing."""
+    import llrmbin
+
+    sha = (llrmbin.REPO / "toolchain/clang/pin").read_text().splitlines()[1].split()[0]
+    clang = tmp_path / "scratch/clang-by-sha" / sha / "bin/clang"
+    clang.parent.mkdir(parents=True)
+    clang.touch()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("LLRM_CLANG_M16", raising=False)
+    assert llrmbin.cc_environment()["LLRM_CLANG_M16"] == str(clang)
