@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 223 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 224 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -94,6 +94,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | earlycse | LLVM's EarlyCSE with MemorySSA (`early-cse<memssa>`): one walk down the dominator tree, scoped tables of what is available, and a generation count that memory operations advance. | [`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`). | [earlycse](earlycse.md) |
 | edges | Edge surgery on conditional branches: a new block on one arm of a `br i1`, holding the operations that belong to that edge and not to either arm's block. | Not a pass: a library. `split` is called by `rotate` and | [edges](edges.md) |
 | emptyblocks | CodeGenPrepare's `eliminateMostlyEmptyBlocks`: a block of phis and a jump is merged into its successor before isel ([CodeGenPrepare.cpp#L939](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L939)). | First in `cgpaddr`'s run, before the sinks: it changes the CFG. | [emptyblocks](emptyblocks.md) |
+| exitne | A loop's strict exit compare of a unit-stride counter becomes `!=` where the counter provably never passes the bound. | [`crate::indvars`](indvars.md) runs `strengthened_in` after LFTR. The m68k mid-end | [exitne](exitne.md) |
 | exitopt | A loop's exits are folded by what ScalarEvolution knows of their counts. | Not wired in: [`crate::indvars`](indvars.md) will run `optimized` before | [exitopt](exitopt.md) |
 | exitpredicate | A read-only loop's exits are rewritten to tests on the loop's trip count made before it. | Not wired in: [`crate::indvars`](indvars.md) will run [`predicated`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/predicated.rs) after | [exitpredicate](exitpredicate.md) |
 | exitsink | An add, subtract or extension in a loop that only exit phis read, moved to those exits: LLVM's LICM sinking an instruction only used outside the loop. | Step 4 of [`crate::indvars`](indvars.md): on whenever `indvars` is, in the fixed point | [exitsink](exitsink.md) |
@@ -200,7 +201,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | sinkcommon | The code that ends every unconditional way into a block in the same way runs once in the block: SimplifyCFG's `sinkCommonCodeFromPredecessors`. | Named by `simplifycfg`, `switcharms`. | [sinkcommon](sinkcommon.md) |
 | slpcompares | Compares of adjacent bytes against constants become one wide compare: the part of LLVM's `SLPVectorizer` that matters here, where a vector of compares is `reduce.and`ed, `VectorCombine` and `InstCombine` then make it a compare of one integer. | At the pin's `slp-vectorizer` slot, after `simplifycfg` has made the | [slpcompares](slpcompares.md) |
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |
-| speculate | A block that only a branch reaches and that jumps back to the branch's other target runs before the branch, its phis in the target becoming selects: the `speculativelyExecuteBB` step of SimplifyCFG. | Named by `simplifycfg`. | [speculate](speculate.md) |
+| speculate | A block that only a branch reaches and that jumps back to the branch's other target runs before the branch, its phis in the target becoming selects: the `speculativelyExecuteBB` step of SimplifyCFG. | Named by `branchtocommon`, `simplifycfg`. | [speculate](speculate.md) |
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |
 | splitcopy | A `memcpy` into a local nothing else can reach becomes the loads and stores of the bytes the local is read as. | Inside [`crate::promote`](promote.md)'s `Sroa`, before it scalarizes the aggregate's | [splitcopy](splitcopy.md) |
 | splitstore | CodeGenPrepare's `splitMergedValStore`: a store of two values merged into one wider integer is two stores ([CodeGenPrepare.cpp#L8608](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8608)). | In `cgpaddr`'s run, before the address-mode sinking (the stores it makes | [splitstore](splitstore.md) |

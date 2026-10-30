@@ -64,6 +64,7 @@ mod odd_shift;
 mod or_simplify;
 mod pair_arith;
 mod pair_mul;
+mod pin_folds;
 mod promote_int_op;
 mod reassociate;
 mod reduce_load_width;
