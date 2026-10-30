@@ -55,15 +55,6 @@ pub enum CombineLevel {
 
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
-    /// `SimplifySetCC`'s "Canonicalize GE/LE comparisons to use GT/LT" (`x >= c`
-    /// is `x > c - 1`). DEVIATE: off by default. x86's rows are the old
-    /// selector's, which keeps a range check as `cmp n; jae`; the rewrite
-    /// turns it into `cmp n - 1; ja` and moved 35 of its 424 judged rows
-    /// (`switch` in every language). Exit: re-bless the x86 rows.
-    fn canonicalize_ge_le(&self) -> bool {
-        false
-    }
-
     /// `TLI.convertSelectOfConstantsToMath`: a select of two constants is an
     /// extend of the condition plus a constant. The pin's default is false;
     /// DEVIATE: true here because this combiner was written for x86, which
@@ -233,6 +224,15 @@ pub trait CombineHooks {
     /// width, not only `i16` and below. DEVIATE: off by default, as above.
     /// Exit: x86 judged.
     fn widen_multiply_high_any_width(&self) -> bool {
+        false
+    }
+
+    /// `SimplifySetCC`'s "Canonicalize GE/LE comparisons to use GT/LT" (`x >=
+    /// c` is `x > c - 1`). DEVIATE: off by default. x86's rows are the old
+    /// selector's, which keeps a range check as `cmp n; jae`; the rewrite
+    /// turns it into `cmp n - 1; ja` and moved 35 of its 424 judged rows
+    /// (`switch` in every language). Exit: re-bless the x86 rows.
+    fn canonicalize_ge_le(&self) -> bool {
         false
     }
 
@@ -647,13 +647,22 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(folded) = self.signed_truncation_check(vt, n0, c1, cond) {
             return Some(folded);
         }
-        // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >= c` is
-        // `x > c - 1` and `x <= c` is `x < c + 1`, with the always-true extremes folded.
+        // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >=
+        // c` is `x > c - 1` and `x <= c` is `x < c + 1`, with the
+        // always-true extremes folded.
         if self.level < CombineLevel::AfterLegalizeVectorOps && self.hooks.canonicalize_ge_le() {
             let bits = op_type.size_in_bits();
-            if matches!(cond, CondCode::SetGe | CondCode::SetUGe | CondCode::SetLe | CondCode::SetULe) {
-                let unsigned = matches!(cond, CondCode::SetUGe | CondCode::SetULe);
-                let ge = matches!(cond, CondCode::SetGe | CondCode::SetUGe);
+            let (unsigned, ge) = match cond {
+                CondCode::SetGe => (false, true),
+                CondCode::SetUGe => (true, true),
+                CondCode::SetLe => (false, false),
+                CondCode::SetULe => (true, false),
+                _ => (false, matches!(cond, CondCode::SetEq)),
+            };
+            if matches!(
+                cond,
+                CondCode::SetGe | CondCode::SetUGe | CondCode::SetLe | CondCode::SetULe
+            ) {
                 let mask = super::fold::mask(bits);
                 let (min, max) = if unsigned { (0, mask) } else { (1u128 << (bits - 1), mask >> 1) };
                 let edge = if ge { min } else { max };
@@ -1209,7 +1218,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
-        let narrow = super::dag::MemInfo { mem_vt: vt, ..info };
+        // `AdjustBigEndianShift`: the low bytes of a big-endian value are its
+        // last bytes
+        let offset =
+            if self.dag.config().big_endian { i64::from((wide.size_in_bits() - vt.size_in_bits()) / 8) } else { 0 };
+        let ptr = if offset == 0 { ptr } else { self.dag.get_object_ptr_offset(ptr, offset) };
+        let base = match info.base {
+            super::dag::MemBase::Stack(at) => super::dag::MemBase::Stack(at + offset as i32),
+            super::dag::MemBase::CallArgument(at) => super::dag::MemBase::CallArgument(at + offset as i32),
+            other => other,
+        };
+        let align = if offset == 0 { info.align } else { info.align.min(1 << (offset as u32).trailing_zeros()) };
+        let narrow = super::dag::MemInfo { mem_vt: vt, align, base, ..info };
         let new = self.dag.get_load(vt, chain, ptr, narrow);
         if self.dag.invariant_loads.contains(&load.node) {
             self.dag.invariant_loads.insert(new.node);

@@ -172,6 +172,9 @@ pub struct DagConfig {
     /// `computeKnownBitsForTargetNode`: what the target knows of one of its nodes, given the known bits
     /// of operand `n`; `None` for a node it says nothing about.
     pub known_bits_for_target_node: Option<TargetKnownBits>,
+    /// `DataLayout::isBigEndian`: a narrowed load's offset counts from the
+    /// other end.
+    pub big_endian: bool,
 }
 
 /// See [`DagConfig::known_bits_for_target_node`].
@@ -189,6 +192,7 @@ impl Default for DagConfig {
             int_div_cheap: false,
             fp_extended: false,
             known_bits_for_target_node: None,
+            big_endian: false,
         }
     }
 }

@@ -233,13 +233,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         let vt = self.dag.value_type(node);
         let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
-        let any = self.dag.get_ext_load(
-            super::actions::LoadExt::ExtLoad,
-            vt,
-            chain,
-            ptr,
-            MemInfo { ext: None, ..info },
-        );
+        let any =
+            self.dag.get_ext_load(super::actions::LoadExt::ExtLoad, vt, chain, ptr, MemInfo { ext: None, ..info });
         let value = if ext == super::actions::LoadExt::SExtLoad {
             let ty = self.dag.get_value_type_node(info.mem_vt);
             self.dag.get_node(ISD::SignExtendInReg, vt, &[any, ty])

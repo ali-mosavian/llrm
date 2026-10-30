@@ -181,7 +181,8 @@ fn the_pins_physical_registers_are_physical_register_nodes() {
 
 /// A target whose map lacks a register the selector names read it as a
 /// virtual register of the pin's number (AArch64's NZCV, 7, became vreg 7).
-/// The adapter now records a refusal; x86's map still reads a stranger as virtual.
+/// The adapter now records a refusal; x86's map still reads a stranger as
+/// virtual.
 #[test]
 fn a_register_the_target_cannot_map_is_a_refusal_not_a_virtual_register() {
     use llrm_dagisel::dag::Dag;

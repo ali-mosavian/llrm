@@ -112,8 +112,12 @@ pub fn render_target(
             }
         }
         if module == "reg" && !registers.is_empty() {
-            writeln!(out, "    /// The record's `registers`, by number.\n    pub const REGISTERS: &[(u16, &str)] = &[").unwrap();
-            let mut named = registers.iter().map(|r| Ok((ids.get(&format!("{ns}{r}"))? as u16, r))).collect::<Result<Vec<_>, String>>()?;
+            writeln!(out, "    /// The record's `registers`, by number.\n    pub const REGISTERS: &[(u16, &str)] = &[")
+                .unwrap();
+            let mut named = registers
+                .iter()
+                .map(|r| Ok((ids.get(&format!("{ns}{r}"))? as u16, r)))
+                .collect::<Result<Vec<_>, String>>()?;
             named.sort();
             for (value, name) in named {
                 writeln!(out, "        ({value}, {name:?}),").unwrap();
