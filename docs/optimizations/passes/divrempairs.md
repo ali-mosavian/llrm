@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/divrempairs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/divrempairs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/divrempairs.rs sha256:35404cb58288c8f131e1b533b78ec792ab14389c75cd4e4b7fe75ef8673d631c -->
+<!-- src: crates/opt/llrm-transforms/src/divrempairs.rs sha256:b97ecacfc49e863d6b1f0a53ec2c75cf7c689970d71f1b579d0a69ec756b7bd1 -->
 
 # divrempairs
 
@@ -12,8 +12,8 @@ A translation of LLVM
 at d1106deb71cc. A `sdiv` or `udiv` and a `srem`, `urem` or expanded
 remainder `x - (x / y) * y` with the same dividend, divisor and signedness
 are a pair. Where the target has a divide that makes both
-(`TargetTransformInfo::hasDivRemOp`: x86 on every register type, or what a
-target's `Tti` says), the expanded remainder is first written as the real
+(`TargetTransformInfo::hasDivRemOp`: x86 on every register type, as its
+`Tti` states it), the expanded remainder is first written as the real
 `srem`/`urem`, and the pair is put side by side so the backend finds one
 divide: the one in a block the other's block follows is moved after it, and
 a pair in two arms of one branch goes to the block before the branch when
