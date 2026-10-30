@@ -2912,6 +2912,16 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         Ok((pointer, ty, volatile, class.or(tag)))
     }
 
+    /// The tag of an element of a named array: `allocation` where the language
+    /// says the access reaches array elements, as an access through the array's
+    /// descriptor does, so the two are not called apart.
+    fn element_tag(&self) -> MetadataId {
+        match self.tables.regions.get(&(self.function.id, self.at_instruction)) {
+            Some(Region::Element) => self.tables.tags.allocation,
+            _ => self.tables.tags.place,
+        }
+    }
+
     fn untyped_place(
         &mut self,
         operand: &Operand,
@@ -2926,12 +2936,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let place = self.places[&one.place];
                 let element = self.tables.types[&place.r#type].element.ok_or("an array element of a non-array")?;
                 let (pointer, ty) = self.element(place, &one.indices, 0, element)?;
-                Ok((pointer, ty, place.volatile, Some(self.tables.tags.place)))
+                Ok((pointer, ty, place.volatile, Some(self.element_tag())))
             }
             Operand::ProjectedPlace(one) => {
                 let place = self.places[&one.place];
                 let (pointer, ty) = self.element(place, &one.indices, one.offset, one.r#type)?;
-                Ok((pointer, ty, place.volatile, Some(self.tables.tags.place)))
+                let tag = if one.indices.is_empty() { self.tables.tags.place } else { self.element_tag() };
+                Ok((pointer, ty, place.volatile, Some(tag)))
             }
             Operand::IndirectPlace(one) => {
                 let base = self

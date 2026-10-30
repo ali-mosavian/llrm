@@ -3409,7 +3409,7 @@ fn two_dynamic_arrays_are_apart_but_a_parameters_array_is_not() {
     };
     let apart = loads_of_b(&source(""));
     assert_eq!(apart, 1, "b(i) is loaded once");
-    // The SUB's array is any caller's: its accesses carry no array's tag.
+    // The SUB's array is any caller's: its accesses carry no array's own tag.
     let mir = emitted_mir(&parsed_as(
         &written(&directory, "param.bas", source("fill c(), n\r\n").as_bytes()),
         "qb45",
@@ -3421,7 +3421,18 @@ fn two_dynamic_arrays_are_apart_but_a_parameters_array_is_not() {
         .lines()
         .filter(|one| one.contains("addrspace(1)") && (one.contains("store i16") || one.contains("load i16")))
         .collect::<Vec<_>>();
-    assert!(!far.is_empty() && far.iter().all(|one| !one.contains("!tbaa")), "{sub}");
+    // The generic `allocation` tag: every array's ancestor, so it aliases them
+    // all.
+    let tag = |one: &str| one.split("!tbaa ").nth(1).map(str::to_owned);
+    let node = |name: &str| mir.lines().find(|line| line.starts_with(&format!("!{name} = "))).map(str::to_owned);
+    let generic = |one: &&str| {
+        tag(one)
+            .and_then(|id| node(&id[1..]))
+            .and_then(|access| access.split("!{!").nth(1).map(|rest| rest.split(',').next().unwrap_or("").to_owned()))
+            .and_then(|ty| node(&ty))
+            .is_some_and(|ty| ty.contains("\"allocation\","))
+    };
+    assert!(!far.is_empty() && far.iter().all(generic), "{sub}");
 }
 
 /// The `llrm.qb.frame` calls (the variables handed to the handler) of `name`.
@@ -3926,15 +3937,45 @@ fn test_an_array_parameters_descriptor_is_read_once_outside_its_loop() {
     assert_eq!(descriptor_loads(&function), 2, "{function}");
 }
 
-/// A REDIM in the loop may move the array and rewrite its descriptor: the
-/// loads stay in the loop, after it.
+/// A callee that REDIMs the array may move it and rewrite its descriptor: a
+/// loop that calls one reads the descriptor words again after the call.
 #[test]
-fn test_a_redim_in_the_loop_keeps_the_descriptor_loads_in_it() {
-    let text = "DEFINT A-Z\r\nDECLARE SUB fill ()\r\nfill\r\nSUB fill\r\nREDIM a(0 TO 9) AS INTEGER\r\n\
-DIM j AS INTEGER\r\nFOR j = 0 TO 8\r\na(j) = j\r\nREDIM a(0 TO 9) AS INTEGER\r\nNEXT\r\nEND SUB\r\n";
+fn test_a_call_that_may_redim_the_array_keeps_the_descriptor_loads_in_the_loop() {
+    let source = |call: &str| {
+        format!(
+            "DEFINT A-Z\r\nDECLARE SUB fill (a() AS INTEGER, n AS INTEGER)\r\nDECLARE SUB regrow (a() AS INTEGER)\r\n\
+REM $DYNAMIC\r\nDIM v(0 TO 9) AS INTEGER\r\nfill v(), 8\r\n\
+SUB fill (a() AS INTEGER, n AS INTEGER)\r\nDIM j AS INTEGER\r\nFOR j = 0 TO n\r\na(j) = j\r\n{call}NEXT\r\nEND SUB\r\n\
+SUB regrow (a() AS INTEGER)\r\nREDIM a(0 TO 9) AS INTEGER\r\nEND SUB\r\n"
+        )
+    };
+    let in_loop = |text: String| {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let source = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
+        let function = function_text(&optimized_mir(&source), "FILL");
+        let looped =
+            blocks(&function).into_iter().find(|block| block.contains(" = phi ")).expect("the loop").to_owned();
+        (looped.contains("ptr %0, i16 2"), function)
+    };
+    let (loaded, function) = in_loop(source("regrow a()\r\n"));
+    assert!(loaded, "{function}");
+    let (loaded, function) = in_loop(source(""));
+    assert!(!loaded, "{function}");
+}
+
+/// A parameter bound to a static array the callee also names was tagged
+/// `allocation` against that array's own `place` accesses, so `PRINT g(1)`
+/// after `a(1) = ...` printed the value read before the store (3, not 8).
+#[test]
+fn test_a_parameter_bound_to_a_static_array_may_alias_its_direct_accesses() {
+    let text = "DEFINT A-Z\r\nDECLARE SUB s (a() AS INTEGER)\r\nDIM SHARED g(0 TO 9) AS INTEGER\r\ng(1) = 3\r\n\
+s g()\r\nSUB s (a() AS INTEGER)\r\nx = g(1)\r\na(1) = x + 5\r\nPRINT g(1)\r\nEND SUB\r\n";
     let directory = tempfile::tempdir().expect("a temporary directory");
     let source = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
-    let function = function_text(&optimized_mir(&source), "FILL");
-    let looped = blocks(&function).into_iter().find(|block| block.contains(" = phi ")).expect("the loop");
-    assert!(looped.contains("ptr %0, i16 2"), "{function}");
+    let function = function_text(&optimized_mir_inlining(&source, llrm_transforms::inline::Threshold::none()), "S");
+    let loads = function
+        .lines()
+        .filter(|line| line.contains("load i16, ptr getelementptr") && line.contains("@\"G%\""))
+        .count();
+    assert_eq!(loads, 2, "{function}");
 }

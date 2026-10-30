@@ -11463,11 +11463,12 @@ fn region(
     instruction
         .operands
         .iter()
-        .any(|operand| {
-            matches!(
-                operand,
-                Operand::Indirect { base, inbounds: true, .. } if function.elements.contains(base)
-            )
+        .any(|operand| match operand {
+            Operand::Indirect { base, inbounds: true, .. } => function.elements.contains(base),
+            // A named array's element, which a parameter may be bound to.
+            Operand::Element(..) => true,
+            Operand::Projection { indices, .. } => !indices.is_empty(),
+            _ => false,
         })
         .then_some(Region::Element)
 }
