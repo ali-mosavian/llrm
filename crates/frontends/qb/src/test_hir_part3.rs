@@ -2486,7 +2486,7 @@ fn test_a_floating_function_returns_through_its_hidden_destination() {
         let text = llrm_mir::print::module(&emitted.module);
         let half = between(
             &text,
-            &format!("define cc 1000 ptr @\"HALF{suffix}\"(ptr dereferenceable({bytes}) %0, ptr %1)"),
+            &format!("define cc 1000 ptr @\"HALF{suffix}\"(ptr dereferenceable({bytes}) nonnull noundef %0, ptr %1)"),
             "\n}",
         );
         assert!(
@@ -3409,7 +3409,7 @@ fn two_dynamic_arrays_are_apart_but_a_parameters_array_is_not() {
     };
     let apart = loads_of_b(&source(""));
     assert_eq!(apart, 1, "b(i) is loaded once");
-    // The SUB's array is any caller's: its accesses carry no array's tag.
+    // The SUB's array is any caller's: its accesses carry no array's own tag.
     let mir = emitted_mir(&parsed_as(
         &written(&directory, "param.bas", source("fill c(), n\r\n").as_bytes()),
         "qb45",
@@ -3421,7 +3421,18 @@ fn two_dynamic_arrays_are_apart_but_a_parameters_array_is_not() {
         .lines()
         .filter(|one| one.contains("addrspace(1)") && (one.contains("store i16") || one.contains("load i16")))
         .collect::<Vec<_>>();
-    assert!(!far.is_empty() && far.iter().all(|one| !one.contains("!tbaa")), "{sub}");
+    // The generic `allocation` tag: every array's ancestor, so it aliases them
+    // all.
+    let tag = |one: &str| one.split("!tbaa ").nth(1).map(str::to_owned);
+    let node = |name: &str| mir.lines().find(|line| line.starts_with(&format!("!{name} = "))).map(str::to_owned);
+    let generic = |one: &&str| {
+        tag(one)
+            .and_then(|id| node(&id[1..]))
+            .and_then(|access| access.split("!{!").nth(1).map(|rest| rest.split(',').next().unwrap_or("").to_owned()))
+            .and_then(|ty| node(&ty))
+            .is_some_and(|ty| ty.contains("\"allocation\","))
+    };
+    assert!(!far.is_empty() && far.iter().all(generic), "{sub}");
 }
 
 /// The `llrm.qb.frame` calls (the variables handed to the handler) of `name`.
@@ -3898,4 +3909,376 @@ fn test_a_program_ending_in_a_runtime_call_still_calls_the_exit_under_the_dag_se
     let text = std::fs::read_to_string(&out).expect("the listing");
     let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     assert!(main.trim_end().ends_with("call B$CENP"), "{main}");
+}
+
+/// A loop over a dynamic array's elements, the array a parameter: the
+/// descriptor words are read in the loop only if an element store might write
+/// them.
+const ARRAY_LOOP: &str = "DEFINT A-Z\r\nDECLARE SUB fill (a() AS INTEGER, lo AS INTEGER, hi AS INTEGER)\r\n\
+DIM v(0 TO 9) AS INTEGER\r\nfill v(), 0, 9\r\n\
+SUB fill (a() AS INTEGER, lo AS INTEGER, hi AS INTEGER)\r\nDIM j AS INTEGER, p AS INTEGER\r\np = a(hi)\r\n\
+FOR j = lo TO hi - 1\r\nIF a(j) < p THEN a(j) = p\r\nNEXT\r\nEND SUB\r\n";
+
+/// The loads of a descriptor's words (offsets 2 and 10 of the array pointer
+/// `%0`) in the function's text.
+fn descriptor_loads(function: &str) -> usize {
+    function.lines().filter(|line| line.contains("getelementptr") && line.contains("ptr %0, i16 ")).count()
+}
+
+/// SORT of the quicksort bench read its array's descriptor on every trip
+/// (bq16 108282 memory operands against 85305 for the same loop in Nib): the
+/// element accesses and the descriptor loads carried no `!tbaa`, so the
+/// element store kept the loads in the loop. They are read once, before it.
+#[test]
+fn test_an_array_parameters_descriptor_is_read_once_outside_its_loop() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let source = parsed_as(&written(&directory, "T.BAS", ARRAY_LOOP.as_bytes()), "qb45", "qb45");
+    let function = function_text(&optimized_mir(&source), "FILL");
+    assert_eq!(descriptor_loads(&function), 2, "{function}");
+}
+
+/// A callee that REDIMs the array may move it and rewrite its descriptor: a
+/// loop that calls one reads the descriptor words again after the call.
+#[test]
+fn test_a_call_that_may_redim_the_array_keeps_the_descriptor_loads_in_the_loop() {
+    let source = |call: &str| {
+        format!(
+            "DEFINT A-Z\r\nDECLARE SUB fill (a() AS INTEGER, n AS INTEGER)\r\nDECLARE SUB regrow (a() AS INTEGER)\r\n\
+REM $DYNAMIC\r\nDIM v(0 TO 9) AS INTEGER\r\nfill v(), 8\r\n\
+SUB fill (a() AS INTEGER, n AS INTEGER)\r\nDIM j AS INTEGER\r\nFOR j = 0 TO n\r\na(j) = j\r\n{call}NEXT\r\nEND SUB\r\n\
+SUB regrow (a() AS INTEGER)\r\nREDIM a(0 TO 9) AS INTEGER\r\nEND SUB\r\n"
+        )
+    };
+    let in_loop = |text: String| {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let source = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
+        let function = function_text(&optimized_mir(&source), "FILL");
+        let looped =
+            blocks(&function).into_iter().find(|block| block.contains(" = phi ")).expect("the loop").to_owned();
+        (looped.contains("ptr %0, i16 2"), function)
+    };
+    let (loaded, function) = in_loop(source("regrow a()\r\n"));
+    assert!(loaded, "{function}");
+    let (loaded, function) = in_loop(source(""));
+    assert!(!loaded, "{function}");
+}
+
+/// A parameter bound to a static array the callee also names was tagged
+/// `allocation` against that array's own `place` accesses, so `PRINT g(1)`
+/// after `a(1) = ...` printed the value read before the store (3, not 8).
+#[test]
+fn test_a_parameter_bound_to_a_static_array_may_alias_its_direct_accesses() {
+    let text = "DEFINT A-Z\r\nDECLARE SUB s (a() AS INTEGER)\r\nDIM SHARED g(0 TO 9) AS INTEGER\r\ng(1) = 3\r\n\
+s g()\r\nSUB s (a() AS INTEGER)\r\nx = g(1)\r\na(1) = x + 5\r\nPRINT g(1)\r\nEND SUB\r\n";
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let source = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
+    let function = function_text(&optimized_mir_inlining(&source, llrm_transforms::inline::Threshold::none()), "S");
+    let loads = function
+        .lines()
+        .filter(|line| line.contains("load i16, ptr getelementptr") && line.contains("@\"G%\""))
+        .count();
+    assert_eq!(loads, 2, "{function}");
+}
+
+/// A loop that calls a procedure which prints, over an array only the main
+/// code DIMs.
+const CALLING_LOOP: &str = "DEFINT A-Z\r\nDECLARE SUB fill (a() AS INTEGER, n AS INTEGER)\r\n\
+DECLARE SUB tick (n AS INTEGER)\r\nREM $DYNAMIC\r\nDIM v(0 TO 9) AS INTEGER\r\nfill v(), 8\r\n\
+SUB fill (a() AS INTEGER, n AS INTEGER)\r\nDIM j AS INTEGER\r\nFOR j = 0 TO n\r\na(j) = j\r\ntick n\r\nNEXT\r\nEND SUB\r\n\
+SUB tick (n AS INTEGER)\r\nPRINT n\r\nEND SUB\r\n";
+
+/// The descriptor selectors `FILL`'s loop turns into pointers: one for each
+/// reload of the descriptor's words.
+fn looped_descriptor_loads(
+    text: &str,
+    whole_program: bool,
+) -> usize {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let frontend = qb_driver::Frontend { whole_program, ..qb_driver::Frontend::new("qb45", "llrm") };
+    let source = qb_driver::parsed(&written(&directory, "T.BAS", text.as_bytes()), &frontend, None).expect("parses");
+    let mut options = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
+    options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    let (mut mir, _) = llrm_codegen::driver::emitted(&source, &options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
+    let function = function_text(&llrm_mir::print::module(&mir.modules[0]), "FILL");
+    blocks(&function)
+        .into_iter()
+        .filter(|block| block.contains(" = phi "))
+        .map(|block| block.matches("!llrm.descriptor").count())
+        .sum()
+}
+
+/// queens reloaded its array's descriptor words around each recursive call: a
+/// call may rewrite them, and nothing said none could. A program that is all
+/// here, DIMs once at its start and never REDIMs reads them once.
+#[test]
+fn test_descriptor_words_nothing_can_rewrite_are_read_outside_a_loop_that_calls() {
+    assert_eq!(looped_descriptor_loads(CALLING_LOOP, true), 0);
+    // Another module might DIM, and compact the heap.
+    assert_eq!(looped_descriptor_loads(CALLING_LOOP, false), 1);
+}
+
+/// A REDIM between two calls rewrites the descriptor words the second call
+/// reads: the words are not invariant, so inlining both calls into one body
+/// must not merge their loads.
+#[test]
+fn test_a_redim_between_two_calls_keeps_both_reads_of_the_descriptor() {
+    let text = "DEFINT A-Z\r\nDECLARE SUB fill (a() AS INTEGER, n AS INTEGER)\r\nDECLARE SUB tick (n AS INTEGER)\r\n\
+REM $DYNAMIC\r\nDIM v(0 TO 9) AS INTEGER\r\nfill v(), 8\r\nREDIM v(0 TO 99) AS INTEGER\r\nfill v(), 8\r\n\
+SUB fill (a() AS INTEGER, n AS INTEGER)\r\nDIM j AS INTEGER\r\nFOR j = 0 TO n\r\na(j) = j\r\ntick n\r\nNEXT\r\nEND SUB\r\n\
+SUB tick (n AS INTEGER)\r\nPRINT n\r\nEND SUB\r\n";
+    assert_eq!(looped_descriptor_loads(text, true), 1);
+}
+
+/// A BYREF scalar parameter is the address of the caller's variable: the
+/// pointer carries `nonnull noundef`, as clang's reference parameters do.
+/// Only `dereferenceable` was stated, so the callee kept null checks open.
+#[test]
+fn test_a_reference_parameter_is_nonnull_and_noundef() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "ref.bas", b"DECLARE SUB Bump (n AS INTEGER)\nDIM k AS INTEGER\nBump k\nPRINT k\nSUB Bump (n AS INTEGER)\nn = n + 1\nEND SUB\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+    let text = llrm_mir::print::module(&emitted.module);
+    let define = text
+        .lines()
+        .find(|line| line.starts_with("define") && line.contains("BUMP"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(define.contains("nonnull") && define.contains("noundef"), "{define}");
+}
+
+/// `mustprogress` lets a pass delete a side-effect-free loop it cannot prove
+/// ends: a delay loop or an ON KEY wait loop would go. Only a routine with no
+/// loop states it; a routine with either loop keeps its loops.
+#[test]
+fn test_mustprogress_is_stated_only_of_routines_without_loops() {
+    let define = |body: &str, name: &str| {
+        let directory = tempfile::TempDir::new().unwrap();
+        let basic = format!("DECLARE SUB {name} ()\nDIM SHARED flag AS INTEGER\n{name}\nSUB {name}\n{body}\nEND SUB\n");
+        let source = written(&directory, "mp.bas", basic.as_bytes());
+        let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+        let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        text.lines()
+            .find(|line| line.starts_with("define") && line.contains(name))
+            .unwrap_or_else(|| panic!("{text}"))
+            .to_owned()
+    };
+    assert!(define("flag = 1", "STRAIGHT").contains("mustprogress"));
+    assert!(!define("FOR i% = 1 TO 30000: NEXT", "DELAYS").contains("mustprogress"));
+    assert!(!define("DO WHILE flag = 0: LOOP", "WAITS").contains("mustprogress"));
+}
+
+/// `noalias` of a reference parameter is stated only where every call passes
+/// it a local no other argument names. `CALL Add(x, x)` hands one variable
+/// twice and a SHARED variable is also the callee's own name for it: stating
+/// `noalias` there would let a pass reorder `a = a + 1` past `b = 2`.
+#[test]
+fn test_noalias_is_stated_only_for_distinct_locals() {
+    let define = |calls: &str, whole_program: bool| {
+        let directory = tempfile::TempDir::new().unwrap();
+        let basic = format!(
+            "DECLARE SUB Add (a AS INTEGER, b AS INTEGER)\nDECLARE SUB Caller ()\nDIM SHARED g AS INTEGER\nCaller\nSUB Caller\nDIM p AS INTEGER, q AS INTEGER\n{calls}\nEND SUB\nSUB Add (a AS INTEGER, b AS INTEGER)\na = a + 1\nb = 2\ng = g + 1\nEND SUB\n"
+        );
+        let source = written(&directory, "na.bas", basic.as_bytes());
+        let frontend = qb_driver::Frontend { whole_program, ..qb_driver::Frontend::new("qb45", "qb45") };
+        let program = qb_driver::parsed(&source, &frontend, None).expect("parses");
+        let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        text.lines()
+            .find(|line| line.starts_with("define") && line.contains("ADD"))
+            .unwrap_or_else(|| panic!("{text}"))
+            .to_owned()
+    };
+    let count = |call: &str, whole_program| define(call, whole_program).matches("noalias").count();
+    assert_eq!(count("Add p, q", true), 2);
+    assert_eq!(count("Add p, p", true), 0, "one variable passed twice");
+    assert_eq!(count("Add p, g", true), 1, "only the local; the SHARED one is also the callee's name for it");
+    assert_eq!(count("Add p, q", false), 0, "an exported callee has callers this module does not see");
+}
+
+/// The `!invariant.load` marks in `WORK` of `body`, a procedure of a program
+/// that is all here, on the llrm runtime.
+fn invariant_marks(
+    main: &str,
+    body: &str,
+) -> usize {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let frontend = qb_driver::Frontend { whole_program: true, ..qb_driver::Frontend::new("qb45", "llrm") };
+    let text = format!(
+        "DEFINT A-Z\r\nDECLARE SUB work ()\r\nDECLARE SUB take (a() AS INTEGER)\r\nREM $DYNAMIC\r\n{main}\r\n\
+SUB work\r\n{body}\r\nEND SUB\r\nSUB take (a() AS INTEGER)\r\na(0) = 1\r\nEND SUB\r\n"
+    );
+    let source = qb_driver::parsed(&written(&directory, "T.BAS", text.as_bytes()), &frontend, None).expect("parses");
+    let emitted = llrm_codegen::hir::mir::emit(&source, &llrm_x86_m16::layout()).swap_remove(0);
+    function_text(&llrm_mir::print::module(&emitted.module), "WORK").matches("invariant").count()
+}
+
+const FILLED: &str =
+    "n = VAL(COMMAND$)\r\nDIM a(0 TO n) AS INTEGER\r\nFOR i = 0 TO n\r\na(i) = i\r\nNEXT\r\nPRINT a(n)";
+
+/// A local array DIM'd in a procedure called once at the start of the program
+/// keeps its shape words until it is gone, but they were reloaded around every
+/// store the loop made: the array's counts and bounds cost memory operands per
+/// element.
+#[test]
+fn test_the_shape_words_of_a_local_array_in_a_once_called_procedure_are_invariant() {
+    assert!(invariant_marks("work", FILLED) > 0);
+}
+
+/// None of these may be marked: a callee may REDIM or move what it is handed,
+/// a REDIM rewrites the words, a DIM that does not precede a load leaves it
+/// reading an undefined descriptor, and a procedure called again re-DIMs.
+#[test]
+fn test_the_shape_words_are_not_invariant_when_the_array_can_change() {
+    let escaping = "n = VAL(COMMAND$)\r\nDIM a(0 TO n) AS INTEGER\r\ntake a()\r\nFOR i = 0 TO n\r\nPRINT a(i)\r\nNEXT";
+    let redimmed = "n = VAL(COMMAND$)\r\nDIM a(0 TO n) AS INTEGER\r\nREDIM a(0 TO n + 1) AS INTEGER\r\nFOR i = 0 TO n\r\na(i) = i\r\nNEXT";
+    let conditional = "n = VAL(COMMAND$)\r\nIF n > 3 THEN\r\nDIM a(0 TO n) AS INTEGER\r\nEND IF\r\nFOR i = 0 TO n\r\na(i) = i\r\nNEXT";
+    assert_eq!(invariant_marks("work", escaping), 0);
+    assert_eq!(invariant_marks("work", redimmed), 0);
+    assert_eq!(invariant_marks("work", conditional), 0);
+    assert_eq!(invariant_marks("FOR k = 1 TO 3\r\nwork\r\nNEXT", FILLED), 0);
+}
+
+/// The `Invariant` facts a whole-program compile of `body` in `WORK` states,
+/// on the 16-bit segmented target or a flat one.
+fn invariant_facts(
+    flat: bool,
+    body: &str,
+) -> usize {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let frontend = qb_driver::Frontend {
+        whole_program: true,
+        near_bytes: if flat { 4 } else { 0 },
+        far_bytes: if flat { 4 } else { 0 },
+        ..qb_driver::Frontend::new("qb45", "llrm")
+    };
+    let text =
+        format!("DEFINT A-Z\r\nDECLARE SUB work ()\r\nREM $DYNAMIC\r\nwork\r\nSUB work\r\n{body}\r\nEND SUB\r\n");
+    let program = qb_driver::parsed(&written(&directory, "T.BAS", text.as_bytes()), &frontend, None).expect("parses");
+    program
+        .modules
+        .iter()
+        .flat_map(|module| &module.facts)
+        .filter(|stated| matches!(stated.fact, llrm_hir::facts::Fact::Invariant))
+        .count()
+}
+
+/// grep bq32 printed wrong counts: a flat array's origin word is a heap
+/// pointer, which the DIM of a later array moves, and the loads after the
+/// first DIM were marked invariant and merged across it. The segmented
+/// target's origin is an offset that stays 0 within the array's own segment.
+#[test]
+fn test_a_flat_arrays_origin_is_not_an_invariant_load() {
+    assert!(invariant_facts(false, FILLED) > 0, "segmented origin is invariant");
+    assert_eq!(invariant_facts(true, FILLED), 0);
+}
+
+/// The `Invariant` facts of a whole-program compile of `main` as written: the
+/// code runs in the main program, so its DIMs are in `__main`'s entry block.
+fn main_invariant_facts(
+    flat: bool,
+    main: &str,
+) -> usize {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let frontend = qb_driver::Frontend {
+        whole_program: true,
+        near_bytes: if flat { 4 } else { 0 },
+        far_bytes: if flat { 4 } else { 0 },
+        ..qb_driver::Frontend::new("qb45", "llrm")
+    };
+    let text = format!("DEFINT A-Z\r\nREM $DYNAMIC\r\n{main}\r\n");
+    let program = qb_driver::parsed(&written(&directory, "T.BAS", text.as_bytes()), &frontend, None).expect("parses");
+    program
+        .modules
+        .iter()
+        .flat_map(|module| &module.facts)
+        .filter(|stated| matches!(stated.fact, llrm_hir::facts::Fact::Invariant))
+        .count()
+}
+
+/// A flat target keeps every array in the local heap, which CLOSE and FRE
+/// slide: the data pointer and origin of a DIM at the program's start change
+/// with them. Only the shape words are invariant there; on the segmented
+/// target a far array's words all are.
+#[test]
+fn test_a_flat_arrays_location_words_are_not_invariant_loads() {
+    let program =
+        "n = VAL(COMMAND$)\r\nDIM a(0 TO n) AS INTEGER\r\nFOR i = 0 TO n\r\na(i) = i\r\nNEXT\r\nCLOSE\r\nPRINT a(n)";
+    assert!(main_invariant_facts(false, program) > 0, "far words are invariant");
+    assert_eq!(main_invariant_facts(true, program), 0);
+}
+
+/// The loops a whole-program compile of `text` states `NoFarAllocation` of.
+fn quiet_loops(
+    flat: bool,
+    text: &str,
+) -> usize {
+    quiet_loops_on(flat, "llrm", text)
+}
+
+fn quiet_loops_on(
+    flat: bool,
+    runtime: &str,
+    text: &str,
+) -> usize {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let frontend = qb_driver::Frontend {
+        whole_program: true,
+        near_bytes: if flat { 4 } else { 0 },
+        far_bytes: if flat { 4 } else { 0 },
+        ..qb_driver::Frontend::new("qb45", runtime)
+    };
+    let program = qb_driver::parsed(&written(&directory, "T.BAS", text.as_bytes()), &frontend, None).expect("parses");
+    program
+        .modules
+        .iter()
+        .flat_map(|module| &module.facts)
+        .filter(|stated| matches!(stated.fact, llrm_hir::facts::Fact::NoFarAllocation))
+        .count()
+}
+
+const SORTING: &str = "DEFINT A-Z\r\nREM $DYNAMIC\r\nDECLARE SUB sort (a() AS INTEGER, lo AS INTEGER, hi AS INTEGER)\r\n\
+DIM v(0 TO 9) AS INTEGER\r\nsort v(), 0, 9\r\n\
+SUB sort (a() AS INTEGER, lo AS INTEGER, hi AS INTEGER)\r\nDIM i AS INTEGER\r\nFOR i = lo TO hi\r\na(i) = hi - i\r\nNEXT\r\n\
+IF hi > lo + 1 THEN sort a(), lo, hi - 1\r\nEND SUB\r\n";
+
+/// SORT's loop reaches only SORT, which allocates nothing: its descriptor
+/// words cannot change while it runs, so a consumer may bracket its loads
+/// with a scoped invariance. A loop that calls a routine that DIMs, REDIMs or
+/// ERASEs, or any routine this module does not define, may move the array.
+#[test]
+fn test_a_loop_that_reaches_no_far_allocation_says_so() {
+    assert_eq!(quiet_loops(false, SORTING), 1);
+    let calling = SORTING.replace("a(i) = hi - i", "a(i) = hi - i: grow");
+    let grows = "SUB grow\r\nDIM w(0 TO 99) AS INTEGER\r\nw(0) = 1\r\nEND SUB\r\n";
+    let declared = calling.replace("DIM v(", "DECLARE SUB grow ()\r\nDIM v(");
+    assert_eq!(quiet_loops(false, &format!("{declared}{grows}")), 0, "a callee that DIMs");
+    let redim = SORTING
+        .replace("a(i) = hi - i", "a(i) = hi - i: REDIM w(0 TO 3) AS INTEGER")
+        .replace("DIM i AS INTEGER", "DIM i AS INTEGER, w(0 TO 1) AS INTEGER");
+    assert_eq!(quiet_loops(false, &redim), 0, "a REDIM in the loop");
+    let shell = SORTING.replace("a(i) = hi - i", "a(i) = hi - i: SHELL \"x\"");
+    assert_eq!(quiet_loops(false, &shell), 0, "SHELL moves the far heap");
+}
+
+/// An error handler's RESUME may run past an allocation it handled, and a
+/// flat target slides its arrays at FRE and CLOSE: neither states it.
+#[test]
+fn test_no_far_allocation_is_not_stated_with_a_handler_or_on_a_flat_target() {
+    assert_eq!(quiet_loops(true, SORTING), 0);
+    let handled = SORTING.replace("sort v(), 0, 9", "ON ERROR GOTO h\r\nsort v(), 0, 9\r\nEND\r\nh:\r\nRESUME NEXT");
+    assert_eq!(quiet_loops(false, &handled), 0);
+}
+
+/// The MS runtime may move a descriptor's location at any call, and the local
+/// heap slides near arrays at CLOSE and FRE: neither premise is the llrm
+/// runtime's far heap's, so a loop over them states nothing.
+#[test]
+fn test_no_far_allocation_needs_the_llrm_runtime_and_far_arrays() {
+    assert_eq!(quiet_loops_on(false, "qb45", SORTING), 0, "the MS runtime");
+    let closing = SORTING.replace("a(i) = hi - i", "a(i) = hi - i: CLOSE");
+    assert_eq!(quiet_loops(false, &closing), 1, "CLOSE does not move a far array");
+    let near = closing.replace("DIM v(0 TO 9) AS INTEGER", "DIM v(0 TO 9) AS INTEGER, names$(0 TO 3)");
+    assert_eq!(quiet_loops(false, &near), 0, "CLOSE slides the local heap, where a string array lives");
 }
