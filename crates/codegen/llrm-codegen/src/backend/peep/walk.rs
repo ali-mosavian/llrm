@@ -339,6 +339,7 @@ pub struct Facts<'a> {
     flags_out: OnceCell<std::rc::Rc<crate::backend::incremental::Solution<peephole::FlagLive>>>,
     users: OnceCell<Counter>,
     zero: OnceCell<std::rc::Rc<HashMap<usize, upperzero::Roots>>>,
+    spills: OnceCell<std::collections::BTreeSet<i64>>,
     /// The mode the code runs in: how an instruction encodes, and what it
     /// touches.
     bits: u32,
@@ -358,6 +359,7 @@ impl<'a> Facts<'a> {
             flags_out: OnceCell::new(),
             users: OnceCell::new(),
             zero: OnceCell::new(),
+            spills: OnceCell::new(),
             bits: body.bits,
         }
     }
@@ -377,6 +379,7 @@ impl<'a> Facts<'a> {
             flags_out: OnceCell::new(),
             users: OnceCell::new(),
             zero: OnceCell::new(),
+            spills: OnceCell::new(),
             bits,
         }
     }
@@ -391,6 +394,11 @@ impl<'a> Facts<'a> {
 
     pub fn body(&self) -> &'a LirBody {
         self.body.expect("a group reading the body runs on one")
+    }
+
+    /// The frame slots only the allocator's spills use (`peephole::spill_homes`).
+    pub fn spill_homes(&self) -> &std::collections::BTreeSet<i64> {
+        self.spills.get_or_init(|| peephole::spill_homes(self.body()))
     }
 
     /// How many instructions and phis read each value.
