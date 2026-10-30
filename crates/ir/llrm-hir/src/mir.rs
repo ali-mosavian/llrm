@@ -461,6 +461,10 @@ struct Tables<'h> {
     layout: DataLayout,
     types: HashMap<i64, &'h model::Type>,
     callables: HashMap<&'h str, &'h model::Callable>,
+    /// The parameters, by position, of each internal function that pass a
+    /// rank-1 view as its data pointer and length (the descriptor the callee
+    /// has is made in its entry block), by function name.
+    splits: HashMap<String, Vec<usize>>,
     /// Each data object's global, by its id: a place's symbol.
     data: HashMap<i64, ConstantId>,
     /// The huge data objects, by id: their places are reached through huge
@@ -669,7 +673,9 @@ fn emit_module<'h>(
             _ => {}
         }
     }
+    let splits = view_splits(hir);
     let mut tables = Tables {
+        splits,
         instruction_flags,
         argument_facts,
         operand_flags,
@@ -1361,6 +1367,56 @@ fn place_function(
 }
 
 /// A defined function, far and C's unless its ABI says otherwise.
+/// The rank-1 view parameters of each internal function that no address of it
+/// is taken and no ABI class sets apart: they pass the view's data pointer and
+/// length, as clang's `(T *, n)` does, so the length is an argument the
+/// optimiser can see through recursion, not a load from the caller's
+/// descriptor.
+fn view_splits(hir: &model::Module) -> HashMap<String, Vec<usize>> {
+    let types: HashMap<i64, &model::Type> = hir.types.iter().map(|one| (one.id, one)).collect();
+    let addressed: HashSet<&str> = hir
+        .functions
+        .iter()
+        .flat_map(|one| one.blocks.iter().flat_map(|block| &block.instructions))
+        .filter(|one| one.op == Op::Address && one.operands.is_empty())
+        .filter_map(|one| one.callee.as_deref())
+        .collect();
+    let is_view = |ty: &model::Type| {
+        ty.kind == TypeKind::Pointer
+            && ty.element.and_then(|id| types.get(&id)).is_some_and(|pointee| {
+                pointee.kind == TypeKind::Opaque && pointee.name.starts_with("$slice[") && !pointee.name.contains(", ")
+            })
+    };
+    let mut splits = HashMap::default();
+    for function in &hir.functions {
+        let plain = function.abi.as_ref().is_some_and(|abi| {
+            abi.memory.is_empty()
+                && abi.byval.is_empty()
+                && abi.result_pointer.is_none()
+                && !abi.variadic
+        });
+        if function.linkage != model::FunctionLinkage::Internal
+            || addressed.contains(function.name.as_str())
+            || interrupted(function)
+            || !plain
+        {
+            continue;
+        }
+        let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
+        let views: Vec<usize> = function
+            .parameters
+            .iter()
+            .enumerate()
+            .filter(|(_, one)| values.get(one).and_then(|ty| types.get(ty)).is_some_and(|ty| is_view(ty)))
+            .map(|(at, _)| at)
+            .collect();
+        if !views.is_empty() {
+            splits.insert(function.name.clone(), views);
+        }
+    }
+    splits
+}
+
 fn declare(
     module: &mut Module,
     tables: &Tables,
@@ -1372,11 +1428,19 @@ fn declare(
     // x86_intrcc its frame.
     let parameters: Vec<TypeId> = match interrupted(function) {
         true => vec![types.ptr(0)],
-        false => function
-            .parameters
-            .iter()
-            .map(|one| value_type(types, &tables.spaces, tables.types[&values[one]]))
-            .collect::<Emit<_>>()?,
+        false => {
+            let split = tables.splits.get(&function.name);
+            let mut parameters = Vec::new();
+            for (at, one) in function.parameters.iter().enumerate() {
+                if split.is_some_and(|split| split.contains(&at)) {
+                    parameters.push(types.ptr(tables.spaces.far));
+                    parameters.push(types.int(8 * tables.descriptor_word as u32));
+                } else {
+                    parameters.push(value_type(types, &tables.spaces, tables.types[&values[one]])?);
+                }
+            }
+            parameters
+        }
     };
     if function.abi.as_ref().is_some_and(|abi| abi.float_return == model::FloatReturn::Address)
         && tables.types[&function.result_type].kind == model::TypeKind::Float
@@ -1467,7 +1531,16 @@ fn lower_fact(
             };
         }
         Subject::Param { function, index } => match declared.get(&function) {
-            Some(&global) => (global, Some(index)),
+            Some(&global) => {
+                // A view split into two parameters states nothing of either;
+                // those after it are two places further.
+                let split = hir.functions.iter().find(|one| one.id == function).and_then(|one| tables.splits.get(&one.name));
+                match split {
+                    Some(split) if split.contains(&(index as usize)) => return Ok(()),
+                    Some(split) => (global, Some(index + split.iter().filter(|&&at| (at as i64) < index).count() as i64)),
+                    None => (global, Some(index)),
+                }
+            }
             None => return Ok(()),
         },
         Subject::Callable(id) => {
@@ -2452,6 +2525,9 @@ struct Body<'b, 'm, 'h> {
     sites: &'b HashMap<i64, &'h model::CallAbi>,
     blocks: HashMap<i64, BlockId>,
     values: HashMap<i64, Value>,
+    /// The split view parameters: the parameter's value, its data pointer
+    /// and its length.
+    views: Vec<(i64, Value, Value)>,
     /// The `i1` each comparison's result was widened from: what an assumption
     /// is made of.
     truths: HashMap<i64, Value>,
@@ -2501,10 +2577,25 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         function: &'h model::Function,
         index: &'b FunctionIndex<'h>,
     ) -> Emit<Self> {
+        let split = tables.splits.get(&function.name);
+        let mut views = Vec::new();
         let values = match interrupted(function) {
             // Its parameters are only ever its saved registers' memory.
             true => HashMap::default(),
-            false => function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect(),
+            false => {
+                let mut values = HashMap::default();
+                let mut passed = 0;
+                for &one in &function.parameters {
+                    if split.is_some_and(|split| split.contains(&(values.len() + views.len()))) {
+                        views.push((one, b.parameter(passed), b.parameter(passed + 1)));
+                        passed += 2;
+                    } else {
+                        values.insert(one, b.parameter(passed));
+                        passed += 1;
+                    }
+                }
+                values
+            }
         };
         let destination = result_destination(tables, function).map(|at| b.parameter(at));
         b.function.reserve_instructions(function.blocks.iter().map(|one| one.instructions.len() + 1).sum());
@@ -2518,6 +2609,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             sites: &index.sites,
             blocks: HashMap::default(),
             values,
+            views,
             truths: HashMap::default(),
             branch_only: branch_only_comparisons(function),
             frame: HashMap::default(),
@@ -2563,6 +2655,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         self.b.position(frame.unwrap_or(self.blocks[&entry.id]));
         self.allocate(handled.map(|one| one.frame), statements)?;
         self.declare_variables();
+        self.rebuild_views()?;
         if let Some(handled) = handled {
             self.handle(handled, statements)?;
             self.b.br(self.blocks[&entry.id]);
@@ -2571,6 +2664,61 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             self.emit_block(block)?;
         }
         self.close_handling()
+    }
+
+    /// A call of a function that takes its views as data pointer and length:
+    /// each view argument is those two, read from its descriptor. `attributes`
+    /// follow the arguments they were for.
+    fn split_views(
+        &mut self,
+        split: &[usize],
+        order: &[usize],
+        arguments: Vec<Value>,
+        attributes: Vec<(usize, Attribute)>,
+    ) -> Emit<(Vec<Value>, Vec<(usize, Attribute)>)> {
+        let word = self.tables.descriptor_word;
+        let (int, far) = (self.b.context.types.int(8 * word as u32), self.b.context.types.ptr(self.tables.spaces.far));
+        let mut passed = Vec::new();
+        let mut moved = Vec::new();
+        for (index, (&argument, &operand)) in arguments.iter().zip(order).enumerate() {
+            moved.push(passed.len());
+            if split.contains(&operand) {
+                let data_at = self.offset(argument, 2 * word, true);
+                passed.push(self.b.load(far, data_at, false, ""));
+                passed.push(self.b.load(int, argument, false, ""));
+            } else {
+                passed.push(argument);
+            }
+            let _ = index;
+        }
+        let kept = attributes
+            .into_iter()
+            .filter(|(index, _)| !split.contains(&order[*index]))
+            .map(|(index, attribute)| (moved[index], attribute))
+            .collect();
+        Ok((passed, kept))
+    }
+
+    /// Each split view parameter's descriptor, made again from its data pointer
+    /// and length (the capacity is the length): the optimiser's scalar
+    /// replacement leaves the length and the pointer as the values they are.
+    fn rebuild_views(&mut self) -> Emit<()> {
+        let word = self.tables.descriptor_word;
+        for (parameter, data, length) in self.views.clone() {
+            let pointer = self.hir_type(self.value_types[&parameter]);
+            let size = self.tables.types[&pointer.element.ok_or("a view pointer of no view")?].width;
+            let byte = self.b.context.types.int(8);
+            let bytes = self.b.context.types.intern(Type::Array { element: byte, count: size as u64 });
+            let object = self.b.alloca(bytes, "");
+            let (cap_at, data_at) = (self.offset(object, word, true), self.offset(object, 2 * word, true));
+            self.b.store(length, object, false);
+            self.b.store(length, cap_at, false);
+            self.b.store(data, data_at, false);
+            let far = self.b.context.types.ptr(self.tables.spaces.far);
+            let view = self.b.cast(CastOp::AddrSpaceCast, object, far, "");
+            self.values.insert(parameter, view);
+        }
+        Ok(())
     }
 
     /// A debugger reads a declared variable from its cell at any time, so every
@@ -3739,7 +3887,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let site = self.sites.get(&instruction.id).copied();
                 let order =
                     site.and_then(|site| passed(site, operands.len())).unwrap_or_else(|| (0..operands.len()).collect());
-                let arguments: Vec<Value> = order.iter().map(|&one| operands[one]).collect();
+                let mut arguments: Vec<Value> = order.iter().map(|&one| operands[one]).collect();
                 let mut attributes = self.extensions(instruction, &order);
                 attributes.extend(self.byval_arguments(instruction));
                 for &(operand, fact) in
@@ -3750,6 +3898,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                         .position(|&at| at as i64 == operand)
                         .ok_or("a fact of an argument the call does not pass")?;
                     attributes.push((index, fact.attribute().ok_or("an instruction flag of an argument")?));
+                }
+                if let Some(split) = self.tables.splits.get(callee) {
+                    (arguments, attributes) = self.split_views(split, &order, arguments, attributes)?;
                 }
                 let through = self.answer(instruction);
                 let returns = match instruction.results[..] {
