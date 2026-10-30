@@ -589,7 +589,8 @@ fn folded_use(
 /// A store, a call or anything else `isLoadFoldBarrier` drops the loads waiting
 /// to fold.
 ///
-/// Not translated: the other instructions `foldMemoryOperand` knows (`imul`, the extends, the x87 forms), a load whose result is read twice.
+/// Not translated: the other instructions `foldMemoryOperand` knows (`imul`,
+/// the extends, the x87 forms), a load whose result is read twice.
 pub fn loads_folded(body: &LirBody) -> LirBody {
     let mut reads: HashMap<u32, usize> = HashMap::default();
     for block in &body.blocks {
@@ -601,7 +602,8 @@ pub fn loads_folded(body: &LirBody) -> LirBody {
         for one in &block.insns {
             // Readers, not operands: `test v, v` is one reader of `v`
             // (`hasOneNonDBGUser`).
-            let mut seen: Vec<u32> = one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)).collect();
+            let mut seen: Vec<u32> =
+                one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)).collect();
             seen.sort_unstable();
             seen.dedup();
             for value in seen {
@@ -680,7 +682,8 @@ fn load_folded(
         let def = &insns[loads[&load]];
         let zero = Loc::Imm(Imm { value: 0, width: cell.width, address: None });
         let mut folded = one.clone();
-        folded.what = Some(Semantics { name: Some("cmp".into()), sources: vec![Loc::Mem(cell.clone()), zero], ..what.clone() });
+        folded.what =
+            Some(Semantics { name: Some("cmp".into()), sources: vec![Loc::Mem(cell.clone()), zero], ..what.clone() });
         folded.uses.retain(|&used| used != load);
         folded.uses.extend(def.uses.iter().copied());
         folded.widths.retain(|&(used, _)| used != load);
