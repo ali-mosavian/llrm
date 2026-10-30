@@ -353,7 +353,6 @@ pub(crate) fn applied(
             }
             let Some(&(_, on)) = mirror.iter().find(|(node, _)| node == stepped) else { continue };
             let ValueDef::Instruction(original) = function.value(*added).def else { continue };
-            let block = function.parent(original).expect("a placed add");
             let step = i128::try_from(step).unwrap_or(0);
             let amount = Operand::Constant(context.int(index, step * family.k));
             let made = function.create_instruction(
@@ -363,8 +362,8 @@ pub(crate) fn applied(
                 Flags::default(),
                 None,
             );
-            let before = function.terminator(block).expect("a terminated block");
-            function.insert(made, Position::Before(before)).expect("a block");
+            // Right after the add it follows, so every read of the add sees it.
+            function.insert(made, Position::After(original)).expect("a block");
             mirror.push((*added, function.instruction(made).result.expect("a value")));
             grew = true;
         }
