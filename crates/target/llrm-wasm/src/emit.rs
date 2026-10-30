@@ -65,7 +65,7 @@ pub fn emit<D: Dag>(
             }
         }
         let opcode = machine_opcode(dag, node);
-        let mut inst = Inst { opcode, operands, mem: None };
+        let mut inst = Inst { opcode, operands, mem: None, tag: 0 };
         if dag.mem_operands(node).is_some() {
             inst.mem = Some(Mem { size: dag.memory_store_size(node), align: dag.alignment(node) });
         }

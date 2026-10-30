@@ -14,23 +14,32 @@ use std::collections::HashMap;
 
 use crate::mir::{Function, Inst, Operand, VReg, is_argument, is_copy, is_tee};
 
-/// `findStartOfTree`: the first instruction of the stackified tree whose root
-/// defines `reg`, as (block, index).
+/// `findStartOfTree`: the index in `block` of the first instruction of the
+/// stackified tree whose root defines `reg`, which a use before `before` reads.
+///
+/// DEVIATE: the definition is searched upwards from the use, not found through
+/// a def list: a stackified register is defined in its use's block, above it,
+/// and the list would shift under the inserts.
 fn find_start_of_tree(
     f: &Function,
     reg: VReg,
-) -> (usize, usize) {
-    let (block, at) = f.vreg_def(reg).expect("a stackified register has a definition");
+    block: usize,
+    before: usize,
+) -> usize {
+    let at = f.blocks[block][..before]
+        .iter()
+        .rposition(|inst| inst.defs().any(|d| d == reg))
+        .expect("a stackified register is defined above its use");
     let def = &f.blocks[block][at];
     if def.defs().any(|d| !f.is_stackified(d)) {
-        return (block, at);
+        return at;
     }
     for operand in &def.operands {
         if let Operand::Use(used) = operand {
-            return find_start_of_tree(f, *used);
+            return find_start_of_tree(f, *used, block, at);
         }
     }
-    (block, at)
+    at
 }
 
 struct Locals {
@@ -72,8 +81,8 @@ pub fn explicit_locals(f: &mut Function) -> bool {
     }
     locals.current = (f.params.len() + f.locals.len()) as u32;
 
-    let original = f.num_vregs();
-    let use_empty: Vec<bool> = (0..original as VReg).map(|r| f.use_empty(r)).collect();
+    let index = f.def_use();
+    let use_empty: Vec<bool> = (0..f.num_vregs() as VReg).map(|r| index.use_empty(r)).collect();
     for (reg, _) in use_empty.iter().enumerate().filter(|(_, empty)| **empty) {
         f.unstackify(reg as VReg);
     }
@@ -113,9 +122,7 @@ pub fn explicit_locals(f: &mut Function) -> bool {
             for k in (0..f.blocks[block][at].operands.len()).rev() {
                 let Operand::Use(old) = f.blocks[block][at].operands[k] else { continue };
                 if f.is_stackified(old) {
-                    let (tree_block, start) = find_start_of_tree(f, old);
-                    debug_assert_eq!(tree_block, block, "a stackified tree stays in its block");
-                    insert_at = start;
+                    insert_at = find_start_of_tree(f, old, block, at);
                     continue;
                 }
                 let local = locals.id(old);

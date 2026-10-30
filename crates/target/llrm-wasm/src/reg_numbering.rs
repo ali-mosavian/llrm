@@ -19,9 +19,10 @@ pub fn reg_numbering(f: &Function) -> Vec<u32> {
             numbers[reg as usize] = index as u32;
         }
     }
+    let index = f.def_use();
     let (mut stack, mut local) = (0_u32, f.params.len() as u32);
     for reg in 0..f.num_vregs() as VReg {
-        if f.use_empty(reg) {
+        if index.use_empty(reg) {
             continue;
         }
         if f.is_stackified(reg) {

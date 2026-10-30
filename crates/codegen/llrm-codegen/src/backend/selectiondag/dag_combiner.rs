@@ -43,6 +43,7 @@ use super::actions::{Action, LoadExt, TargetLowering};
 use super::dag::{MemInfo, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
 use super::mvt::{EVT, MVT};
+use llrm_sdag::lowering::ShiftAmount;
 
 /// `CombineLevel`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -176,6 +177,19 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> DagCombiner<'a, H> {
         self.tli = Some(tli);
         self
+    }
+
+    /// `getShiftAmountConstant`'s type: what the target shifts `vt` by (`i8`
+    /// with no table, as on x86).
+    fn shift_amount_vt(
+        &self,
+        vt: EVT,
+    ) -> EVT {
+        match self.tli.map(|tli| tli.types.shift_amount()) {
+            None | Some(ShiftAmount::I8) => EVT::I8,
+            Some(ShiftAmount::ByValue) => vt,
+            Some(ShiftAmount::Fixed(fixed)) => EVT::Simple(fixed),
+        }
     }
 
     pub(super) fn add_to_worklist(
@@ -610,6 +624,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (c1, c2) = (self.dag.constant(then)?, self.dag.constant(other)?);
         let mask = super::fold::mask(vt.size_in_bits());
         let (c1, c2) = (c1 & mask, c2 & mask);
+        let amount_vt = self.shift_amount_vt(vt);
         let dag = &mut *self.dag;
         if c1 == 1 && c2 == 0 {
             return Some(dag.get_zext_or_trunc(cond, vt));
@@ -631,7 +646,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if c1.is_power_of_two() && c2 == 0 {
             let cond = dag.get_zext_or_trunc(cond, vt);
-            let amount = dag.get_constant(u128::from(c1.trailing_zeros()), EVT::I8);
+            let amount = dag.get_constant(u128::from(c1.trailing_zeros()), amount_vt);
             return Some(dag.get_node(ISD::Shl, vt, &[cond, amount]));
         }
         if c1 == mask {
@@ -674,7 +689,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             CondCode::SetLt if bound == 0 => true,
             _ => return None,
         };
-        let shift = self.dag.get_constant(u128::from(x_vt.size_in_bits() - 1), EVT::I8);
+        let shift = self.dag.get_constant(u128::from(x_vt.size_in_bits() - 1), self.shift_amount_vt(x_vt));
         let sra = self.dag.get_node(ISD::Sra, x_vt, &[x, shift]);
         let mask = self.dag.get_sext_or_trunc(sra, vt);
         if c2 == !c3 & arm_mask {
@@ -711,9 +726,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let width = vt.size_in_bits();
-        let up = self.dag.get_constant(u128::from(width - 1 - mask.trailing_zeros()), EVT::I8);
+        let amount_vt = self.shift_amount_vt(vt);
+        let up = self.dag.get_constant(u128::from(width - 1 - mask.trailing_zeros()), amount_vt);
         let shl = self.dag.get_node(ISD::Shl, vt, &[x, up]);
-        let down = self.dag.get_constant(u128::from(width - 1), EVT::I8);
+        let down = self.dag.get_constant(u128::from(width - 1), amount_vt);
         let sra = self.dag.get_node(ISD::Sra, vt, &[shl, down]);
         Some(self.dag.get_node(ISD::And, vt, &[sra, other]))
     }
@@ -1811,7 +1827,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             Some(c) if c == ones => return Some(self.dag.get_negative(n0, vt)),
             _ => {}
         }
-        let shift_vt = EVT::I8;
+        let shift_vt = self.shift_amount_vt(vt);
         if let (Some(c), false) = (c1, opaque) {
             if c.is_power_of_two() {
                 let amount = self.dag.get_constant(u128::from(c.trailing_zeros()), shift_vt);

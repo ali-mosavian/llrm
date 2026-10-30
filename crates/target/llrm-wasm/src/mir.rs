@@ -10,7 +10,12 @@
 //! (`WebAssemblyMachineFunctionInfo.h`).
 
 use crate::dagisel::generated::ids::opcode as op;
+use crate::dagisel::generated::instrinfo::{desc, flag};
 use crate::dagisel::post_ids as post;
+
+/// `TargetOpcode::PHI`: `PHI dst, src, block, src, block, ..`, the blocks being
+/// the predecessors.
+pub const PHI: u16 = u16::MAX;
 
 /// A virtual register, by index.
 pub type VReg = u32;
@@ -38,6 +43,11 @@ impl ValType {
     /// `getLocalTeeOpcode`.
     pub fn local_tee(self) -> u16 {
         self.pick([post::LOCAL_TEE_I32, post::LOCAL_TEE_I64, post::LOCAL_TEE_F32, post::LOCAL_TEE_F64])
+    }
+
+    /// `COPY`.
+    pub fn copy(self) -> u16 {
+        self.pick([post::COPY_I32, post::COPY_I64, post::COPY_F32, post::COPY_F64])
     }
 
     /// `getDropOpcode`.
@@ -99,6 +109,9 @@ pub struct Inst {
     pub opcode: u16,
     pub operands: Vec<Operand>,
     pub mem: Option<Mem>,
+    /// Names a scope marker (`BLOCK`, `LOOP` and their ends) while CFGStackify
+    /// works; 0 for any other.
+    pub tag: u32,
 }
 
 impl Inst {
@@ -106,7 +119,7 @@ impl Inst {
         opcode: u16,
         operands: &[Operand],
     ) -> Inst {
-        Inst { opcode, operands: operands.to_vec(), mem: None }
+        Inst { opcode, operands: operands.to_vec(), mem: None, tag: 0 }
     }
 
     pub fn with_mem(
@@ -117,9 +130,64 @@ impl Inst {
         self
     }
 
+    /// `MI.isTerminator()`.
+    pub fn is_terminator(&self) -> bool {
+        desc(self.opcode).is_some_and(|desc| desc.has(flag::TERMINATOR))
+    }
+
+    /// `MI.isBranch()`.
+    pub fn is_branch(&self) -> bool {
+        desc(self.opcode).is_some_and(|desc| desc.has(flag::BRANCH))
+    }
+
+    /// `MI.isBarrier()`.
+    pub fn is_barrier(&self) -> bool {
+        desc(self.opcode).is_some_and(|desc| desc.has(flag::BARRIER))
+    }
+
     /// `MI.defs()`.
     pub fn defs(&self) -> impl Iterator<Item = VReg> + '_ {
         self.operands.iter().filter_map(|o| if let Operand::Def(r) = o { Some(*r) } else { None })
+    }
+}
+
+/// `MRI`'s def and use lists, as counts: valid until instructions are added,
+/// removed or moved.
+pub struct DefUse {
+    def: Vec<Option<(usize, usize)>>,
+    defs: Vec<u32>,
+    uses: Vec<u32>,
+}
+
+impl DefUse {
+    /// `MRI.getVRegDef`: the block and index of the first definition.
+    pub fn def(
+        &self,
+        reg: VReg,
+    ) -> Option<(usize, usize)> {
+        self.def[reg as usize]
+    }
+
+    pub fn def_count(
+        &self,
+        reg: VReg,
+    ) -> usize {
+        self.defs[reg as usize] as usize
+    }
+
+    pub fn use_count(
+        &self,
+        reg: VReg,
+    ) -> usize {
+        self.uses[reg as usize] as usize
+    }
+
+    /// `MRI.use_empty`: no instruction reads `reg`.
+    pub fn use_empty(
+        &self,
+        reg: VReg,
+    ) -> bool {
+        self.uses[reg as usize] == 0
     }
 }
 
@@ -131,6 +199,8 @@ pub struct Function {
     /// `MFI.getLocals()`: the types of the locals after the parameters.
     pub locals: Vec<ValType>,
     pub blocks: Vec<Vec<Inst>>,
+    /// The successors of each block, by position, in the terminator's order.
+    pub succs: Vec<Vec<usize>>,
     /// The symbol and addend of each [`Operand::Sym`].
     pub symbols: Vec<(String, i64)>,
     vregs: Vec<ValType>,
@@ -140,6 +210,31 @@ pub struct Function {
 impl Function {
     pub fn new(name: &str) -> Function {
         Function { name: name.to_string(), blocks: vec![Vec::new()], ..Function::default() }
+    }
+
+    /// The blocks in the order `order` gives (`order[new] = old`):
+    /// `MachineFunction::RenumberBlocks` after the layout changed. Block
+    /// operands and successors follow.
+    pub fn apply_order(
+        &mut self,
+        order: &[usize],
+    ) {
+        let mut new_of = vec![usize::MAX; self.blocks.len()];
+        for (new, &old) in order.iter().enumerate() {
+            new_of[old] = new;
+        }
+        let mut blocks = std::mem::take(&mut self.blocks).into_iter().map(Some).collect::<Vec<_>>();
+        let mut succs = std::mem::take(&mut self.succs).into_iter().map(Some).collect::<Vec<_>>();
+        self.blocks = order.iter().map(|&old| blocks[old].take().expect("a block once")).collect();
+        self.succs = order
+            .iter()
+            .map(|&old| succs[old].take().expect("a block once").into_iter().map(|to| new_of[to]).collect())
+            .collect();
+        for operand in self.blocks.iter_mut().flatten().flat_map(|inst| inst.operands.iter_mut()) {
+            if let Operand::Block(block) = operand {
+                *block = new_of[*block as usize] as u32;
+            }
+        }
     }
 
     /// The index of `name + offset` in [`Function::symbols`].
@@ -207,23 +302,26 @@ impl Function {
         self.stackified[reg as usize]
     }
 
-    /// `MRI.use_empty`: no instruction reads `reg`.
-    pub fn use_empty(
-        &self,
-        reg: VReg,
-    ) -> bool {
-        !self.blocks.iter().flatten().any(|i| i.operands.contains(&Operand::Use(reg)))
-    }
-
-    /// `MRI.getVRegDef`: the block and index of the defining instruction.
-    pub fn vreg_def(
-        &self,
-        reg: VReg,
-    ) -> Option<(usize, usize)> {
-        self.blocks
-            .iter()
-            .enumerate()
-            .find_map(|(b, insts)| insts.iter().position(|i| i.defs().any(|d| d == reg)).map(|i| (b, i)))
+    /// The definitions and uses of every register, in one pass over the
+    /// function.
+    pub fn def_use(&self) -> DefUse {
+        let n = self.vregs.len();
+        let mut index = DefUse { def: vec![None; n], defs: vec![0; n], uses: vec![0; n] };
+        for (b, insts) in self.blocks.iter().enumerate() {
+            for (i, inst) in insts.iter().enumerate() {
+                for operand in &inst.operands {
+                    match *operand {
+                        Operand::Def(r) => {
+                            index.defs[r as usize] += 1;
+                            index.def[r as usize].get_or_insert((b, i));
+                        }
+                        Operand::Use(r) => index.uses[r as usize] += 1,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        index
     }
 
     /// `MRI.replaceRegWith`: every use and def of `from` names `to`.
