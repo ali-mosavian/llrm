@@ -4282,3 +4282,62 @@ fn test_no_far_allocation_needs_the_llrm_runtime_and_far_arrays() {
     let near = closing.replace("DIM v(0 TO 9) AS INTEGER", "DIM v(0 TO 9) AS INTEGER, names$(0 TO 3)");
     assert_eq!(quiet_loops(false, &near), 0, "CLOSE slides the local heap, where a string array lives");
 }
+
+/// The MIR of `SORT` in `text`, built for the 16-bit target on `runtime`.
+fn sort_mir(
+    runtime: &str,
+    text: &str,
+) -> String {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let frontend = qb_driver::Frontend::new("qb45", runtime);
+    let program = qb_driver::parsed(&written(&directory, "T.BAS", text.as_bytes()), &frontend, None).expect("parses");
+    let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+    function_text(&llrm_mir::print::module(&emitted.module), "SORT")
+}
+
+/// A loop that reaches no far allocation brackets the descriptor words it
+/// reads: a scope begins before it on the address its loads go through, and
+/// ends where it is left. The pin's LICM reads that scope to keep the loads
+/// out of the loop; quicksort reloaded the selector and the offset of its
+/// array on every element.
+#[test]
+fn test_a_quiet_loop_brackets_its_descriptor_words() {
+    let text = sort_mir("llrm", SORTING);
+    let starts: Vec<&str> = text.lines().filter(|line| line.contains("@llvm.invariant.start.p0(")).collect();
+    let ends: Vec<&str> = text.lines().filter(|line| line.contains("@llvm.invariant.end.p0(")).collect();
+    assert_eq!((starts.len(), ends.len()), (2, 2), "{text}");
+    for start in starts {
+        let scope = start.trim().split(' ').next().expect("a named scope");
+        let pointer = start.trim().rsplit("ptr ").next().expect("a pointer").trim_end_matches(')');
+        assert!(text.contains(&format!("load i16, ptr {pointer}")), "a loop load through {pointer}\n{text}");
+        assert!(ends.iter().any(|end| end.contains(&format!("ptr {scope}, i64 2, ptr {pointer}"))), "its end\n{text}");
+        let uses = text
+            .lines()
+            .filter(|line| line.contains(&format!("({scope},")) || line.contains(&format!("ptr {scope},")))
+            .count();
+        assert_eq!(uses, 1, "the scope has no use but its end\n{text}");
+    }
+    // The first block holds the starts, the block the loop exits to the ends.
+    let blocks = blocks(&text);
+    assert!(blocks[0].matches("invariant.start").count() == 2 && blocks[0].matches("invariant.end").count() == 0);
+}
+
+/// None of these may bracket: a callee that DIMs, a REDIM and a SHELL in the
+/// loop could move the array under the scope; the MS runtime moves a
+/// descriptor's location at any call.
+#[test]
+fn test_no_scope_is_made_over_a_loop_that_can_move_the_array() {
+    let brackets = |runtime: &str, text: &str| sort_mir(runtime, text).matches("invariant.start").count();
+    assert_eq!(brackets("llrm", SORTING), 2);
+    let calling =
+        SORTING.replace("a(i) = hi - i", "a(i) = hi - i: grow").replace("DIM v(", "DECLARE SUB grow ()\r\nDIM v(");
+    let grows = "SUB grow\r\nDIM w(0 TO 99) AS INTEGER\r\nw(0) = 1\r\nEND SUB\r\n";
+    assert_eq!(brackets("llrm", &format!("{calling}{grows}")), 0, "a callee that DIMs");
+    let redim = SORTING
+        .replace("a(i) = hi - i", "a(i) = hi - i: REDIM w(0 TO 3) AS INTEGER")
+        .replace("DIM i AS INTEGER", "DIM i AS INTEGER, w(0 TO 1) AS INTEGER");
+    assert_eq!(brackets("llrm", &redim), 0, "a REDIM in the loop");
+    let shell = SORTING.replace("a(i) = hi - i", "a(i) = hi - i: SHELL \"x\"");
+    assert_eq!(brackets("llrm", &shell), 0, "SHELL");
+    assert_eq!(brackets("qb45", SORTING), 0, "the MS runtime");
+}

@@ -7,7 +7,6 @@
 //! `EmitBranchOnBoolExpr` does; the comparison's widened result is made only
 //! where something else reads it.
 
-use crate::scoped;
 use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
@@ -24,6 +23,7 @@ use llrm_target::layout::{AddressSpaces, Layout};
 use crate::facts::{Stated, Subject};
 use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKind, TypeKind};
 use crate::onerror::{self, Handled};
+use crate::scoped;
 
 mod debug;
 mod handling;
@@ -1861,10 +1861,9 @@ fn declare_outside(
     {
         let types = &mut module.context.types;
         let (void, pointer, size) = (types.void(), types.ptr(0), types.int(64));
-        for (name, result, parameters) in [
-            (INVARIANT_START, pointer, vec![size, pointer]),
-            (INVARIANT_END, void, vec![pointer, size, pointer]),
-        ] {
+        for (name, result, parameters) in
+            [(INVARIANT_START, pointer, vec![size, pointer]), (INVARIANT_END, void, vec![pointer, size, pointer])]
+        {
             let ty = function_type(&mut module.context.types, result, parameters);
             let global = module.add_function(name, ty, Linkage::External)?;
             let reference = module.reference(global);
@@ -2556,7 +2555,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             false => function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect(),
         };
         let destination = result_destination(tables, function).map(|at| b.parameter(at));
-        let brackets = scoped::brackets(function, |block| tables.quiet.contains(&(function.id, block)), &tables.regions);
+        let brackets =
+            scoped::brackets(function, |block| tables.quiet.contains(&(function.id, block)), &tables.regions);
         b.function.reserve_instructions(function.blocks.iter().map(|one| one.instructions.len() + 1).sum());
         Ok(Self {
             b,
@@ -3072,7 +3072,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                         .find(|(word, ..)| word.base == one.base && word.offset == one.offset && word.ty == one.r#type)
                         .map(|&(_, pointer, ..)| pointer)
                 });
-                let described = self.tables.regions.get(&(self.function.id, self.at_instruction)) == Some(&Region::Descriptor);
+                let described =
+                    self.tables.regions.get(&(self.function.id, self.at_instruction)) == Some(&Region::Descriptor);
                 let pointer = match scoped {
                     Some(pointer) if described => pointer,
                     _ => self.offset(base, one.offset, self.operand_flags(operand).contains(Flags::INBOUNDS)),

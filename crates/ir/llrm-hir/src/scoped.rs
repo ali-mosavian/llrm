@@ -38,7 +38,13 @@ pub(crate) fn brackets(
     regions: &HashMap<(i64, i64), Region>,
 ) -> Vec<Bracket> {
     let successors = |block: &crate::model::Block| -> Vec<i64> {
-        block.terminator.targets.iter().chain(block.terminator.cases.iter().map(|(_, target)| target)).copied().collect()
+        block
+            .terminator
+            .targets
+            .iter()
+            .chain(block.terminator.cases.iter().map(|(_, target)| target))
+            .copied()
+            .collect()
     };
     let dominance = AddressDominance::of(
         function.blocks.iter().map(|one| (one.id, one.terminator.targets.as_slice())),
@@ -69,7 +75,9 @@ pub(crate) fn brackets(
     let defined: HashMap<i64, i64> = function
         .blocks
         .iter()
-        .flat_map(|block| block.instructions.iter().flat_map(move |one| one.results.iter().map(move |&r| (r, block.id))))
+        .flat_map(|block| {
+            block.instructions.iter().flat_map(move |one| one.results.iter().map(move |&r| (r, block.id)))
+        })
         .collect();
     let mut kept: Vec<Bracket> = Vec::new();
     for (header, body) in candidates {
