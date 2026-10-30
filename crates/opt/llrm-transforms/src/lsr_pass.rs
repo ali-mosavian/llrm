@@ -77,6 +77,23 @@ impl FunctionPass for LoopStrengthReduce {
         let Some(tti) = outer.target().tti() else { return PreservedAnalyses::all() };
         // The expressions of the passes before, as the pin keeps one SE for
         // the loop passes; handed back below where the CFG is as it was.
+        if !self.size && std::env::var_os("LLRM_COUNT_MIRROR").is_some() {
+            let forms = outer.target().address_forms();
+            let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+            let view = llrm_analysis::memory::Unit::within(unit.context, unit.layout, unit.function, &outer).with_shape(&shape);
+            let loops = shape.loops.clone();
+            for one in &loops {
+                if crate::mirror::found(&view, one, &forms).is_some() {
+                    let name = unit.id.and_then(|id| outer.globals.get(id.0 as usize)).map(|g| format!("{:?}", g.name));
+                    if let Some(path) = std::env::var_os("LLRM_COUNT_MIRROR") {
+                        use std::io::Write;
+                        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                            let _ = writeln!(file, "{}", name.unwrap_or_default());
+                        }
+                    }
+                }
+            }
+        }
         let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);
         let (changed, scev) = reduced_held(
             unit.context,

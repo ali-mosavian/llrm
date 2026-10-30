@@ -283,6 +283,7 @@ mod lsr_generate_tests;
 pub mod lsr_implement;
 pub mod lsr_narrow;
 pub mod lsr_pass;
+mod mirror;
 #[cfg(test)]
 mod lsr_pass_tests;
 pub mod lsr_prepare;
