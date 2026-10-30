@@ -183,3 +183,11 @@ fn memory_intrinsics() {
 fn narrow_integer_conversions() {
     check("float_narrow");
 }
+
+/// A call result marked `zeroext` or `signext`, or such a parameter, was not asserted: `icmp ne i8 %r, 0`
+/// after `call zeroext i8` masked the result again (`i32.const 255; i32.and`), and `zext` of a
+/// `zeroext` parameter did too.
+#[test]
+fn extension_attributes_assert_the_register() {
+    check("ext_attrs");
+}

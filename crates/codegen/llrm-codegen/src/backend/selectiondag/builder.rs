@@ -480,6 +480,18 @@ fn relocating_attribute(attrs: &[llrm_mir::opcode::Attribute]) -> Option<&'stati
     })
 }
 
+/// The assert a `signext` or `zeroext` attribute makes of a narrow value in a wider register
+/// (`getCopyFromParts`'s `AssertOp`).
+fn ext_assert(attrs: &[llrm_mir::opcode::Attribute]) -> Option<ISD> {
+    if llrm_mir::memory::has(attrs, "signext") {
+        Some(ISD::AssertSext)
+    } else if llrm_mir::memory::has(attrs, "zeroext") {
+        Some(ISD::AssertZext)
+    } else {
+        None
+    }
+}
+
 impl<'a> Builder<'a> {
     /// The whole target description, for the paths that read x86-style
     /// `calling.toml` conventions, string registers and runtime routines.
@@ -577,6 +589,7 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
+            result_assert: None,
             call_attrs_move_arguments: false,
             fixed_args: 0,
             had_tail_call: false,
@@ -619,6 +632,9 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is to a variadic function: at m64
     /// `lower_call` sets `al` to the vector registers it uses.
     variadic_call: bool,
+    /// The assert (`AssertZext`, `AssertSext`) the call being lowered makes of its narrow result, from its
+    /// `zeroext` or `signext` return attribute (`LowerCallTo`'s `AssertOp`).
+    result_assert: Option<ISD>,
     /// The call being lowered has an argument whose attribute moves it (`relocating_attribute`).
     call_attrs_move_arguments: bool,
     /// The parameters the callee declares: the arguments after them are variadic.
@@ -1061,8 +1077,9 @@ impl Builder<'_> {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
         }
         let mut next = 0;
-        for (&arg, (vt, count)) in parameters.iter().zip(shapes) {
-            let value = self.join_from_calling(&parts[next..next + count], vt);
+        for (at, (&arg, (vt, count))) in parameters.iter().zip(shapes).enumerate() {
+            let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
+            let value = self.join_from_calling(&parts[next..next + count], vt, ext_assert(attrs));
             next += count;
             self.node_map.insert(arg, value);
             if outside.contains(&arg) {
@@ -1408,6 +1425,7 @@ impl Builder<'_> {
             }
         }
         self.variadic_call = variadic;
+        self.result_assert = ext_assert(&info.return_attrs);
         self.fixed_args = named;
         self.call_attrs_move_arguments = info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some());
         let result =
@@ -1549,18 +1567,31 @@ impl Builder<'_> {
         Ok(all)
     }
 
-    /// `getCopyFromParts`: the parts joined into a `vt`.
+    /// `getCopyFromParts`: the parts joined into a `vt`; a narrow value in one wider part is
+    /// asserted to fit `assert`'s extension first.
     fn join_from_calling(
         &mut self,
         parts: &[SDValue],
         vt: EVT,
+        assert: Option<ISD>,
     ) -> SDValue {
         if let [one] = parts {
-            return if self.dag.value_type(*one) == vt { *one } else { self.dag.get_node(ISD::Truncate, vt, &[*one]) };
+            if self.dag.value_type(*one) == vt {
+                return *one;
+            }
+            let one = match assert {
+                Some(code) if vt.is_integer() => {
+                    let narrow = self.dag.get_value_type_node(vt);
+                    let wide = self.dag.value_type(*one);
+                    self.dag.get_node(code, wide, &[*one, narrow])
+                }
+                _ => *one,
+            };
+            return self.dag.get_node(ISD::Truncate, vt, &[one]);
         }
         let half = EVT::integer(vt.size_in_bits() / 2);
         let (low, high) = parts.split_at(parts.len() / 2);
-        let pair = [self.join_from_calling(low, half), self.join_from_calling(high, half)];
+        let pair = [self.join_from_calling(low, half, None), self.join_from_calling(high, half, None)];
         self.dag.get_node(ISD::BuildPair, vt, &pair)
     }
 
@@ -1621,7 +1652,8 @@ impl Builder<'_> {
         let root = self.root();
         let (chain, parts) = calling.lower_call(&mut self.dag, root, callee_node, &outs, &ins);
         self.dag.set_root(chain);
-        Ok((!void).then(|| self.join_from_calling(&parts, vt)))
+        let assert = self.result_assert.take();
+        Ok((!void).then(|| self.join_from_calling(&parts, vt, assert)))
     }
 
     fn call_node(&self) -> ISD {
