@@ -190,6 +190,12 @@ class Session:
                 look = self.screen_hash()
                 same, picture = (same + 1 if look == picture else 1), look
 
+    def keys_timed(self, keys: list[str], gap_ms: int) -> None:
+        """Each key goes in where the guest is parked and the guest runs `gap_ms` emulated ms, whether or not it has asked for a key."""
+        for key in keys:
+            self.send({"cmd": "key", "key": key})
+            self.resume(gap_ms)
+
     def snap(self, path: Path) -> None:
         """Lockstep: a PNG of the screen as it is where the guest is parked: the fork draws it on the next frame, so the guest runs
         on for the frames it takes (a few emulated ms, the same every run)."""
