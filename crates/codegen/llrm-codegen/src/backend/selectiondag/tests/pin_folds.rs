@@ -9,6 +9,9 @@ use crate::backend::selectiondag::{MemBase, MemInfo};
 struct Asks;
 
 impl CombineHooks for Asks {
+    fn fold_sra_of_trunc_of_shift(&self) -> bool {
+        true
+    }
     fn fold_mul_of_add_with_constant(&self) -> bool {
         true
     }
@@ -349,4 +352,35 @@ fn a_target_that_does_not_ask_keeps_the_multiply_of_the_add() {
     mul_of_add(&mut dag);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.get_root()), ISD::Mul);
+}
+
+fn sra_of_truncated_high_half(dag: &mut SelectionDAG) {
+    let x = dag.get_register(EVT::I64, 5);
+    let (thirty_two, three) = (dag.get_constant(32, EVT::I64), dag.get_constant(3, EVT::I32));
+    let high = dag.get_node(ISD::Srl, EVT::I64, &[x, thirty_two]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[high]);
+    let root = dag.get_node(ISD::Sra, EVT::I32, &[low, three]);
+    dag.set_root(root);
+}
+
+/// `(i32)(x >> 32) >> 3` stayed a shift, a truncate and a shift; the pin makes
+/// it `(i32)(x >>s 35)`, one `asr` on AArch64.
+#[test]
+fn an_sra_of_a_truncated_high_half_is_one_wide_sra() {
+    let mut dag = dag();
+    sra_of_truncated_high_half(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Truncate);
+    let wide = dag.operand(root, 0);
+    assert_eq!(dag.opcode(wide), ISD::Sra);
+    assert_eq!(dag.constant(dag.operand(wide, 1)), Some(35));
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_sra_of_the_truncated_half() {
+    let mut dag = dag();
+    sra_of_truncated_high_half(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Sra);
 }

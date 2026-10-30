@@ -44,7 +44,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
     }
 
-    fn shift_amount(
+    pub(super) fn shift_amount(
         &mut self,
         shifted: EVT,
         count: u32,

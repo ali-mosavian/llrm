@@ -109,6 +109,12 @@ pub trait CombineHooks {
         true
     }
 
+    /// `visitSRA`'s `(sra (trunc (srl x, c1)), c2)` is `(trunc (sra x, c1 + c2))` when the
+    /// truncate removes `c1` bits. Default false until x86 is judged.
+    fn fold_sra_of_trunc_of_shift(&self) -> bool {
+        false
+    }
+
     /// `visitORCommutative`'s absorption folds, `(or (and x, y), x)` is `x`. Default false until
     /// x86 is judged.
     fn fold_or_absorption(&self) -> bool {
@@ -1270,6 +1276,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let vt = self.dag.value_type(node);
+        if self.hooks.fold_sra_of_trunc_of_shift() && self.dag.opcode(n0) == ISD::Truncate {
+            if let Some(folded) = self.sra_of_trunc_of_shift(node) {
+                return Some(folded);
+            }
+        }
         if self.dag.opcode(n0) != ISD::Shl {
             return None;
         }
@@ -1286,6 +1297,36 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let ty = self.dag.get_value_type_node(low);
         let x = self.dag.operand(n0, 0);
         Some(self.dag.get_node(ISD::SignExtendInReg, vt, &[x, ty]))
+    }
+
+    /// `(sra (trunc (srl x, c1)), c2)` and the `sra` form are `(trunc (sra x, c1 + c2))`
+    /// when `c1` is the number of bits the truncate removes ([pin][pin]).
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11664
+    fn sra_of_trunc_of_shift(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        let inner = self.dag.operand(n0, 0);
+        if !matches!(self.dag.opcode(inner), ISD::Srl | ISD::Sra) || !self.dag.has_one_use(inner.node) {
+            return None;
+        }
+        let amount = self.dag.operand(inner, 1);
+        if !self.dag.has_one_use(amount.node) {
+            return None;
+        }
+        let (large_shift, c2) = (self.dag.constant(amount)?, self.dag.constant(n1)?);
+        let large = self.dag.value_type(inner);
+        let removed = large.size_in_bits() - vt.size_in_bits();
+        if large_shift != u128::from(removed) {
+            return None;
+        }
+        let total = self.shift_amount(large, removed + c2 as u32);
+        let sra = self.dag.get_node(ISD::Sra, large, &[self.dag.operand(inner, 0), total]);
+        Some(self.dag.get_node(ISD::Truncate, vt, &[sra]))
     }
 
     /// `visitADD` through `visitADDLike`, the folds that need no target
