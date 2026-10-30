@@ -19,7 +19,6 @@
 "lru c -Os" = 289  # main 279
 "lru nib -Os" = 659  # main 571
 "ring bas -Os" = 76021  # main 74990
-"ring bq16 -Os" = 86500  # main 85602
 "shellsort c -Os" = 16576  # main 14989
 
 # class 3: PRE / loop-header copy, ablation candidate, first-bad TBD: DEBT bench-clocks-pre
