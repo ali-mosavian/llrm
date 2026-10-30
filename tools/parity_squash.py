@@ -8,7 +8,7 @@
 Subset rule: the fast set runs on the head (origin/feat/parity, failure set cached per sha by `head-failures`) AND on the merged tree; the merged tree may fail only checks the head fails, and strictly fewer
 when the description has a `Fixes red` line; both sets are in the refusal. Every landing appends `<sha> #PR gate-ok <date>` to ~/scratch/coordwork/landed.log; `unlogged` lists feat/parity commits with no line.
 Refused unless: the PR head contains the current origin/feat/parity; the squash deletes no file a docs/*.md still links to, and no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
-LIMIT lines of a file, unless a `Deletes:` or `Reverts:` line of the description names the path (own commits or not: #2443's deleted scev/expand_iv.rs); parity_smoke passes on that exact head.
+LIMIT lines of a file, unless a `Deletes:` or `Reverts:` line of the description names the path (own commits or not: #2443's deleted scev/expand_iv.rs); parity_smoke passes on that exact head. The description carries `problems: 0 @ <full head SHA>`, the bench judge's line from a run on that exact head (a missing line or another SHA is REFUSED, named).
 PARITY_BIN names the directory of the built release llrm-cc, llrm-llc, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
 (LLRM_BIN / CARGO_TARGET_DIR as tools/llrmbin.py reads them) when all three are there.
 `--known-red sc=2438` skips ONLY that smoke step (named, with its issue), still runs every other check, and puts one line in the squash's body:
@@ -368,6 +368,20 @@ def precheck_baseline(dev: Path, checks, base_sha: str, cache: Path) -> dict[str
     return found
 
 
+JUDGE_LINE = re.compile(r"^\s*problems:\s*0\s*[@\uff20]\s*(\S+)\s*$", re.M)
+
+
+def judge_line_refusal(number: str, info: dict) -> str | None:
+    """`N: REFUSED: why` unless the description carries `problems: 0 @ <full head SHA>`, the bench judge's line from a run on this exact head: #6095 landed with
+    the judge red on 56 rows because the fast set does not run it. Read at every call (never cached: the description is edited without a new head)."""
+    shas = JUDGE_LINE.findall(info.get("body") or "")
+    if info["headRefOid"] in shas:
+        return None
+    if shas:
+        return f"{number}: REFUSED: the judge line is for {shas[-1][:12]}, the head is {info['headRefOid'][:12]}: run the judge on this head and update the description"
+    return f"{number}: REFUSED: the description has no judge line `problems: 0 @ <full head SHA>` (the bench judge, run on this head)"
+
+
 def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHECK_DIR / "target", checks=None, merge=None, deletions=None, info=None, head_failed: set[str] | None = None, cache: Path = PRECHECK_CACHE, base_sha: str | None = None) -> str:
     """`N: PASS`, or `N: REFUSED: <names>` after merging PR N's head with feat/parity in the dev checkout and running the cheap static checks (ratchets, fmt, docs, the
     deletion rule) there: seconds, no dist build. #2836 cost a batch 26 minutes of halving for a failure these checks name. Only items NEW against feat/parity's own
@@ -375,6 +389,8 @@ def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHE
     info = info or json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, errors="replace", check=True).stdout)
     if info["baseRefName"] != "feat/parity":
         return f"{number}: REFUSED: targets {info['baseRefName']}, not feat/parity"
+    if refused := judge_line_refusal(number, info):
+        return refused
     base_sha = base_sha or git("rev-parse", BASE).strip()
     key = f"{info['headRefOid']} {base_sha}"
     cached = json.loads(cache.read_text()) if cache.exists() else {}
