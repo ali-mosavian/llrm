@@ -245,7 +245,7 @@ fn reloads_of(
 fn a_spilled_value_is_not_reloaded_where_its_register_is_untouched() {
     let ir = module(
         "declare void @g(ptr)
-define ptr @f(ptr %b, i16 %v) {
+define ptr @fun(ptr %b, i16 %v) {
   %c = icmp slt i16 %v, 0
   br i1 %c, label %neg, label %m
 neg:
@@ -260,8 +260,8 @@ m:
     );
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
     let call = text.find("jsr g").expect("the call");
-    assert_eq!(reloads_of(&text[..call], "s_f_0"), 0, "reloaded before the call:\n{text}");
-    assert_eq!(reloads_of(&text[call..], "s_f_0"), 1, "the load after the call is the one needed:\n{text}");
+    assert_eq!(reloads_of(&text[..call], "s_fun_0"), 0, "reloaded before the call:\n{text}");
+    assert_eq!(reloads_of(&text[call..], "s_fun_0"), 1, "the load after the call is the one needed:\n{text}");
 }
 
 /// The control of the test above: a call takes the register, so the value is
@@ -270,12 +270,57 @@ m:
 fn a_spilled_value_is_reloaded_after_each_call_that_takes_its_register() {
     let ir = module(
         "declare void @g(ptr)
-define ptr @f(ptr %b) {
+define ptr @fun(ptr %b) {
   call void @g(ptr %b)
   call void @g(ptr %b)
   ret ptr %b
 }",
     );
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
-    assert_eq!(reloads_of(&text, "s_f_0"), 2, "{text}");
+    assert_eq!(reloads_of(&text, "s_fun_0"), 2, "{text}");
+}
+
+/// A C global named `a`, `x`, `y` or `s`, or after an instruction (`inc`,
+/// `ror`), or after an equate (`rc3`), was written as `lda a`: ca65 read the
+/// register or the opcode and stopped with "Syntax error" or "Illegal
+/// addressing mode". loop_fusion, loop_interchange, pattern_fill and idioms of
+/// tests/run/c did not assemble.
+#[test]
+fn a_symbol_named_like_a_register_an_opcode_or_an_equate_assembles() {
+    let dir = std::env::temp_dir().join(format!("llrm6502-reserved-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["a", "A", "f", "x", "y", "s", "z", "lda", "inc", "ror", "rc3", "bra", "stz"] {
+        let ir = module(&format!(
+            "@{name} = global i8 0
+define i8 @get_{name}() {{
+  %v = load i8, ptr @{name}
+  ret i8 %v
+}}
+define void @{name}_fn() {{
+  store i8 1, ptr @{name}
+  ret void
+}}
+define ptr @addr_{name}() {{
+  ret ptr @{name}
+}}"
+        ));
+        let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+        std::fs::write(dir.join("t.s"), format!(".setcpu \"65C02\"\n{text}")).unwrap();
+        common::pipeline::tool(&dir, "ca65", &["t.s", "-o", "t.o"]).unwrap_or_else(|e| panic!("`{name}`: {e}\n{text}"));
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// The rename of a reserved symbol reads `@name` in the text; a string constant
+/// that holds `@a` (an address in a message) is data and keeps its bytes.
+#[test]
+fn a_string_holding_at_a_reserved_name_keeps_its_bytes() {
+    let ir = module(
+        "@msg = constant [5 x i8] c\"u@a\\00x\"
+define ptr @fun() {
+  ret ptr @msg
+}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!text.contains("__r_"), "the string was rewritten:\n{text}");
 }

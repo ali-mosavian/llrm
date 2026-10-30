@@ -95,12 +95,73 @@ fn without_triple(text: &str) -> String {
         .join("\n")
 }
 
+/// The words ca65 reads as a register, an opcode or one of our `rcN` equates
+/// wherever they stand as an operand or a label.
+const RESERVED: &[&str] = &[
+    "a", "f", "x", "y", "s", "z", "adc", "and", "asl", "bbr", "bbs", "bcc", "bcs", "beq", "bit", "bmi", "bne", "bpl",
+    "bra", "brk", "bvc", "bvs", "clc", "cld", "cli", "clv", "cmp", "cpx", "cpy", "dea", "dec", "dex", "dey", "eor",
+    "ina", "inc", "inx", "iny", "jmp", "jsr", "lda", "ldx", "ldy", "lsr", "nop", "ora", "pha", "php", "phx", "phy",
+    "pla", "plp", "plx", "ply", "rmb", "rol", "ror", "rti", "rts", "sbc", "sec", "sed", "sei", "smb", "sta", "stp",
+    "stx", "sty", "stz", "tax", "tay", "trb", "tsb", "tsx", "txa", "txs", "tya", "wai",
+];
+
+/// Whether ca65 would read the symbol `name` as something else.
+fn reserved(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let numbered =
+        |stem: &str| lower.strip_prefix(stem).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    RESERVED.contains(&lower.as_str())
+        || numbered("rc")
+        || numbered("bbr")
+        || numbered("bbs")
+        || numbered("rmb")
+        || numbered("smb")
+}
+
+/// `text` with every `@name` that `reserved` prefixed by `__r_`, a name C code
+/// cannot spell, so the assembly names the symbol and not the opcode. A string
+/// that is not a symbol's quoted name (`c"user@x"`) is copied as it is.
+fn without_reserved_symbols(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(['@', '"']) {
+        let (before, here) = rest.split_at(at);
+        out.push_str(before);
+        let quoted_name = here.starts_with('@') && here[1..].starts_with('"');
+        if here.starts_with('"') {
+            let close = here[1..].find('"').map_or(here.len(), |n| n + 2);
+            out.push_str(&here[..close]);
+            rest = &here[close..];
+            continue;
+        }
+        out.push('@');
+        let body = &here[1..];
+        let (quote, body) = if quoted_name { (true, &body[1..]) } else { (false, body) };
+        let end = if quote {
+            body.find('"').unwrap_or(body.len())
+        } else {
+            body.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '$' | '-')))
+                .unwrap_or(body.len())
+        };
+        if quote {
+            out.push('"');
+        }
+        if reserved(&body[..end]) {
+            out.push_str("__r_");
+        }
+        rest = body;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `text` through the mid-end at the request's level.
 fn program(
     text: &str,
     request: &Request,
 ) -> Result<Program, String> {
-    let mut module = llrm_mir::parse::module(&without_triple(text)).map_err(|error| error.to_string())?;
+    let mut module =
+        llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text))).map_err(|error| error.to_string())?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     let layout = Mos.layout().datalayout;
     match module.datalayout.as_deref() {
