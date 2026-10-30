@@ -1,0 +1,20 @@
+reason = "TEMPORARY trade-off (owner w2; accepted by coordinator 2026-10-30, pair #6103 + #6140 judged by w6 vs a7640235ca: 59 rows move, nearly all better). quicksort nib -Os: the by-value slice reloads one more value per swap; card owned by w12. quicksort c -O2: the pointer twin's setup costs 7 B the shorter swap block does not repay. Removal: the quicksort nib -Os card, or the 2026-11-06 re-judge."
+exception = true
+
+[[row]]
+label = "quicksort nib -Os"
+counter = "instructions"
+tip = 193986
+to = 195244
+
+[[row]]
+label = "quicksort nib -Os"
+counter = "memory_operands"
+tip = 74446
+to = 79768
+
+[[row]]
+label = "quicksort c -O2"
+counter = "code_bytes"
+tip = 267
+to = 274
