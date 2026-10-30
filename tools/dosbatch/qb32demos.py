@@ -72,6 +72,7 @@ PLAYED = {
 
 LONGEST_MS = 60_000     # the most emulated time a step waits, whatever it is waiting for
 LOOKS = 3               # successive looks at a screen that must show the same picture
+TIMED_GAP_MS = 150      # emulated ms between two keys typed without waiting for the program's read
 LOOK_MS = 50            # emulated ms between two looks
 
 
@@ -107,20 +108,22 @@ def settled(session, name: str | None, before: str | None, looks: int = LOOKS, l
     )
 
 
-def play(exe: Path, work: Path, steps: list, demo: str | None = None) -> dict[str, Path]:
+def play(exe: Path, work: Path, steps: list, demo: str | None = None, conf: str = qb32.DEMO_CONF, timed: bool = False, ended: dict | None = None) -> dict[str, Path]:
     """The steps played in lockstep with the emulator: the guest runs only between commands, for as long as the program takes to
     ask for a key or for a stated number of emulated milliseconds, so each key, look and screenshot happens at an emulated instant
-    that does not depend on the host. Nothing waits for a time, and none waits longer than LONGEST_MS of emulated time."""
+    that does not depend on the host. Nothing waits for a time, and none waits longer than LONGEST_MS of emulated time. `conf` and `timed`
+    (each key typed at a fixed emulated gap instead of at the program's read) are for nibprobe's matrix; `ended` gets the emulated
+    microseconds and cycles per ms at the end."""
     work.mkdir(exist_ok=True)
     shutil.copy(exe, work / "P.EXE")
     shots: dict[str, Path] = {}
-    session = qbplay.Session(work, qb32.DEMO_CONF)
+    session = qbplay.Session(work, conf)
     trace = os.environ.get("QB32DEMO_TRACE")
     try:
         session.launch(LONGEST_MS)
         for keys, _seconds, name, shown in steps:
             before = session.screen_hash() if name else None
-            session.keys_in_lockstep(keys, LONGEST_MS)
+            session.keys_timed(keys, TIMED_GAP_MS) if timed else session.keys_in_lockstep(keys, LONGEST_MS)
             ready(session, shown, bool(keys))
             settled(session, name, before)
             if name:
@@ -128,6 +131,9 @@ def play(exe: Path, work: Path, steps: list, demo: str | None = None) -> dict[st
                 session.snap(shots[name])
             if trace:
                 print(f"{work.parent.parent.name}: {keys} {name} at {session.now_us} emulated us", file=sys.stderr)
+        if ended is not None:
+            status = session.send({"cmd": "virtual_time_status"})
+            ended.update(us=status["emulated_us"], cycles_per_ms=status["cycles_per_ms"])
     finally:
         session.close()
     return shots
