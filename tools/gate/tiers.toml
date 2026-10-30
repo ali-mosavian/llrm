@@ -212,7 +212,7 @@ steps = ["fmt", "docs", "products", "scans", "facts"]
 tests = ["docs_links"]
 # Shell checks of the diff against origin/main (the tree as it stands, committed or not): a conflict marker or whitespace error that a merge left.
 [prepush.checks]
-"diff check" = "base=$(git merge-base HEAD origin/feat/parity 2>/dev/null || git merge-base HEAD origin/main) && git diff --check $base && ! git diff -U0 $base | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
+"diff check" = "base=$(git merge-base HEAD origin/${LAND_BRANCH:-release/next} 2>/dev/null || git merge-base HEAD origin/main) && git diff --check $base && ! git diff -U0 $base | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
 
 # Every step the planner can produce is in exactly one group (a test checks).
 [bench]
