@@ -70,8 +70,8 @@ use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Effects};
 use llrm_mir::module::{Function, InstId, Operand};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
-use llrm_mir::types::{FloatKind, Type};
 use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, Outer, PreservedAnalyses};
+use llrm_mir::types::{FloatKind, Type};
 
 use crate::counting;
 use crate::loopidioms::_memset;
@@ -375,8 +375,7 @@ fn try_merging_into_memset(
             }
             let found = if let Some((value, pointer)) = simple_store(function, at) {
                 // A store of the same byte at a constant offset from the start.
-                (bytewise(&unit, value) == Some(byte))
-                    .then(|| (pointer, stored_bytes(&unit, value).unwrap_or(1), true))
+                (bytewise(&unit, value) == Some(byte)).then(|| (pointer, stored_bytes(&unit, value).unwrap_or(1), true))
             } else if let Some((dest, other, length)) = constant_memset(&unit, callees, function, at) {
                 let same = match byte {
                     Byte::Constant(wanted) => unit.int_constant(other) == Some(wanted),
