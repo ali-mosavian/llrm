@@ -572,7 +572,13 @@ fn is_load_invariant_in_loop(
         }
         // If there are escaping uses of the invariant.start, the load may be
         // non-invariant.
-        if function.instruction(user).result.is_some_and(|scope| function.users(scope).iter().next().is_some()) {
+        // DEVIATE: the pin takes any use, an `invariant.end` included, as
+        // making the load non-invariant
+        // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1086
+        // `II->use_empty()`). Here a scope whose ends cannot run between the
+        // start and the loop header still counts, so a frontend can close a
+        // scope after the loop. Exit: the pin gains the same dominance check.
+        if !scope_holds_at(ctx, aa, user) {
             continue;
         }
         let Some(size) = llrm_mir::intrinsics::length(unit.context, function.instruction(user).operands[0]) else {
@@ -593,6 +599,64 @@ fn is_load_invariant_in_loop(
         }
     }
     false
+}
+
+/// Whether the scope `start` opens is still open at the loop's header: every
+/// use of it is an `invariant.end` on it, and none of those can run after the
+/// start and before the header is reached, on a path that does not restart the
+/// scope. With no use at all, that is the pin's `use_empty()`.
+fn scope_holds_at(
+    ctx: &LoopCtx,
+    aa: &AliasQuery,
+    start: InstId,
+) -> bool {
+    let unit = aa.unit();
+    let function = unit.function;
+    let Some(scope) = function.instruction(start).result else { return true };
+    let mut ends = Vec::new();
+    for one in function.users(scope).iter() {
+        let end = unit.intrinsic(one.user) == Some(llrm_mir::intrinsics::Intrinsic::InvariantEnd) && one.index == 0;
+        match function.parent(one.user) {
+            Some(block) if end => ends.push((one.user, block)),
+            // A phi, a store or any other use may end it where we cannot see.
+            _ => return false,
+        }
+    }
+    if ends.is_empty() {
+        return true;
+    }
+    let Some(opened) = function.parent(start) else { return false };
+    let (opened, header) = (cfg::id(opened), ctx.loop_.header);
+    // The blocks the start reaches, and the blocks that reach the header, each
+    // without passing through the start's block.
+    let after = walk(opened, opened, |at| cfg::successors_of(function, at).into_iter().collect());
+    let before = walk(header, opened, |at| cfg::predecessors_of(function, at).into_iter().collect());
+    ends.into_iter().all(|(end, block)| {
+        let at = cfg::id(block);
+        if at == opened {
+            // Ahead of the start in its block, the start reopens the scope.
+            return function.comes_before(end, start);
+        }
+        !(after.contains(&at) && before.contains(&at))
+    })
+}
+
+/// The blocks `next` reaches from `from` without expanding `stop`.
+fn walk(
+    from: i64,
+    stop: i64,
+    next: impl Fn(i64) -> Vec<i64>,
+) -> std::collections::BTreeSet<i64> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut work = vec![from];
+    while let Some(at) = work.pop() {
+        for to in next(at) {
+            if seen.insert(to) && to != stop {
+                work.push(to);
+            }
+        }
+    }
+    seen
 }
 
 /// [`canHoistLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L932).

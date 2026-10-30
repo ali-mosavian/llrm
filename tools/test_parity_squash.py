@@ -2079,39 +2079,35 @@ def test_the_tests_get_the_clang_of_the_trees_own_pin(tmp_path):
     assert env["LLRM_CLANG_M16"] == "/old/clang", "no build for the sha: the runner's value stays"
 
 
-def test_a_pr_whose_description_has_no_judge_line_for_its_head_is_refused_before_anything_runs(tmp_path, monkeypatch):
-    """#6095 landed with the bench judge red on 56 rows: the fast set does not run the judge, so the description must carry its line from this head."""
-    monkeypatch.setattr(ps, "git", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a refused PR runs nothing")))
+def test_a_compiler_pr_without_a_judge_line_is_not_refused_and_the_warning_is_printed(tmp_path, monkeypatch, capsys):
+    """The user relaxed the rule: the refusal held until the head changed and stalled the queue (30 PRs waited on judge lines). The PR lands; 'WARN: no judge line for <head>' stays visible."""
     head = "a" * 40
-    info = {"headRefOid": head, "baseRefName": ps.BRANCH}
-    for body in ("", None, "problems: 3 @ " + head, "problems: 0", "the judge said problems: 0 @ " + head + " today"):
-        line = ps.precheck("6095", info={**info, "body": body}, cache=tmp_path / "c.json", base_sha="base")
-        assert line.startswith("6095: REFUSED: the description has no judge line"), (body, line)
-    other = ps.precheck("6095", info={**info, "body": "problems: 0 @ " + "b" * 40}, cache=tmp_path / "c.json", base_sha="base")
-    assert other == f"6095: REFUSED: the judge line is for {'b' * 12}, the head is {'a' * 12}: run the judge on this head and update the description"
-
-
-def test_a_pr_with_the_judge_line_for_its_head_passes_that_check_and_an_edited_description_is_read_again(tmp_path, monkeypatch):
     tree = Tree(set(), set())
-    assert run_precheck(tmp_path, monkeypatch, tree, number="6096") == "6096: PASS"
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    info = {"headRefOid": head, "baseRefName": ps.BRANCH, "files": [{"path": "crates/opt/src/lib.rs"}]}
+    for n, body in enumerate(("", None, "problems: 3 @ " + head, "problems: 0", "problems: 0 @ " + "b" * 40)):
+        line = ps.precheck(str(n), dev=tmp_path, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info={**info, "body": body}, cache=tmp_path / f"c{n}.json", base_sha="base")
+        assert line == f"{n}: PASS", (body, line)
+        assert f"{n}: WARN: no judge line for {head}" in capsys.readouterr().err, body
+
+
+def test_a_pr_with_the_judge_line_for_its_head_warns_nothing_and_an_edited_description_is_read_again(tmp_path, monkeypatch, capsys):
     info = {"headRefOid": "h" * 40, "baseRefName": ps.BRANCH}
-    assert ps.judge_line_refusal("1", {**info, "body": "TL;DR\nproblems: 0 @ " + "h" * 40 + "\nOwner: w6"}) is None
-    assert ps.judge_line_refusal("1", {**info, "body": "problems: 0 \uff20 " + "h" * 40}) is None, "the full-width at sign the order was written with"
-    cache = tmp_path / "judge-cache.json"
-    kwargs = dict(cache=cache, base_sha="base")
-    assert "no judge line" in ps.precheck("1", info={**info, "body": ""}, **kwargs)
-    assert "no judge line" not in ps.precheck("1", info={**info, "body": "problems: 0 @ " + "h" * 40}, **{**kwargs, "checks": Tree(set(), set()).checks(), "merge": Tree(set(), set()).merge, "deletions": lambda *a: [], "dev": tmp_path})
+    assert ps.judge_line_warning("1", {**info, "body": "TL;DR\nproblems: 0 @ " + "h" * 40 + "\nOwner: w6"}) is None
+    assert ps.judge_line_warning("1", {**info, "body": "problems: 0 \uff20 " + "h" * 40}) is None, "the full-width at sign the order was written with: a present line is still parsed"
+    assert ps.judge_line_warning("1", {**info, "body": "x"}).startswith("1: WARN: no judge line for " + "h" * 40)
+    assert ps.judge_line_warning("1", {**info, "body": "problems: 0 @ " + "h" * 40}) is None, "an edited description is read again at every call"
 
 
-def test_a_pr_that_touches_no_compiler_path_needs_no_judge_line(tmp_path, monkeypatch):
-    """Without the exemption #6102 and every tools-only or docs-only PR would be refused by the rule: they cannot move the bench judge."""
+def test_a_pr_that_touches_no_compiler_path_gets_no_warning(tmp_path, monkeypatch):
+    """Tools-only and docs-only PRs cannot move the bench judge: no warning either."""
     head = "c" * 40
     info = {"headRefOid": head, "baseRefName": ps.BRANCH, "body": ""}
     tools_only = [{"path": "tools/parity_squash.py"}, {"path": "docs/working/pr-rules.md"}]
-    assert ps.judge_line_refusal("1", {**info, "files": tools_only}) is None
-    assert ps.judge_line_refusal("1", {**info, "files": [*tools_only, {"path": "crates/opt/src/lib.rs"}]}).startswith("1: REFUSED: the description has no judge line"), "one compiler file brings the rule back"
-    assert ps.judge_line_refusal("1", {**info, "files": [{"path": "Cargo.lock"}]}) is not None
-    assert ps.judge_line_refusal("1", info) is not None, "no file list read: the rule applies"
+    assert ps.judge_line_warning("1", {**info, "files": tools_only}) is None
+    assert ps.judge_line_warning("1", {**info, "files": [*tools_only, {"path": "crates/opt/src/lib.rs"}]}).startswith("1: WARN: no judge line for")
+    assert ps.judge_line_warning("1", {**info, "files": [{"path": "Cargo.lock"}]}) is not None
+    assert ps.judge_line_warning("1", info) is not None, "no file list read: the rule applies"
 
 
 def test_the_integration_branch_is_release_next_and_a_pr_on_feat_parity_is_refused(tmp_path, monkeypatch):

@@ -2,7 +2,7 @@
 """The behavioural tier: after a merge that touches the register allocator, the coalescer, liveness, the selector, the peephole or the frame, build the bins once and run
 the call-shaped tests/run programs (the regparm3_matrix family and the programs that keep values across calls), and say so within minutes when one is wrong.
 
-    tools/behavioural.py [--tip SHA] [--watch SECONDS]     one check of origin/feat/parity (or SHA), or a check every SECONDS after a fetch
+    tools/behavioural.py [--tip SHA] [--watch SECONDS]     one check of origin/release/next (or SHA), or a check every SECONDS after a fetch
 
 Not a gate and not before a merge: the hourly sweep stays the official line (the 23:00 sweep of 2026-10-23 found #4152's wrong output 18 minutes after it landed; this
 finds it after the build and a few seconds of runs). A red line is `BEHAVIOURAL RED: <merge> <program>`, appended to the log (BEHAVIOURAL_LOG, default
