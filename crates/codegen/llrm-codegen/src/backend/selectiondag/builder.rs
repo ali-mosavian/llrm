@@ -89,15 +89,9 @@ pub struct BuilderTarget {
     pub opt_size: bool,
     /// The build is for the least size (`-Oz`, the pin's `minsize`).
     pub min_size: bool,
-    /// At size, the most stores a constant memset is inline for; 0 where the
-    /// pin's limit stands. Real mode: a dword store is 4 bytes (prefix, opcode,
-    /// ModRM, disp8) against 13 for the fill (`lea di`, `mov es,ss`, `mov cx`,
-    /// `rep stos`, the zero) that also takes ax, cx and di from the code
-    /// around it, so four.
-    pub memset_stores_size: usize,
-    /// The same for the load and store pairs of a constant memcpy: a dword
-    /// pair is 8 bytes against about 16 for `rep movs`, so two.
-    pub memcpy_moves_size: usize,
+    /// The store limits a memset, memcpy or memmove is inlined for: the
+    /// target description's tuning table.
+    pub tuning: llrm_mir::target::Tuning,
     /// What a size-only pick gives up in clocks for a byte; none: bytes alone
     /// decide.
     pub size_trade: Option<SizeTrade>,
@@ -195,21 +189,12 @@ impl BuilderTarget {
         self
     }
 
-    /// This target with its size limit of memcpy pairs.
-    pub fn with_memcpy_moves_size(
+    /// This target with the tuning table of its description.
+    pub fn with_tuning(
         mut self,
-        moves: usize,
+        tuning: llrm_mir::target::Tuning,
     ) -> BuilderTarget {
-        self.memcpy_moves_size = moves;
-        self
-    }
-
-    /// This target with its size limit of memset stores.
-    pub fn with_memset_stores_size(
-        mut self,
-        stores: usize,
-    ) -> BuilderTarget {
-        self.memset_stores_size = stores;
+        self.tuning = tuning;
         self
     }
 
@@ -262,8 +247,7 @@ impl BuilderTarget {
             jump_tables: true,
             opt_size: false,
             min_size: false,
-            memset_stores_size: 0,
-            memcpy_moves_size: 0,
+            tuning: llrm_mir::target::Tuning::PIN,
             size_trade: None,
             tail_calls: false,
             tti: None,
@@ -293,8 +277,7 @@ impl BuilderTarget {
             jump_tables: true,
             opt_size: false,
             min_size: false,
-            memset_stores_size: 0,
-            memcpy_moves_size: 0,
+            tuning: llrm_mir::target::Tuning::PIN,
             size_trade: None,
             tail_calls: false,
             tti: None,
@@ -1968,6 +1951,14 @@ impl Builder<'_> {
         self.dag.lines[at] = crate::backend::isel::dbg_line(self.module, self.function, inst).filter(|at| at.line != 0);
         self.dag.inst_order.push((inst, self.dag.cur_order));
         if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
+            // a compare settled with its call's flags is read in other blocks
+            // through its register all the same
+            if self.prelowered.contains(&inst)
+                && let Some(result) = self.function.instruction(inst).result
+                && let Some(reg) = self.info.value_regs.get(&result).copied()
+            {
+                self.copy_value_to_register(Operand::Value(result), reg, ISD::AnyExtend)?;
+            }
             return Ok(());
         }
         let instruction = self.function.instruction(inst).clone();

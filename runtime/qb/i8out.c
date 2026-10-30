@@ -58,6 +58,16 @@ static int guess_exponent(const Parts *parts)
     return (int)(((long)(parts->exponent + length - 1) * 1233L) >> 12) + 1;
 }
 
+/* The quick way runs on a hardware long double (x87's 64 bits, or the 53 of the
+   Watcom rows' -mlong-double-64); a software one (arm64's is 113 bits) takes the
+   exact way alone, which gives the same digits. */
+#if __LDBL_MANT_DIG__ <= 64
+#define QUICK_EXTENDED 1
+#else
+#define QUICK_EXTENDED 0
+#endif
+
+#if QUICK_EXTENDED
 /* The magnitude of the value being converted, for the FPU's quick way. */
 static long double magnitude;
 
@@ -89,6 +99,12 @@ static int quick_digits(int k, unsigned long long *digits, int *up)
     *up = difference > 0;
     return 1;
 }
+#else
+static int quick_digits(int k, unsigned long long *digits, int *up)
+{
+    return 0;
+}
+#endif
 
 /* The sixteen digits of value * 10^(16-k), as a number, cut off and not yet
    rounded, and whether rounding adds one.  They are 16 digits only when k is
@@ -170,7 +186,9 @@ void i8_output(double value, Decimal *out)
     unsigned count = DIGITS;
 
     copy_bytes((char *)&bits, (const char *)&value, 8);
+#if QUICK_EXTENDED
     magnitude = value < 0 ? -value : value;
+#endif
     out->sign = bits >> 63 ? '-' : ' ';
     if (special(bits, out))
         return;

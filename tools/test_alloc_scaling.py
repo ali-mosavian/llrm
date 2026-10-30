@@ -15,6 +15,30 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import llrmbin  # noqa: E402
 
+# Every test here compiles with llrm-c and reads the old allocator's `[instr]` rows. Debt `skip-alloc-scaling` in docs/working/ci.md.
+# An llrm-c that is built (--features c-legacy) still has none: the old allocator was deleted, and its tests died with KeyError: 'facts intervals'.
+pytestmark = pytest.mark.usefixtures("old_allocator")
+
+
+# The rows the old allocator's passes print and the tests read: the new allocator still prints `regalloc base`, and an llrm-c with
+# that row alone made the runner's batches die with KeyError: 'facts intervals'.
+OLD_ALLOCATOR_ROWS = ("facts intervals", "facts slots", "intervals homes", "regalloc base")
+
+
+@pytest.fixture(scope="module")
+def old_allocator():
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    if not compiler.exists():
+        pytest.skip("llrm-c is not built (debt skip-alloc-scaling)")
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "probe.c"
+        source.write_text(straight(1024))
+        with llrmbin.with_object([str(compiler), "-m32", "-march=i486", "-O1", "-o", llrmbin.OBJECT, str(source)]) as command:
+            done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    missing = [row for row in OLD_ALLOCATOR_ROWS if not re.search(rf"^\[instr\].* {re.escape(row)}$", done.stderr, re.M)]
+    if missing:
+        pytest.skip(f"this llrm-c has no old allocator: no {', '.join(missing)} row (debt skip-alloc-scaling)")
+
 SMALL, LARGE = 1024, 4096
 # 4x the program may cost this much more (a linear pass costs 4x, a quadratic one 16x). Measured 2026-10-09 on main 61be539b2:
 # 4.09, 4.05 and 12.42, repeating to 0.01%. regalloc base is allowed more: it rebuilds the facts of the body (every interval)
@@ -72,7 +96,7 @@ def test_a_split_finds_its_instruction_by_index_not_by_walking_the_block():
     cost 143.8 / 400.3 Minstr on the ladder's `mem` at N=800 / 1600 (3.08x per doubling, 2.66x before). A block is in slot order,
     so the position is bisected."""
     sys.path.insert(0, str(Path(__file__).resolve().parent / "ladder"))
-    import gen
+    import ladder_gen as gen
     compiler = llrmbin.bin_dir() / "llrm-c"
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "mem800.c"
@@ -85,7 +109,7 @@ def test_a_spill_lists_the_units_of_a_register_in_time_linear_in_its_operands():
     """`InlineSpiller::units` deduplicated the instructions of a register with `contains` on a list and searched the units made so
     far for each: `regalloc base` on the ladder's `mem` cost 259.7 / 586.4 Minstr at N=1600 / 3200 (2.26x per doubling; 2.09x now)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent / "ladder"))
-    import gen
+    import ladder_gen as gen
     compiler = llrmbin.bin_dir() / "llrm-c"
     cost = {}
     with tempfile.TemporaryDirectory() as work:

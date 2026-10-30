@@ -207,7 +207,7 @@ steps = ["fmt", "docs", "products", "scans", "facts"]
 tests = ["docs_links"]
 # Shell checks of the diff against origin/main (the tree as it stands, committed or not): a conflict marker or whitespace error that a merge left.
 [prepush.checks]
-"diff check" = "base=$(git merge-base HEAD origin/feat/parity 2>/dev/null || git merge-base HEAD origin/main) && git diff --check $base && ! git diff -U0 $base | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
+"diff check" = "base=$(git merge-base HEAD origin/${LAND_BRANCH:-release/next} 2>/dev/null || git merge-base HEAD origin/main) && git diff --check $base && ! git diff -U0 $base | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
 
 # Every step the planner can produce is in exactly one group (a test checks).
 [bench]
@@ -279,7 +279,7 @@ needs = [
 # which cannot read the checkout, fails it by name. `rm-quake` is the public QCport, cloned beside the private files.
 [private]
 repo = "ali-mosavian/llrm-private-tools"
-public = { rm-quake = "ali-mosavian/rm-quake" }
+public = { rm-quake = "ali-mosavian/rm-quake@958d5fc3d01a2dbe0f2475462bec001b2249ca8c" }
 env = { TCPP30_DIR = "tcpp30", TD_DIR = "td", VBDOS_DIR = "vbdos", PDS71_DIR = "pds71", QB45_DIR = "qb45", QB45_DEMOS_DIR = "gor", QCPORT_BORLAND = "qcbcc", QCPORT_INC = "qctc/inc", QCPORT_BCC_LIB = "bcpp31/lib", LLRM_BORLAND_INC = "bcinc", LLRM_BORLAND_LIB = "bcpp31/lib", TOOLCHAINS = ".", TURBO = "." }
 group_env = { reference = { QCPORT = "rm-quake/src" }, cost = { QCPORT = "rm-quake/src" }, python = { QCPORT = "rm-quake/src", DFACES_SRC = "qbq-llrm/src" } }
 

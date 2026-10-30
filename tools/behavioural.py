@@ -18,8 +18,10 @@ import sys
 import time
 from pathlib import Path
 
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
 ROOT = Path(__file__).resolve().parent.parent
-BASE = "origin/feat/parity"
+BASE = f"origin/{BRANCH}"
 LOG = Path(os.environ.get("BEHAVIOURAL_LOG") or Path.home() / "scratch/coordwork/behavioural.log")
 STATE = Path(os.environ.get("BEHAVIOURAL_STATE") or Path.home() / "scratch/coordwork/behavioural.state")
 WORKTREE = Path(os.environ.get("BEHAVIOURAL_WORKTREE") or Path.home() / "scratch/wt-behavioural")
@@ -105,7 +107,7 @@ def check(tip: str, last: str | None, build=build_and_run, log: Path | None = No
 
 
 def once(tip_ref: str | None) -> int:
-    subprocess.run(["git", "fetch", "-q", "origin", "feat/parity"], cwd=ROOT, check=True)
+    subprocess.run(["git", "fetch", "-q", "origin", BRANCH], cwd=ROOT, check=True)
     tip = subprocess.run(["git", "rev-parse", tip_ref or BASE], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
     last = STATE.read_text().strip() if STATE.exists() else None
     if last == tip:

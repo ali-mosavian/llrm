@@ -13,9 +13,12 @@ use std::process::Command;
 
 use llrm_target::Target;
 
+// `volatile` and a write to each: a zero static nothing writes is a constant to
+// clang (stored zeros, read as folded zero), so the run would never see the
+// dirt.
 const PROGRAM: &str = "extern void report(long v);
-static char far zfar[40000];
-static char znear[300];
+static volatile char far zfar[40000];
+static volatile char znear[300];
 static char far ifar[4] = {1, 2, 3, 4};
 int main(void)
 {
@@ -25,6 +28,7 @@ int main(void)
     for (i = 0; i < 300; i++) if (znear[i]) near_set++;
     for (i = 0; i < 4; i++) kept += ifar[i];
     zfar[39999u] = 1;
+    znear[299] = 1;
     report(far_set);
     report(near_set);
     report(kept);
@@ -61,6 +65,21 @@ impl Lab {
         assert!(
             done.status.success(),
             "{program} {args:?}: {}{}",
+            String::from_utf8_lossy(&done.stdout),
+            String::from_utf8_lossy(&done.stderr)
+        );
+    }
+
+    /// `llrm-c`'s command line served by llrm-cc over clang (the Watcom m16
+    /// row), in the lab's directory.
+    fn compile(
+        &self,
+        args: &[&str],
+    ) {
+        let done = common::cc::llrm_c().args(args).current_dir(self.dir.path()).output().unwrap();
+        assert!(
+            done.status.success(),
+            "llrm-cc {args:?}: {}{}",
             String::from_utf8_lossy(&done.stdout),
             String::from_utf8_lossy(&done.stderr)
         );
@@ -106,7 +125,10 @@ impl Lab {
     ) -> PathBuf {
         let target = llrm_x86_m16::M16;
         let (layer, c) = (target.os_layer().unwrap(), target.runtime("c").unwrap());
-        let defines = Self::defines(nozero);
+        // llrm-cc's Watcom rows enter `main_`; the start-up's default is
+        // `_main`.
+        let mut defines = Self::defines(nozero);
+        defines.push("-DLL_MAIN=main_".to_owned());
         let defines: Vec<&str> = defines.iter().map(String::as_str).collect();
         self.assemble(
             &Path::new(layer.directory).join(layer.string("start").unwrap()),
@@ -119,7 +141,7 @@ impl Lab {
             &defines,
         );
         std::fs::write(self.path("t.c"), PROGRAM).unwrap();
-        self.run("llrm-c", &["-Os", flag, "-march=i486", "t.c", "-o", &format!("{name}.obj")]);
+        self.compile(&["-Os", flag, "-march=i486", "t.c", "-o", &format!("{name}.obj")]);
         let exe = self.path(&format!("{name}.exe"));
         let (start, init, program) = (format!("{name}-start.obj"), format!("{name}-init.obj"), format!("{name}.obj"));
         self.run(
@@ -209,7 +231,7 @@ fn test_far_zero_data_moves_only_where_the_startup_zeroes_it() {
     let lab = Lab::new();
     std::fs::write(lab.path("t.c"), PROGRAM).unwrap();
     let listing = |flag: &str| {
-        lab.run("llrm-c", &["-Os", flag, "t.c", "-S", "-o", "t.s"]);
+        lab.compile(&["-Os", flag, "t.c", "-S", "-o", "t.s"]);
         std::fs::read_to_string(lab.path("t.s")).unwrap()
     };
     let far = listing("-mfar-bss");

@@ -267,7 +267,44 @@ pub fn ordered(
     let moves = Moves { frame: Some(frame), homes: &homes, hole: 0 };
     let mut machined = shifted(first, frame, &moves)?;
     machined.reserve = first.reserve;
+    if llrm_support::env_flag!("LLRM_CHECK_SLOTS") && llrm_support::env_flag!("LLRM_COUNT_RELAYOUT_SKIPS") {
+        eprintln!("RELAYOUT-CHECKED");
+    }
+    if llrm_support::env_flag!("LLRM_CHECK_SLOTS")
+        && let Some(cell) = reaching_past_its_slot(&machined.body, &again)
+    {
+        panic!("the frame laid again has a cell reaching past its spill slot: {cell:?}");
+    }
     Some((machined, again))
+}
+
+/// A frame cell of `body` longer than the spill slot it is tagged with in
+/// `frame`: it reads or writes the bytes of the next slot.
+fn reaching_past_its_slot(
+    body: &LirBody,
+    frame: &Frame,
+) -> Option<Mem> {
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter_map(|one| one.what.as_ref())
+        .flat_map(|what| what.dests.iter().chain(&what.sources))
+        .filter_map(|place| match place {
+            Loc::Mem(cell) => Some(cell),
+            _ => None,
+        })
+        .find(|cell| {
+            cell.addr.is_some_and(|addr| {
+                addr.space == Space::Frame
+                    && addr.slot_home().is_some_and(|home| {
+                        frame
+                            .capacities
+                            .get(&home)
+                            .is_some_and(|capacity| home != 0 && addr.disp - home + i64::from(cell.width) > *capacity)
+                    })
+            })
+        })
+        .cloned()
 }
 
 /// `body` with every cell moved by `moved`.
@@ -317,6 +354,19 @@ fn replayed(
     again.extents = frame.extents.iter().map(|(start, size)| (start - hole, *size)).collect();
     let mut homes: IndexMap<i64, i64> = IndexMap::default();
     for (key, home) in &frame.slots {
+        // A rounding temporary is laid with the allocas, below them: it moves
+        // by the hole as they do, and is no filler of it.
+        if matches!(
+            key,
+            crate::backend::frame::SlotKey::Named(name, _) if name == "temporary"
+        ) {
+            let moved = home - hole;
+            again.slots.insert(key.clone(), moved);
+            again.capacities.insert(moved, *frame.capacities.get(home)?);
+            again.scratch.insert(moved);
+            homes.insert(*home, moved);
+            continue;
+        }
         match homes.get(home) {
             Some(found) => {
                 again.slots.insert(key.clone(), *found);
@@ -403,6 +453,18 @@ impl Moves<'_> {
         cell: &Mem,
     ) -> Option<Mem> {
         let Some(addr) = cell.addr else { return Some(cell.clone()) };
+        // The replay hands each spill slot out alone, so a cell reaching past
+        // its slot (a `les` over the two word slots of a far pointer) would
+        // read whatever lies next to it in the new layout.
+        if let (Some(frame), Space::Frame, Some(home)) = (self.frame, addr.space, addr.slot_home())
+            && let Some(capacity) = frame.capacities.get(&home).filter(|_| self.homes.contains_key(&home))
+            && addr.disp - home + i64::from(cell.width) > *capacity
+        {
+            if llrm_support::env_flag!("LLRM_COUNT_RELAYOUT_SKIPS") {
+                eprintln!("RELAYOUT-SKIP");
+            }
+            return None;
+        }
         let (addr, offset) = self.addr(addr, cell.offset)?;
         Some(Mem { addr: Some(addr), offset, ..cell.clone() })
     }
@@ -677,6 +739,24 @@ mod tests {
         assert_eq!((incoming.disp, incoming.slot_home()), (8, Some(0)));
     }
 
+    /// A `les` over the two word spill slots of a far pointer was moved by its
+    /// first slot alone, so the second layout read its selector from whatever
+    /// lay after the offset slot: d_faces -O2 loaded ES from an unwritten
+    /// slot and drew the wrong picture (oracle-qcport).
+    #[test]
+    fn test_a_cell_reaching_past_its_spill_slot_is_not_moved() {
+        use super::Moves;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(0);
+        frame.capacities.insert(-12, 2);
+        let homes = [(-12, -20)].into_iter().collect();
+        let moves = Moves { frame: Some(&frame), homes: &homes, hole: 8 };
+        let cell =
+            |width| Mem { through: RegId::EBP, ..Mem::new(Some(Addr::new(Space::Frame, -12).in_slot(-12)), width) };
+        assert!(moves.mem(&cell(2)).is_some(), "premise: a word in its word slot moves");
+        assert_eq!(moves.mem(&cell(4)), None);
+    }
+
     #[global_allocator]
     static COUNTING: llrm_support::alloc_count::Counting = llrm_support::alloc_count::Counting;
 
@@ -704,6 +784,19 @@ mod tests {
         let (moved, made) = llrm_support::alloc_count::counted(|| moves.insn(&one));
         assert!(Arc::ptr_eq(&moved.expect("nothing to refuse"), &one));
         assert!(made <= 2, "{made} allocations for an instruction that does not move");
+    }
+
+    /// `LLRM_CHECK_SLOTS` finds a dword read of a word slot, and passes one of
+    /// a dword slot.
+    #[test]
+    fn test_the_slot_check_finds_a_cell_reaching_past_its_slot() {
+        use crate::backend::frame::Frame;
+        let body = reading(&[(-12, -12)]);
+        let mut frame = Frame::new(0);
+        frame.capacities.insert(-12, 4);
+        assert_eq!(super::reaching_past_its_slot(&body, &frame), None);
+        frame.capacities.insert(-12, 2);
+        assert!(super::reaching_past_its_slot(&body, &frame).is_some());
     }
 
     /// The body of one block that reads each of `disps` once, tagged with the

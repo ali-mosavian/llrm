@@ -12,6 +12,7 @@ use super::fixup;
 const EM_AARCH64: u16 = 183;
 const R_AARCH64_ABS64: u32 = 257;
 const R_AARCH64_ABS32: u32 = 258;
+const R_AARCH64_PREL32: u32 = 261;
 const R_AARCH64_ADR_PREL_PG_HI21: u32 = 275;
 const R_AARCH64_ADD_ABS_LO12_NC: u32 = 277;
 const R_AARCH64_LDST8_ABS_LO12_NC: u32 = 278;
@@ -39,6 +40,8 @@ impl Machine for Arm64 {
         let (kind, width) = match (reloc.kind, reloc.pc_rel, got) {
             (FixupKind::DATA_8, false, _) => (R_AARCH64_ABS64, 8),
             (FixupKind::DATA_4, false, _) => (R_AARCH64_ABS32, 4),
+            // An `.eh_frame` entry's pointer to its function.
+            (FixupKind::DATA_4, true, _) => (R_AARCH64_PREL32, 4),
             (fixup::BRANCH26, _, _) => (R_AARCH64_CALL26, 4),
             (fixup::PAGE21, _, false) => (R_AARCH64_ADR_PREL_PG_HI21, 4),
             (fixup::ADD_IMM12, _, _) => (R_AARCH64_ADD_ABS_LO12_NC, 4),

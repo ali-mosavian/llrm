@@ -212,8 +212,9 @@ entry:
 }
 ";
 
-/// At real mode `rep stosb` names the segment its pointer is in (a value: the
+/// At real mode `rep stos` names the segment its pointer is in (a value: the
 /// group's selector for a global); `REP_STOSB_16` was a refusal in 9 functions.
+/// (A hundred bytes are dwords here: the runtime has no `memset`.)
 #[test]
 fn an_m16_fill_names_its_segment() {
     use crate::model::ir::Operation;
@@ -224,8 +225,8 @@ fn an_m16_fill_names_its_segment() {
     let fill = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
-        .find(|w| w.op == Operation::Fill && w.name.as_deref() == Some("stosb"))
-        .expect("a stosb");
+        .find(|w| w.op == Operation::Fill && w.name.as_deref() == Some("stosd"))
+        .expect("a stosd");
     assert_eq!(fill.sources.len(), 4, "value, count, destination and its segment: {fill:?}");
 }
 
@@ -1055,8 +1056,8 @@ entry:
 fn a_saturating_add_or_subtract_is_the_wrapped_operation_and_a_select() {
     for op in ["uadd", "usub", "sadd", "ssub"] {
         for width in [8, 16, 32, 64] {
-            let ir = format!(
-                "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+            let ir = m16_ir(&format!(
+                "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare i{width} @llvm.{op}.sat.i{width}(i{width}, i{width})
 define i{width} @f(i{width} %a, i{width} %b) {{
 entry:
@@ -1064,7 +1065,7 @@ entry:
   ret i{width} %r
 }}
 "
-            );
+            ));
             let module = llrm_mir::parse::module(&ir).expect("parses");
             let done =
                 selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
@@ -1099,8 +1100,8 @@ fn fixed_point_multiplies_and_saturating_shifts_select_at_every_width() {
             ("ushl.sat", ""),
         ] {
             let scale = if extra.is_empty() { "" } else { ", i32" };
-            let ir = format!(
-                "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+            let ir = m16_ir(&format!(
+                "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare i{width} @llvm.{name}.i{width}(i{width}, i{width}{scale})
 define i{width} @f(i{width} %a, i{width} %b) {{
 entry:
@@ -1108,10 +1109,42 @@ entry:
   ret i{width} %r
 }}
 "
-            );
+            ));
             let module = llrm_mir::parse::module(&ir).expect("parses");
             selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
                 .unwrap_or_else(|e| panic!("{name}{extra} i{width}: {}", e.0));
         }
     }
+}
+
+/// `c.x = a; c.y = b` with `a` and `b` near data and `c` far pointers: each
+/// pointer's segment word was `mov ax, DGROUP` and a store of `ax` (six
+/// instructions, main's lru -Os listing had it four times over); a constant's
+/// store is the immediate's, so the segment's is `mov [c+2], DGROUP`.
+#[test]
+fn the_segment_word_of_a_far_pointer_is_stored_as_an_immediate() {
+    let ir = m16_ir("target datalayout = \"@m16-datalayout@-ni:2:3\"
+@a = internal global [3 x i16] zeroinitializer, align 2
+@b = internal global [3 x i16] zeroinitializer, align 2
+@c = internal global { ptr addrspace(1), ptr addrspace(1) } zeroinitializer, align 2
+define void @f() {
+  store ptr addrspace(1) addrspacecast (ptr @a to ptr addrspace(1)), ptr @c, align 2
+  store ptr addrspace(1) addrspacecast (ptr @b to ptr addrspace(1)), ptr getelementptr inbounds nuw (i8, ptr @c, i16 4), align 2
+  ret void
+}
+");
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let stores: Vec<_> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .collect();
+    assert_eq!(stores.len(), 4, "two offsets and two segments");
+    assert!(
+        stores.iter().all(|w| matches!(w.sources.as_slice(), [crate::model::ir::Loc::Imm(_)])),
+        "each store is an immediate's: {stores:?}"
+    );
 }
