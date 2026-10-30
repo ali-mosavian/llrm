@@ -13,7 +13,7 @@ fn selected(
     let (t, f) = (dag.get_constant(on_true, EVT::I32), dag.get_constant(on_false, EVT::I32));
     let pick = dag.get_select(EVT::I32, test, t, f);
     dag.set_root(pick);
-    legalized(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }, &llrm_x86_m32::M32)
+    legalized(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }, &llrm_x86_m32::M32)
         .unwrap();
     let root = dag.get_root();
     (dag, root)

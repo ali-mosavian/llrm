@@ -15,7 +15,7 @@ fn extracting_a_half_of_a_legal_wide_value_is_a_truncate_of_a_shift() {
         let index = dag.get_constant(which, EVT::I16);
         let half = dag.get_node(ISD::ExtractElement, EVT::I16, &[x, index]);
         dag.set_root(half);
-        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false })
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false })
             .run()
             .unwrap();
         let root = dag.get_root();

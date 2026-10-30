@@ -117,7 +117,7 @@ fn shl_parts_is_a_funnel_shift_a_shift_and_a_cmov_on_bit_five() {
     let parts = dag.get_node_multi(ISD::ShlParts, &[EVT::I32, EVT::I32], &[lo, hi, amount]);
     dag.set_root(SDValue { node: parts.node, res: 1 });
     let tli = p5();
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }).run().unwrap();
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), root.res), (ISD::MergeValues, 1), "the merge of both halves; the combiner drops it");
     let high = dag.operand(root, 1);

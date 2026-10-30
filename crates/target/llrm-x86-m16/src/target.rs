@@ -283,6 +283,10 @@ impl Machine for Dos {
             // `setcc` pair and an `or` that took `bp` addressing out of the
             // loop; split, sieve bq16 -O2 is 8780 -> 8436 memory operands.
             split_merged_conditions: true,
+            // DEVIATE: real mode is priced at the 486, where `imul r16,r16,imm`
+            // is 13 clocks (`mul_r16`) and a `lea` or shift is 1: histo -O2
+            // `x*7+3` was +26% clocks against main's `shl/sub`.
+            i16_multiply_chains: true,
             ..llrm_mir::target::Tuning::PIN
         }
     }

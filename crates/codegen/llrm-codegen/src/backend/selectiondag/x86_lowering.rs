@@ -136,6 +136,14 @@ pub struct X86Lowering {
     pub sse2: bool,
     /// `hasMinSize`: llrm's `-Os` as well as `-Oz`.
     pub min_size: bool,
+    /// DEVIATE: the pin's `combineMul` leaves an `i16` multiply to `imul`
+    /// ([L51209][pin]); a target whose `imul` costs more than a short
+    /// shift/`lea` chain (`OperationCosts::multiply`) sets this and the
+    /// `i32` decomposition below applies to `i16` as well.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51209
+    pub i16_mul_chains: bool,
 }
 
 impl CombineHooks for X86Lowering {
@@ -163,7 +171,7 @@ impl CombineHooks for X86Lowering {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul => combine_mul(dag, node, level, self.min_size),
+            ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains),
             ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
@@ -1712,6 +1720,24 @@ fn log2(value: u128) -> u128 {
     u128::from(127 - value.leading_zeros())
 }
 
+/// `X86ISD::MUL_IMM` by 3, 5 or 9: the `lea` the matcher folds it into. An
+/// `i16` has no such `lea` pattern, so it is written as the add of a shift
+/// (`x + (x << 1)`), which the same matcher turns into one.
+fn mul_imm_node(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    by: u128,
+    vt: EVT,
+) -> SDValue {
+    if vt == EVT::I16 && matches!(by, 3 | 5 | 9) {
+        let amount = dag.get_constant(log2(by - 1), EVT::I8);
+        let shifted = dag.get_node(ISD::Shl, vt, &[x, amount]);
+        return dag.get_node(ISD::Add, vt, &[x, shifted]);
+    }
+    let by = dag.get_constant(by, vt);
+    dag.get_node(x86isd::MUL_IMM, vt, &[x, by])
+}
+
 /// `combineMulSpecial`: `x * c` for the constants that are a `lea` and a
 /// shift or an add.
 fn combine_mul_special(
@@ -1721,17 +1747,14 @@ fn combine_mul_special(
     vt: EVT,
 ) -> Option<SDValue> {
     let shl_add_or_sub = |dag: &mut SelectionDAG, mult: u128, shift: u128, add: bool| {
-        let by = dag.get_constant(mult, vt);
-        let product = dag.get_node(x86isd::MUL_IMM, vt, &[x, by]);
+        let product = mul_imm_node(dag, x, mult, vt);
         let amount = dag.get_constant(shift, EVT::I8);
         let shifted = dag.get_node(ISD::Shl, vt, &[product, amount]);
         dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[shifted, x])
     };
     let mul_mul_add = |dag: &mut SelectionDAG, first: u128, second: u128| {
-        let a = dag.get_constant(first, vt);
-        let once = dag.get_node(x86isd::MUL_IMM, vt, &[x, a]);
-        let b = dag.get_constant(second, vt);
-        let twice = dag.get_node(x86isd::MUL_IMM, vt, &[once, b]);
+        let once = mul_imm_node(dag, x, first, vt);
+        let twice = mul_imm_node(dag, once, second, vt);
         dag.get_node(ISD::Add, vt, &[twice, x])
     };
     match amount {
@@ -1774,9 +1797,10 @@ fn combine_mul(
     node: SDValue,
     level: CombineLevel,
     min_size: bool,
+    i16_chains: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if vt != EVT::I32 {
+    if vt != EVT::I32 && !(vt == EVT::I16 && i16_chains) {
         return None;
     }
     let (x, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
@@ -1792,17 +1816,14 @@ fn combine_mul(
     if is_pow2(bits) || min_size || level == CombineLevel::BeforeLegalizeTypes {
         return None;
     }
-    let signed = i128::from(bits as u32 as i32);
+    let signed = if vt == EVT::I16 { i128::from(bits as u16 as i16) } else { i128::from(bits as u32 as i32) };
     let abs = signed.unsigned_abs();
     let negate = |dag: &mut SelectionDAG, value: SDValue| if signed < 0 { dag.get_negative(value, vt) } else { value };
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
         let by = dag.get_constant(by, EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
     };
-    let mul_imm = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
-        let by = dag.get_constant(by, vt);
-        dag.get_node(x86isd::MUL_IMM, vt, &[value, by])
-    };
+    let mul_imm = |dag: &mut SelectionDAG, value: SDValue, by: u128| mul_imm_node(dag, value, by, vt);
     if matches!(abs, 3 | 5 | 9) {
         let product = mul_imm(dag, x, abs);
         return Some(negate(dag, product));

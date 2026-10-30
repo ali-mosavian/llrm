@@ -10,7 +10,7 @@ fn legalized(
     let mut dag = dag();
     let constant = dag.get_constant_fp(bits, vt);
     dag.set_root(constant);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }).run().unwrap();
     let root = dag.get_root();
     (dag, root)
 }
@@ -60,6 +60,6 @@ fn equal_constants_share_a_pool_entry() {
     let ext = dag.get_node(ISD::FpExtend, EVT::Simple(MVT::F64), &[b]);
     let both = dag.get_node(ISD::FAdd, EVT::Simple(MVT::F64), &[sum, ext]);
     dag.set_root(both);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }).run().unwrap();
     assert_eq!(dag.constant_pool.len(), 2, "0.1 once, 3.0f once");
 }

@@ -41,7 +41,7 @@ fn legalized_by(
     let x = load(&mut dag, vt);
     let count = dag.get_node(op, vt, &[x]);
     dag.set_root(count);
-    DagLegalizer::new(&mut dag, tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+    DagLegalizer::new(&mut dag, tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false })
         .run()
         .expect("legalizes");
     let root = dag.get_root();
@@ -121,7 +121,7 @@ fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
     let abs = dag.get_node(ISD::Abs, EVT::I32, &[x]);
     dag.set_root(abs);
     let tli = TargetLowering::x86_32(Features { cmov: false, ..Features::default() }, MVT::I32);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false })
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false })
         .run()
         .expect("legalizes");
 

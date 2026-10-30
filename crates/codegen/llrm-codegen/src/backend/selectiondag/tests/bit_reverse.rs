@@ -74,7 +74,7 @@ fn the_expansion_reverses_the_bits() {
         let x = dag.get_register(vt, 5);
         let node = dag.get_node(ISD::BitReverse, vt, &[x]);
         dag.set_root(node);
-        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false })
             .run()
             .expect("legalizes");
         let root = dag.get_root();

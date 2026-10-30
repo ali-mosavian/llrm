@@ -10,7 +10,7 @@ fn lowered(
     let (x, n) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I8, 6));
     let root = build(&mut dag, x, n);
     dag.set_root(root);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }).run().unwrap();
     let root = dag.get_root();
     (dag, root, [x, n])
 }

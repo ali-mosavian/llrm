@@ -34,6 +34,10 @@ pub struct Tuning {
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
+    /// An `i16` multiply by a constant is the shift/`lea` chain the pin gives
+    /// an `i32` one, not an `imul`; false: the pin's `combineMul`, which
+    /// leaves the `i16` alone (X86ISelLowering.cpp L51209).
+    pub i16_multiply_chains: bool,
 }
 
 impl Tuning {
@@ -50,6 +54,7 @@ impl Tuning {
         unroll_max_percent_threshold_boost: None,
         inline_threshold: None,
         split_merged_conditions: false,
+        i16_multiply_chains: false,
     };
 }
 

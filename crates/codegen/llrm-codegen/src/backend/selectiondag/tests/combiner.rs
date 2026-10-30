@@ -39,7 +39,7 @@ fn x86(
     dag: &mut SelectionDAG,
     level: CombineLevel,
 ) {
-    DagCombiner::new(dag, &mut X86Lowering { cmov: false, sse2: false, min_size: false }, level).run();
+    DagCombiner::new(dag, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }, level).run();
 }
 
 /// `x * 1` is `x` and `x * 8` is `x << 3`: `getNode` keeps the multiply
@@ -128,6 +128,53 @@ fn multiply_by_other_constants_is_leas_shifts_and_adds() {
     assert_eq!(shape(11), (ISD::Add, ISD::Shl));
     assert_eq!(shape(-5).0, ISD::Sub);
     assert_eq!(shape(7), (ISD::Sub, ISD::Shl));
+}
+
+/// A 486 `imul r16,r16,imm` is 13 clocks: `histo` at -O2 priced `x*7+3` as
+/// one (+26% clocks against main's `shl/sub`). The pin leaves an `i16`
+/// multiply alone; a target whose multiply is dear (`i16_mul_chains`) gets the
+/// `i32` chains (7 is `(x << 3) - x`), and `minsize` keeps the `imul`.
+#[test]
+fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
+    let shape = |c: u128, chains: bool, min_size: bool| {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I16, 1);
+        let k = dag.get_constant(c, EVT::I16);
+        let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
+        dag.set_root(product);
+        let mut lowering = X86Lowering { cmov: false, sse2: false, min_size, i16_mul_chains: chains };
+        DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
+        dag.opcode(dag.get_root())
+    };
+    // An `i16` has no `lea` pattern for `MUL_IMM`: a chain holding one still
+    // ends in an `imul` (recsum c -O2: `x*11` was `imul 5; add; add`).
+    let holds = |c: u128, op: ISD| {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I16, 1);
+        let k = dag.get_constant(c, EVT::I16);
+        let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
+        dag.set_root(product);
+        let mut lowering = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: true };
+        DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
+        let mut todo = vec![dag.get_root()];
+        while let Some(value) = todo.pop() {
+            if dag.opcode(value) == op {
+                return true;
+            }
+            todo.extend(dag.node(value).ops.iter().copied().filter(|v| dag.opcode(*v) != ISD::Load));
+        }
+        false
+    };
+    for c in [3, 5, 9, 10, 11, 12, 15, 24] {
+        assert!(!holds(c, x86isd::MUL_IMM), "x*{c} kept a MUL_IMM");
+        assert!(!holds(c, ISD::Mul), "x*{c} kept a Mul");
+    }
+    for c in [7, 10, 12, 24, 3, 5, 9] {
+        assert_ne!(shape(c, true, false), ISD::Mul, "x*{c} stayed an imul");
+        assert_eq!(shape(c, false, false), ISD::Mul, "x*{c} left the default");
+        assert_eq!(shape(c, true, true), ISD::Mul, "x*{c} grew a minsize body");
+    }
+    assert_eq!(shape(7, true, false), ISD::Sub);
 }
 
 /// A lowering that returns two values (a double-width shift) leaves them as one
