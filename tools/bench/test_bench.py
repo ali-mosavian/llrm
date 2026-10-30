@@ -708,11 +708,13 @@ def test_the_merge_fails_when_the_base_slices_measured_different_bases(tmp_path,
 
 def test_a_base_slice_measures_its_share_of_the_programs_and_writes_base_i(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(bench.shards, "of", lambda index, count: ["fib"] if (index, count) == (2, 3) else [])
+    monkeypatch.setattr(bench, "slice_stamp_of", lambda *a: {"tree": "t"})
+    monkeypatch.setattr(bench.basecounts, "CACHE", tmp_path / "cache")
     monkeypatch.setattr(sys, "argv", ["bench.py", "--shard", "base:2/3", "--json", str(tmp_path / "out"), "--work", str(tmp_path)])
     monkeypatch.setattr(bench, "measure_all", lambda *a, **k: (_ for _ in ()).throw(AssertionError("the base leg measures no head")))
     monkeypatch.setattr(bench, "base_rows", lambda args, names=None: ({("fib", "c", "O2"): {"instructions": 4}}, {"fib"}, "b" * 40) if names == ["fib"] else (_ for _ in ()).throw(AssertionError(names)))
     assert bench.main() == 0
-    assert json.loads((tmp_path / "out/base-2.json").read_text()) == {"base": {"fib/c/O2": {"instructions": 4}}, "same": ["fib"], "base_sha": "b" * 40, "programs": ["fib"]}
+    assert json.loads((tmp_path / "out/base-2.json").read_text()) == {"base": {"fib/c/O2": {"instructions": 4}}, "same": ["fib"], "base_sha": "b" * 40, "programs": ["fib"], "source": "measured"}
     assert not (tmp_path / "out/base.json").exists()
 
 
@@ -1036,3 +1038,46 @@ def test_the_first_stage_line_says_how_many_programs_and_how_many_cores(monkeypa
     monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
     bench.main()
     assert f"measuring 2 benchmarks at O2 Os, {len(os.sched_getaffinity(0))} usable of {os.cpu_count()} cores" in capsys.readouterr().err
+
+
+def _slice_run(monkeypatch, tmp_path, stamp, measured):
+    monkeypatch.setattr(bench.shards, "of", lambda index, count: ["fib"])
+    monkeypatch.setattr(bench, "slice_stamp_of", lambda *a: stamp)
+    monkeypatch.setattr(bench.basecounts, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(bench, "base_rows", lambda args, names=None: measured.append(names) or ({("fib", "c", "O2"): {"instructions": 4}}, {"fib"}, "b" * 40))
+    monkeypatch.setattr(sys, "argv", ["bench.py", "--shard", "base:1/3", "--json", str(tmp_path / "out"), "--work", str(tmp_path)])
+    assert bench.main() == 0
+    return json.loads((tmp_path / "out/base-1.json").read_text())
+
+
+def test_a_base_slice_stored_under_the_same_stamp_is_restored_and_measures_nothing(monkeypatch, tmp_path):
+    """Run 8 measured the same base three times, 22-52 minutes each, because no cache ever hit."""
+    measured = []
+    assert _slice_run(monkeypatch, tmp_path, {"tree": "t"}, measured)["source"] == "measured"
+    again = _slice_run(monkeypatch, tmp_path, {"tree": "t"}, measured)
+    assert again["source"] == "restored" and again["base"] == {"fib/c/O2": {"instructions": 4}} and measured == [["fib"]], "measured once"
+
+
+def test_a_base_slice_stored_under_another_stamp_is_rejected_and_measured_again(monkeypatch, tmp_path):
+    """A stale hit reads as zero regressions: another base tree, tool version or edited program must not be served."""
+    measured = []
+    _slice_run(monkeypatch, tmp_path, {"tree": "t", "tools": {"LLRM_OW": "ow-1"}}, measured)
+    got = _slice_run(monkeypatch, tmp_path, {"tree": "t", "tools": {"LLRM_OW": "ow-2"}}, measured)
+    assert got["source"] == "measured" and len(measured) == 2
+
+
+def test_the_merge_says_how_many_base_slices_were_restored_and_how_many_measured(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(bench, "judge", lambda *a: [])
+    monkeypatch.setattr(bench, "standing", lambda *a: [])
+    for i in (1, 2):
+        shard_file(tmp_path, i)
+        base_slice(tmp_path, i)
+    data = json.loads((tmp_path / "base-2.json").read_text())
+    (tmp_path / "base-2.json").write_text(json.dumps({**data, "source": "restored"}))
+    assert bench.merge(tmp_path, 2, ["O2"], False) == 0
+    assert "base counts: 1 slices restored, 1 measured" in capsys.readouterr().out
+
+
+def test_ci_restores_and_saves_each_base_slice_under_its_stamp_key():
+    workflow = (bench.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "basecounts.py slicekey ${{ matrix.group }}" in workflow and "steps.baseslicecache.outputs.cache-hit != 'true'" in workflow
