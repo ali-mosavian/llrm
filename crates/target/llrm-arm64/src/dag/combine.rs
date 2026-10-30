@@ -237,3 +237,99 @@ pub fn conditional_sub(
     let (on_true, on_false) = if zero_on_true { (x, diff) } else { (diff, x) };
     Some(dag.get_node(ISD::Target(a64::CSEL), vt, &[on_true, on_false, cc, flags]))
 }
+
+fn is_shifted_mask(x: u64) -> bool {
+    x != 0 && {
+        let filled = x | (x - 1);
+        filled.wrapping_add(1) & filled == 0
+    }
+}
+
+/// `AArch64TargetLowering::targetShrinkDemandedConstant` and `optimizeLogicalImm`: the undemanded
+/// bits of an `and`/`or`/`xor` mask are set so it is a bitmask immediate, and the node becomes the
+/// `ANDWri`-family machine node, so no `MOVi32imm` is needed. `None` is "not handled".
+pub fn shrink_demanded_constant(
+    dag: &mut SelectionDAG,
+    op: SDValue,
+    demanded: u128,
+    level: CombineLevel,
+) -> Option<Option<SDValue>> {
+    use llrm_dagisel::generated::aarch64::ids::opcode as machine;
+    // Delay this optimization to as late as possible (`TLO.LegalOps`).
+    if level < CombineLevel::AfterLegalizeDag {
+        return None;
+    }
+    let vt = dag.value_type(op);
+    let size = vt.size_in_bits();
+    if (size != 32 && size != 64) || !vt.is_integer() {
+        return None;
+    }
+    let orig_mask = if size == 64 { u64::MAX } else { (1u64 << size) - 1 };
+    if demanded as u64 & orig_mask == orig_mask {
+        return None;
+    }
+    let new_opcode = match (dag.opcode(op), size) {
+        (ISD::And, 32) => machine::ANDWri,
+        (ISD::And, _) => machine::ANDXri,
+        (ISD::Or, 32) => machine::ORRWri,
+        (ISD::Or, _) => machine::ORRXri,
+        (ISD::Xor, 32) => machine::EORWri,
+        (ISD::Xor, _) => machine::EORXri,
+        _ => return None,
+    };
+    let old = dag.constant(dag.operand(op, 1))? as u64;
+    let mut imm = old;
+    let mut mask = orig_mask;
+    if imm == 0 || imm == mask || crate::mc::immediate::logical(imm & mask, size).is_some() {
+        return None;
+    }
+    let mut elt = size;
+    let mut demanded = demanded as u64;
+    // Clear bits that are not demanded.
+    imm &= demanded;
+    let mut new;
+    loop {
+        // The non-demanded bits take the value of the preceding demanded bits, so the immediate
+        // switches between 0 and 1 as little as possible.
+        let non_demanded = !demanded;
+        let inverted = !imm & demanded;
+        let rotated = ((inverted << 1) | ((inverted >> (elt - 1)) & 1)) & non_demanded;
+        let sum = rotated.wrapping_add(non_demanded);
+        let carry = non_demanded & !sum & (1u64 << (elt - 1)) != 0;
+        let ones = sum.wrapping_add(u64::from(carry)) & non_demanded;
+        new = (imm | ones) & mask;
+        if is_shifted_mask(new) || is_shifted_mask(!(new | !mask)) {
+            break;
+        }
+        if elt == 2 {
+            return None;
+        }
+        elt /= 2;
+        mask >>= elt;
+        let hi = imm >> elt;
+        let demanded_hi = demanded >> elt;
+        if (imm ^ hi) & (demanded & demanded_hi) & mask != 0 {
+            return None;
+        }
+        imm |= hi;
+        demanded |= demanded_hi;
+    }
+    // Replicate the element across the register width.
+    while elt < size {
+        new |= new << elt;
+        elt *= 2;
+    }
+    if new == old {
+        return None;
+    }
+    let x = dag.operand(op, 0);
+    // All zeros or all ones is left to the target-independent combines; otherwise a machine node
+    // keeps them from undoing this.
+    if new == 0 || new == orig_mask {
+        let constant = dag.get_constant(u128::from(new), vt);
+        return Some(Some(dag.get_node(dag.opcode(op), vt, &[x, constant])));
+    }
+    let encoded = crate::mc::immediate::logical(new, size)?;
+    let encoded = dag.get_constant_with(u128::from(encoded), vt, true, false);
+    Some(Some(dag.get_node(ISD::Machine(u32::from(new_opcode)), vt, &[x, encoded])))
+}

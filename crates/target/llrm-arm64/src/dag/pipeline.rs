@@ -220,6 +220,16 @@ impl CombineHooks for Aarch64Lowering {
         matches!(op, ISD::Mul | ISD::Sub | ISD::And | ISD::Or | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr)
     }
 
+    fn target_shrink_demanded_constant(
+        &mut self,
+        dag: &mut SelectionDAG,
+        op: SDValue,
+        demanded: u128,
+        level: CombineLevel,
+    ) -> Option<Option<SDValue>> {
+        super::combine::shrink_demanded_constant(dag, op, demanded, level)
+    }
+
     fn perform_dag_combine(
         &mut self,
         dag: &mut SelectionDAG,

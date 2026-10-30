@@ -854,3 +854,12 @@ fn a_promoted_byte_load_reads_one_byte() {
     let ir = "@a = global i8 0\ndefine void @f() {\n  %l = load i8, ptr @a, align 1\n  %a = add i8 %l, 1\n  store i8 %a, ptr @a, align 1\n  ret void\n}";
     assert_eq!(selected(ir).unwrap(), [["ADRP", "LDRBBui", "ADDWri", "STRBBui", "RET_ReallyLR"]]);
 }
+
+/// `store i8 ((zext (load i8 @a)) & 143)` selected `MOVi32imm` and `ANDWrr`: 143 is no bitmask
+/// immediate and nothing shrank it to the 8 bits the store reads. The pin sets the other bits of the
+/// mask (`optimizeLogicalImm`): `ANDWri` with 0xFFFFFF8F.
+#[test]
+fn a_mask_the_store_reads_only_low_bits_of_becomes_a_bitmask_immediate() {
+    let ir = "@a = global i8 0\ndefine void @f() {\n  %l = load i8, ptr @a, align 1\n  %z = zext i8 %l to i32\n  %m = and i32 %z, 143\n  %r = trunc i32 %m to i8\n  store i8 %r, ptr @a, align 1\n  ret void\n}";
+    assert_eq!(selected(ir).unwrap(), [["ADRP", "LDRBBui", "ANDWri", "STRBBui", "RET_ReallyLR"]]);
+}

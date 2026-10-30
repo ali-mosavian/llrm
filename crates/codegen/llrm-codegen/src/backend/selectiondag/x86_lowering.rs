@@ -181,6 +181,7 @@ impl CombineHooks for X86Lowering {
         dag: &mut SelectionDAG,
         op: SDValue,
         demanded: u128,
+        _level: CombineLevel,
     ) -> Option<Option<SDValue>> {
         x86_shrink_demanded_constant(dag, op, demanded)
     }
