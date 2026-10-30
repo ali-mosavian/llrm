@@ -9,7 +9,7 @@ use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Instruction, Operand};
 use llrm_mir::opcode::{Attribute, CallInfo};
 
-use super::super::dag::{MemBase, MemInfo, NodeData, SDValue};
+use super::super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue};
 use super::super::isd::ISD;
 use super::super::mvt::EVT;
 use super::super::x86isd;
@@ -1082,7 +1082,11 @@ impl Builder<'_> {
         let count = self.dag.get_zext_or_trunc(size, pointer);
         let whole = super::super::known_bits::known_bits(&self.dag, size).zero.trailing_ones();
         let block = match self.dag.constant(value) {
-            Some(_) => (1u64 << whole.min(2)).min(if self.has_opt_size() { word } else { word.max(4) }),
+            // A word in 32-bit code is an operand-size prefix and no gain.
+            Some(_) => match (1u64 << whole.min(2)).min(if self.has_opt_size() { word } else { word.max(4) }) {
+                2 if word == 4 => 1,
+                block => block,
+            },
             _ => 1,
         };
         let (acc, val, count) = match (block, self.dag.constant(value)) {
@@ -1093,11 +1097,22 @@ impl Builder<'_> {
                 if block >= 4 {
                     pattern |= pattern << 16;
                 }
-                let shift = self.dag.get_constant(u128::from(block.trailing_zeros()), EVT::I8);
+                let lg = block.trailing_zeros();
+                let shift = self.dag.get_constant(u128::from(lg), EVT::I8);
+                // `n << lg` with no unsigned wrap is `n << lg` bytes whole: the
+                // count is `n`, with no shift pair (`add cx, cx ; shr cx, 1`).
+                let peeled = (self.dag.opcode(size) == ISD::Shl
+                    && self.dag.node(size).flags.0 & SDNodeFlags::NO_UNSIGNED_WRAP.0 != 0
+                    && self.dag.constant(self.dag.operand(size, 1)) == Some(u128::from(lg)))
+                .then(|| self.dag.operand(size, 0));
+                let counted = match peeled {
+                    Some(base) => self.dag.get_zext_or_trunc(base, pointer),
+                    None => self.dag.get_node(ISD::Srl, pointer, &[count, shift]),
+                };
                 (
                     self.arch.register_named(if block == 2 { "ax" } else { "eax" }),
                     self.dag.get_constant(u128::from(pattern), EVT::integer(block as u32 * 8)),
-                    self.dag.get_node(ISD::Srl, pointer, &[count, shift]),
+                    counted,
                 )
             }
             _ => unreachable!("a block past a byte has a constant value"),

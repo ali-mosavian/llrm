@@ -1491,3 +1491,75 @@ fn the_unit_of_a_dynamic_fill_follows_the_known_bits_of_its_size() {
 fn a_constant_fill_byte_is_splatted_into_the_unit() {
     assert_eq!(dynamic_fill_unit_of("%s = shl nuw i16 %n, 1", 7, "486").as_deref(), Some("2"));
 }
+
+/// sieve m32 -O2 grew 14 bytes when a `memset` of `n << 1` became `rep stosw`
+/// (an operand-size prefix in 32-bit code, and a shift pair): a word is no unit
+/// there. Returns the register width of the fill, and the names of the shifts
+/// that make its count.
+fn fill_at_m32(shift: u32) -> (Option<String>, usize) {
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+define void @f(ptr %p, i32 %n) {{
+entry:
+  %s = shl nuw i32 %n, {shift}
+  call void @llvm.memset.p0.i32(ptr %p, i8 0, i32 %s, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats = || insns.iter().filter_map(|i| i.what.as_ref());
+    let unit = whats()
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(
+            |w| w.sources
+                .iter()
+                .find_map(
+                    |source| match source {
+                        crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                        _ => None,
+                    },
+                ),
+        );
+    (unit, whats().filter(|w| matches!(w.name.as_deref(), Some("shr" | "shl" | "sar"))).count())
+}
+
+#[test]
+fn at_m32_a_fill_of_whole_words_stays_bytes() {
+    assert_eq!(fill_at_m32(1).0.as_deref(), Some("1"));
+}
+
+#[test]
+fn at_m32_a_fill_of_whole_dwords_is_rep_stosd_with_no_shift() {
+    assert_eq!(fill_at_m32(2), (Some("4".to_owned()), 0));
+}
+
+/// `n << 1` bytes of zero at m16 is `cx = n`: the shift that built the size and
+/// the one that halves it cancel (`add cx, cx ; shr cx, 1` was 2 bytes + 2).
+#[test]
+fn a_fill_of_n_shl_1_counts_n_words_with_no_shift_pair() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(ptr %p, i16 %n) {
+entry:
+  %s = shl nuw i16 %n, 1
+  call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 %s, i1 false)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let shifts = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.name.as_deref(), Some("shr" | "shl" | "sar" | "add")))
+        .count();
+    assert_eq!(shifts, 0);
+}
