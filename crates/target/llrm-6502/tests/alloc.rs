@@ -2317,3 +2317,18 @@ define i16 @caller3() {
         assert_eq!(((hi << 8) | lo) as u32, want, "{name}");
     }
 }
+
+/// A fill of a size known only at run time panicked in the selector ("calling.toml names no register cx"):
+/// the generic builder emitted x86's `rep stosb`. It is a call of `memset`.
+#[test]
+fn a_fill_of_unknown_size_is_a_call_of_memset() {
+    let ir = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @fill(ptr %p, i8 %c, i16 %n) {
+  call void @llvm.memset.p0.i16(ptr %p, i8 %c, i16 %n, i1 false)
+  ret void
+}";
+
+    let text = compile(ir, "fill");
+
+    assert!(text.contains("jsr memset") || text.contains("jsr _memset"), "no call of memset in:\n{text}");
+}

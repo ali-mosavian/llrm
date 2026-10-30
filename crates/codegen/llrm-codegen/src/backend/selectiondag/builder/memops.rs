@@ -1130,8 +1130,15 @@ impl Builder<'_> {
     ) -> Result<SDValue, Refused> {
         // The routine's symbol and calling convention are the target fact's
         // (`options.libcalls`), as `memcpycall` applies them to a `memcpy`.
-        let Some((_, convention, routine_symbol)) =
-            self.target.libcalls.as_ref().and_then(|calls| calls.iter().find(|(routine, ..)| routine == name)).cloned()
+        // DEVIATE: a target with a calling hook names none: the routine is
+        // called as the IR would call `name`, and the hook places the arguments.
+        let Some((_, convention, routine_symbol)) = self
+            .target
+            .libcalls
+            .as_ref()
+            .and_then(|calls| calls.iter().find(|(routine, ..)| routine == name))
+            .cloned()
+            .or_else(|| self.calling().map(|_| (name.to_string(), 0, name.to_string())))
         else {
             return Err(Refused("library call whose symbol and convention are the target fact's"));
         };

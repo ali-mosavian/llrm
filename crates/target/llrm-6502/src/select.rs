@@ -418,6 +418,7 @@ fn location(
             let text = global.name.as_deref().ok_or("an unnamed global")?;
             Ok(Operand::Label(if offset == 0 { text.to_owned() } else { format!("{text}{offset:+}") }))
         }
+        NodeData::Symbol(id) => Ok(Operand::Label(one.dag.symbol_names[id as usize].clone())),
         NodeData::PhysReg(id) => Ok(Operand::Reg(REGISTER_INFO.name(id).ok_or("a register with no name")?.to_owned())),
         NodeData::Register(number) if number < FIRST_VIRTUAL => {
             let id = MosPins.phys_reg(number as u16).ok_or_else(|| format!("pin register {number} is not ours"))?;

@@ -223,6 +223,8 @@ let isCall = 1 in {
   // The 6502 has no indirect jsr: the return address and target-1 are pushed and an rts enters the callee.
   def JSRI : MOSInst<(outs), (ins Imag16:$p), "jsr ($p)", [(MOScall i16:$p)]>;
 }
+// a routine the selector names itself (the libcall of a fill or copy of unknown size)
+def : Pat<(MOScall texternalsym:$t), (JSR texternalsym:$t)>;
 
 // The call sequence's stack adjustment, resolved by the frame code once the frame is laid out.
 let Defs = [RS0, P], Uses = [RS0] in {

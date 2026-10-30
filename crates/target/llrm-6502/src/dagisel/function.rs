@@ -39,6 +39,7 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
         jump_tables: false,
+        string_instructions: false,
         target_nodes: Some(TargetNodes {
             call: CALL,
             ret: RET_GLUE,

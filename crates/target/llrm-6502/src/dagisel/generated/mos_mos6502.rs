@@ -8,7 +8,7 @@ use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue};
 use llrm_dagisel::matcher::{Emit, Matcher::*, Slice, Table, Vt};
 use crate::dagisel::predicates;
 
-pub static ITEMS: [llrm_dagisel::matcher::Matcher; 745] = [
+pub static ITEMS: [llrm_dagisel::matcher::Matcher; 751] = [
     SwitchOpcode,
     OpcodeCase { size: 47, opcode: 317 },
     RecordMemRef,
@@ -509,17 +509,23 @@ pub static ITEMS: [llrm_dagisel::matcher::Matcher; 745] = [
     RecordChild(1),
     EmitConvertToTarget(0),
     MorphNodeTo(Emit { opcode: 383, flags: 0, vts: [Vt(5), Vt(0)], num_vts: 1, operands: Slice { start: 35, len: 2 } }),
-    OpcodeCase { size: 14, opcode: 24577 },
+    OpcodeCase { size: 20, opcode: 24577 },
     RecordNode,
     CaptureGlueInput,
     RecordChild(1),
     Scope,
-    Alt(5),
+    Alt(11),
     MoveChild(1),
-    CheckOpcode(39),
+    SwitchOpcode,
+    OpcodeCase { size: 3, opcode: 39 },
     MoveParent,
     EmitMergeInputChains(Slice { start: 0, len: 1 }),
     MorphNodeTo(Emit { opcode: 363, flags: 39, vts: [Vt(0), Vt(0)], num_vts: 0, operands: Slice { start: 24, len: 1 } }),
+    OpcodeCase { size: 3, opcode: 44 },
+    MoveParent,
+    EmitMergeInputChains(Slice { start: 0, len: 1 }),
+    MorphNodeTo(Emit { opcode: 363, flags: 39, vts: [Vt(0), Vt(0)], num_vts: 0, operands: Slice { start: 24, len: 1 } }),
+    OpcodeCase { size: 0, opcode: 0 },
     Alt(2),
     EmitMergeInputChains(Slice { start: 0, len: 1 }),
     MorphNodeTo(Emit { opcode: 364, flags: 39, vts: [Vt(0), Vt(0)], num_vts: 0, operands: Slice { start: 24, len: 1 } }),
