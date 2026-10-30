@@ -1333,8 +1333,8 @@ fn the_debug_flavor_asked_for_reaches_the_object() {
         let (built, _) = compiled(&flags(&["-m32", flag, "-fobject-format=omf"]), &text, "dbgfix").unwrap();
         built.debug.expect("debug info").format
     };
-    assert_eq!(asked("-gdwarf-2"), llrm_object::debug::Format::Dwarf { version: 2 });
-    assert_eq!(asked("-gcodeview"), llrm_object::debug::Format::CodeView);
+    assert_eq!(asked("-gdwarf-2"), llrm_debug::Format::Dwarf { version: 2 });
+    assert_eq!(asked("-gcodeview"), llrm_debug::Format::CodeView);
 }
 
 /// Clang's file MD5 reached a `-gdwarf-2` object and the writer refused it
@@ -2074,10 +2074,10 @@ fn a_variable_made_of_several_values_has_an_expression_location() {
     )
     .unwrap();
     let debug = object.debug.expect("debug info");
-    let made = |location: &llrm_object::debug::Location| match location {
-        llrm_object::debug::Location::Expression { .. } => true,
-        llrm_object::debug::Location::List(entries) => {
-            entries.iter().any(|(_, one)| matches!(one, llrm_object::debug::Location::Expression { .. }))
+    let made = |location: &llrm_debug::Location| match location {
+        llrm_debug::Location::Expression { .. } => true,
+        llrm_debug::Location::List(entries) => {
+            entries.iter().any(|(_, one)| matches!(one, llrm_debug::Location::Expression { .. }))
         }
         _ => false,
     };

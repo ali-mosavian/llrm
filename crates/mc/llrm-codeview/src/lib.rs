@@ -6,7 +6,7 @@
 pub mod symbols;
 mod types;
 
-use llrm_object::debug::Info;
+use llrm_debug::Info;
 use llrm_object::{Object, Reloc, Unsupported};
 
 /// `CV_SIGNATURE_C13`: what opens both sections.
@@ -100,9 +100,9 @@ pub(crate) fn record(
 /// dropped.
 pub fn expanded(
     object: &Object,
+    info: &llrm_debug::Info,
     machine: Option<u16>,
 ) -> Result<Object, Unsupported> {
-    let Some(info) = &object.debug else { return Ok(object.clone()) };
     let encoded = encode(object, info, machine)?;
     let section = |name: &str, one: Section| llrm_object::Section {
         name: name.to_owned(),
@@ -120,7 +120,7 @@ pub fn expanded(
     let mut sections = object.sections.clone();
     sections.push(section(".debug$S", encoded.symbols));
     sections.push(section(".debug$T", encoded.types));
-    Ok(Object { sections, debug: None, ..object.clone() })
+    Ok(Object { sections, ..object.clone() })
 }
 
 /// `object`'s debug sections.

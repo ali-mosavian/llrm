@@ -2,8 +2,8 @@
 //! the AArch64 DWARF register numbers: `x0`..`x30` are 0..30, `sp` 31 and
 //! `v0`..`v31` 64..95).
 
+use llrm_debug::FrameRow;
 use llrm_dwarf::eh_frame::{EhTarget, Pointer};
-use llrm_object::debug::FrameRow;
 
 /// The DWARF number of the frame pointer, `x29`.
 pub const FP: u16 = 29;

@@ -651,7 +651,7 @@ fn a_loop_of_memset_patterns_is_not_fully_unrolled() {
 /// 32 bytes below the canonical frame address.
 #[test]
 fn a_variable_in_the_frame_has_its_place_below_the_frame_address() {
-    use llrm_object::debug::Location;
+    use llrm_debug::Location;
     let object =
         driver::object_with(include_str!("data/debug_o0.ll"), Platform::Linux, "debug_o0", driver::Level::O0, true)
             .expect("lowers");
@@ -667,8 +667,10 @@ fn a_variable_in_the_frame_has_its_place_below_the_frame_address() {
             ("t", &Location::Frame { disp: -24 })
         ]
     );
-    use llrm_object::ObjectTarget;
-    let elf = llrm_arm64::mc::Arm64Objects.write_object("elf", &object).expect("the DWARF writer takes it");
+    use llrm_debug::DebugObjectTarget;
+    let elf = llrm_arm64::mc::Arm64Objects
+        .write_described("elf", &object.object, object.debug.as_ref())
+        .expect("the DWARF writer takes it");
     assert!(elf.windows(8).any(|window| window == b".debug_i"), "a .debug_info section");
 }
 

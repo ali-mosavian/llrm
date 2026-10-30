@@ -1134,7 +1134,7 @@ pub enum NoteValue {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct NoteExpr {
     pub args: Vec<NoteArg>,
-    pub ops: Vec<llrm_object::debug::ExprOp>,
+    pub ops: Vec<llrm_debug::ExprOp>,
     /// The result is the value, not the address of it.
     pub value: bool,
 }

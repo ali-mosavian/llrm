@@ -149,7 +149,7 @@ fn a_debug_member_with_half_a_bit_field_is_refused() {
 /// had no `formal_parameter`.
 #[test]
 fn the_model_tells_parameters_from_locals_and_places_the_code() {
-    use llrm_object::debug::Kind;
+    use llrm_debug::Kind;
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debug.cgs")).expect("reads");
     let machine =
         llrm_codegen::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
@@ -164,7 +164,7 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
         llrm_target::Target::objects(&llrm_x86_m32::M32),
     )
     .expect("builds");
-    let info = object.debug.expect("-g's information rides on the object");
+    let info = object.debug.clone().expect("-g's information rides on the object");
     let f = info.functions.iter().find(|one| one.name == "f").expect("f");
     let kinds: Vec<(&str, Kind)> = f.variables.iter().map(|one| (one.name.as_str(), one.kind)).collect();
     assert_eq!(

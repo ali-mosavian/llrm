@@ -1,4 +1,4 @@
-//! [`llrm_object::debug::Info`] as DWARF 4 or 5: `.debug_abbrev`,
+//! [`llrm_debug::Info`] as DWARF 4 or 5: `.debug_abbrev`,
 //! `.debug_info`, `.debug_str`, `.debug_line` (and `.debug_line_str` in 5),
 //! `.debug_aranges`. A format of object file calls [`expanded`] and writes the
 //! result as it writes any object: the sections are ordinary ones, their cross
@@ -13,15 +13,14 @@ pub mod eh_frame;
 
 /// DWARF says where a value is over a range of code and places a frame cell
 /// from the canonical frame address.
-pub const CAPS: llrm_object::debug::DebugCaps =
-    llrm_object::debug::DebugCaps { location_ranges: true, cfa_locations: true };
+pub const CAPS: llrm_debug::DebugCaps = llrm_debug::DebugCaps { location_ranges: true, cfa_locations: true };
 mod frame;
 mod line;
 mod ranges;
 mod types;
 
 pub use buffer::{sleb, uleb};
-use llrm_object::debug::{Format, Info};
+use llrm_debug::{Format, Info};
 use llrm_object::{DebugSection, Definition, Fix, FixupKind, Object, Reloc, Role, Section, Target, Unsupported};
 
 /// The version DWARF is written in when the format does not say.
@@ -79,7 +78,7 @@ pub fn expanded(
         .any(|one| {
             matches!(
                 &one.location,
-                llrm_object::debug::Location::List(entries) if !entries.is_empty()
+                llrm_debug::Location::List(entries) if !entries.is_empty()
             )
         });
     if lists {
@@ -125,18 +124,18 @@ pub fn expanded(
         };
         sections.push(section(name, part));
     }
-    let mut made = Object { debug: None, ..object.clone() };
+    let mut made = object.clone();
     made.sections.extend(sections);
     Ok(made)
 }
 
 /// A block, or one in it, of several code ranges.
-fn many(block: &llrm_object::debug::Block) -> bool {
+fn many(block: &llrm_debug::Block) -> bool {
     block.ranges.len() > 1 || block.blocks.iter().any(many)
 }
 
 /// A block's variables and those of the blocks in it.
-fn blocks(block: &llrm_object::debug::Block) -> Box<dyn Iterator<Item = &llrm_object::debug::Variable> + '_> {
+fn blocks(block: &llrm_debug::Block) -> Box<dyn Iterator<Item = &llrm_debug::Variable> + '_> {
     Box::new(block.variables.iter().chain(block.blocks.iter().flat_map(blocks)))
 }
 

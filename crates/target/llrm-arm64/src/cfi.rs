@@ -8,8 +8,8 @@
 
 use std::collections::HashMap;
 
+use llrm_debug::FrameRow;
 use llrm_object::assembler::Cfi;
-use llrm_object::debug::FrameRow;
 
 use crate::frame::Lowered;
 use crate::layout::label_of;

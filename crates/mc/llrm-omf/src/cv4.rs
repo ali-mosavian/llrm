@@ -7,7 +7,7 @@
 //!
 //! BASIC's compilers write a different, older dialect: `cvwrite` is that one.
 
-use llrm_object::debug::{self as model, Info, Location, Reach, Scalar, Type, TypeId};
+use llrm_debug::{self as model, Info, Location, Reach, Scalar, Type, TypeId};
 use llrm_object::{Binding, DebugSection, Fix, Object, Reloc, Role, Section, Target};
 use llrm_support::leaf::{numeric, pad};
 

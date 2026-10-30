@@ -1,8 +1,8 @@
-//! [`llrm_object::debug::Info`] as CodeView 4: the $$SYMBOLS and $$TYPES
+//! [`llrm_debug::Info`] as CodeView 4: the $$SYMBOLS and $$TYPES
 //! segments, and the line numbers each section's LINNUM records carry. A fact
 //! CodeView 4 as `cvwrite` writes it cannot say is refused with what it was.
 
-use llrm_object::debug::{self as model, Info, Location};
+use llrm_debug::{self as model, Info, Location};
 use llrm_object::{DebugSection, Definition, Fix, Object, Reloc, Role, Section, Target};
 
 use crate::cvwrite::{self, Flavor, Reach, Scalar, Type};
@@ -309,7 +309,7 @@ pub fn lines(
 
 #[cfg(test)]
 mod tests {
-    use llrm_object::debug::{Function, Line, Range, Scalar as S, Type as T, Variable};
+    use llrm_debug::{Described, Function, Line, Range, Scalar as S, Type as T, Variable};
     use llrm_object::{Binding, Definition, Symbol};
 
     use super::*;
@@ -324,7 +324,7 @@ mod tests {
     fn object(
         variables: Vec<Variable>,
         types: Vec<T>,
-    ) -> Object {
+    ) -> Described {
         let text = Section {
             name: "_TEXT".into(),
             role: Role::Text,
@@ -357,21 +357,23 @@ mod tests {
             ],
             ..Info::default()
         };
-        Object {
-            name: "f.c".into(),
-            bits: 16,
-            sections: vec![text],
-            symbols: vec![Symbol {
-                name: "_f".into(),
-                binding: Binding::Public,
-                definition: Definition::Defined { section: 0, offset: 0 },
-                size: 0,
-                group: None,
-            }],
-            omf_groups: Vec::new(),
-            omf_comdat: Vec::new(),
-            frames: Vec::new(),
+        Described {
             debug: Some(info),
+            object: Object {
+                name: "f.c".into(),
+                bits: 16,
+                sections: vec![text],
+                symbols: vec![Symbol {
+                    name: "_f".into(),
+                    binding: Binding::Public,
+                    definition: Definition::Defined { section: 0, offset: 0 },
+                    size: 0,
+                    group: None,
+                }],
+                omf_groups: Vec::new(),
+                omf_comdat: Vec::new(),
+                frames: Vec::new(),
+            },
         }
     }
 

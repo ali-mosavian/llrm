@@ -1,5 +1,5 @@
-use llrm_object::debug::{
-    DebugOptions, Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable,
+use llrm_debug::{
+    DebugOptions, Described, Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable,
 };
 use llrm_object::{Binding, Object, Section, Symbol, Target};
 
@@ -15,7 +15,7 @@ fn object(
     variables: Vec<Variable>,
     mut types: Vec<Type>,
     format: Format,
-) -> Object {
+) -> Described {
     types.push(Type::Procedure { result: Some(0), parameters: vec![0], convention: None });
     let procedure = types.len() - 1;
     let text = Section {
@@ -42,14 +42,14 @@ fn object(
     let register = |name: &str, dwarf| Register { name: name.into(), bits: 32, dwarf, codeview: None };
     let info = Info {
         options: DebugOptions { format, ..Default::default() },
-        language: llrm_object::debug::Language::C,
-        target: Some(llrm_object::debug::DebugTarget::of(32).with_registers(
+        language: llrm_debug::Language::C,
+        target: Some(llrm_debug::DebugTarget::of(32).with_registers(
             "ebp",
             "",
             vec![register("ebp", Some(5)), register("eax", Some(0)), register("ah", None)],
         )),
         code: vec![Range { section: 0, offset: 0, length: 16 }],
-        files: vec![llrm_object::debug::File { name: "f.c".into(), checksum: None }],
+        files: vec![llrm_debug::File { name: "f.c".into(), checksum: None }],
         types,
         functions: vec![function],
         lines: vec![
@@ -58,21 +58,23 @@ fn object(
         ],
         ..Info::default()
     };
-    Object {
-        name: "f.c".into(),
-        bits: 32,
-        sections: vec![text],
-        symbols: vec![Symbol {
-            name: "_f".into(),
-            binding: Binding::Public,
-            definition: Definition::Defined { section: 0, offset: 0 },
-            size: 0,
-            group: None,
-        }],
-        omf_groups: Vec::new(),
-        omf_comdat: Vec::new(),
-        frames: Vec::new(),
+    Described {
         debug: Some(info),
+        object: Object {
+            name: "f.c".into(),
+            bits: 32,
+            sections: vec![text],
+            symbols: vec![Symbol {
+                name: "_f".into(),
+                binding: Binding::Public,
+                definition: Definition::Defined { section: 0, offset: 0 },
+                size: 0,
+                group: None,
+            }],
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            frames: Vec::new(),
+        },
     }
 }
 
@@ -307,8 +309,8 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
                     name: "pt".into(),
                     bytes: 8,
                     fields: vec![
-                        llrm_object::debug::Field { name: "x".into(), r#type: 0, offset: 0, bits: None },
-                        llrm_object::debug::Field { name: "f".into(), r#type: 0, offset: 4, bits: Some((3, 5)) },
+                        llrm_debug::Field { name: "x".into(), r#type: 0, offset: 0, bits: None },
+                        llrm_debug::Field { name: "f".into(), r#type: 0, offset: 4, bits: Some((3, 5)) },
                     ],
                     union: false,
                 },
@@ -403,7 +405,7 @@ fn a_removed_variable_has_no_location_and_the_others_have_theirs() {
     let made = written(vec![removed, frame("x", 8)], vec![int()], Format::Default).unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join("x.o");
-    std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+    std::fs::write(&path, objects("elf", &Described::from(made.clone())).unwrap()).unwrap();
     let said = std::process::Command::new(&dump).arg("--verify").arg(&path).output().unwrap();
     assert!(
         String::from_utf8_lossy(&said.stdout).trim_end().ends_with("No errors."),
@@ -430,11 +432,11 @@ fn a_frame_cell_is_found_from_the_canonical_frame_address_where_the_code_keeps_n
         return;
     };
     let mut made = object(vec![frame("x", -4)], vec![int()], Format::Default);
-    made.debug.as_mut().unwrap().frame_base = llrm_object::debug::FrameBase::Cfa { bias: 8, far_bias: 8 };
+    made.debug.as_mut().unwrap().frame_base = llrm_debug::FrameBase::Cfa { bias: 8, far_bias: 8 };
     let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join("x.o");
-    std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+    std::fs::write(&path, objects("elf", &Described::from(made.clone())).unwrap()).unwrap();
     let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
     let shown = String::from_utf8_lossy(&shown.stdout).into_owned();
     assert!(shown.contains("DW_AT_frame_base\t(DW_OP_call_frame_cfa)"), "{shown}");
@@ -455,12 +457,12 @@ fn a_function_called_far_finds_its_cells_from_the_longer_frame_address() {
     let fbreg = |far: bool| {
         let mut made = object(vec![frame("x", -2)], vec![int()], Format::Default);
         let info = made.debug.as_mut().unwrap();
-        info.frame_base = llrm_object::debug::FrameBase::Cfa { bias: 4, far_bias: 6 };
+        info.frame_base = llrm_debug::FrameBase::Cfa { bias: 4, far_bias: 6 };
         info.functions[0].far = far;
         let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
         let scratch = tempfile::tempdir().unwrap();
         let path = scratch.path().join("x.o");
-        std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+        std::fs::write(&path, objects("elf", &Described::from(made.clone())).unwrap()).unwrap();
         let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
         String::from_utf8_lossy(&shown.stdout).into_owned()
     };
@@ -475,7 +477,7 @@ fn a_function_called_far_finds_its_cells_from_the_longer_frame_address() {
 /// of -4) and restored.
 #[test]
 fn a_functions_frame_rows_are_the_cfa_instructions_the_dwarf_standard_gives() {
-    use llrm_object::debug::FrameRow;
+    use llrm_debug::FrameRow;
     let row = |offset, register: &str, cfa, saved: &[(&str, i64)]| FrameRow {
         offset,
         cfa_register: register.into(),
@@ -533,7 +535,7 @@ fn a_base_type_is_named_as_the_source_spells_it() {
 /// `target` as the machine, with the registers the information had.
 fn retarget(
     info: &mut Info,
-    mut target: llrm_object::debug::DebugTarget,
+    mut target: llrm_debug::DebugTarget,
 ) {
     target.registers = info.registers_mut(0).clone().into();
     info.target = Some(target);
@@ -544,7 +546,7 @@ fn a_target_with_three_byte_addresses_writes_dwarf_with_three_byte_addresses() {
     let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 5 });
     retarget(
         made.debug.as_mut().unwrap(),
-        llrm_object::debug::DebugTarget {
+        llrm_debug::DebugTarget {
             address_bytes: 3,
             segmented: false,
             codeview_machine: None,
@@ -567,13 +569,13 @@ fn a_segmented_address_takes_the_targets_segment_fixup() {
     let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 4 });
     made.bits = 16;
     let info = made.debug.as_mut().unwrap();
-    retarget(info, llrm_object::debug::DebugTarget::of(16));
+    retarget(info, llrm_debug::DebugTarget::of(16));
     let error = expanded(&made, made.debug.as_ref().unwrap()).unwrap_err();
     assert!(error.0.contains("segment fixup"), "{error:?}");
     let kind = llrm_object::FixupKind(llrm_object::FixupKind::FIRST_TARGET.0 + 9);
     retarget(
         made.debug.as_mut().unwrap(),
-        llrm_object::debug::DebugTarget { segment_base: Some(kind), ..llrm_object::debug::DebugTarget::of(16) },
+        llrm_debug::DebugTarget { segment_base: Some(kind), ..llrm_debug::DebugTarget::of(16) },
     );
     let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     assert!(written.sections.iter().flat_map(|one| &one.relocs).any(|one| one.kind == kind));
@@ -583,10 +585,10 @@ fn a_segmented_address_takes_the_targets_segment_fixup() {
 /// information first.
 fn objects(
     format: &str,
-    object: &Object,
+    object: &Described,
 ) -> Result<Vec<u8>, llrm_object::Unsupported> {
-    use llrm_object::ObjectTarget;
-    llrm_x86::mc::X86Objects.write_object(format, object)
+    use llrm_debug::DebugObjectTarget;
+    llrm_x86::mc::X86Objects.write_described(format, &object.object, object.debug.as_ref())
 }
 
 /// `f` in two pieces of one section (0..6 and 10..16), and the unit's code the
@@ -596,7 +598,7 @@ fn objects(
 fn split(
     version: u16,
     unit: bool,
-) -> Object {
+) -> Described {
     let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version });
     let pieces = vec![Range { section: 0, offset: 0, length: 6 }, Range { section: 0, offset: 10, length: 6 }];
     let info = made.debug.as_mut().unwrap();
@@ -666,7 +668,7 @@ fn a_unit_of_two_code_ranges_has_ranges_and_a_base_of_zero() {
 fn a_segmented_function_of_two_ranges_is_refused_by_name() {
     let mut made = split(4, false);
     made.bits = 16;
-    retarget(made.debug.as_mut().unwrap(), llrm_object::debug::DebugTarget::of(16));
+    retarget(made.debug.as_mut().unwrap(), llrm_debug::DebugTarget::of(16));
     let why = expanded(&made, made.debug.as_ref().unwrap()).err().expect("refused");
     assert!(why.0.contains("segmented"), "{}", why.0);
 }
@@ -682,11 +684,11 @@ fn a_segmented_block_of_two_ranges_is_written_over_its_hull() {
     let kind = llrm_object::FixupKind(llrm_object::FixupKind::FIRST_TARGET.0 + 9);
     retarget(
         made.debug.as_mut().unwrap(),
-        llrm_object::debug::DebugTarget { segment_base: Some(kind), ..llrm_object::debug::DebugTarget::of(16) },
+        llrm_debug::DebugTarget { segment_base: Some(kind), ..llrm_debug::DebugTarget::of(16) },
     );
     let pieces = vec![Range { section: 0, offset: 2, length: 2 }, Range { section: 0, offset: 6, length: 2 }];
     made.debug.as_mut().unwrap().functions[0].blocks =
-        vec![llrm_object::debug::Block { ranges: pieces, variables: Vec::new(), blocks: Vec::new(), inlined: None }];
+        vec![llrm_debug::Block { ranges: pieces, variables: Vec::new(), blocks: Vec::new(), inlined: None }];
     let written = expanded(&made, made.debug.as_ref().unwrap());
     assert!(written.is_ok(), "{:?}", written.err().map(|why| why.0));
 }

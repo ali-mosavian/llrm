@@ -267,6 +267,5 @@ pub fn object(
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
         frames,
-        debug: None,
     })
 }

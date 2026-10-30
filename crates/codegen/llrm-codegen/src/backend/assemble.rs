@@ -511,7 +511,7 @@ pub fn assembled_by(
         crate::backend::debuginfo::described(
             module,
             &names,
-            llrm_object::debug::Producer::Native,
+            llrm_debug::Producer::Native,
             &crate::backend::debuginfo::Machine::of(arch),
         )
     })?;

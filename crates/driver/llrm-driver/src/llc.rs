@@ -443,7 +443,7 @@ fn refuse_debug_format(
     format: &str,
     bitness: u32,
 ) -> Result<(), String> {
-    use llrm_object::debug::Format;
+    use llrm_debug::Format;
     if !flags.debug {
         return Ok(());
     }

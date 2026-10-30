@@ -1520,9 +1520,9 @@ pub(crate) fn expression_note(
     ops: Vec<llrm_mir::DwOp>,
     listed: bool,
 ) -> (NoteValue, Option<(u32, u32)>) {
+    use llrm_debug::ExprOp as E;
     use llrm_mir::DwOp;
     use llrm_mir::module::{DwBinary as B, DwUnary as U};
-    use llrm_object::debug::ExprOp as E;
     let nothing = (NoteValue::Nothing, None);
     let mut ops = ops.as_slice();
     let piece = match ops {

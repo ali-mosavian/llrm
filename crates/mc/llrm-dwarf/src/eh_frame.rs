@@ -3,7 +3,7 @@
 //! `zR`, FDE pointers pc-relative `sdata4`) and an FDE for each function of
 //! `Object::frames`.
 
-use llrm_object::debug::FrameRow;
+use llrm_debug::FrameRow;
 use llrm_object::{Fix, Object, Reloc, Role, Section, Target, Unsupported};
 
 use crate::buffer::Buf;

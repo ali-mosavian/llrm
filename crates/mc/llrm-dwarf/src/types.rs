@@ -1,6 +1,6 @@
 //! The DIE tree of `Info`: the compile unit, its types, globals and functions.
 
-use llrm_object::debug::{
+use llrm_debug::{
     self as model, Block, ExprOp, FrameBase, Function, Info, Kind, Language, Location, Reach, Scalar, Type, Variable,
 };
 use llrm_object::{Binding, Object, Unsupported};

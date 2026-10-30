@@ -53,7 +53,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 mod tests {
     use std::process::Command;
 
-    use llrm_object::ObjectTarget;
+    use llrm_debug::DebugObjectTarget;
     use llrm_object::{Binding, Definition, Fix, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
@@ -78,7 +78,6 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             frames: Vec::new(),
-            debug: None,
         }
     }
 
@@ -198,12 +197,12 @@ mod tests {
     /// and RBP (334) is its frame: llvm-readobj reads them back.
     #[test]
     fn debug_information_names_the_amd64_machine_and_eight_byte_pointers() {
-        use llrm_object::debug::{Function, Info, Kind as K, Location, Range, Reach, Scalar, Type, Variable};
+        use llrm_debug::{Function, Info, Kind as K, Location, Range, Reach, Scalar, Type, Variable};
         let Ok(dump) = which("llvm-readobj") else { return eprintln!("skipped: no llvm-readobj") };
-        let target = llrm_object::debug::DebugTarget::of(64).with_registers(
+        let target = llrm_debug::DebugTarget::of(64).with_registers(
             "rbp",
             "",
-            vec![llrm_object::debug::Register { name: "rbp".into(), bits: 64, dwarf: Some(6), codeview: Some(334) }],
+            vec![llrm_debug::Register { name: "rbp".into(), bits: 64, dwarf: Some(6), codeview: Some(334) }],
         );
         let info = Info {
             target: Some(target),
@@ -232,11 +231,11 @@ mod tests {
             }],
             ..Info::default()
         };
-        let mut made = object(vec![text(vec![0x90; 4], vec![])], vec![defined("f", 0)]);
-        made.debug = Some(info);
+        let made = object(vec![text(vec![0x90; 4], vec![])], vec![defined("f", 0)]);
+        let debug = Some(info);
         let scratch = tempfile::tempdir().unwrap();
         let path = scratch.path().join("f.obj");
-        std::fs::write(&path, crate::mc::X86Objects.write_object("coff", &made).unwrap()).unwrap();
+        std::fs::write(&path, crate::mc::X86Objects.write_described("coff", &made, debug.as_ref()).unwrap()).unwrap();
         let said = Command::new(dump).arg("--codeview").arg(&path).output().unwrap();
         let text = String::from_utf8_lossy(&said.stdout);
         for wanted in [

@@ -1,9 +1,9 @@
 //! x86-64's `.eh_frame` facts (`X86MCTargetDesc.cpp`'s initial frame state, the
 //! System V DWARF register numbers).
 
+use llrm_debug::FrameRow;
 use llrm_dwarf::eh_frame::{EhTarget, Pointer};
 use llrm_object::assembler::AsmBackend;
-use llrm_object::debug::FrameRow;
 use llrm_object::{Fix, Object, Reloc, Role, Section, Target, Unsupported};
 
 use super::backend::X86Backend;
@@ -129,7 +129,7 @@ pub fn eh_target32() -> EhTarget<'static> {
 
 #[cfg(test)]
 mod tests {
-    use llrm_object::debug::FrameRow;
+    use llrm_debug::FrameRow;
     use llrm_object::{Binding, Definition, Frame, Object, ObjectTarget, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
@@ -170,7 +170,6 @@ mod tests {
             }],
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
-            debug: None,
             frames,
         }
     }

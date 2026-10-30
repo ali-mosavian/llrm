@@ -4,8 +4,9 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use llrm_object::debug::{
-    Enumerator, Field, File, Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable,
+use llrm_debug::{
+    Described, Enumerator, Field, File, Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type,
+    Variable,
 };
 use llrm_object::{Binding, Definition, Object, Role, Section, Symbol};
 
@@ -47,7 +48,7 @@ fn variable(
 
 /// `int f(int x, struct S *p) { int y; ... }` in 16 bytes of code on lines 3 to
 /// 5, a global `g`, a struct, an array, an enum and a recursive struct.
-fn object() -> Object {
+fn object() -> Described {
     let text = Section {
         name: "_TEXT".into(),
         role: Role::Text,
@@ -121,7 +122,7 @@ fn object() -> Object {
             variable("e", 6, Kind::Local, Location::Frame { disp: -48 }),
             variable("n", 7, Kind::Local, Location::Frame { disp: -52 }),
         ],
-        blocks: vec![llrm_object::debug::Block {
+        blocks: vec![llrm_debug::Block {
             ranges: vec![Range { section: 0, offset: 4, length: 8 }],
             variables: vec![variable("t", 0, Kind::Local, Location::Frame { disp: -56 })],
             blocks: Vec::new(),
@@ -130,7 +131,7 @@ fn object() -> Object {
         frame: Vec::new(),
     };
     let info = Info {
-        target: Some(llrm_object::debug::DebugTarget::of(32).with_registers("ebp", "", registers())),
+        target: Some(llrm_debug::DebugTarget::of(32).with_registers("ebp", "", registers())),
         files: vec![File { name: "f.c".into(), checksum: None }],
         code: vec![Range { section: 0, offset: 0, length: 16 }],
         types,
@@ -143,15 +144,17 @@ fn object() -> Object {
         ],
         ..Info::default()
     };
-    Object {
-        name: "f.c".into(),
-        bits: 32,
-        sections: vec![text, data],
-        symbols: vec![public("_f", 0, 0), public("_g", 1, 0)],
-        omf_groups: Vec::new(),
-        omf_comdat: Vec::new(),
-        frames: Vec::new(),
+    Described {
         debug: Some(info),
+        object: Object {
+            name: "f.c".into(),
+            bits: 32,
+            sections: vec![text, data],
+            symbols: vec![public("_f", 0, 0), public("_g", 1, 0)],
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            frames: Vec::new(),
+        },
     }
 }
 
@@ -261,11 +264,11 @@ fn lld_link_makes_a_pdb_with_the_functions_parameters_types_and_lines() {
     }
 }
 
-fn function(made: &mut Object) -> &mut Function {
+fn function(made: &mut Described) -> &mut Function {
     &mut made.debug.as_mut().unwrap().functions[0]
 }
 
-fn refusal(change: impl FnOnce(&mut Object)) -> String {
+fn refusal(change: impl FnOnce(&mut Described)) -> String {
     let mut made = object();
     change(&mut made);
     objects(&made).unwrap_err().0
@@ -280,7 +283,7 @@ fn what_the_writer_cannot_say_is_refused_by_name() {
         refusal(|made| function(made).variables[1].location = Location::Register("zmm0".into()))
             .contains("register zmm0 is not in the target's register file")
     );
-    let unnumbered = |made: &mut Object| {
+    let unnumbered = |made: &mut Described| {
         made.debug
             .as_mut()
             .unwrap()
@@ -351,7 +354,7 @@ fn a_variable_over_a_long_function_is_written_in_pieces() {
 /// unreadable. A struct of 5000 fields is a field list over 64 KiB.
 #[test]
 fn what_overflows_a_field_is_refused_not_wrapped() {
-    let huge = |made: &mut Object| {
+    let huge = |made: &mut Described| {
         let fields = (0..5000)
             .map(|at| Field { name: format!("field_number_{at}"), r#type: 0, offset: at * 4, bits: None })
             .collect();
@@ -377,7 +380,7 @@ fn a_column_is_written_with_its_line() {
 
 /// `object` through x86's COFF writer, which expands its debug information to
 /// C13 first.
-fn objects(object: &llrm_object::Object) -> Result<Vec<u8>, llrm_object::Unsupported> {
-    use llrm_object::ObjectTarget;
-    llrm_x86::mc::X86Objects.write_object("coff", object)
+fn objects(object: &Described) -> Result<Vec<u8>, llrm_object::Unsupported> {
+    use llrm_debug::DebugObjectTarget;
+    llrm_x86::mc::X86Objects.write_described("coff", &object.object, object.debug.as_ref())
 }

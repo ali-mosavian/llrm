@@ -18,7 +18,7 @@ LAYERS = [
     (
         "mc and target interface",
         [
-            "llrm-object", "llrm-dwarf", "llrm-omf", "llrm-elf",
+            "llrm-object", "llrm-debug", "llrm-dwarf", "llrm-omf", "llrm-elf",
             "llrm-coff", "llrm-codeview", "llrm-macho", "llrm-target", "llrm-iselgen",
             "llrm-peepgen",
         ],
@@ -148,8 +148,14 @@ def test_codegen_names_no_object_target():
     assert not named, named
 
 
-def test_llrm_target_depends_on_the_object_crate_alone_among_the_mc_crates():
-    """`Target::objects` returns an `ObjectTarget`: the one edge from the target interface to the mc layer."""
+def test_llrm_target_depends_on_the_object_and_debug_crates_alone_among_the_mc_crates():
+    """`Target::objects` returns a `DebugObjectTarget` (an `ObjectTarget` that also writes debug information): the edges from the target interface to the mc layer."""
     target = next(p for p in workspace() if p["name"] == "llrm-target")
-    mc = {d["name"] for d in target["dependencies"] if d["kind"] is None and d["name"].startswith(("llrm-elf", "llrm-coff", "llrm-codeview", "llrm-macho", "llrm-omf", "llrm-dwarf", "llrm-object"))}
-    assert mc == {"llrm-object"}, sorted(mc)
+    mc = {d["name"] for d in target["dependencies"] if d["kind"] is None and d["name"].startswith(("llrm-elf", "llrm-coff", "llrm-codeview", "llrm-macho", "llrm-omf", "llrm-dwarf", "llrm-object", "llrm-debug"))}
+    assert mc == {"llrm-object", "llrm-debug"}, sorted(mc)
+
+
+def test_the_object_crate_holds_no_debug_model():
+    """`Object.debug` and `llrm_object::debug` were the debug model inside the object crate; it is `llrm-debug`'s, and an object travels with its information as `llrm_debug::Described`."""
+    source = "\n".join(path.read_text() for path in (ROOT / "crates" / "mc" / "llrm-object" / "src").rglob("*.rs"))
+    assert "debug::Info" not in source and "pub mod debug" not in source and "pub debug:" not in source

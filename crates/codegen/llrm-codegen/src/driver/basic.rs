@@ -479,7 +479,7 @@ pub fn written_basic(
     module: &masm::Module,
     header: Vec<u8>,
     name: &str,
-    objects: &dyn llrm_object::ObjectTarget,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
     written_basic_in(module, header, name, llrm_target::object::Format::Omf, objects)
 }
@@ -491,7 +491,7 @@ pub fn written_basic_in(
     header: Vec<u8>,
     name: &str,
     format: llrm_target::object::Format,
-    objects: &dyn llrm_object::ObjectTarget,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
     timed("object write", || written_basic_inner(module, header, name, format, objects))
 }
@@ -501,7 +501,7 @@ fn written_basic_inner(
     header: Vec<u8>,
     name: &str,
     format: llrm_target::object::Format,
-    objects: &dyn llrm_object::ObjectTarget,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
     // Build the same semantic segments as backend.objbuild.written, then add
     // the BASIC-owned MODULE_CODE envelope before asking its canonical record
@@ -621,7 +621,8 @@ fn written_basic_inner(
             );
         return objbuild::serialized(objects, &object, format).map_err(|error| error.to_string());
     }
-    let emitted = llrm_omf::write::write(&object, &llrm_x86::mc::omf::X86Omf).map_err(|error| error.to_string())?;
+    let emitted = llrm_omf::write::write(&object.object, object.debug.as_ref(), &llrm_x86::mc::omf::X86Omf)
+        .map_err(|error| error.to_string())?;
     // QB's classes and combine modes shape a real-mode link; a flat object
     // keeps the ones its writer gave.
     if module.object.bitness != 16 {
@@ -1088,11 +1089,8 @@ pub fn assembled(
     externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
     externs.dedup();
-    let producer = if runtime == model::RuntimeProfile::Qb45 {
-        llrm_object::debug::Producer::Qb45
-    } else {
-        llrm_object::debug::Producer::Native
-    };
+    let producer =
+        if runtime == model::RuntimeProfile::Qb45 { llrm_debug::Producer::Qb45 } else { llrm_debug::Producer::Native };
     let mut debug = timed("debug info", || {
         debuginfo::described(module, &names, producer, &debuginfo::Machine::of(&*options.arch))
     })?;

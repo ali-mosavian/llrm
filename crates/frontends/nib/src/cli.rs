@@ -274,10 +274,10 @@ mod tests {
     struct Bare(llrm_x86_m16::M16);
 
     impl Target for Bare {
-        fn objects(&self) -> &'static dyn llrm_object::ObjectTarget {
+        fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
             self.0.objects()
         }
-        fn debug_target(&self) -> llrm_object::debug::DebugTarget {
+        fn debug_target(&self) -> llrm_debug::DebugTarget {
             self.0.debug_target()
         }
         fn name(&self) -> &'static str {

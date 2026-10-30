@@ -1,7 +1,7 @@
 //! `.debug_line`: the line program, one sequence per section of code with
 //! lines.
 
-use llrm_object::debug::{ChecksumKind, Info};
+use llrm_debug::{ChecksumKind, Info};
 use llrm_object::{Object, Unsupported};
 
 use crate::buffer::{Buf, Done};

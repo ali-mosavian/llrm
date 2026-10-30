@@ -66,7 +66,7 @@ pub struct Options {
     pub abi: Option<String>,
     /// `-gcodeview`, `-gdwarf`...: the debug format asked for, where `-g`
     /// writes any.
-    pub debug_format: llrm_object::debug::Format,
+    pub debug_format: llrm_debug::Format,
     /// `-fexcess-precision=standard` or `-ffloat-store`: a float conversion
     /// rounds to its type.
     pub float_store: bool,
@@ -145,7 +145,7 @@ impl Options {
             // older ones.
             if matches!(
                 debug.format,
-                llrm_object::debug::Format::Dwarf { version } if version < 5
+                llrm_debug::Format::Dwarf { version } if version < 5
             ) && let Some((_, md5)) = debug.source.as_mut()
             {
                 *md5 = None;
@@ -166,7 +166,7 @@ impl Options {
     }
 
     /// What the debug writer asked for in this object format can say.
-    fn debug_caps(&self) -> llrm_object::debug::DebugCaps {
+    fn debug_caps(&self) -> llrm_debug::DebugCaps {
         self.arch.objects().debug_caps(self.object_format, self.debug_format)
     }
 
@@ -760,7 +760,7 @@ mod lifetimes_tests;
 
 #[cfg(test)]
 mod location_ranges_tests {
-    use llrm_object::debug::Format;
+    use llrm_debug::Format;
 
     use super::Options;
 

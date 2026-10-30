@@ -1,4 +1,4 @@
-//! `-g`: build a module's debug information as [`llrm_object::debug::Info`],
+//! `-g`: build a module's debug information as [`llrm_debug::Info`],
 //! the format-neutral model each object format's writer encodes.
 //!
 //! # How it works
@@ -85,9 +85,9 @@
 
 use std::collections::BTreeSet;
 
+use llrm_debug::{self as model, DebugOptions, ExprOp, Info, Kind, Location, Variable};
 use llrm_lir::registers::RegId;
 use llrm_mir::{MetadataId, debuginfo as di};
-use llrm_object::debug::{self as model, DebugOptions, ExprOp, Info, Kind, Location, Variable};
 
 use crate::backend::objbuild::Segment;
 use crate::backend::{globals, masm};
@@ -140,7 +140,7 @@ pub struct Debug {
     pub frame: Option<(RegId, RegId, [i64; 2])>,
     pub registers: Vec<model::Register>,
     /// The machine as a debug writer reads it, without its register file.
-    pub target: llrm_object::debug::DebugTarget,
+    pub target: llrm_debug::DebugTarget,
     pub types: Vec<model::Type>,
     /// Each MIR type node's type.
     pub nodes: IndexMap<MetadataId, model::TypeId>,
@@ -263,7 +263,7 @@ pub struct Machine {
     pub near_bits: u32,
     pub registers_text: String,
     pub frame: Option<(RegId, RegId, [i64; 2])>,
-    pub target: llrm_object::debug::DebugTarget,
+    pub target: llrm_debug::DebugTarget,
 }
 
 impl Machine {
@@ -755,8 +755,8 @@ pub fn laid_out(
     let mut info = Info {
         options: DebugOptions { format: debug.format, dialect: debug.dialect, producer: debug.producer },
         language: debug.language,
-        target: Some(llrm_object::debug::DebugTarget {
-            registers: std::sync::Arc::new(llrm_object::debug::RegisterFile {
+        target: Some(llrm_debug::DebugTarget {
+            registers: std::sync::Arc::new(llrm_debug::RegisterFile {
                 registers: debug.registers.clone(),
                 frame: debug.frame_register.clone(),
                 return_register: debug.return_register.clone(),
@@ -773,7 +773,7 @@ pub fn laid_out(
                 } else {
                     name.clone()
                 },
-                checksum: md5.clone().map(|bytes| (llrm_object::debug::ChecksumKind::Md5, bytes)),
+                checksum: md5.clone().map(|bytes| (llrm_debug::ChecksumKind::Md5, bytes)),
             },
             None => model::File { name: source.to_owned(), checksum: None },
         }],
@@ -1158,8 +1158,8 @@ pub fn laid_out(
 
 #[cfg(test)]
 mod tests {
+    use llrm_debug::{ExprOp, Location};
     use llrm_lir::registers::RegId;
-    use llrm_object::debug::{ExprOp, Location};
 
     use super::super::masm::Place;
     use super::super::valuetrack::Where;

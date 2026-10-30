@@ -1,4 +1,4 @@
-//! [`llrm_object::debug::Info`] as Borland's debug information in an OMF
+//! [`llrm_debug::Info`] as Borland's debug information in an OMF
 //! object: the `COMENT` records of classes 0xE1-0xE8 and 0xEA that Turbo C++
 //! writes under `-v`, which `TLINK /v` turns into the table Turbo Debugger
 //! reads. docs/formats/turbo-debugger.md has the measurements behind
@@ -7,13 +7,12 @@
 
 /// Turbo Debugger's records name one place for a whole scope, and no frame
 /// address.
-pub const CAPS: llrm_object::debug::DebugCaps =
-    llrm_object::debug::DebugCaps { location_ranges: false, cfa_locations: false };
+pub const CAPS: llrm_debug::DebugCaps = llrm_debug::DebugCaps { location_ranges: false, cfa_locations: false };
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use llrm_object::debug::{self as model, Function, Info, Kind, Location, Scalar, Type};
+use llrm_debug::{self as model, Function, Info, Kind, Location, Scalar, Type};
 use llrm_object::{Binding, Definition, Object};
 
 use crate::omf::{self, Record};
@@ -668,7 +667,7 @@ pub fn records(
 
 #[cfg(test)]
 mod tests {
-    use llrm_object::debug::{Block, Field, File, Format, Function, Language, Range, Variable};
+    use llrm_debug::{Block, Described, Field, File, Format, Function, Language, Range, Variable};
     use llrm_object::{Section, Symbol};
 
     use super::*;
@@ -693,7 +692,7 @@ mod tests {
         types: Vec<Type>,
         variables: Vec<Variable>,
         info: impl FnOnce(&mut Info),
-    ) -> Object {
+    ) -> Described {
         let text = Section {
             name: "T_TEXT".into(),
             role: llrm_object::Role::Text,
@@ -735,7 +734,7 @@ mod tests {
             frame: Vec::new(),
         };
         let mut made = Info {
-            options: llrm_object::debug::DebugOptions { format: Format::TurboDebugger, ..Default::default() },
+            options: llrm_debug::DebugOptions { format: Format::TurboDebugger, ..Default::default() },
             language: Language::C,
             code: vec![Range { section: 0, offset: 0, length: 0x20 }],
             files: vec![File { name: "t.c".into(), checksum: None }],
@@ -744,20 +743,22 @@ mod tests {
             ..Info::default()
         };
         info(&mut made);
-        Object {
-            name: "t.c".into(),
-            bits: 16,
-            sections: vec![text, data],
-            symbols: vec![symbol("_f", 0, 0, Binding::Public), symbol("_g", 1, 2, Binding::Public)],
-            omf_groups: Vec::new(),
-            omf_comdat: Vec::new(),
-            frames: Vec::new(),
+        Described {
             debug: Some(made),
+            object: Object {
+                name: "t.c".into(),
+                bits: 16,
+                sections: vec![text, data],
+                symbols: vec![symbol("_f", 0, 0, Binding::Public), symbol("_g", 1, 2, Binding::Public)],
+                omf_groups: Vec::new(),
+                omf_comdat: Vec::new(),
+                frames: Vec::new(),
+            },
         }
     }
 
     /// The (class, data) of each COMENT of an object, in order.
-    fn comments(object: &Object) -> Vec<(u8, Vec<u8>)> {
+    fn comments(object: &Described) -> Vec<(u8, Vec<u8>)> {
         omf::parse(&write::write_generic(object).expect("writes"))
             .expect("parses")
             .iter()
@@ -767,7 +768,7 @@ mod tests {
     }
 
     fn all(
-        object: &Object,
+        object: &Described,
         class: u8,
     ) -> Vec<Vec<u8>> {
         comments(object).into_iter().filter(|(one, _)| *one == class).map(|(_, data)| data).collect()
@@ -839,7 +840,7 @@ mod tests {
     }
 
     fn after_of(
-        object: &Object,
+        object: &Described,
         name: &[u8],
     ) -> Vec<(u8, Vec<u8>)> {
         let records = omf::parse(&write::write_generic(object).unwrap()).unwrap();
@@ -905,7 +906,7 @@ mod tests {
     /// 32-bit object is another format and is refused by name.
     #[test]
     fn what_turbo_debugger_cannot_say_is_left_out_not_a_refused_compile() {
-        let names = |made: Object| -> Vec<u8> { all(&made, LOCALS).concat() };
+        let names = |made: Described| -> Vec<u8> { all(&made, LOCALS).concat() };
         let kept = variable("k", 0, Kind::Local, Location::Frame { disp: -2 });
         let register = variable("r", 0, Kind::Local, Location::Register("si".into()));
         let locals = names(object(vec![int()], vec![register, kept.clone()], |_| {}));
@@ -1003,7 +1004,7 @@ mod tests {
     /// near pointer read `function far C`.
     #[test]
     fn a_pointer_to_a_function_points_to_a_function_called_as_far_as_it_reaches() {
-        use llrm_object::debug::Reach::{Far, Near};
+        use llrm_debug::Reach::{Far, Near};
         let short = int();
         let call = |wanted: bool| {
             let made = object(
@@ -1042,7 +1043,7 @@ mod tests {
     #[test]
     fn pointers_to_scalars_of_two_spellings_are_one_record() {
         let spelled = |name: &str| Type::Basic { name: name.into(), scalar: Scalar::Int { bytes: 2, signed: true } };
-        let pointer = |target| Type::Pointer { target, bytes: 2, reach: llrm_object::debug::Reach::Near };
+        let pointer = |target| Type::Pointer { target, bytes: 2, reach: llrm_debug::Reach::Near };
         let made = object(
             vec![spelled("int"), spelled("short"), pointer(0), pointer(1)],
             vec![

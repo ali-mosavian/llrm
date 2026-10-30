@@ -227,7 +227,7 @@ pub trait OmfTargetWriter {
     fn debug_target(
         &self,
         bits: u8,
-    ) -> llrm_object::debug::DebugTarget;
+    ) -> llrm_debug::DebugTarget;
 }
 
 /// The generic kinds alone, with two made-up target kinds for a segment's
@@ -263,8 +263,8 @@ impl OmfTargetWriter for GenericOmf {
     fn debug_target(
         &self,
         bits: u8,
-    ) -> llrm_object::debug::DebugTarget {
-        let mut target = llrm_object::debug::DebugTarget::of(bits);
+    ) -> llrm_debug::DebugTarget {
+        let mut target = llrm_debug::DebugTarget::of(bits);
         target.segment_base = Some(TEST_SEGMENT_BASE);
         target.far_pointer = Some(TEST_FAR_POINTER);
         target
@@ -272,8 +272,8 @@ impl OmfTargetWriter for GenericOmf {
 }
 
 #[cfg(test)]
-pub(crate) fn write_generic(object: &Object) -> Result<Vec<u8>, Error> {
-    write(object, &GenericOmf)
+pub(crate) fn write_generic(object: &llrm_debug::Described) -> Result<Vec<u8>, Error> {
+    write(&object.object, object.debug.as_ref(), &GenericOmf)
 }
 
 /// The location code of a field, and whether it is self-relative.
@@ -595,42 +595,40 @@ fn debug_definition(
     }
 }
 
-/// `object` as an OMF object file.
+/// `object` as an OMF object file, with `debug` as the format's debug records.
 pub fn write(
     object: &Object,
+    debug: Option<&llrm_debug::Info>,
     writer: &dyn OmfTargetWriter,
 ) -> Result<Vec<u8>, Error> {
     // The debug writers name the segment fixups from the machine the target
     // describes.
     let targeted;
-    let object = match &object.debug {
+    let debug = match debug {
         Some(info) if info.target.is_none() => {
-            let info = llrm_object::debug::Info { target: Some(writer.debug_target(object.bits)), ..info.clone() };
-            targeted = Object { debug: Some(info), ..object.clone() };
-            &targeted
+            targeted = llrm_debug::Info { target: Some(writer.debug_target(object.bits)), ..info.clone() };
+            Some(&targeted)
         }
-        _ => object,
+        _ => debug,
     };
     let turbo = matches!(
-        &object.debug,
-        Some(info) if info.options.format == llrm_object::debug::Format::TurboDebugger
+        debug,
+        Some(info) if info.options.format == llrm_debug::Format::TurboDebugger
     );
     let dwarf = matches!(
-        &object.debug,
-        Some(info) if matches!(info.options.format, llrm_object::debug::Format::Dwarf { .. })
+        debug,
+        Some(info) if matches!(info.options.format, llrm_debug::Format::Dwarf { .. })
     );
-    let debug = object.debug.is_some() && !turbo && !dwarf;
+    let debug_records = debug.is_some() && !turbo && !dwarf;
     // Turbo Debugger's records go among the object's own; CodeView's two
     // segments are this writer's, made from the object's debug information.
-    let td = match &object.debug {
+    let td = match debug {
         Some(info) if turbo => Some(crate::td::records(object, info)?),
         _ => None,
     };
-    let (object, lines): (Cow<Object>, Vec<Vec<(u32, usize)>>) = match &object.debug {
+    let (object, lines): (Cow<Object>, Vec<Vec<(u32, usize)>>) = match debug {
         None => (Cow::Borrowed(object), Vec::new()),
-        Some(info) if turbo => {
-            (Cow::Owned(Object { debug: None, ..object.clone() }), crate::codeview::lines(object, info)?)
-        }
+        Some(info) if turbo => (Cow::Borrowed(object), crate::codeview::lines(object, info)?),
         // DWARF's sections are the DWARF writer's: the same ones an ELF object
         // holds, here segments of the class Open Watcom's -hd writes, which the
         // linker joins and relocates.
@@ -644,7 +642,7 @@ pub fn write(
         Some(info) => {
             let mut lines = crate::codeview::lines(object, info)?;
             let described = crate::codeview::sections(object, info)?;
-            let mut expanded = Object { debug: None, ..object.clone() };
+            let mut expanded = object.clone();
             expanded.sections.extend(described);
             lines.resize(expanded.sections.len(), Vec::new());
             (Cow::Owned(expanded), lines)
@@ -739,7 +737,7 @@ pub fn write(
         // it).
         records.push(Rc::new(omf::Record::new(omf::COMENT, vec![0x80, 0xFE, b'F'])));
     }
-    if debug {
+    if debug_records {
         // CodeView 4's marker: LINK /CO reads the debug information after it.
         records.push(Rc::new(omf::Record::new(omf::COMENT, vec![0x00, 0xA1, 0x01, b'C', b'V'])));
     }
@@ -871,7 +869,7 @@ mod tests {
     use super::*;
 
     fn write(object: &Object) -> Result<Vec<u8>, Error> {
-        write_generic(object)
+        write_generic(&llrm_debug::Described::from(object.clone()))
     }
 
     fn symbol(
@@ -903,7 +901,6 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             frames: Vec::new(),
-            debug: None,
         }
     }
 

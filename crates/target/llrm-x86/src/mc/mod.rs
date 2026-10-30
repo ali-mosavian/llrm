@@ -13,7 +13,7 @@ pub mod omf;
 pub mod unwind;
 pub mod win64unwind;
 
-use llrm_object::debug::{DebugCaps, Format as DebugFormat};
+use llrm_debug::{DebugCaps, DebugObjectTarget, Format as DebugFormat, Info};
 use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported, UnwindKind};
 
 /// CodeView's machine number of x86 at `bits`.
@@ -34,16 +34,40 @@ impl ObjectTarget for X86Objects {
         format: &str,
         object: &Object,
     ) -> Result<Vec<u8>, Unsupported> {
+        self.write_described(format, object, None)
+    }
+
+    fn asm_info(
+        &self,
+        format: &str,
+    ) -> Option<AsmInfo> {
+        Some(match format {
+            "omf" => AsmInfo { hosted: false, ..AsmInfo::default() },
+            "elf" => AsmInfo { pref_align: true, hosted: true, unwind: UnwindKind::EhFrame },
+            "macho" => AsmInfo { pref_align: false, hosted: true, unwind: UnwindKind::Compact },
+            "coff" => AsmInfo { pref_align: false, hosted: true, unwind: UnwindKind::Win64 },
+            _ => return None,
+        })
+    }
+}
+
+impl DebugObjectTarget for X86Objects {
+    fn write_described(
+        &self,
+        format: &str,
+        object: &Object,
+        debug: Option<&Info>,
+    ) -> Result<Vec<u8>, Unsupported> {
         // The debug writer is the format's pick, not the container's: DWARF for
         // ELF and Mach-O, C13 for COFF.
         let expanded;
-        let object = match (format, &object.debug) {
-            ("elf" | "macho", Some(_)) => {
-                expanded = llrm_dwarf::expanded(object, object.debug.as_ref().expect("matched"))?;
+        let object = match (format, debug) {
+            ("elf" | "macho", Some(info)) => {
+                expanded = llrm_dwarf::expanded(object, info)?;
                 &expanded
             }
-            ("coff", Some(_)) => {
-                expanded = llrm_codeview::expanded(object, codeview_machine(object.bits))?;
+            ("coff", Some(info)) => {
+                expanded = llrm_codeview::expanded(object, info, codeview_machine(object.bits))?;
                 &expanded
             }
             _ => object,
@@ -66,7 +90,9 @@ impl ObjectTarget for X86Objects {
             object
         };
         match (format, object.bits) {
-            ("omf", _) => llrm_omf::write::write(object, &omf::X86Omf).map_err(|one| Unsupported(one.to_string())),
+            ("omf", _) => {
+                llrm_omf::write::write(object, debug, &omf::X86Omf).map_err(|one| Unsupported(one.to_string()))
+            }
             ("elf", 32) => elf32::write(object),
             ("elf", 64) => elf64::write(object),
             ("macho", 64) => llrm_macho::write(object, &macho::X8664MachO),
@@ -74,19 +100,6 @@ impl ObjectTarget for X86Objects {
             ("coff", 64) => coff64::write(&win64unwind::expanded(object)?),
             _ => Err(Unsupported(format!("no {format} writer for a {}-bit object yet", object.bits))),
         }
-    }
-
-    fn asm_info(
-        &self,
-        format: &str,
-    ) -> Option<AsmInfo> {
-        Some(match format {
-            "omf" => AsmInfo { hosted: false, ..AsmInfo::default() },
-            "elf" => AsmInfo { pref_align: true, hosted: true, unwind: UnwindKind::EhFrame },
-            "macho" => AsmInfo { pref_align: false, hosted: true, unwind: UnwindKind::Compact },
-            "coff" => AsmInfo { pref_align: false, hosted: true, unwind: UnwindKind::Win64 },
-            _ => return None,
-        })
     }
 
     fn debug_caps(
@@ -133,10 +146,9 @@ mod tests {
             symbols: Vec::new(),
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
-            debug: None,
             frames: Vec::new(),
         };
-        let direct = llrm_omf::write::write(&object, &omf::X86Omf).unwrap();
+        let direct = llrm_omf::write::write(&object, None, &omf::X86Omf).unwrap();
         assert_eq!(X86Objects.write_object("omf", &object).unwrap(), direct);
     }
 

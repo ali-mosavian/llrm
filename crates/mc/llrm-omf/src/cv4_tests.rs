@@ -1,4 +1,4 @@
-use llrm_object::debug::{Field, Function, Info, Kind, Language, Location, Range, Scalar as S, Type as T, Variable};
+use llrm_debug::{Described, Field, Function, Info, Kind, Language, Location, Range, Scalar as S, Type as T, Variable};
 use llrm_object::{Binding, Definition, Object, Role, Section, Symbol};
 
 use super::sections;
@@ -22,7 +22,7 @@ fn object(
     bits: u8,
     types: Vec<T>,
     variables: Vec<Variable>,
-) -> Object {
+) -> Described {
     let text = Section {
         name: "_TEXT".into(),
         role: Role::Text,
@@ -52,27 +52,29 @@ fn object(
             Vec::new(),
         )),
         language: Language::C,
-        options: llrm_object::debug::DebugOptions { dialect: llrm_object::debug::Dialect::Cv4, ..Default::default() },
+        options: llrm_debug::DebugOptions { dialect: llrm_debug::Dialect::Cv4, ..Default::default() },
         code: vec![range],
         types,
         functions: vec![function],
         ..Info::default()
     };
-    Object {
-        name: "t.obj".into(),
-        bits,
-        sections: vec![text],
-        symbols: vec![Symbol {
-            name: "_f".into(),
-            binding: Binding::Public,
-            definition: Definition::Defined { section: 0, offset: 0 },
-            size: 0,
-            group: None,
-        }],
-        omf_groups: Vec::new(),
-        omf_comdat: Vec::new(),
-        frames: Vec::new(),
+    Described {
         debug: Some(info),
+        object: Object {
+            name: "t.obj".into(),
+            bits,
+            sections: vec![text],
+            symbols: vec![Symbol {
+                name: "_f".into(),
+                binding: Binding::Public,
+                definition: Definition::Defined { section: 0, offset: 0 },
+                size: 0,
+                group: None,
+            }],
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            frames: Vec::new(),
+        },
     }
 }
 
@@ -146,13 +148,13 @@ fn a_16_bit_procedure_is_the_records_ml_writes() {
 }
 
 fn only_function(
-    made: &mut Object,
+    made: &mut Described,
     change: impl FnOnce(&mut Function),
 ) {
     change(&mut made.debug.as_mut().unwrap().functions[0]);
 }
 
-fn written(made: &Object) -> (Vec<(u16, Vec<u8>)>, Vec<(u16, Vec<u8>)>, Vec<llrm_object::Reloc>) {
+fn written(made: &Described) -> (Vec<(u16, Vec<u8>)>, Vec<(u16, Vec<u8>)>, Vec<llrm_object::Reloc>) {
     let [symbols, types] = sections(made, made.debug.as_ref().unwrap()).unwrap();
     (records(&symbols.image, false), records(&types.image, true), symbols.relocs)
 }
@@ -175,7 +177,7 @@ fn a_struct_that_points_to_itself_is_named_before_its_members_and_has_a_udt() {
     let types = vec![
         T::Scalar(S::Int { bytes: 2, signed: true }),
         node,
-        T::Pointer { target: 1, bytes: 2, reach: llrm_object::debug::Reach::Near },
+        T::Pointer { target: 1, bytes: 2, reach: llrm_debug::Reach::Near },
         T::Procedure { result: None, parameters: vec![2], convention: None },
     ];
     let (symbols, types, _) = written(&object(16u8, types, Vec::new()));
@@ -282,8 +284,8 @@ fn a_c_programs_types_are_the_records_cv4f_h_describes() {
     assert_eq!((records, at), (vec![(0x0003, vec![0x11, 0, 0x21, 0, 0x14, 0, 0, 0xF1])], 0x1002), "array");
 
     let enumerators = vec![
-        llrm_object::debug::Enumerator { name: "a".into(), value: 0 },
-        llrm_object::debug::Enumerator { name: "b".into(), value: -1 },
+        llrm_debug::Enumerator { name: "a".into(), value: 0 },
+        llrm_debug::Enumerator { name: "b".into(), value: -1 },
     ];
     let (records, at) = local_of(vec![short(), T::Enum { name: "e".into(), underlying: 0, enumerators }], 1);
     let list =
@@ -332,7 +334,7 @@ fn a_c_programs_types_are_the_records_cv4f_h_describes() {
 fn a_pointer_to_a_primitive_is_a_primitive_pointer_and_to_a_record_is_a_record() {
     let short = || T::Scalar(S::Int { bytes: 2, signed: true });
     let pointer = |reach, bytes| T::Pointer { target: 0, bytes, reach };
-    use llrm_object::debug::Reach::{Far, Huge, Near};
+    use llrm_debug::Reach::{Far, Huge, Near};
     for (reach, bytes, expected) in [(Near, 2, 0x0111), (Far, 4, 0x0211), (Huge, 4, 0x0311)] {
         let (records, at) = local_of(vec![short(), pointer(reach, bytes)], 1);
         assert_eq!((records.len(), at), (0, expected), "{reach:?}");
@@ -368,20 +370,12 @@ fn a_value_in_a_register_throughout_is_s_register_and_one_part_of_the_time_is_le
         ],
     );
     let registers = [("ax", 9), ("cx", 10), ("dx", 11)]
-        .map(|(name, number)| llrm_object::debug::Register {
-            name: name.into(),
-            bits: 16,
-            dwarf: None,
-            codeview: Some(number),
-        })
+        .map(|(name, number)| llrm_debug::Register { name: name.into(), bits: 16, dwarf: None, codeview: Some(number) })
         .to_vec();
     made.debug
         .as_mut()
         .unwrap()
-        .set_registers(
-            16,
-            llrm_object::debug::RegisterFile { registers, frame: "bp".into(), return_register: String::new() },
-        );
+        .set_registers(16, llrm_debug::RegisterFile { registers, frame: "bp".into(), return_register: String::new() });
     let (symbols, ..) = written(&made);
     let found: Vec<(u16, Vec<u8>)> = symbols[3..].to_vec();
     assert_eq!(
@@ -403,7 +397,7 @@ fn a_block_is_a_scope_with_its_variables_and_an_end() {
     let mut made =
         object(16u8, vec![int(), T::Procedure { result: None, parameters: Vec::new(), convention: None }], Vec::new());
     only_function(&mut made, |one| {
-        one.blocks = vec![llrm_object::debug::Block {
+        one.blocks = vec![llrm_debug::Block {
             ranges: vec![Range { section: 0, offset: 8, length: 6 }],
             variables: vec![variable("i", 0, Kind::Local, Location::Frame { disp: -4 })],
             blocks: Vec::new(),
@@ -508,7 +502,7 @@ fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
 /// (far *fp)(int)` for a near one.
 #[test]
 fn a_pointer_to_a_function_points_to_a_procedure_called_as_far_as_the_pointer_reaches() {
-    use llrm_object::debug::Reach::{Far, Near};
+    use llrm_debug::Reach::{Far, Near};
     let short = T::Scalar(S::Int { bytes: 2, signed: true });
     let types = vec![
         short,

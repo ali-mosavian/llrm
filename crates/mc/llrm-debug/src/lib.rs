@@ -6,6 +6,58 @@
 //! Symbols are indices into `Object::symbols`, code is a section index and
 //! an offset, registers are the target's register-file names.
 
+use llrm_object::{Object, ObjectTarget, Unsupported};
+
+/// An object and the debug information that describes it: what the backend
+/// builds and a [`DebugObjectTarget`] writes. The information is the
+/// object's, not a field of it, so `llrm-object` names no debug model.
+#[derive(Clone, Debug)]
+pub struct Described {
+    pub object: Object,
+    pub debug: Option<Info>,
+}
+
+impl From<Object> for Described {
+    fn from(object: Object) -> Self {
+        Described { object, debug: None }
+    }
+}
+
+impl std::ops::Deref for Described {
+    type Target = Object;
+
+    fn deref(&self) -> &Object {
+        &self.object
+    }
+}
+
+impl std::ops::DerefMut for Described {
+    fn deref_mut(&mut self) -> &mut Object {
+        &mut self.object
+    }
+}
+
+/// A target's object writers when they also write debug information (LLVM's
+/// `MCObjectWriter` with the debug sections its `MCStreamer` emitted).
+pub trait DebugObjectTarget: ObjectTarget {
+    /// `object` as a file of `format`, with `debug` expanded into the debug
+    /// sections the format's writer makes.
+    fn write_described(
+        &self,
+        format: &str,
+        object: &Object,
+        debug: Option<&Info>,
+    ) -> Result<Vec<u8>, Unsupported>;
+
+    /// What the debug writer `asked` for in object `format` can say; the
+    /// format's own pick where `asked` is the default.
+    fn debug_caps(
+        &self,
+        format: &str,
+        asked: Format,
+    ) -> DebugCaps;
+}
+
 /// A type, by its index in [`Info::types`].
 pub type TypeId = usize;
 /// A file, by its index in [`Info::files`].
@@ -96,8 +148,8 @@ pub enum FrameBase {
 }
 
 /// What a debug writer needs to know of the machine, so it reads no
-/// [`crate::Arch`]. The target says it (`Info::target`); a made-up one needs no
-/// variant of `Arch`.
+/// [`llrm_object::Arch`]. The target says it (`Info::target`); a made-up one
+/// needs no variant of `Arch`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugTarget {
     /// The width of a near address: a DWARF address, and the size of a
@@ -109,10 +161,10 @@ pub struct DebugTarget {
     pub codeview_machine: Option<u16>,
     /// The fixup kind for a segment's selector, where addresses are segmented
     /// (`Info::target`'s to say: the object crate names no target's kind).
-    pub segment_base: Option<crate::FixupKind>,
+    pub segment_base: Option<llrm_object::FixupKind>,
     /// The fixup kind for a 16:16 pointer, whose offset is the field's first
     /// two bytes.
-    pub far_pointer: Option<crate::FixupKind>,
+    pub far_pointer: Option<llrm_object::FixupKind>,
     /// The register file with its DWARF and CodeView numbers
     /// (`MCRegisterInfo`'s `mapLLVMRegToDWARFReg`), the frame register and the
     /// return address's column.
@@ -532,17 +584,7 @@ pub struct Function {
     pub frame: Vec<FrameRow>,
 }
 
-/// From `offset` bytes into a function's first range, until the next row: the
-/// canonical frame address is `cfa_offset` past register `cfa_register`, and
-/// each register in `saved` is in memory at that address plus its offset
-/// (negative: below it).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FrameRow {
-    pub offset: usize,
-    pub cfa_register: String,
-    pub cfa_offset: i64,
-    pub saved: Vec<(String, i64)>,
-}
+pub use llrm_object::FrameRow;
 
 /// The first instruction at `offset` of section `section` is source line `line`
 /// of `file`.

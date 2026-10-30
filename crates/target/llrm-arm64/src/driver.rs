@@ -262,7 +262,7 @@ pub fn object(
     name: &str,
     level: impl Into<Level>,
 ) -> Result<llrm_object::Object, String> {
-    object_with(text, platform, name, level, false)
+    object_with(text, platform, name, level, false).map(|described| described.object)
 }
 
 /// [`object`], with the debug information (`-g`) where `debug`.
@@ -272,7 +272,7 @@ pub fn object_with(
     name: &str,
     level: impl Into<Level>,
     debug: bool,
-) -> Result<llrm_object::Object, String> {
+) -> Result<llrm_debug::Described, String> {
     let mut program = program(text, platform)?;
     let level = level.into();
     if debug {
@@ -282,11 +282,9 @@ pub fn object_with(
         optimized_at(&mut program, level)?;
     }
     let lowered = functions_with(&program, debug)?;
-    let mut object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
-    if debug {
-        object.debug = crate::debug::info(&program.modules[0], platform, &object, &lowered, name)?;
-    }
-    Ok(object)
+    let object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
+    let debug = if debug { crate::debug::info(&program.modules[0], platform, &object, &lowered, name)? } else { None };
+    Ok(llrm_debug::Described { object, debug })
 }
 
 /// The assembly of the lowered functions, one instruction a line.
@@ -333,10 +331,12 @@ pub fn object_file_with(
 ) -> Result<Vec<u8>, String> {
     use llrm_target::object::Format;
     let object = object_with(text, platform, name, level, debug)?;
-    use llrm_object::ObjectTarget;
+    use llrm_debug::DebugObjectTarget;
     let objects = crate::mc::Arm64Objects;
-    let macho = || objects.write_object("macho", &object).map_err(|error| error.to_string());
-    let elf = || objects.write_object("elf", &object).map_err(|error| error.to_string());
+    let macho =
+        || objects.write_described("macho", &object.object, object.debug.as_ref()).map_err(|error| error.to_string());
+    let elf =
+        || objects.write_described("elf", &object.object, object.debug.as_ref()).map_err(|error| error.to_string());
     if let Some(dir) = llrm_target::object::all_writers_dir() {
         for (format, written) in [(Format::MachO, macho()), (Format::Elf, elf())] {
             if let Ok(written) = written {

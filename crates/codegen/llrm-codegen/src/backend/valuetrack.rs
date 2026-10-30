@@ -67,8 +67,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind};
+use llrm_debug::FrameRow;
 use llrm_lir::registers::RegId;
-use llrm_object::debug::FrameRow;
 
 use super::masm::{Mark, Place};
 use crate::model::lir::{DebugNote, NoteArg, NoteExpr, NoteValue};

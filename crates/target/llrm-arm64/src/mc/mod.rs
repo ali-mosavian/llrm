@@ -16,6 +16,7 @@ pub mod visit;
 #[cfg(test)]
 pub(crate) mod tests;
 
+use llrm_debug::{DebugObjectTarget, Info};
 use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported, UnwindKind};
 
 /// arm64's object writers.
@@ -27,8 +28,30 @@ impl ObjectTarget for Arm64Objects {
         format: &str,
         object: &Object,
     ) -> Result<Vec<u8>, Unsupported> {
+        self.write_described(format, object, None)
+    }
+
+    fn asm_info(
+        &self,
+        format: &str,
+    ) -> Option<AsmInfo> {
+        matches!(format, "macho" | "elf").then_some(AsmInfo {
+            pref_align: false,
+            hosted: true,
+            unwind: if format == "macho" { UnwindKind::Compact } else { UnwindKind::EhFrame },
+        })
+    }
+}
+
+impl DebugObjectTarget for Arm64Objects {
+    fn write_described(
+        &self,
+        format: &str,
+        object: &Object,
+        debug: Option<&Info>,
+    ) -> Result<Vec<u8>, Unsupported> {
         let expanded;
-        let object = match (format, &object.debug) {
+        let object = match (format, debug) {
             ("elf" | "macho", Some(info)) => {
                 expanded = llrm_dwarf::expanded(object, info)?;
                 &expanded
@@ -48,22 +71,11 @@ impl ObjectTarget for Arm64Objects {
         }
     }
 
-    fn asm_info(
-        &self,
-        format: &str,
-    ) -> Option<AsmInfo> {
-        matches!(format, "macho" | "elf").then_some(AsmInfo {
-            pref_align: false,
-            hosted: true,
-            unwind: if format == "macho" { UnwindKind::Compact } else { UnwindKind::EhFrame },
-        })
-    }
-
     fn debug_caps(
         &self,
         _: &str,
-        _: llrm_object::debug::Format,
-    ) -> llrm_object::debug::DebugCaps {
+        _: llrm_debug::Format,
+    ) -> llrm_debug::DebugCaps {
         llrm_dwarf::CAPS
     }
 }

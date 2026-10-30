@@ -162,7 +162,7 @@ fn main() -> i16:
 }
 
 /// The model of the Nib `source` compiled for real mode, nothing inlined.
-fn model_of(source: &str) -> llrm_object::debug::Info {
+fn model_of(source: &str) -> llrm_debug::Info {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = directory.path().join("probe.nib");
     std::fs::write(&path, source).expect("writes");
@@ -201,7 +201,7 @@ fn model_of(source: &str) -> llrm_object::debug::Info {
 /// on or off, and needs no fold.
 #[test]
 fn a_parameter_the_optimiser_removed_is_in_the_model_with_no_location() {
-    use llrm_object::debug::{Kind, Location};
+    use llrm_debug::{Kind, Location};
     const MIX: &str = "var counter: i16 = 5
 
 fn mix(a: i16, unused: i16) -> i16:
@@ -235,7 +235,7 @@ const TWO: &str = "fn add(a: i16, b: i32) -> i32:\n    return i32(a) + b\n\nfn m
 fn segmented_model(
     source: &str,
     procedure_segments: bool,
-) -> llrm_object::debug::Info {
+) -> llrm_debug::Info {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = directory.path().join("probe.nib");
     std::fs::write(&path, source).expect("writes");
@@ -273,7 +273,7 @@ fn cv4_describes_a_program_with_a_code_segment_per_procedure() {
     assert!(info.code.len() >= 2, "{:?}", info.code);
     let one = segmented_model(TWO, false);
     // The same functions with the same variables, in one segment.
-    let shape = |info: &llrm_object::debug::Info| {
+    let shape = |info: &llrm_debug::Info| {
         info.functions.iter().map(|one| (one.name.clone(), one.variables.len())).collect::<Vec<_>>()
     };
     assert_eq!(shape(&info), shape(&one));
@@ -288,15 +288,15 @@ fn main() -> i16:
 ";
 
 /// The model of `ADD` under `-mabi=regparm3`, its debug format `format`.
-fn regparm_model(format: llrm_object::debug::Format) -> (llrm_object::debug::Info, Vec<u8>) {
+fn regparm_model(format: llrm_debug::Format) -> (llrm_debug::Info, Vec<u8>) {
     regparm_model_of(ADD, format)
 }
 
 /// The model of the Nib `source` under `-mabi=regparm3`, and its code.
 fn regparm_model_of(
     source: &str,
-    format: llrm_object::debug::Format,
-) -> (llrm_object::debug::Info, Vec<u8>) {
+    format: llrm_debug::Format,
+) -> (llrm_debug::Info, Vec<u8>) {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = directory.path().join("probe.nib");
     std::fs::write(&path, source).expect("writes");
@@ -332,8 +332,8 @@ fn regparm_model_of(
 /// code: nothing stores either to a cell.
 #[test]
 fn a_register_parameter_is_said_where_the_code_keeps_it_for_the_whole_body() {
-    use llrm_object::debug::{Kind, Location};
-    let (info, code) = regparm_model(llrm_object::debug::Format::Default);
+    use llrm_debug::{Kind, Location};
+    let (info, code) = regparm_model(llrm_debug::Format::Default);
     let add = info.functions.iter().find(|one| one.name == "add").expect("add");
     let places: Vec<(&str, Kind, &Location)> =
         add.variables.iter().map(|one| (one.name.as_str(), one.kind, &one.location)).collect();
@@ -376,8 +376,8 @@ fn main() -> i16:
 /// incidental and not asserted.
 #[test]
 fn a_register_parameter_kept_across_a_loop_has_its_place_and_one_that_moves_has_its_ranges() {
-    use llrm_object::debug::Location;
-    let (info, _) = regparm_model_of(LOOP, llrm_object::debug::Format::Default);
+    use llrm_debug::Location;
+    let (info, _) = regparm_model_of(LOOP, llrm_debug::Format::Default);
     let sum = info.functions.iter().find(|one| one.name == "sum").expect("sum");
     let step = sum.variables.iter().find(|one| one.name == "step").expect("step");
     assert!(
@@ -389,7 +389,7 @@ fn a_register_parameter_kept_across_a_loop_has_its_place_and_one_that_moves_has_
     let n = sum.variables.iter().find(|one| one.name == "n").expect("n");
     assert!(matches!(&n.location, Location::List(entries) if entries.is_empty()), "{:?}", n.location);
 
-    let (info, _) = regparm_model_of(LOOP, llrm_object::debug::Format::Dwarf { version: 5 });
+    let (info, _) = regparm_model_of(LOOP, llrm_debug::Format::Dwarf { version: 5 });
     let sum = info.functions.iter().find(|one| one.name == "sum").expect("sum");
     let n = sum.variables.iter().find(|one| one.name == "n").expect("n");
     let Location::List(entries) = &n.location else { panic!("{:?}", n.location) };
@@ -436,8 +436,8 @@ fn compiled_regparm() -> Vec<Rc<omf::Record>> {
 /// debugger, and the code is the code of a build without `-g`.
 #[test]
 fn where_the_format_says_ranges_a_register_parameter_stays_in_its_register() {
-    use llrm_object::debug::Location;
-    let (info, _) = regparm_model(llrm_object::debug::Format::Dwarf { version: 5 });
+    use llrm_debug::Location;
+    let (info, _) = regparm_model(llrm_debug::Format::Dwarf { version: 5 });
     let add = info.functions.iter().find(|one| one.name == "add").expect("add");
     assert!(add.variables.iter().all(|one| matches!(&one.location, Location::List(entries) if matches!(entries[..], [(_, Location::Register(_))]))), "{:?}", add.variables);
 }

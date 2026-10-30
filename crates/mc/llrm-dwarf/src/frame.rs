@@ -4,7 +4,7 @@
 //! prologue analysis has nothing to go on (a frameless function, registers
 //! saved where first needed).
 
-use llrm_object::debug::{FrameRow, Info};
+use llrm_debug::{FrameRow, Info};
 use llrm_object::{Object, Unsupported};
 
 use crate::buffer::{Buf, Done};

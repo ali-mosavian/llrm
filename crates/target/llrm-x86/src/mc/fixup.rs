@@ -1,6 +1,6 @@
 //! x86's fixup kinds (`X86FixupKinds.h`), numbered from `FIRST_TARGET`.
 
-use llrm_object::debug::DebugTarget;
+use llrm_debug::DebugTarget;
 use llrm_object::{Fix, FixupKind, FixupKindInfo};
 
 /// A call or jump's target, relative to the field's end: the formats that tell

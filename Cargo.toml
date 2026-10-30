@@ -37,6 +37,7 @@ llrm-x86-m64 = { path = "crates/target/llrm-x86-m64" }
 llrm-x86-m64-select = { path = "crates/target/llrm-x86-m64-select" }
 llrm-omf = { path = "crates/mc/llrm-omf" }
 llrm-object = { path = "crates/mc/llrm-object" }
+llrm-debug = { path = "crates/mc/llrm-debug" }
 llrm-elf = { path = "crates/mc/llrm-elf" }
 llrm-dwarf = { path = "crates/mc/llrm-dwarf" }
 llrm-codeview = { path = "crates/mc/llrm-codeview" }
@@ -100,6 +101,7 @@ llrm-target = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 regex = { workspace = true }
 toml = { workspace = true }
 

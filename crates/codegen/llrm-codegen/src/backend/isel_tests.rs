@@ -4655,13 +4655,13 @@ fn test_dbg_lines_become_linnum() {
         dialect: Default::default(),
         return_register: String::new(),
         frame: None,
-        producer: llrm_object::debug::Producer::Native,
+        producer: llrm_debug::Producer::Native,
         frame_register: "ebp".into(),
         cfa: false,
         ranges: false,
         file: Vec::new(),
         registers: Vec::new(),
-        target: llrm_object::debug::DebugTarget::of(32),
+        target: llrm_debug::DebugTarget::of(32),
         types: Vec::new(),
         nodes: Default::default(),
         procedures: Default::default(),
@@ -7118,9 +7118,9 @@ out:
 }
 
 mod expression_notes {
+    use llrm_debug::ExprOp;
     use llrm_mir::DwOp;
     use llrm_mir::module::DwBinary;
-    use llrm_object::debug::ExprOp;
 
     use crate::backend::isel::expression_note;
     use crate::model::lir::{NoteArg, NoteExpr, NoteValue};

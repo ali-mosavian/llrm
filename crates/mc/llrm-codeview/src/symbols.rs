@@ -3,7 +3,7 @@
 //! or data, a `SECREL` and a `SECTION` relocation against the object's symbol
 //! fill its offset and its section.
 
-use llrm_object::debug::{ChecksumKind, Function, Info, Kind, Location, Range, Type, Variable};
+use llrm_debug::{ChecksumKind, Function, Info, Kind, Location, Range, Type, Variable};
 use llrm_object::{Binding, Definition, Fix, Object, Reloc, Target, Unsupported};
 
 use super::types::Types;
@@ -263,7 +263,7 @@ impl Writer<'_> {
     fn block(
         &self,
         out: &mut Data,
-        block: &llrm_object::debug::Block,
+        block: &llrm_debug::Block,
     ) -> Result<(), Unsupported> {
         let Some(range) = block.hull() else { return refused("a block scope in several sections") };
         let anchored = anchor(self.object, self.function, range)?;

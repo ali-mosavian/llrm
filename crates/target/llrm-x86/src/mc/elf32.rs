@@ -49,7 +49,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 
 #[cfg(test)]
 mod tests {
-    use llrm_object::ObjectTarget;
+    use llrm_debug::DebugObjectTarget;
     use llrm_object::{Binding, Definition, Fix, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
@@ -124,7 +124,6 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             frames: Vec::new(),
-            debug: None,
         }
     }
 
@@ -230,16 +229,15 @@ mod tests {
     /// in its place.
     #[test]
     fn a_debug_format_this_object_cannot_carry_is_refused() {
-        for (format, name) in [
-            (llrm_object::debug::Format::CodeView, "CodeView"),
-            (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger"),
-        ] {
-            let mut made = object(vec![text(vec![0], vec![])], vec![]);
-            made.debug = Some(llrm_object::debug::Info {
-                options: llrm_object::debug::DebugOptions { format, ..Default::default() },
+        for (format, name) in
+            [(llrm_debug::Format::CodeView, "CodeView"), (llrm_debug::Format::TurboDebugger, "Turbo Debugger")]
+        {
+            let made = object(vec![text(vec![0], vec![])], vec![]);
+            let debug = Some(llrm_debug::Info {
+                options: llrm_debug::DebugOptions { format, ..Default::default() },
                 ..Default::default()
             });
-            let why = crate::mc::X86Objects.write_object("elf", &made).unwrap_err().0;
+            let why = crate::mc::X86Objects.write_described("elf", &made, debug.as_ref()).unwrap_err().0;
             assert!(why.contains("cannot carry") && why.contains(name), "{why}");
         }
     }

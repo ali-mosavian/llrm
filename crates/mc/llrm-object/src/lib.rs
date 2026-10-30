@@ -2,7 +2,6 @@
 //! `docs/formats/object-model.md`.
 
 pub mod assembler;
-pub mod debug;
 
 /// Which debug format a [`Role::Debug`] section belongs to, so a writer needs
 /// no name to tell them apart.
@@ -330,10 +329,21 @@ pub struct Object {
     /// nothing refers to them. Each has one public symbol at offset 0
     /// that names it. Indices into `sections`.
     pub omf_comdat: Vec<usize>,
-    pub debug: Option<debug::Info>,
     /// How to find each function's caller (`.eh_frame`'s source), whether or
     /// not `-g` is on. Empty where the format has none or nothing declared it.
     pub frames: Vec<Frame>,
+}
+
+/// From `offset` bytes into a function's first range, until the next row: the
+/// canonical frame address is `cfa_offset` past register `cfa_register`, and
+/// each register in `saved` is in memory at that address plus its offset
+/// (negative: below it).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FrameRow {
+    pub offset: usize,
+    pub cfa_register: String,
+    pub cfa_offset: i64,
+    pub saved: Vec<(String, i64)>,
 }
 
 /// A function's unwind rows: its code's place and how the canonical frame
@@ -343,7 +353,7 @@ pub struct Frame {
     pub section: usize,
     pub offset: usize,
     pub length: usize,
-    pub rows: Vec<debug::FrameRow>,
+    pub rows: Vec<FrameRow>,
     /// The directives that declared the rows, in order (`.cfi_*`), for the
     /// formats that encode them instead of the rows (Mach-O's compact unwind).
     pub cfi: Vec<assembler::Cfi>,
@@ -383,14 +393,6 @@ pub trait ObjectTarget {
         &self,
         format: &str,
     ) -> Option<AsmInfo>;
-
-    /// What the debug writer `asked` for in object `format` can say; the
-    /// format's own pick where `asked` is the default.
-    fn debug_caps(
-        &self,
-        format: &str,
-        asked: debug::Format,
-    ) -> debug::DebugCaps;
 }
 
 /// What an object format says of the code it holds, so the code that lays it

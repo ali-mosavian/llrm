@@ -25,7 +25,6 @@ fn with(code: &[u8]) -> Object {
         }],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
-        debug: None,
         frames: Vec::new(),
     }
 }

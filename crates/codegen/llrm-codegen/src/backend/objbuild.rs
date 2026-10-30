@@ -61,6 +61,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use llrm_debug::{DebugObjectTarget, Described};
 use llrm_lir::registers::Regs;
 use llrm_object::assembler::AsmBackend;
 use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
@@ -528,7 +529,7 @@ pub enum CodeLayout {
 pub fn written(
     module: &masm::Module,
     source: &str,
-    objects: &dyn ObjectTarget,
+    objects: &dyn DebugObjectTarget,
 ) -> Result<Vec<u8>, Error> {
     written_as(module, source, CodeLayout::OneSegment, objects)
 }
@@ -537,7 +538,7 @@ pub fn written_as(
     module: &masm::Module,
     source: &str,
     layout: CodeLayout,
-    objects: &dyn ObjectTarget,
+    objects: &dyn DebugObjectTarget,
 ) -> Result<Vec<u8>, Error> {
     written_in(module, source, layout, Format::Omf, objects)
 }
@@ -548,7 +549,7 @@ pub fn written_in(
     source: &str,
     layout: CodeLayout,
     format: Format,
-    objects: &dyn ObjectTarget,
+    objects: &dyn DebugObjectTarget,
 ) -> Result<Vec<u8>, Error> {
     llrm_support::debug::timed("object write", || {
         let object = built_inner(module, source, layout, format, objects)?;
@@ -576,11 +577,11 @@ pub fn asm_info(
 
 /// `object` as a file of `format`.
 pub fn serialized(
-    objects: &dyn ObjectTarget,
-    object: &Object,
+    objects: &dyn DebugObjectTarget,
+    object: &Described,
     format: Format,
 ) -> Result<Vec<u8>, Error> {
-    Ok(objects.write_object(format.name(), object)?)
+    Ok(objects.write_described(format.name(), &object.object, object.debug.as_ref())?)
 }
 
 /// `module` laid out as an object.
@@ -588,8 +589,8 @@ pub fn built(
     module: &masm::Module,
     source: &str,
     layout: CodeLayout,
-    objects: &dyn ObjectTarget,
-) -> Result<Object, Error> {
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
     built_inner(module, source, layout, Format::Omf, objects)
 }
 
@@ -600,8 +601,8 @@ pub fn built_in(
     source: &str,
     layout: CodeLayout,
     format: Format,
-    objects: &dyn ObjectTarget,
-) -> Result<Object, Error> {
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
     built_inner(module, source, layout, format, objects)
 }
 
@@ -625,8 +626,8 @@ fn built_inner(
     source: &str,
     layout: CodeLayout,
     format: Format,
-    objects: &dyn ObjectTarget,
-) -> Result<Object, Error> {
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
     let module = &stack_probed(live(module)?, format);
     // A procedure the program put in a segment of its own naming (`code_seg`)
     // is in that one, the rest in `code`.
@@ -688,8 +689,7 @@ fn built_inner(
     // The BASIC dialect's records name an address by its offset alone, so they
     // need the one code segment the module's code is in; CodeView 4 as C7
     // writes it has the segment in each address.
-    if module.debug.as_ref().is_some_and(|debug| debug.dialect == llrm_object::debug::Dialect::Bc) && groups.len() != 1
-    {
+    if module.debug.as_ref().is_some_and(|debug| debug.dialect == llrm_debug::Dialect::Bc) && groups.len() != 1 {
         return Err(Unencodable("-g of the BASIC dialect with a code segment per procedure".into()).into());
     }
     let mut externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
@@ -1227,7 +1227,7 @@ pub fn object_of(
     symbols: &IndexMap<String, (usize, usize)>,
     sizes: &IndexMap<String, usize>,
     externs: &IndexMap<String, String>,
-) -> Result<Object, Error> {
+) -> Result<Described, Error> {
     let model = module.object.code_model();
     let used: BTreeSet<String> = segments
         .iter()
@@ -1313,19 +1313,21 @@ pub fn object_of(
     // was handed.
     let name =
         debug.as_ref().and_then(|info| info.files.first()).map_or_else(|| source.to_owned(), |file| file.name.clone());
-    Ok(Object {
-        name,
-        bits: match model {
-            CodeModel::Flat64 => 64u8,
-            CodeModel::Flat32 => 32u8,
-            CodeModel::Segmented16 => 16u8,
-        },
-        sections,
-        symbols: table,
-        omf_groups,
-        omf_comdat: Vec::new(),
-        frames,
+    Ok(Described {
         debug,
+        object: Object {
+            name,
+            bits: match model {
+                CodeModel::Flat64 => 64u8,
+                CodeModel::Flat32 => 32u8,
+                CodeModel::Segmented16 => 16u8,
+            },
+            sections,
+            symbols: table,
+            omf_groups,
+            omf_comdat: Vec::new(),
+            frames,
+        },
     })
 }
 
@@ -1337,8 +1339,8 @@ fn declared_frames(
     symbols: &IndexMap<String, (usize, usize)>,
     sizes: &IndexMap<String, usize>,
 ) -> Vec<llrm_object::Frame> {
+    use llrm_debug::FrameRow;
     use llrm_object::assembler::Cfi;
-    use llrm_object::debug::FrameRow;
     let name = |number: u16| llrm_x86::mc::unwind::register_label(bits, number);
     let mut frames = Vec::new();
     for (section, segment) in segments.iter().enumerate() {
@@ -1616,6 +1618,7 @@ mod tests {
         let leave = semantics(Operation::Return, "retf", vec![], vec![]);
         let insns = vec![insn(1, load), insn(2, call), insn(3, leave)];
         let built = masm::Module {
+            debug: None,
             registers: crate::backend::registerinfo::test_regs(),
             code: "GET_TEXT".into(),
             names: IndexMap::from_iter([((Space::External, 7), "_d".to_owned())]),
@@ -1636,7 +1639,6 @@ mod tests {
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
             stack: 0,
-            debug: None,
         };
         assert_eq!(
             masm::text(&built).unwrap(),
@@ -1662,6 +1664,7 @@ mod tests {
             items.extend(to.map(|to| masm::Datum::Align(masm::Align { to })));
             items.push(masm::Datum::Bytes(vec![2]));
             let module = masm::Module {
+                debug: None,
                 registers: crate::backend::registerinfo::test_regs(),
                 code: "M_TEXT".into(),
                 names: IndexMap::default(),
@@ -1676,7 +1679,6 @@ mod tests {
                 object: llrm_target::Target::object(&llrm_x86_m16::M16),
                 requests: BTreeSet::new(),
                 stack: 0,
-                debug: None,
             };
             let records =
                 omf::parse(&written(&module, "m.c", llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap())
@@ -1736,6 +1738,7 @@ mod tests {
             masm::InlinePart::Fixup("segment".into(), "_far".into(), 0),
         ];
         let rich = masm::Module {
+            debug: None,
             registers: crate::backend::registerinfo::test_regs(),
             code: "RICH_TEXT".into(),
             names: IndexMap::from_iter([
@@ -1787,7 +1790,6 @@ mod tests {
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
             stack: 0,
-            debug: None,
         };
         assert_eq!(
             masm::text(&rich).unwrap(),
@@ -1853,6 +1855,7 @@ mod tests {
     fn test_a_function_is_aligned_as_emitfunctionheader_does() {
         let small = |size: bool| {
             let mut module = masm::Module {
+                debug: None,
                 registers: crate::backend::registerinfo::test_regs(),
                 code: "M_TEXT".into(),
                 names: IndexMap::default(),
@@ -1872,7 +1875,6 @@ mod tests {
                 object: llrm_target::Target::object(&llrm_x86_m32::M32),
                 requests: BTreeSet::new(),
                 stack: 0,
-                debug: None,
             };
             module.object = llrm_target::Target::object(&llrm_x86_m32::M32);
             module

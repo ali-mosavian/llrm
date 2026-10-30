@@ -3,8 +3,8 @@ const EBP: RegId = RegId::EBP;
 const ECX: RegId = RegId::ECX;
 const EDX: RegId = RegId::EDX;
 const ESP: RegId = RegId::ESP;
+use llrm_debug::FrameRow;
 use llrm_lir::registers::RegId;
-use llrm_object::debug::FrameRow;
 
 use super::{Mark, Place, Regs, Where, tracked};
 use crate::model::lir::{DebugNote, NoteValue};

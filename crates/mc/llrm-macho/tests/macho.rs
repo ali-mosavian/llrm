@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use llrm_debug::DebugObjectTarget;
 use llrm_macho::{
     LC_BUILD_VERSION, LC_SYMTAB, MachTargetWriter, N_EXT, N_WEAK_DEF, PLATFORM_MACOS, write as write_with,
 };
@@ -134,7 +135,6 @@ fn program() -> Object {
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
         frames: Vec::new(),
-        debug: None,
     }
 }
 
@@ -299,7 +299,6 @@ fn arm64_program() -> Object {
         omf_groups: vec![],
         omf_comdat: vec![],
         frames: Vec::new(),
-        debug: None,
     }
 }
 
@@ -394,7 +393,6 @@ fn ld64_links_it_with_a_clang_object() {
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
         frames: Vec::new(),
-        debug: None,
     };
     std::fs::write(dir.join("mine.o"), write(&made).unwrap()).unwrap();
     std::fs::write(dir.join("ext.c"), "int ext(void) { return 3; }\n").unwrap();
@@ -486,16 +484,15 @@ fn what_mach_o_cannot_say_is_refused() {
 /// in its place.
 #[test]
 fn a_debug_format_this_object_cannot_carry_is_refused() {
-    for (format, name) in [
-        (llrm_object::debug::Format::CodeView, "CodeView"),
-        (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger"),
-    ] {
-        let mut made = program();
-        made.debug = Some(llrm_object::debug::Info {
-            options: llrm_object::debug::DebugOptions { format, ..Default::default() },
+    for (format, name) in
+        [(llrm_debug::Format::CodeView, "CodeView"), (llrm_debug::Format::TurboDebugger, "Turbo Debugger")]
+    {
+        let made = program();
+        let debug = llrm_debug::Info {
+            options: llrm_debug::DebugOptions { format, ..Default::default() },
             ..Default::default()
-        });
-        let why = write(&made).unwrap_err().0;
+        };
+        let why = llrm_x86::mc::X86Objects.write_described("macho", &made, Some(&debug)).unwrap_err().0;
         assert!(why.contains("cannot carry") && why.contains(name), "{why}");
     }
 }
