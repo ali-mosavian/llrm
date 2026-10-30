@@ -325,6 +325,13 @@ impl llrm_target::Target for M16 {
         llrm_x86::calling::first_argument_offset(CALLING.native(), far)
     }
 
+    /// `idiv word` faults (interrupt 0) where the quotient overflows 16 bits,
+    /// and every DOS runtime (BRUN, llrm's `B$TRAPS` in runtime/qb/dos/m16)
+    /// installs the handler that raises error 11.
+    fn idiv_overflow_traps(&self) -> bool {
+        true
+    }
+
     fn object(&self) -> llrm_target::object::ObjectFormat {
         static OBJECT: std::sync::LazyLock<llrm_target::object::ObjectFormat> = std::sync::LazyLock::new(|| {
             llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml"))
