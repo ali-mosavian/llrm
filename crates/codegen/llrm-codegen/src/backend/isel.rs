@@ -619,8 +619,16 @@ pub fn convention_for(
     // A float leaves in st(0), which no register names.
     let described = entry(arch, calling_convention, variadic);
     let answer = lone_float(types, result);
+    // A convention that names a register for a pointer result (m68k's `a0`)
+    // returns a pointer there, not by its width.
+    let pointer_result = described
+        .filter(|_| matches!(types.get(answer), Type::Pointer(_)))
+        .and_then(|one| one.results.get("pointer"))
+        .map(|names| names.iter().map(|name| arch.register_named(name)).collect::<Vec<_>>());
     let returns = if types.is_void(result) || matches!(types.get(answer), Type::Float(_)) {
         Vec::new()
+    } else if let Some(registers) = pointer_result {
+        registers
     } else {
         results(arch, described, size_of(module, layout, result)?)
     };
