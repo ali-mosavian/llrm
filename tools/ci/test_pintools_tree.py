@@ -31,7 +31,7 @@ def test_the_clang_tree_jobs_keep_their_cache_keys():
 
 def test_only_the_unit_group_restores_the_tree_and_a_missing_one_is_red():
     gate = CI.split("\n  gate:\n")[1].split("\n  # The verdict")[0]
-    assert "pintools: ${{ (matrix.group == 'unit' || matrix.group == 'integration' || matrix.group == 'python') && 'required' || '' }}" in gate
+    assert "pintools: ${{ (matrix.group == 'unit' || matrix.group == 'integration' || startsWith(matrix.group, 'python')) && 'required' || '' }}" in gate
 
 
 def test_a_failed_pintools_job_is_a_failed_verdict():
@@ -80,7 +80,7 @@ def test_the_difftest_tests_that_need_opt_are_red_not_skipped_where_the_gate_req
     for name in ("test_difftest.py", "test_inlinediff.py"):
         text = (ROOT / "tools/difftest" / name).read_text()
         assert 'not os.environ.get("LLRM_REQUIRE_PINTOOLS")' in text
-    assert "matrix.group == 'python'" in CI
+    assert "startsWith(matrix.group, 'python')" in CI
 
 
 def test_the_pindiff_corpus_check_is_red_not_skipped_where_the_gate_requires_the_tools():
