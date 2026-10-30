@@ -184,8 +184,8 @@ static unsigned long long divide_scaled(int *scale, int *inexact)
 }
 
 #if __LDBL_MANT_DIG__ != 64
-/* Only x87's 64-bit extended numbers make the quick way exact; another long
-   double (arm64's software one) takes the exact way alone, with the same result. */
+/* Only x87's 64-bit extended numbers make the quick way exact: at the Watcom rows' 53 bits the
+   quotient rounds once too early and NIBBLES's m16 screens differ.  Another long double takes the exact way alone. */
 static int quick_double(unsigned long long mantissa, int exponent, double *out)
 {
     return 0;

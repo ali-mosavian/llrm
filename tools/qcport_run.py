@@ -147,6 +147,22 @@ def attract_over(directory: Path) -> bool:
     return not problems or any("out of memory" in one.lower() or one.startswith("CPU exception") for one in problems)
 
 
+def stop(child: subprocess.Popen) -> None:
+    """Kill `child` and everything under it: the emulator runs under `timeout`, in a process group of its own, which a kill of the
+    script's group misses."""
+    sys.path.insert(0, str(HERE / "gate"))
+    import proctree
+
+    below = proctree.descendants(child.pid)
+    os.killpg(child.pid, signal.SIGKILL)
+    for one in below:
+        try:
+            os.kill(one, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    child.wait()
+
+
 def progress(directory: Path) -> int:
     """How much the run has written: the emulator's log grows as the program steps, so a stalled run's does not."""
     return sum(one.stat().st_size for one in directory.iterdir() if one.is_file())
@@ -169,12 +185,10 @@ def run(directory: Path, qcport: Path, stall: float, cap: float, tick: float = 1
         if (size := progress(directory)) != seen:
             seen, moved = size, now
         if over and over(directory):
-            os.killpg(child.pid, signal.SIGKILL)
-            child.wait()
+            stop(child)
             return None
         why = f"no progress for {stall:g}s" if now - moved > stall else f"still running after {cap:g}s" if now - start > cap else None
         if why:
-            os.killpg(child.pid, signal.SIGKILL)
-            child.wait()
+            stop(child)
             return why
     return None

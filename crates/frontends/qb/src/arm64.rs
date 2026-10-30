@@ -326,8 +326,8 @@ fn shifted(
 
 /// The entries QB calls with a block of words on the stack (`B$DDIM`, `B$COLR`,
 /// ...): a host's are variadic C functions (runtime/qb/posix/blockentries.c)
-/// that read the block's words in memory order, which is the reverse of the
-/// order they were pushed in.
+/// that read the block's words in memory order; the emitted call already has
+/// them in that order (count first), so the arguments are left as they are.
 const BLOCK_ENTRIES: [(&str, &str); 7] = [
     ("B_DDIM", "ptr"),
     ("B_RDIM", "ptr"),
@@ -349,7 +349,7 @@ fn block_entry(line: &str) -> String {
         }
         let mut depth = 0usize;
         let mut close = line.len();
-        let mut parts = Vec::new();
+        let mut parts: Vec<&str> = Vec::new();
         let mut from = args_at;
         for (index, c) in line[args_at..].char_indices() {
             match c {
@@ -367,7 +367,6 @@ fn block_entry(line: &str) -> String {
                 _ => {}
             }
         }
-        parts.reverse();
         let head = line[..at].trim_end();
         let head = head.strip_suffix("void").map_or(head.to_owned(), |before| format!("{before}void ({first}, ...)"));
         return format!("{head} {symbol}{}{}", parts.join(", "), &line[close..]);
