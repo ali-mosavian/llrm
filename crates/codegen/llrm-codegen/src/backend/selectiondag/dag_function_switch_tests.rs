@@ -223,7 +223,7 @@ fn a_dominant_case_is_peeled_and_the_rest_follows() {
 /// skipped it at `optsize` (-Os), where the pin peels.
 #[test]
 fn a_dominant_case_is_peeled_at_optsize_and_not_at_minsize() {
-    use super::switchcg::{plan_with, BranchProbability, SwitchTarget};
+    use super::switchcg::{BranchProbability, SwitchTarget, plan_with};
     let cases = [
         (1, 1, BranchProbability::new(1, 10)),
         (20, 2, BranchProbability::new(1, 10)),
@@ -264,9 +264,8 @@ b:
 fn a_wide_switch_is_a_tree_unless_minsize() {
     let first_compare = |attribute: &str| {
         let module = llrm_mir::parse::module(&WIDE_SWITCH.replace("ATTR", attribute)).expect("parses");
-        let done =
-            selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
-                .unwrap_or_else(|e| panic!("{}", e.0));
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
         let first = done
             .body
             .insns()

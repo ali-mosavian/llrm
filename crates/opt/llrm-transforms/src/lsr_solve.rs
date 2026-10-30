@@ -152,7 +152,12 @@ impl Collection<'_, '_> {
             shown += 1;
             llrm_support::debug!("lsr-all", "  {:?}", cost.c);
             for (at, &chosen) in choice.iter().enumerate() {
-                llrm_support::debug!("lsr-all", "    use {at} {:?}: {:?}", self.uses[at].kind, self.uses[at].formulae[chosen]);
+                llrm_support::debug!(
+                    "lsr-all",
+                    "    use {at} {:?}: {:?}",
+                    self.uses[at].kind,
+                    self.uses[at].formulae[chosen]
+                );
             }
         }
         found

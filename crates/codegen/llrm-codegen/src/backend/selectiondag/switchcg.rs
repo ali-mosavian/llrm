@@ -160,7 +160,14 @@ pub struct SwitchTarget {
 impl SwitchTarget {
     /// x86 at -O2 with the pin's defaults.
     pub fn x86(pointer_bits: u32) -> SwitchTarget {
-        SwitchTarget { pointer_bits, min_jump_table_entries: 4, jump_tables: true, opt_size: false, min_size: false, optimize: true }
+        SwitchTarget {
+            pointer_bits,
+            min_jump_table_entries: 4,
+            jump_tables: true,
+            opt_size: false,
+            min_size: false,
+            optimize: true,
+        }
     }
 }
 

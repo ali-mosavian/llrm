@@ -702,7 +702,11 @@ fn pushed_arguments(
                 // Only a move of a word or a dword can be a push, or the
                 // `and`/`or` the minsize patterns store 0 and -1 with
                 // (`classifyInstruction`).
-                if insns[place].what.as_ref().is_some_and(|what| what.op != Operation::Move && constant_store(what).is_none()) {
+                if insns[place]
+                    .what
+                    .as_ref()
+                    .is_some_and(|what| what.op != Operation::Move && constant_store(what).is_none())
+                {
                     // DEVIATE SD405: tuned for size, a popped x87 store is
                     // made with its own area (below); the stackifier pops it.
                     if split_wide.is_some() && is_float_store(&insns[place]) {
