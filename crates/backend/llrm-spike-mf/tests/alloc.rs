@@ -492,3 +492,91 @@ fn a_colouring_round_names_every_value_it_cannot_fit() {
     let failures = GraphColoring::<Spilly>::default().colour(&function).expect_err("two registers cannot hold twenty");
     assert!(failures.len() >= 10, "{} failures named", failures.len());
 }
+
+/// `Spilly` with the store shaped like m68k's, `[Imm, Frame, Use]`: the register
+/// is not the first operand.
+struct ImmFirst;
+
+impl Target for ImmFirst {
+    type Class = ();
+
+    fn meet(
+        _: (),
+        _: (),
+    ) -> Option<()> {
+        Some(())
+    }
+
+    fn any() {}
+
+    fn candidates(_: ()) -> Vec<RegId> {
+        vec![R0, R1]
+    }
+
+    fn view(
+        root: RegId,
+        _: (),
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        register
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+
+    fn spill_store(
+        _: (),
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(op("spill_store", vec![Operand::Imm(0), Operand::Frame(slot), Operand::Use(register)]))
+    }
+
+    fn spill_load(
+        _: (),
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(op("spill_load", vec![Operand::Def(register), Operand::Frame(slot)]))
+    }
+}
+
+/// Two spills a block apart share one slot. `slot_access` read operand 0 only,
+/// so a store whose register comes after an `Imm` kept its old slot number while
+/// the other slot was dropped: m68k's expansion failed with "an unknown frame
+/// index" on 290 of 300 fuzz programs.
+#[test]
+fn slot_sharing_renames_a_store_whose_register_is_not_its_first_operand() {
+    let group = |a: u32, b: u32, c: u32| {
+        vec![
+            op("def", vec![Operand::Def(v(c))]),
+            op("def", vec![Operand::Def(v(a))]),
+            op("def", vec![Operand::Def(v(b))]),
+            use1(v(a)),
+            use1(v(a)),
+            use1(v(b)),
+            use1(v(b)),
+            use1(v(c)),
+        ]
+    };
+    let mut insts = group(0, 1, 2);
+    insts.extend(group(3, 4, 5));
+    let mut function = function(insts, 6);
+    let (_, slots) = allocate_spilling::<ImmFirst>(&mut function, 10).unwrap();
+    assert_eq!(slots.len(), 1, "the two spills share a slot");
+    for inst in &function.blocks[0].insts {
+        for operand in &inst.operands {
+            if let Operand::Frame(slot) = operand {
+                assert!(slots.iter().any(|(kept, _)| kept == slot), "frame {slot} is not among {slots:?}");
+            }
+        }
+    }
+}
