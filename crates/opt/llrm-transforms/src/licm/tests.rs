@@ -1170,6 +1170,25 @@ x:
     assert!(!load_of_q_in(&restarted, "b2"), "the start comes after the end each round: {restarted}");
 }
 
+/// Two starts on one pointer: the one ended in the body no longer covers the
+/// load, the one never ended still does. Each is judged by its own ends.
+#[test]
+fn test_one_of_two_starts_on_a_pointer_ended_in_the_loop_leaves_the_other_to_cover() {
+    let two = |second_ended: bool| {
+        let end = if second_ended { "call void @llvm.invariant.end.p0(ptr %t, i64 2, ptr %q)" } else { "" };
+        scoped_loop(
+            &format!("{START}\n  %t = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)"),
+            "",
+            &format!("call void @llvm.invariant.end.p0(ptr %s, i64 2, ptr %q)\n  {end}"),
+            "",
+        )
+    };
+    let one_open = two(false);
+    assert!(!load_of_q_in(&one_open, "b2"), "the second start is still open: {one_open}");
+    let both_ended = two(true);
+    assert!(load_of_q_in(&both_ended, "b2"), "both ended in the body: {both_ended}");
+}
+
 /// A scope that two starts reach through a phi is ended through the phi, which
 /// names neither start. The load stayed in the loop.
 #[test]
