@@ -37,7 +37,11 @@ pub struct Aarch64Lowering {
     globals: Globals,
 }
 
-impl CombineHooks for Aarch64Lowering {}
+impl CombineHooks for Aarch64Lowering {
+    fn canonicalize_ge_le(&self) -> bool {
+        true
+    }
+}
 
 impl LegalizeHooks for Aarch64Lowering {
     fn lower_operation(
