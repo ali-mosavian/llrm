@@ -1,4 +1,4 @@
-' flags: -O1 | -O2 | -O3 | -Os
+' flags: -O1 -fexcess-precision=standard | -O2 -fexcess-precision=standard | -O3 -fexcess-precision=standard | -Os -fexcess-precision=standard
 ' dialect: qb45
 ' Six doubles live across `10# ^ (i% - 5)`: the fexp2 bytes push two slots above their operand and overflowed the x87 stack, which reset the LSR double counter (b printed 40.04, not 44.44).
 DIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE, d AS DOUBLE, e AS DOUBLE, f AS DOUBLE, g AS DOUBLE, h AS DOUBLE, p AS DOUBLE, q AS DOUBLE, r AS DOUBLE

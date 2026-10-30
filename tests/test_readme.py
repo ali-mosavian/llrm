@@ -20,7 +20,7 @@ CASES = [
     # C's function is spelled as the default ABI of m16 spells it (`_dot@3`); Nib's own procedures are not decorated.
     ("C", [str(BIN / "llrm-c"), "dot.c", "-march=i486"], linkrecipe.symbol("x86-m16", "dot")),
     ("Nib", [str(BIN / "llrm-nib"), "dot.nib", "--entry", "dot", "-march=i486"], "_dot"),
-    ("BASIC", [str(BIN / "llrm-qb"), "dot.bas", "--dialect", "qb45", "--runtime", "qb45", "-march=i486", "-Omax", "--whole-program", "-fno-inline-functions-called-once"], "DOT"),
+    ("BASIC", [str(BIN / "llrm-qb"), "dot.bas", "--dialect", "pds71", "--runtime", "qb45", "-march=i486", "-Omax", "--whole-program", "-fno-inline=DOT"], "DOT"),
 ]
 
 
@@ -55,7 +55,7 @@ def _listing(command: list[str], name: str, out: Path) -> str:
 def test_a_readme_listing_is_what_the_compiler_prints(language, command, name, tmp_path):
     """The readme's first C listing was written by hand, and nobody noticed it stop being the output."""
     if not Path(command[0]).exists():
-        pytest.skip("build the compilers first: cargo build --release --bins")
+        pytest.skip(f"{Path(command[0]).name} is not built (debt skip-readme-c covers llrm-c; else cargo build --release --bins)")
     blocks = re.findall(r"```asm\n(.*?)\n```", (ROOT / "readme.md").read_text(), re.S)
     shown = blocks[[one[0] for one in CASES].index(language)]
     assert _renumbered(_uncommented(shown)) == _renumbered(_uncommented(_listing(command, name, tmp_path / "out.asm")))

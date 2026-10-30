@@ -1449,6 +1449,22 @@ impl Emitter<'_, '_> {
         Ok(())
     }
 
+    /// The segment word `SEGMENT_OF` names, as a relocatable immediate. The
+    /// global rides as the operand (morph clears the node's data); naming no
+    /// global it is DGROUP's.
+    fn segment_word(
+        &self,
+        value: SDValue,
+    ) -> Imm {
+        let node = self.dag.node(value);
+        let operand_data = node.ops.first().map(|op| self.dag.node(*op).data);
+        let symbol = match (operand_data, node.data) {
+            (Some(NodeData::Global { symbol, .. }), _) | (_, NodeData::Global { symbol, .. }) => Some(symbol),
+            _ => None,
+        };
+        Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(symbol)) }
+    }
+
     fn machine_in(
         &mut self,
         n: u32,
@@ -1456,17 +1472,9 @@ impl Emitter<'_, '_> {
     ) -> Result<(), EmitError> {
         // `SEGMENT_OF` (sdag-c's pseudo, SD305): the segment word of a global.
         if opcode == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
-            let node = self.dag.node(SDValue { node: n, res: 0 });
-            // The global rides as the operand (morph clears the node's data).
-            let operand_data = node.ops.first().map(|op| self.dag.node(*op).data);
-            let symbol = match (operand_data, node.data) {
-                (Some(NodeData::Global { symbol, .. }), _) | (_, NodeData::Global { symbol, .. }) => Some(symbol),
-                _ => None,
-            };
-            // Naming no global it is DGROUP's.
             let held = self.fresh(2);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
-            let word = Imm { value: 0, width: 2, address: Some(self.ctx.globals.segment(symbol)) };
+            let word = self.segment_word(SDValue { node: n, res: 0 });
             self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(word)]);
             return Ok(());
         }
@@ -3529,6 +3537,17 @@ impl Emitter<'_, '_> {
                     ops.get(i..i + 5).ok_or_else(|| EmitError::Unsupported("a memory operand cut short".to_owned()))?;
                 out.push(Loc::Mem(self.cell(group, cell_width)?));
                 i += 5;
+            } else if desc.num_defs == 0
+                && ins.iter().any(|one| one.kind == operand_type::MEMORY)
+                && matches!(
+                    self.dag.opcode(ops[i]),
+                    ISD::Machine(op) if op == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE)
+                )
+            {
+                // A store of a segment is the immediate's store, as one of
+                // any constant is: no register to hold the word.
+                out.push(Loc::Imm(self.segment_word(ops[i])));
+                i += 1;
             } else {
                 out.push(self.operand(ops[i])?);
                 i += 1;

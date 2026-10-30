@@ -331,6 +331,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 | reg(*rt)?
         }
         Inst::BranchReg { link, rn } => (if *link { 0xD63F_0000 } else { 0xD61F_0000 }) | reg(*rn)? << 5,
+        Inst::Cfi(_) => return error("a .cfi directive has no encoding"),
         Inst::Ret { rn } => 0xD65F_0000 | reg(*rn)? << 5,
         Inst::Load { mem, addr, .. } => load_store(mem, addr, true, &mut fixup)?,
         Inst::Store { mem, addr, .. } => load_store(mem, addr, false, &mut fixup)?,

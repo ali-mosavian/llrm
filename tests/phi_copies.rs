@@ -75,9 +75,18 @@ fn test_a_crc_step_keeps_the_accumulator_in_one_register() {
     // old selector branches on it and needs a fourth register. The pin and the
     // DAG selector are branchless, so this runs `--isel=dag` until it is the
     // default (#4512).
+    // The pin keeps the same shape (clang -O2 -fno-unroll-loops: `movl %eax,
+    // %esi; shrl %esi; andl $1, %eax; negl; andl; xorl`, ESI saved), so the
+    // loops are held to the pin's length instead of to a register count.
+    let flags = ["--isel=dag", "-fno-unroll-loops", "-m32", "-mabi=sysv", "-march=i486", "-O2"];
     let text = listing("bench/crc/crc.c", &["--isel=dag", "-fno-unroll-loops"]);
-    let body = text.split("_bench_crc proc").nth(1).unwrap().split("_bench_crc endp").next().unwrap();
-    assert!(!body.contains("esi") && !body.contains("mov eax, ebx"), "{body}");
+    let pin = common::pin::listing(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/crc/crc.c"), &flags);
+    let (ours, pins) = (common::pin::loops(&text, Some("bench_crc")), common::pin::loops(&pin, Some("bench_crc")));
+    assert!(!ours.is_empty() && ours.len() == pins.len(), "loops {ours:?} against the pin\'s {pins:?}:\n{text}");
+    assert!(
+        ours.iter().zip(&pins).all(|(one, other)| one <= other),
+        "loops {ours:?} against the pin\'s {pins:?}:\n{text}"
+    );
 }
 
 /// x_rle's run length leaves at 255: the number the exit's phi takes was made
