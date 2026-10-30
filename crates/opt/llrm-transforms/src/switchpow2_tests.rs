@@ -89,3 +89,18 @@ fn test_a_switch_of_three_powers_of_two_is_left() {
     let out = run(&switch(&[(1, 'x'), (2, 'y'), (64, 'z')], true), INPUTS);
     assert!(!out.contains("cttz"), "{out}");
 }
+
+/// 1, 2, 64 and 2048 use 4 of 12 exponents: dense enough for a speed build,
+/// not for `hasOptSize`, which `minsize` implies. Only `optsize` was read, so a
+/// `minsize` function still got the exponent switch.
+#[test]
+fn test_a_minsize_function_uses_the_optsize_density() {
+    let text = switch(&[(1, 'x'), (2, 'y'), (64, 'z'), (2048, 'y')], true);
+    let inputs: &[&[i128]] = &[&[1], &[2], &[3], &[64], &[2048], &[0], &[96], &[-1]];
+    assert!(run(&text, inputs).contains("llvm.cttz"), "the premise: a speed build converts");
+    for attr in ["optsize", "minsize"] {
+        let sized = text.replace("(i32 %a) {", &format!("(i32 %a) {attr} {{"));
+        let out = run(&sized, inputs);
+        assert!(!out.contains("llvm.cttz"), "{attr}: {out}");
+    }
+}

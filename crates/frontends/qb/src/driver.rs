@@ -52,6 +52,10 @@ pub struct Frontend {
     /// Integer arithmetic and narrowing raise error 6, Overflow:
     /// `-fsanitize=signed-integer-overflow`.
     pub checked_overflow: bool,
+    /// The target's integer divide faults where the quotient overflows
+    /// (`Target::idiv_overflow_traps`): INTEGER `\\` and MOD divide in 16 bits
+    /// and leave `-32768 \\ -1` to the processor and the runtime's handler.
+    pub idiv_overflow_traps: bool,
     /// Each procedure compares SP with the runtime's limit on entry:
     /// `-fsanitize=stack`.
     pub checked_stack: bool,
@@ -98,6 +102,7 @@ impl Frontend {
             checked_division: false,
             debug: false,
             checked_overflow: false,
+            idiv_overflow_traps: false,
             checked_stack: false,
             mbf: false,
             alternate_math: false,
@@ -141,6 +146,7 @@ fn _options(
             checked_arrays: frontend.checked_arrays,
             checked_division: frontend.checked_division,
             checked_overflow: frontend.checked_overflow,
+            idiv_overflow_traps: frontend.idiv_overflow_traps,
             mbf: frontend.mbf,
             alternate_math: frontend.alternate_math,
             whole_program: frontend.whole_program,

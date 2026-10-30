@@ -12,4 +12,3 @@ label = "sieve bq32 -O2"
 counter = "instructions"
 main = 15616
 to = 15617
-

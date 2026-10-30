@@ -193,6 +193,7 @@ pub mod divrempairs;
 pub mod earlycse;
 pub mod edges;
 pub mod emptyblocks;
+pub mod exitne;
 pub mod exitopt;
 pub mod exitpredicate;
 pub mod exitsink;
