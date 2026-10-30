@@ -852,11 +852,15 @@ impl Builder<'_> {
                     // x86 takes them unaligned. Only a size of whole dwords (a
                     // tail costs the bytes the dwords save, and a far one
                     // cannot be named) and not for size: `xor eax, eax` is a
-                    // byte more than `xor al, al`.
+                    // byte more than `xor al, al`. A size of whole words at
+                    // word alignment is words (the pin calls `memset` there).
                     (None, Some(bytes))
-                        if strings_exist && !opt_size && !self.runtime_has("memset") && bytes % 4 == 0 =>
+                        if strings_exist
+                            && !opt_size
+                            && !self.runtime_has("memset")
+                            && (bytes % 4 == 0 || (bytes % 2 == 0 && alignment >= 2)) =>
                     {
-                        self.rep_stos(root, dst, other, bytes, 4)?
+                        self.rep_stos(root, dst, other, bytes, if bytes % 4 == 0 { 4 } else { 2 })?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
