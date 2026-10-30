@@ -634,8 +634,8 @@ fn test_the_simplify_list_has_no_decide_after_jump_threading() {
     assert!(built.contains(&"jumpthreading@809") && built.contains(&"cvp@810"));
 }
 
-/// The module that implements each `Translated` slot of the function and
-/// module phases. The backend's slots live in `llrm-codegen`.
+/// The module that implements each `Translated` slot. A name starting with
+/// `codegen:` is a file or directory under `llrm-codegen/src`.
 const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("lowerexpect@1177", "lowerexpect"),
     ("sroa@1179", "sroa"),
@@ -680,13 +680,33 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("jumpthreading@809", "jumpthreading"),
     ("loop-interchange@1631", "loopinterchange"),
     ("loop-unroll-and-jam@1474", "loopunrollandjam"),
+    ("cmpsub@1", "codegen:backend/cmpsub"),
+    ("optimizephis@1", "codegen:backend/optimizephis"),
+    ("deadmi@1", "codegen:backend/deadmi"),
+    ("processimpdefs@2", "codegen:processimpdefs"),
+    ("machinelicm@4", "codegen:backend/machinelicm"),
+    ("combiner@4", "codegen:backend/combiner"),
+    ("liverangeshrink@4", "codegen:backend/liverangeshrink"),
+    ("fixupsetcc@5", "codegen:backend/fixupsetcc"),
+    ("callframe@5", "codegen:backend/callframe"),
+    ("flagscopy@5", "codegen:backend/flagscopy"),
+    ("leaopt@5", "codegen:backend/leaopt"),
+    ("floatalloc@8", "codegen:backend/fpstack"),
+    ("latecleanup@13", "codegen:backend/latecleanup"),
+    ("fixupbw@14", "codegen:backend/fixupbw"),
+    ("fixupleas@14", "codegen:backend/fixupleas"),
+    ("copyprop@18", "codegen:backend/machinecp"),
     ("lsr", "lsr_pass"),
     ("canonfreeze", "canonfreeze"),
 ];
 
 /// Every source line of the module `name`: its file and its directory.
 fn module_text(name: &str) -> String {
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let (src, name) = match name.strip_prefix("codegen:") {
+        Some(rest) => (manifest.join("../../codegen/llrm-codegen/src"), rest),
+        None => (manifest.join("src"), name),
+    };
     let mut text = std::fs::read_to_string(src.join(format!("{name}.rs"))).unwrap_or_default();
     if let Ok(dir) = std::fs::read_dir(src.join(name)) {
         for file in dir.flatten() {
@@ -696,14 +716,14 @@ fn module_text(name: &str) -> String {
     text
 }
 
-/// The first `Translated` slot outside the backend whose module is not named
+/// The first `Translated` slot whose module is not named
 /// in `implemented_by` or does not cite the pin, as `reason`.
 fn untranslated_slot(
     registry: &[Entry],
     implemented_by: &[(&str, &str)],
     text: &dyn Fn(&str) -> String,
 ) -> Result<(), String> {
-    for one in registry.iter().filter(|one| one.kind == SlotKind::Translated && one.phase != Phase::Backend) {
+    for one in registry.iter().filter(|one| one.kind == SlotKind::Translated) {
         let Some((_, module)) = implemented_by.iter().find(|(slot, _)| *slot == one.slot) else {
             return Err(format!("{}: Translated, but no module is named for it", one.slot));
         };
