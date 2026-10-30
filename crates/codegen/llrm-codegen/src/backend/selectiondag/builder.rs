@@ -1088,6 +1088,13 @@ impl Builder<'_> {
             }
         }
         if self.module.signature(self.function.ty).2 {
+            if let Some(buffer) = calling.variadic_buffer(&mut self.dag, ins.len()) {
+                let reg = self.info.new_reg();
+                let root = self.root();
+                let copy = self.dag.get_copy_to_reg(root, reg, buffer);
+                self.dag.set_root(copy);
+                self.info.variadic_buffer = Some(reg);
+            }
             self.dag.var_args_frame_index = Some(-(offsets.len() as i32 + 1));
         }
         Ok(())

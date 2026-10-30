@@ -222,3 +222,11 @@ fn sret_is_an_ordinary_pointer() {
 fn variadic_calls_pass_a_buffer() {
     check("varargs");
 }
+
+/// A variadic function body was refused ("a wasm variadic function body is not translated"). It takes the
+/// buffer pointer of its variadic arguments as one more parameter; `va_start` stores it to the list,
+/// `va_copy` copies the list's pointer and `va_end` is nothing.
+#[test]
+fn variadic_functions_read_their_buffer() {
+    check("varargs_body");
+}

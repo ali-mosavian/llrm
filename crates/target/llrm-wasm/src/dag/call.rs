@@ -207,6 +207,16 @@ impl TargetCalling for WasmCalling {
             .collect()
     }
 
+    /// The buffer pointer is one more `ARGUMENT`, after the fixed ones.
+    fn variadic_buffer(
+        &self,
+        dag: &mut SelectionDAG,
+        fixed: usize,
+    ) -> Option<SDValue> {
+        let index = dag.get_constant_with(fixed as u128, EVT::I32, true, false);
+        Some(dag.get_node(ISD::Target(isd::ARGUMENT), self.pointer, &[index]))
+    }
+
     fn lower_return(
         &self,
         dag: &mut SelectionDAG,

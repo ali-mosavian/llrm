@@ -140,6 +140,17 @@ pub trait TargetCalling: Debug + Sync {
         live_in: LiveIn,
     ) -> Vec<SDValue>;
 
+    /// `LowerFormalArguments` of a variadic function: the pointer to the buffer its variadic
+    /// arguments are in, an extra parameter after the `fixed` ones; none for a target that keeps
+    /// them elsewhere.
+    fn variadic_buffer(
+        &self,
+        _dag: &mut SelectionDAG,
+        _fixed: usize,
+    ) -> Option<SDValue> {
+        None
+    }
+
     /// `SelectionDAGTargetInfo::EmitTargetCodeForMemcpy` (and `Memmove`, which
     /// the pin routes to it on wasm): the node that copies `size` bytes, or
     /// none to leave it to the inline expansion and the library call.

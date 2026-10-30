@@ -139,6 +139,9 @@ impl Builder<'_> {
         {
             return Err(Refused("va_start at m64 outside the entry block"));
         }
+        if let Some(buffer) = self.info.variadic_buffer {
+            return self.visit_va_in_buffer(instruction, intrinsic, buffer);
+        }
         let root = self.root();
         let mut ops = vec![root];
         for operand in &instruction.operands[..if matches!(intrinsic, Intrinsic::VaCopy) { 2 } else { 1 }] {
@@ -159,6 +162,46 @@ impl Builder<'_> {
         };
         let node = self.dag.get_node(code, EVT::OTHER, &ops);
         self.dag.set_root(node);
+        Ok(())
+    }
+
+    /// `LowerVASTART` of a target whose `va_list` is a pointer to the variadic buffer: the buffer's
+    /// pointer, stored to the list. `VAEND` is expanded to its chain, `VACOPY` to a load and a store
+    /// of the pointer (`LegalizeDAG`'s `ExpandNode`).
+    fn visit_va_in_buffer(
+        &mut self,
+        instruction: &Instruction,
+        intrinsic: &Intrinsic,
+        buffer: u32,
+    ) -> Result<(), Refused> {
+        let pointer = self.target.dag.pointer;
+        let info = MemInfo {
+            mem_vt: pointer,
+            align: pointer.size_in_bits() / 8,
+            volatile: false,
+            base: MemBase::Unknown,
+            ext: None,
+            space: 0,
+        };
+        match intrinsic {
+            Intrinsic::VaStart => {
+                let list = self.get_value(instruction.operands[0])?;
+                let entry = self.dag.entry_node();
+                let value = self.dag.get_copy_from_reg(entry, buffer, pointer);
+                let root = self.root();
+                let store = self.dag.get_store(root, value, list, info);
+                self.dag.set_root(store);
+            }
+            Intrinsic::VaCopy => {
+                let destination = self.get_value(instruction.operands[0])?;
+                let source = self.get_value(instruction.operands[1])?;
+                let root = self.root();
+                let load = self.dag.get_load(pointer, root, source, info);
+                let store = self.dag.get_store(SDValue { node: load.node, res: 1 }, load, destination, info);
+                self.dag.set_root(store);
+            }
+            _ => {}
+        }
         Ok(())
     }
 
