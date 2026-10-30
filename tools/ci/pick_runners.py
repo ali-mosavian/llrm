@@ -20,7 +20,7 @@ PERF = ("perf", "cost")
 # GitHub runs 20 hosted jobs of this account at once. When this many hosted jobs are already waiting (tools/ci/hosted_backlog.py), a job
 # would wait for a slot longer than tinytim's slowness (2-4x) costs it, so the other jobs overflow to idle tinytim runners.
 OVERFLOW_AT = 8
-OVERFLOW_ORDER = ("python", "reference", "run", "dos", "integration", "tools", "unit", "bench-base", "bench-1", "bench-2", "bench-3", "bench-4", "bench-5", "bench-6")
+OVERFLOW_ORDER = ("python", "python-1", "python-2", "python-3", "reference", "run", "dos", "integration", "tools", "unit", "bench-base", "bench-base-1", "bench-base-2", "bench-base-3", "bench-1", "bench-2", "bench-3", "bench-4", "bench-5", "bench-6")
 MAX_AGE = 180
 
 

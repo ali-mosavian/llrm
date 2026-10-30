@@ -1,0 +1,5 @@
+{
+ "tools/dosbatch/test_qb32.py": 180.0,
+ "tools/dosbatch/test_qbrt.py": 346.0,
+ "tools/gate/test_gate.py": 198.0
+}
