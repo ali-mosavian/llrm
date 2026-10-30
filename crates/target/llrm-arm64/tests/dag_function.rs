@@ -829,3 +829,11 @@ fn a_fence_selects_a_dmb_by_its_ordering() {
     }
     assert_eq!(selected(&ir("syncscope(\"singlethread\") ", "seq_cst")).unwrap(), [["MEMBARRIER", "RET_ReallyLR"]]);
 }
+
+/// A `zeroext` i8 argument passed on as `zeroext` got an `ANDWri` (the incoming register carried no
+/// `AssertZext`); the pin passes the register as it is.
+#[test]
+fn a_zeroext_argument_passed_on_needs_no_mask() {
+    let ir = "declare void @draw(i8 zeroext)\ndefine void @f(i8 zeroext %a) {\n  tail call void @draw(i8 zeroext %a)\n  ret void\n}";
+    assert_eq!(selected(ir).unwrap(), [["TCRETURNdi"]]);
+}

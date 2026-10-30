@@ -1067,8 +1067,29 @@ impl Builder<'_> {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
         }
         let mut next = 0;
-        for (&arg, (vt, count)) in parameters.iter().zip(shapes) {
-            let value = self.join_from_calling(&parts[next..next + count], vt);
+        for (at, (&arg, (vt, count))) in parameters.iter().zip(shapes).enumerate() {
+            let mut pieces = parts[next..next + count].to_vec();
+            // `LowerFormalArguments`: a narrow argument arrives in a wider register, and `zeroext` /
+            // `signext` says what is in the bits above it (`AssertZext`, `AssertSext`).
+            if let [piece] = pieces[..]
+                && vt.is_integer()
+                && self.dag.value_type(piece).is_integer()
+                && vt.size_in_bits() < self.dag.value_type(piece).size_in_bits()
+            {
+                let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
+                let code = if llrm_mir::memory::has(attrs, "signext") {
+                    Some(ISD::AssertSext)
+                } else if llrm_mir::memory::has(attrs, "zeroext") {
+                    Some(ISD::AssertZext)
+                } else {
+                    None
+                };
+                if let Some(code) = code {
+                    let narrow = self.dag.get_value_type_node(vt);
+                    pieces[0] = self.dag.get_node(code, self.dag.value_type(piece), &[piece, narrow]);
+                }
+            }
+            let value = self.join_from_calling(&pieces, vt);
             next += count;
             self.node_map.insert(arg, value);
             if outside.contains(&arg) {
