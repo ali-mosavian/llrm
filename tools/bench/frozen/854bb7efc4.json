@@ -3293,5 +3293,6 @@
 "data_bytes": 8192,
 "bss_bytes": 0
 }
-}
+},
+"note_vs_sizes_py": "code_bytes here is the OMF object's code segments of the bench's own compile, and equals tools/sizes.py's number only where the flags are alike. Accounted to the byte on this commit's compiler: queens nib -O2 sizes.py 173 + 18 = bench 191 (bench adds --procedure-segments and -fno-inline-functions[-called-once]); textfill.flat.bas -O2 sizes.py 198 (--runtime qb45) + 5 (-fqb-runtime=llrm) + 6 (-march=i486 -m32) = bench bq32 209; textfill.bas bas/bq16 equal sizes.py 233."
 }
