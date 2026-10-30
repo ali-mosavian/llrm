@@ -216,7 +216,7 @@ pub fn select_function(
 ///
 /// DEVIATE: a phi of the pad still gets its unwind-edge value built (a dead
 /// constant and a `drop`), the pin has none: its `LowerInvoke` runs on the IR.
-/// Exit: lower invokes in the module before selection.
+/// Exit: the QB hand-over emits valid IR (invokes lowered to calls, no landingpad).
 fn control_successors(
     function: &llrm_mir::module::Function,
     block: llrm_mir::module::BlockId,
