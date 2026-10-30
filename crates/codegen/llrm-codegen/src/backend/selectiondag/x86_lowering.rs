@@ -140,7 +140,7 @@ pub struct X86Lowering {
     /// ([L64277][promote]) and `combineMul` builds the `lea`/shift chain there.
     /// Where `i16` is not promoted (m16, `is_desirable_to_promote_op`) the same
     /// chain is built at `i16`, without the promotion's `66h`/`67h` prefixes.
-    /// DEVIATE: exit is `i16` promotion at m16, which grows every `i16` op.
+    /// Consequence of DEVIATE SD441, which holds the exit.
     ///
     /// [promote]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L64277
@@ -238,8 +238,13 @@ fn x86_shrink_demanded_constant(
 
 /// `isTypeDesirableForOp` (undesirable) and `IsDesirableToPromoteOp`: an `i16`
 /// operation, or an `i8` multiply by a constant, is done in `i32` unless an
-/// operand is a load the operation could fold. m32 only: the 16-bit target
-/// has no wider register to promote into.
+/// operand is a load the operation could fold.
+///
+/// DEVIATE SD441: not at m16. The pin promotes there too; in real mode each
+/// promoted op carries a `66h` prefix (a `lea` of it `67h` as well), which
+/// grows every `i16` op and breaks the m16 -Os rule. Exit: promotion priced
+/// against those prefix bytes and clocks. Until then `i16_mul_chains` builds
+/// the multiply's chain at `i16`.
 fn is_desirable_to_promote_op(
     dag: &SelectionDAG,
     tli: &TargetLowering,
