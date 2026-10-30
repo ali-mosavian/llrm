@@ -956,6 +956,14 @@ def test_the_dos_step_prints_the_host_cpu_and_the_emulator_it_ran_on():
     assert "tools/dosbatch/x87probe.py || true;" in cmd  # the host FPU's verdict is printed, never a red of its own
 
 
+def test_the_dos_step_plays_nibbles_under_a_conf_matrix_after_the_tests_and_names_the_emulators_compiler():
+    """Run 6 died at 38 pixels with nothing to say whether the emulator or the compiler did it: the matrix lines and the compiler of the
+    CI's dosbox-x go to the job log, and the matrix runs after the tests so their verdict stays the step's."""
+    cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["dos-slow"]
+    assert cmd.index("pytest_shards.py") < cmd.index("rc=$?") < cmd.index("tools/dosbatch/nibprobe.py") < cmd.index("exit $rc")
+    assert "nibprobe.py 2>&1 | sed" in cmd and "readelf -p .comment" in cmd  # the .comment section names the build's compiler; a `strings` grep found a bundled library's
+
+
 def test_the_pytest_step_runs_through_the_sharder_with_the_ignores_and_the_cpu_limit():
     cmd = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages(), skip_py=("tests/x.py",))["pytest"]
     assert "pytest_shards.py" in cmd and "--ignore=tests/x.py" in cmd and "-- -q" in cmd and "-p pytest_cpulimit" in cmd
