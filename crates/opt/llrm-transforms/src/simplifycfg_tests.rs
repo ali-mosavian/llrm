@@ -1301,3 +1301,22 @@ bx:
     assert!(!after.contains("br i1"), "{after}");
     assert_eq!(results(&module, inputs), before);
 }
+
+/// SimplifyCFG prices speculation by `TCK_CodeSize` in a `minsize` function
+/// (`validateAndCostRequiredSelects`, `performBranchToCommonDestFolding`); the
+/// kind was always `SizeAndLatency`. On the i486 only a divide is priced
+/// differently (2 against 4), so the kind is checked where it is chosen.
+#[test]
+fn test_a_minsize_function_is_priced_by_code_size() {
+    use llrm_mir::tti::CostKind;
+    let text = "define void @f() {\nb0:\n  ret void\n}\n";
+    let mut module = parsed(text);
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert_eq!(crate::speculate::cost_kind(function), CostKind::SizeAndLatency);
+    for attr in ["optsize", "minsize"] {
+        let mut module = parsed(&text.replace("@f()", &format!("@f() {attr}")));
+        let (_, function) = module.function_mut("f").expect("@f");
+        let expected = if attr == "minsize" { CostKind::CodeSize } else { CostKind::SizeAndLatency };
+        assert_eq!(crate::speculate::cost_kind(function), expected, "{attr}");
+    }
+}

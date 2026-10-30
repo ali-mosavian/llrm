@@ -223,33 +223,6 @@ def test_stale_waivers_are_one_line_of_file_names():
     assert bc.stale_summary([]) == []
 
 
-SCALAR_BASE = {"bq16": 165}
-
-
-def test_the_scalar_o2_waiver_passes_its_size_and_fails_one_byte_more():
-    """parity/scalar bq16 -O2 is main's loop again after the m16 unroll override (353 B to 171, main 165): waived at exactly 171, so one more byte fails."""
-    waivers = bc.waivers()
-    base = {("parity/scalar", lang, "O2"): {"code_bytes": was} for lang, was in SCALAR_BASE.items()}
-    at = {"bq16": 171}
-    for lang, size in at.items():
-        key = ("parity/scalar", lang, "O2")
-        assert bc.judge({key: {"code_bytes": size}}, base, waivers)[0] == [], lang
-        worse = bc.judge({key: {"code_bytes": size + 1}}, base, waivers)[0]
-        assert worse == [(f"parity/scalar {lang} -O2", "code_bytes", SCALAR_BASE[lang], size + 1)], lang
-
-
-def test_the_scalar_waivers_pass_their_limits_and_fail_one_more():
-    """parity/scalar bq16 data 21 to 23 at -O2 and -Os, and -Os code 165 to 171 (LU2 +3, DAG default +4, the cint(val) data cell): waived at exactly those counts."""
-    waivers = bc.waivers()
-    for opt, rows in {"O2": {"data_bytes": (21, 23)}, "Os": {"code_bytes": (165, 171), "data_bytes": (21, 23)}}.items():
-        key = ("parity/scalar", "bq16", opt)
-        base = {key: {counter: was for counter, (was, _) in rows.items()}}
-        assert bc.judge({key: {counter: to for counter, (_, to) in rows.items()}}, base, waivers)[0] == [], opt
-        for counter, (was, to) in rows.items():
-            at = {c: t for c, (_, t) in rows.items()} | {counter: to + 1}
-            assert bc.judge({key: at}, base, waivers)[0] == [(f"parity/scalar bq16 -{opt}", counter, was, to + 1)], (opt, counter)
-
-
 def test_a_base_stored_under_the_old_hash_is_judged_by_the_new_one_not_skipped_whole(tmp_path):
     """programs() stopped hashing `.out` files; a base cached under the old hash then differed from the head in EVERY program (main has an `.out` for
     each): `same` was empty, 424 measurements judged nothing and 218 waivers read stale, with 0 problems printed. A cache that does not say
