@@ -1,0 +1,56 @@
+reason = "TEMPORARY trade-off (owner w10, 2026-10-30). Spill slots now join the pin's orderFrameObjects density order (hottest nearest the frame register), so hot slots sit inside disp8. code_bytes fall on every changed row (jpeg bq32 -600/-689 B, bas/bq16 -6..-203 B); the rows below gain 1-5 instructions, jpeg bq32 -O2 about 1.2k of 76M (+1200 clocks), from a frame whose form masm picks differently. Removal: this file deleted by 2026-11-06 or when masm's form choice reads the new layout; no row may pass its measured count."
+exception = true
+
+[[row]]
+label = "fpbench bq32 -Os"
+counter = "instructions"
+main = 21243
+to = 21246
+
+[[row]]
+label = "jpeg_fixed bq32 -O2"
+counter = "instructions"
+main = 76025599
+to = 76026782
+
+[[row]]
+label = "jpeg_fixed bq32 -Os"
+counter = "instructions"
+main = 85146591
+to = 85146593
+
+[[row]]
+label = "jpeg_single bq32 -O2"
+counter = "instructions"
+main = 55380125
+to = 55381302
+
+[[row]]
+label = "jpeg_single bq32 -Os"
+counter = "instructions"
+main = 58829578
+to = 58829580
+
+[[row]]
+label = "sieve bq32 -O2"
+counter = "instructions"
+main = 15616
+to = 15617
+
+[[row]]
+label = "stft_fixed bq32 -O2"
+counter = "instructions"
+main = 94357645
+to = 94357646
+
+[[row]]
+label = "stft_single bq32 -O2"
+counter = "instructions"
+main = 70159752
+to = 70159753
+
+[[row]]
+label = "stft_single bq32 -Os"
+counter = "instructions"
+main = 69845981
+to = 69845982

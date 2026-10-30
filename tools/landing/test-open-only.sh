@@ -19,8 +19,8 @@ out=$(open_only 5300 5391 5402 2>/dev/null | tr '\n' ' ')
 [ "$out" = "5300 5402 " ] || { echo "FAIL: a draft stayed in the batch: '$out'"; exit 1; }
 grep -q 'gh pr ready' "$(dirname "$0")/queue-runner.sh" && { echo "FAIL: queue-runner.sh readies a draft"; exit 1; }
 echo PASS draft
-# Regression: an urgent batch with nothing to land became the literal `feat/parity`; `gh pr ready feat/parity` resolved the branch to main PR #5663 and marked it ready for review (02:38). A name that is not a PR number never passes open_only.
+# Regression: an urgent batch with nothing to land became the literal `release/next`; `gh pr ready release/next` resolved the branch to main PR #5663 and marked it ready for review (02:38). A name that is not a PR number never passes open_only.
 d=$(mktemp -d); printf '#!/bin/sh\necho OPEN\n' > $d/gh; chmod +x $d/gh
 PATH=$d:$PATH; source "$(dirname "$0")/open-only.sh"
-out=$(open_only feat/parity 5 2>/dev/null | tr '\n' ' ')
+out=$(open_only release/next 5 2>/dev/null | tr '\n' ' ')
 [ "$out" = "5 " ] && echo PASS numeric || { echo "FAIL: a branch name passed open_only: '$out'"; exit 1; }

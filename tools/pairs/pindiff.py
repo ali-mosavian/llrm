@@ -33,6 +33,8 @@ import irguard  # noqa: E402
 import omfcode  # noqa: E402
 import pin  # noqa: E402
 
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
 ROOT = HERE.parents[1]
 
 
@@ -391,7 +393,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--work", required=True)
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--old", action="store_true")
-    parser.add_argument("--ref", default="origin/feat/parity", help="the branch the llc should be built on")
+    parser.add_argument("--ref", default=f"origin/{BRANCH}", help="the branch the llc should be built on")
     parser.add_argument("--max-behind", type=int, default=20, help="commits behind --ref before the header warns")
     parser.add_argument("--dyn", action="store_true", help="m32 only: also run each kernel in the vsgcc harness (dyn.py) and rank flagged rows by dynamic clocks")
     parser.add_argument("--reopt", action="store_true", help="clang's -O IR re-run through the pin's opt, then both llcs (not the default: see front_end_flags)")

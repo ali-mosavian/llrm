@@ -704,3 +704,35 @@ out:
     let after = printed(&module);
     assert_eq!(after.matches("landingpad").count(), 1, "one pad in the function: {after}");
 }
+
+/// An inner loop's exit is the outer loop's header, which another block also
+/// branches back to. Grouping the inner edge made the new block the outer
+/// loop's only latch in the kept loops, while the other backedge stayed: jpeg
+/// (nib, -Os) hit `the loops kept through loopsimplify differ from a new
+/// shape's`, the kept loop with one latch where the function has five.
+#[test]
+fn test_a_grouped_edge_into_a_header_leaves_its_other_latches_to_the_kept_loop() {
+    let mut module = parsed(
+        "define void @f(i1 %c, i1 %d) {
+b0:
+  br label %h
+
+h:
+  br i1 %c, label %a, label %s
+
+a:
+  br i1 %d, label %h, label %out
+
+s:
+  br i1 %d, label %s, label %h
+
+out:
+  ret void
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    // `simplified` checks the kept loops against a new shape's under
+    // `cfg!(test)`.
+    simplified(function);
+}
