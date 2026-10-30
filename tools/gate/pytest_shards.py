@@ -1,6 +1,7 @@
 """pytest over many files at once: one pytest process per file, a few at a time, longest first.
 
-    pytest_shards.py [-j N] [--ignore F]... [--must-pass F]... [--rerun F]... [--durations FILE] PATH... [-- PYTEST_FLAGS]
+    pytest_shards.py [-j N] [--ignore F]... [--must-pass F]... [--rerun F]... [--durations FILE] [--shard I/N --json DIR] PATH... [-- PYTEST_FLAGS]
+    pytest_shards.py --merge DIR N
 
 The files come from `pytest --collect-only`, so a path pytest would not run is not run here. A file with a failing test, a collection
 error, or no test (a file that collected tests and ran none) fails the run; the output of every failed file is printed whole, then one
@@ -10,9 +11,11 @@ every --must-pass file passed at least one test and skipped none: a file that sk
 import os
 import re
 import math
+import hashlib
 import time
 import sys
 import json
+import tomllib
 import argparse
 import subprocess
 from pathlib import Path
@@ -28,6 +31,7 @@ MAX_PARTS = 12
 # in one DOSBox launch, so five parts ran it five times (185 s each, against 134 s whole).
 SPLITTABLE = frozenset({"test_qbgfx.py", "test_qbgorilla.py", "test_scaling_gate.py", "test_scaling.py"})
 # Seconds of the files that were slowest when measured, for a run with nothing recorded yet.
+HOSTED = Path(__file__).with_name("pytest_hosted.toml")  # seconds of each file on a hosted runner: the split of a sharded run reads only this
 SEEDS = {"test_qbgfx.py": 190.0, "test_scaling_gate.py": 300.0, "test_qbrt.py": 130.0, "test_scaling.py": 60.0}
 
 
@@ -53,7 +57,7 @@ def collect(paths: list[str], ignores: list[str], flags: list[str]) -> tuple[dic
     return tests, None
 
 
-def units(tests: dict[str, list[str]], known: dict[str, float]) -> list[tuple[str, list[str]]]:
+def units(tests: dict[str, list[str]], known: dict[str, float], with_seconds: bool = False) -> list:
     """(label, pytest arguments), longest first. A SPLITTABLE file recorded over SPLIT_SECONDS is cut into parts of its tests, dealt round-robin: one
     file held the whole run to its 430 s."""
     out: list[tuple[str, list[str], float]] = []
@@ -65,7 +69,92 @@ def units(tests: dict[str, list[str]], known: dict[str, float]) -> list[tuple[st
             out.append((name, [name], took))
         else:
             out += [(f"{name} [{i + 1}/{parts}]", ids[i::parts], took / parts) for i in range(parts)]
-    return [(label, args) for label, args, _ in sorted(out, key=lambda u: -u[2])]
+    ordered = sorted(out, key=lambda u: -u[2])
+    return ordered if with_seconds else [(label, args) for label, args, _ in ordered]
+
+
+HOSTED_UNKNOWN = 7.0  # run 8: 1653 CPU-seconds over 242 files; the 40 s a file has when nothing is known would make the long files light
+
+
+def hosted_seconds(tests: dict[str, list[str]], path: Path = HOSTED) -> dict[str, float]:
+    """Seconds of every collected file for a sharded deal: the table's, else the seed of a file known to be slow, else an average file."""
+    table = tomllib.loads(path.read_text()) if path.is_file() else {}
+    return {name: table.get(name, SEEDS.get(Path(name).name, HOSTED_UNKNOWN)) for name in tests}
+
+
+def deal(work: list[tuple[str, list[str], float]], index: int, count: int) -> list[tuple[str, list[str]]]:
+    """Shard `index` (1-based) of `count`: the units dealt, heaviest first, onto the lightest shard. Every shard computes the same deal from
+    the same collection and the same table, so each unit is in exactly one shard."""
+    if not 1 <= index <= count:
+        raise SystemExit(f"shard {index} of {count}")
+    load = [0.0] * count
+    mine: list[tuple[str, list[str]]] = []
+    for label, args, seconds in sorted(work, key=lambda u: (-u[2], u[0])):
+        at = min(range(count), key=lambda i: (load[i], i))
+        load[at] += seconds
+        if at == index - 1:
+            mine.append((label, args))
+    return mine
+
+
+def digest(ids) -> str:
+    return hashlib.sha256("\n".join(sorted(ids)).encode()).hexdigest()[:16]
+
+
+def ids_of(args: list[str], tests: dict[str, list[str]]) -> list[str]:
+    """The test ids a unit's pytest arguments run: a file's all, or the ids themselves (a part of a split file)."""
+    return [i for a in args for i in (tests[a] if a in tests else [a])]
+
+
+def merge(folder: Path, count: int, collector=collect) -> int:
+    """The verdict of the `count` shard files in `folder`: every shard is there and green, and the tests the shards ran are the tests
+    `collector` finds over the selection the shards were given (their paths, ignores and flags, recorded in their files), each in one
+    shard. The merge collects for itself: the shards' own view of the collection could not tell a test they all dropped. A shard that
+    crashed left no file; a missing one is a failure, never a pass over its tests."""
+    files = {i: folder / f"pytest-shard-{i}.json" for i in range(1, count + 1)}
+    if missing := [i for i, f in files.items() if not f.is_file()]:
+        print(f"FAIL pytest shard {' '.join(map(str, missing))} of {count} left no result: its tests were not run")
+        return 1
+    data = {i: json.loads(f.read_text()) for i, f in files.items()}
+    problems = []
+    whole = {d["whole"] for d in data.values()}
+    if len(whole) != 1 or {d["count"] for d in data.values()} != {count}:
+        problems.append("the shards collected different tests: " + " ".join(sorted(whole)))
+    ids = [i for d in data.values() for i in d["ids"]]
+    seen = {i for i in ids}
+    if len(ids) != len(seen):
+        problems.append(f"{len(ids) - len(seen)} tests ran in more than one shard")
+    if len(whole) == 1 and digest(seen) != next(iter(whole)):
+        problems.append(f"the shards' tests are not the collection: {len(seen)} tests, digest {digest(seen)} against {next(iter(whole))}")
+    selections = {json.dumps(d["selection"], sort_keys=True) for d in data.values()}
+    if len(selections) != 1:
+        problems.append("the shards were given different selections")
+    else:
+        selection = json.loads(next(iter(selections)))
+        tests, broken = collector(selection["paths"], selection["ignores"], selection["flags"])
+        if broken is not None:
+            problems.append("the merge could not collect the selection: " + " ".join(broken.split())[-300:])
+        else:
+            every = {i for ids in tests.values() for i in ids}
+            if lost := sorted(every - seen):
+                problems.append(f"{len(lost)} collected tests ran in no shard: " + " ".join(lost[:5]))
+            if extra := sorted(seen - every):
+                problems.append(f"{len(extra)} tests ran that the merge's own collection lacks: " + " ".join(extra[:5]))
+    for i, d in sorted(data.items()):
+        print(f"pytest shard {i}: wall {d['wall']:.0f}s, table predicted {d['predicted']:.0f}s of unit time ({d['predicted'] / max(1, d['jobs']):.0f}s at {d['jobs']} workers), {len(d['ids'])} tests")
+    refreshed: dict[str, float] = {}
+    for d in data.values():
+        for name, took in d["files"].items():
+            refreshed[name] = refreshed.get(name, 0.0) + took
+    (folder / "pytest_hosted.refreshed.toml").write_text("".join(f'"{n}" = {t:.1f}\n' for n, t in sorted(refreshed.items())))
+    for i, d in sorted(data.items()):
+        if d["ran"] != len(d["ids"]) or d["failed"]:
+            problems.append(f"shard {i}: {d['ran']} reported of {len(d['ids'])}" + (f"; failed {' '.join(d['failed'])}" if d["failed"] else ""))
+    passed, skipped = (sum(d[w] for d in data.values()) for w in ("passed", "skipped"))
+    print(f"pytest shards merged: {count} shards, {len(seen)} tests, {passed} passed, {skipped} skipped, {len(problems)} problems")
+    for one in problems:
+        print("FAIL", one)
+    return 1 if problems else 0
 
 
 def run_all(work: list[tuple[str, list[str]]], flags: list[str], jobs: int) -> dict[str, tuple[int, float, str]]:
@@ -85,10 +174,17 @@ def main() -> int:
     ap.add_argument("--must-pass", action="append", default=[], help="a test file that must pass a test and skip none")
     ap.add_argument("--rerun", action="append", default=[], help="a test file run once more when it fails, to tell flaky from deterministic")
     ap.add_argument("--durations", help="JSON {file: seconds}, read for the order (longest first) and rewritten after the run")
-    ap.add_argument("paths", nargs="+")
+    ap.add_argument("--shard", metavar="I/N", help="only the units the hosted table deals to shard I of N; --json DIR then gets pytest-shard-I.json for --merge")
+    ap.add_argument("--json", type=Path)
+    ap.add_argument("--merge", nargs=2, metavar=("DIR", "N"), help="judge nothing: the verdict of the N pytest-shard-*.json in DIR")
+    ap.add_argument("paths", nargs="*")
     argv = sys.argv[1:]
     at = argv.index("--") if "--" in argv else len(argv)
     args, flags = ap.parse_args(argv[:at]), argv[at + 1 :]  # what follows `--` is pytest's, whatever it looks like
+    if args.merge:
+        return merge(Path(args.merge[0]), int(args.merge[1]))
+    if not args.paths:
+        ap.error("no path")
     tests, broken = collect(args.paths, args.ignore, flags)
     if broken is not None:
         print(broken)
@@ -98,12 +194,29 @@ def main() -> int:
         print("pytest shards: no test file collected")
         return 1
     known = json.loads(Path(args.durations).read_text()) if args.durations and Path(args.durations).exists() else {}
-    work = units(tests, known)
+    if args.shard:  # the split must be the same in every shard: the checked-in table, never a runner's own durations
+        index, count = map(int, args.shard.split("/"))
+        plan = units(tests, hosted_seconds(tests), with_seconds=True)
+        work = deal(plan, index, count)
+    else:
+        work = units(tests, known)
+    began = time.time()
     results = run_all(work, flags, args.j)
+    wall = time.time() - began
     bad = {n: r for n, r in results.items() if r[0] != 0}
     counts = {n: tally(out) for n, (_, _, out) in results.items()}
     ran = sum(sum(c.values()) for c in counts.values())
-    wanted = sum(map(len, tests.values()))
+    assigned = ids_of([a for _, args in work for a in args], tests)
+    wanted = len(assigned)
+    if args.shard and args.json:
+        args.json.mkdir(parents=True, exist_ok=True)
+        (args.json / f"pytest-shard-{index}.json").write_text(json.dumps({
+            "shard": index, "count": count, "whole": digest(i for ids in tests.values() for i in ids), "ids": assigned, "ran": ran,
+            "selection": {"paths": args.paths, "ignores": args.ignore, "flags": flags}, "wall": wall, "jobs": args.j,
+            "predicted": sum(sec for label, _, sec in plan if label in results),
+            "files": {name: round(sum(t for label, (_, t, _) in results.items() if label.partition(" [")[0] == name), 1) for name in {l.partition(" [")[0] for l in results}},
+            "passed": sum(c.get("passed", 0) for c in counts.values()), "skipped": sum(c.get("skipped", 0) for c in counts.values()), "failed": sorted(bad),
+        }))
     if not bad and ran != wanted:
         print(f"pytest shards: {wanted} tests collected, {ran} reported")
         return 1
@@ -124,6 +237,8 @@ def main() -> int:
     slowest = sorted(results.items(), key=lambda kv: -kv[1][1])[:3]
     passed, skipped = (sum(c.get(w, 0) for c in counts.values()) for w in ("passed", "skipped"))
     print(f"pytest shards: {len(tests)} files, {len(results)} runs, {len(bad)} failed; {passed} passed, {skipped} skipped; slowest " + ", ".join(f"{n} {r[1]:.0f}s" for n, r in slowest))
+    if args.shard:
+        print(f"pytest shards: shard {index} of {count} ran {wanted} of {sum(map(len, tests.values()))} tests")
     if bad:
         print("FAILED files: " + " ".join(sorted(bad)))
     return 1 if bad or vacuous else 0
