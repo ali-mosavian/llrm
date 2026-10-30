@@ -58,13 +58,19 @@ int32_t llrm_os_seek(int handle, int32_t position, unsigned char origin)
    each, so a wait ends, a key scheduled for a time arrives and a run that does not finish is stopped. Linked with
    `--wrap`. */
 extern void llrm_host_poll(void);
+/* The program looked for a key, and found `ready` of them: with none the host may type the next of a script. */
+extern void llrm_host_key_poll(int ready);
 extern int __real_dev_key_ready(void);
 extern long __real_dev_clock(void);
 
 int __wrap_dev_key_ready(void)
 {
+    int ready;
+
     llrm_host_poll();
-    return __real_dev_key_ready();
+    ready = __real_dev_key_ready();
+    llrm_host_key_poll(ready);
+    return ready;
 }
 
 long __wrap_dev_clock(void)

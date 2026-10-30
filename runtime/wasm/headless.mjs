@@ -8,17 +8,29 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 const args = process.argv.slice(2);
 const wasmPath = args.shift();
 const keys = [], dumps = [];
+let script = '', gap = 700, onWait = false, settle = 300;
 let out = '.', stepUs = 100, limitMs = 600000, wallMs = 0, virtual = false;
 while (args.length) {
   const flag = args.shift();
   if (flag === '--keys') { const [text, at] = args.shift().split('@'); keys.push({ text: JSON.parse(`"${text}"`), at: Number(at) }); }
+  else if (flag === '--script') script = args.shift();
+  else if (flag === '--gap') gap = Number(args.shift());
   else if (flag === '--dump-at') { const [at, name] = args.shift().split('='); dumps.push({ at: Number(at), name }); }
   else if (flag === '--out') out = args.shift();
   else if (flag === '--step-us') stepUs = Number(args.shift());
   else if (flag === '--limit-ms') limitMs = Number(args.shift());
   else if (flag === '--virtual') virtual = true;
+  else if (flag === '--dump-after') { const [spec, name] = args.shift().split('='); const [n, dwell] = spec.split('+'); dumps.push({ afterKeys: Number(n), dwell: Number(dwell || 0), name }); }
+  else if (flag === '--on-wait') onWait = true;
+  else if (flag === '--settle-ms') settle = Number(args.shift());
   else if (flag === '--wall-ms') wallMs = Number(args.shift());
   else throw new Error(`unknown argument ${flag}`);
+}
+// QB_HEADLESS_KEYS as the native driver reads it: a key every `gap` ms from the start (\r, \n, \t and \\ are escapes).
+for (let at = 0, n = 1; at < script.length; at++, n++) {
+  let c = script[at];
+  if (c === '\\' && at + 1 < script.length) { at++; c = 'rn'.includes(script[at]) ? '\r' : script[at] === 't' ? '\t' : script[at]; }
+  keys.push({ text: c, at: onWait ? 0 : n * gap });
 }
 mkdirSync(out, { recursive: true });
 
@@ -45,15 +57,48 @@ function dump(name) {
   writeFileSync(`${out}/${name}.ppm`, Buffer.concat([Buffer.from(`P6\n${w} ${h}\n255\n`), body]));
 }
 
+// With --on-wait a key is typed when the program looks for one, none is waiting and `settle` ms have passed since the last:
+// a run does not depend on how long anything took (a key typed at the start would be lost to a program that clears the
+// keyboard when it starts).
+let lastKey = -Infinity;
+const keyTimes = [];
+function typeKey(k) {
+  k.done = true;
+  lastKey = now;
+  keyTimes.push(now);
+  const p = exports.__heap_base.value - 64;
+  mem().set(Buffer.from(k.text + '\0', 'latin1'), p);
+  exports.headless_type(p);
+}
+
+function keyPoll(ready) {
+  if (!onWait || ready || now < lastKey + settle) return;
+  const next = keys.find((k) => !k.done);
+  if (next) typeKey(next);
+}
+
 function due() {
-  for (const k of keys) if (!k.done && now >= k.at) { k.done = true; const p = exports.__heap_base.value - 64; mem().set(Buffer.from(k.text + '\0', 'latin1'), p); exports.headless_type(p); }
-  for (const d of dumps) if (!d.done && now >= d.at) { d.done = true; dump(d.name); }
+  if (!onWait) for (const k of keys) if (!k.done && now >= k.at) typeKey(k);
+  for (const d of dumps) {
+    if (d.done) continue;
+    const reached = d.afterKeys === undefined ? now >= d.at : keyTimes.length >= d.afterKeys && now >= keyTimes[d.afterKeys - 1] + d.dwell;
+    if (reached) { d.done = true; dump(d.name); }
+  }
   if (now > limitMs || (wallMs && Date.now() - started > wallMs)) throw new Exit(124);
 }
+
+// The clock tick (18.2 a second) calls music_tick as the timer interrupt does: a PLAY waits for it to take notes off its queue.
+const TICK_MS = 54.9254;
+let nextTick = TICK_MS, inTick = false;
 
 function tick() {
   now = virtual ? now + stepUs / 1000 : Date.now() - started;
   due();
+  if (inTick) return;
+  inTick = true;
+  for (let fired = 0; now >= nextTick && fired < 4; fired++) { nextTick += TICK_MS; exports.host_tick_fire(); }
+  if (now >= nextTick) nextTick = now + TICK_MS;
+  inTick = false;
 }
 
 const imports = { env: {
@@ -61,6 +106,7 @@ const imports = { env: {
   llrm_host_exit: (code) => { throw new Exit(code); },
   llrm_host_fail: (msg) => { throw new Error(cstring(msg)); },
   llrm_host_now: () => { calls.now = (calls.now || 0) + 1; tick(); return now; },
+  llrm_host_key_poll: (ready) => keyPoll(ready),
   llrm_host_poll: () => { calls.poll = (calls.poll || 0) + 1; tick(); },
   sin: Math.sin, cos: Math.cos, atan: Math.atan, lrint, lrintf: lrint,
 } };
@@ -82,6 +128,6 @@ dump('final');
   }
   if (lines.length) text.push(lines.join('\n') + '\n');
 }
-if (process.env.HEADLESS_TRACE) console.error(JSON.stringify({ now, calls }));
+if (process.env.HEADLESS_TRACE) console.error(JSON.stringify({ now, calls, keyTimes }));
 process.stdout.write(text.join(''));
 process.exitCode = code;

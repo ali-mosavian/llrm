@@ -85,3 +85,15 @@ fn block_entries_are_called_as_a_host_calls_them() {
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// PLAY waits for the clock tick to take its notes off the queue. `music_tick` was a weak no-op in tick.c, bound
+/// locally by the wasm object writer, so play.c's never ran: the queue never drained and PLAY spun until the time
+/// limit (Gorillas hung on its first throw).
+#[test]
+fn play_finishes_on_wasm32() {
+    let dir = built("play", "PLAY \"T255 L64 CDEFG\"\nPRINT \"played\"\nEND\n");
+    let (text, code) = run(&dir, "play", &[]);
+    assert_eq!(text.trim_end(), "played");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
