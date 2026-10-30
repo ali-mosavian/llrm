@@ -208,21 +208,6 @@ counter = "code_bytes"
 to = 91  # base 87; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 87->91, clocks 47103->50104
 
 [[row]]
-label = "recpow c -Os"
-counter = "memory_operands"
-to = 5142  # base 3945; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 188->177, clocks 502789->425796
-
-[[row]]
-label = "recsum c -Os"
-counter = "code_bytes"
-to = 57  # base 52; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 52->57, clocks 82036->82039
-
-[[row]]
-label = "recsum c -Os"
-counter = "instructions"
-to = 14010  # base 14009; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 52->57, clocks 82036->82039
-
-[[row]]
 label = "rectwo c -Os"
 counter = "memory_operands"
 to = 145857  # base 97238; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 80->80, clocks 3889567->2382380
@@ -286,36 +271,6 @@ to = 179059  # base 170762; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f8
 label = "scroll nib -Os"
 counter = "code_bytes"
 to = 156  # base 151; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 151->156, clocks 1837261->687166
-
-[[row]]
-label = "switch bas -Os"
-counter = "data_bytes"
-to = 27  # base 15; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 617->456, clocks 764986->723037
-
-[[row]]
-label = "switch bq16 -Os"
-counter = "data_bytes"
-to = 27  # base 15; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 622->463, clocks 710986->669037
-
-[[row]]
-label = "switch c -Os"
-counter = "instructions"
-to = 68229  # base 68138; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 272->270, clocks 493456->488737
-
-[[row]]
-label = "switch c -Os"
-counter = "memory_operands"
-to = 5706  # base 3708; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 272->270, clocks 493456->488737
-
-[[row]]
-label = "switch nib -Os"
-counter = "data_bytes"
-to = 12  # base 0; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 407->272, clocks 570035->529585
-
-[[row]]
-label = "switch nib -Os"
-counter = "memory_operands"
-to = 5706  # base 2002; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 407->272, clocks 570035->529585
 
 [[row]]
 label = "textfill bas -Os"
@@ -481,31 +436,6 @@ counter = "instructions"
 to = 20721  # base 20426
 
 [[row]]
-label = "recmany c -O2"
-counter = "instructions"
-to = 69022  # base 66023
-
-[[row]]
-label = "recmany c -O2"
-counter = "memory_operands"
-to = 13502  # base 13501
-
-[[row]]
-label = "recpow c -O2"
-counter = "instructions"
-to = 100637  # base 81404
-
-[[row]]
-label = "recsum c -O2"
-counter = "code_bytes"
-to = 74  # base 60
-
-[[row]]
-label = "recsum c -O2"
-counter = "instructions"
-to = 26005  # base 14009
-
-[[row]]
 label = "rectwo c -O2"
 counter = "instructions"
 to = 1166875  # base 938297
@@ -519,21 +449,6 @@ to = 75  # base 72
 label = "ring c -O2"
 counter = "instructions"
 to = 46107  # base 40107
-
-[[row]]
-label = "switch c -O2"
-counter = "code_bytes"
-to = 385  # base 329
-
-[[row]]
-label = "switch c -O2"
-counter = "instructions"
-to = 118530  # base 100137
-
-[[row]]
-label = "switch c -O2"
-counter = "memory_operands"
-to = 5706  # base 3708
 
 [[row]]
 label = "tile c -O2"
@@ -869,36 +784,6 @@ to = 254  # base 213
 label = "ring bq32 -Os"
 counter = "code_bytes"
 to = 219  # base 210
-
-[[row]]
-label = "switch bas -O2"
-counter = "data_bytes"
-to = 27  # base 15
-
-[[row]]
-label = "switch bq16 -O2"
-counter = "data_bytes"
-to = 27  # base 15
-
-[[row]]
-label = "switch bq32 -O2"
-counter = "data_bytes"
-to = 33  # base 21
-
-[[row]]
-label = "switch bq32 -Os"
-counter = "data_bytes"
-to = 33  # base 21
-
-[[row]]
-label = "switch nib -O2"
-counter = "data_bytes"
-to = 12  # base 0
-
-[[row]]
-label = "switch nib -O2"
-counter = "memory_operands"
-to = 5706  # base 2002
 
 [[row]]
 label = "textfill bas -O2"
@@ -1385,31 +1270,6 @@ counter = "code_bytes"
 to = 226  # base 220; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; TEMPORARY: fix after the main merge
 
 [[row]]
-label = "parity/qlight bas -O2"
-counter = "memory_operands"
-to = 21  # base 20; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight bq16 -O2"
-counter = "memory_operands"
-to = 21  # base 20; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight bq32 -O2"
-counter = "code_bytes"
-to = 308  # base 303; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight bq32 -Os"
-counter = "instructions"
-to = 100  # base 99; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight nib -O2"
-counter = "memory_operands"
-to = 5  # base 4; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
-
-[[row]]
 label = "parity/sum_three bas -O2"
 counter = "code_bytes"
 to = 270  # base 252; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; TEMPORARY: fix after the main merge
@@ -1887,61 +1747,6 @@ counter = "code_bytes"
 to = 192  # base 152; unclassified, to be triaged; owner w11; TEMPORARY: fix after the main merge
 
 [[row]]
-label = "parity/qlight bas -Os"
-counter = "instructions"
-to = 99  # base 94; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight bas -Os"
-counter = "memory_operands"
-to = 21  # base 20; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight bas -Os"
-counter = "code_bytes"
-to = 301  # base 293; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight bq16 -Os"
-counter = "instructions"
-to = 106  # base 99; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight bq16 -Os"
-counter = "memory_operands"
-to = 21  # base 20; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight bq16 -Os"
-counter = "code_bytes"
-to = 318  # base 312; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight c -O2"
-counter = "code_bytes"
-to = 391  # base 211; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight c -Os"
-counter = "instructions"
-to = 85  # base 78; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight c -Os"
-counter = "memory_operands"
-to = 13  # base 12; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight c -Os"
-counter = "code_bytes"
-to = 164  # base 154; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
-
-[[row]]
-label = "parity/qlight nib -Os"
-counter = "memory_operands"
-to = 5  # base 4; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
-
-[[row]]
 label = "parity/qmove bas -O2"
 counter = "memory_operands"
 to = 32  # base 29; unclassified, to be triaged; owner w10; TEMPORARY: fix after the main merge
@@ -2190,3 +1995,8 @@ to = 920  # base 791; integer movs (+15 on the pin's own IR at m32); owner w11; 
 label = "stft_single c -Os"
 counter = "code_bytes"
 to = 885  # base 779; integer movs (+15 on the pin's own IR at m32); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "switch c -O2"
+counter = "memory_operands"
+to = 9706  # base 5706; owner w11; idiv by a constant keeps 3 divisors in registers, so 4 spill ops per trip (instructions 118530->78530, code_bytes 385->309); fix: w12's allocator
