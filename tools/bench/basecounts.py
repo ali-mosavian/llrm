@@ -186,14 +186,75 @@ def store_slice(cache: Path, index: int, count: int, stamp: dict, payload: dict)
     return path
 
 
-def waivers(root: Path = ROOT) -> list[dict]:
-    """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`."""
+def waivers(root: Path = ROOT, base: str | None = None) -> list[dict]:
+    """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`. A file with a `base` (a
+    commit) holds rows against that commit's frozen counts (FROZEN), with an `owner` and a `deadline`; those are what `base` selects. The
+    default is the files with none: the rows against the run's own base (the tip or merge-base), which never see the pinned ones."""
     out = []
     for path in sorted((root / WAIVERS).glob("*.toml")):
         data = tomllib.loads(path.read_text())
+        if data.get("base") != base:
+            continue
         for row in data.get("row", []):
-            out.append({**row, "reason": data.get("reason", ""), "file": path.name})
+            out.append({**row, "reason": data.get("reason", ""), "file": path.name, "base": base, "owner": data.get("owner", ""), "deadline": data.get("deadline", "")})
     return out
+
+
+def pinned_bases(root: Path = ROOT) -> list[str]:
+    """The commits the waiver files are pinned to."""
+    return sorted({data["base"] for path in (root / WAIVERS).glob("*.toml") if (data := tomllib.loads(path.read_text())).get("base")})
+
+
+# The counts of a commit that cannot be built any more (main 854bb7efc4 needs the Watcom frontend), measured once: counts only.
+FROZEN = HERE / "frozen"
+
+
+def load_frozen(sha: str, root: Path = ROOT, path: Path | None = None) -> dict | None:
+    found = path or next(iter(sorted((root / "tools/bench/frozen").glob(f"{sha[:10]}*.json"))), None)
+    return json.loads(found.read_text()) if found and found.is_file() else None
+
+
+def check_frozen(data: dict | None, sha: str, pinned: list[dict]) -> list[str]:
+    """Why the frozen counts of `sha` cannot judge `pinned` waivers (rows against them): the file is missing or is another commit's, was made
+    under another hash scheme, lacks a row a waiver names, or a waiver file names no owner or deadline."""
+    if data is None:
+        return [f"FROZEN {sha[:9]}: no frozen counts file (tools/bench/frozen/{sha[:10]}.json): its waivers cannot be judged"]
+    problems = []
+    if not (data.get("sha", "").startswith(sha) or sha.startswith(data.get("sha", "-"))):
+        problems.append(f"FROZEN {sha[:9]}: the file is for {data.get('sha', '?')[:9]}, not the waiver files' target")
+    if data.get("hash_version") != HASH_VERSION:
+        problems.append(f"FROZEN {sha[:9]}: hash version {data.get('hash_version')}, this tree's is {HASH_VERSION}")
+    rows = data.get("rows", {})
+    for w in pinned:
+        name, language, opt = w["label"].rsplit(" ", 2)
+        row = rows.get(f"{name}/{language}/{opt.lstrip('-')}")
+        if row is None or w["counter"] not in row:
+            problems.append(f"FROZEN {sha[:9]}: {w['file']}: {w['label']} {w['counter']} is not a row of the frozen counts")
+    for name in sorted({w["file"] for w in pinned if not (w["owner"] and w["deadline"])}):
+        problems.append(f"FROZEN {sha[:9]}: {name} is pinned to a base and names no owner and deadline")
+    return problems
+
+
+def frozen_view(data: dict, now: dict[str, str]) -> tuple[dict, set[str], list[str]]:
+    """(the frozen rows, the programs whose source is the one they were measured from, the programs changed since): a changed program is not
+    judged against counts of another program."""
+    same = {name for name, hashed in data["programs"].items() if now.get(name) == hashed}
+    return rows_of(data["rows"]), same, sorted(name for name in now if name in data["programs"] and name not in same)
+
+
+def frozen_lines(sha: str, pinned: list[dict], measured: dict, base: dict, changed: list[str]) -> list[str]:
+    """`waived vs SHA: N rows, of which fixed: M`: the rows still waived against the frozen counts, and those of them now at or under it. Nothing here
+    asks to delete a row: it leaves its file in the pull request that fixes it."""
+    fixed = 0
+    for w in pinned:
+        name, language, opt = w["label"].rsplit(" ", 2)
+        key = (name, language, opt.lstrip("-"))
+        if key in measured and key in base and w["counter"] in measured[key] and w["counter"] in base[key] and measured[key][w["counter"]] <= base[key][w["counter"]]:
+            fixed += 1
+    lines = [f"waived vs {sha[:9]}: {len(pinned)} rows, of which fixed: {fixed}"]
+    if changed:
+        lines.append(f"{len(changed)} programs changed since the freeze, not judged against it: {' '.join(changed)}")
+    return lines
 
 
 def judge(measured: dict, base: dict, waived: list[dict], same: set[str] | None = None) -> tuple[list[tuple], list[tuple], list[str]]:

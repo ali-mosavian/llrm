@@ -1,0 +1,3298 @@
+{
+"sha": "854bb7efc4343d7c62114368f6f943a0acbcd44f",
+"tree": "203807b3317c18a6d54a4d826831f75951019e4e",
+"hash_version": 2,
+"opts": [
+"O2",
+"Os"
+],
+"frozen": "2026-10-30",
+"what": "counts of main 854bb7efc4 (the compiler before the parity merge): its own tools/bench harness and compiler, run once on its tree; programs edited since are the old compiler on the head's sources (hash recorded). Counts only: the judge never rebuilds the old base (it needs the Watcom frontend).",
+"load_independent": {
+"instructions": true,
+"memory_operands": true,
+"code_bytes": true,
+"data_bytes": true,
+"bss_bytes": true,
+"clocks": true
+},
+"load_independent_why": "emulated instruction counts, map sizes and DOSBox virtual-time clocks do not move with host load; kernel_ms (wall) is not recorded here",
+"programs": {
+"bintree": "09cc74445cf9",
+"crc": "5002e00042ce",
+"fib": "f53caad0302c",
+"floats": "4bd97b10f058",
+"fpbench": "781c639aa24c",
+"frames": "cbdf497686a2",
+"grep": "0504edb7b313",
+"hanoi": "76283511880b",
+"histo": "0e47af2c82b2",
+"huge": "de4df7c470e6",
+"jpeg_fixed": "d7591aaebbf0",
+"jpeg_single": "928900f761c8",
+"lru": "f8babc91d848",
+"mandel": "2831ca99025d",
+"matmul": "9f8976579385",
+"nbody": "8a82fd865828",
+"nbody_fixed": "c5d89a2dfe18",
+"nbody_single": "e1934c531571",
+"parity/algebra": "691db5e77009",
+"parity/branch": "ccff066c2a7d",
+"parity/control": "d9be332a72f2",
+"parity/loop": "03f03842bb5a",
+"parity/memory": "a850019a78ff",
+"parity/parity": "d003c9089512",
+"parity/qbsp": "b7fd2f2acec6",
+"parity/qlight": "6c65580adedc",
+"parity/qmove": "c86251ebf53e",
+"parity/scalar": "90e9855a520b",
+"parity/sum_three": "890544066710",
+"particle": "48687b5f734e",
+"queens": "ffc419967bd7",
+"quicksort": "95c6d6bbeb67",
+"recchop": "c39676b3de58",
+"recfloat": "3bea0e8b3a67",
+"recgcd": "77496ce55d15",
+"recmany": "7eb3f10ee19f",
+"recpow": "2a3b441c97b6",
+"recsum": "7bb3373ef476",
+"rectwo": "67e87e5c17c2",
+"ring": "c80939a17b5e",
+"scroll": "7ccdb11198d2",
+"shellsort": "c76fdbf3f3d6",
+"sieve": "483d088a61b3",
+"stft_fixed": "9ff6c85248b3",
+"stft_single": "989e0ba73d20",
+"switch": "3021acbad14e",
+"textfill": "59771ad5146c",
+"tile": "517aaf150089"
+},
+"rows": {
+"bintree/bas/O2": {
+"instructions": 150682,
+"memory_operands": 65068,
+"clocks": 331427,
+"code_bytes": 720,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"bintree/bas/Os": {
+"instructions": 149059,
+"memory_operands": 67036,
+"clocks": 407346,
+"code_bytes": 659,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"bintree/bq16/O2": {
+"instructions": 161223,
+"memory_operands": 64217,
+"clocks": 295811,
+"code_bytes": 730,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"bintree/bq16/Os": {
+"instructions": 159598,
+"memory_operands": 66185,
+"clocks": 371728,
+"code_bytes": 669,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"bintree/bq32/O2": {
+"instructions": 72783,
+"code_bytes": 635,
+"data_bytes": 23,
+"bss_bytes": 0,
+"clocks": 139996
+},
+"bintree/bq32/Os": {
+"instructions": 75021,
+"code_bytes": 581,
+"data_bytes": 23,
+"bss_bytes": 0
+},
+"bintree/c/O2": {
+"instructions": 56568,
+"memory_operands": 11825,
+"clocks": 94288,
+"code_bytes": 289,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"bintree/c/Os": {
+"instructions": 56131,
+"memory_operands": 13179,
+"clocks": 171378,
+"code_bytes": 249,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"bintree/nib/O2": {
+"instructions": 85574,
+"memory_operands": 12727,
+"clocks": 157795,
+"code_bytes": 393,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"bintree/nib/Os": {
+"instructions": 118040,
+"memory_operands": 28851,
+"clocks": 271139,
+"code_bytes": 447,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"crc/bas/O2": {
+"instructions": 1216,
+"memory_operands": 71,
+"clocks": 2758,
+"code_bytes": 223,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"crc/bas/Os": {
+"instructions": 1207,
+"memory_operands": 71,
+"clocks": 2767,
+"code_bytes": 220,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"crc/bq16/O2": {
+"instructions": 1216,
+"memory_operands": 63,
+"clocks": 2705,
+"code_bytes": 233,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"crc/bq16/Os": {
+"instructions": 1205,
+"memory_operands": 63,
+"clocks": 2712,
+"code_bytes": 230,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"crc/bq32/O2": {
+"instructions": 1530,
+"code_bytes": 243,
+"data_bytes": 41,
+"bss_bytes": 0,
+"clocks": 2507
+},
+"crc/bq32/Os": {
+"instructions": 1530,
+"code_bytes": 240,
+"data_bytes": 41,
+"bss_bytes": 0,
+"clocks": 2507
+},
+"crc/c/O2": {
+"instructions": 634,
+"memory_operands": 9,
+"clocks": 1384,
+"code_bytes": 69,
+"data_bytes": 10,
+"bss_bytes": 0
+},
+"crc/c/Os": {
+"instructions": 625,
+"memory_operands": 9,
+"clocks": 1393,
+"code_bytes": 68,
+"data_bytes": 10,
+"bss_bytes": 0
+},
+"crc/nib/O2": {
+"instructions": 643,
+"memory_operands": 12,
+"clocks": 1402,
+"code_bytes": 102,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"crc/nib/Os": {
+"instructions": 634,
+"memory_operands": 12,
+"clocks": 1411,
+"code_bytes": 101,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"fib/bas/O2": {
+"instructions": 372147,
+"memory_operands": 109453,
+"clocks": 1116464,
+"code_bytes": 176,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"fib/bas/Os": {
+"instructions": 372147,
+"memory_operands": 109453,
+"clocks": 1116464,
+"code_bytes": 176,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"fib/bq16/O2": {
+"instructions": 404984,
+"memory_operands": 109453,
+"clocks": 820936,
+"code_bytes": 181,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"fib/bq16/Os": {
+"instructions": 404984,
+"memory_operands": 109453,
+"clocks": 820936,
+"code_bytes": 181,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"fib/bq32/O2": {
+"instructions": 372144,
+"code_bytes": 181,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 711462
+},
+"fib/bq32/Os": {
+"instructions": 415925,
+"code_bytes": 180,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 831861
+},
+"fib/c/O2": {
+"instructions": 174385,
+"memory_operands": 29742,
+"clocks": 298686,
+"code_bytes": 282,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"fib/c/Os": {
+"instructions": 284582,
+"memory_operands": 0,
+"clocks": 591071,
+"code_bytes": 56,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"fib/nib/O2": {
+"instructions": 197017,
+"memory_operands": 0,
+"clocks": 415932,
+"code_bytes": 54,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"fib/nib/Os": {
+"instructions": 197017,
+"memory_operands": 0,
+"clocks": 415932,
+"code_bytes": 54,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"floats/bas/O2": {
+"instructions": 5044,
+"memory_operands": 3009,
+"clocks": 99205,
+"code_bytes": 208,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"floats/bas/Os": {
+"instructions": 5045,
+"memory_operands": 3009,
+"clocks": 99206,
+"code_bytes": 210,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"floats/bq16/O2": {
+"instructions": 5044,
+"memory_operands": 3009,
+"clocks": 99205,
+"code_bytes": 213,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"floats/bq16/Os": {
+"instructions": 5045,
+"memory_operands": 3009,
+"clocks": 99206,
+"code_bytes": 215,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"floats/bq32/O2": {
+"instructions": 5043,
+"code_bytes": 231,
+"data_bytes": 37,
+"bss_bytes": 0,
+"clocks": 100202
+},
+"floats/bq32/Os": {
+"instructions": 5046,
+"code_bytes": 228,
+"data_bytes": 37,
+"bss_bytes": 0,
+"clocks": 100210
+},
+"floats/c/O2": {
+"instructions": 7020,
+"memory_operands": 5011,
+"clocks": 110088,
+"code_bytes": 100,
+"data_bytes": 16,
+"bss_bytes": 0
+},
+"floats/c/Os": {
+"instructions": 7022,
+"memory_operands": 5010,
+"clocks": 110098,
+"code_bytes": 92,
+"data_bytes": 16,
+"bss_bytes": 0
+},
+"floats/nib/O2": {
+"instructions": 5027,
+"memory_operands": 3010,
+"clocks": 99106,
+"code_bytes": 106,
+"data_bytes": 28,
+"bss_bytes": 0
+},
+"floats/nib/Os": {
+"instructions": 5027,
+"memory_operands": 3010,
+"clocks": 99106,
+"code_bytes": 106,
+"data_bytes": 28,
+"bss_bytes": 0
+},
+"fpbench/bas/O2": {
+"instructions": 21873,
+"memory_operands": 4850,
+"clocks": 163138,
+"code_bytes": 705,
+"data_bytes": 23,
+"bss_bytes": 0
+},
+"fpbench/bas/Os": {
+"instructions": 21944,
+"memory_operands": 4904,
+"clocks": 163360,
+"code_bytes": 699,
+"data_bytes": 23,
+"bss_bytes": 0
+},
+"fpbench/bq16/O2": {
+"instructions": 22818,
+"memory_operands": 4991,
+"clocks": 165041,
+"code_bytes": 711,
+"data_bytes": 23,
+"bss_bytes": 0
+},
+"fpbench/bq16/Os": {
+"instructions": 22887,
+"memory_operands": 5045,
+"clocks": 165261,
+"code_bytes": 705,
+"data_bytes": 23,
+"bss_bytes": 0
+},
+"fpbench/bq32/O2": {
+"instructions": 21403,
+"code_bytes": 797,
+"data_bytes": 29,
+"bss_bytes": 0,
+"clocks": 162132
+},
+"fpbench/bq32/Os": {
+"instructions": 21682,
+"code_bytes": 778,
+"data_bytes": 29,
+"bss_bytes": 0,
+"clocks": 162449
+},
+"fpbench/c/O2": {
+"instructions": 19766,
+"memory_operands": 3003,
+"clocks": 158807,
+"code_bytes": 333,
+"data_bytes": 8,
+"bss_bytes": 0
+},
+"fpbench/c/Os": {
+"instructions": 19288,
+"memory_operands": 3963,
+"clocks": 156169,
+"code_bytes": 328,
+"data_bytes": 8,
+"bss_bytes": 0
+},
+"fpbench/nib/O2": {
+"instructions": 19878,
+"memory_operands": 3003,
+"clocks": 158957,
+"code_bytes": 469,
+"data_bytes": 16,
+"bss_bytes": 0
+},
+"fpbench/nib/Os": {
+"instructions": 19413,
+"memory_operands": 3963,
+"clocks": 156348,
+"code_bytes": 461,
+"data_bytes": 16,
+"bss_bytes": 0
+},
+"frames/bas/O2": {
+"instructions": 5124953,
+"memory_operands": 960247,
+"clocks": 16742430,
+"code_bytes": 355,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"frames/bas/Os": {
+"instructions": 5012189,
+"memory_operands": 960247,
+"clocks": 20156757,
+"code_bytes": 329,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"frames/bq16/O2": {
+"instructions": 5380027,
+"memory_operands": 960247,
+"clocks": 14296769,
+"code_bytes": 360,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"frames/bq16/Os": {
+"instructions": 5267263,
+"memory_operands": 960247,
+"clocks": 17711096,
+"code_bytes": 334,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"frames/bq32/O2": {
+"instructions": 4674806,
+"code_bytes": 302,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 10330946
+},
+"frames/bq32/Os": {
+"instructions": 4843247,
+"code_bytes": 279,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 15043361
+},
+"frames/c/O2": {
+"instructions": 3036703,
+"memory_operands": 180877,
+"clocks": 8807338,
+"code_bytes": 430,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"frames/c/Os": {
+"instructions": 3736922,
+"memory_operands": 180050,
+"clocks": 14155341,
+"code_bytes": 147,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"frames/nib/O2": {
+"instructions": 5050788,
+"memory_operands": 180050,
+"clocks": 14062703,
+"code_bytes": 193,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"frames/nib/Os": {
+"instructions": 4922998,
+"memory_operands": 270051,
+"clocks": 17401953,
+"code_bytes": 184,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"grep/bas/O2": {
+"code_bytes": 1010,
+"data_bytes": 113,
+"bss_bytes": 0,
+"checked": true
+},
+"grep/bas/Os": {
+"code_bytes": 948,
+"data_bytes": 113,
+"bss_bytes": 0,
+"checked": true
+},
+"grep/bq16/O2": {
+"code_bytes": 977,
+"data_bytes": 113,
+"bss_bytes": 0,
+"checked": true
+},
+"grep/bq16/Os": {
+"code_bytes": 929,
+"data_bytes": 113,
+"bss_bytes": 0,
+"checked": true
+},
+"grep/bq32/O2": {
+"instructions": 623855935,
+"code_bytes": 1438,
+"data_bytes": 127,
+"bss_bytes": 0
+},
+"grep/bq32/Os": {
+"instructions": 623886032,
+"code_bytes": 1279,
+"data_bytes": 127,
+"bss_bytes": 0
+},
+"grep/c/O2": {
+"code_bytes": 535,
+"data_bytes": 81,
+"bss_bytes": 3056,
+"checked": true
+},
+"grep/c/Os": {
+"code_bytes": 516,
+"data_bytes": 81,
+"bss_bytes": 3056,
+"checked": true
+},
+"grep/nib/O2": {
+"code_bytes": 1517,
+"data_bytes": 3157,
+"bss_bytes": 0,
+"checked": true
+},
+"grep/nib/Os": {
+"code_bytes": 1406,
+"data_bytes": 3157,
+"bss_bytes": 0,
+"checked": true
+},
+"hanoi/bas/O2": {
+"instructions": 385005,
+"memory_operands": 155635,
+"clocks": 1015770,
+"code_bytes": 216,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"hanoi/bas/Os": {
+"instructions": 393196,
+"memory_operands": 155635,
+"clocks": 1040343,
+"code_bytes": 214,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"hanoi/bq16/O2": {
+"instructions": 401389,
+"memory_operands": 155635,
+"clocks": 786409,
+"code_bytes": 221,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"hanoi/bq16/Os": {
+"instructions": 409580,
+"memory_operands": 155635,
+"clocks": 810982,
+"code_bytes": 219,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"hanoi/bq32/O2": {
+"instructions": 466918,
+"code_bytes": 241,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 909263
+},
+"hanoi/bq32/Os": {
+"instructions": 491493,
+"code_bytes": 223,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 974798
+},
+"hanoi/c/O2": {
+"instructions": 68,
+"memory_operands": 0,
+"clocks": 107,
+"code_bytes": 113,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"hanoi/c/Os": {
+"instructions": 98,
+"memory_operands": 0,
+"clocks": 199,
+"code_bytes": 37,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"hanoi/nib/O2": {
+"instructions": 99,
+"memory_operands": 0,
+"clocks": 192,
+"code_bytes": 40,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"hanoi/nib/Os": {
+"instructions": 99,
+"memory_operands": 0,
+"clocks": 192,
+"code_bytes": 40,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"histo/bas/O2": {
+"instructions": 83615,
+"memory_operands": 12675,
+"clocks": 201197,
+"code_bytes": 245,
+"data_bytes": 8719,
+"bss_bytes": 0
+},
+"histo/bas/Os": {
+"instructions": 75807,
+"memory_operands": 13059,
+"clocks": 239468,
+"code_bytes": 239,
+"data_bytes": 8719,
+"bss_bytes": 0
+},
+"histo/bq16/O2": {
+"instructions": 83617,
+"memory_operands": 12675,
+"clocks": 201184,
+"code_bytes": 250,
+"data_bytes": 8719,
+"bss_bytes": 0
+},
+"histo/bq16/Os": {
+"instructions": 75809,
+"memory_operands": 13059,
+"clocks": 239455,
+"code_bytes": 244,
+"data_bytes": 8719,
+"bss_bytes": 0
+},
+"histo/bq32/O2": {
+"instructions": 75327,
+"code_bytes": 250,
+"data_bytes": 8725,
+"bss_bytes": 0,
+"clocks": 204114
+},
+"histo/bq32/Os": {
+"instructions": 71229,
+"code_bytes": 246,
+"data_bytes": 8725,
+"bss_bytes": 0,
+"clocks": 253261
+},
+"histo/c/O2": {
+"instructions": 79504,
+"memory_operands": 12672,
+"clocks": 188854,
+"code_bytes": 125,
+"data_bytes": 0,
+"bss_bytes": 4608
+},
+"histo/c/Os": {
+"instructions": 71696,
+"memory_operands": 13056,
+"clocks": 227125,
+"code_bytes": 119,
+"data_bytes": 0,
+"bss_bytes": 4608
+},
+"histo/nib/O2": {
+"instructions": 79505,
+"memory_operands": 12672,
+"clocks": 188853,
+"code_bytes": 128,
+"data_bytes": 4608,
+"bss_bytes": 0
+},
+"histo/nib/Os": {
+"instructions": 71697,
+"memory_operands": 13056,
+"clocks": 227124,
+"code_bytes": 122,
+"data_bytes": 4608,
+"bss_bytes": 0
+},
+"huge/bas/O2": {
+"instructions": 851152,
+"memory_operands": 162283,
+"clocks": 2759582,
+"code_bytes": 355,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"huge/bas/Os": {
+"instructions": 609989,
+"memory_operands": 162918,
+"clocks": 2986427,
+"code_bytes": 332,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"huge/bq16/O2": {
+"instructions": 1052305,
+"memory_operands": 122132,
+"clocks": 2961091,
+"code_bytes": 359,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"huge/bq16/Os": {
+"instructions": 811141,
+"memory_operands": 122767,
+"clocks": 3187935,
+"code_bytes": 336,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"huge/bq32/O2": {
+"instructions": 806320,
+"code_bytes": 256,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 2149001
+},
+"huge/bq32/Os": {
+"instructions": 565722,
+"code_bytes": 241,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 2697535
+},
+"huge/c/O2": {
+"instructions": 528621,
+"memory_operands": 82005,
+"clocks": 2662843,
+"code_bytes": 203,
+"data_bytes": 80400,
+"bss_bytes": 0
+},
+"huge/c/Os": {
+"instructions": 569421,
+"memory_operands": 82405,
+"clocks": 2864843,
+"code_bytes": 205,
+"data_bytes": 80400,
+"bss_bytes": 0
+},
+"huge/nib/O2": {
+"instructions": 810620,
+"memory_operands": 81804,
+"clocks": 2638106,
+"code_bytes": 223,
+"data_bytes": 0,
+"bss_bytes": 80400
+},
+"huge/nib/Os": {
+"instructions": 569421,
+"memory_operands": 82405,
+"clocks": 2864835,
+"code_bytes": 208,
+"data_bytes": 0,
+"bss_bytes": 80400
+},
+"jpeg_fixed/bas/O2": {
+"code_bytes": 5438,
+"data_bytes": 29147,
+"bss_bytes": 0,
+"checked": true
+},
+"jpeg_fixed/bas/Os": {
+"code_bytes": 5245,
+"data_bytes": 29147,
+"bss_bytes": 0,
+"checked": true
+},
+"jpeg_fixed/bq16/O2": {
+"code_bytes": 5487,
+"data_bytes": 29147,
+"bss_bytes": 0,
+"checked": true
+},
+"jpeg_fixed/bq16/Os": {
+"code_bytes": 5267,
+"data_bytes": 29147,
+"bss_bytes": 0,
+"checked": true
+},
+"jpeg_fixed/bq32/O2": {
+"instructions": 83887583,
+"code_bytes": 6445,
+"data_bytes": 29209,
+"bss_bytes": 0,
+"clocks": 186361982
+},
+"jpeg_fixed/bq32/Os": {
+"instructions": 87566477,
+"code_bytes": 6014,
+"data_bytes": 29209,
+"bss_bytes": 0,
+"clocks": 192312402
+},
+"jpeg_fixed/c/O2": {
+"code_bytes": 3331,
+"data_bytes": 474,
+"bss_bytes": 15849,
+"checked": true
+},
+"jpeg_fixed/c/Os": {
+"code_bytes": 3102,
+"data_bytes": 474,
+"bss_bytes": 15849,
+"checked": true
+},
+"jpeg_fixed/nib/O2": {
+"code_bytes": 6332,
+"data_bytes": 17158,
+"bss_bytes": 0,
+"checked": true
+},
+"jpeg_fixed/nib/Os": {
+"code_bytes": 5912,
+"data_bytes": 17158,
+"bss_bytes": 0,
+"checked": true
+},
+"jpeg_single/bas/O2": {
+"code_bytes": 5067,
+"data_bytes": 29635,
+"bss_bytes": 0,
+"checked": true
+},
+"jpeg_single/bas/Os": {
+"code_bytes": 4857,
+"data_bytes": 29635,
+"bss_bytes": 0,
+"checked": true
+},
+"jpeg_single/bq16/O2": {
+"code_bytes": 5116,
+"data_bytes": 29635,
+"bss_bytes": 0,
+"checked": true
+},
+"jpeg_single/bq16/Os": {
+"code_bytes": 4879,
+"data_bytes": 29635,
+"bss_bytes": 0,
+"checked": true
+},
+"jpeg_single/bq32/O2": {
+"instructions": 61569936,
+"code_bytes": 6210,
+"data_bytes": 29697,
+"bss_bytes": 0,
+"clocks": 176491424
+},
+"jpeg_single/bq32/Os": {
+"instructions": 62930834,
+"code_bytes": 5817,
+"data_bytes": 29697,
+"bss_bytes": 0,
+"clocks": 179923251
+},
+"jpeg_single/c/O2": {
+"code_bytes": 3068,
+"data_bytes": 634,
+"bss_bytes": 15849,
+"checked": true
+},
+"jpeg_single/c/Os": {
+"code_bytes": 2910,
+"data_bytes": 634,
+"bss_bytes": 15849,
+"checked": true
+},
+"jpeg_single/nib/O2": {
+"code_bytes": 6173,
+"data_bytes": 17198,
+"bss_bytes": 0,
+"checked": true
+},
+"jpeg_single/nib/Os": {
+"code_bytes": 5759,
+"data_bytes": 17198,
+"bss_bytes": 0,
+"checked": true
+},
+"lru/bas/O2": {
+"instructions": 147,
+"memory_operands": 57,
+"clocks": 295,
+"code_bytes": 493,
+"data_bytes": 77,
+"bss_bytes": 0
+},
+"lru/bas/Os": {
+"instructions": 147,
+"memory_operands": 57,
+"clocks": 359,
+"code_bytes": 446,
+"data_bytes": 77,
+"bss_bytes": 0
+},
+"lru/bq16/O2": {
+"instructions": 148,
+"memory_operands": 57,
+"clocks": 281,
+"code_bytes": 498,
+"data_bytes": 77,
+"bss_bytes": 0
+},
+"lru/bq16/Os": {
+"instructions": 148,
+"memory_operands": 57,
+"clocks": 345,
+"code_bytes": 451,
+"data_bytes": 77,
+"bss_bytes": 0
+},
+"lru/bq32/O2": {
+"instructions": 125,
+"code_bytes": 501,
+"data_bytes": 83,
+"bss_bytes": 0,
+"clocks": 243
+},
+"lru/bq32/Os": {
+"instructions": 123,
+"code_bytes": 473,
+"data_bytes": 83,
+"bss_bytes": 0,
+"clocks": 290
+},
+"lru/c/O2": {
+"instructions": 124,
+"memory_operands": 55,
+"clocks": 217,
+"code_bytes": 378,
+"data_bytes": 0,
+"bss_bytes": 78
+},
+"lru/c/Os": {
+"instructions": 123,
+"memory_operands": 55,
+"clocks": 279,
+"code_bytes": 341,
+"data_bytes": 0,
+"bss_bytes": 78
+},
+"lru/nib/O2": {
+"instructions": 204,
+"memory_operands": 107,
+"clocks": 393,
+"code_bytes": 606,
+"data_bytes": 32,
+"bss_bytes": 0
+},
+"lru/nib/Os": {
+"instructions": 267,
+"memory_operands": 139,
+"clocks": 571,
+"code_bytes": 522,
+"data_bytes": 32,
+"bss_bytes": 0
+},
+"mandel/bas/O2": {
+"instructions": 321035,
+"memory_operands": 20126,
+"clocks": 1105037,
+"code_bytes": 329,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"mandel/bas/Os": {
+"instructions": 305948,
+"memory_operands": 20126,
+"clocks": 1108365,
+"code_bytes": 305,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"mandel/bq16/O2": {
+"instructions": 321035,
+"memory_operands": 20126,
+"clocks": 1105037,
+"code_bytes": 334,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"mandel/bq16/Os": {
+"instructions": 305948,
+"memory_operands": 20126,
+"clocks": 1108365,
+"code_bytes": 310,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"mandel/bq32/O2": {
+"instructions": 321015,
+"code_bytes": 283,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 832400
+},
+"mandel/bq32/Os": {
+"instructions": 305952,
+"code_bytes": 259,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 851428
+},
+"mandel/c/O2": {
+"instructions": 176401,
+"memory_operands": 20125,
+"clocks": 819021,
+"code_bytes": 187,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"mandel/c/Os": {
+"instructions": 173480,
+"memory_operands": 20125,
+"clocks": 817607,
+"code_bytes": 168,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"mandel/nib/O2": {
+"instructions": 162687,
+"memory_operands": 20125,
+"clocks": 812607,
+"code_bytes": 181,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"mandel/nib/Os": {
+"instructions": 172712,
+"memory_operands": 20125,
+"clocks": 833809,
+"code_bytes": 170,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"matmul/bas/O2": {
+"instructions": 8764,
+"memory_operands": 2289,
+"clocks": 27284,
+"code_bytes": 473,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"matmul/bas/Os": {
+"instructions": 8696,
+"memory_operands": 2338,
+"clocks": 28904,
+"code_bytes": 453,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"matmul/bq16/O2": {
+"instructions": 10578,
+"memory_operands": 2210,
+"clocks": 30141,
+"code_bytes": 480,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"matmul/bq16/Os": {
+"instructions": 10508,
+"memory_operands": 2259,
+"clocks": 31759,
+"code_bytes": 460,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"matmul/bq32/O2": {
+"instructions": 7624,
+"code_bytes": 584,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 21767
+},
+"matmul/bq32/Os": {
+"instructions": 7746,
+"code_bytes": 547,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 23626
+},
+"matmul/c/O2": {
+"instructions": 5925,
+"memory_operands": 1554,
+"clocks": 20403,
+"code_bytes": 241,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"matmul/c/Os": {
+"instructions": 5918,
+"memory_operands": 1554,
+"clocks": 20480,
+"code_bytes": 234,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"matmul/nib/O2": {
+"instructions": 6335,
+"memory_operands": 1698,
+"clocks": 21676,
+"code_bytes": 374,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"matmul/nib/Os": {
+"instructions": 6715,
+"memory_operands": 2082,
+"clocks": 23432,
+"code_bytes": 342,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"nbody/bas/O2": {
+"instructions": 56396,
+"memory_operands": 27822,
+"clocks": 382966,
+"code_bytes": 868,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"nbody/bas/Os": {
+"instructions": 58458,
+"memory_operands": 28069,
+"clocks": 389279,
+"code_bytes": 724,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"nbody/bq16/O2": {
+"instructions": 57380,
+"memory_operands": 27961,
+"clocks": 384956,
+"code_bytes": 870,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"nbody/bq16/Os": {
+"instructions": 59440,
+"memory_operands": 28208,
+"clocks": 391267,
+"code_bytes": 726,
+"data_bytes": 31,
+"bss_bytes": 0
+},
+"nbody/bq32/O2": {
+"instructions": 48537,
+"code_bytes": 823,
+"data_bytes": 37,
+"bss_bytes": 0,
+"clocks": 369086
+},
+"nbody/bq32/Os": {
+"instructions": 52541,
+"code_bytes": 701,
+"data_bytes": 37,
+"bss_bytes": 0,
+"clocks": 376218
+},
+"nbody/c/O2": {
+"instructions": 46457,
+"memory_operands": 20844,
+"clocks": 367382,
+"code_bytes": 461,
+"data_bytes": 16,
+"bss_bytes": 0
+},
+"nbody/c/Os": {
+"instructions": 44861,
+"memory_operands": 21632,
+"clocks": 358692,
+"code_bytes": 341,
+"data_bytes": 16,
+"bss_bytes": 0
+},
+"nbody/nib/O2": {
+"instructions": 46466,
+"memory_operands": 20846,
+"clocks": 367403,
+"code_bytes": 492,
+"data_bytes": 28,
+"bss_bytes": 0
+},
+"nbody/nib/Os": {
+"instructions": 44268,
+"memory_operands": 21634,
+"clocks": 357111,
+"code_bytes": 359,
+"data_bytes": 28,
+"bss_bytes": 0
+},
+"nbody_fixed/bas/O2": {
+"instructions": 1446168,
+"memory_operands": 332049,
+"clocks": 6657947,
+"code_bytes": 568,
+"data_bytes": 125,
+"bss_bytes": 0
+},
+"nbody_fixed/bas/Os": {
+"instructions": 1446162,
+"memory_operands": 332049,
+"clocks": 6658133,
+"code_bytes": 555,
+"data_bytes": 125,
+"bss_bytes": 0
+},
+"nbody_fixed/bq16/O2": {
+"instructions": 1446168,
+"memory_operands": 332049,
+"clocks": 6657947,
+"code_bytes": 573,
+"data_bytes": 125,
+"bss_bytes": 0
+},
+"nbody_fixed/bq16/Os": {
+"instructions": 1446162,
+"memory_operands": 332049,
+"clocks": 6658133,
+"code_bytes": 560,
+"data_bytes": 125,
+"bss_bytes": 0
+},
+"nbody_fixed/bq32/O2": {
+"instructions": 1446166,
+"code_bytes": 536,
+"data_bytes": 131,
+"bss_bytes": 0,
+"clocks": 5410798
+},
+"nbody_fixed/bq32/Os": {
+"instructions": 1494166,
+"code_bytes": 521,
+"data_bytes": 131,
+"bss_bytes": 0,
+"clocks": 5566871
+},
+"nbody_fixed/c/O2": {
+"instructions": 1450167,
+"memory_operands": 325049,
+"clocks": 6583945,
+"code_bytes": 481,
+"data_bytes": 0,
+"bss_bytes": 96
+},
+"nbody_fixed/c/Os": {
+"instructions": 1450161,
+"memory_operands": 325049,
+"clocks": 6584131,
+"code_bytes": 468,
+"data_bytes": 0,
+"bss_bytes": 96
+},
+"nbody_fixed/nib/O2": {
+"instructions": 2928103,
+"memory_operands": 615070,
+"clocks": 11454210,
+"code_bytes": 796,
+"data_bytes": 96,
+"bss_bytes": 0
+},
+"nbody_fixed/nib/Os": {
+"instructions": 2922115,
+"memory_operands": 615070,
+"clocks": 11436234,
+"code_bytes": 793,
+"data_bytes": 96,
+"bss_bytes": 0
+},
+"nbody_single/bas/O2": {
+"instructions": 1037180,
+"memory_operands": 144105,
+"clocks": 8236073,
+"code_bytes": 388,
+"data_bytes": 145,
+"bss_bytes": 0
+},
+"nbody_single/bas/Os": {
+"instructions": 1013186,
+"memory_operands": 192105,
+"clocks": 8104085,
+"code_bytes": 375,
+"data_bytes": 145,
+"bss_bytes": 0
+},
+"nbody_single/bq16/O2": {
+"instructions": 1037180,
+"memory_operands": 144105,
+"clocks": 8236073,
+"code_bytes": 393,
+"data_bytes": 145,
+"bss_bytes": 0
+},
+"nbody_single/bq16/Os": {
+"instructions": 1013186,
+"memory_operands": 192105,
+"clocks": 8104085,
+"code_bytes": 380,
+"data_bytes": 145,
+"bss_bytes": 0
+},
+"nbody_single/bq32/O2": {
+"instructions": 1013183,
+"code_bytes": 464,
+"data_bytes": 151,
+"bss_bytes": 0,
+"clocks": 8141081
+},
+"nbody_single/bq32/Os": {
+"instructions": 1013191,
+"code_bytes": 451,
+"data_bytes": 151,
+"bss_bytes": 0,
+"clocks": 8141093
+},
+"nbody_single/c/O2": {
+"instructions": 1037186,
+"memory_operands": 144111,
+"clocks": 8236093,
+"code_bytes": 335,
+"data_bytes": 24,
+"bss_bytes": 96
+},
+"nbody_single/c/Os": {
+"instructions": 1013186,
+"memory_operands": 192111,
+"clocks": 8104093,
+"code_bytes": 327,
+"data_bytes": 24,
+"bss_bytes": 96
+},
+"nbody_single/nib/O2": {
+"instructions": 1276389,
+"memory_operands": 229138,
+"clocks": 8617487,
+"code_bytes": 540,
+"data_bytes": 32,
+"bss_bytes": 0
+},
+"nbody_single/nib/Os": {
+"instructions": 1276425,
+"memory_operands": 229138,
+"clocks": 8617559,
+"code_bytes": 534,
+"data_bytes": 32,
+"bss_bytes": 0
+},
+"parity/algebra/bas/O2": {
+"instructions": 64,
+"memory_operands": 14,
+"clocks": 192,
+"code_bytes": 241,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/algebra/bas/Os": {
+"instructions": 57,
+"memory_operands": 14,
+"clocks": 265,
+"code_bytes": 223,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/algebra/bq16/O2": {
+"instructions": 66,
+"memory_operands": 14,
+"clocks": 164,
+"code_bytes": 246,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/algebra/bq16/Os": {
+"instructions": 60,
+"memory_operands": 14,
+"clocks": 238,
+"code_bytes": 228,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/algebra/bq32/O2": {
+"instructions": 52,
+"code_bytes": 195,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 96
+},
+"parity/algebra/bq32/Os": {
+"instructions": 50,
+"code_bytes": 184,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 114
+},
+"parity/algebra/c/O2": {
+"instructions": 52,
+"memory_operands": 10,
+"clocks": 143,
+"code_bytes": 134,
+"data_bytes": 0,
+"bss_bytes": 4
+},
+"parity/algebra/c/Os": {
+"instructions": 48,
+"memory_operands": 10,
+"clocks": 219,
+"code_bytes": 118,
+"data_bytes": 0,
+"bss_bytes": 4
+},
+"parity/algebra/nib/O2": {
+"instructions": 40,
+"memory_operands": 2,
+"clocks": 125,
+"code_bytes": 107,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/algebra/nib/Os": {
+"instructions": 36,
+"memory_operands": 2,
+"clocks": 201,
+"code_bytes": 91,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/branch/bas/O2": {
+"instructions": 49,
+"memory_operands": 6,
+"clocks": 164,
+"code_bytes": 242,
+"data_bytes": 28,
+"bss_bytes": 0
+},
+"parity/branch/bas/Os": {
+"instructions": 44,
+"memory_operands": 6,
+"clocks": 194,
+"code_bytes": 214,
+"data_bytes": 28,
+"bss_bytes": 0
+},
+"parity/branch/bq16/O2": {
+"instructions": 52,
+"memory_operands": 6,
+"clocks": 137,
+"code_bytes": 253,
+"data_bytes": 28,
+"bss_bytes": 0
+},
+"parity/branch/bq16/Os": {
+"instructions": 46,
+"memory_operands": 6,
+"clocks": 166,
+"code_bytes": 224,
+"data_bytes": 28,
+"bss_bytes": 0
+},
+"parity/branch/bq32/O2": {
+"instructions": 29,
+"code_bytes": 170,
+"data_bytes": 34,
+"bss_bytes": 0,
+"clocks": 62
+},
+"parity/branch/bq32/Os": {
+"instructions": 26,
+"code_bytes": 168,
+"data_bytes": 34,
+"bss_bytes": 0,
+"clocks": 86
+},
+"parity/branch/c/O2": {
+"instructions": 40,
+"memory_operands": 8,
+"clocks": 110,
+"code_bytes": 117,
+"data_bytes": 4,
+"bss_bytes": 2
+},
+"parity/branch/c/Os": {
+"instructions": 35,
+"memory_operands": 8,
+"clocks": 138,
+"code_bytes": 96,
+"data_bytes": 4,
+"bss_bytes": 2
+},
+"parity/branch/nib/O2": {
+"instructions": 25,
+"memory_operands": 0,
+"clocks": 65,
+"code_bytes": 86,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/branch/nib/Os": {
+"instructions": 19,
+"memory_operands": 0,
+"clocks": 92,
+"code_bytes": 65,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/control/bas/O2": {
+"instructions": 156,
+"memory_operands": 14,
+"clocks": 351,
+"code_bytes": 278,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/control/bas/Os": {
+"instructions": 156,
+"memory_operands": 14,
+"clocks": 385,
+"code_bytes": 246,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/control/bq16/O2": {
+"instructions": 160,
+"memory_operands": 14,
+"clocks": 325,
+"code_bytes": 283,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/control/bq16/Os": {
+"instructions": 159,
+"memory_operands": 14,
+"clocks": 358,
+"code_bytes": 251,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/control/bq32/O2": {
+"instructions": 150,
+"code_bytes": 241,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 289
+},
+"parity/control/bq32/Os": {
+"instructions": 153,
+"code_bytes": 212,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 323
+},
+"parity/control/c/O2": {
+"instructions": 151,
+"memory_operands": 19,
+"clocks": 334,
+"code_bytes": 166,
+"data_bytes": 0,
+"bss_bytes": 4
+},
+"parity/control/c/Os": {
+"instructions": 150,
+"memory_operands": 19,
+"clocks": 367,
+"code_bytes": 141,
+"data_bytes": 0,
+"bss_bytes": 4
+},
+"parity/control/nib/O2": {
+"instructions": 137,
+"memory_operands": 2,
+"clocks": 298,
+"code_bytes": 139,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/control/nib/Os": {
+"instructions": 138,
+"memory_operands": 2,
+"clocks": 333,
+"code_bytes": 115,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/loop/bas/O2": {
+"instructions": 135,
+"memory_operands": 10,
+"clocks": 473,
+"code_bytes": 283,
+"data_bytes": 36,
+"bss_bytes": 0
+},
+"parity/loop/bas/Os": {
+"instructions": 132,
+"memory_operands": 10,
+"clocks": 490,
+"code_bytes": 254,
+"data_bytes": 36,
+"bss_bytes": 0
+},
+"parity/loop/bq16/O2": {
+"instructions": 137,
+"memory_operands": 10,
+"clocks": 445,
+"code_bytes": 300,
+"data_bytes": 36,
+"bss_bytes": 0
+},
+"parity/loop/bq16/Os": {
+"instructions": 135,
+"memory_operands": 10,
+"clocks": 463,
+"code_bytes": 270,
+"data_bytes": 36,
+"bss_bytes": 0
+},
+"parity/loop/bq32/O2": {
+"instructions": 92,
+"code_bytes": 221,
+"data_bytes": 42,
+"bss_bytes": 0,
+"clocks": 156
+},
+"parity/loop/bq32/Os": {
+"instructions": 94,
+"code_bytes": 220,
+"data_bytes": 42,
+"bss_bytes": 0,
+"clocks": 178
+},
+"parity/loop/c/O2": {
+"instructions": 131,
+"memory_operands": 14,
+"clocks": 426,
+"code_bytes": 152,
+"data_bytes": 8,
+"bss_bytes": 4
+},
+"parity/loop/c/Os": {
+"instructions": 127,
+"memory_operands": 14,
+"clocks": 442,
+"code_bytes": 129,
+"data_bytes": 8,
+"bss_bytes": 4
+},
+"parity/loop/nib/O2": {
+"instructions": 117,
+"memory_operands": 2,
+"clocks": 412,
+"code_bytes": 122,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/loop/nib/Os": {
+"instructions": 115,
+"memory_operands": 2,
+"clocks": 430,
+"code_bytes": 100,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/memory/bas/O2": {
+"instructions": 64,
+"memory_operands": 16,
+"clocks": 210,
+"code_bytes": 228,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/memory/bas/Os": {
+"instructions": 59,
+"memory_operands": 16,
+"clocks": 239,
+"code_bytes": 214,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/memory/bq16/O2": {
+"instructions": 68,
+"memory_operands": 16,
+"clocks": 184,
+"code_bytes": 233,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/memory/bq16/Os": {
+"instructions": 62,
+"memory_operands": 16,
+"clocks": 212,
+"code_bytes": 219,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/memory/bq32/O2": {
+"instructions": 50,
+"code_bytes": 194,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 126
+},
+"parity/memory/bq32/Os": {
+"instructions": 48,
+"code_bytes": 183,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 144
+},
+"parity/memory/c/O2": {
+"instructions": 48,
+"memory_operands": 12,
+"clocks": 149,
+"code_bytes": 118,
+"data_bytes": 0,
+"bss_bytes": 4
+},
+"parity/memory/c/Os": {
+"instructions": 44,
+"memory_operands": 12,
+"clocks": 179,
+"code_bytes": 104,
+"data_bytes": 0,
+"bss_bytes": 4
+},
+"parity/memory/nib/O2": {
+"instructions": 34,
+"memory_operands": 6,
+"clocks": 100,
+"code_bytes": 91,
+"data_bytes": 2,
+"bss_bytes": 0
+},
+"parity/memory/nib/Os": {
+"instructions": 35,
+"memory_operands": 10,
+"clocks": 140,
+"code_bytes": 91,
+"data_bytes": 4,
+"bss_bytes": 0
+},
+"parity/parity/bas/O2": {
+"instructions": 377,
+"memory_operands": 115,
+"clocks": 981,
+"code_bytes": 211,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/parity/bas/Os": {
+"instructions": 391,
+"memory_operands": 128,
+"clocks": 1021,
+"code_bytes": 207,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/parity/bq16/O2": {
+"instructions": 590,
+"memory_operands": 151,
+"clocks": 1412,
+"code_bytes": 221,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/parity/bq16/Os": {
+"instructions": 604,
+"memory_operands": 164,
+"clocks": 1452,
+"code_bytes": 217,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/parity/bq32/O2": {
+"instructions": 614,
+"code_bytes": 222,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 1388
+},
+"parity/parity/bq32/Os": {
+"instructions": 616,
+"code_bytes": 219,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 1394
+},
+"parity/parity/c/O2": {
+"instructions": 124,
+"memory_operands": 32,
+"clocks": 347,
+"code_bytes": 89,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/parity/c/Os": {
+"instructions": 124,
+"memory_operands": 32,
+"clocks": 347,
+"code_bytes": 89,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/parity/nib/O2": {
+"instructions": 140,
+"memory_operands": 40,
+"clocks": 400,
+"code_bytes": 110,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/parity/nib/Os": {
+"instructions": 164,
+"memory_operands": 64,
+"clocks": 487,
+"code_bytes": 108,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/qbsp/bas/O2": {
+"instructions": 1094,
+"memory_operands": 503,
+"clocks": 2934,
+"code_bytes": 716,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/qbsp/bas/Os": {
+"instructions": 1185,
+"memory_operands": 593,
+"clocks": 3320,
+"code_bytes": 685,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/qbsp/bq16/O2": {
+"instructions": 1504,
+"memory_operands": 581,
+"clocks": 3672,
+"code_bytes": 725,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/qbsp/bq16/Os": {
+"instructions": 1604,
+"memory_operands": 671,
+"clocks": 4067,
+"code_bytes": 694,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"parity/qbsp/bq32/O2": {
+"instructions": 1149,
+"code_bytes": 539,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 2805
+},
+"parity/qbsp/bq32/Os": {
+"instructions": 1181,
+"code_bytes": 506,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 2919
+},
+"parity/qbsp/c/O2": {
+"instructions": 268,
+"memory_operands": 77,
+"clocks": 903,
+"code_bytes": 351,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/qbsp/c/Os": {
+"instructions": 276,
+"memory_operands": 77,
+"clocks": 1020,
+"code_bytes": 309,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/qbsp/nib/O2": {
+"instructions": 301,
+"memory_operands": 82,
+"clocks": 880,
+"code_bytes": 421,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/qbsp/nib/Os": {
+"instructions": 318,
+"memory_operands": 82,
+"clocks": 1006,
+"code_bytes": 375,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/qlight/bas/O2": {
+"instructions": 122,
+"memory_operands": 20,
+"clocks": 547,
+"code_bytes": 349,
+"data_bytes": 49,
+"bss_bytes": 0
+},
+"parity/qlight/bas/Os": {
+"instructions": 94,
+"memory_operands": 20,
+"clocks": 605,
+"code_bytes": 293,
+"data_bytes": 49,
+"bss_bytes": 0
+},
+"parity/qlight/bq16/O2": {
+"instructions": 127,
+"memory_operands": 20,
+"clocks": 492,
+"code_bytes": 369,
+"data_bytes": 49,
+"bss_bytes": 0
+},
+"parity/qlight/bq16/Os": {
+"instructions": 99,
+"memory_operands": 20,
+"clocks": 550,
+"code_bytes": 312,
+"data_bytes": 49,
+"bss_bytes": 0
+},
+"parity/qlight/bq32/O2": {
+"instructions": 117,
+"code_bytes": 303,
+"data_bytes": 55,
+"bss_bytes": 0,
+"clocks": 369
+},
+"parity/qlight/bq32/Os": {
+"instructions": 99,
+"code_bytes": 284,
+"data_bytes": 55,
+"bss_bytes": 0,
+"clocks": 482
+},
+"parity/qlight/c/O2": {
+"instructions": 108,
+"memory_operands": 12,
+"clocks": 460,
+"code_bytes": 211,
+"data_bytes": 10,
+"bss_bytes": 0
+},
+"parity/qlight/c/Os": {
+"instructions": 78,
+"memory_operands": 12,
+"clocks": 516,
+"code_bytes": 154,
+"data_bytes": 10,
+"bss_bytes": 0
+},
+"parity/qlight/nib/O2": {
+"instructions": 124,
+"memory_operands": 4,
+"clocks": 583,
+"code_bytes": 216,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/qlight/nib/Os": {
+"instructions": 112,
+"memory_operands": 4,
+"clocks": 602,
+"code_bytes": 180,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/qmove/bas/O2": {
+"instructions": 83,
+"memory_operands": 29,
+"clocks": 415,
+"code_bytes": 413,
+"data_bytes": 66,
+"bss_bytes": 0
+},
+"parity/qmove/bas/Os": {
+"instructions": 76,
+"memory_operands": 29,
+"clocks": 433,
+"code_bytes": 356,
+"data_bytes": 66,
+"bss_bytes": 0
+},
+"parity/qmove/bq16/O2": {
+"instructions": 85,
+"memory_operands": 29,
+"clocks": 402,
+"code_bytes": 433,
+"data_bytes": 66,
+"bss_bytes": 0
+},
+"parity/qmove/bq16/Os": {
+"instructions": 78,
+"memory_operands": 29,
+"clocks": 420,
+"code_bytes": 375,
+"data_bytes": 66,
+"bss_bytes": 0
+},
+"parity/qmove/bq32/O2": {
+"instructions": 81,
+"code_bytes": 410,
+"data_bytes": 72,
+"bss_bytes": 0,
+"clocks": 361
+},
+"parity/qmove/bq32/Os": {
+"instructions": 76,
+"code_bytes": 350,
+"data_bytes": 72,
+"bss_bytes": 0,
+"clocks": 394
+},
+"parity/qmove/c/O2": {
+"instructions": 90,
+"memory_operands": 37,
+"clocks": 443,
+"code_bytes": 306,
+"data_bytes": 24,
+"bss_bytes": 0
+},
+"parity/qmove/c/Os": {
+"instructions": 85,
+"memory_operands": 37,
+"clocks": 465,
+"code_bytes": 251,
+"data_bytes": 24,
+"bss_bytes": 0
+},
+"parity/qmove/nib/O2": {
+"instructions": 117,
+"memory_operands": 37,
+"clocks": 475,
+"code_bytes": 421,
+"data_bytes": 16,
+"bss_bytes": 0
+},
+"parity/qmove/nib/Os": {
+"instructions": 113,
+"memory_operands": 37,
+"clocks": 503,
+"code_bytes": 359,
+"data_bytes": 16,
+"bss_bytes": 0
+},
+"parity/scalar/bas/O2": {
+"instructions": 92,
+"memory_operands": 2,
+"clocks": 301,
+"code_bytes": 160,
+"data_bytes": 21,
+"bss_bytes": 0
+},
+"parity/scalar/bas/Os": {
+"instructions": 92,
+"memory_operands": 2,
+"clocks": 301,
+"code_bytes": 160,
+"data_bytes": 21,
+"bss_bytes": 0
+},
+"parity/scalar/bq16/O2": {
+"instructions": 92,
+"memory_operands": 2,
+"clocks": 301,
+"code_bytes": 165,
+"data_bytes": 21,
+"bss_bytes": 0
+},
+"parity/scalar/bq16/Os": {
+"instructions": 92,
+"memory_operands": 2,
+"clocks": 301,
+"code_bytes": 165,
+"data_bytes": 21,
+"bss_bytes": 0
+},
+"parity/scalar/bq32/O2": {
+"instructions": 94,
+"code_bytes": 159,
+"data_bytes": 31,
+"bss_bytes": 0,
+"clocks": 292
+},
+"parity/scalar/bq32/Os": {
+"instructions": 94,
+"code_bytes": 159,
+"data_bytes": 31,
+"bss_bytes": 0,
+"clocks": 292
+},
+"parity/scalar/c/O2": {
+"instructions": 87,
+"memory_operands": 0,
+"clocks": 293,
+"code_bytes": 66,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/scalar/c/Os": {
+"instructions": 87,
+"memory_operands": 0,
+"clocks": 293,
+"code_bytes": 66,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/scalar/nib/O2": {
+"instructions": 87,
+"memory_operands": 0,
+"clocks": 285,
+"code_bytes": 69,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/scalar/nib/Os": {
+"instructions": 87,
+"memory_operands": 0,
+"clocks": 285,
+"code_bytes": 69,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/sum_three/bas/O2": {
+"instructions": 68,
+"memory_operands": 30,
+"clocks": 152,
+"code_bytes": 252,
+"data_bytes": 91,
+"bss_bytes": 0
+},
+"parity/sum_three/bas/Os": {
+"instructions": 75,
+"memory_operands": 36,
+"clocks": 165,
+"code_bytes": 264,
+"data_bytes": 91,
+"bss_bytes": 0
+},
+"parity/sum_three/bq16/O2": {
+"instructions": 70,
+"memory_operands": 30,
+"clocks": 139,
+"code_bytes": 249,
+"data_bytes": 91,
+"bss_bytes": 0
+},
+"parity/sum_three/bq16/Os": {
+"instructions": 77,
+"memory_operands": 36,
+"clocks": 152,
+"code_bytes": 261,
+"data_bytes": 91,
+"bss_bytes": 0
+},
+"parity/sum_three/bq32/O2": {
+"instructions": 76,
+"code_bytes": 289,
+"data_bytes": 127,
+"bss_bytes": 0,
+"clocks": 160
+},
+"parity/sum_three/bq32/Os": {
+"instructions": 82,
+"code_bytes": 263,
+"data_bytes": 127,
+"bss_bytes": 0,
+"clocks": 167
+},
+"parity/sum_three/c/O2": {
+"instructions": 90,
+"memory_operands": 34,
+"clocks": 160,
+"code_bytes": 199,
+"data_bytes": 24,
+"bss_bytes": 0
+},
+"parity/sum_three/c/Os": {
+"instructions": 95,
+"memory_operands": 41,
+"clocks": 162,
+"code_bytes": 188,
+"data_bytes": 24,
+"bss_bytes": 0
+},
+"parity/sum_three/nib/O2": {
+"instructions": 72,
+"memory_operands": 29,
+"clocks": 123,
+"code_bytes": 178,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"parity/sum_three/nib/Os": {
+"instructions": 73,
+"memory_operands": 30,
+"clocks": 123,
+"code_bytes": 172,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"particle/bas/O2": {
+"instructions": 129060,
+"memory_operands": 93825,
+"clocks": 278312,
+"code_bytes": 542,
+"data_bytes": 121,
+"bss_bytes": 0
+},
+"particle/bas/Os": {
+"instructions": 129058,
+"memory_operands": 93925,
+"clocks": 280330,
+"code_bytes": 520,
+"data_bytes": 121,
+"bss_bytes": 0
+},
+"particle/bq16/O2": {
+"instructions": 129160,
+"memory_operands": 93825,
+"clocks": 276912,
+"code_bytes": 547,
+"data_bytes": 121,
+"bss_bytes": 0
+},
+"particle/bq16/Os": {
+"instructions": 129158,
+"memory_operands": 93925,
+"clocks": 278930,
+"code_bytes": 525,
+"data_bytes": 121,
+"bss_bytes": 0
+},
+"particle/bq32/O2": {
+"instructions": 137958,
+"code_bytes": 635,
+"data_bytes": 187,
+"bss_bytes": 0,
+"clocks": 335096
+},
+"particle/bq32/Os": {
+"instructions": 147958,
+"code_bytes": 610,
+"data_bytes": 187,
+"bss_bytes": 0,
+"clocks": 336910
+},
+"particle/c/O2": {
+"instructions": 84136,
+"memory_operands": 61509,
+"clocks": 167165,
+"code_bytes": 165,
+"data_bytes": 0,
+"bss_bytes": 1212
+},
+"particle/c/Os": {
+"instructions": 83934,
+"memory_operands": 61509,
+"clocks": 168983,
+"code_bytes": 158,
+"data_bytes": 0,
+"bss_bytes": 1212
+},
+"particle/nib/O2": {
+"instructions": 137176,
+"memory_operands": 112715,
+"clocks": 223122,
+"code_bytes": 337,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"particle/nib/Os": {
+"instructions": 137880,
+"memory_operands": 113621,
+"clocks": 228221,
+"code_bytes": 317,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"queens/bas/O2": {
+"instructions": 355552,
+"memory_operands": 113262,
+"clocks": 676921,
+"code_bytes": 478,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"queens/bas/Os": {
+"instructions": 347107,
+"memory_operands": 95333,
+"clocks": 685825,
+"code_bytes": 425,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"queens/bq16/O2": {
+"instructions": 360456,
+"memory_operands": 113297,
+"clocks": 620006,
+"code_bytes": 491,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"queens/bq16/Os": {
+"instructions": 352012,
+"memory_operands": 95368,
+"clocks": 628911,
+"code_bytes": 438,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"queens/bq32/O2": {
+"instructions": 357901,
+"code_bytes": 547,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 718838
+},
+"queens/bq32/Os": {
+"instructions": 348697,
+"code_bytes": 442,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 769572
+},
+"queens/c/O2": {
+"instructions": 147321,
+"memory_operands": 21780,
+"clocks": 183608,
+"code_bytes": 180,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"queens/c/Os": {
+"instructions": 160207,
+"memory_operands": 19810,
+"clocks": 225189,
+"code_bytes": 159,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"queens/nib/O2": {
+"instructions": 167694,
+"memory_operands": 22849,
+"clocks": 236622,
+"code_bytes": 191,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"queens/nib/Os": {
+"instructions": 262998,
+"memory_operands": 36773,
+"clocks": 395040,
+"code_bytes": 277,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"quicksort/bas/O2": {
+"instructions": 232332,
+"memory_operands": 121740,
+"clocks": 441370,
+"code_bytes": 577,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"quicksort/bas/Os": {
+"instructions": 217808,
+"memory_operands": 121753,
+"clocks": 448030,
+"code_bytes": 511,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"quicksort/bq16/O2": {
+"instructions": 240311,
+"memory_operands": 120768,
+"clocks": 429145,
+"code_bytes": 590,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"quicksort/bq16/Os": {
+"instructions": 224426,
+"memory_operands": 120781,
+"clocks": 434444,
+"code_bytes": 524,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"quicksort/bq32/O2": {
+"instructions": 218607,
+"code_bytes": 585,
+"data_bytes": 23,
+"bss_bytes": 0,
+"clocks": 446669
+},
+"quicksort/bq32/Os": {
+"instructions": 211443,
+"code_bytes": 530,
+"data_bytes": 23,
+"bss_bytes": 0,
+"clocks": 478655
+},
+"quicksort/c/O2": {
+"instructions": 165138,
+"memory_operands": 48262,
+"clocks": 257012,
+"code_bytes": 318,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"quicksort/c/Os": {
+"instructions": 173009,
+"memory_operands": 68843,
+"clocks": 309284,
+"code_bytes": 290,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"quicksort/nib/O2": {
+"instructions": 164290,
+"memory_operands": 48774,
+"clocks": 269143,
+"code_bytes": 416,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"quicksort/nib/Os": {
+"instructions": 174381,
+"memory_operands": 74300,
+"clocks": 316122,
+"code_bytes": 393,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"recchop/c/O2": {
+"instructions": 5793,
+"memory_operands": 763,
+"clocks": 10960,
+"code_bytes": 159,
+"data_bytes": 0,
+"bss_bytes": 128
+},
+"recchop/c/Os": {
+"instructions": 5920,
+"memory_operands": 889,
+"clocks": 11594,
+"code_bytes": 158,
+"data_bytes": 0,
+"bss_bytes": 128
+},
+"recfloat/c/O2": {
+"instructions": 6022,
+"memory_operands": 1010,
+"clocks": 38105,
+"code_bytes": 87,
+"data_bytes": 12,
+"bss_bytes": 0
+},
+"recfloat/c/Os": {
+"instructions": 9021,
+"memory_operands": 1010,
+"clocks": 47103,
+"code_bytes": 87,
+"data_bytes": 12,
+"bss_bytes": 0
+},
+"recgcd/c/O2": {
+"instructions": 20426,
+"memory_operands": 1204,
+"clocks": 107779,
+"code_bytes": 139,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"recgcd/c/Os": {
+"instructions": 22528,
+"memory_operands": 1204,
+"clocks": 111082,
+"code_bytes": 128,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"recmany/c/O2": {
+"instructions": 66023,
+"memory_operands": 13501,
+"clocks": 240202,
+"code_bytes": 307,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"recmany/c/Os": {
+"instructions": 45028,
+"memory_operands": 24010,
+"clocks": 295570,
+"code_bytes": 211,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"recpow/c/O2": {
+"instructions": 81404,
+"memory_operands": 5381,
+"clocks": 482076,
+"code_bytes": 450,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"recpow/c/Os": {
+"instructions": 86962,
+"memory_operands": 3945,
+"clocks": 502789,
+"code_bytes": 188,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"recsum/c/O2": {
+"instructions": 14009,
+"memory_operands": 0,
+"clocks": 82025,
+"code_bytes": 60,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"recsum/c/Os": {
+"instructions": 14009,
+"memory_operands": 0,
+"clocks": 82036,
+"code_bytes": 52,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"rectwo/c/O2": {
+"instructions": 938297,
+"memory_operands": 222651,
+"clocks": 1765045,
+"code_bytes": 421,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"rectwo/c/Os": {
+"instructions": 1896157,
+"memory_operands": 97238,
+"clocks": 3889567,
+"code_bytes": 80,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"ring/bas/O2": {
+"instructions": 42392,
+"memory_operands": 11171,
+"clocks": 74950,
+"code_bytes": 197,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"ring/bas/Os": {
+"instructions": 42407,
+"memory_operands": 11184,
+"clocks": 74990,
+"code_bytes": 192,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"ring/bq16/O2": {
+"instructions": 52767,
+"memory_operands": 9175,
+"clocks": 85564,
+"code_bytes": 208,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"ring/bq16/Os": {
+"instructions": 52780,
+"memory_operands": 9188,
+"clocks": 85602,
+"code_bytes": 203,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"ring/bq32/O2": {
+"instructions": 58692,
+"code_bytes": 213,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 105365
+},
+"ring/bq32/Os": {
+"instructions": 58694,
+"code_bytes": 210,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 105371
+},
+"ring/c/O2": {
+"instructions": 40107,
+"memory_operands": 7024,
+"clocks": 68220,
+"code_bytes": 72,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"ring/c/Os": {
+"instructions": 40107,
+"memory_operands": 7024,
+"clocks": 68220,
+"code_bytes": 72,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"ring/nib/O2": {
+"instructions": 47138,
+"memory_operands": 8048,
+"clocks": 85352,
+"code_bytes": 95,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"ring/nib/Os": {
+"instructions": 50210,
+"memory_operands": 11120,
+"clocks": 96615,
+"code_bytes": 93,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"scroll/bas/O2": {
+"instructions": 170763,
+"memory_operands": 298000,
+"clocks": 668281,
+"code_bytes": 215,
+"data_bytes": 8013,
+"bss_bytes": 0
+},
+"scroll/bas/Os": {
+"instructions": 1200308,
+"memory_operands": 590000,
+"clocks": 1837271,
+"code_bytes": 222,
+"data_bytes": 8013,
+"bss_bytes": 0
+},
+"scroll/bq16/O2": {
+"instructions": 170763,
+"memory_operands": 298000,
+"clocks": 668281,
+"code_bytes": 220,
+"data_bytes": 8013,
+"bss_bytes": 0
+},
+"scroll/bq16/Os": {
+"instructions": 1200308,
+"memory_operands": 590000,
+"clocks": 1837271,
+"code_bytes": 227,
+"data_bytes": 8013,
+"bss_bytes": 0
+},
+"scroll/bq32/O2": {
+"instructions": 58319,
+"code_bytes": 241,
+"data_bytes": 8019,
+"bss_bytes": 0
+},
+"scroll/bq32/Os": {
+"instructions": 58319,
+"code_bytes": 241,
+"data_bytes": 8019,
+"bss_bytes": 0
+},
+"scroll/c/O2": {
+"instructions": 170762,
+"memory_operands": 298000,
+"clocks": 668279,
+"code_bytes": 141,
+"data_bytes": 0,
+"bss_bytes": 8000
+},
+"scroll/c/Os": {
+"instructions": 170762,
+"memory_operands": 298000,
+"clocks": 668279,
+"code_bytes": 141,
+"data_bytes": 0,
+"bss_bytes": 8000
+},
+"scroll/nib/O2": {
+"instructions": 170762,
+"memory_operands": 298000,
+"clocks": 668271,
+"code_bytes": 144,
+"data_bytes": 8000,
+"bss_bytes": 0
+},
+"scroll/nib/Os": {
+"instructions": 1200307,
+"memory_operands": 590000,
+"clocks": 1837261,
+"code_bytes": 151,
+"data_bytes": 8000,
+"bss_bytes": 0
+},
+"shellsort/bas/O2": {
+"instructions": 10772,
+"memory_operands": 2001,
+"clocks": 19037,
+"code_bytes": 335,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"shellsort/bas/Os": {
+"instructions": 10795,
+"memory_operands": 2014,
+"clocks": 20290,
+"code_bytes": 320,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"shellsort/bq16/O2": {
+"instructions": 11549,
+"memory_operands": 1925,
+"clocks": 20044,
+"code_bytes": 347,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"shellsort/bq16/Os": {
+"instructions": 11571,
+"memory_operands": 1938,
+"clocks": 21296,
+"code_bytes": 332,
+"data_bytes": 17,
+"bss_bytes": 0
+},
+"shellsort/bq32/O2": {
+"instructions": 10351,
+"code_bytes": 340,
+"data_bytes": 23,
+"bss_bytes": 0,
+"clocks": 20240
+},
+"shellsort/bq32/Os": {
+"instructions": 11111,
+"code_bytes": 318,
+"data_bytes": 23,
+"bss_bytes": 0,
+"clocks": 20018
+},
+"shellsort/c/O2": {
+"instructions": 9355,
+"memory_operands": 1629,
+"clocks": 13776,
+"code_bytes": 161,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"shellsort/c/Os": {
+"instructions": 9364,
+"memory_operands": 1629,
+"clocks": 14989,
+"code_bytes": 152,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"shellsort/nib/O2": {
+"instructions": 10490,
+"memory_operands": 1661,
+"clocks": 16446,
+"code_bytes": 192,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"shellsort/nib/Os": {
+"instructions": 10595,
+"memory_operands": 1757,
+"clocks": 16798,
+"code_bytes": 179,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"sieve/bas/O2": {
+"instructions": 17646,
+"memory_operands": 7059,
+"clocks": 33557,
+"code_bytes": 289,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"sieve/bas/Os": {
+"instructions": 17661,
+"memory_operands": 7072,
+"clocks": 33601,
+"code_bytes": 273,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"sieve/bq16/O2": {
+"instructions": 22901,
+"memory_operands": 6087,
+"clocks": 39053,
+"code_bytes": 298,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"sieve/bq16/Os": {
+"instructions": 22916,
+"memory_operands": 6100,
+"clocks": 39098,
+"code_bytes": 285,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"sieve/bq32/O2": {
+"instructions": 22781,
+"code_bytes": 307,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 51254
+},
+"sieve/bq32/Os": {
+"instructions": 22794,
+"code_bytes": 282,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 49620
+},
+"sieve/c/O2": {
+"instructions": 12152,
+"memory_operands": 2901,
+"clocks": 22449,
+"code_bytes": 177,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"sieve/c/Os": {
+"instructions": 12882,
+"memory_operands": 3495,
+"clocks": 24556,
+"code_bytes": 113,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"sieve/nib/O2": {
+"instructions": 12141,
+"memory_operands": 2727,
+"clocks": 20634,
+"code_bytes": 133,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"sieve/nib/Os": {
+"instructions": 12876,
+"memory_operands": 3495,
+"clocks": 24538,
+"code_bytes": 110,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"stft_fixed/bas/O2": {
+"code_bytes": 1840,
+"data_bytes": 4677,
+"bss_bytes": 0,
+"checked": true
+},
+"stft_fixed/bas/Os": {
+"code_bytes": 1737,
+"data_bytes": 4677,
+"bss_bytes": 0,
+"checked": true
+},
+"stft_fixed/bq16/O2": {
+"code_bytes": 1818,
+"data_bytes": 4677,
+"bss_bytes": 0,
+"checked": true
+},
+"stft_fixed/bq16/Os": {
+"code_bytes": 1710,
+"data_bytes": 4677,
+"bss_bytes": 0,
+"checked": true
+},
+"stft_fixed/bq32/O2": {
+"instructions": 100030197,
+"code_bytes": 1694,
+"data_bytes": 4709,
+"bss_bytes": 0,
+"clocks": 215008810
+},
+"stft_fixed/bq32/Os": {
+"instructions": 102652646,
+"code_bytes": 1638,
+"data_bytes": 4709,
+"bss_bytes": 0,
+"clocks": 217976466
+},
+"stft_fixed/c/O2": {
+"code_bytes": 1217,
+"data_bytes": 15,
+"bss_bytes": 5122,
+"checked": true
+},
+"stft_fixed/c/Os": {
+"code_bytes": 1135,
+"data_bytes": 15,
+"bss_bytes": 5122,
+"checked": true
+},
+"stft_fixed/nib/O2": {
+"code_bytes": 2577,
+"data_bytes": 5149,
+"bss_bytes": 0,
+"checked": true
+},
+"stft_fixed/nib/Os": {
+"code_bytes": 2578,
+"data_bytes": 5149,
+"bss_bytes": 0,
+"checked": true
+},
+"stft_single/bas/O2": {
+"code_bytes": 1242,
+"data_bytes": 4701,
+"bss_bytes": 0,
+"checked": true
+},
+"stft_single/bas/Os": {
+"code_bytes": 1182,
+"data_bytes": 4701,
+"bss_bytes": 0,
+"checked": true
+},
+"stft_single/bq16/O2": {
+"code_bytes": 1219,
+"data_bytes": 4701,
+"bss_bytes": 0,
+"checked": true
+},
+"stft_single/bq16/Os": {
+"code_bytes": 1154,
+"data_bytes": 4701,
+"bss_bytes": 0,
+"checked": true
+},
+"stft_single/bq32/O2": {
+"instructions": 71255906,
+"code_bytes": 1383,
+"data_bytes": 4733,
+"bss_bytes": 0,
+"clocks": 256790320
+},
+"stft_single/bq32/Os": {
+"instructions": 71586013,
+"code_bytes": 1358,
+"data_bytes": 4733,
+"bss_bytes": 0,
+"clocks": 257911974
+},
+"stft_single/c/O2": {
+"code_bytes": 791,
+"data_bytes": 39,
+"bss_bytes": 5122,
+"checked": true
+},
+"stft_single/c/Os": {
+"code_bytes": 779,
+"data_bytes": 39,
+"bss_bytes": 5122,
+"checked": true
+},
+"stft_single/nib/O2": {
+"code_bytes": 2350,
+"data_bytes": 1092,
+"bss_bytes": 0,
+"checked": true
+},
+"stft_single/nib/Os": {
+"code_bytes": 2406,
+"data_bytes": 1092,
+"bss_bytes": 0,
+"checked": true
+},
+"switch/bas/O2": {
+"instructions": 194976,
+"memory_operands": 32005,
+"clocks": 710299,
+"code_bytes": 831,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"switch/bas/Os": {
+"instructions": 164625,
+"memory_operands": 32005,
+"clocks": 764986,
+"code_bytes": 617,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"switch/bq16/O2": {
+"instructions": 200976,
+"memory_operands": 32005,
+"clocks": 656299,
+"code_bytes": 836,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"switch/bq16/Os": {
+"instructions": 170625,
+"memory_operands": 32005,
+"clocks": 710986,
+"code_bytes": 622,
+"data_bytes": 15,
+"bss_bytes": 0
+},
+"switch/bq32/O2": {
+"instructions": 176979,
+"code_bytes": 615,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 416263
+},
+"switch/bq32/Os": {
+"instructions": 140627,
+"code_bytes": 514,
+"data_bytes": 21,
+"bss_bytes": 0,
+"clocks": 542504
+},
+"switch/c/O2": {
+"instructions": 100137,
+"memory_operands": 3708,
+"clocks": 445249,
+"code_bytes": 329,
+"data_bytes": 12,
+"bss_bytes": 0
+},
+"switch/c/Os": {
+"instructions": 68138,
+"memory_operands": 3708,
+"clocks": 493456,
+"code_bytes": 272,
+"data_bytes": 12,
+"bss_bytes": 0
+},
+"switch/nib/O2": {
+"instructions": 138974,
+"memory_operands": 2002,
+"clocks": 518685,
+"code_bytes": 462,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"switch/nib/Os": {
+"instructions": 108974,
+"memory_operands": 2002,
+"clocks": 570035,
+"code_bytes": 407,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"textfill/bas/O2": {
+"instructions": 34045,
+"memory_operands": 8013,
+"clocks": 54189,
+"code_bytes": 233,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"textfill/bas/Os": {
+"instructions": 30045,
+"memory_operands": 8013,
+"clocks": 58189,
+"code_bytes": 232,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"textfill/bq16/O2": {
+"instructions": 34072,
+"memory_operands": 8013,
+"clocks": 54206,
+"code_bytes": 238,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"textfill/bq16/Os": {
+"instructions": 30073,
+"memory_operands": 8013,
+"clocks": 58207,
+"code_bytes": 237,
+"data_bytes": 13,
+"bss_bytes": 0
+},
+"textfill/bq32/O2": {
+"instructions": 44033,
+"code_bytes": 209,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 64069
+},
+"textfill/bq32/Os": {
+"instructions": 42035,
+"code_bytes": 204,
+"data_bytes": 19,
+"bss_bytes": 0,
+"clocks": 70075
+},
+"textfill/c/O2": {
+"instructions": 34009,
+"memory_operands": 8000,
+"clocks": 54025,
+"code_bytes": 76,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"textfill/c/Os": {
+"instructions": 30009,
+"memory_operands": 8000,
+"clocks": 58025,
+"code_bytes": 75,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"textfill/nib/O2": {
+"instructions": 34024,
+"memory_operands": 8000,
+"clocks": 54065,
+"code_bytes": 105,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"textfill/nib/Os": {
+"instructions": 30024,
+"memory_operands": 8000,
+"clocks": 58065,
+"code_bytes": 104,
+"data_bytes": 0,
+"bss_bytes": 0
+},
+"tile/bas/O2": {
+"instructions": 4181,
+"memory_operands": 1000,
+"clocks": 10196,
+"code_bytes": 167,
+"data_bytes": 8205,
+"bss_bytes": 0
+},
+"tile/bas/Os": {
+"instructions": 4181,
+"memory_operands": 1000,
+"clocks": 10196,
+"code_bytes": 167,
+"data_bytes": 8205,
+"bss_bytes": 0
+},
+"tile/bq16/O2": {
+"instructions": 4181,
+"memory_operands": 1000,
+"clocks": 10196,
+"code_bytes": 172,
+"data_bytes": 8205,
+"bss_bytes": 0
+},
+"tile/bq16/Os": {
+"instructions": 4181,
+"memory_operands": 1000,
+"clocks": 10196,
+"code_bytes": 172,
+"data_bytes": 8205,
+"bss_bytes": 0
+},
+"tile/bq32/O2": {
+"instructions": 4186,
+"code_bytes": 187,
+"data_bytes": 8211,
+"bss_bytes": 0,
+"clocks": 8251
+},
+"tile/bq32/Os": {
+"instructions": 4186,
+"code_bytes": 187,
+"data_bytes": 8211,
+"bss_bytes": 0,
+"clocks": 8251
+},
+"tile/c/O2": {
+"instructions": 4155,
+"memory_operands": 1000,
+"clocks": 10169,
+"code_bytes": 97,
+"data_bytes": 0,
+"bss_bytes": 8192
+},
+"tile/c/Os": {
+"instructions": 4155,
+"memory_operands": 1000,
+"clocks": 10169,
+"code_bytes": 97,
+"data_bytes": 0,
+"bss_bytes": 8192
+},
+"tile/nib/O2": {
+"instructions": 4180,
+"memory_operands": 1000,
+"clocks": 10186,
+"code_bytes": 101,
+"data_bytes": 8192,
+"bss_bytes": 0
+},
+"tile/nib/Os": {
+"instructions": 4180,
+"memory_operands": 1000,
+"clocks": 10186,
+"code_bytes": 101,
+"data_bytes": 8192,
+"bss_bytes": 0
+}
+},
+"note_vs_sizes_py": "code_bytes here is the OMF object's code segments of the bench's own compile, and equals tools/sizes.py's number only where the flags are alike. Accounted to the byte on this commit's compiler: queens nib -O2 sizes.py 173 + 18 = bench 191 (bench adds --procedure-segments and -fno-inline-functions[-called-once]); textfill.flat.bas -O2 sizes.py 198 (--runtime qb45) + 5 (-fqb-runtime=llrm) + 6 (-march=i486 -m32) = bench bq32 209; textfill.bas bas/bq16 equal sizes.py 233."
+}
