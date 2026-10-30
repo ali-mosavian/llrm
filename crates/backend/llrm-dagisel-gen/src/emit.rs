@@ -100,6 +100,7 @@ fn item(m: &Matcher) -> String {
         M::SwitchOpcode => "SwitchOpcode".into(),
         M::OpcodeCase { size, opcode } => format!("OpcodeCase {{ size: {size}, opcode: {opcode} }}"),
         M::CheckType(v) => format!("CheckType({})", vt(*v)),
+        M::CheckTypeRes { res, vt: v } => format!("CheckTypeRes {{ res: {res}, vt: {} }}", vt(*v)),
         M::SwitchType => "SwitchType".into(),
         M::TypeCase { size, vt: v } => format!("TypeCase {{ size: {size}, vt: {} }}", vt(*v)),
         M::CheckChildType { child, vt: v } => format!("CheckChildType {{ child: {child}, vt: {} }}", vt(*v)),
