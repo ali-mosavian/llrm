@@ -256,15 +256,41 @@ fn typed(
     })
 }
 
-/// `module`'s debug information for `arch`, each global and function by the
+/// What a machine tells the debug information: the width of a near address,
+/// its register file as text, the frame registers of 32-bit code where it has
+/// them, and the machine as a debug writer reads it.
+pub struct Machine {
+    pub near_bits: u32,
+    pub registers_text: String,
+    pub frame: Option<(RegId, RegId, [i64; 2])>,
+    pub target: llrm_object::debug::DebugTarget,
+}
+
+impl Machine {
+    pub fn of(arch: &dyn llrm_target::Target) -> Self {
+        let registers = arch.frame_registers();
+        Self {
+            near_bits: arch.object().bitness,
+            registers_text: arch.registers_text(),
+            frame: Some((
+                registers.pointer,
+                registers.stack,
+                [arch.return_address_bytes(false), arch.return_address_bytes(true)],
+            )),
+            target: arch.debug_target(),
+        }
+    }
+}
+
+/// `module`'s debug information for `machine`, each global and function by the
 /// symbol `names` gives it; None without any.
 pub fn described(
     module: &llrm_mir::Module,
     names: &IndexMap<(Space, i64), String>,
     producer: model::Producer,
-    arch: &dyn llrm_target::Target,
+    machine: &Machine,
 ) -> Result<Option<Debug>, String> {
-    let near = arch.object().bitness;
+    let near = machine.near_bits;
     let functions = di::functions(module);
     let globals = di::globals(module);
     if functions.is_empty() && globals.is_empty() {
@@ -311,17 +337,14 @@ pub fn described(
             scope: global.scope.as_deref().and_then(&symbol),
         });
     }
-    let file = llrm_target::registers::parse(&arch.registers_text())?;
+    let file = llrm_target::registers::parse(&machine.registers_text)?;
     let frame_register = llrm_target::registers::of_class(&file, "frame")
         .first()
         .map(|one| (*one).to_owned())
         .ok_or("the target's register file has no frame register")?;
     let return_register =
         llrm_target::registers::of_class(&file, "pc").first().map(|one| (*one).to_owned()).unwrap_or_default();
-    let frame = Some({
-        let registers = arch.frame_registers();
-        (registers.pointer, registers.stack, [arch.return_address_bytes(false), arch.return_address_bytes(true)])
-    });
+    let frame = machine.frame;
     let file_copy = file.clone();
     let registers = file
         .into_iter()
@@ -345,7 +368,7 @@ pub fn described(
         return_register,
         frame,
         registers,
-        target: arch.debug_target(),
+        target: machine.target.clone(),
         types,
         nodes,
         procedures,

@@ -182,6 +182,25 @@ fn accessed_bytes(mem: &Memory) -> i64 {
 }
 
 /// `function`, its registers physical, as real instructions.
+/// Where each source variable that lives in a frame object is, in bytes from
+/// the canonical frame address (the stack pointer once the prologue has run,
+/// plus the frame's size), below it; none where the stack pointer moves in the
+/// body.
+pub fn variable_offsets(
+    function: &MFunc,
+    allocation: &Allocation,
+) -> Vec<(llrm_mir::MetadataId, i64)> {
+    let frame = layout(function, allocation);
+    if frame.dynamic {
+        return Vec::new();
+    }
+    function
+        .declared
+        .iter()
+        .map(|&(variable, slot)| (variable, frame.slots[slot as usize] as i64 - frame.size as i64))
+        .collect()
+}
+
 pub fn lower(
     function: &MFunc,
     allocation: &Allocation,

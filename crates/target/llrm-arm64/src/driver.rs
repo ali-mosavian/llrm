@@ -205,6 +205,7 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         dump("OrderCopies", &machine);
         let allocation = crate::regalloc::allocate(&mut machine);
         dump("RegAlloc", &machine);
+        let variables = crate::frame::variable_offsets(&machine, &allocation);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
         let blocks = crate::layout::fold(blocks);
         let blocks = crate::pairs::fold(blocks);
@@ -212,6 +213,7 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
             symbol: crate::data::symbol_name(platform, &name),
             binding: crate::data::binding_of(global.linkage),
             blocks,
+            variables,
         });
     }
     Ok(out)
@@ -252,13 +254,31 @@ pub fn object(
     name: &str,
     level: impl Into<Level>,
 ) -> Result<llrm_object::Object, String> {
+    object_with(text, platform, name, level, false)
+}
+
+/// [`object`], with the debug information (`-g`) where `debug`.
+pub fn object_with(
+    text: &str,
+    platform: Platform,
+    name: &str,
+    level: impl Into<Level>,
+    debug: bool,
+) -> Result<llrm_object::Object, String> {
     let mut program = program(text, platform)?;
     let level = level.into();
+    if debug {
+        llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
+    }
     if level != Level::O0 {
         optimized_at(&mut program, level)?;
     }
     let lowered = functions(&program)?;
-    crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)
+    let mut object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
+    if debug {
+        object.debug = crate::debug::info(&program.modules[0], platform, &object, &lowered, name)?;
+    }
+    Ok(object)
 }
 
 /// The assembly of the lowered functions, one instruction a line.
@@ -292,8 +312,19 @@ pub fn object_file(
     name: &str,
     level: impl Into<Level>,
 ) -> Result<Vec<u8>, String> {
+    object_file_with(text, platform, name, level, false)
+}
+
+/// [`object_file`], with the debug information (`-g`) where `debug`.
+pub fn object_file_with(
+    text: &str,
+    platform: Platform,
+    name: &str,
+    level: impl Into<Level>,
+    debug: bool,
+) -> Result<Vec<u8>, String> {
     use llrm_target::object::Format;
-    let object = object(text, platform, name, level)?;
+    let object = object_with(text, platform, name, level, debug)?;
     use llrm_object::ObjectTarget;
     let objects = crate::mc::Arm64Objects;
     let macho = || objects.write_object("macho", &object).map_err(|error| error.to_string());

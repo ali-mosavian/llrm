@@ -508,7 +508,12 @@ pub fn assembled_by(
     externs.sort();
     externs.dedup();
     let debug = timed("debug info", || {
-        crate::backend::debuginfo::described(module, &names, llrm_object::debug::Producer::Native, arch)
+        crate::backend::debuginfo::described(
+            module,
+            &names,
+            llrm_object::debug::Producer::Native,
+            &crate::backend::debuginfo::Machine::of(arch),
+        )
     })?;
     let code_segments: std::collections::BTreeMap<String, String> = procedures
         .iter()

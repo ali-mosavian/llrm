@@ -1093,7 +1093,9 @@ pub fn assembled(
     } else {
         llrm_object::debug::Producer::Native
     };
-    let mut debug = timed("debug info", || debuginfo::described(module, &names, producer, &*options.arch))?;
+    let mut debug = timed("debug info", || {
+        debuginfo::described(module, &names, producer, &debuginfo::Machine::of(&*options.arch))
+    })?;
     if let Some(debug) = debug.as_mut() {
         debug.format = options.debug_format;
         debug.cfa = options.cfa_locations();

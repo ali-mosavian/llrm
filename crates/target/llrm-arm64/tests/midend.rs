@@ -644,3 +644,30 @@ fn a_loop_of_memset_patterns_is_not_fully_unrolled() {
     let stores = asm.lines().filter(|line| line.trim_start().starts_with("strh")).count();
     assert_eq!(stores, 1, "{asm}");
 }
+
+/// `-g` on arm64 wrote no debug information at all (`Object::debug` was always
+/// none): a debugger could not name a function or print a variable. At -O0 each
+/// variable lives in its frame object, `a` at `sp+0` and the frame 32 bytes, so
+/// 32 bytes below the canonical frame address.
+#[test]
+fn a_variable_in_the_frame_has_its_place_below_the_frame_address() {
+    use llrm_object::debug::Location;
+    let object =
+        driver::object_with(include_str!("data/debug_o0.ll"), Platform::Linux, "debug_o0", driver::Level::O0, true)
+            .expect("lowers");
+    let info = object.debug.as_ref().expect("debug information");
+    let function = info.functions.iter().find(|one| one.name == "f").expect("the function");
+    let places: Vec<(&str, &Location)> =
+        function.variables.iter().map(|one| (one.name.as_str(), &one.location)).collect();
+    assert_eq!(
+        places,
+        [
+            ("a", &Location::Frame { disp: -32 }),
+            ("b", &Location::Frame { disp: -28 }),
+            ("t", &Location::Frame { disp: -24 })
+        ]
+    );
+    use llrm_object::ObjectTarget;
+    let elf = llrm_arm64::mc::Arm64Objects.write_object("elf", &object).expect("the DWARF writer takes it");
+    assert!(elf.windows(8).any(|window| window == b".debug_i"), "a .debug_info section");
+}

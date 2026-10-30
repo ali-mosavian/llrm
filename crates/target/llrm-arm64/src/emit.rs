@@ -15,7 +15,7 @@ use crate::mc::encode::{FixupKind, encode};
 use crate::mc::inst::{Inst, Target};
 
 /// The words a block's instructions encode to (a directive has none).
-fn words(block: &Lowered) -> usize {
+pub(crate) fn words(block: &Lowered) -> usize {
     block.insts.iter().filter(|inst| !matches!(inst, Inst::Cfi(_))).count()
 }
 
@@ -24,6 +24,9 @@ pub struct Function {
     pub symbol: String,
     pub binding: Binding,
     pub blocks: Vec<Lowered>,
+    /// The source variables in the frame: each variable's metadata node and its
+    /// distance below the canonical frame address.
+    pub variables: Vec<(llrm_mir::MetadataId, i64)>,
 }
 
 /// A function's pieces for the layout: a block's label, then its words.

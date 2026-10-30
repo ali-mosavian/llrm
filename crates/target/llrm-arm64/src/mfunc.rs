@@ -161,6 +161,9 @@ pub struct MFunc {
     /// objects are addressed from the frame pointer and outgoing arguments are
     /// made room for around each call.
     pub dynamic: bool,
+    /// The frame object each source variable lives in (`llvm.dbg.declare` of
+    /// an `alloca`), by the variable's metadata node.
+    pub declared: Vec<(llrm_mir::MetadataId, u32)>,
 }
 
 impl MFunc {

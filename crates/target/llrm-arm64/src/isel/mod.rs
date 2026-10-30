@@ -207,7 +207,21 @@ impl<'a> Selector<'a> {
         self.global_needs_address = needs_address;
     }
 
-    fn finish(self) -> MFunc {
+    fn finish(mut self) -> MFunc {
+        self.mf.declared = self
+            .function
+            .debug_records()
+            .iter()
+            .filter_map(|record| {
+                let llrm_mir::DebugWhat::Declare(llrm_mir::Operand::Value(address)) = record.what else { return None };
+                match self.vals.get(&address)? {
+                    Val::Ptr(AddrExpr { base: Base::Slot(slot), offset: 0, index: None }) => {
+                        Some((record.variable, *slot))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
         self.mf
     }
 
