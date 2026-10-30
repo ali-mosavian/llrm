@@ -44,6 +44,7 @@ use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
 use super::legalize_types::LegalizeError;
 use super::mvt::{EVT, MVT};
+use llrm_sdag::lowering::ShiftAmount;
 
 /// What the target supplies (`TLI.LowerOperation`).
 pub trait Hooks {
@@ -54,6 +55,20 @@ pub trait Hooks {
         dag: &mut SelectionDAG,
         node: SDValue,
     ) -> Option<SDValue>;
+
+    /// `TargetLowering::makeLibCall`: a call to the routine `name` with
+    /// `args`, whose result is a `ret`; `None` where the target cannot make
+    /// one.
+    fn make_lib_call(
+        &mut self,
+        _dag: &mut SelectionDAG,
+        _name: &'static str,
+        _args: &[SDValue],
+        _ret: EVT,
+        _signed: bool,
+    ) -> Option<SDValue> {
+        None
+    }
 }
 
 /// A target with no custom lowering.
@@ -181,7 +196,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             _ => return n,
         };
         let amount = self.dag.operand(at, amount_at);
-        let want = EVT::I8;
+        let want = match self.tli.types.shift_amount() {
+            ShiftAmount::I8 => EVT::I8,
+            ShiftAmount::ByValue => self.dag.value_type(at),
+        };
         if !self.dag.value_type(amount).is_integer() || self.dag.value_type(amount) == want {
             return n;
         }
@@ -197,6 +215,40 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         new
     }
 
+    /// `LegalizeLoadOps`, extending loads: one the target does not have is an any-extending
+    /// load and an extension in the register. The value and the chain it replaces.
+    fn expand_ext_load(
+        &mut self,
+        node: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if self.dag.opcode(node) != ISD::Load {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        let ext = info.ext.filter(|ext| *ext != super::actions::LoadExt::ExtLoad)?;
+        let (EVT::Simple(wide), EVT::Simple(mem)) = (self.dag.value_type(node), info.mem_vt) else { return None };
+        if self.tli.load_ext_action(ext, wide, mem) != Action::Expand {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let any = self.dag.get_ext_load(
+            super::actions::LoadExt::ExtLoad,
+            vt,
+            chain,
+            ptr,
+            MemInfo { ext: None, ..info },
+        );
+        let value = if ext == super::actions::LoadExt::SExtLoad {
+            let ty = self.dag.get_value_type_node(info.mem_vt);
+            self.dag.get_node(ISD::SignExtendInReg, vt, &[any, ty])
+        } else {
+            let mask = self.dag.get_constant(super::fold::mask(info.mem_vt.size_in_bits()), vt);
+            self.dag.get_node(ISD::And, vt, &[any, mask])
+        };
+        Some((value, SDValue { node: any.node, res: 1 }))
+    }
+
     /// `LegalizeOp`.
     fn legalize_op(
         &mut self,
@@ -209,6 +261,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
+        }
+        if let Some(result) = self.expand_ext_load(node) {
+            self.replace_node(node, result.0);
+            self.replace_node(SDValue { node: n, res: 1 }, result.1);
+            return Ok(());
         }
         let vt = self.action_type(node);
         let mut action = match vt {
@@ -254,16 +311,35 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     }
                     Ok(())
                 }
-                None => Err(LegalizeError::Unsupported {
-                    op: self.dag.opcode(node),
-                    ty: vt,
-                    what: "convert node to libcall",
-                }),
+                None => self.convert_node_to_libcall(node, vt),
             },
-            Action::LibCall | Action::Custom => {
+            Action::LibCall => self.convert_node_to_libcall(node, vt),
+            Action::Custom => {
                 Err(LegalizeError::Unsupported { op: self.dag.opcode(node), ty: vt, what: "expand node" })
             }
         }
+    }
+
+    /// `ConvertNodeToLibcall` for the integer `MUL`, `SDIV`, `UDIV`, `SREM`
+    /// and `UREM` (`ExpandIntLibCall`): the target's routine for the type,
+    /// called on the entry chain, as the pin does.
+    fn convert_node_to_libcall(
+        &mut self,
+        node: SDValue,
+        vt: EVT,
+    ) -> Result<(), LegalizeError> {
+        let op = self.dag.opcode(node);
+        let refused = LegalizeError::Unsupported { op, ty: vt, what: "convert node to libcall" };
+        let signed = match op {
+            ISD::SDiv | ISD::SRem => true,
+            ISD::UDiv | ISD::URem | ISD::Mul => false,
+            _ => return Err(refused),
+        };
+        let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
+        let args = [self.dag.operand(node, 0), self.dag.operand(node, 1)];
+        let Some(result) = self.hooks.make_lib_call(self.dag, name, &args, vt, signed) else { return Err(refused) };
+        self.replace_node(node, result);
+        Ok(())
     }
 
     /// `ExpandNode` for `BR_JT`: load the entry at `table + index * size` and
