@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""The one way to squash a pull request into the integration branch ($LAND_BRANCH, default release/next; written feat/parity below): a bare `gh pr merge` merged stale heads that reverted other PRs' work (#2329 reverted decide's LVI step).
+"""The one way to squash a pull request into the integration branch ($LAND_BRANCH, default release/next): a bare `gh pr merge` merged stale heads that reverted other PRs' work (#2329 reverted decide's LVI step).
 
-    [PARITY_BIN=DIR] tools/parity_squash.py merge PR [--known-red STEP=ISSUE]...   under /tmp/land.lock (land.sh's): merge feat/parity into the PR head here (not pushed), refuse or run the fast set on THAT, then `gh pr merge --squash --match-head-commit`
+    [PARITY_BIN=DIR] tools/parity_squash.py merge PR [--known-red STEP=ISSUE]...   under /tmp/land.lock (land.sh's): merge release/next into the PR head here (not pushed), refuse or run the fast set on THAT, then `gh pr merge --squash --match-head-commit`
     tools/parity_squash.py merge-batch N1..N8 [--known-red STEP=ISSUE]...   up to eight ready PRs: ONE fast set on the base with all merged in; on failure halve (the passing half lands first)
-    tools/parity_squash.py audit [SINCE] every squash on origin/feat/parity since SINCE (default 96468410e): what it deleted without a Deletes:/Reverts: line in its PR's description
+    tools/parity_squash.py audit [SINCE] every squash on origin/release/next since SINCE (default 96468410e): what it deleted without a Deletes:/Reverts: line in its PR's description
 
-Subset rule: the fast set runs on the head (origin/feat/parity, failure set cached per sha by `head-failures`) AND on the merged tree; the merged tree may fail only checks the head fails, and strictly fewer
-when the description has a `Fixes red` line; both sets are in the refusal. Every landing appends `<sha> #PR gate-ok <date>` to ~/scratch/coordwork/landed.log; `unlogged` lists feat/parity commits with no line.
-Refused unless: the PR head contains the current origin/feat/parity; the squash deletes no file a docs/*.md still links to, and no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
+Subset rule: the fast set runs on the head (origin/release/next, failure set cached per sha by `head-failures`) AND on the merged tree; the merged tree may fail only checks the head fails, and strictly fewer
+when the description has a `Fixes red` line; both sets are in the refusal. Every landing appends `<sha> #PR gate-ok <date>` to ~/scratch/coordwork/landed.log; `unlogged` lists release/next commits with no line.
+Refused unless: the PR head contains the current origin/release/next; the squash deletes no file a docs/*.md still links to, and no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
 LIMIT lines of a file, unless a `Deletes:` or `Reverts:` line of the description names the path (own commits or not: #2443's deleted scev/expand_iv.rs); parity_smoke passes on that exact head. The description carries `problems: 0 @ <full head SHA>`, the bench judge's line from a run on that exact head (a missing line or another SHA is REFUSED, named); a PR that touches no compiler path (tiers.toml [compiler]) cannot move the judge and needs none.
 PARITY_BIN names the directory of the built release llrm-cc, llrm-llc, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
 (LLRM_BIN / CARGO_TARGET_DIR as tools/llrmbin.py reads them) when all three are there.
@@ -217,7 +217,7 @@ MD_LINK = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
 
 def dead_links(base: str, head: str, cwd: Path = ROOT) -> list[tuple[str, str]]:
     """(deleted path, docs page) for each file the squash deletes that a docs/*.md at `head` still links to. Two PRs deleted the dse, unroll and peel pages and left their
-    readme links; the docs_links test went red on feat/parity for hours."""
+    readme links; the docs_links test went red on release/next for hours."""
     gone = git("diff", "--name-only", "--diff-filter=D", base, head, cwd=cwd).split()
     found = []
     for path in gone:
@@ -298,7 +298,7 @@ def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, ti
     return soft + why + conflict_markers(base, head, cwd) + assistant_mentions(title, description, base, head, cwd)
 
 
-PRECHECK_CACHE = LANDED_LOG.parent / "precheck-cache.json"  # (PR head sha, feat/parity sha) -> the verdict line, and the head's own check failures per sha: ~40 candidates per cycle must not rebuild the dev checkout each
+PRECHECK_CACHE = LANDED_LOG.parent / "precheck-cache.json"  # (PR head sha, release/next sha) -> the verdict line, and the head's own check failures per sha: ~40 candidates per cycle must not rebuild the dev checkout each
 PRECHECK_DIR = Path(os.environ.get("PRECHECK_DIR", Path.home() / "scratch/precheck"))  # a persistent dev checkout + target dir: no dist build, seconds per PR after the first
 
 
@@ -324,7 +324,7 @@ def precheck_checks(dev: Path, target: Path):
     env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
 
     def fmt(root: Path, only: list[str] | None = None) -> dict[str, set[str]]:
-        if only is not None:  # the PR side: its own files only (the baseline, computed once per feat/parity sha, checks them all)
+        if only is not None:  # the PR side: its own files only (the baseline, computed once per release/next sha, checks them all)
             files = fmt_differs(root, only)
             return {"fmt": files} if files else {}
         done = subprocess.run(["tools/fmt.sh", "--check"], cwd=root, env=env, capture_output=True, text=True, errors="replace")
@@ -357,7 +357,7 @@ def precheck_items(dev: Path, checks, deletions_of=None, seconds: dict[str, floa
 
 
 def precheck_baseline(dev: Path, checks, base_sha: str, cache: Path) -> dict[str, set[str]]:
-    """The checks' failures on feat/parity ITSELF, cached per its sha: a red head file (fmt, a stale page) must not refuse every PR, nor the PR that fixes it."""
+    """The checks' failures on release/next ITSELF, cached per its sha: a red head file (fmt, a stale page) must not refuse every PR, nor the PR that fixes it."""
     cached = json.loads(cache.read_text()) if cache.exists() else {}
     key = f"base {base_sha}"
     if key in cached:
@@ -392,9 +392,9 @@ def judge_line_refusal(number: str, info: dict) -> str | None:
 
 
 def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHECK_DIR / "target", checks=None, merge=None, deletions=None, info=None, head_failed: set[str] | None = None, cache: Path = PRECHECK_CACHE, base_sha: str | None = None) -> str:
-    """`N: PASS`, or `N: REFUSED: <names>` after merging PR N's head with feat/parity in the dev checkout and running the cheap static checks (ratchets, fmt, docs, the
-    deletion rule) there: seconds, no dist build. #2836 cost a batch 26 minutes of halving for a failure these checks name. Only items NEW against feat/parity's own
-    failures refuse (by check AND file/page): a red head file refused every PR, the fixes included. The verdict is cached per (PR head sha, feat/parity sha)."""
+    """`N: PASS`, or `N: REFUSED: <names>` after merging PR N's head with release/next in the dev checkout and running the cheap static checks (ratchets, fmt, docs, the
+    deletion rule) there: seconds, no dist build. #2836 cost a batch 26 minutes of halving for a failure these checks name. Only items NEW against release/next's own
+    failures refuse (by check AND file/page): a red head file refused every PR, the fixes included. The verdict is cached per (PR head sha, release/next sha)."""
     info = info or json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName,files"], capture_output=True, text=True, errors="replace", check=True).stdout)
     if info["baseRefName"] != BRANCH:
         return f"{number}: REFUSED: targets {info['baseRefName']}, not {BRANCH}"
@@ -524,7 +524,7 @@ def known_red_line(known: dict[str, str]) -> str:
 
 
 def stale_at_the_call(head: str, fetch=None, base: str = BASE, cwd: Path = ROOT) -> list[str]:
-    """The containment check read at the instant of the merge call: feat/parity moves while the fast set runs (#2443's head predated #2429 by then)."""
+    """The containment check read at the instant of the merge call: release/next moves while the fast set runs (#2443's head predated #2429 by then)."""
     (fetch or (lambda: git("fetch", "-q", "origin", BRANCH, cwd=cwd)))()
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
         return [f"{BRANCH} moved while the checks ran: the PR head does not contain {base} now; merge it in and run again"]
@@ -787,7 +787,7 @@ def conflict_detail(head: str, body: str, base: str = BASE, cwd: Path = ROOT) ->
 
 
 def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5, merge=merge_parity, retry_wait: float = 60) -> bool | None:
-    """Squash PR `number` into feat/parity; None, with nothing pushed, when waits.txt holds it now. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
+    """Squash PR `number` into release/next; None, with nothing pushed, when waits.txt holds it now. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
     run = rate_limit_proof(run)
     if waiting(number):
         print(f"#{number}: HELD: in waits.txt now; not pushed")
@@ -802,7 +802,7 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
     stage(f"squash #{number}")
     done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body], capture_output=True, text=True, errors="replace")
     if done.returncode and "out of date" in f"{done.stderr}{done.stdout}".lower() and info.get("headRefName"):
-        # Another landing moved feat/parity between the batch and this squash: the owner did nothing. Fresh parity is merged into the head once (a merge commit, no
+        # Another landing moved release/next between the batch and this squash: the owner did nothing. Fresh parity is merged into the head once (a merge commit, no
         # force-push), only when it is conflict-free, and the squash retried once; a second refusal, or a conflict, is the owner's.
         if fresh := merge(info["headRefOid"], info["headRefName"]):
             print(f"#{number}: head out of date: merged parity {fresh[:9]}, retried")
@@ -837,7 +837,7 @@ def batch_summary(landed: list[str], refused: list[str], held: list[str], moved:
 
 def merged_result(head: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str | None, str]:
     """(sha, "") of `head` with `base` merged into it, checked out detached in `cwd` and not pushed; (None, why) when `base` conflicts. When `head` already
-    contains `base` the result is `head` itself. The squash lands on whatever feat/parity is at the call: the tests must run on this result, not on a head that
+    contains `base` the result is `head` itself. The squash lands on whatever release/next is at the call: the tests must run on this result, not on a head that
     compiled beside a base that has since moved (#2544 and #2564 each compiled; together the head did not build for three hours). A conflict only in generated
     files is resolved by regenerating them (`regenerate`)."""
     stage("merge")
@@ -1233,7 +1233,7 @@ def new_link_failures(
 ) -> list[str]:
     """The programs that do not link on the merged tree, when the batch changes what programs link against (`link_check.touches_runtime`): a QB program and C programs built
     and linked, not run. qbrt went 183/218 on 50387f114 and the gate was green because nothing linked the QB runtime (a `libcalls` fact made its C sources call `memcpy_`)."""
-    if os.environ.get("LAND_SKIP_LINK") == "1":  # the user's call while a break already on feat/parity is fixed forward: it refused every batch that touched the runtime
+    if os.environ.get("LAND_SKIP_LINK") == "1":  # the user's call while a break already on release/next is fixed forward: it refused every batch that touched the runtime
         print("link: skipped (LAND_SKIP_LINK=1)")
         return []
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -2639,7 +2639,7 @@ def unlogged(log: Path, commits: list[str]) -> list[str]:
 
 
 def compute_head_failures(known: dict[str, str] | None = None) -> set[str]:
-    """The failing checks on the head itself: check origin/feat/parity out, build its binaries when stale, run the smoke. Slow (a build), once per head sha."""
+    """The failing checks on the head itself: check origin/release/next out, build its binaries when stale, run the smoke. Slow (a build), once per head sha."""
     stage("head-failures")
     git("checkout", "-q", "--detach", BASE)
     if stale := ensure_bins():
@@ -2664,7 +2664,7 @@ def compute_head_qbrt_failures() -> set[str]:
 
 
 def compute_head_group_failures() -> set[str]:
-    """The tests/run groups' failing programs on the head itself (check origin/feat/parity out, build its binaries when stale), once per head sha."""
+    """The tests/run groups' failing programs on the head itself (check origin/release/next out, build its binaries when stale), once per head sha."""
     stage("head-groups")
     git("checkout", "-q", "--detach", BASE)
     if stale := ensure_bins():

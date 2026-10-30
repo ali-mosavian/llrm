@@ -34,7 +34,7 @@ def commit(root: Path, name: str, text: str, branch: str) -> None:
 
 
 def test_a_branch_that_conflicts_with_the_tip_names_the_files(tmp_path):
-    """#3436's batch refused PRs that did not merge with feat/parity: the owner learns it from the runner an hour later."""
+    """#3436's batch refused PRs that did not merge with release/next: the owner learns it from the runner an hour later."""
     root = repo(tmp_path)
     commit(root, "a.txt", "one\nthree\n", "parity")
     commit(root, "a.txt", "one\nfour\n", "pr")

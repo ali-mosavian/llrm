@@ -6,7 +6,7 @@
 Run in the worktree of the PR's branch. Every check runs and every failure is named; exit 1 if any failed, and a PR that fails
 stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `new_lib_failures`) on the branch itself:
 
-1. the branch contains the current feat/parity tip, and merges with it cleanly (a conflict names its files);
+1. the branch contains the current release/next tip, and merges with it cleanly (a conflict names its files);
 2. the description has `Owner:` and `Rows:` lines at the start of a line, a perf PR's description states the ledger command and a
    `d_faces qbq-llrm` number, a `Deletes:` or `Reverts:` line naming every path whose
    squash deletes lines or whole test functions, no link to a deleted page, and a `Rows:` line where the title is a perf PR;
@@ -16,7 +16,7 @@ stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `ne
 6. a PR that adds a pass slot (registry entry or phase-table row) adds a test at pipeline level;
 7. the root scanners (tests that read sources and docs; the landing layer runs them on every batch) have no failure the tip does not have, and
    `tools/docs/docsbuild/build.py --check` finds no generated page stale that the tip has not (seconds);
-6. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the feat/parity tip
+6. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the release/next tip
    does not have, and where the change touches the backend's phase list or the parity registry, the slot-list tests of
    llrm-transforms (`parity`) run too: a new phase not listed in `parity_tests` is the trap that refused #3708.
 """
