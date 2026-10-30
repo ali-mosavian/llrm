@@ -1,5 +1,6 @@
 """The gate's path map: a change in an area selects that area's tests, and nothing is left out by omission."""
 
+import os
 import re
 import pytest
 import sys
@@ -1432,9 +1433,9 @@ def test_the_bench_step_is_cut_into_the_configured_shards_each_with_its_own_slic
     p = gate.plan(["bench/fib/fib.c"], "full")
     groups = gate.groups_of(p, {})
     n = gate.load()["bench"]["shards"]
-    assert [g for g in groups if g.startswith("bench")] == ["bench-base"] + [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
+    assert [g for g in groups if g.startswith("bench")] == [f"bench-base-{i}" for i in range(1, n + 1)] + [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
     assert gate.shard_of("bench-3") == ("bench", f"3/{n}") and gate.shard_of("tools") == ("tools", None)
-    assert gate.shard_of("bench-base") == ("bench", "base"), "the base is measured once, by its own job, for every slice to be judged against"
+    assert gate.shard_of("bench-base-2") == ("bench", f"base:2/{n}"), "the base is measured in slices, one job each (the one leg outlasted the 90-minute job timeout in gate run 7)"
     assert "--shard" in gate.commands(p, gate.load(), gate.packages())["bench"]
 
 
@@ -1593,3 +1594,26 @@ def test_a_public_repo_the_gate_clones_is_pinned_to_a_sha():
     """rm-quake was cloned at its HEAD: its 047e7a8 (lit faces with no lightmap) turned oracle-qcport red with no change in this repository. A push there must not move the gate."""
     public = gate.load()["private"]["public"]
     assert public and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", spec) for spec in public.values()), public
+
+
+def test_a_streamed_steps_lines_reach_the_job_log_while_it_runs_and_a_cut_step_keeps_them(tmp_path, capsys):
+    """Gate run 7: bench-base was cancelled at 90 minutes and the job log held none of its stage lines (a step's log was printed at its end)."""
+    tail = gate.LogTail(tmp_path / "bench.log", "bench")
+    tail.pump()
+    (tmp_path / "bench.log").write_text("bench: [0s] base counts\nbench: [12s] half a li")
+    tail.pump()
+    assert capsys.readouterr().out == "[bench] bench: [0s] base counts\n", "a line is printed once it is whole"
+    (tmp_path / "bench.log").write_text("bench: [0s] base counts\nbench: [12s] half a line\n")
+    tail.pump()
+    assert capsys.readouterr().out == "[bench] bench: [12s] half a line\n"
+    gate.run_step("bench", "echo 'bench: [1s] stage' >&2", tmp_path, os.environ.copy())
+    assert "[bench] bench: [1s] stage" in capsys.readouterr().out
+    gate.run_step("pytest", "echo 'a test line'", tmp_path, os.environ.copy())
+    assert "[pytest]" not in capsys.readouterr().out, "only the steps that print little and run long are streamed"
+
+
+def test_a_streamed_step_cut_mid_run_leaves_its_stage_lines_in_the_output(tmp_path, capsys):
+    """Gate run 7: the job timeout cut bench-base after 73 minutes of work and the job log held no stage line, so nobody could say where it was."""
+    done = gate.run_step("bench", "echo 'bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores' >&2; sleep 60", tmp_path, os.environ.copy(), stall=2)
+    assert done[1] == gate.STALL_CODE
+    assert "[bench] bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores" in capsys.readouterr().out

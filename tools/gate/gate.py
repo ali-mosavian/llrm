@@ -717,21 +717,22 @@ def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
 SHARDED = {"bench": ("bench", "BENCH_SHARD"), "oracle": ("oracle", "ORACLE_SHARD")}
 
 
-# Slices a sharded group has besides its numbered ones: `bench-base` measures the base once, for every numbered slice's rows to be judged against.
+# Slices a sharded group has besides its numbered ones: `bench-base-I` measures slice I of the base, for the numbered slices' rows to be judged against.
 EXTRA_SLICES = {"bench": ("base",)}
 
 
 def shard_names(group: str) -> list[str]:
-    """`bench` as the CI jobs `bench-base`, `bench-1` .. `bench-N` (likewise `oracle`, without a base): the step is cut into slices that run on their own runners; any other group as itself."""
+    """`bench` as the CI jobs `bench-base-1` .. `bench-base-N`, `bench-1` .. `bench-N` (likewise `oracle`, without a base): the step is cut into slices that run on their own runners; any other group as itself."""
     if group not in SHARDED:
         return [group]
-    return [f"{group}-{one}" for one in EXTRA_SLICES.get(group, ())] + [f"{group}-{i}" for i in range(1, load()[SHARDED[group][0]]["shards"] + 1)]
+    count = load()[SHARDED[group][0]]["shards"]
+    return [f"{group}-{one}-{i}" for one in EXTRA_SLICES.get(group, ()) for i in range(1, count + 1)] + [f"{group}-{i}" for i in range(1, count + 1)]
 
 
 def shard_of(group: str | None) -> tuple[str | None, str | None]:
-    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`, (`bench`, "base") for `bench-base`; any other group as it is."""
-    if group == "bench-base":
-        return "bench", "base"
+    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`, (`bench`, "base:I/N") for `bench-base-I`; any other group as it is."""
+    if group and (one := re.fullmatch(r"bench-base-(\d+)", group)):
+        return "bench", f"base:{one[1]}/{load()['bench']['shards']}"
     if group and (one := re.fullmatch(r"(bench|oracle)-(\d+)", group)):
         return one[1], f"{one[2]}/{load()[SHARDED[one[1]][0]]['shards']}"
     return group, None
@@ -785,6 +786,29 @@ def kill_on_term() -> None:
         signal.signal(sig, die)
 
 
+# Steps whose log is also printed as it grows: the job log keeps a step's lines only if it ends, and a step cut by the job timeout left
+# none (gate run 7: bench-base cancelled at 90 minutes, no stage line to say where). A test step's thousands of lines stay in its file.
+STREAMED = ("bench",)
+
+
+class LogTail:
+    """The complete lines a step's log has gained since the last pump(), printed as `[step] line`."""
+
+    def __init__(self, path: Path, name: str):
+        self.path, self.name, self.at, self.rest = path, name, 0, b""
+
+    def pump(self) -> None:
+        if not self.path.is_file():
+            return
+        with open(self.path, "rb") as log:
+            log.seek(self.at)
+            data = log.read()
+        self.at += len(data)
+        *lines, self.rest = (self.rest + data).split(b"\n")
+        for line in lines:
+            print(f"[{self.name}] " + line.decode(errors="replace"), flush=True)
+
+
 def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = (), stall: float | None = None) -> tuple[str, int, float, float]:
     """(name, exit code, wall seconds, CPU seconds): the CPU is user+sys of the step's process tree, which a loaded host does not stretch.
     A step that neither writes to its log nor uses CPU for `stall` seconds is killed (a pytest step sat 84 minutes on a hung test with
@@ -797,6 +821,7 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
     # A new file, not a truncated one: an orphan of a killed gate still writing to the old inode interleaves with this step's output
     # (NUL gaps and extra "test result" lines: #1758 "95 results of 83 test binaries").
     path.unlink(missing_ok=True)
+    tail = LogTail(path, name) if name in STREAMED else None
     with open(path, "w") as log:
         child = subprocess.Popen(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         LIVE.add(child.pid)
@@ -809,6 +834,8 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
                 if done:
                     break
                 time.sleep(min(1.0, stall / 4))
+                if tail:
+                    tail.pump()
                 grown, burned = path.stat().st_size, proctree.tree_cpu(child.pid)
                 if grown != seen or burned > used:  # any tick: a loaded host gives a computing step far less than 0.1 s a poll
                     seen, used, active = grown, burned, time.time()
@@ -822,6 +849,8 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
             os.killpg(child.pid, signal.SIGKILL)
             raise
         LIVE.discard(child.pid)
+        if tail:
+            tail.pump()
         child.returncode = code = STALL_CODE if stalled else os.waitstatus_to_exitcode(status)
         cpu = usage.ru_utime + usage.ru_stime
     if stalled:
