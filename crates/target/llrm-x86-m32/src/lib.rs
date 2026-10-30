@@ -194,6 +194,14 @@ impl llrm_target::Target for M32 {
         llrm_x86::calling::frame(CALLING.native())
     }
 
+    /// `idiv` faults (exception 0) where the quotient overflows, and the DOS
+    /// runtime's `B$TRAPS` (runtime/qb/dos/m32/trap.asm, DPMI 0203h) takes it
+    /// for error 11. A host's object has no such handler: the front end asks
+    /// the object format too.
+    fn idiv_overflow_traps(&self) -> bool {
+        true
+    }
+
     fn frame_optional(&self) -> bool {
         CALLING.native().frame_optional
     }

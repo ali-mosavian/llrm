@@ -46,9 +46,18 @@ fn test_a_program_that_handles_errors_keeps_the_overflow_check() {
     assert!(text.contains("32768"), "{text}");
 }
 
-/// The target says whether its divide faults; m32 has no handler shown yet.
+/// The DOS extender's runtime takes exception 0 (runtime/qb/dos/m32/trap.asm,
+/// DPMI 0203h), so m32 is the same 16-bit divide.
 #[test]
-fn test_a_32_bit_target_keeps_the_overflow_check() {
+fn test_a_dos_32_bit_target_leaves_the_overflow_to_the_fault_too() {
     let text = listing(PLAIN, &["-fqb-runtime=llrm", "-m32", "-march=i486"]);
+    assert!(text.contains("cwd") && !text.contains("32768"), "{text}");
+}
+
+/// A host's object has no handler of the runtime's for the fault (no SIGFPE
+/// handler in runtime/qb/posix): the check stays.
+#[test]
+fn test_a_hosted_object_keeps_the_overflow_check() {
+    let text = listing(PLAIN, &["-fqb-runtime=llrm", "-m32", "-march=i486", "-fobject-format=elf"]);
     assert!(text.contains("32768"), "{text}");
 }
