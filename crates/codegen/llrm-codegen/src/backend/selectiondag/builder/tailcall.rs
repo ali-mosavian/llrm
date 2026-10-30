@@ -94,9 +94,8 @@ impl Builder<'_> {
         }
         // the callee keeps every register the caller must
         let calling = full.calling();
-        let preserved = |number: u32| {
-            calling.by_number(number).map(|one| full.convention_callee_saved(one)).unwrap_or_default()
-        };
+        let preserved =
+            |number: u32| calling.by_number(number).map(|one| full.convention_callee_saved(one)).unwrap_or_default();
         let caller_cc = self.function.calling_convention;
         let caller_kept = preserved(caller_cc);
         if caller_cc != info.calling_convention {

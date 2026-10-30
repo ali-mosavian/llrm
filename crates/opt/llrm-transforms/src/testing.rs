@@ -171,35 +171,76 @@ impl llrm_mir::tti::Tti for PrefersExitNe {
         true
     }
 
-    fn cmp_sel_cost(&self, kind: tti::CmpSel, ty: tti::Ty, cost: tti::CostKind) -> tti::Cost {
+    fn cmp_sel_cost(
+        &self,
+        kind: tti::CmpSel,
+        ty: tti::Ty,
+        cost: tti::CostKind,
+    ) -> tti::Cost {
         tti::Basic.cmp_sel_cost(kind, ty, cost)
     }
 
-    fn memory_op_cost(&self, op: tti::MemoryOp, ty: tti::Ty, cost: tti::CostKind, volatile: bool) -> tti::Cost {
+    fn memory_op_cost(
+        &self,
+        op: tti::MemoryOp,
+        ty: tti::Ty,
+        cost: tti::CostKind,
+        volatile: bool,
+    ) -> tti::Cost {
         tti::Basic.memory_op_cost(op, ty, cost, volatile)
     }
 
-    fn cf_instr_cost(&self, phi: bool, kind: tti::CostKind) -> tti::Cost {
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: tti::CostKind,
+    ) -> tti::Cost {
         tti::Basic.cf_instr_cost(phi, kind)
     }
 
-    fn int_imm_cost(&self, value: i128, bits: u32) -> tti::Cost {
+    fn int_imm_cost(
+        &self,
+        value: i128,
+        bits: u32,
+    ) -> tti::Cost {
         tti::Basic.int_imm_cost(value, bits)
     }
 
-    fn int_imm_cost_inst(&self, user: tti::ImmUser, index: u32, value: i128, bits: u32) -> tti::Cost {
+    fn int_imm_cost_inst(
+        &self,
+        user: tti::ImmUser,
+        index: u32,
+        value: i128,
+        bits: u32,
+    ) -> tti::Cost {
         tti::Basic.int_imm_cost_inst(user, index, value, bits)
     }
 
-    fn is_truncate_free(&self, from: tti::Ty, to: tti::Ty) -> bool {
+    fn is_truncate_free(
+        &self,
+        from: tti::Ty,
+        to: tti::Ty,
+    ) -> bool {
         tti::Basic.is_truncate_free(from, to)
     }
 
-    fn is_legal_addressing_mode(&self, global: bool, offset: i64, base: bool, scale: i64) -> bool {
+    fn is_legal_addressing_mode(
+        &self,
+        global: bool,
+        offset: i64,
+        base: bool,
+        scale: i64,
+    ) -> bool {
         tti::Basic.is_legal_addressing_mode(global, offset, base, scale)
     }
 
-    fn cast_cost(&self, kind: tti::CastKind, from: tti::Ty, to: tti::Ty, cost: tti::CostKind) -> tti::Cost {
+    fn cast_cost(
+        &self,
+        kind: tti::CastKind,
+        from: tti::Ty,
+        to: tti::Ty,
+        cost: tti::CostKind,
+    ) -> tti::Cost {
         tti::Basic.cast_cost(kind, from, to, cost)
     }
 

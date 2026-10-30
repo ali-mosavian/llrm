@@ -1,6 +1,7 @@
 //! `cargo run -p llrm-arm64 --example lsr -- FILE.ll`: the module after loop
 //! strength reduction alone, priced by the AArch64 `Tti`
-//! (`tools/lsr_shadow.py` compares it with the pin's `opt -passes=loop-reduce`).
+//! (`tools/lsr_shadow.py` compares it with the pin's `opt
+//! -passes=loop-reduce`).
 use llrm_arm64::tti::AArch64;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::passes::{Declared, Outer};

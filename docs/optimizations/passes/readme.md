@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 223 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 224 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -94,6 +94,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | earlycse | LLVM's EarlyCSE with MemorySSA (`early-cse<memssa>`): one walk down the dominator tree, scoped tables of what is available, and a generation count that memory operations advance. | [`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`). | [earlycse](earlycse.md) |
 | edges | Edge surgery on conditional branches: a new block on one arm of a `br i1`, holding the operations that belong to that edge and not to either arm's block. | Not a pass: a library. `split` is called by `rotate` and | [edges](edges.md) |
 | emptyblocks | CodeGenPrepare's `eliminateMostlyEmptyBlocks`: a block of phis and a jump is merged into its successor before isel ([CodeGenPrepare.cpp#L939](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L939)). | First in `cgpaddr`'s run, before the sinks: it changes the CFG. | [emptyblocks](emptyblocks.md) |
+| exitne | A loop's strict exit compare of a unit-stride counter becomes `!=` where the counter provably never passes the bound. | [`crate::indvars`](indvars.md) runs `strengthened_in` after LFTR. The m68k mid-end | [exitne](exitne.md) |
 | exitopt | A loop's exits are folded by what ScalarEvolution knows of their counts. | Not wired in: [`crate::indvars`](indvars.md) will run `optimized` before | [exitopt](exitopt.md) |
 | exitpredicate | A read-only loop's exits are rewritten to tests on the loop's trip count made before it. | Not wired in: [`crate::indvars`](indvars.md) will run [`predicated`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/predicated.rs) after | [exitpredicate](exitpredicate.md) |
 | exitsink | An add, subtract or extension in a loop that only exit phis read, moved to those exits: LLVM's LICM sinking an instruction only used outside the loop. | Step 4 of [`crate::indvars`](indvars.md): on whenever `indvars` is, in the fixed point | [exitsink](exitsink.md) |

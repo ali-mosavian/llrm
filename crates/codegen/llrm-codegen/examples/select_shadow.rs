@@ -107,7 +107,8 @@ fn main() {
         for &block in function.layout() {
             blocks += 1;
             let block_name = function.block(block).name.clone().unwrap_or_default();
-            let mut done = match build_block(&module, function, &layout, &target, &arch, &convention, &mut info, block) {
+            let mut done = match build_block(&module, function, &layout, &target, &arch, &convention, &mut info, block)
+            {
                 Ok(done) => done,
                 Err(why) => {
                     println!("REFUSED {name}:{block_name} builder: {}", why.0);

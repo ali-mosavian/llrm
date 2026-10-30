@@ -434,7 +434,8 @@ fn dag_name(
 impl<'a> Builder<'a> {
     /// The whole target description, for the paths that read x86-style
     /// `calling.toml` conventions, string registers and runtime routines.
-    /// `Target::string_registers`; none for a target with no x86-style description.
+    /// `Target::string_registers`; none for a target with no x86-style
+    /// description.
     fn string_instructions(&self) -> Option<llrm_target::StringRegisters> {
         self.arch.full().and_then(|arch| arch.string_registers())
     }

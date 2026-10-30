@@ -1,7 +1,9 @@
-//! The per-target generator on a record of its own: the pin's M68k.td to matcher tables, twice, identical.
+//! The per-target generator on a record of its own: the pin's M68k.td to
+//! matcher tables, twice, identical.
 //!
-//! No target crate here has a record yet, so `stale_targets.rs` has nothing to regenerate; this keeps `regen-target.sh`
-//! and `--target` exercised. `DAGISEL_SKIP_PIN=1` skips the test where the pin is not installed.
+//! No target crate here has a record yet, so `stale_targets.rs` has nothing to
+//! regenerate; this keeps `regen-target.sh` and `--target` exercised.
+//! `DAGISEL_SKIP_PIN=1` skips the test where the pin is not installed.
 
 use std::path::Path;
 use std::process::Command;
