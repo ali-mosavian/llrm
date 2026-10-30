@@ -359,3 +359,18 @@ def test_the_base_bench_runs_with_the_fork_start_method_whatever_the_pythons_def
     )
     rows, _ = bc.measure_in_subprocess(tmp_path / "x" / "release", ["O2"], tmp_path / "work", tree=tree)
     assert list(rows) == [("start", "fork", "O2")]
+
+
+def test_an_exception_file_prints_its_rows_every_run_and_fails_a_row_no_longer_worse_than_the_base():
+    """A TEMPORARY trade-off exception (`exception = true`) stayed as a quiet BASE-STALE line after the fix it waited for landed, and no run
+    named its rows. It lists each row with the base's count and the one it may reach, and a row that is no longer worse is a problem."""
+    base = {FIB: row(100)}
+    waivers = [{"label": "fib bq32 -O2", "counter": "instructions", "to": 120, "reason": "r", "file": "a.toml", "exception": True}]
+    rows = bc.waived_rows({FIB: row(120)}, base, waivers)
+    lines, problems = bc.waived_lines(rows, waivers, [])
+    assert "EXCEPTION a.toml: fib bq32 -O2 instructions 100 -> 120" in lines and problems == []
+    worse, better, stale = bc.judge({FIB: row(100)}, base, waivers)
+    lines, problems = bc.waived_lines(bc.waived_rows({FIB: row(100)}, base, waivers), waivers, stale)
+    assert problems == ["EXCEPTION a.toml: fib bq32 -O2 instructions to 120 is no longer worse than the base: delete it"]
+    plain = [{**waivers[0], "exception": False}]
+    assert bc.waived_lines([], plain, bc.judge({FIB: row(100)}, base, plain)[2])[1] == []
