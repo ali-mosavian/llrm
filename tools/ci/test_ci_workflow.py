@@ -53,3 +53,14 @@ def test_the_verdict_line_of_a_pull_request_is_the_candidate_pass_and_no_cheap_f
 def test_only_a_pull_request_into_main_starts_the_gate():
     """A parity pull request into feat/parity merges on a build and a smoke set (tools/parity_smoke.py); its CI runs were cancelled by hand."""
     assert "branches: [main]" in CI.split("pull_request:")[1].split("push:")[0]
+
+
+def test_the_gate_job_outlasts_its_slowest_group_measured():
+    """Runs 3 and 4: `gate (bench-base)` was cancelled at the job's 60 min with its base leg unfinished (10 min of build, still measuring main's
+    rows at minute 47; a cold leg is 28 min on a fast box and the runner is ~1.7x slower). The timeout must be 1.5x the 60 min it was seen to
+    hit, so a cold base leg that needs more than 60 still finishes."""
+    import re
+
+    gate = CI.split("\n  gate:\n")[1]
+    timeout = int(re.search(r"timeout-minutes: (\d+)", gate)[1])
+    assert timeout >= 90, timeout

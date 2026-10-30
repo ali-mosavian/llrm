@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_redim_preserve_keeps_what_fits_and_zeroes_the_rest(tmp_path):
     exe = tmp_path / "preserve_test"
     build = subprocess.run(
-        ["gcc", "-O1", "-g", "-w", "-I", str(ROOT / "tests/hostalloc/shim"), "-I", str(ROOT / "runtime/qb"), "-I", str(ROOT / "runtime/qb/dos/m32"), str(ROOT / "tests/hostarray/preserve_test.c"), "-o", str(exe)],
+        ["gcc", "-O1", "-g", "-w", "-D__cdecl=", "-I", str(ROOT / "tests/hostalloc/shim"), "-I", str(ROOT / "runtime/qb"), "-I", str(ROOT / "runtime/qb/dos/m32"), str(ROOT / "tests/hostarray/preserve_test.c"), "-o", str(exe)],
         capture_output=True,
         text=True,
     )

@@ -7,19 +7,20 @@ cat > $d/gh <<'S'
 #!/bin/sh
 [ "$1" = api ] && { echo paritysha1; exit 0; }
 limit=30; q=.; while [ $# -gt 0 ]; do case "$1" in --limit) limit=$2;; -q) q=$2;; esac; shift; done
-i=0; while [ $i -lt 40 ]; do n=$((3000+i)); d=false; [ $i -eq 5 ] && d=true; m=MERGEABLE; [ $i -eq 7 ] && m=CONFLICTING; [ $i -eq 8 ] || [ $i -eq 9 ] && m=UNKNOWN; b=""; case $i in 2|30) ;; *) b="Owner: sess-$i";; esac; echo "{\"number\":$n,\"isDraft\":$d,\"mergeable\":\"$m\",\"body\":\"$b\",\"headRefOid\":\"h$n\"}"; i=$((i+1)); done | head -n $limit | jq -s "$q" | jq -r 'if type=="array" then .[] else . end'
+i=0; while [ $i -lt 40 ]; do n=$((3000+i)); d=false; [ $i -eq 5 ] && d=true; m=MERGEABLE; [ $i -eq 7 ] && m=CONFLICTING; [ $i -eq 8 ] || [ $i -eq 9 ] && m=UNKNOWN; l=[]; [ $i -eq 11 ] && l='[{"name":"hold"}]'; b=""; case $i in 2|30) ;; *) b="Owner: sess-$i";; esac; echo "{\"number\":$n,\"isDraft\":$d,\"mergeable\":\"$m\",\"body\":\"$b\",\"headRefOid\":\"h$n\",\"labels\":$l}"; i=$((i+1)); done | head -n $limit | jq -s "$q" | jq -r 'if type=="array" then .[] else . end'
 S
 chmod +x $d/gh; echo "3030 3002" > $d/priority.txt; echo "3010 # waits" > $d/waits.txt
 out=$(PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>$d/err | tr '\n' ' ')
 grep -q "^3007: REFUSED: conflicts with feat/parity" $d/err || { echo "FAIL: a conflicting PR was queued or not reported"; exit 1; }
-want="3030 3002 $(seq 3000 3039 | grep -vxE '3030|3002|3005|3007|3010' | tr '\n' ' ')"
+grep -q "^3011: REFUSED: label hold" $d/err || { echo "FAIL: a ready PR labelled hold was queued or not reported: $(cat $d/err)"; exit 1; }
+want="3030 3002 $(seq 3000 3039 | grep -vxE '3030|3002|3005|3007|3010|3011' | tr '\n' ' ')"
 grep -q "^3007: REFUSED: conflicts with feat/parity.*owner sess-7 " $d/err || { echo "FAIL: the conflict line does not name the owner: $(cat $d/err)"; exit 1; }
 grep -q "^3002: WARNING: no .Owner" $d/err && grep -q "^3030: WARNING: no .Owner" $d/err || { echo "FAIL: a PR without an Owner line was not warned about by default: $(cat $d/err)"; exit 1; }
 echo "$out" | grep -qw 3002 && echo "$out" | grep -qw 3030 || { echo "FAIL: a PR without an Owner line was not queued under the default warning: '$out'"; exit 1; }
 refused=$(BODY_CHECKS=refuse PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>$d/err3 | tr '\n' ' ')
 grep -q "^3002: REFUSED: no .Owner" $d/err3 && ! echo "$refused" | grep -qw 3002 || { echo "FAIL: BODY_CHECKS=refuse does not refuse a PR without an Owner line: $(cat $d/err3)"; exit 1; }
 off=$(REQUIRE_OWNER= PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>/dev/null | tr '\n' ' ')
-want_off="3030 3002 $(seq 3000 3039 | grep -vxE '3030|3002|3005|3007|3010' | tr '\n' ' ')"
+want_off="3030 3002 $(seq 3000 3039 | grep -vxE '3030|3002|3005|3007|3010|3011' | tr '\n' ' ')"
 [ "$off" = "$want_off" ] || { echo "FAIL: REQUIRE_OWNER= does not switch the rule off: got '$off'"; exit 1; }
 # a PR the last landing refused (same head, same feat/parity) is not queued again; a moved head or parity queues it
 echo "3012 h3012 paritysha1" > $d/refused.state; echo "3013 h3013 oldparity" >> $d/refused.state

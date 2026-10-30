@@ -3,6 +3,7 @@
 ' expect: backwards 0
 ' expect: finer -1
 DEFINT A-Z
+OPEN "L.TXT" FOR OUTPUT AS #1
 t# = TIMER
 smallest# = 99
 FOR i = 1 TO 60
@@ -12,6 +13,7 @@ FOR i = 1 TO 60
   IF d# > 0 AND d# < smallest# THEN smallest# = d#
   t# = n#
 NEXT i
-PRINT "backwards"; backwards
-PRINT "finer"; " "; (smallest# < .02)
+PRINT #1, "backwards"; backwards
+PRINT #1, "finer"; " "; (smallest# < .02)
+CLOSE #1
 END

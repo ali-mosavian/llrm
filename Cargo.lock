@@ -521,6 +521,9 @@ dependencies = [
 [[package]]
 name = "llrm-object"
 version = "0.1.0"
+dependencies = [
+ "llrm-support",
+]
 
 [[package]]
 name = "llrm-omf"

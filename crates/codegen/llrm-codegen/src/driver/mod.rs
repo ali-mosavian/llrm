@@ -244,6 +244,20 @@ fn stack_checked(program: &mut Program) {
     }
 }
 
+/// Each function `program` defines marked "no-jump-tables"="true", as clang
+/// writes it for `-fno-jump-tables`.
+fn without_jump_tables(program: &mut Program) {
+    for module in &mut program.modules {
+        for global in &mut module.globals {
+            if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
+                && !function.is_declaration()
+            {
+                function.attrs.push(llrm_mir::Attribute::Str("no-jump-tables".to_owned(), Some("true".to_owned())));
+            }
+        }
+    }
+}
+
 /// What C's runtime says of its stack on `arch`: the `stack.toml` its
 /// description names.
 fn runtime_stack_check(arch: &dyn llrm_target::Target) -> Result<crate::hir::model::StackCheck, String> {
@@ -376,6 +390,9 @@ pub fn compiled_module(
     let mut assembled = assembled;
     options.describe_debug(&mut assembled);
     data::zero_to_bss(&mut assembled, &program.modules[0], program.segments.data_space, options.machine.bss_begin);
+    if options.machine.far_bss {
+        data::zero_far_to_bss(&mut assembled, &program.modules[0]);
+    }
     stage_files(options, "", &assembled)?;
     Ok(assembled)
 }
@@ -496,6 +513,9 @@ pub fn optimized(
     no_inlined(program, &options.no_inline)?;
     if options.stack_check {
         stack_checked(program);
+    }
+    if !options.pipeline.jump_tables {
+        without_jump_tables(program);
     }
     let mut pipeline = options.pipeline.clone();
     // The DAG builder lowers the switches that remain, as the pin's
