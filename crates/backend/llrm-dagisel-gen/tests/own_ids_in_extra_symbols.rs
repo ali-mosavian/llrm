@@ -11,7 +11,7 @@ fn an_own_id_listed_in_extra_symbols_is_not_looked_up_in_the_headers() {
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let record = std::fs::read_to_string(root.join("crates/target/llrm-m68k/dagisel.toml")).unwrap();
+    let record = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/m68k/dagisel.toml")).unwrap();
     let record = record.replacen("extra_symbols = [", "own_ids = \"own.txt\"\nextra_symbols = [\"M68kISD::Fake\", ", 1);
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("dagisel.toml"), record).unwrap();
