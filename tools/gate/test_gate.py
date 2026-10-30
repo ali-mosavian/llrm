@@ -1617,3 +1617,11 @@ def test_a_streamed_step_cut_mid_run_leaves_its_stage_lines_in_the_output(tmp_pa
     done = gate.run_step("bench", "echo 'bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores' >&2; sleep 60", tmp_path, os.environ.copy(), stall=2)
     assert done[1] == gate.STALL_CODE
     assert "[bench] bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores" in capsys.readouterr().out
+
+
+def test_objsweep_is_a_heavy_step_selected_by_the_object_and_debug_paths():
+    """Byte identity of the objects against the merge-base ran nowhere in the gate: a writer change moved 57 m64 objects unseen."""
+    for path in ("crates/mc/llrm-dwarf/src/types.rs", "crates/codegen/llrm-codegen/src/backend/objbuild.rs", "tools/pairs/objsweep_gate.py"):
+        assert "objsweep" in gate.plan([path]).steps, path
+    assert "objsweep" not in gate.plan(["tests/run.rs"]).steps
+    assert gate.load()["groups"]["objects"] == ["objsweep"]

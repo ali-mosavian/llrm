@@ -32,3 +32,8 @@ def test_a_leg_that_compiled_little_proves_nothing():
 
 def test_an_object_compiled_on_one_side_fails():
     assert "one side only" in gate.verdict("m32", line(one=1, identical=139), {})
+
+
+def test_a_seeded_bad_object_is_caught():
+    """The control: one flipped byte must be a different object, and a leg that saw it must fail."""
+    assert gate.seeded(b"\x7fELF\x01\x02") is None

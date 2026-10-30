@@ -56,7 +56,18 @@ def control(compiler: str) -> str | None:
         b, _ = objsweep.compile_one(compiler, source, "m32", "Os", Path(scratch) / "b.o", "dag")
     if a is None or b is None:
         return f"control did not compile: {why}"
-    return None if a != b else "control: O2 and Os objects are byte-identical, so the comparison sees nothing"
+    if a == b:
+        return "control: O2 and Os objects are byte-identical, so the comparison sees nothing"
+    return seeded(a)
+
+
+def seeded(good: bytes) -> str | None:
+    """None if `good` with one byte flipped is seen as a different object and a leg that changed it fails; else why the leg cannot be trusted."""
+    bad = good[:-1] + bytes([good[-1] ^ 1])
+    if bad == good:
+        return "control: the seeded bad object equals the good one"
+    line = "objsweep --isel=dag old a new b: 1 objects changed (m32, O2,Os); 141 identical, 0 failed on both sides, 0 failed on one side of 142"
+    return None if verdict("seeded", line, {}) else "control: a leg with a changed object passed"
 
 
 def main() -> int:
