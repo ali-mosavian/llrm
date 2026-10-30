@@ -24,6 +24,8 @@ import pairruns  # noqa: E402
 import parity_smoke  # noqa: E402
 import xfail  # noqa: E402
 
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path(os.environ.get("POSTLAND", Path.home() / "scratch" / "postland"))
 TOOLS = Path(os.environ.get("POSTLAND_TOOLS", Path.home() / "scratch" / "sb-head3" / "dist"))  # jwasm, jwlink, dosbox-x
@@ -362,7 +364,7 @@ class Inconclusive(Exception):
 def once(sha: str | None = None) -> str:
     """Check one head against the last checked one; write and return its report path."""
     git("fetch", "-q", "origin")
-    sha = git("rev-parse", sha or "origin/feat/parity")
+    sha = git("rev-parse", sha or f"origin/{BRANCH}")
     state = load_state()
     previous = state["last"]
     HOME.mkdir(parents=True, exist_ok=True)
@@ -396,7 +398,7 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "loop":
         while True:
             git("fetch", "-q", "origin")
-            if git("rev-parse", "origin/feat/parity") != load_state()["last"]:
+            if git("rev-parse", f"origin/{BRANCH}") != load_state()["last"]:
                 print(once(), flush=True)
             time.sleep(300)
     print(once(sys.argv[2] if len(sys.argv) > 2 else None))
