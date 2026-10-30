@@ -178,6 +178,13 @@ pub struct Layer {
     pub facts: &'static str,
 }
 
+/// The BASIC error number the divide-fault handler of the OS layer `text`
+/// (`os.toml`) reports, or None where the layer installs none
+/// (`divide_fault_error`).
+pub fn divide_fault_error(text: &str) -> Option<i64> {
+    text.parse::<toml::Table>().ok()?.get("divide_fault_error")?.as_integer()
+}
+
 impl Layer {
     pub fn table(&self) -> Result<toml::Table, String> {
         self.text.parse().map_err(|error: toml::de::Error| format!("os.toml: {error}"))
