@@ -10,7 +10,7 @@ use llrm_m68k::dagisel::lowering::{M68kLowering, cond, m68kisd, target_lowering}
 
 fn legalize(dag: &mut SelectionDAG) -> SDValue {
     let tli = target_lowering(Cpu::M68000);
-    DagLegalizer::new(dag, &tli, &mut M68kLowering).run().expect("legalizes");
+    DagLegalizer::new(dag, &tli, &mut M68kLowering { load_as_source: false }).run().expect("legalizes");
     dag.get_root()
 }
 

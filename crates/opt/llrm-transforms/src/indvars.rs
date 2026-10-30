@@ -26,6 +26,9 @@
 //!    counts decide are folded by those.
 //! 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
 //!    exit tests a counter against the value it has at the last trip.
+//!    `exitne::strengthened` (beyond the pin; `LLRM_NO_SCEV_EXITNE`) then makes
+//!    `!=` the strict compare of a unit-stride counter that never passes its
+//!    bound, which LFTR left.
 //! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
 //!
 //! # Example
@@ -302,12 +305,16 @@ impl FunctionPass for IndVars {
         let tested = self.lftr
             && crate::lftr::enabled()
             && crate::lftr::replaced_in(&mut session, unit.context, unit.layout, unit.function, unit.declared, &outer);
+        // After LFTR, which owns the exits it can rewrite against a trip count.
+        let strengthened = crate::exitne::enabled()
+            && outer.target().tti().is_some_and(|tti| tti.prefers_exit_ne())
+            && crate::exitne::strengthened_in(&mut session, unit.context, unit.layout, unit.function, &outer);
         let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
         let loops = cfg::natural(unit.function, &found);
         let sunk = crate::exitsink::sunk(unit.function, &loops);
         // The pin deletes what an edit stopped reading as it goes; a sweep of
         // the function (0.8 M Ir on d_faces' largest body) found the same.
-        let dead = (compared || rewrote || canonical || optimized || predicated || tested || sunk || merged) && {
+        let dead = (compared || rewrote || canonical || strengthened || optimized || predicated || tested || sunk || merged) && {
             match unit.function.touched_since(start) {
                 Some(touched) => {
                     let seeds: Vec<_> = touched.named.iter().collect();

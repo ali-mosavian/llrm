@@ -46,7 +46,7 @@ sed -n '/MatcherTable\[\] = {/,/^  };/p' "$WORK/GenDAGISel.inc" |
 
 grep -oE '\bOPC_[A-Za-z0-9_]+|\bOPFL_[A-Za-z0-9_]+' "$S/include/llvm/CodeGen/SelectionDAGISel.h" | grep -v OPFL_VariadicN | sort -u > "$WORK/members.txt"
 # An own id is in no header: the program cannot name it, whoever lists it.
-{ cat "$WORK/symbols.txt" "$WORK/instr_symbols.txt"; field extra_symbols; } | grep . | sort -u | grep -vxFf <(cut -d' ' -f1 "$OWN") | sed 's/.*/P(&);/' > "$WORK/symbols.cpp"
+{ cat "$WORK/symbols.txt" "$WORK/instr_symbols.txt"; field extra_symbols; field registers | sed "s/^/$NS/"; } | grep . | sort -u | grep -vxFf <(cut -d' ' -f1 "$OWN") | sed 's/.*/P(&);/' > "$WORK/symbols.cpp"
 sed -n '/enum BuiltinOpcodes {/,/^  };/p;/^  enum {/,/^  };/p' "$S/include/llvm/CodeGen/SelectionDAGISel.h" > "$WORK/enums.cpp"
 sed 's/.*/P(&);/' "$WORK/members.txt" > "$WORK/members.cpp"
 field ids_includes > "$WORK/includes.cpp"
@@ -66,3 +66,15 @@ cat "$OWN" >> "$WORK/ids.txt"
 if [ -n "${DAGISEL_GEN:-}" ]; then GEN=("$DAGISEL_GEN"); else GEN=(cargo run -q --release -p llrm-dagisel-gen --); fi
 mkdir -p "$OUT"
 "${GEN[@]}" --target "$REC" --inc "$WORK/GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --instrinfo "$WORK/instrinfo.txt" --out "$OUT"
+# `asm = "<namespace>"` in the record: the instructions' asm strings and printer methods.
+ASM_NS=$(field asm)
+if [ -n "$ASM_NS" ]; then
+  "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
+  python3 -I "$ROOT/tools/dagisel/asmtable.py" "$WORK/target.json" "$OUT/asm.rs" "${ASM_NS%::}"
+fi
+# `enc = "<namespace>"`: the instructions' binary encodings (enc.rs), for the object writer.
+ENC_NS=$(field enc)
+if [ -n "$ENC_NS" ]; then
+  [ -f "$WORK/target.json" ] || "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
+  python3 -I "$ROOT/tools/dagisel/enctable.py" "$WORK/target.json" "$OUT/enc.rs" "${ENC_NS%::}"
+fi

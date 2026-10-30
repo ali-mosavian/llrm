@@ -163,6 +163,19 @@ pub enum ISD {
     Store,
     /// `ATOMIC_SWAP`: `(chain, ptr, value)` to the old value and a chain.
     AtomicSwap,
+    /// `ATOMIC_CMP_SWAP`: `(chain, ptr, expected, new)` to the old value and a chain.
+    AtomicCmpSwap,
+    /// `ATOMIC_LOAD_ADD` and its siblings: `(chain, ptr, value)` to the old value and a chain.
+    AtomicLoadAdd,
+    AtomicLoadSub,
+    AtomicLoadAnd,
+    AtomicLoadOr,
+    AtomicLoadXor,
+    /// `ATOMIC_LOAD_CLR`: and with the complement.
+    AtomicLoadClr,
+    /// `ATOMIC_LOAD` and `ATOMIC_STORE`.
+    AtomicLoad,
+    AtomicStore,
     CallSeqStart,
     CallSeqEnd,
     DynamicStackAlloc,
@@ -325,6 +338,15 @@ impl ISD {
             Load => "load",
             Store => "store",
             AtomicSwap => "atomic_swap",
+            AtomicCmpSwap => "atomic_cmp_swap",
+            AtomicLoadAdd => "atomic_load_add",
+            AtomicLoadSub => "atomic_load_sub",
+            AtomicLoadAnd => "atomic_load_and",
+            AtomicLoadOr => "atomic_load_or",
+            AtomicLoadXor => "atomic_load_xor",
+            AtomicLoadClr => "atomic_load_clr",
+            AtomicLoad => "atomic_load",
+            AtomicStore => "atomic_store",
             CallSeqStart => "callseq_start",
             CallSeqEnd => "callseq_end",
             DynamicStackAlloc => "dynamic_stackalloc",

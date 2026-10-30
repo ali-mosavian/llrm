@@ -22,6 +22,26 @@ A small trait in `llrm-target`/codegen (`DagTarget`: pin ids of target nodes, re
 - S2 as built on `feat/m68k-spike` (10-29): the shared boundary is IR -> scheduled DAG; emission stays per target (m68k emits into its own machine function, not x86 LIR). Done: `PinRegisters` (adapter) and `SchedInfo::pin_register` take the target's registers; `do_instruction_selection_with` takes the selector; `llrm-m68k` `pipeline.rs` runs combine, legalize, select and schedule with its own tables, and a hand-built `a + b` selects `MOV32rp, ADD32dp, RET` as the pin does (x86 defaults unchanged, schedule/dag_select/dagisel tests green).
 - Left for S2: the builder's call, return and formal-argument code is X86's `LowerCall`/`LowerReturn` (x86isd::CALL, m16 views); it needs a `BuilderTarget` hook to `llrm-m68k` `call.rs` (thin dispatch lines in `builder.rs`), and a `BuilderTarget::m68k`. The `DagTarget` trait that replaces `selected_in`'s bitness gate is extracted from the two implementations after that (rule of two), not before. `emit.rs` is not part of S2.
 - Root `.td` may live in the target crate (6502: `crates/target/llrm-6502/*.td`, include dir = pin's `llvm/include`); `own_ids.txt` lives in the target crate, read by regen and by the lowering (one source).
+- Left for S2 (2026-10-29): the shared legalizer has no libcall conversion (`RuntimeLibcalls`: mul/div/rem/shift without the instruction become calls in legalize). 6502 emits runtime-call pseudos at emission instead; m68k needs it for 68000 i32 mul/div, wasm does not. After M5. The call/return/argument hook is done: `selectiondag::target_calling::TargetCalling` (a2bcbe44f6).
+- Left for S2 (2026-10-29): m68k runs the mid-end as loop strength reduction only (as `llc`), so `llrm-m68k` loses to gcc by one instruction where gcc peels a loop's first test (`bench/kernels/strlen.ll`, -O2: 45 vs 44) and where it rotates a loop (`gcd.ll`: 17 vs 16, loop rotation belongs to the neutral-LIR task). Owner: whoever takes the full `-O2` pipeline once the legalizer takes `i33` (next entry).
+- Left for S2 (2026-10-29): the shared legalizer cannot expand an `i64` add or subtract on a 32-bit target without a carry operation. The full `-O2` closes the `sum` loop (`bench/kernels/sum.ll` in llrm-m68k) into `i33` arithmetic (`opt -O2`, pin d1106deb71cc, shown here trimmed); `llc` promotes `i33` to `i64` and expands the add to a carry pair (`UADDO_CARRY`, M68k `ADDX`). Ours stops at the add. Repro, any 32-bit target with `n8:16:32`:
+  ```
+  define i32 @k(i32 %n) {
+    %smax = tail call i32 @llvm.smax.i32(i32 %n, i32 1)
+    %0 = zext nneg i32 %smax to i33
+    %1 = add nsw i33 %0, -1
+    %2 = add nsw i32 %smax, -2
+    %3 = zext i32 %2 to i33
+    %4 = mul i33 %1, %3
+    %5 = lshr i33 %4, 1
+    %6 = trunc nuw i33 %5 to i32
+    %7 = add i32 %smax, %6
+    %8 = add i32 %7, -1
+    ret i32 %8
+  }
+  declare i32 @llvm.smax.i32(i32, i32)
+  ```
+  `cargo run -p llrm-m68k --example asm -- FILE k` (with the datalayout line) fails: `Legalize("Unsupported { op: Add, ty: Simple(I64), what: \"expand add or subtract without a carry operation\" }")`. Not an m68k matter: the target marks no carry op, and the legalizer should expand through `UADDO_CARRY`/`ADDC`/`ADDE` as `llc` does. m68k runs LSR only until this lands (`llrm-m68k` `compile::mid_end`).
 
 ## Probe for M3 (2026-10-28)
 - The DAG vocabulary (`MVT`, `ISD`, `TargetLoweringInfo`, `TargetLowering` action tables) lives in `llrm-x86/src/dag`, re-exported by codegen's `selectiondag.rs`. It is generic in shape (`TargetLowering::empty(types)`, `set_operation_action`, ...) with x86 constructors beside it. A non-x86 target must depend on `llrm-x86` for it until it moves to a neutral crate (layout item for S2).
@@ -40,3 +60,42 @@ S1a generator + regen for M68k alone (new files, no x86 file touched) → S1b x8
 - `llrm-dagisel-gen --target crates/target/llrm-m68k/dagisel.toml` decodes the M68k table (6710 items m68000, 6778 m68020); `add` selects ADD32dr, the pin's llc agrees.
 - x86 regen output byte-identical (diff -rq). Stale test for every `crates/target/*/dagisel.toml`.
 - Found: `Hooks` carries x86-only methods (`has_sse_unaligned_mem`, `is_def32`, `check_tc_ret_enough_regs`, ...); every target implements them. S1b: move them into an x86 extension trait or give defaults (dag.rs of llrm-dagisel).
+
+## Pin bug: `a[i]` of a stack array is stored and loaded as `a[0]` (checked 2026-10-29)
+
+Pin d1106deb71cc, `llc -mcpu=M68000`, `-O0` and `-O2` give the same result. Input:
+
+```llvm
+define i32 @f(i32 %i) {
+  %a = alloca [4 x i32], align 4
+  ; four stores of 10, 20, 30, 40 to a[0..3]
+  %q = getelementptr [4 x i32], ptr %a, i32 0, i32 %i
+  %v = load volatile i32, ptr %q
+  ret i32 %v
+}
+```
+
+Output (`-O2`): the four stores to `(0..12,%sp)`, then `move.l (0,%sp), %d0`. `%i` is never read.
+
+Cause: `M68kISelAddressMode::hasIndexReg` is false for a frame-index base
+([L103](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kISelDAGToDAG.cpp#L103),
+it requires `RegBase`), so the matcher accepts an index beside the frame index, and `getFrameIndexAddress`
+([L323](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kISelDAGToDAG.cpp#L323),
+used at [L827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kISelDAGToDAG.cpp#L827))
+returns the displacement and frame index without the index, before the `hasIndexReg` rejection at L832.
+No lit test under `llvm/test/CodeGen/M68k` indexes a stack array. Ours: `match_address_base` in
+`target/llrm-m68k/src/dagisel/addr.rs` (DEVIATE); the run test is `a_local_array_is_a_frame_object` in
+`tests/results.rs`. Whether to report it upstream is the user's call.
+
+## Open: shared code that still assumes little-endian (grep 2026-10-29)
+
+`DagConfig::big_endian` (default false, so x86 is unchanged) covers `trunc (load)`, `srl/and (load)` narrowing
+(`reduce_load_width.rs`) and store-to-load forwarding (`combine_load.rs`). Not yet:
+
+- `legalize_types.rs` `expand_load` / `expand_store` (and the `Mem` offsets of `expand_*` for i64): low half at +0,
+  high at +4. An i64 load on m68k would swap its halves.
+- `combine_store_merge.rs` (L383): merges adjacent stores with the lowest address as the lowest bits.
+- `dag_combiner.rs` L841: a load of the same address read as little-endian when a store is forwarded.
+- Not looked at: `match_rotate.rs`, `bswap_combine.rs` and `combine_funnel.rs` (load-based forms).
+
+Each is a bug on m68k the moment a kernel uses i64 or merged stores; none is hit by the two bench sets.

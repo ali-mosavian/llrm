@@ -241,6 +241,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-analysis",
  "llrm-codegen",
+ "llrm-dagisel",
  "llrm-dwarf",
  "llrm-elf",
  "llrm-env",
@@ -249,6 +250,7 @@ dependencies = [
  "llrm-macho",
  "llrm-mir",
  "llrm-object",
+ "llrm-sdag",
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
@@ -325,6 +327,10 @@ dependencies = [
  "serde",
  "toml",
 ]
+
+[[package]]
+name = "llrm-cgen"
+version = "0.1.0"
 
 [[package]]
 name = "llrm-codegen"
@@ -467,11 +473,15 @@ dependencies = [
 name = "llrm-m68k"
 version = "0.1.0"
 dependencies = [
+ "llrm-analysis",
+ "llrm-cgen",
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-lir",
  "llrm-mir",
+ "llrm-spike-mf",
  "llrm-target",
+ "llrm-transforms",
 ]
 
 [[package]]
@@ -590,6 +600,14 @@ name = "llrm-sdag"
 version = "0.1.0"
 dependencies = [
  "llrm-support",
+]
+
+[[package]]
+name = "llrm-spike-mf"
+version = "0.1.0"
+dependencies = [
+ "llrm-lir",
+ "llrm-mir",
 ]
 
 [[package]]

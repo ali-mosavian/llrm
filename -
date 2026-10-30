@@ -1,0 +1,61 @@
+_fib:
+.Lfib.0:
+	sub sp, sp, #48
+	str x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	str w0, [sp]
+	subs wzr, w0, #1
+	b.gt .Lfib.2
+.Lfib.1:
+	ldr w0, [sp]
+.Lfib.3:
+	ldr x19, [sp, #16]
+	ldp x29, x30, [sp, #32]
+	add sp, sp, #48
+	ret x30
+.Lfib.2:
+	ldr w9, [sp]
+	subs w0, w9, #1
+	bl _fib
+	orr x19, xzr, x0, lsl #0
+	ldr w9, [sp]
+	subs w0, w9, #2
+	bl _fib
+	add w0, w19, w0, lsl #0
+	b .Lfib.3
+_main:
+.Lmain.0:
+	sub sp, sp, #48
+	str x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	stp wzr, wzr, [sp]
+	adrp x9, _.str@PAGE
+	add x19, x9, _.str@PAGEOFF
+.Lmain.1:
+	ldr w9, [sp, #4]
+	subs wzr, w9, #14
+	b.gt .Lmain.4
+.Lmain.2:
+	ldr w0, [sp, #4]
+	bl _fib
+	orr x1, xzr, x0, lsl #0
+	orr x0, xzr, x19, lsl #0
+	bl _printf
+.Lmain.3:
+	ldr w9, [sp, #4]
+	add w9, w9, #1
+	str w9, [sp, #4]
+	b .Lmain.1
+.Lmain.4:
+	adrp x9, _.str.1@PAGE
+	add x0, x9, _.str.1@PAGEOFF
+	bl _printf
+	movz w0, #10, lsl #0
+	bl _fib
+	subs w0, w0, #55
+	ldr x19, [sp, #16]
+	ldp x29, x30, [sp, #32]
+	add sp, sp, #48
+	ret x30
