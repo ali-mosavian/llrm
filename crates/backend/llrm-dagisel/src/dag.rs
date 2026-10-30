@@ -268,6 +268,13 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> bool;
+    /// `AtomicSDNode::getMergedOrdering`, as LLVM's `AtomicOrdering` number
+    /// (monotonic 2, acquire 4, release 5, acq_rel 6, seq_cst 7); none for a
+    /// node that is not atomic.
+    fn atomic_ordering(
+        &self,
+        node: u32,
+    ) -> Option<u8>;
     /// `SDNodeFlags::hasNoUnsignedWrap`.
     fn has_no_unsigned_wrap(
         &self,

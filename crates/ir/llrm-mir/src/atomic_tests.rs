@@ -1,4 +1,4 @@
-use super::{decode, hidden, lowered};
+use super::{decode, hidden, lowered, restored};
 use crate::module::Module;
 use crate::opcode::{AtomicKind, AtomicOrdering, Opcode};
 use crate::parse;
@@ -107,4 +107,19 @@ fn an_x86_exchange_and_a_seq_cst_store_stay_for_the_target_to_select() {
     let mut refused = parse::module(SWAP).unwrap();
     hidden(&mut refused).unwrap();
     assert!(lowered(&mut refused, 32, true, false).unwrap_err().contains("not lowered"));
+}
+
+/// The shadow harness handed the pin's `llc` the hidden calls, so it compared
+/// our `ldar` with its `bl` to a function that does not exist. Restored, the
+/// module prints as it was parsed.
+#[test]
+fn a_restored_module_prints_as_it_was() {
+    let mut module = parse::module(TEXT).unwrap();
+    let before = crate::print::module(&module);
+    hidden(&mut module).unwrap();
+    restored(&mut module).unwrap();
+    assert!(opcodes(&module).iter().filter(|opcode| matches!(opcode, Opcode::Atomic(_))).count() == 2);
+    let after = crate::print::module(&module);
+    assert!(after.contains("load atomic i32, ptr @flag acquire") && after.contains("store atomic i32 %v, ptr @flag release"), "{after}");
+    assert!(!after.contains("call ") && before.contains("load atomic"), "{after}");
 }

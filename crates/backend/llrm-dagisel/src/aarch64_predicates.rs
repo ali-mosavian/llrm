@@ -3,8 +3,8 @@
 //! `AArch64InstrFormats.td` and `TargetSelectionDAG.td`. llrm-dagisel's shared
 //! ones are re-exported.
 //!
-//! DEVIATE: [`never`] stands for a predicate whose query the [`Dag`] lacks (an
-//! atomic ordering, an indexed store, `ComputeNumSignBits`, a memory intrinsic's type, `isWorthFoldingALU`): the
+//! DEVIATE: [`never`] stands for a predicate whose query the [`Dag`] lacks (the
+//! `STSHH` hints, an indexed store, `ComputeNumSignBits`, a memory intrinsic's type, `isWorthFoldingALU`): the
 //! patterns that name it are not selected and the block is refused, never
 //! mis-selected. Reason: loads and stores of the scalar subset need none.
 //! Exit: with the atomics (`FEAT-atomics`).
@@ -19,6 +19,72 @@ type Args<'a, D, H> = (&'a D, &'a H, SDValue);
 
 pub fn never<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
     false
+}
+
+/// `AtomicOrdering` numbers (LLVM's enum), as [`Dag::atomic_ordering`] returns them.
+const MONOTONIC: u8 = 2;
+const ACQUIRE: u8 = 4;
+const RELEASE: u8 = 5;
+const ACQ_REL: u8 = 6;
+const SEQ_CST: u8 = 7;
+
+fn ordering<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> u8 {
+    dag.atomic_ordering(v.node).expect("an atomic predicate on a node that is not atomic")
+}
+
+/// `getMergedOrdering() == Acquire`.
+pub fn atomic_acquire<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    ordering(args) == ACQUIRE
+}
+
+/// `getMergedOrdering() == Monotonic`.
+pub fn atomic_monotonic<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    ordering(args) == MONOTONIC
+}
+
+/// `getMergedOrdering() == Release`.
+pub fn atomic_release<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    ordering(args) == RELEASE
+}
+
+/// `getMergedOrdering() == AcquireRelease`.
+pub fn atomic_acq_rel<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    ordering(args) == ACQ_REL
+}
+
+/// `getMergedOrdering() == SequentiallyConsistent`.
+pub fn atomic_seq_cst<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    ordering(args) == SEQ_CST
+}
+
+/// `isReleaseOrStronger`: release, acq_rel or seq_cst.
+pub fn atomic_release_or_stronger<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    ordering(args) >= RELEASE
+}
+
+/// `!isReleaseOrStronger`.
+pub fn atomic_not_release_or_stronger<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    ordering(args) < RELEASE
+}
+
+/// `!isAcquireOrStronger`: acquire, acq_rel and seq_cst acquire.
+pub fn atomic_not_acquire_or_stronger<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    !matches!(ordering(args), ACQUIRE | ACQ_REL | SEQ_CST)
+}
+
+/// `atomic_load_nonext`: `getExtensionType() == NON_EXTLOAD`.
+pub fn atomic_load_nonext<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
+    dag.load_ext_type(v.node) == Some(crate::dag::LoadExt::NonExt)
+}
+
+/// `atomic_load_zext`: `getExtensionType() == ZEXTLOAD`.
+pub fn atomic_load_zext<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
+    dag.load_ext_type(v.node) == Some(crate::dag::LoadExt::ZExt)
+}
+
+/// `atomic_load_aext`: `getExtensionType() == EXTLOAD`.
+pub fn atomic_load_ext<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
+    dag.load_ext_type(v.node) == Some(crate::dag::LoadExt::Ext)
 }
 
 /// `pre_store`: `getAddressingMode()` is `PRE_INC` or `PRE_DEC`.

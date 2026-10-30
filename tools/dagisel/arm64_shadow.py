@@ -58,7 +58,7 @@ def parse_pin(text):
 def pin(llc, module):
     with tempfile.NamedTemporaryFile("w", suffix=".ll", delete=False) as f:
         f.write(module)
-    out = subprocess.run([llc, "-O2", "-mtriple=arm64-apple-macosx", "-stop-after=finalize-isel", f.name, "-o", "-"],
+    out = subprocess.run([llc, "-O2", "-mtriple=arm64-apple-macosx", "-mcpu=apple-m1", "-stop-after=finalize-isel", f.name, "-o", "-"],
                          capture_output=True, text=True)
     os.unlink(f.name)
     if out.returncode:
