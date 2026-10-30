@@ -17,7 +17,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::pipeline::{reachable_runtime, tool};
+use common::pipeline::{llrm_cc, reachable_runtime, tool};
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::emit::equates;
 use llrm_6502::platform::{Platform, SIM65};
@@ -132,13 +132,6 @@ const KERNELS3: &[Kernel] = &[
     k("hash16", &[P("str", 0)], true, 51393),
     k("dotx", &[P("buf", 0), P("tab", 0), B(8)], false, 101),
 ];
-
-/// The driver, built beside its backend: `cargo build --release --bin llrm-cc --bin llrm-6502-llc`.
-fn llrm_cc() -> PathBuf {
-    std::env::var_os("LLRM_CC")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/release/llrm-cc"))
-}
 
 fn work(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bench").join(name);

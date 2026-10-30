@@ -8,6 +8,8 @@ use std::process::Command;
 
 use llrm_6502::LAYOUT;
 
+mod common;
+
 /// The flags that make clang's msp430 front end match cc65.
 pub const CLANG_FLAGS: [&str; 3] = ["--target=msp430", "-funsigned-char", "-fpack-struct=1"];
 
@@ -66,9 +68,18 @@ fn cc65() -> Vec<(String, u64)> {
 
 /// The same from clang with `flags`.
 fn clang(flags: &[&str]) -> Vec<(String, u64)> {
+    sizes("clang".as_ref(), flags)
+}
+
+/// The same from the front end as llrm-cc runs it for the 6502 row.
+fn llrm_cc() -> Vec<(String, u64)> {
+    sizes(&common::pipeline::llrm_cc(), &["--target=6502-sim65"])
+}
+
+fn sizes(program: &std::path::Path, flags: &[&str]) -> Vec<(String, u64)> {
     let dir = dir();
     std::fs::write(dir.join("probe.c"), PROBE).unwrap();
-    let out = Command::new("clang")
+    let out = Command::new(program)
         .args(flags)
         .args(["-S", "-emit-llvm", "-o", "-", "probe.c"])
         .current_dir(&dir)
@@ -129,11 +140,17 @@ fn cc65_is_the_6502_data_model() {
     }
 }
 
-/// clang with the bench's flags gives cc65's table for everything but
-/// `NOT_COMPARABLE`.
+/// The front end of llrm-cc's 6502 rows gives cc65's table.
+#[test]
+#[ignore = "needs llrm-cc, the pinned clang and cc65"]
+fn the_llrm_cc_rows_front_end_matches_cc65() {
+    assert_eq!(llrm_cc(), cc65());
+}
+
+/// The same flags on bare clang: the control that the probe sees them.
 #[test]
 #[ignore = "needs clang and cc65"]
-fn clang_with_the_bench_flags_matches_cc65() {
+fn clang_with_the_row_flags_matches_cc65() {
     assert_eq!(clang(&CLANG_FLAGS), cc65());
 }
 

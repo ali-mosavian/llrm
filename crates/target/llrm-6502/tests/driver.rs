@@ -64,3 +64,59 @@ fn the_zero_page_override_survives_the_platform_flag() {
     assert_eq!((equates("16"), equates("26")), (16, 26));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// `-Os` holds an inline to the size threshold: a callee of about forty instructions called three times stays
+/// a call, where `-O2` copies it in. The hand corpus and bench tables have no such callee, so their `-Os` rows
+/// equal their `-O2` rows and cannot show whether `-Os` reaches the mid-end.
+#[test]
+fn the_size_level_keeps_a_call_that_speed_inlines() {
+    let ir = module(
+        "@sink = external global [8 x i8]
+define internal i8 @mix(i8 %x, i8 %y) {
+  %a3 = mul i8 %x, 3
+  %a = add i8 %a3, %y
+  %xy = xor i8 %x, %y
+  %b = add i8 %xy, 5
+  %c = sub i8 %a, %b
+  %ab = and i8 %a, %b
+  %cx = xor i8 %c, %x
+  %d = or i8 %ab, %cx
+  %p0 = getelementptr i8, ptr @sink, i16 0
+  store i8 %a, ptr %p0
+  %p1 = getelementptr i8, ptr @sink, i16 1
+  store i8 %b, ptr %p1
+  %p2 = getelementptr i8, ptr @sink, i16 2
+  store i8 %c, ptr %p2
+  %p3 = getelementptr i8, ptr @sink, i16 3
+  store i8 %d, ptr %p3
+  %e = add i8 %a, %d
+  %p4 = getelementptr i8, ptr @sink, i16 4
+  store i8 %e, ptr %p4
+  %f = sub i8 %b, %c
+  %p5 = getelementptr i8, ptr @sink, i16 5
+  store i8 %f, ptr %p5
+  %ad = xor i8 %a, %d
+  %g = add i8 %ad, %x
+  %p6 = getelementptr i8, ptr @sink, i16 6
+  store i8 %g, ptr %p6
+  %bc = or i8 %b, %c
+  %h = sub i8 %bc, %y
+  %p7 = getelementptr i8, ptr @sink, i16 7
+  store i8 %h, ptr %p7
+  %s1 = add i8 %a, %b
+  %s2 = add i8 %s1, %c
+  %s3 = add i8 %s2, %d
+  ret i8 %s3
+}
+define i8 @f(i8 %p, i8 %q) {
+  %m1 = call i8 @mix(i8 %p, i8 %q)
+  %m2 = call i8 @mix(i8 %q, i8 %p)
+  %m3 = call i8 @mix(i8 %p, i8 9)
+  %r1 = add i8 %m1, %m2
+  %r2 = add i8 %r1, %m3
+  ret i8 %r2
+}",
+    );
+    let calls = |level| assembly(&ir, &Request::new(level)).unwrap().matches("jsr mix").count();
+    assert_eq!((calls(Level::O2), calls(Level::Os)), (0, 3));
+}

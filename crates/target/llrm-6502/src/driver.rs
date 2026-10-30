@@ -109,6 +109,7 @@ fn program(
     }
     let mut program = Program::new(vec![module], Rc::new(llrm_mir::target::Neutral))?;
     if request.level != Level::O0 {
+        let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
         // Bytes over speed on an 8-bit target: no unrolling (the stand-in for the
         // target's override-table entry).
@@ -117,7 +118,7 @@ fn program(
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
-        llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump: None })?;
+        llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
         program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
     }
     Ok(program)

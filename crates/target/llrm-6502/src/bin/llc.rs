@@ -48,6 +48,10 @@ fn run() -> i32 {
     if let Some(bytes) = std::env::var("LLRM_6502_ZERO_PAGE").ok().and_then(|n| n.parse().ok()) {
         request.platform.zero_page = bytes;
     }
+    // the test profile: check every spill-slot sharing, panic on a wrong one
+    if std::env::var_os("LLRM_6502_VERIFY_SLOTS").is_some() {
+        llrm_spike_mf::spill::VERIFY_SLOTS.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let Some(input) = input else {
         eprintln!("usage: llrm-6502-llc [-S] [-O<n>] [--platform=NAME] [--cpu=6502|65c02] [-o OUT] FILE.ll");
         return 2;

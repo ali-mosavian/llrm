@@ -16,13 +16,9 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::pipeline::{datalayout, reachable_runtime, sanitize, tool};
-use llrm_6502::alloc::Tuning;
-use llrm_6502::dagisel::function::select_function;
-use llrm_6502::dagisel::hooks::Cpu;
+use common::pipeline::{llrm_cc, reachable_runtime, tool};
 use llrm_6502::emit::equates;
 use llrm_6502::platform::{Platform, SIM65};
-use llrm_6502::select::module_text;
 
 struct Rng(u64);
 
@@ -606,105 +602,36 @@ fn ours(
     optimize: bool,
 ) -> Result<Option<i32>, String> {
     std::fs::write(dir.join("o.c"), source).unwrap();
-    tool(
-        dir,
-        "clang",
-        &[
-            "--target=msp430",
-            "-funsigned-char",
-            "-fpack-struct=1",
-            "-O2",
-            "-Xclang",
-            "-disable-llvm-passes",
-            "-S",
-            "-emit-llvm",
-            "-fno-unwind-tables",
-            "-o",
-            "raw.ll",
-            "o.c",
-        ],
-    )?;
-    let raw: String = std::fs::read_to_string(dir.join("raw.ll"))
-        .unwrap()
-        .lines()
-        .filter(|l| !l.starts_with("target triple"))
-        .map(|l| {
-            if l.starts_with("target datalayout") {
-                format!("target datalayout = \"{}\"", datalayout())
-            } else {
-                l.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    std::fs::write(dir.join("raw.ll"), raw).unwrap();
-    let inline = match std::env::var("DIFF_INLINE") {
-        Ok(threshold) => format!("-inline-threshold={threshold}"),
-        Err(_) if size_level(seed) => "-inline-threshold=25".to_string(),
-        Err(_) => "-inline-threshold=225".to_string(),
-    };
-    if !optimize {
-        std::fs::copy(dir.join("raw.ll"), dir.join("k.ll")).unwrap();
+    // llrm-cc: clang's msp430 front end, llrm's mid-end (no unrolling) and our backend, to ca65 text; the size
+    // level is `-Os`, the unoptimized run `-O0`
+    let level = if !optimize {
+        "-O0"
+    } else if size_level(seed) {
+        "-Os"
     } else {
-        tool(
-            dir,
-            "/usr/lib/llvm-20/bin/opt",
-            &[
-                "-O2",
-                &inline,
-                "-unroll-threshold=0",
-                "-unroll-full-max-count=0",
-                "-vectorize-loops=false",
-                "-vectorize-slp=false",
-                "-S",
-                "raw.ll",
-                "-o",
-                "k.ll",
-            ],
-        )?;
-    }
-    let mut text = sanitize(&std::fs::read_to_string(dir.join("k.ll")).unwrap());
-    if std::env::var("DIFF_NOLIFETIME").is_ok() {
-        text = text.lines().filter(|l| !l.contains("llvm.lifetime")).collect::<Vec<_>>().join("\n");
-    }
-    llrm_spike_mf::spill::VERIFY_SLOTS
-        .store(std::env::var("DIFF_NOVERIFY").is_err(), std::sync::atomic::Ordering::Relaxed);
-    let mut module =
-        llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e:?}").chars().take(120).collect::<String>())?;
-    llrm_6502::prepare::split_phi_edges(&mut module);
+        "-O2"
+    };
+    let verify = std::env::var_os("DIFF_NOVERIFY").is_none();
     let platform = Platform::parse(SIM65).unwrap();
-    let mut asm = String::new();
-    let names: Vec<String> =
-        std::iter::once("test".to_owned()).chain((0..4).map(|n| format!("h{n}"))).chain(["bump".to_owned()]).collect();
-    let defined: Vec<&String> = names
-        .iter()
-        .filter(|n| module.named(n).is_some_and(|id| module.global(id).function().is_some_and(|f| !f.is_declaration())))
-        .collect();
+    let mut cc = Command::new(llrm_cc());
+    cc.current_dir(dir).args(["--target=6502-sim65", level, "-S", "-o", "o.s", "o.c"]);
+    if verify {
+        cc.env("LLRM_6502_VERIFY_SLOTS", "1");
+    }
     if std::env::var("DIFF_TRACE").is_ok() {
-        eprintln!("trace: seed {seed}: compiling {defined:?}");
+        eprintln!("trace: seed {seed}: llrm-cc {level}");
     }
-    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut selections = Vec::new();
-        for name in &defined {
-            let mut selection = select_function(&module, name, Cpu::Mos6502)?;
-            selection.zero_page = platform.zero_page;
-            if size_level(seed) {
-                selection.tuning = Tuning::SIZE;
-            }
-            selections.push(selection);
-        }
-        let parts: Vec<(&str, &_)> = defined.iter().map(|n| n.as_str()).zip(&selections).collect();
-        module_text(&module, &parts)
-    }));
-    match compiled {
-        Ok(Ok(code)) => asm.push_str(&code.concat()),
-        Ok(Err(why)) => return Err(format!("ours: {}", why.chars().take(160).collect::<String>())),
-        Err(_) => return Err("ours: panic".to_owned()),
+    let made = cc.output().map_err(|e| format!("llrm-cc: {e}"))?;
+    if !made.status.success() {
+        let said = String::from_utf8_lossy(&made.stderr);
+        let line = said.lines().find(|l| l.contains("rror") || l.contains("panick")).or_else(|| said.lines().next());
+        return Err(format!("ours: {}", line.unwrap_or("llrm-cc failed").chars().take(160).collect::<String>()));
     }
+    let asm = std::fs::read_to_string(dir.join("o.s")).unwrap();
     let runtime = reachable_runtime(&asm);
     std::fs::write(
         dir.join("f.s"),
-        format!("{}.import buf\n.import tab\n.import zero\n{asm}{runtime}", equates(&platform)),
+        format!(".import buf\n.import tab\n.import zero\n{asm}{runtime}"),
     )
     .unwrap();
     let driver = format!(

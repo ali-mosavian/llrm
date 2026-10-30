@@ -159,3 +159,10 @@ pub fn tool(
         Err(format!("{program}: {line}"))
     }
 }
+
+/// The driver, built beside its backend: `cargo build --release --bin llrm-cc --bin llrm-6502-llc`.
+pub fn llrm_cc() -> std::path::PathBuf {
+    std::env::var_os("LLRM_CC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/release/llrm-cc"))
+}
