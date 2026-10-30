@@ -33,9 +33,9 @@
 //!    bound, which LFTR left.
 //! 5. `exitsink::sunk`: final updates only exit phis read move to the exits;
 //!    `sinkinvariants::sunk` (`sinkUnusedInvariants`): preheader values the
-//!    loop never reads move to its exit block.
-//!    `firstiterexit::rewritten` (`rewriteFirstIterationLoopExitValues`): an
-//!    exit on a loop-invariant condition reads a header phi's preheader value.
+//!    loop never reads move to its exit block. `firstiterexit::rewritten`
+//!    (`rewriteFirstIterationLoopExitValues`): an exit on a loop-invariant
+//!    condition reads a header phi's preheader value.
 //!
 //! # Example
 //! Step 1, the widening, on `for (unsigned short i = 0; i < n; ++i) a[i] = 1`
