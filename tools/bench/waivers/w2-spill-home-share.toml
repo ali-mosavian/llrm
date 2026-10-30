@@ -1,0 +1,32 @@
+reason = "TEMPORARY trade-off (owner w2; oversight ruled 2026-10-30). Siblings of a one-value original share one spill home (pin InlineSpiller.cpp#L1466): the frame shrinks and 30 m16 rows improve, but nib `_sort`/bintree reload the shared base per access. Removal: the pointer-twin PR landing, or fix rows 3-4 within 3 days; no row may pass its measured count."
+exception = true
+
+# tip = 65098fd950; main = 854bb7efc4. Rows 1-2 stay in parity-vs-main-2026-10-29.toml at their old limit.
+[[row]]
+label = "quicksort nib -O2"
+counter = "instructions"
+tip = 203188
+main = 164290
+to = 205231
+
+[[row]]
+label = "bintree nib -O2"
+counter = "memory_operands"
+tip = 18833
+main = 12727
+to = 18978
+
+# New against the tip; this one is better than main (416).
+[[row]]
+label = "quicksort nib -O2"
+counter = "code_bytes"
+tip = 354
+main = 416
+to = 363
+
+# Worse than the tip by 145, not comparable to main (unmeasured); fill `main` from w6's frozen baseline.
+[[row]]
+label = "bintree nib -O2"
+counter = "instructions"
+tip = 70145
+to = 70290

@@ -1252,8 +1252,10 @@ fn an_i64_udiv_by_a_constant_is_inline_at_speed_and_a_call_at_size() {
             .filter(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call))
             .count()
     };
-    assert_eq!(calls(false), 0, "speed: multiplied by the magic number");
-    assert_eq!(calls(true), 1, "-Os: the divide routine");
+    llrm_x86_m16::with_pin_tuning(|| {
+        assert_eq!(calls(false), 0, "speed: multiplied by the magic number");
+        assert_eq!(calls(true), 1, "-Os: the divide routine");
+    });
 }
 
 /// An indirect call with no stack arguments said nothing of what its callee
