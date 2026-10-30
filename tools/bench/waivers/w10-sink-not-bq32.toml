@@ -5,54 +5,6 @@ exception = true
 # jpeg_fixed/jpeg_single bq32 -Os code_bytes are above old-main: named post-merge rows of w10, deadline 2026-11-06.
 
 [[row]]
-label = "jpeg_fixed bq32 -O2"
-counter = "instructions"
-old_main = 83887581
-tip = 76025599
-main = 76025599
-to = 76025604
-
-[[row]]
-label = "jpeg_fixed bq32 -Os"
-counter = "instructions"
-old_main = 87566477
-tip = 85146591
-main = 85146591
-to = 85146593
-
-[[row]]
-label = "jpeg_fixed bq32 -Os"
-counter = "code_bytes"
-old_main = 6008
-tip = 6364
-main = 6364
-to = 6376
-
-[[row]]
-label = "jpeg_single bq32 -O2"
-counter = "instructions"
-old_main = 61569936
-tip = 55380125
-main = 55380125
-to = 55380126
-
-[[row]]
-label = "jpeg_single bq32 -Os"
-counter = "code_bytes"
-old_main = 5811
-tip = 6207
-main = 6207
-to = 6219
-
-[[row]]
-label = "scroll bq32 -Os"
-counter = "instructions"
-old_main = 58319
-tip = 55167
-main = 55167
-to = 55168
-
-[[row]]
 label = "sieve bq32 -O2"
 counter = "instructions"
 old_main = 22781
@@ -60,26 +12,3 @@ tip = 15616
 main = 15616
 to = 15617
 
-[[row]]
-label = "stft_fixed bq32 -O2"
-counter = "instructions"
-old_main = 100030197
-tip = 94357645
-main = 94357645
-to = 94357651
-
-[[row]]
-label = "stft_single bq32 -O2"
-counter = "instructions"
-old_main = 71255906
-tip = 70159752
-main = 70159752
-to = 70159754
-
-[[row]]
-label = "stft_single bq32 -Os"
-counter = "instructions"
-old_main = 71586013
-tip = 69845981
-main = 69845981
-to = 69845983

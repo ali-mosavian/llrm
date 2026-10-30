@@ -8,49 +8,8 @@ main = 21243
 to = 21246
 
 [[row]]
-label = "jpeg_fixed bq32 -O2"
-counter = "instructions"
-main = 76025599
-to = 76026782
-
-[[row]]
-label = "jpeg_fixed bq32 -Os"
-counter = "instructions"
-main = 85146591
-to = 85146593
-
-[[row]]
-label = "jpeg_single bq32 -O2"
-counter = "instructions"
-main = 55380125
-to = 55381302
-
-[[row]]
-label = "jpeg_single bq32 -Os"
-counter = "instructions"
-main = 58829578
-to = 58829580
-
-[[row]]
 label = "sieve bq32 -O2"
 counter = "instructions"
 main = 15616
 to = 15617
 
-[[row]]
-label = "stft_fixed bq32 -O2"
-counter = "instructions"
-main = 94357645
-to = 94357646
-
-[[row]]
-label = "stft_single bq32 -O2"
-counter = "instructions"
-main = 70159752
-to = 70159753
-
-[[row]]
-label = "stft_single bq32 -Os"
-counter = "instructions"
-main = 69845981
-to = 69845982
