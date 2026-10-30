@@ -26,6 +26,9 @@ struct Target {
     /// Symbols the target's hand code names (`ISD::ATOMIC_CMP_SWAP`,
     /// `M68k::PC`).
     extra_symbols: Vec<String>,
+    /// Registers the target's hand code maps by name (`X0`), without `ns`;
+    /// written as `reg::REGISTERS`.
+    registers: Vec<String>,
 }
 
 fn strings(
@@ -55,6 +58,7 @@ impl Target {
             cpus: strings(table, "cpus")?,
             hw_modes: strings(table, "hw_modes")?,
             extra_symbols: strings(table, "extra_symbols")?,
+            registers: strings(table, "registers")?,
         };
         // The name prefixes the generated modules (`<name>_<cpu>`).
         let mut chars = target.name.chars();
@@ -139,7 +143,10 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         modules.push_str(&format!("pub mod {module};\n"));
         eprintln!("{cpu_name}: {} items, {} operand entries", flat.items.len(), flat.operands.len());
     }
-    write("ids.rs", ids_rs::render_target(&ids, &target.isd, &target.ns, &instructions, &target.extra_symbols))?;
+    write(
+        "ids.rs",
+        ids_rs::render_target(&ids, &target.isd, &target.ns, &instructions, &target.extra_symbols, &target.registers)?,
+    )?;
     write("instrinfo.rs", emit::render_instr_info(inputs.instrinfo, &ids, &emitted, &style)?)?;
     write("mod.rs", modules)
 }

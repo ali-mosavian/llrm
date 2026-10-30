@@ -46,6 +46,13 @@ pub struct Out {
     pub ext: Ext,
     /// `ArgFlags.isPointer()`.
     pub pointer: bool,
+    /// `OutputArg::ArgVT`: the type of the whole value this is a part of.
+    pub arg_vt: EVT,
+    /// `ArgFlags.isSplit()`: one of several parts of a value.
+    pub split: bool,
+    /// The argument is one of a call's variadic ones
+    /// (`CallLoweringInfo::IsVarArg` past `NumFixedArgs`).
+    pub variadic: bool,
 }
 
 /// An `ISD::InputArg`: a part of a formal argument or of a call's result.
@@ -53,6 +60,10 @@ pub struct Out {
 pub struct In {
     pub vt: EVT,
     pub pointer: bool,
+    /// `InputArg::ArgVT`: the type of the whole value this is a part of.
+    pub arg_vt: EVT,
+    /// `ArgFlags.isSplit()`.
+    pub split: bool,
 }
 
 /// `MachineFrameInfo::CreateFixedObject`: size, offset from the first
@@ -62,7 +73,27 @@ pub type FixedObject<'a> = &'a mut dyn FnMut(u32, i64, bool) -> i32;
 /// A live-in register: the virtual register the function receives `reg` in.
 pub type LiveIn<'a> = &'a mut dyn FnMut(RegId) -> u32;
 
+/// Where a [`TargetCalling::accepts`] question comes from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Site {
+    Arguments,
+    Call,
+    Return,
+}
+
 pub trait TargetCalling: Debug + Sync {
+    /// Whether the target places these parts (`outs` the values sent, `ins` the
+    /// values received); the builder refuses with the reason when it does not.
+    fn accepts(
+        &self,
+        _dag: &SelectionDAG,
+        _site: Site,
+        _outs: &[Out],
+        _ins: &[In],
+    ) -> Result<(), &'static str> {
+        Ok(())
+    }
+
     /// `LowerCall`: the call sequence and the call; returns the chain and the
     /// result parts.
     fn lower_call(

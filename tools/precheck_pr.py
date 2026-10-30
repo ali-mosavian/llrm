@@ -13,6 +13,7 @@ stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `ne
 3. no added line, commit message, title or description names the assistant, and no added line names the assistant's config directory;
 4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean;
 5. the changed .rs files are formatted (tools/fmt.sh);
+5b. no file under crates, runtime or tools is ignored by git (build caches excepted): a bare `target` ignore hid crates/target/**;
 6. a PR that adds a pass slot (registry entry or phase-table row) adds a test at pipeline level;
 7. the root scanners (tests that read sources and docs; the landing layer runs them on every batch) have no failure the tip does not have, and
    `tools/docs/docsbuild/build.py --check` finds no generated page stale that the tip has not (seconds);
@@ -104,6 +105,18 @@ def config_dir_paths(
         elif line.startswith("+") and CONFIG_DIR.search(line):
             return [f"{path}: an added line names the assistant's config directory: {line[1:80].strip()}"]
     return []
+
+
+# Build and tool caches that are ignored on purpose; anything else ignored under the source trees is a source the branch never committed.
+IGNORED_OK = re.compile(r"(?:^|/)(?:__pycache__|\.pytest_cache|\.ruff_cache|\.mypy_cache|\.venv)(?:/|$)")
+
+
+def ignored_sources(root: Path) -> list[str]:
+    """Files under crates, runtime and tools that git ignores: a bare `target` line in .gitignore hid crates/target/**, so a PR added sources the
+    runner's clean checkout never had and the build failed there (and locally everything passed)."""
+    listed = git("ls-files", "--others", "--ignored", "--exclude-standard", "--", "crates", "runtime", "tools", cwd=root).splitlines()
+    hidden = [path for path in listed if not IGNORED_OK.search(path)]
+    return [f"{path}: git ignores this file under a source tree; the runner's checkout will not have it (fix .gitignore or `git add -f`)" for path in hidden[:5]]
 
 
 SLOT_ADDED = re.compile(r'^\+\s*(?:entry|partial)\("[\w-]+@\d+"|^\+\s*\("[A-Z]\w+", "[\w]+@\d+"\)')
@@ -279,6 +292,7 @@ def precheck(
     why += [f"{path}: tools/fmt.sh would change it; run tools/fmt.sh (the runner formats an unformatted PR with a commit on your branch, which races with your pushes)" for path in sorted(parity_squash.fmt_differs(root, files))]
     why += slot_without_pipeline_test(root, base)
     why += config_dir_paths(root, base)
+    why += ignored_sources(root)
     packages = changed_packages(root, files)
     why += warning_failures(root, packages, run, dict(os.environ))
     why += lib_failures(root, packages, files, base, run, on_base)

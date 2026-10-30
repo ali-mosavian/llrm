@@ -226,3 +226,18 @@ def test_a_branch_that_leaves_a_generated_page_stale_is_told_before_it_is_marked
     assert len(out) == 1 and "docs/a.md" in out[0] and "docs/b.md" not in out[0] and "build.py --sync" in out[0]
     assert pc.docs_failures(tmp_path, docs=lambda root: {"docs/b.md"}, docs_on_base=lambda: {"docs/b.md"}) == [], "a page the tip has stale is not the branch's"
     assert pc.docs_failures(tmp_path, docs=lambda root: set()) == []
+
+
+def test_a_source_hidden_by_a_bare_target_ignore_fails_the_check_and_an_anchored_one_passes(tmp_path):
+    """A bare `target` line in .gitignore hid crates/target/**: the new file built locally and was missing in the runner's checkout. A root `/target` hides only the build dir."""
+    repo = tmp_path / "r"
+    (repo / "crates" / "target" / "x").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".gitignore").write_text("target\n")
+    (repo / "crates" / "target" / "x" / "new.rs").write_text("fn f() {}\n")
+    (repo / "crates" / "__pycache__").mkdir()
+    (repo / "crates" / "__pycache__" / "a.pyc").write_text("x")
+    found = pc.ignored_sources(repo)
+    assert len(found) == 1 and found[0].startswith("crates/target/x/new.rs: git ignores"), found
+    (repo / ".gitignore").write_text("/target\n__pycache__\n")
+    assert pc.ignored_sources(repo) == []
