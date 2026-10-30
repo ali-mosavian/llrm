@@ -7,10 +7,12 @@
 //! # How it works
 //! One run is these steps.
 //!
-//! 0. `exitvalues::rewritten`: a value read after a loop becomes an expression
-//!    of the loop's count where the loop is left (`rewriteLoopExitValues`,
-//!    ScalarEvolution's exit values, from every exit of the loop, a rotated
-//!    loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
+//! 0. `floativ::rewritten` (`rewriteNonIntegerIVs`): a float counter with whole
+//!    bounds becomes an `i32` one. `exitvalues::rewritten`: a value read after
+//!    a loop becomes an expression of the loop's count where the loop is left
+//!    (`rewriteLoopExitValues`, ScalarEvolution's exit values, from every exit
+//!    of the loop, a rotated loop's latch included); `LLRM_NO_SCEV_EXITVALUES`
+//!    turns it off.
 //! 1. `simplifyindvar::simplified_and_extended` (`simplifyAndExtend`): the IV
 //!    users simplified and a counter read through `zext` or `sext` at a wider
 //!    index becomes a counter of that width (`WidenIV`). C's `unsigned short i`
@@ -29,7 +31,11 @@
 //!    `exitne::strengthened` (beyond the pin; `LLRM_NO_SCEV_EXITNE`) then makes
 //!    `!=` the strict compare of a unit-stride counter that never passes its
 //!    bound, which LFTR left.
-//! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
+//! 5. `exitsink::sunk`: final updates only exit phis read move to the exits;
+//!    `sinkinvariants::sunk` (`sinkUnusedInvariants`): preheader values the
+//!    loop never reads move to its exit block. `firstiterexit::rewritten`
+//!    (`rewriteFirstIterationLoopExitValues`): an exit on a loop-invariant
+//!    condition reads a header phi's preheader value.
 //!
 //! # Example
 //! Step 1, the widening, on `for (unsigned short i = 0; i < n; ++i) a[i] = 1`
@@ -239,6 +245,14 @@ impl FunctionPass for IndVars {
         session.adopt(held.take());
         let mut mark = unit.function.mark();
         let start = mark;
+        // `rewriteNonIntegerIVs`, the pin's first step: a float counter is an
+        // integer one before the expressions are worked out.
+        let floats = {
+            let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
+            let loops = cfg::natural(unit.function, &found);
+            let changed = crate::floativ::rewritten(unit.context, outer.callees(), unit.function, &loops);
+            settled(&mut session, &mut mark, unit, &outer, changed, false)
+        };
         let compared = crate::simplifyindvar::simplified_and_extended_in(
             &mut session,
             unit.context,
@@ -312,19 +326,34 @@ impl FunctionPass for IndVars {
         let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
         let loops = cfg::natural(unit.function, &found);
         let sunk = crate::exitsink::sunk(unit.function, &loops);
+        // `sinkUnusedInvariants`, the pin's last step but one.
+        let sunk_invariants = crate::sinkinvariants::sunk(unit.context, outer.callees(), unit.function, &loops);
+        // `rewriteFirstIterationLoopExitValues`, the last.
+        let tree = analyses.get::<passes::Dominators>(unit.context, unit.layout, unit.function);
+        let first_trip = crate::firstiterexit::rewritten(unit.function, &loops, &tree);
         // The pin deletes what an edit stopped reading as it goes; a sweep of
         // the function (0.8 M Ir on d_faces' largest body) found the same.
-        let dead =
-            (compared || rewrote || canonical || strengthened || optimized || predicated || tested || sunk || merged)
-                && {
-                    match unit.function.touched_since(start) {
-                        Some(touched) => {
-                            let seeds: Vec<_> = touched.named.iter().collect();
-                            dead::dead_from(unit.context, outer.callees(), unit.function, seeds)
-                        }
-                        None => dead::dead(unit.context, outer.callees(), unit.function),
+        let dead = (floats
+            || compared
+            || rewrote
+            || canonical
+            || strengthened
+            || optimized
+            || predicated
+            || tested
+            || sunk
+            || sunk_invariants
+            || first_trip
+            || merged)
+            && {
+                match unit.function.touched_since(start) {
+                    Some(touched) => {
+                        let seeds: Vec<_> = touched.named.iter().collect();
+                        dead::dead_from(unit.context, outer.callees(), unit.function, seeds)
                     }
-                };
+                    None => dead::dead(unit.context, outer.callees(), unit.function),
+                }
+            };
         // The edits after the last step (lftr, the sinking, the dead code).
         // The sinking moves instructions no count reads, LFTR keeps the exit
         // count it was built from and the dead code is values
@@ -341,7 +370,20 @@ impl FunctionPass for IndVars {
             true,
         );
         held.put(session.into_scev());
-        if compared || rewrote || canonical || optimized || predicated || tested || sunk || merged || dead {
+        if floats
+            || compared
+            || rewrote
+            || canonical
+            || strengthened
+            || optimized
+            || predicated
+            || tested
+            || sunk
+            || sunk_invariants
+            || first_trip
+            || merged
+            || dead
+        {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>().preserve::<Scevs>()
         } else {

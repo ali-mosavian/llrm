@@ -42,7 +42,7 @@ use llrm_analysis::scev::expr::{Kind as ScevKind, Scev, Ty, Type, Use as ScevUse
 use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{BlockId, InstId, Operand};
-use llrm_mir::opcode::{IntPredicate, Opcode};
+use llrm_mir::opcode::{AtomicKind, IntPredicate, Opcode};
 use llrm_mir::tti::Tti;
 use llrm_mir::types::Type as MirType;
 use llrm_support::hash::{HashMap, HashSet, IndexSet};
@@ -298,6 +298,13 @@ pub fn is_address_use(
     match &instruction.opcode {
         Opcode::Load { .. } => true,
         Opcode::Store { .. } => instruction.operands[1] == operand,
+        // `LoadInst`, `StoreInst`, `AtomicRMWInst` and `AtomicCmpXchgInst` in
+        // LLVM.
+        Opcode::Atomic(info) => match info.kind {
+            AtomicKind::Load | AtomicKind::Rmw(_) | AtomicKind::CmpXchg { .. } => instruction.operands[0] == operand,
+            AtomicKind::Store => instruction.operands[1] == operand,
+            AtomicKind::Fence => false,
+        },
         Opcode::Call(_) => {
             let Some(name) = intrinsic_name(cx, inst) else { return false };
             let arg = |at: usize| instruction.operands.get(at) == Some(&operand);
@@ -351,6 +358,23 @@ pub fn get_access_type(
             access.mem_ty = cx.function.operand_type(cx.context, instruction.operands[0]);
             if let Some(space) =
                 cx.function.operand_type(cx.context, instruction.operands[1]).and_then(|t| address_space(cx, t))
+            {
+                access.addr_space = space;
+            }
+        }
+        Opcode::Atomic(info) if info.kind != AtomicKind::Fence => {
+            // `getAccessType`: the type read or written, and the pointer's
+            // space.
+            let (value, pointer) = match info.kind {
+                AtomicKind::Load => (None, 0),
+                AtomicKind::Store => (Some(0), 1),
+                AtomicKind::Rmw(_) => (Some(1), 0),
+                _ => (Some(2), 0),
+            };
+            access.mem_ty =
+                value.map_or(Some(instruction.ty), |at| cx.function.operand_type(cx.context, instruction.operands[at]));
+            if let Some(space) =
+                cx.function.operand_type(cx.context, instruction.operands[pointer]).and_then(|t| address_space(cx, t))
             {
                 access.addr_space = space;
             }

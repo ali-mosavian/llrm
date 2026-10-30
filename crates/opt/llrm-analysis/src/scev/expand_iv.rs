@@ -145,9 +145,6 @@ impl Run<'_> {
         ops: &[Use],
         header: BlockId,
     ) -> Operand {
-        if !self.x.canonical_mode || ops.len() > 2 {
-            return self.expand_add_rec_literally(s);
-        }
         let ty = {
             let cx = cx!(self);
             let own = self.se.type_of(s);
@@ -157,6 +154,11 @@ impl Run<'_> {
             let cx = cx!(self);
             self.se.get_type_size_in_bits(&cx, ty)
         };
+        // DEVIATE LU6: an odd width is written over the loop's wider phi.
+        let odd = !self.x.canonical_mode && self.x.widen_odd_width && !ty_bits.is_power_of_two();
+        if (!self.x.canonical_mode && !odd) || ops.len() > 2 {
+            return self.expand_add_rec_literally(s);
+        }
         // An existing canonical IV of a suitable type.
         let mut canonical = self
             .canonical_induction_variable(header)
@@ -184,7 +186,9 @@ impl Run<'_> {
                     let cx = cx!(self);
                     self.se.get_add_rec_expr(&cx, new_ops, header, Flags { expr: nw, use_: 0 }).scev
                 };
+                let canonical_mode = std::mem::replace(&mut self.x.canonical_mode, true);
                 let v = self.expand(wide);
+                self.x.canonical_mode = canonical_mode;
                 let here = self.x.insert_point.expect("an insert point");
                 let at = match self.instruction_of(v) {
                     Some(inst) => self.find_insert_point_after(inst, here),
@@ -200,6 +204,10 @@ impl Run<'_> {
                 };
                 return self.expand_at(narrow, at);
             }
+        }
+        // No wider phi to write it over: its own, as the pin does.
+        if odd {
+            return self.expand_add_rec_literally(s);
         }
         // If `s` is expanded outside the loop, a matching LCSSA phi may do.
         if let Some(v) = self.try_to_reuse_lcssa_phi(s, header) {

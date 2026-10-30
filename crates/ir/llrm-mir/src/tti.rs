@@ -677,6 +677,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LU6: whether LSR's expander writes an add-recurrence of a
+    /// width that is no power of two (the `i6` of `(y + 61) & 63`) from the
+    /// loop's wider `{0,+,1}` phi, as `SCEVExpander` does in canonical mode,
+    /// instead of making a phi of that width.
+    fn lsr_widens_odd_width_induction(&self) -> bool {
+        false
+    }
+
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.
     fn can_macro_fuse_cmp(&self) -> bool {
         false
