@@ -42,6 +42,8 @@ def driver(text: str) -> str:
     """The driver C: each callee prints its name and returns a value of its arguments, `g` (one or two ints) runs over the inputs."""
     names = callees(text)
     signature = re.search(r"\b(void|int)\s+g\(([^)]*)\)", text)
+    if signature is None:
+        raise ValueError("no g")
     returns_int, two = signature[1] == "int", "," in signature[2]
     arity = {n: params for n, params in re.findall(r"\b(?:void|int)\s+([a-z]\w*)\(([^)]*)\)", text)}
 
@@ -106,6 +108,8 @@ def verdict(setup: Setup, text: str) -> tuple[str, str, str]:
     work = Path(tempfile.mkdtemp(prefix="difftest-exec-"))
     try:
         ours, ref = trace(setup, text, "ours", work), trace(setup, text, "ref", work)
+    except ValueError as why:  # a cut of the reducer removed `g`
+        return "broken", f"FAIL {why}", f"FAIL {why}"
     finally:
         shutil.rmtree(work, ignore_errors=True)
     if ours.startswith("FAIL") or ref.startswith("FAIL"):
@@ -118,6 +122,8 @@ def defined(setup: Setup, text: str) -> bool:
     work = Path(tempfile.mkdtemp(prefix="difftest-exec-"))
     try:
         low, high = trace(setup, text, "ref", work, "O0"), trace(setup, text, "ref", work, "O2")
+    except ValueError:
+        return False
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return not low.startswith("FAIL") and low == high
