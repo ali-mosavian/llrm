@@ -9,7 +9,7 @@ fn load(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile, base: MemBase::Stack(1), ext: None, space: 0 };
+    let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile, base: MemBase::Stack(1), ext: None, space: 0, ordering: None };
     dag.get_load(EVT::I8, chain, ptr, info)
 }
 
@@ -64,7 +64,7 @@ fn the_chain_of_the_old_load_moves_to_the_extending_load() {
     let wide = dag.get_node(ISD::ZeroExtend, EVT::I32, &[byte]);
     let chain = SDValue { node: byte.node, res: 1 };
     let ptr = dag.get_register(EVT::I32, 8);
-    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(2), ext: None, space: 0 };
+    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(2), ext: None, space: 0, ordering: None };
     let store = dag.get_store(chain, wide, ptr, info);
     dag.set_root(store);
     combine(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes);
@@ -87,7 +87,7 @@ fn shared(
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut dag = dag();
     let (ptr, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
-    let info = MemInfo { mem_vt: EVT::I16, align: 2, volatile: false, base: MemBase::Stack(1), ext: None, space };
+    let info = MemInfo { mem_vt: EVT::I16, align: 2, volatile: false, base: MemBase::Stack(1), ext: None, space, ordering: None };
     let word = dag.get_load(EVT::I16, chain, ptr, info);
     let wide = dag.get_node(op, EVT::I32, &[word]);
     let five = dag.get_constant(5, EVT::I16);
