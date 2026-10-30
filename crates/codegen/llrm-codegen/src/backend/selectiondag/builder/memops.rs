@@ -1101,7 +1101,7 @@ impl Builder<'_> {
         }
         let root = self.memory_root();
         let (cx, di, _) = self.string_registers();
-        let acc = self.arch.register_named(if block == 2 { "ax" } else { "eax" });
+        let acc = self.accumulator(u64::from(block));
         let count = self.dag.get_zext_or_trunc(count, pointer);
         let copy = self.dag.get_copy_to_phys_reg(root, acc, value, None);
         let mut glue = SDValue { node: copy.node, res: 1 };
@@ -1184,6 +1184,21 @@ impl Builder<'_> {
         let extends = [ISD::AnyExtend; 3];
         let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
         Ok(self.dag.get_root())
+    }
+
+    /// The accumulator a string operation of `block`-byte cells stores from:
+    /// `al`, `ax`, `eax`, and `rax` for a quadword cell.
+    fn accumulator(
+        &self,
+        block: u64,
+    ) -> llrm_lir::registers::RegId {
+        let name = match block {
+            1 => "al",
+            2 => "ax",
+            _ => "eax",
+        };
+        // `RAX` for a quadword block: the dword's name widened (`rax`).
+        self.arch.register_named(&if block == 8 { format!("r{}", &name[1..]) } else { name.to_owned() })
     }
 
     /// The count, destination and source registers of a string operation.
@@ -1362,13 +1377,7 @@ impl Builder<'_> {
             (1, size, value)
         };
         let _ = &mut val;
-        let name = match block {
-            1 => "al",
-            2 => "ax",
-            _ => "eax",
-        };
-        // `RAX` for a quadword block: the dword's name widened (`rax`).
-        let acc = self.arch.register_named(&if block == 8 { format!("r{}", &name[1..]) } else { name.to_owned() });
+        let acc = self.accumulator(block);
         let (cx, di, _) = self.string_registers();
         let count = self.dag.get_constant(u128::from(count), pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, acc, val, None);
