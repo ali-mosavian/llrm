@@ -787,3 +787,21 @@ fn a_fetch_sub_negates_and_adds_and_a_fetch_and_complements_and_clears() {
     assert_eq!(rmw("sub", "monotonic").unwrap(), [["SUBSWrr", "LDADDW", "RET_ReallyLR"]]);
     assert_eq!(rmw("and", "release").unwrap(), [["ORNWrr", "LDCLRLW", "RET_ReallyLR"]]);
 }
+
+/// An atomic access narrower than a register (`i8`, `i16`) was refused (`Legalize(Unsupported
+/// AtomicSwap i8 "promote result")`): the type legalizer keeps the memory type and promotes the
+/// value and result (`PromoteIntRes_Atomic0/1`, `PromoteIntOp_ATOMIC_STORE`).
+#[test]
+fn a_narrow_atomic_access_keeps_its_memory_type() {
+    let ir = |body: &str, ret: &str, args: &str| format!("define {ret} @f(ptr %p{args}) {{\n  {body}\n}}");
+    let xchg = ir("%a = atomicrmw xchg ptr %p, i8 %v acquire, align 1\n  ret i8 %a", "i8", ", i8 %v");
+    assert_eq!(selected(&xchg).unwrap(), [["SWPAB", "RET_ReallyLR"]]);
+    let add = ir("%a = atomicrmw add ptr %p, i16 %v seq_cst, align 2\n  ret i16 %a", "i16", ", i16 %v");
+    assert_eq!(selected(&add).unwrap(), [["LDADDALH", "RET_ReallyLR"]]);
+    let load = ir("%a = load atomic i8, ptr %p acquire, align 1\n  ret i8 %a", "i8", "");
+    assert_eq!(selected(&load).unwrap(), [["LDAPRB", "RET_ReallyLR"]]);
+    let store = ir("store atomic i16 %v, ptr %p release, align 2\n  ret void", "void", ", i16 %v");
+    assert_eq!(selected(&store).unwrap(), [["STLRH", "RET_ReallyLR"]]);
+    let sub = ir("%a = atomicrmw sub ptr %p, i8 %v monotonic, align 1\n  ret i8 %a", "i8", ", i8 %v");
+    assert_eq!(selected(&sub).unwrap(), [["SUBSWrr", "LDADDB", "RET_ReallyLR"]]);
+}

@@ -587,6 +587,34 @@ impl<'a> TypeLegalizer<'a> {
                     None => self.dag.get_node(op, to, &[input]),
                 }
             }
+            op @ (ISD::AtomicSwap
+            | ISD::AtomicLoadAdd
+            | ISD::AtomicLoadSub
+            | ISD::AtomicLoadAnd
+            | ISD::AtomicLoadClr
+            | ISD::AtomicLoadOr
+            | ISD::AtomicLoadXor) => {
+                // `PromoteIntRes_Atomic1`: the access keeps its memory type, the operand is the
+                // promoted value, the result is wider and the chain follows.
+                let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("an atomic has a memory operand") };
+                let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let operand = self.promoted_integer(self.dag.operand(value, 2));
+                let new = if op == ISD::AtomicSwap {
+                    self.dag.get_atomic_swap(chain, ptr, operand, info)
+                } else {
+                    self.dag.get_atomic_rmw(op, chain, ptr, operand, info)
+                };
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: new.node, res: 1 });
+                new
+            }
+            ISD::AtomicLoad => {
+                // `PromoteIntRes_Atomic0`: a zero-extending atomic load.
+                let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("an atomic has a memory operand") };
+                let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let new = self.dag.get_atomic_load(to, chain, ptr, super::dag::MemInfo { ext: Some(super::actions::LoadExt::ZExtLoad), ..info });
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: new.node, res: 1 });
+                new
+            }
             ISD::Load => {
                 // The access keeps its memory type; the result is wider
                 // (an extending load), and the chain follows.
@@ -691,6 +719,13 @@ impl<'a> TypeLegalizer<'a> {
     ) -> Result<bool, LegalizeError> {
         let node = SDValue { node: n, res: 0 };
         let result = match self.dag.opcode(node) {
+            ISD::AtomicStore if at == 1 => {
+                // `PromoteIntOp_ATOMIC_STORE`: the promoted value, the same memory type.
+                let NodeData::Mem(info) = self.dag.node(node).data else { unreachable!("an atomic has a memory operand") };
+                let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 2));
+                let operand = self.promoted_integer(self.dag.operand(node, 1));
+                self.dag.get_atomic_store(chain, ptr, operand, info)
+            }
             ISD::Truncate => {
                 let operand = self.promoted_integer(self.dag.operand(node, at));
                 let vt = self.dag.value_type(node);
