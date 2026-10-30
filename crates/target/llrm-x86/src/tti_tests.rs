@@ -345,8 +345,9 @@ fn a_triple_picks_the_baseline_cpu_of_its_architecture() {
     assert!(X86::of_triple("aarch64-unknown-linux-gnu").is_none());
 }
 
-/// `X86TTIImpl::hasDivRemOp` is `isOperationLegal(SDIVREM)`: every register type has one. It was stated on the lowering,
-/// so a pass that asked the `Tti` (DivRemPairs) found none until it consulted both (#6152's DEVIATE).
+/// `X86TTIImpl::hasDivRemOp` is `isOperationLegal(SDIVREM)`: every register
+/// type has one. It was stated on the lowering, so a pass that asked the `Tti`
+/// (DivRemPairs) found none until it consulted both (#6152's DEVIATE).
 #[test]
 fn the_tti_states_a_divide_remainder_op_on_every_register_type() {
     let tti = X86::of_cpu("i486").unwrap();

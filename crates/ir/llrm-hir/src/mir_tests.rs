@@ -327,6 +327,57 @@ fn an_allocation_and_a_place_are_tagged_apart() {
     );
 }
 
+/// SORT's loop reloaded its array parameter's descriptor words every trip: the
+/// accesses through a parameter's pointer carried no `!tbaa`, so an element
+/// store might have written them. A descriptor word is tagged `place`; an
+/// element of an array no function-local place owns, the generic `allocation`.
+#[test]
+fn a_parameter_arrays_descriptor_and_elements_are_tagged_apart() {
+    use llrm_mir::facts::{Fact, Region};
+
+    use crate::facts::{Builder, Subject};
+    use crate::model::{AddressKind, IndirectPlace};
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 2 }, Value { id: 3, r#type: 1 }];
+    let indirect = |base, offset| {
+        Operand::IndirectPlace(IndirectPlace {
+            base,
+            offset,
+            r#type: 1,
+            volatile: false,
+            origin: None,
+            allocation: None,
+            member: None,
+        })
+    };
+    let instructions = vec![
+        Instruction::new(1, Op::Load, vec![3], vec![indirect(1, 2)]),
+        Instruction::new(2, Op::Store, vec![], vec![indirect(2, 0), Operand::value_ref(3)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let mut function = Function::new(1, "FILL", 0, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1, 2];
+    let mut program = program(function);
+    let mut far = Type::new(2, "far", TypeKind::Pointer, 4);
+    far.address = AddressKind::Far;
+    program.modules[0].types.push(far);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, Fact::Access(Region::Descriptor));
+    facts.state(Subject::Instruction { function: 1, id: 2 }, Fact::Access(Region::Element));
+    program.modules[0].facts = facts.finish();
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains(", !tbaa !2\n"), "{text}");
+    assert!(text.contains("!4\n"), "{text}");
+    assert!(
+        text.lines().any(|line| line.contains("load i16") && line.ends_with("!tbaa !2"))
+            && text.lines().any(|line| line.contains("store i16") && line.ends_with("!tbaa !4")),
+        "{text}"
+    );
+}
+
 /// Another module may name a COMMON array under its own tag path, and the
 /// interprocedural passes meet both in one body: per-array tags would call the
 /// same bytes apart. A COMMON array keeps the generic `allocation` tag.
