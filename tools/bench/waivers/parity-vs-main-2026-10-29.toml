@@ -1,4 +1,7 @@
 reason = "Counts of the integrated parity tree above main 854bb7efc4 (limit = measured, so they cannot grow), dated 2026-10-29. Sections: (1) -Os m16 rows above main, which need the user's yes for main; (2) c -O2 rows, front-end switch Watcom to clang (user 2026-10-26); (3) UNATTRIBUTED -O2, bq16 and bq32 rows, a main-merge blocker due 2026-11-05. Not a rebless of main."
+base = "854bb7efc4"  # judged against tools/bench/frozen/854bb7efc4.json (main before the parity merge), with the limit = measured
+owner = "w2 w10 w11 w13 w15 (the owner and cause class of each row are in its comments)"
+deadline = "2026-10-30 21:00 +0100 (each owner's ETA after the merge)"
 
 # ===== (1) -Os m16 above main: needs your yes for main. cause class and owner per row; byte delta and clocks delta of the row =====
 

@@ -1081,3 +1081,67 @@ def test_the_merge_says_how_many_base_slices_were_restored_and_how_many_measured
 def test_ci_restores_and_saves_each_base_slice_under_its_stamp_key():
     workflow = (bench.ROOT / ".github/workflows/ci.yml").read_text()
     assert "basecounts.py slicekey ${{ matrix.group }}" in workflow and "steps.baseslicecache.outputs.cache-hit != 'true'" in workflow
+
+
+def _pinned_root(tmp_path, frozen=None, owner='owner = "w1"\ndeadline = "2026-10-31"\n', to=120, hashes=None):
+    """A tree with one program (fib), a waiver file pinned to base abc123 for fib c -O2 instructions up to `to`, and frozen counts of abc123."""
+    (tmp_path / "bench/fib").mkdir(parents=True)
+    (tmp_path / "bench/fib/bench.toml").write_text("")
+    (tmp_path / "bench/fib/fib.c").write_text("int main(){return 0;}")
+    waivers = tmp_path / "tools/bench/waivers"
+    waivers.mkdir(parents=True)
+    (waivers / "pinned.toml").write_text(f'reason = "TEMPORARY: fix after the main merge"\nbase = "abc123"\n{owner}\n[[row]]\nlabel = "fib c -O2"\ncounter = "instructions"\nto = {to}\n')
+    (waivers / "default.toml").write_text('reason = "tip"\n[[row]]\nlabel = "fib c -O2"\ncounter = "instructions"\nto = 999\n')
+    if frozen is not False:
+        (tmp_path / "tools/bench/frozen").mkdir(parents=True)
+        data = {"sha": "abc123" + "0" * 34, "hash_version": bench.basecounts.HASH_VERSION, "programs": hashes or bench.basecounts.programs(tmp_path), "rows": {"fib/c/O2": {"instructions": 100}}}
+        (tmp_path / "tools/bench/frozen/abc123.json").write_text(json.dumps({**data, **(frozen or {})}))
+    return tmp_path
+
+
+def test_a_waiver_pinned_to_the_old_base_is_a_debt_against_it_and_never_stale_to_the_default_judge(tmp_path):
+    """The default base became the merge: its judge called all 445 rows waived against the old main BASE-STALE and said delete them. They are
+    the regressions against the old main, which stay until a fix removes each row."""
+    root = _pinned_root(tmp_path)
+    measured = {("fib", "c", "O2"): {"instructions": 120}}
+    assert [w["file"] for w in bench.basecounts.waivers(root)] == ["default.toml"], "the default judge sees no pinned waiver"
+    stale = bench.basecounts.judge(measured, {("fib", "c", "O2"): {"instructions": 120}}, bench.basecounts.waivers(root), {"fib"})[2]
+    assert stale == ["default.toml: fib c -O2 instructions to 999"] and "pinned.toml" not in " ".join(stale)
+    problems, lines = bench.frozen_judge(measured, root)
+    assert problems == [] and lines == ["waived vs abc123: 1 rows, of which fixed: 0"]
+    worse, _ = bench.frozen_judge({("fib", "c", "O2"): {"instructions": 130}}, root)
+    assert worse == ["fib c -O2: instructions 130 > 100 (worse) (against abc123)"], "a row above its limit fails against the old base"
+
+
+def test_a_pinned_row_back_at_or_under_the_old_base_is_counted_fixed_and_never_asked_deleted(tmp_path):
+    root = _pinned_root(tmp_path)
+    problems, lines = bench.frozen_judge({("fib", "c", "O2"): {"instructions": 100}}, root)
+    assert problems == [] and lines == ["waived vs abc123: 1 rows, of which fixed: 1"] and not any("delete" in one for one in lines)
+
+
+def test_the_frozen_counts_missing_or_for_another_commit_or_without_the_waived_row_fail_the_judge(tmp_path):
+    measured = {("fib", "c", "O2"): {"instructions": 120}}
+    assert "no frozen counts file" in bench.frozen_judge(measured, _pinned_root(tmp_path / "a", frozen=False))[0][0]
+    assert "is for fffffffff" in bench.frozen_judge(measured, _pinned_root(tmp_path / "b", frozen={"sha": "f" * 40}))[0][0]
+    assert "hash version 0" in bench.frozen_judge(measured, _pinned_root(tmp_path / "c", frozen={"hash_version": 0}))[0][0]
+    assert "is not a row of the frozen counts" in bench.frozen_judge(measured, _pinned_root(tmp_path / "d", frozen={"rows": {}}))[0][0]
+
+
+def test_a_pinned_waiver_file_without_an_owner_and_deadline_fails_the_judge(tmp_path):
+    root = _pinned_root(tmp_path, owner="")
+    assert "pinned.toml is pinned to a base and names no owner and deadline" in bench.frozen_judge({("fib", "c", "O2"): {"instructions": 120}}, root)[0][0]
+
+
+def test_a_program_changed_since_the_freeze_is_listed_and_not_judged_against_it(tmp_path):
+    root = _pinned_root(tmp_path, hashes={"fib": "another source"})
+    problems, lines = bench.frozen_judge({("fib", "c", "O2"): {"instructions": 500}}, root)
+    assert problems == [] and lines[-1] == "1 programs changed since the freeze, not judged against it: fib"
+
+
+def test_the_checked_in_waivers_are_all_pinned_to_the_checked_in_frozen_counts():
+    """The instrument: 445 rows were judged against the frozen file's row set; one that names a row it lacks would be silently unjudged."""
+    for sha in bench.basecounts.pinned_bases():
+        data = bench.basecounts.load_frozen(sha)
+        assert bench.basecounts.check_frozen(data, sha, bench.basecounts.waivers(bench.ROOT, sha)) == []
+        assert len(data["rows"]) == 424 and len(data["programs"]) == 48 and data["sha"].startswith(sha)
+    assert bench.basecounts.pinned_bases() == ["854bb7efc4"] and not bench.basecounts.waivers(bench.ROOT)

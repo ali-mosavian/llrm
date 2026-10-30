@@ -1,4 +1,7 @@
 reason = "lru -Os m16 bytes: a front-end-change baseline gap (llrm-c to llrm-cc), not a decision to grow; see DEBT lru-os-m16-bytes in docs/working/ci.md"
+base = "854bb7efc4"  # judged against tools/bench/frozen/854bb7efc4.json (main before the parity merge), with the limit = measured
+owner = "w11"
+deadline = "2026-10-30 12:00 +0100 (with w11's c -O2/-Os m16 rows)"
 
 [[row]]
 label = "lru c -Os"
