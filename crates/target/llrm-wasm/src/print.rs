@@ -79,6 +79,8 @@ pub fn instruction(
             }
             Operand::Block(block) => format!(".LBB{block}"),
             Operand::Frame(_) => unreachable!("the frame lowering removes frame indices"),
+            Operand::F32(bits) => hex_float(u64::from(bits), 23, 8),
+            Operand::F64(bits) => hex_float(bits, 52, 11),
             Operand::Def(_) | Operand::Use(_) => unreachable!("filtered as non-immediate"),
         };
         text = text.replace(&format!("${{{name}}}"), &shown).replace(&format!("${name}"), &shown);
@@ -115,4 +117,31 @@ pub fn function(f: &Function) -> String {
     out.extend(f.blocks.iter().flatten().map(|i| format!("\t{}", instruction(f, i))));
     out.push(with_comment("", "# -- End function"));
     out.join("\n") + "\n"
+}
+
+/// `APFloat::convertToHexString` as `WebAssemblyInstPrinter` shows a float immediate: `0x1.8p0`, no `+` on the
+/// exponent, trailing zero digits dropped. `bits` hold `mantissa_bits` of fraction under `exponent_bits`.
+fn hex_float(
+    bits: u64,
+    mantissa_bits: u32,
+    exponent_bits: u32,
+) -> String {
+    let sign = if bits >> (mantissa_bits + exponent_bits) & 1 == 1 { "-" } else { "" };
+    let mantissa = bits & ((1 << mantissa_bits) - 1);
+    let exponent = (bits >> mantissa_bits) & ((1 << exponent_bits) - 1);
+    let bias = (1i64 << (exponent_bits - 1)) - 1;
+    if exponent == (1 << exponent_bits) - 1 {
+        return if mantissa == 0 { format!("{sign}infinity") } else { format!("{sign}nan:0x{mantissa:x}") };
+    }
+    // The fraction as whole hex digits.
+    let digits = mantissa_bits.div_ceil(4);
+    let fraction = mantissa << (digits * 4 - mantissa_bits);
+    let (lead, scale) = match (exponent, mantissa) {
+        (0, 0) => return format!("{sign}0x0p0"),
+        (0, _) => (0, 1 - bias),
+        _ => (1, exponent as i64 - bias),
+    };
+    let text = format!("{fraction:0width$x}", width = digits as usize);
+    let text = text.trim_end_matches('0');
+    if text.is_empty() { format!("{sign}0x{lead}p{scale}") } else { format!("{sign}0x{lead}.{text}p{scale}") }
 }

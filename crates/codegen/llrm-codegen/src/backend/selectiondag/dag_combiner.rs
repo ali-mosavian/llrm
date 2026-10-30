@@ -834,11 +834,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // A far pointer is an integer to the pin (`i32`), not a float.
         let is_float = self.dag.value_type(lhs).is_floating_point();
         let not_cc = if is_float { cc.inverse_float() } else { cc.inverse_integer() };
-        // `isCondCodeLegal`: x86 expands `oeq` and `une` (two flags), so once
-        // operations are legal the fold must not make one.
+        // `isCondCodeLegal` once operations are legal: x86 expands `oeq` and `une` (two flags), wasm the
+        // unordered ones, so the fold must not make one the target expands.
         if self.level >= CombineLevel::AfterLegalizeVectorOps
-            && is_float
-            && matches!(not_cc, CondCode::SetOEq | CondCode::SetUNe)
+            && let (Some(tli), EVT::Simple(operand)) = (self.tli, self.dag.value_type(lhs))
+            && tli.cond_code_action(not_cc, operand) != Action::Legal
         {
             return None;
         }

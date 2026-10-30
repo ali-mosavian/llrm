@@ -90,6 +90,10 @@ pub enum Operand {
     /// A stack object, by frame index, until the frame lowering gives it an
     /// address.
     Frame(i32),
+    /// The bits of an `f32` immediate.
+    F32(u32),
+    /// The bits of an `f64` immediate.
+    F64(u64),
 }
 
 impl Operand {

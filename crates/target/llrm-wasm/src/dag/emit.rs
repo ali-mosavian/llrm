@@ -91,6 +91,14 @@ impl Emitter<'_> {
                 let name = (self.names)(symbol);
                 Some(Operand::Sym(self.f.symbol(&name, offset)))
             }
+            (ISD::TargetExternalSymbolNode, NodeData::Symbol(id)) => {
+                let name = dag.symbol_names[id as usize].clone();
+                Some(Operand::Sym(self.f.symbol(&name, 0)))
+            }
+            (ISD::TargetConstantFP | ISD::ConstantFP, NodeData::ConstFp { bits }) => Some(match vt {
+                EVT::Simple(MVT::F32) => Operand::F32(bits as u32),
+                _ => Operand::F64(bits as u64),
+            }),
             (ISD::BasicBlock, NodeData::Block(block)) => Some(Operand::Block(self.position[&block] as u32)),
             (ISD::Register, _) => None,
             (ISD::TargetFrameIndex, NodeData::FrameIndex(index)) => Some(Operand::Frame(index)),

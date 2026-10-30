@@ -134,10 +134,11 @@ fn select_call(
         // one is called indirectly.
         if at == 1 && Dag::opcode(adapter, operand.node) == isd::Wrapper {
             let inner = Dag::operand(adapter, operand.node, 0);
-            if Dag::opcode(adapter, inner.node)
-                == llrm_codegen::backend::selectiondag::dagisel_adapter::pin_opcode(
-                    llrm_codegen::backend::selectiondag::isd::ISD::TargetGlobalAddress,
-                )
+            use llrm_codegen::backend::selectiondag::isd::ISD::{TargetExternalSymbolNode as TARGET_EXTERNAL, TargetGlobalAddress as TARGET_GLOBAL};
+            let symbol = |isd| llrm_codegen::backend::selectiondag::dagisel_adapter::pin_opcode(isd);
+            if [TARGET_GLOBAL, TARGET_EXTERNAL]
+                .into_iter()
+                .any(|kind| Dag::opcode(adapter, inner.node) == symbol(kind))
             {
                 operand = inner;
             }

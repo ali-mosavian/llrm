@@ -147,3 +147,24 @@ fn promoted_loads_are_any_extending() {
 fn division_by_constants() {
     check("div_pow2");
 }
+
+/// Floating-point arithmetic, comparisons and conversions were `CannotSelect`.
+#[test]
+fn float_arithmetic() {
+    check("float_arith");
+}
+
+/// Float casts, selects, calls and constants: the unordered comparison codes
+/// were `CannotSelect`, a `ConstantFP` became its own operand.
+#[test]
+fn float_conversions_and_calls() {
+    check("float_more");
+}
+
+/// `frem`, `sin`, `cos`, `atan`, `lrint` were refused ("convert node to
+/// libcall", "promote result" of an `i16` `lrint`, a callee symbol with no
+/// operand); the pin calls `fmod`, `sin`, `lrint`.
+#[test]
+fn float_libcalls() {
+    check("float_libcalls");
+}

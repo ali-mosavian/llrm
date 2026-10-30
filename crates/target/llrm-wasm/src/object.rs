@@ -174,6 +174,17 @@ pub fn encode_instruction(
         return;
     }
     for (kind, operand) in asm.kinds.iter().zip(immediates) {
+        match *operand {
+            Operand::F32(bits) => {
+                out.extend(bits.to_le_bytes());
+                continue;
+            }
+            Operand::F64(bits) => {
+                out.extend(bits.to_le_bytes());
+                continue;
+            }
+            _ => {}
+        }
         if let Operand::Sym(at) = *operand {
             // The value is the symbol's final index or address, patched in by `write`.
             let (symbol, addend) = &symbols[at as usize];

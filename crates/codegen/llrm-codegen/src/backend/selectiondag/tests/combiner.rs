@@ -31,7 +31,8 @@ fn x86(
     dag: &mut SelectionDAG,
     level: CombineLevel,
 ) {
-    DagCombiner::new(dag, &mut X86Lowering { cmov: false, sse2: false, min_size: false }, level).run();
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    DagCombiner::new(dag, &mut X86Lowering { cmov: false, sse2: false, min_size: false }, level).with_tli(&tli).run();
 }
 
 /// `x * 1` is `x` and `x * 8` is `x << 3`: `getNode` keeps the multiply

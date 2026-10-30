@@ -46,6 +46,8 @@ fn dump(f: &Function) -> Vec<String> {
                     Sym(s) => Some(format!("sym{s}")),
                     Block(b) => Some(format!("bb{b}")),
                     Frame(f) => Some(format!("fi{f}")),
+                    F32(bits) => Some(format!("f32:{bits:#x}")),
+                    F64(bits) => Some(format!("f64:{bits:#x}")),
                 })
                 .collect();
             let head = if defs.is_empty() { String::new() } else { format!("{} = ", defs.join(", ")) };
