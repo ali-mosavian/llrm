@@ -50,6 +50,17 @@ pub struct TargetLoweringInfo {
     /// Per entry of `INTEGERS`: its action and the type it becomes.
     integers: [(TypeAction, MVT); 6],
     far: bool,
+    /// `getScalarShiftAmountTy`.
+    shift_amount: ShiftAmount,
+}
+
+/// What `getScalarShiftAmountTy` returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShiftAmount {
+    /// x86.
+    I8,
+    /// The shifted type (m68k).
+    ByValue,
 }
 
 impl TargetLoweringInfo {
@@ -74,7 +85,18 @@ impl TargetLoweringInfo {
                 integers[below] = (TypeAction::PromoteInteger, nearest_legal);
             }
         }
-        TargetLoweringInfo { integers, far }
+        TargetLoweringInfo { integers, far, shift_amount: ShiftAmount::I8 }
+    }
+
+    /// A shift's amount has the type of the value shifted
+    /// (`M68kTargetLowering::getScalarShiftAmountTy`).
+    pub fn with_shift_by_value_type(mut self) -> TargetLoweringInfo {
+        self.shift_amount = ShiftAmount::ByValue;
+        self
+    }
+
+    pub fn shift_amount(&self) -> ShiftAmount {
+        self.shift_amount
     }
 
     /// m32: `addRegisterClass` of `i8`, `i16`, `i32`; no far pointer.

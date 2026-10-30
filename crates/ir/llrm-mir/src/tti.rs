@@ -497,6 +497,17 @@ pub trait Tti {
         to: Ty,
     ) -> bool;
 
+    /// `hasDivRemOp(iN, IsSigned)`: whether the target has one divide that
+    /// makes the quotient and the remainder. The base class has none.
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        signed: bool,
+    ) -> bool {
+        let _ = (bits, signed);
+        false
+    }
+
     /// `isLegalAddressingMode`: `base_gv + base_offset + base_reg + scale *
     /// index`.
     fn is_legal_addressing_mode(
@@ -888,10 +899,12 @@ pub fn base_intrinsic_cost(name: &str) -> Option<Cost> {
 }
 
 pub fn is_free_intrinsic(name: &str) -> bool {
-    const FREE: [&str; 6] = [
+    const FREE: [&str; 8] = [
         "llvm.assume",
         "llvm.lifetime.start",
         "llvm.lifetime.end",
+        "llvm.invariant.start",
+        "llvm.invariant.end",
         "llvm.noalias.scope.decl",
         "llvm.experimental.noalias.scope.decl",
         "llrm.noalias.scope.decl",

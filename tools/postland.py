@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""The post-landing loop: per new head of feat/parity, run the checks once, find what failed that the previous head did not, and name the PR that did it.
+"""The post-landing loop: per new head of release/next, run the checks once, find what failed that the previous head did not, and name the PR that did it.
 
-    tools/postland.py once [SHA]      check SHA (default origin/feat/parity) against the last checked head; report to $POSTLAND/<sha>.md
+    tools/postland.py once [SHA]      check SHA (default origin/release/next) against the last checked head; report to $POSTLAND/<sha>.md
     tools/postland.py loop            `once` for each new head, polling
 
 A failure is NEW when it is neither in the previous head's failure set nor on the XFAIL list. A new failure is bisected over the first-parent commits

@@ -2777,7 +2777,8 @@ b:
             .and_then(|done| done)
             .unwrap();
         let printed = crate::testing::printed(&module);
-        let header = printed.lines().find(|line| line.starts_with("define") && line.contains("@main")).unwrap().to_owned();
+        let header =
+            printed.lines().find(|line| line.starts_with("define") && line.contains("@main")).unwrap().to_owned();
         (header.contains("optsize"), header.contains("minsize"))
     };
     assert_eq!(flags(pipeline::Options::standard()).0, false, "-O2 marks nothing");
