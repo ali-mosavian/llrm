@@ -1,13 +1,17 @@
-//! Forwarding of reloads: a value stored to a spill slot is still in the register it was stored from until
-//! something writes that register, so a reload of the slot there is that register (or nothing, if it is the one
+//! Forwarding of reloads: a value stored to a spill slot is still in the
+//! register it was stored from until something writes that register, so a
+//! reload of the slot there is that register (or nothing, if it is the one
 //! the reload names).
 //!
-//! The spiller stores a spilled register after each definition and loads it before each use, in every block,
-//! whether or not the register was touched since. The pin's greedy allocator splits the live range instead
-//! and reloads only after the call or write that took the register (`RAGreedy` splitting, `InlineSpiller`).
+//! The spiller stores a spilled register after each definition and loads it
+//! before each use, in every block, whether or not the register was touched
+//! since. The pin's greedy allocator splits the live range instead and reloads
+//! only after the call or write that took the register (`RAGreedy` splitting,
+//! `InlineSpiller`).
 //!
-//! DEVIATE: a forward analysis over the allocated function, not live-range splitting. Reason: the spill layer
-//! here is spill-everywhere. Exit: the neutral-LIR task, with the pin's allocator.
+//! DEVIATE: a forward analysis over the allocated function, not live-range
+//! splitting. Reason: the spill layer here is spill-everywhere. Exit: the
+//! neutral-LIR task, with the pin's allocator.
 
 use llrm_lir::registers::RegId;
 
@@ -47,10 +51,11 @@ fn equal(
     one.len() == other.len() && one.iter().all(|held| other.iter().any(|also| held.same(also)))
 }
 
-/// Replaces each reload of a spill slot whose value is still in a register by a copy from it, or drops it.
-/// `store` and `load` recognize the target's spill instructions: the slot and the register stored or loaded.
-/// `wide` says whether a register holds a word, `cheap_copy` whether the target copies the second register to
-/// the first without a detour.
+/// Replaces each reload of a spill slot whose value is still in a register by a
+/// copy from it, or drops it. `store` and `load` recognize the target's spill
+/// instructions: the slot and the register stored or loaded. `wide` says
+/// whether a register holds a word, `cheap_copy` whether the target copies the
+/// second register to the first without a detour.
 pub fn forward_reloads<T: Target>(
     function: &mut MFunction<T::Class>,
     assignment: &Assignment,
