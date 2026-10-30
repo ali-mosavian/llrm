@@ -184,8 +184,34 @@ impl Emitter<'_> {
                         continue;
                     }
                     if code == CALL_RESULTS {
+                        let mut params = std::mem::take(&mut params);
+                        if let Some(&Operand::Use(callee)) = params.first() {
+                            // `EmitInstrWithCustomInserter`: the function pointer moves to the end, after
+                            // the type (its signature, by index) and the table.
+                            params.remove(0);
+                            let signature = (
+                                params
+                                    .iter()
+                                    .filter_map(|o| if let Operand::Use(r) = o { Some(self.f.vreg_type(*r)) } else { None })
+                                    .collect::<Vec<_>>(),
+                                operands
+                                    .iter()
+                                    .filter_map(|o| if let Operand::Def(r) = o { Some(self.f.vreg_type(*r)) } else { None })
+                                    .collect::<Vec<_>>(),
+                            );
+                            let at = self.f.signatures.iter().position(|s| *s == signature).unwrap_or_else(|| {
+                                self.f.signatures.push(signature);
+                                self.f.signatures.len() - 1
+                            });
+                            operands.push(Operand::Imm(at as i64));
+                            operands.push(Operand::Sym(self.f.symbol(crate::INDIRECT_FUNCTION_TABLE, 0)));
+                            operands.extend(params);
+                            operands.push(Operand::Use(callee));
+                            out.push(Inst::new(post::CALL_INDIRECT, &operands));
+                            continue;
+                        }
                         // Defs, then the callee symbol, then the arguments.
-                        operands.extend(std::mem::take(&mut params));
+                        operands.extend(params);
                         out.push(Inst::new(post::CALL, &operands));
                         continue;
                     }

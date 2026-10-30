@@ -49,11 +49,18 @@ const LINKING_VERSION: u8 = 2;
 const WASM_SYMBOL_TABLE: u8 = 8;
 const SYMBOL_KIND_FUNCTION: u8 = 0;
 const EXTERNAL_FUNCTION: u8 = 0;
+const EXTERNAL_TABLE: u8 = 1;
 const EXTERNAL_MEMORY: u8 = 2;
+const SECTION_ELEMENT: u8 = 9;
+const SYMBOL_KIND_TABLE: u8 = 5;
+const WASM_SYMBOL_NO_STRIP: u8 = 0x80;
+const WASM_INIT_FUNCS: u8 = 6;
+const REF_FUNC_TYPE: u8 = 0x70;
 const EXTERNAL_GLOBAL: u8 = 3;
 const SYMBOL_KIND_GLOBAL: u8 = 2;
 const WASM_SYMBOL_BINDING_LOCAL: u8 = 2;
 const R_WASM_MEMORY_ADDR_I32: u8 = 5;
+const R_WASM_TABLE_INDEX_I32: u8 = 2;
 const PAGE: u32 = 65536;
 const WASM_SYMBOL_UNDEFINED: u8 = 0x10;
 const R_WASM_FUNCTION_INDEX_LEB: u8 = 0;
@@ -145,6 +152,7 @@ pub fn encode_instruction(
     out: &mut Vec<u8>,
     inst: &crate::mir::Inst,
     symbols: &[(String, i64)],
+    signatures: &[(Vec<ValType>, Vec<ValType>)],
     relocs: &mut Vec<Reloc>,
 ) {
     let asm = find(inst.opcode).unwrap_or_else(|| panic!("opcode {} has no encoding", inst.opcode));
@@ -161,6 +169,30 @@ pub fn encode_instruction(
         panic!("opcode {} is a pseudo or has no encoding", asm.text);
     }
     let immediates = inst.operands.iter().filter(|o| o.is_immediate());
+    if inst.opcode == crate::dagisel::post_ids::CALL_INDIRECT {
+        // The type, then the table, each a five-byte LEB for the linker to fill in.
+        let mut immediates = immediates;
+        let (Some(&Operand::Imm(at)), Some(&Operand::Sym(table))) = (immediates.next(), immediates.next()) else {
+            unreachable!("a call_indirect names its type and its table")
+        };
+        relocs.push(Reloc {
+            offset: out.len(),
+            symbol: String::new(),
+            kind: RelocKind::TypeIndexLeb,
+            addend: 0,
+            signature: Some(signatures[at as usize].clone()),
+        });
+        uleb_padded(out, 0);
+        relocs.push(Reloc {
+            offset: out.len(),
+            symbol: symbols[table as usize].0.clone(),
+            kind: RelocKind::TableNumberLeb,
+            addend: 0,
+            signature: None,
+        });
+        uleb_padded(out, 0);
+        return;
+    }
     if asm.names == ["brl"] {
         // `br_table`: the number of targets, each depth, then the default's.
         let depths: Vec<u64> = immediates
@@ -195,7 +227,7 @@ pub fn encode_instruction(
                 "global_op32" | "global_op64" => RelocKind::GlobalIndexLeb,
                 other => panic!("operand class {other} of {} takes no symbol yet", asm.text),
             };
-            relocs.push(Reloc { offset: out.len(), symbol: symbol.clone(), kind, addend: *addend });
+            relocs.push(Reloc { offset: out.len(), symbol: symbol.clone(), kind, addend: *addend, signature: None });
             uleb_padded(out, 0);
             continue;
         }
@@ -239,6 +271,12 @@ pub enum RelocKind {
     MemoryAddrSleb,
     /// `R_WASM_GLOBAL_INDEX_LEB`.
     GlobalIndexLeb,
+    /// `R_WASM_TABLE_INDEX_SLEB`: the table slot of a function whose address is taken.
+    TableIndexSleb,
+    /// `R_WASM_TYPE_INDEX_LEB`: the type of a `call_indirect`.
+    TypeIndexLeb,
+    /// `R_WASM_TABLE_NUMBER_LEB`.
+    TableNumberLeb,
 }
 
 impl RelocKind {
@@ -248,6 +286,9 @@ impl RelocKind {
             RelocKind::MemoryAddrLeb => 3,
             RelocKind::MemoryAddrSleb => 4,
             RelocKind::GlobalIndexLeb => 7,
+            RelocKind::TableIndexSleb => 1,
+            RelocKind::TypeIndexLeb => 6,
+            RelocKind::TableNumberLeb => 20,
         }
     }
 }
@@ -259,6 +300,8 @@ pub struct Reloc {
     pub symbol: String,
     pub kind: RelocKind,
     pub addend: i64,
+    /// The (parameters, results) of a [`RelocKind::TypeIndexLeb`].
+    pub signature: Option<(Vec<ValType>, Vec<ValType>)>,
 }
 
 pub fn encode_function(f: &Function) -> Encoded {
@@ -277,7 +320,7 @@ pub fn encode_function(f: &Function) -> Encoded {
     }
     let mut relocs = Vec::new();
     for inst in f.blocks.iter().flatten() {
-        encode_instruction(&mut body, inst, &f.symbols, &mut relocs);
+        encode_instruction(&mut body, inst, &f.symbols, &f.signatures, &mut relocs);
     }
     Encoded {
         name: f.name.clone(),
@@ -329,6 +372,10 @@ pub struct DataReloc {
 pub struct Data {
     pub objects: Vec<DataObject>,
     pub undefined: Vec<String>,
+    /// The signature of each function a pointer in `objects` or `init_funcs` names.
+    pub functions: Vec<(String, Vec<ValType>, Vec<ValType>)>,
+    /// `llvm.global_ctors`: the priority and function of each entry, by ascending priority.
+    pub init_funcs: Vec<(u16, String)>,
 }
 
 impl DataObject {
@@ -367,6 +414,8 @@ enum Symbol<'a> {
         name: &'a str,
         ty: ValType,
     },
+    /// The funcref table `call_indirect` and function addresses use, imported.
+    Table,
 }
 
 fn type_index<'a>(
@@ -402,17 +451,22 @@ fn introduce<'a>(
             *one == name
         }
         Symbol::Data { object } => data.objects[*object].name == name,
+        Symbol::Table => name == crate::INDIRECT_FUNCTION_TABLE,
     });
     if known {
         return;
     }
-    if let Some(object) = data.objects.iter().position(|d| d.name == name) {
+    if name == crate::INDIRECT_FUNCTION_TABLE {
+        symbols.push(Symbol::Table);
+    } else if let Some(object) = data.objects.iter().position(|d| d.name == name) {
         symbols.push(Symbol::Data { object });
     } else if data.undefined.iter().any(|d| d == name) {
         symbols.push(Symbol::UndefinedData { name });
     } else if let Some((_, ty)) = f.and_then(|f| f.globals.iter().find(|(one, _)| one == name)) {
         symbols.push(Symbol::Global { name, ty: *ty });
     } else if let Some((_, params, results)) = f.and_then(|f| f.callees.iter().find(|(one, ..)| one == name)) {
+        symbols.push(Symbol::Function { name, defined: None, local: false, params, results });
+    } else if let Some((_, params, results)) = data.functions.iter().find(|(one, ..)| one == name) {
         symbols.push(Symbol::Function { name, defined: None, local: false, params, results });
     } else {
         panic!("symbol {name} is no variable, global or called function");
@@ -426,6 +480,9 @@ pub fn write(
 ) -> Vec<u8> {
     let objects = &data.objects;
     let mut symbols: Vec<Symbol> = Vec::new();
+    // The `call_indirect` types, each with the number of symbols made before it: a type is numbered where
+    // the assembler met it.
+    let mut signature_events: Vec<(usize, &(Vec<ValType>, Vec<ValType>))> = Vec::new();
     for (at, f) in functions.iter().enumerate() {
         let defined = Symbol::Function { name: &f.name, defined: Some(at), local: f.local, params: &f.params, results: &f.results };
         let known = symbols.iter().position(|s| matches!(s, Symbol::Function { name, .. } if *name == f.name));
@@ -434,7 +491,10 @@ pub fn write(
             None => symbols.push(defined),
         }
         for reloc in &f.relocs {
-            introduce(&mut symbols, data, Some(f), &reloc.symbol);
+            match &reloc.signature {
+                Some(signature) => signature_events.push((symbols.len(), signature)),
+                None => introduce(&mut symbols, data, Some(f), &reloc.symbol),
+            }
         }
     }
     for one in objects {
@@ -443,7 +503,39 @@ pub fn write(
             introduce(&mut symbols, data, None, &reloc.symbol);
         }
     }
-    let is_import = |symbol: &Symbol| matches!(symbol, Symbol::Function { defined: None, .. } | Symbol::Global { .. });
+    for (_, name) in &data.init_funcs {
+        introduce(&mut symbols, data, None, name);
+    }
+    let symbol_named = |symbols: &[Symbol], name: &str| {
+        symbols.iter().position(|s| match s {
+            Symbol::Function { name: one, .. } | Symbol::UndefinedData { name: one } | Symbol::Global { name: one, .. } => {
+                *one == name
+            }
+            Symbol::Data { object } => objects[*object].name == name,
+            Symbol::Table => name == crate::INDIRECT_FUNCTION_TABLE,
+        })
+    };
+    // The table slot of each function whose address is taken, in the order the assembler met them: the code
+    // first, then the data. Slot 1 is the first.
+    let mut slots: Vec<usize> = Vec::new();
+    let taken = functions
+        .iter()
+        .flat_map(|f| f.relocs.iter().filter(|r| r.kind == RelocKind::MemoryAddrSleb).map(|r| r.symbol.as_str()))
+        .chain(objects.iter().flat_map(|one| one.relocs.iter().map(|r| r.symbol.as_str())));
+    for name in taken {
+        if let Some(s) = symbol_named(&symbols, name) {
+            if matches!(symbols[s], Symbol::Function { .. }) && !slots.contains(&s) {
+                slots.push(s);
+            }
+        }
+    }
+    // `emitEndOfAsmFile`: a function whose address is taken, a constructor included, keeps the table alive.
+    let address_taken = !slots.is_empty() || !data.init_funcs.is_empty();
+    if address_taken {
+        introduce(&mut symbols, data, None, crate::INDIRECT_FUNCTION_TABLE);
+    }
+    let is_import =
+        |symbol: &Symbol| matches!(symbol, Symbol::Function { defined: None, .. } | Symbol::Global { .. } | Symbol::Table);
     let imports: Vec<usize> = (0..symbols.len()).filter(|&s| is_import(&symbols[s])).collect();
     // Function and global indices: the imports first, then the definitions.
     let mut index_of = vec![0u32; symbols.len()];
@@ -454,6 +546,7 @@ pub fn write(
                 index_of[s] = globals_imported;
                 globals_imported += 1;
             }
+            Symbol::Table => index_of[s] = 0,
             _ => {
                 index_of[s] = functions_imported;
                 functions_imported += 1;
@@ -465,17 +558,8 @@ pub fn write(
             index_of[s] = functions_imported + *at as u32;
         }
     }
-    let position = |name: &str| {
-        symbols
-            .iter()
-            .position(|s| match s {
-                Symbol::Function { name: one, .. }
-                | Symbol::UndefinedData { name: one }
-                | Symbol::Global { name: one, .. } => *one == name,
-                Symbol::Data { object } => objects[*object].name == name,
-            })
-            .expect("a symbol")
-    };
+    let position = |name: &str| symbol_named(&symbols, name).expect("a symbol");
+    let slot_of = |s: usize| slots.iter().position(|&one| one == s).map(|at| at as u32 + 1);
     // Segment addresses: each aligned to its object's alignment.
     let mut address = Vec::with_capacity(objects.len());
     let mut end = 0u32;
@@ -492,10 +576,17 @@ pub fn write(
 
     // Types are numbered in the order the symbols were created, imports and definitions alike.
     let mut types: Vec<(&[ValType], &[ValType])> = Vec::new();
-    for symbol in &symbols {
+    let mut events = signature_events.iter().peekable();
+    for (at, symbol) in symbols.iter().enumerate() {
+        while let Some((_, (params, results))) = events.next_if(|(before, _)| *before <= at) {
+            type_index(&mut types, (params, results));
+        }
         if let Symbol::Function { params, results, .. } = symbol {
             type_index(&mut types, (params, results));
         }
+    }
+    for (_, (params, results)) in events {
+        type_index(&mut types, (params, results));
     }
     let signatures: Vec<usize> = functions.iter().map(|f| type_index(&mut types, (&f.params, &f.results))).collect();
     let import_types: Vec<usize> = imports
@@ -539,7 +630,13 @@ pub fn write(
                 // Mutable: the stack pointer.
                 payload.extend([EXTERNAL_GLOBAL, val_type(ty), 1]);
             }
-            _ => unreachable!("an import is a function or a global"),
+            Symbol::Table => {
+                name(&mut payload, crate::INDIRECT_FUNCTION_TABLE);
+                // A funcref table, no maximum, the slots taken as the minimum.
+                payload.extend([EXTERNAL_TABLE, REF_FUNC_TYPE, 0]);
+                uleb(&mut payload, slots.len() as u64);
+            }
+            _ => unreachable!("an import is a function, a global or the table"),
         }
     }
     section(&mut out, SECTION_IMPORT, &payload);
@@ -550,6 +647,19 @@ pub fn write(
         uleb(&mut payload, signature as u64);
     }
     section(&mut out, SECTION_FUNCTION, &payload);
+
+    if !slots.is_empty() {
+        // One active segment at slot 1: the function index of each slot.
+        payload.clear();
+        uleb(&mut payload, 1);
+        payload.push(0);
+        payload.extend([OPCODE_I32_CONST, 1, OPCODE_END]);
+        uleb(&mut payload, slots.len() as u64);
+        for &s in &slots {
+            uleb(&mut payload, u64::from(index_of[s]));
+        }
+        section(&mut out, SECTION_ELEMENT, &payload);
+    }
 
     if !objects.is_empty() {
         payload.clear();
@@ -566,22 +676,37 @@ pub fn write(
         let start = payload.len();
         payload.extend_from_slice(&f.body);
         for reloc in &f.relocs {
-            let s = position(&reloc.symbol);
             let at = start + reloc.offset;
             let mut value = Vec::new();
-            match reloc.kind {
+            // The index a relocation names: a symbol's, or a type's.
+            let (s, kind) = match &reloc.signature {
+                Some((params, results)) => (type_index(&mut types, (params, results)), RelocKind::TypeIndexLeb),
+                None => {
+                    let s = position(&reloc.symbol);
+                    // The address of a function is its table slot.
+                    let kind = match (reloc.kind, &symbols[s]) {
+                        (RelocKind::MemoryAddrSleb, Symbol::Function { .. }) => RelocKind::TableIndexSleb,
+                        (kind, _) => kind,
+                    };
+                    (s, kind)
+                }
+            };
+            match kind {
                 RelocKind::FunctionIndex | RelocKind::GlobalIndexLeb => uleb_padded(&mut value, index_of[s]),
                 RelocKind::MemoryAddrLeb => uleb_padded(&mut value, (address_of(s) + reloc.addend) as u32),
                 RelocKind::MemoryAddrSleb => sleb_padded(&mut value, (address_of(s) + reloc.addend) as i32),
+                RelocKind::TableIndexSleb => sleb_padded(&mut value, slot_of(s).expect("a slot") as i32),
+                RelocKind::TypeIndexLeb => uleb_padded(&mut value, s as u32),
+                RelocKind::TableNumberLeb => uleb_padded(&mut value, 0),
             }
             payload[at..at + 5].copy_from_slice(&value);
-            code_relocs.push((at, s, reloc.kind, reloc.addend));
+            code_relocs.push((at, s, kind, reloc.addend));
         }
     }
     section(&mut out, SECTION_CODE, &payload);
 
     // The data section; each pointer is patched in and recorded by its offset from the section's start.
-    let mut data_relocs: Vec<(usize, usize, i64)> = Vec::new();
+    let mut data_relocs: Vec<(usize, usize, i64, bool)> = Vec::new();
     if !objects.is_empty() {
         payload.clear();
         uleb(&mut payload, objects.len() as u64);
@@ -595,9 +720,14 @@ pub fn write(
             payload.extend_from_slice(&one.bytes);
             for reloc in &one.relocs {
                 let s = position(&reloc.symbol);
-                let value = (address_of(s) + reloc.addend) as u32;
+                // A function's address is its table slot.
+                let slot = slot_of(s);
+                let value = match slot {
+                    Some(slot) => slot,
+                    None => (address_of(s) + reloc.addend) as u32,
+                };
                 payload[start + reloc.offset..start + reloc.offset + 4].copy_from_slice(&value.to_le_bytes());
-                data_relocs.push((start + reloc.offset, s, reloc.addend));
+                data_relocs.push((start + reloc.offset, s, reloc.addend, slot.is_some()));
             }
         }
         section(&mut out, SECTION_DATA, &payload);
@@ -638,6 +768,12 @@ pub fn write(
                 table.extend([SYMBOL_KIND_DATA, WASM_SYMBOL_UNDEFINED]);
                 name(&mut table, one);
             }
+            Symbol::Table => {
+                // Undefined, named by its import; kept for the function addresses.
+                table.push(SYMBOL_KIND_TABLE);
+                uleb(&mut table, u64::from(WASM_SYMBOL_UNDEFINED | if address_taken { WASM_SYMBOL_NO_STRIP } else { 0 }));
+                uleb(&mut table, u64::from(index_of[s]));
+            }
         }
     }
     payload.push(WASM_SYMBOL_TABLE);
@@ -655,9 +791,20 @@ pub fn write(
         uleb_padded(&mut payload, info.len() as u32);
         payload.extend_from_slice(&info);
     }
+    if !data.init_funcs.is_empty() {
+        let mut inits = Vec::new();
+        uleb(&mut inits, data.init_funcs.len() as u64);
+        for (priority, function) in &data.init_funcs {
+            uleb(&mut inits, u64::from(*priority));
+            uleb(&mut inits, position(function) as u64);
+        }
+        payload.push(WASM_INIT_FUNCS);
+        uleb_padded(&mut payload, inits.len() as u32);
+        payload.extend_from_slice(&inits);
+    }
     custom(&mut out, "linking", &payload);
 
-    let code_section = if objects.is_empty() { SECTION_INDEX_CODE } else { SECTION_INDEX_CODE + 1 };
+    let code_section = SECTION_INDEX_CODE + u64::from(!slots.is_empty()) + u64::from(!objects.is_empty());
     if !code_relocs.is_empty() {
         payload.clear();
         uleb(&mut payload, code_section);
@@ -676,11 +823,13 @@ pub fn write(
         payload.clear();
         uleb(&mut payload, code_section + 1);
         uleb(&mut payload, data_relocs.len() as u64);
-        for &(offset, s, addend) in &data_relocs {
-            payload.push(R_WASM_MEMORY_ADDR_I32);
+        for &(offset, s, addend, table) in &data_relocs {
+            payload.push(if table { R_WASM_TABLE_INDEX_I32 } else { R_WASM_MEMORY_ADDR_I32 });
             uleb(&mut payload, offset as u64);
             uleb(&mut payload, s as u64);
-            sleb(&mut payload, addend);
+            if !table {
+                sleb(&mut payload, addend);
+            }
         }
         custom(&mut out, "reloc.DATA", &payload);
     }

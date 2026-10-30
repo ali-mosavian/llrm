@@ -45,7 +45,7 @@ pub(crate) fn value_type(
 
 /// `computeSignatureVTs` for the slice: the parameters and the results (none
 /// for `void`).
-fn signature(
+pub fn signature(
     module: &Module,
     name: &str,
     width: Width,

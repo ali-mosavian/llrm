@@ -86,7 +86,7 @@ pub fn object(
         let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
         functions.push(crate::object::encode_function(&f));
     }
-    Ok(crate::object::write(&functions, &data(&module)?))
+    Ok(crate::object::write(&functions, &data(&module, width)?))
 }
 
 /// The assembler's name for `global`: `.L` ahead of a private one (`Mangler` with the private prefix `.L`).
@@ -100,7 +100,10 @@ pub fn symbol_name(global: &llrm_mir::module::GlobalValue) -> String {
 
 /// The variables of `module`: the defined ones as data segments, in module order, and the names of the declared
 /// ones.
-fn data(module: &llrm_mir::module::Module) -> Result<crate::object::Data, String> {
+fn data(
+    module: &llrm_mir::module::Module,
+    width: Width,
+) -> Result<crate::object::Data, String> {
     use crate::object::{Data, DataKind, DataObject, DataReloc};
     use llrm_codegen::backend::{globals, masm::Datum};
     use llrm_codegen::objectfile::module::Space;
@@ -121,7 +124,8 @@ fn data(module: &llrm_mir::module::Module) -> Result<crate::object::Data, String
             out.undefined.push(name);
             continue;
         };
-        if !matches!(global.linkage, Linkage::External | Linkage::Internal | Linkage::Private) {
+        let constructors = name == "llvm.global_ctors" && global.linkage == Linkage::Appending;
+        if !constructors && !matches!(global.linkage, Linkage::External | Linkage::Internal | Linkage::Private) {
             return Err(format!("@{name}: {:?} linkage is not supported yet", global.linkage));
         }
         let mut bytes = Vec::new();
@@ -130,6 +134,7 @@ fn data(module: &llrm_mir::module::Module) -> Result<crate::object::Data, String
             match datum {
                 Datum::Label(_) => {}
                 Datum::Bytes(more) => bytes.extend(more),
+                Datum::Align(align) => bytes.resize(bytes.len().next_multiple_of(align.to as usize), 0),
                 Datum::Fill(fill) => bytes.resize(bytes.len() + fill.size as usize, fill.byte.unwrap_or(0)),
                 Datum::Pointer(pointer) if !pointer.far && pointer.bytes == 4 => {
                     relocs.push(DataReloc { offset: bytes.len(), symbol: pointer.name, addend: pointer.offset });
@@ -137,6 +142,33 @@ fn data(module: &llrm_mir::module::Module) -> Result<crate::object::Data, String
                 }
                 other => return Err(format!("@{name}: {other:?} in an initializer is not supported yet")),
             }
+        }
+        for reloc in &relocs {
+            let declared = out.functions.iter().any(|(one, ..)| *one == reloc.symbol);
+            if !declared && module.named(&reloc.symbol).is_some_and(|id| module.global(id).function().is_some()) {
+                let (params, results) = crate::dag::signature(module, &reloc.symbol, width)?;
+                out.functions.push((reloc.symbol.clone(), params, results));
+            }
+        }
+        if constructors {
+            // `globals::datums` lists only the functions, by ascending priority; the priorities are the
+            // initializer's, in the same order. The entries are `{ i32 priority, ptr function, ptr data }`.
+            let llrm_mir::ConstantKind::Aggregate(entries) = &module.context.get(initializer).kind else {
+                return Err("a malformed llvm.global_ctors".to_owned());
+            };
+            let mut priorities = Vec::new();
+            for entry in entries {
+                let llrm_mir::ConstantKind::Aggregate(fields) = &module.context.get(*entry).kind else { continue };
+                if let Some(llrm_mir::ConstantKind::Int(priority)) = fields.first().map(|f| &module.context.get(*f).kind) {
+                    priorities.push(*priority as u16);
+                }
+            }
+            priorities.sort();
+            if priorities.len() != relocs.len() {
+                return Err("llvm.global_ctors: an entry without a function".to_owned());
+            }
+            out.init_funcs = priorities.into_iter().zip(relocs.iter().map(|reloc| reloc.symbol.clone())).collect();
+            continue;
         }
         let align = globals::alignment(module, Some(&layout), variable, false, false).unwrap_or(1);
         let kind = match (variable.constant, bytes.iter().all(|&b| b == 0) && relocs.is_empty()) {

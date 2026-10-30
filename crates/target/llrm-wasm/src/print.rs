@@ -46,6 +46,15 @@ pub fn instruction(
 ) -> String {
     let asm = find(inst.opcode).unwrap_or_else(|| panic!("opcode {} has no assembly string", inst.opcode));
     let mut text = asm.text.to_string();
+    if inst.opcode == crate::dagisel::post_ids::CALL_INDIRECT {
+        // `printOperand` of the table, then the type as `(params) -> (results)`; the table keeps a space.
+        let mut immediates = inst.operands.iter().filter(|o| o.is_immediate());
+        let (Some(&Operand::Imm(at)), Some(&Operand::Sym(table))) = (immediates.next(), immediates.next()) else {
+            unreachable!("a call_indirect names its type and its table")
+        };
+        let (params, results) = &f.signatures[at as usize];
+        return format!("call_indirect\t {}, ({}) -> ({})", f.symbols[table as usize].0, type_list(params), type_list(results));
+    }
     if asm.names == ["brl"] {
         // `printBrList`: every target operand, the default last.
         let list: Vec<String> = inst.operands.iter().filter(|o| o.is_immediate()).map(operand_text).collect();

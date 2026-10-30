@@ -191,3 +191,10 @@ fn narrow_integer_conversions() {
 fn extension_attributes_assert_the_register() {
     check("ext_attrs");
 }
+
+/// A call through a pointer was selected as `call` of nothing (`call 26` in the object); it is
+/// `call_indirect` with the type and the table, the function pointer last.
+#[test]
+fn indirect_calls() {
+    check("indirect");
+}

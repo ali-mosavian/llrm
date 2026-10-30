@@ -44,6 +44,9 @@ fn rows(
 
 include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
 
+/// The table `call_indirect` and the address of a function use.
+pub const INDIRECT_FUNCTION_TABLE: &str = "__indirect_function_table";
+
 /// The pointer width of a module: `wasm32` or `wasm64`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Width {

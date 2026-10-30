@@ -217,6 +217,8 @@ pub struct Function {
     pub callees: Vec<(String, Vec<ValType>, Vec<ValType>)>,
     /// The (name, type) of each wasm global the code names: an import of the object file.
     pub globals: Vec<(String, ValType)>,
+    /// The (parameters, results) each `CALL_INDIRECT` names by its first immediate.
+    pub signatures: Vec<(Vec<ValType>, Vec<ValType>)>,
     /// The (size, alignment) of each stack object, by frame index:
     /// `MachineFrameInfo`.
     pub frame: Vec<(u64, u64)>,

@@ -94,7 +94,7 @@ fn linkage_pointers_and_the_stack_pointer_import() {
 fn every_fixture_object_is_the_pins() {
     let mut wrong = Vec::new();
     for name in
-        ["internal", "obj_arith", "obj_branch", "obj_call", "obj_cmp", "obj_frame", "obj_floatcalls", "obj_global", "obj_mem", "obj_memops", "obj_phis", "obj_shapes", "obj_shifts", "obj_switch"]
+        ["internal", "obj_arith", "obj_branch", "obj_call", "obj_cmp", "obj_frame", "obj_floatcalls", "obj_ctors", "obj_funcdata", "obj_funcptr", "obj_global", "obj_indirect", "obj_mem", "obj_memops", "obj_phis", "obj_shapes", "obj_shifts", "obj_switch"]
     {
         if std::panic::catch_unwind(|| check(name)).is_err() {
             wrong.push(name);
