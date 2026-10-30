@@ -1120,8 +1120,6 @@ def main() -> int:
         print(*clock_lines(measured, args.select), sep="\n")
     stale = [] if args.select else basecounts.judge(measured, base, basecounts.waivers(), same)[2]  # a selection leaves the other rows' waivers unused
     print(f"BASE {base_sha[:9]}: {len(base)} rows")
-    if sources:
-        print(f"base counts: {sources.count('restored')} slices restored, {sources.count('measured')} measured")
     print(*basecounts.stale_summary(stale), sep="\n")
     if not args.select:
         applied, more = basecounts.waived_lines(basecounts.waived_rows(measured, base, basecounts.waivers(), same), basecounts.waivers(), stale)
