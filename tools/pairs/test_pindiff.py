@@ -155,7 +155,8 @@ def test_no_row_of_the_corpus_shifts_by_the_width_of_its_type_at_m16():
 
     pindiff = load("pindiff")
     if not (os.environ.get("LLRM_OW") and os.environ.get("LLRM_PIN_CLANG") and os.environ.get("LLRM_CLANG_M16")):
-        pytest.skip("needs LLRM_OW, LLRM_PIN_CLANG and LLRM_CLANG_M16")
+        # The gate sets all three; where it requires the pin's tools (LLRM_REQUIRE_PINTOOLS) a missing one is red, not a skipped check.
+        (pytest.fail if os.environ.get("LLRM_REQUIRE_PINTOOLS") else pytest.skip)("needs LLRM_OW, LLRM_PIN_CLANG and LLRM_CLANG_M16")
     import tempfile
 
     guard = load("irguard")
@@ -372,3 +373,41 @@ def test_an_m16_row_whose_pin_object_calls_an_i64_divide_is_marked_not_compared(
     row = {"name": "x", "ins": 5, "pin_ins": 5, "bytes": 9, "pin_bytes": 9, "free": 9, "pin_free": 9, "lib": [], "nolib": ["__udivdi3"]}
     line = pindiff.table([{**row, "ins": 50}], False)[1]
     assert "no pin comparison (no 16-bit libgcc)" in line and "INS>pin" not in line
+
+
+def test_an_intrinsic_declared_in_the_code_space_is_handed_to_the_pin_in_space_zero():
+    """A dump at m16 declares `@llvm.lifetime.start.p0 .. addrspace(1)`; the pin's llc stops on "defined with type 'ptr addrspace(1)'",
+    so 4 QCport modules (combat, d_poly, ent, mover) had no pin count (2026-10-29)."""
+    pin = load("pin")
+    text = (
+        "declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) addrspace(1) nounwind\n"
+        "define void @f(ptr %p) addrspace(1) {\n  call cc 1005 addrspace(1) void @llvm.lifetime.start.p0(i64 -1, ptr nonnull %p) nounwind\n  ret void\n}\n"
+    )
+    out = pin.retarget(text, pin.target("m16"))
+    intrinsic_lines = [line for line in out.splitlines() if "@llvm." in line]
+    assert intrinsic_lines and not any("addrspace(1)" in line for line in intrinsic_lines), intrinsic_lines
+    assert "define void @f(ptr %p) addrspace(1)" in out
+
+
+def test_a_pointer_parameter_of_an_intrinsic_keeps_its_space():
+    """Dropping the code space must not touch the far pointer a memcpy takes."""
+    pin = load("pin")
+    out = pin.retarget("declare void @llvm.memcpy.p0.p1.i16(ptr, ptr addrspace(1), i16, i1) addrspace(1) nounwind\n", pin.target("m16"))
+    line = next(line for line in out.splitlines() if "@llvm.memcpy" in line)
+    assert "ptr addrspace(1), i16" in line and ") nounwind" in line, line
+
+
+def test_a_tail_call_of_an_intrinsic_is_in_space_zero_too():
+    """`tail call cc 1005 addrspace(1) .. @llvm.memcpy` kept its space while the declare lost it: "defined with type 'ptr' but expected
+    'ptr addrspace(1)'" on 16 QCport modules."""
+    pin = load("pin")
+    out = pin.retarget("  %r = tail call cc 1005 addrspace(1) ptr @llvm.x.p0(ptr %p)\n", pin.target("m16"))
+    line = next(line for line in out.splitlines() if "@llvm.x" in line)
+    assert "addrspace(1)" not in line, line
+
+
+def test_the_m16_row_datalayout_is_the_machines_string_not_its_template():
+    """targets.toml states `{datalayout:x86-m16}`; pindiff wrote it into the IR as is, and llrm-llc refused all 70 m16 programs
+    (`{datalayout:x86` in the datalayout), so no m16 figure existed on 2026-10-29."""
+    pindiff = load("pindiff")
+    assert "{" not in pindiff.cc_entry("m16")["datalayout"]

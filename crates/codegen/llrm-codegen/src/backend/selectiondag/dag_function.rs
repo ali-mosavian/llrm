@@ -46,7 +46,7 @@ use llrm_target::Target;
 use llrm_target::routines::Used;
 
 use super::actions::{Features, TargetLowering};
-use super::builder::{BuilderTarget, RuntimeAnswer, build_block};
+use super::builder::{BuilderTarget, RuntimeAnswer, SizeTrade, build_block};
 use super::dag_select::select_block;
 use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
 use super::function_lowering::FunctionLoweringInfo;
@@ -106,11 +106,16 @@ pub(super) struct Frame {
     /// (displacement, size) of each object made, by index.
     locals: std::cell::RefCell<Vec<(i64, i64)>>,
     depth: std::cell::Cell<i64>,
+    /// The widest alignment any object was made with.
+    align: std::cell::Cell<i64>,
 }
 
 impl Frame {
-    pub(super) fn new(params: Vec<i64>) -> Frame {
-        Frame { params, locals: Default::default(), depth: Default::default() }
+    pub(super) fn new(
+        params: Vec<i64>,
+        hole: i64,
+    ) -> Frame {
+        Frame { params, locals: Default::default(), depth: std::cell::Cell::new(hole), align: std::cell::Cell::new(1) }
     }
 }
 
@@ -156,6 +161,7 @@ impl FrameObjects for Temporaries<'_> {
         let (size, align) = (i64::from(size), i64::from(align.max(1)));
         let depth = (self.0.depth.get() + size + align - 1).div_euclid(align) * align;
         self.0.depth.set(depth);
+        self.0.align.set(self.0.align.get().max(align));
         let mut locals = self.0.locals.borrow_mut();
         locals.push((-depth, size));
         (locals.len() - 1) as i32
@@ -216,6 +222,9 @@ pub struct RuntimeContracts<'a> {
     /// What the module's finished callees wrote, which a call of one destroys
     /// and no more (`isel`'s `written`).
     pub facts: Option<&'a crate::backend::calleefacts::CalleeFacts>,
+    /// Bytes below BP left free above the allocas, for spill slots
+    /// (`relayout`'s second layout): the frame's objects start under them.
+    pub hole: i64,
 }
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
@@ -708,6 +717,23 @@ impl super::emit::ConstantCells for PoolCells<'_> {
     }
 }
 
+/// The clock prices a size-only pick weighs against bytes (m16: the fill it
+/// prices is real mode's).
+fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
+    let rate = cpu.size_milliclocks_per_byte();
+    if rate == 0 {
+        return None;
+    }
+    let costs = cpu.target().costs();
+    Some(SizeTrade {
+        milliclocks_per_byte: rate,
+        fill: costs.fill,
+        fill_cell: costs.fill_cell,
+        store: costs.store,
+        prefix: costs.prefix,
+    })
+}
+
 fn selected_in(
     module: &Module,
     name: &str,
@@ -766,7 +792,7 @@ fn selected_in(
         }
     }
     let (builder_target, address_mode) = match bitness {
-        16 => (BuilderTarget::m16().with_memset_stores_size(4).with_memcpy_moves_size(2), AddrMode::Real16),
+        16 => (BuilderTarget::m16(), AddrMode::Real16),
         64 => (BuilderTarget::m64(), AddrMode::Flat64),
         _ => (BuilderTarget::m32(), AddrMode::Flat32),
     };
@@ -774,6 +800,7 @@ fn selected_in(
     // The frontends compile static code: every symbol is `dso_local`.
     builder_target.dag.dso_local_symbols = true;
     let builder_target = builder_target
+        .with_tuning(cpu.target().tuning())
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
         // DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
@@ -784,9 +811,18 @@ fn selected_in(
         // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
         // 5095 B against the pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
-        .with_jump_tables(cpu.target().costs().jump_table != 0)
+        .with_jump_tables(
+            cpu.target().costs().jump_table != 0
+                && !function.attrs.iter().any(|attr| {
+                    matches!(
+                        attr,
+                        llrm_mir::Attribute::Str(name, Some(value)) if name == "no-jump-tables" && value == "true"
+                    )
+                }),
+        )
         .with_opt_size(cpu.size || cpu.min_size)
         .with_min_size(cpu.min_size)
+        .with_size_trade(size_trade(cpu))
         .with_tail_calls(tail_calls_on())
         .with_tti(cpu.target().tti())
         .with_runtime_call_verdicts(
@@ -808,7 +844,7 @@ fn selected_in(
     if module.signature(function.ty).2 {
         cells.push(convention.stack_arguments);
     }
-    let frame = Frame::new(cells);
+    let frame = Frame::new(cells, contracts.map_or(0, |one| one.hole));
     // The function's static allocas are frame objects 0, 1, ... in the order
     // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
     // type's alignment. Locals whose lifetime markers say they are never live
@@ -1284,6 +1320,21 @@ fn selected_in(
     let mut body =
         crate::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &noted_wides, &[], body);
     set_odds(&mut body, &info.edge_probs, &block_at);
+    // The loops whose trips `induction` proves, as the old route states them:
+    // the executed-work estimate (the route choice's, `LLRM_DEBUG=cost`) reads
+    // 31 in 32 for a loop without them.
+    {
+        let shape = llrm_analysis::cfg::Shape::of(function);
+        let unit = llrm_analysis::memory::Unit::of(module, &layout, function)
+            .with_spaces(arch.layout().spaces.roles)
+            .with_shape(&shape);
+        let exposed = llrm_analysis::memory::exposed_frames(&unit);
+        let unit = unit.with_exposed(&exposed);
+        let registers = llrm_analysis::consts::known(&unit);
+        let unit = unit.with_registers(&registers);
+        body.loop_trip_counts =
+            crate::backend::isel::proven_trips(&unit, &shape, &registers, |block| block_at.get(&block.0).copied());
+    }
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
     // their bytes are laid down at the call, as the old route did.
@@ -1343,6 +1394,7 @@ fn selected_in(
         far,
         pops,
         depth: fixed_depth,
+        align: frame.align.get(),
         extents: frame.locals.borrow().clone(),
         temporaries: frame.locals.borrow().len() - fixed_objects,
         over_aligned,

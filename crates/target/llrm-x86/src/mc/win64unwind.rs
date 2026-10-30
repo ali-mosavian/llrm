@@ -28,7 +28,7 @@
 //! `X86Objects::write_object`, for a 64-bit COFF object only.
 
 use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
-use llrm_object::{Binding, Definition, Fix, Object, Reloc, Role, Section, Symbol, Target, Unsupported};
+use llrm_object::{Binding, Definition, Fix, Object, Reloc, Role, Section, Seh, Symbol, Target, Unsupported};
 
 const PUSH_NONVOL: u8 = 0;
 const ALLOC_LARGE: u8 = 1;
@@ -45,6 +45,19 @@ const NONVOLATILE: [u8; 8] = [3, 5, 6, 7, 12, 13, 14, 15];
 
 fn gpr(register: Register) -> Option<u8> {
     (register.is_gpr64() && register != Register::RIP).then(|| register.number() as u8)
+}
+
+/// A 64-bit register's hardware number by its name (`rbx` is 3), for a
+/// producer that names registers as the register file does.
+pub fn hardware(name: &str) -> Option<u8> {
+    const NAMES: [&str; 16] =
+        ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
+    NAMES.iter().position(|one| *one == name).map(|number| number as u8)
+}
+
+/// Whether a function must keep the register of hardware number `number`.
+pub fn is_nonvolatile(number: u8) -> bool {
+    NONVOLATILE.contains(&number)
 }
 
 fn nonvolatile(register: Register) -> Option<u8> {
@@ -244,6 +257,36 @@ pub fn from_prologue(
     Ok(out)
 }
 
+/// The unwind data a function's declared directives state (`.seh_*`): each
+/// becomes the code the builder encodes, stamped with the offset after its
+/// instruction. What the codes cannot say is refused, as `from_prologue` does.
+pub fn from_seh(
+    function: &str,
+    directives: &[(usize, Seh)],
+) -> Result<Info, Unsupported> {
+    let mut out = Info { prolog: 0, frame: None, codes: Vec::new() };
+    for &(at, directive) in directives {
+        let offset = u8::try_from(at).map_err(|_| refused(function, "a prologue past 255 bytes"))?;
+        let op = match directive {
+            Seh::PushReg(register) => Op::PushNonvol(register),
+            Seh::StackAlloc(size) => Op::Alloc(size),
+            Seh::SetFrame(register, bytes) => {
+                if bytes % 16 != 0 || bytes > 240 || out.frame.is_some() {
+                    return Err(refused(function, "a frame register offset past 240 or not a multiple of 16"));
+                }
+                out.frame = Some((register, (bytes / 16) as u8));
+                Op::SetFpreg
+            }
+            Seh::SaveReg(register, at) => Op::SaveNonvol(register, at),
+            Seh::SaveXmm(register, at) => Op::SaveXmm128(register, at),
+        };
+        out.codes.push(Code { offset, op });
+        out.prolog = offset;
+    }
+    out.bytes().map_err(|why| refused(function, &why))?;
+    Ok(out)
+}
+
 /// `mov reg, rsp` or `lea reg, [rsp+d]`.
 fn is_frame_set(instruction: &Instruction) -> bool {
     if instruction.op0_kind() != OpKind::Register || gpr(instruction.op0_register()).is_none() {
@@ -278,6 +321,7 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
     functions.sort_unstable();
     functions.dedup_by_key(|one| (one.0, one.1));
 
+    let frames = object.frames.clone();
     let mut object = object.clone();
     let xdata = object.sections.len();
     let mut xdata_image: Vec<u8> = Vec::new();
@@ -286,10 +330,16 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
     for (section, offset, size, index) in functions {
         let name = object.symbols[index].name.clone();
         let code = &object.sections[section].image;
-        let info = from_prologue(
-            &name,
-            code.get(offset..offset + size).ok_or_else(|| refused(&name, "a body past its section"))?,
-        )?;
+        // A producer that declared the prologue is believed; the bytes are
+        // read only for code that declared nothing.
+        let declared = frames.iter().find(|frame| (frame.section, frame.offset) == (section, offset));
+        let info = match declared.filter(|frame| !frame.seh.is_empty()) {
+            Some(frame) => from_seh(&name, &frame.seh)?,
+            None => from_prologue(
+                &name,
+                code.get(offset..offset + size).ok_or_else(|| refused(&name, "a body past its section"))?,
+            )?,
+        };
 
         let at = xdata_image.len();
         xdata_image.extend(info.bytes().map_err(|why| refused(&name, &why))?);

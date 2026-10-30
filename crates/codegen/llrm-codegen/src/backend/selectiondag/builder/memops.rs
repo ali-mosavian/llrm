@@ -415,7 +415,8 @@ impl Builder<'_> {
     }
 
     /// DEVIATE SD223 (real mode): tuned for size, a constant memset whose
-    /// stores take more bytes than a `rep stosb` fill is the fill. The pin
+    /// stores take more bytes than a `rep stosb` fill is the fill, unless the
+    /// fill's extra clocks outweigh the bytes it saves (`SizeTrade`). The pin
     /// counts stores (`MaxStoresPerMemsetOptSize`); in real mode each dword
     /// store carries a `66` prefix and the fill costs `FILL_BYTES`. Mirrors the
     /// old selector's `stored_bytes` rule. Owner w12. Exit: a store-cost
@@ -429,9 +430,20 @@ impl Builder<'_> {
             return false;
         }
         let dwords = length / 4;
+        let words = u64::from(length % 4 >= 2);
+        let bytes = u64::from(length % 2 == 1);
         let (each, setup) = if dwords > 1 { (4, 6) } else { (8, 0) };
-        let stored = setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 };
-        stored > FILL_BYTES
+        let stored = setup + dwords * each + words * 5 + bytes * 4;
+        if stored <= FILL_BYTES {
+            return false;
+        }
+        let Some(trade) = self.target.size_trade else {
+            return true;
+        };
+        let stores = (dwords * (trade.store + trade.prefix) as u64 + (words + bytes) * trade.store as u64) as i64;
+        let fill = trade.fill + length as i64 * trade.fill_cell;
+        // Tuning constant fitted to sc.c, weapons, mdl and lru, not derived.
+        (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 
     /// `getMemsetStores`: the fill value splatted to the widest operation,
@@ -701,10 +713,12 @@ impl Builder<'_> {
         }
         let chain = match which {
             Intrinsic::MemCpy | Intrinsic::MemMove => {
-                let limit = match (opt_size, self.target.memcpy_moves_size) {
-                    (true, 1..) => self.target.memcpy_moves_size,
-                    (true, _) => 4,
-                    _ => 8,
+                let tuning = &self.target.tuning;
+                let limit = match (which, opt_size) {
+                    (Intrinsic::MemMove, true) => tuning.max_stores_per_memmove_opt_size,
+                    (Intrinsic::MemMove, false) => tuning.max_stores_per_memmove,
+                    (_, true) => tuning.max_stores_per_memcpy_opt_size,
+                    (_, false) => tuning.max_stores_per_memcpy,
                 };
                 // DEVIATE SD225 (real mode): tuned for size, a copy of more
                 // than `limit` pieces (dwords, then a word and
@@ -778,10 +792,10 @@ impl Builder<'_> {
                 }
             }
             _ => {
-                let limit = match (opt_size, self.target.memset_stores_size) {
-                    (true, 1..) => self.target.memset_stores_size,
-                    (true, _) => 8,
-                    _ => 16,
+                let limit = if opt_size {
+                    self.target.tuning.max_stores_per_memset_opt_size
+                } else {
+                    self.target.tuning.max_stores_per_memset
                 };
                 let inline = match constant {
                     Some(bytes) if !self.fill_is_smaller(bytes, opt_size) => {
@@ -793,6 +807,14 @@ impl Builder<'_> {
                     (Some(chain), _) => chain,
                     (None, Some(bytes)) if strings_exist && (self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4)) => {
                         self.rep_stos(root, dst, other, bytes, alignment)?
+                    }
+                    // no `memset` to call: dwords, as the old selector fills;
+                    // x86 takes them unaligned. Only a size of whole dwords (a
+                    // tail costs the bytes the dwords save, and a far one
+                    // cannot be named) and not for size: `xor eax, eax` is a
+                    // byte more than `xor al, al`.
+                    (None, Some(bytes)) if strings_exist && !opt_size && !self.runtime_has("memset") && bytes % 4 == 0 => {
+                        self.rep_stos(root, dst, other, bytes, 4)?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
@@ -1155,7 +1177,12 @@ impl Builder<'_> {
         size: u64,
         align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let limit = if self.has_opt_size() { 4 } else { 8 };
+        // The pin's own limits, not the target's: m16's override is for the
+        // load and store pairs of a `memcpy` (SD225); a byval argument is
+        // three dword pushes where the table's 2 would make it `rep movs`
+        // (tests/byval_copy_at_os.rs).
+        let pin = llrm_mir::target::Tuning::PIN;
+        let limit = if self.has_opt_size() { pin.max_stores_per_memcpy_opt_size } else { pin.max_stores_per_memcpy };
         if let Some(copy) = self.inline_memcpy(chain, dst, src, size, limit, align, align)? {
             return Ok(Some(copy));
         }
@@ -1270,7 +1297,10 @@ impl Builder<'_> {
                 _ => (1, size, value),
             }
         } else if let Some(byte) = self.dag.constant(value) {
-            let block = alignment.min(word);
+            // `getOptimalRepType`: a dword at most on a target with 32-bit
+            // registers, whatever its pointers; for size the pointer's width
+            // (`mov eax, 0` is more bytes: fpbench.nib +3 at -Os).
+            let block = alignment.min(if self.has_opt_size() { word } else { word.max(4) });
             let mut pattern = byte as u64 & 255;
             if block >= 2 {
                 pattern |= pattern << 8;

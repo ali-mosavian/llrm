@@ -1,5 +1,6 @@
 """`uv run --project tools python -m unittest discover -s tools/bench`"""
 
+import os
 import re
 import sys
 import json
@@ -431,7 +432,7 @@ def test_a_c_benches_os_layer_header_is_the_rows_not_a_stale_one(tmp_path):
         pytest.skip("no llrm-cc in the dist")
     variant = next(one for one in bench.variants(bench.BENCH / "stft_fixed") if one.language == "c")
     (_, arguments, _), *_ = bench.compiles(variant, "Os", tmp_path, "stft")
-    done = subprocess.run([str(bench.BIN / "llrm-cc"), *arguments, "-E", "-H", "-o", "/dev/null"], env=bench.c_environment(variant), capture_output=True, text=True)
+    done = subprocess.run([str(bench.BIN / "llrm-cc"), *arguments, "-E", "-H", "-o", str(tmp_path / "stft.i")], env=bench.c_environment(variant), capture_output=True, text=True)
     headers = [line for line in done.stderr.splitlines() if line.endswith("llrm_os.h")]
     assert headers and not any(str(tmp_path) in line for line in headers), done.stderr
 
@@ -602,6 +603,20 @@ def test_a_worse_count_fails_the_gate_and_nothing_else_does(monkeypatch, capsys,
     assert code == 0 and "BETTER" not in out and "0 problems" in out
 
 
+def test_the_run_tells_its_stages_on_stderr_and_keeps_stdout_for_the_verdict(monkeypatch, capsys, tmp_path):
+    """bench-3 of gate run 2 printed nothing for 45 minutes before the job timeout cancelled it: nobody could tell the build from the base pass from a DOSBox run."""
+    monkeypatch.setattr(sys, "argv", ["bench.py", "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
+    monkeypatch.setattr(bench, "judge", lambda *a: [])
+    monkeypatch.setattr(bench, "base_rows", lambda args: ({}, set(), "0" * 40))
+    monkeypatch.setattr(bench, "standing", lambda *a: [])
+    monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
+    bench.main()
+    seen = capsys.readouterr()
+    assert [word for word in ("measuring", "measured", "base counts", "base 000000000") if word not in seen.err] == []
+    assert "bench:" not in seen.out
+
+
 def test_record_keeps_the_heads_counts_without_measuring_a_base(monkeypatch, capsys, tmp_path):
     """The counts were recorded after the base was measured: a main push saved them 40 minutes in, and five pull requests measured the base alone."""
     def no_base(args):
@@ -613,36 +628,150 @@ def test_record_keeps_the_heads_counts_without_measuring_a_base(monkeypatch, cap
     assert code == 0 and list((tmp_path / "cache").glob("*-own.json")) and "problems" not in out
 
 
-def shard_file(folder, index, problems=(), measured=None):
+@pytest.fixture(autouse=True)
+def one_program_per_slice(request, monkeypatch):
+    """The merge tests' slices measure program p<I>: the split's real names would make every fixture file 16 names long."""
+    if "merge" in request.function.__name__:
+        monkeypatch.setattr(bench.shards, "of", lambda index, count: [f"p{index}"])
+
+
+def shard_file(folder, index, measured=None, programs=None):
     folder.mkdir(parents=True, exist_ok=True)
-    data = {"measured": measured or {}, "base": {}, "same": [], "problems": list(problems), "base_sha": "a" * 40}
-    (folder / f"shard-{index}.json").write_text(json.dumps(data))
+    (folder / f"shard-{index}.json").write_text(json.dumps({"measured": measured or {}, "programs": [f"p{index}"] if programs is None else programs}))
+
+
+def base_file(folder):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "base.json").write_text(json.dumps({"base": {}, "same": [], "base_sha": "a" * 40}))
 
 
 def test_the_merge_names_a_shard_that_left_no_result_and_fails(tmp_path, capsys):
     """A shard that died before writing its file would otherwise leave its rows unjudged and the run green."""
     shard_file(tmp_path, 1)
     shard_file(tmp_path, 3)
+    base_file(tmp_path)
     assert bench.merge(tmp_path, 3, ["O2"], False) == 1
     assert "bench shard 2 of 3" in capsys.readouterr().out
 
 
-def test_the_merge_prints_every_shards_problems_last_and_fails_on_one(tmp_path, capsys):
-    shard_file(tmp_path, 1, problems=[WORSE])
+def test_the_merge_names_a_missing_base_and_fails_instead_of_measuring_one(tmp_path, capsys, monkeypatch):
+    """Every shard built the base compiler and measured its slice of the base when the cache missed (gate run 2: bench-3 cancelled at 60 minutes, no output). The base is the bench-base leg's: without its file the merge fails, and measures nothing."""
+    shard_file(tmp_path, 1)
+    monkeypatch.setattr(bench, "base_rows", lambda args: (_ for _ in ()).throw(AssertionError("the merge measures no base")))
+    assert bench.merge(tmp_path, 1, ["O2"], False) == 1
+    assert "no result from bench-base" in capsys.readouterr().out
+
+
+def base_slice(folder, index, base=None, sha="a" * 40):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"base-{index}.json").write_text(json.dumps({"base": base or {}, "same": [f"p{index}"], "base_sha": sha, "programs": [f"p{index}"]}))
+
+
+def test_the_merge_judges_against_the_union_of_the_base_slices_as_it_does_against_the_whole_base(tmp_path, capsys, monkeypatch):
+    """The base leg took over 73 minutes on a hosted runner and was cut by the job timeout (gate run 7): three jobs measure a third each, and
+    the merge must judge exactly the rows one leg would have: 424 of them."""
+    rows = {f"p{i}/c/O2": {"instructions": 10 * i} for i in (1, 2, 3)}
+    seen = {}
+    monkeypatch.setattr(bench, "judge", lambda measured, selected, opts, base, same: seen.update(base=base, same=same) or [])
+    monkeypatch.setattr(bench, "standing", lambda *a: [])
+    for i in (1, 2, 3):
+        shard_file(tmp_path / "sliced", i)
+        base_slice(tmp_path / "sliced", i, {k: v for k, v in rows.items() if k.startswith(f"p{i}/")})
+    assert bench.merge(tmp_path / "sliced", 3, ["O2"], False) == 0
+    sliced = dict(seen)
+    for i in (1, 2, 3):
+        shard_file(tmp_path / "whole", i)
+    (tmp_path / "whole").mkdir(exist_ok=True)
+    (tmp_path / "whole/base.json").write_text(json.dumps({"base": rows, "same": ["p1", "p2", "p3"], "base_sha": "a" * 40}))
+    assert bench.merge(tmp_path / "whole", 3, ["O2"], False) == 0
+    assert sliced == seen and len(sliced["base"]) == 3 and sliced["same"] == {"p1", "p2", "p3"}
+
+
+def test_the_merge_names_a_base_slice_that_left_no_result_and_fails(tmp_path, capsys):
+    """A base slice that was cancelled leaves its programs with no base: they would be skipped, and the run green."""
+    for i in (1, 2, 3):
+        shard_file(tmp_path, i)
+    base_slice(tmp_path, 1)
+    base_slice(tmp_path, 3)
+    assert bench.merge(tmp_path, 3, ["O2"], False) == 1
+    assert "bench-base slice 2 of 3" in capsys.readouterr().out
+
+
+def test_the_merge_fails_when_the_base_slices_measured_different_bases(tmp_path, capsys):
+    for i in (1, 2):
+        shard_file(tmp_path, i)
+    base_slice(tmp_path, 1)
+    base_slice(tmp_path, 2, sha="b" * 40)
+    assert bench.merge(tmp_path, 2, ["O2"], False) == 1
+    assert "different bases" in capsys.readouterr().out
+
+
+def test_a_base_slice_measures_its_share_of_the_programs_and_writes_base_i(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(bench.shards, "of", lambda index, count: ["fib"] if (index, count) == (2, 3) else [])
+    monkeypatch.setattr(sys, "argv", ["bench.py", "--shard", "base:2/3", "--json", str(tmp_path / "out"), "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda *a, **k: (_ for _ in ()).throw(AssertionError("the base leg measures no head")))
+    monkeypatch.setattr(bench, "base_rows", lambda args, names=None: ({("fib", "c", "O2"): {"instructions": 4}}, {"fib"}, "b" * 40) if names == ["fib"] else (_ for _ in ()).throw(AssertionError(names)))
+    assert bench.main() == 0
+    assert json.loads((tmp_path / "out/base-2.json").read_text()) == {"base": {"fib/c/O2": {"instructions": 4}}, "same": ["fib"], "base_sha": "b" * 40, "programs": ["fib"]}
+    assert not (tmp_path / "out/base.json").exists()
+
+
+def test_a_base_slice_measures_only_programs_the_base_has_and_judges_only_its_own(monkeypatch, tmp_path):
+    """A program the head added is in the head's slice and not in the base's tree: its bench.py rejects the name and the slice would die."""
+    import measure
+
+    asked = {}
+
+    def counts(sha, opts, tree_of, build, measure_with, timed=False, cache=None, only=None):
+        asked["only"] = only
+        return {("old", "c", "O2"): {"instructions": 1}}, {"old": "h1", "other": "h9"}
+
+    monkeypatch.setattr(measure, "git", lambda *a: "h" * 40)
+    monkeypatch.setattr(measure, "base_of", lambda *a: "b" * 40)
+    monkeypatch.setattr(measure, "tree_of", lambda sha: "t")
+    monkeypatch.setattr(bench.basecounts, "programs_at", lambda sha: {"old": "h1", "other": "h9"})
+    monkeypatch.setattr(bench.basecounts, "programs", lambda root=bench.ROOT: {"old": "h1", "new": "h2", "other": "h9"})
+    monkeypatch.setattr(bench.basecounts, "base_counts", counts)
+    base, same, sha = bench.base_rows(bench.argparse.Namespace(opt=["O2"], time=False, work=tmp_path), ["old", "new"])
+    assert asked["only"] == ["old"] and same == {"old"}, "the head's new program is not asked of the base, and the other slice's program is not this slice's"
+
+
+def test_the_slices_cover_every_program_the_judge_reads_exactly_once():
+    """The split lists benchmark directories (benchlist) and the judge's programs() lists bench.toml: if they differ a program is in no slice, no
+    base row is measured for it, and it is judged against nothing."""
+    names = bench.shards.names()
+    assert set(names) == set(bench.basecounts.programs()), "the slices and the judge name different programs"
+    cut = [name for i in (1, 2, 3) for name in bench.shards.of(i, 3)]
+    assert sorted(cut) == sorted(names)
+
+
+def test_the_merge_prints_every_problem_last_and_fails_on_one(tmp_path, capsys, monkeypatch):
+    shard_file(tmp_path, 1)
     shard_file(tmp_path, 2)
+    base_file(tmp_path)
+    monkeypatch.setattr(bench, "judge", lambda *a: [WORSE])
+    monkeypatch.setattr(bench, "standing", lambda *a: [])
     assert bench.merge(tmp_path, 2, ["O2"], False) == 1
     lines = capsys.readouterr().out.splitlines()
     assert lines[-2] == f"FAIL {WORSE}" and lines[-1].endswith("1 problems")
 
 
-def test_a_shard_judges_and_writes_only_its_own_slice(monkeypatch, capsys, tmp_path):
+def test_a_shard_measures_and_writes_only_its_own_slice_and_never_touches_the_base(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(bench.shards, "of", lambda index, count: ["fib"])
     monkeypatch.setattr(sys, "argv", ["bench.py", "--shard", "2/3", "--json", str(tmp_path / "out"), "--work", str(tmp_path)])
     monkeypatch.setattr(bench, "measure_all", lambda select, *a, **k: {("fib", "c", "O2"): {"instructions": 5}} if select == ["fib"] else {})
-    monkeypatch.setattr(bench, "judge", lambda *a: [])
-    monkeypatch.setattr(bench, "base_rows", lambda args, only=None: ({("fib", "c", "O2"): {"instructions": 5}}, {"fib"}, "b" * 40))
+    monkeypatch.setattr(bench, "base_rows", lambda args: (_ for _ in ()).throw(AssertionError("a slice measures no base")))
     assert bench.main() == 0
-    assert json.loads((tmp_path / "out/shard-2.json").read_text())["measured"] == {"fib/c/O2": {"instructions": 5}}
+    assert json.loads((tmp_path / "out/shard-2.json").read_text()) == {"measured": {"fib/c/O2": {"instructions": 5}}, "programs": ["fib"]}
+
+
+def test_the_base_leg_measures_the_base_once_and_writes_it_for_the_merge(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(sys, "argv", ["bench.py", "--shard", "base", "--json", str(tmp_path / "out"), "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda *a, **k: (_ for _ in ()).throw(AssertionError("the base leg measures no head")))
+    monkeypatch.setattr(bench, "base_rows", lambda args: ({("fib", "c", "O2"): {"instructions": 4}}, {"fib"}, "b" * 40))
+    assert bench.main() == 0
+    assert json.loads((tmp_path / "out/base.json").read_text()) == {"base": {"fib/c/O2": {"instructions": 4}}, "same": ["fib"], "base_sha": "b" * 40}
+    assert capsys.readouterr().out.splitlines()[-1].endswith(" 0 problems")
 
 
 def test_a_bless_records_references_only_and_needs_a_reason():
@@ -679,11 +808,10 @@ def test_two_prs_that_each_change_one_rows_count_are_judged_each_on_its_own_delt
     assert "instructions 95 > 90 (worse)" in judged(second, base_b)[0]  # rebased onto the first, it is judged on that base
 
 
-def _c_build_commands(monkeypatch, tmp_path, name, reads_attribute=True):
-    """The llrm-c commands `bench.build` runs for the C benchmark `name` at -O2."""
+def _c_build_commands(monkeypatch, tmp_path, name):
+    """The llrm-cc commands `bench.build` runs for the C benchmark `name` at -O2."""
     variant = next(one for directory in bench.benchmarks([name]) for one in bench.variants(directory) if one.language == "c")
     seen = []
-    monkeypatch.setattr(bench, "reads_noinline_attribute", lambda compiler: reads_attribute)
 
     def run(command, *args, **kwargs):
         seen.append(command)
@@ -710,13 +838,6 @@ def test_the_object_that_is_sized_has_no_pointer_in_it(monkeypatch, tmp_path):
     text = Path(sized[1]).read_text()
     assert "__attribute__((noinline)) long bench_rectwo(" in text and "volatile" not in text
     assert sized[sized.index("-o") + 1].endswith("x.obj") and counted[counted.index("-o") + 1].endswith("x.counted.obj")
-
-
-def test_a_compiler_that_cannot_read_the_noinline_attribute_gets_the_flag_not_a_failing_source(monkeypatch, tmp_path):
-    """The main dist's llrm-c hands C to wccq, which fails `__attribute__((noinline))` as E1169: all 48 C rows of the m16 -Os table were errors on main
-    and the C kernels went uncompared. Such a compiler is given the plain source and -fno-inline-functions."""
-    (sized,) = _c_build_commands(monkeypatch, tmp_path, "rectwo", reads_attribute=False)
-    assert "__attribute__" not in Path(sized[1]).read_text() and "-fno-inline-functions" in sized
 
 
 def test_the_m32_table_builds_llrm_with_no_inlining_flag_either():
@@ -817,20 +938,12 @@ def test_a_name_no_function_has_is_an_error_not_a_flag_that_did_nothing():
     assert done.returncode != 0 and "defines no function of that name" in done.stderr
 
 
-def test_a_float_nib_row_is_compiled_with_excess_precision_standard_and_records_it():
-    """nbody_single (Nib f32) printed 86015 for 86016 at -O1/-O2 once LoopRotate kept the loop-carried floats in x87 registers (#3218): fast mode allows it, the program's output
-    holds with the rounding on. A float row is measured with it, and says so."""
+def test_a_float_nib_row_is_compiled_in_fast_mode_as_main_measured_it():
+    """ed700f10ce built float Nib rows with -fexcess-precision=standard: against main's rows (compiled fast; the flag recorded in them did nothing there) fpbench read 203869 clocks against 156348,
+    a "regression" of the flag. The rows are measured fast, like main's."""
     float_nib = next(v for v in bench.variants(bench.BENCH / "nbody_single") if v.language == "nib")
-    assert bench.FLOAT_FLAG in bench.nib_flags(float_nib) and bench.float_flags(float_nib) == [bench.FLOAT_FLAG]
-    integer_nib = next(v for v in bench.variants(bench.BENCH / "sieve") if v.language == "nib")
-    assert bench.float_flags(integer_nib) == [] and bench.FLOAT_FLAG not in bench.nib_flags(integer_nib)
-    row = {"instructions": 1, "memory_operands": 1, "code_bytes": 1, "data_bytes": 0, "bss_bytes": 0}
-    measured = {("nbody_single", v.language, "O2"): {"skip": "not under test"} for v in bench.variants(bench.BENCH / "nbody_single")}
-    measured[("nbody_single", "nib", "O2")] = row
-    problems = bench.judge(measured, ["nbody_single"], ["O2"], base={})
-    assert any("records None" in p and "nib -O2" in p for p in problems), problems
-    measured[("nbody_single", "nib", "O2")] = {**row, "flags": [bench.FLOAT_FLAG]}
-    assert not any("float row" in p for p in bench.judge(measured, ["nbody_single"], ["O2"], base={}))
+    assert not any("excess-precision" in one for one in bench.nib_flags())
+    assert not any("excess-precision" in one for one in bench.compiles(float_nib, "Os", Path("w"), "nbody_single")[0][1])
 
 
 def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_time():
@@ -848,3 +961,78 @@ def test_a_c_bench_row_builds_and_links(tmp_path):
     variant = next(one for one in bench.variants(bench.BENCH / "bintree") if one.language == "c")
     built = bench.build(variant, "Os", tmp_path, "bintree")
     assert not isinstance(built, str), built
+
+
+def test_a_row_above_its_clock_limit_fails_the_gate():
+    """tile c -Os ran 10300 clocks against main's 10169 and nothing in the gate said so: only counts and sizes were judged."""
+    limits = {"tile c -Os": 10224}
+    assert bench.clock_problems("tile c -Os", {"clocks": 10225}, limits) == ["tile c -Os: clocks 10225 > limit 10224 (tools/bench/clock_limits.toml)"]
+    assert bench.clock_problems("tile c -Os", {"clocks": 10224}, limits) == []
+    assert bench.clock_problems("fib c -Os", {"clocks": 10**9}, limits) == []
+
+
+def test_lru_c_may_not_go_back_to_the_rep_stosb_fill():
+    """lru c -Os ran 377 clocks while a 28-byte `rep stosb` fill replaced its loop; with the loop kept it is 289."""
+    limits = bench.clock_limits()
+    assert limits["lru c -Os"] == 289
+    assert bench.clock_problems("lru c -Os", {"clocks": 377}, limits) == [
+        "lru c -Os: clocks 377 > limit 289 (tools/bench/clock_limits.toml)"
+    ]
+
+
+def test_a_row_above_main_with_no_clock_entry_fails_the_gate():
+    """quicksort nib ran 447484 clocks against main's 316122; had its entry been missing the gate would have gone red only on the first run."""
+    main = {"quicksort nib -Os": 316122}
+    assert bench.clock_problems("quicksort nib -Os", {"clocks": 316123}, {}, main) == [
+        "quicksort nib -Os: clocks 316123 > main's 316122 and no entry in tools/bench/clock_limits.toml"
+    ]
+    assert bench.clock_problems("quicksort nib -Os", {"clocks": 316122}, {}, main) == []
+    assert bench.clock_problems("quicksort nib -Os", {"clocks": 447484}, {"quicksort nib -Os": 447484}, main) == []
+
+
+def test_every_clock_limit_has_a_main_row_and_every_main_row_is_a_label():
+    assert set(bench.clock_limits()) <= set(bench.main_clocks())
+
+
+def test_every_clock_limit_names_a_real_row():
+    """A typo in a row label would leave its row unjudged."""
+    names = {one.name for directory in bench.benchmarks([]) for one in bench.variants(directory)}
+    for label in bench.clock_limits():
+        name, language, level = label.split()
+        assert (name in names or name.startswith("parity/")) and language in ("c", "bas", "nib") and level == "-Os", label
+
+
+def test_the_gate_judges_a_rows_clocks_against_its_limit(monkeypatch):
+    """judge() ran the count and size gate only: a row over its clock limit passed it."""
+    monkeypatch.setattr(bench, "clock_limits", lambda: {"tile c -Os": 100})
+    row = {"instructions": 1, "memory_operands": 1, "code_bytes": 1, "data_bytes": 0, "bss_bytes": 0}
+    got = {("tile", one.language, "Os"): {**row, "clocks": 101 if one.language == "c" else 1} for one in bench.variants(bench.BENCH / "tile")}
+    problems = bench.judge(got, ["tile"], ["Os"], base={})
+    assert problems == ["tile c -Os: clocks 101 > limit 100 (tools/bench/clock_limits.toml)"]
+
+
+def test_the_merge_fails_when_a_shard_or_base_slice_measured_fewer_programs_than_its_share(tmp_path, capsys):
+    """A slice that died after a few programs and still wrote its file would leave the rest with no row, judged against nothing: zero regressions."""
+    for i in (1, 2):
+        shard_file(tmp_path, i)
+        base_slice(tmp_path, i)
+    shard_file(tmp_path, 2, programs=[])
+    assert bench.merge(tmp_path, 2, ["O2"], False) == 1
+    assert "bench shard 2 of 2 measured 0 programs, the split gives it 1; lacks p2" in capsys.readouterr().out
+
+
+def test_the_merge_fails_when_a_program_is_measured_twice(tmp_path, capsys):
+    for i in (1, 2):
+        shard_file(tmp_path, i, programs=["p1", "p2"])
+        base_slice(tmp_path, i)
+    assert bench.merge(tmp_path, 2, ["O2"], False) == 1
+    assert "measured p1 2 times" in capsys.readouterr().out
+
+
+def test_the_first_stage_line_says_how_many_programs_and_how_many_cores(monkeypatch, capsys, tmp_path):
+    """Run 7 was "3x slower than local" by inference: its stage lines were lost, and nothing said a hosted runner has 4 cores to a local host's 32."""
+    monkeypatch.setattr(bench.shards, "of", lambda index, count: ["fib", "dhry"])
+    monkeypatch.setattr(sys, "argv", ["bench.py", "--shard", "1/3", "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
+    bench.main()
+    assert f"measuring 2 benchmarks at O2 Os, {len(os.sched_getaffinity(0))} usable of {os.cpu_count()} cores" in capsys.readouterr().err

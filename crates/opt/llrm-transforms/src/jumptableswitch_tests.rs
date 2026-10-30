@@ -235,7 +235,7 @@ fn the_pipeline_makes_the_table_call_a_switch() {
     let text = format!("{DOS}{}", example("internal constant", "").replace("define i16 @f(", "define i16 @main(i16 %n, i16 %x) {\nentry:\n  %r = call i16 @f(i16 %n, i16 %x)\n  ret i16 %r\n}\n\ndefine i16 @f("));
     let mut module = parsed(&text);
     let applied = crate::pipeline::Applied {
-        options: crate::pipeline::Options { llvm_order: true, pre: true, ..Default::default() },
+        options: crate::pipeline::Options { pre: true, ..Default::default() },
         ..Default::default()
     };
     llrm_mir::program::Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {

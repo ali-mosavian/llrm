@@ -1084,6 +1084,7 @@ impl Collection<'_, '_> {
             tti: self.tti,
             l: self.l,
             hardware_loop_profitable: self.hardware_loop_profitable,
+            as_written: false,
         };
         cost.rate_formula(&mut rating, f, regs, visited, &self.uses[lu_idx], losers);
     }
