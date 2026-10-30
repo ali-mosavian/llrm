@@ -231,7 +231,7 @@ mod tests {
     use crate::backend::selectiondag::mvt::EVT;
 
     fn info() -> MemInfo {
-        MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0 }
+        MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0, ordering: None }
     }
 
     struct Access {
