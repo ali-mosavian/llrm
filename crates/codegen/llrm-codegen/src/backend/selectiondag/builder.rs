@@ -1304,8 +1304,8 @@ impl Builder<'_> {
             )
             .map_err(|_| Refused("call the convention does not describe"))?
         };
-        if let Some(tail) = self.tail_candidate.take()
-            && !hooked
+        if !hooked
+            && let Some(tail) = self.tail_candidate.take()
             && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
         {
             self.tail_calls.push(tail);
