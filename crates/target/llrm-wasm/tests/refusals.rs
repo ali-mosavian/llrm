@@ -41,3 +41,14 @@ fn an_unwind_edge_is_not_an_edge() {
     let out = assembly(text, Width::W32, Options::default()).expect("compiles");
     assert!(!out.contains("i32.const\t2"), "{out}");
 }
+
+/// A landing pad whose value is read (`extractvalue` of the exception) has no
+/// lowering here: it must stop at compile time, not drop the value.
+#[test]
+fn a_read_landing_pad_value_is_refused_by_name() {
+    let why = refusal(
+        "declare void @g(i32)\ndeclare i32 @p(...)\ndefine i32 @f(i32 %a) personality ptr @p {\nentry:\n  invoke void @g(i32 %a) to label %ok unwind label %pad\n\
+         ok:\n  ret i32 1\npad:\n  %l = landingpad { ptr, i32 } cleanup\n  %s = extractvalue { ptr, i32 } %l, 1\n  ret i32 %s\n}\n",
+    );
+    assert!(why.contains("landing pad"), "{why}");
+}
