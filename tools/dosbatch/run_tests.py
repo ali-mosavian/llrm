@@ -231,7 +231,7 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
         if source.suffix == ".asm":
             dosbatch.assemble(source, obj, *dosbatch.os_defines(target, "c"))
         else:
-            command, env = dosbatch.c_compile(source, obj, target, level, include, abi)
+            command, env = dosbatch.c_compile(source, obj, target, level, None, abi, declarations=include)
             dosbatch._host(command, env)
         objects.append(obj)
     return tuple(objects)

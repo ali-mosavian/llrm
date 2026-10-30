@@ -39,7 +39,7 @@
 21 crates/codegen/llrm-codegen/src/backend/mirprint.rs
 6 crates/codegen/llrm-codegen/src/backend/peep/guards.rs
 4 crates/codegen/llrm-codegen/src/backend/peep/make.rs
-13 crates/codegen/llrm-codegen/src/backend/peephole.rs
+12 crates/codegen/llrm-codegen/src/backend/peephole.rs
 2 crates/codegen/llrm-codegen/src/backend/pushfold.rs
 1 crates/codegen/llrm-codegen/src/backend/rewriter.rs
 16 crates/codegen/llrm-codegen/src/backend/selectiondag/builder.rs

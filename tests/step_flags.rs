@@ -38,7 +38,8 @@ fn test_a_guard_on_a_value_and_its_step_is_one_instruction_and_its_flags() {
 /// sieve's `multiple += i` loop was `lea ax, [edi+esi]; cmp di, dx; mov di, ax;
 /// jb`: the step made before the compare of the value it replaces, so both
 /// lived and the step was copied back (+12.4% instructions behind the header
-/// copy). The step is made in place: `add di, si; add bx, si; cmp di, dx; jb`
+/// copy). The step is made in place: `mov byte ptr [bp+di-1024], 1; add di, si;
+/// cmp di, bx; jb` (the stores' address is the stepped register itself).
 #[test]
 fn test_a_step_made_before_the_compare_of_its_value_is_made_after_it_in_place() {
     let source = format!("{}/bench/sieve/sieve.c", env!("CARGO_MANIFEST_DIR"));
@@ -53,15 +54,16 @@ fn test_a_step_made_before_the_compare_of_its_value_is_made_after_it_in_place() 
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     // The step is made in place whichever side of the compare it is on (the
     // pin's order has `add di, si` ahead of `cmp di, dx` now): the three
-    // instructions before the back edge are steps and the compare, with no
-    // `mov` or `lea` that makes the step in another register and copies it
-    // back.
-    let in_place = lines
-        .windows(4)
-        .any(
-            |four| four[3].starts_with("jb ")
-                && four[..3].iter().filter(|line| line.starts_with("cmp ")).count() == 1
-                && four[..3].iter().all(|line| line.starts_with("cmp ") || line.starts_with("add ")),
-        );
+    // instructions before the back edge are the loop's stores, steps and the
+    // compare, with no register `mov` or `lea` that makes the step in another
+    // register and copies it back.
+    let in_place = lines.windows(4).any(|four| {
+        four[3].starts_with("jb ")
+            && four[..3].iter().filter(|line| line.starts_with("cmp ")).count() == 1
+            && four[..3].iter().any(|line| line.starts_with("add "))
+            && four[..3]
+                .iter()
+                .all(|line| line.starts_with("cmp ") || line.starts_with("add ") || line.starts_with("mov byte ptr ["))
+    });
     assert!(in_place, "{text}");
 }

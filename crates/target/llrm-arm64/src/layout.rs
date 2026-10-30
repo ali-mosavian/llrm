@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use crate::frame::Lowered;
 use crate::mc::inst::{Inst, Target};
 
-fn label_of(inst: &Inst) -> Option<&str> {
+pub(crate) fn label_of(inst: &Inst) -> Option<&str> {
     match inst {
         Inst::Branch { link: false, target: Target::Label(label) }
         | Inst::BranchCond { target: Target::Label(label), .. }

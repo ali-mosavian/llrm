@@ -20,8 +20,11 @@ EXAMPLES = sorted((qbruntime.dosbatch.ROOT / "examples" / "basic").glob("*.bas")
 # Launches at once: each runs a share of the programs through the oracle and each target, in a directory of its own.
 CHUNKS = 6
 LLRM_ONLY = ("events_", "keys_", "llrm_", "bc_nodevices")
+# Games that wait for a key forever: the oracle and the candidate both run to the 120 s limit, so the byte-for-byte test (reference "ok")
+# fails on them; test_demo_introduction_matches_bcom45 compares the introductions.
+INTERACTIVE = ("gorillas", "nibbles")
 ALL_SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_sources(), *EXAMPLES]}
-SOURCES = {name: path for name, path in ALL_SOURCES.items() if not name.startswith(LLRM_ONLY)}
+SOURCES = {name: path for name, path in ALL_SOURCES.items() if not name.startswith(LLRM_ONLY) and name not in INTERACTIVE}
 
 # (program, target) where ours differs from BCOM45 for a bug that is open: it is expected to differ, and a pass fails the
 # test so the entry goes.

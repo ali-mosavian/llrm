@@ -229,6 +229,9 @@ pub fn visit_icmp(
     if let Some(r) = fold_icmp_with_cast_op_of_constant(c, inst, pred, op0, op1) {
         return r;
     }
+    if let Some(r) = fold_icmp_with_pointer_cast(c, inst, pred, op0, op1) {
+        return r;
+    }
     for operand in [op0, op1] {
         if let Operand::Value(value) = operand
             && let ValueDef::Instruction(phi) = c.function.value(value).def
@@ -593,6 +596,72 @@ fn fold_icmp_with_cast_op_of_constant(
         };
         let constant = c.int(narrow, low);
         return Some(new_icmp(c, inst, narrowed, x, constant));
+    }
+    None
+}
+
+/// `foldICmpWithCastOp`'s pointer arms
+/// ([:6663](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)):
+/// `icmp pred (inttoptr X), (inttoptr Y | null)` is the compare of the
+/// integers, and so is `icmp pred (ptrtoint P), (ptrtoint Q | null)` of the
+/// pointers, when the integer is as wide as the pointer.
+///
+/// DEVIATE: the right side is a cast or the null constant, not any constant
+/// (the pin folds a constant expression to the other type).
+fn fold_icmp_with_pointer_cast(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    use llrm_mir::context::ConstantKind;
+    use llrm_mir::opcode::CastOp;
+    use llrm_mir::types::Type;
+    let q = query(c, Some(inst));
+    let is_null = |c: &Combiner| match op1 {
+        Operand::Constant(id) => matches!(c.context.get(id).kind, ConstantKind::Null),
+        _ => false,
+    };
+    let compatible = |c: &Combiner, ptr: llrm_mir::types::TypeId, int: llrm_mir::types::TypeId| match (
+        c.context.types.get(ptr),
+        c.context.types.int_bits(int),
+    ) {
+        (Type::Pointer(space), Some(bits)) => c.env.layout.pointer(*space).bits == bits,
+        _ => false,
+    };
+    if let Some((_, _, x)) = pattern::cast(&q, op0, CastOp::IntToPtr) {
+        let ptr = c.type_of(op0);
+        let int = c.type_of(x);
+        if !compatible(c, ptr, int) {
+            return None;
+        }
+        let y = if is_null(c) {
+            c.int(int, 0)
+        } else {
+            let (_, _, y) = pattern::cast(&query(c, Some(inst)), op1, CastOp::IntToPtr)?;
+            if c.type_of(y) != int {
+                return None;
+            }
+            y
+        };
+        return Some(new_icmp(c, inst, pred, x, y));
+    }
+    if let Some((_, _, p)) = pattern::cast(&q, op0, CastOp::PtrToInt) {
+        let ptr = c.type_of(p);
+        if !compatible(c, ptr, c.type_of(op0)) {
+            return None;
+        }
+        let q_ = if constant(c, op1).is_some_and(|(bits, _)| bits == 0) {
+            Operand::Constant(llrm_mir::constfold::null_value(c.context, ptr))
+        } else {
+            let (_, _, y) = pattern::cast(&query(c, Some(inst)), op1, CastOp::PtrToInt)?;
+            if c.type_of(y) != ptr {
+                return None;
+            }
+            y
+        };
+        return Some(new_icmp(c, inst, pred, p, q_));
     }
     None
 }
