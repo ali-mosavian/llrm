@@ -201,7 +201,7 @@ impl llrm_mir::target::Machine for Mos6502Machine {
     }
 
     fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
-        Some(Rc::new(llrm_mir::tti::Basic))
+        Some(Rc::new(crate::tti::Mos6502::new()))
     }
 }
 

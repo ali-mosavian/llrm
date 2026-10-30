@@ -203,5 +203,6 @@ exit:
 /// price by it silently did not run (see `a_crc_loop_becomes_a_table_lookup`).
 #[test]
 fn the_machine_handed_to_the_mid_end_has_a_tti() {
-    assert!(llrm_6502::driver::machine().tti().is_some());
+    let tti = llrm_6502::driver::machine().tti().expect("a cost model");
+    assert_eq!(tti.name(), "mos6502", "the generic profile prices a word like a byte");
 }

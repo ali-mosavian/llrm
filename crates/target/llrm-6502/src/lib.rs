@@ -12,6 +12,7 @@ pub mod select;
 pub mod sharecmp;
 pub mod target;
 pub mod timing;
+pub mod tti;
 
 use llrm_lir::registers::{RegId, Row};
 
