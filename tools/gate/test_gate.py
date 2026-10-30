@@ -1617,3 +1617,27 @@ def test_a_streamed_step_cut_mid_run_leaves_its_stage_lines_in_the_output(tmp_pa
     done = gate.run_step("bench", "echo 'bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores' >&2; sleep 60", tmp_path, os.environ.copy(), stall=2)
     assert done[1] == gate.STALL_CODE
     assert "[bench] bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores" in capsys.readouterr().out
+
+
+def test_a_group_handed_the_build_jobs_target_runs_no_build_step_of_its_own(tmp_path, monkeypatch):
+    """Gate run 8: every group re-ran cargo check and test --no-run on the restored target, 600-800 s in each of 17 jobs (python: 604 of 1079 s)."""
+    p = gate.plan(["bench/fib/fib.c"], "full")
+    head = gate.head_state()[0]
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
+    monkeypatch.delenv("GATE_PREBUILT", raising=False)
+    assert "build" in gate.group_plan(p, "python").steps, "no flag: a local run builds"
+    monkeypatch.setenv("GATE_PREBUILT", "1")
+    assert "build" in gate.group_plan(p, "python").steps, "the flag without the build job's stamp builds"
+    (tmp_path / ".built-from").write_text("0" * 40 + "\n")
+    assert "build" in gate.group_plan(p, "python").steps, "a target built from another commit builds"
+    (tmp_path / ".built-from").write_text(head + "\n")
+    assert "build" in gate.group_plan(p, "python").steps, "the stamp without the build job's release dir builds"
+    (tmp_path / "release").mkdir()
+    assert "build" not in gate.group_plan(p, "python").steps and "build" not in gate.group_plan(p, "unit").steps
+    assert gate.group_plan(p, "build").steps == ["build"], "the build job still builds"
+
+
+def test_ci_marks_the_restored_target_as_the_build_jobs(tmp_path):
+    workflow = (Path(gate.ROOT) / ".github/workflows/ci.yml").read_text()
+    restore = workflow.split("name: Restore the target dir", 2)[1].split("- id: basecounts", 1)[0]
+    assert 'echo "GATE_PREBUILT=1" >> "$GITHUB_ENV"' in restore
