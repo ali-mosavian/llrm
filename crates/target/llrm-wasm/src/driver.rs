@@ -1,5 +1,5 @@
-//! LLVM IR to wasm assembly text: `llc -O0 -fast-isel=false`'s job for the functions of a
-//! module, one after another.
+//! LLVM IR to wasm assembly text: `llc -O0 -fast-isel=false`'s job for the
+//! functions of a module, one after another.
 
 use crate::Width;
 use crate::dag::{Options, compile_function};
@@ -22,7 +22,8 @@ pub fn datalayout(width: Width) -> &'static str {
     }
 }
 
-/// `text`, LLVM IR, as a module: the lines and words MIR's reader leaves out of LLVM dropped.
+/// `text`, LLVM IR, as a module: the lines and words MIR's reader leaves out of
+/// LLVM dropped.
 pub fn module(
     text: &str,
     width: Width,
@@ -65,4 +66,24 @@ pub fn assembly(
         out.push_str(&print::function(&f));
     }
     Ok(out)
+}
+
+/// The relocatable object of each defined function of `text`: `llc
+/// -filetype=obj`.
+pub fn object(
+    text: &str,
+    width: Width,
+    options: Options,
+) -> Result<Vec<u8>, String> {
+    let module = module(text, width)?;
+    let mut functions = Vec::new();
+    for (_, global, function) in module.functions() {
+        if function.is_declaration() {
+            continue;
+        }
+        let name = global.name.owned().ok_or("an unnamed function")?;
+        let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
+        functions.push(crate::object::encode_function(&f));
+    }
+    Ok(crate::object::write(&functions))
 }

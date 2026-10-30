@@ -33,3 +33,37 @@ fn the_stackified_object_is_written() {
             < std::fs::metadata(format!("{}/tests/golden/four.o", env!("CARGO_MANIFEST_DIR"))).unwrap().len() as usize
     );
 }
+
+/// `tests/obj/NAME.o` is `llc -mtriple=wasm32 -O0 -fast-isel=false
+/// -filetype=obj` of `NAME.ll` at the pin.
+fn check(name: &str) {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/obj");
+    let source = std::fs::read_to_string(dir.join(format!("{name}.ll"))).expect("the .ll");
+    let golden = std::fs::read(dir.join(format!("{name}.o"))).expect("the .o");
+    let got = llrm_wasm::driver::object(&source, llrm_wasm::Width::W32, llrm_wasm::dag::Options::default())
+        .unwrap_or_else(|why| panic!("{name}: {why}"));
+    if let Some(path) = std::env::var_os("WASM_DUMP_DIR") {
+        std::fs::write(std::path::Path::new(&path).join(format!("{name}.o")), &got).expect("dump");
+    }
+    assert_eq!(got, golden, "{name}");
+}
+
+/// Calls to undefined functions wrote no import, `reloc.CODE` or symbol: the
+/// object linked to nothing.
+#[test]
+fn calls_to_undefined_functions_import_and_relocate() {
+    check("calls");
+}
+
+/// Imports, types and symbols follow the order the assembler first met each
+/// name, not the declaration order.
+#[test]
+fn imports_follow_first_use() {
+    check("calls_reordered");
+}
+
+/// A callee defined later is one symbol, defined, at its first use's position.
+#[test]
+fn a_callee_defined_later_is_not_an_import() {
+    check("calls_defined");
+}

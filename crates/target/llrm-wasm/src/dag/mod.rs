@@ -108,5 +108,11 @@ pub fn compile_function(
     cfg_stackify(&mut f);
     explicit_locals(&mut f);
     lower_br_unless(&mut f);
+    for (symbol, _) in f.symbols.clone() {
+        if module.named(&symbol).is_some_and(|id| module.global(id).function().is_some()) {
+            let (params, results) = signature(module, &symbol, width)?;
+            f.callees.push((symbol, params, results));
+        }
+    }
     Ok(f)
 }

@@ -87,7 +87,8 @@ pub enum Operand {
     Sym(u32),
     /// A basic block, by its number in the IR function.
     Block(u32),
-    /// A stack object, by frame index, until the frame lowering gives it an address.
+    /// A stack object, by frame index, until the frame lowering gives it an
+    /// address.
     Frame(i32),
 }
 
@@ -205,7 +206,11 @@ pub struct Function {
     pub succs: Vec<Vec<usize>>,
     /// The symbol and addend of each [`Operand::Sym`].
     pub symbols: Vec<(String, i64)>,
-    /// The (size, alignment) of each stack object, by frame index: `MachineFrameInfo`.
+    /// The (name, parameters, results) of each function the code names: the
+    /// signature the object file gives an undefined function.
+    pub callees: Vec<(String, Vec<ValType>, Vec<ValType>)>,
+    /// The (size, alignment) of each stack object, by frame index:
+    /// `MachineFrameInfo`.
     pub frame: Vec<(u64, u64)>,
     vregs: Vec<ValType>,
     stackified: Vec<bool>,
