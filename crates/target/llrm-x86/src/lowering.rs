@@ -17,10 +17,9 @@
 use std::sync::OnceLock;
 
 use llrm_mir::lowering::{Isd, LoadExt, Lowering};
-
-use crate::dag::actions::{Features, TargetLowering};
-use crate::dag::isd::ISD;
-use crate::dag::mvt::MVT;
+use llrm_sdag::actions::{Features, TargetLowering};
+use llrm_sdag::isd::ISD;
+use llrm_sdag::mvt::MVT;
 
 /// The DAG's tables for i486, built once.
 fn table() -> &'static TargetLowering {
@@ -75,18 +74,6 @@ impl Lowering for X86 {
             return matches!(bits, 8 | 16 | 32 | 64);
         }
         MVT::integer(bits).is_some_and(|vt| table().types.is_type_legal(vt.into()))
-    }
-
-    // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
-    // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
-    // divides to `Expand` (L340) and leaves the two-result ones at the base
-    // class's `Legal`, so every register type has one.
-    fn has_div_rem_op(
-        &self,
-        bits: u32,
-        _signed: bool,
-    ) -> bool {
-        self.is_type_legal(bits)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L2955

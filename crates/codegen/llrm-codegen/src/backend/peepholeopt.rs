@@ -589,8 +589,8 @@ fn folded_use(
 /// A store, a call or anything else `isLoadFoldBarrier` drops the loads waiting
 /// to fold.
 ///
-/// Not translated: the other instructions `foldMemoryOperand` knows (`test`,
-/// `imul`, the extends, the x87 forms), a load whose result is read twice.
+/// Not translated: the other instructions `foldMemoryOperand` knows (`imul`,
+/// the extends, the x87 forms), a load whose result is read twice.
 pub fn loads_folded(body: &LirBody) -> LirBody {
     let mut reads: HashMap<u32, usize> = HashMap::default();
     for block in &body.blocks {
@@ -600,7 +600,13 @@ pub fn loads_folded(body: &LirBody) -> LirBody {
             }
         }
         for one in &block.insns {
-            for value in one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)) {
+            // Readers, not operands: `test v, v` is one reader of `v`
+            // (`hasOneNonDBGUser`).
+            let mut seen: Vec<u32> =
+                one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)).collect();
+            seen.sort_unstable();
+            seen.dedup();
+            for value in seen {
                 *reads.entry(value).or_default() += 1;
             }
         }
@@ -659,6 +665,31 @@ fn load_folded(
 ) -> Option<(Insn, u32)> {
     let what = one.what.as_ref()?;
     let name = what.name.as_deref()?;
+    // `test r, r` of a waiting load is `cmp [m], 0` (`foldMemoryOperandImpl`:
+    // TEST_rr with both operands the register becomes CMP_mi of zero).
+    if (what.op, name) == (Operation::Compare, "test")
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && !what.indirect
+        && let [Loc::Held(first), Loc::Held(second)] = &what.sources[..]
+        && first.value == second.value
+        && loads.contains_key(&first.value)
+        && let Some(Loc::Mem(cell)) = insns[loads[&first.value]].what.as_ref().and_then(|w| w.sources.first())
+        && first.width == cell.width
+    {
+        let load = first.value;
+        let def = &insns[loads[&load]];
+        let zero = Loc::Imm(Imm { value: 0, width: cell.width, address: None });
+        let mut folded = one.clone();
+        folded.what =
+            Some(Semantics { name: Some("cmp".into()), sources: vec![Loc::Mem(cell.clone()), zero], ..what.clone() });
+        folded.uses.retain(|&used| used != load);
+        folded.uses.extend(def.uses.iter().copied());
+        folded.widths.retain(|&(used, _)| used != load);
+        folded.widths.extend(def.widths.iter().copied());
+        return Some((folded, load));
+    }
     let commutes = match (what.op, name) {
         (Operation::Compare, "cmp") => false,
         (Operation::Binary, "add" | "and" | "or" | "xor") => true,

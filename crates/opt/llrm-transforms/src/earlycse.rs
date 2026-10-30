@@ -6,9 +6,9 @@
 //! each function carries the permalink of the one it translates. What is not
 //! translated is marked DEVIATE with its reason:
 //!
-//! - DEVIATE no `invariant.start`, `guard`, `sideeffect`, `pseudoprobe`, masked
-//!   or target memory intrinsics, memset forwarding, fences or atomics: MIR has
-//!   none (or `fill` makes them later). `llvm.assume` is handled.
+//! - DEVIATE no `guard`, `sideeffect`, `pseudoprobe`, masked or target memory
+//!   intrinsics, memset forwarding, fences or atomics: MIR has none (or `fill`
+//!   makes them later). `llvm.assume` is handled.
 //! - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
 //!   does it only when poison-generating flags remain).
 //! - DEVIATE a call's attributes are not intersected; a call that only reads or
@@ -402,7 +402,9 @@ struct Walk<'a> {
     analyses: &'a FunctionAnalyses,
     values: Scoped<SimpleKey, Operand>,
     loads: Scoped<Operand, LoadValue>,
-    invariants: Scoped<(Operand, TypeId), u32>,
+    /// `AvailableInvariants`: a location is its pointer and the bytes it
+    /// covers.
+    invariants: Scoped<(Operand, u64), u32>,
     calls: Scoped<SimpleKey, (InstId, u32)>,
     geps: Scoped<GepKey, Operand>,
     generation: u32,
@@ -597,6 +599,26 @@ impl Walk<'_> {
             .is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
     }
 
+    /// The intrinsic a call names, its type suffixes aside.
+    fn intrinsic(
+        &self,
+        inst: InstId,
+    ) -> Option<llrm_mir::intrinsics::Intrinsic> {
+        memory::callee(self.context, self.function, inst)
+            .and_then(|global| self.view.globals.get(global.0 as usize))
+            .and_then(|global| global.name.as_deref())
+            .and_then(llrm_mir::intrinsics::Intrinsic::named)
+    }
+
+    /// The bytes a load or store of `ty` covers: the size of its
+    /// `MemoryLocation`.
+    fn location_bytes(
+        &self,
+        ty: TypeId,
+    ) -> u64 {
+        self.view.layout.store_size(&self.context.types, ty)
+    }
+
     fn named(
         &self,
         inst: InstId,
@@ -734,7 +756,7 @@ impl Walk<'_> {
             return true;
         }
         let (Some(pointer), Some(ty)) = (self.pointer(inst), self.value_type(inst)) else { return false };
-        self.invariants.lookup(&(pointer, ty)).is_some_and(|&became| became <= generation)
+        self.invariants.lookup(&(pointer, self.location_bytes(ty))).is_some_and(|&became| became <= generation)
     }
 
     /// `EarlyCSE::isSameMemGeneration`
@@ -1010,6 +1032,25 @@ impl Walk<'_> {
                 }
                 continue;
             }
+            // An `invariant.start` makes its location invariant for the rest of
+            // the scope (EarlyCSE.cpp#L1459): the stores after it need not be
+            // consumed.
+            if matches!(self.function.instruction(inst).opcode, Opcode::Call(_))
+                && self.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::InvariantStart)
+            {
+                let call = self.function.instruction(inst);
+                // If there are any uses, the scope might end.
+                let scoped = call.result.is_some_and(|result| !self.function.users(result).is_empty());
+                if !scoped && let Some(size) = llrm_mir::intrinsics::length(self.context, call.operands[0]) {
+                    // Don't start a scope if we already have a better one
+                    // pushed.
+                    let key = (call.operands[1], size);
+                    if self.invariants.lookup(&key).is_none() {
+                        self.invariants.insert(key, self.generation);
+                    }
+                }
+                continue;
+            }
             // If the instruction can be simplified, replace it with its
             // simpler value.
             if let Some(value) = simplify_instruction_in(
@@ -1066,9 +1107,9 @@ impl Walk<'_> {
                     self.generation += 1;
                 }
                 if self.function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "invariant.load") {
-                    let ty = self.function.instruction(inst).ty;
-                    if self.invariants.lookup(&(pointer, ty)).is_none() {
-                        self.invariants.insert((pointer, ty), self.generation);
+                    let key = (pointer, self.location_bytes(self.function.instruction(inst).ty));
+                    if self.invariants.lookup(&key).is_none() {
+                        self.invariants.insert(key, self.generation);
                     }
                 }
                 if let Some(in_val) = self.loads.lookup(&pointer).copied()

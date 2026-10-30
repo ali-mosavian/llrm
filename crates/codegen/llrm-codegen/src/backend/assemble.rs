@@ -422,13 +422,14 @@ pub fn assembled_by(
                         return Err(why);
                     }
                     let procedure = masm::exits_inserted(masm::saved_first(procedure));
-                    if procedure.body.frame_exit.is_some() {
+                    let procedure = if procedure.body.frame_exit.is_some() {
                         let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls))
                             .map_err(|error| error.to_string())?;
                         masm::Procedure { body, ..procedure }
                     } else {
                         procedure
-                    }
+                    };
+                    masm::tail_calls_folded(procedure)
                 };
                 procedures.push(procedure);
             }
@@ -753,7 +754,7 @@ fn machined_once(
     // An over-aligned local lies on its alignment below the aligned top: a
     // layout that moves objects would break it.
     let ordered = if far > 0 && first.body.over_aligned.is_empty() {
-        crate::backend::relayout::ordered(&first, &frame, target.basic).map(|(ordered, _)| ordered)
+        crate::backend::relayout::ordered(&first, &frame, first_stage.registers.free).map(|(ordered, _)| ordered)
     } else {
         None
     };

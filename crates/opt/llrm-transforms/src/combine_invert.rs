@@ -29,6 +29,7 @@
 //! %x = add i32 %p, 5      ; ~%x = sub i32 -6, %p
 //! ```
 
+use llrm_mir::edit::Position;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::valuetracking::pattern;
@@ -38,6 +39,132 @@ use crate::combine_shared::{has_one_use, query};
 
 /// `MaxAnalysisRecursionDepth`.
 const MAX_DEPTH: u32 = 6;
+
+impl Combiner<'_> {
+    /// [`canFreelyInvertAllUsersOf`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/InstCombine/InstCombiner.h#L267):
+    /// every user of `v` but
+    /// `ignored` can take the inverted value: a select condition (unless the
+    /// select is a logical and/or, whose pattern a swap would hide), a branch
+    /// or a `not`.
+    pub(crate) fn can_freely_invert_all_users_of(
+        &self,
+        v: InstId,
+        ignored: Option<InstId>,
+    ) -> bool {
+        let Some(result) = self.function.instruction(v).result else { return false };
+        self.function
+            .users(result)
+            .iter()
+            .all(
+                |one| {
+                    if Some(one.user) == ignored {
+                        return true;
+                    }
+                    let user = self.function.instruction(one.user);
+                    let Some(user_value) = user.result.map(Operand::Value) else {
+                        return matches!(user.opcode, Opcode::Br) && user.operands.len() == 3;
+                    };
+                    let q = query(self, None);
+                    match &user.opcode {
+                        Opcode::Select => {
+                            one.index == 0
+                                && pattern::logical_and(&q, user_value).is_none()
+                                && pattern::logical_or(&q, user_value).is_none()
+                        }
+                        Opcode::Binary(BinaryOp::Xor) => pattern::not(&q, user_value).is_some(),
+                        _ => false,
+                    }
+                },
+            )
+    }
+
+    /// [`freelyInvertAllUsersOf`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L1455):
+    /// the users of `v` but
+    /// `ignored` take the inverted value: a select swaps its arms, a branch
+    /// its successors, a `not` is replaced by `v`.
+    pub(crate) fn freely_invert_all_users_of(
+        &mut self,
+        v: Operand,
+        ignored: Option<InstId>,
+    ) {
+        let Operand::Value(value) = v else { return };
+        let users: Vec<InstId> = self.function.users(value).iter().map(|one| one.user).collect();
+        for user in users {
+            if Some(user) == ignored {
+                continue;
+            }
+            match self.function.instruction(user).opcode {
+                Opcode::Select | Opcode::Br => {
+                    let mut operands = self.function.instruction(user).operands.clone();
+                    operands.swap(1, 2);
+                    self.function.set_operands(user, operands);
+                }
+                _ => self.replace_inst_with(user, v),
+            }
+            self.add_to_worklist(user);
+        }
+    }
+
+    /// [`canFreelyInvert`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L5111).
+    ///
+    /// DEVIATE: a phi has no insertion point here (`getInsertionPointAfterDef`
+    /// skips the phis), so it is not freely invertible. Exit: the first user
+    /// that needs one.
+    pub(crate) fn can_freely_invert(
+        &mut self,
+        op: Operand,
+        ignored: InstId,
+    ) -> bool {
+        let Some(def) = self.definition_of(op) else { return false };
+        if self.function.instruction(def).opcode == Opcode::Phi {
+            return false;
+        }
+        let mut consumes = false;
+        self.get_freely_inverted(ignored, op, true, false, &mut consumes).is_some()
+            && self.can_freely_invert_all_users_of(def, Some(ignored))
+    }
+
+    /// [`freelyInvert`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L5119):
+    /// a `not` of `op` right after its definition takes every other use
+    /// of `op`, and the users of that `not` are inverted.
+    pub(crate) fn freely_invert(
+        &mut self,
+        op: Operand,
+        ignored: InstId,
+    ) -> Operand {
+        let def = self.definition_of(op).expect("an instruction");
+        let ty = self.type_of(op);
+        let ones = self.all_ones(ty);
+        let not = self.insert_after(def, Opcode::Binary(BinaryOp::Xor), ty, vec![op, ones]);
+        let not_value = self.value_of(not);
+        if let Operand::Value(value) = op {
+            let uses: Vec<(InstId, u32)> = self.function.users(value).iter().map(|one| (one.user, one.index)).collect();
+            for (user, index) in uses {
+                if user != not {
+                    self.function.set_operand(user, index as usize, not_value);
+                    self.add_to_worklist(user);
+                }
+            }
+        }
+        self.freely_invert_all_users_of(not_value, Some(ignored));
+        not_value
+    }
+
+    /// A new instruction right after the definition of `def`, queued
+    /// (`Builder.SetInsertPoint(*I.getInsertionPointAfterDef())`).
+    pub(crate) fn insert_after(
+        &mut self,
+        def: InstId,
+        opcode: Opcode,
+        ty: llrm_mir::TypeId,
+        operands: Vec<Operand>,
+    ) -> InstId {
+        let new = self.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+        self.function.insert(new, Position::After(def)).expect("a placed instruction");
+        self.add_to_worklist(new);
+        new
+    }
+}
 
 impl Combiner<'_> {
     /// `getFreelyInverted(V, WillInvertAllUses, Builder, DoesConsume)`: the

@@ -87,18 +87,6 @@ pub trait Lowering {
         false
     }
 
-    /// `TargetTransformInfo::hasDivRemOp(iN, IsSigned)`: whether the target
-    /// has one divide that makes the quotient and the remainder
-    /// (`isOperationLegal(SDIVREM/UDIVREM)`). The base class has none.
-    fn has_div_rem_op(
-        &self,
-        bits: u32,
-        signed: bool,
-    ) -> bool {
-        let _ = (bits, signed);
-        false
-    }
-
     /// `enableExtLdPromotion` (TargetLowering.h#L977): whether CodeGenPrepare
     /// may promote the operands of an extension towards the load that feeds
     /// them. The base class says no.

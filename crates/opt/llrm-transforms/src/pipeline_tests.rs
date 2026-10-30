@@ -2803,3 +2803,39 @@ b4:
     let text = llrm_mir::print::module(&module);
     assert!(!text.contains("phi i6"), "{text}");
 }
+
+/// -Os and -Oz ran with no function carrying `optsize`/`minsize`, so every
+/// pass that reads them was inert (nib -115 B, BAS -750 B at -Oz left on the
+/// table). Clang sets both at -Oz, `optsize` alone at -Os, neither at -O2.
+#[test]
+fn size_levels_mark_every_defined_function_as_clang_does() {
+    let text = "
+declare i16 @ext(i16)
+
+define i16 @main() {
+b:
+  %a = call i16 @ext(i16 3)
+  ret i16 %a
+}
+";
+    let flags = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("main".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        let printed = crate::testing::printed(&module);
+        let header =
+            printed.lines().find(|line| line.starts_with("define") && line.contains("@main")).unwrap().to_owned();
+        (header.contains("optsize"), header.contains("minsize"))
+    };
+    assert_eq!(flags(pipeline::Options::standard()).0, false, "-O2 marks nothing");
+    let (opt, min) = flags(pipeline::Options::size());
+    assert!(opt && !min, "-Os: optsize alone");
+    let (opt, min) = flags(pipeline::Options::min_size());
+    assert!(opt && min, "-Oz: optsize and minsize");
+}

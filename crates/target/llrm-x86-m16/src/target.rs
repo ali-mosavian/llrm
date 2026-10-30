@@ -243,6 +243,10 @@ impl Machine for Dos {
         llrm_target::keeps_division(i64::from(bits / 8), size)
     }
 
+    fn fills_by_pattern(&self) -> bool {
+        true
+    }
+
     fn tuning(&self) -> llrm_mir::target::Tuning {
         if self.pin_tuning {
             return llrm_mir::target::Tuning::PIN;
