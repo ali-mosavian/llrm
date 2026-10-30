@@ -2,6 +2,7 @@
 //! targets.
 
 use super::dag_function::selected;
+use crate::model::ir::Loc;
 
 const SWITCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %x) {
@@ -216,4 +217,66 @@ fn a_dominant_case_is_peeled_and_the_rest_follows() {
         "the peeled test and the rest are blocks of their own: {}",
         done.body.blocks.len()
     );
+}
+
+/// The pin skips `peelDominantCaseCluster` at `hasMinSize` only; ours also
+/// skipped it at `optsize` (-Os), where the pin peels.
+#[test]
+fn a_dominant_case_is_peeled_at_optsize_and_not_at_minsize() {
+    use super::switchcg::{plan_with, BranchProbability, SwitchTarget};
+    let cases = [
+        (1, 1, BranchProbability::new(1, 10)),
+        (20, 2, BranchProbability::new(1, 10)),
+        (40, 3, BranchProbability::new(8, 10)),
+    ];
+    let peeled = |opt_size, min_size| {
+        let target = SwitchTarget { opt_size, min_size, ..SwitchTarget::x86(32) };
+        plan_with(&cases, 0, &target).peeled.is_some()
+    };
+    assert!(peeled(false, false), "premise: -O2 peels the 80% case");
+    assert!(peeled(true, false), "-Os peels as -O2 does");
+    assert!(!peeled(true, true), "-Oz peels nothing");
+}
+
+const WIDE_SWITCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @a()
+define void @f(i32 %x) ATTR {
+entry:
+  switch i32 %x, label %d [ i32 1, label %b
+    i32 100, label %b
+    i32 200, label %b
+    i32 300, label %b
+    i32 400, label %b
+    i32 500, label %b
+    i32 600, label %b ]
+d:
+  ret void
+b:
+  call void @a()
+  ret void
+}
+";
+
+/// At `hasMinSize` the pin lowers a wide switch as a chain, not a balanced
+/// tree (`NumClusters > 3 && !hasMinSize`): the first compare is the pivot at
+/// -Os and -O2, the first case at -Oz.
+#[test]
+fn a_wide_switch_is_a_tree_unless_minsize() {
+    let first_compare = |attribute: &str| {
+        let module = llrm_mir::parse::module(&WIDE_SWITCH.replace("ATTR", attribute)).expect("parses");
+        let done =
+            selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+                .unwrap_or_else(|e| panic!("{}", e.0));
+        let first = done
+            .body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .find(|w| matches!(w.name.as_deref(), Some("sub" | "cmp")))
+            .and_then(|w| w.sources.iter().find_map(|s| if let Loc::Imm(imm) = s { Some(imm.value) } else { None }));
+        first
+    };
+    let plain = first_compare("");
+    assert_eq!(first_compare("optsize"), plain, "-Os splits the tree as -O2 does");
+    assert_ne!(first_compare("minsize"), plain, "-Oz is a chain: {plain:?} against {:?}", first_compare("minsize"));
 }
