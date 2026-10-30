@@ -1,4 +1,4 @@
-reason = "TEMPORARY (owner w10): rotate is gcc copy_headers, not LoopRotate (rotate.rs:695); the cleaner `or i1` from foldCastedBitwiseLogic (#6185) lets it fire on jpeg headers. Fix = LoopRotate port (w10, next). No row may pass its measured count; every -Os m16 row stays below main. queens memory operands rise while its clocks and instructions fall -24%."
+reason = "TEMPORARY (owner w10): foldCastedBitwiseLogic (#6185) leaves a cleaner `or i1` condition, so LoopRotate (looprotate.rs, the translation) rotates headers it left before on jpeg; the pin rotates more on the same inputs (+38 IR insts against ours +4/+15). Every -Os m16 row stays below main. Exit: the 2026-11-06 re-judge; no row may pass its measured count. queens memory operands rise (regalloc spill of the boolean) while its clocks and instructions fall."
 exception = true
 
 [[row]]
