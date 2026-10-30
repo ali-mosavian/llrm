@@ -186,9 +186,9 @@ pub fn main(argv: &[String]) -> i32 {
             codegen.abi = Some("sysv".to_owned());
         }
         let args = Arguments { codegen, ..args };
-        // a host (an ELF or Mach-O object) has no memory at the PC's low
+        // a host (an ELF or Mach-O object, or wasm) has no memory at the PC's low
         // addresses: the object format states it, whatever the pointer width
-        program.promises.hosted = is_hosted(&args.codegen.object_format);
+        program.promises.hosted = args.wasm32 || is_hosted(&args.codegen.object_format);
         if program.runtime.calls_natively() {
             // the `-mabi=` family's convention, else the target's default
             let native = args.codegen.arch.calling().chosen(args.codegen.abi.as_deref())?;
