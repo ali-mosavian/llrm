@@ -96,6 +96,11 @@ pub enum Matcher {
         opcode: Opcode,
     },
     CheckType(Vt),
+    /// `OPC_CheckTypeRes`: the type of result `res` of the node.
+    CheckTypeRes {
+        res: u8,
+        vt: Vt,
+    },
     SwitchType,
     TypeCase {
         size: u32,

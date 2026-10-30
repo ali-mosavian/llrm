@@ -283,6 +283,14 @@ impl Decoder<'_> {
                 "OPC_CheckTypeI32" => Matcher::CheckType(self.fixed_vt("i32")?),
                 "OPC_CheckTypeI64" => Matcher::CheckType(self.fixed_vt("i64")?),
                 "OPC_CheckTypeByHwMode" => Matcher::CheckType(self.hw_vt(&mut at)?),
+                "OPC_CheckTypeRes" => {
+                    let res = self.byte(&mut at)?;
+                    Matcher::CheckTypeRes { res, vt: self.vt(&mut at)? }
+                }
+                "OPC_CheckTypeResByHwMode" => {
+                    let res = self.byte(&mut at)?;
+                    Matcher::CheckTypeRes { res, vt: self.hw_vt(&mut at)? }
+                }
                 "OPC_CheckTypeByHwMode0" => Matcher::CheckType(self.hw.0[0]),
                 "OPC_CheckInteger" => Matcher::CheckInteger(self.signed_vbr(&mut at)?),
                 "OPC_CheckCondCode" => Matcher::CheckCondCode(self.byte(&mut at)?),
@@ -461,5 +469,15 @@ mod tests {
         // The alternative says 1 byte but `CheckOpcode` needs 2 more.
         let err = decode(&[0, 1, 2, 0], &[], &ids(), &hw()).err().unwrap();
         assert!(err.contains("table ends") || err.contains("overran"), "{err}");
+    }
+
+    #[test]
+    fn a_type_check_on_a_result_decodes() {
+        // WebAssembly's table checks result 1 of a node: the decode refused it
+        // as "not in the pin's x86 table".
+        let ids = Ids::parse("OPC_CheckTypeRes 0\nMVT::i32 7\n").unwrap();
+        let decoded = decode(&[0, 1, 7], &[], &ids, &hw()).unwrap();
+        let flat = flatten(&decoded.root, &decoded.lists);
+        assert_eq!(flat.items, [Matcher::CheckTypeRes { res: 1, vt: Vt(7) }]);
     }
 }

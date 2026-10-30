@@ -582,6 +582,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-spike-mf"
+version = "0.1.0"
+dependencies = [
+ "llrm-lir",
+ "llrm-mir",
+]
+
+[[package]]
 name = "llrm-sroa-poc"
 version = "0.1.0"
 dependencies = [

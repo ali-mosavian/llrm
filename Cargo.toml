@@ -48,6 +48,7 @@ llrm-bcdriver = { path = "crates/driver/llrm-bcdriver" }
 llrm-hir = { path = "crates/ir/llrm-hir" }
 llrm-mir = { path = "crates/ir/llrm-mir" }
 llrm-lir = { path = "crates/ir/llrm-lir" }
+llrm-spike-mf = { path = "crates/backend/llrm-spike-mf" }
 llrm-analysis = { path = "crates/opt/llrm-analysis" }
 llrm-transforms = { path = "crates/opt/llrm-transforms" }
 llrm-codegen = { path = "crates/codegen/llrm-codegen" }

@@ -133,7 +133,6 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.checked_stack = flags.sanitize.stack;
     let bound = llrm_driver::target(&flags, None)?;
     frontend.segment_bytes = bound.target.layout().segment_bytes();
-    frontend.idiv_overflow_traps = bound.target.idiv_overflow_traps();
     // The bytes of the pointer that is the near space, and of the one that is
     // the far: a target with one space has the same for both.
     let spaces = &bound.target.layout().spaces;
@@ -144,6 +143,16 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         spills_extended: true,
         ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
     };
+    // A host (ELF, Mach-O) has no handler of the runtime's for the fault.
+    // Where the OS layer's runtime installs a handler that reports error 11
+    // for the divide fault (`divide_fault_error`), a divide's overflow needs
+    // no check of ours; a host's layer is the POSIX one.
+    let layer = if is_hosted(&codegen.object_format) {
+        Some(llrm_target::os::POSIX_LAYER)
+    } else {
+        bound.target.os_layer().map(|layer| layer.text)
+    };
+    frontend.idiv_overflow_traps = layer.and_then(llrm_target::os::divide_fault_error) == Some(11);
     Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen, arm64 })
 }
 
