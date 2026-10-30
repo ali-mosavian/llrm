@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from arm64_shadow import ours, parse_pin  # noqa: E402
+from arm64_shadow import PIN_FLAGS, ours, parse_pin  # noqa: E402
 
 MIR = """name:            f
 body:             |
@@ -38,3 +38,10 @@ class PinModule(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PinCpu(unittest.TestCase):
+    def test_the_pin_runs_for_the_cpu_of_the_table(self):
+        toml = (Path(__file__).resolve().parents[2] / "crates/target/llrm-arm64/dagisel.toml").read_text()
+        self.assertIn('cpus = ["apple-m1"]', toml)
+        self.assertIn("-mcpu=apple-m1", PIN_FLAGS)

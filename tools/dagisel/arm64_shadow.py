@@ -55,10 +55,15 @@ def parse_pin(text):
     return funcs
 
 
+# The cpu of the table (dagisel.toml `cpus`): the pin's default cpu has no LSE or RCPC, so atomics
+# selected for apple-m1 were compared with load/store-exclusive loops.
+PIN_FLAGS = ["-O2", "-mtriple=arm64-apple-macosx", "-mcpu=apple-m1", "-stop-after=finalize-isel"]
+
+
 def pin(llc, module):
     with tempfile.NamedTemporaryFile("w", suffix=".ll", delete=False) as f:
         f.write(module)
-    out = subprocess.run([llc, "-O2", "-mtriple=arm64-apple-macosx", "-stop-after=finalize-isel", f.name, "-o", "-"],
+    out = subprocess.run([llc, *PIN_FLAGS, f.name, "-o", "-"],
                          capture_output=True, text=True)
     os.unlink(f.name)
     if out.returncode:
