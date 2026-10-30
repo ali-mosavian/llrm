@@ -245,3 +245,109 @@ fn a_small_multiplier_stops_the_word_multiply_early() {
     let setup_only = common::cycles_with("mulhi-setup", &setup, "") - empty;
     assert!(cycles - setup_only < 330, "1234 * 56 took {} cycles", cycles - setup_only);
 }
+
+/// A 768-byte buffer in BSS, filled with a pattern that differs in each page.
+const BUFFER: &str = ".segment \"BSS\"\nbuf: .res 768\n.segment \"CODE\"\n";
+
+/// Pattern byte `i`: the index low byte, xor $A5 on page 1, xor $A5 $3C on page 2.
+fn pattern(i: usize) -> u8 {
+    let low = i as u8;
+    match i >> 8 {
+        0 => low,
+        1 => low ^ 0xA5,
+        _ => low ^ 0xA5 ^ 0x3C,
+    }
+}
+
+/// Fills `buf` with the pattern, runs `call` and returns a checksum of all 768 bytes: rotated left once and
+/// xored with each byte in turn, so a byte in the wrong place changes it.
+fn memory_checksum(
+    name: &str,
+    call: &str,
+) -> i32 {
+    let fill = "  ldx #0\n@f: txa\n  sta buf,x\n  eor #$A5\n  sta buf+256,x\n  eor #$3C\n  sta buf+512,x\n  inx\n  bne @f\n";
+    let mut sum = String::from("  lda #0\n  sta rc8\n");
+    for page in 0..3 {
+        sum += &format!(
+            "  ldx #0\n@s{page}: lda rc8\n  asl a\n  adc #0\n  eor buf+{},x\n  sta rc8\n  inx\n  bne @s{page}\n",
+            page * 256
+        );
+    }
+    sum += "  lda rc8\n";
+    let main = format!("{fill}{call}{sum}");
+    common::run_with(name, &main, BUFFER)
+}
+
+/// The checksum of the pattern after `edit`, worked out on the host.
+fn expected(edit: impl FnOnce(&mut [u8])) -> i32 {
+    let mut memory: Vec<u8> = (0..768).map(pattern).collect();
+    edit(&mut memory);
+    i32::from(memory.iter().fold(0u8, |sum, byte| sum.rotate_left(1) ^ byte))
+}
+
+/// `routine(buf + dst, buf + src, n)` for memcpy and memmove, `routine(buf + dst, c, n)` for memset.
+fn mem_call(
+    routine: &str,
+    dst: usize,
+    second: &str,
+    n: usize,
+) -> String {
+    format!(
+        "  lda #<(buf+{dst})\n  sta rc2\n  lda #>(buf+{dst})\n  sta rc3\n{second}  lda #{}\n  sta rc6\n  lda #{}\n  sta rc7\n  jsr {routine}\n",
+        n & 0xFF,
+        n >> 8
+    )
+}
+
+fn source(src: usize) -> String {
+    format!("  lda #<(buf+{src})\n  sta rc4\n  lda #>(buf+{src})\n  sta rc5\n")
+}
+
+/// Whole pages, a partial page, one byte and none: a fill of n bytes writes exactly n, each the byte given.
+#[test]
+fn memset_fills_exactly_n_bytes() {
+    for (dst, n) in [(10, 0), (10, 1), (10, 255), (10, 256), (10, 257), (10, 300), (0, 768)] {
+        let call = mem_call("memset", dst, "  lda #$EE\n  sta rc4\n", n);
+
+        let got = memory_checksum(&format!("memset-{dst}-{n}"), &call);
+
+        assert_eq!(got, expected(|m| m[dst..dst + n].fill(0xEE)), "memset(buf+{dst}, $EE, {n})");
+    }
+}
+
+#[test]
+fn memcpy_copies_exactly_n_bytes() {
+    for n in [0, 1, 255, 256, 257, 300] {
+        let call = mem_call("memcpy", 400, &source(10), n);
+
+        let got = memory_checksum(&format!("memcpy-{n}"), &call);
+
+        assert_eq!(got, expected(|m| m.copy_within(10..10 + n, 400)), "memcpy(buf+400, buf+10, {n})");
+    }
+}
+
+/// Overlap in each direction, equal pointers, disjoint ranges, and page-sized counts.
+#[test]
+fn memmove_handles_overlap_in_both_directions() {
+    for (dst, src, n) in [(20, 10, 300), (10, 20, 300), (10, 10, 300), (310, 10, 300), (11, 10, 256), (11, 10, 512), (11, 10, 1), (10, 11, 512), (11, 10, 0)] {
+        let call = mem_call("memmove", dst, &source(src), n);
+
+        let got = memory_checksum(&format!("memmove-{dst}-{src}-{n}"), &call);
+
+        assert_eq!(got, expected(|m| m.copy_within(src..src + n, dst)), "memmove(buf+{dst}, buf+{src}, {n})");
+    }
+}
+
+/// Each returns its destination in A:X, as the C library does: the difference from `buf + 10` is zero.
+#[test]
+fn the_memory_routines_return_the_destination() {
+    for routine in ["memset", "memcpy", "memmove"] {
+        let second = if routine == "memset" { "  lda #1\n  sta rc4\n".to_owned() } else { source(400) };
+        let call = mem_call(routine, 10, &second, 300);
+        let check = "  sec\n  sbc #<(buf+10)\n  sta rc8\n  txa\n  sbc #>(buf+10)\n  ora rc8\n";
+
+        let got = common::run_with(&format!("{routine}-returns"), &format!("{call}{check}"), BUFFER);
+
+        assert_eq!(got, 0, "{routine} did not return dst");
+    }
+}

@@ -623,3 +623,116 @@ __ashrsi3:                      ; __sa >> __sb (arithmetic) -> __sa
   bne @next
 @done:
   rts
+
+; ---- memory fills and copies ----------------------------------------------------------------------
+; memset(rs1 = dst, rc4 = byte, rs3 = n), memcpy and memmove(rs1 = dst, rs2 = src, rs3 = n); each
+; returns dst in A:X. They walk whole pages with Y, so the low byte of dst stays put and only its high
+; byte is saved, on the hardware stack.
+
+.export memset
+memset:
+  lda rc3
+  pha
+  ldy #0
+  lda rc4
+  ldx rc7
+  beq @tail
+@page:
+  sta (rc2),y
+  iny
+  bne @page
+  inc rc3
+  dex
+  bne @page
+@tail:
+  ldx rc6
+  beq @done
+@byte:
+  sta (rc2),y
+  iny
+  dex
+  bne @byte
+@done:
+  pla
+  tax
+  lda rc2
+  rts
+
+.export memcpy
+memcpy:
+  lda rc3
+  pha
+  ldy #0
+  ldx rc7
+  beq @tail
+@page:
+  lda (rc4),y
+  sta (rc2),y
+  iny
+  bne @page
+  inc rc5
+  inc rc3
+  dex
+  bne @page
+@tail:
+  ldx rc6
+  beq @done
+@byte:
+  lda (rc4),y
+  sta (rc2),y
+  iny
+  dex
+  bne @byte
+@done:
+  pla
+  tax
+  lda rc2
+  rts
+
+; dst below src copies upward; otherwise downward, from the last byte, which is safe whether or not
+; the ranges overlap
+.export memmove
+memmove:
+  lda rc2
+  cmp rc4
+  lda rc3
+  sbc rc5
+  bcs @down
+  jmp memcpy
+@down:
+  lda rc3
+  pha
+  clc
+  adc rc7
+  sta rc3
+  lda rc5
+  clc
+  adc rc7
+  sta rc5
+  ldy rc6
+  beq @pages
+@tail:
+  dey
+  lda (rc4),y
+  sta (rc2),y
+  cpy #0
+  bne @tail
+@pages:
+  ldx rc7
+  beq @done
+@page:
+  dec rc3
+  dec rc5
+@byte:
+  dey
+  lda (rc4),y
+  sta (rc2),y
+  cpy #0
+  bne @byte
+  dex
+  bne @page
+@done:
+  pla
+  tax
+  lda rc2
+  rts
