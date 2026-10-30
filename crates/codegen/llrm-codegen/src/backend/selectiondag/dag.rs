@@ -112,6 +112,9 @@ pub struct MemInfo {
     /// `MachinePointerInfo::getAddrSpace`: 0, or the segment-override space
     /// (`fs` 257, `gs` 256) the IR's pointer names.
     pub space: u32,
+    /// The ordering of an atomic access
+    /// (`MachineMemOperand::getSuccessOrdering`); none for a plain one.
+    pub ordering: Option<llrm_mir::opcode::AtomicOrdering>,
 }
 
 /// `MachinePointerInfo`'s value: what the access is relative to.
@@ -169,6 +172,9 @@ pub struct DagConfig {
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
     pub fp_extended: bool,
+    /// `DataLayout::isBigEndian`: a narrowed load's offset counts from the
+    /// other end.
+    pub big_endian: bool,
 }
 
 impl Default for DagConfig {
@@ -182,6 +188,7 @@ impl Default for DagConfig {
             pointer: EVT::I32,
             int_div_cheap: false,
             fp_extended: false,
+            big_endian: false,
         }
     }
 }

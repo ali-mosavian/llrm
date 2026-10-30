@@ -50,6 +50,7 @@ pub struct TargetLoweringInfo {
     /// Per entry of `INTEGERS`: its action and the type it becomes.
     integers: [(TypeAction, MVT); 6],
     far: bool,
+    /// `getScalarShiftAmountTy`.
     shift_amount: ShiftAmount,
 }
 
@@ -58,10 +59,8 @@ pub struct TargetLoweringInfo {
 pub enum ShiftAmount {
     /// x86.
     I8,
-    /// The shifted type.
+    /// The shifted type (m68k).
     ByValue,
-    /// One integer type, whatever is shifted.
-    Fixed(MVT),
 }
 
 impl TargetLoweringInfo {
@@ -89,25 +88,15 @@ impl TargetLoweringInfo {
         TargetLoweringInfo { integers, far, shift_amount: ShiftAmount::I8 }
     }
 
-    /// The type a shift of `vt` takes its amount in.
-    pub fn with_shift_amount(
-        mut self,
-        shift_amount: ShiftAmount,
-    ) -> TargetLoweringInfo {
-        self.shift_amount = shift_amount;
+    /// A shift's amount has the type of the value shifted
+    /// (`M68kTargetLowering::getScalarShiftAmountTy`).
+    pub fn with_shift_by_value_type(mut self) -> TargetLoweringInfo {
+        self.shift_amount = ShiftAmount::ByValue;
         self
     }
 
-    /// `getScalarShiftAmountTy` for a shift of `vt`.
-    pub fn shift_amount_type(
-        &self,
-        vt: EVT,
-    ) -> EVT {
-        match self.shift_amount {
-            ShiftAmount::I8 => EVT::I8,
-            ShiftAmount::ByValue => vt,
-            ShiftAmount::Fixed(fixed) => EVT::Simple(fixed),
-        }
+    pub fn shift_amount(&self) -> ShiftAmount {
+        self.shift_amount
     }
 
     /// m32: `addRegisterClass` of `i8`, `i16`, `i32`; no far pointer.

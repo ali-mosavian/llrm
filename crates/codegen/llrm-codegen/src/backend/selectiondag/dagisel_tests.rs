@@ -23,7 +23,7 @@ fn hooks() -> X86Hooks {
 }
 
 fn mem_info() -> MemInfo {
-    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0 }
+    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0, ordering: None }
 }
 
 fn input(
@@ -179,6 +179,54 @@ fn the_pins_physical_registers_are_physical_register_nodes() {
     assert!(matches!(data(flags), NodeData::PhysReg(r) if r == super::dagisel_adapter::EFLAGS_ID));
 }
 
+/// A target whose map lacks a register the selector names read it as a
+/// virtual register of the pin's number (AArch64's NZCV, 7, became vreg 7).
+/// The adapter now records a refusal; x86's map still reads a stranger as
+/// virtual.
+#[test]
+fn a_register_the_target_cannot_map_is_a_refusal_not_a_virtual_register() {
+    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::generated::ids::mvt;
+    use llrm_lir::registers::RegId;
+
+    use super::dagisel_adapter::PinRegisters;
+
+    struct OneRegister;
+    impl PinRegisters for OneRegister {
+        fn phys_reg(
+            &self,
+            pin: u16,
+        ) -> Option<RegId> {
+            (pin == 1).then_some(RegId::from_raw(1))
+        }
+        fn pin_register(
+            &self,
+            id: RegId,
+        ) -> Option<u16> {
+            (id == RegId::from_raw(1)).then_some(1)
+        }
+        fn unmapped(
+            &self,
+            pin: u16,
+        ) -> bool {
+            pin > 1
+        }
+    }
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let mut x86 = DagisAdapter::new(&mut dag);
+    x86.register(199, mvt::i32);
+    assert_eq!(x86.refusal(), None, "x86 keeps reading an unnamed register as virtual");
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let mut adapter = DagisAdapter::with_registers(&mut dag, &OneRegister);
+    adapter.register(0, mvt::i32);
+    adapter.register(1, mvt::i32);
+    assert_eq!(adapter.refusal(), None);
+    adapter.register(7, mvt::i32);
+    assert!(adapter.refusal().is_some_and(|why| why.contains("pin register 7")));
+}
+
 /// The adapter said no store truncates, so a narrow store of a wide value
 /// matched the plain store patterns (and `ST_Fp64m32`'s truncating pattern
 /// never could).
@@ -275,7 +323,7 @@ fn every_own_node_has_a_pin_id() {
 /// to the file, so the generated ids did not know it.
 #[test]
 fn every_own_target_id_is_in_own_ids() {
-    let nodes = include_str!("../../../../../../crates/target/llrm-x86/src/dag/x86isd.rs");
+    let nodes = include_str!("../../../../../../crates/codegen/llrm-sdag/src/x86isd.rs");
     let ids = include_str!("../../../../../../tools/dagisel/own_ids.txt");
     let listed: Vec<(&str, &str)> = ids.lines().filter_map(|line| line.split_once(' ')).collect();
     let mut missing = Vec::new();
@@ -372,7 +420,15 @@ fn an_x87_fist_to_a_stack_slot_is_an_ist_pseudo() {
         };
         let slot = dag.get_frame_index(EVT::I32, 3);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: int, align: 4, volatile: false, base: MemBase::Stack(3), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: int,
+            align: 4,
+            volatile: false,
+            base: MemBase::Stack(3),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let fist = dag.intern(
             super::x86_lowering::x86isd::FIST,
             &[EVT::OTHER],
@@ -408,8 +464,15 @@ fn a_float_load_from_the_constant_pool_folds_the_entry_into_the_address() {
         dag.intern(ISD::TargetConstantPool, &[EVT::I32], &[], SDNodeFlags::default(), NodeData::PoolIndex(0, 0));
     let address = dag.get_node(super::x86_lowering::x86isd::WRAPPER, EVT::I32, &[entry]);
     let chain = dag.entry_node();
-    let info =
-        MemInfo { mem_vt: f64_vt, align: 8, volatile: false, base: MemBase::ConstantPool(0), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: f64_vt,
+        align: 8,
+        volatile: false,
+        base: MemBase::ConstantPool(0),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let load = dag.get_load(f64_vt, chain, address, info);
     let mut adapter = DagisAdapter::new(&mut dag);
 

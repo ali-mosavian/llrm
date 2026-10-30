@@ -38,6 +38,7 @@
 //! ([L636](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeTypes.cpp#L636)).
 
 use llrm_mir::hash::HashSet;
+use llrm_sdag::lowering::ShiftAmount;
 use llrm_support::hash::HashMap;
 
 use super::actions::TargetLowering;
@@ -87,8 +88,19 @@ impl<'a> TypeLegalizer<'a> {
         k: u128,
         vt: EVT,
     ) -> SDValue {
-        let amount_vt = self.tli.types.shift_amount_type(vt);
+        let amount_vt = self.shift_amount_type(vt);
         self.dag.get_constant(k, amount_vt)
+    }
+
+    /// `getShiftAmountTy` for a shift of `vt` (`i8` on x86).
+    fn shift_amount_type(
+        &self,
+        vt: EVT,
+    ) -> EVT {
+        match self.tli.types.shift_amount() {
+            ShiftAmount::I8 => EVT::I8,
+            ShiftAmount::ByValue => vt,
+        }
     }
 
     pub fn new(
@@ -1083,7 +1095,7 @@ impl<'a> TypeLegalizer<'a> {
             return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand shift to a library call" });
         }
         let (lo, hi) = self.expanded_integer(input);
-        let shift_vt = self.tli.types.shift_amount_type(half);
+        let shift_vt = self.shift_amount_type(half);
         let amount = match self.dag.value_type(amount).size_in_bits().cmp(&shift_vt.size_in_bits()) {
             std::cmp::Ordering::Greater => self.dag.get_node(ISD::Truncate, shift_vt, &[amount]),
             std::cmp::Ordering::Less => self.dag.get_node(ISD::ZeroExtend, shift_vt, &[amount]),
@@ -1156,7 +1168,7 @@ impl<'a> TypeLegalizer<'a> {
         }
         let vt_bits = u128::from(vt.size_in_bits());
         let n = u128::from(half.size_in_bits());
-        let shift_vt = self.tli.types.shift_amount_type(half);
+        let shift_vt = self.shift_amount_type(half);
         let by = |dag: &mut SelectionDAG, k: u128| dag.get_constant(k, shift_vt);
         let zero = self.dag.get_constant(0, half);
         let funnel_legal = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal(op, half);
@@ -2130,6 +2142,7 @@ impl<'a> TypeLegalizer<'a> {
             base: super::dag::MemBase::Stack(cell),
             ext: None,
             space: 0,
+            ordering: None,
         }
     }
 
@@ -2180,6 +2193,7 @@ impl<'a> TypeLegalizer<'a> {
             base: super::dag::MemBase::Stack(cell),
             ext: None,
             space: 0,
+            ordering: None,
         };
         // the `callseq_start` of this call: back along the chain through the
         // argument copies and the stores of the stack arguments joined before
@@ -2351,6 +2365,7 @@ impl<'a> TypeLegalizer<'a> {
                     base: super::dag::MemBase::Stack(cell),
                     ext: None,
                     space: 0,
+                    ordering: None,
                 };
                 let step = self.dag.get_constant(u128::from(half.size_in_bits() / 8), pointer);
                 let high_slot = self.dag.get_node(ISD::Add, pointer, &[slot, step]);

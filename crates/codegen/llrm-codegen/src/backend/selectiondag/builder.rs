@@ -26,7 +26,7 @@ use super::fold::mask;
 use super::function_lowering::FunctionLoweringInfo;
 use super::isd::{CondCode, ISD};
 use super::mvt::{EVT, MVT};
-use super::target_calling::{Ext, In, Out, TargetCalling};
+use super::target_calling::{Ext, In, Out, Site, TargetCalling};
 use crate::backend::isel::{Convention, Parameter, convention_for};
 
 /// An instruction the builder does not translate yet; the shadow harness
@@ -96,6 +96,15 @@ pub struct BuilderTarget {
     /// What a size-only pick gives up in clocks for a byte; none: bytes alone
     /// decide.
     pub size_trade: Option<SizeTrade>,
+    /// The pairs of an inline constant memcpy are chained one after another in
+    /// address order, not left unordered for the scheduler
+    /// (`getMemcpyLoadsAndStores` puts every load and store on the root).
+    /// DEVIATE: a target that steps a pointer with each access wants that
+    /// order. Off for x86.
+    pub ordered_copies: bool,
+    /// The target has x86's `rep movs` and `rep stos`; without them a copy or
+    /// fill past the inline limit is a call (the pin's `memcpy`, `memset`).
+    pub string_instructions: bool,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -268,6 +277,8 @@ impl BuilderTarget {
             min_size: false,
             tuning: llrm_mir::target::Tuning::PIN,
             size_trade: None,
+            ordered_copies: false,
+            string_instructions: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -299,6 +310,8 @@ impl BuilderTarget {
             min_size: false,
             tuning: llrm_mir::target::Tuning::PIN,
             size_trade: None,
+            ordered_copies: false,
+            string_instructions: true,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -431,6 +444,24 @@ fn dag_name(
     dag.block_name(block.0).to_owned()
 }
 
+/// An attribute that moves an argument out of the place its type gives it
+/// (`sret` to `x8`, `byval` to memory, `inreg`, `nest`, the Swift ones): a
+/// target's calling hook that does not place them refuses.
+fn relocating_attribute(attrs: &[llrm_mir::opcode::Attribute]) -> Option<&'static str> {
+    use llrm_mir::opcode::Attribute;
+    const TYPED: [&str; 5] = ["sret", "byval", "byref", "inalloca", "preallocated"];
+    const FLAGS: [&str; 5] = ["inreg", "nest", "swiftself", "swifterror", "swiftasync"];
+    attrs
+        .iter()
+        .find_map(
+            |attr| match attr {
+                Attribute::Type(name, _) => TYPED.into_iter().find(|one| name == one),
+                Attribute::Flag(name) => FLAGS.into_iter().find(|one| name == one),
+                _ => None,
+            },
+        )
+}
+
 impl<'a> Builder<'a> {
     /// The whole target description, for the paths that read x86-style
     /// `calling.toml` conventions, string registers and runtime routines.
@@ -529,6 +560,8 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
+            call_attrs_move_arguments: false,
+            fixed_args: 0,
             had_tail_call: false,
             volatile_memory: false,
             block,
@@ -569,6 +602,12 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is to a variadic function: at m64
     /// `lower_call` sets `al` to the vector registers it uses.
     variadic_call: bool,
+    /// The call being lowered has an argument whose attribute moves it
+    /// (`relocating_attribute`).
+    call_attrs_move_arguments: bool,
+    /// The parameters the callee declares: the arguments after them are
+    /// variadic.
+    fixed_args: usize,
     /// A `TC_RETURN` ended the block: nothing after the call is built.
     had_tail_call: bool,
     /// The memory intrinsic being lowered is volatile.
@@ -888,6 +927,7 @@ impl Builder<'_> {
                             base: MemBase::Stack(-fixed),
                             ext: None,
                             space: 0,
+                            ordering: None,
                         };
                         let load = self.dag.get_load(part_vt, entry_node, ptr, info);
                         // `LowerMemArgument` makes the object immutable unless
@@ -973,6 +1013,9 @@ impl Builder<'_> {
         outside: &llrm_support::hash::HashSet<ValueId>,
     ) -> Result<(), Refused> {
         let parameters = self.function.parameters().to_vec();
+        if self.function.parameter_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()) {
+            return Err(Refused("a parameter attribute that moves it, with a target's calling hook"));
+        }
         let mut ins = Vec::new();
         let mut shapes = Vec::new();
         for &arg in &parameters {
@@ -984,8 +1027,10 @@ impl Builder<'_> {
             let pointer = self.is_pointer_type(ty);
             let parts = self.calling_parts(vt)?;
             shapes.push((vt, parts.len()));
-            ins.extend(parts.into_iter().map(|vt| In { vt, pointer }));
+            let split = parts.len() > 1;
+            ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
         }
+        calling.accepts(&self.dag, Site::Arguments, &[], &ins).map_err(Refused)?;
         let entry = self.dag.entry_node();
         let mut offsets = Vec::new();
         let mut live_in = |reg: RegId| {
@@ -1051,8 +1096,15 @@ impl Builder<'_> {
             let base = self.dag.get_frame_index(pointer, save);
             let slot = self.dag.get_constant(at as u128 * 8, pointer);
             let address = self.dag.get_node(ISD::Add, pointer, &[base, slot]);
-            let info =
-                MemInfo { mem_vt: pointer, align: 8, volatile: false, base: MemBase::Stack(save), ext: None, space: 0 };
+            let info = MemInfo {
+                mem_vt: pointer,
+                align: 8,
+                volatile: false,
+                base: MemBase::Stack(save),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
             let root = self.control_root();
             let store = self.dag.get_store(root, value, address, info);
             self.dag.set_root(store);
@@ -1216,21 +1268,38 @@ impl Builder<'_> {
             arg_types
                 .push(self.function.operand_type(&self.module.context, *argument).ok_or(Refused("block argument"))?);
         }
-        let first = self.full_arch()?.first_argument_offset(false);
-        let (result_type, _, variadic) = self.module.signature(info.function_type);
-        let plan = convention_for(
-            self.module,
-            self.layout,
-            self.full_arch()?,
-            first,
-            info.calling_convention,
-            result_type,
-            variadic,
-            &arg_types,
-            &info.argument_attrs,
-        )
-        .map_err(|_| Refused("call the convention does not describe"))?;
+        let (result_type, named, variadic) = self.module.signature(info.function_type);
+        let named = named.len();
+        // A target with a calling hook places every part itself: it reads no
+        // plan.
+        let hooked = self.calling().is_some();
+        let first = if hooked { 0 } else { self.full_arch()?.first_argument_offset(false) };
+        let plan = if hooked {
+            Convention {
+                parameters: Vec::new(),
+                returns: Vec::new(),
+                float_result: None,
+                popped: 0,
+                saved: Vec::new(),
+                stack_arguments: 0,
+                first: 0,
+            }
+        } else {
+            convention_for(
+                self.module,
+                self.layout,
+                self.full_arch()?,
+                first,
+                info.calling_convention,
+                result_type,
+                variadic,
+                &arg_types,
+                &info.argument_attrs,
+            )
+            .map_err(|_| Refused("call the convention does not describe"))?
+        };
         if let Some(tail) = self.tail_candidate.take()
+            && !hooked
             && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
         {
             self.tail_calls.push(tail);
@@ -1333,6 +1402,8 @@ impl Builder<'_> {
             }
         }
         self.variadic_call = variadic;
+        self.fixed_args = named;
+        self.call_attrs_move_arguments = info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some());
         let result =
             self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
         if let (true, Some(answer)) = (flags_answer, result) {
@@ -1435,6 +1506,11 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<Vec<EVT>, Refused> {
+        // A float is one part, in a register of its own class: the target's
+        // `accepts` says which.
+        if vt.is_floating_point() {
+            return Ok(vec![vt]);
+        }
         if !vt.is_integer() {
             return Err(Refused("a value that is no integer, with a target's calling hook"));
         }
@@ -1505,15 +1581,22 @@ impl Builder<'_> {
         if sibling || flags_answer || byvals.iter().any(Option::is_some) {
             return Err(Refused("tail call, flags answer or byval with a target's calling hook"));
         }
+        if std::mem::take(&mut self.call_attrs_move_arguments) {
+            return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
+        }
         let mut outs = Vec::new();
+        let variadic_from = if std::mem::take(&mut self.variadic_call) { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
                 Some(ISD::SignExtend) => Ext::Sign,
                 Some(ISD::ZeroExtend) => Ext::Zero,
                 _ => Ext::Any,
             };
-            for piece in self.split_for_calling(*value, ext)? {
-                outs.push(Out { value: piece, ext, pointer: false });
+            let arg_vt = self.dag.value_type(*value);
+            let pieces = self.split_for_calling(*value, ext)?;
+            let split = pieces.len() > 1;
+            for piece in pieces {
+                outs.push(Out { value: piece, ext, pointer: false, arg_vt, split, variadic: at >= variadic_from });
             }
         }
         let void = self.module.context.types.is_void(result_type);
@@ -1525,8 +1608,11 @@ impl Builder<'_> {
             }
             let vt = self.type_of(result_type)?;
             let pointer = self.is_pointer_type(result_type);
-            (vt, self.calling_parts(vt)?.into_iter().map(|vt| In { vt, pointer }).collect())
+            let parts = self.calling_parts(vt)?;
+            let split = parts.len() > 1;
+            (vt, parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }).collect())
         };
+        calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
         let (chain, parts) = calling.lower_call(&mut self.dag, root, callee_node, &outs, &ins);
         self.dag.set_root(chain);
@@ -1619,6 +1705,7 @@ impl Builder<'_> {
                             base: MemBase::CallArgument((displacement - first + index as i64 * part_bytes) as i32),
                             ext: None,
                             space: 0,
+                            ordering: None,
                         };
                         stores.push(self.dag.get_store(chain, *piece, address, mem));
                     }
@@ -1871,10 +1958,14 @@ impl Builder<'_> {
                 Ext::Any
             };
             let pointer = self.is_pointer_type(ty);
-            for piece in self.split_for_calling(value, ext)? {
-                outs.push(Out { value: piece, ext, pointer });
+            let arg_vt = self.dag.value_type(value);
+            let pieces = self.split_for_calling(value, ext)?;
+            let split = pieces.len() > 1;
+            for piece in pieces {
+                outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false });
             }
         }
+        calling.accepts(&self.dag, Site::Return, &outs, &[]).map_err(Refused)?;
         let node = calling.lower_return(&mut self.dag, chain, &outs);
         self.dag.set_root(node);
         Ok(())
@@ -2412,7 +2503,15 @@ impl Builder<'_> {
         let align = vt.size_in_bits().div_ceil(8);
         let index = self.info.new_stack_object(align, align);
         let slot = self.dag.get_frame_index(self.target.dag.pointer, index);
-        let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: vt,
+            align,
+            volatile: false,
+            base: MemBase::Stack(index),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let root = self.root();
         let store = self.dag.get_store(root, operand, slot, info);
         self.dag.set_root(store);
@@ -2738,7 +2837,7 @@ impl Builder<'_> {
                 Some(Type::Pointer(space)) if *space == roles.stack && roles.stack != roles.near => 258,
                 _ => 0,
             };
-        Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space })
+        Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space, ordering: None })
     }
 
     fn visit_load(

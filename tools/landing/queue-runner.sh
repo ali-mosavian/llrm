@@ -3,6 +3,7 @@
 # a batch that does not merge lands one at a time with land.sh. Prints `N: MERGED ...` / `N: REFUSED: ...` lines
 # (the format refusals-report.sh reads). Waits for any running land.sh/runner first.
 . "$(dirname "${BASH_SOURCE[0]:-$0}")/branch.sh"
+[ "$1" = --print-plan ] && exec python3 "$(dirname "${BASH_SOURCE[0]:-$0}")/plan.py" "${@:2}"  # read-only: before the lock, the pid file and the loop
 export BUILDSLOT_BYPASS=1
 mkdir -p "${LAND_TMP:-/tmp/landing}"
 # every temp file of the batch (cargo, rustc, the linker, python tempfile) goes under LAND_TMP: /tmp is a tmpfs that sat at 98% of its inodes and failed links with "Cannot create temporary file"
@@ -10,7 +11,7 @@ export TMPDIR="${LAND_TMPDIR:-${LAND_TMP:-/tmp/landing}/tmp}"; mkdir -p "$TMPDIR
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/rate-limit.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/pr-state.sh"; source "$HERE/runner-reload.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/disk-preflight.sh"; source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/rate-limit.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/pr-state.sh"; source "$HERE/runner-reload.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 SELF_SHA=$(runner_scripts_sha "$HERE")
 while true; do
@@ -19,6 +20,7 @@ while true; do
   [ "$(runner_scripts_sha "$HERE")" = "$SELF_SHA" ] || { echo "runner scripts changed: reloading"; exec "$0" "$@"; }
   # never run beside another landing (old runner's land.sh)
   while landing_busy; do sleep 20; done
+  disk_pause
   rate_limit_pause
   bq_start=$(date +%s)
   "$HERE/build-queue.sh" > $Q.new && mv $Q.new $Q || echo "build-queue failed, keeping the old queue"
