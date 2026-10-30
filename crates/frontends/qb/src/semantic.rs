@@ -517,6 +517,8 @@ pub struct Options {
     /// /D's overflow check: INTEGER + - * and negation, LONG + - and
     /// negation, and LONG to INTEGER raise error 6.
     pub checked_overflow: bool,
+    /// See `Frontend::idiv_overflow_traps`.
+    pub idiv_overflow_traps: bool,
     /// /MBF.
     pub mbf: bool,
     /// /FPa.
@@ -8731,6 +8733,16 @@ impl Compiler {
             && matches!(op, Binary::Modulo | Binary::IntegerDivide)
             && !matches!(left_type, SINGLE | DOUBLE | LONG)
             && !matches!(right_type, SINGLE | DOUBLE | LONG);
+        // Where the processor's divide faults on an overflowing quotient and
+        // the runtime reports it as error 11, an INTEGER divide is the 16-bit
+        // `idiv` BC emits and `-32768 \ -1` needs no check of ours. Not where
+        // an ON ERROR handler is active (the trap names no statement to
+        // RESUME), nor by the constant -1, which the optimizer turns into a
+        // negation.
+        let hardware_idiv = narrow_divmod
+            && self.options.idiv_overflow_traps
+            && !matches!(&right_operand, Operand::Constant(_, Number::Integer(-1)));
+        let narrow_divmod = narrow_divmod && !hardware_idiv;
         let integral = matches!(
             op,
             Binary::And | Binary::Or | Binary::Xor | Binary::Eqv | Binary::Imp | Binary::Modulo | Binary::IntegerDivide
@@ -8750,7 +8762,7 @@ impl Compiler {
             // QB rounds floating operands before every integral/logical
             // operator. Any floating operand selects LONG evaluation; BYTE is
             // promoted to INTEGER. Keep both conversions explicit in HIR.
-            let target = if matches!(op, Binary::Modulo | Binary::IntegerDivide)
+            let target = if (matches!(op, Binary::Modulo | Binary::IntegerDivide) && !hardware_idiv)
                 || matches!(left_type, SINGLE | DOUBLE)
                 || matches!(right_type, SINGLE | DOUBLE)
                 || left_type == LONG
@@ -8810,7 +8822,7 @@ impl Compiler {
         // -fsanitize=integer-divide-by-zero made it.
         if matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
             self.division_checked(&left_operand, &right_operand, common, narrow_divmod, true)?;
-            if !narrow_divmod {
+            if !narrow_divmod && !hardware_idiv {
                 self.wrapped_division(op, operation, result, left_operand, right_operand, common)?;
                 return Ok((Operand::Value(result), result_type));
             }

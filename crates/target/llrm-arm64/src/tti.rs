@@ -19,9 +19,10 @@
 //!   reciprocal throughput 1/2 (what the Cyclone scheduling model gives `LDR`);
 //!   the scheduling model is not read. `generic` has the formula's fixed
 //!   latency 4 (`FeatureFixedLoadLatency4`).
-//! - DEVIATE 3: `isLegalAddressingMode` takes the access type; the trait does
-//!   not, so the access is 8 bytes, a register
-//!   ([`AArch64::is_legal_addressing_mode_for`] takes the size).
+//! - DEVIATE 3: `isLegalAddressingMode` takes the access type; the trait's
+//!   typed queries (`*_at`, which LSR asks of a use) take its size in bytes,
+//!   but the untyped ones (`is_legal_addressing_mode`) assume 8 bytes, a
+//!   register ([`AArch64::is_legal_addressing_mode_for`] takes the size).
 //! - DEVIATE 4: `isMaskAndCmp0FoldingBeneficial` takes the mask; the trait does
 //!   not, so the answer is the base class's `false`
 //!   ([`AArch64Lowering::is_mask_and_cmp0_folding_beneficial_for`] takes the
@@ -602,6 +603,18 @@ impl Tti for AArch64 {
         AArch64::is_legal_addressing_mode_for(ACCESS_BYTES, base_gv, base_offset, has_base_reg, scale)
     }
 
+    fn is_legal_addressing_mode_at(
+        &self,
+        _addr_space: u32,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        AArch64::is_legal_addressing_mode_for(access_bytes, base_gv, base_offset, has_base_reg, scale)
+    }
+
     fn is_legal_addressing_mode_for(
         &self,
         access_bytes: u64,
@@ -642,7 +655,18 @@ impl Tti for AArch64 {
         has_base_reg: bool,
         scale: i64,
     ) -> Cost {
-        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) {
+        self.scaling_factor_cost_at(ACCESS_BYTES, base_gv, base_offset, has_base_reg, scale)
+    }
+
+    fn scaling_factor_cost_at(
+        &self,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        if AArch64::is_legal_addressing_mode_for(access_bytes, base_gv, base_offset, has_base_reg, scale) {
             Cost::of(i64::from(scale != 0 && scale != 1))
         } else {
             Cost::INVALID
