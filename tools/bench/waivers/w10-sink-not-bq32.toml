@@ -1,0 +1,14 @@
+reason = "TEMPORARY trade-off (owner w10, 2026-10-30). foldICmpEquality's sibling, sinkNotIntoLogicalOp, now gives the pin's IR: in jpeg_fixed/jpeg_single's parser `(x>207) | !((x!=204) & (x>200))` is `x==204 | (x-208) u< -7`, equal to pinned `opt -passes=instcombine` on that condition. The bq32 rows below move by 1-6 instructions, jpeg -Os by 12 B, through the register allocation downstream of the fewer-compare IR. Removal: the jpeg bq32 -Os allocation fixed (own goal), or this file deleted by 2026-11-06; no row may pass its measured count."
+exception = true
+
+# old-main = 854bb7efc4; base = 65098fd950 (main after the merge); tip = parent 31493da6d5; to = measured at 81d6c9f882 (and 33f0457e86).
+# jpeg_fixed/jpeg_single bq32 -Os code_bytes are above old-main: named post-merge rows of w10, deadline 2026-11-06.
+
+[[row]]
+label = "sieve bq32 -O2"
+counter = "instructions"
+old_main = 22781
+tip = 15616
+main = 15616
+to = 15617
+

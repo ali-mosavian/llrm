@@ -63,6 +63,7 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 use crate::combine::{Combiner, Visit};
 use crate::combine_icmp_binop::fold_icmp_bin_op;
 use crate::combine_icmp_const::fold_icmp_inst_with_constant;
+use crate::combine_icmp_equality::fold_icmp_equality;
 use crate::combine_shared::{get_complexity, has_one_use, query};
 
 /// `ICmpInst::isSigned`.
@@ -122,7 +123,7 @@ fn binary_of(
 }
 
 /// A new compare in place of `inst`: `new ICmpInst(pred, a, b)`.
-fn new_icmp(
+pub(crate) fn new_icmp(
     c: &mut Combiner,
     inst: InstId,
     pred: IntPredicate,
@@ -257,7 +258,12 @@ pub fn visit_icmp(
         return r;
     }
     // OWED: foldICmpInstWithConstantNotInt, the rest of foldICmpCommutative,
-    // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold.
+    // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold,
+    // and the pin's free-to-invert, uadd-overflow and sign-bit-test arms that
+    // come before foldICmpEquality.
+    if let Some(r) = fold_icmp_equality(c, inst, pred, op0, op1) {
+        return r;
+    }
     if changed { Visit::Changed } else { Visit::None }
 }
 
@@ -760,43 +766,13 @@ fn canonicalize_icmp_predicate(
     if is_canonical_predicate(pred) {
         return None;
     }
-    let result = c.function.instruction(inst).result?;
-    let users: Vec<(InstId, u32)> = c.function.users(result).iter().map(|one| (one.user, one.index)).collect();
-    for &(user, index) in &users {
-        let one = c.function.instruction(user);
-        let ok = match &one.opcode {
-            // Only as the condition, and not a logical and/or: absorbing the
-            // not would hide that pattern.
-            Opcode::Select => {
-                index == 0 && {
-                    let q = query(c, None);
-                    let value = Operand::Value(one.result?);
-                    pattern::logical_and(&q, value).is_none() && pattern::logical_or(&q, value).is_none()
-                }
-            }
-            Opcode::Br => one.operands.len() == 3,
-            Opcode::Binary(BinaryOp::Xor) => pattern::not(&query(c, None), Operand::Value(one.result?)).is_some(),
-            _ => false,
-        };
-        if !ok {
-            return None;
-        }
+    let value = Operand::Value(c.function.instruction(inst).result?);
+    // Can all users be adjusted to predicate inversion?
+    if !c.can_freely_invert_all_users_of(value, None) {
+        return None;
     }
     c.function.set_icmp_predicate(inst, pred.inverse());
-    for (user, _) in users {
-        match c.function.instruction(user).opcode {
-            Opcode::Select | Opcode::Br => {
-                let mut operands = c.function.instruction(user).operands.clone();
-                operands.swap(1, 2);
-                c.function.set_operands(user, operands);
-                c.add_to_worklist(user);
-            }
-            _ => {
-                c.replace_inst_with(user, Operand::Value(result));
-                c.add_to_worklist(user);
-            }
-        }
-    }
+    c.freely_invert_all_users_of(value, None);
     Some(Visit::Changed)
 }
 

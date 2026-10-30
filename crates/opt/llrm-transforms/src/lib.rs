@@ -130,6 +130,7 @@ pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
 pub mod combine_icmp_const;
+pub mod combine_icmp_equality;
 pub mod combine_icmp_logic;
 pub mod combine_icmp_ranges;
 pub mod combine_invert;
@@ -152,6 +153,7 @@ pub mod combine_select_bools;
 pub mod combine_select_ext_const;
 pub mod combine_select_into_op;
 pub mod combine_select_op_op;
+pub mod combine_select_sign_bit;
 pub mod combine_select_spf;
 #[cfg(test)]
 mod combine_semantics_tests;
