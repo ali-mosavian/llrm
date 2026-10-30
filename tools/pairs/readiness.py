@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""The main-merge readiness table, one command: every m16 program larger (-Os, -O2) or slower (clocks) on a feat/parity commit than on main.
+"""The main-merge readiness table, one command: every m16 program larger (-Os, -O2) or slower (clocks) on a release/next commit than on main.
 
     tools/pairs/readiness.py [NEW_SHA] [--base 854bb7efc4] [--out FILE] [--levels -Os -O2] [--no-clocks]
 
-NEW_SHA defaults to origin/feat/parity. Each commit's dist is tools/pairs/pair_build.sh's `SCRATCH/sbp-<full sha>/dist`, built only if absent (a dist
+NEW_SHA defaults to origin/release/next. Each commit's dist is tools/pairs/pair_build.sh's `SCRATCH/sbp-<full sha>/dist`, built only if absent (a dist
 already there is verified and kept, never rebuilt). Sizes are tools/sizes.py's (bytes of OMF code and data, demos left out); clocks are
 tools/pairs/clocksweep.py's (the 486-priced instruction stream of every runnable program at -Os). Measured tables are cached per dist sha under
 SCRATCH/readiness-cache, so a second run on the same two commits measures nothing. The owner column is left blank for the flag ablation.
