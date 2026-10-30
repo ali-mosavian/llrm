@@ -619,8 +619,17 @@ pub fn convention_for(
     // A float leaves in st(0), which no register names.
     let described = entry(arch, calling_convention, variadic);
     let answer = lone_float(types, result);
+    // A convention with address registers names one for a pointer result
+    // (m68k's `a0`, class `address`); `pointer` is the width-keyed x86 entry,
+    // which a far pointer's two words outgrow.
+    let pointer_result = described
+        .filter(|_| matches!(types.get(answer), Type::Pointer(_)))
+        .and_then(|one| one.results.get("address"))
+        .map(|names| names.iter().map(|name| arch.register_named(name)).collect::<Vec<_>>());
     let returns = if types.is_void(result) || matches!(types.get(answer), Type::Float(_)) {
         Vec::new()
+    } else if let Some(registers) = pointer_result {
+        registers
     } else {
         results(arch, described, size_of(module, layout, result)?)
     };
@@ -6250,6 +6259,9 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
                 // A fact for the passes: no code.
                 Some(Intrinsic::Assume) => Ok(()),
+                // A fact for the passes (SelectionDAGBuilder.cpp#L7680): no
+                // code.
+                Some(Intrinsic::InvariantStart | Intrinsic::InvariantEnd) => Ok(()),
                 // A hint; the 386 and 486 have no prefetch instruction.
                 Some(Intrinsic::Prefetch | Intrinsic::FakeUse) => Ok(()),
                 _ => refuse(format!("@{name}")),

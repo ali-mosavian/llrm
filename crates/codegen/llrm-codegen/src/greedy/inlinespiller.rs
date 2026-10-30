@@ -112,7 +112,8 @@ impl Tables {
 // load only when its memory operand is a dereferenceable invariant load; llrm
 // proves the same per live range (`_stable_loads_by`), which covers the m16
 // descriptor loads (`mov es, [d+2]`). Exit: X86InstrInfo's rules translated
-// with an invariant-load flag set from those facts.
+// with an invariant-load flag set from those facts (the flag is read since
+// `flagged_loads`; the facts stay until the producers cover the rows).
 //
 // DEVIATE D-RFP4 (w-4, 2026-10-30): an x87 load (`fld`) of a global or of an
 // incoming argument's cell, which nothing writes while the value lives, is made
@@ -607,8 +608,20 @@ impl<'a> InlineSpiller<'a> {
             })
             .collect();
         if let Some(folded) = folded {
-            for (key, one) in members.iter().zip(folded) {
-                lis.rewrite_instr(block, *key, one);
+            for ((key, one), before) in members.iter().zip(folded).zip(&old) {
+                // A copy into `reg` that folds to a store of its source is a
+                // mergeable spill.
+                // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InlineSpiller.cpp#L1058-L1066>
+                let was_copy = before.defines.contains(&reg)
+                    && before.what.as_ref().is_some_and(|what| {
+                        what.op == Operation::Move
+                            && what.name.as_deref() == Some("mov")
+                            && matches!(what.sources.as_slice(), [Loc::Held(_)])
+                    });
+                lis.rewrite_instr(block, *key, Arc::clone(&one));
+                if was_copy && one.id() != before.id() {
+                    self.note_store(lis, &one, &cell, before);
+                }
             }
             self.folded += 1;
             return Some(Vec::new());
@@ -919,12 +932,19 @@ impl InlineSpiller<'_> {
     ) -> u32 {
         let reg = self.reg;
         let key = self.keys.get(&reg).copied().unwrap_or(self.original);
+        // An original of one value has one value wherever its siblings are live
+        // together: they overlap on that value, and share its slot as LLVM's do
+        // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InlineSpiller.cpp#L1466,
+        // `StackSlot = VRM.getStackSlot(Original)`).
+        let one_value = lis.has_interval(self.original) && lis.get_interval(self.original).range.contains_one_value();
         let clear = range.is_none_or(|range| {
-            self.homed.get(&key).is_none_or(|ranges| {
-                !ranges
-                    .iter()
-                    .any(|(owner, one)| *owner != reg && (one.overlaps(range) || Self::meet_at_group(lis, one, range)))
-            })
+            self.homed
+                .get(&key)
+                .is_none_or(
+                    |ranges| !ranges.iter().any(|(owner, one)| {
+                        *owner != reg && ((!one_value && one.overlaps(range)) || Self::meet_at_group(lis, one, range))
+                    }),
+                )
         });
         if clear { key } else { reg }
     }
@@ -1986,6 +2006,76 @@ mod tests {
         stores
     }
 
+    /// The home `%3` (a sibling of `%2`, both copies of `%1`, live together) is
+    /// spilled to: `%1`'s when `%1` has one value, its own when `%1` is
+    /// defined twice and the siblings may hold two.
+    fn sibling_home(redefined: bool) -> (u32, u32) {
+        use crate::model::ir::Imm;
+        let word = |value: u32| Loc::Held(Held { value, width: 2 });
+        let mov = |at: i64, dest: Loc, source: Loc, defines: Vec<u32>, uses: Vec<u32>| {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![dest],
+                sources: vec![source],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(at, Some((at, at + 1)), Some(what), defines, uses))
+        };
+        let imm = |value| Loc::Imm(Imm { value, width: 2, address: None });
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let mut insns = vec![mov(0, word(1), imm(5), vec![1], vec![])];
+        if redefined {
+            insns.push(mov(1, word(1), imm(6), vec![1], vec![]));
+        }
+        insns.push(mov(2, word(2), word(1), vec![2], vec![1]));
+        insns.push(mov(3, word(3), word(1), vec![3], vec![1]));
+        insns.push(mov(4, Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 0)), 2)), word(2), vec![], vec![2]));
+        insns.push(mov(5, Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 2)), 2)), word(3), vec![], vec![3]));
+        insns.push(Arc::new(Insn::new(6, Some((6, 7)), Some(ret), vec![], vec![])));
+        let body = LirBody::new(
+            "siblings",
+            0,
+            vec![crate::model::lir::Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        for value in 1..=3 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        matrix.vrm.set_is_split_from_reg(2, 1);
+        matrix.vrm.set_is_split_from_reg(3, 1);
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let order_of = |_: u32| Vec::new();
+        let mut spiller = InlineSpiller::new(&body, &mut frame, &classes, &order_of, Rc::new(Tables::default()));
+        spiller.original = 1;
+        spiller.reg = 3;
+        let (two, three) = (lis.get_interval(2).range.clone(), lis.get_interval(3).range.clone());
+        assert!(two.overlaps(&three), "premise: the siblings are live together");
+        spiller.homed.insert(1, vec![(2, two)]);
+        (spiller.shared_key(&lis, Some(&three)), 3)
+    }
+
+    /// Siblings of an original of one value are spilled to its home where they
+    /// overlap, as the pin shares one slot among the descendants of `Original`
+    /// (`InlineSpiller::spill`, `VRM.getStackSlot(Original)`). They each had a
+    /// home of their own: quicksort.nib -O2 stored `a`, a copy of its argument,
+    /// to a second slot and reloaded it twice in the swap block.
+    #[test]
+    fn test_siblings_of_an_original_of_one_value_share_its_home() {
+        assert_eq!(sibling_home(false).0, 1);
+    }
+
+    /// An original defined twice may give two siblings two values, which one
+    /// cell cannot hold.
+    #[test]
+    fn test_siblings_of_an_original_of_two_values_keep_homes_of_their_own() {
+        assert_eq!(sibling_home(true).0, 3);
+    }
+
     /// Two equal stores of one value, one in each arm of a diamond whose head
     /// runs as often as both arms together, become one store at the end of the
     /// head, from the sibling that is live there (`hoistAllSpills`).
@@ -2001,5 +2091,64 @@ mod tests {
     #[test]
     fn test_a_sibling_of_another_width_is_no_source_for_a_hoisted_store() {
         assert_eq!(stores_after_hoisting(2).len(), 2, "both arm stores stay");
+    }
+
+    /// `%2` is a copy of `%1`, which lives on, and is spilled: the copy folds
+    /// to a store of `%1`. The pin records that store as a mergeable spill
+    /// (`InlineSpiller.cpp#L1058`); it was not recorded, so `hoistAllSpills`
+    /// never saw it and bintree.nib -O2 kept a store dominated by another
+    /// (+300 memory operands).
+    #[test]
+    fn test_a_copy_folded_to_a_store_is_a_mergeable_spill() {
+        use crate::model::ir::Imm;
+        let word = |value: u32| Loc::Held(Held { value, width: 2 });
+        let mov = |at: i64, dest: Loc, source: Loc, defines: Vec<u32>, uses: Vec<u32>| {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![dest],
+                sources: vec![source],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(at, Some((at, at + 1)), Some(what), defines, uses))
+        };
+        let imm = Loc::Imm(Imm { value: 5, width: 2, address: None });
+        let global = Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 0)), 2));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let insns = vec![
+            mov(0, word(1), imm, vec![1], vec![]),
+            mov(1, word(2), word(1), vec![2], vec![1]),
+            mov(2, global, word(2), vec![], vec![2]),
+            mov(3, Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 2)), 2)), word(1), vec![], vec![1]),
+            Arc::new(Insn::new(4, Some((4, 5)), Some(ret), vec![], vec![])),
+        ];
+        let body = LirBody::new(
+            "copyspill",
+            0,
+            vec![crate::model::lir::Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        for value in 1..=2 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        matrix.vrm.set_is_split_from_reg(2, 1);
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let tables = Rc::new(Tables::default());
+        for value in 1..=2 {
+            tables.orders.borrow_mut().insert(value, vec![RegId::AX]);
+            tables.widths.borrow_mut().insert(value, 2);
+        }
+        let order_of = |_: u32| Vec::new();
+        let mut spiller = InlineSpiller::new(&body, &mut frame, &classes, &order_of, tables);
+        let (env, original) = (Env, Default::default());
+        let mut vrai = VirtRegAuxInfo::new(&env, &original);
+        let (mut shrunk, mut made) = (Vec::new(), Vec::new());
+        let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
+        spiller.spill(ctx, 2, &mut made);
+        assert_eq!(spiller.stored.len(), 1, "the store %1 -> home is a mergeable spill");
     }
 }

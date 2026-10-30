@@ -243,6 +243,10 @@ impl Machine for Dos {
         llrm_target::keeps_division(i64::from(bits / 8), size)
     }
 
+    fn fills_by_pattern(&self) -> bool {
+        true
+    }
+
     fn tuning(&self) -> llrm_mir::target::Tuning {
         if self.pin_tuning {
             return llrm_mir::target::Tuning::PIN;
@@ -274,6 +278,11 @@ impl Machine for Dos {
             // instructions in 6 procedures at 225, 1559 in 10 at 50 (main
             // 1703).
             inline_threshold: Some(50),
+            // DEVIATE: byte registers are scarce at every level, not only at
+            // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
+            // `setcc` pair and an `or` that took `bp` addressing out of the
+            // loop; split, sieve bq16 -O2 is 8780 -> 8436 memory operands.
+            split_merged_conditions: true,
             ..llrm_mir::target::Tuning::PIN
         }
     }

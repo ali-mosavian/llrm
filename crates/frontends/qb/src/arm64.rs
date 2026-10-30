@@ -73,7 +73,9 @@ fn arm64_text(
             out.push_str(&format!("target datalayout = \"{}\"\n", platform.datalayout()));
             continue;
         }
-        let mut line = line.replace(" cc 1000", "").replace(" \"llrm-fp-eval\"=\"x87-extended\"", "");
+        let mut line =
+            line.replace(" cc 1000", "").replace(" \"llrm-fp-eval\"=\"x87-extended\"", "").replace(" frame_bound", "");
+        line = without_llrm_attributes(&line);
         line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
         line = block_entry(&line);
         // a variadic call has no prototype to extend its arguments: on every
@@ -226,6 +228,77 @@ fn framed_function(lines: &[&str]) -> String {
         let line = if number > at { line.replace(&from_entry, ", %qb.body ]") } else { (*line).to_owned() };
         out.push_str(&line);
         out.push('\n');
+    }
+    without_unwinding(&out)
+}
+
+/// The attributes only llrm reads (its facts about a routine or a pointer),
+/// which the pinned LLVM's parser refuses; the optimizer has used them by the
+/// time the text is handed over.
+fn without_llrm_attributes(line: &str) -> String {
+    const ONLY_LLRM: [&str; 6] = ["noretain", "releases", "threeway", "flagsresult", "stackcheck", "noipa"];
+    let mut line = line.to_owned();
+    for name in ONLY_LLRM {
+        let word = format!(" {name}");
+        let mut from = 0;
+        while let Some(at) = line[from..].find(&word).map(|at| at + from) {
+            let end = at + word.len();
+            if line[end..].starts_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '$')) {
+                from = end;
+            } else {
+                line.replace_range(at..end, "");
+                from = at;
+            }
+        }
+    }
+    line
+}
+
+/// The function with no unwinding left in it: the pad is reached by the jump
+/// back, so an `invoke` is a `call` and a `br` to its normal block, and the
+/// pad's `landingpad` goes. The verifier of the pinned LLVM refuses a pad
+/// reached any other way ("Block containing LandingPadInst must be jumped to
+/// only by the unwind edge of an invoke").
+fn without_unwinding(function: &str) -> String {
+    let mut out = String::with_capacity(function.len());
+    let mut lines = function.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.contains(" = landingpad ") || line.trim_start().starts_with("landingpad ") {
+            // `catch ptr null` follows on a line of its own
+            while lines
+                .next_if(|next| next.trim_start().starts_with("catch ") || next.trim_start().starts_with("cleanup"))
+                .is_some()
+            {}
+            continue;
+        }
+        let Some(invoke) = line
+            .find("invoke ")
+            .filter(|at| line[..*at].trim_end().is_empty() || line[..*at].trim_end().ends_with('='))
+        else {
+            out.push_str(&line.replace(" personality ptr @llrm.qb.personality", ""));
+            out.push('\n');
+            continue;
+        };
+        let mut call = format!("{}call {}", &line[..invoke], &line[invoke + "invoke ".len()..]);
+        // the targets are on the line after the call, or at its end
+        let normal = match call.find(" to label %") {
+            Some(at) => {
+                let target = call[at..].to_owned();
+                call.truncate(at);
+                target
+            }
+            None => lines.next().unwrap_or_default().to_owned(),
+        };
+        let label = normal
+            .trim_start()
+            .strip_prefix("to label %")
+            .and_then(|rest| rest.split(' ').next())
+            .or_else(|| normal.split(" to label %").nth(1).and_then(|rest| rest.split(' ').next()));
+        out.push_str(&call);
+        out.push('\n');
+        if let Some(label) = label {
+            out.push_str(&format!("  br label %{label}\n"));
+        }
     }
     out
 }

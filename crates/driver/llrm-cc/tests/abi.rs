@@ -2,6 +2,9 @@
 //! the sizes and layouts clang is told. m16 needs the i8086 clang
 //! (`LLRM_CLANG_M16`); without it the check says it skipped.
 
+#[path = "common/target_dir.rs"]
+mod target_dir;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -12,7 +15,7 @@ fn compile(
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", target)
-        .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+        .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .arg("-fsyntax-only")
         .arg(root.join("tests/cc/abi").join(file))
         .output()
@@ -56,7 +59,7 @@ fn m16_objects_name_their_code_segment_after_the_source_and_export_globals() {
     let listing_path = std::env::temp_dir().join(format!("llrm-cc-segments-{}.s", std::process::id()));
     let listing = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
-        .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+        .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-S", "-O1", "-o"])
         .arg(&listing_path)
         .arg(root.join("tests/cc/segments/first.c"))

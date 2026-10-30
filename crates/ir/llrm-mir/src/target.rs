@@ -31,6 +31,9 @@ pub struct Tuning {
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
+    /// Two compares joined by `and`/`or` stay two branches at every level, as
+    /// the pin does at optsize; false: the pin's cost rule decides.
+    pub split_merged_conditions: bool,
 }
 
 impl Tuning {
@@ -46,6 +49,7 @@ impl Tuning {
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         inline_threshold: None,
+        split_merged_conditions: false,
     };
 }
 
@@ -87,6 +91,13 @@ pub trait Machine {
     /// code reading them; none: the base class's answers.
     fn lowering(&self) -> Option<std::rc::Rc<dyn crate::lowering::Lowering>> {
         None
+    }
+
+    /// Whether a loop that stores one word or dword to every cell of an object
+    /// is a `memset.pattern` fill at -Os, which isel makes `rep stosw` or
+    /// `rep stosd` (DEVIATE: the pin leaves it a loop).
+    fn fills_by_pattern(&self) -> bool {
+        false
     }
 
     /// The target's tuning limits: the pin's values, with this target's

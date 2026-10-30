@@ -72,6 +72,25 @@ impl Level {
     }
 }
 
+/// `-f<pass>` or `-fno-<pass>` applied to `options`; false when `flag` names
+/// no pass.
+pub fn apply_pass_flag(
+    options: &mut pipeline::Options,
+    flag: &str,
+) -> bool {
+    let Some(name) = flag.strip_prefix("-f") else { return false };
+    let (name, on) = name.strip_prefix("no-").map_or((name, true), |rest| (rest, false));
+    PASSES
+        .iter()
+        .find(|(one, _)| *one == name)
+        .is_some_and(
+            |(_, set)| {
+                set(options, on);
+                true
+            },
+        )
+}
+
 /// gcc's `-f` pass names, each with the options it sets.
 const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("allocation-search", |options, on| options.search = on),
