@@ -8,6 +8,8 @@ use llrm_m68k::encode::encode;
 use llrm_m68k::mc::{Inst, Operand};
 use llrm_m68k::reg;
 
+mod support;
+
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
 
 /// `d1` and so on, as the view of `bits` width the instruction names.
@@ -1454,11 +1456,11 @@ fn run_reading_zero(ir: &str) -> Option<i32> {
     let ir: String = ir.lines().filter(|line| !line.starts_with("@zero =") && !line.starts_with("@buf =")).collect::<Vec<_>>().join("\n");
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
     let code = llrm_m68k::compile::items(&module, "k", Cpu::M68000).expect("compiles");
-    let exe = std::env::temp_dir().join(format!("llrm-m68k-zero-{}-{}", std::process::id(), ir.len()));
+    let exe = support::unique_path("zero");
     write_executable(&exe, &executable(&program(&[Arg::Data(14)], code)).unwrap()).unwrap();
-    let status = std::process::Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
+    let code = support::run(std::path::Path::new("qemu-m68k"), &["-cpu", "m68000"], &exe);
     std::fs::remove_file(&exe).ok();
-    status.code()
+    code
 }
 
 /// Two compares, each read by two `scc`, with the second compare between them:

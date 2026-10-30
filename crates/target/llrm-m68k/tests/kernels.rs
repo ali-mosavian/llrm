@@ -13,6 +13,8 @@ use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::kernels::{Arg, DATALAYOUT, program, source, table};
 use llrm_m68k::object::{executable, write_executable};
 
+mod support;
+
 /// The kernel's hand-derived result and the exit status of its run.
 fn run_kernel(name: &str) -> Option<(i32, i32)> {
     if !std::path::Path::new("/usr/bin/qemu-m68k").exists() {
@@ -116,11 +118,11 @@ fn run_ir(
     }
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
     let code = items(&module, "k", Cpu::M68000).expect("compiles");
-    let exe = std::env::temp_dir().join(format!("llrm-m68k-ir-{}-{}", std::process::id(), ir.len()));
+    let exe = support::unique_path("ir");
     write_executable(&exe, &executable(&program(args, code)).unwrap()).unwrap();
-    let status = Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
+    let code = support::run(std::path::Path::new("qemu-m68k"), &["-cpu", "m68000"], &exe);
     std::fs::remove_file(&exe).ok();
-    status.code()
+    code
 }
 
 /// [`run_ir`] with the runtime the libcalls of a 68000 name (`__mulsi3` and the others) linked in.
@@ -142,11 +144,11 @@ fn run_ir_with_runtime(
         let name = global.name.as_deref().expect("a named function");
         code.extend(items(&module, name, Cpu::M68000).expect("compiles"));
     }
-    let exe = std::env::temp_dir().join(format!("llrm-m68k-rt-{}-{}", std::process::id(), ir.len()));
+    let exe = support::unique_path("rt");
     write_executable(&exe, &executable(&program(args, code)).unwrap()).unwrap();
-    let status = Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
+    let code = support::run(std::path::Path::new("qemu-m68k"), &["-cpu", "m68000"], &exe);
     std::fs::remove_file(&exe).ok();
-    status.code()
+    code
 }
 
 /// A `switch` made blocks of its own that the function builder refused ("a switch lowering made

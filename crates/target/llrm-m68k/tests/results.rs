@@ -2,11 +2,12 @@
 //! value the program computes under `qemu-m68k` (the exit status, 8 bits).
 
 use std::path::PathBuf;
-use std::process::Command;
 
 use llrm_m68k::compile::{Options, items_with, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::object::{executable, start, write_executable};
+
+mod support;
 
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
 
@@ -30,9 +31,9 @@ fn status(
     })?;
     let mut all = start("f", args);
     all.extend(items_with(&module(ir), "f", Cpu::M68000, options).expect("compiles"));
-    let path = std::env::temp_dir().join(format!("llrm-m68k-results-{}-{}", std::process::id(), ir.len()));
+    let path = support::unique_path("results");
     write_executable(&path, &executable(&all).unwrap()).unwrap();
-    let code = Command::new("timeout").args(["10"]).arg(qemu).arg(&path).status().unwrap().code();
+    let code = support::run(&qemu, &[], &path);
     std::fs::remove_file(&path).ok();
     code
 }
@@ -185,9 +186,9 @@ fn status_with_data(
     let qemu = qemu()?;
     let code = items_with(&module(ir), "k", Cpu::M68000, options).expect("compiles");
     let program = llrm_m68k::kernels::program_with_data(args, code, &llrm_m68k::kernels::library_data());
-    let path = std::env::temp_dir().join(format!("llrm-m68k-results-data-{}-{}", std::process::id(), ir.len()));
+    let path = support::unique_path("results-data");
     write_executable(&path, &executable(&program).unwrap()).unwrap();
-    let status = Command::new("timeout").args(["10"]).arg(qemu).arg(&path).status().unwrap().code();
+    let status = support::run(&qemu, &[], &path);
     std::fs::remove_file(&path).ok();
     status
 }
@@ -324,8 +325,6 @@ fn status_with_runtime(
     args: &[i64],
     options: Options,
 ) -> Option<i32> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static RUNS: AtomicUsize = AtomicUsize::new(0);
     let qemu = qemu()?;
     let mut all = start("f", args);
     // one module, so the local labels of the routines do not meet
@@ -335,13 +334,9 @@ fn status_with_runtime(
     for name in ["__mulsi3", "__udivsi3", "__umodsi3", "__divsi3", "__modsi3"] {
         all.extend(items_with(&runtime, name, Cpu::M68000, options).expect("the runtime compiles"));
     }
-    let path = std::env::temp_dir().join(format!(
-        "llrm-m68k-results-rt-{}-{}",
-        std::process::id(),
-        RUNS.fetch_add(1, Ordering::Relaxed)
-    ));
+    let path = support::unique_path("results-rt");
     write_executable(&path, &executable(&all).unwrap()).unwrap();
-    let code = Command::new("timeout").args(["10"]).arg(qemu).arg(&path).status().unwrap().code();
+    let code = support::run(&qemu, &[], &path);
     std::fs::remove_file(&path).ok();
     code
 }
@@ -862,4 +857,37 @@ fn a_shifted_one_against_zero_is_a_btst() {
             assert_eq!(code, want, "x = {x:#x}, n = {n}\n{asm}");
         }
     }
+}
+
+/// Programs of one length run in parallel each ran another's executable (the path was the pid and the IR's length): a
+/// test got the exit status of a different program.
+#[test]
+fn programs_of_one_length_run_in_parallel_without_sharing_an_executable() {
+    if qemu().is_none() {
+        return;
+    }
+    let ir = |value: i32| format!("define i32 @f() {{\n  ret i32 {value}\n}}");
+    assert_eq!(ir(1).len(), ir(2).len());
+    let runs: Vec<_> = (0..8)
+        .map(|i| std::thread::spawn(move || (i, status(&ir(1 + i % 2), &[], Options::default()))))
+        .collect();
+    for run in runs {
+        let (i, code) = run.join().unwrap();
+        assert_eq!(code, Some(1 + i % 2), "thread {i}");
+    }
+}
+
+/// `timeout` ends a run with status 124, which the tests read as the program's answer.
+#[test]
+#[should_panic(expected = "did not finish")]
+fn a_run_cut_off_by_the_timeout_is_not_a_status() {
+    let Some(qemu) = qemu() else { panic!("did not finish: no qemu, the test passes") };
+    let ir = "define i32 @f() {\nentry:\n  br label %l\nl:\n  br label %l\n}";
+    let mut all = start("f", &[]);
+    all.extend(items_with(&module(ir), "f", Cpu::M68000, Options::default()).expect("compiles"));
+    let path = support::unique_path("results-timeout");
+    write_executable(&path, &executable(&all).unwrap()).unwrap();
+    let code = support::run_for(1, &qemu, &[], &path);
+    std::fs::remove_file(&path).ok();
+    panic!("returned {code:?}");
 }
