@@ -307,7 +307,12 @@ fn is_safe_to_execute_unconditionally(
 /// DEVIATE LM1: a load is safe where its bytes are dereferenceable or the
 /// target does not trap on it at its alignment (`Machine::load_may_trap`), in
 /// place of `isDereferenceableAndAlignedPointer` (the same rule as `hoist`'s
-/// `_may_fault`).
+/// `_may_fault`). Exit: none; real mode faults only on an access that crosses
+/// offset FFFFh (dos.toml), so the pin's rule is for a target that traps.
+/// Pin-faithful, 424 bench rows change 2 (nbody_fixed nib -O2/-Os: -16 B,
+/// -36,000 memory operands, +24,000 instructions, +60,000 clocks); the rule
+/// was added for PLASMABLOBS `fsin3%(y% - k%)` leaving its pixel loop
+/// (53b3bb9db8).
 pub fn is_safe_to_speculatively_execute(
     unit: &passes::Unit,
     outer: &Outer,

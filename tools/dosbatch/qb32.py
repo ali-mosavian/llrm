@@ -183,12 +183,17 @@ def data_files(source: Path) -> tuple[Path, ...]:
 
 def basic_key(source: Path, flags: tuple[str, ...]) -> str:
     """What decides the object a BASIC source compiles to: its bytes, the flags, and the compiler's build."""
-    return f"basic|{source.read_bytes().hex()}|{flags}|{_stamp('llrm-qb')}"
+    return f"basic|{source.read_bytes().hex()}|{flags}|{_stamp('llrm-qb')}|{_environment()}"
 
 
 def runtime_key(source: Path, tree: str, tools: str) -> str:
     """What decides a runtime object: its source, every source and header of the runtime, and the tools' builds."""
-    return f"runtime|{source}|{tree}|{tools}"
+    return f"runtime|{source}|{tree}|{tools}|{_environment()}"
+
+
+def _environment() -> str:
+    """The compiler's own switches (`LLRM_*`) change what it emits: an object made under one is not another's."""
+    return repr(sorted((name, value) for name, value in os.environ.items() if name.startswith("LLRM_")))
 
 
 def compile_basic(source: Path, obj: Path, flags: tuple[str, ...] = ("-O2",)) -> str | None:
