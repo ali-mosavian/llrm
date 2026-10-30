@@ -161,7 +161,8 @@ fn select_abs<D: Dag>(
 }
 
 impl<D: AddrDag> Hooks<D> for MosHooks {
-    // The x86 subtarget predicates `Hooks` still requires of every target; no 6502 pattern asks them.
+    // The x86 subtarget predicates `Hooks` still requires of every target; no
+    // 6502 pattern asks them.
     fn has_sse_unaligned_mem(&self) -> bool {
         false
     }

@@ -1,6 +1,7 @@
-//! `llrm-6502-llc [-S] [-O<n>] [--platform=NAME] [--cpu=6502|65c02] [-f[no-]PASS] [-o OUT] FILE.ll`: LLVM IR from
-//! clang's front end alone through the mid-end and the 6502 backend to ca65 text. `-S` is the only output; the
-//! platform is sim65 unless named.
+//! `llrm-6502-llc [-S] [-O<n>] [--platform=NAME] [--cpu=6502|65c02]
+//! [-f[no-]PASS] [-o OUT] FILE.ll`: LLVM IR from clang's front end alone
+//! through the mid-end and the 6502 backend to ca65 text. `-S` is the only
+//! output; the platform is sim65 unless named.
 
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{self, Level, Request};
@@ -44,7 +45,8 @@ fn run() -> i32 {
             }
         }
     }
-    // for measuring what the platform's zero page is worth (clamped by the allocator to 16..=26)
+    // for measuring what the platform's zero page is worth (clamped by the
+    // allocator to 16..=26)
     if let Some(bytes) = std::env::var("LLRM_6502_ZERO_PAGE").ok().and_then(|n| n.parse().ok()) {
         request.platform.zero_page = bytes;
     }
@@ -65,7 +67,8 @@ fn run() -> i32 {
     };
     match driver::assembly(&text, &request) {
         Ok(out) => {
-            let path = output.unwrap_or_else(|| std::path::Path::new(&input).with_extension("s").to_string_lossy().into_owned());
+            let path = output
+                .unwrap_or_else(|| std::path::Path::new(&input).with_extension("s").to_string_lossy().into_owned());
             match std::fs::write(&path, out) {
                 Ok(()) => 0,
                 Err(error) => {

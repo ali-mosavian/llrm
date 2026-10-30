@@ -52,7 +52,8 @@ fn multiply_divide_and_shifts_are_legal_instructions() {
             assert_eq!(tli.operation_action(op, vt), Action::Legal, "{op:?} {vt:?}");
         }
     }
-    // an unsigned divide and remainder are the one `UDIVREM`: the legalizer makes one node of a pair
+    // an unsigned divide and remainder are the one `UDIVREM`: the legalizer
+    // makes one node of a pair
     for vt in [EVT::I8, EVT::I16] {
         assert_eq!(tli.operation_action(ISD::UDivRem, vt), Action::Legal, "UDivRem {vt:?}");
         for op in [ISD::UDiv, ISD::URem] {

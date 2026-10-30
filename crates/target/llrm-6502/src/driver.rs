@@ -5,6 +5,7 @@
 
 use std::rc::Rc;
 
+pub use llrm_codegen::driver::flags::apply_pass_flag;
 use llrm_mir::program::Program;
 use llrm_target::Target;
 use llrm_transforms::pipeline::{Applied, Options};
@@ -16,8 +17,6 @@ use crate::emit::equates;
 use crate::platform::{Platform, SIM65};
 use crate::select::module_text;
 use crate::target::Mos;
-
-pub use llrm_codegen::driver::flags::apply_pass_flag;
 
 /// How far the mid-end goes; `-Os` and `-Oz` also price a byte at the size
 /// level's clocks (`Tuning::SIZE`).
@@ -66,7 +65,9 @@ impl Level {
 /// The platform a row of `ROWS` names, or sim65.
 pub fn platform_named(name: &str) -> Result<Platform, String> {
     let rows = std::iter::once(SIM65).chain(crate::platform::ROWS);
-    rows.filter_map(|text| Platform::parse(text).ok()).find(|one| one.name == name).ok_or_else(|| format!("no platform {name}"))
+    rows.filter_map(|text| Platform::parse(text).ok())
+        .find(|one| one.name == name)
+        .ok_or_else(|| format!("no platform {name}"))
 }
 
 /// Everything a compile is told besides the IR.
@@ -111,8 +112,8 @@ fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
-        // Bytes over speed on an 8-bit target: no unrolling (the stand-in for the
-        // target's override-table entry).
+        // Bytes over speed on an 8-bit target: no unrolling (the stand-in for
+        // the target's override-table entry).
         options.unroll = false;
         options.loop_unrolling = false;
         for flag in &request.passes {
@@ -159,10 +160,11 @@ fn llrm_6502_prepare(program: &mut Program) {
     program.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
 }
 
-/// The cost model the mid-end reads: the pin's `opt` with no target, whose `Basic` TargetTransformInfo prices
-/// the loop-idiom, inline and strength-reduction decisions. Without it (`tti() = None`) those passes price by
-/// generic rules and the recognizer of CRC loops never runs. Everything else is `Neutral`'s: no register
-/// pressure, unit prices.
+/// The cost model the mid-end reads: the pin's `opt` with no target, whose
+/// `Basic` TargetTransformInfo prices the loop-idiom, inline and
+/// strength-reduction decisions. Without it (`tti() = None`) those passes price
+/// by generic rules and the recognizer of CRC loops never runs. Everything else
+/// is `Neutral`'s: no register pressure, unit prices.
 pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
     Rc::new(Mos6502Machine)
 }
@@ -204,11 +206,13 @@ impl llrm_mir::target::Machine for Mos6502Machine {
     }
 }
 
-/// The module's defined variables as ca65 data, and the renames of the symbols ca65 cannot spell (`.crctable`, the
-/// table `LoopIdiomRecognize` makes) to the labels that stand for them in the code.
+/// The module's defined variables as ca65 data, and the renames of the symbols
+/// ca65 cannot spell (`.crctable`, the table `LoopIdiomRecognize` makes) to the
+/// labels that stand for them in the code.
 ///
-/// DEVIATE: integers, arrays, structs and zero fills only; a pointer or float initializer is refused. Reason:
-/// nothing the corpus makes needs more. Exit: relocations, with the object writer.
+/// DEVIATE: integers, arrays, structs and zero fills only; a pointer or float
+/// initializer is refused. Reason: nothing the corpus makes needs more. Exit:
+/// relocations, with the object writer.
 fn data_text(
     module: &llrm_mir::module::Module,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -266,7 +270,9 @@ fn write_constant(
             members
                 .iter()
                 .enumerate()
-                .try_for_each(|(index, member)| write_constant(module, layout, *member, *element, out, at + index * stride))
+                .try_for_each(
+                    |(index, member)| write_constant(module, layout, *member, *element, out, at + index * stride),
+                )
         }
         (ConstantKind::Aggregate(members), _) if types.fields(ty).is_some() => {
             let (_, offsets) = layout.struct_layout(types, ty);

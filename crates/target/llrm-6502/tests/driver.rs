@@ -1,4 +1,5 @@
-//! The pipeline of `llrm-6502-llc` (`driver::assembly`): the request's platform and level reach the allocator.
+//! The pipeline of `llrm-6502-llc` (`driver::assembly`): the request's platform
+//! and level reach the allocator.
 
 mod common;
 
@@ -9,12 +10,24 @@ fn module(function: &str) -> String {
     format!("target datalayout = \"{}\"\n{function}\n", datalayout())
 }
 
-/// Ten sums are live at once. Compiled for sim65 (26 zero-page bytes) they fit in scratch cells; with 16 the
-/// allocator spills. A driver that kept `select_function`'s own 16 spilled on every platform: 8% more bytes
-/// over the hand corpus.
+/// Ten sums are live at once. Compiled for sim65 (26 zero-page bytes) they fit
+/// in scratch cells; with 16 the allocator spills. A driver that kept
+/// `select_function`'s own 16 spilled on every platform: 8% more bytes over the
+/// hand corpus.
 #[test]
 fn the_platforms_zero_page_reaches_the_allocator() {
-    let pairs = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "e"), ("e", "f"), ("a", "c"), ("b", "d"), ("c", "e"), ("d", "f"), ("a", "f")];
+    let pairs = [
+        ("a", "b"),
+        ("b", "c"),
+        ("c", "d"),
+        ("d", "e"),
+        ("e", "f"),
+        ("a", "c"),
+        ("b", "d"),
+        ("c", "e"),
+        ("d", "f"),
+        ("a", "f"),
+    ];
     let mut ir = String::from("define i8 @many(i8 %a, i8 %b, i8 %c, i8 %d, i8 %e, i8 %f) {\n");
     for (n, (x, y)) in pairs.iter().enumerate() {
         ir += &format!("  %t{n} = add i8 %{x}, %{y}\n");
@@ -32,8 +45,9 @@ fn the_platforms_zero_page_reaches_the_allocator() {
     assert!(narrow.contains("s_many_0") || narrow.contains("pha"), "no pressure at 16:\n{narrow}");
 }
 
-/// A word shifted by 5 is a counted loop at the size level and `asl`/`rol` pairs at speed. A driver that kept
-/// `select_function`'s speed tuning gave `-Os` the same text as `-O2`.
+/// A word shifted by 5 is a counted loop at the size level and `asl`/`rol`
+/// pairs at speed. A driver that kept `select_function`'s speed tuning gave
+/// `-Os` the same text as `-O2`.
 #[test]
 fn the_size_level_is_priced_in_bytes() {
     let ir = module("define i16 @shl5(i16 %x) {\n  %p = shl i16 %x, 5\n  %q = add i16 %p, %x\n  ret i16 %q\n}");
@@ -43,8 +57,10 @@ fn the_size_level_is_priced_in_bytes() {
     assert!(!speed.contains("dex") && !speed.contains("dey"), "-O2:\n{speed}");
 }
 
-/// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the platform is named. It was read before
-/// the row's own `--platform=sim65`, which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every size.
+/// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the
+/// platform is named. It was read before the row's own `--platform=sim65`,
+/// which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every
+/// size.
 #[test]
 fn the_zero_page_override_survives_the_platform_flag() {
     let dir = std::env::temp_dir().join(format!("llrm6502-zp-{}", std::process::id()));
@@ -65,8 +81,9 @@ fn the_zero_page_override_survives_the_platform_flag() {
     std::fs::remove_dir_all(dir).ok();
 }
 
-/// `-Os` holds an inline to the size threshold: a callee of about forty instructions called three times stays
-/// a call, where `-O2` copies it in. The hand corpus and bench tables have no such callee, so their `-Os` rows
+/// `-Os` holds an inline to the size threshold: a callee of about forty
+/// instructions called three times stays a call, where `-O2` copies it in. The
+/// hand corpus and bench tables have no such callee, so their `-Os` rows
 /// equal their `-O2` rows and cannot show whether `-Os` reaches the mid-end.
 #[test]
 fn the_size_level_keeps_a_call_that_speed_inlines() {
@@ -121,12 +138,14 @@ define i8 @f(i8 %p, i8 %q) {
     assert_eq!((calls(Level::O2), calls(Level::Os)), (0, 3));
 }
 
-/// The pin's `opt -O2` makes an eight-trip CRC loop a byte-wise table lookup (`LoopIdiomRecognize`, priced by the
-/// target's cost model). Compiled with a machine that had no cost model the recognizer never ran: crc16 kept its
+/// The pin's `opt -O2` makes an eight-trip CRC loop a byte-wise table lookup
+/// (`LoopIdiomRecognize`, priced by the target's cost model). Compiled with a
+/// machine that had no cost model the recognizer never ran: crc16 kept its
 /// bit loop (25 instructions, 6497 clocks) where the pin has 19.
 #[test]
 fn a_crc_loop_becomes_a_table_lookup() {
-    let ir = module("define i16 @crc16(ptr %0, i8 %1) {\n\
+    let ir = module(
+        "define i16 @crc16(ptr %0, i8 %1) {\n\
   %.not = icmp eq i8 %1, 0\n\
   br i1 %.not, label %._crit_edge, label %.lr.ph\n\
 \n\
@@ -161,14 +180,16 @@ fn a_crc_loop_becomes_a_table_lookup() {
   %.012.lcssa = phi i16 [ -1, %2 ], [ %12, %14 ]\n\
   ret i16 %.012.lcssa\n\
 }\n\
-");
+",
+    );
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert!(text.contains(".segment \"RODATA\"") && text.matches(".byte").count() >= 32, "no table:\n{text}");
     assert!(!text.contains("cmp #8"), "the bit loop is still there:\n{text}");
 }
 
-/// `icmp eq %n, %i2` and `icmp eq %i2, %n` are the same compare. LSR rewrites a loop's exit test with the limit on
-/// the left; the backend then kept `%i2` in memory (`stx rc4; inc rc4; lda rc2; cmp rc4`, 29 lines against 26)
+/// `icmp eq %n, %i2` and `icmp eq %i2, %n` are the same compare. LSR rewrites a
+/// loop's exit test with the limit on the left; the backend then kept `%i2` in
+/// memory (`stx rc4; inc rc4; lda rc2; cmp rc4`, 29 lines against 26)
 /// and sum_arr went from 32 bytes and 249 clocks to 38 and 366.
 #[test]
 fn an_equality_compare_costs_the_same_either_way_round() {
@@ -199,8 +220,9 @@ exit:
     assert_eq!(sum("i8 %i2, %n"), sum("i8 %n, %i2"));
 }
 
-/// The machine handed to the mid-end has a cost model; with none the CRC recognizer and the other passes that
-/// price by it silently did not run (see `a_crc_loop_becomes_a_table_lookup`).
+/// The machine handed to the mid-end has a cost model; with none the CRC
+/// recognizer and the other passes that price by it silently did not run (see
+/// `a_crc_loop_becomes_a_table_lookup`).
 #[test]
 fn the_machine_handed_to_the_mid_end_has_a_tti() {
     let tti = llrm_6502::driver::machine().tti().expect("a cost model");
@@ -214,10 +236,11 @@ fn reloads_of(
     text.lines().filter(|line| line.trim() == format!("lda {cell}")).count()
 }
 
-/// A pointer is stored to its spill cell at entry; a path that does not write its register used to load it
-/// again from the cell before the call (a `lda`/`sta` pair a byte, twice, on each of two paths: 12 bytes
-/// of the 6-line `f` below), because the spiller reloads before every use. Only the load after the call, which
-/// took the register, is needed.
+/// A pointer is stored to its spill cell at entry; a path that does not write
+/// its register used to load it again from the cell before the call (a
+/// `lda`/`sta` pair a byte, twice, on each of two paths: 12 bytes of the 6-line
+/// `f` below), because the spiller reloads before every use. Only the load
+/// after the call, which took the register, is needed.
 #[test]
 fn a_spilled_value_is_not_reloaded_where_its_register_is_untouched() {
     let ir = module(
@@ -241,7 +264,8 @@ m:
     assert_eq!(reloads_of(&text[call..], "s_f_0"), 1, "the load after the call is the one needed:\n{text}");
 }
 
-/// The control of the test above: a call takes the register, so the value is loaded again after each one.
+/// The control of the test above: a call takes the register, so the value is
+/// loaded again after each one.
 #[test]
 fn a_spilled_value_is_reloaded_after_each_call_that_takes_its_register() {
     let ir = module(

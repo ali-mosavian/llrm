@@ -1398,9 +1398,11 @@ fn a_word_times_another_constant_still_multiplies() {
     assert!(text.contains("__mulhi3"), "{text}");
 }
 
-/// A product of two zero-extended bytes called `__mulhi3`, which runs up to sixteen iterations on words
-/// (umul8x8r16: 56 bytes and 402 cycles against 25 and 191). It is `__umulqihi3`, eight iterations on bytes. Both
-/// bytes of the product are checked: 255 * 255 = 0xFE01, 200 * 100 = 20000 = 0x4E20, 128 * 2 = 0x100.
+/// A product of two zero-extended bytes called `__mulhi3`, which runs up to
+/// sixteen iterations on words (umul8x8r16: 56 bytes and 402 cycles against 25
+/// and 191). It is `__umulqihi3`, eight iterations on bytes. Both bytes of the
+/// product are checked: 255 * 255 = 0xFE01, 200 * 100 = 20000 = 0x4E20, 128 * 2
+/// = 0x100.
 #[test]
 fn a_product_of_two_zero_extended_bytes_is_a_widening_multiply() {
     let ir = "define i16 @wide(i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  %p = mul i16 %x, %y\n  ret i16 %p\n}";
@@ -1416,8 +1418,8 @@ fn a_product_of_two_zero_extended_bytes_is_a_widening_multiply() {
     }
 }
 
-/// Siblings: a byte times a full word and a product of sign-extended bytes are not the zero-extended case, and
-/// keep their meaning. (-1) * 2 = 0xFFFE.
+/// Siblings: a byte times a full word and a product of sign-extended bytes are
+/// not the zero-extended case, and keep their meaning. (-1) * 2 = 0xFFFE.
 #[test]
 fn only_zero_extended_bytes_take_the_widening_multiply() {
     let word = "define i16 @bw(i8 %a, i16 %w) {\n  %x = zext i8 %a to i16\n  %p = mul i16 %x, %w\n  ret i16 %p\n}";
@@ -1431,15 +1433,15 @@ fn only_zero_extended_bytes_take_the_widening_multiply() {
     assert_eq!(hi << 8 | lo, 0xFFFE);
 }
 
-/// A quotient and a remainder of the same operands called the divide twice (or the divide, a multiply and a
-/// subtract). The routine leaves the remainder in `rc6:rc7` (a byte in `rc6`), so the pair is one call. 1234 / 10 =
+/// A quotient and a remainder of the same operands called the divide twice (or
+/// the divide, a multiply and a subtract). The routine leaves the remainder in
+/// `rc6:rc7` (a byte in `rc6`), so the pair is one call. 1234 / 10 =
 /// 123 r 4, 65535 / 7 = 9362 r 1, 200 / 7 = 28 r 4.
 #[test]
 fn a_quotient_and_remainder_are_one_divide() {
-    for (bits, name, cases) in [
-        (16, "dr16", vec![(1234u32, 10u32), (65535, 7), (500, 500)]),
-        (8, "dr8", vec![(200, 7), (255, 16), (9, 10)]),
-    ] {
+    for (bits, name, cases) in
+        [(16, "dr16", vec![(1234u32, 10u32), (65535, 7), (500, 500)]), (8, "dr8", vec![(200, 7), (255, 16), (9, 10)])]
+    {
         let ir = format!(
             "define i{bits} @{name}(i{bits} %x, i{bits} %y) {{\n  %q = udiv i{bits} %x, %y\n  %r = urem i{bits} %x, %y\n  %m = shl i{bits} %q, 2\n  %s = xor i{bits} %m, %r\n  ret i{bits} %s\n}}"
         );
@@ -1451,13 +1453,20 @@ fn a_quotient_and_remainder_are_one_divide() {
         for (x, y) in cases {
             let want = (((x / y) << 2) ^ (x % y)) & mask;
             let (low, high) = if bits == 16 {
-                (set("rc2", x as u16 & 0xFF) + &set("rc3", (x >> 8) as u16) + &set("rc4", y as u16 & 0xFF) + &set("rc5", (y >> 8) as u16), true)
+                (
+                    set("rc2", x as u16 & 0xFF)
+                        + &set("rc3", (x >> 8) as u16)
+                        + &set("rc4", y as u16 & 0xFF)
+                        + &set("rc5", (y >> 8) as u16),
+                    true,
+                )
             } else {
                 (set("rc2", x as u16) + &set("rc3", y as u16), false)
             };
             let lo = common::run_with(&format!("alloc-{name}-lo-{x}"), &format!("{low}  jsr {name}\n"), &text);
             let got = if high {
-                lo | common::run_with(&format!("alloc-{name}-hi-{x}"), &format!("{low}  jsr {name}\n  txa\n"), &text) << 8
+                lo | common::run_with(&format!("alloc-{name}-hi-{x}"), &format!("{low}  jsr {name}\n  txa\n"), &text)
+                    << 8
             } else {
                 lo
             };
@@ -1466,13 +1475,16 @@ fn a_quotient_and_remainder_are_one_divide() {
     }
 }
 
-/// A remainder alone (the quotient unread) read `rc6:rc7` after `__udivhi3`: `tosumodax` grew from 90 to 94 bytes
-/// and 511 to 517 cycles. It is `__umodhi3` (`__umodqi3`), which leaves the remainder in A:X (A). 1234 % 10 = 4,
-/// 200 % 7 = 4.
+/// A remainder alone (the quotient unread) read `rc6:rc7` after `__udivhi3`:
+/// `tosumodax` grew from 90 to 94 bytes and 511 to 517 cycles. It is
+/// `__umodhi3` (`__umodqi3`), which leaves the remainder in A:X (A). 1234 % 10
+/// = 4, 200 % 7 = 4.
 #[test]
 fn a_remainder_alone_is_the_remainder_routine() {
     for (bits, name, x, y, routine) in [(16, "rem16", 1234u16, 10u16, "__umodhi3"), (8, "rem8", 200, 7, "__umodqi3")] {
-        let ir = format!("define i{bits} @{name}(i{bits} %x, i{bits} %y) {{\n  %r = urem i{bits} %x, %y\n  ret i{bits} %r\n}}");
+        let ir = format!(
+            "define i{bits} @{name}(i{bits} %x, i{bits} %y) {{\n  %r = urem i{bits} %x, %y\n  ret i{bits} %r\n}}"
+        );
         let text = compile(&ir, name);
         assert!(text.contains(&format!("jsr {routine}")), "{bits}: {text}");
         assert!(!text.contains("rc6"), "{bits}: {text}");
@@ -1485,9 +1497,10 @@ fn a_remainder_alone_is_the_remainder_routine() {
     }
 }
 
-/// An `or` of two compares, widened, tested the byte it had just made (`ora; cmp #0; bne`, then `lda #0` or `lda
-/// #1`): isxdigit spent 11 bytes and about 8 cycles on it. The byte is already 0 or 1, so the widening is the
-/// byte. Hex digit values are checked on both sides of each range.
+/// An `or` of two compares, widened, tested the byte it had just made (`ora;
+/// cmp #0; bne`, then `lda #0` or `lda #1`): isxdigit spent 11 bytes and about
+/// 8 cycles on it. The byte is already 0 or 1, so the widening is the byte. Hex
+/// digit values are checked on both sides of each range.
 #[test]
 fn a_widened_or_of_compares_does_not_test_its_own_result() {
     let ir = "define i16 @hex(i16 %c) {
@@ -1511,8 +1524,8 @@ fn a_widened_or_of_compares_does_not_test_its_own_result() {
     }
 }
 
-/// Siblings: a sign extension of the same `or` is still all ones, and a widened bit that is not made of compares
-/// (a parameter) is still tested.
+/// Siblings: a sign extension of the same `or` is still all ones, and a widened
+/// bit that is not made of compares (a parameter) is still tested.
 #[test]
 fn widening_a_condition_that_is_not_a_logic_of_compares_is_unchanged() {
     let ir = "define i16 @sx(i16 %c) {
@@ -2454,8 +2467,9 @@ define i16 @caller3() {
     }
 }
 
-/// A fill of a size known only at run time panicked in the selector ("calling.toml names no register cx"):
-/// the generic builder emitted x86's `rep stosb`. It is a call of `memset`.
+/// A fill of a size known only at run time panicked in the selector
+/// ("calling.toml names no register cx"): the generic builder emitted x86's
+/// `rep stosb`. It is a call of `memset`.
 #[test]
 fn a_fill_of_unknown_size_is_a_call_of_memset() {
     let ir = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)

@@ -60,8 +60,8 @@ fn multiply_bytes_gives_the_low_byte() {
     }
 }
 
-/// The full product of two bytes, A low and X high: 255 * 255 = 65025 = 0xFE01, 200 * 100 = 0x4E20, 0 either side
-/// is 0.
+/// The full product of two bytes, A low and X high: 255 * 255 = 65025 = 0xFE01,
+/// 200 * 100 = 0x4E20, 0 either side is 0.
 #[test]
 fn widening_multiply_of_bytes_gives_the_full_product() {
     for (a, b, want) in [(255, 255, 0xFE01), (200, 100, 0x4E20), (0, 9, 0), (9, 0, 0), (1, 255, 255), (128, 2, 256)] {
@@ -107,8 +107,9 @@ fn unsigned_byte_division() {
     }
 }
 
-/// The divide leaves the remainder behind for a caller that wants both: a byte divide in `rc6` (the quotient in A),
-/// a word divide in `rc6:rc7` (the quotient in A:X). 200 / 7 = 28 r 4; 50000 / 7 = 7142 r 6.
+/// The divide leaves the remainder behind for a caller that wants both: a byte
+/// divide in `rc6` (the quotient in A), a word divide in `rc6:rc7` (the
+/// quotient in A:X). 200 / 7 = 28 r 4; 50000 / 7 = 7142 r 6.
 #[test]
 fn division_leaves_the_remainder_in_rc6_and_rc7() {
     let setup = two_bytes(200, 7);
@@ -270,7 +271,8 @@ fn a_small_multiplier_stops_the_word_multiply_early() {
 /// A 768-byte buffer in BSS, filled with a pattern that differs in each page.
 const BUFFER: &str = ".segment \"BSS\"\nbuf: .res 768\n.segment \"CODE\"\n";
 
-/// Pattern byte `i`: the index low byte, xor $A5 on page 1, xor $A5 $3C on page 2.
+/// Pattern byte `i`: the index low byte, xor $A5 on page 1, xor $A5 $3C on page
+/// 2.
 fn pattern(i: usize) -> u8 {
     let low = i as u8;
     match i >> 8 {
@@ -280,13 +282,15 @@ fn pattern(i: usize) -> u8 {
     }
 }
 
-/// Fills `buf` with the pattern, runs `call` and returns a checksum of all 768 bytes: rotated left once and
-/// xored with each byte in turn, so a byte in the wrong place changes it.
+/// Fills `buf` with the pattern, runs `call` and returns a checksum of all 768
+/// bytes: rotated left once and xored with each byte in turn, so a byte in the
+/// wrong place changes it.
 fn memory_checksum(
     name: &str,
     call: &str,
 ) -> i32 {
-    let fill = "  ldx #0\n@f: txa\n  sta buf,x\n  eor #$A5\n  sta buf+256,x\n  eor #$3C\n  sta buf+512,x\n  inx\n  bne @f\n";
+    let fill =
+        "  ldx #0\n@f: txa\n  sta buf,x\n  eor #$A5\n  sta buf+256,x\n  eor #$3C\n  sta buf+512,x\n  inx\n  bne @f\n";
     let mut sum = String::from("  lda #0\n  sta rc8\n");
     for page in 0..3 {
         sum += &format!(
@@ -306,7 +310,8 @@ fn expected(edit: impl FnOnce(&mut [u8])) -> i32 {
     i32::from(memory.iter().fold(0u8, |sum, byte| sum.rotate_left(1) ^ byte))
 }
 
-/// `routine(buf + dst, buf + src, n)` for memcpy and memmove, `routine(buf + dst, c, n)` for memset.
+/// `routine(buf + dst, buf + src, n)` for memcpy and memmove, `routine(buf +
+/// dst, c, n)` for memset.
 fn mem_call(
     routine: &str,
     dst: usize,
@@ -324,7 +329,8 @@ fn source(src: usize) -> String {
     format!("  lda #<(buf+{src})\n  sta rc4\n  lda #>(buf+{src})\n  sta rc5\n")
 }
 
-/// Whole pages, a partial page, one byte and none: a fill of n bytes writes exactly n, each the byte given.
+/// Whole pages, a partial page, one byte and none: a fill of n bytes writes
+/// exactly n, each the byte given.
 #[test]
 fn memset_fills_exactly_n_bytes() {
     for (dst, n) in [(10, 0), (10, 1), (10, 255), (10, 256), (10, 257), (10, 300), (0, 768)] {
@@ -347,10 +353,21 @@ fn memcpy_copies_exactly_n_bytes() {
     }
 }
 
-/// Overlap in each direction, equal pointers, disjoint ranges, and page-sized counts.
+/// Overlap in each direction, equal pointers, disjoint ranges, and page-sized
+/// counts.
 #[test]
 fn memmove_handles_overlap_in_both_directions() {
-    for (dst, src, n) in [(20, 10, 300), (10, 20, 300), (10, 10, 300), (310, 10, 300), (11, 10, 256), (11, 10, 512), (11, 10, 1), (10, 11, 512), (11, 10, 0)] {
+    for (dst, src, n) in [
+        (20, 10, 300),
+        (10, 20, 300),
+        (10, 10, 300),
+        (310, 10, 300),
+        (11, 10, 256),
+        (11, 10, 512),
+        (11, 10, 1),
+        (10, 11, 512),
+        (11, 10, 0),
+    ] {
         let call = mem_call("memmove", dst, &source(src), n);
 
         let got = memory_checksum(&format!("memmove-{dst}-{src}-{n}"), &call);
@@ -359,7 +376,8 @@ fn memmove_handles_overlap_in_both_directions() {
     }
 }
 
-/// Each returns its destination in A:X, as the C library does: the difference from `buf + 10` is zero.
+/// Each returns its destination in A:X, as the C library does: the difference
+/// from `buf + 10` is zero.
 #[test]
 fn the_memory_routines_return_the_destination() {
     for routine in ["memset", "memcpy", "memmove"] {

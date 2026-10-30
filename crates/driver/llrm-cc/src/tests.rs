@@ -245,8 +245,8 @@ fn os_layer_answers_without_llrm_c_or_clang() {
     assert!(os_layer(&words("--os-layer start")).unwrap().is_err());
 }
 
-/// The 6502 rows name their own backend and platform, and the level reaches it. A row with the default
-/// `llrm-llc` handed the msp430 IR to the x86 backend.
+/// The 6502 rows name their own backend and platform, and the level reaches it.
+/// A row with the default `llrm-llc` handed the msp430 IR to the x86 backend.
 #[test]
 fn the_6502_rows_select_their_own_backend_and_cpu() {
     let table = targets(TARGETS).unwrap();

@@ -29,8 +29,9 @@ fn final_ir(ir: &str) -> String {
     text
 }
 
-/// `DivRemPairs` wrote the remainder of `x / y` and `x % y` as `x - (x / y) * y` because the target said it
-/// had no divide that makes both: itoa called `__udivhi3` and `__mulhi3` per digit and grew 9 bytes. The 6502
+/// `DivRemPairs` wrote the remainder of `x / y` and `x % y` as `x - (x / y) *
+/// y` because the target said it had no divide that makes both: itoa called
+/// `__udivhi3` and `__mulhi3` per digit and grew 9 bytes. The 6502
 /// runtime makes both in one call, so the pair stays a `udiv` and a `urem`.
 #[test]
 fn a_quotient_and_remainder_of_the_same_operands_stay_a_pair() {

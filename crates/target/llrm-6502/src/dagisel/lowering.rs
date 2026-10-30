@@ -99,8 +99,9 @@ pub fn target_lowering() -> TargetLowering {
     // variable ones expand to runtime calls where they are emitted.
     set(&[Mul, SDiv, SRem, Shl, Srl, Sra], Action::Legal);
     set(&[SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
-    // an unsigned divide and remainder are the one runtime call that makes both: the legalizer expands each to
-    // the `UDIVREM` node, and the pair of one dividend and divisor is one node
+    // an unsigned divide and remainder are the one runtime call that makes
+    // both: the legalizer expands each to the `UDIVREM` node, and the pair
+    // of one dividend and divisor is one node
     set(&[UDiv, URem], Action::Expand);
     set(&[UDivRem], Action::Legal);
     set(&[CtTz, CtLz, CtPop, BSwap], Action::Expand);
@@ -241,8 +242,9 @@ fn lower_extend(
         return node;
     }
     let vt = dag.value_type(node);
-    // a logic op over compares is a byte of 0 or 1 already (`condition_byte`): widened, it is that byte, not a
-    // select that tests the byte it was just made into
+    // a logic op over compares is a byte of 0 or 1 already (`condition_byte`):
+    // widened, it is that byte, not a select that tests the byte it was
+    // just made into
     if dag.opcode(node) != ISD::SignExtend
         && matches!(dag.opcode(condition), ISD::And | ISD::Or | ISD::Xor)
         && is_condition_tree(dag, condition)
@@ -303,10 +305,12 @@ fn flip_sign(
     }
 }
 
-/// Equality is symmetric: a value computed in this block goes on the left (it is in `A` when the compare comes),
-/// an incoming register (an argument, a value live in from another block) on the right, where `cmp` reads it
-/// from memory. InstCombine orders a commutative operation's operands the same way (arguments before
-/// instructions in its complexity order), but LSR rewrites a loop's exit test with the limit on the left.
+/// Equality is symmetric: a value computed in this block goes on the left (it
+/// is in `A` when the compare comes), an incoming register (an argument, a
+/// value live in from another block) on the right, where `cmp` reads it
+/// from memory. InstCombine orders a commutative operation's operands the same
+/// way (arguments before instructions in its complexity order), but LSR
+/// rewrites a loop's exit test with the limit on the left.
 fn equality_operands(
     dag: &SelectionDAG,
     op0: SDValue,
@@ -418,8 +422,9 @@ fn condition(
     (cc_operand(dag, cond::NE), flags)
 }
 
-/// Whether `condition_byte` of `value` is made of lowered compares and constants alone, with no fallback
-/// zero extension (which would come back here).
+/// Whether `condition_byte` of `value` is made of lowered compares and
+/// constants alone, with no fallback zero extension (which would come back
+/// here).
 fn is_condition_tree(
     dag: &SelectionDAG,
     value: SDValue,

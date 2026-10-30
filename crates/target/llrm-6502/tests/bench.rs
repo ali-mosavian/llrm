@@ -49,16 +49,20 @@ struct Kernel {
     hand: Option<Hand>,
 }
 
-/// What a `tests/bench/hand/<file>.spec` says about the hand routine against its C kernel `name`.
+/// What a `tests/bench/hand/<file>.spec` says about the hand routine against
+/// its C kernel `name`.
 struct Hand {
     file: &'static str,
-    /// The symbol of the hand routine as linked; `-` when the bench cannot drive it.
+    /// The symbol of the hand routine as linked; `-` when the bench cannot
+    /// drive it.
     symbol: &'static str,
     /// A pointer result is measured from this driver symbol.
     rel: Option<&'static str>,
-    /// What the hand routine answers when it differs from the kernel's `expect` (a truth value).
+    /// What the hand routine answers when it differs from the kernel's `expect`
+    /// (a truth value).
     expect: Option<u16>,
-    /// Other hand-corpus routines linked with it (the clone's, not the installed library's).
+    /// Other hand-corpus routines linked with it (the clone's, not the
+    /// installed library's).
     deps: &'static [&'static str],
 }
 
@@ -71,8 +75,9 @@ const fn k(
     Kernel { name, args, wide_result, expect, hand: None }
 }
 
-/// The symbol the driver calls for the row `tag`: the hand routine's own for the hand row of a
-/// hand-corpus kernel, else the kernel (cc65 prefixes an underscore).
+/// The symbol the driver calls for the row `tag`: the hand routine's own for
+/// the hand row of a hand-corpus kernel, else the kernel (cc65 prefixes an
+/// underscore).
 fn call_symbol(
     kernel: &Kernel,
     abi: Abi,
@@ -133,12 +138,14 @@ const KERNELS3: &[Kernel] = &[
     k("dotx", &[P("buf", 0), P("tab", 0), B(8)], false, 101),
 ];
 
-/// cc65's optimizer flag for the "cc65 -O" rows: `-O`, or what `BENCH_CC65` names (`-Oirs`).
+/// cc65's optimizer flag for the "cc65 -O" rows: `-O`, or what `BENCH_CC65`
+/// names (`-Oirs`).
 fn cc65_optimize() -> &'static str {
     Box::leak(std::env::var("BENCH_CC65").unwrap_or_else(|_| "-O".to_owned()).into_boxed_str())
 }
 
-/// The level of the "ours" -O2 rows, or `BENCH_OURS` (`-O0`: the control that the table can show cc65 winning).
+/// The level of the "ours" -O2 rows, or `BENCH_OURS` (`-O0`: the control that
+/// the table can show cc65 winning).
 fn ours_level(default: &'static str) -> &'static str {
     std::env::var("BENCH_OURS").map_or(default, |level| &*Box::leak(level.into_boxed_str()))
 }
@@ -241,7 +248,8 @@ fn driver(
     // bytes whose Fletcher sum is 52785.
     s.push_str(&format!("lz:\n_lz:\n  .byte {LZ}\n.export lz, _lz\n"));
     s.push_str(".export str, _str, tab, _tab, lzout, _lzout\n");
-    // the hand corpus' strings and the output area (the same as `tests/bench/hand/data.c`)
+    // the hand corpus' strings and the output area (the same as
+    // `tests/bench/hand/data.c`)
     for (name, text) in [
         ("mix", "Hello, World 42!"),
         ("mix2", "hELLO, wORLD 42?"),
@@ -363,7 +371,8 @@ fn measure(
     Ok(Row { bytes, body: bytes, cycles, bss })
 }
 
-/// The `-D` flag and the C file of a kernel: its `#ifdef` in `kernels.c`, or its own file of the hand corpus.
+/// The `-D` flag and the C file of a kernel: its `#ifdef` in `kernels.c`, or
+/// its own file of the hand corpus.
 fn kernel_source(kernel: &Kernel) -> (String, PathBuf) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench");
     match &kernel.hand {
@@ -397,8 +406,9 @@ fn ours_row(
 ) -> Result<Row, String> {
     let dir = work(kernel.name);
     let (define, source) = kernel_source(kernel);
-    // llrm-cc: clang's msp430 front end (int and pointers are 16 bits, as for cc65), llrm's mid-end with no
-    // vectorizer (there is no vector MIR), and our backend, to ca65 text.
+    // llrm-cc: clang's msp430 front end (int and pointers are 16 bits, as for
+    // cc65), llrm's mid-end with no vectorizer (there is no vector MIR),
+    // and our backend, to ca65 text.
     let name = kernel.name;
     let asm = format!("k-{tag}.s");
     let target = if cmos(tag) { "65c02-sim65" } else { "6502-sim65" };
@@ -410,7 +420,8 @@ fn ours_row(
     let cpu = if cmos(tag) { Cpu::W65c02 } else { Cpu::Mos6502 };
     let text = std::fs::read_to_string(dir.join(&asm)).unwrap();
     // the equates are the platform's, not the function's
-    let function: String = text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
+    let function: String =
+        text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
     let bss = function
         .lines()
         .filter(|l| l.contains(": .res "))
@@ -435,7 +446,8 @@ fn hand_row(kernel: &Kernel) -> Result<Row, String> {
     let bench = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench");
     let (wrapper, hand) = match &kernel.hand {
         Some(hand) if hand.symbol == "-" => return Err("no hand: the bench cannot drive it".into()),
-        // the cc65 routine, with the glue that turns a runtime convention into a call, if it has one
+        // the cc65 routine, with the glue that turns a runtime convention into
+        // a call, if it has one
         Some(hand) => {
             let read = |name: String| std::fs::read_to_string(bench.join("hand").join(name));
             let deps: String = hand.deps.iter().map(|dep| read(format!("{dep}.s")).unwrap()).collect();
@@ -452,15 +464,25 @@ fn hand_row(kernel: &Kernel) -> Result<Row, String> {
     Ok(row)
 }
 
-/// The source with no `.import` of a symbol it exports: a glue file and the routine it calls, or a routine and the
-/// routine it depends on, are joined into one unit, where ca65 refuses an import of what the unit defines.
+/// The source with no `.import` of a symbol it exports: a glue file and the
+/// routine it calls, or a routine and the routine it depends on, are joined
+/// into one unit, where ca65 refuses an import of what the unit defines.
 fn without_own_imports(source: &str) -> String {
     let names = |line: &str, directive: &str| -> Option<Vec<String>> {
         let rest = line.trim().strip_prefix(directive).filter(|rest| rest.starts_with(char::is_whitespace))?;
-        Some(rest.split(';').next()?.split(',').map(|name| name.trim().to_owned()).filter(|name| !name.is_empty()).collect())
+        Some(
+            rest.split(';')
+                .next()?
+                .split(',')
+                .map(|name| name.trim().to_owned())
+                .filter(|name| !name.is_empty())
+                .collect(),
+        )
     };
-    let exported: Vec<String> =
-        source.lines().flat_map(|line| names(line, ".export").or_else(|| names(line, ".exportzp")).unwrap_or_default()).collect();
+    let exported: Vec<String> = source
+        .lines()
+        .flat_map(|line| names(line, ".export").or_else(|| names(line, ".exportzp")).unwrap_or_default())
+        .collect();
     source
         .lines()
         .filter_map(|line| {
@@ -477,7 +499,8 @@ fn without_own_imports(source: &str) -> String {
         + "\n"
 }
 
-/// The hand-written corpus: every `tests/bench/hand/*.spec` (see that directory's README) as a kernel.
+/// The hand-written corpus: every `tests/bench/hand/*.spec` (see that
+/// directory's README) as a kernel.
 fn hand_kernels() -> Vec<Kernel> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench/hand");
     let mut specs: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -496,7 +519,9 @@ fn hand_kernels() -> Vec<Kernel> {
         .map(|path| {
             let text = std::fs::read_to_string(path).unwrap();
             let field = |key: &str| {
-                text.lines().find_map(|line| line.strip_prefix(key)?.strip_prefix(':')).map(|v| v.split('#').next().unwrap().trim().to_owned())
+                text.lines()
+                    .find_map(|line| line.strip_prefix(key)?.strip_prefix(':'))
+                    .map(|v| v.split('#').next().unwrap().trim().to_owned())
             };
             let args: Vec<Arg> = field("args")
                 .unwrap_or_default()
@@ -541,7 +566,8 @@ fn hand_kernels() -> Vec<Kernel> {
         .collect()
 }
 
-/// The hand corpus against cc65 -O, the hand code and ours, with the totals that say who wins.
+/// The hand corpus against cc65 -O, the hand code and ours, with the totals
+/// that say who wins.
 fn table4() {
     let mut out = String::from("| kernel | cc65 -O | cc65 hand | ours | ours 65C02 |\n|---|---|---|---|---|\n");
     let cell = |row: &Result<Row, String>| match row {
@@ -554,8 +580,12 @@ fn table4() {
     let mut measured: Vec<(&str, [Option<(i64, i64)>; 3])> = Vec::new();
     let kernels = hand_kernels();
     for kernel in kernels.iter().filter(|k| only.as_deref().is_none_or(|o| o == k.name)) {
-        let rows =
-            [cc65_row(kernel, &[cc65_optimize()], "c1"), hand_row(kernel), ours_row(kernel, ours_level("-O2"), "o2"), ours_row(kernel, ours_level("-O2"), "o2m")];
+        let rows = [
+            cc65_row(kernel, &[cc65_optimize()], "c1"),
+            hand_row(kernel),
+            ours_row(kernel, ours_level("-O2"), "o2"),
+            ours_row(kernel, ours_level("-O2"), "o2m"),
+        ];
         for row in rows.iter().filter(|row| matches!(row, Err(why) if !why.starts_with("no hand"))) {
             eprintln!("{}: {}", kernel.name, row.as_ref().unwrap_err());
         }
@@ -563,12 +593,11 @@ fn table4() {
         measured.push((kernel.name, [pair(&rows[0]), pair(&rows[1]), pair(&rows[2])]));
         out.push_str(&format!("| {} | {} |\n", kernel.name, rows.iter().map(cell).collect::<Vec<_>>().join(" | ")));
     }
-    // ours against cc65 -O and against the hand code: smaller/equal/larger and cycles, geometric means
+    // ours against cc65 -O and against the hand code: smaller/equal/larger and
+    // cycles, geometric means
     for (label, other) in [("cc65 -O", 0usize), ("hand", 1)] {
-        let pairs: Vec<((i64, i64), (i64, i64))> = measured
-            .iter()
-            .filter_map(|(_, row)| Some((row[other]?, row[2]?)))
-            .collect();
+        let pairs: Vec<((i64, i64), (i64, i64))> =
+            measured.iter().filter_map(|(_, row)| Some((row[other]?, row[2]?))).collect();
         let count = |f: &dyn Fn(&((i64, i64), (i64, i64))) -> std::cmp::Ordering, which: std::cmp::Ordering| {
             pairs.iter().filter(|pair| f(pair) == which).count()
         };
@@ -605,8 +634,12 @@ fn table3() {
     };
     for kernel in KERNELS3 {
         let hand = if kernel.name == "lz4" { hand_row(kernel) } else { Err("no hand-written version".into()) };
-        let rows =
-            [cc65_row(kernel, &[cc65_optimize()], "c1"), hand, ours_row(kernel, ours_level("-O2"), "o2"), ours_row(kernel, ours_level("-O2"), "o2m")];
+        let rows = [
+            cc65_row(kernel, &[cc65_optimize()], "c1"),
+            hand,
+            ours_row(kernel, ours_level("-O2"), "o2"),
+            ours_row(kernel, ours_level("-O2"), "o2m"),
+        ];
         for row in rows.iter().filter(|row| !matches!(row, Err(why) if why.starts_with("no hand"))) {
             if let Err(why) = row {
                 eprintln!("{}: {why}", kernel.name);

@@ -538,9 +538,10 @@ fn program(seed: u64) -> String {
 
 const DATA: &str = ".export buf, _buf, tab, _tab, zero, _zero\n.segment \"RODATA\"\nzero:\n_zero:\n  .byte 0\nbuf:\n_buf:\n  .byte 3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3\ntab:\n_tab:\n  .byte 2,5,8,11,14,17,20,23\n";
 
-/// Whether `seed` builds at the size level: the backend's `Tuning::SIZE` and LLVM's `-Oz` inline
-/// threshold (25), against the speed level and the `-O2` one (225). One in three seeds is a size
-/// build; `DIFF_SIZE` makes every one, `DIFF_SPEED` none.
+/// Whether `seed` builds at the size level: the backend's `Tuning::SIZE` and
+/// LLVM's `-Oz` inline threshold (25), against the speed level and the `-O2`
+/// one (225). One in three seeds is a size build; `DIFF_SIZE` makes every one,
+/// `DIFF_SPEED` none.
 fn size_level(seed: u64) -> bool {
     if std::env::var("DIFF_SPEED").is_ok() {
         return false;
@@ -602,8 +603,9 @@ fn ours(
     optimize: bool,
 ) -> Result<Option<i32>, String> {
     std::fs::write(dir.join("o.c"), source).unwrap();
-    // llrm-cc: clang's msp430 front end, llrm's mid-end (no unrolling) and our backend, to ca65 text; the size
-    // level is `-Os`, the unoptimized run `-O0`
+    // llrm-cc: clang's msp430 front end, llrm's mid-end (no unrolling) and our
+    // backend, to ca65 text; the size level is `-Os`, the unoptimized run
+    // `-O0`
     let level = if !optimize {
         "-O0"
     } else if size_level(seed) {
@@ -629,11 +631,7 @@ fn ours(
     }
     let asm = std::fs::read_to_string(dir.join("o.s")).unwrap();
     let runtime = reachable_runtime(&asm);
-    std::fs::write(
-        dir.join("f.s"),
-        format!(".import buf\n.import tab\n.import zero\n{asm}{runtime}"),
-    )
-    .unwrap();
+    std::fs::write(dir.join("f.s"), format!(".import buf\n.import tab\n.import zero\n{asm}{runtime}")).unwrap();
     let driver = format!(
         ".export _main\n{}.import test\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  jsr test\n  stx fold\n  eor fold\n  ldx #0\n  rts\n.segment \"BSS\"\nfold: .res 1\n",
         equates(&platform)

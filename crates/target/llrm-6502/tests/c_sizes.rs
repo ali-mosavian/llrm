@@ -76,7 +76,10 @@ fn llrm_cc() -> Vec<(String, u64)> {
     sizes(&common::pipeline::llrm_cc(), &["--target=6502-sim65"])
 }
 
-fn sizes(program: &std::path::Path, flags: &[&str]) -> Vec<(String, u64)> {
+fn sizes(
+    program: &std::path::Path,
+    flags: &[&str],
+) -> Vec<(String, u64)> {
     let dir = dir();
     std::fs::write(dir.join("probe.c"), PROBE).unwrap();
     let out = Command::new(program)

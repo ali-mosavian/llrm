@@ -160,7 +160,8 @@ pub fn tool(
     }
 }
 
-/// The driver, built beside its backend: `cargo build --release --bin llrm-cc --bin llrm-6502-llc`.
+/// The driver, built beside its backend: `cargo build --release --bin llrm-cc
+/// --bin llrm-6502-llc`.
 pub fn llrm_cc() -> std::path::PathBuf {
     std::env::var_os("LLRM_CC")
         .map(std::path::PathBuf::from)

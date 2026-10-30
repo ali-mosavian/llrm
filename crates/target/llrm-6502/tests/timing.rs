@@ -197,8 +197,9 @@ fn a_macro_body_is_not_priced_as_code() {
     assert_eq!(priced.bytes, 3, "lda #1 and rts only");
 }
 
-/// A macro use was a line the estimator could not price ("cannot price `neg16 rc2, rc3`"), so the signed word
-/// division and modulo kernels of the hand corpus had no row. It costs what its body costs.
+/// A macro use was a line the estimator could not price ("cannot price `neg16
+/// rc2, rc3`"), so the signed word division and modulo kernels of the hand
+/// corpus had no row. It costs what its body costs.
 #[test]
 fn a_macro_use_is_priced_as_its_body() {
     let macros = ".macro neg16 lo, hi\n  sec\n  lda #0\n  sbc lo\n  sta lo\n  lda #0\n  sbc hi\n  sta hi\n.endmacro\n";
@@ -210,8 +211,9 @@ fn a_macro_use_is_priced_as_its_body() {
     assert_eq!(used, llrm_6502::timing::estimate(Cpu::Mos6502, written).unwrap());
 }
 
-/// A lookup table in `RODATA` is bytes of the linked file: the estimator skipped the data segments, so a function
-/// with a CRC table priced 84 bytes against 596 linked and the bench's size check failed.
+/// A lookup table in `RODATA` is bytes of the linked file: the estimator
+/// skipped the data segments, so a function with a CRC table priced 84 bytes
+/// against 596 linked and the bench's size check failed.
 #[test]
 fn data_bytes_in_the_file_are_counted() {
     let text = "f:\n  rts\n.segment \"RODATA\"\nt:\n  .byte 1,2,3\n  .word 5\n.segment \"BSS\"\nb: .res 9\n.segment \"CODE\"\n";

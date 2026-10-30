@@ -1,15 +1,19 @@
 //! The 6502's cost model: what an instruction costs in byte-wide operations.
 //!
-//! The unit is one byte-wide ALU operation (`clc; lda; adc; sta`: 7 bytes, 11 clocks). A type is
-//! `ceil(bits / native)` of them, the native width read from the data layout (`n8`) as
-//! `BasicTTIImplBase::getTypeLegalizationCost` splits a type until it is legal.
+//! The unit is one byte-wide ALU operation (`clc; lda; adc; sta`: 7 bytes, 11
+//! clocks). A type is `ceil(bits / native)` of them, the native width read from
+//! the data layout (`n8`) as `BasicTTIImplBase::getTypeLegalizationCost` splits
+//! a type until it is legal.
 //!
-//! DEVIATE: `BasicTTIImplBase` scales only `RecipThroughput` and prices an expanded scalar at 1; here every
-//! kind scales (as `X86TTIImpl` and `AArch64TTIImpl` do) and a multiply, divide or variable shift is the call
-//! it emits. Reason: `SimplifyCFG`'s speculation budget asks `SizeAndLatency`, and a 16-bit `add` or `icmp` is
-//! two byte operations here, not one. Exit: none; the numbers below are the target's.
+//! DEVIATE: `BasicTTIImplBase` scales only `RecipThroughput` and prices an
+//! expanded scalar at 1; here every kind scales (as `X86TTIImpl` and
+//! `AArch64TTIImpl` do) and a multiply, divide or variable shift is the call it
+//! emits. Reason: `SimplifyCFG`'s speculation budget asks `SizeAndLatency`, and
+//! a 16-bit `add` or `icmp` is two byte operations here, not one. Exit: none;
+//! the numbers below are the target's.
 //!
-//! Derived by hand from the emitted code (`llrm-cc --target=6502-sim65 -O2 -S`), unit = i8 add:
+//! Derived by hand from the emitted code (`llrm-cc --target=6502-sim65 -O2
+//! -S`), unit = i8 add:
 //!
 //! | operation | bytes, clocks | units |
 //! |---|---|---|
@@ -24,17 +28,19 @@
 //! | `__ashlhi3`, `__lshrhi3`, `__ashrhi3` (a loop of about 16 clocks per bit, 8 on average) | 130 | 6 * parts |
 //! | a call as code (`jsr`, two operands in `rc2..`) | 3 + 4 * parts | 2 + parts |
 //!
-//! A memory operation is `parts`, as `BasicTTIImplBase::getMemoryOpCost` prices it, not the measured 2 * parts - 1:
-//! with 3 for a word load, `SimplifyCFG`'s two-entry-phi budget (4) refused to flatten `c >= '0' && c <= '9'`
-//! (compare 2 + load 3), and `InstCombine` never saw its range check (isdigit 28 -> 50 bytes, isalpha 30 -> 74).
-//! The speed-priority form of such a limit belongs in the per-target override table.
+//! A memory operation is `parts`, as `BasicTTIImplBase::getMemoryOpCost` prices
+//! it, not the measured 2 * parts - 1: with 3 for a word load, `SimplifyCFG`'s
+//! two-entry-phi budget (4) refused to flatten `c >= '0' && c <= '9'`
+//! (compare 2 + load 3), and `InstCombine` never saw its range check (isdigit
+//! 28 -> 50 bytes, isalpha 30 -> 74). The speed-priority form of such a limit
+//! belongs in the per-target override table.
 //!
-//! A trunc is free (a register is a byte); a zero extension is the new high bytes cleared, a sign extension
-//! twice that.
+//! A trunc is free (a register is a byte); a zero extension is the new high
+//! bytes cleared, a sign extension twice that.
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_target::Target as _;
 use llrm_mir::tti::*;
+use llrm_target::Target as _;
 
 use crate::target::Mos;
 
@@ -162,7 +168,8 @@ impl Tti for Mos6502 {
         Basic.is_legal_addressing_mode(gv, offset, base, scale)
     }
 
-    // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`), so a pair is one call.
+    // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`), so
+    // a pair is one call.
     fn has_div_rem_op(
         &self,
         bits: u32,

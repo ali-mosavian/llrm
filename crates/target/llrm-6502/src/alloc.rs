@@ -18,8 +18,8 @@ use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
-    Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, machine_sink_in_place,
-    forward_reloads, remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
+    Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, forward_reloads, machine_sink_in_place,
+    remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
 };
 
 use crate::dagisel::generated::ids::opcode as op;
@@ -1557,7 +1557,8 @@ pub fn build(
                 b.call(routine);
                 b.copy(d, Reg::Phys(reg::A));
             }
-            // the quotient comes back in A (and X), the remainder in rc6 (and rc7): see `runtime/mos_rt.s`
+            // the quotient comes back in A (and X), the remainder in rc6 (and
+            // rc7): see `runtime/mos_rt.s`
             op::UDIVREM8 => {
                 b.define(name(&o[0])?);
                 b.define(name(&o[1])?);
@@ -1587,7 +1588,8 @@ pub fn build(
             op::UMUL8X8 => {
                 let (dl, dh) = b.write_word(name(&o[0])?)?;
                 let (mut x, mut y) = (b.byte(name(&o[1])?)?, b.byte(name(&o[2])?)?);
-                // a product goes either way round: the operand that arrives in `rc3` is the second
+                // a product goes either way round: the operand that arrives in
+                // `rc3` is the second
                 if b.arrives_in(x) == Some(rc(3)) || b.arrives_in(y) == Some(rc(2)) {
                     (x, y) = (y, x);
                 }
@@ -1597,12 +1599,7 @@ pub fn build(
                 b.copy(dl, Reg::Phys(reg::A));
                 b.copy(dh, Reg::Phys(reg::X));
             }
-            code @ (op::MUL16
-            | op::SDIV16
-            | op::SREM16
-            | op::SHLV16
-            | op::SRLV16
-            | op::SRAV16) => {
+            code @ (op::MUL16 | op::SDIV16 | op::SREM16 | op::SHLV16 | op::SRLV16 | op::SRAV16) => {
                 let routine = match code {
                     op::MUL16 => "__mulhi3",
                     op::SDIV16 => "__divhi3",
@@ -1691,10 +1688,12 @@ fn results(insts: &[Inst]) -> Vec<RegId> {
 }
 
 /// Copies and loads of a value nothing reads.
-/// A divide whose quotient nobody reads is the routine that returns the remainder in the result registers: the
-/// copies after the call of a divide-remainder (`UDIVREM`) read A and X (or A) for the quotient and `rc6:rc7` (or
-/// `rc6`) for the remainder, and the dead ones are gone. With only the remainder's left, `__umodhi3` and
-/// `__umodqi3` leave it in A:X and A, where the function returns it or copies it without a load.
+/// A divide whose quotient nobody reads is the routine that returns the
+/// remainder in the result registers: the copies after the call of a
+/// divide-remainder (`UDIVREM`) read A and X (or A) for the quotient and
+/// `rc6:rc7` (or `rc6`) for the remainder, and the dead ones are gone. With
+/// only the remainder's left, `__umodhi3` and `__umodqi3` leave it in A:X and
+/// A, where the function returns it or copies it without a load.
 fn narrow_remainder_calls(function: &mut MFunction<Class>) {
     for block in &mut function.blocks {
         for at in 0..block.insts.len() {
@@ -2172,7 +2171,8 @@ fn emit_with<const STACK: bool>(
     };
     remove_identity_copies::<Mos<STACK>>(&mut function, &assignment);
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
-    // a reload of a slot whose register nothing has written is that register; x and y copy through a
+    // a reload of a slot whose register nothing has written is that register; x
+    // and y copy through a
     let spill_slot = |inst: &Inst, name: &str| match (inst.kind, &inst.operands[..]) {
         (Kind::Op(op), [Operand::Use(reg) | Operand::Def(reg), Operand::Frame(slot), ..]) if op == name => {
             Some((*slot, *reg))

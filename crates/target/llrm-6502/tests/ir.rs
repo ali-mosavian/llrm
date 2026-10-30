@@ -53,8 +53,8 @@ fn a_byte_add_runs() {
     }
 }
 
-/// The full product of two zero-extended bytes is the widening multiply (`__umulqihi3`) on this path as well:
-/// 200 * 100 = 20000 = 0x4E20.
+/// The full product of two zero-extended bytes is the widening multiply
+/// (`__umulqihi3`) on this path as well: 200 * 100 = 20000 = 0x4E20.
 #[test]
 fn a_product_of_two_zero_extended_bytes_runs_as_a_widening_multiply() {
     let ir = "define i16 @wide(i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  %p = mul i16 %x, %y\n  ret i16 %p\n}";

@@ -229,8 +229,8 @@ pub struct Estimate {
     pub cycles: u64,
 }
 
-/// `text` with each use of a `.macro` replaced by its body, the parameters by the arguments; the definitions stay,
-/// for the loop below to skip.
+/// `text` with each use of a `.macro` replaced by its body, the parameters by
+/// the arguments; the definitions stay, for the loop below to skip.
 fn expand_macros(text: &str) -> String {
     let mut macros: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
     let mut open: Option<(String, Vec<String>, Vec<String>)> = None;
@@ -346,8 +346,15 @@ pub fn estimate(
                 in_data = segment != "CODE";
             } else if segment != "BSS" {
                 // data in the file: a lookup table the compiler made
-                let unit = if directive.starts_with("byte") { 1 } else if directive.starts_with("word") { 2 } else { 0 };
-                out.bytes += unit * directive.split_whitespace().nth(1).map_or(0, |list| list.split(',').count() as u32);
+                let unit = if directive.starts_with("byte") {
+                    1
+                } else if directive.starts_with("word") {
+                    2
+                } else {
+                    0
+                };
+                out.bytes +=
+                    unit * directive.split_whitespace().nth(1).map_or(0, |list| list.split(',').count() as u32);
             }
             continue;
         }
