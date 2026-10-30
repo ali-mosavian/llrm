@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 225 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 226 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -49,6 +49,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_gep_phi | `foldGEPOfPhi`: a `getelementptr` of a phi of `getelementptr`s as a `getelementptr` of a phi of the one index they differ in. | The `getelementptr` visit of [`combine_gep`](combine_gep.md), which | [combine_gep_phi](combine_gep_phi.md) |
 | combine_icmp_binop | InstCombine's `foldICmpBinOp`, the add and subtract arms ([`InstCombineCompares.cpp:5301`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L5301) at d1106deb71cc). | Named by `combine_compares`. | [combine_icmp_binop](combine_icmp_binop.md) |
 | combine_icmp_const | `icmp (binop ...), C`: the folds of a compare of a binary operator with a constant, so far the `and` family. | `combine_compares::visit_icmp`. | [combine_icmp_const](combine_icmp_const.md) |
+| combine_icmp_equality | InstCombine's `foldICmpEquality` ([`InstCombineCompares.cpp:6222`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L6222)) at d1106deb71cc, up to the `ashr`/`trunc` range check. | Named by `combine_compares`. | [combine_icmp_equality](combine_icmp_equality.md) |
 | combine_icmp_logic | `foldBooleanAndOr`: an `and` or `or` of two `i1` compares, folded to one compare. | `visit_and` and `visit_or` (the bitwise forms). | [combine_icmp_logic](combine_icmp_logic.md) |
 | combine_icmp_ranges | Range folds of `foldAndOrOfICmps`: two compares of one value, each a range of it, are one compare. | `combine_icmp_logic::fold_boolean_and_or`. | [combine_icmp_ranges](combine_icmp_ranges.md) |
 | combine_invert | InstCombine's `getFreelyInverted` (`getFreelyInvertedImpl` of InstructionCombining.cpp at d1106deb71cc): the `~V` of a value whose inversion costs nothing, when every use of it is being rewritten to read `~V`. | The equality folds of `combine_icmp_binop.rs` that turn an `and` of a freely | [combine_invert](combine_invert.md) |
