@@ -1446,7 +1446,7 @@ fn homed(
 }
 
 /// The source line the `!dbg` of `inst` names.
-pub(crate) fn dbg_line(
+pub fn dbg_line(
     module: &Module,
     function: &Function,
     inst: InstId,

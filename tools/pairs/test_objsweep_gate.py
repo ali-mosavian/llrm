@@ -27,8 +27,8 @@ def test_a_listed_change_passes_and_a_different_count_fails():
 
 def test_a_leg_that_compiled_little_proves_nothing():
     """Half the compiles failing on both sides is not a pass: they are neither identical nor changed."""
-    assert "only 20 of 142" in gate.verdict("m32 m16", line(identical=20, both=122), {})
+    assert "only 20 of 142" in gate.verdict("m32", line(identical=20, both=122), {})
 
 
 def test_an_object_compiled_on_one_side_fails():
-    assert "one side only" in gate.verdict("m32 m16", line(one=1, identical=139), {})
+    assert "one side only" in gate.verdict("m32", line(one=1, identical=139), {})

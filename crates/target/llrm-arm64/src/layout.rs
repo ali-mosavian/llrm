@@ -95,6 +95,7 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
         if !ends {
             let next = blocks[at + 1].label.clone();
             blocks[at].insts.push(Inst::Branch { link: false, target: Target::Label(next) });
+            blocks[at].locs.push(None);
         }
     }
     // The entry is never forwarded away.
@@ -148,11 +149,12 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
     // unconditional one is the inverse conditional.
     for at in 0..ordered.len() {
         let next = ordered.get(at + 1).map(|block| block.label.clone());
-        let insts = &mut ordered[at].insts;
+        let Lowered { insts, locs, .. } = &mut ordered[at];
         if let (Some(Inst::Branch { link: false, target: Target::Label(label) }), Some(next)) = (insts.last(), &next)
             && label == next
         {
             insts.pop();
+            locs.pop();
         }
         if insts.len() >= 2
             && let (
@@ -163,7 +165,10 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
         {
             let (cond, go) = (cond.inverted(), go.clone());
             insts.truncate(insts.len() - 2);
+            let place = locs.get(locs.len() - 2).copied().flatten();
+            locs.truncate(locs.len() - 2);
             insts.push(Inst::BranchCond { cond, target: Target::Label(go) });
+            locs.push(place);
         }
     }
     ordered

@@ -182,6 +182,14 @@ fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
 /// Every defined function of `program`'s one module, selected, allocated and
 /// lowered.
 pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String> {
+    functions_with(program, false)
+}
+
+/// [`functions`], each carrying its source places where `lines`.
+pub fn functions_with(
+    program: &Program,
+    lines: bool,
+) -> Result<Vec<crate::emit::Function>, String> {
     let module = &program.modules[0];
     let platform = platform_of_machine(program);
     let mut out = Vec::new();
@@ -190,8 +198,8 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
-        let mut machine =
-            crate::isel::select(module, id, &program.layout, platform).map_err(|why| format!("@{name}: {why}"))?;
+        let mut machine = crate::isel::selected(module, id, &program.layout, platform, lines)
+            .map_err(|why| format!("@{name}: {why}"))?;
         dump("Select", &machine);
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
@@ -273,7 +281,7 @@ pub fn object_with(
     if level != Level::O0 {
         optimized_at(&mut program, level)?;
     }
-    let lowered = functions(&program)?;
+    let lowered = functions_with(&program, debug)?;
     let mut object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
     if debug {
         object.debug = crate::debug::info(&program.modules[0], platform, &object, &lowered, name)?;

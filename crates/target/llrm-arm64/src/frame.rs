@@ -27,6 +27,9 @@ use crate::regalloc::Allocation;
 pub struct Lowered {
     pub label: String,
     pub insts: Vec<Inst>,
+    /// The source line and column each instruction is from, parallel to
+    /// `insts`.
+    pub locs: Vec<Option<(u32, u32)>>,
 }
 
 #[derive(Debug)]
@@ -113,6 +116,22 @@ impl Layout {
 
 struct Emitter {
     insts: Vec<Inst>,
+    /// Parallel to `insts`, filled as each operation is done.
+    locs: Vec<Option<(u32, u32)>>,
+}
+
+impl Emitter {
+    fn new() -> Self {
+        Self { insts: Vec::new(), locs: Vec::new() }
+    }
+
+    /// The instructions made since the last call are from `loc`.
+    fn from_place(
+        &mut self,
+        loc: Option<(u32, u32)>,
+    ) {
+        self.locs.resize(self.insts.len(), loc);
+    }
 }
 
 impl Emitter {
@@ -210,15 +229,17 @@ pub fn lower(
     let save = wrapped.as_ref().map_or(0, |one| one.save);
     let mut out = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
-        let mut emitter = Emitter { insts: Vec::new() };
+        let mut emitter = Emitter::new();
         if index == save {
             prologue(&frame, &mut emitter);
         }
+        emitter.from_place(None);
         // Without a placement every return takes the frame down; with one, the
         // Restore's return does, or the blocks that end the frame at
         // their end.
         let framed = wrapped.as_ref().is_none_or(|one| !one.at_end && one.restores.contains(&index));
-        for op in &block.ops {
+        for (at, op) in block.ops.iter().enumerate() {
+            let place = block.ops.loc(at).map(|one| one.row());
             match op {
                 Op::I(inst) => lower_inst(inst, &frame, &mut emitter)?,
                 Op::Copy { dst, src } => match (dst, src) {
@@ -261,6 +282,7 @@ pub fn lower(
                     emitter.add_to(*dst, base, total < 0, total.unsigned_abs(), Gpr(16));
                 }
             }
+            emitter.from_place(place);
         }
         if wrapped.as_ref().is_some_and(|one| one.at_end && one.restores.contains(&index)) {
             // Before the branches that leave.
@@ -277,11 +299,13 @@ pub fn lower(
                     )
                 })
                 .map_or(0, |i| i + 1);
-            let mut tail = Emitter { insts: Vec::new() };
+            let mut tail = Emitter::new();
             epilogue(&frame, &mut tail);
+            emitter.locs.splice(at..at, vec![None; tail.insts.len()]);
             emitter.insts.splice(at..at, tail.insts);
         }
-        out.push(Lowered { label: block.label.clone(), insts: emitter.insts });
+        emitter.from_place(None);
+        out.push(Lowered { label: block.label.clone(), insts: emitter.insts, locs: emitter.locs });
     }
     Ok(out)
 }

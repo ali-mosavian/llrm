@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use llrm_codegen::model::lir::SrcLoc;
+
 use crate::mc::inst::{Gpr, Inst, Target, Vreg};
 use crate::mc::visit::{Reg, RegRef, Role};
 
@@ -132,7 +134,173 @@ fn visit_reg(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MBlock {
     pub label: String,
-    pub ops: Vec<Op>,
+    pub ops: OpList,
+}
+
+/// A block's operations, each with the source place it was selected from
+/// (LLVM's `DebugLoc` on a `MachineInstr`). Reading is the slice's; what adds,
+/// drops or moves an operation says what becomes of its place, so the two never
+/// part.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct OpList {
+    ops: Vec<Op>,
+    locs: Vec<Option<SrcLoc>>,
+}
+
+impl std::ops::Deref for OpList {
+    type Target = [Op];
+
+    fn deref(&self) -> &[Op] {
+        &self.ops
+    }
+}
+
+impl From<Vec<Op>> for OpList {
+    fn from(ops: Vec<Op>) -> Self {
+        let locs = vec![None; ops.len()];
+        Self { ops, locs }
+    }
+}
+
+impl<'a> IntoIterator for &'a OpList {
+    type IntoIter = std::slice::Iter<'a, Op>;
+    type Item = &'a Op;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.ops.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut OpList {
+    type IntoIter = std::slice::IterMut<'a, Op>;
+    type Item = &'a mut Op;
+
+    /// Each operation to change in place: its place stays.
+    fn into_iter(self) -> Self::IntoIter {
+        self.ops.iter_mut()
+    }
+}
+
+impl IntoIterator for OpList {
+    type IntoIter = std::iter::Zip<std::vec::IntoIter<Op>, std::vec::IntoIter<Option<SrcLoc>>>;
+    type Item = (Op, Option<SrcLoc>);
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.ops.into_iter().zip(self.locs)
+    }
+}
+
+impl FromIterator<(Op, Option<SrcLoc>)> for OpList {
+    fn from_iter<I: IntoIterator<Item = (Op, Option<SrcLoc>)>>(iter: I) -> Self {
+        let (ops, locs) = iter.into_iter().unzip();
+        Self { ops, locs }
+    }
+}
+
+impl OpList {
+    /// `op`, from no place.
+    pub fn push(
+        &mut self,
+        op: Op,
+    ) {
+        self.push_at(op, None);
+    }
+
+    pub fn push_at(
+        &mut self,
+        op: Op,
+        loc: Option<SrcLoc>,
+    ) {
+        self.ops.push(op);
+        self.locs.push(loc);
+    }
+
+    /// `op` before the operation at `at`, from the place that operation is from
+    /// (code the allocator or a pass adds stands where its neighbour does).
+    pub fn insert(
+        &mut self,
+        at: usize,
+        op: Op,
+    ) {
+        let loc = self.locs.get(at).copied().or_else(|| self.locs.last().copied()).flatten();
+        self.insert_at(at, op, loc);
+    }
+
+    pub fn insert_at(
+        &mut self,
+        at: usize,
+        op: Op,
+        loc: Option<SrcLoc>,
+    ) {
+        self.ops.insert(at, op);
+        self.locs.insert(at, loc);
+    }
+
+    pub fn remove(
+        &mut self,
+        at: usize,
+    ) -> (Op, Option<SrcLoc>) {
+        (self.ops.remove(at), self.locs.remove(at))
+    }
+
+    pub fn truncate(
+        &mut self,
+        len: usize,
+    ) {
+        self.ops.truncate(len);
+        self.locs.truncate(len);
+    }
+
+    pub fn retain(
+        &mut self,
+        mut keep: impl FnMut(&Op) -> bool,
+    ) {
+        let mut at = 0;
+        let locs = &mut self.locs;
+        self.ops.retain(|op| {
+            let kept = keep(op);
+            if !kept {
+                locs.remove(at);
+            } else {
+                at += 1;
+            }
+            kept
+        });
+    }
+
+    /// The operations in `range` in the order of `key` (stable), each keeping
+    /// its place.
+    pub fn sort_by_key<K: Ord>(
+        &mut self,
+        range: std::ops::Range<usize>,
+        mut key: impl FnMut(&Op) -> K,
+    ) {
+        let mut pairs: Vec<(Op, Option<SrcLoc>)> =
+            self.ops[range.clone()].iter().cloned().zip(self.locs[range.clone()].iter().copied()).collect();
+        pairs.sort_by_key(|(op, _)| key(op));
+        for (offset, (op, loc)) in pairs.into_iter().enumerate() {
+            self.ops[range.start + offset] = op;
+            self.locs[range.start + offset] = loc;
+        }
+    }
+
+    /// The place the operation at `at` is from.
+    pub fn loc(
+        &self,
+        at: usize,
+    ) -> Option<SrcLoc> {
+        self.locs.get(at).copied().flatten()
+    }
+
+    /// Every operation with its place, leaving the list empty.
+    pub fn take(&mut self) -> Self {
+        std::mem::take(self)
+    }
+
+    /// The operations as a plain list, the places left behind.
+    pub fn into_ops(self) -> Vec<Op> {
+        self.ops
+    }
 }
 
 /// A frame object: a local the function addresses, or a spill.

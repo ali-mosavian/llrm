@@ -87,6 +87,10 @@ pub struct Selector<'a> {
     pub(crate) conjunctions: conjunction::Conjunctions,
     /// The block being filled.
     pub(crate) current: usize,
+    /// Operations carry the source place they are selected from.
+    lines: bool,
+    /// The source place of the instruction being selected.
+    place: Option<llrm_codegen::model::lir::SrcLoc>,
     /// How many accesses name each global (by symbol): one that is named more
     /// than once has its address made once per block (`shared_global`)
     /// instead of an `adrp` at each access.
@@ -110,10 +114,23 @@ pub fn select(
     layout: &DataLayout,
     platform: Platform,
 ) -> Selected<MFunc> {
+    selected(module, function, layout, platform, false)
+}
+
+/// [`select`], each operation carrying the source place of the instruction it
+/// was selected from where `lines`.
+pub fn selected(
+    module: &Module,
+    function: GlobalId,
+    layout: &DataLayout,
+    platform: Platform,
+    lines: bool,
+) -> Selected<MFunc> {
     let global = module.global(function);
     let name = global.name.owned().ok_or("an unnamed function")?;
     let body = global.function().ok_or("a variable is not selected")?;
     let mut selector = Selector::new(module, body, layout, platform, &name);
+    selector.lines = lines;
     selector.run()?;
     Ok(selector.finish())
 }
@@ -137,7 +154,8 @@ impl<'a> Selector<'a> {
             }
         }
         let mut mf = MFunc::new(name);
-        mf.blocks = (0..order.len()).map(|at| MBlock { label: block_label(name, at), ops: Vec::new() }).collect();
+        mf.blocks =
+            (0..order.len()).map(|at| MBlock { label: block_label(name, at), ops: Default::default() }).collect();
         Self {
             module,
             function,
@@ -153,6 +171,8 @@ impl<'a> Selector<'a> {
             chains: chain::Chains::default(),
             conjunctions: conjunction::Conjunctions::default(),
             current: 0,
+            lines: false,
+            place: None,
             global_uses: HashMap::new(),
             global_regs: HashMap::new(),
             global_pages: HashMap::new(),
@@ -229,7 +249,8 @@ impl<'a> Selector<'a> {
         &mut self,
         op: Op,
     ) {
-        self.mf.blocks[self.current].ops.push(op);
+        let place = self.place;
+        self.mf.blocks[self.current].ops.push_at(op, place);
     }
 
     pub(crate) fn inst(
@@ -282,6 +303,9 @@ impl<'a> Selector<'a> {
             let block = self.order[at];
             let insts: Vec<InstId> = self.function.iter_block(block).collect();
             for inst in insts {
+                if self.lines {
+                    self.place = llrm_codegen::backend::isel::dbg_line(self.module, self.function, inst);
+                }
                 self.select_inst(inst)?;
             }
         }

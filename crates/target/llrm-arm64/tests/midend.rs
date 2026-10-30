@@ -671,3 +671,52 @@ fn a_variable_in_the_frame_has_its_place_below_the_frame_address() {
     let elf = llrm_arm64::mc::Arm64Objects.write_object("elf", &object).expect("the DWARF writer takes it");
     assert!(elf.windows(8).any(|window| window == b".debug_i"), "a .debug_info section");
 }
+
+/// The line table of an arm64 object: a row where the source place changes,
+/// and one at the function's start for the line it is declared at (clang's
+/// rows for the same function, bar its `prologue_end` flags).
+#[test]
+fn an_arm64_object_has_a_line_row_where_the_source_place_changes() {
+    let object =
+        driver::object_with(include_str!("data/debug_o0.ll"), Platform::Linux, "debug_o0", driver::Level::O0, true)
+            .expect("lowers");
+    let rows: Vec<(usize, u32, u32)> = object
+        .debug
+        .as_ref()
+        .expect("debug information")
+        .lines
+        .iter()
+        .map(|one| (one.offset, one.line, one.column))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (0, 2, 0),
+            (16, 3, 13),
+            (20, 3, 11),
+            (24, 3, 18),
+            (28, 3, 16),
+            (32, 3, 7),
+            (36, 4, 10),
+            (40, 4, 12),
+            (44, 4, 3)
+        ]
+    );
+}
+
+/// `-g` must not change the code: the source place each operation carries
+/// through the passes decides nothing. The fixtures (clang's -O0 and -O2
+/// output) lower to the same bytes with and without it.
+#[test]
+fn debug_information_leaves_the_code_as_it_was() {
+    for (text, level) in
+        [(include_str!("data/debug_o0.ll"), driver::Level::O0), (include_str!("data/debug_o2.ll"), driver::Level::O2)]
+    {
+        let text_of = |debug| {
+            let object = driver::object_with(text, Platform::Linux, "same", level, debug).expect("lowers");
+            object.sections[0].image.clone()
+        };
+        assert!(!text_of(false).is_empty(), "premise: code");
+        assert_eq!(text_of(false), text_of(true));
+    }
+}

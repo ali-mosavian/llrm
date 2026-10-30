@@ -3,7 +3,7 @@
 
     tools/pairs/objsweep_gate.py
 
-Two `llrm-cc` builds (the merge-base's, tools/measure.py's cached `dist`; this tree's), `objsweep.py` over m16, m32 and m64, plain and
+Two `llrm-cc` builds (the merge-base's with LLRM_MEASURE_REF, origin/main unless named, tools/measure.py's cached `dist`; this tree's), `objsweep.py` over m16, m32 and m64, plain and
 `--debug`, O2 and Os. Each leg must change as many objects as `objsweep_expected.toml` says (none where it says nothing): a PR that moves
 bytes on purpose lists the count and why, and the file is empty again once the base has the change. A leg that compiled too little
 proves nothing and fails, and a control (the same program at O2 and at Os must differ) shows the comparison sees a change.
@@ -23,7 +23,7 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tools"))
 
-LEGS = [("m32 m16", "m32,m16", False), ("m32 m16 debug", "m32,m16", True), ("m64", "m64", False), ("m64 debug", "m64", True)]
+LEGS = [(f"{target}{suffix}", target, debug) for target in ("m32", "m16", "m64") for suffix, debug in (("", False), (" debug", True))]
 LINE = re.compile(r"(\d+) objects changed \(([^)]*)\); (\d+) identical, (\d+) failed on both sides, (\d+) failed on one side of (\d+)")
 MIN_IDENTICAL = 0.5  # of the cells of a leg that must compile and match for it to say anything
 
@@ -60,10 +60,12 @@ def control(compiler: str) -> str | None:
 
 
 def main() -> int:
+    import llrmbin
     import measure
 
+    os.environ.update(llrmbin.cc_environment())
     head = subprocess.run([sys.executable, str(ROOT / "tools/measure.py"), "dist"], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
-    base_sha = measure.base_with_cc("HEAD", measure.base_of("HEAD"))
+    base_sha = measure.base_with_cc("HEAD", measure.base_of("HEAD", os.environ.get("LLRM_MEASURE_REF", "origin/main")))
     if base_sha is None:
         print("objsweep: no ancestor with llrm-cc to compare with")
         return 1
