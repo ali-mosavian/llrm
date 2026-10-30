@@ -380,15 +380,16 @@ def touches_compiler(files: list[str]) -> bool:
 JUDGE_LINE = re.compile(r"^\s*problems:\s*0\s*[@\uff20]\s*(\S+)\s*$", re.M)
 
 
-def judge_line_refusal(number: str, info: dict) -> str | None:
-    """`N: REFUSED: why` unless the description carries `problems: 0 @ <full head SHA>`, the bench judge's line from a run on this exact head: #6095 landed with
-    the judge red on 56 rows because the fast set does not run it. Read at every call (never cached: the description is edited without a new head)."""
+def judge_line_warning(number: str, info: dict) -> str | None:
+    """`N: WARN: ...` unless the description carries `problems: 0 @ <full head SHA>`, the bench judge's line from a run on this exact head. A warning only: the user
+    relaxed the rule (#6095 landed with the judge red on 56 rows, and a refusal that holds until the head changes stalled the queue); the judge runs on the branch
+    periodically and at the main merge. Read at every call (never cached: the description is edited without a new head)."""
     shas = JUDGE_LINE.findall(info.get("body") or "")
     if info["headRefOid"] in shas or ("files" in info and not touches_compiler([f["path"] if isinstance(f, dict) else f for f in info["files"]])):
         return None
     if shas:
-        return f"{number}: REFUSED: the judge line is for {shas[-1][:12]}, the head is {info['headRefOid'][:12]}: run the judge on this head and update the description"
-    return f"{number}: REFUSED: the description has no judge line `problems: 0 @ <full head SHA>` (the bench judge, run on this head)"
+        return f"{number}: WARN: no judge line for {info['headRefOid']}: the line is for {shas[-1][:12]}, the head is {info['headRefOid'][:12]}"
+    return f"{number}: WARN: no judge line for {info['headRefOid']}: the description has no `problems: 0 @ <full head SHA>`"
 
 
 def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHECK_DIR / "target", checks=None, merge=None, deletions=None, info=None, head_failed: set[str] | None = None, cache: Path = PRECHECK_CACHE, base_sha: str | None = None) -> str:
@@ -398,8 +399,8 @@ def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHE
     info = info or json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName,files"], capture_output=True, text=True, errors="replace", check=True).stdout)
     if info["baseRefName"] != BRANCH:
         return f"{number}: REFUSED: targets {info['baseRefName']}, not {BRANCH}"
-    if refused := judge_line_refusal(number, info):
-        return refused
+    if warning := judge_line_warning(number, info):
+        print(warning, file=sys.stderr, flush=True)
     base_sha = base_sha or git("rev-parse", BASE).strip()
     key = f"{info['headRefOid']} {base_sha}"
     cached = json.loads(cache.read_text()) if cache.exists() else {}
