@@ -345,3 +345,10 @@ mod emitted {
 define i32 @f(i32 %a) {\n  %p = alloca i32\n  call void @llvm.lifetime.start.p0(i64 4, ptr %p)\n  store i32 %a, ptr %p\n  %v = load i32, ptr %p\n  call void @llvm.lifetime.end.p0(i64 4, ptr %p)\n  ret i32 %v\n}");
     }
 }
+
+/// `BuilderTarget::m64()` leaves `string_instructions` true, so an arm64 mem intrinsic that
+/// missed the limits path would plan `rep movs` and panic on a register arm64 has not.
+#[test]
+fn arm64_has_no_string_instructions() {
+    assert!(!llrm_arm64::dag::function::builder_target().string_instructions);
+}

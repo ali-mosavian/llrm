@@ -39,6 +39,7 @@ pub fn builder_target() -> BuilderTarget {
         legal_ints: vec![32, 64],
         stack_align: Some(16),
         jump_tables: false,
+        string_instructions: false,
         // DEVIATE (1): the pin's `MaxStoresPerMemcpy` (16, `OptSize` 4), `Memmove` (16, 4) and
         // `Memset` (32, 8) count 16-byte vector steps (`getOptimalMemOpType`); here a step is
         // eight bytes, as no vector type is selected yet, so a copy of more than 128 bytes calls
