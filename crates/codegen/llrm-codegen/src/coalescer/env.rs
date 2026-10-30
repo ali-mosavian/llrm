@@ -11,7 +11,7 @@
 //! `LLRM_CHECK_LIVEINTERVALS=1` checks every interval the joins left against
 //! one made afresh (points live, touching segments as one).
 //!
-//! DEVIATE C8 (no number): the old coalescer also refused a join whose merged
+//! History, not a deviation: the old coalescer also refused a join whose merged
 //! interval crossed a call that destroys every register the values may take,
 //! and joined only where Briggs or George said the colouring stayed easy. LLVM
 //! does neither and relies on the allocator to split; so does this (rows: the
