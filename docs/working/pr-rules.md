@@ -12,14 +12,16 @@ Read with [agents.md](../../agents.md): the seven rules and the method. These ar
 - Conventional commit title, short. Description: `TL;DR`, a few lines, an `Owner: <session>` line. Commit message: no body, or two short lines.
 - No mention of the assistant in code, comments, commits or PR text; the runner refuses it.
 - A deletion names its path in a `Deletes:` or `Reverts:` line.
+- A PR that touches a compiler path (`tiers.toml` `[compiler]`: crates, src, Cargo files) carries `problems: 0 @ <full head SHA>`: the bench judge's line from a run on that exact head. A missing line or another SHA is REFUSED; a new head needs a new line.
 - `perf(...)` PRs, and `refactor(...)` PRs that change non-test pass code, carry a `Rows:` line: the rows pair (base and new binaries, md5), rows above base, run diff clean. An objsweep with 0 objects changed is a valid result for a pass whose output must not change. A backend, isel, regalloc or phi change also carries the QCport -Os bytes (65 modules, tools/rows/qcport.py, m16) in the body before it is ready: #3352 and #3369 landed in the gap before the evidence. A PR whose -Os or above-main question is open goes to tools/landing/waits.txt before its owner reports; "ready" alone is not enough.
 - Every fix has a regression test seen failing first, in the same commit.
 - A PR that waits for evidence or for the user stays DRAFT. A ready PR lands through the runner at once. A hold is an entry in tools/landing/waits.txt, not a draft toggle: land.sh marks a draft ready again, so a PR the runner already picked lands anyway (#3352 did). Open such a PR with `gh pr create --draft`: the runner lands a non-draft PR within seconds of its creation (#3390 went from created to merged in 41 s, before a hold could be written). A change to QB handling or semantics (ON ERROR, RESUME, float rounding) stays draft until oversight's QB sweep has passed on its head.
 
 ## Landing
+- Every PR targets `release/next`, the integration branch; `LAND_BRANCH` (tools/landing/branch.sh) is its one configurable name, and a PR on another base is refused.
 - The owner lands through `tools/landing/land.sh` when its session may; never `gh pr merge` by hand; never land another session's PR.
 - An owner may mark its own evidence-complete PR ready (the runner then lands it) only after running the fast gate on its own host (user, 2026-10-20: "The workers may do it after running the gate locally"). One gate at a time per host. Mark no one else's PR ready.
-- A refused PR: read the REFUSED line, fix, merge fresh feat/parity (never force-push), tell the owner.
+- A refused PR: read the REFUSED line, fix, merge fresh release/next (never force-push), tell the owner.
 - A fast gate on your own host, one at a time (buildslot). Build the compiler with `cargo build --release -p llrm --bin llrm-c`, check the exit code and the md5 before any A/B. Compare the full list of passing and failing test names against a clean run of the parent, not the failure lines: a test red only on your head can hide behind an unchanged failure count.
 
 ## Measuring
