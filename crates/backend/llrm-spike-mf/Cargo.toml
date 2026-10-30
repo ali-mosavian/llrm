@@ -1,0 +1,10 @@
+[package]
+name = "llrm-spike-mf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Spike machine function and graph-colouring allocator shared by the m68k and 6502 spikes"
+
+[dependencies]
+llrm-lir = { workspace = true }
+llrm-mir = { workspace = true }
