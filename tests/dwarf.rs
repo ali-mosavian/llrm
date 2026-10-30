@@ -1323,3 +1323,40 @@ fn a_shrink_wrapped_m64_function_declares_its_frame_and_restores_its_registers()
     }
     assert!(dump.matches("DW_CFA_restore").count() >= 4, "{dump}");
 }
+
+/// `r = g(a, 7); return h(r + b) + r;` at -O2 on x86-64: the object had no
+/// `DW_TAG_call_site`, no declaration of `g` or `h` and no `call_all_calls`,
+/// so a debugger could not show what `g` was called with. The call to `g`
+/// passes 7 in `rsi` and `a`, untouched since entry, in `rdi`.
+#[test]
+fn an_x86_64_o2_object_describes_its_calls_and_what_their_arguments_hold() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("call_sites.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/call_sites.c");
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .args(["-m64", "--isel=dag", "-O2", "-g", "-c"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let verified = Command::new(&dwarfdump).arg("--verify").arg(&object).output().unwrap();
+    assert!(String::from_utf8_lossy(&verified.stdout).trim_end().ends_with("No errors."));
+    let said = Command::new(&dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    assert!(text.contains("DW_AT_call_all_calls"), "{text}");
+    let sites: Vec<&str> = text.split("DW_TAG_call_site\n").skip(1).collect();
+    assert_eq!(sites.len(), 2, "{text}");
+    let first = sites[0].split("NULL").next().unwrap();
+    assert!(
+        first.contains("DW_AT_call_origin") && first.contains("DW_AT_call_return_pc\t(0x000000000000000f)"),
+        "{first}"
+    );
+    assert!(first.contains("DW_OP_entry_value(DW_OP_reg5 RDI)") && first.contains("DW_OP_lit7"), "{first}");
+    assert_eq!(text.matches("DW_AT_declaration").count(), 2, "g and h: {text}");
+}

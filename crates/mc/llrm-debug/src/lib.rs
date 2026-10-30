@@ -198,6 +198,11 @@ pub struct DebugTarget {
     /// A parameter whose register was reused is told by what the register held
     /// at entry (`DW_OP_entry_value`), as the pin does for this target.
     pub entry_values: bool,
+    /// The registers a call passes its arguments in, in order; empty where the
+    /// target does not describe call sites.
+    pub call_arguments: Vec<String>,
+    /// The registers a call leaves as they were.
+    pub call_preserved: Vec<String>,
 }
 
 /// The target's registers as a debug writer numbers them: three flavours of
@@ -262,6 +267,8 @@ impl DebugTarget {
             far_pointer: None,
             registers: std::sync::Arc::default(),
             entry_values: false,
+            call_arguments: Vec::new(),
+            call_preserved: Vec::new(),
         }
     }
 }

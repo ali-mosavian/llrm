@@ -556,6 +556,8 @@ fn a_target_with_three_byte_addresses_writes_dwarf_with_three_byte_addresses() {
             far_pointer: None,
             registers: Default::default(),
             entry_values: false,
+            call_arguments: Vec::new(),
+            call_preserved: Vec::new(),
         },
     );
     let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();

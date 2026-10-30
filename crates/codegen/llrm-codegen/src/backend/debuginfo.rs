@@ -90,7 +90,7 @@ use llrm_lir::registers::RegId;
 use llrm_mir::{MetadataId, debuginfo as di};
 
 use crate::backend::objbuild::Segment;
-use crate::backend::{globals, masm};
+use crate::backend::{callsites, globals, masm};
 use crate::model::ir::Space;
 use crate::model::lir::DebugPlace;
 use crate::support::hash::IndexMap;
@@ -746,6 +746,49 @@ fn combined(
     out
 }
 
+/// The calls of the function whose code is `code[start..end]` of its segment,
+/// and whether every call it makes is among them.
+fn call_sites(
+    debug: &Debug,
+    info: &Info,
+    described: &Procedure,
+    code: &Segment,
+    (start, end): (usize, usize),
+    bits: u32,
+) -> (bool, Vec<callsites::Call>) {
+    if !described.all_calls || debug.target.call_arguments.is_empty() {
+        return (false, Vec::new());
+    }
+    let count = |r#type: model::TypeId| match info.types.get(r#type) {
+        Some(model::Type::Procedure { parameters, .. }) => parameters.len(),
+        _ => 0,
+    };
+    let wanted = |symbol: Option<&str>| {
+        let Some(symbol) = symbol else { return 0 };
+        match debug.declarations.iter().find(|one| one.symbol == symbol) {
+            Some(one) => count(one.r#type),
+            None => debug.procedures.get(symbol).map_or(0, |one| count(one.r#type)),
+        }
+    };
+    let fixups: Vec<(usize, &str)> = code
+        .fixups
+        .iter()
+        .filter(|one| (start..end).contains(&one.at))
+        .map(|one| (one.at - start, one.name.as_str()))
+        .collect();
+    let found = callsites::scan(
+        &code.image[start..end],
+        bits,
+        &fixups,
+        &debug.target.call_arguments,
+        &debug.target.call_preserved,
+        count(described.r#type),
+        &wanted,
+    );
+    let calls = found.calls.into_iter().map(|one| callsites::Call { offset: start + one.offset, ..one }).collect();
+    (!found.tail_call, calls)
+}
+
 /// `module`'s debug information for the object `source`, its code laid out in
 /// `segments` (a procedure's is the one `symbols` puts it in) at `symbols`,
 /// each symbol at its index in `ids`; only what a symbol still defines is
@@ -814,6 +857,7 @@ pub fn laid_out(
         .filter(|one| one.scope.is_none() && defined(&one.symbol))
         .map(|one| variable(&one.name, one.r#type, Kind::Local, &one.symbol, one.displacement))
         .collect();
+    let mut pending: Vec<Vec<callsites::Call>> = Vec::new();
     for procedure in &module.procedures {
         let (Some(described), Some(&(section, start))) =
             (debug.procedures.get(&procedure.name), symbols.get(&procedure.name))
@@ -1147,6 +1191,8 @@ pub fn laid_out(
         }
         let (variables, blocks) =
             in_blocks(&debug.scopes, &code.lines, (section, start, end), variables.into_iter().zip(scoped).collect());
+        let (all_calls, found) = call_sites(debug, &info, described, code, (start, end), procedure.body.bits);
+        pending.push(found);
         info.functions.push(model::Function {
             name: described.name.clone(),
             symbol: ids[&procedure.name],
@@ -1158,9 +1204,50 @@ pub fn laid_out(
             variables,
             blocks,
             frame: frame.unwrap_or_default(),
-            all_calls: described.all_calls,
+            all_calls,
             calls: Vec::new(),
         });
+    }
+    // A call names its callee by symbol: a declaration, or a function of the
+    // unit.
+    for (at, calls) in pending.into_iter().enumerate() {
+        let section = info.functions[at].ranges[0].section;
+        info.functions[at].calls = calls
+            .into_iter()
+            .map(|call| {
+                let origin = call
+                    .symbol
+                    .as_deref()
+                    .and_then(
+                        |name| debug
+                            .declarations
+                            .iter()
+                            .position(|one| one.symbol == name)
+                            .map(model::CallOrigin::Declaration)
+                            .or_else(|| {
+                                let id = ids.get(name)?;
+                                info.functions.iter().position(|one| one.symbol == *id).map(model::CallOrigin::Function)
+                            }),
+                    );
+                model::CallSite {
+                    section,
+                    offset: call.offset,
+                    origin,
+                    parameters: call
+                        .parameters
+                        .into_iter()
+                        .map(|(register, value)| model::CallParameter {
+                            value: match value {
+                                callsites::Value::Constant(one) => model::CallValue::Constant(one),
+                                callsites::Value::Entry => model::CallValue::Entry(register.clone()),
+                                callsites::Value::Register(name, offset) => model::CallValue::Register { name, offset },
+                            },
+                            register,
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
     }
     // The code of each segment that has a procedure: from the first to its last
     // byte.

@@ -24,6 +24,17 @@ pub fn debug_target(bits: u8) -> DebugTarget {
         segment_base: Some(SEGMENT_BASE),
         far_pointer: Some(FAR_POINTER),
         entry_values: bits == 64,
+        // System V: the ABI of the objects that carry DWARF.
+        call_arguments: if bits == 64 {
+            ["rdi", "rsi", "rdx", "rcx", "r8", "r9"].map(str::to_owned).to_vec()
+        } else {
+            Vec::new()
+        },
+        call_preserved: if bits == 64 {
+            ["rbx", "rbp", "r12", "r13", "r14", "r15"].map(str::to_owned).to_vec()
+        } else {
+            Vec::new()
+        },
         ..DebugTarget::of(bits)
     }
 }
