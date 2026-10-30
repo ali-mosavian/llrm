@@ -1634,7 +1634,8 @@ impl Builder<'_> {
             return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
         }
         let mut outs = Vec::new();
-        let variadic_from = if std::mem::take(&mut self.variadic_call) { self.fixed_args } else { usize::MAX };
+        let variadic = std::mem::take(&mut self.variadic_call);
+        let variadic_from = if variadic { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
                 Some(ISD::SignExtend) => Ext::Sign,
@@ -1663,7 +1664,16 @@ impl Builder<'_> {
         };
         calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
-        let (chain, parts) = calling.lower_call(&mut self.dag, root, callee_node, &outs, &ins);
+        let info = &mut *self.info;
+        let (chain, parts) = calling.lower_call_with_frame(
+            &mut self.dag,
+            root,
+            callee_node,
+            &outs,
+            &ins,
+            variadic,
+            &mut |size, align| info.new_stack_object(size, align),
+        );
         self.dag.set_root(chain);
         let assert = self.result_assert.take();
         Ok((!void).then(|| self.join_from_calling(&parts, vt, assert)))

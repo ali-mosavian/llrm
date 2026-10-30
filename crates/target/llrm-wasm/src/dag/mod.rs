@@ -52,10 +52,14 @@ pub fn signature(
 ) -> Result<(Vec<ValType>, Vec<ValType>), String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module.global(id).function().ok_or_else(|| format!("@{name} is no function"))?;
-    let Type::Function { returns, parameters, .. } = module.context.types.get(function.ty) else {
+    let Type::Function { returns, parameters, variadic } = module.context.types.get(function.ty) else {
         return Err(format!("@{name} has no function type"));
     };
-    let params = parameters.iter().map(|&ty| value_type(module, ty, width)).collect::<Result<Vec<_>, _>>()?;
+    let mut params = parameters.iter().map(|&ty| value_type(module, ty, width)).collect::<Result<Vec<_>, _>>()?;
+    if *variadic {
+        // `computeSignatureVTs`: the pointer to the variadic arguments' buffer.
+        params.push(if width == Width::W32 { ValType::I32 } else { ValType::I64 });
+    }
     let results = match module.context.types.get(*returns) {
         Type::Void => Vec::new(),
         _ => vec![value_type(module, *returns, width)?],

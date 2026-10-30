@@ -212,3 +212,13 @@ fn atomics_without_the_feature_are_plain() {
 fn sret_is_an_ordinary_pointer() {
     check("sret");
 }
+
+/// A variadic call was refused ("a wasm variadic call"). Its variadic values go
+/// to a frame object whose address is the last argument, also of a
+/// `call_indirect`, whose type then missed that parameter, and whose frame went
+/// without the stack pointer written back (an indirect call was no call to the
+/// frame lowering).
+#[test]
+fn variadic_calls_pass_a_buffer() {
+    check("varargs");
+}

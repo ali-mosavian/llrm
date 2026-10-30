@@ -71,7 +71,11 @@ pub fn frame_lowering(
     }
     // The joined `CALL` is a pseudo of this crate, outside the generated
     // descriptions.
-    let has_calls = f.blocks.iter().flatten().any(|inst| inst.opcode == post::CALL || has(inst, flag::CALL));
+    let has_calls = f
+        .blocks
+        .iter()
+        .flatten()
+        .any(|inst| matches!(inst.opcode, post::CALL | post::CALL_INDIRECT) || has(inst, flag::CALL));
     let writeback = !(stack_size <= RED_ZONE && !has_calls);
     let (konst, add, sub, global_get, global_set) = match pointer {
         ValType::I64 => (op::CONST_I64, op::ADD_I64, op::SUB_I64, op::GLOBAL_GET_I64, op::GLOBAL_SET_I64),

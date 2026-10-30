@@ -113,6 +113,23 @@ pub trait TargetCalling: Debug + Sync {
         ins: &[In],
     ) -> (SDValue, Vec<SDValue>);
 
+    /// `LowerCall` of a target that makes frame objects of its own
+    /// (`MachineFrameInfo::CreateStackObject`: size, alignment, the frame
+    /// index) or needs to know the callee is variadic with no variadic
+    /// argument passed (`CallLoweringInfo::IsVarArg`).
+    fn lower_call_with_frame(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        callee: SDValue,
+        outs: &[Out],
+        ins: &[In],
+        _variadic: bool,
+        _frame: &mut dyn FnMut(u32, u32) -> i32,
+    ) -> (SDValue, Vec<SDValue>) {
+        self.lower_call(dag, chain, callee, outs, ins)
+    }
+
     /// `LowerFormalArguments`: the value of each part.
     fn lower_formal_arguments(
         &self,

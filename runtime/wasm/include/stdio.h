@@ -6,5 +6,5 @@ static inline FILE *fopen(const char *path, const char *mode) { (void)path; (voi
 static inline int fclose(FILE *f) { (void)f; return 0; }
 typedef unsigned long llrm_size;
 static inline llrm_size fwrite(const void *p, llrm_size size, llrm_size count, FILE *f) { (void)p; (void)f; return size * count; }
-static inline int fprintf(FILE *f, const char *format, ...) { (void)f; (void)format; return 0; }
+#define fprintf(f, ...) ((void)(f), 0)
 #endif

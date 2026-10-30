@@ -170,6 +170,14 @@ pub fn select_function(
         .function()
         .filter(|one| !one.is_declaration())
         .ok_or_else(|| format!("@{name} has no body"))?;
+    if matches!(
+        module.context.types.get(function.ty),
+        llrm_mir::types::Type::Function { variadic: true, .. }
+    ) {
+        // DEVIATE: `LowerFormalArguments` adds the buffer pointer and
+        // `LowerVASTART` stores it. Exit: the varargs definition step.
+        return Err(format!("@{name}: a wasm variadic function body is not translated"));
+    }
     // The target's `TargetCalling` places every value; the builder reads none
     // of this.
     let convention = Convention {

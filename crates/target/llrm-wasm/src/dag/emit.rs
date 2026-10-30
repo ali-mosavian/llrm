@@ -140,6 +140,9 @@ impl Emitter<'_> {
         }
         // The operands of the `CALL_PARAMS` waiting for its `CALL_RESULTS`.
         let mut params: Vec<Operand> = Vec::new();
+        // The value type of each of them: a frame index is a pointer with no
+        // register.
+        let mut param_types: Vec<ValType> = Vec::new();
         let mut out: Vec<Inst> = Vec::new();
         // A unit lists its bottom-most node first; `EmitSchedule` emits the
         // glued ones top-down.
@@ -181,19 +184,24 @@ impl Emitter<'_> {
                     let uses: Vec<Operand> = data.ops.iter().filter_map(|&op| self.operand(dag, op)).collect();
                     if code == CALL_PARAMS {
                         params = uses;
+                        param_types = data
+                            .ops
+                            .iter()
+                            .filter(|&&op| self.operand(dag, op).is_some())
+                            .filter_map(|&op| class(dag.value_type(op)))
+                            .collect();
                         continue;
                     }
                     if code == CALL_RESULTS {
                         let mut params = std::mem::take(&mut params);
+                        let mut param_types = std::mem::take(&mut param_types);
                         if let Some(&Operand::Use(callee)) = params.first() {
                             // `EmitInstrWithCustomInserter`: the function pointer moves to the end, after
                             // the type (its signature, by index) and the table.
                             params.remove(0);
+                            param_types.remove(0);
                             let signature = (
-                                params
-                                    .iter()
-                                    .filter_map(|o| if let Operand::Use(r) = o { Some(self.f.vreg_type(*r)) } else { None })
-                                    .collect::<Vec<_>>(),
+                                param_types,
                                 operands
                                     .iter()
                                     .filter_map(|o| if let Operand::Def(r) = o { Some(self.f.vreg_type(*r)) } else { None })
