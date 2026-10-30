@@ -43,20 +43,11 @@ impl Machine for Opt {
 
 /// The cost model of `triple`'s architecture; none for the ones without.
 fn tti_of(triple: &str) -> Option<Rc<dyn Tti>> {
-    let arch = triple.split('-').next().unwrap_or(HOST_TRIPLE);
-    let cpu = match arch {
-        "x86_64" => "x86-64",
-        "i386" => "i386",
-        "i486" => "i486",
-        "i586" => "pentium",
-        "i686" => "pentiumpro",
-        "aarch64" | "arm64" => {
-            let machine = llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux };
-            return machine.tti();
-        }
-        _ => return None,
-    };
-    llrm_x86::tti::X86::of_cpu(cpu).map(|tti| Rc::new(tti) as Rc<dyn Tti>)
+    if let Some(tti) = llrm_x86::tti::X86::of_triple(triple) {
+        return Some(Rc::new(tti));
+    }
+    let platform = llrm_arm64::driver::platform_or_default(triple)?;
+    llrm_arm64::machine::Arm64Machine { platform }.tti()
 }
 
 /// The `target triple = "..."` the module states.
