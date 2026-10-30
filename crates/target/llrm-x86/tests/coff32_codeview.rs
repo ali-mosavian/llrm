@@ -129,6 +129,8 @@ fn object() -> Described {
             inlined: None,
         }],
         frame: Vec::new(),
+        all_calls: false,
+        calls: Vec::new(),
     };
     let info = Info {
         target: Some(llrm_debug::DebugTarget::of(32).with_registers("ebp", "", registers())),

@@ -232,6 +232,8 @@ mod tests {
                 }],
                 blocks: Vec::new(),
                 frame: Vec::new(),
+                all_calls: false,
+                calls: Vec::new(),
             }],
             ..Info::default()
         };

@@ -38,6 +38,8 @@ fn object(
         variables,
         blocks: Vec::new(),
         frame: Vec::new(),
+        all_calls: false,
+        calls: Vec::new(),
     };
     let register = |name: &str, dwarf| Register { name: name.into(), bits: 32, dwarf, codeview: None };
     let info = Info {
@@ -716,4 +718,66 @@ fn a_format_without_relocations_across_sections_gets_the_offsets_in_the_fields()
         plain_info.relocs.len(),
         "addresses stay relocated"
     );
+}
+
+/// A function that lists its calls gets `call_all_calls`, a declaration DIE
+/// for the callee it does not define, and one call-site DIE per call with the
+/// return pc, the origin and the arguments; the unit verifies. Without the
+/// writer there were none, so a debugger could not show the arguments of a
+/// caller's callee.
+#[test]
+fn call_sites_are_dies_with_origin_return_pc_and_arguments() {
+    use llrm_debug::{CallOrigin, CallParameter, CallSite, CallValue, Declaration};
+    let Some(dump) = dwarfdump() else {
+        skipped("llvm-dwarfdump is not installed");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    for version in [4u16, 5] {
+        let mut made = object(Vec::new(), vec![int()], Format::Dwarf { version });
+        let info = made.debug.as_mut().unwrap();
+        info.declarations = vec![Declaration { name: "g".into(), r#type: 1, external: true }];
+        info.functions[0].all_calls = true;
+        info.functions[0].calls = vec![CallSite {
+            section: 0,
+            offset: 8,
+            origin: Some(CallOrigin::Declaration(0)),
+            parameters: vec![
+                CallParameter { register: "eax".into(), value: CallValue::Constant(7) },
+                CallParameter { register: "eax".into(), value: CallValue::Entry("eax".into()) },
+                CallParameter { register: "eax".into(), value: CallValue::Register { name: "ebp".into(), offset: 0 } },
+            ],
+        }];
+        let path = scratch.path().join("x.o");
+        std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+        let said = std::process::Command::new(&dump).arg("--verify").arg(&path).output().unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
+        assert!(said.status.success() && text.trim_end().ends_with("No errors."), "DWARF {version}:\n{text}");
+        let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
+        let shown = String::from_utf8_lossy(&shown.stdout);
+        let entry = if version >= 5 { "DW_OP_entry_value" } else { "DW_OP_GNU_entry_value" };
+        let (site, param, all, origin, ret, value) = if version >= 5 {
+            (
+                "DW_TAG_call_site\n",
+                "DW_TAG_call_site_parameter",
+                "DW_AT_call_all_calls",
+                "DW_AT_call_origin",
+                "DW_AT_call_return_pc",
+                "DW_AT_call_value",
+            )
+        } else {
+            (
+                "DW_TAG_GNU_call_site\n",
+                "DW_TAG_GNU_call_site_parameter",
+                "DW_AT_GNU_all_call_sites",
+                "DW_AT_abstract_origin",
+                "DW_AT_low_pc",
+                "DW_AT_GNU_call_site_value",
+            )
+        };
+        for expected in [site, param, all, origin, ret, value, "DW_AT_declaration", "DW_OP_lit7", entry, "DW_OP_breg5"]
+        {
+            assert!(shown.contains(expected), "DWARF {version}: no {expected:?} in\n{shown}");
+        }
+    }
 }

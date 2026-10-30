@@ -44,6 +44,8 @@ fn object(
         variables,
         blocks: Vec::new(),
         frame: Vec::new(),
+        all_calls: false,
+        calls: Vec::new(),
     };
     let info = Info {
         target: Some(crate::write::OmfTargetWriter::debug_target(&crate::write::GenericOmf, bits).with_registers(

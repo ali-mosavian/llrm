@@ -292,6 +292,8 @@ pub struct Info {
     pub types: Vec<Type>,
     /// In the order the code is laid out.
     pub functions: Vec<Function>,
+    /// Functions the code calls and the unit does not define.
+    pub declarations: Vec<Declaration>,
     /// Variables of the module, in data.
     pub globals: Vec<Variable>,
     pub lines: Vec<Line>,
@@ -608,6 +610,63 @@ pub struct Function {
     /// the code could not be followed (a writer then says nothing, rather
     /// than something wrong).
     pub frame: Vec<FrameRow>,
+    /// Every call of the body is in [`Function::calls`]
+    /// (`DW_AT_call_all_calls`).
+    pub all_calls: bool,
+    /// The calls, in the order of the code (`DW_TAG_call_site`).
+    pub calls: Vec<CallSite>,
+}
+
+/// A function the unit calls and does not define (a `DISubprogram`
+/// declaration).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Declaration {
+    pub name: String,
+    /// Its [`Type::Procedure`].
+    pub r#type: TypeId,
+    pub external: bool,
+}
+
+/// The function a call reaches.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CallOrigin {
+    /// A function of [`Info::declarations`].
+    Declaration(usize),
+    /// A function of [`Info::functions`].
+    Function(usize),
+}
+
+/// What an argument register holds at a call, in the caller's terms
+/// (`DW_AT_call_value`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CallValue {
+    Constant(i64),
+    /// The value the register had when the caller was entered
+    /// (`DW_OP_entry_value`).
+    Entry(String),
+    /// The value of a register the call preserves, plus `offset`.
+    Register {
+        name: String,
+        offset: i64,
+    },
+}
+
+/// An argument register of a call and what it holds
+/// (`DW_TAG_call_site_parameter`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CallParameter {
+    pub register: String,
+    pub value: CallValue,
+}
+
+/// A call: where it returns to, what it calls, and what its arguments hold.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CallSite {
+    /// The return address: the first byte after the call.
+    pub section: usize,
+    pub offset: usize,
+    pub origin: Option<CallOrigin>,
+    pub parameters: Vec<CallParameter>,
 }
 
 pub use llrm_object::FrameRow;

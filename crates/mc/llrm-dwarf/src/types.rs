@@ -30,6 +30,19 @@ const TAG_BASE: u16 = 0x24;
 const TAG_CONST: u16 = 0x26;
 const TAG_ENUMERATOR: u16 = 0x28;
 const TAG_SUBPROGRAM: u16 = 0x2e;
+const TAG_CALL_SITE: u16 = 0x48;
+const TAG_CALL_SITE_PARAMETER: u16 = 0x49;
+const TAG_GNU_CALL_SITE: u16 = 0x4109;
+const TAG_GNU_CALL_SITE_PARAMETER: u16 = 0x410a;
+const AT_DECLARATION: u16 = 0x3c;
+const AT_CALL_RETURN_PC: u16 = 0x7d;
+const AT_CALL_VALUE: u16 = 0x7e;
+const AT_CALL_ORIGIN: u16 = 0x7f;
+const AT_CALL_ALL_CALLS: u16 = 0x7a;
+const AT_GNU_CALL_SITE_VALUE: u16 = 0x2111;
+const AT_GNU_ALL_CALL_SITES: u16 = 0x2117;
+/// A reference to function `n`'s DIE, patched once every function has one.
+const FUNCTION_REF: usize = usize::MAX / 2;
 const TAG_VARIABLE: u16 = 0x34;
 const TAG_VOLATILE: u16 = 0x35;
 
@@ -69,6 +82,8 @@ struct Tree<'a> {
     /// The out-of-line description of each function inlined somewhere (what an
     /// inlined subroutine is an abstract origin of), by name.
     origins: Vec<(String, usize)>,
+    /// The DIE of each declaration of [`Info::declarations`].
+    declarations: Vec<usize>,
 }
 
 impl Tree<'_> {
@@ -653,7 +668,96 @@ impl Tree<'_> {
             };
             die.attrs.push((AT_FRAME_BASE, Value::Expr(base)));
         }
+        if one.all_calls {
+            die.attrs.push((if self.version >= 5 { AT_CALL_ALL_CALLS } else { AT_GNU_ALL_CALL_SITES }, Value::Flag));
+        }
         self.scope(&mut die, &one.variables, &one.blocks)?;
+        for call in &one.calls {
+            let site = self.call_site(call)?;
+            die.children.push(site);
+        }
+        Ok(self.push(die))
+    }
+
+    /// A call: `DW_TAG_call_site` (`DW_TAG_GNU_call_site` before DWARF 5), the
+    /// function it reaches and the values its argument registers hold.
+    fn call_site(
+        &mut self,
+        call: &model::CallSite,
+    ) -> Result<usize, Unsupported> {
+        let five = self.version >= 5;
+        let mut die = Die::new(if five { TAG_CALL_SITE } else { TAG_GNU_CALL_SITE });
+        match call.origin {
+            Some(model::CallOrigin::Declaration(at)) => {
+                let target = *self
+                    .declarations
+                    .get(at)
+                    .ok_or_else(|| Unsupported(format!("DWARF: a call names declaration {at}, there are none")))?;
+                die.attrs.push((if five { AT_CALL_ORIGIN } else { AT_ABSTRACT_ORIGIN }, Value::Ref(target)));
+            }
+            Some(model::CallOrigin::Function(at)) => {
+                die.attrs.push((if five { AT_CALL_ORIGIN } else { AT_ABSTRACT_ORIGIN }, Value::Ref(FUNCTION_REF + at)));
+            }
+            None => {}
+        }
+        let pc = self.address(call.section, call.offset)?;
+        die.attrs.push((if five { AT_CALL_RETURN_PC } else { AT_LOW_PC }, pc));
+        for parameter in &call.parameters {
+            let mut one = Die::new(if five { TAG_CALL_SITE_PARAMETER } else { TAG_GNU_CALL_SITE_PARAMETER });
+            one.attrs.push((AT_LOCATION, Value::Expr(self.register(&parameter.register)?)));
+            let value = self.call_value(&parameter.value)?;
+            one.attrs.push((if five { AT_CALL_VALUE } else { AT_GNU_CALL_SITE_VALUE }, Value::Expr(value)));
+            let at = self.push(one);
+            die.children.push(at);
+        }
+        Ok(self.push(die))
+    }
+
+    fn call_value(
+        &self,
+        value: &model::CallValue,
+    ) -> Result<Vec<u8>, Unsupported> {
+        Ok(match value {
+            model::CallValue::Constant(n @ 0..=31) => vec![0x30 + *n as u8],
+            model::CallValue::Constant(n) if *n >= 0 => [vec![0x10], crate::uleb(*n as u64)].concat(),
+            model::CallValue::Constant(n) => [vec![0x11], crate::sleb(*n)].concat(),
+            model::CallValue::Entry(name) => {
+                let inner = self.register(name)?;
+                let op = if self.version >= 5 { 0xa3 } else { 0xf3 };
+                [vec![op], crate::uleb(inner.len() as u64), inner].concat()
+            }
+            model::CallValue::Register { name, offset } => match self.info.registers().dwarf(name) {
+                Some(number) if number < 32 => [vec![0x70 + number as u8], crate::sleb(*offset)].concat(),
+                Some(number) => [vec![0x92], crate::uleb(u64::from(number)), crate::sleb(*offset)].concat(),
+                None => return refused(format!("register {name} has no DWARF number")),
+            },
+        })
+    }
+
+    /// A function the unit calls and does not define: a declaration DIE.
+    fn declaration(
+        &mut self,
+        one: &model::Declaration,
+    ) -> Result<usize, Unsupported> {
+        let mut die = Die::new(TAG_SUBPROGRAM);
+        die.attrs.push((AT_NAME, Value::Str(one.name.clone())));
+        die.attrs.push((AT_PROTOTYPED, Value::Flag));
+        let procedure = self.info.types.get(one.r#type).cloned();
+        if let Some(Type::Procedure { result: Some(result), .. }) = &procedure {
+            let _ = self.typed(&mut die, *result);
+        }
+        die.attrs.push((AT_DECLARATION, Value::Flag));
+        if one.external {
+            die.attrs.push((AT_EXTERNAL, Value::Flag));
+        }
+        if let Some(Type::Procedure { parameters, .. }) = &procedure {
+            for parameter in parameters {
+                let mut child = Die::new(TAG_FORMAL_PARAMETER);
+                self.typed(&mut child, *parameter)?;
+                let at = self.push(child);
+                die.children.push(at);
+            }
+        }
         Ok(self.push(die))
     }
 }
@@ -726,6 +830,7 @@ pub fn tree(
         locations: crate::buffer::Buf::default(),
         ranges: Vec::new(),
         origins: Vec::new(),
+        declarations: Vec::new(),
     };
     let mut unit = Die::new(TAG_COMPILE_UNIT);
     unit.attrs.push((AT_PRODUCER, Value::Str("llrm".into())));
@@ -773,9 +878,26 @@ pub fn tree(
             children.push(at);
         }
     }
+    let declarations: Vec<usize> =
+        info.declarations.iter().map(|one| tree.declaration(one)).collect::<Result<_, _>>()?;
+    tree.declarations = declarations.clone();
+    let mut function_dies = Vec::new();
     for function in &info.functions {
         let at = tree.function(function)?;
+        function_dies.push(at);
         children.push(at);
+    }
+    children.extend(declarations);
+    for die in &mut tree.dies {
+        for (_, value) in &mut die.attrs {
+            if let Value::Ref(at) = value {
+                if *at >= FUNCTION_REF {
+                    *at = *function_dies
+                        .get(*at - FUNCTION_REF)
+                        .ok_or_else(|| Unsupported("DWARF: a call names a function there is none of".into()))?;
+                }
+            }
+        }
     }
     children.extend(tree.origins.iter().map(|(_, at)| *at));
     tree.dies[0].children = children;

@@ -168,6 +168,8 @@ fn synthetic() -> (llrm_debug::Described, String) {
             inlined: None,
         }],
         frame: Vec::new(),
+        all_calls: false,
+        calls: Vec::new(),
     };
     let info = Info {
         language: Language::C,

@@ -112,6 +112,8 @@ pub fn info(
             variables,
             blocks: Vec::new(),
             frame: Vec::new(),
+            all_calls: false,
+            calls: Vec::new(),
         });
     }
     info.code = vec![Range { section: 0, offset: 0, length: at }];

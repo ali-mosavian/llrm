@@ -345,6 +345,8 @@ mod tests {
             variables,
             blocks: Vec::new(),
             frame: Vec::new(),
+            all_calls: false,
+            calls: Vec::new(),
         };
         let info = Info {
             code: vec![Range { section: 0, offset: 0, length: 8 }],

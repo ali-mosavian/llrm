@@ -732,6 +732,8 @@ mod tests {
             variables,
             blocks: Vec::new(),
             frame: Vec::new(),
+            all_calls: false,
+            calls: Vec::new(),
         };
         let mut made = Info {
             options: llrm_debug::DebugOptions { format: Format::TurboDebugger, ..Default::default() },

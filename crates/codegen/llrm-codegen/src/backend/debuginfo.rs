@@ -1135,6 +1135,8 @@ pub fn laid_out(
             variables,
             blocks,
             frame: frame.unwrap_or_default(),
+            all_calls: false,
+            calls: Vec::new(),
         });
     }
     // The code of each segment that has a procedure: from the first to its last
