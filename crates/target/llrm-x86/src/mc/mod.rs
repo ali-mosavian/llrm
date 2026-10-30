@@ -13,6 +13,7 @@ pub mod omf;
 pub mod unwind;
 pub mod win64unwind;
 
+use llrm_object::debug::{DebugCaps, Format as DebugFormat};
 use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported, UnwindKind};
 
 /// CodeView's machine number of x86 at `bits`.
@@ -80,30 +81,28 @@ impl ObjectTarget for X86Objects {
         format: &str,
     ) -> Option<AsmInfo> {
         Some(match format {
-            "omf" => AsmInfo { hosted: false, location_ranges: false, cfa_locations: false, ..AsmInfo::default() },
-            "elf" => AsmInfo {
-                pref_align: true,
-                hosted: true,
-                location_ranges: true,
-                cfa_locations: true,
-                unwind: UnwindKind::EhFrame,
-            },
-            "macho" => AsmInfo {
-                pref_align: false,
-                hosted: true,
-                location_ranges: true,
-                cfa_locations: true,
-                unwind: UnwindKind::Compact,
-            },
-            "coff" => AsmInfo {
-                pref_align: false,
-                hosted: true,
-                location_ranges: true,
-                cfa_locations: false,
-                unwind: UnwindKind::Win64,
-            },
+            "omf" => AsmInfo { hosted: false, ..AsmInfo::default() },
+            "elf" => AsmInfo { pref_align: true, hosted: true, unwind: UnwindKind::EhFrame },
+            "macho" => AsmInfo { pref_align: false, hosted: true, unwind: UnwindKind::Compact },
+            "coff" => AsmInfo { pref_align: false, hosted: true, unwind: UnwindKind::Win64 },
             _ => return None,
         })
+    }
+
+    fn debug_caps(
+        &self,
+        format: &str,
+        asked: DebugFormat,
+    ) -> DebugCaps {
+        match (asked, format) {
+            (DebugFormat::Dwarf { .. }, _) => llrm_dwarf::CAPS,
+            (DebugFormat::TurboDebugger, _) => llrm_omf::td::CAPS,
+            // CodeView 4 names one place for a scope, C13 has ranges and no
+            // frame address.
+            (_, "omf") => DebugCaps { location_ranges: false, cfa_locations: false },
+            (_, "coff") => DebugCaps { location_ranges: true, cfa_locations: false },
+            _ => llrm_dwarf::CAPS,
+        }
     }
 }
 
@@ -139,6 +138,29 @@ mod tests {
         };
         let direct = llrm_omf::write::write(&object, &omf::X86Omf).unwrap();
         assert_eq!(X86Objects.write_object("omf", &object).unwrap(), direct);
+    }
+
+    /// The capabilities lived on `Format` and `AsmInfo` apart from the writers
+    /// that have them: DWARF ranges and CFA, Turbo Debugger neither, CodeView
+    /// 4 (OMF) neither, C13 (COFF) ranges only.
+    #[test]
+    fn the_target_says_what_each_debug_writer_can() {
+        let caps = |format, asked| {
+            let one = X86Objects.debug_caps(format, asked);
+            (one.location_ranges, one.cfa_locations)
+        };
+        assert_eq!(caps("omf", DebugFormat::Default), (false, false));
+        assert_eq!(caps("omf", DebugFormat::CodeView), (false, false));
+        assert_eq!(caps("omf", DebugFormat::TurboDebugger), (false, false));
+        assert_eq!(caps("omf", DebugFormat::Dwarf { version: 4 }), (true, true));
+        assert_eq!(
+            (caps("elf", DebugFormat::Default), caps("macho", DebugFormat::Default)),
+            ((true, true), (true, true))
+        );
+        assert_eq!(
+            (caps("coff", DebugFormat::Default), caps("coff", DebugFormat::CodeView)),
+            ((true, false), (true, false))
+        );
     }
 
     #[test]

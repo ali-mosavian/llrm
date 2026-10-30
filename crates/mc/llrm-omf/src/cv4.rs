@@ -594,7 +594,7 @@ fn register_number(
     info: &Info,
     name: &str,
 ) -> Result<u16, Error> {
-    match info.registers.iter().find(|one| one.name == name).and_then(|one| one.codeview) {
+    match info.registers().codeview(name) {
         Some(number) => Ok(number),
         None => refused(format!("register {name} has no CodeView number")),
     }
@@ -665,7 +665,7 @@ impl Symbols<'_> {
             Location::List(_) | Location::Constant(_) | Location::Offset(..) | Location::Pieces(_) => Ok(()),
             Location::Frame { disp } => {
                 let mut data = Vec::new();
-                let frame = &self.info.frame_register;
+                let frame = &self.info.registers().frame;
                 // The frame register is BP's, or another's, which a
                 // register-relative record names.
                 let based = matches!(frame.as_str(), "ebp" | "bp");

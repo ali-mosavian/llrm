@@ -383,6 +383,14 @@ pub trait ObjectTarget {
         &self,
         format: &str,
     ) -> Option<AsmInfo>;
+
+    /// What the debug writer `asked` for in object `format` can say; the
+    /// format's own pick where `asked` is the default.
+    fn debug_caps(
+        &self,
+        format: &str,
+        asked: debug::Format,
+    ) -> debug::DebugCaps;
 }
 
 /// What an object format says of the code it holds, so the code that lays it
@@ -395,12 +403,6 @@ pub struct AsmInfo {
     /// A host's linker and C name the runtime's `B$X` as `B_X`: the object is
     /// not DOS's.
     pub hosted: bool,
-    /// Whether the format's own debug writer says where a value is over a range
-    /// of code.
-    pub location_ranges: bool,
-    /// Whether that writer places a frame cell from the canonical frame
-    /// address.
-    pub cfa_locations: bool,
     /// How the format says where a function's caller is
     /// (`MCAsmInfo::ExceptionsType`, `getExceptionHandlingType`).
     pub unwind: UnwindKind,

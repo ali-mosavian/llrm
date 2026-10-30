@@ -345,6 +345,11 @@ pub trait Target {
     /// instead of naming a target.
     fn objects(&self) -> &'static dyn llrm_object::ObjectTarget;
 
+    /// The machine as a debug writer reads it (`MCRegisterInfo` and the
+    /// fixup kinds of a segment): everything but the register file, which the
+    /// caller reads from [`Target::registers_text`] once.
+    fn debug_target(&self) -> llrm_object::debug::DebugTarget;
+
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
 

@@ -139,6 +139,8 @@ pub struct Debug {
     /// pushes (near, far): what its frame rows are read from.
     pub frame: Option<(RegId, RegId, [i64; 2])>,
     pub registers: Vec<model::Register>,
+    /// The machine as a debug writer reads it, without its register file.
+    pub target: llrm_object::debug::DebugTarget,
     pub types: Vec<model::Type>,
     /// Each MIR type node's type.
     pub nodes: IndexMap<MetadataId, model::TypeId>,
@@ -343,6 +345,7 @@ pub fn described(
         return_register,
         frame,
         registers,
+        target: arch.debug_target(),
         types,
         nodes,
         procedures,
@@ -702,9 +705,14 @@ pub fn laid_out(
     let mut info = Info {
         options: DebugOptions { format: debug.format, dialect: debug.dialect, producer: debug.producer },
         language: debug.language,
-        frame_register: debug.frame_register.clone(),
-        return_register: debug.return_register.clone(),
-        registers: debug.registers.clone(),
+        target: Some(llrm_object::debug::DebugTarget {
+            registers: std::sync::Arc::new(llrm_object::debug::RegisterFile {
+                registers: debug.registers.clone(),
+                frame: debug.frame_register.clone(),
+                return_register: debug.return_register.clone(),
+            }),
+            ..debug.target.clone()
+        }),
         files: vec![match &debug.source {
             Some((name, md5)) => model::File {
                 // CodeView looks for a file by the name it is given, beside

@@ -5,6 +5,11 @@
 //! every byte. 16-bit only. A fact these records cannot say is refused, with
 //! what it was.
 
+/// Turbo Debugger's records name one place for a whole scope, and no frame
+/// address.
+pub const CAPS: llrm_object::debug::DebugCaps =
+    llrm_object::debug::DebugCaps { location_ranges: false, cfa_locations: false };
+
 use std::collections::BTreeMap;
 use std::rc::Rc;
 

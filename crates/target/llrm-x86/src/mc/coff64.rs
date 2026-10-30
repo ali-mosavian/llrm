@@ -200,14 +200,13 @@ mod tests {
     fn debug_information_names_the_amd64_machine_and_eight_byte_pointers() {
         use llrm_object::debug::{Function, Info, Kind as K, Location, Range, Reach, Scalar, Type, Variable};
         let Ok(dump) = which("llvm-readobj") else { return eprintln!("skipped: no llvm-readobj") };
+        let target = llrm_object::debug::DebugTarget::of(64).with_registers(
+            "rbp",
+            "",
+            vec![llrm_object::debug::Register { name: "rbp".into(), bits: 64, dwarf: Some(6), codeview: Some(334) }],
+        );
         let info = Info {
-            frame_register: "rbp".into(),
-            registers: vec![llrm_object::debug::Register {
-                name: "rbp".into(),
-                bits: 64,
-                dwarf: Some(6),
-                codeview: Some(334),
-            }],
+            target: Some(target),
             code: vec![Range { section: 0, offset: 0, length: 4 }],
             types: vec![
                 Type::Scalar(Scalar::Int { bytes: 4, signed: true }),

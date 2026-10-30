@@ -10,6 +10,11 @@
 mod buffer;
 mod die;
 pub mod eh_frame;
+
+/// DWARF says where a value is over a range of code and places a frame cell
+/// from the canonical frame address.
+pub const CAPS: llrm_object::debug::DebugCaps =
+    llrm_object::debug::DebugCaps { location_ranges: true, cfa_locations: true };
 mod frame;
 mod line;
 mod ranges;

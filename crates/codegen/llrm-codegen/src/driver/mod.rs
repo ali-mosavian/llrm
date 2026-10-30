@@ -156,21 +156,18 @@ impl Options {
     /// Whether the debug writer this object format and `-g` flavor pick says
     /// where a value is over a range of code.
     pub fn location_ranges(&self) -> bool {
-        self.debug_format.location_ranges().unwrap_or_else(|| self.format_info().location_ranges)
+        self.debug_caps().location_ranges
     }
 
     /// Whether that writer places a frame cell from the canonical frame
     /// address, so `-g` need not keep a frame register.
     pub fn cfa_locations(&self) -> bool {
-        self.debug_format.cfa_locations().unwrap_or_else(|| self.format_info().cfa_locations)
+        self.debug_caps().cfa_locations
     }
 
-    /// What the object format says of the debug writer it picks by default; a
-    /// format unknown to the target is ELF's.
-    fn format_info(&self) -> llrm_object::AsmInfo {
-        use llrm_target::object::Format;
-        let format = Format::parse(self.object_format).unwrap_or(Format::Elf);
-        crate::backend::objbuild::asm_info(self.arch.objects(), format)
+    /// What the debug writer asked for in this object format can say.
+    fn debug_caps(&self) -> llrm_object::debug::DebugCaps {
+        self.arch.objects().debug_caps(self.object_format, self.debug_format)
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {

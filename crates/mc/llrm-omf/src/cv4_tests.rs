@@ -46,10 +46,13 @@ fn object(
         frame: Vec::new(),
     };
     let info = Info {
-        target: Some(crate::write::OmfTargetWriter::debug_target(&crate::write::GenericOmf, bits)),
+        target: Some(crate::write::OmfTargetWriter::debug_target(&crate::write::GenericOmf, bits).with_registers(
+            if bits == 16 { "bp" } else { "ebp" },
+            "",
+            Vec::new(),
+        )),
         language: Language::C,
         options: llrm_object::debug::DebugOptions { dialect: llrm_object::debug::Dialect::Cv4, ..Default::default() },
-        frame_register: if bits == 16 { "bp" } else { "ebp" }.into(),
         code: vec![range],
         types,
         functions: vec![function],
@@ -364,7 +367,7 @@ fn a_value_in_a_register_throughout_is_s_register_and_one_part_of_the_time_is_le
             variable("c", 0, Kind::Local, Location::Frame { disp: -2 }),
         ],
     );
-    made.debug.as_mut().unwrap().registers = [("ax", 9), ("cx", 10), ("dx", 11)]
+    let registers = [("ax", 9), ("cx", 10), ("dx", 11)]
         .map(|(name, number)| llrm_object::debug::Register {
             name: name.into(),
             bits: 16,
@@ -372,6 +375,13 @@ fn a_value_in_a_register_throughout_is_s_register_and_one_part_of_the_time_is_le
             codeview: Some(number),
         })
         .to_vec();
+    made.debug
+        .as_mut()
+        .unwrap()
+        .set_registers(
+            16,
+            llrm_object::debug::RegisterFile { registers, frame: "bp".into(), return_register: String::new() },
+        );
     let (symbols, ..) = written(&made);
     let found: Vec<(u16, Vec<u8>)> = symbols[3..].to_vec();
     assert_eq!(

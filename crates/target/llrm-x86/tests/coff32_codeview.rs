@@ -130,8 +130,7 @@ fn object() -> Object {
         frame: Vec::new(),
     };
     let info = Info {
-        frame_register: "ebp".into(),
-        registers: registers(),
+        target: Some(llrm_object::debug::DebugTarget::of(32).with_registers("ebp", "", registers())),
         files: vec![File { name: "f.c".into(), checksum: None }],
         code: vec![Range { section: 0, offset: 0, length: 16 }],
         types,
@@ -285,6 +284,7 @@ fn what_the_writer_cannot_say_is_refused_by_name() {
         made.debug
             .as_mut()
             .unwrap()
+            .registers_mut(32)
             .registers
             .push(
                 Register {
@@ -303,7 +303,7 @@ fn what_the_writer_cannot_say_is_refused_by_name() {
         .contains("register st0 has no CodeView number")
     );
     assert!(
-        refusal(|made| made.debug.as_mut().unwrap().frame_register = "esp".into())
+        refusal(|made| made.debug.as_mut().unwrap().registers_mut(32).frame = "esp".into())
             .contains("register esp is not in the target's register file")
     );
     assert!(refusal(|made| function(made).far = true).contains("f is a far function"));

@@ -55,10 +55,16 @@ impl ObjectTarget for Arm64Objects {
         matches!(format, "macho" | "elf").then_some(AsmInfo {
             pref_align: false,
             hosted: true,
-            location_ranges: true,
-            cfa_locations: true,
             unwind: if format == "macho" { UnwindKind::Compact } else { UnwindKind::EhFrame },
         })
+    }
+
+    fn debug_caps(
+        &self,
+        _: &str,
+        _: llrm_object::debug::Format,
+    ) -> llrm_object::debug::DebugCaps {
+        llrm_dwarf::CAPS
     }
 }
 

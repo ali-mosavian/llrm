@@ -172,8 +172,11 @@ fn synthetic() -> (llrm_object::Object, String) {
     let info = Info {
         language: Language::C,
         options: llrm_object::debug::DebugOptions { dialect: llrm_object::debug::Dialect::Cv4, ..Default::default() },
-        frame_register: "bp".into(),
-        registers: vec![Register { name: "si".into(), bits: 16, dwarf: None, codeview: Some(15) }],
+        target: Some(llrm_x86::mc::fixup::debug_target(16).with_registers(
+            "bp",
+            "",
+            vec![Register { name: "si".into(), bits: 16, dwarf: None, codeview: Some(15) }],
+        )),
         code: vec![whole],
         types: vec![
             Type::Scalar(Scalar::Int { bytes: 2, signed: true }),

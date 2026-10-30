@@ -188,8 +188,10 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
     assert_eq!(lines, [15, 16, 17]);
     assert!(info.lines.iter().all(|one| one.file == 0));
     // The target's register file, once, for writers that know no target.
-    assert_eq!(info.frame_register, "ebp");
-    let number = |name: &str| info.registers.iter().find(|one| one.name == name).map(|one| (one.dwarf, one.codeview));
+    assert_eq!(info.registers().frame, "ebp");
+    let number = |name: &str| {
+        info.registers().registers.iter().find(|one| one.name == name).map(|one| (one.dwarf, one.codeview))
+    };
     // DWARF's is Open Watcom's (dwregx86.h): BP is 33.
     assert_eq!(number("bp"), Some((Some(33), Some(14))));
 }

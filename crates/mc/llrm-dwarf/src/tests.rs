@@ -43,8 +43,11 @@ fn object(
     let info = Info {
         options: DebugOptions { format, ..Default::default() },
         language: llrm_object::debug::Language::C,
-        frame_register: "ebp".into(),
-        registers: vec![register("ebp", Some(5)), register("eax", Some(0)), register("ah", None)],
+        target: Some(llrm_object::debug::DebugTarget::of(32).with_registers(
+            "ebp",
+            "",
+            vec![register("ebp", Some(5)), register("eax", Some(0)), register("ah", None)],
+        )),
         code: vec![Range { section: 0, offset: 0, length: 16 }],
         files: vec![llrm_object::debug::File { name: "f.c".into(), checksum: None }],
         types,
@@ -482,8 +485,9 @@ fn a_functions_frame_rows_are_the_cfa_instructions_the_dwarf_standard_gives() {
     let mut made = object(Vec::new(), vec![int()], Format::Dwarf { version: 4 });
     let info = made.debug.as_mut().unwrap();
     let register = |name: &str, number| Register { name: name.into(), bits: 32, dwarf: Some(number), codeview: None };
-    info.registers.extend([register("esp", 4), register("eip", 8)]);
-    info.return_register = "eip".into();
+    let file = info.registers_mut(32);
+    file.registers.extend([register("esp", 4), register("eip", 8)]);
+    file.return_register = "eip".into();
     info.functions[0].frame = vec![
         row(0, "esp", 4, &[]),
         row(1, "esp", 8, &[("ebp", -8)]),
@@ -526,16 +530,29 @@ fn a_base_type_is_named_as_the_source_spells_it() {
 /// The unit header's address size was `object.arch.bits() / 8`, so a machine
 /// with no `Arch` variant could not be written: a target says it in
 /// `Info::target`.
+/// `target` as the machine, with the registers the information had.
+fn retarget(
+    info: &mut Info,
+    mut target: llrm_object::debug::DebugTarget,
+) {
+    target.registers = info.registers_mut(0).clone().into();
+    info.target = Some(target);
+}
+
 #[test]
 fn a_target_with_three_byte_addresses_writes_dwarf_with_three_byte_addresses() {
     let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 5 });
-    made.debug.as_mut().unwrap().target = Some(llrm_object::debug::DebugTarget {
-        address_bytes: 3,
-        segmented: false,
-        codeview_machine: None,
-        segment_base: None,
-        far_pointer: None,
-    });
+    retarget(
+        made.debug.as_mut().unwrap(),
+        llrm_object::debug::DebugTarget {
+            address_bytes: 3,
+            segmented: false,
+            codeview_machine: None,
+            segment_base: None,
+            far_pointer: None,
+            registers: Default::default(),
+        },
+    );
     let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     let (_, info) = named(&written, ".debug_info");
     assert_eq!(info.image[7], 3, "the unit header's address size");
@@ -549,12 +566,14 @@ fn a_segmented_address_takes_the_targets_segment_fixup() {
     let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 4 });
     made.bits = 16;
     let info = made.debug.as_mut().unwrap();
-    info.target = Some(llrm_object::debug::DebugTarget::of(16));
+    retarget(info, llrm_object::debug::DebugTarget::of(16));
     let error = expanded(&made, made.debug.as_ref().unwrap()).unwrap_err();
     assert!(error.0.contains("segment fixup"), "{error:?}");
     let kind = llrm_object::FixupKind(llrm_object::FixupKind::FIRST_TARGET.0 + 9);
-    made.debug.as_mut().unwrap().target =
-        Some(llrm_object::debug::DebugTarget { segment_base: Some(kind), ..llrm_object::debug::DebugTarget::of(16) });
+    retarget(
+        made.debug.as_mut().unwrap(),
+        llrm_object::debug::DebugTarget { segment_base: Some(kind), ..llrm_object::debug::DebugTarget::of(16) },
+    );
     let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     assert!(written.sections.iter().flat_map(|one| &one.relocs).any(|one| one.kind == kind));
 }
@@ -646,6 +665,7 @@ fn a_unit_of_two_code_ranges_has_ranges_and_a_base_of_zero() {
 fn a_segmented_function_of_two_ranges_is_refused_by_name() {
     let mut made = split(4, false);
     made.bits = 16;
+    retarget(made.debug.as_mut().unwrap(), llrm_object::debug::DebugTarget::of(16));
     let why = expanded(&made, made.debug.as_ref().unwrap()).err().expect("refused");
     assert!(why.0.contains("segmented"), "{}", why.0);
 }
@@ -659,8 +679,10 @@ fn a_segmented_block_of_two_ranges_is_written_over_its_hull() {
     let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 4 });
     made.bits = 16;
     let kind = llrm_object::FixupKind(llrm_object::FixupKind::FIRST_TARGET.0 + 9);
-    made.debug.as_mut().unwrap().target =
-        Some(llrm_object::debug::DebugTarget { segment_base: Some(kind), ..llrm_object::debug::DebugTarget::of(16) });
+    retarget(
+        made.debug.as_mut().unwrap(),
+        llrm_object::debug::DebugTarget { segment_base: Some(kind), ..llrm_object::debug::DebugTarget::of(16) },
+    );
     let pieces = vec![Range { section: 0, offset: 2, length: 2 }, Range { section: 0, offset: 6, length: 2 }];
     made.debug.as_mut().unwrap().functions[0].blocks =
         vec![llrm_object::debug::Block { ranges: pieces, variables: Vec::new(), blocks: Vec::new(), inlined: None }];

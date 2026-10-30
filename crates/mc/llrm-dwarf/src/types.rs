@@ -438,7 +438,7 @@ impl Tree<'_> {
         &self,
         name: &str,
     ) -> Result<Vec<u8>, Unsupported> {
-        let number = self.info.registers.iter().find(|one| one.name == name).and_then(|one| one.dwarf);
+        let number = self.info.registers().dwarf(name);
         match number {
             Some(number) if number < 32 => Ok(vec![0x50 + number as u8]),
             Some(number) => Ok([vec![0x90], crate::uleb(u64::from(number))].concat()),
@@ -580,11 +580,9 @@ impl Tree<'_> {
                 // DW_OP_call_frame_cfa.
                 FrameBase::Cfa { .. } => vec![0x9C],
                 FrameBase::Register => {
-                    let base = self
-                        .info
-                        .registers
-                        .iter()
-                        .find(|register| register.name == self.info.frame_register)
+                    let registers = self.info.registers();
+                    let base = registers
+                        .named(&registers.frame)
                         .map(|register| register.name.clone())
                         .ok_or_else(|| Unsupported("DWARF: no frame register".into()))?;
                     self.register(&base)?

@@ -4661,6 +4661,7 @@ fn test_dbg_lines_become_linnum() {
         ranges: false,
         file: Vec::new(),
         registers: Vec::new(),
+        target: llrm_object::debug::DebugTarget::of(32),
         types: Vec::new(),
         nodes: Default::default(),
         procedures: Default::default(),

@@ -277,6 +277,9 @@ mod tests {
         fn objects(&self) -> &'static dyn llrm_object::ObjectTarget {
             self.0.objects()
         }
+        fn debug_target(&self) -> llrm_object::debug::DebugTarget {
+            self.0.debug_target()
+        }
         fn name(&self) -> &'static str {
             self.0.name()
         }

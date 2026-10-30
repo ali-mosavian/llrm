@@ -46,30 +46,18 @@ pub enum Format {
     TurboDebugger,
 }
 
-impl Format {
-    /// Whether the writer says where a value is over a range of code. `None`
-    /// for a format that is the container's pick. CodeView 4, its older
+/// What a debug writer can say, which decides what the compiler keeps for it
+/// (LLVM's one `DbgValueHistory` feeds writers that differ here).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DebugCaps {
+    /// It says where a value is over a range of code. CodeView 4, its older
     /// BASIC dialect and Turbo Debugger's records name one place for a whole
     /// scope.
-    pub fn location_ranges(self) -> Option<bool> {
-        match self {
-            Format::TurboDebugger => Some(false),
-            Format::Dwarf { .. } => Some(true),
-            _ => None,
-        }
-    }
-
-    /// Whether the writer places a frame cell from the canonical frame address,
-    /// which DWARF's call frame information gives at every address, so `-g`
-    /// keeps no frame register for it. `None` as for
-    /// [`Format::location_ranges`].
-    pub fn cfa_locations(self) -> Option<bool> {
-        match self {
-            Format::TurboDebugger => Some(false),
-            Format::Dwarf { .. } => Some(true),
-            _ => None,
-        }
-    }
+    pub location_ranges: bool,
+    /// It places a frame cell from the canonical frame address, which DWARF's
+    /// call frame information gives at every address, so `-g` keeps no frame
+    /// register for it.
+    pub cfa_locations: bool,
 }
 
 /// The source language, which a debugger reads values by.
@@ -110,7 +98,7 @@ pub enum FrameBase {
 /// What a debug writer needs to know of the machine, so it reads no
 /// [`crate::Arch`]. The target says it (`Info::target`); a made-up one needs no
 /// variant of `Arch`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugTarget {
     /// The width of a near address: a DWARF address, and the size of a
     /// reference.
@@ -125,9 +113,63 @@ pub struct DebugTarget {
     /// The fixup kind for a 16:16 pointer, whose offset is the field's first
     /// two bytes.
     pub far_pointer: Option<crate::FixupKind>,
+    /// The register file with its DWARF and CodeView numbers
+    /// (`MCRegisterInfo`'s `mapLLVMRegToDWARFReg`), the frame register and the
+    /// return address's column.
+    pub registers: std::sync::Arc<RegisterFile>,
+}
+
+/// The target's registers as a debug writer numbers them: three flavours of
+/// number in LLVM (`X86RegisterInfo.td`), two here.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RegisterFile {
+    pub registers: Vec<Register>,
+    /// The register a [`Location::Frame`] is relative to.
+    pub frame: String,
+    /// The register that stands for the return address in call frame
+    /// information (the target's `pc` class); empty where the target numbers
+    /// none.
+    pub return_register: String,
+}
+
+impl RegisterFile {
+    pub fn named(
+        &self,
+        name: &str,
+    ) -> Option<&Register> {
+        self.registers.iter().find(|one| one.name == name)
+    }
+
+    /// The DWARF number of `name`.
+    pub fn dwarf(
+        &self,
+        name: &str,
+    ) -> Option<u16> {
+        self.named(name).and_then(|one| one.dwarf)
+    }
+
+    /// The CodeView number of `name`.
+    pub fn codeview(
+        &self,
+        name: &str,
+    ) -> Option<u16> {
+        self.named(name).and_then(|one| one.codeview)
+    }
 }
 
 impl DebugTarget {
+    /// This machine with the register file `frame`, `return_register` and
+    /// `registers` make.
+    pub fn with_registers(
+        self,
+        frame: &str,
+        return_register: &str,
+        registers: Vec<Register>,
+    ) -> Self {
+        let file = RegisterFile { registers, frame: frame.to_owned(), return_register: return_register.to_owned() };
+        Self { registers: std::sync::Arc::new(file), ..self }
+    }
+
     /// What the width of a near offset says; the target adds what it knows
     /// (`Info::target`).
     pub fn of(bits: u8) -> Self {
@@ -137,6 +179,7 @@ impl DebugTarget {
             codeview_machine: None,
             segment_base: None,
             far_pointer: None,
+            registers: std::sync::Arc::default(),
         }
     }
 }
@@ -158,17 +201,9 @@ pub struct Info {
     pub target: Option<DebugTarget>,
     pub options: DebugOptions,
     pub language: Language,
-    /// The register a [`Location::Frame`] is relative to.
-    pub frame_register: String,
     /// What a [`Location::Frame`] is measured from: that register, or the
     /// canonical frame address.
     pub frame_base: FrameBase,
-    /// The register that stands for the return address in call frame
-    /// information (the target's `pc` class); empty where the target
-    /// numbers none.
-    pub return_register: String,
-    /// The target's register file, so a writer needs no target.
-    pub registers: Vec<Register>,
     pub files: Vec<File>,
     /// The module's code, from its first function to its last byte.
     pub code: Vec<Range>,
@@ -181,12 +216,38 @@ pub struct Info {
 }
 
 impl Info {
+    /// The target's registers; none where the target is unset.
+    pub fn registers(&self) -> &RegisterFile {
+        static NONE: std::sync::OnceLock<RegisterFile> = std::sync::OnceLock::new();
+        self.target.as_ref().map_or_else(|| NONE.get_or_init(RegisterFile::default), |one| &*one.registers)
+    }
+
+    /// `file` as the target's registers, on the target as it stands or, where
+    /// there is none, on a machine of `bits`.
+    pub fn set_registers(
+        &mut self,
+        bits: u8,
+        file: RegisterFile,
+    ) {
+        *self.registers_mut(bits) = file;
+    }
+
+    /// The target's registers to edit, on a machine of `bits` where there is
+    /// no target yet.
+    pub fn registers_mut(
+        &mut self,
+        bits: u8,
+    ) -> &mut RegisterFile {
+        let target = self.target.get_or_insert_with(|| DebugTarget::of(bits));
+        std::sync::Arc::make_mut(&mut target.registers)
+    }
+
     /// The machine this information is written for.
     pub fn target_of(
         &self,
         bits: u8,
     ) -> DebugTarget {
-        self.target.unwrap_or_else(|| DebugTarget::of(bits))
+        self.target.clone().unwrap_or_else(|| DebugTarget::of(bits))
     }
 }
 
@@ -589,27 +650,5 @@ mod settled_tests {
         assert_eq!(Location::Frame { disp: 8 }.settled(&scope), Some(&Location::Frame { disp: 8 }));
         let whole = Location::List(vec![(range(0, 32), Location::Register("esi".into()))]);
         assert_eq!(whole.settled(&scope), Some(&Location::Register("esi".into())));
-    }
-}
-
-#[cfg(test)]
-mod format_tests {
-    use super::Format;
-
-    /// The writers' two capability constants lived in the dwarf and omf crates,
-    /// so codegen named both to ask; the format says it now: DWARF has
-    /// ranges and CFA, Turbo Debugger neither, the rest is the container's
-    /// pick.
-    #[test]
-    fn the_format_says_what_its_writer_can() {
-        assert_eq!(
-            (Format::Dwarf { version: 4 }.location_ranges(), Format::Dwarf { version: 4 }.cfa_locations()),
-            (Some(true), Some(true))
-        );
-        assert_eq!(
-            (Format::TurboDebugger.location_ranges(), Format::TurboDebugger.cfa_locations()),
-            (Some(false), Some(false))
-        );
-        assert_eq!((Format::CodeView.location_ranges(), Format::Default.cfa_locations()), (None, None));
     }
 }

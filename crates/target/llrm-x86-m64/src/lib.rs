@@ -65,6 +65,10 @@ impl llrm_target::Target for M64 {
         &llrm_x86::mc::X86Objects
     }
 
+    fn debug_target(&self) -> llrm_object::debug::DebugTarget {
+        llrm_x86::mc::fixup::debug_target(64)
+    }
+
     fn dialect(&self) -> &'static llrm_target::instr::Dialect {
         llrm_x86::instructions::dialect()
     }

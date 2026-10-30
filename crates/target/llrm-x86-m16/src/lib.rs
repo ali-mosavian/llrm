@@ -91,6 +91,10 @@ impl llrm_target::Target for M16 {
         &llrm_x86::mc::X86Objects
     }
 
+    fn debug_target(&self) -> llrm_object::debug::DebugTarget {
+        llrm_x86::mc::fixup::debug_target(16)
+    }
+
     fn registers(&self) -> &'static llrm_lir::registers::Info {
         &REGISTER_INFO
     }

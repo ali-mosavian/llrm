@@ -45,7 +45,7 @@ fn number(
     info: &Info,
     name: &str,
 ) -> Result<u64, Unsupported> {
-    match info.registers.iter().find(|one| one.name == name).and_then(|one| one.dwarf) {
+    match info.registers().dwarf(name) {
         Some(number) => Ok(u64::from(number)),
         None => refused(format!("register {name} has no DWARF number, which a frame rule names")),
     }
@@ -129,10 +129,11 @@ pub fn section(
     address: usize,
 ) -> Result<Option<Done>, Unsupported> {
     let Some(entry) = info.functions.iter().find_map(|one| one.frame.first()) else { return Ok(None) };
-    if info.return_register.is_empty() {
+    let return_register = &info.registers().return_register;
+    if return_register.is_empty() {
         return Ok(None);
     }
-    let return_column = number(info, &info.return_register)?;
+    let return_column = number(info, return_register)?;
     let mut buf = Buf::default();
     // The CIE: the frame address at entry, and the return address in its slot
     // just below it.

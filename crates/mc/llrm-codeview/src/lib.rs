@@ -23,7 +23,7 @@ impl Registers<'_> {
         &self,
         register: &str,
     ) -> Result<u16, Unsupported> {
-        match self.info.registers.iter().find(|one| one.name == register) {
+        match self.info.registers().named(register) {
             Some(one) => {
                 one.codeview.map_or_else(|| refused(format!("register {register} has no CodeView number")), Ok)
             }
@@ -33,7 +33,7 @@ impl Registers<'_> {
 
     /// The register a frame location is relative to.
     pub(crate) fn frame(&self) -> Result<u16, Unsupported> {
-        self.number(&self.info.frame_register)
+        self.number(&self.info.registers().frame)
     }
 }
 
