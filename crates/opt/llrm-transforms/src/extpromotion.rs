@@ -40,7 +40,7 @@
 use llrm_mir::context::{Constant, ConstantKind, Context, signed};
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
-use llrm_mir::lowering::{Ext, Isd, LoadExt, Lowering};
+use llrm_mir::lowering::{Ext, ExtUser, Isd, LoadExt, Lowering};
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::types::TypeId;
@@ -71,6 +71,7 @@ enum Action {
 
 struct Env<'a> {
     context: &'a Context,
+    layout: &'a llrm_mir::datalayout::DataLayout,
     lowering: &'a dyn Lowering,
 }
 
@@ -260,11 +261,56 @@ fn is_ext_free(
     else {
         return false;
     };
-    match kind {
+    let free = match kind {
         CastOp::ZExt => env.lowering.is_ext_free(Ext::ZExt, from, to),
         CastOp::SExt => env.lowering.is_ext_free(Ext::SExt, from, to),
-        _ => false,
-    }
+        _ => return false,
+    };
+    free || env.lowering.is_ext_free_impl(&ext_users(env, function, inst))
+}
+
+/// How each user of the extension `inst` reads it (`isExtFreeImpl`'s loop).
+fn ext_users(
+    env: &Env,
+    function: &Function,
+    inst: InstId,
+) -> Vec<ExtUser> {
+    let one = function.instruction(inst);
+    let Some(result) = one.result else { return Vec::new() };
+    function
+        .users(result)
+        .iter()
+        .map(|used| {
+            let user = function.instruction(used.user);
+            match &user.opcode {
+                Opcode::Binary(BinaryOp::Shl) if used.index == 0 && matches!(user.operands[1], Operand::Constant(_)) => ExtUser::ConstShl,
+                Opcode::Cast(CastOp::Trunc) if function.operand_type(env.context, one.operands[0]) == Some(user.ty) => {
+                    ExtUser::SameTypeTrunc
+                }
+                Opcode::GetElementPtr { source } if used.index >= 1 => {
+                    let mut current = *source;
+                    for &index in user.operands[2..=used.index as usize].iter() {
+                        let types = &env.context.types;
+                        current = match types.get(current) {
+                            llrm_mir::types::Type::Array { element, .. }
+                            | llrm_mir::types::Type::Vector { element, .. } => *element,
+                            _ => match index {
+                                Operand::Constant(c) => match env.context.get(c).kind {
+                                    ConstantKind::Int(at) => {
+                                        types.member(current, at as u64).unwrap_or(current)
+                                    }
+                                    _ => return ExtUser::Other,
+                                },
+                                _ => return ExtUser::Other,
+                            },
+                        };
+                    }
+                    ExtUser::Gep { store_bits: env.layout.store_size(&env.context.types, current) * 8 }
+                }
+                _ => ExtUser::Other,
+            }
+        })
+        .collect()
 }
 
 /// `TypePromotionHelper::promoteOperandForTruncAndAnyExt`: the value that
@@ -543,12 +589,13 @@ fn is_ext_load(
 /// stands after the load that feeds it.
 pub fn optimize_ext(
     context: &Context,
+    layout: &llrm_mir::datalayout::DataLayout,
     lowering: &dyn Lowering,
     function: &mut Function,
     state: &mut State,
     ext: InstId,
 ) -> bool {
-    let env = Env { context, lowering };
+    let env = Env { context, layout, lowering };
     let mut tpt = Transaction::new();
     let good = tpt.restoration_point();
     let mut moved = Vec::new();
