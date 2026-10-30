@@ -62,10 +62,9 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use llrm_lir::registers::Regs;
+use llrm_object::assembler::AsmBackend;
 use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::{CodeModel, Format};
-
-use llrm_object::assembler::AsmBackend;
 use llrm_x86::mc::backend::X86Backend;
 
 use crate::backend::masm;
@@ -529,16 +528,18 @@ pub enum CodeLayout {
 pub fn written(
     module: &masm::Module,
     source: &str,
+    objects: &dyn ObjectTarget,
 ) -> Result<Vec<u8>, Error> {
-    written_as(module, source, CodeLayout::OneSegment)
+    written_as(module, source, CodeLayout::OneSegment, objects)
 }
 
 pub fn written_as(
     module: &masm::Module,
     source: &str,
     layout: CodeLayout,
+    objects: &dyn ObjectTarget,
 ) -> Result<Vec<u8>, Error> {
-    written_in(module, source, layout, Format::Omf)
+    written_in(module, source, layout, Format::Omf, objects)
 }
 
 /// `module` as an object file of `format`.
@@ -547,13 +548,14 @@ pub fn written_in(
     source: &str,
     layout: CodeLayout,
     format: Format,
+    objects: &dyn ObjectTarget,
 ) -> Result<Vec<u8>, Error> {
     llrm_support::debug::timed("object write", || {
-        let object = built_inner(module, source, layout, format)?;
-        let bytes = serialized(&object, format)?;
+        let object = built_inner(module, source, layout, format, objects)?;
+        let bytes = serialized(objects, &object, format)?;
         if let Some(dir) = llrm_target::object::all_writers_dir() {
             for other in Format::ALL {
-                let written = if other == format { Ok(bytes.clone()) } else { serialized(&object, other) };
+                let written = if other == format { Ok(bytes.clone()) } else { serialized(objects, &object, other) };
                 match written {
                     Ok(written) => llrm_target::object::record_writer(&dir, other, &written),
                     Err(why) => llrm_target::object::record_refusal(&dir, other, &format!("{why:?}")),
@@ -564,18 +566,21 @@ pub fn written_in(
     })
 }
 
-/// What `format` says of the code it holds, from x86's table (the formats the
-/// layout tests use).
-pub fn asm_info(format: Format) -> llrm_object::AsmInfo {
-    llrm_x86::mc::X86Objects.asm_info(format.name()).unwrap_or_default()
+/// What `format` says of the code it holds, from the target's table.
+pub fn asm_info(
+    objects: &dyn ObjectTarget,
+    format: Format,
+) -> llrm_object::AsmInfo {
+    objects.asm_info(format.name()).unwrap_or_default()
 }
 
 /// `object` as a file of `format`.
 pub fn serialized(
+    objects: &dyn ObjectTarget,
     object: &Object,
     format: Format,
 ) -> Result<Vec<u8>, Error> {
-    Ok(llrm_x86::mc::X86Objects.write_object(format.name(), object)?)
+    Ok(objects.write_object(format.name(), object)?)
 }
 
 /// `module` laid out as an object.
@@ -583,8 +588,9 @@ pub fn built(
     module: &masm::Module,
     source: &str,
     layout: CodeLayout,
+    objects: &dyn ObjectTarget,
 ) -> Result<Object, Error> {
-    built_inner(module, source, layout, Format::Omf)
+    built_inner(module, source, layout, Format::Omf, objects)
 }
 
 /// [`built`] for `format`, which decides the code too (a Windows 64-bit frame
@@ -594,8 +600,9 @@ pub fn built_in(
     source: &str,
     layout: CodeLayout,
     format: Format,
+    objects: &dyn ObjectTarget,
 ) -> Result<Object, Error> {
-    built_inner(module, source, layout, format)
+    built_inner(module, source, layout, format, objects)
 }
 
 /// A Windows 64-bit function probes the frames past a page through `__chkstk`
@@ -618,6 +625,7 @@ fn built_inner(
     source: &str,
     layout: CodeLayout,
     format: Format,
+    objects: &dyn ObjectTarget,
 ) -> Result<Object, Error> {
     let module = &stack_probed(live(module)?, format);
     // A procedure the program put in a segment of its own naming (`code_seg`)
@@ -667,7 +675,15 @@ fn built_inner(
     }
     let mut sizes: IndexMap<String, usize> = IndexMap::default();
     for (index, group) in groups.iter().enumerate() {
-        _code(&mut segments[index], index, module, group, &mut symbols, &mut sizes, format)?;
+        _code(
+            &mut segments[index],
+            index,
+            module,
+            group,
+            &mut symbols,
+            &mut sizes,
+            asm_info(objects, format).pref_align,
+        )?;
     }
     // The BASIC dialect's records name an address by its offset alone, so they
     // need the one code segment the module's code is in; CodeView 4 as C7
@@ -749,9 +765,9 @@ pub fn _code(
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
     sizes: &mut IndexMap<String, usize>,
-    format: Format,
+    pref_align: bool,
 ) -> Result<(), Error> {
-    _code_by(segment, index, module, group, symbols, sizes, asm_info(format).pref_align, |procedure, number| {
+    _code_by(segment, index, module, group, symbols, sizes, pref_align, |procedure, number| {
         masm::listing(procedure, number).map_err(|error| error.0)
     })
 }
@@ -1628,7 +1644,7 @@ mod tests {
              L0_1:\n    mov ax, word ptr _d\n    call far ptr _f\n    retf\n_get endp\nend\n"
         );
         assert_eq!(
-            written(&built, "get.c").unwrap(),
+            written(&built, "get.c", llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap(),
             hex("800700056765742e63a39622000004434f4445084745545f544558540444415441055f44415441064447524f55502a98\
                  07004809000302010a9807004800000504010f9a040006ff025b8c0900025f6400025f6600df900b000001045f676574\
                  000000c1a00d00010000a100009a00000000cb4c9c0a00c401160101cc045602558a02000074")
@@ -1662,7 +1678,9 @@ mod tests {
                 stack: 0,
                 debug: None,
             };
-            let records = omf::parse(&written(&module, "m.c").unwrap()).unwrap();
+            let records =
+                omf::parse(&written(&module, "m.c", llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap())
+                    .unwrap();
             // The code segment, then _DATA.
             records.iter().filter(|one| one.r#type & 0xFE == omf::SEGDEF).map(|one| one.body[0]).collect()
         };
@@ -1786,7 +1804,7 @@ mod tests {
              \x20   retf\n_f endp\nend\n"
         );
         assert_eq!(
-            written(&rich, "rich.c").unwrap(),
+            written(&rich, "rich.c", llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap(),
             hex("80080006726963682e633b9649000004434f444509524943485f544558540444415441055f4441544103425353045f\
                  425353084641525f44415441074641525f534547044441544106534841524544064447524f555033980700482a0003\
                  0201e9980700a80d00050401a298070048050007060106980700681500090801d29807004802000b0a01019a08000c\
@@ -1876,7 +1894,9 @@ mod tests {
             assert_eq!(["_f0", "_f1", "_f2"].map(|name| sizes[name]), [3, 3, 3], "pref_align {pref_align}");
             (["_f0", "_f1", "_f2"].map(|name| symbols[name].1), segment.align)
         };
-        let offsets = |format: Format, size: bool| offsets_with(asm_info(format).pref_align, size);
+        let offsets = |format: Format, size: bool| {
+            offsets_with(asm_info(llrm_target::Target::objects(&llrm_x86_m32::M32), format).pref_align, size)
+        };
         // `.prefalign` was `Format::Elf` by name: a format that only says
         // `pref_align` got `.p2align`.
         assert_eq!(offsets_with(true, false), ([0, 4, 8], 4), "a format that says pref_align");

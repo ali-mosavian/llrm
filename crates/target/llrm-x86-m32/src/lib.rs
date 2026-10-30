@@ -88,6 +88,10 @@ impl M32 {
 }
 
 impl llrm_target::Target for M32 {
+    fn objects(&self) -> &'static dyn llrm_object::ObjectTarget {
+        &llrm_x86::mc::X86Objects
+    }
+
     fn registers(&self) -> &'static llrm_lir::registers::Info {
         &REGISTER_INFO
     }

@@ -106,7 +106,8 @@ pub fn object(
     source: &Path,
     layout: objbuild::CodeLayout,
     format: llrm_target::object::Format,
+    objects: &dyn llrm_object::ObjectTarget,
 ) -> Result<Vec<u8>, String> {
     let name = source.file_name().map(|one| one.to_string_lossy().into_owned()).unwrap_or_default();
-    objbuild::written_in(module, &name, layout, format).map_err(|error| error.to_string())
+    objbuild::written_in(module, &name, layout, format, objects).map_err(|error| error.to_string())
 }

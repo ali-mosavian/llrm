@@ -78,8 +78,13 @@ fn assembled_by(
 ) -> String {
     let module =
         assemble::assembled(&parsed(text), abi, "T_TEXT", ProfileOrName::Name(cpu), segments).expect("assembles");
-    crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
-        .expect("encodes");
+    crate::backend::objbuild::written_as(
+        &module,
+        "t.asm",
+        crate::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .expect("encodes");
     masm::text(&module).expect("prints")
 }
 
@@ -4633,9 +4638,13 @@ fn test_dbg_lines_become_linnum() {
         assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
             .expect("assembles");
     let records = |assembled: &crate::backend::masm::Module| {
-        let object =
-            crate::backend::objbuild::written_as(assembled, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
-                .expect("encodes");
+        let object = crate::backend::objbuild::written_as(
+            assembled,
+            "t.asm",
+            crate::backend::objbuild::CodeLayout::OneSegment,
+            llrm_target::Target::objects(&llrm_x86_m32::M32),
+        )
+        .expect("encodes");
         llrm_omf::omf::parse(&object).expect("parses")
     };
     // Lines alone are a BASIC statement table's, not -g.
@@ -5500,9 +5509,13 @@ fn decoded_object(text: &str) -> (Vec<iced_x86::Instruction>, Vec<usize>, Vec<us
     let module =
         assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
             .expect("assembles");
-    let bytes =
-        crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
-            .expect("encodes");
+    let bytes = crate::backend::objbuild::written_as(
+        &module,
+        "t.asm",
+        crate::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .expect("encodes");
     let records = omf::parse(&bytes).expect("parses");
     let (code, _, size) = omf::code_segment(&records).expect("a code segment");
     let image = omf::segment_image(&records, code, size);

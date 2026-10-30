@@ -23,7 +23,11 @@ fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_codegen::driver::Options { pipeline, ..llrm_driver::m16_options_old(machine) };
     let built = super::compile::selected(&text, name, None, &options).expect("compiles");
-    omf::parse(&objbuild::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
+    omf::parse(
+        &objbuild::written(&built, &format!("{name}.c"), llrm_target::Target::objects(&llrm_x86_m32::M32))
+            .expect("writes"),
+    )
+    .expect("parses")
 }
 
 /// Every parameter, local, static and global with its C type; `(void)`
@@ -153,7 +157,13 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_codegen::driver::Options { pipeline, ..llrm_driver::m16_options_old(machine) };
     let built = super::compile::selected(&text, "debug", None, &options).expect("compiles");
-    let object = objbuild::built(&built, "debug.c", objbuild::CodeLayout::OneSegment).expect("builds");
+    let object = objbuild::built(
+        &built,
+        "debug.c",
+        objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .expect("builds");
     let info = object.debug.expect("-g's information rides on the object");
     let f = info.functions.iter().find(|one| one.name == "f").expect("f");
     let kinds: Vec<(&str, Kind)> = f.variables.iter().map(|one| (one.name.as_str(), one.kind)).collect();

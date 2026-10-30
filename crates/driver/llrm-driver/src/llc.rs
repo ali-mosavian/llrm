@@ -640,7 +640,8 @@ fn compile(
     if flags.assembly {
         write_output(&output, masm::text(&built).map_err(|error| error.to_string())?)
     } else {
-        let bytes = objbuild::written_in(&built, file, objbuild::CodeLayout::OneSegment, format)
+        let objects = bound(flags, without_triple(&text).0.as_deref())?.target.objects();
+        let bytes = objbuild::written_in(&built, file, objbuild::CodeLayout::OneSegment, format, objects)
             .map_err(|error| error.to_string())?;
         write_output(&output, bytes)
     }

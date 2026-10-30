@@ -340,6 +340,11 @@ pub trait Target {
     /// The target's name, for messages.
     fn name(&self) -> &'static str;
 
+    /// Its object writers and what each format says of the code it holds
+    /// (LLVM's `MCObjectWriter` and `MCAsmInfo`), which the backend is handed
+    /// instead of naming a target.
+    fn objects(&self) -> &'static dyn llrm_object::ObjectTarget;
+
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
 

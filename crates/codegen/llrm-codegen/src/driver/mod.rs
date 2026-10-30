@@ -170,7 +170,7 @@ impl Options {
     fn format_info(&self) -> llrm_object::AsmInfo {
         use llrm_target::object::Format;
         let format = Format::parse(self.object_format).unwrap_or(Format::Elf);
-        crate::backend::objbuild::asm_info(format)
+        crate::backend::objbuild::asm_info(self.arch.objects(), format)
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {

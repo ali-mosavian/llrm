@@ -87,6 +87,10 @@ fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::targ
 }
 
 impl llrm_target::Target for M16 {
+    fn objects(&self) -> &'static dyn llrm_object::ObjectTarget {
+        &llrm_x86::mc::X86Objects
+    }
+
     fn registers(&self) -> &'static llrm_lir::registers::Info {
         &REGISTER_INFO
     }

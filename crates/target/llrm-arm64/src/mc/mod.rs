@@ -35,15 +35,6 @@ impl ObjectTarget for Arm64Objects {
             }
             _ => object,
         };
-        // `.eh_frame` goes in whether or not `-g` is on, for the frames the
-        // backend declared; Mach-O has compact unwind instead.
-        let unwound;
-        let object = if format == "elf" && !object.frames.is_empty() {
-            unwound = llrm_dwarf::eh_frame::expanded(object, &unwind::eh_target())?;
-            &unwound
-        } else {
-            object
-        };
         match format {
             "macho" if !object.frames.is_empty() => llrm_macho::write(&with_unwind(object)?, &macho::Arm64MachO),
             "macho" => llrm_macho::write(object, &macho::Arm64MachO),

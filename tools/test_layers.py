@@ -136,3 +136,20 @@ def test_llrm_c_lib_tests_build_without_the_root_enabling_its_feature():
     """llrm-c became optional in the root: `--workspace --all-targets` then compiled its lib tests without `toolchain` and stopped at the compile_error (#5586 refused 00:51)."""
     done = subprocess.run(["cargo", "check", "-p", "llrm-c", "--lib", "--tests"], cwd=ROOT, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr[-600:]
+
+
+def test_codegen_names_no_object_target():
+    """`objbuild` wrote `X86Objects` by name, a second dispatch beside arm64's; codegen is handed the target's `ObjectTarget` (`Target::objects`)."""
+    named = sorted(
+        str(path.relative_to(ROOT))
+        for path in (ROOT / "crates" / "codegen" / "llrm-codegen" / "src").rglob("*.rs")
+        if "X86Objects" in path.read_text() or "Arm64Objects" in path.read_text()
+    )
+    assert not named, named
+
+
+def test_llrm_target_depends_on_the_object_crate_alone_among_the_mc_crates():
+    """`Target::objects` returns an `ObjectTarget`: the one edge from the target interface to the mc layer."""
+    target = next(p for p in workspace() if p["name"] == "llrm-target")
+    mc = {d["name"] for d in target["dependencies"] if d["kind"] is None and d["name"].startswith(("llrm-elf", "llrm-coff", "llrm-codeview", "llrm-macho", "llrm-omf", "llrm-dwarf", "llrm-object"))}
+    assert mc == {"llrm-object"}, sorted(mc)

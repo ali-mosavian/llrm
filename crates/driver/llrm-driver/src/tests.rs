@@ -1359,6 +1359,7 @@ fn a_dwarf_2_object_from_clang_leaves_out_the_files_md5() {
         "dbgfix.ll",
         llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
     )
     .unwrap();
 }
@@ -1385,6 +1386,7 @@ fn a_variable_in_two_registers_is_written_to_coff_as_subfields() {
         "dbgpieces.ll",
         llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
     )
     .unwrap();
 }
@@ -1586,6 +1588,7 @@ fn eh_frame_in(
         "f.ll",
         llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
     )
     .unwrap();
     let wide = bytes[4] == 2;
@@ -1723,6 +1726,7 @@ fn a_big_coff_frame_is_probed_before_it_is_allocated() {
             "f.ll",
             llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
             format,
+            llrm_target::Target::objects(&llrm_x86_m32::M32),
         )
         .unwrap();
         let frame = object.frames.first().expect("a declared frame").clone();
@@ -1764,9 +1768,13 @@ fn the_declared_win64_prologue_is_what_the_code_bytes_say() {
         "{SYSV}declare i32 @g(i32)\ndefine i32 @f(i32 %a, i32 %b) \"disable-tail-calls\"=\"true\" {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @g(i32 %b)\n  %s = add i32 %x, %y\n  %t = add i32 %s, %a\n  ret i32 %t\n}}\n"
     );
     let (built, _) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
-    let object =
-        llrm_codegen::backend::objbuild::built(&built, "f.ll", llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
-            .unwrap();
+    let object = llrm_codegen::backend::objbuild::built(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
     let frame = object.frames.first().expect("a declared frame");
     assert!(!frame.seh.is_empty(), "no .seh_* directive reached the frame");
     let section = &object.sections[frame.section];

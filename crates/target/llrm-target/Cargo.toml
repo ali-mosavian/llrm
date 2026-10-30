@@ -8,5 +8,6 @@ description = "What every target states: its platform description, read from TOM
 [dependencies]
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
+llrm-object = { workspace = true }
 iced-x86 = { workspace = true }
 toml = { workspace = true }

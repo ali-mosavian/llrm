@@ -238,7 +238,13 @@ pub fn main(argv: &[String]) -> i32 {
         let bytes = if args.flags.assembly {
             masm::text(&module).map_err(|error| error.to_string())?.into_bytes()
         } else {
-            nib::object(&module, &args.source, args.layout, args.flags.format(&*args.codegen.arch)?)?
+            nib::object(
+                &module,
+                &args.source,
+                args.layout,
+                args.flags.format(&*args.codegen.arch)?,
+                args.codegen.arch.objects(),
+            )?
         };
         llrm_codegen::support::debug::timed("write output", || {
             llrm_codegen::driver::flags::write_output(&output, &bytes)
@@ -268,6 +274,9 @@ mod tests {
     struct Bare(llrm_x86_m16::M16);
 
     impl Target for Bare {
+        fn objects(&self) -> &'static dyn llrm_object::ObjectTarget {
+            self.0.objects()
+        }
         fn name(&self) -> &'static str {
             self.0.name()
         }

@@ -67,6 +67,7 @@ fn compiled_source(
             Path::new("probe.nib"),
             CodeLayout::OneSegment,
             llrm_target::object::Format::Omf,
+            llrm_target::Target::objects(&llrm_x86_m16::M16),
         )
         .expect("writes"),
     )
@@ -174,10 +175,15 @@ fn model_of(source: &str) -> llrm_object::debug::Info {
         ..llrm_driver::m16_options_old(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
-    llrm_codegen::backend::objbuild::built(&module, "probe.nib", CodeLayout::OneSegment)
-        .expect("builds")
-        .debug
-        .expect("-g's information")
+    llrm_codegen::backend::objbuild::built(
+        &module,
+        "probe.nib",
+        CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .expect("builds")
+    .debug
+    .expect("-g's information")
 }
 
 /// `unused` is a parameter nothing reads, so dead-argument elimination takes it
@@ -243,10 +249,15 @@ fn segmented_model(
     };
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
     let layout = if procedure_segments { CodeLayout::PerProcedure } else { CodeLayout::OneSegment };
-    llrm_codegen::backend::objbuild::built(&module, "probe.nib", layout)
-        .expect("builds")
-        .debug
-        .expect("-g's information")
+    llrm_codegen::backend::objbuild::built(
+        &module,
+        "probe.nib",
+        layout,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .expect("builds")
+    .debug
+    .expect("-g's information")
 }
 
 /// `-g` with a code segment per procedure was refused, for the one-segment form
@@ -300,7 +311,13 @@ fn regparm_model_of(
         ..llrm_driver::m16_options_old(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
-    let object = llrm_codegen::backend::objbuild::built(&module, "probe.nib", CodeLayout::OneSegment).expect("builds");
+    let object = llrm_codegen::backend::objbuild::built(
+        &module,
+        "probe.nib",
+        CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .expect("builds");
     let code = object.sections.iter().find(|one| one.role == llrm_object::Role::Text).expect("code").image.clone();
     (object.debug.expect("-g's information"), code)
 }
@@ -407,6 +424,7 @@ fn compiled_regparm() -> Vec<Rc<omf::Record>> {
             Path::new("probe.nib"),
             CodeLayout::OneSegment,
             llrm_target::object::Format::Omf,
+            llrm_target::Target::objects(&llrm_x86_m16::M16),
         )
         .expect("writes"),
     )
