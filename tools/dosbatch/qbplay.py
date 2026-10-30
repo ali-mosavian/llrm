@@ -53,7 +53,9 @@ class Session:
             port = probe.getsockname()[1]
             probe.close()
             (work / "play.conf").write_text(conf + f"[autoexec]\nmount c {work}\nc:\n")
-            env = {**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSBOX_DEBUG_PORT": str(port)}
+            # TZ is pinned: the fork turns "virtual time start" into the guest's time of day in the host's zone, and a program that seeds RND
+            # from TIMER (NIBBLES) then plays another game on a UTC runner than on a CET dev box.
+            env = {**os.environ, "TZ": "UTC", "SDL_VIDEODRIVER": "dummy", "DOSBOX_DEBUG_PORT": str(port)}
             self.process = subprocess.Popen(
                 [str(dosbatch.DOSBOX), "-nolog", "-conf", str(work / "play.conf")],
                 env=env,
