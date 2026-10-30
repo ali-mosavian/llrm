@@ -231,3 +231,29 @@ fn an_inexact_single_quotient_is_not_folded_under_extended_evaluation() {
     assert_eq!(divide(false), (true, true));
     assert_eq!(divide(true), (false, true));
 }
+
+/// Two loads of one address on one chain that differ only in their atomic
+/// ordering are two nodes: merged, an `acquire` load would be selected as the
+/// plain load its twin is.
+#[test]
+fn loads_that_differ_in_ordering_are_not_merged() {
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+    use llrm_mir::opcode::AtomicOrdering;
+    let mut dag = dag();
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let info = |ordering| MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Unknown,
+        ext: None,
+        space: 0,
+        ordering,
+    };
+    let plain = dag.get_load(EVT::I32, chain, ptr, info(None));
+    let acquire = dag.get_load(EVT::I32, chain, ptr, info(Some(AtomicOrdering::Acquire)));
+    let again = dag.get_load(EVT::I32, chain, ptr, info(Some(AtomicOrdering::Acquire)));
+    assert_ne!(plain.node, acquire.node);
+    assert_eq!(acquire.node, again.node, "equal accesses still share one node");
+}
