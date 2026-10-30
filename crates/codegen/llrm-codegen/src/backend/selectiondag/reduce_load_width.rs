@@ -39,7 +39,18 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if !vt.is_integer() || vt.size_in_bits() > 64 {
             return None;
         }
-        let n0 = self.dag.operand(node, 0);
+        let mut n0 = self.dag.operand(node, 0);
+        // Look through a freeze between the `and` and the load; it is put back on the narrowed
+        // load. DEVIATE: only a freeze with one use. Exit: x86 judged.
+        let mut frozen = None;
+        if op == ISD::And
+            && self.hooks.reduce_load_width_through_freeze()
+            && self.dag.opcode(n0) == ISD::Freeze
+            && self.dag.has_one_use(n0.node)
+        {
+            frozen = Some(n0);
+            n0 = self.dag.operand(n0, 0);
+        }
         let mut ext_type: Option<LoadExt>;
         let mut ext_vt: EVT;
         let mut shift = 0u32;
@@ -145,6 +156,18 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         };
         self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: new.node, res: 1 });
         let mut result = new;
+        if frozen.is_some() {
+            result = self.dag.get_node(ISD::Freeze, vt, &[result]);
+            let kind = match ext_type {
+                Some(LoadExt::ZExtLoad) => Some(ISD::AssertZext),
+                Some(LoadExt::SExtLoad) => Some(ISD::AssertSext),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                let asserted = self.dag.get_value_type_node(ext_vt);
+                result = self.dag.get_node(kind, vt, &[result, asserted]);
+            }
+        }
         if shifted_offset != 0 {
             let by = self.dag.get_constant(u128::from(shifted_offset), vt);
             result = self.dag.get_node(ISD::Shl, vt, &[result, by]);
