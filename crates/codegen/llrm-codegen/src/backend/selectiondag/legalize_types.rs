@@ -667,6 +667,12 @@ impl<'a> TypeLegalizer<'a> {
                     self.set_promoted_integer(value, joined);
                     return Ok(());
                 }
+                // `PromoteIntRes_LOAD`: a non-extending load becomes an any-extending one.
+                let info = if info.ext.is_none() && info.mem_vt != to {
+                    super::dag::MemInfo { ext: Some(super::actions::LoadExt::ExtLoad), ..info }
+                } else {
+                    info
+                };
                 let loaded = self.dag.get_load(to, chain, ptr, info);
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: loaded.node, res: 1 });
                 loaded

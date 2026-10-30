@@ -846,3 +846,11 @@ fn a_replaced_brcond_does_not_keep_its_compares_alive() {
     let ir = "declare void @other()\ndefine void @f(i64 %a, i64 %b, i64 %c) {\n  %m = and i64 %a, 1\n  %z = icmp eq i64 %m, 0\n  %lt = icmp ult i64 %b, %c\n  %o = select i1 %z, i1 true, i1 %lt\n  br i1 %o, label %t, label %x\nt:\n  tail call void @other()\n  ret void\nx:\n  ret void\n}";
     assert_eq!(selected(ir).unwrap()[0], ["ANDXri", "SUBSXrr", "CCMPXi", "Bcc", "B"]);
 }
+
+/// `i8` read-add-write of a global selected `LDRWui`: a 4-byte read of a 1-byte global (the promoted
+/// load lost its any-extend). The pin loads with `LDRBBui`.
+#[test]
+fn a_promoted_byte_load_reads_one_byte() {
+    let ir = "@a = global i8 0\ndefine void @f() {\n  %l = load i8, ptr @a, align 1\n  %a = add i8 %l, 1\n  store i8 %a, ptr @a, align 1\n  ret void\n}";
+    assert_eq!(selected(ir).unwrap(), [["ADRP", "LDRBBui", "ADDWri", "STRBBui", "RET_ReallyLR"]]);
+}
