@@ -196,6 +196,7 @@ pub fn select_block(
     if llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
         eprintln!("{}", dag.dump());
     }
+    llrm_codegen::backend::selectiondag::dag_select::remove_assertions(dag);
     let selector = Selector::new(match cpu {
         Cpu::Wasm32 => wasm_wasm32::TABLE,
         Cpu::Wasm64 => wasm_wasm64::TABLE,

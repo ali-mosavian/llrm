@@ -89,7 +89,7 @@ pub fn select_block(
 /// `SelectCodeCommon` for `AssertSext` and `AssertZext`: each is its operand.
 /// DEVIATE SD43: the pin drops them while matching; here ahead of the matcher,
 /// which has no id for them. Same selected code.
-fn remove_assertions(dag: &mut SelectionDAG) {
+pub fn remove_assertions(dag: &mut SelectionDAG) {
     for node in dag.node_ids().collect::<Vec<_>>() {
         let value = SDValue { node, res: 0 };
         if matches!(dag.opcode(value), ISD::AssertSext | ISD::AssertZext) {

@@ -176,3 +176,10 @@ fn float_libcalls() {
 fn memory_intrinsics() {
     check("mem_intrinsics");
 }
+
+/// A conversion between a float and an `i8` or `i16` was refused ("promote operand" of
+/// `sitofp`, "promote result" of `fptosi`), then `CannotSelect(AssertSext)`.
+#[test]
+fn narrow_integer_conversions() {
+    check("float_narrow");
+}
