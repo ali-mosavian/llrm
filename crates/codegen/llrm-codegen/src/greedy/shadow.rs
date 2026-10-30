@@ -1191,6 +1191,9 @@ pub fn decide_with_split(
                 .collect::<std::collections::BTreeSet<u32>>()
         })
     };
+    // A load the instruction calls invariant needs no proof (D-I exit).
+    let invariant: std::collections::BTreeSet<u32> =
+        invariant.into_iter().chain(super::remat::flagged_loads(body)).collect();
     tables.remat.borrow_mut().extend(super::remat::values(body, &invariant));
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         if let [value] = one.defines.as_slice()
