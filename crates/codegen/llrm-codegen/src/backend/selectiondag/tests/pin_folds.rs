@@ -9,7 +9,11 @@ use crate::backend::selectiondag::{MemBase, MemInfo};
 struct Asks;
 
 impl CombineHooks for Asks {
-    fn should_transform_signed_truncation_check(&self, _vt: EVT, _kept_bits: u32) -> bool {
+    fn should_transform_signed_truncation_check(
+        &self,
+        _vt: EVT,
+        _kept_bits: u32,
+    ) -> bool {
         true
     }
     fn fold_sra_of_trunc_of_shift(&self) -> bool {
@@ -21,7 +25,10 @@ impl CombineHooks for Asks {
     fn widen_multiply_high_any_width(&self) -> bool {
         true
     }
-    fn shift_amount_type(&self, shifted: EVT) -> EVT {
+    fn shift_amount_type(
+        &self,
+        shifted: EVT,
+    ) -> EVT {
         shifted
     }
     fn fold_xor_of_and_with_mask(&self) -> bool {
@@ -75,8 +82,14 @@ fn a_target_that_does_not_ask_keeps_the_xor_of_the_masked_value() {
 
 fn sext_in_reg_of_extload(dag: &mut SelectionDAG) {
     let (ptr, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
-    let info =
-        MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(0), ext: Some(LoadExt::ExtLoad), space: 0 };
+    let info = MemInfo {
+        mem_vt: EVT::I8,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(0),
+        ext: Some(LoadExt::ExtLoad),
+        space: 0,
+    };
     let load = dag.get_ext_load(LoadExt::ExtLoad, EVT::I32, chain, ptr, info);
     let narrow = dag.get_value_type_node(EVT::I8);
     let root = dag.get_node(ISD::SignExtendInReg, EVT::I32, &[load, narrow]);
@@ -106,7 +119,8 @@ fn a_target_that_does_not_ask_keeps_the_sign_extension_in_the_register() {
 
 fn frozen_compare(dag: &mut SelectionDAG) {
     let a = dag.get_register(EVT::I32, 5);
-    // A shift by a variable amount may be poison, so the combiner cannot drop the freeze.
+    // A shift by a variable amount may be poison, so the combiner cannot drop
+    // the freeze.
     let amount = dag.get_register(EVT::I32, 6);
     let loaded = dag.get_node(ISD::Shl, EVT::I32, &[a, amount]);
     let setcc = dag.get_setcc(EVT::I32, a, loaded, CondCode::SetLt);
@@ -186,7 +200,6 @@ fn a_target_that_does_not_ask_keeps_the_two_byte_stores() {
     assert!(!is_one_halfword_store(&dag));
 }
 
-
 /// Declines the bitwise form of a logic of compares, as AArch64 does.
 struct Declines;
 
@@ -205,8 +218,9 @@ fn and_of_equalities(dag: &mut SelectionDAG) {
     dag.set_root(root);
 }
 
-/// Two byte compares joined by `and` were one `xor`/`or` compare on AArch64 (x86's
-/// `convertSetCCLogicToBitwiseLogic`); the pin's AArch64 leaves them two compares.
+/// Two byte compares joined by `and` were one `xor`/`or` compare on AArch64
+/// (x86's `convertSetCCLogicToBitwiseLogic`); the pin's AArch64 leaves them two
+/// compares.
 #[test]
 fn a_target_that_declines_keeps_the_and_of_two_equalities() {
     let mut dag = dag();
@@ -231,7 +245,8 @@ fn or_of_and_with_one_operand(dag: &mut SelectionDAG) -> SDValue {
     a
 }
 
-/// `(a & b) | a` stayed an `and` and an `or`; the pin's `visitORCommutative` makes it `a`.
+/// `(a & b) | a` stayed an `and` and an `or`; the pin's `visitORCommutative`
+/// makes it `a`.
 #[test]
 fn an_or_of_an_and_with_one_of_its_operands_is_that_operand() {
     let mut dag = dag();
@@ -252,9 +267,20 @@ fn masked_frozen_extload(dag: &mut SelectionDAG) {
     // a pointer that may be poison, so the freeze is not dropped
     let (base, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
     let one = dag.get_constant(1, EVT::I32);
-    let ptr = dag.get_node_flags(ISD::Add, EVT::I32, &[base, one], SDNodeFlags::default().with(SDNodeFlags::NO_UNSIGNED_WRAP, true));
-    let info =
-        MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(0), ext: Some(LoadExt::ExtLoad), space: 0 };
+    let ptr = dag.get_node_flags(
+        ISD::Add,
+        EVT::I32,
+        &[base, one],
+        SDNodeFlags::default().with(SDNodeFlags::NO_UNSIGNED_WRAP, true),
+    );
+    let info = MemInfo {
+        mem_vt: EVT::I8,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(0),
+        ext: Some(LoadExt::ExtLoad),
+        space: 0,
+    };
     let load = dag.get_ext_load(LoadExt::ExtLoad, EVT::I32, chain, ptr, info);
     let frozen = dag.get_node(ISD::Freeze, EVT::I32, &[load]);
     let mask = dag.get_constant(0xff, EVT::I32);
@@ -262,9 +288,10 @@ fn masked_frozen_extload(dag: &mut SelectionDAG) {
     dag.set_root(root);
 }
 
-/// `and (freeze (extload i8)), 255` kept the load wide and the mask (`LDURWi` and `ANDWri` where
-/// the pin has `LDRBBui`): the pin's `ReduceLoadWidth` looks through the freeze, narrows the
-/// load to a zero-extending one and puts the freeze, and an `AssertZext`, back on it.
+/// `and (freeze (extload i8)), 255` kept the load wide and the mask (`LDURWi`
+/// and `ANDWri` where the pin has `LDRBBui`): the pin's `ReduceLoadWidth` looks
+/// through the freeze, narrows the load to a zero-extending one and puts the
+/// freeze, and an `AssertZext`, back on it.
 #[test]
 fn an_and_mask_of_a_frozen_extending_load_is_a_frozen_zero_extending_load() {
     let mut dag = dag();
@@ -296,7 +323,10 @@ fn no_high_multiply() -> TargetLowering {
     tli
 }
 
-fn has_wide_multiply(dag: &SelectionDAG, value: SDValue) -> bool {
+fn has_wide_multiply(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
     let node = dag.node(value);
     (dag.opcode(value) == ISD::Mul && dag.value_type(value) == EVT::I64)
         || node.ops.iter().any(|&op| has_wide_multiply(dag, op))
