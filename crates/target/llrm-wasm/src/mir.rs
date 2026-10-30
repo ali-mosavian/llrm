@@ -73,6 +73,17 @@ pub enum Operand {
     Def(VReg),
     Use(VReg),
     Imm(i64),
+    /// A symbol and addend, by index into [`Function::symbols`].
+    Sym(u32),
+    /// A basic block, by its number in the IR function.
+    Block(u32),
+}
+
+impl Operand {
+    /// An operand that is no register: printed and encoded after the opcode.
+    pub fn is_immediate(&self) -> bool {
+        !matches!(self, Operand::Def(_) | Operand::Use(_))
+    }
 }
 
 /// The one `MachineMemOperand` of a load or store: its size and alignment in
@@ -120,6 +131,8 @@ pub struct Function {
     /// `MFI.getLocals()`: the types of the locals after the parameters.
     pub locals: Vec<ValType>,
     pub blocks: Vec<Vec<Inst>>,
+    /// The symbol and addend of each [`Operand::Sym`].
+    pub symbols: Vec<(String, i64)>,
     vregs: Vec<ValType>,
     stackified: Vec<bool>,
 }
@@ -127,6 +140,25 @@ pub struct Function {
 impl Function {
     pub fn new(name: &str) -> Function {
         Function { name: name.to_string(), blocks: vec![Vec::new()], ..Function::default() }
+    }
+
+    /// The index of `name + offset` in [`Function::symbols`].
+    pub fn symbol(
+        &mut self,
+        name: &str,
+        offset: i64,
+    ) -> u32 {
+        let at = self
+            .symbols
+            .iter()
+            .position(|(n, o)| n == name && *o == offset)
+            .unwrap_or_else(
+                || {
+                    self.symbols.push((name.to_string(), offset));
+                    self.symbols.len() - 1
+                },
+            );
+        at as u32
     }
 
     /// `MRI.createVirtualRegister`.

@@ -7,6 +7,8 @@ isd = "WebAssemblyISD::"
 llvm_dir = "WebAssembly"
 td = "WebAssembly.td"
 cpus = ["wasm32", "wasm64"]
+# The registers the hand code names (the others are virtual).
+registers = ["ARGUMENTS", "SP32", "SP64", "VALUE_STACK"]
 # The header carries the instruction and register enums and the OPERAND_* types; the node enum is tblgen's.
 ids_includes = [
   '#include "MCTargetDesc/WebAssemblyMCTargetDesc.h"',

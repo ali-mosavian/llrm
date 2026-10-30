@@ -141,8 +141,11 @@ pub fn encode_instruction(
     } else {
         panic!("opcode {} is a pseudo or has no encoding", asm.text);
     }
-    let immediates = inst.operands.iter().filter_map(|o| if let Operand::Imm(v) = o { Some(*v) } else { None });
-    for (kind, value) in asm.kinds.iter().zip(immediates) {
+    let immediates = inst.operands.iter().filter(|o| o.is_immediate());
+    for (kind, operand) in asm.kinds.iter().zip(immediates) {
+        let Operand::Imm(value) = *operand else {
+            panic!("operand {operand:?} of {} needs a relocation, not written yet", asm.text)
+        };
         match *kind {
             "i32imm_op" => sleb(out, i64::from(value as i32)),
             "i64imm_op" => sleb(out, value),

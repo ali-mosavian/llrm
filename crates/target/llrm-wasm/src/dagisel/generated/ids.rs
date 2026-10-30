@@ -833,6 +833,13 @@ pub mod reg {
     pub const V128RegClassID: u16 = 7;
     pub const VALUE_STACK: u16 = 2;
     pub const wasm_ptr_rc: u16 = 0;
+    /// The record's `registers`, by number.
+    pub const REGISTERS: &[(u16, &str)] = &[
+        (1, "ARGUMENTS"),
+        (2, "VALUE_STACK"),
+        (8, "SP32"),
+        (9, "SP64"),
+    ];
 }
 
 pub mod generic {
