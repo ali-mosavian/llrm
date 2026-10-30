@@ -186,6 +186,14 @@ fn appending_linkage_is_read_and_printed_as_llvm_spells_it() {
     assert_eq!(round(&once), once);
 }
 
+/// `@llvm.used`'s `section "llvm.metadata"` was read and then dropped by the
+/// printer, so a printed module lost it (the pipeline's text round trips).
+#[test]
+fn a_global_section_survives_printing() {
+    let text = "@llvm.used = appending global [1 x ptr] [ptr @f], section \"llvm.metadata\"\n\ndefine void @f() {\n  ret void\n}\n";
+    assert_eq!(round(text), text);
+}
+
 #[test]
 fn every_invalid_fixture_is_refused_for_its_reason() {
     let fixtures = fixtures(true);
