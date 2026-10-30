@@ -34,13 +34,14 @@ use llrm_support::hash::HashSet;
 
 use super::actions::TargetLowering;
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
-use super::dagisel_adapter::DagisAdapter;
+use super::dag_target::{DagTarget, Phases, Select, select_units};
+use super::dagisel_adapter::{DagisAdapter, PinRegisters};
 use super::emit::{EmitContext, EmitState, Emitted, emit_in};
 use super::isd::ISD;
 use super::legalize_dag;
 use super::legalize_dag::DagLegalizer;
 use super::legalize_types::TypeLegalizer;
-use super::schedule::{SchedInfo, schedule};
+use super::schedule::SchedInfo;
 use super::x86_lowering::X86Lowering;
 use super::{SDValue, SelectionDAG};
 
@@ -53,6 +54,50 @@ pub enum Refusal {
     /// The selector named a register the target has no id for.
     UnknownRegister(String),
     Emit(super::emit::EmitError),
+}
+
+/// x86 as a [`DagTarget`]: its lowering tables, hooks and selector tables.
+pub struct X86Target<'a> {
+    pub tli: &'a TargetLowering,
+    pub lowering: &'a mut X86Lowering,
+    pub chooser: X86Chooser<'a>,
+    pub arch: &'a dyn llrm_target::Target,
+}
+
+/// x86's `Select`: the pin's hand matchers, then the generated table.
+pub struct X86Chooser<'a> {
+    pub selector: &'a Selector,
+    pub hooks: &'a mut X86Hooks,
+}
+
+impl Select for X86Chooser<'_> {
+    fn select(
+        &mut self,
+        adapter: &mut DagisAdapter<'_>,
+        node: u32,
+    ) -> Outcome {
+        select_node(self.selector, adapter, self.hooks, node)
+    }
+}
+
+impl DagTarget for X86Target<'_> {
+    type Lowering = X86Lowering;
+
+    fn phases(&mut self) -> Phases<'_, X86Lowering> {
+        Phases { tli: self.tli, lowering: &mut *self.lowering, arch: Some(self.arch) }
+    }
+
+    fn selection(&mut self) -> (&dyn PinRegisters, &mut dyn Select) {
+        (&super::dagisel_adapter::X86Registers, &mut self.chooser)
+    }
+
+    fn preprocess(
+        &mut self,
+        dag: &mut SelectionDAG,
+        temporaries: &mut dyn super::x86_preprocess::FrameObjects,
+    ) {
+        super::x86_preprocess::preprocess(dag, temporaries, self.lowering.sse2);
+    }
 }
 
 /// The pin's pipeline for one block's DAG.
@@ -69,20 +114,12 @@ pub fn select_block(
     arch: &dyn llrm_target::Target,
     temporaries: &mut dyn super::x86_preprocess::FrameObjects,
 ) -> Result<Emitted, Refusal> {
-    // The scratch slots the legalizers ask for are frame objects numbered from
-    // here; they are made as the legalizers finish, before anything else is.
-    dag.first_temporary = temporaries.objects();
-    legalized(dag, tli, lowering, arch)?;
-    for (at, (size, align)) in std::mem::take(&mut dag.temporaries).into_iter().enumerate() {
-        let made = temporaries.create_stack_temporary(size, align);
-        debug_assert_eq!(made, dag.first_temporary + at as i32);
-    }
-    // `PreprocessISelDAG`: the rewrites that need no matcher.
-    super::x86_preprocess::preprocess(dag, temporaries, lowering.sse2);
-    remove_assertions(dag);
-    do_instruction_selection(dag, selector, hooks)?;
-    let root = dag.get_root();
-    let units = schedule(dag, root, info);
+    let units = select_units(
+        dag,
+        &mut X86Target { tli, lowering, chooser: X86Chooser { selector, hooks }, arch },
+        info,
+        temporaries,
+    )?;
     emit_in(dag, &units, ctx, state, first_at).map_err(Refusal::Emit)
 }
 
@@ -152,6 +189,7 @@ fn refused_legalize(
 /// they read (`allnodes` in the pin is in topological order; here creation
 /// order is not, since a lowering makes the operand it replaces after its
 /// user).
+#[cfg(test)]
 pub(crate) fn do_instruction_selection(
     dag: &mut SelectionDAG,
     selector: &Selector,

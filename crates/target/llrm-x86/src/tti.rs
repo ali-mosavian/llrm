@@ -555,6 +555,18 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
     }
 
+    // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
+    // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
+    // divides to `Expand` (L340) and leaves the two-result ones at the base
+    // class's `Legal`, so every register type has one.
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        self.is_type_legal(Ty::Int(bits))
+    }
+
     fn is_type_legal(
         &self,
         ty: Ty,

@@ -249,6 +249,10 @@ fn plain_char_is_unsigned_only_under_the_watcom_abi() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.c"), "int f(char *p) { return *p; }\n").unwrap();
     for (row, plain) in [("x86_16-dos", "-mabi=cdecl"), ("x86_32-dos", "-mabi=sysv")] {
+        if row == "x86_16-dos" && std::env::var_os("LLRM_CLANG_M16").is_none() {
+            eprintln!("skipped {row}: LLRM_CLANG_M16 names no i8086 clang");
+            continue;
+        }
         for (abi, unsigned) in [(plain, false), ("-mabi=watcom", true)] {
             let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
                 .env("LLRM_CC_TARGET", row)

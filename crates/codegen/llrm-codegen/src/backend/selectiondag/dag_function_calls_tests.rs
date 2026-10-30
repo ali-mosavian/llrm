@@ -1330,3 +1330,61 @@ fn a_call_disturbs_the_registers_its_arguments_arrive_in() {
     let named = |name: &str| regs.root(llrm_x86_m32::M32.register_named(name));
     assert!(disturbs.contains(&named("edx")) && disturbs.contains(&named("ebx")), "{disturbs:?}");
 }
+
+const MINSIZE_CONSTANT_ARGUMENTS: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare void @g(i32, i32)
+define void @f() minsize {
+entry:
+  call void @g(i32 0, i32 -1)
+  ret void
+}
+";
+
+/// At minsize 0 and -1 are stored with `and [m], 0` / `or [m], -1`; the
+/// arguments stayed stores (`sub sp, 8; mov bx, sp; and [bx], 0`, +4 B
+/// each, 4383 B over BAS at -Oz) where the pin's `classifyInstruction`
+/// converts both to pushes.
+#[test]
+fn minsize_constant_arguments_are_pushed_not_stored() {
+    let module = crate::testing::module(MINSIZE_CONSTANT_ARGUMENTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    let call = names.iter().position(|n| n == "call").expect("a call");
+    assert_eq!(&names[call - 2..call], ["push", "push"], "both arguments are pushed: {names:?}");
+    assert!(!names.iter().any(|n| n == "and" || n == "or"), "no constant store is left: {names:?}");
+}
+
+const MINSIZE_CONSTANT_STORES: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+@a = global i16 7
+@b = global i32 7
+define void @f() minsize {
+entry:
+  store i16 0, ptr @a
+  store i32 -1, ptr @b
+  ret void
+}
+";
+
+/// The pin's `OptForMinSize` store patterns (X86InstrCompiler.td:1308) key on
+/// the function's `minsize`, which the selector ignored: `mov dword [b], -1`
+/// (9 B at m16) stayed where `or dword [b], -1` is 6.
+#[test]
+fn minsize_stores_of_zero_and_minus_one_are_and_or() {
+    let module = crate::testing::module(MINSIZE_CONSTANT_STORES).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    assert!(names.iter().any(|n| n == "and") && names.iter().any(|n| n == "or"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "mov"), "no mov of an immediate is left: {names:?}");
+}
