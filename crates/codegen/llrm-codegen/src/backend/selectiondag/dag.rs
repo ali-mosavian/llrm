@@ -1233,6 +1233,52 @@ impl SelectionDAG {
         swap
     }
 
+    /// `getAtomic` of an `ATOMIC_LOAD_*` read-modify-write: the old value at
+    /// `ptr` and a chain, `value` combined into the memory by `op`.
+    pub fn get_atomic_rmw(
+        &mut self,
+        op: ISD,
+        chain: SDValue,
+        ptr: SDValue,
+        value: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        debug_assert!(matches!(
+            op,
+            ISD::AtomicLoadAdd | ISD::AtomicLoadSub | ISD::AtomicLoadAnd | ISD::AtomicLoadOr | ISD::AtomicLoadXor
+        ));
+        let vt = self.value_type(value);
+        let node = self.intern(op, &[vt, EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `getAtomic` of `ATOMIC_LOAD`: the value at `ptr` and a chain.
+    pub fn get_atomic_load(
+        &mut self,
+        vt: EVT,
+        chain: SDValue,
+        ptr: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let node = self.intern(ISD::AtomicLoad, &[vt, EVT::OTHER], &[chain, ptr], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `getAtomic` of `ATOMIC_STORE`: only a chain.
+    pub fn get_atomic_store(
+        &mut self,
+        chain: SDValue,
+        ptr: SDValue,
+        value: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let node = self.intern(ISD::AtomicStore, &[EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
     /// `getMemBasePlusOffset`: `add ptr, offset` (`PTRADD` only where the
     /// target asks to preserve pointer arithmetic, and ours does not).
     pub fn get_mem_base_plus_offset(

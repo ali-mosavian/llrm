@@ -39,6 +39,7 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I64,
         legal_ints: vec![32, 64],
         stack_align: Some(16),
+        native_atomics: true,
         jump_tables: false,
         target_nodes: Some(TargetNodes {
             call: ISD::Target(0),
