@@ -111,11 +111,12 @@ pub(crate) fn fold_not(
     // not (cmp A, B) = !cmp A, B
     if let Some(compare) = c.definition_of(not_op)
         && let Opcode::ICmp(pred) = c.function.instruction(compare).opcode
-        && one_use
+        && (one_use || c.can_freely_invert_all_users_of(compare, None))
     {
         c.function.set_icmp_predicate(compare, pred.inverse());
         c.add_to_worklist(compare);
-        return Some(Visit::Replace(not_op));
+        c.freely_invert_all_users_of(not_op, None);
+        return Some(Visit::Changed);
     }
 
     if one_use && let Some(found) = fold_not_of_select(c, not_op) {

@@ -2123,6 +2123,7 @@ impl<'a> TypeLegalizer<'a> {
             base: super::dag::MemBase::Stack(cell),
             ext: None,
             space: 0,
+            ordering: None,
         }
     }
 
@@ -2173,6 +2174,7 @@ impl<'a> TypeLegalizer<'a> {
             base: super::dag::MemBase::Stack(cell),
             ext: None,
             space: 0,
+            ordering: None,
         };
         // the `callseq_start` of this call: back along the chain through the
         // argument copies and the stores of the stack arguments joined before
@@ -2345,6 +2347,7 @@ impl<'a> TypeLegalizer<'a> {
                     base: super::dag::MemBase::Stack(cell),
                     ext: None,
                     space: 0,
+                    ordering: None,
                 };
                 let step = self.dag.get_constant(u128::from(half.size_in_bits() / 8), pointer);
                 let high_slot = self.dag.get_node(ISD::Add, pointer, &[slot, step]);

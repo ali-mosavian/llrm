@@ -260,6 +260,11 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> bool;
+    /// `SDNodeFlags::hasNoUnsignedWrap`.
+    fn has_no_unsigned_wrap(
+        &self,
+        node: u32,
+    ) -> bool;
     /// `SelectionDAG::MaskedValueIsZero`: every bit of `mask` is known zero in
     /// `value`.
     fn masked_value_is_zero(

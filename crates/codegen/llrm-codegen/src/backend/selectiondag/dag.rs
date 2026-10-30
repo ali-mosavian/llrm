@@ -112,6 +112,9 @@ pub struct MemInfo {
     /// `MachinePointerInfo::getAddrSpace`: 0, or the segment-override space
     /// (`fs` 257, `gs` 256) the IR's pointer names.
     pub space: u32,
+    /// The ordering of an atomic access
+    /// (`MachineMemOperand::getSuccessOrdering`); none for a plain one.
+    pub ordering: Option<llrm_mir::opcode::AtomicOrdering>,
 }
 
 /// `MachinePointerInfo`'s value: what the access is relative to.
@@ -940,7 +943,7 @@ impl SelectionDAG {
         }
         let index = self.nodes.len() as u32;
         self.nodes.push(SDNode {
-            order: self.cur_order,
+            order: if has_no_ir_order(opcode) { 0 } else { self.cur_order },
             opcode,
             values: values.to_vec(),
             ops: ops.to_vec(),
@@ -1663,4 +1666,36 @@ impl Iterator for LiveUsers<'_> {
             }
         }
     }
+}
+
+/// The nodes the pin makes with `IROrder` 0 whatever instruction is being
+/// visited (`ConstantSDNode`, `FrameIndexSDNode`, `RegisterSDNode`,
+/// `BasicBlockSDNode`, .. take no `SDLoc`; `getUNDEF` and `getPOISON` pass an
+/// empty one). The scheduler reads 0 as "no order" and ranks such a node
+/// differently from an ordered one.
+fn has_no_ir_order(opcode: ISD) -> bool {
+    use ISD::*;
+    matches!(
+        opcode,
+        Constant
+            | TargetConstant
+            | ConstantFP
+            | TargetConstantFP
+            | Register
+            | RegisterMask
+            | JumpTable
+            | TargetJumpTable
+            | SrcValue
+            | ExternalSymbol
+            | TargetExternalSymbolNode
+            | FrameIndex
+            | TargetFrameIndex
+            | ConstantPool
+            | TargetConstantPool
+            | BasicBlock
+            | ValueType
+            | CondCodeNode
+            | Undef
+            | Poison
+    )
 }
