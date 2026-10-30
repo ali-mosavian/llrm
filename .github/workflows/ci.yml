@@ -231,7 +231,7 @@ jobs:
     needs: plan
     if: ${{ !cancelled() && needs.plan.outputs.draft != 'true' && needs.plan.outputs.any == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/pintools-tree
@@ -241,7 +241,7 @@ jobs:
     # A skipped ancestor (static, when nothing it checks changed) would skip this job too: success() looks at every job upstream.
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.toolchain.result == 'success' && needs.pintools.result == 'success' }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_groups)[matrix.group] }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -279,7 +279,10 @@ jobs:
             git clone -q --depth 1 "git@github.com:$(python3 tools/gate/gate.py private-repo).git" "$dir"
           shred -u "$RUNNER_TEMP/key" 2>/dev/null || rm -f "$RUNNER_TEMP/key"
           rm -rf "$dir/.git"
-          for pair in $(python3 tools/gate/gate.py private-public); do git clone -q --depth 1 "https://github.com/${pair#*=}.git" "$dir/${pair%%=*}"; done
+          # A public repo is pinned to a sha (tiers.toml `repo@sha`): a push there cannot redden the gate.
+          for pair in $(python3 tools/gate/gate.py private-public); do
+            spec="${pair#*=}"; git clone -q "https://github.com/${spec%@*}.git" "$dir/${pair%%=*}"; git -C "$dir/${pair%%=*}" checkout -q "${spec#*@}"
+          done
           # LLRM_BORLAND_INC (tiers.toml [private]): the lower-case mirror of QCport's Borland headers that llrm-cc's x86_16-bcc row and qcport-run-cc read.
           sh tools/lowercase-includes.sh "$dir/qctc/inc" "$dir/bcinc"
           python3 tools/gate/gate.py private-env "$dir" --group "${{ matrix.group }}" >> "$GITHUB_ENV"

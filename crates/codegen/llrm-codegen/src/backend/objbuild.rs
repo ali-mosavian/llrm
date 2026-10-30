@@ -1029,7 +1029,7 @@ impl llrm_object::assembler::Fragment for Encoded {
     fn relax(
         &mut self,
         at: i64,
-        labels: &std::collections::HashMap<String, i64>,
+        labels: &llrm_support::hash::HashMap<String, i64>,
         _: &CodeModel,
     ) -> Result<bool, llrm_object::Unsupported> {
         match self {

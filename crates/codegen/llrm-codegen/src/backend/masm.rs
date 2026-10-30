@@ -1119,9 +1119,17 @@ pub fn realign_refusal(procedure: &Procedure) -> Option<String> {
 
 /// `procedure` set up as a realigned frame where it has over-aligned locals,
 /// and as it is otherwise (unoptimized code keeps its registers after the
-/// locals' space).
+/// locals' space), except where it calls: its outgoing arguments are stored at
+/// `[sp]` and up, where registers pushed after the space would be.
 pub fn realigned(procedure: Procedure) -> Procedure {
-    if realign_of(&procedure.body) == 0 { procedure } else { saved_first(procedure) }
+    let calls = matches!(procedure.body.bits, 32 | 64)
+        && procedure
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call));
+    if realign_of(&procedure.body) == 0 && !calls { procedure } else { saved_first(procedure) }
 }
 
 /// `procedure` with its callee-saved registers pushed before the space for its

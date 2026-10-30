@@ -40,7 +40,7 @@ impl Machine for Arm64 {
         let (kind, width) = match (reloc.kind, reloc.pc_rel, got) {
             (FixupKind::DATA_8, false, _) => (R_AARCH64_ABS64, 8),
             (FixupKind::DATA_4, false, _) => (R_AARCH64_ABS32, 4),
-            // `.eh_frame`'s pointers to the code (`DW_EH_PE_pcrel | sdata4`).
+            // An `.eh_frame` entry's pointer to its function.
             (FixupKind::DATA_4, true, _) => (R_AARCH64_PREL32, 4),
             (fixup::BRANCH26, _, _) => (R_AARCH64_CALL26, 4),
             (fixup::PAGE21, _, false) => (R_AARCH64_ADR_PREL_PG_HI21, 4),

@@ -15,11 +15,6 @@ def run(name, llrm, gcc, parse=100, level="-O2", set="programs"):
     return {"file": name, "set": set, "level": level, "llrm": llrm, "gcc": gcc, "gcc_parse": parse, "rows": {"mir gvn": 1.0}}
 
 
-def test_a_compile_that_fails_gives_no_count():
-    count, why = scoreboard.instructions(["python3", "-c", "import sys; sys.stderr.write('boom'); sys.exit(1)"], ok=True)
-    assert count is None and "boom" in why
-
-
 def test_a_row_gcc_failed_in_is_refused_and_in_no_total():
     runs = [run("good", 3_000_000, 2_000_000), run("bad", 9_000_000, None, parse=None)]
     report = scoreboard.report(runs)

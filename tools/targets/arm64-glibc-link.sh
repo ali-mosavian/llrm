@@ -4,8 +4,10 @@
 set -euo pipefail
 root=${LLRM_ARM64_SYSROOT:-$HOME/.cache/llrm-arm64-sysroot/root}
 build=${LLVM_BUILD:-$HOME/scratch/llvm-build-aarch64}
+lld=$build/bin/ld.lld
+[ -x "$lld" ] || lld=ld.lld
 lib=$root/usr/aarch64-linux-gnu/lib
 gcc=$(echo "$root"/usr/lib/gcc-cross/aarch64-linux-gnu/*)
 out=$1; shift
-exec "$build/bin/ld.lld" -static --sysroot="$root" -o "$out" "$lib/crt1.o" "$lib/crti.o" "$gcc/crtbeginT.o" "$@" \
+exec "$lld" -static --sysroot="$root" -o "$out" "$lib/crt1.o" "$lib/crti.o" "$gcc/crtbeginT.o" "$@" \
   --start-group "$lib/libc.a" "$lib/libm.a" "$gcc/libgcc.a" "$gcc/libgcc_eh.a" --end-group "$gcc/crtend.o" "$lib/crtn.o"

@@ -65,11 +65,9 @@ pub fn entry_row(bits: u32) -> FrameRow {
 pub fn eh_target() -> EhTarget<'static> {
     EhTarget {
         pointer: Pointer::Pcrel4,
-        section: ".eh_frame",
         address: 8,
         return_column: 16,
-        data_alignment: -8,
-        padding: 8,
+        code_alignment: 1,
         return_saved: true,
         entry: FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() },
         register: &register,
@@ -79,7 +77,7 @@ pub fn eh_target() -> EhTarget<'static> {
 /// Mach-O's `__eh_frame`: the same CIE, but 8-byte FDE pointers the container
 /// resolves.
 pub fn macho_eh_target() -> EhTarget<'static> {
-    EhTarget { pointer: Pointer::Pcrel8, section: "__eh_frame", ..eh_target() }
+    EhTarget { pointer: Pointer::Pcrel8, ..eh_target() }
 }
 
 /// `object` with Mach-O's unwind sections for its declared frames:
@@ -113,18 +111,16 @@ pub fn macho_expanded(object: &Object) -> Result<Object, Unsupported> {
             relocs,
         });
     }
-    llrm_dwarf::eh_frame::expanded(&Object { sections, ..object.clone() }, &macho_eh_target())
+    Ok(llrm_dwarf::eh_frame::expanded_as(&Object { sections, ..object.clone() }, &macho_eh_target(), "__eh_frame")?.0)
 }
 
 /// The same at 32 bits: 4-byte slots, the return address in column 8.
 pub fn eh_target32() -> EhTarget<'static> {
     EhTarget {
         pointer: Pointer::Pcrel4,
-        section: ".eh_frame",
         address: 4,
         return_column: 8,
-        data_alignment: -4,
-        padding: 4,
+        code_alignment: 1,
         return_saved: true,
         entry: FrameRow { offset: 0, cfa_register: "esp".into(), cfa_offset: 4, saved: Vec::new() },
         register: &|name| register_in(32, name),

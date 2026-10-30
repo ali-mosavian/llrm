@@ -45,7 +45,13 @@ impl ObjectTarget for Arm64Objects {
             object
         };
         match format {
+            "macho" if !object.frames.is_empty() => llrm_macho::write(&with_unwind(object)?, &macho::Arm64MachO),
             "macho" => llrm_macho::write(object, &macho::Arm64MachO),
+            "elf" if !object.frames.is_empty() => {
+                // `.eh_frame` goes in whether or not `-g` is on, for the frames
+                // the backend declared.
+                elf::write(&llrm_dwarf::eh_frame::expanded(object, &unwind::eh_target())?)
+            }
             "elf" => elf::write(object),
             _ => Err(Unsupported(format!("no {format} writer for arm64 yet"))),
         }
@@ -63,4 +69,34 @@ impl ObjectTarget for Arm64Objects {
             unwind: if format == "macho" { UnwindKind::Compact } else { UnwindKind::EhFrame },
         })
     }
+}
+
+/// `object` with `__eh_frame` and `__compact_unwind` for the frames the backend
+/// declared: ld64 reads an entry of 32 bytes for each function (its address,
+/// its length, the encoding, a personality and a language-specific area).
+fn with_unwind(object: &Object) -> Result<Object, Unsupported> {
+    use llrm_object::{Fix, Reloc, Role, Section, Target};
+    let (mut expanded, fdes) = llrm_dwarf::eh_frame::expanded_as(object, &unwind::eh_target(), "__eh_frame")?;
+    let (mut image, mut relocs) = (Vec::new(), Vec::new());
+    for (frame, fde) in object.frames.iter().zip(fdes) {
+        relocs.push(Reloc::new(image.len(), Fix::abs(8), Target::Section(frame.section), frame.offset as i64));
+        image.extend(0u64.to_le_bytes());
+        image.extend((frame.length as u32).to_le_bytes());
+        image.extend(unwind::compact_encoding(&frame.rows, fde).to_le_bytes());
+        image.extend([0u8; 16]);
+    }
+    expanded
+        .sections
+        .push(
+            Section {
+                name: "__compact_unwind".to_owned(),
+                role: Role::Unwind,
+                near: true,
+                align: 8,
+                spans: vec![[0, image.len()]],
+                image,
+                relocs,
+            },
+        );
+    Ok(expanded)
 }

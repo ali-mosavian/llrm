@@ -65,6 +65,14 @@ def cpu() -> float:
     return t.user + t.system + t.children_user + t.children_system + _charged[0]
 
 
+def perf_counts() -> bool:
+    """Whether `perf stat` can count `instructions:u` here: a runner with perf installed and no counters fails every wrapped command before it runs."""
+    if shutil.which("perf") is None:
+        return False
+    probe = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", "-o", os.devnull, "--", "true"], capture_output=True)
+    return probe.returncode == 0
+
+
 class Meter:
     """User-space instructions of every command the steps start while open: each is run under `perf stat -e instructions:u -- COMMAND` (load-independent, where CPU
     seconds stretch with contention) and the counts are summed. `perf stat -p PID` was tried first: it read 74 G, 799 G and 893 G for the same set, more than the
@@ -76,7 +84,7 @@ class Meter:
         self._popen = None
 
     def __enter__(self) -> "Meter":
-        if shutil.which("perf") is None:
+        if not perf_counts():
             return self
         import tempfile
 

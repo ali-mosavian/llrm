@@ -1,10 +1,12 @@
 """pytest over many files at once: one pytest process per file, a few at a time, longest first.
 
-    pytest_shards.py [-j N] [--ignore F]... [--durations FILE] PATH... [-- PYTEST_FLAGS]
+    pytest_shards.py [-j N] [--ignore F]... [--must-pass F]... [--rerun F]... [--durations FILE] PATH... [-- PYTEST_FLAGS]
 
 The files come from `pytest --collect-only`, so a path pytest would not run is not run here. A file with a failing test, a collection
 error, or no test (a file that collected tests and ran none) fails the run; the output of every failed file is printed whole, then one
-summary line. Exit 0 only when every collected test file ran and passed or skipped."""
+summary line, which counts the tests passed and skipped. Exit 0 only when every collected test file ran and passed or skipped, and
+every --must-pass file passed at least one test and skipped none: a file that skips everything (its inputs missing) is not a pass. A failed
+--rerun file is run once more and both verdicts are printed (the run stays red): a red that passes again is a flaky one, one that fails again is not."""
 import os
 import re
 import math
@@ -27,6 +29,12 @@ MAX_PARTS = 12
 SPLITTABLE = frozenset({"test_qbgfx.py", "test_qbgorilla.py", "test_scaling_gate.py", "test_scaling.py"})
 # Seconds of the files that were slowest when measured, for a run with nothing recorded yet.
 SEEDS = {"test_qbgfx.py": 190.0, "test_scaling_gate.py": 300.0, "test_qbrt.py": 130.0, "test_scaling.py": 60.0}
+
+
+def tally(out: str) -> dict[str, int]:
+    """The counts pytest's last line reports: {'passed': 2, 'skipped': 1}."""
+    last = out.strip().splitlines()[-1] if out.strip() else ""
+    return {word: int(n) for n, word in re.findall(r"(\d+) (passed|skipped|failed|xfailed|xpassed|errors?)\b", last)}
 
 
 def pytest(*args: str) -> subprocess.CompletedProcess:
@@ -74,6 +82,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("-j", type=int, default=int(os.environ.get("PYTEST_SHARDS") or min(16, os.cpu_count() or 4)))
     ap.add_argument("--ignore", action="append", default=[])
+    ap.add_argument("--must-pass", action="append", default=[], help="a test file that must pass a test and skip none")
+    ap.add_argument("--rerun", action="append", default=[], help="a test file run once more when it fails, to tell flaky from deterministic")
     ap.add_argument("--durations", help="JSON {file: seconds}, read for the order (longest first) and rewritten after the run")
     ap.add_argument("paths", nargs="+")
     argv = sys.argv[1:]
@@ -88,13 +98,22 @@ def main() -> int:
         print("pytest shards: no test file collected")
         return 1
     known = json.loads(Path(args.durations).read_text()) if args.durations and Path(args.durations).exists() else {}
-    results = run_all(units(tests, known), flags, args.j)
+    work = units(tests, known)
+    results = run_all(work, flags, args.j)
     bad = {n: r for n, r in results.items() if r[0] != 0}
-    ran = sum(int(n) for _, _, out in results.values() for n in re.findall(r"(\d+) (?:passed|skipped|failed|xfailed|xpassed|errors?)\b", out.strip().splitlines()[-1] if out.strip() else ""))
+    counts = {n: tally(out) for n, (_, _, out) in results.items()}
+    ran = sum(sum(c.values()) for c in counts.values())
     wanted = sum(map(len, tests.values()))
     if not bad and ran != wanted:
         print(f"pytest shards: {wanted} tests collected, {ran} reported")
         return 1
+    vacuous = [n for n, c in counts.items() if any(n.partition(" [")[0].endswith(f) for f in args.must_pass) and (c.get("skipped") or not c.get("passed"))]
+    for name in vacuous:
+        print(f"pytest shards: {name} is a must-pass file and ran {counts[name].get('passed', 0)} passed, {counts[name].get('skipped', 0)} skipped")
+    for name in sorted(bad):
+        if any(name.partition(" [")[0].endswith(f) for f in args.rerun):
+            again = pytest(*dict(work)[name], *flags)
+            print(f"pytest shards: {name} failed, rerun {'passed' if again.returncode == 0 else 'failed again'}: {(again.stdout.strip().splitlines() or [''])[-1]}")
     for name, (code, _, out) in sorted(bad.items()):
         print(f"\n######## {name}: exit {code}\n{out}")
     if args.durations and not bad:
@@ -103,10 +122,11 @@ def main() -> int:
             per_file[label.partition(" [")[0]] = per_file.get(label.partition(" [")[0], 0) + took
         Path(args.durations).write_text(json.dumps({n: round(t, 1) for n, t in sorted(per_file.items())}, indent=1) + "\n")
     slowest = sorted(results.items(), key=lambda kv: -kv[1][1])[:3]
-    print(f"pytest shards: {len(tests)} files, {len(results)} runs, {len(bad)} failed; slowest " + ", ".join(f"{n} {r[1]:.0f}s" for n, r in slowest))
+    passed, skipped = (sum(c.get(w, 0) for c in counts.values()) for w in ("passed", "skipped"))
+    print(f"pytest shards: {len(tests)} files, {len(results)} runs, {len(bad)} failed; {passed} passed, {skipped} skipped; slowest " + ", ".join(f"{n} {r[1]:.0f}s" for n, r in slowest))
     if bad:
         print("FAILED files: " + " ".join(sorted(bad)))
-    return 1 if bad else 0
+    return 1 if bad or vacuous else 0
 
 
 if __name__ == "__main__":
