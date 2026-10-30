@@ -617,7 +617,7 @@ impl Builder<'_> {
         let (routine, values) = if matches!(which, Intrinsic::MemSet) {
             let value = self.get_value(operands[1])?;
             let pattern = dword(self, value).ok_or(Refused("a huge fill of an odd value"))?;
-            let routine = self.arch.huge_fill_routine(1).map_err(|_| Refused("no huge fill routine"))?;
+            let routine = self.full_arch()?.huge_fill_routine(1).map_err(|_| Refused("no huge fill routine"))?;
             (routine, vec![pattern, count, to_selector, to_offset])
         } else {
             let backward = match (which, proved(llrm_mir::intrinsics::FORWARD), proved(llrm_mir::intrinsics::BACKWARD))
@@ -631,7 +631,7 @@ impl Builder<'_> {
                 return Err(Refused("a huge memory intrinsic through a near source"));
             }
             let [from_offset, from_selector] = self.split_value(src, word);
-            let routine = self.arch.huge_copy_routine(backward).map_err(|_| Refused("no huge copy routine"))?;
+            let routine = self.full_arch()?.huge_copy_routine(backward).map_err(|_| Refused("no huge copy routine"))?;
             (routine, vec![count, from_selector, from_offset, to_selector, to_offset])
         };
         if routine.reads.len() != values.len() {
@@ -641,7 +641,7 @@ impl Builder<'_> {
             values.into_iter().zip(&routine.reads).map(|(value, reg)| (value, Place::Register(*reg))).collect();
         let callee = self.dag.get_target_external_symbol(word, routine.name);
         let root = self.memory_root();
-        let env = CallEnv { arch: self.arch, pointer: word };
+        let env = CallEnv { arch: self.full_arch()?, pointer: word };
         let (chain, _) = lib_call(&mut self.dag, &env, root, callee, &args, 0, 0, &[]);
         self.dag.set_root(chain);
         Ok(())
@@ -717,7 +717,7 @@ impl Builder<'_> {
                 // each here (15 bytes: 43 against 27). The old selector's rule.
                 // Owner w12. Exit: a cost hook on the target.
                 let strings = opt_size
-                    && self.arch.string_registers().is_some()
+                    && self.string_instructions().is_some()
                     && constant.is_some_and(|bytes| bytes / 4 + u64::from((bytes % 4).count_ones()) > limit as u64);
                 let inline = match constant {
                     Some(_) if strings => None,
@@ -823,7 +823,8 @@ impl Builder<'_> {
             return names.iter().any(|(one, ..)| one == name);
         }
         self.arch
-            .runtime("c")
+            .full()
+            .and_then(|arch| arch.runtime("c"))
             .and_then(|description| description.table().ok())
             .and_then(|table| table.get("libcalls").and_then(|calls| calls.as_array()).cloned())
             .is_some_and(|calls| calls.iter().any(|one| one.as_str() == Some(name)))
@@ -965,7 +966,7 @@ impl Builder<'_> {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
         code.push(0xFC);
-        let strings = self.arch.string_registers();
+        let strings = self.string_instructions();
         if strings.is_none() && !flat {
             return self.backward_rep_movsb(chain, dst, src, size);
         }
@@ -1022,7 +1023,7 @@ impl Builder<'_> {
             this.dag.get_node(ISD::Add, pointer, &[end, minus_one])
         };
         let (from, to) = (last(self, src), last(self, dst));
-        let strings = self.arch.string_registers();
+        let strings = self.string_instructions();
         let name_of = |register| self.arch.registers().name(register).expect("a described register");
         // A flat target names no string registers: `cx`, `si` and `di` are
         // its operands, and ES already holds what `pop es` loads.
@@ -1157,11 +1158,11 @@ impl Builder<'_> {
         let value_type =
             if name == "memset" { types.int(self.dag.value_type(first_two[1]).size_in_bits()) } else { pointer_type };
         let arg_types = [pointer_type, value_type, word];
-        let first = self.arch.first_argument_offset(false);
+        let first = self.full_arch()?.first_argument_offset(false);
         let plan: Convention = convention_for(
             self.module,
             self.layout,
-            self.arch,
+            self.full_arch()?,
             first,
             convention,
             pointer_type,
@@ -1280,7 +1281,7 @@ impl Builder<'_> {
         // block are `movsw` and `movsb` glued after the move, not a load and a
         // store from addresses made again (the pin's tail): 1 byte each. The
         // old selector's tail. Owner w12. Exit: a cost hook on the target.
-        if self.has_opt_size() && self.arch.string_registers().is_some() {
+        if self.has_opt_size() && self.string_instructions().is_some() {
             let mut last = rep;
             let mut rest = left;
             for width in [2u64, 1] {

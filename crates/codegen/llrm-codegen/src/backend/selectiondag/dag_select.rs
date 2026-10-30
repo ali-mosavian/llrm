@@ -86,7 +86,7 @@ pub fn select_block(
 /// `SelectCodeCommon` for `AssertSext` and `AssertZext`: each is its operand.
 /// DEVIATE SD43: the pin drops them while matching; here ahead of the matcher,
 /// which has no id for them. Same selected code.
-fn remove_assertions(dag: &mut SelectionDAG) {
+pub fn remove_assertions(dag: &mut SelectionDAG) {
     for node in dag.node_ids().collect::<Vec<_>>() {
         let value = SDValue { node, res: 0 };
         if matches!(dag.opcode(value), ISD::AssertSext | ISD::AssertZext) {
@@ -139,8 +139,21 @@ pub(crate) fn do_instruction_selection(
     selector: &Selector,
     hooks: &mut X86Hooks,
 ) -> Result<(), Refusal> {
+    do_instruction_selection_with(dag, &super::dagisel_adapter::X86Registers, |adapter, node| {
+        select_node(selector, adapter, hooks, node)
+    })
+}
+
+/// `DoInstructionSelection` for any target: `select` picks the instruction for
+/// one node, as the target's `Select` does, and `registers` names its physical
+/// registers in the pin's numbering.
+pub fn do_instruction_selection_with(
+    dag: &mut SelectionDAG,
+    registers: &dyn super::dagisel_adapter::PinRegisters,
+    mut select: impl FnMut(&mut DagisAdapter<'_>, u32) -> Outcome,
+) -> Result<(), Refusal> {
     let order = users_first(dag);
-    let mut adapter = DagisAdapter::new(dag);
+    let mut adapter = DagisAdapter::with_registers(dag, registers);
     // Nodes a selection makes (a shift amount rewritten, a mask shrunk) are
     // visited next, latest first: the pin inserts them before the node
     // being selected (`insertDAGNode`), and its walk runs toward the front
@@ -166,7 +179,7 @@ pub(crate) fn do_instruction_selection(
             adapter.mark_selected(node);
         }
         adapter.dag.cur_order = adapter.dag.nodes()[node as usize].order;
-        if select_node(selector, &mut adapter, hooks, node) == Outcome::CannotSelect {
+        if select(&mut adapter, node) == Outcome::CannotSelect {
             return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
         }
         made.extend(before as u32..adapter.dag.nodes().len() as u32);
