@@ -22,6 +22,7 @@ llrm-debug = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-target = { workspace = true }
+llrm-sdag = { workspace = true }
 llrm-support = { workspace = true }
 
 [dev-dependencies]

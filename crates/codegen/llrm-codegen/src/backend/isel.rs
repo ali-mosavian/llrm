@@ -6393,6 +6393,9 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
                 // A fact for the passes: no code.
                 Some(Intrinsic::Assume) => Ok(()),
+                // A fact for the passes (SelectionDAGBuilder.cpp#L7680): no
+                // code.
+                Some(Intrinsic::InvariantStart | Intrinsic::InvariantEnd) => Ok(()),
                 // A hint; the 386 and 486 have no prefetch instruction.
                 Some(Intrinsic::Prefetch | Intrinsic::FakeUse) => Ok(()),
                 _ => refuse(format!("@{name}")),

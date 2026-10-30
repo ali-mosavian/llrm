@@ -275,7 +275,7 @@ fn every_own_node_has_a_pin_id() {
 /// to the file, so the generated ids did not know it.
 #[test]
 fn every_own_target_id_is_in_own_ids() {
-    let nodes = include_str!("../../../../../../crates/target/llrm-x86/src/dag/x86isd.rs");
+    let nodes = include_str!("../../../../../../crates/codegen/llrm-sdag/src/x86isd.rs");
     let ids = include_str!("../../../../../../tools/dagisel/own_ids.txt");
     let listed: Vec<(&str, &str)> = ids.lines().filter_map(|line| line.split_once(' ')).collect();
     let mut missing = Vec::new();
