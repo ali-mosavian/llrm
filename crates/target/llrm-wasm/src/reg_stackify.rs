@@ -12,7 +12,7 @@
 //!
 //! DEVIATE: only the `Optimize == false` path (the pin runs it at -O0): no
 //! moving of definitions across other instructions, no rematerialization, no
-//! tee for several uses, no dominance or live-interval queries, and one block.
+//! tee for several uses, no dominance or live-interval queries.
 //! Reason: those need `LiveIntervals`, the dominator tree and memory-effect
 //! queries over instructions the slice lacks. At -O0 a move is always a no-op,
 //! because the definition is already the instruction above. Exit: W8.
@@ -23,10 +23,12 @@
 //! `CommutingState` (L797).
 
 use crate::dagisel::generated::instrinfo::{desc, flag};
-use crate::mir::{Function, Inst, Operand, VReg, is_argument};
+use crate::mir::{DefUse, Function, Inst, Operand, VReg, is_argument};
 
 /// `TreeWalkerState`: ranges of the operands still to visit, last first.
 struct TreeWalker {
+    /// The block the walk is in.
+    b: usize,
     /// (instruction, one past the next operand to pop).
     worklist: Vec<(usize, usize)>,
 }
@@ -34,18 +36,20 @@ struct TreeWalker {
 impl TreeWalker {
     fn new(
         f: &Function,
+        b: usize,
         at: usize,
     ) -> TreeWalker {
-        let mut walker = TreeWalker { worklist: Vec::new() };
+        let mut walker = TreeWalker { b, worklist: Vec::new() };
         walker.push_operands(f, at);
         walker
     }
 
     fn defs(
+        &self,
         f: &Function,
         at: usize,
     ) -> usize {
-        f.blocks[0][at].operands.iter().take_while(|o| matches!(o, Operand::Def(_))).count()
+        f.blocks[self.b][at].operands.iter().take_while(|o| matches!(o, Operand::Def(_))).count()
     }
 
     fn push_operands(
@@ -53,8 +57,8 @@ impl TreeWalker {
         f: &Function,
         at: usize,
     ) {
-        let end = f.blocks[0][at].operands.len();
-        if end > Self::defs(f, at) {
+        let end = f.blocks[self.b][at].operands.len();
+        if end > self.defs(f, at) {
             self.worklist.push((at, end));
         }
     }
@@ -69,7 +73,7 @@ impl TreeWalker {
         f: &Function,
     ) -> (usize, usize) {
         let (at, end) = self.worklist.pop().expect("a range remains");
-        if end - 1 > Self::defs(f, at) {
+        if end - 1 > self.defs(f, at) {
             self.worklist.push((at, end - 1));
         }
         (at, end - 1)
@@ -87,7 +91,7 @@ impl TreeWalker {
         f: &Function,
         at: usize,
     ) {
-        *self.worklist.last_mut().expect("an operand remains") = (at, f.blocks[0][at].operands.len());
+        *self.worklist.last_mut().expect("an operand remains") = (at, f.blocks[self.b][at].operands.len());
     }
 
     fn is_on_stack(
@@ -95,7 +99,7 @@ impl TreeWalker {
         f: &Function,
         reg: VReg,
     ) -> bool {
-        self.worklist.iter().any(|&(at, end)| f.blocks[0][at].operands[..end].contains(&Operand::Use(reg)))
+        self.worklist.iter().any(|&(at, end)| f.blocks[self.b][at].operands[..end].contains(&Operand::Use(reg)))
     }
 }
 
@@ -114,11 +118,11 @@ impl Commuting {
         walker: &mut TreeWalker,
     ) {
         if let Some((a, b)) = self.tentative.take() {
-            f.blocks[0][at].operands.swap(a, b);
+            f.blocks[walker.b][at].operands.swap(a, b);
             self.declined = true;
         } else if !self.declined && walker.has_remaining_operands(at) {
-            if let Some((a, b)) = commutable_operands(&f.blocks[0][at]) {
-                f.blocks[0][at].operands.swap(a, b);
+            if let Some((a, b)) = commutable_operands(&f.blocks[walker.b][at]) {
+                f.blocks[walker.b][at].operands.swap(a, b);
                 walker.reset_top_operands(f, at);
                 self.tentative = Some((a, b));
                 self.declined = false;
@@ -142,42 +146,40 @@ fn commutable_operands(inst: &Inst) -> Option<(usize, usize)> {
     (uses.len() >= 2).then(|| (uses[0], uses[1]))
 }
 
-/// Number of definitions and of uses of `reg`.
-fn counts(
-    f: &Function,
-    reg: VReg,
-) -> (usize, usize) {
-    let (mut defs, mut uses) = (0, 0);
-    for operand in f.blocks.iter().flatten().flat_map(|i| &i.operands) {
-        match operand {
-            Operand::Def(r) if *r == reg => defs += 1,
-            Operand::Use(r) if *r == reg => uses += 1,
-            _ => {}
-        }
-    }
-    (defs, uses)
-}
-
 /// Whether anything was stackified.
 pub fn reg_stackify(f: &mut Function) -> bool {
-    assert_eq!(f.blocks.len(), 1, "one block until branches");
     let mut changed = false;
-    let mut mii = f.blocks[0].len() as isize - 1;
+    // Stackifying marks registers and commuting swaps operands; no instruction
+    // is added or moved.
+    let defuse = f.def_use();
+    for b in 0..f.blocks.len() {
+        changed |= stackify_block(f, &defuse, b);
+    }
+    changed
+}
+
+fn stackify_block(
+    f: &mut Function,
+    defuse: &DefUse,
+    b: usize,
+) -> bool {
+    let mut changed = false;
+    let mut mii = f.blocks[b].len() as isize - 1;
     while mii >= 0 {
         let mut insert = mii as usize;
         let mut commuting = Commuting::default();
-        let mut walker = TreeWalker::new(f, insert);
+        let mut walker = TreeWalker::new(f, b, insert);
         while !walker.done() {
             let (at, index) = walker.pop(f);
-            let Operand::Use(reg) = f.blocks[0][at].operands[index] else { continue };
-            let (defs, uses) = counts(f, reg);
-            let Some((_, def)) = f.vreg_def(reg).filter(|_| defs == 1) else { continue };
-            if is_argument(f.blocks[0][def].opcode) {
+            let Operand::Use(reg) = f.blocks[b][at].operands[index] else { continue };
+            let uses = defuse.use_count(reg);
+            let Some((def_block, def)) = defuse.def(reg).filter(|_| defuse.def_count(reg) == 1) else { continue };
+            if def_block != b || is_argument(f.blocks[b][def].opcode) {
                 continue;
             }
             // `isSafeToMove` when not optimizing: one definition, directly
             // above.
-            let explicit_defs = f.blocks[0][def].defs().count();
+            let explicit_defs = f.blocks[b][def].defs().count();
             let can_move = explicit_defs <= 1 && def + 1 == insert && !walker.is_on_stack(f, reg);
             if can_move && uses == 1 {
                 f.stackify(reg);

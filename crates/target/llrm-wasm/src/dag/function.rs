@@ -1,5 +1,5 @@
-//! The builder's view of wasm: the pointer is `i32` (`i64` for wasm64), `i32` and
-//! `i64` are the legal integers, and a return is `WebAssemblyISD::RETURN`.
+//! The builder's view of wasm: the pointer is `i32` (`i64` for wasm64), `i32`
+//! and `i64` are the legal integers, and a return is `WebAssemblyISD::RETURN`.
 
 use std::collections::BTreeMap;
 
@@ -19,6 +19,7 @@ use super::call::{CALL, WasmCalling};
 use super::pipeline::{Scheduled, select_block};
 use crate::dagisel::generated::ids::isd;
 use crate::dagisel::hooks::Cpu;
+use crate::mir::ValType;
 use crate::{REGISTER_INFO, Width};
 
 fn pointer(width: Width) -> EVT {
@@ -38,8 +39,9 @@ fn calling(width: Width) -> &'static WasmCalling {
     }
 }
 
-/// `WebAssemblyTargetLowering::getScalarShiftAmountTy`: the type's width rounded up to a power of
-/// two, at least 8 bits, and 32 bits where the shift is a libcall.
+/// `WebAssemblyTargetLowering::getScalarShiftAmountTy`: the type's width
+/// rounded up to a power of two, at least 8 bits, and 32 bits where the shift
+/// is a libcall.
 fn shift_amount_of(vt: EVT) -> EVT {
     let mut bits = vt.size_in_bits().next_power_of_two();
     if bits > 1 && bits < 8 {
@@ -120,10 +122,24 @@ pub struct Selected {
     pub mem_refs: BTreeMap<u32, Vec<u32>>,
     /// The load and store nodes as the builder made them, by node id.
     pub accesses: BTreeMap<u32, MemInfo>,
+    /// This block's id.
+    pub id: u32,
     /// The function's block ids in layout order.
     pub layout: Vec<u32>,
     /// The successors of this block (ids), in the terminator's order.
     pub successors: Vec<u32>,
+    /// What the phis of the successors take from this block's edges.
+    pub phis: Vec<PhiCopy>,
+}
+
+/// `PHI result, [incoming, from this block]` of the successor `to`: registers
+/// by the builder's number.
+#[derive(Clone, Copy, Debug)]
+pub struct PhiCopy {
+    pub to: u32,
+    pub dst: u32,
+    pub src: u32,
+    pub ty: ValType,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -139,7 +155,8 @@ pub fn select_function(
         .function()
         .filter(|one| !one.is_declaration())
         .ok_or_else(|| format!("@{name} has no body"))?;
-    // The target's `TargetCalling` places every value; the builder reads none of this.
+    // The target's `TargetCalling` places every value; the builder reads none
+    // of this.
     let convention = Convention {
         parameters: Vec::new(),
         returns: Vec::new(),
@@ -160,8 +177,23 @@ pub fn select_function(
         if !built.extra.is_empty() {
             return Err("a switch lowering made blocks".to_owned());
         }
-        let Scheduled { units, mem_refs, accesses } = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
+        let Scheduled { units, mem_refs, accesses } =
+            select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
+        let phis = built
+            .phi_updates
+            .iter()
+            .map(|&(phi, src)| {
+                let llrm_mir::module::ValueDef::Instruction(def) = function.value(phi).def else {
+                    return Err("a phi that is no instruction".to_owned());
+                };
+                let to = function.parent(def).ok_or("a phi outside a block")?.0;
+                let dst = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+                Ok(PhiCopy { to, dst, src, ty: super::value_type(module, function.value(phi).ty, width)? })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         selected.push(Selected {
+            id: block.0,
+            phis,
             dag: built.dag,
             units,
             mem_refs,

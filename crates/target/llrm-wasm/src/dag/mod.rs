@@ -1,6 +1,6 @@
-//! IR to wasm machine code through the DAG: the builder's view of the target, its
-//! calling lowering, the selection pipeline and the emitter, then the machine passes in
-//! the pin's `-O0` order.
+//! IR to wasm machine code through the DAG: the builder's view of the target,
+//! its calling lowering, the selection pipeline and the emitter, then the
+//! machine passes in the pin's `-O0` order.
 
 pub mod call;
 pub mod emit;
@@ -10,15 +10,20 @@ pub mod pipeline;
 use llrm_mir::module::Module;
 use llrm_mir::types::Type;
 
+use crate::Width;
 use crate::argument_move::argument_move;
+use crate::cfg_sort::cfg_sort;
+use crate::cfg_stackify::cfg_stackify;
 use crate::explicit_locals::explicit_locals;
+use crate::lower_br_unless::lower_br_unless;
 use crate::mir::{Function, ValType};
+use crate::phi_elimination::phi_elimination;
 use crate::reg_stackify::reg_stackify;
 use crate::set_p2align::set_p2align_operands;
-use crate::Width;
+use crate::unreachable_blocks::remove_unreachable_blocks;
 
 /// The wasm value type of an IR scalar type.
-fn value_type(
+pub(crate) fn value_type(
     module: &Module,
     ty: llrm_mir::types::TypeId,
     width: Width,
@@ -34,7 +39,8 @@ fn value_type(
     }
 }
 
-/// `computeSignatureVTs` for the slice: the parameters and the results (none for `void`).
+/// `computeSignatureVTs` for the slice: the parameters and the results (none
+/// for `void`).
 fn signature(
     module: &Module,
     name: &str,
@@ -66,8 +72,8 @@ impl Default for Options {
     }
 }
 
-/// Function `name` of `module` as wasm machine code after the `-O0` passes up to
-/// `ExplicitLocals`.
+/// Function `name` of `module` as wasm machine code after the `-O0` passes up
+/// to `ExplicitLocals`.
 pub fn compile_function(
     module: &Module,
     name: &str,
@@ -78,11 +84,18 @@ pub fn compile_function(
     let (params, results) = signature(module, name, width)?;
     let names = |symbol: u32| module.globals[symbol as usize].name.as_deref().unwrap_or("").to_string();
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
+    // The pin's order after instruction selection: `-print-after-all` of `llc
+    // -O0`.
     argument_move(&mut f);
     set_p2align_operands(&mut f);
+    phi_elimination(&mut f);
+    remove_unreachable_blocks(&mut f);
     if options.stackify {
         reg_stackify(&mut f);
     }
+    cfg_sort(&mut f);
+    cfg_stackify(&mut f);
     explicit_locals(&mut f);
+    lower_br_unless(&mut f);
     Ok(f)
 }

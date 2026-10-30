@@ -55,6 +55,14 @@ pub fn instruction(
                     format!(":p2align={value}")
                 }
             }
+            Operand::Imm(value) if *name == "sig" => match value {
+                0x40 => String::new(),
+                0x7f => "i32".to_string(),
+                0x7e => "i64".to_string(),
+                0x7d => "f32".to_string(),
+                0x7c => "f64".to_string(),
+                other => panic!("block type {other:#x}"),
+            },
             Operand::Imm(value) => value.to_string(),
             Operand::Sym(at) => {
                 let (symbol, offset) = &f.symbols[at as usize];
@@ -86,7 +94,7 @@ pub fn function(f: &Function) -> String {
         out.push(format!("\t.local  \t{}", type_list(&f.locals)));
     }
     out.push("# %bb.0:".to_string());
-    out.extend(f.blocks[0].iter().map(|i| format!("\t{}", instruction(f, i))));
+    out.extend(f.blocks.iter().flatten().map(|i| format!("\t{}", instruction(f, i))));
     out.push(with_comment("", "# -- End function"));
     out.join("\n") + "\n"
 }

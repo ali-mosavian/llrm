@@ -1,16 +1,22 @@
-//! `InstrEmitter` for wasm over the builder's DAG: the scheduled units of each block as the
-//! instructions of a [`Function`].
+//! `InstrEmitter` for wasm over the builder's DAG: the scheduled units of each
+//! block as the instructions of a [`Function`].
 //!
 //! # How it works
-//! A result of a machine node becomes a virtual register, an operand a use or an
-//! immediate (constant, symbol, block). `CopyFromReg` of a virtual register names that
-//! register; `CopyToReg` is a `COPY` into it. The builder's registers are shared by every
-//! block, so a value that crosses blocks keeps one register. A `CALL_PARAMS` and the
-//! `CALL_RESULTS` glued to it become one `CALL`, as the custom inserter does
+//! A result of a machine node becomes a virtual register, an operand a use or
+//! an immediate (constant, symbol, block). `CopyFromReg` of a virtual register
+//! names that register; `CopyToReg` is a `COPY` into it. The builder's
+//! registers are shared by every block, so a value that crosses blocks keeps
+//! one register. A `CALL_PARAMS` and the `CALL_RESULTS` glued to it become one
+//! `CALL`, as the custom inserter does
 //! (`WebAssemblyTargetLowering::EmitInstrWithCustomInserter`).
 //!
-//! DEVIATE: one block, direct calls, no frame indices. Reason: control flow and the frame
-//! come with CFGStackify and the frame lowering. Exit: W7, W8.
+//! A phi is a `PHI` in its block over the registers the builder copied the
+//! incoming values to (`FinishBasicBlock`); a machine node whose result a
+//! `CopyToReg` of a virtual register copies is defined in that register
+//! (`InstrEmitter::CreateVirtualRegisters`), so the copy is gone.
+//!
+//! DEVIATE: direct calls only, no frame indices. Reason: the frame and indirect
+//! calls come with the frame lowering and the table. Exit: W8, W10.
 //!
 //! # See also
 //! `InstrEmitter::EmitMachineNode`, pin d1106deb71cc.
@@ -21,9 +27,9 @@ use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 
-use super::function::Selected;
-use crate::dagisel::post_ids::{self as post, CALL_PARAMS, CALL_RESULTS, END_FUNCTION};
-use crate::mir::{Function, Inst, Mem, Operand, VReg, ValType};
+use super::function::{PhiCopy, Selected};
+use crate::dagisel::post_ids::{self as post, CALL_PARAMS, CALL_RESULTS};
+use crate::mir::{Function, Inst, Mem, Operand, PHI, VReg, ValType};
 
 /// The register class of a value type, `None` for a chain or glue.
 fn class(vt: EVT) -> Option<ValType> {
@@ -53,6 +59,8 @@ struct Emitter<'a> {
     /// The register of each of the builder's virtual registers.
     builder: BTreeMap<u32, VReg>,
     names: &'a dyn Fn(u32) -> String,
+    /// The position of each IR block.
+    position: HashMap<u32, usize>,
 }
 
 impl Emitter<'_> {
@@ -64,7 +72,8 @@ impl Emitter<'_> {
         *self.builder.entry(number).or_insert_with(|| self.f.new_vreg(ty))
     }
 
-    /// An operand of a machine node: a register, an immediate, or nothing (chain, glue).
+    /// An operand of a machine node: a register, an immediate, or nothing
+    /// (chain, glue).
     fn operand(
         &mut self,
         dag: &SelectionDAG,
@@ -82,7 +91,7 @@ impl Emitter<'_> {
                 let name = (self.names)(symbol);
                 Some(Operand::Sym(self.f.symbol(&name, offset)))
             }
-            (ISD::BasicBlock, NodeData::Block(block)) => Some(Operand::Block(block)),
+            (ISD::BasicBlock, NodeData::Block(block)) => Some(Operand::Block(self.position[&block] as u32)),
             (ISD::Register, _) => None,
             (ISD::TargetFrameIndex, _) => panic!("a frame index: the frame lowering is not translated yet"),
             _ => class(vt).map(|_| {
@@ -102,10 +111,24 @@ impl Emitter<'_> {
     ) {
         let dag = &selected.dag;
         self.results.clear();
+        // The builder register a result is copied to, where a `CopyToReg` takes
+        // it whole.
+        let mut copied: HashMap<(u32, u8), u32> = HashMap::new();
+        for &node in selected.units.iter().flat_map(|unit| &unit.nodes) {
+            let data = dag.node(SDValue { node, res: 0 });
+            if data.opcode != ISD::CopyToReg {
+                continue;
+            }
+            let (NodeData::Register(number), value) = (dag.node(data.ops[1]).data, data.ops[2]) else { continue };
+            if matches!(dag.node(value).opcode, ISD::Machine(_)) {
+                copied.entry((value.node, value.res)).or_insert(number);
+            }
+        }
         // The operands of the `CALL_PARAMS` waiting for its `CALL_RESULTS`.
         let mut params: Vec<Operand> = Vec::new();
         let mut out: Vec<Inst> = Vec::new();
-        // A unit lists its bottom-most node first; `EmitSchedule` emits the glued ones top-down.
+        // A unit lists its bottom-most node first; `EmitSchedule` emits the
+        // glued ones top-down.
         for &node in selected.units.iter().flat_map(|unit| unit.nodes.iter().rev()) {
             let data = dag.node(SDValue { node, res: 0 });
             match data.opcode {
@@ -119,9 +142,13 @@ impl Emitter<'_> {
                 ISD::CopyToReg => {
                     let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
                     let value = data.ops[2];
-                    if let (Some(ty), Some(Operand::Use(src))) = (class(dag.value_type(value)), self.operand(dag, value)) {
+                    if let (Some(ty), Some(Operand::Use(src))) =
+                        (class(dag.value_type(value)), self.operand(dag, value))
+                    {
                         let dst = self.builder_reg(number, ty);
-                        out.push(Inst::new(copy(ty), &[Operand::Def(dst), Operand::Use(src)]));
+                        if dst != src {
+                            out.push(Inst::new(copy(ty), &[Operand::Def(dst), Operand::Use(src)]));
+                        }
                     }
                 }
                 ISD::Machine(code) => {
@@ -129,7 +156,10 @@ impl Emitter<'_> {
                     let mut operands = Vec::new();
                     for res in 0..data.values.len() {
                         if let Some(ty) = class(data.values[res]) {
-                            let reg = self.f.new_vreg(ty);
+                            let reg = match copied.get(&(node, res as u8)) {
+                                Some(&number) => self.builder_reg(number, ty),
+                                None => self.f.new_vreg(ty),
+                            };
                             self.results.insert((node, res as u8), reg);
                             operands.push(Operand::Def(reg));
                         }
@@ -146,21 +176,30 @@ impl Emitter<'_> {
                         continue;
                     }
                     operands.extend(uses);
-                    let mut inst = Inst { opcode: code, operands, mem: None };
+                    let mut inst = Inst { opcode: code, operands, mem: None, tag: 0 };
                     if let Some(access) = selected.mem_refs.get(&node).and_then(|nodes| nodes.first()) {
                         let info = &selected.accesses[access];
-                        inst.mem = Some(Mem { size: u64::from(info.mem_vt.size_in_bits() / 8), align: u64::from(info.align) });
+                        inst.mem =
+                            Some(Mem { size: u64::from(info.mem_vt.size_in_bits() / 8), align: u64::from(info.align) });
                     }
                     out.push(inst);
                 }
                 _ => {}
             }
         }
-        self.f.blocks[0].extend(out);
+        let at = self.position[&selected.id];
+        self.f.blocks[at].extend(out);
+        self.f.succs[at] = Vec::new();
+        for id in &selected.successors {
+            let to = self.position[id];
+            if !self.f.succs[at].contains(&to) {
+                self.f.succs[at].push(to);
+            }
+        }
     }
 }
 
-/// The function whose body is `blocks`, followed by `END_FUNCTION`. `names` gives the linker
+/// The function whose body is `blocks`. `names` gives the linker
 /// name of a global by the id a `GlobalAddress` carries.
 pub fn emit(
     name: &str,
@@ -172,11 +211,35 @@ pub fn emit(
     let mut f = Function::new(name);
     f.params = params.to_vec();
     f.results = results.to_vec();
-    let mut emitter = Emitter { f, results: HashMap::new(), builder: BTreeMap::new(), names };
+    let layout = blocks.first().map_or(Vec::new(), |block| block.layout.clone());
+    f.blocks = vec![Vec::new(); layout.len().max(1)];
+    f.succs = vec![Vec::new(); f.blocks.len()];
+    let position = layout.iter().enumerate().map(|(at, &id)| (id, at)).collect();
+    let mut emitter = Emitter { f, results: HashMap::new(), builder: BTreeMap::new(), names, position };
     for selected in blocks {
         emitter.block(selected);
     }
+    // The phis, at the start of their blocks: `PHI dst, src, pred, ..` in the
+    // builder's order.
+    let mut phis: BTreeMap<(u32, u32), (ValType, Vec<(u32, u32)>)> = BTreeMap::new();
+    for selected in blocks {
+        for &PhiCopy { to, dst, src, ty } in &selected.phis {
+            phis.entry((to, dst)).or_insert((ty, Vec::new())).1.push((src, selected.id));
+        }
+    }
+    let mut starts: HashMap<usize, Vec<Inst>> = HashMap::new();
+    for ((to, dst), (ty, incoming)) in phis {
+        let mut operands = vec![Operand::Def(emitter.builder_reg(dst, ty))];
+        for (src, pred) in incoming {
+            operands.push(Operand::Use(emitter.builder_reg(src, ty)));
+            operands.push(Operand::Block(emitter.position[&pred] as u32));
+        }
+        starts.entry(emitter.position[&to]).or_default().push(Inst::new(PHI, &operands));
+    }
     let mut f = emitter.f;
-    f.blocks[0].push(Inst::new(END_FUNCTION, &[]));
+    for (at, mut phis) in starts {
+        phis.append(&mut f.blocks[at]);
+        f.blocks[at] = phis;
+    }
     f
 }

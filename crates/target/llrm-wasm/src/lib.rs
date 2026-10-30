@@ -2,17 +2,24 @@
 
 pub mod argument_move;
 pub mod asm_strings;
+pub mod branch;
+pub mod cfg;
+pub mod cfg_sort;
+pub mod cfg_stackify;
 pub mod dag;
 pub mod dagisel;
 pub mod driver;
 pub mod emit;
 pub mod explicit_locals;
+pub mod lower_br_unless;
 pub mod mir;
 pub mod object;
+pub mod phi_elimination;
 pub mod print;
 pub mod reg_numbering;
 pub mod reg_stackify;
 pub mod set_p2align;
+pub mod unreachable_blocks;
 
 use llrm_lir::registers::{RegId, Row};
 use llrm_target::layout::Layout;
