@@ -15,6 +15,7 @@ import hashlib
 import time
 import sys
 import json
+import tomllib
 import argparse
 import subprocess
 from pathlib import Path
@@ -30,7 +31,7 @@ MAX_PARTS = 12
 # in one DOSBox launch, so five parts ran it five times (185 s each, against 134 s whole).
 SPLITTABLE = frozenset({"test_qbgfx.py", "test_qbgorilla.py", "test_scaling_gate.py", "test_scaling.py"})
 # Seconds of the files that were slowest when measured, for a run with nothing recorded yet.
-HOSTED = Path(__file__).with_name("pytest_hosted.json")  # seconds of each file on a hosted runner: the split of a sharded run reads only this
+HOSTED = Path(__file__).with_name("pytest_hosted.toml")  # seconds of each file on a hosted runner: the split of a sharded run reads only this
 SEEDS = {"test_qbgfx.py": 190.0, "test_scaling_gate.py": 300.0, "test_qbrt.py": 130.0, "test_scaling.py": 60.0}
 
 
@@ -77,7 +78,7 @@ HOSTED_UNKNOWN = 7.0  # run 8: 1653 CPU-seconds over 242 files; the 40 s a file 
 
 def hosted_seconds(tests: dict[str, list[str]], path: Path = HOSTED) -> dict[str, float]:
     """Seconds of every collected file for a sharded deal: the table's, else the seed of a file known to be slow, else an average file."""
-    table = json.loads(path.read_text()) if path.is_file() else {}
+    table = tomllib.loads(path.read_text()) if path.is_file() else {}
     return {name: table.get(name, SEEDS.get(Path(name).name, HOSTED_UNKNOWN)) for name in tests}
 
 
@@ -145,7 +146,7 @@ def merge(folder: Path, count: int, collector=collect) -> int:
     for d in data.values():
         for name, took in d["files"].items():
             refreshed[name] = refreshed.get(name, 0.0) + took
-    (folder / "pytest_hosted.refreshed.json").write_text(json.dumps({n: round(t, 1) for n, t in sorted(refreshed.items())}, indent=1) + "\n")
+    (folder / "pytest_hosted.refreshed.toml").write_text("".join(f'"{n}" = {t:.1f}\n' for n, t in sorted(refreshed.items())))
     for i, d in sorted(data.items()):
         if d["ran"] != len(d["ids"]) or d["failed"]:
             problems.append(f"shard {i}: {d['ran']} reported of {len(d['ids'])}" + (f"; failed {' '.join(d['failed'])}" if d["failed"] else ""))

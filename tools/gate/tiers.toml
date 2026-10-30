@@ -214,7 +214,7 @@ tests = ["docs_links"]
 shards = 3
 
 [python]
-shards = 3  # the pytest step: hosted seconds per file in pytest_hosted.json deal its files out; qbrt (346 s, one DOSBox launch) is alone in one
+shards = 3  # the pytest step: hosted seconds per file in pytest_hosted.toml deal its files out; qbrt (346 s, one DOSBox launch) is alone in one
 
 [oracle]
 shards = 3
