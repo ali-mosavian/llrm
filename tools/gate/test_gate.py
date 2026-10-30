@@ -1745,3 +1745,10 @@ def test_the_merge_prints_each_shards_wall_against_the_tables_prediction_and_the
     import tomllib
 
     assert sorted(tomllib.loads((out / "pytest_hosted.refreshed.toml").read_text())) == ["test_a.py", "test_b.py", "test_c.py"]
+
+
+def test_every_python_shard_gets_the_pins_tools_as_the_one_python_job_did(tmp_path):
+    """Trial run 41024196294: the pintools were required for the group named `python` only, so python-1..3 had no opt and test_pin_ablate failed."""
+    workflow = (Path(gate.ROOT) / ".github/workflows/ci.yml").read_text()
+    line = next(l for l in workflow.splitlines() if l.strip().startswith("pintools: ${{ (matrix.group"))
+    assert "startsWith(matrix.group, 'python')" in line and "matrix.group == 'python'" not in line
