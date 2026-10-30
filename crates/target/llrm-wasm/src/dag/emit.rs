@@ -113,7 +113,10 @@ impl Emitter<'_> {
         self.results.clear();
         // The builder register a result is copied to, where a `CopyToReg` takes
         // it whole.
-        let mut copied: HashMap<(u32, u8), u32> = HashMap::new();
+        // `CreateVirtualRegisters` takes the first matching user of the result,
+        // and a node's users list the newest first: the latest
+        // `CopyToReg` wins.
+        let mut copied: HashMap<(u32, u8), (u32, u32)> = HashMap::new();
         for &node in selected.units.iter().flat_map(|unit| &unit.nodes) {
             let data = dag.node(SDValue { node, res: 0 });
             if data.opcode != ISD::CopyToReg {
@@ -121,7 +124,10 @@ impl Emitter<'_> {
             }
             let (NodeData::Register(number), value) = (dag.node(data.ops[1]).data, data.ops[2]) else { continue };
             if matches!(dag.node(value).opcode, ISD::Machine(_)) {
-                copied.entry((value.node, value.res)).or_insert(number);
+                let latest = copied.entry((value.node, value.res)).or_insert((node, number));
+                if node > latest.0 {
+                    *latest = (node, number);
+                }
             }
         }
         // The operands of the `CALL_PARAMS` waiting for its `CALL_RESULTS`.
@@ -157,7 +163,7 @@ impl Emitter<'_> {
                     for res in 0..data.values.len() {
                         if let Some(ty) = class(data.values[res]) {
                             let reg = match copied.get(&(node, res as u8)) {
-                                Some(&number) => self.builder_reg(number, ty),
+                                Some(&(_, number)) => self.builder_reg(number, ty),
                                 None => self.f.new_vreg(ty),
                             };
                             self.results.insert((node, res as u8), reg);
@@ -189,13 +195,25 @@ impl Emitter<'_> {
         }
         let at = self.position[&selected.id];
         self.f.blocks[at].extend(out);
-        self.f.succs[at] = Vec::new();
-        for id in &selected.successors {
-            let to = self.position[id];
-            if !self.f.succs[at].contains(&to) {
-                self.f.succs[at].push(to);
+        // The machine CFG: the blocks the terminators name, then the next block
+        // when control falls into it. An `invoke`'s unwind edge is none
+        // (the pin's `LowerInvoke`).
+        let mut succs: Vec<usize> = Vec::new();
+        let mut falls = true;
+        for inst in self.f.blocks[at].iter().filter(|inst| inst.is_terminator()) {
+            for operand in &inst.operands {
+                if let Operand::Block(to) = *operand {
+                    if !succs.contains(&(to as usize)) {
+                        succs.push(to as usize);
+                    }
+                }
             }
+            falls = !inst.is_barrier();
         }
+        if falls && at + 1 < self.f.blocks.len() {
+            succs.push(at + 1);
+        }
+        self.f.succs[at] = succs;
     }
 }
 
@@ -224,11 +242,21 @@ pub fn emit(
     let mut phis: BTreeMap<(u32, u32), (ValType, Vec<(u32, u32)>)> = BTreeMap::new();
     for selected in blocks {
         for &PhiCopy { to, dst, src, ty } in &selected.phis {
-            phis.entry((to, dst)).or_insert((ty, Vec::new())).1.push((src, selected.id));
+            // The edge is from each block the IR block's lowering made that
+            // reaches `to`; a switch makes several.
+            let reaches = |pred: &&Selected| {
+                pred.origin == selected.id
+                    && emitter.f.succs[emitter.position[&pred.id]].contains(&emitter.position[&to])
+            };
+            let entry = phis.entry((to, dst)).or_insert((ty, Vec::new()));
+            entry.1.extend(blocks.iter().filter(reaches).map(|pred| (src, pred.id)));
         }
     }
     let mut starts: HashMap<usize, Vec<Inst>> = HashMap::new();
     for ((to, dst), (ty, incoming)) in phis {
+        if incoming.is_empty() {
+            continue;
+        }
         let mut operands = vec![Operand::Def(emitter.builder_reg(dst, ty))];
         for (src, pred) in incoming {
             operands.push(Operand::Use(emitter.builder_reg(src, ty)));

@@ -81,15 +81,37 @@ fn phi_copy_order() {
     check("phis");
 }
 
-/// Fifteen C shapes (if/else, `&&`/`||`, nested ifs, while, do-while, for, break, continue, nested loops, calls in
-/// loops, early return). `mul i32 %a, 2` failed `Unsupported { op: Shl, ty: I8 }`: the combiner made an `i8` shift amount.
+/// Fifteen C shapes (if/else, `&&`/`||`, nested ifs, while, do-while, for,
+/// break, continue, nested loops, calls in loops, early return). `mul i32 %a,
+/// 2` failed `Unsupported { op: Shl, ty: I8 }`: the combiner made an `i8` shift
+/// amount.
 #[test]
 fn control_flow_shapes() {
     check("shapes");
 }
 
-/// An `invoke` is a call and a branch to its normal block; the pad nothing else reaches is dropped.
+/// An `invoke` is a call and a branch to its normal block; the pad nothing else
+/// reaches is dropped.
 #[test]
 fn invoke() {
     check("invoke");
+}
+
+/// Every `switch` stopped on 'its lowering made blocks', then on
+/// `CannotSelect(BrJT)`. At `-O0` the pin makes a jump table of two cases
+/// (`br_table` with the range check folded into the default), and a sparse
+/// switch is a chain of compares in case order, not the balanced tree and
+/// probability order of the optimizing levels.
+#[test]
+fn switches() {
+    check("switch");
+}
+
+/// A switch on a function parameter: the pin's dead `COPY` of the parameter
+/// comes right after the `ARGUMENT`; here it comes after the compare (the
+/// scheduler's tie-break between two equal-order nodes).
+#[test]
+#[ignore = "the dead COPY of a switched-on parameter is placed after the range check, not before it"]
+fn switches_on_a_parameter() {
+    check("switch_param");
 }

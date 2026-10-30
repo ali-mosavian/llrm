@@ -46,6 +46,11 @@ pub fn instruction(
 ) -> String {
     let asm = find(inst.opcode).unwrap_or_else(|| panic!("opcode {} has no assembly string", inst.opcode));
     let mut text = asm.text.to_string();
+    if asm.names == ["brl"] {
+        // `printBrList`: every target operand, the default last.
+        let list: Vec<String> = inst.operands.iter().filter(|o| o.is_immediate()).map(operand_text).collect();
+        return text.replace("$brl", &format!("{{{}}}", list.join(", ")));
+    }
     for (name, operand) in asm.names.iter().zip(inst.operands.iter().filter(|o| o.is_immediate())) {
         let shown = match *operand {
             Operand::Imm(value) if *name == "p2align" => {
@@ -78,6 +83,14 @@ pub fn instruction(
         text = text.replace(&format!("${{{name}}}"), &shown).replace(&format!("${name}"), &shown);
     }
     text
+}
+
+fn operand_text(operand: &Operand) -> String {
+    match *operand {
+        Operand::Imm(value) => value.to_string(),
+        Operand::Block(block) => format!(".LBB{block}"),
+        _ => unreachable!("a branch list holds depths and blocks"),
+    }
 }
 
 /// The function as `llc` prints it, from `.section` to the end comment.

@@ -65,7 +65,12 @@ pub fn builder_target(width: Width) -> BuilderTarget {
         shift_amount_of: Some(shift_amount_of),
         legal_ints: vec![32, 64],
         stack_align: Some(16),
-        jump_tables: false,
+        jump_tables: true,
+        // WebAssemblyTargetLowering: setMinimumJumpTableEntries(2); the
+        // pin's -O0 skips the table search beyond one whole-range table, bit
+        // tests and peeling.
+        min_jump_table_entries: 2,
+        switch_optimize: false,
         target_nodes: Some(TargetNodes {
             call: ISD::Target(CALL),
             ret: ISD::Target(isd::RETURN),
@@ -122,13 +127,17 @@ pub struct Selected {
     pub mem_refs: BTreeMap<u32, Vec<u32>>,
     /// The load and store nodes as the builder made them, by node id.
     pub accesses: BTreeMap<u32, MemInfo>,
-    /// This block's id.
+    /// This block's id: an extra one (a switch lowering made it) is numbered
+    /// after the function's.
     pub id: u32,
-    /// The function's block ids in layout order.
+    /// The IR block whose lowering made this one: itself, or the `switch`
+    /// block.
+    pub origin: u32,
+    /// The machine blocks' ids in layout order: each IR block, then the blocks
+    /// its lowering made.
     pub layout: Vec<u32>,
-    /// The successors of this block (ids), in the terminator's order.
-    pub successors: Vec<u32>,
-    /// What the phis of the successors take from this block's edges.
+    /// What the phis of the successors take from this block's edges (an IR
+    /// block's; the extra ones have none).
     pub phis: Vec<PhiCopy>,
 }
 
@@ -171,15 +180,11 @@ pub fn select_function(
     let cpu = if width == Width::W32 { Cpu::Wasm32 } else { Cpu::Wasm64 };
     let mut info = FunctionLoweringInfo::new(function);
     let mut selected = Vec::new();
+    let mut machine_layout = Vec::new();
     for &block in function.layout() {
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        if !built.extra.is_empty() {
-            return Err("switch (br_table, compare trees) is not supported yet: its lowering made blocks".to_owned());
-        }
-        let Scheduled { units, mem_refs, accesses } =
-            select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
-        let successors = control_successors(function, block);
+        let extras = std::mem::take(&mut built.extra);
         let phis = built
             .phi_updates
             .iter()
@@ -191,43 +196,27 @@ pub fn select_function(
                 let dst = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
                 Ok(PhiCopy { to, dst, src, ty: super::value_type(module, function.value(phi).ty, width)? })
             })
-            .collect::<Result<Vec<_>, String>>()?
-            .into_iter()
-            .filter(|copy| successors.contains(&copy.to))
-            .collect();
-        selected.push(Selected {
-            id: block.0,
-            phis,
-            dag: built.dag,
-            units,
-            mem_refs,
-            accesses,
-            layout: function.layout().iter().map(|b| b.0).collect(),
-            successors,
-        });
+            .collect::<Result<Vec<_>, String>>()?;
+        let mut group = vec![(block, block, built, phis)];
+        group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
+        for (id, origin, mut one, phis) in group {
+            let Scheduled { units, mem_refs, accesses } =
+                select_block(&mut one.dag, cpu, &info.jump_tables).map_err(|why| format!("{why:?}"))?;
+            machine_layout.push(id.0);
+            selected.push(Selected {
+                id: id.0,
+                origin: origin.0,
+                phis,
+                dag: one.dag,
+                units,
+                mem_refs,
+                accesses,
+                layout: Vec::new(),
+            });
+        }
+    }
+    for block in &mut selected {
+        block.layout.clone_from(&machine_layout);
     }
     Ok(selected)
-}
-
-/// The blocks control reaches from the end of `block`. An `invoke` goes to its
-/// normal block only: the pin's `LowerInvoke` makes it a call and a branch, and
-/// a pad nothing else branches to is dropped. QB's pads are entered by a branch
-/// after `setjmp`, which stays an edge.
-///
-/// DEVIATE: a phi of the pad still gets its unwind-edge value built (a dead
-/// constant and a `drop`), the pin has none: its `LowerInvoke` runs on the IR.
-/// Exit: the QB hand-over emits valid IR (invokes lowered to calls, no landingpad).
-fn control_successors(
-    function: &llrm_mir::module::Function,
-    block: llrm_mir::module::BlockId,
-) -> Vec<u32> {
-    use llrm_mir::module::Operand;
-    let invoke = function
-        .terminator(block)
-        .map(|last| function.instruction(last))
-        .filter(|last| matches!(last.opcode, llrm_mir::opcode::Opcode::Invoke(_)));
-    match invoke.map(|last| &last.operands[..]) {
-        Some([.., Operand::Block(normal), Operand::Block(_), _]) => vec![normal.0],
-        _ => function.successors(block).into_iter().map(|b| b.0).collect(),
-    }
 }
