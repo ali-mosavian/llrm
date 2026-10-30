@@ -938,7 +938,7 @@ fn selected_in(
     // range, where the phis of its successors look for their edges.
     let mut work: Vec<(BlockId, BlockId, crate::backend::selectiondag::builder::BlockDag)> = Vec::new();
     for &block in function.layout() {
-        let mut built = build_block(module, function, &layout, &builder_target, arch, &convention, &mut info, block)
+        let mut built = build_block(module, function, &layout, &builder_target, &arch, &convention, &mut info, block)
             .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
         let extras = std::mem::take(&mut built.extra);
         work.push((block, block, built));

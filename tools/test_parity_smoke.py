@@ -1,4 +1,4 @@
-"""The per-merge tests of feat/parity: the selection fits 10 s of CPU however many crates a merge touches, an overrun or a failed step fails it, and the last line says which."""
+"""The per-merge tests of release/next: the selection fits 10 s of CPU however many crates a merge touches, an overrun or a failed step fails it, and the last line says which."""
 from __future__ import annotations
 
 import shutil
@@ -125,7 +125,7 @@ def test_a_merge_touching_many_crates_tests_the_six_with_most_changed_files():
 
 
 def test_the_smoke_names_no_target_so_the_prepush_facts_check_stays_green():
-    """tests/target_facts.rs failed feat/parity's prepush: tools/parity_smoke.py spelled the m32 target's crate directory (1 copy of a target fact)."""
+    """tests/target_facts.rs failed release/next's prepush: tools/parity_smoke.py spelled the m32 target's crate directory (1 copy of a target fact)."""
     import re
 
     assert not re.search(r"llrm-x86-m\d+|x86_m\d+", Path(ps.__file__).read_text())
@@ -170,7 +170,7 @@ def test_qcports_own_d_faces_is_compiled_at_all_four_levels_and_a_verifier_failu
 
 
 def test_two_halves_that_each_compile_but_not_together_fail_the_workspace_check(tmp_path):
-    """#2544 (a fold calling `undef(context, ..)`) and #2564 (`undef` taking `&mut Context`, then `&Context`) each compiled; merged, feat/parity did not build
+    """#2544 (a fold calling `undef(context, ..)`) and #2564 (`undef` taking `&mut Context`, then `&Context`) each compiled; merged, release/next did not build
     for three hours. The smoke built only the touched crates' unit tests and passed."""
     (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers = ["lib", "app"]\nresolver = "2"\n')
     (tmp_path / "lib/src").mkdir(parents=True)
@@ -185,7 +185,7 @@ def test_two_halves_that_each_compile_but_not_together_fail_the_workspace_check(
 
 
 def test_an_unused_mut_fails_the_land_time_workspace_check(tmp_path):
-    """#3390 landed `let mut reads` with no mutation: the land-time build check ran without `-D warnings`, so feat/parity's fast-tier `build` step was red for every owner."""
+    """#3390 landed `let mut reads` with no mutation: the land-time build check ran without `-D warnings`, so release/next's fast-tier `build` step was red for every owner."""
     (tmp_path / "Cargo.toml").write_text('[package]\nname = "app"\nversion = "0.0.0"\nedition = "2021"\n')
     (tmp_path / "src").mkdir()
     (tmp_path / "src/lib.rs").write_text("pub fn f() -> u32 { let mut reads = 1; reads }\n")

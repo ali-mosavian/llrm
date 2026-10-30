@@ -333,6 +333,71 @@ pub fn keeps_division(
 /// A target's cost model, built from a CPU's prices: what the passes ask of it.
 pub type CostModel = fn(&CpuPrices) -> Rc<dyn llrm_mir::target::Machine>;
 
+/// What the DAG builder asks of a target for every target. The x86-style paths
+/// (calling.toml conventions, string instructions, libcall routines) read the
+/// whole [`Target`] through [`BuilderArch::full`], which a target without one
+/// answers with `None` and the builder refuses.
+pub trait BuilderArch {
+    fn registers(&self) -> &'static llrm_lir::registers::Info;
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId;
+    fn stack_slot_bytes(&self) -> i64;
+    fn stack_alignment(&self) -> i64;
+    /// The address-space roles (`layout().spaces.roles`).
+    fn roles(&self) -> llrm_mir::spaces::Spaces;
+    fn full(&self) -> Option<&dyn Target>;
+}
+
+impl<T: Target> BuilderArch for T {
+    fn registers(&self) -> &'static llrm_lir::registers::Info {
+        Target::registers(self)
+    }
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId {
+        Target::register_named(self, name)
+    }
+    fn stack_slot_bytes(&self) -> i64 {
+        Target::stack_slot_bytes(self)
+    }
+    fn stack_alignment(&self) -> i64 {
+        Target::stack_alignment(self)
+    }
+    fn roles(&self) -> llrm_mir::spaces::Spaces {
+        Target::layout(self).spaces.roles
+    }
+    fn full(&self) -> Option<&dyn Target> {
+        Some(self)
+    }
+}
+
+impl BuilderArch for &dyn Target {
+    fn registers(&self) -> &'static llrm_lir::registers::Info {
+        Target::registers(*self)
+    }
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId {
+        Target::register_named(*self, name)
+    }
+    fn stack_slot_bytes(&self) -> i64 {
+        Target::stack_slot_bytes(*self)
+    }
+    fn stack_alignment(&self) -> i64 {
+        Target::stack_alignment(*self)
+    }
+    fn roles(&self) -> llrm_mir::spaces::Spaces {
+        Target::layout(*self).spaces.roles
+    }
+    fn full(&self) -> Option<&dyn Target> {
+        Some(*self)
+    }
+}
+
 /// A target, as the driver picks one by name: what a frontend of it starts
 /// from. The passes' view of a target grows here as the backend stops naming
 /// one (docs/machine/targets.md).
