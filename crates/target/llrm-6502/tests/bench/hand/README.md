@@ -1,6 +1,6 @@
 # Hand-written cc65 routines as C kernels
 
-For each routine F of cc65's library (clone at /tmp/claude-1000/cc65src/src, commit a162565), the bench
+For each routine F of cc65's library (a local clone of cc65, commit a162565, its src directory), the bench
 compares the hand assembly with the same job written in C and compiled by cc65 -O and by llrm-6502.
 Files, all in this directory:
 
@@ -19,7 +19,7 @@ Check in a scratch copy, never in this directory. `cl65 -c F.c` writes an interm
 overwrite the hand source, and `F.c` and `F.s` give the same `F.o`. Compile the C and assemble the assembly
 in separate directories, then link:
 
-    S=/tmp/claude-1000/hand-F; rm -rf $S; mkdir -p $S/c $S/a; H=$PWD
+    S=$(mktemp -d); rm -rf $S; mkdir -p $S/c $S/a; H=$PWD
     (cd $S/c && cl65 -t sim6502 -O -c $H/F.check.c $H/data.c $H/F.c)
     (cd $S/a && cl65 -t sim6502 -c $H/F.s)          # and $H/F.glue.s when there is one
     cl65 -t sim6502 -o $S/F.bin $S/c/*.o $S/a/*.o && sim65 $S/F.bin; echo $?
@@ -68,4 +68,4 @@ and with the documented behaviour. Three agreeing sources, not one.
 - A routine that cannot be put in this form (needs a long, I/O, a stack trick, a cc65-internal
   convention): skip it, and report why. Do not bend the form.
 - No heavy jobs: the machine is busy. One-off cl65/ca65/sim65/gcc runs only.
-- Write nothing outside this directory except /tmp/claude-1000 scratch; leave no .o or generated .s here.
+- Write nothing outside this directory except a temporary directory; leave no .o or generated .s here.
