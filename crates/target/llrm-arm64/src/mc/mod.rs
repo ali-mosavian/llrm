@@ -39,6 +39,7 @@ impl ObjectTarget for Arm64Objects {
             pref_align: false,
             hosted: true,
             unwind: if format == "macho" { UnwindKind::Compact } else { UnwindKind::EhFrame },
+            dwarf_relocs_across_sections: format != "macho",
         })
     }
 }
@@ -53,7 +54,11 @@ impl DebugObjectTarget for Arm64Objects {
         let expanded;
         let object = match (format, debug) {
             ("elf" | "macho", Some(info)) => {
-                expanded = llrm_dwarf::expanded(object, info)?;
+                expanded = llrm_dwarf::expanded_for(
+                    object,
+                    info,
+                    self.asm_info(format).is_some_and(|one| one.dwarf_relocs_across_sections),
+                )?;
                 &expanded
             }
             _ => object,

@@ -55,6 +55,18 @@ pub fn expanded(
     object: &Object,
     info: &Info,
 ) -> Result<Object, Unsupported> {
+    expanded_for(object, info, true)
+}
+
+/// [`expanded`] for a format that does (`relocs_across_sections`: ELF, COFF,
+/// OMF) or does not (Mach-O) relocate one debug section's offset into another
+/// (`MCAsmInfo::doesDwarfUseRelocationsAcrossSections`): without, the offset
+/// itself is in the field, as dsymutil reads the object's own sections.
+pub fn expanded_for(
+    object: &Object,
+    info: &Info,
+    relocs_across_sections: bool,
+) -> Result<Object, Unsupported> {
     let version = match info.options.format {
         Format::Default => DEFAULT_VERSION,
         Format::Dwarf { version } if matches!(version, 2..=5) => version,
@@ -126,7 +138,31 @@ pub fn expanded(
     }
     let mut made = object.clone();
     made.sections.extend(sections);
+    if !relocs_across_sections {
+        place_section_offsets(&mut made.sections[base..], base);
+    }
     Ok(made)
+}
+
+/// Writes the offset a relocation of a debug section names in another debug
+/// section (`first` is the index of the first) into the field, and drops it.
+fn place_section_offsets(
+    sections: &mut [llrm_object::Section],
+    first: usize,
+) {
+    for section in sections {
+        let (placed, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut section.relocs)
+            .into_iter()
+            .partition(
+                |one| matches!(one.target, Target::Section(home) if home >= first)
+                    && !one.pc_rel
+                    && one.kind == llrm_object::FixupKind::DATA_4,
+            );
+        for one in &placed {
+            section.image[one.at..one.at + 4].copy_from_slice(&(one.addend as u32).to_le_bytes());
+        }
+        section.relocs = kept;
+    }
 }
 
 /// A block, or one in it, of several code ranges.

@@ -391,6 +391,10 @@ pub struct AsmInfo {
     /// How the format says where a function's caller is
     /// (`MCAsmInfo::ExceptionsType`, `getExceptionHandlingType`).
     pub unwind: UnwindKind,
+    /// One debug section's offset into another is relocated (ELF, COFF, OMF);
+    /// Mach-O's is the offset itself, which dsymutil reads in the object's own
+    /// sections (`MCAsmInfo::doesDwarfUseRelocationsAcrossSections`).
+    pub dwarf_relocs_across_sections: bool,
 }
 
 /// The unwind information a format carries for a function.

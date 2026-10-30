@@ -692,3 +692,28 @@ fn a_segmented_block_of_two_ranges_is_written_over_its_hull() {
     let written = expanded(&made, made.debug.as_ref().unwrap());
     assert!(written.is_ok(), "{:?}", written.err().map(|why| why.0));
 }
+
+/// Mach-O's writer found the offsets of one debug section into another among
+/// the relocations and put them in the fields itself; the DWARF writer says
+/// where a format has none (`doesDwarfUseRelocationsAcrossSections`), so the
+/// fields hold the offsets and no relocation names a debug section.
+#[test]
+fn a_format_without_relocations_across_sections_gets_the_offsets_in_the_fields() {
+    let made = object(vec![frame("x", 8)], vec![int()], Format::Default);
+    let info = made.debug.as_ref().unwrap();
+    let relocated = expanded_for(&made, info, true).unwrap();
+    let plain = expanded_for(&made, info, false).unwrap();
+    let (_, relocated_info) = named(&relocated, ".debug_info");
+    let first = made.sections.len();
+    let (_, plain_info) = named(&plain, ".debug_info");
+    let across = |section: &Section| {
+        section.relocs.iter().filter(|one| matches!(one.target, Target::Section(home) if home >= first)).count()
+    };
+    assert!(across(relocated_info) >= 5 && across(plain_info) == 0, "{:?}", plain_info.relocs);
+    assert_ne!(relocated_info.image, plain_info.image, "the strings' offsets are in the fields");
+    assert_eq!(
+        relocated_info.relocs.len() - across(relocated_info),
+        plain_info.relocs.len(),
+        "addresses stay relocated"
+    );
+}

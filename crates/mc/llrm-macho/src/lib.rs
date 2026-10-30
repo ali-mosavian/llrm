@@ -286,17 +286,6 @@ pub fn write<W: MachTargetWriter>(
                 Target::Section(section) => (None, Some(section)),
                 Target::OmfGroup(_) => return Err(unsupported("a reference to a group is OMF's")),
             };
-            // One debug section's offset into another is not relocated:
-            // dsymutil reads the object's own sections, where it is
-            // the offset itself.
-            if matches!(section.role, Role::Debug(_))
-                && home.is_some_and(|home| matches!(object.sections[home].role, Role::Debug(_)))
-            {
-                let offset = u32::try_from(one.addend)
-                    .map_err(|_| unsupported(format!("{}: an offset of {} does not fit", section.name, one.addend)))?;
-                flavor.backend().apply_fixup(&mut image, one.at, one.kind, false, i64::from(offset), &section.name)?;
-                continue;
-            }
             let (symbolnum, external, field) = match target.and_then(|target| index_of[target]) {
                 Some(symbol) => (symbol, true, one.addend + baked),
                 None if !addend_in_field => {

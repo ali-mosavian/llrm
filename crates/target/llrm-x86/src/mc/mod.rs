@@ -42,10 +42,25 @@ impl ObjectTarget for X86Objects {
         format: &str,
     ) -> Option<AsmInfo> {
         Some(match format {
-            "omf" => AsmInfo { hosted: false, ..AsmInfo::default() },
-            "elf" => AsmInfo { pref_align: true, hosted: true, unwind: UnwindKind::EhFrame },
-            "macho" => AsmInfo { pref_align: false, hosted: true, unwind: UnwindKind::Compact },
-            "coff" => AsmInfo { pref_align: false, hosted: true, unwind: UnwindKind::Win64 },
+            "omf" => AsmInfo { hosted: false, dwarf_relocs_across_sections: true, ..AsmInfo::default() },
+            "elf" => AsmInfo {
+                pref_align: true,
+                hosted: true,
+                unwind: UnwindKind::EhFrame,
+                dwarf_relocs_across_sections: true,
+            },
+            "macho" => AsmInfo {
+                pref_align: false,
+                hosted: true,
+                unwind: UnwindKind::Compact,
+                dwarf_relocs_across_sections: false,
+            },
+            "coff" => AsmInfo {
+                pref_align: false,
+                hosted: true,
+                unwind: UnwindKind::Win64,
+                dwarf_relocs_across_sections: true,
+            },
             _ => return None,
         })
     }
@@ -63,7 +78,11 @@ impl DebugObjectTarget for X86Objects {
         let expanded;
         let object = match (format, debug) {
             ("elf" | "macho", Some(info)) => {
-                expanded = llrm_dwarf::expanded(object, info)?;
+                expanded = llrm_dwarf::expanded_for(
+                    object,
+                    info,
+                    self.asm_info(format).is_some_and(|one| one.dwarf_relocs_across_sections),
+                )?;
                 &expanded
             }
             ("coff", Some(info)) => {
