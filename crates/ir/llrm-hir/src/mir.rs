@@ -7,6 +7,7 @@
 //! `EmitBranchOnBoolExpr` does; the comparison's widened result is made only
 //! where something else reads it.
 
+use crate::scoped;
 use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
@@ -452,6 +453,9 @@ struct Tables<'h> {
     /// The region of memory a load or store reaches, by function and
     /// instruction.
     regions: HashMap<(i64, i64), Region>,
+    /// The back-edge blocks of the loops that state `NoFarAllocation`, by
+    /// function and block.
+    quiet: HashSet<(i64, i64)>,
     array_order: model::ArrayOrder,
     /// The module body's ON ERROR GOTO handlers, which every procedure's pad
     /// calls.
@@ -659,6 +663,14 @@ fn emit_module<'h>(
             regions.insert((function, id), region);
         }
     }
+    let quiet: HashSet<(i64, i64)> = hir
+        .facts
+        .iter()
+        .filter_map(|one| match (one.subject, one.fact) {
+            (Subject::Terminator { function, block }, Fact::NoFarAllocation) => Some((function, block)),
+            _ => None,
+        })
+        .collect();
     let mut argument_facts: HashMap<(i64, i64), Vec<(i64, Fact)>> = HashMap::default();
     let mut operand_flags: HashMap<(i64, i64, i64), Flags> = HashMap::default();
     for one in &hir.facts {
@@ -683,6 +695,7 @@ fn emit_module<'h>(
         argument_facts,
         operand_flags,
         regions,
+        quiet,
         array_order,
         module_handler: None,
         zeroed,
@@ -1781,6 +1794,10 @@ fn place_space(
 const LIFETIMES: [(Op, &str); 2] =
     [(Op::LifetimeStart, "llvm.lifetime.start.p0"), (Op::LifetimeEnd, "llvm.lifetime.end.p0")];
 
+/// What a quiet loop's scope is made and ended with.
+const INVARIANT_START: &str = "llvm.invariant.start.p0";
+const INVARIANT_END: &str = "llvm.invariant.end.p0";
+
 fn lifetime_type(types: &mut Types) -> TypeId {
     let (void, pointer, size) = (types.void(), types.ptr(0), types.int(64));
     function_type(types, void, vec![size, pointer])
@@ -1837,6 +1854,21 @@ fn declare_outside(
             let global = module.add_function(&name, ty, Linkage::External)?;
             let reference = module.reference(global);
             tables.callees.insert(name, reference);
+        }
+    }
+    if !tables.callees.contains_key(INVARIANT_START)
+        && !scoped::brackets(function, |block| tables.quiet.contains(&(function.id, block)), &tables.regions).is_empty()
+    {
+        let types = &mut module.context.types;
+        let (void, pointer, size) = (types.void(), types.ptr(0), types.int(64));
+        for (name, result, parameters) in [
+            (INVARIANT_START, pointer, vec![size, pointer]),
+            (INVARIANT_END, void, vec![pointer, size, pointer]),
+        ] {
+            let ty = function_type(&mut module.context.types, result, parameters);
+            let global = module.add_function(name, ty, Linkage::External)?;
+            let reference = module.reference(global);
+            tables.callees.insert(name.to_owned(), reference);
         }
     }
     if tables.zeroed.contains(&function.id) && !tables.callees.contains_key(MEMSET) {
@@ -2502,6 +2534,13 @@ struct Body<'b, 'm, 'h> {
     /// descriptor's words are read (a `DEF SEG` selector is read from a
     /// variable's place).
     indirect_loads: HashSet<i64>,
+    /// The loops whose descriptor words are bracketed, the address each word
+    /// is read through and the scope made of it, once their preheader is
+    /// emitted.
+    brackets: Vec<scoped::Bracket>,
+    scopes: Vec<Vec<(scoped::Word, Value, Value, u64)>>,
+    /// The bracket whose body the block being emitted is in.
+    in_bracket: Option<usize>,
 }
 
 impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
@@ -2517,6 +2556,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             false => function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect(),
         };
         let destination = result_destination(tables, function).map(|at| b.parameter(at));
+        let brackets = scoped::brackets(function, |block| tables.quiet.contains(&(function.id, block)), &tables.regions);
         b.function.reserve_instructions(function.blocks.iter().map(|one| one.instructions.len() + 1).sum());
         Ok(Self {
             b,
@@ -2545,6 +2585,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             range_nodes: HashMap::default(),
             descriptor_node: None,
             indirect_loads: HashSet::default(),
+            scopes: vec![Vec::new(); brackets.len()],
+            brackets,
+            in_bracket: None,
         })
     }
 
@@ -2639,6 +2682,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     ) -> Emit<()> {
         self.b.position(self.blocks[&block.id]);
         self.enter_block(block.id);
+        self.in_bracket = self.brackets.iter().position(|one| one.body.contains(&block.id));
+        self.end_scopes(block.id);
         let mut line = None;
         for instruction in &block.instructions {
             let first = self.b.function.instruction_count();
@@ -2650,6 +2695,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         // RESUME label ended the block itself.
         let current = self.b.current().expect("a placed block");
         if self.b.function.terminator(current).is_none() {
+            self.start_scopes(block.id);
             let first = self.b.function.instruction_count();
             self.terminator(&block.terminator)?;
             self.lined(first, line);
@@ -2665,6 +2711,52 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             mark_cold(self.b.function, self.blocks[&block.id]);
         }
         Ok(())
+    }
+
+    /// The scopes of the loops entered from `block`: one for each descriptor
+    /// word they load, made of one address each load then goes through.
+    fn start_scopes(
+        &mut self,
+        block: i64,
+    ) {
+        for at in 0..self.brackets.len() {
+            if self.brackets[at].preheader != block {
+                continue;
+            }
+            let words: Vec<scoped::Word> = self.brackets[at].words.iter().copied().collect();
+            for word in words {
+                let Some(&base) = self.values.get(&word.base) else { continue };
+                let pointer = self.offset(base, word.offset, false);
+                let bytes = self.tables.types[&word.ty].width;
+                let types = &mut self.b.context.types;
+                let (pointer_type, size_type) = (types.ptr(0), types.int(64));
+                let ty = function_type(types, pointer_type, vec![size_type, pointer_type]);
+                let callee = Value::Constant(self.tables.callees[INVARIANT_START]);
+                let size = self.b.int(64, i128::from(bytes));
+                let started = self.b.call(ty, callee, &[size, pointer], "");
+                self.scopes[at].push((word, pointer, started.expect("a scope"), bytes as u64));
+            }
+        }
+    }
+
+    /// The end of each scope whose loop `block` is an exit of.
+    fn end_scopes(
+        &mut self,
+        block: i64,
+    ) {
+        for at in 0..self.brackets.len() {
+            if !self.brackets[at].exits.contains(&block) {
+                continue;
+            }
+            for (_, pointer, started, bytes) in self.scopes[at].clone() {
+                let types = &mut self.b.context.types;
+                let (void, pointer_type, size_type) = (types.void(), types.ptr(0), types.int(64));
+                let ty = function_type(types, void, vec![pointer_type, size_type, pointer_type]);
+                let callee = Value::Constant(self.tables.callees[INVARIANT_END]);
+                let size = self.b.int(64, i128::from(bytes));
+                self.b.call(ty, callee, &[started, size, pointer], "");
+            }
+        }
     }
 
     /// What the language's facts say of the instruction lowered as the ones
@@ -2972,12 +3064,20 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                         None => inside.then_some(self.tables.tags.place),
                     },
                 };
-                Ok((
-                    self.offset(base, one.offset, self.operand_flags(operand).contains(Flags::INBOUNDS)),
-                    ty,
-                    one.volatile,
-                    tag,
-                ))
+                // A bracketed loop reads its descriptor words through the one
+                // address its scope was made of.
+                let scoped = self.in_bracket.and_then(|at| {
+                    self.scopes[at]
+                        .iter()
+                        .find(|(word, ..)| word.base == one.base && word.offset == one.offset && word.ty == one.r#type)
+                        .map(|&(_, pointer, ..)| pointer)
+                });
+                let described = self.tables.regions.get(&(self.function.id, self.at_instruction)) == Some(&Region::Descriptor);
+                let pointer = match scoped {
+                    Some(pointer) if described => pointer,
+                    _ => self.offset(base, one.offset, self.operand_flags(operand).contains(Flags::INBOUNDS)),
+                };
+                Ok((pointer, ty, one.volatile, tag))
             }
             Operand::DescriptorPlace(one) => {
                 let base = self

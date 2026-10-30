@@ -10,6 +10,7 @@ pub mod meaning;
 pub mod mir;
 pub mod model;
 pub mod onerror;
+mod scoped;
 pub mod verify;
 
 #[cfg(test)]
