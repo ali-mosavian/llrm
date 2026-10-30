@@ -290,6 +290,19 @@ fn flip_sign(
     }
 }
 
+/// Equality is symmetric: a value computed in this block goes on the left (it is in `A` when the compare comes),
+/// an incoming register (an argument, a value live in from another block) on the right, where `cmp` reads it
+/// from memory. InstCombine orders a commutative operation's operands the same way (arguments before
+/// instructions in its complexity order), but LSR rewrites a loop's exit test with the limit on the left.
+fn equality_operands(
+    dag: &SelectionDAG,
+    op0: SDValue,
+    op1: SDValue,
+) -> (SDValue, SDValue) {
+    let incoming = |value: SDValue| dag.opcode(value) == ISD::CopyFromReg;
+    if incoming(op0) && !incoming(op1) && dag.constant(op1).is_none() { (op1, op0) } else { (op0, op1) }
+}
+
 /// The code a comparison of `op0` with `op1` branches on, and the operands to
 /// compare (possibly swapped or sign-flipped).
 fn translate_cc(
@@ -322,8 +335,10 @@ fn translate_cc(
         }
     }
     match cc {
-        SetEq => (cond::EQ, op0, op1),
-        SetNe => (cond::NE, op0, op1),
+        SetEq | SetNe => {
+            let (a, b) = equality_operands(dag, op0, op1);
+            (if cc == SetEq { cond::EQ } else { cond::NE }, a, b)
+        }
         SetULt => (cond::CC, op0, op1),
         SetUGe => (cond::CS, op0, op1),
         SetUGt => (cond::CC, op1, op0),

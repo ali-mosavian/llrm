@@ -166,3 +166,35 @@ fn a_crc_loop_becomes_a_table_lookup() {
     assert!(text.contains(".segment \"RODATA\"") && text.matches(".byte").count() >= 32, "no table:\n{text}");
     assert!(!text.contains("cmp #8"), "the bit loop is still there:\n{text}");
 }
+
+/// `icmp eq %n, %i2` and `icmp eq %i2, %n` are the same compare. LSR rewrites a loop's exit test with the limit on
+/// the left; the backend then kept `%i2` in memory (`stx rc4; inc rc4; lda rc2; cmp rc4`, 29 lines against 26)
+/// and sum_arr went from 32 bytes and 249 clocks to 38 and 366.
+#[test]
+fn an_equality_compare_costs_the_same_either_way_round() {
+    let sum = |compare: &str| {
+        let ir = module(&format!(
+            "@buf = external global [256 x i8]
+define i8 @f(i8 %n) {{
+entry:
+  %z = icmp eq i8 %n, 0
+  br i1 %z, label %exit, label %loop
+loop:
+  %i = phi i8 [ %i2, %loop ], [ 0, %entry ]
+  %s = phi i8 [ %s2, %loop ], [ 0, %entry ]
+  %e = zext i8 %i to i16
+  %p = getelementptr i8, ptr @buf, i16 %e
+  %v = load i8, ptr %p
+  %s2 = add i8 %v, %s
+  %i2 = add i8 %i, 1
+  %c = icmp eq {compare}
+  br i1 %c, label %exit, label %loop
+exit:
+  %r = phi i8 [ 0, %entry ], [ %s2, %loop ]
+  ret i8 %r
+}}"
+        ));
+        assembly(&ir, &Request::new(Level::O0)).unwrap()
+    };
+    assert_eq!(sum("i8 %i2, %n"), sum("i8 %n, %i2"));
+}
