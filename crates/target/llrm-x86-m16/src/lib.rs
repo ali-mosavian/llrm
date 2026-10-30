@@ -600,7 +600,6 @@ mod tuning_tests {
                 unroll_threshold: None,
                 unroll_max_percent_threshold_boost: None,
                 inline_threshold: None,
-                int_div_cheap: false,
                 split_merged_conditions: false,
                 ..table
             },
