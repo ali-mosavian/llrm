@@ -49,6 +49,21 @@ impl CombineHooks for Asks {
     fn reduce_load_width_through_freeze(&self) -> bool {
         true
     }
+    fn select_to_select_cc(
+        &self,
+        vt: EVT,
+    ) -> bool {
+        vt == EVT::I32
+    }
+    fn reassociate_compare_pairs(&self) -> bool {
+        true
+    }
+    fn simplify_demanded_add_sub_mul(&self) -> bool {
+        true
+    }
+    fn store_fp_constant_as_i64(&self) -> bool {
+        true
+    }
 }
 
 fn xor_of_masked(dag: &mut SelectionDAG) {
@@ -460,4 +475,233 @@ fn a_multiply_by_a_power_of_two_shifts_by_the_targets_amount_type() {
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::Shl);
     assert_eq!(dag.value_type(dag.operand(root, 1)), EVT::I32);
+}
+
+fn select_of_compare(dag: &mut SelectionDAG) {
+    let (a, b) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6));
+    let c = dag.get_register(EVT::I32, 7);
+    let cond = dag.get_setcc(EVT::I1, a, b, CondCode::SetLt);
+    let root = dag.get_select(EVT::I32, cond, c, b);
+    dag.set_root(root);
+}
+
+/// A `select` on a compare stayed a `select` beside the compare, which a second user then kept alive; the
+/// pin makes it a `select_cc` where `SELECT_CC` is legal or custom.
+#[test]
+fn a_select_on_a_compare_is_a_select_cc_where_the_target_asks() {
+    let mut dag = dag();
+    select_of_compare(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::SelectCC);
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_select_on_the_compare() {
+    let mut dag = dag();
+    select_of_compare(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Select);
+}
+
+fn or_of_three_compares(dag: &mut SelectionDAG) {
+    let r = |dag: &mut SelectionDAG, n| dag.get_register(EVT::I32, n);
+    let (a, b, x, c, y) = (r(dag, 1), r(dag, 2), r(dag, 3), r(dag, 4), r(dag, 5));
+    let zero = dag.get_constant(0, EVT::I32);
+    let eq = dag.get_setcc(EVT::I1, a, zero, CondCode::SetEq);
+    let gt1 = dag.get_setcc(EVT::I1, b, x, CondCode::SetGt);
+    let gt2 = dag.get_setcc(EVT::I1, c, y, CondCode::SetGt);
+    let inner = dag.get_node(ISD::Or, EVT::I1, &[eq, gt1]);
+    let root = dag.get_node(ISD::Or, EVT::I1, &[inner, gt2]);
+    dag.set_root(root);
+}
+
+/// `(a == 0 | b > x) | c > y` stayed in written order; the pin pairs the two `>` first
+/// (`reassociateOpsCommutative`).
+#[test]
+fn an_or_of_compares_pairs_those_of_one_predicate_where_the_target_asks() {
+    let mut dag = dag();
+    or_of_three_compares(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    let code = |dag: &SelectionDAG, v: SDValue| dag.node(dag.operand(v, 2)).data;
+    let inner = dag.operand(root, 0);
+    assert_eq!(dag.opcode(inner), ISD::Or);
+    assert_eq!(code(&dag, dag.operand(inner, 0)), code(&dag, dag.operand(inner, 1)), "the two `>` meet");
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_written_order_of_the_compares() {
+    let mut dag = dag();
+    or_of_three_compares(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    let code = |dag: &SelectionDAG, v: SDValue| dag.node(dag.operand(v, 2)).data;
+    let inner = dag.operand(root, 0);
+    assert_ne!(code(&dag, dag.operand(inner, 0)), code(&dag, dag.operand(inner, 1)));
+}
+
+fn masked_add_of_a_high_constant(dag: &mut SelectionDAG) {
+    let x = dag.get_register(EVT::I32, 5);
+    let high = dag.get_constant(0xff, EVT::I32);
+    let sum = dag.get_node(ISD::Add, EVT::I32, &[x, high]);
+    let mask = dag.get_constant(0xff, EVT::I32);
+    let root = dag.get_node(ISD::And, EVT::I32, &[sum, mask]);
+    dag.set_root(root);
+}
+
+/// `(x + 0xff) & 0xff` kept the addend: every demanded bit of it is set, so the pin makes it `-1`
+/// (`SimplifyDemandedBits`, `ADD`).
+#[test]
+fn an_addend_of_all_demanded_ones_is_minus_one_where_the_target_asks() {
+    let mut dag = dag();
+    masked_add_of_a_high_constant(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let sum = dag.operand(dag.get_root(), 0);
+    assert_eq!(dag.constant(dag.operand(sum, 1)), Some(u128::from(u32::MAX)));
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_addend() {
+    let mut dag = dag();
+    masked_add_of_a_high_constant(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let sum = dag.operand(dag.get_root(), 0);
+    assert_eq!(dag.constant(dag.operand(sum, 1)), Some(0xff));
+}
+
+fn volatile_double_store(dag: &mut SelectionDAG) {
+    let (ptr, chain) = (dag.get_register(EVT::I64, 7), dag.entry_node());
+    let one = dag.get_constant_fp(u128::from(1.0f64.to_bits()), EVT::Simple(MVT::F64));
+    let info = MemInfo { mem_vt: EVT::Simple(MVT::F64), align: 8, volatile: true, base: MemBase::Stack(0), ext: None, space: 0 };
+    let root = dag.get_store(chain, one, ptr, info);
+    dag.set_root(root);
+}
+
+/// `store volatile double 1.0` stayed an FP-constant store (a constant-pool load); the pin stores
+/// the bits as an `i64` when that store is legal (`replaceStoreOfFPConstant`).
+#[test]
+fn a_volatile_double_constant_is_stored_as_an_integer_where_the_target_asks() {
+    let tli = TargetLowering::x86_64(Features::default(), MVT::I64);
+    let mut dag = dag();
+    volatile_double_store(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    let root = dag.get_root();
+    assert_eq!(dag.value_type(dag.operand(root, 1)), EVT::I64);
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_volatile_double_store() {
+    let mut dag = dag();
+    volatile_double_store(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.value_type(dag.operand(dag.get_root(), 1)), EVT::Simple(MVT::F64));
+}
+
+/// Indexes any load or store at `base + simm9` (a simple AArch64 shape).
+struct Indexes;
+
+impl CombineHooks for Indexes {
+    fn is_indexed_legal(
+        &self,
+        _is_load: bool,
+        _vt: EVT,
+        _post: bool,
+    ) -> bool {
+        true
+    }
+    fn indexed_address_parts(
+        &self,
+        dag: &SelectionDAG,
+        _access: SDValue,
+        address: SDValue,
+        _post: bool,
+    ) -> Option<(SDValue, i64)> {
+        (dag.opcode(address) == ISD::Add)
+            .then(|| (dag.operand(address, 0), dag.constant(dag.operand(address, 1)).unwrap() as i64))
+    }
+    fn is_legal_addressing_mode(
+        &self,
+        _vt: EVT,
+        _base_offs: i64,
+        _scale: i64,
+    ) -> bool {
+        true
+    }
+}
+
+/// `store i32 4, p+16` then `store p+16, p`: the address has a second user.
+fn store_then_store_of_the_address(dag: &mut SelectionDAG) {
+    let (r, chain) = (dag.get_register(EVT::I64, 7), dag.entry_node());
+    let q = dag.get_register(EVT::I64, 9);
+    // A register base would need a copy (`CombineToPreIndexedLoadStore`, check #1).
+    let p = dag.get_node(ISD::Or, EVT::I64, &[r, q]);
+    let sixteen = dag.get_constant(16, EVT::I64);
+    let a = dag.get_node(ISD::Add, EVT::I64, &[p, sixteen]);
+    let info = |vt| MemInfo { mem_vt: vt, align: 8, volatile: false, base: MemBase::Stack(0), ext: None, space: 0 };
+    let value = dag.get_register(EVT::I32, 8);
+    let first = dag.get_store(chain, value, a, info(EVT::I32));
+    let second = dag.get_store(first, a, p, info(EVT::I64));
+    dag.set_root(second);
+}
+
+fn has_node(
+    dag: &SelectionDAG,
+    opcode: ISD,
+) -> bool {
+    dag.nodes().iter().any(|n| n.opcode == opcode)
+}
+
+/// A store whose address `p+16` is stored again kept the add beside a plain store; the pin writes the
+/// first as a pre-indexed store and stores the writeback (`CombineToPreIndexedLoadStore`).
+#[test]
+fn a_store_whose_address_is_used_again_is_pre_indexed_where_the_target_asks() {
+    let mut dag = dag();
+    store_then_store_of_the_address(&mut dag);
+    DagCombiner::new(&mut dag, &mut Indexes, CombineLevel::AfterLegalizeDag).run();
+    assert!(has_node(&dag, ISD::StorePre));
+}
+
+#[test]
+fn a_target_with_no_indexed_forms_keeps_the_plain_stores() {
+    let mut dag = dag();
+    store_then_store_of_the_address(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::AfterLegalizeDag).run();
+    assert!(!has_node(&dag, ISD::StorePre) && !has_node(&dag, ISD::StorePost));
+}
+
+fn zero_extended_target_node(
+    _dag: &SelectionDAG,
+    _node: SDValue,
+    _operand: &dyn Fn(usize) -> crate::backend::selectiondag::known_bits::KnownBits,
+) -> Option<crate::backend::selectiondag::known_bits::KnownBits> {
+    Some(crate::backend::selectiondag::known_bits::KnownBits { zero: 0xffff_ff00, one: 0, width: 32 })
+}
+
+fn masked_target_node(config: DagConfig) -> (SelectionDAG, SDValue) {
+    let mut dag = SelectionDAG::new(config);
+    let x = dag.get_register(EVT::I32, 5);
+    let node = dag.get_node(ISD::Machine(7), EVT::I32, &[x]);
+    let mask = dag.get_constant(0xff, EVT::I32);
+    let root = dag.get_node(ISD::And, EVT::I32, &[node, mask]);
+    dag.set_root(root);
+    (dag, node)
+}
+
+/// A target node the target says is a byte: `(and node, 0xff)` is `node`. Without the hook the node
+/// is unknown and the mask stays.
+#[test]
+fn the_known_bits_of_a_target_node_come_from_the_target_where_it_says() {
+    let (mut dag, node) = masked_target_node(DagConfig {
+        known_bits_for_target_node: Some(zero_extended_target_node),
+        ..DagConfig::default()
+    });
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.get_root(), node);
+}
+
+#[test]
+fn a_target_that_says_nothing_of_its_node_keeps_the_mask() {
+    let (mut dag, _) = masked_target_node(DagConfig::default());
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::And);
 }

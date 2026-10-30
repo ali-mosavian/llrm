@@ -79,6 +79,9 @@ pub struct BuilderTarget {
     /// Sibling calls become `TC_RETURN`s (tail-call step 3); off until the
     /// emitter lays them (step 5).
     pub tail_calls: bool,
+    /// `TargetLowering::isZExtFree(Val, VT)`: the zero extension of `Val` to `VT` costs nothing. A value
+    /// exported to another block that this holds for is zero extended, not any extended.
+    pub is_zext_free: fn(&SelectionDAG, SDValue, EVT) -> bool,
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
@@ -151,6 +154,15 @@ impl BuilderTarget {
         tti: Option<std::rc::Rc<dyn llrm_mir::tti::Tti>>,
     ) -> BuilderTarget {
         self.tti = tti.map(TtiHandle);
+        self
+    }
+
+    /// This target with its `isZExtFree`.
+    pub fn with_zext_free(
+        mut self,
+        is_zext_free: fn(&SelectionDAG, SDValue, EVT) -> bool,
+    ) -> BuilderTarget {
+        self.is_zext_free = is_zext_free;
         self
     }
 
@@ -269,6 +281,7 @@ impl BuilderTarget {
             tuning: llrm_mir::target::Tuning::PIN,
             size_trade: None,
             tail_calls: false,
+            is_zext_free: |_, _, _| false,
             tti: None,
             runtime_calls: None,
             target_nodes: None,
@@ -300,6 +313,7 @@ impl BuilderTarget {
             tuning: llrm_mir::target::Tuning::PIN,
             size_trade: None,
             tail_calls: false,
+            is_zext_free: |_, _, _| false,
             tti: None,
             runtime_calls: None,
             target_nodes: None,
@@ -2192,6 +2206,16 @@ impl Builder<'_> {
             self.pending_exports.push(chain);
             return Ok(());
         }
+        // `RegsForValue::getCopyToRegs`: "if (ExtendKind == ISD::ANY_EXTEND) if (TLI.isZExtFree(peekThroughFreeze(Val), RegisterVT))".
+        let mut peeled = value;
+        while self.dag.opcode(peeled) == ISD::Freeze {
+            peeled = self.dag.operand(peeled, 0);
+        }
+        let extend = if extend == ISD::AnyExtend && (self.target.is_zext_free)(&self.dag, peeled, reg_vt) {
+            ISD::ZeroExtend
+        } else {
+            extend
+        };
         let value = if reg_vt == vt { value } else { self.dag.get_node(extend, reg_vt, &[value]) };
         let chain = self.dag.get_copy_to_reg(entry, reg, value);
         self.pending_exports.push(chain);
@@ -3287,3 +3311,4 @@ fn is_runtime_routine(
         .and_then(|global| builder.module.global(global).name.owned())
         .is_some_and(|name| name.starts_with(llrm_hir::mir::RUNTIME))
 }
+

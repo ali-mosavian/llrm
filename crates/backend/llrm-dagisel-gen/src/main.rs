@@ -97,6 +97,7 @@ fn run() -> Result<(), String> {
                 complex_patterns: &table.complex_patterns,
                 xforms: &table.xforms,
                 instructions: &instructions,
+                extra: &[],
             };
             emitted.extend(flat.items.iter().filter_map(|m| match m {
                 llrm_dagisel::matcher::Matcher::EmitNode(e) | llrm_dagisel::matcher::Matcher::MorphNodeTo(e) => {
