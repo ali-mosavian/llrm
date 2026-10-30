@@ -1,17 +1,17 @@
 reason = "TEMPORARY (owner w12): loopsimplify groups a multi-backedge header into the single-latch form LLVM makes; downstream decisions of one large nib function then give 62 more code bytes at -Os (with 40bac73188 under it). Exit: fixed after the main merge; no row may pass its measured count."
 exception = true
 
-# tip = 5304/5172 (release/next 828561b429 control judge: 5366/5227 flagged).
+# tip = 5304/5172 (release/next 86054160ef measured 5362/5223, md5 4ab2ce640924; #6128 took 4 B).
 [[row]]
 label = "jpeg_fixed nib -Os"
 counter = "code_bytes"
 tip = 5304
 main = 5912
-to = 5366
+to = 5362
 
 [[row]]
 label = "jpeg_single nib -Os"
 counter = "code_bytes"
 tip = 5172
 main = 5759
-to = 5227
+to = 5223
