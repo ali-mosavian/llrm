@@ -35,6 +35,7 @@ impl Builder<'_> {
             Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove => {
                 self.visit_mem_intrinsic(instruction, info, intrinsic)
             }
+            Intrinsic::MemSetPattern => self.visit_memset_pattern(instruction),
             Intrinsic::FunnelShift { left } => self.visit_funnel_shift(instruction, *left),
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => {
                 self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart))
@@ -75,6 +76,17 @@ impl Builder<'_> {
                 Ok(())
             }
             Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse => Ok(()),
+            // `SelectionDAGBuilder.cpp#L7680`: the region information is
+            // discarded; the scope is an undefined pointer.
+            Intrinsic::InvariantEnd => Ok(()),
+            Intrinsic::InvariantStart => {
+                if let Some(result) = instruction.result {
+                    let vt = self.type_of(instruction.ty)?;
+                    let undef = self.dag.get_undef(vt);
+                    self.set_value(result, undef);
+                }
+                Ok(())
+            }
             // a hint the passes read: its value is its argument
             Intrinsic::Expect | Intrinsic::Restrict => {
                 let value = self.get_value(instruction.operands[0])?;
@@ -617,7 +629,7 @@ impl Builder<'_> {
         let (routine, values) = if matches!(which, Intrinsic::MemSet) {
             let value = self.get_value(operands[1])?;
             let pattern = dword(self, value).ok_or(Refused("a huge fill of an odd value"))?;
-            let routine = self.arch.huge_fill_routine(1).map_err(|_| Refused("no huge fill routine"))?;
+            let routine = self.full_arch()?.huge_fill_routine(1).map_err(|_| Refused("no huge fill routine"))?;
             (routine, vec![pattern, count, to_selector, to_offset])
         } else {
             let backward = match (which, proved(llrm_mir::intrinsics::FORWARD), proved(llrm_mir::intrinsics::BACKWARD))
@@ -631,7 +643,7 @@ impl Builder<'_> {
                 return Err(Refused("a huge memory intrinsic through a near source"));
             }
             let [from_offset, from_selector] = self.split_value(src, word);
-            let routine = self.arch.huge_copy_routine(backward).map_err(|_| Refused("no huge copy routine"))?;
+            let routine = self.full_arch()?.huge_copy_routine(backward).map_err(|_| Refused("no huge copy routine"))?;
             (routine, vec![count, from_selector, from_offset, to_selector, to_offset])
         };
         if routine.reads.len() != values.len() {
@@ -641,7 +653,7 @@ impl Builder<'_> {
             values.into_iter().zip(&routine.reads).map(|(value, reg)| (value, Place::Register(*reg))).collect();
         let callee = self.dag.get_target_external_symbol(word, routine.name);
         let root = self.memory_root();
-        let env = CallEnv { arch: self.arch, pointer: word };
+        let env = CallEnv { arch: self.full_arch()?, pointer: word };
         let (chain, _) = lib_call(&mut self.dag, &env, root, callee, &args, 0, 0, &[]);
         self.dag.set_root(chain);
         Ok(())
@@ -717,7 +729,7 @@ impl Builder<'_> {
                 // each here (15 bytes: 43 against 27). The old selector's rule.
                 // Owner w12. Exit: a cost hook on the target.
                 let strings = opt_size
-                    && self.arch.string_registers().is_some()
+                    && self.string_instructions().is_some()
                     && constant.is_some_and(|bytes| bytes / 4 + u64::from((bytes % 4).count_ones()) > limit as u64);
                 let inline = match constant {
                     Some(_) if strings => None,
@@ -823,7 +835,8 @@ impl Builder<'_> {
             return names.iter().any(|(one, ..)| one == name);
         }
         self.arch
-            .runtime("c")
+            .full()
+            .and_then(|arch| arch.runtime("c"))
             .and_then(|description| description.table().ok())
             .and_then(|table| table.get("libcalls").and_then(|calls| calls.as_array()).cloned())
             .is_some_and(|calls| calls.iter().any(|one| one.as_str() == Some(name)))
@@ -965,7 +978,7 @@ impl Builder<'_> {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
         code.push(0xFC);
-        let strings = self.arch.string_registers();
+        let strings = self.string_instructions();
         if strings.is_none() && !flat {
             return self.backward_rep_movsb(chain, dst, src, size);
         }
@@ -1022,7 +1035,7 @@ impl Builder<'_> {
             this.dag.get_node(ISD::Add, pointer, &[end, minus_one])
         };
         let (from, to) = (last(self, src), last(self, dst));
-        let strings = self.arch.string_registers();
+        let strings = self.string_instructions();
         let name_of = |register| self.arch.registers().name(register).expect("a described register");
         // A flat target names no string registers: `cx`, `si` and `di` are
         // its operands, and ES already holds what `pop es` loads.
@@ -1058,6 +1071,52 @@ impl Builder<'_> {
     }
 
     /// `rep stosb` of a size not known at compile time.
+    /// `llvm.experimental.memset.pattern` of a word or dword cell: `rep stosw`
+    /// / `rep stosd` of `count` cells, where the pin expands it to a loop
+    /// (`fills_by_pattern`). A volatile or huge fill is refused.
+    fn visit_memset_pattern(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), Refused> {
+        let Some(&[destination, value, count, volatile]) = instruction.operands.first_chunk::<4>() else {
+            return Err(Refused("a pattern fill of other than four operands"));
+        };
+        if !matches!(
+            volatile,
+            Operand::Constant(id) if matches!(self.module.context.get(id).kind, ConstantKind::Int(0))
+        ) {
+            return Err(Refused("a volatile pattern fill"));
+        }
+        let (dst, value, count) = (self.get_value(destination)?, self.get_value(value)?, self.get_value(count)?);
+        let pointer = self.target.dag.pointer;
+        let block = self.dag.value_type(value).size_in_bits() / 8;
+        if !matches!(block, 2 | 4) || self.dag.value_type(count).size_in_bits() > pointer.size_in_bits() {
+            return Err(Refused("a pattern fill of other than a word or dword cell, or counted past an address"));
+        }
+        if matches!(
+            self.function.operand_type(&self.module.context, destination).map(|ty| self.module.context.types.get(ty)),
+            Some(llrm_mir::types::Type::Pointer(space)) if self.layout.carries(*space)
+        ) {
+            return Err(Refused("a huge pattern fill"));
+        }
+        let root = self.memory_root();
+        let (cx, di, _) = self.string_registers();
+        let acc = self.accumulator(u64::from(block));
+        let count = self.dag.get_zext_or_trunc(count, pointer);
+        let copy = self.dag.get_copy_to_phys_reg(root, acc, value, None);
+        let mut glue = SDValue { node: copy.node, res: 1 };
+        let mut chain = SDValue { node: copy.node, res: 0 };
+        for (reg, value) in [(cx, count), (di, dst)] {
+            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = SDValue { node: copy.node, res: 1 };
+        }
+        let cell = self.dag.get_value_type_node(EVT::integer(block * 8));
+        let rep = self.dag.get_node_multi(x86isd::REP_STOS, &[EVT::OTHER, EVT::GLUE], &[chain, cell, glue]);
+        self.dag.set_root(SDValue { node: rep.node, res: 0 });
+        Ok(())
+    }
+
     fn rep_stosb(
         &mut self,
         chain: SDValue,
@@ -1105,11 +1164,11 @@ impl Builder<'_> {
         let value_type =
             if name == "memset" { types.int(self.dag.value_type(first_two[1]).size_in_bits()) } else { pointer_type };
         let arg_types = [pointer_type, value_type, word];
-        let first = self.arch.first_argument_offset(false);
+        let first = self.full_arch()?.first_argument_offset(false);
         let plan: Convention = convention_for(
             self.module,
             self.layout,
-            self.arch,
+            self.full_arch()?,
             first,
             convention,
             pointer_type,
@@ -1125,6 +1184,21 @@ impl Builder<'_> {
         let extends = [ISD::AnyExtend; 3];
         let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
         Ok(self.dag.get_root())
+    }
+
+    /// The accumulator a string operation of `block`-byte cells stores from:
+    /// `al`, `ax`, `eax`, and `rax` for a quadword cell.
+    fn accumulator(
+        &self,
+        block: u64,
+    ) -> llrm_lir::registers::RegId {
+        let name = match block {
+            1 => "al",
+            2 => "ax",
+            _ => "eax",
+        };
+        // `RAX` for a quadword block: the dword's name widened (`rax`).
+        self.arch.register_named(&if block == 8 { format!("r{}", &name[1..]) } else { name.to_owned() })
     }
 
     /// The count, destination and source registers of a string operation.
@@ -1228,7 +1302,7 @@ impl Builder<'_> {
         // block are `movsw` and `movsb` glued after the move, not a load and a
         // store from addresses made again (the pin's tail): 1 byte each. The
         // old selector's tail. Owner w12. Exit: a cost hook on the target.
-        if self.has_opt_size() && self.arch.string_registers().is_some() {
+        if self.has_opt_size() && self.string_instructions().is_some() {
             let mut last = rep;
             let mut rest = left;
             for width in [2u64, 1] {
@@ -1303,13 +1377,7 @@ impl Builder<'_> {
             (1, size, value)
         };
         let _ = &mut val;
-        let name = match block {
-            1 => "al",
-            2 => "ax",
-            _ => "eax",
-        };
-        // `RAX` for a quadword block: the dword's name widened (`rax`).
-        let acc = self.arch.register_named(&if block == 8 { format!("r{}", &name[1..]) } else { name.to_owned() });
+        let acc = self.accumulator(block);
         let (cx, di, _) = self.string_registers();
         let count = self.dag.get_constant(u128::from(count), pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, acc, val, None);

@@ -191,6 +191,7 @@ pub mod divrempairs;
 pub mod earlycse;
 pub mod edges;
 pub mod emptyblocks;
+pub mod exitne;
 pub mod exitopt;
 pub mod exitpredicate;
 pub mod exitsink;
@@ -309,6 +310,7 @@ mod pin_slots_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
+pub mod pipeline_text;
 pub mod ports;
 pub mod predicateinfo;
 pub mod profit;
