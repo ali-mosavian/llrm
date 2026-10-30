@@ -180,6 +180,19 @@ fn fewer_instructions_win_before_fewer_registers() {
     assert!(few.is_loser() && many.is_less(&tti, &few));
 }
 
+/// `Cost::isLess` ranks by instructions first only when `-lsr-insns-cost` is on
+/// the command line, which nothing passes: a target with the default order
+/// (registers first) kept a solution of 2 instructions and 4 registers over the
+/// pin's 3 and 3, and a copy loop got a shared index instead of two pointers.
+#[test]
+fn the_default_order_ranks_registers_before_instructions() {
+    let tti = llrm_mir::tti::Basic;
+    let (mut few, mut many) = (Cost::new(), Cost::new());
+    few.c = LsrCost { insns: 2, num_regs: 4, ..LsrCost::default() };
+    many.c = LsrCost { insns: 3, num_regs: 3, ..LsrCost::default() };
+    assert!(many.is_less(&tti, &few) && !few.is_less(&tti, &many));
+}
+
 #[test]
 fn what_an_address_mode_folds_by_kind() {
     let tti = X86::of_cpu("core2").unwrap();
