@@ -1,0 +1,26 @@
+reason = "TEMPORARY trade-off (owner qb-frontend-metadata-tbaa-hoist; oversight ruled 2026-10-30). Array descriptor words are now hoisted out of loops (quicksort memops -25%, instructions -11%); the hoisted values then compete for registers: bq32 re-pushes the descriptor pointer from the stack (+16 B), m16 spills two selectors (+2 memory operands). Removal: 2026-11-06, or when the hoist-aware spill choice lands; no row may pass its measured count."
+exception = true
+
+# tip = 65098fd950; main = 854bb7efc4. Above main by 3 bytes.
+[[row]]
+label = "quicksort bq32 -O2"
+counter = "code_bytes"
+tip = 572
+main = 585
+to = 588
+
+# Better than main (503), worse than the tip by 2; instructions -3, clocks -20.
+[[row]]
+label = "parity/qbsp bas -O2"
+counter = "memory_operands"
+tip = 420
+main = 503
+to = 422
+
+# Better than main (593), worse than the tip by 2; instructions -6, clocks -26.
+[[row]]
+label = "parity/qbsp bas -Os"
+counter = "memory_operands"
+tip = 456
+main = 593
+to = 458
