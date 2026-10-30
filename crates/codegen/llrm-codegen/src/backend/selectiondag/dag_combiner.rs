@@ -77,6 +77,14 @@ pub trait CombineHooks {
         false
     }
 
+    /// `tryStoreMergeOfConstants`' "check whether a truncstore is legal": a run
+    /// of narrow constant stores whose joined type is illegal is one
+    /// truncating store of the promoted type (AArch64: two `strb` are a `strh`).
+    /// DEVIATE: off by default, as above. Exit: x86 judged.
+    fn merge_stores_via_trunc_store(&self) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         _op: ISD,

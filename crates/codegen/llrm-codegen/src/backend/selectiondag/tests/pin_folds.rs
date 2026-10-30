@@ -1,7 +1,7 @@
 //! Folds the pin makes for every target, on only for a target that asks
 //! (`CombineHooks`), so x86's rows are untouched until the judge has seen them.
 
-use super::super::actions::LoadExt;
+use super::super::actions::{LoadExt, TargetLowering};
 use super::super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner, NoCombines};
 use super::*;
 use crate::backend::selectiondag::{MemBase, MemInfo};
@@ -16,6 +16,9 @@ impl CombineHooks for Asks {
         true
     }
     fn push_freeze_through_operands(&self) -> bool {
+        true
+    }
+    fn merge_stores_via_trunc_store(&self) -> bool {
         true
     }
 }
@@ -107,4 +110,57 @@ fn a_target_that_does_not_ask_keeps_the_frozen_compare() {
     frozen_compare(&mut dag);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.get_root()), ISD::Freeze);
+}
+
+fn two_byte_stores(dag: &mut SelectionDAG) {
+    let (ptr, chain) = (dag.get_register(EVT::I64, 7), dag.entry_node());
+    let info = |offset| MemInfo {
+        mem_vt: EVT::I8,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(offset),
+        ext: None,
+        space: 0,
+    };
+    let (lo, hi) = (dag.get_constant(1, EVT::I8), dag.get_constant(0, EVT::I8));
+    let one = dag.get_constant(1, EVT::I64);
+    let next = dag.get_node(ISD::Add, EVT::I64, &[ptr, one]);
+    let first = dag.get_store(chain, lo, ptr, info(0));
+    let second = dag.get_store(first, hi, next, info(1));
+    dag.set_root(second);
+}
+
+/// A target with no 16-bit register that can still store one from an `i32`.
+fn no_halfword_register() -> TargetLowering {
+    let mut tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    tli.types = TargetLoweringInfo::new(&[MVT::I8, MVT::I32], false);
+    tli.set_trunc_store_action(MVT::I32, MVT::I16, Action::Legal);
+    tli
+}
+
+fn is_one_halfword_store(dag: &SelectionDAG) -> bool {
+    let root = dag.get_root();
+    let NodeData::Mem(info) = dag.node(root).data else { return false };
+    dag.opcode(root) == ISD::Store && info.mem_vt == EVT::I16 && dag.constant(dag.operand(root, 1)) == Some(1)
+}
+
+/// Two adjacent byte stores of constants stayed two stores on AArch64, which
+/// has no 16-bit register: the pin joins them into one truncating `i16` store
+/// of the promoted `i32` constant (`strh`).
+#[test]
+fn two_byte_constant_stores_are_one_truncating_halfword_store() {
+    let tli = no_halfword_register();
+    let mut dag = dag();
+    two_byte_stores(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    assert!(is_one_halfword_store(&dag));
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_two_byte_stores() {
+    let tli = no_halfword_register();
+    let mut dag = dag();
+    two_byte_stores(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    assert!(!is_one_halfword_store(&dag));
 }
