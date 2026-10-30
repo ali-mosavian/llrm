@@ -236,6 +236,13 @@ fn x86_shrink_demanded_constant(
     Some(Some(dag.get_node(ISD::And, vt, &[x, new_mask])))
 }
 
+/// Whether this target promotes `i16` (and `i8` multiply) operations to `i32`
+/// (SD441: not at m16). `is_desirable_to_promote_op` and the `i16` multiply
+/// chain both ask this, so the chain is built exactly where nothing promotes.
+pub fn promotes_i16(tli: &TargetLowering) -> bool {
+    !tli.types.has_far_pointer()
+}
+
 /// `isTypeDesirableForOp` (undesirable) and `IsDesirableToPromoteOp`: an `i16`
 /// operation, or an `i8` multiply by a constant, is done in `i32` unless an
 /// operand is a load the operation could fold.
@@ -252,7 +259,7 @@ fn is_desirable_to_promote_op(
 ) -> Option<EVT> {
     let vt = dag.value_type(op);
     let opcode = dag.opcode(op);
-    if tli.types.has_far_pointer() || !tli.types.is_type_legal(vt) {
+    if !promotes_i16(tli) || !tli.types.is_type_legal(vt) {
         return None;
     }
     let is8_mul_by_constant = vt == EVT::I8 && opcode == ISD::Mul && dag.constant(dag.operand(op, 1)).is_some();

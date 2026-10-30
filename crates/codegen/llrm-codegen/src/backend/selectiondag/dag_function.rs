@@ -1027,7 +1027,7 @@ fn selected_in(
                 cmov: tli.can_use_cmov(),
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
-                i16_mul_chains: tli.types.has_far_pointer(),
+                i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
             },
             &selector,
             &mut hooks,

@@ -178,6 +178,28 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
     assert_eq!(shape(7, true, false), ISD::Sub);
 }
 
+/// The `i16` multiply chain is built where `i16` is not promoted and nowhere
+/// else: one predicate (`promotes_i16`) decides both, so changing SD441's rule
+/// moves them together.
+#[test]
+fn the_i16_chain_is_built_exactly_where_i16_is_not_promoted() {
+    use super::super::dag_combiner::CombineHooks;
+    use super::super::x86_lowering::promotes_i16;
+    let m16 = TargetLowering::x86_16(Features::default(), MVT::I16);
+    let m32 = TargetLowering::x86_32(Features::default(), MVT::I32);
+    for (tli, promotes) in [(m16, false), (m32, true)] {
+        let mut dag = dag();
+        // no foldable load: the pin's rule keeps an op beside one in i16
+        let x = dag.get_register(EVT::I16, 2);
+        let y = dag.get_register(EVT::I16, 3);
+        let sum = dag.get_node(ISD::Add, EVT::I16, &[x, y]);
+        let lowering = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: !promotes_i16(&tli) };
+        assert_eq!(promotes_i16(&tli), promotes);
+        assert_eq!(lowering.promote_type(&dag, &tli, sum).is_some(), promotes);
+        assert_eq!(lowering.i16_mul_chains, !promotes);
+    }
+}
+
 /// A lowering that returns two values (a double-width shift) leaves them as one
 /// `MERGE_VALUES`; nothing selects it, so 17 execution programs stopped at
 /// "unselected node MergeValues". `visitMERGE_VALUES` makes each user read the
