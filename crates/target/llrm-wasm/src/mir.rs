@@ -208,6 +208,8 @@ pub struct Function {
     pub symbols: Vec<(String, i64)>,
     /// The (name, parameters, results) of each function the code names: the
     /// signature the object file gives an undefined function.
+    /// Internal or private: no `.globl`, binding local in the object.
+    pub local: bool,
     pub callees: Vec<(String, Vec<ValType>, Vec<ValType>)>,
     /// The (name, type) of each wasm global the code names: an import of the object file.
     pub globals: Vec<(String, ValType)>,

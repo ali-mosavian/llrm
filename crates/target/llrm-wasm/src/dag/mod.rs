@@ -89,6 +89,7 @@ pub fn compile_function(
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
     // The pin's order after instruction selection: `-print-after-all` of `llc
     // -O0`.
+    f.local = module.named(name).is_some_and(|id| module.global(id).linkage != llrm_mir::module::Linkage::External);
     argument_move(&mut f);
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);

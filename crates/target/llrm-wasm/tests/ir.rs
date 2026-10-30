@@ -127,3 +127,9 @@ fn switches_on_a_parameter() {
 fn frames() {
     check("frame");
 }
+
+/// An internal function printed `.globl`; the pin prints none and the comment rides on `.type`.
+#[test]
+fn internal_functions_are_not_global() {
+    check("internal");
+}

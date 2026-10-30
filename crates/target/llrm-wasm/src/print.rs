@@ -97,13 +97,17 @@ fn operand_text(operand: &Operand) -> String {
 /// The function as `llc` prints it, from `.section` to the end comment.
 pub fn function(f: &Function) -> String {
     let name = &f.name;
-    let mut out = vec![
-        format!("\t.section\t.text.{name},\"\",@"),
-        with_comment(&format!("\t.globl\t{name}"), &format!("# -- Begin function {name}")),
-        format!("\t.type\t{name},@function"),
-        with_comment(&format!("{name}:"), &format!("# @{name}")),
-        format!("\t.functype\t{name} ({}) -> ({})", type_list(&f.params), type_list(&f.results)),
-    ];
+    let begin = format!("# -- Begin function {name}");
+    let mut out = vec![format!("\t.section\t.text.{name},\"\",@")];
+    // The begin-function comment rides on the first directive: `.globl` where there is one.
+    if f.local {
+        out.push(with_comment(&format!("\t.type\t{name},@function"), &begin));
+    } else {
+        out.push(with_comment(&format!("\t.globl\t{name}"), &begin));
+        out.push(format!("\t.type\t{name},@function"));
+    }
+    out.push(with_comment(&format!("{name}:"), &format!("# @{name}")));
+    out.push(format!("\t.functype\t{name} ({}) -> ({})", type_list(&f.params), type_list(&f.results)));
     if !f.locals.is_empty() {
         out.push(format!("\t.local  \t{}", type_list(&f.locals)));
     }

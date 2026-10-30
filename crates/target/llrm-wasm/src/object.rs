@@ -161,6 +161,18 @@ pub fn encode_instruction(
         panic!("opcode {} is a pseudo or has no encoding", asm.text);
     }
     let immediates = inst.operands.iter().filter(|o| o.is_immediate());
+    if asm.names == ["brl"] {
+        // `br_table`: the number of targets, each depth, then the default's.
+        let depths: Vec<u64> = immediates
+            .map(|operand| match *operand {
+                Operand::Imm(depth) => depth as u64,
+                other => panic!("br_table operand {other:?} is no depth"),
+            })
+            .collect();
+        uleb(out, depths.len() as u64 - 1);
+        depths.iter().for_each(|&depth| uleb(out, depth));
+        return;
+    }
     for (kind, operand) in asm.kinds.iter().zip(immediates) {
         if let Operand::Sym(at) = *operand {
             // The value is the symbol's final index or address, patched in by `write`.
@@ -183,7 +195,7 @@ pub fn encode_instruction(
             "i32imm_op" => sleb(out, i64::from(value as i32)),
             "i64imm_op" => sleb(out, value),
             "offset32_op" => uleb(out, u64::from(value as u32)),
-            "f32imm_op" | "f64imm_op" | "function32_op" | "function64_op" | "global_op" | "signature" | "bb_op" => {
+            "f32imm_op" | "f64imm_op" | "function32_op" | "function64_op" | "global_op" => {
                 panic!("operand class {kind} of {} is not encoded yet", asm.text)
             }
             _ => uleb(out, value as u64),
@@ -202,6 +214,8 @@ pub struct Encoded {
     pub callees: Vec<(String, Vec<ValType>, Vec<ValType>)>,
     /// The wasm globals the body names.
     pub globals: Vec<(String, ValType)>,
+    /// Internal or private.
+    pub local: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,7 +265,7 @@ pub fn encode_function(f: &Function) -> Encoded {
         body.push(val_type(ty));
     }
     let mut relocs = Vec::new();
-    for inst in &f.blocks[0] {
+    for inst in f.blocks.iter().flatten() {
         encode_instruction(&mut body, inst, &f.symbols, &mut relocs);
     }
     Encoded {
@@ -262,6 +276,7 @@ pub fn encode_function(f: &Function) -> Encoded {
         relocs,
         callees: f.callees.clone(),
         globals: f.globals.clone(),
+        local: f.local,
     }
 }
 
@@ -324,6 +339,7 @@ enum Symbol<'a> {
         name: &'a str,
         /// The position in `functions` of its definition, `None` for an import.
         defined: Option<usize>,
+        local: bool,
         params: &'a [ValType],
         results: &'a [ValType],
     },
@@ -386,7 +402,7 @@ fn introduce<'a>(
     } else if let Some((_, ty)) = f.and_then(|f| f.globals.iter().find(|(one, _)| one == name)) {
         symbols.push(Symbol::Global { name, ty: *ty });
     } else if let Some((_, params, results)) = f.and_then(|f| f.callees.iter().find(|(one, ..)| one == name)) {
-        symbols.push(Symbol::Function { name, defined: None, params, results });
+        symbols.push(Symbol::Function { name, defined: None, local: false, params, results });
     } else {
         panic!("symbol {name} is no variable, global or called function");
     }
@@ -400,7 +416,7 @@ pub fn write(
     let objects = &data.objects;
     let mut symbols: Vec<Symbol> = Vec::new();
     for (at, f) in functions.iter().enumerate() {
-        let defined = Symbol::Function { name: &f.name, defined: Some(at), params: &f.params, results: &f.results };
+        let defined = Symbol::Function { name: &f.name, defined: Some(at), local: f.local, params: &f.params, results: &f.results };
         let known = symbols.iter().position(|s| matches!(s, Symbol::Function { name, .. } if *name == f.name));
         match known {
             Some(known) => symbols[known] = defined,
@@ -463,7 +479,13 @@ pub fn write(
         _ => 0,
     };
 
+    // Types are numbered in the order the symbols were created, imports and definitions alike.
     let mut types: Vec<(&[ValType], &[ValType])> = Vec::new();
+    for symbol in &symbols {
+        if let Symbol::Function { params, results, .. } = symbol {
+            type_index(&mut types, (params, results));
+        }
+    }
     let signatures: Vec<usize> = functions.iter().map(|f| type_index(&mut types, (&f.params, &f.results))).collect();
     let import_types: Vec<usize> = imports
         .iter()
@@ -576,11 +598,11 @@ pub fn write(
     uleb(&mut table, symbols.len() as u64);
     for (s, symbol) in symbols.iter().enumerate() {
         match symbol {
-            Symbol::Function { name: function, defined, .. } => {
+            Symbol::Function { name: function, defined, local, .. } => {
                 table.push(SYMBOL_KIND_FUNCTION);
                 if defined.is_some() {
-                    // Flags (global, default visibility, defined), index, name.
-                    table.push(0);
+                    // Flags (binding, default visibility, defined), index, name.
+                    table.push(if *local { WASM_SYMBOL_BINDING_LOCAL } else { 0 });
                     uleb(&mut table, u64::from(index_of[s]));
                     name(&mut table, function);
                 } else {

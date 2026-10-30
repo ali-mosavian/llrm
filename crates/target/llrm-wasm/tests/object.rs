@@ -87,3 +87,18 @@ fn segments_symbols_and_alignment_follow_the_assembler() {
 fn linkage_pointers_and_the_stack_pointer_import() {
     check("linkage");
 }
+
+/// The whole object of each `tests/ir` fixture. The encoder wrote only the first block of a function, so any
+/// loop or branch lost its code after the first `block`; an internal function was written as a global.
+#[test]
+fn every_fixture_object_is_the_pins() {
+    let mut wrong = Vec::new();
+    for name in
+        ["internal", "obj_arith", "obj_branch", "obj_call", "obj_cmp", "obj_frame", "obj_global", "obj_mem", "obj_phis", "obj_shapes", "obj_shifts", "obj_switch"]
+    {
+        if std::panic::catch_unwind(|| check(name)).is_err() {
+            wrong.push(name);
+        }
+    }
+    assert!(wrong.is_empty(), "objects that differ from the pin's: {wrong:?}");
+}
