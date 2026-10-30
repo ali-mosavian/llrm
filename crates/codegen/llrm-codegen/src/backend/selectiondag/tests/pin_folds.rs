@@ -9,6 +9,12 @@ use crate::backend::selectiondag::{MemBase, MemInfo};
 struct Asks;
 
 impl CombineHooks for Asks {
+    fn widen_multiply_high_any_width(&self) -> bool {
+        true
+    }
+    fn shift_amount_type(&self, shifted: EVT) -> EVT {
+        shifted
+    }
     fn fold_xor_of_and_with_mask(&self) -> bool {
         true
     }
@@ -270,4 +276,46 @@ fn a_target_that_does_not_ask_keeps_the_mask_over_the_frozen_load() {
     masked_frozen_extload(&mut dag);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.get_root()), ISD::And);
+}
+
+/// An `i64`-multiply target whose `i32` has no high multiply (AArch64's shape).
+fn no_high_multiply() -> TargetLowering {
+    let mut tli = TargetLowering::x86_64(Features::default(), MVT::I64);
+    for op in [ISD::MulHU, ISD::UMulLoHi] {
+        tli.set_operation_action(op, MVT::I32, Action::Expand);
+    }
+    tli
+}
+
+fn has_wide_multiply(dag: &SelectionDAG, value: SDValue) -> bool {
+    let node = dag.node(value);
+    (dag.opcode(value) == ISD::Mul && dag.value_type(value) == EVT::I64)
+        || node.ops.iter().any(|&op| has_wide_multiply(dag, op))
+}
+
+fn udiv_by_three(dag: &mut SelectionDAG) {
+    let x = dag.get_register(EVT::I32, 5);
+    let three = dag.get_constant(3, EVT::I32);
+    let root = dag.get_node(ISD::UDiv, EVT::I32, &[x, three]);
+    dag.set_root(root);
+}
+
+/// `udiv i32 x, 3` took the high half through `MULHU`/`UMUL_LOHI` on a target
+/// with a legal `i64` multiply; the pin multiplies in `i64` and shifts right.
+#[test]
+fn a_32_bit_udiv_by_a_constant_is_a_wide_multiply_where_the_target_asks() {
+    let tli = no_high_multiply();
+    let mut dag = dag();
+    udiv_by_three(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    assert!(has_wide_multiply(&dag, dag.get_root()));
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_32_bit_high_multiply() {
+    let tli = no_high_multiply();
+    let mut dag = dag();
+    udiv_by_three(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    assert!(!has_wide_multiply(&dag, dag.get_root()));
 }

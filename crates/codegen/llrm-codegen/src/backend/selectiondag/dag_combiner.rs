@@ -104,6 +104,23 @@ pub trait CombineHooks {
         true
     }
 
+    /// `getShiftAmountTy` for a shift of `shifted`: x86's is `i8`. DEVIATE:
+    /// the pin asks the target; AArch64 shifts by a value of the shifted type.
+    /// Exit: x86 judged.
+    fn shift_amount_type(
+        &self,
+        _shifted: EVT,
+    ) -> EVT {
+        EVT::I8
+    }
+
+    /// `BuildSDIV`/`BuildUDIV`'s "a legal multiply of the wide type" for any
+    /// width, not only `i16` and below. DEVIATE: off by default, as above.
+    /// Exit: x86 judged.
+    fn widen_multiply_high_any_width(&self) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         _op: ISD,
