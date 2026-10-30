@@ -15,13 +15,15 @@ pub mod fold;
 pub mod mfunc;
 pub mod placement;
 pub mod regalloc;
+pub mod reloads;
 pub mod reschedule;
 pub mod sink;
 pub mod spill;
 
 pub use commute::commute_tied;
-pub use fold::{branch_fold, branch_fold_hoisting, remove_identity_copies, remove_redundant_copies};
+pub use fold::{branch_fold, branch_fold_hoisting, remove_identity_copies, remove_redundant_copies, remove_redundant_copies_between};
 pub use mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg};
 pub use regalloc::{Allocate, Assignment, GraphColoring, Target};
+pub use reloads::forward_reloads;
 pub use reschedule::reschedule_kills;
-pub use sink::{Jump, machine_sink, split_critical_edge};
+pub use sink::{Jump, machine_sink, machine_sink_in_place, split_critical_edge};

@@ -54,7 +54,11 @@ fn op(
     name: &'static str,
     operands: Vec<Operand>,
 ) -> Inst {
-    Inst::new(Kind::Op(name), operands)
+    let mut inst = Inst::new(Kind::Op(name), operands);
+    // a `def*` stands for an instruction that cannot run twice: it is not
+    // rematerialized, so pressure spills it
+    inst.side_effects = name.starts_with("def");
+    inst
 }
 
 fn function(
@@ -122,6 +126,10 @@ fn a_phi_copies_before_the_terminator() {
     assert_eq!(function.blocks[1].insts[0].kind, Kind::Copy);
 }
 
+thread_local!(static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
+
+/// `any` is called once for each colouring of the function, so it counts the
+/// rounds.
 struct Spilly;
 
 impl Target for Spilly {
@@ -134,7 +142,9 @@ impl Target for Spilly {
         Some(())
     }
 
-    fn any() {}
+    fn any() {
+        ROUNDS.with(|rounds| rounds.set(rounds.get() + 1));
+    }
 
     fn candidates(_: ()) -> Vec<RegId> {
         vec![R0, R1]
