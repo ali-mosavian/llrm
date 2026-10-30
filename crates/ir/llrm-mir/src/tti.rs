@@ -497,6 +497,17 @@ pub trait Tti {
         to: Ty,
     ) -> bool;
 
+    /// `hasDivRemOp(iN, IsSigned)`: whether the target has one divide that makes the quotient and the remainder.
+    /// The base class has none.
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        signed: bool,
+    ) -> bool {
+        let _ = (bits, signed);
+        false
+    }
+
     /// `isLegalAddressingMode`: `base_gv + base_offset + base_reg + scale *
     /// index`.
     fn is_legal_addressing_mode(
