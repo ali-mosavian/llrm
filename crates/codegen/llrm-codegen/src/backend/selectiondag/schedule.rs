@@ -134,8 +134,11 @@ pub trait SchedInfo {
     /// DEVIATE: the register a copy of a virtual register may clobber, as the
     /// move it can become after allocation does (M68k's `MOVE` sets CCR). A
     /// copy is then held back from between a flag-setter and its reader, where
-    /// the pin leaves it and the flags are saved around it. None: copies
-    /// clobber nothing.
+    /// the pin leaves it and the flags are saved around it: `llc` on
+    /// `llrm-m68k/bench/library/hex.ll` emits `move.w %sr,-(%sp)` /
+    /// `move.w (%sp)+,%ccr` in the loop under the default scheduler (44
+    /// instructions) and under `-pre-RA-sched=source` (42); with this, 31. None:
+    /// copies clobber nothing.
     fn copy_clobbers(&self) -> Option<u16> {
         None
     }
