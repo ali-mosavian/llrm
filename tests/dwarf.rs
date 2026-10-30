@@ -1359,4 +1359,18 @@ fn an_x86_64_o2_object_describes_its_calls_and_what_their_arguments_hold() {
     );
     assert!(first.contains("DW_OP_entry_value(DW_OP_reg5 RDI)") && first.contains("DW_OP_lit7"), "{first}");
     assert_eq!(text.matches("DW_AT_declaration").count(), 2, "g and h: {text}");
+    // Without optimisation the frontend describes no call: no declaration
+    // either (they were written for every callee, at every level).
+    let plain = scratch.path().join("plain.o");
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .args(["-m64", "--isel=dag", "-O0", "-g", "-c"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&plain)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let said = Command::new(&dwarfdump).arg("--debug-info").arg(&plain).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout);
+    assert!(!text.contains("DW_AT_declaration") && !text.contains("DW_TAG_call_site"), "{text}");
 }

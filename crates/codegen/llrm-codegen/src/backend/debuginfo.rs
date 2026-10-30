@@ -1249,6 +1249,21 @@ pub fn laid_out(
             })
             .collect();
     }
+    // Only a callee a call site names is declared: a unit without call sites
+    // is the unit it was.
+    let used: BTreeSet<usize> = info
+        .functions
+        .iter()
+        .flat_map(|one| &one.calls)
+        .filter_map(|call| if let Some(model::CallOrigin::Declaration(at)) = call.origin { Some(at) } else { None })
+        .collect();
+    let kept: Vec<usize> = used.into_iter().collect();
+    for call in info.functions.iter_mut().flat_map(|one| one.calls.iter_mut()) {
+        if let Some(model::CallOrigin::Declaration(at)) = &mut call.origin {
+            *at = kept.iter().position(|one| one == at).expect("kept");
+        }
+    }
+    info.declarations = kept.iter().map(|&at| info.declarations[at].clone()).collect();
     // The code of each segment that has a procedure: from the first to its last
     // byte.
     for section in starts.iter().map(|&(section, _)| section).collect::<std::collections::BTreeSet<_>>() {
