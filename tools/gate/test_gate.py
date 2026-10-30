@@ -16,6 +16,12 @@ ROOT = gate.ROOT
 
 
 
+@pytest.fixture(autouse=True)
+def ambient_prebuilt_flag(monkeypatch):
+    """CI sets GATE_PREBUILT for the whole job, tests included: a plan's steps must not depend on it (trial run 41024196294: python-2 failed 2 tests)."""
+    monkeypatch.delenv("GATE_PREBUILT", raising=False)
+
+
 def ci_needs(workflow: str) -> list[str]:
     """The last four jobs `ci:` waits for: the ones before them (static, toolchain, pintools, build) come and go."""
     return re.search(r"\n  ci:\n    needs: \[([^\]]*)\]", workflow)[1].split(", ")[-4:]
