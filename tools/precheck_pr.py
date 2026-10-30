@@ -37,7 +37,9 @@ import parity_smoke  # noqa: E402
 import parity_squash  # noqa: E402
 from buildslot import slotted  # noqa: E402
 
-BASE = "origin/feat/parity"
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
+BASE = f"origin/{BRANCH}"
 OWNER = re.compile(r"^Owner:\s*\S+", re.M)
 # The board's compile-cost command (docs/working/ledger-command.md): a perf PR's before/after pair is taken with it.
 LEDGER_COMMAND = "-m32 -mabi=sysv -march=i486 -O2"
@@ -292,7 +294,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--title", default="")
     args = parser.parse_args(argv)
     root = Path(git("rev-parse", "--show-toplevel", cwd=Path.cwd()).strip())
-    subprocess.run(["git", "fetch", "-q", "origin", "feat/parity"], cwd=root)
+    subprocess.run(["git", "fetch", "-q", "origin", BRANCH], cwd=root)
     title, body = args.title, args.body_file.read_text() if args.body_file else None
     if body is None:
         shown = subprocess.run(["gh", "pr", "view", *([args.pr] if args.pr else []), "--json", "title,body"], cwd=root, capture_output=True, text=True)

@@ -563,7 +563,8 @@ fn _simplified(
 /// What `loop_` is once `bridge` stands on the edges from `sources` to
 /// `target`: the block joins it where `target` and a source are in it (it
 /// reaches the latch through `target`, and some of what reaches it came from
-/// inside), and becomes its only latch where `target` is its header.
+/// inside), and replaces the latches among `sources` where `target` is its
+/// header.
 fn _bridged(
     loop_: &mut loops::Loop,
     bridge: i64,
@@ -575,7 +576,9 @@ fn _bridged(
     }
     loop_.body.insert(bridge);
     if loop_.header == target {
-        loop_.latches = BTreeSet::from([bridge]);
+        // Only the edges from `sources` moved: the other latches stay.
+        loop_.latches.retain(|latch| !sources.contains(latch));
+        loop_.latches.insert(bridge);
     }
     true
 }
