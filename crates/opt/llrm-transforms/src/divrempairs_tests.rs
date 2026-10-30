@@ -193,6 +193,20 @@ fn test_a_tti_with_a_divrem_op_keeps_the_pair() {
     assert!(!after.contains("sub i32 %a"), "the expanded remainder is gone: {after}");
 }
 
+/// The exit of the deviation anchors here: x86 says nothing on its `Tti` and states its divide on its
+/// `Lowering`, and still keeps the pair. When x86 moves the answer to its `Tti` this keeps passing; if the
+/// `Lowering` site goes first it fails.
+#[test]
+fn test_x86_with_a_tti_that_says_no_still_pairs_through_its_lowering() {
+    use llrm_mir::target::Machine as _;
+    let x86 = llrm_x86_m16::Dos::default();
+    assert!(!x86.tti().is_some_and(|tti| tti.has_div_rem_op(32, false)), "x86's Tti says no");
+    assert!(x86.lowering().is_some_and(|lowering| lowering.has_div_rem_op(32, false)), "x86's lowering says yes");
+    let after = run(EXPANDED, true);
+    assert!(after.contains("urem i32 %a, %b"), "{after}");
+    assert!(!after.contains("sub i32 %a"), "the expanded remainder is gone: {after}");
+}
+
 /// Sibling: a `Tti` that says nothing (the base class) leaves the expanded form
 /// as it was.
 #[test]
