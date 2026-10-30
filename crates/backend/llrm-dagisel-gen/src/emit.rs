@@ -228,7 +228,9 @@ pub fn render(src: &Source) -> Result<String, String> {
         writeln!(w, "];\n").unwrap();
     } else {
         writeln!(w, "/// The pattern predicates still checked when a function is selected.").unwrap();
-        writeln!(w, "pub fn pattern_predicate<C: PatternContext>(ctx: &C, id: u16) -> bool {{\n    match id {{")
+        // With no open predicate nothing reads the context: the name says so (`-D warnings` refuses `ctx` unused).
+        let ctx = if src.open.is_empty() { "_ctx" } else { "ctx" };
+        writeln!(w, "pub fn pattern_predicate<C: PatternContext>({ctx}: &C, id: u16) -> bool {{\n    match id {{")
             .unwrap();
         for (id, e) in src.open {
             writeln!(w, "        {id} => {},", expr(e, src.cpu)?).unwrap();

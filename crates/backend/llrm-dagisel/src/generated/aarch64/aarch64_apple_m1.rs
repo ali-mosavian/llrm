@@ -22522,7 +22522,7 @@ pub static OPERANDS: [u16; 446] = [0, 1, 0, 2, 0, 0, 3, 2, 2, 3, 0, 2, 3, 1, 2, 
 pub const TABLE: Table = Table { items: &ITEMS, operands: &OPERANDS };
 
 /// The pattern predicates still checked when a function is selected.
-pub fn pattern_predicate<C: PatternContext>(ctx: &C, id: u16) -> bool {
+pub fn pattern_predicate<C: PatternContext>(_ctx: &C, id: u16) -> bool {
     match id {
         _ => unreachable!("pattern predicate {id} is not in this table"),
     }
