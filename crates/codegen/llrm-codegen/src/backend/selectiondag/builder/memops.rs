@@ -1059,8 +1059,16 @@ impl Builder<'_> {
 
     /// `rep stos` of a size not known at compile time: the unit is the widest
     /// the size is known to be a whole multiple of (`n << 1` bytes of zero are
-    /// `n` words), as `rep_stos` takes it from a constant size. DEVIATE: the
-    /// pin calls `memset` here; the runtime has none. Exit: the target has one.
+    /// `n` words), as `rep_stos` takes it from a constant size.
+    ///
+    /// DEVIATE: the pin calls `memset` for a size not known at compile time;
+    /// m16 has no libc `memset`, so this was already `rep stosb` here and only
+    /// the unit is new. Every m16 profile has 32-bit operands (the lowest is
+    /// the 386; llrm-cc rejects `-march=i286`), so a dword unit needs no
+    /// gate. Like every string operation in this file it relies on DF being
+    /// clear on entry (the `cld` convention). Exit: a runtime `memset` on
+    /// m16 lands and this lowers to the call; this unit choice is then
+    /// removed.
     fn rep_stosb(
         &mut self,
         chain: SDValue,

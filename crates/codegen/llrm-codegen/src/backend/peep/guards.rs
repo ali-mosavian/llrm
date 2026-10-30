@@ -535,6 +535,12 @@ pub fn holds_after(
     if !writes.is_disjoint(&guarded) {
         return false;
     }
+    // DEVIATE (pin: a spill slot is a FixedStack operand, alias-free against
+    // every other access; the pin's reload there is not kept either). Exit:
+    // pin-faithful spill placement leaves no such pair. ASSUMPTION: an access
+    // through an array index never reaches a spill slot unless the program is
+    // out of bounds (C: undefined; QB: bounds-checked). Inline asm and runtime
+    // frame accesses are volatile or clobbering here and stop the forwarding.
     // A slot only the allocator's spills use is reached by no program pointer
     // (nothing takes its address): a write through a register, a string
     // instruction or a call cannot change it, only an access naming the slot.

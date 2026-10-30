@@ -1412,32 +1412,47 @@ define i16 @f() {
     assert!(matches!(zero.dests.as_slice(), [Loc::Held(held)] if held.width == 4), "{zero:?}");
 }
 
-/// The width in bytes of the register of the `rep stos` a `memset` of `n << shift` bytes of zero becomes
-/// at m16 -O2 on a 486 (`None`: no fill).
-fn dynamic_fill_unit(shift: u32) -> Option<String> {
+/// The width in bytes of the register of the `rep stos` a `memset` of the size
+/// `%s` (defined by `size`, from the argument `%n`) bytes of `value` becomes at
+/// m16 on `cpu` (`None`: no fill).
+fn dynamic_fill_unit_of(
+    size: &str,
+    value: u8,
+    cpu: &str,
+) -> Option<String> {
     let text = format!(
         "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
 define void @f(ptr %p, i16 %n) {{
 entry:
-  %s = shl nuw i16 %n, {shift}
-  call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 %s, i1 false)
+  {size}
+  call void @llvm.memset.p0.i16(ptr %p, i8 {value}, i16 %s, i1 false)
   ret void
 }}
 "
     );
     let module = llrm_mir::parse::module(&text).expect("parses");
-    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let cpu = crate::backend::cpu::profile(cpu).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     insns
         .iter()
         .filter_map(|i| i.what.as_ref())
         .find(|w| w.op == crate::model::ir::Operation::Fill)
-        .and_then(|w| w.sources.iter().find_map(|source| match source {
-            crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
-            _ => None,
-        }))
+        .and_then(
+            |w| w.sources
+                .iter()
+                .find_map(
+                    |source| match source {
+                        crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                        _ => None,
+                    },
+                ),
+        )
+}
+
+fn dynamic_fill_unit(shift: u32) -> Option<String> {
+    dynamic_fill_unit_of(&format!("%s = shl nuw i16 %n, {shift}"), 0, "486")
 }
 
 /// sieve bq16: `memset(p, 0, n << 1)` of a 2-byte array was `rep stosb` of
@@ -1453,4 +1468,26 @@ fn a_fill_of_whole_words_is_rep_stosw() {
 #[test]
 fn a_fill_of_unknown_size_stays_rep_stosb() {
     assert_eq!(dynamic_fill_unit(0).as_deref(), Some("1"));
+}
+
+/// The unit is only as wide as the known bits of the size allow: `n` and `n |
+/// 1` are bytes, `n & -2` and `n << 1` words, `n << 2` dwords on the lowest
+/// profile m16 has (the 386; there is no 8086 or 286 profile, llrm-cc rejects
+/// `-march=i286`), so no profile gets a unit its registers lack.
+#[test]
+fn the_unit_of_a_dynamic_fill_follows_the_known_bits_of_its_size() {
+    let of = |size: &str, cpu: &str| dynamic_fill_unit_of(size, 0, cpu).expect("a fill");
+    assert_eq!(of("%s = add i16 %n, 0", "486"), "1");
+    assert_eq!(of("%s = or i16 %n, 1", "486"), "1");
+    assert_eq!(of("%s = and i16 %n, -2", "486"), "2");
+    assert_eq!(of("%s = shl nuw i16 %n, 2", "386"), "4");
+    assert_eq!(of("%s = shl nuw i16 %n, 3", "486"), "4");
+}
+
+/// A non-zero fill byte is splatted across the unit (`0x0101`, `0x01010101`):
+/// the same `rep stos` for any constant byte, and a byte fill for a byte we
+/// cannot splat at compile time.
+#[test]
+fn a_constant_fill_byte_is_splatted_into_the_unit() {
+    assert_eq!(dynamic_fill_unit_of("%s = shl nuw i16 %n, 1", 7, "486").as_deref(), Some("2"));
 }

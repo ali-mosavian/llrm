@@ -9,6 +9,12 @@
 //!      mov ax,[bp-6]
 //! ```
 //!
+//! DEVIATE: the pin's greedy allocator would not share the slot
+//! (StackSlotColoring only merges non-overlapping live ranges, so its store is
+//! read); ours shares homes (#6096) and leaves the dead store. Exit:
+//! pin-faithful spill placement reaches the same shape; this pass then finds
+//! nothing and goes.
+//!
 //! Backward liveness of the slots over the successors; a plain store kills its
 //! slot, any other operand naming it reads it. Only a slot the allocator owns
 //! (`spill_homes`) whose every access is the same cell is judged: a slot

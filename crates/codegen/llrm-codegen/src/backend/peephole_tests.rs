@@ -5938,11 +5938,22 @@ fn stores_left(blocks: &[(i64, &str, Vec<i64>)]) -> usize {
                         "A" => insn(
                             at,
                             Some((at, at)),
-                            Some(sem(Operation::Address, "lea", vec![rl(RegId::BX, 2)], vec![Loc::Address(AddressRef::new(Some(Addr::new(Space::Frame, -6).in_slot(-6))))])),
+                            Some(sem(
+                                Operation::Address,
+                                "lea",
+                                vec![rl(RegId::BX, 2)],
+                                vec![Loc::Address(AddressRef::new(Some(Addr::new(Space::Frame, -6).in_slot(-6))))],
+                            )),
                             vec![],
                             vec![],
                         ),
-                        _ => insn(at, Some((at, at)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![]),
+                        _ => insn(
+                            at,
+                            Some((at, at)),
+                            Some(sem(Operation::Return, "ret", vec![], vec![])),
+                            vec![],
+                            vec![],
+                        ),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -5959,7 +5970,8 @@ fn stores_left(blocks: &[(i64, &str, Vec<i64>)]) -> usize {
 
 #[test]
 fn test_a_spill_store_a_loop_reads_on_the_next_trip_stays() {
-    // The store ends the loop body; the read is at its top, reached by the back edge.
+    // The store ends the loop body; the read is at its top, reached by the back
+    // edge.
     assert_eq!(stores_left(&[(0, "", vec![100]), (100, "L SD", vec![100, 200]), (200, "ret", vec![])]), 1);
 }
 
@@ -5981,10 +5993,7 @@ fn test_a_slot_whose_address_escapes_keeps_every_store() {
 #[test]
 fn test_a_store_read_on_one_of_two_paths_stays() {
     // 0 -> {100 reads, 200 overwrites}: the read path needs it.
-    assert_eq!(
-        stores_left(&[(0, "SD", vec![100, 200]), (100, "L ret", vec![]), (200, "SS L ret", vec![])]),
-        2
-    );
+    assert_eq!(stores_left(&[(0, "SD", vec![100, 200]), (100, "L ret", vec![]), (200, "SS L ret", vec![])]), 2);
 }
 
 /// The movs left of `mov [bp-14],dx ; <between> ; mov dx,[bp-14]` (a spill and
@@ -5993,6 +6002,16 @@ fn test_a_store_read_on_one_of_two_paths_stays() {
 fn reload_across(
     place: Loc,
     taken: bool,
+) -> usize {
+    reload_across_with(place, taken, false)
+}
+
+/// `reload_across`, the instruction between volatile when `volatile`: how
+/// inline asm and runtime frame accesses are classified.
+fn reload_across_with(
+    place: Loc,
+    taken: bool,
+    volatile: bool,
 ) -> usize {
     let slot = || Addr::new(Space::Frame, -14).in_slot(-14);
     let cell = || Loc::Mem(mem(Some(slot()), 2, RegId::BP, -14, 1));
@@ -6005,14 +6024,25 @@ fn reload_across(
         insns.push(Arc::new(insn(
             5,
             Some((5, 5)),
-            Some(sem(Operation::Address, "lea", vec![rl(RegId::BX, 2)], vec![Loc::Address(AddressRef::new(Some(slot())))])),
+            Some(sem(
+                Operation::Address,
+                "lea",
+                vec![rl(RegId::BX, 2)],
+                vec![Loc::Address(AddressRef::new(Some(slot())))],
+            )),
             vec![],
             vec![],
         )));
     }
-    insns.push(Arc::new(mov(10, vec![place], vec![rl(RegId::CX, 2)], false)));
+    insns.push(Arc::new(Insn { volatile, ..mov(10, vec![place], vec![rl(RegId::CX, 2)], false) }));
     insns.push(Arc::new(mov(100, vec![rl(RegId::DX, 2)], vec![cell()], false)));
-    insns.push(Arc::new(insn(200, Some((200, 200)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])));
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
     let done = forwarded_reloads(rules(), &body("forwarded-reload", 0, vec![block(0, insns, vec![]).into()]));
     whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
 }
@@ -6030,6 +6060,11 @@ fn test_a_byte_store_into_the_spill_slot_stops_the_forwarding() {
 }
 
 #[test]
+/// ASSUMPTION (DEVIATE of `holds_after`): an access through an array index
+/// never reaches a spill slot unless the program is out of bounds (C:
+/// undefined; QB: bounds-checked). The pin says the same with a FixedStack
+/// operand. Not covered: accesses the compiler cannot see as object accesses
+/// (see the volatile test below).
 fn test_a_frame_array_store_indexed_by_a_register_does_not_reach_a_spill_slot() {
     let base = Addr::new(Space::Frame, -20);
     let indexed = Mem { index_through: RegId::SI, scale: 1, ..mem(Some(base), 2, RegId::BP, -20, 1) };
@@ -6039,4 +6074,14 @@ fn test_a_frame_array_store_indexed_by_a_register_does_not_reach_a_spill_slot() 
 #[test]
 fn test_a_pointer_store_stops_the_forwarding_where_the_slot_address_is_taken() {
     assert_eq!(reload_across(Loc::Mem(mem(None, 2, RegId::DI, 0, 0)), true), 3);
+}
+
+/// Inline asm and a runtime routine's frame access are volatile or clobbering
+/// instructions to the compiler: they stop the forwarding like an address-taken
+/// slot, whatever they name.
+#[test]
+fn test_a_volatile_frame_access_stops_the_forwarding() {
+    let base = Addr::new(Space::Frame, -20);
+    let indexed = Mem { index_through: RegId::SI, scale: 1, ..mem(Some(base), 2, RegId::BP, -20, 1) };
+    assert_eq!(reload_across_with(Loc::Mem(indexed), false, true), 3);
 }
