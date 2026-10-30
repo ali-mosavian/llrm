@@ -89,6 +89,7 @@ fn sext_in_reg_of_extload(dag: &mut SelectionDAG) {
         base: MemBase::Stack(0),
         ext: Some(LoadExt::ExtLoad),
         space: 0,
+        ordering: None,
     };
     let load = dag.get_ext_load(LoadExt::ExtLoad, EVT::I32, chain, ptr, info);
     let narrow = dag.get_value_type_node(EVT::I8);
@@ -156,6 +157,7 @@ fn two_byte_stores(dag: &mut SelectionDAG) {
         base: MemBase::Stack(offset),
         ext: None,
         space: 0,
+        ordering: None,
     };
     let (lo, hi) = (dag.get_constant(1, EVT::I8), dag.get_constant(0, EVT::I8));
     let one = dag.get_constant(1, EVT::I64);
@@ -280,6 +282,7 @@ fn masked_frozen_extload(dag: &mut SelectionDAG) {
         base: MemBase::Stack(0),
         ext: Some(LoadExt::ExtLoad),
         space: 0,
+        ordering: None,
     };
     let load = dag.get_ext_load(LoadExt::ExtLoad, EVT::I32, chain, ptr, info);
     let frozen = dag.get_node(ISD::Freeze, EVT::I32, &[load]);

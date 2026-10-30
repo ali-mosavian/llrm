@@ -97,6 +97,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        if self.opt_none {
+            return None;
+        }
         let NodeData::Mem(ld) = self.dag.node(node).data else { return None };
         let (store, offset) = self.unique_store_feeding(node)?;
         let NodeData::Mem(st) = self.dag.node(store).data else { return None };

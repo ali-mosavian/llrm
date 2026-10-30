@@ -927,6 +927,7 @@ impl Builder<'_> {
                             base: MemBase::Stack(-fixed),
                             ext: None,
                             space: 0,
+                            ordering: None,
                         };
                         let load = self.dag.get_load(part_vt, entry_node, ptr, info);
                         // `LowerMemArgument` makes the object immutable unless
@@ -1100,8 +1101,15 @@ impl Builder<'_> {
             let base = self.dag.get_frame_index(pointer, save);
             let slot = self.dag.get_constant(at as u128 * 8, pointer);
             let address = self.dag.get_node(ISD::Add, pointer, &[base, slot]);
-            let info =
-                MemInfo { mem_vt: pointer, align: 8, volatile: false, base: MemBase::Stack(save), ext: None, space: 0 };
+            let info = MemInfo {
+                mem_vt: pointer,
+                align: 8,
+                volatile: false,
+                base: MemBase::Stack(save),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
             let root = self.control_root();
             let store = self.dag.get_store(root, value, address, info);
             self.dag.set_root(store);
@@ -1716,6 +1724,7 @@ impl Builder<'_> {
                             base: MemBase::CallArgument((displacement - first + index as i64 * part_bytes) as i32),
                             ext: None,
                             space: 0,
+                            ordering: None,
                         };
                         stores.push(self.dag.get_store(chain, *piece, address, mem));
                     }
@@ -2513,7 +2522,15 @@ impl Builder<'_> {
         let align = vt.size_in_bits().div_ceil(8);
         let index = self.info.new_stack_object(align, align);
         let slot = self.dag.get_frame_index(self.target.dag.pointer, index);
-        let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: vt,
+            align,
+            volatile: false,
+            base: MemBase::Stack(index),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let root = self.root();
         let store = self.dag.get_store(root, operand, slot, info);
         self.dag.set_root(store);
@@ -2839,7 +2856,7 @@ impl Builder<'_> {
                 Some(Type::Pointer(space)) if *space == roles.stack && roles.stack != roles.near => 258,
                 _ => 0,
             };
-        Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space })
+        Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space, ordering: None })
     }
 
     fn visit_load(

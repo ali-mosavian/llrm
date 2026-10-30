@@ -139,6 +139,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
         old: SDValue,
     ) -> SDValue {
+        if self.opt_none {
+            return old;
+        }
         let aliases = self.gather_all_aliases(node, old);
         match aliases[..] {
             [] => self.dag.entry_node(),
@@ -276,6 +279,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         store: SDValue,
     ) -> Option<SDValue> {
+        if self.opt_none {
+            return None;
+        }
         let base_ptr = BaseIndexOffset::matching(self.dag, store);
         let base = base_ptr.base?;
         if self.dag.is_undef(base) {
@@ -308,7 +314,15 @@ mod tests {
     use crate::backend::selectiondag::dag_combiner::{CombineLevel, NoCombines, combine};
 
     fn info() -> MemInfo {
-        MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0 }
+        MemInfo {
+            mem_vt: EVT::I32,
+            align: 4,
+            volatile: false,
+            base: MemBase::Unknown,
+            ext: None,
+            space: 0,
+            ordering: None,
+        }
     }
 
     /// The root after one combine, from a token factor made of `build`'s
