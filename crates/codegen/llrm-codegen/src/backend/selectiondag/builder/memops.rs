@@ -75,6 +75,17 @@ impl Builder<'_> {
                 Ok(())
             }
             Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse => Ok(()),
+            // `SelectionDAGBuilder.cpp#L7680`: the region information is
+            // discarded; the scope is an undefined pointer.
+            Intrinsic::InvariantEnd => Ok(()),
+            Intrinsic::InvariantStart => {
+                if let Some(result) = instruction.result {
+                    let vt = self.type_of(instruction.ty)?;
+                    let undef = self.dag.get_undef(vt);
+                    self.set_value(result, undef);
+                }
+                Ok(())
+            }
             // a hint the passes read: its value is its argument
             Intrinsic::Expect | Intrinsic::Restrict => {
                 let value = self.get_value(instruction.operands[0])?;
