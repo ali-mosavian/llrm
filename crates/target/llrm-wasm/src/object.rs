@@ -50,6 +50,10 @@ const WASM_SYMBOL_TABLE: u8 = 8;
 const SYMBOL_KIND_FUNCTION: u8 = 0;
 const EXTERNAL_FUNCTION: u8 = 0;
 const EXTERNAL_MEMORY: u8 = 2;
+const EXTERNAL_GLOBAL: u8 = 3;
+const SYMBOL_KIND_GLOBAL: u8 = 2;
+const WASM_SYMBOL_BINDING_LOCAL: u8 = 2;
+const R_WASM_MEMORY_ADDR_I32: u8 = 5;
 const PAGE: u32 = 65536;
 const WASM_SYMBOL_UNDEFINED: u8 = 0x10;
 const R_WASM_FUNCTION_INDEX_LEB: u8 = 0;
@@ -165,6 +169,7 @@ pub fn encode_instruction(
                 "function32_op" => RelocKind::FunctionIndex,
                 "offset32_op" => RelocKind::MemoryAddrLeb,
                 "i32imm_op" => RelocKind::MemoryAddrSleb,
+                "global_op32" | "global_op64" => RelocKind::GlobalIndexLeb,
                 other => panic!("operand class {other} of {} takes no symbol yet", asm.text),
             };
             relocs.push(Reloc { offset: out.len(), symbol: symbol.clone(), kind, addend: *addend });
@@ -195,6 +200,8 @@ pub struct Encoded {
     pub relocs: Vec<Reloc>,
     /// The signature of each function the body calls.
     pub callees: Vec<(String, Vec<ValType>, Vec<ValType>)>,
+    /// The wasm globals the body names.
+    pub globals: Vec<(String, ValType)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -205,6 +212,8 @@ pub enum RelocKind {
     MemoryAddrLeb,
     /// `R_WASM_MEMORY_ADDR_SLEB`.
     MemoryAddrSleb,
+    /// `R_WASM_GLOBAL_INDEX_LEB`.
+    GlobalIndexLeb,
 }
 
 impl RelocKind {
@@ -213,6 +222,7 @@ impl RelocKind {
             RelocKind::FunctionIndex => 0,
             RelocKind::MemoryAddrLeb => 3,
             RelocKind::MemoryAddrSleb => 4,
+            RelocKind::GlobalIndexLeb => 7,
         }
     }
 }
@@ -251,6 +261,7 @@ pub fn encode_function(f: &Function) -> Encoded {
         body,
         relocs,
         callees: f.callees.clone(),
+        globals: f.globals.clone(),
     }
 }
 
@@ -266,11 +277,32 @@ pub enum DataKind {
 
 /// A defined variable: one data segment.
 pub struct DataObject {
+    /// The assembler name: `.L` first for a private one.
     pub name: String,
     pub kind: DataKind,
     /// The log2 of the alignment.
     pub align: u32,
     pub bytes: Vec<u8>,
+    /// Internal or private: `WASM_SYMBOL_BINDING_LOCAL`.
+    pub local: bool,
+    /// A mergeable C string: `WASM_SEGMENT_FLAG_STRINGS`.
+    pub strings: bool,
+    /// The pointers in `bytes`: `R_WASM_MEMORY_ADDR_I32` at each.
+    pub relocs: Vec<DataReloc>,
+}
+
+/// A pointer in a data object: where it is, what it points to and how far in.
+pub struct DataReloc {
+    pub offset: usize,
+    pub symbol: String,
+    pub addend: i64,
+}
+
+/// A module's variables: the defined ones, and the names of the declared ones.
+#[derive(Default)]
+pub struct Data {
+    pub objects: Vec<DataObject>,
+    pub undefined: Vec<String>,
 }
 
 impl DataObject {
@@ -299,6 +331,15 @@ enum Symbol<'a> {
         /// The position in `data`.
         object: usize,
     },
+    /// A variable declared here and defined elsewhere.
+    UndefinedData {
+        name: &'a str,
+    },
+    /// A wasm global the module imports.
+    Global {
+        name: &'a str,
+        ty: ValType,
+    },
 }
 
 fn type_index<'a>(
@@ -321,62 +362,106 @@ fn sleb_padded(
     out.push((value >> 28) as u8 & 0x7f);
 }
 
+/// Adds the symbol `name` if the assembler would have just created it: a variable of the module, a wasm global
+/// or a called function (`f` has the signature).
+fn introduce<'a>(
+    symbols: &mut Vec<Symbol<'a>>,
+    data: &'a Data,
+    f: Option<&'a Encoded>,
+    name: &'a str,
+) {
+    let known = symbols.iter().any(|s| match s {
+        Symbol::Function { name: one, .. } | Symbol::UndefinedData { name: one } | Symbol::Global { name: one, .. } => {
+            *one == name
+        }
+        Symbol::Data { object } => data.objects[*object].name == name,
+    });
+    if known {
+        return;
+    }
+    if let Some(object) = data.objects.iter().position(|d| d.name == name) {
+        symbols.push(Symbol::Data { object });
+    } else if data.undefined.iter().any(|d| d == name) {
+        symbols.push(Symbol::UndefinedData { name });
+    } else if let Some((_, ty)) = f.and_then(|f| f.globals.iter().find(|(one, _)| one == name)) {
+        symbols.push(Symbol::Global { name, ty: *ty });
+    } else if let Some((_, params, results)) = f.and_then(|f| f.callees.iter().find(|(one, ..)| one == name)) {
+        symbols.push(Symbol::Function { name, defined: None, params, results });
+    } else {
+        panic!("symbol {name} is no variable, global or called function");
+    }
+}
+
 /// The object file for `functions` and `data`, in order.
 pub fn write(
     functions: &[Encoded],
-    data: &[DataObject],
+    data: &Data,
 ) -> Vec<u8> {
+    let objects = &data.objects;
     let mut symbols: Vec<Symbol> = Vec::new();
-    let named = |symbols: &[Symbol], name: &str| {
-        symbols.iter().position(|s| match s {
-            Symbol::Function { name: one, .. } => *one == name,
-            Symbol::Data { object } => data[*object].name == name,
-        })
-    };
     for (at, f) in functions.iter().enumerate() {
         let defined = Symbol::Function { name: &f.name, defined: Some(at), params: &f.params, results: &f.results };
-        match named(&symbols, &f.name) {
+        let known = symbols.iter().position(|s| matches!(s, Symbol::Function { name, .. } if *name == f.name));
+        match known {
             Some(known) => symbols[known] = defined,
             None => symbols.push(defined),
         }
         for reloc in &f.relocs {
-            if named(&symbols, &reloc.symbol).is_some() {
-                continue;
-            }
-            if let Some(object) = data.iter().position(|d| d.name == reloc.symbol) {
-                symbols.push(Symbol::Data { object });
-                continue;
-            }
-            let (_, params, results) =
-                f.callees.iter().find(|(name, ..)| *name == reloc.symbol).expect("a used symbol is defined or called");
-            symbols.push(Symbol::Function { name: &reloc.symbol, defined: None, params, results });
+            introduce(&mut symbols, data, Some(f), &reloc.symbol);
         }
     }
-    for (object, one) in data.iter().enumerate() {
-        if named(&symbols, &one.name).is_none() {
-            symbols.push(Symbol::Data { object });
+    for one in objects {
+        introduce(&mut symbols, data, None, &one.name);
+        for reloc in &one.relocs {
+            introduce(&mut symbols, data, None, &reloc.symbol);
         }
     }
-    let imports: Vec<usize> =
-        (0..symbols.len()).filter(|&s| matches!(symbols[s], Symbol::Function { defined: None, .. })).collect();
-    // Function indices: the imports first, then the definitions.
+    let is_import = |symbol: &Symbol| matches!(symbol, Symbol::Function { defined: None, .. } | Symbol::Global { .. });
+    let imports: Vec<usize> = (0..symbols.len()).filter(|&s| is_import(&symbols[s])).collect();
+    // Function and global indices: the imports first, then the definitions.
     let mut index_of = vec![0u32; symbols.len()];
-    for (n, &s) in imports.iter().enumerate() {
-        index_of[s] = n as u32;
+    let (mut functions_imported, mut globals_imported) = (0u32, 0u32);
+    for &s in &imports {
+        match symbols[s] {
+            Symbol::Global { .. } => {
+                index_of[s] = globals_imported;
+                globals_imported += 1;
+            }
+            _ => {
+                index_of[s] = functions_imported;
+                functions_imported += 1;
+            }
+        }
     }
     for (s, symbol) in symbols.iter().enumerate() {
         if let Symbol::Function { defined: Some(at), .. } = symbol {
-            index_of[s] = (imports.len() + at) as u32;
+            index_of[s] = functions_imported + *at as u32;
         }
     }
+    let position = |name: &str| {
+        symbols
+            .iter()
+            .position(|s| match s {
+                Symbol::Function { name: one, .. }
+                | Symbol::UndefinedData { name: one }
+                | Symbol::Global { name: one, .. } => *one == name,
+                Symbol::Data { object } => objects[*object].name == name,
+            })
+            .expect("a symbol")
+    };
     // Segment addresses: each aligned to its object's alignment.
-    let mut address = Vec::with_capacity(data.len());
+    let mut address = Vec::with_capacity(objects.len());
     let mut end = 0u32;
-    for one in data {
+    for one in objects {
         end = end.next_multiple_of(1 << one.align);
         address.push(end);
         end += one.bytes.len() as u32;
     }
+    // The address of a symbol: where its segment is, nothing for an undefined one.
+    let address_of = |s: usize| match symbols[s] {
+        Symbol::Data { object } => i64::from(address[object]),
+        _ => 0,
+    };
 
     let mut types: Vec<(&[ValType], &[ValType])> = Vec::new();
     let signatures: Vec<usize> = functions.iter().map(|f| type_index(&mut types, (&f.params, &f.results))).collect();
@@ -384,7 +469,7 @@ pub fn write(
         .iter()
         .map(|&s| match &symbols[s] {
             Symbol::Function { params, results, .. } => type_index(&mut types, (params, results)),
-            Symbol::Data { .. } => unreachable!("an import is a function"),
+            _ => 0,
         })
         .collect();
 
@@ -409,11 +494,20 @@ pub fn write(
     payload.extend([EXTERNAL_MEMORY, 0]);
     uleb(&mut payload, u64::from(end.div_ceil(PAGE)));
     for (&s, &ty) in imports.iter().zip(&import_types) {
-        let Symbol::Function { name: import, .. } = symbols[s] else { unreachable!("an import is a function") };
         name(&mut payload, "env");
-        name(&mut payload, import);
-        payload.push(EXTERNAL_FUNCTION);
-        uleb(&mut payload, ty as u64);
+        match symbols[s] {
+            Symbol::Function { name: import, .. } => {
+                name(&mut payload, import);
+                payload.push(EXTERNAL_FUNCTION);
+                uleb(&mut payload, ty as u64);
+            }
+            Symbol::Global { name: import, ty } => {
+                name(&mut payload, import);
+                // Mutable: the stack pointer.
+                payload.extend([EXTERNAL_GLOBAL, val_type(ty), 1]);
+            }
+            _ => unreachable!("an import is a function or a global"),
+        }
     }
     section(&mut out, SECTION_IMPORT, &payload);
 
@@ -424,14 +518,13 @@ pub fn write(
     }
     section(&mut out, SECTION_FUNCTION, &payload);
 
-    if !data.is_empty() {
+    if !objects.is_empty() {
         payload.clear();
-        uleb(&mut payload, data.len() as u64);
+        uleb(&mut payload, objects.len() as u64);
         section(&mut out, SECTION_DATA_COUNT, &payload);
     }
 
     // The code section, with each relocated value patched in and its offset from the section's start.
-    let symbol_of = |name: &str| named(&symbols, name).expect("a symbol");
     payload.clear();
     uleb(&mut payload, functions.len() as u64);
     let mut code_relocs: Vec<(usize, usize, RelocKind, i64)> = Vec::new();
@@ -440,18 +533,13 @@ pub fn write(
         let start = payload.len();
         payload.extend_from_slice(&f.body);
         for reloc in &f.relocs {
-            let s = symbol_of(&reloc.symbol);
+            let s = position(&reloc.symbol);
             let at = start + reloc.offset;
             let mut value = Vec::new();
-            match (&symbols[s], reloc.kind) {
-                (Symbol::Function { .. }, RelocKind::FunctionIndex) => uleb_padded(&mut value, index_of[s]),
-                (Symbol::Data { object }, RelocKind::MemoryAddrLeb) => {
-                    uleb_padded(&mut value, (i64::from(address[*object]) + reloc.addend) as u32)
-                }
-                (Symbol::Data { object }, RelocKind::MemoryAddrSleb) => {
-                    sleb_padded(&mut value, (i64::from(address[*object]) + reloc.addend) as i32)
-                }
-                _ => panic!("relocation {:?} against symbol {}", reloc.kind, reloc.symbol),
+            match reloc.kind {
+                RelocKind::FunctionIndex | RelocKind::GlobalIndexLeb => uleb_padded(&mut value, index_of[s]),
+                RelocKind::MemoryAddrLeb => uleb_padded(&mut value, (address_of(s) + reloc.addend) as u32),
+                RelocKind::MemoryAddrSleb => sleb_padded(&mut value, (address_of(s) + reloc.addend) as i32),
             }
             payload[at..at + 5].copy_from_slice(&value);
             code_relocs.push((at, s, reloc.kind, reloc.addend));
@@ -459,16 +547,25 @@ pub fn write(
     }
     section(&mut out, SECTION_CODE, &payload);
 
-    if !data.is_empty() {
+    // The data section; each pointer is patched in and recorded by its offset from the section's start.
+    let mut data_relocs: Vec<(usize, usize, i64)> = Vec::new();
+    if !objects.is_empty() {
         payload.clear();
-        uleb(&mut payload, data.len() as u64);
-        for (one, at) in data.iter().zip(&address) {
+        uleb(&mut payload, objects.len() as u64);
+        for (one, at) in objects.iter().zip(&address) {
             // Active segment of memory 0 at `i32.const address`.
             payload.extend([0, OPCODE_I32_CONST]);
             sleb(&mut payload, i64::from(*at));
             payload.push(OPCODE_END);
             uleb(&mut payload, one.bytes.len() as u64);
+            let start = payload.len();
             payload.extend_from_slice(&one.bytes);
+            for reloc in &one.relocs {
+                let s = position(&reloc.symbol);
+                let value = (address_of(s) + reloc.addend) as u32;
+                payload[start + reloc.offset..start + reloc.offset + 4].copy_from_slice(&value.to_le_bytes());
+                data_relocs.push((start + reloc.offset, s, reloc.addend));
+            }
         }
         section(&mut out, SECTION_DATA, &payload);
     }
@@ -491,26 +588,35 @@ pub fn write(
                     uleb(&mut table, u64::from(index_of[s]));
                 }
             }
+            Symbol::Global { .. } => {
+                table.extend([SYMBOL_KIND_GLOBAL, WASM_SYMBOL_UNDEFINED]);
+                uleb(&mut table, u64::from(index_of[s]));
+            }
             Symbol::Data { object } => {
                 // Flags, name, segment, offset in it, size.
-                table.extend([SYMBOL_KIND_DATA, 0]);
-                name(&mut table, &data[*object].name);
+                let one = &objects[*object];
+                table.extend([SYMBOL_KIND_DATA, if one.local { WASM_SYMBOL_BINDING_LOCAL } else { 0 }]);
+                name(&mut table, &one.name);
                 uleb(&mut table, *object as u64);
                 uleb(&mut table, 0);
-                uleb(&mut table, data[*object].bytes.len() as u64);
+                uleb(&mut table, one.bytes.len() as u64);
+            }
+            Symbol::UndefinedData { name: one } => {
+                table.extend([SYMBOL_KIND_DATA, WASM_SYMBOL_UNDEFINED]);
+                name(&mut table, one);
             }
         }
     }
     payload.push(WASM_SYMBOL_TABLE);
     uleb_padded(&mut payload, table.len() as u32);
     payload.extend_from_slice(&table);
-    if !data.is_empty() {
+    if !objects.is_empty() {
         let mut info = Vec::new();
-        uleb(&mut info, data.len() as u64);
-        for one in data {
+        uleb(&mut info, objects.len() as u64);
+        for one in objects {
             name(&mut info, &one.segment_name());
             uleb(&mut info, u64::from(one.align));
-            uleb(&mut info, 0);
+            uleb(&mut info, u64::from(one.strings));
         }
         payload.push(WASM_SEGMENT_INFO);
         uleb_padded(&mut payload, info.len() as u32);
@@ -518,19 +624,32 @@ pub fn write(
     }
     custom(&mut out, "linking", &payload);
 
+    let code_section = if objects.is_empty() { SECTION_INDEX_CODE } else { SECTION_INDEX_CODE + 1 };
     if !code_relocs.is_empty() {
         payload.clear();
-        uleb(&mut payload, if data.is_empty() { SECTION_INDEX_CODE } else { SECTION_INDEX_CODE + 1 });
+        uleb(&mut payload, code_section);
         uleb(&mut payload, code_relocs.len() as u64);
         for &(offset, s, kind, addend) in &code_relocs {
             payload.push(kind.code());
             uleb(&mut payload, offset as u64);
             uleb(&mut payload, s as u64);
-            if kind != RelocKind::FunctionIndex {
+            if matches!(kind, RelocKind::MemoryAddrLeb | RelocKind::MemoryAddrSleb) {
                 sleb(&mut payload, addend);
             }
         }
         custom(&mut out, "reloc.CODE", &payload);
+    }
+    if !data_relocs.is_empty() {
+        payload.clear();
+        uleb(&mut payload, code_section + 1);
+        uleb(&mut payload, data_relocs.len() as u64);
+        for &(offset, s, addend) in &data_relocs {
+            payload.push(R_WASM_MEMORY_ADDR_I32);
+            uleb(&mut payload, offset as u64);
+            uleb(&mut payload, s as u64);
+            sleb(&mut payload, addend);
+        }
+        custom(&mut out, "reloc.DATA", &payload);
     }
 
     payload.clear();

@@ -85,7 +85,7 @@ pub fn compile_function(
 ) -> Result<Function, String> {
     let blocks = function::select_function(module, name, width)?;
     let (params, results) = signature(module, name, width)?;
-    let names = |symbol: u32| module.globals[symbol as usize].name.as_deref().unwrap_or("").to_string();
+    let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
     // The pin's order after instruction selection: `-print-after-all` of `llc
     // -O0`.

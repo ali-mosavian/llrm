@@ -4,7 +4,7 @@
 
 mod common;
 
-use llrm_wasm::object::{encode_function, write};
+use llrm_wasm::object::{Data, encode_function, write};
 
 #[test]
 fn four_functions_are_llcs_object_byte_for_byte() {
@@ -12,7 +12,7 @@ fn four_functions_are_llcs_object_byte_for_byte() {
 
     let golden = std::fs::read(format!("{}/tests/golden/four.o", env!("CARGO_MANIFEST_DIR"))).expect("golden object");
 
-    let ours = write(&functions, &[]);
+    let ours = write(&functions, &Data::default());
     if let Some(path) = std::env::var_os("WASM_DUMP") {
         std::fs::write(path, &ours).expect("dump");
     }
@@ -24,7 +24,7 @@ fn four_functions_are_llcs_object_byte_for_byte() {
 #[test]
 fn the_stackified_object_is_written() {
     let functions: Vec<_> = common::four_with(true).iter().map(encode_function).collect();
-    let bytes = write(&functions, &[]);
+    let bytes = write(&functions, &Data::default());
     if let Some(path) = std::env::var_os("WASM_DUMP_STACKIFIED") {
         std::fs::write(path, &bytes).expect("dump");
     }
@@ -79,4 +79,11 @@ fn global_addresses_relocate_into_data_segments() {
 #[test]
 fn segments_symbols_and_alignment_follow_the_assembler() {
     check("data");
+}
+
+/// A private string, an internal variable, a pointer in data, an undefined variable and a stack frame wrote no
+/// `.L` name, local binding, `reloc.DATA`, undefined data symbol or `__stack_pointer` import: each was a panic.
+#[test]
+fn linkage_pointers_and_the_stack_pointer_import() {
+    check("linkage");
 }

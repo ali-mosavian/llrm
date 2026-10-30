@@ -209,6 +209,8 @@ pub struct Function {
     /// The (name, parameters, results) of each function the code names: the
     /// signature the object file gives an undefined function.
     pub callees: Vec<(String, Vec<ValType>, Vec<ValType>)>,
+    /// The (name, type) of each wasm global the code names: an import of the object file.
+    pub globals: Vec<(String, ValType)>,
     /// The (size, alignment) of each stack object, by frame index:
     /// `MachineFrameInfo`.
     pub frame: Vec<(u64, u64)>,

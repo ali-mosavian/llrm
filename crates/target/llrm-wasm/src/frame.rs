@@ -78,6 +78,9 @@ pub fn frame_lowering(
         _ => (op::CONST_I32, op::ADD_I32, op::SUB_I32, op::GLOBAL_GET_I32, op::GLOBAL_SET_I32),
     };
     let stack_pointer = f.symbol("__stack_pointer", 0);
+    if f.globals.is_empty() {
+        f.globals.push(("__stack_pointer".to_string(), pointer));
+    }
     let sp = f.new_vreg(pointer);
 
     // The prologue goes below the ARGUMENTs.

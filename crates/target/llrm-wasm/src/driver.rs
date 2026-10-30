@@ -89,43 +89,74 @@ pub fn object(
     Ok(crate::object::write(&functions, &data(&module)?))
 }
 
-/// The defined variables of `module` as data segments, in module order.
-fn data(module: &llrm_mir::module::Module) -> Result<Vec<crate::object::DataObject>, String> {
-    use crate::object::{DataKind, DataObject};
-    use llrm_codegen::backend::globals;
+/// The assembler's name for `global`: `.L` ahead of a private one (`Mangler` with the private prefix `.L`).
+pub fn symbol_name(global: &llrm_mir::module::GlobalValue) -> String {
+    let name = global.name.as_deref().unwrap_or("");
+    match global.linkage {
+        llrm_mir::module::Linkage::Private => format!(".L{name}"),
+        _ => name.to_string(),
+    }
+}
+
+/// The variables of `module`: the defined ones as data segments, in module order, and the names of the declared
+/// ones.
+fn data(module: &llrm_mir::module::Module) -> Result<crate::object::Data, String> {
+    use crate::object::{Data, DataKind, DataObject, DataReloc};
+    use llrm_codegen::backend::{globals, masm::Datum};
     use llrm_codegen::objectfile::module::Space;
-    use llrm_mir::module::{GlobalKind, Linkage};
+    use llrm_mir::module::{GlobalKind, Linkage, UnnamedAddr};
 
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("no datalayout")?)?;
-    let mut out = Vec::new();
+    let mut names = llrm_codegen::support::hash::IndexMap::default();
     for (index, global) in module.globals.iter().enumerate() {
         let id = llrm_mir::GlobalId(index as u32);
+        names.insert((globals::space(module, id), i64::from(id.0)), symbol_name(global));
+    }
+    let mut out = Data::default();
+    for (index, global) in module.globals.iter().enumerate() {
         let GlobalKind::Variable(variable) = &global.kind else { continue };
-        if variable.initializer.is_none() {
+        let id = llrm_mir::GlobalId(index as u32);
+        let name = symbol_name(global);
+        let Some(initializer) = variable.initializer else {
+            out.undefined.push(name);
             continue;
-        }
-        let name = global.name.owned().ok_or("an unnamed variable")?;
-        if global.linkage != Linkage::External {
+        };
+        if !matches!(global.linkage, Linkage::External | Linkage::Internal | Linkage::Private) {
             return Err(format!("@{name}: {:?} linkage is not supported yet", global.linkage));
         }
-        let mut names = llrm_codegen::support::hash::IndexMap::default();
-        names.insert((Space::Segment, i64::from(id.0)), name.clone());
         let mut bytes = Vec::new();
+        let mut relocs = Vec::new();
         for datum in globals::datums(module, id, &names)? {
             match datum {
                 Datum::Label(_) => {}
                 Datum::Bytes(more) => bytes.extend(more),
                 Datum::Fill(fill) => bytes.resize(bytes.len() + fill.size as usize, fill.byte.unwrap_or(0)),
+                Datum::Pointer(pointer) if !pointer.far && pointer.bytes == 4 => {
+                    relocs.push(DataReloc { offset: bytes.len(), symbol: pointer.name, addend: pointer.offset });
+                    bytes.extend([0; 4]);
+                }
                 other => return Err(format!("@{name}: {other:?} in an initializer is not supported yet")),
             }
         }
         let align = globals::alignment(module, Some(&layout), variable, false, false).unwrap_or(1);
-        let kind = match (variable.constant, bytes.iter().all(|&b| b == 0)) {
+        let kind = match (variable.constant, bytes.iter().all(|&b| b == 0) && relocs.is_empty()) {
             (false, true) => DataKind::Bss,
             (true, _) => DataKind::Rodata,
             _ => DataKind::Data,
         };
-        out.push(DataObject { name, kind, align: align.trailing_zeros(), bytes });
+        // `getKindForGlobal`: a constant whose address does not matter, and that is one C string, merges.
+        let is_string = matches!(module.context.get(initializer).kind, llrm_mir::ConstantKind::Bytes(_))
+            && bytes.last() == Some(&0)
+            && !bytes[..bytes.len() - 1].contains(&0);
+        out.objects.push(DataObject {
+            name,
+            kind,
+            align: align.trailing_zeros(),
+            bytes,
+            local: global.linkage != Linkage::External,
+            strings: variable.constant && global.unnamed_addr == UnnamedAddr::Global && is_string,
+            relocs,
+        });
     }
     Ok(out)
 }
