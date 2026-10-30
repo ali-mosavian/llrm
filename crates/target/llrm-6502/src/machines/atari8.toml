@@ -7,5 +7,4 @@ status = "built"
 load_address = 0x2000
 imag_base = 0x82
 zero_page = 26
-cc65_cfg = "atari.cfg"
 soft_stack = 0x8000

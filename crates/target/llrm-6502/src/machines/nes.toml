@@ -8,5 +8,4 @@ status = "built"
 load_address = 0x8000
 imag_base = 0x02
 zero_page = 26
-cc65_cfg = "nes.cfg"
 soft_stack = 0x0700

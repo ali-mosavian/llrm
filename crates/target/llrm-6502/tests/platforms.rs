@@ -21,15 +21,27 @@ fn every_row_parses_and_fits_zero_page() {
     assert_eq!(names, ["c64", "sim65", "apple2", "atari8", "nes", "bbc"]);
 }
 
+const CC65_CFG: [(&str, &str); 6] = [
+    ("c64", "c64.cfg"),
+    ("sim65", "sim6502.cfg"),
+    ("apple2", "apple2.cfg"),
+    ("atari8", "atari.cfg"),
+    ("nes", "nes.cfg"),
+    ("bbc", "bbc.cfg"),
+];
+
 /// The imaginary registers of every row lie inside the zero-page segment of
-/// cc65's own config for that target (the row's `cc65_cfg`), the authority for
+/// cc65's own config for that target (`CC65_CFG`), the authority for
 /// what the platform leaves a program.
 #[test]
 fn every_rows_registers_lie_inside_the_zero_page_of_its_cc65_config() {
     for text in ROWS {
         let row = Platform::parse(text).unwrap();
-        let table: toml::Table = text.parse().unwrap();
-        let cfg = table["platform"]["cc65_cfg"].as_str().unwrap_or_else(|| panic!("{}: no cc65_cfg", row.name));
+        let cfg = CC65_CFG
+            .iter()
+            .find(|(name, _)| *name == row.name)
+            .unwrap_or_else(|| panic!("{}: no cc65 config", row.name))
+            .1;
         let path = format!("/usr/share/cc65/cfg/{cfg}");
         let cfg_text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
         let zp = cfg_text

@@ -6,5 +6,4 @@ name = "sim65"
 load_address = 0x0200
 imag_base = 0x80
 zero_page = 26
-cc65_cfg = "sim6502.cfg"
 soft_stack = 0x8000

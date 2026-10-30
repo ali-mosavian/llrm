@@ -7,5 +7,4 @@ name = "c64"
 load_address = 0x0801
 imag_base = 0x02
 zero_page = 26
-cc65_cfg = "c64.cfg"
 soft_stack = 0x9F00
