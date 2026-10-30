@@ -5,7 +5,6 @@
 mod codemetrics_tests;
 /// `x86.instr`'s reader. Dependency-free but `llrm-lir`, so a build script can
 /// include it with `#[path]`.
-pub mod dag;
 pub mod effects;
 #[cfg(test)]
 mod instructioncost_tests;

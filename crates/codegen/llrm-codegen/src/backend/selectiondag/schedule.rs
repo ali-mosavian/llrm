@@ -67,6 +67,13 @@ use super::mvt::EVT;
 
 /// What the scheduler asks of the target's instruction table (`TII->get`).
 pub trait SchedInfo {
+    /// The pin's number of the physical register `id` names; x86's by default.
+    fn pin_register(
+        &self,
+        id: llrm_lir::registers::RegId,
+    ) -> Option<u16> {
+        super::dagisel_adapter::pin_register(id)
+    }
     /// `MCInstrDesc::getNumDefs`.
     fn num_defs(
         &self,
@@ -542,14 +549,14 @@ impl<'a> Graph<'a> {
             return None;
         }
         let reg = match self.dag.node(self.ops(user)[1]).data {
-            NodeData::PhysReg(id) => super::dagisel_adapter::pin_register(id)?,
+            NodeData::PhysReg(id) => self.info.pin_register(id)?,
             _ => return None,
         };
         // a physical register read back by `CopyFromReg` (a call's flags)
         if self.opcode(def.node) == ISD::CopyFromReg
             && matches!(
                 self.dag.node(self.ops(def.node)[1]).data,
-                NodeData::PhysReg(id) if super::dagisel_adapter::pin_register(id) == Some(reg)
+                NodeData::PhysReg(id) if self.info.pin_register(id) == Some(reg)
             )
         {
             return Some(reg);
