@@ -4139,3 +4139,37 @@ fn test_the_shape_words_are_not_invariant_when_the_array_can_change() {
     assert_eq!(invariant_marks("work", conditional), 0);
     assert_eq!(invariant_marks("FOR k = 1 TO 3\r\nwork\r\nNEXT", FILLED), 0);
 }
+
+/// The `Invariant` facts a whole-program compile of `body` in `WORK` states,
+/// on the 16-bit segmented target or a flat one.
+fn invariant_facts(
+    flat: bool,
+    body: &str,
+) -> usize {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let frontend = qb_driver::Frontend {
+        whole_program: true,
+        near_bytes: if flat { 4 } else { 0 },
+        far_bytes: if flat { 4 } else { 0 },
+        ..qb_driver::Frontend::new("qb45", "llrm")
+    };
+    let text =
+        format!("DEFINT A-Z\r\nDECLARE SUB work ()\r\nREM $DYNAMIC\r\nwork\r\nSUB work\r\n{body}\r\nEND SUB\r\n");
+    let program = qb_driver::parsed(&written(&directory, "T.BAS", text.as_bytes()), &frontend, None).expect("parses");
+    program
+        .modules
+        .iter()
+        .flat_map(|module| &module.facts)
+        .filter(|stated| matches!(stated.fact, llrm_hir::facts::Fact::Invariant))
+        .count()
+}
+
+/// grep bq32 printed wrong counts: a flat array's origin word is a heap
+/// pointer, which the DIM of a later array moves, and the loads after the
+/// first DIM were marked invariant and merged across it. The segmented
+/// target's origin is an offset that stays 0 within the array's own segment.
+#[test]
+fn test_a_flat_arrays_origin_is_not_an_invariant_load() {
+    assert!(invariant_facts(false, FILLED) > 0, "segmented origin is invariant");
+    assert_eq!(invariant_facts(true, FILLED), 0);
+}

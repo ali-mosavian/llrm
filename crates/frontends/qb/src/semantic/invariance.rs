@@ -106,11 +106,14 @@ fn shape_words(compiler: &mut Compiler) {
         return;
     }
     let once: BTreeSet<u32> = once_called(compiler);
+    // Segmented targets only: a flat array's origin is a heap pointer, which a
+    // later DIM can move.
+    let segmented = !compiler.options.one_space();
     let marked: Vec<(u32, u32)> = compiler
         .functions
         .iter()
         .filter(|function| once.contains(&function.id) && function.error_handler.is_none())
-        .flat_map(|function| local_words(function).into_iter().map(move |load| (function.id, load)))
+        .flat_map(|function| local_words(function, segmented).into_iter().map(move |load| (function.id, load)))
         .collect();
     for function in &mut compiler.functions {
         function.invariant.extend(marked.iter().filter(|(id, _)| *id == function.id).map(|(_, load)| *load));
@@ -156,7 +159,10 @@ fn once_called(compiler: &Compiler) -> BTreeSet<u32> {
 
 /// The ids of the word loads of `function`'s local arrays that this module
 /// proves invariant.
-fn local_words(function: &Function) -> Vec<u32> {
+fn local_words(
+    function: &Function,
+    segmented: bool,
+) -> Vec<u32> {
     let pointers = pointers(function);
     let local = |value: &u32| match pointers.get(value) {
         Some(identity @ Identity::Local(..)) => Some(*identity),
@@ -225,7 +231,7 @@ fn local_words(function: &Function) -> Vec<u32> {
         }
         let word = match field {
             Slot::Rank | Slot::Count(_) | Slot::Lower(_) | Slot::CountOf(_) | Slot::LowerOf(_) => true,
-            Slot::Origin => super::shapes::far(&dim.operands),
+            Slot::Origin => segmented && super::shapes::far(&dim.operands),
             Slot::Data | Slot::Selector => false,
         };
         let after = if *dim_block == block {
