@@ -4046,3 +4046,25 @@ fn test_a_reference_parameter_is_nonnull_and_noundef() {
         .unwrap_or_else(|| panic!("{text}"));
     assert!(define.contains("nonnull") && define.contains("noundef"), "{define}");
 }
+
+/// `mustprogress` lets a pass delete a side-effect-free loop it cannot prove
+/// ends: a delay loop or an ON KEY wait loop would go. Only a routine with no
+/// loop states it; a routine with either loop keeps its loops.
+#[test]
+fn test_mustprogress_is_stated_only_of_routines_without_loops() {
+    let define = |body: &str, name: &str| {
+        let directory = tempfile::TempDir::new().unwrap();
+        let basic = format!("DECLARE SUB {name} ()\nDIM SHARED flag AS INTEGER\n{name}\nSUB {name}\n{body}\nEND SUB\n");
+        let source = written(&directory, "mp.bas", basic.as_bytes());
+        let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+        let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        text.lines()
+            .find(|line| line.starts_with("define") && line.contains(name))
+            .unwrap_or_else(|| panic!("{text}"))
+            .to_owned()
+    };
+    assert!(define("flag = 1", "STRAIGHT").contains("mustprogress"));
+    assert!(!define("FOR i% = 1 TO 30000: NEXT", "DELAYS").contains("mustprogress"));
+    assert!(!define("DO WHILE flag = 0: LOOP", "WAITS").contains("mustprogress"));
+}

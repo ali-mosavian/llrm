@@ -10851,6 +10851,28 @@ impl Compiler {
                 facts.state(at, llrm_hir::facts::Fact::NonNull).state(at, llrm_hir::facts::Fact::NoUndef);
             }
         }
+        // `mustprogress` deletes a side-effect-free loop it cannot prove ends,
+        // which BASIC's delay and wait loops (`FOR i = 1 TO n: NEXT`,
+        // `DO WHILE flag = 0: LOOP` for an ON KEY handler) must survive: only
+        // a routine with no loop at all, and no call of a routine of the
+        // program (which may recurse or loop), states it.
+        for function in &self.functions {
+            let calls_program = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .filter_map(|instruction| instruction.callee.as_deref())
+                .any(|callee| self.functions.iter().any(|one| one.name == callee));
+            if has_loop(function) || calls_program {
+                continue;
+            }
+            if let Some(callable) = self.callables.iter().find(|one| one.name == function.name) {
+                facts.state(
+                    llrm_hir::facts::Subject::Callable(i64::from(callable.id)),
+                    llrm_hir::facts::Fact::MustProgress,
+                );
+            }
+        }
         // What the language promises of a FOR counter's add: it does not wrap.
         for function in &self.functions {
             // A signed counter's add does not wrap as signed; an unsigned
@@ -11573,4 +11595,24 @@ fn plural(
     noun: &str,
 ) -> String {
     if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
+}
+
+/// Whether the blocks of a routine hold a cycle: a jump back to a block on the
+/// path to it.
+fn has_loop(function: &Function) -> bool {
+    fn visit(
+        function: &Function,
+        id: u32,
+        state: &mut BTreeMap<u32, bool>,
+    ) -> bool {
+        match state.get(&id) {
+            Some(&on_path) => return on_path,
+            None => state.insert(id, true),
+        };
+        let targets = function.blocks.iter().find(|block| block.id == id).and_then(|block| block.terminator.as_ref());
+        let cyclic = targets.is_some_and(|one| one.targets.iter().any(|&next| visit(function, next, state)));
+        state.insert(id, false);
+        cyclic
+    }
+    function.blocks.first().is_some_and(|entry| visit(function, entry.id, &mut BTreeMap::new()))
 }
