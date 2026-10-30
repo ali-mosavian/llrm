@@ -5895,3 +5895,76 @@ fn test_a_spill_store_the_next_block_overwrites_before_a_read_is_dropped() {
 fn test_a_spill_store_the_next_block_reads_stays() {
     assert_eq!(spill_store_before_an_overwrite(true), 1);
 }
+
+/// The spill stores `dead_spill_stores` leaves in block 0 of a function whose
+/// blocks are `(at, instructions, successors)`; `S(from)` stores slot -6, `L`
+/// loads it, `A` takes its address.
+fn stores_left(blocks: &[(i64, &str, Vec<i64>)]) -> usize {
+    let cell = || Loc::Mem(mem(Some(Addr::new(Space::Frame, -6).in_slot(-6)), 2, RegId::BP, -6, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut at = 0;
+    let built: Vec<Block> = blocks
+        .iter()
+        .map(|(start, text, succ)| {
+            let insns = text
+                .split_whitespace()
+                .map(|word| {
+                    at += 10;
+                    Arc::new(match word {
+                        "SD" => mov(at, vec![cell()], vec![rl(RegId::DX, 2)]),
+                        "SS" => mov(at, vec![cell()], vec![rl(RegId::SI, 2)]),
+                        "L" => mov(at, vec![rl(RegId::AX, 2)], vec![cell()]),
+                        "A" => insn(
+                            at,
+                            Some((at, at)),
+                            Some(sem(Operation::Address, "lea", vec![rl(RegId::BX, 2)], vec![Loc::Address(AddressRef::new(Some(Addr::new(Space::Frame, -6).in_slot(-6))))])),
+                            vec![],
+                            vec![],
+                        ),
+                        _ => insn(at, Some((at, at)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![]),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Block::from(block(*start, insns, Vec::clone(succ)))
+        })
+        .collect();
+    let done = crate::backend::deadspills::dead_spill_stores(&body("dead-spill", 0, built));
+    done.blocks
+        .iter()
+        .flat_map(|block| whats(&block.insns))
+        .filter(|what| what.name.as_deref() == Some("mov") && matches!(what.dests.as_slice(), [Loc::Mem(_)]))
+        .count()
+}
+
+#[test]
+fn test_a_spill_store_a_loop_reads_on_the_next_trip_stays() {
+    // The store ends the loop body; the read is at its top, reached by the back edge.
+    assert_eq!(stores_left(&[(0, "", vec![100]), (100, "L SD", vec![100, 200]), (200, "ret", vec![])]), 1);
+}
+
+#[test]
+fn test_a_spill_store_overwritten_before_the_loop_reads_it_is_dropped() {
+    assert_eq!(stores_left(&[(0, "SD", vec![100]), (100, "SS L", vec![100, 200]), (200, "ret", vec![])]), 1);
+}
+
+#[test]
+fn test_two_stores_to_a_shared_slot_keep_the_one_a_reload_reads() {
+    assert_eq!(stores_left(&[(0, "SD SS L ret", vec![])]), 1);
+}
+
+#[test]
+fn test_a_slot_whose_address_escapes_keeps_every_store() {
+    assert_eq!(stores_left(&[(0, "SD A SS L ret", vec![])]), 2);
+}
+
+#[test]
+fn test_a_store_read_on_one_of_two_paths_stays() {
+    // 0 -> {100 reads, 200 overwrites}: the read path needs it.
+    assert_eq!(
+        stores_left(&[(0, "SD", vec![100, 200]), (100, "L ret", vec![]), (200, "SS L ret", vec![])]),
+        2
+    );
+}
