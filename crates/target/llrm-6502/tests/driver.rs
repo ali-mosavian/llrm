@@ -138,14 +138,8 @@ define i8 @f(i8 %p, i8 %q) {
     assert_eq!((calls(Level::O2), calls(Level::Os)), (0, 3));
 }
 
-/// The pin's `opt -O2` makes an eight-trip CRC loop a byte-wise table lookup
-/// (`LoopIdiomRecognize`, priced by the target's cost model). Compiled with a
-/// machine that had no cost model the recognizer never ran: crc16 kept its
-/// bit loop (25 instructions, 6497 clocks) where the pin has 19.
-#[test]
-fn a_crc_loop_becomes_a_table_lookup() {
-    let ir = module(
-        "define i16 @crc16(ptr %0, i8 %1) {\n\
+/// crc16 as the mid-end leaves it: the `if` of the bit loop is a `select`.
+const CRC16_SELECT_SHAPED: &str = "define i16 @crc16(ptr %0, i8 %1) {\n\
   %.not = icmp eq i8 %1, 0\n\
   br i1 %.not, label %._crit_edge, label %.lr.ph\n\
 \n\
@@ -180,8 +174,15 @@ fn a_crc_loop_becomes_a_table_lookup() {
   %.012.lcssa = phi i16 [ -1, %2 ], [ %12, %14 ]\n\
   ret i16 %.012.lcssa\n\
 }\n\
-",
-    );
+";
+
+/// The pin's `opt -O2` makes an eight-trip CRC loop a byte-wise table lookup
+/// (`LoopIdiomRecognize`, priced by the target's cost model). Compiled with a
+/// machine that had no cost model the recognizer never ran: crc16 kept its
+/// bit loop (25 instructions, 6497 clocks) where the pin has 19.
+#[test]
+fn a_crc_loop_becomes_a_table_lookup() {
+    let ir = module(CRC16_SELECT_SHAPED);
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert!(text.contains(".segment \"RODATA\"") && text.matches(".byte").count() >= 32, "no table:\n{text}");
     assert!(!text.contains("cmp #8"), "the bit loop is still there:\n{text}");
@@ -360,4 +361,81 @@ define void @put() {
     common::pipeline::tool(&dir, "cl65", &["-t", "sim6502", "-o", "t.bin", "t.s"])
         .unwrap_or_else(|e| panic!("{e}\n{text}"));
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// The bytes `assembly` gives `ir` at -O2, priced by `timing::estimate`.
+fn bytes_at_o2(ir: &str) -> u32 {
+    let request = Request::new(Level::O2);
+    let text = assembly(&module(ir), &request).unwrap();
+    llrm_6502::timing::estimate(request.cpu, &text).unwrap().bytes
+}
+
+/// crc16 is the small loop. Ruling: no 512-byte Sarwate table (596 B, 1275 cy
+/// against 88 B, 6221 cy; cc65 -O is 259 B). The loop-shaped source (clang's
+/// `-O0` IR, the `if` a branch) stays under 100 bytes. The select-shaped source
+/// of `a_crc_loop_becomes_a_table_lookup` does become the table, so the bound
+/// is checked to see the table when it is there.
+#[test]
+fn crc16_is_the_88_byte_loop_and_the_bound_sees_the_table() {
+    let looped = bytes_at_o2(
+        r#"define i16 @crc16(ptr %p, i8 %n) {
+  %crc = alloca i16
+  %i = alloca i8
+  %j = alloca i8
+  store i16 -1, ptr %crc
+  store i8 0, ptr %i
+  br label %outer
+outer:
+  %iv = load i8, ptr %i
+  %iz = zext i8 %iv to i16
+  %nz = zext i8 %n to i16
+  %c0 = icmp slt i16 %iz, %nz
+  br i1 %c0, label %body, label %done
+body:
+  %q = getelementptr inbounds nuw i8, ptr %p, i16 %iz
+  %b = load i8, ptr %q
+  %bz = zext i8 %b to i16
+  %sh = shl i16 %bz, 8
+  %c1 = load i16, ptr %crc
+  %x = xor i16 %c1, %sh
+  store i16 %x, ptr %crc
+  store i8 0, ptr %j
+  br label %inner
+inner:
+  %jv = load i8, ptr %j
+  %jz = zext i8 %jv to i16
+  %c2 = icmp slt i16 %jz, 8
+  br i1 %c2, label %step, label %next
+step:
+  %v = load i16, ptr %crc
+  %top = and i16 %v, -32768
+  %set = icmp ne i16 %top, 0
+  br i1 %set, label %yes, label %no
+yes:
+  %v1 = load i16, ptr %crc
+  %s1 = shl i16 %v1, 1
+  %r1 = xor i16 %s1, 4129
+  br label %join
+no:
+  %v2 = load i16, ptr %crc
+  %r2 = shl i16 %v2, 1
+  br label %join
+join:
+  %r = phi i16 [ %r1, %yes ], [ %r2, %no ]
+  store i16 %r, ptr %crc
+  %jn = add i8 %jv, 1
+  store i8 %jn, ptr %j
+  br label %inner
+next:
+  %in = add i8 %iv, 1
+  store i8 %in, ptr %i
+  br label %outer
+done:
+  %res = load i16, ptr %crc
+  ret i16 %res
+}"#,
+    );
+    assert!(looped < 100, "crc16 grew to {looped} bytes: the table is back");
+    let table = bytes_at_o2(CRC16_SELECT_SHAPED);
+    assert!(table > 500, "the select-shaped crc16 is {table} bytes: the bound cannot see the table");
 }
