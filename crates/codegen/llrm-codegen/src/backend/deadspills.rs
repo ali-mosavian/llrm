@@ -19,6 +19,12 @@
 //! slot, any other operand naming it reads it. Only a slot the allocator owns
 //! (`spill_homes`) whose every access is the same cell is judged: a slot
 //! another cell overlaps, or that a pointer can reach, stays.
+//!
+//! # Example
+//! The two blocks at the top: `mov [bp-6],dx` in `L0` is dropped, `L1`
+//! stores the slot before it reads it. From unit test
+//! `test_a_spill_store_the_next_block_overwrites_before_a_read_is_dropped` in
+//! `peephole_tests.rs`.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

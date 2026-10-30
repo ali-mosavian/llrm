@@ -1,0 +1,200 @@
+reason = "TEMPORARY, fix-forward (owner wasm session; coordinator ruled 2026-10-30). Constant-like nodes now carry IR order 0, as the pin's SDNode constructors do (permalinks in the PR body); the faithful order exposes downstream scheduler/tie-break divergence in these 18 rows (16 worse-only, 2 mixed of w6's 82 moved rows; 64 better-only). Numbered rows are the fix-forward list. -Os m16: checked against main_clocks.toml, 115 rows, none moves from at-or-below main to above. Removal: each row when its cause is fixed; no row may pass its measured count."
+exception = true
+
+# tip = 9586386a02 (base); to = 587b9fae7f; w6 424-row A/B, raw ~/scratch/w6-s4-wasm{ctl,head}.json
+
+# 1. worse
+[[row]]
+label = "grep bas -O2"
+counter = "code_bytes"
+tip = 1001
+to = 1007
+
+# 2. worse
+[[row]]
+label = "grep bas -Os"
+counter = "code_bytes"
+tip = 944
+to = 963
+
+# 3. worse
+[[row]]
+label = "grep bq16 -Os"
+counter = "code_bytes"
+tip = 967
+to = 974
+
+# 4. worse
+[[row]]
+label = "huge c -O2"
+counter = "instructions"
+tip = 731818
+to = 732018
+
+# 4. worse
+[[row]]
+label = "huge c -O2"
+counter = "clocks"
+tip = 3630440
+to = 3630840
+
+# 4. worse
+[[row]]
+label = "huge c -O2"
+counter = "code_bytes"
+tip = 223
+to = 226
+
+# 5. worse
+[[row]]
+label = "huge nib -O2"
+counter = "instructions"
+tip = 731818
+to = 732018
+
+# 6. worse
+[[row]]
+label = "jpeg_fixed bas -O2"
+counter = "code_bytes"
+tip = 4846
+to = 4873
+
+# 7. worse
+[[row]]
+label = "jpeg_single bas -O2"
+counter = "code_bytes"
+tip = 4534
+to = 4562
+
+# 8. worse
+[[row]]
+label = "jpeg_single c -Os"
+counter = "code_bytes"
+tip = 2783
+to = 2787
+
+# 9. worse
+[[row]]
+label = "lru c -O2"
+counter = "instructions"
+tip = 96
+to = 98
+
+# 9. worse
+[[row]]
+label = "lru c -O2"
+counter = "memory_operands"
+tip = 48
+to = 49
+
+# 9. worse
+[[row]]
+label = "lru c -O2"
+counter = "clocks"
+tip = 218
+to = 222
+
+# 9. worse
+[[row]]
+label = "lru c -O2"
+counter = "code_bytes"
+tip = 495
+to = 502
+
+# 10. worse
+[[row]]
+label = "matmul bq32 -Os"
+counter = "instructions"
+tip = 7327
+to = 7446
+
+# 10. worse
+[[row]]
+label = "matmul bq32 -Os"
+counter = "code_bytes"
+tip = 533
+to = 537
+
+# 11. worse
+[[row]]
+label = "parity/qbsp bq16 -O2"
+counter = "instructions"
+tip = 1205
+to = 1210
+
+# 11. worse
+[[row]]
+label = "parity/qbsp bq16 -O2"
+counter = "clocks"
+tip = 3176
+to = 3181
+
+# 12. worse
+[[row]]
+label = "parity/qbsp bq16 -Os"
+counter = "instructions"
+tip = 1239
+to = 1244
+
+# 12. worse
+[[row]]
+label = "parity/qbsp bq16 -Os"
+counter = "clocks"
+tip = 3301
+to = 3306
+
+# 13. worse
+[[row]]
+label = "parity/qbsp nib -Os"
+counter = "instructions"
+tip = 317
+to = 318
+
+# 13. worse
+[[row]]
+label = "parity/qbsp nib -Os"
+counter = "clocks"
+tip = 984
+to = 986
+
+# 13. worse
+[[row]]
+label = "parity/qbsp nib -Os"
+counter = "code_bytes"
+tip = 373
+to = 376
+
+# 14. worse
+[[row]]
+label = "scroll bq32 -Os"
+counter = "instructions"
+tip = 55166
+to = 55168
+
+# 15. worse
+[[row]]
+label = "stft_single c -O2"
+counter = "code_bytes"
+tip = 906
+to = 922
+
+# 16. worse
+[[row]]
+label = "stft_single c -Os"
+counter = "code_bytes"
+tip = 885
+to = 900
+
+# 17. mixed
+[[row]]
+label = "grep bq32 -O2"
+counter = "instructions"
+tip = 632330591
+to = 632330704
+
+# 18. mixed
+[[row]]
+label = "grep bq32 -Os"
+counter = "code_bytes"
+tip = 1217
+to = 1219

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_xor.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_xor.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:44735c3ba87661e83d1e3fcc5de286b814ac3f3c14703cb8246dee57e4249e56 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:35f0b047813a8b46e28d1cd758ccd751a37223a75f89c1badc810dd1e41b7549 -->
 
 # combine_xor
 
@@ -19,7 +19,7 @@ DEVIATE 1: no vectors, and only integer constants (`ConstantExpr` and
 DEVIATE 2: the folds that call a helper not yet translated are left out,
 each named where it stood: `foldXorToXor`, `visitMaskedMerge`, the
 `ctlz`/`cttz` and `fneg` bitcast folds, the `i1` select form of `(A & B) ^
-(A | C)`, `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
+(A | C)`, `foldXorOfICmps`, `canonicalizeAbs`,
 `reassociateForUses`, `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
 `canonicalizeConditionalNegationViaMathToSelect`,
 `foldBinOpOfDisplacedShifts`, `foldBitwiseLogicWithIntrinsics` and
@@ -36,4 +36,4 @@ DEVIATE 3: `foldNot` is in `combine_not`.
 ```
 
 ## Used by
-Named by `combine`.
+Named by `combine`, `combine_casted_logic`.

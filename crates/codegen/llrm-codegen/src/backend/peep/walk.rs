@@ -396,7 +396,8 @@ impl<'a> Facts<'a> {
         self.body.expect("a group reading the body runs on one")
     }
 
-    /// The frame slots only the allocator's spills use (`peephole::spill_homes`).
+    /// The frame slots only the allocator's spills use
+    /// (`peephole::spill_homes`).
     pub fn spill_homes(&self) -> &std::collections::BTreeSet<i64> {
         self.spills.get_or_init(|| peephole::spill_homes(self.body()))
     }
