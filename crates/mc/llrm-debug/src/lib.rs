@@ -37,6 +37,32 @@ impl std::ops::DerefMut for Described {
     }
 }
 
+/// A debug format's writer: DWARF, CodeView 13 (LLVM's `MCDwarf` and
+/// `CodeViewContext`, which a target's object writer calls in turn). It makes
+/// the sections of the object's debug information; OMF's CodeView 4 and Turbo
+/// Debugger records are the container's own and are not sections.
+pub trait DebugWriter {
+    /// `object` with the sections that say `info`, which the format's
+    /// container then writes like any other.
+    fn expanded(
+        &self,
+        object: &Object,
+        info: &Info,
+    ) -> Result<Object, Unsupported>;
+}
+
+/// `object` with `debug` expanded by `writer`, untouched where it has none.
+pub fn expanded<'a>(
+    object: &'a Object,
+    debug: Option<&Info>,
+    writer: &dyn DebugWriter,
+) -> Result<std::borrow::Cow<'a, Object>, Unsupported> {
+    match debug {
+        Some(info) => writer.expanded(object, info).map(std::borrow::Cow::Owned),
+        None => Ok(std::borrow::Cow::Borrowed(object)),
+    }
+}
+
 /// A target's object writers when they also write debug information (LLVM's
 /// `MCObjectWriter` with the debug sections its `MCStreamer` emitted).
 pub trait DebugObjectTarget: ObjectTarget {
@@ -726,5 +752,52 @@ mod settled_tests {
         assert_eq!(Location::Frame { disp: 8 }.settled(&scope), Some(&Location::Frame { disp: 8 }));
         let whole = Location::List(vec![(range(0, 32), Location::Register("esi".into()))]);
         assert_eq!(whole.settled(&scope), Some(&Location::Register("esi".into())));
+    }
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use llrm_object::{Role, Section};
+
+    use super::*;
+
+    struct Marks;
+
+    impl DebugWriter for Marks {
+        fn expanded(
+            &self,
+            object: &Object,
+            _: &Info,
+        ) -> Result<Object, Unsupported> {
+            let mut made = object.clone();
+            made.sections.push(Section {
+                name: ".marked".into(),
+                role: Role::Data,
+                near: true,
+                align: 1,
+                image: vec![1],
+                spans: vec![[0, 1]],
+                relocs: Vec::new(),
+            });
+            Ok(made)
+        }
+    }
+
+    /// A format reaches the container through its writer alone: the writer runs
+    /// where the object has debug information and never where it has none.
+    #[test]
+    fn a_writer_expands_an_object_with_information_and_leaves_one_without() {
+        let object = Object {
+            name: "t".into(),
+            bits: 32,
+            sections: Vec::new(),
+            symbols: Vec::new(),
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            frames: Vec::new(),
+        };
+        let with = expanded(&object, Some(&Info::default()), &Marks).unwrap();
+        let without = expanded(&object, None, &Marks).unwrap();
+        assert_eq!((with.sections.len(), without.sections.len()), (1, 0));
     }
 }

@@ -51,18 +51,14 @@ impl DebugObjectTarget for Arm64Objects {
         object: &Object,
         debug: Option<&Info>,
     ) -> Result<Vec<u8>, Unsupported> {
-        let expanded;
-        let object = match (format, debug) {
-            ("elf" | "macho", Some(info)) => {
-                expanded = llrm_dwarf::expanded_for(
-                    object,
-                    info,
-                    self.asm_info(format).is_some_and(|one| one.dwarf_relocs_across_sections),
-                )?;
-                &expanded
-            }
-            _ => object,
+        let dwarf = llrm_dwarf::Dwarf {
+            relocs_across_sections: self.asm_info(format).is_some_and(|one| one.dwarf_relocs_across_sections),
         };
+        let expanded = match format {
+            "elf" | "macho" => llrm_debug::expanded(object, debug, &dwarf)?,
+            _ => std::borrow::Cow::Borrowed(object),
+        };
+        let object = &*expanded;
         match format {
             "macho" if !object.frames.is_empty() => llrm_macho::write(&with_unwind(object)?, &macho::Arm64MachO),
             "macho" => llrm_macho::write(object, &macho::Arm64MachO),

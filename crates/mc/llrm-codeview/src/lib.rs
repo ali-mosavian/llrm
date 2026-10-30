@@ -96,6 +96,23 @@ pub(crate) fn record(
     Ok(())
 }
 
+/// CodeView 13 as a [`llrm_debug::DebugWriter`]: `.debug$S` and `.debug$T`.
+pub struct CodeView {
+    /// The machine of the symbols' `S_COMPILE3`; none where the width has no
+    /// C13 machine.
+    pub machine: Option<u16>,
+}
+
+impl llrm_debug::DebugWriter for CodeView {
+    fn expanded(
+        &self,
+        object: &Object,
+        info: &llrm_debug::Info,
+    ) -> Result<Object, Unsupported> {
+        expanded(object, info, self.machine)
+    }
+}
+
 /// `object` with its debug information as C13 sections, the information itself
 /// dropped.
 pub fn expanded(

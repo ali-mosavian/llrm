@@ -13,7 +13,7 @@ pub mod omf;
 pub mod unwind;
 pub mod win64unwind;
 
-use llrm_debug::{DebugCaps, DebugObjectTarget, Format as DebugFormat, Info};
+use llrm_debug::{DebugCaps, DebugObjectTarget, DebugWriter, Format as DebugFormat, Info};
 use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported, UnwindKind};
 
 /// CodeView's machine number of x86 at `bits`.
@@ -75,22 +75,20 @@ impl DebugObjectTarget for X86Objects {
     ) -> Result<Vec<u8>, Unsupported> {
         // The debug writer is the format's pick, not the container's: DWARF for
         // ELF and Mach-O, C13 for COFF.
-        let expanded;
-        let object = match (format, debug) {
-            ("elf" | "macho", Some(info)) => {
-                expanded = llrm_dwarf::expanded_for(
-                    object,
-                    info,
-                    self.asm_info(format).is_some_and(|one| one.dwarf_relocs_across_sections),
-                )?;
-                &expanded
-            }
-            ("coff", Some(info)) => {
-                expanded = llrm_codeview::expanded(object, info, codeview_machine(object.bits))?;
-                &expanded
-            }
-            _ => object,
+        let dwarf = llrm_dwarf::Dwarf {
+            relocs_across_sections: self.asm_info(format).is_some_and(|one| one.dwarf_relocs_across_sections),
         };
+        let codeview = llrm_codeview::CodeView { machine: codeview_machine(object.bits) };
+        let writer: Option<&dyn DebugWriter> = match format {
+            "elf" | "macho" => Some(&dwarf),
+            "coff" => Some(&codeview),
+            _ => None,
+        };
+        let expanded = match writer {
+            Some(writer) => llrm_debug::expanded(object, debug, writer)?,
+            None => std::borrow::Cow::Borrowed(object),
+        };
+        let object = &*expanded;
         // `.eh_frame` goes in whether or not `-g` is on, for the frames the
         // backend declared.
         let unwound;

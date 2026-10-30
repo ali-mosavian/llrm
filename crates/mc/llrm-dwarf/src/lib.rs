@@ -58,6 +58,24 @@ pub fn expanded(
     expanded_for(object, info, true)
 }
 
+/// DWARF as a [`llrm_debug::DebugWriter`]: the sections of `.debug_*`.
+pub struct Dwarf {
+    /// The format relocates one debug section's offset into another (ELF,
+    /// COFF, OMF), not Mach-O
+    /// (`MCAsmInfo::doesDwarfUseRelocationsAcrossSections`).
+    pub relocs_across_sections: bool,
+}
+
+impl llrm_debug::DebugWriter for Dwarf {
+    fn expanded(
+        &self,
+        object: &Object,
+        info: &Info,
+    ) -> Result<Object, Unsupported> {
+        expanded_for(object, info, self.relocs_across_sections)
+    }
+}
+
 /// [`expanded`] for a format that does (`relocs_across_sections`: ELF, COFF,
 /// OMF) or does not (Mach-O) relocate one debug section's offset into another
 /// (`MCAsmInfo::doesDwarfUseRelocationsAcrossSections`): without, the offset
