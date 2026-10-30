@@ -4208,3 +4208,57 @@ fn test_a_flat_arrays_location_words_are_not_invariant_loads() {
     assert!(main_invariant_facts(false, program) > 0, "far words are invariant");
     assert_eq!(main_invariant_facts(true, program), 0);
 }
+
+/// The loops a whole-program compile of `text` states `NoFarAllocation` of.
+fn quiet_loops(
+    flat: bool,
+    text: &str,
+) -> usize {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let frontend = qb_driver::Frontend {
+        whole_program: true,
+        near_bytes: if flat { 4 } else { 0 },
+        far_bytes: if flat { 4 } else { 0 },
+        ..qb_driver::Frontend::new("qb45", "llrm")
+    };
+    let program = qb_driver::parsed(&written(&directory, "T.BAS", text.as_bytes()), &frontend, None).expect("parses");
+    program
+        .modules
+        .iter()
+        .flat_map(|module| &module.facts)
+        .filter(|stated| matches!(stated.fact, llrm_hir::facts::Fact::NoFarAllocation))
+        .count()
+}
+
+const SORTING: &str = "DEFINT A-Z\r\nREM $DYNAMIC\r\nDECLARE SUB sort (a() AS INTEGER, lo AS INTEGER, hi AS INTEGER)\r\n\
+DIM v(0 TO 9) AS INTEGER\r\nsort v(), 0, 9\r\n\
+SUB sort (a() AS INTEGER, lo AS INTEGER, hi AS INTEGER)\r\nDIM i AS INTEGER\r\nFOR i = lo TO hi\r\na(i) = hi - i\r\nNEXT\r\n\
+IF hi > lo + 1 THEN sort a(), lo, hi - 1\r\nEND SUB\r\n";
+
+/// SORT's loop reaches only SORT, which allocates nothing: its descriptor
+/// words cannot change while it runs, so a consumer may bracket its loads
+/// with a scoped invariance. A loop that calls a routine that DIMs, REDIMs or
+/// ERASEs, or any routine this module does not define, may move the array.
+#[test]
+fn test_a_loop_that_reaches_no_far_allocation_says_so() {
+    assert_eq!(quiet_loops(false, SORTING), 1);
+    let calling = SORTING.replace("a(i) = hi - i", "a(i) = hi - i: grow");
+    let grows = "SUB grow\r\nDIM w(0 TO 99) AS INTEGER\r\nw(0) = 1\r\nEND SUB\r\n";
+    let declared = calling.replace("DIM v(", "DECLARE SUB grow ()\r\nDIM v(");
+    assert_eq!(quiet_loops(false, &format!("{declared}{grows}")), 0, "a callee that DIMs");
+    let redim = SORTING
+        .replace("a(i) = hi - i", "a(i) = hi - i: REDIM w(0 TO 3) AS INTEGER")
+        .replace("DIM i AS INTEGER", "DIM i AS INTEGER, w(0 TO 1) AS INTEGER");
+    assert_eq!(quiet_loops(false, &redim), 0, "a REDIM in the loop");
+    let shell = SORTING.replace("a(i) = hi - i", "a(i) = hi - i: SHELL \"x\"");
+    assert_eq!(quiet_loops(false, &shell), 0, "SHELL moves the far heap");
+}
+
+/// An error handler's RESUME may run past an allocation it handled, and a
+/// flat target slides its arrays at FRE and CLOSE: neither states it.
+#[test]
+fn test_no_far_allocation_is_not_stated_with_a_handler_or_on_a_flat_target() {
+    assert_eq!(quiet_loops(true, SORTING), 0);
+    let handled = SORTING.replace("sort v(), 0, 9", "ON ERROR GOTO h\r\nsort v(), 0, 9\r\nEND\r\nh:\r\nRESUME NEXT");
+    assert_eq!(quiet_loops(false, &handled), 0);
+}

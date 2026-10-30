@@ -290,7 +290,7 @@ fn returns(
 }
 
 /// Whether `target` is reachable from `from` by branches.
-fn reaches(
+pub(super) fn reaches(
     function: &Function,
     from: u32,
     target: u32,
@@ -311,7 +311,7 @@ fn reaches(
 
 /// For each block, the blocks on every path to it from the entry (itself
 /// included).
-fn dominators(function: &Function) -> BTreeMap<u32, BTreeSet<u32>> {
+pub(super) fn dominators(function: &Function) -> BTreeMap<u32, BTreeSet<u32>> {
     let Some(entry) = function.blocks.first().map(|block| block.id) else {
         return BTreeMap::new();
     };

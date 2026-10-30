@@ -365,6 +365,12 @@ facts! {
         // (`-fsanitize=stack`). The runtime's description says where the limit
         // is.
         StackCheck stack_check "stackcheck" on [Callable];
+        // Of a loop's back edge: nothing the loop reaches, in it or through the
+        // routines it calls, allocates, moves or frees a far array (QB's DIM,
+        // REDIM, ERASE, SHELL), so a far array's descriptor keeps its words
+        // for as long as the loop runs. It brackets the loop's descriptor
+        // loads with `llvm.invariant.start`/`end` where a consumer reads it.
+        NoFarAllocation no_far_allocation "nofarallocation" on [Terminator];
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];
@@ -413,6 +419,7 @@ impl Fact {
             // A range wants the width of what it bounds: `typed_attribute`.
             Fact::Invariant
             | Fact::Unroll(_)
+            | Fact::NoFarAllocation
             | Fact::Range(_)
             | Fact::Access(_)
             | Fact::NoSignedWrap
@@ -433,7 +440,7 @@ impl Fact {
     pub fn is_metadata(self) -> bool {
         matches!(
             self,
-            Fact::Range(_) | Fact::Invariant | Fact::Unroll(_) | Fact::Access(_)
+            Fact::Range(_) | Fact::Invariant | Fact::Unroll(_) | Fact::NoFarAllocation | Fact::Access(_)
         )
     }
 

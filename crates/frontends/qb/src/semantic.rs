@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 mod absolute;
+mod allocation;
 mod assignment;
 mod bounds;
 mod debug;
@@ -294,6 +295,9 @@ struct Function {
     invariant: BTreeSet<u32>,
     // Reference parameters (by index) nothing else reaches: `noalias`.
     no_alias: BTreeSet<usize>,
+    // Back-edge blocks of loops that reach no far
+    // allocation: `NoFarAllocation`.
+    quiet_loops: BTreeSet<u32>,
     // Each POKE's far pointer whose DEF SEG is a literal on every path in:
     // the place of the segment cell, which names the memory it addresses.
     absolute: BTreeMap<u32, u32>,
@@ -621,6 +625,7 @@ pub fn compile_debugged(
     shapes::applied(&mut compiler);
     invariance::applied(&mut compiler);
     exclusive::applied(&mut compiler);
+    allocation::applied(&mut compiler);
     absolute::applied(&mut compiler);
     absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
@@ -1948,6 +1953,7 @@ impl Compiler {
             elements: BTreeSet::new(),
             invariant: BTreeSet::new(),
             no_alias: BTreeSet::new(),
+            quiet_loops: BTreeSet::new(),
             absolute: BTreeMap::new(),
         });
     }
@@ -10878,6 +10884,16 @@ impl Compiler {
                 facts.state(
                     llrm_hir::facts::Subject::Callable(i64::from(callable.id)),
                     llrm_hir::facts::Fact::MustProgress,
+                );
+            }
+        }
+        // A loop that reaches no far allocation keeps every far descriptor's
+        // words.
+        for function in &self.functions {
+            for &block in &function.quiet_loops {
+                facts.state(
+                    llrm_hir::facts::Subject::Terminator { function: i64::from(function.id), block: i64::from(block) },
+                    llrm_hir::facts::Fact::NoFarAllocation,
                 );
             }
         }

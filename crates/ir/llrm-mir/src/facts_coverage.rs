@@ -162,6 +162,13 @@ const COVERAGE: &[(&str, Shown)] = &[
         ]),
     ),
     (
+        "nofarallocation",
+        By(&[
+            "test_a_loop_that_reaches_no_far_allocation_says_so",
+            "test_no_far_allocation_is_not_stated_with_a_handler_or_on_a_flat_target",
+        ]),
+    ),
+    (
         "access",
         By(&[
             "a_parameter_arrays_descriptor_and_elements_are_tagged_apart",
