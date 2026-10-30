@@ -1096,3 +1096,68 @@ fn test_a_length_promoted_from_a_descriptor_folds_through_the_recursion() {
 fn step_no_inline(module: &mut Module) {
     stepped(module, &["top"], 40, Threshold::none());
 }
+
+/// Queens' `place(q, row, n)`: a bounds check against the descriptor's length
+/// before the store, the recursion passing the descriptor on. `slice_len` is
+/// the length each outside call's descriptor holds.
+fn queens_shaped(outside: &str) -> String {
+    format!(
+        "@twelve = internal addrspace(1) constant {{ i16, i16, i16 }} {{ i16 0, i16 0, i16 12 }}
+@five = internal addrspace(1) constant {{ i16, i16, i16 }} {{ i16 0, i16 0, i16 5 }}
+declare void @trap() noreturn
+
+define internal i16 @place(ptr addrspace(1) noalias readonly dereferenceable(6) nocapture %q, i16 %row) {{
+b0:
+  %at = getelementptr i8, ptr addrspace(1) %q, i16 4
+  %len = load i16, ptr addrspace(1) %at
+  %done = icmp eq i16 %row, 7
+  br i1 %done, label %out, label %go
+go:
+  %in = icmp ult i16 %row, %len
+  br i1 %in, label %ok, label %bad
+bad:
+  call void @trap()
+  unreachable
+ok:
+  %next = add i16 %row, 1
+  %r = call i16 @place(ptr addrspace(1) %q, i16 %next)
+  ret i16 %r
+out:
+  ret i16 1
+}}
+
+define i16 @top() {{
+b0:
+{outside}
+}}
+"
+    )
+}
+
+/// The length the one outside call's descriptor holds is 12 on every call, the
+/// recursion's included: the bounds check compares against 12 and `@place`
+/// takes no length, and the bounds-check call is gone. It carried the length as
+/// a parameter and the check stayed a comparison with a live value (queens:
+/// 225467 instructions, main's 167694).
+#[test]
+fn test_a_queens_shaped_recursion_folds_the_descriptor_length() {
+    let mut module = parsed(&queens_shaped("  %r = call i16 @place(ptr addrspace(1) @twelve, i16 0)\n  ret i16 %r"));
+    stepped(&mut module, &["top"], 40, Threshold::none());
+    let text = printed(&module);
+    // Row 0..7 against a length of 12: the check, and the call it guards, go.
+    assert!(!text.contains("@trap()\n") && !text.contains("%0"), "{text}");
+    assert!(text.contains("@place(i16 range(i16 0, 8) %row)"), "{text}");
+}
+
+/// Two outside calls with different lengths agree on nothing: the length stays
+/// a parameter (the control that the extra IPSCCP folds only a constant).
+#[test]
+fn test_a_recursion_called_with_two_lengths_keeps_the_length_a_parameter() {
+    let mut module = parsed(&queens_shaped(
+        "  %a = call i16 @place(ptr addrspace(1) @twelve, i16 0)\n  %b = call i16 @place(ptr addrspace(1) @five, i16 0)\n  %r = add i16 %a, %b\n  ret i16 %r",
+    ));
+    stepped(&mut module, &["top"], 40, Threshold::none());
+    let text = printed(&module);
+    assert!(text.contains("icmp ult i16 %row, %0") && text.contains("call void @trap()"), "{text}");
+    assert!(!text.contains("icmp ult i16 %row, 12") && !text.contains("icmp ult i16 %row, 5"), "{text}");
+}
