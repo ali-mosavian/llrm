@@ -466,7 +466,7 @@ def run_precheck(tmp_path, monkeypatch, tree, number="2836", **extra):
     dev.mkdir(exist_ok=True)
     monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
     monkeypatch.setattr(ps, "ensure_bins", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a dist build")))
-    info = {"headRefOid": f"head{number}", "body": "", "baseRefName": "feat/parity"}
+    info = {"headRefOid": f"head{number}", "body": f"problems: 0 @ head{number}", "baseRefName": "feat/parity"}
     return ps.precheck(number, dev=dev, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info=info, cache=tmp_path / f"cache{number}.json", base_sha="base", **extra)
 
 
@@ -502,7 +502,7 @@ def test_a_precheck_verdict_is_cached_per_pr_head_and_feat_parity_sha(tmp_path, 
     dev = tmp_path / "wt"
     dev.mkdir()
     monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
-    info = {"headRefOid": "abc", "body": "", "baseRefName": "feat/parity"}
+    info = {"headRefOid": "abc", "body": "problems: 0 @ abc", "baseRefName": "feat/parity"}
     args = dict(dev=dev, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info=info, cache=tmp_path / "cache.json")
     assert ps.precheck("5", base_sha="p1", **args) == "5: PASS" and ps.precheck("5", base_sha="p1", **args) == "5: PASS" and len(merges) == 1
     assert ps.precheck("5", base_sha="p2", **args) == "5: PASS" and len(merges) == 2
@@ -2077,3 +2077,38 @@ def test_the_tests_get_the_clang_of_the_trees_own_pin(tmp_path):
     env = {"LLRM_CLANG_M16": "/old/clang"}
     ps.with_pinned_clang(env, tmp_path / "tree", tmp_path / "by")
     assert env["LLRM_CLANG_M16"] == "/old/clang", "no build for the sha: the runner's value stays"
+
+
+def test_a_pr_whose_description_has_no_judge_line_for_its_head_is_refused_before_anything_runs(tmp_path, monkeypatch):
+    """#6095 landed with the bench judge red on 56 rows: the fast set does not run the judge, so the description must carry its line from this head."""
+    monkeypatch.setattr(ps, "git", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a refused PR runs nothing")))
+    head = "a" * 40
+    info = {"headRefOid": head, "baseRefName": "feat/parity"}
+    for body in ("", None, "problems: 3 @ " + head, "problems: 0", "the judge said problems: 0 @ " + head + " today"):
+        line = ps.precheck("6095", info={**info, "body": body}, cache=tmp_path / "c.json", base_sha="base")
+        assert line.startswith("6095: REFUSED: the description has no judge line"), (body, line)
+    other = ps.precheck("6095", info={**info, "body": "problems: 0 @ " + "b" * 40}, cache=tmp_path / "c.json", base_sha="base")
+    assert other == f"6095: REFUSED: the judge line is for {'b' * 12}, the head is {'a' * 12}: run the judge on this head and update the description"
+
+
+def test_a_pr_with_the_judge_line_for_its_head_passes_that_check_and_an_edited_description_is_read_again(tmp_path, monkeypatch):
+    tree = Tree(set(), set())
+    assert run_precheck(tmp_path, monkeypatch, tree, number="6096") == "6096: PASS"
+    info = {"headRefOid": "h" * 40, "baseRefName": "feat/parity"}
+    assert ps.judge_line_refusal("1", {**info, "body": "TL;DR\nproblems: 0 @ " + "h" * 40 + "\nOwner: w6"}) is None
+    assert ps.judge_line_refusal("1", {**info, "body": "problems: 0 \uff20 " + "h" * 40}) is None, "the full-width at sign the order was written with"
+    cache = tmp_path / "judge-cache.json"
+    kwargs = dict(cache=cache, base_sha="base")
+    assert "no judge line" in ps.precheck("1", info={**info, "body": ""}, **kwargs)
+    assert "no judge line" not in ps.precheck("1", info={**info, "body": "problems: 0 @ " + "h" * 40}, **{**kwargs, "checks": Tree(set(), set()).checks(), "merge": Tree(set(), set()).merge, "deletions": lambda *a: [], "dev": tmp_path})
+
+
+def test_a_pr_that_touches_no_compiler_path_needs_no_judge_line(tmp_path, monkeypatch):
+    """Without the exemption #6102 and every tools-only or docs-only PR would be refused by the rule: they cannot move the bench judge."""
+    head = "c" * 40
+    info = {"headRefOid": head, "baseRefName": "feat/parity", "body": ""}
+    tools_only = [{"path": "tools/parity_squash.py"}, {"path": "docs/working/pr-rules.md"}]
+    assert ps.judge_line_refusal("1", {**info, "files": tools_only}) is None
+    assert ps.judge_line_refusal("1", {**info, "files": [*tools_only, {"path": "crates/opt/src/lib.rs"}]}).startswith("1: REFUSED: the description has no judge line"), "one compiler file brings the rule back"
+    assert ps.judge_line_refusal("1", {**info, "files": [{"path": "Cargo.lock"}]}) is not None
+    assert ps.judge_line_refusal("1", info) is not None, "no file list read: the rule applies"
