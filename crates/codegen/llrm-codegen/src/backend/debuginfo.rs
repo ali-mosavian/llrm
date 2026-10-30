@@ -104,6 +104,16 @@ pub struct Procedure {
     pub module: bool,
     /// Its parameters' names, in the order the source declares them.
     pub parameters: Vec<String>,
+    /// The frontend described every call it makes.
+    pub all_calls: bool,
+}
+
+/// A function the unit calls and does not define, by its symbol.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Declaration {
+    pub name: String,
+    pub r#type: model::TypeId,
+    pub symbol: String,
 }
 
 /// A variable in data; `scope` the symbol of the procedure declaring it.
@@ -146,6 +156,7 @@ pub struct Debug {
     pub nodes: IndexMap<MetadataId, model::TypeId>,
     /// By each procedure's symbol.
     pub procedures: IndexMap<String, Procedure>,
+    pub declarations: Vec<Declaration>,
     pub globals: Vec<Global>,
     /// The unit's source file where the frontend named one: its name, and the
     /// MD5 of its text.
@@ -323,8 +334,14 @@ pub fn described(
                 r#type: node(function.r#type)?,
                 module: function.module,
                 parameters: function.parameters.iter().map(|(_, name, _)| name.clone()).collect(),
+                all_calls: function.all_calls,
             },
         );
+    }
+    let mut declarations = Vec::new();
+    for one in di::declarations(module) {
+        let Some(at) = symbol(&one.function) else { continue };
+        declarations.push(Declaration { name: one.name, r#type: node(one.r#type)?, symbol: at });
     }
     let mut out = Vec::new();
     for global in globals {
@@ -372,6 +389,7 @@ pub fn described(
         types,
         nodes,
         procedures,
+        declarations,
         globals: out,
         source: di::file(module).map(|(name, md5)| (name, md5.and_then(|hex| unhexed(&hex)))),
         scopes: Scopes::of(module),
@@ -778,6 +796,11 @@ pub fn laid_out(
             None => model::File { name: source.to_owned(), checksum: None },
         }],
         types: debug.types.clone(),
+        declarations: debug
+            .declarations
+            .iter()
+            .map(|one| model::Declaration { name: one.name.clone(), r#type: one.r#type, external: true })
+            .collect(),
         ..Info::default()
     };
     // The register the code would address a cell by is the one pushed below the
@@ -1135,7 +1158,7 @@ pub fn laid_out(
             variables,
             blocks,
             frame: frame.unwrap_or_default(),
-            all_calls: false,
+            all_calls: described.all_calls,
             calls: Vec::new(),
         });
     }

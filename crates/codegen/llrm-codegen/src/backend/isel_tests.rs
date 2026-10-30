@@ -4665,6 +4665,7 @@ fn test_dbg_lines_become_linnum() {
         types: Vec::new(),
         nodes: Default::default(),
         procedures: Default::default(),
+        declarations: Vec::new(),
         globals: Vec::new(),
         source: None,
         scopes: Default::default(),
@@ -5893,7 +5894,14 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     let parameters = named.iter().enumerate().map(|(at, name)| (at as i64, (*name).to_owned(), int)).collect();
     di::add_function(
         &mut module,
-        &di::Function { function: "f".into(), module: false, name: "f".into(), r#type: int, parameters },
+        &di::Function {
+            function: "f".into(),
+            module: false,
+            name: "f".into(),
+            r#type: int,
+            parameters,
+            all_calls: false,
+        },
     );
     // a in a cell, b in AX, c in DX:AX; d is past the three the function has.
     let convention = Convention {
