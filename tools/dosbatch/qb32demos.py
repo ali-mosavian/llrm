@@ -217,7 +217,7 @@ def differences(name: str, want: dict[str, Path], got: dict[str, Path], target: 
 def _key(name: str, source: Path) -> str:
     linker = dosbatch.QB45 / "LINK.EXE"
     stamp = f"{linker.stat().st_size}:{int(linker.stat().st_mtime)}" if linker.exists() else ""
-    return hashlib.sha256(source.read_bytes() + repr(script(name)).encode() + stamp.encode() + qb32.DEMO_CONF.encode() + b"lockstep").hexdigest()[:20]
+    return hashlib.sha256(source.read_bytes() + repr(script(name)).encode() + stamp.encode() + qb32.DEMO_CONF.encode() + b"lockstep" + b"tz=utc").hexdigest()[:20]
 
 
 def reference_shots(name: str, source: Path, work: Path) -> dict[str, Path]:
