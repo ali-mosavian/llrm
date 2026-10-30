@@ -159,17 +159,23 @@ struct Object {
     uses: u64,
 }
 
-/// `X86FrameLowering::orderFrameObjects` for a frame-pointer frame: the indices
-/// of `objects` (in creation order) nearest BP first. The pin sorts ascending
-/// by `uses / size` (compared cross-multiplied, a tie by alignment), stable,
-/// and flips the list for an FP frame.
-fn order(objects: &[Object]) -> Vec<usize> {
+/// `X86FrameLowering::orderFrameObjects`: the indices of `objects` (in
+/// creation order) in the order they are laid from the top of the frame. The
+/// pin sorts ascending by `uses / size` (compared cross-multiplied, a tie by
+/// alignment), stable, and flips the list for an FP frame (hottest nearest BP);
+/// a frame addressed from the stack pointer keeps it (hottest nearest SP).
+fn order(
+    objects: &[Object],
+    sp: bool,
+) -> Vec<usize> {
     let mut sorted: Vec<usize> = (0..objects.len()).collect();
     sorted.sort_by(|&a, &b| {
         let (a, b) = (&objects[a], &objects[b]);
         (a.uses * b.size as u64).cmp(&(b.uses * a.size as u64)).then(a.align.cmp(&b.align))
     });
-    sorted.reverse();
+    if !sp {
+        sorted.reverse();
+    }
     sorted
 }
 
@@ -199,6 +205,7 @@ fn laid(
 pub fn ordered(
     first: &Machined,
     frame: &Frame,
+    sp: bool,
 ) -> Option<(Machined, Frame)> {
     if frame.native.is_some() || frame.hole != 0 {
         return None;
@@ -248,7 +255,7 @@ pub fn ordered(
     }
     let top = -objects.iter().map(|one| one.home + one.size).max()?;
     let old_low = objects.iter().map(|one| one.home).min()?;
-    let placed = order(&objects);
+    let placed = order(&objects, sp);
     let mut homes: IndexMap<i64, i64> = laid(&objects, &placed, top.max(0)).into_iter().collect();
     // The pin's order pads each object to its alignment and the frame grows to
     // hold it (`calculateFrameObjectOffsets`); the reserve follows.
@@ -877,7 +884,7 @@ mod tests {
         let body =
             reading(&[(-46, -46), (-132, -132), (-132, -132), (-132, -132), (-132, -132), (-132, -132), (-132, -132)]);
         assert_eq!(far_cells(&body), 6, "the premise");
-        let (done, again) = ordered(&machined(body), &frame).expect("the order fits");
+        let (done, again) = ordered(&machined(body), &frame, false).expect("the order fits");
         assert_eq!(far_cells(&done.body), 0);
         let word = again.extents.iter().find(|(_, size)| *size == 2).expect("the word");
         assert_eq!(word.0, -2);
@@ -902,6 +909,23 @@ mod tests {
         assert_eq!(done.reserve, -lowest + 12, "the locals lie above the outgoing area");
     }
 
+    /// matmul bq32 -O2 (no frame pointer) laid its hot spill slots at the top
+    /// of the frame, `[esp+148..196]`, and the cold ones at `[esp+24]`: the
+    /// FP order on an SP-addressed frame, +200 bytes. The hot word lies
+    /// lowest, nearest SP.
+    #[test]
+    fn test_a_frame_addressed_from_sp_lays_the_hot_word_lowest() {
+        use super::ordered;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(-132);
+        frame.align = 2;
+        frame.extents = vec![(-46, 46), (-92, 46), (-132, 2)];
+        let body = reading(&[(-46, -46), (-132, -132), (-132, -132), (-132, -132)]);
+        let (_, again) = ordered(&machined(body), &frame, true).expect("the order fits");
+        let word = again.extents.iter().find(|(_, size)| *size == 2).expect("the word");
+        assert_eq!(word.0, -94, "below both arrays");
+    }
+
     /// An order that needs more room than the objects have (padding) grows
     /// the reserve instead of being dropped: jpeg_fixed bq32 -Os kept 294 far
     /// operands and 342 bytes over the pin when the order was refused.
@@ -916,7 +940,7 @@ mod tests {
         frame.extents = vec![(-4, 4), (-6, 2), (-7, 1)];
         let first = machined(reading(&[(-7, -7), (-7, -7), (-7, -7), (-6, -6), (-6, -6), (-6, -6), (-4, -4)]));
         let reserve = first.reserve;
-        let (done, again) = ordered(&first, &frame).expect("the order is taken");
+        let (done, again) = ordered(&first, &frame, false).expect("the order is taken");
         assert_eq!(done.reserve, reserve + 4);
         assert_eq!(again.floor, frame.floor - 4);
     }
@@ -935,7 +959,7 @@ mod tests {
         assert!(home < -128, "the premise: {home}");
         let first = machined(reading(&[(home, home), (home, home), (home, home), (-300, -300)]));
         assert_eq!(far_cells(&first.body), 4, "the premise");
-        let (done, _) = ordered(&first, &frame).expect("the order fits");
+        let (done, _) = ordered(&first, &frame, false).expect("the order fits");
         assert_eq!(far_cells(&done.body), 1, "only the array is far");
     }
 
@@ -948,6 +972,7 @@ mod tests {
         // 3 uses of 2 bytes beat 5 of 8; equal density 1: the wider alignment
         // first; then the later
         let objects = [one(8, 2, 5), one(2, 2, 3), one(4, 2, 4), one(4, 4, 4), one(4, 4, 4)];
-        assert_eq!(order(&objects), [1, 4, 3, 2, 0]);
+        assert_eq!(order(&objects, false), [1, 4, 3, 2, 0]);
+        assert_eq!(order(&objects, true), [0, 2, 3, 4, 1], "no frame pointer: the hottest is laid last, nearest SP");
     }
 }
