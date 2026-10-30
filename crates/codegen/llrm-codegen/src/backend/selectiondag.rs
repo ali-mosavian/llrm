@@ -157,7 +157,7 @@ pub use dag::{
     BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG,
 };
 pub use isd::{CondCode, ISD};
-pub use lowering::{TargetLoweringInfo, TypeAction};
+pub use lowering::{ShiftAmount, TargetLoweringInfo, TypeAction};
 pub use mvt::{EVT, MVT};
 
 #[cfg(test)]
