@@ -919,6 +919,21 @@ def base_rows(args, names: list[str] | None = None) -> tuple[dict, set[str], str
     return base, same, base_sha
 
 
+def base_slice_of(group: str) -> tuple[int, int]:
+    """(I, N) of the CI job `bench-base-I`: N is the gate's `[bench] shards`."""
+    sys.path.insert(0, str(ROOT / "tools/gate"))
+    import gate
+
+    return int(group.rsplit("-", 1)[1]), gate.load()["bench"]["shards"]
+
+
+def slice_stamp_of(index: int, count: int, opts: list[str] = ("O2", "Os"), timed: bool = False) -> dict:
+    import measure
+
+    base_sha = measure.base_of(measure.git("rev-parse", "HEAD"), os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
+    return basecounts.slice_stamp(measure.tree_of(base_sha) or base_sha, list(opts), timed, shards.of(index, count), basecounts.programs(ROOT))
+
+
 def base_leg(args, slice_of: tuple[int, int] | None = None) -> int:
     """`--shard base`: the base's counts, measured (or restored) once for the whole run and written to `base.json` for --merge. The numbered slices
     measure only the head: each of them built the base and measured its part of it (bench-3 of gate run 2 was cancelled at 60 minutes in it).
@@ -926,16 +941,24 @@ def base_leg(args, slice_of: tuple[int, int] | None = None) -> int:
     73 minutes on a hosted runner (gate run 7, cancelled at 90)."""
     names = None if slice_of is None else shards.of(*slice_of)
     stage("base counts" if slice_of is None else f"base counts, slice {slice_of[0]} of {slice_of[1]}: {len(names)} programs, {cores()}")
+    stamp = None if slice_of is None else slice_stamp_of(*slice_of, args.opt, args.time)
+    kept = None if stamp is None else basecounts.load_slice(basecounts.CACHE, *slice_of, stamp)
+    source = "restored" if kept else "measured"
     try:
-        base, same, base_sha = base_rows(args) if slice_of is None else base_rows(args, names)
+        if kept:
+            base, same, base_sha = basecounts.rows_of(kept["base"]), set(kept["same"]), kept["base_sha"]
+        else:
+            base, same, base_sha = base_rows(args) if slice_of is None else base_rows(args, names)
     except BaseException as why:  # noqa: BLE001: the reason is the line the gate prints
         print("FAIL BASE: the base could not be measured: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:])
         return 1
+    if stamp and not kept:
+        basecounts.store_slice(basecounts.CACHE, *slice_of, stamp, {"base": {"/".join(key): value for key, value in base.items()}, "same": sorted(same), "base_sha": base_sha})
     stage(f"base {base_sha[:9]}: {len(base)} rows")
     if args.json:
         args.json.mkdir(parents=True, exist_ok=True)
         (args.json / ("base.json" if slice_of is None else f"base-{slice_of[0]}.json")).write_text(
-            json.dumps({"base": {"/".join(key): value for key, value in base.items()}, "same": sorted(same), "base_sha": base_sha, **({} if names is None else {"programs": names})})
+            json.dumps({"base": {"/".join(key): value for key, value in base.items()}, "same": sorted(same), "base_sha": base_sha, **({} if names is None else {"programs": names, "source": source})})
         )
     print(f"base {base_sha[:9]}: {len(base)} rows: 0 problems")
     return 0
@@ -982,12 +1005,13 @@ def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
     measured = {}
     for one in files:
         measured |= basecounts.rows_of(json.loads(one.read_text())["measured"])
-    base, same, shas = {}, set(), set()
+    base, same, shas, sources = {}, set(), set(), []
     for one in legs:
         data = json.loads(one.read_text())
         base |= basecounts.rows_of(data["base"])
         same |= set(data["same"])
         shas.add(data["base_sha"])
+        sources.append(data.get("source", "measured"))
     if len(shas) != 1:
         print(f"FAIL BASE: the base slices measured different bases: {' '.join(sorted(sha[:9] for sha in shas))}")
         return 1
@@ -1000,6 +1024,8 @@ def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
     problems += more
     print(*standing(measured, [], opts), sep="\n")
     print(f"BASE {base_sha[:9]}: {len(base)} rows")
+    if sources:
+        print(f"base counts: {sources.count('restored')} slices restored, {sources.count('measured')} measured")
     print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
     print(*basecounts.stale_summary(stale), sep="\n")
     print(*applied, sep="\n")

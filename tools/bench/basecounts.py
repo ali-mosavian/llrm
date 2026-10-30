@@ -139,6 +139,53 @@ def base_counts(
     return have, hashes
 
 
+# The tools whose versions the counts depend on: in CI each names a directory with its version hash in it.
+TOOL_VARS = ("LLRM_PIN_CLANG", "LLRM_CLANG_M16", "LLRM_OW", "WDUMP")
+
+
+def slice_stamp(tree: str, opts: list[str], timed: bool, names: list[str], now: dict[str, str], environ=os.environ) -> dict:
+    """What a base slice's rows depend on: the base's tree, the levels, the programs' hashes as the head has them (an edited program is
+    measured from the head's sources), the hash scheme and the tools. A stored slice with any other stamp is not this slice's."""
+    return {
+        "tree": tree,
+        "opts": opts,
+        "timed": timed,
+        "hash_version": HASH_VERSION,
+        "tools": {var: environ.get(var, "") for var in TOOL_VARS},
+        "programs": {name: now.get(name, "") for name in sorted(names)},
+    }
+
+
+def slice_key(stamp: dict, index: int, count: int) -> str:
+    """The actions-cache key of a slice: the stamp's hash, so a changed dependency is a different key, and the file is checked again."""
+    return f"bench-base-slice-{index}of{count}-" + hashlib.sha256(json.dumps(stamp, sort_keys=True).encode()).hexdigest()[:20]
+
+
+def slice_file(cache: Path, index: int, count: int) -> Path:
+    return cache / f"slice-{index}of{count}.json"
+
+
+def load_slice(cache: Path, index: int, count: int, stamp: dict) -> dict | None:
+    """The stored slice if it was measured under `stamp`, else None: a stale hit would read as no regression at all."""
+    path = slice_file(cache, index, count)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except ValueError:
+        return None
+    return data if data.get("stamp") == stamp and {"base", "same", "base_sha"} <= set(data) else None
+
+
+def store_slice(cache: Path, index: int, count: int, stamp: dict, payload: dict) -> Path:
+    cache.mkdir(parents=True, exist_ok=True)
+    path = slice_file(cache, index, count)
+    part = path.with_suffix(".part")
+    part.write_text(json.dumps({**payload, "stamp": stamp}))
+    os.replace(part, path)
+    return path
+
+
 def waivers(root: Path = ROOT) -> list[dict]:
     """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`."""
     out = []
@@ -308,6 +355,12 @@ def with_edited(base: dict, was: dict[str, str], now: dict[str, str], opts: list
 if __name__ == "__main__":
     if sys.argv[1:2] == ["key"]:
         print(compiler_key(sys.argv[2] if len(sys.argv) > 2 else "HEAD"))
+    elif sys.argv[1:2] == ["slicekey"]:  # slicekey bench-base-I [N]: the actions-cache key of base slice I of this tree
+        sys.path.insert(0, str(HERE))
+        import bench
+
+        index, count = bench.base_slice_of(sys.argv[2])
+        print(slice_key(bench.slice_stamp_of(index, count), index, count))
     elif sys.argv[1:2] == ["record"]:  # record ROWS.json DIR: the counts of HEAD
         print(record(rows_of(json.loads(Path(sys.argv[2]).read_text())), Path(sys.argv[3]), compiler_key("HEAD")))
     else:

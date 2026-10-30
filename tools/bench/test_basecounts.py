@@ -359,3 +359,22 @@ def test_the_base_bench_runs_with_the_fork_start_method_whatever_the_pythons_def
     )
     rows, _ = bc.measure_in_subprocess(tmp_path / "x" / "release", ["O2"], tmp_path / "work", tree=tree)
     assert list(rows) == [("start", "fork", "O2")]
+
+
+def test_a_stored_base_slice_is_served_only_to_the_stamp_it_was_measured_under(tmp_path):
+    """A stale hit reads as zero regressions. Each part of the stamp changed alone must reject the file."""
+    stamp = bc.slice_stamp("tree1", ["O2", "Os"], False, ["fib", "crc"], {"fib": "h1", "crc": "h2", "other": "h3"}, {"LLRM_OW": "ow-1"})
+    bc.store_slice(tmp_path, 1, 3, stamp, {"base": {}, "same": [], "base_sha": "a" * 40})
+    assert bc.load_slice(tmp_path, 1, 3, stamp)["base_sha"] == "a" * 40
+    others = [
+        bc.slice_stamp("tree2", ["O2", "Os"], False, ["fib", "crc"], {"fib": "h1", "crc": "h2"}, {"LLRM_OW": "ow-1"}),
+        bc.slice_stamp("tree1", ["O2"], False, ["fib", "crc"], {"fib": "h1", "crc": "h2"}, {"LLRM_OW": "ow-1"}),
+        bc.slice_stamp("tree1", ["O2", "Os"], True, ["fib", "crc"], {"fib": "h1", "crc": "h2"}, {"LLRM_OW": "ow-1"}),
+        bc.slice_stamp("tree1", ["O2", "Os"], False, ["fib", "crc"], {"fib": "h1", "crc": "EDITED"}, {"LLRM_OW": "ow-1"}),
+        bc.slice_stamp("tree1", ["O2", "Os"], False, ["fib", "crc"], {"fib": "h1", "crc": "h2"}, {"LLRM_OW": "ow-2"}),
+    ]
+    assert all(bc.load_slice(tmp_path, 1, 3, other) is None for other in others), "every dependency is part of the stamp"
+    assert len({bc.slice_key(one, 1, 3) for one in [stamp, *others]}) == 6, "and of the cache key"
+    assert bc.load_slice(tmp_path, 2, 3, stamp) is None
+    bc.slice_file(tmp_path, 1, 3).write_text("{not json")
+    assert bc.load_slice(tmp_path, 1, 3, stamp) is None, "a damaged file is measured again"
