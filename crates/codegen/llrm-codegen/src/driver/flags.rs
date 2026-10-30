@@ -80,10 +80,15 @@ pub fn apply_pass_flag(
 ) -> bool {
     let Some(name) = flag.strip_prefix("-f") else { return false };
     let (name, on) = name.strip_prefix("no-").map_or((name, true), |rest| (rest, false));
-    PASSES.iter().find(|(one, _)| *one == name).is_some_and(|(_, set)| {
-        set(options, on);
-        true
-    })
+    PASSES
+        .iter()
+        .find(|(one, _)| *one == name)
+        .is_some_and(
+            |(_, set)| {
+                set(options, on);
+                true
+            },
+        )
 }
 
 /// gcc's `-f` pass names, each with the options it sets.
