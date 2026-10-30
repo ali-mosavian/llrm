@@ -276,6 +276,17 @@ fn the_arms_of_an_expanded_select_keep_their_order() {
     assert!(text.contains("\tcmpi.l\t#10, %d0\n\tbcc\t.LBB0_3\n"), "{text}");
 }
 
+/// The ILP scheduler put the loop-carried copy between `hex`'s `cmpi` and
+/// `bhi`; the copy is a `move.l`, which sets the flags, so they were saved
+/// around it (`move.w %sr,-(%sp)` ... `move.w (%sp)+,%ccr`): 33 instructions
+/// where the source order has 31.
+#[test]
+fn a_copy_is_not_scheduled_between_a_compare_and_its_branch() {
+    let module = llrm_mir::parse::module(&llrm_m68k::kernels::source_in("library", "hex")).expect("parses");
+    let text = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
+    assert!(!text.contains("%sr") && !text.contains("%ccr"), "{text}");
+}
+
 /// A stored `zext i8 to i32` of a load matched the store-load fragment, which checks no extension
 /// (the pin's too: `llc` gives `move.l (buf,%pc), (%a0)`), and copied four bytes where one was
 /// meant. Seed 68 of the differential driver.
