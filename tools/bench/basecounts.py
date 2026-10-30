@@ -19,6 +19,7 @@ import shutil
 import hashlib
 import tomllib
 import subprocess
+import threading
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -230,6 +231,25 @@ def stale_summary(stale: list[str]) -> list[str]:
     return [f"BASE-STALE {len(stale)} waivers in {len(files)} files, delete them: {' '.join(files)}"] if stale else []
 
 
+def run_streaming(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """`subprocess.run(command, capture_output=True, text=True)` that passes stderr on as it is printed: the base's stage lines were captured,
+    and a 25 min leg showed the gate's watchdog nothing but `base counts`."""
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs) as proc:
+        said: list[str] = []
+
+        def pass_on() -> None:
+            for line in proc.stderr:
+                said.append(line)
+                print(line, end="", file=sys.stderr, flush=True)
+
+        reader = threading.Thread(target=pass_on, daemon=True)
+        reader.start()
+        stdout = proc.stdout.read()
+        proc.wait()
+        reader.join()
+    return subprocess.CompletedProcess(command, proc.returncode, stdout, "".join(said))
+
+
 def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: bool = False, only: list[str] | None = None, tree: Path | None = None) -> tuple[dict, dict[str, str]]:
     """(bench.py's rows, programs()) of the tree `directory` (a release directory of measure.py's build tree, `<build>/target/release`) was
     built from, by that tree's own bench.py with its compiler: the harness and the programs as the base had them (the head's harness may
@@ -237,7 +257,7 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: b
     tree = tree or directory.parents[1] / "tree"
     out = work / "base.json"
     work.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "LLRM_BIN": str(directory)}
+    env = {**os.environ, "LLRM_BIN": str(directory), "PYTHONPATH": os.pathsep.join([str(HERE / "forkstart"), *filter(None, [os.environ.get("PYTHONPATH")])])}
     env.pop("LLRM_BENCH_BASE", None)
     command = [sys.executable, str(tree / "tools/bench/bench.py"), "--opt", *opts, "--json", str(out), "--work", str(work / "run")]
     if timed:
@@ -245,7 +265,7 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: b
     command += only or []
     if (tree / "tools/bench/bench.py").is_file() and "--no-judge" in (tree / "tools/bench/bench.py").read_text():
         command.append("--no-judge")
-    done = subprocess.run(command, cwd=tree, env=env, capture_output=True, text=True)
+    done = run_streaming(command, cwd=tree, env=env)
     if not out.is_file():
         raise SystemExit("the base did not measure: " + " | ".join(line.strip() for line in (done.stdout + done.stderr).splitlines()[-4:] if line.strip()))
     return rows_of(json.loads(out.read_text())), programs(tree)
