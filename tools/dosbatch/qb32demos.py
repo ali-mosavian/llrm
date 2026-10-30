@@ -214,29 +214,29 @@ def differences(name: str, want: dict[str, Path], got: dict[str, Path], target: 
     return bad
 
 
-def _key(name: str, source: Path) -> str:
+def _key(name: str, source: Path, conf: str = qb32.DEMO_CONF) -> str:
     linker = dosbatch.QB45 / "LINK.EXE"
     stamp = f"{linker.stat().st_size}:{int(linker.stat().st_mtime)}" if linker.exists() else ""
-    return hashlib.sha256(source.read_bytes() + repr(script(name)).encode() + stamp.encode() + qb32.DEMO_CONF.encode() + b"lockstep").hexdigest()[:20]
+    return hashlib.sha256(source.read_bytes() + repr(script(name)).encode() + stamp.encode() + conf.encode() + b"lockstep" + b"tz=utc").hexdigest()[:20]
 
 
-def reference_shots(name: str, source: Path, work: Path) -> dict[str, Path]:
+def reference_shots(name: str, source: Path, work: Path, conf: str = qb32.DEMO_CONF) -> dict[str, Path]:
     """BCOM45's checkpoint screens of `name`: from the cache, or built, played and put there."""
     names = [one[2] for one in script(name) if one[2]]
-    cached = CACHE / name / _key(name, source)
+    cached = CACHE / name / _key(name, source, conf)
     if all((cached / f"{one}.png").exists() for one in names):
         return {one: cached / f"{one}.png" for one in names}
     work.mkdir(parents=True, exist_ok=True)
     (work / "build").mkdir(exist_ok=True)
     exe = qbplay.reference({name: source}, work / "build")[name]
-    shots = play(exe, work / "play", script(name), name)
+    shots = play(exe, work / "play", script(name), name, conf=conf)
     cached.mkdir(parents=True, exist_ok=True)
     for one, path in shots.items():
         shutil.copy(path, cached / f"{one}.png")
     return {one: cached / f"{one}.png" for one in names}
 
 
-def candidate_shots(name: str, built: dict, work: Path) -> dict[str, dict[str, Path]]:
+def candidate_shots(name: str, built: dict, work: Path, conf: str = qb32.DEMO_CONF) -> dict[str, dict[str, Path]]:
     """The checkpoint screens of each target's build of `name`: {target: {checkpoint: screenshot}}."""
     work.mkdir(parents=True, exist_ok=True)
     shots = {}
@@ -245,8 +245,37 @@ def candidate_shots(name: str, built: dict, work: Path) -> dict[str, dict[str, P
         play_dir.mkdir(parents=True, exist_ok=True)
         for beside in one.files:
             shutil.copy(beside, play_dir / Path(beside).name)
-        shots[target] = play(one.exe, play_dir, script(name), name)
+        shots[target] = play(one.exe, play_dir, script(name), name, conf=conf)
     return shots
+
+
+# Demos that seed RND from TIMER: BCOM45's runtime and ours reach `RANDOMIZE TIMER` a few emulated ms apart, so at some start times they sit in
+# different 55 ms ticks, get different seeds and play different games (NIBBLES m16 at 2 of 8 start times: Lives 5 against 4, a score of 0
+# against -10). Both builds are made from the source with a fixed seed; the real-timer game is not compared.
+PINNED_SEEDS = {"NIBBLES": 1234}
+SEEDED = b"RANDOMIZE TIMER"
+
+
+def seeded(source: Path, seed: int, work: Path) -> Path:
+    """`source` with its one `RANDOMIZE TIMER` made `RANDOMIZE seed`, written under `work` (the name stays: it names the build)."""
+    text = source.read_bytes()
+    assert text.count(SEEDED) == 1, f"{source.name}: expected one {SEEDED.decode()}, found {text.count(SEEDED)}"
+    out = work / "seeded" / str(seed) / source.name
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(text.replace(SEEDED, b"RANDOMIZE %d" % seed))
+    return out
+
+
+def compare(name: str, reference: Path, candidate: Path, work: Path, objects: dict, conf: str = qb32.DEMO_CONF, record: bool = False) -> dict[str, list[str]]:
+    """BCOM45's build of `reference` against each target's build of `candidate`, both played under `conf`: the checkpoints that differ."""
+    built = qbbuild.build(candidate, work / "build", objects)
+    if record:
+        record_hashes(name, built, objects)
+    with ThreadPoolExecutor(2) as pool:
+        want = pool.submit(reference_shots, name, reference, work / "ref", conf)
+        got = pool.submit(candidate_shots, name, built, work / "cand", conf)
+        want, got = want.result(), got.result()
+    return {target: differences(name, want, shots, target) for target, shots in got.items()}
 
 
 def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]] | Exception]:
@@ -255,13 +284,8 @@ def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]] 
     objects = qbbuild.runtimes(work)
 
     def one(name: str) -> dict[str, list[str]]:
-        built = qbbuild.build(sources[name], work / name / "build", objects)
-        record_hashes(name, built, objects)
-        with ThreadPoolExecutor(2) as pool:
-            reference = pool.submit(reference_shots, name, sources[name], work / name / "ref")
-            candidate = pool.submit(candidate_shots, name, built, work / name / "cand")
-            want, got = reference.result(), candidate.result()
-        return {target: differences(name, want, shots, target) for target, shots in got.items()}
+        source = seeded(sources[name], PINNED_SEEDS[name], work / name) if name in PINNED_SEEDS else sources[name]
+        return compare(name, source, source, work / name, objects, record=True)
 
     with ThreadPoolExecutor(len(sources)) as pool:
         futures = {name: pool.submit(one, name) for name in sources}
