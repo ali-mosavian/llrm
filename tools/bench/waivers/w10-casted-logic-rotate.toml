@@ -2,6 +2,132 @@ reason = "TEMPORARY (owner w10): pin-faithful LoopRotate (looprotate.rs, the tra
 exception = true
 
 [[row]]
+label = "jpeg_fixed bas -O2"
+counter = "code_bytes"
+tip = 4846
+main = 5433
+to = 4850
+
+[[row]]
+label = "jpeg_fixed bas -Os"
+counter = "code_bytes"
+tip = 4659
+main = 5240
+to = 4699
+
+[[row]]
+label = "jpeg_fixed bq16 -Os"
+counter = "code_bytes"
+tip = 4761
+main = 5263
+to = 4818
+
+[[row]]
+label = "jpeg_fixed bq32 -O2"
+counter = "instructions"
+tip = 74798566
+main = 83887581
+to = 74798633
+
+[[row]]
+label = "jpeg_fixed bq32 -O2"
+counter = "clocks"
+tip = 158518681
+main = 186361982
+to = 158518747
+
+[[row]]
+label = "jpeg_fixed bq32 -O2"
+counter = "code_bytes"
+tip = 7938
+main = 6439
+to = 8121
+
+[[row]]
+label = "jpeg_fixed bq32 -Os"
+counter = "instructions"
+tip = 83514323
+main = 87566477
+to = 83514387
+
+[[row]]
+label = "jpeg_fixed bq32 -Os"
+counter = "clocks"
+tip = 167988991
+main = 192312402
+to = 167989084
+
+[[row]]
+label = "jpeg_fixed bq32 -Os"
+counter = "code_bytes"
+tip = 5717
+main = 6008
+to = 5775
+
+[[row]]
+label = "jpeg_single bas -O2"
+counter = "code_bytes"
+tip = 4534
+main = 5062
+to = 4538
+
+[[row]]
+label = "jpeg_single bas -Os"
+counter = "code_bytes"
+tip = 4345
+main = 4852
+to = 4385
+
+[[row]]
+label = "jpeg_single bq16 -Os"
+counter = "code_bytes"
+tip = 4447
+main = 4875
+to = 4504
+
+[[row]]
+label = "jpeg_single bq32 -O2"
+counter = "instructions"
+tip = 54099469
+main = 61569936
+to = 54099538
+
+[[row]]
+label = "jpeg_single bq32 -O2"
+counter = "clocks"
+tip = 161148633
+main = 176491423
+to = 161148699
+
+[[row]]
+label = "jpeg_single bq32 -O2"
+counter = "code_bytes"
+tip = 7618
+main = 6204
+to = 7801
+
+[[row]]
+label = "jpeg_single bq32 -Os"
+counter = "instructions"
+tip = 57713402
+main = 62930837
+to = 57713475
+
+[[row]]
+label = "jpeg_single bq32 -Os"
+counter = "clocks"
+tip = 168558789
+main = 179923250
+to = 168558882
+
+[[row]]
+label = "jpeg_single bq32 -Os"
+counter = "code_bytes"
+tip = 5560
+main = 5811
+to = 5618
+
+[[row]]
 label = "queens bas -O2"
 counter = "memory_operands"
 tip = 70048
@@ -15,3 +141,16 @@ tip = 70048
 main = 95333
 to = 80447
 
+[[row]]
+label = "queens bq16 -O2"
+counter = "memory_operands"
+tip = 70060
+main = 113297
+to = 80459
+
+[[row]]
+label = "queens bq16 -Os"
+counter = "memory_operands"
+tip = 70060
+main = 95368
+to = 80459
