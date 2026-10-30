@@ -34,19 +34,32 @@ TIMEOUT = 20
 
 
 def callees(text: str) -> list[str]:
-    return sorted(set(re.findall(r"^int (c\d+)\(", text, re.M)))
+    """The functions the source calls but `g`: declared `int cK(...)` by the generator, `void f(...)` or `int h(...)` in a fixture."""
+    return sorted(set(re.findall(r"\b(?:void|int)\s+([a-z]\w*)\(", text)) - {"g"})
 
 
 def driver(text: str) -> str:
-    """The driver C: each callee prints its name and returns a value of its arguments, `g` runs over the inputs."""
+    """The driver C: each callee prints its name and returns a value of its arguments, `g` (one or two ints) runs over the inputs."""
     names = callees(text)
-    returns_int = "\nint g(" in "\n" + text
-    defs = "".join(f'int {n}(int a, int b) {{ printf("{n}\\n"); return a * 3 + b; }}\n' for n in names)
-    proto = f"{'int' if returns_int else 'void'} g(int, int);\n"
-    call = (lambda a, b: f'printf("in %d %d\\n", {a}, {b}); printf("r %d\\n", g({a}, {b}));') if returns_int else (
-        lambda a, b: f'printf("in %d %d\\n", {a}, {b}); g({a}, {b});'
+    signature = re.search(r"\b(void|int)\s+g\(([^)]*)\)", text)
+    returns_int, two = signature[1] == "int", "," in signature[2]
+    arity = {n: params for n, params in re.findall(r"\b(?:void|int)\s+([a-z]\w*)\(([^)]*)\)", text)}
+
+    def stub(n: str) -> str:
+        """Defined with the arity the source declares: a stub that reads an argument nobody passed returns garbage."""
+        params = arity[n].strip()
+        shape = ("int a, int b", "a * 3 + b") if "," in params else ("int a", "a * 3 + 1") if params not in ("", "void") else ("void", "7")
+        return f'int {n}({shape[0]}) {{ printf("{n}\\n"); return {shape[1]}; }}\n'
+
+    defs = "".join(stub(n) for n in names)
+    proto = f"{signature[1]} g({'int, int' if two else 'int'});\n"
+    inputs = [(a, b) for a in ONE for b in TWO] if two else [(a, None) for a in ONE]
+    args = lambda a, b: f"{a}, {b}" if two else f"{a}"  # noqa: E731
+    shown = lambda a, b: f'printf("in {"%d %d" if two else "%d"}\\n", {args(a, b)});'  # noqa: E731
+    call = (lambda a, b: f'{shown(a, b)} printf("r %d\\n", g({args(a, b)}));') if returns_int else (
+        lambda a, b: f"{shown(a, b)} g({args(a, b)});"
     )
-    calls = "\n".join(call(a, b) for a in ONE for b in TWO)
+    calls = "\n".join(call(a, b) for a, b in inputs)
     return f"#include <stdio.h>\n{proto}{defs}int main(void)\n{{\n{calls}\nreturn 0;\n}}\n"
 
 
@@ -158,6 +171,22 @@ def cmd_run(args, setup: Setup) -> int:
     return 1 if differ or broken else 0
 
 
+def cmd_files(args, setup: Setup) -> int:
+    """The vendored C files (fixtures/*.c) through the same comparison; a file without a one- or two-int `g` is skipped."""
+    match = differ = skipped = 0
+    for name in args.files:
+        text = Path(name).read_text()
+        if not re.search(r"\b(?:void|int)\s+g\((?:int\s+\w+)(?:\s*,\s*int\s+\w+)?\)", text):
+            skipped += 1
+            continue
+        kind = verdict(setup, text)[0]
+        match, differ = match + (kind == "match"), differ + (kind != "match")
+        if kind != "match":
+            print(f"{kind.upper()} {Path(name).name}")
+    print(f"match {match} differ {differ} skipped {skipped}")
+    return 1 if differ else 0
+
+
 def cmd_replay(args, setup: Setup) -> int:
     text = gen.emit(args.seed, args.shape)
     print(text)
@@ -180,7 +209,7 @@ def cmd_run_targets(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("run", "replay"):
+    for name in ("run", "replay", "files"):
         one = sub.add_parser(name)
         one.add_argument("--level", default="O2")
         one.add_argument("--target", choices=sorted(BITS), default="x86_64-linux")
@@ -193,14 +222,16 @@ def main(argv: list[str] | None = None) -> int:
             one.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
             one.add_argument("--no-reduce", action="store_true")
             one.add_argument("--targets", default=None, help="comma list, one run each (the batch step: x86_64-linux,x86_32-linux)")
-        else:
+        elif name == "replay":
             one.add_argument("seed", type=int)
             one.add_argument("shape", choices=gen.SHAPES)
+        else:
+            one.add_argument("files", nargs="+")
     args = ap.parse_args(argv)
     if args.cmd == "run" and args.targets:
         return cmd_run_targets(args)
     setup = Setup(args.bin, args.level, args.target, args.ours.split() if args.ours else None)
-    return (cmd_run if args.cmd == "run" else cmd_replay)(args, setup)
+    return {"run": cmd_run, "replay": cmd_replay, "files": cmd_files}[args.cmd](args, setup)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -57,3 +58,17 @@ def test_the_unfixed_tailmerge_binary_differs_on_the_recorded_programs_and_the_f
     found = {f"{seed} {shape}" for seed in range(10) for shape in gen.SHAPES if ex.verdict(s, gen.emit(seed, shape))[0] == "differ"}
     recorded = set((Path(__file__).parent / "fixtures/exec/prefix_differs.txt").read_text().split("\n")) - {""}
     assert found == (recorded if expect == "prefix" else set()), sorted(found ^ recorded)
+
+
+def test_the_vendored_sibling_call_files_differ_only_on_the_unfixed_binary():
+    """The six files w10 found (a4 b17 b21 d2 d3 d4) differ on release/next without #6146; the fixed binary matches all."""
+    bin_dir, expect = os.environ.get("LLRM_DIFFTEST_BIN"), os.environ.get("LLRM_DIFFTEST_EXPECT")
+    if not bin_dir or expect not in ("prefix", "fixed"):
+        pytest.skip("LLRM_DIFFTEST_BIN and LLRM_DIFFTEST_EXPECT=prefix|fixed name a built compiler")
+    s = ex.Setup(bin_dir, "O2", "x86_64-linux")
+    differ = set()
+    for path in sorted((Path(__file__).parent / "fixtures").glob("*.c")):
+        text = path.read_text()
+        if re.search(r"\b(?:void|int)\s+g\((?:int\s+\w+)(?:\s*,\s*int\s+\w+)?\)", text) and ex.verdict(s, text)[0] != "match":
+            differ.add(path.stem)
+    assert differ == ({"a4", "b17", "b21", "d2", "d3", "d4"} if expect == "prefix" else set()), differ
