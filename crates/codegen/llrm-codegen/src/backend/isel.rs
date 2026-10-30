@@ -226,6 +226,28 @@ pub mod api {
 mod unwind;
 
 pub use matcher::Compiled;
+/// Each loop of `shape` with a trip count `induction` proves, as (the LIR
+/// address of its header, the trips): what the executed-work estimate scales
+/// the loop by. `header_at` names the LIR block a MIR block became.
+pub(crate) fn proven_trips(
+    unit: &Unit,
+    shape: &llrm_analysis::cfg::Shape,
+    facts: &IndexMap<llrm_mir::module::ValueId, llrm_analysis::consts::Known>,
+    header_at: impl Fn(BlockId) -> Option<i64>,
+) -> Vec<(i64, i64)> {
+    let mut counts: Vec<(i64, i64)> = shape
+        .loops
+        .iter()
+        .filter_map(|one| {
+            let header = header_at(cfg::block(one.header))?;
+            let count = llrm_analysis::induction::trip_count(unit, one, facts)?;
+            Some((header, i64::try_from(count).expect("a trip count fits an int64")))
+        })
+        .collect();
+    counts.sort();
+    counts
+}
+
 #[cfg(test)]
 pub(crate) use matcher::OPCODE_SCANS;
 pub(crate) use matcher::reads_invariant_memory;
@@ -754,6 +776,9 @@ pub struct Selected {
     /// The bytes below BP its allocas and stack temporaries take: an
     /// indexed access names no frame slot the frame could find it by.
     pub depth: i64,
+    /// The widest alignment of what it laid out below BP: the hole above them
+    /// is a multiple of it, or laying them again moves them further.
+    pub align: i64,
     /// The slots it laid out below BP, as (first byte, size): allocas, homes of
     /// arguments, stack temporaries. Temporaries of different statements
     /// may share bytes.
@@ -1140,6 +1165,7 @@ pub fn selected_with<'c>(
         folded: BTreeSet::new(),
         depth: hole,
         extents: Vec::new(),
+        alloca_align: 1,
         allocas: 0,
         frame_objects: Vec::new(),
         over_aligned: Vec::new(),
@@ -1262,6 +1288,7 @@ pub fn selected_with<'c>(
         far: selector.far,
         pops: selector.pops,
         depth: selector.depth,
+        align: selector.alloca_align,
         extents: selector.extents,
         temporaries: 0,
         over_aligned: selector.over_aligned,
@@ -1792,6 +1819,8 @@ pub struct Selector<'m, 'c, 'p> {
     folded: BTreeSet<u32>,
     depth: i64,
     extents: Vec<(i64, i64)>,
+    /// The widest alignment of the groups laid out.
+    alloca_align: i64,
     /// Where the allocas end, below which the stack temporaries go.
     allocas: i64,
     /// Each alloca's frame displacement and size.
@@ -2001,6 +2030,7 @@ impl Selector<'_, '_, '_> {
         // gap; a later, smaller one takes it.
         let mut holes = Vec::<(i64, i64)>::new();
         for (group, align) in order {
+            self.alloca_align = self.alloca_align.max(align);
             let size = capacity[group];
             let fit = holes.iter().position(|&(low, high)| (high - size).div_euclid(align) * align >= low);
             let disp = if let Some(at) = fit {
@@ -2527,19 +2557,7 @@ impl Selector<'_, '_, '_> {
             .with_shape(&self.shape);
         let exposed = llrm_analysis::memory::exposed_frames(&unit);
         let unit = unit.with_exposed(&exposed);
-        let facts = unit.registers();
-        let mut counts: Vec<(i64, i64)> = self
-            .shape
-            .loops
-            .iter()
-            .filter_map(|one| {
-                let header = block_at.get(&cfg::block(one.header))?;
-                let count = llrm_analysis::induction::trip_count(&unit, one, &facts)?;
-                Some((*header, i64::try_from(count).expect("a trip count fits an int64")))
-            })
-            .collect();
-        counts.sort();
-        counts
+        proven_trips(&unit, &self.shape, &self.registers, |block| block_at.get(&block).copied())
     }
 
     /// Blocks from which every path ends in `unreachable`, as the old

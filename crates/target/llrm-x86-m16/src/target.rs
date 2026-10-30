@@ -33,6 +33,19 @@ pub static DESCRIPTION: std::sync::LazyLock<llrm_target::opcosts::Description> =
     llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
 });
 
+thread_local! {
+    static PIN_TUNING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` with every `Dos` this thread makes taking the pin's tuning limits
+/// instead of the table's overrides: for tests of a pass's own thresholds.
+pub fn with_pin_tuning<R>(f: impl FnOnce() -> R) -> R {
+    let before = PIN_TUNING.with(|one| one.replace(true));
+    let out = f();
+    PIN_TUNING.with(|one| one.set(before));
+    out
+}
+
 /// Real-mode DOS on one CPU: its prices and registers, and the built-in
 /// description's foreign memory.
 pub struct Dos {
@@ -50,6 +63,9 @@ pub struct Dos {
     /// The conventions as the description states them: where arguments go and
     /// who removes them.
     pub calling: Option<&'static llrm_target::calling::Calling>,
+    /// The pin's tuning limits instead of the table's overrides: for tests of
+    /// a pass's own thresholds.
+    pub pin_tuning: bool,
 }
 
 /// The segment registers a selector is held in: ES, FS and GS, and DS where
@@ -75,7 +91,15 @@ impl Default for Dos {
             far_access: FAR_ACCESS,
             private: None,
             calling: None,
+            pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
         }
+    }
+}
+
+impl Dos {
+    /// On a 486 with the pin's tuning limits.
+    pub fn pin_tuned() -> Self {
+        Self { pin_tuning: true, ..Self::default() }
     }
 }
 
@@ -119,6 +143,7 @@ impl Dos {
             far_access: FAR_ACCESS,
             private: None,
             calling: None,
+            pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
         }
     }
 }
@@ -159,8 +184,9 @@ impl Machine for Dos {
             unroll_size_few_trips: (3, 30),
         };
         let layout = crate::layout();
-        llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)
-            .map(|one| std::rc::Rc::new(one.in_real_mode(real)) as std::rc::Rc<dyn llrm_mir::tti::Tti>)
+        llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?).map(|one| {
+            std::rc::Rc::new(one.in_real_mode(real).with_tuning(self.tuning())) as std::rc::Rc<dyn llrm_mir::tti::Tti>
+        })
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
@@ -215,6 +241,46 @@ impl Machine for Dos {
         size: bool,
     ) -> bool {
         llrm_target::keeps_division(i64::from(bits / 8), size)
+    }
+
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        if self.pin_tuning {
+            return llrm_mir::target::Tuning::PIN;
+        }
+        llrm_mir::target::Tuning {
+            max_stores_per_memset: 4,
+            max_stores_per_memcpy: 2,
+            max_stores_per_memmove: 2,
+            // DEVIATE SD223/SD225 (real mode): a dword store is 4 bytes
+            // (prefix, opcode, ModRM, disp8) against 13 for the fill (`lea di`,
+            // `mov es,ss`, `mov cx`, `rep stos`, the zero) that also takes ax,
+            // cx and di from the code around it, so four; a dword load and
+            // store pair is 8 bytes against about 16 for `rep movs`, so two.
+            max_stores_per_memset_opt_size: 4,
+            max_stores_per_memcpy_opt_size: 2,
+            max_stores_per_memmove_opt_size: 2,
+            // Tuning constant fitted to sc.c, weapons, mdl and lru, not
+            // derived.
+            size_milliclocks_per_byte: 10_000,
+            // DEVIATE: real mode weighs code bytes over clocks at every level,
+            // so the full unroll takes the pin's size threshold
+            // (`OptSizeThreshold`,
+            // 0) and no boost: the 8-trip loops of matmul and fpbench were 2045
+            // and 1350 bytes unrolled, 306 and 418 not.
+            unroll_threshold: Some(0),
+            unroll_max_percent_threshold_boost: Some(100),
+            // DEVIATE: bytes over clocks at every level: the inliner's bar is
+            // the pin's `OptSizeThreshold`, 50, not 225. jpeg_single.nib: 3178
+            // instructions in 6 procedures at 225, 1559 in 10 at 50 (main
+            // 1703).
+            inline_threshold: Some(50),
+            // DEVIATE: byte registers are scarce at every level, not only at
+            // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
+            // `setcc` pair and an `or` that took `bp` addressing out of the
+            // loop; split, sieve bq16 -O2 is 8780 -> 8436 memory operands.
+            split_merged_conditions: true,
+            ..llrm_mir::target::Tuning::PIN
+        }
     }
 
     fn size_costs(&self) -> OperationCosts {

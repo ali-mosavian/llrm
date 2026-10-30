@@ -29,6 +29,8 @@ import stamp  # noqa: E402
 sys.path.insert(0, str(HERE / "dosbatch"))
 import cpulimit  # noqa: E402
 
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
 LEVELS = ("-O1", "-O2", "-O3", "-Os")
 MODULES = ("host", "render", "model", "game", "sound", "ui")
 KNOWN = HERE / "qcport_sweep_known.toml"
@@ -181,7 +183,7 @@ def first_bad(commits: list[str], is_bad) -> str:
 
 def bisect_one(good: str, repro: list[str], build) -> tuple[str, str]:
     """(sha, subject) of the first first-parent squash after `good` on which `repro` (a compile of the failing module) fails; `build(sha)` returns the llrm-c path."""
-    shas = subprocess.run(["git", "log", "--first-parent", "--reverse", "--format=%H", f"{good}..origin/feat/parity"], cwd=ROOT, capture_output=True, text=True).stdout.split()
+    shas = subprocess.run(["git", "log", "--first-parent", "--reverse", "--format=%H", f"{good}..origin/{BRANCH}"], cwd=ROOT, capture_output=True, text=True).stdout.split()
 
     def bad(sha: str) -> bool | None:
         try:

@@ -47,8 +47,8 @@ oracle = "none"
 
 [[program]]
 match = "*/mandel*"
-cause = "untriaged"
-owner = "w-2"
+cause = "LSR"
+owner = "w-15"
 
 [[program]]
 match = "*/range_exp*"
@@ -79,8 +79,8 @@ owner = "w-1"
 
 [[program]]
 match = "*/quicksort*"
-cause = "untriaged"
-owner = "w-1"
+cause = "LSR"
+owner = "w-15"
 
 [[program]]
 match = "*/udt*"
@@ -119,6 +119,16 @@ cause = "same pre-ISel IR shape as grep.bas (IR 158 vs 155, 12 fewer phis, asm +
 owner = "w-13"
 status = "cause known"
 oracle = "none"
+
+[[program]]
+match = "*/histo*"
+cause = "LSR"
+owner = "w-15"
+
+[[program]]
+match = "*/grep*"
+cause = "LSR"
+owner = "w-15"
 
 [[program]]
 match = "*/particle.nib"
@@ -296,3 +306,31 @@ owner = "w-5"
 match = "qb/*"
 cause = "correctness-driven: `call B$CENP` ends $QB$MAIN as BC's does (+17 B per program against main, i.e. parity with BC)"
 owner = "w-9"
+
+[[program]]
+match = "fib/fib.nib"
+cause = "tail-recursion elimination of fib(n-2) (accumulator loop), the pin's TRE"
+owner = "w-10"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "scroll/scroll.*"
+cause = "loop-idiom memmove to rep movsd; setup (cx, si, di, es) costs more than main's two-instruction loop"
+owner = "w-10"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "ring/ring.bas"
+cause = "RA: frame sub sp 18 -> 22"
+owner = "w-10"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "control/control.nib"
+cause = "loop guard from rotation (test dx,dx; jle)"
+owner = "w-10"
+status = "cause known"
+oracle = "none"

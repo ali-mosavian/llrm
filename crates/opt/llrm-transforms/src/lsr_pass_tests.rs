@@ -962,3 +962,96 @@ fn the_expressions_of_a_value_an_edit_touched_are_kept_through_lsr() {
     let loops = 16;
     assert!(lsr_scevs_made(loops) <= loops * 21, "{} values made", lsr_scevs_made(loops));
 }
+
+/// bench/sieve at m16: the inner loop starts at `i * i`, a quadratic addrec of
+/// the outer loop. The pin's LSR expands it into two outer-loop induction
+/// variables (a pointer and its step, `opt -passes=loop-reduce` gives the same
+/// on this IR); with six registers they spill every outer iteration (sieve
+/// bq16 -O2 memory operands 6087 -> 12191). DEVIATE LU5.
+const SIEVE: &str = "define i32 @f() {
+b1:
+  %a = alloca [1024 x i8]
+  br label %b13
+b8:
+  %c2 = phi i16 [ %c1, %b13 ], [ %c3, %b12 ], [ %c3, %e ]
+  %s2 = phi i32 [ %s1, %b13 ], [ %s3, %b12 ], [ %s3, %e ]
+  %n = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %n, 1024
+  br i1 %done, label %b9, label %b13
+b9:
+  %z = zext i16 %c2 to i32
+  %h = shl nuw i32 %z, 16
+  %x = xor i32 %h, %s2
+  ret i32 %x
+b12:
+  %c3 = add i16 %c1, 1
+  %w = zext nneg i16 %i to i32
+  %s3 = add i32 %s1, %w
+  %small = icmp samesign ult i16 %i, 32
+  br i1 %small, label %sq, label %b8
+sq:
+  %m = mul nuw nsw i16 %i, %i
+  br label %b21
+b13:
+  %i = phi i16 [ %n, %b8 ], [ 2, %b1 ]
+  %s1 = phi i32 [ %s2, %b8 ], [ 0, %b1 ]
+  %c1 = phi i16 [ %c2, %b8 ], [ 0, %b1 ]
+  %p = getelementptr inbounds nuw i8, ptr %a, i16 %i
+  %v = load i8, ptr %p
+  %z8 = icmp eq i8 %v, 0
+  br i1 %z8, label %b12, label %b8
+b21:
+  %j = phi i16 [ %j2, %b21 ], [ %m, %sq ]
+  %q = getelementptr inbounds nuw i8, ptr %a, i16 %j
+  store i8 1, ptr %q
+  %j2 = add nuw nsw i16 %j, %i
+  %go = icmp samesign ult i16 %j2, 1024
+  br i1 %go, label %b21, label %e
+e:
+  br label %b8
+}
+";
+
+fn six_registers() -> llrm_x86::tti::X86 {
+    let real = RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+    };
+    X86::of_cpu("i486").unwrap().in_real_mode(real)
+}
+
+fn reduced_real(
+    text: &str,
+    tti: &llrm_x86::tti::X86,
+) -> String {
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, tti);
+    printed(&module)
+}
+
+#[test]
+fn a_quadratic_start_is_not_expanded_into_the_outer_loop_in_real_mode() {
+    let after = reduced_real(SIEVE, &six_registers());
+    assert!(!after.contains("[ 5, %b1 ]"), "{after}");
+}
+
+/// The flat target keeps the pin's choice.
+#[test]
+fn a_quadratic_start_is_expanded_into_the_outer_loop_on_a_flat_target() {
+    let mut module = parsed(&format!("{}{}", DOS, SIEVE));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    assert!(after.contains("[ 5, %b1 ]"), "{after}");
+}

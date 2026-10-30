@@ -72,6 +72,7 @@ PLAYED = {
 
 LONGEST_MS = 60_000     # the most emulated time a step waits, whatever it is waiting for
 LOOKS = 3               # successive looks at a screen that must show the same picture
+TIMED_GAP_MS = 150      # emulated ms between two keys typed without waiting for the program's read
 LOOK_MS = 50            # emulated ms between two looks
 
 
@@ -107,20 +108,22 @@ def settled(session, name: str | None, before: str | None, looks: int = LOOKS, l
     )
 
 
-def play(exe: Path, work: Path, steps: list, demo: str | None = None) -> dict[str, Path]:
+def play(exe: Path, work: Path, steps: list, demo: str | None = None, conf: str = qb32.DEMO_CONF, timed: bool = False, ended: dict | None = None) -> dict[str, Path]:
     """The steps played in lockstep with the emulator: the guest runs only between commands, for as long as the program takes to
     ask for a key or for a stated number of emulated milliseconds, so each key, look and screenshot happens at an emulated instant
-    that does not depend on the host. Nothing waits for a time, and none waits longer than LONGEST_MS of emulated time."""
+    that does not depend on the host. Nothing waits for a time, and none waits longer than LONGEST_MS of emulated time. `conf` and `timed`
+    (each key typed at a fixed emulated gap instead of at the program's read) are for nibprobe's matrix; `ended` gets the emulated
+    microseconds and cycles per ms at the end."""
     work.mkdir(exist_ok=True)
     shutil.copy(exe, work / "P.EXE")
     shots: dict[str, Path] = {}
-    session = qbplay.Session(work, qb32.DEMO_CONF)
+    session = qbplay.Session(work, conf)
     trace = os.environ.get("QB32DEMO_TRACE")
     try:
         session.launch(LONGEST_MS)
         for keys, _seconds, name, shown in steps:
             before = session.screen_hash() if name else None
-            session.keys_in_lockstep(keys, LONGEST_MS)
+            session.keys_timed(keys, TIMED_GAP_MS) if timed else session.keys_in_lockstep(keys, LONGEST_MS)
             ready(session, shown, bool(keys))
             settled(session, name, before)
             if name:
@@ -128,6 +131,9 @@ def play(exe: Path, work: Path, steps: list, demo: str | None = None) -> dict[st
                 session.snap(shots[name])
             if trace:
                 print(f"{work.parent.parent.name}: {keys} {name} at {session.now_us} emulated us", file=sys.stderr)
+        if ended is not None:
+            status = session.send({"cmd": "virtual_time_status"})
+            ended.update(us=status["emulated_us"], cycles_per_ms=status["cycles_per_ms"])
     finally:
         session.close()
     return shots
@@ -148,6 +154,45 @@ def region_difference(want: Path, got: Path, box: tuple[int, int, int, int]) -> 
     return sum(pixel(left, x, y) != pixel(right, x, y) for y in range(y0, y1) for x in range(x0, x1))
 
 
+def difference_mask(want: Path, got: Path, cols: int = 64, rows: int = 25) -> str:
+    """Where two screens differ, as text a job log can hold: the bounding box, then a grid of the screen with `#` in each cell that has a
+    differing pixel (the screens themselves stay out of a private group's log)."""
+    (width, height, left), (_, _, right) = qbplay.png_pixels(want), qbplay.png_pixels(got)
+    hits = [(i // 3 % width, i // 3 // width) for i in range(0, len(left), 3) if left[i : i + 3] != right[i : i + 3]]
+    if not hits:
+        return "no differing pixel"
+    grid = [[" "] * cols for _ in range(rows)]
+    for x, y in hits:
+        grid[y * rows // height][x * cols // width] = "#"
+    xs, ys = [x for x, _ in hits], [y for _, y in hits]
+    return f"{len(hits)} pixels in x {min(xs)}-{max(xs)}, y {min(ys)}-{max(ys)} of {width}x{height}\n" + "\n".join("|" + "".join(row) + "|" for row in grid)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def hash_lines(name: str, target: str, built, objects: dict[str, Path]) -> list[str]:
+    """`sha256 label` for each file a demo's build of `target` is made of: its object, the runtime objects it links, the EXE, and (once per run)
+    the DOSBox-X binary and the demo conf. A hosted run's table against a local run's of the same commit says whether the build is the
+    same (then the host's emulator is the difference) or not (then the compiler's output depends on the host)."""
+    obj = built.exe.with_suffix(".obj")
+    files = {f"{name}.{target}.obj": obj, **{f"runtime/{one.name}": one for one in qbbuild.needed((obj,), objects)}, f"{name}.{target}.EXE": built.exe}
+    return [f"{sha256(path)} {label}" for label, path in sorted(files.items())]
+
+
+def record_hashes(name: str, built: dict, objects: dict[str, dict[str, Path]]) -> None:
+    """Print the hash table of each target's build and keep it in the gate's logs beside the screens."""
+    lines = [f"{hashlib.sha256(qb32.DEMO_CONF.encode()).hexdigest()} demo conf", f"{sha256(Path(dosbatch.DOSBOX).resolve())} dosbox-x"]
+    for target, one in built.items():
+        lines += hash_lines(name, target, one, objects[target])
+    print("\n".join(f"hash {line}" for line in lines))
+    if logs := os.environ.get("CARGO_TARGET_DIR"):
+        (kept := Path(logs) / "gate-logs").mkdir(parents=True, exist_ok=True)
+        with (kept / "demo-hashes.txt").open("a") as out:
+            out.write("\n".join(f"{name} {line}" for line in lines) + "\n")
+
+
 def keep_screens(name: str, target: str, checkpoint: str, want: Path, got: Path) -> None:
     """Both screens of a mismatch into the gate's logs (CI uploads them): the pixel count alone cannot say what drew wrong."""
     if logs := os.environ.get("CARGO_TARGET_DIR"):
@@ -164,33 +209,34 @@ def differences(name: str, want: dict[str, Path], got: dict[str, Path], target: 
         count = region_difference(want[checkpoint], got[checkpoint], box) if box else qbplay.differing_pixels(want[checkpoint], got[checkpoint])
         if count > CURSOR_PIXELS:
             bad.append(f"{checkpoint}: {count} pixels")
+            print(f"{name} {target} {checkpoint}: {difference_mask(want[checkpoint], got[checkpoint])}")
             keep_screens(name, target, checkpoint, want[checkpoint], got[checkpoint])
     return bad
 
 
-def _key(name: str, source: Path) -> str:
+def _key(name: str, source: Path, conf: str = qb32.DEMO_CONF) -> str:
     linker = dosbatch.QB45 / "LINK.EXE"
     stamp = f"{linker.stat().st_size}:{int(linker.stat().st_mtime)}" if linker.exists() else ""
-    return hashlib.sha256(source.read_bytes() + repr(script(name)).encode() + stamp.encode() + qb32.DEMO_CONF.encode() + b"lockstep").hexdigest()[:20]
+    return hashlib.sha256(source.read_bytes() + repr(script(name)).encode() + stamp.encode() + conf.encode() + b"lockstep" + b"tz=utc").hexdigest()[:20]
 
 
-def reference_shots(name: str, source: Path, work: Path) -> dict[str, Path]:
+def reference_shots(name: str, source: Path, work: Path, conf: str = qb32.DEMO_CONF) -> dict[str, Path]:
     """BCOM45's checkpoint screens of `name`: from the cache, or built, played and put there."""
     names = [one[2] for one in script(name) if one[2]]
-    cached = CACHE / name / _key(name, source)
+    cached = CACHE / name / _key(name, source, conf)
     if all((cached / f"{one}.png").exists() for one in names):
         return {one: cached / f"{one}.png" for one in names}
     work.mkdir(parents=True, exist_ok=True)
     (work / "build").mkdir(exist_ok=True)
     exe = qbplay.reference({name: source}, work / "build")[name]
-    shots = play(exe, work / "play", script(name), name)
+    shots = play(exe, work / "play", script(name), name, conf=conf)
     cached.mkdir(parents=True, exist_ok=True)
     for one, path in shots.items():
         shutil.copy(path, cached / f"{one}.png")
     return {one: cached / f"{one}.png" for one in names}
 
 
-def candidate_shots(name: str, built: dict, work: Path) -> dict[str, dict[str, Path]]:
+def candidate_shots(name: str, built: dict, work: Path, conf: str = qb32.DEMO_CONF) -> dict[str, dict[str, Path]]:
     """The checkpoint screens of each target's build of `name`: {target: {checkpoint: screenshot}}."""
     work.mkdir(parents=True, exist_ok=True)
     shots = {}
@@ -199,8 +245,37 @@ def candidate_shots(name: str, built: dict, work: Path) -> dict[str, dict[str, P
         play_dir.mkdir(parents=True, exist_ok=True)
         for beside in one.files:
             shutil.copy(beside, play_dir / Path(beside).name)
-        shots[target] = play(one.exe, play_dir, script(name), name)
+        shots[target] = play(one.exe, play_dir, script(name), name, conf=conf)
     return shots
+
+
+# Demos that seed RND from TIMER: BCOM45's runtime and ours reach `RANDOMIZE TIMER` a few emulated ms apart, so at some start times they sit in
+# different 55 ms ticks, get different seeds and play different games (NIBBLES m16 at 2 of 8 start times: Lives 5 against 4, a score of 0
+# against -10). Both builds are made from the source with a fixed seed; the real-timer game is not compared.
+PINNED_SEEDS = {"NIBBLES": 1234}
+SEEDED = b"RANDOMIZE TIMER"
+
+
+def seeded(source: Path, seed: int, work: Path) -> Path:
+    """`source` with its one `RANDOMIZE TIMER` made `RANDOMIZE seed`, written under `work` (the name stays: it names the build)."""
+    text = source.read_bytes()
+    assert text.count(SEEDED) == 1, f"{source.name}: expected one {SEEDED.decode()}, found {text.count(SEEDED)}"
+    out = work / "seeded" / str(seed) / source.name
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(text.replace(SEEDED, b"RANDOMIZE %d" % seed))
+    return out
+
+
+def compare(name: str, reference: Path, candidate: Path, work: Path, objects: dict, conf: str = qb32.DEMO_CONF, record: bool = False) -> dict[str, list[str]]:
+    """BCOM45's build of `reference` against each target's build of `candidate`, both played under `conf`: the checkpoints that differ."""
+    built = qbbuild.build(candidate, work / "build", objects)
+    if record:
+        record_hashes(name, built, objects)
+    with ThreadPoolExecutor(2) as pool:
+        want = pool.submit(reference_shots, name, reference, work / "ref", conf)
+        got = pool.submit(candidate_shots, name, built, work / "cand", conf)
+        want, got = want.result(), got.result()
+    return {target: differences(name, want, shots, target) for target, shots in got.items()}
 
 
 def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]] | Exception]:
@@ -209,12 +284,8 @@ def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]] 
     objects = qbbuild.runtimes(work)
 
     def one(name: str) -> dict[str, list[str]]:
-        built = qbbuild.build(sources[name], work / name / "build", objects)
-        with ThreadPoolExecutor(2) as pool:
-            reference = pool.submit(reference_shots, name, sources[name], work / name / "ref")
-            candidate = pool.submit(candidate_shots, name, built, work / name / "cand")
-            want, got = reference.result(), candidate.result()
-        return {target: differences(name, want, shots, target) for target, shots in got.items()}
+        source = seeded(sources[name], PINNED_SEEDS[name], work / name) if name in PINNED_SEEDS else sources[name]
+        return compare(name, source, source, work / name, objects, record=True)
 
     with ThreadPoolExecutor(len(sources)) as pool:
         futures = {name: pool.submit(one, name) for name in sources}

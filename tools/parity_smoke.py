@@ -42,6 +42,8 @@ sys.path.insert(0, str(HERE / "dosbatch"))
 import cpulimit  # noqa: E402
 from buildslot import slotted  # noqa: E402
 
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 15.0  # CPU seconds (user+sys of this process and its children, never wall); the user's rule is a fast set within 10-15 s
 INSTRUCTIONS = 60_000_000_000  # user-space instructions of the steps. Today's set (a tools-only merge, one unit crate) is 50.9 G, repeating to 0.1 %, in 12.6-13.4 s CPU at load 31-33: 4.0 G/s at best, so 15 s is 60 G
@@ -65,6 +67,14 @@ def cpu() -> float:
     return t.user + t.system + t.children_user + t.children_system + _charged[0]
 
 
+def perf_counts() -> bool:
+    """Whether `perf stat` can count `instructions:u` here: a runner with perf installed and no counters fails every wrapped command before it runs."""
+    if shutil.which("perf") is None:
+        return False
+    probe = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", "-o", os.devnull, "--", "true"], capture_output=True)
+    return probe.returncode == 0
+
+
 class Meter:
     """User-space instructions of every command the steps start while open: each is run under `perf stat -e instructions:u -- COMMAND` (load-independent, where CPU
     seconds stretch with contention) and the counts are summed. `perf stat -p PID` was tried first: it read 74 G, 799 G and 893 G for the same set, more than the
@@ -76,7 +86,7 @@ class Meter:
         self._popen = None
 
     def __enter__(self) -> "Meter":
-        if shutil.which("perf") is None:
+        if not perf_counts():
             return self
         import tempfile
 
@@ -595,7 +605,6 @@ RUNTIME_C = {
     "qb_dev_interface": "the device interface headers",
     "qb_sdl": "the SDL device",
     "qb_dirty": "the dirty-line protocol under ThreadSanitizer (its child lifts testcap's soft data limit)",
-    "qb_chk": "the range checks of EXP, ^ and LOG on a host",
     "qb_runtime_pin_clang": "the runtime's C sources through the pinned clang",
 }
 # Targets that read files, not crates: scans of sources and docs, run on every PR (all together about 2 s).
@@ -893,7 +902,7 @@ def dump(data: dict) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--bin", type=Path, default=None, help="the llrm-c, llrm-qb and llrm-nib directory (default: LLRM_BIN, else the target dir's release)")
-    parser.add_argument("--base", default="origin/feat/parity", help="what the merge result is compared with to find the touched crates")
+    parser.add_argument("--base", default=f"origin/{BRANCH}", help="what the merge result is compared with to find the touched crates")
     parser.add_argument("--skip", action="append", default=[], metavar="STEP", help="a step known red (tools/parity_squash.py --known-red): not run, named as skipped in the line")
     parser.add_argument("--rank", nargs="+", metavar="CRATE", help="measure these crates' unit tests once and write the ranking")
     args = parser.parse_args()

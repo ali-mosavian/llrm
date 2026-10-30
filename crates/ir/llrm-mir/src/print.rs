@@ -856,6 +856,9 @@ impl Printer<'_> {
                 Type::Array { .. } => format!("[{}]", members(ids)),
                 Type::Vector { .. } => format!("<{}>", members(ids)),
                 Type::Struct { packed: true, .. } => format!("<{{ {} }}>", members(ids)),
+                Type::Named(name) if self.types().body(name).is_some_and(|body| body.packed) => {
+                    format!("<{{ {} }}>", members(ids))
+                }
                 _ if ids.is_empty() => "{}".to_owned(),
                 _ => format!("{{ {} }}", members(ids)),
             },

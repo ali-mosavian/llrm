@@ -2,6 +2,7 @@
 # queue-runner.sh: batches up to 8 disjoint PRs of the queue build-queue.sh writes to /tmp/land-queue.txt before every batch (tools/parity_squash.py merge-batch: one smoke, halving on failure);
 # a batch that does not merge lands one at a time with land.sh. Prints `N: MERGED ...` / `N: REFUSED: ...` lines
 # (the format refusals-report.sh reads). Waits for any running land.sh/runner first.
+. "$(dirname "${BASH_SOURCE[0]:-$0}")/branch.sh"
 export BUILDSLOT_BYPASS=1
 mkdir -p "${LAND_TMP:-/tmp/landing}"
 # every temp file of the batch (cargo, rustc, the linker, python tempfile) goes under LAND_TMP: /tmp is a tmpfs that sat at 98% of its inodes and failed links with "Cannot create temporary file"
@@ -22,7 +23,7 @@ while true; do
   bq_start=$(date +%s)
   "$HERE/build-queue.sh" > $Q.new && mv $Q.new $Q || echo "build-queue failed, keeping the old queue"
   echo "$(date +%H:%M:%S) build-queue $(( $(date +%s) - bq_start )) s" >> "${LAND_TMP:-/tmp/landing}/assemble.log"
-  # landings outside the gate: every first-parent commit of feat/parity not in landed.log, reported once
+  # landings outside the gate: every first-parent commit of $LAND_BRANCH not in landed.log, reported once
   git -C "$W" fetch -q origin 2>/dev/null; (cd "$W" && "$HERE/unlogged.sh" 2>/dev/null) | while read -r l; do
     grep -qxF "$l" "${LAND_TMP:-/tmp/landing}/unlogged.log" 2>/dev/null || { echo "UNLOGGED LANDING: $l"; echo "$l" >> "${LAND_TMP:-/tmp/landing}/unlogged.log"; }
   done
@@ -36,7 +37,7 @@ while true; do
   batch=("$n")
   BATCH_CAP=${BATCH_CAP:-48}  # PRs per batch (runner.env); the window read from the queue is 24 more
   cand=($(sed -n "1,$((BATCH_CAP + 24))p" $Q))
-  # the cheap static checks (ratchets, fmt, docs, deletions) on each PR merged with feat/parity: a failure never reaches a batch (and never halves it)
+  # the cheap static checks (ratchets, fmt, docs, deletions) on each PR merged with $LAND_BRANCH: a failure never reaches a batch (and never halves it)
   if [ "${LAND_FAST:-}" = 1 ]; then  # the user's call: no precheck, no smoke, up to 16 PRs in queue order; merge-batch leaves out the ones that cannot join
     # only PRs that merge one after another: one that conflicts with an earlier member waits a round instead of costing the others a smoke
     # closed PRs are dropped and a head younger than 15 minutes waits (a fix may be on its way) before the assembly
@@ -66,13 +67,13 @@ while true; do
   for m in "${batch[@]}"; do [[ $m =~ ^[0-9]+$ ]] || continue
     info="$(cached_state $m state) $(cached_state $m isDraft) $(cached_state $m baseRefName)"; [[ $info =~ ^[A-Z]+\ (true|false)\  ]] || info=$(gh pr view $m --repo $R --json state,isDraft,baseRefName -q '"\(.state) \(.isDraft) \(.baseRefName)"'); set -- $info
     [ "$1" = OPEN ] || continue
-    [ "$3" = feat/parity ] || gh pr edit $m --repo $R --base feat/parity >/dev/null
+    [ "$3" = $LAND_BRANCH ] || gh pr edit $m --repo $R --base $LAND_BRANCH >/dev/null
   done
   log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
   rm -f "$log.done"
   stale_batch_watch "$log"
   [ "${LAND_FAST:-}" = 1 ] && alone_warm_at_squash "$log" $(sed -n "1,${BATCH_CAP}p" $Q)  # warms the verdict cache while the batch squashes, not while it tests
-  ( flock -n 9 || { echo "waiting for the landing lock (another landing holds the checkout)" >&2; flock -x 9; }; cd $W && git fetch -q origin && git reset -q --hard && git clean -fdq && git checkout -q --detach ${LAND_TOOLS_REF:-origin/feat/parity} \
+  ( flock -n 9 || { echo "waiting for the landing lock (another landing holds the checkout)" >&2; flock -x 9; }; cd $W && git fetch -q origin && git reset -q --hard && git clean -fdq && git checkout -q --detach ${LAND_TOOLS_REF:-origin/$LAND_BRANCH} \
     && { echo "STAGE assemble ${asm_s:-0}s"; WAITS=${WAITS:-$HERE/waits.txt} PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}"; } 2>&1 \
       | stamp_lines > $log ) 9>"$W.checkout.lock"
   touch "$log.done"

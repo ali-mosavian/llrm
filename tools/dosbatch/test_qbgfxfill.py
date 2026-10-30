@@ -22,23 +22,7 @@ NEEDED = ("gfxdev", "gdfill", "gdline", "gdxfer", "gdscan", "gdcirc", "bios", "p
 
 
 def compile_c(target: str, include: Path, platform: Path, obj: Path) -> None:
-    dosbatch._host(
-        [
-            str(dosbatch.BIN / "llrm-c"),
-            str(SOURCE),
-            dosbatch.m_flag(target),
-            "-Os",
-            "-I",
-            str(include),
-            "-I",
-            str(qbruntime.RUNTIME),
-            "-I",
-            str(platform),
-            *qbruntime.device_includes(platform),
-            "-o",
-            str(obj),
-        ]
-    )
+    dosbatch._host(*dosbatch.c_compile(SOURCE, obj, target, "-Os", include, [], ["-I", str(qbruntime.RUNTIME), "-I", str(platform), *qbruntime.device_includes(platform)]))
 
 
 @pytest.fixture(scope="module")

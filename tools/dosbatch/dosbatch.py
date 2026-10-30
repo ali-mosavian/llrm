@@ -11,6 +11,7 @@ stopping comes from the launch's events.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import re
@@ -174,12 +175,13 @@ def target_bits(target: str) -> int:
 WATCOM_ROWS = {16: "x86_16-wat", 32: "x86_32-wat"}
 
 
-def c_compile(source: Path, obj: Path, target: str, level: str, include: Path, abi: list[str], extra: list[str] = ()) -> tuple[list[str], dict[str, str]]:
+def c_compile(source: Path, obj: Path, target: str, level: str, include: Path | None, abi: list[str], extra: list[str] = (), declarations: Path | None = None) -> tuple[list[str], dict[str, str]]:
     """(command, environment) that builds the C `source` for `target`: llrm-cc over clang, the target a row of its table, not a flag.
-    `include` is unused: the row's -isystem has llrm_os.h."""
+    `include` is unused: the row's -isystem has llrm_os.h, and a directory made for llrm-c holds its own, which would shadow it.
+    `declarations` is searched: the directory of a Nib program's exports, NAME.h, with nothing else in it."""
     if target_bits(target) not in WATCOM_ROWS:
         raise BuildError(f"llrm-cc has no row for {target}")
-    return [str(BIN / "llrm-cc"), level, "-c", *abi, *extra, str(source), "-o", str(obj)], {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
+    return [str(BIN / "llrm-cc"), level, "-c", *(["-I", str(declarations)] if declarations else []), *abi, *extra, str(source), "-o", str(obj)], {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
 
 
 def m_flag(target: str) -> str:
@@ -287,6 +289,23 @@ REAL_MODE = linkrecipe.named(16)
 _COMPILERS = {"nib": "llrm-nib"}
 
 
+@functools.cache
+def clang_identity() -> str:
+    """Which clangs llrm-cc will run (`LLRM_PIN_CLANG`, `LLRM_CLANG_M16`): each one's real path and `--version`, for the keys of cached objects."""
+    parts = []
+    for variable in ("LLRM_PIN_CLANG", "LLRM_CLANG_M16"):
+        path = os.environ.get(variable)
+        if not path:
+            continue
+        real = os.path.realpath(path)
+        try:
+            version = subprocess.run([real, "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            version = "unreadable"
+        parts.append(f"{variable}={real} {version}")
+    return "|".join(parts)
+
+
 def c_frontend() -> str:
     """The C compiler a run builds with: llrm-cc over clang."""
     return "llrm-cc"
@@ -308,6 +327,12 @@ def os_defines(target: str, language: str, abi: str | None = None) -> tuple[str,
     # llrm-cc's Watcom rows enter `main_`, the start-up's default being `_main` (as -mabi=sysv and cdecl name it).
     watcom = abi == "watcom" or abi not in ("sysv", "cdecl", "ia16")
     return (*defines, "LL_MAIN=main_") if language == "c" and watcom else defines
+
+
+def entry_defines(target: str, entry: str | None, near: bool = False) -> tuple[str, ...]:
+    """The assembler's defines for a program linked by name: the start-up calls `entry`, `_main` when none is named (cdecl and sysv programs)."""
+    defines = os_defines(target, "c", "cdecl")
+    return (*defines, *(("NEAR_CODE=1",) if near else ()), *((f"LL_MAIN={entry}",) if entry else ()))
 
 
 def os_start(target: str, language: str) -> list[str]:

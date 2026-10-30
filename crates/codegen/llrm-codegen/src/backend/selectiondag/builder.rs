@@ -89,22 +89,43 @@ pub struct BuilderTarget {
     pub opt_size: bool,
     /// The build is for the least size (`-Oz`, the pin's `minsize`).
     pub min_size: bool,
-    /// At size, the most stores a constant memset is inline for; 0 where the
-    /// pin's limit stands. Real mode: a dword store is 4 bytes (prefix, opcode,
-    /// ModRM, disp8) against 13 for the fill (`lea di`, `mov es,ss`, `mov cx`,
-    /// `rep stos`, the zero) that also takes ax, cx and di from the code
-    /// around it, so four.
-    pub memset_stores_size: usize,
-    /// The same for the load and store pairs of a constant memcpy: a dword
-    /// pair is 8 bytes against about 16 for `rep movs`, so two.
-    pub memcpy_moves_size: usize,
+    /// The store limits a memset, memcpy or memmove is inlined for: the
+    /// target description's tuning table.
+    pub tuning: llrm_mir::target::Tuning,
+    /// What a size-only pick gives up in clocks for a byte; none: bytes alone
+    /// decide.
+    pub size_trade: Option<SizeTrade>,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
     pub runtime_calls: Option<IdMap<InstId, Result<RuntimeAnswer, &'static str>>>,
 }
 
+/// The clock side of a size-only pick (`fill_is_smaller`): the longer form
+/// is taken only while the bytes it saves, at `milliclocks_per_byte` each,
+/// pay for the clocks it adds. All prices come from the target description.
+#[derive(Clone, Copy, Debug)]
+pub struct SizeTrade {
+    /// Clocks a byte of code is worth, in thousandths.
+    pub milliclocks_per_byte: i64,
+    /// A `rep stos` fill: its fixed clocks, and each byte it stores.
+    pub fill: i64,
+    pub fill_cell: i64,
+    /// One store of a register-sized and of a wide (prefixed) value.
+    pub store: i64,
+    pub prefix: i64,
+}
+
 impl BuilderTarget {
+    /// This target with its clock price of a byte of code.
+    pub fn with_size_trade(
+        mut self,
+        trade: Option<SizeTrade>,
+    ) -> BuilderTarget {
+        self.size_trade = trade;
+        self
+    }
+
     /// This target with the cost model of its CPU.
     pub fn with_tti(
         mut self,
@@ -168,21 +189,12 @@ impl BuilderTarget {
         self
     }
 
-    /// This target with its size limit of memcpy pairs.
-    pub fn with_memcpy_moves_size(
+    /// This target with the tuning table of its description.
+    pub fn with_tuning(
         mut self,
-        moves: usize,
+        tuning: llrm_mir::target::Tuning,
     ) -> BuilderTarget {
-        self.memcpy_moves_size = moves;
-        self
-    }
-
-    /// This target with its size limit of memset stores.
-    pub fn with_memset_stores_size(
-        mut self,
-        stores: usize,
-    ) -> BuilderTarget {
-        self.memset_stores_size = stores;
+        self.tuning = tuning;
         self
     }
 
@@ -235,8 +247,8 @@ impl BuilderTarget {
             jump_tables: true,
             opt_size: false,
             min_size: false,
-            memset_stores_size: 0,
-            memcpy_moves_size: 0,
+            tuning: llrm_mir::target::Tuning::PIN,
+            size_trade: None,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -265,8 +277,8 @@ impl BuilderTarget {
             jump_tables: true,
             opt_size: false,
             min_size: false,
-            memset_stores_size: 0,
-            memcpy_moves_size: 0,
+            tuning: llrm_mir::target::Tuning::PIN,
+            size_trade: None,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -1277,6 +1289,11 @@ impl Builder<'_> {
             let byte = self.dag.get_node(ISD::ZeroExtend, EVT::I8, &[settled]);
             let tied = self.dag.get_copy_to_reg(root, reg, byte);
             self.dag.set_root(tied);
+            // Later users read the saved byte: the compare itself would be
+            // selected where it is used, from flags a later call has rewritten.
+            let saved = self.dag.get_copy_from_reg(tied, reg, EVT::I8);
+            let kept = self.dag.get_node(ISD::Truncate, self.dag.value_type(settled), &[saved]);
+            self.set_value(result, kept);
             self.prelowered.insert(one.user);
         }
         Ok(())
@@ -1934,6 +1951,14 @@ impl Builder<'_> {
         self.dag.lines[at] = crate::backend::isel::dbg_line(self.module, self.function, inst).filter(|at| at.line != 0);
         self.dag.inst_order.push((inst, self.dag.cur_order));
         if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
+            // a compare settled with its call's flags is read in other blocks
+            // through its register all the same
+            if self.prelowered.contains(&inst)
+                && let Some(result) = self.function.instruction(inst).result
+                && let Some(reg) = self.info.value_regs.get(&result).copied()
+            {
+                self.copy_value_to_register(Operand::Value(result), reg, ISD::AnyExtend)?;
+            }
             return Ok(());
         }
         let instruction = self.function.instruction(inst).clone();
@@ -2431,11 +2456,15 @@ impl Builder<'_> {
         };
         // a far access goes through the offset half after `LES`, so `ES`
         // (llrm's own space 259); the pin's 256..258 are `gs`, `fs`, `ss`
+        // A near pointer into the stack segment, where it is not the data
+        // segment's space, is read through `SS`.
+        let roles = self.arch.layout().spaces.roles;
         let space =
             match self.function.operand_type(&self.module.context, pointer).map(|ty| self.module.context.types.get(ty))
             {
                 Some(Type::Pointer(_)) if self.operand_type(pointer)? == MVT::Far.into() => 259,
                 Some(Type::Pointer(space)) if (256..259).contains(space) => *space,
+                Some(Type::Pointer(space)) if *space == roles.stack && roles.stack != roles.near => 258,
                 _ => 0,
             };
         Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space })
