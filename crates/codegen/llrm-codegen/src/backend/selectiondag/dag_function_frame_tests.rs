@@ -41,7 +41,7 @@ fn stack_temporaries_are_cells_below_the_frame_pointer() {
     use super::dag_function::{Frame, Temporaries};
     use super::emit::FrameMap;
     use super::x86_preprocess::FrameObjects;
-    let frame = Frame::new(vec![8, 12]);
+    let frame = Frame::new(vec![8, 12], 0);
     let mut temps = Temporaries(&frame);
     let (first, second) = (temps.create_stack_temporary(4, 4), temps.create_stack_temporary(8, 8));
     let disp = |index| match frame.cell(index, 4).expect("a cell").addr {
@@ -966,23 +966,27 @@ entry:
 /// overlapping dwords as a plain copy makes them.
 #[test]
 fn a_volatile_copy_is_the_accesses_it_names_and_no_more() {
-    let module = llrm_mir::parse::module(VOLATILE_COPY).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
-        .unwrap_or_else(|e| panic!("{}", e.0));
-    let mut widths: Vec<u32> = done
-        .body
-        .insns()
-        .iter()
-        .filter_map(|i| i.what.as_ref())
-        .filter(|w| w.name.as_deref() == Some("mov"))
-        .filter_map(|w| match w.dests.as_slice() {
-            [crate::model::ir::Loc::Mem(cell)] => Some(cell.width),
-            _ => None,
-        })
-        .collect();
-    widths.sort_unstable();
-    assert_eq!(widths, [1, 2, 4], "the stores: {widths:?}");
-    assert!(done.body.insns().iter().filter(|i| i.volatile).count() >= 3, "volatile accesses");
+    // The profile prices on the 16-bit machine, whose table limits a copy to
+    // two moves at every level: this one is about volatile accesses, not that.
+    llrm_x86_m16::with_pin_tuning(|| {
+        let module = llrm_mir::parse::module(VOLATILE_COPY).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+        let mut widths: Vec<u32> = done
+            .body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter(|w| w.name.as_deref() == Some("mov"))
+            .filter_map(|w| match w.dests.as_slice() {
+                [crate::model::ir::Loc::Mem(cell)] => Some(cell.width),
+                _ => None,
+            })
+            .collect();
+        widths.sort_unstable();
+        assert_eq!(widths, [1, 2, 4], "the stores: {widths:?}");
+        assert!(done.body.insns().iter().filter(|i| i.volatile).count() >= 3, "volatile accesses");
+    });
 }
 
 const VOLATILE_LOAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -1107,6 +1111,58 @@ fn at_os_an_18_byte_clear_is_a_fill() {
     assert_eq!(fills_and_stores("h").0, 1, "a fill for the global");
 }
 
+/// Fills and stores a `memset` of `length` bytes of `value` to a local becomes
+/// at -Os, m16, on a 486.
+fn memset_shape(
+    length: u32,
+    value: i32,
+) -> (usize, usize) {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+declare void @use(ptr)
+define void @f() {{
+entry:
+  %a = alloca [{length} x i8], align 2
+  call void @llvm.memset.p0.i16(ptr %a, i8 {value}, i16 {length}, i1 false)
+  call void @use(ptr %a)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats = || insns.iter().filter_map(|i| i.what.as_ref());
+    let fills = whats().filter(|w| w.op == crate::model::ir::Operation::Fill).count();
+    let stores = whats()
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    (fills, stores)
+}
+
+/// A 10-byte clear at m16 -Os was a `rep stosb` on bytes alone (19 B of
+/// stores against 16): 57 clocks of a 486 for 3 bytes, 17 clocks a byte
+/// against the target's 10.
+#[test]
+fn at_os_a_10_byte_clear_is_stores_not_rep_stos() {
+    assert_eq!(memset_shape(10, 0).0, 0);
+}
+
+/// sc.c's 14-byte zero fill: 7 bytes saved for 66 clocks, 9.4 a byte, pay.
+#[test]
+fn at_os_a_14_byte_zero_fill_stays_rep_stos() {
+    assert_eq!(memset_shape(14, 0).0, 1);
+}
+
+/// Past the break-even length the fill is smaller by more than it costs.
+#[test]
+fn at_os_a_long_fill_is_rep_stos() {
+    assert_eq!(memset_shape(54, 0).0, 1);
+}
+
 /// A cell exactly one past a frame object's end is the next object's first
 /// byte; it was tagged with the nearer slot (`home_of`: the next object), so
 /// the relayout moved it under that object: matmul -O3 at m32 loaded
@@ -1181,10 +1237,11 @@ entry:
     assert!(names.iter().any(|n| n == "inc"), "{names:?}");
 }
 
-/// At -O2 the same copy is three dword load and store pairs, as the pin's
-/// `MaxStoresPerMemcpy` (8) allows; only -Os (SD225, limit 2) uses `rep movsd`.
+/// At -O2 the same copy is `rep movsd` too: m16's table states the -Os limit
+/// (2, SD225) at every level, where the pin's `MaxStoresPerMemcpy` (8) would
+/// make three dword load and store pairs.
 #[test]
-fn at_o2_a_12_byte_copy_is_inline_dword_moves() {
+fn at_o2_a_12_byte_copy_is_a_string_move_at_m16() {
     let module = llrm_mir::parse::module(M16_COPY_12).expect("parses");
     let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
     let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
@@ -1196,7 +1253,7 @@ fn at_o2_a_12_byte_copy_is_inline_dword_moves() {
         .filter_map(|i| i.what.as_ref())
         .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
         .count();
-    assert_eq!((copies, stores), (0, 3), "three stores and no string move");
+    assert_eq!((copies, stores), (1, 0), "a string move and no stores");
 }
 
 const M16_FAR_COPY_12: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"

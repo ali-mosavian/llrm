@@ -19,6 +19,9 @@
 //! DEVIATE 2: `RewriteGEPs` is always true, the only way `foldGEPICmp` calls
 //! it. Exit: `OptimizePointerDifference`, which passes false.
 //!
+//! # Used by
+//! `foldGEPICmp` (`combine_compares.rs`).
+//!
 //! # Example
 //! ```text
 //! %b = getelementptr inbounds nuw i8, ptr %p, i64 %x
@@ -71,7 +74,7 @@ impl Combiner<'_> {
             return base;
         }
         // Every pointer the left chain passes through.
-        let mut pointers = std::collections::HashSet::new();
+        let mut pointers = llrm_support::hash::HashSet::default();
         let mut at = lhs;
         loop {
             pointers.insert(at);

@@ -498,6 +498,9 @@ pub struct Rating<'a, 'b> {
     /// `TTI.isHardwareLoopProfitable`: a counted-down loop's recurrence is
     /// folded into the loop instruction.
     pub hardware_loop_profitable: bool,
+    /// The formulae rated are the loop as it stands: its values exist, and
+    /// nothing is expanded (DEVIATE LU5 charges only an expansion).
+    pub as_written: bool,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
@@ -732,6 +735,19 @@ impl Cost {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
+
+            // DEVIATE LU5: a start that is a non-affine addrec of an enclosing
+            // loop is expanded as an induction variable for each of its steps,
+            // live through that loop.
+            if r.tti.lsr_charges_outer_nonaffine_ivs() && !r.as_written {
+                let start = r.se.operands(reg)[0].scev;
+                if let Some(outer) = r.se.addrec_header(start).filter(|&h| h != r.l && cx_loop_contains(r.cx, h, r.l)) {
+                    let _ = outer;
+                    if !r.se.is_affine(start) {
+                        self.c.num_regs += (r.se.operands(start).len() as u32).saturating_sub(1);
+                    }
+                }
+            }
 
             // The step, if it needs a register of its own.
             let step = r.se.operands(reg)[1].scev;

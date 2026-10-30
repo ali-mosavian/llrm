@@ -64,7 +64,14 @@ def instructions(text: str) -> int:
 
 
 def cc_entry(machine: str) -> dict:
-    return tomllib.loads((ROOT / "crates/driver/llrm-cc/targets.toml").read_text())[MACHINES[machine]["cc"]]
+    entry = tomllib.loads((ROOT / "crates/driver/llrm-cc/targets.toml").read_text())[MACHINES[machine]["cc"]]
+    # `{datalayout:NAME}` stands for that target's datalayout.toml string, as llrm-cc expands it.
+    entry["datalayout"] = re.sub(
+        r"\{datalayout:([\w-]+)\}",
+        lambda found: tomllib.loads((ROOT / f"crates/target/llrm-{found.group(1)}/src/machines/datalayout.toml").read_text())["datalayout"],
+        entry["datalayout"],
+    )
+    return entry
 
 
 def clang_flags(machine: str) -> tuple[str, list[str]]:

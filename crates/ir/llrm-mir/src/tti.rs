@@ -405,6 +405,18 @@ pub trait Tti {
         None
     }
 
+    /// The target's `DefaultThreshold` for the inliner (its tuning table);
+    /// none: the pass's own.
+    fn inline_threshold_override(&self) -> Option<i64> {
+        None
+    }
+
+    /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
+    /// unroll (its tuning table); none: the pass's own.
+    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
+        (None, None)
+    }
+
     /// `getUnrollingPreferences` given the loop's shape, which targets read
     /// (nesting depth, exits); by default the loop-blind
     /// `get_unrolling_preferences`.
@@ -652,6 +664,15 @@ pub trait Tti {
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU5: whether a formula whose base register is a non-affine
+    /// addrec of an enclosing loop is charged the induction variables its
+    /// expansion keeps live across that loop (one for each order past the
+    /// first), not one register. The pin charges one and survives on 7
+    /// registers; with 6 they spill every outer iteration.
+    fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
         false
     }
 

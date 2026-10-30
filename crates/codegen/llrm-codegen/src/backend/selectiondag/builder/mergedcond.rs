@@ -106,6 +106,14 @@ impl Builder<'_> {
         self.defining(operand).is_none_or(|inst| self.function.parent(inst) == Some(self.block))
     }
 
+    /// Whether `inst` compares a runtime routine's answer in the flags.
+    fn reads_flags_answer(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        llrm_mir::facts::compares_flags_result(&self.module.context, &self.module.globals, self.function, inst)
+    }
+
     /// `isExportableFromCurrentBlock`.
     fn exportable(
         &self,
@@ -159,7 +167,17 @@ impl Builder<'_> {
             false,
             &mut cases,
         )?;
-        if !self.should_emit_as_branches(&cases) {
+        // A runtime routine's flags answer lives only until the next call: a
+        // case block would export it, so the compares stay in this block.
+        let flags_read = cases
+            .iter()
+            .any(
+                |case| matches!(
+                    case.lhs,
+                    Operand::Value(value) if self.node_map.get(&value).is_some_and(|one| self.dag.opcode(*one) == super::super::x86isd::LLRM_CALL_FLAGS)
+                ),
+            );
+        if flags_read || !self.should_emit_as_branches(&cases) {
             // remove the blocks the walk made
             self.order = order;
             self.next_synthetic = next;
@@ -381,7 +399,10 @@ impl Builder<'_> {
                 Opcode::ICmp(_) | Opcode::FCmp(_) => Some((compare.operands[0], compare.operands[1])),
                 _ => None,
             };
+            // DEVIATE: a compare of a runtime routine's flags answer is a leaf
+            // read as a value; its flags cannot be exported to another block.
             if let Some((lhs, rhs)) = operands
+                && !self.reads_flags_answer(inst)
                 && (cur_bb == switch_bb || (self.exportable(lhs) && self.exportable(rhs)))
             {
                 let cc = match &compare.opcode {

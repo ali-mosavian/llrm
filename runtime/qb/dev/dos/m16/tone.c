@@ -1,13 +1,13 @@
 /* The speaker: timer channel 2 as a square wave, gated by port 61h. */
 #include "device.h"
 
+#define TIMER_CLOCK 1193182L
 enum {
     TIMER_COMMAND = 0x43,
     TIMER_CHANNEL_2 = 0x42,
     SQUARE_WAVE_2 = 0xB6,
     SPEAKER_PORT = 0x61,
-    SPEAKER_ON = 0x03,
-    TIMER_CLOCK = 1193182L
+    SPEAKER_ON = 0x03
 };
 
 void dev_tone(unsigned hertz)

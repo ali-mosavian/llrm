@@ -584,6 +584,9 @@ pub enum Item {
     /// A `.cfi_*` directive (`MCCFIInstruction`), where LLVM's lands: no
     /// code of its own.
     Cfi(llrm_object::assembler::Cfi),
+    /// A `.seh_*` directive (Win64): no code of its own, stamped with the
+    /// offset after the instruction before it.
+    Seh(llrm_object::Seh),
 }
 
 /// `-g`: a place in the code a debugger is told of.
@@ -745,6 +748,41 @@ impl CfiState {
     }
 }
 
+/// The `.seh_*` directive a prologue instruction needs
+/// (`X86FrameLowering::BuildCFI`'s Win64 arm): `.seh_pushreg` for a push of a
+/// register the function must keep, `.seh_stackalloc` for `sub rsp` and for a
+/// push of any other register, `.seh_setframe` where the frame register is set
+/// from `rsp`. `hardware` is a register's number in the instruction set.
+fn seh_after(
+    what: &Semantics,
+    bp: &Loc,
+    hardware: &dyn Fn(&Loc) -> Option<u8>,
+) -> Option<Item> {
+    use llrm_object::Seh;
+    let imm = |loc: &Loc| match loc {
+        Loc::Imm(imm) => Some(imm.value),
+        _ => None,
+    };
+    let seh = match (what.op, what.name.as_deref()) {
+        (Operation::Push, _) => {
+            let number = hardware(what.sources.first()?)?;
+            if llrm_x86::mc::win64unwind::is_nonvolatile(number) { Seh::PushReg(number) } else { Seh::StackAlloc(8) }
+        }
+        (Operation::Move, _) if what.dests.first() == Some(bp) && what.sources.first() == Some(&sp_reg()) => {
+            Seh::SetFrame(hardware(bp)?, 0)
+        }
+        (Operation::Address, _) if what.dests.first() == Some(bp) => match what.sources.first() {
+            Some(Loc::Mem(from)) => Seh::SetFrame(hardware(bp)?, u64::try_from(from.offset).ok()?),
+            _ => return None,
+        },
+        (Operation::Binary, Some("sub")) if what.dests.first() == Some(&sp_reg()) => {
+            Seh::StackAlloc(u64::try_from(what.sources.get(1).and_then(imm)?).ok()?)
+        }
+        _ => return None,
+    };
+    Some(Item::Seh(seh))
+}
+
 fn reg(register: RegId) -> Loc {
     Loc::Reg(ir::Reg { register, width: 2 })
 }
@@ -847,9 +885,10 @@ fn sp_reg() -> Loc {
 
 /// Whether a return of `body` is a sibling call (`jmp`).
 fn sibling_calls(body: &lir::LirBody) -> bool {
-    body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| {
-        one.what.as_ref().is_some_and(|what| what.op == Operation::Return && what.name.as_deref() == Some("jmp"))
-    })
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .any(|one| one.what.as_ref().is_some_and(|what| what.is_sibling_call()))
 }
 
 /// Whether a call in `body` leaves SP somewhere else (`alloca`). The registers
@@ -967,9 +1006,17 @@ pub fn realign_refusal(procedure: &Procedure) -> Option<String> {
 
 /// `procedure` set up as a realigned frame where it has over-aligned locals,
 /// and as it is otherwise (unoptimized code keeps its registers after the
-/// locals' space).
+/// locals' space), except where it calls: its outgoing arguments are stored at
+/// `[sp]` and up, where registers pushed after the space would be.
 pub fn realigned(procedure: Procedure) -> Procedure {
-    if realign_of(&procedure.body) == 0 { procedure } else { saved_first(procedure) }
+    let calls = matches!(procedure.body.bits, 32 | 64)
+        && procedure
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call));
+    if realign_of(&procedure.body) == 0 && !calls { procedure } else { saved_first(procedure) }
 }
 
 /// `procedure` with its callee-saved registers pushed before the space for its
@@ -1587,6 +1634,10 @@ fn built(
     let numbers = dwarf(procedure.registers.pointer).zip(dwarf(procedure.registers.stack));
     let mut cfi =
         numbers.filter(|_| plain).map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame));
+    let hardware = |loc: &Loc| match loc {
+        Loc::Reg(one) => regs.name(one.register).and_then(llrm_x86::mc::win64unwind::hardware),
+        _ => None,
+    };
     let (mut entry_items, mut after_entry) = (Vec::new(), None);
     if let Some(cfi) = cfi.as_mut() {
         entry_items.push(Item::Mark(Mark::Declared));
@@ -1594,6 +1645,7 @@ fn built(
         for one in &enter {
             entry_items.push(Item::Semantics(one.clone()));
             let marks = cfi.after(one, &bp);
+            entry_items.extend(seh_after(one, &bp, &hardware));
             // The System V callee-saved registers: rbx, rbp and r12 to r15
             // (the frame register's own push is told apart by its name).
             if one.op == Operation::Push
@@ -1715,12 +1767,12 @@ fn built(
                     // an indirect sibling call: the epilogue, then a jump
                     // through the register the callee's
                     // address is in
-                    if what.name.as_deref() == Some("jmp") && what.indirect {
+                    if what.is_sibling_call() && what.indirect {
                         out.push(Item::Semantics(Semantics { op: Operation::Jump, ..what.clone() }));
                         continue;
                     }
                     // a sibling call: the epilogue, then a jump to the callee
-                    if what.name.as_deref() == Some("jmp")
+                    if what.is_sibling_call()
                         && let Some(callee) = procedure.callees.get(&one.at)
                     {
                         out.push(Item::Callee(Callee { tail: true, ..callee.clone() }));
@@ -1928,6 +1980,12 @@ fn frame_omitted(
     held: bool,
 ) -> Option<Vec<Item>> {
     let omitted = stack_addressed(procedure, number)?;
+    // The exits were made instructions for an omitted frame (`exits_inserted`):
+    // the size comparison below, asked again of the body that now holds them,
+    // may answer the other way and print the entry with a frame register.
+    if procedure.body.frame_exit == Some(true) {
+        return Some(omitted);
+    }
     // Where allocation freed the frame register the pin's `hasFP` said no, and
     // the pin omits it whatever the bytes (BASIC, which never asks, compares).
     if !procedure.size || held || procedure.registers.free {
@@ -2103,7 +2161,7 @@ fn addressed_pass(
     let name_of = |target: i64| label(number, target);
     for item in items.iter_mut() {
         match item {
-            Item::Align(_) | Item::Cfi(_) => {}
+            Item::Align(_) | Item::Cfi(_) | Item::Seh(_) => {}
             Item::Label(label) => {
                 if after_dead_end.contains(&label.name) {
                     depth = None;
@@ -2475,7 +2533,7 @@ pub fn _procedure_of(
         match item {
             Item::Align(CodeAlign { log2, .. }) => out.push(format!("    align {}", 1u32 << log2)),
             Item::Label(Label { name }) => out.push(format!("{name}:")),
-            Item::Mark(_) | Item::Cfi(_) => {}
+            Item::Mark(_) | Item::Cfi(_) | Item::Seh(_) => {}
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
                 out.extend(_code(&code).into_iter().map(|line| format!("    {line}")));
             }
@@ -3246,6 +3304,41 @@ mod tests {
             stack_check: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         };
+        let lines: Vec<String> =
+            _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
+        assert!(lines.iter().any(|one| one == "jmp _other"), "{lines:?}");
+        assert!(!lines.iter().any(|one| one == "ret"), "{lines:?}");
+    }
+
+    /// A sibling call in a body whose frame register was omitted: the exits
+    /// inserted ahead of the return (`frame_exit` set) must still end in the
+    /// jump to the callee, not a `ret`.
+    #[test]
+    fn a_sibling_call_in_an_omitted_frame_still_jumps() {
+        let bx = Loc::Reg(ir::Reg { register: RegId::EBX, width: 4 });
+        let si = Loc::Reg(ir::Reg { register: RegId::ESI, width: 4 });
+        let r#move = insn(0, semantics(Operation::Move, "mov", vec![si], vec![bx]));
+        let leave = insn(1, semantics(Operation::Return, "jmp", vec![], vec![]));
+        let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
+        let body = lir::LirBody {
+            bits: 32,
+            ..lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default())
+        };
+        let procedure = Procedure {
+            name: "_get".into(),
+            public: true,
+            far: false,
+            body,
+            reserve: 0,
+            callees: IndexMap::from_iter([(1, Callee::new("_other", false))]),
+            interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: None,
+            registers: llrm_target::Target::frame_registers(&llrm_x86_m32::M32),
+        };
+        let procedure = exits_inserted(procedure);
+        assert_eq!(procedure.body.frame_exit, Some(true), "premise: the frame is omitted and its exits inserted");
         let lines: Vec<String> =
             _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         assert!(lines.iter().any(|one| one == "jmp _other"), "{lines:?}");

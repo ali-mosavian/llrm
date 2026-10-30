@@ -47,3 +47,12 @@ def tree_cpu(pid: int) -> float:
         total += stats.get(one, (0, 0))[1]
         todo.extend(children.get(one, []))
     return total / TICKS
+
+
+def describe(pid: int) -> list[str]:
+    """`ps -o pid,ppid,stat,wchan:20,etime,args` of `pid` and everything under it: what a killed step was doing and waiting on."""
+    import subprocess
+
+    pids = ",".join(str(one) for one in [pid, *descendants(pid)])
+    done = subprocess.run(["ps", "-o", "pid,ppid,stat,wchan:20,etime,args", "-p", pids, "--cols", "300"], capture_output=True, text=True)
+    return [f"  {line}" for line in done.stdout.splitlines()] or ["  (ps printed nothing)"]
