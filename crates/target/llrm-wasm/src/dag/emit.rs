@@ -93,7 +93,7 @@ impl Emitter<'_> {
             }
             (ISD::BasicBlock, NodeData::Block(block)) => Some(Operand::Block(self.position[&block] as u32)),
             (ISD::Register, _) => None,
-            (ISD::TargetFrameIndex, _) => panic!("a frame index: the frame lowering is not translated yet"),
+            (ISD::TargetFrameIndex, NodeData::FrameIndex(index)) => Some(Operand::Frame(index)),
             _ => class(vt).map(|_| {
                 let reg = self
                     .results
@@ -228,6 +228,7 @@ pub fn emit(
 ) -> Function {
     let mut f = Function::new(name);
     f.params = params.to_vec();
+    f.frame = blocks.first().map_or(Vec::new(), |block| block.frame.clone());
     f.results = results.to_vec();
     let layout = blocks.first().map_or(Vec::new(), |block| block.layout.clone());
     f.blocks = vec![Vec::new(); layout.len().max(1)];

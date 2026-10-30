@@ -12,6 +12,7 @@ pub mod driver;
 pub mod emit;
 pub mod explicit_locals;
 pub mod fix_br_table_defaults;
+pub mod frame;
 pub mod lower_br_unless;
 pub mod mir;
 pub mod object;

@@ -239,7 +239,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     ) -> bool {
         // "Always perform this optimization before types are legal"; no
         // x86 type asks to merge after (`mergeStoresAfterLegalization`).
-        if self.level >= CombineLevel::AfterLegalizeTypes {
+        if self.level >= CombineLevel::AfterLegalizeTypes || self.opt_none {
             return false;
         }
         let Some(tli) = self.tli else { return false };
