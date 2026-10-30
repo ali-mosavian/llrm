@@ -180,11 +180,25 @@ fn fewer_instructions_win_before_fewer_registers() {
     assert!(few.is_loser() && many.is_less(&tti, &few));
 }
 
+/// `Cost::isLess` ranks by instructions first only when `-lsr-insns-cost` is on
+/// the command line, which nothing passes: a target with the default order
+/// (registers first) kept a solution of 2 instructions and 4 registers over the
+/// pin's 3 and 3, and a copy loop got a shared index instead of two pointers.
+#[test]
+fn the_default_order_ranks_registers_before_instructions() {
+    let tti = llrm_mir::tti::Basic;
+    let (mut few, mut many) = (Cost::new(), Cost::new());
+    few.c = LsrCost { insns: 2, num_regs: 4, ..LsrCost::default() };
+    many.c = LsrCost { insns: 3, num_regs: 3, ..LsrCost::default() };
+    assert!(many.is_less(&tti, &few) && !few.is_less(&tti, &many));
+}
+
 #[test]
 fn what_an_address_mode_folds_by_kind() {
     let tti = X86::of_cpu("core2").unwrap();
-    let fold =
-        |kind, gv, offset, base, scale| is_am_completely_folded_at(&tti, kind, 0, gv, Immediate(offset), base, scale);
+    let fold = |kind, gv, offset, base, scale| {
+        is_am_completely_folded_at(&tti, kind, MemAccessTy::unknown(0), gv, Immediate(offset), base, scale)
+    };
     assert!(fold(Kind::Address, false, 8, true, 4));
     assert!(!fold(Kind::Address, false, 1 << 40, true, 1), "a displacement is 32 bits");
     assert!(fold(Kind::Basic, false, 0, true, 0) && !fold(Kind::Basic, false, 0, true, 1));
@@ -205,7 +219,7 @@ fn offsets_that_wrap_with_the_base_do_not_fold() {
             Immediate(min),
             Immediate(max),
             Kind::Address,
-            0,
+            MemAccessTy::unknown(0),
             false,
             Immediate(base),
             true,

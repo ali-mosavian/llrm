@@ -274,6 +274,7 @@ impl Selector {
                 | Matcher::CheckPredicate(_)
                 | Matcher::CheckOpcode(_)
                 | Matcher::CheckType(_)
+                | Matcher::CheckTypeRes { .. }
                 | Matcher::CheckChildType { .. }
                 | Matcher::CheckInteger(_)
                 | Matcher::CheckChildInteger { .. }
@@ -498,6 +499,7 @@ impl Selector {
             | Matcher::CheckPredicate(_)
             | Matcher::CheckOpcode(_)
             | Matcher::CheckType(_)
+            | Matcher::CheckTypeRes { .. }
             | Matcher::CheckChildType { .. }
             | Matcher::CheckInteger(_)
             | Matcher::CheckChildInteger { .. }
@@ -538,6 +540,7 @@ impl Selector {
             Matcher::CheckPredicate(predicate) => hooks.check_node_predicate(dag, n, predicate),
             Matcher::CheckOpcode(opcode) => dag.opcode(n.node) == opcode,
             Matcher::CheckType(vt) => check_type(vt, n),
+            Matcher::CheckTypeRes { res, vt } => check_type(vt, SDValue::new(n.node, res)),
             Matcher::CheckChildType { child: index, vt } => child(index).is_some_and(|c| check_type(vt, c)),
             Matcher::CheckInteger(value) => dag.constant(n) == Some(value),
             Matcher::CheckChildInteger { child: index, value } => {

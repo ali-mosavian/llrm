@@ -9,13 +9,6 @@ tip = 203188
 main = 164290
 to = 205231
 
-[[row]]
-label = "bintree nib -O2"
-counter = "memory_operands"
-tip = 18833
-main = 12727
-to = 18978
-
 # New against the tip; this one is better than main (416).
 [[row]]
 label = "quicksort nib -O2"
@@ -23,10 +16,3 @@ counter = "code_bytes"
 tip = 354
 main = 416
 to = 363
-
-# Worse than the tip by 145, not comparable to main (unmeasured); fill `main` from w6's frozen baseline.
-[[row]]
-label = "bintree nib -O2"
-counter = "instructions"
-tip = 70145
-to = 70290

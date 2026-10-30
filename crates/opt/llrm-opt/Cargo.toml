@@ -1,0 +1,17 @@
+[package]
+name = "llrm-opt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "An opt-like driver over llrm-transforms, for running the LLVM pin's lit tests"
+publish = false
+
+[[bin]]
+name = "llrm-opt"
+path = "src/main.rs"
+
+[dependencies]
+llrm-mir = { workspace = true }
+llrm-transforms = { workspace = true }
+llrm-x86 = { workspace = true }
+llrm-arm64 = { workspace = true }

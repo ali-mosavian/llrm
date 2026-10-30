@@ -463,3 +463,16 @@ fn the_uses_of_a_local_are_walked_once_however_many_accesses_ask() {
     let (small, large) = (scans(8), scans(64));
     assert!(large <= 64 + 8 && small <= 8 + 8, "8 locals: {small} walks, 64 locals: {large}");
 }
+
+/// DeadStoreElimination.cpp#L770 `isNoopIntrinsic`: `invariant.end` neither
+/// reads nor writes the store it follows, so a store overwritten after it goes.
+/// MIR had no `invariant.end`, and the call, which touches its argument's
+/// memory, kept the store.
+#[test]
+fn an_overwritten_store_goes_past_invariant_end() {
+    let after = eliminated(
+        "@g = global i16 0\n\ndeclare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)\ndeclare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)\n\ndefine i16 @f(i16 %x) {\nb0:\n  %s = call ptr @llvm.invariant.start.p0(i64 2, ptr @g)\n  store i16 1, ptr @g\n  call void @llvm.invariant.end.p0(ptr %s, i64 2, ptr @g)\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}\n",
+        &[&[7]],
+    );
+    assert!(!after.contains("store i16 1"), "{after}");
+}
