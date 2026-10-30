@@ -43,6 +43,8 @@ pub(super) struct Arguments {
     pub(super) codegen: codegen::Options,
     /// `--arm64=linux|darwin`: the object is arm64's, from the 64-bit lowering.
     pub(super) arm64: Option<llrm_arm64::machine::Platform>,
+    /// `--wasm32`: the object is wasm32's, from the 32-bit lowering.
+    pub(super) wasm32: bool,
 }
 
 pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
@@ -56,6 +58,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     flags.float_store = false;
     let (mut dump_hir, mut dump) = (None, None);
     let mut arm64 = None;
+    let mut wasm32 = false;
     let mut at = 0;
     while at < argv.len() {
         // The runtime the program calls: the Microsoft ones by their stack ABI,
@@ -118,6 +121,10 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
                 });
                 flags.take(&["-m64".to_owned()], &mut 0)?;
             }
+            "--wasm32" => {
+                wasm32 = true;
+                flags.take(&["-m32".to_owned()], &mut 0)?;
+            }
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
             _ if source.is_none() => source = Some(PathBuf::from(argument)),
             _ => return Err(format!("unrecognized arguments: {argument}")),
@@ -143,7 +150,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         spills_extended: true,
         ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
     };
-    Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen, arm64 })
+    Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen, arm64, wasm32 })
 }
 
 /// Whether the object format is a host's: an ELF or Mach-O object, whatever
@@ -194,6 +201,10 @@ pub fn main(argv: &[String]) -> i32 {
                 .map_err(|error| error.to_string())?;
         } else if let (Some(platform), Some(output)) = (args.arm64, &args.flags.output) {
             let bytes = super::arm64::object_bytes(&program, &args.source, &args.codegen, platform)
+                .map_err(|error| error.to_string())?;
+            llrm_codegen::driver::flags::write_output(output, bytes).map_err(|error| error.to_string())?;
+        } else if let (true, Some(output)) = (args.wasm32, &args.flags.output) {
+            let bytes = super::wasm32::object_bytes(&program, &args.source, &args.codegen)
                 .map_err(|error| error.to_string())?;
             llrm_codegen::driver::flags::write_output(output, bytes).map_err(|error| error.to_string())?;
         } else if let Some(output) = &args.flags.output {

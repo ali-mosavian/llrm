@@ -17,11 +17,11 @@ use llrm_codegen::hir::model;
 use super::compile::{_inline_frame, _near_procedures, _positional_data, CompileError};
 
 /// The names the host runtime links the module by.
-const EXPORTS: [(&str, &str); 2] = [("@__main", "@QB_MAIN"), ("@$qb$statementTable", "@QB_STATEMENTS")];
+pub(super) const EXPORTS: [(&str, &str); 2] = [("@__main", "@QB_MAIN"), ("@$qb$statementTable", "@QB_STATEMENTS")];
 
 /// `line` with the symbol `from` (a whole name, not the start of a longer one)
 /// written `to`.
-fn renamed(
+pub(super) fn renamed(
     line: &str,
     from: &str,
     to: &str,
@@ -44,7 +44,7 @@ fn renamed(
 /// argument narrower than 32 bits, and the clang-built runtime relies on it:
 /// `-1` passed as 0xFFFF reached `VIEW PRINT` as 65535, "Illegal function
 /// call". Linux's callee extends for itself.
-fn signext_i16_arguments(line: &str) -> String {
+pub(super) fn signext_i16_arguments(line: &str) -> String {
     let Some(name) = line.find("@B_") else { return line.to_owned() };
     let Some(open) = line[name..].find('(').map(|at| name + at) else { return line.to_owned() };
     let Some(close) = line[open..].find(')').map(|at| open + at) else { return line.to_owned() };
@@ -114,13 +114,11 @@ fn arm64_text(
     out
 }
 
-/// The object of `program` for `platform`.
-pub fn object_bytes(
+/// The module through the shared mid-end, as MIR text, and the bytes of its READ/DATA rows.
+pub(super) fn host_module(
     program: &model::Program,
-    source: &Path,
     codegen: &Options,
-    platform: Platform,
-) -> Result<Vec<u8>, CompileError> {
+) -> Result<(String, Vec<u8>), CompileError> {
     let fail = |why: String| CompileError::Value(why);
     let laid_out = super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function));
     let program = _near_procedures(&laid_out, codegen.arch.layout().spaces.far_is_near());
@@ -137,7 +135,19 @@ pub fn object_bytes(
         read_data.push(0);
     }
     read_data.extend([0xff, 0xff, 0x01]);
-    let text = arm64_text(&llrm_mir::print::module(&mir.modules[0]), platform, &read_data);
+    Ok((llrm_mir::print::module(&mir.modules[0]), read_data))
+}
+
+/// The object of `program` for `platform`.
+pub fn object_bytes(
+    program: &model::Program,
+    source: &Path,
+    codegen: &Options,
+    platform: Platform,
+) -> Result<Vec<u8>, CompileError> {
+    let fail = |why: String| CompileError::Value(why);
+    let (mir, read_data) = host_module(program, codegen)?;
+    let text = arm64_text(&mir, platform, &read_data);
     if let Some(path) = std::env::var_os("LLRM_ARM64_TEXT") {
         std::fs::write(path, &text).map_err(|error| fail(error.to_string()))?;
     }
@@ -151,7 +161,7 @@ pub fn object_bytes(
 /// the function, which takes the branch to its pad. The function's allocas are
 /// handed to `qb_host_escape` so that no pass keeps them in registers, which
 /// the jump would restore stale.
-fn framed(text: &str) -> String {
+pub(super) fn framed(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut function: Vec<&str> = Vec::new();
     let mut inside = false;
@@ -233,7 +243,7 @@ fn framed_function(lines: &[&str]) -> String {
 /// A mid-end pass leaves a result number on a terminator or a store (`%54 = br
 /// label %b36`), which the x86 path never reads and MIR's reader refuses. Each
 /// such number is dropped and the numbers after it in the function close up.
-fn without_results_on_void(text: &str) -> String {
+pub(super) fn without_results_on_void(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut body: Vec<&str> = Vec::new();
     for line in text.lines() {
@@ -338,7 +348,7 @@ const BLOCK_ENTRIES: [(&str, &str); 7] = [
     ("B_CSCN", "i16"),
 ];
 
-fn block_entry(line: &str) -> String {
+pub(super) fn block_entry(line: &str) -> String {
     for (name, first) in BLOCK_ENTRIES {
         let symbol = format!("@{name}(");
         let Some(at) = line.find(&symbol) else { continue };

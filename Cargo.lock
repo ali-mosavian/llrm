@@ -573,6 +573,7 @@ dependencies = [
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
+ "llrm-wasm",
  "llrm-x86-m16",
  "logos",
  "num-bigint",
