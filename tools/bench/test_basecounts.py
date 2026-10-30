@@ -121,7 +121,7 @@ def test_the_base_is_measured_by_its_own_trees_bench_not_the_heads(monkeypatch, 
         Path(command[command.index("--json") + 1]).write_text(json.dumps({"fib/c/O2": row(7)}))
         return subprocess.CompletedProcess(command, 1, "", "")  # an old bench exits 1 on problems: the rows are what counts
 
-    monkeypatch.setattr(bc.subprocess, "run", fake)
+    monkeypatch.setattr(bc, "run_streaming", fake)
     rows, hashes = bc.measure_in_subprocess(tmp_path / "b/target/release", ["O2"], tmp_path / "w")
     assert rows == {("fib", "c", "O2"): row(7)} and hashes == {}
     command, cwd, binary = seen[0]
@@ -134,7 +134,7 @@ def test_a_base_that_does_not_measure_says_why_on_one_line_the_gate_prints(monke
     filter drops."""
     import subprocess
 
-    monkeypatch.setattr(bc.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "Traceback\nBuildError: llrm-c: unrecognized arguments: -mbss-begin\n"))
+    monkeypatch.setattr(bc, "run_streaming", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "Traceback\nBuildError: llrm-c: unrecognized arguments: -mbss-begin\n"))
     try:
         bc.measure_in_subprocess(tmp_path, ["O2"], tmp_path / "w")
     except SystemExit as why:
@@ -314,3 +314,48 @@ def test_a_program_edited_since_the_base_is_judged_against_the_base_compiler_on_
     assert worse == [("jpeg nib -O2", "instructions", 60, 70)]
     bc.with_edited(base, {"jpeg": "old"}, {"jpeg": "new"}, ["O2"], measure, tmp_path, "t")
     assert asked == [["jpeg"]], "measured once per tree and edit"
+
+
+def test_the_judge_counts_the_rows_its_waivers_excused_and_fails_waivers_it_never_read():
+    """424 measurements: 0 problems said nothing of the 267 rows that passed under a waiver, so a judge that read no waiver at all looked the
+    same. The summary names how many rows ran under which file; waivers on file with none applied and none stale are a problem."""
+    base = {FIB: row(100), ("sieve", "c", "O2"): row(10)}
+    got = {FIB: row(120), ("sieve", "c", "O2"): row(10)}
+    waivers = [{"label": "fib bq32 -O2", "counter": "instructions", "to": 120, "reason": "r", "file": "a.toml"}]
+    rows = bc.waived_rows(got, base, waivers)
+    assert rows == [("a.toml", "fib bq32 -O2", "instructions", 100, 120)]
+    lines, problems = bc.waived_lines(rows, waivers, [])
+    assert lines == ["WAIVED 1 rows of 1 waivers (limit = measured): a.toml 1"] and problems == []
+    lines, problems = bc.waived_lines([], waivers, [])
+    assert problems == ["WAIVERS: none was applied and none is stale: the waivers are not being read"]
+    assert bc.waived_lines([], waivers, ["a.toml: x"])[1] == [] and bc.waived_lines([], [], [])[1] == []
+
+
+def test_the_bases_progress_lines_reach_the_gates_log_as_they_are_printed(tmp_path, capsys):
+    """run 5's bench-base: the base measured in a subprocess whose stderr was captured, so 25 min of stage lines showed the gate's watchdog only
+    `base counts`, and it killed the step after a quiet stretch. The lines are passed on as they come."""
+    tree = tmp_path / "tree"
+    (tree / "tools/bench").mkdir(parents=True)
+    (tree / "tools/bench/bench.py").write_text(
+        "import sys, json\nprint('bench: [1s] O2: built 3 programs', file=sys.stderr, flush=True)\n"
+        "out = sys.argv[sys.argv.index('--json') + 1]\nopen(out, 'w').write(json.dumps({'fib/c/O2': {'instructions': 1}}))\n"
+    )
+    rows, _ = bc.measure_in_subprocess(tmp_path / "x" / "release", ["O2"], tmp_path / "work", tree=tree)
+    assert capsys.readouterr().err.strip() == "bench: [1s] O2: built 3 programs" and rows == {("fib", "c", "O2"): {"instructions": 1}}
+
+
+def test_the_base_bench_runs_with_the_fork_start_method_whatever_the_pythons_default(tmp_path, monkeypatch):
+    """Run 6's bench-base: Python 3.14 on the runner defaults to forkserver, and the base's nested process pools sat at 0 CPU for 10 min until
+    the gate killed the step (here, forced to forkserver, the same phase ran 3x slower). The base bench starts with `fork`, as it was written."""
+    default = tmp_path / "py314"
+    default.mkdir()
+    (default / "sitecustomize.py").write_text("import multiprocessing\nmultiprocessing.set_start_method('forkserver', force=True)\n")
+    monkeypatch.setenv("PYTHONPATH", str(default))
+    tree = tmp_path / "tree"
+    (tree / "tools/bench").mkdir(parents=True)
+    (tree / "tools/bench/bench.py").write_text(
+        "import sys, json, multiprocessing\nout = sys.argv[sys.argv.index('--json') + 1]\n"
+        "open(out, 'w').write(json.dumps({f'start/{multiprocessing.get_start_method()}/O2': {'instructions': 1}}))\n"
+    )
+    rows, _ = bc.measure_in_subprocess(tmp_path / "x" / "release", ["O2"], tmp_path / "work", tree=tree)
+    assert list(rows) == [("start", "fork", "O2")]

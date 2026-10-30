@@ -14,7 +14,17 @@ if [ "${1:-}" = "--newest-libgcc" ]; then
 fi
 
 prefix=${ARM64_SYSROOT:-$HOME/.cache/llrm-arm64-sysroot}
-if [ -d "$prefix/root/usr/aarch64-linux-gnu/lib" ]; then
+done_marker=$prefix/root/.complete
+if [ -f "$done_marker" ]; then
+    echo "$prefix/root"
+    exit 0
+fi
+mkdir -p "$prefix"
+# One builder at a time: concurrent extractions into one tree unlinked each other's files (dpkg-deb "Cannot unlink"), and a
+# half-extracted root passed the old directory test and segfaulted a program. The root appears by rename, marker last.
+exec 9>"$prefix/.lock"
+flock 9
+if [ -f "$done_marker" ]; then
     echo "$prefix/root"
     exit 0
 fi
@@ -23,7 +33,10 @@ libgcc=$(apt-cache pkgnames libgcc- | newest_libgcc)
 mkdir -p "$prefix/debs"
 (cd "$prefix/debs" && apt-get download libc6-dev-arm64-cross libc6-arm64-cross linux-libc-dev-arm64-cross \
     libgcc-s1-arm64-cross "$libgcc" >&2)
+rm -rf "$prefix/root" "$prefix/root.new"
 for deb in "$prefix"/debs/*.deb; do
-    dpkg -x "$deb" "$prefix/root"
+    dpkg -x "$deb" "$prefix/root.new"
 done
+touch "$prefix/root.new/.complete"
+mv "$prefix/root.new" "$prefix/root"
 echo "$prefix/root"
