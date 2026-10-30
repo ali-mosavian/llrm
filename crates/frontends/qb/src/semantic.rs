@@ -4,10 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 mod absolute;
+mod allocation;
 mod assignment;
 mod bounds;
 mod debug;
+mod exclusive;
 mod format_spec;
+mod invariance;
 mod merging;
 mod shapes;
 mod tags;
@@ -286,6 +289,15 @@ struct Function {
     // Each element pointer into a far array: the place of the descriptor
     // owning the allocation it stays inside.
     allocations: BTreeMap<u32, u32>,
+    // Each element pointer of any array, whichever descriptor it came from.
+    elements: BTreeSet<u32>,
+    // Each descriptor-word load nothing rewrites: `!invariant.load`.
+    invariant: BTreeSet<u32>,
+    // Reference parameters (by index) nothing else reaches: `noalias`.
+    no_alias: BTreeSet<usize>,
+    // Back-edge blocks of loops that reach no far
+    // allocation: `NoFarAllocation`.
+    quiet_loops: BTreeSet<u32>,
     // Each POKE's far pointer whose DEF SEG is a literal on every path in:
     // the place of the segment cell, which names the memory it addresses.
     absolute: BTreeMap<u32, u32>,
@@ -613,6 +625,9 @@ pub fn compile_debugged(
         merging::applied(&mut compiler);
     }
     shapes::applied(&mut compiler);
+    invariance::applied(&mut compiler);
+    exclusive::applied(&mut compiler);
+    allocation::applied(&mut compiler);
     absolute::applied(&mut compiler);
     absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
@@ -1937,6 +1952,10 @@ impl Compiler {
             promises: Vec::new(),
             origins: BTreeMap::new(),
             allocations: BTreeMap::new(),
+            elements: BTreeSet::new(),
+            invariant: BTreeSet::new(),
+            no_alias: BTreeSet::new(),
+            quiet_loops: BTreeSet::new(),
             absolute: BTreeMap::new(),
         });
     }
@@ -10620,6 +10639,24 @@ impl Compiler {
                             );
                         }
                     }
+                    if function.invariant.contains(&instruction.id) {
+                        facts.state(
+                            llrm_hir::facts::Subject::Instruction {
+                                function: i64::from(function.id),
+                                id: i64::from(instruction.id),
+                            },
+                            llrm_hir::facts::Fact::Invariant,
+                        );
+                    }
+                    if let Some(region) = region(instruction, function) {
+                        facts.state(
+                            llrm_hir::facts::Subject::Instruction {
+                                function: i64::from(function.id),
+                                id: i64::from(instruction.id),
+                            },
+                            llrm_hir::facts::Fact::Access(region),
+                        );
+                    }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
                     out.push(']');
@@ -10830,6 +10867,45 @@ impl Compiler {
                 facts.state(
                     llrm_hir::facts::Subject::Param { function: i64::from(function.id), index },
                     llrm_hir::facts::Fact::Dereferenceable(bytes as u64),
+                );
+                // A reference is the address of a variable its caller names:
+                // never null, never an undefined value.
+                let at = llrm_hir::facts::Subject::Param { function: i64::from(function.id), index };
+                facts.state(at, llrm_hir::facts::Fact::NonNull).state(at, llrm_hir::facts::Fact::NoUndef);
+                if function.no_alias.contains(&(index as usize)) {
+                    facts.state(at, llrm_hir::facts::Fact::NoAlias);
+                }
+            }
+        }
+        // `mustprogress` deletes a side-effect-free loop it cannot prove ends,
+        // which BASIC's delay and wait loops (`FOR i = 1 TO n: NEXT`,
+        // `DO WHILE flag = 0: LOOP` for an ON KEY handler) must survive: only
+        // a routine with no loop at all, and no call of a routine of the
+        // program (which may recurse or loop), states it.
+        for function in &self.functions {
+            let calls_program = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .filter_map(|instruction| instruction.callee.as_deref())
+                .any(|callee| self.functions.iter().any(|one| one.name == callee));
+            if has_loop(function) || calls_program {
+                continue;
+            }
+            if let Some(callable) = self.callables.iter().find(|one| one.name == function.name) {
+                facts.state(
+                    llrm_hir::facts::Subject::Callable(i64::from(callable.id)),
+                    llrm_hir::facts::Fact::MustProgress,
+                );
+            }
+        }
+        // A loop that reaches no far allocation keeps every far descriptor's
+        // words.
+        for function in &self.functions {
+            for &block in &function.quiet_loops {
+                facts.state(
+                    llrm_hir::facts::Subject::Terminator { function: i64::from(function.id), block: i64::from(block) },
+                    llrm_hir::facts::Fact::NoFarAllocation,
                 );
             }
         }
@@ -11446,6 +11522,33 @@ fn numbers(
     }
 }
 
+/// The region of memory a load or store reaches, where the frontend knows it:
+/// a descriptor's field, or an element of an array (its subscripts are in
+/// range, which an access promises).
+fn region(
+    instruction: &Instruction,
+    function: &Function,
+) -> Option<llrm_hir::facts::Region> {
+    use llrm_hir::facts::Region;
+    if !matches!(instruction.op, "load" | "store") {
+        return None;
+    }
+    if matches!(instruction.tag, Some(Tag::DescriptorField { .. })) {
+        return Some(Region::Descriptor);
+    }
+    instruction
+        .operands
+        .iter()
+        .any(|operand| match operand {
+            Operand::Indirect { base, inbounds: true, .. } => function.elements.contains(base),
+            // A named array's element, which a parameter may be bound to.
+            Operand::Element(..) => true,
+            Operand::Projection { indices, .. } => !indices.is_empty(),
+            _ => false,
+        })
+        .then_some(Region::Element)
+}
+
 fn operand_json(
     out: &mut String,
     operand: &Operand,
@@ -11528,4 +11631,24 @@ fn plural(
     noun: &str,
 ) -> String {
     if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
+}
+
+/// Whether the blocks of a routine hold a cycle: a jump back to a block on the
+/// path to it.
+fn has_loop(function: &Function) -> bool {
+    fn visit(
+        function: &Function,
+        id: u32,
+        state: &mut BTreeMap<u32, bool>,
+    ) -> bool {
+        match state.get(&id) {
+            Some(&on_path) => return on_path,
+            None => state.insert(id, true),
+        };
+        let targets = function.blocks.iter().find(|block| block.id == id).and_then(|block| block.terminator.as_ref());
+        let cyclic = targets.is_some_and(|one| one.targets.iter().any(|&next| visit(function, next, state)));
+        state.insert(id, false);
+        cyclic
+    }
+    function.blocks.first().is_some_and(|entry| visit(function, entry.id, &mut BTreeMap::new()))
 }

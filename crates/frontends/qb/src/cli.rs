@@ -192,6 +192,15 @@ pub fn main(argv: &[String]) -> i32 {
         // a host (an ELF or Mach-O object) has no memory at the PC's low
         // addresses: the object format states it, whatever the pointer width
         program.promises.hosted = is_hosted(&args.codegen.object_format);
+        // The Microsoft runtimes are segmented code with far pointers: on a
+        // flat target the object only failed later, "overlapping or
+        // pre-added relocations".
+        if !program.runtime.calls_natively() && args.codegen.arch.object().code_model().flat() {
+            return Err(format!(
+                "the {} runtime is segmented 16-bit code: build for a 32-bit target with -fqb-runtime=llrm",
+                args.frontend.runtime
+            ));
+        }
         if program.runtime.calls_natively() {
             // the `-mabi=` family's convention, else the target's default
             let native = args.codegen.arch.calling().chosen(args.codegen.abi.as_deref())?;

@@ -156,9 +156,11 @@ impl Fact {
             | Fact::AllowReciprocal
             | Fact::Invariant
             | Fact::Unroll(_)
+            | Fact::NoFarAllocation
             | Fact::MustProgress
             | Fact::NoRecurse
             | Fact::NoIpa
+            | Fact::Access(_)
             | Fact::Range(_) => true,
         }
     }

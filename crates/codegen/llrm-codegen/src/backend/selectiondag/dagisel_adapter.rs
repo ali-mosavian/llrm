@@ -285,6 +285,15 @@ pub trait PinRegisters {
         &self,
         id: llrm_lir::registers::RegId,
     ) -> Option<u16>;
+
+    /// Whether `register` is one the target cannot map. Selection then refuses
+    /// ([`DagisAdapter::refusal`]); the default reads it as virtual.
+    fn unmapped(
+        &self,
+        _register: u16,
+    ) -> bool {
+        false
+    }
 }
 
 /// x86's registers (the default of an adapter).
@@ -307,7 +316,8 @@ impl PinRegisters for X86Registers {
 
 impl DagisAdapter<'_> {
     /// The `Register` node for the pin's register number: physical when the
-    /// builder names it so.
+    /// builder names it so. A number the target does not know is a virtual
+    /// register for now and a [`DagisAdapter::refusal`].
     fn register_node(
         &mut self,
         vt: EVT,
@@ -315,6 +325,10 @@ impl DagisAdapter<'_> {
     ) -> SDValue {
         match self.registers.phys_reg(register) {
             Some(id) => self.dag.get_phys_register(vt, id),
+            None if self.registers.unmapped(register) => {
+                self.refusal.get_or_insert_with(|| format!("pin register {register} has no id on this target"));
+                self.dag.get_register(vt, u32::from(register))
+            }
             None => self.dag.get_register(vt, u32::from(register)),
         }
     }
@@ -343,6 +357,7 @@ pub struct DagisAdapter<'a> {
     node_id: Vec<i32>,
     /// The target's registers in the pin's numbering.
     registers: &'a dyn PinRegisters,
+    refusal: Option<String>,
 }
 
 impl<'a> DagisAdapter<'a> {
@@ -372,7 +387,13 @@ impl<'a> DagisAdapter<'a> {
         for (position, node) in super::dag_select::users_first(dag).into_iter().rev().enumerate() {
             node_id[node as usize] = position as i32;
         }
-        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id, registers }
+        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id, registers, refusal: None }
+    }
+
+    /// Why selection must be refused: the selector named a register the target
+    /// cannot map.
+    pub fn refusal(&self) -> Option<&str> {
+        self.refusal.as_deref()
     }
 
     /// `Node->setNodeId(-1)`.

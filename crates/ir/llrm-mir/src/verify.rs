@@ -595,6 +595,13 @@ impl Checker<'_> {
                 {
                     self.fail(format!("{at}: bswap must be an even number of bytes"));
                 }
+                // Verifier.cpp#L6072: the size is -1, 0 or a positive number.
+                if self.called_intrinsic(callee) == Some(Intrinsic::InvariantStart)
+                    && !crate::intrinsics::length(self.context, instruction.operands[0])
+                        .is_some_and(|size| size <= i64::MAX as u64 || size == u64::MAX)
+                {
+                    self.fail(format!("{at}: invariant_start parameter must be -1, 0 or a positive number"));
+                }
                 if call_returns != result {
                     self.fail(format!(
                         "{at} returns {}, not its type's {}",
