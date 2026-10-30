@@ -342,3 +342,20 @@ def test_the_bases_progress_lines_reach_the_gates_log_as_they_are_printed(tmp_pa
     )
     rows, _ = bc.measure_in_subprocess(tmp_path / "x" / "release", ["O2"], tmp_path / "work", tree=tree)
     assert capsys.readouterr().err.strip() == "bench: [1s] O2: built 3 programs" and rows == {("fib", "c", "O2"): {"instructions": 1}}
+
+
+def test_the_base_bench_runs_with_the_fork_start_method_whatever_the_pythons_default(tmp_path, monkeypatch):
+    """Run 6's bench-base: Python 3.14 on the runner defaults to forkserver, and the base's nested process pools sat at 0 CPU for 10 min until
+    the gate killed the step (here, forced to forkserver, the same phase ran 3x slower). The base bench starts with `fork`, as it was written."""
+    default = tmp_path / "py314"
+    default.mkdir()
+    (default / "sitecustomize.py").write_text("import multiprocessing\nmultiprocessing.set_start_method('forkserver', force=True)\n")
+    monkeypatch.setenv("PYTHONPATH", str(default))
+    tree = tmp_path / "tree"
+    (tree / "tools/bench").mkdir(parents=True)
+    (tree / "tools/bench/bench.py").write_text(
+        "import sys, json, multiprocessing\nout = sys.argv[sys.argv.index('--json') + 1]\n"
+        "open(out, 'w').write(json.dumps({f'start/{multiprocessing.get_start_method()}/O2': {'instructions': 1}}))\n"
+    )
+    rows, _ = bc.measure_in_subprocess(tmp_path / "x" / "release", ["O2"], tmp_path / "work", tree=tree)
+    assert list(rows) == [("start", "fork", "O2")]

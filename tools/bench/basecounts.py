@@ -257,7 +257,7 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: b
     tree = tree or directory.parents[1] / "tree"
     out = work / "base.json"
     work.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "LLRM_BIN": str(directory)}
+    env = {**os.environ, "LLRM_BIN": str(directory), "PYTHONPATH": os.pathsep.join([str(HERE / "forkstart"), *filter(None, [os.environ.get("PYTHONPATH")])])}
     env.pop("LLRM_BENCH_BASE", None)
     command = [sys.executable, str(tree / "tools/bench/bench.py"), "--opt", *opts, "--json", str(out), "--work", str(work / "run")]
     if timed:
