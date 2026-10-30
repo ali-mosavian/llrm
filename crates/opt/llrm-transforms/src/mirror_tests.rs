@@ -71,14 +71,24 @@ out:
 /// which is what clang hands a C `a[i]`.
 fn typed() -> String {
     PARTITION
-        .replace("  %o = mul i16 %j, 2\n  %pj = getelementptr inbounds i8, ptr @a, i16 %o", "  %pj = getelementptr inbounds [2 x i8], ptr @a, i16 %j")
-        .replace("  %oi = mul i16 %i, 2\n  %pi = getelementptr inbounds i8, ptr @a, i16 %oi", "  %pi = getelementptr inbounds [2 x i8], ptr @a, i16 %i")
+        .replace(
+            "  %o = mul i16 %j, 2\n  %pj = getelementptr inbounds i8, ptr @a, i16 %o",
+            "  %pj = getelementptr inbounds [2 x i8], ptr @a, i16 %j",
+        )
+        .replace(
+            "  %oi = mul i16 %i, 2\n  %pi = getelementptr inbounds i8, ptr @a, i16 %oi",
+            "  %pi = getelementptr inbounds [2 x i8], ptr @a, i16 %i",
+        )
 }
 
 const INPUTS: &[&[i128]] = &[&[0, 1], &[0, 2], &[0, 9], &[2, 7], &[5, 6], &[3, 30], &[0, 0], &[4, 2]];
 
-/// (whether the pass changed `body`, the function after), the interpreter's results unchanged.
-fn through(body: &str, forms: &[AddressForm]) -> (bool, String) {
+/// (whether the pass changed `body`, the function after), the interpreter's
+/// results unchanged.
+fn through(
+    body: &str,
+    forms: &[AddressForm],
+) -> (bool, String) {
     let mut module = parsed(&format!("{DOS}{body}"));
     let expected = results(&module, INPUTS);
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
@@ -89,8 +99,9 @@ fn through(body: &str, forms: &[AddressForm]) -> (bool, String) {
     (changed, after)
 }
 
-/// quicksort -m16 shuffled bx between `a[j]` and `a[i]` (nib's swap block ran 10 memory operands
-/// a swap where main's ran 4): `i` is stepped by some trips, so no loop pass gave `a[i]` a pointer.
+/// quicksort -m16 shuffled bx between `a[j]` and `a[i]` (nib's swap block ran
+/// 10 memory operands a swap where main's ran 4): `i` is stepped by some trips,
+/// so no loop pass gave `a[i]` a pointer.
 #[test]
 fn test_a_counter_some_trips_step_has_a_pointer_where_the_address_takes_no_scale() {
     let (changed, after) = through(PARTITION, &bare());
@@ -98,8 +109,8 @@ fn test_a_counter_some_trips_step_has_a_pointer_where_the_address_takes_no_scale
     assert!(!after.contains("load i16, ptr %pi") && !after.contains("store i16 %j, ptr %pi"), "{after}");
 }
 
-/// C's `a[i]` is `gep [2 x i8], a, i`, not a multiply into a byte gep: the matcher found no loop in
-/// quicksort.c and the pass changed none of its rows.
+/// C's `a[i]` is `gep [2 x i8], a, i`, not a multiply into a byte gep: the
+/// matcher found no loop in quicksort.c and the pass changed none of its rows.
 #[test]
 fn test_a_typed_gep_of_the_counter_has_a_pointer_too() {
     let (changed, after) = through(&typed(), &bare());

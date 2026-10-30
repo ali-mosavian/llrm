@@ -283,7 +283,6 @@ mod lsr_generate_tests;
 pub mod lsr_implement;
 pub mod lsr_narrow;
 pub mod lsr_pass;
-mod mirror;
 #[cfg(test)]
 mod lsr_pass_tests;
 pub mod lsr_prepare;
@@ -298,6 +297,7 @@ pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
 pub mod mergestores;
+mod mirror;
 pub mod mldstmotion;
 pub mod narrowspace;
 #[cfg(test)]

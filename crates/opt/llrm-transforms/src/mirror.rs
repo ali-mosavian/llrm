@@ -103,11 +103,11 @@ use std::collections::BTreeSet;
 
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, StepCycle};
-use llrm_analysis::{cfg, memory};
 use llrm_analysis::occurrence::{arms, from_arms};
+use llrm_analysis::{cfg, memory};
 use llrm_mir::context::{Context, signed};
-use llrm_mir::edit::Position;
 use llrm_mir::dense::IdSet;
+use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::target::AddressForm;
@@ -190,8 +190,8 @@ fn family_of(
             if !function.parent(one.user).is_some_and(|block| body.contains(&block)) {
                 continue;
             }
-            // The pin's canonical form: `gep [k x i8], base, y`, one read of the
-            // cycle's value by the pointer it scales.
+            // The pin's canonical form: `gep [k x i8], base, y`, one read of
+            // the cycle's value by the pointer it scales.
             if let Opcode::GetElementPtr { source } = user.opcode
                 && user.operands.len() == 2
                 && user.operands[1] == Operand::Value(y)
@@ -199,7 +199,9 @@ fn family_of(
                 let k = view.layout.alloc_size(&view.context.types, source) as i128;
                 let base = user.operands[0];
                 let flat = match function.operand_type(view.context, base).map(|ty| view.context.types.get(ty)) {
-                    Some(Type::Pointer(space)) => !view.layout.is_pair(*space) && view.layout.offset_bits(*space) == bits,
+                    Some(Type::Pointer(space)) => {
+                        !view.layout.is_pair(*space) && view.layout.offset_bits(*space) == bits
+                    }
                     _ => false,
                 };
                 if k > 1 && !scales.contains(&(k as i64)) && invariant(base) && flat {
@@ -398,7 +400,6 @@ pub(crate) fn applied(
         function.replace_all_uses_with(result, Operand::Value(made));
     }
 }
-
 
 #[cfg(test)]
 #[path = "mirror_tests.rs"]

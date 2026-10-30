@@ -81,7 +81,13 @@ impl FunctionPass for LoopStrengthReduce {
         // where the target's address takes no scale and asks for it.
         if !self.size
             && tti.mirrors_conditional_counters()
-            && crate::mirror::mirrored(unit.context, unit.layout, unit.function, &outer, &outer.target().address_forms())
+            && crate::mirror::mirrored(
+                unit.context,
+                unit.layout,
+                unit.function,
+                &outer,
+                &outer.target().address_forms(),
+            )
         {
             analyses.invalidate(unit.function, &PreservedAnalyses::none());
         }
