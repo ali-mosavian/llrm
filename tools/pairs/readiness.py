@@ -20,6 +20,8 @@ import subprocess
 import importlib.util
 from pathlib import Path
 
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tools" / "pairs"))
@@ -198,7 +200,7 @@ def report(header: list[str], sized: dict[str, tuple], clocks: tuple | None, tin
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("new", nargs="?", default="origin/feat/parity")
+    parser.add_argument("new", nargs="?", default=f"origin/{BRANCH}")
     parser.add_argument("--base", default=BASE)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--levels", nargs="+", default=["-Os", "-O2"])
