@@ -158,3 +158,24 @@ fn an_odd_width_min_max_is_promoted_with_extended_operands() {
         }
     }
 }
+
+/// With no `i8` or `i16` register, a store of one was refused ("promote
+/// operand"): it is a truncating store of the promoted value, as
+/// `PromoteIntOp_STORE`.
+#[test]
+fn a_store_of_a_value_below_the_register_size_is_a_truncating_store() {
+    let tli = TargetLowering::empty(llrm_sdag::lowering::TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false));
+    let mut dag = dag();
+    let value = load(&mut dag, EVT::Simple(MVT::I16), 1);
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let info = MemInfo { mem_vt: EVT::Simple(MVT::I16), align: 2, volatile: false, base: MemBase::Stack(2), ext: None, space: 0 };
+    let store = dag.get_store(chain, value, ptr, info);
+    dag.set_root(store);
+    assert_eq!(legalize(&mut dag, &tli), Ok(true));
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Store);
+    assert_eq!(dag.value_type(dag.operand(root, 1)), EVT::I32, "the promoted value");
+    let NodeData::Mem(stored) = dag.node(root).data else { panic!("a store has a memory operand") };
+    assert_eq!(stored.mem_vt, EVT::Simple(MVT::I16), "still stores 16 bits");
+}
