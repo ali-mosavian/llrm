@@ -41,6 +41,7 @@ pub fn builder_target() -> BuilderTarget {
         stack_align: Some(16),
         native_atomics: true,
         jump_tables: false,
+        min_jump_table_entries: (10, 4),
         target_nodes: Some(TargetNodes {
             call: ISD::Target(0),
             ret: ISD::Target(RET_GLUE),

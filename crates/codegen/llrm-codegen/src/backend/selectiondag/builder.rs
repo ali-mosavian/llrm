@@ -88,6 +88,10 @@ pub struct BuilderTarget {
     /// A dense switch may be a jump table: the target prices one (the MIR pass
     /// reads the same cost).
     pub jump_tables: bool,
+    /// `getMinimumJumpTableEntries`, and the value at `minsize` where the
+    /// target keeps another (AArch64: 10, then 4; AArch64Subtarget.cpp#L345,
+    /// d1106deb71cc).
+    pub min_jump_table_entries: (usize, usize),
     /// The function is tuned for size (`-Os`, `optsize`, `minsize`: the pin's
     /// `hasOptSize`): a jump table needs 40% density.
     pub opt_size: bool,
@@ -288,6 +292,7 @@ impl BuilderTarget {
             stack_align: None,
             float_store: false,
             jump_tables: true,
+            min_jump_table_entries: (4, 4),
             opt_size: false,
             min_size: false,
             tuning: llrm_mir::target::Tuning::PIN,
@@ -323,6 +328,7 @@ impl BuilderTarget {
             stack_align: None,
             float_store: false,
             jump_tables: true,
+            min_jump_table_entries: (4, 4),
             opt_size: false,
             min_size: false,
             tuning: llrm_mir::target::Tuning::PIN,

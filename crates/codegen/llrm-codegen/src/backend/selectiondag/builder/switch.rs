@@ -189,6 +189,11 @@ impl Builder<'_> {
         // MIR pass reads the same cost).
         let target = SwitchTarget {
             jump_tables: self.target.jump_tables,
+            min_jump_table_entries: if self.has_min_size() {
+                self.target.min_jump_table_entries.1
+            } else {
+                self.target.min_jump_table_entries.0
+            },
             opt_size: self.target.opt_size || self.function_has("optsize") || self.function_has("minsize"),
             min_size: self.has_min_size(),
             ..SwitchTarget::x86(self.target.dag.pointer.size_in_bits())
@@ -336,8 +341,9 @@ impl Builder<'_> {
         header: &BitTestHeader,
     ) -> EVT {
         let bits = vt.size_in_bits();
+        let legal = self.target.legal_ints.contains(&bits);
         let fits = bits >= 64 || header.masks.iter().all(|(mask, _)| mask >> bits == 0);
-        if fits { vt } else { self.target.dag.pointer }
+        if legal && fits { vt } else { self.target.dag.pointer }
     }
 
     /// `visitBitTestCase`.
