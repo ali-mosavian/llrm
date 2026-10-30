@@ -49,6 +49,8 @@ pub enum Refusal {
     Legalize(String),
     /// No pattern selected the node (`CannotYetSelect`).
     CannotSelect(String),
+    /// The selector named a register the target has no id for.
+    UnknownRegister(String),
     Emit(super::emit::EmitError),
 }
 
@@ -181,6 +183,9 @@ pub fn do_instruction_selection_with(
         adapter.dag.cur_order = adapter.dag.nodes()[node as usize].order;
         if select(&mut adapter, node) == Outcome::CannotSelect {
             return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
+        }
+        if let Some(why) = adapter.refusal() {
+            return Err(Refusal::UnknownRegister(why.to_owned()));
         }
         made.extend(before as u32..adapter.dag.nodes().len() as u32);
     }
