@@ -542,8 +542,61 @@ fn call_behavior(
     aa.call_effects(call)
 }
 
+/// `licm-max-num-uses-traversed`.
+const MAX_NUM_USES_TRAVERSED: u32 = 8;
+
+/// [`isLoadInvariantInLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1053):
+/// an `invariant.start` over the load's address and at least its size, with
+/// no use of its own, stands in a block that properly dominates the loop's
+/// header.
+fn is_load_invariant_in_loop(
+    ctx: &LoopCtx,
+    aa: &AliasQuery,
+    load: InstId,
+) -> bool {
+    let unit = aa.unit();
+    let function = unit.function;
+    let instruction = function.instruction(load);
+    // A constant address: no use list to walk.
+    let Operand::Value(address) = instruction.operands[0] else { return false };
+    let bits = unit.layout.size_bits(&unit.context.types, instruction.ty);
+    let mut visited = 0;
+    for user in function.users(address).iter().map(|one| one.user) {
+        // Avoid traversing for a load operand with a high number of users.
+        visited += 1;
+        if visited > MAX_NUM_USES_TRAVERSED {
+            return false;
+        }
+        if unit.intrinsic(user) != Some(llrm_mir::intrinsics::Intrinsic::InvariantStart) {
+            continue;
+        }
+        // If there are escaping uses of the invariant.start, the load may be
+        // non-invariant.
+        if function.instruction(user).result.is_some_and(|scope| function.users(scope).iter().next().is_some()) {
+            continue;
+        }
+        let Some(size) = llrm_mir::intrinsics::length(unit.context, function.instruction(user).operands[0]) else {
+            continue;
+        };
+        // -1 stands for a variable sized object.
+        if size > i64::MAX as u64 {
+            continue;
+        }
+        // The invariant.start should dominate the load, and the load must not
+        // be hoisted out of a loop that contains this dominating one.
+        let Some(block) = function.parent(user) else { continue };
+        if bits <= size * 8
+            && cfg::id(block) != ctx.loop_.header
+            && ctx.shape.dominance.dominates(function, cfg::id(block), ctx.loop_.header)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// [`canHoistLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L932).
-/// No `invariant.start` or `invariant.group` in MIR, no atomic loads.
+/// No `invariant.group` in MIR, no atomic loads.
 pub fn can_hoist_load(
     unit: &passes::Unit,
     ctx: &LoopCtx,
@@ -562,6 +615,10 @@ pub fn can_hoist_load(
     // in the same alias set as something that ends up being modified. Loads
     // marked `invariant` are too.
     if aa.is_use_trivially_optimizable_to_live_on_entry(load) {
+        return true;
+    }
+    // This checks for an invariant.start dominating the load.
+    if is_load_invariant_in_loop(ctx, aa, load) {
         return true;
     }
     let Some(access) = mssa.get_memory_access(load) else { return false };

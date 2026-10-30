@@ -938,6 +938,80 @@ b3:
     assert!(block_of(&stated, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{stated}");
 }
 
+/// A loop around a load of `%q` that a store through `%p` cannot be ruled out
+/// of, with `start` in the entry block and `loop_start` in the loop (the
+/// printed function).
+fn invariant_start_loop(
+    start: &str,
+    loop_start: &str,
+) -> String {
+    licm_printed(&format!(
+        "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)
+
+define i16 @f(i16 %n, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {start}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  {loop_start}
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  ret i16 %i
+}}
+"
+    ))
+}
+
+fn load_of_q_in(
+    printed: &str,
+    block: &str,
+) -> bool {
+    block_of(printed, block).iter().any(|line| line.contains("load i16, ptr %q"))
+}
+
+/// LICM.cpp#L1053 `isLoadInvariantInLoop`: an `invariant.start` over the
+/// load's address, in a block that properly dominates the loop's header and
+/// with no use of its own, lets the load leave past a store the loop cannot
+/// rule out. The load stayed (MIR had no `invariant.start`).
+#[test]
+fn test_a_load_under_a_dominating_invariant_start_leaves_past_a_store() {
+    let plain = invariant_start_loop("", "");
+    assert!(load_of_q_in(&plain, "b2"), "premise: without a scope the load stays: {plain}");
+    let scoped = invariant_start_loop("%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)", "");
+    assert!(!load_of_q_in(&scoped, "b2") && load_of_q_in(&scoped, "b0"), "{scoped}");
+}
+
+/// The scope must cover the load (`LocSizeInBits <= InvariantSizeInBits`) and
+/// end nowhere (`II->use_empty()`), and must stand outside the loop
+/// (`properlyDominates(II->getParent(), CurLoop->getHeader())`); -1, an object
+/// of unknown size, covers nothing (`InvariantSize->isNegative()`).
+#[test]
+fn test_an_invariant_start_that_does_not_cover_or_ends_or_sits_in_the_loop_keeps_the_load() {
+    let narrow = invariant_start_loop("%s = call ptr @llvm.invariant.start.p0(i64 1, ptr %q)", "");
+    assert!(load_of_q_in(&narrow, "b2"), "a one byte scope does not cover an i16: {narrow}");
+    let ended = invariant_start_loop(
+        "%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)\n  call void @llvm.invariant.end.p0(ptr %s, i64 2, ptr %q)",
+        "",
+    );
+    assert!(load_of_q_in(&ended, "b2"), "a scope that something ends is not one: {ended}");
+    let inside = invariant_start_loop("", "%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)");
+    assert!(load_of_q_in(&inside, "b2"), "a scope inside the loop does not dominate its header: {inside}");
+    let unknown = invariant_start_loop("%s = call ptr @llvm.invariant.start.p0(i64 -1, ptr %q)", "");
+    assert!(load_of_q_in(&unknown, "b2"), "-1 is skipped: {unknown}");
+}
+
 /// A GEP the target folds into the loop's load, also read by an exit phi: LLVM
 /// copies it into the exit and keeps it in the loop. llrm left the exit phi
 /// reading the loop's pointer, where `opt -passes=licm` re-forms the address
