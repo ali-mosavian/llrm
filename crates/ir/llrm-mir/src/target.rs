@@ -93,6 +93,13 @@ pub trait Machine {
         None
     }
 
+    /// Whether a loop that stores one word or dword to every cell of an object
+    /// is a `memset.pattern` fill at -Os, which isel makes `rep stosw` or
+    /// `rep stosd` (DEVIATE: the pin leaves it a loop).
+    fn fills_by_pattern(&self) -> bool {
+        false
+    }
+
     /// The target's tuning limits: the pin's values, with this target's
     /// overrides. A target with no entry here takes `Tuning::PIN`.
     fn tuning(&self) -> Tuning {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile every QCport module at -O1/-O2/-O3/-Os with QCport's flags on a feat/parity build, group the failures, file one issue per new kind, bisect it.
+"""Compile every QCport module at -O1/-O2/-O3/-Os with QCport's flags on a release/next build, group the failures, file one issue per new kind, bisect it.
 
     tools/qcport_sweep.py --bin DIR [--issue] [--bisect GOOD]
 
@@ -214,7 +214,7 @@ def issue_text(why: str, where: list[tuple[str, str]], head: str, first: tuple[s
     title = f"qcport sweep: {why[:90]} ({module} {level}{', ...' if len(where) > 1 else ''})"
     mods = ", ".join(sorted({f'{m} {l}' for m, l in where})[:12])
     body = (
-        f"TL;DR: compiling QCport's {module}.c at {level} fails on feat/parity {head[:9]}: `{why}`.\n\n"
+        f"TL;DR: compiling QCport's {module}.c at {level} fails on release/next {head[:9]}: `{why}`.\n\n"
         f"Repro: `llrm-c {level} -I $QCPORT/{{host,render,model,game,sound,ui,qgl}} -I $QCPORT_INC $QCPORT/<dir>/{module}.c -o /tmp/out.obj` "
         f"(QCPORT=~/scratch/qcport/src, QCPORT_INC=~/scratch/qctc/inc).\n\nFails: {mods}{' ...' if len(where) > 12 else ''}.\n"
         + (f"\nFirst bad squash (first-parent bisection): {first[0][:9]} {first[1]}\n" if first else "")
@@ -232,7 +232,7 @@ def main() -> int:
     qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
     include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
     compiler = (args.bin or llrmbin.bin_dir()) / "llrm-c"
-    # The binary names what was swept: origin/feat/parity moves during a run, and a report must not name a sha it did not test.
+    # The binary names what was swept: origin/release/next moves during a run, and a report must not name a sha it did not test.
     head, dirty = stamp.read(compiler)
     failures = sweep(compiler, qcport, include, jobs=args.jobs) + sweep_extra(compiler.parent, jobs=args.jobs, include=include)
     groups = grouped(failures)

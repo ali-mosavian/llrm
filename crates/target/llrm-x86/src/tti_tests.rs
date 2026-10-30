@@ -337,3 +337,10 @@ fn real_mode_drops_an_lsr_solution_the_model_rates_worse_and_flat_code_keeps_it(
     assert!(X86::of_cpu("i486").unwrap().in_real_mode(real).should_drop_lsr_solution_if_less_profitable());
     assert!(!X86::of_cpu("i486").unwrap().should_drop_lsr_solution_if_less_profitable());
 }
+
+#[test]
+fn a_triple_picks_the_baseline_cpu_of_its_architecture() {
+    assert!(X86::of_triple("x86_64-unknown-linux-gnu").unwrap().native() == 64);
+    assert!(X86::of_triple("i686-pc-linux-gnu").unwrap().native() == 32);
+    assert!(X86::of_triple("aarch64-unknown-linux-gnu").is_none());
+}

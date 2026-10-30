@@ -1,7 +1,7 @@
 """No tracked file holds a merge-conflict marker.
 
-A merge of generated pages (`docs/optimizations`) left `<<<<<<< HEAD` ... `>>>>>>> origin/feat/parity` in two pages
-that landed on feat/parity; only a gate's diff check saw them.
+A merge of generated pages (`docs/optimizations`) left `<<<<<<< HEAD` ... `>>>>>>> origin/release/next` in two pages
+that landed on release/next; only a gate's diff check saw them.
 """
 import re
 import subprocess
