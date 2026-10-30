@@ -209,3 +209,14 @@ fn a_macro_use_is_priced_as_its_body() {
 
     assert_eq!(used, llrm_6502::timing::estimate(Cpu::Mos6502, written).unwrap());
 }
+
+/// A lookup table in `RODATA` is bytes of the linked file: the estimator skipped the data segments, so a function
+/// with a CRC table priced 84 bytes against 596 linked and the bench's size check failed.
+#[test]
+fn data_bytes_in_the_file_are_counted() {
+    let text = "f:\n  rts\n.segment \"RODATA\"\nt:\n  .byte 1,2,3\n  .word 5\n.segment \"BSS\"\nb: .res 9\n.segment \"CODE\"\n";
+
+    let priced = llrm_6502::timing::estimate(Cpu::Mos6502, text).unwrap();
+
+    assert_eq!(priced.bytes, 1 + 3 + 2);
+}

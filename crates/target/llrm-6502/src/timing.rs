@@ -324,6 +324,7 @@ pub fn estimate(
     }
     let mut out = Estimate::default();
     let mut in_data = false;
+    let mut segment = "CODE";
     // a macro's body is text for ca65, not code until it is used
     let mut in_macro = false;
     for (at, line) in lines.iter().enumerate() {
@@ -341,7 +342,12 @@ pub fn estimate(
         }
         if let Some(directive) = trimmed.strip_prefix('.') {
             if directive.starts_with("segment") {
-                in_data = !directive.contains("\"CODE\"");
+                segment = directive.split('"').nth(1).unwrap_or("CODE");
+                in_data = segment != "CODE";
+            } else if segment != "BSS" {
+                // data in the file: a lookup table the compiler made
+                let unit = if directive.starts_with("byte") { 1 } else if directive.starts_with("word") { 2 } else { 0 };
+                out.bytes += unit * directive.split_whitespace().nth(1).map_or(0, |list| list.split(',').count() as u32);
             }
             continue;
         }

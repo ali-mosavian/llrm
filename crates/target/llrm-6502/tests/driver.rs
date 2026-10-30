@@ -120,3 +120,49 @@ define i8 @f(i8 %p, i8 %q) {
     let calls = |level| assembly(&ir, &Request::new(level)).unwrap().matches("jsr mix").count();
     assert_eq!((calls(Level::O2), calls(Level::Os)), (0, 3));
 }
+
+/// The pin's `opt -O2` makes an eight-trip CRC loop a byte-wise table lookup (`LoopIdiomRecognize`, priced by the
+/// target's cost model). Compiled with a machine that had no cost model the recognizer never ran: crc16 kept its
+/// bit loop (25 instructions, 6497 clocks) where the pin has 19.
+#[test]
+fn a_crc_loop_becomes_a_table_lookup() {
+    let ir = module("define i16 @crc16(ptr %0, i8 %1) {\n\
+  %.not = icmp eq i8 %1, 0\n\
+  br i1 %.not, label %._crit_edge, label %.lr.ph\n\
+\n\
+.lr.ph:                                           \n\
+  %.01118 = phi i8 [ %15, %14 ], [ 0, %2 ]\n\
+  %.01217 = phi i16 [ %12, %14 ], [ -1, %2 ]\n\
+  %3 = zext i8 %.01118 to i16\n\
+  %4 = getelementptr i8, ptr %0, i16 %3\n\
+  %5 = load i8, ptr %4, align 1\n\
+  %6 = zext i8 %5 to i16\n\
+  %7 = shl i16 %6, 8\n\
+  %8 = xor i16 %7, %.01217\n\
+  br label %9\n\
+\n\
+9:                                                \n\
+  %.016 = phi i8 [ 0, %.lr.ph ], [ %13, %9 ]\n\
+  %.115 = phi i16 [ %8, %.lr.ph ], [ %12, %9 ]\n\
+  %10 = shl i16 %.115, 1\n\
+  %11 = xor i16 %10, 4129\n\
+  %.not14 = icmp slt i16 %.115, 0\n\
+  %12 = select i1 %.not14, i16 %11, i16 %10\n\
+  %13 = add i8 %.016, 1\n\
+  %exitcond.not = icmp eq i8 %13, 8\n\
+  br i1 %exitcond.not, label %14, label %9\n\
+\n\
+14:                                               \n\
+  %15 = add i8 %.01118, 1\n\
+  %exitcond19.not = icmp eq i8 %15, %1\n\
+  br i1 %exitcond19.not, label %._crit_edge, label %.lr.ph\n\
+\n\
+._crit_edge:                                      \n\
+  %.012.lcssa = phi i16 [ -1, %2 ], [ %12, %14 ]\n\
+  ret i16 %.012.lcssa\n\
+}\n\
+");
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains(".segment \"RODATA\"") && text.matches(".byte").count() >= 32, "no table:\n{text}");
+    assert!(!text.contains("cmp #8"), "the bit loop is still there:\n{text}");
+}
