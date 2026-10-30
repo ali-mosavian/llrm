@@ -1,7 +1,8 @@
-//! The control-flow graph of a wasm [`Function`], for the dominator tree and loop info of
-//! `llrm-mir`, which are written over a graph trait.
+//! The control-flow graph of a wasm [`Function`], for the dominator tree and
+//! loop info of `llrm-mir`, which are written over a graph trait.
 //!
-//! Blocks are numbered by position: `MachineBasicBlock::getNumber` after `RenumberBlocks`.
+//! Blocks are numbered by position: `MachineBasicBlock::getNumber` after
+//! `RenumberBlocks`.
 
 use llrm_mir::domtree::{DomGraph, DomTree};
 use llrm_mir::loopinfo::{LoopGraph, LoopInfo};
@@ -35,6 +36,41 @@ impl Cfg {
         block: usize,
     ) -> impl Iterator<Item = usize> + '_ {
         self.preds[block].iter().map(|b| b.0 as usize)
+    }
+
+    /// A retreating edge of a depth-first walk whose target does not dominate
+    /// its source: the function has a loop with two entries, which
+    /// `FixIrreducibleControlFlow` rewrites in the pin.
+    pub fn irreducible_edge(
+        &self,
+        tree: &DomTree,
+    ) -> Option<(usize, usize)> {
+        let n = self.nodes.len();
+        // 0 unvisited, 1 on the walk's stack, 2 finished.
+        let mut state = vec![0_u8; n];
+        let mut stack: Vec<(usize, usize)> = Vec::new();
+        if n > 0 {
+            state[0] = 1;
+            stack.push((0, 0));
+        }
+        while let Some(&mut (block, ref mut next)) = stack.last_mut() {
+            let Some(&to) = self.succs[block].get(*next) else {
+                state[block] = 2;
+                stack.pop();
+                continue;
+            };
+            *next += 1;
+            let to = to.0 as usize;
+            match state[to] {
+                0 => {
+                    state[to] = 1;
+                    stack.push((to, 0));
+                }
+                1 if !tree.dominates(BlockId(to as u32), BlockId(block as u32)) => return Some((block, to)),
+                _ => {}
+            }
+        }
+        None
     }
 
     /// The dominator tree and the loops.

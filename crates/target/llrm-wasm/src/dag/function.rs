@@ -175,7 +175,7 @@ pub fn select_function(
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
         if !built.extra.is_empty() {
-            return Err("a switch lowering made blocks".to_owned());
+            return Err("switch (br_table, compare trees) is not supported yet: its lowering made blocks".to_owned());
         }
         let Scheduled { units, mem_refs, accesses } =
             select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;

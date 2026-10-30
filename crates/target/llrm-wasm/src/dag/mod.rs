@@ -12,6 +12,7 @@ use llrm_mir::types::Type;
 
 use crate::Width;
 use crate::argument_move::argument_move;
+use crate::cfg::Cfg;
 use crate::cfg_sort::cfg_sort;
 use crate::cfg_stackify::cfg_stackify;
 use crate::explicit_locals::explicit_locals;
@@ -90,6 +91,12 @@ pub fn compile_function(
     set_p2align_operands(&mut f);
     phi_elimination(&mut f);
     remove_unreachable_blocks(&mut f);
+    let cfg = Cfg::of(&f);
+    if let Some((from, to)) = cfg.irreducible_edge(&cfg.analyses().0) {
+        // DEVIATE: the pin runs `FixIrreducibleControlFlow` here. Exit:
+        // translate it.
+        return Err(format!("@{name}: irreducible control flow (block {from} to {to}) is not supported yet"));
+    }
     if options.stackify {
         reg_stackify(&mut f);
     }
