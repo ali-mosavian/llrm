@@ -238,3 +238,11 @@ fn variadic_functions_read_their_buffer() {
 fn a_loop_with_two_entries_gets_one() {
     check("irreducible");
 }
+
+/// `unreachable` lowered to nothing, so control left a `noreturn` call by falling into the next block's
+/// code (Gorillas' `B_SERR` paths: a type mismatch at the end of the function). Wasm traps on it
+/// (`TrapUnreachable`).
+#[test]
+fn unreachable_traps() {
+    check("unreachable");
+}

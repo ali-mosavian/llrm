@@ -84,6 +84,8 @@ pub struct BuilderTarget {
     pub min_jump_table_entries: usize,
     /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit tests and peeling run.
     pub switch_optimize: bool,
+    /// `TargetOptions::TrapUnreachable`: an `unreachable` is a trap, so control that reaches it stops.
+    pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
     /// The library routines the target's runtime has, each with the calling
@@ -287,6 +289,7 @@ impl BuilderTarget {
             shift_amount_of: None,
             min_jump_table_entries: 4,
             switch_optimize: true,
+            trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
             stack_align: None,
@@ -323,6 +326,7 @@ impl BuilderTarget {
             shift_amount_of: None,
             min_jump_table_entries: 4,
             switch_optimize: true,
+            trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
             stack_align: None,
@@ -1686,6 +1690,19 @@ impl Builder<'_> {
         Ok((!void).then(|| self.join_from_calling(&parts, vt, assert)))
     }
 
+    /// `visitUnreachable`: a trap for a target that traps (`NoTrapAfterNoreturn` is off for it).
+    ///
+    /// DEVIATE: no exception for the call before it being a `llvm.trap`, which has no intrinsic here.
+    /// Exit: with the intrinsic.
+    fn visit_unreachable(&mut self) {
+        if !self.target.trap_unreachable {
+            return;
+        }
+        let root = self.root();
+        let trap = self.dag.get_node(ISD::Trap, EVT::OTHER, &[root]);
+        self.dag.set_root(trap);
+    }
+
     fn call_node(&self) -> ISD {
         self.target.target_nodes.map_or(super::x86isd::CALL, |t| t.call)
     }
@@ -2410,7 +2427,7 @@ impl Builder<'_> {
             Opcode::Alloca { .. }
                 if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
             Opcode::Alloca { allocated, align, .. } => self.visit_alloca(&instruction, *allocated, *align)?,
-            Opcode::Unreachable => {}
+            Opcode::Unreachable => self.visit_unreachable(),
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
             Opcode::Call(info) => {

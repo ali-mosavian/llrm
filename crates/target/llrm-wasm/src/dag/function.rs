@@ -74,6 +74,8 @@ pub fn builder_target(width: Width) -> BuilderTarget {
         // tests and peeling.
         min_jump_table_entries: 2,
         switch_optimize: false,
+        // `WebAssemblyTargetMachine`: `TrapUnreachable`.
+        trap_unreachable: true,
         target_nodes: Some(TargetNodes {
             call: ISD::Target(CALL),
             ret: ISD::Target(isd::RETURN),
