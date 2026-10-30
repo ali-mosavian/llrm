@@ -91,3 +91,37 @@ fn a_declaration_keeps_the_dbg_attachment_clang_puts_after_declare() {
     let again = parse::module(&once).expect("what is printed parses");
     assert_eq!(print::module(&again), once);
 }
+
+const ARGLIST: &str = include_str!("clang/arglist.ll");
+
+/// clang -O2 -g writes `#dbg_value(!DIArgList(i32 %a, i32 %b), !var,
+/// !DIExpression(DW_OP_LLVM_arg, 0, ...))` for a variable that is a sum of
+/// values. The parser stopped at it ("expected a type, found DIArgList") and
+/// ten of the benchmark programs could not be built with `-g` at all.
+#[test]
+fn a_debug_value_of_an_argument_list_parses_keeps_its_values_and_prints_back() {
+    let module = parse::module(ARGLIST).expect("the argument list parses");
+    let function = module
+        .functions()
+        .map(|(.., function)| function)
+        .find(|function| function.debug_records().iter().any(|one| matches!(one.what, llrm_mir::DebugWhat::Args(_))))
+        .expect("a function with a variadic record");
+    let record = function
+        .debug_records()
+        .iter()
+        .find(|one| matches!(one.what, llrm_mir::DebugWhat::Args(_)))
+        .expect("the record");
+    let llrm_mir::DebugWhat::Args(list) = record.what else { unreachable!() };
+    assert_eq!(function.debug_args(list).len(), 3);
+    let again = parse::module(&print::module(&module)).expect("what is printed parses");
+    let kept = |module: &llrm_mir::module::Module| -> usize {
+        module
+            .functions()
+            .flat_map(|(.., function)| {
+                function.debug_records().iter().map(|one| matches!(one.what, llrm_mir::DebugWhat::Args(_)))
+            })
+            .filter(|one| *one)
+            .count()
+    };
+    assert_eq!((kept(&module), kept(&again)), (1, 1));
+}

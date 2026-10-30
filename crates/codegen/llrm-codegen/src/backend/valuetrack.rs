@@ -64,13 +64,14 @@
 //! [`LiveDebugValues`](https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/LiveDebugValues/InstrRefBasedImpl.cpp).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind};
 use llrm_lir::registers::RegId;
 use llrm_object::debug::FrameRow;
 
 use super::masm::{Mark, Place};
-use crate::model::lir::{DebugNote, NoteValue};
+use crate::model::lir::{DebugNote, NoteArg, NoteExpr, NoteValue};
 
 /// What holds a value: a register as the instruction named it, or a frame cell.
 type Held = Place;
@@ -311,13 +312,16 @@ fn step(
 }
 
 /// Where a variable's value is.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Where {
     Place(Place),
     /// In no place: the value is the constant.
     Constant(i64),
     /// In no place: the value is that of the place plus a constant.
     Offset(Place, i64),
+    /// In no place: the expression of the values the registers hold, one for
+    /// each of its value arguments in order.
+    Expr(Arc<NoteExpr>, Vec<Place>),
 }
 
 /// `state` after the variable `note` names takes its value: the whole variable
@@ -337,11 +341,8 @@ fn noted(
                     _ => false,
                 },
         );
-    if let Some(value) = match note.value {
-        NoteValue::Nothing => None,
-        value => Some(value),
-    } {
-        state.has.insert((note.variable, note.piece), value);
+    if note.value != NoteValue::Nothing {
+        state.has.insert((note.variable, note.piece), note.value.clone());
     }
 }
 
@@ -355,6 +356,22 @@ fn holders(
     match state.has.get(&(variable, piece)) {
         None | Some(NoteValue::Nothing) => Vec::new(),
         Some(NoteValue::Constant(value)) => vec![Where::Constant(*value)],
+        Some(NoteValue::Expr(expr)) => {
+            // Each value argument in a register, or else a cell; one that is in
+            // neither leaves the variable nowhere.
+            let places: Option<Vec<Place>> = expr
+                .args
+                .iter()
+                .filter_map(|arg| if let NoteArg::Value(value) = arg { Some(*value) } else { None })
+                .map(|value| {
+                    let mut found: Vec<&Held> =
+                        state.holds.iter().filter(|(_, held)| **held == value).map(|(held, _)| held).collect();
+                    found.sort_by_key(|held| matches!(held, Held::Cell { .. }));
+                    found.first().map(|held| **held)
+                })
+                .collect();
+            places.map(|places| vec![Where::Expr(Arc::clone(expr), places)]).unwrap_or_default()
+        }
         Some(&(NoteValue::Value(value) | NoteValue::Offset(value, _))) => {
             let add = match state.has.get(&(variable, piece)) {
                 Some(&NoteValue::Offset(_, add)) => Some(add),

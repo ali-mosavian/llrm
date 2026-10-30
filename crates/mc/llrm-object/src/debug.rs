@@ -400,9 +400,36 @@ pub enum Location {
     /// The value of the place plus a constant (`DW_OP_plus_uconst, n,
     /// DW_OP_stack_value`), which is in no place.
     Offset(Box<Location>, i64),
+    /// What the operations make of the arguments, which are in no place of
+    /// their own: a register, a frame cell or a constant each, with the bytes
+    /// of the value a cell holds, pushed by [`ExprOp::Arg`]. The value itself
+    /// where `value`, else the place it addresses.
+    Expression { args: Vec<(Location, u32)>, ops: Vec<ExprOp>, value: bool },
     /// Its bytes in pieces, from the first: each piece's size in bytes and
     /// where it is; none for a piece that is nowhere.
     Pieces(Vec<(u32, Option<Location>)>),
+}
+
+/// One operation of a [`Location::Expression`], on a stack.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ExprOp {
+    /// Push the expression's `n`th argument (`DW_OP_LLVM_arg`).
+    Arg(u32),
+    Constu(u64),
+    Consts(i64),
+    PlusUconst(u64),
+    Plus,
+    Minus,
+    Mul,
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    Shra,
+    Not,
+    Neg,
+    Deref,
 }
 
 impl Location {

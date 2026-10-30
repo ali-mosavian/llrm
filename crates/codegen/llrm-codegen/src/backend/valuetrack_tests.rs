@@ -27,7 +27,7 @@ fn firsts(ranges: &[(usize, usize, Vec<Where>)]) -> Vec<(usize, usize, Where)> {
     for (from, to, places) in ranges {
         match out.last_mut() {
             Some(last) if last.1 == *from && last.2 == places[0] => last.1 = *to,
-            _ => out.push((*from, *to, places[0])),
+            _ => out.push((*from, *to, places[0].clone())),
         }
     }
     out
@@ -149,7 +149,7 @@ fn a_value_copied_to_another_register_is_in_both_until_the_first_is_overwritten(
         found[&(1, None)],
         [
             (5, 7, vec![Where::Place(Place::Register(RegId::from(EAX)))]),
-            (7, 9, vec![Where::Place(Place::Register(RegId::from(EAX))), ebx]),
+            (7, 9, vec![Where::Place(Place::Register(RegId::from(EAX))), ebx.clone()]),
             (9, 10, vec![ebx])
         ]
     );

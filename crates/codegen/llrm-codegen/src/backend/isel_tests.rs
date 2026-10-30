@@ -7116,3 +7116,61 @@ out:
     assert!(listing.iter().any(|line| line.starts_with("fcom dword ptr")), "{listing:?}");
     assert!(!listing.iter().any(|line| line.starts_with("fxch")), "{listing:?}");
 }
+
+mod expression_notes {
+    use llrm_mir::DwOp;
+    use llrm_mir::module::DwBinary;
+    use llrm_object::debug::ExprOp;
+
+    use crate::backend::isel::expression_note;
+    use crate::model::lir::{NoteArg, NoteExpr, NoteValue};
+
+    fn expr(
+        args: Vec<NoteArg>,
+        ops: Vec<ExprOp>,
+        value: bool,
+    ) -> NoteValue {
+        NoteValue::Expr(std::sync::Arc::new(NoteExpr { args, ops, value }))
+    }
+
+    /// A leading `DW_OP_deref` on a lone value (no `DW_OP_stack_value`) says
+    /// the variable lives in the memory the value addresses: a note of a value
+    /// that was not, and the dereference lost, made the pointer the variable.
+    #[test]
+    fn a_leading_deref_makes_the_value_an_address() {
+        let (note, piece) = expression_note(vec![NoteValue::Value(3)], vec![DwOp::Deref], false);
+        assert_eq!(piece, None);
+        assert_eq!(note, expr(vec![NoteArg::Value(3)], vec![ExprOp::Arg(0)], false));
+    }
+
+    /// A deref after other operations, then `DW_OP_stack_value`, is a value.
+    #[test]
+    fn a_deref_inside_a_value_expression_stays() {
+        let ops = vec![DwOp::PlusUconst(4), DwOp::Deref, DwOp::StackValue];
+        let (note, _) = expression_note(vec![NoteValue::Value(3)], ops, false);
+        assert_eq!(
+            note,
+            expr(vec![NoteArg::Value(3)], vec![ExprOp::Arg(0), ExprOp::PlusUconst(4), ExprOp::Deref], true)
+        );
+    }
+
+    /// A trailing fragment is the part of the variable, not an operation.
+    #[test]
+    fn a_trailing_fragment_is_the_piece() {
+        let ops =
+            vec![DwOp::Arg(0), DwOp::Constu(2), DwOp::Binary(DwBinary::Shl), DwOp::Fragment { offset: 32, size: 16 }];
+        let (note, piece) = expression_note(vec![NoteValue::Value(7)], ops, true);
+        assert_eq!(piece, Some((4, 2)));
+        assert_eq!(note, expr(vec![NoteArg::Value(7)], vec![ExprOp::Arg(0), ExprOp::Constu(2), ExprOp::Shl], true));
+    }
+
+    /// An argument no operation names, an operation not read, or an argument
+    /// with no value says nothing rather than a wrong value.
+    #[test]
+    fn what_cannot_be_said_is_nothing() {
+        let said = |args: Vec<NoteValue>, ops: Vec<DwOp>| expression_note(args, ops, true).0;
+        assert_eq!(said(vec![NoteValue::Value(1)], vec![DwOp::Arg(1)]), NoteValue::Nothing);
+        assert_eq!(said(vec![NoteValue::Value(1)], vec![DwOp::Arg(0), DwOp::Other]), NoteValue::Nothing);
+        assert_eq!(said(vec![NoteValue::Nothing], vec![DwOp::Arg(0)]), NoteValue::Nothing);
+    }
+}

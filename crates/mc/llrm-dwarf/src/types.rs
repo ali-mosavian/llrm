@@ -1,7 +1,7 @@
 //! The DIE tree of `Info`: the compile unit, its types, globals and functions.
 
 use llrm_object::debug::{
-    self as model, Block, FrameBase, Function, Info, Kind, Language, Location, Reach, Scalar, Type, Variable,
+    self as model, Block, ExprOp, FrameBase, Function, Info, Kind, Language, Location, Reach, Scalar, Type, Variable,
 };
 use llrm_object::{Binding, Object, Unsupported};
 
@@ -345,6 +345,59 @@ impl Tree<'_> {
                 }
                 _ => refused("a value plus a constant is said for a value in a register"),
             },
+            // The arguments each as a value on the stack (DW_OP_bregN 0, or
+            // DW_OP_consts), then the operations; DW_OP_stack_value where the
+            // result is the value.
+            Location::Expression { args, ops, value } => {
+                let mut pushed = Vec::new();
+                for (arg, bytes) in args {
+                    pushed.push(match arg {
+                        Location::Frame { .. } => {
+                            let Ok(size) = u8::try_from(*bytes) else {
+                                return refused("an expression's cell is read at a width of a byte count");
+                            };
+                            [self.expression(arg)?, vec![0x94, size]].concat()
+                        }
+                        Location::Register(name) => {
+                            let named = self.register(name)?;
+                            match named[..] {
+                                [one] if (0x50..0x70).contains(&one) => [vec![one + 0x20], crate::sleb(0)].concat(),
+                                _ => [vec![0x92], named[1..].to_vec(), crate::sleb(0)].concat(),
+                            }
+                        }
+                        Location::Constant(value) => [vec![0x11], crate::sleb(*value)].concat(),
+                        _ => return refused("an expression's argument is a register, a cell or a constant"),
+                    });
+                }
+                let mut out = Vec::new();
+                for op in ops {
+                    match *op {
+                        ExprOp::Arg(n) => match pushed.get(n as usize) {
+                            Some(bytes) => out.extend(bytes),
+                            None => return refused("an expression names an argument it does not have"),
+                        },
+                        ExprOp::Constu(n) => out.extend([vec![0x10], crate::uleb(n)].concat()),
+                        ExprOp::Consts(n) => out.extend([vec![0x11], crate::sleb(n)].concat()),
+                        ExprOp::PlusUconst(n) => out.extend([vec![0x23], crate::uleb(n)].concat()),
+                        ExprOp::Plus => out.push(0x22),
+                        ExprOp::Minus => out.push(0x1c),
+                        ExprOp::Mul => out.push(0x1e),
+                        ExprOp::And => out.push(0x1a),
+                        ExprOp::Or => out.push(0x21),
+                        ExprOp::Xor => out.push(0x27),
+                        ExprOp::Shl => out.push(0x24),
+                        ExprOp::Shr => out.push(0x25),
+                        ExprOp::Shra => out.push(0x26),
+                        ExprOp::Not => out.push(0x20),
+                        ExprOp::Neg => out.push(0x1f),
+                        ExprOp::Deref => out.push(0x06),
+                    }
+                }
+                if *value {
+                    out.push(0x9F);
+                }
+                Ok(out)
+            }
             // DW_OP_consts, DW_OP_stack_value.
             Location::Constant(value) => Ok([vec![0x11], crate::sleb(*value), vec![0x9F]].concat()),
             // Each piece's place, then DW_OP_piece and its size; a piece with
@@ -375,6 +428,7 @@ impl Tree<'_> {
             | Location::Relative { .. }
             | Location::Constant(_)
             | Location::Offset(..)
+            | Location::Expression { .. }
             | Location::Pieces(_) => Value::Expr(self.expression(location)?),
             Location::Static { symbol, disp } => Value::ExprAddr { symbol: *symbol, delta: *disp },
             Location::List(entries) => Value::LocList(self.list(entries)?),

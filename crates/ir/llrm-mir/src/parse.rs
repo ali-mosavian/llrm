@@ -1636,6 +1636,21 @@ impl Parser {
         let Token::Word(word) = self.next() else { unreachable!("a record") };
         self.expect_punct('(')?;
         let what = match word.as_str() {
+            "#dbg_value" if matches!(self.peek(), Token::MetadataName(name) if name == "DIArgList") => {
+                // clang's `!DIArgList(i32 %a, i32 %b)`: the values an
+                // expression's `DW_OP_LLVM_arg n` names.
+                self.next();
+                self.expect_punct('(')?;
+                let mut values = Vec::new();
+                while !self.eat_punct(')') {
+                    if !values.is_empty() {
+                        self.expect_punct(',')?;
+                    }
+                    values.push(self.typed_value(local)?.1);
+                }
+                self.expect_punct(',')?;
+                DebugWhat::Args(local.function.add_debug_args(values))
+            }
             "#dbg_declare" | "#dbg_value" | "#dbg_piece" => {
                 let (_, at) = self.typed_value(local)?;
                 self.expect_punct(',')?;
@@ -1669,7 +1684,10 @@ impl Parser {
         // clang's `, !DIExpression(), !loc` after a declare or value's
         // variable.
         let (mut expression, mut location) = (None, None);
-        if matches!(what, DebugWhat::Declare(_) | DebugWhat::Value(_)) && self.eat_punct(',') {
+        if matches!(
+            what,
+            DebugWhat::Declare(_) | DebugWhat::Value(_) | DebugWhat::Args(_)
+        ) && self.eat_punct(',') {
             expression = Some(self.record_node()?);
             if self.eat_punct(',') {
                 location = Some(self.record_node()?);

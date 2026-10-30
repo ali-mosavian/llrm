@@ -662,7 +662,11 @@ impl Symbols<'_> {
                 self.record(if self.wide { 0x020C } else { 0x010C }, &data)?;
                 Ok(())
             }
-            Location::List(_) | Location::Constant(_) | Location::Offset(..) | Location::Pieces(_) => Ok(()),
+            Location::List(_)
+            | Location::Constant(_)
+            | Location::Offset(..)
+            | Location::Expression { .. }
+            | Location::Pieces(_) => Ok(()),
             Location::Frame { disp } => {
                 let mut data = Vec::new();
                 let frame = &self.info.registers().frame;

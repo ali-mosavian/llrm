@@ -87,7 +87,7 @@ use std::collections::BTreeSet;
 
 use llrm_lir::registers::RegId;
 use llrm_mir::{MetadataId, debuginfo as di};
-use llrm_object::debug::{self as model, DebugOptions, Info, Kind, Location, Variable};
+use llrm_object::debug::{self as model, DebugOptions, ExprOp, Info, Kind, Location, Variable};
 
 use crate::backend::objbuild::Segment;
 use crate::backend::{globals, masm};
@@ -597,11 +597,37 @@ fn unhexed(hex: &str) -> Option<Vec<u8>> {
 /// Where one value is, as the model says it.
 fn located(at: super::valuetrack::Where) -> Location {
     match at {
+        super::valuetrack::Where::Expr(expr, places) => {
+            let mut places = places.into_iter();
+            let args = expr
+                .args
+                .iter()
+                .map(|arg| match arg {
+                    crate::model::lir::NoteArg::Value(_) => {
+                        let place = places.next().expect("a place for each value argument");
+                        let bytes = if let masm::Place::Cell { bytes, .. } = place { bytes } else { 0 };
+                        (located(super::valuetrack::Where::Place(place)), bytes)
+                    }
+                    crate::model::lir::NoteArg::Constant(value) => (Location::Constant(*value), 0),
+                })
+                .collect();
+            Location::Expression { args, ops: expr.ops.clone(), value: expr.value }
+        }
         super::valuetrack::Where::Place(masm::Place::Register(register)) => {
             Location::Register(format!("{register:?}").to_lowercase())
         }
         super::valuetrack::Where::Place(masm::Place::Cell { disp, .. }) => Location::Frame { disp },
         super::valuetrack::Where::Constant(value) => Location::Constant(value),
+        // A value in a cell plus a constant is read at the cell's width.
+        super::valuetrack::Where::Offset(masm::Place::Cell { disp, bytes }, add) => Location::Expression {
+            args: vec![(Location::Frame { disp }, bytes)],
+            ops: if add >= 0 {
+                vec![ExprOp::Arg(0), ExprOp::PlusUconst(add as u64)]
+            } else {
+                vec![ExprOp::Arg(0), ExprOp::Constu(add.unsigned_abs()), ExprOp::Minus]
+            },
+            value: true,
+        },
         super::valuetrack::Where::Offset(place, add) => {
             Location::Offset(Box::new(located(super::valuetrack::Where::Place(place))), add)
         }
@@ -619,7 +645,7 @@ fn stable(
     if last.1 < until || ranges.windows(2).any(|pair| pair[0].1 != pair[1].0) {
         return None;
     }
-    let place = first.2.iter().copied().find(|place| {
+    let place = first.2.iter().cloned().find(|place| {
         matches!(place, super::valuetrack::Where::Place(_)) && ranges.iter().all(|one| one.2.contains(place))
     })?;
     Some((first.0, place))
@@ -643,7 +669,7 @@ fn combined(
     for pair in edges.windows(2) {
         let (from, to) = (pair[0], pair[1]);
         let at = |ranges: &Vec<(usize, usize, super::valuetrack::Where)>| {
-            ranges.iter().find(|&&(a, b, _)| a <= from && to <= b).map(|&(.., place)| place)
+            ranges.iter().find(|(a, b, _)| *a <= from && to <= *b).map(|(.., place)| place.clone())
         };
         let location =
             if let Some(whole) = parts.iter().find(|(piece, _)| piece.is_none()).and_then(|(_, ranges)| at(ranges)) {
@@ -895,6 +921,7 @@ pub fn laid_out(
                         }
                         _ => None,
                     };
+                    let is_single = single.is_some();
                     let entries: Vec<(model::Range, Location)> = match single {
                         Some(Some((from, place))) => vec![(
                             model::Range { section, offset: start + from, length: end - start - from },
@@ -907,7 +934,10 @@ pub fn laid_out(
                                 .map(|(piece, ranges)| {
                                     (
                                         piece,
-                                        ranges.into_iter().map(|(from, to, places)| (from, to, places[0])).collect(),
+                                        ranges
+                                            .into_iter()
+                                            .map(|(from, to, places)| (from, to, places[0].clone()))
+                                            .collect(),
                                     )
                                 })
                                 .collect(),
@@ -918,7 +948,7 @@ pub fn laid_out(
                         })
                         .collect(),
                     };
-                    if single.is_some() {
+                    if is_single {
                         // A cell is a frame variable like any other.
                         if let [(_, Location::Frame { disp })] = &entries[..] {
                             variables.push(Variable {
@@ -1104,10 +1134,35 @@ pub fn laid_out(
 #[cfg(test)]
 mod tests {
     use llrm_lir::registers::RegId;
+    use llrm_object::debug::{ExprOp, Location};
 
     use super::super::masm::Place;
     use super::super::valuetrack::Where;
-    use super::stable;
+    use super::{located, stable};
+
+    /// A value in a cell plus a constant was refused by the DWARF writer ("said
+    /// for a value in a register"): the variable had no location. It is the
+    /// cell read at its width, plus the constant.
+    #[test]
+    fn a_cell_plus_a_constant_is_an_expression() {
+        let cell = Place::Cell { disp: -8, bytes: 4 };
+        assert_eq!(
+            located(Where::Offset(cell, 12)),
+            Location::Expression {
+                args: vec![(Location::Frame { disp: -8 }, 4)],
+                ops: vec![ExprOp::Arg(0), ExprOp::PlusUconst(12)],
+                value: true,
+            }
+        );
+        assert_eq!(
+            located(Where::Offset(cell, -3)),
+            Location::Expression {
+                args: vec![(Location::Frame { disp: -8 }, 4)],
+                ops: vec![ExprOp::Arg(0), ExprOp::Constu(3), ExprOp::Minus],
+                value: true,
+            }
+        );
+    }
 
     fn reg(register: llrm_lir::registers::RegId) -> Where {
         Where::Place(Place::Register(register))

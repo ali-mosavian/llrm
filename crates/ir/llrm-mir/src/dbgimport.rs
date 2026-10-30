@@ -69,7 +69,10 @@ impl Import {
             let mut parameters: Vec<(i64, String, MetadataId)> = Vec::new();
             let mut made: HashMap<MetadataId, MetadataId> = HashMap::default();
             for record in &mut records {
-                if !matches!(record.what, DebugWhat::Declare(_) | DebugWhat::Value(_)) {
+                if !matches!(
+                    record.what,
+                    DebugWhat::Declare(_) | DebugWhat::Value(_) | DebugWhat::Args(_)
+                ) {
                     continue;
                 }
                 let old = record.variable;

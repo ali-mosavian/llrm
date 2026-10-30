@@ -787,6 +787,23 @@ impl Function {
     }
 
     /// What `-g` says of the variables, in the order of the program.
+    pub fn debug_args(
+        &self,
+        list: u32,
+    ) -> &[Operand] {
+        &self.debug_arglists[list as usize]
+    }
+
+    /// A list of values a record is made of; the record names it by the
+    /// number this returns.
+    pub fn add_debug_args(
+        &mut self,
+        values: Vec<Operand>,
+    ) -> u32 {
+        self.debug_arglists.push(values);
+        u32::try_from(self.debug_arglists.len() - 1).expect("a few lists")
+    }
+
     pub fn debug_records(&self) -> &[DebugRecord] {
         &self.debug_records
     }
@@ -829,6 +846,11 @@ impl Function {
                 *at = with;
             }
         }
+        for one in self.debug_arglists.iter_mut().flatten() {
+            if *one == Operand::Value(value) {
+                *one = with;
+            }
+        }
     }
 
     /// What named `value` says nothing now (a use of it in a record is no use,
@@ -848,6 +870,9 @@ impl Function {
         for record in &mut self.debug_records {
             match record.what {
                 DebugWhat::Value(at) if at == Operand::Value(value) => record.what = DebugWhat::Gone,
+                DebugWhat::Args(list) if self.debug_arglists[list as usize].contains(&Operand::Value(value)) => {
+                    record.what = DebugWhat::Gone
+                }
                 DebugWhat::Piece { value: at, offset, bytes } if at == Operand::Value(value) => {
                     record.what = DebugWhat::GonePiece { offset, bytes }
                 }

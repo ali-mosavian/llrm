@@ -203,7 +203,11 @@ impl Writer<'_> {
                             parent += size;
                         }
                     }
-                    Location::List(_) | Location::Static { .. } | Location::Constant(_) | Location::Offset(..) => {}
+                    Location::List(_)
+                    | Location::Static { .. }
+                    | Location::Constant(_)
+                    | Location::Offset(..)
+                    | Location::Expression { .. } => {}
                 }
             }
         }

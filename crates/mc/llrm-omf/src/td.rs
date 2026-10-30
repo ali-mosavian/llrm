@@ -397,6 +397,7 @@ impl Builder<'_> {
             | Location::List(_)
             | Location::Constant(_)
             | Location::Offset(..)
+            | Location::Expression { .. }
             | Location::Pieces(_)
             | Location::Relative { .. } => return Ok(Vec::new()),
         }

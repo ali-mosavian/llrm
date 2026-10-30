@@ -2049,3 +2049,55 @@ fn a_variable_alloca_at_m64_names_the_quadword_stack_pointer() {
                 define void @f(i64 %n) {\n  %p = alloca i32, i64 %n, align 16\n  call void @use(ptr %p)\n  ret void\n}\n";
     compiled(&flags(&["-O1", "--isel=dag", "-fverify-ir"]), text, "f").unwrap();
 }
+
+/// `!DIArgList` records (a variable made of several values) were read by no
+/// pass: `sum` in `bench_recgcd` had no location over the code that follows
+/// the record, and gdb printed `<optimized out>`.
+#[test]
+fn a_variable_made_of_several_values_has_an_expression_location() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/arglist_sum.ll")
+        .lines()
+        .map(
+            |line| {
+                if line.starts_with("target datalayout") { "target datalayout = \"@m32-datalayout@\"" } else { line }
+            },
+        )
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, format) = compiled(&flags(&["-m32", "-g", "-fobject-format=elf"]), &text, "arglist").unwrap();
+    let object = llrm_codegen::backend::objbuild::built_in(
+        &built,
+        "arglist.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    let debug = object.debug.expect("debug info");
+    let made = |location: &llrm_object::debug::Location| match location {
+        llrm_object::debug::Location::Expression { .. } => true,
+        llrm_object::debug::Location::List(entries) => {
+            entries.iter().any(|(_, one)| matches!(one, llrm_object::debug::Location::Expression { .. }))
+        }
+        _ => false,
+    };
+    let variables: Vec<_> = debug.functions.iter().flat_map(|function| function.variables.iter()).collect();
+    for name in ["d", "e"] {
+        assert!(
+            variables.iter().any(|variable| variable.name == name && made(&variable.location)),
+            "{name}: {variables:#?}"
+        );
+    }
+    // `d` is `%mul + %xor`: DW_OP_breg0 0, DW_OP_breg2 0, DW_OP_plus,
+    // DW_OP_stack_value.
+    let bytes = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "arglist.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    let sum = [0x70, 0x00, 0x72, 0x00, 0x22, 0x9f];
+    assert!(bytes.windows(sum.len()).any(|window| window == sum), "the sum's expression is in the object");
+}

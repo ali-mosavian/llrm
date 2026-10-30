@@ -231,6 +231,12 @@ pub fn fingerprint(function: &Function) -> u128 {
                         digest.write_u8(2);
                         operand(&mut digest, at);
                     }
+                    DebugWhat::Args(list) => {
+                        digest.write_u8(6);
+                        for &one in function.debug_args(list) {
+                            operand(&mut digest, one);
+                        }
+                    }
                     DebugWhat::Piece { value, offset, bytes } => {
                         digest.write_u8(3);
                         operand(&mut digest, value);
@@ -590,6 +596,17 @@ impl Printer<'_> {
                             out,
                             "  #dbg_value({}, !{}{extra})",
                             self.typed(function, slots, at),
+                            record.variable.0
+                        ),
+                        DebugWhat::Args(list) => writeln!(
+                            out,
+                            "  #dbg_value(!DIArgList({}), !{}{extra})",
+                            function
+                                .debug_args(list)
+                                .iter()
+                                .map(|&one| self.typed(function, slots, one))
+                                .collect::<Vec<_>>()
+                                .join(", "),
                             record.variable.0
                         ),
                         DebugWhat::Piece { value, offset, bytes } => writeln!(
