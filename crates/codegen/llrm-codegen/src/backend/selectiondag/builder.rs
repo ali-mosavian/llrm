@@ -26,7 +26,7 @@ use super::fold::mask;
 use super::function_lowering::FunctionLoweringInfo;
 use super::isd::{CondCode, ISD};
 use super::mvt::{EVT, MVT};
-use super::target_calling::{Ext, In, Out, TargetCalling};
+use super::target_calling::{Ext, In, Out, Site, TargetCalling};
 use crate::backend::isel::{Convention, Parameter, convention_for};
 
 /// An instruction the builder does not translate yet; the shadow harness
@@ -445,6 +445,20 @@ fn dag_name(
     dag.block_name(block.0).to_owned()
 }
 
+/// An attribute that moves an argument out of the place its type gives it
+/// (`sret` to `x8`, `byval` to memory, `inreg`, `nest`, the Swift ones): a target's calling
+/// hook that does not place them refuses.
+fn relocating_attribute(attrs: &[llrm_mir::opcode::Attribute]) -> Option<&'static str> {
+    use llrm_mir::opcode::Attribute;
+    const TYPED: [&str; 5] = ["sret", "byval", "byref", "inalloca", "preallocated"];
+    const FLAGS: [&str; 5] = ["inreg", "nest", "swiftself", "swifterror", "swiftasync"];
+    attrs.iter().find_map(|attr| match attr {
+        Attribute::Type(name, _) => TYPED.into_iter().find(|one| name == one),
+        Attribute::Flag(name) => FLAGS.into_iter().find(|one| name == one),
+        _ => None,
+    })
+}
+
 impl<'a> Builder<'a> {
     /// The whole target description, for the paths that read x86-style
     /// `calling.toml` conventions, string registers and runtime routines.
@@ -543,6 +557,8 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
+            call_attrs_move_arguments: false,
+            fixed_args: 0,
             had_tail_call: false,
             volatile_memory: false,
             block,
@@ -583,6 +599,10 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is to a variadic function: at m64
     /// `lower_call` sets `al` to the vector registers it uses.
     variadic_call: bool,
+    /// The call being lowered has an argument whose attribute moves it (`relocating_attribute`).
+    call_attrs_move_arguments: bool,
+    /// The parameters the callee declares: the arguments after them are variadic.
+    fixed_args: usize,
     /// A `TC_RETURN` ended the block: nothing after the call is built.
     had_tail_call: bool,
     /// The memory intrinsic being lowered is volatile.
@@ -987,6 +1007,9 @@ impl Builder<'_> {
         outside: &llrm_support::hash::HashSet<ValueId>,
     ) -> Result<(), Refused> {
         let parameters = self.function.parameters().to_vec();
+        if self.function.parameter_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()) {
+            return Err(Refused("a parameter attribute that moves it, with a target's calling hook"));
+        }
         let mut ins = Vec::new();
         let mut shapes = Vec::new();
         for &arg in &parameters {
@@ -998,8 +1021,10 @@ impl Builder<'_> {
             let pointer = self.is_pointer_type(ty);
             let parts = self.calling_parts(vt)?;
             shapes.push((vt, parts.len()));
-            ins.extend(parts.into_iter().map(|vt| In { vt, pointer }));
+            let split = parts.len() > 1;
+            ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
         }
+        calling.accepts(&self.dag, Site::Arguments, &[], &ins).map_err(Refused)?;
         let entry = self.dag.entry_node();
         let mut offsets = Vec::new();
         let mut live_in = |reg: RegId| {
@@ -1230,21 +1255,37 @@ impl Builder<'_> {
             arg_types
                 .push(self.function.operand_type(&self.module.context, *argument).ok_or(Refused("block argument"))?);
         }
-        let first = self.full_arch()?.first_argument_offset(false);
-        let (result_type, _, variadic) = self.module.signature(info.function_type);
-        let plan = convention_for(
-            self.module,
-            self.layout,
-            self.full_arch()?,
-            first,
-            info.calling_convention,
-            result_type,
-            variadic,
-            &arg_types,
-            &info.argument_attrs,
-        )
-        .map_err(|_| Refused("call the convention does not describe"))?;
+        let (result_type, named, variadic) = self.module.signature(info.function_type);
+        let named = named.len();
+        // A target with a calling hook places every part itself: it reads no plan.
+        let hooked = self.calling().is_some();
+        let first = if hooked { 0 } else { self.full_arch()?.first_argument_offset(false) };
+        let plan = if hooked {
+            Convention {
+                parameters: Vec::new(),
+                returns: Vec::new(),
+                float_result: None,
+                popped: 0,
+                saved: Vec::new(),
+                stack_arguments: 0,
+                first: 0,
+            }
+        } else {
+            convention_for(
+                self.module,
+                self.layout,
+                self.full_arch()?,
+                first,
+                info.calling_convention,
+                result_type,
+                variadic,
+                &arg_types,
+                &info.argument_attrs,
+            )
+            .map_err(|_| Refused("call the convention does not describe"))?
+        };
         if let Some(tail) = self.tail_candidate.take()
+            && !hooked
             && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
         {
             self.tail_calls.push(tail);
@@ -1347,6 +1388,8 @@ impl Builder<'_> {
             }
         }
         self.variadic_call = variadic;
+        self.fixed_args = named;
+        self.call_attrs_move_arguments = info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some());
         let result =
             self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
         if let (true, Some(answer)) = (flags_answer, result) {
@@ -1449,6 +1492,10 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<Vec<EVT>, Refused> {
+        // A float is one part, in a register of its own class: the target's `accepts` says which.
+        if vt.is_floating_point() {
+            return Ok(vec![vt]);
+        }
         if !vt.is_integer() {
             return Err(Refused("a value that is no integer, with a target's calling hook"));
         }
@@ -1519,32 +1566,58 @@ impl Builder<'_> {
         if sibling || flags_answer || byvals.iter().any(Option::is_some) {
             return Err(Refused("tail call, flags answer or byval with a target's calling hook"));
         }
+        if std::mem::take(&mut self.call_attrs_move_arguments) {
+            return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
+        }
         let mut outs = Vec::new();
+        let variadic_from = if std::mem::take(&mut self.variadic_call) { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
                 Some(ISD::SignExtend) => Ext::Sign,
                 Some(ISD::ZeroExtend) => Ext::Zero,
                 _ => Ext::Any,
             };
-            for piece in self.split_for_calling(*value, ext)? {
-                outs.push(Out { value: piece, ext, pointer: false });
+            let arg_vt = self.dag.value_type(*value);
+            let pieces = self.split_for_calling(*value, ext)?;
+            let split = pieces.len() > 1;
+            for piece in pieces {
+                outs.push(Out { value: piece, ext, pointer: false, arg_vt, split, variadic: at >= variadic_from });
             }
         }
         let void = self.module.context.types.is_void(result_type);
-        let (vt, ins) = if void {
-            (EVT::OTHER, Vec::new())
-        } else {
-            if self.is_aggregate(result_type) {
-                return Err(Refused("an aggregate result with a target's calling hook"));
+        // `ComputeValueVTs`: an aggregate result is its leaves, each answered like a scalar result.
+        let mut layout: Vec<(EVT, usize)> = Vec::new();
+        let mut ins: Vec<In> = Vec::new();
+        let aggregate = !void && self.is_aggregate(result_type);
+        if !void {
+            let leaf_types: Vec<TypeId> =
+                if aggregate { self.leaves(result_type)?.into_iter().map(|(leaf, _)| leaf).collect() } else { vec![result_type] };
+            for leaf in leaf_types {
+                let vt = self.type_of(leaf)?;
+                let pointer = self.is_pointer_type(leaf);
+                let parts = self.calling_parts(vt)?;
+                let split = parts.len() > 1;
+                layout.push((vt, parts.len()));
+                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
             }
-            let vt = self.type_of(result_type)?;
-            let pointer = self.is_pointer_type(result_type);
-            (vt, self.calling_parts(vt)?.into_iter().map(|vt| In { vt, pointer }).collect())
-        };
+        }
+        let vt = layout.first().map_or(EVT::OTHER, |(vt, _)| *vt);
+        calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
         let (chain, parts) = calling.lower_call(&mut self.dag, root, callee_node, &outs, &ins);
         self.dag.set_root(chain);
-        Ok((!void).then(|| self.join_from_calling(&parts, vt)))
+        if void {
+            return Ok(None);
+        }
+        let mut rest = &parts[..];
+        let mut leaves = Vec::new();
+        for (leaf_vt, count) in layout {
+            let (mine, tail) = rest.split_at(count);
+            leaves.push(self.join_from_calling(mine, leaf_vt));
+            rest = tail;
+        }
+        let _ = vt;
+        Ok(Some(if aggregate { self.merge(&leaves) } else { leaves[0] }))
     }
 
     fn call_node(&self) -> ISD {
@@ -1885,10 +1958,14 @@ impl Builder<'_> {
                 Ext::Any
             };
             let pointer = self.is_pointer_type(ty);
-            for piece in self.split_for_calling(value, ext)? {
-                outs.push(Out { value: piece, ext, pointer });
+            let arg_vt = self.dag.value_type(value);
+            let pieces = self.split_for_calling(value, ext)?;
+            let split = pieces.len() > 1;
+            for piece in pieces {
+                outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false });
             }
         }
+        calling.accepts(&self.dag, Site::Return, &outs, &[]).map_err(Refused)?;
         let node = calling.lower_return(&mut self.dag, chain, &outs);
         self.dag.set_root(node);
         Ok(())
@@ -3299,6 +3376,97 @@ mod f80_tests {
         );
         assert_eq!(*stub.outs.lock().unwrap(), [(2, 2), (4, 4)]);
         assert_eq!(*stub.ins.lock().unwrap(), [EVT::I8; 4]);
+    }
+
+    /// A target that records the result parts the builder asks it to place.
+    #[derive(Debug, Default)]
+    struct Results {
+        calls: std::sync::Mutex<usize>,
+        results: std::sync::Mutex<Vec<EVT>>,
+    }
+
+    impl TargetCalling for Results {
+        fn lower_call(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            callee: SDValue,
+            _outs: &[Out],
+            ins: &[In],
+        ) -> (SDValue, Vec<SDValue>) {
+            *self.calls.lock().unwrap() += 1;
+            *self.results.lock().unwrap() = ins.iter().map(|one| one.vt).collect();
+            let call = dag.get_node_multi(super::super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee]);
+            let values = ins.iter().map(|one| dag.get_constant(0, one.vt)).collect();
+            (SDValue { node: call.node, res: 0 }, values)
+        }
+
+        fn lower_formal_arguments(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            ins: &[In],
+            _fixed: FixedObject,
+            live_in: LiveIn,
+        ) -> Vec<SDValue> {
+            ins.iter().map(|one| dag.get_copy_from_reg(chain, live_in(RegId::AL), one.vt)).collect()
+        }
+
+        fn lower_return(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            _outs: &[Out],
+        ) -> SDValue {
+            dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain])
+        }
+    }
+
+    fn built_with_results(
+        body: &str,
+        stub: &'static Results,
+    ) {
+        let text = format!("target datalayout = \"e-p:32:32-n8:16:32\"\n{body}");
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let (id, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("f");
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        let target = BuilderTarget {
+            legal_ints: vec![8],
+            target_nodes: Some(TargetNodes {
+                call: super::super::x86isd::CALL,
+                ret: super::super::x86isd::RET_GLUE,
+                stack_pointer: "esp",
+                big_endian: false,
+                calling: Some(stub),
+            }),
+            ..BuilderTarget::m32()
+        };
+        build_block(
+            &module,
+            function,
+            &layout,
+            &target,
+            &llrm_x86_m32::M32,
+            &convention,
+            &mut info,
+            function.entry().unwrap(),
+        )
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    }
+
+    /// A call returning `{ i8, i8 }` was refused ("an aggregate result with a target's calling hook");
+    /// the hook is asked for each leaf's parts.
+    #[test]
+    fn a_struct_result_is_answered_leaf_by_leaf() {
+        let stub: &'static Results = Box::leak(Box::default());
+        built_with_results(
+            "declare { i8, i8 } @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = call { i8, i8 } @g(i8 %a)\n  %v = extractvalue { i8, i8 } %r, 1\n  ret i8 %v\n}",
+            stub,
+        );
+        assert_eq!(*stub.results.lock().unwrap(), [EVT::I8, EVT::I8]);
     }
 }
 
