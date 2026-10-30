@@ -983,6 +983,27 @@ def partition_problems(files: list[Path], legs: list[Path], count: int) -> list[
     return out
 
 
+BASE_COUNTS: Path | None = None  # --base-counts: the frozen counts file to judge the pinned waivers against, instead of tools/bench/frozen/
+
+
+def frozen_judge(measured: dict, root: Path = ROOT) -> tuple[list[str], list[str]]:
+    """(problems, lines) of the rows against the commits the waiver files are pinned to (basecounts.pinned_bases): each judged against that commit's
+    frozen counts, never rebuilt, by the waivers pinned to it. The default judge never sees those waivers."""
+    problems, lines = [], []
+    for sha in basecounts.pinned_bases(root):
+        pinned = basecounts.waivers(root, sha)
+        data = basecounts.load_frozen(sha, root, BASE_COUNTS)
+        if bad := basecounts.check_frozen(data, sha, pinned):
+            problems += bad
+            continue
+        base, same, changed = basecounts.frozen_view(data, basecounts.programs(root))
+        for (name, language, opt), got in sorted(measured.items()):
+            if language in basecounts.OURS and name in same and (name, language, opt) in base:
+                problems += [f"{one} (against {sha[:9]})" for one in against(f"{name} {language} -{opt}", got, base[(name, language, opt)], pinned)]
+        lines += basecounts.frozen_lines(sha, pinned, measured, base, changed)
+    return problems, lines
+
+
 def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
     """The verdict of the `count` shard files in `folder` (bench.py --shard writes them) judged against `base.json` (--shard base): the lines the
     whole run prints that a shard cannot (the standing against each reference, the waivers nothing needed, the problems last), and with `record`
@@ -1022,7 +1043,10 @@ def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
     stale = basecounts.judge(measured, base, basecounts.waivers(), same)[2]
     applied, more = basecounts.waived_lines(basecounts.waived_rows(measured, base, basecounts.waivers(), same), basecounts.waivers(), stale)
     problems += more
+    held, held_lines = frozen_judge(measured)
+    problems += held
     print(*standing(measured, [], opts), sep="\n")
+    print(*held_lines, sep="\n")
     print(f"BASE {base_sha[:9]}: {len(base)} rows")
     if sources:
         print(f"base counts: {sources.count('restored')} slices restored, {sources.count('measured')} measured")
@@ -1052,11 +1076,13 @@ def main() -> int:
     parser.add_argument("--record", action="store_true", help="measure the head and keep its counts as the base of the next pull requests (a main push); no base, no judging")
     parser.add_argument("--shard", metavar="I/N", help="only shard I of N of the benchmarks (shards.toml), judged alone; --json then writes shard-I.json for --merge. `base` or `base:I/N`: the base's counts, all or slice I, in base.json or base-I.json")
     parser.add_argument("--merge", nargs=2, metavar=("DIR", "N"), help="judge nothing: print the verdict of the N shard-*.json in DIR (add --record on a main push)")
+    parser.add_argument("--base-counts", type=Path, help="the frozen counts file the pinned waivers (a `base` in their header) are judged against, instead of tools/bench/frozen/SHA.json")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
-    global ONLY
+    global ONLY, BASE_COUNTS
     ONLY = args.lang
+    BASE_COUNTS = args.base_counts
     if args.merge:
         return merge(Path(args.merge[0]), int(args.merge[1]), args.opt, args.record)
     if args.shard == "base":
@@ -1125,6 +1151,9 @@ def main() -> int:
         applied, more = basecounts.waived_lines(basecounts.waived_rows(measured, base, basecounts.waivers(), same), basecounts.waivers(), stale)
         print(*applied, sep="\n")
         problems += more
+        held, held_lines = frozen_judge(measured)
+        problems += held
+        print(*held_lines, sep="\n")
     for one in problems:  # last: the tail of the log is what a reader sees
         print("FAIL", one)
     print(f"{len(measured)} measurements: {len(problems)} problems")
