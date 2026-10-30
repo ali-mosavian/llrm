@@ -179,6 +179,7 @@ pub fn select_function(
         }
         let Scheduled { units, mem_refs, accesses } =
             select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
+        let successors = control_successors(function, block);
         let phis = built
             .phi_updates
             .iter()
@@ -190,7 +191,10 @@ pub fn select_function(
                 let dst = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
                 Ok(PhiCopy { to, dst, src, ty: super::value_type(module, function.value(phi).ty, width)? })
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Result<Vec<_>, String>>()?
+            .into_iter()
+            .filter(|copy| successors.contains(&copy.to))
+            .collect();
         selected.push(Selected {
             id: block.0,
             phis,
@@ -199,8 +203,31 @@ pub fn select_function(
             mem_refs,
             accesses,
             layout: function.layout().iter().map(|b| b.0).collect(),
-            successors: function.successors(block).into_iter().map(|b| b.0).collect(),
+            successors,
         });
     }
     Ok(selected)
+}
+
+/// The blocks control reaches from the end of `block`. An `invoke` goes to its
+/// normal block only: the pin's `LowerInvoke` makes it a call and a branch, and
+/// a pad nothing else branches to is dropped. QB's pads are entered by a branch
+/// after `setjmp`, which stays an edge.
+///
+/// DEVIATE: a phi of the pad still gets its unwind-edge value built (a dead
+/// constant and a `drop`), the pin has none: its `LowerInvoke` runs on the IR.
+/// Exit: lower invokes in the module before selection.
+fn control_successors(
+    function: &llrm_mir::module::Function,
+    block: llrm_mir::module::BlockId,
+) -> Vec<u32> {
+    use llrm_mir::module::Operand;
+    let invoke = function
+        .terminator(block)
+        .map(|last| function.instruction(last))
+        .filter(|last| matches!(last.opcode, llrm_mir::opcode::Opcode::Invoke(_)));
+    match invoke.map(|last| &last.operands[..]) {
+        Some([.., Operand::Block(normal), Operand::Block(_), _]) => vec![normal.0],
+        _ => function.successors(block).into_iter().map(|b| b.0).collect(),
+    }
 }
