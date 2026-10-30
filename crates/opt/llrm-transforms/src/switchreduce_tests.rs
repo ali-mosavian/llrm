@@ -118,3 +118,23 @@ fn test_a_dense_switch_is_left() {
 fn test_a_switch_of_three_cases_is_left() {
     check_no_rotate(&sparse(&[(5, 'a'), (900, 'b'), (5000, 'a')]), INPUTS);
 }
+
+/// Six cases 4 apart use 6 of 21 slots: dense for a speed build, not for
+/// `hasOptSize`, which `minsize` implies. Only `optsize` was read, so a
+/// `minsize` function was left a sparse switch.
+#[test]
+fn test_a_minsize_function_reduces_a_switch_at_the_optsize_density() {
+    let text = sparse(&[(0, 'a'), (4, 'b'), (8, 'a'), (12, 'b'), (16, 'a'), (20, 'b')]);
+    for attr in ["optsize", "minsize"] {
+        let sized = text.replace("(i32 %x) {", &format!("(i32 %x) {attr} {{"));
+        let mut module = parsed(&sized);
+        let outer = Outer::of(&module, None);
+        let layout = DataLayout::parse("n8:16:32:64").expect("a datalayout");
+        let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+        let mut declared = Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        simplified(context, &spec, &mut declared, function);
+        declared.place(&mut module).expect("placed");
+        assert!(printed(&module).contains("fshl"), "{attr}: {}", printed(&module));
+    }
+}
