@@ -80,6 +80,10 @@ pub struct BuilderTarget {
     /// `getScalarShiftAmountTy` for a target whose amount depends on the type
     /// shifted (wasm); none: `shift_amount`.
     pub shift_amount_of: Option<fn(EVT) -> EVT>,
+    /// `getMinimumJumpTableEntries`.
+    pub min_jump_table_entries: usize,
+    /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit tests and peeling run.
+    pub switch_optimize: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
     /// The library routines the target's runtime has, each with the calling
@@ -281,6 +285,8 @@ impl BuilderTarget {
             dag: DagConfig { offset_folding: true, ..DagConfig::default() },
             shift_amount: EVT::I8,
             shift_amount_of: None,
+            min_jump_table_entries: 4,
+            switch_optimize: true,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
             stack_align: None,
@@ -315,6 +321,8 @@ impl BuilderTarget {
             dag: DagConfig { pointer: EVT::I16, offset_folding: true, ..DagConfig::default() },
             shift_amount: EVT::I8,
             shift_amount_of: None,
+            min_jump_table_entries: 4,
+            switch_optimize: true,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
             stack_align: None,

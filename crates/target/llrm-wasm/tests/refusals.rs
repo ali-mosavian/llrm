@@ -21,17 +21,6 @@ fn irreducible_control_flow_is_refused_by_name() {
     assert!(why.contains("irreducible control flow"), "{why}");
 }
 
-/// Every `switch`, whatever its density, stopped on 'a switch lowering made
-/// blocks': the reader could not tell it from an internal fault.
-#[test]
-fn switch_is_refused_by_name() {
-    let why = refusal(
-        "define i32 @f(i32 %x) {\nentry:\n  switch i32 %x, label %d [ i32 1, label %one i32 2, label %two ]\none:\n  ret i32 10\n\
-         two:\n  ret i32 20\nd:\n  ret i32 0\n}\n",
-    );
-    assert!(why.contains("switch") && why.contains("not supported yet"), "{why}");
-}
-
 /// An `invoke`'s unwind edge was a successor of its block, so a pad nothing
 /// else branches to stayed in the function: `i32.const 2; return` after the
 /// normal path's `return`. The pin drops it (`LowerInvoke`).

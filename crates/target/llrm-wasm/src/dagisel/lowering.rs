@@ -10,7 +10,7 @@
 //! DEVIATE: not translated yet are the floating-point rows, the SIMD, reference
 //! type and atomic rows, `LOAD`/`STORE` `Custom` (only address spaces 1 and the
 //! reference types use it), `VAARG` (no such ISD opcode yet), `DEBUGTRAP`,
-//! `ExternalSymbol`, `JumpTable`, `BR_JT`, `VASTART`, `CopyToReg` and the
+//! `ExternalSymbol`, `VASTART`, `CopyToReg` and the
 //! position-independent path of `LowerGlobalAddress`. Reason: each needs DAG
 //! nodes or target state the straight-line slice does not reach, and a `Custom`
 //! row whose lowering returns nothing would expand the node. Exit: W4 onwards.
@@ -34,6 +34,7 @@ pub mod wasmisd {
     use super::{ISD, ids};
 
     pub const WRAPPER: ISD = ISD::Target(ids::Wrapper);
+    pub const BR_TABLE: ISD = ISD::Target(ids::BR_TABLE);
 }
 
 /// The pointer type: `Subtarget->hasAddr64() ? MVT::i64 : MVT::i32`.
@@ -77,15 +78,19 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
         }
     }
+    tl.set_operation_action(BrJT, MVT::Other, Action::Custom);
     tl.set_operation_action(BuildPair, MVT::I64, Action::Expand);
     tl.set_operation_action(Trap, MVT::Other, Action::Legal);
     tl
 }
 
-/// The custom lowerings.
-pub struct WasmLowering;
+/// The custom lowerings. `tables` are the function's jump tables, as block ids:
+/// `MJTI`.
+pub struct WasmLowering<'a> {
+    pub tables: &'a [Vec<u32>],
+}
 
-impl Hooks for WasmLowering {
+impl Hooks for WasmLowering<'_> {
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
@@ -94,6 +99,7 @@ impl Hooks for WasmLowering {
         match dag.opcode(node) {
             ISD::GlobalAddress => Some(lower_global_address(dag, node)),
             ISD::FrameIndex => Some(lower_frame_index(dag, node)),
+            ISD::BrJT => Some(lower_br_jt(dag, node, self.tables)),
             _ => None,
         }
     }
@@ -120,4 +126,21 @@ fn lower_frame_index(
     let NodeData::FrameIndex(index) = dag.node(node).data else { unreachable!("a FrameIndex node carries its index") };
     let vt = dag.value_type(node);
     dag.get_target_frame_index(vt, index)
+}
+
+/// `LowerBR_JT`: `BR_TABLE chain, index, case blocks.., dummy default`. The
+/// default is the first case until `FixBrTableDefaults` finds the range
+/// check's.
+fn lower_br_jt(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    tables: &[Vec<u32>],
+) -> SDValue {
+    let (chain, table, index) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let NodeData::JumpTable(at) = dag.node(table).data else { unreachable!("a BR_JT names a JumpTable") };
+    let blocks = &tables[at as usize];
+    let mut ops = vec![chain, index];
+    ops.extend(blocks.iter().map(|&block| dag.get_basic_block(block)));
+    ops.push(dag.get_basic_block(blocks[0]));
+    dag.get_node(wasmisd::BR_TABLE, MVT::Other.into(), &ops)
 }

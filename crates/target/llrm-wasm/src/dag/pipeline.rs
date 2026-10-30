@@ -168,9 +168,10 @@ pub struct Scheduled {
 pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
+    tables: &[Vec<u32>],
 ) -> Result<Scheduled, Refusal> {
     let tli = target_lowering(cpu);
-    let mut lowering = WasmLowering;
+    let mut lowering = WasmLowering { tables };
     DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     TypeLegalizer::new(dag, &tli).with_hooks(&mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
     DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
