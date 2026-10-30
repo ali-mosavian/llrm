@@ -92,6 +92,23 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`. Default false until
+    /// x86 is judged.
+    fn fold_mul_of_add_with_constant(&self) -> bool {
+        false
+    }
+
+    /// `TargetLowering::isMulAddWithConstProfitable` for a single-use add, on the constants `c1`
+    /// and `c2` of the type `vt`.
+    fn is_mul_add_with_const_profitable(
+        &self,
+        _vt: EVT,
+        _c1: u128,
+        _c2: u128,
+    ) -> bool {
+        true
+    }
+
     /// `visitORCommutative`'s absorption folds, `(or (and x, y), x)` is `x`. Default false until
     /// x86 is judged.
     fn fold_or_absorption(&self) -> bool {
@@ -1920,7 +1937,51 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
         }
+        // `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`.
+        if self.hooks.fold_mul_of_add_with_constant() && self.dag.opcode(n0) == ISD::Add && !opaque {
+            if let (Some(c2), Some(c1)) = (c1, self.dag.constant(self.dag.operand(n0, 1))) {
+                if self.mul_add_with_const_profitable(node, n0, vt, c1, c2) {
+                    let x = self.dag.operand(n0, 0);
+                    let product = self.dag.get_node(ISD::Mul, vt, &[x, n1]);
+                    let folded = self.dag.get_constant(c1.wrapping_mul(c2) & ones, vt);
+                    return Some(self.dag.get_node(ISD::Add, vt, &[product, folded]));
+                }
+            }
+        }
         self.reassociate_ops(ISD::Mul, n0, n1)
+    }
+
+    /// `isMulAddWithConstProfitable`: a one-use add the target accepts, or another multiply
+    /// by the same constant that shares `x * c2` or will after its own fold.
+    fn mul_add_with_const_profitable(
+        &self,
+        mul: SDValue,
+        add: SDValue,
+        vt: EVT,
+        c1: u128,
+        c2: u128,
+    ) -> bool {
+        if self.dag.has_one_use(add.node) && self.hooks.is_mul_add_with_const_profitable(vt, c1, c2) {
+            return true;
+        }
+        let constant = self.dag.operand(mul, 1);
+        let var = self.dag.operand(add, 0);
+        let users: Vec<u32> = self.dag.users(constant).collect();
+        users.into_iter().filter(|&user| user != mul.node).any(|user| {
+            let user = SDValue { node: user, res: 0 };
+            if self.dag.opcode(user) != ISD::Mul {
+                return false;
+            }
+            let other = if self.dag.operand(user, 0) == constant {
+                self.dag.operand(user, 1)
+            } else {
+                self.dag.operand(user, 0)
+            };
+            other == var
+                || (self.dag.opcode(other) == ISD::Add
+                    && self.dag.constant(self.dag.operand(other, 1)).is_some()
+                    && self.dag.operand(other, 0) == var)
+        })
     }
     /// `visitSIGN_EXTEND_INREG` ([pin][pin]): an operand that is already
     /// sign-extended, nested in-regs, a `sext`/`aext`/`zext` of a value no

@@ -9,6 +9,9 @@ use crate::backend::selectiondag::{MemBase, MemInfo};
 struct Asks;
 
 impl CombineHooks for Asks {
+    fn fold_mul_of_add_with_constant(&self) -> bool {
+        true
+    }
     fn widen_multiply_high_any_width(&self) -> bool {
         true
     }
@@ -318,4 +321,32 @@ fn a_target_that_does_not_ask_keeps_the_32_bit_high_multiply() {
     udiv_by_three(&mut dag);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     assert!(!has_wide_multiply(&dag, dag.get_root()));
+}
+
+fn mul_of_add(dag: &mut SelectionDAG) {
+    let x = dag.get_register(EVT::I32, 5);
+    let (three, five) = (dag.get_constant(3, EVT::I32), dag.get_constant(5, EVT::I32));
+    let sum = dag.get_node(ISD::Add, EVT::I32, &[x, three]);
+    let root = dag.get_node(ISD::Mul, EVT::I32, &[sum, five]);
+    dag.set_root(root);
+}
+
+/// `(x + 3) * 5` stayed a multiply of a sum; the pin distributes it to
+/// `x * 5 + 15`, which AArch64 selects as a shifted add and an add-immediate.
+#[test]
+fn a_multiply_of_an_add_with_a_constant_distributes() {
+    let mut dag = dag();
+    mul_of_add(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Add);
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(15));
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_multiply_of_the_add() {
+    let mut dag = dag();
+    mul_of_add(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Mul);
 }
