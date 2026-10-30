@@ -34,6 +34,9 @@ pub struct Tuning {
     /// `isIntDivCheap` at every level, not only at minsize: a divide by a
     /// constant stays a divide instead of becoming a multiply and shifts.
     pub int_div_cheap: bool,
+    /// Two compares joined by `and`/`or` stay two branches at every level, as
+    /// the pin does at optsize; false: the pin's cost rule decides.
+    pub split_merged_conditions: bool,
 }
 
 impl Tuning {
@@ -50,6 +53,7 @@ impl Tuning {
         unroll_max_percent_threshold_boost: None,
         inline_threshold: None,
         int_div_cheap: false,
+        split_merged_conditions: false,
     };
 }
 
