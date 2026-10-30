@@ -4,25 +4,26 @@
 #   tools/dagisel/regen-target.sh RECORD [OUT_DIR]   # RECORD: crates/target/llrm-<t>/dagisel.toml
 #
 # The record names the root .td, the ids headers and the CPUs (see dagisel-gen's target.rs).
-# LLVM_SRC is a checkout of the pin, LLVM_BUILD a build of it with bin/llvm-tblgen and, for a
+# LLVM_SRC is a checkout of the pin, LLVM_BUILD (default: the record's llvm_build) a build of it with bin/llvm-tblgen and, for a
 # target built in tree, its generated headers (lib/Target/<dir>). DAGISEL_GEN names a built
 # llrm-dagisel-gen to use instead of cargo run.
 set -euo pipefail
 
 PIN=d1106deb71cc81016406a1917d0508d2df296266
 LLVM_SRC=${LLVM_SRC:-$HOME/scratch/llvm-src}
-LLVM_BUILD=${LLVM_BUILD:-$HOME/scratch/llvm-build-m68k}
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 REC=$(realpath "$1")
 RECDIR=$(dirname "$REC")
-OUT=${2:-$RECDIR/src/dagisel/generated}
+field() { python3 -I -c 'import sys,tomllib; t=tomllib.load(open(sys.argv[1],"rb"))["target"]; v=t.get(sys.argv[2],""); print("\n".join(v) if isinstance(v,list) else v)' "$REC" "$1"; }
+# The build of the pin that has this target's generated headers: the record's `llvm_build` under ~/scratch.
+LLVM_BUILD=${LLVM_BUILD:-$HOME/scratch/$(field llvm_build)}
 if [ -z "${WORK:-}" ]; then WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT; fi
-mkdir -p "$WORK" "$OUT"
+mkdir -p "$WORK"
 
 [ "$(git -C "$LLVM_SRC" rev-parse HEAD)" = "$PIN" ] || { echo "LLVM_SRC is not at the pin $PIN" >&2; exit 1; }
 S=$LLVM_SRC/llvm
-field() { python3 -I -c 'import sys,tomllib; t=tomllib.load(open(sys.argv[1],"rb"))["target"]; v=t.get(sys.argv[2],""); print("\n".join(v) if isinstance(v,list) else v)' "$REC" "$1"; }
 
+OUT=${2:-$RECDIR/$(field out)}
 NS=$(field ns); ISD=$(field isd); DIR=$(field llvm_dir); TD=$(field td)
 if [ -n "$DIR" ]; then
   T=$S/lib/Target/$DIR; INC=(-I"$T"); HDR=(-I"$T" -I"$LLVM_BUILD/lib/Target/$DIR" -I"$WORK")
@@ -57,9 +58,23 @@ for key, f in (("// @ENUMS@", "enums"), ("// @INCLUDES@", "includes"), ("@SYMBOL
     t = t.replace(key, open(f"{work}/{f}.cpp").read())
 open(work + "/ids.cpp", "w").write(t)
 PY
-g++ -std=c++17 -w -I"$S/include" -I"$LLVM_BUILD/include" "${HDR[@]}" "$WORK/ids.cpp" -o "$WORK/ids" -Wl,--unresolved-symbols=ignore-all
+if [ "$(uname)" = Darwin ]; then UNRESOLVED=(-Wl,-undefined,dynamic_lookup); else UNRESOLVED=(-Wl,--unresolved-symbols=ignore-all); fi
+g++ -std=c++17 -w -I"$S/include" -I"$LLVM_BUILD/include" "${HDR[@]}" "$WORK/ids.cpp" -o "$WORK/ids" "${UNRESOLVED[@]}"
 "$WORK/ids" | sed 's/^SelectionDAGISel:://' > "$WORK/ids.txt"
 cat "$OWN" >> "$WORK/ids.txt"
 
 if [ -n "${DAGISEL_GEN:-}" ]; then GEN=("$DAGISEL_GEN"); else GEN=(cargo run -q --release -p llrm-dagisel-gen --); fi
+mkdir -p "$OUT"
 "${GEN[@]}" --target "$REC" --inc "$WORK/GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --instrinfo "$WORK/instrinfo.txt" --out "$OUT"
+# `asm = "<namespace>"` in the record: the instructions' asm strings and printer methods.
+ASM_NS=$(field asm)
+if [ -n "$ASM_NS" ]; then
+  "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
+  python3 -I "$ROOT/tools/dagisel/asmtable.py" "$WORK/target.json" "$OUT/asm.rs" "${ASM_NS%::}"
+fi
+# `enc = "<namespace>"`: the instructions' binary encodings (enc.rs), for the object writer.
+ENC_NS=$(field enc)
+if [ -n "$ENC_NS" ]; then
+  [ -f "$WORK/target.json" ] || "${TBLGEN[@]}" --dump-json "$T/$TD" -o "$WORK/target.json"
+  python3 -I "$ROOT/tools/dagisel/enctable.py" "$WORK/target.json" "$OUT/enc.rs" "${ENC_NS%::}"
+fi

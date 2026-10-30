@@ -246,7 +246,7 @@ fn int_imm_chunk(value: i64) -> i64 {
 
 /// `isLegalArithImmed`:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/MCTargetDesc/AArch64AddressingModes.h#L355
-fn is_legal_arith_immediate(c: u64) -> bool {
+pub(crate) fn is_legal_arith_immediate(c: u64) -> bool {
     c >> 12 == 0 || (c & 0xfff == 0 && c >> 24 == 0)
 }
 

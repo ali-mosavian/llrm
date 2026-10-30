@@ -118,6 +118,12 @@ impl TargetLoweringInfo {
         self.shift_amount
     }
 
+    /// AArch64: `addRegisterClass` of `i32` and `i64`; a compare makes an `i32`
+    /// and a shift amount is an `i64` (`AArch64TargetLowering::getSetCCResultType`).
+    pub fn aarch64() -> TargetLoweringInfo {
+        TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false).with_set_cc_result(MVT::I32).with_shift_amount_type(MVT::I64)
+    }
+
     /// m32: `addRegisterClass` of `i8`, `i16`, `i32`; no far pointer.
     pub fn x86_32() -> TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], false)

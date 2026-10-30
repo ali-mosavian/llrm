@@ -38,13 +38,13 @@
 //! ([L5432](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L5432)).
 
 use llrm_mir::hash::HashSet;
-use llrm_sdag::lowering::ShiftAmount;
 
 use super::actions::{Action, TargetLowering};
 use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
 use super::legalize_types::LegalizeError;
 use super::mvt::{EVT, MVT};
+use llrm_sdag::lowering::ShiftAmount;
 
 /// What the target supplies (`TLI.LowerOperation`).
 pub trait Hooks {
@@ -216,9 +216,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         new
     }
 
-    /// `LegalizeLoadOps`, extending loads: one the target does not have is an
-    /// any-extending load and an extension in the register. The value and
-    /// the chain it replaces.
+    /// `LegalizeLoadOps`, extending loads: one the target does not have is an any-extending
+    /// load and an extension in the register. The value and the chain it replaces.
     fn expand_ext_load(
         &mut self,
         node: SDValue,

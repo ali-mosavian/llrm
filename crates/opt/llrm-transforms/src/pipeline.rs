@@ -1195,7 +1195,9 @@ pub fn recorded(
     // sinks.
     // CodeGenPrepare's sinking: compares, masks, address phis and the address
     // arithmetic of a block's accesses, made in the block that uses them.
-    if applied.options.wanted("cgpaddr") {
+    // `LLRM_NO_CGPADDR` leaves it out, so a shadow run can hand the pin's `llc` (whose own CodeGenPrepare
+    // runs inside it) the module before this one.
+    if applied.options.wanted("cgpaddr") && !llrm_support::env_flag!("LLRM_NO_CGPADDR") {
         manager.add(cgpaddr::CgpAddr);
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
