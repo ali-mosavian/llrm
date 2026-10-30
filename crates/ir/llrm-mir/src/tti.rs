@@ -523,6 +523,21 @@ pub trait Tti {
         self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
     }
 
+    /// `isLegalAddressingMode` in `addr_space` for an access of `access_bytes`
+    /// (0: unknown): the two together, as LSR asks it of a use.
+    fn is_legal_addressing_mode_at(
+        &self,
+        addr_space: u32,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        let _ = access_bytes;
+        self.is_legal_addressing_mode_in(addr_space, base_gv, base_offset, has_base_reg, scale)
+    }
+
     /// `isLegalAddressingMode` for an access of `access_bytes` (LLVM's
     /// `AccessTy`): an immediate offset's legality depends on the access
     /// size on AArch64 (`ldr x` takes an offset `ldr w` does not). By
@@ -537,6 +552,20 @@ pub trait Tti {
     ) -> bool {
         let _ = access_bytes;
         self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
+    }
+
+    /// `getScalingFactorCost` for an access of `access_bytes` (0: unknown), as
+    /// LSR asks it of a use; by default the size is not asked.
+    fn scaling_factor_cost_at(
+        &self,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        let _ = access_bytes;
+        self.scaling_factor_cost(base_gv, base_offset, has_base_reg, scale)
     }
 
     /// `getScalingFactorCost` for an access of `access_bytes`.
@@ -1063,6 +1092,29 @@ mod access_tests {
                 scale: i64,
             ) -> bool {
                 self.0.is_legal_addressing_mode_in(addr_space, gv, offset, base, scale)
+            }
+
+            fn scaling_factor_cost_at(
+                &self,
+                access_bytes: u64,
+                gv: bool,
+                offset: i64,
+                base: bool,
+                scale: i64,
+            ) -> Cost {
+                self.0.scaling_factor_cost_at(access_bytes, gv, offset, base, scale)
+            }
+
+            fn is_legal_addressing_mode_at(
+                &self,
+                addr_space: u32,
+                access_bytes: u64,
+                gv: bool,
+                offset: i64,
+                base: bool,
+                scale: i64,
+            ) -> bool {
+                self.0.is_legal_addressing_mode_at(addr_space, access_bytes, gv, offset, base, scale)
             }
 
             fn cast_cost(

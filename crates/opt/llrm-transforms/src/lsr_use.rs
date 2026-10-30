@@ -270,14 +270,14 @@ impl Use {
 pub fn is_am_completely_folded_at(
     tti: &dyn Tti,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
     scale: i64,
 ) -> bool {
     match kind {
-        Kind::Address => tti.is_legal_addressing_mode_in(addr_space, base_gv, base_offset.0, has_base_reg, scale),
+        Kind::Address => tti.is_legal_addressing_mode_at(access.addr_space, access.bytes, base_gv, base_offset.0, has_base_reg, scale),
         Kind::ICmpZero => {
             // There is no hook for folding a global into a compare.
             if base_gv {
@@ -313,7 +313,7 @@ pub fn is_am_completely_folded_between(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
@@ -329,8 +329,8 @@ pub fn is_am_completely_folded_between(
     if (high > base) != (max > 0) {
         return false;
     }
-    is_am_completely_folded_at(tti, kind, addr_space, base_gv, Immediate(low), has_base_reg, scale)
-        && is_am_completely_folded_at(tti, kind, addr_space, base_gv, Immediate(high), has_base_reg, scale)
+    is_am_completely_folded_at(tti, kind, access, base_gv, Immediate(low), has_base_reg, scale)
+        && is_am_completely_folded_at(tti, kind, access, base_gv, Immediate(high), has_base_reg, scale)
 }
 
 /// `isAMCompletelyFolded(TTI, MinOffset, MaxOffset, Kind, AccessTy, F, L)`.
@@ -340,7 +340,7 @@ pub fn is_am_completely_folded_formula(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     f: &Formula,
     l: BlockId,
 ) -> bool {
@@ -352,7 +352,7 @@ pub fn is_am_completely_folded_formula(
         min_offset,
         max_offset,
         kind,
-        addr_space,
+        access,
         f.base_gv.is_some(),
         f.base_offset,
         f.has_base_reg,
@@ -373,7 +373,7 @@ pub fn is_am_completely_folded(
         lu.min_offset,
         lu.max_offset,
         lu.kind,
-        lu.access_ty.addr_space,
+        lu.access_ty,
         f.base_gv.is_some(),
         f.base_offset,
         f.has_base_reg,
@@ -389,7 +389,7 @@ pub fn is_legal_use(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
@@ -400,7 +400,7 @@ pub fn is_legal_use(
         min_offset,
         max_offset,
         kind,
-        addr_space,
+        access,
         base_gv,
         base_offset,
         has_base_reg,
@@ -411,7 +411,7 @@ pub fn is_legal_use(
             min_offset,
             max_offset,
             kind,
-            addr_space,
+            access,
             base_gv,
             base_offset,
             true,
@@ -425,7 +425,7 @@ pub fn is_legal_use_formula(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     f: &Formula,
 ) -> bool {
     is_legal_use(
@@ -433,7 +433,7 @@ pub fn is_legal_use_formula(
         min_offset,
         max_offset,
         kind,
-        addr_space,
+        access,
         f.base_gv.is_some(),
         f.base_offset,
         f.has_base_reg,
@@ -462,14 +462,15 @@ pub fn scaling_factor_cost(
         return TtiCost::FREE;
     }
     // Not completely folded: an extra cost only for a scale other than 1.
-    if !is_am_completely_folded_formula(tti, se, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space, f, l) {
+    if !is_am_completely_folded_formula(tti, se, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f, l) {
         return TtiCost::of(i64::from(f.scale != 1));
     }
     match lu.kind {
         Kind::Address => {
             // The price at both ends of the offsets.
             let at = |offset: Immediate| {
-                tti.scaling_factor_cost(
+                tti.scaling_factor_cost_at(
+                    lu.access_ty.bytes,
                     f.base_gv.is_some(),
                     f.base_offset.add_unsigned(offset).0,
                     f.has_base_reg,
@@ -624,7 +625,7 @@ impl Cost {
                 && !is_am_completely_folded_at(
                     r.tti,
                     Kind::Address,
-                    lu.access_ty.addr_space,
+                    lu.access_ty,
                     f.base_gv.is_some(),
                     offset,
                     f.has_base_reg,

@@ -173,7 +173,7 @@ impl Collection<'_, '_> {
             lu.min_offset,
             lu.max_offset,
             lu.kind,
-            lu.access_ty.addr_space,
+            lu.access_ty,
             f.base_gv.is_some(),
             f.base_offset,
             f.has_base_reg,
@@ -220,7 +220,7 @@ impl Collection<'_, '_> {
             }
             let (min, max, kind, space) = {
                 let lu = &self.uses[lu_idx];
-                (lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space)
+                (lu.min_offset, lu.max_offset, lu.kind, lu.access_ty)
             };
             // A constant that could be folded into an immediate stays there.
             if is_always_foldable_scev(self.tti, se, cx, min, max, kind, space, piece, base.num_regs() > 1) {
@@ -560,7 +560,7 @@ impl Collection<'_, '_> {
                     offset,
                     offset,
                     lu.kind,
-                    lu.access_ty.addr_space,
+                    lu.access_ty,
                     f.base_gv.is_some(),
                     f.base_offset,
                     f.has_base_reg,
@@ -642,7 +642,7 @@ impl Collection<'_, '_> {
             // Whether this scale will be legal.
             let (min, max, kind, outside, space) = {
                 let lu = &self.uses[lu_idx];
-                (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop, lu.access_ty.addr_space)
+                (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop, lu.access_ty)
             };
             let legal = |kind| {
                 is_legal_use(

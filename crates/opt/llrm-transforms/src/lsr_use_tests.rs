@@ -197,7 +197,7 @@ fn the_default_order_ranks_registers_before_instructions() {
 fn what_an_address_mode_folds_by_kind() {
     let tti = X86::of_cpu("core2").unwrap();
     let fold =
-        |kind, gv, offset, base, scale| is_am_completely_folded_at(&tti, kind, 0, gv, Immediate(offset), base, scale);
+        |kind, gv, offset, base, scale| is_am_completely_folded_at(&tti, kind, MemAccessTy::unknown(0), gv, Immediate(offset), base, scale);
     assert!(fold(Kind::Address, false, 8, true, 4));
     assert!(!fold(Kind::Address, false, 1 << 40, true, 1), "a displacement is 32 bits");
     assert!(fold(Kind::Basic, false, 0, true, 0) && !fold(Kind::Basic, false, 0, true, 1));
@@ -218,7 +218,7 @@ fn offsets_that_wrap_with_the_base_do_not_fold() {
             Immediate(min),
             Immediate(max),
             Kind::Address,
-            0,
+            MemAccessTy::unknown(0),
             false,
             Immediate(base),
             true,
