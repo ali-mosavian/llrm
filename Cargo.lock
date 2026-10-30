@@ -542,6 +542,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-opt"
+version = "0.1.0"
+dependencies = [
+ "llrm-arm64",
+ "llrm-mir",
+ "llrm-transforms",
+ "llrm-x86",
+]
+
+[[package]]
 name = "llrm-peepgen"
 version = "0.1.0"
 dependencies = [

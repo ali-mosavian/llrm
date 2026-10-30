@@ -77,6 +77,12 @@ pub fn platform_of(triple: &str) -> Option<Platform> {
     }
 }
 
+/// The platform of an AArch64 `triple` that names none (`aarch64--`): Linux,
+/// the pin's default; `None` for another architecture.
+pub fn platform_or_default(triple: &str) -> Option<Platform> {
+    platform_of(triple).or_else(|| matches!(triple.split('-').next()?, "aarch64" | "arm64").then_some(Platform::Linux))
+}
+
 /// `text` read as a program for `platform`, its datalayout the platform's.
 pub fn program(
     text: &str,
@@ -353,6 +359,13 @@ pub fn object_file_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_triple_without_an_os_is_linux_only_for_aarch64() {
+        assert_eq!(platform_or_default("aarch64--"), Some(Platform::Linux));
+        assert_eq!(platform_or_default("arm64-apple-macos"), Some(Platform::Darwin));
+        assert_eq!(platform_or_default("x86_64-unknown-linux-gnu"), None);
+    }
 
     /// Clang writes Apple's variadic reads as `va_arg`, which MIR does not read
     /// ("`va_arg` is not an instruction of MIR's subset"): each becomes the

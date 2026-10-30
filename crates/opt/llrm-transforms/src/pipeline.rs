@@ -132,6 +132,7 @@ use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis, ProgramSummaries,
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
+use llrm_mir::opcode::Attribute;
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, PassManager, PreservedAnalyses, Stage, Unit};
 use llrm_mir::program::Program;
 
@@ -1042,6 +1043,9 @@ pub fn recorded(
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
     manager.dump_inputs = llrm_support::env_flag!("LLRM_DUMP_INPUTS");
+    if applied.options.optimize && applied.options.prefers_size() {
+        mark_for_size(program, applied.options.has_min_size);
+    }
     if !applied.options.optimize {
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
@@ -1235,6 +1239,27 @@ pub fn recorded(
         }
     }
     done
+}
+
+/// What clang does at -Os and -Oz: every defined function carries `optsize`,
+/// and `minsize` at -Oz (`Function::hasOptSize` / `hasMinSize` read them).
+fn mark_for_size(
+    program: &mut Program,
+    min_size: bool,
+) {
+    for module in &mut program.modules {
+        for global in &mut module.globals {
+            let GlobalKind::Function(function) = &mut global.kind else { continue };
+            if function.is_declaration() {
+                continue;
+            }
+            for name in ["optsize"].into_iter().chain(min_size.then_some("minsize")) {
+                if !function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name)) {
+                    function.attrs.push(Attribute::Flag(name.to_owned()));
+                }
+            }
+        }
+    }
 }
 
 /// Each loop's counters chosen once, on the loop the passes before leave. LSR

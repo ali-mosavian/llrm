@@ -35,6 +35,7 @@ impl Builder<'_> {
             Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove => {
                 self.visit_mem_intrinsic(instruction, info, intrinsic)
             }
+            Intrinsic::MemSetPattern => self.visit_memset_pattern(instruction),
             Intrinsic::FunnelShift { left } => self.visit_funnel_shift(instruction, *left),
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => {
                 self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart))
@@ -1070,6 +1071,52 @@ impl Builder<'_> {
     }
 
     /// `rep stosb` of a size not known at compile time.
+    /// `llvm.experimental.memset.pattern` of a word or dword cell: `rep stosw`
+    /// / `rep stosd` of `count` cells, where the pin expands it to a loop
+    /// (`fills_by_pattern`). A volatile or huge fill is refused.
+    fn visit_memset_pattern(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), Refused> {
+        let Some(&[destination, value, count, volatile]) = instruction.operands.first_chunk::<4>() else {
+            return Err(Refused("a pattern fill of other than four operands"));
+        };
+        if !matches!(
+            volatile,
+            Operand::Constant(id) if matches!(self.module.context.get(id).kind, ConstantKind::Int(0))
+        ) {
+            return Err(Refused("a volatile pattern fill"));
+        }
+        let (dst, value, count) = (self.get_value(destination)?, self.get_value(value)?, self.get_value(count)?);
+        let pointer = self.target.dag.pointer;
+        let block = self.dag.value_type(value).size_in_bits() / 8;
+        if !matches!(block, 2 | 4) || self.dag.value_type(count).size_in_bits() > pointer.size_in_bits() {
+            return Err(Refused("a pattern fill of other than a word or dword cell, or counted past an address"));
+        }
+        if matches!(
+            self.function.operand_type(&self.module.context, destination).map(|ty| self.module.context.types.get(ty)),
+            Some(llrm_mir::types::Type::Pointer(space)) if self.layout.carries(*space)
+        ) {
+            return Err(Refused("a huge pattern fill"));
+        }
+        let root = self.memory_root();
+        let (cx, di, _) = self.string_registers();
+        let acc = self.accumulator(u64::from(block));
+        let count = self.dag.get_zext_or_trunc(count, pointer);
+        let copy = self.dag.get_copy_to_phys_reg(root, acc, value, None);
+        let mut glue = SDValue { node: copy.node, res: 1 };
+        let mut chain = SDValue { node: copy.node, res: 0 };
+        for (reg, value) in [(cx, count), (di, dst)] {
+            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = SDValue { node: copy.node, res: 1 };
+        }
+        let cell = self.dag.get_value_type_node(EVT::integer(block * 8));
+        let rep = self.dag.get_node_multi(x86isd::REP_STOS, &[EVT::OTHER, EVT::GLUE], &[chain, cell, glue]);
+        self.dag.set_root(SDValue { node: rep.node, res: 0 });
+        Ok(())
+    }
+
     fn rep_stosb(
         &mut self,
         chain: SDValue,
@@ -1137,6 +1184,21 @@ impl Builder<'_> {
         let extends = [ISD::AnyExtend; 3];
         let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
         Ok(self.dag.get_root())
+    }
+
+    /// The accumulator a string operation of `block`-byte cells stores from:
+    /// `al`, `ax`, `eax`, and `rax` for a quadword cell.
+    fn accumulator(
+        &self,
+        block: u64,
+    ) -> llrm_lir::registers::RegId {
+        let name = match block {
+            1 => "al",
+            2 => "ax",
+            _ => "eax",
+        };
+        // `RAX` for a quadword block: the dword's name widened (`rax`).
+        self.arch.register_named(&if block == 8 { format!("r{}", &name[1..]) } else { name.to_owned() })
     }
 
     /// The count, destination and source registers of a string operation.
@@ -1315,13 +1377,7 @@ impl Builder<'_> {
             (1, size, value)
         };
         let _ = &mut val;
-        let name = match block {
-            1 => "al",
-            2 => "ax",
-            _ => "eax",
-        };
-        // `RAX` for a quadword block: the dword's name widened (`rax`).
-        let acc = self.arch.register_named(&if block == 8 { format!("r{}", &name[1..]) } else { name.to_owned() });
+        let acc = self.accumulator(block);
         let (cx, di, _) = self.string_registers();
         let count = self.dag.get_constant(u128::from(count), pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, acc, val, None);

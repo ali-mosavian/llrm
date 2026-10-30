@@ -310,6 +310,7 @@ mod pin_slots_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
+pub mod pipeline_text;
 pub mod ports;
 pub mod predicateinfo;
 pub mod profit;

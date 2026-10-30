@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The per-merge tests of the integration branch feat/parity: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
+"""The per-merge tests of the integration branch release/next: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
 First, untimed, `cargo check --workspace --all-targets` of the merged tree and every source-scan ratchet (whatever the merge touches).
 
     tools/parity_smoke.py [--bin DIR] [--base REF] [--rank CRATE...]
@@ -146,7 +146,7 @@ def run_cut(command: list[str], seconds: float, cwd: Path, env: dict[str, str] |
 
 def workspace_check(root: Path = ROOT, target: Path | None = None) -> str:
     """"" when the whole workspace, tests and benches included, compiles under `-D warnings` (the fast tier's `build` step); else the first errors. Built before the clock
-    starts, like the unit tests: two halves that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every
+    starts, like the unit tests: two halves that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke release/next's head for every
     build). Under `-D warnings` because the land-time check once lacked it: #3390 landed an unused `mut` that failed the fast tier for everyone. Its own target directory:
     other RUSTFLAGS would rebuild the shared one."""
     target = target or Path(os.environ.get("LLRM_WARN_TARGET", Path.home() / ".cache/llrm/warn-target"))
