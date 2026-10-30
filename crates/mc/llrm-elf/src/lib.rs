@@ -4,7 +4,7 @@
 //! [`Machine`]. `llrm-x86`'s `mc::elf32` and `mc::elf64` and `llrm-arm64`'s
 //! `mc::elf` are the machines.
 
-use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, assembler::AsmBackend};
 
 const SHT_PROGBITS: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
@@ -48,6 +48,10 @@ pub trait Machine {
     const UNWIND_TYPE: u32 = SHT_PROGBITS;
 
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported>;
+
+    /// The target's assembler backend, which fills the fields the file keeps
+    /// (`MCAsmBackend::applyFixup`).
+    fn backend() -> &'static dyn AsmBackend;
 }
 
 fn unsupported(text: impl Into<String>) -> Unsupported {
@@ -264,7 +268,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             // Checked for RELA too: the addend must fit the field the linker
             // would have patched.
             let mut field = [0u8; 8];
-            apply_fixup(&mut field, 0, width, one.pc_rel, addend, &section.name)?;
+            M::backend().apply_fixup(&mut field, 0, one.kind, one.pc_rel, addend, &section.name)?;
             put_word::<M>(&mut entries, one.at as u64);
             if M::WIDE {
                 entries.extend((u64::from(symbol) << 32 | u64::from(kind)).to_le_bytes());

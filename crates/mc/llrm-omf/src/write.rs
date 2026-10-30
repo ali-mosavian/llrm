@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::rc::Rc;
 
+use llrm_object::assembler::AsmBackend;
 use llrm_object::{DebugSection, Definition, Fix, FixupKind, FixupKindInfo, Object, Role, Section, Target};
 
 use crate::omf;
@@ -212,6 +213,10 @@ fn class(section: &Section) -> &'static str {
 /// `MCObjectTargetWriter`): the generic kinds and the segmented pair are the
 /// writer's own.
 pub trait OmfTargetWriter {
+    /// The target's assembler backend, which fills the fields the file keeps
+    /// (`MCAsmBackend::applyFixup`).
+    fn backend(&self) -> &dyn AsmBackend;
+
     /// What `kind` says of its field.
     fn kind_info(
         &self,
@@ -242,6 +247,10 @@ pub(crate) const TEST_FAR_POINTER: FixupKind = FixupKind(FixupKind::FIRST_TARGET
 
 #[cfg(test)]
 impl OmfTargetWriter for GenericOmf {
+    fn backend(&self) -> &dyn AsmBackend {
+        &llrm_object::assembler::GenericBackend
+    }
+
     fn kind_info(
         &self,
         kind: FixupKind,
@@ -492,7 +501,11 @@ fn ledata(
         if Some(kind.kind) == writer.debug_target(16).segment_base && made.value != 0 {
             return Err(unencodable(format!("{}: a segment base with an addend", section.name)));
         }
-        llrm_object::apply_fixup(&mut image, at, packed(writer, kind), kind.pc_rel, made.value, &section.name)
+        writer
+            .backend()
+            // A far pointer's offset is its first two bytes: patched as data of
+            // that width.
+            .apply_fixup(&mut image, at, Fix::abs(packed(writer, kind)).kind, kind.pc_rel, made.value, &section.name)
             .map_err(|one| unencodable(one.0))?;
         subrecords.insert(at, (made.subrecord, kind));
     }

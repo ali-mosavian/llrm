@@ -24,6 +24,10 @@ fn write_arm64(object: &Object) -> Result<Vec<u8>, Unsupported> {
 struct Made;
 
 impl MachTargetWriter for Made {
+    fn backend(&self) -> &dyn llrm_object::assembler::AsmBackend {
+        &llrm_object::assembler::GenericBackend
+    }
+
     fn cpu(&self) -> (u32, u32) {
         (0x0100_4242, 7)
     }
@@ -560,4 +564,72 @@ fn a_weak_symbol_is_a_weak_definition() {
     }
     found.sort();
     assert_eq!(found, [("_hook".to_owned(), true, true), ("_strong".to_owned(), true, false)]);
+}
+
+/// A backend that marks the fields it is asked to fill.
+struct Marking;
+
+impl llrm_object::assembler::AsmBackend for Marking {
+    fn kind_info(
+        &self,
+        kind: llrm_object::FixupKind,
+    ) -> llrm_object::FixupKindInfo {
+        kind.info()
+    }
+
+    fn write_nop_data(
+        &self,
+        _: &mut Vec<u8>,
+        _: usize,
+    ) -> bool {
+        false
+    }
+
+    fn apply_fixup(
+        &self,
+        image: &mut [u8],
+        at: usize,
+        _: llrm_object::FixupKind,
+        _: bool,
+        _: i64,
+        _: &str,
+    ) -> Result<(), Unsupported> {
+        image[at..at + 8].fill(0xEE);
+        Ok(())
+    }
+}
+
+struct MarkingMade;
+
+impl MachTargetWriter for MarkingMade {
+    fn backend(&self) -> &dyn llrm_object::assembler::AsmBackend {
+        &Marking
+    }
+
+    fn cpu(&self) -> (u32, u32) {
+        Made.cpu()
+    }
+
+    fn lists_locals(&self) -> bool {
+        Made.lists_locals()
+    }
+
+    fn relocation(
+        &self,
+        reloc: &Reloc,
+    ) -> Result<llrm_macho::Described, Unsupported> {
+        Made.relocation(reloc)
+    }
+}
+
+/// The container wrote a field's bytes itself, so a target's backend never saw
+/// the fixups it was made to fill (`applyFixup` is the target's).
+#[test]
+fn a_field_is_filled_by_the_targets_backend() {
+    let mut made = program();
+    made.sections[0].relocs.clear();
+    let plain = write_with(&made, &Made).unwrap();
+    let marked = write_with(&made, &MarkingMade).unwrap();
+    let marks = |bytes: &[u8]| bytes.windows(8).any(|window| window == [0xEE; 8]);
+    assert!(!marks(&plain) && marks(&marked));
 }

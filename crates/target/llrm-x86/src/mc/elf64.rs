@@ -28,6 +28,10 @@ impl Machine for X8664 {
     /// `SHT_X86_64_UNWIND`.
     const UNWIND_TYPE: u32 = 0x7000_0001;
 
+    fn backend() -> &'static dyn llrm_object::assembler::AsmBackend {
+        &super::backend::FIELDS
+    }
+
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
         let from = reloc.pc_bias;
         let (kind, width, from) = match (reloc.kind, reloc.pc_rel) {

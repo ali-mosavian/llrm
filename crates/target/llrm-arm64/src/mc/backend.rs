@@ -7,6 +7,9 @@ use super::fixup;
 
 pub struct Arm64Backend;
 
+/// The backend the object writers ask to fill a field.
+pub static BACKEND: Arm64Backend = Arm64Backend;
+
 impl AsmBackend for Arm64Backend {
     fn kind_info(
         &self,

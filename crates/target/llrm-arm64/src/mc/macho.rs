@@ -24,6 +24,10 @@ const ARM64_RELOC_GOT_LOAD_PAGEOFF12: u32 = 6;
 pub struct Arm64MachO;
 
 impl MachTargetWriter for Arm64MachO {
+    fn backend(&self) -> &dyn llrm_object::assembler::AsmBackend {
+        &super::backend::BACKEND
+    }
+
     fn cpu(&self) -> (u32, u32) {
         (CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64_ALL)
     }

@@ -23,6 +23,10 @@ impl Machine for I386 {
     const NUMBER: u16 = 3;
     const ADDEND: bool = false;
 
+    fn backend() -> &'static dyn llrm_object::assembler::AsmBackend {
+        &super::backend::FIELDS
+    }
+
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
         let from = reloc.pc_bias;
         let (kind, width, from) = match (reloc.kind, reloc.pc_rel) {

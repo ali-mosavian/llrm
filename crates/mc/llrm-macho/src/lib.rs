@@ -17,7 +17,7 @@
 //! (`N_WEAK_DEF`) replaces only itself, and each reference between two symbols
 //! is a relocation.
 
-use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, assembler::AsmBackend};
 
 const MH_MAGIC_64: u32 = 0xFEED_FACF;
 const MH_OBJECT: u32 = 1;
@@ -140,6 +140,10 @@ pub struct Described {
 /// What a target says of the Mach-O object it writes (LLVM's
 /// `MCMachObjectTargetWriter`).
 pub trait MachTargetWriter {
+    /// The target's assembler backend, which fills the fields the file keeps
+    /// (`MCAsmBackend::applyFixup`).
+    fn backend(&self) -> &dyn AsmBackend;
+
     /// `cputype` and `cpusubtype`.
     fn cpu(&self) -> (u32, u32);
 
@@ -270,13 +274,11 @@ pub fn write<W: MachTargetWriter>(
             // LLVM resolves a difference of two sections' symbols (no entry).
             if section.role == Role::Unwind && one.pc_rel && matches!(one.target, Target::Section(_)) {
                 let Target::Section(home) = one.target else { unreachable!("matched") };
-                let width = one.width();
                 let value = address[home] as i64 + one.addend - (address[index] + one.at) as i64;
-                image[one.at..one.at + width].copy_from_slice(&value.to_le_bytes()[..width]);
+                flavor.backend().apply_fixup(&mut image, one.at, one.kind, true, value, &section.name)?;
                 continue;
             }
             let Described { kind, length, pcrel, beyond, addend_in_field } = flavor.relocation(one)?;
-            let width = one.width();
             // A section's start is a local symbol at offset 0 of it.
             let (target, home) = match one.target {
                 Target::Symbol(target) => (Some(target), None),
@@ -291,7 +293,7 @@ pub fn write<W: MachTargetWriter>(
             {
                 let offset = u32::try_from(one.addend)
                     .map_err(|_| unsupported(format!("{}: an offset of {} does not fit", section.name, one.addend)))?;
-                image[one.at..one.at + width].copy_from_slice(&u64::from(offset).to_le_bytes()[..width]);
+                flavor.backend().apply_fixup(&mut image, one.at, one.kind, false, i64::from(offset), &section.name)?;
                 continue;
             }
             let (symbolnum, external, field) = match target.and_then(|target| index_of[target]) {
@@ -339,7 +341,7 @@ pub fn write<W: MachTargetWriter>(
                 ));
                 continue;
             }
-            apply_fixup(&mut image, one.at, width, pcrel, field, &section.name)?;
+            flavor.backend().apply_fixup(&mut image, one.at, one.kind, pcrel, field, &section.name)?;
             made.push((
                 one.at,
                 [

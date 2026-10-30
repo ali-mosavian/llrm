@@ -408,7 +408,9 @@ fn pack_field(
     value: i64,
 ) -> Result<(), llrm_object::Unsupported> {
     let bytes = if kind == POINTER { 2 } else { width(kind) };
-    llrm_object::apply_fixup(buffer, at, bytes, kind.pc_rel, value, "")
+    // A far pointer's offset is its first two bytes: patched as data of that
+    // width.
+    llrm_x86::mc::backend::FIELDS.apply_fixup(buffer, at, Fix::abs(bytes).kind, kind.pc_rel, value, "")
 }
 
 /// What a relocated field holds, sign-extended from the bytes that hold an

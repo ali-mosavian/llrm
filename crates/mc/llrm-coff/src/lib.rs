@@ -3,7 +3,7 @@
 //! types: see [`Machine`]. `llrm-x86`'s `mc::coff32` and `mc::coff64` are the
 //! machines.
 
-use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, assembler::AsmBackend};
 
 const SCN_CNT_CODE: u32 = 0x20;
 const SCN_CNT_INITIALIZED_DATA: u32 = 0x40;
@@ -26,7 +26,6 @@ const SYMBOL: usize = 18;
 /// to (`baked`): `REL32` is the field's end.
 pub struct Relocation {
     pub kind: u16,
-    pub width: usize,
     pub baked: usize,
 }
 
@@ -42,6 +41,10 @@ pub trait Machine {
     const SAFE_SEH: bool = false;
 
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported>;
+
+    /// The target's assembler backend, which fills the fields the file keeps
+    /// (`MCAsmBackend::applyFixup`).
+    fn backend() -> &'static dyn AsmBackend;
 }
 
 fn unsupported(text: impl Into<String>) -> Unsupported {
@@ -242,12 +245,12 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut image = section.image.clone();
         let mut entries = Vec::new();
         for one in &section.relocs {
-            let Relocation { kind, width, baked } = M::relocation(one)?;
+            let Relocation { kind, baked } = M::relocation(one)?;
             let Target::Symbol(target) = one.target else { return Err(unsupported("a reference to a group is OMF's")) };
             // The linker adds S + field (- P - baked, if relative); the model
             // wants S + addend - (at + pc_bias).
             let field = one.addend - one.beyond(baked);
-            apply_fixup(&mut image, one.at, width, one.pc_rel, field, &section.name)?;
+            M::backend().apply_fixup(&mut image, one.at, one.kind, one.pc_rel, field, &section.name)?;
             put32(&mut entries, one.at as u32);
             put32(&mut entries, coff_symbol[target]);
             put16(&mut entries, kind);

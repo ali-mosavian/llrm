@@ -32,6 +32,10 @@ impl Machine for Arm64 {
     const NUMBER: u16 = EM_AARCH64;
     const ADDEND: bool = true;
 
+    fn backend() -> &'static dyn llrm_object::assembler::AsmBackend {
+        &super::backend::BACKEND
+    }
+
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
         // Every instruction relocation computes its value from the symbol and
         // the addend alone (`from` is 0): the page and branch kinds subtract

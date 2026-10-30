@@ -503,7 +503,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
 
 /// `word` with the pc-relative field of `kind` filled for a target `offset`
 /// bytes from the instruction (a label of the same function).
-pub fn resolve(
+pub(super) fn resolve(
     word: u32,
     kind: FixupKind,
     offset: i64,

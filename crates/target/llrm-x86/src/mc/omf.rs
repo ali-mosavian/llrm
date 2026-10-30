@@ -8,6 +8,10 @@ use super::fixup;
 pub struct X86Omf;
 
 impl OmfTargetWriter for X86Omf {
+    fn backend(&self) -> &dyn llrm_object::assembler::AsmBackend {
+        &super::backend::FIELDS
+    }
+
     fn kind_info(
         &self,
         kind: FixupKind,

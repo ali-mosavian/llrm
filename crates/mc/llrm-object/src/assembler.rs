@@ -4,6 +4,28 @@ use llrm_support::hash::HashMap;
 
 use crate::{FixupKind, FixupKindInfo, Unsupported};
 
+/// A target with data fields only: the generic kinds, no instruction field and
+/// no nop. What a container takes for a target that declares nothing more, and
+/// what its tests make targets of.
+pub struct GenericBackend;
+
+impl AsmBackend for GenericBackend {
+    fn kind_info(
+        &self,
+        kind: FixupKind,
+    ) -> FixupKindInfo {
+        kind.info()
+    }
+
+    fn write_nop_data(
+        &self,
+        _: &mut Vec<u8>,
+        _: usize,
+    ) -> bool {
+        false
+    }
+}
+
 pub trait AsmBackend {
     /// What `kind` says of the field it patches.
     fn kind_info(

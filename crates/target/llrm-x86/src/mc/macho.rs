@@ -27,6 +27,10 @@ fn unsupported(text: impl Into<String>) -> Unsupported {
 pub struct X8664MachO;
 
 impl MachTargetWriter for X8664MachO {
+    fn backend(&self) -> &dyn llrm_object::assembler::AsmBackend {
+        &super::backend::FIELDS
+    }
+
     fn cpu(&self) -> (u32, u32) {
         (CPU_TYPE_X86_64, CPU_SUBTYPE_X86_64_ALL)
     }
