@@ -676,8 +676,8 @@ pub fn optimized_with<E: From<String>>(
     // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/ArgumentPromotion.cpp#L581),
     // which this promotion does not. The length it makes an argument crosses
     // the recursion as a value only IPSCCP's lattice folds. Exit: the
-    // frontend states the descriptor length as an IR fact (or passes the
-    // scalar) so the pin's own pipeline folds it, promotion follows the pin's
+    // by-value slice parameters (#6140) pass the length as a
+    // scalar the pin's own pipeline folds, promotion follows the pin's
     // conditions, and a sweep shows this call does nothing; then it goes.
     // Owner w2.
     if promoted_any {
