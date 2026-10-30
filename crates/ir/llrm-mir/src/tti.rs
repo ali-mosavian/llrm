@@ -602,6 +602,16 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// Beyond the pin: whether a strict exit compare of a unit-stride counter
+    /// that never passes its bound should become `!=` (`exitne`). Counting to
+    /// zero and testing `!=` is cheap where a decrement sets the flags and one
+    /// branch follows (m68k `subq; bne`, `dbra`), not where the compare is
+    /// free anyway (x86: the rewrite moved `bq32` rows the wrong way). Off by
+    /// default; a target opts in where it measured a win.
+    fn prefers_exit_ne(&self) -> bool {
+        false
+    }
+
     /// `isNumRegsMajorCostOfLSR`.
     fn is_num_regs_major_cost_of_lsr(&self) -> bool {
         true
