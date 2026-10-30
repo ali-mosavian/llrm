@@ -111,6 +111,12 @@ fn judged(body: &LirBody) -> Vec<i64> {
         .collect()
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Instructions `walk` visited: the work, for the doubling test.
+    pub static VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `live` before `insns`, given it after them; `dead` is told the index of
 /// each store to a slot not live after it.
 fn walk(
@@ -120,6 +126,8 @@ fn walk(
     dead: &mut dyn FnMut(usize),
 ) {
     for (at, one) in insns.iter().enumerate().rev() {
+        #[cfg(test)]
+        VISITED.with(|visited| visited.set(visited.get() + 1));
         let Some(what) = one.what.as_ref() else { continue };
         let set = |live: &mut [u64], on: bool, id: usize| {
             if on {
