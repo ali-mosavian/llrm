@@ -138,6 +138,11 @@ impl Level {
     }
 
     fn options(self) -> Options {
+        // The DAG builder lowers the switches (`visitSwitch`); the MIR pass would do it first.
+        Options { lower_switches: false, ..self.generic_options() }
+    }
+
+    fn generic_options(self) -> Options {
         match self {
             Self::O0 => Options::none(),
             Self::O1 => Options::basic(),
