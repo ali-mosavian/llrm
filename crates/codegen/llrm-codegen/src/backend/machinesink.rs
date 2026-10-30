@@ -597,11 +597,20 @@ impl Sinker {
         // block sets DS. A load of a global stayed above the branch that used
         // it only on one arm (`mov edx,[g]` for `cmp [g],0`).
         let default_segment = one.what.as_ref().is_some_and(|what| {
-            let mut places = what.sources.iter().chain(&what.dests).filter_map(|place| match place {
-                Loc::Mem(mem) => Some(mem),
-                _ => None,
-            });
-            places.clone().next().is_some() && places.all(|mem| mem.addr.as_ref().is_none_or(|addr| addr.segment == iced_x86::Register::None))
+            let mut places = what
+                .sources
+                .iter()
+                .chain(&what.dests)
+                .filter_map(
+                    |place| match place {
+                        Loc::Mem(mem) => Some(mem),
+                        _ => None,
+                    },
+                );
+            places.clone().next().is_some()
+                && places.all(|mem| {
+                    mem.addr.as_ref().is_none_or(|addr| addr.segment == llrm_lir::registers::RegId::None.iced())
+                })
         }) && !self.insns[block][index + 1..].iter().any(|later| {
             liveness::effect(self.regs, self.bits, later)
                 .is_none_or(|found| found.writes.iter().any(|&(register, _)| self.regs.is_data_segment(register)))

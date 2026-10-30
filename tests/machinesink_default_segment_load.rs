@@ -2,9 +2,9 @@
 
 mod common;
 
-/// `g` is read only after `a > 0`. The load reads DS here and counted as machine
-/// state, so it stayed above the first branch (`mov edx,[g]` before `jle`,
-/// 1 instruction on every call, a register held across the branch); the
+/// `g` is read only after `a > 0`. The load reads DS here and counted as
+/// machine state, so it stayed above the first branch (`mov edx,[g]` before
+/// `jle`, 1 instruction on every call, a register held across the branch); the
 /// pin's `MOV32rm` names no segment register and sinks it. jpeg_fixed bq32 -Os
 /// had its loads of globals above branches, as in this function.
 #[test]
