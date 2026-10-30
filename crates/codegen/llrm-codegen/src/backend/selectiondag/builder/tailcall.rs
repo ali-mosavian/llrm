@@ -241,7 +241,8 @@ pub(super) fn tail_position(
     // `returnTypeIsEligibleForTailCall`: the `ret` returns the call's value
     let returned = function.instruction(ret).operands.first();
     match (call.result, returned) {
-        (None, None) => true,
+        // a `ret void` ignores what the call returns
+        (_, None) => true,
         (Some(value), Some(Operand::Value(one))) => value == *one,
         _ => false,
     }
@@ -306,6 +307,19 @@ mod tests {
             "{HEAD}define i32 @f(ptr %p, i32 %a) {{\n  %r = tail call i32 @g(i32 %a)\n  store i32 1, ptr %p\n  ret i32 %r\n}}\n"
         );
         assert_eq!(count(&text), 0);
+    }
+
+    /// `ret void` after a call that returns a value: "it doesn't matter what the call's return
+    /// type is" (`returnTypeIsEligibleForTailCall`). It was refused, so the pin's `puts`
+    /// tail call at the end of a `void` function was a `BL` and `RET`.
+    #[test]
+    fn a_void_return_after_a_value_returning_call_is_in_tail_position() {
+        let text = format!("{HEAD}define void @f(i32 %a) {{\n  %r = tail call i32 @g(i32 %a)\n  ret void\n}}\n");
+        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let (_, _, function) =
+            module.functions().find(|(_, g, f)| !f.is_declaration() && g.name.as_deref() == Some("f")).unwrap();
+        let call = function.iter_block(function.entry().unwrap()).next().unwrap();
+        assert!(super::tail_position(function, call));
     }
 
     /// The return must hand back the call's value, not another.
