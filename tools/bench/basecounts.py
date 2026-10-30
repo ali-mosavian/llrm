@@ -140,12 +140,13 @@ def base_counts(
 
 
 def waivers(root: Path = ROOT) -> list[dict]:
-    """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`."""
+    """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`. `exception = true`: a temporary trade-off, named in every run, and
+    a failure once a row is no longer worse than the base."""
     out = []
     for path in sorted((root / WAIVERS).glob("*.toml")):
         data = tomllib.loads(path.read_text())
         for row in data.get("row", []):
-            out.append({**row, "reason": data.get("reason", ""), "file": path.name})
+            out.append({**row, "reason": data.get("reason", ""), "file": path.name, "exception": data.get("exception", False)})
     return out
 
 
@@ -195,6 +196,9 @@ def waived_lines(rows: list[tuple], waived: list[dict], stale: list[str]) -> tup
         per_file[one[0]] = per_file.get(one[0], 0) + 1
     lines = [f"WAIVED {len(rows)} rows of {len(waived)} waivers (limit = measured): " + (", ".join(f"{f} {n}" for f, n in sorted(per_file.items())) or "none")]
     problems = ["WAIVERS: none was applied and none is stale: the waivers are not being read"] if waived and not rows and not stale else []
+    excepted = {w["file"] for w in waived if w.get("exception")}
+    lines += [f"EXCEPTION {one[0]}: {one[1]} {one[2]} {one[3]} -> {one[4]}" for one in rows if one[0] in excepted]
+    problems += [f"EXCEPTION {one} is no longer worse than the base: delete it" for one in stale if one.split(":", 1)[0] in excepted]
     return lines, problems
 
 
