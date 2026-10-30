@@ -17,12 +17,10 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::pipeline::{datalayout, reachable_runtime, sanitize, tool};
-use llrm_6502::dagisel::function::select_function;
+use common::pipeline::{reachable_runtime, tool};
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::emit::equates;
 use llrm_6502::platform::{Platform, SIM65};
-use llrm_6502::select::{function_items, module_text};
 
 const LZ: &str = "48,97,98,99,3,0,17,100,2,0,255,5,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,7,0,255,26,63,120,121,122,40,0,0,242,255,0,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,1,0,48,101,110,100";
 const BUF: [u8; 16] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3];
@@ -134,6 +132,13 @@ const KERNELS3: &[Kernel] = &[
     k("hash16", &[P("str", 0)], true, 51393),
     k("dotx", &[P("buf", 0), P("tab", 0), B(8)], false, 101),
 ];
+
+/// The driver, built beside its backend: `cargo build --release --bin llrm-cc --bin llrm-6502-llc`.
+fn llrm_cc() -> PathBuf {
+    std::env::var_os("LLRM_CC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/release/llrm-cc"))
+}
 
 fn work(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bench").join(name);
@@ -382,98 +387,34 @@ fn cc65_row(
     Ok(row)
 }
 
-/// Stands in for the 6502 override-table entry for loop unrolling: bytes over
-/// speed on an 8-bit target, so no full or partial unroll (the table moves
-/// these to `opt`'s pipeline entry unchanged).
-const UNROLL: [&str; 2] = ["-unroll-threshold=0", "-unroll-full-max-count=0"];
-
 fn ours_row(
     kernel: &Kernel,
-    clang_flag: &str,
+    level: &str,
     tag: &str,
 ) -> Result<Row, String> {
     let dir = work(kernel.name);
     let (define, source) = kernel_source(kernel);
-    // clang is only the C front end (msp430: int and pointers are 16 bits, as
-    // for cc65); the optimizer then runs on our datalayout, so only i8 is a
-    // legal integer and nothing widens to i16. `opt` stands in for the
-    // middle end, with the vectorizers off: there is no vector MIR.
-    let raw = format!("raw-{tag}.ll");
-    let ll = format!("k-{tag}.ll");
-    tool(
-        &dir,
-        "clang",
-        &[
-            "--target=msp430",
-            "-funsigned-char",
-            "-fpack-struct=1",
-            "-O2",
-            "-Xclang",
-            "-disable-llvm-passes",
-            "-S",
-            "-emit-llvm",
-            "-fno-unwind-tables",
-            &define,
-            "-o",
-            &raw,
-            source.to_str().unwrap(),
-        ],
-    )?;
-    let retargeted: String = std::fs::read_to_string(dir.join(&raw))
-        .unwrap()
-        .lines()
-        .filter(|l| !l.starts_with("target triple"))
-        .map(|l| {
-            if l.starts_with("target datalayout") {
-                format!("target datalayout = \"{}\"", datalayout())
-            } else {
-                l.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    std::fs::write(dir.join(&raw), retargeted).unwrap();
-    tool(
-        &dir,
-        "/usr/lib/llvm-20/bin/opt",
-        &[clang_flag, UNROLL[0], UNROLL[1], "-vectorize-loops=false", "-vectorize-slp=false", "-S", &raw, "-o", &ll],
-    )?;
-    let text = sanitize(&std::fs::read_to_string(dir.join(&ll)).unwrap());
-    let mut module =
-        llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e:?}").chars().take(100).collect::<String>())?;
-    llrm_6502::prepare::split_phi_edges(&mut module);
+    // llrm-cc: clang's msp430 front end (int and pointers are 16 bits, as for cc65), llrm's mid-end with no
+    // vectorizer (there is no vector MIR), and our backend, to ca65 text.
     let name = kernel.name;
+    let asm = format!("k-{tag}.s");
+    let target = if cmos(tag) { "65c02-sim65" } else { "6502-sim65" };
+    tool(
+        &dir,
+        llrm_cc().to_str().unwrap(),
+        &[&format!("--target={target}"), level, "-S", &define, "-o", &asm, source.to_str().unwrap()],
+    )?;
     let cpu = if cmos(tag) { Cpu::W65c02 } else { Cpu::Mos6502 };
-    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let selection = select_function(&module, name, cpu)?;
-        {
-            let mut selection = selection;
-            selection.zero_page = Platform::parse(SIM65).unwrap().zero_page;
-            if tag.starts_with("os") {
-                selection.tuning = llrm_6502::alloc::Tuning::SIZE;
-            }
-            module_text(&module, &[(name, &selection)]).map(|texts| texts.concat())
-        }
-    }));
-    let path = {
-        let selection = select_function(&module, name, cpu).map_err(|e| format!("{e:?}"))?;
-        let (items, _) = function_items(&module, name, &selection)?;
-        if llrm_6502::alloc::build(name, &items).is_ok() { "allocator" } else { "cell" }
-    };
-    println!("path  {tag:<9} {name:<9} {path}");
-    let function = match compiled {
-        Ok(Ok(text)) => text,
-        Ok(Err(why)) => return Err(format!("select: {why}").chars().take(100).collect::<String>()),
-        Err(_) => return Err("select: panic".into()),
-    };
+    let text = std::fs::read_to_string(dir.join(&asm)).unwrap();
+    // the equates are the platform's, not the function's
+    let function: String = text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
     let bss = function
         .lines()
         .filter(|l| l.contains(": .res "))
         .map(|l| l.rsplit(' ').next().unwrap().parse::<usize>().unwrap())
         .sum();
-    let platform = Platform::parse(SIM65).unwrap();
     let runtime = reachable_runtime(&function);
-    let file = format!("{}.import buf\n{function}{runtime}", equates(&platform));
+    let file = format!(".import buf\n{text}{runtime}");
     std::fs::write(dir.join(format!("f-{tag}.s")), file).unwrap();
     let row = measure(&dir, kernel, Abi::Ours, tag, bss)?;
     // the table's bytes are the linked binary's, to the byte

@@ -18,3 +18,7 @@ toml = { workspace = true }
 [build-dependencies]
 llrm-target = { workspace = true }
 llrm-lir = { workspace = true }
+
+[[bin]]
+name = "llrm-6502-llc"
+path = "src/bin/llc.rs"
