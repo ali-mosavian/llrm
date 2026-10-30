@@ -669,7 +669,7 @@ pub fn optimized_with<E: From<String>>(
             reoptimised(&mut program.modules[at], &mut modules[at], id, "promote.")?;
         }
     }
-    // DEVIATE: the pin's IPSCCP runs once, before the CGSCC walk
+    // DEVIATE SD443: the pin's IPSCCP runs once, before the CGSCC walk
     // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1228),
     // and its ArgumentPromotion leaves a recursive function's descriptor alone
     // when it holds a pointer

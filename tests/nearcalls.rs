@@ -111,7 +111,7 @@ fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
 
 /// Queens' `safe(q, row, col)` reads `q[r]` for `r < row` under a bounds check
 /// on the slice's length, 12, which reaches it as a field of the descriptor.
-/// DEVIATE (the extra IPSCCP after `promote.`, interprocedural.rs; owner w2,
+/// DEVIATE SD443 (the extra IPSCCP after `promote.`, interprocedural.rs; owner w2,
 /// fix-by 2026-11-07): the checks
 /// are folded. The pin keeps them: its ArgumentPromotion refuses a recursive
 /// function's descriptor that holds a pointer (ArgumentPromotion.cpp#L581 at
