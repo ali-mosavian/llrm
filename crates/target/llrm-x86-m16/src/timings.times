@@ -1,3 +1,6 @@
+# `=` in a cell: the price is in the CPU's file, machine/tune/x86/<march>.toml, which holds the rows every
+# target with that CPU agrees on. Correct such a price there; a row only this target states is here.
+#
 # x86's CPU timings: one column a CPU, `-` where the CPU has no price for a
 # form (the 386 has no `unknown`, and the others no `mov_seg_r`). Read by
 # `llrm-target`; a target's mapping from these prices to its operations is
@@ -34,11 +37,11 @@ default_cpu           486
 cpus                  386  486   P5   P6   K5   K6   K7 Core
 # What gcc's -march and -mtune call each (K5 has no gcc name).
 march                i386 i486 pentium pentiumpro k5 k6 athlon core2
-issue                   1    1    2    3    4    3    3    4
-in_order                1    1    1    0    0    0    0    0
-prefix                  0    1    1    0    0    0    0    0
-partial_stall           0    0    0    7    0    1    1    2
-lcp_stall               0    0    0    6    0    0    0    3
+issue                   =    =    =    =    =    =    =    =
+in_order                =    =    =    =    =    =    =    =
+prefix                  =    =    =    =    =    =    =    =
+partial_stall           =    =    =    =    =    =    =    =
+lcp_stall               =    =    =    =    =    =    =    =
 # gcc's by-pieces limits for a constant memset (x86-tune-costs.h, gcc 13.4.0): stores while their count is under
 # the ratio, else the CPU's stringop algorithm, `rep stos` of dwords here (i386_memset :146 is bytes, i486_memset
 # :256, pentium_memset :368); `-` where gcc's algorithm is a loop or a libcall (pentiumpro_memset :588, k6_memset
@@ -47,168 +50,168 @@ lcp_stall               0    0    0    6    0    0    0    3
 # pentium_cost :424; `clear_ratio` (zero) is CLEAR_RATIO: :203, :313, :425. The `_size` rows are the
 # optimise-for-size path every CPU takes: i386.h:1866 MOVE_RATIO(speed false) 3, :1871 CLEAR_RATIO 2, its algorithm
 # `rep stos` of bytes (ix86_size_memset :33).
-set_ratio               3    3    6    -    -    -    -    -
-clear_ratio             3    3    6    -    -    -    -    -
-set_ratio_size          3    3    3    3    3    3    3    3
-clear_ratio_size        2    2    2    2    2    2    2    2
+set_ratio               =    =    =    -    -    -    -    -
+clear_ratio             =    =    =    -    -    -    -    -
+set_ratio_size          =    =    =    =    =    =    =    =
+clear_ratio_size        =    =    =    =    =    =    =    =
 # A switch of at least `jump_table` case values is a jump table: gcc's case_values_threshold, targhooks.cc:1846
 # (4 with a `casesi` pattern, else 5); i386.md has `tablejump` (:15824) and no `casesi`, and i386.cc sets no
 # TARGET_CASE_VALUES_THRESHOLD.
-jump_table              5    5    5    5    5    5    5    5
+jump_table              =    =    =    =    =    =    =    =
 # Bytes of a line of the first-level data cache, which loop interchange prices
 # a walk by: the 486's 8 KB cache has 16 byte lines (Intel's i486 data sheet),
 # the Pentium's, Pentium Pro's, K5's and K6's 32 (Intel and AMD's manuals), the
 # Athlon's and Core 2's 64. The 386 has no cache on the chip.
-cache_line              -   16   32   32   32   32   64   64
-pairing                 0    0    1    0    0    0    0    0
+cache_line              -   =    =    =    =    =    =    = 
+pairing                 =    =    =    =    =    =    =    =
 
 [clocks]
-alu_rr                  2    1    1    1    1    1    1    1   # add/and/or/xor/sub/cmp reg,reg
-xchg_rr                 3    3    3    3    2    2    2    3   # xchg reg,reg: the 486's is Intel's 3, not an ALU's 1
-alu_ri                  2    1    1    1    1    1    1    1   # ... reg,imm
-alu_rm                  6    2    2    1    1    1    1    1   # ... reg,[mem]
-alu_mr                  8    3    3    1    1    1    1    1   # ... [mem],reg
-mov_rr                  2    1    1    1    1    1    1    1
-mov_rm                  4    1    1    1    1    1    1    1
-mov_mr                  2    1    1    1    1    1    1    1
-mov_ri                  2    1    1    1    1    1    1    1
-shift_ri                3    2    1    1    1    1    1    1   # shl/shr/sar reg,imm
-shift_r1                3    3    1    1    1    1    1    1   # the D1 form, reg,1
-movzx                   4    3    3    1    1    1    1    1
-setcc                   4    4    1    1    1    1    1    1   # setcc r8: 386 and 486 4 when set (Intel 240440-002); P5 onwards 1-2
-cdq                     2    3    2    1    1    1    1    1
-imul_r32               22   26   10    4    4    3    5    3   # 486 is 13-42, data dependent
-imul_m32               26   27   11    4    4    3    5    3
-idiv_r32               43   43   46   39   42   41   40   26   # the expensive one
-idiv_m32               47   44   47   39   42   41   40   26
-push_r                  2    1    1    1    1    1    1    1
-push_m                  6    4    2    2    2    2    2    2
-push_i                  2    1    1    1    1    1    1    1
-pop_r                   4    4    1    1    1    1    1    1   # POP memory is an implicit stack load and an explicit store. 486
-pop_m                   5    6    1    4    3    3    4    4   # Intel's 80386 table: POP m16/m32 is five clocks, not the four-unit register form.
-pop_seg                 8    3    3    8    3    3    5    8   # segment load, costly on P6+
-mov_seg_r               8    3    3    8    3    3    5    8
-les                     8    6    4    9    4    4    6    9
-nop                     3    1    1    1    1    1    1    1
-jmp_short               7    3    1    1    1    1    1    1   # predicted taken
-jmp_indirect            11    5    2    2    2    2    2    2   # JMP r/m near: Intel's 80386 and i486 tables; the rest recalled, to audit
-jcc                     7    3    1    1    1    1    1    1   # predicted
-call_far               37   18    4   21    4    4    5   22   # real mode, no gate
-ret_far                18   13    4   17    4    4    5   18   # RET imm16: the same clocks as RET, 2 bytes more.
-ret_pop                18   13    4   17    4    4    5   18
-unknown                 -    2    2    2    2    2    2    2
-mul_r16                22   13   11    4    4    3    5    3
-div_r16                27   24   25   23   24   24   24   22
-lahf                    2    3    2    3    2    2    2    3
-sahf                    3    2    2    1    1    1    1    1
-lea                     2    1    1    1    1    1    1    1
-rep_stos                5    7    9   30   10   10   15   30
-rep_stos_cell           5    4    1    1    1    1    1    1
-rep_movs                8   12   13   30   12   12   15   30   # Intel's 80386 table: REP MOVS is 8+4n.
-rep_movs_cell           4    3    1    1    1    1    1    1
-mul_r32                38   26   10    4    4    3    5    3
-leave                   6    5    2    2    2    2    2    2
-x87_load                8    3    1    1    6    4    4    6   # GCC's i386 table: x87 loads/stores eight units, arithmetic 23/27/88. Memory arithmetic includes both components.
-x87_exchange           18    4    1    0    1    2    0    0   # 80387 register exchange is eighteen clocks.
-x87_store               8    8    2    1    6    1    3    6
-x87_convert_store      35   35    7    7    7    6   12   12
-x87_add                23    8    3    3    5    2    4    3
-x87_add_m              31    8    3    3    7    4    4    9
-x87_mul                27   16    3    5    8    2    4    5
-x87_mul_m              35   14    3    5   10    4    4   11
-x87_div                88   73   39   38   56   56   24   24
-x87_div_m              96   73   39   38   62   58   24   30
+alu_rr                  =    =    =    =    =    =    =    =   # add/and/or/xor/sub/cmp reg,reg
+xchg_rr                 =    =    =    =    =    =    =    =   # xchg reg,reg: the 486's is Intel's 3, not an ALU's 1
+alu_ri                  =    =    =    =    =    =    =    =   # ... reg,imm
+alu_rm                  =    =    =    =    =    =    =    =   # ... reg,[mem]
+alu_mr                  =    =    =    =    =    =    =    =   # ... [mem],reg
+mov_rr                  =    =    =    =    =    =    =    =
+mov_rm                  =    =    =    =    =    =    =    =
+mov_mr                  =    =    =    =    =    =    =    =
+mov_ri                  =    =    =    =    =    =    =    =
+shift_ri                =    =    =    =    =    =    =    =   # shl/shr/sar reg,imm
+shift_r1                =    =    =    =    =    =    =    =   # the D1 form, reg,1
+movzx                   =    =    =    =    =    =    =    =
+setcc                   =    =    =    =    =    =    =    =   # setcc r8: 386 and 486 4 when set (Intel 240440-002); P5 onwards 1-2
+cdq                     =    =    =    =    =    =    =    =
+imul_r32               =    =    =     =    =    =    =    =   # 486 is 13-42, data dependent
+imul_m32               =    =    =     =    =    =    =    =
+idiv_r32               =    =    =    =    =    =    =    =    # the expensive one
+idiv_m32               =    =    =    =    =    =    =    = 
+push_r                  =    =    =    =    =    =    =    =
+push_m                  =    =    =    =    =    =    =    =
+push_i                  =    =    =    =    =    =    =    =
+pop_r                   =    =    =    =    =    =    =    =   # POP memory is an implicit stack load and an explicit store. 486
+pop_m                   =    =    =    =    =    =    =    =   # Intel's 80386 table: POP m16/m32 is five clocks, not the four-unit register form.
+pop_seg                 =    3    3    =    =    =    =    =   # segment load, costly on P6+
+mov_seg_r               =    3    3    =    =    =    =    =
+les                     =    6    4    =    =    =    =    =
+nop                     =    =    =    =    =    =    =    =
+jmp_short               =    =    =    =    =    =    =    =   # predicted taken
+jmp_indirect            =     =    =    =    =    =    =    =   # JMP r/m near: Intel's 80386 and i486 tables; the rest recalled, to audit
+jcc                     =    =    =    =    =    =    =    =   # predicted
+call_far               =    18    4   =     =    =    =   =    # real mode, no gate
+ret_far                =    13    4   =     =    =    =   =    # RET imm16: the same clocks as RET, 2 bytes more.
+ret_pop                =    13    4   =     =    =    =   = 
+unknown                 -    =    =    =    =    =    =    =
+mul_r16                =    =    =     =    =    =    =    =
+div_r16                =    =    =    =    =    =    =    = 
+lahf                    =    =    =    =    =    =    =    =
+sahf                    =    =    2    =    =    =    =    =
+lea                     =    =    =    =    =    =    =    =
+rep_stos                =    =    =   =    =    =    =    = 
+rep_stos_cell           =    =    =    =    =    =    =    =
+rep_movs                =   =    =    =    =    =    =    =    # Intel's 80386 table: REP MOVS is 8+4n.
+rep_movs_cell           =    =    =    =    =    =    =    =
+mul_r32                =    =    =     =    =    =    =    =
+leave                   =    =    2    =    =    =    =    =
+x87_load                =    =    =    =    =    =    =    =   # GCC's i386 table: x87 loads/stores eight units, arithmetic 23/27/88. Memory arithmetic includes both components.
+x87_exchange           =     =    =    =    =    =    =    =   # 80387 register exchange is eighteen clocks.
+x87_store               =    =    =    =    =    =    =    =
+x87_convert_store      =    =     =    =    =    =   =    = 
+x87_add                =     =    =    =    =    =    =    =
+x87_add_m              =     =    =    =    =    =    =    =
+x87_mul                =    =     =    =    =    =    =    =
+x87_mul_m              =    =     =    =   =     =    =   = 
+x87_div                =    =    =    =    =    =    =    = 
+x87_div_m              =    =    =    =    =    =    =    = 
 # Integer memory operands (fild, fiadd, fimul, fidiv, m16/m32int): the 486 column is Intel's i486 data sheet 240440-002, Table 10.3,
 # the least of each range (fild 13, fiadd m16 20, fimul m16 23, fidiv m16 85; the vsgcc harness counts the same); every other column is
 # the pair the form replaces, `fild` as a load plus the operation, which favours neither: no source here states a cheaper form.
-x87_load_i               8   13    1    1    6    4    4    6
-x87_add_i               31   20    4    4   11    6    8    9
-x87_mul_i               35   23    4    6   14    6    8   11
-x87_div_i               96   85   40   39   62   60   28   30
-x87_cmp_i               31   15    4    4   11    6    8    9
-x87_control_load        8    4    8   10    6    6   42    6
-x87_control_store       8    3    2    4    6    4    1    6
-jcc_not_taken           3    1    1    1    1    1    1    1   # Intel's 80386 table: Jcc is 7+m taken, 3 not.
+x87_load_i               =   =     =    =    =    =    =    =
+x87_add_i               =    =     =    =   =     =    =    =
+x87_mul_i               =    =     =    =   =     =    =   = 
+x87_div_i               =    =    =    =    =    =    =    = 
+x87_cmp_i               =    =     =    =   =     =    =    =
+x87_control_load        =    =    =   =     =    =   =     =
+x87_control_store       =    =    =    =    =    =    =    =
+jcc_not_taken           =    =    =    =    =    =    =    =   # Intel's 80386 table: Jcc is 7+m taken, 3 not.
 
 # Audited bounds of the signed multiply and divide (docs/measurement/timing-audit.md), where a CPU has them:
 # the least and most clocks by operand width in bytes (`w2`, `w4`), and where the P5 prices the full product
 # of a word differently (`smul_full_w2`). Read by backend/timing.rs; the divide has one figure.
-smul_min_w2             9   13   10    -    -    -    -    -
-smul_max_w2            22   26   10    -    -    -    -    -
-smul_min_w4             9   13   10    -    -    -    -    -
-smul_max_w4            38   42   10    -    -    -    -    -
-smul_full_w2            -    -   11    -    -    -    -    -
+smul_min_w2             =   =    =     -    -    -    -    -
+smul_max_w2            =    =    =     -    -    -    -    -
+smul_min_w4             =   =    =     -    -    -    -    -
+smul_max_w4            =    =    =     -    -    -    -    -
+smul_full_w2            -    -   =     -    -    -    -    -
 # Intel 240440-002 Table 10.1 note 3: 10 + max(bits of the multiplier, n), n = 3 for a positive multiplier and 5 for a negative one.
-smul_negative_bits      -    5    -    -    -    -    -    -
-sdiv_w2                27   27   30    -    -    -    -    -
-sdiv_w4                43   43   46    -    -    -    -    -
-udiv_w2                22   24   25    -    -    -    -    -
-udiv_w4                38   40   41    -    -    -    -    -
+smul_negative_bits      -    =    -    -    -    -    -    -
+sdiv_w2                =    =    =     -    -    -    -    -
+sdiv_w4                =    =    =     -    -    -    -    -
+udiv_w2                =    =    =     -    -    -    -    -
+udiv_w4                =    =    =     -    -    -    -    -
 
 [latency]
-alu_rr                  2    1    1    1    1    1    1    1   # add/and/or/xor/sub/cmp reg,reg
-xchg_rr                 3    3    3    3    2    2    2    3   # xchg reg,reg: the 486's is Intel's 3, not an ALU's 1
-alu_rm                  6    2    2    4    3    3    3    4   # ... reg,[mem]
-alu_mr                  8    3    3    4    3    3    3    4   # ... [mem],reg
-mov_rr                  2    1    1    1    1    1    1    1
-mov_rm                  4    1    1    3    2    2    3    4
-mov_mr                  2    1    1    3    2    2    3    3
-mov_ri                  2    1    1    1    1    1    1    1
-shift_ri                3    2    1    1    1    1    1    1   # shl/shr/sar reg,imm
-shift_r1                3    3    1    1    1    1    1    1   # the D1 form, reg,1
-movzx                   4    3    3    1    1    1    1    1
-setcc                   4    4    1    1    1    1    1    1
-cdq                     2    3    2    1    1    1    1    1
-imul_r32               22   26   10    4    4    3    5    3   # 486 is 13-42, data dependent
-imul_m32               26   27   11    7    6    5    7    6
-mul_r16                22   13   11    4    4    3    5    3
-idiv_r32               43   43   46   39   42   41   40   26   # the expensive one
-idiv_m32               47   44   47   39   42   41   40   26
-div_r16                27   24   25   23   24   24   24   22
-push_r                  2    1    1    1    1    1    1    1
-push_m                  6    4    2    3    2    2    2    3
-push_i                  2    1    1    1    1    1    1    1
-pop_r                   4    4    1    3    2    2    2    3   # POP memory is an implicit stack load and an explicit store. 486
-pop_m                   5    6    1    4    3    3    4    4
-pop_seg                 8    3    3    8    3    3    5    8   # segment load, costly on P6+
-mov_seg_r               8    3    3    8    3    3    5    8
-les                     8    6    4    9    4    4    6    9
-nop                     3    1    1    1    1    1    1    1
-jmp_short               7    3    1    1    1    1    1    1   # predicted taken
-jmp_indirect            11    5    2    2    2    2    2    2   # JMP r/m near: Intel's 80386 and i486 tables; the rest recalled, to audit
-jcc                     7    3    1    1    1    1    1    1   # predicted
-call_far               37   18    4   21    4    4    5   22   # real mode, no gate
-ret_far                18   13    4   17    4    4    5   18   # RET imm16: the same clocks as RET, 2 bytes more.
-lahf                    2    3    2    3    2    2    2    3
-sahf                    3    2    2    1    1    1    1    1
-unknown                 -    2    2    2    2    2    2    2
-alu_ri                  2    1    1    1    1    1    1    1   # ... reg,imm
-ret_pop                18   13    4   17    4    4    5   18
-lea                     2    1    1    1    1    1    1    1
-rep_stos                5    7    9   30   10   10   15   30
-rep_stos_cell           5    4    1    1    1    1    1    1
-rep_movs                8   12   13   30   12   12   15   30
-rep_movs_cell           4    3    1    1    1    1    1    1
-mul_r32                38   26   10    4    4    3    5    3
-leave                   6    5    2    2    2    2    2    2
-x87_load                8    3    1    1    6    4    4    6
-x87_exchange           18    4    1    0    1    2    0    0
-x87_store               8    8    2    1    6    1    3    6
-x87_convert_store      35   35    7    7    7    6   12   12
-x87_add                23    8    3    3    5    2    4    3
-x87_add_m              31    8    3    3    7    4    4    9
-x87_mul                27   16    3    5    8    2    4    5
-x87_mul_m              35   14    3    5   10    4    4   11
-x87_div                88   73   39   38   56   56   24   24
-x87_div_m              96   73   39   38   62   58   24   30
+alu_rr                  =    =    =    =    =    =    =    =   # add/and/or/xor/sub/cmp reg,reg
+xchg_rr                 =    =    =    =    =    =    =    =   # xchg reg,reg: the 486's is Intel's 3, not an ALU's 1
+alu_rm                  =    =    =    =    =    =    =    =   # ... reg,[mem]
+alu_mr                  =    =    =    =    =    =    =    =   # ... [mem],reg
+mov_rr                  =    =    =    =    =    =    =    =
+mov_rm                  =    =    =    =    =    =    =    =
+mov_mr                  =    =    =    =    =    =    =    =
+mov_ri                  =    =    =    =    =    =    =    =
+shift_ri                =    =    =    =    =    =    =    =   # shl/shr/sar reg,imm
+shift_r1                =    =    =    =    =    =    =    =   # the D1 form, reg,1
+movzx                   =    =    =    =    =    =    =    =
+setcc                   =    =    =    =    =    =    =    =
+cdq                     =    =    =    =    =    =    =    =
+imul_r32               =    =    =     =    =    =    =    =   # 486 is 13-42, data dependent
+imul_m32               =    =    =     =    =    =    =    =
+mul_r16                =    =    =     =    =    =    =    =
+idiv_r32               =    =    =    =    =    =    =    =    # the expensive one
+idiv_m32               =    =    =    =    =    =    =    = 
+div_r16                =    =    =    =    =    =    =    = 
+push_r                  =    =    =    =    =    =    =    =
+push_m                  =    =    =    =    =    =    =    =
+push_i                  =    =    =    =    =    =    =    =
+pop_r                   =    =    =    =    =    =    =    =   # POP memory is an implicit stack load and an explicit store. 486
+pop_m                   =    =    =    =    =    =    =    =
+pop_seg                 =    3    3    =    =    =    =    =   # segment load, costly on P6+
+mov_seg_r               =    3    3    =    =    =    =    =
+les                     =    6    4    =    =    =    =    =
+nop                     =    =    =    =    =    =    =    =
+jmp_short               =    =    =    =    =    =    =    =   # predicted taken
+jmp_indirect            =     =    =    =    =    =    =    =   # JMP r/m near: Intel's 80386 and i486 tables; the rest recalled, to audit
+jcc                     =    =    =    =    =    =    =    =   # predicted
+call_far               =    18    4   =     =    =    =   =    # real mode, no gate
+ret_far                =    13    4   =     =    =    =   =    # RET imm16: the same clocks as RET, 2 bytes more.
+lahf                    =    =    =    =    =    =    =    =
+sahf                    =    =    2    =    =    =    =    =
+unknown                 -    =    =    =    =    =    =    =
+alu_ri                  =    =    =    =    =    =    =    =   # ... reg,imm
+ret_pop                =    13    4   =     =    =    =   = 
+lea                     =    =    =    =    =    =    =    =
+rep_stos                =    =    =   =    =    =    =    = 
+rep_stos_cell           =    =    =    =    =    =    =    =
+rep_movs                =   =    =    =    =    =    =    = 
+rep_movs_cell           =    =    =    =    =    =    =    =
+mul_r32                =    =    =     =    =    =    =    =
+leave                   =    =    2    =    =    =    =    =
+x87_load                =    =    =    =    =    =    =    =
+x87_exchange           =     =    =    =    =    =    =    =
+x87_store               =    =    =    =    =    =    =    =
+x87_convert_store      =    =     =    =    =    =   =    = 
+x87_add                =     =    =    =    =    =    =    =
+x87_add_m              =     =    =    =    =    =    =    =
+x87_mul                =    =     =    =    =    =    =    =
+x87_mul_m              =    =     =    =   =     =    =   = 
+x87_div                =    =    =    =    =    =    =    = 
+x87_div_m              =    =    =    =    =    =    =    = 
 # Integer memory operands (fild, fiadd, fimul, fidiv, m16/m32int): the 486 column is Intel's i486 data sheet 240440-002, Table 10.3,
 # the least of each range (fild 13, fiadd m16 20, fimul m16 23, fidiv m16 85; the vsgcc harness counts the same); every other column is
 # the pair the form replaces, `fild` as a load plus the operation, which favours neither: no source here states a cheaper form.
-x87_load_i               8   13    1    1    6    4    4    6
-x87_add_i               31   20    4    4   11    6    8    9
-x87_mul_i               35   23    4    6   14    6    8   11
-x87_div_i               96   85   40   39   62   60   28   30
-x87_cmp_i               31   15    4    4   11    6    8    9
-x87_control_load        8    4    8   10    6    6   42    6
-x87_control_store       8    3    2    4    6    4    1    6
-jcc_not_taken           3    1    1    1    1    1    1    1
+x87_load_i               =   =     =    =    =    =    =    =
+x87_add_i               =    =     =    =   =     =    =    =
+x87_mul_i               =    =     =    =   =     =    =   = 
+x87_div_i               =    =    =    =    =    =    =    = 
+x87_cmp_i               =    =     =    =   =     =    =    =
+x87_control_load        =    =    =   =     =    =   =     =
+x87_control_store       =    =    =    =    =    =    =    =
+jcc_not_taken           =    =    =    =    =    =    =    =

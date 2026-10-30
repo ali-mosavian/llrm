@@ -1,0 +1,38 @@
+== -loop-interchange-profitabilities=ignore
+@f
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v7, %B10 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v5, %B9 ], [ 0, %B3 ]
+  br label %B5
+B5:
+  br i1 %cond, label %B6, label %B12
+B6:
+  br label %B7
+B7:
+  %v2 = getelementptr [42 x i8], ptr %A, i64 %v0, i64 %v1
+  store i8 1, ptr %v2
+  %v3 = add i64 %v0, 1
+  %v4 = icmp eq i64 %v3, 42
+  br label %B8
+B8:
+  br label %B9
+B9:
+  %v5 = add i64 %v1, 1
+  %v6 = icmp eq i64 %v5, 42
+  br i1 %v6, label %B10, label %B4
+B10:
+  %v7 = add i64 %v0, 1
+  %v8 = icmp eq i64 %v7, 42
+  br i1 %v8, label %B11, label %B2
+B11:
+  ret void
+B12:
+  br label %B7

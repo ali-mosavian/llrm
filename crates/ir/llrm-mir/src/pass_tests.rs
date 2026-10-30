@@ -8,7 +8,7 @@ use crate::module::{Change, Function, GlobalKind, Module, Operand};
 use crate::opcode::Attribute;
 use crate::parse;
 use crate::passes::{
-    Analyses, Analysis, Dominators, FunctionPass, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager,
+    Analyses, Analysis, Dominators, FunctionPass, Loops, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager,
     PreservedAnalyses, Unit,
 };
 use crate::target::Neutral;
@@ -144,6 +144,58 @@ fn a_pass_that_says_none_drops_what_it_did_not_name_edited_or_not() {
     passes.add(Look(PreservedAnalyses::all()));
     passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
     assert_eq!(COMPUTED.get(), 2, "a pass that said none kept an analysis");
+}
+
+/// Asks for the loops and the dominators, then says what it kept.
+struct LooksAtLoops {
+    seen: Rc<RefCell<Vec<(Rc<crate::loopinfo::LoopInfo>, Rc<crate::domtree::DomTree>)>>>,
+    kept: PreservedAnalyses,
+}
+
+impl FunctionPass for LooksAtLoops {
+    fn name(&self) -> &'static str {
+        "looks-at-loops"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let loops = analyses.get::<Loops>(unit.context, unit.layout, unit.function);
+        let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
+        self.seen.borrow_mut().push((loops, tree));
+        self.kept.clone()
+    }
+}
+
+/// LLVM's `preserveSet<CFGAnalyses>`: a pass that left the CFG alone keeps the
+/// loops and dominators, one that names nothing drops both. Without the set
+/// the manager recomputed LoopInfo after every pass that only moved
+/// instructions.
+#[test]
+fn a_pass_preserving_the_cfg_keeps_loops_and_dominators() {
+    let run = |kept: PreservedAnalyses| {
+        let seen = Rc::default();
+        let mut passes = PassManager::default();
+        passes.add(LooksAtLoops { seen: Rc::clone(&seen), kept });
+        passes.add(LooksAtLoops { seen: Rc::clone(&seen), kept: PreservedAnalyses::all() });
+        passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+        let seen = seen.borrow();
+        (Rc::ptr_eq(&seen[0].0, &seen[1].0), Rc::ptr_eq(&seen[0].1, &seen[1].1))
+    };
+    assert_eq!(run(PreservedAnalyses::none().preserve_cfg()), (true, true), "the CFG set was not honoured");
+    assert_eq!(run(PreservedAnalyses::none()), (false, false), "premise: none drops both");
+}
+
+/// A pass that claims the CFG and changes it is caught, as LLVM's
+/// `-verify-analysis-invalidation` does.
+#[test]
+fn a_pass_claiming_the_cfg_it_changed_is_caught() {
+    let mut passes = PassManager { verify_invalidation: true, ..Default::default() };
+    passes.add(Retarget(PreservedAnalyses::none().preserve_cfg()));
+    let error = passes.run_module(&mut module(), Rc::new(Neutral)).err();
+    assert!(error.is_some_and(|e| e.starts_with("retarget claims to preserve")), "a changed CFG went unnoticed");
 }
 
 /// Asks, drops as a rule that edited would, and asks again, the body unedited.
@@ -329,6 +381,57 @@ fn verify_each_names_the_pass_that_broke_the_module() {
     assert!(error.starts_with("after drop-return: "), "{error}");
 }
 
+const TWO_EDGES: &str = "define i16 @p(i1 %c) {\nentry:\n  br i1 %c, label %b, label %b\nb:\n  %x = phi i16 [ 1, %entry ], [ 1, %entry ]\n  ret i16 %x\n}\n";
+
+/// Drops one of the two inputs of the phi that two edges feed: the body
+/// `SsaUpdaterBulk` left (#3016), which made SCEV and liveness allocate 3 GB.
+#[cfg(debug_assertions)]
+struct ShortPhi;
+
+#[cfg(debug_assertions)]
+impl FunctionPass for ShortPhi {
+    fn name(&self) -> &'static str {
+        "short-phi"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let function = &mut *unit.function;
+        let block = function.layout()[1];
+        let phi = function.iter_block(block).next().unwrap();
+        let first = function.instruction(phi).operands[..2].to_vec();
+        function.set_operands(phi, first);
+        PreservedAnalyses::none()
+    }
+}
+
+/// A pass that leaves a phi short of an input for one of its edges is named
+/// where it ran, not found as a consumer's runaway allocation later. Only a
+/// build with debug assertions checks: LLVM verifies a release build's passes
+/// only under `-verify-each`.
+#[test]
+#[cfg(debug_assertions)]
+fn a_pass_that_leaves_a_phi_short_of_an_edge_is_named() {
+    let mut module = parse::module(TWO_EDGES).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(ShortPhi);
+    let error = passes.run_module(&mut module, Rc::new(Neutral)).unwrap_err();
+    assert!(error.starts_with("after short-phi: a phi in %b has 1 inputs from %entry for 2 edges"), "{error}");
+}
+
+/// The well-formed body passes the same check.
+#[test]
+fn a_pass_that_keeps_every_phi_whole_is_not_refused() {
+    let mut module = parse::module(TWO_EDGES).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+}
+
 /// A bisection limit runs only the first pass runs, as LLVM's
 /// `-opt-bisect-limit`: with two functions and a limit of one, the second
 /// is left as it was. It found the peephole that added deedlines' z%(i)
@@ -477,7 +580,8 @@ fn a_required_module_analysis_is_computed_again_only_after_a_pass_drops_it() {
 }
 
 /// `-verify-analysis-invalidation` of a module analysis: a pass claiming
-/// to keep `Bodies` while it empties a body.
+/// to keep `Bodies` while it empties a body (which `CalleeEffects` reads as
+/// `defined`, so it is stale too).
 #[test]
 fn a_pass_keeping_a_module_analysis_it_changed_is_caught() {
     struct Empty;
@@ -502,7 +606,7 @@ fn a_pass_keeping_a_module_analysis_it_changed_is_caught() {
     passes.add(Empty);
     assert_eq!(
         passes.run_module(&mut module(), Rc::new(Neutral)).err().as_deref(),
-        Some("empty claims to preserve bodies but changed them")
+        Some("empty claims to preserve bodies, callee-effects but changed them")
     );
 }
 
@@ -735,6 +839,124 @@ fn a_frozen_module_analysis_is_held_past_passes_that_add_no_memory_operation() {
     assert_eq!(SUMMED.get(), 2, "a pass that may add one did not drop it");
 }
 
+thread_local! {
+    static PEEKED: RefCell<Vec<Option<usize>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Notes what the outer proxy holds of `Bodies`.
+struct Peek;
+
+impl FunctionPass for Peek {
+    fn name(&self) -> &'static str {
+        "peek"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        PEEKED.with_borrow_mut(|seen| seen.push(analyses.outer().cached::<Bodies>().as_deref().copied()));
+        PreservedAnalyses::all()
+    }
+}
+
+/// Reports @f changed: the manager drops what it does not keep.
+struct Touch;
+
+impl ModulePass for Touch {
+    fn name(&self) -> &'static str {
+        "touch"
+    }
+
+    fn run(
+        &mut self,
+        module: &mut Module,
+        _: &mut ModuleAnalyses,
+    ) -> Vec<GlobalId> {
+        vec![module.named("f").unwrap()]
+    }
+}
+
+/// Abandons `Bodies`, as GlobalDCE does once it renumbers the globals.
+struct Abandon;
+
+impl crate::program::ProgramPass for Abandon {
+    fn name(&self) -> &'static str {
+        "abandon"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut crate::program::Program,
+        analyses: &mut crate::program::ProgramAnalyses,
+    ) -> Result<(), String> {
+        analyses.abandon::<Bodies>();
+        Ok(())
+    }
+}
+
+/// Makes a table, as SimplifyCFG's lookup tables are made.
+struct Tabulate;
+
+impl FunctionPass for Tabulate {
+    fn name(&self) -> &'static str {
+        "tabulate"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let ty = unit.context.types.int(16);
+        unit.declared.table("t", ty, unit.context.int(ty, 0));
+        PreservedAnalyses::none()
+    }
+}
+
+/// A table's initializer may hold a tracked global's address: GlobalsAA held
+/// past r_portal.c's lookup table of `@_dg_push`, `@_dg_pop` and `@_dg_proj`
+/// still had them reached by name only (`LLRM_CHECK_STALE` failed).
+#[test]
+fn a_pass_that_adds_a_table_abandons_a_cached_module_analysis() {
+    SUMMED.set(0);
+    PEEKED.with_borrow_mut(Vec::clear);
+    let mut passes = PassManager::default();
+    passes.require_cached::<Bodies>();
+    passes.compute::<Bodies>();
+    passes.add(Peek);
+    passes.add(Tabulate);
+    passes.add(Peek);
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(PEEKED.take(), [Some(1), None], "held past a pass that added a table");
+}
+
+/// GlobalsAA was computed 9 times for one compile of d_faces -O2, LLVM's twice:
+/// at `RequireAnalysisPass<GlobalsAA>` and `RecomputeGlobalsAAPass`. A cached
+/// analysis is made at its points alone, read only once made, and kept past
+/// every pass until one abandons it.
+#[test]
+fn a_cached_module_analysis_is_computed_at_its_points_alone() {
+    SUMMED.set(0);
+    PEEKED.with_borrow_mut(Vec::clear);
+    let mut passes = PassManager::default();
+    passes.require_cached::<Bodies>();
+    passes.add(Peek);
+    passes.compute::<Bodies>();
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add_module(Touch);
+    passes.add_program(Nothing);
+    passes.add(Peek);
+    passes.recompute::<Bodies>();
+    passes.add(Peek);
+    passes.add_program(Abandon);
+    passes.add(Peek);
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(SUMMED.get(), 2, "computed other than at its two points");
+    assert_eq!(PEEKED.take(), [None, Some(1), Some(1), None]);
+}
+
 /// What a body holds, as a number: a summary that can only be an upper bound.
 struct Size;
 
@@ -775,7 +997,7 @@ impl FunctionPass for Lies {
         let ty = unit.context.types.int(16);
         let one = unit.context.int(ty, 1);
         let function = &mut *unit.function;
-        let first = function.block(function.entry().unwrap()).instructions()[0];
+        let first = function.block(function.entry().unwrap()).first().expect("a block with an instruction");
         let made = function.create_instruction(
             crate::opcode::Opcode::Binary(crate::opcode::BinaryOp::Add),
             ty,
@@ -1207,4 +1429,206 @@ fn a_result_derived_from_one_held_from_before_the_edit_is_not_kept_as_current() 
     analyses.invalidate(function, &PreservedAnalyses::none());
     analyses.get::<Above>(context, &layout, function);
     assert_eq!(ABOVE_RUNS.get(), 2, "kept as derived from the body as it stands");
+}
+
+/// Asks for `Counted`, edits the function, and says it kept `Counted` by
+/// updating it: it puts the result back when `put_back` (LLVM's pass that
+/// uses `MemorySSAUpdater` and preserves `MemorySSAAnalysis`).
+struct UpdatesCounted {
+    put_back: bool,
+}
+
+impl FunctionPass for UpdatesCounted {
+    fn name(&self) -> &'static str {
+        "updates-counted"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        analyses.get::<Counted>(unit.context, unit.layout, unit.function);
+        let last = *unit.function.layout().last().unwrap();
+        let ret = unit.function.terminator(last).unwrap();
+        unit.function.erase(ret).unwrap();
+        if self.put_back {
+            analyses.replace::<Counted>(unit.function, unit.function.layout().len());
+        }
+        PreservedAnalyses::none().preserve_updated::<Counted>()
+    }
+}
+
+/// A pass that updated an analysis and put it back keeps it for the next pass:
+/// the analysis is built once over the two passes that ask. Without
+/// `replace` the manager would have built it again after the edit.
+#[test]
+fn an_analysis_a_pass_updated_and_put_back_is_not_computed_again() {
+    COMPUTED.set(0);
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(UpdatesCounted { put_back: true });
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(COMPUTED.get(), 1, "the updated result was not kept");
+}
+
+/// A pass that says it kept an analysis by updating it and did not put the
+/// result back left it as old as the edit: the manager computes it again.
+#[test]
+fn an_analysis_a_pass_said_it_updated_and_did_not_put_back_is_computed_again() {
+    COMPUTED.set(0);
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(UpdatesCounted { put_back: false });
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(COMPUTED.get(), 2, "a stale result stood");
+}
+
+/// `LLRM_CHECK_STALE` names the pass that declared it and did not put back.
+#[test]
+fn the_stale_check_names_a_pass_that_declared_an_update_it_did_not_put_back() {
+    crate::passes::check_stale(true);
+    let mut passes = PassManager::default();
+    passes.add(Look(PreservedAnalyses::all()));
+    passes.add(UpdatesCounted { put_back: false });
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = passes.run_module(&mut module(), Rc::new(Neutral));
+    }));
+    crate::passes::check_stale(false);
+    let message = caught.expect_err("the lying pass went unnoticed");
+    let message = message.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(message.contains("updates-counted") && message.contains("replace"), "{message}");
+}
+
+/// A function pass that changes nothing.
+struct Idle;
+
+impl FunctionPass for Idle {
+    fn name(&self) -> &'static str {
+        "idle"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        PreservedAnalyses::all()
+    }
+}
+
+/// A program pass that changes nothing.
+struct Nothing;
+
+impl crate::program::ProgramPass for Nothing {
+    fn name(&self) -> &'static str {
+        "nothing"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut crate::program::Program,
+        _: &mut crate::program::ProgramAnalyses,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// `LLRM_DUMP_INPUTS` dumped the input of the pipeline's function passes only:
+/// a module or program pass (the inliner, GlobalDCE, IPSCCP) wrote nothing, and
+/// a miscompile after inlining could not name its pass (#2982).
+#[test]
+fn a_module_or_program_pass_dumps_its_input_when_inputs_are_dumped() {
+    let text = "define i16 @g() {\nentry:\n  ret i16 0\n}\n\ndefine i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %b\nb:\n  ret i16 0\n}\n";
+    let run = |inputs: bool| {
+        let directory = std::env::temp_dir().join(format!("llrm-dump-inputs-{}-{inputs}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let mut module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        let mut passes = PassManager::default();
+        passes.dump = Some(directory.clone());
+        passes.dump_inputs = inputs;
+        passes.add_module(MarkReadonly);
+        passes.add_program(Nothing);
+        passes.add(Idle);
+        passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+        directory
+    };
+    let directory = run(true);
+    let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
+    let lines: Vec<Vec<&str>> = manifest.lines().map(|line| line.split(' ').collect()).collect();
+    let named: Vec<(&str, &str)> = lines.iter().map(|line| (line[0], line[2])).collect();
+    assert_eq!(
+        named,
+        [("mark-readonly", "0001-in-mark-readonly.ll"), ("nothing", "0002-in-nothing.ll"), ("idle", "0003-in-idle.ll"),]
+    );
+    assert!(lines.iter().all(|line| line[3].parse::<usize>().unwrap() > 0), "{manifest}");
+    for (_, file) in named {
+        assert!(directory.join(file).exists(), "{file}");
+    }
+    let off = run(false);
+    assert!(!off.join("manifest.txt").exists(), "an input dump without LLRM_DUMP_INPUTS");
+    let _ = std::fs::remove_dir_all(directory);
+    let _ = std::fs::remove_dir_all(off);
+}
+
+/// A dump per pass added: five passes of the three kinds wrote fewer input
+/// files and manifest lines than that when a kind was left out.
+#[test]
+fn a_manager_with_n_passes_writes_n_input_dumps_and_n_manifest_lines() {
+    let directory = std::env::temp_dir().join(format!("llrm-dump-count-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let mut module = parse::module(TEXT).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = PassManager::default();
+    passes.dump = Some(directory.clone());
+    passes.dump_inputs = true;
+    passes.add_program(Nothing);
+    passes.add(Idle);
+    passes.add_program(Nothing);
+    passes.add(Idle);
+    passes.add(Idle);
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    let files = std::fs::read_dir(&directory)
+        .unwrap()
+        .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().contains("-in-"))
+        .count();
+    let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
+    assert_eq!((files, manifest.lines().count()), (5, 5), "{manifest}");
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// RunsOver the bodies it is run over.
+struct RunsOver(std::rc::Rc<std::cell::Cell<usize>>);
+
+impl FunctionPass for RunsOver {
+    fn name(&self) -> &'static str {
+        "runs-over"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        self.0.set(self.0.get() + 1);
+        PreservedAnalyses::all()
+    }
+}
+
+/// A private function whose last call was inlined has a body of one
+/// `unreachable` (`bare`): the pin's CGSCC walk deletes it, so no function pass
+/// runs over it. The late slots ran on four such leaves of d_faces, in every
+/// slot.
+#[test]
+fn a_function_the_inliner_deleted_is_not_run_over() {
+    let mut module = parse::module(
+        "define internal i16 @gone() {\nb1:\n  unreachable\n}\n\ndefine i16 @kept(i16 %x) {\nb1:\n  ret i16 %x\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let runs = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut passes = PassManager::default();
+    passes.add(RunsOver(std::rc::Rc::clone(&runs)));
+    passes.run_module(&mut module, std::rc::Rc::new(crate::target::Neutral)).expect("a run");
+    assert_eq!(runs.get(), 1, "only @kept is run over");
 }

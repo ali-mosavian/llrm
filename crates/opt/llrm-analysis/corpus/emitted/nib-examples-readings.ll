@@ -1,4 +1,4 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
 @$str1 = internal constant [10 x i8] c"\08\00\03\00\03\00raw\00"
 @$str2 = internal constant [11 x i8] c"\08\00\04\00\04\00avg3\00"
@@ -7,7 +7,7 @@ target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
 @$str5 = internal constant [25 x i8] c"\08\00\12\00\12\00peak of the rest: \00"
 @$str6 = internal constant [8 x i8] c"\08\00\01\00\01\00 \00"
 
-define internal i16 @main() addrspace(1) {
+define internal cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %0 = alloca i16
   %1 = alloca [16 x i8]
@@ -24,222 +24,193 @@ b1:
   %12 = alloca i16
   %13 = alloca i16
   %14 = alloca [16 x i8]
-  store i16 0, ptr %0
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 16, i1 false)
-  store i16 0, ptr %2
-  call void @llvm.memset.p0.i16(ptr %3, i8 0, i16 4, i1 false)
-  call void @llvm.memset.p0.i16(ptr %4, i8 0, i16 8, i1 false)
-  call void @llvm.memset.p0.i16(ptr %5, i8 0, i16 16, i1 false)
-  call void @llvm.memset.p0.i16(ptr %6, i8 0, i16 8, i1 false)
-  call void @llvm.memset.p0.i16(ptr %7, i8 0, i16 16, i1 false)
-  call void @llvm.memset.p0.i16(ptr %8, i8 0, i16 8, i1 false)
-  call void @llvm.memset.p0.i16(ptr %9, i8 0, i16 8, i1 false)
-  call void @llvm.memset.p0.i16(ptr %10, i8 0, i16 12, i1 false)
-  call void @llvm.memset.p0.i16(ptr %11, i8 0, i16 8, i1 false)
-  store i16 0, ptr %12
-  store i16 0, ptr %13
-  call void @llvm.memset.p0.i16(ptr %14, i8 0, i16 16, i1 false)
   store i16 8, ptr %12, !tbaa !2
   store i16 8, ptr %13, !tbaa !2
-  %15 = sub i16 0, 0
-  %16 = getelementptr inbounds i16, ptr %14, i16 %15
-  store i16 12, ptr %16, !tbaa !2
-  %17 = sub i16 1, 0
-  %18 = getelementptr inbounds i16, ptr %14, i16 %17
-  store i16 15, ptr %18, !tbaa !2
-  %19 = sub i16 2, 0
-  %20 = getelementptr inbounds i16, ptr %14, i16 %19
-  store i16 11, ptr %20, !tbaa !2
-  %21 = sub i16 3, 0
-  %22 = getelementptr inbounds i16, ptr %14, i16 %21
-  store i16 30, ptr %22, !tbaa !2
-  %23 = sub i16 4, 0
-  %24 = getelementptr inbounds i16, ptr %14, i16 %23
-  store i16 28, ptr %24, !tbaa !2
-  %25 = sub i16 5, 0
-  %26 = getelementptr inbounds i16, ptr %14, i16 %25
-  store i16 27, ptr %26, !tbaa !2
-  %27 = sub i16 6, 0
-  %28 = getelementptr inbounds i16, ptr %14, i16 %27
-  store i16 9, ptr %28, !tbaa !2
-  %29 = sub i16 7, 0
-  %30 = getelementptr inbounds i16, ptr %14, i16 %29
-  store i16 10, ptr %30, !tbaa !2
-  %31 = getelementptr i8, ptr @$str1, i16 6
-  %32 = getelementptr i8, ptr %31, i16 -4
-  %33 = load i16, ptr %32
-  %34 = addrspacecast ptr %31 to ptr addrspace(1)
-  store i16 %33, ptr %11, !tbaa !2
-  %35 = getelementptr inbounds i8, ptr %11, i16 2
-  store i16 %33, ptr %35, !tbaa !2
-  %36 = getelementptr inbounds i8, ptr %11, i16 4
-  store ptr addrspace(1) %34, ptr %36, !tbaa !2
-  %37 = addrspacecast ptr %11 to ptr addrspace(1)
-  %38 = addrspacecast ptr %14 to ptr addrspace(1)
+  %15 = getelementptr inbounds i16, ptr %14, i16 0
+  store i16 12, ptr %15, !tbaa !2
+  %16 = getelementptr inbounds i16, ptr %14, i16 1
+  store i16 15, ptr %16, !tbaa !2
+  %17 = getelementptr inbounds i16, ptr %14, i16 2
+  store i16 11, ptr %17, !tbaa !2
+  %18 = getelementptr inbounds i16, ptr %14, i16 3
+  store i16 30, ptr %18, !tbaa !2
+  %19 = getelementptr inbounds i16, ptr %14, i16 4
+  store i16 28, ptr %19, !tbaa !2
+  %20 = getelementptr inbounds i16, ptr %14, i16 5
+  store i16 27, ptr %20, !tbaa !2
+  %21 = getelementptr inbounds i16, ptr %14, i16 6
+  store i16 9, ptr %21, !tbaa !2
+  %22 = getelementptr inbounds i16, ptr %14, i16 7
+  store i16 10, ptr %22, !tbaa !2
+  %23 = getelementptr i8, ptr @$str1, i16 6
+  %24 = getelementptr i8, ptr %23, i16 -4
+  %25 = load i16, ptr %24
+  %26 = addrspacecast ptr %23 to ptr addrspace(1)
+  store i16 %25, ptr %11, !tbaa !2
+  %27 = getelementptr inbounds i8, ptr %11, i16 2
+  store i16 %25, ptr %27, !tbaa !2
+  %28 = getelementptr inbounds i8, ptr %11, i16 4
+  store ptr addrspace(1) %26, ptr %28, !tbaa !2
+  %29 = addrspacecast ptr %11 to ptr addrspace(1)
+  %30 = addrspacecast ptr %14 to ptr addrspace(1)
   store i16 8, ptr %9, !tbaa !2
-  %39 = getelementptr inbounds i8, ptr %9, i16 2
-  store i16 8, ptr %39, !tbaa !2
-  %40 = getelementptr inbounds i8, ptr %9, i16 4
-  store ptr addrspace(1) %38, ptr %40, !tbaa !2
-  %41 = addrspacecast ptr %9 to ptr addrspace(1)
-  %42 = getelementptr inbounds i8, ptr %10, i16 2
-  %43 = addrspacecast ptr %42 to ptr addrspace(1)
-  %44 = load i16, ptr addrspace(1) %41, !tbaa !2
-  store i16 %44, ptr addrspace(1) %43
-  %45 = getelementptr i8, ptr addrspace(1) %41, i16 2
-  %46 = load i16, ptr addrspace(1) %45, !tbaa !2
-  %47 = getelementptr i8, ptr addrspace(1) %43, i16 2
-  store i16 %46, ptr addrspace(1) %47
-  %48 = getelementptr i8, ptr addrspace(1) %41, i16 4
-  %49 = load ptr addrspace(1), ptr addrspace(1) %48, !tbaa !2
-  %50 = getelementptr i8, ptr addrspace(1) %43, i16 4
-  store ptr addrspace(1) %49, ptr addrspace(1) %50
+  %31 = getelementptr inbounds i8, ptr %9, i16 2
+  store i16 8, ptr %31, !tbaa !2
+  %32 = getelementptr inbounds i8, ptr %9, i16 4
+  store ptr addrspace(1) %30, ptr %32, !tbaa !2
+  %33 = addrspacecast ptr %9 to ptr addrspace(1)
+  %34 = getelementptr inbounds i8, ptr %10, i16 2
+  %35 = addrspacecast ptr %34 to ptr addrspace(1)
+  %36 = load i16, ptr addrspace(1) %33, !tbaa !2
+  store i16 %36, ptr addrspace(1) %35
+  %37 = getelementptr i8, ptr addrspace(1) %33, i16 2
+  %38 = load i16, ptr addrspace(1) %37, !tbaa !2
+  %39 = getelementptr i8, ptr addrspace(1) %35, i16 2
+  store i16 %38, ptr addrspace(1) %39
+  %40 = getelementptr i8, ptr addrspace(1) %33, i16 4
+  %41 = load ptr addrspace(1), ptr addrspace(1) %40, !tbaa !2
+  %42 = getelementptr i8, ptr addrspace(1) %35, i16 4
+  store ptr addrspace(1) %41, ptr addrspace(1) %42
   store i16 0, ptr %10, !tbaa !2
-  %51 = getelementptr inbounds i8, ptr %10, i16 10
-  store i16 0, ptr %51, !tbaa !2
-  %52 = addrspacecast ptr %10 to ptr addrspace(1)
-  call addrspace(1) void @"report[$state0]"(ptr addrspace(1) %37, ptr addrspace(1) %52)
-  %53 = getelementptr i8, ptr @$str2, i16 6
-  %54 = getelementptr i8, ptr %53, i16 -4
-  %55 = load i16, ptr %54
-  %56 = addrspacecast ptr %53 to ptr addrspace(1)
-  store i16 %55, ptr %8, !tbaa !2
-  %57 = getelementptr inbounds i8, ptr %8, i16 2
-  store i16 %55, ptr %57, !tbaa !2
-  %58 = getelementptr inbounds i8, ptr %8, i16 4
-  store ptr addrspace(1) %56, ptr %58, !tbaa !2
-  %59 = addrspacecast ptr %8 to ptr addrspace(1)
-  %60 = addrspacecast ptr %14 to ptr addrspace(1)
+  %43 = getelementptr inbounds i8, ptr %10, i16 10
+  store i16 0, ptr %43, !tbaa !2
+  %44 = addrspacecast ptr %10 to ptr addrspace(1)
+  call cc 1005 addrspace(1) void @"report[$state0]"(ptr addrspace(1) %29, ptr addrspace(1) %44)
+  %45 = getelementptr i8, ptr @$str2, i16 6
+  %46 = getelementptr i8, ptr %45, i16 -4
+  %47 = load i16, ptr %46
+  %48 = addrspacecast ptr %45 to ptr addrspace(1)
+  store i16 %47, ptr %8, !tbaa !2
+  %49 = getelementptr inbounds i8, ptr %8, i16 2
+  store i16 %47, ptr %49, !tbaa !2
+  %50 = getelementptr inbounds i8, ptr %8, i16 4
+  store ptr addrspace(1) %48, ptr %50, !tbaa !2
+  %51 = addrspacecast ptr %8 to ptr addrspace(1)
+  %52 = addrspacecast ptr %14 to ptr addrspace(1)
   store i16 8, ptr %6, !tbaa !2
-  %61 = getelementptr inbounds i8, ptr %6, i16 2
-  store i16 8, ptr %61, !tbaa !2
-  %62 = getelementptr inbounds i8, ptr %6, i16 4
-  store ptr addrspace(1) %60, ptr %62, !tbaa !2
-  %63 = addrspacecast ptr %6 to ptr addrspace(1)
-  %64 = getelementptr inbounds i8, ptr %7, i16 2
-  %65 = addrspacecast ptr %64 to ptr addrspace(1)
-  %66 = load i16, ptr addrspace(1) %63, !tbaa !2
-  store i16 %66, ptr addrspace(1) %65
-  %67 = getelementptr i8, ptr addrspace(1) %63, i16 2
-  %68 = load i16, ptr addrspace(1) %67, !tbaa !2
-  %69 = getelementptr i8, ptr addrspace(1) %65, i16 2
-  store i16 %68, ptr addrspace(1) %69
-  %70 = getelementptr i8, ptr addrspace(1) %63, i16 4
-  %71 = load ptr addrspace(1), ptr addrspace(1) %70, !tbaa !2
-  %72 = getelementptr i8, ptr addrspace(1) %65, i16 4
-  store ptr addrspace(1) %71, ptr addrspace(1) %72
+  %53 = getelementptr inbounds i8, ptr %6, i16 2
+  store i16 8, ptr %53, !tbaa !2
+  %54 = getelementptr inbounds i8, ptr %6, i16 4
+  store ptr addrspace(1) %52, ptr %54, !tbaa !2
+  %55 = addrspacecast ptr %6 to ptr addrspace(1)
+  %56 = getelementptr inbounds i8, ptr %7, i16 2
+  %57 = addrspacecast ptr %56 to ptr addrspace(1)
+  %58 = load i16, ptr addrspace(1) %55, !tbaa !2
+  store i16 %58, ptr addrspace(1) %57
+  %59 = getelementptr i8, ptr addrspace(1) %55, i16 2
+  %60 = load i16, ptr addrspace(1) %59, !tbaa !2
+  %61 = getelementptr i8, ptr addrspace(1) %57, i16 2
+  store i16 %60, ptr addrspace(1) %61
+  %62 = getelementptr i8, ptr addrspace(1) %55, i16 4
+  %63 = load ptr addrspace(1), ptr addrspace(1) %62, !tbaa !2
+  %64 = getelementptr i8, ptr addrspace(1) %57, i16 4
+  store ptr addrspace(1) %63, ptr addrspace(1) %64
   store i16 0, ptr %7, !tbaa !2
-  %73 = getelementptr inbounds i8, ptr %7, i16 10
-  store i16 3, ptr %73, !tbaa !2
-  %74 = getelementptr inbounds i8, ptr %7, i16 12
-  store i16 0, ptr %74, !tbaa !2
-  %75 = getelementptr inbounds i8, ptr %7, i16 14
-  store i16 0, ptr %75, !tbaa !2
-  %76 = addrspacecast ptr %7 to ptr addrspace(1)
-  call addrspace(1) void @"report[$state1]"(ptr addrspace(1) %59, ptr addrspace(1) %76)
-  %77 = addrspacecast ptr %14 to ptr addrspace(1)
+  %65 = getelementptr inbounds i8, ptr %7, i16 10
+  store i16 3, ptr %65, !tbaa !2
+  %66 = getelementptr inbounds i8, ptr %7, i16 12
+  store i16 0, ptr %66, !tbaa !2
+  %67 = getelementptr inbounds i8, ptr %7, i16 14
+  store i16 0, ptr %67, !tbaa !2
+  %68 = addrspacecast ptr %7 to ptr addrspace(1)
+  call cc 1005 addrspace(1) void @"report[$state1]"(ptr addrspace(1) %51, ptr addrspace(1) %68)
+  %69 = addrspacecast ptr %14 to ptr addrspace(1)
   store i16 8, ptr %4, !tbaa !2
-  %78 = getelementptr inbounds i8, ptr %4, i16 2
-  store i16 8, ptr %78, !tbaa !2
-  %79 = getelementptr inbounds i8, ptr %4, i16 4
-  store ptr addrspace(1) %77, ptr %79, !tbaa !2
-  %80 = addrspacecast ptr %4 to ptr addrspace(1)
-  %81 = getelementptr inbounds i8, ptr %5, i16 2
-  %82 = addrspacecast ptr %81 to ptr addrspace(1)
-  %83 = load i16, ptr addrspace(1) %80, !tbaa !2
-  store i16 %83, ptr addrspace(1) %82
-  %84 = getelementptr i8, ptr addrspace(1) %80, i16 2
-  %85 = load i16, ptr addrspace(1) %84, !tbaa !2
-  %86 = getelementptr i8, ptr addrspace(1) %82, i16 2
-  store i16 %85, ptr addrspace(1) %86
-  %87 = getelementptr i8, ptr addrspace(1) %80, i16 4
-  %88 = load ptr addrspace(1), ptr addrspace(1) %87, !tbaa !2
-  %89 = getelementptr i8, ptr addrspace(1) %82, i16 4
-  store ptr addrspace(1) %88, ptr addrspace(1) %89
+  %70 = getelementptr inbounds i8, ptr %4, i16 2
+  store i16 8, ptr %70, !tbaa !2
+  %71 = getelementptr inbounds i8, ptr %4, i16 4
+  store ptr addrspace(1) %69, ptr %71, !tbaa !2
+  %72 = addrspacecast ptr %4 to ptr addrspace(1)
+  %73 = getelementptr inbounds i8, ptr %5, i16 2
+  %74 = addrspacecast ptr %73 to ptr addrspace(1)
+  %75 = load i16, ptr addrspace(1) %72, !tbaa !2
+  store i16 %75, ptr addrspace(1) %74
+  %76 = getelementptr i8, ptr addrspace(1) %72, i16 2
+  %77 = load i16, ptr addrspace(1) %76, !tbaa !2
+  %78 = getelementptr i8, ptr addrspace(1) %74, i16 2
+  store i16 %77, ptr addrspace(1) %78
+  %79 = getelementptr i8, ptr addrspace(1) %72, i16 4
+  %80 = load ptr addrspace(1), ptr addrspace(1) %79, !tbaa !2
+  %81 = getelementptr i8, ptr addrspace(1) %74, i16 4
+  store ptr addrspace(1) %80, ptr addrspace(1) %81
   store i16 0, ptr %5, !tbaa !2
-  %90 = getelementptr inbounds i8, ptr %5, i16 10
-  store i16 2, ptr %90, !tbaa !2
-  %91 = getelementptr inbounds i8, ptr %5, i16 12
-  store i16 0, ptr %91, !tbaa !2
-  %92 = getelementptr inbounds i8, ptr %5, i16 14
-  store i16 0, ptr %92, !tbaa !2
-  %93 = addrspacecast ptr %5 to ptr addrspace(1)
-  %94 = call addrspace(1) i32 @$state1.next(ptr addrspace(1) %93)
-  %95 = addrspacecast ptr %3 to ptr addrspace(1)
-  store i32 %94, ptr addrspace(1) %95, !tbaa !2
-  %96 = load i8, ptr %3, !tbaa !2
-  %97 = icmp eq i8 %96, 0
-  %98 = sext i1 %97 to i8
-  %99 = icmp ne i8 %98, 0
-  br i1 %99, label %b4, label %b3
+  %82 = getelementptr inbounds i8, ptr %5, i16 10
+  store i16 2, ptr %82, !tbaa !2
+  %83 = getelementptr inbounds i8, ptr %5, i16 12
+  store i16 0, ptr %83, !tbaa !2
+  %84 = getelementptr inbounds i8, ptr %5, i16 14
+  store i16 0, ptr %84, !tbaa !2
+  %85 = addrspacecast ptr %5 to ptr addrspace(1)
+  %86 = call cc 1005 addrspace(1) i32 @$state1.next(ptr addrspace(1) %85)
+  %87 = addrspacecast ptr %3 to ptr addrspace(1)
+  store i32 %86, ptr addrspace(1) %87, !tbaa !2
+  %88 = load i8, ptr %3, !tbaa !2, !range !7
+  %89 = icmp eq i8 %88, 0
+  br i1 %89, label %b4, label %b3
 
 b2:
-  %100 = load i16, ptr %5, !tbaa !2
-  %101 = getelementptr inbounds i8, ptr %5, i16 2
+  %90 = load i16, ptr %5, !tbaa !2
+  %91 = getelementptr inbounds i8, ptr %5, i16 2
+  %92 = load i16, ptr %91, !tbaa !2
+  %93 = getelementptr inbounds i8, ptr %5, i16 4
+  %94 = load i16, ptr %93, !tbaa !2
+  %95 = getelementptr inbounds i8, ptr %5, i16 6
+  %96 = load ptr addrspace(1), ptr %95, !tbaa !2
+  %97 = getelementptr inbounds i8, ptr %5, i16 10
+  %98 = load i16, ptr %97, !tbaa !2
+  %99 = getelementptr inbounds i8, ptr %5, i16 12
+  %100 = load i16, ptr %99, !tbaa !2
+  %101 = getelementptr inbounds i8, ptr %5, i16 14
   %102 = load i16, ptr %101, !tbaa !2
-  %103 = getelementptr inbounds i8, ptr %5, i16 4
-  %104 = load i16, ptr %103, !tbaa !2
-  %105 = getelementptr inbounds i8, ptr %5, i16 6
-  %106 = load ptr addrspace(1), ptr %105, !tbaa !2
-  %107 = getelementptr inbounds i8, ptr %5, i16 10
-  %108 = load i16, ptr %107, !tbaa !2
-  %109 = getelementptr inbounds i8, ptr %5, i16 12
-  %110 = load i16, ptr %109, !tbaa !2
-  %111 = getelementptr inbounds i8, ptr %5, i16 14
-  %112 = load i16, ptr %111, !tbaa !2
-  store i16 %100, ptr %1, !tbaa !2
-  %113 = getelementptr inbounds i8, ptr %1, i16 2
-  store i16 %102, ptr %113, !tbaa !2
-  %114 = getelementptr inbounds i8, ptr %1, i16 4
-  store i16 %104, ptr %114, !tbaa !2
-  %115 = getelementptr inbounds i8, ptr %1, i16 6
-  store ptr addrspace(1) %106, ptr %115, !tbaa !2
-  %116 = getelementptr inbounds i8, ptr %1, i16 10
-  store i16 %108, ptr %116, !tbaa !2
-  %117 = getelementptr inbounds i8, ptr %1, i16 12
-  store i16 %110, ptr %117, !tbaa !2
-  %118 = getelementptr inbounds i8, ptr %1, i16 14
-  store i16 %112, ptr %118, !tbaa !2
-  %119 = addrspacecast ptr %1 to ptr addrspace(1)
-  %120 = call addrspace(1) i16 @"peak[$state1]"(ptr addrspace(1) %119)
-  store i16 %120, ptr %0, !tbaa !2
-  %121 = getelementptr i8, ptr @$str5, i16 6
-  call addrspace(1) void @N$PS(ptr %121)
-  %122 = load i16, ptr %0, !tbaa !2
-  call addrspace(1) void @N$PI2(i16 %122)
-  call addrspace(1) void @N$PN()
+  store i16 %90, ptr %1, !tbaa !2
+  %103 = getelementptr inbounds i8, ptr %1, i16 2
+  store i16 %92, ptr %103, !tbaa !2
+  %104 = getelementptr inbounds i8, ptr %1, i16 4
+  store i16 %94, ptr %104, !tbaa !2
+  %105 = getelementptr inbounds i8, ptr %1, i16 6
+  store ptr addrspace(1) %96, ptr %105, !tbaa !2
+  %106 = getelementptr inbounds i8, ptr %1, i16 10
+  store i16 %98, ptr %106, !tbaa !2
+  %107 = getelementptr inbounds i8, ptr %1, i16 12
+  store i16 %100, ptr %107, !tbaa !2
+  %108 = getelementptr inbounds i8, ptr %1, i16 14
+  store i16 %102, ptr %108, !tbaa !2
+  %109 = addrspacecast ptr %1 to ptr addrspace(1)
+  %110 = call cc 1005 addrspace(1) i16 @"peak[$state1]"(ptr addrspace(1) %109)
+  store i16 %110, ptr %0, !tbaa !2
+  %111 = getelementptr i8, ptr @$str5, i16 6
+  call cc 1005 addrspace(1) void @N$PS(ptr %111)
+  %112 = load i16, ptr %0, !tbaa !2
+  call cc 1005 addrspace(1) void @N$PI2(i16 %112)
+  call cc 1005 addrspace(1) void @N$PN()
   ret i16 0
 
 b3:
-  %123 = getelementptr i8, ptr @$str4, i16 6
-  call addrspace(1) void @N$PS(ptr %123)
-  call addrspace(1) void @N$PN()
+  %113 = getelementptr i8, ptr @$str4, i16 6
+  call cc 1005 addrspace(1) void @N$PS(ptr %113)
+  call cc 1005 addrspace(1) void @N$PN()
   br label %b2
 
 b4:
-  %124 = getelementptr inbounds i8, ptr %3, i16 2
-  %125 = load i16, ptr %124, !tbaa !2
-  %126 = getelementptr inbounds i8, ptr %3, i16 2
-  %127 = load i16, ptr %126, !tbaa !2
-  store i16 %127, ptr %2, !tbaa !2
-  %128 = getelementptr i8, ptr @$str3, i16 6
-  call addrspace(1) void @N$PS(ptr %128)
-  %129 = load i16, ptr %2, !tbaa !2
-  call addrspace(1) void @N$PI2(i16 %129)
-  call addrspace(1) void @N$PN()
+  %114 = getelementptr inbounds i8, ptr %3, i16 2
+  %115 = load i16, ptr %114, !tbaa !2
+  %116 = getelementptr inbounds i8, ptr %3, i16 2
+  %117 = load i16, ptr %116, !tbaa !2
+  store i16 %117, ptr %2, !tbaa !2
+  %118 = getelementptr i8, ptr @$str3, i16 6
+  call cc 1005 addrspace(1) void @N$PS(ptr %118)
+  %119 = load i16, ptr %2, !tbaa !2
+  call cc 1005 addrspace(1) void @N$PI2(i16 %119)
+  call cc 1005 addrspace(1) void @N$PN()
   br label %b2
 }
 
-define internal i16 @"peak[$state1]"(ptr addrspace(1) %0) addrspace(1) {
+define internal cc 1005 i16 @"peak[$state1]"(ptr addrspace(1) noalias %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %1 = alloca i16
   %2 = alloca [4 x i8]
   %3 = alloca [16 x i8]
   %4 = alloca i16
-  store i16 0, ptr %1
-  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 4, i1 false)
-  call void @llvm.memset.p0.i16(ptr %3, i8 0, i16 16, i1 false)
-  store i16 0, ptr %4
   store i16 -32768, ptr %4, !tbaa !2
   %5 = load i16, ptr addrspace(1) %0
   %6 = getelementptr i8, ptr addrspace(1) %0, i16 2
@@ -274,18 +245,16 @@ b2:
 
 b3:
   %24 = addrspacecast ptr %3 to ptr addrspace(1)
-  %25 = call addrspace(1) i32 @$state1.next(ptr addrspace(1) %24)
+  %25 = call cc 1005 addrspace(1) i32 @$state1.next(ptr addrspace(1) %24)
   %26 = addrspacecast ptr %2 to ptr addrspace(1)
   store i32 %25, ptr addrspace(1) %26, !tbaa !2
-  %27 = load i8, ptr %2, !tbaa !2
+  %27 = load i8, ptr %2, !tbaa !2, !range !8
   %28 = icmp eq i8 %27, 0
-  %29 = sext i1 %28 to i8
-  %30 = icmp ne i8 %29, 0
-  br i1 %30, label %b7, label %b6
+  br i1 %28, label %b7, label %b6
 
 b4:
-  %31 = load i16, ptr %4, !tbaa !2
-  ret i16 %31
+  %29 = load i16, ptr %4, !tbaa !2
+  ret i16 %29
 
 b5:
   br label %b2
@@ -294,21 +263,19 @@ b6:
   br label %b4
 
 b7:
+  %30 = getelementptr inbounds i8, ptr %2, i16 2
+  %31 = load i16, ptr %30, !tbaa !2
   %32 = getelementptr inbounds i8, ptr %2, i16 2
   %33 = load i16, ptr %32, !tbaa !2
-  %34 = getelementptr inbounds i8, ptr %2, i16 2
-  %35 = load i16, ptr %34, !tbaa !2
-  store i16 %35, ptr %1, !tbaa !2
-  %36 = load i16, ptr %1, !tbaa !2
-  %37 = load i16, ptr %4, !tbaa !2
-  %38 = icmp sgt i16 %36, %37
-  %39 = sext i1 %38 to i8
-  %40 = icmp ne i8 %39, 0
-  br i1 %40, label %b8, label %b9
+  store i16 %33, ptr %1, !tbaa !2
+  %34 = load i16, ptr %1, !tbaa !2
+  %35 = load i16, ptr %4, !tbaa !2
+  %36 = icmp sgt i16 %34, %35
+  br i1 %36, label %b8, label %b9
 
 b8:
-  %41 = load i16, ptr %1, !tbaa !2
-  store i16 %41, ptr %4, !tbaa !2
+  %37 = load i16, ptr %1, !tbaa !2
+  store i16 %37, ptr %4, !tbaa !2
   br label %b10
 
 b9:
@@ -318,20 +285,16 @@ b10:
   br label %b5
 }
 
-define internal void @"report[$state1]"(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) %1) addrspace(1) {
+define internal cc 1005 void @"report[$state1]"(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %2 = alloca i16
   %3 = alloca [4 x i8]
   %4 = alloca [16 x i8]
   %5 = alloca ptr
-  store i16 0, ptr %2
-  call void @llvm.memset.p0.i16(ptr %3, i8 0, i16 4, i1 false)
-  call void @llvm.memset.p0.i16(ptr %4, i8 0, i16 16, i1 false)
-  store ptr null, ptr %5
-  call addrspace(1) void @N$PBEG()
-  call addrspace(1) void @N$PFLD(i8 8, i8 10, i8 32, i8 1)
-  call addrspace(1) void @N$PV(ptr addrspace(1) %0)
-  %6 = call addrspace(1) ptr @N$PEND()
+  call cc 1005 addrspace(1) void @N$PBEG()
+  call cc 1005 addrspace(1) void @N$PFLD(i8 zeroext 8, i8 zeroext 10, i8 zeroext 32, i8 zeroext 1)
+  call cc 1005 addrspace(1) void @N$PV(ptr addrspace(1) %0)
+  %6 = call cc 1005 addrspace(1) ptr @N$PEND()
   store ptr %6, ptr %5, !tbaa !2
   %7 = load i16, ptr addrspace(1) %1
   %8 = getelementptr i8, ptr addrspace(1) %1, i16 2
@@ -366,21 +329,19 @@ b2:
 
 b3:
   %26 = addrspacecast ptr %4 to ptr addrspace(1)
-  %27 = call addrspace(1) i32 @$state1.next(ptr addrspace(1) %26)
+  %27 = call cc 1005 addrspace(1) i32 @$state1.next(ptr addrspace(1) %26)
   %28 = addrspacecast ptr %3 to ptr addrspace(1)
   store i32 %27, ptr addrspace(1) %28, !tbaa !2
-  %29 = load i8, ptr %3, !tbaa !2
+  %29 = load i8, ptr %3, !tbaa !2, !range !9
   %30 = icmp eq i8 %29, 0
-  %31 = sext i1 %30 to i8
-  %32 = icmp ne i8 %31, 0
-  br i1 %32, label %b7, label %b6
+  br i1 %30, label %b7, label %b6
 
 b4:
-  %33 = load ptr, ptr %5, !tbaa !2
-  call addrspace(1) void @N$PS(ptr %33)
-  call addrspace(1) void @N$PN()
-  %34 = load ptr, ptr %5, !tbaa !2
-  call addrspace(1) void @N$BDRP(ptr %34)
+  %31 = load ptr, ptr %5, !tbaa !2
+  call cc 1005 addrspace(1) void @N$PS(ptr %31)
+  call cc 1005 addrspace(1) void @N$PN()
+  %32 = load ptr, ptr %5, !tbaa !2
+  call cc 1005 addrspace(1) void @N$BDRP(ptr %32)
   ret void
 
 b5:
@@ -390,33 +351,30 @@ b6:
   br label %b4
 
 b7:
+  %33 = getelementptr inbounds i8, ptr %3, i16 2
+  %34 = load i16, ptr %33, !tbaa !2
   %35 = getelementptr inbounds i8, ptr %3, i16 2
   %36 = load i16, ptr %35, !tbaa !2
-  %37 = getelementptr inbounds i8, ptr %3, i16 2
-  %38 = load i16, ptr %37, !tbaa !2
-  store i16 %38, ptr %2, !tbaa !2
-  call addrspace(1) void @N$PBEG()
-  %39 = getelementptr i8, ptr @$str6, i16 6
-  call addrspace(1) void @N$PS(ptr %39)
-  %40 = load i16, ptr %2, !tbaa !2
-  call addrspace(1) void @N$PFLD(i8 3, i8 10, i8 32, i8 0)
-  call addrspace(1) void @N$PI2(i16 %40)
-  %41 = call addrspace(1) ptr @N$PEND()
-  %42 = load ptr, ptr %5, !tbaa !2
-  %43 = call addrspace(1) ptr @N$TAPP(ptr %42, ptr %41)
-  store ptr %43, ptr %5, !tbaa !2
-  call addrspace(1) void @N$BDRP(ptr %41)
+  store i16 %36, ptr %2, !tbaa !2
+  call cc 1005 addrspace(1) void @N$PBEG()
+  %37 = getelementptr i8, ptr @$str6, i16 6
+  call cc 1005 addrspace(1) void @N$PS(ptr %37)
+  %38 = load i16, ptr %2, !tbaa !2
+  call cc 1005 addrspace(1) void @N$PFLD(i8 zeroext 3, i8 zeroext 10, i8 zeroext 32, i8 zeroext 0)
+  call cc 1005 addrspace(1) void @N$PI2(i16 %38)
+  %39 = call cc 1005 addrspace(1) ptr @N$PEND()
+  %40 = load ptr, ptr %5, !tbaa !2
+  %41 = call cc 1005 addrspace(1) ptr @N$TAPP(ptr %40, ptr %39)
+  store ptr %41, ptr %5, !tbaa !2
+  call cc 1005 addrspace(1) void @N$BDRP(ptr %39)
   br label %b5
 }
 
-define internal i32 @$state1.next(ptr addrspace(1) %0) addrspace(1) {
+define internal cc 1005 i32 @$state1.next(ptr addrspace(1) nonnull dereferenceable(16) noalias nocapture %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %1 = alloca i16
   %2 = alloca i16
   %3 = alloca [4 x i8]
-  store i16 0, ptr %1
-  store i16 0, ptr %2
-  call void @llvm.memset.p0.i16(ptr %3, i8 0, i16 4, i1 false)
   %4 = getelementptr i8, ptr addrspace(1) %0, i16 2
   br label %b2
 
@@ -426,39 +384,31 @@ b2:
 b3:
   %5 = load i16, ptr addrspace(1) %0
   %6 = icmp eq i16 %5, 0
-  %7 = sext i1 %6 to i8
-  %8 = icmp ne i8 %7, 0
-  br i1 %8, label %b7, label %b6
+  br i1 %6, label %b7, label %b6
 
 b6:
-  %9 = icmp eq i16 %5, 2
-  %10 = sext i1 %9 to i8
-  %11 = icmp ne i8 %10, 0
-  br i1 %11, label %b9, label %b8
+  %7 = icmp eq i16 %5, 2
+  br i1 %7, label %b9, label %b8
 
 b7:
-  %12 = getelementptr i8, ptr addrspace(1) %0, i16 12
-  store i16 0, ptr addrspace(1) %12
+  %8 = getelementptr i8, ptr addrspace(1) %0, i16 12
+  store i16 0, ptr addrspace(1) %8
   store i16 2, ptr addrspace(1) %0
   br label %b2
 
 b8:
-  %13 = icmp eq i16 %5, 3
-  %14 = sext i1 %13 to i8
-  %15 = icmp ne i8 %14, 0
-  br i1 %15, label %b14, label %b13
+  %9 = icmp eq i16 %5, 3
+  br i1 %9, label %b14, label %b13
 
 b9:
-  %16 = getelementptr i8, ptr addrspace(1) %0, i16 12
-  %17 = load i16, ptr addrspace(1) %16
-  %18 = getelementptr i8, ptr addrspace(1) %0, i16 10
-  %19 = load i16, ptr addrspace(1) %18
-  %20 = add i16 %17, %19
-  %21 = load i16, ptr addrspace(1) %4
-  %22 = icmp ule i16 %20, %21
-  %23 = sext i1 %22 to i8
-  %24 = icmp ne i8 %23, 0
-  br i1 %24, label %b10, label %b11
+  %10 = getelementptr i8, ptr addrspace(1) %0, i16 12
+  %11 = load i16, ptr addrspace(1) %10
+  %12 = getelementptr i8, ptr addrspace(1) %0, i16 10
+  %13 = load i16, ptr addrspace(1) %12
+  %14 = add i16 %11, %13
+  %15 = load i16, ptr addrspace(1) %4
+  %16 = icmp ule i16 %14, %15
+  br i1 %16, label %b10, label %b11
 
 b10:
   store i16 3, ptr addrspace(1) %0
@@ -469,93 +419,85 @@ b11:
   br label %b2
 
 b13:
-  %25 = icmp eq i16 %5, 4
-  %26 = sext i1 %25 to i8
-  %27 = icmp ne i8 %26, 0
-  br i1 %27, label %b22, label %b21
+  %17 = icmp eq i16 %5, 4
+  br i1 %17, label %b22, label %b21
 
 b14:
-  %28 = getelementptr i8, ptr addrspace(1) %0, i16 14
-  store i16 0, ptr addrspace(1) %28
-  %29 = getelementptr i8, ptr addrspace(1) %0, i16 12
-  %30 = load i16, ptr addrspace(1) %29
-  %31 = getelementptr i8, ptr addrspace(1) %0, i16 12
-  %32 = load i16, ptr addrspace(1) %31
-  %33 = getelementptr i8, ptr addrspace(1) %0, i16 10
-  %34 = load i16, ptr addrspace(1) %33
-  %35 = add i16 %32, %34
-  store i16 %30, ptr %2, !tbaa !2
-  store i16 %35, ptr %1, !tbaa !2
+  %18 = getelementptr i8, ptr addrspace(1) %0, i16 14
+  store i16 0, ptr addrspace(1) %18
+  %19 = getelementptr i8, ptr addrspace(1) %0, i16 12
+  %20 = load i16, ptr addrspace(1) %19
+  %21 = getelementptr i8, ptr addrspace(1) %0, i16 12
+  %22 = load i16, ptr addrspace(1) %21
+  %23 = getelementptr i8, ptr addrspace(1) %0, i16 10
+  %24 = load i16, ptr addrspace(1) %23
+  %25 = add i16 %22, %24
+  store i16 %20, ptr %2, !tbaa !2
+  store i16 %25, ptr %1, !tbaa !2
   br label %b15
 
 b15:
-  %36 = load i16, ptr %2, !tbaa !2
-  %37 = load i16, ptr %1, !tbaa !2
-  %38 = icmp ult i16 %36, %37
-  %39 = sext i1 %38 to i8
-  %40 = icmp ne i8 %39, 0
-  br i1 %40, label %b16, label %b18
+  %26 = load i16, ptr %2, !tbaa !2
+  %27 = load i16, ptr %1, !tbaa !2
+  %28 = icmp ult i16 %26, %27
+  br i1 %28, label %b16, label %b18
 
 b16:
-  %41 = getelementptr i8, ptr addrspace(1) %0, i16 14
-  %42 = load i16, ptr addrspace(1) %41
-  %43 = load i16, ptr %2, !tbaa !2
-  %44 = load i16, ptr addrspace(1) %4
-  %45 = icmp ult i16 %43, %44
-  %46 = sext i1 %45 to i8
-  %47 = icmp ne i8 %46, 0
-  br i1 %47, label %b19, label %b20
+  %29 = getelementptr i8, ptr addrspace(1) %0, i16 14
+  %30 = load i16, ptr addrspace(1) %29
+  %31 = load i16, ptr %2, !tbaa !2
+  %32 = load i16, ptr addrspace(1) %4, !range !5
+  %33 = icmp ult i16 %31, %32
+  br i1 %33, label %b19, label %b20
 
 b17:
-  %48 = load i16, ptr %2, !tbaa !2
-  %49 = add i16 %48, 1
-  store i16 %49, ptr %2, !tbaa !2
+  %34 = load i16, ptr %2, !tbaa !2
+  %35 = add nuw i16 %34, 1
+  store i16 %35, ptr %2, !tbaa !2
   br label %b15
 
 b18:
   store i16 5, ptr addrspace(1) %0
-  %50 = getelementptr i8, ptr addrspace(1) %0, i16 14
-  %51 = load i16, ptr addrspace(1) %50
-  %52 = getelementptr i8, ptr addrspace(1) %0, i16 10
-  %53 = load i16, ptr addrspace(1) %52
-  %54 = sdiv i16 %51, %53
-  %55 = srem i16 %51, %53
-  %56 = icmp ne i16 %55, 0
-  %57 = sext i1 %56 to i8
-  %58 = xor i16 %55, %53
-  %59 = icmp slt i16 %58, 0
-  %60 = sext i1 %59 to i8
-  %61 = and i8 %57, %60
-  %62 = sext i8 %61 to i16
-  %63 = and i16 %62, 1
-  %64 = sub i16 %54, %63
-  store i8 0, ptr %3, !tbaa !2
-  %65 = getelementptr inbounds i8, ptr %3, i16 2
-  store i16 %64, ptr %65, !tbaa !2
-  %66 = addrspacecast ptr %3 to ptr addrspace(1)
-  %67 = load i32, ptr addrspace(1) %66, !tbaa !2
-  ret i32 %67
+  %36 = getelementptr i8, ptr addrspace(1) %0, i16 14
+  %37 = load i16, ptr addrspace(1) %36
+  %38 = getelementptr i8, ptr addrspace(1) %0, i16 10
+  %39 = load i16, ptr addrspace(1) %38
+  %40 = sdiv i16 %37, %39
+  %41 = srem i16 %37, %39
+  %42 = icmp ne i16 %41, 0
+  %43 = zext i1 %42 to i8
+  %44 = xor i16 %41, %39
+  %45 = icmp slt i16 %44, 0
+  %46 = zext i1 %45 to i8
+  %47 = and i8 %43, %46
+  %48 = zext i8 %47 to i16
+  %49 = and i16 %48, 1
+  %50 = sub i16 %40, %49
+  store i16 0, ptr %3, !tbaa !2
+  %51 = getelementptr inbounds i8, ptr %3, i16 2
+  store i16 %50, ptr %51, !tbaa !2
+  %52 = addrspacecast ptr %3 to ptr addrspace(1)
+  %53 = load i32, ptr addrspace(1) %52, !tbaa !2
+  ret i32 %53
 
 b19:
-  %68 = getelementptr i8, ptr addrspace(1) %4, i16 4
-  %69 = load ptr addrspace(1), ptr addrspace(1) %68
-  %70 = mul i16 %43, 2
-  %71 = getelementptr i8, ptr addrspace(1) %69, i16 %70
-  %72 = load i16, ptr addrspace(1) %71
-  %73 = add i16 %42, %72
-  %74 = getelementptr i8, ptr addrspace(1) %0, i16 14
-  store i16 %73, ptr addrspace(1) %74
+  %54 = getelementptr i8, ptr addrspace(1) %4, i16 4
+  %55 = load ptr addrspace(1), ptr addrspace(1) %54
+  %56 = mul i16 %31, 2
+  %57 = getelementptr inbounds i8, ptr addrspace(1) %55, i16 %56
+  %58 = load i16, ptr addrspace(1) %57
+  %59 = add i16 %30, %58
+  %60 = getelementptr i8, ptr addrspace(1) %0, i16 14
+  store i16 %59, ptr addrspace(1) %60
   br label %b17
 
 b20:
-  call addrspace(1) void @N$EBND()
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 
 b21:
-  %75 = icmp eq i16 %5, 5
-  %76 = sext i1 %75 to i8
-  %77 = icmp ne i8 %76, 0
-  br i1 %77, label %b24, label %b23
+  %61 = icmp eq i16 %5, 5
+  br i1 %61, label %b24, label %b23
 
 b22:
   store i16 1, ptr addrspace(1) %0
@@ -563,35 +505,31 @@ b22:
 
 b23:
   store i16 1, ptr addrspace(1) %0
-  store i8 1, ptr %3, !tbaa !2
-  %78 = addrspacecast ptr %3 to ptr addrspace(1)
-  %79 = load i32, ptr addrspace(1) %78, !tbaa !2
-  ret i32 %79
+  store i32 1, ptr %3, !tbaa !2
+  %62 = addrspacecast ptr %3 to ptr addrspace(1)
+  %63 = load i32, ptr addrspace(1) %62, !tbaa !2
+  ret i32 %63
 
 b24:
-  %80 = getelementptr i8, ptr addrspace(1) %0, i16 12
-  %81 = load i16, ptr addrspace(1) %80
-  %82 = add i16 %81, 1
-  %83 = getelementptr i8, ptr addrspace(1) %0, i16 12
-  store i16 %82, ptr addrspace(1) %83
+  %64 = getelementptr i8, ptr addrspace(1) %0, i16 12
+  %65 = load i16, ptr addrspace(1) %64
+  %66 = add i16 %65, 1
+  %67 = getelementptr i8, ptr addrspace(1) %0, i16 12
+  store i16 %66, ptr addrspace(1) %67
   store i16 2, ptr addrspace(1) %0
   br label %b2
 }
 
-define internal void @"report[$state0]"(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) %1) addrspace(1) {
+define internal cc 1005 void @"report[$state0]"(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %2 = alloca i16
   %3 = alloca [4 x i8]
   %4 = alloca [12 x i8]
   %5 = alloca ptr
-  store i16 0, ptr %2
-  call void @llvm.memset.p0.i16(ptr %3, i8 0, i16 4, i1 false)
-  call void @llvm.memset.p0.i16(ptr %4, i8 0, i16 12, i1 false)
-  store ptr null, ptr %5
-  call addrspace(1) void @N$PBEG()
-  call addrspace(1) void @N$PFLD(i8 8, i8 10, i8 32, i8 1)
-  call addrspace(1) void @N$PV(ptr addrspace(1) %0)
-  %6 = call addrspace(1) ptr @N$PEND()
+  call cc 1005 addrspace(1) void @N$PBEG()
+  call cc 1005 addrspace(1) void @N$PFLD(i8 zeroext 8, i8 zeroext 10, i8 zeroext 32, i8 zeroext 1)
+  call cc 1005 addrspace(1) void @N$PV(ptr addrspace(1) %0)
+  %6 = call cc 1005 addrspace(1) ptr @N$PEND()
   store ptr %6, ptr %5, !tbaa !2
   %7 = load i16, ptr addrspace(1) %1
   %8 = getelementptr i8, ptr addrspace(1) %1, i16 2
@@ -618,21 +556,19 @@ b2:
 
 b3:
   %20 = addrspacecast ptr %4 to ptr addrspace(1)
-  %21 = call addrspace(1) i32 @$state0.next(ptr addrspace(1) %20)
+  %21 = call cc 1005 addrspace(1) i32 @$state0.next(ptr addrspace(1) %20)
   %22 = addrspacecast ptr %3 to ptr addrspace(1)
   store i32 %21, ptr addrspace(1) %22, !tbaa !2
-  %23 = load i8, ptr %3, !tbaa !2
+  %23 = load i8, ptr %3, !tbaa !2, !range !10
   %24 = icmp eq i8 %23, 0
-  %25 = sext i1 %24 to i8
-  %26 = icmp ne i8 %25, 0
-  br i1 %26, label %b7, label %b6
+  br i1 %24, label %b7, label %b6
 
 b4:
-  %27 = load ptr, ptr %5, !tbaa !2
-  call addrspace(1) void @N$PS(ptr %27)
-  call addrspace(1) void @N$PN()
-  %28 = load ptr, ptr %5, !tbaa !2
-  call addrspace(1) void @N$BDRP(ptr %28)
+  %25 = load ptr, ptr %5, !tbaa !2
+  call cc 1005 addrspace(1) void @N$PS(ptr %25)
+  call cc 1005 addrspace(1) void @N$PN()
+  %26 = load ptr, ptr %5, !tbaa !2
+  call cc 1005 addrspace(1) void @N$BDRP(ptr %26)
   ret void
 
 b5:
@@ -642,29 +578,28 @@ b6:
   br label %b4
 
 b7:
+  %27 = getelementptr inbounds i8, ptr %3, i16 2
+  %28 = load i16, ptr %27, !tbaa !2
   %29 = getelementptr inbounds i8, ptr %3, i16 2
   %30 = load i16, ptr %29, !tbaa !2
-  %31 = getelementptr inbounds i8, ptr %3, i16 2
-  %32 = load i16, ptr %31, !tbaa !2
-  store i16 %32, ptr %2, !tbaa !2
-  call addrspace(1) void @N$PBEG()
-  %33 = getelementptr i8, ptr @$str6, i16 6
-  call addrspace(1) void @N$PS(ptr %33)
-  %34 = load i16, ptr %2, !tbaa !2
-  call addrspace(1) void @N$PFLD(i8 3, i8 10, i8 32, i8 0)
-  call addrspace(1) void @N$PI2(i16 %34)
-  %35 = call addrspace(1) ptr @N$PEND()
-  %36 = load ptr, ptr %5, !tbaa !2
-  %37 = call addrspace(1) ptr @N$TAPP(ptr %36, ptr %35)
-  store ptr %37, ptr %5, !tbaa !2
-  call addrspace(1) void @N$BDRP(ptr %35)
+  store i16 %30, ptr %2, !tbaa !2
+  call cc 1005 addrspace(1) void @N$PBEG()
+  %31 = getelementptr i8, ptr @$str6, i16 6
+  call cc 1005 addrspace(1) void @N$PS(ptr %31)
+  %32 = load i16, ptr %2, !tbaa !2
+  call cc 1005 addrspace(1) void @N$PFLD(i8 zeroext 3, i8 zeroext 10, i8 zeroext 32, i8 zeroext 0)
+  call cc 1005 addrspace(1) void @N$PI2(i16 %32)
+  %33 = call cc 1005 addrspace(1) ptr @N$PEND()
+  %34 = load ptr, ptr %5, !tbaa !2
+  %35 = call cc 1005 addrspace(1) ptr @N$TAPP(ptr %34, ptr %33)
+  store ptr %35, ptr %5, !tbaa !2
+  call cc 1005 addrspace(1) void @N$BDRP(ptr %33)
   br label %b5
 }
 
-define internal i32 @$state0.next(ptr addrspace(1) %0) addrspace(1) {
+define internal cc 1005 i32 @$state0.next(ptr addrspace(1) nonnull dereferenceable(12) noalias nocapture %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %1 = alloca [4 x i8]
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 4, i1 false)
   %2 = getelementptr i8, ptr addrspace(1) %0, i16 2
   br label %b2
 
@@ -674,36 +609,28 @@ b2:
 b3:
   %3 = load i16, ptr addrspace(1) %0
   %4 = icmp eq i16 %3, 0
-  %5 = sext i1 %4 to i8
-  %6 = icmp ne i8 %5, 0
-  br i1 %6, label %b7, label %b6
+  br i1 %4, label %b7, label %b6
 
 b6:
-  %7 = icmp eq i16 %3, 2
-  %8 = sext i1 %7 to i8
-  %9 = icmp ne i8 %8, 0
-  br i1 %9, label %b9, label %b8
+  %5 = icmp eq i16 %3, 2
+  br i1 %5, label %b9, label %b8
 
 b7:
-  %10 = getelementptr i8, ptr addrspace(1) %0, i16 10
-  store i16 0, ptr addrspace(1) %10
+  %6 = getelementptr i8, ptr addrspace(1) %0, i16 10
+  store i16 0, ptr addrspace(1) %6
   store i16 2, ptr addrspace(1) %0
   br label %b2
 
 b8:
-  %11 = icmp eq i16 %3, 3
-  %12 = sext i1 %11 to i8
-  %13 = icmp ne i8 %12, 0
-  br i1 %13, label %b14, label %b13
+  %7 = icmp eq i16 %3, 3
+  br i1 %7, label %b14, label %b13
 
 b9:
-  %14 = getelementptr i8, ptr addrspace(1) %0, i16 10
-  %15 = load i16, ptr addrspace(1) %14
-  %16 = load i16, ptr addrspace(1) %2
-  %17 = icmp ult i16 %15, %16
-  %18 = sext i1 %17 to i8
-  %19 = icmp ne i8 %18, 0
-  br i1 %19, label %b10, label %b11
+  %8 = getelementptr i8, ptr addrspace(1) %0, i16 10
+  %9 = load i16, ptr addrspace(1) %8
+  %10 = load i16, ptr addrspace(1) %2
+  %11 = icmp ult i16 %9, %10
+  br i1 %11, label %b10, label %b11
 
 b10:
   store i16 3, ptr addrspace(1) %0
@@ -714,58 +641,50 @@ b11:
   br label %b2
 
 b13:
-  %20 = icmp eq i16 %3, 4
-  %21 = sext i1 %20 to i8
-  %22 = icmp ne i8 %21, 0
-  br i1 %22, label %b18, label %b17
+  %12 = icmp eq i16 %3, 4
+  br i1 %12, label %b18, label %b17
 
 b14:
   store i16 6, ptr addrspace(1) %0
-  %23 = getelementptr i8, ptr addrspace(1) %0, i16 10
-  %24 = load i16, ptr addrspace(1) %23
-  %25 = load i16, ptr addrspace(1) %2
-  %26 = icmp ult i16 %24, %25
-  %27 = sext i1 %26 to i8
-  %28 = icmp ne i8 %27, 0
-  br i1 %28, label %b15, label %b16
+  %13 = getelementptr i8, ptr addrspace(1) %0, i16 10
+  %14 = load i16, ptr addrspace(1) %13
+  %15 = load i16, ptr addrspace(1) %2, !range !6
+  %16 = icmp ult i16 %14, %15
+  br i1 %16, label %b15, label %b16
 
 b15:
-  %29 = getelementptr i8, ptr addrspace(1) %2, i16 4
-  %30 = load ptr addrspace(1), ptr addrspace(1) %29
-  %31 = mul i16 %24, 2
-  %32 = getelementptr i8, ptr addrspace(1) %30, i16 %31
-  %33 = load i16, ptr addrspace(1) %32
-  store i8 0, ptr %1, !tbaa !2
-  %34 = getelementptr inbounds i8, ptr %1, i16 2
-  store i16 %33, ptr %34, !tbaa !2
-  %35 = addrspacecast ptr %1 to ptr addrspace(1)
-  %36 = load i32, ptr addrspace(1) %35, !tbaa !2
-  ret i32 %36
+  %17 = getelementptr i8, ptr addrspace(1) %2, i16 4
+  %18 = load ptr addrspace(1), ptr addrspace(1) %17
+  %19 = mul i16 %14, 2
+  %20 = getelementptr inbounds i8, ptr addrspace(1) %18, i16 %19
+  %21 = load i16, ptr addrspace(1) %20
+  store i16 0, ptr %1, !tbaa !2
+  %22 = getelementptr inbounds i8, ptr %1, i16 2
+  store i16 %21, ptr %22, !tbaa !2
+  %23 = addrspacecast ptr %1 to ptr addrspace(1)
+  %24 = load i32, ptr addrspace(1) %23, !tbaa !2
+  ret i32 %24
 
 b16:
-  call addrspace(1) void @N$EBND()
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 
 b17:
-  %37 = icmp eq i16 %3, 5
-  %38 = sext i1 %37 to i8
-  %39 = icmp ne i8 %38, 0
-  br i1 %39, label %b20, label %b19
+  %25 = icmp eq i16 %3, 5
+  br i1 %25, label %b20, label %b19
 
 b18:
-  %40 = getelementptr i8, ptr addrspace(1) %0, i16 10
-  %41 = load i16, ptr addrspace(1) %40
-  %42 = add i16 %41, 1
-  %43 = getelementptr i8, ptr addrspace(1) %0, i16 10
-  store i16 %42, ptr addrspace(1) %43
+  %26 = getelementptr i8, ptr addrspace(1) %0, i16 10
+  %27 = load i16, ptr addrspace(1) %26
+  %28 = add i16 %27, 1
+  %29 = getelementptr i8, ptr addrspace(1) %0, i16 10
+  store i16 %28, ptr addrspace(1) %29
   store i16 2, ptr addrspace(1) %0
   br label %b2
 
 b19:
-  %44 = icmp eq i16 %3, 6
-  %45 = sext i1 %44 to i8
-  %46 = icmp ne i8 %45, 0
-  br i1 %46, label %b22, label %b21
+  %30 = icmp eq i16 %3, 6
+  br i1 %30, label %b22, label %b21
 
 b20:
   store i16 1, ptr addrspace(1) %0
@@ -773,40 +692,44 @@ b20:
 
 b21:
   store i16 1, ptr addrspace(1) %0
-  store i8 1, ptr %1, !tbaa !2
-  %47 = addrspacecast ptr %1 to ptr addrspace(1)
-  %48 = load i32, ptr addrspace(1) %47, !tbaa !2
-  ret i32 %48
+  store i32 1, ptr %1, !tbaa !2
+  %31 = addrspacecast ptr %1 to ptr addrspace(1)
+  %32 = load i32, ptr addrspace(1) %31, !tbaa !2
+  ret i32 %32
 
 b22:
   store i16 4, ptr addrspace(1) %0
   br label %b2
 }
 
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+declare cc 1005 void @N$PS(ptr) addrspace(1)
 
-declare void @N$PS(ptr) addrspace(1)
+declare cc 1005 void @N$PI2(i16) addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @N$PI2(i16) addrspace(1)
+declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @N$PN() addrspace(1)
+declare cc 1005 void @N$PBEG() addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @N$PBEG() addrspace(1)
+declare cc 1005 void @N$PFLD(i8, i8, i8, i8) addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @N$PFLD(i8, i8, i8, i8) addrspace(1)
+declare cc 1005 void @N$PV(ptr addrspace(1)) addrspace(1)
 
-declare void @N$PV(ptr addrspace(1)) addrspace(1)
+declare cc 1005 ptr @N$PEND() addrspace(1)
 
-declare ptr @N$PEND() addrspace(1)
+declare cc 1005 void @N$BDRP(ptr) addrspace(1)
 
-declare void @N$BDRP(ptr) addrspace(1)
+declare cc 1005 ptr @N$TAPP(ptr, ptr) addrspace(1)
 
-declare ptr @N$TAPP(ptr, ptr) addrspace(1)
-
-declare void @N$EBND() addrspace(1)
+declare cc 1005 void @N$EBND() addrspace(1) noreturn memory(inaccessiblemem: readwrite)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}
 !2 = !{!1, !1, i64 0}
 !3 = !{!"allocation", !0, i64 0}
 !4 = !{!3, !3, i64 0}
+!5 = !{i16 0, i16 -32768}
+!6 = !{i16 0, i16 -32768}
+!7 = !{i8 0, i8 2}
+!8 = !{i8 0, i8 2}
+!9 = !{i8 0, i8 2}
+!10 = !{i8 0, i8 2}

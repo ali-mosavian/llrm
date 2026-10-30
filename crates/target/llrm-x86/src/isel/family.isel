@@ -28,6 +28,13 @@
 # A constant first operand is taken second.
 commutative add and or xor mul
 
+# An element count that is a value reserves its bytes when it runs.
+pattern dynamic_alloca
+  match alloca
+  when dynamic
+  call dynamic_alloca
+end
+
 pattern alloca
   match alloca
   nothing
@@ -103,53 +110,63 @@ end
 
 pattern wide_cast_to
   match cast.i64
+  when splits_i64
   call wide_cast
 end
 
 pattern wide_cast_from
   match cast(_.i64)
+  when splits_i64
   call wide_cast
 end
 
-# An i64 as its halves, low first (isel/expand.rs): the first form for the lowest, the second for each above it,
+# Where the datalayout has no legal i64 (`splits_i64`), an i64 is its halves, low first (isel/expand.rs): the first form for the lowest, the second for each above it,
 # which takes the carry of the half below.
 pattern wide_add
   match add.i64(a, b)
+  when splits_i64
   chain add adc <- a, b
 end
 
 pattern wide_sub
   match sub.i64(a, b)
+  when splits_i64
   chain sub sbb <- a, b
 end
 
 pattern wide_and
   match and.i64(a, b)
+  when splits_i64
   chain and and <- a, b
 end
 
 pattern wide_or
   match or.i64(a, b)
+  when splits_i64
   chain or or <- a, b
 end
 
 pattern wide_xor
   match xor.i64(a, b)
+  when splits_i64
   chain xor xor <- a, b
 end
 
 pattern wide_binary
   match binary.i64
+  when splits_i64
   call wide_binary
 end
 
 pattern wide_load
   match load.i64(p)
+  when splits_i64
   call wide_load(p)
 end
 
 pattern wide_store
   match store(v.i64, p)
+  when splits_i64
   call wide_store(v, p)
 end
 
@@ -216,8 +233,17 @@ pattern divide
   call divide
 end
 
+# An i1's byte is 0 or 1: its sum and difference are the xor, its product the
+# and. LSR's expander makes `add i1 x, true` of a `not`.
+pattern boolean_sum for add=xor sub=xor mul=and
+  match $mir.i1(a, b)
+  let x = held(a)
+  let y = source(b)
+  emit $x86 result <- x, y
+end
+
 pattern boolean_arithmetic
-  match add|sub|mul|shl|lshr|ashr.i1
+  match shl|lshr|ashr.i1
   refuse "arithmetic on an i1"
 end
 
@@ -251,8 +277,61 @@ pattern multiply_scaled
   call scaled(a, n)
 end
 
+# The `not` of a comparison is the comparison of the opposite condition, as
+# DAGCombiner's visitXOR has it; one nothing else reads is not made twice.
+pattern inverted_icmp_only
+  match xor.i1(t=icmp(_, _), #1)
+  when only_reader(t)
+  cover t
+  call setcc_inverted
+end
+
+pattern inverted_fcmp_only
+  match xor.i1(t=fcmp(_, _), #1)
+  when only_reader(t)
+  cover t
+  call setcc_inverted
+end
+
+pattern inverted_icmp
+  match xor.i1(t=icmp(_, _), #1)
+  call setcc_inverted
+end
+
+pattern inverted_fcmp
+  match xor.i1(t=fcmp(_, _), #1)
+  call setcc_inverted
+end
+
 # What the target would rather run on the whole register (`promote` in its datalayout.toml): the word
 # operation is run as a dword, which reads and writes what lies above the word and does not care.
+# A load only this reads is its memory operand (X86DAGToDAGISel::tryFoldLoad:
+# `ADD32rm`): nothing writes memory between, and the load has no other reader.
+# DEVIATE F1 (exit: SsaSpill deleted or after twoaddr, 2026-11-05; then the pin's unfold in `twoaddr.rs`
+# replaces this guard, see lir-cleanup-plan.md): only where the other operand is free after (`dies`); the pin folds
+# either way and leaves the copy to the coalescer, which cost `x_transpose` 7.6%,
+# `x_bigadd` 3.7% and `nbody_fixed` 1.0% in clocks (bench's rows pair, 486).
+# Not `and`: `and_tested` covers an AND a comparison with zero reads, and a load
+# covered here would be left unselected under it.
+pattern arithmetic_cell for add=add sub=sub or=or xor=xor
+  match $mir.i16|i32(a:value, v=load(p))
+  when !indexing(), !promoted, nonvolatile(v), only_reader(v), dies(a), unwritten(v), !stored_back(v), !local(v)
+  cover v
+  let x = held(a)
+  let y = access(p)
+  emit $x86 result <- x, y
+end
+
+# The same with the load first, for the operations that commute.
+pattern arithmetic_cell_first for add=add or=or xor=xor
+  match $mir.i16|i32(v=load(p), b:value)
+  when !indexing(), !promoted, nonvolatile(v), only_reader(v), dies(b), unwritten(v), !stored_back(v), !local(v)
+  cover v
+  let x = held(b)
+  let y = access(p)
+  emit $x86 result <- x, y
+end
+
 pattern arithmetic_promoted for add=add sub=sub and=and or=or xor=xor
   match $mir(a, b)
   when promoted
@@ -282,9 +361,22 @@ pattern extractvalue
   call extractvalue
 end
 
+# An aggregate of scalars is its fields, each in a register of its own, as a call answers it.
+pattern insertvalue
+  match insertvalue
+  call insertvalue
+end
+
 # Where a target's own casts go: after the i64 and float casts, which are not
 # those of its own types, and before the general ones.
 own casts
+
+# A boolean truncation only the block's branch reads is the branch's `test`.
+pattern fused_truncation
+  match trunc.i1(x)
+  when fused
+  nothing
+end
 
 pattern truncate_to_boolean
   match trunc.i1(x)
@@ -348,6 +440,21 @@ pattern pointer_cast for ptrtoint=mov inttoptr=mov addrspacecast=mov
   emit $x86 r <- s
 end
 
+# A frozen value is the value: LLVM selects it as a copy.
+pattern freeze
+  match freeze.i1|i8|i16|i32|ptr(x)
+  let r = result
+  let s = source(x)
+  emit mov r <- s
+end
+
+# Where an i64 is its halves, a frozen one is the same halves.
+pattern wide_freeze
+  match freeze.i64
+  when splits_i64
+  call wide_freeze
+end
+
 pattern unselected_cast
   match cast
   call unselected_cast
@@ -362,14 +469,14 @@ end
 
 # An AND only a comparison with zero reads is `test`.
 pattern and_tested
-  match icmp(t=and.i16|i32(_:value, _:value|int), #0)
+  match icmp(t=and.i8|i16|i32(_:value, _:value|int), #0)
   when only_reader(t)
   cover t
   call setcc
 end
 
 pattern and_tested_second
-  match icmp(#0, t=and.i16|i32(_:value, _:value|int))
+  match icmp(#0, t=and.i8|i16|i32(_:value, _:value|int))
   when only_reader(t)
   cover t
   call setcc

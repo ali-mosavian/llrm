@@ -13,18 +13,24 @@ pub mod pypath;
 pub mod pyrepr;
 pub mod pyset;
 mod register;
+pub mod version;
 
 pub use register::PhysicalRegister;
 
-/// Whether the environment variable `name` is set, from a snapshot of the
-/// environment taken at the first ask. `std::env::var_os` takes the environment
-/// lock and scans it on every call: the `LLRM_CHECK_*` switches asked in a loop
-/// (once for each instruction's liveness effect) were 2% of a compile of
-/// rectwo. The variables are those the process started with; none is set
-/// afterwards.
+/// Whether the switch `name` is on: set to anything but an off word (empty,
+/// `0`, `false`, `off`), from a snapshot of the environment taken at the first
+/// ask. `std::env::var_os` takes the environment lock and scans it on every
+/// call: the `LLRM_CHECK_*` switches asked in a loop (once for each
+/// instruction's liveness effect) were 2% of a compile of rectwo. The
+/// variables are those the process started with; none is set afterwards. The
+/// parser is `llrm_env`'s, the only one.
 pub fn env_set(name: &str) -> bool {
-    static NAMES: std::sync::OnceLock<hash::HashSet<std::ffi::OsString>> = std::sync::OnceLock::new();
-    NAMES.get_or_init(|| std::env::vars_os().map(|(name, _)| name).collect()).contains(std::ffi::OsStr::new(name))
+    llrm_env::set(name)
+}
+
+/// The value of the variable `name`, from the same snapshot as `env_set`.
+pub fn env_var(name: &str) -> Option<&'static std::ffi::OsStr> {
+    llrm_env::var(name)
 }
 
 /// `env_set` of a literal name, asked once at the call site that names it:
@@ -68,11 +74,10 @@ pub fn reached_checks() -> Vec<(&'static str, u32)> {
     rows
 }
 
-/// `LLRM_CHECK_CACHES=1`: every identity-cache hit is recomputed and must equal
-/// what was cached.
+/// `LLRM_CHECK_CACHES` on: every identity-cache hit is recomputed and must
+/// equal what was cached.
 pub fn checking_caches() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CACHES").is_some_and(|value| value == "1"))
+    env_flag!("LLRM_CHECK_CACHES")
 }
 
 #[cfg(test)]

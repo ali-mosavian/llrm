@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fold.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fold.rs sha256:17db1df24b2ac132811677b5bb03f13191c0562647a32ac2e00643d7b40378b9 -->
+<!-- src: crates/opt/llrm-transforms/src/fold.rs sha256:8211eeb7df66784f684aef44d49f101be12a9461429e01d25fba01ca742ca42e -->
 
 # fold
 
@@ -23,11 +23,11 @@ own, and the definition is left unread for [`crate::dead`](dead.md) to take. A
 commutative operation that ends up with the constant on the left gets it
 back on the right; an ordered one (`sub`, shifts) keeps its operand order.
 
-A call kills only the cells its writes may overlap (`CallEffects`, from
-`Summaries` and the call's `memory(...)`, `readonly` and `readnone`
-attributes); one that states writes without an effect list clears every
-cell. A fact about reaching an edge says nothing about a callee, so edge
-facts clear all cells at a call.
+A call kills only the cells its writes may overlap
+(`alias::calls_by_attributes`, from the call's `memory(...)`, `readonly` and
+`readnone` attributes and `GlobalsModRef`); one that states writes without
+an effect list clears every cell. A fact about reaching an edge says nothing
+about a callee, so edge facts clear all cells at a call.
 
 ```text
  store i16 9, ptr @g          store i16 9, ptr @g
@@ -36,10 +36,7 @@ facts clear all cells at a call.
  %b = load i16, ptr @g        (%a is 9; with @clobber readonly, %b too)
 ```
 
-Every edge fold found runs in the call, from the one set of facts (replacing an
-operation by a phi of its own numbers leaves the others' answers true; one per
-call took a pipeline round each, and every other pass ran again for it:
-`d_faces` -O1 4 rounds). At a block with two or more predecessors, a
+One edge fold runs per call. At a block with two or more predecessors, a
 pure `Binary` or `Cast` in the block (or in the single-predecessor chain
 below it) that reads one of its phis, and whose answer is a number on every
 incoming edge, becomes a phi of those numbers. An operation that also reads

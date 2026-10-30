@@ -92,7 +92,7 @@ def main() -> int:
         jobs = [Job(stems[c["name"]], "obj", objs / f"{stems[c['name']]}.obj", libs=tuple(rf"V:\LIB\{one}" for one in c.get("link_libraries", [])),
                     args=" ".join(c.get("arguments", [])),
                     library=rf"V:\LIB\{c['runtime_library']}" if c.get("runtime_library") else "") for c, why in zip(cases, failed) if not why]
-        ran = dosbatch.run(jobs, work, tools=PROFILES[profile]) if jobs else {}
+        ran = dosbatch.run_parallel(jobs, work, tools=PROFILES[profile]) if jobs else {}
         for case, problem in zip(cases, failed):
             name = f"{profile}/{case['name']}"
             if not problem:

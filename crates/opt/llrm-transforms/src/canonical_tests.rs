@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/canonical_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/canonical_tests.rs`, the port of
 //! `tests/test_canonical.py`, each body now MIR text run by llrm-mir's
 //! interpreter.
 //!
@@ -52,8 +52,10 @@ fn test_a_neutral_term_is_its_operand_and_a_test_below_zero_is_equality() {
             let mut folded = body.clone();
             let (context, function) = folded.function_mut("f").expect("@f");
             assert!(identities(context, function));
-            let entry = function.block(function.entry().unwrap()).instructions();
-            let opcodes = entry.iter().map(|&one| function.instruction(one).opcode.clone()).collect::<Vec<_>>();
+            let opcodes = function
+                .iter_block(function.entry().unwrap())
+                .map(|one| function.instruction(one).opcode.clone())
+                .collect::<Vec<_>>();
             assert_eq!(opcodes, [Opcode::ICmp(equality), Opcode::Br]);
             assert_eq!(llrm_mir::verify::verify(&folded), Vec::<String>::new());
             for x in [0, 1, 0xFFFF] {

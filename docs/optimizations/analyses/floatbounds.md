@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/floatbounds.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/floatbounds.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/floatbounds.rs sha256:cf5b0927fb91044e2cccd709ed9afb132a1195b7373f9eaa5215a5971a7039dd -->
+<!-- src: crates/opt/llrm-analysis/src/floatbounds.rs sha256:146ea5f51e6e8251bc48552445ca3e852091cdbb6abd136933082cc27b82d17d -->
 
 # floatbounds
 
@@ -62,12 +62,11 @@ From unit test `test_integer_inputs_bound_their_float_work` in
 
 ## Provides
 `exact`, `evaluated`, `_memory`. No pass consumes them: only this module's
-tests call them, and `exact` fails unless the caller supplies the loop
-bounds in `Unit::bounds`.
+tests call them.
 
 ## Needs
 [`crate::floatfacts`](floatfacts.md) (`rule`, `Format`, facts and `cells_before`),
-[`crate::consts`](consts.md), [`crate::ranges`](ranges.md) (the intervals in `Unit::bounds`).
+[`crate::consts`](consts.md), [`crate::ranges`](ranges.md) (the edges' intervals at a load).
 
 ## See also
 LLVM ValueTracking's `computeKnownFPClass` with `isKnownExactCastIntToFP`.

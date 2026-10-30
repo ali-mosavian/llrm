@@ -116,24 +116,48 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::cfg::Around;
 use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::{cfg, ssa};
 use llrm_mir::module::{Function, Operand, ValueId};
 
 use crate::edges;
-use crate::lcssa::{arms, definitions, exit_phi, from_arms, operations, place_phi};
+use crate::lcssa::{arms, exit_phi, from_arms, operations, outside_reads, place_phi};
+
+/// What the closing of a function's loops reads of its blocks, found when first
+/// asked: closing adds phis and moves no edge, so it stands for every loop.
+#[derive(Default)]
+pub struct Flow {
+    pub dominance: Option<cfg::Dominance>,
+    graph: Option<(Vec<cfg::Block>, llrm_support::graph::Predecessors)>,
+}
+
+impl Flow {
+    /// A flow that reads the dominators the caller holds.
+    pub fn with_dominance(dominance: cfg::Dominance) -> Self {
+        Self { dominance: Some(dominance), graph: None }
+    }
+}
 
 /// Whether anything changed.
 pub fn closed(
     function: &mut Function,
     loop_: &Loop,
+    exiting: &[(i64, i64)],
+    flow: &mut Flow,
 ) -> Result<bool, String> {
-    let graph = cfg::graph(function);
+    let (graph, predecessors) = flow
+        .graph
+        .get_or_insert_with(
+            || {
+                let graph = cfg::graph(function);
+                let predecessors = loops::predecessors(&graph);
+                (graph, predecessors)
+            },
+        );
+    let (graph, predecessors) = (&*graph, &*predecessors);
     let entry = function.entry().map(cfg::id);
-    let predecessors = loops::predecessors(&graph);
-    let dominance = cfg::Dominance::of(function);
-    let exits = loop_.exits(function).into_iter().map(|(_, to)| to).collect::<BTreeSet<_>>();
+    let dominance = &*flow.dominance.get_or_insert_with(|| cfg::Dominance::of(function));
+    let exits = exiting.iter().map(|&(_, to)| to).collect::<BTreeSet<_>>();
     if exits.iter().any(|at| {
         predecessors
             .get(at)
@@ -141,35 +165,26 @@ pub fn closed(
     }) {
         return Ok(false);
     }
-    let definitions = definitions(function, &loop_.body);
-    let mut sites: BTreeMap<ValueId, BTreeSet<i64>> = BTreeMap::new();
-    for block in graph.iter().filter(|block| !loop_.body.contains(&block.at)) {
-        for inst in operations(function, cfg::block(block.at)) {
-            for operand in &function.instruction(inst).operands {
-                if let Operand::Value(value) = operand
-                    && definitions.contains_key(value)
-                {
-                    sites.entry(*value).or_default().insert(block.at);
-                }
-            }
-        }
-        for phi in edges::phis(function, cfg::block(block.at)) {
-            for (value, parent) in arms(function, phi) {
-                if let Operand::Value(value) = value
-                    && !loop_.body.contains(&cfg::id(parent))
-                    && definitions.contains_key(&value)
-                {
-                    sites.entry(value).or_default().insert(cfg::id(parent));
-                }
+    let reachable = graph.iter().map(|block| block.at).collect::<BTreeSet<_>>();
+    let mut sites: BTreeMap<ValueId, (i64, BTreeSet<i64>)> = BTreeMap::new();
+    for (value, home, reads) in outside_reads(function, &loop_.body) {
+        for read in reads {
+            let site = match read.from {
+                Some(from) if loop_.body.contains(&from) => continue,
+                Some(from) => from,
+                None => read.home,
+            };
+            if reachable.contains(&read.home) {
+                sites.entry(value).or_insert_with(|| (home, BTreeSet::new())).1.insert(site);
             }
         }
     }
     let mut changed = false;
-    for (&value, value_sites) in &sites {
+    for (&value, (home, value_sites)) in &sites {
         let available = exits
             .iter()
             .copied()
-            .filter(|at| predecessors[at].iter().all(|&parent| dominance.dominates(definitions[&value], parent)))
+            .filter(|at| predecessors[at].iter().all(|&parent| dominance.dominates(function, *home, parent)))
             .collect::<BTreeSet<_>>();
         let mut needed = BTreeSet::new();
         let mut pending = value_sites.iter().copied().collect::<Vec<_>>();
@@ -204,32 +219,59 @@ pub fn _merged(
     exits: &BTreeSet<i64>,
     predecessors: &llrm_support::graph::Predecessors,
 ) -> Result<bool, String> {
-    let mut reaching = needed
-        .iter()
-        .map(|&at| (at, if exits.contains(&at) { BTreeSet::from([at]) } else { BTreeSet::new() }))
-        .collect::<BTreeMap<_, _>>();
-    loop {
-        let changed = needed
-            .iter()
-            .map(|&at| {
-                let now = if exits.contains(&at) {
-                    reaching[&at].clone()
-                } else {
-                    predecessors[&at].iter().flat_map(|parent| reaching[parent].iter().copied()).collect()
-                };
-                (at, now)
-            })
-            .collect::<BTreeMap<_, _>>();
-        if changed == reaching {
-            break;
-        }
-        reaching = changed;
-    }
-    if reaching.values().any(BTreeSet::is_empty) {
-        return Ok(false);
-    }
+    // The phis that reach each block. A join stands for the exits behind it: a
+    // block below one that sees nothing else needs no phi (SSAUpdater makes a
+    // phi only where the values differ, as in `formLCSSAForInstructionsImpl`:
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/LCSSA.cpp#L169-L262
     let mut joins = exits.clone();
-    joins.extend(needed.iter().copied().filter(|at| reaching[at].len() > 1 && predecessors[at].len() > 1));
+    let reaching = loop {
+        let mut reaching = needed
+            .iter()
+            .map(|&at| (at, if joins.contains(&at) { BTreeSet::from([at]) } else { BTreeSet::new() }))
+            .collect::<BTreeMap<_, _>>();
+        loop {
+            let changed = needed
+                .iter()
+                .map(|&at| {
+                    let now = if joins.contains(&at) {
+                        reaching[&at].clone()
+                    } else {
+                        predecessors[&at].iter().flat_map(|parent| reaching[parent].iter().copied()).collect()
+                    };
+                    (at, now)
+                })
+                .collect::<BTreeMap<_, _>>();
+            if changed == reaching {
+                break;
+            }
+            reaching = changed;
+        }
+        if reaching.values().any(BTreeSet::is_empty) {
+            return Ok(false);
+        }
+        let more = needed
+            .iter()
+            .copied()
+            .filter(|at| !joins.contains(at) && reaching[at].len() > 1 && predecessors[at].len() > 1)
+            .collect::<Vec<_>>();
+        // One at a time, the one nothing else waiting lies above: a join above
+        // may leave those below it with one supplier.
+        let above = |from: i64| {
+            let mut seen = BTreeSet::new();
+            let mut pending = predecessors[&from].to_vec();
+            while let Some(at) = pending.pop() {
+                if needed.contains(&at) && seen.insert(at) {
+                    pending.extend(predecessors[&at].iter().copied());
+                }
+            }
+            seen
+        };
+        let Some(&first) = more.iter().find(|&&at| !above(at).iter().any(|up| more.contains(up))).or(more.first())
+        else {
+            break reaching;
+        };
+        joins.insert(first);
+    };
     // Which join's phi each needed block reads.
     let mut supplier = joins.iter().map(|&at| (at, at)).collect::<BTreeMap<_, _>>();
     let mut pending = needed.difference(&joins).copied().collect::<BTreeSet<_>>();
@@ -265,16 +307,27 @@ pub fn _merged(
     };
     let replacements = supplier.keys().map(|&at| (at, result(function, at))).collect::<BTreeMap<_, _>>();
     for (&at, &phi) in &phis {
-        let incoming = predecessors[&at]
-            .iter()
-            .map(|&parent| {
+        let incoming = function
+            .edge_predecessors(cfg::block(at))
+            .into_iter()
+            .map(cfg::id)
+            .map(|parent| {
                 (if exits.contains(&at) { Operand::Value(value) } else { replacements[&parent] }, cfg::block(parent))
             })
             .collect::<Vec<_>>();
         function.set_operands(phi, from_arms(&incoming));
     }
     let swap = |at: i64| BTreeMap::from([(value, replacements[&at])]);
+    // A phi reads `value` through a replaced parent only in a successor of one.
+    let reading = replacements
+        .keys()
+        .flat_map(|&at| cfg::successors_of(function, at))
+        .chain(replacements.keys().copied())
+        .collect::<BTreeSet<_>>();
     for block in function.layout().to_vec() {
+        if !reading.contains(&cfg::id(block)) {
+            continue;
+        }
         for phi in edges::phis(function, block) {
             let incoming = arms(function, phi)
                 .into_iter()

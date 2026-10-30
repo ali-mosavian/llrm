@@ -78,7 +78,7 @@ The runner must report that state, never treat it as a passing `PASS` result.
 ## Evidence and explicit unknowns
 
 Evidence is local and intentionally narrow: `docs/frontends/qb/dialects.md`
-records the underscore distinction and `/G3`; `crates/frontends/qbfront/src/intrinsics.rs`
+records the underscore distinction and `/G3`; `crates/frontends/qb/src/intrinsics.rs`
 identifies currently catalogued pointer intrinsics; and the installed VBDOS
 tree supplies `INC/VBDOS.BI`, `INC/CUSTCALL.BAS`, and form examples.
 qb-qrender supplies the source shapes in `src/{ent,model,r_bsp,

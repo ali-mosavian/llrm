@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/loopsimplify_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/loopsimplify_tests.rs`, the port of
 //! `tests/test_loopsimplify.py`, each body now MIR text.
 //!
 //! The BC corpora's test_adjacent_angle_loops_reach_a_fixed_point
@@ -77,6 +77,10 @@ b5:
 b4:
   br label %0
 
+0:
+  %1 = phi i16 [ %s, %b5 ], [ %t, %b4 ]
+  br label %b1
+
 b1:
   %carried = phi i16 [ %stepped, %b2 ], [ %1, %0 ]
   br i1 %c, label %b2, label %b3
@@ -87,10 +91,6 @@ b2:
 
 b3:
   ret i16 %carried
-
-0:
-  %1 = phi i16 [ %s, %b5 ], [ %t, %b4 ]
-  br label %b1
 }
 "
     );
@@ -98,20 +98,15 @@ b3:
 
 #[test]
 fn test_unsupported_group_is_atomic() {
-    for hazard in ["entry", "missing-source", "opaque", "bad-phi"] {
-        let text = match hazard {
-            // A terminator that is not `br`, as the old opaque operation.
-            "opaque" => TWO_ENTRIES.replace("b5:\n  br label %b1", "b5:\n  switch i16 %s, label %b1 []"),
-            _ => TWO_ENTRIES.to_owned(),
-        };
-        let mut module = parsed(&text);
+    for hazard in ["entry", "missing-source", "bad-phi"] {
+        let mut module = parsed(TWO_ENTRIES);
         let (mut target, mut sources) = (at(&module, "b1"), BTreeSet::from([at(&module, "b5"), at(&module, "b4")]));
         let (_, function) = module.function_mut("f").expect("@f");
         match hazard {
             "entry" => target = cfg::id(function.entry().expect("an entry")),
             "missing-source" => sources = BTreeSet::from([999]),
             "bad-phi" => {
-                let phi = function.block(cfg::block(target)).instructions()[0];
+                let phi = function.block(cfg::block(target)).first().expect("a block with an instruction");
                 let operands = function.instruction(phi).operands[4..].to_vec();
                 function.set_operands(phi, operands);
             }
@@ -125,8 +120,9 @@ fn test_unsupported_group_is_atomic() {
 
 #[test]
 fn test_conditional_entry_and_shared_exit_become_dedicated() {
-    for unsupported_exit in [false, true] {
-        let header = match unsupported_exit {
+    // A `switch` is regrouped as a `br` is: every case naming the block moves.
+    for switch in [false, true] {
+        let header = match switch {
             false => "br i1 %d, label %b2, label %b3",
             true => "switch i16 %s, label %b2 [ i16 0, label %b3 ]",
         };
@@ -152,13 +148,10 @@ b3:
         let mut module = parsed(&text);
         let (header_at, exit_at) = (at(&module, "b1"), at(&module, "b3"));
         let (_, function) = module.function_mut("f").expect("@f");
-        let before = function.clone();
         let changed = simplified(function);
-        if unsupported_exit {
-            assert!(!changed);
-            assert_eq!(*function, before);
-            continue;
-        }
+        assert!(changed);
+        assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
+        let (_, function) = module.function_mut("f").expect("@f");
         let graph = cfg::graph(function);
         let found = loops::loops(&graph, Some(cfg::id(function.entry().unwrap())));
         assert_eq!(found.len(), 1);
@@ -351,8 +344,13 @@ out:
     assert_eq!(*function, before);
 }
 
+/// The pin's loop-simplify visits the natural loops of a function that also
+/// holds an irreducible cycle (`opt -passes=loop-simplify` on this text gives
+/// `%head` a preheader and a dedicated exit, and leaves the cycle `%a`/`%b`
+/// alone). The pass gave up on the whole function: the QB module `qb-bounds`
+/// kept a loop with 18 latches and `@__main` of `qb-addrm` its reloads.
 #[test]
-fn an_irreducible_cycle_leaves_every_loop_alone() {
+fn a_natural_loop_is_simplified_beside_an_irreducible_cycle() {
     let text = "define void @f(i1 %c, i1 %d) {
 b0:
   br i1 %c, label %head, label %a
@@ -372,9 +370,14 @@ out:
 ";
     let mut module = parsed(text);
     let (_, function) = module.function_mut("f").expect("@f");
-    let before = function.clone();
-    assert!(!simplified(function), "the self loop at %head would otherwise get a preheader");
-    assert_eq!(*function, before);
+    assert!(simplified(function), "the self loop at %head gets a preheader");
+    let after = printed(&module);
+    // %b0 no longer branches to %head: a block of its own does, and it is
+    // %head's only way in from outside.
+    assert!(!after.contains("b0:\n  br i1 %c, label %head,"), "{after}");
+    assert_eq!(after.matches("label %head").count(), 2, "the preheader's branch and the self loop's: {after}");
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert!(!simplified(function), "a second run changes nothing");
 }
 
 #[test]
@@ -436,12 +439,19 @@ fn corpus_simplified() -> Vec<(String, Vec<usize>, Vec<usize>, bool)> {
         let names: Vec<String> = module
             .functions()
             .filter(|(_, _, one)| one.entry().is_some())
-            .filter_map(|(_, global, _)| global.name.clone())
+            .filter_map(|(_, global, _)| global.name.owned())
             .collect();
         for function_name in names {
             let (_, function) = module.function_mut(&function_name).unwrap();
+            // DEVIATE: a loop whose header is a landing pad (ON ERROR and
+            // RESUME) is left alone (`ehprepare` takes one pad); it
+            // is not counted.
             let latches = |function: &llrm_mir::module::Function| {
-                loops::loops(&cfg::graph(function), None).iter().map(|one| one.latches.len()).collect::<Vec<_>>()
+                loops::loops(&cfg::graph(function), None)
+                    .iter()
+                    .filter(|one| !crate::edges::starts_with_landing_pad(function, cfg::block(one.header)))
+                    .map(|one| one.latches.len())
+                    .collect::<Vec<_>>()
             };
             let before = latches(function);
             simplified(function);
@@ -497,4 +507,200 @@ fn loops_already_in_simplified_form_make_no_copy_of_the_function() {
         simplified(function)
     };
     assert!(!changed, "a loop in the form was changed");
+}
+
+/// The blocks a simplified loop gets stand where the pin lays them out: the
+/// preheader right after an outside predecessor, the dedicated exit right
+/// before the exit block (`placeSplitBlockCarefully`,
+/// `SplitBlockPredecessors`). They stood at the end of the function, which
+/// JumpThreading, visiting blocks in layout order, read as another loop shape
+/// (x_list's list-sum loop kept two pointer phis).
+#[test]
+fn test_a_new_preheader_and_exit_stand_next_to_the_blocks_they_serve() {
+    let mut module = parsed(
+        "define void @f(i1 %c, i1 %d) {
+entry:
+  br i1 %c, label %head, label %side
+
+side:
+  br i1 %d, label %head, label %guard
+
+head:
+  br i1 %d, label %head, label %guard
+
+guard:
+  ret void
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert!(simplified(function));
+    let order: Vec<&str> =
+        function.layout().iter().map(|&one| function.block(one).name.as_deref().unwrap_or("new")).collect();
+    assert_eq!(order, ["entry", "side", "new", "head", "new", "guard"]);
+}
+
+/// The first loop's exit is the second loop's header, so one new block is
+/// both its dedicated exit and the second's preheader. The pin works the last
+/// top-level loop first, so that block is made as a preheader and put right
+/// after the first loop's header: `entry h1 new b1 h2 b2 exit`. Taken in
+/// program order it was made as an exit, stood before `h2`, and bench
+/// x_transpose's late JumpThreading saw another layout than the pin's.
+#[test]
+fn a_loops_are_simplified_last_top_level_loop_first_so_the_preheader_follows_the_first_header() {
+    let mut module = parsed(
+        "define i32 @f(i32 %n) {
+entry:
+  br label %h1
+
+h1:
+  %i = phi i32 [ 0, %entry ], [ %i1, %b1 ]
+  %c1 = icmp slt i32 %i, %n
+  br i1 %c1, label %b1, label %h2
+
+b1:
+  %i1 = add i32 %i, 1
+  br label %h1
+
+h2:
+  %j = phi i32 [ 0, %h1 ], [ %j1, %b2 ]
+  %c2 = icmp slt i32 %j, %n
+  br i1 %c2, label %b2, label %exit
+
+b2:
+  %j1 = add i32 %j, 1
+  br label %h2
+
+exit:
+  ret i32 %j
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert!(simplified(function));
+    let order: Vec<&str> =
+        function.layout().iter().map(|&one| function.block(one).name.as_deref().unwrap_or("new")).collect();
+    assert_eq!(order, ["entry", "h1", "new", "b1", "h2", "b2", "exit"]);
+}
+
+/// `n` self-loops in a row, each entered from two blocks.
+fn entered_twice(n: usize) -> String {
+    let mut text = String::from("define void @f(i1 %c) {\nb0:\n  br label %e0\n\n");
+    for k in 0..n {
+        let next = if k + 1 == n { "end".to_owned() } else { format!("e{}", k + 1) };
+        text += &format!(
+            "e{k}:\n  br i1 %c, label %h{k}, label %m{k}\n\nm{k}:\n  br label %h{k}\n\nh{k}:\n  br i1 %c, label %h{k}, label %x{k}\n\nx{k}:\n  br label %{next}\n\n"
+        );
+    }
+    text + "end:\n  ret void\n}\n"
+}
+
+/// `simplifyLoop` found each loop's parent by asking every loop whether it held
+/// the header, and a header's place by a walk of the function: 128 loops in a
+/// row cost the pass 82 M instructions on the generated nests, the work
+/// growing with the square of the loops. A block is looked at once for each
+/// loop around it.
+#[test]
+fn finding_the_parents_of_loops_looks_at_each_block_once_per_loop_around_it() {
+    let probes = |n: usize| {
+        let before = super::parent_probes();
+        let (_, after) = simplify(&entered_twice(n));
+        assert_eq!(shape(&after, "h0"), (1, 1, true));
+        super::parent_probes() - before
+    };
+    let (a, b) = (probes(32), probes(128));
+    assert!(b * 100 <= a * 450, "32 loops: {a}, 128 loops: {b}");
+}
+
+/// The loops were kept up to date through each bridge by asking every loop
+/// whether the bridge joins it: with the loops in a row, `mir loopsimplify`
+/// read 10 / 27 / 84 Minstr for 512 / 1024 / 2048 branches at -O2 (steps of 2.7
+/// and 3.1: the square of the loops). A bridge is offered to the loops around
+/// its target only.
+#[test]
+fn a_bridge_is_offered_to_the_loops_around_its_target_not_to_every_loop() {
+    let probes = |n: usize| {
+        let before = super::bridge_probes();
+        let (_, after) = simplify(&entered_twice(n));
+        assert_eq!(shape(&after, "h0"), (1, 1, true));
+        super::bridge_probes() - before
+    };
+    let (a, b) = (probes(32), probes(128));
+    assert!(a > 0, "premise: bridges were made");
+    assert!(b * 100 <= a * 450, "32 loops: {a}, 128 loops: {b}");
+}
+
+/// Two latches that end in `invoke` kept the loop at two latches: the pass only
+/// regrouped `br` edges (`opt -passes=loop-simplify` gives `%head.backedge`).
+/// `qb-bounds` `@__main` kept 18 latches.
+#[test]
+fn invoke_backedges_are_merged_into_one_latch_and_the_unwind_edge_stays() {
+    let text = "declare void @g()
+declare i32 @__gxx_personality_v0(...)
+define void @f(i1 %c, i1 %d) personality ptr @__gxx_personality_v0 {
+b0:
+  br label %head
+
+head:
+  br i1 %c, label %l1, label %l2
+
+l1:
+  invoke void @g() to label %head unwind label %lp
+
+l2:
+  invoke void @g() to label %head unwind label %lp
+
+lp:
+  %x = landingpad { ptr, i32 } cleanup
+  ret void
+}
+";
+    let mut module = parsed(text);
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert!(simplified(function), "the two invoke latches get one backedge block");
+    let after = printed(&module);
+    assert_eq!(after.matches("to label %head unwind").count(), 0, "{after}");
+    assert_eq!(after.matches("unwind label %lp").count(), 2, "{after}");
+    let (_, function) = module.function_mut("f").expect("@f");
+    let shape = cfg::Shape::of(function);
+    assert_eq!(shape.loops.iter().map(|one| one.latches.len()).collect::<Vec<_>>(), [1]);
+    assert!(!simplified(function), "a second run changes nothing");
+}
+
+/// A loop headed by a landing pad (ON ERROR, RESUME) is left alone: the pin
+/// splits the pad in two, and `ehprepare` refuses a second pad ("more than one
+/// landing pad"): `tests/run/qb/bounds.bas` did not compile.
+#[test]
+fn a_landing_pad_header_is_not_split_in_two() {
+    let text = "declare i32 @g()
+declare i32 @__gxx_personality_v0(...)
+define void @f(i1 %c) personality ptr @__gxx_personality_v0 {
+b0:
+  invoke i32 @g() to label %n1 unwind label %lp
+
+n1:
+  invoke i32 @g() to label %n2 unwind label %lp
+
+n2:
+  ret void
+
+lp:
+  %x = landingpad { ptr, i32 } cleanup
+  br i1 %c, label %a, label %b
+
+a:
+  invoke i32 @g() to label %out unwind label %lp
+
+b:
+  invoke i32 @g() to label %out unwind label %lp
+
+out:
+  ret void
+}
+";
+    let mut module = parsed(text);
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert!(!simplified(function), "a pad is not split");
+    let after = printed(&module);
+    assert_eq!(after.matches("landingpad").count(), 1, "one pad in the function: {after}");
 }

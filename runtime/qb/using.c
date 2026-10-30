@@ -538,6 +538,8 @@ static void using_string(SD *item)
 
 static const UsingOps ops = {using_integer, using_real, using_string, using_end};
 
+#pragma aux B_USNG "B$USNG"
+
 /* B$USNG: PRINT USING, with the format. */
 void B_USNG(SD *format)
 {
@@ -545,5 +547,3 @@ void B_USNG(SD *format)
     str_tmp_free(format);
     using_ops = &ops;
 }
-
-#pragma aux B_USNG "B$USNG"

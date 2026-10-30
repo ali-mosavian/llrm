@@ -4,12 +4,14 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use llrm_mir::GlobalId;
+use llrm_mir::module::Module;
 use llrm_mir::passes::{Analyses, ModuleAnalyses, Outer};
 use llrm_mir::program::{Exports, Program, ProgramAnalyses};
 use llrm_mir::target::Neutral;
 
 use crate::consts::{Calls, Known, known_walked};
-use crate::manager::{GlobalsAA, ProgramSummaries, Summaries, ThroughMemory, call_effects};
+use crate::manager::{GlobalsAA, ProgramSummaries, Summaries, ThroughMemory};
 use crate::memory::Unit;
 use crate::testing::{DOS, function, layout, parsed, value};
 
@@ -22,7 +24,7 @@ fn kept(
     kept_by(globals, call, true)
 }
 
-/// `kept`, or without `Summaries` what `manager::call_effects` leaves.
+/// `kept`, or without `Summaries` what `calls_by_attributes` leaves.
 fn kept_by(
     globals: &str,
     call: &str,
@@ -38,7 +40,7 @@ fn kept_under(
     call: &str,
     summarized: bool,
 ) -> Option<Known> {
-    let module = parsed(&format!(
+    let mut module = parsed(&format!(
         "{DOS}{globals}
 define i16 @f() {{
 b0:
@@ -50,11 +52,15 @@ b0:
 "
     ));
     let layout = layout(&module);
+    if summarized {
+        attributed(&mut module);
+    }
     let program =
         Program::new(vec![module], Rc::new(Neutral)).unwrap().with_runtime(parsed(&format!("{DOS}{runtime}"))).unwrap();
     let module = &program.modules[0];
     let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
     modules.require::<GlobalsAA>();
+    modules.require::<crate::manager::GlobalsModRefAnalysis>();
     if summarized {
         modules.require::<Summaries>();
     }
@@ -62,12 +68,20 @@ b0:
     let f = function(module, "f");
     if !summarized {
         let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
-        let calls: Calls =
-            call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
+        let calls: Calls = crate::alias::calls_by_attributes(&crate::testing::with_points(unit))
+            .iter()
+            .map(|(at, effect)| (at, effect.stores.clone()))
+            .collect();
         return known_walked(&unit, &calls).get(&value(f, "r")).cloned();
     }
     let known = Analyses::new(outer).get::<ThroughMemory>(&module.context, &layout, f);
     Result::as_ref(&*known).unwrap().get(&value(f, "r")).cloned()
+}
+
+/// What the pipeline's `FunctionAttrs` has stated of `module`.
+fn attributed(module: &mut Module) {
+    let layout = layout(module);
+    crate::functionattrs::infer_module(module, &layout, llrm_mir::target::Machine::spaces(&Neutral));
 }
 
 fn seven() -> Option<Known> {
@@ -90,6 +104,9 @@ fn a_private_global_whose_address_leaves_is_forgotten() {
         "%n = ptrtoint ptr @g to i16\n  store i16 %n, ptr @word",
         "store i16 ptrtoint (ptr @g to i16), ptr @word",
         "%n = add i16 ptrtoint (ptr @g to i16), 1\n  store i16 %n, ptr @word",
+        "store ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)), ptr @slot",
+        "store ptr getelementptr (i8, ptr @g, i16 1), ptr @slot",
+        "call void @outside(ptr getelementptr (i8, ptr @g, i16 1))",
     ] {
         let globals = format!("{PRIVATE}@slot = global ptr null\n@word = global i16 0\n");
         let call = format!("{leaves}\n  call void @outside(ptr null)");
@@ -125,34 +142,46 @@ b0:
     );
     let call = "%a = alloca [4 x i8]\n  %s = addrspacecast ptr %a to ptr addrspace(1)\n  call addrspace(1) void @mk(ptr addrspace(1) %s)\n  call addrspace(1) void @set(ptr addrspace(1) %s)";
     assert_eq!(kept(&globals, call), None);
+    // farstruct.nib as #3251 left it, 0 for 5: the address a constant cast,
+    // which the use scan did not see.
+    let constant = globals.replace(
+        "%far = addrspacecast ptr @g to ptr addrspace(1)\n  store ptr addrspace(1) %far,",
+        "store ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)),",
+    );
+    assert_ne!(constant, globals, "premise: the cast is a constant");
+    assert_eq!(kept(&constant, call), None);
 }
 
-/// QB's `REDIM` descriptor held every array's address in a private constant
-/// nothing read: the array was untracked, and a runtime call that writes
-/// through a pointer it loaded then reloaded it (deedlines, +128 memory
-/// operands).
+/// A private constant nothing names holds a global's address: GlobalsModRef,
+/// as the pin's, takes an address stored in any initializer as escaped (the
+/// pin's pipeline has globaldce remove a dead one first, so QB's `REDIM`
+/// descriptors never reach this in a compile). `CallEffects`, deleted with
+/// #3436, kept the global tracked (deedlines +128 memory operands then); row
+/// AM-CA-5.
 #[test]
-fn a_private_initializer_nothing_names_does_not_leak_the_address_it_holds() {
+fn a_private_initializer_nothing_names_leaks_the_address_it_holds_as_the_pin_has_it() {
     let dead = format!("{PRIVATE}@held = internal constant ptr @g\n");
-    assert_eq!(kept(&dead, "call void @outside(ptr null)"), seven());
+    assert_eq!(kept(&dead, "call void @outside(ptr null)"), None);
     let chained = format!("{PRIVATE}@held = internal constant ptr @g\n@outer = internal constant ptr @held\n");
-    assert_eq!(kept(&chained, "call void @outside(ptr null)"), seven());
+    assert_eq!(kept(&chained, "call void @outside(ptr null)"), None);
     let named = format!("{PRIVATE}@held = internal constant ptr @g\n");
     assert_eq!(kept(&named, "%h = load ptr, ptr @held\n  call void @outside(ptr null)"), None);
     let behind = format!("{PRIVATE}@held = internal constant ptr @g\n@outer = internal constant ptr @held\n");
     assert_eq!(kept(&behind, "%h = load ptr, ptr @outer\n  call void @outside(ptr null)"), None);
 }
 
-/// A descriptor holding a global's address, handed only to a routine that
-/// `noretain`s it, leaves the global tracked; `nocapture` alone does not.
+/// A descriptor holding a global's address, handed to a routine that
+/// `noretain`s it: GlobalsModRef does not read `noretain` (ours, not the
+/// pin's), so the global is untracked either way; `CallEffects` kept it. Row
+/// AM-CA-5.
 #[test]
-fn a_global_held_only_by_a_noretain_argument_stays_tracked() {
+fn a_global_held_by_a_noretain_argument_is_untracked_until_globalsmodref_reads_noretain() {
     let held = |attrs: &str| {
         let globals =
             format!("{PRIVATE}@desc = internal constant ptr @g\n\ndeclare void @erase(ptr {attrs}) nocallback\n");
         kept(&globals, "call void @erase(ptr @desc)\n  store i16 7, ptr @g\n  call void @outside(ptr null)")
     };
-    assert_eq!(held("nocapture noretain"), seven());
+    assert_eq!(held("nocapture noretain"), None);
     assert_eq!(held("nocapture"), None);
 }
 
@@ -279,14 +308,29 @@ fn kept_in(
     let second = format!(
         "{DOS}{globals}\ndefine i16 @f() {{\nb0:\n  store i16 7, ptr @g\n  {call}\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
     );
-    let program = Program::new(vec![parsed(&format!("{DOS}{first}")), parsed(&second)], Rc::new(Neutral))
-        .unwrap()
-        .exporting(exports);
+    let (mut first, mut second) = (parsed(&format!("{DOS}{first}")), parsed(&second));
+    attributed(&mut first);
+    attributed(&mut second);
+    let mut program = Program::new(vec![first, second], Rc::new(Neutral)).unwrap().exporting(exports);
+    // Each body's attributes on the other module's declaration of it, as the
+    // pipeline's `published` does.
+    for at in 0..2 {
+        let defined: Vec<_> = program.modules[at].functions().map(|(id, _, _)| id).collect();
+        for id in defined {
+            let other = 1 - at;
+            for one in (0..program.modules[other].globals.len() as u32).map(GlobalId) {
+                if program.definition(other, one) == Some((at, id)) {
+                    program.restate(at, id, other, one);
+                }
+            }
+        }
+    }
     let mut analyses = ProgramAnalyses::default();
     analyses.get::<ProgramSummaries>(&program);
     let module = &program.modules[1];
     let mut modules = ModuleAnalyses::new(analyses.proxy(&program, 1));
     modules.require::<GlobalsAA>();
+    modules.require::<crate::manager::GlobalsModRefAnalysis>();
     modules.require::<Summaries>();
     let f = function(module, "f");
     let known = Analyses::new(modules.outer(module)).get::<ThroughMemory>(&module.context, &program.layout, f);
@@ -385,4 +429,384 @@ fn the_window_of_a_private_global_keeps_it_private_and_is_it() {
     let window = "%w = call ptr @llrm.ia16.window.p0.p0(ptr @g)";
     assert_eq!(kept(&globals, &format!("{window}\n  call void @outside(ptr null)")), seven());
     assert_ne!(kept(&globals, &format!("{window}\n  store i16 9, ptr %w\n  call void @outside(ptr null)")), seven());
+}
+
+/// Where `globalsaa`'s tracked set (each body's pointer solve) and
+/// `GlobalsModRef`'s `AnalyzeGlobals` (a use scan per global) disagree, over
+/// every corpus module as a one-module program, asked of the internal global
+/// variables. The scan never tracks what GlobalsAA does not. GlobalsAA tracks
+/// more, and each extra global is one the pin's rule calls escaped for a
+/// reason this test names: its address is in the initializer of another
+/// internal global (GlobalsAA reads an initializer only through its holder),
+/// stored as a value, or a `phi` input. A global escaping for any other reason
+/// is a difference nobody has explained.
+#[test]
+fn globals_aa_tracks_what_the_globals_mod_ref_scan_tracks_and_the_extras_are_explained() {
+    use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, GlobalId};
+    use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Operand, ValueId};
+    use llrm_mir::opcode::{CastOp, Opcode};
+    let (mut compared, mut extras, mut explained) = (0usize, 0usize, 0usize);
+    let mut unexplained = Vec::new();
+    for (name, module) in crate::testing::corpus() {
+        let Ok(program) = Program::new(vec![module], Rc::new(Neutral)) else { continue };
+        let module = &program.modules[0];
+        let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+        // `require` only keeps an analysis; `get` computes it.
+        let old = modules.get::<GlobalsAA>(module);
+        let old = Result::as_ref(&*old).expect("GlobalsAA of a corpus module");
+        let scan = crate::globalsmodref::compute(module);
+        let names = |root: ConstantId, id: GlobalId| {
+            let mut work = vec![root];
+            while let Some(c) = work.pop() {
+                match &module.context.get(c).kind {
+                    ConstantKind::Global(g) if *g == id => return true,
+                    ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
+                        work.extend(operands.iter().copied())
+                    }
+                    ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => work.push(*value),
+                    ConstantKind::Aggregate(members) => work.extend(members.iter().copied()),
+                    _ => {}
+                }
+            }
+            false
+        };
+        for (at, global) in module.globals.iter().enumerate() {
+            let id = GlobalId(at as u32);
+            if !matches!(global.kind, GlobalKind::Variable(_))
+                || !matches!(global.linkage, Linkage::Internal | Linkage::Private)
+            {
+                continue;
+            }
+            compared += 1;
+            let label = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let (tracked, scanned) = (old.tracked(id), scan.is_non_address_taken(id));
+            if scanned && !tracked {
+                unexplained.push(format!("{label}: only the scan tracks it"));
+            }
+            if !tracked || scanned {
+                continue;
+            }
+            extras += 1;
+            // The reasons, found by looking at the uses the scan stops at.
+            let in_initializer = module
+                .globals
+                .iter()
+                .any(
+                    |holder| match &holder.kind {
+                        GlobalKind::Variable(v) => v.initializer.is_some_and(|init| names(init, id)),
+                        GlobalKind::Function(_) => false,
+                    },
+                );
+            let mut other = false;
+            let mut visit = |f: &Function, inst: InstId, index: usize| -> Option<ValueId> {
+                let op = f.instruction(inst);
+                match &op.opcode {
+                    Opcode::Load { .. } => None,
+                    Opcode::Store { .. } if index == 1 => None,
+                    Opcode::Store { .. } | Opcode::Phi => None,
+                    Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => op.result,
+                    _ => {
+                        other = true;
+                        None
+                    }
+                }
+            };
+            let mut by_use = false;
+            for (_, _, f) in module.functions().filter(|(_, _, f)| !f.is_declaration()) {
+                for (_, inst) in f.walk() {
+                    for (index, operand) in f.instruction(inst).operands.iter().enumerate() {
+                        let Operand::Constant(c) = operand else { continue };
+                        if !names(*c, id) {
+                            continue;
+                        }
+                        let mut work = Vec::new();
+                        work.extend(visit(f, inst, index));
+                        while let Some(v) = work.pop() {
+                            for user in f.users(v) {
+                                let kind = &f.instruction(user.user).opcode;
+                                by_use |= matches!(kind, Opcode::Store { .. } if user.index != 1)
+                                    || matches!(kind, Opcode::Phi);
+                                work.extend(visit(f, user.user, user.index as usize));
+                            }
+                        }
+                    }
+                }
+            }
+            if (in_initializer || by_use) && !other {
+                explained += 1;
+            } else {
+                unexplained
+                    .push(format!("{label}: initializer {in_initializer}, stored or phi {by_use}, other use {other}"));
+            }
+        }
+    }
+    // Premise: the corpus has internal globals, and GlobalsAA tracks some the
+    // scan does not.
+    assert!(compared > 0 && extras > 0, "{compared} compared, {extras} extra");
+    assert!(
+        unexplained.is_empty(),
+        "{} of {extras} unexplained: {:#?}",
+        unexplained.len(),
+        &unexplained[..unexplained.len().min(8)]
+    );
+    assert_eq!(explained, extras);
+}
+
+/// GlobalsAA of a module asks no pointer solve: its tracked set is one use scan
+/// of the module (`AnalyzeGlobals`), where it ran `alias::points_to` on every
+/// body, five times over a d_faces compile (48.8 M inclusive, #3190).
+#[test]
+fn globals_aa_asks_no_pointer_solve() {
+    let module = parsed(&format!(
+        "{DOS}@g = internal global i16 0\n@h = internal global i16 0\ndefine i16 @f() {{\nb0:\n  store i16 7, ptr @g\n  %r = load i16, ptr @h\n  ret i16 %r\n}}\ndefine i16 @k() {{\nb0:\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+    ));
+    let program = Program::new(vec![module], Rc::new(Neutral)).unwrap();
+    let module = &program.modules[0];
+    let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+    let (values, escapes) = (crate::alias::value_solves(), crate::alias::escape_solves());
+    let found = modules.get::<GlobalsAA>(module);
+    let found = Result::as_ref(&*found).unwrap();
+    // Premise: the analysis ran and tracks both globals.
+    assert_eq!(found.tracked_globals().len(), 2);
+    assert_eq!(crate::alias::value_solves() - values, 0, "a body was solved for what it points to");
+    assert_eq!(crate::alias::escape_solves() - escapes, 0, "a body was solved for what escapes");
+}
+
+/// `GlobalsAA` of the one-module program `text`.
+fn globals_of(text: &str) -> crate::globalsaa::Globals {
+    let module = parsed(text);
+    let program = Program::new(vec![module], Rc::new(Neutral)).unwrap();
+    let module = &program.modules[0];
+    let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+    let found = modules.get::<GlobalsAA>(module);
+    Result::as_ref(&*found).expect("GlobalsAA").clone()
+}
+
+/// GlobalsAA is held past the bodies ipa-cp adds after it was made. A copy
+/// is no declaration: taken for one, its call wrote no tracked global and a
+/// load of @g across it kept a stale value.
+#[test]
+fn a_function_added_after_globals_aa_was_made_reaches_every_tracked_global() {
+    let found = globals_of(
+        "@g = internal global i16 0
+
+define void @f() {
+b0:
+  store i16 1, ptr @g
+  ret void
+}
+",
+    );
+    let added = llrm_mir::context::GlobalId(2);
+    let (read, written) = found.unsummarized(Some(added));
+    assert_eq!((read.len(), written.len()), (1, 1), "a copy made since was taken for a declaration");
+}
+
+/// A loop summing `@a` that reads it by index, then the same loop after loop
+/// strength reduction: through a pointer phi that steps by 2. `after` adds
+/// `uses` to the second, in the loop (`ret` is its return value, `decl` what
+/// it declares).
+fn indexed_and_stepped(
+    decl: &str,
+    uses: &str,
+    ret: (&str, &str),
+) -> (crate::globalsaa::Globals, crate::globalsaa::Globals) {
+    let head = format!(
+        "{DOS}@a = internal global [128 x i8] zeroinitializer
+@s = internal global [4 x i8] zeroinitializer
+{decl}
+"
+    );
+    let before = format!(
+        "{head}define {ty} @f() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b1 ]
+  %p = getelementptr inbounds [2 x i8], ptr @a, i16 %i
+  %v = load i16, ptr %p
+  store i16 %v, ptr @s
+  %i.next = add nuw nsw i16 %i, 1
+  %c = icmp ne i16 %i.next, 64
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret {ty} {zero}
+}}
+",
+        ty = ret.0,
+        zero = if ret.0 == "ptr" { "null" } else { "0" },
+    );
+    let after = format!(
+        "{head}define {ty} @f() {{
+b0:
+  br label %b1
+
+b1:
+  %p = phi ptr [ @a, %b0 ], [ %p.next, %b1 ]
+  %i = phi i16 [ -256, %b0 ], [ %i.next, %b1 ]
+  %v = load i16, ptr %p
+  store i16 %v, ptr @s
+  {uses}
+  %i.next = add nsw i16 %i, 4
+  %p.next = getelementptr i8, ptr %p, i16 2
+  %c = icmp ne i16 %i.next, 0
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret {ty} {value}
+}}
+",
+        ty = ret.0,
+        value = ret.1,
+    );
+    (globals_of(&before), globals_of(&after))
+}
+
+/// jpeg-shaped loops after `lsr` read a global through `phi ptr [ @a, ... ]`.
+/// The pin's use scan calls that an escape (no `phi` case in
+/// `AnalyzeUsesOfPointer`), so a held result that tracks `@a` was refused by
+/// `LLRM_CHECK_STALE` as one that "no longer covers the module" with nothing
+/// added but a pointer induction variable (lsr-stale-repro.bas, -m16 -O1).
+#[test]
+fn a_global_read_through_a_stepped_pointer_phi_is_still_covered() {
+    let (before, after) = indexed_and_stepped("", "", ("i16", "0"));
+    let a = GlobalId(0);
+    assert!(before.tracked(a), "reached by name before");
+    assert!(!after.tracked(a), "the pin's scan calls the phi an escape");
+    assert!(before.covers(&after));
+}
+
+#[test]
+fn a_stepped_pointer_phi_passed_to_a_call_is_not_covered() {
+    let (before, after) = indexed_and_stepped("declare void @ext(ptr)", "call void @ext(ptr %p)", ("i16", "0"));
+    assert!(!before.covers(&after));
+}
+
+#[test]
+fn a_stepped_pointer_phi_stored_as_a_value_is_not_covered() {
+    let (before, after) = indexed_and_stepped(
+        "@keep = internal global [4 x i8] zeroinitializer",
+        "store ptr %p, ptr @keep",
+        ("i16", "0"),
+    );
+    assert!(!before.covers(&after));
+}
+
+#[test]
+fn a_stepped_pointer_phi_that_is_returned_is_not_covered() {
+    let (before, after) = indexed_and_stepped("", "", ("ptr", "%p"));
+    assert!(!before.covers(&after));
+}
+
+/// Two globals reaching one pointer phi that is passed to a call: both
+/// escape. The joins seen were one set for every candidate, so `@b` found the
+/// phi already seen from `@a` and was judged not to escape (w-7's review). The
+/// held result tracks `@b` only (`@a` is stored in `@hold`), so `@a`'s own
+/// refusal cannot hide it.
+#[test]
+fn a_global_joined_into_a_phi_with_another_that_is_passed_to_a_call_is_not_covered() {
+    let head = format!(
+        "{DOS}@a = internal global [128 x i8] zeroinitializer
+@b = internal global [128 x i8] zeroinitializer
+@hold = internal global [2 x i8] zeroinitializer
+declare void @ext(ptr)
+"
+    );
+    let before = format!(
+        "{head}define i16 @f(i16 %n) {{
+b0:
+  store ptr @a, ptr @hold
+  %w = load i16, ptr @b
+  ret i16 %w
+}}
+"
+    );
+    let after = format!(
+        "{head}define i16 @f(i1 %c) {{
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi ptr [ @a, %b1 ], [ @b, %b2 ]
+  call void @ext(ptr %p)
+  ret i16 0
+}}
+"
+    );
+    let (before, after) = (globals_of(&before), globals_of(&after));
+    assert!(!before.tracked(GlobalId(0)) && before.tracked(GlobalId(1)));
+    assert!(!before.covers(&after));
+}
+
+/// `GlobalsAA` of the one-module program `text` on real mode.
+fn globals_on_dos(text: &str) -> crate::globalsaa::Globals {
+    let module = parsed(text);
+    let program = Program::new(vec![module], Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let module = &program.modules[0];
+    let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+    let found = modules.get::<GlobalsAA>(module);
+    Result::as_ref(&*found).expect("GlobalsAA").clone()
+}
+
+/// A body that makes a far pointer from `selector`, an `i16`, and reads a
+/// byte through it, beside `@a`, an internal global nobody takes the address
+/// of (`rest` follows).
+fn forged_over_a(
+    selector: &str,
+    rest: &str,
+) -> crate::globalsaa::Globals {
+    globals_on_dos(&format!(
+        "{DOS}@a = internal global [8 x i8] zeroinitializer
+@w = internal global [2 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {{
+b0:
+  %s = inttoptr i16 {selector} to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %p = getelementptr i8, ptr addrspace(1) %far, i16 %n
+  %v = load volatile i8, ptr addrspace(1) %p
+  %w = load i16, ptr @a
+  ret i16 %w
+}}
+{rest}"
+    ))
+}
+
+/// far6.bas: z, a DIM SHARED whose address nobody took, was promoted to a
+/// register (z's loads 4 -> 1) while `DEF SEG = VARSEG(w)` and a POKE at a
+/// scanned offset wrote it: 21257 where BC printed 100. A selector made of an
+/// integer that is no plain number may name the data segment, so no global is
+/// reached by name only; a plain number names a segment no object occupies.
+#[test]
+fn a_selector_forged_from_a_computed_integer_leaves_no_global_tracked() {
+    let a = GlobalId(0);
+    assert!(forged_over_a("-18432", "").tracked(a), "premise: a numeric segment (&HB800) forges nothing");
+    assert!(!forged_over_a("%n", "").tracked(a), "a selector computed from a parameter");
+    let varseg = "ptrtoint (ptr addrspace(2) addrspacecast (ptr @w to ptr addrspace(2)) to i16)";
+    assert!(!forged_over_a(varseg, "").tracked(a), "VARSEG(w): the data segment's own value");
+}
+
+/// The runtime's bodies come `available_externally` and are no forger of the
+/// program's globals (`!llrm.named` is the same trust boundary).
+#[test]
+fn a_runtime_body_that_forges_a_selector_does_not_untrack_the_programs_globals() {
+    let runtime = "
+define available_externally i16 @rt(i16 %n) {
+b0:
+  %s = inttoptr i16 %n to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %v = load volatile i8, ptr addrspace(1) %far
+  %z = zext i8 %v to i16
+  ret i16 %z
+}
+";
+    assert!(forged_over_a("-18432", runtime).tracked(GlobalId(0)));
 }

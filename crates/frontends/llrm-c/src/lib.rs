@@ -1,5 +1,12 @@
 //! C through Open Watcom's front end.
 
+// Without the feature every test that compiles a `.c` file fails with
+// `Unsupported("llrm was built without the toolchain feature")`: one error
+// here instead. The root package enables it, so a workspace build has it.
+#[cfg(all(test, not(feature = "toolchain")))]
+compile_error!("llrm-c's lib tests need --features toolchain: cargo test -p llrm-c --features toolchain");
+
+pub mod builtins;
 #[cfg(test)]
 mod callconv_tests;
 pub mod compile;

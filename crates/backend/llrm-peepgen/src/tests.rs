@@ -14,8 +14,13 @@ fn forms() -> String {
     format!("{}\n{}", read("llrm-x86"), read("llrm-x86-m16"))
 }
 
+fn dialect() -> llrm_target::instr::Dialect {
+    llrm_target::instr::Dialect::parse(include_str!("../../../target/llrm-x86/src/instructions/dialect.toml"))
+        .expect("x86's dialect")
+}
+
 fn table() -> table::Table {
-    table::load(&forms(), "x86.instr").unwrap()
+    table::load(&forms(), "x86.instr", &dialect()).unwrap()
 }
 
 fn compiled(rules: &str) -> Result<Vec<automaton::Automaton>, String> {
@@ -29,7 +34,7 @@ fn the_rules_llrm_builds_with_compile() {
         include_str!("../../../target/llrm-x86/src/isel/peephole.peep"),
         include_str!("../../../target/llrm-x86-m16/src/isel/peephole.peep")
     );
-    let made = generate(&forms(), "x86.instr", &rules, "peephole.peep");
+    let made = generate(&forms(), "x86.instr", &rules, "peephole.peep", &dialect());
     assert!(made.is_ok(), "{}", made.err().unwrap_or_default());
 }
 
@@ -57,6 +62,15 @@ fn a_malformed_rule_is_refused_with_its_line() {
         ),
         "test.peep:3: rule r: a gap '...' comes only after the first instruction"
     );
+}
+
+/// A literal operand is signed: `add d, d, #-1` was refused ("expected a
+/// number, found '-'"), so no rule could name the canonical `x - 1` that the
+/// combiner makes, and `dec` was chosen for `sub x, 1` alone.
+#[test]
+fn a_negative_literal_operand_compiles() {
+    let rules = "group g\n    walk each\nrule r\n    match add d:reg, d, #-1\n    rewrite @0: dec d, d\n";
+    assert!(compiled(rules).is_ok(), "{:?}", compiled(rules).err());
 }
 
 /// `add r,1` and `add r,2` differ only in the immediate: one state tests
@@ -102,4 +116,22 @@ fn every_operation_of_llrm_lir_has_a_spelling_and_a_variant() {
         assert_eq!(table::operation(op.as_str()).as_deref(), Some(format!("{op:?}").as_str()), "{op:?}");
         assert!(table::variant(&format!("{op:?}")), "{op:?}");
     }
+}
+
+/// A flag a rule names is the target's own, in its dialect: a rule testing
+/// arm64's `Z` generated `RflagsBits::Z`, which x86's decoder has no such bit
+/// of.
+#[test]
+fn a_rule_names_the_flags_of_its_dialect() {
+    let arm = llrm_target::instr::Dialect::parse(
+        "file = \"arm64.instr\"\nregisters = [\"x0\"]\nwidths = [32, 64]\narithmetic = [\"N\", \"Z\"]\n\
+         [flags]\nN = 8\nZ = 4\n",
+    )
+    .expect("a dialect");
+    let forms = "add binary rm/^0,rmi 32,64 alu_rr - - - -/N,Z\ninc unary rm/^0 32,64 alu_rr - - - -/N,Z\n";
+    let rules =
+        "group g\n    walk each\nrule r\n    match add d:reg, d, #1\n    when dead(@0, Z)\n    rewrite @0: inc d, d\n";
+    let made = generate(forms, "arm64.instr", rules, "test.peep", &arm).unwrap_or_else(|error| panic!("{error}"));
+    assert!(made.rules.contains("Lanes::flags(flag_bits::Z)"), "{}", made.rules);
+    assert!(made.rules.contains("pub const Z: u32 = 0x4;") && !made.rules.contains("RflagsBits"), "{}", made.rules);
 }

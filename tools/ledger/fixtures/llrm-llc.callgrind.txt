@@ -1,0 +1,16 @@
+User annotated:   
+Auto-annotation:  off
+
+--------------------------------------------------------------------------------
+Ir                  
+--------------------------------------------------------------------------------
+24,237,814 (100.0%)  PROGRAM TOTALS
+
+24,237,814 (100.0%)  PROGRAM TOTALS
+1,133,700 ( 4.68%)  ???:__rustc::__rust_alloc [/home/alim/scratch/tgt-c1/release/llrm-llc]
+  189,717 ( 0.78%)  ???:llrm_target::registers::parse [/home/alim/scratch/tgt-c1/release/llrm-llc]
+   18,485 ( 0.08%)  ???:__rustc::__rust_alloc_zeroed [/home/alim/scratch/tgt-c1/release/llrm-llc]
+      208 ( 0.00%)  ???:<llrm_codegen::abi::llvm::LlvmAbi as llrm_codegen::backend::assemble::Abi>::contract [/home/alim/scratch/tgt-c1/release/llrm-llc]
+      140 ( 0.00%)  ???:<llrm_codegen::abi::llvm::LlvmAbi as llrm_codegen::backend::assemble::Abi>::linked [/home/alim/scratch/tgt-c1/release/llrm-llc]
+       88 ( 0.00%)  ???:<llrm_codegen::abi::llvm::LlvmAbi as llrm_codegen::backend::assemble::Abi>::registers [/home/alim/scratch/tgt-c1/release/llrm-llc]
+        6 ( 0.00%)  ???:<llrm_codegen::abi::llvm::LlvmAbi as llrm_codegen::backend::assemble::Abi>::runtime_contracts [/home/alim/scratch/tgt-c1/release/llrm-llc]

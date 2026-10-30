@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# buildslot CMD...: run CMD (a cargo build/check/test) holding one of 4 shared slots at nice 10; waits for a free slot.
+# CARGO_BUILD_JOBS defaults to 8 (cargo's own default is every core: four slots of 32 rustc at 1-1.7 GB each ran the host out of memory and
+# systemd-oomd killed whole sessions); set it to override. Installed to ~/.local/bin/buildslot from this file.
+# Usage: buildslot cargo build --release   (the parity merge loop does NOT use it)
+N=${BUILDSLOTS:-4}; D=${BUILDSLOT_DIR:-/tmp/buildslots}; mkdir -p $D
+export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
+# every test/bench binary cargo runs goes through testcap (a per-process memory cap); a caller's own runner wins
+here=$(dirname "$(readlink -f "$0")")
+triple=$(rustc -vV | sed -n 's/^host: //p' | tr 'a-z-' 'A-Z_')
+runner=CARGO_TARGET_${triple}_RUNNER
+[ -n "${!runner}" ] || export "$runner=$here/testcap"
+# First come, first served: a waiter takes a ticket (BUILDSLOT_PRIORITY=0 sorts before the default 1) and only the N oldest live tickets may try the N slots. Random polling let short tests
+# keep beating a dist build that held the shared dist lock: 44 minutes at 0% CPU, 11 pair_builds queued behind it.
+poll=${BUILDSLOT_POLL:-0.5}
+mkdir -p $D/q; ticket=$D/q/${BUILDSLOT_PRIORITY:-1}-$(date +%s%N).$$
+: > $ticket
+while true; do
+  for f in $D/q/*; do [ -e "$f" ] && ! kill -0 "${f##*.}" 2>/dev/null && rm -f "$f"; done  # a ticket whose process is gone
+  ahead=$(ls $D/q | sort | grep -n -x -F "${ticket##*/}" | cut -d: -f1)
+  if [ $((ahead - 1)) -lt $N ]; then  # one of the first N waiters: with N free slots they all go at once
+    for i in $(seq 1 $N); do
+      exec {fd}>$D/slot$i
+      if flock -n $fd; then rm -f $ticket; exec nice -n 10 "$@"; fi
+      exec {fd}>&-
+    done
+  fi
+  sleep $poll
+done

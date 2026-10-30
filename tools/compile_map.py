@@ -33,6 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import corpora  # noqa: E402
+import pin_clang  # noqa: E402
 import llrmbin  # noqa: E402
 
 QCPORT = Path(os.environ.get("QCPORT", Path.home() / "scratch/qbq-llrm/src"))
@@ -53,10 +54,10 @@ ROWS = [
     (r"^analysis (bounded|dominated-edges|registers|counted|followers|demanded)", "analysis: ranges", "ranger"),
     (r"^analysis ", "analysis: other", None),
     (r"^mir ", "mir passes", None),
-    (r"^isel|^masm|^lir (far|schedule|shrink|duplicated)", "isel", None),
+    (r"^isel|^lir (far|schedule|shrink|duplicated)", "isel", None),
     (r"^(facts (hints|sibling prices|fold prices)|siblings )", "regalloc: hints", "hint-slope"),
     (r"^(facts |classes |intervals |regalloc |split |spill |after |lir (regalloc|ssaspill)|candidate |ssa |siblings )", "regalloc", "allocator"),
-    (r"^lir (peephole|jumps|floatassign|floatalloc|floatfold|coalesce|phielim|twoaddr|parcopy|loopslots|pressuresink|frame)", "lir passes", None),
+    (r"^lir (peephole|jumps|floatassign|floatalloc|floatfold|coalesce|phielim|twoaddr|parcopy|loopslots|frame)", "lir passes", None),
     (r"^(assemble|machine|objbuild|emit|frame laid|masm|stack checks)", "emit", None),
 ]
 # The same categories in gcc's timers and clang's trace events.
@@ -204,23 +205,40 @@ def commit() -> str:
     return run(["git", "-C", ROOT, "log", "-1", "--format=%h %s"]).stdout.strip()
 
 
+def output_args(kind: str, directory: Path) -> tuple[list[str], list[str]]:
+    """(llrm's, gcc's and clang's) output arguments for one kind of output: `asm` is `-S -o /dev/null` for all three (the listing is written, 15.6 M of text for llrm
+    at d_faces -O2); `obj` is an object file for all three (what users build). Both columns of a ratio use the same kind."""
+    if kind == "asm":
+        return ["-S", "-o", "/dev/null"], ["-S", "-o", "/dev/null"]
+    return ["-o", str(directory / "o.obj")], ["-c", "-o", str(directory / "o.o")]
+
+
 def build_map(args) -> dict:
     llrm = llrmbin.bin_dir() / "llrm-c"
     source = args.source if args.source.is_absolute() else QCPORT / args.source
-    base = [str(llrm), "-m32", args.level, *INCLUDES, "-S", "-o", "/dev/null", str(source)]
+    outdir = Path(tempfile.mkdtemp(prefix="compile_map_out"))
+    import atexit, shutil
+    atexit.register(shutil.rmtree, outdir, True)
+    llrm_out, foreign_out = output_args(args.output, outdir)
+    base = [str(llrm), "-m32", args.level, *INCLUDES, *llrm_out, str(source)]
     env = {"PATH": os.environ["PATH"]}
     total = instructions(base, env)
     timing = {"llrm": cycles(base, env)}
     timed_env = {**env, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "1000"}
     timed = run(base, env=timed_env)
     instrumented = instructions(base, timed_env)
+    with tempfile.TemporaryDirectory() as empty_dir:  # what a compile of nothing costs: loader, runtime start, exit
+        empty = Path(empty_dir) / "empty.c"
+        empty.write_text("int f(void){return 1;}\n")
+        startup = instructions([*base[:-1], str(empty)], env) / 1e6 if base[-1] == str(source) else None
     rows, step_total = parse_steps(timed.stderr)
     own_sum = sum(r[1] for r in rows)
     result = {
-        "header": {"commit": commit(), "llrm": " ".join(base), "gcc": f"gcc {' '.join(FOREIGN)} {args.level} -S -o /dev/null {source}",
-                   "clang": f"clang {' '.join(FOREIGN)} {args.level} -S -o /dev/null {source}"},
-        "total_M": total / 1e6, "instrumented_M": instrumented / 1e6, "rows_sum_M": own_sum, "debug_total_M": step_total[0] if step_total else None,
+        "header": {"commit": commit(), "llrm": " ".join(base), "output": args.output, "gcc": f"gcc {' '.join(FOREIGN)} {args.level} {' '.join(foreign_out)} {source}",
+                   "clang": f"{pin_clang.path()} {' '.join(FOREIGN)} {args.level} {' '.join(foreign_out)} {source}"},
+        "total_M": total / 1e6, "instrumented_M": instrumented / 1e6, "rows_sum_M": own_sum, "debug_total_M": step_total[0] if step_total else None, "startup_M": startup,
         "outside_every_step_M": step_total[2] if step_total else None,
+        "load_average": list(os.getloadavg()),
         "rows": [], "categories": {},
     }
     for count, own, whole, name in sorted(rows, key=lambda r: -r[1]):
@@ -234,14 +252,14 @@ def build_map(args) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         many = copies(source, work)
-        gcc_one = instructions(["gcc", *FOREIGN, args.level, "-S", "-o", "/dev/null", str(source)], env) / 1e6
-        clang_one = instructions(["clang", *FOREIGN, args.level, "-S", "-o", "/dev/null", str(source)], env) / 1e6
+        gcc_one = instructions(["gcc", *FOREIGN, args.level, *foreign_out, str(source)], env) / 1e6
+        clang_one = instructions([pin_clang.path(), *FOREIGN, args.level, *foreign_out, str(source)], env) / 1e6
         for name in ("gcc", "clang"):
-            timing[name] = cycles([name, *FOREIGN, args.level, "-S", "-o", "/dev/null", str(source)], env)
+            timing[name] = cycles([pin_clang.path() if name == "clang" else name, *FOREIGN, args.level, *foreign_out, str(source)], env)
         # Their timers are time, not instructions: three runs, summed.
         sums, gtotal = collections.Counter(), 0.0
         for _ in range(REPEATS):
-            part, whole = parse_gcc(run(["gcc", *FOREIGN, args.level, "-S", "-o", "/dev/null", "-ftime-report", str(many)]).stderr)
+            part, whole = parse_gcc(run(["gcc", *FOREIGN, args.level, *foreign_out, "-ftime-report", str(many)]).stderr)
             for name, user in part:
                 sums[name] += user
             gtotal += whole or 0.0
@@ -254,7 +272,7 @@ def build_map(args) -> dict:
         for k in range(REPEATS):
             trace = work / f"trace{k}"
             trace.mkdir()
-            run(["clang", *FOREIGN, args.level, "-S", "-o", trace / "o.s", "-ftime-trace", "-ftime-trace-granularity=20", str(many)])
+            run([pin_clang.path(), *FOREIGN, args.level, *(["-S", "-o", trace / "o.s"] if args.output == "asm" else ["-c", "-o", trace / "o.o"]), "-ftime-trace", "-ftime-trace-granularity=20", str(many)])
             selfs.update(self_times(json.loads(next(trace.glob("*.json")).read_text())["traceEvents"]))
         ccat = collections.defaultdict(float)
         for name, micro in selfs.items():
@@ -275,18 +293,36 @@ def build_map(args) -> dict:
     return result
 
 
+def accounting(result: dict) -> list[tuple[str, float]]:
+    """The lines of the accounting block, (label, M) in order, and the identities they satisfy:
+    instrumented = timed thread + outside the thread; timed thread = rows + outside every step + unexplained. Every figure of a report is quoted with this block."""
+    plain, inst = result["total_M"], result["instrumented_M"]
+    thread = result["debug_total_M"] if result.get("debug_total_M") is not None else result["rows_sum_M"] + (result["outside_every_step_M"] or 0.0)
+    rows, outside = result["rows_sum_M"], result["outside_every_step_M"] or 0.0
+    process = inst - thread
+    startup = min(result.get("startup_M") or 0.0, process)
+    return [("plain perf total (instructions:u, process)", plain), ("instrumented perf total (LLRM_DEBUG=time on)", inst),
+            ("instrument overhead (instrumented - plain)", inst - plain), ("timed thread total", thread), ("rows sum (own M of every step)", rows),
+            ("outside every step, inside the thread", outside), ("unexplained in the thread (thread - rows - outside)", thread - rows - outside),
+            ("outside the timed thread (instrumented - thread)", process), ("  of which start-up and exit (empty-file compile)", startup),
+            ("  of which the rest (main-thread work, instrument)", process - startup)]
+
+
 def show(result: dict, old: dict | None = None) -> str:
     out = []
     head = result["header"]
     out += [f"commit  {head['commit']}", f"llrm    {head['llrm']}", f"gcc     {head['gcc']}", f"clang   {head['clang']}", ""]
     total = result["total_M"]
     inst = result["instrumented_M"]
-    gap = inst - result["rows_sum_M"]
-    out.append(f"perf total {total:,.0f} M plain, {inst:,.0f} M with LLRM_DEBUG=time on (the instrument costs {inst - total:,.0f} M, {100 * (inst - total) / total:.1f}%); "
-               f"the rows sum to {result['rows_sum_M']:,.0f} M of the instrumented run, {gap:,.0f} M ({100 * gap / inst:.1f}%) short: outside every step "
-               f"(llrm's own count {result['outside_every_step_M']:,.0f} M) and process start-up. Tolerance: rows within 2% of the instrumented total, else the map is wrong.")
-    if abs(gap) > 0.02 * inst:
-        out.append("WARNING: the rows are not within 2% of the instrumented total; read nothing off this map until that is explained.")
+    thread = result["debug_total_M"] if result.get("debug_total_M") is not None else inst  # an old map without the thread total: the instrumented total
+    gap = thread - result["rows_sum_M"]  # the rows add up to the timed thread; the instrumented total also holds the process around it
+    load = result.get("load_average")
+    out += [f"Host load average at the run (1/5/15 min): {' / '.join(f'{one:.1f}' for one in load)}; instruction counts do not depend on it, a cycles figure does." if load else "Host load average: not recorded."]
+    out += [f"Output kind: {result['header'].get('output', 'asm')} for llrm, gcc and clang alike (asm = -S, the listing is written; obj = an object file).",
+            "Accounting (M instructions; quote it with any figure of this map):"] + [f"  {label:56}{value:>9,.1f}" for label, value in accounting(result)]
+    out.append(f"The rows sum to {100 * result['rows_sum_M'] / thread:.1f}% of the timed thread and {100 * result['rows_sum_M'] / inst:.1f}% of the instrumented total (the instrument's own cost and the process around the thread are in the second only). Tolerance: rows within 2% of the timed thread, else the map is wrong.")
+    if abs(gap) > 0.02 * thread:
+        out.append("WARNING: the rows are not within 2% of the timed thread; read nothing off this map until that is explained.")
     out.append(f"gcc {result['gcc_total_M']:,.0f} M, clang {result['clang_total_M']:,.0f} M (perf total, one file). llrm/gcc {total / result['gcc_total_M']:.1f}x, llrm/clang {total / result['clang_total_M']:.1f}x.")
     if "cycles" in result:
         out += ["", f"Cycles (best of {CYCLE_RUNS}; spread = worst over best, how far the host's load moved them; per-step cycles are not available)"]
@@ -311,17 +347,22 @@ def show(result: dict, old: dict | None = None) -> str:
     for key, (l, g, c) in sorted(buckets.items(), key=lambda kv: -kv[1][0]):
         out.append(f"{key:38}{l:>8.0f}{g:>8.0f}{c:>8.0f}{(f'{l / g:.1f}x' if g > 1 else ''):>10}{(f'{l / c:.1f}x' if c > 1 else ''):>12}")
     before = {r["name"]: r["own_M"] for r in (old or {}).get("rows", [])}
-    out += ["", f"By step (own M as measured under the instrument; % of the instrumented total), rows of 0.5% and more{', change against the other map' if old else ''}",
+    out += ["", f"By step (own M as measured under the instrument; % of the instrumented total), rows of 0.5% and more, then one line for the rest{', change against the other map' if old else ''}",
             f"{'step':34}{'n':>6}{'own M':>9}{'%':>6}{'cum %':>7}  {'category':20}{'owner':16}" + ("   change M" if old else "")]
     cum = 0.0
+    rest_n, rest_rows, rest_own = 0, 0, 0.0
     for r in result["rows"]:
         share = 100 * r["own_M"] / inst
         if share < 0.5:
+            rest_n += r["count"]; rest_rows += 1; rest_own += r["own_M"]
             continue
         cum += share
         flag = "UNOWNED" if r["owner"] is None and share >= FLAG_AT else (r["owner"] or "-")
         delta = f"{r['own_M'] - before.get(r['name'], 0.0):>+10.0f}" if old else ""
         out.append(f"{r['name'][:33]:34}{r['count']:>6}{r['own_M']:>9.0f}{share:>6.1f}{cum:>7.1f}  {r['category']:20}{flag:16}{delta}")
+    if rest_rows:  # the table sums to the instrumented total: the rows under 0.5% were ~19 M of it, listed nowhere
+        rest_share = 100 * rest_own / inst
+        out.append(f"{f'other ({rest_rows} rows under 0.5%)':34}{rest_n:>6}{rest_own:>9.0f}{rest_share:>6.1f}{cum + rest_share:>7.1f}  {'-':20}{'-':16}")
     unowned = [r for r in result["rows"] if r["owner"] is None and 100 * r["own_M"] / inst >= FLAG_AT]
     out += ["", f"{len(unowned)} unowned row(s) at {FLAG_AT}% or more (of the instrumented total): "
             + (", ".join(f"{r['name']} ({100 * r['own_M'] / inst:.1f}%)" for r in unowned) or "none")]
@@ -332,6 +373,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source", type=Path, default=Path("render/d_faces.c"))
     parser.add_argument("--level", default="-O1")
+    parser.add_argument("--output", choices=("asm", "obj"), default="asm", help="the output of all three compilers: assembly text (-S) or an object file; ratios are only between columns of one kind")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--detail", action="store_true", help="the largest gcc and clang timers of each category, to check the matching")
     parser.add_argument("--diff", type=Path, help="a map made earlier (--json): the table shows each step's change")

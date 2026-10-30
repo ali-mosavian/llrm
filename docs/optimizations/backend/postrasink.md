@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postrasink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postrasink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:81e361de86862d8d2c649662076120e244349db33791ea0c6ee306df7a7d9fcc -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/postrasink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/postrasink.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/postrasink.rs sha256:22f13d62d1b79ebf1a0b8376a09e8743674881be731e29ee32eff53abe752c27 -->
 
 # postrasink
 
@@ -36,9 +36,7 @@ the same rule, with cells instead of registers: the one successor whose
 reachable blocks may read the slot (`Reads`, cell liveness worked out once
 for the function) receives it, provided nothing after the store in its block
 may read or overwrite the cell or touch `r`. A target entered from elsewhere
-too, such as a loop header, takes the store on the edge instead, in a block
-of its own (a bridge, with a jump to the target) which the layout puts in
-line; the branch is retargeted and the block odds are rerouted.
+too, such as a loop header, takes no store.
 
 The point is shrink wrapping. A path that returns at once then has no copy
 and no store of a saved register, and the prologue can be placed after the
@@ -92,14 +90,26 @@ From unit test `test_a_copy_only_one_successor_reads_moves_into_it` in
 0x0009).
 
 ## Runs
-A sub-pass of [`crate::backend::peephole`](peephole.md), after `spillforward`: a reload
-on the other path is gone by then, so the store need not run there. Once per
+A sub-pass of [`crate::backend::peephole`](peephole.md), after `copysink`. Once per
 peephole run. `latched` follows it.
 
 ## Keeps
 The body is returned unchanged where no block with several successors holds
-a copy or spill store. Block odds follow a bridged edge.
+a copy or spill store.
+
+## Deviations from the pin
+The copy half is `PostRAMachineSinkingImpl::tryToSinkCopy`; a copy moves
+when no later instruction of the block touches what it reads or writes and
+one successor, entered from this block alone, has its result live in.
+- DEVIATE P1: the spill-store half (a store to a frame cell sunk by cell
+  liveness, for shrink wrapping) has no counterpart in the pin, where
+  `ShrinkWrap` places the prologue. Exit: ShrinkWrap translated.
+- DEVIATE P2: `latched` has no counterpart in the pin (x_cordic `-Os`).
+  Exit: the coalescer or block placement keeps the copy off the back edge.
+- Blocks are walked in reverse post-order and past a call, not the pin's
+  layout order with a call stopping a block: the pin's way gives 7 different
+  objects of 556 (net +4 B, 2 larger), so ours stays.
 
 ## See also
 - LLVM `PostRAMachineSinking`:
-  <https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/lib/CodeGen/MachineSink.cpp>
+  <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L2243>

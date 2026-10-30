@@ -22,8 +22,7 @@ pub fn require_verification() {
 /// run set it, so a frontend or a phase that breaks an invariant is caught in
 /// every gate run.
 pub fn verifying() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    REQUIRED.load(Ordering::Relaxed) || *ON.get_or_init(|| std::env::var("LLRM_VERIFY").is_ok_and(|value| value != "0"))
+    REQUIRED.load(Ordering::Relaxed) || crate::env_flag!("LLRM_VERIFY")
 }
 
 /// Whether `channel` is on.
@@ -95,7 +94,13 @@ fn work_fd() -> i32 {
         attr[5] = (1 << 5) | (1 << 6);
         // SAFETY: `attr` is a valid, zero-padded perf_event_attr of the size it
         // states; the others are the syscall's own numbers.
+        #[cfg(target_os = "linux")]
         let opened = unsafe { libc::syscall(libc::SYS_perf_event_open, attr.as_ptr(), 0, -1, -1, 8u64) };
+        #[cfg(not(target_os = "linux"))]
+        let opened: i64 = {
+            let _ = &attr;
+            -1
+        };
         let found = i32::try_from(opened).unwrap_or(-1);
         fd.set(Some(found));
         found
@@ -121,6 +126,16 @@ fn work_now() -> u64 {
 /// counter), for a caller that bills its own steps.
 pub fn work() -> u64 {
     work_now()
+}
+
+/// `f`'s result and the work it did on this thread: instructions retired where
+/// the counter reads, else CPU time. A slope test reads this, not the wall
+/// clock, which other sessions' load stretch (four such tests failed under the
+/// gate and passed alone).
+pub fn work_of<R>(f: impl FnOnce() -> R) -> (R, u64) {
+    let before = work_now();
+    let result = f();
+    (result, work_now().saturating_sub(before))
 }
 
 thread_local! {
@@ -603,5 +618,27 @@ mod tests {
             "{row}"
         );
         assert!(row.contains("12075 timed spans"), "{row}");
+    }
+}
+
+#[cfg(test)]
+mod work_tests {
+    use super::work_of;
+
+    /// A quadratic loop and a linear one over `n` items, to see what a slope
+    /// test makes of them: the ratio of the work at 4x the size.
+    fn ratio(step: impl Fn(usize) -> usize) -> f64 {
+        let least = |n: usize| (0..3).map(|_| work_of(|| std::hint::black_box(step(n))).1).min().unwrap() as f64;
+        least(4000) / least(1000)
+    }
+
+    /// Work is a count, not a duration: a linear loop's 4x size costs about 4x
+    /// and a quadratic one's about 16x, whatever else runs on the machine.
+    #[test]
+    fn work_of_tells_a_quadratic_loop_from_a_linear_one() {
+        let linear = ratio(|n| (0..n * 50).fold(0, |sum, one| sum ^ one));
+        let quadratic = ratio(|n| (0..n).map(|a| (0..n).fold(a, |sum, one| sum ^ one)).sum::<usize>());
+        assert!(linear < 6.0, "linear {linear:.1}");
+        assert!(quadratic > 10.0, "quadratic {quadratic:.1}");
     }
 }

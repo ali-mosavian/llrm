@@ -1,0 +1,62 @@
+# Tests expected to fail on feat/parity: id, issue, owner, date (the date triage is due), why (a regression, or a stale expectation). A fix removes its entry (a listed test that passes fails the gate).
+# ids: "unit <crate>::<test>" (cargo lib test) and "run <program name>" (tests/run).
+
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_selector_the_loop_never_changes_is_loaded_before_it"
+issue = 4958
+owner = "llrm-w3"
+date = "2026-11-02"
+why = "qbdemo FRACTALEFFECT: the loop-invariant selector is reloaded every trip as `mov cx,[bp-20]; mov es,cx` (parity) or `mov es,[bp-20]` (loaded_segments); the test only matched the direct form"
+[[xfail]]
+id = "unit llrm-qb::test_hir_part3::test_a_poke_after_a_call_that_never_runs_def_seg_keeps_its_segment"
+issue = 3994
+owner = "funcattrs-port"
+date = "2026-10-27"
+why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
+[[xfail]]
+id = "unit llrm-qb::a_power_of_a_variable_base_covers_the_whole_domain"
+issue = 2848
+owner = "alim"
+date = "2026-10-27"
+[[xfail]]
+id = "integration header_copy::test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return"
+issue = 2194
+owner = "w5"
+date = "2026-11-02"
+why = "recchop shrink-wrap (same root as #4900): main saves 2 registers before the early return, tip 4 (the pin 4); static instrs m16 -Os main 44 / tip 49, -O2 48 / 51; m32 -O1 -ftree-ch pushes main 2 / tip 4"
+[[xfail]]
+id = "integration header_copy::test_sum_three_loop_is_five_instructions_by_default"
+issue = 4899
+owner = "w3"
+date = "2026-11-02"
+why = "LSR no longer counts to zero at flat i486 -O2 -m32: loop per trip main 5 instrs, tip 6, pin 6; the m16 bounds variant is w2's hoisted-invariant pressure (w13)"
+[[xfail]]
+id = "integration header_copy::test_a_counted_exits_number_lets_its_counter_step_in_place"
+issue = 4903
+owner = "w3"
+date = "2026-11-02"
+why = "mandel.nib -O2 m16 -ftree-ch: main ends on inc; jne, tip on inc; cmp 32 (same LSR count-to-zero loss as #4899)"
+[[xfail]]
+id = "integration demanded_bits::the_stages_of_a_bit_reversal_a_masked_byte_never_reads_are_not_computed"
+issue = 4919
+owner = "w4"
+date = "2026-11-02"
+why = "rev32(s)&255 at -O1/-O2: main 23 instrs, tip 31, pin 18; first bad cf87c539b8"
+[[xfail]]
+id = "integration loop_rotation::test_a_latch_that_ends_in_a_jump_elsewhere_is_not_priced_as_falling_through"
+issue = 4920
+owner = "w5"
+date = "2026-11-02"
+why = "x_binsearch -O2 m32: main 2 jumps/82 instrs, tip 6/140, pin 6/124; first bad 1e0ac1b1ff"
+[[xfail]]
+id = "integration coalesce_hot_copies::test_the_join_of_a_loop_variable_takes_its_register_not_the_registers_of_one_arm"
+issue = 4921
+owner = "w5"
+date = "2026-11-02"
+why = "binary search -O1: tip 2 jmp/26 instrs, main 1/26, pin 1/22; first bad a94491462c"
+[[xfail]]
+id = "integration flat_foreign::a_store_to_the_video_buffer_does_not_reload_a_variable"
+issue = 4932
+owner = "w6"
+date = "2026-11-02"
+why = "main forwards the stored 5 (1 instr fewer); tip and the pin reload g; first bad 26d6c9e9a3"

@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/executed.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/executed.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/executed.rs sha256:f6162defad11370ca416a1ff46101d41fe476e91ce5763e500f13960890ef4e7 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/executed.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/executed.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/executed.rs sha256:1de49df108c7c0d8570c17829bbff88da3828ab4ec6bbc51bce8b9c8d4f99c8c -->
 
 # executed
 
@@ -29,13 +29,13 @@ how many are `taken`; and `jumps`. x87 spills are left out. A
 body with an irreducible loop has no finite estimate: the result is none.
 
 `work` is `instructions + memory`, the number the allocator and the
-route choice compare alternatives by (`allocate::_emitted`, and the cost of
+route choice compares alternatives by (the cost of
 a candidate in `assemble.rs`, in bytes at -Os). `Executed::jump_cycles`
 prices the branches and jumps on a CPU profile: taken branches, untaken
 branches and short jumps each at their form's cost.
 
 `predict` records what the MIR spill model forecast for a function;
-`pressure` prints that forecast beside the reloads and stores the
+[`pressure`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/pressure.rs) prints that forecast beside the reloads and stores the
 allocator left.
 
 ## Example
@@ -73,11 +73,11 @@ between routes, at every -O level; `LLRM_DEBUG=cost` and
 
 ## Provides
 `Executed`, `work`, `summary` (the `cost` debug channel's line,
-`LLRM_DEBUG=cost`) and `pressure` (`LLRM_DEBUG=pressure`).
+`LLRM_DEBUG=cost`) and [`pressure`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/pressure.rs) (`LLRM_DEBUG=pressure`).
 Consumers: `allocate.rs`, `assemble.rs`.
 
 ## Needs
-`crate::analysis::frequency`, `crate::analysis::loops` and
+[`crate::analysis::frequency`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/analysis.rs), [`crate::analysis::loops`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/analysis.rs) and
 [`crate::backend::cpu`](cpu.md) for jump prices.
 
 ## See also

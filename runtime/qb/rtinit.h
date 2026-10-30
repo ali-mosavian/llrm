@@ -24,6 +24,9 @@ typedef struct Comp {
 void qb_comp_add(Comp *c);
 void qb_dispatch(byte slot);
 byte qb_rt_inited(void);
+/* The m16 fork clang ignores __cdecl (`_qb_start@3`); start.asm calls `_qb_start` at both models. */
+#pragma aux qb_start "_qb_start"
+void __cdecl qb_start(void);
 
 extern const char *qb_input_line;
 /* The file INPUT # or LINE INPUT # reads (B$DSKI chose it), and file.c's way to

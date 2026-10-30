@@ -1,0 +1,35 @@
+# The clang trees the llrm-cc tests need, built once per sha and cached (toolchain/clangbuild.sh): `pin` (LLRM_PIN_CLANG) and `m16`
+# (LLRM_CLANG_M16). One job per tree: cold, a tree is 3127 ninja steps, 74-76 min on a hosted runner (run 40785285056, no ccache hit), so both in one job
+# would take 2.5 h. The setup action restores them; a missing one is red.
+name: toolchain
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: "all, or pintools (skips the two hour-long clang builds)"
+        default: all
+  push:
+    branches: [feat/parity, main]
+    paths: [toolchain/clang/pin, toolchain/clangbuild.sh, toolchain/cache.sh, toolchain/pintoolsbuild.sh, .github/actions/pintools-tree/action.yml, .github/workflows/toolchain.yml]
+jobs:
+  clang:
+    if: ${{ inputs.jobs != 'pintools' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [pin, m16]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/clang-tree
+        with:
+          kind: ${{ matrix.kind }}
+          artifact: "true"
+  # The pin's llc, opt and llvm-tblgen with its source (toolchain/pintoolsbuild.sh), the tree ci.yml's pintools job restores. Dispatchable on its own.
+  pintools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/pintools-tree

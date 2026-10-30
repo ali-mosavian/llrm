@@ -23,6 +23,15 @@ use llrm_mir::{
 pub const PERSONALITY: &str = "llrm.qb.personality";
 pub const ONERROR: &str = "llrm.qb.onerror";
 pub const ONLOCALERROR: &str = "llrm.qb.onlocalerror";
+/// The flag on a declaration whose effect belongs to the frame that runs the
+/// call (the runtime keeps the registration of that frame), so a body that
+/// makes the call is not copied into another frame: like `returns_twice` for
+/// `setjmp`, which `CallAnalyzer::visitCallBase` and `isInlineViable` read.
+pub const FRAME_BOUND: &str = "frame_bound";
+/// Hands one of the function's variables to the runtime: its handler reads
+/// the frame's variables whenever a call raises, so no pass may keep one in a
+/// register across a call (D-EH1: the pin says `llvm.localescape`).
+pub const FRAME: &str = "llrm.qb.frame";
 /// ERR outside the handler: the runtime's error number.
 pub const ERR: &str = "llrm.qb.B$FERR";
 
@@ -34,12 +43,15 @@ pub struct Handled {
     pub onerror_type: TypeId,
     /// The landing pad's type, `{ptr, i32}`.
     pub pad: TypeId,
-    /// Each statement's line, by its number: `[n x i16]`, and its type.
-    pub lines: (ConstantId, TypeId),
+    /// Each numbered site's line, by its number: `[n x i16]`, and its type;
+    /// none where no site has a line, ERL being 0 there.
+    pub lines: Option<(ConstantId, TypeId)>,
+    /// `FRAME`, and its type.
+    pub frame: (ConstantId, TypeId),
 }
 
 /// Gives `function` the personality, declares ON ERROR GOTO -- ON LOCAL
-/// ERROR GOTO where `local` -- and keeps `lines`, each statement's BASIC
+/// ERROR GOTO where `local` -- and keeps `lines`, each site's BASIC
 /// line in the order a site numbers them.
 pub fn handled(
     module: &mut Module,
@@ -48,27 +60,46 @@ pub fn handled(
     lines: &[i64],
     local: bool,
 ) -> Result<Handled, String> {
-    let name = module.global(function).name.clone().unwrap_or_default();
+    let name = module.global(function).name.owned().unwrap_or_default();
     let i16 = module.context.types.int(16);
-    let table = module.context.types.intern(Type::Array { element: i16, count: lines.len() as u64 });
-    let members = lines.iter().map(|&line| module.context.int(i16, i128::from(line as u16 as i16))).collect();
-    let initializer = module.context.constant(Constant { ty: table, kind: ConstantKind::Aggregate(members) });
-    let variable = GlobalVariable { ty: table, constant: true, initializer: Some(initializer), align: None };
-    let lines = module.add_variable(&format!("$QB$ERL${name}"), variable, Linkage::Internal)?;
-    let lines = (module.reference(lines), table);
+    let lines = if lines.iter().all(|&line| line as u16 == 0) {
+        None
+    } else {
+        let table = module.context.types.intern(Type::Array { element: i16, count: lines.len() as u64 });
+        let members = lines.iter().map(|&line| module.context.int(i16, i128::from(line as u16 as i16))).collect();
+        let initializer = module.context.constant(Constant { ty: table, kind: ConstantKind::Aggregate(members) });
+        let variable = GlobalVariable {
+            externally_initialized: false,
+            ty: table,
+            constant: true,
+            initializer: Some(initializer),
+            align: None,
+        };
+        let lines = module.add_variable(&format!("$QB$ERL${name}"), variable, Linkage::Internal)?;
+        Some((module.reference(lines), table))
+    };
     let types = &mut module.context.types;
     let (void, flag, i32, ptr) = (types.void(), types.int(1), types.int(32), types.ptr(0));
     let personality_type = types.intern(Type::Function { returns: i32, parameters: Vec::new(), variadic: true });
     let onerror_type = types.intern(Type::Function { returns: void, parameters: vec![flag], variadic: false });
     let pad = types.intern(Type::Struct { fields: vec![ptr, i32], packed: false });
     let personality = declared(module, far, PERSONALITY, personality_type, 0, &[])?;
-    let onerror =
-        declared(module, far, if local { ONLOCALERROR } else { ONERROR }, onerror_type, BASIC, &["nounwind"])?;
+    let onerror = declared(
+        module,
+        far,
+        if local { ONLOCALERROR } else { ONERROR },
+        onerror_type,
+        BASIC,
+        &["nounwind", FRAME_BOUND],
+    )?;
+    let frame_type =
+        module.context.types.intern(Type::Function { returns: void, parameters: vec![ptr], variadic: false });
+    let frame = declared(module, far, FRAME, frame_type, BASIC, &["nounwind"])?;
     let GlobalKind::Function(handled) = &mut module.globals[function.0 as usize].kind else {
         return Err("a handler outside a function".to_owned());
     };
     handled.personality = Some(personality);
-    Ok(Handled { onerror, onerror_type, pad, lines })
+    Ok(Handled { onerror, onerror_type, pad, lines, frame: (frame, frame_type) })
 }
 
 /// The slot keeping the number of the handler ON ERROR GOTO last named, 0
@@ -88,7 +119,13 @@ pub fn active_global(module: &mut Module) -> Result<ConstantId, String> {
     let none = module.context.int(i16, 0);
     let global = module.add_variable(
         "$QB$ACTIVE",
-        GlobalVariable { ty: i16, constant: false, initializer: Some(none), align: None },
+        GlobalVariable {
+            externally_initialized: false,
+            ty: i16,
+            constant: false,
+            initializer: Some(none),
+            align: None,
+        },
         Linkage::Internal,
     )?;
     Ok(module.reference(global))
@@ -102,14 +139,21 @@ pub fn last_erl_global(module: &mut Module) -> Result<ConstantId, String> {
     let none = module.context.int(i16, 0);
     let global = module.add_variable(
         "$QB$ERL",
-        GlobalVariable { ty: i16, constant: false, initializer: Some(none), align: None },
+        GlobalVariable {
+            externally_initialized: false,
+            ty: i16,
+            constant: false,
+            initializer: Some(none),
+            align: None,
+        },
         Linkage::Internal,
     )?;
     Ok(module.reference(global))
 }
 
 /// ON ERROR GOTO the handler numbered `handler`, 0 for none. Inside the
-/// handler trapping stays off until RESUME turns on what this names.
+/// handler trapping stays off until RESUME turns on what this names; there
+/// ON ERROR GOTO 0 also raises the error handled again, which ends the program.
 pub fn goto(
     b: &mut Builder,
     handled: &Handled,
@@ -120,12 +164,7 @@ pub fn goto(
     let number = b.int(16, i128::from(handler));
     b.store(number, active, false);
     if inside {
-        return if handler == 0 {
-            Err("ON ERROR GOTO 0 in the handler, which ends the program with the error it handles: not selected yet"
-                .to_owned())
-        } else {
-            Ok(())
-        };
+        return Ok(());
     }
     let on = b.int(1, i128::from(handler != 0));
     b.call_as(BASIC, handled.onerror_type, Operand::Constant(handled.onerror), &[on], "");
@@ -142,7 +181,7 @@ pub fn landed(
 }
 
 /// Before RESUME: trapping on again. A handler is named there: trapping was
-/// on to land, and `goto` refuses ON ERROR GOTO 0 inside the handler.
+/// on to land, and ON ERROR GOTO 0 inside the handler never gets here.
 pub fn resuming(
     b: &mut Builder,
     handled: &Handled,
@@ -160,9 +199,11 @@ pub fn erl(
     returns: TypeId,
 ) -> Operand {
     let i16 = b.context.types.int(16);
-    let number = b.load(i16, site, false, "");
     let zero = b.int(16, 0);
-    let (table, ty) = handled.lines;
+    let Some((table, ty)) = handled.lines else {
+        return if returns == i16 { zero } else { b.cast(CastOp::ZExt, zero, returns, "") };
+    };
+    let number = b.load(i16, site, false, "");
     let at = b.gep(ty, Operand::Constant(table), &[zero, number], Flags::default(), "");
     let line = b.load(i16, at, false, "erl");
     if returns == i16 { line } else { b.cast(CastOp::ZExt, line, returns, "") }

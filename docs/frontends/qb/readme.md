@@ -31,7 +31,7 @@ flowchart TB
   src["<b>PROGRAM.BAS</b>"]:::src
   qbf["<b>qbfront</b><br/><small>lexer: generated_parser/lexer.rs<br/>parser: engine.rs, ast.rs<br/>semantic.rs: names, types,<br/>storage, CFG</small>"]:::opt
   hir["<b>HIR</b><br/><small>versioned text, crates/ir/llrm-hir,<br/>decoded in llrm-qb</small>"]:::mid
-  qb["<b>llrm-qb</b><br/><small>QB ABI adapter: llrm-core/src/abi/qb.rs<br/>runtime contracts: llrm-qbruntime<br/>frame and call lowering</small>"]:::out
+  qb["<b>llrm-qb</b><br/><small>QB ABI adapter: llrm-codegen/src/abi/qb.rs<br/>runtime contracts: llrm-qbruntime<br/>frame and call lowering</small>"]:::out
   mir["<b>MIR</b>"]:::mid
   opt["<b>shared optimizer</b>"]:::mid
   lir["<b>LIR</b>"]:::mid
@@ -124,7 +124,7 @@ add no MIR instructions. Syntax accepted before its lowering exists reports a
 specific unsupported construct after semantic analysis.
 
 QB intrinsics are resolved in one declarative catalogue,
-`crates/frontends/qbfront/src/intrinsics.rs`. Each entry holds dialect
+`crates/frontends/qb/src/intrinsics.rs`. Each entry holds dialect
 availability, arity, result class, effects and an exact lowering variant;
 semantic analysis never tells two intrinsics apart by spelling a second time.
 
@@ -153,8 +153,8 @@ Two source-level rules follow from probes of VBDOS:
 
 | Where | What |
 |---|---|
-| `crates/frontends/qbfront/tests/` | parser, quickr and generated-parser tests; `fixtures/*.bas` programs |
-| `crates/frontends/llrm-qb/src/test_*.rs` | HIR to object, frames, intrinsics, resume, stack check, debug info |
+| `crates/frontends/qb/tests/` | parser, quickr and generated-parser tests; `fixtures/*.bas` programs |
+| `crates/frontends/qb/src/test_*.rs` | HIR to object, frames, intrinsics, resume, stack check, debug info |
 | `tests/run/qb/*.bas` | programs run in DOSBox-X against their `.out` by `tools/dosbatch/run_tests.py qb` |
 | `tests/differential/` | llrm-qb against BC, and the Microsoft BASIC conformance suites on their own runtimes: `cargo test --test differential` |
 

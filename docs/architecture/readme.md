@@ -4,7 +4,7 @@ For contributors. What the compiler is made of, the order things run in, and
 which crate owns each step.
 
 <!-- architecture-index:start -->
-Contents: [split](split.md), [source layout](source-layout.md), [HIR](hir/readme.md), [HIR model](hir/model.md), [MIR](rich-mir.md), [strong alias analysis](strong-alias.md), [call effects](modref.md), [the parity pipeline: plan](parity-pipeline.md), [points-to across edits](points-to-lifetime.md), [the pinned LLVM pipeline per level](parity-pipeline-slots.md), [what the rotate slot changes](rotate-refusals.md), [optimizer pipeline design](pipeline-design.md), [compile time against gcc and clang](compile-time-review.md), [a decision that records what it read](decision-dependencies.md), [compile-time architecture](compile-time-spec.md), [decide against SimplifyCFG and JumpThreading](decide-vs-llvm.md), [indvars against IndVarSimplify](indvars-vs-llvm.md), [lsr against LoopStrengthReduce](lsr-vs-llvm.md), [the split path against SplitKit](split-path.md), [the allocator on the LIR core](allocator-lir-core.md), [the allocator's decision procedure against RAGreedy's](allocator-procedure.md), [pass lists against clang](pass-parity.md), [LLVM's architecture against llrm's](architecture-parity.md), [LICM as a translation of LLVM's](licm-port.md), [front-end aggregates](frontend-aggregates.md), [LoopIdiomRecognize as a translation of LLVM's](loopidiom-port.md), [MemorySSA as a translation of LLVM's](memoryssa-port.md), [ScalarEvolution as a translation of LLVM's](scev-port.md), [DominatorTree as a translation of LLVM's](domtree-port.md), [GVN and MemoryDependenceAnalysis as a translation of LLVM's](gvn-port.md), [BasicAA as a translation of LLVM's](basicaa-port.md), [DSE in LLVM's shape on the memory SSA](dse-poc.md), [LLVM measured](../comparison/llvm/measured.md), [LLVM compared](../comparison/llvm/readme.md), [LLVM's analysis manager against llrm's `Analyses`](../comparison/llvm/analysis-manager.md), [LLVM's MemorySSA walker against llrm's frontier walk](../comparison/llvm/memoryssa.md), [LLVM's BasicAA against llrm's `regions::overlapping`](../comparison/llvm/alias.md), [LLVM's LICM against llrm's `hoist`](../comparison/llvm/licm.md), [LLVM's SimplifyCFG against llrm's `decide`](../comparison/llvm/simplifycfg.md), [LIR jumps and coalescing against LLVM's](../comparison/llvm/lir-jumps-coalesce.md), [LIR clean-up: each pass against LLVM's machine pass](lir-cleanup-plan.md), [analyses gcc and LLVM do not compute](analysis-avoidance.md), [compile-cost gap by date](compile-gap-series.md), [output rows by date](rows-series.md), [the plan to reach clang's compile time](redesign-plan.md), [one combine pass with a worklist](combine-worklist.md), [the inliner as LLVM's: translation plan](cgscc-plan.md), [TargetTransformInfo: one translation, many readers](tti-plan.md), [the glue between bodies as LLVM's mechanisms](glue-plan.md), [loop passes as translations of LLVM's](loop-passes-port.md), [LLVM pass order evidence](llvm-order.md), [object model](../formats/object-model.md), [packages design](https://github.com/ali-mosavian/llrm/issues/1526)
+Contents: [the end-state design, box by box, mirroring LLVM](target-architecture.md), [arm64 backend spike, plan and order of work](arm64-spike.md), [arm64 against the core machine passes, an inventory](arm64-core-passes.md), [x86-64 backend spike, plan and order of work](x86-64-spike.md), [LP64 C front end, plan (no code)](lp64-c-frontend-plan.md), [split](split.md), [source layout](source-layout.md), [HIR](hir/readme.md), [HIR model](hir/model.md), [MIR](rich-mir.md), [strong alias analysis](strong-alias.md), [call effects](modref.md), [the parity pipeline: plan](parity-pipeline.md), [points-to across edits](points-to-lifetime.md), [the pinned LLVM pipeline per level](parity-pipeline-slots.md), [what the rotate slot changes](rotate-refusals.md), [optimizer pipeline design](pipeline-design.md), [compile time against gcc and clang](compile-time-review.md), [a decision that records what it read](decision-dependencies.md), [compile-time architecture](compile-time-spec.md), [decide against SimplifyCFG and JumpThreading](decide-vs-llvm.md), [indvars against IndVarSimplify](indvars-vs-llvm.md), [lsr against LoopStrengthReduce](lsr-vs-llvm.md), [the split path against SplitKit](split-path.md), [the allocator on the LIR core](allocator-lir-core.md), [the allocator's decision procedure against RAGreedy's](allocator-procedure.md), [pass lists against clang](pass-parity.md), [LLVM's architecture against llrm's](architecture-parity.md), [LICM as a translation of LLVM's](licm-port.md), [front-end aggregates](frontend-aggregates.md), [LoopIdiomRecognize as a translation of LLVM's](loopidiom-port.md), [MemorySSA as a translation of LLVM's](memoryssa-port.md), [ScalarEvolution as a translation of LLVM's](scev-port.md), [DominatorTree as a translation of LLVM's](domtree-port.md), [ConstraintElimination as a translation of LLVM's](constraint-elimination-port.md), [JumpThreading as a translation of LLVM's](jumpthreading-translation.md), [ShrinkWrap as a translation of LLVM's](shrinkwrap-port.md), [DFAJumpThreading as a translation of LLVM's](dfajumpthreading-translation.md), [Retiring the old Shape analysis](shape-retirement.md), [the translation queue: old slots ranked by cost](translation-queue.md), [JumpThreading ON loses on 13 rows: cause and owner per row](jt-row-losses.md), [GVN and MemoryDependenceAnalysis as a translation of LLVM's](gvn-port.md), [BasicAA as a translation of LLVM's](basicaa-port.md), [DSE in LLVM's shape on the memory SSA](dse-poc.md), [LLVM measured](../comparison/llvm/measured.md), [LLVM compared](../comparison/llvm/readme.md), [LLVM's analysis manager against llrm's `Analyses`](../comparison/llvm/analysis-manager.md), [the analysis-manager model: invalidation rules, audit and per-analysis PRs](analysis-manager-model.md), [LLVM's MemorySSA walker against llrm's frontier walk](../comparison/llvm/memoryssa.md), [LLVM's BasicAA against llrm's `regions::overlapping`](../comparison/llvm/alias.md), [LLVM's LICM against llrm's `hoist`](../comparison/llvm/licm.md), [LLVM's SimplifyCFG against llrm's `decide`](../comparison/llvm/simplifycfg.md), [LIR jumps and coalescing against LLVM's](../comparison/llvm/lir-jumps-coalesce.md), [LIR clean-up: each pass against LLVM's machine pass](lir-cleanup-plan.md), [analyses gcc and LLVM do not compute](analysis-avoidance.md), [compile-cost gap by date](compile-gap-series.md), [output rows by date](rows-series.md), [the plan to reach clang's compile time](redesign-plan.md), [one combine pass with a worklist](combine-worklist.md), [the inliner as LLVM's: translation plan](cgscc-plan.md), [per-function register lists: design note](register-lists.md), [TargetTransformInfo: one translation, many readers](tti-plan.md), [the glue between bodies as LLVM's mechanisms](glue-plan.md), [loop passes as translations of LLVM's](loop-passes-port.md), [LLVM pass order evidence](llvm-order.md), [object model](../formats/object-model.md), [emission against AsmPrinter and MC](emission-survey.md), [the old ranges and regions modules: callers and deletion order](old-ranges-deletion.md), [Pre-RA MachineCSE: row losses](precse-rows.md), [one ScalarEvolution per function, held by the manager across the loop passes: design and invalidation map](persistent-scev.md), [Target facts in backend code: audit](target-facts-audit.md), [LIR vocabulary, one and target-generic](lir-vocabulary.md), [LIR data model, mutable instructions with register use lists](lir-data-model.md), [machine descriptions: ISA, tuning, platform files](machine-description.md), [arm64 isel and peephole gaps against llc, as the table patterns to write](arm64-patterns.md), [packages design](https://github.com/ali-mosavian/llrm/issues/1526), [Recursion rows (D10)](recursion-rows.md)
 <!-- architecture-index:end -->
 
 Source frontends (QB, C through Open Watcom, Nib) produce HIR. HIR is emitted
@@ -29,11 +29,11 @@ flowchart TB
   qb["<b>QB, QBasic, PDS, VBDOS</b><br/><small>qbfront parser (llrm-qb)</small>"]:::src
   nib["<b>Nib</b><br/><small>llrm-nib: lexer, parser,<br/>semantics</small>"]:::src
   c["<b>C</b><br/><small>patched Open Watcom front<br/>end (llrm-c translate)</small>"]:::src
-  bc["<b>BC .OBJ (side input)</b><br/><small>llrm-x86-bc:<br/>decode and lift</small>"]:::src
+  bc["<b>BC .OBJ (side input)</b><br/><small>llrm-bcobj:<br/>decode and lift</small>"]:::src
   hir["<b>HIR</b><br/><small>llrm-hir: model, verify,<br/>JSON codec</small>"]:::mid
   mir["<b>MIR</b><br/><small>llrm-mir</small>"]:::mid
   opt["<b>Optimized MIR</b><br/><small>llrm-transforms: module<br/>steps, per-body fixed point</small>"]:::opt
-  lir["<b>LIR over virtual values</b><br/><small>llrm-lir, llrm-core backend</small>"]:::mid
+  lir["<b>LIR over virtual values</b><br/><small>llrm-lir, llrm-codegen backend</small>"]:::mid
   ph["<b>Machine phases (flow.rs)</b><br/><small>phi elimination, two-address,<br/>coalescing, register<br/>allocation, parallel copies,<br/>prologue, peephole,<br/>scheduling, jumps</small>"]:::mid
   obj["<b>llrm_object::Object</b><br/><small>format-neutral (objbuild.rs)</small>"]:::out
   wr["<b>Object writer</b><br/><small>omf, elf32, elf64, coff32,<br/>coff64, macho</small>"]:::out
@@ -54,9 +54,9 @@ flowchart TB
 | Tool | Frontend | Reaches MIR by |
 | --- | --- | --- |
 | `llrm-qb` | `qbfront` parses and resolves each dialect | HIR, emitted by `llrm_hir::mir::emit` |
-| `llrm-nib` | `crates/frontends/llrm-nib/src/` | the same HIR path |
+| `llrm-nib` | `crates/frontends/nib/src/` | the same HIR path |
 | `llrm-c` | a patched Open Watcom front end records its code-generator calls (`toolchain/owshim/`) | HIR from `crates/frontends/llrm-c/src/translate.rs` |
-| `llrm-omf` | objects QuickBASIC's BC wrote (a side input, [BC objects](../frontends/bc.md)) | `llrm-x86-bc` lifts their machine code; `llrm-bcdriver` compiles it afresh |
+| `llrm-omf` | objects QuickBASIC's BC wrote (a side input, [BC objects](../frontends/bc.md)) | `llrm-bcobj` lifts their machine code; `llrm-bcdriver` compiles it afresh |
 
 [`driver::compiled`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/mod.rs#L125)
 runs the HIR route: emit, optimize, then
@@ -80,7 +80,7 @@ flowchart TB
   fe["<b>Tools (src/bin) and frontends</b><br/><small>llrm-qb llrm-nib llrm-c<br/>llrm-omf llrm-mir llrm-run<br/>nibfront nib-lsp<br/>llrm-bcdriver qbfront</small>"]:::src
   drv["<b>llrm-driver</b>"]:::mid
   sel["<b>llrm-x86-m16-select</b><br/><small>llrm-x86-m32-select<br/>(generated selector,<br/>peephole rules)</small>"]:::mid
-  core["<b>llrm-core</b><br/><small>driver, isel, machine phases,<br/>objbuild, HIR interpreter</small>"]:::opt
+  core["<b>llrm-codegen</b><br/><small>driver, isel, machine phases,<br/>objbuild, HIR interpreter</small>"]:::opt
   hir["<b>llrm-hir</b>"]:::mid
   tr["<b>llrm-transforms</b>"]:::mid
   tgt["<b>llrm-target</b><br/><small>llrm-lir</small>"]:::mid
@@ -109,17 +109,17 @@ Three edges carry the architecture:
 
 - `llrm-mir`, `llrm-analysis` and `llrm-transforms` depend on no machine
   crate. A pass reaches the target only as `llrm_mir::target::Machine`.
-- `llrm-core` depends on no `llrm-x86-m*` crate
+- `llrm-codegen` depends on no `llrm-x86-m*` crate
   (`tests/core_depends_on_no_target.rs`); `llrm-driver` is the one place that
   matches on a target's name.
-- Frontends depend on `llrm-core` and `llrm-driver`, never on each other.
+- Frontends depend on `llrm-codegen` and `llrm-driver`, never on each other.
 
 [source-layout.md](source-layout.md) lists every crate.
 
 ## BC objects (side input)
 
 `llrm-omf` takes objects QuickBASIC's BC already compiled, lifts each
-procedure's machine code to MIR (`llrm-x86-bc`, on `llrm-x86-bcmachine`'s
+procedure's machine code to MIR (`llrm-bcobj`, on `llrm-bcobj`'s
 decoder) and sends it through the same optimizer and backend; it writes a new
 object, not a patched one. Runtime calls carry contracts from `runtime.toml`.
 See [BC objects](../frontends/bc.md).
@@ -167,7 +167,7 @@ flowchart TB
   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
   sroa["<b>sroa</b>"]:::mid
-  round["<b>One round</b><br/><small>fold ports decide phiopt<br/>equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead fill</small>"]:::opt
+  round["<b>One round</b><br/><small>fold ports simplifycfg decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead fill</small>"]:::opt
   unroll["<b>unroll</b><br/><small>(a copy goes back<br/>through sroa)</small>"]:::mid
   chg(["<b>changed?</b>"]):::mid
   peel["<b>peel</b><br/><small>(repeat while loops drop)</small>"]:::mid
@@ -263,7 +263,7 @@ flowchart TB
 unconstrained value, and `Peephole` runs after it because its rewrites depend
 on placement. Peephole rules are `peephole.peep` files compiled by
 `llrm-peepgen`; the groups that run are listed in
-`crates/backend/llrm-core/src/backend/peep/groups.list`. `ISEL_DUMP=1` prints
+`crates/codegen/llrm-codegen/src/backend/peep/groups.list`. `ISEL_DUMP=1` prints
 the LIR after each phase.
 
 Layout orders bodies and relaxes branches to a fixed point.
@@ -278,7 +278,7 @@ step or a reader consumes, not in code:
 
 | Description | Read by |
 | --- | --- |
-| `crates/frontends/llrm-qbruntime/src/runtime.toml` | HIR emission, the BC lift and lowering: routine contracts |
+| `crates/frontends/qb/runtime.toml` | HIR emission, the BC lift and lowering: routine contracts |
 | `patterns.isel`, `x86.instr` | `llrm-iselgen`: the selector |
 | `peephole.peep` | `llrm-peepgen`: rewrite rules |
 | `registers.regs`, `timings.times`, `opcosts.txt`, `*.toml` per target | the target crates: registers, costs, layout, ABI |

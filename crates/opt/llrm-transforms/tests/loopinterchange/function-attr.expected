@@ -1,0 +1,101 @@
+== -loop-interchange-profitabilities=ignore
+@call_writeonly
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v4, %B3 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v2, %B2 ], [ 0, %B1 ]
+  call void @writeonly(ptr %A)
+  %v2 = add i64 %v1, 1
+  %v3 = icmp eq i64 %v2, 100
+  br i1 %v3, label %B3, label %B2
+B3:
+  %v4 = add i64 %v0, 1
+  %v5 = icmp eq i64 %v4, 100
+  br i1 %v5, label %B4, label %B1
+B4:
+  ret void
+@call_mem_none
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v9, %B7 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v7, %B6 ], [ 0, %B3 ]
+  br label %B5
+B5:
+  %v2 = getelementptr [100 x i32], ptr %A, i64 %v0, i64 %v1
+  store i32 0, ptr %v2
+  %v3 = call i32 @mem_none(ptr %A)
+  %v4 = getelementptr [100 x i32], ptr %B, i64 %v0, i64 %v1
+  store i32 %v3, ptr %v4
+  %v5 = add i64 %v0, 1
+  %v6 = icmp eq i64 %v5, 100
+  br label %B6
+B6:
+  %v7 = add i64 %v1, 1
+  %v8 = icmp eq i64 %v7, 100
+  br i1 %v8, label %B7, label %B4
+B7:
+  %v9 = add i64 %v0, 1
+  %v10 = icmp eq i64 %v9, 100
+  br i1 %v10, label %B8, label %B2
+B8:
+  ret void
+@call_throw_exception
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v6, %B5 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v4, %B4 ], [ 0, %B1 ]
+  %v2 = getelementptr [10 x i8], ptr %A, i64 %v1, i64 %v0
+  store i8 0, ptr %v2
+  %v3 = icmp eq i64 %v1, 1
+  br i1 %v3, label %B3, label %B4
+B3:
+  call void @throw_exception()
+  br label %B4
+B4:
+  %v4 = add i64 %v1, 1
+  %v5 = icmp eq i64 %v4, 10
+  br i1 %v5, label %B5, label %B2
+B5:
+  %v6 = add i64 %v0, 1
+  %v7 = icmp eq i64 %v6, 10
+  br i1 %v7, label %B6, label %B1
+B6:
+  ret void
+@call_not_return
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v6, %B5 ], [ 0, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v4, %B4 ], [ 0, %B1 ]
+  %v2 = getelementptr [10 x i8], ptr @ARR_100, i64 %v0, i64 %v1
+  store i8 0, ptr %v2
+  %v3 = icmp eq i64 %v1, 1
+  br i1 %v3, label %B3, label %B4
+B3:
+  call void @not_return()
+  br label %B4
+B4:
+  %v4 = add i64 %v1, 1
+  %v5 = icmp eq i64 %v4, 10
+  br i1 %v5, label %B5, label %B2
+B5:
+  %v6 = add i64 %v0, 1
+  %v7 = icmp eq i64 %v6, 1000
+  br i1 %v7, label %B6, label %B1
+B6:
+  ret void

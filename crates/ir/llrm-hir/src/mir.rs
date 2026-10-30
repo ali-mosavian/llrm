@@ -2,12 +2,16 @@
 //! globals, local places allocas, HIR values SSA values. What MIR cannot
 //! hold yet is refused whole with the reason: a function is left declared,
 //! a data object an external global, so what refers to them still verifies.
+//!
+//! A branch on a comparison tests the comparison's `i1`, as clang's
+//! `EmitBranchOnBoolExpr` does; the comparison's widened result is made only
+//! where something else reads it.
 
 use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
 use llrm_mir::datalayout::{DataLayout, float_bits};
-use llrm_mir::facts::Fact;
+use llrm_mir::facts::{Fact, Inlining};
 use llrm_mir::{
     Attribute, BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, Flags, FloatKind,
     FloatPredicate, Function, GlobalId, GlobalVariable, IntPredicate, Linkage, MetadataId, MetadataNode,
@@ -51,6 +55,7 @@ pub fn emit(
             if program.stack_check.is_some() {
                 check_stack(&mut emitted.module);
             }
+            evaluate_extended(&mut emitted.module);
             emitted
         })
         .collect()
@@ -67,6 +72,25 @@ fn check_stack(module: &mut Module) {
         let naked = function.attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "naked"));
         if !function.is_declaration() && !naked && function.calling_convention != llrm_mir::opcode::X86_INTR {
             function.attrs.push(Fact::StackCheck.carrier());
+        }
+    }
+}
+
+/// Every function the module defines evaluates its float math on the x87, at
+/// extended precision: `llvm.log` and its kin are not the host libm's doubles
+/// (`llrm_mir::constantfolding::FP_EVAL`), so the constant folder leaves them.
+fn evaluate_extended(module: &mut Module) {
+    for global in &mut module.globals {
+        let llrm_mir::GlobalKind::Function(function) = &mut global.kind else { continue };
+        if !function.is_declaration() {
+            function
+                .attrs
+                .push(
+                    Attribute::Str(
+                        llrm_mir::constantfolding::FP_EVAL.to_owned(),
+                        Some(llrm_mir::constantfolding::FP_EVAL_EXTENDED.to_owned()),
+                    ),
+                );
         }
     }
 }
@@ -154,7 +178,8 @@ pub fn promised(
         let cells = promises.writes(routine);
         let nounwind = promises.nounwind.iter().any(|one| one == routine);
         let no_return = promises.no_return.iter().any(|one| one == routine);
-        if cells.is_none() && !nounwind && !no_return || out.named(name).is_some() {
+        let flags = promises.flags_results.iter().any(|one| one == routine);
+        if cells.is_none() && !nounwind && !no_return && !flags || out.named(name).is_some() {
             continue;
         }
         let Some(one) = out.declared(module, global)? else { continue };
@@ -164,6 +189,7 @@ pub fn promised(
         function.attrs.extend(cells.is_some().then(|| Fact::NoCallback.carrier()));
         function.attrs.extend(nounwind.then(|| Fact::NoUnwind.carrier()));
         function.attrs.extend(no_return.then(|| Fact::NoReturn.carrier()));
+        function.attrs.extend(flags.then(|| Fact::FlagsResult.carrier()));
         if let Some(cells) = cells {
             let written = std::iter::once(one)
                 .chain(cells.iter().filter_map(|cell| declared.get(cell.as_str()).copied()))
@@ -241,6 +267,19 @@ fn value_type(
     })
 }
 
+/// The type a pointer step of `size` bytes steps over: an integer where the
+/// size is one, else an array of bytes.
+fn element_type(
+    types: &mut Types,
+    size: i64,
+) -> TypeId {
+    let byte = types.int(8);
+    match size {
+        1 | 2 | 4 | 8 => types.int(8 * size as u32),
+        _ => types.intern(Type::Array { element: byte, count: size as u64 }),
+    }
+}
+
 /// A HIR type's MIR type in memory: bytes where it is no value.
 fn stored_type(
     types: &mut Types,
@@ -300,7 +339,12 @@ impl Tags {
             MetadataOperand::Node(node) => *node,
             _ => return,
         };
+        // Each tag is a descriptor, a place: sized once for them all, not grown
+        // by doubling through hundreds of rehashes (`DenseMap::init`).
+        let places: usize = hir.functions.iter().map(|function| function.places.len()).sum();
+        self.arrays.reserve(places);
         let mut identities: HashMap<(i64, i64), MetadataId> = HashMap::default();
+        identities.reserve(places);
         for function in &hir.functions {
             let places: HashMap<i64, &model::Place> = function.places.iter().map(|one| (one.id, one)).collect();
             let described =
@@ -428,6 +472,8 @@ struct Tables<'h> {
     conventions: HashMap<String, u32>,
     /// The runtime routines that raise no error.
     nounwind: &'h [String],
+    /// `B$REAL` places the PC's low memory whatever the pointer's width.
+    hosted: bool,
     /// Each source line's `!dbg` node, `!{i32 line}`.
     lines: HashMap<i64, MetadataId>,
     /// The metadata the language's facts give an instruction's result, by
@@ -642,6 +688,7 @@ fn emit_module<'h>(
         tags: Tags::new(&mut module),
         classes: HashMap::default(),
         nounwind,
+        hosted: promises.hosted,
         lines: HashMap::default(),
         fact_nodes: HashMap::default(),
         accesses: HashMap::default(),
@@ -686,6 +733,8 @@ fn emit_module<'h>(
         let reference = module.reference(global);
         tables.data.insert(object.id, reference);
     }
+    let indexes: HashMap<i64, FunctionIndex> =
+        hir.functions.iter().map(|one| (one.id, FunctionIndex::of(one))).collect();
     let mut functions = Vec::new();
     for function in &hir.functions {
         match declare(&mut module, &tables, function) {
@@ -702,7 +751,7 @@ fn emit_module<'h>(
         }
     }
     for (function, global) in &mut functions {
-        if let Err(why) = declare_outside(&mut module, &mut tables, function) {
+        if let Err(why) = declare_outside(&mut module, &mut tables, function, &indexes[&function.id]) {
             // What it calls is undeclared: it stays a declaration, external as
             // LLVM's `deleteBody` leaves one.
             if let Some(global) = global.take() {
@@ -711,11 +760,45 @@ fn emit_module<'h>(
             refused.push((function.name.clone(), why));
         }
     }
+    // A routine only addressed in code, as one only addressed in data (below),
+    // is declared once every call has declared its own.
+    for (function, _) in &functions {
+        for instruction in function.blocks.iter().flat_map(|one| &one.instructions) {
+            let (Op::Address, true, Some(callee)) =
+                (instruction.op, instruction.operands.is_empty(), instruction.callee.as_deref())
+            else {
+                continue;
+            };
+            if tables.callees.contains_key(callee) {
+                continue;
+            }
+            let returns = module.context.types.void();
+            let ty = function_type(&mut module.context.types, returns, Vec::new());
+            match module.add_function(callee, ty, Linkage::External) {
+                Ok(global) => {
+                    place_function(&mut module, global, (0, tables.spaces.far));
+                    let reference = module.reference(global);
+                    tables.callees.insert(callee.to_owned(), reference);
+                    tables.conventions.insert(callee.to_owned(), 0);
+                }
+                Err(why) => refused.push((callee.to_owned(), why)),
+            }
+        }
+    }
     let declared: HashMap<i64, GlobalId> =
         functions.iter().filter_map(|(function, global)| Some((function.id, (*global)?))).collect();
     for one in &hir.facts {
         if let Err(why) = lower_fact(&mut module, &tables, hir, &declared, &data, one) {
             refused.push((hir.name.clone(), why));
+        }
+    }
+    // The runtime's frame has an exit (B$EXSA frees the temporaries the
+    // procedure made, polls events, restores registers) that a copy of the
+    // body inlined into another procedure would not run.
+    for (function, global) in &functions {
+        let Some(global) = global.filter(|_| tables.zeroed.contains(&function.id)) else { continue };
+        if let llrm_mir::GlobalKind::Function(placed) = &mut module.globals[global.0 as usize].kind {
+            placed.attrs.push(Fact::Inline(Inlining::Never).carrier());
         }
     }
     // What changes what the code after a call means is not a fact a pass may
@@ -797,9 +880,7 @@ fn emit_module<'h>(
     let statements = hir.statements();
     let rows = statements.clone().unwrap_or_default();
     // A RESUME marker the body falls into raises; the handlers' markers do not.
-    let raises = |callee: &str| {
-        handling::resumes(callee) || (!handling::owns(callee) && !nounwind.iter().any(|one| one == callee))
-    };
+    let raises = |callee: &str| handling::raises(callee, nounwind);
     let outlined = match module_handler(&mut module, &tables.spaces, &functions, runtime, &rows, &raises) {
         Ok(outlined) => outlined,
         Err((name, why)) => {
@@ -813,7 +894,9 @@ fn emit_module<'h>(
         let handled = match (function.error_handler.is_some() || tables.module_handler.is_some(), &statements) {
             (false, _) => Ok(None),
             (true, Ok(rows)) => {
-                let lines: Vec<i64> = handling::numbered(rows, function.id).iter().map(|one| one.line).collect();
+                let numbered = handling::numbered(rows, function.id);
+                let lines: Vec<i64> =
+                    handling::sites(function, &numbered, nounwind).iter().map(|&site| numbered[site].line).collect();
                 onerror::handled(&mut module, tables.spaces.far, global, &lines, function.error_handler_local).map(Some)
             }
             (true, Err(why)) => Err(why.clone()),
@@ -828,7 +911,8 @@ fn emit_module<'h>(
         };
         let mut builder = module.builder(global);
         let rows = statements.as_deref().unwrap_or_default();
-        let emitted = Body::new(&mut builder, &tables, function).and_then(|mut body| body.run(handled, rows));
+        let emitted = Body::new(&mut builder, &tables, function, &indexes[&function.id])
+            .and_then(|mut body| body.run(handled, rows));
         if emitted.is_err() {
             builder.function.delete_body();
         }
@@ -840,9 +924,9 @@ fn emit_module<'h>(
         }
     }
     if let Some((handler, (global, handled), owner)) = outlined {
-        let name = module.global(global).name.clone().unwrap_or_default();
+        let name = module.global(global).name.owned().unwrap_or_default();
         let mut builder = module.builder(global);
-        let emitted = Body::new(&mut builder, &tables, owner).and_then(|mut body| {
+        let emitted = Body::new(&mut builder, &tables, owner, &indexes[&owner.id]).and_then(|mut body| {
             // The handler is its own function; the owner's parameters are not
             // its.
             body.destination = None;
@@ -1051,12 +1135,19 @@ fn declare_data(
     let bytes = module.context.types.intern(Type::Array { element: byte, count: object.bytes.len() as u64 });
     let linkage = match (ty, object.linkage) {
         (None, _) | (Some(_), model::DataLinkage::External | model::DataLinkage::Exported) => Linkage::External,
+        (Some(_), model::DataLinkage::Internal) if object.exposed => Linkage::External,
         (Some(_), model::DataLinkage::Internal) => Linkage::Internal,
         (Some(_), model::DataLinkage::Private) => Linkage::Private,
     };
     // An external one has no type to lay out, and is constant as declared.
     let constant = object.readonly && (ty.is_some() || object.linkage == model::DataLinkage::External);
-    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant, initializer: None, align: None };
+    let variable = GlobalVariable {
+        externally_initialized: false,
+        ty: ty.unwrap_or(bytes),
+        constant,
+        initializer: None,
+        align: None,
+    };
     let global = add_unique(module, &object.name, |module, name| module.add_variable(name, variable.clone(), linkage));
     module.globals[global.0 as usize].address_space = data_space(spaces, object.address);
     global
@@ -1104,7 +1195,13 @@ fn data_initializer(
             let operands = vec![target, index];
             address = context.constant(Constant {
                 ty,
-                kind: ConstantKind::Expr(ConstantExpr::GetElementPtr { source: byte, inbounds: false, operands }),
+                kind: ConstantKind::Expr(ConstantExpr::GetElementPtr {
+                    source: byte,
+                    inbounds: false,
+                    nusw: false,
+                    nuw: false,
+                    operands,
+                }),
             });
         }
         let cast = |context: &mut llrm_mir::Context, op, ty| {
@@ -1457,6 +1554,163 @@ fn frame_groups<'h>(
         .collect()
 }
 
+/// The places of `function` some instruction may write: every place an
+/// instruction names, but as the operand an `Op::Load` or `Op::Copy` reads.
+fn written_places(function: &model::Function) -> HashSet<i64> {
+    let mut written = HashSet::default();
+    let named = |operand: &Operand, written: &mut HashSet<i64>| match operand {
+        Operand::PlaceRef(one) => {
+            written.insert(one.place);
+        }
+        Operand::ArrayElement(one) => {
+            written.insert(one.place);
+        }
+        Operand::ProjectedPlace(one) => {
+            written.insert(one.place);
+        }
+        _ => {}
+    };
+    for block in &function.blocks {
+        for one in &block.instructions {
+            let read_only = matches!(one.op, Op::Load | Op::Copy);
+            for (at, operand) in one.operands.iter().enumerate() {
+                if !(read_only && at == 0) {
+                    named(operand, &mut written);
+                }
+            }
+            if one.callee.is_some() || one.asm.is_some() {
+                one.operands.iter().for_each(|operand| named(operand, &mut written));
+            }
+        }
+    }
+    written
+}
+
+/// The frame groups an error handler can read, by index: those live at a
+/// statement RESUME or RESUME NEXT continues at (the statement a call may
+/// raise in, and the one after it) or at a handler of the function, and those
+/// something may write through an address. A group a statement makes and
+/// reads before the next begins is in none: the runtime enters the handler
+/// with nothing restored, and RESUME starts a statement afresh. None where
+/// the groups cannot be told (a place read as a whole).
+fn resumable_groups(
+    function: &model::Function,
+    groups: &[FrameGroup<'_>],
+    statements: &[model::Statement],
+    handlers: &[i64],
+) -> Option<HashSet<usize>> {
+    let group_of: HashMap<i64, usize> = groups
+        .iter()
+        .enumerate()
+        .flat_map(|(at, group)| group.places.iter().map(move |place| (place.id, at)))
+        .collect();
+    let single: Vec<bool> = groups.iter().map(|group| group.places.len() == 1).collect();
+    let rows = handling::numbered(statements, function.id);
+    // The group a place operand reads or writes, and whether the whole of it.
+    let named = |operand: &Operand| -> Option<(usize, bool)> {
+        match operand {
+            Operand::PlaceRef(one) => group_of.get(&one.place).map(|at| (*at, single[*at])),
+            Operand::ArrayElement(one) => group_of.get(&one.place).map(|at| (*at, false)),
+            Operand::ProjectedPlace(one) => group_of.get(&one.place).map(|at| (*at, false)),
+            _ => None,
+        }
+    };
+    let mut escaped: HashSet<usize> = HashSet::default();
+    // Per block: the groups read before the block writes them, and those it
+    // writes whole.
+    let mut used: HashMap<i64, HashSet<usize>> = HashMap::default();
+    let mut killed: HashMap<i64, HashSet<usize>> = HashMap::default();
+    for block in &function.blocks {
+        let (mut read, mut wrote): (HashSet<usize>, HashSet<usize>) = Default::default();
+        for one in &block.instructions {
+            let reads = |operand: &Operand, read: &mut HashSet<usize>, wrote: &HashSet<usize>| {
+                if let Some((at, _)) = named(operand) {
+                    if !wrote.contains(&at) {
+                        read.insert(at);
+                    }
+                }
+            };
+            match one.op {
+                Op::Load | Op::Copy => one.operands.iter().for_each(|operand| reads(operand, &mut read, &wrote)),
+                Op::Store if one.callee.is_none() && one.asm.is_none() && one.operands.len() == 2 => {
+                    reads(&one.operands[1], &mut read, &wrote);
+                    if let Some((at, whole)) = named(&one.operands[0]) {
+                        if whole && matches!(one.operands[0], Operand::PlaceRef(_)) {
+                            wrote.insert(at);
+                        } else if !wrote.contains(&at) {
+                            // Part of a group: what is not written stays read.
+                            read.insert(at);
+                        }
+                    }
+                }
+                _ => {
+                    for operand in &one.operands {
+                        if let Some((at, _)) = named(operand) {
+                            escaped.insert(at);
+                        }
+                    }
+                }
+            }
+        }
+        for operand in &block.terminator.operands {
+            if let Some((at, _)) = named(operand) {
+                if !wrote.contains(&at) {
+                    read.insert(at);
+                }
+            }
+        }
+        used.insert(block.id, read);
+        killed.insert(block.id, wrote);
+    }
+    // Live into each block, to a fixpoint.
+    let mut live_in: HashMap<i64, HashSet<usize>> =
+        function.blocks.iter().map(|one| (one.id, used[&one.id].clone())).collect();
+    loop {
+        let mut changed = false;
+        for block in function.blocks.iter().rev() {
+            let mut now = used[&block.id].clone();
+            let after = block.terminator.targets.iter().chain(block.terminator.cases.iter().map(|(_, target)| target));
+            for target in after {
+                for at in live_in.get(target)? {
+                    if !killed[&block.id].contains(at) {
+                        now.insert(*at);
+                    }
+                }
+            }
+            if now.len() != live_in[&block.id].len() {
+                live_in.insert(block.id, now);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // Where RESUME continues: the statement a call may raise in, and the next.
+    let mut targets: Vec<i64> = handlers.to_vec();
+    let mut raising = vec![false; rows.len()];
+    for one in function.blocks.iter().flat_map(|block| &block.instructions) {
+        if one.callee.is_some() || matches!(
+            one.op,
+            Op::Div | Op::Rem | Op::Udiv | Op::Urem | Op::Divmod | Op::Udivmod
+        )
+        {
+            if let Some(row) = rows.partition_point(|row| row.instruction <= one.id).checked_sub(1) {
+                raising[row] = true;
+            }
+        }
+    }
+    for (row, _) in raising.iter().enumerate().filter(|(_, raises)| **raises) {
+        targets.push(rows[row].block);
+        targets.push(rows[(row + 1).min(rows.len() - 1)].block);
+    }
+    let mut needed = escaped;
+    for target in targets {
+        needed.extend(live_in.get(&target)?.iter().copied());
+    }
+    Some(needed)
+}
+
 /// The memset a zeroed aggregate local calls.
 const MEMSET: &str = "llvm.memset.p0.i16";
 
@@ -1533,10 +1787,9 @@ fn declare_outside(
     module: &mut Module,
     tables: &mut Tables,
     function: &model::Function,
+    index: &FunctionIndex,
 ) -> Emit<()> {
-    let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
-    let places: HashMap<i64, &model::Place> = function.places.iter().map(|one| (one.id, one)).collect();
-    let sites = call_sites(function);
+    let FunctionIndex { values, places, sites } = index;
     if function.error_handler.is_some() && !function.error_handler_local {
         // The module handler run to the module's end raises "No RESUME".
         declare_runtime(module, tables, handling::RAISE, 1)?;
@@ -1544,7 +1797,8 @@ fn declare_outside(
     for place in &function.places {
         if !matches!(place.storage, Storage::Local | Storage::Parameter) && !tables.data.contains_key(&place.symbol) {
             let ty = stored_type(&mut module.context.types, &tables.spaces, tables.types[&place.r#type])?;
-            let variable = GlobalVariable { ty, constant: false, initializer: None, align: None };
+            let variable =
+                GlobalVariable { externally_initialized: false, ty, constant: false, initializer: None, align: None };
             let global = add_unique(module, &place.name, |module, name| {
                 module.add_variable(name, variable.clone(), Linkage::External)
             });
@@ -1601,7 +1855,9 @@ fn declare_outside(
         tables.callees.insert(VA_START.to_owned(), reference);
     }
     for instruction in function.blocks.iter().flat_map(|one| &one.instructions) {
-        if let (Some(operand), Some(result)) = (instruction.operands.first(), instruction.results.first()) {
+        if let (Some(operand), Some(result)) = (instruction.operands.first(), instruction.results.first())
+            && names_intrinsic(instruction.op)
+        {
             let types = &mut module.context.types;
             let from = value_type(types, &tables.spaces, tables.types[&operand_type(operand, &values, &places)]);
             let to = value_type(types, &tables.spaces, tables.types[&values[result]]);
@@ -1620,6 +1876,21 @@ fn declare_outside(
                 let global = module.add_function(slot.key(), ty, Linkage::External)?;
                 slot.insert(module.reference(global));
             }
+        }
+        if instruction.op == Op::Concat
+            && tables.spaces.segment_space().is_err()
+            && !tables.callees.contains_key(REAL_ADDRESS)
+            && let Ok(to) =
+                value_type(&mut module.context.types, &tables.spaces, tables.types[&values[&instruction.results[0]]])
+            && let Type::Pointer(space) = *module.context.types.get(to)
+            && let pointer_bits = tables.layout.pointer(space).bits
+            && tables.hosted
+        {
+            let wide = module.context.types.int(pointer_bits);
+            let ty = function_type(&mut module.context.types, to, vec![wide]);
+            let global = module.add_function(REAL_ADDRESS, ty, Linkage::External)?;
+            let reference = module.reference(global);
+            tables.callees.insert(REAL_ADDRESS.to_owned(), reference);
         }
         if instruction.op == Op::Assume {
             let types = &mut module.context.types;
@@ -1795,7 +2066,7 @@ fn passed(
 /// The intrinsic a HIR instruction from a `from` to a `to` calls, if any:
 /// a float function, or a float converted to an integer, which rounds as
 /// the machine's default mode does, to nearest, ties to even.
-fn intrinsic(
+pub(crate) fn intrinsic(
     types: &Types,
     op: Op,
     from: TypeId,
@@ -1804,6 +2075,7 @@ fn intrinsic(
     let float = match types.get(from) {
         Type::Float(FloatKind::Float) => "f32",
         Type::Float(FloatKind::Double) => "f64",
+        Type::Float(FloatKind::X86Fp80) => "f80",
         _ => return None,
     };
     let function = match op {
@@ -1815,15 +2087,39 @@ fn intrinsic(
         Op::Fatan => "atan",
         Op::Flog2 => "log2",
         Op::Fexp2 => "exp2",
+        Op::Fln => "log",
+        Op::Fexp => "exp",
         Op::Fround => "rint",
         _ => return None,
     };
     Some(format!("llvm.{function}.{float}"))
 }
 
+/// The ops `intrinsic`, `fixed` and `ptrdiff` can name a callee for: the rest
+/// need no value type worked out to find that out.
+pub(crate) fn names_intrinsic(op: Op) -> bool {
+    matches!(
+        op,
+        Op::Convert
+            | Op::Fabs
+            | Op::Fsqrt
+            | Op::Fsin
+            | Op::Fcos
+            | Op::Fatan
+            | Op::Flog2
+            | Op::Fexp2
+            | Op::Fln
+            | Op::Fexp
+            | Op::Fround
+            | Op::FixedMul
+            | Op::FixedDiv
+            | Op::PtrDiff
+    )
+}
+
 /// The intrinsic that answers the bytes between two pointers of one type
 /// into an object, as an integer of `to`'s width.
-fn ptrdiff(
+pub(crate) fn ptrdiff(
     types: &Types,
     from: TypeId,
     to: TypeId,
@@ -1834,7 +2130,7 @@ fn ptrdiff(
 
 /// The fixed-point intrinsic a HIR instruction on `ty` calls, and its
 /// parameters: the two operands and the fraction's bits.
-fn fixed(
+pub(crate) fn fixed(
     types: &mut Types,
     op: Op,
     ty: TypeId,
@@ -1881,6 +2177,9 @@ pub const RETURNS_TWICE: &str = "returns_twice";
 
 /// What the language promises holds, LLVM's intrinsic.
 const ASSUME: &str = "llvm.assume";
+/// The runtime routine that places a byte of the PC's low memory on a 64-bit
+/// host.
+const REAL_ADDRESS: &str = "B$REAL";
 
 /// Where a variadic function's variadic arguments start, stored in a list.
 const VA_START: &str = "llvm.va_start.p0";
@@ -1901,6 +2200,15 @@ fn asm_name(asm: &model::Asm) -> String {
         outputs: asm.outputs.clone(),
         clobbers: asm.clobbers.clone(),
         memory: asm.memory,
+        fixups: asm
+            .fixups
+            .iter()
+            .map(|one| llrm_mir::intrinsics::AsmFixup {
+                at: one.at as usize,
+                kind: one.kind.clone(),
+                addend: one.addend,
+            })
+            .collect(),
     })
 }
 
@@ -1958,6 +2266,25 @@ fn three_way(op: Op) -> Option<Op> {
 }
 
 /// An operand's HIR type: a place's is what it holds.
+/// What the emitter looks up by id in one function, built once: the types of
+/// its values, its places, and each call's ABI by its instruction.
+/// `declare_outside` and the body each built their own.
+struct FunctionIndex<'h> {
+    values: HashMap<i64, i64>,
+    places: HashMap<i64, &'h model::Place>,
+    sites: HashMap<i64, &'h model::CallAbi>,
+}
+
+impl<'h> FunctionIndex<'h> {
+    fn of(function: &'h model::Function) -> Self {
+        Self {
+            values: function.values.iter().map(|one| (one.id, one.r#type)).collect(),
+            places: function.places.iter().map(|one| (one.id, one)).collect(),
+            sites: call_sites(function),
+        }
+    }
+}
+
 /// Each call's ABI by the instruction it is of: found once for a function,
 /// where every call instruction used to read all of `calls`.
 fn call_sites(function: &model::Function) -> HashMap<i64, &model::CallAbi> {
@@ -1987,6 +2314,67 @@ fn operand_type(
 /// `function`'s blocks, each after its dominators -- reverse postorder from
 /// the entry and every external entry, the unreachable ones last -- so a
 /// value is emitted before its uses whatever the HIR's block order.
+/// The results of the comparisons that nothing but a branch reads: C's
+/// `if (a < b)` tests the `i1`, as clang's `EmitBranchOnBoolExpr` does, and
+/// the widened result is never made. Two passes over the body, bit-indexed by
+/// value (a body of a thousand statements pays for no hashing), and none at
+/// all when it compares nothing.
+fn branch_only_comparisons(function: &model::Function) -> HashMap<i64, Option<(Value, CastOp, TypeId)>> {
+    let size = function.values.iter().map(|one| one.id).max().map_or(0, |most| most as usize + 1);
+    let mut compared = vec![false; size];
+    let mut any = false;
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        if let Some(&result) = instruction.results.first()
+            && comparison(three_way(instruction.op).unwrap_or(instruction.op)).is_some()
+            && let Some(slot) = compared.get_mut(result as usize)
+        {
+            *slot = true;
+            any = true;
+        }
+    }
+    if !any {
+        return HashMap::default();
+    }
+    fn read(
+        compared: &mut [bool],
+        value: i64,
+    ) {
+        if let Some(slot) = compared.get_mut(value as usize) {
+            *slot = false;
+        }
+    }
+    fn note(
+        compared: &mut [bool],
+        operands: &[Operand],
+    ) {
+        for operand in operands {
+            match operand {
+                Operand::ValueRef(one) => read(compared, one.value),
+                Operand::ArrayElement(one) => note(compared, &one.indices),
+                Operand::ProjectedPlace(one) => note(compared, &one.indices),
+                Operand::IndirectPlace(one) => {
+                    read(compared, one.base);
+                    if let Some(origin) = one.origin {
+                        read(compared, origin);
+                    }
+                }
+                Operand::DescriptorPlace(one) => read(compared, one.base),
+                Operand::Constant(_) | Operand::PlaceRef(_) => {}
+            }
+        }
+    }
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            note(&mut compared, &instruction.operands);
+        }
+        match block.terminator.kind {
+            TerminatorKind::Branch => note(&mut compared, &block.terminator.operands[1..]),
+            _ => note(&mut compared, &block.terminator.operands),
+        }
+    }
+    compared.iter().enumerate().filter(|(_, only)| **only).map(|(value, _)| (value as i64, None)).collect()
+}
+
 fn emission_order(function: &model::Function) -> Vec<&model::Block> {
     let blocks: HashMap<i64, &model::Block> = function.blocks.iter().map(|block| (block.id, block)).collect();
     let successors = |block: &model::Block| {
@@ -2025,7 +2413,7 @@ fn mark_cold(
     function: &mut Function,
     block: BlockId,
 ) {
-    for inst in function.block(block).instructions().to_vec() {
+    for inst in function.iter_block(block).collect::<Vec<_>>() {
         let old = function.instruction(inst).clone();
         let Opcode::Call(mut info) = old.opcode else { continue };
         info.attrs.push(Fact::Cold.carrier());
@@ -2055,21 +2443,31 @@ struct Body<'b, 'm, 'h> {
     b: &'b mut Builder<'m>,
     tables: &'b Tables<'h>,
     function: &'h model::Function,
-    value_types: HashMap<i64, i64>,
-    places: HashMap<i64, &'h model::Place>,
+    value_types: &'b HashMap<i64, i64>,
+    /// The MIR type of each HIR type this function asked for, by id: `ty` is
+    /// asked once per operand and result (`CodeGenTypes::TypeCache`).
+    type_ids: HashMap<i64, TypeId>,
+    places: &'b HashMap<i64, &'h model::Place>,
     /// Each call's ABI by its instruction.
-    sites: HashMap<i64, &'h model::CallAbi>,
+    sites: &'b HashMap<i64, &'h model::CallAbi>,
     blocks: HashMap<i64, BlockId>,
     values: HashMap<i64, Value>,
     /// The `i1` each comparison's result was widened from: what an assumption
     /// is made of.
     truths: HashMap<i64, Value>,
+    /// Comparisons whose widened result only a branch reads: not made, the
+    /// branch takes the `i1` (`truths`). Each is its `i1`, the cast and the
+    /// type it would have been widened to, for a reader that asks anyway.
+    branch_only: HashMap<i64, Option<(Value, CastOp, TypeId)>>,
     /// Each local place's frame object, and its offset in it.
     frame: HashMap<i64, (usize, i64)>,
     /// Where a variadic function's variadic arguments start, if a parameter
     /// lives with them.
     passed: Option<Value>,
     objects: Vec<Value>,
+    /// Of those, the ones a place of the program lives in, not a statement's
+    /// own argument box (`$arg`): what a handler can read.
+    variables: Vec<Value>,
     /// Each value that is a place's address, and that place's size.
     addresses: HashMap<i64, i64>,
     /// The addresses of the variables `-g` declares.
@@ -2089,6 +2487,11 @@ struct Body<'b, 'm, 'h> {
     /// The `!range` node of each bounds at each integer type, made on the first
     /// access that wants it.
     range_nodes: HashMap<(i64, i64, TypeId), MetadataId>,
+    descriptor_node: Option<MetadataId>,
+    /// The results of the loads through a pointer, which is where a
+    /// descriptor's words are read (a `DEF SEG` selector is read from a
+    /// variable's place).
+    indirect_loads: HashSet<i64>,
 }
 
 impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
@@ -2096,6 +2499,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         b: &'b mut Builder<'m>,
         tables: &'b Tables<'h>,
         function: &'h model::Function,
+        index: &'b FunctionIndex<'h>,
     ) -> Emit<Self> {
         let values = match interrupted(function) {
             // Its parameters are only ever its saved registers' memory.
@@ -2103,19 +2507,23 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             false => function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect(),
         };
         let destination = result_destination(tables, function).map(|at| b.parameter(at));
+        b.function.reserve_instructions(function.blocks.iter().map(|one| one.instructions.len() + 1).sum());
         Ok(Self {
             b,
             tables,
             function,
-            value_types: function.values.iter().map(|one| (one.id, one.r#type)).collect(),
-            places: function.places.iter().map(|one| (one.id, one)).collect(),
-            sites: call_sites(function),
+            value_types: &index.values,
+            type_ids: HashMap::default(),
+            places: &index.places,
+            sites: &index.sites,
             blocks: HashMap::default(),
             values,
             truths: HashMap::default(),
+            branch_only: branch_only_comparisons(function),
             frame: HashMap::default(),
             passed: None,
             objects: Vec::new(),
+            variables: Vec::new(),
             addresses: HashMap::default(),
             declared_addresses: HashSet::default(),
             declared_offsets: HashMap::default(),
@@ -2125,6 +2533,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             at_instruction: 0,
             operands_at: Vec::new(),
             range_nodes: HashMap::default(),
+            descriptor_node: None,
+            indirect_loads: HashSet::default(),
         })
     }
 
@@ -2151,7 +2561,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             self.blocks.insert(block.id, id);
         }
         self.b.position(frame.unwrap_or(self.blocks[&entry.id]));
-        self.allocate()?;
+        self.allocate(handled.map(|one| one.frame), statements)?;
         self.declare_variables();
         if let Some(handled) = handled {
             self.handle(handled, statements)?;
@@ -2290,13 +2700,47 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     /// An alloca for each group of local places that overlap, each zeroed
     /// as HIR's frame starts: a scalar by a store, an aggregate by memset,
     /// as clang zeroes one.
-    fn allocate(&mut self) -> Emit<()> {
+    fn allocate(
+        &mut self,
+        frame: Option<(ConstantId, TypeId)>,
+        statements: &[model::Statement],
+    ) -> Emit<()> {
         let groups = frame_groups(&mut self.b.context.types, self.tables, self.function)?;
-        for group in &groups {
+        // A zeroed place nothing writes always holds zero: nothing to hand the
+        // handler, and the optimiser folds what reads it.
+        let written = self.tables.zeroed.contains(&self.function.id).then(|| written_places(self.function));
+        // What the handler can read: the groups live where RESUME continues.
+        // The module handler runs as a function of its own, which reads none of
+        // the owner's locals; the owner's RESUME labels are scanned for
+        // like any.
+        let owner = matches!(
+            &self.tables.module_handler,
+            Some(handler) if handler.owner == self.function.id
+        );
+        let needed = handling::handlers(self.function)
+            .ok()
+            .and_then(
+                |handlers| resumable_groups(self.function, &groups, statements, if owner { &[] } else { &handlers }),
+            );
+        for (at, group) in groups.iter().enumerate() {
             for place in &group.places {
                 self.frame.insert(place.id, (self.objects.len(), place.offset - group.start));
             }
-            self.objects.push(self.b.alloca(group.ty, ""));
+            let object = self.b.alloca(group.ty, "");
+            let constant = written
+                .as_ref()
+                .is_some_and(|written| group.places.iter().all(|one| !one.volatile && !written.contains(&one.id)));
+            let dead = needed.as_ref().is_some_and(|needed| !needed.contains(&at));
+            if !constant && !dead && group.places.iter().any(|one| !one.name.starts_with("$arg")) {
+                self.variables.push(object);
+            }
+            self.objects.push(object);
+        }
+        // The handler reads the variables whenever a call raises.
+        if let Some((routine, ty)) = frame {
+            for object in self.variables.clone() {
+                self.b.call(ty, Value::Constant(routine), &[object], "");
+            }
         }
         if interrupted(self.function) {
             self.passed = Some(self.b.parameter(0));
@@ -2347,7 +2791,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         &mut self,
         id: i64,
     ) -> Emit<TypeId> {
-        value_type(&mut self.b.context.types, &self.tables.spaces, self.tables.types[&id])
+        if let Some(&known) = self.type_ids.get(&id) {
+            return Ok(known);
+        }
+        let made = value_type(&mut self.b.context.types, &self.tables.spaces, self.tables.types[&id])?;
+        self.type_ids.insert(id, made);
+        Ok(made)
     }
 
     fn result_type(
@@ -2377,11 +2826,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         operand: &Operand,
     ) -> Emit<Value> {
         match operand {
-            Operand::ValueRef(one) => self
-                .values
-                .get(&one.value)
-                .copied()
-                .ok_or_else(|| format!("value {} used before its definition", one.value)),
+            Operand::ValueRef(one) => match (self.values.get(&one.value), self.branch_only.get(&one.value)) {
+                (Some(&value), _) => Ok(value),
+                // A reader the scan did not see: widened where it asks.
+                (None, Some(&Some((truth, cast, ty)))) => Ok(self.b.cast(cast, truth, ty, "")),
+                _ => Err(format!("value {} used before its definition", one.value)),
+            },
             Operand::Constant(one) => self.constant(one),
             place => {
                 let (pointer, ty, volatile, tag) = self.place(place)?;
@@ -2538,9 +2988,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             _ => Vec::new(),
         };
-        let Some(inst) =
-            self.b.function.block(self.b.current().expect("a placed block")).instructions().last().copied()
-        else {
+        let Some(inst) = self.b.function.block(self.b.current().expect("a placed block")).last() else {
             return;
         };
         for fact in facts {
@@ -2584,6 +3032,26 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         let node = MetadataId(self.b.metadata.len() as u32 - 1);
         self.range_nodes.insert((bounds.lo, bounds.hi, ty), node);
         Some(node)
+    }
+
+    /// Marks the `inttoptr` `cast` as making an array's own segment from a
+    /// descriptor word, which `forging::forges_selector` does not take for a
+    /// forged one.
+    fn described(
+        &mut self,
+        cast: Value,
+    ) {
+        let Value::Value(cast) = cast else { return };
+        let llrm_mir::ValueDef::Instruction(inst) = self.b.function.value(cast).def else { return };
+        let node = *self
+            .descriptor_node
+            .get_or_insert_with(
+                || {
+                    self.b.metadata.push(MetadataNode { distinct: false, operands: Vec::new() });
+                    MetadataId(self.b.metadata.len() as u32 - 1)
+                },
+            );
+        self.b.function.annotate(inst, llrm_mir::module::DESCRIPTOR_WORD, node);
     }
 
     fn tagged(
@@ -2815,8 +3283,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let ty = self.result_type(instruction.results[0])?;
             // BASIC's truth is all ones; an unsigned boolean's, as C's, is one.
             let one = self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
-            let result = self.b.cast(if one { CastOp::ZExt } else { CastOp::SExt }, truth, ty, "");
+            let cast = if one { CastOp::ZExt } else { CastOp::SExt };
             self.truths.insert(instruction.results[0], truth);
+            if let Some(deferred) = self.branch_only.get_mut(&instruction.results[0]) {
+                *deferred = Some((truth, cast, ty));
+                return Ok(());
+            }
+            let result = self.b.cast(cast, truth, ty, "");
             self.define(instruction, result);
             return Ok(());
         }
@@ -2918,6 +3391,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             Op::Copy | Op::Load => {
                 let value = self.value(&instruction.operands[0])?;
+                if matches!(instruction.op, Op::Load) && matches!(instruction.operands[0], Operand::IndirectPlace(_)) {
+                    self.indirect_loads.extend(instruction.results.iter().copied());
+                }
                 self.define(instruction, value);
             }
             Op::Store => {
@@ -3062,8 +3538,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // At the pointer's index width: 16 bits for a far pointer, which
             // moves the offset alone; 32 for a huge one, which carries.
             Op::PtrOffset => {
-                let [pointer, displacement] = self.operands(instruction)?[..] else {
-                    return Err("ptr_offset without two operands".to_owned());
+                let operands = self.operands(instruction)?;
+                let (pointer, displacement) = match operands[..] {
+                    [pointer, displacement] | [pointer, displacement, _] => (pointer, displacement),
+                    _ => return Err("ptr_offset without two operands".to_owned()),
                 };
                 let signed = self.operand_hir_type(&instruction.operands[1]).signed != Some(false);
                 let space = match self.b.context.types.get(self.b.type_of(pointer)) {
@@ -3072,9 +3550,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 let index = self.b.context.types.int(self.tables.layout.pointer(space).index_bits);
                 let displacement = self.convert(displacement, signed, index)?;
-                let byte = self.b.context.types.int(8);
+                // A third operand is the element size in bytes, and the
+                // displacement counts elements: clang's `a[i]`.
+                let element = match instruction.operands.get(2) {
+                    Some(Operand::Constant(model::Constant { value: Number::Int(size), .. })) => {
+                        element_type(&mut self.b.context.types, *size)
+                    }
+                    Some(_) => return Err("a ptr_offset scale that is no constant".to_owned()),
+                    None => self.b.context.types.int(8),
+                };
                 let flags = self.stated_flags(instruction);
-                let result = self.b.gep(byte, pointer, &[displacement], flags, "");
+                let result = self.b.gep(element, pointer, &[displacement], flags, "");
                 self.define(instruction, result);
             }
             Op::PtrDiff => {
@@ -3101,14 +3587,25 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let Type::Pointer(space) = *self.b.context.types.get(ty) else {
                     return Err("a concat that is no pointer".to_owned());
                 };
-                let bits = self.tables.layout.pointer(space).bits;
-                let wide = self.b.context.types.int(bits);
+                let pointer_bits = self.tables.layout.pointer(space).bits;
+                let wide = self.b.context.types.int(pointer_bits);
                 let selector = self.convert(selector, false, wide)?;
-                let four = self.b.int(bits, 4);
+                let four = self.b.int(pointer_bits, 4);
                 let paragraph = self.b.binary(BinaryOp::Shl, selector, four, Flags::default(), "");
                 let offset = self.convert(offset, false, wide)?;
                 let address = self.b.binary(BinaryOp::Add, paragraph, offset, Flags::default(), "");
-                let result = self.b.cast(CastOp::IntToPtr, address, ty, "");
+                // A host has no memory at the PC's low addresses: the
+                // runtime gives the place of the byte `address` in its image
+                // of them.
+                let result = if self.tables.hosted {
+                    let callee = Value::Constant(
+                        *self.tables.callees.get(REAL_ADDRESS).ok_or_else(|| format!("@{REAL_ADDRESS} undeclared"))?,
+                    );
+                    let function = function_type(&mut self.b.context.types, ty, vec![wide]);
+                    self.b.call(function, callee, &[address], "").expect("an address")
+                } else {
+                    self.b.cast(CastOp::IntToPtr, address, ty, "")
+                };
                 self.define(instruction, result);
             }
             Op::Concat => {
@@ -3117,6 +3614,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 let segment = self.b.context.types.ptr(self.tables.spaces.segment_space()?);
                 let segment = self.b.cast(CastOp::IntToPtr, selector, segment, "");
+                if matches!(
+                    &instruction.operands[0],
+                    Operand::ValueRef(one) if self.indirect_loads.contains(&one.value)
+                ) {
+                    self.described(segment);
+                }
                 let ty = self.result_type(instruction.results[0])?;
                 let base = self.b.cast(CastOp::AddrSpaceCast, segment, ty, "");
                 let byte = self.b.context.types.int(8);
@@ -3133,16 +3636,59 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     _ => return Err(format!("{op} by a variable fraction")),
                 };
                 let ty = self.b.type_of(a);
+                if op == Op::FixedDiv && self.b.context.types.int_bits(ty) == Some(32) {
+                    // A fixed-point `/` truncates toward zero (the language
+                    // spec) and `llvm.sdiv.fix` rounds down: the divide the
+                    // spec states, `(a << fraction) / b` in 64 bits, is
+                    // truncating by itself, where `sdiv.fix` took a floor
+                    // and a correction (115 bytes a divide at m16 -Os).
+                    let wide = self.b.context.types.int(64);
+                    let shift = self.b.int(64, fraction);
+                    let (a, b) = (self.b.cast(CastOp::SExt, a, wide, ""), self.b.cast(CastOp::SExt, b, wide, ""));
+                    let scaled = self.b.binary(BinaryOp::Shl, a, shift, Flags::default(), "");
+                    let quotient = self.b.binary(BinaryOp::SDiv, scaled, b, Flags::default(), "");
+                    let result = self.b.cast(CastOp::Trunc, quotient, ty, "");
+                    self.define(instruction, result);
+                    return Ok(());
+                }
                 let (name, parameters) =
                     fixed(&mut self.b.context.types, op, ty).ok_or("fixed point of a non-integer")?;
                 let callee =
                     Value::Constant(*self.tables.callees.get(&name).ok_or_else(|| format!("@{name} undeclared"))?);
+                let fraction_value = fraction;
                 let fraction = self.b.int(32, fraction);
                 let function = function_type(&mut self.b.context.types, ty, parameters);
-                let result = self.b.call(function, callee, &[a, b, fraction], "").expect("a fixed-point value");
+                let mut result = self.b.call(function, callee, &[a, b, fraction], "").expect("a fixed-point value");
+                if op == Op::FixedDiv {
+                    // `llvm.sdiv.fix` rounds toward negative infinity; a fixed
+                    // point `/` truncates toward zero (the language spec). A
+                    // negative quotient that is not exact is one too low: it
+                    // is exact when `q * b == a << fraction` (the remainder is
+                    // smaller than `b`, so the difference cannot wrap to zero).
+                    let bits = self.b.context.types.int_bits(ty).ok_or("fixed point of a non-integer")?;
+                    let zero = self.b.int(bits, 0);
+                    let shift = self.b.int(bits, fraction_value);
+                    let signs = self.b.binary(BinaryOp::Xor, a, b, Flags::default(), "");
+                    let negative = self.b.icmp(IntPredicate::Slt, signs, zero, "");
+                    let scaled = self.b.binary(BinaryOp::Shl, a, shift, Flags::default(), "");
+                    let product = self.b.binary(BinaryOp::Mul, result, b, Flags::default(), "");
+                    let inexact = self.b.icmp(IntPredicate::Ne, scaled, product, "");
+                    let low = self.b.binary(BinaryOp::And, negative, inexact, Flags::default(), "");
+                    let one = self.b.cast(CastOp::ZExt, low, ty, "");
+                    result = self.b.binary(BinaryOp::Add, result, one, Flags::default(), "");
+                }
                 self.define(instruction, result);
             }
-            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fround => {
+            Op::Fabs
+            | Op::Fsqrt
+            | Op::Fsin
+            | Op::Fcos
+            | Op::Fatan
+            | Op::Flog2
+            | Op::Fexp2
+            | Op::Fln
+            | Op::Fexp
+            | Op::Fround => {
                 let value = self.value(&instruction.operands[0])?;
                 let ty = self.result_type(instruction.results[0])?;
                 let result = self.intrinsic(op, value, ty)?.ok_or_else(|| format!("{op} of a non-float"))?;
@@ -3259,9 +3805,11 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         Ok(())
     }
 
-    /// Each byte argument's extension to a stack word, as its HIR type's
-    /// signedness says: LLVM's signext and zeroext. `order` is the operands
-    /// in argument order.
+    /// Each argument narrower than the target's word (a near pointer), extended
+    /// to it (the callee, clang's `signext`, trusts the caller's: a word
+    /// zero-extended printed 49536 for -16000 at m32). The extension to a
+    /// stack word, as its HIR type's signedness says: LLVM's signext and
+    /// zeroext. `order` is the operands in argument order.
     fn extensions(
         &self,
         instruction: &model::Instruction,
@@ -3278,7 +3826,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             .enumerate()
             .filter_map(|(index, &at)| {
                 let ty = self.hir_type(operand_type(&instruction.operands[at], values, places));
-                let signed = ty.signed.filter(|_| ty.kind == model::TypeKind::Integer && ty.width == 1)?;
+                let signed = ty.signed.filter(|_| {
+                    ty.kind == model::TypeKind::Integer && ty.width * 8 < i64::from(self.tables.layout.pointer(0).bits)
+                })?;
                 Some((index, Attribute::Flag(if signed { "signext" } else { "zeroext" }.to_owned())))
             })
             .chain(classes)
@@ -3414,10 +3964,23 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         match terminator.kind {
             TerminatorKind::Jump => self.b.br(self.block(terminator.targets[0])),
             TerminatorKind::Branch => {
-                let value = self.value(&terminator.operands[0])?;
-                let bits = self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a branch on a non-integer")?;
-                let zero = self.b.int(bits, 0);
-                let condition = self.b.icmp(IntPredicate::Ne, value, zero, "");
+                // A comparison's own `i1`, as clang branches
+                // (`EmitBranchOnBoolExpr`): its widened result
+                // is nonzero exactly when it holds.
+                let truth = match &terminator.operands[0] {
+                    Operand::ValueRef(one) => self.truths.get(&one.value).copied(),
+                    _ => None,
+                };
+                let condition = match truth {
+                    Some(truth) => truth,
+                    None => {
+                        let value = self.value(&terminator.operands[0])?;
+                        let bits =
+                            self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a branch on a non-integer")?;
+                        let zero = self.b.int(bits, 0);
+                        self.b.icmp(IntPredicate::Ne, value, zero, "")
+                    }
+                };
                 self.b.cond_br(condition, self.block(terminator.targets[0]), self.block(terminator.targets[1]));
             }
             TerminatorKind::Switch => {

@@ -1,0 +1,21 @@
+// Prints `name value` for every symbol the pin's X86GenDAGISel.inc names, so the Rust
+// decoder takes numbers from the pin's headers and parses none of them. regen.sh fills in the lists.
+#include "llvm/CodeGen/ISDOpcodes.h"
+#include "llvm/CodeGen/TargetOpcodes.h"
+#include "llvm/CodeGen/ValueTypes.h"
+#include "MCTargetDesc/X86BaseInfo.h"
+#include "X86ISelLowering.h"
+#include <cstdio>
+
+using namespace llvm;
+
+
+// @ENUMS@
+
+#define P(sym) std::printf("%s %lld\n", #sym, (long long)(sym))
+
+int main() {
+  @MEMBERS@
+  @SYMBOLS@
+  return 0;
+}

@@ -1,0 +1,13 @@
+err 6  0 
+exp 1 
+err 6  0 
+exp 2 
+err 6  0 
+exp 3 
+err 5  0 
+log 0 
+err 5  0 
+log 1 
+log 2 
+sinerr 5  0 
+done

@@ -1,6 +1,6 @@
 # Turbo Debugger information (`-gtd`)
 
-For contributors changing `crates/target/llrm-omf/src/td.rs` or checking its output. `-gtd` writes the debug
+For contributors changing `crates/mc/llrm-omf/src/td.rs` or checking its output. `-gtd` writes the debug
 records Turbo C++ 3.0 writes under `-v` into a 16-bit OMF object; `TLINK /v` turns them into the table Turbo
 Debugger reads.
 

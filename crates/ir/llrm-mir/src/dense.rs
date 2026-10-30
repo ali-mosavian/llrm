@@ -42,6 +42,111 @@ impl Dense for i64 {
     }
 }
 
+/// `llvm::SetVector` over dense ids: insertion order kept, membership and
+/// removal of an absent id O(1). A worklist that is told to forget an id
+/// (SROA's `set_subtract` of the allocas it deleted) pays only when it holds
+/// it.
+#[derive(Clone)]
+pub struct IdSetVector<K> {
+    order: Vec<K>,
+    members: IdSet<K>,
+}
+
+impl<K> Default for IdSetVector<K> {
+    fn default() -> Self {
+        Self { order: Vec::new(), members: IdSet::default() }
+    }
+}
+
+impl<K: Dense + Copy + PartialEq> IdSetVector<K> {
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    pub fn contains(
+        &self,
+        key: &K,
+    ) -> bool {
+        self.members.contains(key)
+    }
+
+    /// Whether `key` was not in it (`insert`).
+    pub fn push(
+        &mut self,
+        key: K,
+    ) -> bool {
+        let fresh = self.members.insert(key);
+        if fresh {
+            self.order.push(key);
+        }
+        fresh
+    }
+
+    /// The last pushed (`pop_back_val`).
+    pub fn pop(&mut self) -> Option<K> {
+        let key = self.order.pop()?;
+        self.members.remove(&key);
+        Some(key)
+    }
+
+    /// Whether `key` was in it (`remove`).
+    pub fn remove(
+        &mut self,
+        key: &K,
+    ) -> bool {
+        if !self.members.remove(key) {
+            return false;
+        }
+        let at = self.order.iter().rposition(|one| one == key).expect("a member is in the order");
+        self.order.remove(at);
+        true
+    }
+
+    /// Forgets every id of `gone` it holds (`set_subtract`). A list, not an
+    /// `IdSet`: walking a bitset costs its width, not its members.
+    pub fn set_subtract(
+        &mut self,
+        gone: impl IntoIterator<Item = K>,
+    ) {
+        for key in gone {
+            self.remove(&key);
+        }
+    }
+
+    /// Keeps the first `len` (`truncate`).
+    pub fn truncate(
+        &mut self,
+        len: usize,
+    ) {
+        for key in self.order.drain(len.min(self.order.len())..) {
+            self.members.remove(&key);
+        }
+    }
+
+    /// Only the ids `keep` says to; O(n), for a pass over the whole list.
+    pub fn retain(
+        &mut self,
+        mut keep: impl FnMut(&K) -> bool,
+    ) {
+        let members = &mut self.members;
+        self.order.retain(|key| {
+            let kept = keep(key);
+            if !kept {
+                members.remove(key);
+            }
+            kept
+        });
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = K> + '_ {
+        self.order.iter().copied()
+    }
+}
+
 /// A set of ids, a bit each.
 #[derive(Clone)]
 pub struct IdSet<K> {
@@ -243,17 +348,23 @@ impl<K: Dense> PartialEq for IdSet<K> {
 
 impl<K: Dense> Eq for IdSet<K> {}
 
-/// A map from ids, a slot each.
+/// Ids to a page: a page is allocated when an id in it is first set, so a map
+/// of a few ids among many costs a page each, not a slot for every id below the
+/// largest, and growing a map copies the page table, not the entries.
+const PAGE_BITS: usize = 5;
+const PAGE: usize = 1 << PAGE_BITS;
+
+/// A map from ids, a slot each, in pages.
 #[derive(Clone)]
 pub struct IdMap<K, V> {
-    slots: Vec<Option<V>>,
+    pages: Vec<Option<Box<[Option<V>]>>>,
     len: usize,
     key: PhantomData<K>,
 }
 
 impl<K, V> Default for IdMap<K, V> {
     fn default() -> Self {
-        Self { slots: Vec::new(), len: 0, key: PhantomData }
+        Self { pages: Vec::new(), len: 0, key: PhantomData }
     }
 }
 
@@ -262,9 +373,9 @@ impl<K: Dense, V> IdMap<K, V> {
         Self::default()
     }
 
-    /// Room for ids below `ids` without growing.
+    /// Room for ids below `ids` without growing the page table.
     pub fn with_capacity(ids: usize) -> Self {
-        Self { slots: Vec::with_capacity(ids), len: 0, key: PhantomData }
+        Self { pages: Vec::with_capacity(ids.div_ceil(PAGE)), len: 0, key: PhantomData }
     }
 
     pub fn len(&self) -> usize {
@@ -279,14 +390,16 @@ impl<K: Dense, V> IdMap<K, V> {
         &self,
         key: &K,
     ) -> Option<&V> {
-        self.slots.get(key.index())?.as_ref()
+        let at = key.index();
+        self.pages.get(at >> PAGE_BITS)?.as_ref()?[at & (PAGE - 1)].as_ref()
     }
 
     pub fn get_mut(
         &mut self,
         key: &K,
     ) -> Option<&mut V> {
-        self.slots.get_mut(key.index())?.as_mut()
+        let at = key.index();
+        self.pages.get_mut(at >> PAGE_BITS)?.as_mut()?[at & (PAGE - 1)].as_mut()
     }
 
     pub fn contains_key(
@@ -301,12 +414,15 @@ impl<K: Dense, V> IdMap<K, V> {
         &mut self,
         mut keep: impl FnMut(K, &mut V) -> bool,
     ) {
-        for (at, slot) in self.slots.iter_mut().enumerate() {
-            if let Some(value) = slot
-                && !keep(K::at(at), value)
-            {
-                *slot = None;
-                self.len -= 1;
+        for (page, slots) in self.pages.iter_mut().enumerate() {
+            let Some(slots) = slots else { continue };
+            for (at, slot) in slots.iter_mut().enumerate() {
+                if let Some(value) = slot
+                    && !keep(K::at((page << PAGE_BITS) + at), value)
+                {
+                    *slot = None;
+                    self.len -= 1;
+                }
             }
         }
     }
@@ -327,7 +443,8 @@ impl<K: Dense, V> IdMap<K, V> {
         &mut self,
         key: &K,
     ) -> Option<V> {
-        let old = self.slots.get_mut(key.index())?.take();
+        let at = key.index();
+        let old = self.pages.get_mut(at >> PAGE_BITS)?.as_mut()?[at & (PAGE - 1)].take();
         self.len -= usize::from(old.is_some());
         old
     }
@@ -339,24 +456,48 @@ impl<K: Dense, V> IdMap<K, V> {
         make: impl FnOnce() -> V,
     ) -> &mut V {
         let at = key.index();
-        if self.get(&key).is_none() {
-            self.insert(key, make());
+        let slot = &mut Self::page(&mut self.pages, at >> PAGE_BITS)[at & (PAGE - 1)];
+        if slot.is_none() {
+            *slot = Some(make());
+            self.len += 1;
         }
-        self.slots[at].as_mut().expect("just made")
+        slot.as_mut().expect("just made")
     }
 
     pub fn clear(&mut self) {
-        self.slots.clear();
+        self.pages.clear();
         self.len = 0;
     }
 
     /// The pairs, ascending by key.
     pub fn iter(&self) -> impl Iterator<Item = (K, &V)> + '_ {
-        self.slots.iter().enumerate().filter_map(|(at, slot)| Some((K::at(at), slot.as_ref()?)))
+        self.pages
+            .iter()
+            .enumerate()
+            .filter_map(|(page, slots)| Some((page, slots.as_ref()?)))
+            .flat_map(
+                |(page, slots)| {
+                    slots
+                        .iter()
+                        .enumerate()
+                        .filter_map(move |(at, slot)| Some((K::at((page << PAGE_BITS) + at), slot.as_ref()?)))
+                },
+            )
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (K, &mut V)> + '_ {
-        self.slots.iter_mut().enumerate().filter_map(|(at, slot)| Some((K::at(at), slot.as_mut()?)))
+        self.pages
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(page, slots)| Some((page, slots.as_mut()?)))
+            .flat_map(
+                |(page, slots)| {
+                    slots
+                        .iter_mut()
+                        .enumerate()
+                        .filter_map(move |(at, slot)| Some((K::at((page << PAGE_BITS) + at), slot.as_mut()?)))
+                },
+            )
     }
 
     pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
@@ -364,7 +505,13 @@ impl<K: Dense, V> IdMap<K, V> {
     }
 
     pub fn values(&self) -> impl Iterator<Item = &V> + '_ {
-        self.slots.iter().flatten()
+        self.pages.iter().flatten().flat_map(|slots| slots.iter().flatten())
+    }
+
+    /// The slots allocated, for a test that a sparse map holds few.
+    #[cfg(test)]
+    fn held_slots(&self) -> usize {
+        self.pages.iter().flatten().map(|page| page.len()).sum()
     }
 
     fn slot(
@@ -372,10 +519,18 @@ impl<K: Dense, V> IdMap<K, V> {
         key: K,
     ) -> &mut Option<V> {
         let at = key.index();
-        if at >= self.slots.len() {
-            self.slots.resize_with(at + 1, || None);
+        &mut Self::page(&mut self.pages, at >> PAGE_BITS)[at & (PAGE - 1)]
+    }
+
+    /// The slots of page `page`, made if it has none.
+    fn page(
+        pages: &mut Vec<Option<Box<[Option<V>]>>>,
+        page: usize,
+    ) -> &mut [Option<V>] {
+        if page >= pages.len() {
+            pages.resize_with(page + 1, || None);
         }
-        &mut self.slots[at]
+        pages[page].get_or_insert_with(|| (0..PAGE).map(|_| None).collect())
     }
 }
 
@@ -448,6 +603,20 @@ mod tests {
     /// Block addresses stand in for the B-trees of them (`BTreeSet<i64>`,
     /// `BTreeMap<i64, _>`): the same members in the same ascending order,
     /// and the set operations the passes used on them.
+    /// A map of a few ids among many held a slot for every id below the
+    /// largest: 1,000,001 for two entries (`get_constant_evolving_phi_operands`
+    /// memoised a few instructions of a body of thousands, 22 K instructions
+    /// a call in `reserve`). It holds pages, one per few ids.
+    #[test]
+    fn test_a_map_of_two_far_ids_holds_two_pages_not_a_million_slots() {
+        let mut map: IdMap<u32, u8> = IdMap::new();
+        map.insert(3, 1);
+        map.insert(1_000_000, 2);
+        assert_eq!((map.get(&3), map.get(&1_000_000), map.get(&4)), (Some(&1), Some(&2), None));
+        assert_eq!(map.len(), 2);
+        assert!(map.held_slots() <= 128, "{} slots held", map.held_slots());
+    }
+
     #[test]
     fn test_a_set_of_block_addresses_agrees_with_the_btree_it_replaces() {
         let (a, b): (Vec<i64>, Vec<i64>) =

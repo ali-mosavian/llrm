@@ -1,0 +1,16 @@
+Printing analysis 'Loop Access Analysis' for function 'f':
+  loop:
+    Report: unsafe dependent memory operations in loop. Use #pragma clang loop distribute(enable) to allow loop distribution to attempt to isolate the offending operations into a separate loop
+Unsafe indirect dependence.
+    Dependences:
+      IndirectUnsafe:
+          %v = load i32, ptr %p, align 4 -> 
+          store i32 %w, ptr %p, align 4
+
+    Run-time memory checks:
+    Grouped accesses:
+
+    Non vectorizable stores to invariant address were not found in loop.
+    SCEV assumptions:
+
+    Expressions re-written:

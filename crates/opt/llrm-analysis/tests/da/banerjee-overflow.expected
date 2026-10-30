@@ -1,0 +1,9 @@
+== --test banerjee-miv --tbaa
+@banerjee_delta_ovfl
+  output [* *]!
+  output [* *|<]!
+  output [* *]!
+@banerjee_no_nsw
+  output [* *]!
+  output [* *|<]!
+  output [* *]!

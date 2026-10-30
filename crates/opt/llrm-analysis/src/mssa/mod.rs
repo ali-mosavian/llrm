@@ -7,13 +7,21 @@
 //! defining access, per-block access and def lists in order); dense ids and
 //! `Vec` are the representation under it.
 
+pub mod alias;
 pub mod build;
+pub mod edit;
+pub mod phitrans;
 pub mod shadow;
+pub mod updater;
 pub mod verify;
+pub mod view;
+pub mod walker;
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+#[cfg(test)]
+mod updater_tests;
 
 use std::cell::RefCell;
 
@@ -51,8 +59,11 @@ pub struct MemoryAccess {
     pub defining: Option<AccessId>,
     /// `MemoryPhi`: `(getIncomingBlock(i), getIncomingValue(i))`.
     pub incoming: Vec<(BlockId, AccessId)>,
-    /// `MemoryUseOrDef::getOptimized`, set by `OptimizeUses` (stage 2).
+    /// A def's optimized access (operand 1), none for a use (whose optimized
+    /// access is its defining access).
     pub optimized: Option<AccessId>,
+    /// `OptimizedID`: the id of the access this one was optimized to.
+    pub optimized_id: Option<u32>,
     /// `MemoryAccess::users`: the uses and defs that take this one as their
     /// defining access. Each knows its place here (`user_slot`), so that
     /// leaving costs what `Use::removeFromList` does, not a scan.
@@ -61,8 +72,15 @@ pub struct MemoryAccess {
     pub phi_users: Vec<AccessId>,
     /// Where this access stands in its defining access's `users`.
     pub user_slot: u32,
+    /// The defs that take this one as their optimized access (operand 1).
+    pub optimized_users: Vec<AccessId>,
+    /// Where this def stands in its optimized access's `optimized_users`.
+    pub optimized_slot: u32,
     /// `MemoryDef::getID` and `MemoryPhi::getID`.
     pub id: u32,
+    /// Removed from the graph (`delete MA`): its place in the arena stays, in
+    /// no list.
+    pub dead: bool,
 }
 
 /// `AccessList` and `DefsList` of one block
@@ -74,6 +92,7 @@ pub struct BlockAccesses {
 }
 
 /// [`MemorySSA`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/MemorySSA.h#L702).
+#[derive(Clone)]
 pub struct Mssa {
     pub(crate) accesses: Vec<MemoryAccess>,
     /// `PerBlockAccesses` and `PerBlockDefs`.
@@ -85,6 +104,9 @@ pub struct Mssa {
     /// `BlockNumbering` and `BlockNumberingValid`.
     pub(crate) block_numbering: RefCell<IdMap<AccessId, u32>>,
     pub(crate) block_numbering_valid: RefCell<IdSet<BlockId>>,
+    /// Entries of a use list looked at to take an access out of it: one a
+    /// removal, for the tests that hold the cost linear.
+    pub(crate) use_list_steps: u64,
 }
 
 impl Mssa {
@@ -139,7 +161,7 @@ impl Mssa {
         &self,
         block: BlockId,
     ) -> Option<&[AccessId]> {
-        self.per_block.get(&block).map(|lists| lists.accesses.as_slice())
+        self.per_block.get(&block).map(|lists| lists.accesses.as_slice()).filter(|list| !list.is_empty())
     }
 
     /// `getBlockDefs`.
@@ -167,6 +189,7 @@ impl Mssa {
     ) {
         if let Some(old) = self.accesses[access as usize].defining {
             let slot = self.accesses[access as usize].user_slot as usize;
+            self.use_list_steps += 1;
             let users = &mut self.accesses[old as usize].users;
             debug_assert_eq!(users[slot], access);
             users.swap_remove(slot);
@@ -179,6 +202,78 @@ impl Mssa {
             let users = &mut self.accesses[new as usize].users;
             self.accesses[access as usize].user_slot = users.len() as u32;
             self.accesses[new as usize].users.push(access);
+        }
+    }
+
+    /// Use-list entries looked at so far to take accesses out of lists.
+    pub fn use_list_steps(&self) -> u64 {
+        self.use_list_steps
+    }
+
+    /// `MemoryUseOrDef::setOptimized`: for a use, `setOptimized` also sets
+    /// operand 0 (the defining access); for a def, operand 1.
+    pub fn set_optimized(
+        &mut self,
+        access: AccessId,
+        to: AccessId,
+    ) {
+        let id = self.accesses[to as usize].id;
+        if self.accesses[access as usize].kind == Kind::Use {
+            self.set_defining_access(access, Some(to));
+        } else {
+            self.leave_optimized(access);
+            self.accesses[access as usize].optimized = Some(to);
+            let users = &mut self.accesses[to as usize].optimized_users;
+            self.accesses[access as usize].optimized_slot = users.len() as u32;
+            self.accesses[to as usize].optimized_users.push(access);
+        }
+        self.accesses[access as usize].optimized_id = Some(id);
+    }
+
+    /// `MemoryUseOrDef::getOptimized`.
+    pub fn get_optimized(
+        &self,
+        access: AccessId,
+    ) -> Option<AccessId> {
+        let one = self.access(access);
+        if one.kind == Kind::Use { one.defining } else { one.optimized }
+    }
+
+    /// `MemoryUseOrDef::isOptimized`.
+    pub fn is_optimized(
+        &self,
+        access: AccessId,
+    ) -> bool {
+        let one = self.access(access);
+        self.get_optimized(access).is_some_and(|target| one.optimized_id == Some(self.access(target).id))
+    }
+
+    /// `MemoryUseOrDef::resetOptimized`.
+    pub(crate) fn reset_optimized(
+        &mut self,
+        access: AccessId,
+    ) {
+        self.accesses[access as usize].optimized_id = None;
+        if self.accesses[access as usize].kind != Kind::Use {
+            self.leave_optimized(access);
+            self.accesses[access as usize].optimized = None;
+        }
+    }
+
+    /// A def stops taking its optimized access as operand 1.
+    fn leave_optimized(
+        &mut self,
+        access: AccessId,
+    ) {
+        if let Some(old) = self.accesses[access as usize].optimized {
+            let slot = self.accesses[access as usize].optimized_slot as usize;
+            self.use_list_steps += 1;
+            let users = &mut self.accesses[old as usize].optimized_users;
+            debug_assert_eq!(users[slot], access);
+            users.swap_remove(slot);
+            if let Some(&moved) = users.get(slot) {
+                self.accesses[moved as usize].optimized_slot = slot as u32;
+            }
         }
     }
 
@@ -253,7 +348,7 @@ impl Mssa {
         }
         let (a, b) = (self.access(dominator).block, self.access(dominatee).block);
         if a != b {
-            return self.dominance.dominates(crate::cfg::id(a), crate::cfg::id(b));
+            return self.dominance.dominates_resolved(crate::cfg::id(a), crate::cfg::id(b));
         }
         self.locally_dominates(dominator, dominatee)
     }
@@ -275,7 +370,7 @@ impl Mssa {
             if use_block != self.access(dominator).block {
                 return self
                     .dominance
-                    .dominates(crate::cfg::id(self.access(dominator).block), crate::cfg::id(use_block));
+                    .dominates_resolved(crate::cfg::id(self.access(dominator).block), crate::cfg::id(use_block));
             }
             // If the use block and the def block are the same, compare locally.
             return self.locally_dominates(dominator, user_access.incoming[at].1);

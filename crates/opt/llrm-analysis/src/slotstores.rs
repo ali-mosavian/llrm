@@ -48,7 +48,8 @@
 //! not exact. Consumer: [`crate::alias`] (`point_values`).
 //!
 //! # Needs
-//! [`crate::memory`] (`MemRef`, `Unit::exposed`), [`crate::cfg`].
+//! [`crate::basicaa`] (`object_cell`), [`crate::memory`] (`Unit::exposed`),
+//! [`crate::cfg`].
 //!
 //! # See also
 //! LLVM `PromoteMemToReg`
@@ -63,8 +64,9 @@ use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::hash::{HashMap, HashSet};
 
+use crate::basicaa::object_cell;
 use crate::cfg;
-use crate::memory::{MemRef, Unit};
+use crate::memory::Unit;
 
 /// A cell of a slot: its bytes, `low..high`.
 type Cell = (i64, i64);
@@ -143,12 +145,12 @@ fn ssa_reaching(
     let mut cells: IdMap<ValueId, BTreeSet<Cell>> = IdMap::new();
     let mut loaded: IdMap<InstId, (ValueId, Cell)> = IdMap::new();
     for load in loads.iter() {
-        let Some(reference) = MemRef::of(unit, load) else { continue };
-        let Some(Operand::Value(slot)) = reference.root else { continue };
-        if !is_alloca(unit, slot) || reference.base.is_some() {
+        let Some(place) = object_cell(unit, load) else { continue };
+        let Operand::Value(slot) = place.object else { continue };
+        if !is_alloca(unit, slot) || place.indexed {
             continue;
         }
-        let cell = (reference.disp, reference.disp + i64::from(reference.width));
+        let cell = (place.offset, place.offset + place.size as i64);
         cells.get_or_insert_with(slot, BTreeSet::new).insert(cell);
         loaded.insert(load, (slot, cell));
     }
@@ -173,7 +175,7 @@ fn ssa_reaching(
     let mut by_block: IdMap<i64, Vec<Event>> = IdMap::new();
     for block in &graph {
         let events = by_block.get_or_insert_with(block.at, Vec::new);
-        for &inst in function.block(cfg::block(block.at)).instructions() {
+        for inst in function.iter_block(cfg::block(block.at)) {
             let op = function.instruction(inst);
             match op.opcode {
                 Opcode::Load { .. } => {
@@ -189,11 +191,9 @@ fn ssa_reaching(
                         // The cell it writes, or any of the slot where its
                         // address is not an offset of
                         // the slot's own.
-                        let cell = MemRef::of(unit, inst)
-                            .filter(|reference| {
-                                reference.root == Some(Operand::Value(slot)) && reference.base.is_none()
-                            })
-                            .map(|reference| (reference.disp, reference.disp + i64::from(reference.width)));
+                        let cell = object_cell(unit, inst)
+                            .filter(|place| place.object == Operand::Value(slot) && !place.indexed)
+                            .map(|place| (place.offset, place.offset + place.size as i64));
                         events.push(Event::Store { slot, cell, inst });
                     }
                     // Another object's address is no slot's.
@@ -277,7 +277,7 @@ fn ssa_reaching(
     let successors: IdMap<i64, &cfg::Successors> = graph.iter().map(|block| (block.at, &block.succ)).collect();
     let mut children: IdMap<i64, Vec<i64>> = IdMap::new();
     for block in &graph {
-        if let Some(parent) = dominance.immediate(block.at) {
+        if let Some(parent) = dominance.immediate(unit.function, block.at) {
             children.get_or_insert_with(parent, Vec::new).push(block.at);
         }
     }
@@ -388,8 +388,7 @@ fn named_plainly(
                 Opcode::Load { .. } | Opcode::Store { .. }
                     if one.index as usize == usize::from(matches!(op.opcode, Opcode::Store { .. })) =>
                 {
-                    let named = MemRef::of(unit, one.user)
-                        .is_some_and(|reference| reference.root == Some(Operand::Value(slot)));
+                    let named = object_cell(unit, one.user).is_some_and(|place| place.object == Operand::Value(slot));
                     if !named {
                         return false;
                     }

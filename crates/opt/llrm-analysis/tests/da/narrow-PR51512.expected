@@ -1,0 +1,5 @@
+== --test all
+@foo
+  output [0 S]!
+  output [0 0|<]!
+  none!

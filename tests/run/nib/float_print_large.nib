@@ -1,0 +1,6 @@
+# print_float's inlined digit loop printed 1.989e30 as 1.18553638452002971189248e+23.
+const SUN: f64 = 1.989e30
+
+fn main() -> i16:
+    print(f"sun {SUN} kg")
+    return 0

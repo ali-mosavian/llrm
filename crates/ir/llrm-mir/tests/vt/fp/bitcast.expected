@@ -1,0 +1,15 @@
+b 0 all=3ff/? nan=3ff/? neg=3ff/?
+b 1 all=3ff/? nan=3ff/? neg=3ff/?
+b 2 all=3c3/0 nan=3c3/0 neg=3c3/0
+b 3 all=3f/1 nan=3f/1 neg=3f/1
+b 4 all=100/0 nan=100/0 neg=100/0
+b 5 all=2/? nan=2/? neg=2/?
+b 6 all=200/0 nan=200/0 neg=200/0
+b 7 all=40/0 nan=40/0 neg=40/0
+b 8 all=100/0 nan=100/0 neg=100/0
+b 9 all=3ff/? nan=3ff/? neg=3ff/?
+b 10 all=3ff/? nan=3ff/? neg=3ff/?
+b 11 all=3ff/? nan=3ff/? neg=3ff/?
+b 12 all=3c3/0 nan=3c3/0 neg=3c3/0
+b 13 all=3c3/0 nan=3c3/0 neg=3c3/0
+b 14 all=3c3/0 nan=3c3/0 neg=3c3/0

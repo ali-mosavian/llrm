@@ -1,7 +1,6 @@
 ; RUN: llrm-mir %s
 ; CHECK: define {{.*}} @"_bench_nbody_fixed@3"(
 
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
 
 @_pos_x = internal global [24 x i8] zeroinitializer
 @_pos_y = internal global [24 x i8] zeroinitializer

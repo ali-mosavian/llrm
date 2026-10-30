@@ -69,7 +69,7 @@ A function is eligible when nothing outside the module reaches it (`direct_only`
 
 | Target | What an eligible function becomes |
 |---|---|
-| x86-m32 | `private = "watcall32"`: every such non-variadic function whose convention is an ABI family's own (`watcall32`, `sysv32`) takes `watcall32`, and every call of it with it. No price is asked: registers cost no more than the stack at either end. A `__cdecl` function under `-mabi=watcom` is not an ABI family's own and keeps `cdecl32`. |
+| x86-m32 | `private = "fastcc32"` (the pin's `fastcc`, CC1): every such non-variadic function whose convention is an ABI family's own (`watcall32`, `sysv32`) takes `fastcc32`, and every call of it with it. No price is asked. `LLRM_PRIVATE_WATCALL=1` gives them `watcall32` instead, to compare. A `__cdecl` function under `-mabi=watcom` is not an ABI family's own and keeps `cdecl32`. |
 | x86-m16 | no `private`. The callee-pop twin (`callee_pop`: `cdecl16` to `fastcc`, `regparm3` to `regparm3pop`) when it pays: internal, not variadic, with arguments, never named but as a callee, called only in its own convention, and `calls * cleanup(words) + pop >= returns * return_pops`, in clocks or, at `-Os`, bytes |
 
 Sources: [`privately`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/calleepop.rs#L150) and [`decided`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/calleepop.rs#L71); tests `calleepop_tests.rs` and `a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_stack`.

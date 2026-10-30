@@ -1,8 +1,0 @@
-[package]
-name = "buildprs"
-version = "0.1.0"
-edition = "2021"
-description = "Rust implementation of the QBasic buildprs parser-table generator"
-license = "MIT"
-
-[dependencies]

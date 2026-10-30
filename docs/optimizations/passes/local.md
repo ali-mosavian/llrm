@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/local.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/local.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:7e9de207f2bcbe87ee888cd0bab5e5b26950c9bb8a9d816b41801f6262a457bb -->
+<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:aada91e94acf06850fc46b5b235cf2d80fad9b2d763a73cf06b68da02218d535 -->
 
 # local
 
@@ -67,6 +67,17 @@ DEVIATE, each with the fact MIR lacks:
     is `valuetracking::underlying`, which does not look through a `select`,
     a `phi` or a call that returns an argument: two pointers that differ
     only below one are not replaceable here, where LLVM may say they are.
+24. `MergeBlockIntoPredecessor` erases `PTI` after redirecting the uses of
+    `BB`; here before. A `DbgMarker` hands `PTI`'s records to the next
+    instruction or the trailing list, which `STI` adopts when it moves.
+    `Function::erase` re-homes a record when its instruction goes
+    (`settle_records`), and the branch must still name `BB` for that to
+    reach `STI`: redirected first, it names its own block and the records
+    stay on the erased branch. Asserted by
+    `merging_leaves_the_records_of_the_old_branch_before_the_new_terminator`.
+25. `!llrm.descriptor` (ours, no LLVM kind): kept where both instructions
+    carry it, dropped otherwise. LLVM's unknown-kind arm would drop it, and
+    the merged `inttoptr` then reads as a forged selector (`forging`).
 
 ## Example
 Two phis with the same arms in one block. Before:

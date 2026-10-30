@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/assemble.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/assemble.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/assemble.rs sha256:5c5613db77e50a7b9379ecbec608287e42f4192ff781b02ebb082413223cc810 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/assemble.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/assemble.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/assemble.rs sha256:b86558cd3f1666a001cae8afa450bbc2a6017d21928a9c84a7c0d1fb1a55d2ef -->
 
 # assemble
 
@@ -23,20 +23,15 @@ flowchart TB
   classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
   staged["<b>staged</b><br/><small>isel, framefree, frame::of<br/>LIR over virtual regs</small>"]:::src
-  a["<b>route A</b><br/><small>machine phases,<br/>allocator alone</small>"]:::mid
-  b["<b>route B</b><br/><small>machine phases<br/>with ssaspill</small>"]:::mid
-  pick(["<b>cheaper one kept</b>"]):::mid
+  a["<b>machine phases</b><br/><small>the allocator alone</small>"]:::mid
   far["<b>far frame cells and a spill</b><br/><small>area: relayout::laid_again<br/>fewer far cells kept</small>"]:::mid
   facts["<b>-Omax, a callee's fact used</b><br/><small>again without facts<br/>cheaper kept</small>"]:::mid
   pad["<b>landing pad moved last</b><br/><small>(landed_last)</small>"]:::mid
   fin["<b>assembled_by: cleaned returns,</b><br/><small>duplicated returns,<br/>shrink-wrap tails<br/>masm::Procedure</small>"]:::out
   staged --> a
-  staged --> b
-  a --> pick
-  b --> pick
   staged --> far
   staged --> facts
-  pick --> pad
+  a --> pad
   far --> pad
   facts --> pad
   pad --> fin
@@ -44,20 +39,10 @@ flowchart TB
 
 *How a staged procedure becomes a masm Procedure*
 
-`phased_to` runs the list of `flow::machine_with` over the staged body
+`phased` runs the list of `flow::machine_with` over the staged body
 (`prologue` is skipped; masm writes the prologue from the frame's reserve).
 Each phase's output is checked, and `ISEL_DUMP=1` prints the LIR after
-each. The two routes differ in whether `ssaspill` is on that list. A
-route's price is the instructions and memory operands it is expected to
-execute (`executed::work`), or its encoded bytes at -Os, plus two for each
-register it must save; a tie is decided by the other measure.
-
-Below -Omax `directed` runs the allocator alone first and runs the spiller
-route only if at least 0.5% of the weighted instructions are spill or
-frame-cell traffic; `LLRM_CANDIDATES=spiller|allocator` forces one route,
-`measure` runs both whatever the traffic and `LLRM_DEBUG=routes` says what
-the allocator alone left. With `-fallocation-routes` off (the default below -Omax) the allocator
-runs alone.
+each.
 
 When all functions are done the module's constants are added to the data,
 stack checks the program proves unneeded are elided, undefined names
@@ -84,7 +69,7 @@ _bump endp
 
 From `--dump` (`mir/21-homes.ll`) and `-S` of a nib program at -O2 with
 `-fno-inline-functions -fno-inline-functions-called-once -fno-ipa-cp-clone
--fno-ipa-vrp -march=i386`.
+-march=i386`.
 
 ## Runs
 Once per module. Per-function candidates are described above; the gating

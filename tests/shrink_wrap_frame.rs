@@ -1,7 +1,7 @@
 //! ShrinkWrap places the whole prologue: a function that leaves before it
 //! touches its frame builds none for that path.
 
-use std::process::Command;
+mod common;
 
 const KERNEL: &str = "
 extern int g(int *);
@@ -17,12 +17,8 @@ int f(int n)
 fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(scratch.path())
-        .args(flags)
-        .args(["-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(scratch.path()).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(scratch.path().join("a.s")).unwrap()
 }

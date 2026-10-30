@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selects.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selects.rs sha256:dc483d5566192eb2c3a59e2a2547f0b6d754109ff20704cdd7bd26c6076964a2 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/selects.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/selects.rs sha256:17d3e1973353111fc1655ff9e9b9acda05499552e3210ad9f0eb3b85fe0f13e3 -->
 
 # selects
 
@@ -21,6 +21,22 @@ replaces the select's uses:
                                join:   %r = phi [a, taken], [b, block]
                                        rest
 ```
+
+DEVIATE S3 (no number): `llvm.usub.sat` is expanded here, before selection,
+to `umax(a, b) - b`. The pin expands it in the DAG legalizer
+(`TargetLowering::expandAddSubSat`, `TargetLowering.cpp`) to a subtraction
+and a conditional move. Exit: the legalizer's expansion lands.
+
+DEVIATE S2 (no number): the pin keeps the select to instruction selection.
+CodeGenPrepare's `optimizeSelectInst` forms no branch where
+`isPredictableSelectExpensive` is false (in-order i486, `CodeGenPrepare.cpp`
+`isFormingBranchFromSelectProfitable`), and `X86TargetLowering::
+EmitLoweredSelect` then expands the select to a diamond on machine IR, with
+both operands computed before it. Ours expands in MIR. The operand sinking
+of `sinkSelectOperand`, which the pin does not do here, is deleted: it
+moved nothing over 834 objects. Exit: the expansion at selection, the
+registry slot `emit-lowered-select` (lir-cleanup-port, PR by 2026-11-13;
+##3052).
 
 The loop is repeated until no select is left in any function, so two selects
 in one block each get their own split. The result is checked by an

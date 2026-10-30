@@ -53,8 +53,8 @@
 //!
 //! # Runs
 //! Once per pass of the function fixed point, after `algebraic`, and again
-//! after the loop-header copy (`-ftree-ch`). `lsr`, `window`, `indvars` and
-//! `jumpthread` call it on the code they leave. `markers_dropped` runs once
+//! after the loop-header copy (`-ftree-ch`). `lsr`, `window` and `indvars`
+//! call it on the code they leave. `markers_dropped` runs once
 //! after the whole pipeline, before exception-handling preparation and
 //! selection, once every reader has used the assumptions. `-fno-tree-dce` turns
 //! off the pass only, not those calls; nothing runs at -O0.
@@ -63,8 +63,8 @@
 //! Blocks and edges are unchanged: dominators and loops are preserved.
 //!
 //! # See also
-//! [`crate::dse`] removes dead stores; [`crate::promote`] makes the loads that
-//! make a store dead; [`crate::loopmotion`] sinks stores out of loops.
+//! [`crate::deadstore`] removes dead stores; [`crate::promote`] makes the loads
+//! that make a store dead; [`crate::loopmotion`] sinks stores out of loops.
 
 use std::collections::BTreeSet;
 
@@ -111,21 +111,16 @@ impl FunctionPass for Dead {
 /// Instructions whose results nothing that stays reads, removed. Whether
 /// any went.
 pub fn dead(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     function: &mut Function,
 ) -> bool {
     #[cfg(test)]
     SCANNED.with(|scanned| {
-        scanned.set(
-            scanned.get()
-                + function.layout().iter().map(|&block| function.block(block).instructions().len()).sum::<usize>(),
-        )
+        scanned.set(scanned.get() + function.layout().iter().map(|&block| function.block(block).len()).sum::<usize>())
     });
     let markers = _unneeded_markers(context, callees, function);
-    for &marker in &markers {
-        function.erase(marker).expect("a call with no result");
-    }
+    function.erase_all(&markers).expect("a call with no result");
     let alive = live(context, callees, function);
     let gone = function
         .walk()
@@ -142,9 +137,7 @@ pub fn dead(
             function.replace_all_uses_with(result, Operand::Constant(poison));
         }
     }
-    for &inst in &gone {
-        function.erase(inst).expect("nothing reads it");
-    }
+    function.erase_all(&gone).expect("nothing reads it");
     ssa::pruned_phis(function, &alive) | !gone.is_empty() | !markers.is_empty()
 }
 
@@ -279,7 +272,7 @@ pub fn markers_dropped(module: &mut llrm_mir::Module) {
             .globals
             .iter()
             .enumerate()
-            .filter(|(_, global)| global.name.as_deref().and_then(Intrinsic::named) == Some(wanted))
+            .filter(|(_, global)| global.intrinsic() == Some(wanted))
             .map(|(at, _)| llrm_mir::GlobalId(at as u32))
             .collect::<BTreeSet<_>>()
     };

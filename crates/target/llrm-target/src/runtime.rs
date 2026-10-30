@@ -4,6 +4,12 @@
 //! language, `runtime/<language>/<language>.toml`, with the files it names
 //! embedded; a language reads what it needs and never asks which target.
 
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+
+static PARSED: LazyLock<Mutex<HashMap<usize, Result<Arc<toml::Table>, String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// One language's runtime on one target.
 #[derive(Clone, Copy, Debug)]
 pub struct Description {
@@ -25,9 +31,15 @@ impl Description {
         self.files.iter().find(|(one, _)| *one == name).map(|(_, text)| *text)
     }
 
-    /// The description parsed.
-    pub fn table(&self) -> Result<toml::Table, String> {
-        self.text.parse().map_err(|error: toml::de::Error| error.to_string())
+    /// The description parsed, once per description (an embedded text, so
+    /// its address names it) however often it is asked.
+    pub fn table(&self) -> Result<Arc<toml::Table>, String> {
+        let key = self.text.as_ptr() as usize;
+        let mut parsed = PARSED.lock().unwrap_or_else(PoisonError::into_inner);
+        parsed
+            .entry(key)
+            .or_insert_with(|| self.text.parse().map(Arc::new).map_err(|error: toml::de::Error| error.to_string()))
+            .clone()
     }
 
     /// What the assembler is told of the description: `assembler_defines =

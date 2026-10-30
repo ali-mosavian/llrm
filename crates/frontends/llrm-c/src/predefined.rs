@@ -91,6 +91,7 @@ pub fn header(
         define(&format!("__{name}_DIG__"), digits.to_string());
         define(&format!("__{name}_MANT_DIG__"), mantissa.to_string());
     }
+    out.extend(crate::builtins::defines());
     out.join("\n") + "\n"
 }
 

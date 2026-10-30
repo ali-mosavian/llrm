@@ -2,7 +2,6 @@
 ; CHECK: define {{.*}} @_rot(
 
 ; Ten floats rotating through a loop: a cycle of ten phi copies (llrm-c -O2, 11-gepoffset.ll).
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
 
 define i32 @_rot(i16 %0, float %1) addrspace(1) memory(none) willreturn nounwind norecurse {
 b1:

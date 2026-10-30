@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/transform_tests.rs` (`d_tests`), each
+//! Adapted from llrm-codegen's `optimize/transform_tests.rs` (`d_tests`), each
 //! body now MIR text run by llrm-mir's interpreter.
 
 use llrm_mir::module::Module;

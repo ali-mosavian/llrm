@@ -5,7 +5,8 @@
 ;; retn: never returns: LL$EXIT with main's result
 ;;
 ;; chng: oct/26 restyled, symbols renamed to LL$ [ali]
-;; obs.: The language's start-up hook runs before `main` when its description names one.
+;; obs.: LL_MAIN names the entry: `_main`, or `main_` for a program from llrm-cc (Watcom's register convention).
+;;       The language's start-up hook runs before `main` when its description names one.
 
 ;; The start-up under DOS/32A: flat, CS = DS = ES = SS. The extender enters with ES on the PSP, so
 ;; ES is set to DS; it zero-fills the image's BSS and sets the stack `.stack` names. `LL$STACK_LOW`, the
@@ -14,7 +15,10 @@
 .386
 .model flat
 
-extrn _main:near
+ifndef LL_MAIN
+LL_MAIN textequ <_main>
+endif
+extrn LL_MAIN:near
 extrn LL$STACK_LOW:dword
 extrn LL$EXIT:near
 extrn LL$PSP:word
@@ -41,7 +45,7 @@ start:
 ifdef LANG_INIT
                 call    LANG_INIT
 endif
-                call    _main
+                call    LL_MAIN
                 push    eax
                 call    LL$EXIT
 

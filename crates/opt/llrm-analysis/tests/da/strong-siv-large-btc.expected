@@ -1,0 +1,10 @@
+== --tbaa
+@strong_siv_large_btc
+  none!
+  output [-1]!
+  none!
+== --test strong-siv --tbaa
+@strong_siv_large_btc
+  none!
+  output [-1]!
+  none!

@@ -1,0 +1,37 @@
+== -loop-interchange-profitabilities=ignore -loop-interchange-reduction-to-mem
+@f
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v14, %B7 ], [ 0, %B1 ]
+  %v1 = phi double [ %v12, %B7 ], [ fp(0000000000000000), %B1 ]
+  %v2 = phi i1 [ false, %B7 ], [ true, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v3 = phi i64 [ %v10, %B6 ], [ 0, %B3 ]
+  %v4 = getelementptr double, ptr %A, i64 %v3
+  br label %B5
+B5:
+  %v5 = load double, ptr %v4
+  %v6 = select i1 %v2, double fp(0000000000000000), double %v5
+  %v7 = add i64 %v0, 1
+  %v8 = fadd reassoc double fp(3FF0000000000000), %v6
+  store double %v8, ptr %v4
+  %v9 = icmp eq i64 %v7, 10
+  br label %B6
+B6:
+  %v10 = add i64 %v3, 1
+  %v11 = icmp eq i64 %v10, 10
+  br i1 %v11, label %B7, label %B4
+B7:
+  %v12 = phi double [ %v8, %B6 ]
+  %v13 = phi double [ %v8, %B6 ]
+  %v14 = add i64 %v0, 1
+  %v15 = icmp eq i64 %v14, 10
+  br i1 %v15, label %B8, label %B2
+B8:
+  ret void

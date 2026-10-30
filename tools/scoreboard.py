@@ -25,6 +25,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import llrmbin  # noqa: E402
 spec = importlib.util.spec_from_file_location("compile_cost", HERE / "compile-cost.py")
 compile_cost = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compile_cost)
@@ -52,8 +54,8 @@ GCC = ["gcc", "-m32", "-march=i486", "-w", "-Dfar=", "-fno-pic", "-fno-stack-pro
 
 
 def instructions(command: list[str], env: dict | None = None, ok: bool = False) -> tuple[int | None, str]:
-    with tempfile.NamedTemporaryFile("r", dir=SCRATCH) as out:
-        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", "-o", out.name, "--", *command],
+    with tempfile.NamedTemporaryFile("r", dir=SCRATCH) as out, llrmbin.with_object(command) as real:
+        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", "-o", out.name, "--", *real],
                               capture_output=True, text=True, env={**os.environ, **(env or {})})
         counts = [line.split(",") for line in out.read().splitlines() if "instructions" in line]
     if ok and done.returncode:
@@ -69,7 +71,7 @@ def measure(llrm: Path, levels: list[str], jobs: int) -> list[dict]:
 
         def one(job):
             name, level, source, flags = job
-            made, err = instructions([str(llrm), level, *flags, str(source), "-o", os.devnull],
+            made, err = instructions([str(llrm), level, *flags, str(source), "-o", llrmbin.OBJECT],
                                      {"LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"}, ok=True)
             rows = {m.group(2): float(m.group(1)) for m in ROW.finditer(err)}
             run = {"file": name, "set": "qcport" if name.startswith("qcport/") else "programs", "level": level, "llrm": made,
@@ -145,8 +147,6 @@ def main() -> int:
     parser.add_argument("--json", type=Path, help="write the runs here")
     parser.add_argument("llrm", nargs="?", type=Path)
     args = parser.parse_args()
-    sys.path.insert(0, str(HERE))
-    import llrmbin
 
     runs = measure(args.llrm or llrmbin.bin_dir() / "llrm-c", [f"-{level.lstrip('-')}" for level in args.levels], args.jobs)
     if args.json:

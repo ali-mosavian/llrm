@@ -40,12 +40,12 @@ def runtime16(work: Path) -> dict[str, Path]:
     """The real-mode runtime's objects by source name, from the cache where nothing it is made of has changed."""
     work.mkdir(parents=True, exist_ok=True)
     include = dosbatch.c_include(dosbatch.REAL_MODE, work)
-    tree, tools = qb32._tree(), qb32._stamp("llrm-c", "jwasm")
+    tree, tools = qb32._tree(), qb32._stamp(dosbatch.c_frontend(), "jwasm")
     made: dict[str, Path] = {}
 
     def make(name: str, source: Path, produce) -> None:
         obj = work / f"{name}.obj"
-        qb32.cached(qb32.runtime_key(source, tree, tools) + f"|{dosbatch.REAL_MODE}|{name}", obj, lambda: produce(obj))
+        qb32.cached(qb32.runtime_key(source, tree, tools) + f"|{dosbatch.REAL_MODE}|{qbruntime.c_build_key()}|{name}", obj, lambda: produce(obj))
         made[name] = obj
 
     shared = qbruntime.shared_sources()
@@ -61,7 +61,7 @@ def runtime16(work: Path) -> dict[str, Path]:
             make(
                 f"{source.stem}_{group}",
                 source,
-                lambda obj, source=source, bit=bit: dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "c"), f"OS_GROUPS={bit}"),
+                lambda obj, source=source, bit=bit: dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "qb"), f"OS_GROUPS={bit}"),
             )
     return made
 
@@ -100,13 +100,13 @@ def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], fl
     # a program that needs hand porting to the flat target (DEF SEG is ignored there) has NAME.flat.bas beside it
     source = flat_source(source) if target == FLAT else source
     extra = ["-march=i486", dosbatch.m_flag(FLAT)] if target == FLAT else []
-    done = dosbatch.subprocess.run([str(dosbatch.BIN / "llrm-qb"), *compile_arguments(source, flags, target, obj)], capture_output=True, text=True)
+    done = dosbatch.subprocess.run(dosbatch.with_isel([str(dosbatch.BIN / "llrm-qb"), *compile_arguments(source, flags, target, obj)]), capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         raise dosbatch.BuildError(f"{source.name} {target}: {(done.stderr or done.stdout).strip()[-400:]}")
     libs = qbruntime.linked_objects(source, work, "llrm", tuple(extra[1:]) if target == FLAT else (), f".{target}")
     if target == FLAT:
         loaders = dosbatch.link_target(
-            qb32.TARGET, obj, exe, work, listing, before=before, runtime=(qb32.START_FILES, []), objects_after=(*libs, *needed((obj, *libs), objects[target])), image=image
+            qb32.TARGET, obj, exe, work, listing, before=before, runtime=(qb32.START_FILES, []), objects_after=(*libs, *needed((obj, *libs), objects[target])), image=image, defines=dosbatch.os_defines(qb32.TARGET, "qb")
         )
         return Built(exe, tuple(loaders))
     link16(obj, objects[target], exe, libs)

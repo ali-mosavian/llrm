@@ -1,40 +1,11 @@
 //! The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`],
-//! [`crate::unswitch`] and [`crate::loopexit`] share: value reuse, liveness of
+//! share: equal calls, liveness of
 //! values, and cleanup of phis after an edge goes.
 //!
 //! # How it works
-//! `subexpressions` is common-subexpression elimination. Blocks are taken in
-//! layout order; each instruction whose whole answer is in its operands gets a
-//! key (`_computation`): the opcode with its predicate, cast and flags, the
-//! type, and the operands as they stand once earlier replacements are made. A
-//! commutative pair (`add`, `mul`, `and`, `or`, `xor`, `icmp eq` and `ne`) is
-//! sorted and a pair of equal operands is one. The pure kinds are in `_PURE`,
-//! plus floating arithmetic and its conversions, which have no exceptions
-//! here. An instruction whose key an earlier one has, where that one has
-//! certainly run (`_reaches`: in the same block before it, or in a dominating
-//! block), reads the earlier result and is erased. A load is reused only
-//! within its block and only if nothing between the two may write its bytes
-//! (`_undisturbed`, from `memoryssa::Accesses`); with `avoid_store_crossing` a
-//! store between them refuses it too.
-//!
 //! `equal_calls` makes two calls with one callee and arguments one when the
 //! caller's `silent` says they touch no memory: the later takes the earlier's
 //! result where the earlier has certainly run.
-//!
-//! `forwarded` is store-to-load forwarding across blocks: each load that
-//! `avail::forwardable_walk` says a known value serves becomes that value.
-//! `Crossings` answers whether a store lies on some path between the value's
-//! definition and the load, for `avoid_store_crossing`; `Forwarding` keeps the
-//! walk for the second numbering of one function.
-//!
-//! ```text
-//!   before                        after
-//!   %a = add %x, %y               %a = add %x, %y
-//!   %c = add %y, %x               (uses of %c read %a)
-//!   %b = load %p                  %b = load %p
-//!   store %v, %q                  store %v, %q   ; may not write %p's bytes
-//!   %d = load %p                  (uses of %d read %b)
-//! ```
 //!
 //! `live` marks, to a fixed point, every value that something staying reads;
 //! `dead` removes the rest. `_comparison` finds the `icmp` in a block that
@@ -48,35 +19,28 @@
 //! function on its own. Read [`crate::gvn`] and its tests for them in use.
 //!
 //! # Provides
-//! `subexpressions`, `equal_calls`, `forwarded` ([`crate::gvn`]); `live` and
-//! `live_except` ([`crate::dead`], [`crate::floatloop`]); `_comparison`
-//! ([`crate::decide`], [`crate::unswitch`]); `_trivial_phis`
-//! ([`crate::decide`], [`crate::loopexit`], [`crate::unswitch`]).
+//! `equal_calls` ([`crate::gvn`]); `live` and `live_except` ([`crate::dead`],
+//! [`crate::floatloop`]); `_comparison` ([`crate::decide`]);
+//! `_trivial_phis` ([`crate::decide`]).
 //!
 //! # Used by
-//! [`crate::gvn`] calls `subexpressions`, `equal_calls` and `forwarded` on each
-//! function it numbers; [`crate::dead`] and [`crate::floatloop`] call `live`
-//! to decide what to delete; [`crate::decide`], [`crate::loopexit`] and
-//! [`crate::unswitch`] call `_trivial_phis` after they drop an edge. Not a
+//! [`crate::gvn`] calls `equal_calls` on each function it numbers;
+//! [`crate::dead`] and [`crate::floatloop`] call `live` to decide what to
+//! delete; [`crate::decide`]
+//! calls `_trivial_phis` after it drops an edge. Not a
 //! pass: it runs only inside those.
 //!
 //! # Needs
-//! `memoryssa::Accesses`, `avail` and `cfg::Dominance` (`llrm_analysis`).
+//! `cfg::Dominance` (`llrm_analysis`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use llrm_analysis::memory;
-use llrm_analysis::memory::MemRef;
-use llrm_analysis::memoryssa::Accesses;
-use llrm_analysis::{avail, cfg, ssa};
+use llrm_analysis::{cfg, ssa};
 use llrm_mir::context::Context;
-use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
-use llrm_mir::passes::Outer;
-use llrm_mir::program::ProgramProxy;
 use llrm_mir::types::TypeId;
 use llrm_support::hash::IndexMap;
 
@@ -137,12 +101,16 @@ pub fn _comparison(
         return None;
     };
     function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(block)
         .find(|&one| function.instruction(one).result == Some(condition))
         .filter(|&one| matches!(function.instruction(one).opcode, Opcode::ICmp(_)))
+}
+
+// Blocks `_trivial_phis` looked at on this thread, for a test that a pass
+// calling it does not call it once per change.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BLOCKS_VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Resolve single-valued joins after an edge disappears: each phi keeps
@@ -150,11 +118,22 @@ pub fn _comparison(
 /// value, and one with an earlier phi's arms is that phi (LLVM's
 /// `EliminateDuplicatePHINodes`).
 pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
-    let predecessors =
-        function.layout().iter().map(|&block| (block, function.predecessors(block))).collect::<BTreeMap<_, _>>();
+    let blocks = function.layout().to_vec();
+    _trivial_phis_in(function, &blocks)
+}
+
+/// `_trivial_phis` of `blocks` alone: the joins whose edges changed, where a
+/// single-entry phi elsewhere (a loop's closing phi) must stay.
+pub fn _trivial_phis_in(
+    function: &mut Function,
+    blocks: &[BlockId],
+) -> Result<(), String> {
+    let predecessors = blocks.iter().map(|&block| (block, function.predecessors(block))).collect::<BTreeMap<_, _>>();
     loop {
         let mut changed = false;
-        for block in function.layout().to_vec() {
+        for &block in blocks {
+            #[cfg(test)]
+            BLOCKS_VISITED.with(|visited| visited.set(visited.get() + 1));
             for phi in edges::phis(function, block) {
                 let result = function.instruction(phi).result.expect("a phi's value");
                 let incoming = arms(function, phi)
@@ -177,33 +156,115 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
                 }
             }
         }
-        if !_duplicate_phis(function)? && !changed {
+        let mut duplicates = false;
+        for &block in blocks {
+            duplicates |= duplicate_phis_in(function, block)?;
+        }
+        if !duplicates && !changed {
             return Ok(());
         }
     }
 }
 
-/// Each phi whose arms, edge for edge, are an earlier phi's in its block
-/// replaced by that phi. Whether any was.
-fn _duplicate_phis(function: &mut Function) -> Result<bool, String> {
+#[cfg(test)]
+thread_local! {
+    /// How many blocks `duplicate_phis_in` walked, for the test that a block of
+    /// fewer than two phis is not.
+    pub(crate) static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `PHICSENumPHISmallSize`: up to this many phis `EliminateDuplicatePHINodes`
+/// compares pair by pair (`EliminateDuplicatePHINodesNaiveImpl`), more it
+/// hashes.
+const NAIVE_PHIS: usize = 32;
+
+#[cfg(test)]
+thread_local! {
+    /// How many blocks `duplicate_phis_in` hashed (more than `NAIVE_PHIS`
+    /// phis).
+    pub(crate) static HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `isIdenticalToWhenDefined` of two phis: the same type and, for each
+/// predecessor, the same value, in any order of the arms.
+fn identical_phis(
+    function: &Function,
+    a: InstId,
+    b: InstId,
+) -> bool {
+    let (one, other) = (function.instruction(a), function.instruction(b));
+    if one.ty != other.ty || one.operands.len() != other.operands.len() {
+        return false;
+    }
+    one.operands.chunks(2).all(|arm| other.operands.chunks(2).any(|candidate| candidate == arm))
+}
+
+/// `EliminateDuplicatePHINodesNaiveImpl`: each later phi identical to an
+/// earlier one is replaced by it, and the comparison starts over from the first
+/// phi (the replacement can make earlier pairs identical). Whether any was.
+fn duplicate_phis_compared(
+    function: &mut Function,
+    mut phis: Vec<InstId>,
+) -> Result<bool, String> {
     let mut changed = false;
-    for block in function.layout().to_vec() {
-        let mut seen = llrm_support::hash::HashMap::<(TypeId, Vec<(BlockId, Operand)>), ValueId>::default();
-        for phi in edges::phis(function, block) {
-            let op = function.instruction(phi);
-            let (ty, result) = (op.ty, op.result.expect("a phi's value"));
-            let mut incoming = arms(function, phi).into_iter().map(|(value, from)| (from, value)).collect::<Vec<_>>();
-            incoming.sort_by_key(|&(from, _)| from);
-            match seen.entry((ty, incoming)) {
-                std::collections::hash_map::Entry::Occupied(earlier) => {
-                    function.replace_value(result, Operand::Value(*earlier.get()));
-                    function.set_operands(phi, Vec::new());
-                    function.erase(phi)?;
-                    changed = true;
-                }
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    slot.insert(result);
-                }
+    let mut at = 0;
+    while at < phis.len() {
+        let kept = phis[at];
+        let duplicate = (at + 1..phis.len()).find(|&later| identical_phis(function, kept, phis[later]));
+        let Some(later) = duplicate else {
+            at += 1;
+            continue;
+        };
+        let phi = phis.remove(later);
+        let (result, keeps) = (
+            function.instruction(phi).result.expect("a phi's value"),
+            function.instruction(kept).result.expect("a phi's value"),
+        );
+        function.replace_value(result, Operand::Value(keeps));
+        function.set_operands(phi, Vec::new());
+        function.erase(phi)?;
+        changed = true;
+        at = 0;
+    }
+    Ok(changed)
+}
+
+/// Each phi whose arms, edge for edge, are an earlier phi's in `block`
+/// replaced by that phi: LLVM's `EliminateDuplicatePHINodes(BB)`. Whether any
+/// was.
+pub fn duplicate_phis_in(
+    function: &mut Function,
+    block: BlockId,
+) -> Result<bool, String> {
+    // Two phis at least make a duplicate: most blocks have none or one, and
+    // are not walked (d_faces -O2: 581 Ir a block visit against the pin's 142).
+    if !edges::has_two_phis(function, block) {
+        return Ok(false);
+    }
+    #[cfg(test)]
+    WALKED.with(|walked| walked.set(walked.get() + 1));
+    let phis = edges::phis(function, block);
+    if phis.len() <= NAIVE_PHIS {
+        return duplicate_phis_compared(function, phis);
+    }
+    #[cfg(test)]
+    HASHED.with(|hashed| hashed.set(hashed.get() + 1));
+    let mut changed = false;
+    let mut seen = llrm_support::hash::HashMap::<(TypeId, Vec<(BlockId, Operand)>), ValueId>::default();
+    for phi in phis {
+        let op = function.instruction(phi);
+        let (ty, result) = (op.ty, op.result.expect("a phi's value"));
+        let mut incoming = arms(function, phi).into_iter().map(|(value, from)| (from, value)).collect::<Vec<_>>();
+        incoming.sort_by_key(|&(from, _)| from);
+        match seen.entry((ty, incoming)) {
+            std::collections::hash_map::Entry::Occupied(earlier) => {
+                function.replace_value(result, Operand::Value(*earlier.get()));
+                function.set_operands(phi, Vec::new());
+                function.erase(phi)?;
+                changed = true;
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(result);
             }
         }
     }
@@ -260,106 +321,6 @@ pub fn _floating(opcode: &Opcode) -> bool {
     )
 }
 
-/// How far past a load the writes were looked at when a later load of the same
-/// bytes was found equal to it: the next such load looks at the rest, not at
-/// the whole stretch again (a block of N loads of one cell with a store
-/// between each was N^2/2 asks).
-struct Verified {
-    upto: usize,
-    read: MemRef,
-    stored: bool,
-}
-
-/// One operation where two computed the same thing from the same values;
-/// whether any went.
-///
-/// `avoid_store_crossing` keeps a load from being served across a store.
-pub fn subexpressions(
-    function: &mut Function,
-    accesses: &Accesses,
-    avoid_store_crossing: bool,
-    program: Option<&ProgramProxy>,
-    crossed: &std::cell::Cell<bool>,
-) -> Result<bool, String> {
-    let dominance = cfg::Dominance::of(function);
-    let order: IndexMap<BlockId, usize> =
-        function.layout().iter().enumerate().map(|(index, &block)| (block, index)).collect();
-
-    let mut seen: IndexMap<_Computation, Vec<(usize, usize, InstId)>> = IndexMap::default();
-    // What a name is rewritten to, and so what it numbers as.
-    let mut swap: BTreeMap<ValueId, Operand> = BTreeMap::new();
-    let mut gone: BTreeSet<InstId> = BTreeSet::new();
-    let mut verified: llrm_mir::dense::IdMap<InstId, Verified> = llrm_mir::dense::IdMap::new();
-    for block in dominators_first(function, &dominance) {
-        let here = order[&block];
-        let instructions = function.block(block).instructions();
-        for (index, &inst) in instructions.iter().enumerate() {
-            let op = function.instruction(inst);
-            let Some(key) = _computation(op, &swap) else {
-                continue;
-            };
-            let candidates = seen.entry(key).or_default();
-            let first = candidates
-                .iter()
-                .rev()
-                .find(|candidate| _reaches(candidate.0, candidate.1, here, index, &dominance, function.layout(), block))
-                .copied();
-            let Some((at, where_, earlier)) = first else {
-                candidates.push((here, index, inst));
-                continue;
-            };
-            let loads = matches!(op.opcode, Opcode::Load { .. });
-            if loads && at != here {
-                candidates.push((here, index, inst));
-                continue;
-            }
-            if loads {
-                // The writes between the earlier load and this one: those up
-                // to the last load it served were looked at then.
-                let read = accesses.references.get(&inst);
-                let kept = verified.get(&earlier).filter(|kept| kept.upto <= index && Some(&kept.read) == read);
-                let (from, mut stored) = kept.map_or((where_ + 1, false), |kept| (kept.upto, kept.stored));
-                let between = &instructions[from..index];
-                if !_undisturbed(inst, between, accesses, program) {
-                    candidates.push((here, index, inst));
-                    continue;
-                }
-                stored |= between.iter().any(|&b| matches!(function.instruction(b).opcode, Opcode::Store { .. }));
-                if let Some(read) = read {
-                    verified.insert(earlier, Verified { upto: index, read: read.clone(), stored });
-                }
-                if stored {
-                    // The one place `avoid_store_crossing` changes what is
-                    // numbered: told, so a caller that runs this both
-                    // ways can see when the second way is the first.
-                    crossed.set(true);
-                    if avoid_store_crossing {
-                        candidates.push((here, index, inst));
-                        continue;
-                    }
-                }
-            }
-            let (Some(mine), Some(theirs)) = (op.result, function.instruction(earlier).result) else {
-                continue;
-            };
-            swap.insert(mine, Operand::Value(theirs));
-            gone.insert(inst);
-        }
-    }
-
-    if gone.is_empty() {
-        return Ok(false);
-    }
-    // A leader is never itself swapped, so the order is free.
-    for (&value, &with) in &swap {
-        function.replace_value(value, with);
-    }
-    // Each block is rewritten once: erasing k of the n instructions of a block
-    // one at a time is O(kn).
-    function.erase_all(&gone.into_iter().collect::<Vec<_>>())?;
-    Ok(true)
-}
-
 /// Two calls with the same callee and arguments that touch no memory (`silent`
 /// says which) are one: the later one is the earlier's value, where the earlier
 /// has certainly run. LLVM's GVN numbers a call that `doesNotAccessMemory` and
@@ -373,7 +334,7 @@ pub fn equal_calls(
     // are looked at again.
     let mut groups: IndexMap<(TypeId, &[Operand]), Vec<(usize, usize, InstId)>> = IndexMap::default();
     for (at, &block) in function.layout().iter().enumerate() {
-        for (index, &inst) in function.block(block).instructions().iter().enumerate() {
+        for (index, inst) in function.iter_block(block).enumerate() {
             let op = function.instruction(inst);
             if matches!(op.opcode, Opcode::Call(_)) && op.result.is_some() {
                 groups.entry((op.ty, &op.operands[..])).or_default().push((at, index, inst));
@@ -404,7 +365,7 @@ pub fn equal_calls(
             let earlier = leaders
                 .iter()
                 .rev()
-                .find(|leader| _reaches(leader.0, leader.1, at, index, &dominance, &layout, layout[at]))
+                .find(|leader| _reaches(leader.0, leader.1, at, index, &dominance, function, &layout, layout[at]))
                 .copied();
             match earlier {
                 Some((_, _, leader)) => {
@@ -488,8 +449,7 @@ pub fn _computation(
 
 /// The blocks with each before the ones it dominates: by dominator depth, not
 /// by the layout, which a removed join leaves behind the blocks it came to
-/// dominate. A numbering that serves a later computation from an earlier one
-/// meets the dominating one first this way.
+/// dominate.
 pub fn dominators_first(
     function: &Function,
     dominance: &cfg::Dominance,
@@ -507,804 +467,21 @@ pub fn _reaches(
     then: usize,
     index: usize,
     dominance: &cfg::Dominance,
+    function: &Function,
     layout: &[BlockId],
     block: BlockId,
 ) -> bool {
     if at == then {
         return where_ < index;
     }
-    dominance.dominates(cfg::id(layout[at]), cfg::id(block))
-}
-
-thread_local! {
-    static UNDISTURBED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many writes this thread has looked at for those asks, for a test that a
-/// stretch of a block is looked at once.
-pub fn undisturbed_looked() -> usize {
-    LOOKED.with(std::cell::Cell::get)
-}
-
-/// How many times this thread has asked whether a load is undisturbed by a set
-/// of writes, for a test that a pass asks it once.
-pub fn undisturbed_asked() -> usize {
-    UNDISTURBED.with(std::cell::Cell::get)
-}
-
-/// Whether the load `one` still reads what the load before it read, with
-/// `between` run in between: nothing there may write its bytes.
-///
-/// `accesses` says what each writes; a call writes its footprint.
-/// `regions::overlapping` decides against each write, on `program`, and an
-/// answer it cannot give overlaps.
-pub fn _undisturbed(
-    one: InstId,
-    between: &[InstId],
-    accesses: &Accesses,
-    program: Option<&ProgramProxy>,
-) -> bool {
-    UNDISTURBED.with(|asked| asked.set(asked.get() + 1));
-    LOOKED.with(|looked| looked.set(looked.get() + between.len()));
-    let Some(read) = accesses.references.get(&one) else {
-        return false;
-    };
-    between.iter().all(|&other| llrm_analysis::memoryssa::spares(accesses, program, read, other))
-}
-
-/// The walk's answer for every load in one gvn run, kept for the run's second
-/// numbering of the same function: it does not depend on
-/// `avoid_store_crossing`.
-#[derive(Default)]
-pub struct Forwarding {
-    walked: std::cell::OnceCell<Vec<avail::Forward>>,
-}
-
-impl Forwarding {
-    fn served(
-        &self,
-        unit: &memory::Unit,
-        accesses: &Accesses,
-        want: &IdSet<InstId>,
-    ) -> Vec<avail::Forward> {
-        self.walked.get_or_init(|| avail::forwardable_walk(unit, accesses, want)).clone()
-    }
-}
-
-/// Store-to-load forwarding: each load a known value serves becomes that
-/// value; whether any did. `accesses` are `function`'s as it stands.
-///
-/// `crossed` is set when a value serves a load across a store, the one thing
-/// `avoid_store_crossing` changes: where it is not set the run is the same
-/// either way.
-///
-/// `avoid_store_crossing` keeps a value from serving a load when a store
-/// lies on a path from its definition to the load.
-pub fn forwarded(
-    context: &Context,
-    layout: &DataLayout,
-    function: &mut Function,
-    outer: &Outer,
-    accesses: &Accesses,
-    registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
-    shape: &llrm_analysis::cfg::Shape,
-    avoid_store_crossing: bool,
-    forwarding: &Forwarding,
-    crossed: &std::cell::Cell<bool>,
-) -> Result<bool, String> {
-    let want = function
-        .walk()
-        .map(|(_, inst)| inst)
-        .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Load { .. }))
-        .collect::<IdSet<_>>();
-    if want.is_empty() {
-        return Ok(false);
-    }
-    let unit = memory::Unit::within(context, layout, function, outer).with_registers(registers).with_shape(shape);
-    let crossings = Crossings::of(function, &shape.reaching);
-    // What each block holds is a fact of the instructions `function` has now,
-    // which a caller that runs this twice on one function works out once.
-    let served = forwarding
-        .served(&unit, accesses, &want)
-        .into_iter()
-        .filter(|one| {
-            let crosses = crossings.crosses(one.value, one.at);
-            crossed.set(crossed.get() || crosses);
-            !avoid_store_crossing || !crosses
-        })
-        .collect::<Vec<_>>();
-    if served.is_empty() {
-        return Ok(false);
-    }
-    // A load may be served by another served load.
-    let replacements = served
-        .iter()
-        .map(|one| (function.instruction(one.at).result.expect("a load's value"), one.value))
-        .collect::<BTreeMap<_, _>>();
-    let ends = ssa::providers(replacements.values().copied(), |id| replacements.get(&id).copied())
-        .map_err(|error| error.to_string())?;
-    for (&value, end) in replacements.keys().zip(ends) {
-        function.replace_value(value, end);
-    }
-    function.erase_all(&served.iter().map(|one| one.at).collect::<Vec<_>>())?;
-    Ok(true)
-}
-
-/// Whether stores lie on paths between instructions, asked many times of one
-/// function: where each instruction is and how many stores each block holds
-/// before each position are found once, and the blocks that reach a block once
-/// for each block asked of. Each ask was a scan of a block for the instruction,
-/// twice, and of the function for what reaches the load: quadratic in a large
-/// function.
-struct Crossings<'f> {
-    function: &'f Function,
-    places: BTreeMap<InstId, (BlockId, i64)>,
-    /// Per block, the stores among its first `n` instructions, at `n`.
-    stores: BTreeMap<BlockId, Vec<u32>>,
-    reaching: &'f cfg::Reaching,
-}
-
-impl<'f> Crossings<'f> {
-    fn of(
-        function: &'f Function,
-        reaching: &'f cfg::Reaching,
-    ) -> Self {
-        let mut places = BTreeMap::new();
-        let mut stores = BTreeMap::new();
-        for &block in function.layout() {
-            let mut counted = vec![0u32];
-            for (index, &inst) in function.block(block).instructions().iter().enumerate() {
-                places.insert(inst, (block, index as i64));
-                counted.push(
-                    counted[index] + u32::from(matches!(function.instruction(inst).opcode, Opcode::Store { .. })),
-                );
-            }
-            stores.insert(block, counted);
-        }
-        Self { function, places, stores, reaching }
-    }
-
-    /// Whether a store lies on some path from `holder`'s definition to `load`,
-    /// or `holder` is defined where no path from it reaches `load` first.
-    fn crosses(
-        &self,
-        holder: Operand,
-        load: InstId,
-    ) -> bool {
-        let function = self.function;
-        let Operand::Value(holder) = holder else {
-            return false;
-        };
-        let source = match function.value(holder).def {
-            ValueDef::Instruction(inst) => self.places[&inst],
-            _ => (function.entry().expect("a body"), -1),
-        };
-        let destination = self.places[&load];
-        let stores_in = |block: BlockId, low: i64, high: i64| {
-            let counted = &self.stores[&block];
-            let (low, high) = (low.max(0) as usize, (high.max(0) as usize).min(counted.len() - 1));
-            low < high && counted[high] > counted[low]
-        };
-        if source.0 == destination.0 {
-            return source.1 >= destination.1 || stores_in(source.0, source.1 + 1, destination.1);
-        }
-        let reaching = self.reaching.to(function, destination.0);
-        if !reaching.contains(&source.0) {
-            return true;
-        }
-        let mut seen = IdSet::new();
-        let mut work = vec![source.0];
-        let mut arrived = false;
-        while let Some(at) = work.pop() {
-            if !reaching.contains(&at) || !seen.insert(at) {
-                continue;
-            }
-            let low = if at == source.0 { source.1 + 1 } else { 0 };
-            let high = if at == destination.0 { destination.1 } else { function.block(at).instructions().len() as i64 };
-            if stores_in(at, low, high) {
-                return true;
-            }
-            if at == destination.0 {
-                arrived = true;
-            } else {
-                work.extend(function.successors(at));
-            }
-        }
-        !arrived
-    }
+    dominance.dominates(function, cfg::id(layout[at]), cfg::id(block))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
 
-    use llrm_analysis::memory::Unit;
-    use llrm_analysis::memoryssa::Accesses;
-    use llrm_mir::datalayout::DataLayout;
-    use llrm_mir::module::Module;
-    use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-    use llrm_mir::opcode::Opcode;
-    use llrm_mir::passes::Outer;
-    use llrm_support::hash::IndexMap;
-
-    use super::{_trivial_phis, Crossings, forwarded, subexpressions};
-    use crate::testing::{f, parsed, printed, results};
-
-    /// `module`'s @f numbered.
-    fn subexpressions_of(module: &mut Module) -> bool {
-        let layout = DataLayout::default();
-        let (_, _, function) =
-            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-        let accesses = Accesses::resolved(
-            &llrm_analysis::testing::with_registers(Unit::of(module, &layout, function)),
-            &IndexMap::default(),
-        )
-        .unwrap();
-        subexpressions(f(module), &accesses, false, None, &std::cell::Cell::new(false)).unwrap()
-    }
-
-    /// `text` numbered: its printed form, and whether anything went. What
-    /// `@f` returns for `inputs` is what it returned before.
-    fn numbered(
-        text: &str,
-        inputs: &[&[i128]],
-    ) -> (String, bool) {
-        let before = parsed(text);
-        let mut module: Module = before.clone();
-        let changed = subexpressions_of(&mut module);
-        let text = printed(&module);
-        assert_eq!(results(&module, inputs), results(&before, inputs), "{text}");
-        (text, changed)
-    }
-
-    /// `text`, left as it was.
-    fn kept(text: &str) {
-        let mut module = parsed(text);
-        let before = printed(&module);
-        assert!(!subexpressions_of(&mut module), "{before}");
-        assert_eq!(printed(&module), before);
-    }
-
-    const XY: &[&[i128]] = &[&[0, 0], &[3, 5], &[-7, 2], &[0x7fff, 1]];
-
-    /// A store to text memory misses @g on real-mode DOS: a load of @g is
-    /// reused across it where the target is asked. It was not asked.
-    #[test]
-    fn test_a_load_is_reused_across_a_store_to_foreign_memory() {
-        let text = format!(
-            "{}@g = global i16 0
-
-define i16 @f() {{
-b0:
-  %a = load i16, ptr @g
-  %s = inttoptr i16 -18432 to ptr addrspace(2)
-  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
-  store i16 1, ptr addrspace(1) %far
-  %b = load i16, ptr @g
-  %r = add i16 %a, %b
-  ret i16 %r
-}}
-",
-            llrm_analysis::testing::DOS
-        );
-        let reused = |dos: bool| {
-            let mut module = parsed(&text);
-            let layout = llrm_analysis::testing::layout(&module);
-            let program = llrm_mir::program::ProgramProxy::of(&module, std::rc::Rc::new(llrm_x86_m16::Dos::default()));
-            let program = dos.then_some(&*program);
-            let (_, _, function) =
-                module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-            let accesses = Accesses::resolved(
-                &Unit { program, ..llrm_analysis::testing::with_registers(Unit::of(&module, &layout, function)) },
-                &IndexMap::default(),
-            )
-            .unwrap();
-            subexpressions(f(&mut module), &accesses, false, program, &std::cell::Cell::new(false)).unwrap()
-        };
-        assert!(reused(true) && !reused(false));
-    }
-
-    /// `text`'s @f forwarded, printed; what it returns for `XY` stays.
-    fn forwarded_of(
-        text: &str,
-        avoid_store_crossing: bool,
-    ) -> String {
-        let before = parsed(text);
-        let mut module = before.clone();
-        let (layout, outer) = (llrm_analysis::testing::layout(&module), Outer::of(&module, None));
-        let accesses = {
-            let (_, _, function) =
-                module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-            Accesses::resolved(
-                &llrm_analysis::testing::with_registers(Unit::within(&module.context, &layout, function, &outer)),
-                &IndexMap::default(),
-            )
-            .unwrap()
-        };
-        let (context, function) = module.function_mut("f").expect("@f");
-        let registers = llrm_analysis::consts::known(&llrm_analysis::testing::with_registers(Unit::within(
-            context, &layout, function, &outer,
-        )));
-        let shape = llrm_analysis::cfg::Shape::of(function);
-        let changed = forwarded(
-            context,
-            &layout,
-            function,
-            &outer,
-            &accesses,
-            &registers,
-            &shape,
-            avoid_store_crossing,
-            &super::Forwarding::default(),
-            &std::cell::Cell::new(false),
-        )
-        .unwrap();
-        let text = printed(&module);
-        assert_eq!(changed, text != printed(&before), "{text}");
-        assert_eq!(results(&module, XY), results(&before, XY), "{text}");
-        text
-    }
-
-    /// The stored value serves the load of its cell; the load of the cell
-    /// 8 bytes on stays.
-    #[test]
-    fn test_forwarding_extends_lifetime_without_conflating_shared_addresses() {
-        let text = forwarded_of(
-            "@g = global [8 x i16] zeroinitializer
-
-define i16 @f(i16 %x, i16 %y) {
-b0:
-  store i16 %x, ptr @g
-  %a = load i16, ptr @g
-  %o = getelementptr i8, ptr @g, i16 8
-  %b = load i16, ptr %o
-  %r = add i16 %a, %b
-  ret i16 %r
-}
-",
-            false,
-        );
-        assert!(
-            text.contains(
-                "  store i16 %x, ptr @g
-  %o = getelementptr i8, ptr @g, i16 8
-  %b = load i16, ptr %o
-  %r = add i16 %x, %b
-"
-            ),
-            "{text}"
-        );
-    }
-
-    const CROSSING: &str = "@g = global [8 x i16] zeroinitializer
-
-define i16 @f(i16 %x, i16 %y) {
-b0:
-  store i16 %x, ptr @g
-  %o = getelementptr i8, ptr @g, i16 8
-  STORE
-  %a = load i16, ptr @g
-  ret i16 %a
-}
-";
-
-    /// A store to another cell leaves the value held; `avoid_store_crossing`
-    /// declines to hold it across one.
-    #[test]
-    fn test_a_value_crosses_a_store_only_when_allowed() {
-        for store in ["store i16 %y, ptr %o", "store volatile i16 %y, ptr %o"] {
-            let text = CROSSING.replace("STORE", store);
-            assert!(
-                forwarded_of(&text, false).contains(
-                    "  ret i16 %x
-"
-                ),
-                "{store}"
-            );
-            assert_eq!(forwarded_of(&text, true), printed(&parsed(&text)), "{store}");
-        }
-    }
-
-    /// What may write the cell between stops the value.
-    #[test]
-    fn test_a_value_is_not_forwarded_past_what_may_write_its_cell() {
-        for between in [
-            "%v = getelementptr i8, ptr @g, i16 %y\n  store i16 %y, ptr %v",
-            "store i8 1, ptr @g",
-            "call void @h()",
-            "store volatile i8 1, ptr @g",
-        ] {
-            let text = format!(
-                "{}\ndefine void @h() {{\nb0:\n  store i16 3, ptr @g\n  ret void\n}}\n",
-                CROSSING.replace("STORE", between)
-            );
-            assert_eq!(forwarded_of(&text, false), printed(&parsed(&text)), "{between}");
-        }
-    }
-
-    #[test]
-    fn test_a_repeated_expression_is_computed_once() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %a = mul i16 %x, %y
-  %b = mul i16 %x, %y
-  %r = sub i16 %a, %b
-  ret i16 %r
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert_eq!(
-            text,
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %a = mul i16 %x, %y
-  %r = sub i16 %a, %a
-  ret i16 %r
-}
-"
-        );
-    }
-
-    #[test]
-    fn test_operands_in_either_order_are_one_commutative_expression() {
-        for (op, ty) in [("add", "i16"), ("xor", "i16"), ("icmp eq", "i1"), ("icmp ne", "i1")] {
-            let text = format!(
-                "define i32 @f(i16 %x, i16 %y) {{
-b0:
-  %a = {op} i16 %x, %y
-  %b = {op} i16 %y, %x
-  %s = zext {ty} %a to i32
-  %t = zext {ty} %b to i32
-  %r = add i32 %s, %t
-  ret i32 %r
-}}
-"
-            );
-            let (text, changed) = numbered(&text, XY);
-            assert!(changed, "{op}");
-            // and so are the two widenings
-            assert!(text.contains("%r = add i32 %s, %s"), "{text}");
-        }
-    }
-
-    #[test]
-    fn test_an_ordered_expression_with_its_operands_swapped_stays() {
-        for (op, ty) in [("sub", "i16"), ("shl", "i16"), ("icmp slt", "i1")] {
-            kept(&format!(
-                "define i32 @f(i16 %x, i16 %y) {{
-b0:
-  %a = {op} i16 %x, %y
-  %b = {op} i16 %y, %x
-  %s = zext {ty} %a to i32
-  %t = zext {ty} %b to i32
-  %r = add i32 %s, %t
-  ret i32 %r
-}}
-"
-            ));
-        }
-    }
-
-    /// Same opcode, but one operand, the flags or the type differs.
-    #[test]
-    fn test_expressions_differing_in_an_operand_flags_or_type_stay() {
-        for (first, second) in [
-            ("%a = add i16 %x, 1", "%b = add i16 %x, 2"),
-            ("%a = add nsw i16 %x, 1", "%b = add i16 %x, 1"),
-            ("%a = udiv exact i16 %x, 2", "%b = udiv i16 %x, 2"),
-            ("%a = sext i8 %n to i16", "%b = zext i8 %n to i16"),
-        ] {
-            kept(&format!(
-                "define i16 @f(i16 %x, i8 %n) {{
-b0:
-  {first}
-  {second}
-  %r = add i16 %a, %b
-  ret i16 %r
-}}
-"
-            ));
-        }
-        kept(
-            "define i32 @f(i8 %n) {
-b0:
-  %a = zext i8 %n to i16
-  %b = zext i8 %n to i32
-  %w = zext i16 %a to i32
-  %r = add i32 %w, %b
-  ret i32 %r
-}
-",
-        );
-    }
-
-    #[test]
-    fn test_a_dominated_repeat_reads_the_dominating_value() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %a = and i16 %x, %y
-  %c = icmp eq i16 %x, 0
-  br i1 %c, label %b1, label %b2
-
-b1:
-  %b = and i16 %y, %x
-  ret i16 %b
-
-b2:
-  ret i16 %a
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert!(text.contains("b1:\n  ret i16 %a\n"), "{text}");
-    }
-
-    /// Neither arm runs before the other.
-    #[test]
-    fn test_a_repeat_in_a_sibling_block_is_kept() {
-        kept(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %c = icmp eq i16 %x, 0
-  br i1 %c, label %b1, label %b2
-
-b1:
-  %a = or i16 %x, %y
-  ret i16 %a
-
-b2:
-  %b = or i16 %x, %y
-  ret i16 %b
-}
-",
-        );
-    }
-
-    /// matrix printed T=0 for T=380 after CSE deleted a zero still named by
-    /// its loop phi.
-    #[test]
-    fn test_cse_replaces_phi_uses_of_a_deleted_initializer() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %first = add i16 %x, 7
-  br label %b1
-
-b1:
-  %second = add i16 %x, 7
-  br label %b2
-
-b2:
-  %result = phi i16 [ %second, %b1 ]
-  %r = add i16 %result, %second
-  ret i16 %r
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert!(!text.contains("%second"), "{text}");
-        assert!(text.contains("%result = phi i16 [ %first, %b1 ]\n  %r = add i16 %result, %first"), "{text}");
-    }
-
-    /// Descriptor addresses encoded as zero must not become the same value.
-    #[test]
-    fn test_cse_keeps_distinct_linker_addresses() {
-        for other in ["@b", "null"] {
-            kept(&format!(
-                "@a = global i16 0
-@b = global i16 0
-
-define i16 @f() {{
-b0:
-  %first = ptrtoint ptr @a to i16
-  %second = ptrtoint ptr {other} to i16
-  %r = add i16 %first, %second
-  ret i16 %r
-}}
-"
-            ));
-        }
-    }
-
-    #[test]
-    fn test_cse_reuses_one_frame_object_address() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %frame = alloca [66 x i16]
-  %first = getelementptr i8, ptr %frame, i16 4
-  %duplicate = getelementptr i8, ptr %frame, i16 4
-  store i16 %x, ptr %first
-  %r = load i16, ptr %duplicate
-  ret i16 %r
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert!(!text.contains("%duplicate"), "{text}");
-        assert!(text.contains("%r = load i16, ptr %first"), "{text}");
-    }
-
-    /// An address took its cell for a read, so no two addresses of one
-    /// descriptor were ever one value and no load through them was shared.
-    #[test]
-    fn test_cse_reuses_one_cell_address() {
-        let (text, changed) = numbered(
-            "@descriptor = global [20 x i8] zeroinitializer
-
-define i16 @f(i16 %x, i16 %y) {
-b0:
-  %first = getelementptr i8, ptr @descriptor, i16 18
-  %duplicate = getelementptr i8, ptr @descriptor, i16 18
-  store i16 %x, ptr %first
-  %r = load i16, ptr %duplicate
-  ret i16 %r
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert!(!text.contains("%duplicate"), "{text}");
-    }
-
-    /// lngmix under SROA refused 0x0071: "mov ... defines [v24_1] through no
-    /// operand": the third divide was served the second's quotient, which
-    /// the second no longer computed.
-    #[test]
-    fn test_a_third_equal_divide_reads_the_answer_the_first_computed() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %q0 = sdiv i16 %x, %y
-  %r0 = srem i16 %x, %y
-  %q1 = sdiv i16 %x, %y
-  %r1 = srem i16 %x, %y
-  %q2 = sdiv i16 %x, %y
-  %r2 = srem i16 %x, %y
-  %a = add i16 %r1, %q2
-  %b = add i16 %a, %q0
-  ret i16 %b
-}
-",
-            &[&[7, 2], &[-9, 4], &[100, -3]],
-        );
-        assert!(changed);
-        assert!(text.contains("  %a = add i16 %r0, %q0\n  %b = add i16 %a, %q0\n"), "{text}");
-        assert_eq!(text.matches("sdiv").count() + text.matches("srem").count(), 2, "{text}");
-    }
-
-    /// `%a` and `%b` load `%p` with `between` in between, in @f of `head`,
-    /// which starts with `pointers`.
-    fn loads(
-        head: &str,
-        pointers: &str,
-        between: &str,
-    ) -> String {
-        format!(
-            "{head}
-define i16 @f(i16 %x, i16 %y{pointers}) {{
-b0:
-  %a = load i16, ptr %p
-{between}  %b = load i16, ptr %p
-  %r = add i16 %a, %b
-  ret i16 %r
-}}
-"
-        )
-    }
-
-    const LOCAL: &str = "  %p = alloca [2 x i16]\n  %q = alloca i16\n  store i16 %x, ptr %p\n";
-
-    fn reused(text: String) {
-        let (text, changed) = numbered(&text.replace("i16 %y) {\nb0:\n", &format!("i16 %y) {{\nb0:\n{LOCAL}")), XY);
-        assert!(changed, "{text}");
-        assert!(text.contains("%r = add i16 %a, %a"), "{text}");
-    }
-
-    #[test]
-    fn test_a_load_is_reused_across_what_touches_no_memory() {
-        reused(loads("", "", "  %n = add i16 %x, 1\n"));
-    }
-
-    #[test]
-    fn test_a_load_is_reused_across_a_store_to_another_offset() {
-        reused(loads("", "", "  %s = getelementptr i8, ptr %p, i16 2\n  store i16 %y, ptr %s\n"));
-    }
-
-    #[test]
-    fn test_a_load_is_reused_across_a_store_to_another_alloca() {
-        reused(loads("", "", "  store i16 %y, ptr %q\n"));
-    }
-
-    /// A volatile access touches only its own bytes: one of another alloca
-    /// leaves the first load's value. Both were a barrier (#257).
-    #[test]
-    fn test_a_load_is_reused_across_a_volatile_access_of_another_alloca() {
-        reused(loads("", "", "  store volatile i16 %y, ptr %q\n"));
-        reused(loads("", "", "  %v = load volatile i16, ptr %q\n"));
-    }
-
-    /// Two noalias pointers' objects are apart; alias proves nothing of one
-    /// noalias pointer against a plain one.
-    #[test]
-    fn test_a_load_through_a_noalias_pointer_is_reused_across_a_store_through_another() {
-        let mut module = parsed(
-            &loads("", "", "  store i16 %y, ptr %q\n")
-                .replace("i16 %y) {", "i16 %y, ptr noalias %p, ptr noalias %q) {"),
-        );
-        assert!(subexpressions_of(&mut module), "{}", printed(&module));
-        assert!(printed(&module).contains("%r = add i16 %a, %a"));
-    }
-
-    /// Neither alloca escaped, so the callee cannot reach them.
-    #[test]
-    fn test_a_load_is_reused_across_a_call_that_cannot_reach_it() {
-        reused(loads(
-            "define void @g(ptr %s) {\nb0:\n  store i16 9, ptr %s\n  ret void\n}\n",
-            "",
-            "  call void @g(ptr %q)\n",
-        ));
-    }
-
-    #[test]
-    fn test_a_load_is_refused_across_what_may_write_it() {
-        let pointers = |between: &str| loads("declare void @g(ptr)\n", ", ptr %p, ptr %q", between);
-        for between in [
-            "  store i16 %y, ptr %q\n",
-            "  call void @g(ptr %q)\n",
-            "  call void @g(ptr %p)\n",
-            "  store volatile i16 %y, ptr %q\n",
-        ] {
-            kept(&pointers(between));
-        }
-        kept(&pointers("").replace("%b = load i16", "%b = load volatile i16"));
-    }
-
-    /// The first load has not certainly run, nor did the old one look.
-    #[test]
-    fn test_a_load_in_another_block_is_loaded_again() {
-        kept(
-            "define i16 @f(ptr %p) {
-b0:
-  %a = load i16, ptr %p
-  br label %b1
-
-b1:
-  %b = load i16, ptr %p
-  %r = add i16 %a, %b
-  ret i16 %r
-}
-",
-        );
-    }
-
-    #[test]
-    fn test_floating_arithmetic_is_one_expression() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %u = sitofp i16 %x to double
-  %v = sitofp i16 %x to double
-  %a = fdiv double %u, 3.0
-  %b = fdiv double %v, 3.0
-  %s = fadd double %a, %b
-  %r = fptosi double %s to i16
-  ret i16 %r
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert!(text.contains("%s = fadd double %a, %a"), "{text}");
-    }
+    use super::_trivial_phis;
+    use crate::testing::{parsed, printed};
 
     /// A dead arm and the block it came from go; the join it leaves with one
     /// value is that value.
@@ -1402,175 +579,5 @@ b2:
         _trivial_phis(module.function_mut("f").unwrap().1).unwrap();
         let after = printed(&module);
         assert!(after.matches("phi").count() == 1 && after.contains("add i16 %r, %t"), "{after}");
-    }
-    /// The scan the pass made for every served load (a block searched for the
-    /// instruction twice, the function for what reaches the load), kept
-    /// here as the reference: `Crossings` answers the same for every definition
-    /// and load of a function with a diamond, a loop and stores in every
-    /// block, and finds each position once.
-    fn reference_crosses_store(
-        function: &Function,
-        holder: Operand,
-        load: InstId,
-    ) -> bool {
-        let Operand::Value(holder) = holder else {
-            return false;
-        };
-        let place = |inst: InstId| {
-            let block = function.parent(inst).expect("placed");
-            (
-                block,
-                function.block(block).instructions().iter().position(|&one| one == inst).expect("in its block") as i64,
-            )
-        };
-        let source = match function.value(holder).def {
-            ValueDef::Instruction(inst) => place(inst),
-            _ => (function.entry().expect("a body"), -1),
-        };
-        let destination = place(load);
-        let stores_in = |block: BlockId, low: i64, high: i64| {
-            let instructions = function.block(block).instructions();
-            let range = low.max(0) as usize..(high.max(0) as usize).min(instructions.len());
-            instructions
-                .get(range)
-                .is_some_and(
-                    |run| run.iter().any(|&one| matches!(function.instruction(one).opcode, Opcode::Store { .. })),
-                )
-        };
-        if source.0 == destination.0 {
-            return source.1 >= destination.1 || stores_in(source.0, source.1 + 1, destination.1);
-        }
-        let mut reaching = BTreeSet::from([destination.0]);
-        let mut work = vec![destination.0];
-        while let Some(at) = work.pop() {
-            for parent in function.predecessors(at) {
-                if reaching.insert(parent) {
-                    work.push(parent);
-                }
-            }
-        }
-        if !reaching.contains(&source.0) {
-            return true;
-        }
-        let mut seen = BTreeSet::new();
-        let mut work = vec![source.0];
-        let mut arrived = false;
-        while let Some(at) = work.pop() {
-            if !reaching.contains(&at) || !seen.insert(at) {
-                continue;
-            }
-            let low = if at == source.0 { source.1 + 1 } else { 0 };
-            let high = if at == destination.0 { destination.1 } else { function.block(at).instructions().len() as i64 };
-            if stores_in(at, low, high) {
-                return true;
-            }
-            if at == destination.0 {
-                arrived = true;
-            } else {
-                work.extend(function.successors(at));
-            }
-        }
-        !arrived
-    }
-
-    #[test]
-    fn test_crossings_answer_as_the_scan_for_each_load_did() {
-        let mut module = parsed(
-            "@g = global i16 0
-@h = global i16 0
-
-define i16 @f(i16 %x, i1 %c, i16 %n) {
-b0:
-  %a = load i16, ptr @g
-  store i16 %x, ptr @h
-  br i1 %c, label %b1, label %b2
-
-b1:
-  %b = load i16, ptr @g
-  store i16 %b, ptr @g
-  br label %b3
-
-b2:
-  %d = load i16, ptr @h
-  br label %b3
-
-b3:
-  %i = phi i16 [ 0, %b1 ], [ 0, %b2 ], [ %i2, %b3 ]
-  %e = load i16, ptr @g
-  %i2 = add i16 %i, 1
-  %m = icmp slt i16 %i2, %n
-  store i16 %e, ptr @h
-  br i1 %m, label %b3, label %b4
-
-b4:
-  %r = load i16, ptr @h
-  ret i16 %r
-}
-",
-        );
-        let function = f(&mut module);
-        let reaching = llrm_analysis::cfg::Reaching::default();
-        let crossings = Crossings::of(function, &reaching);
-        let values: Vec<_> = function.walk().filter_map(|(_, inst)| function.instruction(inst).result).collect();
-        let loads: Vec<_> = function
-            .walk()
-            .map(|(_, inst)| inst)
-            .filter(|&inst| matches!(
-                function.instruction(inst).opcode,
-                llrm_mir::opcode::Opcode::Load { .. }
-            ))
-            .collect();
-        assert!(loads.len() >= 5 && values.len() >= 8);
-        for &holder in &values {
-            for &load in &loads {
-                let operand = llrm_mir::module::Operand::Value(holder);
-                assert_eq!(
-                    crossings.crosses(operand, load),
-                    reference_crosses_store(function, operand, load),
-                    "{holder:?} to {load:?}"
-                );
-            }
-        }
-    }
-
-    /// The equal loads of a block of N went one at a time, each erase taking
-    /// the block's list apart to find it: 351 M of 2.7 G on 800 statements
-    /// (mem), 13% of the compile. They go together.
-    #[test]
-    fn test_equal_loads_are_erased_with_one_scan_of_the_block() {
-        let mut text = String::from(
-            "define i16 @f(i16 %n) {\nb0:\n  %i = alloca i16\n  store i16 0, ptr %i\n  br label %b1\n\nb1:\n",
-        );
-        for k in 0..100 {
-            text += &format!("  %l{k} = load i16, ptr %i\n  %m{k} = add i16 %l{k}, %n\n");
-        }
-        text += "  store i16 %n, ptr %i\n  %c = icmp slt i16 %n, 0\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i16 %n\n}\n";
-        let mut module = parsed(&text);
-        let before = llrm_mir::edit::instructions_scanned();
-        subexpressions_of(&mut module);
-        let scanned = llrm_mir::edit::instructions_scanned() - before;
-        assert_eq!(printed(&module).matches("load").count(), 1, "{}", printed(&module));
-        assert!(scanned <= 4 * 210, "{scanned} instructions scanned to erase 99 loads of a block of 210");
-    }
-
-    /// A block of N loads of one slot with a store to another between each
-    /// looked at every store between the first load and each later one: N^2/2
-    /// looks, a third of gvn on 800 statements of a loop (`spares`, 7.4 M
-    /// calls). A stretch is looked at once.
-    #[test]
-    fn test_equal_loads_look_at_each_write_between_them_once() {
-        let mut text = String::from(
-            "define i16 @f(i16 %n) {\nb0:\n  %i = alloca i16\n  %s = alloca i16\n  store i16 0, ptr %i\n  br label %b1\n\nb1:\n",
-        );
-        for k in 0..40 {
-            text += &format!("  %l{k} = load i16, ptr %i\n  %m{k} = add i16 %l{k}, %n\n  store i16 %m{k}, ptr %s\n");
-        }
-        text += "  store i16 %n, ptr %i\n  %c = icmp slt i16 %n, 0\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i16 %n\n}\n";
-        let mut module = parsed(&text);
-        let looked = super::undisturbed_looked();
-        subexpressions_of(&mut module);
-        let looked = super::undisturbed_looked() - looked;
-        assert_eq!(printed(&module).matches("load").count(), 1, "{}", printed(&module));
-        assert!(looked <= 4 * 40, "{looked} writes looked at for 40 loads");
     }
 }

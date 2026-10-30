@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopidioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopidioms.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:ffca51f899467bd35ce9e28b73362ecbcd2677ce8ef0e6cf3b924bdc47a7e9d2 -->
+<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:eabb5369d823934f5353d151d37defc7b56e6691dae96025f9508d3475651d09 -->
 
 # loopidioms
 
@@ -21,9 +21,15 @@ these forms:
 - A fill: a store, or a memset, of a loop-invariant value that is one byte
   repeated, through an address `induction` derives as a GEP off an invariant
   pointer, striding by the element's size. A cell whose bytes do not repeat
-  is `llvm.experimental.memset.pattern`. A loop with several fills to bytes
-  no other reaches is a memset each; fills that tile adjacent bytes with the
-  same byte are one.
+  is `llvm.experimental.memset.pattern` (DEVIATE: the pin forms none off
+  Darwin,
+  [L1214](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L1214);
+  here it is priced from the target's table, so a word fill is `rep stosw`
+  where its clocks beat the loop's at speed, and its bytes at `-Os`; m16
+  `fillw` of 100 words is 407 clocks against the loop's 500, break-even
+  near 16 trips with the segment setup; owner w-5). A loop with several
+  fills to bytes no other reaches is a memset each; fills that tile adjacent
+  bytes with the same byte are one.
 - A copy: a load and a store of one cell each trip, the stored value being
   the loaded one, from one pointer to another with the same step. Where the
   ranges are apart it is `llvm.memcpy`; where they overlap but each trip
@@ -34,8 +40,10 @@ these forms:
 The count in bytes must not wrap the index: a byte's trips never do, and
 wider cells need `inbounds` GEPs or the proof's `maximum`. The counter must
 not be wider than the index. A huge pointer, which carries into its
-selector, is refused. A volatile access, a call, or a value the loop changes
-keeps the loop.
+selector, is taken like any other: the intrinsic carries its address space,
+and instruction selection splits the fill at each 64K segment
+(`isel/huge.rs`; Owner: clib-huge-fill-2256). A volatile access, a call, or
+a value the loop changes keeps the loop.
 
 A loop with one fill of constant bytes is rewritten always. A pattern, a
 copy or a loop of several fills is priced (`_pays`, `_cheaper_by`) against
@@ -65,9 +73,8 @@ at least two non-volatile stores of one repeated byte to adjacent bytes of
 one object (no other memory access between them) is one memset placed where
 the last stood, if profitable (LLVM's `isProfitableToUseMemset`: four stores
 or 16 bytes, or fewer only where the memset needs fewer widest-integer
-stores). A run of adjacent constants that are not one byte repeated becomes
-stores of the widest legal integer, when that is no more code bytes (a value
-stored more than once lives in a register, which is cheaper). `Merge` runs
+stores). The other stores, of constants and of loaded values, to adjacent
+cells are wider ones (`mergestores`). `Merge` runs
 after the scalar passes have settled: no pass asks a memset what a cell
 holds, so merging sooner would lose a store's value to the forwarding after
 it.
@@ -118,8 +125,8 @@ From unit test `a_counted_word_loop_is_one_memset_of_its_bytes` in
 `loopidioms_tests.rs` (first case; the printed text was taken from a run).
 
 ## Runs
-Last in the function fixed point: `LoopIdioms`, then `Merge`, after `unroll`
-and `peel`. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og,
+Last in the function fixed point: `LoopIdioms`, then `Merge`, after the
+unroller. On with `-ftree-loop-distribute-patterns`; off at -O0 and -Og,
 on from -O1. `size` is set at -Os and -Oz.
 
 ## Needs
@@ -132,5 +139,5 @@ Blocks and edges change (a loop becomes one trip): every analysis is
 invalidated when anything was rewritten.
 
 ## See also
-[`crate::counting`](counting.md) builds the count and exit values; [`crate::unroll`](unroll.md),
-[`crate::peel`](peel.md) precede it.
+[`crate::counting`](counting.md) builds the count and exit values;
+[`crate::loopunrollpass`](loopunrollpass.md), [`crate::looppeel`](looppeel.md) precede it.

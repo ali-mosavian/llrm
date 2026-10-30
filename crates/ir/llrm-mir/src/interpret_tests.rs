@@ -22,7 +22,7 @@ fn int(
 #[test]
 fn the_datalayout_places_fields_and_far_pointers_as_stated() {
     let layout = DataLayout::parse(LAYOUT).expect("parses");
-    let mut types = Types::default();
+    let types = Types::default();
     let (i16, i32) = (types.int(16), types.int(32));
     let pair = types.intern(Type::Struct { fields: vec![i16, i32], packed: false });
     assert_eq!(layout.struct_layout(&types, pair), (6, vec![0, 2]), "i32 aligned to 2 bytes");
@@ -129,6 +129,31 @@ fn overflow_intrinsics_wrap_and_say_so() {
     assert_eq!(pair("umul", 256, 256), wrapped(0, 1));
 }
 
+/// `llvm.{s,u}{add,sub}.sat` stopped the parser at the unknown name; each
+/// answer is derived by hand.
+#[test]
+fn saturating_intrinsics_clamp_to_the_range() {
+    let sat = |intrinsic: &str, a: i16, b: i16| {
+        result(&format!(
+            "declare i16 @llvm.{intrinsic}.sat.i16(i16, i16)
+define i16 @f() {{
+  %r = call i16 @llvm.{intrinsic}.sat.i16(i16 {a}, i16 {b})
+  ret i16 %r
+}}
+"
+        ))
+    };
+    assert_eq!(sat("sadd", 32767, 1), int(0x7fff, 16));
+    assert_eq!(sat("sadd", -32768, -1), int(0x8000, 16));
+    assert_eq!(sat("sadd", 5, -7), int(0xfffe, 16));
+    assert_eq!(sat("ssub", -32768, 1), int(0x8000, 16));
+    assert_eq!(sat("ssub", 32767, -1), int(0x7fff, 16));
+    assert_eq!(sat("uadd", -1, 1), int(0xffff, 16));
+    assert_eq!(sat("uadd", 3, 4), int(7, 16));
+    assert_eq!(sat("usub", 3, 4), int(0, 16));
+    assert_eq!(sat("usub", 4, 3), int(1, 16));
+}
+
 #[test]
 fn min_max_intrinsics_compare_as_their_names_say() {
     let chosen = |intrinsic: &str, a: i16, b: i16| {
@@ -156,6 +181,17 @@ define float @f() {
 }
 ";
     assert_eq!(result(text), Ok(Val::Float(FloatKind::Float, u64::from(10.0f32.to_bits()))));
+}
+
+#[test]
+fn copysign_takes_the_second_arguments_sign() {
+    let text = "declare double @llvm.copysign.f64(double, double)
+define double @f() {
+  %r = call double @llvm.copysign.f64(double 2.000000e+00, double -0.000000e+00)
+  ret double %r
+}
+";
+    assert_eq!(result(text), Ok(Val::Float(FloatKind::Double, (-2.0f64).to_bits())));
 }
 
 /// BASIC's float to integer conversion, the machine's round to nearest,
@@ -220,6 +256,113 @@ fn fixed_point_intrinsics_are_their_expansions() {
                     expanded => assert_eq!(called, expanded, "{name}.i{width} {a} {b}"),
                 }
             }
+        }
+    }
+}
+
+/// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` count as the machine integers
+/// do: a zero has as many zeros as the type has bits, and is poison where the
+/// second argument of the first two says so.
+#[test]
+fn bit_count_intrinsics_count_what_the_machine_integers_do() {
+    let call = |name: &str, width: u32, value: u32, flag: bool| {
+        let (parameters, arguments) =
+            if name == "ctpop" { (String::new(), String::new()) } else { (", i1".to_owned(), format!(", i1 {flag}")) };
+        result(&format!(
+            "declare i{width} @llvm.{name}.i{width}(i{width}{parameters})\n\
+             define i{width} @f() {{\n  %r = call i{width} @llvm.{name}.i{width}(i{width} {value}{arguments})\n  ret i{width} %r\n}}\n"
+        ))
+    };
+    for value in [0_u32, 1, 2, 3, 0x80, 0x1234, 0x7fff, 0x8000, 0xffff] {
+        let narrow = value as u16;
+        assert_eq!(call("ctpop", 16, value, false), int(u128::from(narrow.count_ones()), 16));
+        for wide in [value, value << 8 | 1, u32::MAX] {
+            assert_eq!(call("ctpop", 32, wide, false), int(u128::from(wide.count_ones()), 32));
+        }
+        if value == 0 {
+            assert_eq!(call("ctlz", 16, 0, false), int(16, 16));
+            assert_eq!(call("cttz", 16, 0, false), int(16, 16));
+            assert_eq!(call("ctlz", 16, 0, true), Ok(Val::Poison));
+            assert_eq!(call("cttz", 16, 0, true), Ok(Val::Poison));
+        } else {
+            for flag in [false, true] {
+                assert_eq!(call("ctlz", 16, value, flag), int(u128::from(narrow.leading_zeros()), 16));
+                assert_eq!(call("cttz", 16, value, flag), int(u128::from(narrow.trailing_zeros()), 16));
+            }
+        }
+    }
+}
+
+/// `llvm.bswap` reverses the bytes of an integer of any whole number of 16-bit
+/// units.
+#[test]
+fn bswap_reverses_the_bytes() {
+    let call = |bits: u32, value: u128| {
+        result(&format!(
+            "declare i{bits} @llvm.bswap.i{bits}(i{bits})\n\
+             define i{bits} @f() {{\n  %r = call i{bits} @llvm.bswap.i{bits}(i{bits} {value})\n  ret i{bits} %r\n}}\n"
+        ))
+    };
+    assert_eq!(call(16, 0x1234), int(0x3412, 16));
+    assert_eq!(call(32, 0x1234_5678), int(0x7856_3412, 32));
+    assert_eq!(call(64, 0x0123_4567_89ab_cdef), int(0xefcd_ab89_6745_2301, 64));
+    assert_eq!(call(48, 0x0123_4567_89ab), int(0xab89_6745_2301, 48));
+    assert_eq!(call(128, 1), int(1 << 120, 128));
+}
+
+/// `llvm.fshl` and `llvm.fshr` shift the concatenation of their first two
+/// arguments by the third modulo the width (values from `opt
+/// -passes=instsimplify`).
+#[test]
+fn funnel_shifts_take_the_amount_modulo_the_width() {
+    let call = |name: &str, a: u8, b: u8, by: u8| {
+        result(&format!(
+            "declare i8 @llvm.{name}.i8(i8, i8, i8)\n\
+             define i8 @f() {{\n  %r = call i8 @llvm.{name}.i8(i8 {a}, i8 {b}, i8 {by})\n  ret i8 %r\n}}\n"
+        ))
+    };
+    assert_eq!(call("fshl", 18, 52, 3), int(0x91, 8));
+    assert_eq!(call("fshr", 18, 52, 3), int(0x46, 8));
+    // A zero amount keeps the half that is not shifted: the first for fshl, the
+    // second for fshr.
+    assert_eq!(call("fshl", 18, 52, 0), int(18, 8));
+    assert_eq!(call("fshr", 18, 52, 8), int(52, 8));
+    assert_eq!(call("fshl", 18, 52, 11), int(0x91, 8));
+    // The same value twice is a rotate.
+    assert_eq!(call("fshl", 129, 129, 1), int(3, 8));
+    assert_eq!(call("fshr", 129, 129, 1), int(0xc0, 8));
+}
+
+/// `llvm.abs` of the minimum is the minimum, or poison where the flag says.
+#[test]
+fn abs_of_the_minimum_is_itself_unless_the_flag_makes_it_poison() {
+    let call = |a: u8, flag: bool| {
+        result(&format!(
+            "declare i8 @llvm.abs.i8(i8, i1)\n\
+             define i8 @f() {{\n  %r = call i8 @llvm.abs.i8(i8 {a}, i1 {flag})\n  ret i8 %r\n}}\n"
+        ))
+    };
+    assert_eq!(call(251, false), int(5, 8));
+    assert_eq!(call(7, true), int(7, 8));
+    assert_eq!(call(128, false), int(128, 8));
+}
+
+/// `llvm.scmp` and `llvm.ucmp` give -1, 0 or 1 at the result's width, comparing
+/// as signed or unsigned integers.
+#[test]
+fn compare_intrinsics_give_minus_one_zero_or_one() {
+    let call = |name: &str, a: u8, b: u8| {
+        result(&format!(
+            "declare i8 @llvm.{name}.i8.i8(i8, i8)\n\
+             define i8 @f() {{\n  %r = call i8 @llvm.{name}.i8.i8(i8 {a}, i8 {b})\n  ret i8 %r\n}}\n"
+        ))
+    };
+    for a in [0_u8, 1, 5, 127, 128, 200, 255] {
+        for b in [0_u8, 1, 5, 127, 128, 200, 255] {
+            let signed = (a as i8).cmp(&(b as i8)) as i8 as u8;
+            let unsigned = a.cmp(&b) as i8 as u8;
+            assert_eq!(call("scmp", a, b), int(u128::from(signed), 8), "scmp {a} {b}");
+            assert_eq!(call("ucmp", a, b), int(u128::from(unsigned), 8), "ucmp {a} {b}");
         }
     }
 }
@@ -400,4 +543,78 @@ fn a_value_outside_its_stated_range_is_reported() {
     // Unchecked, the promise is not looked at.
     let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n{parameter}")).unwrap();
     assert_eq!(crate::interpret::run(&module, "g", vec![small(5)], 100), Ok(small(5)));
+}
+
+/// An `undef` operand reads as some value: the interpreter picks zero, so
+/// `undef + 5` is 5 and not poison.
+#[test]
+fn undef_reads_as_a_value_not_poison() {
+    assert_eq!(result("define i16 @f() {\nentry:\n  %a = add i16 undef, 5\n  ret i16 %a\n}\n"), int(5, 16));
+}
+
+/// `atomicrmw`, `cmpxchg` and the atomic loads and stores had no parser and no
+/// interpreter: one thread runs, so each is the plain access with LLVM's result
+/// (the old value; `{ old, hit }`).
+#[test]
+fn an_atomic_access_is_the_plain_one_on_one_thread() {
+    let text = "define i32 @f() {
+entry:
+  %p = alloca i32, align 4
+  store atomic i32 7, ptr %p seq_cst, align 4
+  %old = atomicrmw add ptr %p, i32 5 acq_rel
+  %miss = cmpxchg ptr %p, i32 1, i32 100 seq_cst seq_cst
+  %hit = cmpxchg ptr %p, i32 12, i32 40 seq_cst seq_cst
+  %flag = extractvalue { i32, i1 } %hit, 1
+  %f = zext i1 %flag to i32
+  %now = load atomic i32, ptr %p acquire, align 4
+  fence seq_cst
+  %a = mul i32 %old, 1000
+  %b = mul i32 %now, 10
+  %c = add i32 %a, %b
+  %d = add i32 %c, %f
+  ret i32 %d
+}
+";
+    // old 7, then 12 -> 40 on the hit: 7000 + 400 + 1.
+    assert_eq!(result(text), int(7401, 32));
+}
+
+/// `llvm.umul.fix`, `llvm.{s,u}mul.fix.sat` and `llvm.{s,u}shl.sat` were
+/// unknown names to the parser; each answer is derived by hand at 16 bits.
+#[test]
+fn fixed_multiplies_and_saturating_shifts_clamp_to_the_range() {
+    let fixed = |name: &str, a: i16, b: i16, scale: u32| {
+        result(&format!(
+            "declare i16 @llvm.{name}.i16(i16, i16, i32)
+define i16 @f() {{
+  %r = call i16 @llvm.{name}.i16(i16 {a}, i16 {b}, i32 {scale})
+  ret i16 %r
+}}
+"
+        ))
+    };
+    let shift = |name: &str, a: i16, by: i16| {
+        result(&format!(
+            "declare i16 @llvm.{name}.i16(i16, i16)
+define i16 @f() {{
+  %r = call i16 @llvm.{name}.i16(i16 {a}, i16 {by})
+  ret i16 %r
+}}
+"
+        ))
+    };
+    // 1.5 * 1.5 = 2.25 with 8 fraction bits.
+    assert_eq!(fixed("umul.fix", 384, 384, 8), int(576, 16));
+    assert_eq!(fixed("umul.fix.sat", 384, 384, 8), int(576, 16));
+    // 200 * 200 = 40000 wraps to -25536 as signed, saturates to the maximum.
+    assert_eq!(fixed("umul.fix", 200, 200, 0), int(40000, 16));
+    assert_eq!(fixed("umul.fix.sat", -1, -1, 0), int(0xffff, 16));
+    assert_eq!(fixed("smul.fix.sat", 200, 200, 0), int(0x7fff, 16));
+    assert_eq!(fixed("smul.fix.sat", 200, -200, 0), int(0x8000, 16));
+    assert_eq!(fixed("smul.fix.sat", -384, 384, 8), int(0xfdc0, 16));
+    assert_eq!(shift("sshl.sat", 0x4000, 1), int(0x7fff, 16));
+    assert_eq!(shift("sshl.sat", -0x4001, 1), int(0x8000, 16));
+    assert_eq!(shift("sshl.sat", 3, 2), int(12, 16));
+    assert_eq!(shift("ushl.sat", -1, 1), int(0xffff, 16));
+    assert_eq!(shift("ushl.sat", 3, 2), int(12, 16));
 }

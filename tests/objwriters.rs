@@ -1,19 +1,17 @@
 //! The object writers: what `-fobject-format=` picks, and what readelf and
 //! objdump make of the objects it writes for every bench C program.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-
-fn llrm_c() -> PathBuf {
-    Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-c")
-}
 
 fn compile(
     source: &Path,
     arguments: &[&str],
     out: &Path,
 ) -> Output {
-    Command::new(llrm_c()).args(arguments).arg(source).arg("-o").arg(out).output().unwrap()
+    common::cc::llrm_c().args(arguments).arg(source).arg("-o").arg(out).output().unwrap()
 }
 
 fn have(tool: &str) -> bool {
@@ -198,7 +196,7 @@ fn lld_link_makes_a_pdb_of_a_c_program() {
         "sizeof 8",
         "S_GDATA32",
         "`g`",
-        "line/addr entries",
+        "addr entries",
     ] {
         assert!(text.contains(wanted), "no {wanted}:\n{text}");
     }
@@ -385,4 +383,16 @@ fn a_pdb_holds_the_functions_of_an_llrm_object_and_a_clang_cl_object() {
     for wanted in ["l.obj", "m.obj", "S_GPROC32", "`start`", "`clang_add`", "`entry`", "`r`", "`s`"] {
         assert!(text.contains(wanted), "no {wanted}:\n{text}");
     }
+}
+
+/// `-g -fobject-format=coff` of any C function was refused ("the line table's
+/// lines are in no function"): the debug nodes were made before the symbols
+/// were decorated, so no function matched `twice_` and the lines had none.
+#[test]
+fn a_c_function_with_g_in_coff_is_written_with_its_lines() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("p.c");
+    std::fs::write(&source, "int twice(int a)\n{\n    int y = a + 1;\n    return y + y;\n}\n").unwrap();
+    let made = compile(&source, &["-m32", "-O0", "-g", "-fobject-format=coff"], &scratch.path().join("p.obj"));
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
 }

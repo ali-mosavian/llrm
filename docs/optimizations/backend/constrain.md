@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/constrain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/constrain.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/constrain.rs sha256:83735f660751b0bc92b65aab2ec2e8a024274ab9ce3c387540a6cad56e349570 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/constrain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/constrain.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/constrain.rs sha256:1d80b8bd4dd488065023fc7fa6ee979fac112d95136fefec7c531a6e11b3eab4 -->
 
 # constrain
 
@@ -38,17 +38,22 @@ The result is the new body and the map of fresh values to registers.
 The same file holds the other splits the allocator applies to a body
 before it places values:
 
-- `distinct_roles`: a value that is both the base and the index of one
-  16-bit address needs two registers at once; the index reads a copy.
 - `distinct_classes`: a value read as a byte (AX..DX) and as the index of
   a frame array (SI, DI) has no register that fits all reads. The reads that
   fit the most others keep the value; each remaining read takes a copy, live
   across that instruction alone.
-- `addressed`: a candidate shape the allocator tries when the first
-  allocation spills. A spilled value that is a base or index in more than
-  one instruction and has no other role (no plain operand, selector,
-  requirement or hidden use) is copied at each addressing instruction, so
-  the copy can sit in an address register while the value is spilled.
+- `hoisted`: a copy into a required register that a loop makes of a value
+  defined before it, the same each trip, is made once in the loop's
+  preheader. The register is then the value's for the whole loop, which
+  nothing else in it may use: no other instruction requires, delivers,
+  clobbers or defines a value pinned to its root, calls included. A loop
+  with several preheaders is left alone.
+
+  DEVIATE C1 (no number): the pin has no such step. Its x86 states a
+  segment as a prefix, never a register copy, and `MachineLICM` does not
+  move a copy into a physical register. Owner laa-runtime-checks-loadelim;
+  exit: a pin-shaped segment class, or `MachineLICM` learning copies to a
+  physical register; review 2026-11-30.
 - `required`, `required_in` and `required_added`: the pin map of a
   body, of some blocks, or of only the instructions added since a previous
   body.
@@ -76,14 +81,13 @@ After (`RegAlloc`):
 ```
 
 From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
--fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+-fno-inline-functions-called-once -fno-ipa-cp-clone
 -march=i386` of the program under `calleefacts`.
 
 ## Used by
-Register allocation (`allocate.rs`), which calls `distinct_roles`,
-`distinct_classes` and `constrained` on the body entering allocation, the
-`required` family each time the body is rewritten, and `addressed` for a
-candidate shape.
+Register allocation (`allocate.rs`), which calls `distinct_classes` and
+`constrained` on the body entering allocation, and the `required` family
+each time the body is rewritten.
 
 ## See also
 The phase map: `crate::backend`

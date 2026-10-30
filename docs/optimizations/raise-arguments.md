@@ -1,6 +1,6 @@
 # Raising BC objects: arguments and numeric values
 
-For contributors to the BC object path (`crates/target/llrm-x86-bc`), which turns a Borland BASIC object into MIR before the ordinary optimizer runs. Explains how stack arguments become whole values, how runtime helpers become operations, and why a numeric argument is not an escaped address.
+For contributors to the BC object path (`crates/frontends/bcobj`), which turns a Borland BASIC object into MIR before the ordinary optimizer runs. Explains how stack arguments become whole values, how runtime helpers become operations, and why a numeric argument is not an escaped address.
 
 ## Where it sits
 
@@ -14,7 +14,7 @@ flowchart TB
   linkStyle default stroke:#64748b,stroke-width:2.2px
   obj["<b>BC .OBJ</b>"]:::src
   bod["<b>bodies + runtime contracts</b><br/><small>(llrm-qbruntime/runtime.toml)</small>"]:::mid
-  raise["<b>llrm-x86-bc</b><br/><small>one MIR function per body<br/>recognizers: pairs, longs,<br/>floats, access, arrays</small>"]:::opt
+  raise["<b>llrm-bcobj</b><br/><small>one MIR function per body<br/>recognizers: pairs, longs,<br/>floats, access, arrays</small>"]:::opt
   mir["<b>MIR</b><br/><small>@llrm.qb.#lt;routine#gt; calls<br/>with their contract</small>"]:::out
   pas["<b>passes.md</b>"]:::mid
   obj -->|"omf"| bod
@@ -48,6 +48,6 @@ BC passes and computes a long as two words. `pairs.rs` finds the pair of word op
 
 ## See it
 
-`llrm-omf` and the `llrm-bcdriver` crate drive the path; `crates/target/llrm-x86-bc/tests/raise.rs` raises fixture objects and checks the printed answers. `--dump DIR` shows MIR after each pass.
+`llrm-omf` and the `llrm-bcdriver` crate drive the path; `crates/frontends/bcobj/tests/raise.rs` raises fixture objects and checks the printed answers. `--dump DIR` shows MIR after each pass.
 
 Passes: [index](passes/readme.md), [fold](passes/fold.md), [gvn](passes/gvn.md).

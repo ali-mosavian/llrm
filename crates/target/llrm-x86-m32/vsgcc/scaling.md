@@ -52,6 +52,8 @@ Each axis is a generated C program that prints a checksum; `check` compiles ever
 | `cells` | N distinct memory cells read after the stores before them | memory forwarding |
 | `joins` | N held cells and N if/else joins that store and read | through-memory's dense solve |
 | `fjoins` | `joins` in floats | float facts |
+| `fanout` | one function using one value N times | passes that walk a value's users once per use |
+| `equal` | one function of N equal expressions | value numbering's replacement of N values by one leader |
 
 ## QCport
 

@@ -1,0 +1,74 @@
+== 
+@reduction_01
+B0:
+  %v0 = icmp sgt i32 %N, 1
+  br i1 %v0, label %B1, label %B6
+B1:
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v12, %B4 ], [ 1, %B1 ]
+  %v2 = load i32, ptr @X
+  br label %B3
+B3:
+  %v3 = phi i64 [ %v8, %B3 ], [ 1, %B2 ]
+  %v4 = phi i32 [ %v2, %B2 ], [ %v7, %B3 ]
+  %v5 = getelementptr inbounds [500 x [500 x i32]], ptr @A, i64 0, i64 %v3, i64 %v1
+  %v6 = load i32, ptr %v5
+  %v7 = add nsw i32 %v4, %v6
+  %v8 = add nuw nsw i64 %v3, 1
+  %v9 = trunc i64 %v8 to i32
+  %v10 = icmp eq i32 %v9, %N
+  br i1 %v10, label %B4, label %B3
+B4:
+  %v11 = phi i32 [ %v7, %B3 ]
+  store i32 %v11, ptr @X
+  %v12 = add nuw nsw i64 %v1, 1
+  %v13 = trunc i64 %v12 to i32
+  %v14 = icmp eq i32 %v13, %N
+  br i1 %v14, label %B5, label %B2
+B5:
+  br label %B6
+B6:
+  ret void
+@reduction_03
+B0:
+  %v0 = icmp sgt i32 %N, 1
+  br i1 %v0, label %B1, label %B8
+B1:
+  br label %B2
+B2:
+  %v1 = phi i64 [ %v19, %B6 ], [ 1, %B1 ]
+  %v2 = load i32, ptr @Y
+  br label %B3
+B3:
+  %v3 = phi i64 [ %v15, %B5 ], [ 1, %B2 ]
+  %v4 = phi i32 [ %v14, %B5 ], [ %v2, %B2 ]
+  %v5 = load i32, ptr @X
+  br label %B4
+B4:
+  %v6 = phi i64 [ %v9, %B4 ], [ 1, %B3 ]
+  %v7 = getelementptr inbounds [500 x [500 x i32]], ptr @A, i64 0, i64 %v6, i64 %v3
+  %v8 = load i32, ptr %v7
+  %v9 = add nuw nsw i64 %v6, 1
+  %v10 = trunc i64 %v9 to i32
+  %v11 = icmp eq i32 %v10, %N
+  br i1 %v11, label %B5, label %B4
+B5:
+  %v12 = getelementptr inbounds [500 x [500 x i32]], ptr @B, i64 0, i64 %v3, i64 %v1
+  %v13 = load i32, ptr %v12
+  %v14 = add nsw i32 %v4, %v13
+  %v15 = add nuw nsw i64 %v3, 1
+  %v16 = trunc i64 %v15 to i32
+  %v17 = icmp eq i32 %v16, %N
+  br i1 %v17, label %B6, label %B3
+B6:
+  %v18 = phi i32 [ %v14, %B5 ]
+  store i32 %v18, ptr @Y
+  %v19 = add nuw nsw i64 %v1, 1
+  %v20 = trunc i64 %v19 to i32
+  %v21 = icmp eq i32 %v20, %N
+  br i1 %v21, label %B7, label %B2
+B7:
+  br label %B8
+B8:
+  ret void

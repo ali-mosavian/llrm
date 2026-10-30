@@ -3,17 +3,21 @@
 
 use std::collections::BTreeSet;
 
+use crate::context::{Constant, ConstantKind, Context};
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
     Operand, Use, ValueData, ValueDef, ValueId,
 };
 use crate::opcode::{Flags, Opcode};
 use crate::types::{Type, TypeId};
+use crate::uselist::Held;
 
-/// Where an instruction goes: before another, or at a block's end.
+/// Where an instruction goes: before or after another, or at a block's end.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Position {
     Before(InstId),
+    /// Right after another: `Before` what follows it, or the end of its block.
+    After(InstId),
     End(BlockId),
 }
 
@@ -27,31 +31,21 @@ thread_local! {
 impl Function {
     /// Parents and use lists from the arenas, after reading.
     pub(crate) fn index(&mut self) {
-        self.value_uses = vec![Vec::new(); self.values.len()];
-        self.block_uses = vec![Vec::new(); self.blocks.len()];
+        self.uses.reset(self.values.len(), self.blocks.len());
         self.parent = vec![None; self.instructions.len()];
         self.erased = vec![false; self.instructions.len()];
         for &block in &self.layout.clone() {
-            for &inst in &self.blocks[block.0 as usize].instructions.clone() {
+            for inst in self.iter_block(block).collect::<Vec<_>>() {
                 self.parent[inst.0 as usize] = Some(block);
             }
         }
         for inst in 0..self.instructions.len() {
             let operands = self.instructions[inst].operands.clone();
+            let phi = self.instructions[inst].opcode == Opcode::Phi;
+            self.uses.slots(inst as u32, operands.len());
             for (index, operand) in operands.into_iter().enumerate() {
-                self.add_use(operand, Use { user: InstId(inst as u32), index: index as u32 });
+                self.add_use(operand, Use { user: InstId(inst as u32), index: index as u32 }, phi);
             }
-        }
-    }
-
-    fn uses_of(
-        &mut self,
-        operand: Operand,
-    ) -> Option<&mut Vec<Use>> {
-        match operand {
-            Operand::Value(value) => Some(&mut self.value_uses[value.0 as usize]),
-            Operand::Block(block) => Some(&mut self.block_uses[block.0 as usize]),
-            Operand::Constant(_) => None,
         }
     }
 
@@ -59,9 +53,10 @@ impl Function {
         &mut self,
         operand: Operand,
         at: Use,
+        phi: bool,
     ) {
-        if let Some(uses) = self.uses_of(operand) {
-            uses.push(at);
+        if let Some(held) = Held::of(operand, phi) {
+            self.uses.link(held, at);
         }
     }
 
@@ -69,11 +64,10 @@ impl Function {
         &mut self,
         operand: Operand,
         at: Use,
+        phi: bool,
     ) {
-        if let Some(uses) = self.uses_of(operand) {
-            #[cfg(test)]
-            USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
-            uses.retain(|one| *one != at);
+        if let Some(held) = Held::of(operand, phi) {
+            self.uses.unlink(held, at);
         }
     }
 
@@ -82,6 +76,7 @@ impl Function {
     pub fn check_uses(&self) -> Vec<String> {
         let mut values = vec![BTreeSet::new(); self.values.len()];
         let mut blocks = vec![BTreeSet::new(); self.blocks.len()];
+        let mut phi_blocks = vec![BTreeSet::new(); self.blocks.len()];
         for (at, instruction) in self.instructions.iter().enumerate() {
             if self.erased[at] {
                 continue;
@@ -90,6 +85,9 @@ impl Function {
                 let one = Use { user: InstId(at as u32), index: index as u32 };
                 match operand {
                     Operand::Value(value) => values[value.0 as usize].insert(one),
+                    Operand::Block(block) if instruction.opcode == Opcode::Phi => {
+                        phi_blocks[block.0 as usize].insert(one)
+                    }
                     Operand::Block(block) => blocks[block.0 as usize].insert(one),
                     Operand::Constant(_) => false,
                 };
@@ -97,15 +95,24 @@ impl Function {
         }
         let mut problems = Vec::new();
         for (at, expected) in values.iter().enumerate() {
-            let kept: BTreeSet<Use> = self.value_uses[at].iter().copied().collect();
-            if kept != *expected || kept.len() != self.value_uses[at].len() {
-                problems.push(format!("value {at}: kept {:?}, operands say {expected:?}", self.value_uses[at]));
+            let list = self.uses.users(Held::Value(at as u32)).iter().copied().collect::<Vec<_>>();
+            let kept: BTreeSet<Use> = list.iter().copied().collect();
+            if kept != *expected || kept.len() != list.len() {
+                problems.push(format!("value {at}: kept {list:?}, operands say {expected:?}"));
             }
         }
         for (at, expected) in blocks.iter().enumerate() {
-            let kept: BTreeSet<Use> = self.block_uses[at].iter().copied().collect();
-            if kept != *expected || kept.len() != self.block_uses[at].len() {
-                problems.push(format!("block {at}: kept {:?}, operands say {expected:?}", self.block_uses[at]));
+            let list = self.uses.users(Held::Block(at as u32)).iter().copied().collect::<Vec<_>>();
+            let kept: BTreeSet<Use> = list.iter().copied().collect();
+            if kept != *expected || kept.len() != list.len() {
+                problems.push(format!("block {at}: kept {list:?}, operands say {expected:?}"));
+            }
+        }
+        for (at, expected) in phi_blocks.iter().enumerate() {
+            let list = self.uses.users(Held::PhiBlock(at as u32)).iter().copied().collect::<Vec<_>>();
+            let kept: BTreeSet<Use> = list.iter().copied().collect();
+            if kept != *expected || kept.len() != list.len() {
+                problems.push(format!("phis of block {at}: kept {list:?}, operands say {expected:?}"));
             }
         }
         problems
@@ -171,6 +178,20 @@ impl Function {
         }
     }
 
+    /// Room for `count` more instructions and their results, for a builder that
+    /// knows how many it will make.
+    pub fn reserve_instructions(
+        &mut self,
+        count: usize,
+    ) {
+        self.instructions.reserve(count);
+        self.parent.reserve(count);
+        self.erased.reserve(count);
+        self.values.reserve(count);
+        // Each instruction is created and placed: two edits logged.
+        self.changes.0.reserve((count * 2).min(1 << 17));
+    }
+
     /// A new instruction, placed nowhere yet; its result, if its type is not
     /// `void`, is named `name` or numbered.
     pub fn create_instruction(
@@ -186,35 +207,114 @@ impl Function {
             let value = ValueId(self.values.len() as u32);
             let name = name.map(|one| self.unique_name(one));
             self.values.push(ValueData { ty, name, def: ValueDef::Instruction(id) });
-            self.value_uses.push(Vec::new());
+            self.uses.push_value();
             value
         });
+        self.uses.slots(id.0, operands.len());
         for (index, &operand) in operands.iter().enumerate() {
-            self.add_use(operand, Use { user: id, index: index as u32 });
+            self.add_use(operand, Use { user: id, index: index as u32 }, opcode == Opcode::Phi);
         }
-        self.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata: Vec::new() });
+        self.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata: Vec::new(), link: (0, 0) });
         self.parent.push(None);
         self.erased.push(false);
         id
     }
 
-    fn slot(
+    /// The instruction after `inst` in its list.
+    fn next_raw(
         &self,
-        position: Position,
-    ) -> Result<(BlockId, usize), String> {
-        match position {
-            Position::End(block) => Ok((block, self.block(block).instructions.len())),
-            Position::Before(next) => {
-                let block = self.parent(next).ok_or_else(|| format!("instruction {} is not placed", next.0))?;
-                let at = self
-                    .block(block)
-                    .instructions
-                    .iter()
-                    .position(|one| *one == next)
-                    .expect("a parent holds its instruction");
-                Ok((block, at))
-            }
+        inst: InstId,
+    ) -> Option<InstId> {
+        match self.instructions[inst.0 as usize].link.1 {
+            0 => None,
+            n => Some(InstId(n - 1)),
         }
+    }
+
+    /// Links `inst` last in `block`'s list.
+    pub(crate) fn link_last(
+        &mut self,
+        block: BlockId,
+        inst: InstId,
+    ) {
+        let b = &mut self.blocks[block.0 as usize];
+        let id = inst.0 + 1;
+        self.instructions[inst.0 as usize].link = (b.tail, 0);
+        if b.tail != 0 {
+            self.instructions[(b.tail - 1) as usize].link.1 = id;
+        } else {
+            b.head = id;
+        }
+        b.tail = id;
+        b.len += 1;
+    }
+
+    /// Links `inst` before `next` in `block`'s list.
+    fn link_before(
+        &mut self,
+        block: BlockId,
+        inst: InstId,
+        next: InstId,
+    ) {
+        let id = inst.0 + 1;
+        let prev = self.instructions[next.0 as usize].link.0;
+        self.instructions[inst.0 as usize].link = (prev, next.0 + 1);
+        self.instructions[next.0 as usize].link.0 = id;
+        let b = &mut self.blocks[block.0 as usize];
+        if prev != 0 {
+            self.instructions[(prev - 1) as usize].link.1 = id;
+        } else {
+            b.head = id;
+        }
+        b.len += 1;
+    }
+
+    /// Takes `inst` out of `block`'s list.
+    fn unlink(
+        &mut self,
+        block: BlockId,
+        inst: InstId,
+    ) {
+        let (prev, next) = self.instructions[inst.0 as usize].link;
+        let b = &mut self.blocks[block.0 as usize];
+        if prev != 0 {
+            self.instructions[(prev - 1) as usize].link.1 = next;
+        } else {
+            b.head = next;
+        }
+        if next != 0 {
+            self.instructions[(next - 1) as usize].link.0 = prev;
+        } else {
+            b.tail = prev;
+        }
+        self.instructions[inst.0 as usize].link = (0, 0);
+        b.len -= 1;
+    }
+
+    /// Links `inst` at `position`; the block and what follows it.
+    fn link_at(
+        &mut self,
+        inst: InstId,
+        position: Position,
+    ) -> Result<(BlockId, Option<InstId>), String> {
+        let (block, next) = match position {
+            Position::End(block) => (block, None),
+            Position::Before(next) => {
+                (self.parent(next).ok_or_else(|| format!("instruction {} is not placed", next.0))?, Some(next))
+            }
+            Position::After(prev) => {
+                let block = self.parent(prev).ok_or_else(|| format!("instruction {} is not placed", prev.0))?;
+                (block, self.next_raw(prev))
+            }
+        };
+        if self.blocks[block.0 as usize].erased {
+            return Err(format!("block {} is erased", block.0));
+        }
+        match next {
+            Some(next) => self.link_before(block, inst, next),
+            None => self.link_last(block, inst),
+        }
+        Ok((block, next))
     }
 
     /// What stood before `from` now stands before `to`, ahead of what stood
@@ -232,6 +332,17 @@ impl Function {
         self.debug_records = kept;
     }
 
+    /// What stood before `from` now stands before `to`, ahead of what stood
+    /// there (`BasicBlock::flushTerminatorDbgRecords`): a pass that replaces a
+    /// terminator keeps what was said before the old one.
+    pub fn move_records_before(
+        &mut self,
+        from: InstId,
+        to: InstId,
+    ) {
+        self.reanchor_records(from, to);
+    }
+
     /// The first instruction after the phis of the block that the unconditional
     /// branch `inst` alone enters.
     fn sole_successor_start(
@@ -242,19 +353,20 @@ impl Function {
             return None;
         }
         let [Operand::Block(target)] = self.instruction(inst).operands[..] else { return None };
-        // A phi that names the block as where its value comes from is a use of
-        // it too, but no way in. (An erase has already taken its own
-        // use of the block away.)
-        let entries: Vec<InstId> = self
-            .block_users(target)
-            .iter()
-            .map(|one| one.user)
-            .filter(|&one| self.instruction(one).opcode != Opcode::Phi)
-            .collect();
-        if !entries.is_empty() && entries != [inst] {
+        // A branch to its own block enters no other: its records have no start
+        // to go to but itself, which is going away.
+        if self.parent(inst) == Some(target) {
             return None;
         }
-        self.block(target).instructions().iter().copied().find(|&one| self.instruction(one).opcode != Opcode::Phi)
+        // Two entries decide it: a list of N was walked whole for each erase.
+        // (An erase has already taken its own use of the block away.)
+        let mut entries = self.block_users(target).iter().map(|one| one.user);
+        match (entries.next(), entries.next()) {
+            (None, _) => {}
+            (Some(only), None) if only == inst => {}
+            _ => return None,
+        }
+        self.iter_block(target).find(|&one| self.instruction(one).opcode != Opcode::Phi)
     }
 
     /// Takes `inst` out of its block. What was said before it is said before
@@ -267,12 +379,10 @@ impl Function {
         moving: bool,
     ) -> Option<(BlockId, Option<InstId>)> {
         let block = self.parent(inst)?;
-        let list = &self.blocks[block.0 as usize].instructions;
-        SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
-        let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
-        let next = list.get(at + 1).copied();
+        let next = self.next_raw(inst);
         self.settle_records(inst, next, moving);
-        self.blocks[block.0 as usize].instructions.remove(at);
+        self.unlink(block, inst);
+        self.order.invalidate(block);
         self.parent[inst.0 as usize] = None;
         Some((block, next))
     }
@@ -317,18 +427,9 @@ impl Function {
         inst: InstId,
         position: Position,
     ) -> Result<(BlockId, Option<InstId>), String> {
-        let (block, at) = self.slot(position)?;
-        if self.block(block).erased {
-            return Err(format!("block {} is erased", block.0));
-        }
-        self.blocks[block.0 as usize].instructions.insert(at, inst);
+        let (block, next) = self.link_at(inst, position)?;
         self.parent[inst.0 as usize] = Some(block);
-        // What follows is what the position named: scanning the block for it
-        // made each append linear (#992).
-        let next = match position {
-            Position::End(_) => None,
-            Position::Before(next) => Some(next),
-        };
+        self.order.invalidate(block);
         Ok((block, next))
     }
 
@@ -373,12 +474,78 @@ impl Function {
     ) -> Result<(), String> {
         for &inst in run {
             let block_from = self.parent(inst).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
-            let list = &mut self.blocks[block_from.0 as usize].instructions;
-            let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
-            list.remove(at);
+            self.unlink(block_from, inst);
+            self.order.invalidate(block_from);
             self.parent[inst.0 as usize] = None;
             let (to, next) = self.attach(inst, Position::End(block))?;
             self.log(Change::Moved { inst, block: to, next, from: block_from });
+        }
+        Ok(())
+    }
+
+    /// `BasicBlock::splice`: the placed instructions `run`, in order, moved to
+    /// `position` (not inside the run), as moving them one by one before it
+    /// would. Each block is rewritten once, not once per instruction: O(the
+    /// blocks it touches), where `move_to` for each is O(run x block).
+    pub fn splice(
+        &mut self,
+        run: &[InstId],
+        position: Position,
+    ) -> Result<(), String> {
+        let mut moving = crate::dense::IdSet::<InstId>::new();
+        for &inst in run {
+            if self.parent(inst).is_none() {
+                return Err(format!("instruction {} is not placed", inst.0));
+            }
+            if !moving.insert(inst) {
+                return Err(format!("instruction {} is twice in the run", inst.0));
+            }
+        }
+        let anchor = match position {
+            Position::Before(one) | Position::After(one) => Some(one),
+            Position::End(_) => None,
+        };
+        if anchor.is_some_and(|one| moving.contains(&one)) {
+            return Err("the position is inside the run".to_owned());
+        }
+        let froms: Vec<BlockId> = run.iter().map(|&inst| self.parent(inst).expect("placed")).collect();
+        let mut blocks = froms.clone();
+        blocks.sort_unstable();
+        blocks.dedup();
+        for &inst in run {
+            let from = self.parent(inst).expect("placed");
+            self.unlink(from, inst);
+        }
+        for &block in &blocks {
+            self.order.invalidate(block);
+        }
+        for &inst in run {
+            self.parent[inst.0 as usize] = None;
+        }
+        // The place is found with the run out of the way.
+        let (to, next) = match position {
+            Position::End(block) => (block, None),
+            Position::Before(one) => {
+                (self.parent(one).ok_or_else(|| format!("instruction {} is not placed", one.0))?, Some(one))
+            }
+            Position::After(one) => {
+                let block = self.parent(one).ok_or_else(|| format!("instruction {} is not placed", one.0))?;
+                (block, self.next_raw(one))
+            }
+        };
+        if self.blocks[to.0 as usize].erased {
+            return Err(format!("block {} is erased", to.0));
+        }
+        for &inst in run {
+            match next {
+                Some(next) => self.link_before(to, inst, next),
+                None => self.link_last(to, inst),
+            }
+        }
+        self.order.invalidate(to);
+        for (&inst, &from) in run.iter().zip(&froms) {
+            self.parent[inst.0 as usize] = Some(to);
+            self.log(Change::Moved { inst, block: to, next, from });
         }
         Ok(())
     }
@@ -391,8 +558,9 @@ impl Function {
     ) {
         let at = Use { user: inst, index: index as u32 };
         let old = std::mem::replace(&mut self.instructions[inst.0 as usize].operands[index], operand);
-        self.remove_use(old, at);
-        self.add_use(operand, at);
+        let phi = self.instructions[at.user.0 as usize].opcode == Opcode::Phi;
+        self.remove_use(old, at, phi);
+        self.add_use(operand, at, phi);
         self.log(Change::Operand { inst, index: index as u32, was: old });
         self.log(Change::Rewritten(inst));
     }
@@ -404,31 +572,22 @@ impl Function {
         inst: InstId,
         operands: Vec<Operand>,
     ) {
+        let phi = self.instructions[inst.0 as usize].opcode == Opcode::Phi;
         let old = std::mem::take(&mut self.instructions[inst.0 as usize].operands);
         let was: Box<[Operand]> = old.as_slice().into();
-        if old.len() > 4 {
-            // A phi of N inputs names a few values and N blocks: each list is
-            // scanned once for all the places `inst` names it, not
-            // once for each, which was N^2 for the one value
-            // N inputs repeat.
-            let mut places = crate::hash::HashMap::<Operand, Vec<u32>>::default();
-            for (index, operand) in old.into_iter().enumerate() {
-                places.entry(operand).or_default().push(index as u32);
-            }
-            for (operand, indexes) in places {
-                if let Some(uses) = self.uses_of(operand) {
-                    #[cfg(test)]
-                    USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
-                    uses.retain(|one| one.user != inst || indexes.binary_search(&one.index).is_err());
-                }
-            }
+        // The operands before the first that differs keep their uses, as
+        // `removeIncomingValue` moves only what follows the entry it removes.
+        let kept = if self.uses.fits(inst.0, operands.len()) {
+            old.iter().zip(&operands).take_while(|(before, after)| before == after).count()
         } else {
-            for (index, operand) in old.into_iter().enumerate() {
-                self.remove_use(operand, Use { user: inst, index: index as u32 });
-            }
+            0
+        };
+        for (index, operand) in old.into_iter().enumerate().skip(kept) {
+            self.remove_use(operand, Use { user: inst, index: index as u32 }, phi);
         }
-        for (index, &operand) in operands.iter().enumerate() {
-            self.add_use(operand, Use { user: inst, index: index as u32 });
+        self.uses.slots(inst.0, operands.len());
+        for (index, &operand) in operands.iter().enumerate().skip(kept) {
+            self.add_use(operand, Use { user: inst, index: index as u32 }, phi);
         }
         self.instructions[inst.0 as usize].operands = operands;
         self.log(Change::Operands { inst, was });
@@ -448,6 +607,21 @@ impl Function {
         }
     }
 
+    /// `AllocaInst::setAlignment`.
+    pub fn set_alloca_align(
+        &mut self,
+        inst: InstId,
+        align: u64,
+    ) {
+        let Opcode::Alloca { align: held, .. } = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("an alloca")
+        };
+        if *held != Some(align) {
+            *held = Some(align);
+            self.log(Change::Rewritten(inst));
+        }
+    }
+
     /// Makes the store `inst` volatile.
     pub fn make_store_volatile(
         &mut self,
@@ -461,6 +635,100 @@ impl Function {
         }
     }
 
+    /// Gives the `icmp` `inst` the predicate `predicate`, as LLVM's
+    /// `CmpInst::setPredicate`.
+    pub fn set_icmp_predicate(
+        &mut self,
+        inst: InstId,
+        predicate: crate::opcode::IntPredicate,
+    ) {
+        let Opcode::ICmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an icmp") };
+        *held = predicate;
+        self.log(Change::Rewritten(inst));
+    }
+
+    /// `FCmpInst::setPredicate`.
+    pub fn set_fcmp_predicate(
+        &mut self,
+        inst: InstId,
+        predicate: crate::opcode::FloatPredicate,
+    ) {
+        let Opcode::FCmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an fcmp") };
+        *held = predicate;
+        self.log(Change::Rewritten(inst));
+    }
+
+    /// `Value::setName`: `value` is named `name`, or `name` with the least
+    /// number appended that nothing live holds.
+    pub fn set_name(
+        &mut self,
+        value: ValueId,
+        name: &str,
+    ) {
+        let name = self.unique_name(name);
+        self.values[value.0 as usize].name = Some(name);
+    }
+
+    /// `Value::takeName`: `to` is named what `from` was, which goes unnamed;
+    /// the name stays taken in the function.
+    pub fn take_name(
+        &mut self,
+        from: ValueId,
+        to: ValueId,
+    ) {
+        let name = self.values[from.0 as usize].name.take();
+        self.values[to.0 as usize].name = name;
+    }
+
+    /// `BasicBlock::takeName`: `to` is named what `from` was, which goes
+    /// unnamed; the name stays taken in the function.
+    pub fn take_block_name(
+        &mut self,
+        from: BlockId,
+        to: BlockId,
+    ) {
+        let name = self.blocks[from.0 as usize].name.take();
+        self.blocks[to.0 as usize].name = name;
+    }
+
+    /// `BasicBlock::setName`: `block` is named `name`, or `name` with the least
+    /// number appended that nothing live holds.
+    pub fn set_block_name(
+        &mut self,
+        block: BlockId,
+        name: &str,
+    ) {
+        self.release_name(block);
+        let name = self.unique_name(name);
+        self.blocks[block.0 as usize].name = Some(name);
+    }
+
+    /// Replaces an instruction's opcode in place (a `getelementptr`'s source
+    /// type, say); operands and users stay.
+    pub fn set_opcode(
+        &mut self,
+        inst: InstId,
+        opcode: Opcode,
+    ) {
+        self.instructions[inst.0 as usize].opcode = opcode;
+        self.log(Change::Rewritten(inst));
+    }
+
+    /// Gives an instruction's result another type (`Value::mutateType`); the
+    /// operands and users stay, and what reads the old type is the caller's to
+    /// put right.
+    pub fn set_type(
+        &mut self,
+        inst: InstId,
+        ty: TypeId,
+    ) {
+        self.instructions[inst.0 as usize].ty = ty;
+        if let Some(result) = self.instructions[inst.0 as usize].result {
+            self.values[result.0 as usize].ty = ty;
+        }
+        self.log(Change::Rewritten(inst));
+    }
+
     /// Replaces an instruction's flags.
     pub fn set_flags(
         &mut self,
@@ -469,16 +737,6 @@ impl Function {
     ) {
         self.instructions[inst.0 as usize].flags = flags;
         self.log(Change::Rewritten(inst));
-    }
-
-    fn replace_uses(
-        &mut self,
-        uses: Vec<Use>,
-        with: Operand,
-    ) {
-        for one in uses {
-            self.set_operand(one.user, one.index as usize, with);
-        }
     }
 
     /// Every use of `value` now reads `with`. A record that names `value` still
@@ -491,7 +749,11 @@ impl Function {
         with: Operand,
     ) {
         if with != Operand::Value(value) {
-            self.replace_uses(self.users(value).to_vec(), with);
+            // As LLVM's `Value::doRAUW`: each use moves from the head, so the
+            // list is not copied.
+            while let Some(one) = self.uses.head(Held::Value(value.0)) {
+                self.set_operand(one.user, one.index as usize, with);
+            }
         }
     }
 
@@ -508,11 +770,11 @@ impl Function {
             self.retarget_debug_records(value, with);
             // Every use goes: the list is taken, not scanned for each of its
             // uses (a value of U uses read U^2 entries).
-            let uses = std::mem::take(&mut self.value_uses[value.0 as usize]);
             self.log(Change::Substituted { from: value, to: with });
-            for one in uses {
+            while let Some(one) = self.uses.head(Held::Value(value.0)) {
+                self.uses.unlink(Held::Value(value.0), one);
                 self.instructions[one.user.0 as usize].operands[one.index as usize] = with;
-                self.add_use(with, one);
+                self.add_use(with, one, self.instructions[one.user.0 as usize].opcode == Opcode::Phi);
                 self.log(Change::Operand { inst: one.user, index: one.index, was: Operand::Value(value) });
                 self.log(Change::Rewritten(one.user));
             }
@@ -540,7 +802,7 @@ impl Function {
         what: DebugWhat,
     ) {
         let at = self.debug_records.iter().position(|one| one.before == before).unwrap_or(self.debug_records.len());
-        self.debug_records.insert(at, DebugRecord { before, variable, what });
+        self.debug_records.insert(at, DebugRecord { before, variable, what, expression: None, location: None });
     }
 
     /// Says what `variable` is from just before `before` on, after the records
@@ -551,7 +813,7 @@ impl Function {
         variable: MetadataId,
         what: DebugWhat,
     ) {
-        self.debug_records.push(DebugRecord { before, variable, what });
+        self.debug_records.push(DebugRecord { before, variable, what, expression: None, location: None });
     }
 
     /// The records of what `value` was now say `with`.
@@ -601,7 +863,11 @@ impl Function {
         with: BlockId,
     ) {
         if with != block {
-            self.replace_uses(self.block_users(block).to_vec(), Operand::Block(with));
+            for held in [Held::Block(block.0), Held::PhiBlock(block.0)] {
+                while let Some(one) = self.uses.head(held) {
+                    self.set_operand(one.user, one.index as usize, Operand::Block(with));
+                }
+            }
         }
     }
 
@@ -617,11 +883,16 @@ impl Function {
         if let Some(result) = self.instruction(inst).result
             && !self.users(result).is_empty()
         {
-            return Err(format!("instruction {}'s result still has {} users", inst.0, self.users(result).len()));
+            return Err(format!(
+                "instruction {}'s result still has {} users",
+                inst.0,
+                self.users(result).iter().count()
+            ));
         }
         let operands = self.instructions[inst.0 as usize].operands.clone();
+        let phi = self.instructions[inst.0 as usize].opcode == Opcode::Phi;
         for (index, operand) in operands.into_iter().enumerate() {
-            self.remove_use(operand, Use { user: inst, index: index as u32 });
+            self.remove_use(operand, Use { user: inst, index: index as u32 }, phi);
         }
         if let Some(result) = self.instruction(inst).result {
             self.forget_debug_value(result);
@@ -653,49 +924,35 @@ impl Function {
                 return Err(format!("instruction {}'s result still has a user, {}", inst.0, user.user.0));
             }
         }
-        // Each operand's uses are filtered once, not once for each use of it
-        // that goes: a value used by k of the instructions was O(k) a use.
-        let mut operands: Vec<Operand> = Vec::new();
-        let mut seen_values = crate::dense::IdSet::<ValueId>::new();
-        let mut seen_blocks = crate::dense::IdSet::<BlockId>::new();
         for &inst in &insts {
-            for &operand in &self.instructions[inst.0 as usize].operands {
-                let first = match operand {
-                    Operand::Value(value) => seen_values.insert(value),
-                    Operand::Block(block) => seen_blocks.insert(block),
-                    Operand::Constant(_) => false,
-                };
-                if first {
-                    operands.push(operand);
+            for (index, &operand) in self.instructions[inst.0 as usize].operands.iter().enumerate() {
+                if let Some(held) = Held::of(operand, self.instructions[inst.0 as usize].opcode == Opcode::Phi) {
+                    self.uses.unlink(held, Use { user: inst, index: index as u32 });
                 }
             }
             if let Some(result) = self.instruction(inst).result {
                 self.forget_debug_value(result);
             }
         }
-        for operand in operands {
-            if let Some(uses) = self.uses_of(operand) {
-                #[cfg(test)]
-                USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
-                uses.retain(|one| !gone.contains(&one.user));
-            }
-        }
         let mut blocks: Vec<BlockId> = insts.iter().filter_map(|&inst| self.parent(inst)).collect();
         blocks.sort_unstable();
         blocks.dedup();
         for block in blocks {
-            let list = self.blocks[block.0 as usize].instructions.clone();
-            SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
+            let mut at = self.blocks[block.0 as usize].tail;
             let mut next = None;
-            for &inst in list.iter().rev() {
+            while at != 0 {
+                let inst = InstId(at - 1);
+                let before = self.instructions[inst.0 as usize].link.0;
                 if gone.contains(&inst) {
                     self.settle_records(inst, next, false);
                     self.log(Change::Erased { inst, block, next });
+                    self.unlink(block, inst);
                 } else {
                     next = Some(inst);
                 }
+                at = before;
             }
-            self.blocks[block.0 as usize].instructions.retain(|one| !gone.contains(one));
+            self.order.invalidate(block);
         }
         for inst in insts {
             self.parent[inst.0 as usize] = None;
@@ -716,6 +973,23 @@ impl Function {
             panic!("a call")
         };
         info.argument_attrs[index].push(attr);
+        self.log(Change::Rewritten(inst));
+    }
+
+    /// `CallBase::addParamAttr(index, Attribute::getWithAlignment(align))`: the
+    /// argument's `align` is `align`, an earlier one replaced.
+    pub fn set_argument_align(
+        &mut self,
+        inst: InstId,
+        index: usize,
+        align: u64,
+    ) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("a call")
+        };
+        let attrs = &mut info.argument_attrs[index];
+        attrs.retain(|one| !matches!(one, crate::opcode::Attribute::Int(name, _) if name == "align"));
+        attrs.push(crate::opcode::Attribute::Int("align".to_owned(), align));
         self.log(Change::Rewritten(inst));
     }
 
@@ -749,6 +1023,37 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// `CallBase::removeUBImplyingAttrs` of
+    /// `Instruction::dropUBImplyingAttrsAndMetadata`: the call `inst` keeps
+    /// no attribute of its result or arguments that makes it undefined (a
+    /// fact's `implies_ub`, and `dereferenceable_or_null`). Whether any was
+    /// dropped.
+    pub fn drop_ub_implying_attrs(
+        &mut self,
+        inst: InstId,
+    ) -> bool {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            return false;
+        };
+        let implies_ub = |attr: &crate::opcode::Attribute| {
+            crate::facts::Fact::of_attribute(attr).is_some_and(crate::facts::Fact::implies_ub)
+                || matches!(
+                    attr,
+                    crate::opcode::Attribute::Int(name, _) if name == "dereferenceable_or_null"
+                )
+        };
+        let before = info.return_attrs.len() + info.argument_attrs.iter().map(Vec::len).sum::<usize>();
+        info.return_attrs.retain(|attr| !implies_ub(attr));
+        for attrs in &mut info.argument_attrs {
+            attrs.retain(|attr| !implies_ub(attr));
+        }
+        let changed = before != info.return_attrs.len() + info.argument_attrs.iter().map(Vec::len).sum::<usize>();
+        if changed {
+            self.log(Change::Rewritten(inst));
+        }
+        changed
+    }
+
     /// Gives the call `inst` calling convention `convention`.
     pub fn set_call_convention(
         &mut self,
@@ -775,7 +1080,7 @@ impl Function {
             .map(|&ty| {
                 let value = ValueId(self.values.len() as u32);
                 self.values.push(ValueData { ty, name: None, def: ValueDef::Argument(0) });
-                self.value_uses.push(Vec::new());
+                self.uses.push_value();
                 value
             })
             .collect();
@@ -876,6 +1181,34 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// `Instruction::dropPoisonGeneratingAnnotations`: the flags, metadata and
+    /// call attributes of `inst` that make its result poison when the
+    /// operands it was proved for change. `ctlz`, `cttz` and `abs` have no
+    /// MIR spelling, so their poison-on-zero operand is not here.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Instruction.h#L614>
+    pub fn drop_poison_generating_annotations(
+        &mut self,
+        inst: InstId,
+    ) {
+        use crate::opcode::Attribute;
+        let poison_attribute = |attr: &Attribute| match attr {
+            Attribute::Range { .. } => true,
+            Attribute::Flag(name) => name == "nonnull",
+            Attribute::Int(name, _) => name == "align",
+            _ => false,
+        };
+        let instruction = &mut self.instructions[inst.0 as usize];
+        instruction.flags = instruction.flags.without(Flags::POISON_GENERATING);
+        instruction.metadata.retain(|(kind, _)| !matches!(kind.as_str(), "range" | "nonnull" | "align" | "nofpclass"));
+        if let Opcode::Call(info) | Opcode::Invoke(info) = &mut instruction.opcode {
+            info.return_attrs.retain(|attr| !poison_attribute(attr));
+            for attrs in &mut info.argument_attrs {
+                attrs.retain(|attr| !poison_attribute(attr));
+            }
+        }
+        self.log(Change::Rewritten(inst));
+    }
+
     /// Attaches `node` to `inst` as metadata of `kind`.
     pub fn annotate(
         &mut self,
@@ -884,6 +1217,26 @@ impl Function {
         node: MetadataId,
     ) {
         self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));
+        self.log(Change::Rewritten(inst));
+    }
+
+    /// `Instruction::setMetadata`: `inst` has `node` as its metadata of `kind`
+    /// alone, or none of that kind where `node` is `None`.
+    pub fn set_metadata(
+        &mut self,
+        inst: InstId,
+        kind: &str,
+        node: Option<MetadataId>,
+    ) {
+        let metadata = &mut self.instructions[inst.0 as usize].metadata;
+        let before = metadata.clone();
+        metadata.retain(|(one, _)| one != kind);
+        if let Some(node) = node {
+            metadata.push((kind.to_owned(), node));
+        }
+        if self.instructions[inst.0 as usize].metadata != before {
+            self.log(Change::Rewritten(inst));
+        }
     }
 
     /// Every metadata node the function names (on an instruction, or in a debug
@@ -913,7 +1266,13 @@ impl Function {
         inst: InstId,
         kind: &str,
     ) {
-        self.instructions[inst.0 as usize].metadata.retain(|(one, _)| one != kind);
+        let metadata = &mut self.instructions[inst.0 as usize].metadata;
+        let held = metadata.len();
+        metadata.retain(|(one, _)| one != kind);
+        // `!range` and the like are facts about the result.
+        if metadata.len() != held {
+            self.log(Change::Rewritten(inst));
+        }
     }
 
     /// A copy of `inst`, placed nowhere, its result unnamed.
@@ -941,11 +1300,61 @@ impl Function {
                 }
                 other => other,
             };
-            self.debug_records.push(DebugRecord { before: copy, variable: one.variable, what });
+            self.debug_records.push(DebugRecord {
+                before: copy,
+                variable: one.variable,
+                what,
+                expression: one.expression,
+                location: one.location,
+            });
         }
         self.instructions[copy.0 as usize].metadata = original.metadata;
         self.log(Change::Cloned { from: inst, to: copy });
         copy
+    }
+
+    /// `CloneBasicBlock(BB, VMap)`
+    /// ([CloneFunction.cpp:40](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/CloneFunction.cpp#L40)):
+    /// a copy of `block` in the layout nowhere yet, its instructions copied in
+    /// order. `map` gets `block` and each result of the original (not the
+    /// `void` ones) with the copy's. The copies still read the original's
+    /// values: `remap_instruction` rewrites them.
+    pub fn clone_block(
+        &mut self,
+        block: BlockId,
+        map: &mut ValueMap,
+    ) -> BlockId {
+        let copy = self.create_block(None);
+        map.blocks.insert(block, copy);
+        for inst in self.iter_block(block).collect::<Vec<_>>() {
+            let duplicate = self.clone_instruction(inst);
+            self.insert(duplicate, Position::End(copy)).expect("a new block takes its instructions");
+            if let (Some(from), Some(to)) = (self.instruction(inst).result, self.instruction(duplicate).result) {
+                map.values.insert(from, Operand::Value(to));
+            }
+        }
+        copy
+    }
+
+    /// `RemapInstruction(I, VMap)`
+    /// ([ValueMapper.cpp:1014](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ValueMapper.cpp#L1014)):
+    /// the operands `map` has an entry for are replaced; the rest stay.
+    pub fn remap_instruction(
+        &mut self,
+        inst: InstId,
+        map: &ValueMap,
+    ) {
+        let operands = self
+            .instruction(inst)
+            .operands
+            .iter()
+            .map(|&one| match one {
+                Operand::Value(value) => map.values.get(&value).copied().unwrap_or(one),
+                Operand::Block(block) => map.blocks.get(&block).map_or(one, |&copy| Operand::Block(copy)),
+                Operand::Constant(_) => one,
+            })
+            .collect();
+        self.set_operands(inst, operands);
     }
 
     /// A new, empty block, in the layout nowhere yet.
@@ -955,8 +1364,8 @@ impl Function {
     ) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
         let name = name.map(|one| self.unique_name(one));
-        self.blocks.push(Block { name, instructions: Vec::new(), erased: false, placed: false });
-        self.block_uses.push(Vec::new());
+        self.blocks.push(Block { name, erased: false, placed: false, ..Block::default() });
+        self.uses.push_block();
         self.log(Change::BlockCreated(id));
         id
     }
@@ -985,11 +1394,81 @@ impl Function {
         Ok(())
     }
 
+    /// Puts `block` in the layout right before the placed `before`
+    /// (`BasicBlock::Create(..., InsertBefore)`).
+    pub fn insert_block_before(
+        &mut self,
+        block: BlockId,
+        before: BlockId,
+    ) -> Result<(), String> {
+        if self.is_placed(block) || self.block(block).erased {
+            return Err(format!("block {} is already placed or erased", block.0));
+        }
+        let at = self
+            .layout
+            .iter()
+            .position(|one| *one == before)
+            .ok_or_else(|| format!("block {} is not placed", before.0))?;
+        self.layout.insert(at, block);
+        self.blocks[block.0 as usize].placed = true;
+        Ok(())
+    }
+
+    /// `BasicBlock::moveBefore`: the placed `block` moved to stand right
+    /// before the placed `before`.
+    pub fn move_block_before(
+        &mut self,
+        block: BlockId,
+        before: BlockId,
+    ) -> Result<(), String> {
+        if block == before {
+            return Ok(());
+        }
+        let from = self
+            .layout
+            .iter()
+            .position(|one| *one == block)
+            .ok_or_else(|| format!("block {} is not placed", block.0))?;
+        self.layout.remove(from);
+        let at = self
+            .layout
+            .iter()
+            .position(|one| *one == before)
+            .ok_or_else(|| format!("block {} is not placed", before.0))?;
+        self.layout.insert(at, block);
+        Ok(())
+    }
+
+    /// `BasicBlock::moveAfter`: the placed `block` moved to stand right after
+    /// the placed `after`.
+    pub fn move_block_after(
+        &mut self,
+        block: BlockId,
+        after: BlockId,
+    ) -> Result<(), String> {
+        if block == after {
+            return Ok(());
+        }
+        let from = self
+            .layout
+            .iter()
+            .position(|one| *one == block)
+            .ok_or_else(|| format!("block {} is not placed", block.0))?;
+        self.layout.remove(from);
+        let at = self
+            .layout
+            .iter()
+            .position(|one| *one == after)
+            .ok_or_else(|| format!("block {} is not placed", after.0))?;
+        self.layout.insert(at + 1, block);
+        Ok(())
+    }
+
     /// Drops every instruction and block, leaving a declaration, as LLVM's
     /// `deleteBody`.
     pub fn delete_body(&mut self) {
         for block in self.layout.clone() {
-            for inst in self.block(block).instructions.clone() {
+            for inst in self.iter_block(block).collect::<Vec<_>>() {
                 let (block, next) = self.detach(inst, false).expect("a placed instruction");
                 self.log(Change::Erased { inst, block, next });
             }
@@ -1001,8 +1480,103 @@ impl Function {
         self.layout.clear();
         self.debug_records.clear();
         self.erased.fill(true);
-        self.value_uses.iter_mut().for_each(Vec::clear);
-        self.block_uses.iter_mut().for_each(Vec::clear);
+        self.uses.clear_all();
+    }
+
+    /// One edge from `predecessor` into `block` gone: its phis lose one input
+    /// from it. Unless `keep_one_input_phis`, a phi left with no input is
+    /// replaced by poison, and one whose inputs are all alike by that value.
+    /// LLVM's
+    /// [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446).
+    /// MIRROR, one call drops one input.
+    pub fn predecessor_removed(
+        &mut self,
+        context: &Context,
+        block: BlockId,
+        predecessor: BlockId,
+        keep_one_input_phis: bool,
+    ) {
+        let phis: Vec<InstId> =
+            self.iter_block(block).take_while(|&one| self.instruction(one).opcode == Opcode::Phi).collect();
+        // Return early if there are no PHI nodes to update.
+        let Some(&front) = phis.first() else { return };
+        let num_preds = self.instruction(front).operands.len() / 2;
+        for phi in phis {
+            self.remove_incoming_value(context, phi, predecessor, !keep_one_input_phis);
+            if keep_one_input_phis {
+                continue;
+            }
+            // With a single predecessor, removeIncomingValue erased the phi.
+            if num_preds == 1 {
+                continue;
+            }
+            if let Some(constant) = self.phi_constant_value(context, phi) {
+                self.replace_value(self.instruction(phi).result.expect("a phi's value"), constant);
+                self.set_operands(phi, Vec::new());
+                self.erase(phi).expect("a phi nothing reads");
+            }
+        }
+    }
+
+    /// `PHINode::removeIncomingValue(BB, DeletePHIIfEmpty)`: the last input
+    /// takes the removed one's place. Whether an input from `predecessor` was
+    /// there.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L148>
+    pub fn remove_incoming_value(
+        &mut self,
+        context: &Context,
+        phi: InstId,
+        predecessor: BlockId,
+        delete_phi_if_empty: bool,
+    ) -> bool {
+        let mut operands = self.instruction(phi).operands.clone();
+        let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else {
+            return false;
+        };
+        let last = operands.len() / 2 - 1;
+        if at != last {
+            operands[2 * at] = operands[2 * last];
+            operands[2 * at + 1] = operands[2 * last + 1];
+        }
+        operands.truncate(2 * last);
+        let emptied = operands.is_empty();
+        self.set_operands(phi, operands);
+        if emptied && delete_phi_if_empty {
+            let result = self.instruction(phi).result.expect("a phi's value");
+            let poison = context.constant(Constant { ty: self.value(result).ty, kind: ConstantKind::Poison });
+            self.replace_value(result, Operand::Constant(poison));
+            self.erase(phi).expect("a phi nothing reads");
+        }
+        true
+    }
+
+    /// `PHINode::hasConstantValue`: the one value all of `phi`'s inputs are
+    /// but itself (poison if it has only itself).
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L212>
+    fn phi_constant_value(
+        &self,
+        context: &Context,
+        phi: InstId,
+    ) -> Option<Operand> {
+        let result = self.instruction(phi).result.expect("a phi's value");
+        let this = Operand::Value(result);
+        let mut inputs = self.instruction(phi).operands.chunks(2).map(|pair| pair[0]);
+        let mut only = inputs.next()?;
+        for value in inputs {
+            if value != only && value != this {
+                if only != this {
+                    return None;
+                }
+                only = value;
+            }
+        }
+        if only == this {
+            let poison = context.constant(Constant { ty: self.value(result).ty, kind: ConstantKind::Poison });
+            return Some(Operand::Constant(poison));
+        }
+        Some(only)
     }
 
     /// Removes an empty block nothing names.
@@ -1010,35 +1584,54 @@ impl Function {
         &mut self,
         block: BlockId,
     ) -> Result<(), String> {
-        if !self.block(block).instructions.is_empty() {
-            return Err(format!("block {} still holds instructions", block.0));
+        self.erase_blocks(&[block])
+    }
+
+    /// Removes empty blocks nothing names, leaving the layout in one pass:
+    /// erasing `n` blocks one by one scans it `n` times.
+    pub fn erase_blocks(
+        &mut self,
+        blocks: &[BlockId],
+    ) -> Result<(), String> {
+        for &block in blocks {
+            if !self.blocks[block.0 as usize].is_empty() {
+                return Err(format!("block {} still holds instructions", block.0));
+            }
+            if !self.block_users(block).is_empty() || !self.phi_block_users(block).is_empty() {
+                let users = self.block_users(block).iter().count() + self.phi_block_users(block).iter().count();
+                return Err(format!("block {} still has {users} users", block.0));
+            }
         }
-        if !self.block_users(block).is_empty() {
-            return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
+        let mut gone = crate::dense::IdSet::<BlockId>::new();
+        for &block in blocks {
+            gone.insert(block);
         }
-        self.layout.retain(|one| *one != block);
-        self.release_name(block);
-        self.blocks[block.0 as usize].erased = true;
-        self.blocks[block.0 as usize].placed = false;
-        self.log(Change::BlockErased(block));
+        LAYOUT_SCANNED.with(|scanned| scanned.set(scanned.get() + self.layout.len()));
+        self.layout.retain(|one| !gone.contains(one));
+        for &block in blocks {
+            self.release_name(block);
+            self.blocks[block.0 as usize].erased = true;
+            self.blocks[block.0 as usize].placed = false;
+            self.log(Change::BlockErased(block));
+        }
         Ok(())
     }
 }
 
 thread_local! {
-    /// Instructions of a block looked over to take instructions out of it: the
-    /// cost of erasing, which was a scan of the block per instruction erased.
-    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Layout entries looked over to take blocks out of it.
+    static LAYOUT_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many instructions of a block this thread has looked over to take
-/// instructions out of it, for a test that a pass erasing k of a block's n
-/// does not scan k times n.
-pub fn instructions_scanned() -> usize {
-    SCANNED.with(std::cell::Cell::get)
+/// How many layout entries this thread has looked over to erase blocks, for a
+/// test that erasing k of n blocks does not scan k times n.
+pub fn layout_scanned() -> usize {
+    LAYOUT_SCANNED.with(std::cell::Cell::get)
 }
 
-#[cfg(test)]
-thread_local! {
-    pub(crate) static USES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+/// `ValueToValueMapTy`: what `clone_block` copied, original to copy.
+#[derive(Default)]
+pub struct ValueMap {
+    pub values: crate::dense::IdMap<ValueId, Operand>,
+    pub blocks: crate::dense::IdMap<BlockId, BlockId>,
 }

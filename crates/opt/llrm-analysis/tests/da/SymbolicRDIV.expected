@@ -1,0 +1,50 @@
+== 
+@symbolicrdiv0
+  output [*]!
+  flow [|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicrdiv1
+  output [*]!
+  flow [|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicrdiv2
+  output [*]!
+  flow [|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicrdiv3
+  output [*]!
+  flow [|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicrdiv4
+  output [*]!
+  flow [|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicrdiv5
+  output [*]!
+  flow [|<]!
+  confused!
+  input [*]!
+  confused!
+  output [*]!
+@symbolicrdiv6
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  input [S S]!
+  confused!
+  confused!

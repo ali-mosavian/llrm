@@ -1,0 +1,108 @@
+diff --git a/crates/opt/llrm-transforms/src/lsr_generate.rs b/crates/opt/llrm-transforms/src/lsr_generate.rs
+index 5747a0822..3e22448ec 100644
+--- a/crates/opt/llrm-transforms/src/lsr_generate.rs
++++ b/crates/opt/llrm-transforms/src/lsr_generate.rs
+@@ -982,6 +982,103 @@ impl Collection<'_, '_> {
+             }
+         }
+         self.generate_cross_use_constant_offsets(se);
++        self.generate_zero_end_counters(se);
++    }
++
++    /// DEVIATE LZ1 (no pin counterpart; owner w-5, review 2026-11-19): a
++    /// counter that ends at zero. Where an ICmpZero formula is
++    /// `reg(B) + -1*reg(IV)` (`B - IV == 0`) with `B` invariant in the loop,
++    /// the counter `R = IV - B` ends at zero: `reg(R)` is a formula for the
++    /// compare, and for every use whose formula is `reg(a) + s*reg(IV)` the
++    /// formula `reg(a + s*B) + s*reg(R)` makes the same address from the same
++    /// counter. The pin makes neither, so it keeps a compare against `B`
++    /// where `add; je` would do (x_bubble m32: 88533 clocks against 74487
++    /// before LSR was translated). The cost model decides; no loop shape is
++    /// matched. Exit: none planned (the pin lacks it).
++    pub fn generate_zero_end_counters(
++        &mut self,
++        se: &mut ScalarEvolution,
++    ) {
++        let cx = self.cx;
++        let mut pairs: Vec<(Scev, Scev)> = Vec::new();
++        for lu in &self.uses {
++            if lu.kind != Kind::ICmpZero {
++                continue;
++            }
++            for f in &lu.formulae {
++                let (Some(iv), -1, [bound]) = (f.scaled_reg, f.scale, f.base_regs.as_slice()) else { continue };
++                if f.base_gv.is_some() || f.base_offset.is_non_zero() || f.unfolded_offset.is_non_zero() {
++                    continue;
++                }
++                if se.addrec_header(iv) != Some(self.l)
++                    || se.type_of(iv).is_pointer()
++                    || se.type_of(*bound).is_pointer()
++                    || !se.is_loop_invariant(cx, *bound, Some(self.l))
++                {
++                    continue;
++                }
++                if !pairs.contains(&(iv, *bound)) {
++                    pairs.push((iv, *bound));
++                }
++            }
++        }
++        for (iv, bound) in pairs {
++            let counter = se.get_minus_scev(cx, ScevUse::of(iv), ScevUse::of(bound), 0, 0);
++            if se.addrec_header(counter) != Some(self.l) {
++                continue;
++            }
++            for lu_idx in 0..self.uses.len() {
++                for i in 0..self.uses[lu_idx].formulae.len() {
++                    let base = self.uses[lu_idx].formulae[i].clone();
++                    let mut f = base.clone();
++                    if self.uses[lu_idx].kind == Kind::ICmpZero {
++                        let same = base.scaled_reg == Some(iv) && base.scale == -1 && base.base_regs == [bound];
++                        if !same || base.base_gv.is_some() || base.base_offset.is_non_zero() {
++                            continue;
++                        }
++                        f.base_regs = vec![counter];
++                        f.scaled_reg = None;
++                        f.scale = 0;
++                        f.has_base_reg = true;
++                    } else {
++                        // `reg(a) + s*reg(IV)`, or `reg(IV)` alone (`s` is 1).
++                        let (rest, scale) = match (base.scaled_reg, base.base_regs.as_slice()) {
++                            (Some(scaled), rest) if scaled == iv && base.scale != 0 && rest.len() <= 1 => {
++                                (rest.first().copied(), base.scale)
++                            }
++                            (None, [only]) if *only == iv => (None, 1),
++                            _ => continue,
++                        };
++                        let scale_s = se.get_constant_of_type(cx, se.type_of(bound), i128::from(scale));
++                        let scaled_bound =
++                            se.get_mul_expr(cx, vec![ScevUse::of(bound), ScevUse::of(scale_s)], Flags::default(), 0).scev;
++                        let sum = match rest {
++                            Some(a) => {
++                                se.get_add_expr(cx, vec![ScevUse::of(a), ScevUse::of(scaled_bound)], Flags::default(), 0).scev
++                            }
++                            None => scaled_bound,
++                        };
++                        f.base_regs = vec![sum];
++                        f.scaled_reg = Some(counter);
++                        f.scale = scale;
++                        f.has_base_reg = true;
++                    }
++                    f.canonicalize(se, self.l);
++                    let lu = &self.uses[lu_idx];
++                    if !crate::lsr_use::is_legal_use_formula(
++                        self.tti,
++                        lu.min_offset,
++                        lu.max_offset,
++                        lu.kind,
++                        lu.access_ty.addr_space,
++                        &f,
++                    ) {
++                        continue;
++                    }
++                    let _ = self.insert_formula(se, lu_idx, &f);
++                }
++            }
++        }
+     }
+ 
+     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L4792

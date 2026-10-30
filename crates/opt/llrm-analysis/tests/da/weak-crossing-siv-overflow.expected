@@ -1,0 +1,26 @@
+== --tbaa
+@weakcorssing_delta_ovfl
+  none!
+  output [*|<]!
+  none!
+@weakcorssing_prod_ovfl
+  none!
+  output [*|<]!
+  none!
+@test_weakcrossing_siv_overflow
+  none!
+  output [<>]!
+  none!
+== --test weak-crossing-siv --tbaa
+@weakcorssing_delta_ovfl
+  output [*]!
+  output [*|<]!
+  output [*]!
+@weakcorssing_prod_ovfl
+  output [*]!
+  output [*|<]!
+  output [*]!
+@test_weakcrossing_siv_overflow
+  output [*]!
+  output [<>]!
+  output [*]!

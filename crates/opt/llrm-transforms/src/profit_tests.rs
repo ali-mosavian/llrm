@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/profit_tests.rs`: the `profit`-only
+//! Adapted from llrm-codegen's `optimize/profit_tests.rs`: the `profit`-only
 //! cases of `tests/test_unroll_budget.py`, each body now MIR text. A body
 //! of one block has nothing live out.
 
@@ -136,7 +136,7 @@ fn a_loop_induction_counts_is_weighted_by_its_count() {
             &layout,
             function(&module),
         ));
-        let trips = proven_trips(&unit, &llrm_analysis::consts::known(&unit));
+        let trips = proven_trips(&unit);
         let callees = llrm_mir::memory::callees(&module);
         (
             trips.len(),
@@ -375,9 +375,9 @@ out:
 ";
     let module = module(text);
     let f = function(&module);
-    let shape = cfg::Shape::of(f);
+    let loops = llrm_analysis::cfg::loops_of(f);
     let before = llrm_analysis::cfg::shapes_derived();
-    let given = super::_loop_products_by_branch_in(&module.context, &module.metadata, &module.globals, f, &shape, None);
+    let given = super::_loop_products_by_branch_in(&module.context, &module.metadata, &module.globals, f, &loops, None);
     assert_eq!(llrm_analysis::cfg::shapes_derived(), before, "a shape was derived for a call given one");
     let own = super::_loop_products_by_branch(&module.context, &module.metadata, &module.globals, f, None);
     assert_eq!(
@@ -481,29 +481,73 @@ fn test_a_forecast_asks_whether_a_value_is_folded_once_however_many_sites_it_is_
     );
 }
 
-/// @f as `depth` loops nested, each counting with a phi of its own.
-fn nest(depth: usize) -> String {
-    let mut text = "define void @f(i16 %n) {\nb0:\n  br label %h0\n\n".to_string();
-    for k in 0..depth {
-        let from = if k == 0 { "b0".to_string() } else { format!("h{}", k - 1) };
-        let next = if k + 1 == depth { format!("l{k}") } else { format!("h{}", k + 1) };
-        text += &format!("h{k}:\n  %i{k} = phi i16 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  br label %{next}\n\n");
+/// `getSmallConstantTripCount` counts the header's runs, one more than the
+/// latch's where the header leaves: the first cut of the ScalarEvolution
+/// `proven_trips` weighed a pretested loop (`i < 12` step 3: 4 trips) as 5.
+#[test]
+fn a_loop_the_header_leaves_is_weighted_by_its_latch_runs() {
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let trips = |text: &str| {
+        let module = module(text);
+        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::of(
+            &module,
+            &layout,
+            function(&module),
+        ));
+        proven_trips(&unit).values().copied().collect::<Vec<_>>()
+    };
+    let pretested = "define void @f(i16 %n) {\nb0:\n  br label %head\nhead:\n  %i = phi i16 [ 0, %b0 ], [ %next, %body ]\n  \
+                     %more = icmp slt i16 %i, 12\n  br i1 %more, label %body, label %out\nbody:\n  %next = add nsw i16 %i, 3\n  \
+                     br label %head\nout:\n  ret void\n}\n";
+    assert_eq!(trips(pretested), [4]);
+    assert_eq!(trips(&COUNTED.replace("icmp ult i16 %next, %n", "icmp ult i16 %next, 3")), [3]);
+}
+
+/// A block behind `p == null` runs 12 times in 32, the pointer heuristic of
+/// `BranchProbabilityInfo` under `BlockFrequencyInfo`: profit's frequencies
+/// were `branchprob`'s GCC estimates (0.3645 of the entry).
+#[test]
+fn test_profits_frequencies_are_llvms() {
+    let text = "declare void @use(i16)\n\
+        define void @f(ptr %p) {\nb0:\n  %c = icmp eq ptr %p, null\n  br i1 %c, label %yes, label %no\n\
+        yes:\n  call void @use(i16 1)\n  br label %no\n\
+        no:\n  ret void\n}\n";
+    let module = module(text);
+    let function = function(&module);
+    let frequencies = _frequencies(&module.context, &module.metadata, &module.globals, function, None).unwrap();
+    let yes = function.layout()[1];
+    assert_eq!(frequencies[&llrm_analysis::cfg::id(yes)], (super::UNIT as f64 * 12.0 / 32.0).round() as i64);
+}
+
+/// A nest of 24 loops whose trips are unknown (ten each) once panicked the
+/// products in a debug build and wrapped in a release one: `count * factor` and
+/// `count * here / trip` passed `i64`'s end by the nineteenth. A weight past it
+/// is the largest frequency, as `BlockFrequency` saturates.
+#[test]
+fn a_nest_of_loops_past_the_end_of_i64_saturates_its_weights() {
+    const DEPTH: usize = 24;
+    let mut text = String::from("define void @f(i16 %n) {\nb0:\n  br label %h0\n\n");
+    for k in 0..DEPTH {
+        let before = if k == 0 { "b0".to_owned() } else { format!("h{}", k - 1) };
+        text += &format!("h{k}:\n  %i{k} = phi i16 [ 0, %{before} ], [ %n{k}, %l{k} ]\n");
+        text += &if k + 1 < DEPTH { format!("  br label %h{}\n\n", k + 1) } else { format!("  br label %l{k}\n\n") };
     }
-    for k in (0..depth).rev() {
-        let out = if k == 0 { "out".to_string() } else { format!("l{}", k - 1) };
+    for k in (0..DEPTH).rev() {
+        let out = if k == 0 { "out".to_owned() } else { format!("l{}", k - 1) };
         text += &format!(
             "l{k}:\n  %n{k} = add i16 %i{k}, 1\n  %c{k} = icmp ult i16 %n{k}, %n\n  br i1 %c{k}, label %h{k}, label %{out}\n\n"
         );
     }
-    text + "out:\n  ret void\n}\n"
-}
-
-/// 40 nested loops weighed 32^40 a block: `weighted` and the spill forecast
-/// overflowed i64, a panic in a debug build and a wrapped price in a release
-/// one, which hoist then judged motions by.
-#[test]
-fn a_deep_nest_saturates_its_price_instead_of_overflowing() {
-    let deep = work(&nest(40), &[]).expect("a price");
-    assert!(deep >= work(&nest(8), &[]).expect("a price"), "{deep}");
-    assert!(risk(&nest(40), 1).expect("a forecast") >= 0);
+    text += "out:\n  ret void\n}\n";
+    let module = module(&text);
+    let f = function(&module);
+    let products = _loop_products(f, None).expect("products");
+    let named = |name: &str| {
+        cfg::id(*f.layout().iter().find(|&&one| f.block(one).name.as_deref() == Some(name)).expect("a block"))
+    };
+    assert_eq!(products[&named("h0")], 10);
+    assert_eq!(products[&named(&format!("h{}", DEPTH - 1))], i64::MAX);
+    let by_branch = super::_loop_products_by_branch(&module.context, &module.metadata, &module.globals, f, None)
+        .expect("products by branch");
+    assert!(by_branch[&named(&format!("h{}", DEPTH - 1))] >= 1_000_000_000_000_000_000, "{by_branch:?}");
 }

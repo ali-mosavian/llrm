@@ -17,6 +17,14 @@ static SD *slice(SD *sd, unsigned from, int len)
     return str_tmp_copy(sd, from, len);
 }
 
+#pragma aux B_LEFT "B$LEFT"
+#pragma aux B_RGHT "B$RGHT"
+#pragma aux B_FMID "B$FMID"
+#pragma aux B_FCHR "B$FCHR"
+#pragma aux B_SCMP "B$SCMP"
+#pragma aux B_INS2 "B$INS2"
+#pragma aux B_INS3 "B$INS3"
+
 SD *B_LEFT(SD *sd, int len)
 {
     return slice(sd, 0, len);
@@ -68,11 +76,6 @@ int B_SCMP(SD *first, SD *second)
     return order;
 }
 
-#pragma aux B_LEFT "B$LEFT"
-#pragma aux B_RGHT "B$RGHT"
-#pragma aux B_FMID "B$FMID"
-#pragma aux B_FCHR "B$FCHR"
-#pragma aux B_SCMP "B$SCMP"
 
 /* INSTR: where the match first is in the source from `start` (1 or more), 0 if
    it is not.  An empty match is at `start` unless that is past the end; an
@@ -110,6 +113,3 @@ int B_INS3(int start, SD *source, SD *match)
         qb_error(BE_ILLFUN);
     return instr(start, source, match);
 }
-
-#pragma aux B_INS2 "B$INS2"
-#pragma aux B_INS3 "B$INS3"

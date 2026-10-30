@@ -1,25 +1,15 @@
-//! `root`: the 32-bit register a general register is a
-//! view of.
+//! `root`: the register a general register is a view of, named by its dword.
 
 use crate::registers::RegId;
 
-/// The 32-bit root of a byte, word or dword general register of the eight
-/// legacy families, which iced states from the register itself; any other
-/// register (segment, x87, the extended ones) is its own.
+/// The root of a byte, word, dword or (long mode's) quadword general register:
+/// the dword register of its family, which iced states from the register itself
+/// (`AL`, `AX`, `EAX` and `RAX` are views of `EAX`; `R8B`..`R8` of `R8D`). The
+/// name is the token a target's `registers.regs` roots its family at; any other
+/// register (segment, x87, SSE) is its own. A 32-bit target never meets the
+/// 64-bit views, so its roots are what they were.
 pub fn root(register: RegId) -> RegId {
-    let full = register.full_register32();
-    let extended_byte = matches!(register, RegId::SIL | RegId::DIL | RegId::BPL | RegId::SPL);
-    let legacy = (register.is_gpr8() && !extended_byte) || register.is_gpr16() || register.is_gpr32();
-    if legacy
-        && matches!(
-            full,
-            RegId::EAX | RegId::EBX | RegId::ECX | RegId::EDX | RegId::ESI | RegId::EDI | RegId::EBP | RegId::ESP
-        )
-    {
-        full
-    } else {
-        register
-    }
+    register.root()
 }
 
 #[cfg(test)]
@@ -49,8 +39,18 @@ mod tests {
         }
         assert_eq!(root(RegId::ES), RegId::ES);
         assert_eq!(root(RegId::ST0), RegId::ST0);
-        assert_eq!(root(RegId::SIL), RegId::SIL);
-        assert_eq!(root(RegId::RAX), RegId::RAX);
-        assert_eq!(root(RegId::R8D), RegId::R8D);
+        // Long mode's registers root at their dword: the quadword and the new
+        // bytes are views of it.
+        for (root_of, views) in [
+            (RegId::ESI, [RegId::SIL, RegId::RSI]),
+            (RegId::EAX, [RegId::AL, RegId::RAX]),
+            (RegId::R8D, [RegId::R8L, RegId::R8]),
+            (RegId::R15D, [RegId::R15W, RegId::R15]),
+        ] {
+            assert_eq!(root(root_of), root_of);
+            for view in views {
+                assert_eq!(root(view), root_of, "{view:?}");
+            }
+        }
     }
 }

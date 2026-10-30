@@ -13,12 +13,12 @@ typedef struct Point {
     long x, y;
 } Point;
 
-/* Which sides of the screen a point is outside of: 1 left, 2 right, 4 above,
+/* Which sides of the viewport a point is outside of: 1 left, 2 right, 4 above,
    8 below. */
 static int outside(const Point *p)
 {
-    return (p->x < 0) | (p->x >= (long)gfx_current->width) << 1 | (p->y < 0) << 2 |
-           (p->y >= (long)gfx_current->height) << 3;
+    return (p->x < gfx_view_left) | (p->x > gfx_view_right) << 1 | (p->y < gfx_view_top) << 2 |
+           (p->y > gfx_view_bottom) << 3;
 }
 
 /* The other coordinate of the line from (`along_from`, `other_from`) to
@@ -43,7 +43,7 @@ static long cut(long along_from, long other_from, long along_to, long other_to, 
     return other_from + sign * twice;
 }
 
-/* Cuts the line to the screen by moving the end that is outside onto the edge
+/* Cuts the line to the viewport by moving the end that is outside onto the edge
    it is past, taking the sides in the order left, right, above, below, until
    both ends are inside.  Which end ends up first is the one the line is drawn
    from.  False when none of it is on the screen. */
@@ -65,12 +65,12 @@ static int clip(Point *first, Point *last)
             last_out = 0;
         }
         if (first_out & 3) {
-            long edge = first_out & 1 ? 0 : (long)gfx_current->width - 1;
+            long edge = first_out & 1 ? gfx_view_left : gfx_view_right;
 
             first->y = cut(first->x, first->y, last->x, last->y, edge);
             first->x = edge;
         } else {
-            long edge = first_out & 4 ? 0 : (long)gfx_current->height - 1;
+            long edge = first_out & 4 ? gfx_view_top : gfx_view_bottom;
 
             first->x = cut(first->y, first->x, last->y, last->x, edge);
             first->y = edge;
@@ -153,10 +153,10 @@ void gfx_line_between(int color, int style, int how)
     }
 }
 
+#pragma aux B_LINE "B$LINE"
+
 /* B$LINE */
 void B_LINE(short color, short style, short how)
 {
     gfx_line_between(color, style, how);
 }
-
-#pragma aux B_LINE "B$LINE"

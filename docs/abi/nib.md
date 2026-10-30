@@ -48,7 +48,7 @@ flowchart LR
 
 ## Runtime
 
-Nib's runtime routines (`N$...`, named in `crates/backend/llrm-core/src/abi/nib.rs`) are Nib functions exported under those names, in `crates/frontends/llrm-nib/src/runtime`. The `abi/nib.rs` constants also sort them by what they touch: those that end the program (`TERMINATING`), those that touch only the runtime's own state (`RUNTIME_STATE_ONLY`) and those that only read what their arguments point to (`READ_ONLY`).
+Nib's runtime routines (`N$...`, named in `crates/codegen/llrm-codegen/src/abi/nib.rs`) are Nib functions exported under those names, in `crates/frontends/nib/src/runtime`. The `abi/nib.rs` constants also sort them by what they touch: those that end the program (`TERMINATING`), those that touch only the runtime's own state (`RUNTIME_STATE_ONLY`) and those that only read what their arguments point to (`READ_ONLY`).
 
 ## Tests
 

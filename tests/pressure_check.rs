@@ -1,7 +1,7 @@
 //! The spill model's forecast, set beside the spill code the allocator leaves:
 //! `LLRM_DEBUG=pressure`.
 
-use std::process::Command;
+mod common;
 
 /// A value kept across a call in a function that has too few registers for all
 /// it holds.
@@ -22,7 +22,7 @@ fn test_the_pressure_channel_reports_a_forecast_beside_the_allocators_spills() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .env("LLRM_DEBUG", "pressure")
         .args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])

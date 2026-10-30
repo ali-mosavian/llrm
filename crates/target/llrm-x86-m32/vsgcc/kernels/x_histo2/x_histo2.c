@@ -1,10 +1,12 @@
 extern void report(long value);
+typedef unsigned long u32;
+typedef long i32; /* the width these kernels are written for: int is 16 bits at m16 */
 
-static unsigned char data[2048]; static int hist[64];
-long bench_x_histo2(int n)
+static unsigned char data[2048]; static i32 hist[64];
+long bench_x_histo2(i32 n)
 {
-    int i, max = 0, at = 0; unsigned s = 77;
-    for (i = 0; i < n; ++i) { s = s * 1664525u + 1013904223u; data[i] = (unsigned char)(s >> 24); }
+    i32 i, max = 0, at = 0; u32 s = 77;
+    for (i = 0; i < n; ++i) { s = s * 1664525ul + 1013904223ul; data[i] = (unsigned char)(s >> 24); }
     for (i = 0; i < n; ++i) ++hist[(data[i] >> 2) & 63];
     for (i = 0; i < 64; ++i) if (hist[i] > max) { max = hist[i]; at = i; }
     return max * 100 + at;

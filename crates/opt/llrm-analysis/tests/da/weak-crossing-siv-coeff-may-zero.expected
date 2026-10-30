@@ -1,0 +1,14 @@
+== --tbaa
+@weak_crossing_siv_coeff_may_zero
+  output [0]!
+    Runtime Assumptions:
+    Compare predicate: %a ne) 0
+  output [*|<]!
+  output [0]!
+    Runtime Assumptions:
+    Compare predicate: (-1 * %a) ne) 0
+== --test weak-crossing-siv --tbaa
+@weak_crossing_siv_coeff_may_zero
+  output [*]!
+  output [*|<]!
+  output [*]!

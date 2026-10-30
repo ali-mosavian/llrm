@@ -1,0 +1,27 @@
+== 
+@loopnest_01
+B0:
+  br label %B1
+B1:
+  %v0 = phi i32 [ %v8, %B5 ], [ 4, %B0 ]
+  br label %B2
+B2:
+  %v1 = phi i16 [ %v6, %B4 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  %v2 = phi i16 [ %v4, %B3 ], [ 5, %B2 ]
+  %v3 = getelementptr [6 x ptr], ptr @g_78, i16 0, i16 %v2
+  store ptr @g_75, ptr %v3
+  %v4 = add nsw i16 %v2, -1
+  %v5 = icmp sgt i16 %v4, 0
+  br i1 %v5, label %B3, label %B4
+B4:
+  %v6 = add nuw nsw i16 %v1, 1
+  %v7 = icmp eq i16 %v6, 6
+  br i1 %v7, label %B5, label %B2
+B5:
+  %v8 = add nsw i32 %v0, -1
+  %v9 = icmp eq i32 %v0, 0
+  br i1 %v9, label %B6, label %B1
+B6:
+  unreachable

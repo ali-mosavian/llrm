@@ -9,9 +9,10 @@
 extern unsigned qb_xi_begin, qb_xi_end, qb_asizds;
 extern char qb_atopsp;
 
+#pragma aux qb_traps "B$TRAPS"
+
 /* trap.asm: puts the divide fault's handler in. */
 extern void qb_traps(void);
-#pragma aux qb_traps "B$TRAPS"
 
 /* Runs each initializer the linked modules registered (B$Init's XI walk). */
 void qb_run_initializers(void)

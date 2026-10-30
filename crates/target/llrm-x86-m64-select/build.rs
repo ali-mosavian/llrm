@@ -1,0 +1,16 @@
+//! Generates x86-64's selector and peephole rules from its
+//! definition directory, written against `llrm_codegen`.
+
+use std::path::Path;
+
+use llrm_iselgen::build;
+
+fn main() {
+    let groups_list = Path::new("../../codegen/llrm-codegen/src/backend/peep/groups.list");
+    println!("cargo:rerun-if-changed={}", groups_list.display());
+    let groups = build::rule_groups(&std::fs::read_to_string(groups_list).expect("peep/groups.list"));
+    let family = build::family(Path::new("../llrm-x86"));
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let built = build::target(Path::new("../llrm-x86-m64"), &family, &groups, "llrm_codegen", &out);
+    std::fs::write(out.join("select.rs"), built.select_source()).unwrap();
+}

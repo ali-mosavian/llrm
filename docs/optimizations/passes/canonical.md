@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/canonical.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/canonical.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/canonical.rs sha256:4593ea5a1d2ed92c1747c489e3dc375c73c0efc507b85ec877f3af7cf710d554 -->
+<!-- src: crates/opt/llrm-transforms/src/canonical.rs sha256:500da40d42f8e944f1b543bd5e93c663f13a04374e923e4c6f44cab2bf3a8d6b -->
 
 # canonical
 

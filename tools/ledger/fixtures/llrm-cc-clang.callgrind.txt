@@ -1,0 +1,76 @@
+User annotated:   
+Auto-annotation:  off
+
+--------------------------------------------------------------------------------
+Ir                  
+--------------------------------------------------------------------------------
+12,704,307 (100.0%)  PROGRAM TOTALS
+
+--------------------------------------------------------------------------------
+Ir                  file:function
+--------------------------------------------------------------------------------
+1,737,157 (13.67%)  ./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro [/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2]
+  809,766 ( 6.37%)  ./elf/./elf/dl-lookup.c:do_lookup_x [/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2]
+  507,128 ( 3.99%)  ./elf/../sysdeps/generic/dl-new-hash.h:_dl_lookup_symbol_x
+  406,295 ( 3.20%)  /home/alim/scratch/llvm-src/clang/lib/Basic/Builtins.cpp:builtinIsSupported(llvm::StringTable const&, clang::Builtin::Info const&, clang::LangOptions const&) [/home/alim/scratch/ll
+  352,673 ( 2.78%)  /home/alim/scratch/llvm-src/llvm/lib/Support/xxhash.cpp:llvm::xxh3_64bits(unsigned char const*, unsigned long) [/home/alim/scratch/llvm-build/bin/clang-24]
+  289,907 ( 2.28%)  ./malloc/./malloc/malloc.c:_int_malloc [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  202,823 ( 1.60%)  ./elf/./elf/dl-lookup.c:_dl_lookup_symbol_x [/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2]
+  202,532 ( 1.59%)  /home/alim/scratch/llvm-src/llvm/lib/Support/StringMap.cpp:llvm::StringMapImpl::LookupBucketFor(llvm::StringRef, unsigned int) [/home/alim/scratch/llvm-build/bin/clang-24]
+  201,643 ( 1.59%)  ./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:__memcpy_avx_unaligned_erms [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  162,587 ( 1.28%)  ???:std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_append(char const*, unsigned long) [/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34]
+  157,900 ( 1.24%)  ./elf/../sysdeps/x86_64/dl-machine.h:_dl_relocate_object_no_relro
+  157,270 ( 1.24%)  ./string/../sysdeps/x86_64/multiarch/strlen-avx2.S:__strlen_avx2 [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  139,894 ( 1.10%)  ./elf/./elf/do-rel.h:_dl_relocate_object_no_relro
+  133,099 ( 1.05%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/DenseMap.h:bool llvm::DenseMapBase<llvm::DenseMap<llvm::StringRef, llvm::cl::Option*, llvm::DenseMapInfo<llvm::StringRef, void>, l
+  124,236 ( 0.98%)  ./elf/./elf/dl-lookup.c:check_match [/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2]
+  123,905 ( 0.98%)  ./string/../sysdeps/x86_64/multiarch/memcmp-avx2-movbe.S:__memcmp_avx2_movbe [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  114,778 ( 0.90%)  /home/alim/scratch/llvm-src/llvm/lib/Support/StringMap.cpp:llvm::StringMapImpl::RehashTable(unsigned int) [/home/alim/scratch/llvm-build/bin/clang-24]
+  114,745 ( 0.90%)  /home/alim/scratch/llvm-src/llvm/lib/Option/OptTable.cpp:llvm::opt::OptTable::getOption(llvm::opt::OptSpecifier) const [/home/alim/scratch/llvm-build/bin/clang-24]
+  102,496 ( 0.81%)  ./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:__memset_avx2_unaligned_erms [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   95,786 ( 0.75%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/DenseMap.h:llvm::DenseMapBase<llvm::DenseMap<llvm::StringRef, llvm::cl::Option*, llvm::DenseMapInfo<llvm::StringRef, void>, llvm::
+   91,947 ( 0.72%)  ./string/../sysdeps/x86_64/multiarch/../multiarch/strcmp-sse2.S:strcmp [/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2]
+   86,688 ( 0.68%)  /home/alim/scratch/llvm-src/clang/lib/Basic/DiagnosticIDs.cpp:GetDiagInfo(unsigned int) [/home/alim/scratch/llvm-build/bin/clang-24]
+   86,309 ( 0.68%)  /home/alim/scratch/llvm-src/llvm/lib/Support/raw_ostream.cpp:llvm::raw_ostream::write(char const*, unsigned long) [/home/alim/scratch/llvm-build/bin/clang-24]
+   85,339 ( 0.67%)  /home/alim/scratch/llvm-src/clang/lib/Lex/Lexer.cpp:clang::Lexer::LexTokenInternal(clang::Token&)'2 [/home/alim/scratch/llvm-build/bin/clang-24]
+   82,785 ( 0.65%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/StringMap.h:clang::Builtin::Context::initializeBuiltins(clang::IdentifierTable&, clang::LangOptions const&)
+   82,544 ( 0.65%)  /home/alim/scratch/llvm-src/llvm/lib/Support/raw_ostream.cpp:llvm::raw_ostream::write(unsigned char) [/home/alim/scratch/llvm-build/bin/clang-24]
+   80,388 ( 0.63%)  ./malloc/./malloc/malloc.c:malloc [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   79,497 ( 0.63%)  /home/alim/scratch/llvm-src/clang/include/clang/Basic/IdentifierTable.h:clang::Builtin::Context::initializeBuiltins(clang::IdentifierTable&, clang::LangOptions const&)
+   78,402 ( 0.62%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/DenseMap.h:std::pair<llvm::detail::DenseMapPair<llvm::StringRef, llvm::cl::Option*>*, bool> llvm::DenseMapBase<llvm::DenseMap<llvm
+   78,393 ( 0.62%)  ./string/../sysdeps/x86_64/multiarch/strchr-avx2.S:__strchr_avx2 [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   78,080 ( 0.61%)  ./stdlib/./stdlib/cxa_atexit.c:__cxa_atexit [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   74,085 ( 0.58%)  /home/alim/scratch/llvm-src/llvm/lib/Option/Option.cpp:llvm::opt::Option::matches(llvm::opt::OptSpecifier) const'2 [/home/alim/scratch/llvm-build/bin/clang-24]
+   69,941 ( 0.55%)  ./malloc/./malloc/malloc.c:free [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   65,193 ( 0.51%)  ./stdlib/./stdlib/cxa_atexit.c:__new_exitfn [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   65,117 ( 0.51%)  ./stdlib/./stdlib/exit.c:__run_exit_handlers [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   64,016 ( 0.50%)  /home/alim/scratch/llvm-src/clang/lib/Basic/Builtins.cpp:clang::Builtin::Context::initializeBuiltins(clang::IdentifierTable&, clang::LangOptions const&) [/home/alim/scratch/llvm-bu
+   60,074 ( 0.47%)  /home/alim/scratch/llvm-src/clang/lib/Lex/Lexer.cpp:clang::Lexer::LexIdentifierContinue(clang::Token&, char const*) [/home/alim/scratch/llvm-build/bin/clang-24]
+   58,176 ( 0.46%)  /home/alim/scratch/llvm-src/clang/lib/Lex/Preprocessor.cpp:clang::Preprocessor::Lex(clang::Token&)'2 [/home/alim/scratch/llvm-build/bin/clang-24]
+   55,916 ( 0.44%)  /home/alim/scratch/llvm-src/llvm/lib/Support/CommandLine.cpp:(anonymous namespace)::CommandLineParser::addOption(llvm::cl::Option*, llvm::cl::SubCommand*) [/home/alim/scratch/llvm-
+   53,538 ( 0.42%)  /home/alim/scratch/llvm-src/clang/lib/Basic/IdentifierTable.cpp:clang::getKeywordStatus(clang::LangOptions const&, unsigned int) [/home/alim/scratch/llvm-build/bin/clang-24]
+   53,248 ( 0.42%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/StringMap.h:std::pair<llvm::StringMapIterBase<clang::IdentifierInfo*, false>, bool> llvm::StringMap<clang::IdentifierInfo*, llvm::
+   48,672 ( 0.38%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/StringExtras.h:llvm::StringRef::compare_insensitive(llvm::StringRef) const
+   48,479 ( 0.38%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/SmallVector.h:clang::Builtin::Context::initializeBuiltins(clang::IdentifierTable&, clang::LangOptions const&)
+   47,432 ( 0.37%)  /home/alim/scratch/llvm-src/llvm/include/llvm/Support/Allocator.h:clang::Builtin::Context::initializeBuiltins(clang::IdentifierTable&, clang::LangOptions const&)
+   46,882 ( 0.37%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/Enum.h:llvm::X86::updateImpliedFeatures(llvm::StringRef, bool, llvm::StringMap<bool, llvm::MallocAllocator>&)
+   44,617 ( 0.35%)  /home/alim/scratch/llvm-src/llvm/lib/Support/CommandLine.cpp:llvm::cl::Option::addArgument() [/home/alim/scratch/llvm-build/bin/clang-24]
+   43,844 ( 0.35%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/StringRef.h:llvm::X86::updateImpliedFeatures(llvm::StringRef, bool, llvm::StringMap<bool, llvm::MallocAllocator>&)
+   40,838 ( 0.32%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/StringMapEntry.h:clang::Builtin::Context::initializeBuiltins(clang::IdentifierTable&, clang::LangOptions const&)
+   40,831 ( 0.32%)  /home/alim/scratch/llvm-src/llvm/lib/Support/OptionStrCmp.cpp:llvm::StrCmpOptionName(llvm::StringRef, llvm::StringRef, bool) [/home/alim/scratch/llvm-build/bin/clang-24]
+   40,408 ( 0.32%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/DenseMap.h:std::pair<llvm::detail::DenseMapPair<clang::Decl const*, llvm::SmallVector<clang::Attr*, 4u>*>*, bool> llvm::DenseMapBa
+   39,353 ( 0.31%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/DenseMap.h:(anonymous namespace)::CommandLineParser::ResetAllOptionOccurrences()
+   37,495 ( 0.30%)  /home/alim/scratch/llvm-src/llvm/lib/Option/Option.cpp:llvm::opt::Option::matches(llvm::opt::OptSpecifier) const [/home/alim/scratch/llvm-build/bin/clang-24]
+   37,199 ( 0.29%)  /home/alim/scratch/llvm-src/llvm/include/llvm/Option/Option.h:llvm::opt::Option::matches(llvm::opt::OptSpecifier) const'2
+   36,872 ( 0.29%)  /home/alim/scratch/llvm-src/llvm/lib/Support/Twine.cpp:llvm::Twine::printOneChild(llvm::raw_ostream&, llvm::Twine::Child, llvm::Twine::NodeKind) const [/home/alim/scratch/llvm-buil
+   35,991 ( 0.28%)  /home/alim/scratch/llvm-src/llvm/lib/Option/Option.cpp:llvm::opt::Option::Option(llvm::opt::OptTable::Info const*, llvm::opt::OptTable const*) [/home/alim/scratch/llvm-build/bin/cl
+   35,310 ( 0.28%)  /home/alim/scratch/llvm-src/llvm/lib/Support/CommandLine.cpp:llvm::cl::Option::Option(llvm::cl::NumOccurrencesFlag, llvm::cl::OptionHidden) [/home/alim/scratch/llvm-build/bin/clang
+   34,293 ( 0.27%)  ./malloc/./malloc/malloc.c:__libc_malloc2 [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   33,296 ( 0.26%)  ???:operator new(unsigned long) [/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34]
+   33,264 ( 0.26%)  /home/alim/scratch/llvm-src/llvm/lib/Support/CommandLine.cpp:llvm::cl::Option::setArgStr(llvm::StringRef) [/home/alim/scratch/llvm-build/bin/clang-24]
+   31,253 ( 0.25%)  /home/alim/scratch/llvm-src/llvm/lib/Support/FormattedStream.cpp:llvm::formatted_raw_ostream::UpdatePosition(char const*, unsigned long) [/home/alim/scratch/llvm-build/bin/clang-24
+   30,929 ( 0.24%)  ./malloc/./malloc/malloc.c:_int_free_chunk [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   30,545 ( 0.24%)  ???:operator new(unsigned long, std::align_val_t) [/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34]
+   30,389 ( 0.24%)  /home/alim/scratch/llvm-src/clang/lib/Lex/Lexer.cpp:clang::Lexer::LexTokenInternal(clang::Token&) [/home/alim/scratch/llvm-build/bin/clang-24]
+   30,123 ( 0.24%)  /home/alim/scratch/llvm-src/llvm/include/llvm/ADT/StringRef.h:clang::Preprocessor::CheckMacroName(clang::Token&, clang::MacroUse, bool*)
+   29,618 ( 0.23%)  /home/alim/scratch/llvm-src/clang/lib/Basic/SourceManager.cpp:clang::SrcMgr::LineOffsetMapping::get(llvm::MemoryBufferRef, llvm::BumpPtrAllocatorImpl<llvm::MallocAllocator, 4096ul,

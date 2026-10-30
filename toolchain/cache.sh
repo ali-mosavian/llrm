@@ -48,3 +48,11 @@ cached() {
     rm -f "$lock"
     return $made
 }
+
+# setvars.sh names GCC for every host, and Open Watcom's GCC configuration has no macOS: its bootstrap built nothing there
+# (skip_all, then `cpyright.exe` missing). macOS's cc is clang.
+native_tools() {
+    if [ "$(uname)" = Darwin ]; then
+        export OWTOOLS=CLANG
+    fi
+}

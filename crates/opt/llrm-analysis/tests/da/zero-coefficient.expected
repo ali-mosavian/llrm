@@ -1,0 +1,5 @@
+== 
+@test_zero_coefficient
+  output [0]!
+    Runtime Assumptions:
+    Compare predicate: %k ne) 0

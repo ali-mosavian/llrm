@@ -1,6 +1,14 @@
 ; The C run tests' externals, on the OS layer: the report stream (one signed decimal per line), the
 ; benchmark's input and the opaque calls of spec.OPAQUE.
+ifdef NEAR_CODE
+.model small
+LINK equ <near>
+ARG equ 4
+else
 .model medium
+LINK equ <far>
+ARG equ 6
+endif
 .386
 
 extrn LL$OPEN:far
@@ -10,7 +18,7 @@ extrn LL$EXIT:far
 
 .data
 ticks   dw 0
-digits  db 12 dup (?)
+digits  db 13 dup (?)
 inhandle dw 0FFFFh
 inname  db 'DICKENS', 0
 
@@ -20,7 +28,7 @@ stkmsg  db 'Stack Overflow!', 13, 10
 ; Open Watcom's stack overflow (clib stk086.asm `__STKOVERFLOW`): the message and exit status 1,
 ; which a checked function enters (-fsanitize=stack). On stdout, which a test captures.
 public __STKOVERFLOW
-__STKOVERFLOW proc far
+__STKOVERFLOW proc LINK
     mov ax, @data
     mov ds, ax
     push 17
@@ -34,13 +42,13 @@ __STKOVERFLOW endp
 
 ; void report(long v)
 public _report
-_report proc far
+_report proc LINK
     push bp
     mov bp, sp
     push si
     push di
-    mov eax, dword ptr [bp+6]
-    mov di, offset digits + 12
+    mov eax, dword ptr [bp+ARG]
+    mov di, offset digits + 13
     mov byte ptr [di-1], 10
     mov byte ptr [di-2], 13
     sub di, 2
@@ -63,7 +71,7 @@ more:
     dec di
     mov byte ptr [di], '-'
 unsigned:
-    mov cx, offset digits + 12
+    mov cx, offset digits + 13
     sub cx, di
     push cx
     push ds
@@ -80,7 +88,7 @@ _report endp
 ; int input_read(char *buffer, int count): up to count bytes of DICKENS (opened on the first call, in the
 ; current directory), 0 at its end or on an error. The bench/grep program reads its input through this.
 public _input_read
-_input_read proc far
+_input_read proc LINK
     push bp
     mov bp, sp
     cmp inhandle, 0FFFFh
@@ -94,9 +102,9 @@ _input_read proc far
     js failed
     mov inhandle, ax
 opened:
-    push word ptr [bp+8]
+    push word ptr [bp+ARG+2]
     push ds
-    push word ptr [bp+6]
+    push word ptr [bp+ARG]
     push inhandle
     call far ptr LL$READ
     add sp, 8
@@ -109,41 +117,88 @@ done:
     ret
 _input_read endp
 
+; void *memmove(void *dst, const void *src, unsigned n), near pointers that may overlap, in regparm3 (the default convention):
+; dst in AX, src in DX, n in CX; dst comes back in AX. A copy with dst above src inside it runs backwards under the
+; direction flag, cleared again before the return: the n mod 4 end bytes first, then dwords. SI and DI are kept.
+public _memmove@3
+_memmove@3 proc LINK
+    push si
+    push di
+    push ax
+    mov ax, ds
+    mov es, ax
+    pop ax
+    mov di, ax
+    mov si, dx
+    cmp di, si
+    jbe forward
+    mov dx, si
+    add dx, cx
+    cmp di, dx
+    jae forward
+    mov si, dx
+    dec si
+    add di, cx
+    dec di
+    mov dx, cx
+    and cx, 3
+    std
+    rep movsb
+    sub si, 3
+    sub di, 3
+    mov cx, dx
+    shr cx, 2
+    rep movsd
+    cld
+    jmp finished
+forward:
+    mov dx, cx
+    shr cx, 2
+    rep movsd
+    mov cx, dx
+    and cx, 3
+    rep movsb
+finished:
+    pop di
+    pop si
+    ret
+_memmove@3 endp
+
 ; int keep(int x)
 public _keep
-_keep proc far
+_keep proc LINK
     push bp
     mov bp, sp
-    mov ax, [bp+6]
+    mov ax, [bp+ARG]
     pop bp
     ret
 _keep endp
 
 ; long keep32(long x)
 public _keep32
-_keep32 proc far
+_keep32 proc LINK
     push bp
     mov bp, sp
-    mov ax, [bp+6]
-    mov dx, [bp+8]
+    mov ax, [bp+ARG]
+    mov dx, [bp+ARG+2]
     pop bp
     ret
 _keep32 endp
 
 public _touch
-_touch proc far
+_touch proc LINK
     ret
 _touch endp
 
 public _tick
-_tick proc far
+_tick proc LINK
     inc word ptr ticks
     ret
 _tick endp
 
 ; unsigned tick_count(void): the count since the last call
 public _tick_count
-_tick_count proc far
+_tick_count proc LINK
     xor ax, ax
     xchg ax, word ptr ticks
     ret
@@ -151,16 +206,16 @@ _tick_count endp
 
 ; void lcopy(void far *d, void far *s, unsigned n)
 public _lcopy
-_lcopy proc far
+_lcopy proc LINK
     push bp
     mov bp, sp
     push si
     push di
     push ds
     push es
-    les di, [bp+6]
-    lds si, [bp+10]
-    mov cx, [bp+14]
+    les di, [bp+ARG]
+    lds si, [bp+ARG+4]
+    mov cx, [bp+ARG+8]
     cld
     rep movsb
     pop es
@@ -171,6 +226,7 @@ _lcopy proc far
     ret
 _lcopy endp
 
+ifndef NEAR_CODE
 ; The same routines for a program in Open Watcom's register convention (-mabi=watcom): a long in DX:AX, an int in AX, a near
 ; pointer in AX; the callee keeps every register but AX and its arguments'. They call the cdecl ones above.
 public report_
@@ -270,5 +326,7 @@ _lcopy@3 proc far
     pop bp
     retf
 _lcopy@3 endp
+
+endif
 
 end

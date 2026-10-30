@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/edges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/edges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/edges.rs sha256:64374f5280e67ee4422f9d469e3df14d26d65d78d52ce03f8814a03e54de1d8a -->
+<!-- src: crates/opt/llrm-transforms/src/edges.rs sha256:105b474e143b4087c37fe2783d7fec3378ace5959110defe06507765c0a916e1 -->
 
 # edges
 
@@ -48,7 +48,7 @@ b3:
 ; ...
 ```
 
-After `loadjoins` inserts the missing load on the `b2`-to-`b3` edge:
+After load PRE inserts the missing load on the `b2`-to-`b3` edge:
 
 ```mir
 b2:
@@ -67,8 +67,9 @@ b3:
 not in `b2`.
 
 From unit test `test_missing_conditional_edge_gets_its_own_load_block` in
-`loadjoins_tests.rs`.
+`gvn_load_tests.rs`.
 
 ## Runs
-Not a pass: a library. `split` is called by `loadjoins`, `rotate` and
-`unswitch`; `phis` and `retarget` by most of the CFG-rewriting passes.
+Not a pass: a library. `split` is called by `rotate` and
+`simpleloopunswitch`; `phis` and `retarget` by most of the CFG-rewriting
+passes.

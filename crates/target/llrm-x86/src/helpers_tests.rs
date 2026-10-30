@@ -306,6 +306,38 @@ fn the_divides_equal_the_hosts() {
     }
 }
 
+/// The signed divide by a dword divisor fixed the sign of both results for a
+/// caller that reads one (SD232): data_int64 pasted 87 bytes of routine for a
+/// quotient. A routine for the result read is shorter and gives that result as
+/// the host does.
+#[test]
+fn a_divide_read_for_one_result_is_shorter_and_that_result_is_right() {
+    for bits in [16, 32] {
+        let both = divide(true, false, bits).expect("assembles");
+        for (used, name) in [(Used::Quotient, "div64_s32q"), (Used::Remainder, "div64_s32r")] {
+            let routine = divide_used(true, false, bits, used).expect("assembles");
+            assert_eq!(routine.name, name);
+            assert!(
+                routine.code.len() + 6 <= both.code.len(),
+                "{name}: {} of {} bytes",
+                routine.code.len(),
+                both.code.len()
+            );
+            for &dividend in &values() {
+                for &divisor in values().iter().filter(|&&one| one != 0 && one >> 32 == 0) {
+                    let ((quotient, remainder), _) = divided(&routine, bits, dividend, divisor);
+                    let (a, b) = (dividend as i64, divisor as i64);
+                    let (got, want) = match used {
+                        Used::Quotient => (quotient, a.wrapping_div(b) as u64),
+                        _ => (remainder, a.wrapping_rem(b) as u64),
+                    };
+                    assert_eq!(got, want, "{name} {dividend:#x} / {divisor:#x} at {bits} bits");
+                }
+            }
+        }
+    }
+}
+
 /// A divide by a divisor of two dwords estimates the quotient with one `div`
 /// and corrects it: 144 instructions at the worst, where a round per bit of
 /// the quotient is some 600.
@@ -319,5 +351,65 @@ fn a_wide_divide_is_bounded_not_a_round_per_bit() {
         let routine = divide(signed, true, 16).expect("assembles");
         let (_, steps) = divided(&routine, 16, dividend, divisor);
         assert!(steps < 160, "{} took {steps} instructions", routine.name);
+    }
+}
+
+/// The huge string routines assemble for real mode, end where they began (`ds`
+/// and the direction flag are kept), and carry their loops' labels inside their
+/// own bytes.
+#[test]
+fn test_the_huge_string_routines_assemble() {
+    for routine in [
+        huge_fill(1).unwrap(),
+        huge_fill(2).unwrap(),
+        huge_fill(4).unwrap(),
+        huge_copy(false).unwrap(),
+        huge_copy(true).unwrap(),
+    ] {
+        assert!(routine.code.len() > 40 && routine.code.len() < 200, "{}: {} bytes", routine.name, routine.code.len());
+        assert!(routine.reads.contains(&RegId::ECX), "{}", routine.name);
+        assert!(routine.clobbers.contains(&RegId::ES), "{}", routine.name);
+    }
+}
+
+/// Every call site of a huge-pointer or 64-bit divide routine assembled its
+/// source again ("huge_copy/fill helper assembly" 48 M and "M32 divide helper
+/// assembly" 60 M of the dag path's compile): a block is assembled once.
+#[test]
+fn a_helper_asked_for_twice_is_assembled_once() {
+    let before = crate::asm::ASSEMBLED.with(|count| count.get());
+    let first = crate::asm::assembled(
+        &["    mov eax, 0x5a5a1234", "    ret"],
+        crate::asm::Mode { bits: 32, segmented: false, address_bytes: 4, wide: true },
+    );
+    let again = crate::asm::assembled(
+        &["    mov eax, 0x5a5a1234", "    ret"],
+        crate::asm::Mode { bits: 32, segmented: false, address_bytes: 4, wide: true },
+    );
+    assert_eq!(first, again);
+    assert_eq!(crate::asm::ASSEMBLED.with(|count| count.get()) - before, 1);
+}
+
+/// The selector assembles a routine only for a call whose name starts with
+/// the routine kind's prefix: a routine named otherwise would be called and
+/// never laid down.
+#[test]
+fn every_routine_name_starts_with_its_kinds_prefix() {
+    use llrm_target::routines::{DIVIDE_PREFIX, HUGE_PREFIX};
+    for signed in [true, false] {
+        for wide in [true, false] {
+            for bits in [16, 32] {
+                let name = divide(signed, wide, bits).expect("a divide").name;
+                assert!(name.starts_with(DIVIDE_PREFIX), "{name}");
+            }
+        }
+    }
+    for cell in [1, 2, 4] {
+        let name = huge_fill(cell).expect("a fill").name;
+        assert!(name.starts_with(HUGE_PREFIX), "{name}");
+    }
+    for down in [false, true] {
+        let name = huge_copy(down).expect("a copy").name;
+        assert!(name.starts_with(HUGE_PREFIX), "{name}");
     }
 }

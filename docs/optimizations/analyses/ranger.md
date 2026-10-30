@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranger.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranger.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranger.rs sha256:43da706a46a62c29a1c0fb16adb55258816393ecf0a012d191965b8d7c3449b8 -->
+<!-- src: crates/opt/llrm-analysis/src/ranger.rs sha256:b4f04e7494f2179d1d4c0eb54d17ec0d432b334a1d075a9248f1021374f060cb -->
 
 # ranger
 
@@ -22,12 +22,6 @@ block the definition does not dominate (nothing above holds the value), and
 each block it passes keeps the answer, so a value is walked to once from
 each block that asks, not once per question.
 
-A loop's blocks are asked the same way (`LoopView`): the facts the edges and
-assumes above a block give, and the loop's operations worked from them, one
-value at a block. An answer keeps the boxed values it read, so the next
-round of `ranges::inductive_boxes` works out only what a changed box
-reaches.
-
 ## Example
 `if x < 5 { y = x + 1 }`:
 
@@ -41,7 +35,7 @@ From unit test `a_guard_bounds_the_value_on_its_edge_and_not_at_the_join` in
 `ranger_tests.rs`.
 
 ## Provides
-`EdgeRanger::at`, `LoopView::at`.
+`EdgeRanger::at`.
 
 ## Needs
 [`crate::ranges`](ranges.md) (the transfer functions), [`crate::cfg`](cfg.md).

@@ -7,16 +7,20 @@
 
 use iced_x86::Register;
 
-/// A register's id: iced's number for it today, behind a type that is ours.
+/// A register's id: a number in the table of the target being compiled
+/// (`Info`). The x86 targets number theirs as iced does, so the encoder and
+/// decoder convert; any other target numbers its own file. Only the target's
+/// `Info` says what an id means: `Debug` and the x86 helpers below read an id
+/// as iced's.
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct RegId(Register);
+pub struct RegId(u8);
 
 impl std::fmt::Debug for RegId {
     fn fmt(
         &self,
         formatter: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        self.0.fmt(formatter)
+        self.iced().fmt(formatter)
     }
 }
 
@@ -26,24 +30,40 @@ impl RegId {
     /// The register iced names, for the encoder and the decoder.
     #[inline]
     pub const fn new(register: Register) -> Self {
-        RegId(register)
+        RegId(register as u8)
     }
 
+    /// The id numbered `number` in a target's own register file.
     #[inline]
-    pub const fn iced(self) -> Register {
-        self.0
+    pub const fn from_raw(number: u8) -> Self {
+        RegId(number)
+    }
+
+    /// The register iced numbers so; `None` for a number iced has no register
+    /// for, which only a non-x86 target uses.
+    #[inline]
+    pub fn iced(self) -> Register {
+        Register::try_from(usize::from(self.0)).unwrap_or(Register::None)
     }
 
     /// Every register iced names.
     #[inline]
     pub fn values() -> impl Iterator<Item = RegId> + DoubleEndedIterator + ExactSizeIterator {
-        Register::values().map(RegId)
+        Register::values().map(RegId::new)
     }
 
     /// The register of iced's number `index`.
     #[inline]
     pub fn from_index(index: usize) -> RegId {
-        RegId(Register::values().nth(index).expect("an iced register number"))
+        RegId(u8::try_from(index).expect("a register id below 256"))
+    }
+
+    /// The dword register of this one's family (see [`crate::root::root`]):
+    /// x86's numbering, which an x86 target's ids have; another target's
+    /// `Info` says its own roots.
+    #[inline]
+    pub fn root(self) -> RegId {
+        RegId(ROOT_OF[self.0 as usize])
     }
 
     /// iced's number of the register: the index into the tables.
@@ -54,52 +74,62 @@ impl RegId {
 
     #[inline]
     pub fn full_register32(self) -> RegId {
-        RegId(self.0.full_register32())
+        RegId::new(self.iced().full_register32())
     }
 
     #[inline]
     pub fn full_register(self) -> RegId {
-        RegId(self.0.full_register())
+        RegId::new(self.iced().full_register())
     }
 
     #[inline]
     pub fn size(self) -> usize {
-        self.0.size()
+        self.iced().size()
     }
 
     #[inline]
     pub fn number(self) -> usize {
-        self.0.number()
+        self.iced().number()
     }
 
     #[inline]
     pub fn is_gpr(self) -> bool {
-        self.0.is_gpr()
+        self.iced().is_gpr()
     }
 
     #[inline]
     pub fn is_gpr8(self) -> bool {
-        self.0.is_gpr8()
+        self.iced().is_gpr8()
     }
 
     #[inline]
     pub fn is_gpr16(self) -> bool {
-        self.0.is_gpr16()
+        self.iced().is_gpr16()
     }
 
     #[inline]
     pub fn is_gpr32(self) -> bool {
-        self.0.is_gpr32()
+        self.iced().is_gpr32()
+    }
+
+    #[inline]
+    pub fn is_gpr64(self) -> bool {
+        self.iced().is_gpr64()
     }
 
     #[inline]
     pub fn is_segment_register(self) -> bool {
-        self.0.is_segment_register()
+        self.iced().is_segment_register()
     }
 
     #[inline]
     pub fn is_st(self) -> bool {
-        self.0.is_st()
+        self.iced().is_st()
+    }
+
+    #[inline]
+    pub fn is_xmm(self) -> bool {
+        self.iced().is_xmm()
     }
 }
 
@@ -113,13 +143,13 @@ impl From<Register> for RegId {
 impl From<RegId> for Register {
     #[inline]
     fn from(register: RegId) -> Self {
-        register.0
+        register.iced()
     }
 }
 
 /// The classes a description may give a register, one bit each, in this order.
 /// A name not here is refused where the table is generated.
-pub const CLASSES: [&str; 17] = [
+pub const CLASSES: [&str; 23] = [
     "base",
     "byte",
     "code_segment",
@@ -137,6 +167,12 @@ pub const CLASSES: [&str; 17] = [
     "stack_segment",
     "string_segment",
     "x87",
+    "rfp",
+    "fpr",
+    "zero",
+    "xmm",
+    "tail_call",
+    "frame_follows",
 ];
 
 /// The class bits.
@@ -161,7 +197,23 @@ pub mod class {
     pub const STACK: u32 = 1 << 13;
     pub const STACK_SEGMENT: u32 = 1 << 14;
     pub const STRING_SEGMENT: u32 = 1 << 15;
+    /// LLVM's RFP classes: FP0..FP6, the x87 registers greedy allocates and
+    /// the stackifier maps to stack positions. Named by iced's MM0..MM6,
+    /// the physical x87 registers, and never encoded.
+    pub const RFP: u32 = 1 << 17;
     pub const X87: u32 = 1 << 16;
+    /// A floating-point or vector register.
+    pub const FPR: u32 = 1 << 18;
+    /// A register that reads as zero and ignores writes.
+    pub const ZERO: u32 = 1 << 19;
+    /// An SSE register: scalar `float` and `double` live in its low lanes.
+    pub const XMM: u32 = 1 << 20;
+    /// A register an indirect sibling call may take its callee's address in
+    /// (the pin's `GR32_TC`, `GR64_TC`), in the order it is given out.
+    pub const TAIL_CALL: u32 = 1 << 21;
+    /// The register the frame register follows in the allocation order when
+    /// the function has no frame pointer and the register is given out.
+    pub const FRAME_FOLLOWS: u32 = 1 << 22;
 }
 
 /// What LIR calls the frame register and the stack pointer, whatever the
@@ -215,6 +267,8 @@ pub type Rows = fn(&str, usize, usize) -> &'static [Row];
 /// and all of them.
 pub struct Cache {
     integers: [std::sync::OnceLock<Vec<RegId>>; 4],
+    xmm_bytes: std::sync::OnceLock<u32>,
+    rfp: std::sync::OnceLock<Vec<RegId>>,
 }
 
 impl Cache {
@@ -226,6 +280,8 @@ impl Cache {
                 std::sync::OnceLock::new(),
                 std::sync::OnceLock::new(),
             ],
+            xmm_bytes: std::sync::OnceLock::new(),
+            rfp: std::sync::OnceLock::new(),
         }
     }
 }
@@ -245,6 +301,9 @@ pub struct Info {
     pub loads: &'static [(RegId, &'static str)],
     /// The registers a pass may borrow for a moment, most preferred first.
     pub scratch: &'static [RegId],
+    /// The 8-bit registers in allocation order, the high bytes among them
+    /// (the GR8 class); empty where the target has none.
+    pub bytes: &'static [RegId],
     /// The segment register each address space of a pair kind means, where the
     /// target has segments: what an access without a prefix reads, the stack's,
     /// the code's, and the one a far pointer's selector is loaded into.
@@ -504,6 +563,18 @@ impl Info {
             )
     }
 
+    /// The registers of the RFP class (FP0..FP6, the x87 registers greedy
+    /// allocates), by iced's number: the order they are allocated in.
+    pub fn rfp_registers(&self) -> &[RegId] {
+        self.cache.rfp.get_or_init(|| {
+            let mut found: Vec<RegId> =
+                self.entries().filter(|(_, one)| one.classes & class::RFP != 0).map(|(register, _)| register).collect();
+            found.sort_by_key(|one| one.index());
+            found.dedup();
+            found
+        })
+    }
+
     /// Every integer register (the 8, 16 and 32-bit views), wide ones first,
     /// each width by iced's number: the order the allocator's tables have
     /// always been walked in.
@@ -521,9 +592,25 @@ impl Info {
         self.view(self.root(register), bytes as u32 * 8).unwrap_or(register)
     }
 
+    /// The 8-bit allocation order (`@bytes`), empty where the target has none.
+    pub fn byte_order(&self) -> &'static [RegId] {
+        self.bytes
+    }
+
     /// The segment registers, by iced's number.
     pub fn segments(&self) -> impl Iterator<Item = RegId> + '_ {
         self.entries().filter(|(_, one)| one.classes & class::SEGMENT != 0).map(|(id, _)| id)
+    }
+
+    /// The bytes of the target's SSE registers, 0 where it has none: a value
+    /// that wide is held in one.
+    pub fn xmm_bytes(&self) -> u32 {
+        *self
+            .cache
+            .xmm_bytes
+            .get_or_init(
+                || self.entries().find(|(_, one)| one.classes & class::XMM != 0).map_or(0, |(_, one)| one.bits / 8),
+            )
     }
 
     /// How wide this register is, or None where the target does not say: a
@@ -540,7 +627,7 @@ impl Info {
         &self,
         register: RegId,
     ) -> bool {
-        self.integer(register) || self.is_segment(register)
+        self.integer(register) || self.is_segment(register) || self.in_class(register, class::XMM)
     }
 
     /// The entries in iced's number order, with their registers.
@@ -616,6 +703,28 @@ impl RegSet {
         self.0[at / 64] & (1 << (at % 64)) != 0
     }
 
+    /// The registers in either set.
+    #[must_use]
+    #[inline]
+    pub fn union(
+        self,
+        other: &RegSet,
+    ) -> Self {
+        Self(std::array::from_fn(|at| self.0[at] | other.0[at]))
+    }
+
+    /// `other`'s registers added to this set, in place
+    /// (`BitVector::operator|=`).
+    #[inline]
+    pub fn union_with(
+        &mut self,
+        other: &RegSet,
+    ) {
+        for (word, more) in self.0.iter_mut().zip(other.0) {
+            *word |= more;
+        }
+    }
+
     #[must_use]
     pub fn len(&self) -> usize {
         self.0.iter().map(|word| word.count_ones() as usize).sum()
@@ -677,12 +786,12 @@ impl std::fmt::Debug for RegSet {
 /// A register as its number, which is how every dump names it.
 impl llrm_support::pyrepr::Repr for RegId {
     fn repr(&self) -> String {
-        self.0.repr()
+        self.iced().repr()
     }
 }
 
 impl llrm_support::pyset::PyHash for RegId {
     fn py_hash(&self) -> i64 {
-        self.0.py_hash()
+        self.iced().py_hash()
     }
 }

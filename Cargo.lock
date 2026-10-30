@@ -33,10 +33,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "buildprs"
-version = "0.1.0"
-
-[[package]]
 name = "cc"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -108,6 +104,12 @@ name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
+
+[[package]]
+name = "fnv"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "generic-array"
@@ -193,15 +195,18 @@ name = "llrm"
 version = "0.1.0"
 dependencies = [
  "llrm-alloc",
+ "llrm-analysis",
  "llrm-bcdriver",
  "llrm-c",
- "llrm-core",
+ "llrm-cc",
+ "llrm-codegen",
  "llrm-driver",
  "llrm-mir",
  "llrm-nib",
  "llrm-object",
  "llrm-qb",
  "llrm-target",
+ "llrm-transforms",
  "llrm-x86",
  "llrm-x86-m16",
  "llrm-x86-m32",
@@ -231,18 +236,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-arm64"
+version = "0.1.0"
+dependencies = [
+ "llrm-analysis",
+ "llrm-codegen",
+ "llrm-dwarf",
+ "llrm-elf",
+ "llrm-env",
+ "llrm-iselgen",
+ "llrm-lir",
+ "llrm-macho",
+ "llrm-mir",
+ "llrm-object",
+ "llrm-support",
+ "llrm-target",
+ "llrm-transforms",
+ "tempfile",
+]
+
+[[package]]
 name = "llrm-bcdriver"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-bcobj",
+ "llrm-codegen",
  "llrm-driver",
  "llrm-mir",
  "llrm-omf",
  "llrm-transforms",
- "llrm-x86-bc",
- "llrm-x86-bcmachine",
  "llrm-x86-m16",
+]
+
+[[package]]
+name = "llrm-bcobj"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-analysis",
+ "llrm-hir",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-omf",
+ "llrm-qbruntime",
+ "llrm-support",
+ "llrm-target",
+ "llrm-x86-m16",
+ "toml",
 ]
 
 [[package]]
@@ -251,7 +292,8 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
- "llrm-core",
+ "llrm-c",
+ "llrm-codegen",
  "llrm-driver",
  "llrm-mir",
  "llrm-object",
@@ -270,6 +312,62 @@ dependencies = [
  "sha2",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "llrm-cc"
+version = "0.1.0"
+dependencies = [
+ "llrm-driver",
+ "llrm-mir",
+ "llrm-target",
+ "llrm-x86-m16",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "llrm-codegen"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "llrm-analysis",
+ "llrm-codegen",
+ "llrm-dagisel",
+ "llrm-dwarf",
+ "llrm-hir",
+ "llrm-iselgen",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-object",
+ "llrm-omf",
+ "llrm-peepgen",
+ "llrm-qbruntime",
+ "llrm-support",
+ "llrm-target",
+ "llrm-transforms",
+ "llrm-x86",
+ "llrm-x86-m16",
+ "llrm-x86-m32",
+ "llrm-x86-m64",
+ "num-bigint",
+ "num-traits",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "llrm-codeview"
+version = "0.1.0"
+dependencies = [
+ "llrm-object",
+ "llrm-support",
 ]
 
 [[package]]
@@ -281,60 +379,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-coff32"
+name = "llrm-dagisel"
 version = "0.1.0"
-dependencies = [
- "llrm-coff",
- "llrm-object",
- "tempfile",
-]
 
 [[package]]
-name = "llrm-coff64"
+name = "llrm-dagisel-gen"
 version = "0.1.0"
 dependencies = [
- "llrm-coff",
- "llrm-object",
- "tempfile",
-]
-
-[[package]]
-name = "llrm-core"
-version = "0.1.0"
-dependencies = [
- "iced-x86",
- "indexmap",
- "llrm-analysis",
- "llrm-coff",
- "llrm-coff32",
- "llrm-coff64",
- "llrm-core",
- "llrm-dwarf",
- "llrm-elf32",
- "llrm-elf64",
- "llrm-hir",
- "llrm-iselgen",
- "llrm-lir",
- "llrm-macho",
- "llrm-mir",
- "llrm-object",
- "llrm-omf",
- "llrm-peepgen",
- "llrm-qbruntime",
- "llrm-support",
- "llrm-target",
- "llrm-transforms",
- "llrm-x86",
- "llrm-x86-bcmachine",
- "llrm-x86-m16",
- "llrm-x86-m32",
- "num-bigint",
- "num-traits",
- "regex",
- "rustc-hash",
- "serde",
- "serde_json",
- "sha2",
+ "llrm-dagisel",
  "tempfile",
  "toml",
 ]
@@ -344,25 +396,28 @@ name = "llrm-driver"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-codegen",
  "llrm-lir",
+ "llrm-mir",
+ "llrm-object",
  "llrm-target",
  "llrm-x86",
  "llrm-x86-m16",
  "llrm-x86-m16-select",
  "llrm-x86-m32",
  "llrm-x86-m32-select",
+ "llrm-x86-m64",
+ "llrm-x86-m64-select",
 ]
 
 [[package]]
 name = "llrm-dwarf"
 version = "0.1.0"
 dependencies = [
- "llrm-elf32",
- "llrm-elf64",
  "llrm-macho",
  "llrm-object",
  "llrm-support",
+ "llrm-x86",
  "tempfile",
 ]
 
@@ -370,26 +425,12 @@ dependencies = [
 name = "llrm-elf"
 version = "0.1.0"
 dependencies = [
- "llrm-dwarf",
  "llrm-object",
 ]
 
 [[package]]
-name = "llrm-elf32"
+name = "llrm-env"
 version = "0.1.0"
-dependencies = [
- "llrm-elf",
- "llrm-object",
-]
-
-[[package]]
-name = "llrm-elf64"
-version = "0.1.0"
-dependencies = [
- "llrm-elf",
- "llrm-object",
- "tempfile",
-]
 
 [[package]]
 name = "llrm-hir"
@@ -408,6 +449,8 @@ dependencies = [
  "llrm-lir",
  "llrm-peepgen",
  "llrm-support",
+ "llrm-target",
+ "tempfile",
 ]
 
 [[package]]
@@ -423,14 +466,18 @@ dependencies = [
 name = "llrm-macho"
 version = "0.1.0"
 dependencies = [
- "llrm-dwarf",
+ "llrm-arm64",
  "llrm-object",
+ "llrm-x86",
  "tempfile",
 ]
 
 [[package]]
 name = "llrm-mir"
 version = "0.1.0"
+dependencies = [
+ "llrm-env",
+]
 
 [[package]]
 name = "llrm-nib"
@@ -439,7 +486,7 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-analysis",
- "llrm-core",
+ "llrm-codegen",
  "llrm-driver",
  "llrm-hir",
  "llrm-mir",
@@ -462,6 +509,9 @@ dependencies = [
 [[package]]
 name = "llrm-object"
 version = "0.1.0"
+dependencies = [
+ "llrm-support",
+]
 
 [[package]]
 name = "llrm-omf"
@@ -477,10 +527,10 @@ dependencies = [
 name = "llrm-peepgen"
 version = "0.1.0"
 dependencies = [
- "iced-x86",
  "indexmap",
  "llrm-lir",
  "llrm-support",
+ "llrm-target",
  "serde",
  "toml",
 ]
@@ -491,16 +541,20 @@ version = "0.1.0"
 dependencies = [
  "indexmap",
  "llrm-analysis",
- "llrm-core",
+ "llrm-arm64",
+ "llrm-codegen",
  "llrm-driver",
+ "llrm-hir",
  "llrm-mir",
  "llrm-object",
+ "llrm-qbruntime",
  "llrm-support",
+ "llrm-target",
  "llrm-transforms",
  "llrm-x86-m16",
+ "logos",
  "num-bigint",
  "num-traits",
- "qbfront",
  "regex",
  "rustc-hash",
  "serde",
@@ -520,12 +574,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-sroa-poc"
+version = "0.1.0"
+dependencies = [
+ "llrm-analysis",
+ "llrm-mir",
+ "llrm-support",
+ "llrm-transforms",
+]
+
+[[package]]
 name = "llrm-support"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
  "libc",
+ "llrm-env",
  "num-bigint",
  "num-traits",
  "rustc-hash",
@@ -550,9 +615,13 @@ dependencies = [
  "llrm-analysis",
  "llrm-mir",
  "llrm-support",
+ "llrm-target",
+ "llrm-x86",
  "llrm-x86-m16",
+ "llrm-x86-m32",
  "num-bigint",
  "num-traits",
+ "regex",
 ]
 
 [[package]]
@@ -560,40 +629,18 @@ name = "llrm-x86"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-codeview",
+ "llrm-coff",
+ "llrm-dwarf",
+ "llrm-elf",
  "llrm-lir",
- "llrm-support",
- "llrm-target",
- "toml",
-]
-
-[[package]]
-name = "llrm-x86-bc"
-version = "0.1.0"
-dependencies = [
- "iced-x86",
- "llrm-analysis",
- "llrm-hir",
- "llrm-lir",
+ "llrm-macho",
  "llrm-mir",
+ "llrm-object",
  "llrm-omf",
- "llrm-qbruntime",
  "llrm-support",
  "llrm-target",
- "llrm-x86-bcmachine",
- "llrm-x86-m16",
-]
-
-[[package]]
-name = "llrm-x86-bcmachine"
-version = "0.1.0"
-dependencies = [
- "iced-x86",
- "llrm-lir",
- "llrm-omf",
- "llrm-qbruntime",
- "llrm-support",
- "llrm-target",
- "llrm-x86-m16",
+ "tempfile",
  "toml",
 ]
 
@@ -622,7 +669,7 @@ name = "llrm-x86-m16-select"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-codegen",
  "llrm-iselgen",
  "llrm-x86",
 ]
@@ -637,6 +684,7 @@ dependencies = [
  "llrm-mir",
  "llrm-target",
  "llrm-x86",
+ "toml",
 ]
 
 [[package]]
@@ -644,9 +692,64 @@ name = "llrm-x86-m32-select"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-codegen",
  "llrm-iselgen",
  "llrm-x86",
+]
+
+[[package]]
+name = "llrm-x86-m64"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-iselgen",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-target",
+ "llrm-x86",
+ "toml",
+]
+
+[[package]]
+name = "llrm-x86-m64-select"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-codegen",
+ "llrm-iselgen",
+ "llrm-x86",
+]
+
+[[package]]
+name = "logos"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb2c55a318a87600ea870ff8c2012148b44bf18b74fad48d0f835c38c7d07c5f"
+dependencies = [
+ "logos-derive",
+]
+
+[[package]]
+name = "logos-codegen"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58b3ffaa284e1350d017a57d04ada118c4583cf260c8fb01e0fe28a2e9cf8970"
+dependencies = [
+ "fnv",
+ "proc-macro2",
+ "quote",
+ "regex-automata",
+ "regex-syntax",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "logos-derive"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52d3a9855747c17eaf4383823f135220716ab49bea5fbea7dd42cc9a92f8aa31"
+dependencies = [
+ "logos-codegen",
 ]
 
 [[package]]
@@ -705,17 +808,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "qbfront"
-version = "0.1.0"
-dependencies = [
- "buildprs",
- "llrm-core",
- "llrm-driver",
- "llrm-hir",
- "llrm-qbruntime",
 ]
 
 [[package]]
@@ -808,7 +900,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -849,6 +941,17 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "syn"
+version = "2.0.119"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
 
 [[package]]
 name = "syn"

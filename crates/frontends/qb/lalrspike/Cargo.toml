@@ -1,0 +1,17 @@
+[package]
+name = "lalrspike"
+version = "0.1.0"
+edition = "2024"
+description = "Spike: LALR(1) grammars for Nib and the QB family, ambiguity left to later passes"
+build = "build.rs"
+
+[workspace]
+
+[dependencies]
+lalrpop-util = { version = "0.23", features = ["lexer"] }
+llrm-nib = { path = "../../nib" }
+logos = "0.16.1"
+qbfront = { package = "llrm-qb", path = ".." }
+
+[build-dependencies]
+lalrpop = "0.23"

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build one Nib module into a DOS executable on the host:
-# llrm-nib compiles the program and crates/frontends/llrm-nib/src/runtime/runtime.nib, jwasm
+# llrm-nib compiles the program and crates/frontends/nib/src/runtime/runtime.nib, jwasm
 # assembles, jwlink links, with any C or assembly files the program imports
 # from. Those C files may include SOURCE's generated declarations as
 # "NAME.h". Running it is a separate, visible DOSBox step.
@@ -20,12 +20,14 @@ toolchain=${TOOLCHAIN:-$HOME/work/other/d32x/toolchains/native/bin}
 # The ABI the program is built for is the runtime's and the foreign C's too: their calls cross it.
 abi=""
 for flag in ${NIB_FLAGS:-}; do
-    case $flag in -mabi=*) abi="$abi $flag" ;; esac
+    case $flag in -mabi=*) abi="$abi $flag"; abi_name=${flag#-mabi=} ;; esac
 done
+# The instruction selector a run asks for (LLRM_ISEL=dag): the program, the foreign C and the runtime go through it.
+isel=${LLRM_ISEL:+--isel=$LLRM_ISEL}
 work=$(mktemp -d "${TMPDIR:-/tmp}/nib-build.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-"$bin/llrm-nib" "$source" -o "$work/program.obj" "$level" --procedure-segments ${NIB_FLAGS:-} >/dev/null
+"$bin/llrm-nib" $isel "$source" -o "$work/program.obj" "$level" --procedure-segments ${NIB_FLAGS:-} >/dev/null
 "$bin/nibfront" --declare h $abi "$source" >"$work/$(basename "$source" .nib).h"
 defines=""
 recipe() { python3 "$root/tools/linkrecipe.py" "$target" "$1"; }
@@ -37,8 +39,8 @@ for part in "$@"; do
     name=$(basename "$part")
     case $part in
     *.asm) "$toolchain/jwasm" -q -c -Cp -Zg $omf $defines "-Fo$work/$name.obj" "$part" ;;
-    # shellcheck disable=SC2086
-    *) "$bin/llrm-c" "$part" -I "$work" -o "$work/$name.obj" "$level" $abi >/dev/null ;;
+    # llrm-cc compiles the foreign C by clang (LLRM_CLANG_M16 names the i8086 build).
+    *) LLRM_CC_TARGET=x86_16-dos "$bin/llrm-cc" $isel -c "$part" -I "$work" -o "$work/$name.obj" "$level" -mabi="${abi_name:-regparm3}" >/dev/null ;;
     esac
     objects="$objects file $work/$name.obj"
     used="$used --used-by $work/$name.obj"
@@ -51,7 +53,7 @@ for line in $(python3 "$root/tools/dosbatch/os_objects.py" "$target" nib "$work"
 done
 # jwlink keeps whatever any segment references, even one it drops, so the
 # runtime keeps only the routines the other objects name.
-"$bin/llrm-nib" "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $abi $used >/dev/null
+"$bin/llrm-nib" $isel "$root/crates/frontends/nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $abi $used >/dev/null
 objects="file $work/runtime.obj$objects"
 "$toolchain/jwlink" option quiet option eliminate ${NIB_MAP:+option map=$NIB_MAP} $(recipe format) name "$work/program.exe" \
     file "$work/start.obj" ${hookobj:-} file "$work/program.obj" $objects \

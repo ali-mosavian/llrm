@@ -1,0 +1,2 @@
+extends = "pentium"
+features = ["cmov", "fcmov", "fcomi", "nopl"]

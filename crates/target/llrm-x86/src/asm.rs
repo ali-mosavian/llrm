@@ -88,6 +88,7 @@ const MNEMONICS: &[Mnemonic] = &[
     Mnemonic::Sbb,
     Mnemonic::Neg,
     Mnemonic::Rcr,
+    Mnemonic::Ror,
     Mnemonic::Clc,
     Mnemonic::Stc,
     Mnemonic::Mul,
@@ -116,7 +117,7 @@ const ALIASES: &[(&str, &str)] = &[
 
 /// What a block is assembled for: facts of the target's description, not of
 /// this assembler.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Mode {
     /// The code's bits (`object.toml`): the encoder's mode.
     pub bits: u32,
@@ -634,7 +635,34 @@ fn instruction(
 
 /// The machine code of `lines`, one statement each, for code of `bits` bits;
 /// `;` starts a comment. Real mode (16) and flat (32) code are assembled.
+///
+/// A block is assembled once per process: the runtime helpers (the 64-bit
+/// divides, the huge-pointer fills and copies) are asked for at every call
+/// site of every function, and their source is fixed.
 pub fn assembled(
+    lines: &[&str],
+    mode: Mode,
+) -> Result<Vec<u8>, Refusal> {
+    static CACHE: LazyLock<std::sync::Mutex<HashMap<(Mode, String), Result<Vec<u8>, Refusal>>>> =
+        LazyLock::new(Default::default);
+    let key = (mode, lines.join("\n"));
+    if let Some(done) = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
+        return done.clone();
+    }
+    let made = assembled_uncached(lines, mode);
+    #[cfg(test)]
+    ASSEMBLED.with(|count| count.set(count.get() + 1));
+    CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, made.clone());
+    made
+}
+
+// The blocks this thread assembled, not looked up.
+#[cfg(test)]
+thread_local! {
+    pub static ASSEMBLED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn assembled_uncached(
     lines: &[&str],
     mode: Mode,
 ) -> Result<Vec<u8>, Refusal> {

@@ -1,13 +1,9 @@
-/* DATE$ and TIME$ (QB rt/osdate.asm): the date and the time of DOS as text,
+/* DATE$ and TIME$ (QB rt/osdate.asm): the date and the time of the clock as text,
    and set from text. */
-#include "device.h"
+#include "dev.h"
 #include "error.h"
 #include "nhstutil.h"
 #include "qb.h"
-
-enum { DOS_GET_DATE = 0x2A00, DOS_SET_DATE = 0x2B00 };
-
-enum { DOS_GET_TIME = 0x2C00, DOS_SET_TIME = 0x2D00 };
 
 static void put2(char *to, unsigned value)
 {
@@ -15,38 +11,41 @@ static void put2(char *to, unsigned value)
     to[1] = (char)('0' + value % 10);
 }
 
+#pragma aux B_FDAT "B$FDAT"
+#pragma aux B_FTIM "B$FTIM"
+#pragma aux B_SDAT "B$SDAT"
+#pragma aux B_STIM "B$STIM"
+
 /* B$FDAT: DATE$, mm-dd-yyyy. */
 SD *B_FDAT(void)
 {
-    Regs r;
     char *text;
     SD *date = str_tmp(10, &text);
+    unsigned year, month, day;
 
-    r.rax = DOS_GET_DATE;
-    dev_int21(&r);
-    put2(text, r.rdx >> 8);
+    dev_date(&year, &month, &day);
+    put2(text, month);
     text[2] = '-';
-    put2(text + 3, r.rdx & 0xFF);
+    put2(text + 3, day);
     text[5] = '-';
-    put2(text + 6, r.rcx / 100);
-    put2(text + 8, r.rcx % 100);
+    put2(text + 6, year / 100);
+    put2(text + 8, year % 100);
     return date;
 }
 
 /* B$FTIM: TIME$, hh:mm:ss. */
 SD *B_FTIM(void)
 {
-    Regs r;
     char *text;
     SD *time = str_tmp(8, &text);
+    unsigned hour, minute, second;
 
-    r.rax = DOS_GET_TIME;
-    dev_int21(&r);
-    put2(text, r.rcx >> 8);
+    dev_time(&hour, &minute, &second);
+    put2(text, hour);
     text[2] = ':';
-    put2(text + 3, r.rcx & 0xFF);
+    put2(text + 3, minute);
     text[5] = ':';
-    put2(text + 6, r.rdx >> 8);
+    put2(text + 6, second);
     return time;
 }
 
@@ -89,7 +88,6 @@ static int separator(Scan *s, const char *separators)
 void B_SDAT(SD *text)
 {
     Scan s;
-    Regs r;
     int count;
     unsigned month, day, year;
 
@@ -114,11 +112,7 @@ void B_SDAT(SD *text)
     } else {
         year += 1900;
     }
-    r.rax = DOS_SET_DATE;
-    r.rcx = year;
-    r.rdx = month << 8 | day;
-    dev_int21(&r);
-    if ((r.rax & 0xFF) != 0)
+    if (dev_date_set(year, month, day))
         qb_error(BE_ILLFUN);
     str_tmp_free(text);
 }
@@ -127,7 +121,6 @@ void B_SDAT(SD *text)
 void B_STIM(SD *text)
 {
     Scan s;
-    Regs r;
     int count;
     unsigned hours, minutes = 0, seconds = 0;
 
@@ -141,16 +134,7 @@ void B_STIM(SD *text)
         if (separator(&s, ":.") > 0)
             seconds = digits(&s, &count);
     }
-    r.rax = DOS_SET_TIME;
-    r.rcx = hours << 8 | minutes;
-    r.rdx = seconds << 8;
-    dev_int21(&r);
-    if ((r.rax & 0xFF) != 0)
+    if (dev_time_set(hours, minutes, seconds))
         qb_error(BE_ILLFUN);
     str_tmp_free(text);
 }
-
-#pragma aux B_FDAT "B$FDAT"
-#pragma aux B_FTIM "B$FTIM"
-#pragma aux B_SDAT "B$SDAT"
-#pragma aux B_STIM "B$STIM"

@@ -1,0 +1,33 @@
+== -da-enable-dependence-test=all
+@interchange_04
+B0:
+  %v0 = load i32, ptr @N
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v1 = phi i32 [ %v10, %B7 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v2 = phi i32 [ %v8, %B6 ], [ 0, %B3 ]
+  br label %B5
+B5:
+  %v3 = getelementptr inbounds [100 x [100 x i32]], ptr @A, i32 0, i32 %v1, i32 %v2
+  %v4 = load i32, ptr %v3
+  %v5 = add nsw i32 %v4, %k
+  store i32 %v5, ptr %v3
+  %v6 = add nuw nsw i32 %v1, 1
+  %v7 = icmp ne i32 %v0, %v1
+  br label %B6
+B6:
+  %v8 = add nuw nsw i32 %v2, 1
+  %v9 = icmp eq i32 %v2, 99
+  br i1 %v9, label %B7, label %B4
+B7:
+  %v10 = add nuw nsw i32 %v1, 1
+  %v11 = icmp ne i32 %v0, %v1
+  br i1 %v11, label %B2, label %B8
+B8:
+  ret void

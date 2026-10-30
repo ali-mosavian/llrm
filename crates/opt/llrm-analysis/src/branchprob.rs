@@ -228,6 +228,16 @@ pub fn estimated(
     odds
 }
 
+/// The blocks `cold` says are cold, as `taken_from` finds them.
+pub fn cold_blocks(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+) -> BTreeSet<i64> {
+    let terminal = noreturn::terminal_sites(context, declarations, function, &BTreeSet::new());
+    noreturn::cold(context, declarations, function, &terminal)
+}
+
 /// The probability of each edge out of `blocks`, as `estimated` gives them.
 pub fn taken_from(
     context: &Context,
@@ -238,8 +248,22 @@ pub fn taken_from(
     trips: &BTreeMap<i64, i64>,
     blocks: &[BlockId],
 ) -> BTreeMap<(i64, i64), f64> {
-    let terminal = noreturn::terminal_sites(context, declarations, function, &BTreeSet::new());
-    let cold = noreturn::cold(context, declarations, function, &terminal);
+    let cold = cold_blocks(context, declarations, function);
+    taken_cold(context, metadata, declarations, function, shape, trips, &cold, blocks)
+}
+
+/// `taken_from`, `cold` being `cold_blocks`' of `function`: a caller that asks
+/// for a few blocks at a time keeps it, the scan being the function's size.
+pub fn taken_cold(
+    context: &Context,
+    metadata: &[MetadataNode],
+    declarations: &Declarations,
+    function: &Function,
+    shape: &Shape,
+    trips: &BTreeMap<i64, i64>,
+    cold: &BTreeSet<i64>,
+    blocks: &[BlockId],
+) -> BTreeMap<(i64, i64), f64> {
     let runs = Runs::default();
     let mut taken = BTreeMap::new();
     for &block in blocks {
@@ -251,7 +275,7 @@ pub fn taken_from(
             }
             _ => {
                 let (_, weights) =
-                    weighed(context, metadata, declarations, function, shape, trips, &cold, &runs, block, &successors);
+                    weighed(context, metadata, declarations, function, shape, trips, cold, &runs, block, &successors);
                 let total: f64 = weights.iter().sum();
                 for (to, weight) in successors.iter().zip(&weights) {
                     *taken.entry((id(block), *to)).or_default() += weight / total;
@@ -375,14 +399,11 @@ fn weighed(
     };
     let called = |at: i64| {
         function
-            .block(cfg::block(at))
-            .instructions()
-            .iter()
-            .filter(|&&inst| matches!(
+            .iter_block(cfg::block(at))
+            .filter(|&inst| matches!(
                 function.instruction(inst).opcode,
                 Opcode::Call(_) | Opcode::Invoke(_)
             ))
-            .copied()
             .collect::<Vec<_>>()
     };
     // A way that returns at once is the base case of a recursion that the
@@ -545,11 +566,8 @@ impl Run {
         if trip < self.values.len() {
             return self.values.get(trip);
         }
-        let header = function.block(cfg::block(one.header));
-        let phis = header
-            .instructions()
-            .iter()
-            .copied()
+        let phis = function
+            .iter_block(cfg::block(one.header))
             .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
             .collect::<Vec<_>>();
         let outside = |at: &Operand| matches!(at, Operand::Block(from) if !one.body.contains(&id(*from)));
@@ -692,9 +710,9 @@ fn returned(
     function: &Function,
     block: BlockId,
 ) -> Option<(f64, f64)> {
-    let instructions = function.block(block).instructions();
-    let [only] = instructions else { return None };
-    let instruction = function.instruction(*only);
+    let body = function.block(block);
+    let (1, Some(only)) = (body.len(), body.first()) else { return None };
+    let instruction = function.instruction(only);
     let (Opcode::Ret, [Operand::Constant(value)]) = (&instruction.opcode, instruction.operands.as_slice()) else {
         return None;
     };

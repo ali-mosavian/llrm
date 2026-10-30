@@ -229,9 +229,9 @@ impl FloatLoop {
                 return false;
             };
             function.predecessors(exit) == [header]
-                && !function.block(exit).instructions().iter().any(|&i| function.instruction(i).opcode == Opcode::Phi)
-                && function.block(header).instructions().iter().any(|&i| function.instruction(i).opcode == Opcode::Phi)
-                && function.block(latch).instructions().iter().all(|&inst| {
+                && !function.iter_block(exit).any(|i| function.instruction(i).opcode == Opcode::Phi)
+                && function.iter_block(header).any(|i| function.instruction(i).opcode == Opcode::Phi)
+                && function.iter_block(latch).all(|inst| {
                     let op = function.instruction(inst);
                     match op.opcode {
                         Opcode::Br => op.operands.len() == 1,
@@ -239,7 +239,7 @@ impl FloatLoop {
                         _ => floatfacts::rule(&memory, inst).is_some(),
                     }
                 })
-                && floatfacts::touches_in(unit.context, function, function.block(latch).instructions())
+                && floatfacts::touches_in(unit.context, function, &function.iter_block(latch).collect::<Vec<_>>())
         })
     }
 
@@ -288,7 +288,7 @@ struct _Plan {
 /// `solved`, floatfacts' solve of `function` with `calls`. Whether one was.
 #[allow(clippy::too_many_arguments)]
 pub fn specialized(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     callees: &Callees,
     function: &mut Function,
@@ -356,12 +356,12 @@ fn _planned(
         return None;
     };
     if function.predecessors(exit) != [header]
-        || function.block(exit).instructions().iter().any(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+        || function.iter_block(exit).any(|inst| function.instruction(inst).opcode == Opcode::Phi)
     {
         return None;
     }
-    let header_insts = function.block(header).instructions();
-    let latch_insts = function.block(latch).instructions();
+    let header_insts = function.iter_block(header).collect::<Vec<_>>();
+    let latch_insts = function.iter_block(latch).collect::<Vec<_>>();
     let phis = header_insts
         .iter()
         .copied()
@@ -383,7 +383,7 @@ fn _planned(
     let (update, _) = arms(function, phi).into_iter().find(|&(_, from)| from == latch)?;
     // The latch: float work that never reads the counter, the update, and its
     // branch.
-    for &inst in latch_insts {
+    for &inst in &latch_insts {
         let op = function.instruction(inst);
         let reads_counter = op.operands.contains(&Operand::Value(counter));
         let fine = match op.opcode {
@@ -398,7 +398,7 @@ fn _planned(
     }
     // The header stores nothing but the counter.
     let mut finals = Vec::new();
-    for &inst in header_insts {
+    for &inst in &header_insts {
         let op = function.instruction(inst);
         if let Opcode::Store { .. } = op.opcode {
             if op.operands[0] != Operand::Value(counter) {
@@ -411,7 +411,7 @@ fn _planned(
     let inside = |inst: InstId| function.parent(inst).is_some_and(|block| loop_.body.contains(&cfg::id(block)));
     let leaves = header_insts
         .iter()
-        .chain(latch_insts)
+        .chain(&latch_insts)
         .filter_map(|&inst| function.instruction(inst).result)
         .filter(|&value| value != counter);
     for value in leaves.collect::<Vec<_>>() {
@@ -451,7 +451,7 @@ fn _planned(
     );
     let before_last = floatfacts::repeated(
         unit,
-        latch_insts,
+        &latch_insts,
         &(&proof.count - 1),
         &initial,
         Some(&solved.integers),
@@ -459,7 +459,7 @@ fn _planned(
     )?;
     let mut seeds = Vec::new();
     for (reference, _) in &proof.stores {
-        if !_carried(unit, reference, latch_insts) {
+        if !_carried(unit, reference, &latch_insts) {
             continue;
         }
         let fact = consts::_cell(&before_last, &asked.resolve(reference))?;
@@ -493,7 +493,7 @@ fn _planned(
 
 /// A store of `store`'s constant at `position`.
 fn _store(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     store: _Store,
     position: Position,
@@ -511,16 +511,16 @@ fn _store(
 }
 
 fn _rewritten(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     plan: _Plan,
 ) {
     let _Plan { header, latch, exit, counter, seeds, finals, last } = plan;
-    let first = function.block(latch).instructions()[0];
+    let first = function.block(latch).first().expect("an instruction");
     for seed in seeds {
         _store(context, function, seed, Position::Before(first));
     }
-    let exit_first = function.block(exit).instructions()[0];
+    let exit_first = function.block(exit).first().expect("an instruction");
     for store in finals {
         _store(context, function, store, Position::Before(exit_first));
     }
@@ -545,7 +545,7 @@ fn _rewritten(
         updater.rewrite_use(context, function, one);
     }
     // The header's phis lose the back edge, each then its one input.
-    for phi in function.block(header).instructions().to_vec() {
+    for phi in function.iter_block(header).collect::<Vec<_>>() {
         if function.instruction(phi).opcode != Opcode::Phi {
             continue;
         }

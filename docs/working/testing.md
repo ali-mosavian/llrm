@@ -150,7 +150,7 @@ gate runs it as the `identity` step; [tools](../../tools/readme.md) describes it
 
 ## Debug information
 
-`tests/dwarf.rs` and `crates/target/llrm-dwarf` run llvm-dwarfdump, gdb, ld and as over the DWARF llrm writes; `tests/turbo.rs` and
+`tests/dwarf.rs` and `crates/mc/llrm-dwarf` run llvm-dwarfdump, gdb, ld and as over the DWARF llrm writes; `tests/turbo.rs` and
 `tests/cv4.rs` drive Turbo Debugger and CodeView sessions. A test whose tool is missing prints `SKIPPED: why` and passes; with
 `LLRM_REQUIRE_DWARF=1` (`LLRM_REQUIRE_TURBO`, `LLRM_REQUIRE_CODEVIEW`, `LLRM_REQUIRE_WDUMP`) it fails instead. A host that has the
 tools sets them all with `. tools/debug-gate.env`.
@@ -161,7 +161,7 @@ QCport, the largest C program llrm-c compiles, is not in this repository. Its va
 (the Borland headers) and, to run it, `QCPORT_BORLAND` (the all-Borland build) and `JWLINK`.
 
     tools/qcport-compile.sh                 every module at -O2 and -Os; each refusal is listed
-    tools/qcport-run.py                     links the llrm-c build, runs it headless beside the Borland build, compares frames,
+    tools/qcport-run-cc.py                  links the llrm-cc build, runs it headless beside the Borland build, compares frames,
                                             polygons and the md5 of BENCH.BMP
 
 `QCPORT_OBJECTS` reuses objects the gate already built; `QCPORT_RUN_SECONDS` caps each run. Run both before merging a change to

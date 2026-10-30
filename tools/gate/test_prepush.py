@@ -106,3 +106,41 @@ def test_trailing_whitespace_in_the_diff_turns_the_diff_check_red(damaged):
     assert prepushed(damaged, "diff check").stdout.splitlines()[0] == "PREPUSH FAIL: diff check"
     subprocess.run(["git", "rm", "-q", "-f", "--cached", str(notes)], cwd=damaged, check=True)
     notes.unlink()
+
+
+def test_a_command_whose_output_is_not_utf8_fails_the_step_not_the_prepush():
+    """`git diff --check` printed a byte 0xdb of a tracked binary-ish file and run_all died with a UnicodeDecodeError: no PREPUSH line at all, so the diff-check test read an empty stdout."""
+    results, _ = prepush.run_all({"bytes": "printf '\\333 bad\\n'; exit 1"}, dict(os.environ))
+    assert results[0][0] == "bytes" and results[0][1] == 1 and "bad" in results[0][3]
+    assert prepush.verdict(results) == "PREPUSH FAIL: bytes"
+
+
+def test_the_diff_check_looks_at_the_prs_own_delta_not_at_what_parity_has_over_main(tmp_path):
+    """Against origin/main the check found ~13k whitespace findings in data files that feat/parity already has, so PREPUSH PASS could not hold on a parity tree. Old whitespace in parity is
+    not the PR's; a conflict marker it adds is."""
+    import tomllib
+
+    command = tomllib.loads((ROOT / "tools/gate/tiers.toml").read_text())["prepush"]["checks"]["diff check"]
+    repo = tmp_path / "repo"
+
+    def git(*args):
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=repo, check=True, capture_output=True)
+
+    repo.mkdir()
+    git("init", "-q", "-b", "main")
+    (repo / "a.txt").write_text("a\n")
+    git("add", "-A")
+    git("commit", "-qm", "main")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    (repo / "old.tsv").write_text("row \n")  # trailing whitespace that parity has and main does not
+    git("add", "-A")
+    git("commit", "-qm", "parity")
+    git("update-ref", "refs/remotes/origin/feat/parity", "HEAD")
+    run = lambda: subprocess.run(command, shell=True, cwd=repo, capture_output=True, text=True)  # noqa: E731
+    assert run().returncode == 0, run().stdout
+    (repo / "marker.txt").write_text("a\n<<<<<<< HEAD\nb\n")
+    git("add", "-A")
+    assert run().returncode != 0
+    git("rm", "-q", "-f", "--cached", "marker.txt")
+    (repo / "marker.txt").unlink()
+    assert run().returncode == 0

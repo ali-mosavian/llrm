@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/cfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/cfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/cfg.rs sha256:7e1a43b5ae69e1f3a6283aac1ddc491f360638008cad8ffdfe260187c2edfbaf -->
+<!-- src: crates/opt/llrm-analysis/src/cfg.rs sha256:265753edf39b773029e30acee0e704c717b103c528b63114594bc137c22481ae -->
 
 # cfg
 
@@ -24,7 +24,6 @@ loops cost N^2.
   |                         immediate, depths, frontiers, irreducible
   +- loops: Vec<Loop>       from llrm_mir Loops, ids not BlockIds,
   |                         inner loops first
-  +- reaching: Reaching     blocks with a path to a block, found on ask
                             and cached
 ```
 

@@ -39,10 +39,31 @@ fn a_function_becomes_its_llvm_ir() {
     // With no ABI of its own, a procedure is far and C's.
     assert!(
         text.contains(
-            "define i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"
+            "define i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) noinline \"llrm-fp-eval\"=\"x87-extended\" {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"
         ),
         "{text}"
     );
+}
+
+/// The clang-built runtime takes `short v` as `signext` and trusts the caller
+/// to have widened it: `PRINT b(i)` called B$PSI2 with the word zero-extended
+/// and printed 49536 for -16000 (bc_static_arrays_far, -m32). At a 32-bit word
+/// the 16-bit argument carries `signext`; at a 16-bit word it fills the
+/// register.
+#[test]
+fn a_16_bit_argument_is_widened_by_the_caller_where_the_word_is_wider() {
+    let call = |layout: &str| {
+        let mut function = difference();
+        let mut call = Instruction::new(2, Op::Call, vec![], vec![Operand::value_ref(1)]);
+        call.callee = Some("B$PSI2".to_owned());
+        function.blocks[0].instructions.push(call);
+        let emitted = crate::mir::emit(&program(function), &Layout::parse(layout).unwrap()).remove(0);
+        llrm_mir::print::module(&emitted.module)
+    };
+    let flat = call(FLAT);
+    assert!(flat.contains("B$PSI2(i16 signext %0)"), "{flat}");
+    let real = call(REAL);
+    assert!(real.contains("B$PSI2(i16 %0)"), "{real}");
 }
 
 /// A call carries its callee's calling convention, and a far callee lives
@@ -86,7 +107,12 @@ fn a_call_repeats_its_callees_convention() {
     let emitted = emit(&program(function.clone())).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("define cc 1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {"), "{text}");
+    assert!(
+        text.contains(
+            "define cc 1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) noinline \"llrm-fp-eval\"=\"x87-extended\" {"
+        ),
+        "{text}"
+    );
     assert!(text.contains("call i16 @llrm.qb.B$NEAR(i16 %2, i16 %0)"), "{text}");
     assert!(text.contains("declare i16 @llrm.qb.B$NEAR(i16, i16)\n"), "{text}");
 
@@ -533,7 +559,17 @@ fn fixed_point_arithmetic_is_the_fixed_point_intrinsics() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "  %2 = call i32 @llvm.smul.fix.i32(i32 %0, i32 %1, i32 16)\n  %3 = call i32 @llvm.sdiv.fix.i32(i32 %2, i32 %1, i32 16)\n  ret i32 %3\n";
+    // A fixed-point `/` truncates toward zero and `llvm.sdiv.fix` rounds down:
+    // the 32-bit divide is the spec's `(a << 16) / b` in 64 bits, which
+    // truncates by itself.
+    let body = "  %2 = call i32 @llvm.smul.fix.i32(i32 %0, i32 %1, i32 16)
+  %3 = sext i32 %2 to i64
+  %4 = sext i32 %1 to i64
+  %5 = shl i64 %3, 16
+  %6 = sdiv i64 %5, %4
+  %7 = trunc i64 %6 to i32
+  ret i32 %7
+";
     assert!(text.contains(body), "{text}");
 }
 
@@ -928,7 +964,7 @@ fn a_languages_promises_reach_mir() {
     let emitted = emit(&program).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "(ptr noalias %0) addrspace(1) {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !7\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
+    let body = "(ptr noalias %0) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !7\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
     assert!(text.contains(body), "{text}");
     assert!(text.contains("!6 = !{!\"int2\", !5, i64 0}\n!7 = !{!6, !6, i64 0}"), "{text}");
 }
@@ -1383,6 +1419,29 @@ fn inbounds_is_a_fact_of_an_operand() {
     assert_eq!(text.matches("getelementptr i8, ptr %0, i16 2").count(), 1, "{text}");
 }
 
+/// A third operand of `ptr_offset` is the size of the element its index
+/// counts: a step of `i` elements, not of `i` bytes.
+#[test]
+fn a_ptr_offset_with_an_element_size_steps_elements() {
+    use crate::model::{Constant, Number};
+    let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 1 }, Value { id: 3, r#type: 3 }];
+    let size = |bytes| Operand::Constant(Constant { r#type: 1, value: Number::Int(bytes) });
+    let steps = vec![
+        Instruction::new(1, Op::PtrOffset, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2), size(2)]),
+        Instruction::new(2, Op::PtrOffset, vec![3], vec![Operand::value_ref(3), Operand::value_ref(2), size(12)]),
+    ];
+    let block = Block::new(1, steps, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+    let mut function = Function::new(1, "f", 1, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1, 2];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(3, "near", TypeKind::Pointer, 2));
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("getelementptr i16, ptr %0, i16 %1"), "{text}");
+    assert!(text.contains("getelementptr [12 x i8], ptr"), "{text}");
+}
+
 /// A program that calls `B$NEAR`, a routine of one `Callable`, with the
 /// facts `stated` of it.
 fn calling(stated: Vec<(crate::facts::Subject, llrm_mir::facts::Fact)>) -> String {
@@ -1712,6 +1771,27 @@ fn an_assume_of_a_comparison_is_made_on_its_own_truth() {
     );
 }
 
+/// A branch on a comparison is a branch on the comparison's `i1`, as clang
+/// emits `br i1 %cmp`: it tested the widened result against zero, so every
+/// condition of d_faces cost an `icmp`, a `zext` and an `icmp ne` where one
+/// `icmp` did (118 chains in its first dump, 236 instructions).
+#[test]
+fn a_branch_on_a_comparison_is_a_branch_on_its_own_truth() {
+    let mut function = difference();
+    function.values.push(Value { id: 4, r#type: 1 });
+    let compare = Instruction::new(2, Op::Lt, vec![4], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+    function.blocks = vec![
+        Block::new(1, vec![compare], Terminator::new(TerminatorKind::Branch, vec![Operand::value_ref(4)], vec![2, 3])),
+        Block::new(2, Vec::new(), Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(1)], Vec::new())),
+        Block::new(3, Vec::new(), Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new())),
+    ];
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("br i1 %2, label %b2, label %b3"), "{text}");
+    assert!(!text.contains("icmp ne") && !text.contains("sext"), "{text}");
+}
+
 /// A callable that returns twice is a declaration with the attribute, which
 /// the inliner and anything that keeps a value across a call reads; it is
 /// no fact, so the facts builder cannot drop it.
@@ -1991,7 +2071,7 @@ fn a_flat_target_has_one_space_and_a_32_bit_layout() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("p:32:32") && !text.contains("p1:"), "{text}");
-    assert!(text.contains("define ptr @same(ptr %0) {"), "{text}");
+    assert!(text.contains("define ptr @same(ptr %0) noinline \"llrm-fp-eval\"=\"x87-extended\" {"), "{text}");
     // Real mode's description makes the same 4-byte pointer a far one.
     assert!(llrm_mir::print::module(&emit(&program).remove(0).module).contains("ptr addrspace(1)"));
     // A pointer kind the flat target has no space for is refused, not made
@@ -2000,4 +2080,62 @@ fn a_flat_target_has_one_space_and_a_32_bit_layout() {
     huge.modules[0].types[2].address = AddressKind::Huge;
     let refused = crate::mir::emit(&huge, &flat).remove(0).refused;
     assert!(refused.iter().any(|(_, why)| why.contains("no huge address space")), "{refused:?}");
+}
+
+/// BASIC's float math runs on the x87 at extended precision: a function the
+/// lowering makes carries `"llrm-fp-eval"="x87-extended"`, which tells the
+/// constant folder not to fold `llvm.log` and its kin to a host double (a
+/// different last digit from BC's FLDLN2; FXCH; FYL2X).
+#[test]
+fn a_lowered_function_says_its_float_math_is_extended() {
+    let emitted = emit(&program(difference())).remove(0);
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("\"llrm-fp-eval\"=\"x87-extended\""), "{text}");
+}
+
+/// `declare_outside` skips the value types of every op `names_intrinsic`
+/// refuses (8,571 type lookups a compile, 1.4 M Ir); no op it refuses may name
+/// a callee on any pair of types, or that callee would go undeclared.
+#[test]
+fn test_names_intrinsic_covers_every_op_that_names_a_callee() {
+    use llrm_mir::types::{FloatKind, Type, Types};
+    let mut types = Types::default();
+    let kinds = [
+        types.intern(Type::Float(FloatKind::Float)),
+        types.intern(Type::Float(FloatKind::Double)),
+        types.int(8),
+        types.int(16),
+        types.int(32),
+        types.ptr(0),
+        types.ptr(1),
+    ];
+    for op in Op::ALL {
+        for from in kinds {
+            for to in kinds {
+                let named = crate::mir::intrinsic(&types, *op, from, to).is_some()
+                    || crate::mir::fixed(&mut types, *op, from).is_some()
+                    || crate::mir::ptrdiff(&types, from, to).is_some() && *op == Op::PtrDiff;
+                assert!(
+                    !named || crate::mir::names_intrinsic(*op),
+                    "{op:?} names a callee but names_intrinsic refuses it"
+                );
+            }
+        }
+    }
+}
+
+/// Lowering grew the instruction arena by doubling (capacity 16 for 10
+/// instructions); it asks for the HIR function's count up front.
+#[test]
+fn test_lowering_reserves_the_functions_instructions() {
+    let mut function = difference();
+    let sub =
+        |id, result| Instruction::new(id, Op::Sub, vec![result], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+    function.values.extend((4..=11).map(|id| Value { id, r#type: 1 }));
+    function.blocks[0].instructions.extend((4..=11).map(|id| sub(id, id)));
+    let mut emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let (_, lowered) = emitted.module.function_mut("DIFF%").expect("lowered");
+    assert_eq!(lowered.instruction_count(), 10);
+    assert_eq!(lowered.instruction_capacity(), 10);
 }

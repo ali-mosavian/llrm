@@ -40,13 +40,46 @@ fn optional(text: &str) -> Result<Option<u16>, String> {
 /// The scratch order a `@scratch cx dx bx ax` line states: the registers a pass
 /// may borrow for a moment, most preferred first (gcc's `REG_ALLOC_ORDER`).
 pub fn scratch(text: &str) -> Vec<String> {
+    order(text, "@scratch")
+}
+
+/// The 8-bit allocation order a `@bytes al cl dl ah ch dh bl bh` line states
+/// (the GR8 class of X86RegisterInfo.td): the high bytes are in it.
+pub fn bytes(text: &str) -> Vec<String> {
+    order(text, "@bytes")
+}
+
+fn order(
+    text: &str,
+    key: &str,
+) -> Vec<String> {
     text.lines()
-        .filter_map(|raw| raw.split('#').next().unwrap_or("").trim().strip_prefix("@scratch"))
+        .filter_map(|raw| raw.split('#').next().unwrap_or("").trim().strip_prefix(key))
         .flat_map(|names| names.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
         .collect()
 }
 
+/// The registers an `@asm ax bx ..` line names: the ones inline asm may name in
+/// a register constraint (`{ax}`), the 16-bit convention's.
+pub fn asm_names(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|raw| raw.split('#').next().unwrap_or("").trim().strip_prefix("@asm"))
+        .flat_map(|names| names.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        .collect()
+}
+
+thread_local! {
+    static PARSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many register files this thread has parsed, for a test that a compile
+/// does not parse one per block.
+pub fn parsed() -> usize {
+    PARSED.with(std::cell::Cell::get)
+}
+
 pub fn parse(text: &str) -> Result<Vec<Register>, String> {
+    PARSED.with(|parsed| parsed.set(parsed.get() + 1));
     let mut registers = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.split('#').next().unwrap_or("").trim();
@@ -129,6 +162,18 @@ pub fn source(
     classes: &[&str],
     effects: &str,
 ) -> Result<String, String> {
+    source_with(text, id, id, classes, effects)
+}
+
+/// `source`, for a target whose register constants (`X0`, `SP`) live in its
+/// own module `names` and not on the id type `id`: the target numbers its file.
+pub fn source_with(
+    text: &str,
+    id: &str,
+    names: &str,
+    classes: &[&str],
+    effects: &str,
+) -> Result<String, String> {
     let registers = parse(text)?;
     let mut widths: Vec<u32> = registers.iter().map(|one| one.bits).collect();
     widths.sort_unstable();
@@ -155,7 +200,7 @@ pub fn source(
         }
         let mask = if mask.is_empty() { "0".to_owned() } else { mask.join(" | ") };
         code.push_str(&format!(
-            "    table[{id}::{}.index()] = Some(llrm_lir::registers::Entry {{ id: {id}::{}, name: {:?}, bits: {}, root: {id}::{}, lane: {}, classes: {mask} }});\n",
+            "    table[{names}::{}.index()] = Some(llrm_lir::registers::Entry {{ id: {names}::{}, name: {:?}, bits: {}, root: {names}::{}, lane: {}, classes: {mask} }});\n",
             one.name.to_uppercase(),
             one.name.to_uppercase(),
             one.name,
@@ -168,7 +213,7 @@ pub fn source(
     let role = |class: &str| -> Result<String, String> {
         let roots: Vec<&Register> = registers.iter().filter(|one| one.is(class) && one.root == one.name).collect();
         match roots[..] {
-            [one] => Ok(format!("{id}::{}", one.name.to_uppercase())),
+            [one] => Ok(format!("{names}::{}", one.name.to_uppercase())),
             _ => {
                 Err(format!("registers.regs: {} registers are the root with the class `{class}`, not one", roots.len()))
             }
@@ -176,23 +221,25 @@ pub fn source(
     };
     let loads: Vec<String> = registers
         .iter()
-        .filter_map(|one| one.load.as_ref().map(|load| format!("({id}::{}, {load:?})", one.name.to_uppercase())))
+        .filter_map(|one| one.load.as_ref().map(|load| format!("({names}::{}, {load:?})", one.name.to_uppercase())))
         .collect();
-    let scratch: Vec<String> = scratch(text).iter().map(|name| format!("{id}::{}", name.to_uppercase())).collect();
+    let scratch: Vec<String> = scratch(text).iter().map(|name| format!("{names}::{}", name.to_uppercase())).collect();
+    let bytes: Vec<String> = bytes(text).iter().map(|name| format!("{names}::{}", name.to_uppercase())).collect();
     let optional = |class: &str| -> Result<String, String> {
         let roots: Vec<&Register> = registers.iter().filter(|one| one.is(class)).collect();
         match roots[..] {
             [] => Ok("None".to_owned()),
-            [one] => Ok(format!("Some({id}::{})", one.name.to_uppercase())),
+            [one] => Ok(format!("Some({names}::{})", one.name.to_uppercase())),
             _ => Err(format!("registers.regs: {} registers have the class `{class}`, not one", roots.len())),
         }
     };
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views }}\n}};\n",
+        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let bytes: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, bytes, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views }}\n}};\n",
         loads.join(", "),
         scratch.join(", "),
+        bytes.join(", "),
         columns.join(", "),
         role("frame")?,
         role("stack")?,
@@ -201,6 +248,24 @@ pub fn source(
         optional("code_segment")?,
         optional("far_segment")?
     ));
+    Ok(code)
+}
+
+/// The id constants of a target that numbers its own file: `pub const X0: Reg
+/// = Reg::from_raw(1);`, one per register, numbered in the file's order from 1
+/// (0 is no register).
+pub fn constants(
+    text: &str,
+    id: &str,
+) -> Result<String, String> {
+    let registers = parse(text)?;
+    if registers.len() > 255 {
+        return Err(format!("registers.regs: {} registers, ids are one byte and 0 is none", registers.len()));
+    }
+    let mut code = String::new();
+    for (at, one) in registers.iter().enumerate() {
+        code.push_str(&format!("pub const {}: {id} = {id}::from_raw({});\n", one.name.to_uppercase(), at + 1));
+    }
     Ok(code)
 }
 
@@ -230,6 +295,27 @@ mod source_tests {
         .expect("made");
         assert!(made.contains("Reg::EAX.index()"), "{made}");
         assert!(made.contains("llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT"), "{made}");
+    }
+
+    /// A target whose constants are not on the id type (AArch64's `X0` is no
+    /// iced register) names them in its own module; the tables still hold ids.
+    #[test]
+    fn a_target_names_its_constants_in_its_own_module() {
+        let text = "fp 64 fp 0 frame - 29\nsp 64 sp 0 stack - 31\n";
+        let made = super::source_with(text, "Reg", "regs", &CLASSES, "rows").expect("made");
+        assert!(made.contains("regs::FP.index()"), "{made}");
+        assert!(made.contains("&'static [Reg] ="), "{made}");
+        assert!(!made.contains("Reg::FP"), "{made}");
+    }
+
+    /// A target that numbers its own file gets one constant per register, in
+    /// the file's order, and none for more than a byte holds.
+    #[test]
+    fn a_target_numbers_its_registers_from_one() {
+        let made = super::constants("fp 64 fp 0 frame - 29\nsp 64 sp 0 stack - 31\n", "Reg").expect("made");
+        assert_eq!(made, "pub const FP: Reg = Reg::from_raw(1);\npub const SP: Reg = Reg::from_raw(2);\n");
+        let many: String = (0..256).map(|at| format!("r{at} 64 r{at} 0 gpr - -\n")).collect();
+        assert!(super::constants(&many, "Reg").is_err());
     }
 
     /// Two frame registers (or none) are no role: the table is not made.
@@ -283,7 +369,21 @@ mod source_tests {
     fn a_scratch_line_is_an_order_not_a_register() {
         let text = "@scratch cx ax\nebp 32 ebp 0 frame - 1\nesp 32 esp 0 stack - 2\n";
         assert_eq!(crate::registers::scratch(text), ["cx", "ax"]);
+        assert!(crate::registers::bytes(text).is_empty());
         assert_eq!(crate::registers::parse(text).unwrap().len(), 2);
         assert!(source(text, "Reg", &["frame", "stack"], "rows").unwrap().contains("&[Reg::CX, Reg::AX]"));
+    }
+
+    /// The GR8 order with the high bytes is the description's `@bytes` line;
+    /// without one the register file has no byte order.
+    #[test]
+    fn a_bytes_line_is_the_byte_order() {
+        let text = "@bytes al ah\nebp 32 ebp 0 frame - 1\nesp 32 esp 0 stack - 2\n";
+        assert_eq!(crate::registers::bytes(text), ["al", "ah"]);
+        assert!(
+            source(text, "Reg", &["frame", "stack"], "rows")
+                .unwrap()
+                .contains("bytes: &'static [Reg] = &[Reg::AL, Reg::AH]")
+        );
     }
 }

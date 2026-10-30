@@ -54,9 +54,9 @@ QB base syntax, not for PDS 7.1 or VBDOS additions.
 
 Vendored byte for byte, with no p-code dependency:
 
-- `crates/frontends/qbfront/crates/buildprs`, the generator;
+- `crates/frontends/qb/crates/buildprs`, the generator;
 - `grammar/qbasbnf.prs` and `grammar/peropcod.txt`; and
-- the captured generator outputs under `crates/frontends/qbfront/fixtures/buildprs/`
+- the captured generator outputs under `crates/frontends/qb/fixtures/buildprs/`
   (`qbasic-1.1`, `qbasic-1.1-o0`, `micro`), which prove the host generator still reproduces the recovered tables.
 
 ## Adapted, not copied

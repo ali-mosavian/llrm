@@ -1,0 +1,18 @@
+== --tbaa
+@weak_zero_src_siv_addrec_wrap
+  output [S]!
+  output [*|<]!
+  output [*]!
+@weak_zero_dst_siv_addrec_wrap
+  output [*]!
+  output [*|<]!
+  output [S]!
+== --test weak-zero-siv --tbaa
+@weak_zero_src_siv_addrec_wrap
+  output [S]!
+  output [*|<]!
+  output [*]!
+@weak_zero_dst_siv_addrec_wrap
+  output [*]!
+  output [*|<]!
+  output [S]!

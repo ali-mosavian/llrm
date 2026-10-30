@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/copysink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/copysink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/copysink.rs sha256:f23ec39c77ac0b375ec1ff2b92c5a997b83bb96a97e8a0f9d75ad8300801792a -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/copysink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/copysink.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/copysink.rs sha256:27b30fb89d0035db154db8281b96fe13c0b9fe8e194f8784b68da694ad97c7cb -->
 
 # copysink
 
@@ -47,10 +47,10 @@ ends up: `test_copy_read_only_after_its_loop_moves_to_the_exit`.
 
 ## Runs
 Inside the peephole phase, after copy propagation and extension
-rewrites, before `spillforward`. Once per peephole run. No flag of its own.
+rewrites, before `postrasink`. Once per peephole run. No flag of its own.
 
 ## Needs
-`crate::analysis::loops` for loops and dominance, and
+[`crate::analysis::loops`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/analysis.rs) for loops and dominance, and
 [`crate::backend::liveness`](liveness.md) for the backward walk.
 
 ## See also

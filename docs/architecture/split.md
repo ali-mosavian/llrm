@@ -83,15 +83,15 @@ an instruction.
 
 A fact the machine side needs and cannot see in its own form, such as what a
 call may touch, is computed on MIR and carried down on the instruction
-(`CallMemory` in `crates/backend/llrm-core/src/model/lir.rs`), never
+(`CallMemory` in `crates/codegen/llrm-codegen/src/model/lir.rs`), never
 re-derived from machine form.
 
 ## Who owns what
 
 | Concern | Owner |
 | --- | --- |
-| Object records and relocations | the object writers; for BC input, `llrm-omf`, `llrm-x86-bcmachine` |
-| Language semantics, runtime idioms | the frontend and `llrm_hir::mir::emit`; for BC objects, the lift in `llrm-x86-bc` |
+| Object records and relocations | the object writers; for BC input, `llrm-omf`, `llrm-bcobj` |
+| Language semantics, runtime idioms | the frontend and `llrm_hir::mir::emit`; for BC objects, the lift in `llrm-bcobj` |
 | Types, values, comparisons, memory objects and effects, control flow | MIR |
 | CSE, DSE, promotion, LICM, ranges, loop recurrences | `llrm-transforms`, `llrm-analysis` |
 | Runtime call effects (reads, writes, escape, return) | contracts in `llrm-qbruntime`, consumed by HIR emission and MIR |
@@ -108,7 +108,7 @@ loop transformations on LIR.
 
 - **The crate graph.** `llrm-mir` has no dependencies
   (`the_crate_depends_on_nothing`); `llrm-analysis` and `llrm-transforms`
-  depend only on it and `llrm-support`. `llrm-core` names no
+  depend only on it and `llrm-support`. `llrm-codegen` names no
   `llrm-x86-m*` crate (`tests/core_depends_on_no_target.rs`). A pass cannot
   name a register.
 - **Stage dumps.** `LLRM_MIR_STAGES=DIR` writes MIR between passes;

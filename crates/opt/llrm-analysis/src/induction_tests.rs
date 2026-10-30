@@ -1,4 +1,4 @@
-//! llrm-core's `induction_tests.rs` and `counted_loops_tests.rs`, and what
+//! llrm-codegen's `induction_tests.rs` and `counted_loops_tests.rs`, and what
 //! they leave untested, as loops the interpreter runs.
 //!
 //! Skipped: the BC and OMF fixture tests (NDARR, MATRIX, HARR, NESTED),
@@ -2623,4 +2623,74 @@ out:
         invariant(function, &llrm_mir::forest::Body::from_blocks([])).contains(parsed.value("j")),
         "no loop defines nothing"
     );
+}
+
+/// LSR left `store i; trunc(i + 1) == 20000` on a wide counter, which stopped
+/// the proof: copy1d's first loop kept the borrow-mask step instead of
+/// 16380-trip windows.
+#[test]
+fn test_a_wide_counter_tested_through_a_truncation_is_counted() {
+    let parsed = Parsed::new(
+        "define void @f(ptr %p) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %q = phi ptr [ %p, %b0 ], [ %q2, %b1 ]
+  store i32 %i, ptr %q
+  %next = add nuw nsw i32 %i, 1
+  %q2 = getelementptr i8, ptr %q, i32 4
+  %low = trunc i32 %next to i16
+  %done = icmp eq i16 %low, 20000
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret void
+}
+",
+    );
+    let proofs = parsed.counted(false);
+    let [proof] = &proofs[..] else { panic!("one proof") };
+    assert_eq!(proof.count, Some(BigInt::from(20000)));
+}
+
+/// `FOR i = 0 TO n - 1` after InstCombine's `foldICmpBinOp` (`i + 1 < n` is
+/// `i < n - 1`) tests the counter before its step against `n - 1`: the stepped
+/// test against `n`. Uncounted, loopidioms made no `rep stosw` of a word fill
+/// (tests/check/qb/pattern_fill.bas).
+#[test]
+fn test_a_latch_test_against_a_bound_one_step_below_a_value_is_the_stepped_test_against_it() {
+    let parsed = Parsed::new(
+        "define i32 @f(i32 %n) {
+b0:
+  %m = add nsw i32 %n, -1
+  %g = icmp slt i32 %m, 0
+  br i1 %g, label %b4, label %b1
+
+b1:
+  br label %b2
+
+b2:
+  %i = phi i32 [ 0, %b1 ], [ %next, %b2 ]
+  %trips = phi i32 [ 0, %b1 ], [ %up, %b2 ]
+  %up = add i32 %trips, 1
+  %next = add nuw nsw i32 %i, 1
+  %c = icmp slt i32 %i, %m
+  br i1 %c, label %b2, label %b3
+
+b3:
+  ret i32 %up
+
+b4:
+  ret i32 0
+}
+",
+    );
+    let proofs = parsed.counted(false);
+    let [proof] = &proofs[..] else { panic!("{proofs:?}") };
+    assert!(proof.posttested && proof.stepped && proof.shifted && proof.entry_guarded, "{proof:?}");
+    for n in [1, 2, 7] {
+        assert_eq!(parsed.run(&[(n, 32)], 10_000), Some(n as u128), "{n}");
+    }
 }

@@ -74,8 +74,9 @@
 //! checked before the first is made, so a refused one leaves the body as it
 //! was. No copy of the function and no graph of it is made. The loops of
 //! the shape are updated for the new blocks rather than found again
-//! (`LLRM_CHECK_SHAPE` compares them with a new shape). A function with an
-//! irreducible loop is left alone.
+//! (`LLRM_CHECK_SHAPE` compares them with a new shape). The loops are the
+//! natural ones, as LoopInfo finds them: an irreducible cycle is no loop, and
+//! its function's natural loops are simplified all the same.
 //!
 //! # Example
 //! Before:
@@ -141,7 +142,7 @@
 //! In [`crate::pipeline`]'s per-body fixed point, after `tailrec` and before
 //! `lcssa`; again after the header copy of `-ftree-ch`, where it
 //! re-simplifies the loops that copy made; [`simplified`] is called by
-//! [`crate::lsr`] after it guards a loop. On at every level above -O0.
+//! [`crate::lsr_pass`] after it guards a loop. On at every level above -O0.
 //!
 //! # Keeps
 //! Nothing where it changes a body; it reads only the CFG's structure.
@@ -155,9 +156,10 @@ use llrm_analysis::cfg;
 use llrm_analysis::graph::loops;
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
-use llrm_mir::module::{BlockId, Function, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+use llrm_support::hash::HashMap;
 
 use crate::edges;
 
@@ -201,11 +203,30 @@ fn groupable(
     let Some(entry) = function.entry().map(cfg::id) else { return false };
     let destination = cfg::block(target);
     let reaching: BTreeSet<i64> = function.predecessors(destination).into_iter().map(cfg::id).collect();
-    if sources.is_empty() || !sources.is_subset(&reaching) || target == entry {
+    // DEVIATE: LLVM splits a landing pad in two
+    // (`SplitLandingPadPredecessors`); `ehprepare` takes one pad per
+    // function, so a pad is left as it is.
+    if sources.is_empty()
+        || !sources.is_subset(&reaching)
+        || target == entry
+        || edges::starts_with_landing_pad(function, destination)
+    {
         return false;
     }
     for &parent in sources {
         let Some(last) = function.terminator(cfg::block(parent)) else { return false };
+        if matches!(function.instruction(last).opcode, Opcode::Invoke(_)) {
+            if (_normal_destination(function, last) == Operand::Block(destination))
+                == (_unwind_destination(function, last) == Operand::Block(destination))
+            {
+                return false;
+            }
+            continue;
+        }
+        // `replaceUsesOfWith` takes every case that names the target.
+        if function.instruction(last).opcode == Opcode::Switch {
+            continue;
+        }
         match function.instruction(last).operands.len() {
             _ if function.instruction(last).opcode != Opcode::Br => return false,
             3 if !edges::conditional(function, cfg::block(parent), destination) => return false,
@@ -243,7 +264,8 @@ pub fn grouped(
         _ => unreachable!("a phi's block operand"),
     };
     let bridge = function.create_block(None);
-    function.insert_block(bridge, None).expect("a new block");
+    // Right before `destination`, as `SplitBlockPredecessors` lays it out.
+    function.insert_block_before(bridge, destination).expect("a new block");
     for phi in phis {
         let pairs = incoming(function, phi);
         let (grouped, kept): (Vec<_>, Vec<_>) = pairs.into_iter().partition(|&(_, block)| sources.contains(&at(block)));
@@ -271,9 +293,33 @@ pub fn grouped(
     function.insert(jump, Position::End(bridge)).expect("a placed block");
     for &parent in sources {
         let last = function.terminator(cfg::block(parent)).expect("checked above");
-        edges::retarget(function, last, destination, bridge);
+        if matches!(function.instruction(last).opcode, Opcode::Invoke(_)) {
+            let at = function.instruction(last).operands.len() - 3;
+            let at = if _normal_destination(function, last) == Operand::Block(destination) { at } else { at + 1 };
+            function.set_operand(last, at, Operand::Block(bridge));
+        } else {
+            edges::retarget(function, last, destination, bridge);
+        }
     }
     Some(bridge)
+}
+
+/// The normal destination of the invoke `last`; its unwind destination is the
+/// operand after it.
+fn _normal_destination(
+    function: &Function,
+    last: InstId,
+) -> Operand {
+    let operands = &function.instruction(last).operands;
+    operands[operands.len() - 3]
+}
+
+fn _unwind_destination(
+    function: &Function,
+    last: InstId,
+) -> Operand {
+    let operands = &function.instruction(last).operands;
+    operands[operands.len() - 2]
 }
 
 /// Whether `loop_` has a block to group in `function`: its entries from outside
@@ -330,6 +376,94 @@ fn _reached_only_from(
     function.predecessors(cfg::block(target)).into_iter().all(|from| body.contains(&cfg::id(from)))
 }
 
+/// `placeSplitBlockCarefully`
+/// ([LoopSimplify.cpp:80](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopSimplify.cpp#L80)):
+/// a preheader stands right after an outside predecessor, so the jump into
+/// the loop falls through and the block is not inside the loop's run.
+fn place_carefully(
+    function: &mut Function,
+    new: BlockId,
+    entries: &[BlockId],
+    body: &llrm_mir::forest::Body,
+) {
+    let layout = function.layout();
+    let at = layout.iter().position(|&one| one == new).expect("a placed block");
+    if at > 0 && entries.contains(&layout[at - 1]) {
+        return;
+    }
+    let next_in_loop = |pred: &BlockId| {
+        let at = layout.iter().position(|one| one == pred).expect("a placed block");
+        layout.get(at + 1).is_some_and(|next| body.contains(&cfg::id(*next)))
+    };
+    let after = entries.iter().find(|pred| next_in_loop(pred)).unwrap_or(&entries[0]);
+    function.move_block_after(new, *after).expect("placed blocks");
+}
+
+thread_local! {
+    static PARENT_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BRIDGE_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The blocks looked at to find the loops' parents on this thread: a test
+/// bounds it by the size of the function.
+pub fn parent_probes() -> usize {
+    PARENT_PROBES.with(std::cell::Cell::get)
+}
+
+/// The loops looked at to keep them up to date through the bridges made on this
+/// thread: a test bounds it by the loops around the blocks a bridge joins.
+pub fn bridge_probes() -> usize {
+    BRIDGE_PROBES.with(std::cell::Cell::get)
+}
+
+/// The headers in the order `simplifyLoop` works through them: the top-level
+/// loops in `LoopInfo`'s order (reverse program order, program order being
+/// the header's place in reverse postorder), and in each nest its loops from
+/// the back of a breadth-first list, so the deepest and latest first.
+fn visit_order(
+    function: &Function,
+    loops: &[loops::Loop],
+) -> Vec<i64> {
+    let Some(entry) = function.entry() else { return Vec::new() };
+    let program: Vec<i64> = loops::reverse_postorder(&cfg::graph(function), cfg::id(entry));
+    let places: HashMap<i64, usize> = program.iter().enumerate().map(|(at, &block)| (block, at)).collect();
+    let place = |header: i64| places.get(&header).copied().unwrap_or(usize::MAX);
+    // A loop's parent is the smallest other loop holding its header: the
+    // loops from the largest down each claim their blocks, so the owner of a
+    // header when its loop comes up is its parent.
+    let mut by_size: Vec<&loops::Loop> = loops.iter().collect();
+    by_size.sort_by_key(|loop_| std::cmp::Reverse(loop_.body.len()));
+    let mut owner: HashMap<i64, i64> = Default::default();
+    let mut parents: HashMap<i64, Option<i64>> = Default::default();
+    for loop_ in by_size {
+        parents.insert(loop_.header, owner.get(&loop_.header).copied());
+        for &block in &loop_.body {
+            PARENT_PROBES.with(|one| one.set(one.get() + 1));
+            owner.insert(block, loop_.header);
+        }
+    }
+    let mut children: std::collections::BTreeMap<Option<i64>, Vec<i64>> = Default::default();
+    for loop_ in loops {
+        children.entry(parents[&loop_.header]).or_default().push(loop_.header);
+    }
+    for siblings in children.values_mut() {
+        siblings.sort_by_key(|&header| place(header));
+    }
+    let mut order = Vec::new();
+    let tops = children.get(&None).cloned().unwrap_or_default();
+    for &top in tops.iter().rev() {
+        let mut worklist = vec![top];
+        let mut at = 0;
+        while at < worklist.len() {
+            let own = children.get(&Some(worklist[at])).cloned().unwrap_or_default();
+            worklist.extend(own);
+            at += 1;
+        }
+        order.extend(worklist.into_iter().rev());
+    }
+    order
+}
+
 /// Whether any loop changed.
 pub fn simplified(function: &mut Function) -> bool {
     let shape = cfg::Shape::of(function);
@@ -341,13 +475,22 @@ fn _simplified(
     function: &mut Function,
     mut shape: cfg::Shape,
 ) -> bool {
-    if function.entry().is_none() || !shape.dominance.irreducible(function).is_empty() {
+    if function.entry().is_none() || !shape.loops.iter().any(|loop_| _needs_grouping(function, loop_)) {
         return false;
     }
     let mut changed = false;
-    let headers = shape.loops.iter().map(|loop_| loop_.header).collect::<Vec<_>>();
+    let headers = visit_order(function, &shape.loops);
+    let at: HashMap<i64, usize> = shape.loops.iter().enumerate().map(|(index, loop_)| (loop_.header, index)).collect();
+    // The loops each block is in, kept through the bridges: a bridge touches
+    // only the loops around its target.
+    let mut around: HashMap<i64, Vec<usize>> = HashMap::default();
+    for (index, loop_) in shape.loops.iter().enumerate() {
+        for &block in &loop_.body {
+            around.entry(block).or_default().push(index);
+        }
+    }
     for header in headers {
-        let original = shape.loops.iter().find(|loop_| loop_.header == header).expect("StopIteration").clone();
+        let original = shape.loops[at[&header]].clone();
         // A loop that is already in the form has nothing to group.
         if !_needs_grouping(function, &original) {
             continue;
@@ -380,17 +523,34 @@ fn _simplified(
         if plan.is_empty() || !plan.iter().all(|(target, sources)| groupable(function, *target, sources)) {
             continue;
         }
+        // The order LLVM visits the header's predecessors in places the new
+        // blocks, so it is taken before any is grouped.
+        let header = cfg::block(original.header);
+        let (entries, latches): (Vec<BlockId>, Vec<BlockId>) =
+            function.predecessors(header).into_iter().partition(|&one| !original.body.contains(&cfg::id(one)));
         let mut bridges: Vec<(i64, i64, BTreeSet<i64>)> = Vec::new();
         for (target, sources) in plan {
             let Some(bridge) = grouped(function, target, &sources) else {
                 unreachable!("groupable said it could be made");
             };
+            if target == original.header {
+                if sources.contains(&cfg::id(entries[0])) {
+                    place_carefully(function, bridge, &entries, &original.body);
+                } else if let Some(&last) = latches.last() {
+                    // `insertUniqueBackedgeBlock`: right after the last
+                    // backedge block.
+                    function.move_block_after(bridge, last).expect("placed blocks");
+                }
+            }
             bridges.push((cfg::id(bridge), target, sources));
         }
         changed = true;
-        for loop_ in &mut shape.loops {
-            for (bridge, target, sources) in &bridges {
-                _bridged(loop_, *bridge, *target, sources);
+        for (bridge, target, sources) in &bridges {
+            for index in around.get(target).cloned().unwrap_or_default() {
+                BRIDGE_PROBES.with(|one| one.set(one.get() + 1));
+                if _bridged(&mut shape.loops[index], *bridge, *target, sources) {
+                    around.entry(*bridge).or_default().push(index);
+                }
             }
         }
         if cfg!(test) || llrm_support::env_flag!("LLRM_CHECK_SHAPE") {
@@ -401,22 +561,23 @@ fn _simplified(
 }
 
 /// What `loop_` is once `bridge` stands on the edges from `sources` to
-/// `target`: the block joins it where `target` and every source are in it (it
-/// reaches the latch through `target`, and what reaches it came from inside),
-/// and becomes its only latch where `target` is its header.
+/// `target`: the block joins it where `target` and a source are in it (it
+/// reaches the latch through `target`, and some of what reaches it came from
+/// inside), and becomes its only latch where `target` is its header.
 fn _bridged(
     loop_: &mut loops::Loop,
     bridge: i64,
     target: i64,
     sources: &BTreeSet<i64>,
-) {
-    if !loop_.body.contains(&target) || !sources.iter().all(|at| loop_.body.contains(at)) {
-        return;
+) -> bool {
+    if !loop_.body.contains(&target) || !sources.iter().any(|at| loop_.body.contains(at)) {
+        return false;
     }
     loop_.body.insert(bridge);
     if loop_.header == target {
         loop_.latches = BTreeSet::from([bridge]);
     }
+    true
 }
 
 /// `LLRM_CHECK_SHAPE`: the loops kept up to date are those of a new shape of

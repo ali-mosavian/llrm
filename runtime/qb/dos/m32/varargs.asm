@@ -1,7 +1,7 @@
-;; name: B$DDIM, B$RDIM, B$CLOS, B$COLR, B$LOCT, B$CSCN
+;; name: B$DDIM, B$RDIM, B$RDMP, B$CLOS, B$COLR, B$LOCT, B$CSCN
 ;; desc: entries whose stack block has the length of the call, flat
 ;;
-;; args: B$DDIM, B$RDIM [in] (last pushed first, a dword slot each)
+;; args: B$DDIM, B$RDIM, B$RDMP [in] (last pushed first, a dword slot each)
 ;;                      ad:dword           | the array descriptor
 ;;                      rankFeat:dword     | rank, features << 8 (low word)
 ;;                      elem:dword         | element size
@@ -43,6 +43,7 @@
 SLOT            equ     4
 DIM_ALLOCATE    equ     0                       ;; enum DimMode, array.h
 DIM_REALLOCATE  equ     1
+DIM_PRESERVE    equ     2
 
 .code
 ;; the DIM entries differ in the mode alone: the block, past the return, and
@@ -81,6 +82,7 @@ entry           endp
 ;; Clobbers: eax ecx edx, flags
                 DIMPROC B$DDIM, DIM_ALLOCATE
                 DIMPROC B$RDIM, DIM_REALLOCATE
+                DIMPROC B$RDMP, DIM_PRESERVE
 
 ;; B$CLOS - CLOSE the channels given, or all of them.
 ;;

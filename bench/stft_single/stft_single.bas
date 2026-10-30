@@ -56,15 +56,15 @@ FUNCTION BenchStftSingle&
     OPEN "SPECTRA" FOR BINARY AS #2
     remaining = LOF(1) - 2 * HOP
     GET #1, , blk(0)
-    now = 0
+    tnow = 0
     sum = 0
     index = 0
     DO WHILE remaining >= 2 * HOP
-        GET #1, , blk(1 - now)
+        GET #1, , blk(1 - tnow)
         remaining = remaining - 2 * HOP
         FOR smp = 0 TO HOP - 1
-            re(rev(smp)) = CSNG(CVI(MID$(blk(now), 2 * smp + 1, 2))) * .25! * hann(smp)
-            re(rev(smp + HOP)) = CSNG(CVI(MID$(blk(1 - now), 2 * smp + 1, 2))) * .25! * hann(smp + HOP)
+            re(rev(smp)) = CSNG(CVI(MID$(blk(tnow), 2 * smp + 1, 2))) * .25! * hann(smp)
+            re(rev(smp + HOP)) = CSNG(CVI(MID$(blk(1 - tnow), 2 * smp + 1, 2))) * .25! * hann(smp + HOP)
             im(rev(smp)) = 0!
             im(rev(smp + HOP)) = 0!
         NEXT
@@ -98,7 +98,7 @@ FUNCTION BenchStftSingle&
             index = index + 1
         NEXT
         PUT #2, , rowBytes
-        now = 1 - now
+        tnow = 1 - tnow
     LOOP
     CLOSE #1
     CLOSE #2

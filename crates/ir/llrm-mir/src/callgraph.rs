@@ -8,8 +8,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::context::{ConstantExpr, ConstantKind, GlobalId};
-use crate::facts::Facts;
-use crate::intrinsics::Intrinsic;
 use crate::memory;
 use crate::module::{Function, GlobalKind, InstId, Linkage, MetadataOperand, Module, Operand};
 use crate::opcode::Opcode;
@@ -30,7 +28,7 @@ pub type Defined = (usize, GlobalId);
 
 /// What a call of `inst` may reach: the global it names, or the functions
 /// `!callees` lists of an indirect call; `None` where it may reach any.
-fn reached(
+pub fn reached(
     module: &Module,
     function: &Function,
     inst: InstId,
@@ -82,54 +80,6 @@ impl CallGraph {
             callees.insert(id, called);
         }
         Self { callees, unknown, components: Default::default() }
-    }
-}
-
-impl CallGraph {
-    /// The functions that can never be entered again while they run: in no
-    /// cycle of calls, and neither they nor what they reach calls an unbounded
-    /// pointer or a declaration that may call back (not `nocallback`, not
-    /// an intrinsic): LLVM's `addNoRecurseAttrs`. Found for all at once, from
-    /// the functions that do reach one and the callers of those, not by
-    /// walking what each reaches (a chain of N reached N(N-1)/2).
-    pub fn cannot_reenter(
-        &self,
-        module: &Module,
-    ) -> BTreeSet<GlobalId> {
-        let mut callers: BTreeMap<GlobalId, Vec<GlobalId>> = BTreeMap::new();
-        let mut nodes: BTreeSet<GlobalId> = self.callees.keys().copied().collect();
-        for (&caller, called) in &self.callees {
-            for &callee in called {
-                callers.entry(callee).or_default().push(caller);
-                nodes.insert(callee);
-            }
-        }
-        let mut reaching: BTreeSet<GlobalId> = nodes
-            .iter()
-            .copied()
-            .filter(|&at| {
-                let global = module.global(at);
-                let Some(function) = global.function() else { return false };
-                if function.is_declaration() {
-                    return !(Facts::of(&function.attrs).no_callback()
-                        || global
-                            .name
-                            .as_deref()
-                            .and_then(Intrinsic::named)
-                            .is_some_and(|one| !matches!(one, Intrinsic::Code | Intrinsic::Asm)));
-                }
-                self.calls_unknown(at)
-            })
-            .collect();
-        let mut work: Vec<GlobalId> = reaching.iter().copied().collect();
-        while let Some(at) = work.pop() {
-            for &caller in callers.get(&at).into_iter().flatten() {
-                if reaching.insert(caller) {
-                    work.push(caller);
-                }
-            }
-        }
-        self.callees.keys().copied().filter(|&id| !self.recursive(id) && !reaching.contains(&id)).collect()
     }
 }
 
@@ -461,9 +411,13 @@ pub fn direct_calls(module: &Module) -> DirectCalls {
             let instruction = function.instruction(inst);
             let Some(callee) = memory::callee(&module.context, function, inst) else { continue };
             match &instruction.opcode {
-                Opcode::Call(_)
+                // DeadArgumentElimination.cpp `surveyFunction`: a call whose
+                // function type is not the callee's own is a use that keeps
+                // the signature.
+                Opcode::Call(info)
                     if instruction.operands.len()
-                        == module.global(callee).function().map_or(0, |one| one.parameters().len()) + 1 =>
+                        == module.global(callee).function().map_or(0, |one| one.parameters().len()) + 1
+                        && module.global(callee).function().is_some_and(|one| one.ty == info.function_type) =>
                 {
                     found.sites.entry(callee).or_default().push((caller, inst));
                 }

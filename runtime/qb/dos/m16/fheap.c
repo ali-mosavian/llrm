@@ -3,10 +3,12 @@
 #include "fheap.h"
 #include "nheap.h"
 #include "rtinit.h"
+#include "shell.h"
 #include "llrm_os.h"
 
-extern u16 llrm_os_psp;
 #pragma aux llrm_os_psp "LL$PSP"
+
+extern u16 llrm_os_psp;
 
 /* The list's ends: the top, from which entries are placed downwards, and the
    bottom, above DGROUP. */
@@ -93,6 +95,22 @@ void fh_free(FHD *owner)
     owner->data_seg = 0;
 }
 
+/* `to` takes `from`'s place in the list and its paragraphs; `from` is left without. */
+void fh_adopt(FHD *to, FHD *from)
+{
+    FHD *entry = &top;
+
+    while (next_of(entry) != from && entry != &bottom)
+        entry = next_of(entry);
+    if (entry == &bottom)
+        qb_error(FE_CORRUPT);
+    entry->next = (u16)to;
+    to->next = from->next;
+    to->data_seg = from->data_seg;
+    to->size = from->size;
+    from->data_seg = 0;
+}
+
 /* The bytes of far heap nothing holds. */
 unsigned long fh_free_bytes(void)
 {
@@ -102,6 +120,48 @@ unsigned long fh_free_bytes(void)
     for (entry = &top; entry != &bottom; entry = next_of(entry))
         paras += room_below(entry);
     return paras << 4;
+}
+
+/* The paragraph just past the program's last array once every entry is slid down against the bottom, lowest first. */
+static u16 pack_down(void)
+{
+    u16 at = bottom.data_seg + bottom.size;
+    int moved = 1;
+
+    while (moved) {
+        FHD *entry, *lowest = 0;
+
+        moved = 0;
+        for (entry = next_of(&top); entry != &bottom; entry = next_of(entry))
+            if (entry->data_seg >= at && (!lowest || entry->data_seg < lowest->data_seg))
+                lowest = entry;
+        if (lowest) {
+            if (lowest->data_seg != at)
+                far_move(lowest->data_seg, at, lowest->size);
+            lowest->data_seg = at;
+            at += lowest->size;
+            moved = 1;
+        }
+    }
+    return at;
+}
+
+/* SHELL: the arrays slide down and the DOS block shrinks to them, which leaves the child the rest. */
+void qb_shell_release(void)
+{
+    u16 end = pack_down();
+
+    top.data_seg = end;
+    llrm_os_block_resize(llrm_os_psp, end - llrm_os_psp);
+}
+
+/* After the child: the whole block again, the arrays slid back up against its top. */
+void qb_shell_reclaim(void)
+{
+    u16 block = llrm_os_block_resize(llrm_os_psp, 0xFFFF);
+
+    top.data_seg = llrm_os_psp + block;
+    compact();
 }
 
 /* The paragraphs DGROUP takes, up to the top of the local heap. */

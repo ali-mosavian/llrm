@@ -1,1345 +1,1098 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-@$var_heap.heads = internal global [26 x i8] zeroinitializer
-@$var_heap.occupied = internal global [2 x i8] zeroinitializer
-@$var_heap.end = internal global [2 x i8] zeroinitializer
+@$var_heap.heads = internal global [26 x i8] zeroinitializer, align 2
+@$var_heap.occupied = internal global [2 x i8] zeroinitializer, align 2
+@$var_heap.end = internal global [2 x i8] zeroinitializer, align 2
 @$var_format.width = internal global [1 x i8] zeroinitializer
 @$var_format.radix = internal global [1 x i8] c"\0A"
 @$var_format.fill = internal global [1 x i8] c" "
 @$var_format.left = internal global [1 x i8] zeroinitializer
-@$var_format.sink = internal global [2 x i8] zeroinitializer
+@$var_format.sink = internal global [2 x i8] zeroinitializer, align 2
 @$var_format.scratch = internal global [48 x i8] zeroinitializer
 @$str10 = internal constant [14 x i8] c"\08\00\07\00\07\00panic: \00"
 @$str11 = internal constant [9 x i8] c"\08\00\02\00\02\00\0D\0A\00"
 @$str12 = internal constant [35 x i8] c"\08\00\1C\00\1C\00division by zero or overflow\00"
-@$str13 = internal constant [37 x i8] c"\08\00\1E\00\1E\00float outside the integer type\00"
-@$str14 = internal constant [31 x i8] c"\08\00\18\00\18\00shift count out of range\00"
-@$str15 = internal constant [26 x i8] c"\08\00\13\00\13\00index out of bounds\00"
-@$str16 = internal constant [20 x i8] c"\08\00\0D\00\0D\00key not found\00"
-@$str17 = internal constant [20 x i8] c"\08\00\0D\00\0D\00out of memory\00"
-@$str18 = internal constant [28 x i8] c"\08\00\15\00\15\00pop from an empty vec\00"
-@$str19 = internal constant [11 x i8] c"\08\00\04\00\04\00true\00"
-@$str20 = internal constant [12 x i8] c"\08\00\05\00\05\00false\00"
-@$str21 = internal constant [10 x i8] c"\08\00\03\00\03\00inf\00"
-@$str22 = internal constant [10 x i8] c"\08\00\03\00\03\00nan\00"
-@$str23 = internal constant [10 x i8] c"\08\00\03\00\03\000.0\00"
-@$str24 = internal constant [9 x i8] c"\08\00\02\00\02\000.\00"
+@$str13 = internal constant [21 x i8] c"\08\00\0E\00\0E\00stack overflow\00"
+@$str14 = internal constant [37 x i8] c"\08\00\1E\00\1E\00float outside the integer type\00"
+@$str15 = internal constant [31 x i8] c"\08\00\18\00\18\00shift count out of range\00"
+@$str16 = internal constant [26 x i8] c"\08\00\13\00\13\00index out of bounds\00"
+@$str17 = internal constant [20 x i8] c"\08\00\0D\00\0D\00key not found\00"
+@$str18 = internal constant [20 x i8] c"\08\00\0D\00\0D\00out of memory\00"
+@$str19 = internal constant [28 x i8] c"\08\00\15\00\15\00pop from an empty vec\00"
+@$str20 = internal constant [11 x i8] c"\08\00\04\00\04\00true\00"
+@$str21 = internal constant [12 x i8] c"\08\00\05\00\05\00false\00"
+@$str22 = internal constant [10 x i8] c"\08\00\03\00\03\00inf\00"
+@$str23 = internal constant [10 x i8] c"\08\00\03\00\03\00nan\00"
 
-define internal void @os.write(ptr addrspace(1) %0, i16 %1) addrspace(1) {
-b1:
-  %2 = call addrspace(1) i16 @N$OWRI(i16 1, ptr addrspace(1) %0, i16 %1)
+define cc 1005 void @N$EDIV() addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %1 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %2 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str12, i16 6) to ptr addrspace(1)), i16 28)
+  %3 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
   ret void
 }
 
-define internal void @errors.panic(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1) {
-b1:
-  %1 = getelementptr i8, ptr @$str10, i16 6
-  %2 = getelementptr i8, ptr %1, i16 -4
-  %3 = load i16, ptr %2
-  %4 = addrspacecast ptr %1 to ptr addrspace(1)
-  %5 = call addrspace(1) i16 @N$OWRI(i16 1, ptr addrspace(1) %4, i16 %3)
-  %6 = getelementptr i8, ptr addrspace(1) %0, i16 4
-  %7 = load ptr addrspace(1), ptr addrspace(1) %6
-  %8 = load i16, ptr addrspace(1) %0
-  %9 = call addrspace(1) i16 @N$OWRI(i16 1, ptr addrspace(1) %7, i16 %8)
-  %10 = getelementptr i8, ptr @$str11, i16 6
-  %11 = getelementptr i8, ptr %10, i16 -4
-  %12 = load i16, ptr %11
-  %13 = addrspacecast ptr %10 to ptr addrspace(1)
-  %14 = call addrspace(1) i16 @N$OWRI(i16 1, ptr addrspace(1) %13, i16 %12)
-  call addrspace(1) void @N$OEXT(i8 -1)
+define cc 1005 void @N$ESTK() addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %1 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %2 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str13, i16 6) to ptr addrspace(1)), i16 14)
+  %3 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
   ret void
 }
 
-define internal void @errors.say(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1) {
-b1:
-  %1 = getelementptr i8, ptr addrspace(1) %0, i16 4
-  %2 = load ptr addrspace(1), ptr addrspace(1) %1
-  %3 = load i16, ptr addrspace(1) %0
-  %4 = call addrspace(1) i16 @N$OWRI(i16 1, ptr addrspace(1) %2, i16 %3)
+define cc 1005 void @N$ECNV() addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %1 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %2 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str14, i16 6) to ptr addrspace(1)), i16 30)
+  %3 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
   ret void
 }
 
-define void @N$EDIV() addrspace(1) {
-b1:
-  %0 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 8, i1 false)
-  %1 = getelementptr i8, ptr @$str12, i16 6
-  %2 = getelementptr i8, ptr %1, i16 -4
-  %3 = load i16, ptr %2
-  %4 = addrspacecast ptr %1 to ptr addrspace(1)
-  store i16 %3, ptr %0, !tbaa !2
-  %5 = getelementptr inbounds i8, ptr %0, i16 2
-  store i16 %3, ptr %5, !tbaa !2
-  %6 = getelementptr inbounds i8, ptr %0, i16 4
-  store ptr addrspace(1) %4, ptr %6, !tbaa !2
-  %7 = addrspacecast ptr %0 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %7)
+define cc 1005 void @N$ESHF() addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %1 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %2 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str15, i16 6) to ptr addrspace(1)), i16 24)
+  %3 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
   ret void
 }
 
-define void @N$ECNV() addrspace(1) {
-b1:
-  %0 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 8, i1 false)
-  %1 = getelementptr i8, ptr @$str13, i16 6
-  %2 = getelementptr i8, ptr %1, i16 -4
-  %3 = load i16, ptr %2
-  %4 = addrspacecast ptr %1 to ptr addrspace(1)
-  store i16 %3, ptr %0, !tbaa !2
-  %5 = getelementptr inbounds i8, ptr %0, i16 2
-  store i16 %3, ptr %5, !tbaa !2
-  %6 = getelementptr inbounds i8, ptr %0, i16 4
-  store ptr addrspace(1) %4, ptr %6, !tbaa !2
-  %7 = addrspacecast ptr %0 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %7)
+define cc 1005 void @N$EBND() addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %1 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %2 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str16, i16 6) to ptr addrspace(1)), i16 19)
+  %3 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
   ret void
 }
 
-define void @N$ESHF() addrspace(1) {
-b1:
-  %0 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 8, i1 false)
-  %1 = getelementptr i8, ptr @$str14, i16 6
-  %2 = getelementptr i8, ptr %1, i16 -4
-  %3 = load i16, ptr %2
-  %4 = addrspacecast ptr %1 to ptr addrspace(1)
-  store i16 %3, ptr %0, !tbaa !2
-  %5 = getelementptr inbounds i8, ptr %0, i16 2
-  store i16 %3, ptr %5, !tbaa !2
-  %6 = getelementptr inbounds i8, ptr %0, i16 4
-  store ptr addrspace(1) %4, ptr %6, !tbaa !2
-  %7 = addrspacecast ptr %0 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %7)
+define cc 1005 void @N$EKEY() addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %1 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %2 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str17, i16 6) to ptr addrspace(1)), i16 13)
+  %3 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
   ret void
 }
 
-define void @N$EBND() addrspace(1) {
-b1:
-  %0 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 8, i1 false)
-  %1 = getelementptr i8, ptr @$str15, i16 6
-  %2 = getelementptr i8, ptr %1, i16 -4
-  %3 = load i16, ptr %2
-  %4 = addrspacecast ptr %1 to ptr addrspace(1)
-  store i16 %3, ptr %0, !tbaa !2
-  %5 = getelementptr inbounds i8, ptr %0, i16 2
-  store i16 %3, ptr %5, !tbaa !2
-  %6 = getelementptr inbounds i8, ptr %0, i16 4
-  store ptr addrspace(1) %4, ptr %6, !tbaa !2
-  %7 = addrspacecast ptr %0 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %7)
-  ret void
-}
-
-define void @N$EKEY() addrspace(1) {
-b1:
-  %0 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 8, i1 false)
-  %1 = getelementptr i8, ptr @$str16, i16 6
-  %2 = getelementptr i8, ptr %1, i16 -4
-  %3 = load i16, ptr %2
-  %4 = addrspacecast ptr %1 to ptr addrspace(1)
-  store i16 %3, ptr %0, !tbaa !2
-  %5 = getelementptr inbounds i8, ptr %0, i16 2
-  store i16 %3, ptr %5, !tbaa !2
-  %6 = getelementptr inbounds i8, ptr %0, i16 4
-  store ptr addrspace(1) %4, ptr %6, !tbaa !2
-  %7 = addrspacecast ptr %0 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %7)
-  ret void
-}
-
-define internal ptr @heap.header(ptr %0) addrspace(1) memory(none) willreturn {
-b1:
-  ret ptr %0
-}
-
-define internal i16 @heap.size_of(ptr %0) addrspace(1) willreturn {
-b1:
-  %1 = load i16, ptr %0
-  %2 = and i16 %1, -4
-  ret i16 %2
-}
-
-define internal ptr @heap.next(ptr %0) addrspace(1) memory(none) willreturn {
-b1:
-  %1 = getelementptr i8, ptr %0, i16 2
-  ret ptr %1
-}
-
-define internal ptr @heap.previous(ptr %0) addrspace(1) memory(none) willreturn {
-b1:
-  %1 = getelementptr i8, ptr %0, i16 4
-  ret ptr %1
-}
-
-define internal i16 @heap.class_of(i16 %0) addrspace(1) memory(none) {
-b1:
-  %1 = lshr i16 %0, 4
-  br label %b2
-
-b2:
-  %2 = phi i16 [ 0, %b1 ], [ %5, %b3 ]
-  %3 = phi i16 [ %1, %b1 ], [ %6, %b3 ]
-  %4 = icmp ne i16 %3, 0
-  br i1 %4, label %b3, label %b4
-
-b3:
-  %5 = add i16 %2, 1
-  %6 = lshr i16 %3, 1
-  br label %b2
-
-b4:
-  ret i16 %2
-}
-
-define internal i16 @heap.rounded(i16 %0) addrspace(1) {
-b1:
-  %1 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 8, i1 false)
+define internal cc 1005 ptr @heap.allocate(i16 %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
   %2 = icmp ugt i16 %0, -16
-  br i1 %2, label %b2, label %b4
+  br i1 %2, label %3, label %7
 
-b2:
-  %3 = getelementptr i8, ptr @$str17, i16 6
-  %4 = getelementptr i8, ptr %3, i16 -4
-  %5 = load i16, ptr %4
-  %6 = addrspacecast ptr %3 to ptr addrspace(1)
-  store i16 %5, ptr %1, !tbaa !2
-  %7 = getelementptr inbounds i8, ptr %1, i16 2
-  store i16 %5, ptr %7, !tbaa !2
-  %8 = getelementptr inbounds i8, ptr %1, i16 4
-  store ptr addrspace(1) %6, ptr %8, !tbaa !2
-  %9 = addrspacecast ptr %1 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %9)
-  br label %b4
+3:
+  %4 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %5 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str18, i16 6) to ptr addrspace(1)), i16 13)
+  %6 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
+  br label %7
 
-b4:
-  %10 = add i16 %0, 5
-  %11 = and i16 %10, -4
-  %12 = icmp ugt i16 %11, 8
-  br i1 %12, label %b7, label %b6
+7:
+  %8 = add i16 %0, 5
+  %9 = and i16 %8, -4
+  %10 = tail call i16 @llvm.umax.i16(i16 %9, i16 8)
+  %11 = lshr i16 %10, 4
+  %12 = icmp eq i16 %11, 0
+  br i1 %12, label %20, label %13
 
-b6:
-  br label %b7
-
-b7:
-  %13 = phi i16 [ %11, %b4 ], [ 8, %b6 ]
-  ret i16 %13
-}
-
-define internal void @heap.unlink(ptr %0) addrspace(1) {
-b1:
-  %1 = getelementptr i8, ptr %0, i16 2
-  %2 = load ptr, ptr %1
-  %3 = getelementptr i8, ptr %0, i16 4
-  %4 = load ptr, ptr %3
-  %5 = icmp eq ptr %4, null
-  br i1 %5, label %6, label %b3
-
-6:
-  %7 = load i16, ptr %0
-  %8 = and i16 %7, -4
-  %9 = lshr i16 %8, 4
-  br label %10
-
-10:
-  %11 = phi i16 [ 0, %6 ], [ %15, %14 ]
-  %12 = phi i16 [ %9, %6 ], [ %16, %14 ]
-  %13 = icmp ne i16 %12, 0
-  br i1 %13, label %14, label %17
+13:
+  br label %14
 
 14:
-  %15 = add i16 %11, 1
-  %16 = lshr i16 %12, 1
-  br label %10
+  %15 = phi i16 [ %17, %14 ], [ 0, %13 ]
+  %16 = phi i16 [ %18, %14 ], [ %11, %13 ]
+  %17 = add nuw nsw i16 %15, 1
+  %18 = lshr i16 %16, 1
+  %19 = icmp eq i16 %18, 0
+  br i1 %19, label %20, label %14
 
-17:
-  %18 = getelementptr inbounds ptr, ptr @$var_heap.heads, i16 %11
-  store ptr %2, ptr %18, !tbaa !2
-  %19 = icmp eq ptr %2, null
-  br i1 %19, label %b5, label %b4
-
-b3:
-  %20 = getelementptr i8, ptr %4, i16 2
-  store ptr %2, ptr %20
-  br label %b4
-
-b4:
-  %21 = icmp eq ptr %2, null
-  %22 = sext i1 %21 to i8
-  %23 = xor i8 %22, -1
-  %24 = icmp ne i8 %23, 0
-  br i1 %24, label %29, label %b10
-
-b5:
-  %25 = load i16, ptr @$var_heap.occupied, !tbaa !2
-  %26 = shl i16 1, %11
-  %27 = xor i16 %26, -1
-  %28 = and i16 %25, %27
-  store i16 %28, ptr @$var_heap.occupied, !tbaa !2
-  br label %b4
-
-29:
-  %30 = getelementptr i8, ptr %2, i16 4
-  store ptr %4, ptr %30
-  br label %b10
-
-b10:
-  ret void
-}
-
-define internal void @heap.insert(ptr %0, i16 %1) addrspace(1) {
-b1:
-  %2 = load i16, ptr %0
-  %3 = and i16 %2, 2
-  %4 = or i16 %1, %3
-  store i16 %4, ptr %0
-  %5 = add i16 %1, -2
-  %6 = getelementptr i8, ptr %0, i16 %5
-  store i16 %1, ptr %6
-  %7 = getelementptr i8, ptr %0, i16 %1
-  %8 = load i16, ptr %7
-  %9 = and i16 %8, -3
-  store i16 %9, ptr %7
-  %10 = lshr i16 %1, 4
-  br label %11
-
-11:
-  %12 = phi i16 [ 0, %b1 ], [ %16, %15 ]
-  %13 = phi i16 [ %10, %b1 ], [ %17, %15 ]
-  %14 = icmp ne i16 %13, 0
-  br i1 %14, label %15, label %18
-
-15:
-  %16 = add i16 %12, 1
-  %17 = lshr i16 %13, 1
-  br label %11
-
-18:
-  %19 = getelementptr inbounds ptr, ptr @$var_heap.heads, i16 %12
-  %20 = load ptr, ptr %19, !tbaa !2
-  %21 = getelementptr i8, ptr %0, i16 2
-  store ptr %20, ptr %21
-  %22 = getelementptr i8, ptr %0, i16 4
-  store ptr null, ptr %22
-  %23 = icmp eq ptr %20, null
-  %24 = sext i1 %23 to i8
-  %25 = xor i8 %24, -1
-  %26 = icmp ne i8 %25, 0
-  br i1 %26, label %27, label %b4
-
-27:
-  %28 = getelementptr i8, ptr %20, i16 4
-  store ptr %0, ptr %28
-  br label %b4
-
-b4:
-  store ptr %0, ptr %19, !tbaa !2
-  %29 = load i16, ptr @$var_heap.occupied, !tbaa !2
-  %30 = shl i16 1, %12
-  %31 = or i16 %29, %30
-  store i16 %31, ptr @$var_heap.occupied, !tbaa !2
-  ret void
-}
-
-define internal ptr @heap.fit(i16 %0) addrspace(1) {
-b1:
-  %1 = alloca [8 x i8]
-  %2 = alloca [8 x i8]
-  %3 = lshr i16 %0, 4
-  br label %4
-
-4:
-  %5 = phi i16 [ 0, %b1 ], [ %9, %8 ]
-  %6 = phi i16 [ %3, %b1 ], [ %10, %8 ]
-  %7 = icmp ne i16 %6, 0
-  br i1 %7, label %8, label %11
-
-8:
-  %9 = add i16 %5, 1
-  %10 = lshr i16 %6, 1
-  br label %4
-
-11:
-  %12 = getelementptr inbounds ptr, ptr @$var_heap.heads, i16 %5
-  %13 = load ptr, ptr %12, !tbaa !2
-  br label %b2
-
-b2:
-  %14 = phi ptr [ %13, %11 ], [ %27, %25 ]
-  %15 = icmp eq ptr %14, null
-  %16 = sext i1 %15 to i8
-  %17 = xor i8 %16, -1
-  %18 = icmp ne i8 %17, 0
-  br i1 %18, label %19, label %b4
-
-19:
-  %20 = load i16, ptr %14
-  %21 = and i16 %20, -4
-  %22 = icmp uge i16 %21, %0
-  br i1 %22, label %b5, label %25
-
-b4:
-  %23 = load i16, ptr @$var_heap.occupied, !tbaa !2
-  %24 = icmp ult i16 %5, 16
-  br i1 %24, label %b8, label %33
-
-b5:
-  ret ptr %14
+20:
+  %21 = phi i16 [ 0, %7 ], [ %17, %14 ]
+  %22 = getelementptr inbounds [2 x i8], ptr @$var_heap.heads, i16 %21
+  %23 = load ptr, ptr %22, !tbaa !2
+  %24 = icmp eq ptr %23, null
+  br i1 %24, label %31, label %25
 
 25:
-  %26 = getelementptr i8, ptr %14, i16 2
-  %27 = load ptr, ptr %26
-  br label %b2
+  br label %26
 
-b8:
-  %28 = shl i16 2, %5
-  %29 = add i16 %28, -1
-  %30 = xor i16 %29, -1
-  %31 = and i16 %23, %30
-  %32 = icmp eq i16 %31, 0
-  br i1 %32, label %b10, label %b12
+26:
+  %27 = phi ptr [ %35, %33 ], [ %23, %25 ]
+  %28 = load i16, ptr %27
+  %29 = and i16 %28, -4
+  %30 = icmp ult i16 %29, %10
+  br i1 %30, label %33, label %150
+
+31:
+  %32 = icmp ult i16 %21, 16
+  br i1 %32, label %37, label %45
 
 33:
-  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 8, i1 false)
-  %34 = getelementptr i8, ptr @$str14, i16 6
-  %35 = getelementptr i8, ptr %34, i16 -4
-  %36 = load i16, ptr %35
-  %37 = addrspacecast ptr %34 to ptr addrspace(1)
-  store i16 %36, ptr %2
-  %38 = getelementptr inbounds i8, ptr %2, i16 2
-  store i16 %36, ptr %38
-  %39 = getelementptr inbounds i8, ptr %2, i16 4
-  store ptr addrspace(1) %37, ptr %39
-  %40 = addrspacecast ptr %2 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %40)
+  %34 = getelementptr i8, ptr %27, i16 2
+  %35 = load ptr, ptr %34
+  %36 = icmp eq ptr %35, null
+  br i1 %36, label %31, label %26
+
+37:
+  %38 = load i16, ptr @$var_heap.occupied, !tbaa !2
+  %39 = shl i16 2, %21
+  %40 = add i16 %39, -1
+  %41 = xor i16 %40, -1
+  %42 = and i16 %38, %41
+  %43 = icmp eq i16 %42, 0
+  br i1 %43, label %62, label %44
+
+44:
+  br label %46
+
+45:
+  tail call cc 1005 addrspace(1) void @N$ESHF()
   unreachable
 
-b10:
-  ret ptr null
+46:
+  %47 = phi ptr [ @$var_heap.heads, %44 ], [ %54, %46 ]
+  %48 = phi i16 [ %51, %46 ], [ 0, %44 ]
+  %49 = phi i16 [ %50, %46 ], [ %42, %44 ]
+  %50 = lshr exact i16 %49, 1
+  %51 = add i16 %48, 1
+  %52 = and i16 %49, 2
+  %53 = icmp eq i16 %52, 0
+  %54 = getelementptr i8, ptr %47, i16 2
+  br i1 %53, label %46, label %55
 
-b12:
+55:
+  %56 = icmp ult i16 %51, 13
+  br i1 %56, label %58, label %57
+
+57:
+  tail call cc 1005 addrspace(1) void @N$EBND()
+  unreachable
+
+58:
+  %59 = getelementptr i8, ptr %47, i16 2
+  %60 = load ptr, ptr %59, !tbaa !2
+  %61 = icmp eq ptr %60, null
+  br i1 %61, label %62, label %150
+
+62:
+  %63 = add i16 %10, 4
+  %64 = tail call i16 @llvm.umax.i16(i16 %63, i16 1024)
+  %65 = load ptr, ptr @$var_heap.end, !tbaa !2
+  %66 = icmp eq ptr %65, null
+  %67 = zext i1 %66 to i8
+  %68 = select i1 %66, i16 2, i16 0
+  %69 = or disjoint i16 %68, %64
+  %70 = tail call addrspace(1) ptr @LL$MORE(i16 %69)
+  %71 = icmp eq ptr %70, null
+  br i1 %71, label %72, label %76
+
+72:
+  %73 = or disjoint i16 %68, %63
+  %74 = tail call addrspace(1) ptr @LL$MORE(i16 %73)
+  %75 = icmp eq ptr %74, null
+  br i1 %75, label %99, label %76
+
+76:
+  %77 = phi ptr [ %74, %72 ], [ %70, %62 ]
+  %78 = phi i16 [ %63, %72 ], [ %64, %62 ]
+  %79 = icmp eq ptr %65, null
+  %80 = xor i8 %67, 1
+  %81 = icmp eq i8 %80, 0
+  %82 = load ptr, ptr @$var_heap.end
+  %83 = getelementptr i8, ptr %82, i16 2
+  %84 = icmp ne ptr %77, %83
+  %85 = xor i1 %81, true
+  %86 = select i1 %85, i1 %84, i1 false
+  %87 = select i1 %79, i1 true, i1 %86
+  %88 = select i1 %87, ptr %77, ptr %82
+  br i1 %87, label %89, label %90
+
+89:
+  store i16 2, ptr %77
+  br label %90
+
+90:
+  %91 = add i16 %78, -4
+  %92 = select i1 %86, i16 %91, i16 %78
+  %93 = getelementptr i8, ptr %88, i16 %92
+  store ptr %93, ptr @$var_heap.end, !tbaa !2
+  store i16 3, ptr %93
+  %94 = or i16 %92, 1
+  %95 = load i16, ptr %88
+  %96 = and i16 %95, 2
+  %97 = or i16 %94, %96
+  store i16 %97, ptr %88
+  %98 = getelementptr i8, ptr %88, i16 2
+  tail call cc 1005 addrspace(1) void @heap.release(ptr %98)
+  br label %99
+
+99:
+  %100 = icmp eq i16 %11, 0
+  br i1 %100, label %108, label %101
+
+101:
+  br label %102
+
+102:
+  %103 = phi i16 [ %105, %102 ], [ 0, %101 ]
+  %104 = phi i16 [ %106, %102 ], [ %11, %101 ]
+  %105 = add nuw nsw i16 %103, 1
+  %106 = lshr i16 %104, 1
+  %107 = icmp eq i16 %106, 0
+  br i1 %107, label %108, label %102
+
+108:
+  %109 = phi i16 [ 0, %99 ], [ %105, %102 ]
+  %110 = getelementptr inbounds [2 x i8], ptr @$var_heap.heads, i16 %109
+  %111 = load ptr, ptr %110, !tbaa !2
+  %112 = icmp eq ptr %111, null
+  br i1 %112, label %119, label %113
+
+113:
+  br label %114
+
+114:
+  %115 = phi ptr [ %123, %121 ], [ %111, %113 ]
+  %116 = load i16, ptr %115
+  %117 = and i16 %116, -4
+  %118 = icmp ult i16 %117, %10
+  br i1 %118, label %121, label %150
+
+119:
+  %120 = icmp ult i16 %109, 16
+  br i1 %120, label %125, label %133
+
+121:
+  %122 = getelementptr i8, ptr %115, i16 2
+  %123 = load ptr, ptr %122
+  %124 = icmp eq ptr %123, null
+  br i1 %124, label %119, label %114
+
+125:
+  %126 = load i16, ptr @$var_heap.occupied, !tbaa !2
+  %127 = shl i16 2, %109
+  %128 = add i16 %127, -1
+  %129 = xor i16 %128, -1
+  %130 = and i16 %126, %129
+  %131 = icmp eq i16 %130, 0
+  br i1 %131, label %203, label %132
+
+132:
+  br label %134
+
+133:
+  tail call cc 1005 addrspace(1) void @N$ESHF()
+  unreachable
+
+134:
+  %135 = phi ptr [ @$var_heap.heads, %132 ], [ %142, %134 ]
+  %136 = phi i16 [ %139, %134 ], [ 0, %132 ]
+  %137 = phi i16 [ %138, %134 ], [ %130, %132 ]
+  %138 = lshr exact i16 %137, 1
+  %139 = add i16 %136, 1
+  %140 = and i16 %137, 2
+  %141 = icmp eq i16 %140, 0
+  %142 = getelementptr i8, ptr %135, i16 2
+  br i1 %141, label %134, label %143
+
+143:
+  %144 = icmp ult i16 %139, 13
+  br i1 %144, label %146, label %145
+
+145:
+  tail call cc 1005 addrspace(1) void @N$EBND()
+  unreachable
+
+146:
+  %147 = getelementptr i8, ptr %135, i16 2
+  %148 = load ptr, ptr %147, !tbaa !2
+  %149 = icmp eq ptr %148, null
+  br i1 %149, label %203, label %150
+
+150:
+  %151 = phi ptr [ %148, %146 ], [ %60, %58 ], [ %27, %26 ], [ %115, %114 ]
+  %152 = getelementptr i8, ptr %151, i16 2
+  %153 = load ptr, ptr %152
+  %154 = getelementptr i8, ptr %151, i16 4
+  %155 = load ptr, ptr %154
+  %156 = icmp eq ptr %155, null
+  br i1 %156, label %157, label %171
+
+157:
+  %158 = load i16, ptr %151
+  %159 = lshr i16 %158, 4
+  %160 = icmp eq i16 %159, 0
+  br i1 %160, label %168, label %161
+
+161:
+  br label %162
+
+162:
+  %163 = phi i16 [ %165, %162 ], [ 0, %161 ]
+  %164 = phi i16 [ %166, %162 ], [ %159, %161 ]
+  %165 = add nuw nsw i16 %163, 1
+  %166 = lshr i16 %164, 1
+  %167 = icmp eq i16 %166, 0
+  br i1 %167, label %168, label %162
+
+168:
+  %169 = phi i16 [ 0, %157 ], [ %165, %162 ]
+  %170 = getelementptr inbounds [2 x i8], ptr @$var_heap.heads, i16 %169
+  store ptr %153, ptr %170, !tbaa !2
+  %magicptr = ptrtoint ptr %153 to i16
+  %cond = icmp eq i16 %magicptr, 0
+  br i1 %cond, label %175, label %180
+
+171:
+  %172 = getelementptr i8, ptr %155, i16 2
+  store ptr %153, ptr %172
+  br label %173
+
+173:
+  %174 = icmp eq ptr %153, null
+  br i1 %174, label %182, label %180
+
+175:
+  %176 = load i16, ptr @$var_heap.occupied, !tbaa !2
+  %177 = shl nuw i16 1, %169
+  %178 = xor i16 %177, -1
+  %179 = and i16 %176, %178
+  store i16 %179, ptr @$var_heap.occupied, !tbaa !2
+  br label %173
+
+180:
+  %181 = getelementptr i8, ptr %153, i16 4
+  store ptr %155, ptr %181
+  br label %182
+
+182:
+  %183 = load i16, ptr %151
+  %184 = and i16 %183, -4
+  %185 = or disjoint i16 %184, 1
+  %186 = and i16 %183, 2
+  %187 = or disjoint i16 %185, %186
+  store i16 %187, ptr %151
+  %188 = getelementptr i8, ptr %151, i16 %184
+  %189 = load i16, ptr %188
+  %190 = or i16 %189, 2
+  store i16 %190, ptr %188
+  %191 = load i16, ptr %151
+  %192 = and i16 %191, -4
+  %193 = sub i16 %192, %10
+  %194 = icmp ult i16 %193, 8
+  br i1 %194, label %202, label %195
+
+195:
+  %196 = getelementptr i8, ptr %151, i16 %10
+  %197 = or disjoint i16 %193, 3
+  store i16 %197, ptr %196
+  %198 = load i16, ptr %151
+  %199 = and i16 %198, 3
+  %200 = or disjoint i16 %199, %10
+  store i16 %200, ptr %151
+  %201 = getelementptr i8, ptr %196, i16 2
+  tail call cc 1005 addrspace(1) void @heap.release(ptr %201)
+  br label %202
+
+202:
+  ret ptr %152
+
+203:
+  %204 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %205 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str18, i16 6) to ptr addrspace(1)), i16 13)
+  %206 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
+  unreachable
+}
+
+define internal cc 1005 void @heap.release(ptr %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(readwrite, inaccessiblemem: none) nounwind nofree nosync norecurse {
+b1:
+  %1 = icmp eq ptr %0, null
+  br i1 %1, label %common.ret, label %2
+
+common.ret:
+  ret void
+
+2:
+  %3 = getelementptr i8, ptr %0, i16 -2
+  %4 = load i16, ptr %3
+  %5 = and i16 %4, -4
+  %6 = getelementptr i8, ptr %3, i16 %5
+  %7 = load i16, ptr %6
+  %8 = and i16 %7, 1
+  %9 = icmp eq i16 %8, 0
+  br i1 %9, label %10, label %49
+
+10:
+  %11 = getelementptr i8, ptr %0, i16 %5
+  %12 = load ptr, ptr %11
+  %13 = getelementptr i8, ptr %0, i16 %5
+  %14 = getelementptr i8, ptr %13, i16 2
+  %15 = load ptr, ptr %14
+  %16 = icmp eq ptr %15, null
+  br i1 %16, label %17, label %30
+
+17:
+  %18 = lshr i16 %7, 4
+  %19 = icmp eq i16 %18, 0
+  br i1 %19, label %27, label %20
+
+20:
+  br label %21
+
+21:
+  %22 = phi i16 [ %24, %21 ], [ 0, %20 ]
+  %23 = phi i16 [ %25, %21 ], [ %18, %20 ]
+  %24 = add nuw nsw i16 %22, 1
+  %25 = lshr i16 %23, 1
+  %26 = icmp eq i16 %25, 0
+  br i1 %26, label %27, label %21
+
+27:
+  %28 = phi i16 [ 0, %17 ], [ %24, %21 ]
+  %29 = getelementptr inbounds [2 x i8], ptr @$var_heap.heads, i16 %28
+  store ptr %12, ptr %29, !tbaa !2
+  %magicptr1 = ptrtoint ptr %12 to i16
+  %cond1 = icmp eq i16 %magicptr1, 0
+  br i1 %cond1, label %34, label %39
+
+30:
+  %31 = getelementptr i8, ptr %15, i16 2
+  store ptr %12, ptr %31
+  br label %32
+
+32:
+  %33 = icmp eq ptr %12, null
+  br i1 %33, label %41, label %39
+
+34:
+  %35 = load i16, ptr @$var_heap.occupied, !tbaa !2
+  %36 = shl nuw i16 1, %28
+  %37 = xor i16 %36, -1
+  %38 = and i16 %35, %37
+  store i16 %38, ptr @$var_heap.occupied, !tbaa !2
+  br label %32
+
+39:
+  %40 = getelementptr i8, ptr %12, i16 4
+  store ptr %15, ptr %40
+  br label %41
+
+41:
+  %42 = getelementptr i8, ptr %0, i16 %5
+  %43 = getelementptr i8, ptr %42, i16 -2
+  %44 = load i16, ptr %43
+  %45 = and i16 %44, -4
+  %46 = add i16 %45, %5
+  %47 = getelementptr i8, ptr %0, i16 -2
+  %48 = load i16, ptr %47
+  br label %49
+
+49:
+  %50 = phi i16 [ %48, %41 ], [ %4, %2 ]
+  %51 = phi i16 [ %46, %41 ], [ %5, %2 ]
+  %52 = and i16 %50, 2
+  %53 = icmp eq i16 %52, 0
+  br i1 %53, label %54, label %98
+
+54:
+  %55 = getelementptr i8, ptr %0, i16 -4
+  %56 = load i16, ptr %55
+  %57 = sub i16 0, %56
+  %58 = getelementptr i8, ptr %3, i16 %57
+  %59 = getelementptr i8, ptr %0, i16 %57
+  %60 = load ptr, ptr %59
+  %61 = getelementptr i8, ptr %0, i16 %57
+  %62 = getelementptr i8, ptr %61, i16 2
+  %63 = load ptr, ptr %62
+  %64 = icmp eq ptr %63, null
+  br i1 %64, label %65, label %81
+
+65:
+  %66 = getelementptr i8, ptr %0, i16 %57
+  %67 = getelementptr i8, ptr %66, i16 -2
+  %68 = load i16, ptr %67
+  %69 = lshr i16 %68, 4
+  %70 = icmp eq i16 %69, 0
+  br i1 %70, label %78, label %71
+
+71:
+  br label %72
+
+72:
+  %73 = phi i16 [ %75, %72 ], [ 0, %71 ]
+  %74 = phi i16 [ %76, %72 ], [ %69, %71 ]
+  %75 = add nuw nsw i16 %73, 1
+  %76 = lshr i16 %74, 1
+  %77 = icmp eq i16 %76, 0
+  br i1 %77, label %78, label %72
+
+78:
+  %79 = phi i16 [ 0, %65 ], [ %75, %72 ]
+  %80 = getelementptr inbounds [2 x i8], ptr @$var_heap.heads, i16 %79
+  store ptr %60, ptr %80, !tbaa !2
+  %magicptr = ptrtoint ptr %60 to i16
+  %cond = icmp eq i16 %magicptr, 0
+  br i1 %cond, label %85, label %90
+
+81:
+  %82 = getelementptr i8, ptr %63, i16 2
+  store ptr %60, ptr %82
+  br label %83
+
+83:
+  %84 = icmp eq ptr %60, null
+  br i1 %84, label %92, label %90
+
+85:
+  %86 = load i16, ptr @$var_heap.occupied, !tbaa !2
+  %87 = shl nuw i16 1, %79
+  %88 = xor i16 %87, -1
+  %89 = and i16 %86, %88
+  store i16 %89, ptr @$var_heap.occupied, !tbaa !2
+  br label %83
+
+90:
+  %91 = getelementptr i8, ptr %60, i16 4
+  store ptr %63, ptr %91
+  br label %92
+
+92:
+  %93 = add i16 %56, %51
+  %94 = getelementptr i8, ptr %0, i16 %57
+  %95 = getelementptr i8, ptr %94, i16 -2
+  %96 = load i16, ptr %95
+  %97 = and i16 %96, 2
+  br label %98
+
+98:
+  %99 = phi i16 [ %97, %92 ], [ %52, %49 ]
+  %100 = phi i16 [ %93, %92 ], [ %51, %49 ]
+  %101 = phi ptr [ %58, %92 ], [ %3, %49 ]
+  %102 = or i16 %99, %100
+  store i16 %102, ptr %101
+  %103 = getelementptr i8, ptr %101, i16 %100
+  %104 = getelementptr i8, ptr %103, i16 -2
+  store i16 %100, ptr %104
+  %105 = load i16, ptr %103
+  %106 = and i16 %105, -3
+  store i16 %106, ptr %103
+  %107 = lshr i16 %100, 4
+  %108 = icmp eq i16 %107, 0
+  br i1 %108, label %116, label %109
+
+109:
+  br label %110
+
+110:
+  %111 = phi i16 [ %113, %110 ], [ 0, %109 ]
+  %112 = phi i16 [ %114, %110 ], [ %107, %109 ]
+  %113 = add nuw nsw i16 %111, 1
+  %114 = lshr i16 %112, 1
+  %115 = icmp eq i16 %114, 0
+  br i1 %115, label %116, label %110
+
+116:
+  %117 = phi i16 [ 0, %98 ], [ %113, %110 ]
+  %118 = getelementptr inbounds [2 x i8], ptr @$var_heap.heads, i16 %117
+  %119 = load ptr, ptr %118, !tbaa !2
+  %120 = getelementptr i8, ptr %101, i16 2
+  store ptr %119, ptr %120
+  %121 = getelementptr i8, ptr %101, i16 4
+  store ptr null, ptr %121
+  %122 = icmp eq ptr %119, null
+  br i1 %122, label %125, label %123
+
+123:
+  %124 = getelementptr i8, ptr %119, i16 4
+  store ptr %101, ptr %124
+  br label %125
+
+125:
+  %126 = mul i16 %117, 2
+  %127 = getelementptr i8, ptr @$var_heap.heads, i16 %126
+  store ptr %101, ptr %127, !tbaa !2
+  %128 = load i16, ptr @$var_heap.occupied, !tbaa !2
+  %129 = shl nuw i16 1, %117
+  %130 = or i16 %128, %129
+  store i16 %130, ptr @$var_heap.occupied, !tbaa !2
+  br label %common.ret
+}
+
+define internal cc 1005 ptr @buffers.allocate(i16 %0, i16 %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
+  %3 = icmp eq i16 %1, 0
+  br i1 %3, label %11, label %4
+
+4:
+  %5 = udiv i16 -23, %1
+  %6 = icmp ugt i16 %0, %5
+  br i1 %6, label %7, label %11
+
+7:
+  %8 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %9 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str18, i16 6) to ptr addrspace(1)), i16 13)
+  %10 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
+  br label %11
+
+11:
+  %12 = mul i16 %1, %0
+  %13 = add i16 %12, 7
+  %14 = tail call cc 1005 addrspace(1) ptr @heap.allocate(i16 %13)
+  %15 = getelementptr i8, ptr %14, i16 6
+  store i8 1, ptr %14
+  %16 = getelementptr i8, ptr %14, i16 1
+  store i8 0, ptr %16
+  %17 = getelementptr i8, ptr %14, i16 2
+  store i16 0, ptr %17
+  %18 = getelementptr i8, ptr %14, i16 4
+  store i16 %0, ptr %18
+  store i8 0, ptr %15, align 2
+  ret ptr %15
+}
+
+define cc 1005 ptr @N$BRES(ptr %0, i16 %1, i16 %2) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %4 = getelementptr i8, ptr %0, i16 -4
+  %5 = load i16, ptr %4
+  %6 = getelementptr i8, ptr %0, i16 -2
+  %7 = load i16, ptr %6
+  %8 = tail call i16 @llvm.umax.i16(i16 %1, i16 %5)
+  %9 = getelementptr i8, ptr %0, i16 -6
+  %10 = load i8, ptr %9, align 2
+  %11 = zext i8 %10 to i16
+  %12 = and i16 %11, 9
+  %13 = icmp eq i16 %12, 1
+  %not = xor i1 %13, true
+  %14 = icmp ult i16 %7, %8
+  %or.cond = select i1 %not, i1 true, i1 %14
+  br i1 %or.cond, label %b7, label %common.ret
+
+common.ret:
+  %common.op = phi ptr [ %0, %b17 ], [ %0, %3 ], [ %31, %45 ], [ %31, %46 ]
+  ret ptr %common.op
+
+b7:
+  %15 = icmp sgt i16 %7, -1
+  %16 = zext i1 %15 to i16
+  %17 = shl nuw i16 %7, %16
+  %18 = icmp ult i16 %8, %17
+  br i1 %18, label %19, label %b13
+
+19:
+  %20 = icmp eq i16 %2, 0
+  br i1 %20, label %b13.thread, label %21
+
+21:
+  %22 = udiv i16 -23, %2
+  %23 = icmp ugt i16 %17, %22
+  %24 = select i1 %23, i16 %8, i16 %17
   br label %b13
 
 b13:
-  %41 = phi i16 [ 0, %b12 ], [ %46, %b14 ]
-  %42 = phi i16 [ %31, %b12 ], [ %45, %b14 ]
-  %43 = and i16 %42, 1
-  %44 = icmp eq i16 %43, 0
-  br i1 %44, label %b14, label %b15
+  %25 = phi i16 [ %8, %b7 ], [ %24, %21 ]
+  %26 = icmp eq i16 %12, 1
+  br i1 %26, label %143, label %29
 
-b14:
-  %45 = lshr i16 %42, 1
-  %46 = add i16 %41, 1
-  br label %b13
+b13.thread:
+  %27 = icmp eq i16 %12, 1
+  br i1 %27, label %53, label %29
 
-b15:
-  %47 = icmp ult i16 %41, 13
-  br i1 %47, label %b16, label %50
+b17:
+  %28 = getelementptr i8, ptr %0, i16 -2
+  store i16 %54, ptr %28
+  br label %common.ret
 
-b16:
-  %48 = getelementptr inbounds ptr, ptr @$var_heap.heads, i16 %41
-  %49 = load ptr, ptr %48, !tbaa !2
-  ret ptr %49
+29:
+  %30 = phi i16 [ %17, %b13.thread ], [ %54, %71 ], [ %54, %139 ], [ %25, %b13 ], [ %25, %145 ]
+  %31 = tail call cc 1005 addrspace(1) ptr @buffers.allocate(i16 %30, i16 %2)
+  %32 = mul i16 %5, %2
+  %33 = add i16 %32, 1
+  %34 = icmp eq i16 %33, 0
+  br i1 %34, label %46, label %35
 
-50:
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 8, i1 false)
-  %51 = getelementptr i8, ptr @$str15, i16 6
-  %52 = getelementptr i8, ptr %51, i16 -4
-  %53 = load i16, ptr %52
-  %54 = addrspacecast ptr %51 to ptr addrspace(1)
-  store i16 %53, ptr %1
-  %55 = getelementptr inbounds i8, ptr %1, i16 2
-  store i16 %53, ptr %55
-  %56 = getelementptr inbounds i8, ptr %1, i16 4
-  store ptr addrspace(1) %54, ptr %56
-  %57 = addrspacecast ptr %1 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %57)
-  unreachable
+35:
+  %36 = mul i16 %5, %2
+  %37 = add i16 %36, 1
+  br label %38
+
+38:
+  %39 = phi i16 [ %43, %38 ], [ 0, %35 ]
+  %40 = getelementptr i8, ptr %31, i16 %39
+  %41 = getelementptr i8, ptr %0, i16 %39
+  %42 = load i8, ptr %41
+  store i8 %42, ptr %40
+  %43 = add nuw i16 %39, 1
+  %44 = icmp eq i16 %37, %43
+  br i1 %44, label %46, label %38
+
+45:
+  tail call cc 1005 addrspace(1) void @heap.release(ptr %9)
+  br label %common.ret
+
+46:
+  %47 = getelementptr i8, ptr %31, i16 -4
+  store i16 %5, ptr %47
+  %48 = getelementptr i8, ptr %0, i16 -6
+  %49 = load i8, ptr %48, align 2
+  %50 = zext i8 %49 to i16
+  %51 = and i16 %50, 1
+  %52 = icmp eq i16 %51, 0
+  br i1 %52, label %common.ret, label %45
+
+53:
+  %54 = phi i16 [ %25, %143 ], [ %25, %145 ], [ %17, %b13.thread ]
+  %55 = mul i16 %54, %2
+  %56 = getelementptr i8, ptr %0, i16 -8
+  %57 = add i16 %55, 22
+  %58 = icmp ult i16 %57, 15
+  br i1 %58, label %59, label %63
+
+59:
+  %60 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %61 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str18, i16 6) to ptr addrspace(1)), i16 13)
+  %62 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
+  br label %63
+
+63:
+  %64 = add i16 %55, 12
+  %65 = and i16 %64, -4
+  %66 = tail call i16 @llvm.umax.i16(i16 %65, i16 8)
+  %67 = getelementptr i8, ptr %0, i16 -8
+  %68 = load i16, ptr %67
+  %69 = and i16 %68, -4
+  %70 = icmp ult i16 %69, %66
+  br i1 %70, label %71, label %77
+
+71:
+  %72 = getelementptr i8, ptr %0, i16 %69
+  %73 = getelementptr i8, ptr %72, i16 -8
+  %74 = load i16, ptr %73
+  %75 = and i16 %74, 1
+  %76 = icmp eq i16 %75, 0
+  br i1 %76, label %139, label %29
+
+77:
+  %78 = phi i16 [ %138, %123 ], [ %69, %63 ]
+  %79 = sub i16 %78, %66
+  %80 = icmp ult i16 %79, 8
+  br i1 %80, label %b17, label %81
+
+81:
+  %82 = getelementptr i8, ptr %56, i16 %66
+  %83 = or disjoint i16 %79, 3
+  %84 = getelementptr i8, ptr %0, i16 %66
+  %85 = getelementptr i8, ptr %84, i16 -8
+  store i16 %83, ptr %85
+  %86 = getelementptr i8, ptr %0, i16 -8
+  %87 = load i16, ptr %86
+  %88 = and i16 %87, 3
+  %89 = or disjoint i16 %88, %66
+  store i16 %89, ptr %86
+  %90 = getelementptr i8, ptr %82, i16 2
+  tail call cc 1005 addrspace(1) void @heap.release(ptr %90)
+  br label %b17
+
+91:
+  %92 = getelementptr i8, ptr %0, i16 %69
+  %93 = getelementptr i8, ptr %92, i16 -6
+  %94 = load ptr, ptr %93
+  %95 = getelementptr i8, ptr %0, i16 %69
+  %96 = getelementptr i8, ptr %95, i16 -4
+  %97 = load ptr, ptr %96
+  %98 = icmp eq ptr %97, null
+  br i1 %98, label %99, label %112
+
+99:
+  %100 = lshr i16 %74, 4
+  %101 = icmp eq i16 %100, 0
+  br i1 %101, label %109, label %102
+
+102:
+  br label %103
+
+103:
+  %104 = phi i16 [ %106, %103 ], [ 0, %102 ]
+  %105 = phi i16 [ %107, %103 ], [ %100, %102 ]
+  %106 = add nuw nsw i16 %104, 1
+  %107 = lshr i16 %105, 1
+  %108 = icmp eq i16 %107, 0
+  br i1 %108, label %109, label %103
+
+109:
+  %110 = phi i16 [ 0, %99 ], [ %106, %103 ]
+  %111 = getelementptr inbounds [2 x i8], ptr @$var_heap.heads, i16 %110
+  store ptr %94, ptr %111, !tbaa !2
+  %magicptr = ptrtoint ptr %94 to i16
+  %cond = icmp eq i16 %magicptr, 0
+  br i1 %cond, label %116, label %121
+
+112:
+  %113 = getelementptr i8, ptr %97, i16 2
+  store ptr %94, ptr %113
+  br label %114
+
+114:
+  %115 = icmp eq ptr %94, null
+  br i1 %115, label %123, label %121
+
+116:
+  %117 = load i16, ptr @$var_heap.occupied, !tbaa !2
+  %118 = shl nuw i16 1, %110
+  %119 = xor i16 %118, -1
+  %120 = and i16 %117, %119
+  store i16 %120, ptr @$var_heap.occupied, !tbaa !2
+  br label %114
+
+121:
+  %122 = getelementptr i8, ptr %94, i16 4
+  store ptr %97, ptr %122
+  br label %123
+
+123:
+  %124 = getelementptr i8, ptr %0, i16 %69
+  %125 = getelementptr i8, ptr %124, i16 -8
+  %126 = load i16, ptr %125
+  %127 = and i16 %126, -4
+  %128 = add i16 %127, %69
+  %129 = getelementptr i8, ptr %0, i16 -8
+  %130 = load i16, ptr %129
+  %131 = and i16 %130, 3
+  %132 = or disjoint i16 %128, %131
+  store i16 %132, ptr %129
+  %133 = getelementptr i8, ptr %0, i16 %128
+  %134 = getelementptr i8, ptr %133, i16 -8
+  %135 = load i16, ptr %134
+  %136 = or i16 %135, 2
+  store i16 %136, ptr %134
+  %137 = load i16, ptr %129
+  %138 = and i16 %137, -4
+  br label %77
+
+139:
+  %140 = and i16 %74, -4
+  %141 = add i16 %140, %69
+  %142 = icmp ult i16 %141, %66
+  br i1 %142, label %29, label %91
+
+143:
+  %144 = icmp eq i16 %2, 0
+  br i1 %144, label %53, label %145
+
+145:
+  %146 = udiv i16 -23, %2
+  %147 = icmp ugt i16 %25, %146
+  br i1 %147, label %29, label %53
 }
 
-define internal void @heap.grow(i16 %0) addrspace(1) {
+define cc 1005 void @N$BDRP(ptr %0) addrspace(1) "llrm-fp-eval"="x87-extended" memory(readwrite, inaccessiblemem: none) nounwind nofree nosync norecurse {
 b1:
-  %1 = icmp ugt i16 %0, 1024
-  br i1 %1, label %b4, label %b3
+  %1 = icmp eq ptr %0, null
+  br i1 %1, label %b4, label %2
 
-b3:
+b2:
+  tail call cc 1005 addrspace(1) void @heap.release(ptr %3)
   br label %b4
 
 b4:
-  %2 = phi i16 [ %0, %b1 ], [ 1024, %b3 ]
-  %3 = load ptr, ptr @$var_heap.end, !tbaa !2
-  %4 = icmp eq ptr %3, null
-  br i1 %4, label %b7, label %b6
-
-b6:
-  br label %b7
-
-b7:
-  %5 = phi i16 [ 2, %b4 ], [ 0, %b6 ]
-  %6 = add i16 %2, %5
-  %7 = call addrspace(1) ptr @N$OMEM(i16 %6)
-  %8 = icmp eq ptr %7, null
-  br i1 %8, label %b8, label %b10
-
-b8:
-  %9 = add i16 %0, %5
-  %10 = call addrspace(1) ptr @N$OMEM(i16 %9)
-  %11 = icmp eq ptr %10, null
-  br i1 %11, label %b11, label %b10
-
-b10:
-  %12 = phi i16 [ %2, %b7 ], [ %0, %b8 ]
-  %13 = phi ptr [ %7, %b7 ], [ %10, %b8 ]
-  br i1 %4, label %b16, label %b15
-
-b11:
   ret void
 
-b15:
-  %14 = load ptr, ptr @$var_heap.end, !tbaa !2
-  br label %b16
-
-b16:
-  %15 = phi ptr [ %13, %b10 ], [ %14, %b15 ]
-  br i1 %4, label %16, label %b19
-
-16:
-  store i16 2, ptr %15
-  br label %b19
-
-b19:
-  %17 = getelementptr i8, ptr %15, i16 %12
-  store ptr %17, ptr @$var_heap.end, !tbaa !2
-  store i16 3, ptr %17
-  %18 = or i16 %12, 1
-  %19 = load i16, ptr %15
-  %20 = and i16 %19, 2
-  %21 = or i16 %18, %20
-  store i16 %21, ptr %15
-  %22 = getelementptr i8, ptr %15, i16 2
-  call addrspace(1) void @heap.release(ptr %22)
-  ret void
+2:
+  %3 = getelementptr i8, ptr %0, i16 -6
+  %4 = load i8, ptr %3
+  %5 = zext i8 %4 to i16
+  %6 = and i16 %5, 1
+  %7 = icmp eq i16 %6, 0
+  br i1 %7, label %b4, label %b2
 }
 
-define internal void @heap.trim(ptr %0, i16 %1) addrspace(1) {
-b1:
-  %2 = load i16, ptr %0
-  %3 = and i16 %2, -4
-  %4 = sub i16 %3, %1
-  %5 = icmp ult i16 %4, 8
-  br i1 %5, label %b2, label %b3
-
-b2:
-  ret void
-
-b3:
-  %6 = getelementptr i8, ptr %0, i16 %1
-  %7 = or i16 %4, 3
-  store i16 %7, ptr %6
-  %8 = load i16, ptr %0
-  %9 = and i16 %8, 3
-  %10 = or i16 %1, %9
-  store i16 %10, ptr %0
-  %11 = getelementptr i8, ptr %6, i16 2
-  call addrspace(1) void @heap.release(ptr %11)
-  ret void
+define cc 1005 ptr @N$BGRW(ptr %0, i16 %1, i16 %2) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %4 = getelementptr i8, ptr %0, i16 -4
+  %5 = load i16, ptr %4
+  %6 = add i16 %5, %1
+  %7 = tail call cc 1005 addrspace(1) ptr @N$BRES(ptr %0, i16 %6, i16 %2)
+  %8 = getelementptr i8, ptr %7, i16 -4
+  store i16 %6, ptr %8
+  ret ptr %7
 }
 
-define internal ptr @heap.allocate(i16 %0) addrspace(1) {
-b1:
-  %1 = alloca [8 x i8]
-  %2 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 8, i1 false)
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 8, i1 false)
-  %3 = icmp ugt i16 %0, -16
-  br i1 %3, label %4, label %12
+define cc 1005 i16 @N$BSHR(ptr nocapture %0, i16 %1) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %3 = getelementptr i8, ptr %0, i16 -4
+  %4 = load i16, ptr %3
+  %5 = icmp ult i16 %4, %1
+  br i1 %5, label %6, label %b4
 
-4:
-  %5 = getelementptr i8, ptr @$str17, i16 6
-  %6 = getelementptr i8, ptr %5, i16 -4
-  %7 = load i16, ptr %6
-  %8 = addrspacecast ptr %5 to ptr addrspace(1)
-  store i16 %7, ptr %1
-  %9 = getelementptr inbounds i8, ptr %1, i16 2
-  store i16 %7, ptr %9
-  %10 = getelementptr inbounds i8, ptr %1, i16 4
-  store ptr addrspace(1) %8, ptr %10
-  %11 = addrspacecast ptr %1 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %11)
+6:
+  %7 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %8 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str19, i16 6) to ptr addrspace(1)), i16 21)
+  %9 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
+  br label %b4
+
+b4:
+  %10 = sub i16 %4, %1
+  %11 = getelementptr i8, ptr %0, i16 -4
+  store i16 %10, ptr %11
+  ret i16 %10
+}
+
+define cc 1005 ptr @N$BCLN(ptr readonly nocapture %0, i16 %1) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %3 = getelementptr i8, ptr %0, i16 -4
+  %4 = load i16, ptr %3
+  %5 = tail call cc 1005 addrspace(1) ptr @buffers.allocate(i16 %4, i16 %1)
+  %6 = mul i16 %4, %1
+  %7 = add i16 %6, 1
+  %8 = icmp eq i16 %7, 0
+  br i1 %8, label %19, label %9
+
+9:
+  %10 = mul i16 %4, %1
+  %11 = add i16 %10, 1
   br label %12
 
 12:
-  %13 = add i16 %0, 5
-  %14 = and i16 %13, -4
-  %15 = icmp ugt i16 %14, 8
-  br i1 %15, label %17, label %16
+  %13 = phi i16 [ %17, %12 ], [ 0, %9 ]
+  %14 = getelementptr i8, ptr %5, i16 %13
+  %15 = getelementptr i8, ptr %0, i16 %13
+  %16 = load i8, ptr %15
+  store i8 %16, ptr %14
+  %17 = add nuw i16 %13, 1
+  %18 = icmp eq i16 %11, %17
+  br i1 %18, label %19, label %12
 
-16:
-  br label %17
-
-17:
-  %18 = phi i16 [ %14, %12 ], [ 8, %16 ]
-  %19 = call addrspace(1) ptr @heap.fit(i16 %18)
-  %20 = icmp eq ptr %19, null
-  br i1 %20, label %b2, label %b4
-
-b2:
-  call addrspace(1) void @heap.grow(i16 %18)
-  %21 = call addrspace(1) ptr @heap.fit(i16 %18)
-  %22 = icmp eq ptr %21, null
-  br i1 %22, label %b5, label %b4
-
-b4:
-  %23 = phi ptr [ %19, %17 ], [ %21, %b5 ], [ %21, %b2 ]
-  call addrspace(1) void @heap.unlink(ptr %23)
-  %24 = load i16, ptr %23
-  %25 = and i16 %24, -4
-  %26 = or i16 %25, 1
-  %27 = and i16 %24, 2
-  %28 = or i16 %26, %27
-  store i16 %28, ptr %23
-  %29 = getelementptr i8, ptr %23, i16 %25
-  %30 = load i16, ptr %29
-  %31 = or i16 %30, 2
-  store i16 %31, ptr %29
-  %32 = load i16, ptr %23
-  %33 = and i16 %32, -4
-  %34 = sub i16 %33, %18
-  %35 = icmp ult i16 %34, 8
-  br i1 %35, label %43, label %36
-
-36:
-  %37 = getelementptr i8, ptr %23, i16 %18
-  %38 = or i16 %34, 3
-  store i16 %38, ptr %37
-  %39 = load i16, ptr %23
-  %40 = and i16 %39, 3
-  %41 = or i16 %18, %40
-  store i16 %41, ptr %23
-  %42 = getelementptr i8, ptr %37, i16 2
-  call addrspace(1) void @heap.release(ptr %42)
-  br label %43
-
-43:
-  %44 = getelementptr i8, ptr %23, i16 2
-  ret ptr %44
-
-b5:
-  %45 = getelementptr i8, ptr @$str17, i16 6
-  %46 = getelementptr i8, ptr %45, i16 -4
-  %47 = load i16, ptr %46
-  %48 = addrspacecast ptr %45 to ptr addrspace(1)
-  store i16 %47, ptr %2, !tbaa !2
-  %49 = getelementptr inbounds i8, ptr %2, i16 2
-  store i16 %47, ptr %49, !tbaa !2
-  %50 = getelementptr inbounds i8, ptr %2, i16 4
-  store ptr addrspace(1) %48, ptr %50, !tbaa !2
-  %51 = addrspacecast ptr %2 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %51)
-  br label %b4
+19:
+  %20 = getelementptr i8, ptr %5, i16 -4
+  store i16 %4, ptr %20
+  ret ptr %5
 }
 
-define internal void @heap.release(ptr %0) addrspace(1) {
-b1:
-  %1 = icmp eq ptr %0, null
-  br i1 %1, label %b2, label %b3
-
-b2:
-  ret void
-
-b3:
-  %2 = getelementptr i8, ptr %0, i16 -2
-  %3 = load i16, ptr %2
-  %4 = and i16 %3, -4
-  %5 = getelementptr i8, ptr %2, i16 %4
-  %6 = load i16, ptr %5
-  %7 = and i16 %6, 1
-  %8 = icmp eq i16 %7, 0
-  br i1 %8, label %b5, label %b7
-
-b5:
-  call addrspace(1) void @heap.unlink(ptr %5)
-  %9 = load i16, ptr %5
-  %10 = and i16 %9, -4
-  %11 = add i16 %4, %10
-  br label %b7
-
-b7:
-  %12 = phi i16 [ %11, %b5 ], [ %4, %b3 ]
-  %13 = load i16, ptr %2
-  %14 = and i16 %13, 2
-  %15 = icmp eq i16 %14, 0
-  br i1 %15, label %b8, label %b10
-
-b8:
-  %16 = getelementptr i8, ptr %2, i16 -2
-  %17 = load i16, ptr %16
-  %18 = sub i16 0, %17
-  %19 = getelementptr i8, ptr %2, i16 %18
-  call addrspace(1) void @heap.unlink(ptr %19)
-  %20 = add i16 %12, %17
-  br label %b10
-
-b10:
-  %21 = phi ptr [ %19, %b8 ], [ %2, %b7 ]
-  %22 = phi i16 [ %20, %b8 ], [ %12, %b7 ]
-  call addrspace(1) void @heap.insert(ptr %21, i16 %22)
-  ret void
-}
-
-define internal i8 @heap.resize(ptr %0, i16 %1) addrspace(1) {
-b1:
-  %2 = alloca [8 x i8]
-  %3 = getelementptr i8, ptr %0, i16 -2
-  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 8, i1 false)
-  %4 = icmp ugt i16 %1, -16
-  br i1 %4, label %5, label %13
-
-5:
-  %6 = getelementptr i8, ptr @$str17, i16 6
-  %7 = getelementptr i8, ptr %6, i16 -4
-  %8 = load i16, ptr %7
-  %9 = addrspacecast ptr %6 to ptr addrspace(1)
-  store i16 %8, ptr %2
-  %10 = getelementptr inbounds i8, ptr %2, i16 2
-  store i16 %8, ptr %10
-  %11 = getelementptr inbounds i8, ptr %2, i16 4
-  store ptr addrspace(1) %9, ptr %11
-  %12 = addrspacecast ptr %2 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %12)
-  br label %13
-
-13:
-  %14 = add i16 %1, 5
-  %15 = and i16 %14, -4
-  %16 = icmp ugt i16 %15, 8
-  br i1 %16, label %18, label %17
-
-17:
-  br label %18
-
-18:
-  %19 = phi i16 [ %15, %13 ], [ 8, %17 ]
-  %20 = load i16, ptr %3
-  %21 = and i16 %20, -4
-  %22 = icmp ult i16 %21, %19
-  br i1 %22, label %b2, label %28
-
-b2:
-  %23 = getelementptr i8, ptr %3, i16 %21
-  %24 = load i16, ptr %23
-  %25 = and i16 %24, 1
-  %26 = icmp ne i16 %25, 0
-  %27 = sext i1 %26 to i8
-  br i1 %26, label %b6, label %41
-
-28:
-  %29 = load i16, ptr %3
-  %30 = and i16 %29, -4
-  %31 = sub i16 %30, %19
-  %32 = icmp ult i16 %31, 8
-  br i1 %32, label %40, label %33
-
-33:
-  %34 = getelementptr i8, ptr %3, i16 %19
-  %35 = or i16 %31, 3
-  store i16 %35, ptr %34
-  %36 = load i16, ptr %3
-  %37 = and i16 %36, 3
-  %38 = or i16 %19, %37
-  store i16 %38, ptr %3
-  %39 = getelementptr i8, ptr %34, i16 2
-  call addrspace(1) void @heap.release(ptr %39)
-  br label %40
-
-40:
-  ret i8 -1
-
-41:
-  %42 = load i16, ptr %23
-  %43 = and i16 %42, -4
-  %44 = add i16 %21, %43
-  %45 = icmp ult i16 %44, %19
-  %46 = sext i1 %45 to i8
-  br label %b6
-
-b6:
-  %47 = phi i8 [ %27, %b2 ], [ %46, %41 ]
-  %48 = icmp ne i8 %47, 0
-  br i1 %48, label %b7, label %b8
-
-b7:
-  ret i8 0
-
-b8:
-  call addrspace(1) void @heap.unlink(ptr %23)
-  %49 = load i16, ptr %23
-  %50 = and i16 %49, -4
-  %51 = add i16 %21, %50
-  %52 = load i16, ptr %3
-  %53 = and i16 %52, 3
-  %54 = or i16 %51, %53
-  store i16 %54, ptr %3
-  %55 = getelementptr i8, ptr %3, i16 %51
-  %56 = load i16, ptr %55
-  %57 = or i16 %56, 2
-  store i16 %57, ptr %55
-  br label %28
-}
-
-define internal ptr @buffers.flags(ptr %0) addrspace(1) memory(none) willreturn {
-b1:
-  %1 = getelementptr i8, ptr %0, i16 -6
-  ret ptr %1
-}
-
-define internal ptr @buffers.length(ptr %0) addrspace(1) memory(none) willreturn {
-b1:
-  %1 = getelementptr i8, ptr %0, i16 -4
-  ret ptr %1
-}
-
-define internal ptr @buffers.capacity(ptr %0) addrspace(1) memory(none) willreturn {
-b1:
-  %1 = getelementptr i8, ptr %0, i16 -2
-  ret ptr %1
-}
-
-define internal void @buffers.copy(ptr %0, ptr addrspace(1) %1, i16 %2) addrspace(1) memory(argmem: readwrite) willreturn {
-b1:
-  br label %b2
-
-b2:
-  %3 = phi i16 [ 0, %b1 ], [ %8, %b3 ]
-  %4 = icmp ult i16 %3, %2
-  br i1 %4, label %b3, label %b5
-
-b3:
-  %5 = getelementptr i8, ptr %0, i16 %3
-  %6 = getelementptr i8, ptr addrspace(1) %1, i16 %3
-  %7 = load i8, ptr addrspace(1) %6
-  store i8 %7, ptr %5
-  %8 = add i16 %3, 1
-  br label %b2
-
-b5:
-  ret void
-}
-
-define internal i8 @buffers.fits(i16 %0, i16 %1) addrspace(1) memory(none) willreturn {
-b1:
-  %2 = icmp eq i16 %1, 0
-  %3 = sext i1 %2 to i8
-  br i1 %2, label %b3, label %b2
-
-b2:
-  %4 = udiv i16 -23, %1
-  %5 = icmp ule i16 %0, %4
-  %6 = sext i1 %5 to i8
-  br label %b3
-
-b3:
-  %7 = phi i8 [ %3, %b1 ], [ %6, %b2 ]
-  ret i8 %7
-}
-
-define internal ptr @buffers.allocate(i16 %0, i16 %1) addrspace(1) {
-b1:
-  %2 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 8, i1 false)
-  %3 = icmp eq i16 %1, 0
-  %4 = sext i1 %3 to i8
-  br i1 %3, label %9, label %5
-
-5:
-  %6 = udiv i16 -23, %1
-  %7 = icmp ule i16 %0, %6
-  %8 = sext i1 %7 to i8
-  br label %9
-
-9:
-  %10 = phi i8 [ %4, %b1 ], [ %8, %5 ]
-  %11 = xor i8 %10, -1
-  %12 = icmp ne i8 %11, 0
-  br i1 %12, label %b2, label %b4
-
-b2:
-  %13 = getelementptr i8, ptr @$str17, i16 6
-  %14 = getelementptr i8, ptr %13, i16 -4
-  %15 = load i16, ptr %14
-  %16 = addrspacecast ptr %13 to ptr addrspace(1)
-  store i16 %15, ptr %2, !tbaa !2
-  %17 = getelementptr inbounds i8, ptr %2, i16 2
-  store i16 %15, ptr %17, !tbaa !2
-  %18 = getelementptr inbounds i8, ptr %2, i16 4
-  store ptr addrspace(1) %16, ptr %18, !tbaa !2
-  %19 = addrspacecast ptr %2 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %19)
-  br label %b4
-
-b4:
-  %20 = mul i16 %0, %1
-  %21 = add i16 %20, 7
-  %22 = call addrspace(1) ptr @heap.allocate(i16 %21)
-  %23 = getelementptr i8, ptr %22, i16 6
-  %24 = getelementptr i8, ptr %23, i16 -6
-  store i8 1, ptr %24
-  %25 = getelementptr i8, ptr %24, i16 1
-  store i8 0, ptr %25
-  %26 = getelementptr i8, ptr %23, i16 -4
-  store i16 0, ptr %26
-  %27 = getelementptr i8, ptr %23, i16 -2
-  store i16 %0, ptr %27
-  store i8 0, ptr %23
-  ret ptr %23
-}
-
-define ptr @N$BRES(ptr %0, i16 %1, i16 %2) addrspace(1) {
-b1:
+define cc 1005 ptr @N$DRES(ptr %0, i16 %1) addrspace(1) "llrm-fp-eval"="x87-extended" {
   %3 = getelementptr i8, ptr %0, i16 -4
   %4 = load i16, ptr %3
   %5 = getelementptr i8, ptr %0, i16 -2
   %6 = load i16, ptr %5
-  %7 = icmp ult i16 %1, %4
-  br i1 %7, label %b4, label %b3
-
-b3:
-  br label %b4
-
-b4:
-  %8 = phi i16 [ %4, %b1 ], [ %1, %b3 ]
-  %9 = getelementptr i8, ptr %0, i16 -6
-  %10 = load i8, ptr %9
-  %11 = zext i8 %10 to i16
-  %12 = and i16 %11, 9
-  %13 = icmp eq i16 %12, 1
-  %14 = sext i1 %13 to i8
-  br i1 %13, label %b5, label %b6
-
-b5:
-  %15 = icmp uge i16 %6, %8
-  %16 = sext i1 %15 to i8
-  br label %b6
-
-b6:
-  %17 = phi i8 [ %14, %b4 ], [ %16, %b5 ]
-  %18 = icmp ne i8 %17, 0
-  br i1 %18, label %b7, label %b8
-
-b7:
-  ret ptr %0
-
-b8:
-  %19 = icmp ult i16 %6, -32768
-  br i1 %19, label %b10, label %b12
-
-b10:
-  %20 = shl i16 %6, 1
-  br label %b12
-
-b12:
-  %21 = phi i16 [ %20, %b10 ], [ %6, %b8 ]
-  %22 = icmp ult i16 %8, %21
-  %23 = sext i1 %22 to i8
-  br i1 %22, label %24, label %b14
-
-24:
-  %25 = icmp eq i16 %2, 0
-  %26 = sext i1 %25 to i8
-  br i1 %25, label %31, label %27
-
-27:
-  %28 = udiv i16 -23, %2
-  %29 = icmp ule i16 %21, %28
-  %30 = sext i1 %29 to i8
-  br label %31
-
-31:
-  %32 = phi i8 [ %26, %24 ], [ %30, %27 ]
-  br label %b14
-
-b14:
-  %33 = phi i8 [ %23, %b12 ], [ %32, %31 ]
-  %34 = icmp ne i8 %33, 0
-  br i1 %34, label %b17, label %b16
-
-b16:
-  br label %b17
-
-b17:
-  %35 = phi i16 [ %21, %b14 ], [ %8, %b16 ]
-  br i1 %13, label %36, label %b19
-
-36:
-  %37 = icmp eq i16 %2, 0
-  %38 = sext i1 %37 to i8
-  br i1 %37, label %43, label %39
-
-39:
-  %40 = udiv i16 -23, %2
-  %41 = icmp ule i16 %35, %40
-  %42 = sext i1 %41 to i8
-  br label %43
-
-43:
-  %44 = phi i8 [ %38, %36 ], [ %42, %39 ]
-  br label %b19
-
-b19:
-  %45 = phi i8 [ %14, %b17 ], [ %44, %43 ]
-  %46 = icmp ne i8 %45, 0
-  br i1 %46, label %b20, label %b21
-
-b20:
-  %47 = mul i16 %35, %2
-  %48 = add i16 %47, 7
-  %49 = call addrspace(1) i8 @heap.resize(ptr %9, i16 %48)
-  br label %b21
-
-b21:
-  %50 = phi i8 [ %45, %b19 ], [ %49, %b20 ]
-  %51 = icmp ne i8 %50, 0
-  br i1 %51, label %52, label %b23
-
-52:
-  store i16 %35, ptr %5
-  ret ptr %0
-
-b23:
-  %53 = call addrspace(1) ptr @buffers.allocate(i16 %35, i16 %2)
-  %54 = addrspacecast ptr %0 to ptr addrspace(1)
-  %55 = mul i16 %4, %2
-  %56 = add i16 %55, 1
-  br label %57
-
-57:
-  %58 = phi i16 [ 0, %b23 ], [ %64, %60 ]
-  %59 = icmp ult i16 %58, %56
-  br i1 %59, label %60, label %65
-
-60:
-  %61 = getelementptr i8, ptr %53, i16 %58
-  %62 = getelementptr i8, ptr addrspace(1) %54, i16 %58
-  %63 = load i8, ptr addrspace(1) %62
-  store i8 %63, ptr %61
-  %64 = add i16 %58, 1
-  br label %57
-
-65:
-  %66 = getelementptr i8, ptr %53, i16 -4
-  store i16 %4, ptr %66
-  %67 = icmp eq ptr %0, null
-  %68 = sext i1 %67 to i8
-  %69 = xor i8 %68, -1
-  %70 = icmp ne i8 %69, 0
-  br i1 %70, label %71, label %77
-
-71:
-  %72 = load i8, ptr %9
-  %73 = zext i8 %72 to i16
-  %74 = and i16 %73, 1
-  %75 = icmp ne i16 %74, 0
-  %76 = sext i1 %75 to i8
-  br label %77
-
-77:
-  %78 = phi i8 [ %69, %65 ], [ %76, %71 ]
-  %79 = icmp ne i8 %78, 0
-  br i1 %79, label %80, label %81
-
-80:
-  call addrspace(1) void @heap.release(ptr %9)
-  br label %81
-
-81:
-  ret ptr %53
-}
-
-define void @N$BDRP(ptr %0) addrspace(1) {
-b1:
-  %1 = icmp eq ptr %0, null
-  %2 = sext i1 %1 to i8
-  %3 = xor i8 %2, -1
-  %4 = icmp ne i8 %3, 0
-  br i1 %4, label %b2, label %b3
-
-b2:
-  %5 = getelementptr i8, ptr %0, i16 -6
-  %6 = load i8, ptr %5
-  %7 = zext i8 %6 to i16
-  %8 = and i16 %7, 1
-  %9 = icmp ne i16 %8, 0
-  %10 = sext i1 %9 to i8
-  br label %b3
-
-b3:
-  %11 = phi i8 [ %3, %b1 ], [ %10, %b2 ]
-  %12 = icmp ne i8 %11, 0
-  br i1 %12, label %b4, label %b6
-
-b4:
-  %13 = getelementptr i8, ptr %0, i16 -6
-  call addrspace(1) void @heap.release(ptr %13)
-  br label %b6
-
-b6:
-  ret void
-}
-
-define ptr @N$BGRW(ptr %0, i16 %1, i16 %2) addrspace(1) {
-b1:
-  %3 = getelementptr i8, ptr %0, i16 -4
-  %4 = load i16, ptr %3
-  %5 = add i16 %4, %1
-  %6 = call addrspace(1) ptr @N$BRES(ptr %0, i16 %5, i16 %2)
-  %7 = getelementptr i8, ptr %6, i16 -4
-  store i16 %5, ptr %7
-  ret ptr %6
-}
-
-define i16 @N$BSHR(ptr %0, i16 %1) addrspace(1) {
-b1:
-  %2 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 8, i1 false)
-  %3 = getelementptr i8, ptr %0, i16 -4
-  %4 = load i16, ptr %3
-  %5 = icmp ult i16 %4, %1
-  br i1 %5, label %b2, label %13
-
-b2:
-  %6 = getelementptr i8, ptr @$str18, i16 6
-  %7 = getelementptr i8, ptr %6, i16 -4
-  %8 = load i16, ptr %7
-  %9 = addrspacecast ptr %6 to ptr addrspace(1)
-  store i16 %8, ptr %2, !tbaa !2
-  %10 = getelementptr inbounds i8, ptr %2, i16 2
-  store i16 %8, ptr %10, !tbaa !2
-  %11 = getelementptr inbounds i8, ptr %2, i16 4
-  store ptr addrspace(1) %9, ptr %11, !tbaa !2
-  %12 = addrspacecast ptr %2 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %12)
-  br label %13
-
-13:
-  %14 = sub i16 %4, %1
-  store i16 %14, ptr %3
-  ret i16 %14
-}
-
-define ptr @N$BCLN(ptr %0, i16 %1) addrspace(1) {
-b1:
-  %2 = getelementptr i8, ptr %0, i16 -4
-  %3 = load i16, ptr %2
-  %4 = call addrspace(1) ptr @buffers.allocate(i16 %3, i16 %1)
-  %5 = addrspacecast ptr %0 to ptr addrspace(1)
-  %6 = mul i16 %3, %1
-  %7 = add i16 %6, 1
-  br label %8
-
-8:
-  %9 = phi i16 [ 0, %b1 ], [ %15, %11 ]
-  %10 = icmp ult i16 %9, %7
-  br i1 %10, label %11, label %16
-
-11:
-  %12 = getelementptr i8, ptr %4, i16 %9
-  %13 = getelementptr i8, ptr addrspace(1) %5, i16 %9
-  %14 = load i8, ptr addrspace(1) %13
-  store i8 %14, ptr %12
-  %15 = add i16 %9, 1
-  br label %8
-
-16:
-  %17 = getelementptr i8, ptr %4, i16 -4
-  store i16 %3, ptr %17
-  ret ptr %4
-}
-
-define ptr @N$DRES(ptr %0, i16 %1) addrspace(1) {
-b1:
-  %2 = getelementptr i8, ptr %0, i16 -4
-  %3 = load i16, ptr %2
-  %4 = getelementptr i8, ptr %0, i16 -2
-  %5 = load i16, ptr %4
-  %6 = add i16 %5, 1
   %7 = shl i16 %6, 2
-  %8 = mul i16 %3, 3
-  %9 = icmp ule i16 %7, %8
-  br i1 %9, label %b2, label %b3
+  %8 = add i16 %7, 4
+  %9 = mul i16 %4, 3
+  %10 = icmp ugt i16 %8, %9
+  br i1 %10, label %b4, label %common.ret
 
-b2:
-  ret ptr %0
+common.ret:
+  %common.op = phi ptr [ %0, %2 ], [ %15, %30 ], [ %15, %29 ]
+  ret ptr %common.op
 
-b3:
-  %10 = icmp ult i16 %3, 8
-  br i1 %10, label %b7, label %b6
+b4:
+  %11 = icmp ult i16 %4, 8
+  %12 = shl i16 %4, 1
+  %13 = select i1 %11, i16 8, i16 %12
+  %14 = add i16 %13, -1
+  %15 = tail call cc 1005 addrspace(1) ptr @buffers.allocate(i16 %13, i16 %1)
+  %16 = mul i16 %13, %1
+  %17 = icmp eq i16 %16, 0
+  br i1 %17, label %b11, label %18
 
-b6:
-  %11 = shl i16 %3, 1
-  br label %b7
-
-b7:
-  %12 = phi i16 [ 8, %b3 ], [ %11, %b6 ]
-  %13 = add i16 %12, -1
-  %14 = call addrspace(1) ptr @buffers.allocate(i16 %12, i16 %1)
-  %15 = mul i16 %12, %1
-  br label %b8
-
-b8:
-  %16 = phi i16 [ 0, %b7 ], [ %19, %b9 ]
-  %17 = icmp ult i16 %16, %15
-  br i1 %17, label %b9, label %b11
-
-b9:
-  %18 = getelementptr i8, ptr %14, i16 %16
-  store i8 0, ptr %18
-  %19 = add i16 %16, 1
-  br label %b8
+18:
+  tail call void @llvm.memset.p0.i16(ptr align 1 %15, i8 0, i16 %16, i1 false)
+  br label %b11
 
 b11:
-  br label %b12
+  %19 = icmp eq i16 %4, 0
+  br i1 %19, label %30, label %20
 
-b12:
-  %20 = phi i16 [ 0, %b11 ], [ %26, %b14 ]
-  %21 = icmp ult i16 %20, %3
-  br i1 %21, label %b13, label %27
+20:
+  br label %b13
 
 b13:
-  %22 = mul i16 %20, %1
-  %23 = getelementptr i8, ptr %0, i16 %22
-  %24 = load i16, ptr %23
-  %25 = icmp eq i16 %24, 0
-  br i1 %25, label %b14, label %b17
+  %21 = phi ptr [ %28, %b14 ], [ %0, %20 ]
+  %22 = phi i16 [ 0, %20 ], [ %27, %b14 ]
+  %23 = mul i16 %22, %1
+  %24 = getelementptr i8, ptr %0, i16 %23
+  %25 = load i16, ptr %24
+  %26 = icmp eq i16 %25, 0
+  br i1 %26, label %b14, label %b18
 
 b14:
-  %26 = add i16 %20, 1
-  br label %b12
+  %27 = add nuw i16 %22, 1
+  %exitcond1 = icmp eq i16 %27, %4
+  %28 = getelementptr i8, ptr %21, i16 %1
+  br i1 %exitcond1, label %30, label %b13
 
-27:
-  %28 = getelementptr i8, ptr %14, i16 -4
-  store i16 %12, ptr %28
-  %29 = getelementptr i8, ptr %14, i16 -2
-  store i16 %5, ptr %29
-  %30 = icmp eq ptr %0, null
-  %31 = sext i1 %30 to i8
-  %32 = xor i8 %31, -1
-  %33 = icmp ne i8 %32, 0
-  br i1 %33, label %34, label %41
+29:
+  tail call cc 1005 addrspace(1) void @heap.release(ptr %33)
+  br label %common.ret
 
-34:
-  %35 = getelementptr i8, ptr %0, i16 -6
-  %36 = load i8, ptr %35
-  %37 = zext i8 %36 to i16
-  %38 = and i16 %37, 1
-  %39 = icmp ne i16 %38, 0
-  %40 = sext i1 %39 to i8
-  br label %41
+30:
+  %31 = getelementptr i8, ptr %15, i16 -4
+  store i16 %13, ptr %31
+  %32 = getelementptr i8, ptr %15, i16 -2
+  store i16 %6, ptr %32
+  %33 = getelementptr i8, ptr %0, i16 -6
+  %34 = load i8, ptr %33, align 2
+  %35 = zext i8 %34 to i16
+  %36 = and i16 %35, 1
+  %37 = icmp eq i16 %36, 0
+  br i1 %37, label %common.ret, label %29
 
-41:
-  %42 = phi i8 [ %32, %27 ], [ %40, %34 ]
-  %43 = icmp ne i8 %42, 0
-  br i1 %43, label %44, label %46
+b18:
+  %38 = and i16 %25, %14
+  %39 = mul i16 %38, %1
+  %40 = getelementptr i8, ptr %15, i16 %39
+  %41 = load i16, ptr %40
+  %42 = icmp eq i16 %41, 0
+  br i1 %42, label %51, label %43
 
-44:
-  %45 = getelementptr i8, ptr %0, i16 -6
-  call addrspace(1) void @heap.release(ptr %45)
-  br label %46
-
-46:
-  ret ptr %14
-
-b17:
-  %47 = and i16 %24, %13
-  br label %b19
-
-b19:
-  %48 = phi i16 [ %47, %b17 ], [ %54, %b20 ]
-  %49 = mul i16 %48, %1
-  %50 = getelementptr i8, ptr %14, i16 %49
-  %51 = load i16, ptr %50
-  %52 = icmp ne i16 %51, 0
-  br i1 %52, label %b20, label %b21
+43:
+  br label %b20
 
 b20:
-  %53 = add i16 %48, 1
-  %54 = and i16 %53, %13
-  br label %b19
+  %44 = phi i16 [ %46, %b20 ], [ %38, %43 ]
+  %45 = add i16 %44, 1
+  %46 = and i16 %45, %14
+  %47 = mul i16 %46, %1
+  %48 = getelementptr i8, ptr %15, i16 %47
+  %49 = load i16, ptr %48
+  %50 = icmp eq i16 %49, 0
+  br i1 %50, label %51, label %b20
 
-b21:
-  %55 = addrspacecast ptr %23 to ptr addrspace(1)
+51:
+  %52 = phi i16 [ %39, %b18 ], [ %47, %b20 ]
+  %53 = icmp eq i16 %1, 0
+  br i1 %53, label %b14, label %54
+
+54:
+  %55 = getelementptr i8, ptr %15, i16 %52
   br label %56
 
 56:
-  %57 = phi i16 [ 0, %b21 ], [ %63, %59 ]
-  %58 = icmp ult i16 %57, %1
-  br i1 %58, label %59, label %b14
-
-59:
-  %60 = getelementptr i8, ptr %50, i16 %57
-  %61 = getelementptr i8, ptr addrspace(1) %55, i16 %57
-  %62 = load i8, ptr addrspace(1) %61
-  store i8 %62, ptr %60
-  %63 = add i16 %57, 1
-  br label %56
+  %57 = phi i16 [ %61, %56 ], [ 0, %54 ]
+  %58 = getelementptr i8, ptr %55, i16 %57
+  %59 = getelementptr i8, ptr %21, i16 %57
+  %60 = load i8, ptr %59
+  store i8 %60, ptr %58
+  %61 = add nuw i16 %57, 1
+  %exitcond = icmp eq i16 %1, %61
+  br i1 %exitcond, label %b14, label %56
 }
 
-define internal ptr @strings.append_bytes(ptr %0, ptr addrspace(1) %1, i16 %2) addrspace(1) {
-b1:
-  %3 = getelementptr i8, ptr %0, i16 -4
-  %4 = load i16, ptr %3
-  %5 = add i16 %4, %2
-  %6 = call addrspace(1) ptr @N$BRES(ptr %0, i16 %5, i16 1)
-  %7 = getelementptr i8, ptr %6, i16 %4
-  br label %8
-
-8:
-  %9 = phi i16 [ 0, %b1 ], [ %15, %11 ]
-  %10 = icmp ult i16 %9, %2
-  br i1 %10, label %11, label %16
-
-11:
-  %12 = getelementptr i8, ptr %7, i16 %9
-  %13 = getelementptr i8, ptr addrspace(1) %1, i16 %9
-  %14 = load i8, ptr addrspace(1) %13
-  store i8 %14, ptr %12
-  %15 = add i16 %9, 1
-  br label %8
-
-16:
-  %17 = getelementptr i8, ptr %6, i16 -4
-  store i16 %5, ptr %17
-  %18 = getelementptr i8, ptr %6, i16 %5
-  store i8 0, ptr %18
-  ret ptr %6
-}
-
-define ptr @N$TAPP(ptr %0, ptr %1) addrspace(1) {
-b1:
-  %2 = addrspacecast ptr %1 to ptr addrspace(1)
+define cc 1005 ptr @N$TAPP(ptr %0, ptr readonly nocapture %1) addrspace(1) "llrm-fp-eval"="x87-extended" {
   %3 = getelementptr i8, ptr %1, i16 -4
   %4 = load i16, ptr %3
   %5 = getelementptr i8, ptr %0, i16 -4
   %6 = load i16, ptr %5
   %7 = add i16 %6, %4
-  %8 = call addrspace(1) ptr @N$BRES(ptr %0, i16 %7, i16 1)
-  %9 = getelementptr i8, ptr %8, i16 %6
-  br label %10
+  %8 = tail call cc 1005 addrspace(1) ptr @N$BRES(ptr %0, i16 %7, i16 1)
+  %9 = icmp eq i16 %4, 0
+  br i1 %9, label %18, label %10
 
 10:
-  %11 = phi i16 [ 0, %b1 ], [ %17, %13 ]
-  %12 = icmp ult i16 %11, %4
-  br i1 %12, label %13, label %18
+  %11 = getelementptr i8, ptr %8, i16 %6
+  br label %12
 
-13:
-  %14 = getelementptr i8, ptr %9, i16 %11
-  %15 = getelementptr i8, ptr addrspace(1) %2, i16 %11
-  %16 = load i8, ptr addrspace(1) %15
+12:
+  %13 = phi i16 [ %17, %12 ], [ 0, %10 ]
+  %14 = getelementptr i8, ptr %11, i16 %13
+  %15 = getelementptr i8, ptr %1, i16 %13
+  %16 = load i8, ptr %15
   store i8 %16, ptr %14
-  %17 = add i16 %11, 1
-  br label %10
+  %17 = add nuw i16 %13, 1
+  %exitcond = icmp eq i16 %4, %17
+  br i1 %exitcond, label %18, label %12
 
 18:
   %19 = getelementptr i8, ptr %8, i16 -4
@@ -1349,2901 +1102,2120 @@ b1:
   ret ptr %8
 }
 
-define ptr @N$TCAT(ptr %0, ptr %1) addrspace(1) {
-b1:
-  %2 = getelementptr i8, ptr %0, i16 -4
-  %3 = load i16, ptr %2
-  %4 = getelementptr i8, ptr %1, i16 -4
-  %5 = load i16, ptr %4
-  %6 = add i16 %3, %5
-  %7 = call addrspace(1) ptr @buffers.allocate(i16 %6, i16 1)
-  %8 = addrspacecast ptr %0 to ptr addrspace(1)
-  br label %9
+define cc 1005 ptr @N$TCAT(ptr readonly nocapture %0, ptr nocapture readonly %1) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %3 = getelementptr i8, ptr %0, i16 -4
+  %4 = load i16, ptr %3
+  %5 = getelementptr i8, ptr %1, i16 -4
+  %6 = load i16, ptr %5
+  %7 = add i16 %6, %4
+  %8 = icmp ugt i16 %7, -23
+  br i1 %8, label %9, label %13
 
 9:
-  %10 = phi i16 [ 0, %b1 ], [ %16, %12 ]
-  %11 = icmp ult i16 %10, %3
-  br i1 %11, label %12, label %17
-
-12:
-  %13 = getelementptr i8, ptr %7, i16 %10
-  %14 = getelementptr i8, ptr addrspace(1) %8, i16 %10
-  %15 = load i8, ptr addrspace(1) %14
-  store i8 %15, ptr %13
-  %16 = add i16 %10, 1
-  br label %9
-
-17:
-  %18 = getelementptr i8, ptr %7, i16 -4
-  store i16 %3, ptr %18
-  %19 = addrspacecast ptr %1 to ptr addrspace(1)
-  %20 = load i16, ptr %4
-  %21 = add i16 %3, %20
-  %22 = call addrspace(1) ptr @N$BRES(ptr %7, i16 %21, i16 1)
-  %23 = getelementptr i8, ptr %22, i16 %3
-  br label %24
-
-24:
-  %25 = phi i16 [ 0, %17 ], [ %31, %27 ]
-  %26 = icmp ult i16 %25, %20
-  br i1 %26, label %27, label %32
-
-27:
-  %28 = getelementptr i8, ptr %23, i16 %25
-  %29 = getelementptr i8, ptr addrspace(1) %19, i16 %25
-  %30 = load i8, ptr addrspace(1) %29
-  store i8 %30, ptr %28
-  %31 = add i16 %25, 1
-  br label %24
-
-32:
-  %33 = getelementptr i8, ptr %22, i16 -4
-  store i16 %21, ptr %33
-  %34 = getelementptr i8, ptr %22, i16 %21
-  store i8 0, ptr %34
-  ret ptr %22
-}
-
-define ptr @N$VCPY(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1) {
-b1:
-  %1 = load i16, ptr addrspace(1) %0
-  %2 = call addrspace(1) ptr @buffers.allocate(i16 %1, i16 1)
-  %3 = getelementptr i8, ptr addrspace(1) %0, i16 4
-  %4 = load ptr addrspace(1), ptr addrspace(1) %3
-  br label %5
-
-5:
-  %6 = phi i16 [ 0, %b1 ], [ %12, %8 ]
-  %7 = icmp ult i16 %6, %1
-  br i1 %7, label %8, label %13
-
-8:
-  %9 = getelementptr i8, ptr %2, i16 %6
-  %10 = getelementptr i8, ptr addrspace(1) %4, i16 %6
-  %11 = load i8, ptr addrspace(1) %10
-  store i8 %11, ptr %9
-  %12 = add i16 %6, 1
-  br label %5
+  %10 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %11 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str18, i16 6) to ptr addrspace(1)), i16 13)
+  %12 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
+  br label %13
 
 13:
-  %14 = getelementptr i8, ptr %2, i16 %1
-  store i8 0, ptr %14
-  %15 = getelementptr i8, ptr %2, i16 -4
-  store i16 %1, ptr %15
-  ret ptr %2
+  %14 = add i16 %7, 7
+  %15 = tail call cc 1005 addrspace(1) ptr @heap.allocate(i16 %14)
+  %16 = getelementptr i8, ptr %15, i16 6
+  store i8 1, ptr %15
+  %17 = getelementptr i8, ptr %15, i16 1
+  store i8 0, ptr %17
+  %18 = getelementptr i8, ptr %15, i16 2
+  store i16 0, ptr %18
+  %19 = getelementptr i8, ptr %15, i16 4
+  store i16 %7, ptr %19
+  store i8 0, ptr %16, align 2
+  %20 = icmp eq i16 %4, 0
+  br i1 %20, label %29, label %21
+
+21:
+  br label %22
+
+22:
+  %23 = phi i16 [ %28, %22 ], [ 0, %21 ]
+  %24 = getelementptr i8, ptr %0, i16 %23
+  %25 = load i8, ptr %24
+  %26 = getelementptr i8, ptr %15, i16 %23
+  %27 = getelementptr i8, ptr %26, i16 6
+  store i8 %25, ptr %27
+  %28 = add nuw i16 %23, 1
+  %exitcond1 = icmp eq i16 %4, %28
+  br i1 %exitcond1, label %29, label %22
+
+29:
+  %30 = getelementptr i8, ptr %15, i16 2
+  store i16 %4, ptr %30
+  %31 = getelementptr i8, ptr %1, i16 -4
+  %32 = load i16, ptr %31
+  %33 = add i16 %32, %4
+  %34 = tail call cc 1005 addrspace(1) ptr @N$BRES(ptr %16, i16 %33, i16 1)
+  %35 = icmp eq i16 %32, 0
+  br i1 %35, label %44, label %36
+
+36:
+  %37 = getelementptr i8, ptr %34, i16 %4
+  br label %38
+
+38:
+  %39 = phi i16 [ %43, %38 ], [ 0, %36 ]
+  %40 = getelementptr i8, ptr %37, i16 %39
+  %41 = getelementptr i8, ptr %1, i16 %39
+  %42 = load i8, ptr %41
+  store i8 %42, ptr %40
+  %43 = add nuw i16 %39, 1
+  %exitcond = icmp eq i16 %32, %43
+  br i1 %exitcond, label %44, label %38
+
+44:
+  %45 = getelementptr i8, ptr %34, i16 -4
+  store i16 %33, ptr %45
+  %46 = getelementptr i8, ptr %34, i16 %33
+  store i8 0, ptr %46
+  ret ptr %34
 }
 
-define i8 @N$VCMP(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1) addrspace(1) willreturn {
+define cc 1005 ptr @N$VCPY(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %2 = load i16, ptr addrspace(1) %0
+  %3 = icmp ugt i16 %2, -23
+  br i1 %3, label %4, label %8
+
+4:
+  %5 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str10, i16 6) to ptr addrspace(1)), i16 7)
+  %6 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str18, i16 6) to ptr addrspace(1)), i16 13)
+  %7 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  tail call addrspace(1) void @LL$EXIT(i8 zeroext -1)
+  br label %8
+
+8:
+  %9 = add i16 %2, 7
+  %10 = tail call cc 1005 addrspace(1) ptr @heap.allocate(i16 %9)
+  %11 = getelementptr i8, ptr %10, i16 6
+  store i8 1, ptr %10
+  %12 = getelementptr i8, ptr %10, i16 1
+  store i8 0, ptr %12
+  %13 = getelementptr i8, ptr %10, i16 2
+  store i16 0, ptr %13
+  %14 = getelementptr i8, ptr %10, i16 4
+  store i16 %2, ptr %14
+  store i8 0, ptr %11, align 2
+  %15 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 4
+  %16 = load ptr addrspace(1), ptr addrspace(1) %15
+  %17 = icmp eq i16 %2, 0
+  br i1 %17, label %26, label %18
+
+18:
+  br label %19
+
+19:
+  %20 = phi i16 [ %25, %19 ], [ 0, %18 ]
+  %21 = getelementptr i8, ptr addrspace(1) %16, i16 %20
+  %22 = load i8, ptr addrspace(1) %21
+  %23 = getelementptr i8, ptr %10, i16 %20
+  %24 = getelementptr i8, ptr %23, i16 6
+  store i8 %22, ptr %24
+  %25 = add nuw i16 %20, 1
+  %exitcond = icmp eq i16 %2, %25
+  br i1 %exitcond, label %26, label %19
+
+26:
+  %27 = getelementptr i8, ptr %10, i16 %2
+  %28 = getelementptr i8, ptr %27, i16 6
+  store i8 0, ptr %28
+  %29 = getelementptr i8, ptr %10, i16 2
+  store i16 %2, ptr %29
+  ret ptr %11
+}
+
+define cc 1005 range(i8 -1, 2) i8 @N$VCMP(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) "llrm-fp-eval"="x87-extended" memory(read, inaccessiblemem: none) nounwind nofree nosync norecurse {
 b1:
   %2 = load i16, ptr addrspace(1) %0
   %3 = load i16, ptr addrspace(1) %1
-  %4 = icmp ult i16 %2, %3
-  br i1 %4, label %b4, label %b3
-
-b3:
-  br label %b4
-
-b4:
-  %5 = phi i16 [ %2, %b1 ], [ %3, %b3 ]
-  %6 = getelementptr i8, ptr addrspace(1) %0, i16 4
-  %7 = load ptr addrspace(1), ptr addrspace(1) %6
-  %8 = getelementptr i8, ptr addrspace(1) %1, i16 4
-  %9 = load ptr addrspace(1), ptr addrspace(1) %8
-  br label %b5
-
-b5:
-  %10 = phi i16 [ 0, %b4 ], [ %21, %b11 ]
-  %11 = icmp ult i16 %10, %5
-  br i1 %11, label %b6, label %b8
-
-b6:
-  %12 = getelementptr i8, ptr addrspace(1) %7, i16 %10
-  %13 = load i8, ptr addrspace(1) %12
-  %14 = getelementptr i8, ptr addrspace(1) %9, i16 %10
-  %15 = load i8, ptr addrspace(1) %14
-  %16 = icmp ne i8 %13, %15
-  br i1 %16, label %b9, label %b11
-
-b8:
-  %17 = icmp eq i16 %2, %3
-  br i1 %17, label %b15, label %b16
-
-b9:
-  %18 = load i8, ptr addrspace(1) %12
-  %19 = load i8, ptr addrspace(1) %14
-  %20 = icmp ult i8 %18, %19
-  br i1 %20, label %b14, label %b13
-
-b11:
-  %21 = add i16 %10, 1
-  br label %b5
-
-b13:
-  br label %b14
-
-b14:
-  %22 = phi i8 [ -1, %b9 ], [ 1, %b13 ]
-  ret i8 %22
-
-b15:
-  ret i8 0
-
-b16:
-  br i1 %4, label %b20, label %b19
-
-b19:
-  br label %b20
-
-b20:
-  %23 = phi i8 [ -1, %b16 ], [ 1, %b19 ]
-  ret i8 %23
-}
-
-define internal ptr @format.scratch_at(i16 %0) addrspace(1) memory(none) willreturn {
-b1:
-  %1 = getelementptr i8, ptr @$var_format.scratch, i16 %0
-  ret ptr %1
-}
-
-define internal void @format.put(ptr addrspace(1) %0, i16 %1) addrspace(1) {
-b1:
-  %2 = load ptr, ptr @$var_format.sink, !tbaa !2
-  %3 = icmp eq ptr %2, null
-  br i1 %3, label %b2, label %b3
-
-b2:
-  %4 = call addrspace(1) i16 @N$OWRI(i16 1, ptr addrspace(1) %0, i16 %1)
-  br label %b4
-
-b3:
-  %5 = getelementptr i8, ptr %2, i16 -4
-  %6 = load i16, ptr %5
-  %7 = add i16 %6, %1
-  %8 = call addrspace(1) ptr @N$BRES(ptr %2, i16 %7, i16 1)
-  %9 = getelementptr i8, ptr %8, i16 %6
-  br label %10
+  %4 = tail call i16 @llvm.umin.i16(i16 %2, i16 %3)
+  %5 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 4
+  %6 = load ptr addrspace(1), ptr addrspace(1) %5
+  %7 = getelementptr inbounds nuw i8, ptr addrspace(1) %1, i16 4
+  %8 = load ptr addrspace(1), ptr addrspace(1) %7
+  %9 = icmp eq i16 %4, 0
+  br i1 %9, label %b8, label %10
 
 10:
-  %11 = phi i16 [ 0, %b3 ], [ %17, %13 ]
-  %12 = icmp ult i16 %11, %1
-  br i1 %12, label %13, label %18
-
-13:
-  %14 = getelementptr i8, ptr %9, i16 %11
-  %15 = getelementptr i8, ptr addrspace(1) %0, i16 %11
-  %16 = load i8, ptr addrspace(1) %15
-  store i8 %16, ptr %14
-  %17 = add i16 %11, 1
-  br label %10
-
-18:
-  %19 = getelementptr i8, ptr %8, i16 -4
-  store i16 %7, ptr %19
-  %20 = getelementptr i8, ptr %8, i16 %7
-  store i8 0, ptr %20
-  store ptr %8, ptr @$var_format.sink, !tbaa !2
-  br label %b4
-
-b4:
-  ret void
-}
-
-define internal void @format.put_text(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1) {
-b1:
-  %1 = getelementptr i8, ptr addrspace(1) %0, i16 4
-  %2 = load ptr addrspace(1), ptr addrspace(1) %1
-  %3 = load i16, ptr addrspace(1) %0
-  %4 = load ptr, ptr @$var_format.sink
-  %5 = icmp eq ptr %4, null
-  br i1 %5, label %6, label %8
-
-6:
-  %7 = call addrspace(1) i16 @N$OWRI(i16 1, ptr addrspace(1) %2, i16 %3)
-  br label %25
-
-8:
-  %9 = getelementptr i8, ptr %4, i16 -4
-  %10 = load i16, ptr %9
-  %11 = add i16 %10, %3
-  %12 = call addrspace(1) ptr @N$BRES(ptr %4, i16 %11, i16 1)
-  %13 = getelementptr i8, ptr %12, i16 %10
-  br label %14
-
-14:
-  %15 = phi i16 [ 0, %8 ], [ %21, %17 ]
-  %16 = icmp ult i16 %15, %3
-  br i1 %16, label %17, label %22
-
-17:
-  %18 = getelementptr i8, ptr %13, i16 %15
-  %19 = getelementptr i8, ptr addrspace(1) %2, i16 %15
-  %20 = load i8, ptr addrspace(1) %19
-  store i8 %20, ptr %18
-  %21 = add i16 %15, 1
-  br label %14
-
-22:
-  %23 = getelementptr i8, ptr %12, i16 -4
-  store i16 %11, ptr %23
-  %24 = getelementptr i8, ptr %12, i16 %11
-  store i8 0, ptr %24
-  store ptr %12, ptr @$var_format.sink
-  br label %25
-
-25:
-  ret void
-}
-
-define internal void @format.pad(i16 %0) addrspace(1) {
-b1:
-  %1 = addrspacecast ptr @$var_format.fill to ptr addrspace(1)
-  br label %b2
-
-b2:
-  %2 = phi i16 [ 0, %b1 ], [ %26, %25 ]
-  %3 = icmp ult i16 %2, %0
-  br i1 %3, label %b3, label %b5
-
-b3:
-  %4 = load ptr, ptr @$var_format.sink
-  %5 = icmp eq ptr %4, null
-  br i1 %5, label %6, label %8
-
-6:
-  %7 = call addrspace(1) i16 @N$OWRI(i16 1, ptr addrspace(1) %1, i16 1)
-  br label %25
-
-8:
-  %9 = getelementptr i8, ptr %4, i16 -4
-  %10 = load i16, ptr %9
-  %11 = add i16 %10, 1
-  %12 = call addrspace(1) ptr @N$BRES(ptr %4, i16 %11, i16 1)
-  %13 = getelementptr i8, ptr %12, i16 %10
-  br label %14
-
-14:
-  %15 = phi i16 [ 0, %8 ], [ %21, %17 ]
-  %16 = icmp ult i16 %15, 1
-  br i1 %16, label %17, label %22
-
-17:
-  %18 = getelementptr i8, ptr %13, i16 %15
-  %19 = getelementptr i8, ptr addrspace(1) %1, i16 %15
-  %20 = load i8, ptr addrspace(1) %19
-  store i8 %20, ptr %18
-  %21 = add i16 %15, 1
-  br label %14
-
-22:
-  %23 = getelementptr i8, ptr %12, i16 -4
-  store i16 %11, ptr %23
-  %24 = getelementptr i8, ptr %12, i16 %11
-  store i8 0, ptr %24
-  store ptr %12, ptr @$var_format.sink
-  br label %25
-
-25:
-  %26 = add i16 %2, 1
-  br label %b2
+  %11 = call i16 @llvm.umin.i16(i16 %3, i16 %2)
+  br label %b6
 
 b5:
-  ret void
+  %12 = add nuw i16 %13, 1
+  %exitcond = icmp eq i16 %11, %12
+  br i1 %exitcond, label %b8, label %b6
+
+b6:
+  %13 = phi i16 [ %12, %b5 ], [ 0, %10 ]
+  %14 = getelementptr i8, ptr addrspace(1) %6, i16 %13
+  %15 = load i8, ptr addrspace(1) %14
+  %16 = getelementptr i8, ptr addrspace(1) %8, i16 %13
+  %17 = load i8, ptr addrspace(1) %16
+  %18 = icmp eq i8 %15, %17
+  br i1 %18, label %b5, label %b9
+
+b8:
+  %19 = icmp ult i16 %2, %3
+  %20 = icmp eq i16 %2, %3
+  %21 = select i1 %19, i8 -1, i8 1
+  %22 = select i1 %20, i8 0, i8 %21
+  br label %common.ret
+
+b9:
+  %23 = icmp ult i8 %15, %17
+  %24 = select i1 %23, i8 -1, i8 1
+  br label %common.ret
+
+common.ret:
+  %common.op = phi i8 [ %24, %b9 ], [ %22, %b8 ]
+  ret i8 %common.op
 }
 
-define internal i16 @format.open(i16 %0) addrspace(1) {
-b1:
-  %1 = load i8, ptr @$var_format.width, !tbaa !2
-  %2 = zext i8 %1 to i16
-  %3 = icmp ugt i16 %2, %0
-  br i1 %3, label %b2, label %b4
-
-b2:
-  %4 = sub i16 %2, %0
-  br label %b4
-
-b4:
-  %5 = phi i16 [ %4, %b2 ], [ 0, %b1 ]
+define internal cc 1006 void @format.field(ptr addrspace(1) %0, i16 %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
+  %3 = load i8, ptr @$var_format.width, !tbaa !2
+  %4 = zext i8 %3 to i16
+  %5 = zext i8 %3 to i16
+  %6 = zext i8 %3 to i16
+  %7 = icmp ugt i16 %6, %1
+  %8 = sub nsw i16 %6, %1
+  %9 = select i1 %7, i16 %8, i16 0
   store i8 0, ptr @$var_format.width, !tbaa !2
   store i8 10, ptr @$var_format.radix, !tbaa !2
-  %6 = load i8, ptr @$var_format.left, !tbaa !2
-  %7 = xor i8 %6, -1
-  %8 = icmp ne i8 %7, 0
-  br i1 %8, label %b5, label %b7
+  %10 = load i8, ptr @$var_format.left, !tbaa !2, !range !18
+  %11 = icmp ne i8 %10, 0
+  %12 = icmp eq i16 %9, 0
+  %or.cond1 = select i1 %11, i1 true, i1 %12
+  %13 = load ptr, ptr @$var_format.sink, !tbaa !2
+  br i1 %or.cond1, label %36, label %14
 
-b5:
-  call addrspace(1) void @format.pad(i16 %5)
-  br label %b7
+14:
+  %15 = call i16 @llvm.umax.i16(i16 %1, i16 %5)
+  %16 = sub i16 %15, %1
+  br label %17
 
-b7:
-  ret i16 %5
-}
+17:
+  %18 = phi i16 [ %16, %14 ], [ %35, %33 ]
+  %19 = phi ptr [ %34, %33 ], [ %13, %14 ]
+  %20 = icmp eq ptr %19, null
+  br i1 %20, label %21, label %24
 
-define internal void @format.close(i16 %0) addrspace(1) {
-b1:
-  %1 = load i8, ptr @$var_format.left, !tbaa !2
-  %2 = icmp ne i8 %1, 0
-  br i1 %2, label %b2, label %b4
+21:
+  %22 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr @$var_format.fill to ptr addrspace(1)), i16 1)
+  %23 = load ptr, ptr @$var_format.sink, !tbaa !2
+  br label %33
 
-b2:
-  call addrspace(1) void @format.pad(i16 %0)
-  br label %b4
+24:
+  %25 = getelementptr i8, ptr %19, i16 -4
+  %26 = load i16, ptr %25
+  %27 = add i16 %26, 1
+  %28 = tail call cc 1005 addrspace(1) ptr @N$BRES(ptr nonnull %19, i16 %27, i16 1)
+  %29 = getelementptr i8, ptr %28, i16 %26
+  %30 = load i8, ptr @$var_format.fill
+  store i8 %30, ptr %29
+  %31 = getelementptr i8, ptr %28, i16 -4
+  store i16 %27, ptr %31
+  %32 = getelementptr i8, ptr %28, i16 %27
+  store i8 0, ptr %32
+  store ptr %28, ptr @$var_format.sink, !tbaa !2
+  br label %33
 
-b4:
+33:
+  %34 = phi ptr [ %23, %21 ], [ %28, %24 ]
+  %35 = add i16 %18, -1
+  %exitcond11 = icmp eq i16 %35, 0
+  br i1 %exitcond11, label %36, label %17
+
+36:
+  %37 = phi ptr [ %13, %2 ], [ %34, %33 ]
+  %38 = icmp eq ptr %37, null
+  br i1 %38, label %39, label %41
+
+39:
+  %40 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) %0, i16 %1)
+  br label %58
+
+41:
+  %42 = getelementptr i8, ptr %37, i16 -4
+  %43 = load i16, ptr %42
+  %44 = add i16 %43, %1
+  %45 = tail call cc 1005 addrspace(1) ptr @N$BRES(ptr nonnull %37, i16 %44, i16 1)
+  %46 = icmp eq i16 %1, 0
+  br i1 %46, label %55, label %47
+
+47:
+  %48 = getelementptr i8, ptr %45, i16 %43
+  br label %49
+
+49:
+  %50 = phi i16 [ %54, %49 ], [ 0, %47 ]
+  %51 = getelementptr i8, ptr %48, i16 %50
+  %52 = getelementptr i8, ptr addrspace(1) %0, i16 %50
+  %53 = load i8, ptr addrspace(1) %52
+  store i8 %53, ptr %51
+  %54 = add nuw i16 %50, 1
+  %exitcond = icmp eq i16 %1, %54
+  br i1 %exitcond, label %55, label %49
+
+55:
+  %56 = getelementptr i8, ptr %45, i16 -4
+  store i16 %44, ptr %56
+  %57 = getelementptr i8, ptr %45, i16 %44
+  store i8 0, ptr %57
+  store ptr %45, ptr @$var_format.sink, !tbaa !2
+  br label %58
+
+58:
+  %59 = icmp eq i16 %9, 0
+  %60 = load i8, ptr @$var_format.left, !tbaa !2, !range !19
+  %61 = icmp eq i8 %60, 0
+  %or.cond = select i1 %61, i1 true, i1 %59
+  br i1 %or.cond, label %85, label %62
+
+62:
+  %63 = load ptr, ptr @$var_format.sink, !tbaa !2
+  %64 = call i16 @llvm.umax.i16(i16 %1, i16 %4)
+  %65 = sub i16 %64, %1
+  br label %66
+
+66:
+  %67 = phi i16 [ %84, %82 ], [ %65, %62 ]
+  %68 = phi ptr [ %63, %62 ], [ %83, %82 ]
+  %69 = icmp eq ptr %68, null
+  br i1 %69, label %70, label %73
+
+70:
+  %71 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr @$var_format.fill to ptr addrspace(1)), i16 1)
+  %72 = load ptr, ptr @$var_format.sink, !tbaa !2
+  br label %82
+
+73:
+  %74 = getelementptr i8, ptr %68, i16 -4
+  %75 = load i16, ptr %74
+  %76 = add i16 %75, 1
+  %77 = tail call cc 1005 addrspace(1) ptr @N$BRES(ptr nonnull %68, i16 %76, i16 1)
+  %78 = getelementptr i8, ptr %77, i16 %75
+  %79 = load i8, ptr @$var_format.fill
+  store i8 %79, ptr %78
+  %80 = getelementptr i8, ptr %77, i16 -4
+  store i16 %76, ptr %80
+  %81 = getelementptr i8, ptr %77, i16 %76
+  store i8 0, ptr %81
+  store ptr %77, ptr @$var_format.sink, !tbaa !2
+  br label %82
+
+82:
+  %83 = phi ptr [ %72, %70 ], [ %77, %73 ]
+  %84 = add i16 %67, -1
+  %exitcond1 = icmp eq i16 %84, 0
+  br i1 %exitcond1, label %85, label %66
+
+85:
   store i8 32, ptr @$var_format.fill, !tbaa !2
   store i8 0, ptr @$var_format.left, !tbaa !2
   ret void
 }
 
-define internal void @format.field(ptr addrspace(1) %0, i16 %1) addrspace(1) {
-b1:
-  %2 = load i8, ptr @$var_format.width
-  %3 = zext i8 %2 to i16
-  %4 = icmp ugt i16 %3, %1
-  br i1 %4, label %5, label %7
-
-5:
-  %6 = sub i16 %3, %1
-  br label %7
-
-7:
-  %8 = phi i16 [ %6, %5 ], [ 0, %b1 ]
-  store i8 0, ptr @$var_format.width
-  store i8 10, ptr @$var_format.radix
-  %9 = load i8, ptr @$var_format.left
-  %10 = xor i8 %9, -1
-  %11 = icmp ne i8 %10, 0
-  br i1 %11, label %12, label %13
-
-12:
-  call addrspace(1) void @format.pad(i16 %8)
-  br label %13
-
-13:
-  %14 = load ptr, ptr @$var_format.sink
-  %15 = icmp eq ptr %14, null
-  br i1 %15, label %16, label %18
-
-16:
-  %17 = call addrspace(1) i16 @N$OWRI(i16 1, ptr addrspace(1) %0, i16 %1)
-  br label %35
-
-18:
-  %19 = getelementptr i8, ptr %14, i16 -4
-  %20 = load i16, ptr %19
-  %21 = add i16 %20, %1
-  %22 = call addrspace(1) ptr @N$BRES(ptr %14, i16 %21, i16 1)
-  %23 = getelementptr i8, ptr %22, i16 %20
-  br label %24
-
-24:
-  %25 = phi i16 [ 0, %18 ], [ %31, %27 ]
-  %26 = icmp ult i16 %25, %1
-  br i1 %26, label %27, label %32
-
-27:
-  %28 = getelementptr i8, ptr %23, i16 %25
-  %29 = getelementptr i8, ptr addrspace(1) %0, i16 %25
-  %30 = load i8, ptr addrspace(1) %29
-  store i8 %30, ptr %28
-  %31 = add i16 %25, 1
-  br label %24
-
-32:
-  %33 = getelementptr i8, ptr %22, i16 -4
-  store i16 %21, ptr %33
-  %34 = getelementptr i8, ptr %22, i16 %21
-  store i8 0, ptr %34
-  store ptr %22, ptr @$var_format.sink
-  br label %35
-
-35:
-  %36 = load i8, ptr @$var_format.left
-  %37 = icmp ne i8 %36, 0
-  br i1 %37, label %38, label %39
-
-38:
-  call addrspace(1) void @format.pad(i16 %8)
-  br label %39
-
-39:
-  store i8 32, ptr @$var_format.fill
-  store i8 0, ptr @$var_format.left
-  ret void
-}
-
-define internal void @format.word(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1) {
-b1:
-  %1 = getelementptr i8, ptr addrspace(1) %0, i16 4
-  %2 = load ptr addrspace(1), ptr addrspace(1) %1
-  %3 = load i16, ptr addrspace(1) %0
-  call addrspace(1) void @format.field(ptr addrspace(1) %2, i16 %3)
-  ret void
-}
-
-define internal void @format.number(ptr %0, i16 %1) addrspace(1) {
+define internal cc 1005 void @format.number(ptr %0, i16 %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %2 = load i8, ptr @$var_format.fill, !tbaa !2
-  %3 = zext i8 %2 to i16
-  %4 = icmp eq i16 %3, 48
-  %5 = sext i1 %4 to i8
-  br i1 %4, label %b2, label %b3
+  %3 = icmp eq i8 %2, 48
+  br i1 %3, label %b7, label %b4
 
-b2:
-  %6 = load i8, ptr @$var_format.left, !tbaa !2
-  %7 = xor i8 %6, -1
-  br label %b3
+4:
+  %5 = load ptr, ptr @$var_format.sink, !tbaa !2
+  %6 = icmp eq ptr %5, null
+  br i1 %6, label %7, label %10
 
-b3:
-  %8 = phi i8 [ %5, %b1 ], [ %7, %b2 ]
-  %9 = icmp ne i8 %8, 0
-  br i1 %9, label %b4, label %b5
+7:
+  %8 = addrspacecast ptr %0 to ptr addrspace(1)
+  %9 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) %8, i16 1)
+  br label %19
+
+10:
+  %11 = getelementptr i8, ptr %5, i16 -4
+  %12 = load i16, ptr %11
+  %13 = add i16 %12, 1
+  %14 = tail call cc 1005 addrspace(1) ptr @N$BRES(ptr nonnull %5, i16 %13, i16 1)
+  %15 = getelementptr i8, ptr %14, i16 %12
+  %16 = load i8, ptr %0
+  store i8 %16, ptr %15
+  %17 = getelementptr i8, ptr %14, i16 -4
+  store i16 %13, ptr %17
+  %18 = getelementptr i8, ptr %14, i16 %13
+  store i8 0, ptr %18
+  store ptr %14, ptr @$var_format.sink, !tbaa !2
+  br label %19
+
+19:
+  %20 = getelementptr i8, ptr %0, i16 1
+  %21 = add i16 %1, -1
+  %22 = load i8, ptr @$var_format.width, !tbaa !2
+  %23 = icmp eq i8 %22, 0
+  br i1 %23, label %b4, label %b8
 
 b4:
-  %10 = icmp ne i16 %1, 0
-  %11 = sext i1 %10 to i8
-  br label %b5
-
-b5:
-  %12 = phi i8 [ %8, %b3 ], [ %11, %b4 ]
-  %13 = icmp ne i8 %12, 0
-  br i1 %13, label %b6, label %b7
-
-b6:
-  %14 = load i8, ptr %0
-  %15 = zext i8 %14 to i16
-  %16 = icmp eq i16 %15, 45
-  %17 = sext i1 %16 to i8
-  br label %b7
-
-b7:
-  %18 = phi i8 [ %12, %b5 ], [ %17, %b6 ]
-  %19 = icmp ne i8 %18, 0
-  br i1 %19, label %b8, label %b10
-
-b8:
-  %20 = addrspacecast ptr %0 to ptr addrspace(1)
-  %21 = load ptr, ptr @$var_format.sink
-  %22 = icmp eq ptr %21, null
-  br i1 %22, label %23, label %25
-
-23:
-  %24 = call addrspace(1) i16 @N$OWRI(i16 1, ptr addrspace(1) %20, i16 1)
-  br label %42
-
-25:
-  %26 = getelementptr i8, ptr %21, i16 -4
-  %27 = load i16, ptr %26
-  %28 = add i16 %27, 1
-  %29 = call addrspace(1) ptr @N$BRES(ptr %21, i16 %28, i16 1)
-  %30 = getelementptr i8, ptr %29, i16 %27
-  br label %31
-
-31:
-  %32 = phi i16 [ 0, %25 ], [ %38, %34 ]
-  %33 = icmp ult i16 %32, 1
-  br i1 %33, label %34, label %39
-
-34:
-  %35 = getelementptr i8, ptr %30, i16 %32
-  %36 = getelementptr i8, ptr addrspace(1) %20, i16 %32
-  %37 = load i8, ptr addrspace(1) %36
-  store i8 %37, ptr %35
-  %38 = add i16 %32, 1
-  br label %31
-
-39:
-  %40 = getelementptr i8, ptr %29, i16 -4
-  store i16 %28, ptr %40
-  %41 = getelementptr i8, ptr %29, i16 %28
-  store i8 0, ptr %41
-  store ptr %29, ptr @$var_format.sink
-  br label %42
-
-42:
-  %43 = getelementptr i8, ptr %0, i16 1
-  %44 = add i16 %1, -1
-  %45 = load i8, ptr @$var_format.width, !tbaa !2
-  %46 = icmp ne i8 %45, 0
-  br i1 %46, label %b11, label %b10
-
-b10:
-  %47 = phi ptr [ %0, %b7 ], [ %43, %b11 ], [ %43, %42 ]
-  %48 = phi i16 [ %1, %b7 ], [ %44, %b11 ], [ %44, %42 ]
-  %49 = addrspacecast ptr %47 to ptr addrspace(1)
-  call addrspace(1) void @format.field(ptr addrspace(1) %49, i16 %48)
+  %24 = phi i16 [ %21, %b8 ], [ %21, %19 ], [ %1, %b5 ], [ %1, %b7 ], [ %1, %b1 ]
+  %25 = phi ptr [ %20, %b8 ], [ %20, %19 ], [ %0, %b5 ], [ %0, %b7 ], [ %0, %b1 ]
+  %26 = addrspacecast ptr %25 to ptr addrspace(1)
+  tail call cc 1006 addrspace(1) void @format.field(ptr addrspace(1) %26, i16 %24)
   ret void
 
-b11:
-  %50 = zext i8 %45 to i16
-  %51 = add i16 %50, -1
-  %52 = trunc i16 %51 to i8
-  store i8 %52, ptr @$var_format.width, !tbaa !2
-  br label %b10
-}
-
-define internal i16 @format.written(ptr %0, i32 %1, i8 %2) addrspace(1) memory(argmem: write) {
-b1:
-  %3 = zext i8 %2 to i32
-  br label %b2
-
-b2:
-  %4 = phi i32 [ %1, %b1 ], [ %18, %b10 ]
-  %5 = phi i16 [ 0, %b1 ], [ %8, %b10 ]
-  %6 = urem i32 %4, %3
-  %7 = trunc i32 %6 to i8
-  %8 = add i16 %5, 1
-  %9 = sub i16 0, %8
-  %10 = getelementptr i8, ptr %0, i16 %9
-  %11 = zext i8 %7 to i16
-  %12 = icmp slt i16 %11, 10
-  br i1 %12, label %b5, label %b6
-
 b5:
-  %13 = add i16 %11, 48
-  %14 = trunc i16 %13 to i8
-  br label %b7
-
-b6:
-  %15 = add i16 %11, 87
-  %16 = trunc i16 %15 to i8
-  br label %b7
+  %27 = load i8, ptr %0
+  %28 = icmp eq i8 %27, 45
+  br i1 %28, label %4, label %b4
 
 b7:
-  %17 = phi i8 [ %14, %b5 ], [ %16, %b6 ]
-  store i8 %17, ptr %10
-  %18 = udiv i32 %4, %3
-  %19 = icmp eq i32 %18, 0
-  br i1 %19, label %b8, label %b10
+  %29 = load i8, ptr @$var_format.left, !tbaa !2, !range !20
+  %30 = icmp eq i8 %29, 0
+  %31 = icmp ne i16 %1, 0
+  %or.cond = select i1 %30, i1 %31, i1 false
+  br i1 %or.cond, label %b5, label %b4
 
 b8:
-  ret i16 %8
-
-b10:
-  br label %b2
+  %32 = add i8 %22, -1
+  store i8 %32, ptr @$var_format.width, !tbaa !2
+  br label %b4
 }
 
-define internal void @format.integer(i32 %0, i8 %1) addrspace(1) {
-b1:
-  %2 = getelementptr i8, ptr @$var_format.scratch, i16 16
+define cc 1005 void @N$PI1(i8 %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %2 = sext i8 %0 to i32
+  %3 = tail call i32 @llvm.abs.i32(i32 %2, i1 true)
+  %4 = load i8, ptr @$var_format.radix, !tbaa !2
+  %5 = zext i8 %4 to i32
+  br label %6
+
+6:
+  %7 = phi i16 [ %19, %6 ], [ 0, %1 ]
+  %8 = phi i32 [ %3, %1 ], [ %17, %6 ]
+  %9 = urem i32 %8, %5
+  %10 = getelementptr i8, ptr @$var_format.scratch, i16 %7
+  %11 = getelementptr i8, ptr %10, i16 15
+  %12 = icmp samesign ult i32 %9, 10
+  %13 = trunc nuw i32 %9 to i8
+  %14 = or disjoint i8 %13, 48
+  %15 = add nuw i8 %13, 87
+  %16 = select i1 %12, i8 %14, i8 %15
+  store i8 %16, ptr %11
+  %17 = udiv i32 %8, %5
+  %18 = icmp eq i32 %17, 0
+  %19 = add i16 %7, -1
+  br i1 %18, label %20, label %6
+
+20:
+  %21 = icmp sgt i8 %0, -1
+  %22 = sub i16 0, %19
+  br i1 %21, label %28, label %23
+
+23:
+  %24 = sub i16 0, %19
+  %25 = add i16 %24, 1
+  %26 = getelementptr i8, ptr @$var_format.scratch, i16 %19
+  %27 = getelementptr i8, ptr %26, i16 15
+  store i8 45, ptr %27
+  br label %28
+
+28:
+  %29 = phi i16 [ %25, %23 ], [ %22, %20 ]
+  %30 = sub i16 0, %29
+  %31 = getelementptr i8, ptr getelementptr inbounds nuw (i8, ptr @$var_format.scratch, i16 16), i16 %30
+  tail call cc 1005 addrspace(1) void @format.number(ptr %31, i16 %29)
+  ret void
+}
+
+define cc 1005 void @N$PU1(i8 %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %2 = zext i8 %0 to i32
   %3 = load i8, ptr @$var_format.radix, !tbaa !2
   %4 = zext i8 %3 to i32
   br label %5
 
 5:
-  %6 = phi i32 [ %0, %b1 ], [ %23, %25 ]
-  %7 = phi i16 [ 0, %b1 ], [ %10, %25 ]
-  %8 = urem i32 %6, %4
-  %9 = trunc i32 %8 to i8
-  %10 = add i16 %7, 1
-  %11 = sub i16 0, %10
-  %12 = getelementptr i8, ptr %2, i16 %11
-  %13 = zext i8 %9 to i16
-  %14 = icmp slt i16 %13, 10
-  br i1 %14, label %15, label %18
+  %6 = phi i16 [ %18, %5 ], [ 0, %1 ]
+  %7 = phi i32 [ %2, %1 ], [ %16, %5 ]
+  %8 = urem i32 %7, %4
+  %9 = getelementptr i8, ptr @$var_format.scratch, i16 %6
+  %10 = getelementptr i8, ptr %9, i16 15
+  %11 = icmp samesign ult i32 %8, 10
+  %12 = trunc nuw i32 %8 to i8
+  %13 = or disjoint i8 %12, 48
+  %14 = add i8 %12, 87
+  %15 = select i1 %11, i8 %13, i8 %14
+  store i8 %15, ptr %10
+  %16 = udiv i32 %7, %4
+  %17 = icmp eq i32 %16, 0
+  %18 = add i16 %6, -1
+  br i1 %17, label %19, label %5
 
-15:
-  %16 = add i16 %13, 48
-  %17 = trunc i16 %16 to i8
-  br label %21
-
-18:
-  %19 = add i16 %13, 87
-  %20 = trunc i16 %19 to i8
-  br label %21
-
-21:
-  %22 = phi i8 [ %17, %15 ], [ %20, %18 ]
-  store i8 %22, ptr %12
-  %23 = udiv i32 %6, %4
-  %24 = icmp eq i32 %23, 0
-  br i1 %24, label %26, label %25
-
-25:
-  br label %5
-
-26:
-  %27 = icmp ne i8 %1, 0
-  br i1 %27, label %b2, label %b4
-
-b2:
-  %28 = add i16 %7, 2
-  %29 = sub i16 0, %28
-  %30 = getelementptr i8, ptr %2, i16 %29
-  store i8 45, ptr %30
-  br label %b4
-
-b4:
-  %31 = phi i16 [ %28, %b2 ], [ %10, %26 ]
-  %32 = sub i16 0, %31
-  %33 = getelementptr i8, ptr %2, i16 %32
-  call addrspace(1) void @format.number(ptr %33, i16 %31)
+19:
+  %20 = getelementptr i8, ptr @$var_format.scratch, i16 16
+  %21 = getelementptr i8, ptr %20, i16 %18
+  %22 = sub i16 0, %18
+  tail call cc 1005 addrspace(1) void @format.number(ptr %21, i16 %22)
   ret void
 }
 
-define internal void @format.signed(i32 %0) addrspace(1) {
-b1:
-  %1 = icmp slt i32 %0, 0
-  br i1 %1, label %b2, label %b4
+define cc 1005 void @N$PI2(i16 %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %2 = sext i16 %0 to i32
+  %3 = tail call i32 @llvm.abs.i32(i32 %2, i1 true)
+  %4 = load i8, ptr @$var_format.radix, !tbaa !2
+  %5 = zext i8 %4 to i32
+  br label %6
 
-b2:
-  %2 = sub i32 0, %0
-  br label %b4
-
-b4:
-  %3 = phi i32 [ %2, %b2 ], [ %0, %b1 ]
-  %4 = getelementptr i8, ptr @$var_format.scratch, i16 16
-  %5 = load i8, ptr @$var_format.radix
-  %6 = zext i8 %5 to i32
-  br label %7
-
-7:
-  %8 = phi i32 [ %3, %b4 ], [ %25, %27 ]
-  %9 = phi i16 [ 0, %b4 ], [ %12, %27 ]
-  %10 = urem i32 %8, %6
-  %11 = trunc i32 %10 to i8
-  %12 = add i16 %9, 1
-  %13 = sub i16 0, %12
-  %14 = getelementptr i8, ptr %4, i16 %13
-  %15 = zext i8 %11 to i16
-  %16 = icmp slt i16 %15, 10
-  br i1 %16, label %17, label %20
-
-17:
-  %18 = add i16 %15, 48
-  %19 = trunc i16 %18 to i8
-  br label %23
+6:
+  %7 = phi i16 [ %19, %6 ], [ 0, %1 ]
+  %8 = phi i32 [ %3, %1 ], [ %17, %6 ]
+  %9 = urem i32 %8, %5
+  %10 = getelementptr i8, ptr @$var_format.scratch, i16 %7
+  %11 = getelementptr i8, ptr %10, i16 15
+  %12 = icmp samesign ult i32 %9, 10
+  %13 = trunc nuw i32 %9 to i8
+  %14 = or disjoint i8 %13, 48
+  %15 = add i8 %13, 87
+  %16 = select i1 %12, i8 %14, i8 %15
+  store i8 %16, ptr %11
+  %17 = udiv i32 %8, %5
+  %18 = icmp eq i32 %17, 0
+  %19 = add i16 %7, -1
+  br i1 %18, label %20, label %6
 
 20:
-  %21 = add i16 %15, 87
-  %22 = trunc i16 %21 to i8
-  br label %23
+  %21 = icmp sgt i16 %0, -1
+  %22 = sub i16 0, %19
+  br i1 %21, label %28, label %23
 
 23:
-  %24 = phi i8 [ %19, %17 ], [ %22, %20 ]
-  store i8 %24, ptr %14
-  %25 = udiv i32 %8, %6
-  %26 = icmp eq i32 %25, 0
-  br i1 %26, label %28, label %27
-
-27:
-  br label %7
+  %24 = sub i16 0, %19
+  %25 = add i16 %24, 1
+  %26 = getelementptr i8, ptr @$var_format.scratch, i16 %19
+  %27 = getelementptr i8, ptr %26, i16 15
+  store i8 45, ptr %27
+  br label %28
 
 28:
-  br i1 %1, label %29, label %33
-
-29:
-  %30 = add i16 %9, 2
-  %31 = sub i16 0, %30
-  %32 = getelementptr i8, ptr %4, i16 %31
-  store i8 45, ptr %32
-  br label %33
-
-33:
-  %34 = phi i16 [ %30, %29 ], [ %12, %28 ]
-  %35 = sub i16 0, %34
-  %36 = getelementptr i8, ptr %4, i16 %35
-  call addrspace(1) void @format.number(ptr %36, i16 %34)
+  %29 = phi i16 [ %25, %23 ], [ %22, %20 ]
+  %30 = sub i16 0, %29
+  %31 = getelementptr i8, ptr getelementptr inbounds nuw (i8, ptr @$var_format.scratch, i16 16), i16 %30
+  tail call cc 1005 addrspace(1) void @format.number(ptr %31, i16 %29)
   ret void
 }
 
-define void @N$PI1(i8 %0) addrspace(1) {
-b1:
-  %1 = sext i8 %0 to i32
-  call addrspace(1) void @format.signed(i32 %1)
-  ret void
-}
-
-define void @N$PU1(i8 %0) addrspace(1) {
-b1:
-  %1 = zext i8 %0 to i32
-  %2 = getelementptr i8, ptr @$var_format.scratch, i16 16
-  %3 = load i8, ptr @$var_format.radix
+define cc 1005 void @N$PU2(i16 %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %2 = zext i16 %0 to i32
+  %3 = load i8, ptr @$var_format.radix, !tbaa !2
   %4 = zext i8 %3 to i32
   br label %5
 
 5:
-  %6 = phi i32 [ %1, %b1 ], [ %23, %25 ]
-  %7 = phi i16 [ 0, %b1 ], [ %10, %25 ]
-  %8 = urem i32 %6, %4
-  %9 = trunc i32 %8 to i8
-  %10 = add i16 %7, 1
-  %11 = sub i16 0, %10
-  %12 = getelementptr i8, ptr %2, i16 %11
-  %13 = zext i8 %9 to i16
-  %14 = icmp slt i16 %13, 10
-  br i1 %14, label %15, label %18
+  %6 = phi i16 [ %18, %5 ], [ 0, %1 ]
+  %7 = phi i32 [ %2, %1 ], [ %16, %5 ]
+  %8 = urem i32 %7, %4
+  %9 = getelementptr i8, ptr @$var_format.scratch, i16 %6
+  %10 = getelementptr i8, ptr %9, i16 15
+  %11 = icmp samesign ult i32 %8, 10
+  %12 = trunc nuw i32 %8 to i8
+  %13 = or disjoint i8 %12, 48
+  %14 = add i8 %12, 87
+  %15 = select i1 %11, i8 %13, i8 %14
+  store i8 %15, ptr %10
+  %16 = udiv i32 %7, %4
+  %17 = icmp eq i32 %16, 0
+  %18 = add i16 %6, -1
+  br i1 %17, label %19, label %5
 
-15:
-  %16 = add i16 %13, 48
-  %17 = trunc i16 %16 to i8
-  br label %21
-
-18:
-  %19 = add i16 %13, 87
-  %20 = trunc i16 %19 to i8
-  br label %21
-
-21:
-  %22 = phi i8 [ %17, %15 ], [ %20, %18 ]
-  store i8 %22, ptr %12
-  %23 = udiv i32 %6, %4
-  %24 = icmp eq i32 %23, 0
-  br i1 %24, label %26, label %25
-
-25:
-  br label %5
-
-26:
-  call addrspace(1) void @format.number(ptr %12, i16 %10)
+19:
+  %20 = getelementptr i8, ptr @$var_format.scratch, i16 16
+  %21 = getelementptr i8, ptr %20, i16 %18
+  %22 = sub i16 0, %18
+  tail call cc 1005 addrspace(1) void @format.number(ptr %21, i16 %22)
   ret void
 }
 
-define void @N$PI2(i16 %0) addrspace(1) {
-b1:
-  %1 = sext i16 %0 to i32
-  call addrspace(1) void @format.signed(i32 %1)
-  ret void
-}
-
-define void @N$PU2(i16 %0) addrspace(1) {
-b1:
-  %1 = zext i16 %0 to i32
-  %2 = getelementptr i8, ptr @$var_format.scratch, i16 16
-  %3 = load i8, ptr @$var_format.radix
+define cc 1005 void @N$PI4(i32 %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %2 = tail call i32 @llvm.abs.i32(i32 %0, i1 false)
+  %3 = load i8, ptr @$var_format.radix, !tbaa !2
   %4 = zext i8 %3 to i32
   br label %5
 
 5:
-  %6 = phi i32 [ %1, %b1 ], [ %23, %25 ]
-  %7 = phi i16 [ 0, %b1 ], [ %10, %25 ]
-  %8 = urem i32 %6, %4
-  %9 = trunc i32 %8 to i8
-  %10 = add i16 %7, 1
-  %11 = sub i16 0, %10
-  %12 = getelementptr i8, ptr %2, i16 %11
-  %13 = zext i8 %9 to i16
-  %14 = icmp slt i16 %13, 10
-  br i1 %14, label %15, label %18
+  %6 = phi i16 [ %18, %5 ], [ 0, %1 ]
+  %7 = phi i32 [ %2, %1 ], [ %16, %5 ]
+  %8 = urem i32 %7, %4
+  %9 = getelementptr i8, ptr @$var_format.scratch, i16 %6
+  %10 = getelementptr i8, ptr %9, i16 15
+  %11 = icmp samesign ult i32 %8, 10
+  %12 = trunc nuw i32 %8 to i8
+  %13 = or disjoint i8 %12, 48
+  %14 = add i8 %12, 87
+  %15 = select i1 %11, i8 %13, i8 %14
+  store i8 %15, ptr %10
+  %16 = udiv i32 %7, %4
+  %17 = icmp eq i32 %16, 0
+  %18 = add i16 %6, -1
+  br i1 %17, label %19, label %5
 
-15:
-  %16 = add i16 %13, 48
-  %17 = trunc i16 %16 to i8
-  br label %21
+19:
+  %20 = icmp sgt i32 %0, -1
+  %21 = sub i16 0, %18
+  br i1 %20, label %27, label %22
 
-18:
-  %19 = add i16 %13, 87
-  %20 = trunc i16 %19 to i8
-  br label %21
+22:
+  %23 = sub i16 0, %18
+  %24 = add i16 %23, 1
+  %25 = getelementptr i8, ptr @$var_format.scratch, i16 %18
+  %26 = getelementptr i8, ptr %25, i16 15
+  store i8 45, ptr %26
+  br label %27
 
-21:
-  %22 = phi i8 [ %17, %15 ], [ %20, %18 ]
-  store i8 %22, ptr %12
-  %23 = udiv i32 %6, %4
-  %24 = icmp eq i32 %23, 0
-  br i1 %24, label %26, label %25
-
-25:
-  br label %5
-
-26:
-  call addrspace(1) void @format.number(ptr %12, i16 %10)
+27:
+  %28 = phi i16 [ %24, %22 ], [ %21, %19 ]
+  %29 = sub i16 0, %28
+  %30 = getelementptr i8, ptr getelementptr inbounds nuw (i8, ptr @$var_format.scratch, i16 16), i16 %29
+  tail call cc 1005 addrspace(1) void @format.number(ptr %30, i16 %28)
   ret void
 }
 
-define void @N$PI4(i32 %0) addrspace(1) {
-b1:
-  call addrspace(1) void @format.signed(i32 %0)
-  ret void
-}
-
-define void @N$PU4(i32 %0) addrspace(1) {
-b1:
-  %1 = getelementptr i8, ptr @$var_format.scratch, i16 16
-  %2 = load i8, ptr @$var_format.radix
+define cc 1005 void @N$PU4(i32 %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %2 = load i8, ptr @$var_format.radix, !tbaa !2
   %3 = zext i8 %2 to i32
   br label %4
 
 4:
-  %5 = phi i32 [ %0, %b1 ], [ %22, %24 ]
-  %6 = phi i16 [ 0, %b1 ], [ %9, %24 ]
-  %7 = urem i32 %5, %3
-  %8 = trunc i32 %7 to i8
-  %9 = add i16 %6, 1
-  %10 = sub i16 0, %9
-  %11 = getelementptr i8, ptr %1, i16 %10
-  %12 = zext i8 %8 to i16
-  %13 = icmp slt i16 %12, 10
-  br i1 %13, label %14, label %17
+  %5 = phi i16 [ %17, %4 ], [ 0, %1 ]
+  %6 = phi i32 [ %0, %1 ], [ %15, %4 ]
+  %7 = urem i32 %6, %3
+  %8 = getelementptr i8, ptr @$var_format.scratch, i16 %5
+  %9 = getelementptr i8, ptr %8, i16 15
+  %10 = icmp samesign ult i32 %7, 10
+  %11 = trunc nuw i32 %7 to i8
+  %12 = or disjoint i8 %11, 48
+  %13 = add i8 %11, 87
+  %14 = select i1 %10, i8 %12, i8 %13
+  store i8 %14, ptr %9
+  %15 = udiv i32 %6, %3
+  %16 = icmp eq i32 %15, 0
+  %17 = add i16 %5, -1
+  br i1 %16, label %18, label %4
 
-14:
-  %15 = add i16 %12, 48
-  %16 = trunc i16 %15 to i8
-  br label %20
-
-17:
-  %18 = add i16 %12, 87
-  %19 = trunc i16 %18 to i8
-  br label %20
-
-20:
-  %21 = phi i8 [ %16, %14 ], [ %19, %17 ]
-  store i8 %21, ptr %11
-  %22 = udiv i32 %5, %3
-  %23 = icmp eq i32 %22, 0
-  br i1 %23, label %25, label %24
-
-24:
-  br label %4
-
-25:
-  call addrspace(1) void @format.number(ptr %11, i16 %9)
+18:
+  %19 = getelementptr i8, ptr @$var_format.scratch, i16 16
+  %20 = getelementptr i8, ptr %19, i16 %17
+  %21 = sub i16 0, %17
+  tail call cc 1005 addrspace(1) void @format.number(ptr %20, i16 %21)
   ret void
 }
 
-define void @N$PQ4(i32 %0, i8 %1) addrspace(1) {
+define cc 1005 void @N$PQ4(i32 %0, i8 %1) addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
   %2 = icmp slt i32 %0, 0
-  br i1 %2, label %b2, label %b4
+  br i1 %2, label %3, label %5
 
-b2:
-  %3 = getelementptr i8, ptr @$var_format.scratch, i16 0
-  store i8 45, ptr %3
+3:
+  store i8 45, ptr @$var_format.scratch, align 16
   %4 = sub i32 0, %0
-  br label %b4
+  br label %5
 
-b4:
-  %5 = phi i16 [ 1, %b2 ], [ 0, %b1 ]
-  %6 = phi i32 [ %4, %b2 ], [ %0, %b1 ]
-  %7 = getelementptr i8, ptr @$var_format.scratch, i16 16
+5:
+  %6 = phi i32 [ %4, %3 ], [ %0, %b1 ]
+  %7 = phi i16 [ 1, %3 ], [ 0, %b1 ]
   %8 = zext i8 %1 to i32
   %9 = lshr i32 %6, %8
-  br label %10
+  %10 = getelementptr i8, ptr @$var_format.scratch, i16 15
+  br label %11
 
-10:
-  %11 = phi i32 [ %9, %b4 ], [ %28, %30 ]
-  %12 = phi i16 [ 0, %b4 ], [ %15, %30 ]
-  %13 = urem i32 %11, 10
-  %14 = trunc i32 %13 to i8
-  %15 = add i16 %12, 1
-  %16 = sub i16 0, %15
-  %17 = getelementptr i8, ptr %7, i16 %16
-  %18 = zext i8 %14 to i16
-  %19 = icmp slt i16 %18, 10
-  br i1 %19, label %20, label %23
+11:
+  %12 = phi ptr [ %21, %11 ], [ %10, %5 ]
+  %13 = phi i16 [ %20, %11 ], [ -1, %5 ]
+  %14 = phi i32 [ %9, %5 ], [ %18, %11 ]
+  %15 = urem i32 %14, 10
+  %16 = trunc nuw nsw i32 %15 to i8
+  %17 = or disjoint i8 %16, 48
+  store i8 %17, ptr %12
+  %18 = udiv i32 %14, 10
+  %19 = icmp eq i32 %18, 0
+  %20 = add i16 %13, 1
+  %21 = getelementptr i8, ptr %12, i16 -1
+  br i1 %19, label %22, label %11
 
-20:
-  %21 = add i16 %18, 48
-  %22 = trunc i16 %21 to i8
-  br label %26
+22:
+  %23 = icmp eq i16 %20, -1
+  br i1 %23, label %39, label %24
 
-23:
-  %24 = add i16 %18, 87
-  %25 = trunc i16 %24 to i8
-  br label %26
+24:
+  %25 = sub i16 0, %20
+  %26 = sub i16 -1, %20
+  %27 = getelementptr i8, ptr @$var_format.scratch, i16 %7
+  br label %28
 
-26:
-  %27 = phi i8 [ %22, %20 ], [ %25, %23 ]
-  store i8 %27, ptr %17
-  %28 = udiv i32 %11, 10
-  %29 = icmp eq i32 %28, 0
-  br i1 %29, label %31, label %30
+28:
+  %29 = phi ptr [ %27, %24 ], [ %37, %28 ]
+  %30 = phi i16 [ %26, %24 ], [ %36, %28 ]
+  %31 = phi i16 [ %25, %24 ], [ %35, %28 ]
+  %32 = getelementptr i8, ptr @$var_format.scratch, i16 %30
+  %33 = getelementptr i8, ptr %32, i16 16
+  %34 = load i8, ptr %33
+  store i8 %34, ptr %29
+  %35 = add i16 %31, 1
+  %36 = add i16 %30, 1
+  %37 = getelementptr i8, ptr %29, i16 1
+  %38 = icmp eq i16 %35, 1
+  br i1 %38, label %39, label %28
 
-30:
-  br label %10
+39:
+  %40 = add i16 %7, %20
+  %41 = getelementptr i8, ptr @$var_format.scratch, i16 %40
+  %42 = getelementptr i8, ptr %41, i16 1
+  store i8 46, ptr %42
+  %43 = add i16 %7, %20
+  %44 = add i16 %43, 2
+  %45 = shl nuw i32 1, %8
+  %46 = add i32 %45, -1
+  %47 = and i32 %6, %46
+  %48 = icmp eq i32 %47, 0
+  br i1 %48, label %b7.thread, label %54
 
-31:
-  %32 = getelementptr i8, ptr @$var_format.scratch, i16 %5
-  %33 = addrspacecast ptr %17 to ptr addrspace(1)
-  br label %34
-
-34:
-  %35 = phi i16 [ 0, %31 ], [ %41, %37 ]
-  %36 = icmp ult i16 %35, %15
-  br i1 %36, label %37, label %42
-
-37:
-  %38 = getelementptr i8, ptr %32, i16 %35
-  %39 = getelementptr i8, ptr addrspace(1) %33, i16 %35
-  %40 = load i8, ptr addrspace(1) %39
-  store i8 %40, ptr %38
-  %41 = add i16 %35, 1
-  br label %34
-
-42:
-  %43 = add i16 %5, %15
-  %44 = getelementptr i8, ptr @$var_format.scratch, i16 %43
-  store i8 46, ptr %44
-  %45 = add i16 %43, 1
-  %46 = shl i32 1, %8
-  %47 = add i32 %46, -1
-  %48 = and i32 %6, %47
-  %49 = icmp eq i32 %48, 0
-  br i1 %49, label %50, label %b7
-
-50:
-  %51 = getelementptr i8, ptr @$var_format.scratch, i16 %45
+b7.thread:
+  %49 = add i16 %7, %20
+  %50 = getelementptr i8, ptr @$var_format.scratch, i16 %49
+  %51 = getelementptr i8, ptr %50, i16 2
   store i8 48, ptr %51
-  %52 = add i16 %43, 2
-  br label %b7
+  %52 = add i16 %7, %20
+  %53 = add i16 %52, 3
+  br label %113
 
-b7:
-  %53 = phi i16 [ %52, %50 ], [ %45, %42 ]
-  %54 = udiv i32 %46, 10
-  %55 = urem i32 %46, 10
-  %56 = trunc i32 %55 to i16
-  br label %b8
-
-b8:
-  %57 = phi i16 [ %53, %b7 ], [ %79, %b13 ]
-  %58 = phi i32 [ %48, %b7 ], [ %73, %b13 ]
-  %59 = icmp ne i32 %58, 0
-  br i1 %59, label %b9, label %60
+54:
+  %55 = udiv i32 %45, 10
+  %56 = urem i32 %45, 10
+  %57 = trunc nuw nsw i32 %56 to i16
+  %58 = add nuw nsw i16 %57, 9
+  %59 = udiv i16 %58, 10
+  %60 = zext nneg i16 %59 to i32
+  %61 = add nuw nsw i32 %55, %60
+  %62 = shl nuw nsw i32 %55, 1
+  %63 = shl nuw nsw i16 %57, 1
+  %64 = add nuw nsw i16 %63, 9
+  %65 = udiv i16 %64, 10
+  %66 = zext nneg i16 %65 to i32
+  %67 = add nuw nsw i32 %62, %66
+  %68 = mul nuw nsw i32 %55, 3
+  %69 = mul nuw nsw i16 %57, 3
+  %70 = add nuw nsw i16 %69, 9
+  %71 = udiv i16 %70, 10
+  %72 = zext nneg i16 %71 to i32
+  %73 = add nuw nsw i32 %68, %72
+  %74 = shl nuw nsw i32 %55, 2
+  %75 = shl nuw nsw i16 %57, 2
+  %76 = add nuw nsw i16 %75, 9
+  %77 = udiv i16 %76, 10
+  %78 = zext nneg i16 %77 to i32
+  %79 = add nuw nsw i32 %74, %78
+  %80 = mul nuw nsw i32 %55, 5
+  %81 = mul nuw nsw i16 %57, 5
+  %82 = add nuw nsw i16 %81, 9
+  %83 = udiv i16 %82, 10
+  %84 = zext nneg i16 %83 to i32
+  %85 = add nuw nsw i32 %80, %84
+  %86 = mul nuw nsw i32 %55, 6
+  %87 = mul nuw nsw i16 %57, 6
+  %88 = add nuw nsw i16 %87, 9
+  %89 = udiv i16 %88, 10
+  %90 = zext nneg i16 %89 to i32
+  %91 = add nuw nsw i32 %86, %90
+  %92 = mul nuw nsw i32 %55, 7
+  %93 = mul nuw nsw i16 %57, 7
+  %94 = add nuw nsw i16 %93, 9
+  %95 = udiv i16 %94, 10
+  %96 = zext nneg i16 %95 to i32
+  %97 = add nuw nsw i32 %92, %96
+  %98 = shl nuw nsw i32 %55, 3
+  %99 = shl nuw nsw i16 %57, 3
+  %100 = add nuw nsw i16 %99, 9
+  %101 = udiv i16 %100, 10
+  %102 = zext nneg i16 %101 to i32
+  %103 = add nuw nsw i32 %98, %102
+  %104 = mul nuw nsw i32 %55, 9
+  %105 = mul nuw nsw i16 %57, 9
+  %106 = add nuw nsw i16 %105, 9
+  %107 = udiv i16 %106, 10
+  %108 = zext nneg i16 %107 to i32
+  %109 = add nuw nsw i32 %104, %108
+  br label %b9
 
 b9:
-  br label %b11
+  %110 = phi i16 [ %44, %54 ], [ %143, %131 ]
+  %111 = phi i32 [ %47, %54 ], [ %139, %131 ]
+  %112 = icmp ult i32 %111, %61
+  br i1 %112, label %131, label %b11
 
-60:
-  %61 = getelementptr i8, ptr @$var_format.scratch, i16 0
-  call addrspace(1) void @format.number(ptr %61, i16 %57)
+113:
+  %114 = phi i16 [ %53, %b7.thread ], [ %143, %131 ]
+  tail call cc 1005 addrspace(1) void @format.number(ptr @$var_format.scratch, i16 %114)
   ret void
 
 b11:
-  %62 = phi i16 [ 0, %b9 ], [ %63, %b12 ]
-  %63 = phi i16 [ 1, %b9 ], [ %66, %b12 ]
-  %64 = icmp ule i16 %63, 9
-  %65 = sext i1 %64 to i8
-  br i1 %64, label %b14, label %b15
+  %115 = icmp ult i32 %111, %67
+  br i1 %115, label %131, label %116
 
-b12:
-  %66 = add i16 %63, 1
-  br label %b11
+116:
+  %117 = icmp ult i32 %111, %73
+  br i1 %117, label %131, label %118
 
-b13:
-  %67 = zext i16 %62 to i32
-  %68 = mul i32 %67, %54
-  %69 = sub i32 %58, %68
-  %70 = mul i32 %69, 10
-  %71 = mul i16 %62, %56
-  %72 = zext i16 %71 to i32
-  %73 = sub i32 %70, %72
-  %74 = getelementptr i8, ptr @$var_format.scratch, i16 %57
-  %75 = trunc i16 %62 to i8
-  %76 = zext i8 %75 to i16
-  %77 = add i16 %76, 48
-  %78 = trunc i16 %77 to i8
-  store i8 %78, ptr %74
-  %79 = add i16 %57, 1
-  br label %b8
+118:
+  %119 = icmp ult i32 %111, %79
+  br i1 %119, label %131, label %120
 
-b14:
-  %80 = zext i16 %63 to i32
-  %81 = mul i32 %80, %54
-  %82 = mul i16 %63, %56
-  %83 = add i16 %82, 9
-  %84 = udiv i16 %83, 10
-  %85 = zext i16 %84 to i32
-  %86 = add i32 %81, %85
-  %87 = icmp uge i32 %58, %86
-  %88 = sext i1 %87 to i8
-  br label %b15
+120:
+  %121 = icmp ult i32 %111, %85
+  br i1 %121, label %131, label %122
 
-b15:
-  %89 = phi i8 [ %65, %b11 ], [ %88, %b14 ]
-  %90 = icmp ne i8 %89, 0
-  br i1 %90, label %b12, label %b13
+122:
+  %123 = icmp ult i32 %111, %91
+  br i1 %123, label %131, label %124
+
+124:
+  %125 = icmp ult i32 %111, %97
+  br i1 %125, label %131, label %126
+
+126:
+  %127 = icmp ult i32 %111, %103
+  br i1 %127, label %131, label %128
+
+128:
+  %129 = icmp ult i32 %111, %109
+  %130 = select i1 %129, i16 8, i16 9
+  br label %131
+
+131:
+  %132 = phi i16 [ 0, %b9 ], [ 1, %b11 ], [ 2, %116 ], [ 3, %118 ], [ 4, %120 ], [ 5, %122 ], [ 6, %124 ], [ 7, %126 ], [ %130, %128 ]
+  %133 = zext nneg i16 %132 to i32
+  %134 = mul nuw nsw i32 %55, %133
+  %135 = sub i32 %111, %134
+  %136 = mul i32 %135, 10
+  %137 = mul nuw nsw i16 %132, %57
+  %138 = zext nneg i16 %137 to i32
+  %139 = sub i32 %136, %138
+  %140 = getelementptr i8, ptr @$var_format.scratch, i16 %110
+  %141 = trunc nuw nsw i16 %132 to i8
+  %142 = or disjoint i8 %141, 48
+  store i8 %142, ptr %140
+  %143 = add i16 %110, 1
+  %144 = icmp eq i32 %139, 0
+  br i1 %144, label %113, label %b9
 }
 
-define void @N$PQ2(i16 %0, i8 %1) addrspace(1) {
+define cc 1005 void @N$PQ2(i16 %0, i8 %1) addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
   %2 = sext i16 %0 to i32
-  call addrspace(1) void @N$PQ4(i32 %2, i8 %1)
+  tail call cc 1005 addrspace(1) void @N$PQ4(i32 %2, i8 zeroext %1)
   ret void
 }
 
-define void @N$PB(i8 %0) addrspace(1) {
-b1:
-  %1 = icmp ne i8 %0, 0
-  br i1 %1, label %b2, label %b3
-
-b2:
-  %2 = getelementptr i8, ptr @$str19, i16 6
-  br label %b4
-
-b3:
-  %3 = getelementptr i8, ptr @$str20, i16 6
-  br label %b4
-
-b4:
-  %4 = phi ptr [ %2, %b2 ], [ %3, %b3 ]
-  %5 = getelementptr i8, ptr %4, i16 -4
-  %6 = load i16, ptr %5
-  %7 = addrspacecast ptr %4 to ptr addrspace(1)
-  call addrspace(1) void @format.field(ptr addrspace(1) %7, i16 %6)
+define cc 1005 void @N$PB(i8 %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %2 = icmp eq i8 %0, 0
+  %3 = select i1 %2, ptr getelementptr inbounds nuw (i8, ptr @$str21, i16 6), ptr getelementptr inbounds nuw (i8, ptr @$str20, i16 6)
+  %4 = select i1 %2, ptr getelementptr (i8, ptr @$str21, i16 2), ptr getelementptr (i8, ptr @$str20, i16 2)
+  %5 = load i16, ptr %4
+  %6 = addrspacecast ptr %3 to ptr addrspace(1)
+  tail call cc 1006 addrspace(1) void @format.field(ptr addrspace(1) %6, i16 %5)
   ret void
 }
 
-define void @N$PC(i8 %0) addrspace(1) {
-b1:
-  %1 = getelementptr i8, ptr @$var_format.scratch, i16 0
-  store i8 %0, ptr %1
-  %2 = addrspacecast ptr %1 to ptr addrspace(1)
-  call addrspace(1) void @format.field(ptr addrspace(1) %2, i16 1)
+define cc 1005 void @N$PC(i8 %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  store i8 %0, ptr @$var_format.scratch, align 16
+  tail call cc 1006 addrspace(1) void @format.field(ptr addrspace(1) addrspacecast (ptr @$var_format.scratch to ptr addrspace(1)), i16 1)
   ret void
 }
 
-define void @N$PS(ptr %0) addrspace(1) {
-b1:
-  %1 = addrspacecast ptr %0 to ptr addrspace(1)
-  %2 = getelementptr i8, ptr %0, i16 -4
-  %3 = load i16, ptr %2
-  call addrspace(1) void @format.field(ptr addrspace(1) %1, i16 %3)
+define cc 1005 void @N$PS(ptr %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %2 = addrspacecast ptr %0 to ptr addrspace(1)
+  %3 = getelementptr i8, ptr %0, i16 -4
+  %4 = load i16, ptr %3
+  tail call cc 1006 addrspace(1) void @format.field(ptr addrspace(1) %2, i16 %4)
   ret void
 }
 
-define void @N$PV(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1) {
+define cc 1005 void @N$PV(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
-  %1 = getelementptr i8, ptr addrspace(1) %0, i16 4
+  %1 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 4
   %2 = load ptr addrspace(1), ptr addrspace(1) %1
   %3 = load i16, ptr addrspace(1) %0
-  call addrspace(1) void @format.field(ptr addrspace(1) %2, i16 %3)
+  tail call cc 1006 addrspace(1) void @format.field(ptr addrspace(1) %2, i16 %3)
   ret void
 }
 
-define void @N$PN() addrspace(1) {
-b1:
-  %0 = getelementptr i8, ptr @$str11, i16 6
-  %1 = getelementptr i8, ptr %0, i16 -4
-  %2 = load i16, ptr %1
-  %3 = addrspacecast ptr %0 to ptr addrspace(1)
-  %4 = load ptr, ptr @$var_format.sink
-  %5 = icmp eq ptr %4, null
-  br i1 %5, label %6, label %8
+define cc 1005 void @N$PN() addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %1 = load ptr, ptr @$var_format.sink, !tbaa !2
+  %2 = icmp eq ptr %1, null
+  br i1 %2, label %3, label %5
 
-6:
-  %7 = call addrspace(1) i16 @N$OWRI(i16 1, ptr addrspace(1) %3, i16 %2)
-  br label %25
+3:
+  %4 = tail call addrspace(1) i32 @LL$WRITE_FILE(i16 1, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6) to ptr addrspace(1)), i16 2)
+  br label %14
 
-8:
-  %9 = getelementptr i8, ptr %4, i16 -4
-  %10 = load i16, ptr %9
-  %11 = add i16 %10, %2
-  %12 = call addrspace(1) ptr @N$BRES(ptr %4, i16 %11, i16 1)
-  %13 = getelementptr i8, ptr %12, i16 %10
+5:
+  %6 = getelementptr i8, ptr %1, i16 -4
+  %7 = load i16, ptr %6
+  %8 = add i16 %7, 2
+  %9 = tail call cc 1005 addrspace(1) ptr @N$BRES(ptr nonnull %1, i16 %8, i16 1)
+  %10 = getelementptr i8, ptr %9, i16 %7
+  store i8 13, ptr %10
+  %11 = getelementptr i8, ptr %10, i16 1
+  store i8 10, ptr %11
+  %12 = getelementptr i8, ptr %9, i16 -4
+  store i16 %8, ptr %12
+  %13 = getelementptr i8, ptr %9, i16 %8
+  store i8 0, ptr %13
+  store ptr %9, ptr @$var_format.sink, !tbaa !2
   br label %14
 
 14:
-  %15 = phi i16 [ 0, %8 ], [ %21, %17 ]
-  %16 = icmp ult i16 %15, %2
-  br i1 %16, label %17, label %22
-
-17:
-  %18 = getelementptr i8, ptr %13, i16 %15
-  %19 = getelementptr i8, ptr addrspace(1) %3, i16 %15
-  %20 = load i8, ptr addrspace(1) %19
-  store i8 %20, ptr %18
-  %21 = add i16 %15, 1
-  br label %14
-
-22:
-  %23 = getelementptr i8, ptr %12, i16 -4
-  store i16 %11, ptr %23
-  %24 = getelementptr i8, ptr %12, i16 %11
-  store i8 0, ptr %24
-  store ptr %12, ptr @$var_format.sink
-  br label %25
-
-25:
   ret void
 }
 
-define void @N$PFLD(i8 %0, i8 %1, i8 %2, i8 %3) addrspace(1) willreturn {
+define cc 1005 void @N$PFLD(i8 %0, i8 %1, i8 %2, i8 %3) addrspace(1) "llrm-fp-eval"="x87-extended" memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind nofree nosync norecurse {
 b1:
   store i8 %0, ptr @$var_format.width, !tbaa !2
   store i8 %1, ptr @$var_format.radix, !tbaa !2
   store i8 %2, ptr @$var_format.fill, !tbaa !2
   %4 = icmp ne i8 %3, 0
-  %5 = sext i1 %4 to i8
+  %5 = zext i1 %4 to i8
   store i8 %5, ptr @$var_format.left, !tbaa !2
   ret void
 }
 
-define void @N$PBEG() addrspace(1) {
-b1:
-  %0 = call addrspace(1) ptr @buffers.allocate(i16 16, i16 1)
-  store ptr %0, ptr @$var_format.sink, !tbaa !2
+define cc 1005 void @N$PBEG() addrspace(1) "llrm-fp-eval"="x87-extended" {
+  %1 = tail call cc 1005 addrspace(1) ptr @heap.allocate(i16 23)
+  %2 = getelementptr i8, ptr %1, i16 6
+  store i8 1, ptr %1
+  %3 = getelementptr i8, ptr %1, i16 1
+  store i8 0, ptr %3
+  %4 = getelementptr i8, ptr %1, i16 2
+  store i16 0, ptr %4
+  %5 = getelementptr i8, ptr %1, i16 4
+  store i16 16, ptr %5
+  store i8 0, ptr %2, align 2
+  store ptr %2, ptr @$var_format.sink, !tbaa !2
   ret void
 }
 
-define ptr @N$PEND() addrspace(1) willreturn {
+define cc 1005 ptr @N$PEND() addrspace(1) "llrm-fp-eval"="x87-extended" memory(readwrite, argmem: none, inaccessiblemem: none) willreturn nounwind nofree nosync norecurse {
 b1:
   %0 = load ptr, ptr @$var_format.sink, !tbaa !2
   store ptr null, ptr @$var_format.sink, !tbaa !2
   ret ptr %0
 }
 
-define internal void @floats.assign(ptr %0, i16 %1) addrspace(1) memory(argmem: write) willreturn {
-b1:
-  br label %b2
-
-b2:
-  %2 = phi i16 [ 0, %b1 ], [ %6, %b3 ]
-  %3 = icmp slt i16 %2, 72
-  br i1 %3, label %b3, label %b5
-
-b3:
-  %4 = shl i16 %2, 1
-  %5 = getelementptr i8, ptr %0, i16 %4
-  store i16 0, ptr %5
-  %6 = add i16 %2, 1
-  br label %b2
-
-b5:
-  %7 = getelementptr i8, ptr %0, i16 0
-  store i16 %1, ptr %7
-  ret void
-}
-
-define internal void @floats.copy(ptr %0, ptr %1) addrspace(1) memory(argmem: readwrite) willreturn {
-b1:
-  br label %b2
-
-b2:
-  %2 = phi i16 [ 0, %b1 ], [ %8, %b3 ]
-  %3 = icmp slt i16 %2, 72
-  br i1 %3, label %b3, label %b5
-
-b3:
-  %4 = shl i16 %2, 1
-  %5 = getelementptr i8, ptr %0, i16 %4
-  %6 = getelementptr i8, ptr %1, i16 %4
-  %7 = load i16, ptr %6
-  store i16 %7, ptr %5
-  %8 = add i16 %2, 1
-  br label %b2
-
-b5:
-  ret void
-}
-
-define internal void @floats.shift(ptr %0, i16 %1) addrspace(1) memory(argmem: readwrite) willreturn {
-b1:
-  %2 = lshr i16 %1, 4
-  %3 = and i16 %1, 15
-  br label %b2
-
-b2:
-  %4 = phi i16 [ 72, %b1 ], [ %6, %b7 ]
-  %5 = icmp ne i16 %4, 0
-  br i1 %5, label %b3, label %b4
-
-b3:
-  %6 = add i16 %4, -1
-  %7 = shl i16 %6, 1
-  %8 = getelementptr i8, ptr %0, i16 %7
-  %9 = icmp uge i16 %6, %2
-  br i1 %9, label %b5, label %b7
-
-b4:
-  %10 = icmp ne i16 %3, 0
-  br i1 %10, label %b8, label %b10
-
-b5:
-  %11 = sub i16 %6, %2
-  %12 = shl i16 %11, 1
-  %13 = getelementptr i8, ptr %0, i16 %12
-  %14 = load i16, ptr %13
-  br label %b7
-
-b7:
-  %15 = phi i16 [ %14, %b5 ], [ 0, %b3 ]
-  store i16 %15, ptr %8
-  br label %b2
-
-b8:
-  %16 = sub i16 16, %3
-  br label %b11
-
-b10:
-  ret void
-
-b11:
-  %17 = phi i16 [ 72, %b8 ], [ %19, %b12 ]
-  %18 = icmp ugt i16 %17, 1
-  br i1 %18, label %b12, label %b13
-
-b12:
-  %19 = add i16 %17, -1
-  %20 = shl i16 %19, 1
-  %21 = getelementptr i8, ptr %0, i16 %20
-  %22 = load i16, ptr %21
-  %23 = shl i16 %22, %3
-  %24 = add i16 %17, -2
-  %25 = shl i16 %24, 1
-  %26 = getelementptr i8, ptr %0, i16 %25
-  %27 = load i16, ptr %26
-  %28 = lshr i16 %27, %16
-  %29 = or i16 %23, %28
-  store i16 %29, ptr %21
-  br label %b11
-
-b13:
-  %30 = getelementptr i8, ptr %0, i16 0
-  %31 = load i16, ptr %30
-  %32 = shl i16 %31, %3
-  store i16 %32, ptr %30
-  br label %b10
-}
-
-define internal void @floats.multiply(ptr %0, i16 %1) addrspace(1) memory(argmem: readwrite) willreturn {
-b1:
-  br label %b2
-
-b2:
-  %2 = phi i32 [ 0, %b1 ], [ %12, %b3 ]
-  %3 = phi i16 [ 0, %b1 ], [ %13, %b3 ]
-  %4 = icmp slt i16 %3, 72
-  br i1 %4, label %b3, label %b5
-
-b3:
-  %5 = shl i16 %3, 1
-  %6 = getelementptr i8, ptr %0, i16 %5
-  %7 = load i16, ptr %6
-  %8 = zext i16 %7 to i32
-  %9 = mul i32 %8, 10
-  %10 = add i32 %9, %2
-  %11 = trunc i32 %10 to i16
-  store i16 %11, ptr %6
-  %12 = lshr i32 %10, 16
-  %13 = add i16 %3, 1
-  br label %b2
-
-b5:
-  ret void
-}
-
-define internal void @floats.add(ptr %0, ptr %1) addrspace(1) memory(argmem: readwrite) willreturn {
-b1:
-  br label %b2
-
-b2:
-  %2 = phi i32 [ 0, %b1 ], [ %15, %b3 ]
-  %3 = phi i16 [ 0, %b1 ], [ %16, %b3 ]
-  %4 = icmp slt i16 %3, 72
-  br i1 %4, label %b3, label %b5
-
-b3:
-  %5 = shl i16 %3, 1
-  %6 = getelementptr i8, ptr %0, i16 %5
-  %7 = load i16, ptr %6
-  %8 = zext i16 %7 to i32
-  %9 = getelementptr i8, ptr %1, i16 %5
-  %10 = load i16, ptr %9
-  %11 = zext i16 %10 to i32
-  %12 = add i32 %8, %11
-  %13 = add i32 %12, %2
-  %14 = trunc i32 %13 to i16
-  store i16 %14, ptr %6
-  %15 = lshr i32 %13, 16
-  %16 = add i16 %3, 1
-  br label %b2
-
-b5:
-  ret void
-}
-
-define internal void @floats.subtract(ptr %0, ptr %1) addrspace(1) memory(argmem: readwrite) willreturn {
-b1:
-  br label %b2
-
-b2:
-  %2 = phi i32 [ 0, %b1 ], [ %16, %b3 ]
-  %3 = phi i16 [ 0, %b1 ], [ %17, %b3 ]
-  %4 = icmp slt i16 %3, 72
-  br i1 %4, label %b3, label %b5
-
-b3:
-  %5 = shl i16 %3, 1
-  %6 = getelementptr i8, ptr %0, i16 %5
-  %7 = load i16, ptr %6
-  %8 = zext i16 %7 to i32
-  %9 = getelementptr i8, ptr %1, i16 %5
-  %10 = load i16, ptr %9
-  %11 = zext i16 %10 to i32
-  %12 = sub i32 %8, %11
-  %13 = sub i32 %12, %2
-  %14 = trunc i32 %13 to i16
-  store i16 %14, ptr %6
-  %15 = lshr i32 %13, 16
-  %16 = and i32 %15, 1
-  %17 = add i16 %3, 1
-  br label %b2
-
-b5:
-  ret void
-}
-
-define internal i8 @floats.compare(ptr %0, ptr %1) addrspace(1) memory(argmem: read) willreturn {
-b1:
-  br label %b2
-
-b2:
-  %2 = phi i16 [ 72, %b1 ], [ %4, %b6 ]
-  %3 = icmp ne i16 %2, 0
-  br i1 %3, label %b3, label %b4
-
-b3:
-  %4 = add i16 %2, -1
-  %5 = shl i16 %4, 1
-  %6 = getelementptr i8, ptr %0, i16 %5
-  %7 = load i16, ptr %6
-  %8 = getelementptr i8, ptr %1, i16 %5
-  %9 = load i16, ptr %8
-  %10 = icmp ne i16 %7, %9
-  br i1 %10, label %b5, label %b6
-
-b4:
-  ret i8 0
-
-b5:
-  %11 = load i16, ptr %6
-  %12 = load i16, ptr %8
-  %13 = icmp ult i16 %11, %12
-  br i1 %13, label %b10, label %b9
-
-b6:
-  br label %b2
-
-b9:
-  br label %b10
-
-b10:
-  %14 = phi i8 [ -1, %b5 ], [ 1, %b9 ]
-  ret i8 %14
-}
-
-define internal i8 @floats.beyond(ptr %0, ptr %1, i8 %2) addrspace(1) memory(argmem: read) willreturn {
-b1:
-  br label %3
-
-3:
-  %4 = phi i16 [ 72, %b1 ], [ %7, %19 ]
-  %5 = icmp ne i16 %4, 0
-  br i1 %5, label %6, label %14
-
-6:
-  %7 = add i16 %4, -1
-  %8 = shl i16 %7, 1
-  %9 = getelementptr i8, ptr %0, i16 %8
-  %10 = load i16, ptr %9
-  %11 = getelementptr i8, ptr %1, i16 %8
-  %12 = load i16, ptr %11
-  %13 = icmp ne i16 %10, %12
-  br i1 %13, label %15, label %19
-
-14:
-  br label %23
-
-15:
-  %16 = load i16, ptr %9
-  %17 = load i16, ptr %11
-  %18 = icmp ult i16 %16, %17
-  br i1 %18, label %21, label %20
-
-19:
-  br label %3
-
-20:
-  br label %21
-
-21:
-  %22 = phi i8 [ -1, %15 ], [ 1, %20 ]
-  br label %23
-
-23:
-  %24 = phi i8 [ 0, %14 ], [ %22, %21 ]
-  %25 = sext i8 %24 to i16
-  %26 = icmp sgt i16 %25, 0
-  %27 = sext i1 %26 to i8
-  br i1 %26, label %b3, label %b2
-
-b2:
-  %28 = icmp ne i8 %2, 0
-  br i1 %28, label %b4, label %b5
-
-b3:
-  %29 = phi i8 [ %27, %23 ], [ %32, %b5 ]
-  ret i8 %29
-
-b4:
-  %30 = icmp eq i8 %24, 0
-  %31 = sext i1 %30 to i8
-  br label %b5
-
-b5:
-  %32 = phi i8 [ %2, %b2 ], [ %31, %b4 ]
-  br label %b3
-}
-
-define internal i16 @floats.put(ptr %0, i16 %1, i8 %2) addrspace(1) memory(argmem: write) willreturn {
-b1:
-  %3 = getelementptr i8, ptr %0, i16 %1
-  store i8 %2, ptr %3
-  %4 = add i16 %1, 1
-  ret i16 %4
-}
-
-define internal i16 @floats.put_text(ptr %0, i16 %1, ptr addrspace(1) noalias readonly dereferenceable(8) %2) addrspace(1) willreturn {
-b1:
-  %3 = load i16, ptr addrspace(1) %2
-  %4 = getelementptr i8, ptr addrspace(1) %2, i16 4
-  %5 = load ptr addrspace(1), ptr addrspace(1) %4
-  br label %b2
-
-b2:
-  %6 = phi i16 [ %1, %b1 ], [ %12, %b3 ]
-  %7 = phi i16 [ 0, %b1 ], [ %13, %b3 ]
-  %8 = icmp ult i16 %7, %3
-  br i1 %8, label %b3, label %b5
-
-b3:
-  %9 = getelementptr i8, ptr addrspace(1) %5, i16 %7
-  %10 = load i8, ptr addrspace(1) %9
-  %11 = getelementptr i8, ptr %0, i16 %6
-  store i8 %10, ptr %11
-  %12 = add i16 %6, 1
-  %13 = add i16 %7, 1
-  br label %b2
-
-b5:
-  ret i16 %6
-}
-
-define internal i32 @floats.digits(ptr %0, i16 %1, i8 %2, i8 %3, ptr %4) addrspace(1) {
-b1:
-  %5 = alloca [8 x i8]
-  %6 = alloca [4 x i8]
-  call void @llvm.memset.p0.i16(ptr %6, i8 0, i16 4, i1 false)
-  %7 = getelementptr i8, ptr %0, i16 144
-  %8 = getelementptr i8, ptr %0, i16 288
-  %9 = getelementptr i8, ptr %0, i16 432
-  %10 = getelementptr i8, ptr %0, i16 576
-  %11 = icmp ne i8 %2, 0
-  br i1 %11, label %b4, label %b3
-
-b3:
-  br label %b4
-
-b4:
-  %12 = phi i16 [ 1, %b1 ], [ 0, %b3 ]
-  %13 = icmp sge i16 %1, 0
-  br i1 %13, label %b5, label %b6
-
-b5:
-  %14 = add i16 %1, 1
-  %15 = add i16 %14, %12
-  call addrspace(1) void @floats.shift(ptr %0, i16 %15)
-  %16 = icmp ult i16 %12, 16
-  br i1 %16, label %b8, label %71
-
-b6:
-  %17 = add i16 %12, 1
-  call addrspace(1) void @floats.shift(ptr %0, i16 %17)
-  br label %18
-
-18:
-  %19 = phi i16 [ 0, %b6 ], [ %24, %21 ]
-  %20 = icmp slt i16 %19, 72
-  br i1 %20, label %21, label %25
-
-21:
-  %22 = shl i16 %19, 1
-  %23 = getelementptr i8, ptr %7, i16 %22
-  store i16 0, ptr %23
-  %24 = add i16 %19, 1
-  br label %18
-
-25:
-  %26 = getelementptr i8, ptr %7, i16 0
-  store i16 1, ptr %26
-  %27 = sub i16 0, %1
-  %28 = add i16 %27, 1
-  %29 = add i16 %28, %12
-  call addrspace(1) void @floats.shift(ptr %7, i16 %29)
-  br label %30
-
-30:
-  %31 = phi i16 [ 0, %25 ], [ %36, %33 ]
-  %32 = icmp slt i16 %31, 72
-  br i1 %32, label %33, label %37
-
-33:
-  %34 = shl i16 %31, 1
-  %35 = getelementptr i8, ptr %9, i16 %34
-  store i16 0, ptr %35
-  %36 = add i16 %31, 1
-  br label %30
-
-37:
-  %38 = getelementptr i8, ptr %9, i16 0
-  store i16 1, ptr %38
-  br label %39
-
-39:
-  br label %40
-
-40:
-  %41 = phi i16 [ 0, %39 ], [ %48, %43 ]
-  %42 = icmp slt i16 %41, 72
-  br i1 %42, label %43, label %49
-
-43:
-  %44 = shl i16 %41, 1
-  %45 = getelementptr i8, ptr %8, i16 %44
-  %46 = getelementptr i8, ptr %9, i16 %44
-  %47 = load i16, ptr %46
-  store i16 %47, ptr %45
-  %48 = add i16 %41, 1
-  br label %40
-
-49:
-  call addrspace(1) void @floats.shift(ptr %8, i16 %12)
-  %50 = xor i8 %3, -1
-  %51 = icmp ne i8 %50, 0
-  br label %b10
-
-b8:
-  %52 = shl i16 2, %12
-  br label %53
-
-53:
-  %54 = phi i16 [ 0, %b8 ], [ %59, %56 ]
-  %55 = icmp slt i16 %54, 72
-  br i1 %55, label %56, label %60
-
-56:
-  %57 = shl i16 %54, 1
-  %58 = getelementptr i8, ptr %7, i16 %57
-  store i16 0, ptr %58
-  %59 = add i16 %54, 1
-  br label %53
-
-60:
-  %61 = getelementptr i8, ptr %7, i16 0
-  store i16 %52, ptr %61
-  br label %62
-
-62:
-  %63 = phi i16 [ 0, %60 ], [ %68, %65 ]
-  %64 = icmp slt i16 %63, 72
-  br i1 %64, label %65, label %69
-
-65:
-  %66 = shl i16 %63, 1
-  %67 = getelementptr i8, ptr %9, i16 %66
-  store i16 0, ptr %67
-  %68 = add i16 %63, 1
-  br label %62
-
-69:
-  %70 = getelementptr i8, ptr %9, i16 0
-  store i16 1, ptr %70
-  call addrspace(1) void @floats.shift(ptr %9, i16 %1)
-  br label %39
-
-71:
-  call void @llvm.memset.p0.i16(ptr %5, i8 0, i16 8, i1 false)
-  %72 = getelementptr i8, ptr @$str14, i16 6
-  %73 = getelementptr i8, ptr %72, i16 -4
-  %74 = load i16, ptr %73
-  %75 = addrspacecast ptr %72 to ptr addrspace(1)
-  store i16 %74, ptr %5
-  %76 = getelementptr inbounds i8, ptr %5, i16 2
-  store i16 %74, ptr %76
-  %77 = getelementptr inbounds i8, ptr %5, i16 4
-  store ptr addrspace(1) %75, ptr %77
-  %78 = addrspacecast ptr %5 to ptr addrspace(1)
-  call addrspace(1) void @errors.panic(ptr addrspace(1) %78)
-  unreachable
-
-b10:
-  %79 = phi i16 [ 0, %49 ], [ %159, %158 ]
-  br label %80
-
-80:
-  %81 = phi i16 [ 0, %b10 ], [ %88, %83 ]
-  %82 = icmp slt i16 %81, 72
-  br i1 %82, label %83, label %89
-
-83:
-  %84 = shl i16 %81, 1
-  %85 = getelementptr i8, ptr %10, i16 %84
-  %86 = getelementptr i8, ptr %0, i16 %84
-  %87 = load i16, ptr %86
-  store i16 %87, ptr %85
-  %88 = add i16 %81, 1
-  br label %80
-
-89:
-  br label %90
-
-90:
-  %91 = phi i32 [ 0, %89 ], [ %105, %94 ]
-  %92 = phi i16 [ 0, %89 ], [ %106, %94 ]
-  %93 = icmp slt i16 %92, 72
-  br i1 %93, label %94, label %107
-
-94:
-  %95 = shl i16 %92, 1
-  %96 = getelementptr i8, ptr %10, i16 %95
-  %97 = load i16, ptr %96
-  %98 = zext i16 %97 to i32
-  %99 = getelementptr i8, ptr %8, i16 %95
-  %100 = load i16, ptr %99
-  %101 = zext i16 %100 to i32
-  %102 = add i32 %98, %101
-  %103 = add i32 %102, %91
-  %104 = trunc i32 %103 to i16
-  store i16 %104, ptr %96
-  %105 = lshr i32 %103, 16
-  %106 = add i16 %92, 1
-  br label %90
-
-107:
-  br label %108
-
-108:
-  %109 = phi i16 [ 72, %107 ], [ %112, %124 ]
-  %110 = icmp ne i16 %109, 0
-  br i1 %110, label %111, label %119
-
-111:
-  %112 = add i16 %109, -1
-  %113 = shl i16 %112, 1
-  %114 = getelementptr i8, ptr %10, i16 %113
-  %115 = load i16, ptr %114
-  %116 = getelementptr i8, ptr %7, i16 %113
-  %117 = load i16, ptr %116
-  %118 = icmp ne i16 %115, %117
-  br i1 %118, label %120, label %124
-
-119:
-  br label %128
-
-120:
-  %121 = load i16, ptr %114
-  %122 = load i16, ptr %116
-  %123 = icmp ult i16 %121, %122
-  br i1 %123, label %126, label %125
-
-124:
-  br label %108
-
-125:
-  br label %126
-
-126:
-  %127 = phi i8 [ -1, %120 ], [ 1, %125 ]
-  br label %128
-
-128:
-  %129 = phi i8 [ 0, %119 ], [ %127, %126 ]
-  %130 = sext i8 %129 to i16
-  %131 = icmp sgt i16 %130, 0
-  %132 = sext i1 %131 to i8
-  br i1 %131, label %134, label %133
-
-133:
-  br i1 %51, label %138, label %141
-
-134:
-  %135 = phi i8 [ %132, %128 ], [ %142, %141 ]
-  %136 = xor i8 %135, -1
-  %137 = icmp ne i8 %136, 0
-  br i1 %137, label %b13, label %143
-
-138:
-  %139 = icmp eq i8 %129, 0
-  %140 = sext i1 %139 to i8
-  br label %141
-
-141:
-  %142 = phi i8 [ %50, %133 ], [ %140, %138 ]
-  br label %134
-
-b13:
-  br label %b16
-
-143:
-  br label %144
-
-144:
-  %145 = phi i32 [ 0, %143 ], [ %156, %148 ]
-  %146 = phi i16 [ 0, %143 ], [ %157, %148 ]
-  %147 = icmp slt i16 %146, 72
-  br i1 %147, label %148, label %158
-
-148:
-  %149 = shl i16 %146, 1
-  %150 = getelementptr i8, ptr %7, i16 %149
-  %151 = load i16, ptr %150
-  %152 = zext i16 %151 to i32
-  %153 = mul i32 %152, 10
-  %154 = add i32 %153, %145
-  %155 = trunc i32 %154 to i16
-  store i16 %155, ptr %150
-  %156 = lshr i32 %154, 16
-  %157 = add i16 %146, 1
-  br label %144
-
-158:
-  %159 = add i16 %79, 1
-  br label %b10
-
-b16:
-  %160 = phi i16 [ %79, %b13 ], [ %285, %284 ]
-  br label %161
-
-161:
-  %162 = phi i16 [ 0, %b16 ], [ %169, %164 ]
-  %163 = icmp slt i16 %162, 72
-  br i1 %163, label %164, label %170
-
-164:
-  %165 = shl i16 %162, 1
-  %166 = getelementptr i8, ptr %10, i16 %165
-  %167 = getelementptr i8, ptr %0, i16 %165
-  %168 = load i16, ptr %167
-  store i16 %168, ptr %166
-  %169 = add i16 %162, 1
-  br label %161
-
-170:
-  br label %171
-
-171:
-  %172 = phi i32 [ 0, %170 ], [ %186, %175 ]
-  %173 = phi i16 [ 0, %170 ], [ %187, %175 ]
-  %174 = icmp slt i16 %173, 72
-  br i1 %174, label %175, label %188
-
-175:
-  %176 = shl i16 %173, 1
-  %177 = getelementptr i8, ptr %10, i16 %176
-  %178 = load i16, ptr %177
-  %179 = zext i16 %178 to i32
-  %180 = getelementptr i8, ptr %8, i16 %176
-  %181 = load i16, ptr %180
-  %182 = zext i16 %181 to i32
-  %183 = add i32 %179, %182
-  %184 = add i32 %183, %172
-  %185 = trunc i32 %184 to i16
-  store i16 %185, ptr %177
-  %186 = lshr i32 %184, 16
-  %187 = add i16 %173, 1
-  br label %171
-
-188:
-  br label %189
-
-189:
-  %190 = phi i32 [ 0, %188 ], [ %201, %193 ]
-  %191 = phi i16 [ 0, %188 ], [ %202, %193 ]
-  %192 = icmp slt i16 %191, 72
-  br i1 %192, label %193, label %203
-
-193:
-  %194 = shl i16 %191, 1
-  %195 = getelementptr i8, ptr %10, i16 %194
-  %196 = load i16, ptr %195
-  %197 = zext i16 %196 to i32
-  %198 = mul i32 %197, 10
-  %199 = add i32 %198, %190
-  %200 = trunc i32 %199 to i16
-  store i16 %200, ptr %195
-  %201 = lshr i32 %199, 16
-  %202 = add i16 %191, 1
-  br label %189
-
-203:
-  br label %204
-
-204:
-  %205 = phi i16 [ 72, %203 ], [ %208, %220 ]
-  %206 = icmp ne i16 %205, 0
-  br i1 %206, label %207, label %215
-
-207:
-  %208 = add i16 %205, -1
-  %209 = shl i16 %208, 1
-  %210 = getelementptr i8, ptr %10, i16 %209
-  %211 = load i16, ptr %210
-  %212 = getelementptr i8, ptr %7, i16 %209
-  %213 = load i16, ptr %212
-  %214 = icmp ne i16 %211, %213
-  br i1 %214, label %216, label %220
-
-215:
-  br label %224
-
-216:
-  %217 = load i16, ptr %210
-  %218 = load i16, ptr %212
-  %219 = icmp ult i16 %217, %218
-  br i1 %219, label %222, label %221
-
-220:
-  br label %204
-
-221:
-  br label %222
-
-222:
-  %223 = phi i8 [ -1, %216 ], [ 1, %221 ]
-  br label %224
-
-224:
-  %225 = phi i8 [ 0, %215 ], [ %223, %222 ]
-  %226 = sext i8 %225 to i16
-  %227 = icmp sgt i16 %226, 0
-  %228 = sext i1 %227 to i8
-  br i1 %227, label %230, label %229
-
-229:
-  br i1 %51, label %233, label %236
-
-230:
-  %231 = phi i8 [ %228, %224 ], [ %237, %236 ]
-  %232 = icmp ne i8 %231, 0
-  br i1 %232, label %b18, label %239
-
-233:
-  %234 = icmp eq i8 %225, 0
-  %235 = sext i1 %234 to i8
-  br label %236
-
-236:
-  %237 = phi i8 [ %50, %229 ], [ %235, %233 ]
-  br label %230
-
-b18:
-  %238 = icmp ne i8 %3, 0
-  br label %b22
-
-239:
-  br label %240
-
-240:
-  %241 = phi i32 [ 0, %239 ], [ %252, %244 ]
-  %242 = phi i16 [ 0, %239 ], [ %253, %244 ]
-  %243 = icmp slt i16 %242, 72
-  br i1 %243, label %244, label %254
-
-244:
-  %245 = shl i16 %242, 1
-  %246 = getelementptr i8, ptr %0, i16 %245
-  %247 = load i16, ptr %246
-  %248 = zext i16 %247 to i32
-  %249 = mul i32 %248, 10
-  %250 = add i32 %249, %241
-  %251 = trunc i32 %250 to i16
-  store i16 %251, ptr %246
-  %252 = lshr i32 %250, 16
-  %253 = add i16 %242, 1
-  br label %240
-
-254:
-  br label %255
-
-255:
-  %256 = phi i32 [ 0, %254 ], [ %267, %259 ]
-  %257 = phi i16 [ 0, %254 ], [ %268, %259 ]
-  %258 = icmp slt i16 %257, 72
-  br i1 %258, label %259, label %269
-
-259:
-  %260 = shl i16 %257, 1
-  %261 = getelementptr i8, ptr %8, i16 %260
-  %262 = load i16, ptr %261
-  %263 = zext i16 %262 to i32
-  %264 = mul i32 %263, 10
-  %265 = add i32 %264, %256
-  %266 = trunc i32 %265 to i16
-  store i16 %266, ptr %261
-  %267 = lshr i32 %265, 16
-  %268 = add i16 %257, 1
-  br label %255
-
-269:
-  br label %270
-
-270:
-  %271 = phi i32 [ 0, %269 ], [ %282, %274 ]
-  %272 = phi i16 [ 0, %269 ], [ %283, %274 ]
-  %273 = icmp slt i16 %272, 72
-  br i1 %273, label %274, label %284
-
-274:
-  %275 = shl i16 %272, 1
-  %276 = getelementptr i8, ptr %9, i16 %275
-  %277 = load i16, ptr %276
-  %278 = zext i16 %277 to i32
-  %279 = mul i32 %278, 10
-  %280 = add i32 %279, %271
-  %281 = trunc i32 %280 to i16
-  store i16 %281, ptr %276
-  %282 = lshr i32 %280, 16
-  %283 = add i16 %272, 1
-  br label %270
-
-284:
-  %285 = add i16 %160, -1
-  br label %b16
-
-b22:
-  %286 = phi i16 [ 0, %b18 ], [ %483, %b30 ]
-  br label %287
-
-287:
-  %288 = phi i32 [ 0, %b22 ], [ %299, %291 ]
-  %289 = phi i16 [ 0, %b22 ], [ %300, %291 ]
-  %290 = icmp slt i16 %289, 72
-  br i1 %290, label %291, label %301
-
-291:
-  %292 = shl i16 %289, 1
-  %293 = getelementptr i8, ptr %0, i16 %292
-  %294 = load i16, ptr %293
-  %295 = zext i16 %294 to i32
-  %296 = mul i32 %295, 10
-  %297 = add i32 %296, %288
-  %298 = trunc i32 %297 to i16
-  store i16 %298, ptr %293
-  %299 = lshr i32 %297, 16
-  %300 = add i16 %289, 1
-  br label %287
-
-301:
-  br label %302
-
-302:
-  %303 = phi i32 [ 0, %301 ], [ %314, %306 ]
-  %304 = phi i16 [ 0, %301 ], [ %315, %306 ]
-  %305 = icmp slt i16 %304, 72
-  br i1 %305, label %306, label %316
-
-306:
-  %307 = shl i16 %304, 1
-  %308 = getelementptr i8, ptr %8, i16 %307
-  %309 = load i16, ptr %308
-  %310 = zext i16 %309 to i32
-  %311 = mul i32 %310, 10
-  %312 = add i32 %311, %303
-  %313 = trunc i32 %312 to i16
-  store i16 %313, ptr %308
-  %314 = lshr i32 %312, 16
-  %315 = add i16 %304, 1
-  br label %302
-
-316:
-  br label %317
-
-317:
-  %318 = phi i32 [ 0, %316 ], [ %329, %321 ]
-  %319 = phi i16 [ 0, %316 ], [ %330, %321 ]
-  %320 = icmp slt i16 %319, 72
-  br i1 %320, label %321, label %331
-
-321:
-  %322 = shl i16 %319, 1
-  %323 = getelementptr i8, ptr %9, i16 %322
-  %324 = load i16, ptr %323
-  %325 = zext i16 %324 to i32
-  %326 = mul i32 %325, 10
-  %327 = add i32 %326, %318
-  %328 = trunc i32 %327 to i16
-  store i16 %328, ptr %323
-  %329 = lshr i32 %327, 16
-  %330 = add i16 %319, 1
-  br label %317
-
-331:
-  br label %b25
-
-b25:
-  %332 = phi i8 [ 0, %331 ], [ %379, %376 ]
-  br label %333
-
-333:
-  %334 = phi i16 [ 72, %b25 ], [ %337, %349 ]
-  %335 = icmp ne i16 %334, 0
-  br i1 %335, label %336, label %344
-
-336:
-  %337 = add i16 %334, -1
-  %338 = shl i16 %337, 1
-  %339 = getelementptr i8, ptr %0, i16 %338
-  %340 = load i16, ptr %339
-  %341 = getelementptr i8, ptr %7, i16 %338
-  %342 = load i16, ptr %341
-  %343 = icmp ne i16 %340, %342
-  br i1 %343, label %345, label %349
-
-344:
-  br label %353
-
-345:
-  %346 = load i16, ptr %339
-  %347 = load i16, ptr %341
-  %348 = icmp ult i16 %346, %347
-  br i1 %348, label %351, label %350
-
-349:
-  br label %333
-
-350:
-  br label %351
-
-351:
-  %352 = phi i8 [ -1, %345 ], [ 1, %350 ]
-  br label %353
-
-353:
-  %354 = phi i8 [ 0, %344 ], [ %352, %351 ]
-  %355 = sext i8 %354 to i16
-  %356 = icmp sge i16 %355, 0
-  br i1 %356, label %357, label %b27
-
-357:
-  br label %358
-
-358:
-  %359 = phi i32 [ 0, %357 ], [ %374, %362 ]
-  %360 = phi i16 [ 0, %357 ], [ %375, %362 ]
-  %361 = icmp slt i16 %360, 72
-  br i1 %361, label %362, label %376
-
-362:
-  %363 = shl i16 %360, 1
-  %364 = getelementptr i8, ptr %0, i16 %363
-  %365 = load i16, ptr %364
-  %366 = zext i16 %365 to i32
-  %367 = getelementptr i8, ptr %7, i16 %363
-  %368 = load i16, ptr %367
-  %369 = zext i16 %368 to i32
-  %370 = sub i32 %366, %369
-  %371 = sub i32 %370, %359
-  %372 = trunc i32 %371 to i16
-  store i16 %372, ptr %364
-  %373 = lshr i32 %371, 16
-  %374 = and i32 %373, 1
-  %375 = add i16 %360, 1
-  br label %358
-
-376:
-  %377 = zext i8 %332 to i16
-  %378 = add i16 %377, 1
-  %379 = trunc i16 %378 to i8
-  br label %b25
-
-b27:
-  br label %380
-
-380:
-  %381 = phi i16 [ 72, %b27 ], [ %384, %396 ]
-  %382 = icmp ne i16 %381, 0
-  br i1 %382, label %383, label %391
-
-383:
-  %384 = add i16 %381, -1
-  %385 = shl i16 %384, 1
-  %386 = getelementptr i8, ptr %0, i16 %385
-  %387 = load i16, ptr %386
-  %388 = getelementptr i8, ptr %9, i16 %385
-  %389 = load i16, ptr %388
-  %390 = icmp ne i16 %387, %389
-  br i1 %390, label %392, label %396
-
-391:
-  br label %400
-
-392:
-  %393 = load i16, ptr %386
-  %394 = load i16, ptr %388
-  %395 = icmp ult i16 %393, %394
-  br i1 %395, label %398, label %397
-
-396:
-  br label %380
-
-397:
-  br label %398
-
-398:
-  %399 = phi i8 [ -1, %392 ], [ 1, %397 ]
-  br label %400
-
-400:
-  %401 = phi i8 [ 0, %391 ], [ %399, %398 ]
-  %402 = sext i8 %401 to i16
-  %403 = icmp sgt i16 %402, 0
-  %404 = sext i1 %403 to i8
-  br i1 %403, label %406, label %405
-
-405:
-  br i1 %51, label %409, label %412
-
-406:
-  %407 = phi i8 [ %404, %400 ], [ %413, %412 ]
-  %408 = xor i8 %407, -1
-  br label %414
-
-409:
-  %410 = icmp eq i8 %401, 0
-  %411 = sext i1 %410 to i8
-  br label %412
-
-412:
-  %413 = phi i8 [ %50, %405 ], [ %411, %409 ]
-  br label %406
-
-414:
-  %415 = phi i16 [ 0, %406 ], [ %422, %417 ]
-  %416 = icmp slt i16 %415, 72
-  br i1 %416, label %417, label %423
-
-417:
-  %418 = shl i16 %415, 1
-  %419 = getelementptr i8, ptr %10, i16 %418
-  %420 = getelementptr i8, ptr %0, i16 %418
-  %421 = load i16, ptr %420
-  store i16 %421, ptr %419
-  %422 = add i16 %415, 1
-  br label %414
-
-423:
-  br label %424
-
-424:
-  %425 = phi i32 [ 0, %423 ], [ %439, %428 ]
-  %426 = phi i16 [ 0, %423 ], [ %440, %428 ]
-  %427 = icmp slt i16 %426, 72
-  br i1 %427, label %428, label %441
-
-428:
-  %429 = shl i16 %426, 1
-  %430 = getelementptr i8, ptr %10, i16 %429
-  %431 = load i16, ptr %430
-  %432 = zext i16 %431 to i32
-  %433 = getelementptr i8, ptr %8, i16 %429
-  %434 = load i16, ptr %433
-  %435 = zext i16 %434 to i32
-  %436 = add i32 %432, %435
-  %437 = add i32 %436, %425
-  %438 = trunc i32 %437 to i16
-  store i16 %438, ptr %430
-  %439 = lshr i32 %437, 16
-  %440 = add i16 %426, 1
-  br label %424
-
-441:
-  br label %442
-
-442:
-  %443 = phi i16 [ 72, %441 ], [ %446, %458 ]
-  %444 = icmp ne i16 %443, 0
-  br i1 %444, label %445, label %453
-
-445:
-  %446 = add i16 %443, -1
-  %447 = shl i16 %446, 1
-  %448 = getelementptr i8, ptr %10, i16 %447
-  %449 = load i16, ptr %448
-  %450 = getelementptr i8, ptr %7, i16 %447
-  %451 = load i16, ptr %450
-  %452 = icmp ne i16 %449, %451
-  br i1 %452, label %454, label %458
-
-453:
-  br label %462
-
-454:
-  %455 = load i16, ptr %448
-  %456 = load i16, ptr %450
-  %457 = icmp ult i16 %455, %456
-  br i1 %457, label %460, label %459
-
-458:
-  br label %442
-
-459:
-  br label %460
-
-460:
-  %461 = phi i8 [ -1, %454 ], [ 1, %459 ]
-  br label %462
-
-462:
-  %463 = phi i8 [ 0, %453 ], [ %461, %460 ]
-  %464 = sext i8 %463 to i16
-  %465 = icmp sgt i16 %464, 0
-  %466 = sext i1 %465 to i8
-  br i1 %465, label %468, label %467
-
-467:
-  br i1 %238, label %471, label %474
-
-468:
-  %469 = phi i8 [ %466, %462 ], [ %475, %474 ]
-  %470 = icmp ne i8 %407, 0
-  br i1 %470, label %b28, label %b29
-
-471:
-  %472 = icmp eq i8 %463, 0
-  %473 = sext i1 %472 to i8
-  br label %474
-
-474:
-  %475 = phi i8 [ %3, %467 ], [ %473, %471 ]
-  br label %468
-
-b28:
-  %476 = xor i8 %469, -1
-  br label %b29
-
-b29:
-  %477 = phi i8 [ %407, %468 ], [ %476, %b28 ]
-  %478 = icmp ne i8 %477, 0
-  br i1 %478, label %b30, label %b32
-
-b30:
-  %479 = zext i8 %332 to i16
-  %480 = add i16 %479, 48
-  %481 = trunc i16 %480 to i8
-  %482 = getelementptr i8, ptr %4, i16 %286
-  store i8 %481, ptr %482
-  %483 = add i16 %286, 1
-  br label %b22
-
-b32:
-  %484 = icmp ne i8 %408, 0
-  br i1 %484, label %b33, label %b34
-
-b33:
-  br label %b34
-
-b34:
-  %485 = phi i8 [ %408, %b32 ], [ %469, %b33 ]
-  %486 = icmp ne i8 %485, 0
-  br i1 %486, label %487, label %b36
-
-487:
-  br label %488
-
-488:
-  %489 = phi i16 [ 0, %487 ], [ %496, %491 ]
-  %490 = icmp slt i16 %489, 72
-  br i1 %490, label %491, label %497
-
-491:
-  %492 = shl i16 %489, 1
-  %493 = getelementptr i8, ptr %10, i16 %492
-  %494 = getelementptr i8, ptr %0, i16 %492
-  %495 = load i16, ptr %494
-  store i16 %495, ptr %493
-  %496 = add i16 %489, 1
-  br label %488
-
-497:
-  call addrspace(1) void @floats.shift(ptr %10, i16 1)
-  br label %498
-
-498:
-  %499 = phi i16 [ 72, %497 ], [ %502, %514 ]
-  %500 = icmp ne i16 %499, 0
-  br i1 %500, label %501, label %509
-
-501:
-  %502 = add i16 %499, -1
-  %503 = shl i16 %502, 1
-  %504 = getelementptr i8, ptr %10, i16 %503
-  %505 = load i16, ptr %504
-  %506 = getelementptr i8, ptr %7, i16 %503
-  %507 = load i16, ptr %506
-  %508 = icmp ne i16 %505, %507
-  br i1 %508, label %510, label %514
-
-509:
-  br label %518
-
-510:
-  %511 = load i16, ptr %504
-  %512 = load i16, ptr %506
-  %513 = icmp ult i16 %511, %512
-  br i1 %513, label %516, label %515
-
-514:
-  br label %498
-
-515:
-  br label %516
-
-516:
-  %517 = phi i8 [ -1, %510 ], [ 1, %515 ]
-  br label %518
-
-518:
-  %519 = phi i8 [ 0, %509 ], [ %517, %516 ]
-  %520 = sext i8 %519 to i16
-  %521 = icmp sge i16 %520, 0
-  br i1 %521, label %b38, label %b40
-
-b36:
-  %522 = icmp ne i8 %469, 0
-  br i1 %522, label %b41, label %b43
-
-b37:
-  %523 = phi i8 [ %535, %b40 ], [ %539, %b43 ]
-  %524 = zext i8 %523 to i16
-  %525 = add i16 %524, 48
-  %526 = trunc i16 %525 to i8
-  %527 = getelementptr i8, ptr %4, i16 %286
-  store i8 %526, ptr %527
-  %528 = add i16 %286, 1
-  store i16 %528, ptr %6, !tbaa !2
-  %529 = getelementptr inbounds i8, ptr %6, i16 2
-  store i16 %160, ptr %529, !tbaa !2
-  %530 = addrspacecast ptr %6 to ptr addrspace(1)
-  %531 = load i32, ptr addrspace(1) %530, !tbaa !2
-  ret i32 %531
-
-b38:
-  %532 = zext i8 %332 to i16
-  %533 = add i16 %532, 1
-  %534 = trunc i16 %533 to i8
-  br label %b40
-
-b40:
-  %535 = phi i8 [ %534, %b38 ], [ %332, %518 ]
-  br label %b37
-
-b41:
-  %536 = zext i8 %332 to i16
-  %537 = add i16 %536, 1
-  %538 = trunc i16 %537 to i8
-  br label %b43
-
-b43:
-  %539 = phi i8 [ %538, %b41 ], [ %332, %b36 ]
-  br label %b37
-}
-
-define internal void @floats.print_float(ptr addrspace(1) %0, i16 %1, i16 %2, i16 %3, i16 %4) addrspace(1) {
-b1:
-  %5 = alloca [4 x i8]
-  call void @llvm.memset.p0.i16(ptr %5, i8 0, i16 4, i1 false)
-  %6 = call addrspace(1) ptr @heap.allocate(i16 752)
+define internal cc 1006 void @floats.print_float(ptr addrspace(5) nocapture readonly %0, i16 range(i16 2, 5) %1, i16 range(i16 4, 8) %2, i16 range(i16 255, 2048) %3, i16 range(i16 150, 1076) %4) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
+  %6 = tail call cc 1005 addrspace(1) ptr @heap.allocate(i16 752)
   %7 = getelementptr i8, ptr %6, i16 720
-  %8 = add i16 %1, -1
-  %9 = shl i16 %8, 1
-  %10 = getelementptr i8, ptr addrspace(1) %0, i16 %9
-  %11 = load i16, ptr addrspace(1) %10
+  %8 = add nsw i16 %1, -1
+  %9 = shl nuw nsw i16 %8, 1
+  %10 = getelementptr i8, ptr addrspace(5) %0, i16 %9
+  %11 = load i16, ptr addrspace(5) %10
   %12 = lshr i16 %11, %2
   %13 = and i16 %12, %3
-  %14 = shl i16 1, %2
-  %15 = add i16 %14, -1
+  %14 = shl nuw nsw i16 1, %2
+  %15 = add nsw i16 %14, -1
   %16 = and i16 %11, %15
   %17 = icmp eq i16 %16, 0
-  %18 = sext i1 %17 to i8
-  br label %b2
-
-b2:
-  %19 = phi i8 [ %18, %b1 ], [ %31, %b7 ]
-  %20 = phi i16 [ 0, %b1 ], [ %32, %b7 ]
-  %21 = icmp ult i16 %20, %8
-  br i1 %21, label %b3, label %b5
-
-b3:
-  %22 = icmp ne i8 %19, 0
-  br i1 %22, label %b6, label %b7
-
-b5:
-  %23 = lshr i16 %11, 15
-  %24 = icmp ne i16 %23, 0
-  %25 = sext i1 %24 to i8
-  br i1 %24, label %b8, label %b9
-
-b6:
-  %26 = shl i16 %20, 1
-  %27 = getelementptr i8, ptr addrspace(1) %0, i16 %26
-  %28 = load i16, ptr addrspace(1) %27
-  %29 = icmp eq i16 %28, 0
-  %30 = sext i1 %29 to i8
-  br label %b7
-
-b7:
-  %31 = phi i8 [ %19, %b3 ], [ %30, %b6 ]
-  %32 = add i16 %20, 1
-  br label %b2
-
-b8:
-  %33 = icmp eq i16 %13, %3
-  %34 = sext i1 %33 to i8
-  br i1 %33, label %b10, label %b11
-
-b9:
-  %35 = phi i8 [ %25, %b5 ], [ %39, %b11 ]
-  %36 = icmp ne i8 %35, 0
-  br i1 %36, label %b12, label %b14
-
-b10:
-  %37 = xor i8 %19, -1
-  br label %b11
-
-b11:
-  %38 = phi i8 [ %34, %b8 ], [ %37, %b10 ]
-  %39 = xor i8 %38, -1
-  br label %b9
-
-b12:
-  %40 = getelementptr i8, ptr %7, i16 0
-  store i8 45, ptr %40
-  br label %b14
-
-b14:
-  %41 = phi i16 [ 1, %b12 ], [ 0, %b9 ]
-  %42 = icmp eq i16 %13, %3
-  br i1 %42, label %b15, label %b16
-
-b15:
-  %43 = icmp ne i8 %19, 0
-  br i1 %43, label %b18, label %b19
-
-b16:
-  %44 = icmp eq i16 %13, 0
-  %45 = sext i1 %44 to i8
-  br i1 %44, label %b21, label %b22
-
-b17:
-  %46 = phi i16 [ %54, %63 ], [ %91, %b25 ]
-  call addrspace(1) void @format.number(ptr %7, i16 %46)
-  call addrspace(1) void @heap.release(ptr %6)
-  ret void
-
-b18:
-  %47 = getelementptr i8, ptr @$str21, i16 6
-  br label %b20
-
-b19:
-  %48 = getelementptr i8, ptr @$str22, i16 6
-  br label %b20
-
-b20:
-  %49 = phi ptr [ %47, %b18 ], [ %48, %b19 ]
-  %50 = getelementptr i8, ptr %49, i16 -4
-  %51 = load i16, ptr %50
-  %52 = addrspacecast ptr %49 to ptr addrspace(1)
-  br label %53
-
-53:
-  %54 = phi i16 [ %41, %b20 ], [ %61, %57 ]
-  %55 = phi i16 [ 0, %b20 ], [ %62, %57 ]
-  %56 = icmp ult i16 %55, %51
-  br i1 %56, label %57, label %63
-
-57:
-  %58 = getelementptr i8, ptr addrspace(1) %52, i16 %55
-  %59 = load i8, ptr addrspace(1) %58
-  %60 = getelementptr i8, ptr %7, i16 %54
-  store i8 %59, ptr %60
-  %61 = add i16 %54, 1
-  %62 = add i16 %55, 1
-  br label %53
-
-63:
-  br label %b17
-
-b21:
-  br label %b22
-
-b22:
-  %64 = phi i8 [ %45, %b16 ], [ %19, %b21 ]
-  %65 = icmp ne i8 %64, 0
-  br i1 %65, label %b23, label %81
-
-b23:
-  %66 = getelementptr i8, ptr @$str23, i16 6
-  %67 = getelementptr i8, ptr %66, i16 -4
-  %68 = load i16, ptr %67
-  %69 = addrspacecast ptr %66 to ptr addrspace(1)
-  br label %70
-
-70:
-  %71 = phi i16 [ %41, %b23 ], [ %78, %74 ]
-  %72 = phi i16 [ 0, %b23 ], [ %79, %74 ]
-  %73 = icmp ult i16 %72, %68
-  br i1 %73, label %74, label %80
-
-74:
-  %75 = getelementptr i8, ptr addrspace(1) %69, i16 %72
-  %76 = load i8, ptr addrspace(1) %75
-  %77 = getelementptr i8, ptr %7, i16 %71
-  store i8 %76, ptr %77
-  %78 = add i16 %71, 1
-  %79 = add i16 %72, 1
-  br label %70
-
-80:
-  br label %b25
-
-81:
-  br label %82
-
-82:
-  %83 = phi i16 [ 0, %81 ], [ %88, %85 ]
-  %84 = icmp slt i16 %83, 72
-  br i1 %84, label %85, label %89
-
-85:
-  %86 = shl i16 %83, 1
-  %87 = getelementptr i8, ptr %6, i16 %86
-  store i16 0, ptr %87
-  %88 = add i16 %83, 1
-  br label %82
-
-89:
-  %90 = getelementptr i8, ptr %6, i16 0
-  store i16 0, ptr %90
-  br label %b26
-
-b25:
-  %91 = phi i16 [ %71, %80 ], [ %120, %b37 ]
-  br label %b17
-
-b26:
-  %92 = phi i16 [ 0, %89 ], [ %98, %b27 ]
-  %93 = icmp ult i16 %92, %8
-  br i1 %93, label %b27, label %b29
-
-b27:
-  %94 = shl i16 %92, 1
-  %95 = getelementptr i8, ptr %6, i16 %94
-  %96 = getelementptr i8, ptr addrspace(1) %0, i16 %94
-  %97 = load i16, ptr addrspace(1) %96
-  store i16 %97, ptr %95
-  %98 = add i16 %92, 1
-  br label %b26
-
-b29:
-  %99 = getelementptr i8, ptr %6, i16 %9
-  %100 = icmp ne i16 %13, 0
-  br i1 %100, label %b30, label %b32
-
-b30:
-  br label %b32
-
-b32:
-  %101 = phi i16 [ %14, %b30 ], [ 0, %b29 ]
-  %102 = or i16 %16, %101
-  store i16 %102, ptr %99
-  br i1 %100, label %b35, label %b34
-
-b34:
-  br label %b35
-
-b35:
-  %103 = phi i16 [ %13, %b32 ], [ 1, %b34 ]
-  %104 = sub i16 %103, %4
-  %105 = getelementptr i8, ptr %7, i16 16
-  %106 = icmp ugt i16 %13, 1
-  %107 = sext i1 %106 to i8
-  br i1 %106, label %b36, label %b37
-
-b36:
-  br label %b37
-
-b37:
-  %108 = phi i8 [ %107, %b35 ], [ %19, %b36 ]
-  %109 = getelementptr i8, ptr addrspace(1) %0, i16 0
-  %110 = load i16, ptr addrspace(1) %109
-  %111 = and i16 %110, 1
-  %112 = icmp eq i16 %111, 0
-  %113 = sext i1 %112 to i8
-  %114 = call addrspace(1) i32 @floats.digits(ptr %6, i16 %104, i8 %108, i8 %113, ptr %105)
-  %115 = addrspacecast ptr %5 to ptr addrspace(1)
-  store i32 %114, ptr addrspace(1) %115, !tbaa !2
-  %116 = load i16, ptr %5, !tbaa !2
-  %117 = getelementptr inbounds i8, ptr %5, i16 2
-  %118 = load i16, ptr %117, !tbaa !2
-  %119 = add i16 %118, -1
-  %120 = call addrspace(1) i16 @floats.decimal(ptr %7, i16 %41, ptr %105, i16 %116, i16 %119)
-  br label %b25
-}
-
-define internal i16 @floats.decimal(ptr %0, i16 %1, ptr %2, i16 %3, i16 %4) addrspace(1) willreturn {
-b1:
-  %5 = icmp sge i16 %4, -4
-  %6 = sext i1 %5 to i8
-  br i1 %5, label %b2, label %b3
-
-b2:
-  %7 = icmp slt i16 %4, 16
-  %8 = sext i1 %7 to i8
+  %18 = zext i1 %17 to i8
+  %19 = add nsw i16 %1, -1
   br label %b3
 
 b3:
-  %9 = phi i8 [ %6, %b1 ], [ %8, %b2 ]
-  %10 = icmp ne i8 %9, 0
-  br i1 %10, label %b4, label %b5
-
-b4:
-  %11 = icmp slt i16 %4, 0
-  br i1 %11, label %b7, label %b9
+  %20 = phi i16 [ %31, %b7 ], [ 0, %5 ]
+  %21 = phi i16 [ %30, %b7 ], [ %19, %5 ]
+  %22 = phi i8 [ %18, %5 ], [ %29, %b7 ]
+  %23 = icmp eq i8 %22, 0
+  br i1 %23, label %b7, label %b6
 
 b5:
-  %12 = getelementptr i8, ptr %2, i16 0
-  %13 = load i8, ptr %12
-  %14 = getelementptr i8, ptr %0, i16 %1
-  store i8 %13, ptr %14
-  %15 = add i16 %1, 1
-  %16 = icmp ugt i16 %3, 1
-  br i1 %16, label %75, label %b34
+  %24 = icmp sgt i16 %11, -1
+  br i1 %24, label %b10, label %b11
+
+b6:
+  %25 = getelementptr i8, ptr addrspace(5) %0, i16 %20
+  %26 = load i16, ptr addrspace(5) %25
+  %27 = icmp eq i16 %26, 0
+  %28 = zext i1 %27 to i8
+  br label %b7
 
 b7:
-  %17 = getelementptr i8, ptr @$str24, i16 6
-  %18 = getelementptr i8, ptr %17, i16 -4
-  %19 = load i16, ptr %18
-  %20 = addrspacecast ptr %17 to ptr addrspace(1)
-  br label %21
+  %29 = phi i8 [ %28, %b6 ], [ 0, %b3 ]
+  %30 = add i16 %21, -1
+  %31 = add i16 %20, 2
+  %exitcond17 = icmp eq i16 %30, 0
+  br i1 %exitcond17, label %b5, label %b3
 
-21:
-  %22 = phi i16 [ %1, %b7 ], [ %29, %25 ]
-  %23 = phi i16 [ 0, %b7 ], [ %30, %25 ]
-  %24 = icmp ult i16 %23, %19
-  br i1 %24, label %25, label %31
-
-25:
-  %26 = getelementptr i8, ptr addrspace(1) %20, i16 %23
-  %27 = load i8, ptr addrspace(1) %26
-  %28 = getelementptr i8, ptr %0, i16 %22
-  store i8 %27, ptr %28
-  %29 = add i16 %22, 1
-  %30 = add i16 %23, 1
-  br label %21
-
-31:
-  %32 = sub i16 0, %4
-  %33 = add i16 %32, -1
+32:
+  %33 = getelementptr i8, ptr %6, i16 720
+  store i8 45, ptr %33
   br label %b10
-
-b9:
-  %34 = add i16 %4, 1
-  br label %b18
 
 b10:
-  %35 = phi i16 [ %22, %31 ], [ %40, %38 ]
-  %36 = phi i16 [ 0, %31 ], [ %41, %38 ]
-  %37 = icmp slt i16 %36, %33
-  br i1 %37, label %38, label %b13
+  %34 = phi i16 [ 1, %32 ], [ 0, %b11 ], [ 0, %b5 ]
+  %35 = icmp eq i16 %13, %3
+  br i1 %35, label %38, label %b14
+
+b11:
+  %36 = icmp ne i16 %13, %3
+  %37 = icmp ne i8 %29, 0
+  %or.cond = select i1 %36, i1 true, i1 %37
+  br i1 %or.cond, label %32, label %b10
 
 38:
-  %39 = getelementptr i8, ptr %0, i16 %35
-  store i8 48, ptr %39
-  %40 = add i16 %35, 1
-  %41 = add i16 %36, 1
-  br label %b10
+  %39 = icmp eq i8 %29, 0
+  %40 = select i1 %39, ptr getelementptr inbounds nuw (i8, ptr @$str23, i16 6), ptr getelementptr inbounds nuw (i8, ptr @$str22, i16 6)
+  %41 = select i1 %39, ptr getelementptr (i8, ptr @$str23, i16 2), ptr getelementptr (i8, ptr @$str22, i16 2)
+  %42 = load i16, ptr %41
+  %43 = icmp eq i16 %42, 0
+  br i1 %43, label %b15, label %44
 
-b13:
-  br label %b14
+44:
+  br label %45
+
+45:
+  %46 = phi ptr [ %40, %44 ], [ %54, %45 ]
+  %47 = phi i16 [ %42, %44 ], [ %53, %45 ]
+  %48 = phi i16 [ %52, %45 ], [ %34, %44 ]
+  %49 = load i8, ptr %46
+  %50 = getelementptr i8, ptr %6, i16 %48
+  %51 = getelementptr i8, ptr %50, i16 720
+  store i8 %49, ptr %51
+  %52 = add i16 %48, 1
+  %53 = add i16 %47, -1
+  %54 = getelementptr i8, ptr %46, i16 1
+  %exitcond15 = icmp eq i16 %53, 0
+  br i1 %exitcond15, label %b15, label %45
 
 b14:
-  %42 = phi i16 [ %35, %b13 ], [ %48, %b15 ]
-  %43 = phi i16 [ 0, %b13 ], [ %49, %b15 ]
-  %44 = icmp ult i16 %43, %3
-  br i1 %44, label %b15, label %b17
+  %55 = icmp eq i16 %13, 0
+  %56 = icmp ne i8 %29, 0
+  %or.cond1 = select i1 %55, i1 %56, i1 false
+  br i1 %or.cond1, label %64, label %72
+
+57:
+  %58 = add nuw nsw i16 %34, 2
+  %59 = add i16 %671, %58
+  %60 = sub i16 %59, %353
+  br label %b15
+
+61:
+  %62 = sub i16 %691, %707
+  br label %b15
 
 b15:
-  %45 = getelementptr i8, ptr %2, i16 %43
-  %46 = load i8, ptr %45
-  %47 = getelementptr i8, ptr %0, i16 %42
-  store i8 %46, ptr %47
-  %48 = add i16 %42, 1
-  %49 = add i16 %43, 1
-  br label %b14
+  %63 = phi i16 [ %697, %694 ], [ %758, %745 ], [ %71, %64 ], [ %60, %57 ], [ %62, %61 ], [ %34, %38 ], [ %52, %45 ], [ %661, %660 ]
+  tail call cc 1005 addrspace(1) void @format.number(ptr %7, i16 %63)
+  tail call cc 1005 addrspace(1) void @heap.release(ptr %6)
+  ret void
 
-b17:
-  ret i16 %42
+64:
+  %65 = getelementptr i8, ptr %6, i16 %34
+  %66 = getelementptr i8, ptr %65, i16 720
+  store i8 48, ptr %66
+  %67 = getelementptr i8, ptr %6, i16 %34
+  %68 = getelementptr i8, ptr %67, i16 721
+  store i8 46, ptr %68
+  %69 = getelementptr i8, ptr %6, i16 %34
+  %70 = getelementptr i8, ptr %69, i16 722
+  store i8 48, ptr %70
+  %71 = add nuw nsw i16 %34, 3
+  br label %b15
 
-b18:
-  %50 = phi i16 [ %1, %b9 ], [ %62, %b24 ]
-  %51 = phi i16 [ 0, %b9 ], [ %63, %b24 ]
-  %52 = icmp ult i16 %51, %34
-  br i1 %52, label %b19, label %54
-
-b19:
-  %53 = icmp ult i16 %51, %3
-  br i1 %53, label %b22, label %b24
-
-54:
-  %55 = getelementptr i8, ptr %0, i16 %50
-  store i8 46, ptr %55
-  %56 = add i16 %50, 1
-  %57 = icmp ule i16 %3, %34
-  br i1 %57, label %64, label %b27
-
-b22:
-  %58 = getelementptr i8, ptr %2, i16 %51
-  %59 = load i8, ptr %58
+72:
+  tail call void @llvm.memset.p0.i16(ptr align 2 %6, i8 0, i16 144, i1 false)
+  %73 = add nsw i16 %1, -1
   br label %b24
 
 b24:
-  %60 = phi i8 [ %59, %b22 ], [ 48, %b19 ]
-  %61 = getelementptr i8, ptr %0, i16 %50
-  store i8 %60, ptr %61
-  %62 = add i16 %50, 1
-  %63 = add i16 %51, 1
-  br label %b18
+  %74 = phi i16 [ %80, %b24 ], [ 0, %72 ]
+  %75 = phi i16 [ %79, %b24 ], [ %73, %72 ]
+  %76 = getelementptr i8, ptr %6, i16 %74
+  %77 = getelementptr i8, ptr addrspace(5) %0, i16 %74
+  %78 = load i16, ptr addrspace(5) %77
+  store i16 %78, ptr %76
+  %79 = add i16 %75, -1
+  %80 = add nuw i16 %74, 2
+  %exitcond16 = icmp eq i16 %79, 0
+  br i1 %exitcond16, label %81, label %b24
 
-64:
-  %65 = getelementptr i8, ptr %0, i16 %56
-  store i8 48, ptr %65
-  %66 = add i16 %50, 2
-  ret i16 %66
+81:
+  %82 = icmp eq i16 %13, 0
+  %83 = getelementptr i8, ptr %6, i16 %9
+  %84 = select i1 %82, i16 0, i16 %14
+  %85 = or i16 %84, %16
+  store i16 %85, ptr %83
+  %86 = select i1 %82, i16 1, i16 %13
+  %87 = sub nsw i16 %86, %4
+  %88 = icmp ugt i16 %13, 1
+  %89 = select i1 %88, i8 %29, i8 0
+  %90 = load i16, ptr addrspace(5) %0
+  %91 = trunc i16 %90 to i8
+  %92 = and i8 %91, 1
+  %93 = xor i8 %92, 1
+  %94 = getelementptr i8, ptr %6, i16 288
+  %95 = getelementptr i8, ptr %6, i16 432
+  %96 = getelementptr i8, ptr %6, i16 576
+  %97 = icmp eq i8 %89, 0
+  %98 = xor i1 %97, true
+  %99 = zext i1 %98 to i16
+  %100 = icmp sgt i16 %87, -1
+  br i1 %100, label %101, label %196
 
-b27:
-  br label %b28
+101:
+  %102 = icmp eq i8 %89, 0
+  %103 = add nuw nsw i16 %87, 1
+  %104 = add nuw nsw i16 %103, %99
+  %105 = lshr i16 %104, 4
+  %106 = and i16 %104, 15
+  %107 = call i16 @llvm.umax.i16(i16 %13, i16 1)
+  %108 = add i1 %102, true
+  %109 = zext i1 %108 to i16
+  %110 = add i16 %107, %109
+  %111 = add i16 %110, 1
+  %112 = sub i16 %111, %4
+  %113 = lshr i16 %112, 4
+  %114 = mul nsw i16 %113, -2
+  %115 = getelementptr i8, ptr %6, i16 142
+  br label %116
 
-b28:
-  %67 = phi i16 [ %56, %b27 ], [ %73, %b29 ]
-  %68 = phi i16 [ %34, %b27 ], [ %74, %b29 ]
-  %69 = icmp ult i16 %68, %3
-  br i1 %69, label %b29, label %b31
+116:
+  %117 = phi i16 [ %131, %127 ], [ 71, %101 ]
+  %118 = phi ptr [ %130, %127 ], [ %115, %101 ]
+  %119 = phi i16 [ %129, %127 ], [ -72, %101 ]
+  %120 = icmp samesign ult i16 %117, %105
+  br i1 %120, label %127, label %124
 
-b29:
-  %70 = getelementptr i8, ptr %2, i16 %68
-  %71 = load i8, ptr %70
-  %72 = getelementptr i8, ptr %0, i16 %67
-  store i8 %71, ptr %72
-  %73 = add i16 %67, 1
-  %74 = add i16 %68, 1
-  br label %b28
+121:
+  %122 = icmp eq i16 %106, 0
+  br i1 %122, label %149, label %123
 
-b31:
-  ret i16 %67
+123:
+  br label %133
 
-75:
-  %76 = getelementptr i8, ptr %0, i16 %15
-  store i8 46, ptr %76
-  %77 = add i16 %1, 2
-  br label %b35
+124:
+  %125 = getelementptr i8, ptr %118, i16 %114
+  %126 = load i16, ptr %125
+  br label %127
 
-b34:
-  %78 = phi i16 [ %15, %b5 ], [ %82, %b38 ]
-  %79 = getelementptr i8, ptr %0, i16 %78
-  store i8 101, ptr %79
-  %80 = add i16 %78, 1
-  %81 = icmp slt i16 %4, 0
-  br i1 %81, label %b41, label %b40
+127:
+  %128 = phi i16 [ %126, %124 ], [ 0, %116 ]
+  store i16 %128, ptr %118
+  %129 = add nsw i16 %119, 1
+  %130 = getelementptr i8, ptr %118, i16 -2
+  %131 = add nsw i16 %117, -1
+  %132 = icmp eq i16 %129, 0
+  br i1 %132, label %121, label %116
 
-b35:
-  %82 = phi i16 [ %77, %75 ], [ %88, %b36 ]
-  %83 = phi i16 [ 1, %75 ], [ %89, %b36 ]
-  %84 = icmp ult i16 %83, %3
-  br i1 %84, label %b36, label %b38
+133:
+  %134 = phi i16 [ 73, %123 ], [ %144, %133 ]
+  %135 = shl nuw nsw i16 %134, 1
+  %136 = getelementptr i8, ptr %6, i16 %135
+  %137 = getelementptr i8, ptr %136, i16 -4
+  %138 = load i16, ptr %137
+  %139 = shl nuw nsw i16 %134, 1
+  %140 = getelementptr i8, ptr %6, i16 %139
+  %141 = getelementptr i8, ptr %140, i16 -6
+  %142 = load i16, ptr %141
+  %143 = tail call i16 @llvm.fshl.i16(i16 %138, i16 %142, i16 %106)
+  store i16 %143, ptr %137
+  %144 = add nsw i16 %134, -1
+  %145 = icmp samesign ugt i16 %144, 2
+  br i1 %145, label %133, label %146
 
-b36:
-  %85 = getelementptr i8, ptr %2, i16 %83
-  %86 = load i8, ptr %85
-  %87 = getelementptr i8, ptr %0, i16 %82
-  store i8 %86, ptr %87
-  %88 = add i16 %82, 1
-  %89 = add i16 %83, 1
-  br label %b35
+146:
+  %147 = load i16, ptr %6
+  %148 = shl i16 %147, %106
+  store i16 %148, ptr %6
+  br label %149
 
-b38:
-  br label %b34
+149:
+  %150 = shl nuw nsw i16 2, %99
+  %151 = getelementptr i8, ptr %6, i16 146
+  tail call void @llvm.memset.p0.i16(ptr align 2 %151, i8 0, i16 142, i1 false)
+  %152 = getelementptr i8, ptr %6, i16 144
+  store i16 %150, ptr %152
+  %153 = getelementptr i8, ptr %6, i16 434
+  tail call void @llvm.memset.p0.i16(ptr align 2 %153, i8 0, i16 142, i1 false)
+  %154 = getelementptr i8, ptr %6, i16 432
+  store i16 1, ptr %154
+  %155 = lshr i16 %87, 4
+  %156 = and i16 %87, 15
+  %157 = call i16 @llvm.umax.i16(i16 %13, i16 1)
+  %158 = sub i16 %157, %4
+  %159 = lshr i16 %158, 4
+  %160 = shl nuw nsw i16 %159, 1
+  %161 = sub i16 0, %160
+  %162 = getelementptr i8, ptr %6, i16 574
+  %163 = getelementptr i8, ptr %162, i16 %161
+  br label %164
 
-b40:
-  br label %b41
+164:
+  %165 = phi i16 [ %180, %175 ], [ 71, %149 ]
+  %166 = phi i16 [ %179, %175 ], [ 0, %149 ]
+  %167 = icmp samesign ult i16 %165, %155
+  br i1 %167, label %175, label %172
 
-b41:
-  %90 = phi i8 [ 45, %b34 ], [ 43, %b40 ]
-  %91 = getelementptr i8, ptr %0, i16 %80
-  store i8 %90, ptr %91
-  %92 = add i16 %78, 2
-  br i1 %81, label %b42, label %b44
+168:
+  %169 = icmp eq i16 %156, 0
+  br i1 %169, label %269, label %170
 
-b42:
-  %93 = sub i16 0, %4
-  br label %b44
+170:
+  %171 = getelementptr i8, ptr %6, i16 574
+  br label %182
 
-b44:
-  %94 = phi i16 [ %93, %b42 ], [ %4, %b41 ]
-  %95 = icmp uge i16 %94, 100
-  br i1 %95, label %b45, label %b47
+172:
+  %173 = getelementptr i8, ptr %163, i16 %166
+  %174 = load i16, ptr %173
+  br label %175
 
-b45:
-  %96 = udiv i16 %94, 100
-  %97 = trunc i16 %96 to i8
-  %98 = zext i8 %97 to i16
-  %99 = add i16 %98, 48
-  %100 = trunc i16 %99 to i8
-  %101 = getelementptr i8, ptr %0, i16 %92
-  store i8 %100, ptr %101
-  %102 = add i16 %78, 3
-  br label %b47
+175:
+  %176 = phi i16 [ %174, %172 ], [ 0, %164 ]
+  %177 = getelementptr i8, ptr %6, i16 %166
+  %178 = getelementptr i8, ptr %177, i16 574
+  store i16 %176, ptr %178
+  %179 = add nsw i16 %166, -2
+  %180 = add nsw i16 %165, -1
+  %181 = icmp eq i16 %179, -144
+  br i1 %181, label %168, label %164
 
-b47:
-  %103 = phi i16 [ %102, %b45 ], [ %92, %b44 ]
-  %104 = udiv i16 %94, 10
-  %105 = urem i16 %104, 10
-  %106 = trunc i16 %105 to i8
-  %107 = zext i8 %106 to i16
-  %108 = add i16 %107, 48
-  %109 = trunc i16 %108 to i8
-  %110 = getelementptr i8, ptr %0, i16 %103
-  store i8 %109, ptr %110
-  %111 = add i16 %103, 1
-  %112 = urem i16 %94, 10
-  %113 = trunc i16 %112 to i8
-  %114 = zext i8 %113 to i16
-  %115 = add i16 %114, 48
-  %116 = trunc i16 %115 to i8
-  %117 = getelementptr i8, ptr %0, i16 %111
-  store i8 %116, ptr %117
-  %118 = add i16 %103, 2
-  ret i16 %118
+182:
+  %183 = phi ptr [ %171, %170 ], [ %190, %182 ]
+  %184 = phi i16 [ 73, %170 ], [ %189, %182 ]
+  %185 = load i16, ptr %183
+  %186 = getelementptr i8, ptr %183, i16 -2
+  %187 = load i16, ptr %186
+  %188 = tail call i16 @llvm.fshl.i16(i16 %185, i16 %187, i16 %156)
+  store i16 %188, ptr %183
+  %189 = add nsw i16 %184, -1
+  %190 = getelementptr i8, ptr %183, i16 -2
+  %191 = icmp samesign ugt i16 %189, 2
+  br i1 %191, label %182, label %192
+
+192:
+  %193 = getelementptr i8, ptr %6, i16 432
+  %194 = load i16, ptr %193
+  %195 = shl i16 %194, %156
+  br label %267
+
+196:
+  %197 = icmp eq i8 %89, 0
+  %198 = select i1 %197, i16 1, i16 2
+  tail call void @llvm.memmove.p0.p0.i16(ptr nonnull %6, ptr nonnull %6, i16 144, i1 false), !llrm.backward !36
+  br label %199
+
+199:
+  %200 = phi i16 [ %210, %199 ], [ 73, %196 ]
+  %201 = shl nuw nsw i16 %200, 1
+  %202 = getelementptr i8, ptr %6, i16 %201
+  %203 = getelementptr i8, ptr %202, i16 -4
+  %204 = load i16, ptr %203
+  %205 = shl nuw nsw i16 %200, 1
+  %206 = getelementptr i8, ptr %6, i16 %205
+  %207 = getelementptr i8, ptr %206, i16 -6
+  %208 = load i16, ptr %207
+  %209 = tail call i16 @llvm.fshl.i16(i16 %204, i16 %208, i16 %198)
+  store i16 %209, ptr %203
+  %210 = add nsw i16 %200, -1
+  %211 = icmp samesign ugt i16 %210, 2
+  br i1 %211, label %199, label %212
+
+212:
+  %213 = icmp eq i8 %89, 0
+  %214 = load i16, ptr %6
+  %215 = shl i16 %214, %198
+  store i16 %215, ptr %6
+  %216 = getelementptr i8, ptr %6, i16 146
+  tail call void @llvm.memset.p0.i16(ptr align 2 %216, i8 0, i16 142, i1 false)
+  %217 = getelementptr i8, ptr %6, i16 144
+  store i16 1, ptr %217
+  %218 = sub nsw i16 %99, %87
+  %219 = add nuw nsw i16 %218, 1
+  %220 = lshr i16 %219, 4
+  %221 = and i16 %219, 15
+  %222 = add i1 %213, true
+  %223 = zext i1 %222 to i16
+  %224 = add i16 %4, %223
+  %225 = add i16 %224, 1
+  %226 = call i16 @llvm.umax.i16(i16 %13, i16 1)
+  %227 = sub i16 %225, %226
+  %228 = lshr i16 %227, 4
+  %229 = mul nsw i16 %228, -2
+  %230 = getelementptr i8, ptr %6, i16 286
+  br label %231
+
+231:
+  %232 = phi i16 [ %246, %242 ], [ 71, %212 ]
+  %233 = phi ptr [ %245, %242 ], [ %230, %212 ]
+  %234 = phi i16 [ %244, %242 ], [ -72, %212 ]
+  %235 = icmp samesign ult i16 %232, %220
+  br i1 %235, label %242, label %239
+
+236:
+  %237 = icmp eq i16 %221, 0
+  br i1 %237, label %265, label %238
+
+238:
+  br label %248
+
+239:
+  %240 = getelementptr i8, ptr %233, i16 %229
+  %241 = load i16, ptr %240
+  br label %242
+
+242:
+  %243 = phi i16 [ %241, %239 ], [ 0, %231 ]
+  store i16 %243, ptr %233
+  %244 = add nsw i16 %234, 1
+  %245 = getelementptr i8, ptr %233, i16 -2
+  %246 = add nsw i16 %232, -1
+  %247 = icmp eq i16 %244, 0
+  br i1 %247, label %236, label %231
+
+248:
+  %249 = phi i16 [ 73, %238 ], [ %259, %248 ]
+  %250 = shl nuw nsw i16 %249, 1
+  %251 = getelementptr i8, ptr %6, i16 %250
+  %252 = getelementptr i8, ptr %251, i16 140
+  %253 = load i16, ptr %252
+  %254 = shl nuw nsw i16 %249, 1
+  %255 = getelementptr i8, ptr %6, i16 %254
+  %256 = getelementptr i8, ptr %255, i16 138
+  %257 = load i16, ptr %256
+  %258 = tail call i16 @llvm.fshl.i16(i16 %253, i16 %257, i16 %221)
+  store i16 %258, ptr %252
+  %259 = add nsw i16 %249, -1
+  %260 = icmp samesign ugt i16 %259, 2
+  br i1 %260, label %248, label %261
+
+261:
+  %262 = getelementptr i8, ptr %6, i16 144
+  %263 = load i16, ptr %262
+  %264 = shl i16 %263, %221
+  store i16 %264, ptr %262
+  br label %265
+
+265:
+  %266 = getelementptr i8, ptr %6, i16 434
+  tail call void @llvm.memset.p0.i16(ptr align 2 %266, i8 0, i16 142, i1 false)
+  br label %267
+
+267:
+  %sink = phi i16 [ 1, %265 ], [ %195, %192 ]
+  %268 = getelementptr i8, ptr %6, i16 432
+  store i16 %sink, ptr %268
+  br label %269
+
+269:
+  %270 = icmp eq i8 %89, 0
+  tail call void @llvm.memcpy.p0.p0.i16(ptr align 2 %94, ptr align 2 %95, i16 144, i1 false), !llrm.forward !35
+  br i1 %270, label %287, label %271
+
+271:
+  %272 = getelementptr i8, ptr %6, i16 430
+  br label %273
+
+273:
+  %274 = phi ptr [ %272, %271 ], [ %281, %273 ]
+  %275 = phi i16 [ 73, %271 ], [ %280, %273 ]
+  %276 = load i16, ptr %274
+  %277 = getelementptr i8, ptr %274, i16 -2
+  %278 = load i16, ptr %277
+  %279 = tail call i16 @llvm.fshl.i16(i16 %276, i16 %278, i16 1)
+  store i16 %279, ptr %274
+  %280 = add nsw i16 %275, -1
+  %281 = getelementptr i8, ptr %274, i16 -2
+  %282 = icmp samesign ugt i16 %280, 2
+  br i1 %282, label %273, label %283
+
+283:
+  %284 = getelementptr i8, ptr %6, i16 288
+  %285 = load i16, ptr %284
+  %286 = shl i16 %285, 1
+  store i16 %286, ptr %284
+  br label %287
+
+287:
+  %288 = icmp eq i8 %92, 0
+  %289 = xor i1 %288, true
+  %290 = getelementptr i8, ptr %6, i16 722
+  %291 = getelementptr i8, ptr %290, i16 %34
+  br label %292
+
+292:
+  %293 = phi i16 [ %348, %345 ], [ 1, %287 ]
+  %294 = phi ptr [ %347, %345 ], [ %291, %287 ]
+  %295 = phi i16 [ 0, %287 ], [ %346, %345 ]
+  tail call void @llvm.memcpy.p0.p0.i16(ptr %96, ptr nonnull %6, i16 144, i1 false)
+  br label %296
+
+296:
+  %297 = phi i16 [ %311, %296 ], [ -144, %292 ]
+  %298 = phi i32 [ 0, %292 ], [ %310, %296 ]
+  %299 = getelementptr i8, ptr %6, i16 %297
+  %300 = getelementptr i8, ptr %299, i16 720
+  %301 = load i16, ptr %300
+  %302 = zext i16 %301 to i32
+  %303 = getelementptr i8, ptr %6, i16 %297
+  %304 = getelementptr i8, ptr %303, i16 432
+  %305 = load i16, ptr %304
+  %306 = zext i16 %305 to i32
+  %307 = add nuw nsw i32 %298, %302
+  %308 = add nuw nsw i32 %307, %306
+  %309 = trunc i32 %308 to i16
+  store i16 %309, ptr %300
+  %310 = lshr i32 %308, 16
+  %311 = add nsw i16 %297, 2
+  %exitcond14 = icmp eq i16 %311, 0
+  br i1 %exitcond14, label %315, label %296
+
+312:
+  %313 = add nsw i16 %317, -2
+  %314 = icmp eq i16 %313, 574
+  br i1 %314, label %327, label %316
+
+315:
+  br label %316
+
+316:
+  %317 = phi i16 [ 718, %315 ], [ %313, %312 ]
+  %318 = getelementptr i8, ptr %6, i16 %317
+  %319 = load i16, ptr %318
+  %320 = getelementptr i8, ptr %6, i16 %317
+  %321 = getelementptr i8, ptr %320, i16 -432
+  %322 = load i16, ptr %321
+  %323 = icmp eq i16 %319, %322
+  br i1 %323, label %312, label %324
+
+324:
+  %325 = icmp ult i16 %319, %322
+  %326 = select i1 %325, i8 -1, i8 1
+  br label %327
+
+327:
+  %common.op5 = phi i8 [ %326, %324 ], [ 0, %312 ]
+  %328 = icmp sgt i8 %common.op5, 0
+  %329 = icmp eq i8 %common.op5, 0
+  %330 = and i1 %329, %289
+  %331 = select i1 %328, i1 true, i1 %330
+  br i1 %331, label %332, label %349
+
+332:
+  br label %333
+
+333:
+  %334 = phi i16 [ -144, %332 ], [ %344, %333 ]
+  %335 = phi i32 [ %343, %333 ], [ 0, %332 ]
+  %336 = getelementptr i8, ptr %6, i16 %334
+  %337 = getelementptr i8, ptr %336, i16 288
+  %338 = load i16, ptr %337
+  %339 = zext i16 %338 to i32
+  %340 = mul nuw nsw i32 %339, 10
+  %341 = add nuw nsw i32 %340, %335
+  %342 = trunc i32 %341 to i16
+  store i16 %342, ptr %337
+  %343 = lshr i32 %341, 16
+  %344 = add nsw i16 %334, 2
+  %exitcond13 = icmp eq i16 %344, 0
+  br i1 %exitcond13, label %345, label %333
+
+345:
+  %346 = add i16 %295, 1
+  %347 = getelementptr i8, ptr %294, i16 -1
+  %348 = add i16 %293, -1
+  br label %292
+
+349:
+  br label %350
+
+350:
+  %351 = phi i16 [ %293, %349 ], [ %448, %445 ]
+  %352 = phi ptr [ %294, %349 ], [ %447, %445 ]
+  %353 = phi i16 [ %446, %445 ], [ %295, %349 ]
+  tail call void @llvm.memcpy.p0.p0.i16(ptr %96, ptr nonnull %6, i16 144, i1 false)
+  br label %354
+
+354:
+  %355 = phi i16 [ %369, %354 ], [ -144, %350 ]
+  %356 = phi i32 [ 0, %350 ], [ %368, %354 ]
+  %357 = getelementptr i8, ptr %6, i16 %355
+  %358 = getelementptr i8, ptr %357, i16 720
+  %359 = load i16, ptr %358
+  %360 = zext i16 %359 to i32
+  %361 = getelementptr i8, ptr %6, i16 %355
+  %362 = getelementptr i8, ptr %361, i16 432
+  %363 = load i16, ptr %362
+  %364 = zext i16 %363 to i32
+  %365 = add nuw nsw i32 %356, %360
+  %366 = add nuw nsw i32 %365, %364
+  %367 = trunc i32 %366 to i16
+  store i16 %367, ptr %358
+  %368 = lshr i32 %366, 16
+  %369 = add nsw i16 %355, 2
+  %exitcond11 = icmp eq i16 %369, 0
+  br i1 %exitcond11, label %370, label %354
+
+370:
+  br label %371
+
+371:
+  %372 = phi i16 [ -144, %370 ], [ %382, %371 ]
+  %373 = phi i32 [ %381, %371 ], [ 0, %370 ]
+  %374 = getelementptr i8, ptr %6, i16 %372
+  %375 = getelementptr i8, ptr %374, i16 720
+  %376 = load i16, ptr %375
+  %377 = zext i16 %376 to i32
+  %378 = mul nuw nsw i32 %377, 10
+  %379 = add nuw nsw i32 %378, %373
+  %380 = trunc i32 %379 to i16
+  store i16 %380, ptr %375
+  %381 = lshr i32 %379, 16
+  %382 = add nsw i16 %372, 2
+  %exitcond10 = icmp eq i16 %382, 0
+  br i1 %exitcond10, label %386, label %371
+
+383:
+  %384 = add nsw i16 %388, -2
+  %385 = icmp eq i16 %384, 574
+  br i1 %385, label %398, label %387
+
+386:
+  br label %387
+
+387:
+  %388 = phi i16 [ 718, %386 ], [ %384, %383 ]
+  %389 = getelementptr i8, ptr %6, i16 %388
+  %390 = load i16, ptr %389
+  %391 = getelementptr i8, ptr %6, i16 %388
+  %392 = getelementptr i8, ptr %391, i16 -432
+  %393 = load i16, ptr %392
+  %394 = icmp eq i16 %390, %393
+  br i1 %394, label %383, label %395
+
+395:
+  %396 = icmp ult i16 %390, %393
+  %397 = select i1 %396, i8 -1, i8 1
+  br label %398
+
+398:
+  %common.op4 = phi i8 [ %397, %395 ], [ 0, %383 ]
+  %399 = icmp sgt i8 %common.op4, 0
+  %400 = icmp eq i8 %common.op4, 0
+  %401 = and i1 %400, %289
+  %402 = select i1 %399, i1 true, i1 %401
+  br i1 %402, label %404, label %403
+
+403:
+  br label %407
+
+404:
+  %405 = icmp eq i8 %93, 0
+  %406 = xor i1 %405, true
+  br label %449
+
+407:
+  %408 = phi i16 [ -144, %403 ], [ %418, %407 ]
+  %409 = phi i32 [ %417, %407 ], [ 0, %403 ]
+  %410 = getelementptr i8, ptr %6, i16 %408
+  %411 = getelementptr i8, ptr %410, i16 144
+  %412 = load i16, ptr %411
+  %413 = zext i16 %412 to i32
+  %414 = mul nuw nsw i32 %413, 10
+  %415 = add nuw nsw i32 %414, %409
+  %416 = trunc i32 %415 to i16
+  store i16 %416, ptr %411
+  %417 = lshr i32 %415, 16
+  %418 = add nsw i16 %408, 2
+  %exitcond9 = icmp eq i16 %418, 0
+  br i1 %exitcond9, label %419, label %407
+
+419:
+  br label %420
+
+420:
+  %421 = phi i16 [ -144, %419 ], [ %431, %420 ]
+  %422 = phi i32 [ %430, %420 ], [ 0, %419 ]
+  %423 = getelementptr i8, ptr %6, i16 %421
+  %424 = getelementptr i8, ptr %423, i16 432
+  %425 = load i16, ptr %424
+  %426 = zext i16 %425 to i32
+  %427 = mul nuw nsw i32 %426, 10
+  %428 = add nuw nsw i32 %427, %422
+  %429 = trunc i32 %428 to i16
+  store i16 %429, ptr %424
+  %430 = lshr i32 %428, 16
+  %431 = add nsw i16 %421, 2
+  %exitcond8 = icmp eq i16 %431, 0
+  br i1 %exitcond8, label %432, label %420
+
+432:
+  br label %433
+
+433:
+  %434 = phi i16 [ -144, %432 ], [ %444, %433 ]
+  %435 = phi i32 [ %443, %433 ], [ 0, %432 ]
+  %436 = getelementptr i8, ptr %6, i16 %434
+  %437 = getelementptr i8, ptr %436, i16 576
+  %438 = load i16, ptr %437
+  %439 = zext i16 %438 to i32
+  %440 = mul nuw nsw i32 %439, 10
+  %441 = add nuw nsw i32 %440, %435
+  %442 = trunc i32 %441 to i16
+  store i16 %442, ptr %437
+  %443 = lshr i32 %441, 16
+  %444 = add nsw i16 %434, 2
+  %exitcond7 = icmp eq i16 %444, 0
+  br i1 %exitcond7, label %445, label %433
+
+445:
+  %446 = add i16 %353, -1
+  %447 = getelementptr i8, ptr %352, i16 1
+  %448 = add i16 %351, 1
+  br label %350
+
+449:
+  %450 = phi i16 [ %591, %586 ], [ %351, %404 ]
+  %451 = phi i16 [ 0, %404 ], [ %590, %586 ]
+  br label %452
+
+452:
+  %453 = phi i16 [ %463, %452 ], [ -144, %449 ]
+  %454 = phi i32 [ 0, %449 ], [ %462, %452 ]
+  %455 = getelementptr i8, ptr %6, i16 %453
+  %456 = getelementptr i8, ptr %455, i16 144
+  %457 = load i16, ptr %456
+  %458 = zext i16 %457 to i32
+  %459 = mul nuw nsw i32 %458, 10
+  %460 = add nuw nsw i32 %459, %454
+  %461 = trunc i32 %460 to i16
+  store i16 %461, ptr %456
+  %462 = lshr i32 %460, 16
+  %463 = add nsw i16 %453, 2
+  %exitcond6 = icmp eq i16 %463, 0
+  br i1 %exitcond6, label %464, label %452
+
+464:
+  br label %465
+
+465:
+  %466 = phi i16 [ -144, %464 ], [ %476, %465 ]
+  %467 = phi i32 [ %475, %465 ], [ 0, %464 ]
+  %468 = getelementptr i8, ptr %6, i16 %466
+  %469 = getelementptr i8, ptr %468, i16 432
+  %470 = load i16, ptr %469
+  %471 = zext i16 %470 to i32
+  %472 = mul nuw nsw i32 %471, 10
+  %473 = add nuw nsw i32 %472, %467
+  %474 = trunc i32 %473 to i16
+  store i16 %474, ptr %469
+  %475 = lshr i32 %473, 16
+  %476 = add nsw i16 %466, 2
+  %exitcond5 = icmp eq i16 %476, 0
+  br i1 %exitcond5, label %477, label %465
+
+477:
+  br label %478
+
+478:
+  %479 = phi i16 [ -144, %477 ], [ %489, %478 ]
+  %480 = phi i32 [ %488, %478 ], [ 0, %477 ]
+  %481 = getelementptr i8, ptr %6, i16 %479
+  %482 = getelementptr i8, ptr %481, i16 576
+  %483 = load i16, ptr %482
+  %484 = zext i16 %483 to i32
+  %485 = mul nuw nsw i32 %484, 10
+  %486 = add nuw nsw i32 %485, %480
+  %487 = trunc i32 %486 to i16
+  store i16 %487, ptr %482
+  %488 = lshr i32 %486, 16
+  %489 = add nsw i16 %479, 2
+  %exitcond41 = icmp eq i16 %489, 0
+  br i1 %exitcond41, label %490, label %478
+
+490:
+  br label %491
+
+491:
+  %492 = phi i8 [ %527, %526 ], [ 0, %490 ]
+  br label %496
+
+493:
+  %494 = add nsw i16 %497, -2
+  %495 = icmp eq i16 %494, 0
+  br i1 %495, label %508, label %496
+
+496:
+  %497 = phi i16 [ %494, %493 ], [ 144, %491 ]
+  %498 = getelementptr i8, ptr %6, i16 %497
+  %499 = getelementptr i8, ptr %498, i16 -2
+  %500 = load i16, ptr %499
+  %501 = getelementptr i8, ptr %6, i16 %497
+  %502 = getelementptr i8, ptr %501, i16 142
+  %503 = load i16, ptr %502
+  %504 = icmp eq i16 %500, %503
+  br i1 %504, label %493, label %505
+
+505:
+  %506 = icmp ult i16 %500, %503
+  br i1 %506, label %507, label %508
+
+507:
+  br label %531
+
+508:
+  br label %509
+
+509:
+  %510 = phi i16 [ -144, %508 ], [ %525, %509 ]
+  %511 = phi i32 [ %524, %509 ], [ 0, %508 ]
+  %512 = getelementptr i8, ptr %6, i16 %510
+  %513 = getelementptr i8, ptr %512, i16 144
+  %514 = load i16, ptr %513
+  %515 = zext i16 %514 to i32
+  %516 = getelementptr i8, ptr %6, i16 %510
+  %517 = getelementptr i8, ptr %516, i16 288
+  %518 = load i16, ptr %517
+  %519 = zext i16 %518 to i32
+  %520 = add nuw nsw i32 %511, %519
+  %521 = sub nsw i32 %515, %520
+  %522 = trunc i32 %521 to i16
+  store i16 %522, ptr %513
+  %523 = lshr i32 %521, 16
+  %524 = and i32 %523, 1
+  %525 = add nsw i16 %510, 2
+  %exitcond3 = icmp eq i16 %525, 0
+  br i1 %exitcond3, label %526, label %509
+
+526:
+  %527 = add i8 %492, 1
+  br label %491
+
+528:
+  %529 = add nsw i16 %532, -2
+  %530 = icmp eq i16 %529, 430
+  br i1 %530, label %542, label %531
+
+531:
+  %532 = phi i16 [ 574, %507 ], [ %529, %528 ]
+  %533 = getelementptr i8, ptr %6, i16 %532
+  %534 = getelementptr i8, ptr %533, i16 -432
+  %535 = load i16, ptr %534
+  %536 = getelementptr i8, ptr %6, i16 %532
+  %537 = load i16, ptr %536
+  %538 = icmp eq i16 %535, %537
+  br i1 %538, label %528, label %539
+
+539:
+  %540 = icmp ult i16 %535, %537
+  %541 = select i1 %540, i8 -1, i8 1
+  br label %542
+
+542:
+  %common.op2 = phi i8 [ %541, %539 ], [ 0, %528 ]
+  %543 = icmp sgt i8 %common.op2, 0
+  %544 = icmp eq i8 %common.op2, 0
+  %545 = and i1 %544, %289
+  %546 = select i1 %543, i1 true, i1 %545
+  %547 = zext i1 %546 to i8
+  %548 = xor i8 %547, 1
+  tail call void @llvm.memcpy.p0.p0.i16(ptr %96, ptr nonnull %6, i16 144, i1 false)
+  br label %549
+
+549:
+  %550 = phi i16 [ %564, %549 ], [ -144, %542 ]
+  %551 = phi i32 [ 0, %542 ], [ %563, %549 ]
+  %552 = getelementptr i8, ptr %6, i16 %550
+  %553 = getelementptr i8, ptr %552, i16 720
+  %554 = load i16, ptr %553
+  %555 = zext i16 %554 to i32
+  %556 = getelementptr i8, ptr %6, i16 %550
+  %557 = getelementptr i8, ptr %556, i16 432
+  %558 = load i16, ptr %557
+  %559 = zext i16 %558 to i32
+  %560 = add nuw nsw i32 %551, %555
+  %561 = add nuw nsw i32 %560, %559
+  %562 = trunc i32 %561 to i16
+  store i16 %562, ptr %553
+  %563 = lshr i32 %561, 16
+  %564 = add nsw i16 %550, 2
+  %exitcond12 = icmp eq i16 %564, 0
+  br i1 %exitcond12, label %568, label %549
+
+565:
+  %566 = add nsw i16 %570, -2
+  %567 = icmp eq i16 %566, 574
+  br i1 %567, label %580, label %569
+
+568:
+  br label %569
+
+569:
+  %570 = phi i16 [ 718, %568 ], [ %566, %565 ]
+  %571 = getelementptr i8, ptr %6, i16 %570
+  %572 = load i16, ptr %571
+  %573 = getelementptr i8, ptr %6, i16 %570
+  %574 = getelementptr i8, ptr %573, i16 -432
+  %575 = load i16, ptr %574
+  %576 = icmp eq i16 %572, %575
+  br i1 %576, label %565, label %577
+
+577:
+  %578 = icmp ult i16 %572, %575
+  %579 = select i1 %578, i8 -1, i8 1
+  br label %580
+
+580:
+  %common.op1 = phi i8 [ %579, %577 ], [ 0, %565 ]
+  %581 = icmp sgt i8 %common.op1, 0
+  %582 = icmp eq i8 %common.op1, 0
+  %583 = and i1 %582, %406
+  %584 = select i1 %581, i1 true, i1 %583
+  %585 = icmp ne i8 %548, 0
+  %or.cond3 = select i1 %585, i1 true, i1 %584
+  br i1 %or.cond3, label %592, label %586
+
+586:
+  %587 = add i8 %492, 48
+  %588 = getelementptr i8, ptr %6, i16 %451
+  %589 = getelementptr i8, ptr %588, i16 736
+  store i8 %587, ptr %589
+  %590 = add i16 %451, 1
+  %591 = add i16 %450, 1
+  br label %449
+
+592:
+  %593 = icmp ne i8 %548, 0
+  %or.cond11 = select i1 %593, i1 %584, i1 false
+  br i1 %or.cond11, label %594, label %626
+
+594:
+  tail call void @llvm.memcpy.p0.p0.i16(ptr %96, ptr nonnull %6, i16 144, i1 false)
+  %595 = getelementptr i8, ptr %6, i16 718
+  br label %596
+
+596:
+  %597 = phi ptr [ %604, %596 ], [ %595, %594 ]
+  %598 = phi i16 [ %603, %596 ], [ 73, %594 ]
+  %599 = load i16, ptr %597
+  %600 = getelementptr i8, ptr %597, i16 -2
+  %601 = load i16, ptr %600
+  %602 = tail call i16 @llvm.fshl.i16(i16 %599, i16 %601, i16 1)
+  store i16 %602, ptr %597
+  %603 = add nsw i16 %598, -1
+  %604 = getelementptr i8, ptr %597, i16 -2
+  %605 = icmp samesign ugt i16 %603, 2
+  br i1 %605, label %596, label %606
+
+606:
+  %607 = getelementptr i8, ptr %6, i16 576
+  %608 = load i16, ptr %607
+  %609 = shl i16 %608, 1
+  store i16 %609, ptr %607
+  br label %613
+
+610:
+  %611 = add nsw i16 %614, -2
+  %612 = icmp eq i16 %611, -144
+  br i1 %612, label %624, label %613
+
+613:
+  %614 = phi i16 [ %611, %610 ], [ 0, %606 ]
+  %615 = getelementptr i8, ptr %6, i16 %614
+  %616 = getelementptr i8, ptr %615, i16 718
+  %617 = load i16, ptr %616
+  %618 = getelementptr i8, ptr %6, i16 %614
+  %619 = getelementptr i8, ptr %618, i16 286
+  %620 = load i16, ptr %619
+  %621 = icmp eq i16 %617, %620
+  br i1 %621, label %610, label %622
+
+622:
+  %623 = icmp ult i16 %617, %620
+  br i1 %623, label %629, label %624
+
+624:
+  %625 = add i8 %492, 1
+  br label %629
+
+626:
+  %627 = zext i1 %584 to i8
+  %628 = add i8 %492, %627
+  br label %629
+
+629:
+  %630 = phi i8 [ %628, %626 ], [ %625, %624 ], [ %492, %622 ]
+  %631 = add i8 %630, 48
+  %632 = getelementptr i8, ptr %6, i16 %451
+  %633 = getelementptr i8, ptr %632, i16 736
+  store i8 %631, ptr %633
+  %634 = add i16 %451, 1
+  %635 = add i16 %353, -1
+  %636 = icmp sgt i16 %635, -5
+  %637 = icmp slt i16 %635, 16
+  %or.cond2 = and i1 %636, %637
+  br i1 %or.cond2, label %638, label %641
+
+638:
+  %639 = icmp slt i16 %635, 0
+  br i1 %639, label %648, label %640
+
+640:
+  br label %674
+
+641:
+  %642 = getelementptr i8, ptr %6, i16 736
+  %643 = load i8, ptr %642
+  %644 = getelementptr i8, ptr %6, i16 %34
+  %645 = getelementptr i8, ptr %644, i16 720
+  store i8 %643, ptr %645
+  %646 = add nuw nsw i16 %34, 1
+  %647 = icmp ugt i16 %634, 1
+  br i1 %647, label %711, label %717
+
+648:
+  %649 = getelementptr i8, ptr %6, i16 %34
+  %650 = getelementptr i8, ptr %649, i16 720
+  store i8 48, ptr %650
+  %651 = add nuw nsw i16 %34, 1
+  %652 = getelementptr i8, ptr %6, i16 %651
+  %653 = getelementptr i8, ptr %652, i16 720
+  store i8 46, ptr %653
+  %654 = or disjoint i16 %34, 2
+  %655 = xor i16 %635, -1
+  %656 = icmp eq i16 %655, 0
+  br i1 %656, label %660, label %657
+
+657:
+  %658 = getelementptr i8, ptr %7, i16 %654
+  tail call void @llvm.memset.p0.i16(ptr align 1 %658, i8 48, i16 %655, i1 false)
+  %659 = sub nsw i16 %651, %635
+  br label %660
+
+660:
+  %661 = phi i16 [ %659, %657 ], [ %654, %648 ]
+  %662 = icmp eq i16 %634, 0
+  br i1 %662, label %b15, label %663
+
+663:
+  %664 = add i16 %451, 1
+  br label %665
+
+665:
+  %666 = phi ptr [ %352, %663 ], [ %672, %665 ]
+  %667 = phi i16 [ %671, %665 ], [ 0, %663 ]
+  %668 = getelementptr i8, ptr %6, i16 %667
+  %669 = getelementptr i8, ptr %668, i16 736
+  %670 = load i8, ptr %669
+  store i8 %670, ptr %666
+  %671 = add nuw i16 %667, 1
+  %672 = getelementptr i8, ptr %666, i16 1
+  %673 = icmp eq i16 %664, %671
+  br i1 %673, label %57, label %665
+
+674:
+  %675 = phi i16 [ %691, %687 ], [ %34, %640 ]
+  %676 = phi i16 [ %692, %687 ], [ 0, %640 ]
+  %677 = icmp ult i16 %676, %634
+  br i1 %677, label %683, label %687
+
+678:
+  %679 = getelementptr i8, ptr %6, i16 %691
+  %680 = getelementptr i8, ptr %679, i16 720
+  store i8 46, ptr %680
+  %681 = icmp ugt i16 %634, %353
+  br i1 %681, label %682, label %694
+
+682:
+  br label %698
+
+683:
+  %684 = getelementptr i8, ptr %6, i16 %676
+  %685 = getelementptr i8, ptr %684, i16 736
+  %686 = load i8, ptr %685
+  br label %687
+
+687:
+  %688 = phi i8 [ %686, %683 ], [ 48, %674 ]
+  %689 = getelementptr i8, ptr %6, i16 %675
+  %690 = getelementptr i8, ptr %689, i16 720
+  store i8 %688, ptr %690
+  %691 = add i16 %675, 1
+  %692 = add nuw i16 %676, 1
+  %693 = icmp eq i16 %353, %692
+  br i1 %693, label %678, label %674
+
+694:
+  %695 = getelementptr i8, ptr %6, i16 %691
+  %696 = getelementptr i8, ptr %695, i16 721
+  store i8 48, ptr %696
+  %697 = add i16 %691, 2
+  br label %b15
+
+698:
+  %699 = phi i16 [ %450, %682 ], [ %709, %698 ]
+  %700 = phi ptr [ %6, %682 ], [ %708, %698 ]
+  %701 = phi i16 [ -1, %682 ], [ %707, %698 ]
+  %702 = getelementptr i8, ptr %700, i16 %353
+  %703 = getelementptr i8, ptr %702, i16 736
+  %704 = load i8, ptr %703
+  %705 = getelementptr i8, ptr %700, i16 %691
+  %706 = getelementptr i8, ptr %705, i16 721
+  store i8 %704, ptr %706
+  %707 = add i16 %701, -1
+  %708 = getelementptr i8, ptr %700, i16 1
+  %709 = add i16 %699, -1
+  %710 = icmp eq i16 %709, 0
+  br i1 %710, label %61, label %698
+
+711:
+  %712 = getelementptr i8, ptr %6, i16 %646
+  %713 = getelementptr i8, ptr %712, i16 720
+  store i8 46, ptr %713
+  %714 = getelementptr i8, ptr %6, i16 722
+  br label %728
+
+715:
+  %716 = sub i16 %34, %734
+  br label %717
+
+717:
+  %718 = phi i16 [ %716, %715 ], [ %646, %641 ]
+  %719 = getelementptr i8, ptr %6, i16 %718
+  %720 = getelementptr i8, ptr %719, i16 720
+  store i8 101, ptr %720
+  %721 = icmp slt i16 %635, 0
+  %722 = select i1 %721, i8 45, i8 43
+  %723 = getelementptr i8, ptr %6, i16 %718
+  %724 = getelementptr i8, ptr %723, i16 721
+  store i8 %722, ptr %724
+  %725 = add i16 %718, 2
+  %726 = tail call i16 @llvm.abs.i16(i16 %635, i1 false)
+  %727 = icmp ugt i16 %726, 99
+  br i1 %727, label %738, label %745
+
+728:
+  %729 = phi ptr [ %735, %728 ], [ %714, %711 ]
+  %730 = phi i16 [ %734, %728 ], [ -2, %711 ]
+  %731 = getelementptr i8, ptr %729, i16 15
+  %732 = load i8, ptr %731
+  %733 = getelementptr i8, ptr %729, i16 %34
+  store i8 %732, ptr %733
+  %734 = add i16 %730, -1
+  %735 = getelementptr i8, ptr %729, i16 1
+  %736 = add i16 %451, %734
+  %737 = icmp eq i16 %736, -2
+  br i1 %737, label %715, label %728
+
+738:
+  %739 = udiv i16 %726, 100
+  %740 = trunc i16 %739 to i8
+  %741 = add i8 %740, 48
+  %742 = getelementptr i8, ptr %6, i16 %725
+  %743 = getelementptr i8, ptr %742, i16 720
+  store i8 %741, ptr %743
+  %744 = add i16 %718, 3
+  br label %745
+
+745:
+  %746 = phi i16 [ %744, %738 ], [ %725, %717 ]
+  %747 = udiv i16 %726, 10
+  %748 = urem i16 %747, 10
+  %749 = trunc nuw nsw i16 %748 to i8
+  %750 = or disjoint i8 %749, 48
+  %751 = getelementptr i8, ptr %6, i16 %746
+  %752 = getelementptr i8, ptr %751, i16 720
+  store i8 %750, ptr %752
+  %753 = urem i16 %726, 10
+  %754 = trunc nuw nsw i16 %753 to i8
+  %755 = or disjoint i8 %754, 48
+  %756 = getelementptr i8, ptr %6, i16 %746
+  %757 = getelementptr i8, ptr %756, i16 721
+  store i8 %755, ptr %757
+  %758 = add i16 %746, 2
+  br label %b15
 }
 
-define void @N$PR8(double %0) addrspace(1) {
+define cc 1005 void @N$PR8(double %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
   %1 = alloca double
-  store double 0.000000e+00, ptr %1
   store double %0, ptr %1, !tbaa !2
-  %2 = addrspacecast ptr %1 to ptr addrspace(1)
-  call addrspace(1) void @floats.print_float(ptr addrspace(1) %2, i16 4, i16 4, i16 2047, i16 1075)
+  %2 = addrspacecast ptr %1 to ptr addrspace(5)
+  call cc 1006 addrspace(1) void @floats.print_float(ptr addrspace(5) %2, i16 4, i16 4, i16 2047, i16 1075)
   ret void
 }
 
-define void @N$PR4(float %0) addrspace(1) {
+define cc 1005 void @N$PR4(float %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
   %1 = alloca float
-  store float 0.000000e+00, ptr %1
   store float %0, ptr %1, !tbaa !2
-  %2 = addrspacecast ptr %1 to ptr addrspace(1)
-  call addrspace(1) void @floats.print_float(ptr addrspace(1) %2, i16 2, i16 7, i16 255, i16 150)
+  %2 = addrspacecast ptr %1 to ptr addrspace(5)
+  call cc 1006 addrspace(1) void @floats.print_float(ptr addrspace(5) %2, i16 2, i16 7, i16 255, i16 150)
   ret void
 }
 
-declare i16 @N$OWRI(i16, ptr addrspace(1), i16) addrspace(1)
+declare i32 @LL$WRITE_FILE(i16, ptr addrspace(1), i16) addrspace(1)
 
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+declare void @LL$EXIT(i8) addrspace(1)
 
-declare void @N$OEXT(i8) addrspace(1)
+declare ptr @LL$MORE(i16) addrspace(1)
 
-declare ptr @N$OMEM(i16) addrspace(1)
+declare i16 @llvm.fshl.i16(i16, i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+
+declare i16 @llvm.umax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+
+declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nosync nounwind willreturn memory(argmem: write)
+
+declare i16 @llvm.umin.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+
+declare i32 @llvm.abs.i32(i32, i1 immarg) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+
+declare void @llvm.memmove.p0.p0.i16(ptr nocapture writeonly, ptr nocapture readonly, i16, i1 immarg) nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+
+declare void @llvm.memcpy.p0.p0.i16(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i16, i1 immarg) nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+
+declare i16 @llvm.abs.i16(i16, i1 immarg) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}
 !2 = !{!1, !1, i64 0}
 !3 = !{!"allocation", !0, i64 0}
 !4 = !{!3, !3, i64 0}
+!5 = !{i8 0, i8 2}
+!6 = !{i8 0, i8 2}
+!7 = !{i8 0, i8 2}
+!8 = !{i8 0, i8 2}
+!9 = !{i8 0, i8 2}
+!10 = !{i8 0, i8 2}
+!11 = !{i8 0, i8 2}
+!12 = !{i8 0, i8 2}
+!13 = !{i8 0, i8 2}
+!14 = !{i8 0, i8 2}
+!15 = !{i8 0, i8 2}
+!16 = !{i8 0, i8 2}
+!17 = !{i8 0, i8 2}
+!18 = !{i8 0, i8 2}
+!19 = !{i8 0, i8 2}
+!20 = !{i8 0, i8 2}
+!21 = !{i8 0, i8 2}
+!22 = !{i8 0, i8 2}
+!23 = !{i8 0, i8 2}
+!24 = !{i8 0, i8 2}
+!25 = !{i8 0, i8 2}
+!26 = !{i8 0, i8 2}
+!27 = !{i8 0, i8 2}
+!28 = !{i8 0, i8 2}
+!29 = !{i8 0, i8 2}
+!30 = !{i8 0, i8 2}
+!31 = !{i8 0, i8 2}
+!32 = !{i8 0, i8 2}
+!33 = !{i8 0, i8 2}
+!34 = !{i8 0, i8 2}
+!35 = !{}
+!36 = !{}

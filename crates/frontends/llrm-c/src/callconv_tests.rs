@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use llrm_core::testing::boundary::{self, Byte, Procedure};
+use llrm_codegen::testing::boundary::{self, Byte, Procedure};
 
 const CONVENTIONS: [&str; 4] = ["cf", "cn", "pf", "pn"];
 const MODULES: [(&str, &str); 2] = [("callee", "caller"), ("aggee", "agger")];
@@ -244,18 +244,20 @@ fn agrees(
 
 /// `source` recorded and compiled as Borland's compiler has it: the cdecl ABI,
 /// which these tests compare llrm with.
-fn borland(source: &Path) -> Result<llrm_core::backend::masm::Module, String> {
+fn borland(source: &Path) -> Result<llrm_codegen::backend::masm::Module, String> {
     let profile = crate::compile::Profile::for_abi(&llrm_x86_m16::M16, Some("cdecl"))?;
     let stream = crate::compile::recorded_for(source, &[], false, &[], &profile).map_err(|error| error.0)?;
-    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-    let options = llrm_core::driver::Options { abi: Some("cdecl".to_owned()), ..llrm_driver::m16_options(machine) };
+    let machine =
+        llrm_codegen::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+    let options =
+        llrm_codegen::driver::Options { abi: Some("cdecl".to_owned()), ..llrm_driver::m16_options_old(machine) };
     crate::compile::selected(&stream, &source.file_stem().unwrap().to_string_lossy(), None, &options)
         .map_err(|error| format!("{error:?}"))
 }
 
 fn llrm(file: &str) -> Result<BTreeMap<String, Procedure>, String> {
     let built = borland(&fixtures().join(format!("{file}.c")))?;
-    Ok(boundary::procedures(&llrm_core::backend::masm::text(&built).map_err(|error| format!("{error:?}"))?))
+    Ok(boundary::procedures(&llrm_codegen::backend::masm::text(&built).map_err(|error| format!("{error:?}"))?))
 }
 
 fn bcc(file: &str) -> BTreeMap<String, Procedure> {
@@ -290,7 +292,7 @@ fn reference_table() -> String {
 fn test_the_reference_table_is_what_bcc_listed() {
     let path = fixtures().join("reference.txt");
     let derived = reference_table();
-    if std::env::var_os("LLRM_BLESS").is_some() {
+    if llrm_support::env_set("LLRM_BLESS") {
         std::fs::write(&path, &derived).unwrap();
     }
     assert!(
@@ -367,7 +369,7 @@ fn llrm_text(text: &str) -> BTreeMap<String, Procedure> {
     let source = directory.path().join("probe.c");
     std::fs::write(&source, text).unwrap();
     let built = borland(&source).unwrap();
-    boundary::procedures(&llrm_core::backend::masm::text(&built).unwrap())
+    boundary::procedures(&llrm_codegen::backend::masm::text(&built).unwrap())
 }
 
 /// A signed char passed through `...` is promoted to int: llrm zero-extended
@@ -401,4 +403,23 @@ fn test_a_variadic_struct_parameter_address_is_in_its_slots() {
     .unwrap();
     let built = borland(&source);
     assert!(built.is_ok(), "{:?}", built.err());
+}
+
+/// Borland's interrupt handler takes the nine registers it saved as parameters.
+/// #2936 stated `noundef` on each, and the lowered handler has no parameter to
+/// state it of: `@handler: a fact of no parameter` refused valid input from
+/// 10-19 to 10-23, at every level.
+// It records C through wccq, which only the toolchain feature builds.
+#[cfg(feature = "toolchain")]
+#[test]
+fn test_an_interrupt_handler_with_the_nine_saved_registers_compiles() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("handler.c");
+    std::fs::write(
+        &source,
+        "unsigned saved[9];\nvoid interrupt handler(unsigned bp, unsigned di, unsigned si, unsigned ds, unsigned es,\n    unsigned dx, unsigned cx, unsigned bx, unsigned ax) {\n    saved[0] = bp; saved[8] = ax;\n    ax = 0x7777;\n    bx = ~bx;\n}\n",
+    )
+    .unwrap();
+    let built = borland(&source).unwrap_or_else(|error| panic!("{error}"));
+    assert!(llrm_codegen::backend::masm::text(&built).unwrap().contains("handler proc"));
 }

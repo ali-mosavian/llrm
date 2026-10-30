@@ -1,0 +1,212 @@
+# The QB device interface: what runtime/qb asks of the machine's screen, keyboard, speaker and clock, and
+# nothing else. One op is one C function (`dev_*` for text, keyboard, sound and timer; `gd_*` for the
+# graphics screen), declared once in dev.h and gfxdev.h. A platform (dos/m16, dos/m32, headless, sdl)
+# defines every op; tests/qb_dev_interface.rs checks that the list, the headers, the platforms and the
+# portable code agree. The OS layer (runtime/shared) is the other interface: files, memory, process.
+
+# Display, text: cells of a character and an attribute, 0, 0 at the top left.
+[[op]]
+group = "text"
+name = "dev_stdout_is_screen"
+doc = "Whether standard output is the screen and not a file or a pipe."
+
+[[op]]
+group = "text"
+name = "dev_text_size"
+doc = "Rows in the high byte, columns in the low."
+
+[[op]]
+group = "text"
+name = "dev_text_cursor"
+doc = "Row in the high byte, column in the low."
+
+[[op]]
+group = "text"
+name = "dev_text_move"
+doc = "Puts the cursor at a row and column."
+
+[[op]]
+group = "text"
+name = "dev_text_cursor_show"
+doc = "Shows or hides the cursor."
+
+[[op]]
+group = "text"
+name = "dev_text_put"
+doc = "One cell: a character and an attribute."
+
+[[op]]
+group = "text"
+name = "dev_text_write"
+doc = "A run of characters of one attribute from a cell."
+
+[[op]]
+group = "text"
+name = "dev_text_scroll"
+doc = "Rows top to bottom move up some lines; the rows freed are blanks of an attribute."
+
+# Display, graphics: pixels from 0, 0 at the top left, a colour 0 to 15 (or the mode's own), an operation 0 to 3 (set, and, or, xor).
+[[op]]
+group = "graphics"
+name = "gd_set_mode"
+doc = "Sets the video mode; says whether the screen is in it."
+
+[[op]]
+group = "graphics"
+name = "gd_set_pages"
+doc = "Sets the page drawn on and the one shown; says whether the mode has them."
+
+[[op]]
+group = "graphics"
+name = "gd_palette"
+doc = "Gives a palette entry the adapter's colour."
+
+[[op]]
+group = "graphics"
+name = "gd_cga_color"
+doc = "The CGA modes' colour select: background and palette."
+
+[[op]]
+group = "graphics"
+name = "gd_palette_mix"
+doc = "Gives a colour register a mix of red, green and blue, 0 to 63."
+
+[[op]]
+group = "graphics"
+name = "gd_plot"
+doc = "One pixel with an operation."
+
+[[op]]
+group = "graphics"
+name = "gd_fill_select"
+doc = "Chooses the mode's fill routines for a colour and an operation (GdFill)."
+
+[[op]]
+group = "graphics"
+name = "gd_dots_begin"
+doc = "Brackets single pixels drawn with a GdFill."
+
+[[op]]
+group = "graphics"
+name = "gd_dots_end"
+doc = "Ends gd_dots_begin."
+
+[[op]]
+group = "graphics"
+name = "gd_read"
+doc = "The colour of a pixel."
+
+[[op]]
+group = "graphics"
+name = "gd_search"
+doc = "The first pixel of one of two colours, or of neither, along a row."
+
+[[op]]
+group = "graphics"
+name = "gd_run"
+doc = "PAINT's row: the first pixel that is neither edge nor paint, and the run round it."
+
+[[op]]
+group = "graphics"
+name = "gd_move_rows"
+doc = "Copies whole rows of pixels, the first first."
+
+[[op]]
+group = "graphics"
+name = "gd_glyph"
+doc = "A character cell of the font in a colour."
+
+[[op]]
+group = "graphics"
+name = "gd_font"
+doc = "The font of characters of a height."
+
+[[op]]
+group = "graphics"
+name = "gd_get"
+doc = "GET of a box, in QB's array layout."
+
+[[op]]
+group = "graphics"
+name = "gd_put"
+doc = "PUT of a box, in QB's array layout."
+
+[[op]]
+group = "keyboard"
+name = "dev_key_ready"
+doc = "Whether dev_key_read would not wait."
+
+[[op]]
+group = "keyboard"
+name = "dev_key_read"
+doc = "The next byte typed, not echoed, waiting for one; an extended key is 0 and then its scan code."
+
+[[op]]
+group = "keyboard"
+name = "dev_key_peek_scan"
+doc = "The scan code of the next key if it is extended, else -1; also -1 with no key waiting. The key stays."
+
+[[op]]
+group = "keyboard"
+name = "dev_key_discard"
+doc = "Reads and drops the next key."
+
+[[op]]
+group = "sound"
+name = "dev_tone"
+doc = "A tone of the given hertz until the next call; 0 is silence."
+
+[[op]]
+group = "timer"
+name = "dev_clock"
+doc = "The time of day in hundredths of a second since midnight."
+
+[[op]]
+group = "timer"
+name = "dev_clock_fine"
+doc = "The time of day in tenths of a millisecond since midnight, for TIMER: a clock's own resolution where it has one finer than hundredths."
+
+[[op]]
+group = "timer"
+name = "dev_date"
+doc = "The date: year, month, day."
+
+[[op]]
+group = "timer"
+name = "dev_time"
+doc = "The time: hour, minute, second."
+
+[[op]]
+group = "timer"
+name = "dev_date_set"
+doc = "Sets the date; 0 if the clock took it."
+
+[[op]]
+group = "timer"
+name = "dev_time_set"
+doc = "Sets the time; 0 if the clock took it."
+
+[[op]]
+group = "timer"
+name = "dev_tick_start"
+doc = "From now on the clock's tick (18.2 a second) calls music_tick (play.c); undone by dev_tick_stop. Called once."
+
+[[op]]
+group = "timer"
+name = "dev_tick_stop"
+doc = "Ends the tick's calls."
+
+[[op]]
+group = "timer"
+name = "dev_tick_hold"
+doc = "Keeps the tick from calling music_tick until dev_tick_release."
+
+[[op]]
+group = "timer"
+name = "dev_tick_release"
+doc = "Lets the tick call music_tick again."
+
+[[op]]
+group = "printer"
+name = "dev_printer_ready"
+doc = "Whether the printer is there and ready."

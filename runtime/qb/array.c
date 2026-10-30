@@ -65,23 +65,9 @@ static void allocate_near(AD *ad, unsigned bytes)
     ad_use_near(ad, data);
 }
 
-/* DIM, and REDIM after it has erased the array: describes the array and
-   allocates its elements.  Dimensioning an array that has elements is a
-   Duplicate definition, and elements past 64 KB are a Subscript out of range
-   unless the array is huge. */
-void array_dim(enum DimMode mode, const DimCall *call)
+/* The elements of a described array, zeroed, where its features say. */
+static void place_elements(AD *ad, unsigned long bytes)
 {
-    AD *ad = call->ad;
-    unsigned long bytes;
-
-    if (mode == DIM_REALLOCATE)
-        B_ERAS(ad);
-    if (ad_allocated(ad))
-        qb_error(BE_REDIM);
-    describe(ad, call);
-    if (!array_bytes(ad, &bytes))
-        qb_error(BE_SUBSCRIP);
-    ad->size = bytes;
     if (ad->features & FADF_HUGE) {
         ad_huge_alloc(ad, bytes);
         return;
@@ -92,6 +78,87 @@ void array_dim(enum DimMode mode, const DimCall *call)
         ad_far_alloc(ad, bytes);
     else
         allocate_near(ad, bytes);
+}
+
+/* REDIM PRESERVE of an array that has elements: only the outermost dimension may
+   change its upper bound, and the elements of the old extent stay, the rest
+   zeroed. The new elements are placed first, in a descriptor of the stack, so
+   that old and new exist together; the old are then freed and the new descriptor
+   adopted by the array's own, which the heap moves from then on. Anything else
+   changed is a Subscript out of range, as in QB. A string array's strings belong
+   to their descriptors: the kept ones follow to the new element, and the old are
+   cleared so that erasing the old array frees only the strings cut off. */
+static void preserve(AD *ad, const DimCall *call)
+{
+    union {
+        AD ad;
+        u8 room[sizeof(AD) + 59 * sizeof(DM)];
+    } fresh;
+    unsigned long old_bytes, new_bytes;
+    unsigned dim, i;
+
+    if (ad->features & FADF_STATIC)
+        qb_error(BE_REDIM);
+    for (i = 0; i < sizeof fresh; i++)
+        fresh.room[i] = 0;
+    describe(&fresh.ad, call);
+    if (fresh.ad.dims != ad->dims || fresh.ad.elem != ad->elem)
+        qb_error(BE_SUBSCRIP);
+    for (dim = 0; dim < ad->dims; dim++) {
+        int outer = dim + 1 == ad->dims;
+
+        if (fresh.ad.dm[dim].lbound != ad->dm[dim].lbound || (!outer && fresh.ad.dm[dim].count != ad->dm[dim].count))
+            qb_error(BE_SUBSCRIP);
+    }
+    array_bytes(ad, &old_bytes);
+    if (!array_bytes(&fresh.ad, &new_bytes))
+        qb_error(BE_SUBSCRIP);
+    fresh.ad.size = new_bytes;
+    place_elements(&fresh.ad, new_bytes);
+    ad_copy(&fresh.ad, ad, old_bytes < new_bytes ? old_bytes : new_bytes);
+    if (is_string_array(ad)) {
+        SD *from = ad_near_data(ad), *to = ad_near_data(&fresh.ad);
+        unsigned kept = (unsigned)((old_bytes < new_bytes ? old_bytes : new_bytes) / sizeof(SD));
+
+#pragma aux B_ERAS "B$ERAS"
+#pragma aux array_dim "@array_dim@4"
+
+        for (i = 0; i < kept; i++) {
+            str_owner_moved(&to[i], (int)((char *)&to[i] - (char *)&from[i]));
+            from[i].len = 0;
+            from[i].ptr = 0;
+        }
+    }
+    B_ERAS(ad);
+    ad_adopt(ad, &fresh.ad);
+    ad->adjusted = fresh.ad.adjusted;
+    ad->size = fresh.ad.size;
+    for (dim = 0; dim < ad->dims; dim++)
+        ad->dm[dim] = fresh.ad.dm[dim];
+}
+
+/* DIM, and REDIM after it has erased the array: describes the array and
+   allocates its elements.  Dimensioning an array that has elements is a
+   Duplicate definition, and elements past 64 KB are a Subscript out of range
+   unless the array is huge. */
+void array_dim(enum DimMode mode, const DimCall *call)
+{
+    AD *ad = call->ad;
+    unsigned long bytes;
+
+    if (mode == DIM_PRESERVE && ad_allocated(ad)) {
+        preserve(ad, call);
+        return;
+    }
+    if (mode != DIM_ALLOCATE)
+        B_ERAS(ad);
+    if (ad_allocated(ad))
+        qb_error(BE_REDIM);
+    describe(ad, call);
+    if (!array_bytes(ad, &bytes))
+        qb_error(BE_SUBSCRIP);
+    ad->size = bytes;
+    place_elements(ad, bytes);
 }
 
 /* A string array's strings are freed with it. */
@@ -156,6 +223,3 @@ void array_xinit(void)
 {
     lh_on_move(LH_ARRAY, moved);
 }
-
-#pragma aux B_ERAS "B$ERAS"
-#pragma aux array_dim "@array_dim@4"

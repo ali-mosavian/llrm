@@ -3,11 +3,12 @@
 //!
 //! # How it works
 //! `Accesses` records what each instruction touches: a load's or store's own
-//! `MemRef`, a call's footprint (its `CallEffects`, or anything its attributes
-//! allow), and the bytes a call fills before reading any. It is the manager's
-//! `accesses` analysis, built from [`crate::manager`]'s `Annotated` and
-//! `CallEffects`, and kept across changes that only move instructions or give a
-//! store another value (`update`).
+//! `MemRef`, a call's footprint (`alias::calls_by_attributes`: its attributes
+//! and `GlobalsModRef`, no points-to solve), and the bytes a call fills before
+//! reading any. A query of a call is the meet of the footprint and `AAResults`
+//! (BasicAA, GlobalsAA). It is the manager's `accesses` analysis, built from
+//! [`crate::manager`]'s `Annotated`, and kept across changes that only move
+//! instructions or give a store another value (`update`).
 //!
 //! `built` numbers the accesses. Every instruction that writes (`None` writes
 //! means anything) is a `Def`; one that only reads memory is a `Use`; one that
@@ -107,7 +108,7 @@
 //! `transform`.
 //!
 //! # Needs
-//! [`crate::manager`] (`Annotated`, `CallEffects`, `ExposedFrames`),
+//! [`crate::manager`] (`Annotated`, `PointerValues`, `ExposedFrames`),
 //! [`crate::cfg`], [`crate::regions`], [`crate::pointerfacts`],
 //! [`crate::memory`].
 //!
@@ -120,6 +121,7 @@
 //! LLVM `MemorySSA` and its `ClobberWalker`
 //! (`llvm/lib/Analysis/MemorySSA.cpp`).
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -131,11 +133,10 @@ use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis};
 use llrm_support::hash::IndexMap;
 
-use crate::alias::{self, Effect, Procedure, Summary};
 use crate::cfg;
 use crate::consts::Calls;
 use crate::graph::loops;
-use crate::manager::{Annotated, CallEffects};
+use crate::manager::Annotated;
 use crate::memory::{MemRef, ObjectRef, Unit, own_bytes, unmodeled_write};
 use crate::pointerfacts::{self, Location};
 use crate::ranges::Interval;
@@ -196,12 +197,18 @@ pub struct Accesses {
     fills: IndexMap<InstId, Vec<MemRef>>,
     /// What the manager's accesses were made from: the references annotated
     /// and the calls' effects.
-    source: Option<(Rc<<Annotated as Analysis>::Result>, Rc<<CallEffects as Analysis>::Result>)>,
+    source: Option<Rc<<Annotated as Analysis>::Result>>,
     /// What the manager's plain accesses were made from: the references
     /// annotated, the calls' writes, and the module facts that decide a call.
     plain_source: Option<PlainSource>,
     /// The graph's structure, made when first asked.
     graph: GraphCell,
+    /// Nothing above is made up front: a reference and the lists an
+    /// instruction touches are worked out of the unit when first asked
+    /// (`reference_in`, `reads_in`, `writes_in`), as the pin computes a
+    /// `MemoryLocation` when a walk wants one. The graph's clients ask 1.6 %
+    /// of them.
+    lazy: bool,
 }
 
 /// What `PlainAccesses` reads.
@@ -343,17 +350,21 @@ impl Analysis for Accesses {
         analyses: &mut Analyses,
     ) -> Self::Result {
         let annotated = analyses.get::<Annotated>(context, layout, function);
-        let calls = analyses.get::<CallEffects>(context, layout, function);
         let references = Result::as_ref(&*annotated).map_err(String::clone)?;
-        let effects = Result::as_ref(&*calls).map_err(String::clone)?;
+        let footprints = analyses.get::<crate::manager::CallFootprints>(context, layout, function);
+        let footprints = Result::as_ref(&*footprints).map_err(String::clone)?;
         let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
         let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
-        let made = Self::of(
-            &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
-            references.clone(),
-            effects,
-        );
-        Ok(Rc::new(Self { source: Some((annotated, calls)), ..made }))
+        // The pointer value solve `Annotated` shares: the objects a call's
+        // pointer arguments reach.
+        let values = analyses.get::<crate::manager::PointerValues>(context, layout, function);
+        let mut unit =
+            Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed);
+        if let Ok(values) = &*values {
+            unit = unit.with_point_values(values);
+        }
+        let made = Self::of(&unit, references.clone(), footprints);
+        Ok(Rc::new(Self { source: Some(annotated), ..made }))
     }
 
     /// What an instruction touches is its own: a store or call moved to
@@ -370,7 +381,7 @@ impl Analysis for Accesses {
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
         let held = previous.as_ref().ok()?;
-        let (was_annotated, was_calls) = held.source.as_ref()?;
+        let was_annotated = held.source.as_ref()?;
         let inert = |inst: InstId| {
             let opcode = &function.instruction(inst).opcode;
             !llrm_mir::touched::touches_memory(opcode) && !opcode.is_terminator()
@@ -390,9 +401,7 @@ impl Analysis for Accesses {
             return None;
         }
         let annotated = analyses.get::<Annotated>(context, layout, function);
-        let calls = analyses.get::<CallEffects>(context, layout, function);
-        let unchanged = (Rc::ptr_eq(&annotated, was_annotated) || *annotated == **was_annotated)
-            && (Rc::ptr_eq(&calls, was_calls) || *calls == **was_calls);
+        let unchanged = Rc::ptr_eq(&annotated, was_annotated) || *annotated == **was_annotated;
         if !unchanged {
             return None;
         }
@@ -467,16 +476,13 @@ impl Accesses {
     }
 
     /// `unit`'s accesses as `alias` resolves them: each reference with its
-    /// provenance, each call's effect instantiated from `known` callees.
-    pub fn resolved(
-        unit: &Unit,
-        known: &IndexMap<String, Summary>,
-    ) -> Result<Self, String> {
-        Ok(Self::of(unit, unit.annotated()?.into_owned(), &alias::calls_annotated(&Procedure::of(*unit), known)?))
+    /// provenance.
+    pub fn resolved(unit: &Unit) -> Result<Self, String> {
+        Ok(Self::of(unit, unit.annotated()?.into_owned(), &crate::alias::calls_by_attributes(unit)))
     }
 
     /// `function`'s accesses, the manager's: from its `Annotated` and
-    /// `CallEffects`; the pipeline must require `Summaries`.
+    /// the unit's `GlobalsModRef`.
     pub fn managed(
         context: &Context,
         layout: &DataLayout,
@@ -486,22 +492,19 @@ impl Accesses {
         (*analyses.get::<Accesses>(context, layout, function)).clone()
     }
 
-    /// `unit`'s accesses from `references` (`alias::annotated`'s) and each
-    /// call's `effects` (`alias::calls_annotated`'s).
+    /// `unit`'s accesses from `references` (`alias::annotated`'s), each call
+    /// reading and writing what its footprint in `calls` says (the manager's
+    /// `CallFootprints`: its attributes and `GlobalsModRef`, no points-to
+    /// solve), and the bytes each call initializes.
     pub fn of(
         unit: &Unit,
         references: IndexMap<InstId, MemRef>,
-        effects: &IndexMap<InstId, Effect>,
+        calls: &llrm_mir::dense::IdMap<InstId, crate::alias::Effect>,
     ) -> Self {
-        let fills = effects
-            .iter()
-            .filter(|(_, effect)| !effect.fills.is_empty())
-            .map(|(&at, effect)| (at, effect.fills.clone()))
-            .collect();
         Self {
-            fills,
+            fills: initialized_by_calls(unit),
             ..Self::new(unit, references, |inst| {
-                effects.get(&inst).map(|effect| (Some(Rc::clone(&effect.loads)), Some(Rc::clone(&effect.stores))))
+                calls.get(&inst).map(|effect| (Some(Rc::clone(&effect.loads)), Some(Rc::clone(&effect.stores))))
             })
         }
     }
@@ -512,8 +515,9 @@ impl Accesses {
         unit: &Unit,
         calls: &Calls,
     ) -> Self {
-        let references =
-            unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))).collect();
+        let mut references =
+            IndexMap::with_capacity_and_hasher(crate::memory::loads_and_stores(unit.function), Default::default());
+        references.extend(unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))));
         Self::new(unit, references, |inst| calls.get(&inst).map(|stores| (None, Some(Rc::clone(stores)))))
     }
 
@@ -529,38 +533,74 @@ impl Accesses {
         }
     }
 
+    /// What `inst` reads and writes, as `new` has it: none where it touches
+    /// no memory.
+    fn touched_by(
+        unit: &Unit,
+        inst: InstId,
+        reference: &dyn Fn() -> Rc<[MemRef]>,
+        footprint: &impl Fn(InstId) -> Option<Footprint>,
+    ) -> Option<Footprint> {
+        let function = unit.function;
+        let opcode = &function.instruction(inst).opcode;
+        Some(match opcode {
+            // Its order against other volatile accesses is the passes',
+            // which never move one.
+            _ if let Some(own) = own_bytes(opcode) => {
+                let touched = |does: bool| Some(if does { reference() } else { none() });
+                (touched(own.reads), touched(own.writes))
+            }
+            Opcode::Call(info) | Opcode::Invoke(info) => {
+                let callee = llrm_mir::memory::callee(unit.context, function, inst)
+                    .and_then(|one| unit.globals.get(one.0 as usize))
+                    .and_then(GlobalValue::function);
+                let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);
+                let (reads, writes) = footprint(inst).unwrap_or((None, None));
+                (
+                    if reading { reads } else { Some(none()) },
+                    if unmodeled_write(unit, inst) { writes } else { Some(none()) },
+                )
+            }
+            _ => return None,
+        })
+    }
+
+    /// These accesses told of `inst`, an instruction made since: its reference
+    /// as the unit has it and what it touches (a call writes what its
+    /// attributes allow, as `plain` has it).
+    pub fn add_instruction(
+        &mut self,
+        unit: &Unit,
+        inst: InstId,
+    ) {
+        if self.lazy {
+            return;
+        }
+        if let Some(reference) = unit.reference(inst) {
+            self.references.insert(inst, reference);
+        }
+        let own = self.references.get(&inst).cloned();
+        if let Some(found) = Self::touched_by(unit, inst, &|| own.clone().into_iter().collect::<Rc<[_]>>(), &|_| None) {
+            self.touched.insert(inst, found);
+        }
+    }
+
     /// `footprint` gives a call's reads and writes, where known.
     fn new(
         unit: &Unit,
         references: IndexMap<InstId, MemRef>,
         footprint: impl Fn(InstId) -> Option<Footprint>,
     ) -> Self {
-        let function = unit.function;
         let mut touched = IndexMap::default();
-        for (_, inst) in function.walk() {
-            let reference = || references.get(&inst).cloned().into_iter().collect::<Rc<[_]>>();
-            let opcode = &function.instruction(inst).opcode;
-            let found = match opcode {
-                // Its order against other volatile accesses is the passes',
-                // which never move one.
-                _ if let Some(own) = own_bytes(opcode) => {
-                    let touched = |does: bool| Some(if does { reference() } else { none() });
-                    (touched(own.reads), touched(own.writes))
-                }
-                Opcode::Call(info) | Opcode::Invoke(info) => {
-                    let callee = llrm_mir::memory::callee(unit.context, function, inst)
-                        .and_then(|one| unit.globals.get(one.0 as usize))
-                        .and_then(GlobalValue::function);
-                    let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);
-                    let (reads, writes) = footprint(inst).unwrap_or((None, None));
-                    (
-                        if reading { reads } else { Some(none()) },
-                        if unmodeled_write(unit, inst) { writes } else { Some(none()) },
-                    )
-                }
-                _ => continue,
-            };
-            touched.insert(inst, found);
+        for (_, inst) in unit.function.walk() {
+            if let Some(found) = Self::touched_by(
+                unit,
+                inst,
+                &|| references.get(&inst).cloned().into_iter().collect::<Rc<[_]>>(),
+                &footprint,
+            ) {
+                touched.insert(inst, found);
+            }
         }
         Self {
             references,
@@ -569,7 +609,74 @@ impl Accesses {
             source: None,
             plain_source: None,
             graph: GraphCell::default(),
+            lazy: false,
         }
+    }
+
+    /// Accesses that make nothing up front (`lazy`): the references as the unit
+    /// has them, each call writing anything its attributes allow.
+    pub fn lazy() -> Self {
+        Self { lazy: true, ..Self::default() }
+    }
+
+    /// Whether these accesses make nothing up front (`lazy`).
+    pub fn is_lazy(&self) -> bool {
+        self.lazy
+    }
+
+    /// The access `inst` makes, as the unit has it (`Unit::reference`), made
+    /// when asked where these accesses are lazy.
+    pub fn reference_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, MemRef>> {
+        if self.lazy {
+            return unit.reference(inst).map(Cow::Owned);
+        }
+        self.references.get(&inst).map(Cow::Borrowed)
+    }
+
+    /// What `inst` touches, made when asked where these accesses are lazy.
+    fn touched_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Footprint> {
+        Self::touched_by(unit, inst, &|| unit.reference(inst).into_iter().collect::<Rc<[_]>>(), &|_| None)
+    }
+
+    /// [`reads`](Self::reads), asked of the unit where these accesses are lazy.
+    pub fn reads_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, [MemRef]>> {
+        if self.lazy {
+            LAZY_LISTS.with(|made| made.set(made.get() + 1));
+            return match self.touched_in(unit, inst) {
+                None => Some(Cow::Borrowed(&[])),
+                Some((reads, _)) => reads.map(|list| Cow::Owned(list.to_vec())),
+            };
+        }
+        self.reads(inst).map(Cow::Borrowed)
+    }
+
+    /// [`writes`](Self::writes), asked of the unit where these accesses are
+    /// lazy.
+    pub fn writes_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, [MemRef]>> {
+        if self.lazy {
+            LAZY_LISTS.with(|made| made.set(made.get() + 1));
+            return match self.touched_in(unit, inst) {
+                None => Some(Cow::Borrowed(&[])),
+                Some((_, writes)) => writes.map(|list| Cow::Owned(list.to_vec())),
+            };
+        }
+        self.writes(inst).map(Cow::Borrowed)
     }
 
     /// These accesses with the stores `absolute` names writing nothing a
@@ -611,6 +718,18 @@ impl Accesses {
         inst: InstId,
     ) -> &[MemRef] {
         self.fills.get(&inst).map_or(&[], Vec::as_slice)
+    }
+
+    /// [`fills`](Self::fills), asked of the unit where these accesses are lazy.
+    pub fn fills_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Cow<'_, [MemRef]> {
+        if self.lazy {
+            return Cow::Owned(initialized_by(unit, inst));
+        }
+        Cow::Borrowed(self.fills(inst))
     }
 
     /// What `inst` reads; `None` where it may read anything.
@@ -821,6 +940,14 @@ pub fn same_bytes(
 
 thread_local! {
     static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LAZY_LISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many read or write lists this thread's lazy accesses have derived for
+/// an instruction (`reads_in`, `writes_in`), for a test that a client asking
+/// only whether a load or store writes derives none.
+pub fn lazy_lists() -> usize {
+    LAZY_LISTS.with(std::cell::Cell::get)
 }
 
 thread_local! {
@@ -1166,7 +1293,21 @@ impl MemorySSA<'_> {
         } else {
             #[cfg(test)]
             MAY_CLOBBERS.with(|asked| asked.set(asked.get() + stores.len()));
-            let found = stores.iter().any(|store| self.may_clobber_cached(cell, store));
+            let found = match self.call_clobbers(site, cell) {
+                Some(asked)
+                    if stores.is_empty()
+                        || !matches!(
+                            self.unit.function.instruction(site).opcode,
+                            Opcode::Store { .. }
+                        ) =>
+                {
+                    asked
+                }
+                // The stack knows no far segments or byte ranges of a store:
+                // either answer apart rules it out.
+                Some(asked) => asked && stores.iter().any(|store| self.may_clobber_cached(cell, store)),
+                None => stores.iter().any(|store| self.may_clobber_cached(cell, store)),
+            };
             assert!(!(missed && found), "LLRM_CHECK_CLOBBERS: objects that cannot meet were found to clobber");
             found
         };
@@ -1188,6 +1329,68 @@ impl MemorySSA<'_> {
         }
         asked[access] = 1 + u8::from(found);
         found
+    }
+
+    /// `changes` for the def at `site`: a call with a pointer-bearing cell is
+    /// the AA stack's to rule out, even where its footprint says anything;
+    /// the writes of the footprint decide the rest.
+    fn site_changes(
+        &self,
+        cell: &MemRef,
+        invariant: bool,
+        site: InstId,
+        slot: usize,
+        access: usize,
+    ) -> bool {
+        if cell.pointer.is_some()
+            && !invariant
+            && !cell.unwritable()
+            && matches!(
+                self.unit.function.instruction(site).opcode,
+                Opcode::Call(_) | Opcode::Invoke(_)
+            )
+        {
+            return self.clobbered(slot, cell, access, site);
+        }
+        changes(cell, invariant, self.written[&site].as_deref(), |_| self.clobbered(slot, cell, access, site))
+    }
+
+    /// Whether the call or store `site` may write `cell`, as the pin's AA
+    /// stack answers `getModRefInfo(Inst, Loc)` (BasicAA, TBAA, GlobalsAA;
+    /// MemorySSA.cpp `instructionClobbersQuery` L320); none for another
+    /// instruction or a cell with no pointer, which the footprint answers.
+    /// The cell carries no TBAA tag, so the store's own tag rules nothing out.
+    fn call_clobbers(
+        &self,
+        site: InstId,
+        cell: &MemRef,
+    ) -> Option<bool> {
+        use crate::aa::{AAQueryInfo, AAResults, LocationSize, MemoryLocation};
+        if !matches!(
+            self.unit.function.instruction(site).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Store { .. }
+        ) {
+            return None;
+        }
+        let pointer = cell.pointer?;
+        // A cell cut from its pointer (another offset or width) names bytes
+        // the pointer does not; the footprint answers for it.
+        if matches!(
+            self.unit.function.instruction(site).opcode,
+            Opcode::Store { .. }
+        )
+            && MemRef::at(&self.unit, pointer, cell.width) != *cell
+        {
+            return None;
+        }
+        let location = MemoryLocation::new(pointer, LocationSize::Precise(u64::from(cell.width)));
+        let mut aggregate = crate::aggregate::AggregateAA::new();
+        aggregate.add_aa_result(crate::basicaa::BasicAA::new(&self.unit));
+        aggregate.add_aa_result(crate::typebasedaa::TypeBasedAA::new(&self.unit));
+        if let Some(info) = self.unit.globals_mr {
+            aggregate.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(&self.unit, info));
+        }
+        Some(aggregate.get_mod_ref_info(site, Some(&location), &mut AAQueryInfo::default()).is_mod_set())
     }
 
     /// `may_clobber`, with the offsets of the pointers remembered.
@@ -1497,9 +1700,8 @@ impl MemorySSA<'_> {
                 {
                     continue;
                 }
-                let written = &self.written[&at];
                 let slot = self.slot(memory);
-                if changes(memory, invariant, written.as_deref(), |_| self.clobbered(slot, memory, candidate, at)) {
+                if self.site_changes(memory, invariant, at, slot, candidate) {
                     hit = Some(candidate);
                     break;
                 }
@@ -1511,9 +1713,7 @@ impl MemorySSA<'_> {
                 || nearest.is_none_or(|found| {
                     let at = self.access(found).site.expect("a def has a site");
                     let slot = self.slot(memory);
-                    changes(memory, invariant, self.written[&at].as_deref(), |_| {
-                        self.clobbered(slot, memory, found, at)
-                    })
+                    self.site_changes(memory, invariant, at, slot, found)
                 });
             if confirmed {
                 if let Some(found) = hit.or(nearest) {
@@ -1616,7 +1816,6 @@ impl MemorySSA<'_> {
                         (Some(edge_memory), Some(edge_slot)) if access.block != block => (edge_memory, edge_slot),
                         _ => (memory, slot),
                     };
-                    let written = &self.written[&access.site.expect("a def has a site")];
                     let site = access.site.expect("a def has a site");
                     let fixed_apart = match (
                         self.fixed.get(&site),
@@ -1645,11 +1844,7 @@ impl MemorySSA<'_> {
                             }
                             _ => false,
                         };
-                    if !apart
-                        && changes(queried, invariant, written.as_deref(), |_| {
-                            self.clobbered(queried_slot, queried, current, site)
-                        })
-                    {
+                    if !apart && self.site_changes(queried, invariant, site, queried_slot, current) {
                         ended(table, &mut chain, current);
                         found.insert(current);
                     } else {
@@ -1738,7 +1933,7 @@ fn structure_of(
     let mut next_id = entries.len() + 1;
     for block in &graph {
         let mut current = entries[&block.at];
-        for &inst in function.block(cfg::block(block.at)).instructions() {
+        for inst in function.iter_block(cfg::block(block.at)) {
             let writes = accesses.shared_writes(inst, &nothing);
             let defines = writes.as_ref().is_none_or(|stores| !stores.is_empty());
             if !defines && accesses.reads(inst).is_some_and(<[MemRef]>::is_empty) {
@@ -1883,4 +2078,57 @@ impl<'a> Writers<'a> {
         read.unwritable()
             || (!self.anywhere && self.index.all_near(read, |writer, _| spares(accesses, program, read, writer)))
     }
+}
+
+/// The bytes each call of `unit` writes through an argument before it reads
+/// any: `initializes` at the site or on the callee's parameter.
+fn initialized_by_calls(unit: &Unit) -> IndexMap<InstId, Vec<MemRef>> {
+    let mut out = IndexMap::default();
+    for (_, inst) in unit.function.walk() {
+        let fills = initialized_by(unit, inst);
+        if !fills.is_empty() {
+            out.insert(inst, fills);
+        }
+    }
+    out
+}
+
+/// The bytes the call `inst` writes through an argument before it reads any
+/// (`initializes`); nothing for another instruction.
+fn initialized_by(
+    unit: &Unit,
+    inst: InstId,
+) -> Vec<MemRef> {
+    let op = unit.function.instruction(inst);
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return Vec::new() };
+    let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(GlobalValue::function);
+    let mut fills = Vec::new();
+    for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
+        let declared = callee.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
+        let byval = |attrs: &[llrm_mir::opcode::Attribute]| {
+            attrs
+                .iter()
+                .any(
+                    |one| matches!(
+                        one,
+                        llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+                    ),
+                )
+        };
+        if byval(&info.argument_attrs[argument]) || byval(declared) {
+            continue;
+        }
+        for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument])
+            .iter()
+            .chain(llrm_mir::memory::initializes(declared))
+        {
+            let Ok(width) = u32::try_from(high - low) else { continue };
+            let mut one = MemRef::at(unit, operand, width);
+            one.disp += low;
+            fills.push(one);
+        }
+    }
+    fills
 }

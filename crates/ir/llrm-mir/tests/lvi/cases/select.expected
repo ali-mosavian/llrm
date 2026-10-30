@@ -1,0 +1,233 @@
+val smax 0 cr=i32:full-set cst=- pn=-
+val smax 1 cr=i1:full-set cst=- pn=-
+val smax 2 cr=i32:[10,-2147483648) cst=- pn=-
+rval smax 2 cr=i32:[10,-2147483648)
+rval smax 1 cr=i1:full-set
+pred smax 0 a=- b=-
+use smax 0 0 cr=i32:full-set
+use smax 1 0 cr=i1:full-set
+use smax 1 2 cr=i32:full-set
+use smax 2 0 cr=i32:[10,-2147483648)
+lat smax arg0 bb0 overdefined
+lat smax i0 bb0 overdefined
+lat smax i1 bb0 constantrange<10, -2147483648>
+lat smax i2 bb0 overdefined
+val umin 0 cr=i32:full-set cst=- pn=-
+val umin 1 cr=i32:full-set cst=- pn=-
+val umin 2 cr=i1:full-set cst=- pn=-
+val umin 3 cr=i1:full-set cst=- pn=-
+val umin 4 cr=i1:full-set cst=- pn=-
+val umin 5 cr=i32:[0,50) cst=- pn=-
+rval umin 5 cr=i32:[0,50)
+rval umin 4 cr=i1:full-set
+rval umin 3 cr=i1:full-set
+rval umin 2 cr=i1:full-set
+edge umin 0 1 1 cr=i32:full-set
+edge umin 1 2 0 cr=i32:[0,100)
+edge umin 1 2 1 cr=i32:[0,50)
+pred umin 0 a=- b=-
+pred umin 2 a=- b=-
+pred umin 4 a=- b=-
+epred umin 0 0 0 T
+epred umin 0 1 0 F
+epred umin 1 0 2 T
+epred umin 1 1 2 F
+use umin 0 0 cr=i32:full-set
+use umin 1 0 cr=i1:full-set
+use umin 2 0 cr=i32:full-set
+use umin 3 0 cr=i1:full-set
+use umin 4 0 cr=i32:[0,100)
+use umin 4 1 cr=i32:[0,50)
+use umin 5 0 cr=i1:full-set
+use umin 5 1 cr=i32:[0,100)
+use umin 5 2 cr=i32:[0,50)
+use umin 6 0 cr=i32:[0,50)
+lat umin arg0 bb0 overdefined
+lat umin arg0 bb1 constantrange<0, 100>
+lat umin arg0 bb2 constantrange<0, 100>
+lat umin arg0 bb3 overdefined
+lat umin arg1 bb0 overdefined
+lat umin arg1 bb1 overdefined
+lat umin arg1 bb2 constantrange<0, 50>
+lat umin arg1 bb3 overdefined
+lat umin i0 bb0 overdefined
+lat umin i0 bb1 constantrange<-1, 0>
+lat umin i0 bb3 overdefined
+lat umin i1 bb0 overdefined
+lat umin i1 bb1 overdefined
+lat umin i1 bb3 overdefined
+lat umin i2 bb1 overdefined
+lat umin i2 bb2 constantrange<-1, 0>
+lat umin i3 bb1 overdefined
+lat umin i3 bb2 overdefined
+lat umin i4 bb2 overdefined
+lat umin i5 bb2 constantrange<0, 50>
+lat umin i6 bb2 overdefined
+lat umin i7 bb3 overdefined
+val abs 0 cr=i32:full-set cst=- pn=-
+val abs 1 cr=i1:full-set cst=- pn=-
+val abs 2 cr=i32:[-10,10) cst=- pn=-
+val abs 3 cr=i32:[-9,11) cst=- pn=-
+val abs 4 cr=i1:full-set cst=- pn=-
+val abs 5 cr=i32:[0,11) cst=- pn=-
+rval abs 5 cr=i32:[0,11)
+rval abs 4 cr=i1:full-set
+rval abs 3 cr=i32:[-9,11)
+rval abs 2 cr=i32:[-10,10)
+rval abs 1 cr=i1:full-set
+edge abs 0 1 0 cr=i32:[0,20)
+pred abs 0 a=- b=-
+pred abs 4 a=- b=-
+epred abs 0 0 0 T
+epred abs 0 1 0 F
+use abs 0 0 cr=i32:full-set
+use abs 1 0 cr=i1:full-set
+use abs 2 0 cr=i32:[0,20)
+use abs 3 1 cr=i32:[-10,10)
+use abs 4 0 cr=i32:[-10,10)
+use abs 5 0 cr=i1:full-set
+use abs 5 1 cr=i32:[-10,10)
+use abs 5 2 cr=i32:[-9,11)
+use abs 6 0 cr=i32:[0,11)
+lat abs arg0 bb0 overdefined
+lat abs arg0 bb1 constantrange<0, 20>
+lat abs arg0 bb2 constantrange<20, 0>
+lat abs i0 bb0 overdefined
+lat abs i0 bb1 constantrange<-1, 0>
+lat abs i0 bb2 constantrange<0, -1>
+lat abs i1 bb0 overdefined
+lat abs i1 bb1 overdefined
+lat abs i1 bb2 overdefined
+lat abs i2 bb1 constantrange<-10, 10>
+lat abs i3 bb1 constantrange<-9, 11>
+lat abs i4 bb1 overdefined
+lat abs i5 bb1 constantrange<0, 11>
+lat abs i6 bb1 overdefined
+lat abs i7 bb2 overdefined
+val nabs 0 cr=i32:full-set cst=- pn=-
+val nabs 1 cr=i1:full-set cst=- pn=-
+val nabs 2 cr=i32:[-10,10) cst=- pn=-
+val nabs 3 cr=i32:[-9,11) cst=- pn=-
+val nabs 4 cr=i1:full-set cst=- pn=-
+val nabs 5 cr=i32:[-10,1) cst=- pn=-
+rval nabs 5 cr=i32:[-10,1)
+rval nabs 4 cr=i1:full-set
+rval nabs 3 cr=i32:[-9,11)
+rval nabs 2 cr=i32:[-10,10)
+rval nabs 1 cr=i1:full-set
+edge nabs 0 1 0 cr=i32:[0,20)
+pred nabs 0 a=- b=-
+pred nabs 4 a=- b=-
+epred nabs 0 0 0 T
+epred nabs 0 1 0 F
+use nabs 0 0 cr=i32:full-set
+use nabs 1 0 cr=i1:full-set
+use nabs 2 0 cr=i32:[0,20)
+use nabs 3 1 cr=i32:[-10,10)
+use nabs 4 0 cr=i32:[-10,10)
+use nabs 5 0 cr=i1:full-set
+use nabs 5 1 cr=i32:[-9,11)
+use nabs 5 2 cr=i32:[-10,10)
+use nabs 6 0 cr=i32:[-10,1)
+lat nabs arg0 bb0 overdefined
+lat nabs arg0 bb1 constantrange<0, 20>
+lat nabs arg0 bb2 constantrange<20, 0>
+lat nabs i0 bb0 overdefined
+lat nabs i0 bb1 constantrange<-1, 0>
+lat nabs i0 bb2 constantrange<0, -1>
+lat nabs i1 bb0 overdefined
+lat nabs i1 bb1 overdefined
+lat nabs i1 bb2 overdefined
+lat nabs i2 bb1 constantrange<-10, 10>
+lat nabs i3 bb1 constantrange<-9, 11>
+lat nabs i4 bb1 overdefined
+lat nabs i5 bb1 constantrange<-10, 1>
+lat nabs i6 bb1 overdefined
+lat nabs i7 bb2 overdefined
+val cond_arms 0 cr=i32:full-set cst=- pn=-
+val cond_arms 1 cr=i1:full-set cst=- pn=-
+val cond_arms 2 cr=i32:[0,8) cst=- pn=-
+val cond_arms 3 cr=i32:[1,9) cst=- pn=-
+rval cond_arms 3 cr=i32:[1,9)
+rval cond_arms 2 cr=i32:[0,8)
+rval cond_arms 1 cr=i1:full-set
+pred cond_arms 0 a=- b=-
+use cond_arms 0 0 cr=i32:full-set
+use cond_arms 1 0 cr=i1:full-set
+use cond_arms 1 1 cr=i32:full-set
+use cond_arms 2 0 cr=i32:[0,8)
+use cond_arms 3 0 cr=i32:[1,9)
+lat cond_arms arg0 bb0 overdefined
+lat cond_arms i0 bb0 overdefined
+lat cond_arms i1 bb0 constantrange<0, 8>
+lat cond_arms i2 bb0 constantrange<1, 9>
+lat cond_arms i3 bb0 overdefined
+val binop_over_select 0 cr=i1:full-set cst=- pn=-
+val binop_over_select 1 cr=i32:full-set cst=- pn=-
+val binop_over_select 2 cr=i1:full-set cst=- pn=-
+val binop_over_select 3 cr=i32:[3,6) cst=- pn=-
+val binop_over_select 4 cr=i32:[0,4996) cst=- pn=-
+val binop_over_select 5 cr=i32:[3,1005) cst=- pn=-
+rval binop_over_select 5 cr=i32:[3,1005)
+rval binop_over_select 4 cr=i32:[0,4996)
+rval binop_over_select 3 cr=i32:[3,6)
+rval binop_over_select 2 cr=i1:full-set
+edge binop_over_select 0 1 0 cr=i1:full-set
+edge binop_over_select 0 1 1 cr=i32:[0,1000)
+pred binop_over_select 0 a=- b=-
+epred binop_over_select 0 0 0 T
+epred binop_over_select 0 1 0 F
+use binop_over_select 0 0 cr=i32:full-set
+use binop_over_select 1 0 cr=i1:full-set
+use binop_over_select 2 0 cr=i1:full-set
+use binop_over_select 3 0 cr=i32:[0,1000)
+use binop_over_select 3 1 cr=i32:[3,6)
+use binop_over_select 4 0 cr=i32:[3,6)
+use binop_over_select 4 1 cr=i32:[0,1000)
+use binop_over_select 5 0 cr=i32:[0,4996)
+lat binop_over_select arg0 bb0 overdefined
+lat binop_over_select arg0 bb1 overdefined
+lat binop_over_select arg0 bb2 overdefined
+lat binop_over_select arg1 bb0 overdefined
+lat binop_over_select arg1 bb1 constantrange<0, 1000>
+lat binop_over_select arg1 bb2 constantrange<1000, 0>
+lat binop_over_select i0 bb0 overdefined
+lat binop_over_select i0 bb1 constantrange<-1, 0>
+lat binop_over_select i0 bb2 constantrange<0, -1>
+lat binop_over_select i1 bb0 overdefined
+lat binop_over_select i1 bb1 overdefined
+lat binop_over_select i1 bb2 overdefined
+lat binop_over_select i2 bb1 constantrange<3, 6>
+lat binop_over_select i3 bb1 constantrange<0, 4996>
+lat binop_over_select i4 bb1 constantrange<3, 1005>
+lat binop_over_select i5 bb1 overdefined
+lat binop_over_select i6 bb2 overdefined
+val intrinsic_abs 0 cr=i32:full-set cst=- pn=-
+val intrinsic_abs 1 cr=i1:full-set cst=- pn=-
+val intrinsic_abs 2 cr=i32:[-10,10) cst=- pn=-
+val intrinsic_abs 3 cr=i32:[0,11) cst=- pn=-
+rval intrinsic_abs 3 cr=i32:[0,11)
+rval intrinsic_abs 2 cr=i32:[-10,10)
+rval intrinsic_abs 1 cr=i1:full-set
+edge intrinsic_abs 0 1 0 cr=i32:[0,20)
+pred intrinsic_abs 0 a=- b=-
+epred intrinsic_abs 0 0 0 T
+epred intrinsic_abs 0 1 0 F
+use intrinsic_abs 0 0 cr=i32:full-set
+use intrinsic_abs 1 0 cr=i1:full-set
+use intrinsic_abs 2 0 cr=i32:[0,20)
+use intrinsic_abs 3 0 cr=i32:[-10,10)
+use intrinsic_abs 4 0 cr=i32:[0,11)
+lat intrinsic_abs arg0 bb0 overdefined
+lat intrinsic_abs arg0 bb1 constantrange<0, 20>
+lat intrinsic_abs arg0 bb2 constantrange<20, 0>
+lat intrinsic_abs i0 bb0 overdefined
+lat intrinsic_abs i0 bb1 constantrange<-1, 0>
+lat intrinsic_abs i0 bb2 constantrange<0, -1>
+lat intrinsic_abs i1 bb0 overdefined
+lat intrinsic_abs i1 bb1 overdefined
+lat intrinsic_abs i1 bb2 overdefined
+lat intrinsic_abs i2 bb1 constantrange<-10, 10>
+lat intrinsic_abs i3 bb1 constantrange<0, 11>
+lat intrinsic_abs i4 bb1 overdefined
+lat intrinsic_abs i5 bb2 overdefined

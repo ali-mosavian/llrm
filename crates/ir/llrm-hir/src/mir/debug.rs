@@ -71,7 +71,7 @@ fn name(
     module: &Module,
     global: GlobalId,
 ) -> String {
-    module.global(global).name.clone().unwrap_or_default()
+    module.global(global).name.owned().unwrap_or_default()
 }
 
 /// Writes `hir`'s debug information into `module`, `data` and `functions`
@@ -142,6 +142,7 @@ pub(super) fn emitted<'h>(
                         offset: place.offset - group.start,
                         parameter: variable.parameter,
                         argument: variable.argument,
+                        block: None,
                     };
                     variables.insert((function.id, place.id), di::add_variable(module, &node));
                 }

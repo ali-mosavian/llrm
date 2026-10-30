@@ -155,7 +155,7 @@ fn replaced(
 /// trip count is `bound - start + inclusive` for any start -- and the
 /// neutral terms go here, so no rewrite folds its own.
 pub fn identities(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> bool {
     let mut changed = false;
@@ -188,7 +188,7 @@ pub fn identities(
 /// `x` and `x == 0` is `not x`. A frontend's truth, a sign-extended `i1`,
 /// is tested so, and induction reads the compare beneath it.
 fn _zero_tested(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {

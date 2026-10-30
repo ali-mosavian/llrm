@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:85abc6b268358f68c3bc6bef2ccd5592cf1c2720660aefd6b5c2af72d8882769 -->
+<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:edb4953b88795b922c370f71f03c68e455bc461a0ae0dc4c5b977a46a0644adf -->
 
 # interprocedural
 
@@ -26,41 +26,29 @@ fewer.
 
 The stages, in order:
 
-1. `stamped_all`: each exactly defined body is stamped with what is proved
-   of it, callees first: `memory(...)`, `nocapture`/`readonly`/`readnone`/
-   `writeonly`/`initializes` on pointer parameters, `willreturn`,
-   `norecurse`, `nounwind`. A stated attribute is only narrowed. The same
-   stamp is stated on the declarations of the body in other modules.
-2. Inlining ([`crate::inline`](inline.md)), repeated until a round changes nothing.
-   Each round removes the private bodies nothing reaches
-   (`bare_the_unreached`), picks candidates and constant sites by code
-   bytes, and splices (`inline<N>`). What only the clocks admit is tried on
-   copies sized after the pipeline ran over them with the site's constants,
-   and kept where the callers come to no more bytes than before, within the
-   estimate's error, plus what the clocks saved buy at `rate`
-   (`estimated_callees`, `estimated_sites`, `together_trial`). A private
-   function called once is not built in a round, as GCC takes its last call
-   before any body is made.
-3. `promote.` ([`crate::argpromotion`](argpromotion.md)), `narrow.` ([`crate::narrowspace`](narrowspace.md)):
-   a pointer a body only reads is passed as the fields it reads; a far
-   pointer every call fills from DGROUP is passed as its offset.
+1. `stamped_all` (the `stamp` slot, before the walk): each exactly defined
+   body is stamped with what is proved of it, callees first: `memory(...)`,
+   `nocapture`/`readonly`/`readnone`/ `writeonly`/`initializes` on pointer
+   parameters, `willreturn`, `norecurse`, `nounwind`. A stated attribute is
+   only narrowed. The same stamp is stated on the declarations of the body
+   in other modules.
+2. The private bodies nothing reaches any more, the ones the walk
+   ([`crate::walk::Walk`](walk.md)) inlined into every caller, lose their bodies
+   (`bare_the_unreached`). Inlining is the walk's alone.
+3. `promote.` ([`crate::argpromotion`](argpromotion.md)), `narrow.` ([`crate::narrowspace`](narrowspace.md)),
+   `globalsra.` ([`crate::globalsra`](globalsra.md)): a pointer a body only reads is
+   passed as the fields it reads; a far pointer every call fills from DGROUP
+   is passed as its offset.
 4. `ipa<N>.`: a body whose every `ret` returns one integer has its calls'
    results replaced by it (`llrm_analysis::interprocedural`); the call
    stays.
-5. A loop of: `ipa-args<N>.` (a private body whose every call passes the
-   same constant uses it), `ipa-cp.` ([`crate::ipacp`](ipacp.md) cloning), and
-   `ipa-inline<N>.` (constant sites and callees inlined again), with return
-   propagation after each, until nothing changes.
-6. `ipa-range<N>.`, up to four rounds, if `ranges` is set: the range every
-   caller passes a parameter is stated on it for the body's own proofs.
-7. `ipa-deadargs.` ([`crate::deadargs`](deadargs.md)): parameters nothing reads go.
-8. `ipa-peel.` and `ipa-recursive.`: a function that calls itself gets
-   copies of itself, and its callers one copy
-   (`inline::inlined_into_itself`, `inline::peeled_into`); skipped where the
-   threshold is 0 or code size outranks speed.
-9. `stamped_all` again, then `ipa-pure.` removes unused calls to bodies
-   proved pure and terminating, and `ipa-noreturn.` cuts the code after a
-   call to a private body every path of which stops, keeping the call.
+5. A loop of `ipa-cp.` ([`crate::ipacp`](ipacp.md) cloning) and return propagation,
+   until nothing changes. What every caller passes is IPSCCP's, before the
+   walk ([`crate::walk::ModuleIpo`](walk.md)); the pin does not run it again here.
+6. `ipa-deadargs.` ([`crate::deadargs`](deadargs.md)): parameters nothing reads go.
+7. `ipa-pure.` removes unused calls to bodies proved pure and terminating,
+   and `ipa-noreturn.` cuts the code after a call to a private body every
+   path of which stops, keeping the call.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -72,10 +60,8 @@ flowchart TB
   inl["<b>inline*</b>"]:::mid
   pn["<b>promote/narrow</b>"]:::mid
   rc["<b>ret consts</b>"]:::mid
-  lp["<b>[args, cp, inline]*</b>"]:::mid
-  rg["<b>ranges</b>"]:::mid
+  lp["<b>cp*</b>"]:::mid
   da["<b>deadargs</b>"]:::mid
-  rec["<b>recursion</b>"]:::mid
   st2["<b>stamp</b>"]:::mid
   pu["<b>pure</b>"]:::mid
   nr["<b>noreturn</b>"]:::mid
@@ -84,10 +70,8 @@ flowchart TB
   inl --> pn
   pn --> rc
   rc --> lp
-  lp --> rg
-  rg --> da
-  da --> rec
-  rec --> st2
+  lp --> da
+  da --> st2
   st2 --> pu
   pu --> nr
   nr -.-> re
@@ -148,14 +132,13 @@ From unit test `test_a_private_terminal_body_cuts_its_callers_tail` in
 A `ProgramPass` after the per-body fixed point and before `globaldce`,
 and not at -O0. `Stamp` is the same stamping run earlier, before any body's
 pipeline, so loops are judged on what their callees do. Which stages run
-follows the level: `inline` and `ipa-cp` thresholds, `ipa-range`
-(`-fipa-vrp`, -O2 and up), `ipa-cp-clone` (-O3 and up). See
+follows the level: `inline` and `ipa-cp` thresholds, `ipa-cp-clone` (-O3
+and up). See
 `docs/reference/levels.md`.
 
 ## Needs
 [`crate::inline`](inline.md), [`crate::ipacp`](ipacp.md), [`crate::profit`](profit.md), and
-`llrm_analysis`' `Summaries`, `GlobalsAA`, `Callbacks`,
-`interprocedural` and `parameter_ranges`.
+`llrm_analysis`' `Summaries`, `GlobalsAA` and `interprocedural`.
 
 ## See also
 LLVM's FunctionAttrs and IPSCCP; GCC's `ipa-inline.cc`, `ipa-cp.cc` and

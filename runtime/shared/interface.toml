@@ -137,3 +137,118 @@ name = "environment"
 doc = "The `index`th (from 0) string of the environment, NAME=VALUE, copied to `data` (at most `max` bytes); its length, or -1 past the last."
 args = [["index", "usize"], ["data", "bytes_mut"], ["max", "usize"]]
 returns = "isize"
+
+# The clock and the wait, where the operating system has them for a program (a host; DOS programs read the BIOS
+# clock through their language's runtime).
+[[op]]
+group = "time"
+name = "monotonic"
+doc = "Milliseconds from an arbitrary start, modulo 2^31: it never goes back, and a difference is right while under 24 days."
+args = []
+returns = "i32"
+
+[[op]]
+group = "time"
+name = "local_time"
+doc = "Writes the local date and time to `data` as seven little-endian 16-bit words: year, month, day, hour, minute, second, hundredths; 0, or an error."
+args = [["data", "bytes_mut"]]
+returns = "isize"
+
+[[op]]
+group = "time"
+name = "sleep"
+doc = "Waits `milliseconds`, or less if a signal ends it."
+args = [["milliseconds", "usize"]]
+returns = "void"
+
+[[op]]
+group = "process"
+name = "environment_read"
+doc = "Up to `max` bytes of the environment block from byte `offset` to `data`; the count copied."
+args = [["offset", "usize"], ["data", "bytes_mut"], ["max", "usize"]]
+returns = "usize"
+
+[[op]]
+group = "process"
+name = "environment_write"
+doc = "`count` bytes from `data` into the environment block at byte `offset`; 0, or -1 when they do not fit in the block."
+args = [["offset", "usize"], ["data", "bytes"], ["count", "usize"]]
+returns = "isize"
+
+[[op]]
+group = "process"
+name = "execute"
+doc = "Runs the program `name` to its end with the command tail `tail` (a length byte, the text, a carriage return) and the caller's environment; 0 on success, the error code negated otherwise. The caller leaves the program enough memory to run in."
+args = [["name", "path"], ["tail", "path"]]
+returns = "isize"
+
+# Files and directories by name, where the operating system has them.
+[[op]]
+group = "files"
+name = "delete"
+doc = "Deletes the file `name`; 0 on success. No wildcards."
+args = [["name", "path"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "rename"
+doc = "Renames `old` to `new`, which may be in another directory of the same drive; 0 on success."
+args = [["old", "path"], ["new", "path"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "mkdir"
+doc = "Makes the directory `name`; 0 on success."
+args = [["name", "path"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "chdir"
+doc = "Makes the directory `name` the current one; 0 on success."
+args = [["name", "path"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "rmdir"
+doc = "Removes the empty directory `name`; 0 on success."
+args = [["name", "path"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "find_first"
+doc = "Starts a directory search: the first file named by `pattern` (wildcards allowed) whose attributes are among `attrs` (0 for ordinary files, 0x10 adds directories), its entry written to the 43-byte buffer `entry` (attribute at 21, size at 26 as 32 bits, name at 30, NUL-ended); 0 on success."
+args = [["pattern", "path"], ["attrs", "usize"], ["entry", "bytes_mut"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "find_next"
+doc = "The next file of the search `entry` holds, written to `entry`; 0 on success, an error code negated at the end."
+args = [["entry", "bytes_mut"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "free_bytes"
+doc = "The bytes free on `drive` (0 the current one, 1 for A:); an error code negated."
+args = [["drive", "usize"]]
+returns = "i32"
+
+[[op]]
+group = "files"
+name = "current_directory"
+doc = "The current directory of `drive` (0 the current one), without a drive or a leading separator, NUL-ended in at most 64 bytes of `data`; 0 on success."
+args = [["drive", "usize"], ["data", "bytes_mut"]]
+returns = "isize"
+
+[[op]]
+group = "files"
+name = "current_drive"
+doc = "The current drive, 0 for A:."
+args = []
+returns = "isize"

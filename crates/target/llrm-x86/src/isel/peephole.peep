@@ -31,6 +31,8 @@ meta moved_argument = argument uses
 meta rewritable = clobbers requires delivers spread group
 meta rewritable_named = rewritable symbol
 meta widening = clobbers clobbers_high requires delivers spread group frame_adjust spill_reload spill_store
+// A load whose segment is required in a register (ES for a far access) may widen: the requirement stays on the instruction.
+meta widening_load = clobbers clobbers_high delivers spread group frame_adjust spill_reload spill_store
 meta tested = clobbers symbol
 
 // Sets of mnemonics, from x86.instr. What an operation on memory can be:
@@ -56,7 +58,7 @@ group extensions
 
 rule loaded_extension
     match   mov m:reg, src:mem ; ... independent(@0, *) ; x=(movsx|movzx) d:reg, m
-    when    free(@0, widening), free(@1, widening), same_width(m, src), narrower(m, d), feeds_once(@0, @1),
+    when    free(@0, widening_load), free(@1, widening), same_width(m, src), narrower(m, d), feeds_once(@0, @1),
             encodable($0), hoistable($0, @0, gap)
     rewrite @0: x d, src {defines: @1.defines, uses: joined_uses(@0, @1), widths: joined_widths(@0, @1)} ;
             anchor @1 {defines: [], uses: []}
@@ -76,7 +78,7 @@ rule unsigned_extensions
             anchor @1 {defines: [], uses: []}
 
 
-// `movzx r,m8` as `xor r,r; mov rl,m` where the target prices the pair lower (the 486: two clocks
+// Priced forms of a zero extension. `movzx r,m8` as `xor r,r; mov rl,m` where the target prices the pair lower (the 486: two clocks
 // for three). The xor sets the flags, so none may be live, and r must not be in the address.
 group zeroed_loads
     walk window
@@ -86,6 +88,23 @@ rule zeroed_load
     when    clears_before_byte_load(), free(@0, widening), width_in(src, [8]), byte_loadable(d, src),
             flags_dead(@0)
     rewrite @0: xor d, d, d ; @0: mov low_byte(d), src
+
+// `and r, 255` and `and r, 65535` with the flags dead are the zero extension of
+// the low byte or word, as X86's patterns select them (`(and GR32:$src1, 0xffff)`
+// and `0xff`, X86InstrCompiler.td L1772 and L1775 at d1106deb71cc; the GR16 `0xff`
+// pattern at L1778 is not translated): the combiner makes `zext(trunc x)` that
+// `and`. Where the code is not for size, only if the target prices the
+// extension no higher.
+rule byte_mask
+    match   and d:reg, d, #255
+    when    masks_by_extension(), width_in(d, [32]), flags_dead(@0), encodable($0)
+    rewrite @0: movzx d, low_byte(d)
+
+rule word_mask
+    match   and d:reg, d, #65535
+    when    masks_by_extension(), width_in(d, [32]), flags_dead(@0), encodable($0)
+    rewrite @0: movzx d, low_word(d)
+
 
 // Materialize a call's literal once when both stack and register need it.
 group pushed_constants
@@ -121,6 +140,15 @@ rule transferred
             same_length(@0, $0)
     rewrite @0: =@0 r, r, l ; anchor @1
 
+// The same for a cell: `A = op(A, [C]); [C] = A` is `[C] = op([C], A)` when A
+// dies at the store. The spiller folds the reload into the operation and
+// leaves the store, where the pin's spill folding makes one read-modify-write.
+rule transferred_cell
+    match   op=commutative_alu l:reg, l, c:mem ; mov c2:mem, l
+    when    free(@0, exact), free(@1, dropped), same_width(l, c), !addresses(c, l), same_cell(c2, c),
+            dead(@1, lanes(l)), encodable($0)
+    rewrite @0: op c, c, l ; anchor @1
+
 
 // Remove a synthetic save/restore when the source survives between them:
 // nothing between writes the source or touches the temporary, and the
@@ -133,6 +161,35 @@ rule restored_copy
     when    free(@0, synthetic), free(@1, synthetic), same_width(t, s), width_in(t, [8, 16, 32]),
             disjoint(lanes(t), lanes(s)), !empty(lanes(t)), !empty(lanes(s)), dead(@1, lanes(t))
     rewrite anchor @0 ; anchor @1
+
+
+// A reload of the cell a store just filled, into the register that filled it,
+// reads what the register still holds: nothing between writes the register,
+// the cell or what addresses it, and no call, volatile access or barrier
+// stands between. The pin's allocator never leaves the pair; the real-mode
+// register classes do (DEVIATE: no pin reference for them). The store stays:
+// the cell may be read later.
+meta forwarded = clobbers requires delivers spread group symbol frame_adjust volatile
+group forwarded_reloads
+    walk gap
+
+rule forwarded_reload
+    match   mov c:mem, r:reg ; ... holds_after(@0, *) ; mov r, c
+    when    free(@0, forwarded), free(@1, forwarded), same_width(r, c), width_in(r, [8, 16, 32])
+    rewrite @0 ; anchor @1
+
+
+// The same reload into another register is a copy of the register that
+// filled the cell: it still holds the value, and a register copy is shorter
+// and faster than the load.
+group forwarded_copies
+    walk gap
+
+rule forwarded_copy
+    match   mov c:mem, r:reg ; ... holds_after(@0, *) ; mov d:reg, c
+    when    free(@0, forwarded), free(@1, forwarded), same_width(r, c), same_width(d, c), width_in(d, [8, 16, 32]),
+            !same_root(r, d)
+    rewrite @0 ; @1: mov d, r
 
 
 // `T = S; T = op(T); S = T` is `S = op(S); T = S`: the same registers and
@@ -191,6 +248,32 @@ rule fused_push
     when    free(@0, dropped), free(@1, settled), same_width(r, c), width_in(c, [16, 32]), dead(@1, lanes(r)), encodable($1)
     rewrite anchor @0 ; @1: push c
 
+// A constant whose only reader is a push is the push's immediate: `mov cx,8;
+// push cx` is `push 8` (4 bytes to 2). The selector hoists a constant of
+// several uses into a register, as the pin does at -Os, and a call between
+// the uses makes the register be made again for each.
+rule fused_immediate_push
+    match   mov r:reg, lit:imm ; ... delays(@0, *) ; push r
+    when    free(@0, dropped), free(@1, settled), same_width(r, lit), width_in(lit, [16, 32]), dead(@1, lanes(r)),
+            encodable($1)
+    rewrite anchor @0 ; @1: push lit
+
+// The same for a segment or offset symbol: `mov ax, DGROUP; push ax` is
+// `pushw DGROUP`.
+rule fused_symbol_push
+    match   mov r:reg, sym:sym ; ... delays(@0, *) ; push r
+    when    free(@0, dropped), free(@1, settled), same_width(r, sym), width_in(sym, [16, 32]), dead(@1, lanes(r)),
+            encodable($1)
+    rewrite anchor @0 ; @1: push sym
+
+// The same when the constant is made wide and pushed narrow: `mov eax, 0`
+// then `push ax`.
+rule fused_immediate_push_narrow
+    match   mov r:reg, lit:imm ; ... delays(@0, *) ; push p:reg
+    when    free(@0, dropped), free(@1, settled), same_root(r, p), narrower(p, r), width_in(p, [16]),
+            dead(@1, lanes(r)), encodable($1)
+    rewrite anchor @0 ; @1: push low_word(lit)
+
 rule fused_unary
     match   mov r:reg, c:mem ; ... delays(@0, *) ; op=unary_rmw r, r ; mov c2:mem, r
     when    free(@0, dropped), free(@1, settled), free(@2, dropped), same_width(r, c),
@@ -233,6 +316,12 @@ rule decrement
     when    dead(@0, CF), no_longer(@0, $0)
     rewrite @0: dec d, d
 
+// The combiner's canonical `x - 1` is `add x, -1`: the same DEC, as X86's
+// patterns select for `add x, -1` (X86InstrCompiler.td `(add GR32:$src, -1)`).
+rule decrement_by_add
+    match   add d:reg, d, #-1
+    when    dead(@0, CF), no_longer(@0, $0)
+    rewrite @0: dec d, d
 
 // A borrow spread to a mask: `0 - 0 - CF` is `r - r - CF`, flags and all,
 // and needs no zero. The mov between keeps the borrow.

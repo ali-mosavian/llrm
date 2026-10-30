@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:4bf9c4931d73c71f174a841c2277f9f1c59610e33de2e3cf2aa8c17fb3cf2bca -->
+<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:3a0340bc15f155f82da23c1f6d08d7dbf946cbdcfc1823d30a80fb087fc3941d -->
 
 # inline
 
@@ -44,53 +44,31 @@ flowchart TB
 
 *Inlining a call to g*
 
-A callee is a candidate (`candidates`) when it can be cloned (`cloneable`:
-defined, `splice` carries it, it returns, it is not recursive, not
-`noinline`, and does not call `setjmp`-like functions), and then by price.
-The body's semantic operations (not phis, jumps, returns) must fit the
-budget `max(6, min(24, call_cost / 2)) * limit / 225` (`Threshold::budget`),
-and the work copied at every site beyond the last must stay below the calls
-removed, in the target's clocks, or in code bytes where size outranks speed
-(`-Os`). A routine marked `alwaysinline` is a candidate at any size and
-`noinline` at none; the caller's growth limit does not apply to
-`alwaysinline` (gcc's `DECL_DISREGARD_INLINE_LIMITS`). `inlinehint` scales
-the budget by 325/225. A body held only to inline from
-(`available_externally`) is a candidate at any size.
+A callee can be cloned (`cloneable`: defined, `splice` carries it, it
+returns, it is not recursive, not `noinline`, and does not call
+`setjmp`-like functions); whether it is copied at a site is
+`inlinecost::decide`'s, the walk's ([`crate::walk`](walk.md)).
 
-A public callee, or one whose address is taken, stays defined; a private one
-goes with its last site. The last call of a function nothing else reaches
-moves the body whatever its price (`Candidate::moved`), up to
-`LAST_CALL_OPERATIONS`, where `Threshold::last` is on
-(`-finline-functions-called-once`).
+A static alloca of the callee goes to the caller's entry; one whose count
+is an argument folds to a constant in the copy, as
+`CloneAndPruneFunctionInto` simplifies it, and is static too. Any other (a
+variable count) stays where it is, and the copy is bracketed by
+`llvm.stacksave` and, before each return, `llvm.stackrestore`.
 
-`constant_sites` admits a call whose actual is a known constant even where
-the body is not a candidate for every caller: `folded` prices what the known
-actuals remove from the body, and the copy is taken when what is left costs
-no more than the call, weighted by the site's frequency (a hot site, in a
-loop, by 525/225). The original stays for the other callers.
-
-A copy is allowed (`fits`, `grows_within_limits`) only where
+A copy is allowed (`fits_with`) only where
 
 - the call's function type is the callee's and the callee is not variadic;
-- the stack the copy adds stays within `FRAME_LIMIT` (256 bytes), and no
-  body that allocates is copied into a recursive caller;
-- a parameter the callee `releases` is passed an object the caller owns;
-- the caller's growth stays within GCC's `caller_growth_limits`, whose
-  `large-function-insns` is the allocator's knee (`ALLOCATION_KNEE`), not
-  2700, and a body moved into a caller already past the knee is refused.
+- no body that allocates is copied into a recursive caller, except the last
+  call of a private callee;
+- a parameter the callee `releases` is passed an object the caller owns.
+
+Which sites are copied is `inlinecost::decide`'s (the walk's).
 
 `expanded_all` decides every site of a caller first (`Plan`), tracking the
 caller's size and stack as they grow and including what is inlined into each
 copy, then splices from the last site to the first so each split moves only
 what is left of its block. `byval` arguments the callee writes are copied
 first.
-
-Recursion is separate: `inlined_into_itself` gives a recursive function
-copies of itself (GCC's `recursive_inlining`) to depth 8, while the body
-stays under 450 operations and the call's block runs on more than a tenth of
-the function's calls;
-`peeled_into` gives a caller one copy of a recursive callee. `UnitSize`
-bounds the unit's growth as `inline-unit-growth` (40%).
 
 ## Example
 Before:

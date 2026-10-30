@@ -1,11 +1,11 @@
 //! A register no one writes is not saved.
 
-use std::process::Command;
+mod common;
 
 fn listing(source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O1", "-S", "-o", "a.s", "a.c"])
         .output()

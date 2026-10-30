@@ -8,16 +8,25 @@ use crate::module::{Function, GlobalKind, GlobalValue, Module, Operand, ValueDef
 use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::TypeId;
 
+pub mod bittest;
 #[cfg(test)]
 mod boundary_tests;
+pub mod bytewise;
+#[cfg(test)]
+mod bytewise_tests;
 pub mod context;
 #[cfg(test)]
 mod context_tests;
+pub mod fp;
+#[cfg(test)]
+mod fp_tests;
+pub mod fpredicate;
 pub mod guarantee;
 #[cfg(test)]
 mod guarantee_tests;
 pub mod known;
 pub mod nonzero;
+pub mod objectsize;
 pub mod pattern;
 pub mod power2;
 mod query;
@@ -25,9 +34,12 @@ pub mod range;
 pub mod signbits;
 #[cfg(test)]
 mod signbits_tests;
+pub mod underlying;
 
 #[cfg(test)]
 mod nonzero_tests;
+#[cfg(test)]
+mod objectsize_tests;
 #[cfg(test)]
 mod power2_tests;
 
@@ -478,6 +490,69 @@ pub fn underlying(
     function: &Function,
     pointer: Operand,
 ) -> (Operand, Option<i64>) {
+    strip_offsets(context, layout, function, pointer, false)
+}
+
+/// `GetPointerBaseWithConstantOffset`
+/// ([ValueTracking.h:364](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ValueTracking.h#L364)),
+/// over `stripAndAccumulateConstantOffsets`
+/// ([Value.cpp:732](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L732)):
+/// `pointer` less every GEP with only constant indices and every address
+/// space cast, and the bytes those added. A GEP with a variable index is the
+/// base, where `underlying` goes on through it.
+pub fn pointer_base_with_constant_offset(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    pointer: Operand,
+) -> (Operand, i64) {
+    let (base, offset) = strip_offsets(context, layout, function, pointer, true);
+    (base, offset.expect("a stop at a variable index leaves a constant offset"))
+}
+
+/// Whether an object is below `from`: a pointer made, through casts and geps,
+/// of a global or an alloca. A selector cast over one is no pointer into it
+/// (`segment:0`); one over a pointer made of an integer names no object.
+pub(crate) fn object_below(
+    context: &Context,
+    function: &Function,
+    from: Operand,
+) -> bool {
+    let mut at = from;
+    for _ in 0..16 {
+        match at {
+            Operand::Constant(id) => match &context.get(id).kind {
+                ConstantKind::Global(_) => return true,
+                ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
+                    at = Operand::Constant(*value)
+                }
+                ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => at = Operand::Constant(operands[0]),
+                _ => return false,
+            },
+            Operand::Value(value) => {
+                let ValueDef::Instruction(inst) = function.value(value).def else { return false };
+                let instruction = function.instruction(inst);
+                match instruction.opcode {
+                    Opcode::Alloca { .. } => return true,
+                    Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::GetElementPtr { .. } => {
+                        at = instruction.operands[0]
+                    }
+                    _ => return false,
+                }
+            }
+            Operand::Block(_) => return false,
+        }
+    }
+    false
+}
+
+fn strip_offsets(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    pointer: Operand,
+    stop_at_variable: bool,
+) -> (Operand, Option<i64>) {
     let int = |one: Operand| match one {
         Operand::Constant(id) => match context.get(id).kind {
             ConstantKind::Int(bits) => Some(signed(bits, context.types.int_bits(context.get(id).ty).unwrap_or(64))),
@@ -489,30 +564,62 @@ pub fn underlying(
     let mut offset = Some(0_i64);
     for _ in 0..DEPTH {
         // A GEP or an address-space cast, an instruction or a constant.
-        let (source, operands): (Option<TypeId>, Vec<Operand>) = match at {
+        let made: Vec<Operand>;
+        let (source, operands): (Option<TypeId>, &[Operand]) = match at {
             Operand::Value(value) => {
                 let ValueDef::Instruction(inst) = function.value(value).def else { break };
                 let instruction = function.instruction(inst);
                 match instruction.opcode {
-                    Opcode::GetElementPtr { source } => (Some(source), instruction.operands.clone()),
-                    Opcode::Cast(CastOp::AddrSpaceCast) => (None, instruction.operands.clone()),
+                    Opcode::GetElementPtr { source } => (Some(source), &instruction.operands),
+                    // A selector alone names no object (DEVIATE C1).
+                    Opcode::Cast(CastOp::AddrSpaceCast)
+                        if !(function.operand_type(context, instruction.operands[0]).is_some_and(|ty| {
+                            matches!(
+                                context.types.get(ty),
+                                crate::types::Type::Pointer(space) if layout.has_unstable_representation(*space)
+                            )
+                        }) && object_below(context, function, instruction.operands[0])) =>
+                    {
+                        (None, &instruction.operands)
+                    }
                     _ => break,
                 }
             }
             Operand::Constant(id) => match &context.get(id).kind {
                 ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
-                    (Some(*source), operands.iter().map(|&one| Operand::Constant(one)).collect())
+                    made = operands.iter().map(|&one| Operand::Constant(one)).collect();
+                    (Some(*source), &made)
                 }
-                ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => {
-                    (None, vec![Operand::Constant(*value)])
+                ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value })
+                    if !(matches!(
+                        context.types.get(context.get(*value).ty),
+                        crate::types::Type::Pointer(space) if layout.has_unstable_representation(*space)
+                    ) && object_below(context, function, Operand::Constant(*value))) =>
+                {
+                    made = vec![Operand::Constant(*value)];
+                    (None, &made)
                 }
                 _ => break,
             },
             Operand::Block(_) => break,
         };
         if let Some(source) = source {
-            let indices: Vec<Option<i128>> = operands[1..].iter().map(|&one| int(one)).collect();
-            let (constant, variable) = layout.collect_offset(&context.types, source, &indices);
+            // Most GEPs have a few indices: no allocation for them.
+            let mut small = [None; 4];
+            let spill: Vec<Option<i128>>;
+            let indices: &[Option<i128>] = if operands.len() - 1 <= small.len() {
+                for (slot, &one) in small.iter_mut().zip(&operands[1..]) {
+                    *slot = int(one);
+                }
+                &small[..operands.len() - 1]
+            } else {
+                spill = operands[1..].iter().map(|&one| int(one)).collect();
+                &spill
+            };
+            let (constant, variable) = layout.collect_offset(&context.types, source, indices);
+            if stop_at_variable && !variable.is_empty() {
+                break;
+            }
             offset = offset.filter(|_| variable.is_empty()).map(|one| one + constant as i64);
         }
         at = operands[0];
@@ -560,9 +667,11 @@ pub fn alignment(
             },
             Operand::Constant(id) => match &context.get(id).kind {
                 ConstantKind::Global(global) => {
-                    let stated = match &globals[global.0 as usize].kind {
-                        GlobalKind::Variable(variable) => variable.align.unwrap_or(1),
-                        GlobalKind::Function(_) => 1,
+                    // A global declared by the running pass is not in the
+                    // module yet: no alignment is known of it.
+                    let stated = match globals.get(global.0 as usize).map(|one| &one.kind) {
+                        Some(GlobalKind::Variable(variable)) => variable.align.unwrap_or(1),
+                        Some(GlobalKind::Function(_)) | None => 1,
                     };
                     return _lesser(stated, added);
                 }
@@ -660,18 +769,20 @@ pub fn sizes(
     module: &Module,
     layout: &DataLayout,
 ) -> Sizes {
-    let variables = module
-        .globals
-        .iter()
-        .enumerate()
-        .filter_map(
-            |(at, global)| match &global.kind {
-                GlobalKind::Variable(variable) => {
-                    Some((GlobalId(at as u32), layout.alloc_size(&module.context.types, variable.ty)))
-                }
-                GlobalKind::Function(_) => None,
-            },
-        );
+    sizes_of(&module.context, &module.globals, layout)
+}
+
+/// [`sizes`] of a module's parts, for a pass that holds those and not the
+/// module.
+pub fn sizes_of(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+) -> Sizes {
+    let variables = globals.iter().enumerate().filter_map(|(at, global)| match &global.kind {
+        GlobalKind::Variable(variable) => Some((GlobalId(at as u32), layout.alloc_size(&context.types, variable.ty))),
+        GlobalKind::Function(_) => None,
+    });
     variables.collect()
 }
 

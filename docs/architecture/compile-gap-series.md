@@ -142,3 +142,14 @@ Ladder (`tools/ladder/ladder-5e2e995ef.json`, N=25 to 1,600; slopes fit N up to 
 | mixed | 39 / 178 | 40 / 66 | 0.86 / 1.11 | 0.90 / 1.05 | 2,036 / 9,025 |
 
 Allocations and memory at -O2 (`d_faces`; DHAT on the system-allocator build): 2,979,190 blocks, 601.7 MB allocated, peak live 18.7 MB in 88,000 blocks; by phase: optimizer 1,069,863 blocks (35.9%, 226.7 MB), backend 642,017 (21.6%, 91.1 MB), front end 210,006 (7.0%, 27.2 MB), the rest 1,056,587 (35.5%, 256.7 MB); about 900 per IR instruction against clang's 19. Peak resident set (`/usr/bin/time`): `d_faces` 84 MB with mimalloc and 39 MB with the system allocator; `mem` N=1,600 339 MB and 250 MB.
+
+## 2026-10-21, `0b494eb7ab`: the walk, the -O1 inliner, the pass_ch stage, retrange (w-6)
+
+d_faces `-m32`, release profile, `perf stat -e instructions:u` of `llrm-c -S` (no `-fno-inline-functions`), one change at a time on `feat/parity`. Row C1: `clip_w_` is inlined as the pin does since #3354 (`visitCondBrInst`; the callee's `br (not X)` guards hid the loop-entry guard, so it was priced and kept as a call): d_faces `-O2` has the pin's 6 defines, and the compile is 1457.7 -> 1580.9 M (+8.5%; `float-facts` 22.5 -> 43.0 M, `gvn@787` +6.5, `fold@677` +5, `regalloc` +7), `-O1`, `-O3` and `-Os` flat. Oversight accepted it on 2026-10-21 (no row above main that was not above it at the base).
+
+| change | -O1 M | -O2 M | -O3 M | -Os M |
+|---|---:|---:|---:|---:|
+| `feat/parity` 42bec159e | 1561.3 | 1457.7 | 1645.3 | 1280.0 |
+| + #3354 `visitCondBrInst` (C1) | 1556.9 | 1573.5 | 1637.6 | 1273.2 |
+| + #3358 dead pure calls deleted by InstSimplify | 1239.9 | 1573.5 | 1637.6 | 1273.2 |
+| + #3350 no gcc `pass_ch` stage (held, collatz and cordic rows) | 1183.1 | 1501.5 | 1566.0 | 1273.2 |

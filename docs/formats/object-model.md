@@ -43,7 +43,7 @@ writer returns `Unsupported`.
 
 ## The model
 
-`crates/target/llrm-object/src/lib.rs`:
+`crates/mc/llrm-object/src/lib.rs`:
 
 ```
 Object   { name, arch: I8086|I386|X8664, sections, symbols, omf_groups, debug: Option<debug::Info> }

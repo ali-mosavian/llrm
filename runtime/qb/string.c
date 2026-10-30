@@ -19,6 +19,10 @@ static SD *integer_text(long v)
     return temporary_of(text, fout_i4(v, text));
 }
 
+#pragma aux B_STI2 "B$STI2"
+#pragma aux B_STI4 "B$STI4"
+#pragma aux B_STDL "B$STDL"
+
 SD *B_STI2(short v)
 {
     return integer_text(v);
@@ -35,7 +39,3 @@ void B_STDL(SD *sd)
     str_release(sd);
     sd->len = 0;
 }
-
-#pragma aux B_STI2 "B$STI2"
-#pragma aux B_STI4 "B$STI4"
-#pragma aux B_STDL "B$STDL"

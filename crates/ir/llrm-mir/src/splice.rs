@@ -8,18 +8,33 @@ use crate::hash::HashMap;
 use crate::module::{BlockId, Function, InstId, Operand, ValueId};
 use crate::opcode::{Flags, Opcode};
 
-/// Whether a copy of `body` can stand in another function: no unwind edge,
-/// and stack allocated only on entry and of a constant size, so the copy
-/// can sit on the caller's entry, above anything it could be counted by.
+/// Whether a copy of `body` can stand in another function: no unwind edge.
+/// Stack allocated on entry and of a constant size sits on the caller's entry;
+/// any other (`is_static` is false) stays where it is, and the caller brackets
+/// the copy with `stacksave`/`stackrestore` (`has_dynamic_alloca`).
 pub fn carries(body: &Function) -> bool {
-    let entry = body.entry();
-    body.walk().all(|(block, inst)| match &body.instruction(inst).opcode {
-        Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume => false,
-        Opcode::Alloca { .. } => {
-            Some(block) == entry
-                && body.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_)))
-        }
-        _ => true,
+    body.walk().all(|(_, inst)| {
+        !matches!(
+            body.instruction(inst).opcode,
+            Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume
+        )
+    })
+}
+
+/// Whether the alloca `inst` of `body` is on its entry and of a constant size.
+fn is_static(
+    body: &Function,
+    block: BlockId,
+    inst: InstId,
+) -> bool {
+    Some(block) == body.entry() && body.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_)))
+}
+
+/// The address space of the first alloca of `body` that is not static, if any.
+pub fn has_dynamic_alloca(body: &Function) -> Option<u32> {
+    body.walk().find_map(|(block, inst)| match body.instruction(inst).opcode {
+        Opcode::Alloca { address_space, .. } if !is_static(body, block, inst) => Some(address_space),
+        _ => None,
     })
 }
 
@@ -27,19 +42,13 @@ fn phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect()
+    function.iter_block(block).take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
 }
 
 /// `call`, a call to `callee`, replaced by a copy of its body, which
 /// `carries`. The instructions of the copy, in the order of the body's.
 pub fn splice(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     call: InstId,
     callee: &Function,
@@ -51,15 +60,37 @@ pub fn splice(
 /// of the caller's entry, not before the entry's first: copies made out of
 /// order stand as they would made in it.
 pub fn splice_before(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     call: InstId,
     callee: &Function,
     anchor: Option<InstId>,
 ) -> Vec<InstId> {
+    spliced(context, function, call, callee, anchor).copies
+}
+
+/// A copy `splice_before` made.
+pub struct Spliced {
+    /// The instructions of the copy, in the order of the body's.
+    pub copies: Vec<InstId>,
+    /// The copy of the body's entry block.
+    pub entry: BlockId,
+    /// What stands for each of the body's returns: the branch back, or for a
+    /// single return the first instruction after the call.
+    pub returns: Vec<InstId>,
+}
+
+/// `splice_before`, with where the copy begins and returns.
+pub fn spliced(
+    context: &Context,
+    function: &mut Function,
+    call: InstId,
+    callee: &Function,
+    anchor: Option<InstId>,
+) -> Spliced {
     let void = context.types.void();
     let block = function.parent(call).expect("a placed call");
-    let instructions = function.block(block).instructions().to_vec();
+    let instructions = function.iter_block(block).collect::<Vec<_>>();
     let at = instructions.iter().position(|&one| one == call).expect("in its block");
     // What followed the call, and the phis that named its block.
     let rest = function.create_block(None);
@@ -85,17 +116,21 @@ pub fn splice_before(
         blocks.insert(one, copy);
         last = copy;
     }
-    let first = anchor.unwrap_or_else(|| function.block(function.entry().expect("a defined caller")).instructions()[0]);
+    let first = anchor.unwrap_or_else(|| {
+        function.block(function.entry().expect("a defined caller")).first().expect("a block with an instruction")
+    });
     let entry = callee.entry().expect("a defined callee");
     let mut made = Vec::new();
     let mut returns = Vec::new();
+    let mut returned_from = Vec::new();
     for &one in callee.layout() {
-        for &inst in callee.block(one).instructions() {
+        for inst in callee.iter_block(one) {
             let instruction = callee.instruction(inst);
             if instruction.opcode == Opcode::Ret {
                 returns.push((instruction.operands.first().copied(), blocks[&one]));
                 let back =
                     function.create_instruction(Opcode::Br, void, vec![Operand::Block(rest)], Flags::default(), None);
+                returned_from.push(back);
                 function.insert(back, Position::End(blocks[&one])).expect("a placed block");
                 continue;
             }
@@ -112,7 +147,7 @@ pub fn splice_before(
             }
             // A static alloca stays static: on the caller's entry.
             let position = match instruction.opcode {
-                Opcode::Alloca { .. } if one == entry => Position::Before(first),
+                Opcode::Alloca { .. } if is_static(callee, one, inst) => Position::Before(first),
                 _ => Position::End(blocks[&one]),
             };
             function.insert(copy, position).expect("a placed block");
@@ -144,7 +179,7 @@ pub fn splice_before(
                 let ty = function.value(result).ty;
                 let operands = returned.iter().flat_map(|&(value, from)| [value, Operand::Block(from)]).collect();
                 let phi = function.create_instruction(Opcode::Phi, ty, operands, Flags::default(), None);
-                let head = function.block(rest).instructions()[0];
+                let head = function.block(rest).first().expect("a block with an instruction");
                 function.insert(phi, Position::Before(head)).expect("a placed block");
                 Operand::Value(function.instruction(phi).result.expect("a phi's value"))
             }
@@ -152,5 +187,23 @@ pub fn splice_before(
         function.replace_all_uses_with(result, with);
     }
     function.erase(call).expect("its uses were replaced");
-    copies
+    let mut entry = blocks[&entry];
+    let mut returned_from = returned_from;
+    // One return: its block's code goes to the head of what followed the call
+    // and the block goes, as `InlineFunction` splices ReturnBB into AfterCallBB
+    // (L3524); the join keeps AfterCallBB's place in the layout.
+    if let [back] = returned_from[..] {
+        let from = function.parent(back).expect("a placed return");
+        let head = function.block(rest).first().expect("the call's block had a terminator");
+        function.erase(back).expect("a branch has no value");
+        let run: Vec<InstId> = function.iter_block(from).collect();
+        function.splice(&run, Position::Before(head)).expect("placed instructions");
+        function.replace_block_uses_with(from, rest);
+        function.erase_block(from).expect("an emptied block nothing names");
+        if entry == from {
+            entry = rest;
+        }
+        returned_from = vec![head];
+    }
+    Spliced { copies, entry, returns: returned_from }
 }

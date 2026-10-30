@@ -3,20 +3,43 @@
 
 pub mod addressing;
 pub mod calling;
+pub mod instr;
+pub mod isa;
 pub mod layout;
 pub mod machine;
 pub mod object;
 pub mod opcosts;
 pub mod os;
+#[cfg(test)]
+mod os_tests;
+pub mod pressure;
 pub mod registers;
+pub mod routines;
 pub mod runtime;
 pub mod timings;
+pub mod tune;
 
 use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
 use llrm_mir::target::{AddressForm, OperationCosts};
 use machine::Machine;
+
+/// The registers a segmented target's string operation names: the count, the
+/// offsets it reads and writes through, and the segment its source defaults
+/// to.
+#[derive(Clone, Copy, Debug)]
+pub struct StringRegisters {
+    pub count: RegId,
+    pub source: RegId,
+    pub destination: RegId,
+    pub source_segment: RegId,
+    /// The segment a destination is written through, which a string move
+    /// leaves loaded with the source's.
+    pub destination_segment: RegId,
+    /// A data register a tail's byte count rides in.
+    pub tail: RegId,
+}
 
 /// A flat platform's foreign linear ranges, read when a constant address is
 /// first asked of: parsing a platform's description is not paid by a compile
@@ -147,7 +170,19 @@ pub fn described_by_size(
     prices: &CpuPrices,
     sizes: Option<OperationCosts>,
 ) -> Rc<dyn llrm_mir::target::Machine> {
+    described_with(prices, sizes, None, None)
+}
+
+/// `described_by_size`, with the target's LLVM cost model (`Machine::tti`).
+pub fn described_with(
+    prices: &CpuPrices,
+    sizes: Option<OperationCosts>,
+    tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
+    lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
+) -> Rc<dyn llrm_mir::target::Machine> {
     Rc::new(Described {
+        tti,
+        lowering,
         registers: prices.registers,
         call_registers: prices.call_registers,
         float_registers: prices.float_registers,
@@ -170,6 +205,8 @@ pub fn described_by_size(
 }
 
 struct Described {
+    tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
+    lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
     registers: i64,
     call_registers: i64,
     float_registers: i64,
@@ -239,8 +276,24 @@ impl llrm_mir::target::Machine for Described {
         self.operations.clone()
     }
 
+    fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
+        self.tti.clone()
+    }
+
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        self.lowering.clone()
+    }
+
     fn size_costs(&self) -> OperationCosts {
         self.sizes.clone().unwrap_or_else(|| self.costs())
+    }
+
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        keeps_division(i64::from(bits / 8), size)
     }
 
     fn registers(&self) -> i64 {
@@ -264,6 +317,19 @@ impl llrm_mir::target::Machine for Described {
     }
 }
 
+/// Whether a division by a constant of `bytes`-byte values stays a
+/// `div`/`idiv`: a word (no multiply-high), or any size when the build is for
+/// size. The pin's `isIntDivCheap` is `minsize` only (DEVIATE: main keeps the
+/// divide at -Os, which the size bar holds to). The one answer both the
+/// instruction selector's reciprocal (`backend::division`) and the IR's
+/// remainder fold read.
+pub fn keeps_division(
+    bytes: i64,
+    size: bool,
+) -> bool {
+    bytes != 4 || size
+}
+
 /// A target's cost model, built from a CPU's prices: what the passes ask of it.
 pub type CostModel = fn(&CpuPrices) -> Rc<dyn llrm_mir::target::Machine>;
 
@@ -276,6 +342,11 @@ pub trait Target {
 
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
+
+    /// Whether `--isel` unnamed selects through the DAG, not the old selector.
+    fn selects_by_dag(&self) -> bool {
+        false
+    }
 
     /// The linear ranges its platform states no program data occupies, where it
     /// is flat and states its selector's base as 0 (`Machine::flat_foreign`),
@@ -326,8 +397,21 @@ pub trait Target {
         self.stack_slot_bytes()
     }
 
+    /// Whether every call finds the stack a multiple of `stack_alignment`
+    /// (`calling.toml`'s `aligned_calls`), not only those of a function
+    /// that holds a double.
+    fn aligned_calls(&self) -> bool {
+        false
+    }
+
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
+
+    /// The pressure sets of the register classes and each set's limit, for a
+    /// target that has them (the pre-RA scheduler tracks pressure per set).
+    fn pressure(&self) -> Option<(&'static pressure::PressureSets, Vec<u32>)> {
+        None
+    }
 
     /// Where the first argument lies from the frame register: past the saved
     /// frame register and the return address, which a far call makes longer.
@@ -356,9 +440,37 @@ pub trait Target {
     /// The register that holds the stack's top.
     fn stack_pointer(&self) -> RegId;
 
+    /// The registers a string operation names, where they are fixed (real
+    /// mode's, whose source segment defaults to DS); none where the target
+    /// has no segments to name.
+    fn string_registers(&self) -> Option<StringRegisters> {
+        None
+    }
+
     /// The registers a callee keeps for its caller that an allocator may hold
     /// a value in: each by its full register and by the one a prologue pushes.
     fn callee_saved(&self) -> Vec<(RegId, RegId)>;
+
+    /// The register `calling.toml` or a description names `name` (`ebx`,
+    /// `st0`, `x19`), as the family spells it.
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId;
+
+    /// The registers a result `width` bytes wide leaves in under `convention`.
+    fn convention_results(
+        &self,
+        convention: &calling::Convention,
+        width: u32,
+    ) -> Vec<RegId>;
+
+    /// What `convention` keeps for its caller: each register by its full
+    /// register and the one pushed.
+    fn convention_callee_saved(
+        &self,
+        convention: &calling::Convention,
+    ) -> Vec<(RegId, RegId)>;
 
     /// One CPU's timings (a column of the target's `timings.times`), if the
     /// target prices it.
@@ -374,11 +486,99 @@ pub trait Target {
     /// `x86.instr`'s format.
     fn forms_text(&self) -> String;
 
+    /// What the reader of `forms_text` must know of this target's family.
+    fn dialect(&self) -> &'static instr::Dialect;
+
     /// The operand size an instruction has without a size prefix, in bytes.
     fn operand_bytes(&self) -> i64;
 
+    /// The inline routine that fills `cell`-byte cells through a huge pointer.
+    fn huge_fill_routine(
+        &self,
+        cell: u32,
+    ) -> Result<routines::HugeString, String>;
+
+    /// The inline routine that copies through huge pointers, upward or, `down`,
+    /// from the last byte.
+    fn huge_copy_routine(
+        &self,
+        down: bool,
+    ) -> Result<routines::HugeString, String>;
+
+    /// Whether the target links a C math library (`log`, `exp`, `log2` ...). It
+    /// has none: the natural logarithm and the exponentials are x87
+    /// sequences the finalizer spells (`fln`, `fexp`, `flog2`), not calls.
+    fn has_libm(&self) -> bool {
+        false
+    }
+
+    /// The inline 64-bit divide, signed or not, by a divisor of two dwords or
+    /// one.
+    fn divide_routine(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+    ) -> Result<routines::Divide, String>;
+
+    /// `divide_routine` for a caller that reads only `used` of the results: a
+    /// target may have a shorter routine that leaves the rest unfixed.
+    fn divide_routine_used(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        _used: routines::Used,
+    ) -> Result<routines::Divide, String> {
+        self.divide_routine(signed, wide_divisor)
+    }
+
+    /// The width a float value of `bytes` bytes is held at: x87 holds every one
+    /// as its stack register, a vector file as its own size.
+    fn float_width(
+        &self,
+        bytes: u32,
+    ) -> u32;
+
+    /// Bytes of a two-register operation on `width`-byte registers.
+    fn register_op_bytes(
+        &self,
+        width: i64,
+    ) -> i64;
+
+    /// Bytes of a shift of a `width`-byte register by `count`.
+    fn shift_op_bytes(
+        &self,
+        count: i64,
+        width: i64,
+    ) -> i64;
+
+    /// Bytes of a multiply of a `width`-byte register by the immediate
+    /// `number`.
+    fn multiply_immediate_bytes(
+        &self,
+        number: i64,
+        width: i64,
+    ) -> i64;
+
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;
+
+    /// `TargetLowering::getPrefFunctionAlignment` as a power of two (X86: 16
+    /// bytes, 4); 0: functions are not aligned.
+    fn pref_function_alignment(&self) -> u8 {
+        0
+    }
+
+    /// `TargetLowering::getPrefLoopAlignment` as a power of two (X86: 16
+    /// bytes, 4); 0: loops are not aligned.
+    fn pref_loop_alignment(&self) -> u8 {
+        0
+    }
+
+    /// `X86AsmBackend::getMaximumNopSize`: the longest single no-operation
+    /// the padding of this target's code may use.
+    fn max_nop_bytes(&self) -> u8 {
+        1
+    }
 
     /// The operations priced by `price` (the CPU's clocks of a form), as the
     /// target's `opcosts.txt` makes them of forms; `prefix` is the CPU's
@@ -396,6 +596,12 @@ pub trait Target {
     /// register file states.
     fn float_stack(&self) -> usize {
         registers::parse(&self.registers_text()).map_or(0, |all| registers::of_class(&all, "x87").len())
+    }
+
+    /// Whether scalar floating point lives in SSE registers: its register
+    /// file states roots of class `xmm`.
+    fn scalar_sse(&self) -> bool {
+        registers::parse(&self.registers_text()).is_ok_and(|all| !registers::of_class(&all, "xmm").is_empty())
     }
 
     /// The indexed addresses a memory access may use, priced by `costs` (its
@@ -453,8 +659,17 @@ pub trait Target {
             align: self.stack_alignment(),
             optional: self.frame_optional(),
             enter: self.frame_enter(),
+            wrap_split_size: self.frame_wrap_split_size(),
+            slot_scratch: self.frame_slot_scratch(),
             free: false,
         }
+    }
+
+    /// Whether a callee may take its arguments off the stack as it returns
+    /// (some convention of `calling.toml` has `cleanup = "callee"`): where none
+    /// does, a call through a pointer leaves the stack where it found it.
+    fn callee_pops(&self) -> bool {
+        true
     }
 
     /// Whether a function that needs no frame register may leave it out
@@ -466,6 +681,18 @@ pub trait Target {
     /// Whether a frame tuned for size opens with `enter` (`calling.toml`'s
     /// `frame_enter`).
     fn frame_enter(&self) -> bool {
+        false
+    }
+
+    /// Whether a size build wraps a frame around a shared return
+    /// (`calling.toml`'s `frame_wrap_split_size`).
+    /// The registers a one-slot frame pushes and pops, where the target has
+    /// them.
+    fn frame_slot_scratch(&self) -> Option<(RegId, RegId)> {
+        None
+    }
+
+    fn frame_wrap_split_size(&self) -> bool {
         false
     }
 }
@@ -489,6 +716,11 @@ pub struct FrameRegisters {
     pub optional: bool,
     /// A frame tuned for size opens with `enter`.
     pub enter: bool,
+    /// A size build may skip the frame on an early exit into a shared return.
+    pub wrap_split_size: bool,
+    /// The registers a one-slot frame pushes and pops (`calling.toml`'s
+    /// `frame_slot_push`/`frame_slot_pop`), where it does.
+    pub slot_scratch: Option<(RegId, RegId)>,
     /// The function has no frame register: it holds a value, and a frame cell
     /// is addressed through the stack pointer.
     pub free: bool,
@@ -513,4 +745,4 @@ impl FrameRegisters {
 
 /// The I/O ports of a PC: a `[[ports]]`-only description that a platform
 /// appends to its own text.
-pub const PC_PORTS: &str = include_str!("machines/pc-ports.toml");
+pub const PC_PORTS: &str = include_str!("../../../../machine/platform/dos/ports.toml");

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Two commits' llrm-c, built the way CI builds them and compared on deterministic counts: the one way to quote a compile-cost delta.
+"""Two commits' llrm-cc (and the llrm-llc it runs), built the way CI builds them and compared on deterministic counts: the one way to quote a compile-cost delta.
 
     tools/abmeasure.py PARENT HEAD [--profile dist|release] [--levels O1 O2 Os] [--programs d_faces lru bintree] [--cycles N] [--cache]
 
 Each commit gets a worktree and a target directory of its own under $LLRM_AB_DIR (default ~/.cache/llrm/ab), built with
-`CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile dist --bin llrm-c`, the compiler the cost gate measures (tools/measure.py): `release`
+`CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile dist --bin llrm-cc --bin llrm-llc`, the compiler the cost gate measures (tools/measure.py): `release`
 re-partitions its 16 codegen units when one file changes and flips the inlining of unrelated functions (the same PR read +0.46..0.61% on the gate's
 shapes in release, +0.01..0.04% in dist), and its `incremental = true` makes a 6% heavier llrm-c with the opposite sign (#2077: +0.24%
 incremental, -0.58% CI mode). `--profile release` measures the old way. A CHECK or EXP switch in the environment that `--allow-env` does not name is refused (tools/envguard.py): both sides run in one environment.
@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import corpora  # noqa: E402
 import envguard  # noqa: E402
+import llrmbin  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path(os.environ.get("LLRM_AB_DIR") or Path.home() / ".cache/llrm/ab")
@@ -47,9 +48,9 @@ def build(sha: str, root: Path = ROOT, cache: Path = CACHE, profile: str = "dist
     if not tree.exists():
         cache.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "worktree", "add", "-q", "--detach", str(tree), full], cwd=root, check=True)
-    if not (target / profile / "llrm-c").is_file():
+    if not (target / profile / "llrm-cc").is_file():
         flags = ["--profile", "dist"] if profile == "dist" else ["--release"]
-        done = subprocess.run(["cargo", "build", *flags, "-q", "--bin", "llrm-c"], cwd=tree, env=build_env(target))
+        done = subprocess.run(["cargo", "build", *flags, "-q", "--bin", "llrm-cc", "--bin", "llrm-llc"], cwd=tree, env=build_env(target))
         if done.returncode:
             raise SystemExit(f"abmeasure: {full[:12]} does not build")
     return target / profile
@@ -66,9 +67,9 @@ def programs(root: Path, names: list[str], qcport: str | None, work: Path) -> di
             src = Path(qcport)
             wrapped = work / "d_faces_flat.c"
             wrapped.write_text("".join(f"#define {k}\n" for k in KEYWORDS.split()) + f'#include "{src}/render/d_faces.c"\n')
-            out[name] = (wrapped, ["-m32", "-mabi=sysv", "-march=i486", *(f for d in ("", "render", "game", "host", "qgl") for f in ("-I", str(src / d)))])
+            out[name] = (wrapped, [*llrmbin.c_args(32), "-mabi=sysv", *(f for d in ("", "render", "game", "host", "qgl") for f in ("-I", str(src / d)))])
         else:
-            out[name] = (root / "bench" / name / f"{name}.c", ["-m32", "-mabi=sysv", "-march=i486", "-I", str(root / "bench"), "-I", str(root / "bench" / name)])
+            out[name] = (root / "bench" / name / f"{name}.c", [*llrmbin.c_args(32), "-mabi=sysv", "-I", str(root / "bench"), "-I", str(root / "bench" / name)])
     return out
 
 
@@ -81,8 +82,6 @@ def checked(done: subprocess.CompletedProcess, source: Path) -> None:
     """SystemExit with the compiler's first message when the compile failed."""
     if done.returncode:
         lines = (done.stdout + done.stderr).splitlines()
-        # The dist binary embeds the path of its wccq (build.rs LLRM_WCCQ_DIR, inside its own target dir): a binary whose target is gone fails with
-        # "wccq failed ... No such file" after ~2.8 M instructions, and the message must name that path.
         key = [line for line in lines if "Error!" in line or "error:" in line or "No such file" in line]
         first = " | ".join(key[:2] or lines[:2]) or "no message"
         raise SystemExit(f"abmeasure: the compile of {source.name} failed (exit {done.returncode}): {first}")
@@ -95,7 +94,8 @@ def floored(name: str, count: int) -> None:
 
 def counted(binary: Path, source: Path, arguments: list[str], level: str, events: str = "instructions:u") -> dict[str, int]:
     """perf stat's counts of one compile, by event name (cycles and instructions)."""
-    done = subprocess.run(["perf", "stat", "-x,", "-e", events, str(binary), *arguments, f"-{level}", "-o", "/dev/null", str(source)], capture_output=True, text=True)
+    with llrmbin.with_object(["perf", "stat", "-x,", "-e", events, str(binary), *arguments, f"-{level}", "-c", "-o", llrmbin.OBJECT, str(source)]) as command:
+        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, **llrmbin.cc_environment()})
     checked(done, source)
     return {name: int(n) for n, name in re.findall(r"^(\d+),,(\w+)", done.stderr, re.M)}
 
@@ -106,12 +106,14 @@ def change(was: float, now: float) -> str:
 
 def callgrind(binary: Path, source: Path, arguments: list[str], level: str) -> dict[str, int]:
     """Ir, D1 misses (read, write) and last-level misses of one compile under callgrind's cache simulation."""
-    done = subprocess.run(
-        ["valgrind", "--tool=callgrind", "--cache-sim=yes", "--callgrind-out-file=/dev/null", str(binary), *arguments, f"-{level}", "-o", "/dev/null", str(source)], capture_output=True, text=True
-    )
+    with llrmbin.with_object(
+        ["valgrind", "--tool=callgrind", "--trace-children=yes", "--cache-sim=yes", "--callgrind-out-file=/dev/null", str(binary), *arguments, f"-{level}", "-c", "-o", llrmbin.OBJECT, str(source)]
+    ) as command:
+        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, **llrmbin.cc_environment()})
     checked(done, source)
     text = done.stderr
-    num = lambda pattern: int(re.search(pattern, text).group(1).replace(",", ""))  # noqa: E731
+    # --trace-children: one report per process of the driver's tree (llrm-cc, clang, llrm-llc), summed
+    num = lambda pattern: sum(int(one.replace(",", "")) for one in re.findall(pattern, text))  # noqa: E731
     return {
         "Ir": num(r"I\s+refs:\s+([\d,]+)"),
         "D1mr": num(r"D1\s+misses:\s+[\d,]+\s+\(\s*([\d,]+) rd"),
@@ -137,10 +139,11 @@ def main() -> int:
     if "d_faces" in args.programs:
         dfaces = str(corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus))
         print(corpora.header("dfaces", dfaces))
-    a, b = build(args.parent, profile=args.profile) / "llrm-c", build(args.head, profile=args.profile) / "llrm-c"
+    a, b = build(args.parent, profile=args.profile) / "llrm-cc", build(args.head, profile=args.profile) / "llrm-cc"
+    print(llrmbin.assert_distinct(a, b, same_source=args.parent == args.head))
     work = CACHE / "work"
     work.mkdir(parents=True, exist_ok=True)
-    print(f"parent {args.parent} -> {a}\nhead   {args.head} -> {b}\nbuild: CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile {args.profile} --bin llrm-c; switches: {' '.join(envguard.stray(allow=())) or 'none'}{' (allowed: ' + ' '.join(args.allow_env) + ')' if args.allow_env else ''}; load {open('/proc/loadavg').read().split()[0]}")
+    print(f"parent {args.parent} -> {a}\nhead   {args.head} -> {b}\nbuild: CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile {args.profile} --bin llrm-cc --bin llrm-llc; switches: {' '.join(envguard.stray(allow=())) or 'none'}{' (allowed: ' + ' '.join(args.allow_env) + ')' if args.allow_env else ''}; load {open('/proc/loadavg').read().split()[0]}")
     for name, (source, flags) in programs(ROOT, args.programs, dfaces, work).items():
         for level in args.levels:
             ia, ib = counted(a, source, flags, level)["instructions"], counted(b, source, flags, level)["instructions"]

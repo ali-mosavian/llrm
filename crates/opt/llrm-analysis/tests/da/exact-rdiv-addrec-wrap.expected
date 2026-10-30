@@ -1,0 +1,10 @@
+== --tbaa
+@exact_rdiv_no_nsw
+  output [*]!
+  output [|<]!
+  none!
+== --test exact-rdiv --tbaa
+@exact_rdiv_no_nsw
+  output [*]!
+  output [|<]!
+  output [*]!

@@ -5,7 +5,7 @@
 //! reads and writes.
 
 use llrm_lir::registers::RegId;
-use llrm_lir::{Loc, Operation, Reg, Semantics};
+use llrm_lir::{FieldKind, Loc, Operation, Reg, Semantics};
 
 use crate::select;
 
@@ -36,7 +36,7 @@ pub fn root(
     name: &str,
     bits: u32,
 ) -> RegId {
-    let wide = bits == 32;
+    let wide = bits >= 32;
     match (name, wide) {
         ("ax", true) => RegId::EAX,
         ("bx", true) => RegId::EBX,
@@ -88,8 +88,24 @@ fn used(
                 continue;
             }
             Loc::Mem(one) => {
-                let named = one.through != RegId::None || one.index_through != RegId::None || one.addr.is_some();
+                // A symbol indexed by a value the allocator has not placed
+                // names no register yet.
+                let unplaced = (one.index.is_some() && one.index_through == RegId::None)
+                    || (one.base.is_some() && one.through == RegId::None);
+                let named =
+                    one.through != RegId::None || one.index_through != RegId::None || (one.addr.is_some() && !unplaced);
                 match select::operand_of(one, bits) {
+                    // A frame cell indexed by a value the allocator has not
+                    // placed cannot be encoded yet, and reads the registers
+                    // it does name (the frame register, its segment).
+                    None if named && unplaced => {
+                        add(reads, one.through);
+                        add(reads, one.index_through);
+                        if [RegId::BP, RegId::EBP, RegId::SP, RegId::ESP].contains(&one.through) {
+                            add(reads, RegId::SS);
+                        }
+                        continue;
+                    }
                     // An address that cannot be encoded (`[sp]` in real mode)
                     // is an instruction that cannot be.
                     None if named => return false,
@@ -103,7 +119,7 @@ fn used(
                 None => return false,
                 found => found,
             },
-            Loc::Imm(_) | Loc::Held(_) => continue,
+            Loc::Imm(_) | Loc::Held(_) | Loc::Field(_) => continue,
         };
         if let Some((operand, _)) = address {
             add(reads, RegId::from(operand.base));
@@ -143,10 +159,16 @@ fn bytes_of(place: &Loc) -> Option<u32> {
 fn kind_of(place: &Loc) -> char {
     match place {
         Loc::Reg(one) if one.register.is_st() => 's',
+        Loc::Reg(one) if one.register.is_xmm() => 'x',
         Loc::Reg(_) | Loc::Held(_) => 'r',
         Loc::Mem(_) => 'm',
         Loc::Imm(_) => 'i',
         Loc::Address(_) => 'a',
+        Loc::Field(one) => match one.kind {
+            FieldKind::Shift => 'h',
+            FieldKind::Condition => 'c',
+            FieldKind::Extend => 'e',
+        },
     }
 }
 
@@ -164,6 +186,30 @@ fn form_of(
         .min_by_key(|row| row.ties.len())
         .or_else(|| candidates.first())
         .copied()
+}
+
+/// The operands (dests, then sources: bit `n` is operand `n`) that only an xmm
+/// register can fill, from the kinds of every row of the mnemonic: some row
+/// takes `x` there and none takes `r`. None where the table has no row.
+pub fn xmm_operands(
+    rows: &dyn Fn(&str, usize, usize) -> &'static [Row],
+    what: &Semantics,
+) -> Option<u32> {
+    let candidates = rows(what.name.as_deref().filter(|name| !name.is_empty())?, what.dests.len(), what.sources.len());
+    if candidates.is_empty() {
+        return None;
+    }
+    let count = what.dests.len() + what.sources.len();
+    Some(
+        (0..count.min(32))
+            .filter(|at| {
+                let takes = |letter: char| {
+                    candidates.iter().any(|row| row.kinds.get(*at).is_some_and(|kinds| kinds.contains(letter)))
+                };
+                takes('x') && !takes('r')
+            })
+            .fold(0, |mask, at| mask | 1 << at),
+    )
 }
 
 /// The register `root` names at `bytes`, as a pinned operand is.
@@ -321,7 +367,7 @@ pub fn effects(
     found.writes = writes;
     for (list, into) in [(row.reads, &mut found.reads), (row.writes, &mut found.writes)] {
         for entry in list {
-            if ["rep", "idiom", "count", "self", "narrow", "same"].contains(entry) {
+            if ["rep", "idiom", "count", "self", "narrow", "same", "cond"].contains(entry) {
                 continue;
             }
             let (dropped, entry) = entry.strip_prefix('-').map_or((false, *entry), |rest| (true, rest));
@@ -344,6 +390,11 @@ pub fn effects(
     if row.writes.contains(&"rep") {
         let (count, rest) = found.writes.iter().partition(|one| one.full_register() == root("cx", 32).full_register());
         (found.writes, found.maybe_writes) = (count, rest);
+    }
+    // `bsf ax, bx` leaves AX as it was when BX is zero: nothing is written for
+    // certain.
+    if row.writes.contains(&"cond") {
+        found.maybe_writes.append(&mut found.writes);
     }
     Some(Served::Known(found))
 }

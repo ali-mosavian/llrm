@@ -17,15 +17,14 @@
 //!   [`guards`] (what dominating compares and `assume`s prove),
 //!   [`assumptions`].
 //! - Loops: [`induction`] (counters, trip counts, recurrences), [`peelsize`]
-//!   (is a full copy worth it), [`access`] (affine access functions),
-//!   [`dependence`] (distances for unroll-and-jam and loop fusion).
+//!   (is a full copy worth it), [`depanalysis`] (dependences between memory
+//!   accesses, for loop interchange).
 //! - Memory: [`memory`] (objects, slices, `MemRef`, `Unit`), [`pointerfacts`],
 //!   [`regions`], [`alias`] (points-to, summaries), [`effects`],
 //!   [`frameescape`], [`globalsaa`], [`sliceset`] and [`cellmap`] (containers),
-//!   [`memoryssa`], [`avail`] (forwardable loads, dead stores), [`observers`]
-//!   (cells nothing outside can read).
-//! - Calls and control: [`interprocedural`], [`noreturn`],
-//!   [`parameter_ranges`], [`branchprob`] (static frequencies).
+//!   [`memoryssa`], [`avail`] (the cells loads and stores name).
+//! - Calls and control: [`interprocedural`], [`noreturn`], [`branchprob`]
+//!   (static frequencies).
 //! - [`manager`] caches the facts that are expensive or asked repeatedly.
 //!   `testing` and `generated` are test support, behind the `testing` feature.
 //!
@@ -43,9 +42,9 @@
 //!   val["<b>consts, demanded</b>"]:::mid
 //!   rng["<b>ranges, difference,</b><br/><small>guards, floatfacts,<br/>floatbounds</small>"]:::out
 //!   ind["<b>induction</b>"]:::mid
-//!   loop["<b>peelsize, dependence</b>"]:::out
+//!   loop["<b>peelsize, depanalysis</b>"]:::out
 //!   mem["<b>memory, regions, pointerfacts,</b><br/><small>alias, effects, frameescape,<br/>globalsaa, sliceset, cellmap</small>"]:::opt
-//!   ssa["<b>memoryssa, avail,</b><br/><small>observers, noreturn,<br/>interprocedural,<br/>parameter_ranges</small>"]:::out
+//!   ssa["<b>memoryssa, avail,</b><br/><small>noreturn,<br/>interprocedural</small>"]:::out
 //!   man["<b>manager (cache)</b>"]:::data
 //!   use["<b>llrm-transforms passes,</b><br/><small>backend</small>"]:::src
 //!   mir --> base
@@ -77,9 +76,9 @@
 //! pass the result is kept if the pass named it preserved; or, for an entry
 //! that reads only the function, if the function is unchanged; or, for an entry
 //! with `depends`, if the change log cannot have altered it; or it is updated
-//! from the log (`INCREMENTAL`: `Counted`, `DominatedEdges`, `Bounded`,
+//! from the log (`INCREMENTAL`: `Counted`, `DominatedEdges`,
 //! `Accesses`); else it is dropped and recomputed on the next ask. Module
-//! entries (`GlobalsAA`, `Summaries`, `Callbacks`) are dropped unless every run
+//! entries (`GlobalsAA`, `Summaries`) are dropped unless every run
 //! of a pass preserved them. `LLRM_CHECK_REPLAY` asserts that kept and updated
 //! results equal a fresh solve. Free-standing analyses (not manager entries)
 //! are recomputed per call; a `Unit` (see [`memory`]) carries the cached ones
@@ -89,50 +88,88 @@
 //! The manager contract is `crates/ir/llrm-mir/src/passes.rs`. LLVM's
 //! `AnalysisManager` and `PreservedAnalyses` are its counterpart.
 
-pub mod access;
+pub mod aa;
+pub mod accessanalysis;
+pub mod aggregate;
 pub mod alias;
+pub mod aliasdiff;
+pub mod aliassets;
+pub mod argumentattrs;
 pub mod assumptions;
+pub mod attrsummary;
 pub mod avail;
+pub mod basicaa;
+pub mod blockfreq;
+pub mod bpi;
 pub mod branchprob;
+pub mod captureanalysis;
+pub mod capturecheck;
+pub mod capturetracking;
 pub mod cellmap;
 pub mod cfg;
+pub mod cfgwalk;
 pub mod constant_cycles;
 pub mod consts;
 #[cfg(test)]
 mod corpus_tests;
 pub mod demanded;
-pub mod dependence;
+pub mod demandedbits;
+pub mod depanalysis;
 pub mod difference;
 pub mod effects;
+pub mod equivalence;
 pub mod floatbounds;
 pub mod floatfacts;
+pub mod forging;
 pub mod frameescape;
+pub mod functionattrs;
 #[cfg(any(test, feature = "testing"))]
 pub mod generated;
 pub mod globalsaa;
+pub mod globalsmodref;
 pub mod graph;
 pub mod guards;
 pub mod induction;
+pub mod initializes;
 pub mod interprocedural;
+pub mod ivdescriptors;
+#[cfg(test)]
+mod laa_testing;
 pub mod liveness;
+pub mod loads;
+pub mod loadstorepromoter;
+pub mod loopaccess;
+pub mod loopaccessinfo;
+pub mod loopunrollanalyzer;
 pub mod manager;
+pub mod memdep;
+pub mod memdepchecker;
 pub mod memory;
 pub mod memoryssa;
 pub mod mssa;
+pub mod mustexecute;
 pub mod nearest;
+#[cfg(test)]
+mod nocapture_agreement_tests;
 pub mod noreturn;
 pub mod num;
-pub mod observers;
 pub mod occurrence;
-pub mod parameter_ranges;
 pub mod peelsize;
+pub mod placealias;
 pub mod pointerfacts;
 pub mod ranger;
 pub mod ranges;
+pub mod reachability;
 pub mod references;
 pub mod regions;
+pub mod runtimecheck;
+pub mod saverestore;
+pub mod scev;
 pub mod sliceset;
 pub mod slotstores;
 pub mod ssa;
+pub mod ssaupdater;
+pub mod ssaupdaterbulk;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod typebasedaa;

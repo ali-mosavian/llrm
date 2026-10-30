@@ -1,0 +1,48 @@
+== 
+@innermost_latch_uses_values_in_middle_header
+B0:
+  %v0 = load i32, ptr @a
+  %v1 = add i32 80, 1
+  br label %B1
+B1:
+  %v2 = phi i32 [ %v15, %B12 ], [ 10, %B0 ]
+  %v3 = icmp eq i32 %v0, 0
+  br i1 %v3, label %B2, label %B12
+B2:
+  br label %B3
+B3:
+  %v4 = phi i64 [ %v13, %B10 ], [ 4, %B2 ]
+  br label %B4
+B4:
+  br label %B5
+B5:
+  %v5 = phi i64 [ %v10, %B9 ], [ 4, %B4 ]
+  %v6 = zext i32 %v1 to i64
+  br label %B6
+B6:
+  br label %B7
+B7:
+  %v7 = getelementptr inbounds [1 x [6 x i32]], ptr @d, i64 0, i64 %v4, i64 %v5
+  store i32 0, ptr %v7
+  br label %B8
+B8:
+  %v8 = add nsw i64 %v4, 1
+  %v9 = icmp eq i64 %v8, %v6
+  br label %B9
+B9:
+  %v10 = add nsw i64 %v5, -1
+  %v11 = icmp eq i64 %v10, 0
+  br i1 %v11, label %B10, label %B5
+B10:
+  %v12 = phi i64 [ %v6, %B9 ]
+  %v13 = add nsw i64 %v4, 1
+  %v14 = icmp eq i64 %v13, %v12
+  br i1 %v14, label %B11, label %B3
+B11:
+  br label %B12
+B12:
+  %v15 = add nsw i32 %v2, -5
+  %v16 = icmp eq i32 %v15, 0
+  br i1 %v16, label %B13, label %B1
+B13:
+  ret void

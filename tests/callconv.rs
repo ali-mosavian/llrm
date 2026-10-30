@@ -56,7 +56,7 @@ fn run(
     switches: Option<&str>,
 ) {
     let mut command = Command::new(root().join(script));
-    command.args(arguments).env("LLRM_BIN", Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap());
+    command.args(arguments).env("LLRM_BIN", Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap());
     if let Some(switches) = switches {
         command.env("BCSW", switches);
     }

@@ -7,10 +7,12 @@ use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, 
 use crate::hash::HashMap;
 use crate::lexer::is_name;
 use crate::module::{
-    BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataOperand, Module, Operand,
-    UnnamedAddr, ValueId,
+    BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataId, MetadataOperand,
+    Module, Operand, Special, UnnamedAddr, ValueId,
 };
-use crate::opcode::{Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, Tail, spelling};
+use crate::opcode::{
+    AtomicKind, Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, RMW_OPS, Tail, spelling,
+};
 use crate::types::{FloatKind, Type, TypeId, struct_text};
 
 pub fn module(module: &Module) -> String {
@@ -45,7 +47,7 @@ pub fn module(module: &Module) -> String {
             .iter()
             .enumerate()
             .filter(|(_, one)| matches!(one.kind, GlobalKind::Variable(_)))
-            .map(|(at, one)| printer.variable(at, one)),
+            .map(|(at, one)| printer.variable(at, one, module.global_metadata.get(&(at as u32)))),
     );
     for (at, global) in module.globals.iter().enumerate() {
         if let GlobalKind::Function(function) = &global.kind {
@@ -71,12 +73,18 @@ pub fn module(module: &Module) -> String {
         .metadata
         .iter()
         .enumerate()
-        .map(|(at, node)| {
-            format!(
+        .map(|(at, node)| match module.special.get(&MetadataId(at as u32)) {
+            Some(special) => format!(
+                "!{at} = {}!{}({})\n",
+                if node.distinct { "distinct " } else { "" },
+                special.kind,
+                printer.special_operands(special, &node.operands)
+            ),
+            None => format!(
                 "!{at} = {}!{{{}}}\n",
                 if node.distinct { "distinct " } else { "" },
                 printer.metadata_operands(&node.operands)
-            )
+            ),
         })
         .collect();
     section(&mut out, nodes.into_iter());
@@ -99,6 +107,7 @@ pub fn body(
 /// cycle, and a printed body (formatted a line at a time, then held and
 /// compared) was 1.4% of a d_faces compile.
 pub fn fingerprint(function: &Function) -> u128 {
+    crate::counts::bump(crate::counts::Event::Fingerprints);
     use std::hash::{Hash, Hasher};
 
     /// Two multiply-and-rotate hashes (rustc's Fx) with different salts and
@@ -179,8 +188,8 @@ pub fn fingerprint(function: &Function) -> u128 {
         values.insert(parameter, slot(&mut next, &function.value(parameter).name));
     }
     for &block in &function.layout {
-        blocks.insert(block, slot(&mut next, &function.block(block).name));
-        for &inst in &function.block(block).instructions {
+        blocks.insert(block, slot(&mut next, &function.blocks[block.0 as usize].name));
+        for inst in function.iter_block(block) {
             if let Some(result) = function.instruction(inst).result {
                 values.insert(result, slot(&mut next, &function.value(result).name));
             }
@@ -210,7 +219,7 @@ pub fn fingerprint(function: &Function) -> u128 {
         if index > 0 || function.block(block).name.is_some() {
             shown(blocks.get(&block), block.0).hash(&mut digest);
         }
-        for &inst in &function.block(block).instructions {
+        for inst in function.iter_block(block) {
             for record in records.get(&inst).into_iter().flatten() {
                 record.variable.hash(&mut digest);
                 match record.what {
@@ -286,7 +295,7 @@ fn global_names(module: &Module) -> Vec<String> {
     module
         .globals
         .iter()
-        .map(|one| match &one.name {
+        .map(|one| match one.name.as_deref() {
             Some(name) => format!("@{}", quoted(name)),
             None => {
                 next += 1;
@@ -370,6 +379,16 @@ struct Slots {
     blocks: HashMap<BlockId, String>,
 }
 
+/// The label each parameter and result is written with, `%` left off: its
+/// name, else its slot.
+pub fn value_labels(function: &Function) -> crate::dense::IdMap<ValueId, String> {
+    let mut labels = crate::dense::IdMap::new();
+    for (value, label) in Slots::new(function).values {
+        labels.insert(value, label);
+    }
+    labels
+}
+
 /// The label each placed block is written with, `%` left off: its name, else
 /// its slot.
 pub fn block_labels(function: &Function) -> crate::dense::IdMap<BlockId, String> {
@@ -397,7 +416,7 @@ impl Slots {
         }
         for &block in &function.layout {
             blocks.insert(block, name(&function.block(block).name));
-            for &inst in &function.block(block).instructions {
+            for inst in function.iter_block(block) {
                 if let Some(result) = function.instruction(inst).result {
                     values.insert(result, name(&function.value(result).name));
                 }
@@ -450,6 +469,7 @@ impl Printer<'_> {
         &self,
         at: usize,
         global: &GlobalValue,
+        attached: Option<&Vec<(String, MetadataId)>>,
     ) -> String {
         let GlobalKind::Variable(variable) = &global.kind else { unreachable!("a variable") };
         let linkage = match (global.linkage, variable.initializer) {
@@ -459,11 +479,16 @@ impl Printer<'_> {
         let mut words: Vec<String> =
             [linkage, Self::unnamed_addr(global.unnamed_addr)].into_iter().flatten().map(str::to_owned).collect();
         words.extend(Self::address_space(global.address_space));
+        if variable.externally_initialized {
+            words.push("externally_initialized".to_owned());
+        }
         words.push((if variable.constant { "constant" } else { "global" }).to_owned());
         words.push(self.ty(variable.ty));
         words.extend(variable.initializer.map(|one| self.constant(one)));
         let align = variable.align.map(|one| format!(", align {one}")).unwrap_or_default();
-        format!("{} = {}{align}\n", self.globals[at], words.join(" "))
+        let attached: String =
+            attached.into_iter().flatten().map(|(kind, node)| format!(", !{kind} !{}", node.0)).collect();
+        format!("{} = {}{align}{attached}\n", self.globals[at], words.join(" "))
     }
 
     fn function(
@@ -512,6 +537,16 @@ impl Printer<'_> {
         if let Some(personality) = function.personality {
             words.push(format!("personality {}", self.typed_constant(personality)));
         }
+        if declaration {
+            // Clang's spelling: the attachments follow `declare`.
+            for (at, (kind, node)) in function.metadata.iter().enumerate() {
+                words.insert(1 + at, format!("!{kind} !{}", node.0));
+            }
+        } else {
+            for (kind, node) in &function.metadata {
+                words.push(format!("!{kind} !{}", node.0));
+            }
+        }
         let mut out = words.join(" ");
         if declaration {
             out.push('\n');
@@ -536,15 +571,27 @@ impl Printer<'_> {
             if index > 0 || function.block(block).name.is_some() {
                 let _ = writeln!(out, "{}:", slots.blocks[&block]);
             }
-            for &inst in &function.block(block).instructions {
+            for inst in function.iter_block(block) {
                 for record in function.debug_records().iter().filter(|one| one.before == inst) {
+                    let extra: String = record
+                        .expression
+                        .iter()
+                        .chain(record.location.iter())
+                        .map(|node| format!(", !{}", node.0))
+                        .collect();
                     let _ = match record.what {
-                        DebugWhat::Declare(at) => {
-                            writeln!(out, "  #dbg_declare({}, !{})", self.typed(function, slots, at), record.variable.0)
-                        }
-                        DebugWhat::Value(at) => {
-                            writeln!(out, "  #dbg_value({}, !{})", self.typed(function, slots, at), record.variable.0)
-                        }
+                        DebugWhat::Declare(at) => writeln!(
+                            out,
+                            "  #dbg_declare({}, !{}{extra})",
+                            self.typed(function, slots, at),
+                            record.variable.0
+                        ),
+                        DebugWhat::Value(at) => writeln!(
+                            out,
+                            "  #dbg_value({}, !{}{extra})",
+                            self.typed(function, slots, at),
+                            record.variable.0
+                        ),
                         DebugWhat::Piece { value, offset, bytes } => writeln!(
                             out,
                             "  #dbg_piece({}, !{}, {offset}, {bytes})",
@@ -676,6 +723,33 @@ impl Printer<'_> {
                 let align = align.map(|one| format!(", align {one}")).unwrap_or_default();
                 format!("store {}{}, {}{align}", if *volatile { "volatile " } else { "" }, typed(0), typed(1))
             }
+            Opcode::Atomic(info) => {
+                let align = info.align.map(|one| format!(", align {one}")).unwrap_or_default();
+                let volatile = if info.volatile { "volatile " } else { "" };
+                let scope = if info.single_thread { " syncscope(\"singlethread\")" } else { "" };
+                let order = info.ordering.spelling();
+                match info.kind {
+                    AtomicKind::Load => {
+                        format!("load atomic {volatile}{}, {}{scope} {order}{align}", self.ty(inst.ty), typed(0))
+                    }
+                    AtomicKind::Store => {
+                        format!("store atomic {volatile}{}, {}{scope} {order}{align}", typed(0), typed(1))
+                    }
+                    AtomicKind::Rmw(op) => {
+                        let name = RMW_OPS.iter().find(|(one, _)| *one == op).map_or("xchg", |(_, name)| name);
+                        format!("atomicrmw {volatile}{name} {}, {}{scope} {order}{align}", typed(0), typed(1))
+                    }
+                    AtomicKind::CmpXchg { failure, weak } => format!(
+                        "cmpxchg {}{volatile}{}, {}, {}{scope} {order} {}{align}",
+                        if weak { "weak " } else { "" },
+                        typed(0),
+                        typed(1),
+                        typed(2),
+                        failure.spelling()
+                    ),
+                    AtomicKind::Fence => format!("fence{scope} {order}"),
+                }
+            }
             Opcode::GetElementPtr { source } => {
                 let rest: Vec<String> = (0..ops.len()).map(typed).collect();
                 format!("getelementptr{flags} {}, {}", self.ty(*source), rest.join(", "))
@@ -769,8 +843,10 @@ impl Printer<'_> {
                 Type::Float(kind) => float(*kind, *bits),
                 _ => unreachable!("a floating constant has a floating type"),
             },
+            ConstantKind::Float80(bits) => format!("0xK{bits:020X}"),
             ConstantKind::Null => "null".to_owned(),
             ConstantKind::Poison => "poison".to_owned(),
+            ConstantKind::Undef => "undef".to_owned(),
             ConstantKind::Zero => "zeroinitializer".to_owned(),
             ConstantKind::Bytes(bytes) => format!("c{}", string(bytes)),
             ConstantKind::Global(global) => {
@@ -780,16 +856,27 @@ impl Printer<'_> {
                 Type::Array { .. } => format!("[{}]", members(ids)),
                 Type::Vector { .. } => format!("<{}>", members(ids)),
                 Type::Struct { packed: true, .. } => format!("<{{ {} }}>", members(ids)),
+                Type::Named(name) if self.types().body(name).is_some_and(|body| body.packed) => {
+                    format!("<{{ {} }}>", members(ids))
+                }
                 _ if ids.is_empty() => "{}".to_owned(),
                 _ => format!("{{ {} }}", members(ids)),
             },
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, operands }) => {
                 let rest: Vec<String> = operands.iter().map(|&one| self.typed_constant(one)).collect();
                 format!(
                     "getelementptr {}({}, {})",
-                    if *inbounds { "inbounds " } else { "" },
+                    gep_flag_words(*inbounds, *nusw, *nuw),
                     self.ty(*source),
                     rest.join(", ")
+                )
+            }
+            ConstantKind::Expr(ConstantExpr::Binary { op, lhs, rhs }) => {
+                format!(
+                    "{} ({}, {})",
+                    spelling(&crate::opcode::BINARY, *op),
+                    self.typed_constant(*lhs),
+                    self.typed_constant(*rhs)
                 )
             }
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
@@ -809,8 +896,54 @@ impl Printer<'_> {
                 MetadataOperand::Node(node) => format!("!{}", node.0),
                 MetadataOperand::String(text) => format!("!{}", string(text.as_bytes())),
                 MetadataOperand::Constant(id) => self.typed_constant(*id),
+                MetadataOperand::Ident(word) => word.clone(),
             })
             .collect::<Vec<_>>()
             .join(", ")
     }
+
+    /// A specialized node's values, each after its field's name: strings and
+    /// integers bare, as LLVM writes them in `!DILocation(line: 3)`.
+    fn special_operands(
+        &self,
+        special: &Special,
+        operands: &[MetadataOperand],
+    ) -> String {
+        operands
+            .iter()
+            .zip(&special.fields)
+            .map(|(one, field)| {
+                let value = match one {
+                    MetadataOperand::Null => "null".to_owned(),
+                    MetadataOperand::Node(node) => format!("!{}", node.0),
+                    MetadataOperand::String(text) => string(text.as_bytes()),
+                    MetadataOperand::Constant(id) => match &self.context.get(*id).kind {
+                        ConstantKind::Int(value) => (*value as u64 as i64).to_string(),
+                        _ => self.typed_constant(*id),
+                    },
+                    MetadataOperand::Ident(word) => word.clone(),
+                };
+                if field.is_empty() { value } else { format!("{field}: {value}") }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// The flag words of a constant GEP, each followed by a space.
+pub(crate) fn gep_flag_words(
+    inbounds: bool,
+    nusw: bool,
+    nuw: bool,
+) -> String {
+    let mut words = String::new();
+    if inbounds {
+        words.push_str("inbounds ");
+    } else if nusw {
+        words.push_str("nusw ");
+    }
+    if nuw {
+        words.push_str("nuw ");
+    }
+    words
 }

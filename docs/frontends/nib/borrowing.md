@@ -5,7 +5,7 @@ explains every rule of ownership, moves and borrows, and what the checker
 accepts and refuses. Every program below was compiled with `llrm-nib`; every
 diagnostic is its output. The language-level statement is in the
 [language specification](language-spec.md); the regression tests are
-`crates/frontends/llrm-nib/src/test_borrowck.rs`, and the examples
+`crates/frontends/nib/src/test_borrowck.rs`, and the examples
 `examples/borrows.nib` and `examples/borrow_puzzles.nib` are accepted programs.
 
 Diagnostics are `file:line:column: message`; below only `line:column: message`

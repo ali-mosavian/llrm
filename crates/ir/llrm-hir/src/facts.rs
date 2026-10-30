@@ -18,22 +18,23 @@ pub struct Index<'m> {
 impl<'m> Index<'m> {
     pub fn of(module: &'m crate::model::Module) -> Self {
         let functions = module.functions.iter().map(|one| (one.id, one)).collect();
-        let instructions = module
-            .functions
-            .iter()
-            .flat_map(|function| {
-                function
-                    .blocks
-                    .iter()
-                    .flat_map(|block| &block.instructions)
-                    .map(move |instruction| ((function.id, instruction.id), instruction))
-            })
-            .collect();
-        let value_types = module
-            .functions
-            .iter()
-            .flat_map(|function| function.values.iter().map(move |value| ((function.id, value.id), value.r#type)))
-            .collect();
+        // A `flat_map` states no size, so `collect` grew these maps by
+        // doubling: 0.33 M Ir of rehashing on d_faces. Counted first
+        // (`DenseMap::init`).
+        let mut instructions = llrm_support::hash::HashMap::default();
+        instructions.reserve(
+            module.functions.iter().flat_map(|function| &function.blocks).map(|block| block.instructions.len()).sum(),
+        );
+        let mut value_types = llrm_support::hash::HashMap::default();
+        value_types.reserve(module.functions.iter().map(|function| function.values.len()).sum());
+        for function in &module.functions {
+            for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+                instructions.insert((function.id, instruction.id), instruction);
+            }
+            for value in &function.values {
+                value_types.insert((function.id, value.id), value.r#type);
+            }
+        }
         Self { functions, instructions, value_types }
     }
 

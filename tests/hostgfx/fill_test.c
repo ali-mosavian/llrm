@@ -1,4 +1,4 @@
-/* The box fills, dots and CGA searches of runtime/qb/dos/gfxdev.c against the
+/* The box fills, dots and CGA searches of runtime/qb/dev/dos/gfxdev.c against the
    pixel plot and read, and lines against the dot, on the host: for the
    256-colour and the two CGA modes, every operation, random colours, rows and
    spans over random video memory.  Exits 0, or 1 with the case that differed.
@@ -6,7 +6,7 @@
    tests/qbrt/gfx_*.bas, against BCOM45's, are theirs.) */
 #include <stdio.h>
 #include <stdlib.h>
-#include "../../runtime/qb/dos/gfxdev.c"
+#include "../../runtime/qb/dev/dos/gfxdev.c"
 
 unsigned char vga_ram[0x10000], cga_ram[0x4000];
 static unsigned current_mode;

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/sliceset.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/sliceset.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/sliceset.rs sha256:56341ce52551f9fb318df32ecd25d255c77907381687b1902fcad50789ae318b -->
+<!-- src: crates/opt/llrm-analysis/src/sliceset.rs sha256:c4c3475c229284f7298b2ec23b103d769d08e4120ccdad6bef57523e21e208be -->
 
 # sliceset
 
@@ -55,5 +55,5 @@ of the same slices.
 
 ## Provides
 `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`](alias.md) (call
-summaries and `callbacks_over`, via [`crate::manager`](manager.md)'s `Callbacks`) and
+summaries and `callbacks_over`) and
 the `interprocedural` pass in llrm-transforms.

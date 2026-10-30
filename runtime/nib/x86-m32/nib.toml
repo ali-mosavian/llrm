@@ -4,6 +4,8 @@
 # What `-fsanitize=stack` compares and calls.
 stack = "stack.toml"
 # The stack start.asm reserves; the object's own adds to it.
-stack_base = 16384
+# 128 KiB: at about 40 B a level, the 16 KiB it was held ~400 levels and 1500 of recursion kept at -O1 (bench recmany) faulted in the
+# extender (exception 0Dh). The extender takes the stack from extended memory, not from the 640 KiB, so it costs no DOS memory.
+stack_base = 131072
 # Fields the assembler is told as `-DSYMBOL=value`; the OS layer's own come from its description.
 assembler_defines = ["stack_base:STACK_BYTES"]

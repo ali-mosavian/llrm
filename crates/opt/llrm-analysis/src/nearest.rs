@@ -48,12 +48,12 @@
 //! `loadjoins` in llrm-transforms.
 //!
 //! # Needs
-//! `llrm_mir::dominators::DominatorTree` (`span`, the preorder interval of a
+//! `llrm_mir::domtree::DomTree` (`span`, the preorder interval of a
 //! block).
 
 use std::hash::Hash;
 
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::module::BlockId;
 use llrm_support::hash::HashMap;
 
@@ -74,7 +74,7 @@ impl<K: Hash + Eq> Nearest<K> {
     /// The items `placed` as (key, block, item); one in a block the entry does
     /// not reach dominates nothing that is reachable, and is left out.
     pub fn of(
-        tree: &DominatorTree,
+        tree: &DomTree,
         placed: impl IntoIterator<Item = (K, BlockId, usize)>,
     ) -> Self {
         let mut raw: HashMap<K, Vec<(u32, u32, usize)>> = HashMap::default();
@@ -112,7 +112,7 @@ impl<K: Hash + Eq> Nearest<K> {
     /// dominates it: the caller decides).
     pub fn dominating<'a>(
         &'a self,
-        tree: &DominatorTree,
+        tree: &DomTree,
         keys: &[&K],
         at: BlockId,
     ) -> Walk<'a> {
@@ -125,7 +125,7 @@ impl<K: Hash + Eq> Nearest<K> {
     /// block: N^2/2 items walked for the nearest of each).
     pub fn dominating_below<'a>(
         &'a self,
-        tree: &DominatorTree,
+        tree: &DomTree,
         keys: &[&K],
         at: BlockId,
         below: usize,
@@ -245,7 +245,7 @@ mod tests {
     fn test_the_items_that_dominate_a_block_are_found_nearest_first() {
         let module = parsed(&diamonds(8));
         let function = function(&module, "f");
-        let tree = llrm_mir::dominators::DominatorTree::new(function);
+        let tree = llrm_mir::domtree::DomTree::of(function);
         let blocks: Vec<BlockId> = function.layout().to_vec();
         // Item i in block (i * 7) % n, under key i % 3 (key 2 is on every
         // item).

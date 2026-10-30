@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `analysis/noreturn_tests.rs`, the ports of the
+//! Adapted from llrm-codegen's `analysis/noreturn_tests.rs`, the ports of the
 //! `noreturn` tests in `tests/test_noreturn.py` and `tests/test_sccp.py`.
 
 use std::collections::BTreeSet;
@@ -40,14 +40,7 @@ fn shape(
     function
         .layout()
         .iter()
-        .map(|&one| {
-            function
-                .block(one)
-                .instructions()
-                .iter()
-                .map(|&inst| function.instruction(inst).opcode.mnemonic())
-                .collect()
-        })
+        .map(|&one| function.iter_block(one).map(|inst| function.instruction(inst).opcode.mnemonic()).collect())
         .collect()
 }
 
@@ -232,7 +225,7 @@ join:
     let mut module = parsed(text);
     assert!(cut(&mut module, "f", "exit"));
     let f = function(&module, "f");
-    let phi = f.block(block(f, "join")).instructions()[0];
+    let phi = f.block(block(f, "join")).first().expect("a block with an instruction");
     assert_eq!(f.instruction(phi).operands.len(), 2, "one input, from %b");
     assert_eq!(run(&module, "f", vec![bit(false)]), Ok(Val::Int { bits: 2, width: 16 }));
     assert_eq!(run(&module, "f", vec![bit(true)]), run(&parsed(text), "f", vec![bit(true)]));

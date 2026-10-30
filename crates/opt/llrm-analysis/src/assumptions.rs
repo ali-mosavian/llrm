@@ -113,12 +113,13 @@ impl Assumptions {
     pub fn above(
         &self,
         shape: &Shape,
+        function: &llrm_mir::module::Function,
         at: i64,
     ) -> Vec<Operand> {
         let mut found = Vec::new();
         let mut reached = at;
         while !self.is_empty()
-            && let Some(up) = shape.dominance.immediate(reached)
+            && let Some(up) = shape.dominance.immediate(function, reached)
         {
             found.extend(self.here(up).iter().rev());
             reached = up;

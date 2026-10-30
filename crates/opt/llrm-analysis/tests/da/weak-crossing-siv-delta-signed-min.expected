@@ -1,0 +1,10 @@
+== --tbaa
+@weak_crossing_siv_delta_signed_min
+  none!
+  output [*|<]!
+  none!
+== --test weak-crossing-siv --tbaa
+@weak_crossing_siv_delta_signed_min
+  output [*]!
+  output [*|<]!
+  output [*]!

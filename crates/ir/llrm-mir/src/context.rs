@@ -1,11 +1,21 @@
 //! LLVM's context: the uniqued types and constants a module's code refers to.
 
+use std::cell::RefCell;
+
+use crate::arena::Arena;
 use crate::hash::HashMap;
-use crate::opcode::CastOp;
+use crate::opcode::{BinaryOp, CastOp};
 use crate::types::{TypeId, Types};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConstantId(u32);
+
+impl ConstantId {
+    /// Its place among the interned constants: later ids are made later.
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 /// A global value -- variable or function -- of the module.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -15,9 +25,15 @@ pub struct GlobalId(pub u32);
 pub enum ConstantKind {
     /// Bits, modulo the type's width.
     Int(u128),
-    /// IEEE bits: a `float`'s in the low 32.
+    /// IEEE bits: a `float`'s in the low 32. An `x86_fp80` whose value a
+    /// double holds exactly is held as that double.
     Float(u64),
+    /// An `x86_fp80` no double holds exactly: the 80 bits, the sign and 15-bit
+    /// exponent above a 64-bit significand with its integer bit.
+    Float80(u128),
     Null,
+    /// `UndefValue`: any value, chosen per use.
+    Undef,
     Poison,
     /// `zeroinitializer`.
     Zero,
@@ -32,8 +48,25 @@ pub enum ConstantKind {
 /// The constant expressions MIR keeps, for global initializers only.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum ConstantExpr {
-    GetElementPtr { source: TypeId, inbounds: bool, operands: Vec<ConstantId> },
-    Cast { op: CastOp, value: ConstantId },
+    /// `nusw` includes what `inbounds` implies.
+    GetElementPtr {
+        source: TypeId,
+        inbounds: bool,
+        nusw: bool,
+        nuw: bool,
+        operands: Vec<ConstantId>,
+    },
+    Cast {
+        op: CastOp,
+        value: ConstantId,
+    },
+    /// `add`, `sub` and `xor` are the binary operators LLVM still has as
+    /// constant expressions (`add (i32 ptrtoint (ptr @a to i32), i32 3)`).
+    Binary {
+        op: BinaryOp,
+        lhs: ConstantId,
+        rhs: ConstantId,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -42,12 +75,24 @@ pub struct Constant {
     pub kind: ConstantKind,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Context {
     pub types: Types,
-    constants: Vec<Constant>,
-    interned: HashMap<Constant, ConstantId>,
+    constants: Arena<Constant>,
+    interned: Box<RefCell<HashMap<Constant, ConstantId>>>,
     extensions: Extensions,
+}
+
+impl Clone for Context {
+    fn clone(&self) -> Self {
+        crate::counts::bump(crate::counts::Event::ContextClones);
+        Self {
+            types: self.types.clone(),
+            constants: self.constants.clone(),
+            interned: self.interned.clone(),
+            extensions: self.extensions.clone(),
+        }
+    }
 }
 
 /// What a layer above MIR keeps in the context, one value per type, dropped
@@ -78,30 +123,35 @@ impl Context {
         std::rc::Rc::clone(found).downcast::<T>().unwrap_or_else(|_| unreachable!("keyed by its type"))
     }
 
+    /// LLVM's `ConstantInt::get` and kin: `constant`, made on the first ask.
+    /// The table is borrowed for the lookup and again for the insert, never
+    /// across a call.
+    #[inline]
     pub fn constant(
-        &mut self,
+        &self,
         constant: Constant,
     ) -> ConstantId {
-        if let Some(&id) = self.interned.get(&constant) {
+        let found = self.interned.borrow().get(&constant).copied();
+        if let Some(id) = found {
             return id;
         }
-        let id = ConstantId(self.constants.len() as u32);
-        self.constants.push(constant.clone());
-        self.interned.insert(constant, id);
+        let id = ConstantId(self.constants.push(constant.clone()) as u32);
+        self.interned.borrow_mut().insert(constant, id);
         id
     }
 
+    #[inline]
     pub fn get(
         &self,
         id: ConstantId,
     ) -> &Constant {
-        &self.constants[id.0 as usize]
+        self.constants.get(id.0 as usize)
     }
 
     /// `constant` of `from`, interned here: none for one that names a
     /// global or a type only `from` defines.
     pub fn imported(
-        &mut self,
+        &self,
         from: &Context,
         constant: ConstantId,
     ) -> Option<ConstantId> {
@@ -124,18 +174,20 @@ impl Context {
         &mut self,
         renumbered: &dyn Fn(GlobalId) -> Option<GlobalId>,
     ) {
-        for constant in &mut self.constants {
+        for constant in self.constants.iter_mut() {
             if let ConstantKind::Global(global) = constant.kind {
                 constant.kind = renumbered(global).map_or(ConstantKind::Poison, ConstantKind::Global);
             }
         }
-        self.interned =
+        let interned =
             self.constants.iter().enumerate().rev().map(|(at, one)| (one.clone(), ConstantId(at as u32))).collect();
+        self.interned = Box::new(RefCell::new(interned));
     }
 
     /// `value` modulo the width of the integer type `ty`.
+    #[inline]
     pub fn int(
-        &mut self,
+        &self,
         ty: TypeId,
         value: i128,
     ) -> ConstantId {

@@ -1,15 +1,19 @@
 /* SLEEP and BEEP (QB rt/gwsleep, rt/llscnio B$BLEEP). */
 #include "console.h"
-#include "device.h"
+#include "dev.h"
 #include "llrm_os.h"
 #include "qb.h"
 
-enum { HUNDREDTHS = 100, DAY = 8640000L };
+#define DAY 8640000L
+enum { HUNDREDTHS = 100 };
 
 static long elapsed(long since)
 {
     return (dev_clock() - since + DAY) % DAY;
 }
+
+#pragma aux B_SLEP "B$SLEP"
+#pragma aux B_BEEP "B$BEEP"
 
 /* B$SLEP: SLEEP seconds, which ends early on a key; 0 waits for a key. */
 void B_SLEP(long seconds)
@@ -19,7 +23,7 @@ void B_SLEP(long seconds)
     for (;;) {
         if (cn_key_hook)
             cn_key_hook();
-        if (llrm_os_console_key_ready()) {
+        if (dev_key_ready()) {
             if (!cn_key_hook || !cn_key_hook())
                 break;
         } else if (seconds != 0 && elapsed(start) >= seconds * HUNDREDTHS) {
@@ -33,6 +37,3 @@ void B_BEEP(void)
 {
     cn_putc(7);
 }
-
-#pragma aux B_SLEP "B$SLEP"
-#pragma aux B_BEEP "B$BEEP"

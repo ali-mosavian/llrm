@@ -119,14 +119,19 @@ use llrm_analysis::consts::{self, Known};
 use llrm_analysis::manager::{DemandedBits, Ranges, Registers};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::num::Num as BigInt;
-use llrm_analysis::{cfg, induction, ranges};
+use llrm_analysis::scev::analysis::LazyScevView;
+use llrm_analysis::{cfg, induction};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask, signed};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo};
+use llrm_mir::module::{Function, InstId, Operand, Use, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
+use llrm_mir::valuetracking::{AssumptionCache, Query, known};
 use llrm_support::hash::IndexMap;
 
 use crate::counting;
@@ -136,6 +141,9 @@ use crate::counting;
 #[derive(Default)]
 pub struct Algebraic {
     pub size: bool,
+    /// The LLVM order's pass (kept for the pipeline's slots; no rule reads it
+    /// since `_scaled_chain` went).
+    pub llvm: bool,
 }
 
 impl FunctionPass for Algebraic {
@@ -153,7 +161,7 @@ impl FunctionPass for Algebraic {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if simplified(unit.context, unit.layout, unit.function, analyses, self.size) {
+        if simplified_in(unit.context, unit.layout, unit.function, analyses, self.size) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
@@ -210,6 +218,21 @@ pub fn simplified(
     analyses: &mut Analyses,
     size: bool,
 ) -> bool {
+    simplified_in(context, layout, function, analyses, size)
+}
+
+/// [`simplified`].
+pub fn simplified_in(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+    size: bool,
+) -> bool {
+    // The `size` rows are 16-bit rows: the pin's CVP turns a non-negative
+    // `sdiv` by any constant into `udiv` whatever the optsize, and no pin fold
+    // reads it for an address.
+    let size = size && layout.pointer(0).bits < layout.largest_legal_integer();
     // A number proved before stays proved: every rewrite keeps each
     // surviving value's meaning, and none divides by a value.
     let divided_by_values = function
@@ -240,7 +263,6 @@ pub fn simplified(
                 round |= _rewritten(context, layout, function, &recurrences, inst, size);
             }
         }
-        round |= _reassociated_recurrences(function);
         round |= _shared_shifts(context, function);
         // Last, when no other rule has anything to do: a repeat may be a
         // difference the other rules cancel (`x - (x + 5 + x)`).
@@ -260,7 +282,7 @@ pub fn simplified(
 
 /// The first rule that rewrites `inst`.
 fn _rewritten(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     recurrences: &BTreeSet<ValueId>,
@@ -284,9 +306,6 @@ fn _rewritten(
         || _negated_difference(context, function, inst)
         || _difference_from_sum(context, function, inst)
         || _shift_chain(context, function, inst)
-        || _scaled_chain(context, function, inst)
-        || _offset_chain(context, function, inst)
-        || _bitwise_chain(context, function, inst)
         || _identity(context, function, inst)
         || _decided(context, function, inst)
         || _selected(context, function, inst)
@@ -314,7 +333,7 @@ fn _extended_boolean(
 /// `icmp ne (sext i1 x), 0` is `x`, and `icmp eq` of it `!x`: Nib's booleans
 /// are eight-bit 0 and -1, tested against zero.
 fn _extended_boolean_tested(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -350,7 +369,7 @@ fn _extended_boolean_tested(
 /// `xor (sext i1 x), -1` is `sext (xor i1 x, true)`, and `xor (zext x), 1`
 /// the same zero-extended.
 fn _extended_boolean_negated(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -388,13 +407,22 @@ fn _extended_boolean_negated(
 /// Equality needs no flag: a wrapping sum is a bijection. An ordered test
 /// needs the sum not to wrap as its own signedness (`nsw` for a signed
 /// predicate, `nuw` for an unsigned one) and the new constant to stay in the
-/// type. InstCombine's `foldICmpAddConstant` and gcc's `fold_comparison` do it
-/// whoever else reads the sum. A recursion inlined into itself tests `n - 1 ==
+/// type. InstCombine's `foldICmpAddConstant` does the ordered one whoever else
+/// reads the sum; its equality fold (`foldICmpBinOpEqualityWithConstant`,
+/// InstCombineCompares.cpp:3760, "TODO: Remove the one-use limitation") only
+/// when the sum has no other reader.
+///
+/// DEVIATE (D10, numbered with its third part in docs/architecture/
+/// recursion-rows.md): a body that had copies of itself made (`SELF_COPIED`)
+/// folds an equality whoever else reads the sum. Those copies test `n - 1 ==
 /// 0`, `n - 2 == 0`, ... which are `n == 1`, `n == 2`: the chain of differences
-/// each level held in a register, and spilled, is dead (`rectwo`, `hanoi`); a
-/// loop's test of its step (`x - 2 < 2`) reads the counter itself again.
+/// each level held in a register, and spilled, is dead (`rectwo`, `hanoi`,
+/// `recsum`, `recpow`); the pin has no copies and so no chain. Every other body
+/// keeps the pin's one-use rule. Owner: w-6. Exit: when #3422 (SimplifyCFG's
+/// conditional-branch value comparisons) lands, re-measure D10's chains; if
+/// they collapse the gate goes. Review 2026-11-30.
 fn _offset_compared(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -432,6 +460,17 @@ fn _offset_compared(
         predicate,
         IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge
     );
+    if matches!(predicate, IntPredicate::Eq | IntPredicate::Ne)
+        && function.instruction(made).result.is_some_and(|result| function.users(result).into_iter().count() > 1)
+        && !function.attrs.iter().any(|one| {
+            matches!(
+                one,
+                llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::walk::SELF_COPIED
+            )
+        })
+    {
+        return false;
+    }
     let ordered =
         signed || matches!(
             predicate,
@@ -467,7 +506,7 @@ fn _offset_compared(
 /// compare: Nib's `if !(i < n): break` branched on the negation, which
 /// hid the exit from every counting pass and cost `setl; neg; xor`.
 fn _inverted_compare(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -488,12 +527,10 @@ fn _inverted_compare(
 /// `a`, as InstCombine's `foldICmpWithZextOrSext`: a `zext` pair orders as
 /// unsigned, a `sext` pair keeps its predicate, and a constant outside `a`'s
 /// range decides the answer. C's `int` promotion makes every `unsigned short`
-/// compare one of these. Where the extension lives on for another reader the
-/// compare narrows only for a loop-carried `a`, whose trip count is proven at
-/// its own width: narrowed elsewhere it moves the value to a byte-addressable
-/// register for nothing (grep grew 24 bytes).
+/// compare one of these. As the pin's, there is no use gate: the extension
+/// stays for its other readers and dies if it has none.
 fn _narrow_compare(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -521,9 +558,6 @@ fn _narrow_compare(
     if let Some((other, b)) = extension(function, right)
         && other == kind
         && function.operand_type(context, b) == Some(narrow)
-        && (_loop_carried(function, a)
-            || _loop_carried(function, b)
-            || _single_use(function, left) && _single_use(function, right))
     {
         let predicate = if signed { predicate } else { unsigned_form(predicate) };
         _replace(function, inst, Opcode::ICmp(predicate), vec![a, b]);
@@ -545,9 +579,6 @@ fn _narrow_compare(
     }
     let c = if compared_signed || signed { ((bits as i128) << (128 - wide)) >> (128 - wide) } else { bits as i128 };
     if (low..=high).contains(&c) {
-        if !_loop_carried(function, a) && !_single_use(function, left) {
-            return false;
-        }
         let predicate = if signed { predicate } else { unsigned_form(predicate) };
         let number = Operand::Constant(context.int(narrow, c));
         _replace(function, inst, Opcode::ICmp(predicate), vec![a, number]);
@@ -574,7 +605,7 @@ fn _narrow_compare(
 /// operation. `ext a` must be `a` at the result's width, so a conversion
 /// goes; the other operand's cut is loop-invariant where it is.
 fn _narrowed_binary(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -612,7 +643,7 @@ fn _narrowed_binary(
     if !alone && !(free(&a, left) && free(&b, right)) {
         return false;
     }
-    let mut cut = |function: &mut Function, known: Option<Operand>, operand: Operand| match (known, operand) {
+    let cut = |function: &mut Function, known: Option<Operand>, operand: Operand| match (known, operand) {
         (Some(from), _) => from,
         (None, Operand::Constant(_)) => {
             _integer(context, operand).map_or(operand, |bits| Operand::Constant(context.int(narrow, bits as i128)))
@@ -650,7 +681,7 @@ fn _single_use(
 ) -> bool {
     matches!(
         operand,
-        Operand::Value(value) if function.users(value).len() == 1
+        Operand::Value(value) if function.users(value).has_one_use()
     )
 }
 
@@ -762,7 +793,7 @@ fn _before(
 }
 
 fn _constant(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     inst: InstId,
     bits: u128,
@@ -872,7 +903,7 @@ fn _recurrences(
 /// whose step then takes the scale for nothing; elsewhere the scale is as
 /// free in an address as it would be in the mask.
 fn _mask_scaled(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     recurrences: &BTreeSet<ValueId>,
     inst: InstId,
@@ -896,7 +927,7 @@ fn _mask_scaled(
 /// `(x + a) * k + b` is `x * k + (a * k + b)` at every width, each op read
 /// only by the next: the inner offset dies.
 fn _offset_scaled(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -924,7 +955,7 @@ fn _offset_scaled(
 /// `sext x` where `x`'s sign bit is known zero is `zext x`, as InstCombine's
 /// `visitSExt`: `zext` has the cheaper selection and folds with masks.
 fn _nonnegative_sext(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -938,7 +969,7 @@ fn _nonnegative_sext(
     else {
         return false;
     };
-    if llrm_mir::valuetracking::known_zero(context, function, source) >> (width - 1) & 1 == 0 {
+    if known_zero(context, function, source) >> (width - 1) & 1 == 0 {
         return false;
     }
     _replace(function, inst, Opcode::Cast(CastOp::ZExt), vec![source]);
@@ -959,7 +990,7 @@ fn _nonnegative_sext(
 /// mask; and a masked narrow counter is a `zext`, which the induction
 /// analysis can follow where the narrow value cannot wrap.
 fn _masked_truncation(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1004,7 +1035,7 @@ fn _masked_truncation(
 /// extension no longer waits for the mask, and `and x, 2^k-1` is the
 /// `trunc` `_masked_extension` takes (one `movzx r32, r8` for the pair).
 fn _extended_mask(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1043,7 +1074,7 @@ fn _extended_mask(
 /// integer width, is `zext(trunc x)`: a native narrow value is a register's
 /// low part, where the `and` copies the register and masks it.
 fn _masked_extension(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     inst: InstId,
@@ -1072,7 +1103,7 @@ fn _masked_extension(
 /// `trunc`; an extension of a like extension, or `sext` of a `zext`, whose
 /// sign bit is clear, is one extension. `ext(trunc(ext x))` is two steps.
 fn _cast_pair(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1096,7 +1127,7 @@ fn _cast_pair(
     if (inner, outer) == (CastOp::Trunc, CastOp::ZExt) && from <= 128 {
         let kept = bits(middle).unwrap_or(from);
         let dropped = (u128::MAX >> (128 - from)) & !(u128::MAX >> (128 - kept));
-        if llrm_mir::valuetracking::known_zero(context, function, source) & dropped == dropped {
+        if known_zero(context, function, source) & dropped == dropped {
             if to == from {
                 _forward(function, inst, source);
             } else {
@@ -1130,7 +1161,7 @@ fn _cast_pair(
 /// `inttoptr`, as InstCombine's constant folder makes it: `gep i8, ptr null,
 /// -4` is `inttoptr (i16 -4 to ptr)`. Isel has one form for such an address.
 fn _constant_address(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1191,7 +1222,7 @@ fn _constant_address(
 /// wraps apart from its selector), and a selector-alone space is no address at
 /// all.
 fn _offset_address(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     is_recurrence: &dyn Fn(ValueId) -> bool,
@@ -1260,7 +1291,7 @@ fn _address_round_trip(
 /// logic at the narrow type, as InstCombine's `foldCastedBitwiseLogic`:
 /// two frontend truths `and`ed, then tested, become one `i1` `and`.
 fn _casted_logic(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1297,7 +1328,7 @@ fn _casted_logic(
 /// `foldPHIArgOpIntoPHI`: an `&&`'s truths as frontend bytes, then tested,
 /// become one `i1` phi a branch reads.
 fn _phi_of_casts(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1336,10 +1367,7 @@ fn _phi_of_casts(
     function.insert(phi, Position::Before(inst)).expect("a placed phi");
     let block = function.parent(inst).expect("a placed phi");
     let first = function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(block)
         .find(|&one| function.instruction(one).opcode != Opcode::Phi)
         .expect("a terminated block");
     let cast = function.create_instruction(
@@ -1371,10 +1399,7 @@ fn _duplicate_phi(
     // One arm per predecessor: the same count, and each arm of this one among
     // the other's.
     let earlier = function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(block)
         .take_while(|&one| one != inst)
         .find(
             |&one| {
@@ -1393,7 +1418,7 @@ fn _duplicate_phi(
 
 /// Negating a single-use modular difference reverses its operands.
 fn _negated_difference(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1411,7 +1436,7 @@ fn _negated_difference(
 /// `visitSub`. A counter rebased by what a use subtracts it from (`row - (c +
 /// row)` where `c = r - row`) leaves the sum behind it.
 fn _difference_from_sum(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1436,7 +1461,7 @@ fn _difference_from_sum(
 
 /// `(x << a) << b` is `x << (a + b)` while that is short of the width.
 fn _shift_chain(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1461,44 +1486,6 @@ fn _shift_chain(
     }
     let total = _constant(context, function, inst, total);
     _replace(function, inst, Opcode::Binary(BinaryOp::Shl), vec![source, total]);
-    true
-}
-
-/// Two single-use scales are one `mul` at an unchanged modular width.
-fn _scaled_chain(
-    context: &mut Context,
-    function: &mut Function,
-    inst: InstId,
-) -> bool {
-    let Some(last) = _scale(context, function, inst) else { return false };
-    if !_single_use(function, last.source) {
-        return false;
-    }
-    let Some(first) = _definition(function, last.source).and_then(|made| _scale(context, function, made)) else {
-        return false;
-    };
-    let width = _width(context, function, inst).expect("an integer");
-    let factor = _constant(context, function, inst, first.factor.wrapping_mul(last.factor) & mask(width));
-    _replace(function, inst, Opcode::Binary(BinaryOp::Mul), vec![first.source, factor]);
-    true
-}
-
-/// Two single-use offsets are one `add` at an unchanged modular width.
-fn _offset_chain(
-    context: &mut Context,
-    function: &mut Function,
-    inst: InstId,
-) -> bool {
-    let Some((middle, last)) = _offset(context, function, inst) else { return false };
-    if !_single_use(function, middle) {
-        return false;
-    }
-    let Some((source, first)) = _definition(function, middle).and_then(|made| _offset(context, function, made)) else {
-        return false;
-    };
-    let width = _width(context, function, inst).expect("an integer");
-    let amount = _constant(context, function, inst, first.wrapping_add(last) & mask(width));
-    _replace(function, inst, Opcode::Binary(BinaryOp::Add), vec![source, amount]);
     true
 }
 
@@ -1531,7 +1518,7 @@ fn _addends(
 /// had, and the doubled value is one a read-modify-write of a cell can take as
 /// its addend (bench/particle's second sweep of the same cells).
 fn _doubled_addend(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1570,36 +1557,8 @@ fn _doubled_addend(
     true
 }
 
-/// Two single-use `and`s, `or`s or `xor`s of constants are one.
-fn _bitwise_chain(
-    context: &mut Context,
-    function: &mut Function,
-    inst: InstId,
-) -> bool {
-    let Some((op, middle, last)) = _bitwise(context, function, inst) else { return false };
-    if !_single_use(function, middle) {
-        return false;
-    }
-    let Some((first_op, source, first)) =
-        _definition(function, middle).and_then(|made| _bitwise(context, function, made))
-    else {
-        return false;
-    };
-    if first_op != op {
-        return false;
-    }
-    let combined = match op {
-        BinaryOp::And => first & last,
-        BinaryOp::Or => first | last,
-        _ => first ^ last,
-    };
-    let combined = _constant(context, function, inst, combined);
-    _replace(function, inst, Opcode::Binary(op), vec![source, combined]);
-    true
-}
-
 fn _identity(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1653,7 +1612,7 @@ pub fn identity(
 /// `x % 1` is 0, a comparison of a value with itself is decided by its
 /// predicate, and `x >= 0` or `x < 0` unsigned is true or false.
 fn _decided(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1701,78 +1660,16 @@ fn _selected(
     true
 }
 
-/// Put a loop-carried operand at the root of an integer `add` tree:
-/// `(phi + a) + b` is `phi + (a + b)`, whose inner sum may be invariant.
-///
-/// Only a two-level tree in one block, its inner `add` read only by the
-/// outer, whose value is what a latch carries into that phi.
-fn _reassociated_recurrences(function: &mut Function) -> bool {
-    let mut updates = BTreeMap::<ValueId, ValueId>::new();
-    for one in cfg::Shape::of(function).loops {
-        for &phi in function.block(cfg::block(one.header)).instructions() {
-            let instruction = function.instruction(phi);
-            if instruction.opcode != Opcode::Phi {
-                break;
-            }
-            for pair in instruction.operands.chunks(2) {
-                if let (Operand::Value(value), Operand::Block(from)) = (pair[0], pair[1])
-                    && one.latches.contains(&cfg::id(from))
-                {
-                    updates.insert(value, instruction.result.expect("a phi's value"));
-                }
-            }
-        }
-    }
-    let mut changed = false;
-    for (value, recurrence) in updates {
-        let ValueDef::Instruction(outer) = function.value(value).def else { continue };
-        let plain =
-            |function: &Function, inst: InstId| function.instruction(inst).opcode == Opcode::Binary(BinaryOp::Add);
-        let recurrence = Operand::Value(recurrence);
-        if function.is_erased(outer)
-            || !plain(function, outer)
-            || function.instruction(outer).operands.contains(&recurrence)
-        {
-            continue;
-        }
-        for position in 0..2 {
-            let candidate = function.instruction(outer).operands[position];
-            let Some(inner) = _definition(function, candidate) else { continue };
-            if !plain(function, inner)
-                || function.parent(inner) != function.parent(outer)
-                || !_single_use(function, candidate)
-            {
-                continue;
-            }
-            let operands = function.instruction(inner).operands.clone();
-            if operands.iter().filter(|one| **one == recurrence).count() != 1 {
-                continue;
-            }
-            let leaf = if operands[0] == recurrence { operands[1] } else { operands[0] };
-            let other = function.instruction(outer).operands[1 - position];
-            function.set_operands(inner, vec![leaf, other]);
-            function.set_flags(inner, Flags::default());
-            // `other` may be defined between the two.
-            function.move_to(inner, Position::Before(outer)).expect("a placed instruction");
-            function.set_operands(outer, vec![recurrence, candidate]);
-            function.set_flags(outer, Flags::default());
-            changed = true;
-            break;
-        }
-    }
-    changed
-}
-
 /// Reuse a smaller shift of the same value, read elsewhere, in the same
 /// block: `x << 3` after a used `t = x << 1` is `t << 2`.
 fn _shared_shifts(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> bool {
     let mut changed = false;
     for block in function.layout().to_vec() {
         let mut available = IndexMap::<Operand, BTreeMap<u128, ValueId>>::default();
-        for inst in function.block(block).instructions().to_vec() {
+        for inst in function.iter_block(block).collect::<Vec<_>>() {
             let Some(Scale { source, op: BinaryOp::Shl, constant, .. }) = _scale(context, function, inst) else {
                 continue;
             };
@@ -1798,7 +1695,7 @@ fn _shared_shifts(
 /// quotient by -1 stays, where the least value wraps and `sdiv` would be
 /// undefined.
 fn _whole_fixed(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -1832,7 +1729,7 @@ fn _whole_fixed(
 /// `udiv` and `urem` by a power of two: a logical shift and a mask, which the
 /// division unit has no part in.
 fn _unsigned_power_of_two(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -1885,21 +1782,52 @@ fn _redundant_masks(
         analyses
             .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
-    let held = Ranges::of(context, layout, function, analyses, true);
-    let unit = held.unit(context, layout, function, outer);
+    // CVP's `processAnd`: LazyValueInfo's range at the use first.
+    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+    let tree = DomTree::of(function);
+    let mut lvi = LazyValueInfo::new();
+    let mut settled: Vec<(InstId, Operand)> = Vec::new();
+    let mut candidates = candidates;
+    candidates.retain(|&(_, inst, value, mask, width)| {
+        let Some(index) = function.instruction(inst).operands.iter().position(|one| *one == value) else { return true };
+        let range = {
+            let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
+            lvi.get_constant_range_at_use(&mut env, Use { user: inst, index: index as u32 }, false)
+        };
+        let top = range.get_unsigned_max();
+        let reach = if top == 0 { 0 } else { u128::MAX >> (top.leading_zeros()) };
+        let all = if width == 128 { u128::MAX } else { (1u128 << width) - 1 };
+        let query = Query {
+            globals: &outer.globals,
+            metadata: &outer.metadata,
+            dt: Some(&tree),
+            assumptions: Some(&assumptions),
+            cxt: Some(inst),
+            ..Query::bare(context, function, layout)
+        };
+        let possible = reach & !known::compute_known_bits(&query, value, 0).zero & all;
+        if possible & !mask == 0 {
+            settled.push((inst, value));
+            return false;
+        }
+        true
+    });
+    // Then ScalarEvolution's unsigned range: a counted loop's counter.
+    let scev = LazyScevView::new(analyses);
     let made: Vec<(InstId, Operand)> = candidates
         .into_iter()
-        .filter_map(|(block, inst, value, mask, width)| {
-            let interval = ranges::operand_at(&unit, value, cfg::id(block))
-                .ok()
-                .flatten()
-                .filter(|interval| interval.width == width && interval.low.sign() != num_bigint::Sign::Minus)?;
-            let top = u128::try_from(interval.high).ok()?;
+        .filter_map(|(_, inst, value, mask, width)| {
+            let range = scev.ask(context, layout, function, |se, cx| {
+                let s = se.get_scev(cx, value);
+                se.get_unsigned_range(cx, s)
+            });
+            let top = range.get_unsigned_max();
             let reach = if top == 0 { 0 } else { u128::MAX >> (top.leading_zeros()) };
             let all = if width == 128 { u128::MAX } else { (1u128 << width) - 1 };
-            let possible = reach & !llrm_mir::valuetracking::known_zero(context, function, value) & all;
+            let possible = reach & !known_zero(context, function, value) & all;
             (possible & !mask == 0).then_some((inst, value))
         })
+        .chain(settled)
         .collect();
     for &(inst, value) in &made {
         if !function.is_erased(inst) {
@@ -1915,7 +1843,7 @@ fn _redundant_masks(
 /// is known zero is zero. `(a + (b & 3)) & 3` is `(a + b) & 3`, and the half of
 /// a bit reversal a masked byte never reads is gone.
 fn _unread_bits(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
@@ -1934,7 +1862,7 @@ fn _unread_bits(
 }
 
 fn _unread_bits_once(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
@@ -1981,7 +1909,7 @@ fn _unread_bits_once(
         let Some(&bits) = read.get(&result) else { continue };
         let width = context.types.int_bits(instruction.ty).expect("an integer");
         let all = if width == 128 { u128::MAX } else { (1_u128 << width) - 1 };
-        let zero = llrm_mir::valuetracking::known_zero(context, function, Operand::Value(result)) & all;
+        let zero = known_zero(context, function, Operand::Value(result)) & all;
         let (opcode, operands) = (instruction.opcode.clone(), instruction.operands.clone());
         let replacement = if bits & !zero == 0 {
             Some(_constant(context, function, inst, 0))
@@ -1996,11 +1924,53 @@ fn _unread_bits_once(
             }
         };
         if let Some(with) = replacement {
+            // The bits the mask cleared reach what used the result: a sum or
+            // product with `nsw`/`nuw` may now overflow (poison), where it did
+            // not (InstCombine's SimplifyDemandedUseBits drops the flags of an
+            // operation whose operand it changed).
+            _poison_flags_dropped(function, result);
             _forward(function, inst, with);
             changed = true;
         }
     }
     changed
+}
+
+/// The flags that make an overflow poison (`nsw`, `nuw`) or an inexact
+/// division poison (`exact`), cleared on every operation the value `from` flows
+/// into through arithmetic, phis and selects: they read bits of it nobody else
+/// does.
+fn _poison_flags_dropped(
+    function: &mut Function,
+    from: ValueId,
+) {
+    let mut seen = IdSet::<ValueId>::new();
+    let mut pending = vec![from];
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value) {
+            continue;
+        }
+        for user in function.users(value).iter().map(|one| one.user).collect::<Vec<_>>() {
+            let instruction = function.instruction(user);
+            let flows = matches!(
+                instruction.opcode,
+                Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)
+                    | Opcode::Phi
+                    | Opcode::Select
+            );
+            if !flows {
+                continue;
+            }
+            let flags = instruction.flags;
+            let kept = flags.without(Flags::NUW).without(Flags::NSW);
+            if kept != flags {
+                function.set_flags(user, kept);
+            }
+            if let Some(result) = function.instruction(user).result {
+                pending.push(result);
+            }
+        }
+    }
 }
 
 /// `sdiv` and `srem` of a dividend proved non-negative are `udiv` and `urem`
@@ -2043,11 +2013,23 @@ fn _unsigned_divisions(
         analyses
             .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
-    let held = Ranges::of(context, layout, function, analyses, true);
+    // CVP's `processSDivOrSRem`: LazyValueInfo's range of the dividend first.
+    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+    let mut lvi = LazyValueInfo::new();
+    let non_negative: Vec<bool> = candidates
+        .iter()
+        .map(|&(_, inst, _)| {
+            let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
+            lvi.get_constant_range_at_use(&mut env, Use { user: inst, index: 0 }, false).is_all_non_negative()
+        })
+        .collect();
+    let held = Ranges::of(context, layout, function, analyses);
     let unit = held.unit(context, layout, function, outer);
+    let scev = LazyScevView::new(analyses);
     let made: Vec<(InstId, BinaryOp)> = candidates
         .into_iter()
-        .filter_map(|(block, inst, width)| {
+        .zip(non_negative)
+        .filter_map(|((_, inst, width), non_negative)| {
             let operands = &function.instruction(inst).operands;
             let fact = consts::_operand(&unit, operands[1], facts, None)?;
             let divisor = BigInt::from(consts::masked(&fact.n, width));
@@ -2063,12 +2045,12 @@ fn _unsigned_divisions(
                 && divisor > BigInt::from(1u8)
                 && divisor < BigInt::from(1u8) << (width - 1)
                 && (power || !size);
-            let proved = ranges::operand_at(&unit, operands[0], cfg::id(block))
-                .ok()
-                .flatten()
-                .filter(|interval| interval.width == width)
-                .is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
-                || llrm_mir::valuetracking::known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;
+            let proved = non_negative
+                || scev.ask(context, layout, function, |se, cx| {
+                    let s = se.get_scev(cx, operands[0]);
+                    se.get_signed_range(cx, s).is_all_non_negative()
+                })
+                || known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;
             let op = if function.instruction(inst).opcode == Opcode::Binary(BinaryOp::SDiv) {
                 BinaryOp::UDiv
             } else {
@@ -2088,7 +2070,7 @@ fn _unsigned_divisions(
 /// truncate toward zero: `sdiv` and `srem` by a divisor consts proves, at
 /// a legal integer width, where the shifts cost less than the division.
 fn _divisions(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -2144,3 +2126,17 @@ fn _divisions(
 #[cfg(test)]
 #[path = "algebraic_tests.rs"]
 mod tests;
+
+/// `computeKnownBits(V).Zero` with no context instruction: the zero half of
+/// the ValueTracking translation (the layout is only read for pointer
+/// widths, which the callers' integers do not reach).
+fn known_zero(
+    context: &Context,
+    function: &Function,
+    operand: Operand,
+) -> u128 {
+    thread_local! {
+        static LAYOUT: DataLayout = DataLayout::default();
+    }
+    LAYOUT.with(|layout| known::compute_known_bits(&Query::bare(context, function, layout), operand, 0).zero)
+}

@@ -1,11 +1,13 @@
 extern void report(long value);
+typedef unsigned long u32;
+typedef long i32; /* the width these kernels are written for: int is 16 bits at m16 */
 
-static int a[200];
-long bench_x_bubble(int n)
+static i32 a[200];
+long bench_x_bubble(i32 n)
 {
-    unsigned s = 12345;
-    int i, j, t; long sum = 0;
-    for (i = 0; i < n; ++i) { s = s * 1103515245u + 12345u; a[i] = (int)((s >> 16) & 0x7FFF); }
+    u32 s = 12345;
+    i32 i, j, t; long sum = 0;
+    for (i = 0; i < n; ++i) { s = s * 1103515245ul + 12345ul; a[i] = (i32)((s >> 16) & 0x7FFF); }
     for (i = 0; i < n - 1; ++i)
         for (j = 0; j < n - 1 - i; ++j)
             if (a[j] > a[j + 1]) { t = a[j]; a[j] = a[j + 1]; a[j + 1] = t; }

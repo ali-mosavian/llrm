@@ -15,6 +15,30 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import llrmbin  # noqa: E402
 
+# Every test here compiles with llrm-c and reads the old allocator's `[instr]` rows. Debt `skip-alloc-scaling` in docs/working/ci.md.
+# An llrm-c that is built (--features c-legacy) still has none: the old allocator was deleted, and its tests died with KeyError: 'facts intervals'.
+pytestmark = pytest.mark.usefixtures("old_allocator")
+
+
+# The rows the old allocator's passes print and the tests read: the new allocator still prints `regalloc base`, and an llrm-c with
+# that row alone made the runner's batches die with KeyError: 'facts intervals'.
+OLD_ALLOCATOR_ROWS = ("facts intervals", "facts slots", "intervals homes", "regalloc base")
+
+
+@pytest.fixture(scope="module")
+def old_allocator():
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    if not compiler.exists():
+        pytest.skip("llrm-c is not built (debt skip-alloc-scaling)")
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "probe.c"
+        source.write_text(straight(1024))
+        with llrmbin.with_object([str(compiler), "-m32", "-march=i486", "-O1", "-o", llrmbin.OBJECT, str(source)]) as command:
+            done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    missing = [row for row in OLD_ALLOCATOR_ROWS if not re.search(rf"^\[instr\].* {re.escape(row)}$", done.stderr, re.M)]
+    if missing:
+        pytest.skip(f"this llrm-c has no old allocator: no {', '.join(missing)} row (debt skip-alloc-scaling)")
+
 SMALL, LARGE = 1024, 4096
 # 4x the program may cost this much more (a linear pass costs 4x, a quadratic one 16x). Measured 2026-10-09 on main 61be539b2:
 # 4.09, 4.05 and 12.42, repeating to 0.01%. regalloc base is allowed more: it rebuilds the facts of the body (every interval)
@@ -34,9 +58,10 @@ def straight(n: int) -> str:
     return "unsigned fn(unsigned a, unsigned b, unsigned c, unsigned d) {\n" + body + "    return a ^ b ^ c ^ d;\n}\n"
 
 
-def steps(compiler: Path, source: Path, level: str = "-O1", *flags: str) -> dict[str, float]:
+def steps(compiler: Path, source: Path, level: str = "-O1", *flags: str, target: tuple[str, ...] = ("-m32", "-march=i486")) -> dict[str, float]:
     """Each step's own instructions in millions (`LLRM_DEBUG=time`'s `[instr]` rows); skips where the host has no counter."""
-    done = subprocess.run([str(compiler), "-m32", "-march=i486", level, *flags, "-o", os.devnull, str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    with llrmbin.with_object([str(compiler), *target, level, *flags, "-o", llrmbin.OBJECT, str(source)]) as command:
+        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
     assert done.returncode == 0, done.stderr[-500:]
     rows = re.findall(r"^\[instr\]\s+([\d.]+) (Minstr|Mcpu-ns) own\s+[\d.]+ \S+ total\s+\d+x (.+)$", done.stderr, re.M)
     if not rows or any(unit != "Minstr" for _, unit, _ in rows):
@@ -46,7 +71,8 @@ def steps(compiler: Path, source: Path, level: str = "-O1", *flags: str) -> dict
 
 def calls(compiler: Path, source: Path, level: str, step: str) -> int:
     """How many times `LLRM_DEBUG=time` timed `step`."""
-    done = subprocess.run([str(compiler), "-m32", "-march=i486", level, "-o", os.devnull, str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    with llrmbin.with_object([str(compiler), "-m32", "-march=i486", level, "-o", llrmbin.OBJECT, str(source)]) as command:
+        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
     return int(re.search(rf"^\[instr\].*total\s+(\d+)x {re.escape(step)}$", done.stderr, re.M).group(1))
 
 
@@ -63,6 +89,36 @@ def test_the_allocators_passes_grow_as_the_program_does():
             best[n] = {name: run[name] for name in PASSES}
     grown = {name: best[LARGE][name] / max(best[SMALL][name], 1e-9) for name in PASSES}
     assert all(grown[name] < LIMITS[name] for name in PASSES), f"4x the statements cost {grown} times as much (limits {LIMITS}): {best}"
+
+
+def test_a_split_finds_its_instruction_by_index_not_by_walking_the_block():
+    """`rewrite_instr`, `instr_at` and `next_instr` looked for an instruction by walking its block: with trySplit on, `regalloc base`
+    cost 143.8 / 400.3 Minstr on the ladder's `mem` at N=800 / 1600 (3.08x per doubling, 2.66x before). A block is in slot order,
+    so the position is bisected."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "ladder"))
+    import ladder_gen as gen
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "mem800.c"
+        source.write_text(gen.generate("mem", 800))
+        run = steps(compiler, source, "-O2", "-mabi=sysv", "-fno-inline-functions")
+    assert run["regalloc base"] < 125, f"mem N=800 -O2: regalloc base cost {run['regalloc base']} Minstr (125 allowed; 143.8 before): {run}"
+
+
+def test_a_spill_lists_the_units_of_a_register_in_time_linear_in_its_operands():
+    """`InlineSpiller::units` deduplicated the instructions of a register with `contains` on a list and searched the units made so
+    far for each: `regalloc base` on the ladder's `mem` cost 259.7 / 586.4 Minstr at N=1600 / 3200 (2.26x per doubling; 2.09x now)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "ladder"))
+    import ladder_gen as gen
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    cost = {}
+    with tempfile.TemporaryDirectory() as work:
+        for n in (1600, 3200):
+            source = Path(work) / f"mem{n}.c"
+            source.write_text(gen.generate("mem", n))
+            cost[n] = steps(compiler, source, "-O2", "-mabi=sysv", "-fno-inline-functions")["regalloc base"]
+    grown = cost[3200] / cost[1600]
+    assert grown < 2.15, f"mem -O2: twice the size cost regalloc base {grown:.2f}x as much (2.15 allowed; 2.26 before): {cost}"
 
 
 def test_a_rewrite_finds_what_it_changed_by_pointer_not_by_looking_up_every_instruction():
@@ -281,7 +337,7 @@ def test_a_memory_phi_asks_its_own_slot_sharing_and_not_a_pass_over_every_block(
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](400))
         # The spiller's route, which -Omax alone makes by default, is the subject.
-        run = steps(compiler, source, "-O2", "-fallocation-routes")
+        run = steps(compiler, source, "-O2")
     assert run["ssa simulated"] < 150, f"branches N=400 -O2: ssa simulated cost {run['ssa simulated']} Minstr (150 allowed; 693 before): {run}"
 
 
@@ -564,3 +620,27 @@ def test_a_split_by_region_costs_a_fraction_of_a_million_instructions_not_a_mill
     assert splits >= 20, f"premise: branches N=200 -O2 made {splits} splits"
     each = run["split placed"] / splits
     assert each < 0.3, f"branches N=200 -O2: split placed cost {each:.3f} Minstr a split (0.3 allowed; 0.38 before)"
+
+
+def far_stores(n: int) -> str:
+    """A loop through a far pointer, then `n` guarded stores through it: every store splits the pointer's live range."""
+    body = "".join(f"    if (c[{k}]) fr[{k}].y = s + {k}.0f;\n" for k in range(n))
+    return (
+        "typedef struct { float x, y; } P;\nextern float g(float);\nfloat f(P far *fr, int *c, int n)\n{\n    int i; float s = 0;\n"
+        "    for (i = 0; i < n; i++) s += g(fr[i].x);\n" + body + "    return s;\n}\n"
+    )
+
+
+def test_a_split_rewrites_an_instruction_without_scanning_the_operands_of_its_register():
+    """`LiveIntervals::rewrite_instr` removed an instruction's operands with `retain` over the whole list of the register: each
+    split child of a far pointer rewrote ~n instructions, each a scan of ~n operands. `regalloc base` at -Os (code16) cost
+    41.96 / 233.45 Minstr at 400 / 1600 guarded stores (5.56x for 4x; clang's trySplit grows 4.18x). The operands sit in slots."""
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    cost = {}
+    with tempfile.TemporaryDirectory() as work:
+        for n in (400, 1600):
+            source = Path(work) / f"far{n}.c"
+            source.write_text(far_stores(n))
+            cost[n] = steps(compiler, source, "-Os", "-S", target=())["regalloc base"]
+    grown = cost[1600] / cost[400]
+    assert grown < 5.0, f"far stores -Os: 4x the stores cost regalloc base {grown:.2f}x as much (5.0 allowed; 5.56 before): {cost}"

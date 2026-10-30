@@ -1,7 +1,6 @@
 ; RUN: llrm-mir %s
 ; CHECK: define {{.*}} @_draw_string(
 
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
 
 declare fastcc i16 @_font_bit(ptr addrspace(1), i8, i16, i16)
 declare cc1000 i16 @QGLSFPSET(i32, i16, i16, i16) addrspace(1)

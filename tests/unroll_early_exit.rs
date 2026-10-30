@@ -1,6 +1,6 @@
 //! A loop of a known number of trips that may also leave early.
 
-use std::process::Command;
+mod common;
 
 fn listing(
     source: &str,
@@ -9,12 +9,8 @@ fn listing(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(directory)
-        .args(flags)
-        .args(["-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(directory).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
@@ -29,5 +25,8 @@ const SEARCH: &str = "int f(const int *q, int col)\n{\n    int r;\n    for (r = 
 #[test]
 fn a_loop_of_three_trips_that_may_leave_early_is_copied_out_at_o3() {
     let text = listing(SEARCH, &["-m32", "-O3", "-march=i486"]);
-    assert_eq!(text.matches("cmp dword ptr [").count(), 3, "one compare of q[r] for each trip: {text}");
+    // One compare for each trip; the first reads q[0] into a register
+    // first (`mov ebx, [eax]; cmp ebx, edx`) where the pin compares memory.
+    let compares = text.lines().filter(|line| line.trim().starts_with("cmp ")).count();
+    assert_eq!(compares, 3, "one compare of q[r] for each trip: {text}");
 }

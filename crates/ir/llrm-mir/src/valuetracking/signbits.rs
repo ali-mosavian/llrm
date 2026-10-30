@@ -134,7 +134,7 @@ fn compute_num_sign_bits_impl(
                     }
                     let zext = q
                         .instruction_of(op(0))
-                        .filter(|(_, inner)| inner.opcode == Opcode::Cast(CastOp::ZExt))
+                        .filter(|(_, inner)| matches!(inner.opcode, Opcode::Cast(CastOp::ZExt)))
                         .map(|(_, inner)| inner.operands[0]);
                     let tmp = match zext {
                         Some(x) if sh_amt >= u128::from(ty_bits - q.scalar_bits(x)) => {

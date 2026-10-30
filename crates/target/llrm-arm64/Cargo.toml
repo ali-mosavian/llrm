@@ -1,0 +1,32 @@
+[package]
+name = "llrm-arm64"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The arm64 (AArch64) target: its descriptions, translated from LLVM's AArch64 backend"
+
+[dependencies]
+llrm-lir = { workspace = true }
+llrm-object = { workspace = true }
+llrm-mir = { workspace = true }
+llrm-transforms = { workspace = true }
+llrm-codegen = { workspace = true }
+llrm-support = { workspace = true }
+llrm-env = { workspace = true }
+llrm-analysis = { workspace = true }
+llrm-macho = { workspace = true }
+llrm-dwarf = { workspace = true }
+llrm-elf = { workspace = true }
+llrm-target = { workspace = true }
+
+[build-dependencies]
+llrm-lir = { workspace = true }
+llrm-target = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+llrm-iselgen = { workspace = true }
+
+[[bin]]
+name = "llrm-arm64-llc"
+path = "src/bin/llc.rs"

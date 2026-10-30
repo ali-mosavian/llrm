@@ -1,90 +1,81 @@
-reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
-blessed = "2026-10-14"
+reason = "inputs read through volatile or DATA so no build folds the kernel; reference counts change with the source"
+blessed = "2026-10-25"
 
 [ow.O2]
-instructions = 202
-memory_operands = 67
-code_bytes = 284
-data_bytes = 4
+instructions = 211
+memory_operands = 76
+code_bytes = 310
+data_bytes = 24
 bss_bytes = 0
-kernel_ms = 0.0172
 
 [ow.Os]
-instructions = 192
-memory_operands = 64
-code_bytes = 277
-data_bytes = 4
+instructions = 205
+memory_operands = 77
+code_bytes = 303
+data_bytes = 24
 bss_bytes = 0
-kernel_ms = 0.017
 
 [bcc.O2]
-instructions = 204
-memory_operands = 71
+instructions = 207
+memory_operands = 74
 code_bytes = 353
-data_bytes = 8
+data_bytes = 24
 bss_bytes = 0
-kernel_ms = 0.0109
 
 [bcc.Os]
-instructions = 204
-memory_operands = 71
+instructions = 207
+memory_operands = 74
 code_bytes = 334
-data_bytes = 8
+data_bytes = 24
 bss_bytes = 0
-kernel_ms = 0.0108
 
 [tc.O2]
-instructions = 266
-memory_operands = 73
-code_bytes = 358
-data_bytes = 12
+instructions = 277
+memory_operands = 77
+code_bytes = 372
+data_bytes = 32
 bss_bytes = 0
-kernel_ms = 0.0107
 
 [tc.Os]
-instructions = 262
-memory_operands = 73
-code_bytes = 353
-data_bytes = 12
+instructions = 273
+memory_operands = 77
+code_bytes = 367
+data_bytes = 32
 bss_bytes = 0
-kernel_ms = 0.0106
 
 [tcpp.O2]
 instructions = 265
-memory_operands = 74
-code_bytes = 348
-data_bytes = 20
+memory_operands = 75
+code_bytes = 350
+data_bytes = 28
 bss_bytes = 0
 kernel_ms = 0.0117
 
 [tcpp.Os]
 instructions = 261
-memory_operands = 74
-code_bytes = 344
-data_bytes = 20
+memory_operands = 75
+code_bytes = 346
+data_bytes = 28
 bss_bytes = 0
 kernel_ms = 0.0117
 
 [bc.O2]
-instructions = 2300
-memory_operands = 477
-code_bytes = 499
-data_bytes = 35
-bss_bytes = 10
-kernel_ms = 0.0539
+instructions = 2128
+memory_operands = 441
+code_bytes = 538
+data_bytes = 48
+bss_bytes = 30
 
 [pds71.O2]
-instructions = 1736
-memory_operands = 383
-code_bytes = 492
-data_bytes = 19
-bss_bytes = 10
-kernel_ms = 0.0435
+instructions = 1570
+memory_operands = 353
+code_bytes = 540
+data_bytes = 44
+bss_bytes = 30
 
 [vbdos.O2]
-instructions = 1770
-memory_operands = 393
-code_bytes = 498
-data_bytes = 19
-bss_bytes = 10
-kernel_ms = 0.0411
+instructions = 1604
+memory_operands = 363
+code_bytes = 546
+data_bytes = 44
+bss_bytes = 30

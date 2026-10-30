@@ -1,0 +1,9 @@
+[package]
+name = "llrm-env"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The one reading of an LLRM_* switch"
+
+# No dependencies, so llrm-mir (which may depend on nothing else) and llrm-support both use it.
+[dependencies]

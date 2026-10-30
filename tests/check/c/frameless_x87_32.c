@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -O1 -march=i486 -S -o /dev/stdout
+// RUN: llrm-cc %s -m32 -mabi=sysv -O1 -march=i486 -S -o /dev/stdout
 // x87 control-word and register-exchange instructions leave the stack pointer alone: a function using them keeps no frame register.
 // `fnstcw` and `fxch` were refused, so every float-to-integer conversion kept `push ebp; mov ebp, esp` (bench/recfloat).
 extern double g(double, double);

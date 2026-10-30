@@ -191,7 +191,7 @@ The caps are alike (100 writes in llrm's walk, 100 in LLVM's), so caps are not t
 
 ## Measured
 
-Input `tools/ladder/gen.py mem 200` and `loop 200`, `clang -O2 -m32 -march=i486`; LLVM `opt -passes='default<O2>'` under callgrind (inclusive per pass), llrm `LLRM_DEBUG=time` (inclusive, runs in brackets).
+Input `tools/ladder/ladder_gen.py mem 200` and `loop 200`, `clang -O2 -m32 -march=i486`; LLVM `opt -passes='default<O2>'` under callgrind (inclusive per pass), llrm `LLRM_DEBUG=time` (inclusive, runs in brackets).
 
 | pass family | LLVM mem | llrm mem | LLVM loop | llrm loop |
 |---|---:|---:|---:|---:|

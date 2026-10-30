@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/parcopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/parcopy.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/parcopy.rs sha256:6003e8fd564feb8c4fda6cd04285f15b69a436fc6384e4c3bfc695ed54faa2f4 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/parcopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/parcopy.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/parcopy.rs sha256:a9147035ff11d709893452d3c78bb94d2c37546a8d8f0d9c6696d33b535ea8b0 -->
 
 # parcopy
 

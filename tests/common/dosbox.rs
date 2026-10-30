@@ -18,7 +18,7 @@ use std::time::Duration;
 
 /// The DOSBox-X this crate builds, beside the compiler binaries.
 pub fn binary() -> PathBuf {
-    Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().join("dosbox-x")
+    Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("dosbox-x")
 }
 
 /// A test that cannot run says so on stderr, and fails where `require` names an
@@ -31,7 +31,7 @@ pub fn skipped(
     // Written to the stderr itself, which the harness does not capture: seen
     // when the test passes.
     let _ = Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
-    assert!(std::env::var_os(require).is_none(), "{require} is set, and: {reason}");
+    assert!(!llrm_codegen::support::env_set(require), "{require} is set, and: {reason}");
 }
 
 fn conf(

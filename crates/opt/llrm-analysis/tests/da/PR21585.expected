@@ -1,0 +1,17 @@
+== 
+@i32_subscript
+  none!
+  anti [*|<]!
+  output [S]!
+@t
+  input [S]!
+  none!
+  output [*]!
+@i16_wrap
+  input [*]!
+  anti [*|<]!
+  output [*]!
+@i8_stride_wrap
+  input [S]!
+  none!
+  none!

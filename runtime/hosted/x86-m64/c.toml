@@ -1,0 +1,5 @@
+# C's runtime on hosted x86-64 (Linux): libc, linked by the system's driver.
+
+# Library routines it has, under the names the ABI gives them (`*` in the convention's symbol): the compiler calls them for a copy
+# or a fill it does not do inline, and for a move whose direction no pass proved (the pin's getMemmove).
+libcalls = ["memcpy", "memmove", "memset"]

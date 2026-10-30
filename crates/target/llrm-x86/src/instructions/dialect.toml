@@ -1,0 +1,42 @@
+# What the reader of x86.instr must know: see llrm_target::instr::Dialect.
+file = "x86.instr"
+registers = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "es", "ds", "fs", "gs", "ss", "ah"]
+widths = [8, 16, 32, 64, 128]
+# Each row ends in iced's Code name.
+assembler_column = true
+# What a rule's `any` flag reads.
+arithmetic = ["OF", "SF", "ZF", "AF", "CF", "PF"]
+
+# `{cc}` expands to these, in iced's spelling, each with the flags it tests.
+conditions = [
+    { name = "o", flags = ["OF"] },
+    { name = "no", flags = ["OF"] },
+    { name = "b", flags = ["CF"] },
+    { name = "ae", flags = ["CF"] },
+    { name = "e", flags = ["ZF"] },
+    { name = "ne", flags = ["ZF"] },
+    { name = "be", flags = ["CF", "ZF"] },
+    { name = "a", flags = ["CF", "ZF"] },
+    { name = "s", flags = ["SF"] },
+    { name = "ns", flags = ["SF"] },
+    { name = "p", flags = ["PF"] },
+    { name = "np", flags = ["PF"] },
+    { name = "l", flags = ["SF", "OF"] },
+    { name = "ge", flags = ["SF", "OF"] },
+    { name = "le", flags = ["ZF", "SF", "OF"] },
+    { name = "g", flags = ["ZF", "SF", "OF"] },
+]
+
+# RflagsBits.
+[flags]
+OF = 0x1
+SF = 0x2
+ZF = 0x4
+AF = 0x8
+CF = 0x10
+PF = 0x20
+DF = 0x40
+C0 = 0x400
+C1 = 0x800
+C2 = 0x1000
+C3 = 0x2000

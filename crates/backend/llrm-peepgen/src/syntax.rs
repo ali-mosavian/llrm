@@ -349,6 +349,13 @@ impl Parser<'_> {
         }
     }
 
+    /// A number, negative where a `-` leads it: an immediate literal.
+    fn literal(&mut self) -> Result<i64, String> {
+        let negative = self.eat("-");
+        let value = self.int()?;
+        Ok(if negative { -value } else { value })
+    }
+
     fn slot(
         &mut self,
         sigil: &str,
@@ -519,7 +526,7 @@ impl Parser<'_> {
 
     fn operand(&mut self) -> Result<OperandPat, String> {
         if self.eat("#") {
-            let value = self.int()?;
+            let value = self.literal()?;
             let width = if self.eat(":") { Some(self.bits()?) } else { None };
             return Ok(OperandPat::Lit { value, width });
         }
@@ -605,7 +612,7 @@ impl Parser<'_> {
                 }
                 separated = false;
                 list.push(if self.eat("#") {
-                    let value = self.int()?;
+                    let value = self.literal()?;
                     self.expect(":")?;
                     OpExpr::Lit(value, self.bits()?)
                 } else if matches!(self.peek_at(1), Some(Tok::Punct("("))) {

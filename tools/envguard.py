@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 
-FAMILIES = ("LLRM_CHECK_", "LLRM_EXP_")
+FAMILIES = ("LLRM_CHECK_", "LLRM_EXP_", "LLRM_NO_")
 
 
 def stray(env: dict | None = None, allow: tuple[str, ...] | list[str] = ()) -> list[str]:

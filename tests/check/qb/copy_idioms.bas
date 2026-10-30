@@ -1,7 +1,8 @@
 ' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 ' Loops people write that are one string move, and look-alikes that are not.
+' The pin keeps a word fill and a descending copy as counted loops; only the ascending copy and the byte fill are string moves.
 ' CHECK-LABEL: SETPAL proc
-' CHECK: rep stosw
+' CHECK-NOT: rep
 ' CHECK: SETPAL endp
 ' CHECK-LABEL: DOCOPY proc
 ' CHECK: rep movsd
@@ -11,9 +12,8 @@
 ' CHECK: rep movsd
 ' CHECK: SCROLLUP endp
 ' CHECK-LABEL: SCROLLDOWN proc
-' CHECK: std
-' CHECK: rep movsd
-' CHECK: cld
+' CHECK-NOT: rep
+' CHECK-NOT: std
 ' CHECK: SCROLLDOWN endp
 ' CHECK-LABEL: SMEAR proc
 ' CHECK-NOT: rep
@@ -21,14 +21,18 @@
 ' CHECK-LABEL: CHANGED proc
 ' CHECK-NOT: rep
 ' CHECK: CHANGED endp
+' The pin distributes it into llvm.memset (c) and llvm.memcpy (a <- b), as LoopIdiomRecognize does a loop of independent stores: two string moves.
 ' CHECK-LABEL: TWOSTORES proc
-' CHECK-NOT: rep
+' CHECK: rep stos
+' CHECK: rep movs
 ' CHECK: TWOSTORES endp
 ' CHECK-LABEL: STRIDES proc
 ' CHECK-NOT: rep
 ' CHECK: STRIDES endp
+' The pin makes b = 0 and a = b two llvm.memset calls (the second store reads what the first wrote, a constant).
 ' CHECK-LABEL: WRITTEN proc
-' CHECK-NOT: rep
+' CHECK: rep stos
+' CHECK: rep stos
 ' CHECK: WRITTEN endp
 ' CHECK-LABEL: BLK proc
 ' CHECK: rep movsd

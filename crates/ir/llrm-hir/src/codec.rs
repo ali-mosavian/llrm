@@ -246,8 +246,23 @@ impl _Plain for model::IndirectPlace {
 }
 plain_record!(Member, None, owner => "owner", offset => "offset");
 plain_record!(DescriptorPlace, Some("descriptor"), base => "base", field => "field", r#type => "type");
-plain_record!(Asm, None, code => "code", inputs => "inputs", outputs => "outputs", clobbers => "clobbers",
-    memory => "memory");
+plain_record!(AsmFixup, None, at => "at", kind => "kind", addend => "addend");
+// `fixups` only where the block names a symbol: every other block writes as
+// before.
+impl _Plain for model::Asm {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("code".to_owned(), self.code._plain());
+        out.insert("inputs".to_owned(), self.inputs._plain());
+        out.insert("outputs".to_owned(), self.outputs._plain());
+        out.insert("clobbers".to_owned(), self.clobbers._plain());
+        out.insert("memory".to_owned(), self.memory._plain());
+        if !self.fixups.is_empty() {
+            out.insert("fixups".to_owned(), self.fixups._plain());
+        }
+        Json::Dict(out)
+    }
+}
 
 /// Only an inline block names `asm`, and only a promised op `nowrap`: every
 /// other instruction is written as before they existed.
@@ -501,6 +516,9 @@ impl _Plain for model::Program {
         out.insert("float_mode".to_owned(), self.float_mode._plain());
         if self.float_semantics != model::FloatSemantics::Declared {
             out.insert("float_semantics".to_owned(), self.float_semantics._plain());
+        }
+        if self.run_time_module {
+            out.insert("run_time_module".to_owned(), self.run_time_module._plain());
         }
         if !self.zeroed_locals {
             out.insert("zeroed_locals".to_owned(), self.zeroed_locals._plain());
@@ -897,6 +915,7 @@ made_records!(
     Place,
     Value,
     Asm,
+    AsmFixup,
     Instruction,
     Terminator,
     Block,
@@ -1180,6 +1199,7 @@ static ASM: _Record = _Record {
         ("outputs", _Hint::Tuple(&_Hint::Str), true),
         ("clobbers", _Hint::Tuple(&_Hint::Str), true),
         ("memory", _Hint::Bool, true),
+        ("fixups", _Hint::Tuple(&_Hint::Record(&ASM_FIXUP)), false),
     ],
     build: |args| {
         _object(model::Asm {
@@ -1188,6 +1208,19 @@ static ASM: _Record = _Record {
             outputs: _required(args, "outputs")?,
             clobbers: _required(args, "clobbers")?,
             memory: _required(args, "memory")?,
+            fixups: _default(args, "fixups", Vec::new())?,
+        })
+    },
+};
+
+static ASM_FIXUP: _Record = _Record {
+    name: "AsmFixup",
+    fields: &[("at", _Hint::Int, true), ("kind", _Hint::Str, true), ("addend", _Hint::Int, true)],
+    build: |args| {
+        _object(model::AsmFixup {
+            at: _required(args, "at")?,
+            kind: _required(args, "kind")?,
+            addend: _required(args, "addend")?,
         })
     },
 };
@@ -1403,6 +1436,7 @@ static DATA_OBJECT: _Record = _Record {
             linkage: _default(args, "linkage", model::DataLinkage::Internal)?,
             address: _default(args, "address", model::AddressKind::Near)?,
             addressed: _default(args, "addressed", true)?,
+            exposed: false,
             segment: _default(args, "segment", None)?,
         })
     },
@@ -1673,6 +1707,7 @@ static PROGRAM: _Record = _Record {
         ("float_mode", enum_hint!(FloatMode), false),
         ("float_semantics", enum_hint!(FloatSemantics), false),
         ("zeroed_locals", _Hint::Bool, false),
+        ("run_time_module", _Hint::Bool, false),
         ("descriptor_word", _Hint::Int, false),
         ("frames", enum_hint!(Frames), false),
         ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
@@ -1692,6 +1727,7 @@ static PROGRAM: _Record = _Record {
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
             float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
             zeroed_locals: _default(args, "zeroed_locals", true)?,
+            run_time_module: _default(args, "run_time_module", false)?,
             descriptor_word: _default(args, "descriptor_word", 2)?,
             frames: _default(args, "frames", model::Frames::Runtime)?,
             promises: _default(args, "promises", model::RuntimePromises::default())?,

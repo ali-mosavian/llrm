@@ -3,7 +3,7 @@
 //! peephole rules as Rust (and `effect_rows`, the effect rows a data crate
 //! carries). `core` is the path of the crate whose `backend::isel::api` and
 //! `backend::peep` the generated code is written against: `crate` inside
-//! `llrm-core`, `llrm_core` outside it.
+//! `llrm-codegen`, `llrm_codegen` outside it.
 
 use std::path::{Path, PathBuf};
 
@@ -11,6 +11,7 @@ use crate::generate;
 
 /// The family's files every target's own are read after.
 pub struct Family {
+    pub dialect: crate::description::Dialect,
     pub forms: String,
     pub patterns: String,
     pub peephole: String,
@@ -24,11 +25,24 @@ fn read(path: &Path) -> String {
 /// The family's forms, selection patterns and peephole rules, under `dir`
 /// (`llrm-x86`).
 pub fn family(dir: &Path) -> Family {
+    let dialect = dialect_of(dir);
     Family {
-        forms: read(&dir.join("src/instructions/x86.instr")),
+        forms: read(&dir.join("src/instructions").join(&dialect.file)),
         patterns: read(&dir.join("src/isel/family.isel")),
         peephole: read(&dir.join("src/isel/peephole.peep")),
+        dialect,
     }
+}
+
+/// A target that is a family of its own (arm64): its dialect, and no family
+/// patterns, rules or forms before its own.
+pub fn standalone(dir: &Path) -> Family {
+    Family { dialect: dialect_of(dir), forms: String::new(), patterns: String::new(), peephole: String::new() }
+}
+
+fn dialect_of(dir: &Path) -> crate::description::Dialect {
+    crate::description::Dialect::parse(&read(&dir.join("src/instructions/dialect.toml")))
+        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// What `target` wrote and returns for the including crate.
@@ -37,8 +51,9 @@ pub struct Built {
     pub name: String,
     /// `x86_m16`.
     pub ident: String,
-    /// The code width the target's `datalayout.toml` names.
-    pub mode: String,
+    /// The code width the target's `datalayout.toml` names; none for a target
+    /// without one (arm64 has one width).
+    pub mode: Option<String>,
     /// The module `<ident>` of the target's rules: the generated functions
     /// and the `RULES` that name them.
     pub rules: String,
@@ -56,20 +71,26 @@ pub fn target(
     let directory = dir.file_name().and_then(|one| one.to_str()).expect("a name");
     let name = directory.strip_prefix("llrm-").unwrap_or(directory).to_owned();
     let ident = name.replace('-', "_");
-    let (patterns, forms) = (dir.join("src/isel/patterns.isel"), dir.join("src/instructions/x86.instr"));
+    let (patterns, forms) =
+        (dir.join("src/isel/patterns.isel"), dir.join("src/instructions").join(&family.dialect.file));
     let forms = format!("{}\n{}", family.forms, read(&forms));
     let patterns = spliced(&family.patterns, &read(&patterns));
-    let generated = generate(&forms, &patterns, &name, core).unwrap_or_else(|error| panic!("{name}: {error}"));
+    let generated =
+        generate(&forms, &patterns, &name, core, &family.dialect).unwrap_or_else(|error| panic!("{name}: {error}"));
     std::fs::write(out.join(format!("isel_{ident}.rs")), generated.code).unwrap();
-    let layout = read(&dir.join("src/machines/datalayout.toml"));
+    let layout = dir.join("src/machines/datalayout.toml");
     let mode = layout
-        .lines()
-        .find_map(|line| line.strip_prefix("mode = "))
-        .unwrap_or_else(|| panic!("{name}: datalayout.toml has no `mode`"))
-        .trim()
-        .to_owned();
+        .is_file()
+        .then(
+            || read(&layout)
+                .lines()
+                .find_map(|line| line.strip_prefix("mode = "))
+                .unwrap_or_else(|| panic!("{name}: datalayout.toml has no `mode`"))
+                .trim()
+                .to_owned(),
+        );
     let reader = |path: &Path| read(path);
-    let rules = peephole(dir, &ident, &forms, out, &reader, groups, &family.peephole, core);
+    let rules = peephole(dir, &ident, &forms, out, &reader, groups, &family.peephole, core, &family.dialect);
     Built { name, ident, mode, rules }
 }
 
@@ -79,6 +100,13 @@ impl Built {
     /// for every target.
     pub fn select_source(&self) -> String {
         let ident = &self.ident;
+        let mode = self
+            .mode
+            .as_ref()
+            .map_or(
+                String::new(),
+                |mode| format!("\n/// The code width of the target, in bits.\npub const MODE: u32 = {mode};\n"),
+            );
         format!(
             "{rules}
 pub use {ident}::RULES;
@@ -89,12 +117,8 @@ mod selection {{
     include!(concat!(env!(\"OUT_DIR\"), \"/isel_{ident}.rs\"));
 }}
 pub use selection::SELECTOR;
-
-/// The code width of the target, in bits.
-pub const MODE: u32 = {mode};
-",
+{mode}",
             rules = self.rules,
-            mode = self.mode
         )
     }
 }
@@ -104,25 +128,32 @@ pub fn targets(dir: &Path) -> Vec<PathBuf> {
     let mut found: Vec<_> = std::fs::read_dir(dir)
         .expect("crates/target")
         .map(|entry| entry.expect("a directory entry").path())
-        .filter(|one| one.join("src/isel/patterns.isel").is_file())
+        // A directory with a dialect of its own is a family of its own.
+        .filter(|one| {
+            one.join("src/isel/patterns.isel").is_file() && !one.join("src/instructions/dialect.toml").is_file()
+        })
         .collect();
     found.sort();
     found
 }
 
-/// The forms of the target in `dir`: the family's, then its own `x86.instr`.
+/// The forms of the target in `dir`: the family's, then its own (the dialect's
+/// file).
 pub fn forms(
     dir: &Path,
     family: &Family,
 ) -> String {
-    format!("{}\n{}", family.forms, read(&dir.join("src/instructions/x86.instr")))
+    format!("{}\n{}", family.forms, read(&dir.join("src/instructions").join(&family.dialect.file)))
 }
 
 /// `row(name, dests, sources)` for a target's `x86.instr`: what each mnemonic's
 /// forms read and write beyond their operands, and the flags (the table's, from
 /// iced's Code of the mnemonic's forms).
-pub fn effect_rows(forms: &str) -> String {
-    let rows = crate::description::parse(forms).unwrap_or_else(|error| panic!("{error}"));
+pub fn effect_rows(
+    forms: &str,
+    dialect: &crate::description::Dialect,
+) -> String {
+    let rows = crate::description::parse(forms, dialect).unwrap_or_else(|error| panic!("{error}"));
     let mut by_key: Vec<((String, usize, usize), Vec<String>)> = Vec::new();
     for form in &rows {
         let (flags_read, flags_written) = (form.flags_read, form.flags_written);
@@ -183,6 +214,7 @@ fn peephole(
     groups: &[(String, bool)],
     family: &str,
     core: &str,
+    dialect: &crate::description::Dialect,
 ) -> String {
     let rules = dir.join("src/isel/peephole.peep");
     // The family's rules, then the target's own where it has any.
@@ -192,12 +224,11 @@ fn peephole(
     } else {
         String::new()
     };
-    let made = llrm_peepgen::generate(forms, "x86.instr", &format!("{family}\n{own}"), "peephole.peep").unwrap_or_else(
-        |error| {
+    let made = llrm_peepgen::generate(forms, &dialect.file, &format!("{family}\n{own}"), "peephole.peep", dialect)
+        .unwrap_or_else(|error| {
             eprintln!("{error}");
             std::process::exit(1);
-        },
-    );
+        });
     for (group, _, _) in &made.groups {
         assert!(
             groups.iter().any(|(name, _)| name == group),
@@ -309,4 +340,57 @@ pub fn spliced(
         sections.iter().map(|(name, _)| *name).collect::<Vec<_>>()
     );
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DIALECT: &str = "file = \"arm64.instr\"\nregisters = [\"x0\", \"x1\", \"sp\"]\nwidths = [32, 64]\n\
+                           assembler_column = false\nconditions = [{ name = \"eq\", flags = [\"Z\"] }]\n\
+                           [flags]\nN = 8\nZ = 4\nC = 2\nV = 1\n";
+
+    fn directory(
+        name: &str,
+        patterns: bool,
+    ) -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(name);
+        std::fs::create_dir_all(dir.join("src/instructions")).unwrap();
+        std::fs::create_dir_all(dir.join("src/isel")).unwrap();
+        std::fs::write(dir.join("src/instructions/dialect.toml"), DIALECT).unwrap();
+        std::fs::write(dir.join("src/instructions/arm64.instr"), "neg unary r/r 32,64 alu - - - -/-\n").unwrap();
+        if patterns {
+            std::fs::write(dir.join("src/isel/patterns.isel"), "pattern any\n  match add.i32(a, b)\n  nothing\nend\n")
+                .unwrap();
+        }
+        root
+    }
+
+    /// A target that is a family of its own (arm64) was refused: `target` read
+    /// `x86.instr`, wanted the x86 family's files and a `datalayout.toml` with
+    /// a code width.
+    #[test]
+    fn a_target_with_its_own_dialect_generates_with_no_family_and_no_mode() {
+        let root = directory("llrm-arm64", true);
+        let dir = root.path().join("llrm-arm64");
+        let out = tempfile::tempdir().unwrap();
+        let built = target(&dir, &standalone(&dir), &[], "crate", out.path());
+        assert_eq!((built.name.as_str(), built.mode.as_deref()), ("arm64", None));
+        assert!(out.path().join("isel_arm64.rs").is_file());
+        assert!(!built.select_source().contains("MODE"));
+    }
+
+    /// `targets` listed arm64 with the x86 family's targets, so core's build
+    /// generated it against `x86.instr`.
+    #[test]
+    fn the_family_targets_leave_out_a_directory_with_its_own_dialect() {
+        let root = directory("llrm-arm64", true);
+        let plain = root.path().join("llrm-x86-m99/src/isel");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("patterns.isel"), "").unwrap();
+        let names: Vec<_> =
+            targets(root.path()).iter().map(|one| one.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["llrm-x86-m99"]);
+    }
 }

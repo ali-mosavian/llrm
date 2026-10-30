@@ -1,0 +1,117 @@
+val cases 0 cr=i32:full-set cst=- pn=-
+val cases 1 cr=i32:[2,4) cst=- pn=-
+val cases 2 cr=i32:[7,8) cst=i32:7 pn=-
+val cases 3 cr=i32:[6,4) cst=- pn=-
+rval cases 3 cr=i32:[6,4)
+rval cases 2 cr=i32:[7,8)
+rval cases 1 cr=i32:[2,4)
+edge cases 0 3 0 cr=i32:[3,1)
+edge cases 0 1 0 cr=i32:[1,3)
+edge cases 0 2 0 cr=i32:[5,6)
+use cases 0 0 cr=i32:full-set
+use cases 1 0 cr=i32:[1,3)
+use cases 2 0 cr=i32:[2,4)
+use cases 3 0 cr=i32:[5,6)
+use cases 4 0 cr=i32:[7,8)
+use cases 5 0 cr=i32:[3,1)
+use cases 6 0 cr=i32:[6,4)
+lat cases arg0 bb0 overdefined
+lat cases arg0 bb1 constantrange<1, 3>
+lat cases arg0 bb2 constantrange<5, 6>
+lat cases arg0 bb3 constantrange<3, 1>
+lat cases i0 bb0 overdefined
+lat cases i0 bb1 overdefined
+lat cases i0 bb2 overdefined
+lat cases i0 bb3 overdefined
+lat cases i1 bb1 constantrange<2, 4>
+lat cases i2 bb1 overdefined
+lat cases i3 bb2 constantrange<7, 8>
+lat cases i4 bb2 overdefined
+lat cases i5 bb3 constantrange<6, 4>
+lat cases i6 bb3 overdefined
+val foldable 0 cr=i8:full-set cst=- pn=-
+val foldable 1 cr=i32:[0,256) cst=- pn=-
+val foldable 2 cr=i32:[3,4) cst=i32:3 pn=-
+val foldable 3 cr=i32:[7,8) cst=i32:7 pn=-
+val foldable 4 cr=i32:[0,256) cst=- pn=-
+rval foldable 4 cr=i32:[0,256)
+rval foldable 3 cr=i32:[7,8)
+rval foldable 2 cr=i32:[3,4)
+rval foldable 1 cr=i32:[0,256)
+edge foldable 0 3 1 cr=i32:[0,256)
+edge foldable 0 1 1 cr=i32:[3,4)
+edge foldable 0 2 1 cr=i32:[7,8)
+use foldable 0 0 cr=i8:full-set
+use foldable 1 0 cr=i8:full-set
+use foldable 2 0 cr=i32:[3,4)
+use foldable 3 0 cr=i32:[3,4)
+use foldable 4 0 cr=i32:[7,8)
+use foldable 5 0 cr=i32:[7,8)
+use foldable 6 0 cr=i32:[0,256)
+use foldable 7 0 cr=i32:[0,256)
+lat foldable arg0 bb0 overdefined
+lat foldable arg0 bb1 constantrange<3, 4>
+lat foldable arg0 bb2 constantrange<7, 8>
+lat foldable arg0 bb3 constantrange<8, 7>
+lat foldable i0 bb0 constantrange<0, 256>
+lat foldable i0 bb1 constantrange<3, 4>
+lat foldable i0 bb2 constantrange<7, 8>
+lat foldable i0 bb3 constantrange<0, 256>
+lat foldable i1 bb0 overdefined
+lat foldable i1 bb1 overdefined
+lat foldable i1 bb2 overdefined
+lat foldable i1 bb3 overdefined
+lat foldable i2 bb1 constantrange<3, 4>
+lat foldable i3 bb1 overdefined
+lat foldable i4 bb2 constantrange<7, 8>
+lat foldable i5 bb2 overdefined
+lat foldable i6 bb3 constantrange<0, 256>
+lat foldable i7 bb3 overdefined
+val foldable_binop 0 cr=i32:full-set cst=- pn=-
+val foldable_binop 1 cr=i32:full-set cst=- pn=-
+val foldable_binop 2 cr=i32:[12,13) cst=i32:12 pn=-
+val foldable_binop 3 cr=i32:[400,401) cst=i32:400 pn=-
+rval foldable_binop 3 cr=i32:[400,401)
+rval foldable_binop 2 cr=i32:[12,13)
+rval foldable_binop 1 cr=i32:full-set
+edge foldable_binop 0 1 1 cr=i32:[12,13)
+edge foldable_binop 0 2 1 cr=i32:[400,401)
+use foldable_binop 0 0 cr=i32:full-set
+use foldable_binop 1 0 cr=i32:full-set
+use foldable_binop 2 0 cr=i32:[12,13)
+use foldable_binop 3 0 cr=i32:[12,13)
+use foldable_binop 4 0 cr=i32:[400,401)
+use foldable_binop 5 0 cr=i32:[400,401)
+lat foldable_binop arg0 bb0 overdefined
+lat foldable_binop arg0 bb1 constantrange<3, 4>
+lat foldable_binop arg0 bb2 constantrange<100, 101>
+lat foldable_binop arg0 bb3 constantrange<101, 100>
+lat foldable_binop i0 bb0 overdefined
+lat foldable_binop i0 bb1 constantrange<12, 13>
+lat foldable_binop i0 bb2 constantrange<400, 401>
+lat foldable_binop i0 bb3 overdefined
+lat foldable_binop i1 bb0 overdefined
+lat foldable_binop i1 bb1 overdefined
+lat foldable_binop i1 bb2 overdefined
+lat foldable_binop i1 bb3 overdefined
+lat foldable_binop i2 bb1 constantrange<12, 13>
+lat foldable_binop i3 bb1 overdefined
+lat foldable_binop i4 bb2 constantrange<400, 401>
+lat foldable_binop i5 bb2 overdefined
+lat foldable_binop i6 bb3 overdefined
+val default_only 0 cr=i32:full-set cst=- pn=-
+val default_only 1 cr=i32:[0,101) cst=- pn=-
+rval default_only 1 cr=i32:[0,101)
+edge default_only 0 2 0 cr=i32:[1,0)
+use default_only 0 0 cr=i32:full-set
+use default_only 2 1 cr=i32:[1,0)
+use default_only 3 0 cr=i32:[0,101)
+lat default_only arg0 bb0 overdefined
+lat default_only arg0 bb1 constantrange<0, 1>
+lat default_only arg0 bb2 constantrange<1, 0>
+lat default_only i0 bb0 overdefined
+lat default_only i0 bb1 overdefined
+lat default_only i0 bb2 overdefined
+lat default_only i1 bb1 overdefined
+lat default_only i2 bb2 constantrange<0, 101>
+lat default_only i3 bb2 overdefined

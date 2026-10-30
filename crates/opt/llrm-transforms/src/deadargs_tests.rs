@@ -234,3 +234,24 @@ fn a_noipa_routine_keeps_its_unread_parameter() {
     let after = run(&text("noipa"));
     assert!(after.contains("call i16 @f(i16 %x, i16 12)"), "{after}");
 }
+
+/// A call typed `i16` of a function that returns `void` (C's call through a
+/// function pointer, typed int, once the pointer folded to the function) was
+/// retyped to the function's type with its `i16` result kept: "call in block 1
+/// returns i16, not its type's void", far_pointer_call at -O2 under
+/// LLRM_VERIFY=1. LLVM's DeadArgumentElimination leaves a function whose call
+/// type is not its own alone.
+#[test]
+fn a_function_called_with_another_type_keeps_its_parameters() {
+    let after = run("define internal void @f(i16 %unused) {
+b0:
+  ret void
+}
+define i16 @top() {
+b0:
+  %r = call i16 @f(i16 12)
+  ret i16 0
+}
+");
+    assert!(after.contains("call i16 @f(i16 12)"), "{after}");
+}

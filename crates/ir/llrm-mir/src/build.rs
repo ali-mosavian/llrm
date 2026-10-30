@@ -24,7 +24,7 @@ impl Module {
         }
         let id = GlobalId(self.globals.len() as u32);
         self.globals.push(GlobalValue {
-            name: Some(name.to_owned()),
+            name: name.to_owned().into(),
             linkage,
             unnamed_addr: Default::default(),
             address_space: 0,
@@ -41,18 +41,7 @@ impl Module {
         ty: TypeId,
         linkage: Linkage,
     ) -> Result<GlobalId, String> {
-        let Type::Function { parameters, .. } = self.context.types.get(ty).clone() else {
-            return Err(format!("@{name}'s type is no function's"));
-        };
-        let void = self.context.types.void();
-        let mut function = Function::new(ty, void);
-        for (at, ty) in parameters.into_iter().enumerate() {
-            function.parameters.push(ValueId(function.values.len() as u32));
-            function.values.push(ValueData { ty, name: None, def: ValueDef::Argument(at as u32) });
-            function.value_uses.push(Vec::new());
-            function.parameter_attrs.push(Vec::new());
-        }
-        intrinsics::declare(&mut function, name);
+        let function = function_declaration(&mut self.context, name, ty)?;
         self.add(name, linkage, GlobalKind::Function(Box::new(function)))
     }
 
@@ -79,7 +68,13 @@ impl Module {
                 let Some(ty) = self.context.types.imported(&from.context.types, variable.ty) else { return Ok(None) };
                 self.add_variable(
                     name,
-                    GlobalVariable { ty, constant: variable.constant, initializer: None, align: variable.align },
+                    GlobalVariable {
+                        externally_initialized: false,
+                        ty,
+                        constant: variable.constant,
+                        initializer: None,
+                        align: variable.align,
+                    },
                     Linkage::External,
                 )?
             }
@@ -122,6 +117,31 @@ impl Module {
             pending: Vec::new(),
         }
     }
+}
+
+/// The declaration `@name` of type `ty` is, as `Module::add_function` makes it
+/// and a pass that declares a function sees it before the module has it.
+pub fn function_declaration(
+    context: &Context,
+    name: &str,
+    ty: TypeId,
+) -> Result<Function, String> {
+    let Type::Function { parameters, .. } = context.types.get(ty).clone() else {
+        return Err(format!("@{name}'s type is no function's"));
+    };
+    let void = context.types.void();
+    let mut function = Function::new(ty, void);
+    function.parameters.reserve(parameters.len());
+    function.values.reserve(parameters.len());
+    function.parameter_attrs.reserve(parameters.len());
+    for (at, ty) in parameters.into_iter().enumerate() {
+        function.parameters.push(ValueId(function.values.len() as u32));
+        function.values.push(ValueData { ty, name: None, def: ValueDef::Argument(at as u32) });
+        function.uses.push_value();
+        function.parameter_attrs.push(Vec::new());
+    }
+    intrinsics::declare(&mut function, &context.types, name);
+    Ok(function)
 }
 
 /// Appends instructions at the end of one block.
@@ -227,7 +247,7 @@ impl Builder<'_> {
         node: MetadataId,
     ) {
         let block = self.block.expect("a position");
-        let inst = *self.function.block(block).instructions().last().expect("an emitted instruction");
+        let inst = self.function.block(block).last().expect("an emitted instruction");
         self.function.annotate(inst, kind, node);
     }
 
@@ -238,7 +258,7 @@ impl Builder<'_> {
         attr: crate::opcode::Attribute,
     ) {
         let block = self.block.expect("a position");
-        let inst = *self.function.block(block).instructions().last().expect("an emitted call");
+        let inst = self.function.block(block).last().expect("an emitted call");
         self.function.add_argument_attr(inst, index, attr);
     }
 
@@ -313,6 +333,11 @@ impl Builder<'_> {
         name: &str,
     ) -> Operand {
         let ty = self.context.types.int(1);
+        if let (Operand::Constant(x), Operand::Constant(y)) = (a, b)
+            && let Some(folded) = constfold::compare_float(self.context, predicate, x, y)
+        {
+            return Operand::Constant(folded);
+        }
         self.value(Opcode::FCmp(predicate), ty, vec![a, b], Flags::default(), name)
     }
 
@@ -372,10 +397,7 @@ impl Builder<'_> {
             .create_instruction(opcode, ty, Vec::new(), Flags::default(), Some(name).filter(|one| !one.is_empty()));
         let first = self
             .function
-            .block(entry)
-            .instructions()
-            .iter()
-            .copied()
+            .iter_block(entry)
             .find(|&one| !matches!(self.function.instruction(one).opcode, Opcode::Alloca { .. }));
         let position = first.map_or(Position::End(entry), Position::Before);
         self.function.insert(inst, position).expect("the entry block");

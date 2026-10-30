@@ -1,0 +1,506 @@
+use llrm_nib::lexer::TokenKind;
+use crate::ast::*;
+use crate::nib_tokens::Tok;
+
+
+grammar;
+
+extern {
+    type Location = usize;
+    type Error = crate::nib_tokens::Never;
+
+    enum Tok {
+        "ident" => Tok::Plain(TokenKind::Identifier(<String>)),
+        "int" => Tok::Plain(TokenKind::Integer(<i64>)),
+        "float" => Tok::Plain(TokenKind::Float(<String>)),
+        "char" => Tok::Plain(TokenKind::Character(<u8>)),
+        "string" => Tok::Plain(TokenKind::String(<Vec<u8>>)),
+        "fstring" => Tok::Plain(TokenKind::FString(<Vec<u8>>)),
+        "fn" => Tok::Plain(TokenKind::Fn),
+        "type" => Tok::Plain(TokenKind::Type),
+        "fixed" => Tok::Plain(TokenKind::Fixed),
+        "fraction" => Tok::Plain(TokenKind::Fraction),
+        "struct" => Tok::Plain(TokenKind::Struct),
+        "let" => Tok::Plain(TokenKind::Let),
+        "mut" => Tok::Plain(TokenKind::Mut),
+        "const" => Tok::Plain(TokenKind::Const),
+        "var" => Tok::Plain(TokenKind::Var),
+        "loop" => Tok::Plain(TokenKind::Loop),
+        "match" => Tok::Plain(TokenKind::Match),
+        "enum" => Tok::Plain(TokenKind::Enum),
+        "bits" => Tok::Plain(TokenKind::Bits),
+        "with" => Tok::Plain(TokenKind::With),
+        "as" => Tok::Plain(TokenKind::As),
+        "import" => Tok::Plain(TokenKind::Import),
+        "pub" => Tok::Plain(TokenKind::Pub),
+        "extern" => Tok::Plain(TokenKind::Extern),
+        "protocol" => Tok::Plain(TokenKind::Protocol),
+        "yield" => Tok::Plain(TokenKind::Yield),
+        "unsafe" => Tok::Plain(TokenKind::Unsafe),
+        "asm" => Tok::Plain(TokenKind::Asm),
+        "asmbody" => Tok::Plain(TokenKind::AsmBody(_)),
+        "case" => Tok::Plain(TokenKind::Case),
+        "return" => Tok::Plain(TokenKind::Return),
+        "if" => Tok::Plain(TokenKind::If),
+        "else" => Tok::Plain(TokenKind::Else),
+        "while" => Tok::Plain(TokenKind::While),
+        "for" => Tok::Plain(TokenKind::For),
+        "in" => Tok::Plain(TokenKind::In),
+        "break" => Tok::Plain(TokenKind::Break),
+        "continue" => Tok::Plain(TokenKind::Continue),
+        "true" => Tok::Plain(TokenKind::True),
+        "false" => Tok::Plain(TokenKind::False),
+        "is" => Tok::Plain(TokenKind::Is),
+        "char_t" => Tok::Plain(TokenKind::Char),
+        "i8" => Tok::Plain(TokenKind::I8),
+        "u8" => Tok::Plain(TokenKind::U8),
+        "i16" => Tok::Plain(TokenKind::I16),
+        "u16" => Tok::Plain(TokenKind::U16),
+        "i32" => Tok::Plain(TokenKind::I32),
+        "u32" => Tok::Plain(TokenKind::U32),
+        "f32" => Tok::Plain(TokenKind::F32),
+        "f64" => Tok::Plain(TokenKind::F64),
+        "string_t" => Tok::Plain(TokenKind::StringType),
+        "addr" => Tok::Plain(TokenKind::Addr),
+        "bool" => Tok::Plain(TokenKind::Bool),
+        "void" => Tok::Plain(TokenKind::Void),
+        "(" => Tok::Plain(TokenKind::LeftParen),
+        ")" => Tok::Plain(TokenKind::RightParen),
+        "[" => Tok::Plain(TokenKind::LeftBracket),
+        "]" => Tok::Plain(TokenKind::RightBracket),
+        "{" => Tok::Plain(TokenKind::LeftBrace),
+        "}" => Tok::Plain(TokenKind::RightBrace),
+        "," => Tok::Plain(TokenKind::Comma),
+        "." => Tok::Plain(TokenKind::Dot),
+        ".." => Tok::Plain(TokenKind::Range),
+        ":" => Tok::Plain(TokenKind::Colon),
+        "->" => Tok::Plain(TokenKind::Arrow),
+        "=" => Tok::Plain(TokenKind::Equal),
+        "==" => Tok::Plain(TokenKind::EqualEqual),
+        "!=" => Tok::Plain(TokenKind::NotEqual),
+        "<" => Tok::Plain(TokenKind::Less),
+        "<=" => Tok::Plain(TokenKind::LessEqual),
+        ">" => Tok::Plain(TokenKind::Greater),
+        ">=" => Tok::Plain(TokenKind::GreaterEqual),
+        "+" => Tok::Plain(TokenKind::Plus),
+        "+=" => Tok::Plain(TokenKind::PlusEqual),
+        "-" => Tok::Plain(TokenKind::Minus),
+        "-=" => Tok::Plain(TokenKind::MinusEqual),
+        "*" => Tok::Plain(TokenKind::Star),
+        "*=" => Tok::Plain(TokenKind::StarEqual),
+        "&" => Tok::Plain(TokenKind::Ampersand),
+        "/" => Tok::Plain(TokenKind::Slash),
+        "/=" => Tok::Plain(TokenKind::SlashEqual),
+        "//" => Tok::Plain(TokenKind::SlashSlash),
+        "//=" => Tok::Plain(TokenKind::SlashSlashEqual),
+        "!" => Tok::Plain(TokenKind::Bang),
+        "&&" => Tok::Plain(TokenKind::AndAnd),
+        "||" => Tok::Plain(TokenKind::OrOr),
+        "?" => Tok::Plain(TokenKind::Question),
+        "?:" => Tok::Ternary,
+        "not" => Tok::Not,
+        "@" => Tok::Plain(TokenKind::At),
+        "%" => Tok::Plain(TokenKind::Percent),
+        "%=" => Tok::Plain(TokenKind::PercentEqual),
+        "&=" => Tok::Plain(TokenKind::AmpersandEqual),
+        "|" => Tok::Plain(TokenKind::Pipe),
+        "|=" => Tok::Plain(TokenKind::PipeEqual),
+        "^" => Tok::Plain(TokenKind::Caret),
+        "^=" => Tok::Plain(TokenKind::CaretEqual),
+        "~" => Tok::Plain(TokenKind::Tilde),
+        "<<" => Tok::Plain(TokenKind::ShiftLeft),
+        "<<=" => Tok::Plain(TokenKind::ShiftLeftEqual),
+        ">>" => Tok::Plain(TokenKind::ShiftRight),
+        ">>=" => Tok::Plain(TokenKind::ShiftRightEqual),
+        NL => Tok::Plain(TokenKind::Newline),
+        INDENT => Tok::Plain(TokenKind::Indent),
+        DEDENT => Tok::Plain(TokenKind::Dedent),
+        EOF => Tok::Plain(TokenKind::Eof),
+    }
+}
+
+// ---- lists ---------------------------------------------------------------
+
+Comma<T>: Vec<T> = {
+    => vec![],
+    CommaOne<T>,
+    <CommaOne<T>> ",",
+};
+
+CommaOne<T>: Vec<T> = {
+    <T> => vec![<>],
+    <mut v:CommaOne<T>> "," <e:T> => { v.push(e); v },
+};
+
+Ident: String = "ident";
+
+Dotted: Vec<String> = {
+    <Ident> => vec![<>],
+    <mut p:Dotted> "." <i:Ident> => { p.push(i); p }
+};
+
+// ---- module --------------------------------------------------------------
+
+pub Module: Module = {
+    <imports:Import*> <items:Item*> EOF => Module { imports, items }
+};
+
+Import: Import = {
+    "import" <path:Dotted> <alias:("as" <Ident>)?> NL => Import { path, alias }
+};
+
+Item: Item = {
+    <attrs:Attr*> <public:"pub"?> <decl:Decl> => Item { attrs, public: public.is_some(), decl }
+};
+
+Attr: Attr = {
+    "@" <name:AttrName> <args:("(" <Comma<Arg>> ")")?> NL => Attr { name, args: args.unwrap_or_default() }
+};
+
+AttrName: String = {
+    Ident,
+    "extern" => "extern".to_owned(),
+};
+
+Decl: Decl = {
+    <function:FnDef> => Decl::Function { far: false, function },
+    <function:FnHeader> NL => Decl::Function { far: false, function },
+    // `far fn ...` and `huge var ...`: the word is an identifier until a pass
+    // checks it, which keeps `far` and `huge` usable as names.
+    <q:Ident> <function:FnHeader> NL => Decl::Function { far: q == "far", function },
+    <name:StructHead> ":" NL INDENT <fields:Field+> DEDENT
+        => Decl::Struct { name: name.0, params: name.1, fields },
+    "bits" "struct" <name:Ident> ":" <width:Width> NL INDENT <fields:Field+> DEDENT
+        => Decl::Bits { name, width, fields },
+    "enum" <name:Ident> <params:Names> ":" <tag:Tag?> NL INDENT <variants:Variant+> DEDENT
+        => Decl::Enum { name, params, tag, variants },
+    "protocol" <name:Ident> <params:Names> ":" NL INDENT <methods:(<FnHeader> NL)*> DEDENT
+        => Decl::Protocol { name, params, methods },
+    <c:ConstDecl> => Decl::Const(c),
+    "var" <name:Ident> ":" <ty:Type> "=" <value:Expr> NL
+        => Decl::Var { huge: false, name, ty, value },
+    <q:Ident> "var" <name:Ident> ":" <ty:Type> "=" <value:Expr> NL
+        => Decl::Var { huge: q == "huge", name, ty, value },
+    "type" <name:Ident> "=" "fixed" <base:Width> "," "fraction" "=" <fraction:"int"> NL
+        => Decl::Fixed { name, base, fraction },
+};
+
+StructHead: (String, Vec<String>) = "struct" <Ident> <Names> => (<>);
+
+Names: Vec<String> = {
+    => vec![],
+    "[" <CommaOne<Ident>> "]",
+};
+
+Tag: String = {
+    Ident,
+    <Width> => <>.to_owned(),
+};
+
+Width: &'static str = {
+    "u8" => "u8", "u16" => "u16", "u32" => "u32", "i16" => "i16", "i32" => "i32",
+};
+
+Field: Field = {
+    <m:"mut"?> <name:Ident> ":" <ty:Type> NL => Field { mutable: m.is_some(), name, ty }
+};
+
+Variant: Variant = {
+    <name:Ident> <fields:("(" <Comma<VariantField>> ")")?> <value:("=" <"int">)?> NL
+        => Variant { name, fields: fields.unwrap_or_default(), value }
+};
+
+VariantField: (Option<String>, Type) = {
+    <name:(<Ident> ":")?> <ty:Type> => (name, ty)
+};
+
+ConstDecl: Const = {
+    "const" <name:Ident> <ty:(":" <Type>)?> "=" <value:Expr> NL => Const { name, ty, value }
+};
+
+// ---- functions -----------------------------------------------------------
+
+FnDef: Function = {
+    <mut f:FnHeader> <body:Suite> => { f.body = Some(body); f }
+};
+
+FnHeader: Function = {
+    "fn" <name:FnName> <generics:Generics> "(" <params:Comma<Param>> ")" "->" <ret:Type>
+        => Function { name, generics, params, ret, body: None }
+};
+
+// `fn i16.twice(..)`: a method of a built-in type.
+FnName: Vec<String> = {
+    Dotted,
+    <p:Primitive> "." <n:Ident> => vec![p.to_owned(), n],
+};
+
+Generics: Vec<(String, Option<Type>)> = {
+    => vec![],
+    "[" <CommaOne<GenericParam>> "]",
+};
+
+GenericParam: (String, Option<Type>) = <Ident> <(":" <Type>)?> => (<>);
+
+Param: Param = {
+    <name:Ident> ":" <ty:Type> <default:("=" <Expr>)?> => Param { name, ty, default }
+};
+
+Suite: Block = {
+    ":" NL INDENT <Stmt+> DEDENT => Block(<>)
+};
+
+// ---- statements ----------------------------------------------------------
+
+Stmt: Stmt = {
+    "let" <m:"mut"?> <pattern:Pattern> <ty:(":" <Type>)?> "=" <value:Expr> NL
+        => Stmt::Let { mutable: m.is_some(), pattern, ty, value, otherwise: None },
+    "let" <m:"mut"?> <pattern:Pattern> <ty:(":" <Type>)?> "=" <value:Expr> "else" <b:Suite>
+        => Stmt::Let { mutable: m.is_some(), pattern, ty, value, otherwise: Some(b) },
+    <c:ConstDecl> => Stmt::Const(c),
+    "let" <c:ConstDecl> => Stmt::Const(c),
+    <f:FnDef> => Stmt::Function(f),
+    "unsafe" <Suite> => Stmt::Unsafe(<>),
+    "asm" "(" <Comma<AsmArg>> ")" ":" "asmbody" NL => Stmt::Asm,
+    "loop" <Suite> => Stmt::Loop(<>),
+    "return" <Expr?> NL => Stmt::Return(<>),
+    "yield" <Expr> NL => Stmt::Yield(<>),
+    "match" <e:Expr> ":" NL INDENT <arms:Arm+> DEDENT => Stmt::Match(e, arms),
+    "with" <m:"mut"?> <name:Ident> "=" <value:Expr> <body:Suite>
+        => Stmt::With { mutable: m.is_some(), name, value, body },
+    <IfStmt>,
+    "while" <c:Expr> <b:Suite> => Stmt::While(c, b),
+    "for" <r:"case"?> <pattern:Pattern> "in" <source:Expr> <end:(".." <Expr>)?> <body:Suite>
+        => Stmt::For { refutable: r.is_some(), pattern, source, end, body },
+    "break" NL => Stmt::Break,
+    "continue" NL => Stmt::Continue,
+    <place:Expr> <op:AssignOp> <value:Expr> NL => Stmt::Assign(place, op, value),
+    <Expr> NL => Stmt::Expr(<>),
+};
+
+IfStmt: Stmt = {
+    "if" <c:Expr> <t:Suite> => Stmt::If(c, t, None),
+    "if" <c:Expr> <t:Suite> "else" <e:Suite> => Stmt::If(c, t, Some(e)),
+    "if" <c:Expr> <t:Suite> "else" <e:IfStmt> => Stmt::If(c, t, Some(Block(vec![e]))),
+};
+
+Arm: (Pattern, Block) = <Pattern> <Suite> => (<>);
+
+AssignOp: &'static str = {
+    "=" => "=", "+=" => "+=", "-=" => "-=", "*=" => "*=", "/=" => "/=", "//=" => "//=",
+    "%=" => "%=", "&=" => "&=", "|=" => "|=", "^=" => "^=", "<<=" => "<<=", ">>=" => ">>=",
+};
+
+// The register list of an `asm` header: `name = expr`, and `out = (..)`
+// groups; `clobbers = [a, b]` is a list expression.
+AsmArg: () = {
+    Ident "=" Expr => (),
+    Ident "=" "(" Comma<AsmOut> ")" => (),
+};
+
+AsmOut: () = {
+    Ident "=" Expr => (),
+    Ident "=" "let" Ident => (),
+};
+
+// ---- patterns ------------------------------------------------------------
+
+Pattern: Pattern = {
+    <mut p:Dotted> => if p.len() == 1 { let n = p.remove(0); if n == "_" { Pattern::Wild } else { Pattern::Name(n) } } else { Pattern::Path(p) },
+    <"int"> => Pattern::Int(<>),
+    "-" <"int"> => Pattern::Int(-<>),
+    <"char"> => Pattern::Char(<>),
+    "true" => Pattern::Bool(true),
+    "false" => Pattern::Bool(false),
+    "(" <Comma<Pattern>> ")" => Pattern::Tuple(<>),
+    <p:Dotted> "(" <a:Comma<Pattern>> ")" => Pattern::Constructor(p, a),
+    "." <n:Ident> <a:("(" <Comma<Pattern>> ")")?> => Pattern::Variant(n, a.unwrap_or_default()),
+    "[" <Comma<SeqPattern>> "]" => Pattern::Sequence(<>),
+};
+
+SeqPattern: Pattern = {
+    Pattern,
+    "*" <n:Ident> => Pattern::Rest(if n == "_" { None } else { Some(n) }),
+};
+
+// ---- types ---------------------------------------------------------------
+
+Type: Type = {
+    "fn" "(" <p:Comma<Type>> ")" "->" <r:Type> => Type::Function(p, Box::new(r)),
+    "extern" "string" "fn" "(" <p:Comma<Type>> ")" "->" <r:Type> => Type::Function(p, Box::new(r)),
+    "&" <m:"mut"?> "[" <t:Type> <n:("," <"int">)?> "]" => Type::Slice(Box::new(t), n),
+    "&" <m:"mut"?> <t:Type> => Type::Borrow(m.is_some(), Box::new(t)),
+    // The qualifier is an identifier: a type is never followed by one, so
+    // `*far T` and `*Far` are told apart by what comes next.
+    "*" <q:QualIdent> <m:"mut"?> <t:Type> => Type::Pointer(Some(q), m.is_some(), Box::new(t)),
+    "*" <m:"mut"?> <t:Type> => Type::Pointer(None, m.is_some(), Box::new(t)),
+    <t:TypeAtom> <args:TypeSuffix*> => args.into_iter().fold(t, |t, a| Type::Applied(Box::new(t), a)),
+};
+
+TypeAtom: Type = {
+    "(" <CommaOne<Type>> ")" => Type::Tuple(<>),
+    <Primitive> => Type::Primitive(<>),
+    <Dotted> => Type::Path(<>),
+};
+
+TypeSuffix: Vec<TypeArg> = "[" <CommaOne<TypeArg>> "]";
+
+TypeArg: TypeArg = {
+    <Type> => TypeArg::Type(<>),
+    <"int"> => TypeArg::Number(<>),
+};
+
+QualIdent: String = Ident;
+
+Primitive: &'static str = {
+    "char_t" => "char", "i8" => "i8", "u8" => "u8", "i16" => "i16", "u16" => "u16",
+    "i32" => "i32", "u32" => "u32", "f32" => "f32", "f64" => "f64",
+    "string_t" => "string", "addr" => "addr", "bool" => "bool", "void" => "void",
+};
+
+// ---- expressions ---------------------------------------------------------
+
+Expr: Expr = {
+    <params:LambdaParams> <body:Expr> => Expr::Lambda(params, Box::new(body)),
+    OrExpr,
+};
+
+LambdaParams: Vec<(String, Option<Type>)> = {
+    "||" => vec![],
+    "|" <Comma<LambdaParam>> "|",
+};
+
+LambdaParam: (String, Option<Type>) = <Ident> <(":" <Type>)?> => (<>);
+
+OrExpr: Expr = {
+    <l:OrExpr> "||" <r:AndExpr> => Expr::Binary("||", Box::new(l), Box::new(r)),
+    AndExpr,
+};
+
+AndExpr: Expr = {
+    <l:AndExpr> "&&" <r:NotExpr> => Expr::Binary("&&", Box::new(l), Box::new(r)),
+    NotExpr,
+};
+
+NotExpr: Expr = {
+    "!" <TernaryExpr> => Expr::Not(Box::new(<>)),
+    TernaryExpr,
+};
+
+TernaryExpr: Expr = {
+    <c:CompareExpr> "?:" <t:TernaryExpr> ":" <e:TernaryExpr> => Expr::Ternary(Box::new(c), Box::new(t), Box::new(e)),
+    CompareExpr,
+};
+
+CompareExpr: Expr = {
+    <l:BitOr> <rest:(<CompareOp> <BitOr>)+> => Expr::Compare(Box::new(l), rest),
+    BitOr,
+};
+
+CompareOp: &'static str = {
+    "==" => "==", "!=" => "!=", "<" => "<", "<=" => "<=", ">" => ">", ">=" => ">=",
+    "is" => "is",
+    "is" "not" => "is not",
+};
+
+BitOr: Expr = {
+    <l:BitOr> "|" <r:BitXor> => Expr::Binary("|", Box::new(l), Box::new(r)),
+    BitXor,
+};
+
+BitXor: Expr = {
+    <l:BitXor> "^" <r:BitAnd> => Expr::Binary("^", Box::new(l), Box::new(r)),
+    BitAnd,
+};
+
+BitAnd: Expr = {
+    <l:BitAnd> "&" <r:Shift> => Expr::Binary("&", Box::new(l), Box::new(r)),
+    Shift,
+};
+
+Shift: Expr = {
+    <l:Shift> <op:ShiftOp> <r:Sum> => Expr::Binary(op, Box::new(l), Box::new(r)),
+    Sum,
+};
+
+ShiftOp: &'static str = { "<<" => "<<", ">>" => ">>" };
+
+Sum: Expr = {
+    <l:Sum> <op:SumOp> <r:Product> => Expr::Binary(op, Box::new(l), Box::new(r)),
+    Product,
+};
+
+SumOp: &'static str = { "+" => "+", "-" => "-" };
+
+Product: Expr = {
+    <l:Product> <op:ProductOp> <r:Unary> => Expr::Binary(op, Box::new(l), Box::new(r)),
+    Unary,
+};
+
+ProductOp: &'static str = { "*" => "*", "/" => "/", "//" => "//", "%" => "%" };
+
+Unary: Expr = {
+    "-" <Unary> => Expr::Unary("-", Box::new(<>)),
+    "~" <Unary> => Expr::Unary("~", Box::new(<>)),
+    "*" <Unary> => Expr::Unary("*", Box::new(<>)),
+    "&" <Unary> => Expr::Unary("&", Box::new(<>)),
+    "&" "mut" <Unary> => Expr::Unary("&mut", Box::new(<>)),
+    Postfix,
+};
+
+Postfix: Expr = {
+    <e:Postfix> "(" <a:Comma<Arg>> ")" => Expr::Apply(Box::new(e), a),
+    <e:Postfix> "[" <i:CommaOne<Index>> "]" => Expr::Subscript(Box::new(e), i),
+    <e:Postfix> "." <n:Ident> => Expr::Field(Box::new(e), n),
+    <e:Postfix> "?" => Expr::Try(Box::new(e)),
+    Primary,
+};
+
+Arg: Arg = {
+    <name:(<Ident> "=")?> <value:Expr> => Arg { name, value }
+};
+
+Index: Index = {
+    <Expr> => Index::At(<>),
+    <a:Expr?> ":" <b:Expr?> => Index::Slice(a, b),
+    // A type that is no expression, as a generic argument.
+    <TypeOnly> => Index::At(<>),
+};
+
+TypeOnly: Expr = {
+    "extern" "string" "fn" "(" <p:Comma<Type>> ")" "->" <r:Type>
+        => Expr::TypeOnly(Box::new(Type::Function(p, Box::new(r)))),
+    // A pointer type no expression spells: `*mut T`, and `*far T` when the
+    // qualifier is followed by `mut`.
+    "*" <m:"mut"> <t:Type> => Expr::TypeOnly(Box::new(Type::Pointer(None, true, Box::new(t)))),
+    "*" <q:Ident> <m:"mut"> <t:Type> => Expr::TypeOnly(Box::new(Type::Pointer(Some(q), true, Box::new(t)))),
+    "fn" "(" <p:Comma<Type>> ")" "->" <r:Type> => Expr::TypeOnly(Box::new(Type::Function(p, Box::new(r)))),
+};
+
+Primary: Expr = {
+    <"int"> => Expr::Int(<>),
+    <"float"> => Expr::Float(<>),
+    <"char"> => Expr::Char(<>),
+    <"string"> => Expr::Str(<>),
+    <"fstring"> => Expr::FStr(<>),
+    "true" => Expr::Bool(true),
+    "false" => Expr::Bool(false),
+    <Ident> => Expr::Name(<>),
+    <Primitive> => Expr::Primitive(<>),
+    "." <n:Ident> => Expr::Variant(n, None),
+    "(" <Expr> ")" => Expr::Paren(Box::new(<>)),
+    "(" <e:Expr> "," <mut rest:Comma<Expr>> ")" => { rest.insert(0, e); Expr::Tuple(rest) },
+    "(" <e:Expr> <c:Clause+> ")" => Expr::Comprehension(Box::new(e), None, c),
+    "[" <Comma<Expr>> "]" => Expr::List(<>),
+    "[" <e:Expr> <c:Clause+> "]" => Expr::Comprehension(Box::new(e), None, c),
+    "{" <Comma<DictEntry>> "}" => Expr::Dict(<>),
+    "{" <k:Expr> ":" <v:Expr> <c:Clause+> "}" => Expr::Comprehension(Box::new(k), Some(Box::new(v)), c),
+};
+
+DictEntry: (Expr, Expr) = <Expr> ":" <Expr> => (<>);
+
+Clause: Clause = {
+    "for" <r:"case"?> <p:Pattern> "in" <source:Expr> <end:(".." <Expr>)?>
+        => Clause { filter: false, refutable: r.is_some(), pattern: Some(p), source, end },
+    "if" <source:Expr> => Clause { filter: true, refutable: false, pattern: None, source, end: None },
+};

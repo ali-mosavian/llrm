@@ -90,13 +90,20 @@ use llrm_mir::passes::{Declarations, ModuleAnalyses};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy, defines};
 use llrm_support::hash::IndexMap;
 
-use crate::alias;
-use crate::cfg::Shape;
-use crate::memory::{Key, MemoryKind, Unit};
+use crate::memory::Unit;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Globals {
     tracked: BTreeSet<GlobalId>,
+    /// Globals the use scan calls escaped (the pin's `AnalyzeUsesOfPointer`,
+    /// GlobalsModRef.cpp#L312, has no `phi` or `select` case, so one is an
+    /// escape) that escape by no use but being joined: reached by name only, to
+    /// a body that follows a pointer through its joins. `covers` takes one for
+    /// what it was.
+    joined: BTreeSet<GlobalId>,
+    /// The module forges a pointer into the data segment (`forging`): the
+    /// selector casts of its far pointers may name any object.
+    forged: bool,
     /// The `!llrm.named` globals.
     named: BTreeSet<GlobalId>,
     /// Each routine's `!llrm.writes` list.
@@ -105,6 +112,9 @@ pub struct Globals {
     bodies: BTreeSet<GlobalId>,
     /// The bodies outside code may call: not internal, or address-taken.
     entries: BTreeSet<String>,
+    /// How many globals the module had: a function at or past it was added
+    /// since (an ipa-cp copy), a body as LLVM's absent `FunctionInfo` is.
+    known: u32,
 }
 
 impl Globals {
@@ -115,11 +125,25 @@ impl Globals {
         &self,
         fresh: &Globals,
     ) -> bool {
-        self.tracked.is_subset(&fresh.tracked)
+        self.tracked.iter().all(|one| fresh.tracked.contains(one) || fresh.joined.contains(one))
+            && (self.forged || !fresh.forged)
             && self.named == fresh.named
             && self.writes == fresh.writes
-            && self.bodies == fresh.bodies
+            && fresh.bodies.iter().all(|one| self.bodies.contains(one) || one.0 >= self.known)
             && self.entries == fresh.entries
+    }
+
+    /// Whether the module forges a pointer into the data segment.
+    pub fn forged(&self) -> bool {
+        self.forged
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_forged(
+        &mut self,
+        forged: bool,
+    ) {
+        self.forged = forged;
     }
 
     pub fn tracked(
@@ -139,7 +163,7 @@ impl Globals {
         &self,
         callee: Option<GlobalId>,
     ) -> (BTreeSet<GlobalId>, BTreeSet<GlobalId>) {
-        if callee.is_some_and(|one| self.bodies.contains(&one)) {
+        if callee.is_some_and(|one| self.bodies.contains(&one) || one.0 >= self.known) {
             return (self.tracked.clone(), self.tracked.clone());
         }
         let named = self.named.intersection(&self.tracked).copied().collect::<BTreeSet<_>>();
@@ -164,7 +188,7 @@ impl Globals {
         ids: &BTreeSet<GlobalId>,
     ) -> u64 {
         use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = llrm_mir::hash::Fx::default();
         (&self.tracked, &self.named, &self.entries).hash(&mut hasher);
         // By what each is, not by its id: a copy of a body is the body.
         let mut each: Vec<(bool, Option<&BTreeSet<GlobalId>>)> =
@@ -325,7 +349,6 @@ pub struct Elsewhere {
 /// the body and the declarations alone.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Contribution {
-    escaped: BTreeSet<GlobalId>,
     named: BTreeSet<GlobalId>,
     retained: BTreeSet<GlobalId>,
 }
@@ -338,6 +361,33 @@ pub struct Bodies {
     declarations: Option<Rc<Vec<GlobalValue>>>,
     elsewhere: Option<Elsewhere>,
     per: IndexMap<GlobalId, (Mark, Rc<Contribution>)>,
+}
+
+/// The variables of `module` no outside code reaches by name: not exported by
+/// the program, defined in it and not let escape by another module. The
+/// runtime module's `!llrm.named` globals (b$seg) are such: it names them and
+/// never hands their address out.
+pub fn unexported(
+    module: &Module,
+    analyses: &mut ModuleAnalyses,
+) -> BTreeSet<GlobalId> {
+    let program = Rc::clone(analyses.program());
+    let elsewhere = match program.cached::<ProgramGlobals>() {
+        Some(all) => Result::as_ref(&*all).map(|all| all[program.module].clone()).unwrap_or_default(),
+        None => Elsewhere::default(),
+    };
+    module
+        .globals
+        .iter()
+        .enumerate()
+        .filter(|(at, global)| {
+            matches!(global.kind, GlobalKind::Variable(_))
+                && !program.exports.exported(global)
+                && (defines(global) || elsewhere.defined.contains(&GlobalId(*at as u32)))
+                && !elsewhere.escaped.contains(&GlobalId(*at as u32))
+        })
+        .map(|(at, _)| GlobalId(at as u32))
+        .collect()
 }
 
 /// `module`'s, each body's shape from its manager in `analyses` and the
@@ -361,8 +411,8 @@ pub fn analysis(
     }
     memo.declarations = Some(declarations);
     memo.elsewhere = Some(elsewhere.clone());
-    let found =
-        found_with(module, &program, &elsewhere, &mut |id| analyses.function::<Shape>(module, id), Some(&mut memo.per));
+    let forged = *analyses.get::<crate::manager::ForgedSelectors>(module);
+    let found = found_with(module, &program, &elsewhere, forged, Some(&mut memo.per));
     *analyses.memo::<Bodies>() = memo;
     found
 }
@@ -373,19 +423,17 @@ pub fn found(
     module: &Module,
     program: &ProgramProxy,
     elsewhere: &Elsewhere,
-    shape: &mut dyn FnMut(GlobalId) -> Rc<Shape>,
 ) -> Result<Globals, String> {
-    found_with(module, program, elsewhere, shape, None)
+    found_with(module, program, elsewhere, crate::forging::forges_selector(module, program.spaces), None)
 }
 
 fn found_with(
     module: &Module,
     program: &ProgramProxy,
     elsewhere: &Elsewhere,
-    shape: &mut dyn FnMut(GlobalId) -> Rc<Shape>,
+    forged: bool,
     mut kept: Option<&mut IndexMap<GlobalId, (Mark, Rc<Contribution>)>>,
 ) -> Result<Globals, String> {
-    let layout = &program.layout;
     let (named, writes) = promised(module, &program.runtime);
     // Outside code reaches a global by name only where the program exports
     // it, or the runtime names it.
@@ -415,23 +463,7 @@ fn found_with(
         let contribution = match reused {
             Some(one) => one,
             None => {
-                let shape = shape(id);
-                let unit = Unit { program: Some(program), ..Unit::of(module, layout, function) };
-                // Each access asks whether its frame object's address is
-                // exposed: found once for the body.
-                let exposed = crate::memory::exposed_frames(&unit);
-                let facts = alias::points_to(&unit.with_shape(&shape).with_exposed(&exposed), None, None)?;
-                let escaped = facts
-                    .escaped
-                    .iter()
-                    .filter(|one| one.kind == MemoryKind::Global)
-                    .filter_map(|one| match one.key {
-                        Key::Global(global) => Some(GlobalId(global)),
-                        _ => None,
-                    })
-                    .collect();
                 let made = Rc::new(Contribution {
-                    escaped,
                     named: named_in(module, function, false),
                     retained: named_in(module, function, true),
                 });
@@ -441,11 +473,20 @@ fn found_with(
                 made
             }
         };
-        for global in &contribution.escaped {
-            tracked.remove(global);
-        }
         plain.extend(contribution.named.iter().copied());
         retained.extend(contribution.retained.iter().copied());
+    }
+    // The use scan of `AnalyzeGlobals`, once for the module: a global whose
+    // address escapes is not reached by name alone.
+    let candidates = tracked.clone();
+    for escaped in crate::globalsmodref::escaping_among(module, &tracked) {
+        tracked.remove(&escaped);
+    }
+    // Of those, the ones a pointer phi or select, and no other use, lets
+    // escape.
+    let mut joined = candidates.difference(&tracked).copied().collect::<BTreeSet<_>>();
+    for escaped in crate::globalsmodref::escaping_among_joins(module, &joined) {
+        joined.remove(&escaped);
     }
     if let Some(kept) = kept.as_mut() {
         let live: BTreeSet<GlobalId> = bodies.iter().map(|(id, _, _)| *id).collect();
@@ -453,19 +494,26 @@ fn found_with(
     }
     let held = held_from(module, retained);
     tracked.retain(|one| !held.contains(one));
+    joined.retain(|one| !held.contains(one));
+    // A pointer forged into the data segment reaches any global, one whose
+    // address nobody computed among them (`forging`).
+    if forged {
+        tracked.clear();
+        joined.clear();
+    }
     let mut taken = referenced_from(module, plain);
     taken.extend(&elsewhere.taken);
     let entries = bodies
         .iter()
         .filter(|(id, global, _)| program.exports.exported(global) || taken.contains(id))
-        .filter_map(|(_, global, _)| global.name.clone())
+        .filter_map(|(_, global, _)| global.name.owned())
         .collect();
     let bodies = bodies
         .iter()
         .map(|(id, _, _)| *id)
         .chain(elsewhere.defined.iter().copied().filter(|&one| module.global(one).function().is_some()))
         .collect();
-    Ok(Globals { tracked, named, writes, bodies, entries })
+    Ok(Globals { tracked, joined, forged, named, writes, bodies, entries, known: module.globals.len() as u32 })
 }
 
 /// The globals `module`'s initializers hold the address of. An initializer
@@ -516,7 +564,7 @@ fn symbol(
 ) -> Option<Symbol> {
     match program.definition(at, id) {
         Some((module, global)) => Some(Symbol::Defined(module, global)),
-        None => program.modules[at].global(id).name.clone().map(Symbol::Named),
+        None => program.modules[at].global(id).name.owned().map(Symbol::Named),
     }
 }
 
@@ -528,7 +576,7 @@ impl ProgramAnalysis for ProgramGlobals {
     const NAME: &'static str = "program-globals";
     fn run(
         program: &Program,
-        analyses: &mut ProgramAnalyses,
+        _: &mut ProgramAnalyses,
     ) -> Self::Result {
         let count = program.modules.len();
         if count < 2 {
@@ -537,20 +585,17 @@ impl ProgramAnalysis for ProgramGlobals {
         let mut escaped = Vec::new();
         let mut taken = Vec::new();
         for (at, module) in program.modules.iter().enumerate() {
-            let proxy = analyses.proxy(program, at);
             let mut ids = held(module);
-            for (_, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
-                let shape = Shape::of(function);
-                let unit = Unit { program: Some(&proxy), ..Unit::of(module, &program.layout, function) };
-                let exposed = crate::memory::exposed_frames(&unit);
-                let facts = alias::points_to(&unit.with_shape(&shape).with_exposed(&exposed), None, None)?;
-                ids.extend(facts.escaped.iter().filter(|one| one.kind == MemoryKind::Global).filter_map(|one| {
-                    match one.key {
-                        Key::Global(global) => Some(GlobalId(global)),
-                        _ => None,
-                    }
-                }));
-            }
+            // The globals this module lets escape: the use scan of
+            // `AnalyzeGlobals` over every global variable it names.
+            let variables = module
+                .globals
+                .iter()
+                .enumerate()
+                .filter(|(_, global)| matches!(global.kind, GlobalKind::Variable(_)))
+                .map(|(index, _)| GlobalId(index as u32))
+                .collect::<BTreeSet<_>>();
+            ids.extend(crate::globalsmodref::escaping_among(module, &variables));
             let symbols = |ids: BTreeSet<GlobalId>| {
                 ids.into_iter().filter_map(|id| symbol(program, at, id)).collect::<BTreeSet<_>>()
             };

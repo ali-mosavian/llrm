@@ -1,0 +1,2 @@
+_bench_grep@3 executes 26500 instructions, 12296 memory operands; 3958 reloads, 3199 spill stores, 0 remats; 2983 branches, 915 taken, 989 jumps, 7780 jump cycles
+_main executes 8 instructions, 1 memory operands; 0 reloads, 0 spill stores, 0 remats; 0 branches, 0 taken, 0 jumps, 0 jump cycles

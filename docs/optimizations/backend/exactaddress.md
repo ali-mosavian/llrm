@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/exactaddress.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/exactaddress.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/exactaddress.rs sha256:8b36bb8558260f5a2939f66bb99476d4da6af2063353a1769115ba86f2943386 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/exactaddress.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/exactaddress.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/exactaddress.rs sha256:b23fb55a94ef4ca8cccfd0504e7d7069c3720515eab769fd9a6c48ea2a145956 -->
 
 # exactaddress
 
@@ -70,7 +70,7 @@ Inside the peephole phase, after the pattern rewrites, before
 
 ## Needs
 [`crate::backend::affine`](affine.md) (steps), [`crate::backend::upperzero`](upperzero.md),
-[`crate::backend::liveness`](liveness.md) and `crate::analysis::loops`.
+[`crate::backend::liveness`](liveness.md) and [`crate::analysis::loops`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/analysis.rs).
 
 ## See also
 The phase map: `crate::backend`

@@ -79,7 +79,7 @@ A pointer's reach byte is `0x74` near, `0x73` far, `0x5E` huge.
 
 What QuickBASIC's compilers (VBDOS, PDS 7.1, QB 4.5) write under `/Zi` is not CodeView 4: CVPACK translates it,
 and fills in the lexical-scope links (`pParent`, `pEnd`, `pNext`). `cvinfo.rs` reads it, `cvwrite.rs` writes
-it, and `crates/target/llrm-omf/src/cvwrite_tests.rs` checks that the writer inverts the reader.
+it, and `crates/mc/llrm-omf/src/cvwrite_tests.rs` checks that the writer inverts the reader.
 
 ### `$$SYMBOLS`
 
@@ -169,6 +169,6 @@ PDS 7.1's CodeView 3, which evaluates BASIC:
 ## Verification
 
 `tests/cv4.rs` (LINK `/CO`, CVPACK and CodeView under DOSBox-X; needs VB/DOS's tools, `LLRM_REQUIRE_CODEVIEW`
-makes a missing tool a failure), `crates/target/llrm-omf/src/cv4_tests.rs`, `cvwrite_tests.rs`, and
-`crates/frontends/llrm-qb/src/test_debug.rs`. Open items: [#1514](https://github.com/ali-mosavian/llrm/issues/1514),
+makes a missing tool a failure), `crates/mc/llrm-omf/src/cv4_tests.rs`, `cvwrite_tests.rs`, and
+`crates/frontends/qb/src/test_debug.rs`. Open items: [#1514](https://github.com/ali-mosavian/llrm/issues/1514),
 [#892](https://github.com/ali-mosavian/llrm/issues/892), [#883](https://github.com/ali-mosavian/llrm/issues/883).

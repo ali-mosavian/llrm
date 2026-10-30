@@ -22,6 +22,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import harness  # noqa: E402
+import pin_clang  # noqa: E402
 from harness import MEMORY, MISALIGNED, OUT, cost, elf_segments, misaligned_operands, multiplier_of, nm, omf_link  # noqa: E402
 from iced_x86 import Decoder, Mnemonic  # noqa: E402
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc  # noqa: E402
@@ -32,9 +33,10 @@ D_FACES = QCPORT / "render" / "d_faces.c"
 SOURCE = OUT / "dfaces" / "d_faces_flat.c"
 ENV_BASE = 0x300000                       # env.elf is loaded here; everything below it and above BASE is the code under test
 LEVELS = ("O1", "O2", "O3", "Os")
-# The Borland-era keywords mean nothing flat; every compiler reads the file with the same convention and the same sizes.
-KEYWORDS = "far huge near pascal cdecl __far _far __near _near"
-INCLUDES = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(QCPORT / d))]
+import wrapper  # noqa: E402
+
+KEYWORDS = wrapper.KEYWORDS
+INCLUDES = wrapper.includes(QCPORT)
 GCC_FLAGS = ["-m32", "-march=i486", "-fno-pic", "-fno-stack-protector", "-fcf-protection=none", "-fno-asynchronous-unwind-tables", "-w"]
 COVERAGE = ["flat", "tex", "ptex", "wire", "refused", "sc_hit", "sc_miss", "alloc", "alloc_fail", "build", "noz", "nodst"]
 
@@ -67,8 +69,7 @@ def emulation():
 def write_source():
     """The file every compiler reads: d_faces.c with its keywords of the segmented models emptied, so that they all take the flat
     model and one calling convention (llrm-c has no -D)."""
-    SOURCE.parent.mkdir(parents=True, exist_ok=True)
-    SOURCE.write_text("".join(f"#define {word}\n" for word in KEYWORDS.split()) + f'#include "{D_FACES}"\n')
+    wrapper.write_source(D_FACES, SOURCE)
 
 
 def write_env_source():
@@ -100,15 +101,20 @@ def build_variant(variant):
     if variant.startswith("llrm"):
         level = variant[4:] or "O2"
         obj = OUT / "o" / f"dfaces.{variant}.obj"
-        sh([harness.LLRM, "-m32", "-mabi=sysv", f"-{level}", "-march=i486", *INCLUDES, "-o", obj, SOURCE])
+        sh(wrapper.llrm_command(harness.LLRM, level, QCPORT, SOURCE, obj))
         return obj
     compiler = "gcc" if variant.startswith("gcc") else "clang"
     level = variant[len(compiler):]
+    command = compiler if compiler == "gcc" else pin_clang.path()  # not PATH's clang: the distro's 20.1.8 is not the pin
     obj = OUT / "b" / f"dfaces.{variant}.o"
-    sh([compiler, *GCC_FLAGS, f"-{level}", *INCLUDES, "-c", SOURCE, "-o", obj])
+    sh([command, *GCC_FLAGS, f"-{level}", *INCLUDES, "-c", SOURCE, "-o", obj])
     runtime = []
     if level != "O0":
-        runtime = [sh(["gcc", "-m32", "--print-libgcc-file-name"]).stdout.strip()] if compiler == "gcc" else [sh(["clang", "-m32", "--rtlib=compiler-rt", "-print-libgcc-file-name"]).stdout.strip()]
+        libgcc = sh(["gcc", "-m32", "--print-libgcc-file-name"]).stdout.strip()
+        runtime = [libgcc]
+        if compiler != "gcc":
+            builtins = sh([command, "-m32", "--rtlib=compiler-rt", "-print-libgcc-file-name"]).stdout.strip()
+            runtime = [builtins if Path(builtins).exists() else libgcc]  # the pin has no 32-bit compiler-rt here: the host's libgcc serves the 64-bit divides
     elf = OUT / "b" / f"dfaces.{variant}.elf"
     sh(["ld", "-m", emulation(), "-static", "-e", "0", f"-Ttext={harness.BASE:#x}", f"--just-symbols={stub()}", f"--just-symbols={build_env()}",
         f"-Map={OUT / 'b' / f'dfaces.{variant}.map'}", "-o", elf, obj, *runtime])
@@ -209,7 +215,7 @@ def run_m16(level):
     compiled = {}
     for name, source, flag in (("d", D_FACES, f"-{level}"), ("e", HERE / "env.c", "-O1")):
         obj = work / f"{name}.obj"
-        sh([dosbatch.BIN / "llrm-c", "-m16", flag, "-march=i486", *INCLUDES, "-o", obj, source])
+        sh([dosbatch.BIN / "llrm-cc", *harness.llrmbin.c_args(16), flag, *INCLUDES, "-c", "-o", obj, source], env={**os.environ, **harness.llrmbin.cc_environment()})
         compiled[name] = obj
     exe, listing = work / "d.exe", work / "d.map"
     dosbatch.link_c(compiled["d"], exe, work, listing, after=("file", str(compiled["e"])))

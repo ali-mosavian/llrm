@@ -1,0 +1,17 @@
+== --disable-delinearization-checks --tbaa
+@samebd0
+  none!
+  output [-4 -3] / assuming 1 loop level(s) fused:  [-4 -3 -3]!
+  none!
+@samebd1
+  none!
+  flow [|<] / assuming 1 loop level(s) fused:  [<=|<]!
+  none!
+@non_samebd0
+  none!
+  output [* *|<]!
+  output [* * * *]!
+@non_samebd1
+  none!
+  flow [|<]!
+  none!

@@ -20,6 +20,7 @@ use crate::registers::RegId;
 
 pub mod flag;
 mod root;
+pub mod valuelanes;
 
 pub use root::root;
 
@@ -65,6 +66,15 @@ impl Reg {
 pub struct Held {
     pub value: u32,
     pub width: u32,
+}
+
+impl Held {
+    /// The bytes of the value this operand names: the low `width` (the high
+    /// byte of a register, AH, is not yet a way to spell an operand; C1
+    /// step 1).
+    pub const fn lanes(&self) -> valuelanes::ValueLanes {
+        valuelanes::ValueLanes::low(self.width)
+    }
 }
 
 /// An immediate instruction operand.
@@ -133,9 +143,10 @@ pub struct Mem {
     pub index: Option<Held>,
     pub scale: i64,
     pub index_through: RegId,
-    /// Lowering proved (`ranges::exact_offsets`) that this address names the
-    /// same byte summed through 32-bit registers: its start is the object's,
-    /// and every partial sum of its offset is a non-negative 16-bit integer.
+    /// Lowering proved (`valuefacts::exact_offsets`) that this address names
+    /// the same byte summed through 32-bit registers: its start is the
+    /// object's, and every partial sum of its offset is a non-negative
+    /// 16-bit integer.
     pub exact: bool,
 }
 
@@ -217,6 +228,27 @@ fn _in_frame(addr: Option<Addr>) -> bool {
     addr.is_some_and(|addr| addr.space == Space::Frame)
 }
 
+/// What a [`Field`] says about the operand beside it.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum FieldKind {
+    /// A shifted register: `code` names the shift (lsl, lsr, ...).
+    Shift,
+    /// A condition: `code` is the target's condition code.
+    Condition,
+    /// An extended register: `code` names the extension (uxtw, sxtb, ...).
+    Extend,
+}
+
+/// An instruction field that is no register, cell or value: a shift or
+/// extension and its amount, or a condition. `code` is the target's numbering,
+/// which its description names.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Field {
+    pub kind: FieldKind,
+    pub code: u8,
+    pub amount: u8,
+}
+
 /// Every selected machine operand Python LIR may carry.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Loc {
@@ -225,6 +257,7 @@ pub enum Loc {
     Imm(Imm),
     Address(AddressRef),
     Held(Held),
+    Field(Field),
 }
 
 impl Loc {
@@ -355,10 +388,26 @@ pub enum Operation {
     FloatArithPop,
     FloatUnary,
     Barrier,
+    /// A select on a condition: `csel`, `csinc`, `csinv`, `csneg`, `fcsel`.
+    Select,
+    /// An integer multiply-add: `madd`, `msub`, `smaddl`, `umaddl`.
+    MultiplyAdd,
+    /// A fused float multiply-add; the negations are in the form's code:
+    /// `fmadd`, `fmsub`, `fnmadd`, `fnmsub`.
+    FloatMultiplyAdd,
+    /// A bit-field move with its lsb and width as immediates: `ubfx`, `sbfx`,
+    /// `bfi`, `bfxil`, `ubfiz`.
+    BitField,
+    /// Two registers from an address: `ldp`.
+    LoadPair,
+    /// Two registers to an address: `stp`.
+    StorePair,
+    /// A compare that runs only under a condition: `ccmp`, `ccmn`.
+    ConditionalCompare,
 }
 
 impl Operation {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 36] = [
         Self::Move,
         Self::Exchange,
         Self::Address,
@@ -388,6 +437,13 @@ impl Operation {
         Self::FloatArithPop,
         Self::FloatUnary,
         Self::Barrier,
+        Self::Select,
+        Self::MultiplyAdd,
+        Self::FloatMultiplyAdd,
+        Self::BitField,
+        Self::LoadPair,
+        Self::StorePair,
+        Self::ConditionalCompare,
     ];
 
     /// The operation `spelled` as `as_str` spells it, as `x86.instr` does.
@@ -426,6 +482,13 @@ impl Operation {
             Self::FloatArithPop => "farithp",
             Self::FloatUnary => "funary",
             Self::Barrier => "barrier",
+            Self::Select => "select",
+            Self::MultiplyAdd => "muladd",
+            Self::FloatMultiplyAdd => "fmuladd",
+            Self::BitField => "bitfield",
+            Self::LoadPair => "ldpair",
+            Self::StorePair => "stpair",
+            Self::ConditionalCompare => "ccmp",
         }
     }
 }
@@ -443,7 +506,7 @@ impl fmt::Display for Operation {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Semantics {
     pub op: Operation,
-    pub name: Option<String>,
+    pub name: Option<std::sync::Arc<str>>,
     pub dests: Vec<Loc>,
     pub sources: Vec<Loc>,
     pub target: Option<i64>,
@@ -451,6 +514,14 @@ pub struct Semantics {
     /// A table jump (`indirect`, its one source the table's cell): the block
     /// each index of the table goes to. Empty for any other instruction.
     pub table: Vec<i64>,
+    /// A `rep` prefix on an instruction that is not a string operation
+    /// (`IP_HAS_REPEAT`): `bsf` as `tzcnt` on a processor that has it.
+    pub repeat: bool,
+    /// The bytes of its arguments an indirect call's callee pops, as `masm`
+    /// reads them from the body's `call_pops`: the stack depth after the call.
+    /// `None` where unknown, which an indirect call keeps the frame register
+    /// for.
+    pub pops: Option<i64>,
 }
 
 impl Semantics {
@@ -473,8 +544,17 @@ impl Semantics {
             && self.target == other.target
             && self.indirect == other.indirect
             && self.table == other.table
+            && self.repeat == other.repeat
+            && self.pops == other.pops
             && same(&self.dests, &other.dests)
             && same(&self.sources, &other.sources)
+    }
+
+    /// A call that is also the return: the epilogue, then a `jmp` to the
+    /// callee. The callee is named by the instruction's id in a side table, so
+    /// a copy of it has none (DEVIATE TD1).
+    pub fn is_sibling_call(&self) -> bool {
+        self.op == Operation::Return && self.name.as_deref() == Some("jmp")
     }
 
     /// The blocks a branch or jump names (its target, or each index of its
@@ -501,6 +581,8 @@ impl Semantics {
             target: None,
             indirect: false,
             table: Vec::new(),
+            repeat: false,
+            pops: None,
         }
     }
 }
@@ -511,12 +593,14 @@ pub static UNMODELLED: LazyLock<Semantics> = LazyLock::new(|| Semantics::new(Ope
 /// Python `RESTORE_IDIOM`.
 pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
     op: Operation::Restore,
-    name: Some("restore".to_owned()),
+    name: Some("restore".into()),
     dests: Vec::new(),
     sources: Vec::new(),
     target: None,
     indirect: false,
     table: Vec::new(),
+    repeat: false,
+    pops: None,
 });
 
 /// Python `TABLE_DATA`.
@@ -572,7 +656,7 @@ pub fn values(where_: &Loc) -> Values {
                 named(held);
             }
         }
-        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) => {}
+        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) | Loc::Field(_) => {}
     }
     found
 }
@@ -606,12 +690,14 @@ pub fn restoring(
 ) -> Semantics {
     Semantics {
         op: Operation::Restore,
-        name: Some("restore".to_owned()),
+        name: Some("restore".into()),
         dests: vec![low, high],
         sources: vec![wide],
         target: None,
         indirect: false,
         table: Vec::new(),
+        repeat: false,
+        pops: None,
     }
 }
 
@@ -629,6 +715,17 @@ pub fn barrier(semantics: &Semantics) -> bool {
 mod tests {
     use super::root;
     use super::*;
+
+    /// Only a `jmp` return is a sibling call: a plain `ret`, and a `jmp` that
+    /// is a jump, are not (a copy of the first has no callee; neither of
+    /// the others needs one).
+    #[test]
+    fn only_a_jmp_return_is_a_sibling_call() {
+        let named = |op, name: &str| Semantics { name: Some(name.into()), ..Semantics::new(op) };
+        assert!(named(Operation::Return, "jmp").is_sibling_call());
+        assert!(!named(Operation::Return, "ret").is_sibling_call());
+        assert!(!named(Operation::Jump, "jmp").is_sibling_call());
+    }
 
     /// An indexed access through a register that holds a value (`[ebp+edx-16]`,
     /// the frame register freed) is not a frame cell: relayout moved its
@@ -857,6 +954,13 @@ impl Operation {
             Self::FloatArithPop => "FLOAT_ARITH_POP",
             Self::FloatUnary => "FLOAT_UNARY",
             Self::Barrier => "BARRIER",
+            Self::Select => "SELECT",
+            Self::MultiplyAdd => "MULTIPLY_ADD",
+            Self::FloatMultiplyAdd => "FLOAT_MULTIPLY_ADD",
+            Self::BitField => "BIT_FIELD",
+            Self::LoadPair => "LOAD_PAIR",
+            Self::StorePair => "STORE_PAIR",
+            Self::ConditionalCompare => "CONDITIONAL_COMPARE",
         }
     }
 }
@@ -933,6 +1037,7 @@ impl Repr for Loc {
             Loc::Imm(one) => one.repr(),
             Loc::Address(one) => one.repr(),
             Loc::Held(one) => one.repr(),
+            Loc::Field(one) => format!("Field({:?}, code={}, amount={})", one.kind, one.code, one.amount),
         }
     }
 }
@@ -943,7 +1048,7 @@ impl Repr for Semantics {
             "Semantics",
             &[
                 ("op", self.op.repr()),
-                ("name", self.name.repr()),
+                ("name", self.name.as_deref().map(str::to_owned).repr()),
                 ("dests", pyrepr::tuple(&self.dests)),
                 ("sources", pyrepr::tuple(&self.sources)),
                 ("target", self.target.repr()),
@@ -971,7 +1076,7 @@ mod repr_tests {
         );
         assert_eq!(Held { value: 3, width: 2 }.repr(), "Held(value=3, width=2)");
         let semantics = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Reg(Reg { register: RegId::AX, width: 2 })],
             sources: vec![Loc::Imm(Imm { value: 1, width: 2, address: None })],
             ..Semantics::new(Operation::Move)

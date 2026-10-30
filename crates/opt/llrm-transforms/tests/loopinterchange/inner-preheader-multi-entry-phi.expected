@@ -1,0 +1,32 @@
+== -loop-interchange-profitabilities=ignore
+@multi_entry_phi
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v9, %B7 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v7, %B6 ], [ 0, %B3 ]
+  br i1 %c, label %B5, label %B5
+B5:
+  %v2 = mul i64 %v0, 10
+  %v3 = add i64 %v2, %v1
+  %v4 = getelementptr inbounds i32, ptr %A, i64 %v3
+  store i32 0, ptr %v4
+  %v5 = add i64 %v0, 1
+  %v6 = icmp eq i64 %v5, 10
+  br label %B6
+B6:
+  %v7 = add i64 %v1, 1
+  %v8 = icmp eq i64 %v7, 10
+  br i1 %v8, label %B7, label %B4
+B7:
+  %v9 = add i64 %v0, 1
+  %v10 = icmp eq i64 %v9, 10
+  br i1 %v10, label %B8, label %B2
+B8:
+  ret void

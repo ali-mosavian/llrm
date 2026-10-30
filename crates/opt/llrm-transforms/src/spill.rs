@@ -103,8 +103,8 @@
 //!
 //! # Used by
 //! [`crate::profit`] (`spill_forecast`, `weighted`) prices every motion with
-//! it; [`crate::lsr`], [`crate::gvn`] (partial redundancy elimination),
-//! [`crate::hoist`], [`crate::addresssink`] and [`crate::tailrec`] ask it
+//! it; [`crate::lsr_pass`], [`crate::gvn`] (partial redundancy elimination),
+//! [`crate::hoist`] and [`crate::cgpaddr`] ask it
 //! directly when they weigh a rewrite against register pressure. Not a pass:
 //! it runs only inside those.
 //!
@@ -483,7 +483,7 @@ fn addressed_by(
     // once for each access.
     let mut memo = llrm_mir::dense::IdMap::<ValueId, bool>::new();
     for &block in function.layout() {
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             let op = function.instruction(inst);
             let address = match op.opcode {
                 Opcode::Load { .. } => op.operands.first(),
@@ -852,7 +852,7 @@ pub fn words(
 pub fn cells(function: &Function) -> BTreeMap<ValueId, ValueId> {
     let mut cells = BTreeMap::new();
     for &block in function.layout() {
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             let phi = function.instruction(inst);
             let (Opcode::Phi, Some(counter)) = (&phi.opcode, phi.result) else { continue };
             for pair in phi.operands.chunks(2) {
@@ -939,7 +939,7 @@ impl TrafficBase {
         let often = |block: BlockId| frequency.get(&cfg::id(block)).copied().unwrap_or(1);
         for &block in function.layout() {
             let each = often(block);
-            for &inst in function.block(block).instructions() {
+            for inst in function.iter_block(block) {
                 if let Some(value) = function.instruction(inst).result {
                     *base.makers.get_or_insert_with(value, || 0) += 1;
                 }

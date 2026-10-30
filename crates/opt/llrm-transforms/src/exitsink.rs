@@ -62,9 +62,10 @@
 //! Blocks and edges are unchanged; dominators and loops are preserved.
 //!
 //! # See also
-//! [`crate::exitfold`], [`crate::lcssa`]; LLVM LICM `sinkRegion`.
+//! [`crate::lcssa`]; LLVM LICM `sinkRegion`.
 
 use llrm_analysis::cfg;
+use llrm_analysis::cfg::Around;
 use llrm_analysis::graph::loops::Loop;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
@@ -74,14 +75,14 @@ use crate::edges;
 use crate::lcssa::{arms, exit_phi, from_arms, place_phi};
 
 /// Every add and subtract only an exit reads, moved there; whether any was.
-/// `shape` is the body's: a sink moves an instruction between blocks and
+/// `loops` are the body's: a sink moves an instruction between blocks and
 /// leaves the blocks and edges as they are.
 pub fn sunk(
     function: &mut Function,
-    shape: &cfg::Shape,
+    loops: &[Loop],
 ) -> bool {
     let mut changed = false;
-    while let Some((loop_, phi, op)) = _sinkable(function, shape) {
+    while let Some((loop_, phi, op)) = _sinkable(function, loops) {
         _sink(function, &loop_, phi, op);
         changed = true;
     }
@@ -92,11 +93,19 @@ pub fn sunk(
 /// extension in the loop that input is, which only exit phis read.
 fn _sinkable(
     function: &Function,
-    shape: &cfg::Shape,
+    loops: &[Loop],
 ) -> Option<(Loop, InstId, InstId)> {
-    for loop_ in shape.loops.iter().cloned() {
-        for &block in function.layout().iter().filter(|&&block| !loop_.body.contains(&cfg::id(block))) {
+    for loop_ in loops.iter().cloned() {
+        // A candidate phi has an input from the loop: it is in a block the loop
+        // exits to, found by the edges and not by every phi of the function.
+        let exits = loop_.exits(function).into_iter().map(|(_, to)| to).collect::<std::collections::BTreeSet<_>>();
+        for &block in function
+            .layout()
+            .iter()
+            .filter(|&&block| exits.contains(&cfg::id(block)) && !loop_.body.contains(&cfg::id(block)))
+        {
             for phi in edges::phis(function, block) {
+                llrm_mir::counts::bump(llrm_mir::counts::Event::ExitSinkPhis);
                 let [(Operand::Value(value), from)] = arms(function, phi)[..] else { continue };
                 let ValueDef::Instruction(op) = function.value(value).def else { continue };
                 let inside = |inst: InstId| function.parent(inst).is_some_and(|at| loop_.body.contains(&cfg::id(at)));
@@ -161,12 +170,8 @@ fn _sink(
     let instruction = function.instruction(op);
     let moved =
         function.create_instruction(instruction.opcode.clone(), instruction.ty, operands, instruction.flags, None);
-    let first = *function
-        .block(exit)
-        .instructions()
-        .iter()
-        .find(|&&one| function.instruction(one).opcode != Opcode::Phi)
-        .expect("a terminator");
+    let first =
+        function.iter_block(exit).find(|&one| function.instruction(one).opcode != Opcode::Phi).expect("a terminator");
     function.insert(moved, Position::Before(first)).expect("a placed block");
     let result = function.instruction(phi).result.expect("a phi's value");
     function.replace_all_uses_with(result, Operand::Value(function.instruction(moved).result.expect("a value")));

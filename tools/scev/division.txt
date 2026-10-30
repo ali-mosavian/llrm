@@ -1,0 +1,101 @@
+@constants
+  Numerator: 17
+  Denominator: 5
+  Quotient: 3
+  Remainder: 2
+  Numerator: -17
+  Denominator: 5
+  Quotient: -3
+  Remainder: -2
+  Numerator: 0
+  Denominator: 5
+  Quotient: 0
+  Remainder: 0
+  Numerator: 8
+  Denominator: 8
+  Quotient: 1
+  Remainder: 0
+  Numerator: %x
+  Denominator: 1
+  Quotient: %x
+  Remainder: 0
+  Numerator: %x
+  Denominator: %x
+  Quotient: 1
+  Remainder: 0
+@products
+  Numerator: (8 * %a * %b * %c)
+  Denominator: (%b * %c)
+  Quotient: (8 * %a)
+  Remainder: 0
+  Numerator: (%a * %b)
+  Denominator: %a
+  Quotient: %b
+  Remainder: 0
+  Numerator: (8 * %a * %b * %c)
+  Denominator: (%a * %b)
+  Quotient: (8 * %c)
+  Remainder: 0
+  Numerator: (%a * %b)
+  Denominator: %c
+  Quotient: 0
+  Remainder: (%a * %b)
+  Numerator: (8 * %a * %b * %c)
+  Denominator: 4
+  Quotient: (2 * %a * %b * %c)
+  Remainder: 0
+  Numerator: (8 * %a * %b * %c)
+  Denominator: 3
+  Quotient: 0
+  Remainder: (8 * %a * %b * %c)
+@sums
+  Numerator: ((%b + %c) * %a)
+  Denominator: %a
+  Quotient: (%b + %c)
+  Remainder: 0
+  Numerator: (((%b + %c) * %a) + %b)
+  Denominator: %a
+  Quotient: (%b + %c)
+  Remainder: %b
+  Numerator: ((%b + %c) * %a)
+  Denominator: %b
+  Quotient: %a
+  Remainder: (%a * %c)
+  Numerator: (6 + (%a * %b))
+  Denominator: 3
+  Quotient: 2
+  Remainder: (%a * %b)
+@addrec
+  Numerator: {{16,+,(8 * %m * %o)}<%i>,+,(8 * %o)}<%j>
+  Denominator: (%m * %o)
+  Quotient: 0
+  Remainder: {{16,+,(8 * %m * %o)}<%i>,+,(8 * %o)}<%j>
+  Numerator: {{16,+,(8 * %m * %o)}<%i>,+,(8 * %o)}<%j>
+  Denominator: 8
+  Quotient: {{2,+,(%m * %o)}<%i>,+,%o}<%j>
+  Remainder: 0
+  Numerator: {{16,+,(8 * %m * %o)}<%i>,+,(8 * %o)}<%j>
+  Denominator: %o
+  Quotient: {{0,+,(8 * %m)}<%i>,+,8}<%j>
+  Remainder: 16
+  Numerator: {0,+,(8 * %o)}<%j>
+  Denominator: %o
+  Quotient: {0,+,8}<%j>
+  Remainder: 0
+@unknowns
+  Numerator: ((%a * %b) + %c)
+  Denominator: %a
+  Quotient: %b
+  Remainder: %c
+  Numerator: (4 + (%a * %b) + %c)
+  Denominator: %a
+  Quotient: %b
+  Remainder: (4 + %c)
+  Numerator: (((%a * %b) + %c) * %a)
+  Denominator: %a
+  Quotient: ((%a * %b) + %c)
+  Remainder: 0
+  Numerator: (4 * (zext i32 %a to i64))<nuw><nsw>
+  Denominator: 4
+  Quotient: (zext i32 %a to i64)
+  Remainder: 0

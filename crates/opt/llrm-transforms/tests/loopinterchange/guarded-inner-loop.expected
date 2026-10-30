@@ -1,0 +1,53 @@
+== -loop-interchange-profitabilities=ignore
+@main
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i32 [ %v10, %B8 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i32 [ %v8, %B7 ], [ 0, %B3 ]
+  %v2 = icmp eq i32 %v1, 0
+  %v3 = getelementptr [9 x i32], ptr @x, i32 %v1
+  %v4 = getelementptr [9 x i32], ptr @w, i32 %v1
+  %v5 = getelementptr [3 x i32], ptr @y, i32 %v1
+  br label %B5
+B5:
+  br i1 %v2, label %B6, label %B10
+B6:
+  %v6 = add i32 %v0, 1
+  %v7 = icmp eq i32 %v0, 0
+  br label %B7
+B7:
+  %v8 = add i32 %v1, 1
+  %v9 = icmp eq i32 %v8, 3
+  br i1 %v9, label %B8, label %B4
+B8:
+  %v10 = add i32 %v0, 1
+  %v11 = icmp eq i32 %v0, 0
+  br i1 %v11, label %B2, label %B9
+B9:
+  ret i32 0
+B10:
+  %v12 = getelementptr i32, ptr %v3, i32 %v0
+  %v13 = getelementptr i32, ptr %v4, i32 %v0
+  %v14 = getelementptr [9 x i32], ptr %v5, i32 %v0
+  br label %B11
+B11:
+  %v15 = phi i32 [ %v22, %B11 ], [ 0, %B10 ]
+  %v16 = getelementptr [3 x i32], ptr %v12, i32 %v15
+  %v17 = load i32, ptr %v16
+  %v18 = getelementptr [3 x i32], ptr %v13, i32 %v15
+  %v19 = load i32, ptr %v18
+  %v20 = add i32 %v17, %v19
+  %v21 = getelementptr i32, ptr %v14, i32 %v15
+  store i32 %v20, ptr %v21
+  %v22 = add i32 %v15, 1
+  %v23 = icmp eq i32 %v22, %v1
+  br i1 %v23, label %B12, label %B11
+B12:
+  br label %B6

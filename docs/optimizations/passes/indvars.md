@@ -1,72 +1,40 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:31a998825f3f0ff7ba8f0432818637d99187a679891c511bca75663c77186f35 -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:a0b07b16185bdc703c25365d90b8a67992b3601e048b975d10caa77336e22089 -->
 
 # indvars
 
 Settles what a loop's counters are worth: a counter's value after its loop
 becomes a number, and a narrow counter read as a wider index becomes a
 counter of that width. LLVM's IndVarSimplify (`rewriteLoopExitValues`,
-`widenIV`) plus an exit-value rewind across an outer loop. Which counters a
+`widenIV`). Which counters a
 loop keeps, and which ends it, is `lsr`'s.
 
 ## How it works
-One run is these steps, each followed by a refresh of what is known where it
-changed the body.
+One run is these steps.
 
-1. `loopexit::evaluated`: values after a counted loop computed from its
-   trips.
-2. `exitfold::folded`: exits their counts decide are folded.
-3. `exit_values` (only with `exit_values: true`): a counted exit's phi
-   values that are affine in the counters, with constant starts and steps,
-   become numbers. A counter stepped and then tested (`i + 1 < 32`) leaves
-   as 32, so the exit no longer keeps the old counter alive past its step.
-4. `exitsink::sunk`: final updates only exit phis read move to the exits.
-5. `widened`: a counter read through `zext` (or, where it is signed and
-   tested by `slt`, `sext`) to the address's index width, where `induction`
-   proves its values never pass its own (`rises_unsigned`, `rises_signed`),
-   becomes a counter of that width. C's `unsigned short i` reads `a[zext
-   i]`, and `short k` reads `a[sext k]`: a conversion per trip (`inc cx;
-   movsx esi,cx; cmp cx,bx`), which hides the loop from idioms and strength
-   reduction. A signed counter of a loop of at most `unroll`'s trip limit
-   (`IndVars::unrolls`) is left for `unroll` until the run with
-   `exit_values`: one operation fewer in the rolled loop made a loop that
-   `unroll` took whole no longer fit its own size. The wide counter ends the
-   loop against the bound extended once in the preheader; an unsigned or
-   equality compare of the narrow one with a value the loop leaves alone
-   compares the wide one with that value extended
-   (`WidenIV::widenLoopCompare`); other readers of the narrow one read its
-   low part.
-6. `congruent`: header counters with one start and one step are one counter
-   (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
-   first, and `dead` removes them.
-7. `rewound`: see below.
-
-`rewound` carries an exact inner recurrence's exit value around the outer
-loop. An inner loop running exactly `count` trips leaves as
-`start + count * step`; subtracting that distance on the outer back edge
-rebuilds the next start, so the saved start is dead across the hot inner
-loop.
-
-```text
- outer:                                 outer:
-   inner_pre: br inner                    %st = phi [%start,pre],[%r,latch]
- inner:                                 inner:
-   %p = phi [%start,inner_pre],..  =>     %p = phi [%st,inner_pre],..
- exit:                                  exit:
-   ...                                    %r = add %p_exit, -distance
-```
-
-It applies only for a pair of single-latch loops whose inner loop has one
-exit, a known trip count, a counter with constant nonzero step, and a start
-defined outside the outer loop and read in it only by that phi. It is
-profitable when inner-loop register pressure reaches the target's registers
-and the target's `add` costs no more than a `move` and its `memory_update`
-no more than a `load` plus `store`: in a register the old copy and the
-rewind are equal work; in frame cells the old form is a load and a store,
-the new a memory update.
+0. `exitvalues::rewritten`: a value read after a loop becomes an expression
+   of the loop's count where the loop is left (`rewriteLoopExitValues`,
+   ScalarEvolution's exit values, from every exit of the loop, a rotated
+   loop's latch included); `LLRM_NO_SCEV_EXITVALUES` turns it off.
+1. `simplifyindvar::simplified_and_extended` (`simplifyAndExtend`): the IV
+   users simplified and a counter read through `zext` or `sext` at a wider
+   index becomes a counter of that width (`WidenIV`). C's `unsigned short i`
+   reads `a[zext i]`: a conversion per trip, which hides the loop from
+   idioms and strength reduction.
+2. `congruentiv::replaced` (`SCEVExpander::replaceCongruentIVs`;
+   `LLRM_NO_SCEV_CONGRUENT`): header phis SCEV proves equal, a narrow one a
+   truncation of a wide one included, are one, and `dead` removes the rest.
+3. `canonexit::canonicalized` (`canonicalizeExitCondition`;
+   `LLRM_NO_SCEV_CANONEXIT`), `exitopt::optimized` (`optimizeLoopExits`;
+   `LLRM_NO_SCEV_EXITOPT`), `exitpredicate::predicated`
+   (`predicateLoopExits`; `LLRM_NO_SCEV_PREDICATE`), and the exits their
+   counts decide are folded by those.
+4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
+   exit tests a counter against the value it has at the last trip.
+5. `exitsink::sunk`: final updates only exit phis read move to the exits.
 
 ## Example
-Step 5, the widening, on `for (unsigned short i = 0; i < n; ++i) a[i] = 1`
+Step 1, the widening, on `for (unsigned short i = 0; i < n; ++i) a[i] = 1`
 with 32-bit addresses. Before:
 
 ```mir
@@ -124,15 +92,13 @@ From unit test `a_counter_extended_to_the_index_width_is_that_wide` in
 `indvars_tests.rs`.
 
 ## Runs
-In the body pipeline after `promote`, with `exit_values: false`. With
-`-ftree-ch` (not at -Os) it runs again with `exit_values: true` after the
-loop-header copy, where the copy made a counted exit's test the one that
-leaves (a number is a `mov` where the counter's register already holds it).
+In the body pipeline after `promote`. With `-ftree-ch` (not at -Os) it runs
+again after the loop-header copy, where the copy made a counted exit's test
+the one that leaves (a number is a `mov` where the counter's register
+already holds it).
 
 ## Needs
-`Registers`, `Bounded` (for a `sext` counter), `induction`, `liveness`,
-[`crate::loopexit`](loopexit.md), [`crate::exitfold`](exitfold.md), [`crate::exitsink`](exitsink.md),
-[`crate::profit`](profit.md).
+`llrm_analysis::scev`, [`crate::exitvalues`](exitvalues.md), [`crate::exitsink`](exitsink.md).
 
 ## Keeps
 Nothing after steps 1 to 3; dominators and loops after the others.

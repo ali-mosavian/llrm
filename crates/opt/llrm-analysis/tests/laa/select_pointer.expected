@@ -1,0 +1,30 @@
+Printing analysis 'Loop Access Analysis' for function 'f':
+  loop:
+    Memory dependences are safe with run-time checks
+    Dependences:
+    Run-time memory checks:
+    Check 0:
+      Comparing group GRP0:
+        %pw = getelementptr inbounds i32, ptr %d, i64 %i
+      Against group GRP1:
+        %pr = getelementptr inbounds i32, ptr %base, i64 %i
+    Check 1:
+      Comparing group GRP0:
+        %pw = getelementptr inbounds i32, ptr %d, i64 %i
+      Against group GRP2:
+        %pr = getelementptr inbounds i32, ptr %base, i64 %i
+    Grouped accesses:
+      Group GRP0:
+        (Low: %d High: ((4 * %n) + %d))
+          Member: {%d,+,4}<nuw><%loop>
+      Group GRP1:
+        (Low: %a High: ((4 * %n) + %a))
+          Member: {%a,+,4}<nw><%loop>
+      Group GRP2:
+        (Low: %b High: ((4 * %n) + %b))
+          Member: {%b,+,4}<nw><%loop>
+
+    Non vectorizable stores to invariant address were not found in loop.
+    SCEV assumptions:
+
+    Expressions re-written:

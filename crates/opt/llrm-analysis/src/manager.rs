@@ -13,13 +13,13 @@
 //! - `SKIPS` with `depends`: the entry is kept past an invalidation if the
 //!   change log cannot have altered it. `Depends` names the instructions the
 //!   result models, those it keys entries by, and the users a change flows
-//!   through. `ExposedFrames`, `PointerValues`, `Pointers`, `CallEffects` and
-//!   `Writes` model pointers, aggregates and calls only, so a change to integer
-//!   arithmetic leaves them standing.
+//!   through. `ExposedFrames`, `PointerValues`, `Pointers` and `Writes` model
+//!   pointers, aggregates and calls only, so a change to integer arithmetic
+//!   leaves them standing.
 //! - `INCREMENTAL` with `update`: the entry is brought up to date from the
-//!   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
-//!   or loops `Touched::reach` the changes (a change to a terminator or to the
-//!   CFG redoes all); `Accesses` in [`crate::memoryssa`] survives pure moves.
+//!   change log. `DominatedEdges` and `Counted` redo only the blocks or loops
+//!   `Touched::reach` the changes (a change to a terminator or to the CFG
+//!   redoes all); `Accesses` in [`crate::memoryssa`] survives pure moves.
 //! - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
 //!   fresh `run`.
 //!
@@ -58,20 +58,17 @@
 //! ```text
 //!  PointerValues    -
 //!  Pointers         PointerValues
-//!  CallEffects      PointerValues
-//!  Writes           CallEffects
+//!  Writes           PointerValues
 //!  TableLoads       -
 //!  Registers        TableLoads (updates)
 //!  Followers        Registers
 //!  Counted          Registers
 //!  DominatedEdges   Registers
-//!  Bounded          Registers, Counted, DominatedEdges
-//!  Annotated        PointerValues, Registers, Counted, DominatedEdges, Bounded
-//!  Accesses         Annotated, CallEffects                  (memoryssa)
+//!  Annotated        PointerValues, Registers, Counted, DominatedEdges
+//!  Accesses         Annotated, CallFootprints, PointerValues (memoryssa)
 //!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
 //!  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
 //!  FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
-//!  Published        Pointers, ExposedFrames                 (observers)
 //! ```
 //!
 //! Module entries read the program through `ModuleAnalyses` and are dropped
@@ -80,16 +77,13 @@
 //! memory effects, by name) can be held past passes that add no memory
 //! operation when `covers` says the stale result states no more than a fresh
 //! one. `Summaries` keeps per-body facts and recomputes only bodies whose
-//! history moved. `Callbacks`, the effects of all the callbacks into the module
-//! added up, is rebuilt only when `GlobalsAA` or `Summaries` is a different
-//! result. `ProgramSummaries` is a program entry: one fixed point over all
-//! modules, each module's `Summaries` given the others'.
+//! history moved. `ProgramSummaries` is a program entry: one fixed point over
+//! all modules, each module's `Summaries` given the others'.
 //!
 //! `Unit::within` builds the `Unit` that analyses read from `Outer` (the
 //! module, target and program), carrying whichever cached results the caller
 //! holds. `Held` and `Ranges` bundle the cached results a pass passes on to a
 //! `Unit`, so the facts are the manager's and not a solve of the pass's own.
-//! `Bounded` is empty where `Outer::loop_intervals` is off (-O1).
 //!
 //! # Example
 //! A pass replaces the uses of `%x` by `%a`, an integer edit:
@@ -106,10 +100,10 @@
 //! }
 //! ```
 //!
-//! | change                       | `Pointers`, `CallEffects`, `Writes`, `ExposedFrames` |
+//! | change                       | `Pointers`, `Writes`, `ExposedFrames`                |
 //! |------------------------------|------------------------------------------------------|
 //! | `%x` replaced by `%a`        | kept (`unaffected` is true)                          |
-//! | `%q`, the address, rewritten | `CallEffects::unaffected` is false: recomputed        |
+//! | `%q`, the address, rewritten | `Writes::unaffected` is false: recomputed             |
 //!
 //! From unit test
 //! `an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not`
@@ -137,13 +131,12 @@
 //!
 //! # Provides
 //! The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
-//! `CallEffects`, `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
-//! `Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`,
-//! `Bounded`; module entries `GlobalsAA`, `Summaries`, `Callbacks`; program
+//! `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
+//! `Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`;
+//! module entries `GlobalsAA`, `Summaries`; program
 //! entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
-//! `call_effects`, `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s
-//! `Accesses`, [`crate::observers`]'s `Published` and [`crate::noreturn`]'s
-//! `TerminalSites` are entries defined beside their analyses.
+//! `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s
+//! `Accesses` is an entry defined beside its analysis.
 //!
 //! # Needs
 //! [`crate::alias`], [`crate::consts`], [`crate::globalsaa`],
@@ -160,14 +153,13 @@ use std::rc::Rc;
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::depends::Depends;
-use llrm_mir::module::{Change, Function, GlobalValue, InstId, Linkage, Mark, Module, Operand, ValueId};
+use llrm_mir::module::{Change, Function, InstId, Linkage, Mark, Module, Operand, ValueId};
 use llrm_mir::opcode::{CastOp, Opcode};
-use llrm_mir::passes::{Analyses, Analysis, Declarations, ModuleAnalyses, ModuleAnalysis, Outer};
+use llrm_mir::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, Outer};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
-use llrm_support::debug::counted;
 use llrm_support::hash::IndexMap;
 
-use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
+use crate::alias::{self, PointsTo, Procedure, Summary};
 use crate::cfg::Shape;
 use crate::consts::{self, Calls, Known};
 use crate::floatfacts;
@@ -175,7 +167,6 @@ use crate::globalsaa::{self, Globals, ProgramGlobals};
 use crate::induction;
 use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, Slice, Unit};
 use crate::memoryssa;
-use crate::ranges;
 
 impl<'a> Unit<'a> {
     /// `function` as the manager's analyses see it: its module and target
@@ -187,6 +178,7 @@ impl<'a> Unit<'a> {
         outer: &'a Outer,
     ) -> Self {
         let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
+        let globals_mr = outer.cached_ref::<GlobalsModRefAnalysis>();
         Self {
             program: Some(outer.program()),
             spaces: outer.target().spaces(),
@@ -197,6 +189,8 @@ impl<'a> Unit<'a> {
             globals: &outer.globals,
             function,
             globals_aa,
+            globals_mr,
+            outer: Some(outer),
             references: None,
             shape: None,
             registers: None,
@@ -206,56 +200,12 @@ impl<'a> Unit<'a> {
             counted: None,
             followers: None,
             edges: None,
-            bounds: None,
             exposed: None,
             plain: None,
             point_values: None,
-            callbacks: None,
-            callbacks_from: Some(outer),
-            loop_intervals: outer.loop_intervals(),
             congruent: None,
             proved: None,
         }
-    }
-}
-
-/// What calling back into the module may do: the effects of GlobalsAA's
-/// entries added up. Every body that calls something unknown reads it, and it
-/// depends on the entries and the summaries alone, so it is made once for them
-/// and kept while both are the same results.
-pub struct Callbacks;
-
-/// The `GlobalsAA` and `Summaries` results `Callbacks` was last made from.
-#[derive(Default)]
-struct CallbacksSeen(Option<(Rc<Result<Globals, String>>, Rc<Result<IndexMap<String, Summary>, String>>)>);
-
-impl ModuleAnalysis for Callbacks {
-    type Result = Result<Option<Summary>, String>;
-    const NAME: &'static str = "callbacks";
-    fn run(
-        module: &Module,
-        analyses: &mut ModuleAnalyses,
-    ) -> Self::Result {
-        let globals = analyses.get::<GlobalsAA>(module);
-        let known = analyses.get::<Summaries>(module);
-        analyses.memo::<CallbacksSeen>().0 = Some((Rc::clone(&globals), Rc::clone(&known)));
-        Ok(alias::callbacks_over(
-            Result::as_ref(&*globals).map_err(String::clone)?,
-            Result::as_ref(&*known).map_err(String::clone)?,
-        ))
-    }
-    fn unchanged(
-        module: &Module,
-        analyses: &mut ModuleAnalyses,
-        _: &Self::Result,
-    ) -> bool {
-        let globals = analyses.get::<GlobalsAA>(module);
-        let known = analyses.get::<Summaries>(module);
-        analyses
-            .memo::<CallbacksSeen>()
-            .0
-            .as_ref()
-            .is_some_and(|(then, before)| Rc::ptr_eq(then, &globals) && Rc::ptr_eq(before, &known))
     }
 }
 
@@ -283,13 +233,57 @@ impl ModuleAnalysis for GlobalsAA {
     }
 }
 
+/// `GlobalsAAResult` (GlobalsModRef.cpp): what each function does to memory
+/// and to each global nothing outside the module reaches but by name.
+pub struct GlobalsModRefAnalysis;
+
+impl ModuleAnalysis for GlobalsModRefAnalysis {
+    type Result = crate::globalsmodref::GlobalsModRef;
+    const NAME: &'static str = "globals-modref";
+    fn covers(
+        stale: &Self::Result,
+        fresh: &Self::Result,
+    ) -> bool {
+        stale.covers(fresh)
+    }
+    fn run(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Self::Result {
+        crate::globalsmodref::compute_with(module, globalsaa::unexported(module, analyses))
+    }
+}
+
+/// Whether the module forges a pointer into the data segment
+/// (`forging::forges_selector`): worked out once for the module and read by
+/// `GlobalsAA`.
+pub struct ForgedSelectors;
+
+impl ModuleAnalysis for ForgedSelectors {
+    type Result = bool;
+    const NAME: &'static str = "forged-selectors";
+    /// A held `true` claims more than a fresh `false`, never less.
+    fn covers(
+        stale: &Self::Result,
+        fresh: &Self::Result,
+    ) -> bool {
+        *stale || !*fresh
+    }
+    fn run(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Self::Result {
+        crate::forging::forges_selector(module, analyses.program().spaces)
+    }
+}
+
 /// Each defined function's memory effects, by name: `alias::summaries` of
 /// the whole module, its globals as `GlobalsAA` finds them and the bodies
 /// other modules define as the cached `ProgramSummaries` says.
 pub struct Summaries;
 
 impl ModuleAnalysis for Summaries {
-    type Result = Result<IndexMap<String, Summary>, String>;
+    type Result = Result<Rc<IndexMap<String, Rc<Summary>>>, String>;
     const NAME: &'static str = "summaries";
     fn covers(
         stale: &Self::Result,
@@ -306,269 +300,139 @@ impl ModuleAnalysis for Summaries {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
-        let globals_held = analyses.get::<GlobalsAA>(module);
-        let globals = Result::as_ref(&*globals_held).map_err(String::clone)?;
+        let inputs = SummaryInputs::of(module, analyses);
+        let none = BTreeSet::new();
+        let tracked = match &inputs.globals_held {
+            Some(held) => Result::as_ref(&**held).map_err(String::clone)?.tracked_globals(),
+            None => &none,
+        };
         let program = Rc::clone(analyses.program());
-        let known = match program.cached::<ProgramSummaries>() {
-            Some(all) => Some(Result::as_ref(&*all).map_err(String::clone)?[program.module].clone()),
-            None => None,
+        let layout = &program.layout;
+        let then = analyses.memo::<Option<SummariesMade>>().take();
+        // The result of the last run, if it is the one `then` describes; the
+        // only holder of it where nothing else holds it.
+        let before = match analyses.take_dropped::<Summaries>() {
+            Some(held) if then.is_some() => match Rc::try_unwrap(held) {
+                Ok(Ok(map)) => Some(Rc::try_unwrap(map).unwrap_or_else(|shared| (*shared).clone())),
+                Ok(Err(_)) => None,
+                Err(shared) => Result::as_ref(&*shared).ok().map(|map| (**map).clone()),
+            },
+            _ => None,
         };
-        let declarations = analyses.get::<Declarations>(module);
-        let scratch = analyses.from_scratch();
-        let logged = analyses.edit_log().len();
-        let epoch = analyses.log_epoch();
-        // Bodies reported edited since the last run, where the globals' facts
-        // and the declarations are what it was made under and no body was
-        // added, removed or renamed: only those are looked at. The full scan
-        // of marks below is the reference (`LLRM_CHECK_SUMMARIES`).
-        if !scratch
-            && let Some(found) =
-                Self::brought_up(module, analyses, &program, &globals_held, &declarations, &known, logged)
-        {
-            return found;
-        }
-        let marks: IndexMap<GlobalId, Mark> = bodies(module).map(|(id, function)| (id, function.mark())).collect();
-        // What a body's calls and exposed frames are depends on the body and
-        // the declarations: kept while neither moved.
-        let memo = analyses.memo::<SummariesMemo>();
-        let kept = if scratch || !memo.declarations.as_ref().is_some_and(|then| Rc::ptr_eq(then, &declarations)) {
-            IndexMap::default()
-        } else {
-            std::mem::take(&mut memo.facts)
-        };
-        // A body's shape is of its body alone: the one kept with its facts
-        // stands while its history is where they left it.
-        let shapes: IndexMap<GlobalId, Rc<Shape>> = bodies(module)
-            .map(|(id, _)| {
-                let held = kept.get(&id).filter(|one| one.mark == marks[&id]).and_then(|one| one.shape.clone());
-                (id, held.unwrap_or_else(|| analyses.function::<Shape>(module, id)))
-            })
-            .collect();
-        let memo = analyses.memo::<SummariesMemo>();
-        // The calls were found under the globals' facts of the run before:
-        // other facts, the calls are found again.
-        let mut body_facts = body_facts(module, &program.layout, program.target.spaces(), kept, &marks);
-        for (id, one) in body_facts.iter_mut() {
-            one.shape = Some(Rc::clone(&shapes[id]));
-        }
-        if !memo.globals.as_ref().is_some_and(|then| Rc::ptr_eq(then, &globals_held)) {
-            body_facts.values_mut().for_each(|one| (one.calls, one.values) = (None, None));
-        }
-        calls_found(module, &program, globals, bodies(module).map(|(id, _)| id), &mut body_facts);
-        let procedures = Table::of(module, &program, globals, &body_facts, None);
-        // Bodies edited since the last run: those whose history is not where
-        // the last run left it. What else the summaries read, the
-        // globals' facts and the declarations, either is the same result as
-        // then or the whole is worked out again.
-        let memo = analyses.memo::<SummariesMemo>();
-        let dirty = memo
-            .globals
-            .as_ref()
-            .zip(memo.declarations.as_ref())
-            .filter(|(then, _)| Rc::ptr_eq(then, &globals_held))
-            .and_then(|(_, then)| {
-                // A declaration that differs is the function's own to answer
-                // for, and its callers' (the closure does
-                // that); a variable that differs, a global added or removed, is
-                // the whole's.
-                let mut names: BTreeSet<String> = BTreeSet::new();
-                if !Rc::ptr_eq(then, &declarations) {
-                    if then.len() != declarations.len() {
-                        return None;
-                    }
-                    for (before, now) in then.iter().zip(declarations.iter()).filter(|(before, now)| before != now) {
-                        if before.function().is_none() || now.function().is_none() {
-                            return None;
-                        }
-                        names.insert(now.name.clone()?);
-                    }
+        let log = (analyses.log_epoch(), analyses.edit_log().len());
+        let resets = analyses.resets();
+        let made = match (then, before) {
+            (Some(then), Some(mut before)) => {
+                // Only bodies edited since the last run moved, where what a
+                // summary is of besides its body is as then.
+                let alone = then.epoch == log.0
+                    && then.resets == resets
+                    && then.globals == module.globals.len()
+                    && then.tracked == *tracked
+                    && then.inputs.is_the_last_but_declarations(&inputs);
+                if alone {
+                    let edited: BTreeSet<GlobalId> = analyses.edit_log()[then.logged..].iter().copied().collect();
+                    crate::attrsummary::resummarized(module, layout, tracked, &inputs.found, &mut before, edited);
+                    before
+                } else {
+                    let last = crate::attrsummary::Last {
+                        declared: &then.inputs.declared,
+                        declared_now: &inputs.declared,
+                        found: &then.inputs.found,
+                        tracked: &then.tracked,
+                        made: &mut before,
+                    };
+                    crate::attrsummary::summaries_reusing(module, layout, tracked, &inputs.found, Some(last))
                 }
-                names.extend(
-                    bodies(module)
-                        .filter(|(id, function)| memo.marks.get(id) != Some(&function.mark()))
-                        .filter_map(|(id, _)| module.global(id).name.clone()),
-                );
-                Some(names)
-            });
-        let found = Self::solved(&procedures, known.as_ref(), &mut memo.summaries, dirty.as_ref());
-        memo.marks = marks;
-        memo.globals = Some(Rc::clone(&globals_held));
-        memo.declarations = Some(declarations);
-        memo.slots = Some(Rc::clone(&procedures.slots));
-        memo.logged = logged;
-        memo.log_epoch = epoch;
-        drop(procedures);
-        memo.facts = body_facts;
-        found
+            }
+            _ => crate::attrsummary::summaries(module, layout, tracked, &inputs.found),
+        };
+        let tracked = tracked.clone();
+        let globals = module.globals.len();
+        *analyses.memo::<Option<SummariesMade>>() =
+            Some(SummariesMade { inputs, tracked, globals, epoch: log.0, logged: log.1, resets });
+        Ok(Rc::new(made))
     }
-}
 
-impl Summaries {
-    /// The summaries brought up to date from the edit log: none where the
-    /// run is not one that a log can serve (the globals' facts or the
-    /// declarations moved, a body was added, removed or renamed, nothing
-    /// kept), and the full scan is made.
-    fn brought_up(
+    /// A summary is made of its function's declaration (attributes and
+    /// parameters) and of what `GlobalsAA` and `GlobalsModRef` hold, and of
+    /// nothing else in the body: where those are the very results the last run
+    /// read, so is the result. LLVM's `PostOrderFunctionAttrs` does not visit a
+    /// function whose body and callees it kept.
+    fn unchanged(
         module: &Module,
         analyses: &mut ModuleAnalyses,
-        program: &Rc<llrm_mir::program::ProgramProxy>,
-        globals_held: &Rc<Result<Globals, String>>,
-        declarations: &Rc<Vec<GlobalValue>>,
-        known: &Option<IndexMap<String, Summary>>,
-        logged: usize,
-    ) -> Option<Result<IndexMap<String, Summary>, String>> {
-        let epoch = analyses.log_epoch();
-        let memo = analyses.memo::<SummariesMemo>();
-        let since = memo.logged;
-        let steady = memo.slots.is_some()
-            && memo.log_epoch == epoch
-            && since <= logged
-            && memo.globals.as_ref().is_some_and(|then| Rc::ptr_eq(then, globals_held))
-            && memo.declarations.as_ref().is_some_and(|then| Rc::ptr_eq(then, declarations));
-        if !steady {
-            return None;
-        }
-        let slots = Rc::clone(memo.slots.as_ref()?);
-        let moved: Vec<GlobalId> = {
-            let mut seen = BTreeSet::new();
-            analyses.edit_log()[since..].iter().copied().filter(|id| seen.insert(*id)).collect()
-        };
-        let memo = analyses.memo::<SummariesMemo>();
-        let mut refresh = Vec::new();
-        for id in moved {
-            let global = module.global(id);
-            let body = global.function().filter(|one| !one.is_declaration());
-            match (body, slots.by_id.get(&id)) {
-                (Some(function), Some(&slot)) if global.name.as_deref() == Some(slots.names[slot].as_str()) => {
-                    if memo.facts[&id].mark != function.mark() {
-                        refresh.push(id);
-                    }
-                }
-                (None, None) => {}
-                (Some(_), None) if global.name.is_none() => {}
-                _ => {
-                    counted("summaries from the log", false);
-                    return None;
-                }
-            }
-        }
-        let mut facts = std::mem::take(&mut memo.facts);
-        let layout = &program.layout;
-        let spaces = program.target.spaces();
-        let mut dirty = BTreeSet::new();
-        for &id in &refresh {
-            let function = module.global(id).function().expect("a body");
-            let shape = analyses.function::<Shape>(module, id);
-            facts.insert(
-                id,
-                BodyFacts {
-                    mark: function.mark(),
-                    exposed: Rc::new(crate::memory::exposed_frames(
-                        &Unit::of(module, layout, function).with_spaces(spaces),
-                    )),
-                    shape: Some(shape),
-                    calls: None,
-                    values: None,
-                },
-            );
-            dirty.extend(module.global(id).name.clone());
-        }
-        let globals = Result::as_ref(globals_held).ok()?;
-        calls_found(module, program, globals, refresh.iter().copied(), &mut facts);
-        let table = Table::of(module, program, globals, &facts, Some(slots));
-        let memo = analyses.memo::<SummariesMemo>();
-        if llrm_support::env_flag!("LLRM_CHECK_SUMMARIES") {
-            for (id, function) in bodies(module) {
-                assert!(
-                    refresh.contains(&id) || facts[&id].mark == function.mark(),
-                    "LLRM_CHECK_SUMMARIES: {:?} was edited and not reported",
-                    module.global(id).name
-                );
-            }
-        }
-        FROM_LOG.with(|runs| runs.set(runs.get() + 1));
-        counted("summaries from the log", true);
-        let found = Self::solved(&table, known.as_ref(), &mut memo.summaries, Some(&dirty));
-        for &id in &refresh {
-            memo.marks.insert(id, facts[&id].mark);
-        }
-        memo.logged = logged;
-        memo.log_epoch = epoch;
-        drop(table);
-        memo.facts = facts;
-        Some(found)
-    }
-
-    /// `procedures`' summaries, brought up to date for `dirty` (all where it
-    /// is none), and checked against a run from nothing where asked.
-    fn solved(
-        procedures: &Table,
-        known: Option<&IndexMap<String, Summary>>,
-        memo: &mut alias::SummaryMemo,
-        dirty: Option<&BTreeSet<String>>,
-    ) -> Result<IndexMap<String, Summary>, String> {
-        counted("summaries updated", dirty.is_some());
-        let found = alias::summaries_updating(procedures, known, memo, dirty);
-        if llrm_support::env_flag!("LLRM_CHECK_SUMMARIES") {
-            procedures.check_against_scratch();
-        }
-        if llrm_support::env_flag!("LLRM_CHECK_MODULES") {
-            let fresh = alias::summaries(procedures, known);
-            if found != fresh {
-                let (now, then) = (found.as_ref().ok(), fresh.as_ref().ok());
-                let names: Vec<String> = match (now, then) {
-                    (Some(now), Some(then)) => now
-                        .iter()
-                        .filter(|(name, one)| then.get(*name) != Some(one))
-                        .map(|(name, _)| name.clone())
-                        .chain(then.keys().filter(|name| !now.contains_key(*name)).cloned())
-                        .collect(),
-                    _ => Vec::new(),
-                };
-                panic!(
-                    "summaries brought up to date differ from summaries worked out again: {names:?} (dirty {dirty:?})"
-                );
-            }
-        }
-        found
+        _: &Self::Result,
+    ) -> bool {
+        let now = SummaryInputs::of(module, analyses);
+        analyses.memo::<Option<SummariesMade>>().as_ref().is_some_and(|last| now.is_the_last(&last.inputs))
     }
 }
 
-thread_local! {
-    static FROM_LOG: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many runs of `Summaries` on this thread were brought up to date from
-/// the edit log alone, for a test that an edit reported to one body does not
-/// look at the rest.
-pub fn runs_from_the_log() -> usize {
-    FROM_LOG.with(std::cell::Cell::get)
-}
-
-/// What `Summaries` keeps for its next run.
-#[derive(Default)]
-struct SummariesMemo {
-    summaries: alias::SummaryMemo,
-    marks: IndexMap<GlobalId, Mark>,
-    globals: Option<Rc<Result<Globals, String>>>,
-    declarations: Option<Rc<Vec<GlobalValue>>>,
-    facts: IndexMap<GlobalId, BodyFacts>,
-    /// The bodies, by number, the last run was over.
-    slots: Option<Rc<Slots>>,
-    /// How much of the module analyses' edit log the last run had read.
+/// What the last `Summaries::run` read and made.
+struct SummariesMade {
+    inputs: SummaryInputs,
+    tracked: BTreeSet<GlobalId>,
+    /// The globals, and the position in the log of edits, the run was at.
+    globals: usize,
+    epoch: u64,
     logged: usize,
-    /// The `ModuleAnalyses::log_epoch` that `logged` is a position in.
-    log_epoch: u64,
+    /// `ModuleAnalyses::resets` then: a pass since that said anything may have
+    /// changed left the declarations to be compared, not read from the log.
+    resets: u64,
 }
 
-/// The named bodies of a module, in the order the summaries number them.
-struct Slots {
-    /// Which table of bodies this is, as `alias::Bodies::layout` asks.
-    layout: u64,
-    ids: Vec<GlobalId>,
-    names: Vec<String>,
-    by_name: llrm_support::hash::HashMap<String, usize>,
-    by_id: llrm_support::hash::HashMap<GlobalId, usize>,
+/// The results `Summaries::run` read.
+struct SummaryInputs {
+    declared: Rc<Vec<llrm_mir::module::GlobalValue>>,
+    globals_held: Option<Rc<<GlobalsAA as ModuleAnalysis>::Result>>,
+    found: Rc<<GlobalsModRefAnalysis as ModuleAnalysis>::Result>,
+}
+
+impl SummaryInputs {
+    fn of(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Self {
+        // Where GlobalsAA is read cached (`PassManager::require_cached`) and
+        // not yet made, no global is tracked.
+        let globals_held = match analyses.cached::<GlobalsAA>() {
+            Some(held) => Some(held),
+            None if analyses.is_stateless::<GlobalsAA>() => None,
+            None => Some(analyses.get::<GlobalsAA>(module)),
+        };
+        // The one `GlobalsAAResult` of the module, as the pin has: the held
+        // `GlobalsModRef`, not another made for each run.
+        let found = analyses.get::<GlobalsModRefAnalysis>(module);
+        let declared = analyses.get::<llrm_mir::passes::Declarations>(module);
+        Self { declared, globals_held, found }
+    }
+
+    /// As `is_the_last`, the declarations left to the log of edits.
+    fn is_the_last_but_declarations(
+        &self,
+        now: &Self,
+    ) -> bool {
+        Rc::ptr_eq(&self.found, &now.found)
+            && match (&self.globals_held, &now.globals_held) {
+                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+
+    fn is_the_last(
+        &self,
+        last: &Self,
+    ) -> bool {
+        Rc::ptr_eq(&self.declared, &last.declared)
+            && Rc::ptr_eq(&self.found, &last.found)
+            && match (&self.globals_held, &last.globals_held) {
+                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
 }
 
 /// `module`'s defined functions, each with its id.
@@ -686,7 +550,7 @@ fn procedures<'a>(
 ) -> IndexMap<String, Procedure<'a>> {
     bodies(module)
         .filter_map(|(id, function)| {
-            let name = module.global(id).name.clone()?;
+            let name = module.global(id).name.owned()?;
             let one = &facts[&id];
             Some((
                 name,
@@ -705,133 +569,6 @@ fn procedures<'a>(
             ))
         })
         .collect()
-}
-
-/// The bodies `Summaries` is over, as `alias::Bodies`: each body's calls as
-/// kept, and its `Procedure` made when a visit asks for it.
-struct Table<'a> {
-    module: &'a Module,
-    program: &'a ProgramProxy,
-    globals: &'a Globals,
-    facts: &'a IndexMap<GlobalId, BodyFacts>,
-    slots: Rc<Slots>,
-}
-
-impl<'a> Table<'a> {
-    /// `slots` where the bodies are those of the run before, else made.
-    fn of(
-        module: &'a Module,
-        program: &'a ProgramProxy,
-        globals: &'a Globals,
-        facts: &'a IndexMap<GlobalId, BodyFacts>,
-        slots: Option<Rc<Slots>>,
-    ) -> Self {
-        let slots = slots.unwrap_or_else(|| {
-            let named: Vec<(GlobalId, String)> =
-                bodies(module).filter_map(|(id, _)| module.global(id).name.clone().map(|name| (id, name))).collect();
-            thread_local! {
-                static MADE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-            }
-            Rc::new(Slots {
-                layout: MADE.with(|made| {
-                    made.set(made.get() + 1);
-                    made.get()
-                }),
-                by_name: named.iter().enumerate().map(|(at, (_, name))| (name.clone(), at)).collect(),
-                by_id: named.iter().enumerate().map(|(at, (id, _))| (*id, at)).collect(),
-                ids: named.iter().map(|(id, _)| *id).collect(),
-                names: named.into_iter().map(|(_, name)| name).collect(),
-            })
-        });
-        Self { module, program, globals, facts, slots }
-    }
-
-    /// What `LLRM_CHECK_SUMMARIES` asserts: the facts kept for every body are
-    /// those a run from nothing finds (exposed frames, point values, calls),
-    /// and so are the shapes' bodies' marks.
-    fn check_against_scratch(&self) {
-        let (module, program, globals) = (self.module, self.program, self.globals);
-        let mut fresh = body_facts(
-            module,
-            &program.layout,
-            program.target.spaces(),
-            IndexMap::default(),
-            &bodies(module).map(|(id, function)| (id, function.mark())).collect(),
-        );
-        fresh.iter_mut().for_each(|(id, one)| one.shape = self.facts[id].shape.clone());
-        calls_found(module, program, globals, bodies(module).map(|(id, _)| id), &mut fresh);
-        for (&id, kept) in self.facts {
-            let then = &fresh[&id];
-            let name = module.global(id).name.clone();
-            assert!(
-                kept.exposed == then.exposed,
-                "LLRM_CHECK_SUMMARIES: exposed frames of {name:?} differ from scratch"
-            );
-            assert!(
-                kept.values.as_deref() == then.values.as_deref(),
-                "LLRM_CHECK_SUMMARIES: point values of {name:?} differ from scratch"
-            );
-            assert!(
-                format!("{:?}", kept.calls) == format!("{:?}", then.calls),
-                "LLRM_CHECK_SUMMARIES: calls of {name:?} differ from scratch"
-            );
-        }
-    }
-}
-
-impl alias::Bodies for Table<'_> {
-    fn len(&self) -> usize {
-        self.slots.ids.len()
-    }
-
-    fn name(
-        &self,
-        at: usize,
-    ) -> &str {
-        &self.slots.names[at]
-    }
-
-    fn position(
-        &self,
-        name: &str,
-    ) -> Option<usize> {
-        self.slots.by_name.get(name).copied()
-    }
-
-    fn facts(
-        &self,
-        at: usize,
-    ) -> &Rc<alias::CallFacts> {
-        self.facts[&self.slots.ids[at]].calls.as_ref().expect("found before")
-    }
-
-    fn globals(&self) -> Option<&Globals> {
-        (!self.slots.ids.is_empty()).then_some(self.globals)
-    }
-
-    fn layout(&self) -> u64 {
-        self.slots.layout
-    }
-
-    fn procedure(
-        &self,
-        at: usize,
-    ) -> Procedure<'_> {
-        let id = self.slots.ids[at];
-        let one = &self.facts[&id];
-        Procedure::with(
-            summarized_in(
-                self.module,
-                self.program,
-                self.globals,
-                one.shape.as_ref().expect("the shape is kept with the facts"),
-                &one.exposed,
-                one.values.as_deref(),
-                self.module.global(id).function().expect("a body"),
-            ),
-            Rc::clone(self.facts(at)),
-        )
-    }
 }
 
 /// For each module, the summary of each of its declarations another
@@ -873,11 +610,7 @@ impl ProgramAnalysis for ProgramSummaries {
             })
             .collect();
         let globals = (0..count)
-            .map(|at| {
-                globalsaa::found(&program.modules[at], &proxies[at], &elsewhere[at], &mut |id| {
-                    Rc::clone(&shapes[at][&id])
-                })
-            })
+            .map(|at| globalsaa::found(&program.modules[at], &proxies[at], &elsewhere[at]))
             .collect::<Result<Vec<_>, String>>()?;
         // A body defined elsewhere starts as a call no summary describes,
         // the most any call does: each round only narrows.
@@ -923,7 +656,7 @@ fn imported(
                     let (there, defined) = program.definition(at, id).filter(|&(there, _)| there != at)?;
                     let from = &program.modules[there];
                     let summary = own[there].get(from.global(defined).name.as_deref()?)?;
-                    Some((global.name.clone()?, moved(summary, from, module)))
+                    Some((global.name.owned()?, moved(summary, from, module)))
                 })
                 .collect()
         })
@@ -983,7 +716,7 @@ fn carried(
     out
 }
 
-/// What the pointer analyses (`ExposedFrames`, `Pointers`, `CallEffects`,
+/// What the pointer analyses (`ExposedFrames`, `Pointers`,
 /// `Writes`) model: an instruction that can make, move or name a pointer or an
 /// aggregate, or is a call. An integer loaded, computed, stored and compared is
 /// nothing to them; one that reaches an address or a call is. Where a result is
@@ -1109,6 +842,12 @@ impl Analysis for ExposedFrames {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
+        // No alloca before or after: no edit can change the empty answer, and
+        // reading the edits costs their operands (a phi of N arms edited N
+        // times is N^2).
+        if previous.is_empty() && !crate::frameescape::has_alloca(function) {
+            return Some(previous.clone());
+        }
         let mut touched = Vec::<ValueId>::new();
         let mut read = |operand: &Operand| {
             if let Operand::Value(value) = operand {
@@ -1117,7 +856,11 @@ impl Analysis for ExposedFrames {
         };
         for change in changes {
             match change {
-                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return None,
+                Change::Parameters => return None,
+                // An exposed alloca is one of its address's uses, and a block
+                // has none: an erased one was emptied by `Erased` changes, a
+                // created one is filled by `Inserted` ones.
+                Change::BlockCreated(_) | Change::BlockErased(_) => {}
                 Change::Operand { was, .. } => read(was),
                 Change::Operands { was, .. } => was.iter().for_each(&mut read),
                 Change::Erased { inst, .. } => function.instruction(*inst).operands.iter().for_each(&mut read),
@@ -1137,10 +880,11 @@ impl Analysis for ExposedFrames {
                 Change::Substituted { .. } => {}
             }
         }
+        crate::frameescape::count_reads(touched.len());
         let unit = Unit::within(context, layout, function, analyses.outer());
         Some(
-            crate::frameescape::exposed_renewed(function, previous.iter().copied(), &touched, |inst| {
-                crate::memory::is_lifetime_marker(&unit, inst)
+            crate::frameescape::exposed_renewed(function, previous.iter().copied(), &touched, |inst, at| {
+                crate::memory::kept_by(&unit, inst, at)
             })
             .into_iter()
             .collect(),
@@ -1153,7 +897,7 @@ pub struct Pointers;
 
 /// What the pointer solve finds of a body before it asks what escapes:
 /// `alias::point_values`. The call arguments and captures never enter it, so
-/// `Pointers` and `CallEffects` ask this one and each runs only its own escape
+/// `Pointers` and `Writes` ask this one and each runs only its own escape
 /// phase.
 pub struct PointerValues;
 
@@ -1182,6 +926,31 @@ impl Analysis for Pointers {
     type Result = Result<PointsTo, String>;
     const NAME: &'static str = "points-to";
     const SKIPS: bool = true;
+    const AUDITED: bool = true;
+    fn audit(
+        result: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) {
+        if let Ok(facts) = result {
+            let unit = Unit::within(context, layout, function, analyses.outer());
+            // A callee the module defines is read in its body as it stood
+            // before this pass.
+            let snapshot = llrm_mir::passes::MODULE_SNAPSHOT.with(|held| held.borrow().clone());
+            let verify = snapshot
+                .as_ref()
+                .map(
+                    |module| {
+                        let mut verify = crate::capturecheck::Verify::new(module, layout, 8);
+                        verify.trust_external = true;
+                        verify
+                    },
+                );
+            crate::capturecheck::check_with(&unit, facts, verify.as_ref());
+        }
+    }
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), edges: true })
     }
@@ -1226,7 +995,6 @@ impl Analysis for Annotated {
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let counted = analyses.get::<Counted>(context, layout, function);
         let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        let bounds = loop_bounds(context, layout, function, analyses);
         let mut unit = Unit::within(context, layout, function, analyses.outer())
             .with_shape(&shape)
             .with_assumptions(&assumptions)
@@ -1237,158 +1005,11 @@ impl Analysis for Annotated {
         if let Ok(edges) = &*edges {
             unit = unit.with_edges(edges);
         }
-        if let Ok(bounds) = &*bounds {
-            unit = unit.with_bounds(bounds);
-        }
         alias::annotated_with(&unit, pointers, &registers)
     }
 }
 
-/// What each call reads and writes, its callee as `Summaries` says:
-/// `alias::calls_annotated`. Where `Summaries` was not required, each
-/// call is to an unknown callee. Either way a call does no more than its
-/// attributes state, as alias reads them.
-pub struct CallEffects;
-
-impl Analysis for CallEffects {
-    type Result = Result<IndexMap<InstId, Effect>, String>;
-    const NAME: &'static str = "call-effects";
-    const SKIPS: bool = true;
-    const SOUND: bool = true;
-    /// Its references name the pointers of the call's arguments: past a
-    /// substitution they would name a value the edit erased.
-    const NAMES_VALUES: bool = true;
-    /// What it says of a call is what the call and its arguments' meanings
-    /// give, which edits that keep every value's meaning leave (no call is
-    /// made or moved). The calls still there are the calls it has an entry
-    /// for; an erased one is not asked.
-    fn covers(
-        old: &Self::Result,
-        fresh: &Self::Result,
-        _context: &Context,
-        function: &Function,
-    ) -> bool {
-        match (old, fresh) {
-            (Ok(old), Ok(fresh)) => old.iter().all(|(inst, effect)| {
-                function.is_erased(*inst) || fresh.get(inst).is_some_and(|found| effect.covers(found))
-            }),
-            (old, fresh) => old == fresh,
-        }
-    }
-    fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
-    }
-    /// Each effect with the values it names followed through the substitution:
-    /// the same bytes by the value that replaced one found equal.
-    fn remapped(
-        old: &Self::Result,
-        substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
-        _changes: &[llrm_mir::module::Change],
-        _context: &Context,
-        function: &Function,
-    ) -> Option<Self::Result> {
-        let old = old.as_ref().ok()?;
-        // A reference holds its pointer's decomposition (root, base, scale),
-        // read down the chain of instructions below it. Renaming a value to one
-        // that decomposes otherwise (a load forwarded to the GEP it loaded)
-        // gives a reference that knows less than a fresh one: derived again.
-        if renamed_into_a_chain(function, substituted, old) {
-            return None;
-        }
-        Some(Ok(alias::effects_renamed(old, substituted)?))
-    }
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self::Result {
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let values = analyses.get::<PointerValues>(context, layout, function);
-        let outer = analyses.outer();
-        let mut unit = Unit::within(context, layout, function, outer).with_shape(&shape).with_exposed(&exposed);
-        if let Ok(values) = &*values {
-            unit = unit.with_point_values(values);
-        }
-        call_effects(&unit, outer)
-    }
-}
-
-/// Whether a value replaced by another is read the same by a decomposition:
-/// both stop it (a load, a call, an allocation, a phi, a parameter, a
-/// constant), or both are one instruction (opcode, operands and flags: an
-/// inbounds gep goes on through its index where a plain one does not).
-pub(crate) fn decomposes_alike(
-    function: &Function,
-    was: ValueId,
-    now: ValueId,
-) -> bool {
-    use llrm_mir::module::ValueDef;
-    let ends = |value: ValueId| match function.value(value).def {
-        ValueDef::Instruction(inst) => matches!(
-            function.instruction(inst).opcode,
-            Opcode::Load { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. } | Opcode::Phi
-        ),
-        _ => true,
-    };
-    match (function.value(was).def, function.value(now).def) {
-        (ValueDef::Instruction(a), ValueDef::Instruction(b)) => {
-            let (a, b) = (function.instruction(a), function.instruction(b));
-            (ends(was) && ends(now))
-                || (!ends(was) && !ends(now) && a.opcode == b.opcode && a.operands == b.operands && a.flags == b.flags)
-        }
-        _ => ends(was) && ends(now),
-    }
-}
-
-/// Whether a value some reference of `effects` names is replaced by one that a
-/// fresh decomposition reads differently: the reference would name the new
-/// value as its root, where a decomposition goes on through the definition of a
-/// GEP, a cast, an add, and stops at a parameter, a constant, a load, a call,
-/// an allocation, a phi. A load forwarded to the pointer it loaded (a GEP) is
-/// the case; a value replaced by an equal instruction (the same opcode and
-/// operands) decomposes alike.
-fn renamed_into_a_chain(
-    function: &Function,
-    substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
-    effects: &IndexMap<InstId, alias::Effect>,
-) -> bool {
-    use llrm_mir::module::Operand;
-    let alike = |was: ValueId, now: ValueId| decomposes_alike(function, was, now);
-    let differs = |one: &crate::memory::MemRef| {
-        [one.pointer, one.root, one.base.map(Operand::Value), one.segment].into_iter().any(|named| {
-            matches!(
-                named,
-                Some(Operand::Value(was)) if matches!(substituted(was), Some(Operand::Value(now)) if !alike(was, now))
-            )
-        })
-    };
-    // The lists calls share are looked at once.
-    let mut seen: llrm_support::hash::HashSet<*const [crate::memory::MemRef]> = Default::default();
-    effects.values().any(|effect| {
-        let mut lists = [&effect.loads, &effect.stores].into_iter().filter(|list| seen.insert(Rc::as_ptr(list)));
-        lists.any(|list| list.iter().any(&differs)) || effect.fills.iter().any(&differs)
-    })
-}
-
-/// What each call of `unit` reads and writes, its callee as `Summaries`
-/// says where `outer` holds it, and otherwise an unknown one, as LLVM's
-/// function passes read an outer result only if cached.
-pub fn call_effects(
-    unit: &Unit,
-    outer: &Outer,
-) -> Result<IndexMap<InstId, Effect>, String> {
-    let summaries = outer.cached::<Summaries>();
-    let none = IndexMap::default();
-    let known = match summaries.as_deref() {
-        Some(found) => found.as_ref().map_err(String::clone)?,
-        None => &none,
-    };
-    alias::calls_annotated(&Procedure::of(*unit), known)
-}
-
-/// Every value known without solving memory: `consts::known` of no calls.
+/// The constants the body holds as values, which is none: see `Registers::run`.
 pub struct Registers;
 
 /// The loads from a constant global by an index (`consts::is_table_load`), in
@@ -1480,108 +1101,20 @@ impl Analysis for TableLoads {
 impl Analysis for Registers {
     type Result = IndexMap<ValueId, Known>;
     const NAME: &'static str = "registers";
-    const INCREMENTAL: bool = true;
+    const READS_OUTER: bool = false;
 
-    /// A fact is of the values its value is made from alone (the edges of the
-    /// CFG are not read: a phi meets what its arms are), so the facts of
-    /// the values a change did not reach, by the uses of what it
-    /// touched, stand; the others are worked out again from them.
-    fn update(
-        previous: &Self::Result,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        Self::update_owned(Rc::new(previous.clone()), changes, context, layout, function, analyses)
-    }
-
-    fn update_owned(
-        previous: Rc<Self::Result>,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let tables = analyses.get::<TableLoads>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
-        // A load from a table is known by the bounds of its whole index,
-        // whatever it is made of: it is asked again with the values a
-        // change touched.
-        let mut kept = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
-        // The values touched, and the facts that were made from them, which no
-        // longer stand.
-        let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
-        let mut work = Vec::<ValueId>::new();
-        for &inst in tables.iter() {
-            if let Some(result) = function.instruction(inst).result
-                && touched.insert(result)
-            {
-                work.push(result);
-            }
-        }
-        for change in changes {
-            let inst = match *change {
-                Change::Inserted { inst, .. }
-                | Change::Erased { inst, .. }
-                | Change::Moved { inst, .. }
-                | Change::Rewritten(inst) => inst,
-                Change::Cloned { to, .. } => to,
-                Change::BlockCreated(_)
-                | Change::BlockErased(_)
-                | Change::Operand { .. }
-                | Change::Operands { .. }
-                | Change::Substituted { .. } => {
-                    continue;
-                }
-                // An argument's fact is of its position.
-                Change::Parameters => return None,
-            };
-            if let Some(result) = function.instruction(inst).result
-                && touched.insert(result)
-            {
-                work.push(result);
-            }
-        }
-        // Every value to settle again: the touched, those whose fact was made
-        // from them, and the users of each, whose operands may now be
-        // known.
-        let mut dirty = touched.clone();
-        let mut seen = touched;
-        while let Some(value) = work.pop() {
-            kept.swap_remove(&value);
-            for user in function.users(value) {
-                if function.parent(user.user).is_none() {
-                    continue;
-                }
-                let Some(result) = function.instruction(user.user).result else { continue };
-                dirty.insert(result);
-                if kept.contains_key(&result) && seen.insert(result) {
-                    work.push(result);
-                }
-            }
-        }
-        Some(consts::known_from(&unit, kept, Some(&dirty), &tables))
-    }
-
+    /// Empty: a constant is folded into the body where it appears (SCCP,
+    /// InstSimplify, `fold`), as the pin does, so no map of them is kept. The
+    /// fixed point this used to derive (`consts::known`) found 72 values in
+    /// 25033 instructions of d_faces -O2, and every object, row, run and
+    /// QCport module was the same without it.
     fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut Analyses,
     ) -> Self::Result {
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        consts::known(
-            &Unit::within(context, layout, function, analyses.outer())
-                .with_shape(&shape)
-                .with_assumptions(&assumptions)
-                .with_exposed(&exposed),
-        )
+        IndexMap::default()
     }
 }
 
@@ -1712,13 +1245,48 @@ impl Analysis for Counted {
             one.body.iter().any(|at| reached.contains(&crate::cfg::block(*at)))
                 || (cfg_changed
                     && (function.predecessors(crate::cfg::block(one.header)).iter().any(|pred| reached.contains(pred))
-                        || reached.iter().any(|r| shape.dominance.dominates(crate::cfg::id(r), one.header))))
+                        || reached.iter().any(|r| shape.dominance.dominates(function, crate::cfg::id(r), one.header))))
         }))
     }
 }
 
-/// What each call writes, as `CallEffects` says: the `Calls` consts and
-/// floatfacts take.
+/// What each call reads and writes, as its attributes and `GlobalsModRef` say
+/// (`alias::calls_by_attributes`), made once for the body: `Writes` and
+/// `Accesses` take it. Each made it afresh (39 and 11 walks of the body's
+/// calls on d_faces -O2, 32 M Ir) where `CallEffects` was kept past the edits
+/// that reach no call.
+pub struct CallFootprints;
+
+impl Analysis for CallFootprints {
+    type Result = Result<std::rc::Rc<llrm_mir::dense::IdMap<InstId, alias::Effect>>, String>;
+    const NAME: &'static str = "call-footprints";
+    const SKIPS: bool = true;
+    fn depends() -> Option<Depends> {
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
+    }
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        // The unit `Accesses` made them under: without the shape and the
+        // exposed frames each argument's object was worked out from the
+        // body again (3x the Ir a walk).
+        let values = analyses.get::<PointerValues>(context, layout, function);
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let mut unit =
+            Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed);
+        if let Ok(values) = &*values {
+            unit = unit.with_point_values(values);
+        }
+        Ok(std::rc::Rc::new(alias::calls_by_attributes(&unit)))
+    }
+}
+
+/// What each call writes: the stores of `CallFootprints`, the `Calls` consts
+/// and floatfacts take.
 pub struct Writes;
 
 impl Analysis for Writes {
@@ -1734,12 +1302,9 @@ impl Analysis for Writes {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let effects = analyses.get::<CallEffects>(context, layout, function);
-        Ok(Result::as_ref(&*effects)
-            .map_err(String::clone)?
-            .iter()
-            .map(|(&at, effect)| (at, effect.stores.clone()))
-            .collect())
+        let footprints = analyses.get::<CallFootprints>(context, layout, function);
+        let footprints = Result::as_ref(&*footprints).map_err(String::clone)?;
+        Ok(footprints.iter().map(|(at, effect)| (at, effect.stores.clone())).collect())
     }
 }
 
@@ -1809,6 +1374,137 @@ impl Analysis for PlainAccesses {
     }
 }
 
+/// The body's accesses with each reference as it stands (`MemRef::of`), no
+/// provenance annotated: what MemorySSA's clients read once the AA stack
+/// answers every pair (`Annotated` and its inputs are not asked).
+pub struct BaseAccesses;
+
+impl Analysis for BaseAccesses {
+    type Result = Result<std::rc::Rc<memoryssa::Accesses>, String>;
+    const NAME: &'static str = "base-accesses";
+
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut Analyses,
+    ) -> Self::Result {
+        // Nothing is made up front: a reference, and what an instruction
+        // touches, are asked of the unit that reads them (`Accesses::lazy`).
+        Ok(std::rc::Rc::new(memoryssa::Accesses::lazy()))
+    }
+}
+
+/// A body's translated MemorySSA. The accesses it is read with are the
+/// manager's `BaseAccesses`, fetched by the first client that asks
+/// (`accesses`): building the graph needs none of their references.
+pub struct MssaGraph {
+    pub mssa: crate::mssa::Mssa,
+    accesses: std::cell::OnceCell<std::rc::Rc<memoryssa::Accesses>>,
+}
+
+impl MssaGraph {
+    /// A graph with the accesses a pass that updated it kept, if it did.
+    pub fn new(
+        mssa: crate::mssa::Mssa,
+        accesses: Option<std::rc::Rc<memoryssa::Accesses>>,
+    ) -> Self {
+        Self { mssa, accesses: accesses.map(std::cell::OnceCell::from).unwrap_or_default() }
+    }
+
+    /// The accesses of the body this graph is of: the ones kept with it, else
+    /// the manager's.
+    pub fn accesses(
+        &self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Result<std::rc::Rc<memoryssa::Accesses>, String> {
+        if let Some(held) = self.accesses.get() {
+            return Ok(std::rc::Rc::clone(held));
+        }
+        let base = analyses.get::<BaseAccesses>(context, layout, function);
+        let made = Result::as_ref(&*base).map_err(String::clone)?;
+        Ok(std::rc::Rc::clone(self.accesses.get_or_init(|| std::rc::Rc::clone(made))))
+    }
+
+    /// Whether the accesses have been fetched or kept.
+    pub fn has_accesses(&self) -> bool {
+        self.accesses.get().is_some()
+    }
+}
+
+/// Two graphs are equal when every access says the same (`shadow::said`): the
+/// manager's check of a preserved set compares a graph with the one made again.
+/// A use the walker answered for is optimized: its defining access is the
+/// walker's result, not the nearest def ([`setDefiningAccess(DMA,
+/// Optimized)`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/MemorySSA.h#L293),
+/// [`MemoryUse::isOptimized`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/MemorySSA.h#L337)),
+/// so those names are not compared.
+impl PartialEq for MssaGraph {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        if std::ptr::eq(self, other) {
+            return true;
+        }
+        let (mut held, mut fresh) = (crate::mssa::shadow::said(&self.mssa), crate::mssa::shadow::said(&other.mssa));
+        // A use the walker moved up stands for the same load as the nearest
+        // def of a graph made afresh.
+        for inst in crate::mssa::shadow::optimized_uses(&self.mssa) {
+            if let (Some(kept), Some(now)) = (held.instructions.get_mut(&inst), fresh.instructions.get_mut(&inst))
+                && !kept.0
+                && !now.0
+            {
+                kept.1 = crate::mssa::shadow::Name::Live;
+                now.1 = crate::mssa::shadow::Name::Live;
+            }
+        }
+        held == fresh
+    }
+}
+
+impl std::fmt::Debug for MssaGraph {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str("MssaGraph")
+    }
+}
+
+/// `MemorySSAAnalysis`: the graph `mssa::Mssa::build` makes of a body, once per
+/// body state. A pass that edits it takes a clone (`Mssa: Clone`) and updates
+/// that; the manager drops the cached graph with the pass's edit.
+pub struct MemorySsa;
+
+impl Analysis for MemorySsa {
+    type Result = Result<std::rc::Rc<MssaGraph>, String>;
+    const NAME: &'static str = "mssa";
+
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
+        // `AAResults::getModRefInfo(Call, nullptr)` over the pin's stack.
+        let mut stack = crate::aggregate::AggregateAA::new().with_unit(&unit);
+        stack.add_aa_result(crate::basicaa::BasicAA::new(&unit));
+        if let Some(info) = unit.globals_mr {
+            stack.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(&unit, info));
+        }
+        let mssa =
+            crate::mssa::Mssa::build(function, &shape.dominance, &crate::mssa::shadow::effect_from_aa(&unit, stack));
+        Ok(std::rc::Rc::new(MssaGraph::new(mssa, None)))
+    }
+}
+
 /// Float values, integers and memory in one solve, each call writing what
 /// `writes` says: `floatfacts::solved_with`.
 pub struct FloatFacts;
@@ -1859,7 +1555,7 @@ impl Analysis for FloatFacts {
 }
 
 /// Every value known, memory solved alongside and each call writing what
-/// `CallEffects` says.
+/// `Writes` says.
 pub struct ThroughMemory;
 
 impl Analysis for ThroughMemory {
@@ -1965,13 +1661,14 @@ impl Analysis for DominatedEdges {
         let shape = analyses.get::<Shape>(context, layout, function);
         let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
         let held = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone()).ok()?;
-        Some(Ok(held.keeping(|at| !dominated_by(&shape, &reached, at))))
+        Some(Ok(held.keeping(|at| !dominated_by(&shape, function, &reached, at))))
     }
 }
 
 /// Whether `at`, or a block above it, is one of `reached`.
 pub fn dominated_by(
     shape: &Shape,
+    function: &Function,
     reached: &llrm_mir::dense::IdSet<i64>,
     at: i64,
 ) -> bool {
@@ -1980,61 +1677,13 @@ pub fn dominated_by(
         if reached.contains(&one) {
             return true;
         }
-        above = shape.dominance.immediate(one);
+        above = shape.dominance.immediate(function, one);
     }
     false
 }
 
-/// The facts each counted loop gives its blocks, and where there is none the
-/// edges': `ranges::bounded`.
-pub struct Bounded;
-
-impl Analysis for Bounded {
-    type Result = Result<ranges::Bounds, String>;
-    const NAME: &'static str = "bounded";
-    const INCREMENTAL: bool = true;
-
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self::Result {
-        Self::solved(context, layout, function, analyses, None)
-    }
-
-    /// A loop's facts read its own blocks, the facts of the values its
-    /// operations read, the edges' facts above it and the facts of the
-    /// loops it starts from; the loops a change reaches by any of these are
-    /// worked again.
-    fn update(
-        previous: &Self::Result,
-        changes: &[Change],
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Option<Self::Result> {
-        let bounds = previous.as_ref().ok()?;
-        let reach = function.reach_of(changes)?;
-        if reach.cfg_changed() {
-            return None;
-        }
-        let shape = analyses.get::<Shape>(context, layout, function);
-        let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        edges.as_ref().as_ref().ok()?;
-        // A loop starts from the edges' facts of its dominator: those of a
-        // block a change reached or one it dominates may have changed.
-        let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
-        let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
-            dominated_by(&shape, &reached, at)
-        });
-        Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
-    }
-}
-
 /// What a pass asks of the ranges of a body as it stands: the manager's
-/// registers, bounds and edges, and the unit that carries them.
+/// registers and edges, and the unit that carries them.
 pub struct Ranges {
     shape: Rc<Shape>,
     assumptions: Rc<<AssumptionCache as Analysis>::Result>,
@@ -2042,17 +1691,14 @@ pub struct Ranges {
     exposed: Rc<<ExposedFrames as Analysis>::Result>,
     counted: Rc<<Counted as Analysis>::Result>,
     edges: Rc<<DominatedEdges as Analysis>::Result>,
-    bounds: Option<Rc<<Bounded as Analysis>::Result>>,
 }
 
 impl Ranges {
-    /// With the bounds too, which `Bounded` itself works out from the rest.
     pub fn of(
         context: &Context,
         layout: &DataLayout,
         function: &Function,
         analyses: &mut Analyses,
-        with_bounds: bool,
     ) -> Self {
         Self {
             shape: analyses.get::<Shape>(context, layout, function),
@@ -2061,32 +1707,11 @@ impl Ranges {
             exposed: analyses.get::<ExposedFrames>(context, layout, function),
             counted: analyses.get::<Counted>(context, layout, function),
             edges: analyses.get::<DominatedEdges>(context, layout, function),
-            bounds: None,
         }
-        .bounded(context, layout, function, analyses, with_bounds)
-    }
-
-    fn bounded(
-        mut self,
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-        with_bounds: bool,
-    ) -> Self {
-        if with_bounds {
-            self.bounds = Some(analyses.get::<Bounded>(context, layout, function));
-        }
-        self
     }
 
     pub fn registers(&self) -> &Rc<<Registers as Analysis>::Result> {
         &self.registers
-    }
-
-    /// The bounds, where they were asked for.
-    pub fn bounds(&self) -> Option<&<Bounded as Analysis>::Result> {
-        self.bounds.as_deref()
     }
 
     pub fn unit<'a>(
@@ -2105,42 +1730,7 @@ impl Ranges {
         if let Ok(edges) = &*self.edges {
             unit = unit.with_edges(edges);
         }
-        if let Some(Ok(bounds)) = self.bounds.as_deref() {
-            unit = unit.with_bounds(bounds);
-        }
         unit
-    }
-}
-
-impl Bounded {
-    fn solved(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-        prior: Option<(&ranges::Bounds, &llrm_mir::dense::IdSet<i64>)>,
-    ) -> <Self as Analysis>::Result {
-        let held = Ranges::of(context, layout, function, analyses, false);
-        ranges::bounded_solved(&held.unit(context, layout, function, analyses.outer()), held.registers(), prior, true)
-    }
-}
-
-/// The counted loops' intervals for alias and decisions: `Bounded`, or none at
-/// a level without them (-O1: gcc's has value ranges only from -O2's
-/// `-ftree-vrp`; its -O1 reaches an induction variable's range through SCEV and
-/// the loop's iteration bound, which `indvars`, `loopexit`, `hoist` and
-/// `algebraic` still ask `Bounded` for). Empty, the unit does not solve them
-/// itself.
-fn loop_bounds(
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-    analyses: &mut Analyses,
-) -> Rc<<Bounded as Analysis>::Result> {
-    if analyses.outer().loop_intervals() {
-        analyses.get::<Bounded>(context, layout, function)
-    } else {
-        Rc::new(Ok(ranges::Bounds::default()))
     }
 }
 
@@ -2156,7 +1746,6 @@ pub struct Held {
     annotated: Option<Rc<<Annotated as Analysis>::Result>>,
     counted: Option<Rc<<Counted as Analysis>::Result>>,
     followers: Option<Rc<<Followers as Analysis>::Result>>,
-    bounded: Option<Rc<<Bounded as Analysis>::Result>>,
 }
 
 impl Held {
@@ -2177,7 +1766,6 @@ impl Held {
             // Annotated has proved them already.
             counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
             followers: alias.then(|| analyses.get::<Followers>(context, layout, function)),
-            bounded: None,
         }
     }
 
@@ -2197,20 +1785,6 @@ impl Held {
             followers: Some(analyses.get::<Followers>(context, layout, function)),
             ..Self::of(context, layout, function, analyses, false)
         }
-    }
-
-    /// Also what the counted loops bound: for a pass that asks it, so that it
-    /// is the manager's, kept and brought up to date, and not a solve of
-    /// the pass's own.
-    pub fn with_bounded(
-        mut self,
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> Self {
-        self.bounded = Some(loop_bounds(context, layout, function, analyses));
-        self
     }
 
     /// A unit over `function`, the body these were found of.
@@ -2237,9 +1811,6 @@ impl Held {
         }
         if let Some(followers) = self.followers.as_deref() {
             unit = unit.with_followers(followers);
-        }
-        if let Some(Ok(bounds)) = self.bounded.as_deref() {
-            unit = unit.with_bounds(bounds);
         }
         unit
     }
@@ -2281,9 +1852,6 @@ pub fn ask_some(
         analyses.get::<Annotated>(context, layout, function);
     }
     if chosen() {
-        analyses.get::<CallEffects>(context, layout, function);
-    }
-    if chosen() {
         analyses.get::<Writes>(context, layout, function);
     }
     if chosen() {
@@ -2312,9 +1880,6 @@ pub fn ask_some(
     }
     if chosen() {
         analyses.get::<DominatedEdges>(context, layout, function);
-    }
-    if chosen() {
-        analyses.get::<Bounded>(context, layout, function);
     }
     if chosen() {
         analyses.get::<TableLoads>(context, layout, function);

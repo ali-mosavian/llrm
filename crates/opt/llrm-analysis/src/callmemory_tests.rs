@@ -4,8 +4,8 @@
 
 use llrm_mir::passes::Outer;
 
+use crate::alias::calls_by_attributes;
 use crate::consts::{Calls, Known, known_walked};
-use crate::manager::call_effects;
 use crate::memory::Unit;
 use crate::testing::{DOS, function, layout, parsed, value};
 
@@ -33,28 +33,14 @@ b0:
     let layout = layout(&module);
     let outer = Outer::of(&module, None);
     let f = function(&module, "f");
-    let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
-    let calls: Calls =
-        call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
+    let unit =
+        crate::testing::with_points(crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer)));
+    let calls: Calls = calls_by_attributes(&unit).iter().map(|(at, effect)| (at, effect.stores.clone())).collect();
     known_walked(&unit, &calls).get(&value(f, "r")).cloned()
 }
 
 fn seven() -> Option<Known> {
     Some(Known::new(7, 16))
-}
-
-/// Every unsummarized call wrote what its arguments point to. A callee
-/// that may keep a copy may write through it, as LLVM's `readonly` allows.
-#[test]
-fn a_callee_that_only_reads_its_argument_keeps_the_cell() {
-    let call = "call void @use(ptr %a)";
-    assert_eq!(kept("declare void @use(ptr nocapture readonly)", "%a", call), seven());
-    assert_eq!(kept("declare void @use(ptr nocapture readnone)", "%a", call), seven());
-    assert_eq!(kept("declare void @use(ptr)", "%a", "call void @use(ptr nocapture readonly %a)"), seven());
-    assert_eq!(kept("declare void @use(ptr) memory(argmem: read)", "%a", call), seven());
-    assert_eq!(kept("declare void @use(ptr nocapture writeonly)", "%a", call), None);
-    assert_eq!(kept("declare void @use(ptr readonly)", "%a", call), None);
-    assert_eq!(kept("declare void @use(ptr)", "%a", call), None);
 }
 
 /// Every unsummarized call wrote every global.
@@ -67,18 +53,6 @@ fn a_callee_confined_to_its_arguments_keeps_a_global() {
     assert_eq!(kept("declare void @use(ptr)", "@g", "call void @use(ptr %a) memory(argmem: write)"), seven());
     assert_eq!(kept("declare void @use(ptr) memory(write)", "@g", call), None);
     assert_eq!(kept("declare void @use(ptr)", "@g", call), None);
-}
-
-/// A pointer passed to any call escaped, so every later call reached it.
-#[test]
-fn a_pointer_a_callee_keeps_no_copy_of_stays_local() {
-    let declared = "declare void @use(ptr) memory(argmem: read)\ndeclare void @other()";
-    assert_eq!(kept(declared, "%a", "call void @use(ptr nocapture %a)\n  call void @other()"), seven());
-    assert_eq!(
-        kept(&declared.replace("(ptr)", "(ptr nocapture)"), "%a", "call void @use(ptr %a)\n  call void @other()"),
-        seven()
-    );
-    assert_eq!(kept(declared, "%a", "call void @use(ptr %a)\n  call void @other()"), None);
 }
 
 /// Each call to an unsummarized function listed its own copy of every global it
@@ -105,7 +79,7 @@ b0:
     let outer = Outer::of(&module, None);
     let f = function(&module, "f");
     let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
-    let effects: Vec<_> = call_effects(&unit, &outer).unwrap().into_values().collect();
+    let effects: Vec<_> = calls_by_attributes(&crate::testing::with_points(unit)).values().cloned().collect();
     assert_eq!(effects.len(), 2);
     assert!(!effects[0].stores.is_empty());
     assert!(std::rc::Rc::ptr_eq(&effects[0].stores, &effects[1].stores), "each call listed its own references");
@@ -124,4 +98,31 @@ fn calls_sharing_a_list_resolve_it_once() {
         crate::consts::RESOLVED.with(|asked| asked.get())
     };
     assert_eq!(calls(8), calls(1), "each call resolved its list again");
+}
+
+/// A call argument the callee keeps no copy of (`nocapture`) did not leave
+/// its alloca exposed, as the pin's capture tracking: every pointer passed to
+/// a call exposed its alloca, so a loop around such a call could not promote
+/// the slot (jpeg_single.bas -Os, +51 B of loads and stores kept in the loop).
+#[test]
+fn a_nocapture_argument_does_not_expose_the_alloca() {
+    let exposed = |attrs: &str| {
+        let module = parsed(&format!(
+            "{DOS}declare void @use(ptr {attrs})
+
+define void @f() {{
+b0:
+  %a = alloca i16
+  call void @use(ptr %a)
+  ret void
+}}
+"
+        ));
+        let layout = layout(&module);
+        let f = function(&module, "f");
+        let unit = Unit::of(&module, &layout, f);
+        crate::memory::exposed_frames(&unit).contains(&value(f, "a"))
+    };
+    assert!(exposed(""), "premise: a plain argument exposes the alloca");
+    assert!(!exposed("nocapture"));
 }

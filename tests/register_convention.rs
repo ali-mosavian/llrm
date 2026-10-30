@@ -3,6 +3,8 @@
 //! callee. An explicit `cdecl32` keeps the stack. Each expectation was read
 //! from `wcc386 -3r`'s own output for the same signature.
 
+mod common;
+
 use std::process::Command;
 
 /// The listing of `source` for -m32.
@@ -50,8 +52,12 @@ fn the_first_four_arguments_arrive_in_eax_edx_ebx_ecx() {
     let text = listing(
         "@export(\"watcall32\")\nfn third(a: i32, b: u32, c: i32) -> i32:\n    return c\n@export(\"watcall32\")\nfn fourth(a: i32, b: i32, c: i32, d: i32) -> i32:\n    return d\n",
     );
-    assert_eq!(procedure(&text, "third_"), ["L0_0:", "mov eax, ebx", "ret"]);
-    assert_eq!(procedure(&text, "fourth_"), ["L1_0:", "mov eax, ecx", "ret"]);
+    // The label's number is the block's id, which the DAG selector starts at 1.
+    let body = |name: &str| -> Vec<String> {
+        procedure(&text, name).into_iter().filter(|line| !line.ends_with(':')).collect()
+    };
+    assert_eq!(body("third_"), ["mov eax, ebx", "ret"]);
+    assert_eq!(body("fourth_"), ["mov eax, ecx", "ret"]);
 }
 
 /// `wcc386` took the fifth and sixth from the stack, lowest first, and popped
@@ -63,11 +69,10 @@ fn arguments_past_the_fourth_are_on_the_stack_and_the_callee_pops_them() {
         "@export(\"watcall32\")\nfn sixth(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32) -> i32:\n    return e + f\n",
     );
     let lines = procedure(&text, "sixth_");
-    assert!(
-        lines.contains(&"mov eax, dword ptr [esp+4]".to_owned())
-            && lines.contains(&"add eax, dword ptr [esp+8]".to_owned()),
-        "{lines:?}"
-    );
+    // The pin loads the later one and adds the earlier (`a + b` at i386 is
+    // `mov eax, [esp+8]` then `add eax, [esp+4]`): either order is the two.
+    let from = |disp: &str| lines.iter().filter(|line| line.ends_with(&format!("dword ptr [esp+{disp}]"))).count();
+    assert_eq!((from("4"), from("8")), (1, 1), "{lines:?}");
     assert_eq!(lines.last().map(String::as_str), Some("ret 8"));
 }
 
@@ -132,7 +137,7 @@ fn c_listing(
     let path = directory.path().join("t.c");
     std::fs::write(&path, source).unwrap();
     let out = directory.path().join("t.asm");
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let done = common::cc::llrm_c()
         .args(flags)
         .args(["-O2", "-fno-inline-functions", "-S"])
         .arg(&path)
@@ -147,8 +152,8 @@ fn c_listing(
 /// Under `-mabi=sysv` a `static` function took the stack too, though no one
 /// outside sees it (gcc passes it in registers, `regparm` for a `local` one):
 /// its arguments were read from [esp+4..], each call pushed them and popped
-/// them after. It takes the description's `private` convention; the exported
-/// function keeps sysv's.
+/// them after. It takes the description's `private` convention (the pin's
+/// `fastcc`: ECX, EDX, then the stack); the exported function keeps sysv's.
 #[test]
 fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_stack() {
     let text = c_listing(
@@ -156,12 +161,21 @@ fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_s
         "static int add3(int a, int b, int c) { return a * 3 + b * 5 + c; }\nint twice(int a, int b, int c) { return a * 2 + b + c; }\nint use(int x) { return add3(x, 2, 3) + add3(3, x, 1); }\n",
     );
     let private = procedure(&text, "_add3");
-    assert!(!private.iter().any(|line| line.contains("[esp+")), "{private:?}");
+    // The pin's `fastcc` for a private function: the first two arguments in
+    // ECX and EDX, the third on the stack (c785d0488).
+    let stack: Vec<_> = private.iter().filter(|line| line.contains("[esp+")).collect();
+    assert_eq!(stack.len(), 1, "{private:?}");
+    assert!(stack[0].contains("[esp+4]"), "{private:?}");
     let exported = procedure(&text, "_twice");
     assert!(exported.iter().any(|line| line.contains("[esp+4]")), "{exported:?}");
     let caller = procedure(&text, "_use");
+    // One stack argument per call. The pin stores it into the reserved call
+    // frame (`movl $3, (%esp)`) and pops nothing; ours pushes it and cleans
+    // up with `add esp, 4` (DEVIATE CF1, docs/working/ci.md
+    // call-frame-reserve).
     assert!(
-        !caller.iter().any(|line| line.starts_with("push") && line.contains("2")) && !pops_after(&caller),
+        !caller.iter().any(|line| line.starts_with("push") && line.contains("2"))
+            && caller.iter().filter(|line| line.starts_with("pushd")).count() == 2,
         "{caller:?}"
     );
 }
@@ -185,9 +199,14 @@ fn a_callee_saves_the_register_a_call_it_makes_clobbers() {
 /// stored a word, whatever the target: on -m32 every function with `...` that
 /// read an argument read through half a pointer (found by
 /// gcc.c-torture/20030914-2).
+/// llrm-cc: the source calls `va_start` and `va_arg`; clang drops the list of a
+/// function that never reads it, where llrm-c always built one.
 #[test]
 fn a_variadic_function_on_a_flat_target_makes_a_full_width_list_pointer() {
-    let text = c_listing(&["-m32"], "int f(int a, int b, ...) { return b; }\n");
+    let text = c_listing(
+        &["-m32"],
+        "int f(int a, int b, ...)\n{\n    __builtin_va_list ap;\n    __builtin_va_start(ap, b);\n    int c = __builtin_va_arg(ap, int);\n    __builtin_va_end(ap);\n    return c;\n}\n",
+    );
     let lines = procedure(&text, "f_");
     assert!(lines.iter().any(|one| one.starts_with("lea eax, [esp+")), "{lines:?}");
     assert!(!lines.iter().any(|one| one.starts_with("lea ax,") || one.starts_with("mov word ptr")), "{lines:?}");

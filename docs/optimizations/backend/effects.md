@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/effects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/effects.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/effects.rs sha256:c9e8390ad45f1f4d22826f8d2064b4ee44c3a309848db0bc0ffec36be831e63e -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/effects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/effects.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/effects.rs sha256:46d12e4d3d1ccb2fc6574f0a6b96fb1df2a80ce88a0c5b99d4edd259d57cecde -->
 
 # effects
 
@@ -47,5 +47,5 @@ The effects of one instruction as register roots and flag masks.
 ## Used by
 `peephole.rs` (`_effects_by_table`), which adds the instruction's
 `requires` and `delivers` and turns the registers into byte lanes. The
-lanes feed `copyprop`, `copysink`, `regthrash`, `exactaddress`, `liveness`,
-`parcopy`, `spillforward`, `upperzero` and other post-allocation passes.
+lanes feed `machinecp`, `copysink`, `regthrash`, `exactaddress`, `liveness`,
+`parcopy`, `upperzero` and other post-allocation passes.

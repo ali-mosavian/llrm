@@ -71,13 +71,13 @@ def test_the_profile_directory_is_made_before_the_merge_writes_into_it(monkeypat
     (tmp_path / "repo").mkdir()
     root, _ = repo(tmp_path / "repo")
 
-    def instrumented(root, target, flags):
+    def instrumented(root, target, flags, binary="llrm-llc"):
         raw = Path(flags.split("=", 1)[1])
         (raw / "a.profraw").write_bytes(b"x")
         return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
     monkeypatch.setattr(pgo, "cargo", instrumented)
-    monkeypatch.setattr(pgo, "train", lambda binary, jobs: (1, []))
+    monkeypatch.setattr(pgo, "train", lambda binary, jobs, driver=None: (1, []))
     monkeypatch.setattr(pgo, "profdata", lambda: merge)
     monkeypatch.setattr(pgo, "corpus", lambda *a, **k: [])
     pgo.make_profile(root, tmp_path / "out" / "profile", frozenset(), None)
@@ -153,3 +153,49 @@ def test_the_profdata_must_be_the_one_of_rustcs_llvm(monkeypatch, tmp_path):
     found.mkdir(parents=True)
     (found / "llvm-profdata").write_text("")
     assert pgo.profdata() == found / "llvm-profdata"
+
+
+def test_training_llrm_llc_runs_the_corpus_through_llrm_cc_with_the_instrumented_backend(monkeypatch, tmp_path):
+    """The profile of llrm-llc comes from its own runs, driven by llrm-cc (LLRM_LLC names the instrumented one); the target is a row."""
+    seen = []
+
+    def fake(command, check=True, **kw):
+        seen.append((command, kw.get("env", {})))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(pgo, "sh", fake)
+    source = tmp_path / "a.c"
+    source.write_text("int f(void) { return 1; }\n")
+    llc, driver = tmp_path / "llrm-llc", tmp_path / "llrm-cc"
+    ok, failed = pgo.train(llc, [("a", ["-m32", "-mabi=sysv", "-O2", "-march=i486"], source, False), ("a", ["-m16", "-Os"], source, False)], driver=driver)
+    assert (ok, failed) == (2, [])
+    # train() runs the jobs on a thread pool: the order of `seen` is the scheduler's, so pick each call by its target.
+    (first, env32), (second, env16) = sorted(seen, key=lambda call: call[1]["LLRM_CC_TARGET"], reverse=True)
+    assert Path(first[0]) == driver and "-m32" not in first and "-c" in first and "-mabi=sysv" in first
+    assert env32["LLRM_LLC"] == str(llc) and env32["LLRM_CC_TARGET"] == "x86_32-wat"
+    assert env16["LLRM_CC_TARGET"] == "x86_16-wat" and "-m16" not in second
+
+
+def test_the_corpus_for_llrm_llc_leaves_out_what_llrm_cc_cannot_build_and_the_other_corpus_keeps_it():
+    """Training llrm-llc through llrm-cc failed the job on 19 compiles of 8 programs it has no way to build yet."""
+    names = lambda jobs: {job[0] for job in jobs}  # noqa: E731
+    unbuilt = {"es_across_copy", "idioms", "stackdeep", "stackover", "memcpy_runtime", "memfuncs_runtime", "overflow_builtins", "tail_calls_edges"}
+    assert unbuilt <= names(pgo.corpus()) and not unbuilt & names(pgo.corpus(driver=True))
+
+
+def test_llrm_c_is_built_with_its_feature_and_llrm_llc_without(monkeypatch, tmp_path):
+    """`cargo build --bin llrm-c` alone fails "target llrm-c requires the features: c-legacy": the pgo job was red on parity."""
+    asked = []
+    monkeypatch.setattr(pgo.subprocess, "run", lambda command, **_: asked.append(command))
+    pgo.cargo(tmp_path, tmp_path, "", "llrm-c")
+    pgo.cargo(tmp_path, tmp_path, "", "llrm-llc")
+    assert asked[0][-2:] == ["--features", "wccq"] and "--features" not in asked[1]
+    builds = [line for line in (pgo.ROOT / ".github/workflows/pgo.yml").read_text().splitlines() if "cargo build" in line]
+    assert builds and all("--bin llrm-llc" in line or "--bins" in line for line in builds) and not any("wccq" in line for line in builds), builds
+
+
+def test_the_build_command_the_ci_job_runs_parses(monkeypatch):
+    """CI's `pgo.py build --out .. --profile-dir .. --siblings ..` died in main(): `--binary` is a name, and its default str was resolved like a path ('str' object has no attribute 'resolve')."""
+    monkeypatch.chdir(pgo.ROOT)
+    args = pgo.parse(["build", "--out", "target/pgo-out", "--profile-dir", "target/pgo-profile", "--siblings", "target/plain"])
+    assert args.binary == "llrm-llc" and args.out == pgo.ROOT / "target/pgo-out" and args.siblings == pgo.ROOT / "target/plain"

@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/peephole.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/peephole.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/peephole.rs sha256:9475278206ca22e9ea3f73973b28f58086fe331eefb9f380ad99fca932e7a47d -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/peephole.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/peephole.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/peephole.rs sha256:73d34b184d2039d12a33eeb312df3149b93152052eff0ab168cdccc805b1ef1a -->
 
 # peephole
 
@@ -28,10 +28,12 @@ next, then the flag passes, then dead-code elimination, and last the repair
 of what the 16-bit target's 32-bit addresses need.
 
 ```text
- thrash -> frame copies -> copyprop -> extensions -> copysink
-   -> spillforward -> postrasink -> storecombine -> pushed constants
+ frame copies -> machinecp -> extensions -> copysink
+   -> postrasink -> forwarded reloads -> forwarded copies
+   -> storecombine -> pushed constants
    -> pushes, constants, commuted, transferred, high extracts, restored
-      copies, shuttles, overwritten, fused, fused calls, far loads
+      copies, shuttles, overwritten, fused, fused calls, far loads,
+      loaded segments
    -> exact addresses -> addresses (LEA) -> stepped after compare
    -> secondary bases -> increments, borrows, doubled, narrowed
    -> widened moves, zero extensions -> zeroed loads -> shared stores
@@ -51,8 +53,8 @@ Typical rewrites, before and after:
 ```
 
 A sub-pass whose subject the body lacks is skipped. `needs.rs` keeps one bit
-per candidate shape (a register copy, an inserted definition, a cell read
-through an unheld 32-bit register, an exact cell, a based cell) per block,
+per candidate shape (a register copy, a cell read through an unheld 32-bit
+register, an exact cell) per block,
 and `gated` runs the pass only if some block has its bit. `LLRM_CHECK_NEEDS`
 runs the skipped pass anyway and asserts it changed nothing.
 

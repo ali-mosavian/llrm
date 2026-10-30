@@ -1,0 +1,5 @@
+== 
+@dep_constraint_crash_test
+  input [S S]!
+  anti [S S|<]!
+  output [S S]!

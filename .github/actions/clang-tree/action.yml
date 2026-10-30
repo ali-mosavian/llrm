@@ -1,0 +1,55 @@
+name: clang-tree
+description: One clang tree (toolchain/clangbuild.sh), restored from the cache or built, and saved under the ref that runs this.
+inputs:
+  kind:
+    description: pin or m16.
+    required: true
+  artifact:
+    description: '"true": also upload the tree as an artifact (toolchain.yml), for a pull request into main, which cannot read the caches saved on feat/parity (toolchain/clangfetch.sh).'
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - id: tree
+      shell: bash
+      run: |
+        dir=$(sh toolchain/clangbuild.sh --print ${{ inputs.kind }})
+        echo "dir=$dir" >> "$GITHUB_OUTPUT"
+        echo "name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
+    - id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.tree.outputs.dir }}
+        key: llrm-${{ steps.tree.outputs.name }}
+    - name: ccache (the second tree shares most objects with the first)
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ccache-clang-${{ inputs.kind }}-${{ github.sha }}
+        restore-keys: ccache-clang-
+    - name: build
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq ninja-build cmake ccache lld
+        sh toolchain/clangbuild.sh ${{ inputs.kind }}
+    # Saved here, right after the build, not by the cache action's post step: a cancelled job runs no post step, so a run superseded after the build
+    # (during the artifact upload, say) lost its ~1 h tree. One cancelled DURING the build still saves nothing: the build is one step.
+    - if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.tree.outputs.dir }}
+        key: llrm-${{ steps.tree.outputs.name }}
+    - shell: bash
+      run: ${{ steps.tree.outputs.dir }}/bin/clang --version
+    - if: inputs.artifact == 'true'
+      shell: bash
+      run: tar -C "${{ steps.tree.outputs.dir }}" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/tree.tar.zst"
+    - if: inputs.artifact == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: llrm-${{ steps.tree.outputs.name }}
+        path: ${{ runner.temp }}/tree.tar.zst
+        compression-level: 0
+        retention-days: 90

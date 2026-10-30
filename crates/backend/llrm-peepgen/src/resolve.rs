@@ -158,9 +158,9 @@ fn eval_set(
             let mut mask = 0;
             for flag in flags {
                 mask |= if flag == "any" {
-                    table::ARITHMETIC
+                    table.arithmetic
                 } else {
-                    table::flag(flag).ok_or_else(|| format!("unknown flag {flag}"))?
+                    table.flag(flag).ok_or_else(|| format!("unknown flag {flag}"))?
                 };
             }
             every().filter(|one| table.mnemonics[one].reads & mask != 0).collect()
@@ -593,7 +593,7 @@ fn check_call(
                 let known = vars.contains_key(name)
                     || cx.metas.contains_key(name)
                     || cx.sets.contains_key(name)
-                    || table::flag(name).is_some()
+                    || cx.table.flag(name).is_some()
                     || name == "gap";
                 if !known {
                     return fail(format!("{name} in {}(...) is not bound, a meta, a set or a flag", call.name));

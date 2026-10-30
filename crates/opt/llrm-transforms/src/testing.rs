@@ -94,6 +94,17 @@ b0:
 
 ";
 
+/// What the pipeline's `FunctionAttrs` has stated of `module`'s functions, as
+/// `Summaries` reads them.
+pub fn attributed(module: &mut Module) {
+    let layout = llrm_analysis::testing::layout(module);
+    llrm_analysis::functionattrs::infer_module(
+        module,
+        &layout,
+        llrm_mir::target::Machine::spaces(&llrm_mir::target::Neutral),
+    );
+}
+
 /// `module` through `pass` under a pass manager that requires `Summaries`
 /// where `summaries`, as LLVM's `RequireAnalysisPass`, or a bare one;
 /// printed. @f computes what it did on `inputs`.
@@ -104,6 +115,9 @@ pub fn summarized(
     inputs: &[&[i128]],
 ) -> String {
     let mut after = module.clone();
+    if summaries {
+        attributed(&mut after);
+    }
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.verify_each = true;
     if summaries {
@@ -139,11 +153,25 @@ pub struct Tuned {
     pub window: Option<(u32, i64)>,
     /// The address spaces, where not real mode's.
     pub spaces: Option<llrm_mir::spaces::Spaces>,
+    /// `Lowering::is_mask_and_cmp0_folding_beneficial`.
+    pub folds_masks: bool,
     /// `Machine::two_address`.
     pub two_address: bool,
 }
 
+struct FoldsMasks;
+
+impl llrm_mir::lowering::Lowering for FoldsMasks {
+    fn is_mask_and_cmp0_folding_beneficial(&self) -> bool {
+        true
+    }
+}
+
 impl llrm_mir::target::Machine for Tuned {
+    fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
+        self.folds_masks.then(|| std::rc::Rc::new(FoldsMasks) as _)
+    }
+
     fn two_address(&self) -> bool {
         self.two_address
     }

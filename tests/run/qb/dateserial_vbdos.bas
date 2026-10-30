@@ -1,0 +1,6 @@
+' dialect: vbdos
+DIM d AS DOUBLE
+d = DATESERIAL(1992, 2, 29)
+PRINT d
+PRINT DATESERIAL(1899, 12, 30)
+END

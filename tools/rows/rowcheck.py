@@ -30,7 +30,7 @@ def census(sides: dict[str, dict], counters=COUNTERS, checked: bool = False) -> 
             elif str(rows[name].get("error", "")).startswith("unmeasured:"):
                 bad.append(f"{name} (unmeasured in {side}: {rows[name]['error'][len('unmeasured: '):]})")
             elif failed(rows[name], counters, checked):
-                bad.append(f"{name} (failed in {side}: {rows[name].get('error') or ('unchecked: ' + rows[name]['unchecked'] if 'unchecked' in rows[name] else 'sized only, never run')})")
+                bad.append(f"{name} (failed in {side}: {rows[name].get('error') or ('wrong output: got ' + str(rows[name].get('got')) if rows[name].get('ok') is False else 'unchecked: ' + rows[name]['unchecked'] if 'unchecked' in rows[name] else 'sized only, never run')})")
     wanted = len(names) * len(sides)
     failures = sum("failed in" in one for one in bad)
     missing = sum("missing in" in one or "unmeasured in" in one for one in bad)

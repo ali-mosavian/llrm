@@ -1,0 +1,15 @@
+Printing analysis 'Loop Access Analysis' for function 'f':
+  loop:
+    Memory dependences are safe with a maximum safe vector width of 128 bits, with a maximum safe store-load forward width of 128 bits
+    Dependences:
+      BackwardVectorizable:
+          %v = load i64, ptr %pr, align 8 -> 
+          store i64 %v, ptr %pw, align 8
+
+    Run-time memory checks:
+    Grouped accesses:
+
+    Non vectorizable stores to invariant address were not found in loop.
+    SCEV assumptions:
+
+    Expressions re-written:

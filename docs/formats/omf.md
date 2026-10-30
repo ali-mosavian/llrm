@@ -179,7 +179,7 @@ by `llvm-dwarfdump` and, for 16-bit, `wdump`.
 with threads. It refuses a module with LIDATA, COMDAT or 32-bit records
 (`omf::refusals`), because its decoders read 16-bit forms.
 
-`llrm-omf` (`src/bin/llrm-omf.rs`, `crates/bc/llrm-bcdriver`) takes the objects QuickBASIC's BC wrote and
+`llrm-omf` (`src/bin/llrm-omf.rs`, `crates/driver/llrm-bcdriver`) takes the objects QuickBASIC's BC wrote and
 compiles them again through the optimizer and backend: `llrm-omf OBJ... -o OUT [--manifest M]
 [-march=CPU]`, where the objects are one program and a `.lib` argument is the runtime, which is not
 recompiled. A module the raise refuses fails the whole program and nothing is written. The result is a new
@@ -187,7 +187,7 @@ BASIC object, written by the same `llrm_omf::write::write` path as any other.
 
 ## Verification
 
-- `crates/target/llrm-omf/src/write.rs` unit tests: a fixup is never split between LEDATA records, a call is
+- `crates/mc/llrm-omf/src/write.rs` unit tests: a fixup is never split between LEDATA records, a call is
   a self-relative fixup against an extern, a 64-bit object is refused.
 - `tests/turbo.rs` links with TLINK; `tests/cv4.rs` with LINK /CO and CVPACK; `tests/dwarf.rs` with jwlink
   (DWARF in OMF, 16- and 32-bit).

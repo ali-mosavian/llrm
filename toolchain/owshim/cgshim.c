@@ -46,14 +46,97 @@ static const char *OpNames[] = {
 #undef PICK
 };
 
+/* One line is built in Line and written once: vfprintf cost 6 M of the 17.7 M
+ * wccq spends on qbq-llrm's d_faces. Only the conversions the call sites use
+ * (%s %u %d %x %02x %lu %ld %lld, %%) are understood, with printf's output. */
+static char *Line;
+static size_t LineCap, LineLen;
+
+static void put( const char *s, size_t n )
+{
+    if( LineLen + n > LineCap ) {
+        LineCap = ( LineLen + n ) * 2 + 256;
+        Line = realloc( Line, LineCap );
+        if( Line == NULL ) {
+            fprintf( stderr, "cgshim: out of memory\n" );
+            exit( 1 );
+        }
+    }
+    memcpy( Line + LineLen, s, n );
+    LineLen += n;
+}
+
+static void put_number( unsigned long long v, unsigned base, int negative, unsigned width )
+{
+    char digits[26];
+    unsigned n = sizeof( digits );
+
+    do {
+        digits[--n] = "0123456789abcdef"[v % base];
+        v /= base;
+    } while( v != 0 );
+    while( sizeof( digits ) - n < width )
+        digits[--n] = '0';
+    if( negative )
+        digits[--n] = '-';
+    put( digits + n, sizeof( digits ) - n );
+}
+
 static void emit( const char *fmt, ... )
 {
     va_list args;
+    const char *lit = fmt;
 
     va_start( args, fmt );
-    vfprintf( Out, fmt, args );
+    LineLen = 0;
+    for( ; *fmt != '\0'; ++fmt ) {
+        unsigned width = 0;
+        int longs = 0;
+        unsigned long long v;
+        int negative = 0;
+
+        if( *fmt != '%' )
+            continue;
+        put( lit, (size_t)( fmt - lit ) );
+        ++fmt;
+        if( *fmt == '0' ) {
+            ++fmt;
+            width = (unsigned)( *fmt++ - '0' );
+        }
+        for( ; *fmt == 'l'; ++fmt )
+            ++longs;
+        switch( *fmt ) {
+        case '%':
+            put( "%", 1 );
+            break;
+        case 's': {
+            const char *t = va_arg( args, const char * );
+            if( t == NULL )
+                t = "(null)";
+            put( t, strlen( t ) );
+            break;
+        }
+        case 'u':
+        case 'x':
+            v = longs == 0 ? va_arg( args, unsigned ) : longs == 1 ? va_arg( args, unsigned long ) : va_arg( args, unsigned long long );
+            put_number( v, *fmt == 'u' ? 10 : 16, 0, width );
+            break;
+        case 'd': {
+            long long d = longs == 0 ? va_arg( args, int ) : longs == 1 ? va_arg( args, long ) : va_arg( args, long long );
+            negative = d < 0;
+            put_number( negative ? 0ULL - (unsigned long long)d : (unsigned long long)d, 10, negative, width );
+            break;
+        }
+        default:
+            fprintf( stderr, "cgshim: emit does not know %%%c\n", *fmt );
+            exit( 1 );
+        }
+        lit = fmt + 1;
+    }
     va_end( args );
-    fputc( '\n', Out );
+    put( lit, (size_t)( fmt - lit ) );
+    put( "\n", 1 );
+    fwrite( Line, 1, LineLen, Out );
 }
 
 static void refuse( const char *what )
@@ -802,11 +885,15 @@ void DGBytes( unsigned_32 len, const void *data )
     const unsigned char *p = data;
     unsigned_32 i;
 
-    fprintf( Out, "- DGBytes %lu ", (unsigned long)len );
+    LineLen = 0;
+    put( "- DGBytes ", 10 );
+    put_number( len, 10, 0, 0 );
+    put( " ", 1 );
     for( i = 0; i < len; ++i ) {
-        fprintf( Out, "%02x", p[i] );
+        put_number( p[i], 16, 0, 2 );
     }
-    fputc( '\n', Out );
+    put( "\n", 1 );
+    fwrite( Line, 1, LineLen, Out );
 }
 
 void DGIBytes( unsigned_32 len, byte b )

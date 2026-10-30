@@ -1,0 +1,14 @@
+== -allow-unroll-and-jam -unroll-and-jam-count=4
+@test_it
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  br label %B3
+B3:
+  br i1 true, label %B4, label %B3
+B4:
+  br label %B5
+B5:
+  br label %B1

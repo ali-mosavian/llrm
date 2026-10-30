@@ -419,7 +419,8 @@ FUNCTION BenchJpegSingle&
     CLOSE #2
     CLOSE #1
     IF adlerB >= 32768 THEN
-        BenchJpegSingle& = (adlerB - 65536) * 65536 + adlerA
+        adlerB = adlerB - 65536
+        BenchJpegSingle& = adlerB * 65536 + adlerA
     ELSE
         BenchJpegSingle& = adlerB * 65536 + adlerA
     END IF

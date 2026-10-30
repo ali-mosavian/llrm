@@ -35,3 +35,9 @@ Under DOSBox, whose x87 keeps 64 bits, QuickBASIC prints any `62.5#` as
 `62.49999999999999`; the value itself is exact.
 
 The library uses 386 instructions, so it needs a 386 or later.
+
+# NIBBLES and GORILLAS on the native hosts
+
+`nibbles.bas` and `gorillas.bas` build with `llrm-qb --arm64=darwin|linux` and link with `tools/link-qb-sdl.sh`. They
+differ from the DOS originals only in timing: CPU-speed delay loops are `TIMER` waits (`Rest`, NIBBLES' game delay), the
+speed calibration is gone, and GORILLAS' explosions wait a tick per frame so they can be seen.

@@ -36,5 +36,8 @@ fn test_a_masked_offset_counter_and_the_array_walk_share_one_register_at_m32() {
         text[from..].lines().take_while(|line| !line.contains("$QB$MAIN endp")).map(str::trim).collect();
     let steps = body.iter().filter(|line| line.starts_with("add e") && line.ends_with(", 2")).count();
     assert_eq!(steps, 1, "one offset counter steps by 2: {body:#?}");
-    assert!(!body.iter().any(|line| line.starts_with("movsx e") || line.starts_with("movzx e")), "{body:#?}");
+    // A zero-extending load of the array element is not an extended counter.
+    let extended =
+        |line: &&str| (line.starts_with("movsx e") || line.starts_with("movzx e")) && !line.contains("ptr [");
+    assert!(!body.iter().any(|line| extended(&line)), "{body:#?}");
 }

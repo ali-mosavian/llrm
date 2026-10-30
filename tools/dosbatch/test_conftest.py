@@ -14,3 +14,4 @@ def test_the_slow_tier_runs_only_when_named():
     assert conftest.asked_for("slow_dos", {})
     assert conftest.asked_for("", {"LLRM_DOS_SLOW": "1"})
     assert not conftest.asked_for("", {"LLRM_DOS_SLOW": "0"})
+    assert conftest.asked_for("", {"LLRM_DOS_SLOW": "true"}), "the compilers read `true` as on"

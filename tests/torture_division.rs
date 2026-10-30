@@ -1,7 +1,7 @@
 //! Failures of gcc.c-torture/execute that a source program shows: each a C
 //! program, its listing read.
 
-use std::process::Command;
+mod common;
 
 fn listing(
     source: &str,
@@ -10,7 +10,7 @@ fn listing(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-march=i486"])
         .args(flags)

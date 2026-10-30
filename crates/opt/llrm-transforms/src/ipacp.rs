@@ -216,6 +216,13 @@ pub fn cloned(
     }
     for ((name, known), sites) in groups {
         let Some(body) = module.global(name).function() else { continue };
+        // DEVIATE: an `available_externally` body is read, not run: the
+        // definition is elsewhere. A copy would become a definition of its own
+        // (`isDefinitionExact` is false for it; GCC's `ipa-cp` versions only a
+        // node whose definition it owns).
+        if module.global(name).linkage == Linkage::AvailableExternally {
+            continue;
+        }
         if !inline::copyable(module, body)
             || body.parameters().len() != known.len()
             || matches!(
@@ -290,7 +297,7 @@ pub fn cloned(
             }
         }
         let mut number = state.made.get(&origin).copied().unwrap_or(0);
-        let origin_name = module.global(origin).name.clone().unwrap_or_else(|| "f".to_owned());
+        let origin_name = module.global(origin).name.owned().unwrap_or_else(|| "f".to_owned());
         let called = loop {
             number += 1;
             let candidate = format!("{origin_name}.constprop.{number}");
@@ -305,7 +312,7 @@ pub fn cloned(
             .globals
             .push(
                 GlobalValue {
-                    name: Some(called),
+                    name: called.into(),
                     linkage: Linkage::Internal,
                     unnamed_addr: unnamed,
                     address_space: space,
@@ -364,7 +371,7 @@ fn time_saved(
             if !reached.contains(&block) {
                 continue;
             }
-            for &inst in body.block(block).instructions() {
+            for inst in body.iter_block(block) {
                 let instruction = body.instruction(inst);
                 let Some(defined) = consts::_defined(&unit, inst) else { continue };
                 if varying.contains(&defined) || matches!(instruction.opcode, Opcode::Br | Opcode::Ret) {
@@ -454,9 +461,7 @@ fn time_saved(
     }
     // `INLINE_HINT_loop_iterations`: a loop's exit tests a value the known
     // actuals make constant against one that varies.
-    let shape = cfg::Shape::of(body);
-    let hint = shape
-        .loops
+    let hint = cfg::loops_of(body)
         .iter()
         .any(
             |one| one.body.iter().any(|&at| {

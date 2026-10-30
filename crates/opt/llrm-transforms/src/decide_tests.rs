@@ -1,15 +1,29 @@
-//! Adapted from llrm-core's `optimize/transform_tests.rs` (`d_tests`), each
+//! Adapted from llrm-codegen's `optimize/transform_tests.rs` (`d_tests`), each
 //! body now MIR text run by llrm-mir's interpreter.
 
 use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::module::Module;
 use llrm_mir::passes::Outer;
 
-use super::{_threaded, Decide, decided};
+use super::{Decide, decided};
 use crate::testing::{ACROSS_READONLY_CALL, managed, parsed, printed, results};
 
 /// @f decided; whether anything changed.
 fn decide(module: &mut Module) -> bool {
+    let (layout, outer) = (layout(module), Outer::of(module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    decided(context, &layout, function, &outer).expect("decides")
+}
+
+/// @f through JumpThreading, which threads and settles what `decided` once did.
+fn jump_threaded(module: &mut Module) {
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::jumpthreading::JumpThreading { enabled: true, options: Default::default() });
+    manager.run_module(module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
+}
+
+/// @f decided by the guard engine (ScalarEvolution is not asked).
+fn decide_by_guards(module: &mut Module) -> bool {
     let (layout, outer) = (layout(module), Outer::of(module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     decided(context, &layout, function, &outer).expect("decides")
@@ -28,54 +42,6 @@ fn check(
     assert_eq!(results(&module, inputs), before);
 }
 
-/// Collapsed FPCSE's trampoline is removable; a phi edge, a store or a
-/// cycle keeps it.
-#[test]
-fn test_empty_jump_threading_preserves_phi_inputs_and_effects() {
-    let body = |middle: &str, end: &str| {
-        format!(
-            "define i16 @f(i16 %x) {{
-b0:
-  %a = alloca i16
-  br label %b1
-
-b1:
-{middle}
-b2:
-{end}  ret i16 %x
-}}
-"
-        )
-    };
-    let jump = "  br label %b2\n";
-    let phi = "  %r = phi i16 [ %x, %b1 ]\n";
-    for (guard, text) in [
-        ("none", body(jump, "")),
-        ("phi", body(jump, phi)),
-        ("store", body(&format!("  store i16 %x, ptr %a\n{jump}"), "")),
-        ("cycle", body("  br label %b1\n", "")),
-    ] {
-        let mut module = parsed(&text);
-        let (context, function) = module.function_mut("f").expect("@f");
-        let changed = _threaded(context, function);
-        assert_eq!(changed, guard == "none", "{guard}");
-        let expected = if guard == "none" {
-            "define i16 @f(i16 %x) {
-b0:
-  %a = alloca i16
-  br label %b2
-
-b2:
-  ret i16 %x
-}
-"
-        } else {
-            &text
-        };
-        assert_eq!(printed(&module), expected, "{guard}");
-    }
-}
-
 /// A branch on a compare of two numbers is a jump the way it goes, and
 /// the other arm goes.
 #[test]
@@ -83,8 +49,7 @@ fn test_a_branch_on_known_numbers_is_a_jump() {
     check(
         "define i16 @f(i16 %x) {
 b0:
-  %k = add i16 2, 3
-  %c = icmp slt i16 %k, 10
+  %c = icmp slt i16 5, 10
   br i1 %c, label %b1, label %b2
 
 b1:
@@ -96,8 +61,7 @@ b2:
 ",
         "define i16 @f(i16 %x) {
 b0:
-  %k = add i16 2, 3
-  %c = icmp slt i16 %k, 10
+  %c = icmp slt i16 5, 10
   br label %b1
 
 b1:
@@ -147,14 +111,14 @@ b3:
     );
 }
 
-/// A switch on a known number is a jump to its case.
+/// A switch on a constant is a jump to its case (the constant is folded into
+/// the operand, as the pin's IRBuilder leaves it).
 #[test]
 fn test_a_switch_on_a_known_number_is_a_jump_to_its_case() {
     check(
         "define i16 @f(i16 %x) {
 b0:
-  %s = add i16 1, 1
-  switch i16 %s, label %d [ i16 1, label %a
+  switch i16 2, label %d [ i16 1, label %a
                             i16 2, label %b ]
 
 a:
@@ -169,7 +133,6 @@ d:
 ",
         "define i16 @f(i16 %x) {
 b0:
-  %s = add i16 1, 1
   br label %b
 
 b:
@@ -311,7 +274,7 @@ b2:
 ",
     );
     assert_eq!(
-        managed(&mut module, Decide),
+        managed(&mut module, Decide { constants: true }),
         "define i16 @f(i16 %x) {
 b0:
   %c = icmp eq i16 1, 1
@@ -332,7 +295,7 @@ fn a_branch_on_a_cell_kept_across_a_readonly_call_is_decided_after_fold() {
     );
     let mut module = parsed(&format!("{DOS}{text}"));
     managed(&mut module, crate::fold::Fold);
-    let after = managed(&mut module, Decide);
+    let after = managed(&mut module, Decide { constants: true });
     assert!(!after.contains("br i1"), "{after}");
 }
 
@@ -350,7 +313,7 @@ fn decide_solves_no_memory() {
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
-    super::_decided(context, &layout, function, &mut analyses).expect("decides");
+    super::_decided(context, &layout, function, &mut analyses, true).expect("decides");
     assert!(analyses.cached::<llrm_analysis::manager::ThroughMemory>().is_none(), "decide solved memory for the body");
 }
 
@@ -368,7 +331,7 @@ fn decide_asks_no_memory_annotations_or_points_to() {
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
-    super::_decided(context, &layout, function, &mut analyses).expect("decides");
+    super::_decided(context, &layout, function, &mut analyses, true).expect("decides");
     assert!(analyses.cached::<llrm_analysis::manager::PointerValues>().is_none(), "decide solved points-to");
     assert!(analyses.cached::<llrm_analysis::manager::Annotated>().is_none(), "decide annotated the body's memory");
 }
@@ -380,45 +343,6 @@ fn has(
 ) -> bool {
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
     function.layout().iter().any(|&one| function.block(one).name.as_deref() == Some(name))
-}
-
-/// `i < -5` inside `for i = 0 to 9`: only the counted loop's range, not the
-/// header's edge, says it never holds.
-#[test]
-fn a_branch_the_counted_loops_range_rules_out_is_decided() {
-    let mut module = parsed(
-        "define i16 @f() {
-b0:
-  br label %b1
-
-b1:
-  %i = phi i16 [ 0, %b0 ], [ %next, %b4 ]
-  %s = phi i16 [ 0, %b0 ], [ %t, %b4 ]
-  %c = icmp slt i16 %i, 10
-  br i1 %c, label %b2, label %b5
-
-b2:
-  %neg = icmp slt i16 %i, -5
-  br i1 %neg, label %b3, label %b4
-
-b3:
-  %u = add i16 %s, 100
-  br label %b4
-
-b4:
-  %t = phi i16 [ %s, %b2 ], [ %u, %b3 ]
-  %next = add i16 %i, 1
-  br label %b1
-
-b5:
-  ret i16 %s
-}
-",
-    );
-    let before = results(&module, &[&[]]);
-    decide(&mut module);
-    assert!(!has(&module, "b3"), "{}", printed(&module));
-    assert_eq!(results(&module, &[&[]]), before);
 }
 
 /// A pointer to an object compared with null: never equal. A parameter may be
@@ -514,7 +438,7 @@ b4:
     let inputs: &[&[i128]] = &[&[0, 0], &[0, 1], &[1, 0], &[1, 1]];
     let mut module = parsed(text);
     let before = results(&module, inputs);
-    assert!(decide(&mut module));
+    jump_threaded(&mut module);
     let after = printed(&module);
     assert!(!after.contains("phi"), "{after}");
     assert_eq!(results(&module, inputs), before);
@@ -598,6 +522,97 @@ fn test_an_index_that_follows_the_counter_is_below_the_length_the_loop_was_check
     assert_eq!(results(&module, INPUTS), before);
 }
 
+/// ScalarEvolution does not bound that index by the guards: it is not an add
+/// recurrence (the counter steps it in one arm only), as at the pin, where
+/// `opt` keeps this check through `simplifycfg`, `jump-threading` and
+/// `correlated-propagation` and drops it after `loop-rotate`, `indvars` and
+/// `simplifycfg`. The guard engine behind it decides it, so switching to
+/// ScalarEvolution loses nothing.
+#[test]
+fn test_an_index_that_follows_the_counter_is_decided_by_the_guards() {
+    let mut module = parsed(&format!("{DOS}{PARTITION_CHECK}"));
+    let before = results(&module, INPUTS);
+    assert!(decide_by_guards(&mut module));
+    assert!(!printed(&module).contains("br i1 %i_ok"), "{}", printed(&module));
+    assert_eq!(results(&module, INPUTS), before);
+}
+
+/// The loop-exit check of a counted loop (`rectwo`'s `_paths`, seven deep:
+/// -O2 and -O3 +10% clocks with ScalarEvolution on before LazyValueInfo
+/// settled branches). `%k` is the loop's count,
+/// the loop is entered only with `%n != 0`, and it continues only with
+/// `%k - 1 != 0`, so `%k` is not zero where the loop is left from its header.
+/// The old engine decides it, and so does LazyValueInfo (the pinned `opt` drops
+/// it in `correlated-propagation`); ScalarEvolution has no fact about `%k`.
+const COUNT_NOT_ZERO_AT_THE_EXIT: &str = "define i16 @f(i16 %inv, i16 %n) {
+entry:
+  %z0 = icmp eq i16 %n, 0
+  br i1 %z0, label %zero, label %pre
+pre:
+  br label %h
+h:
+  %c = phi i16 [ 0, %pre ], [ %c2, %l ]
+  %k = phi i16 [ %n, %pre ], [ %dec, %l ]
+  %t = icmp eq i16 %inv, 1
+  br i1 %t, label %l, label %x
+l:
+  %dec = sub nsw i16 %k, 1
+  %c2 = add i16 %c, 1
+  %d = icmp eq i16 %dec, 0
+  br i1 %d, label %out, label %h
+x:
+  %z = icmp eq i16 %k, 0
+  br i1 %z, label %zero, label %nz
+out:
+  ret i16 %c2
+nz:
+  ret i16 7
+zero:
+  ret i16 0
+}
+";
+
+#[test]
+fn test_a_count_checked_nonzero_before_its_loop_is_nonzero_at_the_loops_exit_by_the_old_engine() {
+    let mut module = parsed(&format!("{DOS}{COUNT_NOT_ZERO_AT_THE_EXIT}"));
+    let before = results(&module, &[&[1, 3], &[0, 3], &[1, 0], &[0, 0]]);
+    assert!(printed(&module).contains("br i1 %z,"), "premise: the check is in the body");
+    assert!(decide_by_guards(&mut module));
+    assert!(!printed(&module).contains("br i1 %z,"), "{}", printed(&module));
+    assert_eq!(results(&module, &[&[1, 3], &[0, 3], &[1, 0], &[0, 0]]), before);
+}
+
+#[test]
+fn test_the_count_check_at_the_loops_exit_is_decided_by_the_guards() {
+    let mut module = parsed(&format!("{DOS}{COUNT_NOT_ZERO_AT_THE_EXIT}"));
+    assert!(decide_by_guards(&mut module));
+    assert!(!printed(&module).contains("br i1 %z,"), "{}", printed(&module));
+}
+
+/// A condition a dominating branch implies is decided by the guards:
+/// `n > 5` taken, `n > 3` is true.
+#[test]
+fn test_a_compare_a_dominating_branch_implies_is_decided_by_the_guards() {
+    let text = "define i16 @f(i16 %n) {
+b:
+  %big = icmp sgt i16 %n, 5
+  br i1 %big, label %in, label %out
+in:
+  %mid = icmp sgt i16 %n, 3
+  br i1 %mid, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+out:
+  ret i16 2
+}
+";
+    let mut module = parsed(&format!("{DOS}{text}"));
+    assert!(decide_by_guards(&mut module));
+    assert!(!printed(&module).contains("br i1 %mid"), "{}", printed(&module));
+}
+
 /// Where the counter may be negative the check stays: `lo` is not known below
 /// `len`.
 #[test]
@@ -642,44 +657,6 @@ fn test_a_body_is_searched_for_its_assumptions_once_however_many_guards_are_aske
     assert!(decide(&mut module));
     let searched = llrm_analysis::assumptions::built() - before;
     assert_eq!(searched, 1, "the body was searched {searched} times");
-}
-
-/// `decide` solved what the counted loops bound twice: once for the points-to
-/// it holds (the manager's `Bounded`) and again for its own branches (a hand
-/// solve): 26 Minstr of fpbench's -O1 compile. It reads the manager's.
-#[test]
-fn test_decide_works_a_loops_bounds_out_once() {
-    let mut module = parsed(
-        "define i32 @f(i32 %n) {
-b0:
-  br label %h
-
-h:
-  %i = phi i32 [ 0, %b0 ], [ %in, %l ]
-  %c = icmp slt i32 %i, 10
-  br i1 %c, label %l, label %end
-
-l:
-  %in = add nsw i32 %i, 1
-  br label %h
-
-end:
-  %t = icmp slt i32 %n, 5
-  br i1 %t, label %a, label %b
-
-a:
-  ret i32 1
-
-b:
-  ret i32 2
-}
-",
-    );
-    let (layout, outer) = (layout(&module), Outer::of(&module, None));
-    let (context, function) = module.function_mut("f").expect("@f");
-    let before = llrm_analysis::ranges::loops_solved();
-    decided(context, &layout, function, &outer).expect("decides");
-    assert_eq!(llrm_analysis::ranges::loops_solved() - before, 1, "the loop's bounds were worked out more than once");
 }
 
 /// `zip(a, b)` bounded by both slices' lengths: the header copy's phi takes
@@ -751,7 +728,176 @@ b25:
 }
 ";
     let mut module = parsed(text);
-    managed(&mut module, Decide);
+    jump_threaded(&mut module);
+    managed(&mut module, Decide { constants: true });
     assert!(!decide(&mut module), "a run left a decision for the next:\n{}", printed(&module));
     assert!(!printed(&module).contains("phi i1 ["), "the branch on the phi was threaded:\n{}", printed(&module));
+}
+
+/// A branch on `x u< 20` after `llvm.assume(x u< 10)` is always taken: the
+/// assume is LazyValueInfo's to read (`getPredicateAt`), not `ranges`'. It
+/// stayed a branch.
+#[test]
+fn a_branch_an_assume_settles_is_decided() {
+    let mut module = parsed(
+        "declare void @llvm.assume(i1)
+
+define i16 @f(i16 %x) {
+b0:
+  %a = icmp ult i16 %x, 10
+  call void @llvm.assume(i1 %a)
+  %c = icmp ult i16 %x, 20
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 1
+
+b2:
+  ret i16 2
+}
+",
+    );
+    jump_threaded(&mut module);
+    assert!(!has(&module, "b2"), "{}", printed(&module));
+}
+
+/// `br i1 %c, T, T` decided left the two inputs `T`'s phi had from the block
+/// for the one edge a jump has: the verifier refused ("2 inputs from block
+/// for 1 edges") after JumpThreading made such a branch (QCport `sc_shift`).
+#[test]
+fn test_a_branch_to_one_block_twice_leaves_its_phi_one_input() {
+    let mut module = parsed(
+        "define i16 @f(i16 %x) {
+b0:
+  %c = icmp slt i16 2, 3
+  br i1 %c, label %b1, label %b1
+
+b1:
+  %p = phi i16 [ %x, %b0 ], [ %x, %b0 ]
+  ret i16 %p
+}
+",
+    );
+    assert!(decide(&mut module));
+    assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{}", printed(&module));
+}
+
+/// In LLVM's order `Decide` leaves the numbers to SimplifyCFG, CVP and SCCP
+/// (no row of the 71 programs needed them here) and keeps what the guards and
+/// ScalarEvolution prove: constants off, a switch on a known number stays and
+/// a compare the dominating edge settles goes.
+#[test]
+fn test_without_constants_decide_keeps_the_implied_branches_only() {
+    let mut switch = parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %s = add i16 1, 1\n  switch i16 %s, label %d [ i16 1, label %a\n                            i16 2, label %b ]\na:\n  ret i16 10\nb:\n  ret i16 %x\nd:\n  ret i16 30\n}\n",
+    );
+    let before = printed(&switch);
+    managed(&mut switch, Decide { constants: false });
+    assert_eq!(printed(&switch), before, "a switch on a known number is not Decide's here");
+    let mut implied = parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %c = icmp slt i16 %x, 5\n  br i1 %c, label %b1, label %b3\nb1:\n  %d = icmp slt i16 %x, 10\n  br i1 %d, label %b2, label %b3\nb2:\n  ret i16 1\nb3:\n  ret i16 0\n}\n",
+    );
+    managed(&mut implied, Decide { constants: false });
+    assert!(!printed(&implied).contains("br i1 %d"), "{}", printed(&implied));
+}
+
+/// Each ask for a function's loop-form blocks built the whole body's graph and
+/// a predecessor map of it (d_faces -O2: 33 asks, 2.9 M Ir) to read the few
+/// blocks round its loops. With the loops held, it builds no graph, and finds
+/// the preheader `b0` and the latch `b2`.
+#[test]
+fn test_the_loop_form_blocks_are_read_without_the_whole_graph() {
+    let mut module = parsed(
+        "define void @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %c = icmp slt i16 %n, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+  br label %b1
+
+b3:
+  ret void
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    let function = &*function;
+    let loops = llrm_analysis::cfg::loops_of(function);
+    let before = llrm_analysis::cfg::graphs_built();
+    let found = super::loop_form_blocks(function, Some(loops));
+    assert_eq!(llrm_analysis::cfg::graphs_built() - before, 0, "the whole graph was built");
+    assert_eq!(found.into_iter().collect::<Vec<_>>(), [0, 2]);
+}
+
+/// Every nested loop's `Around::exits` read the successors of its whole body
+/// again (d_faces -O2: 188 loops, 1.5 M Ir). The blocks round the loops are
+/// the ones `exits`-based reading finds, with no exit scan at all.
+#[test]
+fn test_the_loop_form_blocks_of_nested_loops_need_no_exit_scan() {
+    use llrm_analysis::cfg::{Around, predecessors_of, successors_of};
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(
+        "define void @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %c = icmp slt i16 %n, 0
+  br i1 %c, label %b2, label %b7
+
+b2:
+  br label %b3
+
+b3:
+  %d = icmp slt i16 %n, 5
+  br i1 %d, label %b4, label %b5
+
+b4:
+  br label %b3
+
+b5:
+  %e = icmp slt i16 %n, 9
+  br i1 %e, label %b6, label %b1
+
+b6:
+  br label %b7
+
+b7:
+  ret void
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    let function = &*function;
+    let reference = {
+        let mut edges = std::collections::BTreeSet::new();
+        for loop_ in llrm_analysis::cfg::loops_of(function) {
+            edges.extend(loop_.preheader(function));
+            if let Some(&latch) = loop_.latches.iter().next().filter(|_| loop_.latches.len() == 1)
+                && successors_of(function, latch)[..] == [loop_.header]
+            {
+                edges.insert(latch);
+            }
+            for (_, exit) in loop_.exits(function) {
+                let after = successors_of(function, exit);
+                if predecessors_of(function, exit).iter().all(|at| loop_.body.contains(at))
+                    && after.len() == 1
+                    && !loop_.body.contains(&after[0])
+                {
+                    edges.insert(exit);
+                }
+            }
+        }
+        edges
+    };
+    assert!(!reference.is_empty());
+    let loops = llrm_analysis::cfg::loops_of(function);
+    let before = get(Event::LoopExitScans);
+    let found = super::loop_form_blocks(function, Some(loops));
+    assert_eq!(get(Event::LoopExitScans) - before, 0, "an exit scan was made");
+    assert_eq!(found, reference);
 }

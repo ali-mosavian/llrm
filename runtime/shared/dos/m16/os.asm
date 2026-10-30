@@ -1,4 +1,4 @@
-;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT
+;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR, LL$FIND_FIRST, LL$FIND_NEXT, LL$EXECUTE, LL$ENVIRONMENT_READ, LL$ENVIRONMENT_WRITE, LL$FREE_BYTES, LL$CURRENT_DIRECTORY, LL$CURRENT_DRIVE
 ;; desc: the OS layer shared by C, Nib and BASIC programs: x86-m16, real-mode DOS
 ;;
 ;; args: the interface of runtime/shared/interface.toml, in cdecl16: arguments in word slots from [bp+6],
@@ -20,8 +20,9 @@
 G_CORE          equ     1
 G_CONSOLE       equ     2
 G_PROCESS       equ     4
+G_FILES         equ     8
 ifndef OS_GROUPS
-OS_GROUPS       equ     7
+OS_GROUPS       equ     15
 endif
 
 if OS_GROUPS and G_CORE
@@ -38,9 +39,24 @@ if OS_GROUPS and G_CONSOLE
 public LL$CONSOLE_READ_KEY
 public LL$CONSOLE_KEY_READY
 endif
+if OS_GROUPS and G_FILES
+public LL$DELETE
+public LL$RENAME
+public LL$MKDIR
+public LL$CHDIR
+public LL$RMDIR
+public LL$FIND_FIRST
+public LL$FIND_NEXT
+public LL$FREE_BYTES
+public LL$CURRENT_DIRECTORY
+public LL$CURRENT_DRIVE
+endif
 if OS_GROUPS and G_PROCESS
 public LL$COMMAND_LINE
 public LL$ENVIRONMENT
+public LL$EXECUTE
+public LL$ENVIRONMENT_READ
+public LL$ENVIRONMENT_WRITE
 if (OS_GROUPS and G_CORE) eq 0
 extrn LL$PSP:word
 endif
@@ -534,6 +550,303 @@ environment_done:
                 pop     bp
                 retf
 LL$ENVIRONMENT  endp
+
+;;::::::::::::::
+;; LL$ENVIRONMENT_READ(offset: u16, data: *far mut u8, max: u16) -> u16: the bytes from `offset`, at most `max`, and how many.
+LL$ENVIRONMENT_READ proc far
+                push    bp
+                mov     bp, sp
+                push    si
+                push    di
+                push    ds
+                push    es
+                les     di, [bp+8]
+                mov     ax, LL$PSP
+                mov     ds, ax
+                mov     ax, ds:[PSP_ENVIRONMENT]
+                mov     ds, ax
+                dec     ax
+                mov     fs, ax
+                mov     ax, fs:[3]
+                shl     ax, 4
+                mov     si, [bp+6]
+                sub     ax, si
+                jbe     short read_none
+                mov     cx, [bp+12]
+                cmp     cx, ax
+                jbe     short read_fits
+                mov     cx, ax
+read_fits:
+                mov     ax, cx
+                rep     movsb
+                jmp     short read_done
+read_none:
+                xor     ax, ax
+read_done:
+                pop     es
+                pop     ds
+                pop     di
+                pop     si
+                pop     bp
+                ret
+LL$ENVIRONMENT_READ endp
+
+;;::::::::::::::
+;; LL$ENVIRONMENT_WRITE(offset: u16, data: *far u8, count: u16) -> i16: `count` bytes into the block at `offset`; -1 when they do not fit.
+LL$ENVIRONMENT_WRITE proc far
+                push    bp
+                mov     bp, sp
+                push    si
+                push    di
+                push    ds
+                push    es
+                mov     ax, LL$PSP
+                mov     es, ax
+                mov     ax, es:[PSP_ENVIRONMENT]
+                mov     es, ax
+                dec     ax
+                mov     fs, ax
+                mov     ax, fs:[3]
+                shl     ax, 4
+                mov     di, [bp+6]
+                mov     cx, [bp+12]
+                mov     dx, di
+                add     dx, cx
+                jc      short write_no_room
+                cmp     dx, ax
+                ja      short write_no_room
+                lds     si, [bp+8]
+                rep     movsb
+                xor     ax, ax
+                jmp     short write_done
+write_no_room:
+                mov     ax, -1
+write_done:
+                pop     es
+                pop     ds
+                pop     di
+                pop     si
+                pop     bp
+                ret
+LL$ENVIRONMENT_WRITE endp
+;;::::::::::::::
+;; LL$EXECUTE(name: *far char, tail: *far char) -> i16: DOS's load-and-execute. The parameter block (the caller's
+;; environment, the tail, two blank FCBs) is built on the stack; DOS 2 destroys SS:SP and every register, so they are
+;; kept in the code segment and restored.
+EXEC_BLOCK      equ     54                      ;; below BP: the saved DS, ES, SI, DI and the 46-byte block
+LL$EXECUTE      proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                push    es
+                push    si
+                push    di
+                sub     sp, 46
+                push    ss
+                pop     es
+                mov     di, sp
+                mov     cx, 23
+                xor     ax, ax
+                rep     stosw
+                lea     bx, [bp-EXEC_BLOCK]
+                mov     ax, [bp+10]
+                mov     [bx+2], ax
+                mov     ax, [bp+12]
+                mov     [bx+4], ax
+                lea     ax, [bx+14]
+                mov     [bx+6], ax
+                mov     [bx+8], ss
+                lea     ax, [bx+30]
+                mov     [bx+10], ax
+                mov     [bx+12], ss
+                mov     cs:exec_ss, ss
+                mov     cs:exec_sp, sp
+                lds     dx, [bp+6]
+                mov     ax, DOS_EXEC * 256
+                int     DOS_INT
+                cli
+                mov     ss, cs:exec_ss
+                mov     sp, cs:exec_sp
+                sti
+                jc      short exec_failed
+                xor     ax, ax
+                jmp     short exec_done
+exec_failed:
+                neg     ax
+exec_done:
+                mov     bp, sp
+                add     bp, EXEC_BLOCK
+                mov     ds, [bp-2]
+                add     sp, 46
+                pop     di
+                pop     si
+                pop     es
+                pop     ds
+                pop     bp
+                ret
+exec_ss         dw      0
+exec_sp         dw      0
+LL$EXECUTE      endp
+endif
+
+if OS_GROUPS and G_FILES
+;;::::::::::::::
+;; The file-name calls: DOS function in AH, the name at DS:DX (the new name at ES:DI for a rename); a carry is
+;; the error code in AX, negated; 0 on success (DOS leaves AX undefined).
+LL$DELETE       proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                mov     ah, DOS_DELETE
+                jmp     short file_name_call
+LL$DELETE       endp
+
+LL$RENAME       proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                push    di
+                push    es
+                lds     dx, [bp+6]
+                les     di, [bp+10]
+                mov     ah, DOS_RENAME
+                int     DOS_INT
+                pop     es
+                pop     di
+                jmp     short file_name_checked
+LL$RENAME       endp
+
+LL$MKDIR        proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                mov     ah, DOS_MKDIR
+                jmp     short file_name_call
+LL$MKDIR        endp
+
+LL$CHDIR        proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                mov     ah, DOS_CHDIR
+                jmp     short file_name_call
+LL$CHDIR        endp
+
+LL$RMDIR        proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                mov     ah, DOS_RMDIR
+file_name_call::
+                int     DOS_INT
+file_name_checked::
+                jc      short file_name_failed
+                xor     ax, ax
+                jmp     short file_name_done
+file_name_failed:
+                neg     ax
+file_name_done:
+                pop     ds
+                pop     bp
+                retf
+LL$RMDIR        endp
+
+;;::::::::::::::
+;; LL$FIND_FIRST(pattern: *far char, attrs: u16, entry: *far mut u8) -> isize: the DTA is the caller's `entry`.
+LL$FIND_FIRST   proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+12]
+                mov     ah, DOS_SET_DTA
+                int     DOS_INT
+                mov     cx, [bp+10]
+                lds     dx, [bp+6]
+                mov     ah, DOS_FIND_FIRST
+                jmp     short file_name_call
+LL$FIND_FIRST   endp
+
+;;::::::::::::::
+;; LL$FIND_NEXT(entry: *far mut u8) -> isize
+LL$FIND_NEXT    proc    far
+                push    bp
+                mov     bp, sp
+                push    ds
+                lds     dx, [bp+6]
+                mov     ah, DOS_SET_DTA
+                int     DOS_INT
+                mov     ah, DOS_FIND_NEXT
+                jmp     short file_name_call
+LL$FIND_NEXT    endp
+
+;;::::::::::::::
+;; LL$FREE_BYTES(drive: u16) -> i32: sectors per cluster x free clusters x bytes per sector, in DX:AX; DOS says an
+;; invalid drive by AX = FFFFh, which is -15.
+LL$FREE_BYTES   proc    far
+                push    bp
+                mov     bp, sp
+                push    bx
+                push    cx
+                mov     dx, [bp+6]
+                mov     ah, DOS_FREE_SPACE
+                int     DOS_INT
+                cmp     ax, 0FFFFh
+                je      short free_failed
+                movzx   eax, ax
+                movzx   ecx, cx
+                movzx   ebx, bx
+                imul    eax, ecx
+                imul    eax, ebx
+                mov     edx, eax
+                shr     edx, 16
+                jmp     short free_done
+free_failed:
+                mov     ax, -15
+                mov     dx, -1
+free_done:
+                pop     cx
+                pop     bx
+                pop     bp
+                retf
+LL$FREE_BYTES   endp
+
+;;::::::::::::::
+;; LL$CURRENT_DIRECTORY(drive: u16, data: *far mut char) -> isize
+LL$CURRENT_DIRECTORY proc far
+                push    bp
+                mov     bp, sp
+                push    ds
+                push    si
+                mov     dx, [bp+6]
+                lds     si, [bp+8]
+                mov     ah, DOS_GET_DIRECTORY
+                int     DOS_INT
+                pop     si
+                jc      short directory_failed
+                xor     ax, ax
+                jmp     short directory_done
+directory_failed:
+                neg     ax
+directory_done:
+                pop     ds
+                pop     bp
+                retf
+LL$CURRENT_DIRECTORY endp
+
+;;::::::::::::::
+;; LL$CURRENT_DRIVE() -> isize
+LL$CURRENT_DRIVE proc   far
+                mov     ah, DOS_GET_DRIVE
+                int     DOS_INT
+                xor     ah, ah
+                retf
+LL$CURRENT_DRIVE endp
+
+
 endif
 
 end

@@ -6,7 +6,7 @@ or commit. Every figure uses one shared style, so a figure names a meaning, neve
 
 ## The style
 
-The style lives in one module, `tools/docsbuild/tomermaid.py`. Nothing else spells a colour, and
+The style lives in one module, `tools/docs/docsbuild/tomermaid.py`. Nothing else spells a colour, and
 this page names the constants rather than copying them.
 
 - `INIT` is the first line of every flowchart: font, sizes, neutral line and caption colours
@@ -119,7 +119,7 @@ sequenceDiagram
 
 ## Checking a figure
 
-`python3 tools/docsbuild/build.py --check` lints every `mermaid` fence of a tracked Markdown file and of
+`python3 tools/docs/docsbuild/build.py --check` lints every `mermaid` fence of a tracked Markdown file and of
 a `//!` header, without mermaid: the first lines are the init line and a diagram type, quotes and brackets
 balance, classes are defined, flowchart edges join declared nodes, a block row fits its `columns`, and no
 label holds a raw `;`. It also rejects a legacy `fig` fence.
@@ -132,7 +132,7 @@ absent; the tests and CI never need it.
 ## Pass pages
 
 The pass, analysis and backend pages in `docs/optimizations/passes/`, `analyses/` and `backend/` are
-written by `python3 tools/docsbuild/build.py --sync` from the `//!` headers, one page per file, with a
+written by `python3 tools/docs/docsbuild/build.py --sync` from the `//!` headers, one page per file, with a
 `readme.md` index in each; edit the header, not the page. A `mermaid` fence in a header is copied to the page
 as it is. A rustdoc link such as `crate::cfg` becomes a link to the sibling page, or to the source on
 GitHub when there is no page. Each page holds a digest of its header, of the tool and of what its own links
@@ -141,7 +141,7 @@ resolve to (adding a source file changes only the pages that link its name, and 
 
 ## Converting older figures
 
-A figure was once a short text spec (`kind: graph|stack|lanes`) drawn to a PNG. `tools/docsbuild/mdfigs.py
+A figure was once a short text spec (`kind: graph|stack|lanes`) drawn to a PNG. `tools/docs/docsbuild/mdfigs.py
 --convert` turns the image of such a figure, or a `fig` fence, into a `mermaid` fence and an italic caption,
 and `--headers FILE...` does the same for the `//!` headers of Rust files. `tomermaid.convert` is the
 converter; read it for the spec language.

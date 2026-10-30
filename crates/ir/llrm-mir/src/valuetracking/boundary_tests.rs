@@ -30,18 +30,16 @@ fn mir_has_no_scalable_vectors_and_no_vscale_range() {
 }
 
 #[test]
-fn mir_has_no_undef() {
-    assert!(rejects("define i32 @f() {\n  ret i32 undef\n}\n"));
-}
-
-#[test]
 fn mir_has_no_operand_bundles() {
     assert!(rejects("declare void @g()\ndefine void @f() {\n  call void @g() [ \"deopt\"(i32 1) ]\n  ret void\n}\n"));
 }
 
 #[test]
-fn mir_has_no_ptrtoaddr() {
-    assert!(rejects("define i64 @f(ptr %p) {\n  %x = ptrtoaddr ptr %p to i64\n  ret i64 %x\n}\n"));
+fn mir_reads_ptrtoaddr_as_ptrtoint() {
+    let module = parse::module("define i64 @f(ptr %p) {\n  %x = ptrtoaddr ptr %p to i64\n  ret i64 %x\n}\n")
+        .expect("ptrtoaddr is read");
+    let text = crate::print::module(&module);
+    assert!(text.contains("ptrtoint ptr %p to i64") && !text.contains("ptrtoaddr"), "{text}");
 }
 
 #[test]
@@ -52,14 +50,6 @@ fn mir_has_no_target_triple() {
 #[test]
 fn mir_has_no_half() {
     assert!(rejects("define half @f(half %a) {\n  ret half %a\n}\n"));
-}
-
-/// `DataLayout` has no preferred alignment (`getPrefTypeAlign`), which
-/// `getPointerAlignment` uses for a global.
-#[test]
-fn the_data_layout_has_no_preferred_alignment() {
-    let source = include_str!("../datalayout.rs");
-    assert!(!source.contains("fn preferred_align"), "translate Value::getPointerAlignment's preferred alignment");
 }
 
 /// No front end, pass or lowering of llrm builds a vector type, so

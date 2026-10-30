@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lcssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lcssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:de2ea89708f71d82ab199e911a3b0ac51f918814ccd9466cb17d30704a4e2ea4 -->
+<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:8a4f4bafb3a3cc4acbecb4634228bd75c4a9d7ab86ae28858149be858a444467 -->
 
 # lcssa
 
@@ -24,9 +24,9 @@ definition of the enclosing loop. For one loop:
 - With several exit blocks, [`crate::lcssamerges`](lcssamerges.md) makes a phi at each and
   merges them where the exits' paths join.
 
-First, a phi outside any loop exit whose inputs are all one value is
-replaced by that value: no loop closes there any more. The new phi is named
-after its value with `.lcssa`. The pass is idempotent.
+Phis are only added, as `formLCSSA` does: a phi whose inputs are all one
+value stays for CodeGenPrepare's phi fold. The new phi is named after its
+value with `.lcssa`. The pass is idempotent.
 
 The helpers `arms`, `from_arms`, `operations`, `definitions`, `exit_phi` and
 `place_phi` read and build phis for many other loop passes.
@@ -72,8 +72,7 @@ From unit test `test_a_loop_value_used_after_the_exit_gets_an_exit_phi` in
 
 ## Runs
 In every body's pipeline after `loopsimplify`, unless `lcssa` is turned off,
-and again after header copying. `unswitch` and `peel` call `closed` on
-their candidates.
+and again after header copying. The unroller calls it first.
 
 ## Keeps
 Dominators and loops stay valid; all other analyses are invalidated when

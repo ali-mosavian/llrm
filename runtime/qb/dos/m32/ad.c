@@ -3,6 +3,7 @@
 #include "qb.h"
 #include "ad.h"
 #include "nheap.h"
+#include "nhstutil.h"
 
 int ad_allocated(const AD *ad)
 {
@@ -18,6 +19,16 @@ void ad_use_near(AD *ad, void *data)
 void *ad_near_data(const AD *ad)
 {
     return ad->data;
+}
+
+unsigned long ad_remaining(const AD *ad, qb_data_ptr from)
+{
+    unsigned long total = ad->elem, start = (unsigned long)ad->data, at = (unsigned long)from;
+    unsigned dim;
+
+    for (dim = 0; dim < ad->dims; dim++)
+        total *= ad->dm[dim].count;
+    return at >= start && at - start <= total ? total - (at - start) : 0;
 }
 
 unsigned long ad_free_bytes(void)
@@ -77,4 +88,17 @@ void ad_clear(AD *ad, unsigned long bytes)
 
     while (bytes--)
         *at++ = 0;
+}
+
+/* Into a fresh array (REDIM PRESERVE): the arrays are distinct, a block copy. */
+void ad_copy(AD *to, const AD *from, unsigned long bytes)
+{
+    copy_bytes((char *)to->data, (const char *)from->data, (unsigned)bytes);
+}
+
+void ad_adopt(AD *to, AD *from)
+{
+    lh_entry(from->data)->owner = to;
+    to->data = from->data;
+    from->data = 0;
 }

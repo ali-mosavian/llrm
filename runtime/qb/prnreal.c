@@ -16,6 +16,13 @@ static void real(double v, int is_double, enum Terminator end)
     print_numeral(text, fout_real(v, is_double, text), end);
 }
 
+#pragma aux B_PCR4 "B$PCR4"
+#pragma aux B_PSR4 "B$PSR4"
+#pragma aux B_PER4 "B$PER4"
+#pragma aux B_PCR8 "B$PCR8"
+#pragma aux B_PSR8 "B$PSR8"
+#pragma aux B_PER8 "B$PER8"
+
 void B_PCR4(float v)
 {
     real(v, 0, COMMA);
@@ -45,10 +52,3 @@ void B_PER8(double v)
 {
     real(v, 1, EOL);
 }
-
-#pragma aux B_PCR4 "B$PCR4"
-#pragma aux B_PSR4 "B$PSR4"
-#pragma aux B_PER4 "B$PER4"
-#pragma aux B_PCR8 "B$PCR8"
-#pragma aux B_PSR8 "B$PSR8"
-#pragma aux B_PER8 "B$PER8"

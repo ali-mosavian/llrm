@@ -25,10 +25,10 @@ Each cap is a named constant at its `cl::opt` default; a different value is a DE
 
 | llrm today | Lines | Goes in stage |
 |---|---:|---|
-| `gvn.rs` (`Gvn`, `EqualCalls`, `propagated`, `numbered`, `joined`) | 685 | 1 (numbering, branch equality), 6 (`joined`) |
-| `transform::subexpressions`, `equal_calls`, `forwarded` | in `transform.rs` | 1, 4 |
+| `gvn.rs` (`Gvn`, `EqualCalls`; `propagated`, `numbered`, `joined` deleted in 6) | 685 | 1 (numbering, branch equality), 6 (`joined`) |
+| `transform::subexpressions`, `forwarded` (deleted in 6); `equal_calls` stays | in `transform.rs` | 1, 4 |
 | `loadjoins.rs` | 478 | 4, 5 |
-| `avail::forwardable_walk`, `Forward` | in `avail.rs` (1,066) | 4, if no other client remains |
+| `avail::forwardable_walk`, `Forward` (deleted) | in `avail.rs` (1,066) | 4 |
 | `profit::motion_price` use inside `Gvn` (crossing/avoiding double numbering) | | 5 (D8) |
 | tests: `gvn_tests.rs`, `loadjoins_tests.rs` | 1,187 + 492 | kept as regression tests; deleted only where the translation's own test covers the same symptom |
 
@@ -114,7 +114,7 @@ Stages 1 and 3 can land before the two upstream dependencies.
 
 | LLVM | Rust | llrm today | DEVIATE |
 |---|---|---|---|
-| [`performPRE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L3799), [`performScalarPRE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L3637), [`performScalarPREInsertion`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L3588), [`splitCriticalEdges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L3826), [`splitCriticalEdges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L3842) | `perform_pre`, `perform_scalar_pre`, `perform_scalar_pre_insertion`, `split_critical_edges` | `joined` with `pre` | none |
+| [`performPRE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L3799), [`performScalarPRE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L3637), [`performScalarPREInsertion`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L3588), [`splitCriticalEdges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L3826), [`splitCriticalEdges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L3842) | `perform_pre`, `perform_scalar_pre`, `perform_scalar_pre_insertion`, `split_critical_edges` | `joined` with `pre` (deleted) | DEVIATE 23: no token types, inline asm or indirect branches in MIR; `ICF` is a block scan (22) |
 
 ## 5. DEVIATEs
 

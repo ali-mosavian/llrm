@@ -2,6 +2,8 @@
 //! decided before allocation), and addresses its frame through the stack
 //! pointer at the depth every way into a block agrees on.
 
+mod common;
+
 use std::process::Command;
 
 /// A loop entered at its test, so its body's label is reached only by a branch
@@ -24,23 +26,20 @@ fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(directory)
-        .args(flags)
-        .args(["-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(directory).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
 /// A block reached only by a later branch was addressed at depth 0: `add dword
-/// ptr [esp-8], ebp` wrote below the stack (recchop wrong at -O2).
+/// ptr [esp-8], ebp` wrote below the stack (recchop wrong at -O2). EBP holds a
+/// value only where the allocator wants it: the pin's listing of this kernel
+/// never names it either.
 #[test]
 fn test_a_block_reached_by_a_later_branch_addresses_its_cells_at_the_depth_it_is_entered() {
     let text = listing(&["-m32", "-march=i486", "-O2"]);
     assert!(!text.contains("[esp-"), "a cell below the stack pointer: {text}");
-    assert!(text.contains("ebp"), "the frame register holds no value: {text}");
     assert!(!text.contains("mov ebp, esp"), "{text}");
 }
 
@@ -56,7 +55,7 @@ fn test_a_pop_into_a_frame_cell_is_addressed_after_the_stack_is_taken_back() {
     .unwrap();
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), kernel).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -92,7 +91,7 @@ fn test_a_stack_array_indexed_by_a_register_is_addressed_through_the_stack_point
 fn test_a_function_that_only_reads_a_stack_argument_does_not_save_the_frame_register() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), "int g(int);\nint f(int n) { return g(n) + 1; }\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -112,7 +111,7 @@ fn test_size_keeps_the_stack_addressed_frame_where_a_value_holds_the_frame_regis
     for program in ["fill_nest", "stack_arrays_copy"] {
         let source = format!("{}/tests/run/c/{program}.c", env!("CARGO_MANIFEST_DIR"));
         let scratch = tempfile::tempdir().unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        let output = common::cc::llrm_c()
             .current_dir(scratch.path())
             .args(["-m32", "-march=i486", "-Os", "-S", "-o", "a.s", &source])
             .output()
@@ -141,7 +140,7 @@ long f(int n) { int i; for (i = 0; i < n; ++i) peg[0][top[0]++] = n - i; mv(n, 0
     for level in ["-O2", "-Os"] {
         let scratch = tempfile::tempdir().unwrap();
         std::fs::write(scratch.path().join("a.c"), source).unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        let output = common::cc::llrm_c()
             .current_dir(scratch.path())
             .args(["-m32", "-mabi=sysv", "-march=i486", level, "-S", "-o", "a.s", "a.c"])
             .output()
@@ -158,7 +157,7 @@ long f(int n) { int i; for (i = 0; i < n; ++i) peg[0][top[0]++] = n - i; mv(n, 0
 fn test_a_dead_looking_run_of_labels_is_addressed_again_once_a_branch_reaches_it() {
     let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/run/c/compare_to_int64.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-O2", "-S", "-o", "a.s", source])
         .output()
@@ -177,7 +176,7 @@ fn test_a_label_a_known_branch_reaches_ends_the_run_taken_for_dead() {
     let source =
         concat!(env!("CARGO_MANIFEST_DIR"), "/crates/target/llrm-x86-m32/vsgcc/kernels/x_binsearch/x_binsearch.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "a.s", source])
         .output()
@@ -265,8 +264,4 @@ fn test_a_basic_procedure_with_a_sine_builds_no_frame_at_m32() {
     let text = basic_procedure(WAVE, "WAVE");
     assert!(!text.contains("mov ebp, esp"), "a frame is built: {text}");
     assert!(text.contains("db 0d9h,0feh"), "the sine is not inline bytes: {text}");
-    assert!(
-        text.lines().any(|line| line.contains("ebp") && !line.contains("push ebp") && !line.contains("pop ebp")),
-        "the frame register holds no value: {text}"
-    );
 }

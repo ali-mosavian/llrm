@@ -1,0 +1,27 @@
+01 002-r01-combine@677.ll insts 5 73772 62477
+05 006-r01-combine@768.ll insts 13 109266 97802
+08 002-r01-combine@677.ll insts 13 151190 168285
+08 007-r01-combine@768.ll insts 17 208065 198387
+08 011-r01-combine@801.ll insts 17 143136 157734
+08 016-r01-combine@837.ll insts 17 143511 157316
+09 003-r01-combine@677.ll insts 52 492477 900598
+09 010-r01-combine@768.ll insts 55 516047 810423
+09 016-r01-combine@801.ll insts 181 1627767 2326161
+09 022-r01-combine@837.ll insts 171 1485895 2191254
+10 002-r01-combine@677.ll insts 121 1111441 609713
+10 008-r01-combine@768.ll insts 126 992172 606332
+10 013-r01-combine@801.ll insts 130 968701 620751
+10 017-r01-combine@837.ll insts 123 954674 589054
+11 004-r01-combine@677.ll insts 1250 9149549 12415272
+11 014-r01-combine@768.ll insts 1323 10145485 12936296
+11 022-r01-combine@801.ll insts 1283 9222741 12222981
+11 032-r01-combine@837.ll insts 1207 8746731 11504285
+function ours(M) pin(M)
+total                     46.24    58.58
+simplify_instruction      11.29     0.48
+icmp                       7.90    16.03
+gep                        4.18     6.89
+select                     2.33     6.12
+known                      1.97     7.50
+nonzero                    0.80     3.36
+ashr                       0.00    11.21
