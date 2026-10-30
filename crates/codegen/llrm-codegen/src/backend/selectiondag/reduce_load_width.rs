@@ -141,7 +141,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if !self.legal_narrow(load, &info, ext_type, ext_vt, shift) {
             return None;
         }
-        let offset = i64::from(shift / 8);
+        // `AdjustBigEndianShift`
+        let store_bits = |bits: u32| bits.div_ceil(8) * 8;
+        let adjusted = if self.dag.config().big_endian {
+            store_bits(info.mem_vt.size_in_bits()) - store_bits(ext_vt.size_in_bits()) - shift
+        } else {
+            shift
+        };
+        let offset = i64::from(adjusted / 8);
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
         let ptr = if offset == 0 { ptr } else { self.dag.get_object_ptr_offset(ptr, offset) };
         let base = match info.base {

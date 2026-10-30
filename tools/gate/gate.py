@@ -566,7 +566,10 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         + "".join(f"; {cargo} --test {Path(one['file']).stem} || rc=1" for one in cfg["scan"] if p.tier == "smoke" and one.get("step") == "integration" and Path(one["file"]).stem != "target_facts")
         + "; exit $rc",
         "bench": bench,
-        "torture": "uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
+        # The 64-bit sample is a plain regression sweep: it passes on the tree where tailmerge merged two sibling-call jumps (#6146), so a green line is no safety net for that class.
+        "torture": "uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work || rc=1"
+        "; echo 'torture --bits 64 --gate (a plain regression sweep: passes on the pre-fix tree of #6146)'"
+        "; uv run -q --project tools python tools/torture/torture.py --bits 64 --gate --work $CARGO_TARGET_DIR/torture-work64 || rc=1; exit ${rc:-0}",
         # Every LLRM_CHECK_* oracle over the BASIC and Nib programs (needs perf: it first checks each oracle ran). Red on a finding nothing
         # expects, or on an expected one that stopped failing: tools/oracle_expected.toml.
         "oracle-sweep": 'uv run -q --project tools python tools/oracle_sweep.py --no-premise --jobs ${JOBS:-8} --expected tools/oracle_expected.toml ${ORACLE_SHARD:+--shard "$ORACLE_SHARD"}',

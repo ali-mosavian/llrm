@@ -1625,3 +1625,21 @@ def test_objsweep_is_a_heavy_step_selected_by_the_object_and_debug_paths():
         assert "objsweep" in gate.plan([path]).steps, path
     assert "objsweep" not in gate.plan(["tests/run.rs"]).steps
     assert gate.load()["groups"]["objects"] == ["objsweep"]
+
+
+def test_the_torture_step_runs_the_64_bit_sample_and_fails_when_either_sample_fails(tmp_path):
+    """#6146's wrong code (tailmerge merging two sibling-call jumps) passed the torture sample, which cannot see it; the 64-bit sample is wired as a plain regression sweep and must fail the step when it fails."""
+    p = gate.plan(["tools/torture/torture.py"])
+    command = gate.commands(p, gate.load(), gate.packages())["torture"]
+    assert "plain regression sweep" in command and "--bits 64 --gate" in command
+    fake = tmp_path / "uv"
+    fake.write_text('#!/bin/sh\ncase "$*" in *"--bits 64"*) exit ${FAIL64:-0};; *) exit ${FAIL32:-0};; esac\n')
+    fake.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "CARGO_TARGET_DIR": str(tmp_path)}
+
+    def run(**fail):
+        return subprocess.run(["bash", "-c", command], env={**env, **fail}, capture_output=True, text=True).returncode
+
+    assert run() == 0
+    assert run(FAIL64="1") == 1, "a wrong 64-bit result must fail the step"
+    assert run(FAIL32="1") == 1, "the 32-bit sample still fails the step"

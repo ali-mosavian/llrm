@@ -73,6 +73,7 @@ mod select_cmp_zero;
 mod select_fold;
 mod select_i1;
 mod select_single_bit;
+mod setcc_canonical;
 mod setcc_i1_operands;
 mod setcc_result;
 mod setcc_simplify;

@@ -264,6 +264,23 @@ pub struct Near {
     pub name: String,
     /// A sibling call's `jmp` (`E9`), not a `call` (`E8`).
     pub tail: bool,
+    /// The conditional jump a sibling call is folded into (`jcc name`).
+    pub cond: Option<String>,
+}
+
+impl Near {
+    /// The opcode bytes before the displacement.
+    fn opcode(
+        &self,
+        model: CodeModel,
+    ) -> Result<Vec<u8>, Unencodable> {
+        let Some(cond) = &self.cond else {
+            return Ok(vec![if self.tail { 0xE9 } else { 0xE8 }]);
+        };
+        let at = select::At { ip: 0, bits: model.bits() };
+        let long = select::branch(cond, 0, at, false).filter(|made| made.code.len() == 2 + model.displacement_bytes());
+        long.map(|made| made.code[..2].to_vec()).ok_or_else(|| Unencodable(format!("{cond} to {}", self.name)))
+    }
 }
 
 /// `Encoded`.
@@ -849,22 +866,25 @@ pub fn _code_by(
             Encoded::Jump(Jump { name, label, long }) => {
                 segment.put(&_jump(name, labels[label], at, *long, model)?.code, &[])
             }
-            Encoded::Near(Near { name, tail }) if labels.contains_key(name) => {
-                let distance = labels[name] - (at as i64 + 1 + model.displacement_bytes() as i64);
+            Encoded::Near(near) if labels.contains_key(&near.name) => {
+                let name = &near.name;
+                let opcode = near.opcode(model)?;
+                let distance = labels[name] - (at as i64 + opcode.len() as i64 + model.displacement_bytes() as i64);
                 let far = || Unencodable(format!("a near call to {name} {distance} bytes away"));
                 let displacement = if model.flat() {
                     i32::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
                 } else {
                     i16::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
                 };
-                segment.put(&[&[if *tail { 0xE9 } else { 0xE8 }][..], &displacement].concat(), &[]);
+                segment.put(&[&opcode[..], &displacement].concat(), &[]);
             }
-            Encoded::Near(Near { name, tail }) => {
+            Encoded::Near(near) => {
+                let opcode = near.opcode(model)?;
                 segment.put(
-                    &vec![0; 1 + model.displacement_bytes()],
-                    &[Fixup::new(1, relative(model.displacement_bytes()), name.clone())],
+                    &vec![0; opcode.len() + model.displacement_bytes()],
+                    &[Fixup::new(opcode.len(), relative(model.displacement_bytes()), near.name.clone())],
                 );
-                segment.image[at] = if *tail { 0xE9 } else { 0xE8 };
+                segment.image[at..at + opcode.len()].copy_from_slice(&opcode);
             }
         }
         at = segment.image.len();
@@ -903,7 +923,10 @@ pub fn _items(
             fixups: vec![Fixup::new(1, POINTER, name.clone())],
         })],
         masm::Item::Callee(masm::Callee { name, tail, .. }) => {
-            vec![Encoded::Near(Near { name: name.clone(), tail: *tail })]
+            vec![Encoded::Near(Near { name: name.clone(), tail: *tail, cond: None })]
+        }
+        masm::Item::TailIf { condition, callee } => {
+            vec![Encoded::Near(Near { name: callee.clone(), tail: true, cond: Some(condition.clone()) })]
         }
         masm::Item::Semantics(Semantics {
             op: Operation::Branch | Operation::Jump,
@@ -1182,7 +1205,7 @@ pub fn _length(
                 2 + model.displacement_bytes()
             }
         }
-        Encoded::Near(_) => 1 + model.displacement_bytes(),
+        Encoded::Near(near) => near.cond.as_ref().map_or(1, |_| 2) + model.displacement_bytes(),
     }
 }
 
