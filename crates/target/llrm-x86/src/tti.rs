@@ -925,6 +925,10 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    fn mirrors_conditional_counters(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()

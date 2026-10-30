@@ -627,6 +627,14 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin (which treats a counter only some trips step as no
+    /// induction variable, `createSimpleAffineAddRec`): such a counter gets a
+    /// pointer that steps with it, where the address takes no scale. False
+    /// keeps the pin's loops. Exit: none, a pass of its own.
+    fn mirrors_conditional_counters(&self) -> bool {
+        false
+    }
+
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.
     fn can_macro_fuse_cmp(&self) -> bool {
         false

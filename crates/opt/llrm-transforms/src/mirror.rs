@@ -104,10 +104,12 @@ use std::collections::BTreeSet;
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, StepCycle};
 use llrm_analysis::{cfg, memory};
-use llrm_mir::context::signed;
+use llrm_analysis::occurrence::{arms, from_arms};
+use llrm_mir::context::{Context, signed};
+use llrm_mir::edit::Position;
 use llrm_mir::dense::IdSet;
-use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, Opcode};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::target::AddressForm;
 use llrm_mir::types::Type;
 
@@ -200,7 +202,7 @@ fn family_of(
                     Some(Type::Pointer(space)) => !view.layout.is_pair(*space) && view.layout.offset_bits(*space) == bits,
                     _ => false,
                 };
-                if k > 1 && !scales.contains(&(k as i64)) && invariant(base) && (flat || std::env::var_os("LLRM_MIRROR_FAR").is_some()) {
+                if k > 1 && !scales.contains(&(k as i64)) && invariant(base) && flat {
                     match families.iter_mut().find(|one| one.base == base && one.k == k) {
                         Some(family) => family.reads.push((one.user, y)),
                         None => families.push(Family { base, k, reads: vec![(one.user, y)] }),
@@ -244,7 +246,7 @@ fn family_of(
                         }
                         _ => false,
                     };
-                if !flat && std::env::var_os("LLRM_MIRROR_FAR").is_none() {
+                if !flat {
                     break;
                 }
                 base = Some(op.operands[0]);
@@ -263,3 +265,141 @@ fn family_of(
     families.into_iter().max_by_key(|one| one.reads.len())
 }
 
+/// Every loop of `function` that has a pointer for its counter, made: whether
+/// any was. `forms` are the target's address forms.
+pub(crate) fn mirrored(
+    context: &Context,
+    layout: &llrm_mir::datalayout::DataLayout,
+    function: &mut Function,
+    outer: &llrm_mir::passes::Outer,
+    forms: &[AddressForm],
+) -> bool {
+    let plans = {
+        let shape = cfg::Shape::of(function);
+        let view = memory::Unit::within(context, layout, function, outer).with_shape(&shape);
+        shape.loops.iter().filter_map(|one| found(&view, one, forms)).collect::<Vec<_>>()
+    };
+    for plan in &plans {
+        applied(context, function, plan);
+    }
+    if !plans.is_empty() {
+        crate::dead::dead(context, outer.callees(), function);
+    }
+    !plans.is_empty()
+}
+
+/// The pointer cycle for the plan, and its accesses reading it.
+pub(crate) fn applied(
+    context: &Context,
+    function: &mut Function,
+    plan: &Plan,
+) {
+    let Plan { header, preheader, cycle, family, bits } = plan;
+    let (header, preheader) = (*header, *preheader);
+    let Some(pointer) = function.operand_type(context, family.base) else { return };
+    let index = function.value(cycle.nodes[0]).ty;
+    let i8 = context.types.int(8);
+    let gep = Opcode::GetElementPtr { source: i8 };
+    let k = Operand::Constant(context.int(index, family.k));
+    let init = cycle.start;
+    // The start: the base moved on by the counter's start times k.
+    let end = function.terminator(preheader).expect("a terminated preheader");
+    let offset = match init {
+        Operand::Constant(id) => match context.get(id).kind {
+            llrm_mir::context::ConstantKind::Int(value) => {
+                Operand::Constant(context.int(index, signed(value, *bits) * family.k))
+            }
+            _ => return,
+        },
+        other => {
+            let made = function.create_instruction(
+                Opcode::Binary(BinaryOp::Mul),
+                index,
+                vec![other, k],
+                Flags::default(),
+                None,
+            );
+            function.insert(made, Position::Before(end)).expect("the preheader");
+            Operand::Value(function.instruction(made).result.expect("a value"))
+        }
+    };
+    let start = function.create_instruction(gep.clone(), pointer, vec![family.base, offset], Flags::default(), None);
+    function.insert(start, Position::Before(end)).expect("the preheader");
+    let start = Operand::Value(function.instruction(start).result.expect("a value"));
+    // Every value of the cycle has its pointer: a phi where it is a phi, a step
+    // where it is an add. The phis first, so the steps can name them.
+    let mut mirror: Vec<(ValueId, ValueId)> = Vec::new();
+    let mut shells: Vec<(InstId, ValueId)> = Vec::new();
+    for &node in &cycle.nodes {
+        if cycle.adds.iter().any(|(added, _, _)| *added == node) {
+            continue;
+        }
+        let ValueDef::Instruction(original) = function.value(node).def else { continue };
+        let block = function.parent(original).expect("a placed phi");
+        let phi = function.create_instruction(Opcode::Phi, pointer, Vec::new(), Flags::default(), None);
+        let first = function.block(block).first().expect("a block with an instruction");
+        function.insert(phi, Position::Before(first)).expect("a block");
+        mirror.push((node, function.instruction(phi).result.expect("a phi's value")));
+        shells.push((phi, node));
+    }
+    // The steps, once what each steps has its pointer (a step may step a step).
+    loop {
+        let mut grew = false;
+        for (added, stepped, step) in &cycle.adds {
+            if mirror.iter().any(|(node, _)| node == added) {
+                continue;
+            }
+            let Some(&(_, on)) = mirror.iter().find(|(node, _)| node == stepped) else { continue };
+            let ValueDef::Instruction(original) = function.value(*added).def else { continue };
+            let block = function.parent(original).expect("a placed add");
+            let step = i128::try_from(step).unwrap_or(0);
+            let amount = Operand::Constant(context.int(index, step * family.k));
+            let made = function.create_instruction(
+                gep.clone(),
+                pointer,
+                vec![Operand::Value(on), amount],
+                Flags::default(),
+                None,
+            );
+            let before = function.terminator(block).expect("a terminated block");
+            function.insert(made, Position::Before(before)).expect("a block");
+            mirror.push((*added, function.instruction(made).result.expect("a value")));
+            grew = true;
+        }
+        if !grew {
+            break;
+        }
+    }
+    let of = |node: Operand, mirror: &[(ValueId, ValueId)]| match node {
+        Operand::Value(value) => {
+            mirror.iter().find(|(original, _)| *original == value).map(|&(_, made)| Operand::Value(made))
+        }
+        _ => None,
+    };
+    for (phi, node) in shells {
+        let ValueDef::Instruction(original) = function.value(node).def else { continue };
+        let block = function.parent(original).expect("a placed phi");
+        let operands: Option<Vec<(Operand, BlockId)>> = arms(function, original)
+            .into_iter()
+            .map(|(value, from)| {
+                // The way in from before the loop.
+                if block == header && !matches!(value, Operand::Value(one) if cycle.nodes.contains(&one)) {
+                    return Some((start, from));
+                }
+                of(value, &mirror).map(|made| (made, from))
+            })
+            .collect();
+        let Some(operands) = operands else { continue };
+        function.set_operands(phi, from_arms(&operands));
+    }
+    for &(read, y) in &family.reads {
+        let Some(result) = function.instruction(read).result else { continue };
+        let Some(&(_, made)) = mirror.iter().find(|(node, _)| *node == y) else { continue };
+        function.replace_all_uses_with(result, Operand::Value(made));
+    }
+}
+
+
+#[cfg(test)]
+#[path = "mirror_tests.rs"]
+mod tests;
