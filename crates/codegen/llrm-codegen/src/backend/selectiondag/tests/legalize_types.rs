@@ -135,3 +135,26 @@ fn the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector() {
     dag.set_root(low);
     assert_eq!(legalize(&mut dag, &tli), Ok(true));
 }
+
+/// `smin`/`umin` of an odd width were refused ("promote result"), so any
+/// min/max of a type below the register size failed to legalize. Signed
+/// operands are sign-extended in register, unsigned ones masked.
+#[test]
+fn an_odd_width_min_max_is_promoted_with_extended_operands() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    for (op, extend) in [(ISD::SMin, ISD::Sra), (ISD::UMax, ISD::And)] {
+        let mut dag = dag();
+        let i12 = EVT::Int(12);
+        let (a, b) = (load(&mut dag, i12, 1), load(&mut dag, i12, 2));
+        let best = dag.get_node(op, i12, &[a, b]);
+        let byte = dag.get_node(ISD::Truncate, EVT::I8, &[best]);
+        dag.set_root(byte);
+        assert_eq!(legalize(&mut dag, &tli), Ok(true), "{op:?}");
+        assert!(all_legal(&mut dag, &tli));
+        let wide = dag.operand(dag.get_root(), 0);
+        assert_eq!((dag.opcode(wide), dag.value_type(wide)), (op, EVT::I16));
+        for operand in [dag.operand(wide, 0), dag.operand(wide, 1)] {
+            assert_eq!(dag.opcode(operand), extend, "{op:?} extends its operands");
+        }
+    }
+}

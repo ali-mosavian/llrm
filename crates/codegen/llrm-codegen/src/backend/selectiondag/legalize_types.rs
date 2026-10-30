@@ -449,6 +449,28 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
+            op @ (ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax) => {
+                // `PromoteIntRes_SimpleIntBinOp` with `SExtPromotedInteger` for
+                // the signed forms and `ZExtPromotedInteger` for the unsigned.
+                let signed = matches!(op, ISD::SMin | ISD::SMax);
+                let extend = |legalizer: &mut Self, operand: SDValue| {
+                    let bits = legalizer.dag.value_type(operand).size_in_bits();
+                    let promoted = legalizer.promoted_integer(operand);
+                    let wide = legalizer.dag.value_type(promoted);
+                    if signed {
+                        let by = legalizer.dag.get_constant(u128::from(wide.size_in_bits() - bits), EVT::I8);
+                        let high = legalizer.dag.get_node(ISD::Shl, wide, &[promoted, by]);
+                        legalizer.dag.get_node(ISD::Sra, wide, &[high, by])
+                    } else {
+                        let mask = legalizer.dag.get_constant(super::fold::mask(bits), wide);
+                        legalizer.dag.get_node(ISD::And, wide, &[promoted, mask])
+                    }
+                };
+                let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let (lhs, rhs) = (extend(self, lhs), extend(self, rhs));
+                let wide = self.dag.value_type(lhs);
+                self.dag.get_node(op, wide, &[lhs, rhs])
+            }
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => {
                 // `PromoteIntRes_SHL/SRL/SRA`: the value promoted, with the
                 // bits above its width cleared (srl) or sign-filled (sra); a
