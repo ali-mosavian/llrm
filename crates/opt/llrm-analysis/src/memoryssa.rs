@@ -198,6 +198,8 @@ pub struct Accesses {
     /// What the manager's accesses were made from: the references annotated
     /// and the calls' effects.
     source: Option<Rc<<Annotated as Analysis>::Result>>,
+    /// The calls' footprints `touched` holds for them were made from.
+    footprint_source: Option<Rc<<crate::manager::CallFootprints as Analysis>::Result>>,
     /// What the manager's plain accesses were made from: the references
     /// annotated, the calls' writes, and the module facts that decide a call.
     plain_source: Option<PlainSource>,
@@ -351,8 +353,8 @@ impl Analysis for Accesses {
     ) -> Self::Result {
         let annotated = analyses.get::<Annotated>(context, layout, function);
         let references = Result::as_ref(&*annotated).map_err(String::clone)?;
-        let footprints = analyses.get::<crate::manager::CallFootprints>(context, layout, function);
-        let footprints = Result::as_ref(&*footprints).map_err(String::clone)?;
+        let footprints_held = analyses.get::<crate::manager::CallFootprints>(context, layout, function);
+        let footprints = Result::as_ref(&*footprints_held).map_err(String::clone)?;
         let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
         let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
         // The pointer value solve `Annotated` shares: the objects a call's
@@ -364,7 +366,7 @@ impl Analysis for Accesses {
             unit = unit.with_point_values(values);
         }
         let made = Self::of(&unit, references.clone(), footprints);
-        Ok(Rc::new(Self { source: Some(annotated), ..made }))
+        Ok(Rc::new(Self { source: Some(annotated), footprint_source: Some(footprints_held), ..made }))
     }
 
     /// What an instruction touches is its own: a store or call moved to
@@ -403,6 +405,13 @@ impl Analysis for Accesses {
         let annotated = analyses.get::<Annotated>(context, layout, function);
         let unchanged = Rc::ptr_eq(&annotated, was_annotated) || *annotated == **was_annotated;
         if !unchanged {
+            return None;
+        }
+        // A call's footprint names the values its arguments are made of; an
+        // edit to those (a gep's index replaced) leaves the references alone.
+        let footprints = analyses.get::<crate::manager::CallFootprints>(context, layout, function);
+        let was_footprints = held.footprint_source.as_ref()?;
+        if !(Rc::ptr_eq(&footprints, was_footprints) || *footprints == **was_footprints) {
             return None;
         }
         Some(if structure_kept(changes, function) {
@@ -607,6 +616,7 @@ impl Accesses {
             touched,
             fills: IndexMap::default(),
             source: None,
+            footprint_source: None,
             plain_source: None,
             graph: GraphCell::default(),
             lazy: false,

@@ -1282,6 +1282,35 @@ fn a_branch_replaced_by_one_to_other_blocks_makes_the_pointer_analyses_derive_ag
     );
 }
 
+/// The accesses were kept past an edit when `Annotated` came out equal, though
+/// a call's footprint names the index its pointer argument is made of:
+/// `LLRM_CHECK_REPLAY` on bench/grep -O2 found a call's footprint with base
+/// %63 where deriving it gave %75, after a gep's index was replaced.
+#[test]
+fn accesses_are_derived_again_when_a_calls_footprint_changed() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @g(ptr) memory(argmem: readwrite)\ndefine void @f(ptr %p, i16 %i, i16 %j) {{\nentry:\n  %q = getelementptr i8, ptr %p, i16 %i\n  call void @g(ptr %q)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    {
+        let (context, function) = module.function_mut("f").unwrap();
+        analyses.get::<crate::memoryssa::Accesses>(context, &layout, function);
+        let gep = function.iter_block(function.layout()[0]).next().unwrap();
+        let j = Operand::Value(value(function, "j"));
+        function.set_operand(gep, 1, j);
+        analyses.invalidate(function, &PreservedAnalyses::none());
+    }
+    let (context, function) = module.function_mut("f").unwrap();
+    let after = analyses.get::<crate::memoryssa::Accesses>(context, &layout, function);
+    assert_eq!(
+        *after,
+        *Analyses::new(outer).get::<crate::memoryssa::Accesses>(context, &layout, function),
+        "what was brought up to date is what deriving it afresh gives"
+    );
+}
+
 /// `LLRM_CHECK_CAPTURES` judges the points-to facts each time `get` hands them
 /// out, so a fact a pass reads (dse dropping a store behind `phi [%slot, %q]`)
 /// is checked where it is used: a planted result that forgot the escape of
