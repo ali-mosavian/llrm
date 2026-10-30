@@ -113,3 +113,13 @@ Source map and line numbers, `-g` types and variables (`Debug`), alias classes
 (a TBAA tree), stated facts, the QB statement table (`$qb$statementTable`),
 runtime promises, and the stack-check configuration sit beside the CFG, never
 in an instruction operand.
+
+### `access`
+
+A load or store may state the region it reaches: `descriptor` (an array
+descriptor's word) or `element` (an element of an array, through its
+descriptor or by name). The emitter turns it into `!tbaa`: `place` for a
+descriptor word, `allocation` (the array's own `allocation.N` where its owner
+is known, else the generic one) for an element. QB states `element` for every
+access to a named or described array, since a parameter may be bound to any of
+them; REDIM, ERASE and DIM stay calls, which clobber what they may move.
