@@ -1,0 +1,11 @@
+# BBC Micro, disc with DFS (PAGE = $1900). STUB: $70..$8F is the zero page the MOS leaves to user
+# programs, so rc0..rc15 fit; not yet checked against a run.
+# zero_page = 26: cc65's own ZP segment for this target is $0070 size $0020 (ours takes the first 26) (/usr/share/cc65/cfg/bbc.cfg:5); the program must assume: the MOS is not called with the user zero page live; no interrupt handler of the program uses $70..$89.
+[platform]
+name = "bbc"
+status = "stub"
+load_address = 0x1900
+imag_base = 0x70
+zero_page = 26
+cc65_cfg = "bbc.cfg"
+soft_stack = 0x7C00

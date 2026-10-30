@@ -1,0 +1,11 @@
+# Commodore 64: a PRG is a 2-byte load address then the program; BASIC starts it with `10 SYS 2061`.
+# The imaginary registers rc0..rc25 (zero_page = 26 bytes) sit in zero page from $02, where KERNAL and BASIC keep nothing a
+# program that never returns to BASIC needs (to be checked against the C64 memory map at M7).
+# zero_page = 26: cc65's own ZP segment for this target is $0002 size $001A (/usr/share/cc65/cfg/c64.cfg:11); the program must assume: BASIC and the KERNAL are not used after start (the PRG never returns to BASIC) and no IRQ handler of the program touches $02..$1B.
+[platform]
+name = "c64"
+load_address = 0x0801
+imag_base = 0x02
+zero_page = 26
+cc65_cfg = "c64.cfg"
+soft_stack = 0x9F00
