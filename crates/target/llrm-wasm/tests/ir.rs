@@ -87,3 +87,9 @@ fn phi_copy_order() {
 fn control_flow_shapes() {
     check("shapes");
 }
+
+/// An `invoke` is a call and a branch to its normal block; the pad nothing else reaches is dropped.
+#[test]
+fn invoke() {
+    check("invoke");
+}

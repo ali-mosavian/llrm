@@ -31,3 +31,13 @@ fn switch_is_refused_by_name() {
     );
     assert!(why.contains("switch") && why.contains("not supported yet"), "{why}");
 }
+
+/// An `invoke`'s unwind edge was a successor of its block, so a pad nothing
+/// else branches to stayed in the function: `i32.const 2; return` after the
+/// normal path's `return`. The pin drops it (`LowerInvoke`).
+#[test]
+fn an_unwind_edge_is_not_an_edge() {
+    let text = "declare void @g(i32)\ndeclare i32 @p(...)\ndefine i32 @f(i32 %a) personality ptr @p {\nentry:\n  invoke void @g(i32 %a) to label %ok unwind label %pad\nok:\n  ret i32 1\npad:\n  %l = landingpad { ptr, i32 } cleanup\n  ret i32 2\n}\n";
+    let out = assembly(text, Width::W32, Options::default()).expect("compiles");
+    assert!(!out.contains("i32.const\t2"), "{out}");
+}
