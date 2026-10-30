@@ -1169,8 +1169,8 @@ impl Builder<'_> {
     ///
     /// DEVIATE SD442: the pin calls `memset` for a size not known at compile
     /// time; m16 has no libc `memset`, so this was already `rep stosb` here and
-    /// only the unit is new. Every m16 profile has 32-bit operands (the lowest is
-    /// the 386; llrm-cc rejects `-march=i286`), so a dword unit needs no
+    /// only the unit is new. Every m16 profile has 32-bit operands (the lowest
+    /// is the 386; llrm-cc rejects `-march=i286`), so a dword unit needs no
     /// gate. Like every string operation in this file it relies on DF being
     /// clear on entry (the `cld` convention). Exit: a runtime `memset` on
     /// m16 lands and this lowers to the call; this unit choice is then

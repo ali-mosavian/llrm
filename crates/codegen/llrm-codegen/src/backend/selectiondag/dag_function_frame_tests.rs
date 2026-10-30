@@ -1596,10 +1596,14 @@ entry:
         .filter_map(|i| i.what.as_ref())
         .find(|w| w.op == crate::model::ir::Operation::Fill)
         .and_then(|w| {
-            w.sources.iter().find_map(|source| match source {
-                crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
-                _ => None,
-            })
+            w.sources
+                .iter()
+                .find_map(
+                    |source| match source {
+                        crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                        _ => None,
+                    },
+                )
         })
 }
 
