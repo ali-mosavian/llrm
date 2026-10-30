@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The one way to squash a pull request into feat/parity: a bare `gh pr merge` merged stale heads that reverted other PRs' work (#2329 reverted decide's LVI step).
+"""The one way to squash a pull request into the integration branch ($LAND_BRANCH, default release/next; written feat/parity below): a bare `gh pr merge` merged stale heads that reverted other PRs' work (#2329 reverted decide's LVI step).
 
     [PARITY_BIN=DIR] tools/parity_squash.py merge PR [--known-red STEP=ISSUE]...   under /tmp/land.lock (land.sh's): merge feat/parity into the PR head here (not pushed), refuse or run the fast set on THAT, then `gh pr merge --squash --match-head-commit`
     tools/parity_squash.py merge-batch N1..N8 [--known-red STEP=ISSUE]...   up to eight ready PRs: ONE fast set on the base with all merged in; on failure halve (the passing half lands first)
@@ -8,7 +8,7 @@
 Subset rule: the fast set runs on the head (origin/feat/parity, failure set cached per sha by `head-failures`) AND on the merged tree; the merged tree may fail only checks the head fails, and strictly fewer
 when the description has a `Fixes red` line; both sets are in the refusal. Every landing appends `<sha> #PR gate-ok <date>` to ~/scratch/coordwork/landed.log; `unlogged` lists feat/parity commits with no line.
 Refused unless: the PR head contains the current origin/feat/parity; the squash deletes no file a docs/*.md still links to, and no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
-LIMIT lines of a file, unless a `Deletes:` or `Reverts:` line of the description names the path (own commits or not: #2443's deleted scev/expand_iv.rs); parity_smoke passes on that exact head.
+LIMIT lines of a file, unless a `Deletes:` or `Reverts:` line of the description names the path (own commits or not: #2443's deleted scev/expand_iv.rs); parity_smoke passes on that exact head. The description carries `problems: 0 @ <full head SHA>`, the bench judge's line from a run on that exact head (a missing line or another SHA is REFUSED, named); a PR that touches no compiler path (tiers.toml [compiler]) cannot move the judge and needs none.
 PARITY_BIN names the directory of the built release llrm-cc, llrm-llc, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
 (LLRM_BIN / CARGO_TARGET_DIR as tools/llrmbin.py reads them) when all three are there.
 `--known-red sc=2438` skips ONLY that smoke step (named, with its issue), still runs every other check, and puts one line in the squash's body:
@@ -36,7 +36,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LIMIT = 20  # deleted lines allowed in files the PR's own commits did not touch
-BASE = "origin/feat/parity"
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch every PR targets and the runner lands on
+BASE = f"origin/{BRANCH}"
 HEAD_FAILURES = Path.home() / "scratch/results/headfail"  # <sha>.json: the failing checks of the fast set on that head
 LANDED_LOG = Path(os.environ.get("LANDED_LOG", Path.home() / "scratch/coordwork/landed.log"))
 FIXES_RED = re.compile(r"(?im)^\s*fixes\s+(?:a\s+)?red\b")
@@ -368,13 +369,37 @@ def precheck_baseline(dev: Path, checks, base_sha: str, cache: Path) -> dict[str
     return found
 
 
+def touches_compiler(files: list[str]) -> bool:
+    """Whether a diff touches a compiler path (tiers.toml [compiler]): the only diffs that can move the judge."""
+    sys.path.insert(0, str(ROOT / "tools/gate"))
+    import gate
+
+    return gate.touches_compiler(files)
+
+
+JUDGE_LINE = re.compile(r"^\s*problems:\s*0\s*[@\uff20]\s*(\S+)\s*$", re.M)
+
+
+def judge_line_refusal(number: str, info: dict) -> str | None:
+    """`N: REFUSED: why` unless the description carries `problems: 0 @ <full head SHA>`, the bench judge's line from a run on this exact head: #6095 landed with
+    the judge red on 56 rows because the fast set does not run it. Read at every call (never cached: the description is edited without a new head)."""
+    shas = JUDGE_LINE.findall(info.get("body") or "")
+    if info["headRefOid"] in shas or ("files" in info and not touches_compiler([f["path"] if isinstance(f, dict) else f for f in info["files"]])):
+        return None
+    if shas:
+        return f"{number}: REFUSED: the judge line is for {shas[-1][:12]}, the head is {info['headRefOid'][:12]}: run the judge on this head and update the description"
+    return f"{number}: REFUSED: the description has no judge line `problems: 0 @ <full head SHA>` (the bench judge, run on this head)"
+
+
 def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHECK_DIR / "target", checks=None, merge=None, deletions=None, info=None, head_failed: set[str] | None = None, cache: Path = PRECHECK_CACHE, base_sha: str | None = None) -> str:
     """`N: PASS`, or `N: REFUSED: <names>` after merging PR N's head with feat/parity in the dev checkout and running the cheap static checks (ratchets, fmt, docs, the
     deletion rule) there: seconds, no dist build. #2836 cost a batch 26 minutes of halving for a failure these checks name. Only items NEW against feat/parity's own
     failures refuse (by check AND file/page): a red head file refused every PR, the fixes included. The verdict is cached per (PR head sha, feat/parity sha)."""
-    info = info or json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, errors="replace", check=True).stdout)
-    if info["baseRefName"] != "feat/parity":
-        return f"{number}: REFUSED: targets {info['baseRefName']}, not feat/parity"
+    info = info or json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName,files"], capture_output=True, text=True, errors="replace", check=True).stdout)
+    if info["baseRefName"] != BRANCH:
+        return f"{number}: REFUSED: targets {info['baseRefName']}, not {BRANCH}"
+    if refused := judge_line_refusal(number, info):
+        return refused
     base_sha = base_sha or git("rev-parse", BASE).strip()
     key = f"{info['headRefOid']} {base_sha}"
     cached = json.loads(cache.read_text()) if cache.exists() else {}
@@ -390,7 +415,7 @@ def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHE
 def _precheck(number, info, dev, target, checks, merge, deletions, head_failed, cache, base_sha) -> str:
     if not dev.exists():
         dev.parent.mkdir(parents=True, exist_ok=True)
-        git("fetch", "-q", "origin", "feat/parity")
+        git("fetch", "-q", "origin", BRANCH)
         git("worktree", "add", "-q", "--detach", str(dev), base_sha)
     git("fetch", "-q", "origin", info["headRefOid"], cwd=dev)
     checks = list(checks) if checks is not None else precheck_checks(dev, target)
@@ -500,9 +525,9 @@ def known_red_line(known: dict[str, str]) -> str:
 
 def stale_at_the_call(head: str, fetch=None, base: str = BASE, cwd: Path = ROOT) -> list[str]:
     """The containment check read at the instant of the merge call: feat/parity moves while the fast set runs (#2443's head predated #2429 by then)."""
-    (fetch or (lambda: git("fetch", "-q", "origin", "feat/parity", cwd=cwd)))()
+    (fetch or (lambda: git("fetch", "-q", "origin", BRANCH, cwd=cwd)))()
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
-        return [f"feat/parity moved while the checks ran: the PR head does not contain {base} now; merge it in and run again"]
+        return [f"{BRANCH} moved while the checks ran: the PR head does not contain {base} now; merge it in and run again"]
     return []
 
 
@@ -579,7 +604,7 @@ def update_generated_only(head: str, branch: str, base: str = BASE, cwd: Path = 
 def merge_parity(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> str:
     """The sha of `head` with fresh `base` merged into it (a merge commit, no rebase), pushed to `branch` as a fast-forward; "" when the merge conflicts or the push fails. The
     owner's conflict stays the owner's: nothing is resolved here."""
-    git("fetch", "-q", "origin", "feat/parity", cwd=cwd)
+    git("fetch", "-q", "origin", BRANCH, cwd=cwd)
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp) / "w"
         git("worktree", "add", "-q", "--detach", str(work), head, cwd=cwd)
@@ -770,7 +795,7 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
     if FAST and info["mergeable"] == "CONFLICTING":
         if not (fresh := update(info["headRefOid"], info["headRefName"])):
             return False
-        note = f"The landing runner merged feat/parity into this branch ({fresh[:9]}; generated pages regenerated). If your push is rejected: git pull --no-rebase, then push; never force."
+        note = f"The landing runner merged {BRANCH} into this branch ({fresh[:9]}; generated pages regenerated). If your push is rejected: git pull --no-rebase, then push; never force."
         run(["gh", "pr", "comment", number, "--body", note])
         info = {**info, "headRefOid": fresh}
         time.sleep(settle)  # GitHub recomputes the PR's mergeability after the push
@@ -784,7 +809,7 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
             time.sleep(settle)  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
             done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", fresh, "--subject", info["title"], "--body", body], capture_output=True, text=True, errors="replace")
         else:
-            print(f"#{number}: head out of date and feat/parity does not merge into it cleanly: the owner merges fresh feat/parity")
+            print(f"#{number}: head out of date and {BRANCH} does not merge into it cleanly: the owner merges fresh {BRANCH}")
     if done.returncode and any(one in f"{done.stderr}{done.stdout}" for one in GITHUB_TRANSIENT):
         print(f"#{number}: GitHub failed on its side, retrying once after {retry_wait:g} s")
         time.sleep(retry_wait)
@@ -1401,7 +1426,7 @@ def _link_programs() -> list[str]:
 
 def rescan_alone(number: str, info: dict) -> set[str]:
     """The new red always-on scanners of PR `number` merged alone onto the head as it is now: the tree its squash makes after earlier PRs of the batch were dropped."""
-    git("fetch", "-q", "origin", "feat/parity")
+    git("fetch", "-q", "origin", BRANCH)
     clean_checkout(BASE)
     git("fetch", "-q", "origin", info["headRefOid"])
     if subprocess.run(["git", "merge", "--no-edit", "-q", info["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
@@ -1413,7 +1438,7 @@ def rescan_alone(number: str, info: dict) -> set[str]:
 
 def rescan_group_alone(numbers: list[str], infos: dict[str, dict]) -> set[str]:
     """The new red always-on scanners of the tree `numbers` make together on the head as it is now (the members still to land, merged one after another; a conflict is the squash's to refuse)."""
-    git("fetch", "-q", "origin", "feat/parity")
+    git("fetch", "-q", "origin", BRANCH)
     clean_checkout(BASE)
     for number in numbers:
         git("fetch", "-q", "origin", infos[number]["headRefOid"])
@@ -1545,7 +1570,7 @@ def verify_tip(cwd: Path = ROOT) -> str:
     return ""
 
 
-def push_tip(heads: dict[str, str], cwd: Path = ROOT, base: str = BASE, ref: str = "feat/parity", prepare=format_tip, verify=verify_tip) -> tuple[str, str]:
+def push_tip(heads: dict[str, str], cwd: Path = ROOT, base: str = BASE, ref: str = BRANCH, prepare=format_tip, verify=verify_tip) -> tuple[str, str]:
     """(tip, ""): the verified PR `heads` merged in order onto `base` (merge commits, the tests-append driver), formatted, checked, and pushed to `ref` as a plain fast-forward (never forced).
     GitHub marks each PR whose head is in the tip merged. ("", why) when a head does not merge, the tip fails `verify`, or the push is refused: the caller squashes per PR then."""
     clean_checkout(base, cwd)
@@ -1833,7 +1858,7 @@ def docs_gated(merge_one, docs_before: set[str], root: Path = ROOT, docs=docs_st
 def sync_docs_head(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str, str]:
     """(sha, ""): `head` with `base` merged in, `build.py --sync` applied and committed, pushed to `branch` as a fast-forward, so the squash lands current pages; `head` itself when its pages are
     current after the merge. (\"\", why) when the merge conflicts outside generated pages, the sync fails or leaves a page stale, or the push fails."""
-    git("fetch", "-q", "origin", "feat/parity", cwd=cwd)
+    git("fetch", "-q", "origin", BRANCH, cwd=cwd)
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp) / "w"
         git("worktree", "add", "-q", "--detach", str(work), head, cwd=cwd)
@@ -2094,8 +2119,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if number not in known_prs:
             raise SystemExit(f"#{number} is not a PR GitHub knows")
         info = known_prs[number]
-        if info["baseRefName"] != "feat/parity":
-            raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
+        if info["baseRefName"] != BRANCH:
+            raise SystemExit(f"#{number} targets {info['baseRefName']}, not {BRANCH}")
         infos[number] = info
     landed, refused, held, late_drops, moved = [], [], [], [], []
     docs_synced: set[str] = set()  # PRs whose merge staled a generated page: synced in the batch tree, and on their branch before the squash
@@ -2111,7 +2136,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         refused.append(number)
 
     def passes_fast(group: list[str]) -> bool:
-        git("fetch", "-q", "origin", "feat/parity")
+        git("fetch", "-q", "origin", BRANCH)
         clean_checkout(BASE)
 
         def members_files() -> dict[str, list[str]]:
@@ -2127,7 +2152,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 merge = subprocess.CompletedProcess([], 0)  # only generated docs conflicted: regenerated and committed
             if merge.returncode:
                 subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
-                return "conflicts with an earlier PR of the batch or with feat/parity: its owner merges fresh feat/parity"
+                return f"conflicts with an earlier PR of the batch or with {BRANCH}: its owner merges fresh {BRANCH}"
             for note in warnings(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", base=before, title=infos[number]["title"]):
                 print(f"#{number}: WARNING: {note}")
             if why := refusals(git("rev-parse", "HEAD").strip(), infos[number]["body"] or "", base=before, title=infos[number]["title"]):
@@ -2352,7 +2377,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"#{number}: {left_out[number]}")
         if FAST:
             return passes_fast(group)
-        git("fetch", "-q", "origin", "feat/parity")
+        git("fetch", "-q", "origin", BRANCH)
         head_failed = head_failures(git("rev-parse", BASE).strip(), lambda: compute_head_failures(known))
         git("checkout", "-q", "--detach", BASE)
         for number in group:
@@ -2448,7 +2473,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if not landed_ok:
                 late_drops.append(number)
             if landed_ok:
-                git("fetch", "-q", "origin", "feat/parity")
+                git("fetch", "-q", "origin", BRANCH)
                 log_landed(git("rev-parse", BASE).strip(), number, "gate-ok")
 
     with land_lock():
@@ -2459,7 +2484,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if pending:
                 tip, why = push_tip({n: infos[n]["headRefOid"] for n in pending})
                 if tip:
-                    print(f"PUSHED: {tip} to feat/parity with {' '.join('#' + n for n in pending)}")
+                    print(f"PUSHED: {tip} to {BRANCH} with {' '.join('#' + n for n in pending)}")
                     for number in pending:
                         landed.append(number)
                         log_landed(tip, number, "gate-ok")
@@ -2678,11 +2703,11 @@ def merge(number: str, known: dict[str, str] | None = None) -> int:
 def _merge(number: str, known: dict[str, str] | None = None) -> int:
     known = known or {}
     info = json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, errors="replace", check=True).stdout)
-    if info["baseRefName"] != "feat/parity":
-        raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
-    git("fetch", "-q", "origin", "feat/parity")
+    if info["baseRefName"] != BRANCH:
+        raise SystemExit(f"#{number} targets {info['baseRefName']}, not {BRANCH}")
+    git("fetch", "-q", "origin", BRANCH)
     if git("status", "--porcelain", "--untracked-files=no").strip():
-        raise SystemExit("this checkout has uncommitted changes: the fast set runs on the PR head merged with feat/parity, checked out here")
+        raise SystemExit(f"this checkout has uncommitted changes: the fast set runs on the PR head merged with {BRANCH}, checked out here")
     git("fetch", "-q", "origin", info["headRefOid"])
     tested_base = git("rev-parse", BASE).strip()
     head_failed = head_failures(tested_base, lambda: compute_head_failures(known))
@@ -2739,12 +2764,12 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
         print("\n".join(f"REFUSED: {w}" for w in why))
         return 1
     if git("rev-parse", BASE).strip() != tested_base:
-        print(f"REFUSED: feat/parity moved from {tested_base[:9]} to {git('rev-parse', BASE).strip()[:9]} while the checks ran; run again")
+        print(f"REFUSED: {BRANCH} moved from {tested_base[:9]} to {git('rev-parse', BASE).strip()[:9]} while the checks ran; run again")
         return 1
     done = gh_run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", known_red_line(known)])
     if done.returncode:
         return done.returncode
-    git("fetch", "-q", "origin", "feat/parity")
+    git("fetch", "-q", "origin", BRANCH)
     squash = json.loads(gh_run(["gh", "pr", "view", number, "--json", "mergeCommit"], capture_output=True, text=True, errors="replace", check=True).stdout)["mergeCommit"]["oid"]
     git("fetch", "-q", "origin", squash)
     log_landed(squash, number, "gate-ok" + (f" (head red: {','.join(sorted(head_failed))})" if head_failed else ""))
@@ -2804,7 +2829,7 @@ def dispatch() -> int:
         print(line)
         return 0 if line.endswith("PASS") else 1
     if len(sys.argv) >= 3 and sys.argv[1] == "alone":
-        git("fetch", "-q", "origin", "feat/parity")
+        git("fetch", "-q", "origin", BRANCH)
         numbers = [a for a in sys.argv[2:] if a.isdigit()]
         heads = {}
         for number in numbers:
@@ -2819,7 +2844,7 @@ def dispatch() -> int:
         print("\n".join(kept))
         return 0
     if len(sys.argv) >= 4 and sys.argv[1] == "assemble":
-        git("fetch", "-q", "origin", "feat/parity")
+        git("fetch", "-q", "origin", BRANCH)
         numbers = [a for a in sys.argv[3:] if a.isdigit()]
         heads = {}
         for number in numbers:

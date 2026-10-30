@@ -42,6 +42,8 @@ sys.path.insert(0, str(HERE / "dosbatch"))
 import cpulimit  # noqa: E402
 from buildslot import slotted  # noqa: E402
 
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 15.0  # CPU seconds (user+sys of this process and its children, never wall); the user's rule is a fast set within 10-15 s
 INSTRUCTIONS = 60_000_000_000  # user-space instructions of the steps. Today's set (a tools-only merge, one unit crate) is 50.9 G, repeating to 0.1 %, in 12.6-13.4 s CPU at load 31-33: 4.0 G/s at best, so 15 s is 60 G
@@ -900,7 +902,7 @@ def dump(data: dict) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--bin", type=Path, default=None, help="the llrm-c, llrm-qb and llrm-nib directory (default: LLRM_BIN, else the target dir's release)")
-    parser.add_argument("--base", default="origin/feat/parity", help="what the merge result is compared with to find the touched crates")
+    parser.add_argument("--base", default=f"origin/{BRANCH}", help="what the merge result is compared with to find the touched crates")
     parser.add_argument("--skip", action="append", default=[], metavar="STEP", help="a step known red (tools/parity_squash.py --known-red): not run, named as skipped in the line")
     parser.add_argument("--rank", nargs="+", metavar="CRATE", help="measure these crates' unit tests once and write the ranking")
     args = parser.parse_args()
