@@ -88,6 +88,14 @@ fn linkage_pointers_and_the_stack_pointer_import() {
     check("linkage");
 }
 
+/// A weak function and variable, a `linkonce_odr` function, an internal and a global one: the symbol table wrote
+/// local binding for each of the weak ones, so the strong `music_tick` of another object never replaced the
+/// runtime's no-op and the tick played nothing (Gorillas' PLAY hung).
+#[test]
+fn weak_symbols_bind_weak() {
+    check("weak");
+}
+
 /// The whole object of each `tests/ir` fixture. The encoder wrote only the first block of a function, so any
 /// loop or branch lost its code after the first `block`; an internal function was written as a global.
 #[test]

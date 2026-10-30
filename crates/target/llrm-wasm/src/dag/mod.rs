@@ -94,7 +94,8 @@ pub fn compile_function(
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
     // The pin's order after instruction selection: `-print-after-all` of `llc
     // -O0`.
-    f.local = module.named(name).is_some_and(|id| module.global(id).linkage != llrm_mir::module::Linkage::External);
+    f.binding =
+        module.named(name).map_or_else(Default::default, |id| crate::mir::Binding::of(module.global(id).linkage));
     lower_memory_pseudos(&mut f);
     // A routine the legalizer or the builder calls (`fmod`, `memcpy`) is in no module: its signature
     // is what the call passes and returns.

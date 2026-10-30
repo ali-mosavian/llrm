@@ -215,8 +215,8 @@ pub struct Function {
     pub symbols: Vec<(String, i64)>,
     /// The (name, parameters, results) of each function the code names: the
     /// signature the object file gives an undefined function.
-    /// Internal or private: no `.globl`, binding local in the object.
-    pub local: bool,
+    /// `.globl`, `.weak` or neither, and the binding in the object.
+    pub binding: Binding,
     pub callees: Vec<(String, Vec<ValType>, Vec<ValType>)>,
     /// The (name, type) of each wasm global the code names: an import of the object file.
     pub globals: Vec<(String, ValType)>,
@@ -357,6 +357,28 @@ impl Function {
                 Operand::Def(r) | Operand::Use(r) if *r == from => *r = to,
                 _ => {}
             }
+        }
+    }
+}
+
+/// How the assembler and the object file bind a symbol (`GlobalValue::isWeakForLinker`, `hasLocalLinkage`): `.globl`
+/// and global, `.weak` and weak, internal or private and local.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Binding {
+    #[default]
+    Global,
+    Weak,
+    Local,
+}
+
+impl Binding {
+    /// `weak`, `weak_odr`, `linkonce`, `linkonce_odr`, `common` and `extern_weak` are weak for the linker.
+    pub fn of(linkage: llrm_mir::module::Linkage) -> Binding {
+        use llrm_mir::module::Linkage as L;
+        match linkage {
+            L::Internal | L::Private => Binding::Local,
+            L::Weak | L::WeakOdr | L::LinkOnce | L::LinkOnceOdr | L::Common | L::ExternWeak => Binding::Weak,
+            L::External | L::AvailableExternally | L::Appending => Binding::Global,
         }
     }
 }

@@ -127,7 +127,18 @@ fn data(
             continue;
         };
         let constructors = name == "llvm.global_ctors" && global.linkage == Linkage::Appending;
-        if !constructors && !matches!(global.linkage, Linkage::External | Linkage::Internal | Linkage::Private) {
+        if !constructors
+            && !matches!(
+                global.linkage,
+                Linkage::External
+                    | Linkage::Internal
+                    | Linkage::Private
+                    | Linkage::Weak
+                    | Linkage::WeakOdr
+                    | Linkage::LinkOnce
+                    | Linkage::LinkOnceOdr
+            )
+        {
             return Err(format!("@{name}: {:?} linkage is not supported yet", global.linkage));
         }
         let mut bytes = Vec::new();
@@ -187,7 +198,7 @@ fn data(
             kind,
             align: align.trailing_zeros(),
             bytes,
-            local: global.linkage != Linkage::External,
+            binding: crate::mir::Binding::of(global.linkage),
             strings: variable.constant && global.unnamed_addr == UnnamedAddr::Global && is_string,
             relocs,
         });

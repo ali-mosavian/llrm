@@ -11,7 +11,7 @@
 //! d1106deb71cc.
 
 use crate::asm_strings::find;
-use crate::mir::{Function, Inst, Operand, ValType};
+use crate::mir::{Binding, Function, Inst, Operand, ValType};
 use crate::set_p2align::default_p2align;
 
 /// The column a trailing comment starts at.
@@ -110,12 +110,14 @@ pub fn function(f: &Function) -> String {
     let name = &f.name;
     let begin = format!("# -- Begin function {name}");
     let mut out = vec![format!("\t.section\t.text.{name},\"\",@")];
-    // The begin-function comment rides on the first directive: `.globl` where there is one.
-    if f.local {
-        out.push(with_comment(&format!("\t.type\t{name},@function"), &begin));
-    } else {
-        out.push(with_comment(&format!("\t.globl\t{name}"), &begin));
-        out.push(format!("\t.type\t{name},@function"));
+    // The begin-function comment rides on the first directive: `.globl` or `.weak` where there is one.
+    match f.binding {
+        Binding::Local => out.push(with_comment(&format!("\t.type\t{name},@function"), &begin)),
+        Binding::Global | Binding::Weak => {
+            let directive = if f.binding == Binding::Weak { "weak" } else { "globl" };
+            out.push(with_comment(&format!("\t.{directive}\t{name}"), &begin));
+            out.push(format!("\t.type\t{name},@function"));
+        }
     }
     out.push(with_comment(&format!("{name}:"), &format!("# @{name}")));
     out.push(format!("\t.functype\t{name} ({}) -> ({})", type_list(&f.params), type_list(&f.results)));

@@ -246,3 +246,10 @@ fn a_loop_with_two_entries_gets_one() {
 fn unreachable_traps() {
     check("unreachable");
 }
+
+/// A `weak` or `linkonce_odr` function printed `.globl` (and was an object-file global): a weak default
+/// (the runtime's no-op `music_tick`) could not be overridden by the strong one.
+#[test]
+fn weak_functions_print_weak() {
+    check("weak");
+}
