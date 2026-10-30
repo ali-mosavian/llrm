@@ -574,3 +574,17 @@ impl CondCode {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The atomic read-modify-write nodes have names of their own, which the
+    /// DAG dump and a selector's refusals print.
+    #[test]
+    fn the_atomic_nodes_are_named() {
+        assert_eq!(ISD::AtomicLoadAdd.name(), "atomic_load_add");
+        assert_eq!(ISD::AtomicCmpSwap.name(), "atomic_cmp_swap");
+        assert_eq!(ISD::AtomicStore.name(), "atomic_store");
+    }
+}

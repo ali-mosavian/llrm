@@ -50,10 +50,10 @@ pub struct TargetLoweringInfo {
     /// Per entry of `INTEGERS`: its action and the type it becomes.
     integers: [(TypeAction, MVT); 6],
     far: bool,
-    /// `getSetCCResultType` for a scalar: x86 compares into an `i8`, AArch64 into an `i32`.
-    set_cc_result: MVT,
     /// `getScalarShiftAmountTy`.
     shift_amount: ShiftAmount,
+    /// `getSetCCResultType` for a scalar: x86 compares into an `i8`.
+    set_cc_result: MVT,
 }
 
 /// What `getScalarShiftAmountTy` returns.
@@ -89,7 +89,7 @@ impl TargetLoweringInfo {
                 integers[below] = (TypeAction::PromoteInteger, nearest_legal);
             }
         }
-        TargetLoweringInfo { integers, far, set_cc_result: MVT::I8, shift_amount: ShiftAmount::I8 }
+        TargetLoweringInfo { integers, far, shift_amount: ShiftAmount::I8, set_cc_result: MVT::I8 }
     }
 
     /// A shift's amount has the type of the value shifted
@@ -99,8 +99,29 @@ impl TargetLoweringInfo {
         self
     }
 
+    /// A shift's amount is a constant of `vt` (`getScalarShiftAmountTy`).
+    pub fn with_shift_amount_type(mut self, vt: MVT) -> TargetLoweringInfo {
+        self.shift_amount = ShiftAmount::Fixed(vt);
+        self
+    }
+
+    /// A compare makes a value of `vt` (AArch64: `i32`).
+    pub fn with_set_cc_result(
+        mut self,
+        vt: MVT,
+    ) -> TargetLoweringInfo {
+        self.set_cc_result = vt;
+        self
+    }
+
     pub fn shift_amount(&self) -> ShiftAmount {
         self.shift_amount
+    }
+
+    /// AArch64: `addRegisterClass` of `i32` and `i64`; a compare makes an `i32`
+    /// and a shift amount is an `i64` (`AArch64TargetLowering::getSetCCResultType`).
+    pub fn aarch64() -> TargetLoweringInfo {
+        TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false).with_set_cc_result(MVT::I32).with_shift_amount_type(MVT::I64)
     }
 
     /// m32: `addRegisterClass` of `i8`, `i16`, `i32`; no far pointer.
@@ -116,16 +137,6 @@ impl TargetLoweringInfo {
     /// m16: the same registers, and the far pointer (SD2).
     pub fn x86_16() -> TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], true)
-    }
-
-    /// AArch64: `addRegisterClass` of `i32` and `i64`; a compare makes an `i32`
-    /// (`AArch64TargetLowering::getSetCCResultType`).
-    pub fn aarch64() -> TargetLoweringInfo {
-        TargetLoweringInfo {
-            set_cc_result: MVT::I32,
-            shift_amount: ShiftAmount::Fixed(MVT::I64),
-            ..TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false)
-        }
     }
 
     /// `getTypeConversion`: the action for `vt` and the type it becomes.
@@ -186,5 +197,19 @@ impl TargetLoweringInfo {
         vt: EVT,
     ) -> bool {
         self.type_action(vt) == TypeAction::Legal
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every target compared into an `i8`; AArch64 compares into an `i32`.
+    #[test]
+    fn a_target_can_choose_the_type_a_compare_makes() {
+        let x86 = TargetLoweringInfo::x86_32();
+        assert_eq!(x86.set_cc_result_type(EVT::I64), EVT::I8);
+        let wide = TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false).with_set_cc_result(MVT::I32);
+        assert_eq!(wide.set_cc_result_type(EVT::I64), EVT::I32);
     }
 }
