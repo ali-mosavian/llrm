@@ -40,8 +40,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return None;
         }
         let mut n0 = self.dag.operand(node, 0);
-        // Look through a freeze between the `and` and the load; it is put back on the narrowed
-        // load. DEVIATE: only a freeze with one use. Exit: x86 judged.
+        // Look through a freeze between the `and` and the load; it is put back
+        // on the narrowed load. DEVIATE: only a freeze with one use.
+        // Exit: x86 judged.
         let mut frozen = None;
         if op == ISD::And
             && self.hooks.reduce_load_width_through_freeze()

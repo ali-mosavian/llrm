@@ -447,8 +447,8 @@ fn a_target_that_does_not_ask_keeps_the_biased_range_check() {
     assert_ne!(dag.opcode(dag.operand(root, 0)), ISD::SignExtendInReg);
 }
 
-/// `x * 4` shifted by an `i8` amount whatever the target; AArch64 cannot promote
-/// that operand and refused 3 corpus functions (`x * -2`).
+/// `x * 4` shifted by an `i8` amount whatever the target; AArch64 cannot
+/// promote that operand and refused 3 corpus functions (`x * -2`).
 #[test]
 fn a_multiply_by_a_power_of_two_shifts_by_the_targets_amount_type() {
     let mut dag = dag();

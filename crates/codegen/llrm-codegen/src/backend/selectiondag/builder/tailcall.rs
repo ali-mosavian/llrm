@@ -310,9 +310,10 @@ mod tests {
         assert_eq!(count(&text), 0);
     }
 
-    /// `ret void` after a call that returns a value: "it doesn't matter what the call's return
-    /// type is" (`returnTypeIsEligibleForTailCall`). It was refused, so the pin's `puts`
-    /// tail call at the end of a `void` function was a `BL` and `RET`.
+    /// `ret void` after a call that returns a value: "it doesn't matter what
+    /// the call's return type is" (`returnTypeIsEligibleForTailCall`). It
+    /// was refused, so the pin's `puts` tail call at the end of a `void`
+    /// function was a `BL` and `RET`.
     #[test]
     fn a_void_return_after_a_value_returning_call_is_in_tail_position() {
         let text = format!("{HEAD}define void @f(i32 %a) {{\n  %r = tail call i32 @g(i32 %a)\n  ret void\n}}\n");

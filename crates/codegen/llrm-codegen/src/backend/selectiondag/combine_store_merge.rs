@@ -25,10 +25,10 @@
 //! ([L23969](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L23969)).
 
 use super::actions::{Action, TargetLowering};
-use super::lowering::TypeAction;
 use super::dag::{MemBase, MemInfo, NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::isd::ISD;
+use super::lowering::TypeAction;
 use super::mvt::EVT;
 
 /// The most nodes the candidate search looks at (`MaxSearchNodes`).

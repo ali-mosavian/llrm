@@ -55,9 +55,9 @@ pub enum CombineLevel {
 
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
-    /// `visitXOR`'s `(xor (and x, y), y)` is `(and (not x), y)`. DEVIATE: off by
-    /// default so x86's rows stay as they are until the judge has seen them.
-    /// Exit: x86 judged.
+    /// `visitXOR`'s `(xor (and x, y), y)` is `(and (not x), y)`. DEVIATE: off
+    /// by default so x86's rows stay as they are until the judge has seen
+    /// them. Exit: x86 judged.
     fn fold_xor_of_and_with_mask(&self) -> bool {
         false
     }
@@ -79,27 +79,27 @@ pub trait CombineHooks {
 
     /// `tryStoreMergeOfConstants`' "check whether a truncstore is legal": a run
     /// of narrow constant stores whose joined type is illegal is one
-    /// truncating store of the promoted type (AArch64: two `strb` are a `strh`).
-    /// DEVIATE: off by default, as above. Exit: x86 judged.
+    /// truncating store of the promoted type (AArch64: two `strb` are a
+    /// `strh`). DEVIATE: off by default, as above. Exit: x86 judged.
     fn merge_stores_via_trunc_store(&self) -> bool {
         false
     }
 
-
-    /// `ReduceLoadWidth` looks through a `freeze` between an `and` mask and its load, and puts
-    /// the freeze back on the narrowed load. Default false until x86 is judged.
+    /// `ReduceLoadWidth` looks through a `freeze` between an `and` mask and its
+    /// load, and puts the freeze back on the narrowed load. Default false
+    /// until x86 is judged.
     fn reduce_load_width_through_freeze(&self) -> bool {
         false
     }
 
-    /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`. Default false until
-    /// x86 is judged.
+    /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`.
+    /// Default false until x86 is judged.
     fn fold_mul_of_add_with_constant(&self) -> bool {
         false
     }
 
-    /// `TargetLowering::isMulAddWithConstProfitable` for a single-use add, on the constants `c1`
-    /// and `c2` of the type `vt`.
+    /// `TargetLowering::isMulAddWithConstProfitable` for a single-use add, on
+    /// the constants `c1` and `c2` of the type `vt`.
     fn is_mul_add_with_const_profitable(
         &self,
         _vt: EVT,
@@ -109,14 +109,16 @@ pub trait CombineHooks {
         true
     }
 
-    /// `visitSRA`'s `(sra (trunc (srl x, c1)), c2)` is `(trunc (sra x, c1 + c2))` when the
-    /// truncate removes `c1` bits. Default false until x86 is judged.
+    /// `visitSRA`'s `(sra (trunc (srl x, c1)), c2)` is `(trunc (sra x, c1 +
+    /// c2))` when the truncate removes `c1` bits. Default false until x86
+    /// is judged.
     fn fold_sra_of_trunc_of_shift(&self) -> bool {
         false
     }
 
-    /// `TargetLowering::shouldTransformSignedTruncationCheck`: `(add x, 1<<(k-1)) u< 1<<k` is
-    /// `sext_inreg x, k == x`. The pin's default is false. Default false until x86 is judged.
+    /// `TargetLowering::shouldTransformSignedTruncationCheck`: `(add x,
+    /// 1<<(k-1)) u< 1<<k` is `sext_inreg x, k == x`. The pin's default is
+    /// false. Default false until x86 is judged.
     fn should_transform_signed_truncation_check(
         &self,
         _vt: EVT,
@@ -125,14 +127,15 @@ pub trait CombineHooks {
         false
     }
 
-    /// `visitORCommutative`'s absorption folds, `(or (and x, y), x)` is `x`. Default false until
-    /// x86 is judged.
+    /// `visitORCommutative`'s absorption folds, `(or (and x, y), x)` is `x`.
+    /// Default false until x86 is judged.
     fn fold_or_absorption(&self) -> bool {
         false
     }
 
-    /// `convertSetCCLogicToBitwiseLogic`: `and (seteq a, b), (seteq c, d)` as one compare of
-    /// `or (xor a, b), (xor c, d)`. Default true, as X86's (the pin's default is false).
+    /// `convertSetCCLogicToBitwiseLogic`: `and (seteq a, b), (seteq c, d)` as
+    /// one compare of `or (xor a, b), (xor c, d)`. Default true, as X86's
+    /// (the pin's default is false).
     fn convert_setcc_logic_to_bitwise_logic(&self) -> bool {
         true
     }
@@ -600,8 +603,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         Some(self.dag.get_setcc(vt, trunc, rhs, cond))
     }
 
-    /// `optimizeSetCCOfSignedTruncationCheck`: `(add x, 1<<(k-1)) u< 1<<k`, or its inverse form
-    /// `(add x, -(1<<(k-1))) u>= -(1<<k)`, is `(sext_inreg x, k) == x` (`!=` for the inverse).
+    /// `optimizeSetCCOfSignedTruncationCheck`: `(add x, 1<<(k-1)) u< 1<<k`, or
+    /// its inverse form `(add x, -(1<<(k-1))) u>= -(1<<k)`, is `(sext_inreg
+    /// x, k) == x` (`!=` for the inverse).
     fn signed_truncation_check(
         &mut self,
         vt: EVT,
@@ -1365,8 +1369,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         Some(self.dag.get_node(ISD::SignExtendInReg, vt, &[x, ty]))
     }
 
-    /// `(sra (trunc (srl x, c1)), c2)` and the `sra` form are `(trunc (sra x, c1 + c2))`
-    /// when `c1` is the number of bits the truncate removes ([pin][pin]).
+    /// `(sra (trunc (srl x, c1)), c2)` and the `sra` form are `(trunc (sra x,
+    /// c1 + c2))` when `c1` is the number of bits the truncate removes
+    /// ([pin][pin]).
     ///
     /// [pin]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11664
@@ -2057,8 +2062,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         self.reassociate_ops(ISD::Mul, n0, n1)
     }
 
-    /// `isMulAddWithConstProfitable`: a one-use add the target accepts, or another multiply
-    /// by the same constant that shares `x * c2` or will after its own fold.
+    /// `isMulAddWithConstProfitable`: a one-use add the target accepts, or
+    /// another multiply by the same constant that shares `x * c2` or will
+    /// after its own fold.
     fn mul_add_with_const_profitable(
         &self,
         mul: SDValue,
@@ -2073,21 +2079,26 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let constant = self.dag.operand(mul, 1);
         let var = self.dag.operand(add, 0);
         let users: Vec<u32> = self.dag.users(constant).collect();
-        users.into_iter().filter(|&user| user != mul.node).any(|user| {
-            let user = SDValue { node: user, res: 0 };
-            if self.dag.opcode(user) != ISD::Mul {
-                return false;
-            }
-            let other = if self.dag.operand(user, 0) == constant {
-                self.dag.operand(user, 1)
-            } else {
-                self.dag.operand(user, 0)
-            };
-            other == var
-                || (self.dag.opcode(other) == ISD::Add
-                    && self.dag.constant(self.dag.operand(other, 1)).is_some()
-                    && self.dag.operand(other, 0) == var)
-        })
+        users
+            .into_iter()
+            .filter(|&user| user != mul.node)
+            .any(
+                |user| {
+                    let user = SDValue { node: user, res: 0 };
+                    if self.dag.opcode(user) != ISD::Mul {
+                        return false;
+                    }
+                    let other = if self.dag.operand(user, 0) == constant {
+                        self.dag.operand(user, 1)
+                    } else {
+                        self.dag.operand(user, 0)
+                    };
+                    other == var
+                        || (self.dag.opcode(other) == ISD::Add
+                            && self.dag.constant(self.dag.operand(other, 1)).is_some()
+                            && self.dag.operand(other, 0) == var)
+                },
+            )
     }
     /// `visitSIGN_EXTEND_INREG` ([pin][pin]): an operand that is already
     /// sign-extended, nested in-regs, a `sext`/`aext`/`zext` of a value no
