@@ -888,11 +888,20 @@ def snapshot_binaries(release: Path, into: Path) -> Path:
 USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "oracle-sweep", "oracle-premise", "oracle-qcport", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
 
 
+def prebuilt(target: str | None = None) -> bool:
+    """Whether this checkout's target dir is the build job's: GATE_PREBUILT is set by CI after it restores the shared target, and the
+    commit that job wrote (target/.built-from) must be this one, with its release dir present. A flag over any other target builds."""
+    target = target or os.environ.get("CARGO_TARGET_DIR", "target")
+    built = Path(target) / ".built-from"
+    return os.environ.get("GATE_PREBUILT") == "1" and (Path(target) / "release").is_dir() and built.is_file() and built.read_text().strip() == head_state()[0]
+
+
 def group_plan(p: Plan, group: str) -> Plan:
     """`p` cut to the steps of CI job group `group` ("build": the build alone, for the job that makes what the others share). A group of
-    checks that read the tree has no target dir to reuse, and gets no build: it would be the workspace's, from cold."""
+    checks that read the tree has no target dir to reuse, and gets no build: it would be the workspace's, from cold. A group handed the
+    build job's target (`prebuilt`) gets none either: its copy of the build took 600-800 s in every job of gate run 8."""
     members = [] if group == "build" else load()["groups"][group]
-    builds = group == "build" or any(m not in TREE_ONLY for m in members)
+    builds = group == "build" or (any(m not in TREE_ONLY for m in members) and not prebuilt())
     return Plan(p.tier, p.reason, [s for s in p.steps if (s == "build" and builds) or s in members], p.packages, p.languages, p.files)
 
 

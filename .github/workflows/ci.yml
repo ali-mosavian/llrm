@@ -295,6 +295,7 @@ jobs:
           zstd -dc -T0 "$RUNNER_TEMP/target.tar.zst" | tar -C "$GITHUB_WORKSPACE" -xf -
           # The build job made this target dir from this commit: no file is newer than it.
           python3 tools/ci/restore_mtime.py . "$(cat target/.built-from)"
+          echo "GATE_PREBUILT=1" >> "$GITHUB_ENV"
       # The bench step judges the compiler's rows against the base's counts (tools/bench/readme.md). Building and measuring the base took 20 of
       # the group's 22 minutes: a push to main records its own counts under the key of what they depend on (basecounts.compiler_key: the
       # tree but docs and editor files), and a pull request restores its base's, the merge ref's first parent.
