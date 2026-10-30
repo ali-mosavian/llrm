@@ -1266,7 +1266,8 @@ impl SelectionDAG {
         node
     }
 
-    /// `getAtomic` of `ATOMIC_STORE`: only a chain.
+    /// `getAtomic` of `ATOMIC_STORE`: only a chain. The operands are `(chain, value, ptr)`, as
+    /// `SelectionDAGBuilder::visitAtomicStore` builds them.
     pub fn get_atomic_store(
         &mut self,
         chain: SDValue,
@@ -1274,7 +1275,7 @@ impl SelectionDAG {
         value: SDValue,
         info: MemInfo,
     ) -> SDValue {
-        let node = self.intern(ISD::AtomicStore, &[EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));
+        let node = self.intern(ISD::AtomicStore, &[EVT::OTHER], &[chain, value, ptr], SDNodeFlags::default(), NodeData::Mem(info));
         self.volatile_accesses.insert(node.node);
         node
     }

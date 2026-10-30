@@ -19,7 +19,9 @@ fn names(one: &Selected) -> Vec<&'static str> {
 
 fn selected(body: &str) -> Result<Vec<Vec<&'static str>>, String> {
     let text = format!("target datalayout = \"{DATALAYOUT}\"\n{body}");
-    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut module = llrm_mir::parse::module(&text).expect("parses");
+    // The pipeline sees an atomic access as a call; the builder reads it back.
+    llrm_mir::atomic::hidden(&mut module).expect("hides");
     Ok(select_function(&module, "f")?.iter().map(names).collect())
 }
 
@@ -741,4 +743,32 @@ fn a_load_whose_address_is_used_again_is_indexed() {
     let post = "define i32 @f(ptr %p, ptr %q) {\n  %v = load i32, ptr %p, align 4\n  %a = getelementptr inbounds i8, ptr %p, i64 16\n  store ptr %a, ptr %q, align 8\n  ret i32 %v\n}";
     let ops = selected(post).unwrap().concat();
     assert!(ops.contains(&"LDRWpost".into()), "{ops:?}");
+}
+
+/// The instruction an atomic access selects follows its ordering (the pin's `llc -mcpu=apple-m1`):
+/// `ldr`/`ldapr`/`ldar`, `str`/`stlr`, and the LSE `ldadd`/`swp` family with their `a`, `l`, `al`
+/// suffixes. The ordering is the node's own (`MemInfo::ordering`); a selector that lost it picks
+/// the monotonic form for all of them, which is a correct-looking wrong program.
+#[test]
+fn an_atomic_access_selects_the_instruction_of_its_ordering() {
+    let one = |ir: String| selected(&ir).unwrap();
+    let load = |o: &str| one(format!("define i32 @f(ptr %p) {{\n  %a = load atomic i32, ptr %p {o}, align 4\n  ret i32 %a\n}}"));
+    assert_eq!(load("monotonic"), [["LDRWui", "RET_ReallyLR"]]);
+    assert_eq!(load("acquire"), [["LDAPRW", "RET_ReallyLR"]]);
+    assert_eq!(load("seq_cst"), [["LDARW", "RET_ReallyLR"]]);
+    let store = |o: &str| one(format!("define void @f(ptr %p, i32 %v) {{\n  store atomic i32 %v, ptr %p {o}, align 4\n  ret void\n}}"));
+    assert_eq!(store("monotonic"), [["STRWui", "RET_ReallyLR"]]);
+    assert_eq!(store("release"), [["STLRW", "RET_ReallyLR"]]);
+    assert_eq!(store("seq_cst"), [["STLRW", "RET_ReallyLR"]]);
+    for (op, family) in [("add", "LDADD"), ("xchg", "SWP")] {
+        let rmw = |o: &str| {
+            one(format!("define i32 @f(ptr %p, i32 %v) {{\n  %a = atomicrmw {op} ptr %p, i32 %v {o}, align 4\n  ret i32 %a\n}}"))
+        };
+        for (ordering, suffix) in
+            [("monotonic", ""), ("acquire", "A"), ("release", "L"), ("acq_rel", "AL"), ("seq_cst", "AL")]
+        {
+            let name: &'static str = Box::leak(format!("{family}{suffix}W").into_boxed_str());
+            assert_eq!(rmw(ordering), [[name, "RET_ReallyLR"]], "{op} {ordering}");
+        }
+    }
 }
