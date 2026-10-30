@@ -7,8 +7,7 @@
 //!
 //! MIRROR: the C++ order and its one-use conditions.
 //!
-//! DEVIATE 1: `foldLogicCastConstant` (a cast and a constant) and the
-//! `(A >> BW-1)` with `zext(icmp)` fold are left out.
+//! DEVIATE 1: the `(A >> BW-1)` with `zext(icmp)` fold is left out.
 //!
 //! DEVIATE 2: ours runs it from `visitAnd` ahead of the folds of a bool
 //! extension, where the C++ reaches it after `reassociateBooleanAndOr`.
@@ -31,6 +30,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 
 use crate::combine::{Combiner, Visit, defining};
 use crate::combine_casts::is_eliminable_cast_pair;
+use crate::combine_minmax::lossless_trunc;
 use crate::combine_shared::{has_one_use, width};
 
 /// A cast: its instruction, kind and source.
@@ -67,6 +67,39 @@ fn should_optimize_cast(
     true
 }
 
+/// `foldLogicCastConstant` (:1781): `logic (zext X), C` and `logic (sext X), C`
+/// with `C` unchanged in the source type is the extension of the logic there.
+fn fold_logic_cast_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    cast: Operand,
+    constant: Operand,
+    kind: CastOp,
+    source: Operand,
+) -> Option<Visit> {
+    let Opcode::Binary(op) = c.function.instruction(inst).opcode else { return None };
+    let value = c.constant_int(constant)?;
+    if !has_one_use(c, cast) || !matches!(kind, CastOp::ZExt | CastOp::SExt) {
+        return None;
+    }
+    let (bits, small) = (width(c, constant), width(c, source));
+    let narrow = lossless_trunc(value, bits, small, kind)?;
+    let small_ty = c.type_of(source);
+    let narrow_c = c.int(small_ty, narrow);
+    let logic = c.create_binop(inst, op, source, narrow_c, Flags::default());
+    let dest = c.function.instruction(inst).ty;
+    let mut flags = Flags::default();
+    if kind == CastOp::ZExt {
+        // `nneg` where the constant is also lossless as a signed truncation,
+        // and the cast had it.
+        let cast_flags = c.function.instruction(defining(c.function, cast)?).flags;
+        if lossless_trunc(value, bits, small, CastOp::SExt).is_some() && cast_flags.contains(Flags::NNEG) {
+            flags.insert(Flags::NNEG);
+        }
+    }
+    Some(c.replace_with_new(inst, Opcode::Cast(kind), dest, vec![logic], flags))
+}
+
 /// `foldCastedBitwiseLogic` for the `and`, `or` or `xor` `inst`.
 pub fn fold_casted_bitwise_logic(
     c: &mut Combiner,
@@ -82,6 +115,9 @@ pub fn fold_casted_bitwise_logic(
     let src_ty = c.type_of(source0);
     // The source must be an integer to narrow the logic to it.
     c.context.types.int_bits(src_ty)?;
+    if let Some(found) = fold_logic_cast_constant(c, inst, op0, op1, kind, source0) {
+        return Some(found);
+    }
     let (cast1, kind1, source1) = cast_of(c, op1)?;
     // The casts must be of one kind to reduce.
     if kind != kind1 {
