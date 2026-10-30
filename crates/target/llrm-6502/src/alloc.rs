@@ -19,7 +19,7 @@ use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
     Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, machine_sink_in_place,
-    remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
+    forward_reloads, remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
 };
 
 use crate::dagisel::generated::ids::opcode as op;
@@ -2099,6 +2099,22 @@ fn emit_with<const STACK: bool>(
         Reg::Phys(p) => p,
     };
     remove_identity_copies::<Mos<STACK>>(&mut function, &assignment);
+    remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
+    // a reload of a slot whose register nothing has written is that register; x and y copy through a
+    let spill_slot = |inst: &Inst, name: &str| match (inst.kind, &inst.operands[..]) {
+        (Kind::Op(op), [Operand::Use(reg) | Operand::Def(reg), Operand::Frame(slot), ..]) if op == name => {
+            Some((*slot, *reg))
+        }
+        _ => None,
+    };
+    forward_reloads::<Mos<STACK>>(
+        &mut function,
+        &assignment,
+        |inst| spill_slot(inst, "SPILL"),
+        |inst| spill_slot(inst, "RELOAD"),
+        is_pair,
+        |to, from| !matches!((to, from), (reg::X, reg::Y) | (reg::Y, reg::X)),
+    );
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     branch_fold::<Mos<STACK>>(&mut function);
     let after = live_after(&function, &at);

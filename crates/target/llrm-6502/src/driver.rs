@@ -6,7 +6,6 @@
 use std::rc::Rc;
 
 use llrm_mir::program::Program;
-use llrm_mir::target::Machine as _;
 use llrm_target::Target;
 use llrm_transforms::pipeline::{Applied, Options};
 
