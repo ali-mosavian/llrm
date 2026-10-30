@@ -32,7 +32,7 @@
 //! BASIC program at -Os and -O2, counters in a throwaway build):
 //! `getOrCreatePreheader` splitting an edge: the 6 to 32 loops per language
 //! and level without a preheader hold 0 hoistable instructions;
-//! `ExtractHoistableLoad`: 0 instructions, none of the 146 loop instructions
+//! `ExtractHoistableLoad`: 0 instructions, none of the 158 loop instructions
 //! flagged invariant (`isDereferenceableInvariantLoad`) is a folded load;
 //! `MayCSE`: only reached in the pin's high-pressure branch for an instruction
 //! outside a block that runs every trip, where the `constant` path above
