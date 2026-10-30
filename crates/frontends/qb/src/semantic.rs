@@ -10845,6 +10845,10 @@ impl Compiler {
                     llrm_hir::facts::Subject::Param { function: i64::from(function.id), index },
                     llrm_hir::facts::Fact::Dereferenceable(bytes as u64),
                 );
+                // A reference is the address of a variable its caller names:
+                // never null, never an undefined value.
+                let at = llrm_hir::facts::Subject::Param { function: i64::from(function.id), index };
+                facts.state(at, llrm_hir::facts::Fact::NonNull).state(at, llrm_hir::facts::Fact::NoUndef);
             }
         }
         // What the language promises of a FOR counter's add: it does not wrap.

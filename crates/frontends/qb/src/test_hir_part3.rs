@@ -4029,3 +4029,20 @@ SUB fill (a() AS INTEGER, n AS INTEGER)\r\nDIM j AS INTEGER\r\nFOR j = 0 TO n\r\
 SUB tick (n AS INTEGER)\r\nPRINT n\r\nEND SUB\r\n";
     assert_eq!(looped_descriptor_loads(text, true), 1);
 }
+
+/// A BYREF scalar parameter is the address of the caller's variable: the
+/// pointer carries `nonnull noundef`, as clang's reference parameters do.
+/// Only `dereferenceable` was stated, so the callee kept null checks open.
+#[test]
+fn test_a_reference_parameter_is_nonnull_and_noundef() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "ref.bas", b"DECLARE SUB Bump (n AS INTEGER)\nDIM k AS INTEGER\nBump k\nPRINT k\nSUB Bump (n AS INTEGER)\nn = n + 1\nEND SUB\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+    let text = llrm_mir::print::module(&emitted.module);
+    let define = text
+        .lines()
+        .find(|line| line.starts_with("define") && line.contains("BUMP"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(define.contains("nonnull") && define.contains("noundef"), "{define}");
+}
