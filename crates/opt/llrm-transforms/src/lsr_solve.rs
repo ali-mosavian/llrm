@@ -91,6 +91,11 @@ impl Collection<'_, '_> {
         &self,
         se: &mut ScalarEvolution,
     ) -> Vec<usize> {
+        for (at, lu) in self.uses.iter().enumerate() {
+            for formula in &lu.formulae {
+                llrm_support::debug!("lsr", "  candidate use {at} {:?}: {:?}", lu.kind, formula);
+            }
+        }
         let mut solution = Vec::new();
         let mut solution_cost = Cost::new();
         solution_cost.lose();
