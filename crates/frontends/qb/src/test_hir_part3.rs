@@ -2486,7 +2486,7 @@ fn test_a_floating_function_returns_through_its_hidden_destination() {
         let text = llrm_mir::print::module(&emitted.module);
         let half = between(
             &text,
-            &format!("define cc 1000 ptr @\"HALF{suffix}\"(ptr dereferenceable({bytes}) %0, ptr %1)"),
+            &format!("define cc 1000 ptr @\"HALF{suffix}\"(ptr dereferenceable({bytes}) nonnull noundef %0, ptr %1)"),
             "\n}",
         );
         assert!(
