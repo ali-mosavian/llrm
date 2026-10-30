@@ -5510,6 +5510,36 @@ fn test_a_reload_stays_across_a_volatile_access() {
     assert_eq!(store_then_reload(vec![device]), 3);
 }
 
+/// nib quicksort `_sort` at m16, the swap block: `mov [bp-14],dx ; mov [si],cx ; mov dx,[bp-14]`
+/// kept a reload of what `dx` still held because `[si]` might be the slot: 2 operands a swap,
+/// 9,286 over the run. Returns the movs left.
+fn reload_across_a_pointer_store(spill: bool) -> usize {
+    let cell = || Loc::Mem(mem(Some(Addr::new(Space::Frame, -14).in_slot(-14)), 2, RegId::BP, -14, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>, spill_store: bool| Insn {
+        spill_store,
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let through_si = Loc::Mem(mem(None, 2, RegId::SI, 0, 0));
+    let mut insns = vec![
+        Arc::new(mov(0, vec![cell()], vec![rl(RegId::DX, 2)], spill)),
+        Arc::new(mov(10, vec![through_si], vec![rl(RegId::CX, 2)], false)),
+        Arc::new(mov(100, vec![rl(RegId::DX, 2)], vec![cell()], false)),
+    ];
+    insns.push(Arc::new(insn(200, Some((200, 200)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])));
+    let done = forwarded_reloads(rules(), &body("forwarded-reload", 0, vec![block(0, insns, vec![]).into()]));
+    whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
+}
+
+#[test]
+fn test_a_spill_slot_is_not_reached_by_a_store_through_a_pointer() {
+    assert_eq!(reload_across_a_pointer_store(true), 2);
+}
+
+#[test]
+fn test_a_cell_that_is_no_spill_slot_may_be_reached_by_a_store_through_a_pointer() {
+    assert_eq!(reload_across_a_pointer_store(false), 3);
+}
+
 /// quicksort `_sort` at m16 -Os: `mov [bp-2],cx ; ... ; mov bx,[bp-2]` read a
 /// cell back into another register while `cx` still held it. Returns the
 /// reload's source register, or `None` when it still reads the cell.

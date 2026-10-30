@@ -1080,6 +1080,32 @@ pub fn forwarded_reloads(
     peep::rewritten(rules.forwarded_reloads, body, &Facts::new(body, None))
 }
 
+/// The frame slots that are the allocator's own: one a spill store fills, whose
+/// address nothing takes and no debug variable names. No program pointer
+/// reaches such a slot, so only an access that names the slot can change it.
+pub fn spill_homes(body: &LirBody) -> BTreeSet<i64> {
+    let home = |addr: Option<Addr>| addr.and_then(|a| a.slot_home()).filter(|home| *home < 0);
+    let mut spilled: BTreeSet<i64> = BTreeSet::new();
+    let mut named: BTreeSet<i64> = BTreeSet::new();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let Some(what) = one.what.as_ref() else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            match place {
+                Loc::Address(a) => named.extend(home(a.addr)),
+                Loc::Mem(cell) if one.spill_store => spilled.extend(home(cell.addr)),
+                _ => {}
+            }
+        }
+    }
+    for variable in &body.variables {
+        if let lir::DebugPlace::At(addr) = &variable.place {
+            named.extend(addr.slot_home());
+        }
+    }
+    spilled.retain(|home| !named.contains(home));
+    spilled
+}
+
 /// `body` without the stores to a spill slot nothing reads. The forwarding
 /// above can drop the last reload of a slot and leave the store that filled
 /// it. A slot is read by any operand but the destination of a plain store; a
