@@ -539,12 +539,15 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         f'out=$(uv run -q --project tools python tools/bench/bench.py ${{BENCH_SHARD:+--shard "$BENCH_SHARD" --json "$CARGO_TARGET_DIR/bench-shards"}}); echo "$out" | grep -aE "^(FAIL|SKIP|BASE[A-Z-]*:? )|measurements:"; '
         'echo "$out" | tail -1 | grep -q " 0 problems"'
     )
-    def cfg_pytest(skipped: tuple[str, ...], durations: str = "pytest-durations") -> str:
+    # The full pytest step alone is cut into shards: pytest-quick (a smoke tier's) runs whole, in the last shard.
+    SHARD_ARGS = '${PYTHON_SHARD:+--shard "$PYTHON_SHARD" --json "$CARGO_TARGET_DIR/pytest-shards"} '
+
+    def cfg_pytest(skipped: tuple[str, ...], durations: str = "pytest-durations", sharded: bool = False) -> str:
         # pytest-programs' two files are named out of the list: an explicit file argument runs though --ignore names it (the step ran them
         # twice, 160 s of a loaded host)
         own = {"tests/test_programs_compile.py", "tests/test_loops.py"}
         tests = " ".join(sorted(f"tests/{one.name}" for one in (ROOT / "tests").glob("*.py") if f"tests/{one.name}" not in own | set(skipped)))
-        return f"PYTHONPATH=tools/gate${{PYTHONPATH:+:$PYTHONPATH}} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${{CARGO_TARGET_DIR:-target}}/{durations}.json tools crates {tests}" + "".join(f" --ignore={f}" for f in skipped) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport"
+        return f"PYTHONPATH=tools/gate${{PYTHONPATH:+:$PYTHONPATH}} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${{CARGO_TARGET_DIR:-target}}/{durations}.json {SHARD_ARGS if sharded else ""}tools crates {tests}" + "".join(f" --ignore={f}" for f in skipped) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport"
 
     steps = {
         "build": BUILD,
@@ -578,7 +581,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         if cfg["fmt"]["enforced"]
         else "tools/fmt.sh --check; rc=$?; [ $rc -le 1 ] || exit $rc; [ $rc = 0 ] || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
         "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
-        "pytest": cfg_pytest(skip_py + tuple(perf_files())),
+        "pytest": cfg_pytest(skip_py + tuple(perf_files()), sharded=True),
         # The tests that read hardware counters, alone: the one job that needs a runner with them (tiers.toml [requires]). On the dist compiler,
         # the build the cost gate measures (tools/measure.py).
         "pytest-perf": "LLRM_BIN=$(python3 tools/measure.py dist) PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/pytest-perf-durations.json "
@@ -714,7 +717,7 @@ def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
 
 
 # Groups cut into slices that run on their own runners: group -> (the tiers.toml table holding `shards`, the env variable the slice is passed in).
-SHARDED = {"bench": ("bench", "BENCH_SHARD"), "oracle": ("oracle", "ORACLE_SHARD")}
+SHARDED = {"bench": ("bench", "BENCH_SHARD"), "oracle": ("oracle", "ORACLE_SHARD"), "python": ("python", "PYTHON_SHARD")}
 
 
 # Slices a sharded group has besides its numbered ones: `bench-base-I` measures slice I of the base, for the numbered slices' rows to be judged against.
@@ -733,7 +736,7 @@ def shard_of(group: str | None) -> tuple[str | None, str | None]:
     """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`, (`bench`, "base:I/N") for `bench-base-I`; any other group as it is."""
     if group and (one := re.fullmatch(r"bench-base-(\d+)", group)):
         return "bench", f"base:{one[1]}/{load()['bench']['shards']}"
-    if group and (one := re.fullmatch(r"(bench|oracle)-(\d+)", group)):
+    if group and (one := re.fullmatch(r"(bench|oracle|python)-(\d+)", group)):
         return one[1], f"{one[2]}/{load()[SHARDED[one[1]][0]]['shards']}"
     return group, None
 
@@ -752,7 +755,8 @@ def private_groups(p: Plan, root: Path = ROOT) -> list[str]:
 def private_env(directory: str, group: str = "") -> dict[str, str]:
     """The tool variables for a job: each points into the private checkout at `directory`; the group's table replaces the general one."""
     cfg = load()["private"]
-    return {name: str(Path(directory) / sub) for name, sub in {**cfg["env"], **cfg.get("group_env", {}).get(group, {})}.items()}
+    own = cfg.get("group_env", {}).get(group) or cfg.get("group_env", {}).get(shard_of(group)[0], {})  # python-2 has python's
+    return {name: str(Path(directory) / sub) for name, sub in {**cfg["env"], **own}.items()}
 
 
 def groups_of(p: Plan, skipped: dict[str, str]) -> dict[str, list[str]]:
@@ -916,6 +920,9 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     skipped = skipped_steps(p.steps, missing, languages)
     if group:
         p = group_plan(p, group)
+        if group == "python" and shard:  # the other steps of the group run once, in the last shard: the pytest step alone is cut
+            index, count = map(int, shard.split("/"))
+            p.steps = [s for s in p.steps if s == "pytest" or index == count]
     start = time.time()
     results: dict[str, tuple[int, float, float]] = {}
 
@@ -1093,7 +1100,7 @@ def main() -> int:
         print(cfg["repo"] if args.command == "private-repo" else "\n".join(f"{k}={v}" for k, v in cfg["public"].items()))
         return 0
     if args.command == "shards":  # for the merge job: how many bench shards to wait for
-        print(load()["bench"]["shards"])
+        print(load()[args.rest[0] if args.rest else "bench"]["shards"])
         return 0
     if args.command == "private-env":  # for `>> "$GITHUB_ENV"`: paths only, nothing read from the checkout
         for name, value in private_env(args.rest[0], args.group or "").items():

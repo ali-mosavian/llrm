@@ -318,6 +318,14 @@ jobs:
           path: target/bench-shards
           if-no-files-found: ignore
           retention-days: 1
+      # A python shard's test ids and counts only: python-merge checks that the shards ran the whole collection, each test once.
+      - if: always() && startsWith(matrix.group, 'python-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.group }}
+          path: target/pytest-shards
+          if-no-files-found: ignore
+          retention-days: 1
       # A private group's logs stay in its job log (the failing excerpt): its tools' output is not uploaded.
       - if: always() && steps.private.outputs.needed != 'true'
         uses: actions/upload-artifact@v4
@@ -369,8 +377,24 @@ jobs:
           path: ${{ runner.temp }}/bench-base
           key: ${{ steps.basecounts.outputs.head }}
 
+  # Every python shard ran, green, and together they ran exactly the tests the shards collected, none twice: a shard that crashed or was
+  # cancelled left no file, and is a failure here, never a pass over its tests.
+  python-merge:
+    needs: [plan, build, gate]
+    if: always() && needs.build.result == 'success' && contains(needs.plan.outputs.groups, '"python-1"')
+    runs-on: ${{ fromJSON(needs.plan.outputs.runner_small || '"ubuntu-24.04"') }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: python-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+      - run: python3 tools/gate/pytest_shards.py --merge "$RUNNER_TEMP/shards" "$(python3 tools/gate/gate.py shards python)"
+
   ci:
-    needs: [plan, static, toolchain, pintools, build, gate, bench-merge, setup-check]
+    needs: [plan, static, toolchain, pintools, build, gate, bench-merge, python-merge, setup-check]
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.label.name == 'merge-candidate') }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_small || '"ubuntu-24.04"') }}
     env:
@@ -379,7 +403,7 @@ jobs:
       # The line `gate.py run` prints, naming the head the run is of (a pull request's head, not the merge commit CI checks out).
       - run: |
           head="${{ github.event.pull_request.head.sha || github.sha }}"
-          echo "plan=${{ needs.plan.result }} setup-check=${{ needs.setup-check.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }}"
+          echo "plan=${{ needs.plan.result }} setup-check=${{ needs.setup-check.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }} python-merge=${{ needs.python-merge.result }}"
           if [ "${{ needs.plan.outputs.draft }}" = true ] && [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.static.result }}" != failure ]; then
             # The verdict was taken at plan time: a pull request marked ready since has had no gate, and a draft line is not its answer.
             now=$(python3 -c 'import json,os,urllib.request as u; r=u.Request("https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}", headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"]}); print(str(json.load(u.urlopen(r))["draft"]).lower())' || echo unknown)
@@ -405,14 +429,14 @@ jobs:
             echo "$line  [runners: ${{ needs.plan.outputs.runner_summary }}]" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.setup-check.result }}" != failure ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.toolchain.result }}" != failure ] && [ "${{ needs.toolchain.result }}" != cancelled ] && [ "${{ needs.pintools.result }}" != failure ] && [ "${{ needs.pintools.result }}" != cancelled ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
+          if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.setup-check.result }}" != failure ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.toolchain.result }}" != failure ] && [ "${{ needs.toolchain.result }}" != cancelled ] && [ "${{ needs.pintools.result }}" != failure ] && [ "${{ needs.pintools.result }}" != cancelled ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ] && [ "${{ needs.python-merge.result }}" != failure ] && [ "${{ needs.python-merge.result }}" != cancelled ]; then
             line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}$on"
             # A pull request's run is the merge candidate's, the full gate: its line says so.
             if [ "${{ github.event_name }}" = pull_request ]; then
               line="GATE ${{ needs.plan.outputs.tier }} CANDIDATE PASS at ${head:0:12}$on"
             fi
           else
-            line="GATE ${{ needs.plan.outputs.tier }} FAIL at ${head:0:12}: plan=${{ needs.plan.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }}"
+            line="GATE ${{ needs.plan.outputs.tier }} FAIL at ${head:0:12}: plan=${{ needs.plan.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }} python-merge=${{ needs.python-merge.result }}"
           fi
           echo "$line  [runners: ${{ needs.plan.outputs.runner_summary }}]" | tee -a "$GITHUB_STEP_SUMMARY"
           case "$line" in *" PASS at "*) ;; *) exit 1;; esac

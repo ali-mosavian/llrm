@@ -2,6 +2,7 @@
 
 import os
 import re
+import json
 import pytest
 import sys
 import subprocess
@@ -16,8 +17,8 @@ ROOT = gate.ROOT
 
 
 def ci_needs(workflow: str) -> list[str]:
-    """The last three jobs `ci:` waits for: the ones before them (static, toolchain, pintools, build) come and go."""
-    return re.search(r"\n  ci:\n    needs: \[([^\]]*)\]", workflow)[1].split(", ")[-3:]
+    """The last four jobs `ci:` waits for: the ones before them (static, toolchain, pintools, build) come and go."""
+    return re.search(r"\n  ci:\n    needs: \[([^\]]*)\]", workflow)[1].split(", ")[-4:]
 
 
 def test_a_change_in_the_c_frontend_runs_the_c_programs_and_qcport_not_the_debugger_sessions():
@@ -1304,7 +1305,7 @@ def test_the_groups_that_need_private_tools_are_named_in_the_plan():
     """A job reads the private checkout only for these; a fork's pull request fails them by name."""
     p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     private = gate.private_groups(p)
-    assert {"reference", "run", "bench-1", "python"} <= set(private) and "tools" not in private, private
+    assert {"reference", "run", "bench-1", "python-1"} <= set(private) and "tools" not in private, private
     assert "unit" not in private
 
 
@@ -1425,7 +1426,7 @@ def test_the_bench_step_runs_as_shards_and_a_merge_judges_the_whole_and_records_
     assert "actions/cache/restore@v4" in workflow and "bench-base-$(python3 tools/bench/basecounts.py key HEAD^1" in workflow
     merge = workflow[workflow.index("  bench-merge:") : workflow.index("\n  ci:")]
     assert "bench.py --merge" in merge and "'--record'" in merge and "key: ${{ steps.basecounts.outputs.head }}" in merge
-    assert ci_needs(workflow) == ["gate", "bench-merge", "setup-check"], "ci waits for the gate, the merge and the set-up check, after any jobs before them"
+    assert ci_needs(workflow) == ["gate", "bench-merge", "python-merge", "setup-check"], "ci waits for the gate, the merges and the set-up check, after any jobs before them"
     assert "if: always() && github.event_name == 'push' && steps.merge.outputs.recorded == 'true'" in merge, "saved even when the verdict is a failure"
 
 
@@ -1506,7 +1507,7 @@ def test_a_change_to_the_setup_action_is_run_on_tinytim_before_it_merges():
     """#1987 fixed the set-up there and its own diff planned no tinytim job: the live proof is a job for any change to the action."""
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "setup-check:" in workflow and "runs-on: [self-hosted, tinytim]" in workflow.split("setup-check:")[1].split("static:")[0]
-    assert "\\.github/actions/setup/" in workflow and ci_needs(workflow) == ["gate", "bench-merge", "setup-check"]
+    assert "\\.github/actions/setup/" in workflow and ci_needs(workflow) == ["gate", "bench-merge", "python-merge", "setup-check"]
 
 
 def test_a_push_to_main_makes_no_perf_or_cost_job():
@@ -1617,3 +1618,86 @@ def test_a_streamed_step_cut_mid_run_leaves_its_stage_lines_in_the_output(tmp_pa
     done = gate.run_step("bench", "echo 'bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores' >&2; sleep 60", tmp_path, os.environ.copy(), stall=2)
     assert done[1] == gate.STALL_CODE
     assert "[bench] bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores" in capsys.readouterr().out
+
+
+def _shard_files():
+    return {f"test_{x}.py": "def test_ok():\n    pass\n\n\ndef test_two():\n    pass\n" for x in "abc"}
+
+
+def _sharded(tmp_path, count=2):
+    for i in range(1, count + 1):
+        done = _shards(tmp_path, _shard_files(), "--shard", f"{i}/{count}", "--json", str(tmp_path / "out"))
+        assert done.returncode == 0, done.stdout
+    return tmp_path / "out"
+
+
+def _merge(folder, count):
+    import subprocess as sp
+    import sys as _sys
+
+    return sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "--merge", str(folder), str(count)], capture_output=True, text=True)
+
+
+def test_the_shards_of_a_python_run_together_ran_every_test_once_and_the_merge_says_so(tmp_path):
+    """The python step took 468 s on one hosted runner. Cut in shards, each test must still run in exactly one of them."""
+    out = _sharded(tmp_path, 2)
+    done = _merge(out, 2)
+    assert done.returncode == 0 and "2 shards, 6 tests, 6 passed, 0 skipped, 0 problems" in done.stdout, done.stdout
+    ran = [json.loads((out / f"pytest-shard-{i}.json").read_text())["ids"] for i in (1, 2)]
+    assert sorted(ran[0] + ran[1]) == sorted(f"test_{x}.py::test_{t}" for x in "abc" for t in ("ok", "two")) and set(ran[0]).isdisjoint(ran[1])
+
+
+def test_a_python_shard_that_left_no_result_fails_the_merge_instead_of_passing_over_its_tests(tmp_path):
+    """A crashed or cancelled shard writes no file: its tests must read as not run, never as zero failures."""
+    out = _sharded(tmp_path, 2)
+    (out / "pytest-shard-2.json").unlink()
+    done = _merge(out, 2)
+    assert done.returncode == 1 and "pytest shard 2 of 2 left no result" in done.stdout
+
+
+def test_a_test_run_by_two_python_shards_or_by_none_fails_the_merge(tmp_path):
+    out = _sharded(tmp_path, 2)
+    one, two = (json.loads((out / f"pytest-shard-{i}.json").read_text()) for i in (1, 2))
+    two["ids"] = two["ids"] + one["ids"][:1]
+    two["ran"] += 1
+    (out / "pytest-shard-2.json").write_text(json.dumps(two))
+    assert "ran in more than one shard" in _merge(out, 2).stdout
+    two["ids"] = two["ids"][:-2]  # and a test no shard ran
+    two["ran"] -= 2
+    (out / "pytest-shard-2.json").write_text(json.dumps(two))
+    done = _merge(out, 2)
+    assert done.returncode == 1 and "not the collection" in done.stdout
+
+
+def test_a_python_shard_with_a_failed_file_or_another_collection_fails_the_merge(tmp_path):
+    out = _sharded(tmp_path, 2)
+    two = json.loads((out / "pytest-shard-2.json").read_text())
+    (out / "pytest-shard-2.json").write_text(json.dumps({**two, "failed": ["test_b.py"]}))
+    assert "failed test_b.py" in _merge(out, 2).stdout
+    (out / "pytest-shard-2.json").write_text(json.dumps({**two, "whole": "0" * 16}))
+    assert "collected different tests" in _merge(out, 2).stdout
+
+
+def test_the_python_shards_deal_the_hosted_table_the_same_in_every_shard_with_qbrt_alone():
+    import pytest_shards
+
+    work = [("a", ["a"], 346.0), ("b", ["b"], 198.0), ("c", ["c"], 180.0)] + [(f"f{i}", [f"f{i}"], 40.0) for i in range(9)]
+    dealt = [dict(pytest_shards.deal(work, i, 3)) for i in (1, 2, 3)]
+    assert sorted(k for d in dealt for k in d) == sorted(label for label, _, _ in work), "each unit in exactly one shard"
+    assert list(dealt[0]) == ["a"] + [k for k in dealt[0] if k != "a"] and len(dealt[0]) < len(dealt[1]), "the heaviest unit has the shortest company"
+    assert dealt == [dict(pytest_shards.deal(work, i, 3)) for i in (1, 2, 3)], "deterministic: the same in every job"
+
+
+def test_the_python_group_is_cut_into_shards_whose_pytest_step_carries_the_shard_and_a_merge_checks_them(monkeypatch):
+    n = gate.load()["python"]["shards"]
+    p = gate.plan(["bench/fib/fib.c"], "full")
+    groups = gate.groups_of(p, {})
+    assert [g for g in groups if g.startswith("python")] == [f"python-{i}" for i in range(1, n + 1)]
+    assert gate.shard_of("python-2") == ("python", f"2/{n}") and gate.shard_of("python") == ("python", None)
+    cmds = gate.commands(p, gate.load(), gate.packages())
+    assert '--shard "$PYTHON_SHARD"' in cmds["pytest"] and "PYTHON_SHARD" not in cmds["pytest-quick"], "pytest-quick runs whole, once"
+    assert gate.private_env("/x", "python-2") == gate.private_env("/x", "python") and "DFACES_SRC" in gate.private_env("/x", "python-2")
+    workflow = (Path(gate.ROOT) / ".github/workflows/ci.yml").read_text()
+    merge = workflow[workflow.index("  python-merge:") : workflow.index("\n  ci:")]
+    assert "pytest_shards.py --merge" in merge and "gate.py shards python" in merge and "startsWith(matrix.group, 'python-')" in workflow
+    assert "needs.python-merge.result" in workflow.split("\n  ci:")[1]
