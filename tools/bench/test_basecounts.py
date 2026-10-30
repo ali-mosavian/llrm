@@ -350,8 +350,8 @@ def test_an_exception_file_prints_its_rows_every_run_and_fails_a_row_no_longer_w
 
 
 def test_the_two_jpeg_nib_os_rows_the_loopsimplify_fix_moves_are_excused_by_their_file():
-    """release/next carried no waiver for jpeg_fixed 5366 / jpeg_single 5227 (base 5304 / 5172): the judge reported exactly these two."""
-    measured = {("jpeg_fixed", "nib", "Os"): row(100, code_bytes=5366), ("jpeg_single", "nib", "Os"): row(100, code_bytes=5227)}
+    """release/next carried no waiver for jpeg_fixed 5362 / jpeg_single 5223 (base 5304 / 5172): the judge reported exactly these two."""
+    measured = {("jpeg_fixed", "nib", "Os"): row(100, code_bytes=5362), ("jpeg_single", "nib", "Os"): row(100, code_bytes=5223)}
     base = {("jpeg_fixed", "nib", "Os"): row(100, code_bytes=5304), ("jpeg_single", "nib", "Os"): row(100, code_bytes=5172)}
     assert len(bc.judge(measured, base, [])[0]) == 2
     assert bc.judge(measured, base, bc.waivers())[0] == []
