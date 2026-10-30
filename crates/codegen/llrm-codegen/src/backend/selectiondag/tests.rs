@@ -51,6 +51,7 @@ mod i1_branch;
 mod i1_m16;
 mod iminmax;
 mod int_to_fp;
+mod ir_order;
 mod known_load;
 mod legalize_dag;
 mod legalize_pending;
