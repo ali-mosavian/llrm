@@ -106,7 +106,10 @@ impl PinRegisters for M68kPins {
 }
 
 /// What the scheduler reads of the instruction descriptions.
-pub struct M68kSched;
+pub struct M68kSched {
+    /// Keep the source order of the pin's `-pre-RA-sched=source` instead of the ILP list scheduler.
+    pub source_order: bool,
+}
 
 impl SchedInfo for M68kSched {
     fn pin_register(
@@ -152,7 +155,7 @@ impl SchedInfo for M68kSched {
     /// M68k does not enable the machine scheduler: `createDefaultScheduler`
     /// gives it the ILP list scheduler.
     fn preference(&self) -> Preference {
-        if std::env::var_os("LLRM_M68K_SOURCE_SCHED").is_some() { Preference::Source } else { Preference::Ilp }
+        if self.source_order { Preference::Source } else { Preference::Ilp }
     }
 }
 
@@ -168,7 +171,7 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false)
+    select_block_with(dag, cpu, false, false)
 }
 
 /// [`select_block`], with a compare's load put where a pattern folds it where
@@ -177,6 +180,7 @@ pub fn select_block_with(
     dag: &mut SelectionDAG,
     cpu: Cpu,
     load_as_source: bool,
+    source_order: bool,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
     let mut lowering = M68kLowering { load_as_source };
@@ -199,5 +203,5 @@ pub fn select_block_with(
     do_instruction_selection_with(dag, &M68kPins, |adapter, node| selector.select(adapter, &mut hooks, node))
         .map_err(|why| Refusal::CannotSelect(format!("{why:?}")))?;
     let root: SDValue = dag.get_root();
-    Ok(schedule(dag, root, &M68kSched))
+    Ok(schedule(dag, root, &M68kSched { source_order }))
 }

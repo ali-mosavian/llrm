@@ -96,17 +96,19 @@ pub fn select_function_with(
     cpu: Cpu,
     load_as_source: bool,
 ) -> Result<Vec<Selected>, String> {
-    select_function_ordered(module, name, cpu, load_as_source, false)
+    select_function_ordered(module, name, cpu, load_as_source, false, false)
 }
 
 /// [`select_function_with`], with `ordered_copies`: the pairs of an inline
-/// copy in address order, which the overlay's `(An)+` chains need.
+/// copy in address order, which the overlay's `(An)+` chains need, and `source_order`: the pin's source-order scheduler
+/// in place of the ILP list scheduler.
 pub fn select_function_ordered(
     module: &Module,
     name: &str,
     cpu: Cpu,
     load_as_source: bool,
     ordered_copies: bool,
+    source_order: bool,
 ) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -129,11 +131,11 @@ pub fn select_function_ordered(
         // the blocks a `switch` lowering made (`CreateMachineBasicBlock`) follow the block that made
         // them, as x86's driver lays them out
         let extras = std::mem::take(&mut built.extra);
-        let units = select_block_with(&mut built.dag, cpu, load_as_source).map_err(|why| format!("{why:?}"))?;
+        let units = select_block_with(&mut built.dag, cpu, load_as_source, source_order).map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
         selected.push(Selected { block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
         for (id, mut extra) in extras {
-            let units = select_block_with(&mut extra.dag, cpu, load_as_source).map_err(|why| format!("{why:?}"))?;
+            let units = select_block_with(&mut extra.dag, cpu, load_as_source, source_order).map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
             selected.push(Selected { block: id, dag: extra.dag, units, phis: Vec::new(), locals: Vec::new() });
         }

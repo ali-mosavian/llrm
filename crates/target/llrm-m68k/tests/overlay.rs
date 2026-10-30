@@ -62,6 +62,10 @@ fn overlay_instructions_encode_as_binutils_does() {
     }
 }
 
+/// The pin's source-order scheduler. Two tests pin the code-saving fallback of `flags.rs`, which only a schedule that
+/// separates a compare from its uses reaches; the ILP list scheduler (the default) keeps them together and retests.
+const SOURCE_ORDER: Options = Options { overlay: true, mid_end: true, size: false, source_order: true };
+
 fn compiled(
     ir: &str,
     options: Options,
@@ -266,7 +270,7 @@ entry:\n\
   %v37 = trunc i32 %v36 to i16\n\
   ret i16 %v37\n\
 }";
-    let text = compiled(ir, Options::default());
+    let text = compiled(ir, SOURCE_ORDER);
     assert!(!text.contains("should not be emitted"), "{text}");
     assert!(text.contains("%ccr") || text.contains("%sr"), "{text}");
 }
@@ -1566,7 +1570,7 @@ define i16 @f() {
   ret i16 %38
 }
 "#;
-    let text = compiled(ir, Options::default());
+    let text = compiled(ir, SOURCE_ORDER);
     assert!(text.contains("move.w\t%sr, -(%sp)") && text.contains("move.w\t(%sp)+, %ccr"), "{text}");
     // the same function built for x86 by the pin's clang returns 55
     if let Some(got) = run_reading_zero(ir) {
