@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/divrempairs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/divrempairs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/divrempairs.rs sha256:1679911f1615b532827de7f00bc715ab8293f69bd0b36868b1c942e03b4a080b -->
+<!-- src: crates/opt/llrm-transforms/src/divrempairs.rs sha256:933cd50d4d885c17c3299928635d2bbe38a50501f71517915409a76d6f81c007 -->
 
 # divrempairs
 
@@ -36,9 +36,9 @@ quotient and the remainder, and the quotient loses its `exact` flag.
 DEVIATE 1: `CatchSwitchInst` terminators have no MIR spelling, so the check
 that refuses to hoist into one has nothing to refuse.
 
-DEVIATE 2: `hasDivRemOp` is read at two sites, `Tti::has_div_rem_op` (default
-false) and `Lowering::has_div_rem_op`, and either one true counts. The pin
-has one, `TTI.hasDivRemOp(Type, IsSigned)`
+DEVIATE 2: `hasDivRemOp` is read at two sites, `Tti::has_div_rem_op`
+(default false) and `Lowering::has_div_rem_op`, and either one true counts.
+The pin has one, `TTI.hasDivRemOp(Type, IsSigned)`
 ([DivRemPairs.cpp#L194](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DivRemPairs.cpp#L194)),
 which `X86TTIImpl` answers
 ([X86TargetTransformInfo.cpp#L7421](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7421)).

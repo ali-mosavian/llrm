@@ -31,9 +31,9 @@
 //! DEVIATE 1: `CatchSwitchInst` terminators have no MIR spelling, so the check
 //! that refuses to hoist into one has nothing to refuse.
 //!
-//! DEVIATE 2: `hasDivRemOp` is read at two sites, `Tti::has_div_rem_op` (default
-//! false) and `Lowering::has_div_rem_op`, and either one true counts. The pin
-//! has one, `TTI.hasDivRemOp(Type, IsSigned)`
+//! DEVIATE 2: `hasDivRemOp` is read at two sites, `Tti::has_div_rem_op`
+//! (default false) and `Lowering::has_div_rem_op`, and either one true counts.
+//! The pin has one, `TTI.hasDivRemOp(Type, IsSigned)`
 //! ([DivRemPairs.cpp#L194](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DivRemPairs.cpp#L194)),
 //! which `X86TTIImpl` answers
 //! ([X86TargetTransformInfo.cpp#L7421](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7421)).
@@ -196,9 +196,10 @@ struct DivRem<'a> {
 impl DivRem<'_> {
     /// `TTI.hasDivRemOp(Type, IsSigned)`.
     ///
-    /// DEVIATE 2 (see the header): asks the target's `Tti` and its `Lowering`. Reason: x86 states
-    /// the answer on its lowering (`isOperationLegal(SDIVREM)`), the pin's
-    /// `TTI` asks that. Exit: x86 answers on its `Tti`.
+    /// DEVIATE 2 (see the header): asks the target's `Tti` and its `Lowering`.
+    /// Reason: x86 states the answer on its lowering
+    /// (`isOperationLegal(SDIVREM)`), the pin's `TTI` asks that. Exit: x86
+    /// answers on its `Tti`.
     fn has_div_rem_op(
         &self,
         bits: u32,
