@@ -1,6 +1,6 @@
-//! Two sibling calls to different callees were tail-merged into one (`isIdenticalTo` compared
-//! callees only for `Call`, not for the sibling-call return): `if (n == 1) f(); else if (n == 2) h();`
-//! called `h` for n == 1.
+//! Two sibling calls to different callees were tail-merged into one
+//! (`isIdenticalTo` compared callees only for `Call`, not for the sibling-call
+//! return): `if (n == 1) f(); else if (n == 2) h();` called `h` for n == 1.
 
 use std::process::Command;
 
@@ -29,9 +29,12 @@ fn test_two_sibling_calls_to_different_callees_are_not_merged() {
     let scratch = tempfile::tempdir().unwrap();
     let source = scratch.path().join("g.ll");
     std::fs::write(&source, IR).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-llc")).args(["-O2", "-S", "-o", "-"]).arg(&source).output().unwrap();
+    let output =
+        Command::new(env!("CARGO_BIN_EXE_llrm-llc")).args(["-O2", "-S", "-o", "-"]).arg(&source).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = String::from_utf8(output.stdout).unwrap();
-    let jumps_to = |name: &str| text.lines().any(|line| line.trim().split_once(' ').is_some_and(|(op, to)| op.starts_with('j') && to == name));
+    let jumps_to = |name: &str| {
+        text.lines().any(|line| line.trim().split_once(' ').is_some_and(|(op, to)| op.starts_with('j') && to == name))
+    };
     assert!(jumps_to("f") && jumps_to("h"), "{text}");
 }
