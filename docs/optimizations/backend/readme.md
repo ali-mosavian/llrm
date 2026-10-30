@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 136 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -35,6 +35,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | cpu | One immutable description of a code-generation tuning target: a CPU's prices and a target's registers, address forms and cost model. | The driver (`driver/mod.rs`, `Options::cpu`) builds it from the machine's | [cpu](cpu.md) |
 | datagroup | Make the data segment register a fourth selector register where the stack lives in the data group. | Register allocation (`allocate.rs`): `names_data_segment` before it, | [datagroup](datagroup.md) |
 | deadmi | An instruction nothing reads is gone: `DeadMachineInstructionElim` after selection. | Named by `flow`. | [deadmi](deadmi.md) |
+| deadspills | Drops a spill store no later read of its slot can see. | Named by `peephole`. | [deadspills](deadspills.md) |
 | debuginfo | `-g`: build a module's debug information as [`llrm_object::debug::Info`], the format-neutral model each object format's writer encodes. | `described` when a module is assembled (`assemble.rs`; `driver/basic.rs` | [debuginfo](debuginfo.md) |
 | division | Select a dword division by a constant as a multiply by its reciprocal, where the CPU's prices make that cheaper. | `isel.rs` (`divide`), for each division by a constant. | [division](division.md) |
 | earlytaildup | Which blocks early tail duplication may copy, and into which predecessors: `shouldTailDuplicate`, `isSimpleBB`, `canCompletelyDuplicateBB` and `canTailDuplicate` of [TailDuplicator.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp) with `PreRegAlloc` set and `LayoutMode` clear. | `flow::machine_with`, first of the machine phases. | [earlytaildup](earlytaildup.md) |

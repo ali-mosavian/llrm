@@ -3,6 +3,7 @@
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{Allocate, GraphColoring, Target, eliminate_phis};
 use llrm_spike_mf::spill::allocate_spilling;
+use llrm_spike_mf::spill::{MENTION_SCANS, minimal_vregs};
 use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Phi, Reg};
 
 const R0: RegId = RegId::from_raw(0);
@@ -579,4 +580,58 @@ fn slot_sharing_renames_a_store_whose_register_is_not_its_first_operand() {
             }
         }
     }
+}
+
+/// `minimal_vregs` says, for every register at once, what `already_minimal`
+/// asked of one register per scan of the function: all its mentions are in one
+/// run of consecutive instructions of one block. The colouring asked it of
+/// every register and the victim choice of every candidate, so a long function
+/// cost registers times instructions: the three div_constants programs of
+/// tests/run/c took over 130 s to compile and now 25 to 50.
+#[test]
+fn a_register_is_minimal_when_its_mentions_are_one_run_of_one_block() {
+    let mut branch = op("br", vec![Operand::Block(1)]);
+    branch.terminator = true;
+    let mut f = function(
+        vec![
+            op("def", vec![Operand::Def(v(0))]),
+            use1(v(0)),
+            op("def", vec![Operand::Def(v(1))]),
+            op("other", vec![]),
+            use1(v(1)),
+            op("def", vec![Operand::Def(v(2))]),
+            op("twice", vec![Operand::Use(v(2)), Operand::Use(v(2))]),
+            op("def", vec![Operand::Def(v(3))]),
+            branch,
+        ],
+        4,
+    );
+    f.blocks.push(Block { id: 1, insts: vec![use1(v(3))], phis: vec![] });
+    assert_eq!(minimal_vregs(&f), [true, false, true, false]);
+}
+
+/// `n` short-lived values one after another: no pressure, a register for each.
+fn sequence(n: u32) -> MFunction<()> {
+    let mut insts = Vec::new();
+    for r in 0..n {
+        insts.push(op("def", vec![Operand::Def(v(r))]));
+        insts.push(use1(v(r)));
+    }
+    function(insts, n as usize)
+}
+
+/// Colouring a long function looked at every instruction once for every
+/// register (`already_minimal` per register): 2000 values over 4000
+/// instructions made millions of looks, and the div_constants programs of
+/// tests/run/c took over 130 s to compile. The count of looks must not grow
+/// with the number of registers times the instructions. Counted work, not
+/// wall-clock: a slow machine cannot fail it.
+#[test]
+fn colouring_does_not_scan_the_function_once_per_register() {
+    let function = sequence(2000);
+    let instructions = function.blocks[0].insts.len() as u64;
+    let before = MENTION_SCANS.load(std::sync::atomic::Ordering::Relaxed);
+    GraphColoring::<Two>::default().allocate(&function).unwrap();
+    let looks = MENTION_SCANS.load(std::sync::atomic::Ordering::Relaxed) - before;
+    assert!(looks <= 4 * instructions, "{looks} looks at {instructions} instructions");
 }

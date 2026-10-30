@@ -332,6 +332,7 @@ pub mod select {
     }
 }
 pub mod bodyfacts;
+pub mod deadspills;
 pub mod regclass;
 pub mod registerinfo;
 pub mod repbsf;

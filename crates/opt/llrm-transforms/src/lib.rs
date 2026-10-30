@@ -299,6 +299,7 @@ pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
 pub mod mergestores;
+mod mirror;
 pub mod mldstmotion;
 pub mod narrowspace;
 #[cfg(test)]

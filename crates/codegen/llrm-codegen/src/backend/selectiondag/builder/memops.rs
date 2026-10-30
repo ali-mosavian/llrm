@@ -9,7 +9,7 @@ use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Instruction, Operand};
 use llrm_mir::opcode::{Attribute, CallInfo};
 
-use super::super::dag::{MemBase, MemInfo, NodeData, SDValue};
+use super::super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue};
 use super::super::isd::ISD;
 use super::super::mvt::EVT;
 use super::super::x86isd;
@@ -1112,7 +1112,6 @@ impl Builder<'_> {
         chain
     }
 
-    /// `rep stosb` of a size not known at compile time.
     /// `llvm.experimental.memset.pattern` of a word or dword cell: `rep stosw`
     /// / `rep stosd` of `count` cells, where the pin expands it to a loop
     /// (`fills_by_pattern`). A volatile or huge fill is refused.
@@ -1159,6 +1158,18 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// `rep stos` of a size not known at compile time: the unit is the widest
+    /// the size is known to be a whole multiple of (`n << 1` bytes of zero are
+    /// `n` words), as `rep_stos` takes it from a constant size.
+    ///
+    /// DEVIATE: the pin calls `memset` for a size not known at compile time;
+    /// m16 has no libc `memset`, so this was already `rep stosb` here and only
+    /// the unit is new. Every m16 profile has 32-bit operands (the lowest is
+    /// the 386; llrm-cc rejects `-march=i286`), so a dword unit needs no
+    /// gate. Like every string operation in this file it relies on DF being
+    /// clear on entry (the `cld` convention). Exit: a runtime `memset` on
+    /// m16 lands and this lowers to the call; this unit choice is then
+    /// removed.
     fn rep_stosb(
         &mut self,
         chain: SDValue,
@@ -1168,9 +1179,50 @@ impl Builder<'_> {
     ) -> SDValue {
         let pointer = self.target.dag.pointer;
         let (cx, di, _) = self.string_registers();
-        let al = self.arch.register_named("al");
+        let word = u64::from(pointer.size_in_bits() / 8);
         let count = self.dag.get_zext_or_trunc(size, pointer);
-        let copy = self.dag.get_copy_to_phys_reg(chain, al, value, None);
+        let whole = super::super::known_bits::known_bits(&self.dag, size).zero.trailing_ones();
+        let block = match self.dag.constant(value) {
+            // A constant size keeps the byte fill: its wider unit moved a store
+            // and grew matmul and bintree by 4 bytes; the gain is a dynamic
+            // one.
+            Some(_) if self.dag.constant(size).is_some() => 1,
+            // A word in 32-bit code is an operand-size prefix and no gain.
+            Some(_) => match (1u64 << whole.min(2)).min(if self.has_opt_size() { word } else { word.max(4) }) {
+                2 if word == 4 => 1,
+                block => block,
+            },
+            _ => 1,
+        };
+        let (acc, val, count) = match (block, self.dag.constant(value)) {
+            (1, _) => (self.accumulator(1), value, count),
+            (block, Some(byte)) => {
+                let mut pattern = byte as u64 & 255;
+                pattern |= pattern << 8;
+                if block >= 4 {
+                    pattern |= pattern << 16;
+                }
+                let lg = block.trailing_zeros();
+                let shift = self.dag.get_constant(u128::from(lg), EVT::I8);
+                // `n << lg` with no unsigned wrap is `n << lg` bytes whole: the
+                // count is `n`, with no shift pair (`add cx, cx ; shr cx, 1`).
+                let peeled = (self.dag.opcode(size) == ISD::Shl
+                    && self.dag.node(size).flags.0 & SDNodeFlags::NO_UNSIGNED_WRAP.0 != 0
+                    && self.dag.constant(self.dag.operand(size, 1)) == Some(u128::from(lg)))
+                .then(|| self.dag.operand(size, 0));
+                let counted = match peeled {
+                    Some(base) => self.dag.get_zext_or_trunc(base, pointer),
+                    None => self.dag.get_node(ISD::Srl, pointer, &[count, shift]),
+                };
+                (
+                    self.accumulator(block),
+                    self.dag.get_constant(u128::from(pattern), EVT::integer(block as u32 * 8)),
+                    counted,
+                )
+            }
+            _ => unreachable!("a block past a byte has a constant value"),
+        };
+        let copy = self.dag.get_copy_to_phys_reg(chain, acc, val, None);
         let mut glue = SDValue { node: copy.node, res: 1 };
         let mut chain = SDValue { node: copy.node, res: 0 };
         for (reg, value) in [(cx, count), (di, dst)] {
@@ -1178,8 +1230,8 @@ impl Builder<'_> {
             chain = SDValue { node: copy.node, res: 0 };
             glue = SDValue { node: copy.node, res: 1 };
         }
-        let byte = self.dag.get_value_type_node(EVT::I8);
-        let rep = self.dag.get_node_multi(x86isd::REP_STOS, &[EVT::OTHER, EVT::GLUE], &[chain, byte, glue]);
+        let unit = self.dag.get_value_type_node(EVT::integer(block as u32 * 8));
+        let rep = self.dag.get_node_multi(x86isd::REP_STOS, &[EVT::OTHER, EVT::GLUE], &[chain, unit, glue]);
         SDValue { node: rep.node, res: 0 }
     }
 
