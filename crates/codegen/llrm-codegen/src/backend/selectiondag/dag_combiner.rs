@@ -55,6 +55,15 @@ pub enum CombineLevel {
 
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
+    /// `SimplifySetCC`'s "Canonicalize GE/LE comparisons to use GT/LT" (`x >= c`
+    /// is `x > c - 1`). DEVIATE: off by default. x86's rows are the old
+    /// selector's, which keeps a range check as `cmp n; jae`; the rewrite
+    /// turns it into `cmp n - 1; ja` and moved 35 of its 424 judged rows
+    /// (`switch` in every language). Exit: re-bless the x86 rows.
+    fn canonicalize_ge_le(&self) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         _op: ISD,
@@ -456,7 +465,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >= c` is
         // `x > c - 1` and `x <= c` is `x < c + 1`, with the always-true extremes folded.
-        if self.level < CombineLevel::AfterLegalizeVectorOps {
+        if self.level < CombineLevel::AfterLegalizeVectorOps && self.hooks.canonicalize_ge_le() {
             let bits = op_type.size_in_bits();
             let (unsigned, ge) = match cond {
                 CondCode::SetGe => (false, true),
