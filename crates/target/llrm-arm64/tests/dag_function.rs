@@ -838,6 +838,15 @@ fn a_zeroext_argument_passed_on_needs_no_mask() {
     assert_eq!(selected(ir).unwrap(), [["TCRETURNdi"]]);
 }
 
+/// `x == 37` on a `signext` i8 argument selected an `ANDWri` before the `SUBSWri`: a promoted compare
+/// zero-extended its operand even when the promoted value was already a sign extension of the same
+/// width. The pin compares it as it is (`SExtOrZExtPromotedOperands`).
+#[test]
+fn a_compare_of_a_sign_extended_byte_needs_no_mask() {
+    let ir = "declare void @other()\ndefine void @f(i8 signext %a) {\n  %c = icmp eq i8 %a, 37\n  br i1 %c, label %t, label %x\nt:\n  tail call void @other()\n  ret void\nx:\n  ret void\n}";
+    assert_eq!(selected(ir).unwrap()[0], ["SUBSWri", "Bcc", "B"]);
+}
+
 /// `(a & 1) == 0 || b < c` selected `ANDSXri`, `SUBSXrr`, `CCMPXi`: the legalizer kept the
 /// `brcond` it had lowered, so the `setcc` of the `and` was still read and was lowered to an
 /// `ANDS` that took over the `and`. The pin has `ANDXri` (`ReplaceAllUsesWith` deletes the node).
