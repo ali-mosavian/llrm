@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:4c6407b4c8dff0d8f7d790edfcc0f9de55444d315e8ce5943f91cecd1d78c4b6 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:e28bd50250d9c116553af948e0cf2ac97b3076d2024a1d79dd3319bcd608b6de -->
 
 # machinesink
 
@@ -89,9 +89,11 @@ class, so `touches_machine_state` asks the classes. One with a pinned result
 (a divide: `ax`, `dx`) still sinks: the pin's does not, but holding a divide
 in its block grew switch.c 16 B at m16 -Os. Exit: none.
 
-DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
-(`SinkInstsIntoCycle`, off by default), no debug-value handling (an
-instruction has none).
+Not ported, and not a deviation on x86 (#2903): `PerformSinkAndFold` runs
+in the pin only where the target sets `EnableSinkAndFold` (AArch64, RISC-V,
+LoongArch; `TargetPassConfig.h:136`, false by default), `SinkInstsIntoCycle`
+is off by default, and an instruction here has no debug values. A target
+here that enables sink-and-fold gets it as a per-target hook, default off.
 
 ## Example
 `b1: v = mov 0; cmp x, 0; je b4` and `b4: r = phi [b1: v] [b2: w]` leave
