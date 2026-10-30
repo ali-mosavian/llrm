@@ -2714,8 +2714,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             self.b.store(length, object, false);
             self.b.store(length, cap_at, false);
             self.b.store(data, data_at, false);
-            let far = self.b.context.types.ptr(self.tables.spaces.far);
-            let view = self.b.cast(CastOp::AddrSpaceCast, object, far, "");
+            let spaces = self.tables.spaces.clone();
+            let view = if spaces.far == spaces.near {
+                object
+            } else {
+                let far = self.b.context.types.ptr(spaces.far);
+                self.b.cast(CastOp::AddrSpaceCast, object, far, "")
+            };
             self.values.insert(parameter, view);
         }
         Ok(())

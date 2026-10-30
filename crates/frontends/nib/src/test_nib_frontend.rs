@@ -3556,3 +3556,15 @@ fn main() -> i16:
 ";
     assert_eq!(run_everywhere(source), 18);
 }
+
+/// At a flat target far and near are one address space: the rebuilt view was
+/// cast to its own space, which the verifier refuses ("cannot take ptr to ptr");
+/// 35 `-m32` nib programs failed to compile.
+#[test]
+fn test_a_split_view_at_a_flat_target_is_not_cast_to_its_own_space() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "views_flat.nib", SUM_VIEW));
+    for emitted in hir::mir::emit(&program, &llrm_x86_m32::layout()) {
+        assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    }
+}
