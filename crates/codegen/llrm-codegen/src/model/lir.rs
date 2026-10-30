@@ -234,7 +234,7 @@ impl LirBody {
         self.notes
             .iter()
             .flat_map(|note| match &note.value {
-                NoteValue::Value(value) | NoteValue::Offset(value, _) => vec![*value],
+                NoteValue::Value(value) | NoteValue::Offset(value, _) | NoteValue::Arrived(value, _) => vec![*value],
                 NoteValue::Expr(expr) => expr
                     .args
                     .iter()
@@ -1124,6 +1124,10 @@ pub enum NoteValue {
     Offset(u32, i64),
     /// What the operations make of the arguments.
     Expr(Arc<NoteExpr>),
+    /// A parameter's own value, which arrived in the register: where no
+    /// register holds it, it is what the function was entered with
+    /// (`DW_OP_entry_value`).
+    Arrived(u32, RegId),
 }
 
 /// A value made of other values (`!DIArgList` with a `!DIExpression`).

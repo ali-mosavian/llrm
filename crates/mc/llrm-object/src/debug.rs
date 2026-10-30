@@ -117,6 +117,9 @@ pub struct DebugTarget {
     /// (`MCRegisterInfo`'s `mapLLVMRegToDWARFReg`), the frame register and the
     /// return address's column.
     pub registers: std::sync::Arc<RegisterFile>,
+    /// A parameter whose register was reused is told by what the register held
+    /// at entry (`DW_OP_entry_value`), as the pin does for this target.
+    pub entry_values: bool,
 }
 
 /// The target's registers as a debug writer numbers them: three flavours of
@@ -180,6 +183,7 @@ impl DebugTarget {
             segment_base: None,
             far_pointer: None,
             registers: std::sync::Arc::default(),
+            entry_values: false,
         }
     }
 }
@@ -400,6 +404,9 @@ pub enum Location {
     /// The value of the place plus a constant (`DW_OP_plus_uconst, n,
     /// DW_OP_stack_value`), which is in no place.
     Offset(Box<Location>, i64),
+    /// What the register held when the function was entered
+    /// (`DW_OP_entry_value`), which is in no place now.
+    EntryValue(String),
     /// What the operations make of the arguments, which are in no place of
     /// their own: a register, a frame cell or a constant each, with the bytes
     /// of the value a cell holds, pushed by [`ExprOp::Arg`]. The value itself

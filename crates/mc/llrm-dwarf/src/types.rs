@@ -318,6 +318,14 @@ impl Tree<'_> {
                 Ok([vec![0x91], crate::sleb(from_frame_base)].concat())
             }
             Location::Register(name) => self.register(name),
+            // DW_OP_entry_value (DW_OP_GNU_entry_value before DWARF 5), the
+            // length of the register's expression and the expression, then
+            // DW_OP_stack_value.
+            Location::EntryValue(name) => {
+                let register = self.register(name)?;
+                let op = if self.version >= 5 { 0xa3 } else { 0xf3 };
+                Ok([vec![op], crate::uleb(register.len() as u64), register, vec![0x9F]].concat())
+            }
             // DW_OP_breg<n> disp: the register's value plus the displacement.
             Location::Relative { register, disp } => {
                 let named = self.register(register)?;
@@ -429,6 +437,7 @@ impl Tree<'_> {
             | Location::Constant(_)
             | Location::Offset(..)
             | Location::Expression { .. }
+            | Location::EntryValue(_)
             | Location::Pieces(_) => Value::Expr(self.expression(location)?),
             Location::Static { symbol, disp } => Value::ExprAddr { symbol: *symbol, delta: *disp },
             Location::List(entries) => Value::LocList(self.list(entries)?),

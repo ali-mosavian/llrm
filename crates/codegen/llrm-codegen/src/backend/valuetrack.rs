@@ -322,6 +322,8 @@ pub enum Where {
     /// In no place: the expression of the values the registers hold, one for
     /// each of its value arguments in order.
     Expr(Arc<NoteExpr>, Vec<Place>),
+    /// In no place: what the register held when the function was entered.
+    Entry(RegId),
 }
 
 /// `state` after the variable `note` names takes its value: the whole variable
@@ -352,7 +354,14 @@ fn holders(
     state: &State,
     variable: u32,
     piece: Option<(u32, u32)>,
+    entry_values: bool,
 ) -> Vec<Where> {
+    if let Some(&NoteValue::Arrived(value, register)) = state.has.get(&(variable, piece))
+        && entry_values
+        && !state.holds.values().any(|held| *held == value)
+    {
+        return vec![Where::Entry(register)];
+    }
     match state.has.get(&(variable, piece)) {
         None | Some(NoteValue::Nothing) => Vec::new(),
         Some(NoteValue::Constant(value)) => vec![Where::Constant(*value)],
@@ -372,7 +381,7 @@ fn holders(
                 .collect();
             places.map(|places| vec![Where::Expr(Arc::clone(expr), places)]).unwrap_or_default()
         }
-        Some(&(NoteValue::Value(value) | NoteValue::Offset(value, _))) => {
+        Some(&(NoteValue::Value(value) | NoteValue::Offset(value, _) | NoteValue::Arrived(value, _))) => {
             let add = match state.has.get(&(variable, piece)) {
                 Some(&NoteValue::Offset(_, add)) => Some(add),
                 _ => None,
@@ -404,6 +413,7 @@ pub fn tracked(
     bias: i64,
     notes: &[DebugNote],
     marks: &[(usize, Mark)],
+    entry_values: bool,
 ) -> BTreeMap<(u32, Option<(u32, u32)>), Vec<(usize, usize, Vec<Where>)>> {
     let mut decoder = Decoder::with_ip(bits, code, 0, DecoderOptions::NONE);
     let mut decode = |at: usize| -> Option<Instruction> {
@@ -506,7 +516,7 @@ pub fn tracked(
         }
         let end = at + one.len();
         for &(variable, piece) in &variables {
-            let places = holders(&state, variable, piece);
+            let places = holders(&state, variable, piece, entry_values);
             if places.is_empty() {
                 continue;
             }

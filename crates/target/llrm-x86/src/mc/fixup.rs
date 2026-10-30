@@ -20,7 +20,12 @@ pub const FAR_POINTER: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 5);
 /// What a debug writer needs of the machine: its width and the kinds that name
 /// a segment (OMF's, which 32-bit objects also carry).
 pub fn debug_target(bits: u8) -> DebugTarget {
-    DebugTarget { segment_base: Some(SEGMENT_BASE), far_pointer: Some(FAR_POINTER), ..DebugTarget::of(bits) }
+    DebugTarget {
+        segment_base: Some(SEGMENT_BASE),
+        far_pointer: Some(FAR_POINTER),
+        entry_values: bits == 64,
+        ..DebugTarget::of(bits)
+    }
 }
 
 /// A call or jump's target, `width` bytes relative to the field's end.

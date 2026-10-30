@@ -551,6 +551,7 @@ fn a_target_with_three_byte_addresses_writes_dwarf_with_three_byte_addresses() {
             segment_base: None,
             far_pointer: None,
             registers: Default::default(),
+            entry_values: false,
         },
     );
     let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();

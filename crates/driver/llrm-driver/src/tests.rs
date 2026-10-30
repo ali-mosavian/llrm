@@ -2101,3 +2101,32 @@ fn a_variable_made_of_several_values_has_an_expression_location() {
     let sum = [0x70, 0x00, 0x72, 0x00, 0x22, 0x9f];
     assert!(bytes.windows(sum.len()).any(|window| window == sum), "the sum's expression is in the object");
 }
+
+/// An x86-64 parameter whose register the body reuses had no location past the
+/// copy (`a` after the call in `f`): gdb printed `<optimized out>` where the
+/// pin's object says `DW_OP_entry_value(DW_OP_reg5 RDI), DW_OP_stack_value`.
+#[test]
+fn a_parameter_whose_register_was_reused_is_told_by_its_entry_value() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/entry_value.ll")
+        .lines()
+        .map(
+            |line| {
+                if line.starts_with("target datalayout") { "target datalayout = \"@m64-datalayout@\"" } else { line }
+            },
+        )
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, format) = compiled(&flags(&["-m64", "-g", "-fobject-format=elf"]), &text, "entryvalue").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "entry_value.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap();
+    // DW_OP_entry_value (DWARF 5) or DW_OP_GNU_entry_value, 1, DW_OP_reg5,
+    // DW_OP_stack_value.
+    let found = |op: u8| bytes.windows(4).any(|window| window == [op, 0x01, 0x55, 0x9f]);
+    assert!(found(0xa3) || found(0xf3), "the entry value of rdi is in the object");
+}

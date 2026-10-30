@@ -1723,15 +1723,39 @@ pub(crate) fn noted(
             unsure.insert((at, variable));
         }
     }
+    // The register each parameter arrives in, by the number its value has.
+    let arrivals: Vec<(RegId, u32)> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .find(|one| one.arrival())
+        .map(|one| one.delivers.iter().map(|(held, register)| (*register, held.value)).collect())
+        .unwrap_or_default();
     for (at, variable, piece, value) in said_at {
         let (piece, value) = if unsure.contains(&(at, variable)) { (None, NoteValue::Nothing) } else { (piece, value) };
         // Said twice by two passes: said once.
+        // A parameter said to be its own value, whole, is also what it arrived
+        // as: where it is held nowhere, it is the value the function was
+        // entered with.
+        let value = match value {
+            NoteValue::Value(vreg)
+                if piece.is_none()
+                    && llrm_mir::debuginfo::read_variable(module, llrm_mir::MetadataId(variable))
+                        .is_some_and(|one| one.parameter) =>
+            {
+                arrivals
+                    .iter()
+                    .find(|(_, arrived)| *arrived == vreg)
+                    .map_or(NoteValue::Value(vreg), |&(register, _)| NoteValue::Arrived(vreg, register))
+            }
+            other => other,
+        };
         if !seen.insert((at, variable, piece, value.clone())) {
             continue;
         }
         let note = u32::try_from(notes.len()).expect("a few notes");
         match &value {
-            NoteValue::Value(vreg) | NoteValue::Offset(vreg, _) => {
+            NoteValue::Value(vreg) | NoteValue::Offset(vreg, _) | NoteValue::Arrived(vreg, _) => {
                 named.insert(*vreg);
             }
             NoteValue::Expr(expr) => named.extend(expr.args.iter().filter_map(|arg| match arg {
@@ -1754,22 +1778,16 @@ pub(crate) fn noted(
     // register from the entry, as a note, and the tracking that follows a
     // variable the code moves says for how long. Its number is past the
     // metadata's.
-    let arrivals: Vec<(RegId, u32)> = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
-        .find(|one| one.arrival())
-        .map(|one| one.delivers.iter().map(|(held, register)| (*register, held.value)).collect())
-        .unwrap_or_default();
     let mut entry_notes: Vec<u32> = Vec::new();
     for (index, variable) in body.variables.iter_mut().enumerate() {
         let (DebugPlace::Register(_), Some(delivered)) = (&variable.place, variable.argument) else { continue };
-        let Some(&(_, vreg)) = usize::try_from(delivered).ok().and_then(|delivered| arrivals.get(delivered)) else {
+        let Some(&(register, vreg)) = usize::try_from(delivered).ok().and_then(|delivered| arrivals.get(delivered))
+        else {
             continue;
         };
         let node = u32::MAX - u32::try_from(index).expect("a few variables");
         entry_notes.push(u32::try_from(notes.len()).expect("a few notes"));
-        notes.push(DebugNote { variable: node, piece: None, value: NoteValue::Value(vreg) });
+        notes.push(DebugNote { variable: node, piece: None, value: NoteValue::Arrived(vreg, register) });
         named.insert(vreg);
         variable.place = DebugPlace::Tracked(node);
     }

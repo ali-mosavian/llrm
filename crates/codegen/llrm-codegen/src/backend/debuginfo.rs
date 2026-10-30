@@ -597,6 +597,7 @@ fn unhexed(hex: &str) -> Option<Vec<u8>> {
 /// Where one value is, as the model says it.
 fn located(at: super::valuetrack::Where) -> Location {
     match at {
+        super::valuetrack::Where::Entry(register) => Location::EntryValue(format!("{register:?}").to_lowercase()),
         super::valuetrack::Where::Expr(expr, places) => {
             let mut places = places.into_iter();
             let args = expr
@@ -900,6 +901,7 @@ pub fn laid_out(
                             bias,
                             &procedure.body.notes,
                             &marks,
+                            debug.target.entry_values,
                         )
                     };
                     let parts: Vec<_> = found

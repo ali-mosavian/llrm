@@ -47,7 +47,7 @@ fn note(
 #[test]
 fn a_variable_follows_its_value_from_the_register_to_the_cell_a_move_copied_it_to() {
     let marks = [(8, Mark::Def { tag: 7, place: Place::Register(RegId::from(EAX)) }), (8, Mark::Note(0))];
-    let found = tracked(&FRAMED, 32, &regs(), &rows(), 8, &[note(1, Some(7))], &marks);
+    let found = tracked(&FRAMED, 32, &regs(), &rows(), 8, &[note(1, Some(7))], &marks, false);
     assert_eq!(
         firsts(&found[&(1, None)]),
         [
@@ -66,7 +66,7 @@ fn a_variable_has_no_place_once_nothing_holds_its_value() {
     let code = [0x55, 0x89, 0xE5, 0xB8, 5, 0, 0, 0, 0xB8, 6, 0, 0, 0, 0xC3];
     let rows = crate::backend::cfi::rows(&code, 32, RegId::EBP, RegId::ESP, 4, &[]).expect("followable");
     let marks = [(8, Mark::Def { tag: 7, place: Place::Register(RegId::from(EAX)) }), (8, Mark::Note(0))];
-    let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks);
+    let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks, false);
     assert_eq!(firsts(&found[&(1, None)]), [(8, 13, Where::Place(Place::Register(RegId::from(EAX))))]);
 }
 
@@ -80,7 +80,7 @@ fn paths_that_join_keep_only_the_place_both_hold() {
     let code = [0xB8, 5, 0, 0, 0, 0x85, 0xC9, 0x74, 0x05, 0x89, 0xC2, 0x31, 0xC0, 0x90, 0xC3];
     let rows = crate::backend::cfi::rows(&code, 32, RegId::EBP, RegId::ESP, 4, &[]).expect("followable");
     let marks = [(5, Mark::Def { tag: 7, place: Place::Register(RegId::from(EAX)) }), (5, Mark::Note(0))];
-    let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks);
+    let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks, false);
     assert_eq!(
         firsts(&found[&(1, None)]),
         [
@@ -104,7 +104,7 @@ fn a_call_loses_the_registers_it_clobbers_and_keeps_the_others() {
         // The call clobbers eax (bit 0) alone.
         (15, Mark::Clobbered(RegId::from(EAX))),
     ];
-    let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7)), note(2, Some(8))], &marks);
+    let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7)), note(2, Some(8))], &marks, false);
     assert_eq!(firsts(&found[&(1, None)]), [(10, 15, Where::Place(Place::Register(RegId::from(EAX))))]);
     assert_eq!(firsts(&found[&(2, None)]), [(10, 16, Where::Place(Place::Register(RegId::from(ECX))))]);
 }
@@ -123,7 +123,7 @@ fn a_cell_whose_address_went_out_is_lost_at_the_next_call() {
     ];
     let rows = crate::backend::cfi::rows(&code, 32, RegId::EBP, RegId::ESP, 4, &[]).expect("followable");
     let marks = [(11, Mark::Def { tag: 7, place: Place::Register(RegId::from(EAX)) }), (11, Mark::Note(0))];
-    let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks);
+    let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks, false);
     assert_eq!(
         firsts(&found[&(1, None)]),
         [
@@ -143,7 +143,7 @@ fn a_value_copied_to_another_register_is_in_both_until_the_first_is_overwritten(
     let code = [0xB8, 5, 0, 0, 0, 0x89, 0xC3, 0x31, 0xC0, 0xC3];
     let rows = crate::backend::cfi::rows(&code, 32, RegId::EBP, RegId::ESP, 4, &[]).expect("followable");
     let marks = [(5, Mark::Def { tag: 7, place: Place::Register(RegId::from(EAX)) }), (5, Mark::Note(0))];
-    let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks);
+    let found = tracked(&code, 32, &regs(), &rows, 8, &[note(1, Some(7))], &marks, false);
     let ebx = Where::Place(Place::Register(RegId::EBX));
     assert_eq!(
         found[&(1, None)],

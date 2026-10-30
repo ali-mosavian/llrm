@@ -184,6 +184,7 @@ fn module(
                 Location::Constant(_)
                 | Location::Offset(..)
                 | Location::Expression { .. }
+                | Location::EntryValue(_)
                 | Location::Pieces(_)
                 | Location::Relative { .. } => {}
             }
