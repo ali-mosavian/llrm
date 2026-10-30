@@ -111,7 +111,8 @@ fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
 
 /// Queens' `safe(q, row, col)` reads `q[r]` for `r < row` under a bounds check
 /// on the slice's length, 12, which reaches it as a field of the descriptor.
-/// DEVIATE (the extra IPSCCP after `promote.`, interprocedural.rs): the checks
+/// DEVIATE (the extra IPSCCP after `promote.`, interprocedural.rs; owner w2,
+/// fix-by 2026-11-07): the checks
 /// are folded. The pin keeps them: its ArgumentPromotion refuses a recursive
 /// function's descriptor that holds a pointer (ArgumentPromotion.cpp#L581 at
 /// d1106deb71cc), so `opt -O2` keeps the descriptor argument and all three
@@ -155,4 +156,20 @@ fn test_nib_reads_a_local_array_slice_through_ss() {
     );
     let body = procedure(&asm, "_safe");
     assert!(body.contains("ss:[") && !body.contains("les "), "{asm}");
+}
+
+/// The exit of the DEVIATE above: the pin's shape, the checks stay. Run it with
+/// `--ignored`; #6159 turns it on and the test above goes. (#6159's build has
+/// two calls; the three the pin's `opt -O2` keeps were counted in a0ed5eb43,
+/// not re-measured.)
+#[test]
+#[ignore = "the pin shape: on when #6159 lands (exit of the extra IPSCCP DEVIATE)"]
+fn test_nib_queens_keeps_its_bounds_checks_as_the_pin_does() {
+    let asm = compiled(
+        "llrm-nib",
+        "queens.nib",
+        include_str!("../bench/queens/queens.nib"),
+        &["-fno-inline-functions", "-fno-inline-functions-called-once"],
+    );
+    assert!(asm.contains("call far ptr N$EBND"), "{asm}");
 }
