@@ -133,6 +133,16 @@ const KERNELS3: &[Kernel] = &[
     k("dotx", &[P("buf", 0), P("tab", 0), B(8)], false, 101),
 ];
 
+/// cc65's optimizer flag for the "cc65 -O" rows: `-O`, or what `BENCH_CC65` names (`-Oirs`).
+fn cc65_optimize() -> &'static str {
+    Box::leak(std::env::var("BENCH_CC65").unwrap_or_else(|_| "-O".to_owned()).into_boxed_str())
+}
+
+/// The level of the "ours" -O2 rows, or `BENCH_OURS` (`-O0`: the control that the table can show cc65 winning).
+fn ours_level(default: &'static str) -> &'static str {
+    std::env::var("BENCH_OURS").map_or(default, |level| &*Box::leak(level.into_boxed_str()))
+}
+
 fn work(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bench").join(name);
     std::fs::create_dir_all(&dir).unwrap();
@@ -545,7 +555,7 @@ fn table4() {
     let kernels = hand_kernels();
     for kernel in kernels.iter().filter(|k| only.as_deref().is_none_or(|o| o == k.name)) {
         let rows =
-            [cc65_row(kernel, &["-O"], "c1"), hand_row(kernel), ours_row(kernel, "-O2", "o2"), ours_row(kernel, "-O2", "o2m")];
+            [cc65_row(kernel, &[cc65_optimize()], "c1"), hand_row(kernel), ours_row(kernel, ours_level("-O2"), "o2"), ours_row(kernel, ours_level("-O2"), "o2m")];
         for row in rows.iter().filter(|row| matches!(row, Err(why) if !why.starts_with("no hand"))) {
             eprintln!("{}: {}", kernel.name, row.as_ref().unwrap_err());
         }
@@ -596,7 +606,7 @@ fn table3() {
     for kernel in KERNELS3 {
         let hand = if kernel.name == "lz4" { hand_row(kernel) } else { Err("no hand-written version".into()) };
         let rows =
-            [cc65_row(kernel, &["-O"], "c1"), hand, ours_row(kernel, "-O2", "o2"), ours_row(kernel, "-O2", "o2m")];
+            [cc65_row(kernel, &[cc65_optimize()], "c1"), hand, ours_row(kernel, ours_level("-O2"), "o2"), ours_row(kernel, ours_level("-O2"), "o2m")];
         for row in rows.iter().filter(|row| !matches!(row, Err(why) if why.starts_with("no hand"))) {
             if let Err(why) = row {
                 eprintln!("{}: {why}", kernel.name);
@@ -624,11 +634,11 @@ fn table(
     for kernel in kernels.iter().filter(|k| only.as_deref().is_none_or(|o| o == k.name)) {
         let rows = [
             cc65_row(kernel, &[], "c0"),
-            cc65_row(kernel, &["-O"], "c1"),
-            ours_row(kernel, "-O2", "o2"),
+            cc65_row(kernel, &[cc65_optimize()], "c1"),
+            ours_row(kernel, ours_level("-O2"), "o2"),
             ours_row(kernel, "-Os", "os"),
-            cc65_row(kernel, &["-O"], "c1m"),
-            ours_row(kernel, "-O2", "o2m"),
+            cc65_row(kernel, &[cc65_optimize()], "c1m"),
+            ours_row(kernel, ours_level("-O2"), "o2m"),
         ];
         for (tag, row) in ["c0", "c1", "o2", "os", "c1m", "o2m"].iter().zip(&rows) {
             if let Err(why) = row {
