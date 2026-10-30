@@ -29,3 +29,16 @@ A translation joins the parity pipeline when this oracle reads clean on its pass
     python3 tools/difftest/difftest.py dumps PASS DIR/* [--llrm-pass target/release/llrm-pass]      # PASS: a key of COUNTERPART, e.g. earlycse, gvn, sroa
 
 The first lines name the `opt` and its version (the pinned 24.0.0git d1106deb71cc, `tools/llvmpin.py`), then: `inputs N; failed (LLVM or llrm) 0; functions compared N; where either side changed the function: M, identical M; LLVM changed K of N; premise ok`. Clean is `identical` equal to the changed count, `failed 0`, `premise ok`, exit 0; the table under it then has no opcode rows. A premise failure (exit 3) means LLVM changed none or all of the functions and agreed everywhere: the run proves nothing. Quote the line and the opcode table in the PR; a remaining difference is listed with the first hunk of each function.
+
+## The executed differential (`exec.py`)
+
+Programs from `gen.py` (seeded; shapes ladder, sibling, loop_exit, widths) built by `llrm-cc -O2` and by the pin's `clang -O0`, run over 11 or 55 argument values; callees print their names, so a wrong or merged callee shows as a different trace.
+
+    python3 tools/difftest/exec.py run --count 25 --targets x86_64-linux,x86_32-linux --bin target/release     # the batch step: 200 programs
+    python3 tools/difftest/exec.py replay SEED SHAPE --bin target/release                                      # one program, both traces
+
+A difference prints its replay command and the program reduced to the lines that still differ (a cut counts only if clang -O0 and -O2 agree on it). Exit 1 on any difference or broken step. Cost: 200 programs in about 1 s on 32 cores, no DOSBox.
+
+Positive control (`fixtures/exec/`): `prefix_differs.txt` lists the 12 programs (seeds 0-9) that release/next without #6146 gets wrong at x86_64-linux; `LLRM_DIFFTEST_BIN=<release dir> LLRM_DIFFTEST_EXPECT=prefix|fixed pytest tools/difftest/test_exec.py` must find exactly those, or none on the fixed tree. `wrong_callee_cc.py` is a hermetic stand-in that calls c0 for c1: the harness must report differences against it.
+
+Not caught: inputs outside the driven set, floating point, anything needing undefined behaviour, bugs the reference shares, m16 (a DOSBox sample is a separate step).
