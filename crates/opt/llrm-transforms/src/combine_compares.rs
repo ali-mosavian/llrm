@@ -28,11 +28,6 @@
 //! the lead). `(a & -4) == C` folds at C = 0 and signmin only
 //! (`a s< -32764` at i16); `((b + M) & M) u< b` is `b != 0` for M = 3, 7.
 //!
-//! DEVIATE 1 (permanent): `samesign` is not a flag of MIR's `icmp`; the folds
-//! that read or set it are left out (the unsigned-to-`samesign` step of
-//! `foldICmpUsingKnownBits`; the signed-to-unsigned step is made, which is what
-//! sets the flag in LLVM).
-//!
 //! DEVIATE 2 (temporary): `foldICmpUsingKnownBits` computes the known bits of
 //! the operands, where LLVM first runs `SimplifyDemandedBits` on them
 //! (InstCombineSimplifyDemanded.cpp, not translated): the same facts or fewer.
@@ -232,6 +227,9 @@ pub fn visit_icmp(
         return r;
     }
     if let Some(r) = fold_icmp_with_cast_op_of_constant(c, inst, pred, op0, op1) {
+        return r;
+    }
+    if let Some(r) = fold_icmp_with_pointer_cast(c, inst, pred, op0, op1) {
         return r;
     }
     for operand in [op0, op1] {
@@ -602,6 +600,72 @@ fn fold_icmp_with_cast_op_of_constant(
     None
 }
 
+/// `foldICmpWithCastOp`'s pointer arms
+/// ([:6663](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)):
+/// `icmp pred (inttoptr X), (inttoptr Y | null)` is the compare of the
+/// integers, and so is `icmp pred (ptrtoint P), (ptrtoint Q | null)` of the
+/// pointers, when the integer is as wide as the pointer.
+///
+/// DEVIATE: the right side is a cast or the null constant, not any constant
+/// (the pin folds a constant expression to the other type).
+fn fold_icmp_with_pointer_cast(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    use llrm_mir::context::ConstantKind;
+    use llrm_mir::opcode::CastOp;
+    use llrm_mir::types::Type;
+    let q = query(c, Some(inst));
+    let is_null = |c: &Combiner| match op1 {
+        Operand::Constant(id) => matches!(c.context.get(id).kind, ConstantKind::Null),
+        _ => false,
+    };
+    let compatible = |c: &Combiner, ptr: llrm_mir::types::TypeId, int: llrm_mir::types::TypeId| match (
+        c.context.types.get(ptr),
+        c.context.types.int_bits(int),
+    ) {
+        (Type::Pointer(space), Some(bits)) => c.env.layout.pointer(*space).bits == bits,
+        _ => false,
+    };
+    if let Some((_, _, x)) = pattern::cast(&q, op0, CastOp::IntToPtr) {
+        let ptr = c.type_of(op0);
+        let int = c.type_of(x);
+        if !compatible(c, ptr, int) {
+            return None;
+        }
+        let y = if is_null(c) {
+            c.int(int, 0)
+        } else {
+            let (_, _, y) = pattern::cast(&query(c, Some(inst)), op1, CastOp::IntToPtr)?;
+            if c.type_of(y) != int {
+                return None;
+            }
+            y
+        };
+        return Some(new_icmp(c, inst, pred, x, y));
+    }
+    if let Some((_, _, p)) = pattern::cast(&q, op0, CastOp::PtrToInt) {
+        let ptr = c.type_of(p);
+        if !compatible(c, ptr, c.type_of(op0)) {
+            return None;
+        }
+        let q_ = if constant(c, op1).is_some_and(|(bits, _)| bits == 0) {
+            Operand::Constant(llrm_mir::constfold::null_value(c.context, ptr))
+        } else {
+            let (_, _, y) = pattern::cast(&query(c, Some(inst)), op1, CastOp::PtrToInt)?;
+            if c.type_of(y) != ptr {
+                return None;
+            }
+            y
+        };
+        return Some(new_icmp(c, inst, pred, p, q_));
+    }
+    None
+}
+
 /// The one user of `inst`'s result.
 fn only_user(
     c: &Combiner,
@@ -889,7 +953,7 @@ fn ceil_log2(
 
 /// `foldICmpUsingKnownBits`
 /// ([:7106](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L7106)).
-/// DEVIATE 2: no `SimplifyDemandedBits` first; DEVIATE 1: no `samesign`.
+/// DEVIATE 2: no `SimplifyDemandedBits` first.
 fn fold_icmp_using_known_bits(
     c: &mut Combiner,
     inst: InstId,
@@ -1090,12 +1154,16 @@ fn fold_icmp_using_known_bits(
         _ => {}
     }
     // Turn a signed comparison into an unsigned one if both operands are known
-    // to have the same sign.
+    // to have the same sign. Set samesign if possible (not for equality).
     let sign = 1u128 << (width - 1);
-    if is_signed(pred)
+    let mut flags = c.function.instruction(inst).flags;
+    let is_unsigned = !is_signed(pred) && !matches!(pred, IntPredicate::Eq | IntPredicate::Ne);
+    if (is_signed(pred) || (is_unsigned && !flags.contains(Flags::SAMESIGN)))
         && ((known0.zero & sign != 0 && known1.zero & sign != 0) || (known0.one & sign != 0 && known1.one & sign != 0))
     {
         c.function.set_icmp_predicate(inst, unsigned_predicate(pred));
+        flags.insert(Flags::SAMESIGN);
+        c.function.set_flags(inst, flags);
         c.add_to_worklist(inst);
         return Some(Visit::Changed);
     }

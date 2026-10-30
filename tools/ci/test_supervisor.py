@@ -77,3 +77,33 @@ def test_the_image_replaces_the_perf_wrapper_in_place():
     tests (12 files) read "perf counted nothing"."""
     text = (Path(__file__).parent / "selfhosted/Containerfile").read_text()
     assert "dpkg-divert --local --rename --add /usr/bin/perf" in text
+
+
+def test_a_runner_without_instruction_counters_is_named_not_pooled(monkeypatch):
+    """Perf counters on tinytim were inferred, never read: a slot whose container lacks them would take cost and perf jobs and fail them. The probe's output says which."""
+    assert supervisor.counters_missing("1234567,,instructions:u,4000,100.00,,\n") is None
+    assert "not supported" in supervisor.counters_missing("<not supported>,,instructions:u,0,100.00,,\n")
+    assert supervisor.counters_missing("0,,instructions:u,0,100.00,,\n")
+    assert "perf_event_open" in supervisor.counters_missing("Error:\nperf_event_open(..., 0) failed: Operation not permitted\n")
+    assert supervisor.counters_missing("")
+    ran = []
+    monkeypatch.setattr(supervisor.subprocess, "run", lambda command, **kw: ran.append(command) or type("D", (), {"stdout": "<not counted>,,instructions:u,0,0,,\n", "stderr": ""})())
+    assert supervisor.preflight(3) is False
+    assert ran[0][1:1 + len(supervisor.container_flags())] == supervisor.container_flags(), "the probe must run as a job does"
+
+
+def test_a_slot_that_fails_its_preflight_registers_no_runner(monkeypatch):
+    """The probe gates the pool: no JIT config is requested for a slot without counters."""
+    asked = []
+    monkeypatch.setattr(supervisor, "preflight", lambda n: False)
+    monkeypatch.setattr(supervisor, "api", lambda *a, **k: asked.append(a))
+
+    def stop(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(supervisor.time, "sleep", stop)
+    try:
+        supervisor.slot(1)
+    except KeyboardInterrupt:
+        pass
+    assert asked == []

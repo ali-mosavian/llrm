@@ -409,12 +409,13 @@ def c_flags() -> list[str]:
 
 
 def c_build_key() -> str:
-    """What the runtime's C is compiled with, for the object cache: the row and the flags, the checkout's own path left out."""
-    return RUNTIME_ROW + " " + " ".join(c_flags()).replace(str(dosbatch.ROOT), "")
+    """What the runtime's C is compiled with, for the object cache: the row and the command dosbatch.c_compile makes of it, the checkout's own path left out."""
+    command, env = dosbatch.c_compile(Path("runtime.c"), Path("runtime.obj"), dosbatch.REAL_MODE, "-Os", None, [], c_flags())  # the command, as the builds make it
+    return RUNTIME_ROW + " " + " ".join(command[1:]).replace(str(dosbatch.ROOT), "") + " " + repr(sorted(env.items())) + " " + dosbatch.clang_identity()
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
-    dosbatch._host(*dosbatch.c_compile(source, obj, dosbatch.REAL_MODE, "-Os", include, [], c_flags()))
+    dosbatch._host(*dosbatch.c_compile(source, obj, dosbatch.REAL_MODE, "-Os", None, [], c_flags()))
 
 
 def remove_existing_archive(work: Path) -> None:

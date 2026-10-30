@@ -234,4 +234,6 @@ mod tests;
 #[cfg(test)]
 mod tests_ext;
 #[cfg(test)]
+mod tuning_tests;
+#[cfg(test)]
 mod vararg_tests;

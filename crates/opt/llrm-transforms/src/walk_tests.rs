@@ -28,7 +28,7 @@ fn pipeline_runs(
     crate::pipeline::capturing_runs(|| {
         llrm_mir::program::Program::lend(
             &mut module,
-            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, applied),
         )
         .and_then(|done| done)
@@ -172,7 +172,7 @@ fn test_a_loop_around_a_call_is_unrolled_only_after_the_call_is_inlined() {
     let mut module = parsed(&loop_around_a_call());
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             crate::pipeline::applied(program, &crate::pipeline::Applied::default())
         },
@@ -220,7 +220,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut options = crate::pipeline::Options::default();
             options.inline.recursive = true;
@@ -252,7 +252,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
         let counted = std::rc::Rc::clone(&seen);
         llrm_mir::program::Program::lend(
             &mut module,
-            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
@@ -310,7 +310,7 @@ fn test_a_caller_of_a_peeled_recursion_is_a_body_with_self_copies() {
         let mut module = parsed(FIB_TOP);
         llrm_mir::program::Program::lend(
             &mut module,
-            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
@@ -418,7 +418,7 @@ exit:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             crate::pipeline::applied(program, &crate::pipeline::Applied::default())
         },
@@ -459,7 +459,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
                 inline: crate::inline::Threshold { recursive: true, ..Default::default() },
@@ -510,7 +510,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             crate::pipeline::applied(program, &crate::pipeline::Applied::default())
         },
@@ -555,7 +555,7 @@ b0:
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
@@ -609,7 +609,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             crate::pipeline::applied(program, &crate::pipeline::Applied::default())
         },
@@ -679,7 +679,7 @@ fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
         let mut module = parsed(text);
         llrm_mir::program::Program::lend(
             &mut module,
-            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
@@ -779,7 +779,7 @@ b0:
         );
         llrm_mir::program::Program::lend(
             &mut module,
-            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
@@ -808,7 +808,7 @@ fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
     let applied = crate::pipeline::Applied { options, ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
@@ -832,7 +832,7 @@ fn walked_top_with(
     let mut module = parsed(text);
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
                 inline: crate::inline::Threshold { recursive, ..Default::default() },
@@ -1031,7 +1031,7 @@ b0:
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
@@ -1068,7 +1068,7 @@ fn sized(
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
@@ -1214,7 +1214,7 @@ b0:
     let seen = std::rc::Rc::clone(&stale);
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         move |program: &mut llrm_mir::program::Program| {
             let seen = std::rc::Rc::clone(&seen);
             let mut walk = crate::walk::Walk {
@@ -1244,7 +1244,7 @@ fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
     let mut module = parsed(crate::ipsccp::tests::AM_BD_6);
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
             ipo.run(program, &mut Default::default())
@@ -1358,7 +1358,7 @@ fn at_o2(
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::default(), ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
@@ -1376,7 +1376,7 @@ fn at_os(
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
@@ -1525,7 +1525,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
             ipo.run(program, &mut Default::default())
@@ -1566,7 +1566,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
             ipo.run(program, &mut Default::default())
@@ -1613,7 +1613,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
             ipo.run(program, &mut Default::default())

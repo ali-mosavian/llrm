@@ -1,0 +1,2002 @@
+reason = "Counts of the integrated parity tree above main 854bb7efc4 (limit = measured, so they cannot grow), dated 2026-10-29. Sections: (1) -Os m16 rows above main, which need the user's yes for main; (2) c -O2 rows, front-end switch Watcom to clang (user 2026-10-26); (3) UNATTRIBUTED -O2, bq16 and bq32 rows, a main-merge blocker due 2026-11-05. Not a rebless of main."
+
+# ===== (1) -Os m16 above main: needs your yes for main. cause class and owner per row; byte delta and clocks delta of the row =====
+
+[[row]]
+label = "crc bas -Os"
+counter = "memory_operands"
+to = 75  # base 71; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 220->207, clocks 2767->2013
+
+[[row]]
+label = "crc c -Os"
+counter = "code_bytes"
+to = 69  # base 68; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 68->69, clocks 1393->1402
+
+[[row]]
+label = "crc c -Os"
+counter = "instructions"
+to = 634  # base 625; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 68->69, clocks 1393->1402
+
+[[row]]
+label = "crc nib -Os"
+counter = "code_bytes"
+to = 102  # base 101; DAG isel/regalloc, w12; code_bytes 101->102, clocks 1411->1420
+
+[[row]]
+label = "crc nib -Os"
+counter = "instructions"
+to = 643  # base 634; DAG isel/regalloc, w12; code_bytes 101->102, clocks 1411->1420
+
+[[row]]
+label = "fib bas -Os"
+counter = "instructions"
+to = 437821  # base 372147; DAG isel/regalloc, w12; code_bytes 176->174, clocks 1116464->1313485
+
+[[row]]
+label = "fib bq16 -Os"
+counter = "instructions"
+to = 470657  # base 404984; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 181->181, clocks 820936->1017956
+
+[[row]]
+label = "fib c -Os"
+counter = "code_bytes"
+to = 60  # base 56; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 56->60, clocks 591071->356059
+
+[[row]]
+label = "fib nib -Os"
+counter = "code_bytes"
+to = 63  # base 54; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 54->63, clocks 415932->356052
+
+[[row]]
+label = "hanoi bas -Os"
+counter = "instructions"
+to = 409579  # base 393196; DAG isel/regalloc, w12; code_bytes 214->211, clocks 1040343->1130452
+
+[[row]]
+label = "hanoi bq16 -Os"
+counter = "instructions"
+to = 442345  # base 409580; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 219->218, clocks 810982->917473
+
+[[row]]
+label = "huge bas -Os"
+counter = "code_bytes"
+to = 334  # base 332; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 332->334, clocks 2986427->2706624
+
+[[row]]
+label = "huge bas -Os"
+counter = "memory_operands"
+to = 163312  # base 162918; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 332->334, clocks 2986427->2706624
+
+[[row]]
+label = "huge bq16 -Os"
+counter = "code_bytes"
+to = 340  # base 336; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 336->340, clocks 3187935->2645775
+
+[[row]]
+label = "nbody_fixed bas -Os"
+counter = "instructions"
+to = 1652138  # base 1446162; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 555->535, clocks 6658133->6298086
+
+[[row]]
+label = "nbody_fixed bas -Os"
+counter = "memory_operands"
+to = 393048  # base 332049; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 555->535, clocks 6658133->6298086
+
+[[row]]
+label = "nbody_fixed bq16 -Os"
+counter = "instructions"
+to = 1652138  # base 1446162; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 560->542, clocks 6658133->6298086
+
+[[row]]
+label = "nbody_fixed bq16 -Os"
+counter = "memory_operands"
+to = 393048  # base 332049; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 560->542, clocks 6658133->6298086
+
+[[row]]
+label = "nbody_fixed c -Os"
+counter = "instructions"
+to = 1472137  # base 1450161; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 468->434, clocks 6584131->5818084
+
+[[row]]
+label = "nbody_fixed c -Os"
+counter = "memory_operands"
+to = 375048  # base 325049; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 468->434, clocks 6584131->5818084
+
+[[row]]
+label = "parity/algebra bq16 -Os"
+counter = "code_bytes"
+to = 229  # base 228; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 228->229, clocks 238->244
+
+[[row]]
+label = "parity/control nib -Os"
+counter = "code_bytes"
+to = 122  # base 115; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 115->122, clocks 333->312
+
+[[row]]
+label = "parity/parity bas -Os"
+counter = "code_bytes"
+to = 213  # base 207; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 207->213, clocks 1021->1012
+
+[[row]]
+label = "parity/parity bas -Os"
+counter = "memory_operands"
+to = 131  # base 128; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 207->213, clocks 1021->1012
+
+[[row]]
+label = "parity/parity bq16 -Os"
+counter = "code_bytes"
+to = 219  # base 217; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 217->219, clocks 1452->1312
+
+[[row]]
+label = "parity/qbsp c -Os"
+counter = "code_bytes"
+to = 312  # base 309; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 309->312, clocks 1020->989
+
+[[row]]
+label = "parity/qbsp c -Os"
+counter = "instructions"
+to = 280  # base 276; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 309->312, clocks 1020->989
+
+[[row]]
+label = "parity/qbsp c -Os"
+counter = "memory_operands"
+to = 91  # base 77; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 309->312, clocks 1020->989
+
+[[row]]
+label = "parity/qbsp nib -Os"
+counter = "memory_operands"
+to = 95  # base 82; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 375->368, clocks 1006->984
+
+[[row]]
+label = "particle bas -Os"
+counter = "instructions"
+to = 147560  # base 129058; LSR masked IV (pin-faithful), w6; code_bytes 520->492, clocks 280330->309245
+
+[[row]]
+label = "particle bq16 -Os"
+counter = "instructions"
+to = 147660  # base 129158; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 525->499, clocks 278930->307845
+
+[[row]]
+label = "particle c -Os"
+counter = "code_bytes"
+to = 165  # base 158; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 158->165, clocks 168983->169089
+
+[[row]]
+label = "particle c -Os"
+counter = "instructions"
+to = 83936  # base 83934; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 158->165, clocks 168983->169089
+
+[[row]]
+label = "particle nib -Os"
+counter = "instructions"
+to = 147770  # base 137880; LSR masked IV (pin-faithful), w6; code_bytes 317->289, clocks 228221->238202
+
+[[row]]
+label = "queens bas -Os"
+counter = "code_bytes"
+to = 428  # base 425; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 425->428, clocks 685825->633496
+
+[[row]]
+label = "queens c -Os"
+counter = "code_bytes"
+to = 172  # base 159; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 159->172, clocks 225189->173895
+
+[[row]]
+label = "queens c -Os"
+counter = "memory_operands"
+to = 33636  # base 19810; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 159->172, clocks 225189->173895
+
+[[row]]
+label = "queens nib -Os"
+counter = "memory_operands"
+to = 44126  # base 36773; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 277->262, clocks 395040->345858
+
+[[row]]
+label = "recchop c -Os"
+counter = "code_bytes"
+to = 169  # base 158; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 158->169, clocks 11594->10466
+
+[[row]]
+label = "recchop c -Os"
+counter = "memory_operands"
+to = 952  # base 889; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 158->169, clocks 11594->10466
+
+[[row]]
+label = "recfloat c -Os"
+counter = "code_bytes"
+to = 91  # base 87; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 87->91, clocks 47103->50104
+
+[[row]]
+label = "rectwo c -Os"
+counter = "memory_operands"
+to = 145857  # base 97238; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 80->80, clocks 3889567->2382380
+
+[[row]]
+label = "ring bas -Os"
+counter = "code_bytes"
+to = 201  # base 192; LSR/unroll (pin-faithful), w3; code_bytes 192->201, clocks 74990->76021
+
+[[row]]
+label = "ring bas -Os"
+counter = "instructions"
+to = 43434  # base 42407; LSR/unroll (pin-faithful), w3; code_bytes 192->201, clocks 74990->76021
+
+[[row]]
+label = "ring bas -Os"
+counter = "memory_operands"
+to = 11187  # base 11184; LSR/unroll (pin-faithful), w3; code_bytes 192->201, clocks 74990->76021
+
+[[row]]
+label = "ring bq16 -Os"
+counter = "code_bytes"
+to = 207  # base 203; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 203->207, clocks 85602->86502
+
+[[row]]
+label = "ring bq16 -Os"
+counter = "memory_operands"
+to = 11201  # base 9188; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 203->207, clocks 85602->86502
+
+[[row]]
+label = "ring c -Os"
+counter = "code_bytes"
+to = 75  # base 72; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 72->75, clocks 68220->80220
+
+[[row]]
+label = "ring c -Os"
+counter = "instructions"
+to = 46107  # base 40107; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 72->75, clocks 68220->80220
+
+[[row]]
+label = "scroll bas -Os"
+counter = "code_bytes"
+to = 227  # base 222; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 222->227, clocks 1837271->687176
+
+[[row]]
+label = "scroll bq16 -Os"
+counter = "code_bytes"
+to = 234  # base 227; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 227->234, clocks 1837271->687176
+
+[[row]]
+label = "scroll c -Os"
+counter = "code_bytes"
+to = 153  # base 141; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 141->153, clocks 668279->687174
+
+[[row]]
+label = "scroll c -Os"
+counter = "instructions"
+to = 179059  # base 170762; front-end baseline gap, llrm-cc vs llrm-c (7c99dd9f82); owner w2, DEBT lru-os-m16-bytes; code_bytes 141->153, clocks 668279->687174
+
+[[row]]
+label = "scroll nib -Os"
+counter = "code_bytes"
+to = 156  # base 151; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 151->156, clocks 1837261->687166
+
+[[row]]
+label = "textfill bas -Os"
+counter = "instructions"
+to = 34045  # base 30045; DAG isel/regalloc, w12; code_bytes 232->231, clocks 58189->64169
+
+[[row]]
+label = "textfill bas -Os"
+counter = "memory_operands"
+to = 12010  # base 8013; DAG isel/regalloc, w12; code_bytes 232->231, clocks 58189->64169
+
+[[row]]
+label = "textfill bq16 -Os"
+counter = "code_bytes"
+to = 238  # base 237; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 237->238, clocks 58207->64176
+
+[[row]]
+label = "textfill bq16 -Os"
+counter = "instructions"
+to = 34063  # base 30073; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 237->238, clocks 58207->64176
+
+[[row]]
+label = "textfill bq16 -Os"
+counter = "memory_operands"
+to = 12010  # base 8013; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 237->238, clocks 58207->64176
+
+[[row]]
+label = "textfill c -Os"
+counter = "instructions"
+to = 32008  # base 30009; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 75->68, clocks 58025->60021
+
+[[row]]
+label = "textfill nib -Os"
+counter = "instructions"
+to = 32011  # base 30024; LSR masked IV (pin-faithful), w6; code_bytes 104->78, clocks 58065->60024
+
+[[row]]
+label = "tile bas -Os"
+counter = "instructions"
+to = 4209  # base 4181; LSR masked IV (pin-faithful), w6; code_bytes 167->167, clocks 10196->10201
+
+[[row]]
+label = "tile bq16 -Os"
+counter = "code_bytes"
+to = 178  # base 172; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 172->174, clocks 10196->10201
+
+[[row]]
+label = "tile bq16 -Os"
+counter = "instructions"
+to = 4209  # base 4181; UNATTRIBUTED, deadline 2026-11-05 (a main-merge blocker); code_bytes 172->174, clocks 10196->10201
+
+[[row]]
+label = "tile c -Os"
+counter = "instructions"
+to = 4208  # base 4155; front-end switch Watcom->clang (user 2026-10-26); w6; code_bytes 97->94, clocks 10169->10224
+
+[[row]]
+label = "tile nib -Os"
+counter = "instructions"
+to = 4208  # base 4180; LSR masked IV (pin-faithful), w6; code_bytes 101->101, clocks 10186->10216
+
+[[row]]
+label = "tile bas -Os"
+counter = "code_bytes"
+to = 171  # base 167; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+[[row]]
+label = "tile c -Os"
+counter = "code_bytes"
+to = 98  # base 97; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+[[row]]
+label = "tile nib -Os"
+counter = "code_bytes"
+to = 105  # base 101; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+# ===== (2) c -O2: front-end switch Watcom->clang, user 2026-10-26; owner w6 =====
+
+[[row]]
+label = "fib c -O2"
+counter = "instructions"
+to = 194440  # base 174385
+
+[[row]]
+label = "frames c -O2"
+counter = "instructions"
+to = 3217791  # base 3036703
+
+[[row]]
+label = "frames c -O2"
+counter = "memory_operands"
+to = 240050  # base 180877
+
+[[row]]
+label = "hanoi c -O2"
+counter = "instructions"
+to = 98  # base 68
+
+[[row]]
+label = "huge c -O2"
+counter = "code_bytes"
+to = 223  # base 203
+
+[[row]]
+label = "huge c -O2"
+counter = "instructions"
+to = 731818  # base 528621
+
+[[row]]
+label = "huge c -O2"
+counter = "memory_operands"
+to = 82800  # base 82005
+
+
+[[row]]
+label = "nbody_fixed c -O2"
+counter = "instructions"
+to = 1509161  # base 1450167
+
+[[row]]
+label = "nbody_fixed c -O2"
+counter = "memory_operands"
+to = 375048  # base 325049
+
+[[row]]
+label = "parity/qbsp c -O2"
+counter = "code_bytes"
+to = 365  # base 351
+
+[[row]]
+label = "particle c -O2"
+counter = "code_bytes"
+to = 175  # base 165
+
+[[row]]
+label = "queens c -O2"
+counter = "memory_operands"
+to = 33636  # base 21780
+
+[[row]]
+label = "recchop c -O2"
+counter = "code_bytes"
+to = 175  # base 159
+
+[[row]]
+label = "recchop c -O2"
+counter = "memory_operands"
+to = 952  # base 763
+
+[[row]]
+label = "recfloat c -O2"
+counter = "code_bytes"
+to = 91  # base 87
+
+[[row]]
+label = "recfloat c -O2"
+counter = "instructions"
+to = 9020  # base 6022
+
+[[row]]
+label = "recgcd c -O2"
+counter = "instructions"
+to = 20721  # base 20426
+
+[[row]]
+label = "rectwo c -O2"
+counter = "instructions"
+to = 1166875  # base 938297
+
+[[row]]
+label = "ring c -O2"
+counter = "code_bytes"
+to = 75  # base 72
+
+[[row]]
+label = "ring c -O2"
+counter = "instructions"
+to = 46107  # base 40107
+
+[[row]]
+label = "tile c -O2"
+counter = "instructions"
+to = 4208  # base 4155
+
+# ===== (2b) lru -O2 bytes: tree-pre + complete unroll/memset, pin-faithful; owner w3 (w2's report) =====
+
+[[row]]
+label = "lru c -O2"
+counter = "code_bytes"
+to = 498  # base 378; tree-pre phis (-62 B) and complete unroll/memset expansion, pin-faithful, w3; ~25 B unsplit (w2: lru-c-o2-bytes-2026-10-29.md)
+
+[[row]]
+label = "lru bas -O2"
+counter = "code_bytes"
+to = 558  # base 493; tree-pre phis (-62 B) and complete unroll/memset expansion, pin-faithful, w3; ~25 B unsplit (w2: lru-c-o2-bytes-2026-10-29.md)
+
+# ===== (3) UNATTRIBUTED: -O2 bas/nib/bq16/bq32 and -Os bq32; deadline 2026-11-05, before the main merge; owner w6 =====
+
+[[row]]
+label = "crc bas -O2"
+counter = "memory_operands"
+to = 75  # base 71
+
+[[row]]
+label = "crc bq32 -O2"
+counter = "code_bytes"
+to = 377  # base 243; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "fib bas -O2"
+counter = "instructions"
+to = 394037  # base 372147
+
+[[row]]
+label = "fib bq16 -O2"
+counter = "instructions"
+to = 426873  # base 404984
+
+[[row]]
+label = "fib bq32 -O2"
+counter = "instructions"
+to = 383090  # base 372144
+
+[[row]]
+label = "fib nib -O2"
+counter = "code_bytes"
+to = 63  # base 54
+
+[[row]]
+label = "frames bas -O2"
+counter = "instructions"
+to = 5353848  # base 5124953
+
+[[row]]
+label = "frames bq16 -O2"
+counter = "instructions"
+to = 5608921  # base 5380027
+
+[[row]]
+label = "frames bq32 -O2"
+counter = "code_bytes"
+to = 315  # base 302
+
+[[row]]
+label = "frames bq32 -O2"
+counter = "instructions"
+to = 5353712  # base 4674806
+
+[[row]]
+label = "frames nib -O2"
+counter = "memory_operands"
+to = 240050  # base 180050
+
+[[row]]
+label = "hanoi bas -O2"
+counter = "instructions"
+to = 401388  # base 385005
+
+[[row]]
+label = "hanoi bq16 -O2"
+counter = "code_bytes"
+to = 222  # base 221
+
+[[row]]
+label = "hanoi bq16 -O2"
+counter = "instructions"
+to = 434154  # base 401389
+
+[[row]]
+label = "hanoi bq32 -O2"
+counter = "code_bytes"
+to = 244  # base 241
+
+[[row]]
+label = "hanoi bq32 -Os"
+counter = "code_bytes"
+to = 225  # base 223
+
+[[row]]
+label = "huge bas -O2"
+counter = "memory_operands"
+to = 163712  # base 162283
+
+[[row]]
+label = "huge bq16 -O2"
+counter = "code_bytes"
+to = 361  # base 359
+
+[[row]]
+label = "huge bq32 -O2"
+counter = "code_bytes"
+to = 297  # base 256
+
+[[row]]
+label = "huge bq32 -Os"
+counter = "code_bytes"
+to = 265  # base 241
+
+[[row]]
+label = "huge nib -O2"
+counter = "code_bytes"
+to = 229  # base 223
+
+[[row]]
+label = "huge nib -O2"
+counter = "memory_operands"
+to = 82800  # base 81804
+
+
+[[row]]
+label = "lru bq16 -O2"
+counter = "code_bytes"
+to = 565  # base 498
+
+[[row]]
+label = "lru bq32 -O2"
+counter = "code_bytes"
+to = 602  # base 501
+
+[[row]]
+label = "nbody_fixed bas -O2"
+counter = "code_bytes"
+to = 592  # base 568; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "nbody_fixed bas -O2"
+counter = "instructions"
+to = 1839162  # base 1446168
+
+[[row]]
+label = "nbody_fixed bas -O2"
+counter = "memory_operands"
+to = 513048  # base 332049
+
+[[row]]
+label = "nbody_fixed bq16 -O2"
+counter = "code_bytes"
+to = 599  # base 573; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "nbody_fixed bq16 -O2"
+counter = "instructions"
+to = 1839162  # base 1446168
+
+[[row]]
+label = "nbody_fixed bq16 -O2"
+counter = "memory_operands"
+to = 513048  # base 332049
+
+[[row]]
+label = "nbody_fixed bq32 -O2"
+counter = "code_bytes"
+to = 1186  # base 536; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "nbody_fixed bq32 -O2"
+counter = "instructions"
+to = 1610109  # base 1446166
+
+[[row]]
+label = "nbody_fixed bq32 -Os"
+counter = "code_bytes"
+to = 529  # base 521
+
+[[row]]
+label = "nbody_fixed bq32 -Os"
+counter = "instructions"
+to = 1581160  # base 1494166
+
+[[row]]
+label = "parity/algebra bq32 -Os"
+counter = "code_bytes"
+to = 186  # base 184
+
+[[row]]
+label = "parity/algebra bq32 -Os"
+counter = "instructions"
+to = 52  # base 50
+
+[[row]]
+label = "parity/control bq32 -Os"
+counter = "code_bytes"
+to = 213  # base 212
+
+[[row]]
+label = "parity/memory bq32 -Os"
+counter = "code_bytes"
+to = 185  # base 183
+
+[[row]]
+label = "parity/memory bq32 -Os"
+counter = "instructions"
+to = 50  # base 48
+
+[[row]]
+label = "parity/memory nib -O2"
+counter = "data_bytes"
+to = 4  # base 2
+
+[[row]]
+label = "parity/memory nib -O2"
+counter = "memory_operands"
+to = 10  # base 6
+
+[[row]]
+label = "parity/parity bas -O2"
+counter = "code_bytes"
+to = 214  # base 211; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "parity/parity bas -O2"
+counter = "memory_operands"
+to = 131  # base 115
+
+[[row]]
+label = "parity/parity bq32 -O2"
+counter = "code_bytes"
+to = 351  # base 222; O2 loop unroll (pin-faithful), w3
+
+[[row]]
+label = "parity/parity bq32 -Os"
+counter = "code_bytes"
+to = 227  # base 219
+
+[[row]]
+label = "parity/qbsp nib -O2"
+counter = "instructions"
+to = 314  # base 301
+
+[[row]]
+label = "parity/qbsp nib -O2"
+counter = "memory_operands"
+to = 95  # base 82
+
+[[row]]
+label = "particle bas -O2"
+counter = "instructions"
+to = 147560  # base 129060
+
+[[row]]
+label = "particle bq16 -O2"
+counter = "instructions"
+to = 147660  # base 129160
+
+[[row]]
+label = "particle nib -O2"
+counter = "instructions"
+to = 147770  # base 137176
+
+[[row]]
+label = "particle nib -O2"
+counter = "memory_operands"
+to = 113421  # base 112715
+
+[[row]]
+label = "queens bq32 -Os"
+counter = "code_bytes"
+to = 469  # base 442
+
+[[row]]
+label = "queens bq32 -Os"
+counter = "instructions"
+to = 362010  # base 348697
+
+[[row]]
+label = "queens nib -O2"
+counter = "code_bytes"
+to = 231  # base 191; O2 loop unroll (pin-faithful), w3; +8 from the ss override f2ad0d72f9 (wrong-code fix)
+
+[[row]]
+label = "queens nib -O2"
+counter = "instructions"
+to = 229051  # base 167694
+
+[[row]]
+label = "queens nib -O2"
+counter = "memory_operands"
+to = 40418  # base 22849
+
+[[row]]
+label = "ring bas -O2"
+counter = "code_bytes"
+to = 203  # base 197
+
+[[row]]
+label = "ring bas -O2"
+counter = "instructions"
+to = 43432  # base 42392
+
+[[row]]
+label = "ring bas -O2"
+counter = "memory_operands"
+to = 11187  # base 11171
+
+[[row]]
+label = "ring bq16 -O2"
+counter = "code_bytes"
+to = 209  # base 208
+
+[[row]]
+label = "ring bq16 -O2"
+counter = "memory_operands"
+to = 11201  # base 9175
+
+[[row]]
+label = "ring bq32 -O2"
+counter = "code_bytes"
+to = 254  # base 213
+
+[[row]]
+label = "ring bq32 -Os"
+counter = "code_bytes"
+to = 219  # base 210
+
+[[row]]
+label = "textfill bas -O2"
+counter = "memory_operands"
+to = 12010  # base 8013
+
+[[row]]
+label = "textfill bq16 -O2"
+counter = "memory_operands"
+to = 12010  # base 8013
+
+[[row]]
+label = "textfill bq32 -O2"
+counter = "code_bytes"
+to = 232  # base 209
+
+[[row]]
+label = "textfill bq32 -Os"
+counter = "code_bytes"
+to = 205  # base 204
+
+[[row]]
+label = "tile bas -O2"
+counter = "instructions"
+to = 4209  # base 4181
+
+[[row]]
+label = "tile bq16 -O2"
+counter = "code_bytes"
+to = 178  # base 172
+
+[[row]]
+label = "tile bq16 -O2"
+counter = "instructions"
+to = 4209  # base 4181
+
+[[row]]
+label = "tile bq32 -O2"
+counter = "code_bytes"
+to = 229  # base 187
+
+[[row]]
+label = "tile bq32 -O2"
+counter = "instructions"
+to = 4577  # base 4186
+
+[[row]]
+label = "tile bq32 -Os"
+counter = "instructions"
+to = 4214  # base 4186
+
+[[row]]
+label = "tile nib -O2"
+counter = "instructions"
+to = 4208  # base 4180
+
+[[row]]
+label = "tile bas -O2"
+counter = "code_bytes"
+to = 171  # base 167; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+[[row]]
+label = "tile c -O2"
+counter = "code_bytes"
+to = 98  # base 97; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+[[row]]
+label = "tile nib -O2"
+counter = "code_bytes"
+to = 105  # base 101; tile without LU6 (post-main tuning item perf/lsr-odd-width-iv-limits)
+
+[[row]]
+label = "shellsort bq16 -O2"
+counter = "memory_operands"
+to = 4056  # base 1925; coordinator-accepted trade: clocks 16894 vs 20044 and instructions 9439 vs 11549 beat main; outer i/ptr spill around the inner loop at 6 regs; owner w15, TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort nib -O2"
+counter = "memory_operands"
+to = 87224  # base 48774; pending: 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2, drop when w2's fix lands; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort bq16 -O2"
+counter = "memory_operands"
+to = 144859  # base 120768; pending: 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2, drop when w2's fix lands; TEMPORARY: fix after the main merge
+
+# Causes with an owner, TEMPORARY: fix after the main merge (coordinator 2026-10-29): -O2 rows and m32 rows only; -Os m16 growth stays unwaived.
+
+[[row]]
+label = "fpbench bas -O2"
+counter = "code_bytes"
+to = 755  # base 705; BASIC SINGLE rounding at excess standard, then spills; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bas -O2"
+counter = "instructions"
+to = 22635  # base 21873; BASIC SINGLE rounding at excess standard, then spills; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bas -O2"
+counter = "memory_operands"
+to = 5437  # base 4850; BASIC SINGLE rounding at excess standard, then spills; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bq16 -O2"
+counter = "code_bytes"
+to = 758  # base 711; BASIC SINGLE rounding at excess standard, then spills; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bq16 -O2"
+counter = "instructions"
+to = 23079  # base 22818; BASIC SINGLE rounding at excess standard, then spills; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bq16 -O2"
+counter = "memory_operands"
+to = 5493  # base 4991; BASIC SINGLE rounding at excess standard, then spills; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bq32 -O2"
+counter = "code_bytes"
+to = 1451  # base 797; BASIC SINGLE rounding at excess standard, then spills; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bq32 -Os"
+counter = "code_bytes"
+to = 823  # base 778; BASIC SINGLE rounding at excess standard, then spills; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench nib -O2"
+counter = "instructions"
+to = 20809  # base 19878; BASIC SINGLE rounding at excess standard, then spills; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench nib -O2"
+counter = "memory_operands"
+to = 3951  # base 3003; BASIC SINGLE rounding at excess standard, then spills; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "grep bq16 -O2"
+counter = "code_bytes"
+to = 1029  # base 977; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "grep bq32 -O2"
+counter = "code_bytes"
+to = 1505  # base 1438; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "grep bq32 -O2"
+counter = "instructions"
+to = 632330701  # base 623855935; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "grep bq32 -Os"
+counter = "code_bytes"
+to = 1454  # base 1279; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "grep bq32 -Os"
+counter = "instructions"
+to = 673289284  # base 623886032; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "histo bq32 -O2"
+counter = "code_bytes"
+to = 262  # base 250; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; LSR IVs, owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "histo bq32 -Os"
+counter = "instructions"
+to = 71324  # base 71229; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; LSR IVs, owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "histo nib -O2"
+counter = "code_bytes"
+to = 131  # base 128; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; LSR IVs, owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "lru nib -O2"
+counter = "memory_operands"
+to = 145  # base 107; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bas -O2"
+counter = "code_bytes"
+to = 333  # base 329; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bas -O2"
+counter = "memory_operands"
+to = 21658  # base 20126; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bq16 -O2"
+counter = "code_bytes"
+to = 340  # base 334; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bq16 -O2"
+counter = "memory_operands"
+to = 21658  # base 20126; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bq32 -O2"
+counter = "code_bytes"
+to = 318  # base 283; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bq32 -Os"
+counter = "code_bytes"
+to = 276  # base 259; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bq32 -Os"
+counter = "instructions"
+to = 309309  # base 305952; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel nib -O2"
+counter = "code_bytes"
+to = 212  # base 181; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel nib -O2"
+counter = "instructions"
+to = 178038  # base 162687; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel nib -O2"
+counter = "memory_operands"
+to = 21658  # base 20125; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul bas -O2"
+counter = "code_bytes"
+to = 547  # base 473; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul bas -O2"
+counter = "memory_operands"
+to = 3009  # base 2289; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul bq16 -O2"
+counter = "code_bytes"
+to = 551  # base 480; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul bq16 -O2"
+counter = "memory_operands"
+to = 3066  # base 2210; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul bq32 -O2"
+counter = "code_bytes"
+to = 1915  # base 584; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul bq32 -Os"
+counter = "code_bytes"
+to = 566  # base 547; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul nib -O2"
+counter = "code_bytes"
+to = 407  # base 374; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul nib -O2"
+counter = "instructions"
+to = 6887  # base 6335; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul nib -O2"
+counter = "memory_operands"
+to = 2027  # base 1698; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody bas -O2"
+counter = "instructions"
+to = 64383  # base 56396; BASIC SINGLE rounding at excess standard; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody bas -O2"
+counter = "memory_operands"
+to = 32010  # base 27822; BASIC SINGLE rounding at excess standard; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody bq16 -O2"
+counter = "instructions"
+to = 64831  # base 57380; BASIC SINGLE rounding at excess standard; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody bq16 -O2"
+counter = "memory_operands"
+to = 32062  # base 27961; BASIC SINGLE rounding at excess standard; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody bq32 -O2"
+counter = "code_bytes"
+to = 827  # base 823; BASIC SINGLE rounding at excess standard; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody bq32 -O2"
+counter = "instructions"
+to = 57621  # base 48537; BASIC SINGLE rounding at excess standard; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody nib -O2"
+counter = "instructions"
+to = 51057  # base 46466; BASIC SINGLE rounding at excess standard; owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single bas -O2"
+counter = "code_bytes"
+to = 415  # base 388; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single bas -O2"
+counter = "memory_operands"
+to = 192105  # base 144105; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single bq16 -O2"
+counter = "code_bytes"
+to = 422  # base 393; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single bq16 -O2"
+counter = "memory_operands"
+to = 192105  # base 144105; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single bq32 -O2"
+counter = "code_bytes"
+to = 1681  # base 464; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single bq32 -Os"
+counter = "code_bytes"
+to = 457  # base 451; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/scalar bas -O2"
+counter = "code_bytes"
+to = 164  # base 160; LU2 and the DAG default, and the cint(val) data cell (scalar-unroll.toml); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/scalar bas -O2"
+counter = "data_bytes"
+to = 23  # base 21; LU2 and the DAG default, and the cint(val) data cell (scalar-unroll.toml); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/scalar bq32 -O2"
+counter = "data_bytes"
+to = 33  # base 31; LU2 and the DAG default, and the cint(val) data cell (scalar-unroll.toml); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/scalar bq32 -Os"
+counter = "code_bytes"
+to = 162  # base 159; LU2 and the DAG default, and the cint(val) data cell (scalar-unroll.toml); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/scalar bq32 -Os"
+counter = "data_bytes"
+to = 33  # base 31; LU2 and the DAG default, and the cint(val) data cell (scalar-unroll.toml); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort bas -O2"
+counter = "instructions"
+to = 248476  # base 232332; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort bas -O2"
+counter = "memory_operands"
+to = 144845  # base 121740; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort bq16 -O2"
+counter = "instructions"
+to = 251640  # base 240311; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort nib -O2"
+counter = "instructions"
+to = 203188  # base 164290; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort bas -O2"
+counter = "code_bytes"
+to = 368  # base 335; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort bas -O2"
+counter = "memory_operands"
+to = 4042  # base 2001; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort bq16 -O2"
+counter = "code_bytes"
+to = 374  # base 347; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort bq32 -O2"
+counter = "code_bytes"
+to = 397  # base 340; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort bq32 -O2"
+counter = "instructions"
+to = 11067  # base 10351; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort bq32 -Os"
+counter = "code_bytes"
+to = 328  # base 318; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort nib -O2"
+counter = "code_bytes"
+to = 194  # base 192; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort nib -O2"
+counter = "memory_operands"
+to = 2945  # base 1661; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bas -O2"
+counter = "code_bytes"
+to = 313  # base 289; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bas -O2"
+counter = "instructions"
+to = 20428  # base 17646; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bas -O2"
+counter = "memory_operands"
+to = 8779  # base 7059; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bq16 -O2"
+counter = "code_bytes"
+to = 319  # base 298; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bq16 -O2"
+counter = "memory_operands"
+to = 8793  # base 6087; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bq32 -O2"
+counter = "code_bytes"
+to = 333  # base 307; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bq32 -Os"
+counter = "code_bytes"
+to = 299  # base 282; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "stft_fixed bq32 -O2"
+counter = "code_bytes"
+to = 1827  # base 1694; fixed-point divide; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "stft_single bq16 -O2"
+counter = "code_bytes"
+to = 1311  # base 1219; integer movs (+15 on the pin's own IR at m32); owner w13; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "stft_single bq32 -O2"
+counter = "code_bytes"
+to = 1612  # base 1383; integer movs (+15 on the pin's own IR at m32); owner w13; TEMPORARY: fix after the main merge
+
+# Causes with an owner, TEMPORARY: fix after the main merge (coordinator 2026-10-29): -O2 rows and m32 rows only; -Os m16 growth stays unwaived.
+
+[[row]]
+label = "parity/loop bq32 -Os"
+counter = "code_bytes"
+to = 226  # base 220; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bas -O2"
+counter = "code_bytes"
+to = 270  # base 252; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bas -O2"
+counter = "instructions"
+to = 82  # base 68; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bas -O2"
+counter = "memory_operands"
+to = 48  # base 30; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bq16 -O2"
+counter = "code_bytes"
+to = 267  # base 249; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bq16 -O2"
+counter = "instructions"
+to = 84  # base 70; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bq16 -O2"
+counter = "memory_operands"
+to = 48  # base 30; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three nib -O2"
+counter = "instructions"
+to = 75  # base 72; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three nib -O2"
+counter = "memory_operands"
+to = 39  # base 29; inline of a public callee, the out-of-line body kept; the pin inlines the same (w10 checked textfill, loop, hanoi); owner w10; TEMPORARY: fix after the main merge
+
+# Causes with an owner, TEMPORARY: fix after the main merge (coordinator 2026-10-29): -O2 rows and m32 rows only; -Os m16 growth stays unwaived.
+
+[[row]]
+label = "parity/branch bq32 -Os"
+counter = "code_bytes"
+to = 176  # base 168; 2-6 IR insns differ from the pin in BENCH/main, so not pin-equal; owner w10, fix after the merge; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/branch bq32 -Os"
+counter = "instructions"
+to = 31  # base 26; 2-6 IR insns differ from the pin in BENCH/main, so not pin-equal; owner w10, fix after the merge; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/parity bas -O2"
+counter = "instructions"
+to = 384  # base 377; 2-6 IR insns differ from the pin in BENCH/main, so not pin-equal; owner w10, fix after the merge; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "bintree bq32 -O2"
+counter = "code_bytes"
+to = 639  # base 635; noise-level, +4 B; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "bintree nib -O2"
+counter = "memory_operands"
+to = 18833  # base 12727; inlined like the pin; the extra memory traffic is RA; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "floats bq32 -O2"
+counter = "instructions"
+to = 5046  # base 5043; noise-level, +3 insns; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_fixed bas -O2"
+counter = "data_bytes"
+to = 29203  # base 29147; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_fixed bq16 -O2"
+counter = "data_bytes"
+to = 29203  # base 29147; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_fixed bq32 -O2"
+counter = "code_bytes"
+to = 8661  # base 6445; -O2 inline and unroll, pin-faithful (the pin's IR is larger); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_fixed bq32 -O2"
+counter = "data_bytes"
+to = 29321  # base 29209; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_fixed nib -O2"
+counter = "data_bytes"
+to = 17214  # base 17158; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_single bas -O2"
+counter = "data_bytes"
+to = 29691  # base 29635; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_single bq16 -O2"
+counter = "data_bytes"
+to = 29691  # base 29635; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_single bq32 -O2"
+counter = "code_bytes"
+to = 8341  # base 6210; -O2 inline and unroll, pin-faithful (the pin's IR is larger); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_single bq32 -O2"
+counter = "data_bytes"
+to = 29809  # base 29697; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_single nib -O2"
+counter = "data_bytes"
+to = 17254  # base 17198; 28-entry jump table for a switch, the pin makes it too (w10 checked m32 llc); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bas -Os"
+counter = "instructions"
+to = 21954  # base 21944; BASIC SINGLE rounding at excess standard, then spills; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bas -Os"
+counter = "memory_operands"
+to = 5491  # base 4904; BASIC SINGLE rounding at excess standard, then spills; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bas -Os"
+counter = "code_bytes"
+to = 737  # base 699; BASIC SINGLE rounding at excess standard, then spills; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bq16 -Os"
+counter = "memory_operands"
+to = 5547  # base 5045; BASIC SINGLE rounding at excess standard, then spills; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench bq16 -Os"
+counter = "code_bytes"
+to = 740  # base 705; BASIC SINGLE rounding at excess standard, then spills; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench c -O2"
+counter = "instructions"
+to = 20802  # base 19766; BASIC SINGLE rounding at excess standard, then spills; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench c -O2"
+counter = "memory_operands"
+to = 3957  # base 3003; BASIC SINGLE rounding at excess standard, then spills; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench c -O2"
+counter = "code_bytes"
+to = 350  # base 333; BASIC SINGLE rounding at excess standard, then spills; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench c -Os"
+counter = "instructions"
+to = 20054  # base 19288; BASIC SINGLE rounding at excess standard, then spills; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "fpbench nib -Os"
+counter = "instructions"
+to = 20082  # base 19413; BASIC SINGLE rounding at excess standard, then spills; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "grep bas -Os"
+counter = "code_bytes"
+to = 958  # base 948; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "grep bq16 -Os"
+counter = "code_bytes"
+to = 980  # base 929; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "grep c -O2"
+counter = "code_bytes"
+to = 543  # base 535; LSR IVs; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "grep c -Os"
+counter = "code_bytes"
+to = 524  # base 516; LSR IVs; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "histo c -Os"
+counter = "instructions"
+to = 71952  # base 71696; LSR IVs; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "histo c -Os"
+counter = "code_bytes"
+to = 123  # base 119; LSR IVs; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "histo nib -Os"
+counter = "instructions"
+to = 71956  # base 71697; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "histo nib -Os"
+counter = "code_bytes"
+to = 129  # base 122; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_fixed bq32 -Os"
+counter = "code_bytes"
+to = 6364  # base 6014; unclassified, to be triaged; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_fixed c -O2"
+counter = "data_bytes"
+to = 531  # base 474; unclassified, to be triaged; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_fixed c -Os"
+counter = "data_bytes"
+to = 475  # base 474; unclassified, to be triaged; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_single bq32 -Os"
+counter = "code_bytes"
+to = 6207  # base 5817; unclassified, to be triaged; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_single c -O2"
+counter = "data_bytes"
+to = 693  # base 634; unclassified, to be triaged; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "jpeg_single c -Os"
+counter = "data_bytes"
+to = 637  # base 634; unclassified, to be triaged; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bas -Os"
+counter = "instructions"
+to = 310072  # base 305948; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bas -Os"
+counter = "memory_operands"
+to = 21658  # base 20126; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bq16 -Os"
+counter = "instructions"
+to = 310072  # base 305948; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bq16 -Os"
+counter = "memory_operands"
+to = 21658  # base 20126; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel bq16 -Os"
+counter = "code_bytes"
+to = 312  # base 310; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel c -O2"
+counter = "memory_operands"
+to = 21658  # base 20125; LSR IVs; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel c -O2"
+counter = "code_bytes"
+to = 205  # base 187; LSR IVs; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel c -Os"
+counter = "memory_operands"
+to = 21658  # base 20125; LSR IVs; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel c -Os"
+counter = "code_bytes"
+to = 178  # base 168; LSR IVs; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel nib -Os"
+counter = "instructions"
+to = 177029  # base 172712; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel nib -Os"
+counter = "memory_operands"
+to = 21658  # base 20125; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "mandel nib -Os"
+counter = "code_bytes"
+to = 186  # base 170; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul bas -Os"
+counter = "memory_operands"
+to = 3009  # base 2338; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul bas -Os"
+counter = "code_bytes"
+to = 521  # base 453; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul bq16 -Os"
+counter = "memory_operands"
+to = 3066  # base 2259; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul bq16 -Os"
+counter = "code_bytes"
+to = 525  # base 460; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul c -O2"
+counter = "instructions"
+to = 6684  # base 5925; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul c -O2"
+counter = "memory_operands"
+to = 2114  # base 1554; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul c -O2"
+counter = "code_bytes"
+to = 306  # base 241; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul c -Os"
+counter = "instructions"
+to = 6572  # base 5918; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul c -Os"
+counter = "memory_operands"
+to = 2203  # base 1554; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul c -Os"
+counter = "code_bytes"
+to = 302  # base 234; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul nib -Os"
+counter = "instructions"
+to = 6865  # base 6715; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul nib -Os"
+counter = "memory_operands"
+to = 2364  # base 2082; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "matmul nib -Os"
+counter = "code_bytes"
+to = 370  # base 342; RA: frame temporaries and address registers; matmul c is worse than main on bytes and instructions; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody bas -Os"
+counter = "instructions"
+to = 63644  # base 58458; BASIC SINGLE rounding at excess standard; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody bas -Os"
+counter = "memory_operands"
+to = 32064  # base 28069; BASIC SINGLE rounding at excess standard; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody bq16 -Os"
+counter = "instructions"
+to = 64094  # base 59440; BASIC SINGLE rounding at excess standard; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody bq16 -Os"
+counter = "memory_operands"
+to = 32116  # base 28208; BASIC SINGLE rounding at excess standard; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody c -O2"
+counter = "instructions"
+to = 51062  # base 46457; BASIC SINGLE rounding at excess standard; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody c -Os"
+counter = "instructions"
+to = 50265  # base 44861; BASIC SINGLE rounding at excess standard; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody c -Os"
+counter = "code_bytes"
+to = 344  # base 341; BASIC SINGLE rounding at excess standard; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody nib -Os"
+counter = "instructions"
+to = 50260  # base 44268; BASIC SINGLE rounding at excess standard; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single bas -Os"
+counter = "code_bytes"
+to = 392  # base 375; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single bq16 -Os"
+counter = "code_bytes"
+to = 399  # base 380; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single bq32 -O2"
+counter = "data_bytes"
+to = 191  # base 151; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single c -O2"
+counter = "instructions"
+to = 1057206  # base 1037186; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single c -O2"
+counter = "memory_operands"
+to = 192111  # base 144111; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single c -O2"
+counter = "code_bytes"
+to = 357  # base 335; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single c -Os"
+counter = "instructions"
+to = 1020198  # base 1013186; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "nbody_single c -Os"
+counter = "code_bytes"
+to = 336  # base 327; same pre-ISel IR, asm grows: spills and a larger frame (RA); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/branch bas -Os"
+counter = "code_bytes"
+to = 216  # base 214; unclassified, to be triaged; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/branch bq16 -Os"
+counter = "code_bytes"
+to = 227  # base 224; unclassified, to be triaged; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/branch c -O2"
+counter = "code_bytes"
+to = 145  # base 117; unclassified, to be triaged; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/branch c -Os"
+counter = "code_bytes"
+to = 99  # base 96; unclassified, to be triaged; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/branch nib -Os"
+counter = "code_bytes"
+to = 66  # base 65; unclassified, to be triaged; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/loop c -O2"
+counter = "code_bytes"
+to = 192  # base 152; unclassified, to be triaged; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/qmove bas -O2"
+counter = "memory_operands"
+to = 32  # base 29; unclassified, to be triaged; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/qmove bas -Os"
+counter = "memory_operands"
+to = 32  # base 29; unclassified, to be triaged; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/qmove bq16 -O2"
+counter = "memory_operands"
+to = 32  # base 29; unclassified, to be triaged; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/qmove bq16 -Os"
+counter = "memory_operands"
+to = 32  # base 29; unclassified, to be triaged; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/qmove bq32 -Os"
+counter = "code_bytes"
+to = 351  # base 350; unclassified, to be triaged; owner w10; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/scalar bas -Os"
+counter = "code_bytes"
+to = 164  # base 160; LU2 and the DAG default (+4..6 B), cint(val) data cell; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/scalar bas -Os"
+counter = "data_bytes"
+to = 23  # base 21; LU2 and the DAG default (+4..6 B), cint(val) data cell; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bas -Os"
+counter = "instructions"
+to = 82  # base 75; inline of a public callee, the out-of-line body kept; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bas -Os"
+counter = "memory_operands"
+to = 48  # base 36; inline of a public callee, the out-of-line body kept; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bas -Os"
+counter = "code_bytes"
+to = 266  # base 264; inline of a public callee, the out-of-line body kept; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bq16 -Os"
+counter = "instructions"
+to = 84  # base 77; inline of a public callee, the out-of-line body kept; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bq16 -Os"
+counter = "memory_operands"
+to = 48  # base 36; inline of a public callee, the out-of-line body kept; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three bq16 -Os"
+counter = "code_bytes"
+to = 263  # base 261; inline of a public callee, the out-of-line body kept; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three nib -Os"
+counter = "instructions"
+to = 76  # base 73; inline of a public callee, the out-of-line body kept; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "parity/sum_three nib -Os"
+counter = "memory_operands"
+to = 39  # base 30; inline of a public callee, the out-of-line body kept; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort bas -Os"
+counter = "instructions"
+to = 245882  # base 217808; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort bas -Os"
+counter = "memory_operands"
+to = 144845  # base 121753; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort bas -Os"
+counter = "code_bytes"
+to = 517  # base 511; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort bq16 -Os"
+counter = "instructions"
+to = 249047  # base 224426; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort bq16 -Os"
+counter = "memory_operands"
+to = 144859  # base 120781; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort c -O2"
+counter = "instructions"
+to = 186231  # base 165138; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort c -O2"
+counter = "memory_operands"
+to = 82977  # base 48262; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort c -Os"
+counter = "instructions"
+to = 180579  # base 173009; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort c -Os"
+counter = "memory_operands"
+to = 82977  # base 68843; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort nib -Os"
+counter = "instructions"
+to = 211900  # base 174381; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "quicksort nib -Os"
+counter = "memory_operands"
+to = 92360  # base 74300; 7ee16741c1 (LLVM LSR default) and 9f3810d984 (arg promotion); owner w2; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort bas -Os"
+counter = "memory_operands"
+to = 3913  # base 2014; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort bas -Os"
+counter = "code_bytes"
+to = 352  # base 320; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort bq16 -Os"
+counter = "memory_operands"
+to = 3927  # base 1938; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort bq16 -Os"
+counter = "code_bytes"
+to = 358  # base 332; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort c -O2"
+counter = "instructions"
+to = 10150  # base 9355; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort c -O2"
+counter = "memory_operands"
+to = 4365  # base 1629; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort c -O2"
+counter = "code_bytes"
+to = 198  # base 161; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort c -Os"
+counter = "instructions"
+to = 10143  # base 9364; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort c -Os"
+counter = "memory_operands"
+to = 4365  # base 1629; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort c -Os"
+counter = "code_bytes"
+to = 194  # base 152; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort nib -Os"
+counter = "memory_operands"
+to = 3041  # base 1757; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "shellsort nib -Os"
+counter = "code_bytes"
+to = 186  # base 179; outer i/ptr spill around the inner loop at 6 regs, CGP address sinking; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bas -Os"
+counter = "instructions"
+to = 19775  # base 17661; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bas -Os"
+counter = "memory_operands"
+to = 8605  # base 7072; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bas -Os"
+counter = "code_bytes"
+to = 295  # base 273; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bq16 -Os"
+counter = "memory_operands"
+to = 8619  # base 6100; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve bq16 -Os"
+counter = "code_bytes"
+to = 301  # base 285; LSR IVs; owner w15; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve c -O2"
+counter = "instructions"
+to = 13858  # base 12152; LSR IVs; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve c -O2"
+counter = "memory_operands"
+to = 3495  # base 2901; LSR IVs; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "sieve c -Os"
+counter = "code_bytes"
+to = 116  # base 113; LSR IVs; owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "stft_single bas -Os"
+counter = "code_bytes"
+to = 1200  # base 1182; integer movs (+15 on the pin's own IR at m32); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "stft_single bq16 -Os"
+counter = "code_bytes"
+to = 1272  # base 1154; integer movs (+15 on the pin's own IR at m32); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "stft_single c -O2"
+counter = "code_bytes"
+to = 920  # base 791; integer movs (+15 on the pin's own IR at m32); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "stft_single c -Os"
+counter = "code_bytes"
+to = 885  # base 779; integer movs (+15 on the pin's own IR at m32); owner w11; TEMPORARY: fix after the main merge
+
+[[row]]
+label = "switch c -O2"
+counter = "memory_operands"
+to = 9706  # base 5706; owner w11; idiv by a constant keeps 3 divisors in registers, so 4 spill ops per trip (instructions 118530->78530, code_bytes 385->309); fix: w12's allocator

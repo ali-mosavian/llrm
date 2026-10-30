@@ -872,7 +872,7 @@ pub fn _duplicable_return_size(
         || real[real.len() - 1].what.as_ref().is_none_or(|what| what.op != Operation::Return)
         // A sibling call names its callee by the instruction's id, which a copy
         // does not keep.
-        || real[real.len() - 1].what.as_ref().is_some_and(|what| what.name.as_deref() == Some("jmp"))
+        || real[real.len() - 1].what.as_ref().is_some_and(|what| what.is_sibling_call())
         // A return that pops 64 KB or more is several instructions
         // (`masm::moved_return`), not one `ret`.
         || real[real.len() - 1].what.as_ref().is_some_and(|what| matches!(

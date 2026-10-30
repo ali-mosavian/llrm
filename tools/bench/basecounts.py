@@ -15,9 +15,11 @@ import os
 import re
 import sys
 import json
+import shutil
 import hashlib
 import tomllib
 import subprocess
+import threading
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -28,6 +30,10 @@ OURS = ("bas", "c", "nib", "bq16", "bq32")
 COUNTERS = ("instructions", "memory_operands", "code_bytes", "data_bytes", "bss_bytes")
 # Not under bench/: every tool that lists the benchmarks took a directory there for a program (a "waivers" with no waivers.c).
 WAIVERS = "tools/bench/waivers"
+
+
+# Files in a benchmark directory no compiler reads: the output a run is checked against (`.out`, `.ci.out`, BC's `.bcout`) and a listing.
+NOT_INPUT = {".out", ".bcout", ".asm"}
 
 
 # What changes nothing a count is made of: a commit that touches only these has its parent's counts.
@@ -49,19 +55,46 @@ def record(rows: dict, cache: Path, key: str, root: Path = ROOT) -> Path:
     rows = {k: v for k, v in rows.items() if k[1] in OURS}
     cache.mkdir(parents=True, exist_ok=True)
     path = cache / f"{key}-own.json"
-    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root)}))
+    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root), "hash_version": HASH_VERSION}))
     return path
 
 
+HASH_VERSION = 2  # 1: every file of the directory but expected.toml; 2: and not NOT_INPUT
+
+
+def _is_input(name: str) -> bool:
+    return name != "expected.toml" and Path(name).suffix not in NOT_INPUT
+
+
+def _hash(files: list[tuple[str, bytes]]) -> str:
+    digest = hashlib.sha256()
+    for name, data in sorted(files):
+        digest.update(name.encode() + b"\0" + data)
+    return digest.hexdigest()[:12]
+
+
 def programs(root: Path = ROOT) -> dict[str, str]:
-    """Each benchmark's hash: its sources and settings (not its baseline or the waivers). A row of a program that differs between the base
-    and the head compares two programs, not two compilers, and is not judged."""
+    """Each benchmark's hash: its sources and settings (not its baseline, the waivers or what a run is checked against). A row of a program
+    that differs between the base and the head compares two programs, not two compilers, and is not judged."""
     out = {}
     for settings in sorted((root / "bench").glob("**/bench.toml")):
-        digest = hashlib.sha256()
-        for one in sorted(path for path in settings.parent.iterdir() if path.is_file() and path.name != "expected.toml"):
-            digest.update(one.name.encode() + b"\0" + one.read_bytes())
-        out[str(settings.parent.relative_to(root / "bench"))] = digest.hexdigest()[:12]
+        files = [(path.name, path.read_bytes()) for path in settings.parent.iterdir() if path.is_file() and _is_input(path.name)]
+        out[str(settings.parent.relative_to(root / "bench"))] = _hash(files)
+    return out
+
+
+def programs_at(sha: str, root: Path = ROOT) -> dict[str, str]:
+    """`programs()` of the tree of commit `sha`, read from git: the hash of a base that was stored under another HASH_VERSION."""
+    listing = subprocess.run(["git", "ls-tree", "-r", "--name-only", sha, "--", "bench"], cwd=root, capture_output=True, text=True, check=True).stdout.splitlines()
+    by_dir: dict[str, list[str]] = {}
+    for path in listing:
+        by_dir.setdefault(str(Path(path).parent), []).append(path)
+    out = {}
+    for directory, paths in sorted(by_dir.items()):
+        if f"{directory}/bench.toml" not in paths:
+            continue
+        files = [(Path(path).name, subprocess.run(["git", "cat-file", "blob", f"{sha}:{path}"], cwd=root, capture_output=True, check=True).stdout) for path in paths if _is_input(Path(path).name)]
+        out[str(Path(directory).relative_to("bench"))] = _hash(files)
     return out
 
 
@@ -79,7 +112,7 @@ def label(key: tuple[str, str, str]) -> str:
 
 
 def base_counts(
-    sha: str, opts: list[str], tree_of, build, measure_with, timed: bool = False, cache: Path | None = None, only: list[str] | None = None
+    sha: str, opts: list[str], tree_of, build, measure_with, timed: bool = False, cache: Path | None = None, only: list[str] | None = None, root: Path = ROOT
 ) -> tuple[dict[tuple[str, str, str], dict], dict[str, str]]:
     """(`sha`'s rows (ours only), its programs' hashes): stored by its tree, else measured with the compiler `build(sha)` names (a release
     directory) by `measure_with(directory, opts)`, which returns (bench.py's rows, programs()) of the base's own tree: its harness and its
@@ -91,6 +124,8 @@ def base_counts(
     stored = json.loads(path.read_text()) if path.is_file() else {"rows": {}, "programs": {}}
     have = rows_of(stored["rows"])
     if all(any(key[2] == opt for key in have) for opt in opts):
+        if stored.get("hash_version") != HASH_VERSION:  # counts do not depend on the hash; the programs' hashes do
+            return have, programs_at(sha, root)
         return have, stored["programs"]
     if only:
         rows, hashes = measure_with(build(sha), opts, only)
@@ -99,18 +134,19 @@ def base_counts(
     have |= {key: value for key, value in rows.items() if key[1] in OURS}
     cache.mkdir(parents=True, exist_ok=True)
     part = path.with_suffix(".part")
-    part.write_text(json.dumps({"rows": {"/".join(key): value for key, value in have.items()}, "programs": hashes}))
+    part.write_text(json.dumps({"rows": {"/".join(key): value for key, value in have.items()}, "programs": hashes, "hash_version": HASH_VERSION}))
     os.replace(part, path)
     return have, hashes
 
 
 def waivers(root: Path = ROOT) -> list[dict]:
-    """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`."""
+    """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`. `exception = true`: a temporary trade-off, named in every run, and
+    a failure once a row is no longer worse than the base."""
     out = []
     for path in sorted((root / WAIVERS).glob("*.toml")):
         data = tomllib.loads(path.read_text())
         for row in data.get("row", []):
-            out.append({**row, "reason": data.get("reason", ""), "file": path.name})
+            out.append({**row, "reason": data.get("reason", ""), "file": path.name, "exception": data.get("exception", False)})
     return out
 
 
@@ -139,20 +175,93 @@ def judge(measured: dict, base: dict, waived: list[dict], same: set[str] | None 
     return worse, better, stale
 
 
+def waived_rows(measured: dict, base: dict, waived: list[dict], same: set[str] | None = None) -> list[tuple[str, str, str, int, int]]:
+    """(file, label, counter, base's, now) of each row a waiver excused: worse than the base and exactly at the waiver's count."""
+    rows = []
+    for key, got in sorted(measured.items()):
+        was = base.get(key)
+        if key[1] not in OURS or was is None or (same is not None and key[0] not in same) or any(one in row for row in (got, was) for one in ("error", "skip", "known", "xpass")):
+            continue
+        for counter in COUNTERS:
+            if counter in got and counter in was and got[counter] > was[counter]:
+                rows += [(w["file"], label(key), counter, was[counter], got[counter]) for w in waived if w["label"] == label(key) and w["counter"] == counter and w["to"] == got[counter]]
+    return rows
+
+
+def waived_lines(rows: list[tuple], waived: list[dict], stale: list[str]) -> tuple[list[str], list[str]]:
+    """(summary lines, problems): how many rows ran under which waiver file, each at its limit. Waivers on file that excused nothing and went
+    stale nowhere mean the instrument is not reading them: a judge that printed 0 problems with every waiver unread looks the same as a clean run."""
+    per_file: dict[str, int] = {}
+    for one in rows:
+        per_file[one[0]] = per_file.get(one[0], 0) + 1
+    lines = [f"WAIVED {len(rows)} rows of {len(waived)} waivers (limit = measured): " + (", ".join(f"{f} {n}" for f, n in sorted(per_file.items())) or "none")]
+    problems = ["WAIVERS: none was applied and none is stale: the waivers are not being read"] if waived and not rows and not stale else []
+    excepted = {w["file"] for w in waived if w.get("exception")}
+    lines += [f"EXCEPTION {one[0]}: {one[1]} {one[2]} {one[3]} -> {one[4]}" for one in rows if one[0] in excepted]
+    problems += [f"EXCEPTION {one} is no longer worse than the base: delete it" for one in stale if one.split(":", 1)[0] in excepted]
+    return lines, problems
+
+
+def coverage(measured: dict, base: dict, same: set[str]) -> tuple[int, int, list[str], list[str]]:
+    """(rows judged, programs judged, programs left out as edited, problems): what `judge` looked at. A program the base and the head share
+    that yields no judged row is a problem, and so is a run that judged none: 424 measurements once passed with `same` empty, 218 waivers
+    stale and nothing compared. The left-out programs are named so that a growing list is seen."""
+    rows: dict[str, int] = {}
+    skipped: dict[str, set[str]] = {}
+    for key, got in measured.items():
+        if key[1] not in OURS:
+            continue
+        was = base.get(key)
+        why = "no base" if was is None else next((one for row in (got, was) for one in ("error", "skip", "known", "xpass") if one in row), None)
+        if key[0] in same and why is None:
+            rows[key[0]] = rows.get(key[0], 0) + 1
+        elif key[0] in same:
+            skipped.setdefault(key[0], set()).add(why)
+    programs = sorted({key[0] for key in measured if key[1] in OURS})
+    left_out = [name for name in programs if name not in same]
+    problems = [f"COVERAGE {name}: no row was judged (rows skipped: {', '.join(sorted(skipped.get(name, {'none measured'})))})" for name in programs if name in same and name not in rows]
+    if not same and programs:
+        problems = ["COVERAGE: no row was judged: no program is the same in the base and the head"]
+    return sum(rows.values()), len(rows), left_out, problems
+
+
+def coverage_lines(judged: int, programs: int, left_out: list[str]) -> list[str]:
+    return [f"JUDGED {judged} rows of {programs} programs" + (f"; left out, edited since the base: {' '.join(left_out)}" if left_out else "")]
+
+
 def stale_summary(stale: list[str]) -> list[str]:
     """The stale waivers (judge's third value) as one line naming their files: 29 rows of them buried the failures under them."""
     files = sorted({one.split(":", 1)[0] for one in stale})
     return [f"BASE-STALE {len(stale)} waivers in {len(files)} files, delete them: {' '.join(files)}"] if stale else []
 
 
-def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: bool = False, only: list[str] | None = None) -> tuple[dict, dict[str, str]]:
+def run_streaming(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """`subprocess.run(command, capture_output=True, text=True)` that passes stderr on as it is printed: the base's stage lines were captured,
+    and a 25 min leg showed the gate's watchdog nothing but `base counts`."""
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs) as proc:
+        said: list[str] = []
+
+        def pass_on() -> None:
+            for line in proc.stderr:
+                said.append(line)
+                print(line, end="", file=sys.stderr, flush=True)
+
+        reader = threading.Thread(target=pass_on, daemon=True)
+        reader.start()
+        stdout = proc.stdout.read()
+        proc.wait()
+        reader.join()
+    return subprocess.CompletedProcess(command, proc.returncode, stdout, "".join(said))
+
+
+def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: bool = False, only: list[str] | None = None, tree: Path | None = None) -> tuple[dict, dict[str, str]]:
     """(bench.py's rows, programs()) of the tree `directory` (a release directory of measure.py's build tree, `<build>/target/release`) was
     built from, by that tree's own bench.py with its compiler: the harness and the programs as the base had them (the head's harness may
     pass flags the base's compiler does not know). A subprocess: the harness binds its compiler's directory at import."""
-    tree = directory.parents[1] / "tree"
+    tree = tree or directory.parents[1] / "tree"
     out = work / "base.json"
     work.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "LLRM_BIN": str(directory)}
+    env = {**os.environ, "LLRM_BIN": str(directory), "PYTHONPATH": os.pathsep.join([str(HERE / "forkstart"), *filter(None, [os.environ.get("PYTHONPATH")])])}
     env.pop("LLRM_BENCH_BASE", None)
     command = [sys.executable, str(tree / "tools/bench/bench.py"), "--opt", *opts, "--json", str(out), "--work", str(work / "run")]
     if timed:
@@ -160,10 +269,44 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: b
     command += only or []
     if (tree / "tools/bench/bench.py").is_file() and "--no-judge" in (tree / "tools/bench/bench.py").read_text():
         command.append("--no-judge")
-    done = subprocess.run(command, cwd=tree, env=env, capture_output=True, text=True)
+    done = run_streaming(command, cwd=tree, env=env)
     if not out.is_file():
         raise SystemExit("the base did not measure: " + " | ".join(line.strip() for line in (done.stdout + done.stderr).splitlines()[-4:] if line.strip()))
     return rows_of(json.loads(out.read_text())), programs(tree)
+
+
+def measure_head_sources(directory: Path, opts: list[str], work: Path, names: list[str], head: Path = ROOT) -> dict:
+    """The base compiler's rows for `names` built from the head's sources: a copy of the base's tree whose bench/NAME directories are the
+    head's, measured by that tree's own bench.py."""
+    tree = directory.parents[1] / "tree"
+    overlay = work / "overlay"
+    shutil.rmtree(overlay, ignore_errors=True)
+    shutil.copytree(tree, overlay, symlinks=True, ignore=lambda directory, names: [n for n in names if n == ".git" or (n == "target" and Path(directory) == tree)])  # crates/target is source
+    for name in names:
+        shutil.rmtree(overlay / "bench" / name, ignore_errors=True)
+        shutil.copytree(head / "bench" / name, overlay / "bench" / name)
+    return measure_in_subprocess(directory, opts, work, False, names, overlay)[0]
+
+
+def with_edited(base: dict, was: dict[str, str], now: dict[str, str], opts: list[str], measure_with, cache: Path | None = None, tree: str = "") -> tuple[dict, set[str], list[str]]:
+    """(the base's rows with those of the programs edited since the base, the programs the base and the head have alike, the edited rows the
+    base compiler could not build): an edited program is judged too, its base being the base compiler's counts on the head's sources.
+    `measure_with(names)` returns those rows; stored by the base's tree and the edited programs' hashes, so measured once."""
+    same = {name for name in now if was.get(name) == now[name]}
+    edited = sorted(name for name in now if name in was and was[name] != now[name])
+    if not edited:
+        return base, same, []
+    cache = cache or CACHE
+    key = hashlib.sha256(json.dumps([tree, opts, [(name, now[name]) for name in edited]]).encode()).hexdigest()[:20]
+    path = cache / f"{tree}-edited-{key}.json"
+    if path.is_file():
+        rows = rows_of(json.loads(path.read_text()))
+    else:
+        rows = {k: v for k, v in measure_with(edited).items() if k[1] in OURS}
+        cache.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"/".join(k): v for k, v in rows.items()}))
+    unbuilt = sorted(label(k) for k, v in rows.items() if "error" in v or "skip" in v)
+    return base | rows, same | {name for name in edited if any(k[0] == name for k in rows)}, unbuilt
 
 
 if __name__ == "__main__":
