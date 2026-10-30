@@ -140,6 +140,7 @@ pub fn lower_call(
             base: MemBase::CallArgument(offset as i32),
             ext: None,
             space: 0,
+            ordering: None,
         };
         stores.push(dag.get_store(chain, out.value, address, info));
     }
@@ -210,6 +211,7 @@ pub fn lower_formal_arguments(
                     base: MemBase::Stack(index),
                     ext: None,
                     space: 0,
+                    ordering: None,
                 };
                 dag.get_load(arg.vt, chain, address, info)
             }
