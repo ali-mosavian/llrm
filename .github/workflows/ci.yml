@@ -310,7 +310,23 @@ jobs:
         with:
           path: ${{ runner.temp }}/bench-base
           key: ${{ steps.basecounts.outputs.base }}
+      # A slice of the base measured under the same base tree, programs, levels and tools (basecounts.slice_stamp) is not measured again; the
+      # slice's file is checked against the stamp when it is read, so a stale hit is rejected and measured.
+      - id: baseslice
+        if: startsWith(matrix.group, 'bench-base-')
+        run: echo "key=$(uv run -q --project tools python tools/bench/basecounts.py slicekey ${{ matrix.group }})" >> "$GITHUB_OUTPUT"
+      - if: startsWith(matrix.group, 'bench-base-')
+        id: baseslicecache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/bench-base
+          key: ${{ steps.baseslice.outputs.key }}
       - run: JOBS=$(nproc) python3 tools/gate/gate.py run --group ${{ matrix.group }} --base "${{ needs.plan.outputs.base }}"
+      - if: success() && startsWith(matrix.group, 'bench-base-') && steps.baseslicecache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/bench-base
+          key: ${{ steps.baseslice.outputs.key }}
       # A shard's rows, counts and names only (nothing a private tool printed): bench-merge judges what no shard can alone.
       - if: always() && startsWith(matrix.group, 'bench-')
         uses: actions/upload-artifact@v4
