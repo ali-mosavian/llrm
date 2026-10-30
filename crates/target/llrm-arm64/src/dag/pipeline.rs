@@ -410,6 +410,7 @@ pub fn select_block(
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))
+            .or_else(|| super::bitfield::select_bitfield_insert_in_zero(adapter, node))
             .or_else(|| select_zero(adapter, node))
             .unwrap_or_else(|| selector.select(adapter, &mut hooks, node))
     })?;

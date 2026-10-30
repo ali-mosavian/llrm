@@ -2,6 +2,7 @@
 //! rest of what the shared stages ask of a target.
 
 pub mod addr;
+pub mod bitfield;
 pub mod call;
 pub mod ccmp;
 pub mod combine;

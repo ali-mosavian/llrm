@@ -872,3 +872,11 @@ fn a_replaced_store_does_not_hide_the_bits_its_value_needs() {
     let ops = &selected(ir).unwrap()[0];
     assert!(!ops.contains(&"MOVi32imm"), "{ops:?}");
 }
+
+/// `(y << 4) & 112` selected `UBFMWri` (the shift) and `ANDWri`: the pin matches the pair as one
+/// `UBFIZ` (`tryBitfieldInsertInZeroOp`).
+#[test]
+fn a_shifted_and_masked_field_is_one_ubfiz() {
+    let ir = "define i32 @f(i32 %y) {\n  %s = shl i32 %y, 4\n  %t = and i32 %s, 112\n  ret i32 %t\n}";
+    assert_eq!(selected(ir).unwrap(), [["UBFMWri", "RET_ReallyLR"]]);
+}
