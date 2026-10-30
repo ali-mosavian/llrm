@@ -175,6 +175,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         // No x86 table names these, so the generated ids lack them: `ISD::NodeType`'s order after
         // `ATOMIC_SWAP` ([ISDOpcodes.h L1425](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/ISDOpcodes.h#L1425)).
         AtomicCmpSwap => pin::ATOMIC_STORE + 1,
+        AtomicCmpSwapWithSuccess => pin::ATOMIC_STORE + 2,
         AtomicLoadSub => pin::ATOMIC_LOAD_ADD + 1,
         AtomicLoadAnd => pin::ATOMIC_LOAD_ADD + 2,
         AtomicLoadClr => pin::ATOMIC_LOAD_ADD + 3,

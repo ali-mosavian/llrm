@@ -1236,7 +1236,7 @@ impl Builder<'_> {
         let (pointer, value) = match info.kind {
             AtomicKind::Load => (arguments[0], None),
             AtomicKind::Store => (arguments[1], Some(arguments[0])),
-            AtomicKind::Rmw(_) => (arguments[0], Some(arguments[1])),
+            AtomicKind::Rmw(_) | AtomicKind::CmpXchg { .. } => (arguments[0], Some(arguments[1])),
             _ => return Err(Refused("an atomic other than a load, store or read-modify-write")),
         };
         if self.operand_type(pointer)? == MVT::Far.into() {
@@ -1278,6 +1278,15 @@ impl Builder<'_> {
                 self.dag.set_root(SDValue { node: old.node, res: 1 });
                 if let Some(result) = instruction.result {
                     self.set_value(result, old);
+                }
+            }
+            (AtomicKind::CmpXchg { .. }, Some(expected)) => {
+                let expected = self.get_value(expected)?;
+                let new = self.get_value(arguments[2])?;
+                let swap = self.dag.get_atomic_cmp_swap(Some(EVT::I1), root, ptr, expected, new, mem);
+                self.dag.set_root(SDValue { node: swap.node, res: 2 });
+                if let Some(result) = instruction.result {
+                    self.set_value(result, swap);
                 }
             }
             _ => unreachable!("the kinds were matched above"),

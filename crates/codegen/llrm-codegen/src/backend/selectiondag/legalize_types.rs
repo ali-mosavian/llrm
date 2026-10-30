@@ -607,6 +607,15 @@ impl<'a> TypeLegalizer<'a> {
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: new.node, res: 1 });
                 new
             }
+            ISD::AtomicCmpSwapWithSuccess if value.res == 1 => {
+                // `PromoteIntRes_AtomicCmpSwap`: only the success flag is widened.
+                let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("an atomic has a memory operand") };
+                let ops: Vec<SDValue> = (0..4).map(|at| self.dag.operand(value, at)).collect();
+                let new = self.dag.get_atomic_cmp_swap(Some(to), ops[0], ops[1], ops[2], ops[3], info);
+                self.replace_value_with(SDValue { node: value.node, res: 0 }, SDValue { node: new.node, res: 0 });
+                self.replace_value_with(SDValue { node: value.node, res: 2 }, SDValue { node: new.node, res: 2 });
+                SDValue { node: new.node, res: 1 }
+            }
             ISD::AtomicLoad => {
                 // `PromoteIntRes_Atomic0`: a zero-extending atomic load.
                 let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("an atomic has a memory operand") };

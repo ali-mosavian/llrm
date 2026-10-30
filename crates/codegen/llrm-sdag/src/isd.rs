@@ -173,6 +173,8 @@ pub enum ISD {
     AtomicSwap,
     /// `ATOMIC_CMP_SWAP`: `(chain, ptr, expected, new)` to the old value and a chain.
     AtomicCmpSwap,
+    /// `ATOMIC_CMP_SWAP_WITH_SUCCESS`: `(chain, ptr, expected, new)` to the old value, a success flag and a chain.
+    AtomicCmpSwapWithSuccess,
     /// `ATOMIC_LOAD_ADD` and its siblings: `(chain, ptr, value)` to the old value and a chain.
     AtomicLoadAdd,
     AtomicLoadSub,
@@ -349,6 +351,7 @@ impl ISD {
             StorePre | StorePost => "store<indexed>",
             AtomicSwap => "atomic_swap",
             AtomicCmpSwap => "atomic_cmp_swap",
+            AtomicCmpSwapWithSuccess => "atomic_cmp_swap_with_success",
             AtomicLoadAdd => "atomic_load_add",
             AtomicLoadSub => "atomic_load_sub",
             AtomicLoadAnd => "atomic_load_and",
@@ -585,6 +588,7 @@ mod tests {
     fn the_atomic_nodes_are_named() {
         assert_eq!(ISD::AtomicLoadAdd.name(), "atomic_load_add");
         assert_eq!(ISD::AtomicCmpSwap.name(), "atomic_cmp_swap");
+        assert_eq!(ISD::AtomicCmpSwapWithSuccess.name(), "atomic_cmp_swap_with_success");
         assert_eq!(ISD::AtomicStore.name(), "atomic_store");
     }
 }

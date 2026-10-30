@@ -1258,6 +1258,27 @@ impl SelectionDAG {
         node
     }
 
+    /// `getAtomic` of `ATOMIC_CMP_SWAP_WITH_SUCCESS`, or of `ATOMIC_CMP_SWAP` when `flag` is none:
+    /// the old value at `ptr`, the success flag of type `flag` if asked for, and a chain.
+    pub fn get_atomic_cmp_swap(
+        &mut self,
+        flag: Option<EVT>,
+        chain: SDValue,
+        ptr: SDValue,
+        expected: SDValue,
+        new: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let vt = self.value_type(expected);
+        let (op, types) = match flag {
+            Some(flag) => (ISD::AtomicCmpSwapWithSuccess, vec![vt, flag, EVT::OTHER]),
+            None => (ISD::AtomicCmpSwap, vec![vt, EVT::OTHER]),
+        };
+        let node = self.intern(op, &types, &[chain, ptr, expected, new], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
     /// `getAtomic` of `ATOMIC_LOAD`: the value at `ptr` and a chain.
     pub fn get_atomic_load(
         &mut self,

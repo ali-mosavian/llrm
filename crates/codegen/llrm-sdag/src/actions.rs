@@ -482,6 +482,8 @@ impl TargetLowering {
 
         // Atomics.
         let narrow = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];
+        // `TargetLoweringBase`: the success flag is a compare of the old value.
+        t.set_ops(&[AtomicCmpSwapWithSuccess], &narrow, Expand);
         t.set_ops(&[AtomicCmpSwap], &[MVT::I128], Custom);
         let sub = if !features.lse && !features.outline_atomics { LibCall } else { Expand };
         t.set_ops(&[AtomicLoadSub], &words, sub);

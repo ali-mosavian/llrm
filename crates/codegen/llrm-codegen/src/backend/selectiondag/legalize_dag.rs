@@ -477,6 +477,16 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let added = self.dag.get_atomic_rmw(ISD::AtomicLoadAdd, chain, ptr, negated, info);
                 Some(vec![added, SDValue { node: added.node, res: 1 }])
             }
+            ISD::AtomicCmpSwapWithSuccess => {
+                // `ExpandNode`: the swap, and the success flag as the old value equal to the expected one.
+                let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+                let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let (expected, new) = (self.dag.operand(node, 2), self.dag.operand(node, 3));
+                let swap = self.dag.get_atomic_cmp_swap(None, chain, ptr, expected, new, info);
+                let flag_vt = self.dag.node(node).values[1];
+                let success = self.dag.get_setcc(flag_vt, swap, expected, CondCode::SetEq);
+                Some(vec![swap, success, SDValue { node: swap.node, res: 1 }])
+            }
             ISD::UDiv | ISD::SDiv => {
                 let divrem = if op == ISD::SDiv { ISD::SDivRem } else { ISD::UDivRem };
                 if !ready(self, divrem) {

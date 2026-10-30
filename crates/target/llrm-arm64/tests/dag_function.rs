@@ -805,3 +805,16 @@ fn a_narrow_atomic_access_keeps_its_memory_type() {
     let sub = ir("%a = atomicrmw sub ptr %p, i8 %v monotonic, align 1\n  ret i8 %a", "i8", ", i8 %v");
     assert_eq!(selected(&sub).unwrap(), [["SUBSWrr", "LDADDB", "RET_ReallyLR"]]);
 }
+
+/// A `cmpxchg` was refused (`an atomic other than a load, store or read-modify-write`). The pin
+/// selects one CAS of its success ordering, then `SUBSWrr` of the old and expected values and
+/// `CSINCWr` for the flag (`ExpandNode` of `ATOMIC_CMP_SWAP_WITH_SUCCESS`).
+#[test]
+fn a_cmpxchg_selects_the_cas_of_its_ordering_and_a_flag_from_the_compare() {
+    let ir = |order: &str, ty: &str| {
+        format!("define i1 @f(ptr %p, {ty} %a, {ty} %b) {{\n  %r = cmpxchg ptr %p, {ty} %a, {ty} %b {order} monotonic\n  %s = extractvalue {{ {ty}, i1 }} %r, 1\n  ret i1 %s\n}}")
+    };
+    for (order, cas) in [("monotonic", "CASW"), ("acquire", "CASAW"), ("release", "CASLW"), ("acq_rel", "CASALW"), ("seq_cst", "CASALW")] {
+        assert_eq!(selected(&ir(order, "i32")).unwrap(), [[cas, "SUBSWrr", "CSINCWr", "RET_ReallyLR"]], "{order}");
+    }
+}
