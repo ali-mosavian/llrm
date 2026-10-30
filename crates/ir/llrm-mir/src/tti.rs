@@ -497,8 +497,8 @@ pub trait Tti {
         to: Ty,
     ) -> bool;
 
-    /// `hasDivRemOp(iN, IsSigned)`: whether the target has one divide that makes the quotient and the remainder.
-    /// The base class has none.
+    /// `hasDivRemOp(iN, IsSigned)`: whether the target has one divide that
+    /// makes the quotient and the remainder. The base class has none.
     fn has_div_rem_op(
         &self,
         bits: u32,

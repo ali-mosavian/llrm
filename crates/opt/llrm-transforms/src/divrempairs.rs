@@ -7,14 +7,14 @@
 //! at d1106deb71cc. A `sdiv` or `udiv` and a `srem`, `urem` or expanded
 //! remainder `x - (x / y) * y` with the same dividend, divisor and signedness
 //! are a pair. Where the target has a divide that makes both
-//! (`TargetTransformInfo::hasDivRemOp`: x86 on every register type, or what a target's `Tti` says), the
-//! expanded remainder is first written as the real `srem`/`urem`, and the
-//! pair is put side by side so the backend finds one divide: the one in a
-//! block the other's block follows is moved after it, and a pair in two arms
-//! of one branch goes to the block before the branch when nothing before
-//! either can fail to reach it. Where the target has none, a `srem`/`urem`
-//! becomes `x - (x / y) * y` of the quotient already made, and the quotient
-//! moves up to the remainder when it stood below it.
+//! (`TargetTransformInfo::hasDivRemOp`: x86 on every register type, or what a
+//! target's `Tti` says), the expanded remainder is first written as the real
+//! `srem`/`urem`, and the pair is put side by side so the backend finds one
+//! divide: the one in a block the other's block follows is moved after it, and
+//! a pair in two arms of one branch goes to the block before the branch when
+//! nothing before either can fail to reach it. Where the target has none, a
+//! `srem`/`urem` becomes `x - (x / y) * y` of the quotient already made, and
+//! the quotient moves up to the remainder when it stood below it.
 //!
 //! # Example
 //! ```text
@@ -185,8 +185,9 @@ struct DivRem<'a> {
 impl DivRem<'_> {
     /// `TTI.hasDivRemOp(Type, IsSigned)`.
     ///
-    /// DEVIATE: asks the target's `Tti` and its `Lowering`. Reason: x86 states the answer on its lowering
-    /// (`isOperationLegal(SDIVREM)`), the pin's `TTI` asks that. Exit: x86 answers on its `Tti`.
+    /// DEVIATE: asks the target's `Tti` and its `Lowering`. Reason: x86 states
+    /// the answer on its lowering (`isOperationLegal(SDIVREM)`), the pin's
+    /// `TTI` asks that. Exit: x86 answers on its `Tti`.
     fn has_div_rem_op(
         &self,
         bits: u32,

@@ -181,9 +181,11 @@ b0:
 }
 ";
 
-/// A target that states a divide-remainder op through its `Tti` (the 6502's runtime divide) keeps the pair: the
-/// expanded remainder becomes the real `urem`. Before the hook the pass asked only the lowering, found none and
-/// left `a - (a / b) * b`, a multiply per remainder (itoa: 581 bytes against 389).
+/// A target that states a divide-remainder op through its `Tti` (the 6502's
+/// runtime divide) keeps the pair: the expanded remainder becomes the real
+/// `urem`. Before the hook the pass asked only the lowering, found none and
+/// left `a - (a / b) * b`, a multiply per remainder (itoa: 581 bytes against
+/// 389).
 #[test]
 fn test_a_tti_with_a_divrem_op_keeps_the_pair() {
     let after = run_with_tti(EXPANDED, true);
@@ -191,7 +193,8 @@ fn test_a_tti_with_a_divrem_op_keeps_the_pair() {
     assert!(!after.contains("sub i32 %a"), "the expanded remainder is gone: {after}");
 }
 
-/// Sibling: a `Tti` that says nothing (the base class) leaves the expanded form as it was.
+/// Sibling: a `Tti` that says nothing (the base class) leaves the expanded form
+/// as it was.
 #[test]
 fn test_a_tti_without_a_divrem_op_leaves_the_expanded_remainder() {
     assert_eq!(run_with_tti(EXPANDED, false), printed(&parsed(&format!("{HEAD}{EXPANDED}"))));
