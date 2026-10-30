@@ -4096,3 +4096,46 @@ fn test_noalias_is_stated_only_for_distinct_locals() {
     assert_eq!(count("Add p, g", true), 1, "only the local; the SHARED one is also the callee's name for it");
     assert_eq!(count("Add p, q", false), 0, "an exported callee has callers this module does not see");
 }
+
+/// The `!invariant.load` marks in `WORK` of `body`, a procedure of a program
+/// that is all here, on the llrm runtime.
+fn invariant_marks(
+    main: &str,
+    body: &str,
+) -> usize {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let frontend = qb_driver::Frontend { whole_program: true, ..qb_driver::Frontend::new("qb45", "llrm") };
+    let text = format!(
+        "DEFINT A-Z\r\nDECLARE SUB work ()\r\nDECLARE SUB take (a() AS INTEGER)\r\nREM $DYNAMIC\r\n{main}\r\n\
+SUB work\r\n{body}\r\nEND SUB\r\nSUB take (a() AS INTEGER)\r\na(0) = 1\r\nEND SUB\r\n"
+    );
+    let source = qb_driver::parsed(&written(&directory, "T.BAS", text.as_bytes()), &frontend, None).expect("parses");
+    let emitted = llrm_codegen::hir::mir::emit(&source, &llrm_x86_m16::layout()).swap_remove(0);
+    function_text(&llrm_mir::print::module(&emitted.module), "WORK").matches("invariant").count()
+}
+
+const FILLED: &str =
+    "n = VAL(COMMAND$)\r\nDIM a(0 TO n) AS INTEGER\r\nFOR i = 0 TO n\r\na(i) = i\r\nNEXT\r\nPRINT a(n)";
+
+/// A local array DIM'd in a procedure called once at the start of the program
+/// keeps its shape words until it is gone, but they were reloaded around every
+/// store the loop made: the array's counts and bounds cost memory operands per
+/// element.
+#[test]
+fn test_the_shape_words_of_a_local_array_in_a_once_called_procedure_are_invariant() {
+    assert!(invariant_marks("work", FILLED) > 0);
+}
+
+/// None of these may be marked: a callee may REDIM or move what it is handed,
+/// a REDIM rewrites the words, a DIM that does not precede a load leaves it
+/// reading an undefined descriptor, and a procedure called again re-DIMs.
+#[test]
+fn test_the_shape_words_are_not_invariant_when_the_array_can_change() {
+    let escaping = "n = VAL(COMMAND$)\r\nDIM a(0 TO n) AS INTEGER\r\ntake a()\r\nFOR i = 0 TO n\r\nPRINT a(i)\r\nNEXT";
+    let redimmed = "n = VAL(COMMAND$)\r\nDIM a(0 TO n) AS INTEGER\r\nREDIM a(0 TO n + 1) AS INTEGER\r\nFOR i = 0 TO n\r\na(i) = i\r\nNEXT";
+    let conditional = "n = VAL(COMMAND$)\r\nIF n > 3 THEN\r\nDIM a(0 TO n) AS INTEGER\r\nEND IF\r\nFOR i = 0 TO n\r\na(i) = i\r\nNEXT";
+    assert_eq!(invariant_marks("work", escaping), 0);
+    assert_eq!(invariant_marks("work", redimmed), 0);
+    assert_eq!(invariant_marks("work", conditional), 0);
+    assert_eq!(invariant_marks("FOR k = 1 TO 3\r\nwork\r\nNEXT", FILLED), 0);
+}

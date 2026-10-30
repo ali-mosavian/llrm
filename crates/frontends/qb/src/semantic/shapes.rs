@@ -93,6 +93,15 @@ impl Known {
 ///
 /// The runtime runs the records in order, `adjustment * count - lower`, then
 /// scales by the element size and keeps the low word.
+/// Whether a DIM or REDIM call's `flags` argument asks for far memory.
+pub(super) fn far(operands: &[Operand]) -> bool {
+    const FAR: i64 = 1;
+    let [.., _size, Operand::Constant(_, Number::Integer(flags)), _descriptor] = operands else {
+        return false;
+    };
+    (flags >> 8) & 3 == FAR
+}
+
 fn far_origin(
     operands: &[Operand],
     records: &[(Operand, Operand)],
