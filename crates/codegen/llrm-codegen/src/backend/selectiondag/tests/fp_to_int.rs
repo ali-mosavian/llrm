@@ -11,7 +11,13 @@ fn converted(
     let x = dag.get_register(EVT::Simple(MVT::F64), 5);
     let converted = dag.get_node(op, to, &[x]);
     dag.set_root(converted);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     (dag, root)
 }

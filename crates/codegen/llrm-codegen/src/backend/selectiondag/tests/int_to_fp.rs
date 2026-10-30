@@ -20,7 +20,13 @@ fn legalized(
     let x = value(&mut dag);
     let converted = dag.get_node(op, double(), &[x]);
     dag.set_root(converted);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     (dag, root)
 }

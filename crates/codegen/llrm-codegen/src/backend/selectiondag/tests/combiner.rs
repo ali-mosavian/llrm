@@ -39,7 +39,8 @@ fn x86(
     dag: &mut SelectionDAG,
     level: CombineLevel,
 ) {
-    DagCombiner::new(dag, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }, level).run();
+    DagCombiner::new(dag, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }, level)
+        .run();
 }
 
 /// `x * 1` is `x` and `x * 8` is `x << 3`: `getNode` keeps the multiply

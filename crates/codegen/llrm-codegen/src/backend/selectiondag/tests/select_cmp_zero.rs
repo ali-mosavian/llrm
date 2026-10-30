@@ -51,7 +51,13 @@ fn lowered(build: impl FnOnce(&mut SelectionDAG, [SDValue; 3]) -> (SDValue, SDVa
         if a & 1 == 0 { eval(&dag, then, (a, b, c)) } else { eval(&dag, other, (a, b, c)) }
     };
     let expected: Vec<u32> = SAMPLES.iter().flat_map(|&a| SAMPLES.iter().map(move |&b| (a, b, 5))).map(want).collect();
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     let got: Vec<u32> =
         SAMPLES.iter().flat_map(|&a| SAMPLES.iter().map(move |&b| (a, b, 5))).map(|p| eval(&dag, root, p)).collect();
@@ -86,7 +92,13 @@ fn a_select_on_a_raw_low_bit_is_arithmetic_too() {
     let root = dag.get_select(EVT::I32, bit, flipped, y);
     dag.set_root(root);
     let want = |(a, b, c): (u32, u32, u32)| if a & 1 != 0 { b ^ c } else { b };
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     assert!(!has(&dag, root, x86isd::CMOV));
     for (a, b) in SAMPLES.iter().flat_map(|&a| SAMPLES.iter().map(move |&b| (a, b))) {

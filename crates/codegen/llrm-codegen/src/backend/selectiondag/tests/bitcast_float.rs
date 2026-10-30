@@ -71,7 +71,13 @@ fn a_float_read_as_an_i32_goes_through_a_stack_slot() {
     let x = dag.get_register(F32, 5);
     let bits = dag.get_node(ISD::BitCast, EVT::I32, &[x]);
     dag.set_root(bits);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+    )
+    .run()
+    .unwrap();
     let load = dag.get_root();
     assert_eq!((dag.opcode(load), dag.value_type(load)), (ISD::Load, EVT::I32));
     let store = SDValue { node: dag.operand(load, 0).node, res: 0 };

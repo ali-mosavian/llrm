@@ -318,7 +318,8 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
             function.layout()[0],
         )
         .expect("builds");
-        let (mut lowering, mut hooks) = (X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }, hooks());
+        let (mut lowering, mut hooks) =
+            (X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }, hooks());
         let x86 = X86Target {
             tli: &tli,
             lowering: &mut lowering,

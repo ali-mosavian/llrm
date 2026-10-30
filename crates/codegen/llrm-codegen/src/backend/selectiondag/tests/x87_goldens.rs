@@ -62,9 +62,13 @@ fn selected(text: &str) -> BTreeMap<String, Result<Counts, String>> {
                 }
             };
             let dag = &mut built.dag;
-            if let Err(why) =
-                legalized(dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }, &machine)
-                    .and_then(|()| do_instruction_selection(dag, &selector, &mut hooks))
+            if let Err(why) = legalized(
+                dag,
+                &tli,
+                &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+                &machine,
+            )
+            .and_then(|()| do_instruction_selection(dag, &selector, &mut hooks))
             {
                 failure = Some(format!("{why:?}"));
                 break;
