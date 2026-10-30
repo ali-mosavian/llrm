@@ -16,9 +16,10 @@ use crate::cfg::Cfg;
 use crate::cfg_sort::cfg_sort;
 use crate::cfg_stackify::cfg_stackify;
 use crate::explicit_locals::explicit_locals;
+use crate::fix_br_table_defaults::fix_br_table_defaults;
+use crate::frame::frame_lowering;
 use crate::lower_br_unless::lower_br_unless;
 use crate::mir::{Function, ValType};
-use crate::fix_br_table_defaults::fix_br_table_defaults;
 use crate::phi_elimination::phi_elimination;
 use crate::reg_stackify::reg_stackify;
 use crate::set_p2align::set_p2align_operands;
@@ -92,6 +93,7 @@ pub fn compile_function(
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
     phi_elimination(&mut f);
+    frame_lowering(&mut f, if width == Width::W32 { ValType::I32 } else { ValType::I64 })?;
     remove_unreachable_blocks(&mut f);
     let cfg = Cfg::of(&f);
     if let Some((from, to)) = cfg.irreducible_edge(&cfg.analyses().0) {

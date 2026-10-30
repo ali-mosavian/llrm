@@ -1,22 +1,22 @@
-//! The shared DAG stages run for wasm: the pin's `CodeGenAndEmitDAG` order (combine,
-//! legalize types, combine, legalize the DAG, combine, select, schedule) over a built
-//! block, with wasm's tables and hooks.
+//! The shared DAG stages run for wasm: the pin's `CodeGenAndEmitDAG` order
+//! (combine, legalize types, combine, legalize the DAG, combine, select,
+//! schedule) over a built block, with wasm's tables and hooks.
 //!
 //! # How it works
-//! `WebAssemblyDAGToDAGISel::Select` handles `CALL` itself: it splits the node into
-//! `CALL_PARAMS` (operands, glue result) and `CALL_RESULTS` (the results), which a
-//! custom inserter joins after selection. The same split is made here
+//! `WebAssemblyDAGToDAGISel::Select` handles `CALL` itself: it splits the node
+//! into `CALL_PARAMS` (operands, glue result) and `CALL_RESULTS` (the results),
+//! which a custom inserter joins after selection. The same split is made here
 //! ([`select_call`]); everything else goes through the matcher table.
 //!
-//! The pin runs no scheduler preference of its own at `-O0`: `createDefaultScheduler`
-//! gives `source`.
+//! The pin runs no scheduler preference of its own at `-O0`:
+//! `createDefaultScheduler` gives `source`.
 //!
-//! DEVIATE: no target combines (`WebAssemblyTargetLowering::PerformDAGCombine`) and no
-//! `PreprocessISelDAG`. Reason: the slice does not reach them. Exit: W6.
+//! DEVIATE: no target combines (`WebAssemblyTargetLowering::PerformDAGCombine`)
+//! and no `PreprocessISelDAG`. Reason: the slice does not reach them. Exit: W6.
 //!
 //! # See also
-//! `SelectionDAGISel::CodeGenAndEmitDAG` and `WebAssemblyISelDAGToDAG.cpp` (L425) at the
-//! pin d1106deb71cc.
+//! `SelectionDAGISel::CodeGenAndEmitDAG` and `WebAssemblyISelDAGToDAG.cpp`
+//! (L425) at the pin d1106deb71cc.
 
 use std::collections::BTreeMap;
 
@@ -107,7 +107,8 @@ impl SchedInfo for WasmSched {
         Some(u32::from(op::ADJCALLSTACKUP))
     }
 
-    /// `createDefaultScheduler` at `-O0` (`OptLevel == None`) is the source-order list scheduler.
+    /// `createDefaultScheduler` at `-O0` (`OptLevel == None`) is the
+    /// source-order list scheduler.
     fn preference(&self) -> Preference {
         Preference::Source
     }
@@ -129,12 +130,15 @@ fn select_call(
     let mut params = Vec::with_capacity(operands);
     for at in 1..operands {
         let mut operand = Dag::operand(adapter, node, at);
-        // The callee loses its `Wrapper` when it is a symbol: only a computed one is called indirectly.
+        // The callee loses its `Wrapper` when it is a symbol: only a computed
+        // one is called indirectly.
         if at == 1 && Dag::opcode(adapter, operand.node) == isd::Wrapper {
             let inner = Dag::operand(adapter, operand.node, 0);
-            if Dag::opcode(adapter, inner.node) == llrm_codegen::backend::selectiondag::dagisel_adapter::pin_opcode(
-                llrm_codegen::backend::selectiondag::isd::ISD::TargetGlobalAddress,
-            ) {
+            if Dag::opcode(adapter, inner.node)
+                == llrm_codegen::backend::selectiondag::dagisel_adapter::pin_opcode(
+                    llrm_codegen::backend::selectiondag::isd::ISD::TargetGlobalAddress,
+                )
+            {
                 operand = inner;
             }
         }
@@ -143,24 +147,29 @@ fn select_call(
     params.push(Dag::operand(adapter, node, 0));
     let glue = llrm_dagisel::generated::ids::mvt::Glue;
     let call_params = Dag::machine_node(adapter, post_ids::CALL_PARAMS, &[glue], &params);
-    let results = if adapter.dag.opcode(SDValue { node, res: 0 }) == llrm_codegen::backend::selectiondag::isd::ISD::Target(RET_CALL) {
+    let results = if adapter.dag.opcode(SDValue { node, res: 0 })
+        == llrm_codegen::backend::selectiondag::isd::ISD::Target(RET_CALL)
+    {
         post_ids::RET_CALL_RESULTS
     } else {
         post_ids::CALL_RESULTS
     };
-    let vts: Vec<_> = (0..Dag::num_values(adapter, node)).map(|at| Dag::value_type(adapter, PinValue::new(node, at as u8))).collect();
+    let vts: Vec<_> =
+        (0..Dag::num_values(adapter, node)).map(|at| Dag::value_type(adapter, PinValue::new(node, at as u8))).collect();
     let call_results = Dag::machine_node(adapter, results, &vts, &[PinValue::new(call_params, 0)]);
     Dag::replace_node(adapter, node, call_results);
     Outcome::Selected
 }
 
-/// A block after scheduling: the units in order, and the memory accesses each machine node got
-/// (`setNodeMemRefs`), as the load and store nodes they came from.
+/// A block after scheduling: the units in order, and the memory accesses each
+/// machine node got (`setNodeMemRefs`), as the load and store nodes they came
+/// from.
 pub struct Scheduled {
     pub units: Vec<Unit>,
     pub mem_refs: BTreeMap<u32, Vec<u32>>,
-    /// What each load and store node was before selection: `MorphNodeTo` turns a selected
-    /// access into the instruction in place and drops its `MachineMemOperand`.
+    /// What each load and store node was before selection: `MorphNodeTo` turns
+    /// a selected access into the instruction in place and drops its
+    /// `MachineMemOperand`.
     pub accesses: BTreeMap<u32, MemInfo>,
 }
 
@@ -172,11 +181,14 @@ pub fn select_block(
 ) -> Result<Scheduled, Refusal> {
     let tli = target_lowering(cpu);
     let mut lowering = WasmLowering { tables };
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
-    TypeLegalizer::new(dag, &tli).with_hooks(&mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).with_opt_none().run();
+    TypeLegalizer::new(dag, &tli)
+        .with_hooks(&mut lowering)
+        .run()
+        .map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
+    DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).with_opt_none().run();
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).with_opt_none().run();
 
     let selector = Selector::new(match cpu {
         Cpu::Wasm32 => wasm_wasm32::TABLE,

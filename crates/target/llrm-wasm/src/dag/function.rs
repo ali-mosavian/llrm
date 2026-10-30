@@ -22,7 +22,7 @@ use crate::dagisel::hooks::Cpu;
 use crate::mir::ValType;
 use crate::{REGISTER_INFO, Width};
 
-fn pointer(width: Width) -> EVT {
+pub(crate) fn pointer(width: Width) -> EVT {
     match width {
         Width::W32 => EVT::I32,
         Width::W64 => EVT::I64,
@@ -139,6 +139,9 @@ pub struct Selected {
     /// What the phis of the successors take from this block's edges (an IR
     /// block's; the extra ones have none).
     pub phis: Vec<PhiCopy>,
+    /// The (size, alignment) of each stack object, by frame index: the
+    /// function's allocas, then what the builder made.
+    pub frame: Vec<(u64, u64)>,
 }
 
 /// `PHI result, [incoming, from this block]` of the successor `to`: registers
@@ -212,11 +215,55 @@ pub fn select_function(
                 mem_refs,
                 accesses,
                 layout: Vec::new(),
+                frame: Vec::new(),
             });
         }
     }
+    let mut frame = static_frame(module, function, &layout, &info)?;
+    frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
     for block in &mut selected {
         block.layout.clone_from(&machine_layout);
+        block.frame.clone_from(&frame);
     }
     Ok(selected)
+}
+
+/// The (size, alignment) of each static alloca, by the frame index
+/// `FunctionLoweringInfo` gave it: the type's size times a constant count, at
+/// its alignment (`FunctionLoweringInfo::set`).
+fn static_frame(
+    module: &Module,
+    function: &llrm_mir::module::Function,
+    layout: &DataLayout,
+    info: &FunctionLoweringInfo,
+) -> Result<Vec<(u64, u64)>, String> {
+    use llrm_mir::context::ConstantKind;
+    use llrm_mir::module::{Operand, ValueDef};
+    use llrm_mir::opcode::Opcode;
+
+    let mut objects = vec![(0, 1); info.static_allocas.iter().map(|(_, &index)| index as usize + 1).max().unwrap_or(0)];
+    for (value, &index) in info.static_allocas.iter() {
+        let ValueDef::Instruction(def) = function.value(value).def else {
+            return Err("an alloca that is no instruction".into());
+        };
+        let instruction = function.instruction(def);
+        let Opcode::Alloca { allocated, align, .. } = instruction.opcode else {
+            return Err("an alloca that is none".into());
+        };
+        let count = match instruction.operands.first() {
+            None => 1,
+            Some(Operand::Constant(id)) => match module.context.get(*id).kind {
+                ConstantKind::Int(count) => u64::try_from(count).map_err(|_| "a negative alloca count")?,
+                _ => return Err("an alloca count that is no number".into()),
+            },
+            Some(_) => return Err("an alloca count that is no constant".into()),
+        };
+        let types = &module.context.types;
+        let size = layout.alloc_size(types, allocated) * count;
+        // `AI->getAlign()`; an alloca that states none has the type's preferred
+        // one (the IR reader's default).
+        let align = align.map_or_else(|| layout.pref_align(types, allocated), u64::from);
+        objects[index as usize] = (size, align);
+    }
+    Ok(objects)
 }

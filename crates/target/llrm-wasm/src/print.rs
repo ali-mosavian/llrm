@@ -78,6 +78,7 @@ pub fn instruction(
                 }
             }
             Operand::Block(block) => format!(".LBB{block}"),
+            Operand::Frame(_) => unreachable!("the frame lowering removes frame indices"),
             Operand::Def(_) | Operand::Use(_) => unreachable!("filtered as non-immediate"),
         };
         text = text.replace(&format!("${{{name}}}"), &shown).replace(&format!("${name}"), &shown);

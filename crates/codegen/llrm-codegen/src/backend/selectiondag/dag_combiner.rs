@@ -147,6 +147,8 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     combined: NodeSet,
     /// The action table, for the folds that ask what the target can do.
     pub(super) tli: Option<&'a TargetLowering>,
+    /// `OptLevel == CodeGenOptLevel::None`: the chain, store and load combines the pin skips at `-O0` are skipped.
+    pub(super) opt_none: bool,
 }
 
 fn op_is_srl(op: ISD) -> bool {
@@ -167,6 +169,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             queued: NodeSet::default(),
             combined: NodeSet::default(),
             tli: None,
+            opt_none: false,
         }
     }
 
@@ -190,6 +193,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             Some(ShiftAmount::ByValue) => vt,
             Some(ShiftAmount::Fixed(fixed)) => EVT::Simple(fixed),
         }
+    }
+
+    /// The pin's `-O0` combiner (`OptLevel == None`).
+    pub fn with_opt_none(mut self) -> DagCombiner<'a, H> {
+        self.opt_none = true;
+        self
     }
 
     pub(super) fn add_to_worklist(
@@ -1777,6 +1786,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        if self.opt_none {
+            return None;
+        }
         let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let NodeData::Mem(info) = self.dag.node(node).data else { return None };
         if self.dag.opcode(value) != ISD::BuildPair

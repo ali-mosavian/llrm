@@ -115,3 +115,15 @@ fn switches() {
 fn switches_on_a_parameter() {
     check("switch_param");
 }
+
+/// A function with a stack object panicked on 'the frame lowering is not
+/// translated yet'. The pin reads `__stack_pointer`, subtracts the frame
+/// (16-aligned), writes it back unless a call-free leaf fits the 128-byte red
+/// zone, and addresses objects as offsets from the new stack pointer. Here
+/// also: a store-then-load of a local stayed a single forwarded value (the
+/// pin's `-O0` combiner does not forward), and one constant stored twice was
+/// placed early (the pin gives constant nodes IR order 0).
+#[test]
+fn frames() {
+    check("frame");
+}
