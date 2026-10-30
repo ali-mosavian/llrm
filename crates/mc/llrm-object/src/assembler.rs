@@ -1,6 +1,6 @@
 //! What the assembler asks of a target (LLVM's `MCAsmBackend`).
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::{FixupKind, FixupKindInfo, Unsupported};
 
@@ -36,10 +36,24 @@ pub trait AsmBackend {
 /// register is saved.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Cfi {
-    DefCfa { register: u16, offset: i64 },
-    DefCfaRegister { register: u16 },
-    DefCfaOffset { offset: i64 },
-    Offset { register: u16, offset: i64 },
+    DefCfa {
+        register: u16,
+        offset: i64,
+    },
+    DefCfaRegister {
+        register: u16,
+    },
+    DefCfaOffset {
+        offset: i64,
+    },
+    Offset {
+        register: u16,
+        offset: i64,
+    },
+    /// The register is back where the caller left it (`.cfi_restore`).
+    Restore {
+        register: u16,
+    },
 }
 
 /// A piece of a section as the assembler lays it out (`MCFragment`): a label,
@@ -79,7 +93,7 @@ pub fn layout<F: Fragment>(
     context: &F::Context,
 ) -> Result<Labels, Unsupported> {
     loop {
-        let (mut labels, mut named, mut at) = (Labels::new(), HashMap::new(), 0i64);
+        let (mut labels, mut named, mut at) = (Labels::new(), HashMap::default(), 0i64);
         let mut starts = Vec::with_capacity(items.len());
         for item in items.iter() {
             if let Some(name) = item.label() {

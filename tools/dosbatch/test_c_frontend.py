@@ -103,6 +103,15 @@ def test_llrm_cc_reads_the_rows_own_os_header_not_llrm_cs(monkeypatch, tmp_path)
     assert "/llrm-c-header-dir" not in dosbatch.c_compile(source, tmp_path / "p.obj", "x86-m16", "-O2", Path("/llrm-c-header-dir"), [])[0]
 
 
+def test_a_nib_programs_declarations_are_searched_and_the_header_dir_still_is_not(tmp_path):
+    """Nib's foreign C includes NAME.h from the directory of its exports (interop: 'main.h' file not found, #6025), and that directory
+    alone: the one `include` names holds llrm-c's llrm_os.h, which shadowed the row's and sent the QB runtime's bq16 programs to handle 426."""
+    source = tmp_path / "geometry.c"
+    command = dosbatch.c_compile(source, tmp_path / "g.obj", "x86-m16", "-O2", Path("/llrm-c-header-dir"), [], declarations=Path("/exports"))[0]
+    assert command[command.index("-I") + 1] == "/exports", command
+    assert "/llrm-c-header-dir" not in command, command
+
+
 def test_a_watcom_abi_program_links_the_start_up_that_calls_main_(monkeypatch):
     """-mabi=watcom spells `main` as `main_`: watcom_far_sum, fsgs_call, register_upper_half and wc16_mixed failed to link
     ('_main is an undefined reference') when only some runs asked for LL_MAIN=main_ (#5540)."""
@@ -180,3 +189,47 @@ def test_an_initializer_lands_in_the_xi_segments_start_up_walks(tmp_path, model)
     dosbatch._host(*dosbatch.c_compile(dosbatch.ROOT / "runtime/qb/nheap.c", obj, target, "-Os", include, [], flags))
     names = obj.read_bytes()
     assert all(bytes([len(name)]) + name in names for name in (b"XIB", b"XI", b"XIE"))
+
+
+def test_a_program_linked_without_an_entry_calls_the_start_ups_default_main(monkeypatch):
+    """The x86_16-dos and x86_32-dos rows (cdecl, sysv) name no --entry; link_objects took os_defines' llrm-cc default, `main_`, and gate run 2
+    failed a_program_runs_in_each_model and a_static_huge_object... with 'E2028: main_ is an undefined reference'."""
+    monkeypatch.setattr(dosbatch, "os_layer", lambda target, field, language: "A=1")
+    assert dosbatch.entry_defines("x86-m16", None) == ("A=1",)
+    assert dosbatch.entry_defines("x86-m16", "main_", near=True) == ("A=1", "NEAR_CODE=1", "LL_MAIN=main_")
+
+
+def test_the_object_cache_key_names_the_clang(monkeypatch, tmp_path):
+    """w13: the key ignored the compiler, so swapping LLRM_CLANG_M16 served objects another clang built and the results looked valid."""
+    import qbruntime
+
+    def clang(name, version):
+        path = tmp_path / name
+        path.write_text(f"#!/bin/sh\necho 'clang version {version}'\n")
+        path.chmod(0o755)
+        return str(path)
+
+    keys = []
+    for name, version in (("a", "1"), ("b", "2")):
+        monkeypatch.setenv("LLRM_CLANG_M16", clang(name, version))
+        dosbatch.clang_identity.cache_clear()
+        keys.append(qbruntime.c_build_key())
+    assert keys[0] != keys[1]
+
+
+def test_the_runtime_object_cache_key_follows_the_command_that_builds_the_objects(monkeypatch):
+    """#6025 gave every C compile `-I <generated include>`; its llrm_os.h shadowed the row's and the OS layer lost its stack convention. The cache key
+    named the flags and the compiler binary but not dosbatch.c_compile's command, so a tree whose compiler had not been relinked kept being served
+    the objects of the other command: test_a_flat_programs_count_is_net_of_the_empty_startup_program died with KeyError 426 (a pointer for a DOS
+    handle) in some runs and passed in others, and reverting a PR changed nothing. The key must change with the command."""
+    import qbruntime
+
+    before = qbruntime.c_build_key()
+    real = dosbatch.c_compile
+
+    def with_a_flag(source, obj, target, level, include, abi, extra=()):
+        command, env = real(source, obj, target, level, include, abi, extra)
+        return [*command[:2], "-DSOMETHING_NEW", *command[2:]], env
+
+    monkeypatch.setattr(dosbatch, "c_compile", with_a_flag)
+    assert qbruntime.c_build_key() != before

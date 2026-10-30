@@ -5,7 +5,7 @@ mod common;
 /// `dot` walks `A[i][k]` and `B[k][j]` of two 12 x 12 arrays for a run-time
 /// `n`; `through` walks pointers of unknown extent.
 const KERNEL: &str = "
-static double A[12][12], B[12][12];
+double A[12][12], B[12][12];
 double dot(int n, int i, int j)
 {
     double sum = 0;

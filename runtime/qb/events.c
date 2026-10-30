@@ -8,7 +8,9 @@
 #include "error.h"
 #include "qb.h"
 
-enum { HUNDREDTHS = 100, DAY = 8640000L, LONGEST = 86400 };
+#define DAY 8640000L
+#define LONGEST 86400L
+enum { HUNDREDTHS = 100 };
 
 enum {
     DEVICE_TIMER = 1,

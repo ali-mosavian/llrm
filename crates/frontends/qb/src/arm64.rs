@@ -51,6 +51,9 @@ fn signext_i16_arguments(line: &str) -> String {
     let arguments: Vec<String> = line[open + 1..close]
         .split(", ")
         .map(|argument| match argument.strip_prefix("i16") {
+            // already extended: the HIR marks the narrow argument of a call at
+            // a 32-bit word
+            Some(rest) if rest.trim_start().starts_with("signext") => argument.to_owned(),
             Some(rest) if rest.is_empty() || rest.starts_with(' ') => format!("i16 signext{rest}"),
             _ => argument.to_owned(),
         })
@@ -179,11 +182,17 @@ fn framed(text: &str) -> String {
 
 fn framed_function(lines: &[&str]) -> String {
     let mut out = String::new();
-    let landing = lines.iter().any(|line| line.trim_start().starts_with("%landed = landingpad"));
-    let entry = lines.iter().position(|line| line.ends_with(':')).filter(|_| landing);
-    let Some(entry) = entry else {
+    let landing = lines.iter().position(|line| line.trim_start().starts_with("%landed = landingpad"));
+    let entry = lines.iter().position(|line| line.ends_with(':')).filter(|_| landing.is_some());
+    let (Some(entry), Some(landing)) = (entry, landing) else {
         return lines.iter().map(|line| format!("{line}\n")).collect();
     };
+    // The pad's block, whatever the optimizer called it.
+    let pad = lines[..landing]
+        .iter()
+        .rev()
+        .find(|line| line.ends_with(':'))
+        .map_or("landing", |line| line.trim_end_matches(':'));
     let mut at = entry + 1;
     while lines[at].contains(" = alloca ") {
         at += 1;
@@ -200,9 +209,9 @@ fn framed_function(lines: &[&str]) -> String {
             out.push_str(
                 "  %qb.prev = call ptr @qb_host_frame(ptr %qb.jb)\n  %qb.rc = call i32 @_setjmp(ptr %qb.jb)\n",
             );
-            out.push_str(
-                "  %qb.back = icmp ne i32 %qb.rc, 0\n  br i1 %qb.back, label %landing, label %qb.body\n\nqb.body:\n",
-            );
+            out.push_str(&format!(
+                "  %qb.back = icmp ne i32 %qb.rc, 0\n  br i1 %qb.back, label %{pad}, label %qb.body\n\nqb.body:\n"
+            ));
         }
         if line.contains("= load i16, ptr @Q_QB$LANDED") {
             // DOS lands in `$QB$LANDING`, which stores ERR there; here the jump
@@ -317,8 +326,8 @@ fn shifted(
 
 /// The entries QB calls with a block of words on the stack (`B$DDIM`, `B$COLR`,
 /// ...): a host's are variadic C functions (runtime/qb/posix/blockentries.c)
-/// that read the block's words in memory order, which is the reverse of the
-/// order they were pushed in.
+/// that read the block's words in memory order; the emitted call already has
+/// them in that order (count first), so the arguments are left as they are.
 const BLOCK_ENTRIES: [(&str, &str); 7] = [
     ("B_DDIM", "ptr"),
     ("B_RDIM", "ptr"),
@@ -340,7 +349,7 @@ fn block_entry(line: &str) -> String {
         }
         let mut depth = 0usize;
         let mut close = line.len();
-        let mut parts = Vec::new();
+        let mut parts: Vec<&str> = Vec::new();
         let mut from = args_at;
         for (index, c) in line[args_at..].char_indices() {
             match c {
@@ -358,7 +367,6 @@ fn block_entry(line: &str) -> String {
                 _ => {}
             }
         }
-        parts.reverse();
         let head = line[..at].trim_end();
         let head = head.strip_suffix("void").map_or(head.to_owned(), |before| format!("{before}void ({first}, ...)"));
         return format!("{head} {symbol}{}{}", parts.join(", "), &line[close..]);
@@ -379,4 +387,34 @@ fn aligned(line: &str) -> String {
         None => line,
     };
     format!("{body}, align 16")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{framed, signext_i16_arguments};
+
+    /// The call already carried `signext` (the HIR extends a 16-bit argument at
+    /// a 32-bit word), and Darwin's pass added a second: `i16 signext signext
+    /// -1` (qb_arm64 darwin_callers_extend_narrow_arguments_to_the_runtime).
+    #[test]
+    fn an_argument_already_extended_is_not_extended_twice() {
+        let line = "  tail call void @B_PEI2(i16 signext -1)";
+        assert_eq!(signext_i16_arguments(line), line);
+        assert_eq!(
+            signext_i16_arguments("  tail call void @B_PEI2(i16 -1, i16 signext 2)"),
+            "  tail call void @B_PEI2(i16 signext -1, i16 signext 2)"
+        );
+    }
+
+    /// The optimizer drops block names, so the pad is `0:` and not `landing:`;
+    /// the jump back branched to `%landing`, which no block defined
+    /// ("block %landing is used but never defined": ON ERROR programs at -O2
+    /// on arm64, qb_arm64 `on_error_lands_in_its_handler`).
+    #[test]
+    fn the_jump_back_branches_to_the_pad_whatever_it_is_called() {
+        let text = "define void @f() personality ptr @p {\nframe:\n  %a = alloca i16\n  call void @g()\n  ret void\n\n0:\n  %landed = landingpad { ptr, i32 }\n    cleanup\n  ret void\n}\n";
+        let framed = framed(text);
+        assert!(framed.contains("label %0, label %qb.body"), "{framed}");
+        assert!(!framed.contains("%landing"), "{framed}");
+    }
 }

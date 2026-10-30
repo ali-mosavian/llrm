@@ -166,7 +166,7 @@ def test_sizes_reports_bytes_and_no_cost_estimate(monkeypatch, tmp_path, capsys)
 
     monkeypatch.delenv("LLRM_DEBUG", raising=False)
     monkeypatch.setattr(sizes.cpulimit, "run", run)
-    assert sizes.measure(["llrm-c", "x.c"], "-O2") is None
+    assert sizes.measure(["llrm-cc", "x.c"], "-O2") is None
     assert "LLRM_DEBUG" not in seen, "measure asked the compiler for its cost estimate"
 
     tables = iter([{"a/a.c": 100, "b/b.c": 50}, {"a/a.c": 120, "b/b.c": 50}])
@@ -195,3 +195,13 @@ def test_a_basic_program_takes_the_excess_precision_a_pair_names(tmp_path, monke
     listed = dict(sizes.programs(tmp_path, demos=False))
     assert "-fexcess-precision=fast" in listed["stft_single/stft_single.bas"]
     assert not any("-fexcess-precision" in word for word in listed["stft_single/stft_single.c"])
+
+
+def test_a_c_program_is_built_by_llrm_cc_to_an_object_on_a_watcom_row(tmp_path):
+    """sizes.py ran bins/llrm-c, which is gone: every C program read as failing to compile and tests/test_programs_compile.py went red once
+    its binary list named llrm-cc instead."""
+    import sizes
+
+    command = sizes.c_command(str(tmp_path / "llrm-cc"), str(sizes.ROOT / "bench/bintree/bintree.c"))
+    assert Path(command[0]).name == "llrm-cc" and "--target=x86_16-wat" in command
+    assert sizes.stop(command) == ["-c"] and sizes.stop(["llrm-qb", "x.bas"]) == []

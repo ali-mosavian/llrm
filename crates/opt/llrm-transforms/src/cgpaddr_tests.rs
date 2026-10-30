@@ -206,6 +206,7 @@ impl llrm_mir::target::Machine for Flat {
             macro_fusion: false,
             quad: false,
             real_mode: None,
+            tuning: llrm_mir::target::Tuning::PIN,
         }))
     }
 }
