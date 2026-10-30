@@ -138,3 +138,17 @@ fn an_error_that_reaches_a_handler_stops_with_a_named_failure() {
     assert_ne!(ran.status.code(), Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// The page sounds what PLAY plays, from the tones the module hands its host (`llrm_host_tone`, a wrap of `dev_tone`).
+/// Without the wrap the host heard nothing. The sequence is the x86-32 host build's own for this tune.
+#[test]
+fn play_hands_its_tones_to_the_host() {
+    let dir = built("tune", "PLAY \"T120 L16 CDE\"\nPRINT \"played\"\nEND\n");
+    let (text, code) = run(&dir, "tune", &[]);
+    assert_eq!(text.trim_end(), "played");
+    assert_eq!(code, Some(0));
+    let log = std::fs::read_to_string(dir.join("frames/tones.json")).expect("the host heard no tone");
+    let hertz: Vec<u32> = log.split("\"hertz\":").skip(1).map(|rest| rest.split(['}', ',']).next().unwrap().parse().unwrap()).collect();
+    assert_eq!(hertz, [524, 0, 588, 0, 0]);
+    std::fs::remove_dir_all(dir).ok();
+}

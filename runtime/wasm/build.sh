@@ -29,6 +29,6 @@ for s in $sources; do
 done
 [ $failed = 0 ] || exit 1
 "$qb" "$bas" --wasm32 -o "$obj/program.o"
-wasm-ld --no-entry --allow-undefined --wrap=dev_key_ready --wrap=dev_clock --export=llrm_wasm_start --export=__wasm_call_ctors --export=headless_type \
+wasm-ld --no-entry --allow-undefined --wrap=dev_key_ready --wrap=dev_clock --wrap=dev_tone --export=llrm_wasm_start --export=__wasm_call_ctors --export=headless_type \
   --export=host_pixels --export=host_colors --export=host_tick_fire --export=host_width --export=host_height --export=host_mode --export=host_text_row --export=headless_type_extended \
   --export=__heap_base -z stack-size=8388608 "$obj"/*.o -o "$out"

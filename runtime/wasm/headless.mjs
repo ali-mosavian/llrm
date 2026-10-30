@@ -4,6 +4,7 @@
 // instead, so a run is the same every time: for a program whose timing loops were taken out. Keys and frame dumps are
 // scheduled on the clock, in milliseconds since the start. Frames are written as PPM files.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { Exit, instantiate } from './host.mjs';
 
 const args = process.argv.slice(2);
 const wasmPath = args.shift();
@@ -34,23 +35,15 @@ for (let at = 0, n = 1; at < script.length; at++, n++) {
 }
 mkdirSync(out, { recursive: true });
 
-let exports, scratch;
-let now = 0; // virtual milliseconds
+let now = 0; // milliseconds: virtual with --virtual
 const started = Date.now();
 const calls = {};
 const text = [];
-const mem = () => new Uint8Array(exports.memory.buffer);
-const cstring = (at) => { const m = mem(); let end = at; while (m[end]) end++; return Buffer.from(m.subarray(at, end)).toString('latin1'); };
-const lrint = (x) => { const r = Math.round(x); return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r; };
-
-class Exit extends Error { constructor(code) { super(`exit ${code}`); this.code = code; } }
+const tones = [];
+let host;
 
 function dump(name) {
-  const w = exports.host_width(), h = exports.host_height();
-  const rgb = new Uint8Array(768);
-  exports.host_colors(scratch);
-  rgb.set(mem().subarray(scratch, scratch + 768));
-  const pixels = mem().subarray(exports.host_pixels(), exports.host_pixels() + w * h);
+  const { w, h, colors: rgb, pixels } = host.frame();
   const body = Buffer.alloc(w * h * 3);
   for (let i = 0; i < w * h; i++) { body[i * 3] = rgb[pixels[i] * 3]; body[i * 3 + 1] = rgb[pixels[i] * 3 + 1]; body[i * 3 + 2] = rgb[pixels[i] * 3 + 2]; }
   writeFileSync(`${out}/${name}.ppm`, Buffer.concat([Buffer.from(`P6\n${w} ${h}\n255\n`), body]));
@@ -65,9 +58,7 @@ function typeKey(k) {
   k.done = true;
   lastKey = now;
   keyTimes.push(now);
-  const p = scratch;
-  mem().set(Buffer.from(k.text + '\0', 'latin1'), p);
-  exports.headless_type(p);
+  for (const c of k.text) host.type(c.charCodeAt(0));
 }
 
 function keyPoll(ready) {
@@ -88,47 +79,24 @@ function due() {
   if (now > limitMs || (wallMs && Date.now() - started > wallMs)) throw new Exit(124);
 }
 
-// The clock tick (18.2 a second) calls music_tick as the timer interrupt does: a PLAY waits for it to take notes off its queue.
-const TICK_MS = 54.9254;
-let nextTick = TICK_MS, inTick = false;
-
-function tick() {
-  now = virtual ? now + stepUs / 1000 : Date.now() - started;
-  due();
-  if (inTick) return;
-  inTick = true;
-  for (let fired = 0; now >= nextTick && fired < 4; fired++) { nextTick += TICK_MS; exports.host_tick_fire(); }
-  if (now >= nextTick) nextTick = now + TICK_MS;
-  inTick = false;
-}
-
-const imports = { env: {
-  llrm_host_write: (fd, ptr, n) => { text.push(Buffer.from(mem().subarray(ptr, ptr + n)).toString('latin1')); },
-  llrm_host_exit: (code) => { throw new Exit(code); },
-  llrm_host_fail: (msg) => { throw new Error(cstring(msg)); },
-  llrm_host_now: () => { calls.now = (calls.now || 0) + 1; tick(); return now; },
-  llrm_host_key_poll: (ready) => keyPoll(ready),
-  llrm_host_poll: () => { calls.poll = (calls.poll || 0) + 1; tick(); },
-  sin: Math.sin, cos: Math.cos, atan: Math.atan, lrint, lrintf: lrint,
-} };
-
-const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), imports);
-exports = instance.exports;
-// The harness's own memory: a page after the program's. `__heap_base` is the top of the program's stack, whose
-// outermost frames anything written below it would overwrite.
-scratch = exports.memory.grow(1) * 65536;
-exports.__wasm_call_ctors();
+host = await instantiate(readFileSync(wasmPath), {
+  clock: () => (now = virtual ? now + stepUs / 1000 : Date.now() - started),
+  poll: () => { calls.poll = (calls.poll || 0) + 1; due(); },
+  keyPoll,
+  write: (chunk) => text.push(chunk),
+  tone: (hertz, at) => tones.push({ at, hertz }),
+});
 let code = 0;
-try { code = exports.llrm_wasm_start(); } catch (error) { if (error instanceof Exit) code = error.code; else throw error; }
+try { code = host.run(); } catch (error) { if (error instanceof Exit) code = error.code; else throw error; }
 dump('final');
+if (tones.length) writeFileSync(`${out}/tones.json`, JSON.stringify(tones));
 {
   // The text screen, the rows that are not blank, as runtime/qb/dev/headless/main.c prints it.
-  const row = scratch;
   const lines = [];
   for (let r = 0; r < 25; r++) {
-    exports.host_text_row(r, row);
-    const text = cstring(row).replace(/ +$/, '');
-    if (text) lines.push(text);
+    host.exports.host_text_row(r, host.scratch);
+    const row = host.cstring(host.scratch).replace(/ +$/, '');
+    if (row) lines.push(row);
   }
   if (lines.length) text.push(lines.join('\n') + '\n');
 }

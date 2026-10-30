@@ -63,6 +63,16 @@ extern void llrm_host_key_poll(int ready);
 extern int __real_dev_key_ready(void);
 extern long __real_dev_clock(void);
 
+/* A tone the program starts or ends (0): the host sounds it. */
+extern void llrm_host_tone(unsigned hertz);
+extern void __real_dev_tone(unsigned hertz);
+
+void __wrap_dev_tone(unsigned hertz)
+{
+    llrm_host_tone(hertz);
+    __real_dev_tone(hertz);
+}
+
 int __wrap_dev_key_ready(void)
 {
     int ready;
