@@ -112,7 +112,8 @@ impl Tables {
 // load only when its memory operand is a dereferenceable invariant load; llrm
 // proves the same per live range (`_stable_loads_by`), which covers the m16
 // descriptor loads (`mov es, [d+2]`). Exit: X86InstrInfo's rules translated
-// with an invariant-load flag set from those facts.
+// with an invariant-load flag set from those facts (the flag is read since
+// `flagged_loads`; the facts stay until the producers cover the rows).
 //
 // DEVIATE D-RFP4 (w-4, 2026-10-30): an x87 load (`fld`) of a global or of an
 // incoming argument's cell, which nothing writes while the value lives, is made
