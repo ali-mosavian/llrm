@@ -84,9 +84,11 @@
 //! (a divide: `ax`, `dx`) still sinks: the pin's does not, but holding a divide
 //! in its block grew switch.c 16 B at m16 -Os. Exit: none.
 //!
-//! DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
-//! (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
-//! instruction has none).
+//! Not ported, and not a deviation on x86 (#2903): `PerformSinkAndFold` runs
+//! in the pin only where the target sets `EnableSinkAndFold` (AArch64, RISC-V,
+//! LoongArch; `TargetPassConfig.h:136`, false by default), `SinkInstsIntoCycle`
+//! is off by default, and an instruction here has no debug values. A target
+//! here that enables sink-and-fold gets it as a per-target hook, default off.
 //!
 //! # Example
 //! `b1: v = mov 0; cmp x, 0; je b4` and `b4: r = phi [b1: v] [b2: w]` leave

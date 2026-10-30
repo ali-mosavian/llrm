@@ -916,7 +916,7 @@ fn selected_in(
         },
         opt_none: false,
         opt_for_size: cpu.size,
-        min_size: false,
+        min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
         address_mode,
     });

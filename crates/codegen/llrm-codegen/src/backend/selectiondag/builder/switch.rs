@@ -190,6 +190,7 @@ impl Builder<'_> {
         let target = SwitchTarget {
             jump_tables: self.target.jump_tables,
             opt_size: self.target.opt_size || self.function_has("optsize") || self.function_has("minsize"),
+            min_size: self.has_min_size(),
             ..SwitchTarget::x86(self.target.dag.pointer.size_in_bits())
         };
         let plan = switchcg::plan_with(&cases, default.0, &target);
@@ -231,7 +232,7 @@ impl Builder<'_> {
             vec![WorkItem { block: start, first: 0, last: clusters.len() - 1, ge: None, lt: None, default_prob }];
         let mut clusters = clusters;
         while let Some(item) = work.pop() {
-            if item.last - item.first + 1 > 3 && self.target_optimizes() {
+            if item.last - item.first + 1 > 3 && self.target_optimizes() && !self.has_min_size() {
                 self.split_work_item(&mut work, &item, &clusters, cond)?;
                 continue;
             }
