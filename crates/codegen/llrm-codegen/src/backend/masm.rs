@@ -1511,7 +1511,10 @@ const FOLDABLE: [&str; 16] =
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L3752>
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1642>
 pub fn tail_calls_folded(procedure: Procedure) -> Procedure {
-    if procedure.body.bits == 16 || procedure.interrupt.is_some() || procedure.entry != 0 {
+    if llrm_target::object::CodeModel::of(procedure.body.bits).segmented()
+        || procedure.interrupt.is_some()
+        || procedure.entry != 0
+    {
         return procedure;
     }
     let sole_call = |block: &lir::LirBlock| -> Option<(Arc<lir::Insn>, Callee)> {
