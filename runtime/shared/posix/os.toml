@@ -1,0 +1,14 @@
+# The OS layer for a POSIX host (Linux, macOS): os.c implements the interface (runtime/shared/interface.toml) with
+# the C library and POSIX. llrm_os.h is rendered from the interface (os.rs, `posix_c_header`), never written by hand.
+# The names are DOS's (write_file is write, more is alloc, command_line is args, environment is environ).
+
+os = "posix"
+pointer = "flat"
+groups = ["core", "console", "process", "files", "time"]
+implementation = "os.c"
+
+# The standard handles are the file descriptors.
+[handles]
+stdin = 0
+stdout = 1
+stderr = 2

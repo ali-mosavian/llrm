@@ -1,5 +1,7 @@
 //! `LLRM_DEBUG=time`: the report accounts for the whole compile.
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -43,6 +45,32 @@ fn compiled_checking(
     String::from_utf8_lossy(&done.stderr).into_owned()
 }
 
+/// llrm-qb's stderr on `PROGRAM` compiled to assembly text (`-S`).
+fn listed(channels: &str) -> String {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = directory.path().join("t.bas");
+    std::fs::write(&source, PROGRAM).expect("writes the source");
+    let done = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-qb")))
+        .args([
+            source.to_str().unwrap(),
+            "--dialect",
+            "qb45",
+            "--runtime",
+            "qb45",
+            "-O2",
+            "-S",
+            "-o",
+            directory.path().join("t.asm").to_str().unwrap(),
+        ])
+        .env_remove("LLRM_VERIFY")
+        .env("LLRM_DEBUG", channels)
+        .env("LLRM_TIME_TOP", "1000")
+        .output()
+        .expect("runs llrm-qb");
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    String::from_utf8_lossy(&done.stderr).into_owned()
+}
+
 /// The number before `ms` in the `[time] <line> ...` line's field called
 /// `field`.
 fn field(
@@ -71,12 +99,23 @@ fn test_the_outermost_steps_add_up_to_the_runs_cpu_time() {
 
 /// A pass the pass manager ran, and the analyses it asked for, are in the
 /// report, under the pipeline step.
+/// llrm-cc: the object writer's step is `object write` since it writes any
+/// object format, not `omf write` (llrm-qb's report, unrelated to the C front
+/// end).
 #[test]
 fn test_a_pass_manager_pass_and_its_analyses_are_in_the_report() {
     let report = compiled(Some("time"));
-    for wanted in
-        ["mir gvn", "mir fold", "analysis ", "mir pipeline", "lir regalloc", "isel", "omf write", "frontend", "hits"]
-    {
+    for wanted in [
+        "mir gvn",
+        "mir combine",
+        "analysis ",
+        "mir pipeline",
+        "lir regalloc",
+        "isel",
+        "object write",
+        "frontend",
+        "hits",
+    ] {
         assert!(report.contains(wanted), "no `{wanted}` in:\n{report}");
     }
 }
@@ -138,7 +177,7 @@ fn compiled_c(
     let directory = tempfile::tempdir().expect("a directory");
     let source = directory.path().join("t.c");
     std::fs::write(&source, "int f(int a) { return a * 3 + 1; }\n").expect("writes the source");
-    let mut command = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c")));
+    let mut command = common::cc::llrm_c();
     command.args(["-m32", "-O2", "-o", directory.path().join("t.obj").to_str().unwrap()]);
     command.args(flag);
     command.arg(&source);
@@ -154,17 +193,39 @@ fn compiled_c(
 /// The frontend's program was verified in every user's compile (30 M
 /// instructions, 0.9% of d_faces -O2). It is checked under the check
 /// mode, which the gate sets, and under `-fverify-ir`.
+/// llrm-cc: it has no HIR, so `hir verify` is not a step; the program clang's
+/// IR becomes is `mir verify frontend`. The two legs are two tests, so the
+/// check mode's passes while `-fverify-ir` fails (llrm-cc hands it to clang,
+/// which rejects it: a bug, reported).
 #[test]
-fn test_the_frontends_program_is_verified_under_the_check_mode_or_fverify_ir_only() {
-    let steps = ["hir verify", "mir verify frontend", "mir verify pipeline"];
+fn test_the_frontends_program_is_verified_under_the_check_mode_only() {
+    let steps = ["mir verify frontend", "mir verify pipeline"];
     let plain = compiled_c(None, None);
     for step in steps {
         assert!(!plain.contains(step), "`{step}` ran in a plain compile:\n{plain}");
     }
-    for (flag, verify) in [(None, Some("1")), (Some("-fverify-ir"), None)] {
-        let checked = compiled_c(flag, verify);
-        for step in steps {
-            assert!(checked.contains(step), "no `{step}` with {flag:?} {verify:?}:\n{checked}");
-        }
+    let checked = compiled_c(None, Some("1"));
+    for step in steps {
+        assert!(checked.contains(step), "no `{step}` with LLRM_VERIFY=1:\n{checked}");
     }
+}
+
+/// The same under `-fverify-ir`, the user's way to ask for the check mode.
+#[test]
+fn test_the_frontends_program_is_verified_under_fverify_ir() {
+    let checked = compiled_c(Some("-fverify-ir"), None);
+    for step in ["mir verify frontend", "mir verify pipeline"] {
+        assert!(checked.contains(step), "no `{step}` with -fverify-ir:\n{checked}");
+    }
+}
+
+/// With `-S` the listing writer ran outside every timed step: 21 M of a 1259 M
+/// d_faces -O2 compile, and the accounting block read it as unexplained.
+#[test]
+fn test_the_assembly_listing_is_a_timed_step() {
+    let report = listed("time");
+    assert!(
+        report.lines().any(|one| one.starts_with("[time]") && one.ends_with(" masm text")),
+        "no `masm text` step in:\n{report}"
+    );
 }

@@ -5,8 +5,10 @@
 #include "ad.h"
 #include "far.h"
 #include "fheap.h"
+#include "nheap.h"
+#include "device.h"
 
-enum { SEGMENT = 0x10000UL };
+#define SEGMENT 0x10000UL
 
 int ad_allocated(const AD *ad)
 {
@@ -23,6 +25,19 @@ void ad_use_near(AD *ad, void *data)
 void *ad_near_data(const AD *ad)
 {
     return (void *)ad->data_off;
+}
+
+/* A pointer is the segment in its high word: the paragraph arithmetic a huge array's two segments want. */
+unsigned long ad_remaining(const AD *ad, qb_data_ptr from)
+{
+    unsigned long total = ad->elem, start, at = (unsigned long)from;
+    unsigned dim;
+
+    for (dim = 0; dim < ad->dims; dim++)
+        total *= ad->dm[dim].count;
+    start = ((unsigned long)ad->data_seg << 4) + ad->data_off;
+    at = ((at >> 16) << 4) + (at & 0xFFFF);
+    return at >= start && at - start <= total ? total - (at - start) : 0;
 }
 
 unsigned long ad_free_bytes(void)
@@ -71,4 +86,41 @@ void ad_near_moved(AD *ad, int delta)
 void ad_clear(AD *ad, unsigned long bytes)
 {
     far_clear_bytes(ad->data_seg, ad->data_off, bytes);
+}
+
+/* `count` bytes between far addresses given as a segment and a long offset. */
+static void copy_far(u16 to_segment, unsigned long to, u16 from_segment, unsigned long from, unsigned long count)
+{
+    while (count) {
+        unsigned long chunk = count < 0x1000 ? count : 0x1000;
+        u8 __far *target = (u8 __far *)far_words(to_segment + (u16)(to >> 4)) + (to & 15);
+        const u8 __far *source = (const u8 __far *)far_words(from_segment + (u16)(from >> 4)) + (from & 15);
+        BlockOp op;
+
+        op.dst = target;
+        op.src = source;
+        op.count = (unsigned)chunk;
+        op.value = 0;
+        dev_move(&op);
+        to += chunk;
+        from += chunk;
+        count -= chunk;
+    }
+}
+
+void ad_copy(AD *to, const AD *from, unsigned long bytes)
+{
+    copy_far(to->data_seg, to->data_off, from->data_seg, from->data_off, bytes);
+}
+
+void ad_adopt(AD *to, AD *from)
+{
+    if (from->features & (FADF_FAR | FADF_HUGE))
+        fh_adopt(to, from);
+    else {
+        lh_entry((void *)from->data_off)->owner = to;
+        to->data_seg = from->data_seg;
+    }
+    to->data_off = from->data_off;
+    from->data_seg = 0;
 }

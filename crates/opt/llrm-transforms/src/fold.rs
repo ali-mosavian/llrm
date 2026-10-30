@@ -18,11 +18,11 @@
 //! commutative operation that ends up with the constant on the left gets it
 //! back on the right; an ordered one (`sub`, shifts) keeps its operand order.
 //!
-//! A call kills only the cells its writes may overlap (`CallEffects`, from
-//! `Summaries` and the call's `memory(...)`, `readonly` and `readnone`
-//! attributes); one that states writes without an effect list clears every
-//! cell. A fact about reaching an edge says nothing about a callee, so edge
-//! facts clear all cells at a call.
+//! A call kills only the cells its writes may overlap
+//! (`alias::calls_by_attributes`, from the call's `memory(...)`, `readonly` and
+//! `readnone` attributes and `GlobalsModRef`); one that states writes without
+//! an effect list clears every cell. A fact about reaching an edge says nothing
+//! about a callee, so edge facts clear all cells at a call.
 //!
 //! ```text
 //!  store i16 9, ptr @g          store i16 9, ptr @g
@@ -164,7 +164,7 @@ struct _EdgeFold {
 /// expression folded on its edges, then floatfold; `outer` is its module
 /// and target, `calls` what each call writes. Whether anything changed.
 pub fn folded(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -175,7 +175,7 @@ pub fn folded(
 
 /// `folded`, `analyses` holding what is known of `function`.
 fn _folded(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
@@ -196,7 +196,7 @@ fn _folded(
 /// `folded`'s integers: consts' answers, a counted float loop's exit
 /// cells among them.
 fn _numbers(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,

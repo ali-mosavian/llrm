@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/*/llrm-*"]
-default-members = [".", "crates/*/llrm-*"]
+members = [".", "crates/*/*", "runtime/qb"]
+default-members = [".", "crates/*/*", "runtime/qb"]
 resolver = "3"
 
 [workspace.package]
@@ -14,6 +14,7 @@ indexmap = "2"
 # The compilers' allocator: glibc's malloc and free were a quarter of a compile's instructions.
 mimalloc = { version = "0.1", default-features = false }
 llrm-alloc = { path = "crates/support/llrm-alloc" }
+llrm-env = { path = "crates/support/llrm-env" }
 num-bigint = "0.4"
 num-traits = "0.2"
 rustc-hash = "2"
@@ -30,33 +31,33 @@ llrm-x86-m16-select = { path = "crates/target/llrm-x86-m16-select" }
 llrm-target = { path = "crates/target/llrm-target" }
 llrm-x86 = { path = "crates/target/llrm-x86" }
 llrm-x86-m32 = { path = "crates/target/llrm-x86-m32" }
+llrm-arm64 = { path = "crates/target/llrm-arm64" }
 llrm-x86-m32-select = { path = "crates/target/llrm-x86-m32-select" }
-llrm-omf = { path = "crates/target/llrm-omf" }
-llrm-object = { path = "crates/target/llrm-object" }
-llrm-elf = { path = "crates/target/llrm-elf" }
-llrm-dwarf = { path = "crates/target/llrm-dwarf" }
-llrm-coff = { path = "crates/target/llrm-coff" }
-llrm-coff32 = { path = "crates/target/llrm-coff32" }
-llrm-coff64 = { path = "crates/target/llrm-coff64" }
-llrm-elf32 = { path = "crates/target/llrm-elf32" }
-llrm-elf64 = { path = "crates/target/llrm-elf64" }
-llrm-macho = { path = "crates/target/llrm-macho" }
-llrm-x86-bcmachine = { path = "crates/target/llrm-x86-bcmachine" }
-llrm-x86-bc = { path = "crates/target/llrm-x86-bc" }
-llrm-bcdriver = { path = "crates/bc/llrm-bcdriver" }
+llrm-x86-m64 = { path = "crates/target/llrm-x86-m64" }
+llrm-x86-m64-select = { path = "crates/target/llrm-x86-m64-select" }
+llrm-omf = { path = "crates/mc/llrm-omf" }
+llrm-object = { path = "crates/mc/llrm-object" }
+llrm-elf = { path = "crates/mc/llrm-elf" }
+llrm-dwarf = { path = "crates/mc/llrm-dwarf" }
+llrm-codeview = { path = "crates/mc/llrm-codeview" }
+llrm-coff = { path = "crates/mc/llrm-coff" }
+llrm-macho = { path = "crates/mc/llrm-macho" }
+llrm-bcobj = { path = "crates/frontends/bcobj" }
+llrm-bcdriver = { path = "crates/driver/llrm-bcdriver" }
 llrm-hir = { path = "crates/ir/llrm-hir" }
 llrm-mir = { path = "crates/ir/llrm-mir" }
 llrm-lir = { path = "crates/ir/llrm-lir" }
 llrm-analysis = { path = "crates/opt/llrm-analysis" }
 llrm-transforms = { path = "crates/opt/llrm-transforms" }
-llrm-core = { path = "crates/backend/llrm-core" }
-llrm-driver = { path = "crates/backend/llrm-driver" }
+llrm-codegen = { path = "crates/codegen/llrm-codegen" }
+llrm-driver = { path = "crates/driver/llrm-driver" }
+llrm-cc = { path = "crates/driver/llrm-cc" }
 llrm-iselgen = { path = "crates/backend/llrm-iselgen" }
 llrm-peepgen = { path = "crates/backend/llrm-peepgen" }
-llrm-nib = { path = "crates/frontends/llrm-nib" }
-llrm-qb = { path = "crates/frontends/llrm-qb" }
+llrm-nib = { path = "crates/frontends/nib" }
+llrm-qb = { path = "crates/frontends/qb" }
 llrm-c = { path = "crates/frontends/llrm-c" }
-llrm-qbruntime = { path = "crates/frontends/llrm-qbruntime" }
+llrm-qbruntime = { path = "runtime/qb" }
 
 [package]
 name = "llrm"
@@ -68,12 +69,17 @@ default-run = "llrm-qb"
 
 [dependencies]
 llrm-alloc = { workspace = true }
-llrm-core = { workspace = true }
+llrm-codegen = { workspace = true }
 llrm-mir = { workspace = true }
+llrm-analysis = { workspace = true }
+llrm-transforms = { workspace = true }
+llrm-x86 = { workspace = true }
 llrm-bcdriver = { workspace = true }
+llrm-driver = { workspace = true }
 llrm-nib = { workspace = true }
 llrm-qb = { workspace = true }
-llrm-c = { workspace = true }
+llrm-c = { workspace = true, optional = true }
+llrm-cc = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
@@ -81,18 +87,18 @@ tempfile = { workspace = true }
 default = ["toolchain"]
 # What the build scripts bootstrap: Open Watcom's wccq (llrm-c), jwasm and jwlink, and DOSBox-X.
 # The lib tests need only wccq.
-toolchain = ["wccq", "jw", "dosrun"]
-wccq = ["llrm-c/toolchain"]
+toolchain = ["jw", "dosrun"]
+# The Watcom-dialect llrm-c, kept until llrm-cc replaces it (C4): not built by default.
+c-legacy = ["dep:llrm-c"]
+wccq = ["c-legacy", "llrm-c/toolchain"]
 jw = []
 dosrun = []
 system-alloc = []
 
 [dev-dependencies]
 llrm-target = { workspace = true }
-llrm-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
-llrm-driver = { workspace = true }
 llrm-object = { workspace = true }
 regex = { workspace = true }
 toml = { workspace = true }
@@ -104,6 +110,15 @@ path = "src/bin/llrm-qb.rs"
 [[bin]]
 name = "llrm-c"
 path = "src/bin/llrm-c.rs"
+required-features = ["c-legacy"]
+
+[[bin]]
+name = "llrm-cc"
+path = "src/bin/llrm-cc.rs"
+
+[[bin]]
+name = "llrm-llc"
+path = "src/bin/llrm-llc.rs"
 
 [[bin]]
 name = "llrm-omf"
@@ -116,6 +131,10 @@ path = "src/bin/llrm-nib.rs"
 [[bin]]
 name = "llrm-mir"
 path = "src/bin/llrm-mir.rs"
+
+[[bin]]
+name = "llrm-pass"
+path = "src/bin/llrm-pass.rs"
 
 [[bin]]
 name = "llrm-run"
@@ -132,6 +151,11 @@ path = "src/bin/nib-lsp.rs"
 # Release, bench and `test --release` inherit this; only a clean rebuilds all.
 [profile.release]
 incremental = true
+
+# Debug builds and `cargo test` (the test profile inherits dev) keep line tables only: full DWARF made each target dir several times larger and /home was filling at
+# 78 GB an hour. Backtraces still carry file:line; a debugger loses local variables there.
+[profile.dev]
+debug = "line-tables-only"
 
 # The shipped llrm-c, the vs-gcc compile-time table and the creep run on main: one codegen unit and fat LTO (about 3 minutes from cold, against
 # 7-60 s incremental). Compile instructions -11..-13% (d_faces, combat, cmd, mdl, nbody_single, queens, x_life, 2026-10-09); thin LTO with

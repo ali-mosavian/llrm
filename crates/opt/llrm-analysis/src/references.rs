@@ -93,6 +93,9 @@ struct Table {
     mark: Mark,
     /// The metadata the types were read from.
     metadata: (usize, usize),
+    /// How many globals the unit listed: with none, no root is a global
+    /// variable (`MemRef::object`).
+    globals: usize,
     made: IdMap<InstId, Rc<MemRef>>,
     /// Each value some chain read, with the accesses whose chain it is in.
     chains: IdMap<ValueId, Vec<InstId>>,
@@ -103,6 +106,7 @@ impl Table {
         Self {
             mark: unit.function.mark(),
             metadata: (unit.metadata.as_ptr() as usize, unit.metadata.len()),
+            globals: unit.globals.len(),
             made: IdMap::new(),
             chains: IdMap::new(),
         }
@@ -175,7 +179,7 @@ pub(crate) fn of(
     let mut tables = bases.tables.borrow_mut();
     let now = unit.function.mark();
     let table = tables.entry(now.lineage()).or_insert_with(|| Table::new(unit));
-    if table.metadata != (unit.metadata.as_ptr() as usize, unit.metadata.len()) {
+    if table.metadata != (unit.metadata.as_ptr() as usize, unit.metadata.len()) || table.globals != unit.globals.len() {
         table.clear(unit);
     } else if table.mark != now {
         match unit.function.changes_since(table.mark) {

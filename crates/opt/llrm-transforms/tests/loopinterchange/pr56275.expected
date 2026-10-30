@@ -1,0 +1,79 @@
+== 
+@test1
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v16, %B7 ], [ 1, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v14, %B6 ], [ 1, %B3 ]
+  %v2 = add i64 %v1, 1
+  %v3 = add i64 %v1, 0
+  br label %B5
+B5:
+  %v4 = add i64 %v0, 0
+  %v5 = add i64 %v0, 0
+  %v6 = getelementptr inbounds [64 x i32], ptr %a, i64 %v4, i64 %v2
+  %v7 = getelementptr inbounds [64 x i32], ptr %a, i64 %v5, i64 %v3
+  %v8 = getelementptr inbounds [64 x i32], ptr %b, i64 %v0, i64 %v1
+  %v9 = getelementptr inbounds [64 x i32], ptr %c, i64 %v0, i64 %v1
+  %v10 = load i32, ptr %v8
+  store i32 %v10, ptr %v6
+  %v11 = load i32, ptr %v7
+  store i32 %v11, ptr %v9
+  %v12 = add nuw nsw i64 %v0, 1
+  %v13 = icmp eq i64 %v12, 63
+  br label %B6
+B6:
+  %v14 = add nuw nsw i64 %v1, 1
+  %v15 = icmp eq i64 %v14, 63
+  br i1 %v15, label %B7, label %B4
+B7:
+  %v16 = add nuw nsw i64 %v0, 1
+  %v17 = icmp eq i64 %v16, 63
+  br i1 %v17, label %B8, label %B2
+B8:
+  ret void
+@test2
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v16, %B7 ], [ 1, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v14, %B6 ], [ 1, %B3 ]
+  %v2 = add i64 %v1, 1
+  %v3 = add i64 %v1, 0
+  br label %B5
+B5:
+  %v4 = add i64 %v0, 0
+  %v5 = add i64 %v0, 0
+  %v6 = getelementptr inbounds [64 x i32], ptr %a, i64 %v4, i64 %v2
+  %v7 = getelementptr inbounds [64 x i32], ptr %a, i64 %v5, i64 %v3
+  %v8 = getelementptr inbounds [64 x i32], ptr %b, i64 %v0, i64 %v1
+  %v9 = getelementptr inbounds [64 x i32], ptr %c, i64 %v0, i64 %v1
+  %v10 = load i32, ptr %v8
+  %v11 = load i32, ptr %v7
+  store i32 %v10, ptr %v6
+  store i32 %v11, ptr %v9
+  %v12 = add nuw nsw i64 %v0, 1
+  %v13 = icmp eq i64 %v12, 63
+  br label %B6
+B6:
+  %v14 = add nuw nsw i64 %v1, 1
+  %v15 = icmp eq i64 %v14, 63
+  br i1 %v15, label %B7, label %B4
+B7:
+  %v16 = add nuw nsw i64 %v0, 1
+  %v17 = icmp eq i64 %v16, 63
+  br i1 %v17, label %B8, label %B2
+B8:
+  ret void

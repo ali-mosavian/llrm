@@ -14,7 +14,8 @@
 # base: any GPR), index (an address index: any GPR but ESP), frame, stack, positional (the register is a
 # position in a stack, st(i): an exchange of it is an effect and it is no register a pass renames or removes).
 # Kind letter `r` is gpr, `s` is x87. Allocation order is file order: the
-# cdecl32 caller-saved registers first, then the callee-saved ones.
+# cdecl32 caller-saved registers first, then the callee-saved ones in X86RegisterInfo.td's order
+# (GR32: EAX ECX EDX ESI EDI EBX EBP; RegisterClassInfo keeps that order within each group).
 # ES is described only as the string operations' segment, and is not
 # allocatable; it equals DS (`string_segment` in datalayout.toml). FS and GS
 # are never described.
@@ -23,13 +24,16 @@
 # register the result is not left in comes last.
 @scratch cx dx bx ax
 #
+# @bytes: the 8-bit allocation order, GR8 of X86RegisterInfo.td: the high bytes come before bl and bh.
+@bytes al cl dl ah ch dh bl bh
+#
 # name  bits root lane classes dwarf codeview
-eax     32   eax  0    gpr,byte,base,index,int  0  17
-ecx     32   ecx  0    gpr,byte,base,index,int  1  18
-edx     32   edx  0    gpr,byte,base,index,int  2  19
-ebx     32   ebx  0    gpr,byte,base,index,int  3  20
+eax     32   eax  0    gpr,byte,base,index,int,tail_call  0  17
+ecx     32   ecx  0    gpr,byte,base,index,int,tail_call  1  18
+edx     32   edx  0    gpr,byte,base,index,int,tail_call  2  19
 esi     32   esi  0    gpr,base,index,int  6  23
 edi     32   edi  0    gpr,base,index,int  7  24
+ebx     32   ebx  0    gpr,byte,base,index,int,frame_follows  3  20
 ebp     32   ebp  0    reserved,frame,base,index,int  5  22
 esp     32   esp  0    reserved,stack,base,int  4  21
 # The return address call frame information names (DWARF column 8); no code reaches it as a register.
@@ -64,3 +68,13 @@ st4     80   st4 0    x87,positional  15  132
 st5     80   st5 0    x87,positional  16  133
 st6     80   st6 0    x87,positional  17  134
 st7     80   st7 0    x87,positional  18  135
+# LLVM's RFP registers FP0..FP6, which greedy allocates and the stackifier maps
+# to stack positions (FP7 is the stackifier's scratch). Named by iced's MM0..MM6,
+# the physical x87 registers; never encoded (an assigned one becomes an st(i)).
+mm0     80   mm0 0    rfp  -  -
+mm1     80   mm1 0    rfp  -  -
+mm2     80   mm2 0    rfp  -  -
+mm3     80   mm3 0    rfp  -  -
+mm4     80   mm4 0    rfp  -  -
+mm5     80   mm5 0    rfp  -  -
+mm6     80   mm6 0    rfp  -  -

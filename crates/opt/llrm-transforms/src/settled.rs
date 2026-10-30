@@ -74,7 +74,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 
-use llrm_analysis::manager::{Callbacks, GlobalsAA, Summaries};
+use llrm_analysis::manager::{GlobalsAA, Summaries};
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::footprint::{self, Footprint};
 use llrm_mir::module::{Change, Function, GlobalKind, Mark, MetadataOperand, Operand};
@@ -107,7 +107,7 @@ struct Record {
 pub struct Slice {
     own: u64,
     /// One number for each part of the module's facts
-    /// (`llrm_mir::passes::read`), in the order of its bits.
+    /// (`llrm_mir::passes::read`), in the order of its bits; bit 3 is unused.
     parts: [u64; 5],
 }
 
@@ -198,15 +198,14 @@ impl Settled {
             .map_or(0, |record| record.bits)
     }
 
-    /// `pass` found nothing on `function` as it is, under facts `slice`.
+    /// `pass` found nothing on a body as it was at `mark`, under facts `slice`.
     pub fn note(
         &self,
         pass: &'static str,
-        function: &Function,
+        mark: Mark,
         slice: Slice,
         bits: u8,
     ) {
-        let mark = function.mark();
         self.found.borrow_mut().entry(mark.lineage()).or_default().insert(pass, Record { mark, slice, bits });
     }
 
@@ -234,6 +233,12 @@ impl Settled {
     }
 }
 
+/// The hasher of every digest here. SipHash was 1.8 M of a `d_faces` compile:
+/// these are compared within a run, and nothing keyed guards them.
+fn digest() -> llrm_mir::hash::Fx {
+    llrm_mir::hash::Fx::default()
+}
+
 /// A number that is the same where a body reads the same outside itself: see
 /// the module's text.
 pub fn slice(
@@ -245,7 +250,7 @@ pub fn slice(
     let saved = read::swap(0);
     let function = &*unit.function;
     let context = &*unit.context;
-    let mut own = std::collections::hash_map::DefaultHasher::new();
+    let mut own = digest();
     // What a body says of its parameters for its callers (`initializes`) is a
     // result of its code, not a premise of it.
     let parameters: Vec<Vec<&llrm_mir::opcode::Attribute>> = function
@@ -253,8 +258,8 @@ pub fn slice(
         .iter()
         .map(|attrs| attrs.iter().filter(|one| !matches!(one, llrm_mir::opcode::Attribute::Initializes(_))).collect())
         .collect();
-    let numbered = |value: &dyn Fn(&mut std::collections::hash_map::DefaultHasher)| {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let numbered = |value: &dyn Fn(&mut llrm_mir::hash::Fx)| {
+        let mut hasher = digest();
         value(&mut hasher);
         hasher.finish()
     };
@@ -262,7 +267,7 @@ pub fn slice(
         numbered(&|hasher| function.attrs.hash(hasher)),
         numbered(&|hasher| parameters.hash(hasher)),
         numbered(&|hasher| (&function.return_attrs, function.calling_convention, function.ty).hash(hasher)),
-        numbered(&|hasher| (unit.metadata.len(), outer.loop_intervals()).hash(hasher)),
+        numbered(&|hasher| unit.metadata.len().hash(hasher)),
     ];
     own_parts.hash(&mut own);
     let named = named(context, function, unit.metadata);
@@ -283,7 +288,7 @@ pub fn slice(
             }
             continue;
         }
-        let mut declaration = std::collections::hash_map::DefaultHasher::new();
+        let mut declaration = digest();
         let mut kept = (None, None);
         match &global.kind {
             GlobalKind::Function(callee) => {
@@ -297,7 +302,7 @@ pub fn slice(
                     callee.parameter_attrs.iter().filter(|attrs| !attrs.is_empty()).collect::<Vec<_>>(),
                 )
                     .hash(&mut declaration);
-                let mut effects = std::collections::hash_map::DefaultHasher::new();
+                let mut effects = digest();
                 // The pointer parameters it keeps a copy of are counted, not
                 // placed: a parameter nothing reads is the one taken away.
                 let pointers = |callee: &llrm_mir::module::Function| -> Vec<bool> {
@@ -332,7 +337,7 @@ pub fn slice(
                     .hash(&mut effects);
                 outer.kept_across(Some(id)).hash(&mut effects);
                 callees.push(effects.finish());
-                let mut summary = std::collections::hash_map::DefaultHasher::new();
+                let mut summary = digest();
                 global.name.as_deref().and_then(|name| summaries?.get(name)).hash(&mut summary);
                 known.push(summary.finish());
                 kept = (Some(effects.finish()), Some(summary.finish()));
@@ -347,30 +352,19 @@ pub fn slice(
     let one_of = |mut numbers: Vec<u64>| {
         numbers.sort_unstable();
         numbers.dedup();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = digest();
         numbers.hash(&mut hasher);
         hasher.finish()
     };
     let globals =
         outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok()).map(|globals| globals.read_by(&named));
-    let callbacks = *cache
-        .callbacks
-        .get_or_insert_with(
-            || {
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                outer.cached_ref::<Callbacks>().and_then(|one| one.as_ref().ok()).hash(&mut hasher);
-                hasher.finish()
-            },
-        );
     let hashed = |value: &dyn std::fmt::Debug| {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = digest();
         format!("{value:?}").hash(&mut hasher);
         hasher.finish()
     };
-    let slice = Slice {
-        own: own.finish(),
-        parts: [one_of(callees), one_of(known), hashed(&globals), callbacks, one_of(declared)],
-    };
+    let slice =
+        Slice { own: own.finish(), parts: [one_of(callees), one_of(known), hashed(&globals), 0, one_of(declared)] };
     FACTS.with(|held| held.replace(cache));
     read::swap(saved);
     slice
@@ -384,7 +378,6 @@ struct Facts {
     /// Its declaration's number, what the callee does to memory and its
     /// summary.
     each: HashMap<GlobalId, (u64, Option<u64>, Option<u64>)>,
-    callbacks: Option<u64>,
 }
 
 thread_local! {
@@ -417,4 +410,19 @@ fn named(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    /// The digests were `DefaultHasher`, SipHash13 over every attribute of a
+    /// body at each slice. Does not compile for any other hasher type.
+    #[test]
+    fn test_digests_are_fx() {
+        use std::hash::{Hash, Hasher};
+        let mut hasher: llrm_mir::hash::Fx = super::digest();
+        7u32.hash(&mut hasher);
+        let mut by_hand = llrm_mir::hash::Fx::default();
+        7u32.hash(&mut by_hand);
+        assert_eq!(hasher.finish(), by_hand.finish());
+    }
 }

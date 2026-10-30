@@ -69,7 +69,7 @@ flowchart TB
 
 *How the changed paths select the tier*
 
-`[compiler]` is `crates/**`, `src/**`, `build.rs`, the manifests, `rust-toolchain.toml`, `.cargo/**`. `[shared]` is the manifests, `src/**`, `tests/common/**`, `crates/ir/**`, `crates/support/**`, `crates/target/llrm-target/**`, `crates/target/llrm-object/**` and `tools/gate/**`. A path in no table is unknown and selects full. Backend and transform changes are not shared: they take fast plus every codegen heavy step (`run`, `qcport`, `pytest-programs`).
+`[compiler]` is `crates/**`, `src/**`, `build.rs`, the manifests, `rust-toolchain.toml`, `.cargo/**`. `[shared]` is the manifests, `src/**`, `tests/common/**`, `crates/ir/**`, `crates/support/**`, `crates/target/llrm-target/**`, `crates/mc/llrm-object/**` and `tools/gate/**`. A path in no table is unknown and selects full. Backend and transform changes are not shared: they take fast plus every codegen heavy step (`run`, `qcport`, `pytest-programs`).
 
 `gate.py plan [--base REF] [--files F...] [--tier auto|fast|full]` prints the tier, the reason, the steps and the run languages. A diff that changes only some crates tests those crates and the crates that depend on them (and the `[[reads]]` crates whose tests read their sources); full tests the workspace.
 
@@ -98,7 +98,7 @@ Every step exits 0 to pass, 77 when SKIPPED, and anything else to fail. A cargo 
 | `identity` | `tests/toolchain.rs` `test_the_identity_gate_passes` | the compiler built against itself makes identical objects | identity |
 | `turbo` | Turbo Debugger sessions (`tests/turbo.rs`) | the debugger shows the same values | reference |
 | `cv4` | Microsoft LINK and CodeView sessions (`tests/cv4.rs`) | pass | reference |
-| `qcport` | `tools/qcport-run.py` | QCport built by llrm-c draws what the Borland build draws | reference |
+| `qcport` | `tools/qcport-run-cc.py` | QCport built by llrm-cc draws what the Borland build draws | reference |
 | `dos-slow` | `tools/dosbatch` tests marked `slow_dos` | pass | dos |
 | `measure` | `tools/measure.py check` | no compile-cost or growth rise past `[measure]` | cost |
 

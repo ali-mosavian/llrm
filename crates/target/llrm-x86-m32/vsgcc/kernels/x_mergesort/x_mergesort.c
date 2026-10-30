@@ -1,9 +1,11 @@
 extern void report(long value);
+typedef unsigned long u32;
+typedef long i32; /* the width these kernels are written for: int is 16 bits at m16 */
 
-static int a[256], b[256];
-static void msort(int lo, int hi)
+static i32 a[256], b[256];
+static void msort(i32 lo, i32 hi)
 {
-    int mid, i, j, k;
+    i32 mid, i, j, k;
     if (hi - lo < 2) return;
     mid = (lo + hi) / 2;
     msort(lo, mid); msort(mid, hi);
@@ -13,10 +15,10 @@ static void msort(int lo, int hi)
     while (j < hi) b[k++] = a[j++];
     for (k = lo; k < hi; ++k) a[k] = b[k];
 }
-long bench_x_mergesort(int n)
+long bench_x_mergesort(i32 n)
 {
-    unsigned s = 99; int i; long sum = 0;
-    for (i = 0; i < n; ++i) { s = s * 69069u + 1u; a[i] = (int)(s >> 18); }
+    u32 s = 99; i32 i; long sum = 0;
+    for (i = 0; i < n; ++i) { s = s * 69069ul + 1ul; a[i] = (i32)(s >> 18); }
     msort(0, n);
     for (i = 0; i < n; ++i) sum = sum * 11 + a[i];
     return sum;

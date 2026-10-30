@@ -6,6 +6,10 @@
 //! does, so a load, a store or a `gep` through it can use the near pointer and
 //! drop the selector: no `les`, no segment register held across a loop.
 //!
+//! A far pointer that is a constant cast of a global (what forwarding a stored
+//! far pointer leaves where its load was) is read the same way: a load or store
+//! through it, or through steps of it that only memory reads, uses the global.
+//!
 //! A far value narrows when every user is one that does not need the selector:
 //! a non-volatile load's or store's pointer, the base of a `gep`, a phi or
 //! select of narrowing values, or a cast back to the near space (which is the
@@ -20,6 +24,11 @@
 //! reach unless SS were DS. No such assumption is made. Phis and selects
 //! narrow only where every value they join narrows to one space; a join of two
 //! spaces stays far.
+//!
+//! DEVIATE LP-5 (no pin pass on x86: infer-address-spaces is a target pass
+//! (none for x86); the near pointer under a far cast matters at m16 only; exit:
+//! deleted if the m16 rows do not lose without it, else folded into LP-4; owner
+//! w-6; review 2026-11-13).
 //!
 //! # Example
 //! Before:
@@ -69,8 +78,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::context::Context;
+use llrm_mir::context::{ConstantExpr, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{CastOp, Opcode};
@@ -172,8 +182,135 @@ fn met(
     }
 }
 
+/// The near pointer a constant far cast is made of: `addrspacecast (ptr @g to
+/// ptr addrspace(1))` is `@g`, a global's address in the data space, and a
+/// constant step of one is the same step of the global (a field of a forwarded
+/// struct).
+fn near_of_constant(
+    context: &Context,
+    layout: &DataLayout,
+    spaces: Spaces,
+    operand: Operand,
+) -> Option<Operand> {
+    let Operand::Constant(id) = operand else { return None };
+    near_constant(context, layout, spaces, id).map(Operand::Constant)
+}
+
+fn near_constant(
+    context: &Context,
+    layout: &DataLayout,
+    spaces: Spaces,
+    id: llrm_mir::context::ConstantId,
+) -> Option<llrm_mir::context::ConstantId> {
+    let constant = context.get(id);
+    far(context, layout, constant.ty)?;
+    match constant.kind.clone() {
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => {
+            (near(context, spaces, context.get(value).ty) == Some(spaces.data)).then_some(value)
+        }
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, operands }) => {
+            let base = near_constant(context, layout, spaces, operands[0])?;
+            let mut stepped = operands;
+            stepped[0] = base;
+            Some(context.constant(llrm_mir::context::Constant {
+                ty: context.types.ptr(spaces.data),
+                kind: ConstantKind::Expr(ConstantExpr::GetElementPtr {
+                    source,
+                    inbounds,
+                    nusw,
+                    nuw,
+                    operands: stepped,
+                }),
+            }))
+        }
+        _ => None,
+    }
+}
+
+/// Whether every user of `value` reads it through memory or steps it on to one
+/// that does.
+fn only_read_through(
+    function: &Function,
+    value: ValueId,
+    depth: u32,
+) -> bool {
+    depth < 8
+        && !function.users(value).is_empty()
+        && function.users(value).iter().all(|one| match &function.instruction(one.user).opcode {
+            Opcode::Load { volatile: false, .. } => one.index == 0,
+            Opcode::Store { volatile: false, .. } => one.index == 1,
+            Opcode::GetElementPtr { .. } if one.index == 0 => function
+                .instruction(one.user)
+                .result
+                .is_some_and(|result| only_read_through(function, result, depth + 1)),
+            _ => false,
+        })
+}
+
+/// A load, a store or a step through a constant far cast of a global (what
+/// forwarding a stored pointer leaves in place of the load) reads the global's
+/// near address. `inferred` follows casts that are instructions only.
+fn narrow_constant_casts(
+    context: &Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    spaces: Spaces,
+) -> bool {
+    let walk: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
+    let data = context.types.ptr(spaces.data);
+    let mut near_steps: IdMap<ValueId, Operand> = IdMap::default();
+    let mut changed = false;
+    for inst in walk {
+        let instruction = function.instruction(inst).clone();
+        let base_of = |operand: Operand| match operand {
+            Operand::Value(value) => near_steps.get(&value).copied(),
+            constant => near_of_constant(context, layout, spaces, constant),
+        };
+        match instruction.opcode {
+            Opcode::Load { volatile: false, .. } => {
+                if let Some(base) = base_of(instruction.operands[0]) {
+                    function.set_operand(inst, 0, base);
+                    changed = true;
+                }
+            }
+            Opcode::Store { volatile: false, .. } => {
+                if let Some(base) = base_of(instruction.operands[1]) {
+                    function.set_operand(inst, 1, base);
+                    changed = true;
+                }
+            }
+            Opcode::GetElementPtr { .. } => {
+                let (Some(base), Some(result)) = (base_of(instruction.operands[0]), instruction.result) else {
+                    continue;
+                };
+                if far(context, layout, instruction.ty).is_none() || !only_read_through(function, result, 0) {
+                    continue;
+                }
+                let mut operands = instruction.operands.clone();
+                operands[0] = base;
+                let made =
+                    function.create_instruction(instruction.opcode.clone(), data, operands, instruction.flags, None);
+                function.insert(made, Position::Before(inst)).expect("placed");
+                near_steps.insert(result, Operand::Value(function.instruction(made).result.expect("a step's value")));
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
 fn inferred(
-    context: &mut Context,
+    context: &Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    spaces: Spaces,
+) -> bool {
+    let narrowed = narrow_constant_casts(context, layout, function, spaces);
+    inferred_casts(context, layout, function, spaces) || narrowed
+}
+
+fn inferred_casts(
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     spaces: Spaces,
@@ -444,7 +581,7 @@ fn inferred(
     let values: Vec<ValueId> = narrow.keys().copied().collect();
     for value in values {
         let near_value = narrow[&value];
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             match usage(function, value, one.user, one.index) {
                 Reads::Narrows => {
                     if matches!(

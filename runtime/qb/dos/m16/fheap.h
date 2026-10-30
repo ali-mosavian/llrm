@@ -13,6 +13,7 @@ typedef AD FHD;
 /* Allocates `bytes`, zeroed, for `owner`; out of room is Out of memory. */
 void fh_alloc(FHD *owner, unsigned long bytes);
 void fh_free(FHD *owner);
+void fh_adopt(FHD *to, FHD *from);
 unsigned long fh_free_bytes(void);
 
 #endif

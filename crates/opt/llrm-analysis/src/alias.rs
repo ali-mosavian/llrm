@@ -71,10 +71,10 @@
 //! does what the module's entry points do (`callbacks`). `summaries_updating`
 //! redoes only the bodies that changed and their readers.
 //!
-//! Call effects (`calls_annotated`). Each call gets an `Effect`: the `MemRef`s
-//! it loads and stores, instantiated through the actuals, and the bytes it
-//! fills (`initialized`: bytes written before any is read). It is a side table,
-//! because the rich MIR's call carries no memory operands.
+//! Call effects (`calls_by_attributes`). Each call gets an `Effect`: the
+//! `MemRef`s it loads and stores, instantiated through the actuals, and the
+//! bytes it fills (`initialized`: bytes written before any is read). It is a
+//! side table, because the rich MIR's call carries no memory operands.
 //!
 //! Access annotation (`annotated`). Each load and store gets its provenance;
 //! where a range bounds its index the slice narrows to the bytes the index can
@@ -114,13 +114,13 @@
 //!
 //! # Provides
 //! `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`,
-//! `escaped_before`, `nonnull`), `seeds`, `summaries`, `calls_annotated`,
+//! `escaped_before`, `nonnull`), `seeds`, `summaries`, `calls_by_attributes`,
 //! `annotated`, `congruences`, `initialized`, `read_arguments`,
 //! `nonnull_by_definition`. Manager entries in [`crate::manager`]: `Pointers`,
-//! `PointValues`, `Annotated`, `CallEffects`, `Summaries`. Consumers:
+//! `PointValues`, `Annotated`, `Summaries`. Consumers:
 //! [`crate::memory`] (a `Unit`'s lazily built `annotated` and `points_to`),
-//! [`crate::memoryssa`] (`calls_annotated`), [`crate::avail`]
-//! (`EscapedBefore`), [`crate::observers`], [`crate::induction`]
+//! [`crate::memoryssa`] (`calls_by_attributes`), [`crate::avail`]
+//! (`EscapedBefore`), [`crate::induction`]
 //! (`congruences`), [`crate::globalsaa`], [`crate::interprocedural`], and
 //! `gvn`, `promote`, `loadjoins` and `decide` in `llrm-transforms`.
 //!
@@ -159,7 +159,7 @@ use crate::memory::{
     object_of, wrapped,
 };
 use crate::num::Num as BigInt;
-use crate::ranges::{self, Interval, Lookup};
+use crate::ranges::{self, Interval};
 use crate::regions;
 use crate::sliceset::{self, Shared, SliceSet};
 
@@ -654,6 +654,9 @@ pub struct Summary {
     /// type cannot land on a load of a type apart from it, however unplaced
     /// its pointer. None: some has none.
     pub unknown_write_types: Option<BTreeSet<Access>>,
+    /// The tracked globals `reads` and `writes` name are all the unknown
+    /// access reaches of them (`GlobalsModRef` found them per global).
+    pub globals_listed: bool,
 }
 
 /// An access type: its name and its ancestors', as `MemRef::typed` and
@@ -765,6 +768,7 @@ impl Summary {
             unknown_read: self.unknown_read,
             unknown_write: self.unknown_write,
             unknown_write_types: self.unknown_write_types.clone(),
+            globals_listed: self.globals_listed,
         }
     }
 }
@@ -828,7 +832,7 @@ impl CallFacts {
             if let Operand::Constant(id) = callee
                 && let ConstantKind::Global(global) = unit.context.get(id).kind
                 && let Some(named) = unit.globals.get(global.0 as usize)
-                && let Some(name) = named.name.clone()
+                && let Some(name) = named.name.owned()
             {
                 if named.function().is_some()
                     && !matches!(
@@ -852,7 +856,7 @@ impl CallFacts {
                     Operand::Constant(id)
                         if matches!(
                             unit.context.get(id).kind,
-                            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison
+                            ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison | ConstantKind::Undef
                         ) =>
                     {
                         Actual::Absent
@@ -973,12 +977,12 @@ pub(crate) fn only_reads(
         && !allowed.other.writes
 }
 
-fn _borrowed(
+pub(crate) fn borrowed(
     unit: &Unit,
     at: InstId,
     index: usize,
 ) -> bool {
-    let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
+    let (Opcode::Call(_) | Opcode::Invoke(_)) = &unit.function.instruction(at).opcode else { return false };
     // What these return is the operand's bytes, followed as a value: the call
     // keeps nothing (`captures(ret: provenance)` in LLVM).
     if matches!(
@@ -987,48 +991,23 @@ fn _borrowed(
     ) {
         return true;
     }
+    no_capture_argument(unit, at, index)
+}
+
+/// Whether the call `at` is stated to keep no copy of its argument `index`,
+/// at the site or on the callee's parameter (`nocapture`).
+pub(crate) fn no_capture_argument(
+    unit: &Unit,
+    at: InstId,
+    index: usize,
+) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
     let nocapture = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_capture();
     let declared = llrm_mir::memory::callee(unit.context, unit.function, at)
         .and_then(|one| unit.globals.get(one.0 as usize))
         .and_then(|one| one.function());
     info.argument_attrs.get(index).is_some_and(|attrs| nocapture(attrs))
         || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| nocapture(attrs))
-}
-
-/// What a callee nobody summarized may read and write at `at`, as far as
-/// its attributes allow: through each actual, the objects it points to;
-/// elsewhere, what a nonlocal reaches, what escaped before the call, and
-/// of the tracked globals what GlobalsAA says it names and what
-/// `callbacks` into the module do, all of them where that is unknown.
-///
-/// Less what a call back into the module adds (`_calling_back`'s), which is the
-/// same set for every call that may call back: whether each of the two is
-/// wanted comes back with them, and the sets are put together once for all the
-/// calls with the same others (`calls_annotated`).
-fn _unknown_visible(
-    procedure: &Procedure,
-    facts: &PointsTo,
-    at: InstId,
-    actual: &[Provenance],
-) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>, Back), String> {
-    let unit = &procedure.unit;
-    let allowed = _allowed(unit, at);
-    let (mut reads, mut writes) = _through_arguments(&allowed, actual);
-    let (other_reads, other_writes, back) = _unknown_base(unit, facts, at)?;
-    if allowed.other.reads {
-        reads.extend(other_reads);
-    }
-    if allowed.other.writes {
-        writes.extend(other_writes);
-    }
-    Ok((reads, writes, Back { reads: back && allowed.other.reads, writes: back && allowed.other.writes }))
-}
-
-/// Which of a call's reads and writes a call back into the module adds to.
-#[derive(Clone, Copy, Default)]
-struct Back {
-    reads: bool,
-    writes: bool,
 }
 
 /// What a callee nobody summarized may read and write through each of `actual`,
@@ -1090,60 +1069,6 @@ fn _unknown_base(
     writes.extend(_globals(unit, written));
     // An indirect callee may be an entry itself.
     Ok((reads, writes, callee.is_none() || globalsaa::calls_back(unit, at)))
-}
-
-/// What a call back into the module adds to what a call reads and writes: the
-/// callbacks' effects, and of the tracked globals all that the callbacks do not
-/// state, or where none are known.
-fn _calling_back(
-    unit: &Unit,
-    callbacks: Option<&Summary>,
-    reading: bool,
-    writing: bool,
-    reads: &mut SliceSet,
-    writes: &mut SliceSet,
-) {
-    let Some(callbacks) = callbacks else {
-        if reading {
-            reads.extend(_tracked(unit));
-        }
-        if writing {
-            writes.extend(_tracked(unit));
-        }
-        return;
-    };
-    if reading {
-        reads.absorb(&callbacks.reads);
-        if callbacks.unknown_read {
-            reads.extend(_tracked(unit));
-        }
-    }
-    if writing {
-        writes.absorb(&callbacks.writes);
-        if callbacks.unknown_write {
-            writes.extend(_tracked(unit));
-        }
-    }
-}
-
-/// What calling back into the module may do: the effects of the unit's
-/// GlobalsAA entries, in no caller's object space; none where `known`
-/// lacks one.
-fn _callbacks(
-    unit: &Unit,
-    known: &IndexMap<String, Summary>,
-) -> Option<Summary> {
-    callbacks_over(unit.globals_aa?, known)
-}
-
-/// `_callbacks` of GlobalsAA's `globals` and the summaries `known`: all that
-/// the answer depends on, so the module holds it once for every body that asks
-/// (`manager::Callbacks`).
-pub fn callbacks_over(
-    globals: &globalsaa::Globals,
-    known: &IndexMap<String, Summary>,
-) -> Option<Summary> {
-    CalledBack::of(globals, known)?.summary()
 }
 
 thread_local! {
@@ -1385,11 +1310,16 @@ pub fn visits() -> usize {
 }
 
 pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
+    _direct_summary_with(unit).map(|(summary, _)| summary)
+}
+
+/// `_direct_summary`, and the points-to facts it was made from.
+fn _direct_summary_with(unit: &Unit) -> Result<(Summary, Rc<PointsTo>), String> {
     DIRECT_RUNS.with(|runs| runs.set(runs.get() + 1));
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     let (mut unknown_read, mut unknown_write) = (false, false);
     let mut types = Some(BTreeSet::new());
-    let facts = points_to(unit, None, None)?;
+    let facts = Rc::new(points_to(unit, None, None)?);
     for (_, inst) in unit.function.walk() {
         let Some(reference) = MemRef::of(unit, inst) else { continue };
         let read = matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. });
@@ -1448,14 +1378,16 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
             _ => None,
         })
         .collect();
-    Ok(Summary {
+    let summary = Summary {
         reads: reads.into(),
         writes: writes.into(),
         captures,
         unknown_read,
         unknown_write,
         unknown_write_types: types,
-    })
+        globals_listed: false,
+    };
+    Ok((summary, facts))
 }
 
 fn _widen_parameters(summary: Summary) -> Summary {
@@ -1497,6 +1429,59 @@ fn _summary<'s>(
     name: &str,
 ) -> Option<&'s Summary> {
     (!procedure.replaceable.contains(name)).then(|| known.get(name)).flatten()
+}
+
+/// What a call back into the module adds to what a call reads and writes: the
+/// callbacks' effects, and of the tracked globals all that the callbacks do not
+/// state, or where none are known.
+fn _calling_back(
+    unit: &Unit,
+    callbacks: Option<&Summary>,
+    reading: bool,
+    writing: bool,
+    reads: &mut SliceSet,
+    writes: &mut SliceSet,
+) {
+    let Some(callbacks) = callbacks else {
+        if reading {
+            reads.extend(_tracked(unit));
+        }
+        if writing {
+            writes.extend(_tracked(unit));
+        }
+        return;
+    };
+    if reading {
+        reads.absorb(&callbacks.reads);
+        if callbacks.unknown_read {
+            reads.extend(_tracked(unit));
+        }
+    }
+    if writing {
+        writes.absorb(&callbacks.writes);
+        if callbacks.unknown_write {
+            writes.extend(_tracked(unit));
+        }
+    }
+}
+
+/// What calling back into the module may do: the effects of the unit's
+/// GlobalsAA entries, in no caller's object space; none where `known`
+/// lacks one.
+fn _callbacks(
+    unit: &Unit,
+    known: &IndexMap<String, Summary>,
+) -> Option<Summary> {
+    callbacks_over(unit.globals_aa?, known)
+}
+
+/// `_callbacks` of GlobalsAA's `globals` and the summaries `known`: all that
+/// the answer depends on.
+pub fn callbacks_over(
+    globals: &globalsaa::Globals,
+    known: &IndexMap<String, Summary>,
+) -> Option<Summary> {
+    CalledBack::of(globals, known)?.summary()
 }
 
 /// Transitive per-procedure mod/ref and capture summaries to a fixed point.
@@ -1588,6 +1573,9 @@ impl Bodies for IndexMap<String, Procedure<'_>> {
 pub struct SummaryMemo {
     result: IndexMap<String, Summary>,
     direct: IndexMap<String, Summary>,
+    /// The facts a call-free body's direct summary was made from: its visit,
+    /// with no call to give them other captures, finds the same.
+    direct_facts: IndexMap<String, Rc<PointsTo>>,
     /// The last visit of each body, in the order of the run, with its name.
     found: Vec<(String, Option<Visit>)>,
     known: Option<IndexMap<String, Summary>>,
@@ -1659,7 +1647,15 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
         let mut dirty_at: Vec<usize> = dirty_names.iter().filter_map(|name| procedures.position(name)).collect();
         dirty_at.sort_unstable();
         for at in dirty_at {
-            memo.direct.insert(procedures.name(at).to_owned(), _direct_summary(&procedures.procedure(at).unit)?);
+            let procedure = procedures.procedure(at);
+            let (summary, facts) = _direct_summary_with(&procedure.unit)?;
+            let name = procedures.name(at).to_owned();
+            if procedure.calls.is_empty() && procedure.arguments.is_empty() {
+                memo.direct_facts.insert(name.clone(), facts);
+            } else {
+                memo.direct_facts.shift_remove(&name);
+            }
+            memo.direct.insert(name, summary);
         }
         Ok::<(), String>(())
     })?;
@@ -1825,6 +1821,7 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
                 at,
                 &procedure,
                 &direct[name],
+                memo.direct_facts.get(name),
                 &result,
                 (callbacks.as_ref(), version),
                 &mut last[at].1,
@@ -2094,6 +2091,7 @@ fn _summarized(
     me: usize,
     procedure: &Procedure,
     direct: &Summary,
+    direct_facts: Option<&Rc<PointsTo>>,
     result: &IndexMap<String, Summary>,
     (callbacks, version): (Option<&Summary>, usize),
     memo: &mut Option<Visit>,
@@ -2107,9 +2105,12 @@ fn _summarized(
         .map(|(at, target)| (*at, _summary(procedure, result, target).map(|one| one.captures.clone())))
         .collect::<IndexMap<_, _>>();
     if memo.as_ref().is_none_or(|one| one.captured != captured_at) {
-        let facts = Rc::new(llrm_support::debug::timed("summaries points-to", || {
-            points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at))
-        })?);
+        let facts = match direct_facts {
+            Some(held) if captured_at.is_empty() && procedure.arguments.is_empty() => Rc::clone(held),
+            _ => Rc::new(llrm_support::debug::timed("summaries points-to", || {
+                points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at))
+            })?),
+        };
         *memo = Some(Visit { captured: captured_at, facts, version: None, unknown: Default::default(), base: None });
     }
     let visit = memo.as_mut().expect("made above");
@@ -2221,6 +2222,7 @@ fn _summarized(
         unknown_read,
         unknown_write,
         unknown_write_types: types,
+        globals_listed: false,
     })
 }
 
@@ -2258,16 +2260,30 @@ impl Effect {
             |one: &MemRef| one.pointer.is_none() && one.root.is_none() && one.base.is_none() && one.segment.is_none();
         let within = |old: &[MemRef], new: &[MemRef]| {
             let kept_slices = || old.iter().filter_map(|one| one.provenance.as_ref()).flat_map(|one| one.slices.iter());
-            let unknown_whole = kept_slices().any(|one| {
-                one.object.kind == MemoryKind::Unknown && one.low <= -(1_i64 << 31) && one.high >= 1_i64 << 31
-            });
+            let whole = |kind: MemoryKind| {
+                kept_slices().any(|one| one.object.kind == kind && one.low <= -(1_i64 << 31) && one.high >= 1_i64 << 31)
+            };
+            // `objects_may_alias` asks both objects addressed first, then the
+            // other one captured.
+            let reached = |slice: &Slice| slice.object.addressed() && slice.object.captured();
+            let unknown_whole = whole(MemoryKind::Unknown);
+            // What a callee may reach (`Nonlocal`) meets what escaped, a frame
+            // object aside: `objects_may_alias`' own rule.
+            let nonlocal_whole = whole(MemoryKind::Nonlocal);
             new.iter().all(|one| {
                 old.contains(one)
                     || (names_nothing(one)
                         && one.provenance.as_ref().is_some_and(|provenance| {
-                            provenance.slices.iter().all(|slice| {
-                                slice_covered(slice, kept_slices()) || (unknown_whole && slice.object.captured())
-                            })
+                            provenance
+                                .slices
+                                .iter()
+                                .all(
+                                    |slice| slice_covered(slice, kept_slices())
+                                        || (unknown_whole && reached(slice))
+                                        || (nonlocal_whole
+                                            && reached(slice)
+                                            && !matches!(slice.object.kind, MemoryKind::Frame | MemoryKind::Stack)),
+                                )
                         }))
             })
         };
@@ -2275,424 +2291,179 @@ impl Effect {
     }
 }
 
-/// `effects` with each value `to` gives another operand named by it, the
-/// effects of the same calls on the same bytes after a value is replaced by
-/// one found equal. The lists the calls share stay shared. None where a
-/// reference cannot carry its names over (`MemRef::renamed`).
-pub fn effects_renamed(
-    effects: &IndexMap<InstId, Effect>,
-    to: &dyn Fn(ValueId) -> Option<Operand>,
-) -> Option<IndexMap<InstId, Effect>> {
-    let mut lists: HashMap<*const [MemRef], Rc<[MemRef]>> = HashMap::default();
-    let mut list = |old: &Rc<[MemRef]>| -> Option<Rc<[MemRef]>> {
-        if let Some(done) = lists.get(&Rc::as_ptr(old)) {
-            return Some(Rc::clone(done));
-        }
-        let made: Rc<[MemRef]> = old.iter().map(|one| one.renamed(to)).collect::<Option<Vec<_>>>()?.into();
-        lists.insert(Rc::as_ptr(old), Rc::clone(&made));
-        Some(made)
-    };
-    effects
-        .iter()
-        .map(|(inst, effect)| {
-            Some((
-                *inst,
-                Effect {
-                    loads: list(&effect.loads)?,
-                    stores: list(&effect.stores)?,
-                    fills: effect.fills.iter().map(|one| one.renamed(to)).collect::<Option<Vec<_>>>()?,
-                },
-            ))
-        })
-        .collect()
-}
-
-/// Instantiate callee effects through actual pointer provenance: each
-/// call's effect, as old `calls_annotated` wrote it into the call.
-pub fn calls_annotated(
-    procedure: &Procedure,
-    known: &IndexMap<String, Summary>,
-) -> Result<IndexMap<InstId, Effect>, String> {
-    // Capture is part of escape flow. Unknown callees may retain every
-    // pointer actual; known callees retain only the parameters their fixed
-    // point summary says they capture.
-    let callee = |at: &InstId| procedure.calls.get(at).and_then(|target| _summary(procedure, known, target));
-    let captures =
-        procedure.calls.keys().map(|at| (*at, callee(at).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
-    let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captures))?;
-    let computed;
-    let callbacks = match procedure.unit.callbacks() {
-        Some(held) => {
-            if llrm_support::env_flag!("LLRM_CHECK_CALLBACKS") {
-                assert!(
-                    *held == _callbacks(&procedure.unit, known),
-                    "the held callbacks are not what adding the entries up gives"
-                );
-            }
-            held.as_ref()
-        }
-        None => {
-            computed = _callbacks(&procedure.unit, known);
-            computed.as_ref()
-        }
-    };
-
+/// What each call of `unit` reads and writes as its attributes and the unit's
+/// `GlobalsModRef` say, with no points-to solve (`getModRefInfo(Call, Loc)`
+/// as the pin's BasicAA and GlobalsAA read it): through each pointer argument
+/// the call may read or write, as a reference to the whole object it points
+/// into; elsewhere (`other`) unknown and non-local memory and the tracked
+/// globals the callee may touch (all of them where `GlobalsModRef` has nothing
+/// of the callee).
+pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect> {
+    FOOTPRINTS.with(|made| made.set(made.get() + 1));
+    let tracked: Vec<GlobalId> =
+        unit.globals_aa.into_iter().flat_map(|aa| aa.tracked_globals().iter().copied()).collect();
     let reference = |one: &Slice| {
         MemRef::reach(
-            u32::try_from(one.width).expect("a slice width is a memory width"),
+            u32::MAX >> 2,
             Provenance { slices: crate::memory::Sorted::from([one.clone()]), restrict: crate::memory::Sorted::new() },
         )
     };
+    // What a call reaches elsewhere depends on its callee alone, and on the
+    // module analyses the unit reads: kept with the proxy that holds them,
+    // where the unit is made under it.
+    let memo = unit.outer.filter(|outer| {
+        let same = |held: Option<*const ()>, now: Option<*const ()>| held == now;
+        same(
+            unit.globals_aa.map(|one| std::ptr::from_ref(one).cast()),
+            outer
+                .cached_ref::<crate::manager::GlobalsAA>()
+                .and_then(|one| one.as_ref().ok())
+                .map(|one| std::ptr::from_ref(one).cast()),
+        ) && same(
+            unit.globals_mr.map(|one| std::ptr::from_ref(one).cast()),
+            outer.cached_ref::<crate::manager::GlobalsModRefAnalysis>().map(|one| std::ptr::from_ref(one).cast()),
+        )
+    });
+    let reaches = |callee: Option<GlobalId>, nocallback: bool| -> (Rc<[MemRef]>, Rc<[MemRef]>) {
+        REACHES.with(|made| made.set(made.get() + 1));
+        // A callee that cannot call back writes of the tracked globals only
+        // what the runtime module promises of it (`!llrm.writes`).
+        let promised = if nocallback { unit.globals_aa.map(|aa| aa.unsummarized(callee)) } else { None };
+        let (mut reads, mut writes) = (SliceSet::new(), SliceSet::new());
+        for object in [ObjectRef::UNKNOWN, ObjectRef::NONLOCAL] {
+            reads.insert(Slice::whole(object));
+            writes.insert(Slice::whole(object));
+        }
+        for &global in &tracked {
+            let Some(object) = memory::global_object(unit, global) else { continue };
+            // What reaches the global through an argument is the argument's own
+            // reference.
+            let touched = unit.globals_mr.map_or(crate::aa::ModRefInfo::ModRef, |all| {
+                all.get_mod_ref_info_for_global(unit.globals, callee, global, || crate::aa::ModRefInfo::NoModRef)
+            });
+            // Only a named global is promised anything: the runtime holds its
+            // address by name alone. Any other is reached through arguments
+            // too.
+            let (reads_it, writes_it) = match &promised {
+                Some((named, written)) if named.contains(&global) => (true, written.contains(&global)),
+                _ => (true, true),
+            };
+            if touched.is_ref_set() && reads_it {
+                reads.insert(Slice::whole(object));
+            }
+            if touched.is_mod_set() && writes_it {
+                writes.insert(Slice::whole(object));
+            }
+        }
+        (reads.iter().map(&reference).collect(), writes.iter().map(&reference).collect())
+    };
+    let remembered = |key: u64, make: &dyn Fn() -> (Rc<[MemRef]>, Rc<[MemRef]>)| match memo {
+        Some(outer) => (*outer.memo(key, make)).clone(),
+        None => make(),
+    };
+    let mut elsewhere: llrm_mir::dense::IdMap<u32, (Rc<[MemRef]>, Rc<[MemRef]>)> = llrm_mir::dense::IdMap::default();
+    let mut elsewhere_unknown = None;
+    let mut out = llrm_mir::dense::IdMap::default();
+    // Calls reaching the same references share the one list.
+    // Hashed by Fx: the default SipHash of these lists was 27 M Ir on d_faces
+    // -O2.
+    let mut shared: llrm_support::hash::HashMap<Vec<MemRef>, Rc<[MemRef]>> = llrm_support::hash::HashMap::default();
+    let mut share = |list: Vec<MemRef>| -> Rc<[MemRef]> {
+        if let Some(one) = shared.get(&list) {
+            return Rc::clone(one);
+        }
+        let one: Rc<[MemRef]> = list.as_slice().into();
+        shared.insert(list, Rc::clone(&one));
+        one
+    };
+    for (_, at) in unit.function.walk() {
+        let op = unit.function.instruction(at);
+        let (Opcode::Call(_) | Opcode::Invoke(_)) = op.opcode else { continue };
+        let count = match op.opcode {
+            Opcode::Call(_) => op.operands.len() - 1,
+            _ => op.operands.len() - 3,
+        };
+        let allowed = _allowed(unit, at);
+        let (mut loads, mut stores): (Vec<MemRef>, Vec<MemRef>) = (Vec::new(), Vec::new());
+        for (index, &argument) in op.operands[..count].iter().enumerate() {
+            if !is_pointer(unit, argument) {
+                continue;
+            }
+            let through = allowed.through.get(index).copied().unwrap_or(Effects::ANY);
+            let width = match crate::aa::MemoryLocation::get_for_argument(unit, at, index as u32).map(|one| one.size) {
+                Some(crate::aa::LocationSize::Precise(bytes)) => u32::try_from(bytes).unwrap_or(u32::MAX >> 2),
+                _ => u32::MAX >> 2,
+            };
+            let mut place = MemRef::at(unit, argument, width);
+            place.provenance = unit.point_values.and_then(|values| values.reference(unit, &place));
+            // A pointer of no known object (a far pointer built from a segment
+            // word) reaches any object that may be reached: the unknown one.
+            if place.provenance.is_none() {
+                place = MemRef::reach(
+                    width,
+                    Provenance {
+                        slices: crate::memory::Sorted::from([Slice::whole(ObjectRef::UNKNOWN)]),
+                        restrict: crate::memory::Sorted::new(),
+                    },
+                );
+            }
+            if through.writes && !_by_value(unit, at, index) {
+                stores.push(place.clone());
+            }
+            if through.reads {
+                loads.push(place);
+            }
+        }
+        let callee = llrm_mir::memory::callee(unit.context, unit.function, at);
+        let nocallback = !crate::globalsaa::calls_back(unit, at);
+        let (other_loads, other_stores) = match callee {
+            Some(id) => {
+                let key = id.0 * 2 + u32::from(nocallback);
+                if !elsewhere.contains_key(&key) {
+                    elsewhere.insert(key, remembered(u64::from(key), &|| reaches(callee, nocallback)));
+                }
+                elsewhere.get(&key).expect("inserted above")
+            }
+            None => elsewhere_unknown.get_or_insert_with(|| remembered(u64::MAX, &|| reaches(None, false))),
+        };
+        if allowed.other.reads {
+            loads.extend(other_loads.iter().cloned());
+        }
+        if allowed.other.writes {
+            stores.extend(other_stores.iter().cloned());
+        }
+        out.insert(at, Effect { loads: share(loads), stores: share(stores), fills: Vec::new() });
+    }
+    out
+}
 
-    let mut out = IndexMap::default();
-    // Calls reaching the same slices share one list of references. A set's
-    // shared run is part of its key by where it is: the same run is the
-    // same slices.
-    let mut made: HashMap<(BTreeSet<Slice>, usize), Rc<[MemRef]>> = HashMap::default();
-    // What a call back into the module adds, found once for the calls that ask:
-    // the run the callbacks' summary holds.
-    let back: std::cell::OnceCell<(SliceSet, SliceSet)> = std::cell::OnceCell::new();
-    let added = || {
-        back.get_or_init(|| {
-            let (mut reads, mut writes) = (SliceSet::new(), SliceSet::new());
-            _calling_back(&procedure.unit, callbacks, true, true, &mut reads, &mut writes);
-            (reads, writes)
+/// Whether argument `argument` of the call `at` is passed byval: the callee's
+/// own copy, which its writes do not carry back.
+fn _by_value(
+    unit: &Unit,
+    at: InstId,
+    argument: usize,
+) -> bool {
+    let named = |attrs: &[llrm_mir::opcode::Attribute]| {
+        attrs.iter().any(|one| {
+            matches!(
+                one,
+                llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+            )
         })
     };
-    for at in procedure.sites.iter().copied() {
-        let actual = _actuals(procedure, &facts, at);
-        let mut calling_back = Back::default();
-        let mut effect = match callee(&at) {
-            Some(callee) => {
-                // A body does no more than its call states.
-                let allowed = _allowed(&procedure.unit, at);
-                let mut effect = callee.instantiated(&actual);
-                if !(allowed.arguments.reads || allowed.other.reads) {
-                    (effect.reads, effect.unknown_read) = (SliceSet::new(), false);
-                }
-                if !(allowed.arguments.writes || allowed.other.writes) {
-                    (effect.writes, effect.unknown_write) = (SliceSet::new(), false);
-                }
-                effect
-            }
-            None => {
-                let (reads, writes, back) = _unknown_visible(procedure, &facts, at, &actual)?;
-                calling_back = back;
-                Summary { reads: reads.into(), writes: writes.into(), ..Summary::default() }
-            }
-        };
-        if effect.unknown_read {
-            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.to_set() } else { visible });
-            effect.reads.extend(NONLOCAL.slices.to_set());
-            effect.reads.extend(_tracked(&procedure.unit));
-        }
-        // What an unplaced write may reach: each of its types' stores, not an
-        // untyped one.
-        let mut typed = Vec::new();
-        if effect.unknown_write {
-            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            let mut reached = if visible.is_empty() { UNKNOWN.slices.to_set() } else { visible };
-            reached.extend(NONLOCAL.slices.to_set());
-            match &effect.unknown_write_types {
-                // A pointer no fact follows reaches only what escaped, never a
-                // tracked global.
-                Some(types) if !types.is_empty() => {
-                    for (name, lineage) in types {
-                        typed.extend(reached.iter().map(|one| MemRef {
-                            typed: Some(name.clone()),
-                            lineage: lineage.clone(),
-                            ..reference(one)
-                        }));
-                    }
-                }
-                _ => {
-                    effect.writes.extend(reached);
-                    effect.writes.extend(_tracked(&procedure.unit));
-                }
-            }
-        }
-        let fills = _fills(&procedure.unit, &facts, at);
-        if calling_back.reads {
-            effect.reads.absorb(&added().0);
-        }
-        if calling_back.writes {
-            effect.writes.absorb(&added().1);
-        }
-        let mut shared = |slices: SliceSet, typed: Vec<MemRef>| -> Rc<[MemRef]> {
-            if !typed.is_empty() {
-                return slices.iter().map(reference).chain(typed).collect();
-            }
-            let run = slices.base().map_or(0, |run| Rc::as_ptr(run) as usize);
-            Rc::clone(made.entry((slices.own().clone(), run)).or_insert_with(|| slices.iter().map(reference).collect()))
-        };
-        let (loads, stores) = (shared(effect.reads, Vec::new()), shared(effect.writes, typed));
-        out.insert(at, Effect { loads, stores, fills });
-    }
-    Ok(out)
-}
-
-/// The bytes the call `at` writes through an argument before it reads
-/// any: `initializes` at the site or on the callee's parameter.
-fn _fills(
-    unit: &Unit,
-    facts: &PointsTo,
-    at: InstId,
-) -> Vec<MemRef> {
-    let op = unit.function.instruction(at);
-    let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return Vec::new() };
-    let declared = llrm_mir::memory::callee(unit.context, unit.function, at)
-        .and_then(|one| unit.globals.get(one.0 as usize))
-        .and_then(|one| one.function());
-    let mut out = Vec::new();
-    for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
-        let declared = declared
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
+    info.argument_attrs.get(argument).is_some_and(|attrs| named(attrs))
+        || llrm_mir::memory::callee(unit.context, unit.function, at)
+            .and_then(|one| unit.globals.get(one.0 as usize))
+            .and_then(|one| one.function())
             .and_then(|one| one.parameter_attrs.get(argument))
-            .map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs));
-        for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument]).iter().chain(declared) {
-            let Ok(width) = u32::try_from(high - low) else { continue };
-            let mut one = MemRef::at(unit, operand, width);
-            one.disp += low;
-            let provenance = facts.reference(unit, &one);
-            out.push(MemRef { provenance, ..one });
-        }
-    }
-    out
-}
-
-/// Byte ranges, sorted, apart and not touching.
-type Ranges = Vec<(i64, i64)>;
-
-fn _with(
-    ranges: &Ranges,
-    low: i64,
-    high: i64,
-) -> Ranges {
-    let (mut low, mut high, mut out) = (low, high, Vec::new());
-    for &(one, other) in ranges {
-        if other < low || high < one {
-            out.push((one, other));
-        } else {
-            (low, high) = (low.min(one), high.max(other));
-        }
-    }
-    out.push((low, high));
-    out.sort_unstable();
-    out
-}
-
-fn _without(
-    ranges: &Ranges,
-    low: i64,
-    high: i64,
-) -> Ranges {
-    let mut out = Vec::new();
-    for &(one, other) in ranges {
-        if one < low.min(other) {
-            out.push((one, low.min(other)));
-        }
-        if high.max(one) < other {
-            out.push((high.max(one), other));
-        }
-    }
-    out
-}
-
-fn _common(
-    one: &Ranges,
-    other: &Ranges,
-) -> Ranges {
-    let mut out = Vec::new();
-    for &(low, high) in one {
-        for &(from, to) in other {
-            if low.max(from) < high.min(to) {
-                out.push((low.max(from), high.min(to)));
-            }
-        }
-    }
-    out.sort_unstable();
-    out
-}
-
-/// The parameter a slice lies in.
-fn _parameter(one: &Slice) -> Option<usize> {
-    match (one.object.kind, one.object.key) {
-        (MemoryKind::Parameter, Key::Int(index)) => usize::try_from(index).ok(),
-        _ => None,
-    }
+            .is_some_and(|attrs| named(attrs))
 }
 
 /// The bytes `slice` may cover, or `None` for all of them.
 fn _bytes(one: &Slice) -> Option<(i64, i64)> {
     (one.low != memory::WHOLE_LOW && one.high != memory::WHOLE_HIGH).then(|| (one.low, one.high - 1 + one.width))
-}
-
-/// Each pointer parameter's bytes the body writes before anything reads
-/// them, on every path that returns: LLVM's `initializes`, as its
-/// FunctionAttrs infers it, backwards from each `ret`. A path that
-/// unwinds or cannot go on asks nothing; a call reads what its effect
-/// loads and writes what its `initializes` names.
-pub fn initialized(
-    procedure: &Procedure,
-    known: &IndexMap<String, Summary>,
-) -> Result<Vec<Ranges>, String> {
-    let unit = &procedure.unit;
-    let function = unit.function;
-    let count = function.parameters().len();
-    // Only a pointer parameter is an object a body can write before it reads.
-    // Two points-to solves and the effects of every call were made for each
-    // body of the module (45% of `mir interprocedural` over QCport at -O1),
-    // most of them for bodies whose parameters are integers.
-    // LLRM_CHECK_INITIALIZED works it out anyway and asserts nothing is
-    // initialized. And only a store, or a call that initializes its
-    // argument, writes one.
-    let pointers = function
-        .parameters()
-        .iter()
-        .any(|&one| matches!(
-            unit.context.types.get(function.value(one).ty),
-            llrm_mir::types::Type::Pointer(_)
-        ))
-        && function.walk().any(|(_, inst)| {
-            matches!(
-                function.instruction(inst).opcode,
-                Opcode::Store { volatile: false, .. } | Opcode::Call(_) | Opcode::Invoke(_)
-            )
-        });
-    if !pointers && !llrm_support::env_flag!("LLRM_CHECK_INITIALIZED") {
-        return Ok(vec![Vec::new(); count]);
-    }
-    // The value solve is made once; the escape phase is not asked.
-    let values = match unit.point_values {
-        Some(_) => None,
-        None => Some(point_values(unit)?),
-    };
-    let held =
-        Procedure { unit: values.as_ref().map_or(*unit, |values| unit.with_point_values(values)), ..procedure.clone() };
-    let (procedure, unit) = (&held, &held.unit);
-    // What it reads of the solve is each pointer's objects: neither what
-    // escapes nor, for the actuals, anything the arguments add (they enter
-    // only the escape phase), so the value solve is all it asks.
-    let facts = unit.point_values.expect("the value solve was made above or is held");
-    let effects = calls_annotated(procedure, known)?;
-    // `None` is every byte: nothing asked yet.
-    type State = Vec<Option<Ranges>>;
-    let meet = |one: &State, other: &State| -> State {
-        one.iter()
-            .zip(other)
-            .map(|(one, other)| match (one, other) {
-                (None, any) | (any, None) => any.clone(),
-                (Some(one), Some(other)) => Some(_common(one, other)),
-            })
-            .collect()
-    };
-    // A read of another object that may be the parameter's reads all of it.
-    let interner = ObjectInterner::of(unit.context);
-    let parameter_objects = (0..count)
-        .map(|index| {
-            interner.intern(MemoryObject {
-                identity: Some(Identity::Int(index as i64)),
-                ..MemoryObject::new(MemoryKind::Parameter)
-            })
-        })
-        .collect::<Vec<_>>();
-    let read = |state: &mut State, one: &Slice| {
-        for (index, ranges) in state.iter_mut().enumerate() {
-            let parameter = parameter_objects[index];
-            let bytes = if one.object == parameter {
-                _bytes(one)
-            } else if memory::objects_may_alias(&one.object, &parameter) {
-                None
-            } else {
-                continue;
-            };
-            let held = ranges.clone().unwrap_or_else(|| vec![(i64::MIN, i64::MAX)]);
-            *ranges = Some(bytes.map_or_else(Vec::new, |(low, high)| _without(&held, low, high)));
-        }
-    };
-    let written = |state: &mut State, index: usize, low: i64, high: i64| {
-        if let Some(Some(held)) = state.get(index) {
-            state[index] = Some(_with(held, low, high));
-        }
-    };
-    let transfer = |at: i64, mut state: State| -> State {
-        for &inst in function.block(cfg::block(at)).instructions().iter().rev() {
-            let op = function.instruction(inst);
-            if let Some(effect) = effects.get(&inst) {
-                for one in
-                    effect.loads.iter().filter_map(|one| one.provenance.as_ref()).flat_map(|one| one.slices.iter())
-                {
-                    read(&mut state, one);
-                }
-                let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { continue };
-                let declared = llrm_mir::memory::callee(unit.context, function, inst)
-                    .and_then(|one| unit.globals.get(one.0 as usize))
-                    .and_then(|one| one.function());
-                for (argument, operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
-                    let mut ranges = llrm_mir::memory::initializes(&info.argument_attrs[argument]).to_vec();
-                    ranges.extend(
-                        declared
-                            .and_then(|one| one.parameter_attrs.get(argument))
-                            .map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs)),
-                    );
-                    let Some(pointer) = _operand(unit, *operand, &facts.values) else { continue };
-                    let [one] = pointer.slices.iter().collect::<Vec<_>>()[..] else { continue };
-                    let (Some(index), true) = (_parameter(one), one.high == one.low + 1) else { continue };
-                    for (low, high) in ranges {
-                        written(&mut state, index, one.low + low, one.low + high);
-                    }
-                }
-                continue;
-            }
-            let Some(reference) = MemRef::of(unit, inst) else { continue };
-            let slices = facts.reference(unit, &reference).map_or_else(|| UNKNOWN.slices.clone(), |one| one.slices);
-            match op.opcode {
-                Opcode::Store { volatile: false, .. } => {
-                    if let [one] = slices.iter().collect::<Vec<_>>()[..]
-                        && let (Some(index), true) = (_parameter(one), one.high == one.low + 1)
-                    {
-                        written(&mut state, index, one.low, one.low + one.width);
-                    }
-                }
-                Opcode::Store { .. } => {}
-                _ => slices.iter().for_each(|one| read(&mut state, one)),
-            }
-        }
-        state
-    };
-    let graph = cfg::graph(function);
-    let exit = |at: i64| -> State {
-        match function.instruction(*function.block(cfg::block(at)).instructions().last().expect("a block ends")).opcode
-        {
-            Opcode::Ret => vec![Some(Vec::new()); count],
-            _ => vec![None; count],
-        }
-    };
-    let mut entry = graph.iter().map(|block| (block.at, vec![None; count])).collect::<IndexMap<i64, State>>();
-    loop {
-        let mut changed = false;
-        for block in graph.iter().rev() {
-            let out = block.succ.iter().fold(exit(block.at), |state, successor| meet(&state, &entry[successor]));
-            let made = transfer(block.at, out);
-            if made != entry[&block.at] {
-                entry.insert(block.at, made);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    let first = graph.first().map_or_else(|| vec![None; count], |block| entry[&block.at].clone());
-    // A range reaching the sentinels was found only on paths that never return.
-    let bounded = |(low, high): &(i64, i64)| i64::MIN < *low && *high < i64::MAX && low < high;
-    let made: Vec<Ranges> =
-        first.into_iter().map(|one| one.unwrap_or_default().into_iter().filter(bounded).collect()).collect();
-    assert!(
-        pointers || made.iter().all(Vec::is_empty),
-        "initialized: a body with no pointer parameter written initializes bytes"
-    );
-    Ok(made)
 }
 
 fn _union<'a>(parts: impl IntoIterator<Item = Option<&'a Provenance>>) -> Option<Provenance> {
@@ -2847,6 +2618,21 @@ thread_local! {
     static ESCAPE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static VALUE_ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LIMIT_COLLAPSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FOOTPRINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static REACHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out the footprints of a body's calls
+/// (`calls_by_attributes`), for a test that `Writes` and `Accesses` share one.
+pub fn footprints_made() -> usize {
+    FOOTPRINTS.with(std::cell::Cell::get)
+}
+
+/// How many times this thread has worked out what a callee reaches elsewhere
+/// (the `reaches` of `calls_by_attributes`), for a test that a proxy keeps
+/// them.
+pub fn reaches_made() -> usize {
+    REACHES.with(std::cell::Cell::get)
 }
 
 /// How many rounds over the blocks the value solves of this thread have made,
@@ -2936,16 +2722,17 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
     let graph = cfg::graph(function);
     let shape = unit.shape();
     let dominance = &shape.dominance;
+    let tree = dominance.tree(function);
     let back_edges = graph
         .iter()
         .flat_map(|block| block.succ.iter().map(move |successor| (block.at, *successor)))
-        .filter(|(at, successor)| dominance.dominates(*successor, *at))
+        .filter(|(at, successor)| dominance.dominates(unit.function, *successor, *at))
         .collect::<BTreeSet<_>>();
     // The instructions that can give a pointer a fact, in program order, and
     // the ones that read each value they read.
     let mut order: Vec<InstId> = Vec::new();
     for block in &graph {
-        for &inst in function.block(cfg::block(block.at)).instructions() {
+        for inst in function.iter_block(cfg::block(block.at)) {
             let op = function.instruction(inst);
             let pointer_result = op.result.is_some_and(|result| pointer_values.contains(&result));
             let pointer_store = matches!(op.opcode, Opcode::Store { .. }) && is_pointer(unit, op.operands[0]);
@@ -2971,7 +2758,7 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
         let place: llrm_mir::dense::IdMap<InstId, usize> = function
             .layout()
             .iter()
-            .flat_map(|&block| function.block(block).instructions().iter().enumerate().map(|(at, &inst)| (inst, at)))
+            .flat_map(|&block| function.iter_block(block).enumerate().map(|(at, inst)| (inst, at)))
             .collect();
         pointer_loads
             .iter()
@@ -2986,7 +2773,7 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
                             if there == here {
                                 place.get(&store) > place.get(load)
                             } else {
-                                shape.reaching.to(function, there).contains(&here)
+                                crate::reachability::is_potentially_reachable_blocks(function, here, there, Some(tree))
                             }
                         },
                     )
@@ -3182,7 +2969,11 @@ pub fn points_to(
         }
         None => std::borrow::Cow::Owned(point_values(unit)?),
     };
-    escapes(unit, &solved, arguments, captures)
+    let found = escapes(unit, &solved, arguments, captures)?;
+    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES") {
+        crate::capturecheck::check(unit, &found);
+    }
+    Ok(found)
 }
 
 /// What `points_to` adds to the value solve: what escapes, and when.
@@ -3196,7 +2987,7 @@ fn escapes(
     let function = unit.function;
     let graph = cfg::graph(function);
     let values = &solved.values;
-    let instructions = |at: i64| function.block(cfg::block(at)).instructions();
+    let instructions = |at: i64| function.iter_block(cfg::block(at));
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
     let mut pointer_fields: IndexMap<ObjectRef, BTreeSet<ObjectRef>> = IndexMap::default();
@@ -3299,7 +3090,7 @@ fn escapes(
         // What a block holds of its cells on entry is not carried between
         // blocks: what a cell held anywhere is `pointer_fields`'.
         let mut mine: HashMap<InstId, Vec<usize>> = HashMap::default();
-        for &inst in instructions(block.at) {
+        for inst in instructions(block.at) {
             let op = function.instruction(inst);
             // What publishes an object: a call, a return, a store of a pointer,
             // an integer made of a pointer, a pointer an
@@ -3322,7 +3113,7 @@ fn escapes(
                     let actual = _resolved_actuals(arguments.get(&inst).map_or(&[][..], Vec::as_slice), &values);
                     let kept = |index: usize| -> Result<bool, String> {
                         match captures.and_then(|captures| captures.get(&inst)).and_then(Option::as_ref) {
-                            None => Ok(!_borrowed(unit, inst, index)),
+                            None => Ok(!borrowed(unit, inst, index)),
                             Some(selected) => Ok(selected
                                 .iter()
                                 .map(_index)
@@ -3349,7 +3140,7 @@ fn escapes(
                     // The callee's own address is no argument.
                     let count = op.operands.len() - if matches!(op.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
                     let kept = (0..count)
-                        .filter(|&index| !_borrowed(unit, inst, index))
+                        .filter(|&index| !borrowed(unit, inst, index))
                         .map(|index| op.operands[index])
                         .collect::<Vec<_>>();
                     newly.extend(provenances(&kept, &values));
@@ -3403,7 +3194,7 @@ fn escapes(
         let mut steps = Vec::new();
         for inst in instructions(block.at) {
             let publishes = publishes[&block.at]
-                .get(inst)
+                .get(&inst)
                 .map(
                     |objects| {
                         objects.iter().for_each(|one| every.insert(*one));
@@ -3412,13 +3203,13 @@ fn escapes(
                         sorted
                     },
                 );
-            let asked = calls.contains(inst)
+            let asked = calls.contains(&inst)
                 || matches!(
-                    function.instruction(*inst).opcode,
+                    function.instruction(inst).opcode,
                     Opcode::Load { .. } | Opcode::Store { .. }
                 );
             if publishes.is_some() || asked {
-                steps.push(Step { inst: *inst, publishes, asked });
+                steps.push(Step { inst, publishes, asked });
             }
         }
         order.push(steps);
@@ -3848,26 +3639,31 @@ pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
 
 /// `annotated`, given the points-to facts and what `consts::known` finds
 /// without memory.
-/// `ranges::bounded`'s facts, the manager's where the unit carries them for the
-/// registers asked of, else worked out.
-enum Bounded<'a> {
-    Held(&'a ranges::Bounds),
-    Worked(ranges::Facts),
-}
-
-impl Bounded<'_> {
-    /// What is known of `value` at block `at`.
-    fn of(
-        &self,
-        unit: &Unit,
-        value: &ValueId,
-        at: i64,
-    ) -> Option<Interval> {
-        match self {
-            Bounded::Held(held) => held.scope(unit, at).lookup(value).map(std::borrow::Cow::into_owned),
-            Bounded::Worked(worked) => worked.get(&at).and_then(|scope| scope.get(value)).cloned(),
-        }
-    }
+///
+/// DEVIATE AN1 (owner funcattrs-port, review 2026-11-13): Annotated keeps the
+/// MemRef path (Accesses/PlainAccesses consume its slices); exit: they ask
+/// BasicAA per query and Annotated is deleted.
+///
+/// DEVIATE AN2 (owner funcattrs-port, review 2026-11-13): an index's range is
+/// `computeConstantRange` at the access, with the dominator tree and no
+/// assumption cache; BasicAA's `analyzeVariableOffsets` passes both. It asks no
+/// SCEV and no LVI range of an index, so a loop counter's interval is its
+/// ValueTracking range, as at the pin; a counted loop's span or a dominating
+/// guard is not the pin's answer. Exit: the
+/// assumption cache is passed (MemorySSA S3, where BasicAA asks per query).
+/// The range `analyzeVariableOffsets` finds of a variable index:
+/// `computeConstantRange` at `at` intersected with `fromKnownBits(Known,
+/// IsSigned)`, read as the signed interval of `value`; none where it is the
+/// whole type.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L1973>
+fn signed_range_at(
+    unit: &Unit,
+    tree: Option<&llrm_mir::domtree::DomTree>,
+    at: InstId,
+    value: ValueId,
+) -> Option<Interval> {
+    ranges::value_tracking_at(unit, tree, None, at, Operand::Value(value))
 }
 
 pub fn annotated_with(
@@ -3875,32 +3671,16 @@ pub fn annotated_with(
     facts: &impl Resolves,
     known: &IndexMap<ValueId, Known>,
 ) -> Result<IndexMap<InstId, MemRef>, String> {
-    let bounded = match (unit.bounds, unit.registers) {
-        (Some(held), Some(registers)) if std::ptr::eq(known, registers) => {
-            if llrm_support::env_flag!("LLRM_CHECK_REPLAY") {
-                // The body's own intervals, or at a level without them (-O1:
-                // `Outer::loop_intervals`) none: a unit made for alias carries
-                // none there, one made for an induction variable's range the
-                // body's.
-                let facts = held.loops_facts();
-                assert!(
-                    (!unit.loop_intervals && facts.is_empty())
-                        || facts == ranges::bounded_solved(unit, known, None, false)?.loops_facts(),
-                    "the bounds a unit carries are not those of the body it stands over: stale"
-                );
-            }
-            Bounded::Held(held)
-        }
-        _ => Bounded::Worked(ranges::bounded_with(unit, known)?),
-    };
     // Only an access with a variable index asks: 4,185 lookups in 123 solves.
     let strides = std::cell::LazyCell::new(|| congruences_of(unit, known, None, None));
     let constants = ranges::intervals(known);
+    let tree = unit.shape.map(|shape| shape.dominance.tree(unit.function));
 
-    let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {
+    let tag = |reference: &MemRef, at: InstId| -> Result<MemRef, String> {
         let mut got = facts.reference(unit, reference);
-        let interval =
-            reference.base.and_then(|base| bounded.of(unit, &base, at).or_else(|| constants.get(&base).cloned()));
+        let interval = reference
+            .base
+            .and_then(|base| signed_range_at(unit, tree, at, base).or_else(|| constants.get(&base).cloned()));
         if let (Some(current), true, Some(base), Some(interval)) = (&got, reference.object, reference.base, interval) {
             if interval.width == reference.base_width && current.slices.len() == 1 && reference.scale > 0 {
                 let source = current.slices.first().expect("one slice");
@@ -3915,20 +3695,24 @@ pub fn annotated_with(
                 let stride = modulus * reference.scale;
                 let zero = BigInt::from(0_u8);
                 if low < high && source.object.extent.is_none_or(|extent| zero <= low && end <= BigInt::from(extent)) {
-                    let model = |number: &BigInt| {
-                        i64::try_from(number).map_err(|_| format!("slice bound {number} exceeds the i64 slice model"))
-                    };
-                    got = Some(Provenance {
-                        slices: crate::memory::Sorted::from([Slice::new(
-                            source.object.clone(),
-                            model(&low)?,
-                            model(&high)?,
-                            model(&stride)?,
-                            width,
-                        )
-                        .expect("a nonempty positive-stride slice is valid")]),
-                        restrict: current.restrict.clone(),
-                    });
+                    // A bound past the i64 slice model (an index spanning 2^63
+                    // elements of a run-time sized object)
+                    // is left as the object's whole extent.
+                    if let (Ok(low), Ok(high), Ok(stride)) =
+                        (i64::try_from(&low), i64::try_from(&high), i64::try_from(&stride))
+                    {
+                        got = Some(Provenance {
+                            slices: crate::memory::Sorted::from([Slice::new(
+                                source.object.clone(),
+                                low,
+                                high,
+                                stride,
+                                width,
+                            )
+                            .expect("a nonempty positive-stride slice is valid")]),
+                            restrict: current.restrict.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -3936,7 +3720,9 @@ pub fn annotated_with(
         // names those linear bytes, whatever its pointer's provenance.
         if let (None, Some(Operand::Value(segment))) = (reference.selector, reference.segment) {
             let lookup = |value: ValueId| {
-                bounded.of(unit, &value, at).or_else(|| constants.get(&value).cloned()).map(|one| (value, one))
+                signed_range_at(unit, tree, at, value)
+                    .or_else(|| constants.get(&value).cloned())
+                    .map(|one| (value, one))
             };
             let known = [Some(segment), reference.base].into_iter().flatten().filter_map(lookup).collect();
             if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
@@ -3964,8 +3750,9 @@ pub fn annotated_with(
         Ok(MemRef { provenance: got, ..reference.clone() })
     };
 
-    let mut out = IndexMap::default();
-    for (block, inst) in unit.function.walk() {
+    let mut out =
+        IndexMap::with_capacity_and_hasher(crate::memory::loads_and_stores(unit.function), Default::default());
+    for (_, inst) in unit.function.walk() {
         if !matches!(
             unit.function.instruction(inst).opcode,
             Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
@@ -3973,7 +3760,7 @@ pub fn annotated_with(
             continue;
         }
         if let Some(reference) = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst)) {
-            out.insert(inst, tag(&reference, cfg::id(block))?);
+            out.insert(inst, tag(&reference, inst)?);
         }
     }
     Ok(out)

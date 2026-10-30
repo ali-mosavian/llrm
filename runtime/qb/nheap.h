@@ -32,6 +32,8 @@ void nh_init(char *first, char *top);
 void *lh_alloc(uword bytes, enum LhType type, void *owner, byte file);
 void lh_free(void *data);
 void lh_compact(void);
+/* B$NHCPCT: strings packed down, heap entries up, and the free heap given to strings. */
+void nh_compact(void);
 LhEntry *lh_entry(void *data);
 /* The data of the file entry for `channel`, or of any file's with 0. */
 void *lh_file(byte channel);

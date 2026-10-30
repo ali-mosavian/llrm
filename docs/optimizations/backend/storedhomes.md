@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/storedhomes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/storedhomes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/storedhomes.rs sha256:4bbd4dfbc101023591eadc4dcb370ce286d77d6fd88bca17de0c0ef5fe08f87f -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/storedhomes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/storedhomes.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/storedhomes.rs sha256:7278ea912f2a6c71eb9e2d66d28c9c7b812e0e06076c0a5796b8e0954c58d7f5 -->
 
 # storedhomes
 
@@ -35,6 +35,6 @@ no LIR of their own. Read the spiller's `ISEL_DUMP=1` output (see
 [`crate::backend::lirtext`](lirtext.md)) to see a spilled phi read from its home cell.
 
 ## Used by
-[`crate::backend::spiller`](spiller.md) and [`crate::backend::floatassign`](floatassign.md) (`held`);
-[`crate::backend::floatfold`](floatfold.md) and [`crate::backend::pressuresink`](pressuresink.md)
-(`may_write`); [`crate::backend::postrasink`](postrasink.md) (`apart`).
+`crate::backend::spiller` and [`crate::backend::floatassign`](floatassign.md) (`held`);
+[`crate::backend::floatfold`](floatfold.md) (`may_write`); [`crate::backend::postrasink`](postrasink.md)
+(`apart`).

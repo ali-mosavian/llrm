@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:5e70bd8e37b3c24e9e026aab83cbae0a313210321b0a4c7a312971a79a0b621b -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:3d55a65f12b45c1c428da4261854c3839e861f760a2bb9cd0748367a0809616d -->
 
 # manager
 
@@ -18,13 +18,13 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
 - `SKIPS` with `depends`: the entry is kept past an invalidation if the
   change log cannot have altered it. `Depends` names the instructions the
   result models, those it keys entries by, and the users a change flows
-  through. `ExposedFrames`, `PointerValues`, `Pointers`, `CallEffects` and
-  `Writes` model pointers, aggregates and calls only, so a change to integer
-  arithmetic leaves them standing.
+  through. `ExposedFrames`, `PointerValues`, `Pointers` and `Writes` model
+  pointers, aggregates and calls only, so a change to integer arithmetic
+  leaves them standing.
 - `INCREMENTAL` with `update`: the entry is brought up to date from the
-  change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
-  or loops `Touched::reach` the changes (a change to a terminator or to the
-  CFG redoes all); `Accesses` in [`crate::memoryssa`](memoryssa.md) survives pure moves.
+  change log. `DominatedEdges` and `Counted` redo only the blocks or loops
+  `Touched::reach` the changes (a change to a terminator or to the CFG
+  redoes all); `Accesses` in [`crate::memoryssa`](memoryssa.md) survives pure moves.
 - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
   fresh `run`.
 
@@ -63,20 +63,17 @@ most `AssumptionCache` and `ExposedFrames`, which are omitted):
 ```text
  PointerValues    -
  Pointers         PointerValues
- CallEffects      PointerValues
- Writes           CallEffects
+ Writes           PointerValues
  TableLoads       -
  Registers        TableLoads (updates)
  Followers        Registers
  Counted          Registers
  DominatedEdges   Registers
- Bounded          Registers, Counted, DominatedEdges
- Annotated        PointerValues, Registers, Counted, DominatedEdges, Bounded
- Accesses         Annotated, CallEffects                  (memoryssa)
+ Annotated        PointerValues, Registers, Counted, DominatedEdges
+ Accesses         Annotated, CallFootprints, PointerValues (memoryssa)
  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
  FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
- Published        Pointers, ExposedFrames                 (observers)
 ```
 
 Module entries read the program through `ModuleAnalyses` and are dropped
@@ -85,16 +82,13 @@ outside code reaches but by name) and `Summaries` (each defined function's
 memory effects, by name) can be held past passes that add no memory
 operation when `covers` says the stale result states no more than a fresh
 one. `Summaries` keeps per-body facts and recomputes only bodies whose
-history moved. `Callbacks`, the effects of all the callbacks into the module
-added up, is rebuilt only when `GlobalsAA` or `Summaries` is a different
-result. `ProgramSummaries` is a program entry: one fixed point over all
-modules, each module's `Summaries` given the others'.
+history moved. `ProgramSummaries` is a program entry: one fixed point over
+all modules, each module's `Summaries` given the others'.
 
 `Unit::within` builds the `Unit` that analyses read from `Outer` (the
 module, target and program), carrying whichever cached results the caller
 holds. `Held` and `Ranges` bundle the cached results a pass passes on to a
 `Unit`, so the facts are the manager's and not a solve of the pass's own.
-`Bounded` is empty where `Outer::loop_intervals` is off (-O1).
 
 ## Example
 A pass replaces the uses of `%x` by `%a`, an integer edit:
@@ -111,10 +105,10 @@ entry:
 }
 ```
 
-| change                       | `Pointers`, `CallEffects`, `Writes`, `ExposedFrames` |
+| change                       | `Pointers`, `Writes`, `ExposedFrames`                |
 |------------------------------|------------------------------------------------------|
 | `%x` replaced by `%a`        | kept (`unaffected` is true)                          |
-| `%q`, the address, rewritten | `CallEffects::unaffected` is false: recomputed        |
+| `%q`, the address, rewritten | `Writes::unaffected` is false: recomputed             |
 
 From unit test
 `an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not`
@@ -142,13 +136,12 @@ with and without the seed.
 
 ## Provides
 The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
-`CallEffects`, `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
-`Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`,
-`Bounded`; module entries `GlobalsAA`, `Summaries`, `Callbacks`; program
+`Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
+`Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`;
+module entries `GlobalsAA`, `Summaries`; program
 entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
-`call_effects`, `writes`. [`crate::cfg`](cfg.md)'s `Shape`, [`crate::memoryssa`](memoryssa.md)'s
-`Accesses`, [`crate::observers`](observers.md)'s `Published` and [`crate::noreturn`](noreturn.md)'s
-`TerminalSites` are entries defined beside their analyses.
+`writes`. [`crate::cfg`](cfg.md)'s `Shape`, [`crate::memoryssa`](memoryssa.md)'s
+`Accesses` is an entry defined beside its analysis.
 
 ## Needs
 [`crate::alias`](alias.md), [`crate::consts`](consts.md), [`crate::globalsaa`](globalsaa.md),

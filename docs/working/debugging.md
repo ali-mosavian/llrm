@@ -64,6 +64,10 @@ Run the failing build under dosrun with a `:write` range over the damage, or `:m
 
 A bad segment (`lds`, `ss:` on data the program model places in DS) points at the machine model (`-m[no-]stack-is-data`), not a pass.
 
+## Inline costs
+
+`llrm-arm64-llc -debug-only=inline-cost f.ll` prints each inlining decision (`'callee' inlined into 'caller' with (cost=, threshold=)`) the callee's body as the costs were taken on it, and the cost of every instruction (`[inlinetrace]`), as LLVM's option of that name does; the pin's clang has none. The switches behind it are `LLRM_INLINE_REMARKS` and `LLRM_EXP_INLINETRACE`.
+
 ## 4. Which pass: dump and diff
 
 Compile the one module with every stage dumped:
@@ -87,6 +91,8 @@ If the MIR is right to the last dump, the fault is in the machine phases:
     ISEL_DUMP=1 llrm-c -O2 -I ... module.c -o module.obj
 
 prints the LIR after each machine phase (`=== PhiElimination`, `RegAlloc`, `ParallelCopy`, `Peephole`, `LoopSlots`, `Scheduler`, ...). The first phase whose output is wrong is the one.
+
+`llrm-arm64-llc` (and `llrm-cc` with `LLRM_CC_TARGET=arm64-macos`) takes the same variable and prints the operations, one per line, after `Select`, `Prepass`, `FlagCse`, `StoreCluster`, `SibCall`, `OrderCopies` and `RegAlloc` (spills and reloads are visible there).
 
 `llrm-mir FILE` reads, verifies and prints a `.ll` back; `llrm-mir --run [--entry NAME] [--fuel N] FILE` interprets its `@main`, so a reduced MIR program can be run before and after a pass.
 
@@ -168,3 +174,7 @@ In DOS, with Turbo C++ as `c:`, Turbo Debugger as `d:` and the work directory as
 Wait until `text_screen` shows `Module:`. F8 steps over and F7 into (`key` with `"key":"f8"`), until the second screen line reads `File: lst.c 9`. Ctrl-F7 (`scancode` 0x64, `ascii` 0) opens a watch; type the expression with `key`, then `enter`. The Watches window then reads `s int 0`, `n struct node * ds:00AE [_head]`, `*n struct node {ds:00AA,3}`, `n->v int 3`: the local, the parameter and what it points at, the same as for Turbo C++'s own build.
 
 The debug gate runs these against the real tools: `. tools/debug-gate.env` sets `LLRM_REQUIRE_DWARF`, `LLRM_REQUIRE_TURBO`, `LLRM_REQUIRE_CODEVIEW`, `LLRM_REQUIRE_NIBRUN`, `LLRM_REQUIRE_JWLINK` and `LLRM_REQUIRE_WDUMP`, so a missing tool fails a test instead of skipping it, and `TCPP30_DIR`, `TD_DIR` and `VBDOS_DIR` locate Turbo C++, Turbo Debugger and the Microsoft tools. The gate steps are `turbo` and `cv4` ([gate](gate.md)).
+
+## Reducing a failure: `tools/reduce.py`
+
+`tools/reduce.py FILE --cmd 'COMMAND {}'` deletes lines (with `--unit blocks`, blank-line-separated blocks first: the functions of an IR file) while COMMAND keeps exiting 0 on the candidate (`{}` is its path), and writes `FILE.reduced`. It is one tool for C, Nib, BASIC and MIR text. COMMAND decides what "still fails" means, so it also decides that a candidate which no longer compiles is not interesting. Examples: a compiler panic, `! llrm-c -O2 {} -o /dev/null 2>&1 | grep -q 'widen.rs:142'`; a verifier error, `llrm-c ... 2>&1 | grep -q 'with no instruction choosing'`; a miscompile, a script that builds the candidate at the failing level and machine, runs it and compares with gcc's output (keep the candidate free of undefined behaviour, or it reduces to one). Every reproduced failure becomes a test at once, the smallest that still fails (`tests/run` for a program, a MIR text test for a pass): see [testing](testing.md).

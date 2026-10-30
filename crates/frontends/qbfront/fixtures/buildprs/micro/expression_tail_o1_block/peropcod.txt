@@ -1,9 +1,0 @@
-opStBload1|x
-opStBsave|x
-opLbs|x
-opChanOut|x
-opFnAbs|x
-opFnPoint1|x
-opFnLbound1|x
-opFnUbound1|x
-opFnIoctl_|x

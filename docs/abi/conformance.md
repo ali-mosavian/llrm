@@ -43,7 +43,7 @@ The matrix's listings are read as facts, one per line with the listing line it c
 |---|---|
 | `tests/register_convention.rs` | `watcall32`: arguments in EAX, EDX, EBX, ECX, the rest on the stack popped by the callee; `cdecl32`; what a callee saves; private functions under `-mabi=sysv`; a full-width `va_start` |
 | `crates/frontends/llrm-c/src/compile.rs` | `regparm3` by argument size, `ia16` struct results, `watcall16` words, pairs and struct results, over `tests/fixtures/c/regparm3.c`, `ia16.cgs`, `watcall16.cgs` |
-| `crates/backend/llrm-core/src/backend/isel_tests.rs` | the frame and register save sequence of a far function |
+| `crates/codegen/llrm-codegen/src/backend/isel_tests.rs` | the frame and register save sequence of a far function |
 | `tests/ipra.rs` | callee facts: a caller keeps a value in a register a private callee does not write; an exported or recursive one tells nothing |
 | `tests/nearcalls.rs` | near entry for a private function in C, Nib and BASIC |
 | `tests/dead_arguments.rs` | a parameter nothing reads leaves with its argument |

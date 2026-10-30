@@ -1,4 +1,4 @@
-//! Copied from llrm-core's `analysis/loops_tests.rs`, the port of
+//! Copied from llrm-codegen's `analysis/loops_tests.rs`, the port of
 //! `tests/test_loops.py`. Its corpus tests read the rich-MIR corpus in
 //! llrm-analysis's `corpus_tests.rs`.
 

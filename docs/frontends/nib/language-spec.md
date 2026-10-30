@@ -347,6 +347,10 @@ defined result, such as `inf - inf` or `0.0 / 0.0`, gives `nan`; division by
 zero gives `inf` or `-inf`. Nothing traps: the exceptions are masked, as
 the BIOS leaves them. `%` and `//` are not defined on floats.
 
+Floats follow C's fast default. "Stored" means a memory store: a variable promoted to a
+register may keep extended precision across statements. `-fexcess-precision=standard` rounds every
+`f32` assignment to single.
+
 ### 3.7 Conversions
 
 A conversion names its target type as a function: `i32(narrow)`,
@@ -2097,7 +2101,7 @@ the value; the table doubles before an insert that would pass a load of 3/4.
 ### 13.8 The runtime
 
 The compiler emits length, indexing, slicing, and iteration inline. The
-runtime is written in the language itself (`crates/frontends/llrm-nib/src/runtime/*.nib`);
+runtime is written in the language itself (`crates/frontends/nib/src/runtime/*.nib`);
 only start-up and the OS layer are assembly. Each routine is a code segment of
 its own COMDAT when `--procedure-segments` is given, so a program links only the
 routines it reaches. Routines are named `N$`, a letter for the group, then
@@ -2611,7 +2615,7 @@ A, B`; `NAME's parameter "p" cannot cross a foreign ABI; pass a scalar or a
 calls the Nib runtime (ROUTINE), which a library for qb45 links without`.
 
 Run-time failures are panics (section 10.3). The complete set of messages is
-in the frontend's semantic passes under `crates/frontends/llrm-nib/src`; a
+in the frontend's semantic passes under `crates/frontends/nib/src`; a
 test pins each rule in `test_language.rs` and `test_borrowck.rs`.
 
 ## 18. Built-in names and library

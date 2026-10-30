@@ -21,6 +21,15 @@ static SD *trim(SD *sd, byte sides)
     return str_tmp_copy(sd, first, last - first);
 }
 
+#pragma aux B_LTRM "B$LTRM"
+#pragma aux B_RTRM "B$RTRM"
+#pragma aux B_SPAC "B$SPAC"
+#pragma aux B_STRI "B$STRI"
+#pragma aux B_STRS "B$STRS"
+#pragma aux B_FLEN "B$FLEN"
+#pragma aux B_SCPF "B$SCPF"
+#pragma aux B_SCPY "B$SCPY"
+
 SD *B_LTRM(SD *sd)
 {
     return trim(sd, TRIM_LEFT);
@@ -93,12 +102,3 @@ int B_FLEN(SD *sd)
     str_tmp_free(sd);
     return len;
 }
-
-#pragma aux B_LTRM "B$LTRM"
-#pragma aux B_RTRM "B$RTRM"
-#pragma aux B_SPAC "B$SPAC"
-#pragma aux B_STRI "B$STRI"
-#pragma aux B_STRS "B$STRS"
-#pragma aux B_FLEN "B$FLEN"
-#pragma aux B_SCPF "B$SCPF"
-#pragma aux B_SCPY "B$SCPY"

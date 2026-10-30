@@ -6,9 +6,8 @@ Audience: an engineer who has a wrong or poor allocation and needs to see what t
 
 | Switch | Effect |
 |---|---|
-| `-fallocation-search` | try other shapes of a body after the first allocation; on at every level but -O0 ([assignment](assignment.md#search-over-shapes-of-the-body)) |
+| `-fallocation-search` | no effect on the allocator, which allocates once; |
 | `-fallocation-search-all` | try every shape, with and without splitting; -Omax |
-| `-fallocation-routes` | make each function by the allocator alone and by the SSA spiller's route and keep the cheaper; on at every level but -O0 ([ssa-spill-route](ssa-spill-route.md)) |
 | `-Os`, `-Oz` | candidates and routes are priced in bytes, each block counted once |
 | `-march=`, `-mtune=` | the CPU's prices: fold discounts, cycle breaking, edge copies |
 | `-mstack-is-data` | `ds` is a fourth selector register |
@@ -63,3 +62,7 @@ Each incremental structure has a switch that recomputes it whole and asserts equ
 5. Slow compile: `LLRM_DEBUG=time`; `regalloc trial` spans count the extra allocations of the search. Each timed span costs about 6-7 K instructions of its own, so a step called many times reads high and a change that opens fewer spans reads better than it is (greedy against the old allocator on d_faces -O2: -106 M in the report, -56 M in `perf stat`). The last `[instr]` row prints the span count. Quote deltas from a plain `perf stat -e instructions:u`.
 
 General debugging is in [working/debugging](../../working/debugging.md).
+
+## Same-MIR runs against the pin
+
+`LLRM_MIR_PRINT=fn` prints the LIR the allocator takes as MIR; `llc -start-before=greedy -x mir` allocates it with the pin. The pin parses a MIR with no instruction erased, but ours reaches the allocator through the coalescer, whose erased instructions leave empty entries that `packIndexes` counts (LLVM does the same in a full run). On queens `place_` that made every interval 1.3x longer and the spill weights 3-50% lower than the pin's for the same intervals (top four weights equal to four digits once the entries are left out). Run ours with `LLRM_PACK_DENSE=1` for a same-MIR comparison, and expect the full-pipeline pin to sit between the two (queens `place_`: pin 95 index units, ours 105, dense 74).

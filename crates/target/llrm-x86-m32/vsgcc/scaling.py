@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import levels_time
 import llrmbin
+import pin_clang
 
 WORK = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
 COMPILERS = ("llrm", "gcc", "clang")
@@ -181,6 +182,21 @@ def cells(n: int) -> str:
     return PRELUDE_C + f"static unsigned cell[{n}];\nunsigned fn(unsigned a) {{\n" + body + "    return a;\n}\n" + _main("cells", "    return (long)fn(3u);\n")
 
 
+def fanout(n: int) -> str:
+    """One function using one value N times: each store reads the parameter `a`, so its use list is N long. A pass that walks a value's
+    users once per use (EarlyCSE did, in an oldest-first `Vec`: x3.5 a doubling) is quadratic here and not on `straight`, whose values
+    have four uses at most."""
+    body = "".join(f"    p[{k % 64}] = a + {k}u;\n" for k in range(n))
+    return PRELUDE_C + "unsigned fn(unsigned *p, unsigned a) {\n" + body + "    return p[0];\n}\n" + _main("fanout", "    static unsigned cell[64];\n    return (long)fn(cell, 3u);\n")
+
+
+def equal(n: int) -> str:
+    """One function of N equal expressions of two values: value numbering replaces them all by one leader, whose use list is N long
+    after the replacement (`replace_all_uses_with` runs N times on one list)."""
+    body = "".join(f"    p[{k % 64}] ^= (a * 7u + b) * {k % 5 + 1}u;\n" for k in range(n))
+    return PRELUDE_C + "unsigned fn(unsigned *p, unsigned a, unsigned b) {\n" + body + "    return p[0];\n}\n" + _main("equal", "    static unsigned cell[64];\n    return (long)fn(cell, 3u, 5u);\n")
+
+
 def joins(n: int) -> str:
     """Four functions, each with N static cells all known after its first N stores and N if/else joins that store to one and read
     another: every join meets N held cells, so a pass that keeps the cells of memory as one map per block, and meets the maps of the
@@ -222,7 +238,7 @@ def fjoins(n: int) -> str:
     return "".join(out)
 
 
-AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins, "fjoins": fjoins, "cases": cases, "unrolled": unrolled}
+AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain, "nest": nest, "cells": cells, "joins": joins, "fjoins": fjoins, "cases": cases, "unrolled": unrolled, "fanout": fanout, "equal": equal}
 
 
 # --- measuring -------------------------------------------------------------------------------------------------------
@@ -237,7 +253,7 @@ def measured_environment(env: dict | None = None) -> dict:
     peephole` read 157.0 or 168.8 Minstr of cells(224) by 4 bytes of environment alone: base and head must be given the same bytes."""
     # The compiler reads LLRM_BIN too: the pinned directory stands for it always, of one length wherever the binaries are and whether
     # the caller set it or not (llrmbin.pinned).
-    where = {"LLRM_BIN": str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-c").parent)}
+    where = {"LLRM_BIN": str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-cc").parent), **llrmbin.cc_environment()}
     kept = {"PATH": "/usr/bin:/bin", **where, **(env or {})}
     used = sum(len(k) + len(v) + 2 for k, v in kept.items())
     return {**kept, "LLRM_PAD": "x" * max(0, ENVIRONMENT_BYTES - used - len("LLRM_PAD") - 2)}
@@ -267,7 +283,7 @@ def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tup
     The child sees no LLRM_ variable of the caller's but LLRM_BIN (and `env`'s own): LLRM_CHECK_*, LLRM_VERIFY and the like add work to
     the step they check, and a count taken under them is not the compiler's (regparm16: 'lir peephole' read 4.5 Minstr over at every size).
 
-    A source file is compiled from a directory of its own under /tmp, as `src.c`, and an llrm binary is run as `./llrm-c` through a
+    A source file is compiled from a directory of its own under /tmp, as `src.c`, and an llrm binary is run as `./llrm-cc` through a
     link: the length of the paths the compiler is given (its own name as run, the source's) moves the allocator's pages, and `lir
     peephole` read 173.7 or 159.0 Minstr of cells(224) by that length alone (mimalloc: a block that lives all run in a size class's
     page, or none, decides whether the page is given back and made again at every free). Base and head, and one run and the next,
@@ -354,7 +370,7 @@ def check(axis: str, n: int, work: Path) -> str:
     seen = {}
     for compiler, level in (("gcc", "O0"), ("gcc", "O2"), ("clang", "O2")):
         exe = work / f"{axis}.{compiler}{level}"
-        subprocess.run([compiler, f"-{level}", "-w", "-o", str(exe), str(source), str(work / "report.c")], check=True, capture_output=True)
+        subprocess.run([pin_clang.path() if compiler == "clang" else compiler, f"-{level}", "-w", "-o", str(exe), str(source), str(work / "report.c")], check=True, capture_output=True)
         seen[f"{compiler} {level}"] = int(subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout)
     (harness.OUT / "o").mkdir(parents=True, exist_ok=True)
     subprocess.run(levels_time.command("llrm", "O2", source)[:-3] + ["-o", str(harness.OUT / "o" / f"{axis}.llrm.obj"), str(source)], check=True, capture_output=True)

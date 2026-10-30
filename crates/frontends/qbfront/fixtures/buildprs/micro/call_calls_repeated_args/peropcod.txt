@@ -1,3 +1,0 @@
-opStCall|x
-opStCalls|x
-opFnAbs|x

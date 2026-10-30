@@ -1,0 +1,47 @@
+== 
+@pr43326-triply-nested
+B0:
+  br label %B1
+B1:
+  br label %B2
+B2:
+  %v0 = phi i64 [ %v14, %B12 ], [ 0, %B1 ]
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v1 = phi i64 [ %v12, %B11 ], [ 0, %B3 ]
+  br label %B5
+B5:
+  br label %B6
+B6:
+  br label %B7
+B7:
+  %v2 = phi i64 [ %v8, %B9 ], [ 0, %B6 ]
+  br label %B8
+B8:
+  %v3 = getelementptr inbounds [10 x [10 x i32]], ptr %e, i64 %v0, i64 %v2, i64 %v1
+  %v4 = load i32, ptr %v3
+  %v5 = getelementptr inbounds [10 x [10 x i32]], ptr %f, i64 %v0, i64 %v2, i64 %v1
+  store i32 %v4, ptr %v5
+  %v6 = add nuw nsw i64 %v0, 1
+  %v7 = icmp ne i64 %v6, 10
+  br label %B9
+B9:
+  %v8 = add nuw nsw i64 %v2, 1
+  %v9 = icmp ne i64 %v8, 10
+  br i1 %v9, label %B7, label %B10
+B10:
+  %v10 = add nuw nsw i64 %v0, 1
+  %v11 = icmp ne i64 %v10, 10
+  br label %B11
+B11:
+  %v12 = add nuw nsw i64 %v1, 1
+  %v13 = icmp ne i64 %v12, 10
+  br i1 %v13, label %B4, label %B12
+B12:
+  %v14 = add nuw nsw i64 %v0, 1
+  %v15 = icmp ne i64 %v14, 10
+  br i1 %v15, label %B2, label %B13
+B13:
+  ret void

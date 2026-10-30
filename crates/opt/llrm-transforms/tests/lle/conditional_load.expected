@@ -1,0 +1,34 @@
+target datalayout = "e-m:e-p:64:64-i64:64-n8:16:32:64"
+
+define void @f(ptr %a, i1 %p, i64 %n) {
+entry:
+  %g = icmp sgt i64 %n, 0
+  br i1 %g, label %loop.preheader, label %exit
+
+loop.preheader:                                   ; preds = %entry
+  br label %loop
+
+loop:                                             ; preds = %loop.preheader, %latch
+  %i = phi i64 [ %i.next, %latch ], [ 0, %loop.preheader ]
+  br i1 %p, label %then, label %latch
+
+then:                                             ; preds = %loop
+  %pa = getelementptr inbounds i32, ptr %a, i64 %i
+  %x = load i32, ptr %pa, align 4
+  %y = mul i32 %x, 3
+  %j = add nuw nsw i64 %i, 1
+  %pa1 = getelementptr inbounds i32, ptr %a, i64 %j
+  store i32 %y, ptr %pa1, align 4
+  br label %latch
+
+latch:                                            ; preds = %then, %loop
+  %i.next = add nuw nsw i64 %i, 1
+  %c = icmp eq i64 %i.next, %n
+  br i1 %c, label %exit.loopexit, label %loop
+
+exit.loopexit:                                    ; preds = %latch
+  br label %exit
+
+exit:                                             ; preds = %exit.loopexit, %entry
+  ret void
+}

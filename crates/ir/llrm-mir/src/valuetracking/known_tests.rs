@@ -4,7 +4,7 @@
 
 use super::{AssumptionCache, Query, column};
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::module::{GlobalKind, InstId, Operand};
 use crate::parse;
 
@@ -20,10 +20,10 @@ fn dump(text: &str) -> String {
         if function.is_declaration() {
             continue;
         }
-        let name = global.name.clone().unwrap_or_default();
-        let dt = DominatorTree::new(function);
+        let name = global.name.owned().unwrap_or_default();
+        let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
-        let first = function.block(function.entry().expect("an entry")).instructions().first().copied();
+        let first = function.block(function.entry().expect("an entry")).first();
         let mut values: Vec<(Operand, Option<InstId>)> =
             function.parameters().iter().map(|parameter| (Operand::Value(*parameter), first)).collect();
         for (_, inst) in function.walk() {
@@ -122,4 +122,47 @@ fn test_intrinsic_call_with_missing_argument_is_unknown() {
         &dump(text),
         "f 0 kb=???????????????????????????????? nn=0 ng=0\nf 1 kb=???????????????????????????????? nn=0 ng=0\n",
     );
+}
+
+/// `computeKnownBits` of `undef` says nothing, and a phi whose incoming values
+/// are all undef is skipped, as in LLVM.
+#[test]
+fn test_undef_operands_match_llvm() {
+    assert_same(
+        &dump(include_str!("../../tests/vt/known/undef.ll")),
+        include_str!("../../tests/vt/known/undef.expected"),
+    );
+}
+
+/// Each operand kind `computeKnownBits` reads before the operator: an integer
+/// constant, a null pointer, undef, poison, a `range` argument and an aligned
+/// pointer argument keep their bits when the kind is read once.
+#[test]
+fn test_operand_kinds_have_their_known_bits() {
+    let text = "declare void @use(i8, ptr, i8, i8, i8, ptr)\n\
+        define void @f(i8 range(i8 0, 16) %r, ptr align 8 %p) {\n  \
+        call void @use(i8 5, ptr null, i8 undef, i8 poison, i8 %r, ptr %p)\n  ret void\n}\n";
+    let module = parse::module(text).expect("parses");
+    let layout = DataLayout::default();
+    let function = module
+        .globals
+        .iter()
+        .find_map(|global| match &global.kind {
+            GlobalKind::Function(function) if !function.is_declaration() => Some(function),
+            _ => None,
+        })
+        .expect("@f");
+    let q = Query::new(&module, function, &layout);
+    let (_, call) = function.walk().next().expect("the call");
+    let got: Vec<String> = function.instruction(call).operands[..6]
+        .iter()
+        .map(|&operand| super::known::compute_known_bits(&q, operand, 0).print())
+        .collect();
+    let pointer = |low: &str| format!("{}{low}", "?".repeat(got[1].len() - low.len()));
+    assert_eq!(got[0], "00000101");
+    assert_eq!(got[1], "0".repeat(got[1].len()));
+    assert_eq!(got[2], "????????");
+    assert_eq!(got[3], "????????");
+    assert_eq!(got[4], "0000????");
+    assert_eq!(got[5], pointer("000"));
 }

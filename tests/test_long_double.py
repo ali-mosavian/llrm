@@ -20,15 +20,17 @@ from tools.e2e.configs import QB45
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "dosbatch"))
 import dosbatch  # noqa: E402
-from tools import llrmbin  # noqa: E402
+from tools import envflag, llrmbin  # noqa: E402
 BIN = llrmbin.bin_dir()
 SOURCE = ROOT / "tests" / "fixtures" / "c" / "longdouble.c"
 
 
 def _unusable() -> str | None:
-    for tool in ("llrm-c", "jwasm", "jwlink"):
+    for tool in ("llrm-cc", "jwasm", "jwlink"):
         if not (BIN / tool).exists():
             return f"{BIN / tool} is missing"
+    if "LLRM_CLANG_M16" not in os.environ:
+        return "no LLRM_CLANG_M16 (llrm-cc's 16-bit row needs the patched clang)"
     if not QB45.is_dir() or dosbox.dosbox_bin() is None:
         return "no DOSBox-X or no QB 4.5 tools (for DOS's mount)"
     return None if shutil.which("cc") else "no host cc"
@@ -38,17 +40,17 @@ def test_a_long_double_program_prints_on_dos_what_it_prints_on_the_host(tmp_path
     why = _unusable()
     if why:
         message = f"NOT RUN: {why}"
-        if os.environ.get("LLRM_REQUIRE_BINARIES"):
+        if envflag.flag("LLRM_REQUIRE_BINARIES"):
             pytest.fail(message)
         warnings.warn(message, stacklevel=1)
         pytest.skip(message)
 
-    def run(*command):
-        done = subprocess.run([str(one) for one in command], cwd=tmp_path, capture_output=True, text=True)
+    def run(*command, env=None):
+        done = subprocess.run([str(one) for one in command], cwd=tmp_path, capture_output=True, text=True, env=env)
         assert done.returncode == 0, done.stdout + done.stderr
         return done.stdout
 
-    run(BIN / "llrm-c", SOURCE, "-O2", "-o", "p.obj")
+    run(llrmbin.compiler(BIN), *llrmbin.c_args(16), "-O2", "-c", SOURCE, "-o", "p.obj", env={**os.environ, **llrmbin.cc_environment()})
     dosbatch.link_c(tmp_path / "p.obj", tmp_path / "P.EXE", tmp_path)
     assert dosbox.launch(tmp_path, QB45, ["P.EXE > P.TXT"], timeout=60).finished
     on_dos = dosbox.read_dos(tmp_path, "P.TXT").replace("\r", "")

@@ -1,17 +1,20 @@
 """The 486's clocks per instruction form, read from the targets' `timings.times`: the table the compiler prices by is the one the
 emulator counts by. A form the table has no row for is in `UNTABLED` below, each with its source, and `test_clocks.py` keeps the two
 apart."""
+import tomllib
 from pathlib import Path
 
 CPU = "486"
 CRATES = Path(__file__).resolve().parents[2]
+TUNE = CRATES.parents[1] / "machine" / "tune" / "x86"
 
 
 def _read(path: Path, cpu: str) -> tuple[dict[str, int], dict[str, int]]:
-    """(scalars, [clocks]) of `cpu`'s column; a `-` is no price and absent."""
+    """(scalars, [clocks]) of `cpu`'s column; a `-` is no price and absent, a `=` is read from the CPU's tune file."""
     scalars: dict[str, int] = {}
     clocks: dict[str, int] = {}
     cpus: list[str] = []
+    marches: list[str] = []
     section = "scalars"
     for raw in path.read_text().splitlines():
         line = raw.split("#")[0].strip()
@@ -24,9 +27,15 @@ def _read(path: Path, cpu: str) -> tuple[dict[str, int], dict[str, int]]:
         if name == "cpus":
             cpus = values
             continue
+        if name == "march":
+            marches = values
+            continue
         if section not in ("scalars", "clocks") or not cpus or len(values) != len(cpus):
             continue
         value = values[cpus.index(cpu)]
+        if value == "=":
+            tune = tomllib.loads((TUNE / f"{marches[cpus.index(cpu)]}.toml").read_text())
+            value = str((tune if section == "scalars" else tune[section])[name])
         if value != "-" and value.lstrip("-").isdigit():
             (scalars if section == "scalars" else clocks)[name] = int(value)
     return scalars, clocks

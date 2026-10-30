@@ -14,6 +14,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import envflag  # noqa: E402
+
 
 class SourceTests(unittest.TestCase):
     def test_a_source_for_bc_ends_its_lines_with_cr_lf(self):
@@ -45,6 +48,19 @@ class RuntimeObjectTests(unittest.TestCase):
 
 
 class LinkTests(unittest.TestCase):
+    def test_two_start_ups_with_one_stem_both_reach_the_link(self):
+        """The QB m32 link names a platform start.asm and the OS layer's: both were START.OBJ, the second overwrote the first and the link lost a start-up."""
+        platform, shared = "runtime/qb/dos/m32/start.asm", "runtime/shared/dos/m32/start.asm"
+        said = []
+        link = {"first": [], "last": [], "final": [], "format": []}
+        with tempfile.TemporaryDirectory() as work, mock.patch.object(dosbatch, "target_link", return_value=link), mock.patch.object(
+            dosbatch, "runtime_object", side_effect=lambda name, path, defines=(): path
+        ), mock.patch.object(dosbatch, "_host", side_effect=said.append), mock.patch.object(dosbatch, "link_loaders", return_value=()):
+            dosbatch.link_target("m32", Path(work) / "P.OBJ", Path(work) / "P.EXE", Path(work), runtime=([platform, shared], []), defines=())
+        files = [word for word in said[0] if word.endswith(".OBJ") and word != str(Path(work) / "P.OBJ")]
+        self.assertEqual(len(files), 2)
+        self.assertEqual(len(set(files)), 2, files)
+
     def test_a_candidate_runtime_is_copied_and_never_falls_back_to_the_toolchain_library(self):
         """The first candidate link silently used BCOM45 after its replacement archive was not mounted."""
         with tempfile.TemporaryDirectory() as work:
@@ -98,7 +114,7 @@ class NibCutTests(unittest.TestCase):
         not a skip."""
         missing = [name for name in ("jwlink", "llrm-nib") if not (dosbatch.BIN / name).exists()]
         if missing:
-            self.assertFalse(os.environ.get("LLRM_REQUIRE_JWLINK"), f"LLRM_REQUIRE_JWLINK is set and {missing} is missing")
+            self.assertFalse(envflag.flag("LLRM_REQUIRE_JWLINK"), f"LLRM_REQUIRE_JWLINK is set and {missing} is missing")
             print(f"SKIPPED: needs {missing}", file=sys.stderr)
             self.skipTest(f"needs {missing}")
         with tempfile.TemporaryDirectory() as work:
@@ -235,3 +251,17 @@ def test_a_program_whose_screen_is_compared_keeps_the_mount_so_its_rows_line_up_
     with mock.patch.object(dosbatch, "_launch", return_value=None), mock.patch.object(dosbatch, "collect", return_value={}):
         dosbatch.run([dosbatch.Job("J", "exe", exe, screen=True)], tmp_path / "w")
     assert "mount v" in (tmp_path / "w" / "jobs.txt").read_text()
+
+
+def test_a_failed_assembly_leaves_no_err_file_in_the_working_directory(tmp_path, monkeypatch):
+    """jwasm writes `<source>.err` into the current directory when it fails: tools/dosbatch/init.err landed untracked in the source tree."""
+    import pytest
+
+    if not (dosbatch.BIN / "jwasm").is_file():
+        pytest.skip("jwasm is not built")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    with pytest.raises(Exception):  # noqa: B017
+        dosbatch.assemble(tmp_path / "missing" / "init.asm", tmp_path / "x.obj")
+    assert list(cwd.iterdir()) == []

@@ -1,0 +1,40 @@
+== --tbaa
+@test_no_noalias
+  none!
+  confused!
+  none!
+@test_one_noalias
+  none!
+  none!
+  none!
+@test_two_noalias
+  none!
+  none!
+  none!
+@test_global_alias
+  none!
+  confused!
+  none!
+@test_global_noalias
+  none!
+  none!
+  none!
+@test_global_size
+  none!
+  confused!
+  none!
+  none!
+  confused!
+  none!
+@test_tbaa_same
+  none!
+  confused!
+  none!
+@test_tbaa_diff
+  none!
+  none!
+  none!
+@tbaa_loop
+  input [* *]!
+  none!
+  output [*]!

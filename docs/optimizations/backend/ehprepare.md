@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/ehprepare.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/ehprepare.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/ehprepare.rs sha256:ab4c4cfb239d2e59928c0bd86963c8ab241d7be2a1d19e7fa5aa4661d2c82573 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/ehprepare.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/ehprepare.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/ehprepare.rs sha256:14010e2c1316ef43a6dfe8f8594968c39433c1b5de881b1550b1512fdfbb764a -->
 
 # ehprepare
 
@@ -25,6 +25,29 @@ shape of LLVM's SjLjEHPrepare, with the runtime as the longjmp.
     ... uses %x (made in entry)    ... uses reload of %x's slot
 ```
 
+The frontend passes each of a handled function's variables to `FRAME`
+(`llrm.qb.frame`) in its entry, so every pass sees it captured and keeps its
+loads and stores: the handler reads the variables whenever a call raises, as
+an SEH funclet reads its parent's frame (`llvm.localescape`). A statement's
+own argument boxes (`$arg`) are not passed, nor is a variable
+nothing writes (it holds the zero it was made with) or one dead at every
+statement RESUME continues at, a handler's first block, and the statement
+after each that may raise (`resumable_groups`): qb/bounds.bas -261 B at -Os.
+Without it GVN forwarded the variables into 2,638 phis in GORILLA's
+MAKECITYSCAPE and the demotion below stored them all back: 189,936 bytes at
+m32 -Os where main's is 47,769. D-EH1 (DEVIATE): MIR has no variadic
+intrinsic, so one call per variable stands for `localescape`; exit: the
+intrinsic in `llrm-mir` (owner splitkit-port, 2026-11-06).
+
+Row D-EH2 (open): GORILLA m32 is 3.5%, 4.6%, 5.4% and 4.4% over main at
+-O1, -O2, -O3 and -Os (50,709 against 48,994; 51,219 against 48,976; 51,609
+against 48,976; 49,860 against 47,769), m16 1.8%, 2.7%, 3.3% and 2.3%
+(42,540 against 41,768; 42,890 against 41,758; 43,130 against 41,758; 41,528
+against 40,602). DRAWGORILLA (+187 instructions at m32 -Os), PLOTSHOT
+(+117), DOSUN (+65) and MAKECITYSCAPE (+53) carry it. Owner splitkit-port,
+by 2026-10-27, closed by the per-function listing diff against main; closes
+when all eight are at or under main.
+
 `prepared` works on each function with the QB personality, in order:
 
 - Checks. A function that registers a handler without the personality, a
@@ -41,6 +64,7 @@ shape of LLVM's SjLjEHPrepare, with the runtime as the longjmp.
   calls `B$OEGP` with the landing's offset, or 0.
 - Replaces the pad's selector (the landing pad's second member) with a load
   of `$QB$LANDED`.
+- Erases the `FRAME` calls.
 - Demotes to the stack every phi of the pad and every value live into it
   (`demote_phis`, `demote_live`, after LLVM's DemotePHIToStack and
   DemoteRegToStack). The pad is entered with nothing the function left in a

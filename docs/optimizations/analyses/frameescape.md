@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/frameescape.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/frameescape.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/frameescape.rs sha256:ff0c05ed90010c66b04fc6b22838d4176d1481c052bcfb1af3a25e6b8eaa846d -->
+<!-- src: crates/opt/llrm-analysis/src/frameescape.rs sha256:f458c44a2fcb7df3219349e9cd08e2610df3c14bb1dd4f9bb29afb706cd5364f -->
 
 # frameescape
 
@@ -13,8 +13,8 @@ either accesses through it or exposes it:
 
 - a load's pointer and a store's pointer (not the stored value) are
   accesses;
-- a lifetime marker (`marker` says which instructions) names an object
-  without handing out its address;
+- a lifetime marker, or a use `marker` says keeps no copy (`nocapture`),
+  names an object without handing out its address;
 - any other use, including storing the pointer, passing it to a call,
   returning it, `ptrtoint`, or comparing it, exposes it.
 

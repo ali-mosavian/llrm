@@ -1,0 +1,5 @@
+d 2 fneg fp
+d 4 add vector
+d 5 call i32
+d 6 call i32
+d 7 call vector

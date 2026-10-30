@@ -1,0 +1,133 @@
+== -allow-unroll-and-jam -unroll-and-jam-count=4 -unroll-remainder
+@followup
+B0:
+  %v0 = icmp ne i32 %J, 0
+  %v1 = icmp ne i32 %I, 0
+  %v2 = and i1 %v0, %v1
+  br i1 %v2, label %B1, label %B14
+B1:
+  %v3 = add i32 %I, -1
+  %v4 = and i32 %I, 3
+  %v5 = icmp ult i32 %v3, 3
+  br i1 %v5, label %B2, label %B15
+B2:
+  %v6 = phi i32 [ %v81, %B19 ], [ 0, %B1 ]
+  %v7 = icmp ne i32 %v4, 0
+  call void @llvm.assume(i1 %v7)
+  br label %B3
+B3:
+  br label %B4
+B4:
+  %v8 = phi i32 [ %v13, %B4 ], [ 0, %B3 ]
+  %v9 = phi i32 [ %v12, %B4 ], [ 0, %B3 ]
+  %v10 = getelementptr inbounds i32, ptr %B, i32 %v8
+  %v11 = load i32, ptr %v10
+  %v12 = add i32 %v11, %v9
+  %v13 = add nuw i32 %v8, 1
+  %v14 = icmp eq i32 %v13, %J
+  br i1 %v14, label %B5, label %B4
+B5:
+  %v15 = phi i32 [ %v12, %B4 ]
+  %v16 = getelementptr inbounds i32, ptr %A, i32 %v6
+  store i32 %v15, ptr %v16
+  %v17 = add nuw i32 %v6, 1
+  %v18 = icmp ne i32 1, %v4
+  br i1 %v18, label %B6, label %B12
+B6:
+  br label %B7
+B7:
+  %v19 = phi i32 [ %v24, %B7 ], [ 0, %B6 ]
+  %v20 = phi i32 [ %v23, %B7 ], [ 0, %B6 ]
+  %v21 = getelementptr inbounds i32, ptr %B, i32 %v19
+  %v22 = load i32, ptr %v21
+  %v23 = add i32 %v22, %v20
+  %v24 = add nuw i32 %v19, 1
+  %v25 = icmp eq i32 %v24, %J
+  br i1 %v25, label %B8, label %B7
+B8:
+  %v26 = phi i32 [ %v23, %B7 ]
+  %v27 = getelementptr inbounds i32, ptr %A, i32 %v17
+  store i32 %v26, ptr %v27
+  %v28 = add nuw i32 %v6, 2
+  %v29 = icmp ne i32 2, %v4
+  br i1 %v29, label %B9, label %B12
+B9:
+  br label %B10
+B10:
+  %v30 = phi i32 [ %v35, %B10 ], [ 0, %B9 ]
+  %v31 = phi i32 [ %v34, %B10 ], [ 0, %B9 ]
+  %v32 = getelementptr inbounds i32, ptr %B, i32 %v30
+  %v33 = load i32, ptr %v32
+  %v34 = add i32 %v33, %v31
+  %v35 = add nuw i32 %v30, 1
+  %v36 = icmp eq i32 %v35, %J
+  br i1 %v36, label %B11, label %B10
+B11:
+  %v37 = phi i32 [ %v34, %B10 ]
+  %v38 = getelementptr inbounds i32, ptr %A, i32 %v28
+  store i32 %v37, ptr %v38
+  br label %B12
+B12:
+  br label %B13
+B13:
+  br label %B14
+B14:
+  ret void
+B15:
+  %v39 = sub i32 %I, %v4
+  br label %B16
+B16:
+  %v40 = phi i32 [ %v45, %B18 ], [ 0, %B15 ]
+  %v41 = phi i32 [ %v46, %B18 ], [ 0, %B15 ]
+  %v42 = add nuw nsw i32 %v40, 1
+  %v43 = add nuw nsw i32 %v40, 2
+  %v44 = add nuw nsw i32 %v40, 3
+  %v45 = add nuw i32 %v40, 4
+  %v46 = add nuw i32 %v41, 4
+  br label %B17
+B17:
+  %v47 = phi i32 [ %v58, %B17 ], [ 0, %B16 ]
+  %v48 = phi i32 [ %v57, %B17 ], [ 0, %B16 ]
+  %v49 = phi i32 [ %v62, %B17 ], [ 0, %B16 ]
+  %v50 = phi i32 [ %v61, %B17 ], [ 0, %B16 ]
+  %v51 = phi i32 [ %v66, %B17 ], [ 0, %B16 ]
+  %v52 = phi i32 [ %v65, %B17 ], [ 0, %B16 ]
+  %v53 = phi i32 [ %v70, %B17 ], [ 0, %B16 ]
+  %v54 = phi i32 [ %v69, %B17 ], [ 0, %B16 ]
+  %v55 = getelementptr inbounds i32, ptr %B, i32 %v47
+  %v56 = load i32, ptr %v55
+  %v57 = add i32 %v56, %v48
+  %v58 = add nuw i32 %v47, 1
+  %v59 = getelementptr inbounds i32, ptr %B, i32 %v49
+  %v60 = load i32, ptr %v59
+  %v61 = add i32 %v60, %v50
+  %v62 = add nuw i32 %v49, 1
+  %v63 = getelementptr inbounds i32, ptr %B, i32 %v51
+  %v64 = load i32, ptr %v63
+  %v65 = add i32 %v64, %v52
+  %v66 = add nuw i32 %v51, 1
+  %v67 = getelementptr inbounds i32, ptr %B, i32 %v53
+  %v68 = load i32, ptr %v67
+  %v69 = add i32 %v68, %v54
+  %v70 = add nuw i32 %v53, 1
+  %v71 = icmp eq i32 %v70, %J
+  br i1 %v71, label %B18, label %B17
+B18:
+  %v72 = phi i32 [ %v57, %B17 ]
+  %v73 = phi i32 [ %v61, %B17 ]
+  %v74 = phi i32 [ %v65, %B17 ]
+  %v75 = phi i32 [ %v69, %B17 ]
+  %v76 = getelementptr inbounds i32, ptr %A, i32 %v40
+  store i32 %v72, ptr %v76
+  %v77 = getelementptr inbounds i32, ptr %A, i32 %v42
+  store i32 %v73, ptr %v77
+  %v78 = getelementptr inbounds i32, ptr %A, i32 %v43
+  store i32 %v74, ptr %v78
+  %v79 = getelementptr inbounds i32, ptr %A, i32 %v44
+  store i32 %v75, ptr %v79
+  %v80 = icmp eq i32 %v46, %v39
+  br i1 %v80, label %B19, label %B16
+B19:
+  %v81 = phi i32 [ %v45, %B18 ]
+  %v82 = icmp ne i32 %v4, 0
+  br i1 %v82, label %B2, label %B13

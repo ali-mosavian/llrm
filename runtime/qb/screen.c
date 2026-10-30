@@ -14,6 +14,8 @@ void (*const screen_needs_text)(void) = cn_text_xinit;
 
 /* Set by gfx.c's initializer when the program has the graphics screen. */
 void (*screen_set_mode)(int mode);
+/* The graphics screen's SCREEN pages: 0 where the mode has no such page. */
+int (*screen_set_pages)(int active, int visible);
 /* The graphics screen's COLOR, which is the screen's own wherever a program has
    it, and does not need the text drawn on it. */
 void (*screen_set_colors)(int foreground, int background);
@@ -39,6 +41,15 @@ static void arguments(const int *block, int *values, unsigned slots)
         }
     }
 }
+
+#pragma aux screen_color "@screen_color@2"
+#pragma aux screen_locate "@screen_locate@2"
+#pragma aux screen_mode "@screen_mode@2"
+#pragma aux B_CSRL "B$CSRL"
+#pragma aux B_FPOS "B$FPOS"
+#pragma aux B_SCLS "B$SCLS"
+#pragma aux B_VWPT "B$VWPT"
+#pragma aux B_WIDT "B$WIDT"
 
 /* B$COLR's block: COLOR foreground, background, border. */
 void screen_color(const int *block)
@@ -69,11 +80,20 @@ void screen_mode(const int *block)
     int value[4];
 
     arguments(block, value, 4);
-    if (value[0] == ABSENT || (value[0] == 0 && !screen_set_mode))
+    if (value[0] == ABSENT && value[2] == ABSENT && value[3] == ABSENT)
         return;
-    if (!screen_set_mode)
-        qb_error(BE_ILLFUN);
-    screen_set_mode(value[0]);
+    if (value[0] != ABSENT && !(value[0] == 0 && !screen_set_mode)) {
+        if (!screen_set_mode)
+            qb_error(BE_ILLFUN);
+        screen_set_mode(value[0]);
+    }
+    if (value[2] != ABSENT || value[3] != ABSENT) {
+        /* a page left out is the one the screen has: page 0 after a mode, else what was set */
+        int none = (value[2] == ABSENT || value[2] == 0) && (value[3] == ABSENT || value[3] == 0);
+
+        if (screen_set_pages ? !screen_set_pages(value[2], value[3]) : !none)
+            qb_error(BE_ILLFUN);
+    }
 }
 
 /* B$SCLS: CLS, with -1 for no argument. */
@@ -102,17 +122,8 @@ void B_VWPT(short top, short bottom)
     cn_view(top, bottom);
 }
 
-/* B$WIDT: WIDTH columns, rows. */
+/* B$WIDT: WIDTH columns, rows; -1 for one left out. */
 void B_WIDT(short columns, short rows)
 {
-    cn_set_size(columns, rows);
+    cn_set_size(columns < 0 ? 0 : columns, rows < 0 ? 0 : rows);
 }
-
-#pragma aux screen_color "@screen_color@2"
-#pragma aux screen_locate "@screen_locate@2"
-#pragma aux screen_mode "@screen_mode@2"
-#pragma aux B_CSRL "B$CSRL"
-#pragma aux B_FPOS "B$FPOS"
-#pragma aux B_SCLS "B$SCLS"
-#pragma aux B_VWPT "B$VWPT"
-#pragma aux B_WIDT "B$WIDT"

@@ -29,18 +29,19 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("readonly", By(&["test_a_load_from_a_readonly_noalias_parameter_leaves_past_a_store"])),
     ("readnone", By(&["a_readnone_or_memory_none_callee_touches_nothing"])),
     ("nonnull", By(&["a_frame_object_is_nonnull_and_a_parameter_is_not"])),
+    ("noundef", By(&["test_scalar_parameters_are_noundef", "test_noundef_parameters_make_the_or_form"])),
     (
         "nocapture",
         By(&[
             "facts_of_a_call_argument_are_its_call_site_attributes",
-            "test_known_capture_summary_controls_later_external_reach",
+            "a_nocapture_parameter_keeps_nothing_and_an_unknown_callee_keeps_all",
         ]),
     ),
     (
         "noretain",
         By(&[
-            "a_noretain_argument_publishes_nothing_it_points_to",
-            "a_global_held_only_by_a_noretain_argument_stays_tracked",
+            "a_noretain_call_still_writes_what_its_argument_points_to",
+            "a_noretain_call_clobbers_a_global_its_argument_holds",
             "noretain_is_a_parameter_attribute_that_round_trips",
         ]),
     ),
@@ -55,7 +56,7 @@ const COVERAGE: &[(&str, Shown)] = &[
         "writeonly",
         By(&[
             "facts_of_a_call_argument_are_its_call_site_attributes",
-            "a_write_only_argument_publishes_nothing_it_will_hold",
+            "a_stored_through_parameter_is_nocapture_writeonly_and_a_kept_one_is_neither",
         ]),
     ),
     ("noreturn", By(&["test_a_stated_noreturn_callee_ends_the_path"])),
@@ -66,6 +67,8 @@ const COVERAGE: &[(&str, Shown)] = &[
             "purity_refuses_nontermination_nonlocal_accesses_and_what_callees_do_not_state",
         ]),
     ),
+    ("nofree", By(&["test_nofree_and_nosync_follow_what_the_calls_state"])),
+    ("nosync", By(&["test_nofree_and_nosync_follow_what_the_calls_state"])),
     (
         "willreturn",
         Unread("ow-frontend-contract: no frontend states it; functionattrs infers it (test for the inference only)"),
@@ -88,6 +91,10 @@ const COVERAGE: &[(&str, Shown)] = &[
     ),
     ("cold", By(&["test_a_frontend_cold_block_stays_cold_in_the_rich_mir"])),
     ("threeway", Unread("qcport-rich: a pass that folds a compare of a three-way result")),
+    (
+        "flagsresult",
+        By(&["a_flags_result_read_other_than_by_a_comparison_is_refused", "a_sext_of_a_flags_compare_stays_a_compare"]),
+    ),
     (
         "stackcheck",
         By(&[

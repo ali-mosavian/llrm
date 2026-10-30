@@ -1,5 +1,6 @@
 use super::*;
 use crate::hash::HashMap;
+use crate::module::Operand;
 
 /// A graph given by its successor lists, for edits a `Function` cannot make
 /// without a pass.
@@ -199,6 +200,22 @@ fn dump<const POST: bool>(
     tree: &DomTreeBase<POST>,
     sorted: bool,
 ) -> String {
+    dump_of(tree, sorted, 8)
+}
+
+/// `dump` of a graph of nine blocks.
+fn dump9<const POST: bool>(
+    tree: &DomTreeBase<POST>,
+    sorted: bool,
+) -> String {
+    dump_of(tree, sorted, 9)
+}
+
+fn dump_of<const POST: bool>(
+    tree: &DomTreeBase<POST>,
+    sorted: bool,
+    blocks: u32,
+) -> String {
     let list = |mut items: Vec<u32>| {
         if sorted {
             items.sort_unstable();
@@ -218,7 +235,7 @@ fn dump<const POST: bool>(
     if POST {
         out.push_str(&line("V".into(), None));
     }
-    for block in 0..8 {
+    for block in 0..blocks {
         out.push_str(&line(block.to_string(), Some(BlockId(block))));
     }
     out.push_str(&format!("roots:{}\n", list(tree.roots().iter().map(|one| one.0).collect())));
@@ -235,16 +252,21 @@ fn hash(text: &str) -> String {
     format!("{h:016x}")
 }
 
-/// `domtree_golden.txt` as `(kind, key) -> (updated, updated sorted, fresh
-/// sorted)`.
-fn golden() -> (String, HashMap<(String, String), [String; 3]>) {
+/// `domtree_golden.txt` as `(kind, key) -> [updated, updated sorted, fresh
+/// sorted, lazy, permissive]`, and the split lines as `("split <kind>",
+/// "<from>><to> <strategy>") -> [hash]`.
+fn golden() -> (String, HashMap<(String, String), Vec<String>>) {
     let text = include_str!("domtree_golden.txt");
     let mut lines = text.lines();
     let version = lines.next().expect("a version line").to_string();
     let rows = lines
         .map(|line| {
             let f: Vec<&str> = line.split(' ').collect();
-            ((f[0].to_string(), f[1].to_string()), [f[2].to_string(), f[3].to_string(), f[4].to_string()])
+            if f[0] == "split" {
+                ((format!("split {}", f[1]), format!("{} {}", f[2], f[3])), vec![f[4].to_string()])
+            } else {
+                ((f[0].to_string(), f[1].to_string()), f[2..].iter().map(|one| one.to_string()).collect())
+            }
         })
         .collect();
     (version, rows)
@@ -261,7 +283,7 @@ fn the_golden_file_is_the_pinned_llvms_and_lists_every_case() {
         version, "# LLVM 24.0.0git d1106deb71cc81016406a1917d0508d2df296266",
         "golden file not from the pinned binary"
     );
-    assert_eq!(rows.len(), 2 * cases().len());
+    assert_eq!(rows.keys().filter(|(kind, _)| !kind.starts_with("split")).count(), 2 * cases().len());
     let diverges = |kind: &str| rows.iter().filter(|((k, _), r)| k == kind && r[1] != r[2]).count();
     assert_eq!((diverges("dom"), diverges("post") > 0), (0, true));
 }
@@ -357,4 +379,240 @@ fn a_function_is_a_graph_of_its_blocks() {
     post.verify(function, VerificationLevel::Full).expect("post");
     assert_eq!(dom.immediate_dominator(layout[3]), Some(layout[0]), "the join's dominator is the entry");
     assert_eq!(post.immediate_dominator(layout[0]), Some(layout[3]), "the entry's post-dominator is the join");
+}
+
+fn function(text: &str) -> Function {
+    let module = crate::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    module
+        .functions()
+        .find(|(_, _, function)| !function.is_declaration())
+        .map(|(_, _, function)| function.clone())
+        .expect("a body")
+}
+
+/// Asking was a walk up the tree through a hash map, as deep as the loops nest:
+/// 45% of a compile of 60 sequential loops, and 301 s of one of 200 (#394). It
+/// is a comparison of two numbers.
+#[test]
+fn asking_whether_a_block_dominates_does_not_walk_the_tree() {
+    let depth = 20_000;
+    let body: String = (0..depth).map(|at| format!("b{at}:\n  br label %b{}\n", at + 1)).collect();
+    let function = function(&format!("define void @f() {{\nentry:\n  br label %b0\n{body}b{depth}:\n  ret void\n}}\n"));
+    let tree = DomTree::of(&function);
+    let last = *function.layout().last().expect("blocks");
+    let start = std::time::Instant::now();
+    let asked = function.layout().iter().filter(|&&at| tree.dominates(at, last)).count();
+    assert_eq!(asked, depth + 2);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(1),
+        "{:?} for {depth} questions of depth {depth}",
+        start.elapsed()
+    );
+}
+
+const DIAMOND_LOOP: &str = "define void @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %join\nb:\n  br i1 %c, label %join, label %loop\nloop:\n  br i1 %c, label %loop, label %out\njoin:\n  br label %out\nout:\n  ret void\n}\n";
+
+/// The tree after an edit the log tells of, against a tree of the edited
+/// function built afresh. Each edit is one the passes make: a branch to another
+/// block, a block put between two, a branch cut and a branch made.
+#[test]
+fn a_tree_updated_from_the_log_is_the_tree_of_the_function_afresh() {
+    // (block whose terminator is rewritten, operand index, new target block
+    // name) over DIAMOND_LOOP.
+    let edits: [(&str, usize, &str); 5] =
+        [("a", 0, "out"), ("b", 1, "out"), ("b", 2, "join"), ("loop", 1, "join"), ("join", 0, "loop")];
+    for (block, slot, target) in edits {
+        let mut function = function(DIAMOND_LOOP);
+        let by_name = |function: &Function, name: &str| {
+            *function.layout().iter().find(|one| function.block(**one).name.as_deref() == Some(name)).expect("a block")
+        };
+        let before = DomTree::of(&function);
+        let mark = function.mark();
+        let (at, to) = (by_name(&function, block), by_name(&function, target));
+        let last = function.terminator(at).expect("terminated");
+        let mut operands = function.instruction(last).operands.clone();
+        operands[slot] = Operand::Block(to);
+        function.set_operands(last, operands);
+        let changes = function.changes_since(mark).expect("on record").to_vec();
+        let updated =
+            before.updated(&function, &changes).unwrap_or_else(|| panic!("{block}[{slot}] -> {target}: not updated"));
+        let fresh = DomTree::of(&function);
+        assert_eq!(updated, fresh, "{block}[{slot}] -> {target}");
+        updated
+            .verify(&function, VerificationLevel::Full)
+            .unwrap_or_else(|error| panic!("{block}[{slot}] -> {target}: {error}"));
+    }
+}
+
+use crate::domtree_updater::{DomTreeUpdater, UpdateStrategy};
+
+/// The same updates through a Lazy updater, one at a time, then the tree asked
+/// for; and through `applyUpdatesPermissive` with the first update repeated:
+/// the trees the pinned LLVM's `DomTreeUpdater` leaves.
+#[test]
+fn a_lazy_updater_leaves_the_tree_llvm_leaves_for_every_case() {
+    let (_, rows) = golden();
+    let cfg = graph();
+    for batch in cases() {
+        let (after, updates, key) = applied(&batch);
+        let mut repeated = updates.clone();
+        repeated.push(updates[0]);
+        for (permissive, column) in [(false, 3), (true, 4)] {
+            let (mut dom, mut post) = (
+                DomTreeUpdater::new(Some(fresh::<false>(&cfg)), None, UpdateStrategy::Lazy),
+                DomTreeUpdater::new(None, Some(fresh::<true>(&cfg)), UpdateStrategy::Lazy),
+            );
+            for updater in [&mut dom, &mut post] {
+                if permissive {
+                    updater.apply_updates_permissive(&after, &repeated);
+                } else {
+                    for update in &updates {
+                        updater.apply_updates(&after, std::slice::from_ref(update));
+                    }
+                }
+            }
+            let (want_dom, want_post) =
+                (&rows[&("dom".to_string(), key.clone())], &rows[&("post".to_string(), key.clone())]);
+            assert_eq!(
+                hash(&dump(dom.get_dom_tree(&after), false)),
+                want_dom[column],
+                "dom {key} permissive {permissive}"
+            );
+            assert_eq!(
+                hash(&dump(post.get_post_dom_tree(&after), false)),
+                want_post[column],
+                "post {key} permissive {permissive}"
+            );
+            dom.into_trees(&after);
+            post.into_trees(&after);
+        }
+    }
+}
+
+/// A critical edge split with block 8, made after the trees were: Eager and
+/// Lazy leave the pinned LLVM's tree.
+#[test]
+fn splitting_a_critical_edge_leaves_the_tree_llvm_leaves() {
+    let (_, rows) = golden();
+    let cfg = graph();
+    let mut seen = 0;
+    for from in 0..8_u32 {
+        for &to in &cfg.succs[from as usize] {
+            let mut after = cfg.clone();
+            for target in after.succs[from as usize].iter_mut() {
+                if *target == to {
+                    *target = 8;
+                    break;
+                }
+            }
+            after.succs.push(vec![to]);
+            after.blocks.push(BlockId(8));
+            for lazy in [false, true] {
+                let strategy = if lazy { UpdateStrategy::Lazy } else { UpdateStrategy::Eager };
+                let name = format!("{from}>{to} {}", if lazy { "lazy" } else { "eager" });
+                if from != 7 {
+                    let mut dom = DomTreeUpdater::new(Some(fresh::<false>(&cfg)), None, strategy);
+                    dom.split_critical_edge(&after, BlockId(from), BlockId(to), BlockId(8));
+                    let want = &rows[&("split dom".to_string(), name.clone())];
+                    assert_eq!(hash(&dump9(dom.get_dom_tree(&after), false)), want[0], "dom split {name}");
+                    dom.into_trees(&after);
+                    seen += 1;
+                }
+                let mut post = DomTreeUpdater::new(None, Some(fresh::<true>(&cfg)), strategy);
+                post.split_critical_edge(&after, BlockId(from), BlockId(to), BlockId(8));
+                let want = &rows[&("split post".to_string(), name.clone())];
+                assert_eq!(hash(&dump9(post.get_post_dom_tree(&after), false)), want[0], "post split {name}");
+                post.into_trees(&after);
+                seen += 1;
+            }
+        }
+    }
+    assert_eq!(
+        seen,
+        rows.keys().filter(|(kind, _)| kind.starts_with("split")).count(),
+        "premise: every split line was compared"
+    );
+}
+
+/// Blocks waiting to be deleted leave the trees only when no update is pending:
+/// a flush event, as LLVM's.
+#[test]
+fn a_block_deleted_under_a_lazy_updater_leaves_the_trees_at_the_flush() {
+    let mut cfg = graph();
+    cfg.delete(0, 2);
+    cfg.delete(2, 3);
+    cfg.delete(2, 4);
+    cfg.delete(7, 2);
+    cfg.succs[2].clear();
+    let mut updater = DomTreeUpdater::new(Some(fresh::<false>(&graph())), None, UpdateStrategy::Lazy);
+    updater.apply_updates(
+        &cfg,
+        &[
+            Update::delete(BlockId(0), BlockId(2)),
+            Update::delete(BlockId(2), BlockId(3)),
+            Update::delete(BlockId(2), BlockId(4)),
+        ],
+    );
+    updater.delete_bb(BlockId(2));
+    assert!(updater.is_bb_pending_deletion(BlockId(2)) && updater.has_pending_dom_tree_updates());
+    let tree = updater.get_dom_tree(&cfg);
+    assert!(!tree.contains(BlockId(2)), "block 2 is out of the tree after the flush");
+    assert!(!updater.has_pending_deleted_bb());
+    updater.into_trees(&cfg);
+}
+
+fn builds() -> (u64, u64) {
+    use crate::counts::{Event, get};
+    (get(Event::Dominators), get(Event::DominatorsReused))
+}
+
+/// 394 trees were built for d_faces, 322 of them for a CFG built before: 5 M Ir
+/// of SemiNCA for answers already held.
+#[test]
+fn a_tree_of_an_unchanged_cfg_is_copied_not_built() {
+    let function = function(
+        "define i32 @f(i1 %c, i32 %x) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %m\nb:\n  br label %m\nm:\n  %y = add i32 %x, 1\n  ret i32 %y\n}\n",
+    );
+    let (built, reused) = builds();
+    let first = DomTree::of(&function);
+    let second = DomTree::of(&function);
+    let (built_now, reused_now) = builds();
+    assert_eq!((built_now - built, reused_now - reused), (1, 1), "one build, one copy");
+    assert!(first == second);
+    second.verify(&function, VerificationLevel::Full).expect("the copy is a tree of the function");
+}
+
+/// What the copy must never do: hand the tree of the CFG as it was.
+#[test]
+fn a_tree_after_an_edit_of_the_cfg_is_built_again_and_follows_it() {
+    let mut function = function(
+        "define void @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %m\nb:\n  br label %m\nm:\n  br label %n\nn:\n  ret void\n}\n",
+    );
+    let before = DomTree::of(&function);
+    let layout = function.layout().to_vec();
+    let entry_branch = function.terminator(layout[0]).expect("a branch");
+    function.set_operand(entry_branch, 2, Operand::Block(layout[1]));
+    let (built, _) = builds();
+    let after = DomTree::of(&function);
+    assert_eq!(builds().0 - built, 1, "built again");
+    assert!(after == DomTree::built(&function), "the tree of the CFG now");
+    assert!(before != after, "b is no longer reached from the entry");
+}
+
+/// An edit that leaves the blocks and edges alone leaves the tree.
+#[test]
+fn a_tree_after_an_edit_that_keeps_the_cfg_is_copied() {
+    let mut function = function(
+        "define i32 @f(i32 %x) {\nentry:\n  br label %a\na:\n  br label %b\nb:\n  br label %c\nc:\n  %y = add i32 %x, 1\n  ret i32 %y\n}\n",
+    );
+    DomTree::of(&function);
+    let layout = function.layout().to_vec();
+    let add = function.iter_block(layout[3]).next().expect("the add");
+    let operands = function.instruction(add).operands.clone();
+    function.set_operand(add, 0, operands[1]);
+    function.set_operand(add, 1, operands[0]);
+    let (built, reused) = builds();
+    let tree = DomTree::of(&function);
+    assert_eq!((builds().0 - built, builds().1 - reused), (0, 1));
+    tree.verify(&function, VerificationLevel::Full).expect("still a tree of the function");
 }

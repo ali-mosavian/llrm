@@ -2,10 +2,11 @@
 
 use std::process::Command;
 
-/// jpeg_fixed at -Omax -m32 panicked in the allocator, `liveunion.rs:88`
-/// "no entry found for key": a rewrite that took a fresh slot numbering moved
-/// every interval, yet only the values it named were moved in the index of a
-/// register with many holders, so a removed holder's old segments stayed in it.
+/// jpeg_fixed at -Omax -m32 panicked in the allocator, `liveunion.rs:88` (since
+/// deleted) "no entry found for key": a rewrite that took a fresh slot
+/// numbering moved every interval, yet only the values it named were moved in
+/// the index of a register with many holders, so a removed holder's old
+/// segments stayed in it.
 #[test]
 fn a_rewrite_that_renumbers_the_slots_does_not_leave_stale_holders_in_the_index() {
     let scratch = tempfile::tempdir().unwrap();

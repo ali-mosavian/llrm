@@ -23,8 +23,18 @@ void qb_end(void)
     finish();
 }
 
+#pragma aux B_CEND "B$CEND"
+#pragma aux B_STOP "B$STOP"
+#pragma aux B_CENP "B$CENP"
+
 /* B$CEND: SYSTEM and END. */
 void B_CEND(void)
+{
+    qb_end();
+}
+
+/* B$STOP: STOP in a compiled program ends it as END does. */
+void B_STOP(void)
 {
     qb_end();
 }
@@ -37,6 +47,3 @@ void B_CENP(void)
         qb_no_resume();
     B_CEND();
 }
-
-#pragma aux B_CEND "B$CEND"
-#pragma aux B_CENP "B$CENP"

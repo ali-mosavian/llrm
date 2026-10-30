@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/constant_cycles.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/constant_cycles.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/constant_cycles.rs sha256:c13421e7f05331ea0c31e49f39f06c5f1936c75abd7b42a5393b10f073b3ee57 -->
+<!-- src: crates/opt/llrm-analysis/src/constant_cycles.rs sha256:d0d1ee5bb318b977b982dfa7ccd4958a6340a57251827f51fb472f247e0dcb7b -->
 
 # constant_cycles
 

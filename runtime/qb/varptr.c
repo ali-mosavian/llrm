@@ -7,6 +7,9 @@
 
 enum { TYPE_INTEGER = 2, TYPE_STRING = 3, TYPE_SINGLE = 4, TYPE_DOUBLE = 8 };
 
+#pragma aux B_VARP "B$VARP"
+#pragma aux B_SADD "B$SADD"
+
 /* B$VARP: the string of a variable's type byte and its address. */
 SD *B_VARP(unsigned address, short type)
 {
@@ -80,8 +83,6 @@ const SD *varptr_string(const char **at, const char *end)
     return (const SD *)variable;
 }
 
-#pragma aux B_VARP "B$VARP"
-#pragma aux B_SADD "B$SADD"
 
 enum { NESTING = 16 };
 

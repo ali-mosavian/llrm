@@ -1,0 +1,31 @@
+INIT sw=0x808000 target=0x458 size=50 rev=0x23 flat=1
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=4
+SEG 3 attr=0xc name="CONST2" align=4
+SEG 4 attr=0x6 name="_DATA" align=4
+START
+TYPE T25 size=28 align=1
+f1 DBSrcFile "/home/alim/scratch/wt-reds/tests/fixtures/c32/strcopy.c" main=1
+- DBSrcCue f1 5 1
+SYM y1 name="copy" base="copy" pattern="*_" attr=0x7 seg=1
+CALLCONV y1 class=0x0 target=0x0 parms=[f0000ff:0] ret=0:0 save=ffffffff:fffffffd
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="to" base="to" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_POINTER
+SYM y3 name="from" base="from" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_POINTER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+- DBSrcCue f1 7 1
+n4 CGFEName y2 TY_POINTER
+n5 CGUnary O_POINTS n4 TY_POINTER
+n6 CGFEName y3 TY_POINTER
+n7 CGUnary O_POINTS n6 TY_POINTER
+TYPE T26 size=60 align=4
+n8 CGUnary O_POINTS n7 T26
+n9 CGLVAssign n5 n8 T26
+- CGDone n9
+- DBSrcCue f1 8 1
+- CGReturn n0 TY_INTEGER
+STOP
+FINI

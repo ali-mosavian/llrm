@@ -1,12 +1,9 @@
 """`uv run --project tools python -m pytest tools/test_qcport_run.py`"""
-import importlib.util
 import sys
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location("qcport_run", Path(__file__).parent / "qcport-run.py")
-qcport_run = importlib.util.module_from_spec(spec)
-sys.modules["qcport_run"] = qcport_run
-spec.loader.exec_module(qcport_run)
+sys.path.insert(0, str(Path(__file__).parent))
+import qcport_run  # noqa: E402
 
 LISTING = """format dos
 option quiet, map=/elsewhere/QCPORT.MAP
@@ -122,3 +119,100 @@ def test_a_run_that_steps_forever_is_stopped_by_the_cap():
     with tempfile.TemporaryDirectory() as raw:
         src, work = fake_qcport(Path(raw), "while true; do echo step >> dosbox.log; sleep 0.05; done\n")
         assert "after 2s" in qcport_run.run(work, src, stall=30, cap=2, tick=0.1)
+
+
+def _attract_run(tmp_path, steps, **logs):
+    (tmp_path / "cstep.txt").write_text(steps)
+    for name, text in logs.items():
+        (tmp_path / name).write_text(text)
+    return tmp_path
+
+
+PLAYED = "attract demo demo1.qdc map e1m3\r\nattract demo demo2.qdc map e1m4\r\nattract demo demo3.qdc map e1m6\r\n"
+
+
+def test_an_attract_loop_that_starts_all_three_demos_has_no_problem(tmp_path):
+    run = _attract_run(tmp_path, PLAYED)
+    assert qcport_run.attract_problems(run) == []
+    assert qcport_run.attract_over(run)
+
+
+def test_an_attract_loop_that_runs_out_of_memory_after_one_demo_is_named_with_the_line(tmp_path):
+    """QCport -O2 at b9e7400be drew the benchmark (300 ticks) and failed the empty command line: 329,553 bytes of code against Borland's 296,085, and `miptex.bin: out of memory` loading the third demo's level."""
+    run = _attract_run(tmp_path, "attract demo demo1.qdc map e1m3\n", **{"ERROR.LOG": "miptex.bin: out of memory\n"})
+    problems = qcport_run.attract_problems(run)
+    assert problems == ["never started: demo2.qdc demo3.qdc", "miptex.bin: out of memory"]
+    assert qcport_run.attract_over(run), "an out-of-memory run is over, not left to the stall timer"
+
+
+def test_an_attract_loop_still_on_its_second_demo_is_not_over(tmp_path):
+    run = _attract_run(tmp_path, "attract demo demo1.qdc map e1m3\nattract demo demo2.qdc map e1m4\n")
+    assert qcport_run.attract_problems(run) == ["never started: demo3.qdc"]
+    assert not qcport_run.attract_over(run)
+
+
+def test_demos_the_emulator_logged_count_before_run_sh_has_written_cstep(tmp_path):
+    """run.sh writes cstep.txt when the emulator exits; a run stopped while it plays has only dosbox.log. The first attract run read cstep.txt, found it missing and called Borland's good run 'never started'."""
+    (tmp_path / "dosbox.log").write_text("Bochs port E9h: " + PLAYED.replace("\r\n", "\nBochs port E9h: "))
+    assert qcport_run.attract_problems(tmp_path) == []
+
+
+def test_the_attract_verdict_names_each_run_that_misses_a_demo():
+    """The attract loop must play all three demos on both builds; QCport -O2 once ran out of memory loading miptex.bin and passed the benchmark."""
+    bad = ["never started: demo2.qdc demo3.qdc", "miptex.bin: out of memory"]
+    assert qcport_run.attract_verdict({"borland": [], "llrm": []}) == []
+    assert qcport_run.attract_verdict({"borland": [], "llrm": bad}) == [f"llrm: {'; '.join(bad)}"]
+    assert qcport_run.attract_verdict({"borland": ["never started: demo1.qdc"], "llrm": []}) == ["borland: never started: demo1.qdc"]
+
+
+def test_a_run_that_logs_a_fault_without_end_cannot_fill_the_disk():
+    """A faulting run looped on CPU exception 6 and wrote a 57 GB dosbox.log before it was stopped."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as raw:
+        src, work = fake_qcport(Path(raw), "head -c 8388608 /dev/zero >> dosbox.log\n")
+        qcport_run.run(work, src, stall=30, cap=30, tick=0.1, file_limit=1 << 20)  # the script writes 8 MiB
+        assert (work / "dosbox.log").stat().st_size <= 1 << 20
+
+
+def test_an_attract_loop_that_played_all_three_demos_and_then_faulted_is_a_problem(tmp_path):
+    """302389dd83 let the program execute garbage: CPU exception 6 looped after the demos started, and the run was judged only by 'never started'."""
+    run = _attract_run(tmp_path, PLAYED)
+    (run / "dosbox.log").write_text("CPU_Exception: Calling CPU_Interrupt for exception 5\nCPU_Exception: Calling CPU_Interrupt for exception 6\nCPU_Exception: Calling CPU_Interrupt for exception 6\n")
+    assert qcport_run.attract_problems(run) == ["CPU exception 5", "CPU exception 6"]
+    assert qcport_run.attract_over(run)
+
+
+def test_a_fault_is_found_in_the_start_of_a_log_that_never_ends(tmp_path):
+    (tmp_path / "dosbox.log").write_text("CPU_Exception: Calling CPU_Interrupt for exception 6\n" + "x" * (qcport_run.LOG_READ + 10))
+    assert qcport_run.faults(tmp_path) == ["CPU exception 6"]
+
+
+def test_the_pinned_drawing_is_no_difference_and_any_other_is():
+    built = {"frames": "62", "polys": "37637", "md5": "ba64e86d5de8b0adb94f2fe3e76ffeea"}
+    assert qcport_run.pinned(65, built) == []
+    assert qcport_run.pinned(64, {**built, "polys": "23434"}) == ["modules: pinned 65, llrm 64", "polys: pinned 37637, llrm 23434"]
+
+
+def test_a_run_stopped_for_stalling_leaves_no_emulator_behind(tmp_path):
+    """run.sh starts the emulator under `timeout`, which makes its own process group: killing the script's group left two DOSBoxes
+    burning a core each for up to the 900 s cap (found 2026-10-29 after a stalled run), starving the steps that ran beside them."""
+    import os
+    import time
+
+    (tmp_path / "tools").mkdir()
+    pidfile = tmp_path / "emulator.pid"
+    script = tmp_path / "tools" / "run.sh"
+    script.write_text(f"#!/bin/sh\ntimeout 60 sh -c 'echo $$ > {pidfile}; exec sleep 60' &\nwait\n")
+    script.chmod(0o755)
+    work = tmp_path / "side"
+    work.mkdir()
+    why = qcport_run.run(work, tmp_path / "qcport", stall=1, cap=30, tick=0.2)
+    assert why == "no progress for 1s", why
+    emulator = int(pidfile.read_text())
+    time.sleep(0.3)
+    try:
+        os.kill(emulator, 0)
+    except ProcessLookupError:
+        return
+    os.kill(emulator, 9)
+    raise AssertionError(f"the emulator ({emulator}) outlived the run that was stopped")

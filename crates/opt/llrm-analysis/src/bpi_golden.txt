@@ -1,0 +1,66 @@
+Printing analysis 'Branch Probability Analysis' for function 'pointer':
+---- Branch Probabilities ----
+  edge %entry -> %yes probability is 0x30000000 / 0x80000000 = 37.50%
+  edge %entry -> %no probability is 0x50000000 / 0x80000000 = 62.50%
+  edge %yes -> %no probability is 0x80000000 / 0x80000000 = 100.00% [HOT edge]
+Printing analysis 'Branch Probability Analysis' for function 'zero':
+---- Branch Probabilities ----
+  edge %entry -> %a probability is 0x30000000 / 0x80000000 = 37.50%
+  edge %entry -> %b probability is 0x50000000 / 0x80000000 = 62.50%
+  edge %a -> %b probability is 0x30000000 / 0x80000000 = 37.50%
+  edge %a -> %c1 probability is 0x50000000 / 0x80000000 = 62.50%
+  edge %b -> %c1 probability is 0x50000000 / 0x80000000 = 62.50%
+  edge %b -> %d probability is 0x30000000 / 0x80000000 = 37.50%
+  edge %c1 -> %d probability is 0x30000000 / 0x80000000 = 37.50%
+  edge %c1 -> %e probability is 0x50000000 / 0x80000000 = 62.50%
+  edge %d -> %e probability is 0x80000000 / 0x80000000 = 100.00% [HOT edge]
+Printing analysis 'Branch Probability Analysis' for function 'mask':
+---- Branch Probabilities ----
+  edge %entry -> %yes probability is 0x40000000 / 0x80000000 = 50.00%
+  edge %entry -> %no probability is 0x40000000 / 0x80000000 = 50.00%
+  edge %yes -> %no probability is 0x80000000 / 0x80000000 = 100.00% [HOT edge]
+Printing analysis 'Branch Probability Analysis' for function 'float':
+---- Branch Probabilities ----
+  edge %entry -> %a probability is 0x50000000 / 0x80000000 = 62.50%
+  edge %entry -> %b probability is 0x30000000 / 0x80000000 = 37.50%
+  edge %a -> %b probability is 0x50000000 / 0x80000000 = 62.50%
+  edge %a -> %c1 probability is 0x30000000 / 0x80000000 = 37.50%
+  edge %b -> %c1 probability is 0x7ffff800 / 0x80000000 = 100.00% [HOT edge]
+  edge %b -> %d probability is 0x00000800 / 0x80000000 = 0.00%
+  edge %c1 -> %d probability is 0x00000800 / 0x80000000 = 0.00%
+  edge %c1 -> %e probability is 0x7ffff800 / 0x80000000 = 100.00% [HOT edge]
+  edge %d -> %e probability is 0x80000000 / 0x80000000 = 100.00% [HOT edge]
+Printing analysis 'Branch Probability Analysis' for function 'weights':
+---- Branch Probabilities ----
+  edge %entry -> %yes probability is 0x60000000 / 0x80000000 = 75.00%
+  edge %entry -> %no probability is 0x20000000 / 0x80000000 = 25.00%
+  edge %yes -> %no probability is 0x80000000 / 0x80000000 = 100.00% [HOT edge]
+  edge %no -> %dead probability is 0x00000001 / 0x80000000 = 0.00%
+  edge %no -> %done probability is 0x7fffffff / 0x80000000 = 100.00% [HOT edge]
+Printing analysis 'Branch Probability Analysis' for function 'unreachable':
+---- Branch Probabilities ----
+  edge %entry -> %ok probability is 0x7ffff800 / 0x80000000 = 100.00% [HOT edge]
+  edge %entry -> %fail probability is 0x00000800 / 0x80000000 = 0.00%
+  edge %ok -> %warm probability is 0x78787f1d / 0x80000000 = 94.12% [HOT edge]
+  edge %ok -> %cold probability is 0x078780e3 / 0x80000000 = 5.88%
+  edge %cold -> %warm probability is 0x80000000 / 0x80000000 = 100.00% [HOT edge]
+Printing analysis 'Branch Probability Analysis' for function 'loop':
+---- Branch Probabilities ----
+  edge %entry -> %head probability is 0x80000000 / 0x80000000 = 100.00% [HOT edge]
+  edge %head -> %body probability is 0x7c000000 / 0x80000000 = 96.88% [HOT edge]
+  edge %head -> %exit probability is 0x04000000 / 0x80000000 = 3.12%
+  edge %body -> %head probability is 0x80000000 / 0x80000000 = 100.00% [HOT edge]
+Printing analysis 'Branch Probability Analysis' for function 'unlikely':
+---- Branch Probabilities ----
+  edge %entry -> %head probability is 0x80000000 / 0x80000000 = 100.00% [HOT edge]
+  edge %head -> %reset probability is 0x2aaaa8e4 / 0x80000000 = 33.33%
+  edge %head -> %latch probability is 0x5555571c / 0x80000000 = 66.67%
+  edge %reset -> %latch probability is 0x80000000 / 0x80000000 = 100.00% [HOT edge]
+  edge %latch -> %head probability is 0x7c000000 / 0x80000000 = 96.88% [HOT edge]
+  edge %latch -> %exit probability is 0x04000000 / 0x80000000 = 3.12%
+Printing analysis 'Branch Probability Analysis' for function 'switched':
+---- Branch Probabilities ----
+  edge %entry -> %other probability is 0x28000000 / 0x80000000 = 31.25%
+  edge %entry -> %zero probability is 0x18000000 / 0x80000000 = 18.75%
+  edge %entry -> %one probability is 0x40000000 / 0x80000000 = 50.00%
+  edge %zero -> %other probability is 0x80000000 / 0x80000000 = 100.00% [HOT edge]

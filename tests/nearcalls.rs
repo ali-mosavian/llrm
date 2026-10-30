@@ -17,8 +17,13 @@ fn compiled(
     let scratch = tempfile::tempdir().unwrap();
     let (input, out) = (scratch.path().join(name), scratch.path().join("out.asm"));
     std::fs::write(&input, source).unwrap();
-    let done =
-        Command::new(bin.join(tool)).arg(&input).args(arguments).args(["-O2", "-S", "-o"]).arg(&out).output().unwrap();
+    // llrm-c is gone: its command line is served by llrm-cc over the pinned
+    // clang.
+    let done = if tool == "llrm-c" {
+        common::cc::llrm_c().arg(&input).args(arguments).args(["-O2", "-S", "-o"]).arg(&out).output().unwrap()
+    } else {
+        Command::new(bin.join(tool)).arg(&input).args(arguments).args(["-O2", "-S", "-o"]).arg(&out).output().unwrap()
+    };
     assert!(done.status.success(), "{tool}: {}", String::from_utf8_lossy(&done.stderr));
     std::fs::read_to_string(out).unwrap()
 }
@@ -70,7 +75,10 @@ fn test_basic_enters_a_module_internal_procedure_near() {
         &["--own-frames", "--whole-program", "--dialect", "pds71", "--runtime", "pds71"],
     );
     let body = procedure(&asm, "DOWN");
-    assert!(body.starts_with("DOWN proc near") && body.contains("call DOWN\n") && !body.contains("retf"), "{asm}");
+    // The recursion is a closed form now (the pin's tail-recursion
+    // elimination and IndVars), so the call that enters it near is main's.
+    assert!(body.starts_with("DOWN proc near") && !body.contains("retf"), "{asm}");
+    assert!(asm.contains("call DOWN\n"), "{asm}");
 }
 
 /// A function only direct calls reach takes the fields it reads in place of the
@@ -99,19 +107,22 @@ fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
     assert!(!body.contains("es:[bx+4]") && !body.contains("[bx+4]"), "{asm}");
 }
 
-/// Queens' `safe(q, row, col)` read `q[r]` for `r < row` under a bounds check
-/// on the slice's length, 12, which only reached it as a field of the
-/// descriptor. Promoted, the length is a constant the callers pass and the
-/// check folds against `row`'s range; the constant is then no argument at all.
+/// Queens' `safe(q, row, col)` reads `q[r]` for `r < row` under a bounds check
+/// on the slice's length, 12, which reaches it as a field of the descriptor.
+/// llrm's own bounds analysis and field promotion folded the check (a0ed5eb43
+/// retired them as llrm-only); the pin does not: `opt -O2` over the same IR
+/// (queens.nib's MIR before the promotion, converted) keeps the descriptor
+/// argument and all three `call @N$EBND` (one in `safe`, two in `place`). The
+/// checks stay, as the pin's.
 #[test]
-fn test_nib_queens_loses_its_bounds_checks_and_the_arguments_that_carried_them() {
+fn test_nib_queens_keeps_its_bounds_checks_as_the_pin_does() {
     let asm = compiled(
         "llrm-nib",
         "queens.nib",
         include_str!("../bench/queens/queens.nib"),
         &["-fno-inline-functions", "-fno-inline-functions-called-once"],
     );
-    assert!(!asm.contains("N$EBND") && !asm.contains("pushw 12"), "{asm}");
+    assert!(asm.contains("call far ptr N$EBND"), "{asm}");
 }
 
 /// A slice of a module array is a far pointer to DGROUP: pushed as segment and

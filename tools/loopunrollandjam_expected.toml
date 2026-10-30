@@ -1,0 +1,5 @@
+# Files of the pin's LoopUnrollAndJam tests that tools/loopunrollandjam_oracle.py does not compare as they are.
+# `reason`: the whole file differs; `functions.NAME`: one function differs (the corpus pins llrm's own output for it).
+
+["pragma-explicit.ll".functions]
+function2 = "llrm's remainder keeps three more phis than the pin's (138 lines against 141); not the AA: BasicAA's aliasPHI/aliasSelect are translated and `function`, the same body, matches (D4, unclassified)"

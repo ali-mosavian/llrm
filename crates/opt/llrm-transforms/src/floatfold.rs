@@ -110,7 +110,7 @@ impl FunctionPass for FloatFold {
 /// `outer` is its module and target, `calls` what each call writes.
 /// Whether anything changed.
 pub fn folded(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -121,7 +121,7 @@ pub fn folded(
 
 /// `folded`, `analyses` holding what is known of `function`.
 pub(crate) fn _folded(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
@@ -150,7 +150,7 @@ pub(crate) fn _folded(
 }
 
 /// A floating constant's value and format.
-fn float(
+pub(crate) fn float(
     context: &Context,
     operand: Operand,
 ) -> Option<(FloatKind, f64)> {
@@ -166,8 +166,8 @@ fn float(
 }
 
 /// A floating constant of `ty`.
-fn float_constant(
-    context: &mut Context,
+pub(crate) fn float_constant(
+    context: &Context,
     ty: TypeId,
     kind: FloatKind,
     number: f64,
@@ -184,7 +184,7 @@ fn float_constant(
 /// is `x` (`nsz`). `x + -0.0`, `x - 0.0` and `x * 1.0` need no flag. Whether
 /// anything changed.
 pub fn freedoms(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> bool {
     let mut changed = false;
@@ -206,7 +206,7 @@ pub fn freedoms(
 
 /// The operand `inst` equals, or a number it is, as its flags let it.
 fn _simplified(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     inst: InstId,
 ) -> Option<Operand> {
@@ -275,7 +275,7 @@ fn exact_reciprocal(
 
 /// `inst` rewritten where a flag lets the language's freedom be used.
 fn _combined(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     inst: InstId,
 ) -> bool {
@@ -372,7 +372,7 @@ fn _replaced(
 
 /// Every read of a known float value reads its constant.
 pub fn stored(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     facts: &IndexMap<ValueId, Finite>,
 ) -> bool {
@@ -394,7 +394,7 @@ pub fn stored(
 
 /// Every read of a known conversion result reads its number.
 pub fn discarded(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     converted: &IndexMap<ValueId, Known>,
 ) -> bool {

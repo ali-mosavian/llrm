@@ -1,4 +1,4 @@
-//! The rich-MIR corpus, and the corpus tests of llrm-core's
+//! The rich-MIR corpus, and the corpus tests of llrm-codegen's
 //! `analysis/loops_tests.rs` asked of it through `cfg::graph`.
 
 use std::collections::BTreeSet;
@@ -32,11 +32,52 @@ fn graphs() -> Vec<(String, Vec<cfg::Block>)> {
     out
 }
 
+/// Functions the optimizer leaves irreducible although their source is not.
+/// Both are the pin's own passes, run as it runs them; the pin does not keep
+/// loops reducible:
+/// - `entries/@main`: the late SimplifyCFG's `sinkCommonCodeFromPredecessors`
+///   after a loop peel gives the loop header a second entry
+///   (`-fno-unroll-loops` hides it). The pin's `opt` makes the same split block
+///   from the same CFG:
+///   `tests/fixtures/pin-simplifycfg/sink_split_irreducible.*.ll`.
+/// - `pipeline/@$state3.next`: DFAJumpThreading on a state machine (on in the
+///   pin; `LLRM_NO_DFAJUMPTHREADING=1` makes it reducible).
+/// A known function that is reducible fails the test, so the entry goes with
+/// the change that makes it so.
+const KNOWN_IRREDUCIBLE: &[&str] =
+    &["optimized/nib-examples-entries/@main", "optimized/nib-examples-pipeline/@$state3.next"];
+
+/// A function with an error handler has a personality: its RESUME switch
+/// (`hir/mir/handling.rs`) enters the statement after, or the statement
+/// itself, wherever the error was raised, loop bodies included, so such a
+/// function is irreducible by construction (qb-bounds, `ON ERROR RESUME
+/// NEXT` in a loop: blocks 6, 7, 9, 11 and 13). Every other function is
+/// reducible.
 #[test]
-fn every_corpus_function_is_reducible() {
-    for (name, graph) in graphs() {
-        assert_eq!(loops::irreducible(&graph, None), BTreeSet::new(), "{name}");
+fn every_corpus_function_without_an_error_handler_is_reducible() {
+    let mut handled = 0;
+    let mut known = BTreeSet::new();
+    let mut unexpected = BTreeSet::new();
+    for (name, module) in corpus() {
+        for (_, global, function) in module.functions() {
+            if function.entry().is_none() {
+                continue;
+            }
+            let name = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let irreducible = loops::irreducible(&cfg::graph(function), None);
+            if function.personality.is_some() {
+                handled += 1;
+            } else if KNOWN_IRREDUCIBLE.contains(&name.as_str()) {
+                assert_ne!(irreducible, BTreeSet::new(), "{name} is reducible now: remove it from KNOWN_IRREDUCIBLE");
+                known.insert(name);
+            } else if irreducible != BTreeSet::new() {
+                unexpected.insert(name);
+            }
+        }
     }
+    assert_eq!(unexpected, BTreeSet::new(), "irreducible with no error handler");
+    assert!(handled > 0, "the corpus has functions with an error handler");
+    assert_eq!(known.len(), KNOWN_IRREDUCIBLE.len(), "{known:?}");
 }
 
 #[test]
@@ -111,6 +152,11 @@ dead:
             );
             assert_eq!(shape.dominance.frontiers(function), loops::frontiers(&graph, None), "{name}");
             assert_eq!(shape.dominance.irreducible(function), loops::irreducible(&graph, None), "{name}");
+            assert_eq!(
+                shape.dominance.is_irreducible(function),
+                !loops::irreducible(&graph, None).is_empty(),
+                "{name}"
+            );
         }
     }
 }
@@ -139,4 +185,20 @@ fn the_loops_of_a_shape_are_those_the_graph_walks_find() {
         }
     }
     assert!(found > 1000, "premise: the corpus holds many loops, {found} compared");
+}
+
+/// The claim above, checked on the pin's own output: its SimplifyCFG sink
+/// leaves `f` with a cycle entered at two nodes.
+#[test]
+fn the_pins_simplifycfg_sink_makes_an_irreducible_loop() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tests/fixtures/pin-simplifycfg/sink_split_irreducible.pin.ll");
+    let module = crate::testing::parse_corpus_entry("pin-sink", &path);
+    let irreducible = module
+        .functions()
+        .filter(|(_, _, function)| {
+            function.entry().is_some() && loops::irreducible(&cfg::graph(function), None) != BTreeSet::new()
+        })
+        .count();
+    assert_eq!(irreducible, 1);
 }

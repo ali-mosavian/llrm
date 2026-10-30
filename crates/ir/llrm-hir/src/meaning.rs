@@ -79,6 +79,9 @@ pub struct Meaning {
     /// The string parameters the routine frees where the runtime allocated
     /// them: a copy of it stands in only where no actual is such a temporary.
     pub releases: Vec<usize>,
+    /// The copy is always inlined, whatever the size model or
+    /// `-fno-inline-functions` says of the call.
+    pub always_inline: bool,
     /// The condition under which it raises the error, and the error's number.
     pub check: Option<(Expr, i64)>,
 }

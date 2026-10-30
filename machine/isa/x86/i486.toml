@@ -1,0 +1,2 @@
+extends = "i386"
+features = ["x87", "bswap", "cmpxchg", "xadd"]

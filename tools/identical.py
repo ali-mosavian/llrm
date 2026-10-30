@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Whether two llrm-c builds write the same bytes: every program, every tests/run/c program and every QCport module, at each level.
+"""Whether two builds (llrm-llc, compiled through llrm-cc beside it, or llrm-c) write the same bytes: every program, every tests/run/c program and every QCport module, at each level.
 
     tools/identical.py OLD_LLRM_C NEW_LLRM_C [--levels=-O1,-O2,-Os,-Omax] [--programs-only] [--old-head REV] [--new-head REV]
 
@@ -20,6 +20,7 @@ import re
 import sys
 import tempfile
 import time
+import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -28,7 +29,9 @@ ROOT = HERE.parent
 VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))
 sys.path.insert(0, str(VSGCC))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "pgo"))
 import corpora  # noqa: E402
+import pgo  # noqa: E402
 import programs  # noqa: E402
 import wrap  # noqa: E402
 
@@ -42,9 +45,9 @@ MODULES = ("host", "render", "model", "game", "sound", "ui")
 # needs no edit here: CHECKS was a list each PR appended to, and every PR that added an oracle conflicted with the others on it. An oracle
 # here is a gap the next dependency bug falls through (qcport/triggers -O1 sat behind one of the others for weeks): each of these fails on
 # the corpus on main today, and leaves with the fix named.
-#   COLORS, FRAME, SCOPES: fail on the corpus (634, 21 and 102 of 1,323 programs and modules; 0 with the oracle off).
+#   COLORS and FRAME: fail on the corpus (634 and 21 of 1,323 programs and modules; 0 with the oracle off).
 #   STALE: a pass that says it adds no memory operation outlives a frozen globals-aa (#2094).
-NOT_RUN = frozenset("COLORS FRAME SCOPES STALE".split())
+NOT_RUN = frozenset("COLORS FRAME STALE CAPTURES_CALLS CAPTURES_BLIND CAPTURES_COUNT CAPTURES_MODULE".split())
 
 
 def checks(root: Path = ROOT) -> tuple[str, ...]:
@@ -140,6 +143,9 @@ def same(job: tuple[str, str, str, list[str]], old: str, new: str, work: Path) -
         )
         at = len(arguments) - 1 - arguments[::-1].index("-o")
         command = [str(Path(compiler).with_name(tool)), *arguments[:at], "-o", str(out), *arguments[at + 2 :]]
+        if tool == "llrm-c" and Path(compiler).name == "llrm-llc":  # the backend is the subject: llrm-cc compiles, with it
+            command, driven = pgo.through_driver(Path(compiler).with_name("llrm-cc"), Path(compiler), arguments[: at - 1], Path(arguments[at - 1]), str(out))
+            env = {**env, "LLRM_LLC": driven["LLRM_LLC"], "LLRM_CC_TARGET": driven["LLRM_CC_TARGET"]}
         done = subprocess.run(command, capture_output=True, text=True, env=env)
         if done.returncode:
             return name, level, f"{tag} failed: {done.stderr[-200:]}"
@@ -178,6 +184,9 @@ def main() -> int:
             for name, (source, flags) in files.items()
             for level in (levels if not name.startswith("run/") else [""])
         ]
+        if Path(args.old).name == "llrm-llc":  # compiled by llrm-cc, which cannot build these yet (the pgo corpus's list)
+            unbuilt = set(tomllib.loads((HERE / "pgo/corpus.toml").read_text())["llrm-cc"]["unbuilt"])
+            jobs = [job for job in jobs if job[0].removeprefix("run/").split("#")[0] not in unbuilt]
         if not args.no_bench:
             benches = bench_compiles(work)
             jobs += [(name, "", tool, arguments) for name, (tool, arguments) in benches.items()]

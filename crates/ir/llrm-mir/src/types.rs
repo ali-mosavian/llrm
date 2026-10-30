@@ -1,5 +1,8 @@
 //! Types, uniqued by the context as LLVM's are, so a type is a copyable id.
 
+use std::cell::{Cell, RefCell};
+
+use crate::arena::Arena;
 use crate::hash::HashMap;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -21,6 +24,13 @@ impl FloatKind {
     pub fn value_bytes(self) -> u32 {
         crate::datalayout::float_bits(self).div_ceil(8)
     }
+}
+
+/// The 10 bytes of an x87 extended value, from its 80 bits.
+pub fn x87_image(bits: u128) -> [u8; 10] {
+    let mut bytes = [0; 10];
+    bytes.copy_from_slice(&bits.to_le_bytes()[..10]);
+    bytes
 }
 
 /// The 10 bytes of x87's extended format holding the double whose bits
@@ -87,37 +97,69 @@ pub struct StructBody {
 
 #[derive(Clone, Debug, Default)]
 pub struct Types {
-    types: Vec<Type>,
-    interned: HashMap<Type, TypeId>,
+    types: Arena<Type>,
+    interned: Box<RefCell<HashMap<Type, TypeId>>>,
+    /// `Type::Int(w)` for `w <= SMALL_INT`, the hot ask, without hashing.
+    small_ints: SmallInts,
     /// Identified structs in definition order.
     pub named: Vec<(String, Option<StructBody>)>,
 }
 
+/// Widths with a direct slot.
+const SMALL_INT: usize = 64;
+
+/// A type id plus one per width, 0 where the width was never asked.
+#[derive(Clone, Debug)]
+struct SmallInts([Cell<u32>; SMALL_INT + 1]);
+
+impl Default for SmallInts {
+    fn default() -> Self {
+        Self(std::array::from_fn(|_| Cell::new(0)))
+    }
+}
+
 impl Types {
+    /// LLVM's `IntegerType::get` and kin: `ty`, made on the first ask. The
+    /// table is borrowed for the lookup and again for the insert, never across
+    /// a call.
+    #[inline]
     pub fn intern(
-        &mut self,
+        &self,
         ty: Type,
     ) -> TypeId {
-        if let Some(&id) = self.interned.get(&ty) {
-            return id;
+        let slot = match ty {
+            Type::Int(bits) => self.small_ints.0.get(bits as usize),
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            if slot.get() != 0 {
+                return TypeId(slot.get() - 1);
+            }
         }
-        let id = TypeId(self.types.len() as u32);
-        self.types.push(ty.clone());
-        self.interned.insert(ty, id);
+        let found = self.interned.borrow().get(&ty).copied();
+        let id = found.unwrap_or_else(|| {
+            let id = TypeId(self.types.push(ty.clone()) as u32);
+            self.interned.borrow_mut().insert(ty, id);
+            id
+        });
+        if let Some(slot) = slot {
+            slot.set(id.0 + 1);
+        }
         id
     }
 
+    #[inline]
     pub fn get(
         &self,
         id: TypeId,
     ) -> &Type {
-        &self.types[id.0 as usize]
+        self.types.get(id.0 as usize)
     }
 
     /// `ty` of `from`, interned here: none for an identified struct, whose
     /// body is `from`'s own.
     pub fn imported(
-        &mut self,
+        &self,
         from: &Types,
         ty: TypeId,
     ) -> Option<TypeId> {
@@ -139,24 +181,25 @@ impl Types {
         Some(self.intern(one))
     }
 
-    pub fn void(&mut self) -> TypeId {
+    pub fn void(&self) -> TypeId {
         self.intern(Type::Void)
     }
 
     pub fn int(
-        &mut self,
+        &self,
         bits: u32,
     ) -> TypeId {
         self.intern(Type::Int(bits))
     }
 
     pub fn ptr(
-        &mut self,
+        &self,
         space: u32,
     ) -> TypeId {
         self.intern(Type::Pointer(space))
     }
 
+    #[inline]
     pub fn int_bits(
         &self,
         id: TypeId,
@@ -167,11 +210,18 @@ impl Types {
         }
     }
 
+    #[inline]
     pub fn is_void(
         &self,
         id: TypeId,
     ) -> bool {
         matches!(self.get(id), Type::Void)
+    }
+
+    /// What a held fact about these types was true of: how many there are, and
+    /// how many identified structs.
+    pub fn version(&self) -> (usize, usize) {
+        (self.types.len(), self.named.len())
     }
 
     pub fn body(
@@ -247,3 +297,7 @@ pub fn struct_text(
     let inner = if fields.is_empty() { "{}".to_owned() } else { format!("{{ {fields} }}") };
     if packed { format!("<{inner}>") } else { inner }
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;

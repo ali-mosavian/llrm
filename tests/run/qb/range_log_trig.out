@@ -1,0 +1,41 @@
+ 0 error 5
+log oksqr ok
+.
+-1 error 5
+log oksqr ok
+.
+-1D-300 error 5
+log oksqr ok
+.
+ 1D-300 log oksqr ok
+.
+ 1 log oksqr ok
+.
+ 1D+300 log oksqr ok
+.
+ 100 sin okcos oktan ok
+.
+ 2147483648 sin okcos oktan ok
+.
+ 2147483648.5 error 5
+sin okerror 5
+cos okerror 5
+tan ok
+.
+ 2147483649 error 5
+sin okerror 5
+cos okerror 5
+tan ok
+.
+-2147483648 sin okcos oktan ok
+.
+-2147483649 error 5
+sin okerror 5
+cos okerror 5
+tan ok
+.
+ 1D+300 error 5
+sin okerror 5
+cos okerror 5
+tan ok
+.

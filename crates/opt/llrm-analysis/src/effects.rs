@@ -166,6 +166,17 @@ pub fn call(
     call_effects(context, declarations, function, inst, |_| true)
 }
 
+/// Whether the call `inst` touches only inaccessible memory
+/// (`CallBase::onlyAccessesInaccessibleMemory`), or is no call.
+pub fn only_accesses_inaccessible_memory(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    call_effects(context, declarations, function, inst, |location| location != Some("inaccessiblemem")) == Effects::NONE
+}
+
 /// Whether the call `inst` may touch memory at all.
 pub fn touches_memory(
     context: &Context,

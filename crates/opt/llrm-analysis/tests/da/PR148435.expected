@@ -1,0 +1,7 @@
+== --tbaa
+@_Z1cb
+  output [*]!
+@test_siv_no_addrec
+  output [* *]!
+@f1
+  output [*]!

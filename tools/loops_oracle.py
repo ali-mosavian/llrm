@@ -8,9 +8,11 @@ Exit 1 if any file fails or is missing a side. The pinned opt is named in
 one place (`llvmpin` once it lands on main); a different version is refused.
 """
 import subprocess, sys, glob
+import targetdesc
 from pathlib import Path
 
 PINNED = Path.home() / "scratch/llvm-build/bin/opt"
+TARGET = targetdesc.triple_cpu()  # llrm's default target (crates/target/*/datalayout.toml): a dump has no `target triple`, and opt costs for x86-64 without one
 COMMIT = "24.0.0git"
 ROOT = Path(__file__).resolve().parent.parent
 LLRM = ROOT / "target/release/llrm-mir"
@@ -30,7 +32,7 @@ def main():
     loops = nested = 0
     bad = []
     for f in files:
-        want = run([str(PINNED), "-passes=print<loops>", "-disable-output", f])
+        want = run([str(PINNED), *TARGET, "-passes=print<loops>", "-disable-output", f])
         got = run([str(LLRM), "--loops", f])
         if want.returncode or got.returncode:
             missing += 1

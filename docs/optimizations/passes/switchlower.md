@@ -1,17 +1,31 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlower.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlower.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:bfc9166cf96258d9fd6a8755363b532557d10ccebfb29174ad94ee3498864605 -->
+<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:a7f8874d4e21dcd1d206a8cc4603913a271ffb306a2490e67f0f3a3d941a4daa -->
 
 # switchlower
 
-A switch lowered as gcc 13.4 lowers one: a lookup table where every case
-only picks constants, bit tests for few targets in a narrow range, and
-otherwise a balanced tree of range tests.
+A switch lowered as LLVM's SelectionDAG lowers one: the likeliest range
+peeled off, jump tables and bit tests for what is dense, and a balanced
+tree of range tests over the rest. Switch conversion (lookup tables) is the
+`switchconv` pass.
 
 ## How it works
-The cases are sorted and the ones that share a target and follow one
-another are made one range (`group_case_labels`); cases to the default
-are dropped. The values are ordered signed or unsigned, whichever makes
-the narrower span: a `-1, 0, 1` switch is three adjacent values.
+`visitSwitch` ([`switchcg`](switchcg.md) holds the decisions, a
+translation of `SwitchLoweringUtils.cpp`): cases to one target that follow
+one another are one range, values ordered signed; `peelDominantCaseCluster`
+takes a range of at least 66% out ahead; `findJumpTables` and
+`findBitTestClusters` replace runs by tables and bit tests.
+
+`splitWorkItem` splits more than three clusters at the pivot that balances
+their probability, `value < pivot` to the one side, the other to the rest;
+at most three are `lowerWorkItem`: the likeliest first, each falling to the
+next and the last to the default, two values one bit apart one `(x | bit)
+== both` compare, a range `x - low <= span`.
+
+A jump table is the range test of `x - low` and a `switch` over the indices
+`0..n`, every index a block that only jumps on; the backend makes it a jump
+through a table of code addresses. Bit tests are `1 << (x - low)` against
+one mask per target (`visitBitTestCase`: a single bit or all but one is a
+compare). Where the default is `unreachable` the range test goes.
 
 Switch conversion (gcc's `-ftree-switch-conversion`, -O2 and up; LLVM's
 `SimplifyCFG::SwitchToLookupTable`). Every case target is the join `J` or
@@ -27,29 +41,19 @@ move for each phi; the table's the range test and a load for each phi, a
 widening where its cells are narrower. Tuned for size the costs are bytes
 and the whole tree is set against the code and the data of the table.
 
-Bit tests (`bit_test_cluster`). A run of clusters narrower than a word with
-at most 3 targets, and 3 cases for one target, 5 for two or 6 for three, is
-`1 << (x - min)` tested against one mask per target.
-
-The tree (`switch_decision_tree`). What is left is balanced by count and
-tested as `emit_case_nodes` does: a single value by equality, a range by
-`x - low <= span` when it is a leaf, a node with children by the compares
-`x > high`, `x >= low`.
-
-Jump tables (`jump_table_cluster`), over the plain clusters left: the fewest
-runs whose span is at most 8 times (3 tuned for size) the comparisons they
-replace, and at least the target's `jump_table` cases (gcc's
-`case_values_threshold`, 5 on x86; 0: no table jump). Such a run is `x -
-low` behind its range test and a `switch table` over the indices `0..n`,
-every index a block that only jumps on; the backend makes it a jump through
-a table of code addresses. `-fno-jump-tables` leaves them in the tree.
+The deviations (probabilities, cases to the default) are in
+[`switchcg`](switchcg.md).
 
 ## Runs
-As two passes, gcc's: `switchconv` (`pass_convert_switch`, -O2 and up),
+As two passes: `switchconv` (gcc's `pass_convert_switch`, -O2 and up),
 which makes the lookup tables and so adds loads, and last of the function
 passes `switchlower` (`pass_lower_switch`), every level that optimizes,
 which adds no memory operation: the module analyses frozen at the end of the
 pipeline stand past it.
+
+DEVIATE LP-6 (no mid-end pin pass: SelectionDAGBuilder lowers a switch at
+isel (`visitSwitch`), here MIR is lowered before selection (CG1); exit: isel
+lowers switches and this is deleted; owner w-6; review 2026-11-20).
 
 ## Example
 Before:
@@ -62,10 +66,13 @@ b0:
                             i32 40, label %b ]
 ```
 
-After, the first three one range and the tree two ranges:
+After, the first three one range, tested first as the likelier:
 
 ```mir
 b0:
-  %t = icmp ugt i32 %k, 2
-  br i1 %t, label %m, label %a
+  %t = icmp ule i32 %k, 2
+  br i1 %t, label %a, label %m
+m:
+  %u = icmp eq i32 %k, 40
+  br i1 %u, label %b, label %d
 ```

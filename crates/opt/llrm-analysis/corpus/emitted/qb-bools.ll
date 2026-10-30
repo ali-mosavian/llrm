@@ -1,4 +1,4 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
 @$data = internal global [0 x i8] zeroinitializer
 @$qb$statementTable = internal constant [0 x i8] zeroinitializer
@@ -8,13 +8,10 @@ target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
 @"D%" = internal global [2 x i8] zeroinitializer
 @"X%" = internal global [2 x i8] zeroinitializer
 @"T%" = internal global [2 x i8] zeroinitializer
-@$fslSegment = internal constant ptr addrspace(2) addrspacecast (ptr addrspace(1) @$string3$payload to ptr addrspace(2))
-@$string3$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string3$payload, i16 4) to i16), [4 x i8] c"\02\00T=" }>
-@$string3$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string3$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string6$payload = internal addrspace(1) constant <{ [2 x i8], i16, [6 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string6$payload, i16 4) to i16), [6 x i8] c"\04\00DONE" }>
-@$string6$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string6$payload, i16 2) to i16), ptr @$fslSegment }>
+@$string3 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string3, i16 4), [2 x i8] c"T=" }>
+@$string4 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string4, i16 4), [4 x i8] c"DONE" }>
 
-define internal cc1000 void @__main() addrspace(1) {
+define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
   store i16 3, ptr @"A%", !tbaa !2
   store i16 7, ptr @"B%", !tbaa !2
@@ -33,54 +30,52 @@ b1:
   %7 = load i16, ptr @"A%", !tbaa !2
   %8 = load i16, ptr @"B%", !tbaa !2
   %9 = icmp slt i16 %7, %8
-  %10 = sext i1 %9 to i16
-  %11 = icmp ne i16 %10, 0
-  br i1 %11, label %b2, label %b3
+  br i1 %9, label %b2, label %b3
 
 b2:
-  %12 = load i16, ptr @"T%", !tbaa !2
-  %13 = add i16 %12, 1
-  store i16 %13, ptr @"T%", !tbaa !2
+  %10 = load i16, ptr @"T%", !tbaa !2
+  %11 = add i16 %10, 1
+  store i16 %11, ptr @"T%", !tbaa !2
   br label %b4
 
 b3:
   br label %b4
 
 b4:
-  %14 = load i16, ptr @"A%", !tbaa !2
-  %15 = load i16, ptr @"B%", !tbaa !2
-  %16 = icmp slt i16 %14, %15
-  %17 = sext i1 %16 to i16
-  %18 = load i16, ptr @"C%", !tbaa !2
-  %19 = load i16, ptr @"D%", !tbaa !2
-  %20 = icmp slt i16 %18, %19
-  %21 = sext i1 %20 to i16
-  %22 = and i16 %17, %21
-  %23 = icmp ne i16 %22, 0
-  br i1 %23, label %b5, label %b6
+  %12 = load i16, ptr @"A%", !tbaa !2
+  %13 = load i16, ptr @"B%", !tbaa !2
+  %14 = icmp slt i16 %12, %13
+  %15 = sext i1 %14 to i16
+  %16 = load i16, ptr @"C%", !tbaa !2
+  %17 = load i16, ptr @"D%", !tbaa !2
+  %18 = icmp slt i16 %16, %17
+  %19 = sext i1 %18 to i16
+  %20 = and i16 %15, %19
+  %21 = icmp ne i16 %20, 0
+  br i1 %21, label %b5, label %b6
 
 b5:
-  %24 = load i16, ptr @"T%", !tbaa !2
-  %25 = add i16 %24, 2
-  store i16 %25, ptr @"T%", !tbaa !2
+  %22 = load i16, ptr @"T%", !tbaa !2
+  %23 = add i16 %22, 2
+  store i16 %23, ptr @"T%", !tbaa !2
   br label %b7
 
 b6:
   br label %b7
 
 b7:
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string3$descriptor)
-  %26 = load i16, ptr @"T%", !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI2(i16 %26)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string6$descriptor)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string3)
+  %24 = load i16, ptr @"T%", !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PEI2(i16 %24)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string4)
   ret void
 }
 
-declare cc1000 void @llrm.qb.B$PSSD(ptr) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PSSD(ptr) addrspace(1)
 
-declare cc1000 void @llrm.qb.B$PEI2(i16) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PEI2(i16) addrspace(1)
 
-declare cc1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}

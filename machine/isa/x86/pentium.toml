@@ -1,0 +1,2 @@
+extends = "i486"
+features = ["cx8", "tsc"]

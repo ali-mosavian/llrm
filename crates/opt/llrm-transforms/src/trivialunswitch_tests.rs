@@ -108,3 +108,27 @@ fn an_exit_value_the_loop_computes_keeps_the_branch() {
     let after = unswitched(&text, INPUTS);
     assert!(after.contains("br i1 %z, label %out, label %test"), "{after}");
 }
+
+/// A rotated loop (the header is the latch) is left as it is: moving its
+/// invariant exit test before the body would skip the body on the first trip.
+#[test]
+fn a_rotated_loop_keeps_its_exit_test_after_the_body() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br label %head
+
+head:
+  %i = phi i16 [ %m, %b0 ], [ %next, %head ]
+  %next = sub i16 %i, 1
+  br i1 %z, label %out, label %head
+
+out:
+  %r = phi i16 [ %next, %head ]
+  ret i16 %r
+}
+";
+    let after = unswitched(text, &[&[0, 5], &[0, 0]]);
+    let entry = after.split("b0:").nth(1).expect("the entry").split("head:").next().expect("its end");
+    assert!(!entry.contains("br i1 %z"), "the entry tests it: {after}");
+}

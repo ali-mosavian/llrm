@@ -4,11 +4,13 @@
    each statement whether an event is due (B$EVAN), and calls the handlers
    of those that are (B$EVPD, B$EVDN) itself. */
 #include "console.h"
-#include "device.h"
+#include "dev.h"
 #include "error.h"
 #include "qb.h"
 
-enum { HUNDREDTHS = 100, DAY = 8640000L, LONGEST = 86400 };
+#define DAY 8640000L
+#define LONGEST 86400L
+enum { HUNDREDTHS = 100 };
 
 enum {
     DEVICE_TIMER = 1,
@@ -47,8 +49,6 @@ static const byte key_scan[KEYS] = {
     0, 0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0x85, 0x86};
 
 extern unsigned music_waiting(void);
-extern int ev_next_extended_scan(void);
-extern void ev_discard_key(void);
 
 static int take_keys(void);
 
@@ -64,6 +64,16 @@ static Trap *trap_of(short device, long number)
         return &traps[KEYS + 1 + device - DEVICE_FIRST_ABSENT];
     return 0;
 }
+
+#pragma aux B_STIK "B$STIK"
+#pragma aux B_FSTG "B$FSTG"
+#pragma aux B_FPEN "B$FPEN"
+#pragma aux B_EVAR "B$EVAR"
+#pragma aux B_EVSW "B$EVSW"
+#pragma aux B_EVAN "B$EVAN"
+#pragma aux B_EVPD "B$EVPD"
+#pragma aux B_EVDN "B$EVDN"
+#pragma aux B_FPLY "B$FPLY"
 
 /* B$EVAR: ON device(number) GOSUB the handler of that number; 0 takes the
    trap away. */
@@ -103,7 +113,7 @@ void B_EVSW(short device, long number, short mode)
    one, or there is none. */
 static int trapped_key(void)
 {
-    int scan = ev_next_extended_scan(), key;
+    int scan = dev_key_peek_scan(), key;
 
     if (scan < 0)
         return 0;
@@ -111,7 +121,7 @@ static int trapped_key(void)
         Trap *trap = &traps[1 + key];
 
         if (key_scan[key] == scan && trap->handler && trap->state != OFF) {
-            ev_discard_key();
+            dev_key_discard();
             trap->due = 1;
             return 1;
         }
@@ -223,13 +233,3 @@ short B_FPEN(short which)
     (void)which;
     return 0;
 }
-
-#pragma aux B_STIK "B$STIK"
-#pragma aux B_FSTG "B$FSTG"
-#pragma aux B_FPEN "B$FPEN"
-#pragma aux B_EVAR "B$EVAR"
-#pragma aux B_EVSW "B$EVSW"
-#pragma aux B_EVAN "B$EVAN"
-#pragma aux B_EVPD "B$EVPD"
-#pragma aux B_EVDN "B$EVDN"
-#pragma aux B_FPLY "B$FPLY"

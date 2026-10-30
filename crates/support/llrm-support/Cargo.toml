@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "Support code shared by every llrm crate"
 
 [dependencies]
+llrm-env = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }
 rustc-hash = { workspace = true }

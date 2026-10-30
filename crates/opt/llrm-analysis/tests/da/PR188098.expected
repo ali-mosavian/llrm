@@ -1,0 +1,5 @@
+== --tbaa
+@fun
+  output [* *]!
+  flow [|<]!
+  input [* *]!

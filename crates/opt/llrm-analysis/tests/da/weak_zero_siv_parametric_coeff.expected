@@ -1,0 +1,22 @@
+== --tbaa
+@weak_zero_src_siv_parametric_coeff
+  output [S]!
+  output [*|<]!
+  output [0]!
+    Runtime Assumptions:
+    Compare predicate: %a ne) 0
+@weak_zero_dst_siv_parametric_coeff
+  output [0]!
+    Runtime Assumptions:
+    Compare predicate: %a ne) 0
+  output [*|<]!
+  output [S]!
+== --test weak-zero-siv --tbaa
+@weak_zero_src_siv_parametric_coeff
+  output [S]!
+  output [*|<]!
+  output [*]!
+@weak_zero_dst_siv_parametric_coeff
+  output [*]!
+  output [*|<]!
+  output [S]!

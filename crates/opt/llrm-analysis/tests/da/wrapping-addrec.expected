@@ -1,0 +1,3 @@
+== --tbaa
+@test_wrapping_i1_addrec
+  output [*]!

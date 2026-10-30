@@ -1,0 +1,30 @@
+ 22712.6 ok
+.
+ 22712.8 error 6
+ok
+.
+ 23000 error 6
+ok
+.
+ 100000 error 6
+ok
+.
+-23000 ok
+.
+-100000 ok
+.
+ 0 ok
+.
+ 1D+300 error 6
+ok
+.
+ 22712 ok
+.
+ 22713 error 6
+ok
+.
+-22713 ok
+.
+ 100000 error 6
+ok
+.

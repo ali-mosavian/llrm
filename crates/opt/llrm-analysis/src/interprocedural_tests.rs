@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `analysis/interprocedural_tests.rs`.
+//! Adapted from llrm-codegen's `analysis/interprocedural_tests.rs`.
 
 use std::collections::BTreeSet;
 
@@ -22,22 +22,6 @@ fn number(
         ConstantKind::Int(bits) => bits,
         ref other => panic!("{other:?} is not an integer"),
     }
-}
-
-/// Each map entry by its function's name, its constants as numbers.
-fn named(
-    module: &Module,
-    facts: &Parameters,
-) -> Vec<(String, Vec<Option<u128>>)> {
-    facts
-        .iter()
-        .map(|(&id, values)| {
-            (
-                module.global(id).name.clone().unwrap(),
-                values.iter().map(|value| value.map(|one| number(module, one))).collect(),
-            )
-        })
-        .collect()
 }
 
 fn calls(function: &Function) -> Vec<InstId> {
@@ -74,71 +58,6 @@ b3:
 }
 
 #[test]
-fn test_parameter_specialization_requires_every_call_to_agree() {
-    let text = |second: u32| {
-        format!(
-            "define internal i16 @leaf(i16 %x) {{
-b:
-  ret i16 %x
-}}
-
-define void @a() {{
-b:
-  %r = call i16 @leaf(i16 7)
-  ret void
-}}
-
-define void @b() {{
-b:
-  %r = call i16 @leaf(i16 {second})
-  ret void
-}}
-"
-        )
-    };
-    let module = parsed(&text(9));
-    assert!(constant_parameters(&module, &names(&module, &["leaf"])).is_empty());
-
-    let mut module = parsed(&text(7));
-    let agreed = constant_parameters(&module, &names(&module, &["leaf"]));
-    assert_eq!(named(&module, &agreed), [("leaf".to_owned(), vec![Some(7)])]);
-    let constants = agreed[&module.named("leaf").unwrap()].clone();
-    let (context, leaf) = module.function_mut("leaf").unwrap();
-    assert!(specialize_parameters(context, leaf, &constants));
-    assert_eq!(constant_returns(&module).values().map(|&one| number(&module, one)).collect::<Vec<_>>(), [7]);
-}
-
-#[test]
-fn test_constant_parameters_reads_a_propagated_return() {
-    let mut module = parsed(
-        "define internal i16 @four() {
-b:
-  ret i16 4
-}
-
-define internal void @choose(i16 %x) {
-b:
-  ret void
-}
-
-define void @caller() {
-b:
-  %x = call i16 @four()
-  call void @choose(i16 %x)
-  ret void
-}
-",
-    );
-    let eligible = names(&module, &["choose"]);
-    assert!(constant_parameters(&module, &eligible).is_empty());
-    let returns = constant_returns(&module);
-    let (context, caller) = module.function_mut("caller").unwrap();
-    assert!(propagate_returns(context, caller, &returns));
-    assert_eq!(calls(caller).len(), 2, "the call stays");
-    assert_eq!(named(&module, &constant_parameters(&module, &eligible)), [("choose".to_owned(), vec![Some(4)])]);
-}
-
-#[test]
 fn test_current_call_constants_keeps_a_per_call_fact_when_another_call_is_dynamic() {
     let module = parsed(
         "define internal void @choose(i16 %x) {
@@ -160,7 +79,6 @@ b:
     assert_eq!(found.keys().copied().collect::<Vec<_>>(), sites);
     assert_eq!(found[&sites[0]].iter().map(|one| one.map(|one| number(&module, one))).collect::<Vec<_>>(), [Some(4)]);
     assert_eq!(found[&sites[1]], vec![None]);
-    assert!(constant_parameters(&module, &names(&module, &["choose"])).is_empty());
 }
 
 #[test]
@@ -335,57 +253,6 @@ b:
 }
 
 #[test]
-fn a_constant_that_is_not_an_integer_is_no_parameter_fact() {
-    let module = parsed(
-        "define internal void @take(ptr %p, i16 %n) {
-b:
-  ret void
-}
-
-define void @caller() {
-b:
-  call void @take(ptr null, i16 3)
-  ret void
-}
-",
-    );
-    assert_eq!(
-        named(&module, &constant_parameters(&module, &names(&module, &["take"]))),
-        [("take".to_owned(), vec![None, Some(3)])]
-    );
-}
-
-#[test]
-fn a_body_nobody_calls_has_no_parameter_facts() {
-    let module = parsed(
-        "define internal void @take(i16 %n) {
-b:
-  ret void
-}
-",
-    );
-    assert!(constant_parameters(&module, &names(&module, &["take"])).is_empty());
-}
-
-#[test]
-fn only_eligible_callees_get_parameter_facts() {
-    let module = parsed(
-        "define void @exported(i16 %n) {
-b:
-  ret void
-}
-
-define void @caller() {
-b:
-  call void @exported(i16 3)
-  ret void
-}
-",
-    );
-    assert!(constant_parameters(&module, &BTreeSet::new()).is_empty());
-}
-
-#[test]
 fn an_indirect_call_has_no_per_call_constants() {
     let module = parsed(
         "define void @caller(ptr %target) {
@@ -396,21 +263,6 @@ b:
 ",
     );
     assert!(current_call_constants(&module.context, function(&module, "caller")).is_empty());
-}
-
-#[test]
-fn specializing_a_parameter_nothing_reads_changes_nothing() {
-    let mut module = parsed(
-        "define internal i16 @leaf(i16 %x, i16 %y) {
-b:
-  ret i16 %y
-}
-",
-    );
-    let i16 = module.context.types.int(16);
-    let seven = module.context.int(i16, 7);
-    let (context, leaf) = module.function_mut("leaf").unwrap();
-    assert!(!specialize_parameters(context, leaf, &[Some(seven), None]));
 }
 
 #[test]
@@ -509,49 +361,4 @@ fn test_noreturn_follows_a_long_chain_to_where_it_ends() {
     assert_eq!(noreturn_procedures(&ends, &ends.declarations(), &all(&ends)), all(&ends));
     let returns = parsed(&chain("ret void"));
     assert_eq!(noreturn_procedures(&returns, &returns.declarations(), &all(&returns)), BTreeSet::new());
-}
-
-/// A pointer parameter replaced by the address of a global: what the body
-/// wrote through it as `argmem` it now writes to a global, so `memory(argmem:
-/// write)` no longer says where.
-#[test]
-fn a_pointer_parameter_made_a_constant_address_unsplits_the_memory_attribute() {
-    let mut module = parsed(
-        "@g = global i16 0
-
-define internal void @set(ptr %p) memory(argmem: write) {
-b:
-  store i16 1, ptr %p
-  ret void
-}
-",
-    );
-    let global = module.named("g").unwrap();
-    let constant = module.reference(global);
-    let (context, function) = module.function_mut("set").unwrap();
-    assert!(specialize_parameters(context, function, &[Some(constant)]));
-    let attrs = &function.attrs;
-    assert!(llrm_mir::memory::located(attrs).1.writes, "{attrs:?}");
-}
-
-/// An integer parameter made a constant moves no access between argument
-/// memory and the rest: unsplitting the attribute anyway changed it, the next
-/// stamp narrowed it back and re-ran the body's pipeline (three more runs and
-/// 3.4% more instructions on QCport's `console` at -Os).
-#[test]
-fn an_integer_parameter_made_a_constant_leaves_the_memory_attribute_alone() {
-    let mut module = parsed(
-        "define internal void @set(ptr %p, i16 %n) memory(argmem: write) {
-b:
-  store i16 %n, ptr %p
-  ret void
-}
-",
-    );
-    let (context, function) = module.function_mut("set").unwrap();
-    let ty = function.value(function.parameters()[1]).ty;
-    let constant = context.constant(llrm_mir::Constant { ty, kind: llrm_mir::ConstantKind::Int(7) });
-    let before = function.attrs.clone();
-    assert!(specialize_parameters(context, function, &[None, Some(constant)]));
-    assert_eq!(function.attrs, before);
 }

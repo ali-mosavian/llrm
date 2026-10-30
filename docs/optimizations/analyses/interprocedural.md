@@ -1,11 +1,12 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/interprocedural.rs sha256:e1904c82f1a24ad462aabcd66e76332d9fb461aec98327127ce9540f99110df5 -->
+<!-- src: crates/opt/llrm-analysis/src/interprocedural.rs sha256:46a73bd0d673dc037904df6ad00b8963761757ae7e76f43e7585bb608fc04a56 -->
 
 # interprocedural
 
-Finds what the two sides of a direct call make certain: constant arguments,
-constant returns, purity and termination. Intra-procedural passes cannot see
-across a call, so these facts are written into the bodies for them to fold.
+Finds what the two sides of a direct call make certain: constant call
+actuals, constant returns, purity and termination. Intra-procedural passes
+cannot see across a call, so these facts are written into the bodies for
+them to fold.
 
 ## How it works
 A direct call is opaque to ordinary SCCP even when every return of the named
@@ -14,12 +15,7 @@ with `program_*`, a whole program) and write it into the body, where the
 ordinary pipeline folds the consumers.
 
 Arguments. `current_call_constants` lists, per call or `invoke` with a known
-callee, the integer-constant actuals. `constant_parameters` (and
-`program_parameters`, which also reads other modules' calls) keeps, for each
-`eligible` (private) body, the parameter positions where every call agrees
-on one constant; a recursive call that passes the parameter on at the same
-position adds no new value. `specialize_parameters` replaces the uses of
-such a parameter by the constant.
+callee, the integer-constant actuals (what `ipacp` clones for).
 
 Returns. `constant_returns` finds, for each exactly defined body, the one
 integer every `ret` returns. `propagate_returns` replaces uses of a direct
@@ -38,11 +34,7 @@ stamped on each body. `stated_pure` is the exactly defined bodies that state
 no memory effect, `willreturn` and `nounwind`. `erasable` asks the same of
 one call (LLVM's `wouldInstructionBeTriviallyDead`), and
 `remove_dead_pure_calls` erases the calls with no used result that are
-erasable. `returns_without_looping` holds when every CFG path ends in `ret`
-without revisiting a block. `cannot_fault` holds when every access is
-non-volatile and either in a frame object (`frameescape::framed`) or a
-constant offset ([`crate::pointerfacts`](pointerfacts.md)) from an initialized near global
-this module defines.
+erasable.
 
 Noreturn. `noreturn_procedures` and `program_noreturn` are
 [`crate::noreturn`](noreturn.md)'s greatest fixed point over the eligible bodies;

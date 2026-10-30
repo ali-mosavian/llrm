@@ -1,3 +1,0 @@
-opShared|x
-opStCommon|x
-opFnAbs|x

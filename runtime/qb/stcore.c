@@ -27,6 +27,9 @@ void str_assign(SD *source, SD *destination)
     }
 }
 
+#pragma aux B_SASS "B$SASS"
+#pragma aux B_SCAT "B$SCAT"
+
 /* B$SASS: LET a$ = b$ */
 void B_SASS(SD *source, SD *destination)
 {
@@ -50,6 +53,3 @@ SD *B_SCAT(SD *left, SD *right)
     str_tmp_free(right);
     return joined;
 }
-
-#pragma aux B_SASS "B$SASS"
-#pragma aux B_SCAT "B$SCAT"

@@ -6,12 +6,12 @@
 //! arithmetic, `inbounds` on pointer arithmetic. The last two hold for
 //! objects of at most PTRDIFF_MAX bytes, as clang assumes of every object.
 
-use llrm_core::hir::facts::{Builder as Facts, Subject};
-use llrm_core::hir::model::{
+use llrm_codegen::hir::facts::{Builder as Facts, Subject};
+use llrm_codegen::hir::model::{
     self as h, AddressKind, CallDistance, DataLinkage, FloatEvaluation, FloatReturn, Number, Op, Operand, StackCleanup,
     Storage, TerminatorKind, TypeKind,
 };
-use llrm_core::support::hash::IndexMap;
+use llrm_codegen::support::hash::IndexMap;
 use llrm_mir::facts::Fact;
 use llrm_mir::types::FloatKind;
 use llrm_support::hash::{HashMap, HashSet};
@@ -105,7 +105,16 @@ pub fn program(
         .map(|proc| proc.symbol)
         .collect();
     let param_facts = crate::ow_facts::param_facts(unit);
-    let module = Shared { calling, unit, data: &data, keys: &keys, valueless: &valueless, param_facts: &param_facts };
+    let module = Shared {
+        calling,
+        unit,
+        data: &data,
+        keys: &keys,
+        valueless: &valueless,
+        param_facts: &param_facts,
+        lifetimes: profile.lifetimes,
+        expects: profile.expects,
+    };
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
@@ -190,7 +199,7 @@ pub fn program(
     // A call keeps what its target's C convention does not clobber; the
     // compiler's constants go in CONST.
     let contract = crate::raise_hir::contract(convention, String::new(), true, 0);
-    let preserved = llrm_core::abi::runtime::preserves(&contract);
+    let preserved = llrm_codegen::abi::runtime::preserves(&contract);
     Ok(h::Program {
         zeroed_locals: false,
         promises,
@@ -269,7 +278,7 @@ struct Object {
 }
 
 fn number(text: &str) -> R<i64> {
-    text.trim().parse().map_err(|_| Unsupported(format!("not a number: {text}")))
+    hir::parse_int(text).ok_or_else(|| Unsupported(format!("not a number: {text}")))
 }
 
 /// Each data segment's labelled objects, as the stream lays them down.
@@ -564,6 +573,31 @@ impl<'u> Types<'u> {
         self.unit.types.get(&self.unit.canonical_type(type_)).copied()
     }
 
+    /// What the convention sees of a parameter of C type `type_`.
+    fn argument(
+        &mut self,
+        type_: &str,
+    ) -> R<llrm_mir::target::Argument> {
+        if let Some(bytes) = self.aggregate(type_) {
+            return Ok(llrm_mir::target::Argument {
+                bytes,
+                integer: false,
+                pointer: false,
+                floating: false,
+                memory: true,
+            });
+        }
+        let id = self.c(type_)?;
+        let (shape, bytes) = (self.shape(id), self.get(id).width);
+        Ok(llrm_mir::target::Argument {
+            bytes,
+            integer: matches!(shape, Shape::Int(..) | Shape::Bool),
+            pointer: matches!(shape, Shape::Pointer(_) | Shape::Huge),
+            floating: matches!(shape, Shape::Float(_)),
+            memory: false,
+        })
+    }
+
     /// C type `type_` as a value, its accesses in its aliasing class.
     fn c(
         &mut self,
@@ -641,6 +675,48 @@ struct Shared<'a> {
     valueless: &'a HashSet<i64>,
     /// The facts the language states of each parameter, by symbol.
     param_facts: &'a HashMap<i64, Vec<Fact>>,
+    /// Whether a block's locals get `llvm.lifetime` markers (clang's at -O1 and
+    /// up).
+    lifetimes: bool,
+    /// Whether `__builtin_expect` is the `llvm.expect` intrinsic.
+    expects: bool,
+}
+
+/// The blocks (by order of opening) that a jump enters from outside them: their
+/// locals' lifetimes are not marked, as clang's `Bypasses` leaves unmarked a
+/// local a jump skips the start of (CGDecl.cpp, `EmitAutoVarAlloca`).
+fn entered_blocks(body: &[hir::Statement]) -> HashSet<usize> {
+    let (mut path, mut opened) = (Vec::new(), 0);
+    let mut placed: HashMap<&str, Vec<usize>> = HashMap::default();
+    let mut jumps: Vec<(&str, Vec<usize>)> = Vec::new();
+    for one in body {
+        let args: Vec<&str> = one.args.iter().map(String::as_str).collect();
+        match (one.call.as_str(), &args[..]) {
+            ("DBBegBlock", []) => {
+                opened += 1;
+                path.push(opened);
+            }
+            ("DBEndBlock", []) => {
+                path.pop();
+            }
+            ("CGControl", ["O_LABEL", _, label]) => {
+                placed.insert(label, path.clone());
+            }
+            ("CGControl", ["O_GOTO", _, label] | [_, _, label])
+            | ("CGSelCase", [_, label, _])
+            | ("CGSelOther", [_, label]) => {
+                jumps.push((label, path.clone()));
+            }
+            _ => {}
+        }
+    }
+    let mut entered = HashSet::default();
+    for (label, from) in jumps {
+        if let Some(to) = placed.get(label) {
+            entered.extend(to.iter().filter(|one| !from.contains(one)));
+        }
+    }
+    entered
 }
 
 /// What a tree node evaluates to.
@@ -671,6 +747,17 @@ struct Open {
 struct Body<'a, 't> {
     /// The facts the language states of instructions, by instruction id.
     stated_instructions: Vec<(i64, Fact)>,
+    /// What the language states of an operand of an instruction: its id, the
+    /// operand's position and the fact.
+    stated_operands: Vec<(i64, i64, Fact)>,
+    /// A scaled index's product, by value: its index and the element size.
+    scales: HashMap<i64, (i64, i64)>,
+    /// The places of each open block that marks its locals' lifetimes; and the
+    /// blocks (by order of opening) a jump enters from outside, which mark
+    /// none.
+    scopes: Vec<Option<Vec<i64>>>,
+    opened: usize,
+    entered: HashSet<usize>,
     shared: &'a Shared<'a>,
     unit: &'a hir::Unit,
     proc: &'a hir::Proc,
@@ -684,7 +771,9 @@ struct Body<'a, 't> {
     labels: HashMap<String, usize>,
     slots: HashMap<String, i64>,
     globals: HashMap<i64, i64>,
-    done: HashMap<i64, Got>,
+    /// What each tree node evaluated to, by handle (a dense row: the handles
+    /// are a function's node numbers).
+    done: Vec<Option<Got>>,
     selects: IndexMap<String, (Vec<(i64, String)>, Option<String>)>,
     calls: Vec<h::CallAbi>,
     instructions: i64,
@@ -767,7 +856,14 @@ fn answered_by_inline_code(
     unit: &hir::Unit,
     proc: &hir::Proc,
 ) -> bool {
-    let statements: Vec<&hir::Statement> = proc.body.iter().filter(|one| one.call != "DBSrcCue").collect();
+    let statements: Vec<&hir::Statement> = proc
+        .body
+        .iter()
+        .filter(|one| !matches!(
+            one.call.as_str(),
+            "DBSrcCue" | "DBBegBlock" | "DBEndBlock" | "CGAutoDecl"
+        ))
+        .collect();
     statements
         .windows(2)
         .any(|two| two[1].call == "CGReturn" && two[1].args[0] == "n0" && inline_statement(unit, two[0]))
@@ -782,6 +878,7 @@ fn value_ref(value: i64) -> Operand {
 fn cleanup(
     symbol: &hir::Symbol,
     unit: &hir::Unit,
+    listed_default: bool,
 ) -> R<(StackCleanup, Option<String>)> {
     // The entry is called by the runtime's start in the stack convention its
     // description names.
@@ -794,11 +891,56 @@ fn cleanup(
         (false, hir::REVERSE_PARMS) => Ok((StackCleanup::Callee, None)),
         // Open Watcom's own register list, where the target's calling.toml
         // states that convention.
-        (true, 0) if symbol.register_list == unit.default_registers => {
+        (true, 0) if symbol.register_list == unit.default_registers || listed_default => {
             Ok((StackCleanup::Callee, unit.registers_cc.clone()))
         }
         _ => refuse(format!("{} has a register calling convention", symbol.object_name())),
     }
+}
+
+/// Whether the register list a pragma wrote (`__parm [__ax] [__dx] [__bx]`) is
+/// what the target's own register convention gives these `parameters`, and the
+/// routine keeps what that convention's callee keeps: then the function is the
+/// convention's, whatever the spelling. Another list is a convention of its
+/// own.
+fn lists_default(
+    symbol: &hir::Symbol,
+    unit: &hir::Unit,
+    calling: &llrm_target::calling::Calling,
+    parameters: &[llrm_mir::target::Argument],
+) -> bool {
+    use crate::hwreg::Set;
+    let Some(entry) = unit.registers_cc.as_deref().and_then(|cc| calling.by_cc(cc)) else { return false };
+    if !symbol.register_parms || symbol.call_target & (SPECIAL_RETURN | MODIFY_EXACT) != 0 {
+        return false;
+    }
+    // What the default keeps, bp, si and di among it.
+    if Set::parse(&symbol.saved_registers).is_some_and(|saved| !saved.is_empty() && !unit.hardware.keeps_general(saved))
+    {
+        return false;
+    }
+    let kinds: Vec<_> = parameters.iter().map(|one| entry.kind(*one, 2)).collect();
+    let placed = entry.place(&kinds);
+    let listed: Vec<&str> =
+        symbol.register_list.trim_matches(|c| c == '[' || c == ']').split(',').filter(|one| !one.is_empty()).collect();
+    let mut places = placed.places.iter();
+    for at in 0..parameters.len() {
+        let place = places.next();
+        match (listed.get(at), place) {
+            (Some(text), Some(llrm_target::calling::Place::Registers(names))) => {
+                let Some(mut named) = Set::parse(text).and_then(|set| unit.hardware.names(set)) else { return false };
+                let mut want: Vec<String> = names.clone();
+                named.sort_unstable();
+                want.sort_unstable();
+                if named != want {
+                    return false;
+                }
+            }
+            (None, Some(llrm_target::calling::Place::Stack(_))) => {}
+            _ => return false,
+        }
+    }
+    listed.len() == parameters.len()
 }
 
 /// Parameters that live in the memory they were passed in, `sizes` each
@@ -820,7 +962,7 @@ fn in_their_slots(
     if !interrupt && !variadic {
         return Ok(());
     }
-    let exposed = llrm_core::hir::escape::exposed_frame(function);
+    let exposed = llrm_codegen::hir::escape::exposed_frame(function);
     // STDARG.H's __size: rounded up to an int, the two bytes of Borland's.
     let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
     // A struct parameter whose address is taken lives in its words' slots,
@@ -1005,7 +1147,9 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<h::Function> {
         let unit = shared.unit;
         let symbol = &unit.symbols[&proc.symbol];
-        let (cleanup, convention) = cleanup(symbol, unit)?;
+        let arguments = proc.parms.iter().map(|(_, type_)| types.argument(type_)).collect::<R<Vec<_>>>()?;
+        let listed_default = lists_default(symbol, unit, calling, &arguments);
+        let (cleanup, convention) = cleanup(symbol, unit, listed_default)?;
         let mut body = Body {
             convention: convention.clone(),
             memory: Vec::new(),
@@ -1024,9 +1168,14 @@ impl<'a, 't> Body<'a, 't> {
             labels: HashMap::default(),
             slots: HashMap::default(),
             globals: HashMap::default(),
-            done: HashMap::default(),
+            done: Vec::new(),
             selects: IndexMap::default(),
             stated_instructions: Vec::new(),
+            stated_operands: Vec::new(),
+            scales: HashMap::default(),
+            scopes: Vec::new(),
+            opened: 0,
+            entered: entered_blocks(&proc.body),
             calls: Vec::new(),
             instructions: 0,
             inlined: None,
@@ -1055,7 +1204,9 @@ impl<'a, 't> Body<'a, 't> {
             body.statement(one)?;
         }
         body.finish()?;
+        body.drop_unread_scales();
         let mut body_instruction_facts = std::mem::take(&mut body.stated_instructions);
+        let body_operand_facts = std::mem::take(&mut body.stated_operands);
         let body_widths: HashMap<i64, i64> =
             parameters.iter().map(|&one| (one, body.types.get(body.values[one as usize - 1].r#type).width)).collect();
         let parameter_bytes = body_widths.values().sum();
@@ -1109,7 +1260,16 @@ impl<'a, 't> Body<'a, 't> {
         for (instruction, fact) in std::mem::take(&mut body_instruction_facts) {
             facts.state(Subject::Instruction { function: id, id: instruction }, fact);
         }
+        for (instruction, operand, fact) in body_operand_facts {
+            facts.state(Subject::Operand { function: id, instruction, operand }, fact);
+        }
         for (value, fact) in stated {
+            // An interrupt handler's parameters are the registers it saved,
+            // read from its frame slots: its lowered signature has no parameter
+            // to state a fact of.
+            if function.abi.as_ref().is_some_and(|abi| abi.distance == CallDistance::Interrupt) {
+                continue;
+            }
             let index = function.parameters.iter().position(|&one| one == value).expect("a parameter") as i64;
             facts.state(Subject::Param { function: id, index }, fact);
         }
@@ -1258,6 +1418,57 @@ impl<'a, 't> Body<'a, 't> {
         block.instructions.last_mut().expect("just pushed")
     }
 
+    /// The scaled products no instruction reads: an index that counts elements
+    /// leaves its multiply behind.
+    fn drop_unread_scales(&mut self) {
+        // Only a scale's result can be dead here, so only those are noted.
+        fn read(
+            operand: &Operand,
+            scales: &HashMap<i64, (i64, i64)>,
+            into: &mut HashSet<i64>,
+        ) {
+            let mut note = |value: i64| {
+                if scales.contains_key(&value) {
+                    into.insert(value);
+                }
+            };
+            match operand {
+                Operand::ValueRef(one) => note(one.value),
+                Operand::ArrayElement(one) => one.indices.iter().for_each(|index| read(index, scales, into)),
+                Operand::ProjectedPlace(one) => one.indices.iter().for_each(|index| read(index, scales, into)),
+                Operand::IndirectPlace(one) => note(one.base),
+                Operand::DescriptorPlace(one) => note(one.base),
+                Operand::Constant(_) | Operand::PlaceRef(_) => {}
+            }
+        }
+        if self.scales.is_empty() {
+            return;
+        }
+        let mut used = HashSet::default();
+        for block in &self.blocks {
+            let operands = block.instructions.iter().flat_map(|one| &one.operands);
+            let ending = block.terminator.iter().flat_map(|one| &one.operands);
+            operands.chain(ending).for_each(|operand| read(operand, &self.scales, &mut used));
+        }
+        let scales = &self.scales;
+        let dead = |one: &h::Instruction| {
+            one.op == Op::Mul && one.results.iter().all(|result| scales.contains_key(result) && !used.contains(result))
+        };
+        let (ids, unread): (HashSet<i64>, HashSet<i64>) = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|one| dead(one))
+            .map(|one| (one.id, one.results[0]))
+            .unzip();
+        for block in &mut self.blocks {
+            block.instructions.retain(|one| !ids.contains(&one.id));
+        }
+        self.stated_instructions.retain(|(id, _)| !ids.contains(id));
+        self.stated_operands.retain(|(id, _, _)| !ids.contains(id));
+        self.values.retain(|value| !unread.contains(&value.id));
+    }
+
     /// That C promises the result of instruction `id` fits its type.
     fn state_no_wrap(
         &mut self,
@@ -1341,7 +1552,9 @@ impl<'a, 't> Body<'a, 't> {
 
     fn block(&mut self) -> usize {
         let id = self.blocks.len() as i64 + 1;
-        self.blocks.push(Open { id, instructions: Vec::new(), terminator: None });
+        // Room for a typical block: growing by doubling copied the large
+        // `Instruction`s 674 times (0.75 M Ir).
+        self.blocks.push(Open { id, instructions: Vec::with_capacity(16), terminator: None });
         self.blocks.len() - 1
     }
 
@@ -1501,6 +1714,9 @@ impl<'a, 't> Body<'a, 't> {
                     let parameter = self.value(pointer);
                     parameters.push(parameter);
                     self.byval.push(parameter);
+                    // CGCall.cpp DetermineNoUndef: an indirect argument is
+                    // `noundef`.
+                    stated.push((parameter, Fact::NoUndef));
                     self.byval_homes.push((place, parameter));
                     self.slots.insert(format!("y{symbol}"), place);
                 }
@@ -1533,6 +1749,9 @@ impl<'a, 't> Body<'a, 't> {
                     stores.push((place, -1, parameter));
                     homes.push((place, parameter));
                     self.slots.insert(format!("y{symbol}"), place);
+                    // CGCall.cpp DetermineNoUndef: a scalar parameter is
+                    // `noundef`.
+                    stated.push((parameter, Fact::NoUndef));
                     // What the language states of a parameter: C99 6.7.3.1 for
                     // restrict.
                     stated.extend(
@@ -1592,8 +1811,38 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<()> {
         self.line = one.line;
         let args: Vec<&str> = one.args.iter().map(String::as_str).collect();
-        if !matches!(one.call.as_str(), "DBSrcCue" | "CGReturn") {
+        if !matches!(
+            one.call.as_str(),
+            "DBSrcCue" | "CGReturn" | "DBBegBlock" | "DBEndBlock" | "CGAutoDecl"
+        ) {
             self.inlined = None;
+        }
+        match (one.call.as_str(), &args[..]) {
+            ("DBBegBlock", []) => {
+                self.opened += 1;
+                let marks = self.shared.lifetimes && !self.entered.contains(&self.opened);
+                self.scopes.push(marks.then(Vec::new));
+                return Ok(());
+            }
+            ("CGAutoDecl", [name]) => {
+                if let (Some(Some(_)), Some(&place)) = (self.scopes.last(), self.slots.get(*name)) {
+                    self.open();
+                    self.instruction(Op::LifetimeStart, Vec::new(), vec![Operand::place_ref(place)]);
+                    self.scopes.last_mut().and_then(Option::as_mut).expect("a marking block").push(place);
+                }
+                return Ok(());
+            }
+            ("DBEndBlock", []) => {
+                // A block left by a jump has no end here: its locals stay live
+                // to the next start, never shorter than they are.
+                if let Some(Some(places)) = self.scopes.pop().filter(|_| !self.terminated(self.current)) {
+                    for place in places.into_iter().rev() {
+                        self.instruction(Op::LifetimeEnd, Vec::new(), vec![Operand::place_ref(place)]);
+                    }
+                }
+                return Ok(());
+            }
+            _ => {}
         }
         match (one.call.as_str(), &args[..]) {
             ("CGControl", ["O_LABEL", _, label]) => {
@@ -1642,7 +1891,7 @@ impl<'a, 't> Body<'a, 't> {
                     .bits(value)
                     .ok_or_else(|| Unsupported(format!("{}: a switch on a non-integer", self.name())))?
                     .max(16);
-                let is_signed = signed(&self.unit.canonical_type(&from));
+                let is_signed = signed(self.unit.canonical_type_ref(&from));
                 let wide = self.types.int(bits / 8, is_signed);
                 let value = self.resized(value, is_signed, wide);
                 let default = self.label(&other);
@@ -1777,7 +2026,7 @@ impl<'a, 't> Body<'a, 't> {
         let a = self.value_as(left, type_)?;
         let b = self.value_as(right, type_)?;
         let truth = self.types.of(Shape::Bool, None);
-        if is_float(&self.unit.canonical_type(type_)) {
+        if is_float(self.unit.canonical_type_ref(type_)) {
             let op = match cg_op.as_str() {
                 "O_EQ" => Op::Eq,
                 "O_NE" => Op::Ne,
@@ -1802,7 +2051,7 @@ impl<'a, 't> Body<'a, 't> {
             }
             _ => (a, b),
         };
-        let is_signed = signed(&self.unit.canonical_type(type_));
+        let is_signed = signed(self.unit.canonical_type_ref(type_));
         let op = match (cg_op.as_str(), is_signed) {
             ("O_EQ", _) => Op::Eq,
             ("O_NE", _) => Op::Ne,
@@ -1821,30 +2070,52 @@ impl<'a, 't> Body<'a, 't> {
 
     // ---- expressions ----
 
+    fn done_of(
+        &self,
+        key: i64,
+    ) -> Option<Got> {
+        usize::try_from(key).ok().and_then(|at| self.done.get(at).copied().flatten())
+    }
+
+    fn remember(
+        &mut self,
+        key: i64,
+        got: Got,
+    ) {
+        let at = usize::try_from(key).expect("a node handle is not negative");
+        if self.done.len() <= at {
+            self.done.resize(at + 1, None);
+        }
+        self.done[at] = Some(got);
+    }
+
     fn eval(
         &mut self,
         node: &str,
     ) -> R<Got> {
         let key = hir::handle(node);
-        if let Some(&done) = self.done.get(&key) {
+        if let Some(done) = self.done_of(key) {
             return Ok(done);
         }
         let got = self.expression(node)?;
-        self.done.insert(key, got);
+        self.remember(key, got);
         Ok(got)
     }
 
+    /// The type name of a tree node, borrowed from the unit (a `String` was
+    /// copied for each of the 2,971 asks, 0.21 M Ir).
     fn type_of_node(
         &self,
         node: &str,
-    ) -> String {
-        let tree = &self.unit.nodes[&hir::handle(node)];
+    ) -> &'a str {
+        let unit: &'a hir::Unit = self.unit;
+        let tree = &unit.nodes[&hir::handle(node)];
         match tree.call.as_str() {
-            "CGCall" => self.unit.calls[&hir::handle(&tree.args[0])].type_.clone(),
+            "CGCall" => unit.calls[&hir::handle(&tree.args[0])].type_.as_str(),
             "CGEval" | "CGVolatile" | "CGAttr" => self.type_of_node(&tree.args[0]),
             "CGFact" => self.type_of_node(&tree.args[1]),
-            "CGFlow" | "CGCompare" => "TY_BOOLEAN".to_owned(),
-            _ => tree.args.last().cloned().unwrap_or_default(),
+            "CGFlow" | "CGCompare" => "TY_BOOLEAN",
+            _ => tree.args.last().map_or("", String::as_str),
         }
     }
 
@@ -1944,7 +2215,13 @@ impl<'a, 't> Body<'a, 't> {
                 }
                 let ty = self.types.pointer(space(self.unit, Key::Symbol(symbol.id)));
                 let value = self.value(ty);
-                self.instruction(Op::Address, vec![value], Vec::new()).callee = Some(symbol.object_name());
+                let name = symbol.object_name();
+                // A routine this unit does not define is declared by the
+                // address taken of it as by a call.
+                if !self.unit.procs.iter().any(|one| one.symbol == symbol.id) {
+                    self.callable(&name);
+                }
+                self.instruction(Op::Address, vec![value], Vec::new()).callee = Some(name);
                 Ok(value)
             }
             Got::Returned(None) => self.refuse("a void call's value"),
@@ -2185,7 +2462,7 @@ impl<'a, 't> Body<'a, 't> {
                     start: number(start)?,
                     width: number(width)?,
                     unit: self.ty(type_)?,
-                    signed: signed(&self.unit.canonical_type(type_)),
+                    signed: signed(self.unit.canonical_type_ref(type_)),
                 }
             }
             _ => return self.refuse(format!("{} {}", tree.call, tree.args.join(" "))),
@@ -2414,16 +2691,21 @@ impl<'a, 't> Body<'a, 't> {
         let field = ones(width) << start;
         let kept = !field & ones(bits);
         let value = self.resized(value, signed, unit);
-        let whole = self.loaded(pointer, volatile, first, bytes, unit);
-        let (shift, inside, outside) = (
-            self.constant(unit, Number::Int(start.into())),
-            self.constant(unit, Number::Int(field.into())),
-            self.constant(unit, Number::Int(kept.into())),
-        );
+        let (shift, inside) =
+            (self.constant(unit, Number::Int(start.into())), self.constant(unit, Number::Int(field.into())));
         let placed = self.op(Op::Shl, unit, vec![value_ref(value), value_ref(shift)]);
         let part = self.op(Op::And, unit, vec![value_ref(placed), value_ref(inside)]);
-        let rest = self.op(Op::And, unit, vec![value_ref(whole), value_ref(outside)]);
-        let joined = self.op(Op::Or, unit, vec![value_ref(rest), value_ref(part)]);
+        // A field that fills its container keeps nothing: clang stores it
+        // (`EmitStoreThroughBitfieldLValue`, `StorageSize == Info.Size`). The
+        // read-modify-write of an unwritten container read poison at -O2.
+        let joined = if start == 0 && width == bytes * 8 {
+            part
+        } else {
+            let whole = self.loaded(pointer, volatile, first, bytes, unit);
+            let outside = self.constant(unit, Number::Int(kept.into()));
+            let rest = self.op(Op::And, unit, vec![value_ref(whole), value_ref(outside)]);
+            self.op(Op::Or, unit, vec![value_ref(rest), value_ref(part)])
+        };
         self.stored(pointer, volatile, first, bytes, unit, joined);
         Ok(if signed {
             let (up, down) = (
@@ -2494,44 +2776,29 @@ impl<'a, 't> Body<'a, 't> {
         Ok(())
     }
 
-    /// `size` bytes from `from` to `into`, widest first, as the old raise
-    /// copies.
+    /// `size` bytes from `from` to `into`: one `copy_bytes`, which lowers to
+    /// `llvm.memcpy` as clang's `EmitAggregateCopy` does, so the passes see a
+    /// memcpy and not a load and a store a word.
     fn copy(
         &mut self,
         into: i64,
         from: i64,
         size: i64,
     ) {
-        let mut done = 0;
-        while done < size {
-            let width = [4, 2, 1].into_iter().find(|&one| size - done >= one).expect("a byte left");
-            let ty = self.types.raw(width);
-            let source = self.displaced(from, done);
-            let target = self.displaced(into, done);
-            let moved = self.op(Op::Load, ty, vec![Operand::IndirectPlace(indirect(source, 0, ty, false))]);
-            self.instruction(
-                Op::Store,
-                Vec::new(),
-                vec![Operand::IndirectPlace(indirect(target, 0, ty, false)), value_ref(moved)],
-            );
-            done += width;
+        if size <= 0 {
+            return;
         }
-    }
-
-    /// `pointer` moved `by` constant bytes, inside its object.
-    fn displaced(
-        &mut self,
-        pointer: i64,
-        by: i64,
-    ) -> i64 {
-        if by == 0 {
-            return pointer;
-        }
-        let at = self.int(self.types.word(), by);
-        let result = self.value(self.type_of(pointer));
-        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(at)]).id;
-        self.stated_instructions.push((id, Fact::InBounds));
-        result
+        let ty = self.types.raw(1);
+        let count = h::Constant { r#type: self.types.word(), value: h::Number::Int(size) };
+        self.instruction(
+            Op::CopyBytes,
+            Vec::new(),
+            vec![
+                Operand::IndirectPlace(indirect(into, 0, ty, false)),
+                Operand::IndirectPlace(indirect(from, 0, ty, false)),
+                Operand::Constant(count),
+            ],
+        );
     }
 
     /// `value`, of C type `from`, as `to`.
@@ -2557,7 +2824,7 @@ impl<'a, 't> Body<'a, 't> {
         if self.same(self.type_of(value), ty) {
             return Ok(value);
         }
-        let source_signed = signed(&self.unit.canonical_type(from));
+        let source_signed = signed(self.unit.canonical_type_ref(from));
         Ok(match (self.shape(value), self.types.shape(ty)) {
             (Shape::Int(..) | Shape::Bool, Shape::Int(..)) => self.resized(value, source_signed, ty),
             (Shape::Int(..) | Shape::Bool, Shape::Float(_)) => {
@@ -2627,7 +2894,7 @@ impl<'a, 't> Body<'a, 't> {
         value: i64,
         type_: &str,
     ) -> R<i64> {
-        let floats = is_float(&self.unit.canonical_type(type_));
+        let floats = is_float(self.unit.canonical_type_ref(type_));
         let ty = self.type_of(value);
         Ok(match (cg_op, floats) {
             ("O_UMINUS", true) => self.op(Op::Fneg, ty, vec![value_ref(value)]),
@@ -2659,7 +2926,7 @@ impl<'a, 't> Body<'a, 't> {
         type_: &str,
         bits: i64,
     ) -> bool {
-        !self.unit.wrapv && signed(&self.unit.canonical_type(type_)) && bits >= 16
+        !self.unit.wrapv && signed(self.unit.canonical_type_ref(type_)) && bits >= 16
     }
 
     /// The index of a pointer add scaled to bytes, `index * size`: the
@@ -2675,7 +2942,7 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<()> {
         let tree = self.unit.nodes[&hir::handle(node)].clone();
         let [op, left, right, type_] = &tree.args[..] else { return Ok(()) };
-        if tree.call != "CGBinary" || op != "O_TIMES" || is_float(&self.unit.canonical_type(type_)) {
+        if tree.call != "CGBinary" || op != "O_TIMES" || is_float(self.unit.canonical_type_ref(type_)) {
             return Ok(());
         }
         let constant = |this: &Self, node: &String| this.unit.nodes[&hir::handle(node)].call == "CGInteger";
@@ -2684,7 +2951,7 @@ impl<'a, 't> Body<'a, 't> {
             (true, false) => (right, left),
             _ => return Ok(()),
         };
-        let unsigned = !signed(&self.unit.canonical_type(&self.type_of_node(index)));
+        let unsigned = !signed(self.unit.canonical_type_ref(&self.type_of_node(index)));
         let (a, b) = (self.value_as(index, type_)?, self.value_as(size, type_)?);
         let ty = self.ty(type_)?;
         let result = self.value(ty);
@@ -2693,7 +2960,10 @@ impl<'a, 't> Body<'a, 't> {
         if unsigned {
             self.stated_instructions.push((id, Fact::NoUnsignedWrap));
         }
-        self.done.insert(hir::handle(node), Got::Value(result));
+        if let Some(bytes) = self.whole_constant(size) {
+            self.scales.insert(result, (if index == left { a } else { b }, bytes));
+        }
+        self.remember(hir::handle(node), Got::Value(result));
         Ok(())
     }
 
@@ -2816,14 +3086,30 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<i64> {
         // A huge pointer's index is a dword; a far one's its offset's word.
         let word = self.types.int(if self.space(pointer) == Some(HUGE) { 4 } else { self.types.word() }, true);
-        let by = match self.bits(by) {
-            Some(_) => self.resized(by, signed(&self.unit.canonical_type(from)), word),
-            None => return self.refuse(format!("a pointer moved by a {from}")),
+        // A product of an index and an element size, at 32 bits: the index
+        // counts elements as clang's `a[i]` does. A 16-bit byte offset may pass
+        // 32767 inside a segment, which an element index promises it does not.
+        let scale = self.scales.get(&by).copied().filter(|_| !subtract && self.types.word() == 4);
+        if self.bits(by).is_none() {
+            return self.refuse(format!("a pointer moved by a {from}"));
+        }
+        let signed = signed(self.unit.canonical_type_ref(from));
+        let operands = match scale {
+            Some((index, size)) => {
+                let index = self.resized(index, signed, word);
+                let ty = self.types.int(self.types.word(), true);
+                let size = Operand::Constant(h::Constant { r#type: ty, value: Number::Int(size) });
+                vec![value_ref(pointer), value_ref(index), size]
+            }
+            None => {
+                let by = self.resized(by, signed, word);
+                let by = if subtract { self.op(Op::Neg, word, vec![value_ref(by)]) } else { by };
+                vec![value_ref(pointer), value_ref(by)]
+            }
         };
-        let by = if subtract { self.op(Op::Neg, word, vec![value_ref(by)]) } else { by };
         let ty = self.type_of(pointer);
         let result = self.value(ty);
-        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(by)]).id;
+        let id = self.instruction(Op::PtrOffset, vec![result], operands).id;
         self.stated_instructions.push((id, Fact::InBounds));
         Ok(result)
     }
@@ -2836,7 +3122,7 @@ impl<'a, 't> Body<'a, 't> {
         type_: &str,
     ) -> R<i64> {
         let ty = self.ty(type_)?;
-        if is_float(&self.unit.canonical_type(type_)) {
+        if is_float(self.unit.canonical_type_ref(type_)) {
             let op = match cg_op {
                 "O_PLUS" => Op::Fadd,
                 "O_MINUS" => Op::Fsub,
@@ -2847,7 +3133,7 @@ impl<'a, 't> Body<'a, 't> {
             return Ok(self.op(op, ty, vec![value_ref(a), value_ref(b)]));
         }
         let Some(bits) = self.bits(a) else { return self.refuse(format!("{cg_op} of {type_}")) };
-        let is_signed = signed(&self.unit.canonical_type(type_));
+        let is_signed = signed(self.unit.canonical_type_ref(type_));
         let (op, nowrap) = match cg_op {
             "O_PLUS" => (Op::Add, self.wraps(type_, bits)),
             "O_MINUS" => (Op::Sub, self.wraps(type_, bits)),
@@ -2963,8 +3249,31 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<Got> {
         use crate::hwreg::Set;
         let name = symbol.name.clone();
-        if !code.fixups.is_empty() {
-            return self.refuse(format!("{name} is inline code with registers and a symbol reference"));
+        // The words that name a symbol, each with the symbol's address as an
+        // operand ahead of the registers'.
+        let mut symbols = Vec::new();
+        let mut fixups = Vec::new();
+        for fixup in &code.fixups {
+            let target = &self.unit.symbols[&fixup.symbol];
+            let value = if target.proc() {
+                if inline(target) {
+                    return self.refuse(format!("{name} names inline code {}", target.name));
+                }
+                self.scalar(Got::Function(target.id))?
+            } else if fixup.kind == "reloff" {
+                return self.refuse(format!("{name} reaches data {} relative to itself", target.name));
+            } else if let Some(&object) = self.shared.keys.get(&Key::Symbol(target.id)) {
+                let place = self.global(object);
+                self.address_of(place)
+            } else {
+                return self
+                    .refuse(format!("{name} names {}, a frame place, in inline code with registers", target.name));
+            };
+            if !matches!(fixup.kind.as_str(), "offset" | "segment" | "reloff") {
+                return self.refuse(format!("{name} names a symbol as {}", fixup.kind));
+            }
+            symbols.push(value_ref(value));
+            fixups.push(h::AsmFixup { at: fixup.at, kind: fixup.kind.clone(), addend: fixup.offset });
         }
         // Source order: the call lists its last argument first.
         let parms: Vec<(String, String)> = call.parms.iter().rev().cloned().collect();
@@ -3116,6 +3425,7 @@ impl<'a, 't> Body<'a, 't> {
             operands.push(value_ref(value.expect("a part")));
             registers.push(root);
         }
+        operands.splice(0..0, symbols);
         // What it answers in.
         let target = symbol.call_target;
         // A small struct is answered as the integer of its size, and kept in a
@@ -3184,6 +3494,7 @@ impl<'a, 't> Body<'a, 't> {
             outputs,
             clobbers,
             memory,
+            fixups,
         });
         if returns_void {
             return Ok(Got::Returned(None));
@@ -3331,18 +3642,75 @@ impl<'a, 't> Body<'a, 't> {
             Got::Function(symbol) => &unit.symbols[&symbol],
             _ => &unit.symbols[&call.symbol],
         };
+        // GNU C's builtins: the table lowers them, or the unit is refused.
+        if matches!(target, Got::Function(_))
+            && symbol.imported()
+            && let Some(name) = symbol.name.strip_prefix("__builtin_")
+        {
+            return match crate::builtins::lowering(name) {
+                Some(crate::builtins::Lowering::Identity) => {
+                    // `parms` lists the arguments last first: the first
+                    // argument of the source is the last of
+                    // them.
+                    let mut values = Vec::new();
+                    for (node, type_) in &call.parms {
+                        values.push(self.value_as(node, type_)?);
+                    }
+                    let Some(&first) = values.last() else {
+                        return refuse(format!("{}: __builtin_{name} called with no argument", self.name()));
+                    };
+                    // clang's `__builtin_expect`: the intrinsic where it
+                    // optimizes (`lower-expect` makes it branch weights), the
+                    // argument below.
+                    if self.shared.expects
+                        && name == "expect"
+                        && let [expected, _] = values[..]
+                        && let Shape::Int(width, _) = self.shape(first)
+                    {
+                        let ty = self.type_of(first);
+                        let expected = self.fitted(expected, ty);
+                        let callee = format!("llvm.expect.i{}", width * 8);
+                        self.callable(&callee);
+                        let result = self.value(ty);
+                        self.call_site(
+                            Some(&callee),
+                            Some(result),
+                            vec![value_ref(first), value_ref(expected)],
+                            // Passed last operand first, as the call sites
+                            // above list them.
+                            vec![1, 0],
+                            StackCleanup::Caller,
+                            CallDistance::Near,
+                            None,
+                            Vec::new(),
+                            Vec::new(),
+                            None,
+                        );
+                        return Ok(Got::Returned(Some(result)));
+                    }
+                    Ok(Got::Returned(Some(first)))
+                }
+                Some(other) => refuse(format!(
+                    "{}: __builtin_{name} is {other:?}, a define of the predefined header, and reached the translator",
+                    self.name()
+                )),
+                None => refuse(format!("{}: unsupported builtin __builtin_{name}", self.name())),
+            };
+        }
         // bcc -O's builtin: the library's fabs is the x87 instruction.
         if let (Got::Function(_), [(node, type_)]) = (target, call.parms.as_slice())
             && symbol.name == "fabs"
             && symbol.imported()
-            && is_float(&unit.canonical_type(type_))
-            && is_float(&unit.canonical_type(&call.type_))
+            && is_float(unit.canonical_type_ref(type_))
+            && is_float(unit.canonical_type_ref(&call.type_))
         {
             let value = self.value_as(node, type_)?;
             return Ok(Got::Returned(Some(self.unary("O_FABS", value, type_)?)));
         }
-        let (cleanup, convention) =
-            cleanup(symbol, self.unit).map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
+        let arguments = call.parms.iter().rev().map(|(_, type_)| self.types.argument(type_)).collect::<R<Vec<_>>>()?;
+        let listed_default = lists_default(symbol, unit, self.shared.calling, &arguments);
+        let (cleanup, convention) = cleanup(symbol, self.unit, listed_default)
+            .map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
         let distance = distance(symbol);
         let callee = match target {
             Got::Function(_) => None,
@@ -3486,6 +3854,9 @@ impl<'a, 't> Body<'a, 't> {
             .map(|(at, bytes)| (at as i64, *bytes))
             .collect();
         let result_pointer = result_at.filter(|_| convention.is_some());
+        let first_argument = operands.len() as i64 - count;
+        let stated: Vec<i64> =
+            in_memory.iter().enumerate().filter(|(_, memory)| !**memory).map(|(at, _)| at as i64).collect();
         self.call_site(
             name.as_deref(),
             result,
@@ -3498,6 +3869,10 @@ impl<'a, 't> Body<'a, 't> {
             byval,
             result_pointer,
         );
+        // CGCall.cpp `DetermineNoUndef`: a scalar argument, and an indirect
+        // one, is `noundef`; a struct's words passed in memory are not.
+        let call_id = self.calls.last().expect("the call just made").instruction;
+        self.stated_operands.extend(stated.into_iter().map(|at| (call_id, first_argument + at, Fact::NoUndef)));
         let Some((temporary, size)) = returned else { return Ok(Got::Returned(result)) };
         let address = self.address_of(temporary);
         if let (Some(width), Some(value)) = (returned_as_integer(self.shared.calling, &convention, size), result) {
@@ -3565,9 +3940,33 @@ mod tests {
             &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
         )
         .unwrap();
-        let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+        let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
+    }
+
+    fn statement(
+        call: &str,
+        args: &[&str],
+    ) -> hir::Statement {
+        hir::Statement { call: call.to_owned(), args: args.iter().map(|one| (*one).to_owned()).collect(), line: 0 }
+    }
+
+    /// A jump into a block skips its locals' starts; marking them put an access
+    /// where the local is not live, which `lifetimes::intervals` drops: the
+    /// blocks it enters are reported, a jump within or out of one is not.
+    #[test]
+    fn a_jump_into_a_block_is_reported_and_one_out_of_it_is_not() {
+        let body = [
+            statement("CGControl", &["O_GOTO", "n0", "l1"]),
+            statement("DBBegBlock", &[]),
+            statement("CGControl", &["O_LABEL", "n0", "l1"]),
+            statement("CGControl", &["O_GOTO", "n0", "l2"]),
+            statement("DBEndBlock", &[]),
+            statement("CGControl", &["O_LABEL", "n0", "l2"]),
+        ];
+        assert_eq!(super::entered_blocks(&body), llrm_support::hash::HashSet::from_iter([1]));
+        assert_eq!(super::entered_blocks(&body[1..]), llrm_support::hash::HashSet::default());
     }
 
     /// The C library's strcmp is stated a three-way compare: branchprob
@@ -3679,7 +4078,7 @@ mod tests {
     }
 
     /// `fixture`'s HIR program.
-    fn program_of(fixture: &str) -> llrm_core::hir::model::Program {
+    fn program_of(fixture: &str) -> llrm_codegen::hir::model::Program {
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
         super::program(
@@ -3720,7 +4119,7 @@ mod tests {
                     &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
                 )
                 .ok()?;
-                llrm_core::hir::verify::verify(&program).err().map(|why| format!("{fixture}: {why:?}"))
+                llrm_codegen::hir::verify::verify(&program).err().map(|why| format!("{fixture}: {why:?}"))
             })
             .collect();
         assert!(invalid.is_empty(), "{invalid:#?}");
@@ -3733,29 +4132,30 @@ mod tests {
         let mut program = program_of("bytes.cgs");
         let machine = llrm_x86_m16::machine::BUILT_IN.clone();
         let options = llrm_driver::m16_options(machine);
-        assert!(llrm_core::driver::emitted(&program, &options).is_ok(), "premise: valid as raised");
+        assert!(llrm_codegen::driver::emitted(&program, &options).is_ok(), "premise: valid as raised");
         let module = &mut program.modules[0];
         let byte = module
             .types
             .iter()
-            .find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1)
+            .find(|one| one.kind == llrm_codegen::hir::model::TypeKind::Integer && one.width == 1)
             .map(|one| one.id)
             .expect("a byte type");
         let stored =
             module.functions.iter_mut().flat_map(|one| &mut one.blocks).flat_map(|one| &mut one.instructions).find(
                 |one| {
-                    one.op == llrm_core::hir::model::Op::Store
+                    one.op == llrm_codegen::hir::model::Op::Store
                         && matches!(
                             &one.operands[0],
-                            llrm_core::hir::model::Operand::IndirectPlace(place) if place.r#type != byte
+                            llrm_codegen::hir::model::Operand::IndirectPlace(place) if place.r#type != byte
                         )
                 },
             );
-        let Some(llrm_core::hir::model::Operand::IndirectPlace(place)) = stored.map(|one| &mut one.operands[0]) else {
+        let Some(llrm_codegen::hir::model::Operand::IndirectPlace(place)) = stored.map(|one| &mut one.operands[0])
+        else {
             panic!("premise: a store through a pointer")
         };
         place.r#type = byte;
-        let why = llrm_core::driver::emitted(&program, &options).err().unwrap_or_default();
+        let why = llrm_codegen::driver::emitted(&program, &options).err().unwrap_or_default();
         assert!(why.contains("store value type does not match its place"), "{why}");
     }
 
@@ -3764,12 +4164,12 @@ mod tests {
     #[test]
     fn test_a_stated_pointee_still_bounds_an_indirect_place() {
         let mut program = program_of("bytes.cgs");
-        assert!(llrm_core::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
+        assert!(llrm_codegen::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
         let module = &mut program.modules[0];
         let byte = module
             .types
             .iter()
-            .find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1)
+            .find(|one| one.kind == llrm_codegen::hir::model::TypeKind::Integer && one.width == 1)
             .map(|one| one.id)
             .expect("a byte type");
         let wider = |ty: i64| module.types.iter().find(|one| one.id == ty).is_some_and(|one| one.width > 1);
@@ -3780,7 +4180,7 @@ mod tests {
             .flat_map(|one| &one.instructions)
             .flat_map(|one| &one.operands)
             .find_map(|operand| match operand {
-                llrm_core::hir::model::Operand::IndirectPlace(place) if wider(place.r#type) => Some(place.base),
+                llrm_codegen::hir::model::Operand::IndirectPlace(place) if wider(place.r#type) => Some(place.base),
                 _ => None,
             })
             .expect("premise: a place wider than a byte, read through a pointer");
@@ -3800,7 +4200,7 @@ mod tests {
                 value.r#type = narrowed;
             }
         }
-        let why = llrm_core::hir::verify::verify(&program).unwrap_err();
+        let why = llrm_codegen::hir::verify::verify(&program).unwrap_err();
         assert!(format!("{why:?}").contains("exceeds its pointee"), "{why:?}");
     }
 
@@ -3809,7 +4209,11 @@ mod tests {
     #[test]
     fn test_an_indirect_calls_order_is_over_its_arguments() {
         let mut program = program_of("codeptrs.cgs");
-        assert!(llrm_core::hir::verify::verify(&program).is_ok(), "{:?}", llrm_core::hir::verify::verify(&program));
+        assert!(
+            llrm_codegen::hir::verify::verify(&program).is_ok(),
+            "{:?}",
+            llrm_codegen::hir::verify::verify(&program)
+        );
         let function = program.modules[0]
             .functions
             .iter_mut()
@@ -3817,7 +4221,7 @@ mod tests {
             .unwrap();
         let site = function.calls.iter_mut().find(|site| !site.order.is_empty()).unwrap();
         site.order.iter_mut().for_each(|one| *one += 1);
-        let why = llrm_core::hir::verify::verify(&program).unwrap_err();
+        let why = llrm_codegen::hir::verify::verify(&program).unwrap_err();
         assert!(format!("{why:?}").contains("invalid argument order"), "{why:?}");
     }
 
@@ -3862,6 +4266,20 @@ mod tests {
         );
     }
 
+    /// CGCall.cpp `DetermineNoUndef`: a scalar parameter is `noundef`. None was
+    /// stated, so SimplifyCFG could not tell `a || b` from one that reads an
+    /// undefined `b`, and kept the select form (a branch more on m16).
+    #[test]
+    fn test_scalar_parameters_are_noundef() {
+        let module = raised("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs");
+        let function = module.global(module.named("_add").unwrap()).function().unwrap();
+        assert!(
+            (0..function.parameter_attrs.len()).all(|at| llrm_mir::facts::Facts::param(function, at).no_undef()),
+            "{:?}",
+            function.parameter_attrs
+        );
+    }
+
     #[test]
     fn test_static_is_internal_linkage() {
         let module = raised("iparg.cgs");
@@ -3871,6 +4289,136 @@ mod tests {
             (Linkage::Internal, Linkage::External)
         );
         assert_eq!(linkage(&raised("parity/loop.cgs"), "_demo_seed"), Linkage::Internal);
+    }
+
+    /// `source`'s `_f`, recorded by wccq and raised for the m16 or m32 target.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    fn raised_c(
+        source: &str,
+        flat: bool,
+    ) -> String {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("x.c");
+        std::fs::write(&path, source).unwrap();
+        let (calling, profile, layout) = if flat {
+            (
+                llrm_target::Target::calling(&llrm_x86_m32::M32),
+                crate::compile::Profile::of(&llrm_x86_m32::M32).unwrap(),
+                llrm_x86_m32::layout(),
+            )
+        } else {
+            (
+                llrm_target::Target::calling(&llrm_x86_m16::M16),
+                crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
+                llrm_x86_m16::layout(),
+            )
+        };
+        let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
+        let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile).unwrap();
+        let emitted = llrm_codegen::hir::mir::emit(&program, &layout).swap_remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        defined(&emitted.module, "_f")
+    }
+
+    /// `y = x` of a 104-byte struct (QCport: 221 such load/store pairs in 11
+    /// modules at -Os): clang's `EmitAggregateCopy` is one `llvm.memcpy`; the
+    /// raise made 26 pairs of 4-byte loads and stores, which no later pass
+    /// could see as a copy.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn a_struct_assignment_is_one_memcpy_not_a_load_and_a_store_a_word() {
+        let source = "struct S { float a[26]; };\nvoid __cdecl use(struct S *);\nint __cdecl f(void) { struct S x, y; use(&x); y = x; use(&y); return 0; }\n";
+        for flat in [false, true] {
+            let text = raised_c(source, flat);
+            assert_eq!(text.matches("@llvm.memcpy").count(), 1, "{text}");
+            assert!(text.matches(" load ").count() < 3, "{text}");
+        }
+    }
+
+    /// `__builtin_expect(x, 0)` is clang's `llvm.expect` where it optimizes
+    /// (the arguments in source order: the value, then the expected one) and
+    /// its argument below: without the intrinsic `lower-expect` had nothing to
+    /// make branch weights of.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn builtin_expect_is_the_intrinsic_when_optimizing_and_its_argument_below() {
+        let source = "int __cdecl f(int x) { return __builtin_expect(x, 0); }\n";
+        let calling = llrm_target::Target::calling(&llrm_x86_m16::M16);
+        let record = |expects: bool| {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("x.c");
+            std::fs::write(&path, source).unwrap();
+            let mut profile = crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap();
+            profile.expects = expects;
+            let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
+            let program =
+                super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile).unwrap();
+            let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+            assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+            defined(&emitted.module, "_f")
+        };
+        let optimized = record(true);
+        let call = optimized.lines().find(|line| line.contains("@llvm.expect.i16(")).expect("the intrinsic");
+        assert!(call.contains(", i16 0)") && !call.contains("i16 0,"), "{optimized}");
+        assert!(!record(false).contains("llvm.expect"));
+    }
+
+    /// A GNU C builtin the table lacks was a call of an undefined extern,
+    /// found by the linker if at all: it is refused here, by name.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn an_unknown_builtin_is_refused_with_its_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("x.c");
+        std::fs::write(&path, "int __cdecl f(int x) { return __builtin_popcount(x); }\n").unwrap();
+        let calling = llrm_target::Target::calling(&llrm_x86_m16::M16);
+        let profile = crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap();
+        let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
+        let refused = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile)
+            .err()
+            .expect("refused");
+        assert!(format!("{refused:?}").contains("unsupported builtin __builtin_popcount"), "{refused:?}");
+    }
+
+    /// CGCall.cpp `DetermineNoUndef`: a scalar argument of a call is
+    /// `noundef`, as the parameter is. None was stated at a call site, so a
+    /// callee's `noundef` parameter had no argument to match (a branch more
+    /// where SimplifyCFG asks if an argument may be undef).
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_scalar_call_arguments_are_noundef() {
+        let text = raised_c(
+            "extern int __cdecl g(int a, short *p);\nint __cdecl f(int n, short *q) { return g(n, q); }\n",
+            false,
+        );
+        let call = text.lines().find(|line| line.contains("call ")).expect("a call");
+        assert_eq!(call.matches("noundef").count(), 2, "{text}");
+    }
+
+    const ARRAYS: &str = "short a[100]; int b[100];\n\
+        int __cdecl f(int n, short *p) { int t = 0; int i; for (i = 0; i < n; i++) t += a[i] + b[i] + p[i]; return t; }\n";
+
+    /// A flat `a[i]` was `i * 2` and a byte step, per access: 159 `mul`s and
+    /// a byte `getelementptr` each at d_faces' first SROA, against clang's 8.
+    /// It steps `i` elements of the array's own size, as clang's does.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_flat_array_index_counts_elements_without_a_multiply() {
+        let text = raised_c(ARRAYS, true);
+        assert!(!text.contains(" mul "), "{text}");
+        assert!(text.contains("getelementptr inbounds i16, ptr @_a, i32 "), "{text}");
+        assert!(text.contains("getelementptr inbounds i32, ptr @_b, i32 "), "{text}");
+        assert!(text.contains("getelementptr inbounds i16, ptr %"), "{text}");
+    }
+
+    /// A 16-bit index may pass 32767 bytes inside a segment (`scaled`), which
+    /// an element count would promise it does not: m16 keeps the byte step.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_16_bit_array_index_keeps_its_byte_offset() {
+        let text = raised_c(ARRAYS, false);
+        assert!(text.contains(" mul ") && text.contains("getelementptr inbounds i8, "), "{text}");
     }
 
     /// In `bytes`, `i++` is a signed int's and `total +=` an unsigned's;
@@ -3939,11 +4487,22 @@ mod tests {
         assert!(text.contains("O_CONVERT") && text.contains("TY_LONG_DOUBLE"), "the shape the front end refused");
         let module = raised("longdouble.cgs");
         let printed = llrm_mir::print::module(&module);
-        for conversion in ["fptrunc x86_fp80", "fpext double", "fptosi x86_fp80", "sitofp i16"] {
+        // An integer constant converts at once (x86_fp80 constants fold
+        // exactly); the integer conversion is the next test's.
+        for conversion in ["fptrunc x86_fp80", "fpext double", "fptosi x86_fp80"] {
             assert!(printed.contains(conversion), "{conversion}: {printed}");
         }
         let main = defined(&module, "_main");
-        assert!(main.contains("sitofp") && main.contains("x86_fp80"), "{main}");
+        assert!(main.contains("fmul x86_fp80") && main.contains("4.000000e+00"), "{main}");
+    }
+
+    /// A short that is no constant converts to a long double by `sitofp`.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_short_converts_to_a_long_double_by_sitofp() {
+        let text = raised_c("long double __cdecl f(short s) { return s; }\n", false);
+        assert!(text.contains("sitofp i16") && text.contains("x86_fp80"), "{text}");
     }
 
     /// `*seed` is a short's access: C's int2 class, not the character type.

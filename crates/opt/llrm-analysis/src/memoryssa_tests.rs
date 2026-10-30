@@ -1,4 +1,4 @@
-//! llrm-core's `analysis/memoryssa_tests.rs`, written as rich MIR.
+//! llrm-codegen's `analysis/memoryssa_tests.rs`, written as rich MIR.
 //!
 //! Skipped: `test_entry_backedge_keeps_the_invocation_memory_state`, since
 //! nothing branches to an LLVM entry block.
@@ -40,7 +40,7 @@ fn site(
     name: &str,
     index: usize,
 ) -> InstId {
-    unit.function.block(block(unit.function, name)).instructions()[index]
+    unit.function.iter_block(block(unit.function, name)).nth(index).unwrap()
 }
 
 fn at(
@@ -444,6 +444,67 @@ b0:
     }
 }
 
+/// A call is a clobber of a cell where the AA stack cannot rule it out
+/// (`instructionClobbersQuery`): `lifetime.end` of another slot is apart from
+/// this one (the pin's NoModRef), a call given the slot is not. The footprint
+/// made both clobbers (33 `lifetime.end` and 15 `lifetime.start` queries over
+/// QCport's modules).
+#[test]
+fn test_a_call_the_aa_stack_rules_out_does_not_clobber_the_cell() {
+    let parsed = Parsed::new(
+        "declare void @llvm.lifetime.end.p0(i64, ptr)
+declare void @given(ptr)
+
+define i16 @f() {
+b0:
+  %slot = alloca i16
+  %other = alloca i16
+  store i16 1, ptr %slot
+  call void @llvm.lifetime.end.p0(i64 2, ptr %other)
+  %x = load i16, ptr %slot
+  call void @given(ptr %slot)
+  %y = load i16, ptr %slot
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    let (store, ended, load, given, again) =
+        (site(&unit, "b0", 2), site(&unit, "b0", 3), site(&unit, "b0", 4), site(&unit, "b0", 5), site(&unit, "b0", 6));
+    let graph = graph(&unit);
+    assert_eq!(
+        graph.clobbers(load, &cell(&unit, load)),
+        BTreeSet::from([graph.at(store).id]),
+        "lifetime.end {ended:?}"
+    );
+    assert_eq!(graph.clobbers(again, &cell(&unit, again)), BTreeSet::from([graph.at(given).id]));
+}
+
+/// A store the AA stack rules out (a `noalias` argument against a pointer
+/// derived from another argument) is not a clobber of the cell; the walker
+/// asked the stack only for calls and found the store.
+#[test]
+fn test_a_store_the_aa_stack_rules_out_does_not_clobber_the_cell() {
+    let parsed = Parsed::new(
+        "define i16 @f(ptr noalias %p, ptr %q, i16 %i) {
+b0:
+  %r = getelementptr i16, ptr %q, i16 %i
+  store i16 1, ptr %p
+  %x = load i16, ptr %r
+  store i16 2, ptr %r
+  %y = load i16, ptr %p
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    let (first, load, _second, again) =
+        (site(&unit, "b0", 1), site(&unit, "b0", 2), site(&unit, "b0", 3), site(&unit, "b0", 4));
+    let graph = graph(&unit);
+    assert_eq!(graph.clobbers(again, &cell(&unit, again)), BTreeSet::from([graph.at(first).id]));
+    let _ = load;
+}
+
 /// A loop write invalidates a dominating read made before entering the loop.
 #[test]
 fn test_loop_backedge_write_prevents_read_reuse() {
@@ -600,8 +661,9 @@ b0:
     assert!(!covers(&unit, &pointed, &long), "unrelated roots");
 }
 
-/// `@g` and `@h` are apart only once alias names each access's object; a
-/// call is apart only once its callee's summary says it writes `@h` alone.
+/// `@g` and `@h` are apart by the AA stack (BasicAA, GlobalsAA) whether or not
+/// the accesses are resolved: the store to `@h` and the call are both asked of
+/// it, and neither is kept in the accesses.
 #[test]
 fn test_resolved_accesses_prove_two_globals_apart() {
     let parsed = Parsed::new(&format!(
@@ -624,28 +686,15 @@ b0:
 "
     ));
     let unit = parsed.unit();
-    let seth = Procedure::of(crate::testing::with_registers(Unit::of(
-        &parsed.module,
-        &parsed.layout,
-        function(&parsed.module, "seth"),
-    )));
-    let known = alias::summaries(&IndexMap::from_iter([("seth".to_owned(), seth)]), None).unwrap();
-    let (first, second, call, load) =
-        (site(&unit, "b0", 0), site(&unit, "b0", 1), site(&unit, "b0", 2), site(&unit, "b0", 3));
-    for (accesses, clobber) in [
-        (Accesses::plain(&unit, &Calls::default()), call),
-        (Accesses::resolved(&unit, &IndexMap::default()).unwrap(), call),
-        (Accesses::resolved(&unit, &known).unwrap(), first),
-    ] {
+    let (first, call, load) = (site(&unit, "b0", 0), site(&unit, "b0", 2), site(&unit, "b0", 3));
+    for accesses in [Accesses::plain(&unit, &Calls::default()), Accesses::resolved(&unit).unwrap()] {
         let graph = built(&unit, &accesses);
-        assert_eq!(graph.clobbers(load, &accesses.references[&load]), BTreeSet::from([graph.at(clobber).id]));
+        assert_eq!(graph.clobbers(load, &accesses.references[&load]), BTreeSet::from([graph.at(call).id]));
     }
+    // A call known to write nothing leaves the first store.
     let plain = Accesses::plain(&unit, &Calls::from_iter([(call, std::rc::Rc::from([]))]));
-    assert_eq!(
-        built(&unit, &plain).clobbers(load, &plain.references[&load]),
-        BTreeSet::from([graph(&unit).at(second).id]),
-        "unresolved, @h may be @g"
-    );
+    let graph = built(&unit, &plain);
+    assert_eq!(graph.clobbers(load, &plain.references[&load]), BTreeSet::from([graph.at(first).id]));
 }
 
 /// `Accesses`, `memory::unmodeled_write` and `effects::unmodeled` each say
@@ -801,7 +850,7 @@ fn a_store_to_another_object_is_ruled_out_without_alias_reasoning() {
         "@h = global [8 x i8] zeroinitializer\n\ndefine void @f() {{\nb0:\n{stores}  %y = load i16, ptr {CELL}\n  ret void\n}}\n"
     ));
     let unit = parsed.unit();
-    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let accesses = Accesses::resolved(&unit).expect("resolved");
     let graph = built(&unit, &accesses);
     let load = site(&unit, "b0", 20);
     let before = MAY_CLOBBERS.with(std::cell::Cell::get);
@@ -829,7 +878,7 @@ fn test_a_walk_for_a_load_to_be_served_stops_once_more_writes_reach_it_than_can_
         "define i16 @f(i1 %c) {{\nb0:\n  store i16 7, ptr {CELL}\n{diamonds}  %loaded = load i16, ptr {CELL}\n  ret i16 %loaded\n}}\n"
     ));
     let unit = parsed.unit();
-    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let accesses = Accesses::resolved(&unit).expect("resolved");
     let graph = built(&unit, &accesses);
     let load = site(&unit, &format!("j{}", joins - 1), 0);
     let reference = &accesses.references[&load];
@@ -855,7 +904,7 @@ fn test_a_load_of_one_of_many_fixed_cells_finds_its_store_without_walking_the_ot
     let loads: String = (0..200).map(|at| format!("  %y{at} = load i8, ptr {}\n", cell(at))).collect();
     let parsed = Parsed::new(&format!("define void @f() {{\nb0:\n{stores}{loads}  ret void\n}}\n"));
     let unit = parsed.unit();
-    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let accesses = Accesses::resolved(&unit).expect("resolved");
     let graph = built(&unit, &accesses);
     let before = STEPS.with(std::cell::Cell::get);
     for at in 0..200 {
@@ -1037,7 +1086,7 @@ fn test_a_walk_stops_at_the_step_limit_with_the_access_it_stopped_at() {
     let parsed =
         Parsed::new(&format!("define i8 @f(ptr %p) {{\nb0:\n{stores}  %y = load i8, ptr %p\n  ret i8 %y\n}}\n"));
     let unit = parsed.unit();
-    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let accesses = Accesses::resolved(&unit).expect("resolved");
     let graph = built(&unit, &accesses);
     let load = site(&unit, "b0", 6000);
     let before = STEPS.with(std::cell::Cell::get);

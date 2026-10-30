@@ -53,8 +53,10 @@
 //!
 //! Tail recursion makes such loops: `paths(n, m)` tests `n == 0` on every trip
 //! of the loop that tests `m == 0`. A condition inside the body, or a branch
-//! that stays in the loop on both sides, is [`crate::unswitch`]'s, which
-//! copies the loop.
+//! that stays in the loop on both sides, is [`crate::simpleloopunswitch`]'s,
+//! which copies the loop.
+//!
+//! A rotated loop, one whose header jumps back to itself, is left alone (TU1).
 //!
 //! The pass repeats while a loop changes.
 //!
@@ -158,8 +160,7 @@ pub fn unswitched(
     callees: &Callees,
     function: &mut Function,
 ) -> bool {
-    let shape = cfg::Shape::of(function);
-    for loop_ in &shape.loops {
+    for loop_ in &cfg::loops_of(function) {
         if let Some(plan) = planned(context, callees, function, loop_) {
             moved(function, plan);
             return true;
@@ -192,13 +193,18 @@ fn planned(
     if function.successors(preheader) != [header] {
         return None;
     }
+    // TU1 A rotated loop, whose header tests the exit after its body, is
+    // left alone: SimpleLoopUnswitch's trivial path (the translation that
+    // replaces this pass) decides it from the exiting block.
+    if function.successors(header).contains(&header) {
+        return None;
+    }
     let branch = function.terminator(header)?;
     let instruction = function.instruction(branch);
     let [condition, Operand::Block(first), Operand::Block(second)] = instruction.operands[..] else { return None };
     let Operand::Value(value) = condition else { return None };
-    let defined_in = |block: BlockId| {
-        function.block(block).instructions().iter().any(|&one| function.instruction(one).result == Some(value))
-    };
+    let defined_in =
+        |block: BlockId| function.iter_block(block).any(|one| function.instruction(one).result == Some(value));
     if loop_.body.iter().any(|&at| defined_in(cfg::block(at))) {
         return None;
     }
@@ -211,7 +217,7 @@ fn planned(
     // What the header does before the branch is skipped where the loop is never
     // entered: it does nothing but phis and work that cannot trap, and its
     // results leave only through the exit's phis.
-    for &inst in function.block(header).instructions() {
+    for inst in function.iter_block(header) {
         if inst == branch || function.instruction(inst).opcode == Opcode::Phi {
             continue;
         }
@@ -226,7 +232,7 @@ fn planned(
         _ => false,
     };
     for &at in &loop_.body {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.iter_block(cfg::block(at)) {
             let Some(result) = function.instruction(inst).result else { continue };
             for one in function.users(result) {
                 let user = one.user;

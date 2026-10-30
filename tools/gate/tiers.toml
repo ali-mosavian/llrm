@@ -31,7 +31,7 @@ paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**", ".zed/*
 paths = [
   "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs", "src/**", "tests/common/**",
   "crates/ir/**", "crates/support/**",
-  "crates/target/llrm-target/**", "crates/target/llrm-object/**",
+  "crates/target/llrm-target/**", "crates/mc/llrm-object/**",
   "tools/gate/**",
 ]
 
@@ -56,12 +56,12 @@ paths = ["crates/**/*.rs"]
 [[heavy]]
 step = "turbo"
 why = "Turbo Debugger session over a program: 48 s"
-owners = ["crates/backend/llrm-core/src/backend/debuginfo.rs", "crates/backend/llrm-core/src/backend/frame.rs", "crates/backend/llrm-core/src/backend/cfi*.rs", "tests/turbo.rs", "tests/common/**", "crates/target/llrm-omf/**", "crates/target/llrm-coff*/**", "crates/target/llrm-dwarf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
+owners = ["crates/codegen/llrm-codegen/src/backend/debuginfo.rs", "crates/codegen/llrm-codegen/src/backend/frame.rs", "crates/codegen/llrm-codegen/src/backend/cfi*.rs", "tests/turbo.rs", "tests/common/**", "crates/mc/llrm-omf/**", "crates/mc/llrm-coff*/**", "crates/mc/llrm-dwarf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
 
 [[heavy]]
 step = "cv4"
 why = "Microsoft link + CodeView sessions: 30 s"
-owners = ["crates/backend/llrm-core/src/backend/debuginfo.rs", "crates/backend/llrm-core/src/backend/frame.rs", "crates/backend/llrm-core/src/backend/cfi*.rs", "tests/cv4.rs", "crates/target/llrm-coff*/**", "crates/target/llrm-omf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
+owners = ["crates/codegen/llrm-codegen/src/backend/debuginfo.rs", "crates/codegen/llrm-codegen/src/backend/frame.rs", "crates/codegen/llrm-codegen/src/backend/cfi*.rs", "tests/cv4.rs", "crates/mc/llrm-coff*/**", "crates/mc/llrm-omf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
 
 [[heavy]]
 step = "identity"
@@ -71,17 +71,22 @@ owners = ["tests/toolchain.rs", "tools/identity.sh", "tools/g-identical.sh", "to
 [[heavy]]
 step = "pytest-programs"
 why = "compiles every program, and the loop cross-cases: 60 s"
-owners = ["tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_innerloops.py", "tools/sizes*", "tools/loops/**", "tools/innerloops.py", "examples/**", "bench/**", "tests/run/**", "crates/frontends/**", "crates/backend/**", "crates/opt/**"]
+owners = ["tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_innerloops.py", "tools/sizes*", "tools/loops/**", "tools/innerloops.py", "examples/**", "bench/**", "tests/run/**", "crates/frontends/**", "crates/driver/llrm-cc/**", "crates/backend/**", "crates/codegen/**", "crates/driver/llrm-driver/**", "crates/opt/**"]
 
 [[heavy]]
 step = "dos-slow"
 why = "NIBBLES and GORILLA played on dos32 against BCOM45, and the graphics sweeps: 5 to 8 minutes (tools/dosbatch/conftest.py's slow_dos tier)"
-owners = ["runtime/qb/**", "runtime/shared/dos/**", "crates/frontends/qbfront/**", "crates/frontends/llrm-qb/**", "crates/frontends/llrm-qbruntime/**", "crates/ir/llrm-hir/src/mir*", "crates/backend/llrm-core/src/driver/basic.rs", "tools/dosbatch/**", "toolchain/dosrunbuild.sh"]
+owners = ["runtime/qb/**", "runtime/shared/dos/**", "crates/frontends/qb/**", "crates/frontends/qb/**", "runtime/qb/**", "crates/ir/llrm-hir/src/mir*", "crates/codegen/llrm-codegen/src/driver/basic.rs", "tools/dosbatch/**", "toolchain/dosrunbuild.sh"]
 
 [[heavy]]
 step = "qcport"
 why = "builds and runs QCport against the all-Borland build: 100 s"
-owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
+owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/driver/llrm-cc/**", "crates/target/llrm-x86-m32/**", "crates/mc/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**", "crates/codegen/**"]
+
+[[heavy]]
+step = "oracle-qcport"
+why = "QCport's modules under every LLRM_CHECK_* oracle, then built and run against the Borland build: the C corpus the oracle sweep lacks"
+owners = ["tools/oracle_qcport.py", "tools/oracle_sweep.py", "tools/oracle_expected.toml", "tools/qcport*", "tools/qcport/**", "crates/frontends/llrm-c/**", "crates/driver/llrm-cc/**", "crates/backend/**", "crates/opt/**", "crates/codegen/**"]
 
 [[heavy]]
 step = "rfmt-post"
@@ -91,13 +96,13 @@ owners = ["tools/rfmt-post/**", "tools/fmt.sh", "rustfmt.toml"]
 [[heavy]]
 step = "measure"
 why = "compile cost (QCport and the 66 programs at -O1/-O2/-O3/-Os) and its growth with size (axes at N and 2N, and each step of the compile) against the merge-base's measurement in ~/.cache/llrm/measure: 3-8 minutes when the base is not measured yet"
-owners = ["crates/backend/**", "crates/opt/**", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-x86/**", "tools/compile-cost.py", "tools/measure.py", "bench/**"]
+owners = ["crates/backend/**", "crates/codegen/**", "crates/driver/llrm-driver/**", "crates/opt/**", "crates/frontends/llrm-c/**", "crates/driver/llrm-cc/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-x86/**", "tools/compile-cost.py", "tools/measure.py", "bench/**"]
 
 # `run` always runs when code changed, on the languages the diff can affect (all, in a full tier).
 [run_languages]
-qb = ["crates/frontends/llrm-qb/**", "crates/frontends/qbfront/**", "crates/frontends/llrm-qbruntime/**", "tests/run/qb/**"]
-c = ["crates/frontends/llrm-c/**", "tests/run/c/**"]
-nib = ["crates/frontends/llrm-nib/**", "tests/run/nib/**"]
+qb = ["crates/frontends/qb/**", "crates/frontends/qb/**", "runtime/qb/**", "tests/run/qb/**"]
+c = ["crates/frontends/llrm-c/**", "crates/driver/llrm-cc/**", "tests/run/c/**"]
+nib = ["crates/frontends/nib/**", "tests/run/nib/**"]
 # Everything else (targets, examples, bench, tests/run/huge, tests/run/alias, run.rs) runs all languages.
 
 # One slow test inside an otherwise cheap binary: split out, so the binary's other tests stay cheap.
@@ -111,7 +116,7 @@ filter = "test_the_identity_gate_passes"
 # skipped llrm-mir's dense-key ratchet and main's full run went red on it). A test that reads sources and is not listed here fails
 # test_gate. `step = "integration"`: a root test binary the integration step runs on every code change anyway.
 [scan_inputs]
-paths = ["**/*.rs", "tools/**/*.py", "tools/**/*.sh", "crates/**/*.py", "crates/**/*.sh", "src/**/*.py", "src/**/*.sh", "crates/ir/llrm-mir/dense-keys.txt", "tests/target_facts.baseline"]
+paths = ["**/*.rs", "tools/**/*.py", "tools/**/*.sh", "crates/**/*.py", "crates/**/*.sh", "src/**/*.py", "src/**/*.sh", "crates/ir/llrm-mir/dense-keys.txt", "crates/ir/llrm-mir/slice-users.txt", "tests/target_facts.baseline"]
 
 [[scan]]
 file = "crates/ir/llrm-mir/src/tests.rs"
@@ -119,9 +124,9 @@ package = "llrm-mir"
 lib = "no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id"
 
 [[scan]]
-file = "crates/opt/llrm-transforms/tests/no_hand_solved_bounds.rs"
-package = "llrm-transforms"
-test = "no_hand_solved_bounds"
+file = "crates/ir/llrm-mir/src/tests.rs"
+package = "llrm-mir"
+lib = "no_file_gains_a_slice_read_of_a_use_list"
 
 [[scan]]
 file = "crates/support/llrm-support/tests/no_uncached_env_checks.rs"
@@ -133,11 +138,27 @@ file = "tests/seeded_maps.rs"
 step = "integration"
 
 [[scan]]
+file = "tests/no_todo.rs"
+step = "integration"
+
+[[scan]]
 file = "tests/target_facts.rs"
 step = "integration"
 
 [[scan]]
 file = "tests/no_local_paths.rs"
+step = "integration"
+
+[[scan]]
+file = "tests/no_kill_by_pattern.rs"
+step = "integration"
+
+[[scan]]
+file = "tests/no_partial_ecx_counts.rs"
+step = "integration"
+
+[[scan]]
+file = "tests/qb_dev_interface.rs"
 step = "integration"
 
 # Whole binaries that are heavy: every test in them is slow.
@@ -186,7 +207,7 @@ steps = ["fmt", "docs", "products", "scans", "facts"]
 tests = ["docs_links"]
 # Shell checks of the diff against origin/main (the tree as it stands, committed or not): a conflict marker or whitespace error that a merge left.
 [prepush.checks]
-"diff check" = "git diff --check origin/main && ! git diff -U0 origin/main | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
+"diff check" = "base=$(git merge-base HEAD origin/feat/parity 2>/dev/null || git merge-base HEAD origin/main) && git diff --check $base && ! git diff -U0 $base | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
 
 # Every step the planner can produce is in exactly one group (a test checks).
 [bench]
@@ -205,7 +226,7 @@ perf = ["pytest-perf", "oracle-premise"]  # steps that read hardware counters: t
 oracle = ["oracle-sweep"]  # CI runs it as `oracle-1` .. `oracle-N` ([oracle] shards): every LLRM_CHECK_* oracle over a slice of the BASIC and Nib programs
 tools = ["torture"]
 bench = ["bench"]  # CI runs it as `bench-1` .. `bench-N` ([bench] shards): one slice of the benchmarks each, judged together by bench.py --merge
-reference = ["turbo", "cv4", "qcport"]
+reference = ["turbo", "cv4", "qcport", "oracle-qcport"]
 dos = ["dos-slow"]
 cost = ["measure"]
 
@@ -234,6 +255,16 @@ needs = [
 require = ["LLRM_REQUIRE_WDUMP"]
 needs = [{ env = "WDUMP", default = "~/dos/devtools/dev/c/watcom/binl/wdump", marker = "." }]
 
+# The pinned clang and the m16 clang the llrm-cc tests drive, built by .github/workflows/toolchain.yml into trees named for their shas
+# (toolchain/clangbuild.sh --print). Open source, so not private: CI builds and caches them, and a missing one is red there (only `perf` may
+# be missing); a local run with GATE_ALLOW_MISSING=1 skips the steps that need them with this reason.
+[capability.clang]
+require = []
+needs = [
+  { run = 'cd "$(git rev-parse --show-toplevel)" && test -x "$(sh toolchain/clangbuild.sh --print pin)/bin/clang"' },
+  { run = 'cd "$(git rev-parse --show-toplevel)" && test -x "$(sh toolchain/clangbuild.sh --print m16)/bin/clang"' },
+]
+
 [capability.qcport]
 private = true
 require = []
@@ -248,17 +279,19 @@ needs = [
 # which cannot read the checkout, fails it by name. `rm-quake` is the public QCport, cloned beside the private files.
 [private]
 repo = "ali-mosavian/llrm-private-tools"
-public = { rm-quake = "ali-mosavian/rm-quake" }
-env = { TCPP30_DIR = "tcpp30", TD_DIR = "td", VBDOS_DIR = "vbdos", PDS71_DIR = "pds71", QB45_DIR = "qb45", QB45_DEMOS_DIR = "gor", QCPORT_BORLAND = "qcbcc", QCPORT_INC = "qctc/inc", QCPORT_BCC_LIB = "bcpp31/lib", TOOLCHAINS = ".", TURBO = "." }
+public = { rm-quake = "ali-mosavian/rm-quake@958d5fc3d01a2dbe0f2475462bec001b2249ca8c" }
+env = { TCPP30_DIR = "tcpp30", TD_DIR = "td", VBDOS_DIR = "vbdos", PDS71_DIR = "pds71", QB45_DIR = "qb45", QB45_DEMOS_DIR = "gor", QCPORT_BORLAND = "qcbcc", QCPORT_INC = "qctc/inc", QCPORT_BCC_LIB = "bcpp31/lib", LLRM_BORLAND_INC = "bcinc", LLRM_BORLAND_LIB = "bcpp31/lib", TOOLCHAINS = ".", TURBO = "." }
 group_env = { reference = { QCPORT = "rm-quake/src" }, cost = { QCPORT = "rm-quake/src" }, python = { QCPORT = "rm-quake/src", DFACES_SRC = "qbq-llrm/src" } }
 
 # What each item needs, one table. A key is a step (`turbo`), a `run` language (`lang:qb`), a cheap test binary (`bin:differential`).
 # A step is skipped whole; a language or binary is left out of the step that runs it, and the step is skipped if no language is left.
 # A Python test file declares its own need, not here: `REQUIRES = ["perf"]` at module level.
 [requires]
+integration = ["clang"]  # the llrm-cc tests (tests/common/cc.rs) drive the pinned and m16 clang
 turbo = ["turbo"]
 cv4 = ["codeview"]
 qcport = ["qcport"]
+oracle-qcport = ["qcport"]
 dos-slow = ["qb45", "qb45demos"]
 pytest-perf = ["perf"]
 oracle-premise = ["perf"]
@@ -309,6 +342,43 @@ high = 0.025         # a step needs this share of the compile's work to fail (th
 
 # Rows the user accepted a rise on, each at a ceiling equal to what the decision measured: a row above its ceiling fails as ever.
 # A row names a prefix (`nest O1` is also its steps); the limits it gives replace the general ones for it. Tighten as the follow-up lands.
+
+# A row with `branch` is a decision for that PR alone (tools/measure.py drops it for any other head and lays its limits over the
+# first matching row, the higher standing). T-1, https://github.com/ali-mosavian/llrm/issues/2295: the scalar GVN (#2179) costs +1.0% of
+# a compile and gvn's own cost is x1.1 to x1.6 of the base's while the old forwarding and pricing machinery still runs beside it
+# (a constant factor: gvn at 512, 1024, 2048, 4096 statements of `straight` O1 is x1.414, x1.414, x1.413, x1.410 of the base's).
+# Exit, the same for each of the four: stages 4-6 of docs/architecture/gvn-port.md delete spill_forecast, loadjoins, motion_price and
+# joined and Gvn::run reaches <= 25,680 instructions per IR instruction per run; the four are deleted in that PR.
+[[measure.accepted]]
+row = "qcport -Os"
+branch = "alim/feat/gvn-scalar-pr"
+geomean = 1.0145
+why = "T-1: qcport geomean at -Os."
+
+[[measure.accepted]]
+suffix = "mir gvn"
+branch = "alim/feat/gvn-scalar-pr"
+pass_slack = 1.65
+step_rise = 1.6
+why = "T-1: gvn's own cost at 2N against the base's, on every axis and level (widest read: cells O1 x1.626, straight O1 x1.583)."
+
+[[measure.accepted]]
+row = "straight Os"
+branch = "alim/feat/gvn-scalar-pr"
+worst = 1.0225
+why = "T-1: the whole compile at 2N=1024 of the straight axis (read x1.0220)."
+
+[[measure.accepted]]
+row = "callers Os analysis call-effects"
+branch = "alim/feat/gvn-scalar-pr"
+pass_slack = 1.15
+why = "T-1: call-effects at 2N (read x1.133), asked more often by the scalar pass's callers."
+
+[[measure.accepted]]
+row = "callers-m16 Os analysis call-effects"
+branch = "alim/feat/gvn-scalar-pr"
+pass_slack = 1.15
+why = "T-1: call-effects at 2N (read x1.132)."
 
 [[measure.accepted]]
 row = "fjoins O1 analysis through-memory"
@@ -470,9 +540,3 @@ row = "callers O2"
 step_excess = 0.0051
 pass_slack = 1.277
 why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
-
-
-[[measure.accepted]]
-row = "nest Os mir gvn"
-pass_slack = 1.15
-why = "#2374: block weights cap at 2^48 instead of wrapping past i64, so loops past ~8 deep weigh alike and hoist moves less out of them; gvn sees what stays (x1.129 at 2N=32, 26.5 -> 29.9 Minstr) while the axis falls (nest Os 2N 576.7 -> 541.3 Minstr, x0.939; O1 x0.869, O2 x0.883). Remove when profit's weights are BlockFrequencyInfo's (relative, entry 1)."

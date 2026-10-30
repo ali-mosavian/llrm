@@ -3,7 +3,7 @@
 
 ; A loop walking ten arrays by pointer (llrm-c -O2 -march=i386, 06-rotate.ll), as the pipeline hands it to isel.
 ; Regalloc used to spill its own reload forever: issue #104.
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-f80:16-n8:16:32"
 
 @_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum_a9 = global [600 x i8] zeroinitializer
 @_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum_a8 = global [600 x i8] zeroinitializer

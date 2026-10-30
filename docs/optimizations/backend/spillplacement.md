@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/spillplacement.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/spillplacement.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/spillplacement.rs sha256:e3d017b69c6524645aa0aa0b2adf7190577d70ff6ae03f59c92cce6de4024235 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/spillplacement.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/spillplacement.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/spillplacement.rs sha256:30bd8cf9dbe007d8b1926f5816e32f9930e7dbc43a2628243bf8b192f70cb190 -->
 
 # spillplacement
 
@@ -43,7 +43,7 @@ updates. A bundle joining more than a hundred blocks needs a stronger pull
 before it chooses a register. `finish` returns the bundles that settled in a
 register.
 
-The result drives [`crate::backend::splitkit`](splitkit.md): blocks whose borders are in
+The result drives `crate::backend::splitkit`: blocks whose borders are in
 registers form the region a piece holds.
 
 ## Example
@@ -52,7 +52,7 @@ nothing, and the tests build bodies in code and assert on the bundles. Read
 `splitkit` for the effect.
 
 ## Runs
-Not a pass: [`crate::backend::splitkit`](splitkit.md) queries it for each value it
+Not a pass: `crate::backend::splitkit` queries it for each value it
 splits, and `floatalloc` asks for the bundles of a body, at every -O level.
 
 ## Provides

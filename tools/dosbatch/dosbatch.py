@@ -11,6 +11,8 @@ stopping comes from the launch's events.
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import os
 import re
 import sys
@@ -30,6 +32,7 @@ import cpulimit
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import linkrecipe  # noqa: E402
+import omfalign  # noqa: E402
 import llrmbin  # noqa: E402
 
 BIN = llrmbin.bin_dir()
@@ -102,14 +105,40 @@ class BuildError(Exception):
 _RUNTIME_LOCK = threading.Lock()
 
 
-def _host(command: list[str]) -> None:
-    done = cpulimit.run(command, 300, capture_output=True, text=True)
+def with_isel(command: list[str]) -> list[str]:
+    """`command` with `--isel=$LLRM_ISEL` after `llrm-cc`, `llrm-qb` or `llrm-nib`, when the variable is set: the same programs through the other instruction selector."""
+    mode = os.environ.get("LLRM_ISEL")
+    if mode and Path(command[0]).name in ("llrm-cc", "llrm-qb", "llrm-nib"):
+        return [command[0], f"--isel={mode}", *command[1:]]
+    return command
+
+
+class ProofMissing(Exception):
+    pass
+
+
+def isel_proof(report: Path, mode: str) -> tuple[int, int]:
+    """The functions `$LLRM_ISEL_REPORT` says the DAG path (first) and the old selector (second) selected. A run that quotes a count
+    under `mode` proves with this which selector compiled it: no report, or no function from `mode`'s selector, is no proof."""
+    if not report.exists() or not report.read_text().strip():
+        raise ProofMissing(f"{report}: no function was reported as selected: nothing shows which selector compiled this run")
+    lines = [line.rsplit(" ", 1) for line in report.read_text().splitlines() if line.strip()]
+    dag = sum(1 for _, by in lines if by == "dag")
+    old = sum(1 for _, by in lines if by == "old")
+    if mode in ("dag", "shadow") and dag == 0:
+        raise ProofMissing(f"LLRM_ISEL={mode} but the DAG path selected no function ({old} by the old selector)")
+    return dag, old
+
+
+def _host(command: list[str], env: dict[str, str] | None = None) -> None:
+    done = cpulimit.run(with_isel(command), 300, capture_output=True, text=True, **({"env": {**os.environ, **env}} if env else {}))
     if done.returncode != 0:
         raise BuildError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")
 
 
 def assemble(source: Path, obj: Path, *defines: str) -> None:
-    _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", linkrecipe.assembler(REAL_MODE), *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
+    # -Fw: jwasm writes `<source>.err` into the current directory on an error (tools/dosbatch/init.err leaked into the tree); it goes beside the object
+    _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", linkrecipe.assembler(REAL_MODE), *(f"-D{one}" for one in defines), f"-Fo{obj}", f"-Fw{obj.with_suffix('.err')}", str(source)])
 
 
 def ow_root() -> Path:
@@ -143,6 +172,18 @@ def target_bits(target: str) -> int:
     return target_modes()[target]
 
 
+WATCOM_ROWS = {16: "x86_16-wat", 32: "x86_32-wat"}
+
+
+def c_compile(source: Path, obj: Path, target: str, level: str, include: Path | None, abi: list[str], extra: list[str] = (), declarations: Path | None = None) -> tuple[list[str], dict[str, str]]:
+    """(command, environment) that builds the C `source` for `target`: llrm-cc over clang, the target a row of its table, not a flag.
+    `include` is unused: the row's -isystem has llrm_os.h, and a directory made for llrm-c holds its own, which would shadow it.
+    `declarations` is searched: the directory of a Nib program's exports, NAME.h, with nothing else in it."""
+    if target_bits(target) not in WATCOM_ROWS:
+        raise BuildError(f"llrm-cc has no row for {target}")
+    return [str(BIN / "llrm-cc"), level, "-c", *(["-I", str(declarations)] if declarations else []), *abi, *extra, str(source), "-o", str(obj)], {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
+
+
 def m_flag(target: str) -> str:
     """The flag that names `target` to the compilers."""
     return f"-m{target_modes()[target]}"
@@ -165,6 +206,12 @@ def target_link(target: str) -> dict:
 _ASSEMBLED: set[tuple[Path, tuple[str, ...]]] = set()
 
 
+def runtime_path(made: Path, name: str, defines: tuple[str, ...]) -> Path:
+    """Where the object of runtime file `name` goes in `made`: one path per set of defines, as builds that differ in them run at once."""
+    one = object_name(name)
+    return made / (one if not defines else f"{hashlib.md5(' '.join(defines).encode()).hexdigest()[:8]}-{one}")
+
+
 def runtime_object(name: str, path: Path, defines: tuple[str, ...] = ()) -> Path:
     """`path`, the object of the runtime file `name`, made once for this process however many builds ask: one
     made with the description's defines is not dated by its source, so it is made on the first ask, and an
@@ -180,6 +227,15 @@ def runtime_object(name: str, path: Path, defines: tuple[str, ...] = ()) -> Path
     return path
 
 
+def object_name(name: str) -> str:
+    """The object of runtime file `name`, unique across directories: a platform's start.asm and the OS layer's share a stem."""
+    source = Path(name)
+    if source.is_absolute():
+        # The compiler names the hook by absolute path; its leading "/" made the object's name a directory (jwasm A1106: cannot open file).
+        source = source.relative_to(ROOT) if source.is_relative_to(ROOT) else Path(*source.parts[1:])
+    return "_".join([*(part for part in source.parent.parts if part != "runtime"), source.stem]).upper() + ".OBJ"
+
+
 C_RUNTIME = "@c-runtime"
 
 
@@ -191,6 +247,12 @@ def link_files(source: Path, names: Iterable[str], target: str) -> list[Path]:
     for name in names:
         out += [ROOT / one for one in target_link(target)["last"]] if name == C_RUNTIME else [source.parent / name]
     return out
+
+
+def link_loaders(target: str) -> tuple[Path, ...]:
+    """The files `target`'s executable needs beside it (an extender's loader)."""
+    link = target_link(target)
+    return (Path(link["loader"].replace("{ow}", str(ow_root()))),) if "loader" in link else ()
 
 
 def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = (), defines: tuple[str, ...] | None = None, image: Path | None = None) -> tuple[Path, ...]:
@@ -205,26 +267,53 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
     made.mkdir(exist_ok=True)
 
     def objects(names: list[str]) -> list[Path]:
-        return [runtime_object(name, made / (Path(name).stem.upper() + ".OBJ"), defines) for name in names]
+        return [runtime_object(name, runtime_path(made, name, defines), defines) for name in names]
 
     first, last, final = objects(runtime[0] if runtime else link["first"]), objects(runtime[1] if runtime else link["last"]), objects(link["final"])
     mapping = ["option", f"map={listing}"] if listing else []
     files = lambda paths: [word for one in paths for word in ("file", str(one))]  # noqa: E731
     _host([str(BIN / "jwlink"), "option", "quiet", *mapping, *before, *link["format"], "name", str(exe), *map(fill, link.get("options", [])), *files(first), "file", str(obj), *files(objects_after), *files(last), *after, *files(final)])
     if image is not None:
-        _host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={image.with_suffix('.map')}", "format", "elf", "name", str(image), *files(first), "file", str(obj), *files(objects_after), *files(last), *after, *files(final)])
-    return (Path(fill(link["loader"])),) if "loader" in link else ()
+        # jwlink's ELF writer breaks on paragraph-aligned data (tools/dosbatch/omfalign.py): the image takes dword-aligned copies, in a directory of
+        # its own: rows build at once in one work directory, and copies shared by name were written under each other's linker (E2146 invalid object file).
+        every = omfalign.dword_laid_out([*first, obj, *objects_after, *last, *final], image.with_suffix(".objects"))
+        cut = lambda count: [every.pop(0) for _ in range(count)]  # noqa: E731
+        copies = (cut(len(first)), cut(1)[0], cut(len(objects_after)), cut(len(last)), cut(len(final)))
+        _host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={image.with_suffix('.map')}", "format", "elf", "name", str(image), *files(copies[0]), "file", str(copies[1]), *files(copies[2]), *files(copies[3]), *after, *files(copies[4])])
+    return link_loaders(target)
 
 
 # The 16-bit target the loop corpus and the C helpers build for.
 REAL_MODE = linkrecipe.named(16)
 
-_COMPILERS = {"c": "llrm-c", "nib": "llrm-nib"}
+_COMPILERS = {"nib": "llrm-nib"}
+
+
+@functools.cache
+def clang_identity() -> str:
+    """Which clangs llrm-cc will run (`LLRM_PIN_CLANG`, `LLRM_CLANG_M16`): each one's real path and `--version`, for the keys of cached objects."""
+    parts = []
+    for variable in ("LLRM_PIN_CLANG", "LLRM_CLANG_M16"):
+        path = os.environ.get(variable)
+        if not path:
+            continue
+        real = os.path.realpath(path)
+        try:
+            version = subprocess.run([real, "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            version = "unreadable"
+        parts.append(f"{variable}={real} {version}")
+    return "|".join(parts)
+
+
+def c_frontend() -> str:
+    """The C compiler a run builds with: llrm-cc over clang."""
+    return "llrm-cc"
 
 
 def os_layer(target: str, field: str, language: str) -> str:
-    """What `language`'s compiler says of `target`'s OS layer (`--os-layer FIELD`)."""
-    said = subprocess.run([str(BIN / _COMPILERS[language]), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
+    """What `language`'s compiler says of `target`'s OS layer (`--os-layer FIELD`); "qb" is C's, as the QB runtime is C."""
+    said = subprocess.run([str(BIN / (c_frontend() if language in ("c", "qb") else _COMPILERS[language])), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
     if field == "directory" and "/runtime/" in said:
         # The compiler names the runtime of the tree it was built in; a target shared by two worktrees holds the other's (a gate of main
         # read the tip's path: 14 collection errors). The tools read this tree's.
@@ -232,9 +321,18 @@ def os_layer(target: str, field: str, language: str) -> str:
     return said
 
 
-def os_defines(target: str, language: str) -> tuple[str, ...]:
+def os_defines(target: str, language: str, abi: str | None = None) -> tuple[str, ...]:
     """What the assembler is told of `target`'s OS layer and `language`'s description: `SYMBOL=value` each."""
-    return tuple(os_layer(target, "defines", language).split())
+    defines = tuple(os_layer(target, "defines", language).split())
+    # llrm-cc's Watcom rows enter `main_`, the start-up's default being `_main` (as -mabi=sysv and cdecl name it).
+    watcom = abi == "watcom" or abi not in ("sysv", "cdecl", "ia16")
+    return (*defines, "LL_MAIN=main_") if language == "c" and watcom else defines
+
+
+def entry_defines(target: str, entry: str | None, near: bool = False) -> tuple[str, ...]:
+    """The assembler's defines for a program linked by name: the start-up calls `entry`, `_main` when none is named (cdecl and sysv programs)."""
+    defines = os_defines(target, "c", "cdecl")
+    return (*defines, *(("NEAR_CODE=1",) if near else ()), *((f"LL_MAIN={entry}",) if entry else ()))
 
 
 def os_start(target: str, language: str) -> list[str]:
@@ -245,12 +343,17 @@ def os_start(target: str, language: str) -> list[str]:
 
 
 def c_include(target: str, work: Path) -> Path:
-    """A directory of `work` holding the OS layer's C header for `target` as llrm_os.h (`llrm-c --os-layer header`)."""
+    """A directory of `work` holding the OS layer's C header for `target` as llrm_os.h (`llrm-cc --os-layer header`)."""
     directory = work / f"{target}-include"
     directory.mkdir(exist_ok=True)
     header = os_layer(target, "header", "c") + "\n"
-    if not (directory / "llrm_os.h").exists() or (directory / "llrm_os.h").read_text() != header:
-        (directory / "llrm_os.h").write_text(header)
+    path = directory / "llrm_os.h"
+    if not path.exists() or path.read_text() != header:
+        # Every C program of a run asks, from the thread that compiles it: a header written in place is empty or half there under a compile that
+        # reads it (an implicit `llrm_os_close`, linked as the undefined `_llrm_os_close@3`). It is made beside and renamed, so it is whole or absent.
+        made = path.with_name(f"llrm_os.{os.getpid()}.{threading.get_ident()}.tmp")
+        made.write_text(header)
+        os.replace(made, path)
     return directory
 
 
@@ -259,7 +362,7 @@ def c_support(target: str, work: Path) -> list[Path]:
     `work`: for a build with another compiler's start-up, which brings neither."""
     link = target_link(target)
     defines = os_defines(target, "c")
-    return [runtime_object(name, work / (Path(name).stem.upper() + ".OBJ"), defines) for name in (*link["last"], *link["final"])]
+    return [runtime_object(name, work / object_name(name), defines) for name in (*link["last"], *link["final"])]
 
 
 def os_objects(target: str, language: str, work: Path) -> dict[str, Path]:
@@ -278,7 +381,7 @@ def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level:
     """A Nib program for `target`: its object, `runtime.nib` cut to what the program and the OS layer (`os_objects`) name, linked as the target says."""
     runtime = work / (obj.stem + "R.obj")
     used = [word for one in (obj, *foreign, *os_objects(target, "nib", work).values()) for word in ("--used-by", str(one))]
-    _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), m_flag(target), *abi, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
+    _host(with_isel([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/nib/src/runtime/runtime.nib"), m_flag(target), *abi, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used]))
     return link_target(target, obj, exe, work, runtime=(os_start(target, "nib"), []), objects_after=(runtime, *foreign), defines=os_defines(target, "nib"))
 
 
@@ -524,6 +627,30 @@ def run(jobs: list[Job], work: Path, timeout: int | None = None, stall: int = 18
     if over is not None:
         return stopped_for_output(jobs, work, over, cap)
     return collect(jobs, work, events)
+
+
+def workers_for(count: int) -> int:
+    """How many DOSBox launches share `count` jobs: `LLRM_DOS_WORKERS`, at most 6 and four or more jobs each, 4 by default."""
+    wanted = int(os.environ.get("LLRM_DOS_WORKERS", "4"))
+    return max(1, min(wanted, 6, count // 4))
+
+
+def run_parallel(jobs: list[Job], work: Path, **options) -> dict[str, Result]:
+    """`run`, the jobs spread over several dosrun launches that run at once. Each launch builds and runs its own share in a
+    directory of its own under `work` (so files kept by `run` are in `work/launchN`); a job's result does not depend on the
+    others (virtual time)."""
+    launches = workers_for(len(jobs))
+    if launches == 1:
+        return run(jobs, work, **options)
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir(parents=True)
+    shares = [jobs[at::launches] for at in range(launches)]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(launches) as pool:
+        parts = list(pool.map(lambda at: run(shares[at], work / f"launch{at}", **options), range(launches)))
+    return {stem: result for part in parts for stem, result in part.items()}
 
 
 def stopped_for_output(jobs: list[Job], work: Path, over: str, cap: int) -> dict[str, Result]:

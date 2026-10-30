@@ -5,7 +5,7 @@
 //! (quicksort), a word slot loopslots promoted (sieve), a frame address folded
 //! into an indexed cell (the spiller; the nib loop test of llrm-nib).
 
-use std::process::Command;
+mod common;
 
 fn compiles(
     program: &str,
@@ -13,12 +13,8 @@ fn compiles(
 ) {
     let scratch = tempfile::tempdir().unwrap();
     let source = format!("{}/bench/{program}/{program}.c", env!("CARGO_MANIFEST_DIR"));
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(scratch.path())
-        .args(flags)
-        .args(["-o", "a.obj", &source])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(scratch.path()).args(flags).args(["-o", "a.obj", &source]).output().unwrap();
     assert!(output.status.success(), "{program} {flags:?}: {}", String::from_utf8_lossy(&output.stderr));
 }
 

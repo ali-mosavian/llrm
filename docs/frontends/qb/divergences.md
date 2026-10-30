@@ -31,8 +31,9 @@ SQR agree exactly.
 
 Matching BC bit for bit means calling its routine, which takes the argument
 in ST0 and returns the answer in ST0, and the call is 5 bytes where `fsin` is
-2. That is a less accurate answer for more code, so it is not done. Pinned by
-`sin-cos.bas`.
+2. That is a less accurate answer for more code, so it is not done. `sin-cos.bas`
+prints 11 decimals, where the two agree (and where an emulator's `fsin` of one
+build agrees with the next).
 
 ## A constant times a quotient
 

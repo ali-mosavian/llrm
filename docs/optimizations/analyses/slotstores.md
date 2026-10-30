@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/slotstores.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/slotstores.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/slotstores.rs sha256:5557dff34738b19adc2d65dc3bb5e9a326b3c6f3119ccba68583a00ef78f3efe -->
+<!-- src: crates/opt/llrm-analysis/src/slotstores.rs sha256:d9e2b51073b259748f7fe0f38732651ca8a1debc9c6cac2cf91111d22e9c0333 -->
 
 # slotstores
 
@@ -53,7 +53,8 @@ b2:
 not exact. Consumer: [`crate::alias`](alias.md) (`point_values`).
 
 ## Needs
-[`crate::memory`](memory.md) (`MemRef`, `Unit::exposed`), [`crate::cfg`](cfg.md).
+[`crate::basicaa`](basicaa.md) (`object_cell`), [`crate::memory`](memory.md) (`Unit::exposed`),
+[`crate::cfg`](cfg.md).
 
 ## See also
 LLVM `PromoteMemToReg`

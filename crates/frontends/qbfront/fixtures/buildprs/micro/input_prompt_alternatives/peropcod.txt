@@ -1,3 +1,0 @@
-opStInput|x
-opInputEos|x
-opFnAbs|x

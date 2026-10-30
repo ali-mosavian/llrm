@@ -9,6 +9,9 @@
    &HB800 is video memory). */
 #include "rtinit.h"
 
+#pragma aux b_seg "b$seg"
+#pragma aux B_DSG0 "B$DSG0"
+
 unsigned short b_seg;
 
 void B_DSG0(void)
@@ -25,6 +28,3 @@ void defseg_xinit(void)
 {
     qb_comp_add(&comp);
 }
-
-#pragma aux b_seg "b$seg"
-#pragma aux B_DSG0 "B$DSG0"

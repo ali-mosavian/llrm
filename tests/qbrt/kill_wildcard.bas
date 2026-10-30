@@ -1,0 +1,24 @@
+' KILL with * and ?: every match goes, directories stay, no match is File not found (53)
+DEFINT A-Z
+ON ERROR GOTO h
+MKDIR "QBKWD"
+FOR i = 1 TO 3
+  OPEN "QBKWD\F" + CHR$(48 + i) + ".TMP" FOR OUTPUT AS #1
+  CLOSE #1
+NEXT
+OPEN "QBKWD\KEEP.DAT" FOR OUTPUT AS #1
+CLOSE #1
+MKDIR "QBKWD\F9.TMP"
+KILL "QBKWD\F?.TMP"
+KILL "QBKWD\F?.TMP"
+KILL "QBKWD\NOSUCH*.*"
+FILES "QBKWD\*.*"
+KILL "QBKWD\*.*"
+FILES "QBKWD\*.*"
+RMDIR "QBKWD\F9.TMP"
+RMDIR "QBKWD"
+PRINT "done"
+END
+h:
+PRINT "error"; ERR; "at"; ERL
+RESUME NEXT

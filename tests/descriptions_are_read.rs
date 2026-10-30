@@ -24,19 +24,31 @@ const NAMED: &[(&str, &str)] = &[
     ("calling.toml", "*.result.*"),
     ("platform.toml", "physical.*"),
     ("datalayout.toml", "pointers.*"),
-    ("pc-ports.toml", "port.*"),
-    ("dos.toml", "port.*"),
-    ("pc-ports.toml", "ports.*"),
-    ("dos.toml", "foreign.*"),
+    ("ports.toml", "port.*"),
+    ("real16.toml", "port.*"),
+    ("ports.toml", "ports.*"),
+    ("real16.toml", "foreign.*"),
     // Every integer of an OS facts file is defined for the assembler
     // as -DDOS_<KEY>: the mechanism reads them all.
     ("facts.toml", "*"),
     ("facts.toml", "errors.*"),
     ("os.toml", "heap_bytes"),
+    // The standard handles are the interface's `handles` names, each looked up
+    // here.
+    ("os.toml", "handles.*"),
     // The error codes are a table the interface maps over, whatever their
     // names.
     ("interface.toml", "errors.*"),
+    // A dialect's flags are a table the instruction reader and the rule
+    // generator map over by the names rows and rules give.
+    ("dialect.toml", "flags.*"),
+    // An instruction-set catalog is a table keyed by feature name.
+    ("features.toml", "*"),
 ];
+
+/// A tune file names its instruction forms: `Timings::parse_tuned` looks each
+/// one up by the form a target's `timings.times` row names.
+const TUNE_NAMED: &[&str] = &["clocks.*", "latency.*"];
 
 /// The files git tracks under `directories` of `root`: what the repository
 /// holds, not what a build, a virtualenv or an editor left beside it (a
@@ -58,11 +70,13 @@ fn tracked(
 }
 
 fn descriptions() -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = tracked(Path::new(ROOT), &["crates/target", "runtime"])
+    let mut found: Vec<PathBuf> = tracked(Path::new(ROOT), &["crates/target", "runtime", "machine"])
         .into_iter()
         .filter(|path| {
             let name = path.file_name().unwrap().to_string_lossy();
-            let in_src = path.components().any(|one| one.as_os_str() == "src" || one.as_os_str() == "runtime")
+            let in_src = path
+                .components()
+                .any(|one| one.as_os_str() == "src" || one.as_os_str() == "runtime" || one.as_os_str() == "machine")
                 || name == "platform.toml";
             in_src
                 && (matches!(
@@ -177,7 +191,9 @@ fn every_toml_key_has_a_reader() {
         let mut all = Vec::new();
         keys("", &toml::Value::Table(value), &mut all);
         for (at, key) in all {
-            let named = NAMED.iter().any(|(file, pattern)| *file == name && matches(pattern, &at));
+            let named = NAMED.iter().any(|(file, pattern)| *file == name && matches(pattern, &at))
+                || (path.to_string_lossy().contains("/machine/tune/")
+                    && TUNE_NAMED.iter().any(|pattern| matches(pattern, &at)));
             // A reader that takes the key through a closure or a helper:
             // `name("code")`, `number("fixed")`.
             let called = regex::Regex::new(&format!(r#"(?:\w\(|,\s*)"{}"\s*[,)]"#, regex::escape(&key))).unwrap();
@@ -252,17 +268,21 @@ fn an_untracked_file_is_not_a_reader() {
     assert!(found.contains("tracked_key") && !found.contains("unread_key"), "{found}");
 }
 
-/// `x86.instr` is read by one parser, in the family crate every x86 target
-/// shares: m16's copy was `#[path]`-included by the build script and the rule
-/// generator, and a second reader would be a second schema.
+/// A target's `.instr` is read by one parser, in `llrm_target::instr`: m16's
+/// copy was `#[path]`-included by the build script and the rule generator, and
+/// a second reader would be a second schema.
 #[test]
-fn x86_instr_has_one_reader_in_the_family_crate() {
+fn an_instr_description_has_one_reader_in_llrm_target_instr() {
     let root = Path::new(ROOT);
     let readers: Vec<PathBuf> = tracked(root, &["crates/target"])
         .into_iter()
-        .filter(|path| path.file_name().is_some_and(|name| name == "parse.rs"))
-        .filter(|path| fs::read_to_string(path).is_ok_and(|text| text.contains("`x86.instr`'s reader")))
+        .filter(|path| {
+            path.file_name().is_some_and(|name| name == "parse.rs" || name == "lib.rs" || name == "instr.rs")
+        })
+        .filter(|path| {
+            fs::read_to_string(path).is_ok_and(|text| text.contains("The reader of a target's instruction description"))
+        })
         .map(|path| path.strip_prefix(root).unwrap().to_path_buf())
         .collect();
-    assert_eq!(readers, [PathBuf::from("crates/target/llrm-x86/src/parse.rs")]);
+    assert_eq!(readers, [PathBuf::from("crates/target/llrm-target/src/instr.rs")]);
 }

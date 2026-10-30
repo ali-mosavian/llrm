@@ -61,10 +61,17 @@ pub struct Convention {
     pub order: Order,
     pub cleanup: Cleanup,
     pub argument_registers: Vec<String>,
+    /// The vector registers a `float` or `double` argument takes, in order,
+    /// none where floats travel in memory.
+    pub float_argument_registers: Vec<String>,
     /// The pairs an i64 argument takes, low register first.
     pub wide_pairs: Vec<[String; 2]>,
     /// Whether a register an argument skipped is free for a later one.
     pub backfill: bool,
+    /// The ABI guarantees the stack is a multiple of `stack_alignment` at every
+    /// call, whatever the callee holds: every function that calls frames
+    /// itself to it.
+    pub aligned_calls: bool,
     /// The most bytes of an integer one argument register holds, where that is
     /// more than a stack slot (a long in a 32-bit register on a 16-bit
     /// target); a slot's worth where the file gives none.
@@ -85,6 +92,10 @@ pub struct Convention {
     pub arguments_clobbered: bool,
     /// The same for the registers a result leaves in.
     pub results_clobbered: bool,
+    /// Functions of this name that no function of the module calls and whose
+    /// address is not taken keep nothing for their caller: the run-time
+    /// start-up that calls them discards every register once they return.
+    pub entry_clobbers_all: Vec<String>,
     /// The convention a variadic call uses in place of this one: it moves the
     /// arguments, not the symbol.
     pub variadic: Option<String>,
@@ -113,6 +124,15 @@ pub struct Convention {
     /// sp,N`: the 486 takes 14 clocks against 3 (Intel 240440-002), and neither
     /// GCC nor LLVM emits it.
     pub frame_enter: bool,
+    /// A size build may set the frame up after an early exit that shares its
+    /// return with the late path (the exit then jumps over the epilogue). Left
+    /// false where that jump outgrows its short form (QCport m16 -Os +9 B).
+    pub frame_wrap_split_size: bool,
+    /// The registers a frame of one stack slot pushes and pops instead of a
+    /// `sub`/`add` of the stack pointer: the pushed one holds nothing a
+    /// push may not read, the popped one is a caller-saved register no result
+    /// or tail call argument is in.
+    pub frame_slot_scratch: Option<(String, String)>,
     pub stack: String,
     /// The registers a callee keeps, the frame register among them.
     pub preserved: Vec<Kept>,
@@ -127,6 +147,16 @@ pub struct Convention {
     /// How many slots an i64 or a double takes.
     pub wide_slots: i64,
     pub variadic_float: String,
+    /// The register a variadic call sets, as a byte, to the number of vector
+    /// registers it passes arguments in (SysV AMD64's `al`); none where the
+    /// convention has no such count.
+    pub variadic_vector_register: Option<String>,
+    /// How a variadic function's `va_list` is made: absent, the arguments are
+    /// on the stack and the list points at the first; `sysv-amd64`, the
+    /// unnamed argument registers are saved in a register save area and the
+    /// list is the four-field structure that names it (X86ISelLowering's
+    /// `LowerVASTART`, `LowerFormalArguments`).
+    pub va_list: Option<String>,
     /// For an interrupt handler: what its frame pointer addresses, lowest
     /// address first, each slot's register and bytes. Empty for the rest.
     pub interrupt_frame: Vec<(String, i64)>,
@@ -170,18 +200,23 @@ pub struct Calling {
     /// whatever ABI the program has: no one else sees it, so the target's
     /// best serves. None where its default is that.
     pub private: Option<String>,
+    /// The convention an instrument gives private functions in place of
+    /// `private` (`LLRM_PRIVATE_WATCALL`), to compare the two. Never a default.
+    pub private_instrument: Option<String>,
 }
 
 const KEYS: &[&str] = &[
     "cc",
     "wide_pairs",
     "backfill",
+    "aligned_calls",
     "register_bytes",
     "sized_arguments",
     "skip_memory",
     "aggregate_arguments_in_memory",
     "arguments_clobbered",
     "results_clobbered",
+    "entry_clobbers_all",
     "variadic",
     "pops_as",
     "symbol",
@@ -192,12 +227,16 @@ const KEYS: &[&str] = &[
     "order",
     "cleanup",
     "argument_registers",
+    "float_argument_registers",
     "return_address_bytes",
     "first_argument_offset",
     "first_argument_offset_far",
     "frame",
     "frame_optional",
     "frame_enter",
+    "frame_wrap_split_size",
+    "frame_slot_push",
+    "frame_slot_pop",
     "stack",
     "preserved",
     "clobbered",
@@ -211,6 +250,8 @@ const KEYS: &[&str] = &[
     "promotion",
     "wide_slots",
     "variadic_float",
+    "variadic_vector_register",
+    "va_list",
     "like",
     "interrupt_frame",
 ];
@@ -237,7 +278,13 @@ impl Calling {
                 .ok_or_else(|| format!("calling.toml: abi.{family}.convention is not a name"))?;
             abis.insert(family.clone(), convention.to_owned());
         }
-        for (name, value) in table.iter().filter(|(name, _)| !matches!(name.as_str(), "default" | "abi" | "private")) {
+        for (name, value) in table
+            .iter()
+            .filter(|(name, _)| !matches!(
+                name.as_str(),
+                "default" | "abi" | "private" | "private_instrument"
+            ))
+        {
             let mut one = value.as_table().ok_or_else(|| format!("calling.toml: {name} is not a table"))?.clone();
             // `like = "other"`: everything `other` states that this does not.
             if let Some(like) = one.remove("like") {
@@ -261,11 +308,17 @@ impl Calling {
             .get("private")
             .map(|one| one.as_str().map(str::to_owned).ok_or("calling.toml: `private` names a convention"))
             .transpose()?;
-        let calling = Self { conventions, abis, default, private };
-        if let Some(name) = &calling.private {
-            calling
-                .named(name)
-                .ok_or_else(|| format!("calling.toml: private is the convention {name}, which is not given"))?;
+        let private_instrument = table
+            .get("private_instrument")
+            .map(|one| one.as_str().map(str::to_owned).ok_or("calling.toml: `private_instrument` names a convention"))
+            .transpose()?;
+        let calling = Self { conventions, abis, default, private, private_instrument };
+        for (key, name) in [("private", &calling.private), ("private_instrument", &calling.private_instrument)] {
+            if let Some(name) = name {
+                calling
+                    .named(name)
+                    .ok_or_else(|| format!("calling.toml: {key} is the convention {name}, which is not given"))?;
+            }
         }
         for (family, convention) in &calling.abis {
             calling
@@ -281,6 +334,11 @@ impl Calling {
     /// The convention a private function takes, where the target states one.
     pub fn private(&self) -> Option<&Convention> {
         self.private.as_deref().and_then(|name| self.named(name))
+    }
+
+    /// The convention the comparison instrument gives a private function.
+    pub fn private_instrument(&self) -> Option<&Convention> {
+        self.private_instrument.as_deref().and_then(|name| self.named(name))
     }
 
     /// Whether a function with `convention` may take the private one instead:
@@ -359,15 +417,19 @@ impl Calling {
         self.conventions.iter().find(|one| one.cc.as_deref() == Some(cc))
     }
 
-    /// The convention a MIR calling-convention number names: `ccc` and `fastcc`
-    /// the one stating `cc = "cdecl"`, any other the one whose `cc` is the
-    /// number's name without its `cc`.
+    /// The convention a MIR calling-convention number names: `ccc` the one
+    /// stating `cc = "cdecl"`, `fastcc` the one stating `cc = "fast"` or, where
+    /// there is none, C's own; any other the one whose `cc` is the number's
+    /// name without its `cc`.
     pub fn by_number(
         &self,
         number: u32,
     ) -> Option<&Convention> {
         match number {
-            0 | llrm_mir::opcode::FAST => self.by_cc("cdecl"),
+            0 => self.by_cc("cdecl"),
+            llrm_mir::opcode::FAST => self.by_cc("fast").or_else(|| self.by_cc("cdecl")),
+            // BASIC's own (`pascal far`, QB's): the one stating `cc = "basic"`.
+            llrm_mir::opcode::BASIC => self.by_cc("basic"),
             other => self
                 .by_cc(llrm_mir::opcode::CONVENTIONS.iter().find(|(_, one)| *one == other)?.0.trim_end_matches("cc")),
         }
@@ -415,6 +477,11 @@ impl Convention {
     ) -> Kind {
         let register = self.register_bytes.unwrap_or(slot);
         match () {
+            // A convention with vector argument registers (SysV x86-64) passes
+            // a float in one.
+            _ if argument.floating && !argument.memory && !self.float_argument_registers.is_empty() => {
+                Kind::Float(argument.bytes)
+            }
             _ if argument.memory || argument.floating => Kind::Memory(argument.bytes),
             _ if argument.bytes <= slot => Kind::Word,
             _ if argument.bytes <= register && argument.integer => Kind::Sized(argument.bytes),
@@ -435,6 +502,9 @@ pub enum Kind {
     Sized(i64),
     Wide,
     Memory(i64),
+    /// A `float` or `double`: the next vector register, else the stack in a
+    /// slot of its own.
+    Float(i64),
 }
 
 /// Where one argument goes.
@@ -568,12 +638,17 @@ impl Convention {
             cc: table.contains_key("cc").then(|| text("cc")).transpose()?,
             wide_pairs,
             backfill: flag("backfill")?,
+            aligned_calls: flag("aligned_calls")?,
             register_bytes: table.contains_key("register_bytes").then(|| integer("register_bytes")).transpose()?,
             sized_arguments: flag("sized_arguments")?,
             skip_memory: flag("skip_memory")?,
             aggregate_arguments_in_memory: flag("aggregate_arguments_in_memory")?,
             arguments_clobbered: flag("arguments_clobbered")?,
             results_clobbered: flag("results_clobbered")?,
+            entry_clobbers_all: match table.get("entry_clobbers_all") {
+                Some(_) => names(table.get("entry_clobbers_all"), "entry_clobbers_all")?,
+                None => Vec::new(),
+            },
             variadic: table.contains_key("variadic").then(|| text("variadic")).transpose()?,
             pops_as: table.contains_key("pops_as").then(|| text("pops_as")).transpose()?,
             symbol,
@@ -582,6 +657,10 @@ impl Convention {
             order,
             cleanup,
             argument_registers: names(table.get("argument_registers"), "argument_registers")?,
+            float_argument_registers: match table.get("float_argument_registers") {
+                Some(_) => names(table.get("float_argument_registers"), "float_argument_registers")?,
+                None => Vec::new(),
+            },
             return_address_bytes: integer("return_address_bytes")?,
             first_argument_offset: integer("first_argument_offset")?,
             first_argument_offset_far: table
@@ -591,6 +670,11 @@ impl Convention {
             frame: text("frame")?,
             frame_optional: flag("frame_optional")?,
             frame_enter: flag("frame_enter")?,
+            frame_wrap_split_size: flag("frame_wrap_split_size")?,
+            frame_slot_scratch: table
+                .contains_key("frame_slot_push")
+                .then(|| Ok::<_, String>((text("frame_slot_push")?, text("frame_slot_pop")?)))
+                .transpose()?,
             stack: text("stack")?,
             preserved,
             clobbered: names(table.get("clobbered"), "clobbered")?,
@@ -600,6 +684,11 @@ impl Convention {
             promotion: text("promotion")?,
             wide_slots: integer("wide_slots")?,
             variadic_float: text("variadic_float")?,
+            variadic_vector_register: table
+                .contains_key("variadic_vector_register")
+                .then(|| text("variadic_vector_register"))
+                .transpose()?,
+            va_list: table.contains_key("va_list").then(|| text("va_list")).transpose()?,
             interrupt_frame: match table.get("interrupt_frame") {
                 None => Vec::new(),
                 Some(rows) => rows
@@ -633,6 +722,12 @@ impl Convention {
             .map(|(_, registers)| registers.as_slice())
     }
 
+    /// The vector register a `float` or `double` result leaves in, where the
+    /// convention has one.
+    pub fn float_result_register(&self) -> Option<&str> {
+        self.results.get("float")?.first().map(String::as_str)
+    }
+
     /// Where `arguments` go: each takes the first register free, an i64 the
     /// first pair with both free; the first that fits no register, and all
     /// after it, go on the stack, each at least a slot. Without `backfill`,
@@ -643,7 +738,21 @@ impl Convention {
         &self,
         arguments: &[Kind],
     ) -> Placement {
+        self.place_reserving(arguments, &[])
+    }
+
+    /// `place` with `reserved` registers already taken: the hidden pointer of a
+    /// struct result.
+    pub fn place_reserving(
+        &self,
+        arguments: &[Kind],
+        reserved: &[&str],
+    ) -> Placement {
         let mut free: Vec<bool> = vec![true; self.argument_registers.len()];
+        for (index, name) in self.argument_registers.iter().enumerate() {
+            free[index] = !reserved.contains(&name.as_str());
+        }
+        let mut float_free = 0;
         let at = |name: &String| self.argument_registers.iter().position(|one| one == name);
         let mut places = Vec::new();
         let mut used = Vec::new();
@@ -659,8 +768,15 @@ impl Convention {
                         both.iter().all(|&index| free[index]).then_some(both)
                     }),
                     Kind::Memory(_) => None,
+                    Kind::Float(_) => None,
                 }
             };
+            if let (Kind::Float(_), Some(register)) = (kind, self.float_argument_registers.get(float_free)) {
+                float_free += 1;
+                used.push(register.clone());
+                places.push(Place::Registers(vec![register.clone()]));
+                continue;
+            }
             match found {
                 Some(registers) => {
                     if !self.backfill {
@@ -682,7 +798,7 @@ impl Convention {
                         Kind::Word => self.slot_bytes,
                         Kind::Sized(bytes) => bytes.max(self.slot_bytes),
                         Kind::Wide => self.slot_bytes * self.wide_slots,
-                        Kind::Memory(bytes) => bytes.max(self.slot_bytes),
+                        Kind::Memory(bytes) | Kind::Float(bytes) => bytes.max(self.slot_bytes),
                     };
                     stack += (bytes + self.slot_bytes - 1) / self.slot_bytes * self.slot_bytes;
                 }

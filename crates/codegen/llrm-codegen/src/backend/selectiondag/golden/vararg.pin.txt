@@ -1,0 +1,31 @@
+Initial selection DAG: %bb.0 'sum:'
+SelectionDAG has 16 nodes:
+  t0: ch,glue = EntryToken
+  t3: i32,ch = load<(load (s32) from %fixed-stack.1)> t0, FrameIndex:i32<-1>, poison:i32
+  t6: ch = vastart t0, FrameIndex:i32<0>, SrcValue:ch<0x5e9ead205060>
+  t7: i32 = Constant<0>
+  t8: i32,ch = load<(dereferenceable load (s32) from %ir.ap)> t6, FrameIndex:i32<0>, poison:i32
+  t9: i32,ch = load<(load (s32) from %ir.p)> t6, t8, poison:i32
+      t10: ch = TokenFactor t8:1, t9:1
+    t11: ch = vaend t10, FrameIndex:i32<0>, SrcValue:ch<0x5e9ead205060>
+  t14: ch,glue = CopyToReg t11, Register:i32 $eax, t9
+  t15: ch = X86ISD::RET_GLUE t14, TargetConstant:i32<0>, Register:i32 $eax, t14:1
+
+
+
+Initial selection DAG: %bb.0 'copy:'
+SelectionDAG has 19 nodes:
+  t0: ch,glue = EntryToken
+  t3: i32,ch = load<(load (s32) from %fixed-stack.1)> t0, FrameIndex:i32<-1>, poison:i32
+    t6: ch = vastart t0, FrameIndex:i32<0>, SrcValue:ch<0x5e9ead20bf60>
+  t9: ch = vacopy t6, FrameIndex:i32<1>, FrameIndex:i32<0>, SrcValue:ch<0x5e9ead20bfe0>, SrcValue:ch<0x5e9ead20bf60>
+  t10: i32 = Constant<0>
+  t11: i32,ch = load<(dereferenceable load (s32) from %ir.bp)> t9, FrameIndex:i32<1>, poison:i32
+  t12: i32,ch = load<(load (s32) from %ir.p)> t9, t11, poison:i32
+      t13: ch = TokenFactor t11:1, t12:1
+    t14: ch = vaend t13, FrameIndex:i32<1>, SrcValue:ch<0x5e9ead20bfe0>
+  t17: ch,glue = CopyToReg t14, Register:i32 $eax, t12
+  t18: ch = X86ISD::RET_GLUE t17, TargetConstant:i32<0>, Register:i32 $eax, t17:1
+
+
+

@@ -5,8 +5,8 @@ RUNS runs, one process each, source to object (`-m32`, no assembler or linker st
 
 Writes $VSGCC_WORK/levels_time.json and prints the tables. `--extra DIR` adds the `*.c` under DIR that gcc and clang both
 accept; the x_* kernels in `kernels/` are always in. What each side times, as `perf stat -e instructions:u` counts it (children included):
-  llrm-c   C front end (its preprocessor included), HIR, MIR passes, instruction selection, register allocation, OMF object
-           writer; one process.
+  llrm-cc  the driver, clang's front end (the preprocessor included), then llrm-llc: MIR passes, instruction selection, register
+           allocation, OMF object writer; three processes.
   gcc -c   the driver, cc1 (preprocessor and compiler) and `as`; three processes.
   clang -c the driver and the cc1 process with its integrated assembler.
 `empty.c` is compiled the same way at every level: what a compiler spends on nothing, to read the rest against.
@@ -17,6 +17,7 @@ from pathlib import Path
 R = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(R / "tools"))
 import llrmbin
+import pin_clang
 import benchlist
 
 O = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
@@ -33,7 +34,9 @@ UNRANDOMIZED = ["setarch", "-R"]
 
 def command(compiler: str, level: str, source: Path, bits: int = 32) -> list[str]:
     if compiler == "llrm":
-        return [str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-c")), f"-m{bits}", *(["-march=i486"] if bits == 32 else []), f"-{level}", "-o", "/dev/null", str(source)]
+        return [str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-cc")), *llrmbin.c_args(bits), f"-{level}", "-c", "-o", llrmbin.OBJECT, str(source)]
+    if compiler == "clang":
+        compiler = pin_clang.path()  # not PATH's: the distro's 20.1.8 is not the pin
     return [compiler, *FLAGS, f"-{level}", "-c", "-o", "/dev/null", str(source)]
 
 
@@ -62,7 +65,7 @@ def counted(cmd: list[str], env: dict | None = None, preexec=None, timeout: floa
     import resource
 
     before = resource.getrusage(resource.RUSAGE_CHILDREN)
-    with tempfile.NamedTemporaryFile("r") as out:
+    with tempfile.NamedTemporaryFile("r") as out, llrmbin.with_object(cmd) as cmd:
         if backend() == "perf":
             wrapped = ["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, "--"]
         else:  # the tool's own messages go to a file, so the command's stderr is its own

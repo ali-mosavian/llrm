@@ -1,2 +1,0 @@
-opCircleStart|x
-opFnAbs|x

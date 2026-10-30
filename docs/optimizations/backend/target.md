@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/target.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/target.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/target.rs sha256:d2857bc8a2074f4a6f60af9c3cf3116ddc29a989fb65ffd4a8620e3c880babd0 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/target.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/target.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/target.rs sha256:3a04cf13a807ad2db6a7af80ecc9de9bb666394fb6c8c314a6b7e390b6a8eaea -->
 
 # target
 
@@ -40,10 +40,10 @@ No honest example: the module is tables and queries (`Need`, `order`,
 show each answer.
 
 ## Used by
-[`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md),
+[`crate::backend::allocate`](allocate.md), `crate::coalescer::pass`,
 [`crate::backend::constrain`](constrain.md), [`crate::backend::datagroup`](datagroup.md),
 [`crate::backend::regclass`](regclass.md), [`crate::backend::parcopy`](parcopy.md),
-[`crate::backend::ssaspill`](ssaspill.md) and [`crate::backend::masm`](masm.md) (register names).
+`crate::backend::ssaspill` and [`crate::backend::masm`](masm.md) (register names).
 
 ## See also
 LLVM's

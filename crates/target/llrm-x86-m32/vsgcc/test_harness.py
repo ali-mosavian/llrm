@@ -68,15 +68,14 @@ def test_every_result_reproduces_the_benchmark_output():
         assert r["ok"], (r["prog"], r["variant"], r["got"])
 
 
-def test_build_script_flags_are_accepted_by_llrm_c():
-    """build.sh/ctime.py passed the removed --target: every llrm build failed with exit 2 and run.sh printed no tables."""
+def test_build_script_flags_are_accepted_by_llrm_cc():
+    """build.sh/ctime.py passed a flag the compiler refused: every llrm build failed with exit 2 and run.sh printed no tables."""
     import subprocess
     if not harness.LLRM.exists():
-        pytest.skip(f"no llrm-c at {harness.LLRM}")
-    out = subprocess.run([str(harness.LLRM), "-m32", "-O2", "-march=i486", "-fno-inline-functions", "-o", "/dev/null", str(BENCH / "sieve/sieve.c")], capture_output=True, text=True)
+        pytest.skip(f"no llrm-cc at {harness.LLRM}")
+    out = subprocess.run([str(harness.LLRM), *harness.llrmbin.c_args(32), "-O2", "-fno-inline-functions", "-c", "-o", "/dev/null", str(BENCH / "sieve/sieve.c")], capture_output=True, text=True, env=harness.cc_env())
     assert out.returncode == 0, out.stderr
     here = Path(__file__).parent
-    assert "--target" not in (here / "build.sh").read_text() + (here / "ctime.py").read_text()
 
 
 def test_a_multiply_costs_what_its_multiplier_is():
@@ -96,13 +95,13 @@ def test_llrm_is_built_in_the_convention_gcc_uses_and_its_report_is_read_from_th
     assert harness.built_abi() == "sysv"
     result = harness.run("fib", "llrm")
     assert result["reports"] == expected("fib"), result["reports"]
-    listing = subprocess_text([str(harness.LLRM), "-m32", "-mabi=sysv", "-O2", "-march=i486", "-S", "-o", "/dev/stdout", str(BENCH / "fib/fib.c")])
+    listing = subprocess_text([str(harness.LLRM), *harness.llrmbin.c_args(32), "-mabi=sysv", "-O2", "-S", "-o", "/dev/stdout", str(BENCH / "fib/fib.c")])
     assert "_fib proc" in listing and "fib_ proc" not in listing, "sysv names are undecorated"
 
 
 def subprocess_text(argv):
     import subprocess
-    done = subprocess.run(argv, capture_output=True, text=True)
+    done = subprocess.run(argv, capture_output=True, text=True, env=harness.cc_env())
     assert done.returncode == 0, done.stderr
     return done.stdout
 
@@ -191,3 +190,14 @@ def test_nbody_executes_no_misaligned_operand_at_any_level(built):
     With the entry right, a hole of 12 bytes for spills moved the arrays of -O1/-O2/-Os to 4 mod 8: 18,404 operands, +55,212 clocks."""
     for variant in ("llrmO1", "llrm", "llrmO3", "llrmOs"):
         assert harness.run("nbody", variant)["misaligned"] == 0, variant
+
+
+def test_code_bytes_counts_text_only_not_the_unwind_tables_the_pin_emits(tmp_path, monkeypatch):
+    """The pin's llc object carries .eh_frame (56 B on x_switch) and ours none: summing sections read 419 against ours 379, where the code was 363 against 379 (w12)."""
+    import subprocess
+    (tmp_path / "b").mkdir()
+    (tmp_path / "t.s").write_text(".text\n.fill 100,1,0x90\n.section .eh_frame,\"a\"\n.fill 56,1,0\n.data\n.long 1\n")
+    done = subprocess.run(["gcc", "-m32", "-c", str(tmp_path / "t.s"), "-o", str(tmp_path / "b" / "p.pinllc.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    monkeypatch.setattr(harness, "OUT", tmp_path)
+    assert harness.code_bytes("p", "pinllc") == 100

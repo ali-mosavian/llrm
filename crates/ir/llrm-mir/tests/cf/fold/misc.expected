@@ -1,0 +1,32 @@
+m 0 phi i32 5
+m 1 phi -
+m 2 phi i32 7
+m 3 phi i32 undef
+m 4 select i32 1
+m 5 select i32 2
+m 6 select i32 poison
+m 7 freeze i32 5
+m 8 freeze -
+m 9 freeze ptr @g
+m 10 extractvalue i32 3
+m 11 extractvalue i1 1
+m 12 extractvalue i32 0
+m 13 insertvalue %P { i32 9, i1 1 }
+m 14 insertvalue %P { i32 0, i1 1 }
+m 15 insertvalue [2 x i32] zeroinitializer
+m 16 add i32 3
+m 17 add i32 poison
+m 18 udiv i32 poison
+m 19 sdiv i32 poison
+m 20 shl i32 poison
+m 21 and i32 0
+m 22 sub i64 3
+m 23 add i128 0
+m 24 mul i7 44
+m 25 lshr i64 1
+m 26 ashr i64 18446744073709551615
+m 27 xor i64 ptrtoint (ptr @g)
+m 28 or i32 4294967295
+m 29 trunc i8 44
+m 30 icmp i1 0
+m 31 alloca -

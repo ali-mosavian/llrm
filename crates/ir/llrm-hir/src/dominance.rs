@@ -1,9 +1,9 @@
 //! Every value an instruction or terminator uses is defined where the
 //! definition dominates the use: earlier in the same block, or in a block
 //! that dominates it. A parameter dominates everything. The one dominator
-//! computation is `llrm-support`'s (`graph`).
+//! computation is `llrm-mir`'s (`domtree`).
 
-use llrm_support::graph::{Node, dominance};
+use llrm_mir::domtree_address::AddressDominance;
 use llrm_support::hash::HashMap;
 
 use crate::model::{Function, Operand};
@@ -11,16 +11,6 @@ use crate::model::{Function, Operand};
 struct Edges {
     id: i64,
     to: Vec<i64>,
-}
-
-impl Node for Edges {
-    fn at(&self) -> i64 {
-        self.id
-    }
-
-    fn succ(&self) -> &[i64] {
-        &self.to
-    }
 }
 
 /// The values `operand` reads: the value itself, a place's base or origin,
@@ -53,7 +43,7 @@ pub fn check(function: &Function) -> Result<(), String> {
     let mut edges: Vec<Edges> =
         function.blocks.iter().map(|one| Edges { id: one.id, to: one.terminator.targets.clone() }).collect();
     edges.push(Edges { id: root, to: entries.collect() });
-    let dominance = dominance(&edges, Some(root));
+    let dominance = AddressDominance::of(edges.iter().map(|one| (one.id, one.to.as_slice())), Some(root));
     // Where each value is defined: block, and position in it.
     let mut defined: HashMap<i64, (i64, usize)> = HashMap::default();
     for block in &function.blocks {

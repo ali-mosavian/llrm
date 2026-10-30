@@ -1,0 +1,6 @@
+t 0 load i32 1
+t 1 load i16 0
+t 2 load i64 4294967298
+t 3 load i32 16909056
+t 4 load i32 50332675
+t 5 load i8 1

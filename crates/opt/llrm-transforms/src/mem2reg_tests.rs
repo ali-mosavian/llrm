@@ -197,7 +197,7 @@ b0:
 }
 
 /// The pipeline the compilers run, with `Options::mem2reg` (what
-/// `LLRM_EXP_MEM2REG` sets): a local scalar and a loop-carried local leave no
+/// the default sets): a local scalar and a loop-carried local leave no
 /// alloca, and the answer is the same as with the write-through `Promote`.
 #[test]
 fn test_the_pipeline_with_mem2reg_on_leaves_no_alloca_and_the_same_answer() {
@@ -253,4 +253,136 @@ done:
     assert!(!printed_on.contains("alloca"), "{printed_on}");
     let inputs: [&[i128]; 3] = [&[0], &[1], &[10]];
     assert_eq!(crate::testing::results(&on, &inputs), crate::testing::results(&off, &inputs));
+}
+
+/// Old: a load of memory nothing wrote was `poison`, and a read-modify-write of
+/// a fresh bitfield poisoned its container (`and poison, -8` is poison), so
+/// `v.x = 5; return v.x` folded wrong. Then it was the zero of the type; the
+/// pin gives `undef` (PromoteMemoryToRegister.cpp#L914).
+#[test]
+fn test_a_read_of_unwritten_memory_is_undef_not_poison() {
+    let after = promoted(
+        "define i8 @f() {
+b0:
+  %s = alloca i8
+  %x = load i8, ptr %s
+  %y = and i8 %x, -8
+  %z = or i8 %y, 5
+  store i8 %z, ptr %s
+  %r = load i8, ptr %s
+  ret i8 %r
+}
+",
+    );
+    assert!(!after.contains("poison") && !after.contains("alloca"), "{after}");
+    assert!(after.contains("and i8 undef, -8"), "{after}");
+}
+
+/// The value on entry to a phi is undef as well: one arm stores, the other
+/// reaches the join with the slot unwritten.
+#[test]
+fn test_the_entry_value_of_a_slot_at_a_join_is_undef() {
+    let after = promoted(
+        "define i32 @f(i32 %a, i1 %c) {
+b0:
+  %s = alloca i32
+  br i1 %c, label %b1, label %b2
+b1:
+  store i32 %a, ptr %s
+  br label %b2
+b2:
+  %x = load i32, ptr %s
+  ret i32 %x
+}
+",
+    );
+    assert!(!after.contains("poison"), "{after}");
+    assert!(after.contains("phi i32") && after.contains("undef, %b0"), "{after}");
+    let after = promoted(
+        "define ptr @g() {
+b0:
+  %s = alloca ptr
+  %x = load ptr, ptr %s
+  ret ptr %x
+}
+",
+    );
+    assert!(after.contains("ret ptr undef"), "{after}");
+}
+
+/// Old: `struct { int x:3, y:5; } v; v.x = 5; v.y = 3; return v.x * 8 + v.y`
+/// read the fresh container as poison and the optimized program returned
+/// poison instead of -21 (clang -O2). Undef reads as any value, and the
+/// masks keep only the written bits, so the full pipeline returns -21.
+#[test]
+fn test_a_bitfield_read_modify_write_on_a_fresh_container_returns_what_clang_does() {
+    let text = "define i16 @f() {
+b0:
+  %s = alloca i8
+  %c0 = load i8, ptr %s
+  %m0 = and i8 %c0, -8
+  %w0 = or i8 %m0, 5
+  store i8 %w0, ptr %s
+  %c1 = load i8, ptr %s
+  %m1 = and i8 %c1, 7
+  %w1 = or i8 %m1, 24
+  store i8 %w1, ptr %s
+  %c2 = load i8, ptr %s
+  %l = shl i8 %c2, 5
+  %x8 = ashr i8 %l, 5
+  %x = sext i8 %x8 to i16
+  %c3 = load i8, ptr %s
+  %y8 = ashr i8 %c3, 3
+  %y = sext i8 %y8 to i16
+  %xs = mul i16 %x, 8
+  %r = add i16 %xs, %y
+  ret i16 %r
+}
+";
+    use llrm_mir::program::Program;
+
+    use crate::pipeline::{self, Applied};
+    let mut module = module(text);
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = crate::testing::printed(&module);
+    assert!(!printed.contains("poison") && !printed.contains("alloca"), "{printed}");
+    assert_eq!(
+        crate::testing::results(&module, &[&[]]),
+        vec![llrm_mir::interpret::Val::Int { bits: 0xffeb, width: 16 }]
+    );
+}
+
+/// A load whose value is stored back and loaded again in one block: the
+/// second load took the first's value, which the first load's own
+/// replacement then left behind (the `zext` that SROA builds from the
+/// loaded byte of 20000801-1 read an erased load, and ADCE panicked on
+/// it). Each load takes the store's value as it is when the load is
+/// replaced; the first load comes first on the alloca's list of uses once a
+/// pass has rebuilt it.
+#[test]
+fn test_a_load_stored_and_loaded_again_leaves_no_erased_value_behind() {
+    let mut module = module(
+        "define i32 @f(i32 %a) {
+b0:
+  %s = alloca i32
+  store i32 %a, ptr %s
+  %x = load i32, ptr %s
+  store i32 %x, ptr %s
+  %y = load i32, ptr %s
+  %z = add i32 %y, 1
+  ret i32 %z
+}
+",
+    );
+    let function = crate::testing::f(&mut module);
+    let first = function.iter_block(function.layout()[0]).nth(2).expect("the first load");
+    let pointer = function.instruction(first).operands[0];
+    function.set_operand(first, 0, pointer);
+    let after = managed(&mut module, Mem2Reg);
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    assert!(after.contains("add i32 %a, 1"), "{after}");
 }

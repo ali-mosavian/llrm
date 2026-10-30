@@ -34,8 +34,65 @@ Each old analysis keeps a zero-callers counter (`LLRM_DEBUG=analyses`): when no 
 
 ## Run counts per level
 
-The run count per slot must match LLVM's. Today `loopsimplify`/`lcssa` run 3 times per body at every level against LLVM's 1 to 1.5 per function (d_faces -O2: 36 and 11 bodies vs 16). The fix is a row of this page.
+The run count per slot must match LLVM's. `parity::RUNS_PER_BODY` states it and `check_run_counts` checks a compile's `LLRM_DEBUG=runs` lines: `gvn@787` once per body. On d_faces -O2 under the order `gvn` runs 12 times over 11 functions (clang 11): the twelfth is the one body the interprocedural stage (`ipa-range`, after the function pipeline here, `ipsccp` before it in LLVM) sends back through the Simplify list. The old rounds ran it 35 times. At -O1 the order still runs `gvn` (11 times); clang's -O1 has none, a levels row. `loopsimplify`/`lcssa` run at three unconditional slots per body (x_hanoi2: ours 9/9/15/9 at -O1/-O2/-O3/-Os against LLVM's 4/10/10/10): stated in `parity::RUN_COUNTS_OPEN`, not yet checked.
+
+## A/Bs against the old rounds
+
+
+## Recount of the registry
+
+The count of record is the registry's own recount: `LLRM_DEBUG=counts llrm-c -O2 f.c -S -o /dev/null 2>&1 | grep '^\[parity\]'` prints it from `parity.rs` of the build it runs, the same at every level (it counts the registry, not the built list): all slots by state (Partial counted apart from Translated), each phase's slots, the analyses. No page or test pins a number: `parity_tests.rs` checks that the tally and the printed lines are the recount of the rows by kind, so a PR that moves a slot edits its row and nothing else.
+
+`parity::check_phase` fails when a slot the registry calls Old or Missing holds a translated pass (`FunctionPass::translation`), and when a Translated or Partial slot is not run, so a wiring PR updates its row in the same commit. A Partial row says what is done and what is left (`criterion:` and `exit:`); stage landings inside a row the registry counts as one slot (SimplifyCFG pieces under `decide@N`, LSR, jumps) do not move the count until the row's own criterion is met.
+
+Every analysis the manager computes has a row in `parity::ANALYSES` and a `[parity] analysis <key> <kind> <type>` line. An Old row says what replaces it (`replaced_by`; "none" is a DEVIATE or delete candidate). `tools/old_analysis_callers.py` reads its list of old analyses from these lines, not from a file of its own.
+
+`rotate@728` is on (off only where unroll-and-jam runs). `jumpthreading@668/@809` run by default; `LLRM_NO_JUMPTHREADING` (set) turns them off. Every other Translated or Partial slot runs under the order; `LLRM_NO_LLVM_ORDER` turns the order off.
 
 ## Scoreboard
 
-Under the parity switch `LLRM_DEBUG=time` prints instructions per slot, and the rows report the per-slot totals next to LLVM's (`-time-passes`-equivalent). Not built yet.
+What exists: `LLRM_DEBUG=runs` prints each step's own work with the body's `in=`/`out=` instruction counts and the function name, and `LLRM_DEBUG=counts` prints `callers <analysis> J joined O old`: how many times a joined (Translated) slot and an old one made the manager compute each analysis; an analysis with no old caller can be deleted. A per-slot instruction table is built by hand from the runs lines; there is no automatic table yet.
+
+## Road to parity
+
+Target: every bucket at most 1.5x clang's, `d_faces` -O2. Figures are M instructions, llrm / clang, from llvm-difftest's projection (callgrind, per-pass inclusive; per-pass llrm figures are upper bounds). Owner `?` is unassigned.
+
+| bucket | llrm / clang M | translations | owner | blocker | target M |
+|---|---|---|---|---|---|
+| SimplifyCFG + JumpThreading | 343 / 20 | `SimplifyCFG.cpp`, `JumpThreading.cpp` | scalar-cleanup-port | DomTree and LVI joins; run counts | 30 |
+| InstCombine | 243 / 42 | `InstCombine*.cpp` onto InstSimplify | fold-poc | InstSimplify join | 63 |
+| regalloc | 276 / 42 | `RAGreedy`, `SplitKit`, region splitting | regalloc-core-poc | greedy not default | 63 |
+| llrm-only analyses | 599 / 57 | BasicAA, SCEV, BPI/BFI, MemorySSA, LVI behind the managers | cgscc-poc, scev-port | BasicAA S3 and SCEV S3 migrations | 86 |
+| glue | 390 / 99 | CGSCC FunctionAttrs walk, emission, C front end | cgscc-poc, backend-slopes, hir-branch-icmp-2211 | glue-plan steps | 149 |
+| loop passes + LSR | 120+ / 10+ | rotate, unroll, peel, unswitch, `LoopStrengthReduce.cpp` | loop-passes-port, loop-products-slope | SCEV S3 to S5 | 15 |
+| machine clean-up + FPS | 171 / 23 | MachineCopyPropagation, `X86FloatingPoint.cpp` | backend-slopes | greedy default | 35 |
+
+Order:
+
+1. Join the existing translations: EarlyCSE, SROA/mem2reg, GVN, InstSimplify, DomTree. Done when GVN's body is at most 1.2x clang's and the run counts are equal.
+2. SimplifyCFG, InstCombine, LICM.
+3. Migrations off BasicAA S3 and SCEV S3. Critical path: the loop, BPI/BFI and LSR rows wait on them.
+4. Backend: greedy default, MachineCopyPropagation, FPS.
+5. Glue: the CGSCC FunctionAttrs walk, emission, the front end.
+6. In parallel: ilist block storage and use lists.
+
+### Scoreboard table
+
+llvm-difftest fills this every half hour; one row per bucket, instrument stated in the header.
+
+| bucket | llrm M | clang M | ratio | target M | main |
+|---|---|---|---|---|---|
+| SimplifyCFG + JumpThreading | | | | 30 | |
+| InstCombine | | | | 63 | |
+| regalloc | | | | 63 | |
+| llrm-only analyses | | | | 86 | |
+| glue | | | | 149 | |
+| loop passes + LSR | | | | 15 | |
+| machine clean-up + FPS | | | | 35 | |
+| total | | | | | |
+
+## Backend DEVIATEs
+
+| id | where | deviation | owner, date | exit |
+|----|-------|-----------|-------------|------|
+| D-SB1 | `isel/wide.rs` `narrow_divisor`, the idiv test; `isel.rs` `significant_bits` | the divisions count sign bits with the old `valuetracking::sign_bits`, not the translated `compute_num_sign_bits`: with it, x_ll_div ran +8% and switch +10% in clocks (two dword `idiv`s for the helper; `x % 65537` as `idiv` for the reciprocal) | w-1, 2026-10-20 | price two dword divisions against the helper, and the reciprocal against `idiv`, from the target description's table; then use the translated count |

@@ -85,7 +85,7 @@ pick the writer from the object format and the `-g` flavor, and the backend buil
    the register holds it for the whole body; a parameter the code overwrites has no one place and is left
    out; DWARF gets its ranges. A parameter in two registers (a pair) is still left out
    (at `-O0` no frontend produces one; with optimization [#1368](https://github.com/ali-mosavian/llrm/issues/1368)). Tests:
-   `crates/frontends/llrm-nib/src/test_debug.rs`, `tests/cv4.rs`.
+   `crates/frontends/nib/src/test_debug.rs`, `tests/cv4.rs`.
 4. `valuetrack.rs` follows the emitted code along every path (LLVM's instruction-referencing
    LiveDebugValues): isel marks which instructions define a named value, masm marks where each landed, and
    the tracker says where each variable is, in a register or a cell. Where the code cannot be followed or the
@@ -100,6 +100,15 @@ per scope (CodeView 4, Turbo Debugger) says a variable only where one place hold
 cell, or one register the code keeps it in from its first value to the end of the body. A variable in
 several places is left out, and no store is added to make it sayable. `tools/g-identical.sh` and the tests `g_leaves_the_code_of_the_bench_programs_alone` and
 `g_leaves_the_code_of_the_basic_and_nib_bench_programs_alone` (`tests/dwarf.rs`) hold the rule.
+
+## Clang's debug nodes in MIR
+
+The MIR parser and printer carry what clang writes for `-g`, unchanged: specialized nodes (`!DILocation(line: 3, column: 5, scope: !10)`,
+`DISubprogram`, `DILocalVariable`, `DIBasicType`, `DIDerivedType`, `DICompositeType`, `DIEnumerator`, `DISubrange`, `DIGlobalVariableExpression`,
+`DIExpression`...; `Module.special` names each node's kind and fields, its operands are the values in order, flag sets such as `A | B` are
+words), `#dbg_declare(ptr %x, !var, !DIExpression(), !loc)` records (`DebugRecord.expression`, `.location`), and `!dbg !N` on a `define` or a
+variable (`Function.metadata`, `Module.global_metadata`). Nothing reads them yet: turning them into the model above is the next step
+(the import and the writer are the following steps). Test: `crates/ir/llrm-mir/tests/di_roundtrip.rs`.
 
 ## Flags
 
@@ -178,7 +187,7 @@ No gap by construction: BASIC's CodeView dialect has no register record (QB loca
 | `tests/cv4.rs` | LINK `/CO` and CVPACK take an llrm object and CodeView, driven under DOSBox-X, shows variables, enums, constants, register variables and block scopes; Nib too |
 | `tests/turbo.rs` | `TLINK /v` and `TDUMP` agree with Turbo C++ on the module table; Turbo Debugger shows the same watch values |
 | `tests/objwriters.rs` | LLVM tools read every bench COFF object and its CodeView; `lld-link` makes a PDB |
-| `crates/target/llrm-dwarf/src/tests.rs` | unit headers, relocations, line table, frame rows, `llvm-dwarfdump --verify` per class and version |
+| `crates/mc/llrm-dwarf/src/tests.rs` | unit headers, relocations, line table, frame rows, `llvm-dwarfdump --verify` per class and version |
 | `tools/dwarf-coverage.sh llrm-c` | per level, how many source variables have a location and what share of their scope bytes it covers, against gcc |
 | `tools/debug-matrix.py` | the matrix of #1338; every OMF DWARF cell is valid under `jwlink` and `wdump` (which reads DWARF 2 and 3 only, so OMF cells use `-gdwarf-2`; 32-bit `-gdwarf 4`/`5` crashes `wdump`) |
 | the emulator fork's symbol tests ([`tests/symbols/qb`](https://github.com/ali-mosavian/dosbox-x/blob/main/tests/symbols/qb/README.md)) | QuickBASIC images at `-m16` and `-m32` (under DOS/32A, linked with `jwlink`) read in the debugger with `-gcodeview` and `-gdwarf`: locals, and by-reference parameters read through their pointers |

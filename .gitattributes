@@ -1,7 +1,27 @@
 # QuickBASIC reads only CRLF lines.
 docs/examples/basic/*.bas text eol=crlf
 docs/examples/basic/*.BI text eol=crlf
+# DOS BASIC test sources are CRLF: the diff check must not flag the CR (#5440's chfirst.bas refused sqb-5300).
+tests/**/*.bas whitespace=cr-at-eol
+# Expected program output keeps the trailing space printf left (tests/run/qb/dateserial_vbdos.out).
+tests/**/*.out whitespace=-trailing-space
 # GitHub has no Nib grammar; Python's fits its comments and blocks.
 *.nib linguist-language=Python linguist-detectable=false
 # Two branches that lower the same file's count merge as both lines; the guard asks for a re-bless.
 tests/target_facts.baseline merge=union
+# Golden data, one row per line; trailing spaces are part of the rows.
+crates/ir/llrm-mir/src/idf_golden.txt whitespace=-trailing-space
+# Expected program output: lines end with the space printf left, which the diff check must not flag.
+crates/target/llrm-arm64/tests/darwin/*.out whitespace=-trailing-space
+tests/run/qb/*.out whitespace=-trailing-space
+# PRs that each add a row to a plan table merge as both rows.
+docs/working/selectiondag-plan.md merge=union
+docs/working/codegen-slot-table.md merge=union
+# PRs that each append a test to one area's test file merge as both, each block whole (merge=union dropped a closing brace, #4570). The driver is
+# configured per clone: tools/landing/merge-driver.sh; unconfigured, git merges the text and conflicts as before.
+*_tests.rs merge=tests-append
+crates/frontends/qb/tests/parser.rs merge=tests-append
+tests.rs merge=tests-append
+
+# Append-only table: two PRs that each add rows at the end merge without a conflict.
+docs/working/above-main-rows.md merge=union

@@ -6,7 +6,7 @@
 //! pass which speculates a load, and does not say so, cannot leave a frozen
 //! summary unsound unseen.
 
-use std::process::Command;
+mod common;
 
 const PROGRAMS: [&str; 8] = ["crc", "bintree", "matmul", "nbody", "sieve", "queens", "grep", "huge"];
 
@@ -17,7 +17,7 @@ fn the_passes_after_the_summaries_add_no_memory_operation() {
             for level in ["-O1", "-O2", "-Os"] {
                 let scratch = tempfile::tempdir().unwrap();
                 let source = format!("{}/bench/{program}/{program}.c", env!("CARGO_MANIFEST_DIR"));
-                let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+                let output = common::cc::llrm_c()
                     .current_dir(scratch.path())
                     .args(flags)
                     .args([level, "-o", "a.obj", &source])

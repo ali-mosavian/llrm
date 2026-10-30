@@ -2,7 +2,7 @@
 //! clang emit `call [table+edx*4]`, one instruction where we made `mov ecx,
 //! [table+ecx*4]` and `call ecx`.
 
-use std::process::Command;
+mod common;
 
 /// bench/x_funcptr: four functions called through a table; at -Os it was 130
 /// bytes and 25,519 instructions against clang's 123 and 18,018.
@@ -16,7 +16,7 @@ fn listing(level: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), FUNCPTR).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-mabi=sysv", "-march=i486", level, "-S", "-o", "a.s", "a.c"])
         .output()

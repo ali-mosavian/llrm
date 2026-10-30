@@ -1,0 +1,14 @@
+# Files that copy a use list (users(..).snapshot(), counted by tests.rs), and how many: a ceiling that only falls; each copy is a place to walk the list in place (LLVM make_early_inc_range).
+crates/codegen/llrm-codegen/src/backend/ehprepare.rs	2
+crates/frontends/bcobj/src/emit.rs	2
+crates/opt/llrm-transforms/src/cgpaddr.rs	2
+crates/opt/llrm-transforms/src/constraintelim.rs	1
+crates/opt/llrm-transforms/src/cvp.rs	3
+crates/opt/llrm-transforms/src/earlycse.rs	1
+crates/opt/llrm-transforms/src/inferspace.rs	1
+crates/opt/llrm-transforms/src/local.rs	1
+crates/opt/llrm-transforms/src/loopdeletion.rs	2
+crates/opt/llrm-transforms/src/rotate.rs	2
+crates/opt/llrm-transforms/src/simplifycfg.rs	1
+crates/opt/llrm-transforms/src/sroa.rs	1
+crates/opt/llrm-transforms/src/unroll.rs	1

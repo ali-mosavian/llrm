@@ -71,9 +71,7 @@ pub fn operations_in<'a>(
     inside
         .into_iter()
         .map(|&at| crate::cfg::block(at))
-        .flat_map(move |block| {
-            function.block(block).instructions().iter().map(move |&inst| (inst, block, function.instruction(inst)))
-        })
+        .flat_map(move |block| function.iter_block(block).map(move |inst| (inst, block, function.instruction(inst))))
         .filter(|(_, _, instruction)| instruction.opcode != Opcode::Phi)
 }
 
@@ -125,7 +123,7 @@ b0:
         assert_eq!(found.len(), 3);
         assert_ne!(found[0], found[1]);
         assert_eq!(function.instruction(found[0]), function.instruction(found[1]));
-        assert_eq!(&found[..2], &function.block(block(function, "b0")).instructions()[..2]);
+        assert_eq!(&found[..2], function.iter_block(block(function, "b0")).take(2).collect::<Vec<_>>());
     }
 
     #[test]
@@ -147,7 +145,7 @@ b1:
 
         assert_eq!(found.len(), 2);
         assert_ne!(found[0], found[1]);
-        assert_eq!(found, function.block(block(function, "b1")).instructions()[..2]);
+        assert_eq!(found, function.iter_block(block(function, "b1")).take(2).collect::<Vec<_>>());
     }
 
     #[test]

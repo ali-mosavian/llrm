@@ -46,15 +46,10 @@ fn test_generated_recurrences_expand_to_what_the_loop_computes() {
             let mut module = case.module();
             let (context, function) = module.function_mut("f").expect("@f");
             let (b0, b1, b2) = (function.layout()[0], function.layout()[1], function.layout()[2]);
-            let loop_size = function.block(b1).instructions().len();
+            let loop_size = function.block(b1).len();
             let mut expander = Expander::new(function.terminator(b0).expect("a branch"));
             let (first, by) = (expander.int(context, function, &start), expander.int(context, function, &step));
-            assert_eq!(
-                function.block(b1).instructions().len(),
-                loop_size,
-                "seed {seed}: expansion landed in the loop\n{}",
-                case.text
-            );
+            assert_eq!(function.block(b1).len(), loop_size, "seed {seed}: expansion landed in the loop\n{}", case.text);
             let width = start.width;
             let ret = function.terminator(b2).expect("a return");
             let at = Position::Before(ret);

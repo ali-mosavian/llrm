@@ -51,7 +51,7 @@
 //! `Unit` is what the analyses read: the function, its module's types,
 //! constants, layout, metadata and globals, the program's target and segment
 //! layout, and optional facts handed in with `with_*` (shape, registers,
-//! pointers, annotated references, assumptions, counted loops, bounds, edges,
+//! pointers, annotated references, assumptions, counted loops, edges,
 //! exposed frames, GlobalsAA, callbacks). A fact not handed in is derived on
 //! demand, which is correct but repeats work; [`crate::manager`]'s
 //! `Unit::within` fills them from cached analyses. `Standing` holds the
@@ -244,6 +244,13 @@ thread_local! {
     /// Structural comparisons of objects, for the test that sets of slices make
     /// none.
     pub static OBJECT_COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Reads of an access's `!tbaa` name and lineage, for the test that a held
+    /// access is not asked its type again.
+    pub static TYPE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Ord for MemoryObject {
@@ -1078,6 +1085,13 @@ pub struct Unit<'a> {
     /// What GlobalsAA proves of the module's globals; without it every
     /// global is captured.
     pub globals_aa: Option<&'a Globals>,
+    /// What `GlobalsModRef` proves of the module's calls and tracked globals,
+    /// the manager's `GlobalsModRefAnalysis`; without it a call says nothing
+    /// of a global.
+    pub globals_mr: Option<&'a crate::globalsmodref::GlobalsModRef>,
+    /// The proxy `within` made the unit under, whose memo holds what depends on
+    /// its module analyses alone.
+    pub outer: Option<&'a llrm_mir::passes::Outer>,
     /// Dominance and loops, the manager's; without them each ask finds them.
     pub shape: Option<&'a Shape>,
     /// What consts knows without memory, the manager's `Registers`.
@@ -1099,9 +1113,6 @@ pub struct Unit<'a> {
     /// What the unavoidable branch edges bound at each block, under
     /// `registers`: the manager's `DominatedEdges`.
     pub edges: Option<&'a crate::ranger::EdgeFacts>,
-    /// What each counted loop bounds at each block, under `registers`: the
-    /// manager's `Bounded`.
-    pub bounds: Option<&'a crate::ranges::Bounds>,
     /// The allocas whose address is exposed, the manager's `ExposedFrames`;
     /// without it each ask scans the alloca's uses.
     pub exposed: Option<&'a BTreeSet<ValueId>>,
@@ -1112,16 +1123,6 @@ pub struct Unit<'a> {
     /// The pointer value solve of this body, the manager's `PointerValues`;
     /// without it each `points_to` makes its own.
     pub point_values: Option<&'a crate::alias::PointValues>,
-    /// What calling back into the module does, the module's `Callbacks`;
-    /// without it each `calls_annotated` adds up every entry's summary.
-    pub callbacks: Option<&'a Option<crate::alias::Summary>>,
-    /// Where `callbacks` is read from when it is asked for and was not given: a
-    /// body that never asks is not one that read it (`llrm_mir::passes::read`).
-    pub callbacks_from: Option<&'a llrm_mir::passes::Outer>,
-    /// Whether the unit's `bounds`, held, are the counted loops' intervals: at
-    /// a level without them (`Outer::loop_intervals`) they are empty on
-    /// purpose.
-    pub loop_intervals: bool,
     /// The congruences of this body under these registers
     /// (`alias::congruences_of`), where a caller asking many times of one
     /// body made a cell for them: each proof of a loop's trips asked of the
@@ -1140,7 +1141,7 @@ impl<'a> Unit<'a> {
         inst: InstId,
     ) -> Option<llrm_mir::intrinsics::Intrinsic> {
         let callee = llrm_mir::memory::callee(self.context, self.function, inst)?;
-        llrm_mir::intrinsics::Intrinsic::named(self.globals.get(callee.0 as usize)?.name.as_deref()?)
+        self.globals.get(callee.0 as usize)?.intrinsic()
     }
 
     /// Whether `inst` calls out: a call no intrinsic's instructions
@@ -1161,16 +1162,29 @@ impl<'a> Unit<'a> {
         layout: &'a DataLayout,
         function: &'a Function,
     ) -> Self {
+        Self::over(&module.context, layout, &module.metadata, &module.globals, function)
+    }
+
+    /// [`Unit::of`] for a caller that holds the module's parts, not the module.
+    pub fn over(
+        context: &'a Context,
+        layout: &'a DataLayout,
+        metadata: &'a [MetadataNode],
+        globals: &'a [GlobalValue],
+        function: &'a Function,
+    ) -> Self {
         Self {
             program: None,
             spaces: llrm_mir::spaces::Spaces::FLAT,
-            context: &module.context,
+            context,
             layout,
-            metadata: &module.metadata,
+            metadata,
             tbaa: None,
-            globals: &module.globals,
+            globals,
             function,
             globals_aa: None,
+            globals_mr: None,
+            outer: None,
             references: None,
             shape: None,
             registers: None,
@@ -1180,13 +1194,9 @@ impl<'a> Unit<'a> {
             counted: None,
             followers: None,
             edges: None,
-            bounds: None,
             exposed: None,
             plain: None,
             point_values: None,
-            callbacks: None,
-            callbacks_from: None,
-            loop_intervals: true,
             congruent: None,
             proved: None,
         }
@@ -1197,23 +1207,6 @@ impl<'a> Unit<'a> {
         spaces: llrm_mir::spaces::Spaces,
     ) -> Self {
         Self { spaces, ..self }
-    }
-
-    /// What calling back into the module does: the held `callbacks`, or the
-    /// module's where the unit was made over its facts.
-    pub fn callbacks(&self) -> Option<&'a Option<crate::alias::Summary>> {
-        self.callbacks.or_else(|| {
-            self.callbacks_from
-                .and_then(|outer| outer.cached_ref::<crate::manager::Callbacks>())
-                .and_then(|one| one.as_ref().ok())
-        })
-    }
-
-    pub fn with_callbacks(
-        self,
-        callbacks: &'a Option<crate::alias::Summary>,
-    ) -> Self {
-        Self { callbacks: Some(callbacks), ..self }
     }
 
     pub fn with_point_values(
@@ -1235,6 +1228,13 @@ impl<'a> Unit<'a> {
         exposed: &'a BTreeSet<ValueId>,
     ) -> Self {
         Self { exposed: Some(exposed), ..self }
+    }
+
+    pub fn with_globals_mr(
+        self,
+        globals_mr: &'a crate::globalsmodref::GlobalsModRef,
+    ) -> Self {
+        Self { globals_mr: Some(globals_mr), ..self }
     }
 
     pub fn with_globals_aa(
@@ -1263,13 +1263,6 @@ impl<'a> Unit<'a> {
         assumptions: &'a Assumptions,
     ) -> Self {
         Self { assumptions: Some(assumptions), ..self }
-    }
-
-    pub fn with_bounds(
-        self,
-        bounds: &'a crate::ranges::Bounds,
-    ) -> Self {
-        Self { bounds: Some(bounds), ..self }
     }
 
     pub fn with_edges(
@@ -1332,16 +1325,7 @@ impl<'a> Unit<'a> {
     /// not seen states what it computes with `with_registers`.
     pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
         match self.registers {
-            Some(registers) => {
-                if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
-                    let fresh = crate::consts::known(&Unit { registers: None, ..*self });
-                    assert!(
-                        *registers == fresh,
-                        "the registers a unit carries are not those of the body it stands over: stale"
-                    );
-                }
-                Cow::Borrowed(registers)
-            }
+            Some(registers) => Cow::Borrowed(registers),
             None => panic!("a unit with no registers was asked for them: take them from the analysis manager"),
         }
     }
@@ -1501,9 +1485,6 @@ pub type Knowns = llrm_support::hash::SparseIdMap<ValueId, Known>;
 /// place a unit's registers are derived outside the manager.
 pub struct Standing<'h> {
     held: Option<&'h Knowns>,
-    /// What the counted loops bound, held for the same body as `held`, where
-    /// the caller has it.
-    bounds: Option<&'h crate::ranges::Bounds>,
     derived: Option<Knowns>,
     /// What stood before an edit, and the values the edit reached: `derived`
     /// is made from them when next asked.
@@ -1539,24 +1520,6 @@ impl<'h> Standing<'h> {
     pub fn held(registers: &'h Knowns) -> Self {
         Self {
             held: Some(registers),
-            bounds: None,
-            derived: None,
-            edited: None,
-            shape: None,
-            renew: None,
-            renewed: None,
-            reshaped: false,
-        }
-    }
-
-    /// `held`, and the bounds the manager found of the same body.
-    pub fn held_with(
-        registers: &'h Knowns,
-        bounds: &'h crate::ranges::Bounds,
-    ) -> Self {
-        Self {
-            held: Some(registers),
-            bounds: Some(bounds),
             derived: None,
             edited: None,
             shape: None,
@@ -1568,16 +1531,7 @@ impl<'h> Standing<'h> {
 
     /// No one has found them: derived when first asked.
     pub fn underived() -> Self {
-        Self {
-            held: None,
-            bounds: None,
-            derived: None,
-            edited: None,
-            shape: None,
-            renew: None,
-            renewed: None,
-            reshaped: false,
-        }
+        Self { held: None, derived: None, edited: None, shape: None, renew: None, renewed: None, reshaped: false }
     }
 
     /// `self`, the shape of the body as the manager found it.
@@ -1608,7 +1562,6 @@ impl<'h> Standing<'h> {
     /// The body changed: what was found of it no longer holds.
     pub fn changed(&mut self) {
         self.held = None;
-        self.bounds = None;
         self.derived = None;
         self.edited = None;
         self.renewed = None;
@@ -1634,7 +1587,6 @@ impl<'h> Standing<'h> {
                 return;
             }
         };
-        self.bounds = None;
         self.renewed = None;
         let mut kept = kept;
         let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
@@ -1682,16 +1634,6 @@ impl<'h> Standing<'h> {
         self.edited = Some((kept, dirty));
     }
 
-    /// `of`, and the manager's bounds of the body where it is still as they
-    /// were found of it.
-    pub fn of_with_bounds(
-        &mut self,
-        unit: &Unit,
-    ) -> (&Knowns, Option<&'h crate::ranges::Bounds>) {
-        let bounds = self.bounds;
-        (self.of(unit), bounds)
-    }
-
     /// What is known of `unit`'s body as it stands, which it must be the one
     /// these were asked of.
     pub fn of(
@@ -1718,11 +1660,34 @@ impl<'h> Standing<'h> {
     }
 }
 
+/// The loads and stores of `function`: the capacity of a map of each one's
+/// reference.
+pub(crate) fn loads_and_stores(function: &Function) -> usize {
+    function
+        .walk()
+        .filter(|&(_, inst)| matches!(
+            function.instruction(inst).opcode,
+            Opcode::Load { .. } | Opcode::Store { .. }
+        ))
+        .count()
+}
+
 /// The allocas of `unit`'s function whose address is exposed, in one pass: what
 /// `object_of` reads of `Unit::exposed` instead of asking each alloca's uses.
+/// Whether operand `at` of `inst` hands out no address that outlives it: a
+/// lifetime marker's, or a call argument the callee keeps no copy of
+/// ([`nocapture`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/CaptureTracking.cpp#L304)).
+pub fn kept_by(
+    unit: &Unit,
+    inst: InstId,
+    at: usize,
+) -> bool {
+    is_lifetime_marker(unit, inst) || crate::alias::no_capture_argument(unit, inst, at)
+}
+
 pub fn exposed_frames(unit: &Unit) -> BTreeSet<ValueId> {
     llrm_mir::counts::bump(llrm_mir::counts::Event::ExposedFrames);
-    crate::frameescape::exposed_allocas(unit.function, |inst| is_lifetime_marker(unit, inst))
+    crate::frameescape::exposed_allocas(unit.function, |inst, at| kept_by(unit, inst, at))
 }
 
 /// The object `root` is the address of, where it is an object's own: an
@@ -1744,7 +1709,7 @@ pub fn object_of(
             // is exposed.
             let exposed = match unit.exposed {
                 Some(found) => found.contains(&value),
-                None => crate::frameescape::exposes(unit.function, value, |inst| is_lifetime_marker(unit, inst)),
+                None => crate::frameescape::exposes(unit.function, value, |inst, at| kept_by(unit, inst, at)),
             };
             Some(ObjectInterner::of(unit.context).intern(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
@@ -1857,10 +1822,14 @@ pub struct MemRef {
     pub provenance: Option<Provenance>,
 }
 
-/// The accesses worked out for a version of a function, and which version.
+/// The accesses worked out for a version of a function, and which version:
+/// of its text, the spaces and the globals the unit lists (a unit with none
+/// finds no root a global variable, `object`).
 struct Held {
-    key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces),
-    seen: std::rc::Rc<std::cell::RefCell<llrm_support::hash::SparseIdMap<InstId, Option<std::rc::Rc<MemRef>>>>>,
+    key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces, usize),
+    seen: std::rc::Rc<
+        std::cell::RefCell<llrm_support::hash::SparseIdMap<InstId, (Option<std::rc::Rc<MemRef>>, Option<u32>)>>,
+    >,
 }
 
 /// The most versions kept: the analyses of one function ask in a run, and a
@@ -1974,7 +1943,19 @@ impl MemRef {
         };
         let mut disp: i128 = 0;
         let mut root = pointer;
+        // A block nothing enters may define a pointer from itself; a chain
+        // longer than 64 starts remembering what it has passed.
+        let mut steps = 0u32;
+        let mut seen = BTreeSet::new();
         loop {
+            steps += 1;
+            if steps > 64 {
+                if let Operand::Value(value) = root
+                    && !seen.insert(value)
+                {
+                    break;
+                }
+            }
             if let (Some(chain), Operand::Value(value)) = (chain.as_deref_mut(), root) {
                 chain.push(value);
             }
@@ -2020,7 +2001,7 @@ impl MemRef {
         unit: &Unit,
         inst: InstId,
     ) -> Option<Self> {
-        let key = (unit.function.mark(), unit.spaces());
+        let key = (unit.function.mark(), unit.spaces(), unit.globals.len());
         let held = ACCESSES.with(|held| {
             let held = held.borrow();
             held.iter().rev().find(|one| one.key == key).map(|one| std::rc::Rc::clone(&one.seen))
@@ -2037,18 +2018,21 @@ impl MemRef {
                 seen
             }),
         };
+        let tag =
+            unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa").map(|(_, tag)| tag.0);
         let found = seen.borrow().get(&inst).cloned();
-        let Some(found) = found else {
+        let Some((found, held_tag)) = found else {
             let made = crate::references::of(unit, inst);
-            seen.borrow_mut().insert(inst, made.clone());
+            seen.borrow_mut().insert(inst, (made.clone(), tag));
             return made.map(|one| (*one).clone());
         };
         // Metadata is attached without a change logged: the type is asked
-        // again.
+        // again where the tag is not the one it was held with.
         let mut found = found.map(|one| (*one).clone());
-        if let Some(access) = &mut found {
+        if let (Some(access), true) = (&mut found, tag != held_tag) {
             access.typed = typed(unit, inst);
             access.lineage = lineage(unit, inst);
+            seen.borrow_mut().insert(inst, (Some(std::rc::Rc::new(access.clone())), tag));
         }
         static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *CHECKED.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_ACCESSES")) {
@@ -2108,8 +2092,7 @@ impl MemRef {
         let instruction = unit.function.instruction(inst);
         let Opcode::Call(_) = instruction.opcode else { return None };
         let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)?;
-        let name = unit.globals.get(callee.0 as usize)?.name.as_deref()?;
-        let cell = match Intrinsic::named(name)? {
+        let cell = match unit.globals.get(callee.0 as usize)?.intrinsic()? {
             Intrinsic::MemSet => 1,
             Intrinsic::MemSetPattern => unit.int_bits(instruction.operands[1])? / 8,
             _ => return None,
@@ -2254,6 +2237,9 @@ pub fn extent_of(
         let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
         let GlobalKind::Variable(variable) = &unit.globals.get(global.0 as usize)?.kind else { return None };
         variable.initializer?;
+        // The size alone: making the object (its capture state, interning)
+        // for it was 47 M Ir of fjoins' 991 M, asked 63,024 times.
+        return Some(unit.layout.alloc_size(&unit.context.types, variable.ty) as i64);
     }
     object_of(unit, root)?.extent
 }
@@ -2354,7 +2340,7 @@ fn step(
             ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
                 through(Operand::Constant(*value))
             }
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands, .. }) => {
                 let indices = operands[1..]
                     .iter()
                     .map(|&one| {
@@ -2390,7 +2376,7 @@ fn bits_signed(
 /// The linear address of a flat pointer `root` an integer constant makes: a
 /// target with one address space has no selector, and its pointer's integer is
 /// the address.
-fn flat_constant(
+pub(crate) fn flat_constant(
     unit: &Unit,
     root: Operand,
 ) -> Option<i64> {
@@ -2418,17 +2404,31 @@ fn segment(
     unit: &Unit,
     root: Operand,
 ) -> Option<Operand> {
-    let (_, instruction) = unit.defining(root)?;
-    if !matches!(instruction.opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
-        return None;
-    }
-    let from = instruction.operands[0];
+    let from = match root {
+        Operand::Constant(id) => match &unit.context.get(id).kind {
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => Operand::Constant(*value),
+            _ => return None,
+        },
+        _ => {
+            let (_, instruction) = unit.defining(root)?;
+            if !matches!(instruction.opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
+                return None;
+            }
+            instruction.operands[0]
+        }
+    };
     if unit.space(from) != Some(2) {
         return None;
     }
-    match unit.defining(from) {
-        Some((_, made)) if matches!(made.opcode, Opcode::Cast(CastOp::IntToPtr)) => Some(made.operands[0]),
-        _ => Some(from),
+    match from {
+        Operand::Constant(id) => match &unit.context.get(id).kind {
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => Some(Operand::Constant(*value)),
+            _ => Some(from),
+        },
+        _ => match unit.defining(from) {
+            Some((_, made)) if matches!(made.opcode, Opcode::Cast(CastOp::IntToPtr)) => Some(made.operands[0]),
+            _ => Some(from),
+        },
     }
 }
 
@@ -2474,6 +2474,8 @@ pub fn typed(
     unit: &Unit,
     inst: InstId,
 ) -> Option<std::rc::Rc<str>> {
+    #[cfg(test)]
+    TYPE_READS.with(|count| count.set(count.get() + 1));
     let (_, tag) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa")?;
     if let Some(tree) = unit.tbaa {
         // A type's name read through the tree is the type node's first operand,
@@ -2503,6 +2505,8 @@ pub fn lineage(
     unit: &Unit,
     inst: InstId,
 ) -> std::rc::Rc<[String]> {
+    #[cfg(test)]
+    TYPE_READS.with(|count| count.set(count.get() + 1));
     let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else {
         return no_lineage();
     };
@@ -2578,6 +2582,30 @@ mod tests {
 
     fn object(kind: MemoryKind) -> MemoryObject {
         MemoryObject::new(kind)
+    }
+
+    /// A loop nothing enters (a block group that only reaches itself) can
+    /// define a pointer as `gep %p, 1` of itself, as a function with
+    /// JumpThreading did before `decide` removed it:
+    /// the chain walk never ended and held a value per step, 50 GB in 100 s
+    /// on QB's datetime.c at -Os -m16. A chain that comes back to a value ends
+    /// there, as `getUnderlyingObject` ends on a value it has seen.
+    #[test]
+    fn a_pointer_chain_that_comes_back_to_itself_ends() {
+        let module = parsed(&format!(
+            "{DOS}define i8 @f(ptr %a) {{\nb0:\n  ret i8 0\nb1:\n  %p = getelementptr inbounds i8, ptr %p, i16 1\n  %v = load i8, ptr %p\n  br label %b1\n}}\n"
+        ));
+        let layout = layout(&module);
+        let (_, _, f) = module.functions().next().unwrap();
+        let unit = Unit::of(&module, &layout, f);
+        let (_, load) = f
+            .walk()
+            .find(|&(_, at)| matches!(
+                f.instruction(at).opcode,
+                llrm_mir::opcode::Opcode::Load { .. }
+            ))
+            .unwrap();
+        assert!(MemRef::of(&unit, load).is_some());
     }
 
     /// Isel's unit named no program, so the spaces became one flat space: a QB

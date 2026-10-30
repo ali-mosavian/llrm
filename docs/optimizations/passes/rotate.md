@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/rotate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/rotate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/rotate.rs sha256:a6db8310e62c1d5dd1ac3c9d4575914d983066bfe4d032f483d84b4acd21174e -->
+<!-- src: crates/opt/llrm-transforms/src/rotate.rs sha256:4f490b55e175715129593db7145448bd6c1ce76f470b17676a3b2e31cffd29b4 -->
 
 # rotate
 
@@ -82,9 +82,9 @@ rows it moves (#1557); the steeper slopes of rotate, loopslots and
 `analysis registers` on nests and many-loop functions are #1559.
 
 A rotated loop is no longer the pre-tested shape the counted-loop
-analyses, [`crate::peel`](peel.md) and [`crate::unroll`](unroll.md) read, so rotation goes
-after them. [`crate::lsr`](lsr.md) enters a loop it counts to zero at its body too,
-behind a skip guard, with the same `_rotate`.
+analyses, [`crate::looppeel`](looppeel.md) and [`crate::loopunrollpass`](loopunrollpass.md) read, so
+rotation goes after them. [`crate::lsr_pass`](lsr_pass.md) enters a loop it counts to
+zero at its body too, behind a skip guard, with the same `_rotate`.
 
 ## Example
 Before:

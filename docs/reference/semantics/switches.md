@@ -1,13 +1,13 @@
 # Multiway branches
 
-For frontend authors and contributors to `decide`, `jumpthread` and isel. A multiway branch is one MIR instruction, so a frontend states the dispatch and the optimizer sees every case.
+For frontend authors and contributors to `decide`, `dfajumpthreading` and isel. A multiway branch is one MIR instruction, so a frontend states the dispatch and the optimizer sees every case.
 
 ## MIR `switch`
 
 `switch` takes one integer selector, ordered `(value, block)` cases and a default. Destinations may repeat; duplicate case values may not. Passes that read it:
 
 - `decide` ([`decide.rs`](../../optimizations/passes/decide.md)) selects the case a known selector takes.
-- `jumpthread` threads a switch's edges (`jumpthread.rs`) and, from -O2, the switch of a loop's state ([levels](../levels.md)).
+- `jumpthreading` threads a switch's edges and `dfajumpthreading` the switch of a loop's state ([levels](../levels.md)).
 - `loopclone` remaps cases and default, keeping successor phis; `loopmotion` and `peelsize` read it.
 - isel ([`isel.rs`](../../optimizations/backend/isel.md)) expands it to compares and branches; a case equal to the default needs no compare.
 

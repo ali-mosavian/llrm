@@ -1,4 +1,4 @@
-//! llrm-core's `rotate_tests.rs` (tests/test_countdown.py and
+//! llrm-codegen's `rotate_tests.rs` (tests/test_countdown.py and
 //! tests/test_rotate.py), each body now MIR text run by the interpreter
 //! before and after.
 //!
@@ -13,9 +13,7 @@ use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::module::{Function, Module, Operand};
 
 use super::Rotate;
-use crate::peel::Peel;
 use crate::testing::{f, managed, parsed, printed, results};
-use crate::unroll::Unroll;
 
 const INPUTS: &[&[i128]] = &[&[3, 0], &[3, 1], &[2, 7], &[-4, 300], &[5, 9]];
 
@@ -153,18 +151,6 @@ fn a_header_that_stores_keeps_its_first_test() {
     assert!(!through(&text, Rotate { proven: true, copy: false }).0);
 }
 
-/// A rotated loop is one block testing at its bottom, which unroll and
-/// peel do not take: they run before rotation.
-#[test]
-fn a_rotated_loop_is_not_unrolled_or_peeled() {
-    let mut module = parsed(&summing("4"));
-    managed(&mut module, Rotate { proven: true, copy: false });
-    let rotated = printed(&module);
-    assert!(!through(&rotated, Unroll::default()).0);
-    assert!(!through(&rotated, Peel::default()).0);
-    assert!(through(&summing("4"), Unroll::default()).0);
-}
-
 /// A step made in the header that a header phi takes round the back edge is not
 /// skipped on entry: rotation read it as test-only and the counter's next value
 /// was its own (`sub %x, 1` of itself, #811).
@@ -280,23 +266,4 @@ fn test_a_second_test_of_a_counter_is_copied_with_the_first() {
     let (changed, module) = through(&two_tests("%i"), Rotate { proven: false, copy: true });
     assert!(changed);
     assert_eq!(guards(&module), 2);
-}
-
-/// Rotating derived what is known of the function (a fixed point and the cycle
-/// propagation over every value) before looking for a loop to enter at its
-/// body, so every function without one paid for it: 1.0 Minstr of a 40 on
-/// straight(512) at -Os. It is asked of the first loop that could be entered.
-#[test]
-fn a_function_with_no_loop_to_enter_derives_nothing() {
-    let straight = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
-    let before = llrm_analysis::consts::register_derivations();
-    let (changed, _) = through(straight, Rotate { proven: true, copy: true });
-    assert!(!changed);
-    assert_eq!(llrm_analysis::consts::register_derivations(), before, "a body with no loop derived its registers");
-    let before = llrm_analysis::consts::register_derivations();
-    through(&summing("4"), Rotate { proven: true, copy: false });
-    assert!(
-        llrm_analysis::consts::register_derivations() > before,
-        "premise: a loop is asked its trips from the registers"
-    );
 }

@@ -1,4 +1,4 @@
-;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY
+;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$DELETE, LL$RENAME, LL$MKDIR, LL$CHDIR, LL$RMDIR, LL$FIND_FIRST, LL$FIND_NEXT, LL$FREE_BYTES, LL$CURRENT_DIRECTORY, LL$CURRENT_DRIVE
 ;; desc: the OS layer shared by C, Nib and BASIC programs: x86-m32, DOS/32A
 ;;
 ;; args: the interface of runtime/shared/interface.toml, in cdecl32: arguments in dword slots from
@@ -21,8 +21,9 @@
 G_CORE          equ     1
 G_CONSOLE       equ     2
 G_PROCESS       equ     4
+G_FILES         equ     8
 ifndef OS_GROUPS
-OS_GROUPS       equ     7
+OS_GROUPS       equ     15
 endif
 
 ;; What DOS's device information (IOCTL 44h) says of a handle: bit 7 is a character device.
@@ -45,9 +46,24 @@ if OS_GROUPS and G_CONSOLE
 public LL$CONSOLE_READ_KEY
 public LL$CONSOLE_KEY_READY
 endif
+if OS_GROUPS and G_FILES
+public LL$DELETE
+public LL$RENAME
+public LL$MKDIR
+public LL$CHDIR
+public LL$RMDIR
+public LL$FIND_FIRST
+public LL$FIND_NEXT
+public LL$FREE_BYTES
+public LL$CURRENT_DIRECTORY
+public LL$CURRENT_DRIVE
+endif
 if OS_GROUPS and G_PROCESS
 public LL$COMMAND_LINE
 public LL$ENVIRONMENT
+public LL$EXECUTE
+public LL$ENVIRONMENT_READ
+public LL$ENVIRONMENT_WRITE
 endif
 
 ;; HEAP_BYTES comes from os.toml, DOS_* from the OS's facts: the assembler is told both.
@@ -397,6 +413,348 @@ environment_done:
                 pop     ebx
                 ret
 LL$ENVIRONMENT  endp
+
+;;::::::::::::::
+;; LL$ENVIRONMENT_READ(offset: usize, data: *near mut u8, max: usize) -> usize: the bytes from `offset`, at most `max`, and how many.
+LL$ENVIRONMENT_READ proc
+                push    ebx
+                push    esi
+                push    edi
+                push    es
+                mov     ax, LL$PSP
+                mov     es, ax
+                mov     ax, es:[PSP_ENVIRONMENT]
+                mov     es, ax
+                lsl     ebx, eax
+                inc     ebx
+                mov     esi, dword ptr [esp+20]
+                sub     ebx, esi
+                jbe     short read_none
+                mov     ecx, dword ptr [esp+28]
+                cmp     ecx, ebx
+                jbe     short read_fits
+                mov     ecx, ebx
+read_fits:
+                mov     edi, dword ptr [esp+24]
+                mov     eax, ecx
+                jecxz   short read_done
+read_byte:
+                mov     bl, es:[esi]
+                mov     [edi], bl
+                inc     esi
+                inc     edi
+                dec     ecx
+                jnz     short read_byte
+                jmp     short read_done
+read_none:
+                xor     eax, eax
+read_done:
+                pop     es
+                pop     edi
+                pop     esi
+                pop     ebx
+                ret
+LL$ENVIRONMENT_READ endp
+
+;;::::::::::::::
+;; LL$ENVIRONMENT_WRITE(offset: usize, data: *near u8, count: usize) -> isize: `count` bytes into the block at `offset`; -1 when they do not fit.
+LL$ENVIRONMENT_WRITE proc
+                push    ebx
+                push    esi
+                push    edi
+                push    es
+                mov     ax, LL$PSP
+                mov     es, ax
+                mov     ax, es:[PSP_ENVIRONMENT]
+                mov     es, ax
+                lsl     ebx, eax
+                inc     ebx
+                mov     edi, dword ptr [esp+20]
+                mov     ecx, dword ptr [esp+28]
+                mov     eax, edi
+                add     eax, ecx
+                jc      short write_no_room
+                cmp     eax, ebx
+                ja      short write_no_room
+                mov     esi, dword ptr [esp+24]
+                jecxz   short write_ok
+write_byte:
+                mov     bl, [esi]
+                mov     es:[edi], bl
+                inc     esi
+                inc     edi
+                dec     ecx
+                jnz     short write_byte
+write_ok:
+                xor     eax, eax
+                jmp     short write_done
+write_no_room:
+                mov     eax, -1
+write_done:
+                pop     es
+                pop     edi
+                pop     esi
+                pop     ebx
+                ret
+LL$ENVIRONMENT_WRITE endp
+;;::::::::::::::
+;; LL$EXECUTE(name: *near char, tail: *near char) -> isize: DOS's load-and-execute (4B00h) as the extender's real-mode call
+;; (DPMI 0300h) runs it, over a block of DOS memory holding what DOS reads: the name, the tail, the parameter block (the
+;; caller's environment, the tail, two blank FCBs). DOS/32A's own 4Bh takes a block layout it does not document.
+EXEC_NAME       equ     0                       ;; at most 128 bytes, NUL-ended
+EXEC_TAIL       equ     128                     ;; length byte, text, CR: at most 128 bytes
+EXEC_BLOCK      equ     256                     ;; 14 bytes
+EXEC_FCB        equ     272                     ;; two of 16 bytes
+EXEC_PARAS      equ     19                      ;; 304 bytes
+EXEC_CALL       equ     -16-52                  ;; from EBP
+EXEC_VECTORS    equ     EXEC_CALL-12            ;; from EBP: INT 22h, 23h, 24h as offset and segment words
+LL$EXECUTE      proc
+                push    ebp
+                mov     ebp, esp
+                push    ebx
+                push    esi
+                push    edi
+                push    es
+                sub     esp, 52 + 12            ;; the real-mode call structure (EXEC_CALL), below it the real-mode terminate, break and critical-error vectors (EXEC_VECTORS)
+                mov     ax, DOS_DPMI_DOS_ALLOC
+                mov     bx, EXEC_PARAS
+                int     DOS_DPMI_INT
+                jc      exec_no_memory
+                push    eax                     ;; the real-mode segment
+                push    edx                     ;; the selector
+                mov     es, dx
+                xor     edi, edi
+                mov     ecx, EXEC_PARAS * 4
+                xor     eax, eax
+                rep     stosd
+                mov     esi, dword ptr [ebp+8]
+                mov     edi, EXEC_NAME
+                mov     ecx, 127
+exec_copy_name:
+                mov     al, [esi]
+                test    al, al
+                jz      short exec_name_done
+                mov     es:[edi], al
+                inc     esi
+                inc     edi
+                dec     ecx
+                jnz     short exec_copy_name
+exec_name_done:
+                mov     esi, dword ptr [ebp+12]
+                movzx   ecx, byte ptr [esi]
+                add     ecx, 2
+                cmp     ecx, 128
+                jbe     short exec_tail_fits
+                mov     ecx, 128
+exec_tail_fits:
+                mov     edi, EXEC_TAIL
+                rep     movsb
+                mov     eax, dword ptr [esp+4]  ;; the segment
+                mov     word ptr es:[EXEC_BLOCK+4], ax
+                mov     word ptr es:[EXEC_BLOCK+2], EXEC_TAIL
+                mov     word ptr es:[EXEC_BLOCK+8], ax
+                mov     word ptr es:[EXEC_BLOCK+6], EXEC_FCB
+                mov     word ptr es:[EXEC_BLOCK+12], ax
+                mov     word ptr es:[EXEC_BLOCK+10], EXEC_FCB + 16
+                ;; the call structure, on the stack, with the registers 4Bh reads
+                lea     edi, [ebp+EXEC_CALL]
+                push    es
+                push    ss
+                pop     es
+                mov     ecx, 13
+                xor     eax, eax
+                rep     stosd
+                pop     es
+                mov     eax, dword ptr [esp+4]
+                mov     word ptr [ebp+EXEC_CALL+34], ax      ;; ES
+                mov     word ptr [ebp+EXEC_CALL+36], ax      ;; DS
+                mov     word ptr [ebp+EXEC_CALL+20], EXEC_NAME   ;; DX
+                mov     word ptr [ebp+EXEC_CALL+16], EXEC_BLOCK  ;; BX
+                mov     word ptr [ebp+EXEC_CALL+28], DOS_EXEC * 256 ;; AX
+                mov     bl, 22h
+exec_save_vector:
+                mov     ax, DOS_DPMI_GET_VECTOR
+                int     DOS_DPMI_INT
+                movzx   eax, bl
+                mov     word ptr [ebp+EXEC_VECTORS+eax*4-22h*4], dx
+                mov     word ptr [ebp+EXEC_VECTORS+eax*4-22h*4+2], cx
+                inc     bl
+                cmp     bl, 25h
+                jb      short exec_save_vector
+                push    es
+                push    ss
+                pop     es
+                lea     edi, [ebp+EXEC_CALL]
+                mov     ax, DOS_DPMI_SIMULATE
+                mov     bl, DOS_INT
+                xor     bh, bh
+                xor     ecx, ecx
+                int     DOS_DPMI_INT
+                pop     es
+                pushfd
+                mov     bl, 22h
+exec_restore_vector:
+                movzx   eax, bl
+                mov     dx, word ptr [ebp+EXEC_VECTORS+eax*4-22h*4]
+                mov     cx, word ptr [ebp+EXEC_VECTORS+eax*4-22h*4+2]
+                mov     ax, DOS_DPMI_SET_VECTOR
+                int     DOS_DPMI_INT
+                inc     bl
+                cmp     bl, 25h
+                jb      short exec_restore_vector
+                popfd
+                jc      short exec_call_failed
+                movzx   eax, word ptr [ebp+EXEC_CALL+28]
+                test    byte ptr [ebp+EXEC_CALL+32], 1       ;; the flags' carry: DOS's error code is in AX
+                jnz     short exec_failed
+                xor     eax, eax
+                jmp     short exec_free
+exec_failed:
+                neg     eax
+                jmp     short exec_free
+exec_call_failed:
+                mov     eax, -1
+exec_free:
+                mov     ebx, eax
+                pop     edx                     ;; the selector
+                add     esp, 4
+                mov     ax, DOS_DPMI_DOS_FREE
+                int     DOS_DPMI_INT
+                mov     eax, ebx
+                jmp     exec_done
+exec_no_memory:
+                mov     eax, -8
+exec_done:
+                add     esp, 52 + 12
+                pop     es
+                pop     edi
+                pop     esi
+                pop     ebx
+                pop     ebp
+                ret
+LL$EXECUTE      endp
+endif
+
+if OS_GROUPS and G_FILES
+;;::::::::::::::
+;; The file-name calls: DOS function in AH, the name at DS:EDX (the new name at ES:EDI for a rename, EDI kept); a
+;; carry is the error code in AX, negated; 0 on success (DOS leaves AX undefined).
+LL$DELETE       proc
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_DELETE
+                jmp     short file_name_call
+LL$DELETE       endp
+
+LL$RENAME       proc
+                push    edi
+                mov     edx, dword ptr [esp+8]
+                mov     edi, dword ptr [esp+12]
+                mov     ah, DOS_RENAME
+                int     DOS_INT
+                pop     edi
+                jmp     short file_name_checked
+LL$RENAME       endp
+
+LL$MKDIR        proc
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_MKDIR
+                jmp     short file_name_call
+LL$MKDIR        endp
+
+LL$CHDIR        proc
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_CHDIR
+                jmp     short file_name_call
+LL$CHDIR        endp
+
+LL$RMDIR        proc
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_RMDIR
+file_name_call::
+                int     DOS_INT
+file_name_checked::
+                jc      short file_name_failed
+                xor     eax, eax
+                ret
+file_name_failed:
+                movzx   eax, ax
+                neg     eax
+                ret
+LL$RMDIR        endp
+
+;;::::::::::::::
+;; LL$FIND_FIRST(pattern: *near char, attrs: usize, entry: *near mut u8) -> isize: the DTA is the caller's `entry`.
+LL$FIND_FIRST   proc
+                mov     edx, dword ptr [esp+12]
+                mov     ah, DOS_SET_DTA
+                int     DOS_INT
+                mov     ecx, dword ptr [esp+8]
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_FIND_FIRST
+                jmp     short file_name_call
+LL$FIND_FIRST   endp
+
+;;::::::::::::::
+;; LL$FIND_NEXT(entry: *near mut u8) -> isize
+LL$FIND_NEXT    proc
+                mov     edx, dword ptr [esp+4]
+                mov     ah, DOS_SET_DTA
+                int     DOS_INT
+                mov     ah, DOS_FIND_NEXT
+                jmp     short file_name_call
+LL$FIND_NEXT    endp
+
+;;::::::::::::::
+;; LL$FREE_BYTES(drive: usize) -> i32: sectors per cluster x free clusters x bytes per sector; AX = FFFFh from
+;; DOS is -15.
+LL$FREE_BYTES   proc
+                push    ebx
+                mov     edx, dword ptr [esp+8]
+                mov     ah, DOS_FREE_SPACE
+                int     DOS_INT
+                cmp     ax, 0FFFFh
+                je      short free_failed
+                movzx   eax, ax
+                movzx   ecx, cx
+                movzx   ebx, bx
+                imul    eax, ecx
+                imul    eax, ebx
+                pop     ebx
+                ret
+free_failed:
+                mov     eax, -15
+                pop     ebx
+                ret
+LL$FREE_BYTES   endp
+
+;;::::::::::::::
+;; LL$CURRENT_DIRECTORY(drive: usize, data: *near mut char) -> isize
+LL$CURRENT_DIRECTORY proc
+                push    esi
+                mov     edx, dword ptr [esp+8]
+                mov     esi, dword ptr [esp+12]
+                mov     ah, DOS_GET_DIRECTORY
+                int     DOS_INT
+                pop     esi
+                jc      short directory_failed
+                xor     eax, eax
+                ret
+directory_failed:
+                movzx   eax, ax
+                neg     eax
+                ret
+LL$CURRENT_DIRECTORY endp
+
+;;::::::::::::::
+;; LL$CURRENT_DRIVE() -> isize
+LL$CURRENT_DRIVE proc
+                mov     ah, DOS_GET_DRIVE
+                int     DOS_INT
+                movzx   eax, al
+                ret
+LL$CURRENT_DRIVE endp
+
+
 endif
 
 end

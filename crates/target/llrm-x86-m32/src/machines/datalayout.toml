@@ -4,12 +4,19 @@
 # What gcc's -m names it: -m32.
 mode = 32
 
+# What the LLVM tools are told to price this target as (opt -mtriple/-mcpu), and the TTI llrm prices with.
+llvm_triple = "i486-unknown-linux-gnu"
+llvm_cpu = "i486"
+tti = "X86"
+
 # LLVM syntax. One pointer type; i64 is two dwords; x87 long double is 80 bits.
 datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
 
 # The operations this machine has no instruction for, which the compiler expands before selection: fptoui to a 64-bit integer
-# (fistp stores signed qwords) and a conditional move (none before the Pentium Pro).
-expand = ["fptoui.i64", "select"]
+# (fistp stores signed qwords), a conditional move (none before the Pentium Pro), the bit counts (no popcnt, and bsr and bsf
+# are not selected yet), `bswap` and the three-way compares `scmp` and `ucmp` (none is selected yet), and `abs`, `fshl` and
+# `fshr` (no cmov, and SHLD/SHRD are not selected yet).
+expand = ["abs", "bitreverse", "bswap", "ctlz", "ctpop", "cttz", "fptoui.i64", "fshl", "fshr", "scmp", "select", "ucmp"]
 
 # The operations flat code would rather run on the whole register: a word one costs an operand-size prefix, and when the
 # word is read after as a dword, an extension (X86TargetLowering::isTypeDesirableForOp). A word add or sub stays a word
@@ -36,3 +43,19 @@ address_bits = 32
 scales = [1, 2, 4, 8]
 # Cost: the `lea` and memory-form keys of `timings`; no per-form surcharge is
 # described until it is measured.
+
+# What the C front end lays types out as, in bytes: the one place sizeof(int), sizeof(void *) and the rest are stated
+# (llrm-cc checks its clang against it; the triple's default decides nothing). A row names its libc's departures
+# (`wchar_bytes`, `long_double_bytes` in targets.toml).
+[c]
+int = 4
+long = 4
+long_long = 8
+pointer = 4
+function_pointer = 4
+size_t = 4
+ptrdiff_t = 4
+wchar_t = 4
+double = 8
+long_double = 12
+enum = 4

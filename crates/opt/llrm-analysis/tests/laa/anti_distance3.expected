@@ -1,0 +1,15 @@
+Printing analysis 'Loop Access Analysis' for function 'f':
+  loop:
+    Memory dependences are safe
+    Dependences:
+      Forward:
+          %v = load i32, ptr %pr, align 4 -> 
+          store i32 %v, ptr %pw, align 4
+
+    Run-time memory checks:
+    Grouped accesses:
+
+    Non vectorizable stores to invariant address were not found in loop.
+    SCEV assumptions:
+
+    Expressions re-written:

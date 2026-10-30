@@ -1,0 +1,177 @@
+val select_use 0 cr=i32:full-set cst=- pn=-
+val select_use 1 cr=i1:full-set cst=- pn=-
+val select_use 2 cr=i1:full-set cst=- pn=-
+val select_use 3 cr=i32:full-set cst=- pn=-
+val select_use 4 cr=i32:full-set cst=- pn=-
+val select_use 5 cr=i32:full-set cst=- pn=-
+rval select_use 5 cr=i32:full-set
+rval select_use 4 cr=i32:full-set
+rval select_use 3 cr=i32:full-set
+rval select_use 2 cr=i1:full-set
+pred select_use 0 a=- b=-
+use select_use 0 0 cr=i32:full-set
+use select_use 1 0 cr=i1:full-set
+use select_use 1 1 cr=i32:full-set
+use select_use 2 0 cr=i1:full-set
+use select_use 2 2 cr=i32:full-set
+use select_use 3 0 cr=i32:full-set
+use select_use 3 1 cr=i32:full-set
+use select_use 4 0 cr=i32:full-set
+lat select_use arg0 bb0 overdefined
+lat select_use arg1 bb0 overdefined
+lat select_use i0 bb0 overdefined
+lat select_use i1 bb0 overdefined
+lat select_use i2 bb0 overdefined
+lat select_use i3 bb0 overdefined
+lat select_use i4 bb0 overdefined
+val chain 0 cr=i32:full-set cst=- pn=-
+val chain 1 cr=i1:full-set cst=- pn=-
+val chain 2 cr=i32:full-set cst=- pn=-
+val chain 3 cr=i32:full-set cst=- pn=-
+val chain 4 cr=i32:full-set cst=- pn=-
+rval chain 4 cr=i32:full-set
+rval chain 3 cr=i32:full-set
+rval chain 2 cr=i32:full-set
+rval chain 1 cr=i1:full-set
+pred chain 0 a=- b=-
+use chain 0 0 cr=i32:full-set
+use chain 1 0 cr=i32:full-set
+use chain 2 0 cr=i32:full-set
+use chain 3 0 cr=i1:full-set
+use chain 3 1 cr=i32:full-set
+use chain 4 0 cr=i32:full-set
+lat chain arg0 bb0 overdefined
+lat chain i0 bb0 overdefined
+lat chain i1 bb0 overdefined
+lat chain i2 bb0 overdefined
+lat chain i3 bb0 overdefined
+lat chain i4 bb0 overdefined
+val phi_use 0 cr=i32:full-set cst=- pn=-
+val phi_use 1 cr=i1:full-set cst=- pn=-
+val phi_use 2 cr=i1:full-set cst=- pn=-
+val phi_use 3 cr=i32:full-set cst=- pn=-
+rval phi_use 3 cr=i32:full-set
+rval phi_use 2 cr=i1:full-set
+edge phi_use 1 3 0 cr=i32:[0,10)
+edge phi_use 2 3 0 cr=i32:[10,0)
+pred phi_use 0 a=- b=-
+epred phi_use 0 0 0 T
+epred phi_use 0 1 0 F
+use phi_use 0 0 cr=i32:full-set
+use phi_use 1 0 cr=i1:full-set
+use phi_use 4 0 cr=i32:full-set
+use phi_use 4 1 cr=i32:full-set
+use phi_use 5 0 cr=i32:full-set
+lat phi_use arg0 bb0 overdefined
+lat phi_use arg0 bb1 constantrange<0, 10>
+lat phi_use arg0 bb2 constantrange<10, 0>
+lat phi_use arg0 bb3 overdefined
+lat phi_use arg1 bb0 overdefined
+lat phi_use arg1 bb1 overdefined
+lat phi_use arg1 bb2 overdefined
+lat phi_use arg1 bb3 overdefined
+lat phi_use i0 bb0 overdefined
+lat phi_use i0 bb1 constantrange<-1, 0>
+lat phi_use i0 bb2 constantrange<0, -1>
+lat phi_use i1 bb0 overdefined
+lat phi_use i1 bb1 overdefined
+lat phi_use i1 bb2 overdefined
+lat phi_use i2 bb1 overdefined
+lat phi_use i3 bb2 overdefined
+lat phi_use i4 bb3 overdefined
+lat phi_use i5 bb3 overdefined
+val phi_use_cond 0 cr=i32:full-set cst=- pn=-
+val phi_use_cond 1 cr=i1:full-set cst=- pn=-
+val phi_use_cond 2 cr=i32:[0,10) cst=- pn=-
+rval phi_use_cond 2 cr=i32:[0,10)
+rval phi_use_cond 1 cr=i1:full-set
+edge phi_use_cond 0 2 0 cr=i32:[0,10)
+pred phi_use_cond 0 a=- b=-
+epred phi_use_cond 0 0 0 T
+epred phi_use_cond 0 1 0 F
+use phi_use_cond 0 0 cr=i32:full-set
+use phi_use_cond 1 0 cr=i1:full-set
+use phi_use_cond 3 0 cr=i32:[0,10)
+use phi_use_cond 4 0 cr=i32:[0,10)
+lat phi_use_cond arg0 bb0 overdefined
+lat phi_use_cond arg0 bb1 constantrange<10, 0>
+lat phi_use_cond arg0 bb2 overdefined
+lat phi_use_cond i0 bb0 overdefined
+lat phi_use_cond i0 bb1 constantrange<0, -1>
+lat phi_use_cond i0 bb2 overdefined
+lat phi_use_cond i1 bb0 overdefined
+lat phi_use_cond i1 bb1 overdefined
+lat phi_use_cond i1 bb2 overdefined
+lat phi_use_cond i2 bb1 overdefined
+lat phi_use_cond i3 bb2 constantrange<0, 10>
+lat phi_use_cond i4 bb2 overdefined
+val div_not_speculatable 0 cr=i32:full-set cst=- pn=-
+val div_not_speculatable 1 cr=i32:full-set cst=- pn=-
+val div_not_speculatable 2 cr=i1:full-set cst=- pn=-
+val div_not_speculatable 3 cr=i32:full-set cst=- pn=-
+val div_not_speculatable 4 cr=i32:full-set cst=- pn=-
+rval div_not_speculatable 4 cr=i32:full-set
+rval div_not_speculatable 3 cr=i32:full-set
+rval div_not_speculatable 2 cr=i1:full-set
+pred div_not_speculatable 0 a=- b=-
+use div_not_speculatable 0 0 cr=i32:full-set
+use div_not_speculatable 1 0 cr=i32:full-set
+use div_not_speculatable 1 1 cr=i32:full-set
+use div_not_speculatable 2 0 cr=i1:full-set
+use div_not_speculatable 2 1 cr=i32:full-set
+use div_not_speculatable 3 0 cr=i32:full-set
+lat div_not_speculatable arg0 bb0 overdefined
+lat div_not_speculatable arg1 bb0 overdefined
+lat div_not_speculatable i0 bb0 overdefined
+lat div_not_speculatable i1 bb0 overdefined
+lat div_not_speculatable i2 bb0 overdefined
+lat div_not_speculatable i3 bb0 overdefined
+val div_by_const 0 cr=i32:full-set cst=- pn=-
+val div_by_const 1 cr=i1:full-set cst=- pn=-
+val div_by_const 2 cr=i32:[0,1431655766) cst=- pn=-
+val div_by_const 3 cr=i32:[0,1431655766) cst=- pn=-
+rval div_by_const 3 cr=i32:[0,1431655766)
+rval div_by_const 2 cr=i32:[0,1431655766)
+rval div_by_const 1 cr=i1:full-set
+pred div_by_const 0 a=- b=-
+use div_by_const 0 0 cr=i32:full-set
+use div_by_const 1 0 cr=i32:full-set
+use div_by_const 2 0 cr=i1:full-set
+use div_by_const 2 1 cr=i32:[0,1431655766)
+use div_by_const 3 0 cr=i32:[0,1431655766)
+lat div_by_const arg0 bb0 overdefined
+lat div_by_const i0 bb0 overdefined
+lat div_by_const i1 bb0 constantrange<0, 1431655766>
+lat div_by_const i2 bb0 constantrange<0, 1431655766>
+lat div_by_const i3 bb0 overdefined
+val two_uses 0 cr=i32:full-set cst=- pn=-
+val two_uses 1 cr=i1:full-set cst=- pn=-
+val two_uses 2 cr=i32:full-set cst=- pn=-
+val two_uses 3 cr=i32:full-set cst=- pn=-
+val two_uses 4 cr=i32:full-set cst=- pn=-
+val two_uses 5 cr=i32:full-set cst=- pn=-
+val two_uses 6 cr=i32:full-set cst=- pn=-
+rval two_uses 6 cr=i32:full-set
+rval two_uses 5 cr=i32:full-set
+rval two_uses 4 cr=i32:full-set
+rval two_uses 3 cr=i32:full-set
+rval two_uses 2 cr=i32:full-set
+rval two_uses 1 cr=i1:full-set
+pred two_uses 0 a=- b=-
+use two_uses 0 0 cr=i32:full-set
+use two_uses 1 0 cr=i32:full-set
+use two_uses 2 0 cr=i32:full-set
+use two_uses 3 0 cr=i1:full-set
+use two_uses 3 1 cr=i32:full-set
+use two_uses 4 0 cr=i32:full-set
+use two_uses 5 0 cr=i32:full-set
+use two_uses 5 1 cr=i32:full-set
+use two_uses 6 0 cr=i32:full-set
+lat two_uses arg0 bb0 overdefined
+lat two_uses i0 bb0 overdefined
+lat two_uses i1 bb0 overdefined
+lat two_uses i2 bb0 overdefined
+lat two_uses i3 bb0 overdefined
+lat two_uses i4 bb0 overdefined
+lat two_uses i5 bb0 overdefined
+lat two_uses i6 bb0 overdefined

@@ -79,7 +79,7 @@ loads a descriptor's selector and offset and emits ordinary `concat` and
 
 ## Verification and the interpreter
 
-`verify::verify` checks a `Program` before MIR construction. `crates/backend/llrm-core/src/hir/`
+`verify::verify` checks a `Program` before MIR construction. `crates/codegen/llrm-codegen/src/hir/`
 holds a HIR interpreter (`execute*.rs`) used by tests and re-exports the
 `llrm-hir` modules. Other pieces of `llrm-hir`: `escape` (which data objects
 a pointer can reach), `onerror` (ON ERROR as invokes and a landing pad),

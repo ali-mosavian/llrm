@@ -33,7 +33,7 @@ LLVM has no module-wide summary table and no whole-program step. A function's ef
 
 ## Order
 
-1. `PostOrderFunctionAttrs` as a pass over an SCC, behind a flag, oracle: `opt -passes=function-attrs` on the dumped module (basicaa-port's `capturecheck` for `nocapture`, #2146). Replaces `Stamp`; the slope test is the stamping cost against N bodies.
+1. (memory half: `functionattrs::infer_memory` is the translation of `addMemoryAttrs`, in shadow behind `LLRM_SHADOW_MEMORY`; `argumentattrs::add_argument_attrs` is `addArgumentAttrs` without `initializes`, and `functionattrs::post_order` runs both with the flags, same switch; they wire in with the walk, since LLVM states it after the SCC's bodies are simplified and `Stamp`'s first run sees raw bodies.) `PostOrderFunctionAttrs` as a pass over an SCC, behind a flag, oracle: `opt -passes=function-attrs` on the dumped module (basicaa-port's `capturecheck` for `nocapture`, #2146). Replaces `Stamp`; the slope test is the stamping cost against N bodies.
 2. `Summaries` readers move to the AA queries; `Summaries` deleted (one PR per reader, rows-neutral).
 3. The walk (`PreservedAnalyses`, `DevirtSCCRepeatedPass`) around inline and function-attrs; blocked by [step 3.2 of the order work](cgscc-plan.md).
 4. `ipsccp` replaces stages 4, 5a, 6; `deadargelim`, `argpromotion` diffed.

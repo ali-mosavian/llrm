@@ -6,11 +6,13 @@
    the speaker; music in the foreground makes the program wait until the queue
    is empty (the last note has begun), music in the background only while it is
    full. */
-#include "device.h"
+#include "dev.h"
 #include "nhstutil.h"
 #include "varptr.h"
 #include "rtinit.h"
 
+/* a minute of the clock's ticks, in thousandths */
+#define TICKS_PER_MINUTE 1092390L
 enum {
     LOWEST_OCTAVE = 0,
     HIGHEST_OCTAVE = 6,
@@ -21,9 +23,7 @@ enum {
     HIGHEST_TEMPO = 255,
     LONGEST_NOTE = 64,
     HIGHEST_NOTE = 84,
-    SEMITONES = 12,
-    /* a minute of the clock's ticks, in thousandths */
-    TICKS_PER_MINUTE = 1092390L
+    SEMITONES = 12
 };
 
 /* How much of a note sounds before the silence that ends it, in eighths. */
@@ -76,6 +76,10 @@ static volatile unsigned head, tail;
 static byte tick_started;
 static volatile unsigned sound_left, quiet_left;
 
+#pragma aux music_tick "B$MUSICTICK"
+#pragma aux B_SPLY "B$SPLY"
+#pragma aux B_SOND "B$SOND"
+
 /* The clock tick: counts the note out, and starts the next. */
 void music_tick(void)
 {
@@ -95,7 +99,6 @@ void music_tick(void)
     }
 }
 
-#pragma aux music_tick "B$MUSICTICK"
 
 /* The notes waiting: PLAY(n) and ON PLAY (events.c). */
 unsigned music_waiting(void)
@@ -153,7 +156,7 @@ static void play_note(Player *p, int note, long time)
     Note *at;
 
     if (!tick_started) {
-        dev_ticker_start();
+        dev_tick_start();
         tick_started = 1;
     }
     /* in the foreground a note waits for the queue ahead of it and for the
@@ -310,7 +313,6 @@ void B_SPLY(SD *commands)
     str_tmp_free(commands);
 }
 
-#pragma aux B_SPLY "B$SPLY"
 
 /* B$SOND: SOUND frequency, duration in clock ticks (18.2 a second).  In
    foreground music a note waits for the one sounding to end; in background
@@ -325,17 +327,17 @@ void B_SOND(short hertz, float duration)
         illegal();
     ticks = (long)(duration + 0.5f);
     if (ticks == 0) {
-        dev_interrupts_off();
+        dev_tick_hold();
         tail = head;
         sound_left = quiet_left = 0;
         dev_tone(0);
-        dev_interrupts_on();
+        dev_tick_release();
         return;
     }
     if (hertz < 37)
         illegal();
     if (!tick_started) {
-        dev_ticker_start();
+        dev_tick_start();
         tick_started = 1;
     }
     if (player.foreground)
@@ -349,7 +351,6 @@ void B_SOND(short hertz, float duration)
     head = (head + 1) % QUEUE;
 }
 
-#pragma aux B_SOND "B$SOND"
 
 /* The program has ended: what is queued is not played, and the speaker is
  * quiet. */
@@ -359,7 +360,7 @@ static void music_stop(void)
     sound_left = quiet_left = 0;
     dev_tone(0);
     if (tick_started)
-        dev_ticker_stop();
+        dev_tick_stop();
 }
 
 static Comp comp = {0, C_SN, {0, 0, 0, 0, music_stop}};

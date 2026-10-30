@@ -69,6 +69,7 @@ float = ["st0"]
 # Pascal: arguments pushed left to right and popped by the callee. Nib's pascal16.
 [pascal16]
 like = "cdecl16"
+cc = "basic"
 order = "left-to-right"
 cleanup = "callee"
 
@@ -116,6 +117,9 @@ wide_pairs = [["ax", "dx"], ["bx", "cx"]]
 backfill = true
 arguments_clobbered = true
 results_clobbered = true
+# DEVIATE: `main_` keeps nothing when no function of the module calls it. Watcom's `cstrt086` calls it and discards every
+# register after it returns, so the saves of bx/cx/dx (6 bytes in each program) buy nothing. Open Watcom saves them.
+entry_clobbers_all = ["main_"]
 variadic = "cdecl16"
 preserved = ["bp", ["ebx", "bx"], ["ecx", "cx"], ["edx", "dx"], ["esi", "si"], ["edi", "di"]]
 clobbered = ["ax", "es", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "flags"]

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cfg.rs sha256:01cc824413dc26938c405e75f5b0285131384822ce7173dcbae7ae1a6f0ea37b -->
+<!-- src: crates/opt/llrm-transforms/src/cfg.rs sha256:3263142ab45d0c45ef85b811b559ee02ace721ac7ed4e858e5917e79076165a9 -->
 
 # cfg
 
@@ -64,7 +64,7 @@ From unit test `test_single_entry_phi_is_replaced` in `cfg_tests.rs`.
 
 ## Runs
 A library function, called by `decide` after it decides branches and by
-`phiopt`, `rotate` and `lsr` after their rewrites. The pass `Merged` wraps
+`rotate` and `lsr` after their rewrites. The pass `Merged` wraps
 it; no pipeline stage runs it alone.
 
 ## Keeps

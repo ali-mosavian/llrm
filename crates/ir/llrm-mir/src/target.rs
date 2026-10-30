@@ -6,6 +6,49 @@ use std::collections::BTreeSet;
 
 use crate::spaces::Spaces;
 
+/// The tuning limits of a target: one default (the pin's value, which every
+/// target without an entry takes) and the overrides a target description
+/// states. The names are the pin's `TargetLoweringBase` fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tuning {
+    /// `MaxStoresPerMemset`, and at size `MaxStoresPerMemsetOptSize`.
+    pub max_stores_per_memset: usize,
+    pub max_stores_per_memset_opt_size: usize,
+    /// `MaxStoresPerMemcpy` and `...OptSize`: the load and store pairs of a
+    /// constant copy.
+    pub max_stores_per_memcpy: usize,
+    pub max_stores_per_memcpy_opt_size: usize,
+    /// `MaxStoresPerMemmove` and `...OptSize`.
+    pub max_stores_per_memmove: usize,
+    pub max_stores_per_memmove_opt_size: usize,
+    /// Clocks a byte of code is worth, in thousandths, where a decision is
+    /// made for size; 0: bytes alone decide.
+    pub size_milliclocks_per_byte: i64,
+    /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
+    /// full-unroll pass; none: the pass's own, by optimization level.
+    pub unroll_threshold: Option<u32>,
+    pub unroll_max_percent_threshold_boost: Option<u32>,
+    /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
+    /// optimized for size; none: 225, or 250 at -O3.
+    pub inline_threshold: Option<i64>,
+}
+
+impl Tuning {
+    /// X86ISelLowering.cpp: 16/8, 8/4, 8/4 stores; no clock price for a byte.
+    pub const PIN: Tuning = Tuning {
+        max_stores_per_memset: 16,
+        max_stores_per_memset_opt_size: 8,
+        max_stores_per_memcpy: 8,
+        max_stores_per_memcpy_opt_size: 4,
+        max_stores_per_memmove: 8,
+        max_stores_per_memmove_opt_size: 4,
+        size_milliclocks_per_byte: 0,
+        unroll_threshold: None,
+        unroll_max_percent_threshold_boost: None,
+        inline_threshold: None,
+    };
+}
+
 /// Where the target keeps no program data, as linear addresses: old
 /// `abi::machine::Machine::foreign_span`. A real-mode target has some (its
 /// video memory and ROM); any other none.
@@ -26,10 +69,57 @@ pub trait Machine {
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
 
+    /// LLVM's per-instruction cost model of this target, for the passes that
+    /// translate LLVM's (InlineCost, the SCEV expander, loop strength
+    /// reduction); none: they price by the generic rules.
+    fn tti(&self) -> Option<std::rc::Rc<dyn crate::tti::Tti>> {
+        None
+    }
+
+    /// The library functions the target's runtime has and the widths of `int`
+    /// and `size_t` (`TargetLibraryInfo`'s `initialize` of the triple); none:
+    /// the pin's defaults for an unknown OS, `int` as wide as a pointer.
+    fn library(&self) -> Option<std::rc::Rc<dyn crate::libfunc::Library>> {
+        None
+    }
+
+    /// The target's `TargetLowering` facts, for the passes that translate
+    /// code reading them; none: the base class's answers.
+    fn lowering(&self) -> Option<std::rc::Rc<dyn crate::lowering::Lowering>> {
+        None
+    }
+
+    /// The target's tuning limits: the pin's values, with this target's
+    /// overrides. A target with no entry here takes `Tuning::PIN`.
+    fn tuning(&self) -> Tuning {
+        Tuning::PIN
+    }
+
+    /// Clocks a byte of code is worth, in thousandths, where a decision is
+    /// made for size: the smaller form is kept while the clocks it costs are
+    /// under this per byte saved. None: bytes alone decide.
+    fn size_milliclocks_per_byte(&self) -> i64 {
+        self.tuning().size_milliclocks_per_byte
+    }
+
     /// What each operation costs in code bytes, for a decision made for
     /// size; by default the same prices.
     fn size_costs(&self) -> OperationCosts {
         self.costs()
+    }
+
+    /// Whether a division by a constant stays a divide instruction on
+    /// `bits`-bit values, `size` saying the build is for size
+    /// (`isIntDivCheap`, read the other way): the remainder is then the
+    /// divide's own, not `x - (x / c) * c`. By default no: a division is a
+    /// multiply.
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        let _ = (bits, size);
+        false
     }
 
     /// How many integer values fit in registers at once.
@@ -231,20 +321,25 @@ pub struct OperationCosts {
     pub set: i64,
     pub fill: i64,
     pub fill_cell: i64,
+    /// The code bytes of the routine a fill through a huge pointer is laid
+    /// down as, in a table priced by bytes; 0 where there is none.
+    pub huge_fill: i64,
+    /// The same for a copy or move through huge pointers: the smaller of the
+    /// upward and downward routines.
+    pub huge_copy: i64,
     /// `rep movs` as a copy sets it up (ES, the two addresses, the count) and
     /// what each cell costs it; `direction` is `std` and `cld` around a
     /// backward one.
     pub copy: i64,
     pub copy_cell: i64,
+    /// What a copy of a length known only at run time adds to `copy`: the
+    /// count in dwords and the odd bytes after it, a second `rep movs`.
+    pub copy_variable: i64,
     pub direction: i64,
     /// How many operations a completely unrolled loop may total before the work
     /// it saves is boosted (`peelsize::Limits`); 0: the target states none
     /// and the pass's own is used.
     pub unroll_budget: i64,
-    /// What a compare of `x & mask` with zero costs as the one instruction a
-    /// target that has one makes of it (x86 `test`), the `and` and the compare
-    /// folded; 0: the target states none, and the two are separate operations.
-    pub mask_test: i64,
     /// gcc's by-pieces ratios for a constant memset (`SET_RATIO` for a
     /// nonzero byte, `CLEAR_RATIO` for zero; the `_size` ones when tuned for
     /// size): stores while their number is under it, else a fill. 0: the
@@ -353,11 +448,13 @@ impl Default for OperationCosts {
             set: 1,
             fill: 1,
             fill_cell: 1,
+            huge_fill: 0,
+            huge_copy: 0,
             copy: 1,
             copy_cell: 1,
+            copy_variable: 0,
             direction: 1,
             unroll_budget: 0,
-            mask_test: 0,
             pieces_set: 0,
             pieces_clear: 0,
             pieces_set_size: 0,
@@ -540,5 +637,23 @@ mod operand_size_tests {
         let real = [form(2, false, 0), form(4, true, 1)];
         assert_eq!(three_operand(&costs, &real, 4, 2, 2, false), Some(2 + 1 + 1));
         assert_eq!(three_operand(&costs, &real, 2, 2, 1, true), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Tuning;
+
+    /// X86ISelLowering.cpp:2936-2941 and the clock-free default: a target with
+    /// no entry in its description takes exactly these.
+    #[test]
+    fn the_default_tuning_is_the_pins() {
+        let pin = Tuning::PIN;
+        assert_eq!((pin.max_stores_per_memset, pin.max_stores_per_memset_opt_size), (16, 8));
+        assert_eq!((pin.max_stores_per_memcpy, pin.max_stores_per_memcpy_opt_size), (8, 4));
+        assert_eq!((pin.max_stores_per_memmove, pin.max_stores_per_memmove_opt_size), (8, 4));
+        assert_eq!(pin.size_milliclocks_per_byte, 0);
+        assert_eq!((pin.unroll_threshold, pin.unroll_max_percent_threshold_boost), (None, None));
+        assert_eq!(pin.inline_threshold, None);
     }
 }

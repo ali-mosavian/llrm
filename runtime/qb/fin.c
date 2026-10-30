@@ -183,6 +183,14 @@ static unsigned long long divide_scaled(int *scale, int *inexact)
     return quotient;
 }
 
+#if __LDBL_MANT_DIG__ != 64
+/* Only x87's 64-bit extended numbers make the quick way exact: at the Watcom rows' 53 bits the
+   quotient rounds once too early and NIBBLES's m16 screens differ.  Another long double takes the exact way alone. */
+static int quick_double(unsigned long long mantissa, int exponent, double *out)
+{
+    return 0;
+}
+#else
 /* The FPU's way for a mantissa below 2^63 and a power of ten up to 10^27, both
    exact in its 64 bits: one multiplication or division rounds to 64 bits, and
    the double is that rounded again to 53.  The two roundings agree unless the
@@ -215,6 +223,7 @@ static int quick_double(unsigned long long mantissa, int exponent, double *out)
     *out = (double)quick;
     return 1;
 }
+#endif
 
 /* The double nearest `mantissa` * 10^`exponent`, a tie going to the even one,
    built from its bits.  A value too big for a double is an Overflow, and one

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/alias.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/alias.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:44884d435595655b94b4e0e299767b7ba76b2682bbcbca211daf360168324e65 -->
+<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:ac387d69d6c47b8456c7ca017ec99bcc75df14c832ee746e9bba8266a61ea529 -->
 
 # alias
 
@@ -76,10 +76,10 @@ memory, what escaped before the call, and, of the globals
 does what the module's entry points do (`callbacks`). `summaries_updating`
 redoes only the bodies that changed and their readers.
 
-Call effects (`calls_annotated`). Each call gets an `Effect`: the `MemRef`s
-it loads and stores, instantiated through the actuals, and the bytes it
-fills (`initialized`: bytes written before any is read). It is a side table,
-because the rich MIR's call carries no memory operands.
+Call effects (`calls_by_attributes`). Each call gets an `Effect`: the
+`MemRef`s it loads and stores, instantiated through the actuals, and the
+bytes it fills (`initialized`: bytes written before any is read). It is a
+side table, because the rich MIR's call carries no memory operands.
 
 Access annotation (`annotated`). Each load and store gets its provenance;
 where a range bounds its index the slice narrows to the bytes the index can
@@ -119,13 +119,13 @@ From unit test `test_points_to_flows_through_memory_and_a_phi` in
 
 ## Provides
 `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`,
-`escaped_before`, `nonnull`), `seeds`, `summaries`, `calls_annotated`,
+`escaped_before`, `nonnull`), `seeds`, `summaries`, `calls_by_attributes`,
 `annotated`, `congruences`, `initialized`, `read_arguments`,
 `nonnull_by_definition`. Manager entries in [`crate::manager`](manager.md): `Pointers`,
-`PointValues`, `Annotated`, `CallEffects`, `Summaries`. Consumers:
+`PointValues`, `Annotated`, `Summaries`. Consumers:
 [`crate::memory`](memory.md) (a `Unit`'s lazily built `annotated` and `points_to`),
-[`crate::memoryssa`](memoryssa.md) (`calls_annotated`), [`crate::avail`](avail.md)
-(`EscapedBefore`), [`crate::observers`](observers.md), [`crate::induction`](induction.md)
+[`crate::memoryssa`](memoryssa.md) (`calls_by_attributes`), [`crate::avail`](avail.md)
+(`EscapedBefore`), [`crate::induction`](induction.md)
 (`congruences`), [`crate::globalsaa`](globalsaa.md), [`crate::interprocedural`](interprocedural.md), and
 `gvn`, `promote`, `loadjoins` and `decide` in `llrm-transforms`.
 

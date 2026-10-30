@@ -1,0 +1,5 @@
+CONST UGL.8BIT = 0
+CONST Config.MaxItems = 100
+X = 3.14
+Y = .5
+PRINT UGL.8BIT

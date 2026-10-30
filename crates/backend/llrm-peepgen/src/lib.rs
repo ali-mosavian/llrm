@@ -1,6 +1,6 @@
 //! Compiles llrm's peephole rules (`.peep`) against the instruction
 //! description (`x86.instr`) into Rust: one decision automaton per rule
-//! group and the rules at its accepting states. llrm-core's build script
+//! group and the rules at its accepting states. llrm-codegen's build script
 //! runs it.
 
 pub mod automaton;
@@ -32,8 +32,9 @@ pub fn generate(
     table_file: &str,
     rules: &str,
     rules_file: &str,
+    dialect: &llrm_target::instr::Dialect,
 ) -> Result<Generated, String> {
-    let table = table::load(table_source, table_file)?;
+    let table = table::load(table_source, table_file, dialect)?;
     let (program, automata) = compile(&table, rules, rules_file)?;
     let groups = program
         .groups

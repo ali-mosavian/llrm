@@ -23,7 +23,7 @@ pub fn binary<'a>(
     op: BinaryOp,
 ) -> Option<(InstId, &'a Instruction, Operand, Operand)> {
     let (inst, instruction) = q.instruction_of(v)?;
-    (instruction.opcode == Opcode::Binary(op))
+    (matches!(instruction.opcode, Opcode::Binary(kind) if kind == op))
         .then(|| (inst, instruction, instruction.operands[0], instruction.operands[1]))
 }
 
@@ -102,7 +102,7 @@ impl CmpPredicate {
 
 /// An operand of a comparison `m_ICmpLike` matched: a value, or the integer
 /// zero it makes up for `trunc nuw x to i1`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Side {
     Value(Operand),
     Int(u128, u32),
@@ -182,7 +182,8 @@ pub fn cast<'a>(
     op: CastOp,
 ) -> Option<(InstId, &'a Instruction, Operand)> {
     let (inst, instruction) = q.instruction_of(v)?;
-    (instruction.opcode == Opcode::Cast(op)).then(|| (inst, instruction, instruction.operands[0]))
+    (matches!(instruction.opcode, Opcode::Cast(kind) if kind == op))
+        .then(|| (inst, instruction, instruction.operands[0]))
 }
 
 /// `m_c_<Op>(P, m_Value(Other))`: `v` is `op a, b` where `a` or `b` satisfies
@@ -258,7 +259,7 @@ pub fn logical_and(
     if q.scalar_bits(v) != 1 {
         return None;
     }
-    if instruction.opcode == Opcode::Binary(BinaryOp::And) {
+    if matches!(instruction.opcode, Opcode::Binary(BinaryOp::And)) {
         return Some((instruction.operands[0], instruction.operands[1]));
     }
     let (_, _, cond, t, f) = select(q, v)?;
@@ -274,7 +275,7 @@ pub fn logical_or(
     if q.scalar_bits(v) != 1 {
         return None;
     }
-    if instruction.opcode == Opcode::Binary(BinaryOp::Or) {
+    if matches!(instruction.opcode, Opcode::Binary(BinaryOp::Or)) {
         return Some((instruction.operands[0], instruction.operands[1]));
     }
     let (_, _, cond, t, f) = select(q, v)?;
@@ -404,7 +405,7 @@ macro_rules! intrinsics {
             $($variant,)*
         }
 
-        const INTRINSIC_NAMES: &[(&str, IntrinsicId)] = &[$(($name, IntrinsicId::$variant),)*];
+        pub(crate) const INTRINSIC_NAMES: &[(&str, IntrinsicId)] = &[$(($name, IntrinsicId::$variant),)*];
     };
 }
 
@@ -415,9 +416,21 @@ intrinsics! {
     UaddWithOverflow => "uadd.with.overflow",
     UsubWithOverflow => "usub.with.overflow",
     UmulWithOverflow => "umul.with.overflow",
+    Fabs => "fabs",
+    Fma => "fma",
+    Fmuladd => "fmuladd",
+    Ldexp => "ldexp",
+    ArithmeticFence => "arithmetic.fence",
+    FptruncRound => "fptrunc.round",
+    Copysign => "copysign",
     Ctpop => "ctpop",
     Ctlz => "ctlz",
     Cttz => "cttz",
+    Memset => "memset",
+    MemsetPattern => "experimental.memset.pattern",
+    Memcpy => "memcpy",
+    MemcpyInline => "memcpy.inline",
+    Memmove => "memmove",
     Abs => "abs",
     Smax => "smax",
     Smin => "smin",
@@ -437,6 +450,7 @@ intrinsics! {
     UshlSat => "ushl.sat",
     SmulFix => "smul.fix",
     SmulFixSat => "smul.fix.sat",
+    SdivFix => "sdiv.fix",
     UmulFix => "umul.fix",
     UmulFixSat => "umul.fix.sat",
     Pow => "pow",
@@ -508,12 +522,25 @@ intrinsics! {
 /// for the intrinsics of [`IntrinsicId`]: the longest name that is the callee's
 /// before its type suffix.
 pub fn intrinsic_id_of_name(name: &str) -> Option<IntrinsicId> {
+    static BY_BASE: std::sync::OnceLock<crate::hash::HashMap<&'static str, IntrinsicId>> = std::sync::OnceLock::new();
     let name = name.strip_prefix("llvm.")?;
-    INTRINSIC_NAMES
-        .iter()
-        .filter(|(base, _)| name.strip_prefix(base).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
-        .max_by_key(|(base, _)| base.len())
-        .map(|(_, id)| *id)
+    let by_base = BY_BASE.get_or_init(|| INTRINSIC_NAMES.iter().copied().collect());
+    // A base is the whole name or what stands before a `.`: the longest one
+    // found wins.
+    let mut end = name.len();
+    loop {
+        #[cfg(test)]
+        NAME_PROBES.with(|one| one.set(one.get() + 1));
+        if let Some(&id) = by_base.get(&name[..end]) {
+            return Some(id);
+        }
+        end = name[..end].rfind('.')?;
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static NAME_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `IntrinsicInst::getIntrinsicID` of a call: `inst` calls one of
@@ -522,7 +549,7 @@ pub fn intrinsic_id(
     q: &Query,
     inst: InstId,
 ) -> Option<IntrinsicId> {
-    intrinsic_id_of_name(q.callee_name(inst)?)
+    q.callee_intrinsic_id(inst)
 }
 
 // ---- nonzero.rs ----
@@ -703,7 +730,7 @@ pub mod nested {
         r: Matcher,
     ) -> bool {
         let Some((_, instruction)) = q.instruction_of(v) else { return false };
-        if instruction.opcode != Opcode::Binary(op) || !instruction.flags.contains(needs) {
+        if !matches!(instruction.opcode, Opcode::Binary(kind) if kind == op) || !instruction.flags.contains(needs) {
             return false;
         }
         let (a, b) = (instruction.operands[0], instruction.operands[1]);
@@ -751,7 +778,7 @@ pub mod nested {
         inner: Matcher,
     ) -> bool {
         let Some((_, instruction)) = q.instruction_of(v) else { return false };
-        instruction.opcode == Opcode::Cast(op) && inner(instruction.operands[0])
+        matches!(instruction.opcode, Opcode::Cast(kind) if kind == op) && inner(instruction.operands[0])
     }
 
     /// `m_ICmp(Pred, L, R)` with `m_c_ICmp`'s swap when `commutable`: the
@@ -1058,4 +1085,15 @@ pub fn is_argument(
         v,
         Operand::Value(id) if matches!(q.function.value(id).def, ValueDef::Argument(_))
     )
+}
+
+// ---- combine_shared.rs ----
+
+/// `m_Neg(m_Value(X))`: `sub 0, x`, with the flags of the `sub`.
+pub fn neg(
+    q: &Query,
+    v: Operand,
+) -> Option<(InstId, Operand, Flags)> {
+    let (inst, instruction, a, b) = binary(q, v, BinaryOp::Sub)?;
+    zero(q, a).then_some((inst, b, instruction.flags))
 }

@@ -4,9 +4,21 @@ inputs:
   save:
     description: Save the caches at the end (the build job only).
     default: "false"
+  clang:
+    description: '"required": a clang tree that is missing is an error (the gate jobs); otherwise a warning.'
+    default: ""
+  pintools:
+    description: '"required": the pin tools tree (the pintools job builds it) must exist and is exported as LLVM_BIN, LLVM_SRC and LLVM_BUILD (the unit, integration and python groups).'
+    default: ""
 runs:
   using: composite
   steps:
+    - name: No build slot on a hosted runner
+      if: runner.environment == 'github-hosted'
+      shell: bash
+      run: |
+        # tools/buildslot.py refuses cargo where ~/.local/bin/buildslot is missing; only tinytim (self-hosted) has it, and keeps the rule.
+        echo "BUILDSLOT_BYPASS=1" >> "$GITHUB_ENV"
     - name: apt
       shell: bash
       run: |
@@ -15,6 +27,9 @@ runs:
         echo "deb https://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm20.list
         sudo apt-get update -qq
         sudo apt-get install -y -qq build-essential gcc-multilib autoconf automake libtool pkg-config nasm valgrind libpng-dev zlib1g-dev libncurses-dev gdb binutils llvm-20 clang-20 lld-20 zstd
+        # qb_arm64: qemu and the arm64 cross libraries only (no cross compiler); the newest libgcc-N-dev the image lists.
+        libgcc=$(apt-cache pkgnames libgcc- | grep -E '^libgcc-[0-9]+-dev-arm64-cross$' | sort -t- -k2,2n | tail -n 1)
+        sudo apt-get install -y -qq qemu-user libc6-dev-arm64-cross libc6-arm64-cross linux-libc-dev-arm64-cross libgcc-s1-arm64-cross "$libgcc"
         # gcc-multilib: the vsgcc harness links gcc -m32 programs, which need the 32-bit libgcc (__divdi3).
         # ubuntu-24.04 is a fixed image: gdb 15.1, binutils 2.42 (printed below).
         echo /usr/lib/llvm-20/bin >> "$GITHUB_PATH"
@@ -31,20 +46,84 @@ runs:
       if: inputs.save != 'true'
       with:
         path: ~/.cache/llrm
-        key: llrm-forks-${{ runner.os }}-${{ hashFiles('toolchain/jwbuild.sh', 'toolchain/dosrunbuild.sh', 'toolchain/cache.sh', 'toolchain/owshim/ow-commit', 'toolchain/wdump.sh', 'toolchain/gcctorture.sh') }}
+        key: llrm-forks-${{ runner.os }}-${{ hashFiles('toolchain/jwbuild.sh', 'toolchain/dosrunbuild.sh', 'toolchain/cache.sh', 'toolchain/owshim/ow-commit', 'toolchain/wdump.sh', 'toolchain/gcctorture.sh', 'toolchain/owclib.sh', 'tools/build-ow-clib.sh', 'tools/ow-clib-make.py') }}
         restore-keys: llrm-forks-
     - uses: actions/cache@v4
       if: inputs.save == 'true'
       with:
         path: ~/.cache/llrm
-        key: llrm-forks-${{ runner.os }}-${{ hashFiles('toolchain/jwbuild.sh', 'toolchain/dosrunbuild.sh', 'toolchain/cache.sh', 'toolchain/owshim/ow-commit', 'toolchain/wdump.sh', 'toolchain/gcctorture.sh') }}
+        key: llrm-forks-${{ runner.os }}-${{ hashFiles('toolchain/jwbuild.sh', 'toolchain/dosrunbuild.sh', 'toolchain/cache.sh', 'toolchain/owshim/ow-commit', 'toolchain/wdump.sh', 'toolchain/gcctorture.sh', 'toolchain/owclib.sh', 'tools/build-ow-clib.sh', 'tools/ow-clib-make.py') }}
         restore-keys: llrm-forks-
+    - name: Which clang trees the pin names
+      id: clang
+      shell: bash
+      run: |
+        for kind in pin m16; do
+          dir=$(sh toolchain/clangbuild.sh --print $kind)
+          echo "$kind=$dir" >> "$GITHUB_OUTPUT"
+          echo "${kind}_name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
+        done
+    - id: pintools
+      if: inputs.pintools == 'required'
+      shell: bash
+      run: |
+        dir=$(sh toolchain/pintoolsbuild.sh --print)
+        echo "dir=$dir" >> "$GITHUB_OUTPUT"
+        echo "name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      if: inputs.pintools == 'required'
+      with:
+        path: ${{ steps.pintools.outputs.dir }}
+        key: llrm-${{ steps.pintools.outputs.name }}
+    - uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.clang.outputs.pin }}
+        key: llrm-${{ steps.clang.outputs.pin_name }}
+    - uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.clang.outputs.m16 }}
+        key: llrm-${{ steps.clang.outputs.m16_name }}
+    - name: The clang trees, from the toolchain workflow's artifacts where the cache missed
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # A pull request into main cannot read the caches saved on feat/parity (toolchain/clangfetch.sh). A tree with no artifact either stays missing.
+        sh toolchain/clangfetch.sh "llrm-${{ steps.clang.outputs.pin_name }}" "${{ steps.clang.outputs.pin }}" || true
+        sh toolchain/clangfetch.sh "llrm-${{ steps.clang.outputs.m16_name }}" "${{ steps.clang.outputs.m16 }}" || true
+    - name: The pin's tools tree (built by the pintools job)
+      if: inputs.pintools == 'required'
+      shell: bash
+      run: |
+        # LLVM_BIN holds llc and opt (tools/pairs/pin.py); tools/dagisel/regen.sh reads LLVM_SRC (at the pin) and LLVM_BUILD (llvm-tblgen,
+        # the generated headers). A missing tree is red: those tests would fail on it anyway, less clearly.
+        dir="${{ steps.pintools.outputs.dir }}"
+        for t in llc opt llvm-tblgen; do [ -x "$dir/build/bin/$t" ] || { echo "::error::no pin tools tree at $dir: $t is missing (the pintools job builds it)"; exit 1; }; done
+        echo "LLVM_SRC=$dir/src" >> "$GITHUB_ENV"
+        echo "LLVM_BUILD=$dir/build" >> "$GITHUB_ENV"
+        # LLVM_BIN is the pin's whole bin directory for pinclocks.sh, clang-oracle.sh and the difftest tools: clang is the clang tree's, linked in.
+        clang="$(sh toolchain/clangbuild.sh --print pin)/bin/clang"
+        [ -x "$clang" ] || { echo "::error::no pinned clang at $clang to link into LLVM_BIN (the toolchain job builds it)"; exit 1; }
+        ln -sf "$clang" "$dir/build/bin/clang"
+        echo "LLVM_BIN=$dir/build/bin" >> "$GITHUB_ENV"
+        # A test that needs the tools is red, not skipped, where they are required (tools/difftest/test_*.py).
+        echo "LLRM_REQUIRE_PINTOOLS=1" >> "$GITHUB_ENV"
+    - name: The clang trees (built by the toolchain workflow)
+      shell: bash
+      run: |
+        # Built by .github/workflows/toolchain.yml, never here. A tree that is missing leaves its variable unset, and the llrm-cc tests
+        # fail on it: red, not skipped. The pin tree must report the pin's sha (tools/pin_clang.py).
+        pin="${{ steps.clang.outputs.pin }}/bin/clang"
+        m16="${{ steps.clang.outputs.m16 }}/bin/clang"
+        miss() { if [ "${{ inputs.clang }}" = required ]; then echo "::error::$1"; exit 1; else echo "::warning::$1"; fi; }
+        if [ -x "$pin" ] && LLRM_PIN_CLANG="$pin" python3 tools/pin_clang.py >/dev/null; then echo "LLRM_PIN_CLANG=$pin" >> "$GITHUB_ENV"; else miss "no pinned clang tree at $pin (the toolchain job builds it)"; fi
+        if [ -x "$m16" ]; then echo "LLRM_CLANG_M16=$m16" >> "$GITHUB_ENV"; else miss "no m16 clang tree at $m16 (the toolchain job builds it)"; fi
     - name: Drop trees whose pin is gone
       shell: bash
       run: |
         for d in ~/.cache/llrm/*-[0-9a-f]*; do
           [ -d "$d" ] || continue
-          grep -rqs "${d##*-}" toolchain/jwbuild.sh toolchain/dosrunbuild.sh toolchain/owshim/ow-commit toolchain/gcctorture.sh || { echo "pruned $d"; rm -rf "$d" "$d.lock"; }
+          grep -rqs "${d##*-}" toolchain/jwbuild.sh toolchain/dosrunbuild.sh toolchain/owshim/ow-commit toolchain/gcctorture.sh toolchain/clang/pin || { echo "pruned $d"; rm -rf "$d" "$d.lock"; }
         done
     - name: wdump (Open Watcom's, built from the tree owshim pins)
       shell: bash
@@ -56,6 +135,14 @@ runs:
         [ -x "$wdump" ] || { echo "::error::toolchain/wdump.sh printed '$wdump', which is not an executable file"; exit 1; }
         echo "WDUMP=$wdump" >> "$GITHUB_ENV"
         echo "LLRM_REQUIRE_WDUMP=1" >> "$GITHUB_ENV"
+    - name: Open Watcom's DOS C library (LLRM_OW), built from the cached source tree
+      shell: bash
+      run: |
+        # No installed Open Watcom: the bootstrapped tree's own tools build the library and the noemu stubs (toolchain/owclib.sh), once per
+        # commit, cached with the forks. A failed build is a red job, and the llrm-cc tests fail on an unset LLRM_OW.
+        ow=$(sh toolchain/owclib.sh | tail -n 1)
+        [ -f "$ow/bld/clib/library/msdos.386/ms_r/clib3r.lib" ] || { echo "::error::toolchain/owclib.sh printed '$ow', which has no library"; exit 1; }
+        echo "LLRM_OW=$ow" >> "$GITHUB_ENV"
     - name: The gcc torture corpus (pinned, cached with the forks)
       shell: bash
       run: echo "TORTURE_CORPUS=$(sh toolchain/gcctorture.sh)" >> "$GITHUB_ENV"

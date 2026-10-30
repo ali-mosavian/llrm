@@ -5,10 +5,11 @@
    or a pipe, and cntext.c the text screen, linked only by a program that uses
    the screen statements. */
 #include "cndriver.h"
-#include "device.h"
+#include "dev.h"
 #include "llrm_os.h"
 
-enum { STREAM_WIDTH = 80, CHUNK = 64 };
+#define DAY 8640000L
+enum { STREAM_WIDTH = 80, CHUNK = 64, BEEP_HERTZ = 800, BEEP_LENGTH = 25 /* hundredths of a second */ };
 
 const Driver *cn_text_driver;
 const Driver *cn_gfx_driver;
@@ -20,6 +21,17 @@ static const Driver *redirected;
 static byte column;
 static char pending[CHUNK];
 static unsigned used;
+
+/* The bell: a tone for a quarter of a second, on the text screen and on the graphics screen alike. */
+void cn_bell(void)
+{
+    long start = dev_clock();
+
+    dev_tone(BEEP_HERTZ);
+    while ((dev_clock() - start + DAY) % DAY < BEEP_LENGTH)
+        ;
+    dev_tone(0);
+}
 
 static void flush(void)
 {
@@ -169,14 +181,28 @@ byte cn_width(void)
     return cn_driver()->width();
 }
 
+/* A NUL prints nothing, on the screen or redirected (BCOM45, measured: "a" + CHR$(0) + "b" prints ab). */
 void cn_putc(char c)
 {
-    cn_driver()->write(&c, 1);
+    if (c)
+        cn_driver()->write(&c, 1);
 }
 
 void cn_write(const char *s, unsigned n)
 {
-    cn_driver()->write(s, n);
+    const char *start = s;
+
+    while (n) {
+        if (*s == 0) {
+            if (s != start)
+                cn_driver()->write(start, s - start);
+            start = s + 1;
+        }
+        s++;
+        n--;
+    }
+    if (s != start)
+        cn_driver()->write(start, s - start);
 }
 
 void cn_crlf(void)

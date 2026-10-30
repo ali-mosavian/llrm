@@ -57,7 +57,7 @@ nib() {
 # The pipeline's last pass, as the stage dumps name it.
 mkdir "$work/probe"
 LLRM_MIR_STAGES=$work/probe "$bin/llrm-qb" "$root/tests/run/qb/addrm.bas" -o "$work/probe.obj" >/dev/null 2>&1
-pipeline_end=$(ls "$work/probe" | tail -1)
+pipeline_end=$(ls "$work/probe" | grep -E '^[0-9]+-.*\.ll$' | tail -1)
 for source in "$root"/tests/run/qb/*.bas; do
   qb "qb-$(basename "$source" .bas)" "$source"
 done
@@ -67,5 +67,7 @@ done
 for source in $(find "$root/tests/fixtures/nib" "$root/examples" -name '*.nib' | sort); do
   nib "nib-$(echo "${source#"$root"/}" | sed -e 's|^tests/fixtures/nib/||' -e 's|/|-|g' -e 's/\.nib$//')" "$source"
 done
-nib nib-runtime "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib"
+nib nib-runtime "$root/crates/frontends/nib/src/runtime/runtime.nib"
 echo "emitted: $(ls "$out/emitted" | wc -l), optimized: $(ls "$out/optimized" | wc -l), $(du -sh "$out" | cut -f1)"
+# A run that keeps no optimized module has lost its pipeline's last stage, not a corpus.
+[ "$(ls "$out/optimized" | wc -l)" -gt 0 ] || { echo "mir-corpus: no optimized module kept; the stage dumps changed" >&2; exit 1; }

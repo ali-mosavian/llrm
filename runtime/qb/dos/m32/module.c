@@ -3,9 +3,10 @@
  */
 #include "module.h"
 
+#pragma aux qb_module_header "qb_module_header"
+
 /* start.asm: the module's header. */
 extern const u8 *qb_module_header;
-#pragma aux qb_module_header "qb_module_header"
 
 /* Offsets in the header. */
 enum ModuleWord {

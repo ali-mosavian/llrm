@@ -1,3 +1,4 @@
+' dialect: pds71
 ' $dynamic
 dim items(-1 to 0, 2 to 4, 1 to 1, 1 to 1, 1 to 1, 1 to 1, 1 to 1, 1 to 1, 5 to 6) as integer
 dim rowIndex as integer

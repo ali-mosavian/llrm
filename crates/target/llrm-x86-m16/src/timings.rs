@@ -8,8 +8,9 @@ use llrm_support::hash::IndexMap;
 use llrm_target::timings::{CpuTable, Timings};
 
 /// The file, read once.
-pub static TABLE: LazyLock<Timings> =
-    LazyLock::new(|| Timings::parse(include_str!("timings.times")).expect("timings.times parses"));
+pub static TABLE: LazyLock<Timings> = LazyLock::new(|| {
+    Timings::parse_tuned(include_str!("timings.times"), llrm_target::tune::X86).expect("timings.times parses")
+});
 
 pub const ARCHS: [&str; 7] = ["486", "P5", "P6", "K5", "K6", "K7", "Core"];
 

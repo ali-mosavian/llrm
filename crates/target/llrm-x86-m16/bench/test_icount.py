@@ -104,10 +104,80 @@ class CountTests(unittest.TestCase):
         result = icount.run(self.exe, entry, self.directory)
         self.assertEqual((result.region.instructions, result.region.memory_operands), (3 + 1, 0))
 
+    def test_a_whole_program_is_counted_from_its_first_instruction_to_its_exit(self):
+        """A program with no region to name (tests/run's, for the clocks sweep) counted nothing: `entry=None` only ran it.
+        `whole` counts the 34 of `region`, the 4 of `other` and the 7 of the start-up, the exit's `int 21h` included."""
+        result = icount.run(self.exe, None, self.directory, whole=True)
+        self.assertEqual((result.error, result.exit_code), ("", 0))
+        self.assertEqual(result.region.instructions, 34 + 4 + 7)
+
+    def test_a_profile_counts_each_address_as_often_as_it_ran(self):
+        """A hot loop in grep.bas (2.1x the clocks of main) was found by reading two listings: `profile` names the addresses that ran, and how often."""
+        entry = maps.find(maps.symbols(self.listing), "region")
+        profile = {}
+        icount.run(self.exe, None, self.directory, whole=True, profile=profile)
+        # `mov cx, 5` (3 bytes), then `dec cx`: the loop body runs five times
+        self.assertEqual((profile[entry], profile[entry + 3]), (1, 5))
+
     def test_a_function_the_program_never_calls_is_reported_not_counted_as_zero(self):
         result = icount.run(self.exe, 0x7000, self.directory)
         self.assertIsNone(result.region)
         self.assertIn("never entered", result.error)
+
+
+EXIT_WITH = """\
+.model small
+.386
+.stack 256
+.data
+{data}
+.code
+start:
+    mov ax, @data
+    mov ds, ax
+{body}
+    mov ah, 4Ch
+    int 21h
+end start
+"""
+
+
+@unittest.skipUnless((BIN / "jwasm").exists(), "needs jwasm and jwlink beside llrm's binaries (cargo build)")
+class ServiceTests(unittest.TestCase):
+    def run_body(self, body: str, file: bytes = b"", data: str = "dummy db 0"):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            (directory / "S.ASM").write_text(EXIT_WITH.format(body=body, data=data))
+            (directory / "DATA.BIN").write_bytes(file)
+            subprocess.run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{directory}/S.OBJ", str(directory / "S.ASM")], check=True)
+            subprocess.run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(directory / "S.EXE"), "file", str(directory / "S.OBJ")], check=True)
+            return icount.run(directory / "S.EXE", None, directory, whole=True)
+
+    def test_a_program_that_asks_for_the_current_drive_runs_to_its_exit(self):
+        """`int 21h ah=19h` (QuickBASIC's startup, grep.bas and stft_single.bas) stopped the run with `int 21h ah=0x19`: those
+        programs had no clock row. The drive is C: (2) and AL carries it to the exit code."""
+        result = self.run_body("    mov ah, 19h\n    int 21h\n    mov bl, al\n    mov al, bl")
+        self.assertEqual((result.error, result.exit_code), ("", 2))
+
+    def test_a_file_opened_by_its_drive_and_root_path_is_found_in_the_programs_directory(self):
+        """QuickBASIC names a file `C:\\DATA.BIN` once the drive is known: the emulator looked for a file of that very name, opened
+        nothing and the program printed 0 where stft_single.bas and grep.bas want 78803551 and 4745."""
+        body = """    mov dx, offset fname
+    mov ax, 3D00h
+    int 21h
+    jc fail
+    mov bx, ax
+    mov dx, offset buf
+    mov cx, 1
+    mov ah, 3Fh
+    int 21h
+    mov al, buf
+    jmp done
+fail:
+    mov al, 99
+done:"""
+        result = self.run_body(body, bytes([7]), "fname db 'C:\\DATA.BIN', 0\nbuf db 0")
+        self.assertEqual((result.error, result.exit_code), ("", 7))
 
 
 class MapTests(unittest.TestCase):
@@ -120,3 +190,4 @@ class MapTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

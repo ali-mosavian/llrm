@@ -1,11 +1,9 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-define internal i16 @calculate() addrspace(1) {
+define internal cc 1005 i16 @calculate() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %0 = alloca [4 x i8]
   %1 = alloca [4 x i8]
-  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 4, i1 false)
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 4, i1 false)
   store i16 1, ptr %1, !tbaa !2
   %2 = getelementptr inbounds i8, ptr %1, i16 2
   store i16 2, ptr %2, !tbaa !2
@@ -32,8 +30,6 @@ b1:
   %18 = add i16 %15, %17
   ret i16 %18
 }
-
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}

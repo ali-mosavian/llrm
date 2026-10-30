@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/upperzero.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/upperzero.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:5edf217f1822df7f90ea7083adafbab594e31a53616e444623b990d7701e1bce -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/upperzero.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/upperzero.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/upperzero.rs sha256:c8b4905b5d60f4078f4f4c852a8ec77e466ed1df69dc10687e68cd1170da3a3b -->
 
 # upperzero
 
@@ -25,12 +25,12 @@ instruction, a set of roots (one bit each) known to be zero above bit 15.
 ```
 
 `established` makes the facts true where the code needs them. A cell that
-reads a root through a register holding no value (the frame pointer) needs
-that root's upper half zero. Where the analysis does not prove it, the pass
-inserts `movzx r32,r16`: in the preheader of the outermost loop around the
-cell in which nothing disturbs the root, when the loop's entry is one block
-with one successor, or else before the first such cell in the block. It
-repeats until no cell lacks the fact.
+reads a root 32 bits wide, whether the register holds a value or not (the
+frame pointer), needs that root's upper half zero. Where the analysis does
+not prove it, the pass inserts `movzx r32,r16`: in the preheader of the
+outermost loop around the cell in which nothing disturbs the root, when the
+loop's entry is one block with one successor, or else before the first such
+cell in the block. It repeats until no cell lacks the fact.
 
 ## Example
 `mov ecx, 2; xchg esi, ecx; nop` in one block, nothing known on entry.

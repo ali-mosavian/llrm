@@ -55,3 +55,12 @@ class LimitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MemoryLimitTests(unittest.TestCase):
+    def test_a_child_allocating_beyond_the_limit_is_stopped_and_reported_as_a_memory_limit(self):
+        """datetime.c compiled with the translated JumpThreading grew to 50 GB before a timeout stopped it: a runaway must die at its limit and say so."""
+        with self.assertRaises(cpulimit.MemoryLimit):
+            cpulimit.run([sys.executable, "-c", "x = bytearray(900 * 1024 * 1024)"], 60, memory_kb=300_000, capture_output=True, text=True)
+        done = cpulimit.run([sys.executable, "-c", "x = bytearray(10 * 1024 * 1024); print('ok')"], 60, memory_kb=300_000, capture_output=True, text=True)
+        self.assertEqual(done.stdout.strip(), "ok")

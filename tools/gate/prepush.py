@@ -24,10 +24,14 @@ sys.path.insert(0, str(HERE))
 
 import gate  # noqa: E402
 
+sys.path.insert(0, str(HERE.parent))
+from buildslot import slotted  # noqa: E402
+
 
 def selected(cfg: dict, only: list[str] | None = None) -> dict[str, str]:
     """name -> the shell command of every prepush step (the gate's own) and root test, in tiers.toml's order."""
-    files = subprocess.run(["git", "diff", "--name-only", "origin/main"], capture_output=True, text=True, cwd=ROOT).stdout.split()
+    base = subprocess.run("git merge-base HEAD origin/feat/parity 2>/dev/null || git merge-base HEAD origin/main", shell=True, capture_output=True, text=True, cwd=ROOT).stdout.strip() or "origin/main"
+    files = subprocess.run(["git", "diff", "--name-only", base], capture_output=True, text=True, cwd=ROOT).stdout.split()
     plan = gate.plan(files or ["README.md"], "smoke")
     commands = gate.commands(plan, cfg, gate.packages())
     chosen = {step: commands[step] for step in cfg["prepush"]["steps"] if step in commands}
@@ -43,7 +47,7 @@ def run_all(commands: dict[str, str], env: dict[str, str], jobs: int = 4) -> tup
     def one(item: tuple[str, str]) -> tuple[str, int, float, str]:
         name, command = item
         started = time.perf_counter()
-        done = subprocess.run(command, shell=True, cwd=ROOT, env=env, capture_output=True, text=True)
+        done = subprocess.run(slotted(command), shell=True, cwd=ROOT, env=env, capture_output=True, text=True, errors="replace")
         return name, done.returncode, time.perf_counter() - started, done.stdout + done.stderr
 
     started = time.perf_counter()

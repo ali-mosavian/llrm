@@ -182,13 +182,11 @@ pub fn is_valid_assume_for_context(
         if !allow_ephemerals && assume == cxt {
             return false;
         }
-        let list = q.function.block(cxt_block).instructions();
-        let (Some(from), Some(to)) =
-            (list.iter().position(|one| *one == cxt), list.iter().position(|one| *one == assume))
-        else {
-            return false;
-        };
-        if !super::guarantee::is_guaranteed_to_transfer_execution_to_successor_range(q, &list[from..to], 15) {
+        if !super::guarantee::is_guaranteed_to_transfer_execution_to_successor_range(
+            q,
+            q.function.iter_range(cxt, assume),
+            15,
+        ) {
             return false;
         }
         return allow_ephemerals || !is_ephemeral_value_of(q, assume, cxt);
@@ -210,8 +208,8 @@ pub fn will_not_free_between(
     ctx: InstId,
 ) -> bool {
     let mut checked = 0_u32;
-    let mut has_no_free_in_range = |range: &[InstId]| -> bool {
-        for &inst in range {
+    let mut has_no_free_in_range = |range: &mut dyn Iterator<Item = InstId>| -> bool {
+        for inst in range {
             let n = checked;
             checked += 1;
             if n > MAX_INSTRS_TO_CHECK_FOR_FREE {
@@ -229,25 +227,21 @@ pub fn will_not_free_between(
         true
     };
     let (Some(ctx_block), Some(assume_block)) = (q.block_of(ctx), q.block_of(assume)) else { return false };
-    let position =
-        |block: BlockId, inst: InstId| q.function.block(block).instructions().iter().position(|one| *one == inst);
     if ctx_block == assume_block {
         if assume != ctx && !q.comes_before(assume, ctx) {
             return false;
         }
-        let (Some(from), Some(to)) = (position(ctx_block, assume), position(ctx_block, ctx)) else { return false };
-        return has_no_free_in_range(&q.function.block(ctx_block).instructions()[from..to]);
+        return has_no_free_in_range(&mut q.function.iter_range(assume, ctx));
     }
     let mut cur = ctx_block;
     loop {
-        let list = q.function.block(cur).instructions();
         if cur == assume_block {
-            let Some(from) = position(cur, assume) else { return false };
-            return has_no_free_in_range(&list[from..]);
+            return has_no_free_in_range(&mut q.function.iter_from(assume));
         }
         let Some(pred) = single_predecessor(q, cur) else { return false };
-        let end = if cur == ctx_block { position(cur, ctx).unwrap_or(list.len()) } else { list.len() };
-        if !has_no_free_in_range(&list[..end]) {
+        // The context's own block is read up to it, the others whole.
+        let upto = (cur == ctx_block).then_some(ctx);
+        if !has_no_free_in_range(&mut q.function.iter_block(cur).take_while(|&one| Some(one) != upto)) {
             return false;
         }
         cur = pred;
@@ -529,7 +523,7 @@ pub fn compute_known_bits_from_cond(
 }
 
 /// `DominatorTree::dominates(BasicBlockEdge(start, end), use_block)`.
-fn edge_dominates(
+pub(super) fn edge_dominates(
     q: &Query,
     start: BlockId,
     end: BlockId,
@@ -578,7 +572,7 @@ pub fn compute_known_bits_from_context(
     let Some(cxt) = q.cxt else { return };
     if let (Some(conditions), Some(_)) = (q.dom_conditions, q.dt) {
         let cxt_block = q.block_of(cxt);
-        for &branch in conditions.conditions_for(v) {
+        for &branch in conditions.conditions_for(v).iter() {
             let instruction = q.function.instruction(branch);
             let (Some(start), Some(cxt_block), Operand::Block(taken), Operand::Block(otherwise)) =
                 (q.block_of(branch), cxt_block, instruction.operands[1], instruction.operands[2])
@@ -634,10 +628,7 @@ pub fn compute_known_bits_from_context(
 
 /// `CmpInst::isTrueWhenEqual`.
 fn is_true_when_equal(pred: IntPredicate) -> bool {
-    matches!(
-        pred,
-        IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle
-    )
+    pred.true_when_equal()
 }
 
 /// `m_Specific(side)` of `x`.
@@ -1184,6 +1175,33 @@ fn is_argument(
     )
 }
 
+/// `SmallPtrSet<Value *, 8>`: the first eight values in a scanned array on the
+/// stack, the rest in a set.
+#[derive(Default)]
+struct SmallVisited {
+    small: [Option<Operand>; 8],
+    len: usize,
+    rest: HashMap<Operand, ()>,
+}
+
+impl SmallVisited {
+    /// Whether `v` is new.
+    fn insert(
+        &mut self,
+        v: Operand,
+    ) -> bool {
+        if self.small[..self.len].contains(&Some(v)) {
+            return false;
+        }
+        if self.len < self.small.len() {
+            self.small[self.len] = Some(v);
+            self.len += 1;
+            return true;
+        }
+        self.rest.insert(v, ()).is_none()
+    }
+}
+
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L10875>
 fn add_value_affected_by_condition(
     q: &Query,
@@ -1241,9 +1259,9 @@ pub fn find_values_affected_by_condition(
     }
 
     let mut worklist = vec![cond];
-    let mut visited: HashMap<Operand, ()> = HashMap::default();
+    let mut visited = SmallVisited::default();
     while let Some(v) = worklist.pop() {
-        if visited.insert(v, ()).is_some() {
+        if !visited.insert(v) {
             continue;
         }
         if is_assume {

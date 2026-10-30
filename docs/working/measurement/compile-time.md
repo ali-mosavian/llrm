@@ -64,6 +64,8 @@ flowchart LR
 | `LLRM_WHY` | every analysis computed again, and the pass that invalidated it |
 | `LLRM_CHECK_*` | a check that a cached or incremental result equals a fresh one (`LLRM_CHECK_STALE`, `LLRM_CHECK_INTERVALS`, `LLRM_CHECK_REPLAY`, ...); each is a lookup in a snapshot of the environment, not a `getenv` |
 
+A flag (`LLRM_WHY`, `LLRM_CHECK_*`, `LLRM_VERIFY`, `LLRM_BLESS`) is off when unset, empty, `0`, `false` or `off`, and on for any other value; one parser reads them all (`llrm_env`, asked through `llrm_support::env_set`). Unset a flag to turn it off. Variables that carry a value (`LLRM_DEBUG`, `LLRM_TIME_TOP`, `LLRM_MIR_STAGES`, `LLRM_CANDIDATES`) are read as their own.
+
 A change that saves compile time is checked byte-identical on the programs with its `LLRM_CHECK_*` switch on, so a faster compile is not a different one.
 
 ## Reading a result

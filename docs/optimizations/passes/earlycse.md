@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/earlycse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/earlycse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:1c25db9d55dd1871fd69e3de4ec6feae453cddd3718f68a9cd19e1861c33f324 -->
+<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:aea80fdf90e53103c750d9710d65cefe89398ca53ade3710cb25ebd2b6cf7939 -->
 
 # earlycse
 
@@ -14,25 +14,19 @@ translated is marked DEVIATE with its reason:
 - DEVIATE no `invariant.start`, `guard`, `sideeffect`, `pseudoprobe`, masked
   or target memory intrinsics, memset forwarding, fences or atomics: MIR has
   none (or `fill` makes them later). `llvm.assume` is handled.
-- DEVIATE `simplifyInstruction` is `simplify_instruction`, a stub with the
-  signature of fold-poc's `llrm_mir::simplify::simplify_instruction`
-  (InstructionSimplify.cpp): `algebraic::identity`, constants folded, a
-  select on a constant or with equal arms, `x cmp x`, `icmp ne (zext i1 x),
-  0`, `gep p, 0`, a phi of one value. It goes when theirs builds.
 - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
-  does it only when poison-generating flags remain); a load's metadata not
-  shared by both loads is dropped (`combineMetadataForCSE` merges it).
+  does it only when poison-generating flags remain).
 - DEVIATE a call's attributes are not intersected; a call that only reads or
   only writes memory (`memory::of`, which counts every location including
   `inaccessiblemem`) is numbered unless it is an `llvm.`/`llrm.` marker.
 - DEVIATE a GEP's constant offset is taken for byte GEPs only.
-- DEVIATE MemorySSA is the manager's, built once for the function as it was
-  and not updated (`MSSAUpdater`); an erased store stays a def in it, which
-  is only conservative. Erasures wait for the end of the walk so that what
-  it asks about still exists.
-- DEVIATE the clobber walk is `MemorySSA::clobbers` over the instruction's
-  `MemRef`: a set of nearest defs, each of which must dominate the earlier
-  access, where LLVM's walker answers one.
+- DEVIATE MemorySSA is the translated `Mssa`, built once for the function as
+  it was and not updated (`MSSAUpdater`); an erased store stays a def in it,
+  which is only conservative. Erasures wait for the end of the walk so that
+  what it asks about still exists.
+- the clobbering access is `llrm_analysis::mssa::view::Translated`'s: one
+  access, the `MemoryPhi` where the nearest clobbers diverge, as LLVM's
+  walker answers.
 - DEVIATE (call walker) the clobbering access of a call is its defining
   access, not LLVM's call-vs-call query (the walker asks the modref of the
   call against each def): any write between two calls blocks the CSE, which
@@ -75,5 +69,4 @@ b0:
 ```
 
 ## Used by
-[`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`),
-behind `Options::llvm_order` (`LLRM_EXP_LLVM`), off by default.
+[`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`).

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/pointerfacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/pointerfacts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/pointerfacts.rs sha256:9a7855e83a70f09585781b895fbe1fe8d1de8b8f397c6deb384de15b4a9836c1 -->
+<!-- src: crates/opt/llrm-analysis/src/pointerfacts.rs sha256:86db913c232f6d43a431ede1e91156e6d8a9780524953dde19793ce88f1f8c31 -->
 
 # pointerfacts
 
@@ -68,8 +68,7 @@ From unit test `offsets_follow_constant_inbounds_steps_only` in
 
 ## Provides
 `Offsets` (made by `offsets`), `Location`. Consumers: [`crate::memoryssa`](memoryssa.md),
-[`crate::interprocedural`](interprocedural.md) (`cannot_fault`) and `argpromotion` in
-llrm-transforms.
+`argpromotion` in llrm-transforms.
 
 ## Needs
 `llrm_mir::datalayout::DataLayout` for offsets and index widths.

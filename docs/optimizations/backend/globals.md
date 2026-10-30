@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/globals.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/globals.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/globals.rs sha256:7983305ce3130c10e61f7815abc475035b7bf949f11661b0c12a6bde0a7b352e -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/globals.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/globals.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/globals.rs sha256:c84cf41d4236d552f88e9394d2ba4cd37828ca4575424773466ddb3f9f5e1b4d -->
 
 # globals
 

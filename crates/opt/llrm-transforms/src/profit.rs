@@ -35,10 +35,10 @@
 //! Frequencies come in two models, both per entry:
 //! - `_frequencies`: `branchprob`'s estimate in `UNIT`ths of an execution
 //!   (never below one, so a cold arm is near free but ordered), with each
-//!   loop's proven trips (`proven_trips`, from `induction::trip_count`) in
-//!   place of its estimate;
+//!   loop's proven trips (`proven_trips`, from ScalarEvolution's
+//!   `getSmallConstantTripCount`) in place of its estimate;
 //! - `_loop_products`: the trips of each loop around a block multiplied, with
-//!   `UNKNOWN_TRIPS` (ten) for a loop `induction` does not name. `lsr` and
+//!   `UNKNOWN_TRIPS` (ten) for a loop ScalarEvolution does not count. `lsr` and
 //!   `gvn` were tuned on it (#202, #203). `_loop_products_by_branch` weighs
 //!   each block by the share of its loop's trips that reach it.
 //!
@@ -76,10 +76,10 @@
 //! `proven_trips`, the frequency models and `UNIT`, `UNKNOWN_TRIPS`.
 //!
 //! # Used by
-//! Each of [`crate::lsr`], [`crate::hoist`], [`crate::gvn`],
-//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`],
+//! Each of [`crate::lsr_pass`], [`crate::hoist`], [`crate::gvn`],
+//! [`crate::loopunrollpass`], [`crate::looppeel`],
 //! [`crate::loopidioms`], [`crate::window`], [`crate::gepoffset`],
-//! [`crate::indvars`], [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`]
+//! [`crate::indvars`], [`crate::ipacp`], [`crate::inline`]
 //! and [`crate::interprocedural`] asks it, before a rewrite that trades code
 //! size or registers for speed, whether the rewrite pays. Not a pass: it runs
 //! only inside those.
@@ -90,11 +90,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::branchprob;
 use llrm_analysis::cfg;
-use llrm_analysis::consts::Known;
 use llrm_analysis::effects::Declarations;
-use llrm_analysis::{induction, memory};
+use llrm_analysis::memory;
+use llrm_analysis::scev::analysis::ScevSession;
+use llrm_mir::blockfrequency::frequency::BlockFrequency;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::{Callees, callee};
@@ -103,7 +103,6 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
-use num_traits::ToPrimitive;
 
 use crate::spill::{self, Room};
 
@@ -161,7 +160,7 @@ fn folds_into_users(
 ) -> bool {
     let users = function.users(value);
     // One reader: a load read twice is held in a register, not read twice.
-    users.len() == 1
+    users.has_one_use()
         && users.iter().all(|user| {
             let one = function.instruction(user.user);
             function.parent(user.user) == Some(block)
@@ -251,12 +250,7 @@ pub fn _block(
     block: i64,
     costs: &OperationCosts,
 ) -> Option<i64> {
-    function
-        .block(cfg::block(block))
-        .instructions()
-        .iter()
-        .map(|&one| operation(context, layout, function, callees, one, costs))
-        .sum()
+    function.iter_block(cfg::block(block)).map(|one| operation(context, layout, function, callees, one, costs)).sum()
 }
 
 /// Semantic work present once in the body, independent of frequency.
@@ -285,7 +279,7 @@ pub fn site(
 ) -> llrm_analysis::peelsize::Site {
     let entries = match frequencies.0.get_or_init(|| {
         FREQUENCIES.with(|runs| runs.set(runs.get() + 1));
-        let trips = proven_trips(unit, &unit.registers());
+        let trips = proven_trips(unit);
         _frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips))
     }) {
         Some(frequency) => cfg::graph(unit.function)
@@ -302,7 +296,7 @@ pub fn site(
         .iter()
         .flat_map(|&at| {
             let block = cfg::block(at);
-            unit.function.block(block).instructions().iter().map(move |&inst| (block, inst))
+            unit.function.iter_block(block).map(move |inst| (block, inst))
         })
         .any(|(_, inst)| {
             unit.calls_out(inst)
@@ -351,29 +345,70 @@ pub fn priced(
     r#static(context, layout, function, callees, costs).is_some()
 }
 
-/// Each loop's trips by latch, where induction proves them: the `trips`
-/// that replaces the conventional ten.
-pub fn proven_trips(
-    unit: &memory::Unit,
-    facts: &IndexMap<ValueId, Known>,
-) -> IndexMap<i64, i64> {
+/// Each loop's trips by latch (the runs of its latch), where ScalarEvolution
+/// proves them (`getSmallConstantTripCount`): the `trips` that replaces the
+/// conventional ten.
+pub fn proven_trips(unit: &memory::Unit) -> IndexMap<i64, i64> {
     let mut trips = IndexMap::default();
-    for loop_ in &unit.shape().loops {
-        if let Some(count) = induction::trip_count(unit, loop_, facts).and_then(|count| count.to_i64()) {
+    let loops = &unit.shape().loops;
+    if loops.is_empty() {
+        return trips;
+    }
+    let mut session = ScevSession::within(unit.context, unit.globals, unit.metadata, unit.function);
+    for loop_ in loops {
+        if let Some(count) = scev_trips(&mut session, unit, loop_) {
             trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
         }
     }
     trips
 }
 
+/// How often `loop_`'s latch runs, where ScalarEvolution proves it
+/// (`getSmallConstantTripCount`): one exit, in the latch or in the header.
+/// The count is the header's runs, one more than the latch's where the header
+/// leaves.
+pub fn scev_trips(
+    session: &mut ScevSession,
+    unit: &memory::Unit,
+    loop_: &llrm_analysis::graph::loops::Loop,
+) -> Option<i64> {
+    let header = cfg::block(loop_.header);
+    let count =
+        session.ask_within(unit.context, unit.layout, unit.globals, unit.metadata, unit.function, |scev, cx| {
+            let natural = cx.loops.get_loop_for(header).filter(|found| found.get_header() == header)?;
+            let [exiting] = natural.get_exiting_blocks(cx.function)[..] else { return None };
+            let runs = scev.get_small_constant_trip_count(cx, header);
+            if loop_.latches.contains(&cfg::id(exiting)) {
+                Some(runs)
+            } else if exiting == header {
+                Some(runs.saturating_sub(1))
+            } else {
+                None
+            }
+        })?;
+    (count != 0).then_some(i64::from(count))
+}
+
+/// At most how often `loop_`'s latch runs, where ScalarEvolution proves a
+/// bound (`getSmallConstantMaxTripCount`, the header's runs, which the
+/// latch's never exceed): the loop may also leave by another exit.
+pub fn scev_trip_bound(
+    session: &mut ScevSession,
+    unit: &memory::Unit,
+    loop_: &llrm_analysis::graph::loops::Loop,
+) -> Option<i64> {
+    let header = cfg::block(loop_.header);
+    let count =
+        session.ask_within(unit.context, unit.layout, unit.globals, unit.metadata, unit.function, |scev, cx| {
+            cx.loops.get_loop_for(header).filter(|found| found.get_header() == header)?;
+            Some(scev.get_small_constant_max_trip_count(cx, header))
+        })?;
+    (count != 0).then_some(i64::from(count))
+}
+
 /// What one execution of the entry weighs in `_frequencies`: a block taken a
 /// third of the time weighs a third of it.
 pub const UNIT: i64 = 256;
-
-/// The most a block weighs, as BlockFrequencyInfo saturates its frequencies:
-/// 11 nested loops of 32 trips overflow i64, and spill traffic, a sum that
-/// `TrafficLess` subtracts from, cannot saturate.
-pub const MAX_FREQUENCY: i64 = 1 << 48;
 
 /// Block frequencies as `branchprob` estimates them (the heuristics, a loop's
 /// proven `trips` by latch), per entry, in `UNIT`ths of an execution and never
@@ -386,31 +421,31 @@ pub fn _frequencies(
     function: &Function,
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
-    _frequencies_in(context, metadata, globals, function, &cfg::Shape::of(function), trips)
+    _frequencies_in(context, metadata, globals, function, &cfg::loops_of(function), trips)
 }
 
-/// `_frequencies`, `shape` being `function`'s.
+/// `_frequencies`, `loops` being `function`'s.
 pub fn _frequencies_in(
     context: &Context,
     metadata: &[llrm_mir::module::MetadataNode],
     globals: &Declarations,
     function: &Function,
-    shape: &cfg::Shape,
+    loops: &[llrm_analysis::graph::loops::Loop],
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
-    _odds_in(context, metadata, globals, function, shape, trips).map(|(frequency, _)| frequency)
+    _odds_in(context, metadata, globals, function, loops, trips).map(|(frequency, _)| frequency)
 }
 
 /// Each loop's proven trips by its header: none for loops whose latches
 /// disagree.
 pub fn counted_by_header(
-    shape: &cfg::Shape,
+    loops: &[llrm_analysis::graph::loops::Loop],
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
     let empty = IndexMap::default();
     let trips = trips.unwrap_or(&empty);
     let mut counted = BTreeMap::new();
-    for loop_ in &shape.loops {
+    for loop_ in loops {
         let exact = loop_.latches.iter().filter_map(|at| trips.get(at).copied()).collect::<BTreeSet<_>>();
         if exact.len() > 1 {
             return None;
@@ -422,31 +457,59 @@ pub fn counted_by_header(
     Some(counted)
 }
 
-/// `_frequencies_in`, and the odds of each edge they were worked out from.
+/// `_frequencies_in`, and the odds of each edge they were worked out from:
+/// `BranchProbabilityInfo`'s, a loop's proven trips setting its exit's
+/// (`blockfreq::trip_adjusted`, profit's own: LLVM's probabilities know no
+/// trip count), then `BlockFrequencyInfo` over them, each block's frequency in
+/// `UNIT`s of the entry's. `None` for conflicting proofs.
 fn _odds_in(
     context: &Context,
     metadata: &[llrm_mir::module::MetadataNode],
     globals: &Declarations,
     function: &Function,
-    shape: &cfg::Shape,
+    loops: &[llrm_analysis::graph::loops::Loop],
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<(BTreeMap<i64, i64>, BTreeMap<(i64, i64), f64>)> {
-    let counted = counted_by_header(shape, trips)?;
-    let odds = branchprob::estimated(context, metadata, globals, function, shape, &counted);
+    let counted = counted_by_header(loops, trips)?;
+    let taken = _edge_odds(context, metadata, globals, function, loops, &counted);
+    let frequencies = llrm_analysis::blockfreq::BlockFrequencies::of_probabilities(function, &taken);
     Some((
-        cfg::graph(function)
+        function
+            .layout()
             .iter()
-            .map(|block| {
-                (
-                    block.at,
-                    odds.frequency
-                        .get(&block.at)
-                        .map_or(UNIT, |one| ((one * UNIT as f64).round() as i64).clamp(1, MAX_FREQUENCY)),
-                )
+            .map(|&block| {
+                (cfg::id(block), ((frequencies.relative_to_entry(block) * UNIT as f64).round() as i64).max(1))
             })
             .collect(),
-        odds.taken,
+        taken,
     ))
+}
+
+/// Each edge's odds as `_odds_in` works the frequencies out from:
+/// `BranchProbabilityInfo`'s, a proven loop's exit set by its trips
+/// (`counted`, by header).
+pub fn _edge_odds(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    globals: &Declarations,
+    function: &Function,
+    loops: &[llrm_analysis::graph::loops::Loop],
+    counted: &BTreeMap<i64, i64>,
+) -> BTreeMap<(i64, i64), f64> {
+    // The layout only folds the integer constants of a loop's exit test
+    // (`computeUnlikelySuccessors`).
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+        llrm_analysis::bpi::Module { context, declarations: globals, metadata, layout: &layout },
+        function,
+    );
+    let mut taken = BTreeMap::new();
+    for &block in function.layout() {
+        for to in function.successors(block) {
+            taken.insert((cfg::id(block), cfg::id(to)), bpi.get_edge_probability_to(function, block, to).to_f64());
+        }
+    }
+    llrm_analysis::blockfreq::trip_adjusted(function, loops, counted, &taken)
 }
 
 /// Block frequencies as a product of the trips of each loop around a block, ten
@@ -457,20 +520,20 @@ pub fn _loop_products(
     function: &Function,
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
-    _loop_products_in(function, &cfg::Shape::of(function), trips)
+    _loop_products_in(function, &cfg::loops_of(function), trips)
 }
 
-/// `_loop_products`, `shape` being `function`'s.
+/// `_loop_products`, `loops` being `function`'s.
 pub fn _loop_products_in(
     function: &Function,
-    shape: &cfg::Shape,
+    loops: &[llrm_analysis::graph::loops::Loop],
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
     let graph = cfg::graph(function);
     let mut frequency = graph.iter().map(|block| (block.at, 1_i64)).collect::<BTreeMap<_, _>>();
     let empty = IndexMap::default();
     let trips = trips.unwrap_or(&empty);
-    for loop_ in &shape.loops {
+    for loop_ in loops {
         let exact = loop_.latches.iter().filter_map(|at| trips.get(at).copied()).collect::<BTreeSet<_>>();
         if exact.len() > 1 {
             return None;
@@ -478,7 +541,7 @@ pub fn _loop_products_in(
         let factor = exact.iter().next().copied().unwrap_or(UNKNOWN_TRIPS);
         for at in &loop_.body {
             if let Some(count) = frequency.get_mut(at) {
-                *count = count.saturating_mul(factor).min(MAX_FREQUENCY);
+                *count = nested(*count, factor);
             }
         }
     }
@@ -496,20 +559,20 @@ pub fn _loop_products_by_branch(
     function: &Function,
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
-    _loop_products_by_branch_in(context, metadata, globals, function, &cfg::Shape::of(function), trips)
+    _loop_products_by_branch_in(context, metadata, globals, function, &cfg::loops_of(function), trips)
 }
 
-/// `_loop_products_by_branch`, `shape` being `function`'s: asked of the
+/// `_loop_products_by_branch`, `loops` being `function`'s: asked of the
 /// manager's, it is not derived three times over for each call.
 pub fn _loop_products_by_branch_in(
     context: &Context,
     metadata: &[llrm_mir::module::MetadataNode],
     globals: &Declarations,
     function: &Function,
-    shape: &cfg::Shape,
+    loops: &[llrm_analysis::graph::loops::Loop],
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<BTreeMap<i64, i64>> {
-    _products_with_odds_in(context, metadata, globals, function, shape, trips).map(|(weight, _)| weight)
+    _products_with_odds_in(context, metadata, globals, function, loops, trips).map(|(weight, _)| weight)
 }
 
 /// `_loop_products_by_branch_in`, and the odds of each edge it came from.
@@ -518,12 +581,11 @@ pub fn _products_with_odds_in(
     metadata: &[llrm_mir::module::MetadataNode],
     globals: &Declarations,
     function: &Function,
-    shape: &cfg::Shape,
+    loops: &[llrm_analysis::graph::loops::Loop],
     trips: Option<&IndexMap<i64, i64>>,
 ) -> Option<(BTreeMap<i64, i64>, BTreeMap<(i64, i64), f64>)> {
-    let mut weight = _loop_products_in(function, shape, trips)?;
-    let (odds, taken) = _odds_in(context, metadata, globals, function, shape, trips)?;
-    let loops = &shape.loops;
+    let mut weight = _loop_products_in(function, loops, trips)?;
+    let (odds, taken) = _odds_in(context, metadata, globals, function, loops, trips)?;
     for (at, count) in weight.iter_mut() {
         let Some(innermost) = loops.iter().filter(|one| one.body.contains(at)).min_by_key(|one| one.body.len()) else {
             continue;
@@ -531,20 +593,41 @@ pub fn _products_with_odds_in(
         let trip: i64 = innermost.latches.iter().map(|latch| odds.get(latch).copied().unwrap_or(UNIT)).sum();
         let here = odds.get(at).copied().unwrap_or(UNIT);
         if here < trip {
-            *count = ((*count as i128 * here as i128 / trip as i128) as i64).max(1);
+            *count = share_of(*count, here, trip);
         }
     }
     Some((weight, taken))
 }
 
-/// `total` plus `price` run `frequency` times, saturating: 40 nested loops
-/// weigh more than an i64 holds.
-fn weigh(
-    total: i64,
-    frequency: i64,
-    price: i64,
+/// A block weight as the frequency type LLVM keeps it in: a saturating `u64`
+/// ([`BlockFrequency`](llrm_mir::blockfrequency::frequency::BlockFrequency),
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/BlockFrequency.h#L27>).
+/// DEVIATE: the maps keep `i64`, so a weight past `i64::MAX` is that.
+fn frequency(count: i64) -> BlockFrequency {
+    BlockFrequency(u64::try_from(count).unwrap_or(0))
+}
+
+fn weight(frequency: BlockFrequency) -> i64 {
+    i64::try_from(frequency.get_frequency()).unwrap_or(i64::MAX)
+}
+
+/// `count` for a block one loop deeper, which runs `factor` trips: the product
+/// of the trips of every loop around a block. Twenty nested loops of the
+/// assumed ten trips pass `i64`'s end.
+fn nested(
+    count: i64,
+    factor: i64,
 ) -> i64 {
-    total.saturating_add(frequency.saturating_mul(price))
+    weight(frequency(count).saturating_mul(u64::try_from(factor).unwrap_or(0)))
+}
+
+/// `count` times the share `here / trip`, at least 1.
+fn share_of(
+    count: i64,
+    here: i64,
+    trip: i64,
+) -> i64 {
+    weight(frequency(count).scaled(u64::try_from(here).unwrap_or(0), u64::try_from(trip).unwrap_or(1))).max(1)
 }
 
 /// Profile-free expected work at `frequency`, a block's executions per entry
@@ -559,10 +642,10 @@ pub fn weighted(
 ) -> Option<i64> {
     #[cfg(test)]
     PRICED.with(|count| count.set((count.get().0 + 1, count.get().1)));
-    let mut total = 0;
+    let mut total: i64 = 0;
     for &block in function.layout() {
         let priced = _block(context, layout, function, callees, cfg::id(block), costs)?;
-        total = weigh(total, frequency[&cfg::id(block)], priced);
+        total = total.saturating_add(frequency[&cfg::id(block)].saturating_mul(priced));
     }
     Some(total)
 }
@@ -660,7 +743,7 @@ pub fn pressure_adjusted(
     frequency: &BTreeMap<i64, i64>,
 ) -> Option<i64> {
     let work = weighted(context, layout, function, callees, costs, frequency)?;
-    Some(work.saturating_add(spill_forecast(context, layout, function, costs, room, across, frequency)?.cost))
+    Some(work + spill_forecast(context, layout, function, costs, room, across, frequency)?.cost)
 }
 
 /// What `function` costs at `frequency` under `costs` and `room`: the one

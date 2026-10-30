@@ -39,6 +39,9 @@ pub struct Layout {
     pub mode: u32,
     /// LLVM's datalayout string.
     pub datalayout: String,
+    /// The `target triple` of the LLVM IR this target takes, where it takes
+    /// any.
+    pub llvm_triple: Option<String>,
     pub spaces: AddressSpaces,
     /// The operations (`select`, `fptoui.i64`) the machine has no instruction
     /// for, which the compiler expands before selection: LLVM's
@@ -50,6 +53,10 @@ pub struct Layout {
     /// `setOperationAction(..., Promote)`. An operation not listed runs as it
     /// is.
     pub promote: Vec<String>,
+    /// The cost model (`tti`: `"X86"`) and the CPU of it (`llvm_cpu`) the
+    /// compiler prices this target with; none where the description names none.
+    pub tti: Option<String>,
+    pub llvm_cpu: Option<String>,
 }
 
 impl AddressSpaces {
@@ -74,6 +81,30 @@ impl Layout {
         operation: &str,
     ) -> bool {
         self.expand.iter().any(|one| one == operation)
+    }
+
+    /// Whether the machine lacks an instruction for `operation` on values of
+    /// the type `ty` (`select.i8`), or on any type (`select`).
+    pub fn expands_for(
+        &self,
+        operation: &str,
+        ty: &str,
+    ) -> bool {
+        self.expands(operation)
+            || self
+                .expand
+                .iter()
+                .any(|one| one.strip_prefix(operation).is_some_and(|rest| rest.strip_prefix('.') == Some(ty)))
+    }
+
+    /// Whether any value type of `operation` is expanded.
+    pub fn expands_some(
+        &self,
+        operation: &str,
+    ) -> bool {
+        self.expand
+            .iter()
+            .any(|one| one == operation || one.strip_prefix(operation).is_some_and(|rest| rest.starts_with('.')))
     }
 
     /// Whether the machine would rather run `operation` at the native width
@@ -132,6 +163,17 @@ impl Layout {
             }
         };
         let required = |name: &str| number(name)?.ok_or(format!("spaces.{name} is missing"));
+        // A selector alone is no address, and a huge pointer's packed bits are
+        // not one either (a displacement past 64K carries into its selector):
+        // casts through their spaces do not compose (`ni:` marks them
+        // non-integral for every pass that asks the layout).
+        let non_integral: Vec<String> =
+            [number("segment")?, number("huge")?].into_iter().flatten().map(|space| space.to_string()).collect();
+        let datalayout = if non_integral.is_empty() || datalayout.split('-').any(|spec| spec.starts_with("ni:")) {
+            datalayout
+        } else {
+            format!("{datalayout}-ni:{}", non_integral.join(":"))
+        };
         let mut unmarked = BTreeMap::new();
         for (width, kind) in value.get("pointers").and_then(|one| one.as_table()).ok_or("[pointers] is missing")? {
             let width: i64 = width.parse().map_err(|_| format!("pointers.{width} is not a width"))?;
@@ -167,11 +209,21 @@ impl Layout {
                 .and_then(|list| list.iter().map(|one| one.as_str().map(str::to_owned)).collect())
                 .ok_or("promote is not a list of operation names")?,
         };
+        let text = |name: &str| -> Result<Option<String>, String> {
+            match value.get(name) {
+                None => Ok(None),
+                Some(one) => one.as_str().map(|one| Some(one.to_owned())).ok_or(format!("{name} is not a string")),
+            }
+        };
+        let llvm_triple = text("llvm_triple")?;
         Ok(Self {
             mode,
             datalayout,
+            llvm_triple,
             expand,
             promote,
+            tti: text("tti")?,
+            llvm_cpu: text("llvm_cpu")?,
             spaces: AddressSpaces {
                 roles: Spaces {
                     near: required("near")?,
@@ -194,6 +246,25 @@ mod tests {
     use super::*;
 
     const FLAT: &str = "mode = 32\ndatalayout = \"e-p:32:32\"\n[spaces]\nnear = 0\nfar = 0\ndata = 0\nstack = 0\n[pointers]\n4 = \"near\"\n";
+
+    /// A target found by the triple a module states needs the triple read from
+    /// its description.
+    #[test]
+    fn a_layout_reads_its_llvm_triple() {
+        let text = format!("llvm_triple = \"x86_64-unknown-linux-gnu\"\n{FLAT}");
+        assert_eq!(Layout::parse(&text).unwrap().llvm_triple.as_deref(), Some("x86_64-unknown-linux-gnu"));
+        assert_eq!(Layout::parse(FLAT).unwrap().llvm_triple, None);
+    }
+
+    /// The cost model and the CPU a target is priced as were read nowhere: the
+    /// targets spelled "i486" in code (m16 and m32 both).
+    #[test]
+    fn the_layout_names_the_cost_model_and_its_cpu() {
+        let named = Layout::parse(&format!("tti = \"X86\"\nllvm_cpu = \"i386\"\n{FLAT}")).unwrap();
+        assert_eq!((named.tti.as_deref(), named.llvm_cpu.as_deref()), (Some("X86"), Some("i386")));
+        let bare = Layout::parse(FLAT).unwrap();
+        assert_eq!((bare.tti, bare.llvm_cpu), (None, None));
+    }
 
     #[test]
     fn a_flat_layout_has_one_space_and_none_of_the_pair_kinds() {
@@ -255,5 +326,26 @@ mod tests {
             Layout::parse(&FLAT.replace("near = 0", "near = \"x\"")).unwrap_err(),
             "spaces.near is not an address space number"
         );
+    }
+}
+
+#[cfg(test)]
+mod segment_tests {
+    use super::*;
+
+    /// The selector-alone space is no address (casts through it do not
+    /// compose): a target that has one marks it non-integral in the layout
+    /// every pass reads; one that has none marks nothing.
+    #[test]
+    fn the_selector_space_is_non_integral_in_the_layout() {
+        let text = |segment: &str| {
+            format!(
+                "mode = 16\ndatalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16\"\n[spaces]\nnear = 0\nfar = 1\ndata = 0\nstack = 0\n{segment}\n[pointers]\n4 = \"near\"\n"
+            )
+        };
+        let with = Layout::parse(&text("segment = 2")).unwrap().data();
+        let without = Layout::parse(&text("")).unwrap().data();
+        assert!(with.is_non_integral_address_space(2));
+        assert!(!without.is_non_integral_address_space(2));
     }
 }

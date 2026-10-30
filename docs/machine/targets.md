@@ -21,11 +21,11 @@ flowchart TB
   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
   drv["<b>llrm-driver</b><br/><small>the one crate that<br/>names targets</small>"]:::src
-  core["<b>llrm-core (backend)</b><br/><small>depends on no target crate</small>"]:::opt
+  core["<b>llrm-codegen (backend)</b><br/><small>depends on no target crate</small>"]:::opt
   s16["<b>llrm-x86-m16-select</b><br/><small>SELECT crate: build.rs<br/>runs llrm-iselgen</small>"]:::mid
   s32["<b>llrm-x86-m32-select</b><br/><small>SELECT crate: build.rs<br/>runs llrm-iselgen</small>"]:::mid
-  d16["<b>llrm-x86-m16</b><br/><small>DATA crate: descriptions<br/>+ Target impl#59; no llrm-core</small>"]:::mid
-  d32["<b>llrm-x86-m32</b><br/><small>DATA crate: descriptions<br/>+ Target impl#59; no llrm-core</small>"]:::mid
+  d16["<b>llrm-x86-m16</b><br/><small>DATA crate: descriptions<br/>+ Target impl#59; no llrm-codegen</small>"]:::mid
+  d32["<b>llrm-x86-m32</b><br/><small>DATA crate: descriptions<br/>+ Target impl#59; no llrm-codegen</small>"]:::mid
   x86["<b>llrm-x86</b><br/><small>form schema and parser,<br/>encoder, x87 and i64 hooks,<br/>family.isel, helpers</small>"]:::mid
   tgt["<b>llrm-target</b><br/><small>Target trait, layout,<br/>registers, calling, timings,<br/>opcosts, object, OS</small>"]:::mid
   subgraph g_irs["IRS#59; NAME NO TARGET"]
@@ -52,7 +52,7 @@ flowchart TB
 
 *Crate graph of the targets; an arrow reads "depends on"*
 
-A data crate does not depend on `llrm-core`; a select crate does, and only `llrm-driver` depends on a select crate. `llrm-core` has no target among its normal dependencies (`tests/core_depends_on_no_target.rs`). Its own unit tests need a selector, so a `fixtures` feature generates the m16 and m32 selectors inside `llrm-core` for them, and nothing else turns it on (`tests/core_fixtures_are_for_core_tests.rs`). The data/select split is held by a manifest test proposed in [#1273](https://github.com/ali-mosavian/llrm/pull/1273).
+A data crate does not depend on `llrm-codegen`; a select crate does, and only `llrm-driver` depends on a select crate. `llrm-codegen` has no target among its normal dependencies (`tests/core_depends_on_no_target.rs`). Its own unit tests need a selector, so a `fixtures` feature generates the m16 and m32 selectors inside `llrm-codegen` for them, and nothing else turns it on (`tests/core_fixtures_are_for_core_tests.rs`). The data/select split is held by a manifest test proposed in [#1273](https://github.com/ali-mosavian/llrm/pull/1273).
 
 ## What a target ships
 
@@ -65,11 +65,11 @@ Files under `crates/target/llrm-x86-m32/src` (m16 has the same set):
 | `isel/patterns.isel` | MIR shape to forms; the generator turns them into a decision automaton |
 | `isel/peephole.peep` | form windows to forms |
 | `timings.times` | a column per CPU: clocks, latency, issue, prefix and stall costs |
-| `opcosts.txt` | each MIR operation priced as a sum of form prices; `unroll_budget`; `mask_test`, what `x & mask == 0` costs as one instruction |
+| `opcosts.txt` | each MIR operation priced as a sum of form prices; `unroll_budget` |
 | `machines/datalayout.toml` | data layout, address-space kinds, address forms; the `f80` entry is the x87 `long double`'s alignment, so its size in memory (`Layout::long_double_bytes`: 10 at m16, 12 at m32; the front end is built with it, so `sizeof`, arrays and members of a `long double` lay out at that size) |
 | `machines/calling.toml` | conventions: slot size, argument registers, results, cleanup, preserved |
 | `machines/object.toml` | object writer and listing syntax |
-| `machines/dos.toml`, `dos32.toml` | the platform: memory map, ports (apart from the target) |
+| `machine/platform/dos/real16.toml`, `flat32.toml`, `ports.toml` | the platform: memory map, ports (apart from the target) |
 
 The family crate `llrm-x86` holds the forms and peephole rules every x86 target shares (`x86.instr`, `family.isel`, `peephole.peep`) and `helpers/*.asm`. `llrm-target` holds the parsers and the `Target` trait the passes query ([`lib.rs`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/target/llrm-target/src/lib.rs#L210)): layout and address spaces, the frame register and where arguments lie, results, callee-saved registers, CPUs and `-march` names, operation costs per CPU, address forms, float stack depth.
 
@@ -88,7 +88,7 @@ flowchart TB
   out["<b>SELECTOR, RULES,</b><br/><small>effect rows</small>"]:::opt
   impl["<b>Target impl (data crate)</b><br/><small>read by the passes</small>"]:::opt
   drv["<b>llrm-driver binds</b>"]:::mid
-  core["<b>llrm-core backend</b>"]:::out
+  core["<b>llrm-codegen backend</b>"]:::out
   src --> gen
   gen --> out
   src --> impl
@@ -99,12 +99,12 @@ flowchart TB
 
 *From target description to compiler*
 
-A pattern names a hook (`call NAME`, `when NAME`): a name `llrm-core` exports becomes a call on its selection context; any other resolves to the target crate's hook function, and a missing one is a compile error. Cost expressions, loops and searches are hooks, not description.
+A pattern names a hook (`call NAME`, `when NAME`): a name `llrm-codegen` exports becomes a call on its selection context; any other resolves to the target crate's hook function, and a missing one is a compile error. Cost expressions, loops and searches are hooks, not description.
 
 ## Adding a target
 
 1. A data crate and a select crate in `crates/target`, named `llrm-<isa>-<mode>` and `llrm-<isa>-<mode>-select`, with the files above and a `Target` impl.
-2. A `build.rs` in the select crate that calls `llrm_iselgen::build::target` with the family directory and `llrm-core`'s `peep/groups.list`.
+2. A `build.rs` in the select crate that calls `llrm_iselgen::build::target` with the family directory and `llrm-codegen`'s `peep/groups.list`.
 3. One arm in `llrm_driver::all` and `llrm_driver::selector`; nothing else matches on a name.
 4. A pass or IR that needs something the target does not state takes it as a parameter from the `Target` trait. An enum variant, constant or branch for one target in a shared crate is a defect.
 

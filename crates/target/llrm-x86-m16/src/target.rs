@@ -9,7 +9,7 @@ use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use crate::timings;
 
 /// The registers a value may be placed in.
-pub const GENERAL: [RegId; 6] = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI];
+pub const GENERAL: [RegId; 6] = [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX, RegId::ESI, RegId::EDI];
 
 /// The registers a 16-bit address is encoded with, `[bx+si]`: a base is BX or
 /// BP and an index SI or DI.
@@ -33,6 +33,19 @@ pub static DESCRIPTION: std::sync::LazyLock<llrm_target::opcosts::Description> =
     llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
 });
 
+thread_local! {
+    static PIN_TUNING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` with every `Dos` this thread makes taking the pin's tuning limits
+/// instead of the table's overrides: for tests of a pass's own thresholds.
+pub fn with_pin_tuning<R>(f: impl FnOnce() -> R) -> R {
+    let before = PIN_TUNING.with(|one| one.replace(true));
+    let out = f();
+    PIN_TUNING.with(|one| one.set(before));
+    out
+}
+
 /// Real-mode DOS on one CPU: its prices and registers, and the built-in
 /// description's foreign memory.
 pub struct Dos {
@@ -50,6 +63,9 @@ pub struct Dos {
     /// The conventions as the description states them: where arguments go and
     /// who removes them.
     pub calling: Option<&'static llrm_target::calling::Calling>,
+    /// The pin's tuning limits instead of the table's overrides: for tests of
+    /// a pass's own thresholds.
+    pub pin_tuning: bool,
 }
 
 /// The segment registers a selector is held in: ES, FS and GS, and DS where
@@ -75,7 +91,15 @@ impl Default for Dos {
             far_access: FAR_ACCESS,
             private: None,
             calling: None,
+            pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
         }
+    }
+}
+
+impl Dos {
+    /// On a 486 with the pin's tuning limits.
+    pub fn pin_tuned() -> Self {
+        Self { pin_tuning: true, ..Self::default() }
     }
 }
 
@@ -119,11 +143,56 @@ impl Dos {
             far_access: FAR_ACCESS,
             private: None,
             calling: None,
+            pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
         }
     }
 }
 
 impl Machine for Dos {
+    /// Real mode's C: a 16-bit `int` and `size_t`, under C's decorated symbols
+    /// (`_sin@3`).
+    fn library(&self) -> Option<std::rc::Rc<dyn llrm_mir::libfunc::Library>> {
+        Some(std::rc::Rc::new(llrm_mir::libfunc::Cdecl { int_bits: 16, size_t_bits: 16 }))
+    }
+
+    /// LLVM prices 16-bit code with the i386 X86 model (`-code16`: the same
+    /// subtarget, operand-size prefixes), and every CPU the target accepts
+    /// reads the x87 tables as on m32 (`llrm_x86::tti`, T3).
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        let scales: std::collections::BTreeSet<i64> =
+            self.address_forms.iter().flat_map(|form| form.scales.iter().copied()).collect();
+        let scale_costs: Vec<(i64, i64)> = scales
+            .into_iter()
+            .filter_map(|scale| {
+                let cheapest =
+                    self.address_forms.iter().filter(|form| form.scales.contains(&scale)).map(|form| form.use_cost);
+                Some((scale, cheapest.min()?))
+            })
+            .collect();
+        // A scaled index is an instruction that forms the scaled register (the
+        // `lea`) and the cost of the prefixed form it is used in, once for each
+        // register scaled.
+        let scaled_index_insns =
+            scale_costs.iter().filter(|(scale, _)| *scale > 1).map(|(_, cost)| 1 + *cost).min().unwrap_or(0);
+        let real = llrm_x86::tti::RealMode {
+            scale_costs,
+            registers: self.registers as u32,
+            scaled_index_insns: scaled_index_insns as u32,
+            huge_space: crate::spaces().huge,
+            inline_size_guard: true,
+            float_code_size_percent: 200,
+            unroll_size_few_trips: (3, 30),
+        };
+        let layout = crate::layout();
+        llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?).map(|one| {
+            std::rc::Rc::new(one.in_real_mode(real).with_tuning(self.tuning())) as std::rc::Rc<dyn llrm_mir::tti::Tti>
+        })
+    }
+
+    fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false }))
+    }
+
     fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {
         self.private.clone()
     }
@@ -152,7 +221,7 @@ impl Machine for Dos {
         crate::spaces()
     }
 
-    /// The description's foreign memory: `dos.toml` states it once.
+    /// The description's foreign memory: `real16.toml` states it once.
     fn foreign_span(
         &self,
         selectors: (i64, i64),
@@ -166,6 +235,49 @@ impl Machine for Dos {
         self.costs.clone()
     }
 
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        llrm_target::keeps_division(i64::from(bits / 8), size)
+    }
+
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        if self.pin_tuning {
+            return llrm_mir::target::Tuning::PIN;
+        }
+        llrm_mir::target::Tuning {
+            max_stores_per_memset: 4,
+            max_stores_per_memcpy: 2,
+            max_stores_per_memmove: 2,
+            // DEVIATE SD223/SD225 (real mode): a dword store is 4 bytes
+            // (prefix, opcode, ModRM, disp8) against 13 for the fill (`lea di`,
+            // `mov es,ss`, `mov cx`, `rep stos`, the zero) that also takes ax,
+            // cx and di from the code around it, so four; a dword load and
+            // store pair is 8 bytes against about 16 for `rep movs`, so two.
+            max_stores_per_memset_opt_size: 4,
+            max_stores_per_memcpy_opt_size: 2,
+            max_stores_per_memmove_opt_size: 2,
+            // Tuning constant fitted to sc.c, weapons, mdl and lru, not
+            // derived.
+            size_milliclocks_per_byte: 10_000,
+            // DEVIATE: real mode weighs code bytes over clocks at every level,
+            // so the full unroll takes the pin's size threshold
+            // (`OptSizeThreshold`,
+            // 0) and no boost: the 8-trip loops of matmul and fpbench were 2045
+            // and 1350 bytes unrolled, 306 and 418 not.
+            unroll_threshold: Some(0),
+            unroll_max_percent_threshold_boost: Some(100),
+            // DEVIATE: bytes over clocks at every level: the inliner's bar is
+            // the pin's `OptSizeThreshold`, 50, not 225. jpeg_single.nib: 3178
+            // instructions in 6 procedures at 225, 1559 in 10 at 50 (main
+            // 1703).
+            inline_threshold: Some(50),
+            ..llrm_mir::target::Tuning::PIN
+        }
+    }
+
     fn size_costs(&self) -> OperationCosts {
         // The by-pieces ratios are the CPU's, whichever table prices the rest.
         OperationCosts {
@@ -173,6 +285,13 @@ impl Machine for Dos {
             pieces_clear: self.costs.pieces_clear,
             pieces_set_size: self.costs.pieces_set_size,
             pieces_clear_size: self.costs.pieces_clear_size,
+            huge_fill: llrm_x86::helpers::huge_fill(1).map_or(0, |routine| routine.code.len() as i64),
+            huge_copy: [false, true]
+                .into_iter()
+                .filter_map(|down| llrm_x86::helpers::huge_copy(down).ok())
+                .map(|routine| routine.code.len() as i64)
+                .min()
+                .unwrap_or(0),
             ..DESCRIPTION.size_costs()
         }
     }
@@ -209,7 +328,7 @@ impl Machine for Dos {
         self.address_forms.clone()
     }
 
-    /// The description's: `dos.toml` states when an access faults.
+    /// The description's: `real16.toml` states when an access faults.
     fn load_may_trap(
         &self,
         width: u64,
@@ -225,7 +344,7 @@ impl Machine for Dos {
         Some((crate::spaces().far, (1 << 16) - (step - 1)))
     }
 
-    /// The description's: `dos.toml` states each device's reach.
+    /// The description's: `real16.toml` states each device's reach.
     fn port_touches_memory(
         &self,
         ports: (i64, i64),
@@ -298,6 +417,58 @@ mod tests {
     use llrm_mir::target::Machine;
 
     use super::Dos;
+
+    /// BASIC's convention (MIR's cc 1000, `pascal far`) had no row in
+    /// calling.toml, so the DAG path took a call of it to destroy every
+    /// register, SI and DI too, and spilled the pointer it kept in SI (the
+    /// ABI's contract kept them). The row states what it destroys.
+    #[test]
+    fn basic_has_a_calling_row_that_keeps_si_and_di() {
+        use llrm_target::Target;
+        let found = super::super::M16.calling().by_number(llrm_mir::opcode::BASIC).expect("a row for cc 1000");
+        assert_eq!(found.cc.as_deref(), Some("basic"));
+        assert!(found.clobbered.iter().all(|name| !matches!(name.as_str(), "si" | "di")), "{:?}", found.clobbered);
+        assert!(found.clobbered.iter().any(|name| name == "bx"), "{:?}", found.clobbered);
+    }
+
+    /// LSR reads the addressing hooks of the model: real mode's `[bx+si]` is
+    /// free, a scaled or any-register address pays the prefix and its stall,
+    /// and a value sits in one of six registers. The 32-bit mode's model made
+    /// every second register cost 1 and counted eight.
+    #[test]
+    fn the_model_reads_real_modes_addressing_and_registers() {
+        let costs = super::costs("486");
+        let dos = Dos { address_forms: super::address_forms(&costs, 1), costs, ..Dos::default() };
+        let tti = dos.tti().expect("m16 states its cost model");
+        let cost = |scale| tti.scaling_factor_cost(false, 0, true, scale).value;
+        assert_eq!((cost(0), cost(1)), (0, 0), "plain and bx+si are free");
+        assert_eq!((cost(2), cost(4), cost(8)), (2, 2, 2), "the prefix (1) and the stall (1)");
+        for scale in [2, 4, 8] {
+            assert!(tti.is_legal_addressing_mode(false, 0, true, scale), "scale {scale} is the prefixed form");
+        }
+        assert_eq!(tti.scaled_index_insns(), 3, "the lea, the prefix and the stall, once for each scaled register");
+        let costs = super::costs("486");
+        let dos = Dos { address_forms: super::address_forms(&costs, 0), costs, ..Dos::default() };
+        let scaled = dos.tti().expect("m16 states its cost model").scaled_index_insns();
+        assert_eq!(scaled, 2, "the lea and the prefix: no address stall");
+        assert!(!tti.is_legal_addressing_mode(false, 1 << 16, true, 1), "a displacement is 16 bits");
+        assert_eq!(tti.number_of_gpr_registers(), 6);
+    }
+
+    /// A huge pointer's offset carries into its selector: `[base + index]` and
+    /// a displacement are not addressing modes there, while a far pointer's
+    /// are the ordinary ones.
+    #[test]
+    fn a_huge_pointer_is_addressed_by_one_register_and_a_far_one_as_usual() {
+        let costs = super::costs("486");
+        let dos = Dos { address_forms: super::address_forms(&costs, 1), costs, ..Dos::default() };
+        let tti = dos.tti().expect("m16 states its cost model");
+        let (huge, far) = (crate::spaces().huge.expect("m16 has a huge space"), crate::spaces().far);
+        assert!(tti.is_legal_addressing_mode_in(huge, false, 0, true, 0), "the pointer itself");
+        assert!(!tti.is_legal_addressing_mode_in(huge, false, 0, true, 1), "no index");
+        assert!(!tti.is_legal_addressing_mode_in(huge, false, 2, true, 0), "no displacement");
+        assert!(tti.is_legal_addressing_mode_in(far, false, 2, true, 1), "a far pointer takes both");
+    }
 
     /// Dos prices at the 486's clocks: a 16-bit divide and multiply, and a
     /// fill's setup around `rep stos`.

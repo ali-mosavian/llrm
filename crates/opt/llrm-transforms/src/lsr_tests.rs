@@ -1920,7 +1920,7 @@ fn test_a_loop_the_pass_cannot_improve_is_left_as_it_is() {
 
 /// `a[i]` over a huge pointer, as C's `__huge` lowers it: the counter beside
 /// a pointer that each trip advances with a carry into its selector.
-const HUGE_WALK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+const HUGE_WALK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"
 
 define i16 @f(ptr addrspace(3) %a, i16 %n) {
 start:
@@ -2531,6 +2531,39 @@ b2:
   %mix = add i16 %next, %k
   %sum = add i16 %acc, %mix
   %c = icmp eq i16 %i, 1
+  br i1 %c, label %b3, label %b2
+
+b3:
+  ret i16 %sum
+
+b4:
+  ret i16 0
+}
+";
+    let printed = same(text, &[&[1, 3], &[2, 3], &[5, -4], &[9, 0]]);
+    assert!(readers(&printed, "%i").iter().all(|line| !line.contains("icmp")), "{printed}");
+}
+
+/// The test of the counter written before its step (LoopRotate's order) was
+/// rewritten to read the step it precedes: "does not dominate" after lsr in
+/// runtime.nib's `floats.compare`, which broke flat_containers and planets.
+#[test]
+fn test_a_latch_test_written_before_the_step_is_moved_after_it() {
+    let text = "define i16 @f(i16 %n, i16 %k) {
+b0:
+  %g = icmp eq i16 %n, 0
+  br i1 %g, label %b4, label %b1
+
+b1:
+  br label %b2
+
+b2:
+  %i = phi i16 [ %n, %b1 ], [ %next, %b2 ]
+  %acc = phi i16 [ 0, %b1 ], [ %sum, %b2 ]
+  %c = icmp eq i16 %i, 1
+  %next = sub nsw i16 %i, 1
+  %mix = add i16 %next, %k
+  %sum = add i16 %acc, %mix
   br i1 %c, label %b3, label %b2
 
 b3:

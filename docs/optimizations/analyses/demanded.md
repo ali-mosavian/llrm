@@ -1,9 +1,13 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/demanded.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/demanded.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/demanded.rs sha256:e55171cb90c711f4458039ae2afacb4f275bd93060688f91c88fa6992368d5f8 -->
+<!-- src: crates/opt/llrm-analysis/src/demanded.rs sha256:3893468f3558e0d8176a79dcc7bdc73ac72e5020d84c94bc1bfebd7cfcd04779 -->
 
 # demanded
 
 Which bits of each integer value anything reads: LLVM's `DemandedBits`.
+
+Exit: deleted, with `algebraic::_unread_bits` (its only reader), by the
+InstCombine `SimplifyDemandedBits` translation (instcombine-port); BDCE
+(`demandedbits`) does not replace it.
 
 ## How it works
 A backward fixed point over the use-def graph, the dual of

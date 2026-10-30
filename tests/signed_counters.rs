@@ -2,15 +2,17 @@
 //! writes through it, and the address that counter makes is one addressing
 //! mode.
 
-use std::process::Command;
+mod common;
 
 fn listing(source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
-        .args(["-m32", "-mabi=sysv", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])
+        // The loops are the premise: at 40 trips the pin's order copies them
+        // out.
+        .args(["-m32", "-mabi=sysv", "-O2", "-march=i486", "-fno-unroll-loops", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -40,8 +42,11 @@ fn a_short_counter_read_as_an_index_is_not_extended_each_trip() {
 #[test]
 fn a_global_row_and_a_scaled_counter_are_one_address() {
     let text = listing(
-        "static short tile[64][64];\nint sum(int y) { int t = 0; short x; for (x = 0; x < 40; x++) t += tile[y & 63][(x + 7) & 63]; return t; }\n",
+        "short tile[64][64];\nint sum(int y) { int t = 0; short x; for (x = 0; x < 40; x++) t += tile[y & 63][(x + 7) & 63]; return t; }\n",
     );
-    assert!(text.contains("_tile") && text.contains("*2]"), "{text}");
+    // One access a trip: the row, the base and the counter, which is stepped
+    // by 2 (the pin's strength reduction), so no `*2` and no doubling.
+    let access = text.lines().find(|line| line.contains("movsx") && line.contains("_tile+"));
+    assert!(access.is_some_and(|line| line.contains("][") || line.matches('+').count() >= 2), "{text}");
     assert!(!text.contains("lea esi, [ebx+ebx]") && !text.contains("movsx esi, bx"), "{text}");
 }

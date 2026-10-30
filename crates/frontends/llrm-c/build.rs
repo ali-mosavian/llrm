@@ -9,6 +9,8 @@ use std::process::Command;
 fn main() {
     if std::env::var_os("CARGO_FEATURE_TOOLCHAIN").is_some() {
         toolchain();
+    } else {
+        std::fs::write(PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("wccq.rs"), "&[]\n").unwrap();
     }
 }
 
@@ -86,5 +88,12 @@ fn toolchain() {
             .expect("could not start sh");
         assert!(status.success(), "OWCPU={cpu} ../../../toolchain/owshim/build.sh failed: {status}");
     }
-    println!("cargo:rustc-env=LLRM_WCCQ_DIR={}", out.display());
+    // The front ends are carried in the binary, which writes the one it needs
+    // out at run time: a dist reads nothing from the tree it was built in.
+    let mut list = String::from("&[\n");
+    for cpu in trees.keys() {
+        list += &format!("    ({cpu:?}, include_bytes!({:?})),\n", out.join(cpu).join("wccq"));
+    }
+    list += "]\n";
+    std::fs::write(PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("wccq.rs"), list).unwrap();
 }

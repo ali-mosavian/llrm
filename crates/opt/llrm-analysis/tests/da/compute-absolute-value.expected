@@ -1,0 +1,9 @@
+== --tbaa
+@unknown_sign
+  output [0]!
+    Runtime Assumptions:
+    Compare predicate: (-1 * %k) ne) 0
+  output [*|<]!
+  output [0]!
+    Runtime Assumptions:
+    Compare predicate: (-1 * %k) ne) 0

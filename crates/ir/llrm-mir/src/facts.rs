@@ -13,14 +13,63 @@
 //! attribute by name.
 
 use crate::context::{ConstantKind, Context};
-use crate::module::{Function, InstId, MetadataNode, MetadataOperand};
-use crate::opcode::{Attribute, Flags};
+use crate::module::{Function, GlobalValue, InstId, MetadataNode, MetadataOperand, Operand, ValueDef, ValueId};
+use crate::opcode::{Attribute, Flags, Opcode};
 use crate::types::TypeId;
 
 /// Whether `function` is `noipa`: no interprocedural pass uses its body for
 /// anyone else or changes how it is called.
 pub fn opaque(function: &Function) -> bool {
     Facts::of(&function.attrs).no_ipa()
+}
+
+/// Whether the call `inst` or its callee states `flagsresult`: the machine
+/// flags are its result.
+pub fn returns_flags(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
+    Facts::of(&info.attrs).contains(Fact::FlagsResult)
+        || crate::memory::callee(context, function, inst)
+            .and_then(|callee| globals.get(callee.0 as usize))
+            .and_then(GlobalValue::function)
+            .is_some_and(|callee| Facts::of(&callee.attrs).contains(Fact::FlagsResult))
+}
+
+/// Whether `value` is a flags result, which only a comparison may read: a
+/// fold that gives it another user (`sext (icmp slt v, 0)` to `ashr v`) leaves
+/// instruction selection nothing to read the flags with. The verifier states
+/// it and every fold that builds a user of a compared value asks it.
+pub fn result_read_only_by_comparison(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &Function,
+    value: ValueId,
+) -> bool {
+    matches!(
+        function.value(value).def,
+        ValueDef::Instruction(call) if returns_flags(context, globals, function, call)
+    )
+}
+
+/// Whether `inst` is a comparison of a flags result: a use the fold of
+/// something that reads it would end.
+pub fn compares_flags_result(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    matches!(function.instruction(inst).opcode, Opcode::ICmp(_))
+        && function.instruction(inst).operands.iter().any(|operand| {
+            matches!(
+                operand,
+                Operand::Value(value) if result_read_only_by_comparison(context, globals, function, *value)
+            )
+        })
 }
 
 /// The kind of thing a fact is stated of: a routine, one of its parameters,
@@ -70,6 +119,12 @@ macro_rules! facts {
                     $(Fact::$custom(_) => $ckey,)*
                     $(Fact::$bit => $bkey,)*
                 }
+            }
+
+            /// The attribute a flag fact is stated by, none for any other fact.
+            #[inline]
+            fn flag_key(self) -> Option<&'static str> {
+                match self { $(Fact::$flag => Some($fkey),)* _ => None }
             }
 
             /// The kinds of subject it can be stated of.
@@ -233,6 +288,9 @@ facts! {
         // Touches no memory through the pointer, or at all, of a routine.
         ReadNone read_none "readnone" on [Param, Callable];
         NonNull non_null "nonnull" on [Param];
+        // The value is never `undef` or `poison` where the routine is called:
+        // clang's `noundef` of a scalar or an indirect parameter.
+        NoUndef no_undef "noundef" on [Param, Operand];
         NoCapture no_capture "nocapture" on [Param, Operand];
         // Of a pointer argument: the callee keeps neither it nor any pointer it
         // reads out of the memory it reaches, once it returns. `nocapture` says
@@ -253,6 +311,12 @@ facts! {
         // Of a routine: it raises nothing, comes back, calls nothing of the
         // module, is rare.
         NoUnwind no_unwind "nounwind" on [Callable];
+        // Of a routine: it frees no memory, directly or through what it calls;
+        // of a pointer argument: it is not freed through it.
+        NoFree no_free "nofree" on [Callable, Param];
+        // Of a routine: it does no synchronizing, directly or through what it
+        // calls.
+        NoSync no_sync "nosync" on [Callable];
         WillReturn will_return "willreturn" on [Callable];
         // It is never entered again while it runs: in no cycle of calls, and
         // nothing it reaches calls what may call back.
@@ -270,6 +334,10 @@ facts! {
         // is greater, nothing about how often. LLVM knows strcmp's by name
         // (LibFunc); here the language states it of the routine.
         ThreeWayCompare three_way_compare "threeway" on [Callable];
+        // Of a routine: its result is the machine flags of a comparison, so
+        // only a comparison can read it (`result_read_only_by_comparison`).
+        // The runtime's description says which routines (QB's B$SCMP).
+        FlagsResult flags_result "flagsresult" on [Callable];
         // Of a routine: it compares SP with its runtime's stack limit on entry
         // (`-fsanitize=stack`). The runtime's description says where the limit
         // is.
@@ -386,6 +454,20 @@ impl Fact {
         self.attribute().unwrap_or_else(|| panic!("{} has no attribute", self.key()))
     }
 
+    /// Whether `attributes` state this fact:
+    /// `Facts::of(attributes).contains(self)` for any fact but inlining
+    /// (which the strongest of wins), without building the facts.
+    #[inline]
+    pub fn stated_by(
+        self,
+        attributes: &[Attribute],
+    ) -> bool {
+        match self.flag_key() {
+            Some(key) => attributes.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == key)),
+            None => attributes.iter().filter_map(Fact::of_attribute).any(|fact| fact == self),
+        }
+    }
+
     /// The fact a carrier states, if it states one.
     pub fn of_attribute(attribute: &Attribute) -> Option<Fact> {
         match attribute {
@@ -471,17 +553,26 @@ impl Facts {
                 facts.push(fact);
             }
         }
-        Facts(facts)
+        Facts::keeping_the_strongest_inlining(facts)
     }
 
     /// The facts `attributes` state; any other attribute is not a fact.
     pub fn of(attributes: &[Attribute]) -> Facts {
-        let mut facts = Vec::new();
+        let mut facts = Vec::with_capacity(attributes.len());
         for fact in attributes.iter().filter_map(Fact::of_attribute) {
             if !facts.contains(&fact) {
                 facts.push(fact);
             }
         }
+        Facts::keeping_the_strongest_inlining(facts)
+    }
+
+    /// `Never` outranks the other ways to state inlining, whichever came first
+    /// (`noinline alwaysinline` and `alwaysinline noinline` agree).
+    fn keeping_the_strongest_inlining(mut facts: Vec<Fact>) -> Facts {
+        let strongest =
+            facts.iter().filter_map(|fact| if let Fact::Inline(how) = fact { Some(*how) } else { None }).min();
+        facts.retain(|fact| !matches!(fact, Fact::Inline(how) if Some(*how) != strongest));
         Facts(facts)
     }
 
@@ -712,6 +803,20 @@ mod tests {
             );
         }
         assert!(Inlining::Never < Inlining::Hint && Inlining::Hint < Inlining::Always);
+    }
+
+    /// Two ways stated at once: the stronger wins in either order.
+    /// `alwaysinline noinline` read as `Always`, so a routine the language
+    /// said never to inline was copied.
+    #[test]
+    fn never_outranks_always_in_either_order() {
+        let flags = |names: &[&str]| -> Vec<Attribute> {
+            names.iter().map(|name| Attribute::Flag((*name).to_owned())).collect()
+        };
+        for names in [["noinline", "alwaysinline"], ["alwaysinline", "noinline"]] {
+            assert_eq!(Facts::of(&flags(&names)).inline(), Some(Inlining::Never), "{names:?}");
+        }
+        assert_eq!(Facts::of(&flags(&["inlinehint", "alwaysinline"])).inline(), Some(Inlining::Hint));
     }
 
     /// Each spelling of the unroll hint, and of an invariant load, reads back

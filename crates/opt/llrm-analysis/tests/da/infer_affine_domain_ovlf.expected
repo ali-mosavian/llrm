@@ -1,0 +1,10 @@
+== --tbaa
+@infer_affine_domain_ovfl
+  none!
+  output [*|<]!
+  none!
+== --test exact-siv --tbaa
+@infer_affine_domain_ovfl
+  none!
+  output [*|<]!
+  none!

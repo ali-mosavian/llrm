@@ -1,0 +1,13 @@
+# x86-64: ELF64 relocatable objects, linked by the system linker against glibc.
+formats = ["elf"]
+default = "elf"
+bitness = 64
+# Symbols are `[rip + symbol]`: the isel makes a symbol's address a value before it adds a register to it.
+pc_relative = true
+# A symbol defined elsewhere is reached through the GOT (R_X86_64_REX_GOTPCRELX): the program is a PIE.
+got_external = true
+header = []
+
+# The ELF objects, linked by GNU ld: its emulation (`-m`).
+[link.elf]
+emulation = "elf_x86_64"

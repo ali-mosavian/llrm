@@ -1,0 +1,11 @@
+# arm64 Linux: ELF64 relocatable objects, linked by lld against glibc.
+formats = ["elf"]
+default = "elf"
+bitness = 64
+# Symbols are reached with adrp + :lo12:, and an external one through the GOT.
+pc_relative = true
+got_external = true
+header = []
+
+[link.elf]
+emulation = "aarch64elf"

@@ -19,6 +19,9 @@ impl Flag {
     pub const SF: Flag = Flag(RflagsBits::SF);
     pub const OF: Flag = Flag(RflagsBits::OF);
 
+    /// The five flags emitted code reads: all but AF.
+    pub const READ: Flag = Flag(Flag::CF.0 | Flag::PF.0 | Flag::ZF.0 | Flag::SF.0 | Flag::OF.0);
+
     /// Members in definition order, which is the order `repr` names them in.
     const MEMBERS: [(&'static str, Flag); 6] =
         [("CF", Flag::CF), ("PF", Flag::PF), ("AF", Flag::AF), ("ZF", Flag::ZF), ("SF", Flag::SF), ("OF", Flag::OF)];

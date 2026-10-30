@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/arithmetic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/arithmetic.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/arithmetic.rs sha256:500a7bb23ab0aa2aeca8d07d76ce1105fbd14962c1f66295a18cfdb95f54a61d -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/arithmetic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/arithmetic.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/arithmetic.rs sha256:81aa4576d6c371b95545715d03e38fd6e67ee44d6d137d042d13044570dbc3dc -->
 
 # arithmetic
 
@@ -33,6 +33,24 @@ a dword.
 `scale` returns the chain only where it is cheaper than `imul`.
 Results are kept in the profile, as a multiply is asked about again and
 again.
+
+DEVIATE M1 (AM-M1, priced): the pin's X86 does a scalar constant multiply
+by `combineMul`
+([X86ISelLowering.cpp#L51191](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191))
+and `decomposeMulByConstant` (#L3636): a `lea` for 3, 5 and 9 (times a power
+of two) and shifts and adds for 2^n +- 1, otherwise `imul`; ours searches
+the CPU profile's clocks (above), so a product like `x*7 + y` in an unrolled
+loop is `lea`s where the pin has `imul`. Price, 2026-10-23, one build with
+the chains switched off by a probe, 71 vsgcc programs at m32: clocks with
+the chains are -5.1% / -5.9% / -6.0% at -O1 / -O2 / -O3, code
++3072 / +720 / +688 B (the chains cost bytes), -Os identical (no chain is
+chosen; the DAG path since 2026-10-27 takes them at m32 -Os as the pin does:
++3037 B over 58 objects of tests/run/c, histo and x_dct clocks equal the
+pin's, and keeps `imul` at m16 -Os, where they grow 27 of 175 by 3550 B);
+QCport m16 -38 B at -O1..-O3, 0 at -Os. Instructions against the pin on the
+same IR: lea +471 at -O2 (`docs/working/instruction-gap-vs-pin.md`). Exit:
+none while the clocks decide; reviewed with the tuning phase. Owner w-4,
+review 2026-12-01.
 
 ## Example
 What the ranking answers on a 486 (`targets::tuned_for(M32, "486")`):

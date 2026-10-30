@@ -11,7 +11,7 @@
 ; CHECK: define {{.*}} @_run_f_conc7_s24_xi_bln_index_n_st1_sum_as_end(
 ; CHECK: define {{.*}} @_main(
 
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-f80:16-n8:16:32"
 
 @_f_conc7_s24_xi_bln_index_n_st1_sum_as_end_a4 = global [600 x i8] zeroinitializer
 @_f_conc7_s24_xi_bln_index_n_st1_sum_as_end_a5 = global [1200 x i8] zeroinitializer

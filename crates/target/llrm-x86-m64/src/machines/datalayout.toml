@@ -1,0 +1,53 @@
+# x86-64: flat 64-bit. The user half of the address space is 47 bits; FS and GS are the thread and
+# are never assumed.
+
+# What gcc's -m names it: -m64.
+mode = 64
+
+# What the LLVM tools are told to price this target as (opt -mtriple/-mcpu), and the TTI llrm prices with.
+llvm_triple = "x86_64-unknown-linux-gnu"
+llvm_cpu = "x86-64"
+tti = "X86"
+
+# LLVM syntax, as the pin's clang prints it for x86_64-linux-gnu. i64 is native; long double is 80 bits.
+datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+# A `select` of a byte (`cmov` has no 8-bit form) or of a float (no SSE yet) becomes a branch and a phi before selection;
+# the others are `cmov`.
+expand = ["abs", "bitreverse", "fshl", "fshr", "select.double", "select.float", "select.i1", "select.i8", "select.x86_fp80"]
+
+# X86TargetLowering::isTypeDesirableForOp: a word operation costs an operand-size prefix and, read as a
+# dword after, an extension.
+promote = ["add.i16", "sub.i16", "mul.i16", "and.i16", "or.i16", "xor.i16"]
+
+[spaces]
+near = 0
+far = 0
+data = 0
+stack = 0
+
+[pointers]
+8 = "near"
+
+# Base + index*scale + displacement; RSP is no index; a form with no base takes an index and disp32 or
+# disp32 alone; RIP-relative takes disp32 alone. A form's only fact the passes ask is the index width and
+# the scales.
+[[address_form]]
+address_bits = 64
+scales = [1, 2, 4, 8]
+
+# What the C front end lays types out as, in bytes: the one place sizeof(int), sizeof(void *) and the rest are stated
+# (llrm-cc checks its clang against it; the triple's default decides nothing). A row names its libc's departures
+# (`wchar_bytes`, `long_double_bytes` in targets.toml).
+[c]
+int = 4
+long = 8
+long_long = 8
+pointer = 8
+function_pointer = 8
+size_t = 8
+ptrdiff_t = 8
+wchar_t = 4
+double = 8
+long_double = 16
+enum = 4

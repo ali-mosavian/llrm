@@ -16,3 +16,6 @@ iced-x86 = { workspace = true }
 llrm-iselgen = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-target = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }

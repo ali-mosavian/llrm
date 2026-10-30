@@ -3,8 +3,6 @@
 //! register the callee did not write, and a function that is not private tells
 //! nothing.
 
-use std::process::Command;
-
 pub mod common;
 
 /// The listing of C `source` and the facts the compiler found
@@ -17,7 +15,7 @@ fn compiled(
     let path = directory.path().join("t.c");
     std::fs::write(&path, source).unwrap();
     let out = directory.path().join("t.asm");
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let done = common::cc::llrm_c()
         .env("LLRM_DEBUG", "facts")
         .args(flags)
         .args(["-O2", "-fno-inline-functions", "-fno-inline-functions-called-once", "-S"])
@@ -43,6 +41,13 @@ fn procedure(
         .collect()
 }
 
+/// The m16 default's spelling of a C name in a listing (`_twice@3`, regparm3),
+/// as the tests without `-mabi=sysv` meet it; `common::symbol` is the default
+/// target's.
+fn watcom(name: &str) -> String {
+    format!("_{name}@3")
+}
+
 const SYSV: &[&str] = &["-m32", "-mabi=sysv"];
 
 /// `twice` writes AX alone, and cdecl16 says a call loses AX, BX, CX, DX and
@@ -55,8 +60,8 @@ fn a_caller_keeps_a_value_in_a_register_a_private_callee_does_not_write() {
         &[],
         "static int twice(int x) { return x + x; }\nint g(int a, int b)\n{\n    int k = a * b;\n    int t = twice(a);\n    return t + k;\n}\n",
     );
-    assert!(facts.contains(&format!("{} writes {{EAX}}", common::symbol("twice"))), "{facts}");
-    let lines = procedure(&text, &common::symbol("g"));
+    assert!(facts.contains(&format!("{} writes {{EAX}}", watcom("twice"))), "{facts}");
+    let lines = procedure(&text, &watcom("g"));
     assert!(!lines.iter().any(|one| one == "push si" || one == "pop si"), "{lines:?}");
 }
 
@@ -95,11 +100,11 @@ fn a_segment_register_is_written_where_the_callee_loads_it() {
     );
     let far = facts
         .lines()
-        .find(|one| one.contains(&format!("{} writes", common::symbol("far_get"))))
+        .find(|one| one.contains(&format!("{} writes", watcom("far_get"))))
         .unwrap_or_else(|| panic!("{facts}"));
     let near = facts
         .lines()
-        .find(|one| one.contains(&format!("{} writes", common::symbol("near_get"))))
+        .find(|one| one.contains(&format!("{} writes", watcom("near_get"))))
         .unwrap_or_else(|| panic!("{facts}"));
     assert!(far.contains("ES") && !near.contains("ES"), "{far} / {near}");
 }
@@ -107,12 +112,15 @@ fn a_segment_register_is_written_where_the_callee_loads_it() {
 /// A far pointer's selector held in ES across a call survives it where the
 /// callee does not write ES: `h` loaded it again after the call (`mov es,
 /// [bp+8]`), the convention saying ES is lost.
+/// llrm-cc: the selector arrives in DX, so the one `mov es, dx` is before the
+/// call; the test asserts none after it.
 #[test]
 fn a_caller_keeps_es_across_a_call_that_does_not_write_it() {
     let (text, _) = compiled(
         &[],
         "char *near_cursor;\nstatic int near_get(void) { return *near_cursor; }\nint h(char __far *a) { int x = *a; int y = near_get(); return x + y + a[1]; }\n",
     );
-    let lines = procedure(&text, &common::symbol("h"));
-    assert!(!lines.iter().any(|one| one.starts_with("mov es,")), "{lines:?}");
+    let lines = procedure(&text, &watcom("h"));
+    let call = lines.iter().position(|one| one.starts_with("call")).expect("h calls near_get");
+    assert!(!lines[call..].iter().any(|one| one.starts_with("mov es,") || one.starts_with("les ")), "{lines:?}");
 }

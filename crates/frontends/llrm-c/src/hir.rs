@@ -7,9 +7,8 @@
 
 use std::fmt;
 
-use llrm_core::support::hash::HashSet;
-use llrm_core::support::hash::IndexMap;
-use llrm_core::support::pyrepr::{self, Repr, Tuple};
+use llrm_codegen::support::hash::IndexMap;
+use llrm_codegen::support::pyrepr::{self, Repr, Tuple};
 
 use super::stream::Record;
 
@@ -45,7 +44,7 @@ pub fn intrinsic_runtime(base: &str) -> Option<&'static str> {
 
 pub const STATEMENTS: [&str; 9] =
     ["CGDone", "CGTrash", "CGControl", "CGReturn", "CGSelCase", "CGSelRange", "CGSelOther", "CGSelect", "CGBigLabel"];
-pub const IGNORED: [&str; 13] = [
+pub const IGNORED: [&str; 11] = [
     "START",
     "STOP",
     "FINI",
@@ -57,8 +56,6 @@ pub const IGNORED: [&str; 13] = [
     "DBEndStruct",
     "DBConst",
     "DBTypeDef",
-    "DBBegBlock",
-    "DBEndBlock",
 ];
 
 /// A construct the C path refuses rather than guesses at.
@@ -426,15 +423,28 @@ impl Unit {
         &self,
         type_: &str,
     ) -> String {
-        let mut type_ = type_.to_owned();
-        let mut seen = HashSet::default();
-        while let Some(next) = self.aliases.get(&type_) {
-            if !seen.insert(type_.clone()) {
+        self.canonical_type_ref(type_).to_owned()
+    }
+
+    /// [`Unit::canonical_type`] without a copy: the alias chain is followed
+    /// over the names the unit and the caller hold, and nothing is allocated
+    /// unless a type has an alias (a `String` and a `HashSet` for every query,
+    /// 0.75 M Ir of `translate::program`). A cycle ends at the first name met
+    /// twice.
+    pub fn canonical_type_ref<'a>(
+        &'a self,
+        type_: &'a str,
+    ) -> &'a str {
+        let mut current = type_;
+        let mut seen: Vec<&str> = Vec::new();
+        while let Some(next) = self.aliases.get(current) {
+            if seen.contains(&current) {
                 break;
             }
-            type_ = next.clone();
+            seen.push(current);
+            current = next.as_str();
         }
-        type_
+        current
     }
 }
 
@@ -445,7 +455,25 @@ pub fn handle(token: &str) -> i64 {
 
 /// `int(text)`.
 pub(crate) fn int(text: &str) -> i64 {
-    text.trim().parse().unwrap_or_else(|_| panic!("ValueError: invalid literal for int() with base 10: {text:?}"))
+    parse_int(text).unwrap_or_else(|| panic!("ValueError: invalid literal for int() with base 10: {text:?}"))
+}
+
+/// `text` as a decimal integer, or none. A plain run of digits, with a leading
+/// `-`, is read by a byte loop: the record stream's numbers are all that, and
+/// `trim().parse()` was 1.48 M Ir of the 16.9 M in `translate::program`
+/// (4.6 K calls).
+pub(crate) fn parse_int(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    let (negative, digits) = match bytes.split_first() {
+        Some((b'-', rest)) => (true, rest),
+        _ => (false, bytes),
+    };
+    // Eighteen digits cannot overflow an `i64`.
+    if !digits.is_empty() && digits.len() <= 18 && digits.iter().all(u8::is_ascii_digit) {
+        let magnitude = digits.iter().fold(0_i64, |sum, digit| sum * 10 + i64::from(digit - b'0'));
+        return Some(if negative { -magnitude } else { magnitude });
+    }
+    text.trim().parse().ok()
 }
 
 /// `int(text, 16)`.
@@ -457,17 +485,17 @@ pub(crate) fn hex(text: &str) -> i64 {
 }
 
 fn field<'a>(
-    one: &'a Record,
+    one: &'a Record<'_>,
     key: &str,
 ) -> &'a str {
-    one.fields.get(key).unwrap_or_else(|| panic!("KeyError: {key:?}"))
+    one.field(key).unwrap_or_else(|| panic!("KeyError: {key:?}"))
 }
 
-fn arg(
-    one: &Record,
+fn arg<'a>(
+    one: &'a Record<'_>,
     index: usize,
-) -> &str {
-    one.args.get(index).unwrap_or_else(|| panic!("IndexError: tuple index out of range"))
+) -> &'a str {
+    one.args.get(index).map(AsRef::as_ref).unwrap_or_else(|| panic!("IndexError: tuple index out of range"))
 }
 
 /// The current `proc`; Python raises `AttributeError` on `None`.
@@ -475,34 +503,39 @@ fn open(proc: Option<usize>) -> usize {
     proc.expect("AttributeError: 'NoneType' object has no attribute")
 }
 
-pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
+pub fn unit(records: &[Record<'_>]) -> Result<Unit, Unsupported> {
     let mut made = Unit::default();
+    // d_faces: 4256 nodes grew the map 12 times, copying 38 K Ir each.
+    made.nodes.reserve(records.len() / 2);
     let mut proc: Option<usize> = None;
     let mut segment: Option<i64> = None;
     let mut line = 0;
+    // How many `DBBegBlock`s of the procedure are open.
+    let mut depth = 0usize;
     let mut main_file: Option<String> = None;
     for one in records {
         let args = &one.args;
-        match one.call.as_str() {
+        let owned = || -> Vec<String> { args.iter().map(|one| one.to_string()).collect() };
+        match one.call {
             "UNSUPPORTED" => {
                 return Err(Unsupported(format!("stream line {}: the shim refused {}", one.line, args.join(" "))));
             }
             "INIT" => {
                 made.target = hex(field(one, "target"));
                 made.switches = hex(field(one, "sw"));
-                made.flat = one.fields.get("flat").is_some_and(|one| one == "1");
+                made.flat = one.field("flat") == Some("1");
                 // CGSW_GEN_DBG_TYPES or CGSW_GEN_DBG_LOCALS
                 if hex(field(one, "sw")) & 0x0018_0000 != 0 {
                     made.debug = Some(Debug::default());
                 }
             }
             "DBScalar" | "DBArray" | "DBPtr" | "DBStruct" | "DBEnum" | "DBProc" | "DBName" => {
-                let result = handle(one.result.as_deref().expect("a debug type's handle"));
+                let result = handle(one.result.expect("a debug type's handle"));
                 let debug = made
                     .debug
                     .as_mut()
                     .ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
-                let described = match one.call.as_str() {
+                let described = match one.call {
                     "DBScalar" => DebugType::Scalar { name: arg(one, 0).to_owned(), cg: arg(one, 1).to_owned() },
                     "DBArray" => DebugType::Array { hi: int(arg(one, 1)), base: handle(arg(one, 2)) },
                     "DBPtr" => DebugType::Pointer { cg: arg(one, 0).to_owned(), base: handle(arg(one, 1)) },
@@ -524,7 +557,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     .as_mut()
                     .ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
                 let known = debug.types.get_mut(&handle(arg(one, 0)));
-                match (one.call.as_str(), known) {
+                match (one.call, known) {
                     ("DBField", Some(DebugType::Struct { fields, .. })) => {
                         fields.push((int(arg(one, 1)), arg(one, 2).to_owned(), handle(arg(one, 3)), None))
                     }
@@ -593,7 +626,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                         return_registers: String::new(),
                         saved_registers: String::new(),
                         code: None,
-                        segment: int(one.fields.get("seg").map_or("0", String::as_str)),
+                        segment: int(one.field("seg").unwrap_or("0")),
                     },
                 );
             }
@@ -601,11 +634,11 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 let symbol = made.symbols.get_mut(&handle(arg(one, 0))).expect("KeyError: symbol");
                 symbol.call_class = hex(field(one, "class"));
                 symbol.call_target = hex(field(one, "target"));
-                let parms = one.fields.get("parms").map_or("[]", String::as_str);
+                let parms = one.field("parms").unwrap_or("[]");
                 symbol.register_parms = parms != "[]";
                 symbol.register_list = parms.to_owned();
-                symbol.return_registers = one.fields.get("ret").cloned().unwrap_or_default();
-                symbol.saved_registers = one.fields.get("save").cloned().unwrap_or_default();
+                symbol.return_registers = one.field("ret").unwrap_or_default().to_owned();
+                symbol.saved_registers = one.field("save").unwrap_or_default().to_owned();
             }
             "CODE" => {
                 let fixups = field(one, "fix")
@@ -624,7 +657,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     Some(Code { data, fixups });
             }
             "BENewBack" => {
-                let result = one.result.as_deref().expect("TypeError: 'NoneType' object is not subscriptable");
+                let result = one.result.expect("TypeError: 'NoneType' object is not subscriptable");
                 made.backs.insert(handle(result), handle(arg(one, 0)));
             }
             "CGProcDecl" => {
@@ -638,6 +671,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     debug: Vec::new(),
                 });
                 proc = Some(made.procs.len() - 1);
+                depth = 0;
             }
             "CGParmDecl" => {
                 let at = open(proc);
@@ -647,15 +681,24 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
             "CGAutoDecl" => {
                 let at = open(proc);
                 let auto = (arg(one, 0).to_owned(), arg(one, 1).to_owned());
+                // A local of a nested block is placed where its block begins.
+                if depth > 0 {
+                    made.procs[at].body.push(Statement { call: one.call.to_owned(), args: vec![auto.0.clone()], line });
+                }
                 made.procs[at].autos.push(auto);
+            }
+            "DBBegBlock" | "DBEndBlock" => {
+                let at = open(proc);
+                depth = if one.call == "DBBegBlock" { depth + 1 } else { depth.saturating_sub(1) };
+                made.procs[at].body.push(Statement { call: one.call.to_owned(), args: Vec::new(), line });
             }
             "CGTemp" => {
                 let at = open(proc);
-                let result = one.result.clone().expect("CGTemp returns a handle");
+                let result = one.result.map(str::to_owned).expect("CGTemp returns a handle");
                 made.procs[at].autos.push((result, arg(one, 0).to_owned()));
             }
             "CGInitCall" => {
-                let result = one.result.as_deref().expect("CGInitCall returns a handle");
+                let result = one.result.expect("CGInitCall returns a handle");
                 made.calls.insert(
                     handle(result),
                     Call {
@@ -670,18 +713,18 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 let parm = (arg(one, 1).to_owned(), arg(one, 2).to_owned());
                 made.calls.get_mut(&handle(arg(one, 0))).expect("KeyError: call").parms.push(parm);
             }
-            "DBSrcFile" if one.fields.get("main").is_some_and(|one| one == "1") => main_file = one.result.clone(),
+            "DBSrcFile" if one.field("main") == Some("1") => main_file = one.result.map(str::to_owned),
             "DBSrcFile" => {}
             // A line of another file, a header's, is no line of the source.
             "DBSrcCue" => line = if main_file.as_deref() == Some(arg(one, 0)) { int(arg(one, 1)) } else { 0 },
             "CGSelInit" => {
                 let at = open(proc);
-                let result = one.result.clone().expect("CGSelInit returns a handle");
-                made.procs[at].body.push(Statement { call: one.call.clone(), args: vec![result], line });
+                let result = one.result.map(str::to_owned).expect("CGSelInit returns a handle");
+                made.procs[at].body.push(Statement { call: one.call.to_owned(), args: vec![result], line });
             }
             call if STATEMENTS.contains(&call) => {
                 let at = open(proc);
-                made.procs[at].body.push(Statement { call: call.to_owned(), args: args.clone(), line });
+                made.procs[at].body.push(Statement { call: call.to_owned(), args: owned(), line });
             }
             call if call.starts_with("DG") => {
                 let Some(segment) = segment else {
@@ -691,17 +734,17 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     .get_mut(&segment)
                     .expect("KeyError: segment")
                     .items
-                    .push((call.to_owned(), Tuple(args.clone())));
+                    .push((call.to_owned(), Tuple(owned())));
             }
             call if IGNORED.contains(&call) => {}
             "CGFact" => {
-                let node = Node { call: one.call.clone(), args: args.clone() };
+                let node = Node { call: one.call.to_owned(), args: owned() };
                 crate::ow_facts::check(&node)?;
-                made.nodes.insert(handle(one.result.as_deref().expect("a fact names its node")), node);
+                made.nodes.insert(handle(one.result.expect("a fact names its node")), node);
             }
-            _ if one.result.as_deref().is_some_and(|result| result.starts_with('n')) => {
-                let result = one.result.as_deref().expect("checked");
-                made.nodes.insert(handle(result), Node { call: one.call.clone(), args: args.clone() });
+            _ if one.result.is_some_and(|result| result.starts_with('n')) => {
+                let result = one.result.expect("checked");
+                made.nodes.insert(handle(result), Node { call: one.call.to_owned(), args: owned() });
             }
             _ => {
                 return Err(Unsupported(format!("stream line {}: {}", one.line, one.call)));
@@ -722,4 +765,77 @@ fn from_hex(text: &str) -> Vec<u8> {
                 .unwrap_or_else(|_| panic!("ValueError: non-hexadecimal number found in fromhex()"))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod canonical_tests {
+    use super::*;
+
+    /// The reference: what `canonical_type` was.
+    fn was(
+        aliases: &IndexMap<String, String>,
+        type_: &str,
+    ) -> String {
+        let mut type_ = type_.to_owned();
+        let mut seen = llrm_support::hash::HashSet::default();
+        while let Some(next) = aliases.get(&type_) {
+            if !seen.insert(type_.clone()) {
+                break;
+            }
+            type_ = next.clone();
+        }
+        type_
+    }
+
+    /// Every query of a type made a `String` and a `HashSet`: the borrowed
+    /// walk answers the same for no alias, a chain, a self-alias and a cycle.
+    #[test]
+    fn test_the_borrowed_alias_walk_agrees_with_the_owning_one() {
+        let pairs = [("A", "B"), ("B", "C"), ("X", "Y"), ("Y", "X"), ("S", "S")];
+        let aliases: IndexMap<String, String> = pairs.iter().map(|(a, b)| ((*a).to_owned(), (*b).to_owned())).collect();
+        let unit = Unit { aliases: aliases.clone(), ..Unit::default() };
+        for name in ["A", "B", "C", "X", "Y", "S", "TY_INT", ""] {
+            assert_eq!(unit.canonical_type_ref(name), was(&aliases, name), "{name}");
+            assert_eq!(unit.canonical_type(name), was(&aliases, name), "{name}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod int_tests {
+    use super::parse_int;
+
+    /// Every handle and number of the record stream went through
+    /// `trim().parse()` (`trim_matches` with `char::is_whitespace`, then the
+    /// generic parser): 1.48 M Ir of `translate::program`. The byte loop gives
+    /// the same answer for what it takes and leaves the rest to that.
+    #[test]
+    fn test_the_byte_loop_agrees_with_trim_and_parse_on_every_spelling() {
+        let spellings = [
+            "0",
+            "7",
+            "42",
+            "-7",
+            "-0",
+            " 12",
+            "12 ",
+            "\t-3\n",
+            "+5",
+            "",
+            "-",
+            "1_000",
+            "12a",
+            "0x10",
+            "123456789012345678",
+            "1234567890123456789",
+            "9223372036854775807",
+            "9223372036854775808",
+            "-9223372036854775808",
+            "-9223372036854775809",
+            "00012",
+        ];
+        for text in spellings {
+            assert_eq!(parse_int(text), text.trim().parse::<i64>().ok(), "{text:?}");
+        }
+    }
 }

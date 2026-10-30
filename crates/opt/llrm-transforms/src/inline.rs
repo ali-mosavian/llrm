@@ -39,53 +39,31 @@
 //!
 //! *Inlining a call to g*
 //!
-//! A callee is a candidate (`candidates`) when it can be cloned (`cloneable`:
-//! defined, `splice` carries it, it returns, it is not recursive, not
-//! `noinline`, and does not call `setjmp`-like functions), and then by price.
-//! The body's semantic operations (not phis, jumps, returns) must fit the
-//! budget `max(6, min(24, call_cost / 2)) * limit / 225` (`Threshold::budget`),
-//! and the work copied at every site beyond the last must stay below the calls
-//! removed, in the target's clocks, or in code bytes where size outranks speed
-//! (`-Os`). A routine marked `alwaysinline` is a candidate at any size and
-//! `noinline` at none; the caller's growth limit does not apply to
-//! `alwaysinline` (gcc's `DECL_DISREGARD_INLINE_LIMITS`). `inlinehint` scales
-//! the budget by 325/225. A body held only to inline from
-//! (`available_externally`) is a candidate at any size.
+//! A callee can be cloned (`cloneable`: defined, `splice` carries it, it
+//! returns, it is not recursive, not `noinline`, and does not call
+//! `setjmp`-like functions); whether it is copied at a site is
+//! `inlinecost::decide`'s, the walk's ([`crate::walk`]).
 //!
-//! A public callee, or one whose address is taken, stays defined; a private one
-//! goes with its last site. The last call of a function nothing else reaches
-//! moves the body whatever its price (`Candidate::moved`), up to
-//! `LAST_CALL_OPERATIONS`, where `Threshold::last` is on
-//! (`-finline-functions-called-once`).
+//! A static alloca of the callee goes to the caller's entry; one whose count
+//! is an argument folds to a constant in the copy, as
+//! `CloneAndPruneFunctionInto` simplifies it, and is static too. Any other (a
+//! variable count) stays where it is, and the copy is bracketed by
+//! `llvm.stacksave` and, before each return, `llvm.stackrestore`.
 //!
-//! `constant_sites` admits a call whose actual is a known constant even where
-//! the body is not a candidate for every caller: `folded` prices what the known
-//! actuals remove from the body, and the copy is taken when what is left costs
-//! no more than the call, weighted by the site's frequency (a hot site, in a
-//! loop, by 525/225). The original stays for the other callers.
-//!
-//! A copy is allowed (`fits`, `grows_within_limits`) only where
+//! A copy is allowed (`fits_with`) only where
 //!
 //! - the call's function type is the callee's and the callee is not variadic;
-//! - the stack the copy adds stays within `FRAME_LIMIT` (256 bytes), and no
-//!   body that allocates is copied into a recursive caller;
-//! - a parameter the callee `releases` is passed an object the caller owns;
-//! - the caller's growth stays within GCC's `caller_growth_limits`, whose
-//!   `large-function-insns` is the allocator's knee (`ALLOCATION_KNEE`), not
-//!   2700, and a body moved into a caller already past the knee is refused.
+//! - no body that allocates is copied into a recursive caller, except the last
+//!   call of a private callee;
+//! - a parameter the callee `releases` is passed an object the caller owns.
+//!
+//! Which sites are copied is `inlinecost::decide`'s (the walk's).
 //!
 //! `expanded_all` decides every site of a caller first (`Plan`), tracking the
 //! caller's size and stack as they grow and including what is inlined into each
 //! copy, then splices from the last site to the first so each split moves only
 //! what is left of its block. `byval` arguments the callee writes are copied
 //! first.
-//!
-//! Recursion is separate: `inlined_into_itself` gives a recursive function
-//! copies of itself (GCC's `recursive_inlining`) to depth 8, while the body
-//! stays under 450 operations and the call's block runs on more than a tenth of
-//! the function's calls;
-//! `peeled_into` gives a caller one copy of a recursive callee. `UnitSize`
-//! bounds the unit's growth as `inline-unit-growth` (40%).
 //!
 //! # Example
 //! Before:
@@ -174,38 +152,32 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use llrm_analysis::cfg;
-use llrm_analysis::consts;
-use llrm_analysis::memory::Unit;
 use llrm_mir::callgraph::CallGraph;
-use llrm_mir::context::{ConstantId, ConstantKind, Context, GlobalId};
+use llrm_mir::context::{ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::{Facts, Inlining};
-use llrm_mir::memory::{Callees, Effects, callee};
-use llrm_mir::module::{Function, InstId, Linkage, Module, Operand, ValueDef};
+use llrm_mir::memory::{Callees, callee};
+use llrm_mir::module::{Function, InstId, Metadata, MetadataId, Module, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
-use llrm_mir::splice::{carries, splice, splice_before};
+use llrm_mir::splice::{Spliced, carries, spliced};
 use llrm_mir::types::Type;
 use llrm_support::hash::{IndexMap, SparseIdMap};
 
-use crate::profit::{self, OperationCosts, operation};
+use crate::profit::{OperationCosts, operation};
 
 /// How much inlining may copy: LLVM's inline threshold, 225 at -O2 and 0
-/// for none. A callee's budget, in semantic operations, scales with it.
-/// `hint` is the ratio a routine the language marks worth inlining may grow
-/// by: LLVM's inline-hint threshold, 325 against 225; 1/1 where code size
-/// outranks speed. `hot` is the same for a call in a loop: LLVM's
-/// locally-hot call site threshold, 525 against 225.
+/// for none. A callee's budget, in semantic operations, scales with it. The
+/// hint and hot-site thresholds are `InlineParams`' (inlinecost.rs).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Threshold {
     pub limit: i64,
-    pub hint: (i64, i64),
-    pub hot: (i64, i64),
     /// Where code size outranks speed: a call also removes its arguments'
     /// pushes and cleanup.
     pub single: bool,
+    /// The caller is `minsize` (-Oz): a call is held to `OptMinSizeThreshold`.
+    pub min_size: bool,
     /// The last call of a function nothing else reaches inlines at any size:
     /// its body moves, nothing is copied: LLVM's last-call-to-static bonus
     /// and GCC's `-finline-functions-called-once`, which
@@ -215,11 +187,17 @@ pub struct Threshold {
     /// `-fipa-cp-clone` (-O3): a function is copied for the constants its
     /// callers pass though the unit grows (`ipacp`).
     pub cp_clone: bool,
+    /// `-finline-recursive`: gcc's recursive inlining and peeling (a recursive
+    /// function copied into itself to depth 3, a recursive callee's own calls
+    /// inlined in the copy, its tail-call elimination deferred until the
+    /// copies are made). Off: the pin's inliner, which copies a recursive
+    /// callee once (DEVIATE (recursion), docs/architecture/recursion-rows.md).
+    pub recursive: bool,
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, hint: (325, 225), hot: (525, 225), single: false, last: true, cp_clone: false }
+        Self { limit, single: false, min_size: false, last: true, cp_clone: false, recursive: false }
     }
 
     /// Nothing inlines, the last call of a function included.
@@ -227,9 +205,28 @@ impl Threshold {
         Self { last: false, ..Self::new(0) }
     }
 
-    /// The same where code size outranks speed: a hint or a loop buys nothing.
+    /// The same where code size outranks speed: the caller is `optsize`, so the
+    /// call is held to `OptSizeThreshold` (inlinecost.rs, D8).
     pub fn for_size(self) -> Self {
-        Self { hint: (1, 1), hot: (1, 1), single: true, ..self }
+        Self { single: true, ..self }
+    }
+
+    /// What the pin's inliner calls the caller: `hasMinSize`, `optsize` or
+    /// neither.
+    pub fn caller_size(self) -> crate::inlinecost::CallerSize {
+        use crate::inlinecost::CallerSize;
+        if self.min_size {
+            CallerSize::MinSize
+        } else if self.single {
+            CallerSize::OptSize
+        } else {
+            CallerSize::Speed
+        }
+    }
+
+    /// The same where the caller is `minsize` (-Oz).
+    pub fn for_min_size(self) -> Self {
+        Self { single: true, min_size: true, ..self }
     }
 }
 
@@ -239,45 +236,7 @@ impl Default for Threshold {
     }
 }
 
-impl Threshold {
-    /// The budget for a call priced `call_cost`; None when nothing inlines.
-    pub(crate) fn budget(
-        self,
-        call_cost: i64,
-    ) -> Option<i64> {
-        (self.limit > 0).then(|| 6.max(24.min(call_cost.div_euclid(2))) * self.limit / Self::default().limit)
-    }
-
-    /// The same for a call a function makes to itself:
-    /// `want_inline_small_function_p` is asked of the recursive edge too,
-    /// so the growth the function may have is `max-inline-insns-auto`, 15
-    /// at -O2 (params.opt:545), where a call priced at 12 or less admits
-    /// six operations. `rectwo`'s body is nine.
-    pub(crate) fn recursive_budget(
-        self,
-        call_cost: i64,
-    ) -> Option<i64> {
-        // -O1 has no `-finline-functions`: its threshold keeps the ordinary
-        // budget.
-        let floor = if self.limit < Self::default().limit {
-            0
-        } else if self.limit >= Self::new(250).limit {
-            // -O3's `max-inline-insns-auto` is 30, twice -O2's
-            // (opts.cc:690-694): the threshold's own 250 against
-            // 225 is not that ratio.
-            INSNS_AUTO_O3
-        } else {
-            INSNS_AUTO * self.limit / Self::default().limit
-        };
-        self.budget(call_cost).map(|budget| budget.max(floor))
-    }
-}
-
-/// GCC's `max-inline-insns-auto` at -O2 (params.opt:545).
-const INSNS_AUTO: i64 = 15;
-
-/// The same at -O3.
-const INSNS_AUTO_O3: i64 = 30;
+impl Threshold {}
 
 /// Direct call counts by callee.
 pub type Counter = IndexMap<GlobalId, i64>;
@@ -287,52 +246,6 @@ fn stated(body: &Function) -> Option<Inlining> {
     Facts::of(&body.attrs).inline()
 }
 
-/// The stack, in bytes, inlining may add to one function: a copy's frame is
-/// a cell of its own wherever it sits, so copies add up, and in a recursive
-/// function they add up per level.  LLVM bounds the same way.
-const FRAME_LIMIT: u64 = 256;
-
-/// Where the register allocator's cost leaves linear. gcc bounds a caller's
-/// growth at `large-function-insns` (2700) and `large-function-growth` (100%,
-/// ipa-inline.cc `caller_growth_limits`) and LLVM moves a once-called body up
-/// to the last-call bonus (15000 over 5 a instruction, about 3000): both for
-/// allocators near linear in function size. Ours rebuilds its intervals and
-/// facts over the whole body at each spill and split, so a body merged past the
-/// knee costs several times what its parts did. Measured (compile-time's curve,
-/// QCport -O2, 732 functions, instrument commit 646b62f0 on perf/walk, data in
-/// ~/scratch/ctime-out/curve): backend milliseconds per LIR instruction 0.20 up
-/// to about 200 instructions, 0.45 at 200-400, 0.96 at 400-800, 1.8 above 1600;
-/// the log-log slope of time against size 1.25 below 300 instructions and 2.2
-/// above. The knee is in LIR instructions and this counts MIR operations, which
-/// are 1.86 LIR instructions each at the median (QCport's 108 functions of 60
-/// operations or more at -O2, 16-bit; 1.66 over 15 on the 32-bit target), so
-/// 250 / 1.8. Counted as the same number, sb_build's 38-operation callee went
-/// into a caller of 190 and left 667 instructions where its parts were 175 and
-/// 465: backend 0.36 s -> 2.4 s. Called-once inlining (#769) merged part_frame
-/// from 435 to 1647 instructions: backend 271 ms -> 11,385 ms.
-// Re-measure when the allocator's slot numbering lands:
-// https://github.com/ali-mosavian/llrm/issues/794. Measured 2026-10-07.
-const KNEE_INSTRUCTIONS: i64 = 250;
-/// LIR instructions a MIR operation comes to, in percent: the median over
-/// QCport's 108 functions of 60 operations or more at -O2 (186) and 15 on the
-/// 32-bit target (166), taken as 180.
-const INSTRUCTIONS_PER_OPERATION: i64 = 180;
-/// The knee in the unit this counts, MIR operations.
-const ALLOCATION_KNEE: i64 = KNEE_INSTRUCTIONS * 100 / INSTRUCTIONS_PER_OPERATION;
-
-/// gcc's rule of `caller_growth_limits` with the knee for
-/// `large-function-insns`: an inline that leaves its caller over
-/// `ALLOCATION_KNEE` operations and over the larger of the caller's own size
-/// (before any inlining) and the callee's grown by `LARGE_GROWTH` percent is
-/// refused, the last call of a function included.
-const LARGE_FUNCTION: i64 = ALLOCATION_KNEE;
-const LARGE_GROWTH: i64 = 100;
-
-/// A body that is moved into its one caller is at most the knee: gcc's limits
-/// above let a large callee into a small caller whole, which is the merge that
-/// costs.
-const LAST_CALL_OPERATIONS: i64 = ALLOCATION_KNEE;
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Candidate {
     pub body: Rc<Function>,
@@ -341,17 +254,68 @@ pub struct Candidate {
     /// Admitted only as the last call of a body nothing else reaches, which it
     /// moves whatever its price: not a copy the price allows.
     pub moved: bool,
+    /// A private callee nothing but this one call reaches: the copy takes
+    /// the callee's place, so it may allocate in a recursive caller
+    /// (INL-REC-1).
+    pub last_call: bool,
+    /// The function the body is of, where it is a recursive callee whose own
+    /// calls may be peeled.
+    pub callee: Option<GlobalId>,
+    /// Where the body calls itself: the calls it makes of itself per call,
+    /// the sum of those calls' frequencies over the entry's.
+    pub self_calls: Option<f64>,
+    /// How many calls of itself the body has.
+    pub self_sites: usize,
 }
 
 /// What a caller says of itself that bounds what may be copied into it.
 pub struct Caller<'a> {
     pub layout: &'a DataLayout,
     pub recursive: bool,
-    /// The caller's operations before anything was inlined into it, 0 where
-    /// that is not known: the growth its inlines may come to is measured
-    /// against it (`LARGE_FUNCTION`).
-    pub base: i64,
+    /// The copies are of the caller itself: they stop at the recursion limits,
+    /// and this is the frequency of each call of the function's own body
+    /// over its entry's (a call not in it counts 1).
+    pub self_inlining: Option<&'a SparseIdMap<InstId, f64>>,
+    /// A recursive callee inlined here may have its own calls inlined in the
+    /// copy, gcc's peeling.
+    pub peeling: bool,
 }
+
+/// DEVIATE (recursion), gcc's `--param max-inline-recursive-depth-auto` is 8
+/// (params.opt:573, gcc 13.3; `want_inline_self_recursive_call_p`,
+/// ipa-inline.cc:991); 3 here. Measured on the i486 rows,
+/// -O2 clocks / bytes (main | depth 8 | depth 3): fib 227171/537 | 227940/1736
+/// | 132006/360, rectwo 612458/538 | 1539189/1848 | 530081/520; gcc's depth
+/// costs 3-10x main's bytes (bintree 291 -> 2876, quicksort 343 -> 3116).
+/// Owner: w-6. Exit: the copies are chosen by gcc's badness heap with its
+/// real growth limits (`inline-unit-growth`).
+pub const MAX_INLINE_RECURSIVE_DEPTH: usize = 3;
+
+/// gcc 13.3's depth (params.opt:573), which peeling keeps.
+const MAX_INLINE_RECURSIVE_DEPTH_GCC: usize = 8;
+
+/// gcc 13.3's `max-inline-insns-recursive-auto` (params.opt:553), which caps
+/// what the copies of one peeled call add.
+const MAX_INLINE_INSNS_RECURSIVE_GCC: i64 = 450;
+
+/// DEVIATE (recursion), gcc 13.3's `--param max-inline-insns-recursive-auto`
+/// is 450 (params.opt:553, `recursive_inlining`, ipa-inline.cc:1645); 150 here,
+/// in `gcc_insns`: the size the function may reach by copies of itself. The
+/// smallest that keeps fib and rectwo under main (depth 3, -O2 clocks/bytes;
+/// main fib 227171/537, rectwo 612458/538): 60: fib 207179/264, rectwo
+/// 1489763/280; 100: 132006/360, 876030/424; 150: 132006/360, 530081/520; 450:
+/// 132006/360, 530081/520. Owner: w-6. Exit: as the depth's.
+pub const MAX_INLINE_INSNS_RECURSIVE: i64 = 150;
+
+/// `--param min-inline-recursive-probability` (10 per cent, params.opt:769): a
+/// copy is made only where the call's frequency over the entry's, in the
+/// body, exceeds this (`want_inline_self_recursive_call_p`,
+/// ipa-inline.cc:1067).
+pub const MIN_INLINE_RECURSIVE_PROBABILITY: f64 = 10.0;
+
+/// gcc 13.3 `--param max-inline-insns-auto` (params.opt:545), in `gcc_insns`:
+/// what a peeled copy may add.
+pub const MAX_INLINE_INSNS_AUTO: i64 = 15;
 
 /// Whether `inst` does semantic work: not a phi, a jump or a return.
 fn semantic(
@@ -480,12 +444,7 @@ fn copy_byval_arguments(
         let (pointer, void, flag) = (context.types.ptr(0), context.types.void(), context.types.int(1));
         let entry = function.entry().ok_or("a caller with a body")?;
         let first = anchor.or_else(|| {
-            function
-                .block(entry)
-                .instructions()
-                .iter()
-                .copied()
-                .find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
+            function.iter_block(entry).find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
         });
         let alloca = function.create_instruction(
             Opcode::Alloca { allocated: aggregate, align: None, address_space: 0 },
@@ -567,17 +526,6 @@ pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
     module.functions().map(|(id, _, _)| id).filter(|&id| graph.recursive(id)).collect()
 }
 
-/// Whether `body` may be cloned into another function: it returns, `splice`
-/// carries it, and it is not recursive, never to be inlined or `setjmp`-like.
-pub(crate) fn cloneable(
-    module: &Module,
-    recursive: &BTreeSet<GlobalId>,
-    id: GlobalId,
-    body: &Function,
-) -> bool {
-    !recursive.contains(&id) && copyable(module, body)
-}
-
 /// Whether `body` may be copied as a function of its own (a recursive one
 /// included): it returns, `splice` carries it, and it is not to be inlined or
 /// `setjmp`-like.
@@ -618,15 +566,17 @@ pub fn size(
     function: GlobalId,
     costs: &OperationCosts,
 ) -> Option<i64> {
-    size_of(module, callees, module.global(function).function()?, costs)
+    size_of(module, callees, module.global(function).function()?, None, costs)
 }
 
 /// `size` of a body that need not be in the module: a copy specialised for
-/// the constants a site passes (`interprocedural::Specialisations`).
+/// the constants a site passes (`interprocedural::Specialisations`). Its calls
+/// may name functions it declared, which `declared` holds and the module not.
 pub fn size_of(
     module: &Module,
     callees: &Callees,
     body: &Function,
+    declared: Option<&Declared>,
     costs: &OperationCosts,
 ) -> Option<i64> {
     let calls: i64 = body
@@ -647,53 +597,17 @@ pub fn size_of(
         .filter(|point| {
             matches!(body.instruction(point.inst).opcode, Opcode::Call(_))
                 && !callee(&module.context, body, point.inst).is_some_and(|id| {
-                    module
-                        .global(id)
-                        .name
-                        .as_deref()
-                        .is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
+                    let name = match module.globals.get(id.0 as usize) {
+                        Some(one) => one.name.as_deref(),
+                        None => declared.and_then(|declared| declared.pending_name(id)),
+                    };
+                    name.is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
                 })
         })
         .map(|point| point.across.len() as i64)
         .sum::<i64>()
         * costs.store;
     work(module, body, callees, costs).map(|work| work + calls + kept)
-}
-
-/// The priced work of `body` that its known actuals fold away: what a copy at
-/// such a site no longer does. Instructions whose inputs are all known, and
-/// branches they decide; a lower bound, as control flow past a decided branch
-/// is not followed.
-pub(crate) fn folded(
-    module: &Module,
-    layout: &DataLayout,
-    body: &Function,
-    known: &[Option<ConstantId>],
-    callees: &Callees,
-    costs: &OperationCosts,
-) -> i64 {
-    let unit = Unit::of(module, layout, body);
-    let mut values = IndexMap::default();
-    for (&parameter, constant) in body.parameters().iter().zip(known) {
-        if let Some(number) = constant.and_then(|id| consts::_operand(&unit, Operand::Constant(id), &values, None)) {
-            values.insert(parameter, number);
-        }
-    }
-    let mut saved = 0;
-    for (_, inst) in body.walk().filter(|&(_, inst)| semantic(body, inst)) {
-        let instruction = body.instruction(inst);
-        let decided = instruction.opcode == Opcode::Br
-            && consts::_operand(&unit, instruction.operands[0], &values, None).is_some();
-        let result = consts::_result(&unit, inst, &values, None);
-        if !decided && result.is_none() {
-            continue;
-        }
-        if let (Some(value), Some(number)) = (consts::_defined(&unit, inst), result) {
-            values.insert(value, number);
-        }
-        saved += operation(&module.context, layout, body, callees, inst, costs).unwrap_or(0);
-    }
-    saved
 }
 
 /// What a call costs beyond its own instruction, which inlining saves: the
@@ -703,201 +617,6 @@ pub fn call_overhead(
     arguments: usize,
 ) -> i64 {
     costs.call + costs.return_ + arguments as i64 * costs.argument
-}
-
-/// Functions worth moving into their direct callers.
-///
-/// A candidate's size is bounded by the `Threshold`; a routine the language
-/// says is `Always` inlined is a candidate at any size, and `Never` is none.
-/// Inlining it at all
-/// `count` sites leaves the body behind when it is public or its address is
-/// taken; a private one goes with the last site, so one site costs nothing.
-/// Each copy beyond that duplicates the body's priced work, which has to
-/// stay below the calls removed.
-pub fn candidates(
-    module: &Module,
-    callees: &Callees,
-    layout: &DataLayout,
-    calls: &Counter,
-    private: &BTreeSet<GlobalId>,
-    costs: &OperationCosts,
-    reach: i64,
-    threshold: Threshold,
-) -> IndexMap<GlobalId, Candidate> {
-    candidates_over(
-        module,
-        callees,
-        layout,
-        calls,
-        private,
-        costs,
-        reach,
-        threshold,
-        &recursive(module),
-        &llrm_mir::callgraph::addressed(module),
-    )
-}
-
-/// `candidates` where the module's recursive and addressed functions are known:
-/// a round asks twice (the bytes and the clocks) and found them each time.
-pub fn candidates_over(
-    module: &Module,
-    callees: &Callees,
-    layout: &DataLayout,
-    calls: &Counter,
-    private: &BTreeSet<GlobalId>,
-    costs: &OperationCosts,
-    reach: i64,
-    threshold: Threshold,
-    recursive: &BTreeSet<GlobalId>,
-    addressed: &BTreeSet<GlobalId>,
-) -> IndexMap<GlobalId, Candidate> {
-    let budget = threshold.budget(reach);
-    let call_cost = costs.call;
-    let mut out = IndexMap::default();
-    let mut lasts = IndexMap::default();
-    for (&name, &count) in calls {
-        let Some(body) = body(module, name) else { continue };
-        if count == 0 || !cloneable(module, &recursive, name, body) {
-            continue;
-        }
-        let always = stated(body) == Some(Inlining::Always);
-        // A hint is worth a larger body, and a larger duplication, by LLVM's
-        // ratio.
-        let scale =
-            |n: i64| if stated(body) == Some(Inlining::Hint) { n * threshold.hint.0 / threshold.hint.1 } else { n };
-        // What a call removes: it, and where code size is what counts, its
-        // arguments' pushes and cleanup. A `byval` argument's copy goes
-        // too, as LLVM counts it (InlineCost: the bytes copied): a push's price
-        // per word.
-        let copied: i64 = body
-            .parameter_attrs
-            .iter()
-            .flatten()
-            .filter_map(|one| match one {
-                llrm_mir::Attribute::Type(kind, ty) if kind == "byval" => {
-                    Some(layout.alloc_size(&module.context.types, *ty) as i64 / 4)
-                }
-                _ => None,
-            })
-            .sum();
-        let saved = call_cost
-            + copied * costs.argument
-            + if threshold.single { module.signature(body.ty).1.len() as i64 * costs.argument } else { 0 };
-        let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
-        // The last call of a function nothing else reaches moves its body: no
-        // copy, and the call, its arguments and the return gone (LLVM's
-        // last-call-to-static bonus).
-        let admitted = || {
-            budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
-                && (copies == 0
-                    || work(module, body, callees, costs).is_some_and(|work| work * copies < scale(count * saved)))
-        };
-        // Only once nothing else is: a body that a call in it is about to be
-        // inlined into would be copied with that call still in it, and
-        // the call's callee counted once too many.
-        let last =
-            threshold.last && copies == 0 && semantic_count(body) <= LAST_CALL_OPERATIONS && !always && !admitted();
-        // A body held only to inline from (`available_externally`) is a
-        // candidate at any size: it is emitted nowhere, so a copy costs
-        // nothing the program had.
-        let verdict = always || admitted() || module.global(name).linkage == Linkage::AvailableExternally;
-        llrm_support::debug!(
-            "inline",
-            "{} x{count} ({copies} copies): {} ops, budget {budget:?}, work {:?}, call {call_cost}: {}",
-            module.global(name).name.as_deref().unwrap_or("?"),
-            semantic_count(body),
-            work(module, body, callees, costs),
-            if verdict { "candidate" } else { "refused" }
-        );
-        if verdict {
-            out.insert(
-                name,
-                Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: false },
-            );
-        } else if last {
-            lasts.insert(
-                name,
-                Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: true },
-            );
-        }
-    }
-    if out.is_empty() {
-        out = lasts;
-    }
-    out
-}
-
-/// Functions worth cloning at one call site whose actual is a known
-/// constant; `recursive` is `recursive(module)`.
-///
-/// Whole-body parameter specialization needs every caller to agree.  This
-/// narrower policy instead admits a call whose known actual exposes local
-/// SCCP after the normal MIR clone.  The original body remains for dynamic
-/// callers, so no source-level calling convention or symbol changes.
-/// The work a copy keeps, priced in the target's clocks after what the known
-/// actuals fold, must stay below the call it replaces.
-pub fn constant_sites(
-    module: &Module,
-    callees: &Callees,
-    layout: &DataLayout,
-    recursive: &BTreeSet<GlobalId>,
-    caller: &Function,
-    constants: &IndexMap<InstId, Vec<Option<ConstantId>>>,
-    costs: &OperationCosts,
-    reach: i64,
-    threshold: Threshold,
-) -> IndexMap<InstId, Candidate> {
-    let Some(budget) = threshold.budget(reach) else { return IndexMap::default() };
-    let frequency =
-        profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None).unwrap_or_default();
-    let mut out = IndexMap::default();
-    for (block, at) in caller.walk() {
-        let Some(name) = callee(&module.context, caller, at) else { continue };
-        let known = constants.get(&at).map_or(&[][..], Vec::as_slice);
-        if !known.iter().any(Option::is_some) {
-            continue;
-        }
-        let Some(body) = body(module, name) else { continue };
-        let semantic = semantic_count(body);
-        // What stays of the copy, in clocks, against the call it replaces.
-        // Where code size is what counts, a body of arithmetic every actual of
-        // which is known is taken to fold whole: `folded` follows no
-        // branch past a decided one, so a loop on known bounds looked
-        // all kept.
-        let folds = threshold.single
-            && known.iter().all(Option::is_some)
-            && callees.get(&name).is_some_and(|summary| summary.effects == Effects::NONE);
-        let saved = if folds { None } else { Some(folded(module, layout, body, known, callees, costs)) };
-        let kept = if folds { Some(0) } else { work(module, body, callees, costs).map(|all| all - saved.unwrap_or(0)) };
-        // A call in a loop saves its overhead on every trip, which LLVM's
-        // hot-site threshold weighs.
-        let hot = frequency.get(&cfg::id(block)).is_some_and(|&one| one > profit::UNIT);
-        let overhead = call_overhead(costs, known.len()) * if hot { threshold.hot.0 } else { 1 }
-            / if hot { threshold.hot.1 } else { 1 };
-        // A copy that folds nothing buys the call's overhead once, which
-        // `candidates` prices by its copies, unless the site is in a
-        // loop and buys it every trip.
-        let verdict = (folds || hot || saved.is_some_and(|saved| saved > 0))
-            && kept.is_some_and(|kept| kept <= overhead)
-            && semantic <= budget
-            && cloneable(module, recursive, name, body);
-        llrm_support::debug!(
-            "inline",
-            "constant site of {}: {semantic} ops, {kept:?} clocks kept, budget {budget}, call {overhead}, {} of {} actuals known: {}",
-            module.global(name).name.as_deref().unwrap_or("?"),
-            known.iter().flatten().count(),
-            known.len(),
-            if verdict { "candidate" } else { "refused" }
-        );
-        if verdict {
-            out.insert(
-                at,
-                Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: false },
-            );
-        }
-    }
-    out
 }
 
 /// Surviving direct call counts.
@@ -914,37 +633,6 @@ pub fn call_counts(module: &Module) -> Counter {
         }
     }
     counts
-}
-
-/// Inline the first legal call site in `function`; whether one was.
-pub fn expanded(
-    context: &mut Context,
-    function: &mut Function,
-    caller: &Caller,
-    available: &IndexMap<GlobalId, Candidate>,
-    constant: Option<&IndexMap<InstId, Candidate>>,
-    declared: &mut Declared,
-) -> Result<bool, String> {
-    let empty = IndexMap::default();
-    let constant = constant.unwrap_or(&empty);
-    let calls = function.walk().map(|(_, inst)| inst).collect::<Vec<_>>();
-    let own = semantic_count(function);
-    for call in calls {
-        if !matches!(function.instruction(call).opcode, Opcode::Call(_)) {
-            continue;
-        }
-        let candidate =
-            constant.get(&call).or_else(|| callee(context, function, call).and_then(|name| available.get(&name)));
-        let Some(candidate) = candidate else {
-            continue;
-        };
-        if fits(context, function, caller, own, call, candidate) {
-            copy_byval_arguments(context, function, caller.layout, call, &candidate.body, declared, None)?;
-            splice(context, function, call, &candidate.body);
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 /// What a call is told of one actual: the function it names, and whether it
@@ -1014,11 +702,28 @@ struct Plan<'a, 'c> {
     caller: &'c Caller<'c>,
     available: &'a IndexMap<GlobalId, Candidate>,
     own: i64,
+    /// The caller's size in `gcc_insns`, kept only to bound self-inlining.
+    insns: i64,
+    /// What peeled copies have added, in `gcc_insns`.
+    peeled: i64,
     frame: u64,
     seq: usize,
 }
 
 impl<'a> Plan<'a, '_> {
+    /// Whether the call `target` names, inside the copy of `candidate`, is
+    /// inlined in turn: a function's call of itself only where peeling is on
+    /// (self-inlining, which has no callee set, bounds itself); the peeled
+    /// copy descends into nothing else.
+    fn descends(
+        &self,
+        target: &Candidate,
+        candidate: &Candidate,
+    ) -> bool {
+        let itself = target.callee.is_some() && target.callee == candidate.callee;
+        if self.caller.peeling { itself } else { !itself }
+    }
+
     /// `candidate` inlined at a call of `function_type` with `actuals`: the
     /// size and stack it adds are kept, and what is inlined in the copy.
     fn inline(
@@ -1026,12 +731,64 @@ impl<'a> Plan<'a, '_> {
         function_type: llrm_mir::types::TypeId,
         actuals: &[Actual],
         candidate: &'a Candidate,
+        site: InstId,
+        depth: usize,
+        parent: Option<&'a Candidate>,
     ) -> Option<(Planned<'a>, Actual)> {
-        if !fits_with(self.context, self.caller, self.own, self.frame, function_type, |at| actuals[at].owned, candidate)
-        {
+        if !fits_with(self.context, self.caller, function_type, |at| actuals[at].owned, candidate) {
             return None;
         }
         let callee = &*candidate.body;
+        if let Some(frequencies) = self.caller.self_inlining {
+            let grown = gcc_insns(callee) - 1;
+            // `want_inline_self_recursive_call_p`: the frequency of the
+            // call within the body, over the entry's, above the minimum.
+            let frequency = frequencies.get(&site).copied().unwrap_or(1.0);
+            if depth > MAX_INLINE_RECURSIVE_DEPTH
+                || self.insns + grown > MAX_INLINE_INSNS_RECURSIVE
+                || frequency * 100.0 <= MIN_INLINE_RECURSIVE_PROBABILITY
+            {
+                return None;
+            }
+            self.insns += grown;
+        } else if self.caller.peeling && depth > 1 {
+            // Peeling (`want_inline_self_recursive_call_p`,
+            // ipa-inline.cc:1033): the copy's own call, `depth - 1`
+            // copies deep, is inlined while the probability of
+            // recursing is below 1 - 1/8, squared once for
+            // each copy before it, and the copy adds a small function's
+            // growth. DEVIATE: gcc reads the probability of the one call's
+            // edge; here it is the calls of the function to itself per call,
+            // so a tree (fib: 1, bintree: 1.25) is not peeled, which doubles
+            // a copy at each level (bintree -O2 +0.13% clocks, 988 to 1276 B).
+            let level = depth - 1;
+            // The edge's frequency in the caller, over that of the call that
+            // made the outermost copy: the calls to itself per call, to the
+            // power of the copies it is deep.
+            let reached = parent.and_then(|one| one.self_calls).unwrap_or(1.0).powi(level as i32);
+            // The squaring bounds the copies, which are `sites` to the power of
+            // the depth: with one call the copies grow by one a level and the
+            // limit stays (hanoi: 133 clocks with it squared, 103 without).
+            let mut limit = 1.0 - 1.0 / MAX_INLINE_RECURSIVE_DEPTH_GCC as f64;
+            if parent.is_some_and(|one| one.self_sites > 1) {
+                for _ in 1..level {
+                    limit *= limit;
+                }
+            }
+            let grown = gcc_insns(callee) - 1;
+            // DEVIATE: gcc has no cap on peeling; the copies of one call add at
+            // most what gcc lets a function grow by recursive inlining, 450
+            // (recpow -O1: uncapped 32 copies and 8203 bytes; 150 left it at
+            // 486966 clocks against 475701 before; 450 is 454246 / 5547).
+            if level > MAX_INLINE_RECURSIVE_DEPTH_GCC
+                || reached >= limit
+                || grown > MAX_INLINE_INSNS_AUTO
+                || self.peeled + grown > MAX_INLINE_INSNS_RECURSIVE_GCC
+            {
+                return None;
+            }
+            self.peeled += grown;
+        }
         self.seq += 1;
         let seq = self.seq;
         let mut actuals = actuals.to_vec();
@@ -1063,7 +820,9 @@ impl<'a> Plan<'a, '_> {
                     .collect();
                 let target = seen.last().and_then(|one| one.callee).and_then(|name| self.available.get(&name));
                 if let Some(target) = target
-                    && let Some((planned, result)) = self.inline(info.function_type, &seen, target)
+                    && self.descends(target, candidate)
+                    && let Some((planned, result)) =
+                        self.inline(info.function_type, &seen, target, inst, depth + 1, Some(candidate))
                 {
                     if instruction.result.is_some() {
                         results.insert(inst, result);
@@ -1103,6 +862,304 @@ struct Placed {
     base: Option<InstId>,
     stack: std::collections::BTreeMap<usize, InstId>,
     copies: std::collections::BTreeMap<usize, InstId>,
+    /// The copies' lifetimes, marked once every copy is made.
+    lifetimes: Vec<Lifetimes>,
+}
+
+/// The static allocas of a copy no marker bounds, and where the copy begins
+/// and returns.
+struct Lifetimes {
+    allocas: Vec<InstId>,
+    /// The address space of the copy's dynamic allocas, if it has any: the copy
+    /// is bracketed by `stacksave` and `stackrestore` so the caller's stack
+    /// does not grow per call.
+    dynamic: Option<u32>,
+    entry: llrm_mir::module::BlockId,
+    returns: Vec<InstId>,
+}
+
+/// `lifetime.start` and `lifetime.end`'s name and type for an alloca in
+/// `space`, declared where the module has none.
+fn lifetime_markers(
+    context: &mut Context,
+    declared: &mut Declared,
+    space: u32,
+) -> ([GlobalId; 2], llrm_mir::types::TypeId) {
+    let types = &mut context.types;
+    let (void, pointer, size) = (types.void(), types.ptr(space), types.int(64));
+    let ty = types.intern(Type::Function { returns: void, parameters: vec![size, pointer], variadic: false });
+    let start = declared.declare(&format!("llvm.lifetime.start.p{space}"), ty);
+    let end = declared.declare(&format!("llvm.lifetime.end.p{space}"), ty);
+    ([start, end], ty)
+}
+
+/// The static allocas of `body`'s copy that `InsertLifetime` marks: those of
+/// its entry no lifetime marker of `body`'s bounds already
+/// (`hasLifetimeMarkers`), of a size other than 0.
+fn unmarked_allocas(
+    context: &mut Context,
+    function: &Function,
+    layout: &DataLayout,
+    body: &Function,
+    made: &Spliced,
+    declared: &mut Declared,
+) -> Lifetimes {
+    let entry = body.entry();
+    let originals = body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret);
+    let mut allocas = Vec::new();
+    for ((block, inst), &copy) in originals.zip(&made.copies) {
+        let Opcode::Alloca { allocated, address_space, .. } = body.instruction(inst).opcode else { continue };
+        // Only a static one: a dynamic alloca stays where it was copied, after
+        // its markers.
+        let static_copy = function.parent(copy) == function.entry() && is_static_alloca(context, function, copy);
+        if Some(block) != entry || !static_copy || layout.alloc_size(&context.types, allocated) == 0 {
+            continue;
+        }
+        let pointer = body.instruction(inst).result.map(Operand::Value);
+        if pointer.is_none_or(|one| outlives_the_copy(body, one)) {
+            continue;
+        }
+        let markers = lifetime_markers(context, declared, address_space).0;
+        let marked = body
+            .walk()
+            .any(
+                |(_, one)| callee(context, body, one).is_some_and(|id| markers.contains(&id))
+                    && body.instruction(one).operands.get(1).copied() == pointer,
+            );
+        if !marked {
+            allocas.push(copy);
+        }
+    }
+    Lifetimes {
+        allocas,
+        dynamic: dynamic_alloca_space(function, &made.copies),
+        entry: made.entry,
+        returns: made.returns.clone(),
+    }
+}
+
+/// Whether the object at `pointer` may be read after the body returns: its
+/// address, or one derived from it, is returned or stored as a value.
+///
+/// DEVIATE D10 (docs/architecture/cgscc-plan.md): `InsertLifetime` marks every
+/// static alloca, as returning or keeping a local's address is undefined in C.
+/// Fact: QB's runtime bodies, copied only, return their own allocas (`B$FMID`'s
+/// view); ending the view at the return made the read through it undef. Exit:
+/// the lifetime ends after the copy's last use of the address, not at its
+/// return.
+fn outlives_the_copy(
+    body: &Function,
+    pointer: Operand,
+) -> bool {
+    let Operand::Value(object) = pointer else { return false };
+    let mut pending = vec![object];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value) {
+            continue;
+        }
+        for one in body.users(value) {
+            let instruction = body.instruction(one.user);
+            match (&instruction.opcode, one.index) {
+                (Opcode::Ret, _) | (Opcode::Store { .. }, 0) => return true,
+                (Opcode::GetElementPtr { .. } | Opcode::Cast(_) | Opcode::Phi | Opcode::Select, _) => {
+                    pending.extend(instruction.result);
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+/// `CloneAndPruneFunctionInto`: the copy of a body's entry is simplified as the
+/// arguments make constants of it, so an alloca of the entry whose count was
+/// the argument's (`int a[n]`) has a constant one and is static: it goes to the
+/// caller's entry, and the copy has no dynamic alloca to bracket.
+fn fold_entry_allocas(
+    context: &Context,
+    function: &mut Function,
+    layout: &DataLayout,
+    body: &Function,
+    made: &Spliced,
+    anchor: Option<InstId>,
+) {
+    let entry = body.entry();
+    let originals = body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret);
+    let copies: Vec<(InstId, bool)> = originals
+        .zip(&made.copies)
+        .filter(|&((block, _), _)| Some(block) == entry)
+        .map(|((_, inst), &copy)| (copy, matches!(body.instruction(inst).opcode, Opcode::Alloca { .. })))
+        .collect();
+    if !copies.iter().any(|&(copy, alloca)| alloca && !is_static_alloca(context, function, copy)) {
+        return;
+    }
+    for &(copy, alloca) in &copies {
+        if alloca {
+            continue;
+        }
+        let Some(result) = function.instruction(copy).result else { continue };
+        if let Some(folded) = llrm_mir::simplify::simplify_instruction(context, layout, function, copy) {
+            function.replace_all_uses_with(result, folded);
+        }
+    }
+    let first = anchor
+        .filter(|&one| function.parent(one).is_some())
+        .or_else(|| function.entry().and_then(|entry| function.block(entry).first()));
+    let Some(first) = first else { return };
+    for &(copy, alloca) in &copies {
+        if alloca && function.parent(copy) != function.entry() && is_static_alloca(context, function, copy) {
+            function.move_to(copy, Position::Before(first)).expect("a placed alloca");
+        }
+    }
+}
+
+/// Whether the alloca `inst` has a constant count (the entry block aside).
+fn is_static_alloca(
+    _context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    function.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_)))
+}
+
+/// The address space of the first alloca among `copies` that is not static: not
+/// on the caller's entry or of a variable count.
+fn dynamic_alloca_space(
+    function: &Function,
+    copies: &[InstId],
+) -> Option<u32> {
+    copies
+        .iter()
+        .find_map(
+            |&copy| match function.instruction(copy).opcode {
+                Opcode::Alloca { address_space, .. }
+                    if function.parent(copy) != function.entry()
+                        || !function.instruction(copy).operands.iter().all(|one| matches!(one, Operand::Constant(_))) =>
+                {
+                    Some(address_space)
+                }
+                _ => None,
+            },
+        )
+}
+
+/// `InlineFunction`'s stack save and restore: a copy with a dynamic alloca
+/// saves the stack pointer where it begins and restores it before each return.
+fn bracket_dynamic_stack(
+    context: &mut Context,
+    function: &mut Function,
+    copy: &Lifetimes,
+    space: u32,
+    declared: &mut Declared,
+) {
+    let types = &mut context.types;
+    let (void, pointer) = (types.void(), types.ptr(space));
+    let save_ty = types.intern(Type::Function { returns: pointer, parameters: vec![], variadic: false });
+    let restore_ty = types.intern(Type::Function { returns: void, parameters: vec![pointer], variadic: false });
+    let save = declared.declare(&format!("llvm.stacksave.p{space}"), save_ty);
+    let restore = declared.declare(&format!("llvm.stackrestore.p{space}"), restore_ty);
+    let call = |context: &Context, function: &mut Function, id: GlobalId, ty, ret, operands: Vec<Operand>| {
+        let target =
+            context.constant(llrm_mir::context::Constant { ty: context.types.ptr(0), kind: ConstantKind::Global(id) });
+        let info = CallInfo {
+            function_type: ty,
+            calling_convention: 0,
+            return_attrs: Vec::new(),
+            argument_attrs: vec![Vec::new(); operands.len()],
+            attrs: Vec::new(),
+            tail: Default::default(),
+        };
+        let mut operands = operands;
+        operands.push(Operand::Constant(target));
+        function.create_instruction(Opcode::Call(Box::new(info)), ret, operands, Flags::default(), None)
+    };
+    let first = function.block(copy.entry).first().expect("a copied entry");
+    let saved = call(context, function, save, save_ty, pointer, Vec::new());
+    function.insert(saved, Position::Before(first)).expect("a placed block");
+    let saved = Operand::Value(function.instruction(saved).result.expect("a pointer"));
+    for &back in &copy.returns {
+        let finish = call(context, function, restore, restore_ty, void, vec![saved]);
+        function.insert(finish, Position::Before(back)).expect("a placed block");
+    }
+}
+
+/// `InlineFunction`'s `InsertLifetime`: each alloca of `lifetimes` begins at
+/// the copy's first instruction and ends before each of its returns, so that
+/// copies whose code does not overlap may share a slot (`lifetimes` in the
+/// backend).
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/InlineFunction.cpp>
+fn insert_lifetimes(
+    context: &mut Context,
+    function: &mut Function,
+    layout: &DataLayout,
+    lifetimes: &Lifetimes,
+    declared: &mut Declared,
+) {
+    let void = context.types.void();
+    let i64_ty = context.types.int(64);
+    if let Some(space) = lifetimes.dynamic {
+        bracket_dynamic_stack(context, function, lifetimes, space, declared);
+    }
+    for &alloca in &lifetimes.allocas {
+        let Opcode::Alloca { allocated, address_space, .. } = function.instruction(alloca).opcode else { continue };
+        let ([start, end], ty) = lifetime_markers(context, declared, address_space);
+        let size = Operand::Constant(context.int(i64_ty, layout.alloc_size(&context.types, allocated) as i128));
+        let pointer = Operand::Value(function.instruction(alloca).result.expect("an alloca's value"));
+        let marker = |context: &Context, function: &mut Function, id: GlobalId| {
+            let target = context
+                .constant(llrm_mir::context::Constant { ty: context.types.ptr(0), kind: ConstantKind::Global(id) });
+            let info = CallInfo {
+                function_type: ty,
+                calling_convention: 0,
+                return_attrs: Vec::new(),
+                argument_attrs: vec![Vec::new(); 2],
+                attrs: Vec::new(),
+                tail: Default::default(),
+            };
+            function.create_instruction(
+                Opcode::Call(Box::new(info)),
+                void,
+                vec![size, pointer, Operand::Constant(target)],
+                Flags::default(),
+                None,
+            )
+        };
+        let first = function.block(lifetimes.entry).first().expect("a copied entry");
+        let begin = marker(context, function, start);
+        function.insert(begin, Position::Before(first)).expect("a placed block");
+        for &back in &lifetimes.returns {
+            let finish = marker(context, function, end);
+            function.insert(finish, Position::Before(back)).expect("a placed block");
+        }
+    }
+}
+
+/// The `!dbg` location of `inst`.
+fn dbg_of(
+    function: &Function,
+    inst: InstId,
+) -> Option<MetadataId> {
+    function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "dbg").map(|&(_, node)| node)
+}
+
+/// The copies of `body` placed at a call located at `site`: each location
+/// says it was inlined at `site`, and an instruction without one is at
+/// `site` itself (`fixupLineNumbers`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/InlineFunction.cpp#L1706>).
+fn inlined_at(
+    function: &mut Function,
+    body: &Function,
+    copies: &[InstId],
+    site: MetadataId,
+    metadata: Metadata,
+    declared: &mut Declared,
+) {
+    let originals = body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret);
+    for ((_, inst), &copy) in originals.zip(copies) {
+        let node = dbg_of(body, inst).map_or(site, |loc| declared.inlined_at(metadata, loc, site));
+        function.set_metadata(copy, "dbg", Some(node));
+    }
 }
 
 /// `planned` at `call`, then what is inlined into the copy.
@@ -1114,19 +1171,32 @@ fn executed(
     planned: &Planned,
     declared: &mut Declared,
     placed: &mut Placed,
+    metadata: Metadata,
 ) -> Result<(), String> {
     let seq = planned.seq;
+    let located = dbg_of(function, call);
     let after = placed.copies.range(seq + 1..).next().map(|(_, &one)| one);
     if let Some(copy) = copy_byval_arguments(context, function, layout, call, &planned.candidate.body, declared, after)?
     {
         placed.copies.insert(seq, copy);
     }
     let anchor = placed.stack.range(..seq).next_back().map(|(_, &one)| one).or(placed.base);
-    let copies = splice_before(context, function, call, &planned.candidate.body, anchor);
+    let site = match &function.instruction(call).opcode {
+        Opcode::Call(info) => info.tail,
+        _ => llrm_mir::opcode::Tail::None,
+    };
+    let made = spliced(context, function, call, &planned.candidate.body, anchor);
+    if let Some(site) = located {
+        inlined_at(function, &planned.candidate.body, &made.copies, site, metadata, declared);
+    }
+    fold_entry_allocas(context, function, layout, &planned.candidate.body, &made, anchor);
+    narrow_tail_calls(function, &made.copies, site);
+    placed.lifetimes.push(unmarked_allocas(context, function, layout, &planned.candidate.body, &made, declared));
+    let copies = made.copies;
     // The call was the entry's first instruction and is gone: the copies that
     // come out of this one are anchored on what the entry starts with now.
     if placed.base == Some(call) {
-        placed.base = function.entry().and_then(|entry| function.block(entry).instructions().first().copied());
+        placed.base = function.entry().and_then(|entry| function.block(entry).first());
     }
     let body = &*planned.candidate.body;
     let entry = body.entry();
@@ -1137,9 +1207,39 @@ fn executed(
         placed.stack.insert(seq, copy);
     }
     for (place, nested) in planned.nested.iter().rev() {
-        executed(context, function, layout, copies[*place], nested, declared, placed)?;
+        executed(context, function, layout, copies[*place], nested, declared, placed, metadata)?;
     }
     Ok(())
+}
+
+/// The `tail` markers of the calls a body brings, as `InlineFunction` leaves
+/// them: a call is no more `tail` than the site it was inlined at
+/// (`ChildTCK = std::min(CallSiteTailKind, ChildTCK)` unless the child is
+/// `notail`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/InlineFunction.cpp#L3136>);
+/// the body's `tail` rested on its own frame, not on the caller's. `notail`
+/// at the site is no marker.
+fn narrow_tail_calls(
+    function: &mut Function,
+    copies: &[InstId],
+    site: llrm_mir::opcode::Tail,
+) {
+    use llrm_mir::opcode::Tail;
+    let rank = |kind: Tail| match kind {
+        Tail::None => 0,
+        Tail::Tail => 1,
+        Tail::MustTail => 2,
+        Tail::NoTail => 3,
+    };
+    let site = if site == Tail::NoTail { Tail::None } else { site };
+    for &copy in copies {
+        let Opcode::Call(info) = &function.instruction(copy).opcode else { continue };
+        if info.tail != Tail::NoTail && rank(site) < rank(info.tail) {
+            let mut info = info.clone();
+            info.tail = site;
+            function.set_opcode(copy, Opcode::Call(info));
+        }
+    }
 }
 
 /// Every legal call site in `function` inlined, as `expanded` called until it
@@ -1158,10 +1258,20 @@ pub fn expanded_all(
     available: &IndexMap<GlobalId, Candidate>,
     constant: Option<&SparseIdMap<InstId, Candidate>>,
     declared: &mut Declared,
+    metadata: Metadata,
 ) -> Result<usize, String> {
     let calls: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
     let start = (semantic_count(function), frame(context, caller.layout, function));
-    let mut plan = Plan { context: &*context, caller, available, own: start.0, frame: start.1, seq: 0 };
+    let mut plan = Plan {
+        context: &*context,
+        caller,
+        available,
+        own: start.0,
+        insns: gcc_insns(function),
+        peeled: 0,
+        frame: start.1,
+        seq: 0,
+    };
     let mut results = SparseIdMap::default();
     let mut sites: Vec<(InstId, Planned)> = Vec::new();
     for call in calls {
@@ -1169,11 +1279,13 @@ pub fn expanded_all(
         let Opcode::Call(info) = &instruction.opcode else { continue };
         let scope = Scope { function, actuals: None, results: &results };
         let seen: Vec<Actual> = instruction.operands.iter().map(|&one| scope.actual(plan.context, one, 0)).collect();
-        let target = constant
-            .and_then(|sites| sites.get(&call))
-            .or_else(|| seen.last().and_then(|one| one.callee).and_then(|name| available.get(&name)));
+        let target = match constant {
+            Some(sites) => sites.get(&call),
+            None => seen.last().and_then(|one| one.callee).and_then(|name| available.get(&name)),
+        };
         let Some(target) = target else { continue };
-        if let Some((planned, result)) = plan.inline(info.function_type, &seen, target) {
+        plan.peeled = 0;
+        if let Some((planned, result)) = plan.inline(info.function_type, &seen, target, call, 1, None) {
             if instruction.result.is_some() {
                 results.insert(call, result);
             }
@@ -1181,49 +1293,25 @@ pub fn expanded_all(
         }
     }
     let end = (plan.own, plan.frame);
-    let mut placed = Placed {
-        base: function.entry().and_then(|entry| function.block(entry).instructions().first().copied()),
-        ..Placed::default()
-    };
+    let mut placed =
+        Placed { base: function.entry().and_then(|entry| function.block(entry).first()), ..Placed::default() };
     for (call, planned) in sites.iter().rev() {
-        executed(context, function, caller.layout, *call, planned, declared, &mut placed)?;
+        executed(context, function, caller.layout, *call, planned, declared, &mut placed, metadata)?;
     }
     assert_eq!(end.0, semantic_count(function), "the size kept is not the body's");
     assert_eq!(end.1, frame(context, caller.layout, function), "the stack kept is not the body's");
+    for lifetimes in &placed.lifetimes {
+        insert_lifetimes(context, function, caller.layout, lifetimes, declared);
+    }
     Ok(sites.len())
 }
 
-/// Whether the call fits its callee, which returns, and the stack the copy
-/// adds stays within `FRAME_LIMIT`, and in a recursive function none; `own` is
-/// the caller's size now.
-fn fits(
-    context: &Context,
-    function: &Function,
-    caller: &Caller,
-    own: i64,
-    call: InstId,
-    candidate: &Candidate,
-) -> bool {
-    let Opcode::Call(info) = &function.instruction(call).opcode else { return false };
-    let stack = if candidate.frame == 0 { 0 } else { frame(context, caller.layout, function) };
-    fits_with(
-        context,
-        caller,
-        own,
-        stack,
-        info.function_type,
-        |at| owned(context, function, function.instruction(call).operands[at], 0),
-        candidate,
-    )
-}
-
-/// `fits` where the call is told what it is by `owned_at` and the caller's
-/// stack is `stack` (only read of a candidate that allocates).
+/// Whether the call fits its callee, which returns, and in a recursive
+/// function no body that allocates is copied unless it is the callee's last
+/// call; the call is told what it is by `owned_at`.
 fn fits_with(
     context: &Context,
     caller: &Caller,
-    own: i64,
-    stack: u64,
     function_type: llrm_mir::types::TypeId,
     owned_at: impl Fn(usize) -> bool,
     candidate: &Candidate,
@@ -1234,8 +1322,7 @@ fn fits_with(
             context.types.get(callee.ty),
             Type::Function { variadic: true, .. }
         )
-        && (candidate.frame == 0 || (!caller.recursive && stack + candidate.frame <= FRAME_LIMIT))
-        && grows_within_limits(own, caller, callee, candidate.moved)
+        && (candidate.frame == 0 || !caller.recursive || candidate.last_call)
         && callee
             .parameters()
             .iter()
@@ -1243,230 +1330,6 @@ fn fits_with(
             .all(|(at, _)| !Facts::of(&callee.parameter_attrs[at]).releases() || owned_at(at))
 }
 
-/// gcc's `caller_growth_limits`: the size after the inline, against the
-/// function limits. A caller whose size before is not known is its own base.
-fn grows_within_limits(
-    own: i64,
-    caller: &Caller,
-    callee: &Function,
-    moved: bool,
-) -> bool {
-    // gcc's `DECL_DISREGARD_INLINE_LIMITS`: `always_inline` is held to no limit
-    // of size.
-    if stated(callee) == Some(Inlining::Always) {
-        return true;
-    }
-    let callee_size = semantic_count(callee);
-    let base = if caller.base > 0 { caller.base } else { own };
-    let after = own + callee_size;
-    // A body moved into a caller already past the knee is the merge that costs
-    // most: that caller does not grow by one.
-    if moved && after >= callee_size && after > ALLOCATION_KNEE && own > ALLOCATION_KNEE {
-        return false;
-    }
-    within_function_limits(own, base, callee_size, LARGE_FUNCTION)
-}
-
-/// gcc's `caller_growth_limits` (ipa-inline.cc L170-190): a function of `own`
-/// operations grown by a body of `callee_size`, whose size before any inlining
-/// was `base`, stays within the larger of `large` operations and `base`'s (or
-/// the callee's) growth by `large-function-growth` (params.opt:369-370, 100%).
-fn within_function_limits(
-    own: i64,
-    base: i64,
-    callee_size: i64,
-    large: i64,
-) -> bool {
-    let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
-    let after = own + callee_size;
-    !(after >= callee_size && after > large && after > limit)
-}
-
-/// gcc's `large-function-insns` (params.opt:373-374): where its own limit on a
-/// function begins, against `LARGE_FUNCTION`, the knee of our allocator.
-const GCC_LARGE_FUNCTION: i64 = 2700;
-/// gcc's `inline-unit-growth` (params.opt:209-210), percent.
-const UNIT_GROWTH: i64 = 40;
-/// gcc's `large-unit-insns` (params.opt:385-386): a unit smaller than this is
-/// allowed to grow as if it had this many.
-const LARGE_UNIT: i64 = 10_000;
-
-/// A unit's operations as inlining began and as it stands: gcc's
-/// `compute_max_insns` (ipa-inline.cc L1801-1809), the bound the inline heap's
-/// loop holds the unit's growth to (L2210).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct UnitSize {
-    pub initial: i64,
-    pub now: i64,
-}
-
-impl UnitSize {
-    /// The unit `modules` make.
-    pub fn of(modules: &[Module]) -> Self {
-        let size = modules
-            .iter()
-            .flat_map(|module| module.functions())
-            .filter(|(_, _, function)| !function.is_declaration())
-            .map(|(_, _, function)| semantic_count(function))
-            .sum();
-        Self { initial: size, now: size }
-    }
-
-    /// Whether the unit may grow by `growth` operations.
-    pub fn admits(
-        &self,
-        growth: i64,
-    ) -> bool {
-        self.now + growth <= self.initial.max(LARGE_UNIT) * (100 + UNIT_GROWTH) / 100
-    }
-}
-
-/// Whether `operand` is an object the program owns: a variable, a frame object,
-/// or a parameter, which the language passes owned. What a call returns, loads
-/// or joins may be a runtime temporary, which the runtime frees where a routine
-/// that `releases` it is called.
-fn owned(
-    context: &Context,
-    function: &Function,
-    operand: Operand,
-    depth: usize,
-) -> bool {
-    match operand {
-        Operand::Constant(id) => matches!(context.get(id).kind, ConstantKind::Global(_)),
-        Operand::Value(value) => match function.value(value).def {
-            ValueDef::Argument(_) => true,
-            ValueDef::Instruction(inst) => match function.instruction(inst).opcode {
-                Opcode::Alloca { .. } => true,
-                Opcode::GetElementPtr { .. } if depth < 8 => {
-                    owned(context, function, function.instruction(inst).operands[0], depth + 1)
-                }
-                _ => false,
-            },
-        },
-        Operand::Block(_) => false,
-    }
-}
-
 #[cfg(test)]
 #[path = "inline_tests.rs"]
 mod tests;
-
-/// GCC's `max-inline-recursive-depth-auto` (params.opt:573).
-const RECURSIVE_DEPTH: u32 = 8;
-/// GCC's `max-inline-insns-recursive-auto` (params.opt:553): what a function
-/// may grow to by inlining itself.
-const RECURSIVE_SIZE: i64 = 450;
-/// GCC's `min-inline-recursive-probability` (params.opt:769), percent: a
-/// recursive call is inlined into the function only if it runs more often than
-/// this per call of it.
-const RECURSIVE_PROBABILITY: i64 = 10;
-
-/// Only a body the ordinary inline threshold admits
-/// (`want_inline_small_function_p` is asked of the recursive edge too), by its
-/// growth: the body less the call it replaces; and one that allocates no stack,
-/// each copy of which would add its frame.
-fn recursion_admits(
-    original: &Function,
-    budget: i64,
-) -> bool {
-    semantic_count(original) - 1 <= budget
-        && !original.walk().any(|(_, inst)| matches!(original.instruction(inst).opcode, Opcode::Alloca { .. }))
-        && carries(original)
-}
-
-/// GCC's inlining of a recursive callee into a caller that is not it
-/// (ipa-inline.cc L2263-2290): `caller` is given a copy of `original`, the body
-/// of recursive `id` as it was before it was given copies of itself, at each
-/// call to it, under the limits the recursion's own copies are held to; the
-/// copies made. One level: gcc's frequency test
-/// (`want_inline_self_recursive_call_p`, `peeling`) is asked only of an edge
-/// inside a copy, the copies' own calls being the callee's to peel once it has
-/// grown.
-pub fn peeled_into(
-    id: GlobalId,
-    caller: &mut Function,
-    original: &Function,
-    budget: i64,
-    context: &mut Context,
-    unit: &mut UnitSize,
-) -> usize {
-    if !recursion_admits(original, budget) {
-        return 0;
-    }
-    let mut made = 0;
-    let base = semantic_count(caller);
-    let calls: Vec<InstId> =
-        caller.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, caller, inst) == Some(id)).collect();
-    for call in calls {
-        let copy = semantic_count(original);
-        if !within_function_limits(semantic_count(caller), base, copy, GCC_LARGE_FUNCTION) || !unit.admits(copy - 1) {
-            break;
-        }
-        unit.now += copy - 1;
-        splice(context, caller, call, original);
-        made += 1;
-    }
-    made
-}
-
-/// GCC's `recursive_inlining` (ipa-inline.cc): `function`, the body of `id`,
-/// with calls to itself replaced by copies of `original`, its body as it was,
-/// breadth first and each copy's own calls in turn, while a call is likelier
-/// than `RECURSIVE_PROBABILITY` percent of the function's calls, is no deeper
-/// than `RECURSIVE_DEPTH`, and the function stays under `RECURSIVE_SIZE`; the
-/// copies made, and under gcc's function and unit growth limits. A function
-/// that allocates stack is left alone: each level would add its frame, which
-/// `large-stack-frame-growth` (params.opt:381-382) bounds in gcc.
-pub fn inlined_into_itself(
-    id: GlobalId,
-    function: &mut Function,
-    original: &Function,
-    budget: i64,
-    frequencies: &dyn Fn(&Context, &Function) -> std::collections::BTreeMap<i64, i64>,
-    context: &mut Context,
-    unit: &mut UnitSize,
-) -> usize {
-    let own = |function: &Function, context: &Context| -> Vec<InstId> {
-        function.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, function, inst) == Some(id)).collect()
-    };
-    if !recursion_admits(original, budget) {
-        return 0;
-    }
-    let mut depth: IndexMap<InstId, u32> = own(function, context).into_iter().map(|call| (call, 1)).collect();
-    let mut made = 0;
-    loop {
-        let weights = frequencies(context, function);
-        let next = own(function, context)
-            .into_iter()
-            .filter(|call| depth.get(call).copied().unwrap_or(1) <= RECURSIVE_DEPTH)
-            .filter(|&call| {
-                function
-                    .parent(call)
-                    .and_then(|block| weights.get(&cfg::id(block)))
-                    .is_some_and(|&weight| weight * 100 > profit::UNIT * RECURSIVE_PROBABILITY)
-            })
-            .min_by_key(|call| depth.get(call).copied().unwrap_or(1));
-        let Some(call) = next else { break };
-        if semantic_count(function) + semantic_count(original) >= RECURSIVE_SIZE {
-            break;
-        }
-        // The limits every inline is held to (`can_inline_edge_by_limits_p`,
-        // forced for a recursive copy): the function's growth, as gcc's
-        // `caller_growth_limits` and the unit's.
-        let copy = semantic_count(original);
-        if !within_function_limits(semantic_count(function), copy, copy, GCC_LARGE_FUNCTION) || !unit.admits(copy - 1) {
-            break;
-        }
-        unit.now += copy - 1;
-        let at = depth.get(&call).copied().unwrap_or(1);
-        let before: BTreeSet<InstId> = own(function, context).into_iter().collect();
-        splice(context, function, call, original);
-        made += 1;
-        for new in own(function, context) {
-            if !before.contains(&new) {
-                depth.insert(new, at + 1);
-            }
-        }
-    }
-    made
-}

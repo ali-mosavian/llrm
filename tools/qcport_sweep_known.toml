@@ -1,0 +1,10 @@
+# Failure kinds of tools/qcport_sweep.py already filed: `match` is a substring of the kind (digits as N), `issue` its number. Delete an entry when the issue closes.
+# (none open: the sweep of feat/parity 5169d843d compiled 260 of 260)
+
+[[known]]
+match = "an instruction with a value"
+issue = 2531
+
+[[known]]
+match = "@TOP: ptrtoint"
+issue = 2672

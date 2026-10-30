@@ -1,0 +1,10 @@
+== --tbaa
+@exactsiv_mul_overflow
+  none!
+  output [*|<]!
+  none!
+== --test exact-siv --tbaa
+@exactsiv_mul_overflow
+  none!
+  output [*|<]!
+  none!

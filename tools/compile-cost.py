@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""What it costs llrm-c to compile: user-space instructions per file at -O1, -O2, -O3 and -Os.
+"""What it costs llrm-cc to compile: user-space instructions per file at -O1, -O2, -O3 and -Os, clang's front end and llrm-llc together
+(the driver's whole process tree: `perf stat` counts the children).
 
-    tools/compile-cost.py [--noise] [llrm-c]     print the measurement (tools/measure.py compares it with the merge-base's)
+    tools/compile-cost.py [--noise] [llrm-cc]     print the measurement (tools/measure.py compares it with the merge-base's)
 
-Files: the 66 vsgcc programs (bench/ and the x_ kernels, wrapped as vsgcc compiles them) and, when QCPORT and QCPORT_INC
+Files: the 66 vsgcc programs (bench/ and the x_ kernels, wrapped as vsgcc compiles them) and, when QCPORT and LLRM_BORLAND_INC
 are set, QCport's modules. Instructions come from `perf stat -e instructions:u`, one process per compile: a count of
 work done, not of time taken, so host load does not move it. Exit 77 if perf cannot count (no permission, a VM with no
 counter), never a pass on a zero. `--noise` measures twice and prints the spread: the same build differs by 0.0001 in
@@ -42,9 +43,11 @@ class NoCounter(Exception):
 
 def instructions(command: list[str]) -> int:
     """User-space instructions `command` retires, children included. The compiler must succeed."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k in ("LLRM_BIN", "LLRM_COUNTER")}  # LLRM_VERIFY adds checking work
+    env = {k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k in ("LLRM_BIN", "LLRM_COUNTER", *llrmbin.CC_ENV)}  # LLRM_VERIFY adds checking work
+    env.setdefault("LLRM_OW", llrmbin.cc_environment()["LLRM_OW"])
     try:
-        count, _, done = levels_time.counted(command, env=env)
+        with llrmbin.with_object(command) as real:
+            count, _, done = levels_time.counted(real, env=env)
     except RuntimeError as why:
         raise NoCounter(str(why))
     if done.returncode:
@@ -59,10 +62,12 @@ def files(work: Path) -> dict[str, tuple[Path, list[str]]]:
     for name, source in sources.items():
         wrapped = work / f"{name}.c"
         wrapped.write_text(wrap.wrapped(name, source.read_text()))
-        found[name] = (wrapped, programs.LLRM_FLAGS)
-    if (qcport := os.environ.get("QCPORT")) and (headers := os.environ.get("QCPORT_INC")):
+        found[name] = (wrapped, [*llrmbin.c_args(32), *programs.CC_FLAGS])
+    if (qcport := os.environ.get("QCPORT")) and (headers := os.environ.get("LLRM_BORLAND_INC")):
         base = Path(qcport).expanduser()
-        include = [flag for d in (*MODULES, "qgl") for flag in ("-I", str(base / d))] + ["-I", str(Path(headers).expanduser())]
+        # QCport is Borland-dialect C: the cdecl row, Borland's headers as their lower-case mirror (no DOS ^Z), `_asm` blocks (qcport-run-cc.py's line).
+        include = ["--target=x86_16-dos", llrmbin.C_ROWS[16][1], "-fasm-blocks", "-D_asm=__asm", "-nostdinc", "-isystem", str(Path(headers).expanduser()),
+                   *(flag for d in (*MODULES, "qgl") for flag in ("-I", str(base / d)))]
         for d in MODULES:
             for source in sorted((base / d).glob("*.c")):
                 found[f"qcport/{source.stem}"] = (source, include)
@@ -73,7 +78,7 @@ def measure(compiler: Path, jobs: int) -> dict[str, int]:
     """Instructions per `file level`."""
     with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
         work = Path(tmp)
-        todo = [(f"{name} {level}", [str(llrmbin.pinned(compiler)), level, *flags, str(source), "-o", os.devnull]) for name, (source, flags) in files(work).items() for level in LEVELS]
+        todo = [(f"{name} {level}", [str(llrmbin.pinned(compiler)), level, "-c", *flags, str(source), "-o", llrmbin.OBJECT]) for name, (source, flags) in files(work).items() for level in LEVELS]
         with ThreadPoolExecutor(jobs) as pool:
             return dict(zip((k for k, _ in todo), pool.map(instructions, (c for _, c in todo))))
 
@@ -84,7 +89,7 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
     parser.add_argument("compiler", nargs="?", type=Path)
     args = parser.parse_args()
-    args.compiler = args.compiler or llrmbin.bin_dir() / "llrm-c"
+    args.compiler = args.compiler or llrmbin.bin_dir() / "llrm-cc"
     try:
         now = measure(args.compiler, args.jobs)
         if args.noise:

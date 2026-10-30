@@ -1,0 +1,244 @@
+val count 0 cr=i32:full-set cst=- pn=-
+val count 1 cr=i32:[0,101) cst=- pn=-
+val count 2 cr=i1:full-set cst=- pn=-
+val count 3 cr=i32:[1,101) cst=- pn=-
+rval count 3 cr=i32:[1,101)
+rval count 2 cr=i1:full-set
+rval count 1 cr=i32:full-set
+edge count 1 2 1 cr=i32:[0,100)
+edge count 1 3 1 cr=i32:[100,101)
+edge count 2 1 3 cr=i32:[1,101)
+edge count 2 1 1 cr=i32:[0,100)
+edge count 2 1 2 cr=i1:[-1,0)
+pred count 2 a=- b=-
+epred count 1 0 2 T
+epred count 1 1 2 F
+use count 2 0 cr=i32:[0,101)
+use count 3 0 cr=i1:full-set
+use count 4 0 cr=i32:[0,100)
+use count 6 0 cr=i32:[100,101)
+lat count arg0 bb0 overdefined
+lat count arg0 bb1 overdefined
+lat count arg0 bb2 overdefined
+lat count arg0 bb3 overdefined
+lat count i0 bb0 overdefined
+lat count i0 bb1 overdefined
+lat count i1 bb1 constantrange<0, 101>
+lat count i1 bb2 constantrange<0, 100>
+lat count i1 bb3 constantrange<100, 101>
+lat count i2 bb1 overdefined
+lat count i2 bb2 constantrange<-1, 0>
+lat count i2 bb3 constantrange<0, -1>
+lat count i3 bb1 overdefined
+lat count i3 bb2 overdefined
+lat count i3 bb3 overdefined
+lat count i4 bb2 constantrange<1, 101>
+lat count i5 bb2 overdefined
+lat count i6 bb3 overdefined
+val count_down 0 cr=i32:full-set cst=- pn=-
+val count_down 1 cr=i1:full-set cst=- pn=-
+val count_down 2 cr=i32:full-set cst=- pn=-
+val count_down 3 cr=i32:full-set cst=- pn=-
+val count_down 4 cr=i1:full-set cst=- pn=-
+rval count_down 4 cr=i1:full-set
+rval count_down 3 cr=i32:full-set
+rval count_down 2 cr=i32:full-set
+rval count_down 1 cr=i1:full-set
+edge count_down 0 1 0 cr=i32:[0,50)
+edge count_down 1 1 3 cr=i32:full-set
+edge count_down 1 1 2 cr=i32:[1,0)
+edge count_down 1 1 4 cr=i1:[-1,0)
+pred count_down 0 a=- b=-
+pred count_down 4 a=- b=-
+epred count_down 0 0 0 T
+epred count_down 0 1 0 F
+epred count_down 1 0 4 T
+epred count_down 1 1 4 F
+use count_down 0 0 cr=i32:full-set
+use count_down 1 0 cr=i1:full-set
+use count_down 2 0 cr=i32:[0,50)
+use count_down 3 0 cr=i32:[1,0)
+use count_down 4 0 cr=i32:full-set
+use count_down 5 0 cr=i1:full-set
+lat count_down arg0 bb0 overdefined
+lat count_down arg0 bb1 constantrange<0, 50>
+lat count_down arg0 bb2 overdefined
+lat count_down i0 bb0 overdefined
+lat count_down i0 bb1 constantrange<-1, 0>
+lat count_down i0 bb2 overdefined
+lat count_down i1 bb0 overdefined
+lat count_down i1 bb1 overdefined
+lat count_down i1 bb2 overdefined
+lat count_down i2 bb1 overdefined
+lat count_down i3 bb1 overdefined
+lat count_down i4 bb1 overdefined
+lat count_down i5 bb1 overdefined
+lat count_down i6 bb2 overdefined
+val two_phis 0 cr=i1:full-set cst=- pn=-
+val two_phis 1 cr=i32:full-set cst=- pn=-
+val two_phis 2 cr=i1:full-set cst=- pn=-
+val two_phis 3 cr=i1:full-set cst=- pn=-
+val two_phis 4 cr=i32:[1,201) cst=- pn=-
+val two_phis 5 cr=i32:[101,4) cst=- pn=-
+val two_phis 6 cr=i32:full-set cst=- pn=-
+val two_phis 7 cr=i1:full-set cst=- pn=-
+rval two_phis 7 cr=i1:full-set
+rval two_phis 6 cr=i32:full-set
+rval two_phis 5 cr=i32:[101,4)
+rval two_phis 4 cr=i32:[1,201)
+rval two_phis 3 cr=i1:full-set
+rval two_phis 2 cr=i1:full-set
+edge two_phis 0 2 1 cr=i32:[4,0)
+edge two_phis 1 4 1 cr=i32:[0,4)
+edge two_phis 2 4 1 cr=i32:[101,0)
+pred two_phis 0 a=- b=-
+pred two_phis 3 a=- b=-
+pred two_phis 9 a=F b=F
+epred two_phis 0 0 0 T
+epred two_phis 0 1 0 F
+epred two_phis 2 0 3 T
+epred two_phis 2 1 3 F
+use two_phis 0 0 cr=i32:full-set
+use two_phis 1 0 cr=i1:full-set
+use two_phis 3 0 cr=i32:[4,0)
+use two_phis 4 0 cr=i1:full-set
+use two_phis 7 0 cr=i32:[101,4)
+use two_phis 7 1 cr=i32:[101,0)
+use two_phis 8 0 cr=i32:[1,201)
+use two_phis 8 1 cr=i32:[101,4)
+use two_phis 9 0 cr=i32:[1,201)
+use two_phis 10 0 cr=i32:full-set
+lat two_phis arg0 bb0 overdefined
+lat two_phis arg0 bb1 overdefined
+lat two_phis arg0 bb2 overdefined
+lat two_phis arg0 bb3 overdefined
+lat two_phis arg0 bb4 overdefined
+lat two_phis arg1 bb0 overdefined
+lat two_phis arg1 bb1 constantrange<0, 4>
+lat two_phis arg1 bb2 constantrange<4, 0>
+lat two_phis arg1 bb3 constantrange<4, 101>
+lat two_phis arg1 bb4 constantrange<101, 4>
+lat two_phis i0 bb0 overdefined
+lat two_phis i0 bb1 constantrange<-1, 0>
+lat two_phis i0 bb2 constantrange<0, -1>
+lat two_phis i1 bb0 overdefined
+lat two_phis i1 bb1 overdefined
+lat two_phis i1 bb2 overdefined
+lat two_phis i10 bb4 overdefined
+lat two_phis i2 bb1 overdefined
+lat two_phis i3 bb2 overdefined
+lat two_phis i3 bb3 constantrange<0, -1>
+lat two_phis i4 bb2 overdefined
+lat two_phis i4 bb3 overdefined
+lat two_phis i5 bb3 overdefined
+lat two_phis i6 bb4 constantrange<1, 201>
+lat two_phis i7 bb4 constantrange<101, 4>
+lat two_phis i8 bb4 overdefined
+lat two_phis i9 bb4 overdefined
+val nested 0 cr=i32:full-set cst=- pn=-
+val nested 1 cr=i32:[0,11) cst=- pn=-
+val nested 2 cr=i1:full-set cst=- pn=-
+val nested 3 cr=i32:[0,20) cst=- pn=-
+val nested 4 cr=i32:full-set cst=- pn=-
+val nested 5 cr=i1:full-set cst=- pn=-
+val nested 6 cr=i32:[1,11) cst=- pn=-
+val nested 7 cr=i32:full-set cst=- pn=-
+rval nested 7 cr=i32:full-set
+rval nested 6 cr=i32:[1,11)
+rval nested 5 cr=i1:full-set
+rval nested 4 cr=i32:[2,22)
+rval nested 3 cr=i32:[0,20)
+rval nested 2 cr=i1:full-set
+rval nested 1 cr=i32:[0,11)
+edge nested 1 4 1 cr=i32:[10,11)
+edge nested 1 4 0 cr=i32:full-set
+edge nested 2 2 4 cr=i32:[0,20)
+edge nested 2 2 3 cr=i32:[0,18)
+edge nested 2 2 5 cr=i1:[-1,0)
+edge nested 2 3 1 cr=i32:[0,10)
+edge nested 3 1 6 cr=i32:[1,11)
+edge nested 3 1 1 cr=i32:[0,10)
+edge nested 3 1 2 cr=i1:[-1,0)
+pred nested 2 a=- b=-
+pred nested 6 a=- b=-
+epred nested 1 0 2 T
+epred nested 1 1 2 F
+epred nested 2 0 6 T
+epred nested 2 1 6 F
+use nested 2 0 cr=i32:[0,11)
+use nested 3 0 cr=i1:full-set
+use nested 5 0 cr=i32:[0,20)
+use nested 6 0 cr=i32:full-set
+use nested 7 0 cr=i1:full-set
+use nested 8 0 cr=i32:[0,10)
+use nested 10 0 cr=i32:[10,11)
+use nested 10 1 cr=i32:full-set
+use nested 11 0 cr=i32:full-set
+lat nested arg0 bb0 overdefined
+lat nested arg0 bb1 overdefined
+lat nested arg0 bb2 overdefined
+lat nested arg0 bb3 overdefined
+lat nested arg0 bb4 overdefined
+lat nested i0 bb0 overdefined
+lat nested i0 bb1 overdefined
+lat nested i1 bb1 constantrange<0, 11>
+lat nested i1 bb2 constantrange<0, 10>
+lat nested i1 bb3 constantrange<0, 10>
+lat nested i1 bb4 constantrange<10, 11>
+lat nested i10 bb4 overdefined
+lat nested i11 bb4 overdefined
+lat nested i2 bb1 overdefined
+lat nested i2 bb2 constantrange<-1, 0>
+lat nested i2 bb4 constantrange<0, -1>
+lat nested i3 bb1 overdefined
+lat nested i3 bb2 overdefined
+lat nested i3 bb4 overdefined
+lat nested i4 bb2 constantrange<0, 20>
+lat nested i4 bb3 constantrange<18, 20>
+lat nested i5 bb2 overdefined
+lat nested i5 bb3 constantrange<20, 0>
+lat nested i6 bb2 overdefined
+lat nested i6 bb3 constantrange<0, -1>
+lat nested i7 bb2 overdefined
+lat nested i7 bb3 overdefined
+lat nested i8 bb3 constantrange<1, 11>
+lat nested i9 bb3 overdefined
+val self_loop 0 cr=i32:full-set cst=- pn=-
+val self_loop 1 cr=i32:full-set cst=- pn=-
+val self_loop 2 cr=i1:full-set cst=- pn=-
+rval self_loop 2 cr=i1:full-set
+rval self_loop 1 cr=i32:full-set
+edge self_loop 0 1 0 cr=i32:full-set
+edge self_loop 1 1 1 cr=i32:[0,1)
+edge self_loop 1 1 2 cr=i1:[-1,0)
+edge self_loop 1 2 1 cr=i32:[1,0)
+pred self_loop 2 a=- b=-
+epred self_loop 1 0 2 T
+epred self_loop 1 1 2 F
+use self_loop 1 0 cr=i32:full-set
+use self_loop 2 0 cr=i32:full-set
+use self_loop 3 0 cr=i1:full-set
+use self_loop 4 0 cr=i32:[1,0)
+lat self_loop arg0 bb0 overdefined
+lat self_loop arg0 bb1 overdefined
+lat self_loop arg0 bb2 overdefined
+lat self_loop i0 bb0 overdefined
+lat self_loop i0 bb1 overdefined
+lat self_loop i1 bb1 overdefined
+lat self_loop i1 bb2 constantrange<1, 0>
+lat self_loop i2 bb1 overdefined
+lat self_loop i2 bb2 constantrange<0, -1>
+lat self_loop i3 bb1 overdefined
+lat self_loop i3 bb2 overdefined
+lat self_loop i4 bb2 overdefined
+val unreachable_pred 0 cr=i32:full-set cst=- pn=-
+val unreachable_pred 1 cr=i32:[5,10) cst=- pn=-
+rval unreachable_pred 1 cr=i32:[5,10)
+use unreachable_pred 3 0 cr=i32:[5,10)
+lat unreachable_pred arg0 bb0 overdefined
+lat unreachable_pred arg0 bb2 overdefined
+lat unreachable_pred i0 bb0 overdefined
+lat unreachable_pred i0 bb2 overdefined
+lat unreachable_pred i1 bb1 overdefined
+lat unreachable_pred i2 bb2 constantrange<5, 10>
+lat unreachable_pred i3 bb2 overdefined

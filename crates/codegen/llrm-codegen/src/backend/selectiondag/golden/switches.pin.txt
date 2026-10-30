@@ -1,0 +1,12 @@
+dense6: JT:0-5 
+sparse: 1 100 1000 10000 
+gaps: JT:0-15 
+bits3: BT:1-12 
+bits_one: BT:0-10 
+neg: JT:-3-2 
+i8dense: JT:10-16 
+two: 5 9 
+three: 1 2 3 
+mixed: JT:0-104 1000 
+big: JT:0-38 
+wide: JT:0-70 

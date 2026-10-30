@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# testcap CMD...: run a cargo test/bench/run binary with a per-process data-segment limit (TEST_MEM_CAP_GB, default 16), so one runaway
+# test dies alone with a failed allocation instead of taking the host (a 175 GB test binary triggered systemd-oomd and killed whole sessions).
+# buildslot installs it as cargo's target runner. RLIMIT_DATA counts heap and private mappings; RLIMIT_AS would trip on Rust's address-space reservations.
+cap=$(( ${TEST_MEM_CAP_GB:-16} << 30 ))
+# soft limit only: a test that needs more (ThreadSanitizer maps 35 TB of shadow) lifts it for its own child with `prlimit --data=unlimited`
+exec prlimit --data=$cap: "$@"

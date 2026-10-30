@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/masm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/masm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:d2ff757834fd58b14878e3dda2bf77e5514e7b6b5f4eea5444515084e75444cf -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/masm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/masm.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/masm.rs sha256:534ada3b9cbc764dddb8dfacef991b332ce6c8003745213fe927e9f1b053d958 -->
 
 # masm
 
@@ -26,7 +26,7 @@ the stack aligned; a call's arguments are padded to it by `isel`.
   cleaned_returns          and leave            block labels, items
   (ret imm / retf n)       sequences            leave before each ret
                            shrinkwrap::wrapped  pieces set up in the
-                                                block that first needs
+                                                the Save block
 ```
 
 The entry and return sequences are not in the LIR. `parts` builds them:
@@ -54,9 +54,9 @@ where a variable's value is defined) which encode to no bytes. A move of an
 immediate into a segment register, which x86 lacks, is written `push imm;
 pop seg`.
 
-A frame piece (the frame, one saved register) is set up where it is first
-needed rather than at the entry when `shrinkwrap::wrapped` says so, and is
-taken back on the returns that path reaches.
+The frame and the saved registers are set up at the Save block rather than
+the entry when `shrinkwrap::wrapped` says so, and are taken back before the
+return of the Restore block.
 
 `cleaned_returns` rewrites each `ret` of a callee that removes its
 arguments to `ret n` or `retf n`; past what `ret imm16` can remove, a
@@ -111,7 +111,7 @@ From `ISEL_DUMP=1` and `-S` of a `total` over a `&[u16]`
 ## Runs
 Once per procedure after the machine phases. `cleaned_returns` runs in
 `assemble::assembled_by` (`masm cleaned returns`), before the return
-duplication and shrink-wrap tails there; `listing` runs when the object is
+duplication there; `listing` runs when the object is
 built or `-S` is printed.
 
 ## See also

@@ -1,0 +1,248 @@
+== --test all --tbaa
+@strong_siv
+  none!
+@weak_crossing_siv
+  none!
+  output [*|<]!
+  none!
+@exact_siv
+  none!
+  none!
+  none!
+@weak_zero_siv
+  output [S]!
+  none!
+  none!
+@exact_rdiv
+  none!
+  none!
+  none!
+@symbolic_rdiv
+  none!
+  none!
+  none!
+@gcd_miv
+  output [* *]!
+  none!
+  output [* *]!
+@banerjee_miv
+  output [* *]!
+  none!
+  output [* *]!
+== --test strong-siv --tbaa
+@strong_siv
+  none!
+@weak_crossing_siv
+  none!
+  output [*|<]!
+  none!
+@exact_siv
+  none!
+  none!
+  none!
+@weak_zero_siv
+  output [S]!
+  none!
+  none!
+@exact_rdiv
+  none!
+  output [|<]!
+  none!
+@symbolic_rdiv
+  none!
+  none!
+  none!
+@gcd_miv
+  output [* *]!
+  output [* *|<]!
+  output [* *]!
+@banerjee_miv
+  output [* *]!
+  none!
+  output [* *]!
+== --test weak-crossing-siv --tbaa
+@strong_siv
+  output [*]!
+@weak_crossing_siv
+  output [*]!
+  output [*|<]!
+  output [*]!
+@exact_siv
+  output [*]!
+  output [*|<]!
+  output [*]!
+@weak_zero_siv
+  output [S]!
+  none!
+  output [*]!
+@exact_rdiv
+  output [*]!
+  output [|<]!
+  output [*]!
+@symbolic_rdiv
+  output [*]!
+  none!
+  output [*]!
+@gcd_miv
+  output [* *]!
+  output [* *|<]!
+  output [* *]!
+@banerjee_miv
+  output [* *]!
+  none!
+  output [* *]!
+== --test exact-siv --tbaa
+@strong_siv
+  none!
+@weak_crossing_siv
+  none!
+  output [*|<]!
+  none!
+@exact_siv
+  none!
+  none!
+  none!
+@weak_zero_siv
+  output [S]!
+  none!
+  none!
+@exact_rdiv
+  none!
+  output [|<]!
+  none!
+@symbolic_rdiv
+  none!
+  none!
+  none!
+@gcd_miv
+  output [* *]!
+  output [* *|<]!
+  output [* *]!
+@banerjee_miv
+  output [* *]!
+  none!
+  output [* *]!
+== --test weak-zero-siv --tbaa
+@strong_siv
+  output [*]!
+@weak_crossing_siv
+  output [*]!
+  output [*|<]!
+  output [*]!
+@exact_siv
+  output [*]!
+  output [*|<]!
+  output [*]!
+@weak_zero_siv
+  output [S]!
+  none!
+  output [*]!
+@exact_rdiv
+  output [*]!
+  output [|<]!
+  output [*]!
+@symbolic_rdiv
+  output [*]!
+  none!
+  output [*]!
+@gcd_miv
+  output [* *]!
+  output [* *|<]!
+  output [* *]!
+@banerjee_miv
+  output [* *]!
+  none!
+  output [* *]!
+== --test exact-rdiv --tbaa
+@strong_siv
+  output [*]!
+@weak_crossing_siv
+  output [*]!
+  output [*|<]!
+  output [*]!
+@exact_siv
+  output [*]!
+  output [*|<]!
+  output [*]!
+@weak_zero_siv
+  output [S]!
+  none!
+  output [*]!
+@exact_rdiv
+  output [*]!
+  none!
+  output [*]!
+@symbolic_rdiv
+  output [*]!
+  none!
+  output [*]!
+@gcd_miv
+  output [* *]!
+  output [* *|<]!
+  output [* *]!
+@banerjee_miv
+  output [* *]!
+  none!
+  output [* *]!
+== --test gcd-miv --tbaa
+@strong_siv
+  output [*]!
+@weak_crossing_siv
+  output [*]!
+  output [*|<]!
+  output [*]!
+@exact_siv
+  output [*]!
+  output [*|<]!
+  output [*]!
+@weak_zero_siv
+  output [S]!
+  none!
+  output [*]!
+@exact_rdiv
+  output [*]!
+  none!
+  output [*]!
+@symbolic_rdiv
+  output [*]!
+  none!
+  output [*]!
+@gcd_miv
+  output [* *]!
+  none!
+  output [* *]!
+@banerjee_miv
+  output [* *]!
+  none!
+  output [* *]!
+== --test banerjee-miv --tbaa
+@strong_siv
+  output [*]!
+@weak_crossing_siv
+  output [*]!
+  output [*|<]!
+  output [*]!
+@exact_siv
+  output [*]!
+  output [*|<]!
+  output [*]!
+@weak_zero_siv
+  output [S]!
+  none!
+  output [*]!
+@exact_rdiv
+  output [*]!
+  output [|<]!
+  output [*]!
+@symbolic_rdiv
+  output [*]!
+  none!
+  output [*]!
+@gcd_miv
+  output [* *]!
+  output [<> <>]!
+  output [* *]!
+@banerjee_miv
+  output [* *]!
+  none!
+  output [* *]!

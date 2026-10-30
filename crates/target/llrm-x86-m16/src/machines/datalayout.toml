@@ -4,11 +4,18 @@
 # What gcc's -m names it: -m16.
 mode = 16
 
-datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
+# What the LLVM tools are told to price this target as (opt -mtriple/-mcpu: the pricing CPU is the 486, nobody prices the 386) and the TTI llrm prices with (set before the TTI exists: the oracle refuses until the m16 machine states it).
+llvm_triple = "i386-unknown-unknown-code16"
+llvm_cpu = "i486"
+tti = "X86"
+
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32"
 
 # The operations this machine has no instruction for, which the compiler expands before selection: fptoui to a 64-bit integer
-# (fistp stores signed qwords) and a conditional move (none before the Pentium Pro).
-expand = ["fptoui.i64", "select"]
+# (fistp stores signed qwords), a conditional move (none before the Pentium Pro), the bit counts (no popcnt, and bsr and bsf
+# are not selected yet), `bswap` and the three-way compares `scmp` and `ucmp` (none is selected yet), and `abs`, `fshl` and
+# `fshr` (no cmov, and SHLD/SHRD are not selected yet).
+expand = ["abs", "bitreverse", "bswap", "ctlz", "ctpop", "cttz", "fptoui.i64", "fshl", "fshr", "scmp", "select", "ucmp"]
 
 # What a frontend's addresses are, by address space number.
 [spaces]
@@ -31,3 +38,20 @@ fixed = 4
 [pointers]
 2 = "near"
 4 = "far"
+
+# What the C front end lays types out as, in bytes: the one place sizeof(int), sizeof(void *) and the rest are stated
+# Medium model: near data, far code (-mcmodel names the others).
+# (llrm-cc checks its clang against it; the triple's default decides nothing). A row names its libc's departures
+# (`wchar_bytes`, `long_double_bytes` in targets.toml).
+[c]
+int = 2
+long = 4
+long_long = 8
+pointer = 2
+function_pointer = 4
+size_t = 2
+ptrdiff_t = 2
+wchar_t = 2
+double = 8
+long_double = 10
+enum = 2

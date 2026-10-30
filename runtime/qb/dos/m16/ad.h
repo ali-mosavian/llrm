@@ -28,7 +28,7 @@ typedef struct AD {
 } AD;
 
 /* The most bytes an array may have unless it is huge: a segment's. */
-enum { AD_MAX_BYTES = 0x10000UL };
+#define AD_MAX_BYTES 0x10000UL
 
 enum {
     FADF_NEAR = 0,
@@ -59,8 +59,20 @@ void ad_forget(AD *ad);
 /* The local heap moved a near array's elements `delta` bytes up. */
 void ad_near_moved(AD *ad, int delta);
 
+/* The bytes of the elements from `from`, a pointer into them, to their end:
+   what B$PALU counts the palette from. Nothing for a pointer outside them. */
+unsigned long ad_remaining(const AD *ad, qb_data_ptr from);
+
 /* Zeros `bytes` of the elements, as ERASE of a static array does. */
 void ad_clear(AD *ad, unsigned long bytes);
+
+/* The first `bytes` of `from`'s elements into `to`'s, which are as many or more. */
+void ad_copy(AD *to, const AD *from, unsigned long bytes);
+
+/* `to`, which has no elements, takes over those of `from` and their place in the heap, so that
+   the heap's later moves reach `to`; `from` is left without elements. The rest of the
+   descriptor is the caller's. */
+void ad_adopt(AD *to, AD *from);
 
 /* The bytes of the largest array the target can still take: FRE(-1). */
 unsigned long ad_free_bytes(void);

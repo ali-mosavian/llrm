@@ -1,0 +1,9 @@
+== 
+@f1
+  output [S]!
+  flow [|<]!
+  input [S]!
+@f2
+  output [S]!
+  flow [|<] / assuming 1 loop level(s) fused:  [S|<]!
+  input [S]!

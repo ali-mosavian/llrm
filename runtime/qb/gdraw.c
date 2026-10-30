@@ -8,8 +8,10 @@
 #include "qb.h"
 #include "varptr.h"
 
-void B_PAIN(short fill, short border);
 #pragma aux B_PAIN "B$PAIN"
+#pragma aux B_DRAW "B$DRAW"
+
+void B_PAIN(short fill, short border);
 
 enum { FRACTION = 256, HALF = 128 };
 
@@ -136,7 +138,7 @@ static void move_by(Drawing *d, long dx, long dy)
 static void absolute(Drawing *d, long x, long y)
 {
     d->fx = d->fy = HALF;
-    move_to(d, (int)x, (int)y);
+    move_to(d, (int)x + gfx_origin_x, (int)y + gfx_origin_y);
 }
 
 /* M: to a point, or by an offset if the first number has a sign. */
@@ -280,5 +282,3 @@ void B_DRAW(SD *commands)
     execute(&d);
     str_tmp_free(commands);
 }
-
-#pragma aux B_DRAW "B$DRAW"

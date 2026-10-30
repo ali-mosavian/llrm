@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/homes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/homes.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/homes.rs sha256:4177086e561ae741e1a0a373be6959528c3c84756eee92c866845fe4f924b2f0 -->
+<!-- src: crates/opt/llrm-transforms/src/homes.rs sha256:b96ef4bc0cead5a2e89a9eaf0bcb2acd00632c7ee493bcad32ea7e3f5075c7e1 -->
 
 # homes
 
@@ -78,5 +78,5 @@ are the ones selection sees. On whenever optimizing.
 Adds metadata only; no instruction changes.
 
 ## See also
-Consumers: the spillers, `floatassign` and `isel` in `llrm-core`. Tests:
+Consumers: the spillers, `floatassign` and `isel` in `llrm-codegen`. Tests:
 `homes_tests.rs`.

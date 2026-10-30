@@ -3,11 +3,11 @@
 //! is its oracle: `tools/mir-oracle.sh` holds the two to the same verdicts.
 
 use crate::context::{ConstantKind, Context};
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::hash::{HashMap, HashSet};
 use crate::intrinsics::{self, Intrinsic};
 use crate::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
-use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
+use crate::opcode::{AtomicKind, AtomicOrdering, Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::{Type, TypeId};
 
 pub fn verify(module: &Module) -> Vec<String> {
@@ -20,6 +20,15 @@ pub fn verify(module: &Module) -> Vec<String> {
         };
         if declaration && !matches!(global.linkage, Linkage::External | Linkage::ExternWeak) {
             out.push(format!("@{name}: Global is external, but doesn't have external or weak linkage!"));
+        }
+        if let GlobalKind::Variable(variable) = &global.kind {
+            let array = matches!(module.context.types.get(variable.ty), Type::Array { .. });
+            if global.linkage == Linkage::Appending && !array {
+                out.push(format!("@{name}: Only global arrays can have appending linkage!"));
+            }
+            if matches!(name, "llvm.global_ctors" | "llvm.global_dtors") && global.linkage != Linkage::Appending {
+                out.push(format!("@{name}: invalid linkage for intrinsic global variable"));
+            }
         }
         if let GlobalKind::Function(function) = &global.kind {
             if intrinsics::is_reserved(name) {
@@ -89,6 +98,71 @@ impl std::fmt::Display for At<'_> {
     }
 }
 
+/// Each phi of `block` has one input per edge into it, and inputs from one
+/// block agree, as LLVM requires. The findings are pushed on `out`, bare (the
+/// verifier prefixes the function). `crate::passes::run_checked` asks it of
+/// every body a pass leaves, so a pass that makes a phi short fails at once
+/// and not as a consumer's runaway allocation (#3016).
+pub fn phi_arity_of(
+    function: &Function,
+    block: BlockId,
+    out: &mut Vec<String>,
+) {
+    let mut edges: HashMap<BlockId, usize> = HashMap::default();
+    for one in function.block_users(block) {
+        let user = function.instruction(one.user);
+        if user.opcode.is_terminator()
+            && let Some(parent) = function.parent(one.user)
+        {
+            *edges.entry(parent).or_default() += 1;
+        }
+    }
+    for inst in function.iter_block(block) {
+        let instruction = function.instruction(inst);
+        if instruction.opcode != Opcode::Phi {
+            continue;
+        }
+        let mut inputs: HashMap<BlockId, Vec<Operand>> = HashMap::default();
+        for pair in instruction.operands.chunks(2) {
+            if let [value, Operand::Block(from)] = pair {
+                inputs.entry(*from).or_default().push(*value);
+            }
+        }
+        let name = BlockName(function, block);
+        for (from, values) in &inputs {
+            if !edges.contains_key(from) {
+                out.push(format!(
+                    "a phi in {name} has an input from {}, which does not branch there",
+                    BlockName(function, *from)
+                ));
+            } else if values.len() != edges[from] {
+                out.push(format!(
+                    "a phi in {name} has {} inputs from {} for {} edges",
+                    values.len(),
+                    BlockName(function, *from),
+                    edges[from]
+                ));
+            } else if values.iter().any(|one| *one != values[0]) {
+                out.push(format!("a phi in {name} has different inputs from {}", BlockName(function, *from)));
+            }
+        }
+        for from in edges.keys() {
+            if !inputs.contains_key(from) {
+                out.push(format!("a phi in {name} has no input from {}", BlockName(function, *from)));
+            }
+        }
+    }
+}
+
+/// [`phi_arity_of`] over every block of `function`.
+pub fn phi_arity(function: &Function) -> Vec<String> {
+    let mut out = Vec::new();
+    for block in function.layout().iter().copied() {
+        phi_arity_of(function, block, &mut out);
+    }
+    out
+}
+
 struct Checker<'a> {
     module: &'a Module,
     context: &'a Context,
@@ -125,6 +199,17 @@ impl Checker<'_> {
         operand: Operand,
     ) -> Option<TypeId> {
         self.function.operand_type(self.context, operand)
+    }
+
+    /// The intrinsic `operand` names, if it names one MIR has.
+    fn called_intrinsic(
+        &self,
+        operand: Operand,
+    ) -> Option<Intrinsic> {
+        let Operand::Constant(id) = operand else { return None };
+        let ConstantKind::Global(global) = self.context.get(id).kind else { return None };
+        let name = self.module.global(global).name.as_deref()?;
+        intrinsics::is_reserved(name).then(|| Intrinsic::named(name)).flatten()
     }
 
     /// The type of the intrinsic `operand` names, if it names one.
@@ -206,14 +291,14 @@ impl Checker<'_> {
         for problem in function.check_uses() {
             self.fail(format!("use lists: {problem}"));
         }
-        let tree = DominatorTree::new(function);
+        let tree = DomTree::of(function);
         let entry = function.entry().expect("a body has an entry");
         if !function.predecessors(entry).is_empty() {
             self.fail("the entry block has predecessors".to_owned());
         }
         for &block in function.layout() {
             self.block(block, block == entry);
-            for &inst in function.block(block).instructions() {
+            for inst in function.iter_block(block) {
                 self.instruction(inst, returns);
                 self.dominance(&tree, inst);
             }
@@ -225,19 +310,19 @@ impl Checker<'_> {
         block: BlockId,
         entry: bool,
     ) {
-        let list = self.function.block(block).instructions();
+        let function = self.function;
         let name = self.block_name(block);
-        match list.last() {
+        match function.block(block).last() {
             None => return self.fail(format!("{name} is empty")),
-            Some(&last) if !self.function.instruction(last).opcode.is_terminator() => {
+            Some(last) if !function.instruction(last).opcode.is_terminator() => {
                 self.fail(format!("{name} does not end in a terminator"))
             }
             _ => {}
         }
         let mut phis_over = false;
-        for (at, &inst) in list.iter().enumerate() {
-            let opcode = &self.function.instruction(inst).opcode;
-            if opcode.is_terminator() && at + 1 != list.len() {
+        for inst in function.iter_block(block) {
+            let opcode = &function.instruction(inst).opcode;
+            if opcode.is_terminator() && function.next_in_block(inst).is_some() {
                 self.fail(format!("{name} has a terminator before its end"));
             }
             match opcode {
@@ -262,55 +347,12 @@ impl Checker<'_> {
         &mut self,
         block: BlockId,
     ) {
-        let mut edges: HashMap<BlockId, usize> = HashMap::default();
-        for one in self.function.block_users(block) {
-            let user = self.function.instruction(one.user);
-            if user.opcode.is_terminator()
-                && let Some(parent) = self.function.parent(one.user)
-            {
-                *edges.entry(parent).or_default() += 1;
-            }
-        }
-        for &inst in self.function.block(block).instructions() {
-            let instruction = self.function.instruction(inst);
-            if instruction.opcode != Opcode::Phi {
-                continue;
-            }
-            let mut inputs: HashMap<BlockId, Vec<Operand>> = HashMap::default();
-            for pair in instruction.operands.chunks(2) {
-                if let [value, Operand::Block(from)] = pair {
-                    inputs.entry(*from).or_default().push(*value);
-                }
-            }
-            let name = self.block_name(block);
-            for (from, values) in &inputs {
-                if !edges.contains_key(from) {
-                    self.fail(format!(
-                        "a phi in {name} has an input from {}, which does not branch there",
-                        self.block_name(*from)
-                    ));
-                } else if values.len() != edges[from] {
-                    self.fail(format!(
-                        "a phi in {name} has {} inputs from {} for {} edges",
-                        values.len(),
-                        self.block_name(*from),
-                        edges[from]
-                    ));
-                } else if values.iter().any(|one| *one != values[0]) {
-                    self.fail(format!("a phi in {name} has different inputs from {}", self.block_name(*from)));
-                }
-            }
-            for from in edges.keys() {
-                if !inputs.contains_key(from) {
-                    self.fail(format!("a phi in {name} has no input from {}", self.block_name(*from)));
-                }
-            }
-        }
+        phi_arity_of(self.function, block, &mut self.errors);
     }
 
     fn dominance(
         &mut self,
-        tree: &DominatorTree,
+        tree: &DomTree,
         inst: InstId,
     ) {
         let instruction = self.function.instruction(inst);
@@ -435,6 +477,69 @@ impl Checker<'_> {
             Opcode::Store { .. } if !is_pointer(self, ty(1)) => {
                 self.fail(format!("{at} stores through {}", self.show(ty(1))))
             }
+            Opcode::Atomic(info) => {
+                // LLVM's `Verifier::visitLoadInst`, `visitStoreInst`,
+                // `visitAtomicRMWInst`,
+                // `visitAtomicCmpXchgInst` and `visitFenceInst`.
+                let pointer = usize::from(info.kind == AtomicKind::Store);
+                if info.kind != AtomicKind::Fence && !is_pointer(self, ty(pointer)) {
+                    self.fail(format!("{at} accesses through {}", self.show(ty(pointer))));
+                }
+                let accessed = match info.kind {
+                    AtomicKind::Load => Some(result),
+                    AtomicKind::Store => Some(ty(0)),
+                    AtomicKind::Rmw(_) | AtomicKind::CmpXchg { .. } => Some(ty(1)),
+                    AtomicKind::Fence => None,
+                };
+                if let Some(accessed) = accessed
+                    && !is_int(self, accessed)
+                    && !is_pointer(self, accessed)
+                    && !(matches!(self.ty(accessed), Type::Float(_))
+                        && !matches!(info.kind, AtomicKind::CmpXchg { .. }))
+                {
+                    self.fail(format!(
+                        "{at}: atomic {} operand must have integer, pointer or floating point type!",
+                        mnemonic_of(info.kind)
+                    ));
+                }
+                let order = info.ordering;
+                match info.kind {
+                    AtomicKind::Load if matches!(order, AtomicOrdering::Release | AtomicOrdering::AcqRel) => {
+                        self.fail(format!("{at}: Load cannot have Release ordering"))
+                    }
+                    AtomicKind::Store if matches!(order, AtomicOrdering::Acquire | AtomicOrdering::AcqRel) => {
+                        self.fail(format!("{at}: Store cannot have Acquire ordering"))
+                    }
+                    AtomicKind::Rmw(_) if order == AtomicOrdering::Unordered => {
+                        self.fail(format!("{at}: atomicrmw instructions cannot be unordered."))
+                    }
+                    AtomicKind::Fence
+                        if !matches!(
+                            order,
+                            AtomicOrdering::Acquire
+                                | AtomicOrdering::Release
+                                | AtomicOrdering::AcqRel
+                                | AtomicOrdering::SeqCst
+                        ) =>
+                    {
+                        self.fail(format!(
+                            "{at}: fence instructions may only have acquire, release, acq_rel, or seq_cst ordering."
+                        ))
+                    }
+                    AtomicKind::CmpXchg { failure, .. } => {
+                        if order < AtomicOrdering::Monotonic || failure < AtomicOrdering::Monotonic {
+                            self.fail(format!("{at}: cmpxchg cannot be unordered"));
+                        } else if matches!(failure, AtomicOrdering::Release | AtomicOrdering::AcqRel) {
+                            self.fail(format!("{at}: cmpxchg failure ordering cannot include release semantics"));
+                        } else if failure > order && order != AtomicOrdering::Release {
+                            self.fail(format!(
+                                "{at}: cmpxchg failure ordering cannot be stronger than success ordering"
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
             Opcode::Alloca { address_space, .. } => {
                 if let Some(count) = types.first().copied().flatten()
                     && !is_int(self, count)
@@ -447,6 +552,17 @@ impl Checker<'_> {
             }
             Opcode::GetElementPtr { source } => self.gep(inst, *source, &at),
             Opcode::Call(info) | Opcode::Invoke(info) => {
+                // llrm's rule, not LLVM's: the flags a routine returns are read
+                // by a comparison and nothing else.
+                if let Some(value) = instruction.result
+                    && crate::facts::returns_flags(self.context, &self.module.globals, function, inst)
+                    && function
+                        .users(value)
+                        .iter()
+                        .any(|one| !matches!(function.instruction(one.user).opcode, Opcode::ICmp(_)))
+                {
+                    self.fail(format!("{at} returns flags that something other than a comparison reads"));
+                }
                 let invoke = matches!(instruction.opcode, Opcode::Invoke(_));
                 let (call_returns, parameters, variadic) = self.module.signature(info.function_type);
                 let parameters = parameters.to_vec();
@@ -471,6 +587,13 @@ impl Checker<'_> {
                     && declared != info.function_type
                 {
                     self.fail(format!("{at}: Intrinsic called with incompatible signature"));
+                }
+                // Verifier.cpp's `visitIntrinsicCall`: a byte swap of whole
+                // 16-bit units.
+                if self.called_intrinsic(callee) == Some(Intrinsic::ByteSwap)
+                    && !matches!(self.ty(result), Type::Int(bits) if bits % 16 == 0)
+                {
+                    self.fail(format!("{at}: bswap must be an even number of bytes"));
                 }
                 if call_returns != result {
                     self.fail(format!(
@@ -569,13 +692,8 @@ impl Checker<'_> {
     ) {
         let operands = &self.function.instruction(inst).operands;
         let Operand::Block(unwind) = operands[operands.len() - 2] else { return };
-        let first = self
-            .function
-            .block(unwind)
-            .instructions()
-            .iter()
-            .find(|&&one| self.function.instruction(one).opcode != Opcode::Phi);
-        if !first.is_some_and(|&one| matches!(
+        let first = self.function.iter_block(unwind).find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
+        if !first.is_some_and(|one| matches!(
             self.function.instruction(one).opcode,
             Opcode::LandingPad { .. }
         )) {
@@ -584,5 +702,16 @@ impl Checker<'_> {
         if self.function.personality.is_none() {
             self.fail(format!("{at} in a function without a personality"));
         }
+    }
+}
+
+/// What an atomic instruction is called in a diagnostic.
+fn mnemonic_of(kind: AtomicKind) -> &'static str {
+    match kind {
+        AtomicKind::Load => "load",
+        AtomicKind::Store => "store",
+        AtomicKind::Rmw(_) => "atomicrmw",
+        AtomicKind::CmpXchg { .. } => "cmpxchg",
+        AtomicKind::Fence => "fence",
     }
 }

@@ -1,0 +1,44 @@
+== 
+@alias_with_different_offsets
+  confused!
+  confused!
+  none!
+@alias_with_parametric_offset
+  output []!
+    Runtime Assumptions:
+    Equal predicate: (zext i2 (trunc i64 %n to i2) to i64) == 0
+  flow [|<]!
+    Runtime Assumptions:
+    Equal predicate: (zext i2 (trunc i64 %n to i2) to i64) == 0
+  none!
+@alias_with_parametric_expr
+  output []!
+    Runtime Assumptions:
+    Equal predicate: (zext i2 ((trunc i64 %m to i2) + (-2 * (trunc i64 %n to i2))) to i64) == 0
+  flow [|<]!
+    Runtime Assumptions:
+    Equal predicate: (zext i2 ((trunc i64 %m to i2) + (-2 * (trunc i64 %n to i2))) to i64) == 0
+    Equal predicate: (zext i2 (-2 + (trunc i64 %m to i2)) to i64) == 0
+  input []!
+    Runtime Assumptions:
+    Equal predicate: (zext i2 (-2 + (trunc i64 %m to i2)) to i64) == 0
+@gep_i8_vs_i32
+  output []!
+    Runtime Assumptions:
+    Equal predicate: (zext i2 (trunc i64 %n to i2) to i64) == 0
+  output [|<]!
+    Runtime Assumptions:
+    Equal predicate: (zext i2 (trunc i64 %n to i2) to i64) == 0
+  none!
+@linearized_accesses
+  output [* * *]!
+  output [* * *|<]!
+  output [* * *]!
+@multidim_accesses
+  none!
+  output [* * *|<]!
+  none!
+@multidim_accesses2
+  output [* * *]!
+    Runtime Assumptions:
+    Equal predicate: (zext i3 {0,+,-4}<%for.k> to i64) == 0

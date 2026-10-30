@@ -3,7 +3,7 @@
 Audience: contributors to `qbfront` and the QB ABI adapter. Facts about the
 Microsoft BASIC procedure, array and symbol ABI, measured from compiled BASIC
 and not inferred from 16-bit C conventions. The adapter is
-`crates/backend/llrm-core/src/abi/qb.rs`.
+`crates/codegen/llrm-codegen/src/abi/qb.rs`.
 
 A runtime result is primary evidence. A BC `/A` listing is not raw code: VBDOS
 shows back-patched frame operands as zero.
@@ -163,3 +163,18 @@ that site (VBDOS only).
 `ON ERROR` registration is executable state, not function metadata. Each
 source statement materializes `B$OEGA` with a far module offset or `B$OEGP`
 with a local offset. `ON ERROR GOTO 0` passes zero at that exact position.
+
+## `noundef` (note Q1)
+
+llrm-c states `noundef` on scalar parameters and arguments as clang does
+(`DetermineNoUndef`, CGCall.cpp). llrm-qb states none yet.
+
+What guarantees a defined value: every QB variable reads as zero until
+assigned (`B$ENRA` zeroes the frame, `memory-model.md`), so a `BYVAL` scalar and
+the near or far pointer of a `BYREF` argument are never `undef`. A function
+result not assigned is zero too.
+
+What does not: the bytes a `BYREF` pointer reaches in a procedure that frames
+itself (`zeroed_locals` off: its frame holds garbage until its own stores zero
+it), an out-parameter the runtime is to fill, and padding of a `TYPE` passed
+whole. Those stay unmarked, as clang leaves aggregates.

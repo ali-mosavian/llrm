@@ -1,14 +1,28 @@
 //! What every x86 target shares. Each target's `x86.instr` holds only the forms
 //! it adds to `instructions::FAMILY`.
 
-pub mod effects;
+#[cfg(test)]
+mod codemetrics_tests;
 /// `x86.instr`'s reader. Dependency-free but `llrm-lir`, so a build script can
 /// include it with `#[path]`.
-pub mod parse;
+pub mod dag;
+pub mod effects;
+#[cfg(test)]
+mod instructioncost_tests;
+pub mod lowering;
+pub mod mc;
+pub use llrm_target::instr as parse;
 pub mod select;
+pub mod tti;
+#[cfg(test)]
+mod tti_tests;
 
 /// A calling convention's registers as the x86 family names them: the
 /// architecture's, the same in every x86 target.
+/// The width an x87 stack value is held at: every float is the register's ten
+/// bytes.
+pub const X87_WIDTH: u32 = 10;
+
 pub mod calling {
     use llrm_lir::registers::RegId;
     use llrm_target::calling::Convention;
@@ -105,6 +119,9 @@ pub mod registers {
     /// The general registers a value or an address is held in, the frame
     /// pointer's included, the stack pointer's not.
     pub const ROOTS: [RegId; 7] = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI, RegId::EBP];
+    /// The roots long mode adds to `ROOTS`, named by their dword views.
+    pub const ROOTS64: [RegId; 8] =
+        [RegId::R8D, RegId::R9D, RegId::R10D, RegId::R11D, RegId::R12D, RegId::R13D, RegId::R14D, RegId::R15D];
     /// The word view of a dword register, where it has one.
     pub fn word_of(dword: RegId) -> Option<RegId> {
         DWORDS.iter().position(|one| *one == dword).map(|at| WORDS[at])
@@ -137,6 +154,10 @@ pub mod registers {
                 widths.insert(one, size);
             }
         }
+        // The registers only 64-bit mode has (REX): their width is iced's.
+        for one in RegId::values().filter(|one| one.is_gpr()) {
+            widths.entry(one).or_insert(one.size() as i64);
+        }
         widths
     });
 
@@ -152,6 +173,12 @@ pub mod registers {
             for one in in_order(row) {
                 at_width.entry(llrm_lir::root(one)).or_default().entry(size).or_insert(one);
             }
+        }
+        // Long mode's views: the quadword of each family, and the families it
+        // adds. The first register of each width by iced's number (AL
+        // before AH).
+        for one in RegId::values().filter(|one| one.is_gpr()) {
+            at_width.entry(llrm_lir::root(one)).or_default().entry(one.size() as i64).or_insert(one);
         }
         at_width
     });
@@ -254,6 +281,15 @@ pub mod instructions {
     /// joined.
     pub fn joined(own: &str) -> String {
         format!("{FAMILY}\n{own}")
+    }
+
+    /// What the reader of `x86.instr` must know: its registers, widths, flags
+    /// and conditions (`dialect.toml`).
+    pub fn dialect() -> &'static llrm_target::instr::Dialect {
+        static DIALECT: std::sync::LazyLock<llrm_target::instr::Dialect> = std::sync::LazyLock::new(|| {
+            llrm_target::instr::Dialect::parse(include_str!("instructions/dialect.toml")).expect("dialect.toml parses")
+        });
+        &DIALECT
     }
 }
 

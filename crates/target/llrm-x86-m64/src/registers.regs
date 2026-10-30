@@ -1,0 +1,122 @@
+# x86-64 registers, one per line, `-` for none. The schema is llrm-target's `registers.rs`; the classes are
+# those of x86-m32's. Allocation order is file order: SysV AMD64's caller-saved registers first, then the
+# callee-saved ones (rbx, r14, r15, r12, r13: the pin's GR32/GR64 order, which RegisterClassInfo keeps for the CSR aliases).
+#
+# A register family is rooted at its DWORD name (eax, r8d): the backend's one convention for a root, which a
+# 32-bit target's file shares (`llrm_lir::root`). The quadword (rax, r8) is a view of that root, the widest;
+# writing a dword view zeroes the rest of the quadword. REX makes every low byte addressable (sil, dil, bpl,
+# spl, r8l..r15l); AH..BH are not described: no REX instruction can name them.
+#
+# @scratch: the words a pass may borrow for a moment, most preferred first.
+@scratch ecx edx eax
+#
+# name  bits root lane classes dwarf codeview
+eax   32 eax   0 gpr,byte,base,index,int  0 17
+rax   64 eax   0 int,tail_call  0 328
+ax    16 eax   0 int  0 9
+al    8  eax   0 int  0 1
+ecx   32 ecx   0 gpr,byte,base,index,int  2 18
+rcx   64 ecx   0 int,tail_call  2 330
+cx    16 ecx   0 int  2 10
+cl    8  ecx   0 int  2 2
+edx   32 edx   0 gpr,byte,base,index,int  1 19
+rdx   64 edx   0 int,tail_call  1 331
+dx    16 edx   0 int  1 11
+dl    8  edx   0 int  1 3
+esi   32 esi   0 gpr,byte,base,index,int  4 23
+rsi   64 esi   0 int,tail_call  4 332
+si    16 esi   0 int  4 15
+sil   8  esi   0 int  4 324
+edi   32 edi   0 gpr,byte,base,index,int  5 24
+rdi   64 edi   0 int,tail_call  5 333
+di    16 edi   0 int  5 16
+dil   8  edi   0 int  5 325
+r8d   32 r8d   0 gpr,byte,base,index,int  8 -
+r8    64 r8d   0 int,tail_call  8 336
+r8w   16 r8d   0 int  8 -
+r8l   8  r8d   0 int  8 -
+r9d   32 r9d   0 gpr,byte,base,index,int  9 -
+r9    64 r9d   0 int,tail_call  9 337
+r9w   16 r9d   0 int  9 -
+r9l   8  r9d   0 int  9 -
+r10d  32 r10d  0 gpr,byte,base,index,int  10 -
+r10   64 r10d  0 int  10 338
+r10w  16 r10d  0 int  10 -
+r10l  8  r10d  0 int  10 -
+r11d  32 r11d  0 gpr,byte,base,index,int  11 -
+r11   64 r11d  0 int,tail_call  11 339
+r11w  16 r11d  0 int  11 -
+r11l  8  r11d  0 int  11 -
+ebx   32 ebx   0 gpr,byte,base,index,int,frame_follows  3 20
+rbx   64 ebx   0 int  3 329
+bx    16 ebx   0 int  3 12
+bl    8  ebx   0 int  3 4
+r14d  32 r14d  0 gpr,byte,base,index,int  14 -
+r14   64 r14d  0 int  14 342
+r14w  16 r14d  0 int  14 -
+r14l  8  r14d  0 int  14 -
+r15d  32 r15d  0 gpr,byte,base,index,int  15 -
+r15   64 r15d  0 int  15 343
+r15w  16 r15d  0 int  15 -
+r15l  8  r15d  0 int  15 -
+r12d  32 r12d  0 gpr,byte,base,index,int  12 -
+r12   64 r12d  0 int  12 340
+r12w  16 r12d  0 int  12 -
+r12l  8  r12d  0 int  12 -
+r13d  32 r13d  0 gpr,byte,base,index,int  13 -
+r13   64 r13d  0 int  13 341
+r13w  16 r13d  0 int  13 -
+r13l  8  r13d  0 int  13 -
+ebp   32 ebp   0 reserved,frame,base,index,int  6 22
+rbp   64 ebp   0 int  6 334
+bp    16 ebp   0 int  6 14
+bpl   8  ebp   0 int  6 326
+esp   32 esp   0 reserved,stack,base,int  7 21
+rsp   64 esp   0 int  7 335
+sp    16 esp   0 int  7 13
+spl   8  esp   0 int  7 327
+# The return address call frame information names (DWARF column 16); no code reaches it as a register.
+rip   64 rip  0 pc  16 -
+# The segment registers exist in 64-bit mode and name no base but FS and GS: the string operations still read
+# DS and ES, and the register file names a data segment. No selector is ever placed in one. DWARF 50-55.
+es    16 es   0 segment,reserved,string_segment  50 25
+cs    16 cs   0 segment,reserved,code_segment  51 26
+ss    16 ss   0 segment,reserved,stack_segment  52 27
+ds    16 ds   0 segment,reserved,data_segment  53 28
+fs    16 fs   0 segment,reserved  54 29
+gs    16 gs   0 segment,reserved  55 30
+# x87: st(i) are positions in the float stack (DWARF 33-40, CodeView 128-135), the same classes as x86-m32's.
+st0    80 st0  0 x87,positional  33 128
+st1    80 st1  0 x87,positional  34 129
+st2    80 st2  0 x87,positional  35 130
+st3    80 st3  0 x87,positional  36 131
+st4    80 st4  0 x87,positional  37 132
+st5    80 st5  0 x87,positional  38 133
+st6    80 st6  0 x87,positional  39 134
+st7    80 st7  0 x87,positional  40 135
+# LLVM's RFP registers FP0..FP6, which greedy allocates and the stackifier maps to stack positions (FP7 is
+# the stackifier's scratch). Named by iced's MM0..MM6, the physical x87 registers; never encoded.
+mm0    80 mm0  0 rfp  -  -
+mm1    80 mm1  0 rfp  -  -
+mm2    80 mm2  0 rfp  -  -
+mm3    80 mm3  0 rfp  -  -
+mm4    80 mm4  0 rfp  -  -
+mm5    80 mm5  0 rfp  -  -
+mm6    80 mm6  0 rfp  -  -
+# SSE: xmm0-15, caller-saved in System V AMD64. A scalar float or double is the low 4 or 8 bytes. DWARF 17-32.
+xmm0  128 xmm0  0 xmm  17 154
+xmm1  128 xmm1  0 xmm  18 155
+xmm2  128 xmm2  0 xmm  19 156
+xmm3  128 xmm3  0 xmm  20 157
+xmm4  128 xmm4  0 xmm  21 158
+xmm5  128 xmm5  0 xmm  22 159
+xmm6  128 xmm6  0 xmm  23 160
+xmm7  128 xmm7  0 xmm  24 161
+xmm8  128 xmm8  0 xmm  25 162
+xmm9  128 xmm9  0 xmm  26 163
+xmm10 128 xmm10 0 xmm  27 164
+xmm11 128 xmm11 0 xmm  28 165
+xmm12 128 xmm12 0 xmm  29 166
+xmm13 128 xmm13 0 xmm  30 167
+xmm14 128 xmm14 0 xmm  31 168
+xmm15 128 xmm15 0 xmm  32 169

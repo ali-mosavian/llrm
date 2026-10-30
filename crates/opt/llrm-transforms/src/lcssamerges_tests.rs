@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/lcssamerges_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/lcssamerges_tests.rs`, the port of
 //! `tests/test_lcssa_merges.py`, each body now MIR text; `==` on bodies is
 //! printed text.
 
@@ -61,6 +61,17 @@ b5:
 }
 "
     ));
+}
+
+/// qcport host -Os: an exit entered by a switch's two cases got an exit phi
+/// with one input for its two edges, which the verifier refused.
+#[test]
+fn test_a_switch_with_two_cases_to_one_exit_gives_its_phi_two_inputs() {
+    let text = MULTIPLE_EXITS.replace(
+        "  br i1 %more, label %b2, label %b3",
+        "  switch i16 %carried, label %b2 [\n    i16 5, label %b3\n    i16 9, label %b3\n  ]",
+    );
+    assert!(closed_once(&text).contains("%carried.lcssa = phi i16 [ %carried, %b1 ], [ %carried, %b1 ]"));
 }
 
 #[test]
@@ -130,4 +141,43 @@ fn test_an_exit_shared_with_the_loop_entry_is_left_alone() {
     let before = printed(&module);
     assert!(!closed(f(&mut module)).unwrap());
     assert_eq!(printed(&module), before);
+}
+
+/// `MULTIPLE_EXITS` with `values` loop values read after the join, then
+/// `phis` phis of a block that reads nothing from the loop.
+fn many_values_and_phis(
+    values: usize,
+    phis: usize,
+) -> String {
+    let defs = (0..values).map(|k| format!("  %v{k} = add i16 %carried, {k}\n")).collect::<String>();
+    let uses = (0..values).map(|k| format!("  %u{k} = add i16 %v{k}, 1\n")).collect::<String>();
+    let others = (0..phis).map(|k| format!("  %w{k} = phi i16 [ %answer, %b6 ], [ {k}, %b7 ]\n")).collect::<String>();
+    MULTIPLE_EXITS
+        .replace("  %more = icmp", &format!("{defs}  %more = icmp"))
+        .replace(
+            "  %answer = add i16 %carried, 7\n  ret i16 %answer\n",
+            &format!(
+                "  %answer = add i16 %carried, 7\n{uses}  %flag = icmp eq i16 %answer, 0\n  br i1 %flag, label %b6, label %b7\n\nb6:\n  br label %b8\n\nb7:\n  br label %b8\n\nb8:\n{others}  ret i16 %answer\n"
+            ),
+        )
+}
+
+/// A merged value rewrote every phi of the function to find the ones that
+/// read it: each of 8 more values over 2 000 phis of an unrelated block cost
+/// 2 000 phi reads (about 130 K instructions per value on qbq's d_faces -O2).
+/// The work a value adds is that of the phis that read it, not of the function.
+#[test]
+fn test_merging_a_value_does_not_scan_the_phis_of_unrelated_blocks() {
+    let least = |values: usize| {
+        let text = many_values_and_phis(values, 2000);
+        (0..3)
+            .map(|_| {
+                let mut module = parsed(&text);
+                llrm_support::debug::work_of(|| closed(f(&mut module)).unwrap()).1 as f64
+            })
+            .fold(f64::MAX, f64::min)
+    };
+    let (one, nine) = (least(1), least(9));
+    let each = (nine - one) / 8.0;
+    assert!(each < one / 4.0, "one value {one:.0} work, nine {nine:.0}: {each:.0} for each more");
 }

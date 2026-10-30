@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dead.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dead.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:f5da5a7be707be525408847f84250a3bb5a1389eceeacc0adf9277cf73951d1c -->
+<!-- src: crates/opt/llrm-transforms/src/dead.rs sha256:1d0f30aee0e96f9477364fc610b9b9e741df8da5173f0fc1d13208e95d586982 -->
 
 # dead
 
@@ -58,8 +58,8 @@ in `dead_tests.rs`.
 
 ## Runs
 Once per pass of the function fixed point, after `algebraic`, and again
-after the loop-header copy (`-ftree-ch`). `lsr`, `window`, `indvars` and
-`jumpthread` call it on the code they leave. `markers_dropped` runs once
+after the loop-header copy (`-ftree-ch`). `lsr`, `window` and `indvars`
+call it on the code they leave. `markers_dropped` runs once
 after the whole pipeline, before exception-handling preparation and
 selection, once every reader has used the assumptions. `-fno-tree-dce` turns
 off the pass only, not those calls; nothing runs at -O0.
@@ -68,5 +68,5 @@ off the pass only, not those calls; nothing runs at -O0.
 Blocks and edges are unchanged: dominators and loops are preserved.
 
 ## See also
-[`crate::dse`](dse.md) removes dead stores; [`crate::promote`](promote.md) makes the loads that
-make a store dead; [`crate::loopmotion`](loopmotion.md) sinks stores out of loops.
+[`crate::deadstore`](deadstore.md) removes dead stores; [`crate::promote`](promote.md) makes the loads
+that make a store dead; `crate::loopmotion` sinks stores out of loops.

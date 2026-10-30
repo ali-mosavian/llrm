@@ -108,9 +108,9 @@ const OPERATIONS: [&str; 35] = [
     "fill_cell",
     "copy",
     "copy_cell",
+    "copy_variable",
     "direction",
     "unroll_budget",
-    "mask_test",
 ];
 
 impl Description {
@@ -244,9 +244,9 @@ impl Description {
                 "fill_cell" => out.fill_cell = value,
                 "copy" => out.copy = value,
                 "copy_cell" => out.copy_cell = value,
+                "copy_variable" => out.copy_variable = value,
                 "direction" => out.direction = value,
                 "unroll_budget" => out.unroll_budget = value,
-                "mask_test" => out.mask_test = value,
                 other => unreachable!("`{other}` was checked"),
             }
         }
@@ -258,7 +258,7 @@ impl Description {
 mod tests {
     use super::*;
 
-    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ndirection = 2*a\nunroll_budget = 7\nmask_test = a\n";
+    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ncopy_variable = cv\ndirection = 2*a\nunroll_budget = 7\n";
 
     #[test]
     fn a_sum_is_terms_with_counts_and_signs() {
@@ -286,7 +286,7 @@ mod tests {
             "{ALL}[bytes]\n{}\n[size]\nprefix = 1\nargument = 2\n",
             [
                 "a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd",
-                "fl", "flf", "fs", "fr", "f", "fc", "cp", "cc"
+                "fl", "flf", "fs", "fr", "f", "fc", "cp", "cc", "cv"
             ]
             .iter()
             .map(|one| format!("{one} = 4"))

@@ -12,15 +12,13 @@ pub mod parse;
 use std::fmt::Write as _;
 
 use automaton::{Automaton, State};
-use parse::{Call, Expr, OperandPattern, Pattern, Step};
-
 /// The instruction description's reader.
-#[path = "../../../target/llrm-x86/src/parse.rs"]
-pub mod description;
+pub use llrm_target::instr as description;
+use parse::{Call, Expr, OperandPattern, Pattern, Step};
 
 /// What each operand constructor may make, as `x86.instr` spells kinds,
 /// and how many arguments it takes.
-pub const CONSTRUCTORS: [(&str, &str, usize); 16] = [
+pub const CONSTRUCTORS: [(&str, &str, usize); 19] = [
     ("loaded", "m", 1),
     ("held", "r", 1),
     ("source", "ri", 1),
@@ -37,6 +35,9 @@ pub const CONSTRUCTORS: [(&str, &str, usize); 16] = [
     ("cell", "m", 1),
     ("access", "m", 1),
     ("imm", "i", 2),
+    ("shift", "h", 2),
+    ("cond", "c", 1),
+    ("extend", "e", 2),
 ];
 
 pub struct Generated {
@@ -107,6 +108,8 @@ fn structure(
 }
 
 struct Checker<'a> {
+    /// The instruction file's name, as a refusal spells it.
+    file: &'a str,
     pattern: &'a Pattern,
     forms: &'a [description::Form],
     bound: Vec<(String, String)>,
@@ -183,7 +186,7 @@ impl Checker<'_> {
     ) -> Result<&description::Form, String> {
         let forms: Vec<&description::Form> = self.forms.iter().filter(|one| one.name == name).collect();
         if forms.is_empty() {
-            return refused(self.pattern, format!("x86.instr has no `{name}`"));
+            return refused(self.pattern, format!("{} has no `{name}`", self.file));
         }
         if let Some(other) = forms.iter().find(|one| one.operation != forms[0].operation) {
             return refused(self.pattern, format!("`{name}` is both {} and {}", forms[0].operation, other.operation));
@@ -203,7 +206,7 @@ impl Checker<'_> {
                     })
             })
             .map_or_else(
-                || refused(self.pattern, format!("x86.instr has no `{name}` taking {dests:?} <- {sources:?}")),
+                || refused(self.pattern, format!("{} has no `{name}` taking {dests:?} <- {sources:?}", self.file)),
                 Ok,
             )
     }
@@ -286,10 +289,11 @@ pub fn generate(
     patterns_text: &str,
     name: &str,
     core: &str,
+    dialect: &description::Dialect,
 ) -> Result<Generated, String> {
     let ident = name.replace('-', "_");
-    let forms = description::parse(forms_text)?;
-    let pinned = description::pinned(forms_text)?;
+    let forms = description::parse(forms_text, dialect)?;
+    let pinned = description::pinned(forms_text, dialect)?;
     if forms.iter().filter(|form| !form.fixed.is_empty()).ne(pinned.iter()) {
         return Err("the fixed-operand reader disagrees with the instruction description".to_owned());
     }
@@ -343,7 +347,8 @@ pub fn generate(
     writeln!(code, "pub static COVERS: [bool; {}] = {covering:?};", covering.len()).unwrap();
     let (mut holds, mut covers, mut costs, mut emits) = (String::new(), String::new(), String::new(), String::new());
     for (index, pattern) in patterns.patterns.iter().enumerate() {
-        let mut checker = Checker { pattern, forms: &forms, bound: bindings(pattern), lets: Vec::new() };
+        let mut checker =
+            Checker { file: &dialect.file, pattern, forms: &forms, bound: bindings(pattern), lets: Vec::new() };
         writeln!(holds, "            {index} => {},", condition(&checker, false)?).unwrap();
         if !pattern.covers.is_empty() {
             let marks: Vec<String> = pattern
@@ -420,11 +425,16 @@ mod tests {
     use super::automaton::State;
     use super::generate;
 
+    fn dialect() -> super::description::Dialect {
+        super::description::Dialect::parse(include_str!("../../../target/llrm-x86/src/instructions/dialect.toml"))
+            .expect("x86's dialect")
+    }
+
     const FORMS: &str =
         "add binary rm/^0,rmi 16 alu_rr - - - -/- Add_rm{w}_r{w}\nneg unary rm/^0 16 alu_rr - - - -/- Neg_rm{w}\n";
 
     fn refused(patterns: &str) -> String {
-        generate(FORMS, patterns, "test", "crate").err().expect("refused")
+        generate(FORMS, patterns, "test", "crate", &dialect()).err().expect("refused")
     }
 
     #[test]
@@ -449,7 +459,7 @@ mod tests {
     #[test]
     fn two_patterns_sharing_a_prefix_share_its_states() {
         let patterns = "pattern any\n  match add.i16(a, b)\n  nothing\nend\npattern zero\n  match add.i16(a, #0)\n  nothing\nend\n";
-        let generated = generate(FORMS, patterns, "test", "crate").expect("generates");
+        let generated = generate(FORMS, patterns, "test", "crate", &dialect()).expect("generates");
         let states = &generated.automaton.states;
         let testing = |feature: usize| {
             states.iter().filter(|one| matches!(one, State::Test { feature: f, .. } if *f == feature)).count()
@@ -459,6 +469,29 @@ mod tests {
         assert!(states.contains(&State::Leaf(vec![0, 1])) && states.contains(&State::Leaf(vec![0])));
     }
 
+    /// An operand may be a shift, a condition or an extension field, with no
+    /// register in it: a pattern said `shift(1, 3)` and the generator refused
+    /// "no operand constructor `shift`".
+    #[test]
+    fn a_pattern_emits_shift_condition_and_extend_fields() {
+        let forms = "addsh binary r/r,r,h 16 alu_rr - - - -/- Add_rm{w}_r{w}\n\
+                     csel binary r/r,r,c 16 alu_rr - - - -/- Add_rm{w}_r{w}\n\
+                     addx binary r/r,r,e 16 alu_rr - - - -/- Add_rm{w}_r{w}\n";
+        let patterns = "pattern fields\n  match add.i16(a, b)\n  emit addsh result <- held(a), held(b), shift(1, 3)\n  \
+                        emit csel result <- held(a), held(b), cond(10)\n  emit addx result <- held(a), held(b), extend(2, 1)\nend\n";
+        let generated = generate(forms, patterns, "test", "crate", &dialect()).expect("generates");
+        for call in ["op_shift(m, out, 1i64, 3i64)", "op_cond(m, out, 10i64)", "op_extend(m, out, 2i64, 1i64)"] {
+            assert!(generated.code.contains(call), "{call} in {}", generated.code);
+        }
+        let wrong = "pattern p\n  match add(a, b)\n  emit add result <- held(a), held(b), shift(1, 3)\nend\n";
+        assert!(refused(wrong).contains("x86.instr has no `add` taking"));
+        let arity = "pattern p\n  match add(a, b)\n  emit addsh result <- held(a), held(b), shift(1)\nend\n";
+        assert_eq!(
+            generate(forms, arity, "test", "crate", &dialect()).err().expect("refused"),
+            "patterns.isel:1: pattern `p`: `shift` takes 2 arguments, not 1"
+        );
+    }
+
     /// A second target's selector, generated beside the first, defined the same
     /// methods under the same names: they were `pattern_holds` on one
     /// `Selector`.
@@ -466,8 +499,8 @@ mod tests {
     fn each_targets_selector_has_methods_named_for_it() {
         let patterns = "pattern any\n  match add.i16(a, b)\n  nothing\nend\n";
         let (first, second) = (
-            generate(FORMS, patterns, "x86-m16", "crate").unwrap().code,
-            generate(FORMS, patterns, "x86-m32", "crate").unwrap().code,
+            generate(FORMS, patterns, "x86-m16", "crate", &dialect()).unwrap().code,
+            generate(FORMS, patterns, "x86-m32", "crate", &dialect()).unwrap().code,
         );
         assert!(first.contains("fn x86_m16_holds(") && !first.contains("x86_m32"));
         assert!(second.contains("fn x86_m32_holds(") && second.contains("name: \"x86-m32\""));

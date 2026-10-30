@@ -10,7 +10,7 @@
 
 use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::hash::HashMap;
 use crate::intrinsics::Intrinsic;
 use crate::module::{Function, GlobalKind, GlobalValue, InstId, Instruction, MetadataNode, Module, Operand, ValueDef};
@@ -29,7 +29,7 @@ pub struct Query<'a> {
     pub metadata: &'a [MetadataNode],
     pub function: &'a Function,
     pub layout: &'a DataLayout,
-    pub dt: Option<&'a DominatorTree>,
+    pub dt: Option<&'a DomTree>,
     pub assumptions: Option<&'a AssumptionCache>,
     /// `DC`: the conditional branches each value is tested by.
     pub dom_conditions: Option<&'a DomConditionCache>,
@@ -119,10 +119,7 @@ impl<'a> Query<'a> {
         a: InstId,
         b: InstId,
     ) -> bool {
-        let Some(block) = self.block_of(a).filter(|block| Some(*block) == self.block_of(b)) else { return false };
-        let instructions = self.function.block(block).instructions();
-        let at = |inst: InstId| instructions.iter().position(|one| *one == inst);
-        matches!((at(a), at(b)), (Some(x), Some(y)) if x < y)
+        self.block_of(a).is_some_and(|block| Some(block) == self.block_of(b)) && self.function.comes_before(a, b)
     }
 
     pub fn type_of(
@@ -189,20 +186,34 @@ impl<'a> Query<'a> {
         self.metadata.get(node.0 as usize)
     }
 
-    /// The global a call's callee names.
+    /// The name of the function a call's callee names.
     pub fn callee_name(
         &self,
         inst: InstId,
     ) -> Option<&'a str> {
+        self.callee_function(inst)?.name.as_deref()
+    }
+
+    /// The intrinsic of `pattern::IntrinsicId` a call reaches, from the name's
+    /// cached id.
+    pub(crate) fn callee_intrinsic_id(
+        &self,
+        inst: InstId,
+    ) -> Option<crate::valuetracking::pattern::IntrinsicId> {
+        self.callee_function(inst)?.name.intrinsic_id()
+    }
+
+    /// The function global a call's callee names.
+    fn callee_function(
+        &self,
+        inst: InstId,
+    ) -> Option<&'a GlobalValue> {
         let instruction = self.function.instruction(inst);
         let (Opcode::Call(_) | Opcode::Invoke(_)) = instruction.opcode else { return None };
         let Operand::Constant(id) = *instruction.operands.last()? else { return None };
         let ConstantKind::Global(global) = self.context().get(id).kind else { return None };
         let global = self.globals.get(global.0 as usize)?;
-        match &global.kind {
-            GlobalKind::Function(_) => global.name.as_deref(),
-            GlobalKind::Variable(_) => None,
-        }
+        matches!(global.kind, GlobalKind::Function(_)).then_some(global)
     }
 
     /// The intrinsic a call reaches, when MIR has it.
@@ -210,7 +221,7 @@ impl<'a> Query<'a> {
         &self,
         inst: InstId,
     ) -> Option<Intrinsic> {
-        self.callee_name(inst).and_then(Intrinsic::named)
+        self.callee_function(inst)?.intrinsic()
     }
 
     /// Whether `a` is the same value as `b`.
@@ -241,10 +252,23 @@ const MAX_ASSUMES_PER_VALUE: usize = 1024;
 
 /// `AssumptionCache`: the `llvm.assume` calls of a function, and the values
 /// each one tells of.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AssumptionCache {
     pub assumes: Vec<InstId>,
     affected: HashMap<Operand, Vec<InstId>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The bodies `AssumptionCache::of` did not walk for assumes.
+    pub(crate) static SKIPPED_WALKS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// `LLRM_CHECK_ASSUME_SKIP` walks the body even where no `llvm.assume` is
+/// declared, and fails on an assume found.
+fn check_assume_skip() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_ASSUME_SKIP"))
 }
 
 impl AssumptionCache {
@@ -253,13 +277,36 @@ impl AssumptionCache {
         module: &Module,
         function: &Function,
     ) -> Self {
+        Self::of(&module.context, &module.globals, &module.metadata, function)
+    }
+
+    /// `AssumptionCache(F)` from the parts of a module a pass holds.
+    pub fn of(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        function: &Function,
+    ) -> Self {
         let layout = DataLayout::default();
-        let query = Query::new(module, function, &layout);
-        let assumes: Vec<InstId> = function
-            .walk()
-            .filter(|(_, inst)| query.intrinsic(*inst) == Some(Intrinsic::Assume))
-            .map(|(_, inst)| inst)
-            .collect();
+        let query = Query { globals, metadata, ..Query::bare(context, function, &layout) };
+        // A call reaches `llvm.assume` only through a function of that name:
+        // with none declared there is nothing to find in the body.
+        let declared = globals.iter().any(|global| {
+            matches!(global.kind, GlobalKind::Function(_)) && global.intrinsic() == Some(Intrinsic::Assume)
+        });
+        let check = !declared && check_assume_skip();
+        let assumes: Vec<InstId> = if declared || check {
+            function
+                .walk()
+                .filter(|(_, inst)| query.intrinsic(*inst) == Some(Intrinsic::Assume))
+                .map(|(_, inst)| inst)
+                .collect()
+        } else {
+            #[cfg(test)]
+            SKIPPED_WALKS.with(|walks| walks.set(walks.get() + 1));
+            Vec::new()
+        };
+        assert!(!check || assumes.is_empty(), "an assume was found where none is declared");
         let mut cache = Self { assumes, affected: HashMap::default() };
         for assume in cache.assumes.clone() {
             cache.update_affected_values(&query, assume);
@@ -301,7 +348,9 @@ impl AssumptionCache {
 /// condition tells of it.
 #[derive(Clone, Debug, Default)]
 pub struct DomConditionCache {
-    affected: HashMap<Operand, Vec<InstId>>,
+    /// Behind a cell because InstCombine registers a branch as it visits it,
+    /// while its queries hold the cache.
+    affected: std::cell::RefCell<HashMap<Operand, Vec<InstId>>>,
 }
 
 impl DomConditionCache {
@@ -311,14 +360,32 @@ impl DomConditionCache {
         function: &Function,
     ) -> Self {
         let layout = DataLayout::default();
-        let query = Query::new(module, function, &layout);
-        let mut cache = Self::default();
+        Self::registered(&Query::new(module, function, &layout), function)
+    }
+
+    /// [`DomConditionCache::new`] from the parts of a module a pass holds.
+    pub fn of(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Self {
+        let query = Query { globals, metadata, ..Query::bare(context, function, layout) };
+        Self::registered(&query, function)
+    }
+
+    fn registered(
+        query: &Query,
+        function: &Function,
+    ) -> Self {
+        let cache = Self::default();
         for &block in function.layout() {
             if let Some(branch) = function.terminator(block)
                 && function.instruction(branch).opcode == Opcode::Br
                 && function.instruction(branch).operands.len() == 3
             {
-                cache.register_branch(&query, branch);
+                cache.register_branch(query, branch);
             }
         }
         cache
@@ -326,15 +393,16 @@ impl DomConditionCache {
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/DomConditionCache.cpp#L19>
     pub fn register_branch(
-        &mut self,
+        &self,
         q: &Query,
         branch: InstId,
     ) {
         let mut affected = Vec::new();
         let condition = q.function.instruction(branch).operands[0];
         super::context::find_values_affected_by_condition(q, condition, false, &mut |v| affected.push(v));
+        let mut map = self.affected.borrow_mut();
         for value in affected {
-            let list = self.affected.entry(value).or_default();
+            let list = map.entry(value).or_default();
             if !list.contains(&branch) {
                 list.push(branch);
             }
@@ -345,8 +413,8 @@ impl DomConditionCache {
     pub fn conditions_for(
         &self,
         value: Operand,
-    ) -> &[InstId] {
-        self.affected.get(&value).map_or(&[], Vec::as_slice)
+    ) -> std::cell::Ref<'_, [InstId]> {
+        std::cell::Ref::map(self.affected.borrow(), |map| map.get(&value).map_or(&[][..], Vec::as_slice))
     }
 }
 
@@ -355,8 +423,9 @@ impl DomConditionCache {
 /// AC}`.
 pub struct FunctionAnalyses {
     layout: DataLayout,
-    dt: DominatorTree,
+    dt: DomTree,
     assumptions: AssumptionCache,
+    dom_conditions: Option<DomConditionCache>,
 }
 
 impl FunctionAnalyses {
@@ -365,7 +434,75 @@ impl FunctionAnalyses {
         function: &Function,
     ) -> Self {
         let layout = module.datalayout.as_deref().and_then(|text| DataLayout::parse(text).ok()).unwrap_or_default();
-        Self { layout, dt: DominatorTree::new(function), assumptions: AssumptionCache::new(module, function) }
+        Self {
+            layout,
+            dt: DomTree::of(function),
+            assumptions: AssumptionCache::new(module, function),
+            dom_conditions: None,
+        }
+    }
+
+    /// The same from the parts of a module a pass holds, not the module.
+    pub fn of(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Self {
+        Self {
+            layout: layout.clone(),
+            dt: DomTree::of(function),
+            assumptions: AssumptionCache::of(context, globals, metadata, function),
+            dom_conditions: None,
+        }
+    }
+
+    /// The same with the branch conditions that tell of a value (`SQ.DC`, the
+    /// `DomConditionCache` InstCombine keeps): a query at an instruction then
+    /// reads what the branches dominating it say.
+    pub fn with_dom_conditions(
+        mut self,
+        module: &Module,
+        function: &Function,
+    ) -> Self {
+        self.dom_conditions = Some(DomConditionCache::new(module, function));
+        self
+    }
+
+    /// The same with an empty cache that the pass fills as it visits each
+    /// conditional branch (`DC.registerBranch` in `visitBranchInst`): a query
+    /// sees the branches visited before it, as LLVM's does.
+    pub fn with_lazy_dom_conditions(mut self) -> Self {
+        self.dom_conditions = Some(DomConditionCache::default());
+        self
+    }
+
+    /// [`FunctionAnalyses::with_dom_conditions`] from the parts of a module.
+    pub fn with_dom_conditions_of(
+        mut self,
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        function: &Function,
+    ) -> Self {
+        self.dom_conditions = Some(DomConditionCache::of(context, globals, metadata, &self.layout, function));
+        self
+    }
+
+    /// The dominating-condition cache (`SQ.DC`), where asked for.
+    pub fn dom_conditions(&self) -> Option<&DomConditionCache> {
+        self.dom_conditions.as_ref()
+    }
+
+    /// The dominator tree (`SQ.DT`).
+    pub fn dominator_tree(&self) -> &DomTree {
+        &self.dt
+    }
+
+    /// The assumptions (`SQ.AC`).
+    pub fn assumption_cache(&self) -> &AssumptionCache {
+        &self.assumptions
     }
 
     /// A query at `cxt` (`CxtI`), or at no instruction.
@@ -378,6 +515,7 @@ impl FunctionAnalyses {
         Query {
             dt: Some(&self.dt),
             assumptions: Some(&self.assumptions),
+            dom_conditions: self.dom_conditions.as_ref(),
             ..Query::new(module, function, &self.layout).with_cxt(cxt)
         }
     }

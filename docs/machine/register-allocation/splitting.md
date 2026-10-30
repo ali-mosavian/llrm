@@ -2,7 +2,7 @@
 
 Audience: an engineer changing how a value that finds no register is cut instead of spilled whole. This page states the three ways a split is chosen, how the choice is priced, and how a piece is made.
 
-A split gives a region of a value's range a fresh value, the piece, joined to the rest by copies where control enters or leaves the region. The piece competes for a register on its own; the rest may only take a free register or spill. The code is LLVM's `SplitKit` and `SpillPlacement`: [`splitkit.rs`](../../optimizations/backend/splitkit.md) chooses and carves, [`spillplacement.rs`](../../optimizations/backend/spillplacement.md) decides register or stack per bundle.
+A split gives a region of a value's range a fresh value, the piece, joined to the rest by copies where control enters or leaves the region. The piece competes for a register on its own; the rest may only take a free register or spill. The code is LLVM's `SplitKit` and `SpillPlacement`: `greedy/splitkit.rs` chooses and carves, [`spillplacement.rs`](../../optimizations/backend/spillplacement.md) decides register or stack per bundle.
 
 ## Choosing regions
 
@@ -63,6 +63,6 @@ flowchart TB
 
 A piece is not split again unless its live blocks shrink strictly (LLVM's `RS_Split2`), which ends splitting. `LLRM_CHECK_SPLIT=1` and `LLRM_CHECK_PLACING=1` compare the incremental answers with a full look; `LLRM_DEBUG=split` prints `split V at SPANS` for each region carved.
 
-## Loop-scoped copies
+## The greedy allocator's splits
 
-`splitkit::loop_bases` is the other splitter: for spilled address bases, indexes and selectors that a loop reads and the code outside also names, it carves a loop-local copy, entered once and left after the loop ([`test_a_loop_scoped_base_piece_enters_once_and_leaves_after_the_loop`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/splitkit.rs#L2042)). It is a candidate shape of the search ([assignment](assignment.md#search-over-shapes-of-the-body)), not part of the loop.
+The translated greedy allocator splits with a line-by-line port of LLVM's SplitKit at the [pin](https://github.com/llvm/llvm-project/tree/d1106deb71cc81016406a1917d0508d2df296266): `EdgeBundles`, `SpillPlacement`, `InterferenceCache`, `SplitAnalysis`, `SplitEditor` (module `greedy::spliteditor`) and `RAGreedy::trySplit` ([`tryLocalSplit`, `tryRegionSplit`, `tryBlockSplit`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L1975), module `greedy::regionsplit`). It runs when a range has waited a round and neither a free register nor an eviction took it; `LLRM_NO_SPLIT=1` turns it off. The editor inserts the copies in the function itself; `finish` rewrites the operands and checks out against `LLRM_CHECK_LIVEINTERVALS=1` (every interval equals one computed afresh). Not translated, each named in its module doc: rematerialization at a split ([#2513](https://github.com/ali-mosavian/llrm/issues/2513)), sub-registers, `tryInstructionSplit`, hint splitting. The old splitter above goes when the greedy allocator is the only one.

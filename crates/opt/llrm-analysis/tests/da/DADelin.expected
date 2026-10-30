@@ -1,0 +1,49 @@
+== 
+@t1
+  input [* * *]!
+  anti [* * *|<]!
+  output [* * *]!
+@t2
+  input [* * *]!
+  anti [* * *|<]!
+  output [* * *]!
+@t3
+  input [* * *]!
+  anti [* * *|<]!
+  output [* * *]!
+@t4
+  input [* * *]!
+  anti [* * *|<]!
+  output [* * *]!
+@t5
+  input [* * *]!
+  anti [* * *|<]!
+  output [* * *]!
+@t6
+  input [* * *]!
+  anti [* * *|<]!
+  output [* * *]!
+@t7
+  input [* * *]!
+  anti [* * *|<]!
+  output [* * *]!
+@t8
+  input [* * *]!
+  anti [* * *|<]!
+  output [* * *]!
+@test_sizes
+  input [0 S]!
+  anti [* *|<]!
+  output [* *]!
+@nonnegative
+  output [* *]!
+  output [* *|<]!
+  output [* *]!
+@coeff_may_negative
+  output [*]!
+  output [*|<]!
+  output [*]!
+@coeff_positive
+  output [*]!
+  output [*|<]!
+  output [*]!

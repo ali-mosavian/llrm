@@ -1,0 +1,43 @@
+== 
+@f
+B0:
+  br label %B1
+B1:
+  %v0 = phi i64 [ %v16, %B9 ], [ 0, %B0 ]
+  %v1 = add nuw nsw i64 %v0, 3
+  br label %B2
+B2:
+  br label %B3
+B3:
+  %v2 = phi i64 [ %v14, %B8 ], [ 1, %B2 ]
+  br label %B4
+B4:
+  br label %B5
+B5:
+  %v3 = phi i64 [ %v12, %B7 ], [ 1, %B4 ]
+  %v4 = add nsw i64 %v3, -1
+  br label %B6
+B6:
+  %v5 = getelementptr inbounds nuw [16 x [16 x [16 x i32]]], ptr @a, i64 0, i64 %v1, i64 %v2, i64 %v3
+  %v6 = load i32, ptr %v5
+  %v7 = add nuw nsw i64 %v2, 1
+  %v8 = getelementptr inbounds [16 x [16 x [16 x i32]]], ptr @a, i64 0, i64 %v0, i64 %v7, i64 %v4
+  %v9 = load i32, ptr %v8
+  %v10 = sub nsw i32 %v9, %v6
+  store i32 %v10, ptr %v8
+  %v11 = icmp ne i64 %v7, 8
+  br label %B7
+B7:
+  %v12 = add nuw nsw i64 %v3, 1
+  %v13 = icmp ne i64 %v12, 8
+  br i1 %v13, label %B5, label %B8
+B8:
+  %v14 = add nuw nsw i64 %v2, 1
+  %v15 = icmp ne i64 %v14, 8
+  br i1 %v15, label %B3, label %B9
+B9:
+  %v16 = add nuw nsw i64 %v0, 1
+  %v17 = icmp ne i64 %v16, 4
+  br i1 %v17, label %B1, label %B10
+B10:
+  ret void

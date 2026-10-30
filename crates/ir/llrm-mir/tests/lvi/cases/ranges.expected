@@ -1,0 +1,94 @@
+val load_range 0 cr=- cst=- pn=-
+val load_range 1 cr=i32:[3,8) cst=- pn=-
+val load_range 2 cr=i32:[4,9) cst=- pn=-
+rval load_range 2 cr=i32:[4,9)
+rval load_range 1 cr=i32:[3,8)
+use load_range 1 0 cr=i32:[3,8)
+use load_range 2 0 cr=i32:[4,9)
+lat load_range arg0 bb0 overdefined
+lat load_range i0 bb0 constantrange<3, 8>
+lat load_range i1 bb0 constantrange<4, 9>
+lat load_range i2 bb0 overdefined
+val load_range2 0 cr=- cst=- pn=-
+val load_range2 1 cr=i32:[3,30) cst=- pn=-
+val load_range2 2 cr=i32:[4,31) cst=- pn=-
+rval load_range2 2 cr=i32:[4,31)
+rval load_range2 1 cr=i32:[3,30)
+use load_range2 1 0 cr=i32:[3,30)
+use load_range2 2 0 cr=i32:[4,31)
+lat load_range2 arg0 bb0 overdefined
+lat load_range2 i0 bb0 constantrange<3, 30>
+lat load_range2 i1 bb0 constantrange<4, 31>
+lat load_range2 i2 bb0 overdefined
+val call_range 0 cr=i32:[5,10) cst=- pn=-
+val call_range 1 cr=i32:[0,3) cst=- pn=-
+val call_range 2 cr=i32:[5,12) cst=- pn=-
+rval call_range 2 cr=i32:[5,12)
+rval call_range 1 cr=i32:[0,3)
+rval call_range 0 cr=i32:[5,10)
+use call_range 2 0 cr=i32:[5,10)
+use call_range 2 1 cr=i32:[0,3)
+use call_range 3 0 cr=i32:[5,12)
+lat call_range i0 bb0 constantrange<5, 10>
+lat call_range i1 bb0 constantrange<0, 3>
+lat call_range i2 bb0 constantrange<5, 12>
+lat call_range i3 bb0 overdefined
+val call_md 0 cr=i32:[3,8) cst=- pn=-
+val call_md 1 cr=i32:[6,15) cst=- pn=-
+rval call_md 1 cr=i32:[6,15)
+rval call_md 0 cr=i32:[3,8)
+use call_md 1 0 cr=i32:[3,8)
+use call_md 2 0 cr=i32:[6,15)
+lat call_md i0 bb0 constantrange<3, 8>
+lat call_md i1 bb0 constantrange<6, 15>
+lat call_md i2 bb0 overdefined
+val arg_range 0 cr=i32:[3,9) cst=- pn=-
+val arg_range 1 cr=i8:[-4,4) cst=- pn=-
+val arg_range 2 cr=i32:[4,10) cst=- pn=-
+val arg_range 3 cr=i32:[-4,4) cst=- pn=-
+val arg_range 4 cr=i32:[0,13) cst=- pn=-
+rval arg_range 4 cr=i32:[0,13)
+rval arg_range 3 cr=i32:[-4,4)
+rval arg_range 2 cr=i32:[4,10)
+use arg_range 0 0 cr=i32:[3,9)
+use arg_range 1 0 cr=i8:[-4,4)
+use arg_range 2 0 cr=i32:[4,10)
+use arg_range 2 1 cr=i32:[-4,4)
+use arg_range 3 0 cr=i32:[0,13)
+lat arg_range arg0 bb0 constantrange<3, 9>
+lat arg_range arg1 bb0 constantrange<-4, 4>
+lat arg_range i0 bb0 constantrange<4, 10>
+lat arg_range i1 bb0 constantrange<-4, 4>
+lat arg_range i2 bb0 constantrange<0, 13>
+lat arg_range i3 bb0 overdefined
+val arg_range_edge 0 cr=i32:[0,100) cst=- pn=-
+val arg_range_edge 1 cr=i1:full-set cst=- pn=-
+val arg_range_edge 2 cr=i32:[1,11) cst=- pn=-
+val arg_range_edge 3 cr=i32:[0,90) cst=- pn=-
+rval arg_range_edge 3 cr=i32:[0,90)
+rval arg_range_edge 2 cr=i32:[1,11)
+rval arg_range_edge 1 cr=i1:full-set
+edge arg_range_edge 0 1 0 cr=i32:[0,10)
+edge arg_range_edge 0 2 0 cr=i32:[10,100)
+pred arg_range_edge 0 a=- b=-
+epred arg_range_edge 0 0 0 T
+epred arg_range_edge 0 1 0 F
+use arg_range_edge 0 0 cr=i32:[0,100)
+use arg_range_edge 1 0 cr=i1:full-set
+use arg_range_edge 2 0 cr=i32:[0,10)
+use arg_range_edge 3 0 cr=i32:[1,11)
+use arg_range_edge 4 0 cr=i32:[10,100)
+use arg_range_edge 5 0 cr=i32:[0,90)
+lat arg_range_edge arg0 bb0 constantrange<0, 100>
+lat arg_range_edge arg0 bb1 constantrange<0, 10>
+lat arg_range_edge arg0 bb2 constantrange<10, 100>
+lat arg_range_edge i0 bb0 overdefined
+lat arg_range_edge i0 bb1 constantrange<-1, 0>
+lat arg_range_edge i0 bb2 constantrange<0, -1>
+lat arg_range_edge i1 bb0 overdefined
+lat arg_range_edge i1 bb1 overdefined
+lat arg_range_edge i1 bb2 overdefined
+lat arg_range_edge i2 bb1 constantrange<1, 11>
+lat arg_range_edge i3 bb1 overdefined
+lat arg_range_edge i4 bb2 constantrange<0, 90>
+lat arg_range_edge i5 bb2 overdefined

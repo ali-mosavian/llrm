@@ -24,10 +24,18 @@ RUNTIME = qbruntime.RUNTIME
 # The OS layer's directory is the target's to say; the QB runtime's code for it sits beside it under runtime/qb.
 SHARED = Path(dosbatch.os_layer(TARGET, "directory", "c"))
 PLATFORM = RUNTIME / SHARED.parent.name / SHARED.name
-START_FILES = [str((PLATFORM / "qbstart.asm").relative_to(dosbatch.ROOT)), str((SHARED / "start.asm").relative_to(dosbatch.ROOT))]
+START_FILES = [str((PLATFORM / "start.asm").relative_to(dosbatch.ROOT)), str((SHARED / "start.asm").relative_to(dosbatch.ROOT))]
 
 
 OBJECTS = Path.home() / ".cache" / "llrm" / "qb32-objs"
+
+
+EXTENDER_NOTE = re.compile(rb"DOS/32A warning \(9003\): real mode interrupt vector has been modified: INT [0-9A-Fa-f]+h\r?\n")
+
+
+def without_extender_notes(output: bytes) -> bytes:
+    """`output` without DOS/32A's exit note that a program changed a real-mode interrupt vector (paint_queue sets INT 43h, the font pointer): the extender's line, not the program's."""
+    return EXTENDER_NOTE.sub(b"", output)
 
 
 def _stamp(*names: str) -> str:
@@ -121,15 +129,15 @@ def build(work: Path) -> dict[str, Path]:
     include = dosbatch.c_include(TARGET, work)
     made: dict[str, Path] = {}
     failures = []
-    tree, tools = _tree(), _stamp("llrm-c", "jwasm", "jwlink")
-    for source in sorted([*RUNTIME.glob("*.c"), *PLATFORM.glob("*.c"), *PLATFORM.glob("*.asm"), *(RUNTIME / "dos").glob("*.c")]):
-        if source.name == "qbstart.asm":
+    tree, tools = _tree(), _stamp(dosbatch.c_frontend(), "jwasm", "jwlink") + "|" + dosbatch.clang_identity()
+    for source in sorted([*RUNTIME.glob("*.c"), *qbruntime.platform_sources_of(PLATFORM)]):
+        if source.name == "start.asm":
             continue
         obj = work / f"{source.stem}.obj"
 
         def produce(source=source, obj=obj):
             if source.suffix == ".c":
-                dosbatch._host([str(dosbatch.BIN / "llrm-c"), str(source), dosbatch.m_flag(TARGET), "-Os", "-I", str(include), "-I", str(RUNTIME), "-I", str(PLATFORM), "-I", str(RUNTIME / "dos"), "-o", str(obj)])
+                dosbatch._host(*dosbatch.c_compile(source, obj, TARGET, "-Os", include, [], ["-I", str(RUNTIME), "-I", str(PLATFORM), *qbruntime.device_includes(PLATFORM)]))
             else:
                 dosbatch.assemble(source, obj)
 
@@ -194,13 +202,13 @@ def compile_basic(source: Path, obj: Path, flags: tuple[str, ...] = ("-O2",)) ->
 
 
 def _compile_basic(source: Path, obj: Path, flags: tuple[str, ...]) -> None:
-    done = dosbatch.subprocess.run([str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", dosbatch.m_flag(TARGET), *flags, "-o", str(obj)], capture_output=True, text=True)
+    done = dosbatch.subprocess.run(dosbatch.with_isel([str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", dosbatch.m_flag(TARGET), *flags, "-o", str(obj)]), capture_output=True, text=True)
     if done.returncode != 0:
         raise RuntimeError((done.stderr or done.stdout).strip()[-400:])
 
 
 def link(program: Path, objects: dict[str, Path], exe: Path, work: Path) -> tuple[Path, ...]:
-    return dosbatch.link_target(TARGET, program, exe, work, runtime=(START_FILES, []), objects_after=tuple(closure(program, objects)))
+    return dosbatch.link_target(TARGET, program, exe, work, runtime=(START_FILES, []), objects_after=tuple(closure(program, objects)), defines=dosbatch.os_defines(TARGET, "qb"))
 
 
 # Every dos32 run is on virtual time (the fork's `[cpu] virtual time`): the guest clock follows the instructions it
@@ -292,7 +300,7 @@ def flat_programs(names: list[str], work: Path) -> dict[str, str]:
                 found[name] = f"run: {results[job.stem].status}"
                 continue
             want = (dosbatch.ROOT / "tests" / "qbflat" / f"{name}.out").read_bytes()
-            got = qbruntime.raw_output(work / "run", job.stem)
+            got = without_extender_notes(qbruntime.raw_output(work / "run", job.stem))
             found[name] = qbruntime.first_byte_difference(want.replace(b"\r\n", b"\n"), got.replace(b"\r\n", b"\n"))
     return found
 

@@ -1,0 +1,17 @@
+f 0 getelementptr ptr gep[inbounds,nuw] i8 (ptr @g, i64 8)
+f 1 getelementptr ptr gep[inbounds,nuw] i8 (ptr @g, i64 8)
+f 2 getelementptr ptr @g
+f 3 getelementptr ptr gep[inbounds,nuw] i8 (ptr @g, i64 12)
+f 4 getelementptr ptr gep[inbounds,nuw] i8 (ptr @s, i64 18)
+f 5 getelementptr ptr inttoptr (i64 24)
+f 6 getelementptr ptr inttoptr (i64 50)
+f 7 getelementptr ptr gep[inbounds,nuw] i8 (ptr @g, i64 12)
+f 8 getelementptr ptr gep[] i8 (ptr @g, i64 18446744073709551612)
+f 9 getelementptr ptr gep[inbounds,nuw] i8 (ptr @w, i64 20)
+f 10 getelementptr ptr gep[inbounds,nuw] i8 (ptr @ext, i64 4)
+f 11 getelementptr ptr @ext
+f 12 getelementptr ptr inttoptr (i64 120)
+f 13 getelementptr ptr gep[inbounds,nuw] i8 (ptr @g, i64 4)
+f 14 getelementptr ptr addrspace(1) gep[inbounds,nuw] i8 (ptr addrspace(1) @g1, i32 4)
+f 15 getelementptr ptr @g
+f 16 getelementptr ptr poison

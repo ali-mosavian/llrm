@@ -8,8 +8,11 @@
 
 enum { PATH_MAX = 128, BSAVE_TYPE = 0xFD, BSAVE_HEADER = 7 };
 
-extern u16 b_seg;
 #pragma aux b_seg "b$seg"
+#pragma aux B_BLOD "B$BLOD"
+#pragma aux B_BSAV "B$BSAV"
+
+extern u16 b_seg;
 
 /* QB's number for what DOS refused with (messages.inc). */
 static unsigned os_error(long code)
@@ -108,6 +111,3 @@ void B_BSAV(SD *name, unsigned offset, unsigned short length)
     if (put < 0)
         qb_error(BE_DISKFULL);
 }
-
-#pragma aux B_BLOD "B$BLOD"
-#pragma aux B_BSAV "B$BSAV"

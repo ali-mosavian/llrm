@@ -2,17 +2,14 @@
 //! occupies (DOS/32A's zero-based low memory: the interrupt vectors, the video
 //! buffer, the BIOS ROM) reaches no variable.
 
-use std::process::Command;
+mod common;
 
 fn listing(source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(directory)
-        .args(["-m32", "-O2", "-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(directory).args(["-m32", "-O2", "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }

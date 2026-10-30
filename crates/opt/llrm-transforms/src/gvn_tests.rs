@@ -1,11 +1,12 @@
-//! `joined`'s PRE and the `Gvn` pass, each body MIR text run by llrm-mir's
+//! Scalar PRE and the `Gvn` pass, each body MIR text run by llrm-mir's
 //! interpreter before and after.
 
 use llrm_analysis::manager::Summaries;
 use llrm_mir::passes::PassManager;
 
-use super::{Gvn, joined};
-use crate::testing::{f, parsed, printed, results};
+use super::Gvn;
+use super::pass::run_impl_cfg;
+use crate::testing::{parsed, printed, results};
 
 const INPUTS: &[&[i128]] = &[&[0, 0, 0], &[3, 5, 1], &[-7, 2, 0], &[0x7fff, 1, 1]];
 
@@ -34,15 +35,19 @@ b3:
     )
 }
 
-/// `text` joined: its printed form, and whether anything changed. What
-/// `@f` returns is what it returned before.
+/// `text` run through the scalar pass (`pre` says whether PRE is on): its
+/// printed form, and whether anything changed. What `@f` returns is what it
+/// returned before.
 fn joined_once(
     text: &str,
-    insert: bool,
+    pre: bool,
 ) -> (String, bool) {
     let before = parsed(text);
     let mut module = before.clone();
-    let changed = joined(f(&mut module), insert).unwrap();
+    let layout = llrm_analysis::testing::layout(&module);
+    let outer = llrm_mir::passes::Outer::of(&module, None);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let changed = run_impl_cfg(context, &layout, function, &outer, pre, None).0;
     let text = printed(&module);
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{text}");
     (text, changed)
@@ -50,9 +55,9 @@ fn joined_once(
 
 fn kept(
     text: &str,
-    insert: bool,
+    pre: bool,
 ) {
-    let (after, changed) = joined_once(text, insert);
+    let (after, changed) = joined_once(text, pre);
     assert!(!changed);
     assert_eq!(after, printed(&parsed(text)));
 }
@@ -60,12 +65,9 @@ fn kept(
 #[test]
 fn test_providers_on_every_edge_become_a_phi() {
     let (text, changed) =
-        joined_once(&diamond("  %a = add i16 %x, %y\n", "  %b = add i16 %y, %x\n", "  %r = add i16 %x, %y\n"), false);
+        joined_once(&diamond("  %a = add i16 %x, %y\n", "  %b = add i16 %y, %x\n", "  %r = add i16 %x, %y\n"), true);
     assert!(changed);
-    assert!(
-        text.ends_with("b3:\n  %r.pre-phi = phi i16 [ %a, %b1 ], [ %b, %b2 ]\n  ret i16 %r.pre-phi\n}\n"),
-        "{text}"
-    );
+    assert!(text.contains("%r.pre-phi = phi i16 [ %b, %b2 ], [ %a, %b1 ]\n  ret i16 %r.pre-phi\n}\n"), "{text}");
 }
 
 #[test]
@@ -76,10 +78,11 @@ fn test_a_join_expression_translates_through_its_phis() {
             "  %b = mul i16 %y, 3\n",
             "  %p = phi i16 [ %x, %b1 ], [ %y, %b2 ]\n  %r = mul i16 %p, 3\n",
         ),
-        false,
+        true,
     );
     assert!(changed);
-    assert!(text.contains("  %r.pre-phi = phi i16 [ %a, %b1 ], [ %b, %b2 ]\n  ret i16 %r.pre-phi\n"), "{text}");
+    assert!(text.contains("  %r.pre-phi = phi i16 [ %b, %b2 ], [ %a, %b1 ]\n"), "{text}");
+    assert!(text.contains("  ret i16 %r.pre-phi\n"), "{text}");
 }
 
 #[test]
@@ -95,7 +98,7 @@ fn test_a_missing_provider_is_inserted_on_an_unconditional_edge() {
   br label %b3
 
 b3:
-  %r.pre-phi = phi i16 [ %a, %b1 ], [ %r.pre, %b2 ]
+  %r.pre-phi = phi i16 [ %r.pre, %b2 ], [ %a, %b1 ]
   ret i16 %r.pre-phi
 }
 "
@@ -104,13 +107,61 @@ b3:
     );
 }
 
-/// A divide by %y on the path that did not divide could trap there.
+/// A division is inserted on a path that did not divide: the edge is the
+/// join's only way in from there, so it divides on that path anyway.
 #[test]
-fn test_a_division_is_not_inserted_on_a_path_that_did_not_divide() {
-    let text = diamond("  %a = udiv i16 %x, %y\n", "", "  %r = udiv i16 %x, %y\n");
-    let mut module = parsed(&text);
-    assert!(!joined(f(&mut module), true).unwrap());
-    assert_eq!(printed(&module), printed(&parsed(&text)));
+fn test_a_division_is_inserted_on_an_edge_that_only_leads_to_it() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  %d = or i16 %y, 1
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = udiv i16 %x, %d
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %r = udiv i16 %x, %d
+  ret i16 %r
+}
+";
+    let (text, changed) = joined_once(text, true);
+    assert!(changed);
+    assert!(text.contains("b2:\n  %r.pre = udiv i16 %x, %d\n  br label %b3\n"), "{text}");
+}
+
+/// A call that may not return stands before the division in the join: the
+/// division is not always reached, so it is not inserted.
+#[test]
+fn test_a_division_after_a_call_that_may_not_return_is_not_inserted() {
+    let text = "define void @h() {
+b0:
+  ret void
+}
+
+define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  %d = or i16 %y, 1
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = udiv i16 %x, %d
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  call void @h()
+  %r = udiv i16 %x, %d
+  ret i16 %r
+}
+";
+    let (text, _) = joined_once(text, true);
+    assert!(!text.contains("%r.pre"), "{text}");
 }
 
 #[test]
@@ -119,14 +170,59 @@ fn test_no_provider_on_any_edge_leaves_the_join_alone() {
 }
 
 /// `x - y` on one edge and `y - x` on the other: the second edge has no
-/// provider.
+/// provider, so it gets its own copy.
 #[test]
 fn test_an_arm_computing_another_expression_serves_nothing() {
-    kept(&diamond("  %a = sub i16 %x, %y\n", "  %b = sub i16 %y, %x\n", "  %r = sub i16 %x, %y\n"), false);
+    let (text, _) =
+        joined_once(&diamond("  %a = sub i16 %x, %y\n", "  %b = sub i16 %y, %x\n", "  %r = sub i16 %x, %y\n"), true);
+    assert!(text.contains("  %r.pre = sub i16 %x, %y\n"), "{text}");
+    assert!(text.contains("%r.pre-phi = phi i16 [ %r.pre, %b2 ], [ %a, %b1 ]"), "{text}");
 }
 
-/// Inserting on the entry edge would hoist into the preheader what the
-/// latch computes; the latch, dominated by the header, serves nothing.
+/// The edge from b0 to b3 is critical: it is split on one pass, and the copy
+/// goes into the new block on the next.
+#[test]
+fn test_a_critical_edge_is_split_and_then_gets_the_copy() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b3
+
+b1:
+  %a = add i16 %x, %y
+  %d = icmp eq i16 %a, 0
+  br i1 %d, label %b2, label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %r = add i16 %x, %y
+  ret i16 %r
+}
+";
+    let (text, changed) = joined_once(text, true);
+    assert!(changed);
+    assert!(text.contains("%r.pre = add i16 %x, %y"), "{text}");
+    assert!(text.contains("%r.pre-phi = phi i16"), "{text}");
+}
+
+/// A compare is never made a phi: the phi would keep the code generator from
+/// sinking it to its branch.
+#[test]
+fn test_a_compare_computed_on_every_edge_is_not_made_a_phi() {
+    let (text, _) = joined_once(
+        &diamond(
+            "  %a = icmp eq i16 %x, %y\n  %a2 = zext i1 %a to i16\n",
+            "  %b = icmp eq i16 %y, %x\n  %b2 = zext i1 %b to i16\n",
+            "  %q = icmp eq i16 %x, %y\n  %r = zext i1 %q to i16\n",
+        ),
+        true,
+    );
+    assert!(!text.contains("%q.pre-phi"), "{text}");
+}
+
+/// Nothing is inserted on the entry edge: the header's other way in is a back
+/// edge, which PRE leaves alone. The latch's repeat is the header's value.
 #[test]
 fn test_a_loop_header_is_not_served_from_its_own_body() {
     let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
@@ -148,7 +244,8 @@ b3:
   ret i16 %r
 }
 ";
-    kept(text, true);
+    let (text, _) = joined_once(text, true);
+    assert!(!text.contains(".pre"), "{text}");
 }
 
 /// Numbering serves the dominated repeat; the join then takes a phi of
@@ -170,8 +267,40 @@ fn test_gvn_numbers_then_joins() {
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
     assert!(after.contains("  %s = add i16 %a, %a\n"), "{after}");
-    assert!(after.contains("  %r.pre-phi = phi i16 [ %a, %b1 ], [ %b, %b2 ]\n  ret i16 %r.pre-phi\n"), "{after}");
+    assert!(after.contains("  %r.pre-phi = phi i16 [ %b, %b2 ], [ %a, %b1 ]\n  ret i16 %r.pre-phi\n"), "{after}");
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS));
+}
+
+/// Forwarding the cell a loop stores its phi to leaves `phi [%p, entry],
+/// [%self, latch]`, which `simplifyInstruction` then makes `%p`.
+#[test]
+fn test_forwarding_a_loops_cell_to_its_phi_leaves_no_phi_of_itself() {
+    let text = "@g = global ptr null
+
+define i16 @f(ptr %p, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %q = phi ptr [ %p, %b0 ], [ %r, %b1 ]
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  store ptr %q, ptr @g
+  %r = load ptr, ptr @g
+  %j = add i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %j
+}
+";
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let after = printed(&module);
+    assert!(!after.contains("phi ptr"), "{after}");
 }
 
 /// Under the pass manager a load through a global is served across a
@@ -250,7 +379,7 @@ fn test_gvn_joins_the_values_each_arm_stored() {
         diamond("  store i16 %x, ptr @g\n", "  store i16 %y, ptr @g\n", "  %r = load i16, ptr @g\n")
     );
     assert!(
-        managed(&text).contains("b3:\n  %r1 = phi i16 [ %x, %b1 ], [ %y, %b2 ]\n  ret i16 %r1\n"),
+        managed(&text).contains("b3:\n  %r1 = phi i16 [ %y, %b2 ], [ %x, %b1 ]\n  ret i16 %r1\n"),
         "{}",
         managed(&text)
     );
@@ -258,80 +387,24 @@ fn test_gvn_joins_the_values_each_arm_stored() {
     assert_eq!(managed(&volatile), printed(&parsed(&volatile)));
 }
 
-/// `@x` loaded before a loop of `bound` trips and again after a store
-/// inside it, where serving the reload holds `%a` through a point that
-/// then spills. Priced at the conventional ten trips even when proven
-/// one, the reload was always served: a spill for one saved load. The
-/// registers are the target's; gvn used to ignore them. Where `%a` spills
-/// in the loop, each reload of it costs the load it saves.
+/// A call is unknown unless its attributes say what it touches, as for an LLVM
+/// function pass (it was the module summaries before): the load after a call
+/// that writes only its argument is the load before it, and after one that may
+/// write anything it is not. It panicked without `Summaries`.
 #[test]
-fn a_loop_of_proven_trips_prices_the_reload_it_serves() {
-    let text = |bound: &str| {
-        format!(
-            "@x = global i16 0
-@y = global i16 0
-@z = global i16 0
-
-define i16 @f(i16 %n, i16 %p) {{
-b0:
-  %a = load i16, ptr @x
-  store i16 %a, ptr @z
-  br label %b1
-
-b1:
-  %i = phi i16 [ 0, %b0 ], [ %i.next, %b2 ]
-  %more = icmp slt i16 %i, {bound}
-  br i1 %more, label %b2, label %b3
-
-b2:
-  %t1 = mul i16 %i, 3
-  %t2 = mul i16 %i, 5
-  %t3 = add i16 %t1, %t2
-  store i16 %t3, ptr @y
-  %b = load i16, ptr @x
-  store i16 %b, ptr @z
-  %i.next = add i16 %i, 1
-  br label %b1
-
-b3:
-  %q = mul i16 %p, %p
-  %r = add i16 %q, %p
-  ret i16 %r
-}}
-"
-        )
+fn a_call_is_unknown_unless_its_attributes_say_otherwise() {
+    let module = |attributes: &str| {
+        crate::testing::parsed(&format!(
+            "{}@g = global [64 x i8] zeroinitializer\n@k = global i16 0\ndefine void @h(ptr %s){attributes} {{\nb0:\n  store i16 9, ptr %s\n  ret void\n}}\n\ndefine i16 @f() {{\nb0:\n  %a = load i16, ptr @g\n  call void @h(ptr @k)\n  %b = load i16, ptr @g\n  %r = add i16 %a, %b\n  ret i16 %r\n}}\n",
+            llrm_analysis::testing::DOS,
+        ))
     };
-    let reloads = |bound: &str, registers: i64| {
-        let before = parsed(&text(bound));
-        let mut module = before.clone();
-        let mut manager = PassManager::default();
-        manager.require::<Summaries>();
-        manager.add(Gvn::default());
-        manager
-            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() }))
-            .unwrap();
-        let inputs: &[&[i128]] = &[&[0, 1], &[1, 2], &[5, 3]];
-        assert_eq!(results(&module, inputs), results(&before, inputs));
-        printed(&module).contains("%b = load i16, ptr @x")
-    };
-    assert!(reloads("1", 4));
-    assert!(!reloads("%n", 6), "room for %a: serving the reload saves a load per trip");
-}
-
-/// Without `Summaries` required the pass runs, as an LLVM function pass
-/// does without a cached outer result: every call unknown, so less
-/// precise. It panicked.
-#[test]
-fn a_bare_pass_manager_takes_every_call_for_unknown() {
-    let module = crate::testing::parsed(&format!(
-        "{}{}{}",
-        llrm_analysis::testing::DOS,
-        crate::testing::WRITES_ITS_ARGUMENT,
-        "define i16 @f() {\nb0:\n  %a = load i16, ptr @g\n  call void @h(ptr @k)\n  %b = load i16, ptr @g\n  %r = add i16 %a, %b\n  ret i16 %r\n}\n"
-    ));
-    let precise = crate::testing::summarized(&module, Gvn::default(), true, &[&[]]);
-    let bare = crate::testing::summarized(&module, Gvn::default(), false, &[&[]]);
-    assert!(precise.contains("%r = add i16 %a, %a") && !bare.contains("%r = add i16 %a, %a"), "{precise}\n{bare}");
+    let precise = crate::testing::summarized(&module(" memory(argmem: write)"), Gvn::default(), false, &[&[]]);
+    let unknown = crate::testing::summarized(&module(""), Gvn::default(), false, &[&[]]);
+    assert!(
+        precise.contains("%r = add i16 %a, %a") && !unknown.contains("%r = add i16 %a, %a"),
+        "{precise}\n{unknown}"
+    );
 }
 
 /// @e may call back into @f, so @h's summary took in @f's: the memset's
@@ -373,7 +446,8 @@ b0:
     manager.add(Gvn::default());
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let text = printed(&module);
-    assert!(text.contains("%y = zext i8 7 to i16"), "{text}");
+    // The load is the stored 7, and the widening of a constant is simplified.
+    assert!(text.contains("ret i16 7"), "{text}");
 }
 
 /// A view lent to @bump holds a pointer to %values; @bump reads it out
@@ -439,10 +513,11 @@ b4:
 }
 ",
     );
+    // The select and the widening are simplified on the way.
     assert!(
         after.contains("br i1 true, label %b2, label %b3")
-            && after.contains("select i1 true")
-            && after.contains("zext i1 false"),
+            && after.contains("b2:\n  ret i16 %y")
+            && after.contains("b4:\n  ret i16 0"),
         "{after}"
     );
 }
@@ -500,7 +575,8 @@ b0:
     manager.add(Gvn::default());
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
-    assert!(after.matches("inttoptr").count() == 1 && after.contains("load i16, ptr addrspace(1) %f1"), "{after}");
+    // One cast, and the load reads what the store wrote.
+    assert!(after.matches("inttoptr").count() == 1 && !after.contains("load i16, ptr addrspace(1)"), "{after}");
 }
 
 /// A load of what the language says is written once and never again is the
@@ -543,7 +619,7 @@ b0:
 fn test_a_store_at_a_fixed_address_keeps_a_global_loaded_before() {
     for (space, reloaded) in [(4, false), (1, true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 @g = global i16 0
 
@@ -574,7 +650,7 @@ b0:
 fn test_a_store_to_a_global_keeps_a_fixed_address_read_before() {
     for (space, reloaded) in [(4, false), (1, true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 @g = global i16 0
 
@@ -610,7 +686,7 @@ b0:
 fn test_a_noalias_result_is_apart_from_every_other_object() {
     for (attribute, reloaded) in [("noalias ", false), ("", true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 declare {attribute}ptr @make()
 
@@ -655,7 +731,7 @@ fn numbered(text: &str) -> String {
 fn test_a_volatile_store_elsewhere_keeps_a_global_loaded_before() {
     for (store, reloaded) in [("ptr addrspace(4) %dev", false), ("ptr @h", false), ("ptr addrspace(1) %far", true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 @g = global i16 0
 @h = global i8 0
@@ -680,7 +756,7 @@ b0:
 /// both stay, and a second volatile read is not the first's value.
 #[test]
 fn test_volatile_accesses_keep_their_order_and_count() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 define i16 @f(ptr addrspace(4) %dev) {
 b0:
@@ -740,7 +816,7 @@ fn a_pass_derives_the_shape_of_its_body_once_however_many_loops_it_has() {
 #[test]
 fn a_pass_takes_the_trip_counts_the_manager_proved() {
     // The check proves them again to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_COUNTED").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_COUNTED") {
         return;
     }
     let loops = 20;
@@ -765,34 +841,6 @@ fn a_pass_takes_the_trip_counts_the_manager_proved() {
     assert!(proved <= loops, "{proved} loops proved for one pass over a body of {loops} loops");
 }
 
-/// A function numbered twice walks once (the walk does not depend on
-/// `avoid_store_crossing`).
-#[test]
-fn a_function_numbered_twice_walks_once() {
-    let text = "@x = global i16 0
-@y = global i16 0
-
-define i16 @f(i16 %p) {
-b0:
-  %a = load i16, ptr @x
-  store i16 %p, ptr @y
-  %b = load i16, ptr @x
-  %r = add i16 %a, %b
-  ret i16 %r
-}
-";
-    let mut module = parsed(text);
-    let mut manager = PassManager::default();
-    manager.require::<Summaries>();
-    manager.add(Gvn::default());
-    let (walked, numbered) = (llrm_analysis::avail::walked(), super::numberings());
-    manager
-        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 1, ..Default::default() }))
-        .unwrap();
-    assert_eq!(super::numberings() - numbered, 2, "the function is numbered both ways");
-    assert_eq!(llrm_analysis::avail::walked() - walked, 1, "the walk ran again for the second numbering");
-}
-
 /// The walk forwards a stored value to its load.
 #[test]
 fn the_walk_alone_forwards_a_stored_value_to_its_load() {
@@ -812,81 +860,6 @@ b0:
     manager.add(Gvn::default());
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     assert!(printed(&module).contains("  store i16 %x, ptr @g\n  ret i16 %x\n"), "{}", printed(&module));
-}
-
-/// A function numbered both ways (crossing stores and not) and priced twice,
-/// 4067 times over QCport and the programs at -O2: 72% of them priced alike and
-/// the second won 2.3%. The ways differ only where a load is served across a
-/// store; where none is, the second numbering is the first and is neither made
-/// nor priced.
-#[test]
-fn test_a_function_with_no_load_served_across_a_store_is_numbered_once() {
-    let numberings = |text: &str, registers: i64| {
-        let mut module = parsed(text);
-        let mut manager = PassManager::default();
-        manager.require::<Summaries>();
-        manager.add(Gvn::default());
-        let before = super::numberings();
-        manager
-            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() }))
-            .unwrap();
-        super::numberings() - before
-    };
-    let plain = "@x = global i16 0
-@z = global i16 0
-
-define i16 @f(i16 %p) {
-b0:
-  %a = load i16, ptr @x
-  %b = load i16, ptr @x
-  %r = add i16 %a, %b
-  store i16 %r, ptr @z
-  ret i16 %r
-}
-";
-    let across = "@x = global i16 0
-@y = global i16 0
-
-define i16 @f(i16 %p) {
-b0:
-  %a = load i16, ptr @x
-  store i16 %p, ptr @y
-  %b = load i16, ptr @x
-  %r = add i16 %a, %b
-  ret i16 %r
-}
-";
-    assert_eq!(numberings(plain, 6), 1, "the second numbering is the first");
-    assert_eq!(numberings(across, 1), 2, "a load served across a store is numbered both ways where crossing spills");
-}
-
-/// Crossing the store is dearer only through the registers it holds a value in:
-/// where the function fits its registers everywhere, the careful numbering
-/// (which keeps the load) can only cost more work, and is not made or priced.
-/// The forecast it needed was 40% of gvn on a 2048-statement function.
-#[test]
-fn a_load_served_across_a_store_is_numbered_once_where_crossing_spills_nothing() {
-    let across = "@x = global i16 0
-@y = global i16 0
-
-define i16 @f(i16 %p) {
-b0:
-  %a = load i16, ptr @x
-  store i16 %p, ptr @y
-  %b = load i16, ptr @x
-  %r = add i16 %a, %b
-  ret i16 %r
-}
-";
-    let mut module = parsed(across);
-    let mut manager = PassManager::default();
-    manager.require::<Summaries>();
-    manager.add(Gvn::default());
-    let before = super::numberings();
-    manager
-        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
-        .unwrap();
-    assert_eq!(super::numberings() - before, 1);
 }
 
 /// The three kinds of load the deleted availability map forwarded and the
@@ -1007,7 +980,7 @@ b0:
 #[test]
 fn test_two_equal_calls_are_one_before_tail_recursion_makes_a_loop_of_one() {
     use super::EqualCalls;
-    use crate::tailrec::TailRecursion;
+    use crate::tailcallelim::TailCallElim;
     let text = "define internal i32 @h(i32 %n) memory(none) {
 b0:
   %z = icmp eq i32 %n, 0
@@ -1030,7 +1003,7 @@ b2:
         if merge {
             manager.add(EqualCalls);
         }
-        manager.add(TailRecursion);
+        manager.add(TailCallElim);
         manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
         printed(&module)
     };
@@ -1049,6 +1022,7 @@ fn without_pre_a_load_a_dominator_holds_is_still_served() {
     let reloaded = "define i16 @f(i16 %x, i16 %y, i1 %c) {
 b0:
   %first = load i16, ptr @g
+  %kept = add i16 %first, 1
   br i1 %c, label %b1, label %b2
 
 b1:
@@ -1060,7 +1034,8 @@ b2:
 
 b3:
   %r = add i16 %first, 1
-  ret i16 %r
+  %s = add i16 %r, %kept
+  ret i16 %s
 }
 ";
     let after = managed_with(
@@ -1160,28 +1135,117 @@ b0:
 "
         );
         let after = numbered(&text);
-        assert_eq!(after.matches("load i16, ptr %qq").count() == 2, reloaded, "{both}\n{after}");
+        // Told of one only, `%qq` is `%q` itself: the zero GEP is simplified.
+        let read = if both { "load i16, ptr %qq" } else { "load i16, ptr %q" };
+        assert_eq!(after.matches(read).count() == 2, reloaded, "{both}\n{after}");
     }
 }
 
-/// One register short of room for the reload's provider, crossing the store
-/// spills and the careful numbering is made and priced. Its price cannot be
-/// less than its work, yet it was forecast for spills (a whole-function
-/// forecast; skipping it takes 61 M off the 3,540 M d_faces -O2 compile) though
-/// that work alone is already past what crossing costs. The answer is the same,
-/// and one forecast is made, not two.
+/// Two loads of one cell are one load once the pass has run, and the two
+/// products of them one product: the scalar pass runs over what load numbering
+/// merged. Run only before it, the products stayed two, and a later pass saw no
+/// square (x_primes -O2 +4% clocks).
 #[test]
-fn a_numbering_dearer_in_work_than_the_crossing_one_is_not_forecast_for_spills() {
-    let text = "@x = global i16 0\n@y = global i16 0\n@z = global i16 0\n\ndefine i16 @f(i16 %n, i16 %p) {\nb0:\n  %a = load i16, ptr @x\n  store i16 %a, ptr @z\n  br label %b1\n\nb1:\n  %i = phi i16 [ 0, %b0 ], [ %i.next, %b2 ]\n  %more = icmp slt i16 %i, %n\n  br i1 %more, label %b2, label %b3\n\nb2:\n  %t1 = mul i16 %i, 3\n  %t2 = mul i16 %i, 5\n  %t3 = add i16 %t1, %t2\n  store i16 %t3, ptr @y\n  %b = load i16, ptr @x\n  store i16 %b, ptr @z\n  %i.next = add i16 %i, 1\n  br label %b1\n\nb3:\n  %q = mul i16 %p, %p\n  %r = add i16 %q, %p\n  ret i16 %r\n}\n";
+fn a_product_of_two_loads_of_one_cell_is_one_with_a_product_of_the_same() {
+    let text = "define i16 @f(ptr %p) {
+b0:
+  %a = load i16, ptr %p
+  %b = load i16, ptr %p
+  %m = mul i16 %a, %b
+  %c = load i16, ptr %p
+  %d = load i16, ptr %p
+  %n = mul i16 %c, %d
+  %r = sub i16 %m, %n
+  ret i16 %r
+}
+";
     let mut module = parsed(text);
     let mut manager = PassManager::default();
+    manager.verify_each = true;
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    crate::profit::PRICED.with(|count| count.set((0, 0)));
-    manager
-        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 5, ..Default::default() }))
-        .unwrap();
-    let (_, forecasts) = crate::profit::PRICED.with(std::cell::Cell::get);
-    assert!(!printed(&module).contains("%b = load i16, ptr @x"), "the reload is served");
-    assert_eq!(forecasts, 1, "{forecasts} whole-function forecasts for the two numberings");
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let after = printed(&module);
+    assert_eq!(after.matches("mul i16").count(), 1, "{after}");
+}
+
+/// hanoi.bas at -O2 (every BASIC front end, +2% to +4% instructions): the
+/// second load of the by-reference `%0` is the first, and so the second
+/// `sub` is the first, only if the numbering that merges the loads is priced
+/// with the arithmetic merged too. Priced without, the careful numbering won
+/// and the load stayed.
+#[test]
+fn a_load_served_across_a_call_is_priced_with_the_arithmetic_it_merges() {
+    let text = "declare i16 @hanoi(ptr nocapture readonly, ptr nocapture readnone) memory(argmem: read)
+
+define i16 @f(ptr nocapture readonly %p, ptr nocapture readnone %q) memory(argmem: read) {
+b1:
+  %a = alloca i16
+  %b = alloca i16
+  %c = alloca i16
+  %n = load i16, ptr %p
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b2, label %b3
+
+b2:
+  store i16 0, ptr %c
+  br label %b5
+
+b3:
+  %l1 = load i16, ptr %p
+  %s1 = sub i16 %l1, 1
+  store i16 %s1, ptr %a
+  %r1 = call i16 @hanoi(ptr %a, ptr %q)
+  %t1 = add i16 %r1, 1
+  %l2 = load i16, ptr %p
+  %s2 = sub i16 %l2, 1
+  store i16 %s2, ptr %b
+  %r2 = call i16 @hanoi(ptr %b, ptr %q)
+  %t2 = add i16 %t1, %r2
+  store i16 %t2, ptr %c
+  br label %b5
+
+b5:
+  %v = load i16, ptr %c
+  ret i16 %v
+}
+";
+    for registers in 1..=8 {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        manager.verify_each = true;
+        manager.require::<Summaries>();
+        manager.add(Gvn::default());
+        manager
+            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() }))
+            .unwrap();
+        let after = printed(&module);
+        assert_eq!(after.matches("load i16, ptr %p").count(), 1, "{registers} registers\n{after}");
+    }
+}
+
+/// A min/max of two constants a load forwarded folds in the same pass (`opt`
+/// agrees): `process_instruction` asked `simplifyInstruction` of binary
+/// operators, compares, selects and casts only, so a `umax` the select
+/// canonicalization made kept its call and the pointer selects behind it
+/// stayed (borrow_puzzles.nib -Os +25 B).
+#[test]
+fn test_an_intrinsic_of_forwarded_constants_folds() {
+    let after = managed(
+        "declare i16 @llvm.umax.i16(i16, i16)\n\ndefine i16 @f() {\nb0:\n  %a = alloca i16\n  store i16 5, ptr %a\n  %x = load i16, ptr %a\n  %m = call i16 @llvm.umax.i16(i16 %x, i16 4)\n  ret i16 %m\n}\n",
+    );
+    assert!(after.contains("ret i16 5") && !after.contains("call i16 @llvm.umax"), "{after}");
+}
+
+/// `object_of` walked an alloca's uses at every access asked of it, since the
+/// pass did not hand it the exposed frames: matmul -O2 made 133 M instructions
+/// in GVN against the pin's 18 M, 12 walks here for 3 locals. The walks are
+/// the frames', not the accesses'.
+#[test]
+fn the_uses_of_a_local_are_walked_once_however_many_accesses_ask() {
+    let mut module = parsed(include_str!("../tests/fixtures/gvn_matmul_loops.ll"));
+    let before = llrm_analysis::frameescape::scans();
+    crate::testing::managed(&mut module, Gvn::default());
+    let walks = llrm_analysis::frameescape::scans() - before;
+    assert!(walks <= 3, "{walks} walks for 3 locals");
 }

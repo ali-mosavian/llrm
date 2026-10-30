@@ -107,7 +107,7 @@
 //! [`crate::ranges`], [`crate::alias`], [`crate::peelsize`],
 //! [`crate::difference`], [`crate::guards`], [`crate::floatfacts`], and in
 //! llrm-transforms `indvars`, `lsr`, `loopexit`, `peel`, `unroll`,
-//! `unroll_jam`, `rotate`, `decide`, `hoist`, `expand`, `exitfold`, `counting`,
+//! `rotate`, `decide`, `hoist`, `expand`, `exitfold`, `counting`,
 //! `window`, `loopidioms`, `floatloop`.
 //!
 //! # Needs
@@ -330,6 +330,21 @@ fn _descending(test: IntPredicate) -> bool {
     )
 }
 
+/// The test of the stepped counter that holds where the unstepped counter
+/// passes `test` against the same bound, for a step of one.
+fn _after_step(
+    test: IntPredicate,
+    step: &BigInt,
+) -> Option<IntPredicate> {
+    match (test, step > &BigInt::from(0)) {
+        (IntPredicate::Slt, true) => Some(IntPredicate::Sle),
+        (IntPredicate::Ult, true) => Some(IntPredicate::Ule),
+        (IntPredicate::Sgt, false) => Some(IntPredicate::Sge),
+        (IntPredicate::Ugt, false) => Some(IntPredicate::Uge),
+        _ => None,
+    }
+}
+
 fn _inclusive(test: IntPredicate) -> bool {
     matches!(
         test,
@@ -514,7 +529,7 @@ fn _control(
     // A latch that only jumps on, split from a critical edge, is the end of
     // the block that branches to it: that block is tested after its trip.
     let forwarded = (latch.succ.as_slice() == [header.at]).then(|| {
-        let only = function.block(cfg::block(latch.at)).instructions();
+        let only = function.block(cfg::block(latch.at));
         let preds =
             function.predecessors(cfg::block(latch.at)).into_iter().map(|at| block_of(cfg::id(at))).collect::<Vec<_>>();
         match (only.len(), &preds[..]) {
@@ -532,7 +547,7 @@ fn _control(
     // The latch jumps back and only the header branches to it: the header holds
     // the trip.
     let header_holds_trip = latch.succ.as_slice() == [header.at]
-        && function.block(cfg::block(latch.at)).instructions().len() == 1
+        && function.block(cfg::block(latch.at)).len() == 1
         && header.succ.len() == 2
         && header.succ.contains(&latch.at)
         && function.predecessors(cfg::block(latch.at)).len() == 1;
@@ -862,6 +877,50 @@ fn _proven(
             }
         }
     }
+    // A wide counter tested through a truncation, which equality sees as the
+    // narrow counter of the same low bits: LSR keeps the wide value a store
+    // reads and tests `trunc(i + 1) == 20000`. Only a loop tested at its
+    // latch, for equality, so no wrap promise of the wide step is read.
+    let mut narrow: llrm_mir::dense::IdMap<ValueId, bool> = llrm_mir::dense::IdMap::new();
+    if shape.posttested && continuing == IntPredicate::Ne {
+        for (counter, source) in counters.clone() {
+            let Some(phi) = defining(function, source).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+            else {
+                continue;
+            };
+            let Some(Operand::Value(update)) = incoming(function, phi, cfg::block(latch)) else { continue };
+            let (AffineOperand::Const(start), AffineOperand::Const(step)) = (&counter.start, &counter.step) else {
+                continue;
+            };
+            if counter.value != source {
+                continue;
+            }
+            for (of, stepped) in [(source, false), (update, true)] {
+                for one in function.users(of) {
+                    let user = function.instruction(one.user);
+                    let Some(result) = user.result.filter(|_| user.opcode == Opcode::Cast(CastOp::Trunc)) else {
+                        continue;
+                    };
+                    let Some(width) = unit.int_bits(Operand::Value(result)).filter(|&width| width < start.width) else {
+                        continue;
+                    };
+                    if !function.parent(one.user).is_some_and(|block| inside.contains(&cfg::id(block))) {
+                        continue;
+                    }
+                    narrow.insert(result, stepped);
+                    counters.push((
+                        Affine {
+                            value: result,
+                            start: AffineOperand::constant(start.n.clone(), width),
+                            step: AffineOperand::constant(step.n.clone(), width),
+                            header: counter.header,
+                        },
+                        source,
+                    ));
+                }
+            }
+        }
+    }
     let mut proven = Vec::new();
     for (counter, source) in &counters {
         let Some(phi) = defining(function, *source).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
@@ -869,12 +928,13 @@ fn _proven(
             continue;
         };
         let Some(Operand::Value(update)) = incoming(function, phi, cfg::block(latch)) else { continue };
-        let mut tested = BTreeMap::from([(counter.value, false)]);
-        if shape.posttested {
+        let narrowed = narrow.get(&counter.value).copied();
+        let mut tested = BTreeMap::from([(counter.value, narrowed.unwrap_or(false))]);
+        if shape.posttested && narrowed.is_none() {
             tested.insert(update, true);
         }
         let Some((width, bound, mirrored, stepped)) = _compared(unit, icmp, &tested) else { continue };
-        let test = if mirrored { continuing.swapped() } else { continuing };
+        let mut test = if mirrored { continuing.swapped() } else { continuing };
         let Some(step) = _signed(&counter.step, facts, counter.start.width()) else { continue };
         if step == BigInt::from(0) || width != counter.start.width() {
             continue;
@@ -884,6 +944,9 @@ fn _proven(
             &bound,
             AffineOperand::Value(value, _) if !still.contains(*value)
         ) {
+            continue;
+        }
+        if narrowed.is_some() && test != IntPredicate::Ne {
             continue;
         }
         let zero = BigInt::from(0);
@@ -918,6 +981,30 @@ fn _proven(
                 bound = AffineOperand::constant(masked(&moved, width), width);
                 (stepped, shifted) = (true, true);
             }
+        } else if shape.posttested
+            && !stepped
+            && function.parent(branch) == Some(cfg::block(latch))
+            && abs(&step) == BigInt::from(1)
+            && let Some(inclusive) = _after_step(test, &step)
+            && _promised(function, update, &step, _unsigned(test), _signed(&counter.start, facts, width).as_ref())
+        {
+            // A bound that is no constant stays: `i < b` before the step is
+            // `i + 1 <= b` after it, when the step does not wrap.
+            test = inclusive;
+            (stepped, shifted) = (true, true);
+        }
+        // The same against `x - step`: `i < x - 1` before a step of 1 is the
+        // stepped counter `< x`. The subtract must not wrap in the test's
+        // signedness, or `x` is not one step on from the bound.
+        if shape.posttested
+            && !stepped
+            && test != IntPredicate::Ne
+            && function.parent(branch) == Some(cfg::block(latch))
+            && let AffineOperand::Value(value, _) = &bound
+            && let Some(on) = _one_step_on(unit, *value, &step, _unsigned(test), width)
+            && _promised(function, update, &step, _unsigned(test), _signed(&counter.start, facts, width).as_ref())
+        {
+            (bound, stepped, shifted) = (on, true, true);
         }
         let start = counter.start.clone();
         let limit = _constant(&bound, facts, width);
@@ -940,6 +1027,7 @@ fn _proven(
         // equal.
         let mut equal = start.clone();
         if count.is_none()
+            && narrowed.is_none()
             && let Some((entry, rewinds)) = _carried(unit, loop_, &start, *source, update, width)
             && let (entered, Some(trips)) = counted_from(&entry)
             && rewinds.iter().all(|(stepped_root, offset)| {
@@ -1087,7 +1175,26 @@ fn _entered(
             root.map_or(number.clone(), |root| Scev::unknown(root, width).plus(&number))
         };
         let (start, bound) = (rooted(value), rooted(limit));
-        return guards().iter().any(|guard| crate::guards::implies_at_offset(guard, test, &start, &bound));
+        // A guard on a value that is a root and a constant (`n - 1 >= 0`) is
+        // read in the same terms.
+        let rooted_guard = |guard: &crate::guards::Guard| {
+            let side = |one: &Scev| -> Option<Scev> {
+                let [(product, factor)] = one.terms.iter().collect::<Vec<_>>()[..] else { return None };
+                let value =
+                    product.single().filter(|_| *factor == BigInt::from(1) && one.constant == BigInt::from(0))?;
+                Some(rooted(&AffineOperand::Value(value, width)))
+            };
+            Some(crate::guards::Guard {
+                predicate: guard.predicate,
+                left: side(&guard.left)?,
+                right: guard.right.clone(),
+            })
+        };
+        return guards().iter().any(|guard| crate::guards::implies_at_offset(guard, test, &start, &bound))
+            || guards().iter().any(|guard| {
+                rooted_guard(guard)
+                    .is_some_and(|rooted| crate::guards::implies_at_rooted_offset(&rooted, test, &start, &bound))
+            });
     }
     // Only an equality test reads the guards at an offset (`a != 1` proves `a -
     // 1 != 0`), and only where the ones above do not prove it as they
@@ -1242,8 +1349,8 @@ pub fn exits(
     // Those the latch follows are in a chain: each dominates the next.
     exiting.sort_by_key(|&at| {
         (
-            !shape.dominance.dominates(at, latch),
-            inside.iter().filter(|&&other| shape.dominance.dominates(other, at)).count(),
+            !shape.dominance.dominates(unit.function, at, latch),
+            inside.iter().filter(|&&other| shape.dominance.dominates(unit.function, other, at)).count(),
         )
     });
     exiting
@@ -1262,7 +1369,7 @@ pub fn exits(
             else {
                 return found;
             };
-            if !shape.dominance.dominates(at, latch) {
+            if !shape.dominance.dominates(unit.function, at, latch) {
                 return found;
             }
             let shaped = |posttested: bool| _Control {
@@ -1470,6 +1577,34 @@ fn _compared(
 /// without a signed wrap stays in `0 ..= signed max`, where a signed sum is the
 /// unsigned one: `nsw` there is `nuw` too, as LLVM's SCEV infers it. `start` is
 /// the counter's signed start where known.
+/// `x` where `value` is `x - step` and the difference does not wrap in the
+/// test's signedness: the bound one step on.
+fn _one_step_on(
+    unit: &Unit,
+    value: ValueId,
+    step: &BigInt,
+    unsigned: bool,
+    width: u32,
+) -> Option<AffineOperand> {
+    let function = unit.function;
+    let op = function.instruction(defining(function, value)?);
+    let stated = llrm_mir::facts::Facts::of_flags(op.flags);
+    let no_wrap = if unsigned { stated.no_unsigned_wrap() } else { stated.no_signed_wrap() };
+    let (Operand::Value(base), offset) = (op.operands.first().copied()?, unit.int_constant(*op.operands.get(1)?)?)
+    else {
+        return None;
+    };
+    let offset = BigInt::from(offset);
+    let offset = if unsigned { offset } else { _signed_value(&offset, width) };
+    let wanted = match op.opcode {
+        Opcode::Binary(BinaryOp::Add) => -step,
+        Opcode::Binary(BinaryOp::Sub) => step.clone(),
+        _ => return None,
+    };
+    let wanted = if unsigned { mod_floor(&wanted, &(BigInt::from(1) << width)) } else { _signed_value(&wanted, width) };
+    (no_wrap && offset == wanted).then(|| AffineOperand::Value(base, width))
+}
+
 fn _promised(
     function: &Function,
     update: ValueId,
@@ -1968,8 +2103,8 @@ fn accesses<'a>(
     loop_
         .body
         .iter()
-        .filter(move |at| latch.is_some_and(|latch| shape.dominance.dominates(**at, latch)))
-        .flat_map(|&at| unit.function.block(cfg::block(at)).instructions().iter().map(move |&inst| (at, inst)))
+        .filter(move |at| latch.is_some_and(|latch| shape.dominance.dominates(unit.function, **at, latch)))
+        .flat_map(|&at| unit.function.iter_block(cfg::block(at)).map(move |inst| (at, inst)))
         .filter_map(|(at, inst)| Some((at, MemRef::of(unit, inst)?)))
         .filter(|(_, reference)| reference.inbounds)
 }
@@ -2225,7 +2360,7 @@ pub fn basics(
     // are not `phi + step`, with their start and what they take round.
     let mut backs: Vec<(ValueId, ValueId)> = Vec::new();
     let mut derived: Vec<(ValueId, AffineOperand, ValueId)> = Vec::new();
-    for &inst in function.block(header).instructions() {
+    for inst in function.iter_block(header) {
         let phi = function.instruction(inst);
         if phi.opcode != Opcode::Phi {
             break;
@@ -2367,7 +2502,7 @@ pub fn followers(
         if !llrm_mir::facts::Facts::of_flags(function.instruction(update).flags).no_signed_wrap() {
             continue;
         }
-        for &inst in function.block(header).instructions() {
+        for inst in function.iter_block(header) {
             let phi = function.instruction(inst);
             if phi.opcode != Opcode::Phi {
                 break;
@@ -2425,7 +2560,7 @@ pub fn pointers(
     if !function.is_placed(header) {
         return out;
     }
-    for &inst in function.block(header).instructions() {
+    for inst in function.iter_block(header) {
         let phi = function.instruction(inst);
         if phi.opcode != Opcode::Phi {
             break;
@@ -2519,7 +2654,7 @@ pub fn control_replacement<'a>(
         return None;
     }
     let (header, latch) = (cfg::block(loop_.header), cfg::block(proof.latch));
-    let first = function.block(latch).instructions().first().map(|&one| &function.instruction(one).opcode);
+    let first = function.block(latch).first().map(|one| &function.instruction(one).opcode);
     if loop_.body.len() != 2
         || proof.entered != proof.latch
         || first == Some(&Opcode::Phi)
@@ -2528,11 +2663,9 @@ pub fn control_replacement<'a>(
         return None;
     }
     let tests_only = function
-        .block(header)
-        .instructions()
-        .iter()
+        .iter_block(header)
         .all(
-            |&inst| inst == proof.compare
+            |inst| inst == proof.compare
                 || inst == proof.branch
                 || matches!(
                     function.instruction(inst).opcode,

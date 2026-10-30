@@ -1,0 +1,357 @@
+val and_cond 0 cr=i32:full-set cst=- pn=-
+val and_cond 1 cr=i1:full-set cst=- pn=-
+val and_cond 2 cr=i1:full-set cst=- pn=-
+val and_cond 3 cr=i1:full-set cst=- pn=-
+val and_cond 4 cr=i32:[7,51) cst=- pn=-
+val and_cond 5 cr=i32:[52,8) cst=- pn=-
+rval and_cond 5 cr=i32:[52,8)
+rval and_cond 4 cr=i32:[7,51)
+rval and_cond 3 cr=i1:full-set
+rval and_cond 2 cr=i1:full-set
+rval and_cond 1 cr=i1:full-set
+edge and_cond 0 1 0 cr=i32:[6,50)
+edge and_cond 0 2 0 cr=i32:[50,6)
+pred and_cond 0 a=- b=-
+pred and_cond 1 a=- b=-
+use and_cond 0 0 cr=i32:full-set
+use and_cond 1 0 cr=i32:full-set
+use and_cond 2 0 cr=i1:full-set
+use and_cond 2 1 cr=i1:full-set
+use and_cond 3 0 cr=i1:full-set
+use and_cond 4 0 cr=i32:[6,50)
+use and_cond 5 0 cr=i32:[7,51)
+use and_cond 6 0 cr=i32:[50,6)
+use and_cond 7 0 cr=i32:[52,8)
+lat and_cond arg0 bb0 overdefined
+lat and_cond arg0 bb1 constantrange<6, 50>
+lat and_cond arg0 bb2 constantrange<50, 6>
+lat and_cond i0 bb0 overdefined
+lat and_cond i0 bb1 overdefined
+lat and_cond i0 bb2 overdefined
+lat and_cond i1 bb0 overdefined
+lat and_cond i1 bb1 overdefined
+lat and_cond i1 bb2 overdefined
+lat and_cond i2 bb0 overdefined
+lat and_cond i2 bb1 constantrange<-1, 0>
+lat and_cond i2 bb2 constantrange<0, -1>
+lat and_cond i3 bb0 overdefined
+lat and_cond i3 bb1 overdefined
+lat and_cond i3 bb2 overdefined
+lat and_cond i4 bb1 constantrange<7, 51>
+lat and_cond i5 bb1 overdefined
+lat and_cond i6 bb2 constantrange<52, 8>
+lat and_cond i7 bb2 overdefined
+val or_cond 0 cr=i32:full-set cst=- pn=-
+val or_cond 1 cr=i1:full-set cst=- pn=-
+val or_cond 2 cr=i1:full-set cst=- pn=-
+val or_cond 3 cr=i1:full-set cst=- pn=-
+val or_cond 4 cr=i32:[52,6) cst=- pn=-
+val or_cond 5 cr=i32:[7,53) cst=- pn=-
+rval or_cond 5 cr=i32:[7,53)
+rval or_cond 4 cr=i32:[52,6)
+rval or_cond 3 cr=i1:full-set
+rval or_cond 2 cr=i1:full-set
+rval or_cond 1 cr=i1:full-set
+edge or_cond 0 1 0 cr=i32:[51,5)
+edge or_cond 0 2 0 cr=i32:[5,51)
+pred or_cond 0 a=- b=-
+pred or_cond 1 a=- b=-
+use or_cond 0 0 cr=i32:full-set
+use or_cond 1 0 cr=i32:full-set
+use or_cond 2 0 cr=i1:full-set
+use or_cond 2 1 cr=i1:full-set
+use or_cond 3 0 cr=i1:full-set
+use or_cond 4 0 cr=i32:[51,5)
+use or_cond 5 0 cr=i32:[52,6)
+use or_cond 6 0 cr=i32:[5,51)
+use or_cond 7 0 cr=i32:[7,53)
+lat or_cond arg0 bb0 overdefined
+lat or_cond arg0 bb1 constantrange<51, 5>
+lat or_cond arg0 bb2 constantrange<5, 51>
+lat or_cond i0 bb0 overdefined
+lat or_cond i0 bb1 overdefined
+lat or_cond i0 bb2 overdefined
+lat or_cond i1 bb0 overdefined
+lat or_cond i1 bb1 overdefined
+lat or_cond i1 bb2 overdefined
+lat or_cond i2 bb0 overdefined
+lat or_cond i2 bb1 constantrange<-1, 0>
+lat or_cond i2 bb2 constantrange<0, -1>
+lat or_cond i3 bb0 overdefined
+lat or_cond i3 bb1 overdefined
+lat or_cond i3 bb2 overdefined
+lat or_cond i4 bb1 constantrange<52, 6>
+lat or_cond i5 bb1 overdefined
+lat or_cond i6 bb2 constantrange<7, 53>
+lat or_cond i7 bb2 overdefined
+val logical 0 cr=i32:full-set cst=- pn=-
+val logical 1 cr=i1:full-set cst=- pn=-
+val logical 2 cr=i1:full-set cst=- pn=-
+val logical 3 cr=i1:full-set cst=- pn=-
+val logical 4 cr=i32:[2,101) cst=- pn=-
+val logical 5 cr=i1:full-set cst=- pn=-
+rval logical 5 cr=i1:full-set
+rval logical 4 cr=i32:[2,101)
+rval logical 3 cr=i1:full-set
+rval logical 2 cr=i1:full-set
+rval logical 1 cr=i1:full-set
+edge logical 0 1 0 cr=i32:[1,100)
+edge logical 0 2 1 cr=i1:full-set
+edge logical 0 2 2 cr=i1:full-set
+edge logical 2 3 0 cr=i32:[100,1)
+pred logical 0 a=- b=-
+pred logical 1 a=- b=-
+use logical 0 0 cr=i32:full-set
+use logical 1 0 cr=i32:full-set
+use logical 2 0 cr=i1:full-set
+use logical 2 1 cr=i1:full-set
+use logical 3 0 cr=i1:full-set
+use logical 4 0 cr=i32:[1,100)
+use logical 5 0 cr=i32:[2,101)
+use logical 6 0 cr=i1:full-set
+use logical 6 2 cr=i1:full-set
+use logical 7 0 cr=i1:full-set
+use logical 8 0 cr=i32:[100,1)
+lat logical arg0 bb0 overdefined
+lat logical arg0 bb1 constantrange<1, 100>
+lat logical arg0 bb2 constantrange<100, 1>
+lat logical arg0 bb3 constantrange<100, 1>
+lat logical i0 bb0 overdefined
+lat logical i0 bb1 overdefined
+lat logical i0 bb2 overdefined
+lat logical i1 bb0 overdefined
+lat logical i1 bb1 overdefined
+lat logical i1 bb2 overdefined
+lat logical i2 bb0 overdefined
+lat logical i2 bb1 constantrange<-1, 0>
+lat logical i2 bb2 constantrange<0, -1>
+lat logical i3 bb0 overdefined
+lat logical i3 bb1 overdefined
+lat logical i3 bb2 overdefined
+lat logical i4 bb1 constantrange<2, 101>
+lat logical i5 bb1 overdefined
+lat logical i6 bb2 overdefined
+lat logical i6 bb3 constantrange<-1, 0>
+lat logical i6 bb4 constantrange<0, -1>
+lat logical i7 bb2 overdefined
+lat logical i7 bb3 overdefined
+lat logical i7 bb4 overdefined
+lat logical i8 bb3 overdefined
+lat logical i9 bb4 overdefined
+val not_cond 0 cr=i32:full-set cst=- pn=-
+val not_cond 1 cr=i1:full-set cst=- pn=-
+val not_cond 2 cr=i1:full-set cst=- pn=-
+val not_cond 3 cr=i32:[8,1) cst=- pn=-
+val not_cond 4 cr=i32:[2,9) cst=- pn=-
+rval not_cond 4 cr=i32:[2,9)
+rval not_cond 3 cr=i32:[8,1)
+rval not_cond 2 cr=i1:full-set
+rval not_cond 1 cr=i1:full-set
+edge not_cond 0 1 0 cr=i32:[7,0)
+edge not_cond 0 2 0 cr=i32:[0,7)
+pred not_cond 0 a=- b=-
+use not_cond 0 0 cr=i32:full-set
+use not_cond 1 0 cr=i1:full-set
+use not_cond 2 0 cr=i1:full-set
+use not_cond 3 0 cr=i32:[7,0)
+use not_cond 4 0 cr=i32:[8,1)
+use not_cond 5 0 cr=i32:[0,7)
+use not_cond 6 0 cr=i32:[2,9)
+lat not_cond arg0 bb0 overdefined
+lat not_cond arg0 bb1 constantrange<7, 0>
+lat not_cond arg0 bb2 constantrange<0, 7>
+lat not_cond i0 bb0 overdefined
+lat not_cond i0 bb1 overdefined
+lat not_cond i0 bb2 overdefined
+lat not_cond i1 bb0 overdefined
+lat not_cond i1 bb1 constantrange<-1, 0>
+lat not_cond i1 bb2 constantrange<0, -1>
+lat not_cond i2 bb0 overdefined
+lat not_cond i2 bb1 overdefined
+lat not_cond i2 bb2 overdefined
+lat not_cond i3 bb1 constantrange<8, 1>
+lat not_cond i4 bb1 overdefined
+lat not_cond i5 bb2 constantrange<2, 9>
+lat not_cond i6 bb2 overdefined
+val cond_itself 0 cr=i32:full-set cst=- pn=-
+val cond_itself 1 cr=i1:full-set cst=- pn=-
+val cond_itself 2 cr=i1:[-1,0) cst=i1:1 pn=-
+val cond_itself 3 cr=i32:[0,1) cst=i32:0 pn=-
+val cond_itself 4 cr=i1:full-set cst=- pn=-
+rval cond_itself 4 cr=i1:full-set
+rval cond_itself 3 cr=i32:[0,1)
+rval cond_itself 2 cr=i1:[-1,0)
+rval cond_itself 1 cr=i1:full-set
+edge cond_itself 0 1 1 cr=i1:[-1,0)
+edge cond_itself 0 2 1 cr=i1:[0,-1)
+pred cond_itself 0 a=- b=-
+pred cond_itself 5 a=T b=-
+epred cond_itself 0 0 0 T
+epred cond_itself 0 1 0 F
+use cond_itself 0 0 cr=i32:full-set
+use cond_itself 1 0 cr=i1:full-set
+use cond_itself 2 0 cr=i1:[-1,0)
+use cond_itself 3 0 cr=i1:[-1,0)
+use cond_itself 4 0 cr=i1:[0,-1)
+use cond_itself 5 0 cr=i32:[0,1)
+use cond_itself 6 0 cr=i1:full-set
+lat cond_itself arg0 bb0 overdefined
+lat cond_itself arg0 bb1 constantrange<0, 7>
+lat cond_itself arg0 bb2 constantrange<7, 0>
+lat cond_itself i0 bb0 overdefined
+lat cond_itself i0 bb1 constantrange<-1, 0>
+lat cond_itself i0 bb2 constantrange<0, -1>
+lat cond_itself i1 bb0 overdefined
+lat cond_itself i1 bb1 overdefined
+lat cond_itself i1 bb2 overdefined
+lat cond_itself i2 bb1 constantrange<-1, 0>
+lat cond_itself i3 bb1 overdefined
+lat cond_itself i4 bb2 constantrange<0, 1>
+lat cond_itself i5 bb2 overdefined
+lat cond_itself i6 bb2 overdefined
+val trunc_cond 0 cr=i32:full-set cst=- pn=-
+val trunc_cond 1 cr=i1:full-set cst=- pn=-
+val trunc_cond 2 cr=i32:[2,1) cst=- pn=-
+val trunc_cond 3 cr=i32:[2,1) cst=- pn=-
+rval trunc_cond 3 cr=i32:[2,1)
+rval trunc_cond 2 cr=i32:[2,1)
+rval trunc_cond 1 cr=i1:full-set
+edge trunc_cond 0 1 0 cr=i32:[1,0)
+edge trunc_cond 0 2 0 cr=i32:[0,-1)
+use trunc_cond 0 0 cr=i32:full-set
+use trunc_cond 1 0 cr=i1:full-set
+use trunc_cond 2 0 cr=i32:[1,0)
+use trunc_cond 3 0 cr=i32:[2,1)
+use trunc_cond 4 0 cr=i32:[0,-1)
+use trunc_cond 5 0 cr=i32:[2,1)
+lat trunc_cond arg0 bb0 overdefined
+lat trunc_cond arg0 bb1 constantrange<1, 0>
+lat trunc_cond arg0 bb2 constantrange<0, -1>
+lat trunc_cond i0 bb0 overdefined
+lat trunc_cond i0 bb1 constantrange<-1, 0>
+lat trunc_cond i0 bb2 constantrange<0, -1>
+lat trunc_cond i1 bb0 overdefined
+lat trunc_cond i1 bb1 overdefined
+lat trunc_cond i1 bb2 overdefined
+lat trunc_cond i2 bb1 constantrange<2, 1>
+lat trunc_cond i3 bb1 overdefined
+lat trunc_cond i4 bb2 constantrange<2, 1>
+lat trunc_cond i5 bb2 overdefined
+val trunc_nuw_cond 0 cr=i8:full-set cst=- pn=-
+val trunc_nuw_cond 1 cr=i1:full-set cst=- pn=-
+val trunc_nuw_cond 2 cr=i32:[1,2) cst=i32:1 pn=-
+val trunc_nuw_cond 3 cr=i32:[0,1) cst=i32:0 pn=-
+val trunc_nuw_cond 4 cr=i32:[5,6) cst=i32:5 pn=-
+rval trunc_nuw_cond 4 cr=i32:[5,6)
+rval trunc_nuw_cond 3 cr=i32:[0,1)
+rval trunc_nuw_cond 2 cr=i32:[1,2)
+rval trunc_nuw_cond 1 cr=i1:full-set
+edge trunc_nuw_cond 0 1 0 cr=i8:[1,2)
+edge trunc_nuw_cond 0 2 0 cr=i8:[0,1)
+use trunc_nuw_cond 0 0 cr=i8:full-set
+use trunc_nuw_cond 1 0 cr=i1:full-set
+use trunc_nuw_cond 2 0 cr=i8:[1,2)
+use trunc_nuw_cond 3 0 cr=i32:[1,2)
+use trunc_nuw_cond 4 0 cr=i8:[0,1)
+use trunc_nuw_cond 5 0 cr=i32:[0,1)
+use trunc_nuw_cond 6 0 cr=i32:[5,6)
+lat trunc_nuw_cond arg0 bb0 overdefined
+lat trunc_nuw_cond arg0 bb1 constantrange<1, 2>
+lat trunc_nuw_cond arg0 bb2 constantrange<0, 1>
+lat trunc_nuw_cond i0 bb0 overdefined
+lat trunc_nuw_cond i0 bb1 constantrange<-1, 0>
+lat trunc_nuw_cond i0 bb2 constantrange<0, -1>
+lat trunc_nuw_cond i1 bb0 overdefined
+lat trunc_nuw_cond i1 bb1 overdefined
+lat trunc_nuw_cond i1 bb2 overdefined
+lat trunc_nuw_cond i2 bb1 constantrange<1, 2>
+lat trunc_nuw_cond i3 bb1 overdefined
+lat trunc_nuw_cond i4 bb2 constantrange<0, 1>
+lat trunc_nuw_cond i5 bb2 constantrange<5, 6>
+lat trunc_nuw_cond i6 bb2 overdefined
+val user_of_edge 0 cr=i8:full-set cst=- pn=-
+val user_of_edge 1 cr=i1:full-set cst=- pn=-
+val user_of_edge 2 cr=i8:full-set cst=- pn=-
+val user_of_edge 3 cr=i32:[94,95) cst=i32:94 pn=-
+rval user_of_edge 3 cr=i32:[94,95)
+rval user_of_edge 2 cr=i8:full-set
+rval user_of_edge 1 cr=i1:full-set
+edge user_of_edge 0 1 2 cr=i8:[94,95)
+pred user_of_edge 0 a=- b=-
+epred user_of_edge 0 0 0 T
+epred user_of_edge 0 1 0 F
+use user_of_edge 0 0 cr=i8:full-set
+use user_of_edge 1 0 cr=i8:[93,94)
+use user_of_edge 2 0 cr=i1:full-set
+use user_of_edge 3 0 cr=i8:[94,95)
+use user_of_edge 4 0 cr=i32:[94,95)
+lat user_of_edge arg0 bb0 overdefined
+lat user_of_edge arg0 bb1 constantrange<93, 94>
+lat user_of_edge arg0 bb2 constantrange<94, 93>
+lat user_of_edge i0 bb0 overdefined
+lat user_of_edge i0 bb1 constantrange<-1, 0>
+lat user_of_edge i0 bb2 constantrange<0, -1>
+lat user_of_edge i1 bb0 overdefined
+lat user_of_edge i1 bb1 constantrange<94, 95>
+lat user_of_edge i1 bb2 constantrange<95, 94>
+lat user_of_edge i2 bb0 overdefined
+lat user_of_edge i2 bb1 overdefined
+lat user_of_edge i2 bb2 overdefined
+lat user_of_edge i3 bb1 constantrange<94, 95>
+lat user_of_edge i4 bb1 overdefined
+lat user_of_edge i5 bb2 overdefined
+val cast_of_edge 0 cr=i8:full-set cst=- pn=-
+val cast_of_edge 1 cr=i1:full-set cst=- pn=-
+val cast_of_edge 2 cr=i32:[0,256) cst=- pn=-
+val cast_of_edge 3 cr=i32:[-128,128) cst=- pn=-
+val cast_of_edge 4 cr=i4:full-set cst=- pn=-
+val cast_of_edge 5 cr=i32:[0,39) cst=- pn=-
+val cast_of_edge 6 cr=i32:[0,16) cst=- pn=-
+val cast_of_edge 7 cr=i32:[0,54) cst=- pn=-
+rval cast_of_edge 7 cr=i32:[0,54)
+rval cast_of_edge 6 cr=i32:[0,16)
+rval cast_of_edge 5 cr=i32:[0,39)
+rval cast_of_edge 4 cr=i4:full-set
+rval cast_of_edge 3 cr=i32:[-128,128)
+rval cast_of_edge 2 cr=i32:[0,256)
+rval cast_of_edge 1 cr=i1:full-set
+edge cast_of_edge 0 1 2 cr=i32:[0,20)
+edge cast_of_edge 0 1 3 cr=i32:[0,20)
+edge cast_of_edge 0 1 4 cr=i4:full-set
+pred cast_of_edge 0 a=- b=-
+epred cast_of_edge 0 0 0 T
+epred cast_of_edge 0 1 0 F
+use cast_of_edge 0 0 cr=i8:full-set
+use cast_of_edge 1 0 cr=i8:[0,20)
+use cast_of_edge 2 0 cr=i8:[0,20)
+use cast_of_edge 3 0 cr=i8:[0,20)
+use cast_of_edge 4 0 cr=i1:full-set
+use cast_of_edge 5 0 cr=i32:[0,20)
+use cast_of_edge 5 1 cr=i32:[0,20)
+use cast_of_edge 6 0 cr=i4:full-set
+use cast_of_edge 7 0 cr=i32:[0,39)
+use cast_of_edge 7 1 cr=i32:[0,16)
+use cast_of_edge 8 0 cr=i32:[0,54)
+lat cast_of_edge arg0 bb0 overdefined
+lat cast_of_edge arg0 bb1 constantrange<0, 20>
+lat cast_of_edge arg0 bb2 constantrange<20, 0>
+lat cast_of_edge i0 bb0 overdefined
+lat cast_of_edge i0 bb1 constantrange<-1, 0>
+lat cast_of_edge i0 bb2 constantrange<0, -1>
+lat cast_of_edge i1 bb0 constantrange<0, 256>
+lat cast_of_edge i1 bb1 constantrange<0, 20>
+lat cast_of_edge i1 bb2 constantrange<20, 256>
+lat cast_of_edge i2 bb0 constantrange<-128, 128>
+lat cast_of_edge i2 bb1 constantrange<0, 20>
+lat cast_of_edge i2 bb2 constantrange<-128, 128>
+lat cast_of_edge i3 bb0 overdefined
+lat cast_of_edge i3 bb1 overdefined
+lat cast_of_edge i3 bb2 overdefined
+lat cast_of_edge i4 bb0 overdefined
+lat cast_of_edge i4 bb1 overdefined
+lat cast_of_edge i4 bb2 overdefined
+lat cast_of_edge i5 bb1 constantrange<0, 39>
+lat cast_of_edge i6 bb1 constantrange<0, 16>
+lat cast_of_edge i7 bb1 constantrange<0, 54>
+lat cast_of_edge i8 bb1 overdefined
+lat cast_of_edge i9 bb2 overdefined

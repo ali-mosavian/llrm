@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/arrival.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/arrival.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/arrival.rs sha256:a2cc20b598e8e9df634394ac2d5e5691d28fc9e6b20a1d2f7da0ca5c1bed5c61 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/arrival.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/arrival.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/arrival.rs sha256:8c62e2c0e446fb8942635d370f54af78cee4aec85cbfdccebd0ed0ef41b51fbf -->
 
 # arrival
 

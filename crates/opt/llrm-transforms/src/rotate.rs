@@ -77,9 +77,9 @@
 //! `analysis registers` on nests and many-loop functions are #1559.
 //!
 //! A rotated loop is no longer the pre-tested shape the counted-loop
-//! analyses, [`crate::peel`] and [`crate::unroll`] read, so rotation goes
-//! after them. [`crate::lsr`] enters a loop it counts to zero at its body too,
-//! behind a skip guard, with the same `_rotate`.
+//! analyses, [`crate::looppeel`] and [`crate::loopunrollpass`] read, so
+//! rotation goes after them. [`crate::lsr_pass`] enters a loop it counts to
+//! zero at its body too, behind a skip guard, with the same `_rotate`.
 //!
 //! # Example
 //! Before:
@@ -163,7 +163,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::cfg::Around;
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction;
-use llrm_analysis::manager::Registers;
+use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::ssa::SsaUpdater;
 use llrm_analysis::{cfg, memory};
 use llrm_mir::context::Context;
@@ -246,9 +246,9 @@ struct Forest {
 }
 
 impl Forest {
-    /// The shape of `function` as it stands: its dominance afresh (cheap) and
-    /// the loops held, made from `fresh` the first time; `fresh` holds it
-    /// too, so that what it derives next does not derive it again.
+    /// The shape of `function` as it stands: its dominance, queued (see below),
+    /// and the loops held, made from `fresh` the first time; `fresh` holds
+    /// it too, so that what it derives next does not derive it again.
     /// Give it back with `keep` once `fresh` is dropped.
     fn shape(
         &mut self,
@@ -263,11 +263,15 @@ impl Forest {
             None => fresh.get::<cfg::Shape>(context, layout, function).loops.clone(),
         };
         let shape = std::rc::Rc::new(cfg::Shape {
-            // The manager's, brought up to date from the edges the rotations
-            // changed.
-            dominance: cfg::Dominance::new(analyses.get::<llrm_mir::passes::Dominators>(context, layout, function)),
+            // The manager's, as it was true: the edges the rotations change
+            // queue in the log (a lazy `DomTreeUpdater`) and the first reader
+            // applies them, so a rotation nobody asks the tree after costs
+            // none.
+            dominance: match analyses.held::<llrm_mir::passes::Dominators>() {
+                Some((tree, mark)) => cfg::Dominance::pending(tree, mark),
+                None => cfg::Dominance::new(analyses.get::<llrm_mir::passes::Dominators>(context, layout, function)),
+            },
             loops,
-            reaching: Default::default(),
         });
         fresh.seed::<cfg::Shape>(function, std::rc::Rc::clone(&shape));
         shape
@@ -302,6 +306,7 @@ impl Forest {
     /// in the loops `from` is in.
     fn split(
         &mut self,
+        function: &Function,
         bridge: i64,
         from: i64,
         header: i64,
@@ -310,6 +315,8 @@ impl Forest {
         for one in loops.iter_mut().filter(|one| one.header != header && one.body.contains(&from)) {
             one.body.insert(bridge);
         }
+        // A loop one block larger may now be the larger of two siblings.
+        Self::ordered(function, loops);
     }
 
     /// As `cfg::natural` lists them: smallest first, equal ones by the place in
@@ -333,9 +340,17 @@ impl Forest {
         function: &Function,
     ) {
         if cfg!(test) || llrm_support::env_flag!("LLRM_CHECK_SHAPE") {
+            // Loops of equal size are disjoint, so the order the layout gives
+            // them (it moves as blocks are copied) does not matter: only which
+            // loops there are.
+            let by_size = |loops: &[Loop]| {
+                let mut sorted = loops.to_vec();
+                sorted.sort_by_key(|one| (one.body.len(), one.header));
+                sorted
+            };
             let fresh = cfg::Shape::of(function).loops;
             assert!(
-                self.loops.as_ref() == Some(&fresh),
+                self.loops.as_deref().map(by_size) == Some(by_size(&fresh)),
                 "the loops held through a rotation are not those of the function as it stands"
             );
         }
@@ -363,13 +378,7 @@ fn _phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-        .collect()
+    function.iter_block(block).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
 }
 
 /// Whether an instruction may be skipped on entry: it computes, and nothing
@@ -467,10 +476,7 @@ fn _shape_of(
         return None;
     }
     let work = function
-        .block(header)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(header)
         .filter(
             |&inst| {
                 let op = function.instruction(inst);
@@ -510,7 +516,7 @@ fn _shape_of(
 /// where the guard sends it to `first` and skipped to the exit otherwise
 /// (`true`: the guard is true on the way out).
 pub(crate) fn _rotate(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     shape: &Shape,
     guard: Option<(Operand, bool)>,
@@ -558,7 +564,7 @@ pub(crate) fn _rotate(
                 Flags::default(),
                 function.value(value).name.clone().as_deref(),
             );
-            let top = function.block(shape.first).instructions().first().copied();
+            let top = function.block(shape.first).first();
             function.insert(phi, top.map_or(Position::End(shape.first), Position::Before)).expect("a placed block");
             (phi, Operand::Value(function.instruction(phi).result.expect("a phi's value")))
         })
@@ -580,7 +586,7 @@ pub(crate) fn _rotate(
         let mut updater = SsaUpdater::new(function.value(value).ty, function.value(value).name.clone().as_deref());
         updater.add_available_value(shape.preheader, starts[index]);
         updater.add_available_value(shape.latch, latest(nexts[index]));
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             let user = function.instruction(one.user);
             let at = match (user.opcode == Opcode::Phi).then(|| user.operands[one.index as usize + 1]) {
                 Some(Operand::Block(from)) => from,
@@ -602,7 +608,7 @@ pub(crate) fn _rotate(
         let mut updater = SsaUpdater::new(function.value(value).ty, function.value(value).name.clone().as_deref());
         updater.add_available_value(shape.preheader, copy);
         updater.add_available_value(shape.header, Operand::Value(value));
-        for one in function.users(value).to_vec() {
+        for one in function.users(value).snapshot() {
             if function.parent(one.user) != Some(shape.header) {
                 updater.rewrite_use(context, function, one);
             }
@@ -613,7 +619,7 @@ pub(crate) fn _rotate(
 
 /// The first proven loop not in `done` entered at its body; whether one was.
 fn rotated(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
@@ -622,6 +628,7 @@ fn rotated(
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
     let found = forest.shape(context, layout, function, &mut fresh, analyses);
+    let mut scevs = None;
     for loop_ in found.loops.iter() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
@@ -631,10 +638,11 @@ fn rotated(
         };
         // Asked of the first loop that could be rotated: a body with none
         // derives nothing.
-        let facts = analyses.get::<Registers>(context, layout, function);
+        let session = scevs.get_or_insert_with(|| {
+            ScevSession::within(context, &analyses.outer().globals, &analyses.outer().metadata, function)
+        });
         let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
-        let proven = induction::trip_count(&unit, &loop_, &facts).is_some();
-        drop((unit, facts));
+        let proven = crate::profit::scev_trips(session, &unit, &loop_).is_some();
         if !proven {
             continue;
         }
@@ -655,22 +663,22 @@ fn rotated(
 /// the last loop pass finds it. Comparing a build with and without `-ftree-ch`
 /// shows a loop whose symbolic count the copy lost.
 fn census(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     id: Option<llrm_mir::context::GlobalId>,
     analyses: &Analyses,
 ) {
     let mut fresh = analyses.fresh();
-    let facts = fresh.get::<Registers>(context, layout, function);
     let found = fresh.get::<cfg::Shape>(context, layout, function);
     let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
+    let mut scevs = ScevSession::within(context, &analyses.outer().globals, &analyses.outer().metadata, function);
     let name = format!("{id:?}");
     let (mut proofs, mut constant, mut symbolic) = (0, 0, 0);
     for loop_ in found.loops.iter() {
-        let found = induction::counted(&unit, &loop_, Some(&facts), false);
+        let found = induction::counted(&unit, &loop_, None, false);
         proofs += usize::from(!found.is_empty());
-        constant += usize::from(induction::trip_count(&unit, &loop_, &facts).is_some());
+        constant += usize::from(crate::profit::scev_trips(&mut scevs, &unit, &loop_).is_some());
         symbolic += usize::from(found.iter().any(|proof| {
             induction::trips(proof, &mut |_, _| induction::AffineOperand::constant(0, proof.width())).is_some()
         }));
@@ -701,6 +709,7 @@ fn copied(
 ) -> Result<bool, String> {
     let mut fresh = analyses.fresh();
     let found = forest.shape(context, layout, function, &mut fresh, analyses);
+    let mut scevs = None;
     for loop_ in found.loops.iter() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
@@ -708,21 +717,19 @@ fn copied(
         let Some(shape) = _shape_of(function, &loop_, false, true) else {
             continue;
         };
-        let insns = function
-            .block(shape.header)
-            .instructions()
-            .iter()
-            .filter(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
-            .count();
+        let insns =
+            function.iter_block(shape.header).filter(|&inst| function.instruction(inst).opcode != Opcode::Phi).count();
         if insns > MAX_HEADER_INSNS {
             continue;
         }
         // A loop proven to run needs no guard: it is entered at its body once
         // the loop passes are done (`rotated`, which unroll, peel and
         // fill wait for), as gcc's value propagation leaves it after its copy.
-        let facts = analyses.get::<Registers>(context, layout, function);
+        let session = scevs.get_or_insert_with(|| {
+            ScevSession::within(context, &analyses.outer().globals, &analyses.outer().metadata, function)
+        });
         let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
-        if induction::trip_count(&unit, &loop_, &facts).is_some() {
+        if crate::profit::scev_trips(session, &unit, &loop_).is_some() {
             continue;
         }
         let Some((guard, copies)) = _copy_test(function, &shape) else {
@@ -736,7 +743,6 @@ fn copied(
             .map(|(_, node)| *node);
         _rotate(context, function, &shape, Some(guard), &copies)?;
         _weighed(context, declared, function, &shape, weights, guard.1);
-        drop(facts);
         drop(fresh);
         forest.keep(found);
         forest.rotated(function, cfg::id(shape.header), cfg::id(shape.first), cfg::id(shape.header));
@@ -789,12 +795,7 @@ fn _chained(
     if loop_.entering(function) != BTreeSet::from([preheader]) {
         return Ok(None);
     }
-    let insns = function
-        .block(first)
-        .instructions()
-        .iter()
-        .filter(|&&inst| function.instruction(inst).opcode != Opcode::Phi)
-        .count();
+    let insns = function.iter_block(first).filter(|&inst| function.instruction(inst).opcode != Opcode::Phi).count();
     if insns > remaining {
         return Ok(None);
     }
@@ -812,7 +813,7 @@ fn _chained(
     let bridge = crate::edges::split(function, cfg::block(preheader), first, Vec::new())?;
     // The loop is as it was and a block stands on its way in, in the loops
     // around.
-    forest.split(cfg::id(bridge), preheader, cfg::id(first));
+    forest.split(function, cfg::id(bridge), preheader, cfg::id(first));
     let Some(shape) = _shape_of(function, &loop_, true, true).filter(|shape| shape.preheader == bridge) else {
         forest.check(function);
         return Ok(None);
@@ -887,10 +888,7 @@ fn _copy_test(
     let phis_known = known.len();
     let entering = function.terminator(shape.preheader).expect("a terminated preheader");
     let work: Vec<InstId> = function
-        .block(shape.header)
-        .instructions()
-        .iter()
-        .copied()
+        .iter_block(shape.header)
         .filter(|&inst| {
             function.instruction(inst).opcode != Opcode::Phi && !function.instruction(inst).opcode.is_terminator()
         })

@@ -37,7 +37,13 @@ fn a_built_module_is_the_one_its_text_describes() {
     let count = module
         .add_variable(
             "count",
-            GlobalVariable { ty: i16, constant: false, initializer: Some(zero), align: None },
+            GlobalVariable {
+                externally_initialized: false,
+                ty: i16,
+                constant: false,
+                initializer: Some(zero),
+                align: None,
+            },
             Linkage::Internal,
         )
         .unwrap();
@@ -127,6 +133,44 @@ fn the_builder_folds_what_is_made_of_numbers() {
     assert_eq!(number(&module, cut), Some(40));
     assert_eq!(number(&module, wide), Some(0xFFFF_FFFB));
     assert_eq!(number(&module, less), Some(1));
+}
+
+/// `zz_f` compared two double constants at run time: `fcmp olt double C1, C2`
+/// was an instruction to isel, a compare and a `seta` per call argument. The
+/// builder folds it as `ConstantFoldCompareInstruction` does, a NaN being
+/// unordered.
+#[test]
+fn the_builder_folds_a_compare_of_two_floating_constants() {
+    use crate::context::{Constant, ConstantKind};
+    use crate::opcode::FloatPredicate;
+    let mut module = Module::default();
+    let (i1, double) =
+        (module.context.types.int(1), module.context.types.intern(Type::Float(crate::types::FloatKind::Double)));
+    let unary = module.context.types.intern(Type::Function { returns: i1, parameters: vec![], variadic: false });
+    let f = module.add_function("f", unary, Linkage::External).unwrap();
+    let constant = |m: &Module, value: f64| {
+        Operand::Constant(m.context.constant(Constant { ty: double, kind: ConstantKind::Float(value.to_bits()) }))
+    };
+    let (one, two, nan) = (constant(&module, 1.0), constant(&module, 2.0), constant(&module, f64::NAN));
+    let mut b = module.builder(f);
+    let entry = b.block("entry");
+    b.position(entry);
+    let folded = [
+        b.fcmp(FloatPredicate::Olt, one, two, "lt"),
+        b.fcmp(FloatPredicate::Ogt, one, two, "gt"),
+        b.fcmp(FloatPredicate::Olt, one, nan, "lt_nan"),
+        b.fcmp(FloatPredicate::Ult, one, nan, "ult_nan"),
+    ];
+    b.ret(Some(folded[0]));
+    assert!(!print::module(&module).contains("fcmp"), "{}", print::module(&module));
+    let held = |operand: Operand| match operand {
+        Operand::Constant(id) => match module.context.get(id).kind {
+            ConstantKind::Int(bits) => Some(bits),
+            _ => None,
+        },
+        _ => None,
+    };
+    assert_eq!(folded.map(held), [Some(1), Some(0), Some(0), Some(1)]);
 }
 
 /// `ConstantFoldBinaryInstruction`'s special cases: an identity returns the
@@ -219,11 +263,48 @@ fn the_builder_folds_float_casts_of_numbers() {
     let negative = constant(&mut b, double, (-1.0f64).to_bits());
     let unsigned = b.cast(CastOp::FPToUI, negative, i8, "g");
     assert_eq!(bits_of(&b, unsigned), Some(u64::MAX));
-    // An x87 constant and a NaN stay instructions.
+    // An x87 constant folds in its own format; a NaN stays an instruction.
     let extended = constant(&mut b, x87, 2.0f64.to_bits());
-    assert!(matches!(b.cast(CastOp::FPTrunc, extended, double, "h"), Operand::Value(_)));
+    let narrowed = b.cast(CastOp::FPTrunc, extended, double, "h");
+    assert_eq!(bits_of(&b, narrowed), Some(2.0f64.to_bits()));
     let nan = constant(&mut b, double, f64::NAN.to_bits());
     assert!(matches!(b.cast(CastOp::FPTrunc, nan, float, "i"), Operand::Value(_)));
     let zero = b.int(32, 0);
     b.ret(Some(zero));
+}
+
+/// The attributes stamp was SipHash13 over the whole declaration at every
+/// invalidation: 1.0 M of a `d_faces` compile in `Attribute::hash_slice` alone.
+/// It is the crate's Fx now, and moves with an attribute.
+#[test]
+fn test_attributes_stamp_is_fx_and_moves_with_an_attribute() {
+    use std::hash::{Hash, Hasher};
+
+    let mut module = parse::module(TEXT).unwrap();
+    let by_hand = |f: &crate::module::Function| {
+        let mut hasher = crate::hash::Fx::default();
+        f.ty.hash(&mut hasher);
+        f.parameter_attrs.hash(&mut hasher);
+        f.return_attrs.hash(&mut hasher);
+        f.attrs.hash(&mut hasher);
+        f.personality.hash(&mut hasher);
+        f.calling_convention.hash(&mut hasher);
+        hasher.finish()
+    };
+    let before = module.function_mut("f").unwrap().1.attributes_stamp();
+    assert_eq!(before, by_hand(module.function_mut("f").unwrap().1));
+    module.function_mut("f").unwrap().1.attrs.push(crate::opcode::Attribute::Flag("nounwind".into()));
+    assert_ne!(module.function_mut("f").unwrap().1.attributes_stamp(), before);
+}
+
+/// A declaration grew its parameter vectors by doubling (235 growths on
+/// d_faces): five parameters left room for eight.
+#[test]
+fn test_a_declaration_holds_room_for_its_parameters_only() {
+    let module = Module::default();
+    let i16 = module.context.types.int(16);
+    let void = module.context.types.void();
+    let ty = module.context.types.intern(Type::Function { returns: void, parameters: vec![i16; 5], variadic: false });
+    let declaration = crate::build::function_declaration(&module.context, "f", ty).expect("a function type");
+    assert_eq!(declaration.parameter_attrs.capacity(), 5);
 }

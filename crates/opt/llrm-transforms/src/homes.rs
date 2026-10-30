@@ -73,7 +73,7 @@
 //! Adds metadata only; no instruction changes.
 //!
 //! # See also
-//! Consumers: the spillers, `floatassign` and `isel` in `llrm-core`. Tests:
+//! Consumers: the spillers, `floatassign` and `isel` in `llrm-codegen`. Tests:
 //! `homes_tests.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -264,7 +264,7 @@ impl<'a> Scan<'a> {
         let overlaps = |cell: &MemRef, inst: InstId| self.overlaps(cell, inst);
         let mut held = Vec::new();
         for &block in function.layout() {
-            for &inst in function.block(block).instructions() {
+            for inst in function.iter_block(block) {
                 let phi = function.instruction(inst);
                 let (Opcode::Phi, Some(result)) = (&phi.opcode, phi.result) else { continue };
                 let inputs: Vec<(Operand, BlockId)> = phi
@@ -390,13 +390,16 @@ fn survives(
     at: BlockId,
 ) -> bool {
     let home = function.parent(store).expect("a placed store");
-    if !dominance.dominates(cfg::id(home), cfg::id(at)) {
+    if !dominance.dominates(function, cfg::id(home), cfg::id(at)) {
         return false;
     }
     let after = |block: BlockId, from: Option<InstId>| {
-        let insts = function.block(block).instructions();
-        let start = from.and_then(|one| insts.iter().position(|&other| other == one)).map_or(0, |index| index + 1);
-        insts[start..].iter().all(|&one| !overlaps(cell, one))
+        let following = from.filter(|&one| function.parent(one) == Some(block));
+        let rest: Box<dyn Iterator<Item = InstId> + '_> = match following {
+            Some(one) => Box::new(function.iter_after(one)),
+            None => Box::new(function.iter_block(block)),
+        };
+        rest.into_iter().all(|one| !overlaps(cell, one))
     };
     // What follows the store in its block, then every block on a path from it
     // to `at` that does not return to it.
@@ -470,7 +473,7 @@ pub(crate) fn homed_scanning(
     };
     let mut homes = Vec::new();
     for &block in function.layout() {
-        for &inst in function.block(block).instructions() {
+        for inst in function.iter_block(block) {
             let phi = function.instruction(inst);
             let (Opcode::Phi, Some(result)) = (&phi.opcode, phi.result) else { continue };
             let inputs: Vec<(Operand, BlockId)> = phi
@@ -543,13 +546,16 @@ fn survives_scanning(
     at: BlockId,
 ) -> bool {
     let home = function.parent(store).expect("a placed store");
-    if !dominance.dominates(cfg::id(home), cfg::id(at)) {
+    if !dominance.dominates(function, cfg::id(home), cfg::id(at)) {
         return false;
     }
     let after = |block: BlockId, from: Option<InstId>| {
-        let insts = function.block(block).instructions();
-        let start = from.and_then(|one| insts.iter().position(|&other| other == one)).map_or(0, |index| index + 1);
-        insts[start..].iter().all(|&one| !overlaps(cell, one))
+        let following = from.filter(|&one| function.parent(one) == Some(block));
+        let rest: Box<dyn Iterator<Item = InstId> + '_> = match following {
+            Some(one) => Box::new(function.iter_after(one)),
+            None => Box::new(function.iter_block(block)),
+        };
+        rest.into_iter().all(|one| !overlaps(cell, one))
     };
     // What follows the store in its block, then every block on a path from it
     // to `at` that does not return to it.

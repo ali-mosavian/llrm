@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gvn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gvn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:cc15f9897849173f145dea58bf53a50758b5190c23e06a2a2bb8d99e7f2be5b0 -->
+<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:909bacd774fa01e9fd51dead7e55f7faf7fbbaee2589f9597d1e0ac9d6afc098 -->
 
 # gvn
 
@@ -11,49 +11,45 @@ load or a store. `Gvn` is the pass; `EqualCalls` is its call part alone.
 ## How it works
 `Gvn` runs these steps on a body, in order.
 
-1. Branch equality (`propagated`, LLVM's `propagateEquality`). In what the
-   edge to a successor dominates, the branch's condition is that edge's
-   constant.
-2. Numbering (`transform::forwarded`, `transform::subexpressions`,
-   `transform::equal_calls`). A load a known value serves becomes that
-   value: a dominating store of the same bytes and type, or an earlier load
-   of them, with nothing between that may write them. Two pure operations on
-   the same operands are one, a copy counting as its source and a
-   commutative pair ordered. The blocks are met dominators first, not in
-   layout order, which a removed join leaves behind the blocks it came to
-   dominate. Two calls with the same callee and arguments that read and
-   write no memory are one.
-3. Join PRE (`joined`). An expression every predecessor of a join already
-   computes becomes a phi of those values. With `pre`, a predecessor that
-   lacks it gets the computation inserted before its unconditional `br`, if
-   no loop is entered or left by the edge and the operands are available
-   there. Divisions (which may trap on a path that did not divide), loads
-   and floating expressions are never inserted here.
-4. Load PRE (`loadjoins::reused`). A load at a join whose bytes every
-   predecessor holds becomes a phi of those values; with `pre`, a
-   predecessor holding none gets its own load on its edge where that
-   speculates nothing.
+1. The scalar pass (`pass::run_impl`, `table`: LLVM's `GVNPass` and
+   `ValueTable` without the load and PRE parts). Blocks with one way in are
+   merged into it, then each block is met in reverse postorder, its
+   instructions simplified or numbered by opcode, type and operand numbers
+   (a commutative pair ordered, a compare's predicate swapped with its
+   operands, a GEP by the bytes it adds, flags in no key): one that a
+   dominating leader has is replaced, keeping the flags both have. In what
+   an edge of a branch, a switch case or an assume dominates, the condition
+   is that edge's constant (`propagateEquality`), and the arm of a branch on
+   a constant is dead: its join's phis read poison from it. Two calls with
+   the same callee and arguments that read and write no memory are one.
+2. Loads (`pass::loads`: `processLoad`, `processNonLocalLoad`). Memory
+   dependence (`llrm_analysis::memdep`) names what a load depends on in its
+   block, or in every block that reaches it. A load a store or an earlier
+   load of the same bytes serves becomes that value, cut or widened to its
+   type (`vncoercion`); where several blocks serve it, a phi (`SsaUpdater`)
+   merges them. A load with an unavailable block is left for step 4. Equal
+   calls that touch no memory (`transform::equal_calls`) are one after it.
+3. Load PRE (`pass::loadpre`: `performLoadPRE`, `performLoopLoadPRE`). With
+   `pre`, a load that is available on all but one of the ways into its block
+   is loaded on that way too (an edge into the block with several ways out
+   is split), and becomes a phi; a loop header's load of an address the loop
+   does not change is loaded in the preheader and after the one clobber.
+4. Scalar PRE (`pass::scalarpre`: `performPRE`). With `pre`, an expression
+   that all but one predecessor of a join computes (none of them over a back
+   edge) is computed in that one too, before its terminator, and a phi takes
+   its place; an edge with several ways out is split first and the pass
+   tries again. Compares, GEPs, loads and instructions with effects are
+   left; so is any that could trap and may follow an exit.
 
 A volatile access is never numbered. Floats are numbered like integers; a
 value serves a read only of its own type, so a float store reaches a float
 load exactly and nothing rounds. Which floats are exact constants is
 [`crate::floatfold`](../backend/floatfold.md)'s question.
 
-What serves a load is a MemorySSA walk (`avail::forwardable_walk`).
-`memoryssa::Accesses` says what each instruction reads and writes,
-`alias::PointValues` what each pointer may point to, and a call's footprint
-is its `CallEffects` from `Summaries`; without `Summaries` every callee is
-unknown. A call that may write the bytes, or a store that may overlap, ends
-the walk, and a walk past `MAX_NEAREST_WRITES` (100) writes gives up.
-
-A value held across a store saves a load but lengthens a live range. Where a
-load was served across a store the function is numbered twice, once crossing
-stores and once avoiding them, and the crossing one stands unless the
-careful one prices lower (`profit::motion_price`: work weighted by block
-frequency plus the spill forecast against the target's registers). Where
-nothing spills the crossing one stands. Trip counts are the proven ones
-(`profit::proven_trips`). Without `pre` there is no pricing and a load is
-served wherever it is redundant on every path.
+What serves a load is MemDep over `BasicAA`: the nearest store, load,
+allocation or `memset` in its block that may touch its bytes, and a partial
+overlap is a clobber the coercion may still cut a value from. The scan stops
+at `BLOCK_SCAN_LIMIT` (100) instructions.
 
 `EqualCalls` runs the call numbering alone, before `tailrec`, so two equal
 calls are one before one of them becomes the loop's next trip (EarlyCSE
@@ -119,17 +115,16 @@ b3:
 ## Runs
 `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after
 `dse`, before `promote`. Both are on at every optimizing level and are
-turned off together by `-fno-gcse`. `Gvn`'s PRE steps and pricing (`pre`)
+turned off together by `-fno-gcse`. `Gvn`'s PRE steps (`pre`)
 are on from -O2, the -O1 level being FRE, and off with `-fno-tree-pre`. Each
 runs once per body pass.
 
 ## Needs
-[`crate::transform`](transform.md), [`crate::loadjoins`](loadjoins.md), `memoryssa::Accesses`,
-`alias::PointValues`, `Summaries`, registers and loop trips for pricing.
+[`crate::transform`](transform.md), `memdep`, `BasicAA`, `LoopInfo`.
 
 ## Keeps
 Dominators and loops, unless a join split an edge.
 
 ## See also
-Tests: `gvn_tests.rs`, `loadjoins_tests.rs`. Levels:
+Tests: `gvn_tests.rs`, `gvn_load_tests.rs`. Levels:
 `docs/reference/levels.md`. LLVM `GVN.cpp`; gcc `tree-ssa-pre.cc`.

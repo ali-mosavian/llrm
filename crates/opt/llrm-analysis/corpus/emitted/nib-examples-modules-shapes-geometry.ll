@@ -1,9 +1,8 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-define internal i32 @Point.shifted(ptr addrspace(1) %0, i16 %1) addrspace(1) {
+define internal cc 1005 i32 @Point.shifted(ptr addrspace(1) nonnull dereferenceable(4) readonly noalias nocapture %0, i16 %1) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %2 = alloca [4 x i8]
-  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 4, i1 false)
   %3 = load i16, ptr addrspace(1) %0
   %4 = add i16 %3, %1
   %5 = getelementptr i8, ptr addrspace(1) %0, i16 2
@@ -16,15 +15,12 @@ b1:
   ret i32 %9
 }
 
-define internal i8 @side(ptr addrspace(1) %0) addrspace(1) {
+define internal cc 1005 i8 @side(ptr addrspace(1) nonnull dereferenceable(4) readonly noalias nocapture %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %1 = alloca i8
-  store i8 0, ptr %1
   %2 = load i16, ptr addrspace(1) %0
   %3 = icmp slt i16 %2, 0
-  %4 = sext i1 %3 to i8
-  %5 = icmp ne i8 %4, 0
-  br i1 %5, label %b2, label %b3
+  br i1 %3, label %b2, label %b3
 
 b2:
   store i8 0, ptr %1, !tbaa !2
@@ -35,16 +31,14 @@ b3:
   br label %b4
 
 b4:
-  %6 = load i8, ptr %1, !tbaa !2
-  ret i8 %6
+  %4 = load i8, ptr %1, !tbaa !2
+  ret i8 %4
 }
 
-define internal i16 @secret() addrspace(1) {
+define internal cc 1005 i16 @secret() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   ret i16 7
 }
-
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}

@@ -9,7 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import pytest  # noqa: E402
-from sizes import code_bytes, data_bytes  # noqa: E402
+import sizes  # noqa: E402
+from sizes import code_bytes, data_bytes, selected  # noqa: E402
 
 
 def record(kind: int, body: bytes) -> bytes:
@@ -165,7 +166,7 @@ def test_sizes_reports_bytes_and_no_cost_estimate(monkeypatch, tmp_path, capsys)
 
     monkeypatch.delenv("LLRM_DEBUG", raising=False)
     monkeypatch.setattr(sizes.cpulimit, "run", run)
-    assert sizes.measure(["llrm-c", "x.c"], "-O2") is None
+    assert sizes.measure(["llrm-cc", "x.c"], "-O2") is None
     assert "LLRM_DEBUG" not in seen, "measure asked the compiler for its cost estimate"
 
     tables = iter([{"a/a.c": 100, "b/b.c": 50}, {"a/a.c": 120, "b/b.c": 50}])
@@ -177,3 +178,30 @@ def test_sizes_reports_bytes_and_no_cost_estimate(monkeypatch, tmp_path, capsys)
     assert re.search(r"a/a\.c\s+bytes\s+100 ->\s+120 \(\+20\)", out), out
     assert "b/b.c" not in out, "an unchanged program is not listed"
     assert " ins " not in out and " mem " not in out and "TOTAL bytes 150 -> 170" in out, out
+
+
+def test_the_isel_variable_reaches_the_compiler_command(monkeypatch):
+    """`LLRM_ISEL=dag python3 tools/sizes.py` measured the old selector twice (185238 -> 185238 bytes): the variable was never passed on."""
+    command = ["llrm-c", "x.c", "-Os"]
+    monkeypatch.delenv("LLRM_ISEL", raising=False)
+    assert selected(command) == command
+    monkeypatch.setenv("LLRM_ISEL", "dag")
+    assert selected(command) == ["llrm-c", "--isel=dag", "x.c", "-Os"]
+
+
+def test_a_basic_program_takes_the_excess_precision_a_pair_names(tmp_path, monkeypatch):
+    """main compiled SINGLE as fast and the tip as standard: a pair on the defaults read +39 B on stft_single.bas as growth. SIZES_EXCESS sets both sides."""
+    monkeypatch.setenv("SIZES_EXCESS", "fast")
+    listed = dict(sizes.programs(tmp_path, demos=False))
+    assert "-fexcess-precision=fast" in listed["stft_single/stft_single.bas"]
+    assert not any("-fexcess-precision" in word for word in listed["stft_single/stft_single.c"])
+
+
+def test_a_c_program_is_built_by_llrm_cc_to_an_object_on_a_watcom_row(tmp_path):
+    """sizes.py ran bins/llrm-c, which is gone: every C program read as failing to compile and tests/test_programs_compile.py went red once
+    its binary list named llrm-cc instead."""
+    import sizes
+
+    command = sizes.c_command(str(tmp_path / "llrm-cc"), str(sizes.ROOT / "bench/bintree/bintree.c"))
+    assert Path(command[0]).name == "llrm-cc" and "--target=x86_16-wat" in command
+    assert sizes.stop(command) == ["-c"] and sizes.stop(["llrm-qb", "x.bas"]) == []

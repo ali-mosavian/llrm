@@ -1,0 +1,5 @@
+== 
+@foo
+  input [S 0]!
+  input [* *|<]!
+  none!

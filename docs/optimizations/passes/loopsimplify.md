@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:1557dfc32d32a566cd8130ca98119595135e3511acdc4dbd89b83719d88c6f86 -->
+<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:618ef40628d24fe9868696ddf56961cf240b6120e32045b5a4948aaead2c1818 -->
 
 # loopsimplify
 
@@ -79,8 +79,9 @@ out from the edges of its blocks and of the targets, and every grouping is
 checked before the first is made, so a refused one leaves the body as it
 was. No copy of the function and no graph of it is made. The loops of
 the shape are updated for the new blocks rather than found again
-(`LLRM_CHECK_SHAPE` compares them with a new shape). A function with an
-irreducible loop is left alone.
+(`LLRM_CHECK_SHAPE` compares them with a new shape). The loops are the
+natural ones, as LoopInfo finds them: an irreducible cycle is no loop, and
+its function's natural loops are simplified all the same.
 
 ## Example
 Before:
@@ -146,7 +147,7 @@ From unit test `test_grouping_preserves_each_phi_edge_value` in
 In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `tailrec` and before
 `lcssa`; again after the header copy of `-ftree-ch`, where it
 re-simplifies the loops that copy made; `simplified` is called by
-[`crate::lsr`](lsr.md) after it guards a loop. On at every level above -O0.
+[`crate::lsr_pass`](lsr_pass.md) after it guards a loop. On at every level above -O0.
 
 ## Keeps
 Nothing where it changes a body; it reads only the CFG's structure.

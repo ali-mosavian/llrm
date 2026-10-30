@@ -4,7 +4,7 @@
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::knownbits::KnownBits;
 use llrm_mir::module::{GlobalKind, InstId, Module, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
@@ -47,7 +47,7 @@ fn dump(
     name: &str,
     layout: &DataLayout,
 ) {
-    let dt = DominatorTree::new(function);
+    let dt = DomTree::of(function);
     let ac = AssumptionCache::new(module, function);
     let dc = DomConditionCache::new(module, function);
     let insts: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();

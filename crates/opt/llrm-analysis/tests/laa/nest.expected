@@ -1,0 +1,21 @@
+Printing analysis 'Loop Access Analysis' for function 'f':
+  inner:
+    Memory dependences are safe
+    Dependences:
+    Run-time memory checks:
+    Grouped accesses:
+
+    Non vectorizable stores to invariant address were not found in loop.
+    SCEV assumptions:
+
+    Expressions re-written:
+  outer:
+    Report: loop is not the innermost loop
+    Dependences:
+    Run-time memory checks:
+    Grouped accesses:
+
+    Non vectorizable stores to invariant address were not found in loop.
+    SCEV assumptions:
+
+    Expressions re-written:

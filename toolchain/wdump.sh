@@ -16,20 +16,20 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/llrm"
 ow_tree() {
     git clone -q --filter=blob:none https://github.com/open-watcom/open-watcom-v2.git "$1"
     git -C "$1" checkout -q "$OW_COMMIT"
-    ( set +u; cd "$1" && . ./setvars.sh && ./build.sh boot )
+    ( set +u; cd "$1" && . ./setvars.sh && native_tools && ./build.sh boot )
 }
 if [ -z "${OWROOT:-}" ]; then
     OWROOT="$CACHE/open-watcom-v2-$OW_COMMIT"
     cached "$OWROOT" ow_tree
 elif [ ! -x "$OWROOT/build/binbuild/wmake" ]; then
-    ( set +u; cd "$OWROOT" && . ./setvars.sh && ./build.sh boot )
+    ( set +u; cd "$OWROOT" && . ./setvars.sh && native_tools && ./build.sh boot )
 fi
 
 # wdump DIR: bld/exedump built with the bootstrapped wmake and the host compiler, as the front end's objects are, and copied to DIR.
 wdump() {
     # `cached` runs this in an `if`, where `set -e` is off: each step says so itself, and a wdump.exe left by an earlier build is not one.
     rm -f "$OWROOT/bld/exedump/binbuild/wdump.exe"
-    ( set +u; cd "$OWROOT" && . ./setvars.sh >/dev/null && cd bld/exedump && mkdir -p binbuild && cd binbuild \
+    ( set +u; cd "$OWROOT" && . ./setvars.sh >/dev/null && native_tools && cd bld/exedump && mkdir -p binbuild && cd binbuild \
         && "$OWROOT/build/binbuild/wmake" -h -f ../binmake bootstrap=1 >&2 ) || return 1
     # Open Watcom's makefile names a host build wdump.exe on every host; it is the host's own format (ELF, Mach-O), which this checks: a
     # DOS or Windows image would not run here. Installed without the extension.

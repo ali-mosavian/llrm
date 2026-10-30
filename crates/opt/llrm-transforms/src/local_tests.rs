@@ -3,7 +3,7 @@
 
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::memory;
 use llrm_mir::module::{BlockId, InstId, Module, Operand, Use, ValueId};
 use llrm_mir::types::Type;
@@ -345,9 +345,9 @@ fn a_noundef_replacement_that_stays_keeps_its_range() {
 
 // ---- the dominator tree queries and replaceDominatedUsesWith
 
-fn tree_of(module: &Module) -> DominatorTree {
+fn tree_of(module: &Module) -> DomTree {
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-    DominatorTree::new(function)
+    DomTree::of(function)
 }
 
 fn block(
@@ -895,6 +895,67 @@ b2:
 }
 ";
 
+/// The records said before the predecessor's branch go with the terminator that
+/// takes its place: the merge redirected the uses of the block before it erased
+/// the branch, which then named its own block, and the records stayed standing
+/// before the erased branch (nib: "a debug record of !8 stands before
+/// instruction 5, which is no longer in the function").
+#[test]
+fn merging_leaves_the_records_of_the_old_branch_before_the_new_terminator() {
+    let (merged, module) = merged(
+        "define i16 @f(i16 %x) {
+b0:
+  %a = add i16 %x, 1
+  #dbg_value(i16 %a, !0)
+  br label %b1
+
+b1:
+  ret i16 %a
+}
+
+!0 = !{!\"v\"}
+",
+        "b1",
+        false,
+    );
+    assert!(merged);
+    assert!(llrm_mir::verify::verify(&module).is_empty(), "{:?}", llrm_mir::verify::verify(&module));
+    let (_, _, function) = module.functions().next().expect("@f");
+    let ret = function.terminator(function.entry().expect("entry")).expect("a terminator");
+    assert!(function.debug_records().iter().all(|one| one.before == ret), "{:?}", function.debug_records());
+    assert_eq!(function.debug_records().len(), 1);
+}
+
+/// With instructions in the merged block the records before the old branch
+/// stand before the first of them, not after all of them: observed.c's `mix`
+/// at -O2 -g had every record of every variable past the last instruction, so
+/// gdb read `a`, `b`, `c` and `i` as optimised out where the pin says them.
+#[test]
+fn merging_keeps_the_records_of_the_old_branch_before_the_moved_instructions() {
+    let (merged, module) = merged(
+        "define i16 @f(i16 %x) {
+b0:
+  #dbg_value(i16 %x, !0)
+  br label %b1
+
+b1:
+  %b = mul i16 %x, 2
+  %c = add i16 %b, 1
+  ret i16 %c
+}
+
+!0 = !{!\"v\"}
+",
+        "b1",
+        false,
+    );
+    assert!(merged);
+    let (_, _, function) = module.functions().next().expect("@f");
+    let first = function.iter_block(function.entry().expect("entry")).next().expect("an instruction");
+    assert!(function.debug_records().iter().all(|one| one.before == first), "{:?}", function.debug_records());
+    assert_eq!(function.debug_records().len(), 1);
+}
+
 /// A block its predecessor alone enters joins it: the phi is its one value,
 /// the instructions follow the predecessor's, and the block is gone.
 #[test]
@@ -1359,4 +1420,122 @@ b1:
     assert!(merged);
     assert_eq!(lines(&body(&after), "br"), Vec::<String>::new());
     assert_eq!(results(&after, &[&[1, 1], &[1, 2]]), results(&before, &[&[1, 1], &[1, 2]]));
+}
+
+/// `changeToUnreachable`: the instruction and what follows it in its block go,
+/// the block ends in `unreachable`, uses of what went are poison, and the
+/// successor's phi loses its input from the block.
+#[test]
+fn test_change_to_unreachable_cuts_the_block_and_the_successors_phi() {
+    let mut module = parsed(
+        "define i16 @f(i1 %c, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %d = add i16 %x, 1
+  br label %b2
+
+b2:
+  %p = phi i16 [ %x, %b0 ], [ %d, %b1 ]
+  ret i16 %p
+}
+",
+    );
+    let at = inst(&module, "d");
+    let (context, function) = module.function_mut("f").expect("@f");
+    assert_eq!(change_to_unreachable(context, function, at), 2);
+    assert_eq!(
+        printed(&module),
+        "define i16 @f(i1 %c, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  unreachable
+
+b2:
+  ret i16 %x
+}
+"
+    );
+}
+
+/// `duplicate_phis_in` built a map and a vector of the phis for every block it
+/// was asked of, and most blocks have no two phis (d_faces -O2: 3,844 visits,
+/// 2.8 M Ir). A block of none or one is not walked; one of two is.
+#[test]
+fn a_block_of_fewer_than_two_phis_is_not_walked_for_duplicates() {
+    let mut module = parsed(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i16 [ %x, %b1 ], [ 1, %b2 ]
+  %q = phi i16 [ %x, %b1 ], [ 1, %b2 ]
+  ret i16 %p
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    let walked = || crate::transform::WALKED.with(std::cell::Cell::get);
+    let before = walked();
+    for block in function.layout().to_vec() {
+        if function.layout().last() != Some(&block) {
+            assert!(!crate::transform::duplicate_phis_in(function, block).unwrap(), "no duplicates before b3");
+        }
+    }
+    assert_eq!(walked() - before, 0, "a block of fewer than two phis was walked");
+    let last = *function.layout().last().expect("b3");
+    assert!(crate::transform::duplicate_phis_in(function, last).unwrap(), "b3's two phis are one");
+    assert_eq!(walked() - before, 1);
+}
+
+/// `EliminateDuplicatePHINodes` compares the phis of a block pair by pair up to
+/// `PHICSENumPHISmallSize` (32) of them and hashes only a larger set; every
+/// block of two or more was hashed (d_faces -O2: 1,741 blocks, a map and a key
+/// vector each, 494 Ir a block against the pin's 141).
+#[test]
+fn a_block_of_few_phis_is_compared_pair_by_pair_and_a_block_of_many_is_hashed() {
+    let join = |phis: usize| {
+        let mut text = String::from(
+            "define i16 @f(i16 %x, i1 %c) {\nb0:\n  br i1 %c, label %b1, label %b2\n\nb1:\n  br label %b3\n\nb2:\n  br label %b3\n\nb3:\n",
+        );
+        for n in 0..phis {
+            // Every phi is the first one's twin except one that differs.
+            let other = if n == 1 { "2" } else { "1" };
+            text.push_str(&format!("  %p{n} = phi i16 [ %x, %b1 ], [ {other}, %b2 ]\n"));
+        }
+        text.push_str("  ret i16 %p0\n}\n");
+        text
+    };
+    let run = |phis: usize| {
+        let mut module = parsed(&join(phis));
+        let (_, function) = module.function_mut("f").expect("@f");
+        let last = *function.layout().last().expect("b3");
+        let before = crate::transform::HASHED.with(std::cell::Cell::get);
+        let changed = crate::transform::duplicate_phis_in(function, last).unwrap();
+        let left = crate::edges::phis(function, last).len();
+        (changed, left, crate::transform::HASHED.with(std::cell::Cell::get) - before)
+    };
+    assert_eq!(run(3), (true, 2, 0), "p0 and p2 are one; p1 stays; compared, not hashed");
+    assert_eq!(run(32), (true, 2, 0), "32 phis are still compared");
+    assert_eq!(run(33), (true, 2, 1), "33 phis are hashed, with the same result");
+}
+
+/// Two array selectors merged lost `!llrm.descriptor`; the survivor read as a
+/// forged data-segment pointer and `LLRM_CHECK_STALE` failed bintree.bas -O2
+/// -m16.
+#[test]
+fn merged_array_selectors_keep_their_descriptor_mark() {
+    assert_eq!(combined("!llrm.descriptor !6", "!llrm.descriptor !2", true), ["llrm.descriptor"]);
+    assert_eq!(combined("!llrm.descriptor !6", "!llrm.descriptor !2", false), ["llrm.descriptor"]);
+    assert_eq!(combined("!llrm.descriptor !6", "!tbaa !4", true), Vec::<String>::new());
 }

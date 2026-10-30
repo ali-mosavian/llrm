@@ -2,7 +2,7 @@
 
 Audience: an engineer who must change or debug the register allocator. This page is the index and the story from a function's virtual values to its registers and frame slots; each stage has a page of its own.
 
-The code is in `crates/backend/llrm-core/src/backend`. The allocator is LLVM's greedy allocator (`RAGreedy`, with its `SplitKit`, `SpillPlacement`, `InlineSpiller` and last-chance recoloring) with these differences: pricing is by `executed::work` and block frequencies, the search runs the allocation on several shapes of a body and keeps the cheapest, and a second route puts an SSA spiller in front.
+The code is in `crates/codegen/llrm-codegen/src/backend`. The allocator is LLVM's greedy allocator (`RAGreedy`, with its `SplitKit`, `SpillPlacement`, `InlineSpiller` and last-chance recoloring) with these differences: pricing is by `executed::work` and block frequencies, the search runs the allocation on several shapes of a body and keeps the cheapest, and a second route puts an SSA spiller in front.
 
 | Page | Holds |
 |---|---|
@@ -13,7 +13,6 @@ The code is in `crates/backend/llrm-core/src/backend`. The allocator is LLVM's g
 | [spilling](spilling.md) | Stores, reloads, slots and their sharing |
 | [rematerialization-and-forwarding](rematerialization-and-forwarding.md) | Values made again, reads in place, forwarding |
 | [coalescing-and-copies](coalescing-and-copies.md) | Phi elimination, ties, the coalescer, hints, parallel copies |
-| [ssa-spill-route](ssa-spill-route.md) | The second route and how a route is chosen |
 | [after-allocation](after-allocation.md) | Peephole, loop slots, the frame, shrink-wrapping |
 | [x87](x87.md) | Floating values on the register stack |
 | [debugging](debugging.md) | Flags, environment switches, dump and debug lines |
@@ -47,11 +46,10 @@ flowchart LR
 ## The story
 
 1. **Selection** gives a function as SSA LIR over virtual values, with `requires`, `delivers` and `clobbers` on the instructions that call, return or use fixed registers, and a frame ([inputs-and-classes](inputs-and-classes.md)).
-2. **Route.** A function is made by the allocator alone, and where that left frame traffic worth removing, also with `SsaSpill` in front; the cheaper is kept ([ssa-spill-route](ssa-spill-route.md)).
-3. **Out of SSA.** Phis become parallel copies, `TwoAddress` ties destinations to sources, x87 values go to the register stack ([x87](x87.md)), and the coalescer joins the copies it can prove safe ([coalescing-and-copies](coalescing-and-copies.md)).
-4. **Prepare.** `RegAlloc::transform` gives every required register a value of its own, fixes class conflicts, and refuses a body no allocation can exist for.
-5. **Allocate.** Every value is queued with its live interval ([live-ranges](live-ranges.md)). Each is tried in a free register, then by evicting cheaper holders, then split, then recolored, then spilled ([assignment](assignment.md), [splitting](splitting.md), [spilling](spilling.md)). Splits and spills rewrite the body in place and the affected values are queued again.
-6. **Search.** If something was spilled, the body is allocated again in other shapes and the cheapest result by `executed::work` is kept.
+2. **Out of SSA.** Phis become parallel copies, `TwoAddress` ties destinations to sources, x87 values go to the register stack ([x87](x87.md)), and the coalescer joins the copies it can prove safe ([coalescing-and-copies](coalescing-and-copies.md)).
+3. **Prepare.** `RegAlloc::transform` gives every required register a value of its own, fixes class conflicts, and refuses a body no allocation can exist for.
+4. **Allocate.** Every value is queued with its live interval ([live-ranges](live-ranges.md)). Each is tried in a free register, then by evicting cheaper holders, then split, then recolored, then spilled ([assignment](assignment.md), [splitting](splitting.md), [spilling](spilling.md)). Splits and spills rewrite the body in place and the affected values are queued again.
+5. **Search.** If something was spilled, the body is allocated again in other shapes and the cheapest result by `executed::work` is kept.
 7. **Apply.** Each operand naming a value is replaced by its register.
 8. **After.** Parallel copies are ordered, the peephole removes copies and reloads, loop slots move into free registers, and `masm` builds the frame ([after-allocation](after-allocation.md)).
 

@@ -1,15 +1,15 @@
-' RUN: llrm-qb %s -fallocation-search -fallocation-routes --dialect qb45 --runtime qb45 -Os -march=i486 -fno-inline-functions -S -o /dev/stdout
-' The search and the second route hold this; one allocation does not (#1886).
+' RUN: llrm-qb %s --dialect qb45 --runtime qb45 -Os -march=i486 -fno-inline-functions -S -o /dev/stdout
+' The selectors a loop that fits the registers uses are loaded once before it (#1886).
 ' A loop that fits the selector registers holds its arrays' segments in them: loaded once before it, not before
 ' each use. With typed writes the segment loads proved stable, and a tie in static loads made them per trip
 ' (+300 instructions at -Os, same bytes).
 ' CHECK-LABEL: BENCHPARTICLE proc
 ' CHECK: call far ptr ADVANCE
-' CHECK: mov es, word ptr PX%+2
-' CHECK: mov fs, word ptr PY%+2
-' CHECK: mov gs, word ptr PZ%+2
+' CHECK: {{mov es, word ptr PX%\+2|mov es, ax}}
+' CHECK: {{mov fs, word ptr PY%\+2|mov fs, ax}}
+' CHECK: {{mov gs, word ptr PZ%\+2|mov gs, ax}}
 ' CHECK: L1_{{[0-9]+}}:
-' CHECK-NOT: mov es, word ptr PX%+2
+' CHECK-NOT: PX%+2
 ' CHECK: BENCHPARTICLE endp
 DEFINT A-Z
 DECLARE SUB Advance (n)

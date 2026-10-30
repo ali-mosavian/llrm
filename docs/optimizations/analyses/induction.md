@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/induction.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/induction.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/induction.rs sha256:ba28772eacd63e1d7f9e549dce7e825b4a88c7d622a5ac086a3437380b7830a1 -->
+<!-- src: crates/opt/llrm-analysis/src/induction.rs sha256:0627049565471a9e4fa37580c0a07469b01178139dc7e311994c24eea4670763 -->
 
 # induction
 
@@ -112,7 +112,7 @@ entries: `Counted` (incremental) and `Followers`. Consumers:
 [`crate::ranges`](ranges.md), [`crate::alias`](alias.md), [`crate::peelsize`](peelsize.md),
 [`crate::difference`](difference.md), [`crate::guards`](guards.md), [`crate::floatfacts`](floatfacts.md), and in
 llrm-transforms `indvars`, `lsr`, `loopexit`, `peel`, `unroll`,
-`unroll_jam`, `rotate`, `decide`, `hoist`, `expand`, `exitfold`, `counting`,
+`rotate`, `decide`, `hoist`, `expand`, `exitfold`, `counting`,
 `window`, `loopidioms`, `floatloop`.
 
 ## Needs

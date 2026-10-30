@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use crate::context::{Context, GlobalId};
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::hash::{HashMap, HashSet};
 use crate::module::{Change, Function, GlobalKind, GlobalValue, MetadataNode, Module};
 use crate::program::{Program, ProgramAnalyses, ProgramPass, ProgramProxy, interface};
@@ -83,6 +83,17 @@ pub fn running_function() -> String {
     RUNNING_FUNCTION.with(|name| name.borrow().clone())
 }
 
+/// Tells the debug lines which function a body is about to run over: for a
+/// run outside the manager's loop over a pass's functions (the interprocedural
+/// stage's reruns), which would otherwise print the last function it set.
+pub fn set_running_function(name: &str) {
+    RUNNING_FUNCTION.with(|running| {
+        let mut running = running.borrow_mut();
+        running.clear();
+        running.push_str(name);
+    });
+}
+
 pub(crate) fn counted(
     what: &'static str,
     hit: bool,
@@ -108,11 +119,63 @@ pub struct Unit<'a> {
     pub declared: &'a mut Declared,
 }
 
+/// What a library routine's declaration states: its convention, its
+/// attributes and, on each pointer parameter, `parameter`.
+fn routine_facts(
+    function: &mut crate::module::Function,
+    convention: u32,
+    attrs: &[crate::opcode::Attribute],
+    parameter: &[crate::opcode::Attribute],
+) {
+    function.calling_convention = convention;
+    function.attrs.extend(attrs.iter().cloned());
+    for at in 0..function.parameter_attrs.len() {
+        function.parameter_attrs[at].extend(parameter.iter().cloned());
+    }
+}
+
 /// A global a pass has declared and the module has yet to get.
 #[derive(Clone, Debug)]
 enum Pending {
     Function(String, crate::types::TypeId),
+    /// A library routine: its convention and what the library states of it.
+    Routine(String, crate::types::TypeId, u32, Vec<crate::opcode::Attribute>, Vec<crate::opcode::Attribute>),
     Table(String, crate::module::GlobalVariable),
+}
+
+/// The size of each function a global variable's initializer names.
+fn referenced_sizes(module: &Module) -> HashMap<GlobalId, Size> {
+    use crate::context::{ConstantExpr, ConstantId, ConstantKind};
+    let mut named: Vec<GlobalId> = Vec::new();
+    let mut stack: Vec<ConstantId> = module
+        .globals
+        .iter()
+        .filter_map(|global| match &global.kind {
+            GlobalKind::Variable(variable) => variable.initializer,
+            GlobalKind::Function(_) => None,
+        })
+        .collect();
+    while let Some(id) = stack.pop() {
+        match &module.context.get(id).kind {
+            ConstantKind::Aggregate(members) => stack.extend(members.iter().copied()),
+            ConstantKind::Global(global) => named.push(*global),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => stack.extend(operands.iter().copied()),
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => stack.push(*value),
+            _ => {}
+        }
+    }
+    named
+        .into_iter()
+        .map(|id| {
+            let size = match &module.globals[id.0 as usize].kind {
+                GlobalKind::Function(function) if !function.is_declaration() => {
+                    Size::Instructions(function.live_instructions())
+                }
+                _ => Size::Declaration,
+            };
+            (id, size)
+        })
+        .collect()
 }
 
 /// What a function pass declares in its module, as LLVM's
@@ -130,17 +193,53 @@ pub struct Declared {
     pending: Vec<Pending>,
     /// Metadata nodes made, numbered after the module's.
     nodes: Vec<crate::module::MetadataNode>,
+    /// What the nodes made that are specialized (`DILocation`) are.
+    special: std::collections::BTreeMap<crate::module::MetadataId, crate::module::Special>,
+    /// The location made of an inlined body's location and the call it was
+    /// inlined at.
+    located: HashMap<(crate::module::MetadataId, crate::module::MetadataId), crate::module::MetadataId>,
     first_node: u32,
+    /// The live instructions of the functions a constant names, while a pass
+    /// that `wants_sizes` runs (`size_of`).
+    sizes: HashMap<GlobalId, Size>,
+}
+
+/// How big another function is (`Function::getInstructionCount`), which a
+/// function pass cannot see: the manager counts the functions a constant names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Size {
+    /// Named by no constant, or not counted: nothing is known.
+    Unknown,
+    Declaration,
+    Instructions(usize),
 }
 
 impl Declared {
+    /// Counts the functions a global initializer of `module` names, for a
+    /// pass that `wants_sizes` (`size_of`).
+    pub fn count_referenced(
+        &mut self,
+        module: &Module,
+    ) {
+        self.sizes = referenced_sizes(module);
+    }
+
+    /// How many instructions function `id` has, if a constant names it and
+    /// the pass `wants_sizes`.
+    pub fn size_of(
+        &self,
+        id: GlobalId,
+    ) -> Size {
+        self.sizes.get(&id).copied().unwrap_or(Size::Unknown)
+    }
+
     pub fn of(module: &Module) -> Self {
         counted("declared names", false);
         let ids = module
             .globals
             .iter()
             .enumerate()
-            .filter_map(|(at, one)| Some((one.name.clone()?, GlobalId(at as u32))))
+            .filter_map(|(at, one)| Some((one.name.owned()?, GlobalId(at as u32))))
             .collect();
         Self {
             ids: Some(ids),
@@ -148,7 +247,10 @@ impl Declared {
             next: module.globals.len() as u32,
             pending: Vec::new(),
             nodes: Vec::new(),
+            special: Default::default(),
+            located: HashMap::default(),
             first_node: module.metadata.len() as u32,
+            sizes: HashMap::default(),
         }
     }
 
@@ -166,7 +268,10 @@ impl Declared {
             held: Some(held),
             pending: Vec::new(),
             nodes: Vec::new(),
+            special: Default::default(),
+            located: HashMap::default(),
             first_node: metadata as u32,
+            sizes: HashMap::default(),
         }
     }
 
@@ -177,14 +282,77 @@ impl Declared {
             held.iter()
                 .flat_map(|all| all.iter())
                 .enumerate()
-                .filter_map(|(at, one)| Some((one.name.clone()?, GlobalId(at as u32))))
+                .filter_map(|(at, one)| Some((one.name.owned()?, GlobalId(at as u32))))
                 .collect()
         })
+    }
+
+    /// The declarations made and not yet placed, as the module will hold them
+    /// from global `from` on: what a pass after the one that declared them
+    /// sees, as LLVM's `getOrInsertFunction` has the callee in the module at
+    /// once.
+    pub fn since(
+        &self,
+        from: usize,
+        context: &Context,
+    ) -> Vec<GlobalValue> {
+        let first = self.next as usize - self.pending.len();
+        self.pending
+            .iter()
+            .skip(from.saturating_sub(first))
+            .map(|one| match one {
+                Pending::Function(name, ty) => GlobalValue {
+                    name: name.clone().into(),
+                    linkage: crate::module::Linkage::External,
+                    unnamed_addr: Default::default(),
+                    address_space: 0,
+                    kind: GlobalKind::Function(Box::new(
+                        crate::build::function_declaration(context, name, *ty).expect("a declaration that places"),
+                    )),
+                },
+                Pending::Routine(name, ty, convention, attrs, parameter) => {
+                    let mut function =
+                        crate::build::function_declaration(context, name, *ty).expect("a declaration that places");
+                    routine_facts(&mut function, *convention, attrs, parameter);
+                    GlobalValue {
+                        name: name.clone().into(),
+                        linkage: crate::module::Linkage::External,
+                        unnamed_addr: Default::default(),
+                        address_space: 0,
+                        kind: GlobalKind::Function(Box::new(function)),
+                    }
+                }
+                Pending::Table(name, variable) => GlobalValue {
+                    name: name.clone().into(),
+                    linkage: crate::module::Linkage::Private,
+                    unnamed_addr: Default::default(),
+                    address_space: 0,
+                    kind: GlobalKind::Variable(variable.clone()),
+                },
+            })
+            .collect()
+    }
+
+    /// The name of a function declared and not yet placed in the module.
+    pub fn pending_name(
+        &self,
+        id: GlobalId,
+    ) -> Option<&str> {
+        let at = (id.0 as usize).checked_sub(self.next as usize - self.pending.len())?;
+        match self.pending.get(at)? {
+            Pending::Function(name, _) | Pending::Routine(name, ..) => Some(name),
+            Pending::Table(..) => None,
+        }
     }
 
     /// The metadata nodes made so far, which the module has after the pass.
     pub fn nodes(&self) -> &[crate::module::MetadataNode] {
         &self.nodes
+    }
+
+    /// The id the next `node` gets: what a node that names itself holds.
+    pub fn next_node(&self) -> crate::module::MetadataId {
+        crate::module::MetadataId(self.first_node + self.nodes.len() as u32)
     }
 
     /// A metadata node, its id at once, added to the module after the pass.
@@ -194,6 +362,64 @@ impl Declared {
     ) -> crate::module::MetadataId {
         self.nodes.push(node);
         crate::module::MetadataId(self.first_node + self.nodes.len() as u32 - 1)
+    }
+
+    /// `loc`, a `DILocation` of an inlined body, as seen from the call it was
+    /// inlined at, `call`: the same line, column and scope with `inlinedAt`
+    /// ending in `call` (`fixupLineNumbers`, LLVM's inliner), one node per
+    /// pair. Not a `DILocation` with named fields: `call` alone.
+    pub fn inlined_at(
+        &mut self,
+        module: crate::module::Metadata<'_>,
+        loc: crate::module::MetadataId,
+        call: crate::module::MetadataId,
+    ) -> crate::module::MetadataId {
+        use crate::module::{MetadataId, MetadataNode, MetadataOperand, Special};
+        if let Some(&made) = self.located.get(&(loc, call)) {
+            return made;
+        }
+        let made_here = loc.0.checked_sub(self.first_node);
+        let (node, special): (&MetadataNode, &Special) = match made_here {
+            Some(at) => match (self.nodes.get(at as usize), self.special.get(&loc)) {
+                (Some(node), Some(special)) => (node, special),
+                _ => return loc,
+            },
+            None => match (module.nodes.get(loc.0 as usize), module.special.get(&loc)) {
+                (Some(node), Some(special)) => (node, special),
+                _ => return loc,
+            },
+        };
+        if special.kind != "DILocation" || special.fields.len() != node.operands.len() {
+            return loc;
+        }
+        let mut fields = special.fields.clone();
+        let mut operands = node.operands.clone();
+        let distinct = node.distinct;
+        let at = fields.iter().position(|one| one == "inlinedAt");
+        let outer = match at.and_then(|at| operands.get(at).cloned()) {
+            Some(MetadataOperand::Node(prev)) => self.inlined_at(module, prev, call),
+            _ => call,
+        };
+        match at {
+            Some(at) => operands[at] = MetadataOperand::Node(outer),
+            None => {
+                fields.push("inlinedAt".to_owned());
+                operands.push(MetadataOperand::Node(outer));
+            }
+        }
+        let id: MetadataId = self.node(MetadataNode { distinct, operands });
+        self.special.insert(id, Special { kind: "DILocation".to_owned(), fields });
+        self.located.insert((loc, call), id);
+        id
+    }
+
+    /// `Module::getFunction`: the global `name`, declared by the module or by
+    /// this pass, without declaring it.
+    pub fn find(
+        &mut self,
+        name: &str,
+    ) -> Option<GlobalId> {
+        self.names().get(name).copied()
     }
 
     /// The function `name` of type `ty`, declared where the module has none.
@@ -209,6 +435,28 @@ impl Declared {
         self.next += 1;
         self.names().insert(name.to_owned(), id);
         self.pending.push(Pending::Function(name.to_owned(), ty));
+        id
+    }
+
+    /// A library routine `name` of type `ty`, declared where the module has
+    /// none (`getOrInsertFunction`): in calling convention `convention`, with
+    /// `attrs` on it and `parameter` on each pointer parameter, what the
+    /// library states of it (`inferNonMandatoryLibFuncAttrs`).
+    pub fn routine(
+        &mut self,
+        name: &str,
+        ty: crate::types::TypeId,
+        convention: u32,
+        attrs: Vec<crate::opcode::Attribute>,
+        parameter: Vec<crate::opcode::Attribute>,
+    ) -> GlobalId {
+        if let Some(&id) = self.names().get(name) {
+            return id;
+        }
+        let id = GlobalId(self.next);
+        self.next += 1;
+        self.names().insert(name.to_owned(), id);
+        self.pending.push(Pending::Routine(name.to_owned(), ty, convention, attrs, parameter));
         id
     }
 
@@ -237,10 +485,21 @@ impl Declared {
         let id = GlobalId(self.next);
         self.next += 1;
         self.names().insert(name.clone(), id);
-        let variable =
-            crate::module::GlobalVariable { ty, constant: true, initializer: Some(initializer), align: None };
+        let variable = crate::module::GlobalVariable {
+            externally_initialized: false,
+            ty,
+            constant: true,
+            initializer: Some(initializer),
+            align: None,
+        };
         self.pending.push(Pending::Table(name, variable));
         id
+    }
+
+    /// Whether a table is among the declarations made: its initializer may
+    /// hold the address of a global no code took before.
+    pub fn tables_pending(&self) -> bool {
+        self.pending.iter().any(|one| matches!(one, Pending::Table(..)))
     }
 
     /// The declarations made, added to `module`; how many.
@@ -255,6 +514,13 @@ impl Declared {
                     let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
                     (name, id)
                 }
+                Pending::Routine(name, ty, convention, attrs, parameter) => {
+                    let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
+                    if let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind {
+                        routine_facts(function, convention, &attrs, &parameter);
+                    }
+                    (name, id)
+                }
                 Pending::Table(name, variable) => {
                     let id = module.add_variable(&name, variable, crate::module::Linkage::Private)?;
                     (name, id)
@@ -264,6 +530,8 @@ impl Declared {
         }
         assert_eq!(module.metadata.len() as u32, self.first_node, "nodes numbered after the module's");
         module.metadata.append(&mut self.nodes);
+        module.special.append(&mut self.special);
+        self.located.clear();
         self.first_node = module.metadata.len() as u32;
         Ok(made)
     }
@@ -357,6 +625,37 @@ pub trait Analysis: 'static {
         Self::depends().is_some_and(|depends| depends.unaffected(changes, context, function))
     }
 
+    /// Whether a held `old`, the result for the function as it stands, still
+    /// holds beyond `==` with a fresh one: for a result that compares equal to
+    /// any other (a cache of what was asked) the check of its entries.
+    /// `LLRM_CHECK_PRESERVED` and `verify_invalidation` ask it of every entry
+    /// a pass kept.
+    #[allow(unused_variables)]
+    fn consistent(
+        old: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> bool {
+        true
+    }
+
+    /// Whether `audit` runs on every result this analysis hands out, kept or
+    /// derived (`LLRM_CHECK_CAPTURES`): a fact is judged where a pass reads it.
+    const AUDITED: bool = false;
+
+    /// An independent check of `result`, made each time it is handed out.
+    #[allow(unused_variables)]
+    fn audit(
+        result: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) {
+    }
+
     /// `previous`, which was true of the function before `changes`, made true
     /// of it now; none where it would be derived afresh. Must give what
     /// `run` gives, as `LLRM_CHECK_REPLAY` asserts.
@@ -399,8 +698,9 @@ pub trait Analysis: 'static {
 
 /// A fact about the whole module, as LLVM's `GlobalsAA`: computed on
 /// demand, before each pass once required (`PassManager::require`), and
-/// dropped unless every run of a pass preserved it. It asks `analyses` for
-/// the module analyses it builds on and its program. Function analyses
+/// dropped unless every run of a pass preserved it; or made at points alone
+/// and kept until abandoned (`PassManager::require_cached`). It asks `analyses`
+/// for the module analyses it builds on and its program. Function analyses
 /// read it through `Outer::cached`.
 pub trait ModuleAnalysis: 'static {
     type Result: PartialEq + std::fmt::Debug + 'static;
@@ -615,22 +915,43 @@ impl ModuleAnalysis for Declarations {
 pub struct Dominators;
 
 impl Analysis for Dominators {
-    type Result = DominatorTree;
+    type Result = DomTree;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "dominators";
     const INCREMENTAL: bool = true;
 
+    fn preserved(preserved: &PreservedAnalyses) -> bool {
+        preserved.kept::<Self>() || preserved.cfg_preserved()
+    }
+
     /// The blocks the changed edges reach are worked out again; nothing else
     /// can move.
     fn update(
-        previous: &DominatorTree,
+        previous: &DomTree,
         changes: &[crate::module::Change],
         _: &Context,
         _: &DataLayout,
         function: &Function,
         _: &mut Analyses,
-    ) -> Option<DominatorTree> {
+    ) -> Option<DomTree> {
         previous.updated(function, changes)
+    }
+
+    /// In place where nothing else holds the tree: LLVM's pass updates the
+    /// tree it owns, and a copy of it per edit is a step in the size of the
+    /// function.
+    fn update_owned(
+        previous: Rc<DomTree>,
+        changes: &[crate::module::Change],
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> Option<DomTree> {
+        match Rc::try_unwrap(previous) {
+            Ok(mut tree) => tree.update_in_place(function, changes).then_some(tree),
+            Err(shared) => shared.updated(function, changes),
+        }
     }
 
     fn run(
@@ -638,8 +959,8 @@ impl Analysis for Dominators {
         _: &DataLayout,
         function: &Function,
         _: &mut Analyses,
-    ) -> DominatorTree {
-        DominatorTree::new(function)
+    ) -> DomTree {
+        DomTree::of(function)
     }
 }
 
@@ -650,6 +971,11 @@ impl Analysis for Loops {
     type Result = crate::loopinfo::LoopInfo;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "loops";
+
+    fn preserved(preserved: &PreservedAnalyses) -> bool {
+        preserved.kept::<Self>() || preserved.cfg_preserved()
+    }
+
     fn run(
         context: &Context,
         layout: &DataLayout,
@@ -660,23 +986,6 @@ impl Analysis for Loops {
     }
 }
 
-/// LLVM's `ScalarEvolutionAnalysis`, of add recurrences alone.
-pub struct ScalarEvolution;
-
-impl Analysis for ScalarEvolution {
-    type Result = crate::scalarevolution::Evolution;
-    const READS_OUTER: bool = false;
-    const NAME: &'static str = "scalar-evolution";
-    fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
-    ) -> crate::scalarevolution::Evolution {
-        crate::scalarevolution::Evolution::new(context, function, &analyses.get::<Loops>(context, layout, function))
-    }
-}
-
 /// Which analyses a pass left true. MIRROR: LLVM's `PreservedAnalyses`
 /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Analysis.h#L109):
 /// a pass that changed something names what it kept, and the manager drops the
@@ -684,12 +993,18 @@ impl Analysis for ScalarEvolution {
 #[derive(Clone, Debug, Default)]
 pub struct PreservedAnalyses {
     all: bool,
+    /// LLVM's `preserveSet<CFGAnalyses>`: the pass left the CFG as it was.
+    cfg: bool,
     kept: HashSet<TypeId>,
+    /// Kept because the pass brought them up to date itself and put the
+    /// result back (`Analyses::replace`): LLVM's pass that uses
+    /// `MemorySSAUpdater` and then `preserve<MemorySSAAnalysis>()`.
+    updated: HashSet<TypeId>,
 }
 
 impl PreservedAnalyses {
     pub fn all() -> Self {
-        Self { all: true, kept: HashSet::default() }
+        Self { all: true, cfg: false, kept: HashSet::default(), updated: HashSet::default() }
     }
 
     pub fn none() -> Self {
@@ -701,9 +1016,31 @@ impl PreservedAnalyses {
         self
     }
 
+    /// `A` is kept because the pass updated it: the manager holds it only if
+    /// the pass put its updated result back with [`Analyses::replace`] as the
+    /// function stands after its last edit; otherwise it drops it (and
+    /// `LLRM_CHECK_STALE` fails, naming the pass).
+    pub fn preserve_updated<A: Analysis>(mut self) -> Self {
+        self.kept.insert(TypeId::of::<A>());
+        self.updated.insert(TypeId::of::<A>());
+        self
+    }
+
     pub fn preserve_module<M: ModuleAnalysis>(mut self) -> Self {
         self.kept.insert(TypeId::of::<M>());
         self
+    }
+
+    /// `preserveSet<CFGAnalyses>`: the pass changed no block or edge, so the
+    /// analyses that read only the CFG (dominators, loops) stand.
+    pub fn preserve_cfg(mut self) -> Self {
+        self.cfg = true;
+        self
+    }
+
+    /// `PreservedAnalyses::allAnalysesInSet<CFGAnalyses>`.
+    pub fn cfg_preserved(&self) -> bool {
+        self.all || self.cfg
     }
 
     /// Whether the pass changed nothing: LLVM's `areAllPreserved`.
@@ -722,6 +1059,14 @@ impl PreservedAnalyses {
     ) -> bool {
         self.all || self.kept.contains(&analysis)
     }
+
+    /// Whether the pass kept `analysis` by updating it (`preserve_updated`).
+    fn updated_by_pass(
+        &self,
+        analysis: TypeId,
+    ) -> bool {
+        self.updated.contains(&analysis)
+    }
 }
 
 /// What a function analysis may read beyond its function: LLVM's outer
@@ -734,9 +1079,75 @@ pub struct Outer {
     pub globals: Rc<Vec<GlobalValue>>,
     program: Rc<ProgramProxy>,
     modules: HashMap<TypeId, Rc<dyn Any>>,
+    /// What was worked out of these module analyses and nothing else.
+    memo: Memo,
+}
+
+/// Results derived from the module analyses of one [`Outer`] alone, kept for
+/// its life: a clone starts empty, as does one made by `with_declared`, and
+/// `require` empties it, so none outlives the analyses it was made from.
+#[derive(Default)]
+pub struct Memo(std::cell::RefCell<HashMap<(TypeId, u64), Rc<dyn Any>>>);
+
+impl Clone for Memo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
 }
 
 impl Outer {
+    /// The `V` kept under `key`, made by `make` the first time it is asked.
+    pub fn memo<V: 'static>(
+        &self,
+        key: u64,
+        make: impl FnOnce() -> V,
+    ) -> Rc<V> {
+        let at = (TypeId::of::<V>(), key);
+        if let Some(found) = self.memo.0.borrow().get(&at) {
+            return Rc::clone(found).downcast::<V>().expect("keyed by its type");
+        }
+        let made = Rc::new(make());
+        self.memo.0.borrow_mut().insert(at, Rc::clone(&made) as Rc<dyn Any>);
+        made
+    }
+}
+
+impl Outer {
+    /// `self` with the declarations `added` after its globals: the callee table
+    /// and the declarations a pass reads include a function a pass of this
+    /// run declared, as they will once the module has it.
+    pub fn with_declared(
+        &self,
+        added: Vec<GlobalValue>,
+    ) -> Outer {
+        let first = self.globals.len();
+        let mut globals = (*self.globals).clone();
+        globals.extend(added.iter().cloned());
+        let globals = Rc::new(globals);
+        let mut modules = self.modules.clone();
+        modules.insert(TypeId::of::<Declarations>(), Rc::clone(&globals) as Rc<dyn Any>);
+        let key = TypeId::of::<CalleeEffects>();
+        if let Some(old) = modules.get(&key).and_then(|one| Rc::clone(one).downcast::<crate::memory::Callees>().ok()) {
+            let mut callees = (*old).clone();
+            for (at, one) in added.iter().enumerate() {
+                if let GlobalKind::Function(function) = &one.kind {
+                    callees.insert(
+                        GlobalId((first + at) as u32),
+                        crate::memory::global_summary(one.name.as_deref(), function),
+                    );
+                }
+            }
+            modules.insert(key, Rc::new(callees));
+        }
+        Outer {
+            metadata: self.metadata.clone(),
+            globals,
+            program: Rc::clone(&self.program),
+            modules,
+            memo: Memo::default(),
+        }
+    }
+
     /// `module`'s, a program of its own for `target`, or a neutral one:
     /// for analyses asked outside a pass manager.
     pub fn of(
@@ -753,11 +1164,7 @@ impl Outer {
     ) {
         let result = ModuleAnalyses::new(Rc::clone(&self.program)).get::<M>(module);
         self.modules.insert(TypeId::of::<M>(), result);
-    }
-
-    /// Whether alias and decisions ask the intervals of counted loops.
-    pub fn loop_intervals(&self) -> bool {
-        self.program.loop_intervals
+        self.memo.0.borrow_mut().clear();
     }
 
     pub fn program(&self) -> &ProgramProxy {
@@ -832,12 +1239,13 @@ pub mod read {
     pub const SUMMARIES: u8 = 2;
     /// What `GlobalsAA` holds.
     pub const GLOBALS: u8 = 4;
-    /// What calling back into the module may do (`Callbacks`).
-    pub const CALLBACKS: u8 = 8;
     /// The other functions' and variables' declarations, and the globals'
     /// sizes.
     pub const DECLARATIONS: u8 = 16;
-    pub const ALL: u8 = 31;
+    /// What `GlobalsModRef` holds: what each function does to each tracked
+    /// global.
+    pub const GLOBALS_MODREF: u8 = 32;
+    pub const ALL: u8 = 55;
 
     thread_local! {
         static READ: Cell<u8> = const { Cell::new(0) };
@@ -859,7 +1267,7 @@ pub mod read {
             "callee-effects" | "call-registers" => CALLEES,
             "summaries" => SUMMARIES,
             "globals-aa" => GLOBALS,
-            "callbacks" => CALLBACKS,
+            "globals-modref" => GLOBALS_MODREF,
             "declarations" | "global-sizes" | "type-ancestry" => DECLARATIONS,
             _ => ALL,
         }
@@ -926,7 +1334,9 @@ impl<A: Analysis> Cached for Entry<A> {
         function: &Function,
         outer: &Rc<Outer>,
     ) -> bool {
-        *self.result == A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)))
+        let mut fresh = Analyses::new(Rc::clone(outer));
+        *self.result == A::run(context, layout, function, &mut fresh)
+            && A::consistent(&self.result, context, layout, function, &mut fresh)
     }
 
     fn preserved(
@@ -1014,7 +1424,7 @@ pub fn note_pass(name: &'static str) {
 /// nothing.
 fn why() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    TRACE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
+    TRACE.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_WHY"))
 }
 
 /// Starts or stops counting recomputations on this thread (the test form of
@@ -1048,17 +1458,34 @@ fn record(
 
 fn why_printed() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_WHY"))
 }
 
 fn check_modules() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_MODULES").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
+}
+
+fn check_captures() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CAPTURES").is_some())
 }
 
 fn check_replay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_REPLAY").is_some())
+    let on = *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_REPLAY"));
+    if on {
+        REPLAY_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    on
+}
+
+static REPLAY_CHECKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// How many times a `LLRM_CHECK_REPLAY` site asked and found it on: reported by
+/// `LLRM_DEBUG=checks` like `stale_checks_run`, which the premise step reads.
+pub fn replay_checks_run() -> u32 {
+    REPLAY_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Whether `changes` only keep every live value's meaning, as a result that
@@ -1164,6 +1591,23 @@ impl Substitutions {
 }
 
 impl Analyses {
+    /// The functions `declared` holds that the outer facts lack, added to them:
+    /// the passes after the one that declared a function see its callee, and
+    /// what was derived from the outer facts is derived again.
+    pub fn declared(
+        &mut self,
+        context: &Context,
+        declared: &Declared,
+    ) {
+        let added = declared.since(self.outer.globals.len(), context);
+        if added.is_empty() {
+            return;
+        }
+        let outer = Rc::new(self.outer.with_declared(added));
+        self.drop_reading_outer();
+        self.outer = outer;
+    }
+
     /// Drops what was kept only as sound: a named point (the start of a round,
     /// after the interprocedural step) where the facts are worked out afresh,
     /// as gcc recomputes its alias results at a few fixed points.
@@ -1201,6 +1645,18 @@ impl Analyses {
     /// The proxy, not noted as a read: for the manager's own use.
     pub fn outer_unread(&self) -> &Rc<Outer> {
         &self.outer
+    }
+
+    /// `A`'s result, if computed, and the point in the function's history it
+    /// was true at: the cached one, or one kept past an invalidation for
+    /// `update` to bring up to date. What a pass that edits and rarely asks
+    /// holds (the updates queue in the change log), for LLVM's lazy
+    /// `DomTreeUpdater`.
+    pub fn held<A: Analysis>(&self) -> Option<(Rc<A::Result>, crate::module::Mark)> {
+        let key = TypeId::of::<A>();
+        let entry = self.cache.get(&key).or_else(|| self.kept.get(&key))?;
+        let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+        Some((Rc::clone(&entry.result), entry.mark))
     }
 
     /// `A`'s result, if computed: LLVM's `getCachedResult`.
@@ -1259,6 +1715,19 @@ impl Analyses {
 
     /// `A`'s result for `function`, computed once until invalidated.
     pub fn get<A: Analysis>(
+        &mut self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Rc<A::Result> {
+        let result = self.found::<A>(context, layout, function);
+        if A::AUDITED && check_captures() {
+            A::audit(&result, context, layout, function, self);
+        }
+        result
+    }
+
+    fn found<A: Analysis>(
         &mut self,
         context: &Context,
         layout: &DataLayout,
@@ -1448,10 +1917,36 @@ impl Analyses {
         function: &Function,
     ) {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_PRESERVED").is_some()) {
+        if *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_PRESERVED")) {
             let stale = self.stale(context, layout, function);
             assert!(stale.is_empty(), "{pass} left {} held but stale", stale.join(", "));
         }
+    }
+
+    /// Puts `result` back as `A`'s result for `function` as it stands now: a
+    /// pass that updated a clone of what it asked for (LLVM's
+    /// `MemorySSAUpdater` on the analysis itself) stores it here, then
+    /// returns `PreservedAnalyses::preserve_updated::<A>()`. Call it after the
+    /// last edit: the result is stamped with the function's history now.
+    pub fn replace<A: Analysis>(
+        &mut self,
+        function: &Function,
+        result: A::Result,
+    ) {
+        let key = TypeId::of::<A>();
+        self.kept.remove(&key);
+        self.evicted.remove(&key);
+        self.soft.remove(&key);
+        self.cache.insert(
+            key,
+            Box::new(Entry::<A> {
+                result: Rc::new(result),
+                outer: Rc::clone(&self.outer),
+                mark: function.mark(),
+                bits: 0,
+                from_older: false,
+            }),
+        );
     }
 
     /// Drops what `preserved` does not keep: LLVM's
@@ -1500,8 +1995,24 @@ impl Analyses {
         current: Option<&Function>,
     ) {
         self.attributes = current.map(Function::attributes_stamp);
-        let gone: Vec<TypeId> =
+        let mut gone: Vec<TypeId> =
             self.cache.iter().filter(|(_, entry)| !entry.preserved(preserved)).map(|(key, _)| *key).collect();
+        // Kept because the pass updated it: held only if the pass put the
+        // result back as the function stands, else it is as old as the edits.
+        if let Some(function) = current {
+            for (key, entry) in &self.cache {
+                if preserved.updated_by_pass(*key) && !preserved.are_all_preserved() && entry.mark() != function.mark()
+                {
+                    assert!(
+                        !stale_checks_on(),
+                        "{} was declared kept updated by {} and not put back with `replace` after its last edit",
+                        entry.name(),
+                        PASS.with(std::cell::Cell::get)
+                    );
+                    gone.push(*key);
+                }
+            }
+        }
         self.retire(gone);
     }
 
@@ -1636,7 +2147,7 @@ impl Analyses {
 /// was not reported fails, where otherwise it is brought up to date.
 fn unreported_fails() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_UNREPORTED").is_some())
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_UNREPORTED"))
 }
 
 /// A module analysis: how to compute it, and whether two results agree.
@@ -1715,10 +2226,16 @@ pub struct ModuleAnalyses {
     /// What every outer proxy holds, beside the callees' effects, the
     /// globals' sizes and declarations.
     required: Vec<Kind>,
+    /// What an outer proxy holds once made, kept until abandoned
+    /// (`PassManager::require_cached`).
+    stateless: Vec<Kind>,
     results: HashMap<TypeId, (Kind, Rc<dyn Any>)>,
     /// Results dropped, reused when computed again the same, so that an
     /// outer proxy holding them stays the same.
     dropped: HashMap<TypeId, Rc<dyn Any>>,
+    /// The results `take_dropped` handed over, for `why` to tell a result
+    /// brought up to date from one made from nothing.
+    taken: HashSet<TypeId>,
     outer: Option<Rc<Outer>>,
     functions: HashMap<GlobalId, Analyses>,
     /// The bodies reported edited since the declarations were last checked
@@ -1734,6 +2251,9 @@ pub struct ModuleAnalyses {
     /// analyses made over it, not to ones carried from before.
     log_epoch: u64,
     declarations_open: bool,
+    /// How often `invalidate` has said anything may have changed: a result that
+    /// trusts the log of edits for what moved must be of the same count.
+    resets: u64,
     metadata_open: bool,
     /// What an analysis keeps for its next run, by its type: the working of an
     /// update that reuses the last.
@@ -1749,6 +2269,17 @@ pub struct ModuleAnalyses {
 pub struct Carried {
     dropped: HashMap<TypeId, Rc<dyn Any>>,
     memos: HashMap<TypeId, Box<dyn Any>>,
+    /// The stateless results, held as they were.
+    held: Vec<(Kind, Rc<dyn Any>)>,
+    stateless: Vec<Kind>,
+}
+
+impl Carried {
+    /// Drops `M`'s result, held or not.
+    pub(crate) fn abandon<M: ModuleAnalysis>(&mut self) {
+        self.held.retain(|(kind, _)| kind.id != TypeId::of::<M>());
+        self.dropped.remove(&TypeId::of::<M>());
+    }
 }
 
 static NEXT_LOG_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -1758,14 +2289,17 @@ impl ModuleAnalyses {
         Self {
             program,
             required: Vec::new(),
+            stateless: Vec::new(),
             results: HashMap::default(),
             dropped: HashMap::default(),
+            taken: HashSet::default(),
             outer: None,
             functions: HashMap::default(),
             edited: BTreeSet::new(),
             edit_log: Vec::new(),
             log_epoch: NEXT_LOG_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             declarations_open: true,
+            resets: 0,
             metadata_open: true,
             memos: HashMap::default(),
             scratch: false,
@@ -1775,8 +2309,15 @@ impl ModuleAnalyses {
     /// What `self` leaves for the analyses made next over this module.
     pub fn carried(self) -> Carried {
         let mut dropped = self.dropped;
-        dropped.extend(self.results.into_iter().map(|(id, (_, held))| (id, held)));
-        Carried { dropped, memos: self.memos }
+        let mut held = Vec::new();
+        for (id, (kind, result)) in self.results {
+            if self.stateless.iter().any(|one| one.id == id) {
+                held.push((kind, result));
+            } else {
+                dropped.insert(id, result);
+            }
+        }
+        Carried { dropped, memos: self.memos, held, stateless: self.stateless }
     }
 
     /// `self`, with what the analyses before it left.
@@ -1786,6 +2327,12 @@ impl ModuleAnalyses {
     ) -> Self {
         self.dropped = before.dropped;
         self.memos = before.memos;
+        for kind in before.stateless {
+            if !self.stateless.iter().any(|one| one.id == kind.id) {
+                self.stateless.push(kind);
+            }
+        }
+        self.results.extend(before.held.into_iter().map(|(kind, result)| (kind.id, (kind, result))));
         self
     }
 
@@ -1833,6 +2380,31 @@ impl ModuleAnalyses {
         module: &Module,
     ) -> Rc<M::Result> {
         self.computed(Kind::of::<M>(), module).downcast::<M::Result>().expect("keyed by its type")
+    }
+
+    /// Drops the stateless results, as a pass that adds a table must: its
+    /// initializer may take a tracked global's address. DEVIATE: LLVM keeps
+    /// GlobalsAA past SimplifyCFG's lookup tables.
+    pub fn abandon_stateless(&mut self) {
+        for kind in &self.stateless {
+            if let Some((_, result)) = self.results.remove(&kind.id) {
+                self.dropped.insert(kind.id, result);
+            }
+        }
+    }
+
+    /// The result of `M` a pass dropped, handed over to the run that brings it
+    /// up to date: not kept, so that it is the only holder where nothing else
+    /// holds it. A run that does not take it leaves it to be compared.
+    pub fn take_dropped<M: ModuleAnalysis>(&mut self) -> Option<Rc<M::Result>> {
+        let one = self.dropped.remove(&TypeId::of::<M>())?;
+        self.taken.insert(TypeId::of::<M>());
+        Some(one.downcast::<M::Result>().expect("keyed by its type"))
+    }
+
+    /// Whether `M` is made only at its points (`PassManager::require_cached`).
+    pub fn is_stateless<M: ModuleAnalysis>(&self) -> bool {
+        self.stateless.iter().any(|one| one.id == TypeId::of::<M>())
     }
 
     /// `M`'s result, if computed.
@@ -1888,10 +2460,12 @@ impl ModuleAnalyses {
                         "diff"
                     }
                 }
+                None if self.taken.contains(&kind.id) => "diff",
                 None => "first",
             };
             record("mod", kind.name, class);
         }
+        self.taken.remove(&kind.id);
         let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
         self.results.insert(kind.id, (kind, Rc::clone(&result)));
         result
@@ -1899,6 +2473,19 @@ impl ModuleAnalyses {
 
     /// Drops what `preserved` does not keep.
     pub fn invalidate(
+        &mut self,
+        preserved: &PreservedAnalyses,
+    ) {
+        self.declarations_open = true;
+        self.resets += 1;
+        self.metadata_open = true;
+        self.invalidate_bodies(preserved);
+    }
+
+    /// `invalidate` for a pass that changed the declarations of the bodies it
+    /// reported to `changed` and of no other global: what trusts the log of
+    /// edits for what moved may go on trusting it.
+    pub fn invalidate_logged(
         &mut self,
         preserved: &PreservedAnalyses,
     ) {
@@ -1915,7 +2502,14 @@ impl ModuleAnalyses {
         &mut self,
         preserved: &PreservedAnalyses,
     ) {
-        let gone: Vec<TypeId> = self.results.keys().filter(|one| !preserved.keeps(**one)).copied().collect();
+        // A stateless result stands whatever the pass kept, as LLVM's
+        // `GlobalsAAResult::invalidate` (GlobalsModRef.cpp:825, d1106deb71cc).
+        let gone: Vec<TypeId> = self
+            .results
+            .keys()
+            .filter(|one| !preserved.keeps(**one) && !self.stateless.iter().any(|kind| kind.id == **one))
+            .copied()
+            .collect();
         for one in gone {
             let (_, result) = self.results.remove(&one).expect("held");
             self.dropped.insert(one, result);
@@ -1938,6 +2532,7 @@ impl ModuleAnalyses {
                     globals: Rc::default(),
                     program: Rc::clone(&self.program),
                     modules: HashMap::default(),
+                    memo: Memo::default(),
                 }),
             };
             self.functions.insert(id, Analyses::new(outer));
@@ -1987,6 +2582,11 @@ impl ModuleAnalyses {
         &self.edit_log
     }
 
+    /// How often a pass has said anything may have changed (`invalidate`).
+    pub fn resets(&self) -> u64 {
+        self.resets
+    }
+
     /// Which `edit_log` this is, for an analysis that keeps a position in it: a
     /// position kept by analyses carried over from before is of another log.
     pub fn log_epoch(&self) -> u64 {
@@ -2022,6 +2622,8 @@ impl ModuleAnalyses {
         &mut self,
         module: &Module,
     ) -> Rc<Outer> {
+        let required: Vec<Kind> =
+            self.required.iter().filter(|one| !self.stateless.iter().any(|kind| kind.id == one.id)).copied().collect();
         let every = [
             Kind::of::<CalleeEffects>(),
             Kind::of::<CallRegisters>(),
@@ -2030,8 +2632,16 @@ impl ModuleAnalyses {
             Kind::of::<TypeAncestry>(),
         ]
         .into_iter()
-        .chain(self.required.clone());
-        let modules: HashMap<TypeId, Rc<dyn Any>> = every.map(|kind| (kind.id, self.computed(kind, module))).collect();
+        .chain(required);
+        let mut modules: HashMap<TypeId, Rc<dyn Any>> =
+            every.map(|kind| (kind.id, self.computed(kind, module))).collect();
+        // A stateless one as LLVM's `getCachedResult` through the proxy: only
+        // what was made.
+        for kind in &self.stateless {
+            if let Some((_, result)) = self.results.get(&kind.id) {
+                modules.insert(kind.id, Rc::clone(result));
+            }
+        }
         // The declarations and the metadata are results among these: where
         // every result is the one the proxy holds, so are they, and
         // neither is read again.
@@ -2045,7 +2655,13 @@ impl ModuleAnalyses {
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()])
             .downcast::<Vec<GlobalValue>>()
             .expect("keyed by its type");
-        let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };
+        let now = Outer {
+            metadata: module.metadata.clone(),
+            globals,
+            program: Rc::clone(&self.program),
+            modules,
+            memo: Memo::default(),
+        };
         if !self.outer.as_ref().is_some_and(|old| old.same(&now)) {
             self.outer = Some(Rc::new(now));
         }
@@ -2088,8 +2704,70 @@ impl ModuleAnalyses {
     }
 }
 
+thread_local! {
+    /// The first body a pass left with a short phi since the manager last
+    /// asked (#3016), as "after <pass>: ...".
+    static PHI_PROBLEM: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `pass`, then (in a build with debug assertions: dev, the unit tests)
+/// checks that every phi of the body it left has one input per edge, and notes
+/// the first pass that left one short for [`take_phi_problem`]. Passes that run
+/// others (a slot of several, the fixed-point rounds) run them through here, so
+/// the member is named and not the slot. A release build pays nothing: LLVM
+/// verifies only under `-verify-each`.
+pub fn run_checked(
+    pass: &mut dyn FunctionPass,
+    unit: &mut Unit,
+    analyses: &mut Analyses,
+) -> PreservedAnalyses {
+    let preserved = pass.run(unit, analyses);
+    check_phi_arity(pass.name(), unit.function);
+    preserved
+}
+
+/// [`run_checked`]'s check, for a pass that edits in steps and names a step
+/// that is not a pass of its own.
+pub fn check_phi_arity(
+    step: &str,
+    function: &Function,
+) {
+    #[cfg(debug_assertions)]
+    PHI_PROBLEM.with(|problem| {
+        let mut problem = problem.borrow_mut();
+        if problem.is_none() {
+            let found = crate::verify::phi_arity(function);
+            if !found.is_empty() {
+                *problem = Some(format!("after {step}: {}", found.join("; ")));
+            }
+        }
+    });
+    #[cfg(not(debug_assertions))]
+    let _ = (step, function);
+}
+
+/// The problem [`run_checked`] noted, if any, and forgets it.
+pub fn take_phi_problem() -> Option<String> {
+    PHI_PROBLEM.with(|problem| problem.borrow_mut().take())
+}
+
 pub trait FunctionPass {
     fn name(&self) -> &'static str;
+    /// The names of the passes that run under `name` (a slot that stands for
+    /// one pass of LLVM and runs several): the pass itself if it is one.
+    fn parts(&self) -> Vec<&'static str> {
+        vec![self.name()]
+    }
+    /// The LLVM pass this one translates; `None` for an llrm stand-in. The
+    /// parity registry refuses an Old slot that runs one
+    /// (`parity::check_phase`).
+    fn translation(&self) -> Option<&'static str> {
+        None
+    }
+    /// [`translation`](Self::translation) of each pass that runs under `name`.
+    fn translations(&self) -> Vec<&'static str> {
+        self.translation().into_iter().collect()
+    }
     /// Whether the pass may add a memory operation a function did not have (a
     /// load speculated, a call made). The module analyses frozen at a point
     /// of the pipeline (`PassManager::freeze`) are held past a pass that says
@@ -2098,6 +2776,20 @@ pub trait FunctionPass {
     /// and says if it did.
     fn adds_memory_operations(&self) -> bool {
         true
+    }
+
+    /// The pass reads how many instructions another function has
+    /// (`Function::getInstructionCount`): the manager counts the functions a
+    /// global's initializer names, once before the pass runs over the module
+    /// and again for each of them the pass changes (`Declared::size_of`).
+    fn wants_sizes(&self) -> bool {
+        false
+    }
+
+    /// The pass dumps the bodies it is run over itself (the pipeline does, per
+    /// function), so the manager dumps none.
+    fn dumps_inputs_itself(&self) -> bool {
+        false
     }
     /// The parts of a function the pass looks at (`footprint`). A pass that
     /// found nothing to do is not run again until an edit reaches one of
@@ -2140,6 +2832,11 @@ pub(crate) enum Pass {
     /// Not a pass: from here the module analyses it names are not dropped by a
     /// pass that adds no memory operation.
     Freeze(Vec<Kind>),
+    /// Not a pass: computes the stateless analysis now, again where `again`.
+    Compute {
+        kind: Kind,
+        again: bool,
+    },
 }
 
 impl Pass {
@@ -2149,6 +2846,8 @@ impl Pass {
             Pass::Module(pass) => pass.name(),
             Pass::Program(pass) => pass.name(),
             Pass::Freeze(_) => "freeze",
+            Pass::Compute { again: false, .. } => "require",
+            Pass::Compute { again: true, .. } => "recompute",
         }
     }
 }
@@ -2170,14 +2869,15 @@ pub struct PassManager {
     pub verify_invalidation: bool,
     /// A directory each pass's output is written to, as `NN-pass.ll`.
     pub dump: Option<std::path::PathBuf>,
+    /// `LLRM_DUMP_INPUTS`: the module each pass is about to run over is dumped
+    /// too, as `NNNN-in-pass.ll` with a line in `manifest.txt`.
+    pub dump_inputs: bool,
     /// How many pass runs happen, a module pass's one and a function
     /// pass's one per function, as LLVM's `-opt-bisect-limit`: each run is
     /// named on stderr, and those past the limit are skipped.
     pub bisect: Option<usize>,
     pub(crate) required: Vec<Kind>,
-    /// The program is run without the intervals of counted loops for alias and
-    /// decisions (`Program::loop_intervals`).
-    pub without_loop_intervals: bool,
+    pub(crate) stateless: Vec<Kind>,
     /// Program analyses computed before each module's run.
     pub(crate) program_required: Vec<fn(&Program, &mut ProgramAnalyses)>,
     /// Pass runs so far, for `bisect`.
@@ -2230,6 +2930,29 @@ impl PassManager {
         }
     }
 
+    /// `M` is made only at `compute` and `recompute`, read through the outer
+    /// proxy once made (LLVM's `getCachedResult`), and kept past every pass
+    /// until one abandons it (`ProgramAnalyses::abandon`), as LLVM's
+    /// `GlobalsAA`. Held past a function pass it is rechecked under
+    /// `LLRM_CHECK_STALE` like a frozen one.
+    pub fn require_cached<M: ModuleAnalysis>(&mut self) {
+        if !self.stateless.iter().any(|one| one.id == TypeId::of::<M>()) {
+            self.stateless.push(Kind::of::<M>());
+        }
+    }
+
+    /// LLVM's `RequireAnalysisPass<M>`: `M` made here unless held, and the
+    /// module analyses that read it dropped
+    /// (`InvalidateAnalysisPass<AAManager>`).
+    pub fn compute<M: ModuleAnalysis>(&mut self) {
+        self.passes.push(Pass::Compute { kind: Kind::of::<M>(), again: false });
+    }
+
+    /// LLVM's `RecomputeGlobalsAAPass`: `compute`, made afresh even if held.
+    pub fn recompute<M: ModuleAnalysis>(&mut self) {
+        self.passes.push(Pass::Compute { kind: Kind::of::<M>(), again: true });
+    }
+
     /// Computes program analysis `P` before each module's run, for the
     /// module's analyses to read through their program proxy.
     pub fn require_program<P: crate::program::ProgramAnalysis>(&mut self) {
@@ -2244,7 +2967,6 @@ impl PassManager {
         &mut self,
         program: &mut Program,
     ) -> Result<Vec<Stage>, String> {
-        program.loop_intervals = !self.without_loop_intervals;
         self.managed(program, &mut ProgramAnalyses::default())
     }
 
@@ -2297,6 +3019,11 @@ impl PassManager {
                     );
                     running
                 }) {
+                    if self.dump_inputs {
+                        for (at, module) in program.modules.iter().enumerate() {
+                            before(&dumps[at], start, name, module)?;
+                        }
+                    }
                     let _running = crate::counts::pass_run(name, 0);
                     spanned(name, || pass.run(program, analyses))?;
                 }
@@ -2325,6 +3052,7 @@ impl PassManager {
                 let before = interface(&program.modules[at]);
                 let mut modules = ModuleAnalyses {
                     required: self.required.clone(),
+                    stateless: self.stateless.clone(),
                     ..ModuleAnalyses::new(analyses.proxy(program, at))
                 };
                 if let Some(before) = analyses.uncarry(at) {
@@ -2363,15 +3091,30 @@ impl PassManager {
             eprintln!("BISECT: {}running pass ({runs}) {name} on {unit}", if running { "" } else { "NOT " });
             running
         };
+        let inputs = self.dump_inputs;
         let mut frozen: Vec<Kind> = Vec::new();
         for (number, pass) in self.passes.iter_mut().enumerate().skip(passes.start).take(passes.len()) {
             let name = pass.name();
             PASS.with(|p| p.set(name));
+            let dumped_by_itself = matches!(pass, Pass::Function(one) if one.dumps_inputs_itself());
+            if inputs && !dumped_by_itself && !matches!(pass, Pass::Freeze(_) | Pass::Compute { .. }) {
+                before(dump, number, name, module)?;
+            }
             let pass = match pass {
                 Pass::Function(pass) => pass,
                 Pass::Program(_) => unreachable!("a program pass runs over every module"),
                 Pass::Freeze(kinds) => {
                     frozen.extend(kinds.iter().copied());
+                    continue;
+                }
+                Pass::Compute { kind, again } => {
+                    if *again && let Some((_, old)) = analyses.results.remove(&kind.id) {
+                        analyses.dropped.insert(kind.id, old);
+                    }
+                    if !analyses.results.contains_key(&kind.id) {
+                        analyses.computed(*kind, module);
+                        analyses.invalidate_bodies(&PreservedAnalyses::none());
+                    }
                     continue;
                 }
                 Pass::Module(pass) => {
@@ -2416,25 +3159,36 @@ impl PassManager {
             // The module analyses every run of the pass preserved.
             let mut kept: HashSet<TypeId> = analyses.results.keys().copied().collect();
             let mut declared = Declared::of(module);
+            // The sizes a pass that `wants_sizes` reads: of the functions a
+            // constant names (a table of them), the only ones it can ask about.
+            let sized = pass.wants_sizes();
+            if sized {
+                declared.sizes = referenced_sizes(module);
+            }
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
+                // The other bodies as they stand, for an audit that
+                // reads a callee.
+                if check_captures() {
+                    MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
+                }
                 let Module { context, globals, metadata, .. } = &mut *module;
                 let global = &mut globals[at];
                 let GlobalKind::Function(function) = &mut global.kind else { continue };
-                if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
+                if function.is_declaration()
+                    || function.is_deleted()
+                    || !bisected(name, global.name.as_deref().unwrap_or_default())
+                {
                     continue;
                 }
-                RUNNING_FUNCTION.with(|running| {
-                    let mut running = running.borrow_mut();
-                    running.clear();
-                    running.push_str(global.name.as_deref().unwrap_or_default());
-                });
+                set_running_function(global.name.as_deref().unwrap_or_default());
                 let cache = analyses.manager(id, &outer);
                 let before = function.mark();
                 let running = crate::counts::pass_run_over(name, function);
                 let preserved = in_function(global.name.as_deref().unwrap_or_default(), || {
                     spanned(name, || {
-                        pass.run(
+                        run_checked(
+                            pass.as_mut(),
                             &mut Unit {
                                 context,
                                 layout: &layout,
@@ -2448,6 +3202,9 @@ impl PassManager {
                     })
                 });
                 drop(running);
+                if let Some(problem) = take_phi_problem() {
+                    return Err(problem);
+                }
                 kept.retain(|one| preserved.keeps(*one));
                 spanned("invalidate", || cache.invalidate(function, &preserved));
                 cache.check_kept(name, context, &layout, function);
@@ -2457,13 +3214,24 @@ impl PassManager {
                         return Err(format!("{name} claims to preserve {} but changed them", stale.join(", ")));
                     }
                 }
-                // An analysis that reads the log of edits is told of this one.
+                // An analysis that reads the log of edits is told of
+                // this one.
                 let moved = function.mark() != before;
                 stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
                 if moved {
                     analyses.edit_log.push(id);
                 }
+
+                if declared.tables_pending() {
+                    analyses.abandon_stateless();
+                }
                 spanned("declared", || declared.place(module))?;
+                if sized
+                    && let Some(size) = declared.sizes.get_mut(&GlobalId(at as u32))
+                    && let GlobalKind::Function(function) = &module.globals[at].kind
+                {
+                    *size = Size::Instructions(function.live_instructions());
+                }
             }
             if self.verify_invalidation {
                 let stale = analyses.stale(module, &kept);
@@ -2479,9 +3247,11 @@ impl PassManager {
             let mut preserved = PreservedAnalyses::none();
             preserved.kept = kept;
             analyses.invalidate(&preserved);
+            let mut checked = self.stateless.clone();
             if !pass.adds_memory_operations() {
-                checked_stale(module, analyses, &frozen, name);
+                checked.extend(frozen.iter().copied());
             }
+            checked_stale(module, analyses, &checked, name);
             after(dump, self.verify_each, number, name, module)?;
         }
         Ok(stages)
@@ -2489,12 +3259,21 @@ impl PassManager {
 }
 
 thread_local! {
+    /// The module as it stood before the function pass now running
+    /// (`LLRM_CHECK_CAPTURES`).
+    pub static MODULE_SNAPSHOT: std::cell::RefCell<Option<Rc<Module>>> = const { std::cell::RefCell::new(None) };
     static CHECK_STALE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `LLRM_CHECK_STALE` for this thread, for a test.
 pub fn check_stale(on: bool) {
     CHECK_STALE.with(|check| check.set(on));
+}
+
+/// `LLRM_CHECK_STALE`, or `check_stale(true)` on this thread.
+fn stale_checks_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_STALE").is_some())
 }
 
 static STALE_CHECKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -2515,8 +3294,7 @@ fn checked_stale(
     pass: &str,
 ) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let on =
-        CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_STALE").is_some());
+    let on = CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_STALE"));
     if frozen.is_empty() || !on {
         return;
     }
@@ -2546,6 +3324,35 @@ impl ProgramPass for PassManager {
     ) -> Result<(), String> {
         self.managed(program, analyses).map(|_| ())
     }
+}
+
+/// `LLRM_DUMP_INPUTS`: the module pass `number` is about to run over, as
+/// `NNNN-in-pass.ll`, with a line in `manifest.txt` (pass, number, file,
+/// instructions), as the pipeline's `input` writes for a function.
+fn before(
+    dump: &Option<std::path::PathBuf>,
+    number: usize,
+    name: &str,
+    module: &Module,
+) -> Result<(), String> {
+    let Some(directory) = dump else { return Ok(()) };
+    let file = format!("{:04}-in-{name}.ll", number + 1);
+    let instructions: usize = module
+        .globals
+        .iter()
+        .map(|global| match &global.kind {
+            GlobalKind::Function(function) => function.walk().count(),
+            _ => 0,
+        })
+        .sum();
+    let line = format!("{name} {} {file} {instructions}\n", number + 1);
+    std::fs::create_dir_all(directory)
+        .and_then(|()| std::fs::write(directory.join(&file), crate::print::module(module)))
+        .and_then(|()| {
+            let mut out = std::fs::OpenOptions::new().create(true).append(true).open(directory.join("manifest.txt"))?;
+            std::io::Write::write_all(&mut out, line.as_bytes())
+        })
+        .map_err(|error| error.to_string())
 }
 
 /// The dump and the verifier after pass `number`.

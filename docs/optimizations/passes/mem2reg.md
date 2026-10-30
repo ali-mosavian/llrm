@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/mem2reg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/mem2reg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/mem2reg.rs sha256:84daa963bab54f5cc2fa1046d68aafd99e519f55a47e15bbbd876935bc077220 -->
+<!-- src: crates/opt/llrm-transforms/src/mem2reg.rs sha256:0d613e981fc535ba2e8fb29f3e151bb8e4fbaa9780ed4b025321cc8a74f42da5 -->
 
 # mem2reg
 
@@ -29,7 +29,6 @@ DEVIATE, each with its reason:
   MIR has none.
 - No `llvm.assume`, so no `convertMetadataToAssumes` (`noundef` metadata)
   and no droppable users; no `fake_use`. Lifetime markers are translated.
-- MIR has `poison` and no `undef`: `UndefValue` is `poison`.
 - `isGuaranteedNotToBePoison` is true of a constant that is not `poison`
   only (no `noundef` arguments).
 - The iterated dominance frontier is `Dominance::frontiers` iterated with
@@ -80,4 +79,4 @@ b3:
 
 ## Used by
 [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when
-`Options::mem2reg` (`LLRM_EXP_MEM2REG`) is set; off by default.
+`Options::mem2reg` is set (on by default; `LLRM_NO_MEM2REG` turns it off).

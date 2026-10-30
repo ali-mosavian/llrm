@@ -8,8 +8,8 @@
 //!
 //! - a load's pointer and a store's pointer (not the stored value) are
 //!   accesses;
-//! - a lifetime marker (`marker` says which instructions) names an object
-//!   without handing out its address;
+//! - a lifetime marker, or a use `marker` says keeps no copy (`nocapture`),
+//!   names an object without handing out its address;
 //! - any other use, including storing the pointer, passing it to a call,
 //!   returning it, `ptrtoint`, or comparing it, exposes it.
 //!
@@ -102,6 +102,95 @@ fn accessed(
     }
 }
 
+/// Whether `value` may hold an address no fact follows: a parameter, or a
+/// result that is neither an alloca nor a move of one such value (a load, a
+/// call, an integer cast), or a phi with such an arm. `seen` stops a cycle.
+fn unfollowed(
+    function: &Function,
+    value: ValueId,
+    seen: &mut llrm_mir::dense::IdSet<ValueId>,
+) -> bool {
+    use llrm_mir::module::ValueDef;
+    if !seen.insert(value) {
+        return false;
+    }
+    match function.value(value).def {
+        ValueDef::Argument(_) => true,
+        ValueDef::Instruction(inst) => {
+            let instruction = function.instruction(inst);
+            match instruction.opcode {
+                Opcode::Alloca { .. } => false,
+                Opcode::Phi => instruction.operands.chunks(2).any(|pair| {
+                    matches!(
+                        pair[0],
+                        Operand::Value(arm) if unfollowed(function, arm, seen)
+                    )
+                }),
+                _ => match source(function, inst) {
+                    Some(Operand::Value(from)) => unfollowed(function, from, seen),
+                    Some(_) => false,
+                    None => true,
+                },
+            }
+        }
+    }
+}
+
+/// Whether the phi `inst` joins an address with one no fact follows: a pointer
+/// loaded from memory, a parameter, a call's result. What the phi holds may
+/// then be any of its other arms' objects, reached by a pointer that is no
+/// fact, so those objects are exposed (a load through the join may read them).
+fn joins_unfollowed(
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    function
+        .instruction(inst)
+        .operands
+        .chunks(2)
+        .any(
+            |pair| matches!(
+                pair[0],
+                Operand::Value(arm) if unfollowed(function, arm, &mut llrm_mir::dense::IdSet::new())
+            ),
+        )
+}
+
+/// The values that may hold an address no fact follows (`unfollowed`), for
+/// every value at once: the parameters and the results that are neither an
+/// alloca nor a move, spread to what moves them.
+fn unfollowed_values(function: &Function) -> Vec<bool> {
+    let mut unfollowed_value = vec![false; function.value_count()];
+    let mut spread: Vec<ValueId> = Vec::new();
+    for &parameter in function.parameters() {
+        unfollowed_value[parameter.0 as usize] = true;
+        spread.push(parameter);
+    }
+    for (_, inst) in function.walk() {
+        let instruction = function.instruction(inst);
+        let Some(result) = instruction.result else { continue };
+        let moving =
+            matches!(instruction.opcode, Opcode::Alloca { .. } | Opcode::Phi) || source(function, inst).is_some();
+        if !moving {
+            unfollowed_value[result.0 as usize] = true;
+            spread.push(result);
+        }
+    }
+    while let Some(value) = spread.pop() {
+        for (to, _) in function.users(value).iter().map(|one| (one.user, one.index)) {
+            let instruction = function.instruction(to);
+            let moves = instruction.opcode == Opcode::Phi || source(function, to) == Some(Operand::Value(value));
+            if let (true, Some(result)) = (moves, instruction.result)
+                && !unfollowed_value[result.0 as usize]
+            {
+                unfollowed_value[result.0 as usize] = true;
+                spread.push(result);
+            }
+        }
+    }
+    unfollowed_value
+}
+
 pub fn analysed(function: &Function) -> Escapes {
     // Origins are not allocation bounds. Absence here says nothing about
     // runtime frame walking, callbacks, or pointers loaded from memory.
@@ -168,13 +257,35 @@ pub fn analysed(function: &Function) -> Escapes {
         }
     }
 
-    let exposed: BTreeSet<ValueId> =
+    let mut exposed: BTreeSet<ValueId> =
         operations.iter().filter(|&&inst| !moving(inst)).flat_map(|&inst| inputs(inst, &origins)).collect();
+    // A join with an arm no fact follows exposes what its other arms hold.
+    let unfollowed_value = unfollowed_values(function);
+    for &phi in &phis {
+        let instruction = function.instruction(phi);
+        let joins = instruction
+            .operands
+            .chunks(2)
+            .any(
+                |arm| matches!(
+                    arm[0],
+                    Operand::Value(value) if unfollowed_value[value.0 as usize]
+                ),
+            );
+        if joins {
+            for arm in instruction.operands.chunks(2) {
+                if let Operand::Value(value) = arm[0] {
+                    exposed.extend(origins.get(&value).into_iter().flatten().copied());
+                }
+            }
+        }
+    }
     Escapes { origins, exposed }
 }
 
 thread_local! {
     static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static WHOLE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -186,6 +297,21 @@ pub fn whole_runs() -> usize {
 
 /// How many times this thread has asked `exposes` of one alloca, for a test
 /// that a function's answers are found once.
+pub fn reads() -> usize {
+    READS.with(std::cell::Cell::get)
+}
+
+/// Counts the operands `ExposedFrames::update` read from the edits it was
+/// given.
+pub fn count_reads(n: usize) {
+    READS.with(|reads| reads.set(reads.get() + n));
+}
+
+/// Whether `function` has an alloca, which every answer here is about.
+pub fn has_alloca(function: &Function) -> bool {
+    function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
+}
+
 pub fn scans() -> usize {
     SCANS.with(std::cell::Cell::get)
 }
@@ -196,8 +322,13 @@ pub fn scans() -> usize {
 /// value through moves is exposed too.
 pub fn exposed_allocas(
     function: &Function,
-    marker: impl Fn(InstId) -> bool,
+    marker: impl Fn(InstId, usize) -> bool,
 ) -> BTreeSet<ValueId> {
+    // Nothing to answer for a function with no alloca; the scan below walks
+    // every operand of every instruction.
+    if !has_alloca(function) {
+        return BTreeSet::new();
+    }
     WHOLE.with(|runs| runs.set(runs.get() + 1));
     let mut exposing = vec![false; function.value_count()];
     // The values a value moves into, reversed: who feeds each.
@@ -216,8 +347,33 @@ pub fn exposed_allocas(
                 if let Some(result) = instruction.result {
                     feeds[result.0 as usize].push(*value);
                 }
-            } else if !(accessed(function, inst) == Some(index) || marker(inst)) {
+            } else if !(accessed(function, inst) == Some(index) || marker(inst, index)) {
                 exposing[value.0 as usize] = true;
+            }
+        }
+    }
+    // A join with an arm no fact follows exposes its other arms (see
+    // `joins_unfollowed`).
+    let unfollowed_value = unfollowed_values(function);
+    for (_, inst) in function.walk() {
+        let instruction = function.instruction(inst);
+        if instruction.opcode != Opcode::Phi {
+            continue;
+        }
+        let joins = instruction
+            .operands
+            .chunks(2)
+            .any(
+                |arm| matches!(
+                    arm[0],
+                    Operand::Value(value) if unfollowed_value[value.0 as usize]
+                ),
+            );
+        if joins {
+            for arm in instruction.operands.chunks(2) {
+                if let Operand::Value(value) = arm[0] {
+                    exposing[value.0 as usize] = true;
+                }
             }
         }
     }
@@ -243,7 +399,7 @@ pub fn exposed_renewed(
     function: &Function,
     previous: impl IntoIterator<Item = ValueId>,
     touched: &[ValueId],
-    marker: impl Fn(InstId) -> bool,
+    marker: impl Fn(InstId, usize) -> bool,
 ) -> Vec<ValueId> {
     use llrm_mir::module::ValueDef;
     let mut affected = llrm_mir::dense::IdSet::<ValueId>::new();
@@ -285,7 +441,7 @@ pub fn exposed_renewed(
 pub fn exposes(
     function: &Function,
     alloca: ValueId,
-    marker: impl Fn(InstId) -> bool,
+    marker: impl Fn(InstId, usize) -> bool,
 ) -> bool {
     SCANS.with(|scans| scans.set(scans.get() + 1));
     let mut seen = BTreeSet::from([alloca]);
@@ -296,9 +452,14 @@ pub fn exposes(
             let moves = instruction.opcode == Opcode::Phi
                 || source(function, one.user) == Some(Operand::Value(value)) && one.index == 0;
             if !moves {
-                if accessed(function, one.user) == Some(one.index as usize) || marker(one.user) {
+                if accessed(function, one.user) == Some(one.index as usize) || marker(one.user, one.index as usize) {
                     continue;
                 }
+                return true;
+            }
+            // A join with an arm no fact follows (`alias.rs`: it publishes
+            // the other arms' objects).
+            if instruction.opcode == Opcode::Phi && joins_unfollowed(function, one.user) {
                 return true;
             }
             if let Some(result) = instruction.result
@@ -504,6 +665,32 @@ out:
         }
     }
 
+    /// `exposed_allocas` walked every operand of every instruction, asking
+    /// `marker` of each, in a function with no alloca: an empty answer for
+    /// O(function) per GVN run (`analysis exposed-frames` 0.44 G of chain512's
+    /// 34.9 G).
+    #[test]
+    fn a_function_with_no_alloca_is_answered_without_a_scan() {
+        let module = parsed(
+            "declare void @sink(ptr)
+define void @f(ptr %p, i16 %x) {
+entry:
+  call void @sink(ptr %p)
+  %a = add i16 %x, 1
+  store i16 %a, ptr %p
+  ret void
+}
+",
+        );
+        let asked = std::cell::Cell::new(0);
+        let found = exposed_allocas(function(&module, "f"), |_, _| {
+            asked.set(asked.get() + 1);
+            false
+        });
+        assert!(found.is_empty());
+        assert_eq!(asked.get(), 0, "operands asked about with no alloca to answer for");
+    }
+
     #[test]
     fn framed_follows_steps_and_phis_but_not_a_parameter() {
         let module = parsed(
@@ -545,6 +732,39 @@ out:
 
     fn names(items: &[&str]) -> BTreeSet<String> {
         items.iter().map(|one| (*one).to_owned()).collect()
+    }
+
+    /// A slot's address joined with a pointer loaded from memory, then read
+    /// through the join, was taken to be reached by no pointer a load could
+    /// give: LICM promoted the slot's store out of its loop and the read saw
+    /// the slot unwritten (`phi_slot_unknown_arm`, 2158 for 5736113).
+    #[test]
+    fn a_slot_joined_with_a_loaded_pointer_is_exposed() {
+        let text = "@t = global ptr null
+
+define i16 @f(i1 %c) {
+b:
+  %slot = alloca i16
+  %other = alloca i16
+  %q = load ptr, ptr @t
+  br label %loop
+
+loop:
+  %p = phi ptr [ %slot, %b ], [ %q, %loop ]
+  %v = load i16, ptr %p
+  br i1 %c, label %loop, label %out
+
+out:
+  ret i16 %v
+}
+";
+        assert_eq!(exposed(text), names(&["slot"]));
+        let module = parsed(text);
+        let f = function(&module, "f");
+        let by_pass = exposed_allocas(f, |_, _| false);
+        assert_eq!(by_pass, BTreeSet::from([value(f, "slot")]));
+        assert!(exposes(f, value(f, "slot"), |_, _| false));
+        assert!(!exposes(f, value(f, "other"), |_, _| false));
     }
 
     #[test]
@@ -640,7 +860,10 @@ join:
         let found = framed(f);
         assert_eq!(found.get(&value(f, "both")), Some(&BTreeSet::from([value(f, "one"), value(f, "two")])));
         assert!(!found.contains_key(&value(f, "mixed")));
-        assert!(analysed(f).exposed.is_empty(), "accessing through a phi exposes nothing");
+        // Accessing through a phi of slots exposes nothing; a phi that joins a
+        // slot with a parameter holds a pointer no fact follows, which may be
+        // the slot: the slot is exposed.
+        assert_eq!(analysed(f).exposed, BTreeSet::from([value(f, "one")]));
     }
 
     #[test]
@@ -696,8 +919,8 @@ b0:
         );
         let f = function(&module, "f");
         let x = value(f, "x");
-        let marker = |inst: InstId| matches!(&f.instruction(inst).opcode, Opcode::Call(_));
-        assert!(exposes(f, x, |_| false));
+        let marker = |inst: InstId, _: usize| matches!(&f.instruction(inst).opcode, Opcode::Call(_));
+        assert!(exposes(f, x, |_, _| false));
         assert!(!exposes(f, x, marker));
     }
 }

@@ -1,7 +1,7 @@
 ; RUN: llrm-mir %s
 ; CHECK: define {{.*}} @_f(
 
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32"
 
 define i16 @_f(ptr addrspace(1) %p0, ptr addrspace(1) %p1, ptr addrspace(1) %p2, ptr addrspace(1) %p3, ptr addrspace(1) %p4, ptr addrspace(1) %p5, i16 %n) addrspace(1) {
 entry:

@@ -1,8 +1,10 @@
 # The ABI a program has without -mabi=, and, for each ABI, the convention an unmarked function has under it.
 default = "watcom"
 
-# The convention a function nothing outside the program reaches takes under every ABI: no one else sees it, so the register one.
-private = "watcall32"
+# The convention a function nothing outside the program reaches takes under every ABI: no one else sees it. The pin's `fastcc`
+# (CC1 in calleepop.rs); `LLRM_PRIVATE_WATCALL=1` gives them `private_instrument` instead, to compare the two.
+private = "fastcc32"
+private_instrument = "watcall32"
 
 [abi.watcom]
 convention = "watcall32"
@@ -39,6 +41,8 @@ frame = "ebp"
 # A function that can address its frame through the stack pointer has no frame register: it is then one more value register (last to be
 # given out, saved where used), decided before allocation (`backend/framefree.rs`).
 frame_optional = true
+# A size build wraps a frame around a shared return too: the pin has no size check, and the jump over the epilogue stays short.
+frame_wrap_split_size = true
 stack = "esp"
 preserved = ["ebx", "ecx", "edx", "esi", "edi", "ebp"]
 clobbered = ["eax", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "flags"]
@@ -90,8 +94,11 @@ frame = "ebp"
 # A function that can address its frame through the stack pointer has no frame register: it is then one more value register (last to be
 # given out, saved where used), decided before allocation (`backend/framefree.rs`).
 frame_optional = true
+# A size build wraps a frame around a shared return too: the pin has no size check, and the jump over the epilogue stays short.
+frame_wrap_split_size = true
 stack = "esp"
-preserved = ["ebx", "esi", "edi", "ebp"]
+# In the pin's CSR_32 order (esi, edi, ebx, ebp): the frame pushes them last first.
+preserved = ["esi", "edi", "ebx", "ebp"]
 clobbered = ["eax", "ecx", "edx", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "flags"]
 # Direction flag clear and the x87 stack empty on entry and on return.
 entry_state = ["df_clear", "x87_empty"]
@@ -126,6 +133,18 @@ macho = "_*"
 8 = ["eax", "edx"]
 pointer = ["eax"]
 float = ["st0"]
+
+# fastcc32: the pin's `fastcc` on i486 (llc d1106deb71cc, read from its disassembly): the first two integers take ECX then EDX (an i8
+# CL, an i16 DX, an i64 ECX:EDX), a float or what comes after goes on the stack, the caller pops. The private convention (CC1).
+[fastcc32]
+like = "cdecl32"
+cc = "fast"
+argument_registers = ["ecx", "edx"]
+wide_pairs = [["ecx", "edx"]]
+backfill = true
+skip_memory = true
+arguments_clobbered = true
+results_clobbered = true
 
 # sysv32: the i386 System V ABI, gcc's default on Linux, as `gcc -m32` emits it (read from its disassembly, not from the
 # psABI's text): every argument on the stack, pushed right to left in dword slots, which the caller removes; EBX, ESI, EDI and

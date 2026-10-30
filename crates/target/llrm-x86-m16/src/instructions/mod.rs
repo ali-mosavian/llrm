@@ -6,14 +6,15 @@ use std::sync::LazyLock;
 use iced_x86::{Code, Instruction};
 use llrm_support::hash::HashMap;
 pub use llrm_x86::parse;
-pub use parse::{CONDITIONS, Form, Operand, Side};
+pub use parse::{Form, Operand, Side};
 
 /// The forms real mode adds to the family's.
 pub const OWN: &str = include_str!("x86.instr");
 
 pub static TEXT: LazyLock<String> = LazyLock::new(|| llrm_x86::instructions::joined(OWN));
 
-pub static FORMS: LazyLock<Vec<Form>> = LazyLock::new(|| parse::parse(&TEXT).expect("x86.instr parses"));
+pub static FORMS: LazyLock<Vec<Form>> =
+    LazyLock::new(|| parse::parse(&TEXT, llrm_x86::instructions::dialect()).expect("x86.instr parses"));
 
 static CODES: LazyLock<HashMap<String, Code>> =
     LazyLock::new(|| Code::values().map(|code| (format!("{code:?}"), code)).collect());
@@ -92,8 +93,10 @@ mod tests {
 
     #[test]
     fn a_malformed_line_is_refused_with_its_line() {
-        let error = parse::parse("add binary rm/^0,rmx 16 alu_rr - - - -/- Add_rm{w}_r{w}").unwrap_err();
-        assert_eq!(error, "x86.instr:1: operand `rmx` is not made of the kinds r m i a s");
+        let error =
+            parse::parse("add binary rm/^0,rmz 16 alu_rr - - - -/- Add_rm{w}_r{w}", llrm_x86::instructions::dialect())
+                .unwrap_err();
+        assert_eq!(error, "x86.instr:1: operand `rmz` is not made of the kinds r m i a s h c e x");
     }
 
     /// The allocator's classes were built from every row, at about 5,000
@@ -101,8 +104,8 @@ mod tests {
     /// operand give it anything.
     #[test]
     fn reading_the_pinned_forms_is_the_pinned_subset_of_reading_all() {
-        let all = parse::parse(&TEXT).unwrap();
-        let pinned = parse::pinned(&TEXT).unwrap();
+        let all = parse::parse(&TEXT, llrm_x86::instructions::dialect()).unwrap();
+        let pinned = parse::pinned(&TEXT, llrm_x86::instructions::dialect()).unwrap();
         let wanted: Vec<&Form> = all.iter().filter(|form| !form.fixed.is_empty()).collect();
         assert_eq!(pinned.iter().collect::<Vec<_>>(), wanted);
         assert!(pinned.len() * 3 < all.len(), "{} of {} rows pin", pinned.len(), all.len());

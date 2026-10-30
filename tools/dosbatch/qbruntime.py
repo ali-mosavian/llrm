@@ -279,7 +279,9 @@ def linked_objects(source: Path, work: Path, runtime: str = "qb45", flags: tuple
             library = source.parent / name
             obj = work / f"{library.stem}.{runtime}{tag}.obj"
             done = subprocess.run(
-                [str(dosbatch.BIN / "llrm-nib"), str(library), "-o", str(obj), "-O2", f"--basic-runtime={runtime}", *flags],
+                dosbatch.with_isel(
+                    [str(dosbatch.BIN / "llrm-nib"), str(library), "-o", str(obj), "-O2", f"--basic-runtime={runtime}", *flags]
+                ),
                 capture_output=True,
                 text=True,
             )
@@ -364,6 +366,18 @@ def os_group_bits(source: Path) -> dict[str, int]:
     return {name.lower(): int(bit) for name, bit in found}
 
 
+def device_directory(platform: Path | None = None) -> Path:
+    """The QB device interface's code for that target: runtime/qb/dev/<os>/<mode> (the DOS BIOS, VGA, speaker and clock)."""
+    platform = platform or platform_directory()
+    return RUNTIME / "dev" / platform.parent.name / platform.name
+
+
+def device_includes(platform: Path | None = None) -> list[str]:
+    """The compiler's -I arguments for the device interface: dev.h, the target's devsym.h and device.h, and the code both targets share."""
+    where = device_directory(platform)
+    return ["-I", str(RUNTIME / "dev"), "-I", str(where), "-I", str(where.parent)]
+
+
 def shared_sources() -> list[Path]:
     return [os_directory() / dosbatch.os_layer(dosbatch.REAL_MODE, "implementation", "c")]
 
@@ -373,32 +387,35 @@ def portable_sources() -> list[Path]:
     return sorted(RUNTIME.glob("*.c"))
 
 
+def platform_sources_of(platform: Path) -> list[Path]:
+    """A target's own code: its C and its assembly, and its device interface's."""
+    device = device_directory(platform)
+    return sorted([*platform.glob("*.c"), *platform.glob("*.asm"), *device.glob("*.c"), *device.glob("*.asm"), *device.parent.glob("*.c")])
+
+
 def platform_sources() -> list[Path]:
     """The target's own code: its C and its assembly."""
-    return sorted([*platform_directory().glob("*.c"), *platform_directory().glob("*.asm"), *(RUNTIME / "dos").glob("*.c")])
+    return platform_sources_of(platform_directory())
+
+
+# The row the runtime's C is built on; the object cache names it.
+RUNTIME_ROW = "x86_16-wat"
+
+
+def c_flags() -> list[str]:
+    # No -I include: its llrm_os.h is llrm-c's, with a plain `__cdecl` the fork clang ignores (borland.h erases it); the row's own header has the attribute that keeps the OS layer's stack convention.
+    # An empty BSSB ahead of each object's _BSS: start.asm zeroes from it (the objects' order is the linker's).
+    return ["-mbss-begin", "-I", str(RUNTIME), "-I", str(platform_directory()), *device_includes()]
+
+
+def c_build_key() -> str:
+    """What the runtime's C is compiled with, for the object cache: the row and the command dosbatch.c_compile makes of it, the checkout's own path left out."""
+    command, env = dosbatch.c_compile(Path("runtime.c"), Path("runtime.obj"), dosbatch.REAL_MODE, "-Os", None, [], c_flags())  # the command, as the builds make it
+    return RUNTIME_ROW + " " + " ".join(command[1:]).replace(str(dosbatch.ROOT), "") + " " + repr(sorted(env.items())) + " " + dosbatch.clang_identity()
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
-    dosbatch._host(
-        [
-            str(dosbatch.BIN / "llrm-c"),
-            str(source),
-            dosbatch.m_flag(dosbatch.REAL_MODE),
-            # An empty BSSB ahead of each object's _BSS: start.asm zeroes from it (the objects' order is the linker's).
-            "-mbss-begin",
-            "-Os",
-            "-I",
-            str(include),
-            "-I",
-            str(RUNTIME),
-            "-I",
-            str(platform_directory()),
-            "-I",
-            str(RUNTIME / "dos"),
-            "-o",
-            str(obj),
-        ]
-    )
+    dosbatch._host(*dosbatch.c_compile(source, obj, dosbatch.REAL_MODE, "-Os", None, [], c_flags()))
 
 
 def remove_existing_archive(work: Path) -> None:
@@ -463,7 +480,7 @@ def build(directory: Path) -> tuple[Path, Path]:
     for source in shared:
         for group, bit in os_group_bits(source).items():
             obj = directory / f"{source.stem}_{group}.obj"
-            dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "c"), f"OS_GROUPS={bit}")
+            dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "qb"), f"OS_GROUPS={bit}")
             objects.append(obj)
     output = directory / ARCHIVE_NAME
     archive(objects, output, directory / "lib")

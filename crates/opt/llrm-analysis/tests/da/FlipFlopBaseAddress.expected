@@ -1,0 +1,25 @@
+== 
+@bug41488_test1
+  confused!
+  confused!
+  confused!
+@bug41488_test2
+  confused!
+  confused!
+  confused!
+@bug53942_foo
+  input [S]!
+  confused!
+  confused!
+@bug53942_bar
+  confused!
+  confused!
+  confused!
+@non_invariant_baseptr_with_identical_obj
+  confused!
+@non_invariant_baseptr_with_identical_obj2
+  confused!
+@non_invariant_baseptr_with_identical_obj3
+  confused!
+  confused!
+  confused!

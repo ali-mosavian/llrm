@@ -1,0 +1,26 @@
+# arm64 Darwin (LP64): flat 64-bit.
+mode = 64
+llvm_triple = "arm64-apple-macosx"
+llvm_cpu = "apple-m1"
+tti = "AArch64"
+
+# LLVM syntax, as the pin's clang prints it for arm64-apple-macosx. i64 is native; long double is 64 bits.
+datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32"
+
+# A select of a float or integer is csel/fcsel: nothing expands. A sub-word add is done in a word register.
+expand = ["abs", "fshl", "fshr"]
+promote = ["add.i8", "sub.i8", "mul.i8", "and.i8", "or.i8", "xor.i8", "add.i16", "sub.i16", "mul.i16", "and.i16", "or.i16", "xor.i16"]
+
+[spaces]
+near = 0
+far = 0
+data = 0
+stack = 0
+
+[pointers]
+8 = "near"
+
+# Base + (index, optionally extended) << scale, or base + scaled unsigned 12-bit offset.
+[[address_form]]
+address_bits = 64
+scales = [1, 2, 4, 8, 16]

@@ -323,7 +323,7 @@ def test_check_names_the_binary_it_measured_on_a_pass_as_on_a_failure(monkeypatc
     The binary is on the first line and again on the verdict, whichever it is."""
     base = made(files(a=1000))
     for now_files, verdict in ((files(a=1000), 0), (files(a=2000), 1)):
-        now = made(now_files) | {"binary": {"path": "/x/llrm-c", "sha": "abc123def456"}}
+        now = made(now_files) | {"binary": {"path": "/x/llrm-cc", "sha": "abc123def456"}}
         monkeypatch.setattr(measure, "measure_all", lambda jobs, now=now: now)
         monkeypatch.setattr(measure, "git", lambda *a, **k: "f" * 40)
         monkeypatch.setattr(measure, "base_of", lambda head, ref: "e" * 40)
@@ -331,8 +331,20 @@ def test_check_names_the_binary_it_measured_on_a_pass_as_on_a_failure(monkeypatc
         monkeypatch.setattr(measure, "stored", lambda sha, which: {})
         assert measure.check(1, "origin/main") == verdict
         out = capsys.readouterr().out
-        assert out.splitlines()[0].startswith("measured /x/llrm-c (abc123def456)")
+        assert out.splitlines()[0].startswith("measured /x/llrm-cc (abc123def456)")
         assert "abc123def456" in out.splitlines()[-1] or verdict == 1
+
+
+def test_the_cost_step_does_not_build_a_base_that_has_no_llrm_cc(monkeypatch):
+    """Gate run 3's cost step: the base was main (llrm-c only) and `cargo build --bin llrm-cc` died with "no bin target named llrm-cc"; the
+    base is now the nearest first-parent ancestor that has llrm-cc, and none is a named skip, not a build failure."""
+    with_cc = {"c" * 40, "d" * 40}
+    monkeypatch.setattr(measure, "has_cc", lambda sha: sha in with_cc)
+    monkeypatch.setattr(measure, "git", lambda *a, **k: "\n".join(["h" * 40, "b" * 40, "c" * 40, "d" * 40]))
+    assert measure.base_with_cc("h" * 40, "m" * 40) == "c" * 40
+    assert measure.base_with_cc("h" * 40, "d" * 40) == "d" * 40
+    monkeypatch.setattr(measure, "has_cc", lambda sha: False)
+    assert measure.base_with_cc("h" * 40, "m" * 40) is None
 
 
 def test_a_measurement_is_of_one_profile_and_the_dist_base_is_built_with_the_dist_profile(tmp_path, monkeypatch):
@@ -348,7 +360,7 @@ def test_a_measurement_is_of_one_profile_and_the_dist_base_is_built_with_the_dis
     monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
     monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
     assert measure.built("0" * 40) == tmp_path / "snapshots" / ("dist" + "0" * 12)
-    assert ran == [["bash", "-c", "env -u RUSTFLAGS cargo build --profile dist -q --bin llrm-c"]], "llrm-c only: seven more fat-LTO links measure nothing"
+    assert ran == [["bash", "-c", "env -u RUSTFLAGS cargo build --profile dist -q --bin llrm-cc --bin llrm-llc"]], "llrm-cc and llrm-llc only: the other binaries measure nothing"
 
 
 def test_a_flagged_step_names_the_steps_of_its_axis_that_rose():
@@ -456,7 +468,7 @@ def test_the_squash_that_lands_a_gated_branch_has_the_measurement_the_gate_store
 def test_a_gated_head_not_yet_on_the_reference_is_stored_for_the_commit_that_lands_it(tmp_path, monkeypatch):
     """`check` stored the head only when already an ancestor of origin/main, which a branch under gate never is."""
     saved = []
-    now = made(files(a=1000)) | {"binary": {"path": "/x/llrm-c", "sha": "abc123def456"}}
+    now = made(files(a=1000)) | {"binary": {"path": "/x/llrm-cc", "sha": "abc123def456"}}
     monkeypatch.setattr(measure, "measure_all", lambda jobs: now)
     monkeypatch.setattr(measure, "git", lambda *a, **k: "" if a[0] == "status" else "f" * 40)
     monkeypatch.setattr(measure, "base_of", lambda head, ref: "e" * 40)
@@ -716,7 +728,7 @@ def test_the_local_dist_binary_is_built_when_it_is_missing_and_left_alone_when_i
     monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
     assert measure.ensure_dist({"CARGO_TARGET_DIR": str(tmp_path)}) == tmp_path / "dist" and len(ran) == 1
     (tmp_path / "dist").mkdir()
-    (tmp_path / "dist" / "llrm-c").write_text("")
+    (tmp_path / "dist" / "llrm-cc").write_text("")
     measure.ensure_dist({"CARGO_TARGET_DIR": str(tmp_path)})
     assert len(ran) == 1
 
@@ -832,12 +844,50 @@ def test_the_build_the_bench_takes_its_base_from_makes_every_tool_the_bench_runs
     import re
 
     ran = set(re.findall(r'"(llrm-[a-z]+)"', (HERE / "bench" / "bench.py").read_text()))
-    assert {"llrm-c", "llrm-qb", "llrm-nib"} <= ran, ran
+    assert {"llrm-cc", "llrm-qb", "llrm-nib"} <= ran, ran
     recipe = measure.MEASURE_BUILDS[measure.BENCH_BASE_PROFILE]
     named = set(re.findall(r"--bin (llrm-[a-z]+)", recipe))
     assert "--bins" in recipe or ran <= named, (measure.BENCH_BASE_PROFILE, recipe, ran)
     assert "--bins" not in measure.MEASURE_BUILDS["dist"], "the dist build is the compiler's cost alone: the bench does not take its base from it"
 
+
+MINE = "alim/feat/gvn-scalar-pr"
+
+
+def gvn_readings():
+    """The T-1 classes (#2295, #2179), each as (what it is, a call that says whether it fails under a tolerance table)."""
+    qcport = lambda scale: made({f"qcport/m{i} -Os": int(1_000_000 * scale) for i in range(65)})
+    qbase = made({f"qcport/m{i} -Os": 1_000_000 for i in range(65)})
+    step = lambda key, ratio, whole=400.0: ({key: [50.0, 100.0, 200.0, whole]}, {key: [50.0 * ratio, 100.0 * ratio, 200.0 * ratio, whole]})
+    return {
+        "qcport -Os geomean": (1.0140, 1.0146, lambda tol, x: measure.rises(qbase, qcport(x), tol)[1]),
+        "gvn at 2N": (1.64, 1.66, lambda tol, x: measure.step_rises(*step("cells O1 mir gvn", x), tol)[1]),
+        "gvn step rise": (1.58, 1.70, lambda tol, x: measure.step_rises(*step("straight O1 mir gvn", x), tol)[1]),
+        "straight Os compile": (
+            1.0222,
+            1.0230,
+            lambda tol, x: measure.axis_rises({"straight Os": [500, 1000, 2000]}, {"straight Os": [500, 1000, 2000 * x]}, tol)[1],
+        ),
+        "callers Os call-effects": (1.14, 1.16, lambda tol, x: measure.step_rises(*step("callers Os analysis call-effects", x, 2000.0), tol)[1]),
+    }
+
+
+def test_each_gvn_exception_class_passes_on_its_pr_up_to_its_ceiling_and_fails_above_it_and_elsewhere():
+    """T-1 (#2295): the scalar GVN's PR (#2179) alone may read these up to the ceilings; the same reading on another head fails at the
+    normal limit, and above its ceiling it fails on the PR too."""
+    mine, other = measure.tolerances(branch=MINE), measure.tolerances(branch="alim/feat/something-else")
+    for name, (inside, above, fails) in gvn_readings().items():
+        assert not fails(mine, inside), f"{name}: {inside} is inside the ceiling on its PR"
+        assert fails(other, inside), f"{name}: {inside} fails on any other head"
+        assert fails(mine, above), f"{name}: {above} is above the ceiling on its PR"
+
+
+def test_the_gvn_gvn_exception_leaves_every_other_step_at_the_normal_limits():
+    """The suffix rule is `mir gvn`, not every step: a fold step at the same reading fails on the PR."""
+    mine = measure.tolerances(branch=MINE)
+    base = {"cells O1 mir fold": [50.0, 100.0, 200.0, 400.0]}
+    assert measure.step_rises(base, {"cells O1 mir fold": [80.0, 160.0, 320.0, 400.0]}, mine)[1]
+    assert not [one for one in measure.tolerances(branch="x")["accepted"] if "branch" in one]
 
 def test_a_step_rise_line_says_it_is_an_own_reading_on_this_build_profile(monkeypatch):
     """#2318: the gate read gvn x1.583 where a direct reading said x1.41, and neither said what it was: the same binaries give 1.583

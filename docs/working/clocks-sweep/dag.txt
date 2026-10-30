@@ -1,0 +1,285 @@
+arms: base sbp-854bb7efc/dist isel=default; new sbp-d6d94ee7b0/dist isel=dag
+466 programs measured on both, 27 void (did not build, run or print the expected output on one side)
+249 slower, 202 faster, 114 tiny (near the start-up); geomean new/base = 1.0167
+  +1070.89%       +2538 clocks  (237 -> 2775)  tiny  c/x87_arguments.c [-Os -march=i486]
+  +405.32%      +21247 clocks  (5242 -> 26489)  c/stackover.c [-Os -fsanitize=stack]
+  +126.22%     +907559 clocks  (719019 -> 1626578)  scroll/scroll.c [-Os -march=i486]
+   +96.60%    +1159993 clocks  (1200813 -> 2360806)  huge/fillw.c
+   +96.45%    +1063564 clocks  (1102662 -> 2166226)  c/huge_array.c [-Os -march=i486]
+   +91.52%        +734 clocks  (802 -> 1536)  c/logical_value.c [-Os]
+   +88.40%    +1004787 clocks  (1136649 -> 2141436)  huge/tri.c
+   +73.63%     +839997 clocks  (1140818 -> 1980815)  huge/copy1d.c
+   +72.63%     +400007 clocks  (550764 -> 950771)  huge/pairs.c
+   +70.89%        +302 clocks  (426 -> 728)  tiny  c/float_in_place_update.c
+   +65.51%     +917007 clocks  (1399691 -> 2316698)  huge/tri.nib
+   +64.46%     +599993 clocks  (930814 -> 1530807)  huge/long1d.c
+   +58.75%    +6579513 clocks  (11199603 -> 17779116)  nbody_fixed/nbody_fixed.nib
+   +57.50%    +1026454 clocks  (1784994 -> 2811448)  huge/tri.bas
+   +57.44%     +839593 clocks  (1461712 -> 2301305)  huge/copy1d.nib
+   +56.16%     +399649 clocks  (711574 -> 1111223)  huge/pairs.nib
+   +53.31%      +44025 clocks  (82586 -> 126611)  recsum/recsum.c [-Os -march=i486]
+   +52.89%       +1081 clocks  (2044 -> 3125)  nib/fixed_div_truncates.nib
+   +51.17%     +599590 clocks  (1171680 -> 1771270)  huge/long1d.nib
+   +47.35%      +21012 clocks  (44376 -> 65388)  c/licm_graph_callee_footprint.c [-Os -fno-inline-functions]
+   +45.82%     +840009 clocks  (1833384 -> 2673393)  huge/copy1d.bas
+   +45.21%      +61007 clocks  (134935 -> 195942)  nib/f32_store.nib [-Os -march=i486 -fexcess-precision=standard]
+   +41.99%      +40710 clocks  (96952 -> 137662)  c/es_across_copy.c [-Os -march=i486]
+   +41.99%      +40710 clocks  (96952 -> 137662)  c/es_across_copy.c [-Os -march=i486 -fsanitize=bounds]
+   +40.61%     +175049 clocks  (431067 -> 606116)  nbody/nbody.bas
+   +39.19%     +439830 clocks  (1122287 -> 1562117)  huge/pairs.bas
+   +39.10%    +2519480 clocks  (6443151 -> 8962631)  nib/far_near.nib [-Os -march=i486]
+   +38.92%       +9842 clocks  (25290 -> 35132)  sieve/sieve.c [-Os -march=i486]
+   +38.39%     +599833 clocks  (1562452 -> 2162285)  huge/long1d.bas
+   +35.69%       +3908 clocks  (10950 -> 14858)  c/copy_runs.c [-Os]
+   +34.80%      +36003 clocks  (103470 -> 139473)  textfill/textfill.flat.bas
+   +33.98%       +6844 clocks  (20140 -> 26984)  c/pattern_fill.c [-Os -march=i486]
+   +32.50%     +559532 clocks  (1721740 -> 2281272)  huge/fillw.nib
+   +32.22%      +19237 clocks  (59705 -> 78942)  tiny  qb/range_on_error.bas [-Os]
+   +31.32%    +2551199 clocks  (8145393 -> 10696592)  qb/nbody_single.bas
+   +31.32%    +2551199 clocks  (8145393 -> 10696592)  nbody_single/nbody_single.bas
+   +30.34%    +2949532 clocks  (9720876 -> 12670408)  huge/copyw.nib
+   +27.71%      +20964 clocks  (75660 -> 96624)  sieve/sieve.bas
+   +27.37%       +1904 clocks  (6957 -> 8861)  c/split_loops.c [-Os]
+   +26.80%     +767997 clocks  (2865525 -> 3633522)  huge/huge.c
+   +26.44%     +133119 clocks  (503422 -> 636541)  recpow/recpow.c [-Os -march=i486]
+   +25.74%      +75344 clocks  (292718 -> 368062)  c/loop_interchange.c [-Os]
+   +25.49%      +81004 clocks  (317762 -> 398766)  quicksort/quicksort.nib
+   +25.36%     +767681 clocks  (3027080 -> 3794761)  huge/huge.nib
+   +24.82%      +71999 clocks  (290113 -> 362112)  c/recdeep.c [-Os]
+   +24.30%      +49642 clocks  (204327 -> 253969)  fpbench/fpbench.bas
+   +23.30%      +68994 clocks  (296142 -> 365136)  recmany/recmany.c [-Os -march=i486]
+   +23.30%      +68994 clocks  (296142 -> 365136)  c/recmany_o1.c [-Os -march=i486]
+   +22.77%     +112479 clocks  (494038 -> 606517)  switch/switch.c [-Os -march=i486]
+   +22.75%   +18074027 clocks  (79434410 -> 97508437)  jpeg_single/jpeg_single.c [-Os -march=i486]
+   +22.36%     +768628 clocks  (3437590 -> 4206218)  huge/huge.bas
+   +18.68%      +47980 clocks  (256905 -> 304885)  c/idiom_edges.c [-Os -march=i486]
+   +18.49%      +27039 clocks  (146216 -> 173255)  qb/range_exp.bas [-Os]
+   +18.06%        +906 clocks  (5018 -> 5924)  c/stackdeep.c [-Os -fsanitize=stack]
+   +17.89%     +129957 clocks  (726258 -> 856215)  queens/queens.bas
+   +17.34%    +3501685 clocks  (20198120 -> 23699805)  frames/frames.bas
+   +17.02%     +196977 clocks  (1157291 -> 1354268)  fib/fib.bas
+   +15.10%     +126038 clocks  (834907 -> 960945)  mandel/mandel.nib
+   +14.65%   +21182872 clocks  (144633417 -> 165816289)  stft_single/stft_single.c [-Os -march=i486]
+   +14.51%     +270016 clocks  (1860608 -> 2130624)  huge/down1d.c
+   +14.14%        +224 clocks  (1584 -> 1808)  c/x87rotate.c [-Os -march=i486]
+   +14.09%       +3673 clocks  (26073 -> 29746)  sieve/sieve.nib
+   +13.75%      +67404 clocks  (490365 -> 557769)  quicksort/quicksort.bas
+   +13.57%       +3736 clocks  (27523 -> 31259)  nib/pattern_fill.nib
+   +12.84%     +269790 clocks  (2101252 -> 2371042)  huge/down1d.nib
+   +12.55%        +144 clocks  (1147 -> 1291)  c/write_through_parameter.c [-Os]
+   +12.24%       +7980 clocks  (65185 -> 73165)  tiny  qb/resume_next_print_last.bas [-Os]
+   +12.17%      +17878 clocks  (146927 -> 164805)  qb/ownf_recurse_qb45.bas
+   +11.52%      +61975 clocks  (538181 -> 600156)  switch/switch.nib
+   +11.28%        +183 clocks  (1623 -> 1806)  c/float_conversions_loop.c
+   +10.83%     +269848 clocks  (2491771 -> 2761619)  huge/down1d.bas
+   +10.41%      +42398 clocks  (407123 -> 449521)  huge/grid2d.c
+    +9.97%        +606 clocks  (6080 -> 6686)  c/tail_calls.c [-Os -march=i486 -fno-inline-functions -fno-inline-functions-called-once]
+    +9.21%      +74210 clocks  (806084 -> 880294)  switch/switch.bas
+    +8.96%       +3999 clocks  (44651 -> 48650)  tile/tile.nib
+    +8.60%        +919 clocks  (10690 -> 11609)  nib/stackover.nib
+    +8.40%       +1637 clocks  (19485 -> 21122)  c/switch_peeled_table.c [-Os -march=i486]
+    +8.33%      +90109 clocks  (1081170 -> 1171279)  hanoi/hanoi.bas
+    +8.28%     +554750 clocks  (6703489 -> 7258239)  c/div_constants_long.c [-Os -fno-inline-functions]
+    +7.82%      +10999 clocks  (140575 -> 151574)  tiny  floats/floats.bas
+    +7.77%       +1641 clocks  (21113 -> 22754)  matmul/matmul.c [-Os -march=i486]
+    +7.40%      +42082 clocks  (568678 -> 610760)  huge/grid2d.nib
+    +7.06%       +7272 clocks  (103018 -> 110290)  qb/pattern_fill.bas
+    +6.98%    +7417274 clocks  (106244688 -> 113661962)  jpeg_single/jpeg_single.nib [-Os -march=i486]
+    +6.70%     +287150 clocks  (4287991 -> 4575141)  c/div_constants_short.c [-Os -fno-inline-functions]
+    +6.61%         +37 clocks  (560 -> 597)  c/function_table.c [-Os]
+    +6.17%      +70941 clocks  (1149186 -> 1220127)  mandel/mandel.bas
+    +6.11%         +54 clocks  (884 -> 938)  c/fsgs_call.c
+    +6.04%       +6011 clocks  (99544 -> 105555)  textfill/textfill.bas
+    +5.97%      +11787 clocks  (197444 -> 209231)  qb/range_power.bas [-Os]
+    +5.90%       +6588 clocks  (111613 -> 118201)  recgcd/recgcd.c [-Os -march=i486]
+    +5.89%    +7404706 clocks  (125664679 -> 133069385)  stft_fixed/stft_fixed.c [-Os -march=i486]
+    +5.76%         +41 clocks  (712 -> 753)  hanoi/hanoi.c [-Os -march=i486]
+    +5.60%       +4297 clocks  (76733 -> 81030)  tile/tile.c [-Os -march=i486]
+    +5.59%       +1932 clocks  (34534 -> 36466)  c/int64_division.c [-Os]
+    +5.58%      +17293 clocks  (310070 -> 327363)  quicksort/quicksort.c [-Os -march=i486]
+    +5.45%      +17830 clocks  (326858 -> 344688)  particle/particle.bas
+    +5.37%      +12275 clocks  (228429 -> 240704)  histo/histo.nib
+    +5.29%       +1852 clocks  (35015 -> 36867)  c/loop_versioning.c [-Os -fno-inline-functions]
+    +5.16%       +1303 clocks  (25272 -> 26575)  c/float_in_memory_loop.c [-Os]
+    +4.48%         +61 clocks  (1361 -> 1422)  c/variadic.c [-Os -march=i486]
+    +4.48%      +20102 clocks  (449139 -> 469241)  bintree/bintree.bas
+    +4.42%       +1546 clocks  (35015 -> 36561)  c/loop_versioning.c [-Os]
+    +4.36%         +13 clocks  (298 -> 311)  tiny  c/os_console.c [-Os -march=i486]
+    +4.35%      +42627 clocks  (979190 -> 1021817)  huge/grid2d.bas
+    +4.20%       +4243 clocks  (101087 -> 105330)  tile/tile.bas
+    +4.13%        +370 clocks  (8950 -> 9320)  c/switch_jump_table.c [-Os]
+    +3.99%      +14288 clocks  (358530 -> 372818)  nbody/nbody.nib
+    +3.97%         +69 clocks  (1737 -> 1806)  c/int_compared_with_float.c [-Os -fexcess-precision=standard]
+    +3.90%       +8812 clocks  (225742 -> 234554)  particle/particle.nib
+    +3.87%        +132 clocks  (3407 -> 3539)  c/static_pointers.c [-Os -march=i486]
+    +3.69%      +13245 clocks  (359375 -> 372620)  nbody/nbody.c [-Os -march=i486]
+    +3.40%       +1997 clocks  (58656 -> 60653)  textfill/textfill.c
+    +3.32%         +67 clocks  (2018 -> 2085)  c/local_initializers.c [-Os]
+    +3.22%      +17878 clocks  (555193 -> 573071)  qb/ownf_recurse_pds71.bas
+    +3.15%      +25370 clocks  (805605 -> 830975)  qb/idioms.bas [-Os -march=i486, qb45]
+    +2.91%       +1727 clocks  (59329 -> 61056)  textfill/textfill.nib
+    +2.91%    +3446374 clocks  (118569407 -> 122015781)  jpeg_fixed/jpeg_fixed.nib [-Os -march=i486]
+    +2.76%        +354 clocks  (12806 -> 13160)  c/loop_fusion.c [-Os]
+    +2.75%      +17878 clocks  (649910 -> 667788)  qb/ownf_recurse_vbdos.bas
+    +2.63%       +1853 clocks  (70414 -> 72267)  tiny  matmul/matmul.bas
+    +2.47%     +115960 clocks  (4701937 -> 4817897)  nib/flat_heap.nib [-Os -march=i486]
+    +2.45%        +181 clocks  (7377 -> 7558)  c/frameless.c [-Os -fno-inline-functions]
+    +2.22%      +25370 clocks  (1140684 -> 1166054)  qb/idioms.bas [-Os -march=i486, pds71]
+    +2.17%      +87596 clocks  (4037913 -> 4125509)  c/div_constants_ulong.c [-Os -fno-inline-functions]
+    +2.13%     +301570 clocks  (14155972 -> 14457542)  frames/frames.c [-Os -march=i486]
+    +2.13%       +1201 clocks  (56419 -> 57620)  tiny  qb/intsum.bas
+    +2.02%      +25322 clocks  (1254369 -> 1279691)  qb/idioms.bas [-Os -march=i486, vbdos]
+    +1.96%         +19 clocks  (970 -> 989)  control/control.c [-Os -march=i486]
+    +1.89%       +1413 clocks  (74743 -> 76156)  qb/onerr.bas
+    +1.83%    +3631160 clocks  (198090007 -> 201721167)  stft_single/stft_single.nib [-Os -march=i486]
+    +1.79%      +14610 clocks  (818137 -> 832747)  mandel/mandel.c [-Os -march=i486]
+    +1.77%       +4353 clocks  (246196 -> 250549)  histo/histo.c [-Os -march=i486]
+    +1.56%         +27 clocks  (1735 -> 1762)  c/long_double_layout.c [-Os]
+    +1.40%         +16 clocks  (1144 -> 1160)  c/wide_frame.c [-Os -march=i486]
+    +1.36%         +10 clocks  (733 -> 743)  branch/branch.c [-Os -march=i486]
+    +1.36%      +11173 clocks  (823158 -> 834331)  qb/idioms.bas [-Os -march=i486 -fsanitize=bounds, qb45]
+    +1.33%         +24 clocks  (1806 -> 1830)  c/old_style_extra_args.c [-Os -march=i486 -fno-inline-functions -fno-inline-functions-called-once]
+    +1.19%        +726 clocks  (60969 -> 61695)  tiny  qb/erlnum.bas
+    +1.18%          +9 clocks  (762 -> 771)  tiny  nib/os_console.nib [-Os -march=i486]
+    +1.13%      +20959 clocks  (1856788 -> 1877747)  scroll/scroll.nib
+    +1.11%      +21319 clocks  (1913168 -> 1934487)  scroll/scroll.bas
+    +1.03%         +22 clocks  (2146 -> 2168)  c/os_console_in.c [-Os -march=i486]
+    +0.96%      +11173 clocks  (1158237 -> 1169410)  qb/idioms.bas [-Os -march=i486 -fsanitize=bounds, pds71]
+    +0.94%         +87 clocks  (9233 -> 9320)  c/switch_jump_table.c [-Os -fno-unroll-loops -fno-peel-loops]
+    +0.87%      +11125 clocks  (1271922 -> 1283047)  qb/idioms.bas [-Os -march=i486 -fsanitize=bounds, vbdos]
+    +0.83%        +964 clocks  (116764 -> 117728)  ring/ring.bas
+    +0.76%         +27 clocks  (3542 -> 3569)  c/os_files.c [-Os -march=i486]
+    +0.72%          +6 clocks  (834 -> 840)  memory/memory.c [-Os -march=i486]
+    +0.64%        +326 clocks  (50899 -> 51225)  tiny  qb/far_peek_poke_string.bas [-Os, qb45]
+    +0.60%        +251 clocks  (41962 -> 42213)  tiny  qb/far_poke_loop_variable.bas [-Os, qb45]
+    +0.58%        +947 clocks  (164133 -> 165080)  c/phi_slot_unknown_arm.c [-Os]
+    +0.58%        +947 clocks  (164133 -> 165080)  c/phi_slot_unknown_arm.c [-Os -march=i486]
+    +0.41%          +9 clocks  (2181 -> 2190)  crc/crc.c [-Os -march=i486]
+    +0.40%        +327 clocks  (82715 -> 83042)  qb/fpemu.bas
+    +0.37%        +181 clocks  (49084 -> 49265)  tiny  qb/errent.bas
+    +0.37%        +204 clocks  (55468 -> 55672)  tiny  qb/oneline.bas
+    +0.36%        +163 clocks  (45008 -> 45171)  tiny  qb/addrm.bas
+    +0.34%       +1432 clocks  (417030 -> 418462)  fib/fib.nib
+    +0.33%       +1582 clocks  (476197 -> 477779)  qb/hugechk.bas
+    +0.33%       +1559 clocks  (476159 -> 477718)  qb/farchk.bas
+    +0.32%          +2 clocks  (618 -> 620)  tiny  c/switch_empty_cases.c [-Os]
+    +0.32%          +2 clocks  (618 -> 620)  tiny  c/switch_empty_cases.c [-Os -fno-unroll-loops -fno-peel-loops]
+    +0.27%        +218 clocks  (79536 -> 79754)  qb/fpdeep.bas
+    +0.27%        +316 clocks  (118750 -> 119066)  qb/stackrt.bas
+    +0.26%         +84 clocks  (31727 -> 31811)  c/huffman_decode.c [-Os -march=i486 -fno-inline-functions -fno-inline-functions-called-once]
+    +0.26%        +114 clocks  (44121 -> 44235)  tiny  qb/segld.bas
+    +0.25%        +659 clocks  (258936 -> 259595)  qb/log_exp_digits.bas [-Os]
+    +0.25%        +115 clocks  (45288 -> 45403)  tiny  qb/fpcse.bas
+    +0.24%        +132 clocks  (55344 -> 55476)  examples/bigframe.nib
+    +0.22%        +154 clocks  (70771 -> 70925)  qb/jumps.bas
+    +0.21%       +1240 clocks  (582898 -> 584138)  qb/hugerg.bas
+    +0.21%        +190 clocks  (91040 -> 91230)  qb/stackover.bas
+    +0.19%          +3 clocks  (1618 -> 1621)  c/volatile_bitfield.c [-Os]
+    +0.17%         +70 clocks  (41640 -> 41710)  tiny  qb/arridx.bas
+    +0.15%         +78 clocks  (51007 -> 51085)  tiny  qb/udt.bas
+    +0.14%         +68 clocks  (49569 -> 49637)  tiny  qb/ivarg.bas
+    +0.13%       +1053 clocks  (801130 -> 802183)  qb/nbody.bas
+    +0.13%          +1 clocks  (782 -> 783)  tiny  qlight/qlight.c [-Os -march=i486]
+    +0.12%         +51 clocks  (42498 -> 42549)  tiny  qb/ivchan.bas
+    +0.11%         +46 clocks  (41700 -> 41746)  tiny  qb/wendgo.bas
+    +0.10%         +54 clocks  (52925 -> 52979)  tiny  qb/resdiv.bas
+    +0.09%         +37 clocks  (41469 -> 41506)  tiny  control/control.bas
+    +0.09%          +2 clocks  (2350 -> 2352)  c/float_bits.c [-Os -march=i486]
+    +0.08%         +66 clocks  (79812 -> 79878)  basic/scores.bas
+    +0.08%         +43 clocks  (52838 -> 52881)  tiny  qb/strcmp_smoke.bas [-Os]
+    +0.07%         +44 clocks  (59499 -> 59543)  tiny  qb/ownf_err_qb45.bas
+    +0.07%         +28 clocks  (38763 -> 38791)  recfloat/recfloat.c [-Os -march=i486]
+    +0.07%        +364 clocks  (514721 -> 515085)  qb/stackrtp.bas
+    +0.06%         +68 clocks  (107952 -> 108020)  qb/arrays.bas
+    +0.06%         +42 clocks  (68083 -> 68125)  qb/fpcalc.bas
+    +0.06%        +408 clocks  (662919 -> 663327)  qb/stackrtv.bas
+    +0.06%        +291 clocks  (485647 -> 485938)  qb/stackoverp.bas
+    +0.06%        +348 clocks  (582906 -> 583254)  qb/stackoverv.bas
+    +0.06%         +34 clocks  (57345 -> 57379)  tiny  qb/gvnphi.bas
+    +0.06%         +45 clocks  (76297 -> 76342)  qb/intrinsics_errors_qb45.bas
+    +0.06%         +30 clocks  (50933 -> 50963)  tiny  qb/resumelocals.bas
+    +0.06%        +268 clocks  (456449 -> 456717)  qb/far_peek_poke_string.bas [-Os, pds71]
+    +0.06%         +28 clocks  (49567 -> 49595)  tiny  qb/ivword.bas
+    +0.06%         +28 clocks  (49587 -> 49615)  tiny  qb/ivarm.bas
+    +0.06%         +34 clocks  (60352 -> 60386)  tiny  qb/data_after_checked.bas [-Os]
+    +0.06%         +27 clocks  (48555 -> 48582)  tiny  qb/lngmxx.bas
+    +0.05%        +218 clocks  (450738 -> 450956)  qb/far_poke_loop_variable.bas [-Os, pds71]
+    +0.04%         +20 clocks  (45273 -> 45293)  tiny  qb/harr.bas
+    +0.04%         +20 clocks  (50238 -> 50258)  tiny  qb/lcexit.bas
+    +0.04%         +16 clocks  (43771 -> 43787)  tiny  qb/spill.bas
+    +0.03%         +14 clocks  (43458 -> 43472)  tiny  qb/onrange.bas
+    +0.03%         +13 clocks  (41654 -> 41667)  tiny  qb/nested.bas
+    +0.03%         +13 clocks  (41981 -> 41994)  tiny  qb/lngmix.bas
+    +0.03%         +21 clocks  (68126 -> 68147)  qb/fpicse.bas
+    +0.03%         +16 clocks  (57077 -> 57093)  tiny  qb/gvnpre.bas
+    +0.03%         +16 clocks  (57345 -> 57361)  tiny  qb/gvnjn.bas
+    +0.03%         +15 clocks  (55514 -> 55529)  tiny  qb/procs.bas
+    +0.02%         +13 clocks  (55764 -> 55777)  tiny  qb/arrphi.bas
+    +0.02%         +25 clocks  (113089 -> 113114)  qb/cmpord.bas
+    +0.02%         +15 clocks  (68107 -> 68122)  qb/fpi2cs.bas
+    +0.02%         +19 clocks  (94525 -> 94544)  qb/cmpof.bas
+    +0.02%         +10 clocks  (50072 -> 50082)  tiny  qb/hotlpx.bas
+    +0.02%          +8 clocks  (40632 -> 40640)  tiny  qb/bools.bas
+    +0.02%          +8 clocks  (41168 -> 41176)  tiny  qb/split.bas
+    +0.02%          +8 clocks  (41168 -> 41176)  tiny  qb/rotate.bas
+    +0.02%          +8 clocks  (41168 -> 41176)  tiny  qb/hotlop.bas
+    +0.02%          +8 clocks  (41436 -> 41444)  tiny  qb/press.bas
+    +0.02%          +8 clocks  (45412 -> 45420)  tiny  qb/matrix.bas
+    +0.01%        +965 clocks  (6699441 -> 6700406)  qb/nbody_fixed.bas
+    +0.01%        +965 clocks  (6699441 -> 6700406)  nbody_fixed/nbody_fixed.bas
+    +0.01%          +1 clocks  (7212 -> 7213)  examples/settings.nib
+    +0.01%          +8 clocks  (60901 -> 60909)  tiny  qb/chain.bas
+    +0.01%         +13 clocks  (99656 -> 99669)  qb/divmod.bas
+    +0.01%         +69 clocks  (575443 -> 575512)  qb/hugelp.bas
+    +0.01%          +5 clocks  (48353 -> 48358)  tiny  qb/rngarm.bas
+    +0.01%         +45 clocks  (480901 -> 480946)  qb/intrinsics_errors_pds71.bas
+    +0.01%         +44 clocks  (470777 -> 470821)  qb/ownf_err_pds71.bas
+    +0.01%          +5 clocks  (54659 -> 54664)  tiny  qb/memphi.bas
+    +0.01%         +45 clocks  (577621 -> 577666)  qb/intrinsics_errors_vbdos.bas
+    +0.01%         +44 clocks  (565215 -> 565259)  qb/ownf_err_vbdos.bas
+    +0.01%          +4 clocks  (58110 -> 58114)  tiny  qb/resnext.bas
+    +0.01%          +4 clocks  (60935 -> 60939)  tiny  qb/nots.bas
+    +0.01%          +2 clocks  (39345 -> 39347)  tiny  qb/far_poke_own_variable.bas [-Os, qb45]
+    +0.00%          +4 clocks  (80887 -> 80891)  qb/arith.bas
+    +0.00%          +2 clocks  (41023 -> 41025)  tiny  sum_three/sum_three.bas
+    +0.00%          +2 clocks  (41286 -> 41288)  tiny  qb/ovfpol.bas
+    +0.00%          +2 clocks  (49088 -> 49090)  tiny  qb/write.bas
+    +0.00%         +36 clocks  (946543 -> 946579)  qb/hugebnd.bas
+    +0.00%         +17 clocks  (454627 -> 454644)  qb/ownf_local_pds71.bas
+    +0.00%          +5 clocks  (149340 -> 149345)  qb/bigframe6000.bas
+    +0.00%          +8 clocks  (465323 -> 465331)  qb/resumelocals_local.bas
+    +0.00%          +1 clocks  (68903 -> 68904)  ring/ring.c [-Os -march=i486]
+    +0.00%          +3 clocks  (456653 -> 456656)  qb/ndmax.bas
+  void  c/bit_setclear.c [-Os -march=i486]: base: compile: /bit_setclear.c:
+cool-zhukovsky-b4940f/test
+  void  c/bit_test.c [-Os -march=i486]: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
+  void  c/builtin_expect.c [-Os]: base: link: jwlink: Error! E2028: ___builtin_expect@3 is an undefined reference
+file work/perso
+  void  c/builtins_table.c [-Os]: base: link: jwlink: Error! E2028: ___builtin_abs@3 is an undefined reference
+Error! E2028: ___builtin_cons
+  void  c/high_byte.c: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
+  void  c/huge_copy.c: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
+  void  c/huge_fill.c: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
+  void  c/huge_runs.c: base: compile: d __declspec declaration
+worktrees/cool-zhukovsky-b49
+  void  c/inlined_tail_call_keeps_frame_stores.c [-Os]: base: compile: llrm-c: wccq failed on worktrees/cool-zhukovsky-b4940
+  void  c/tail_calls_edges.c [-Os -march=i486 -fno-inline=_sum5@3 -fno-inline=_big_sum@3 -fno-inline=_make_big@3 -fno-inline=vsum_ -fno-inline=_half@3 -fno-inline=_twice@3]: base: compile: ce
+llrm-c: error: unknown option -fno-inline=_sum5@3; the passes are -fallocation-search, -
+  void  c/tail_calls_edges.c [-Os -march=i486 -mabi=regparm3 -fno-inline=_sum5@3 -fno-inline=_big_sum@3 -fno-inline=_make_big@3 -fno-inline=vsum_ -fno-inline=_half@3 -fno-inline=_twice@3]: base: compile: ce
+llrm-c: error: unknown option -fno-inline=_sum5@3; the passes are -fallocation-search, -
+  void  examples/speaker.nib: base: the program never exited (limit)
+  void  examples/ticker.nib: base: the program never exited (limit)
+  void  grep/grep.bas: base: int 21h ah=0x19
+  void  grep/grep.c [-Os -march=i486]: base: the program never exited (limit)
+  void  grep/grep.nib: base: the program never exited (limit)
+  void  jpeg_fixed/jpeg_fixed.bas: base: int 21h ah=0x19
+  void  jpeg_single/jpeg_single.bas: base: int 21h ah=0x19
+  void  qb/currency_store_pds71.bas: base: compile: llrm-qb: run/qb
+  void  qb/data_big_literal.bas [-Os]: base: compile: llrm-qb: run/qb
+  void  qb/palette_using_pds71.bas: base: compile: llrm-qb: run/qb
+  void  qb/range_log_trig.bas [-Os]: base: compile: llrm-qb: run/qb
+  void  qb/redim_preserve_pds71.bas: base: compile: llrm-qb: run/qb
+  void  qb/resume0.bas: base: compile: llrm-qb: run/qb
+  void  stft_fixed/stft_fixed.bas: base: int 21h ah=0x19
+  void  stft_fixed/stft_fixed.nib [-Os -march=i486]: new: the program never exited (limit)
+  void  stft_single/stft_single.bas: base: int 21h ah=0x19

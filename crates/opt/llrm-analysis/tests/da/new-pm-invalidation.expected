@@ -1,0 +1,5 @@
+== --tbaa
+@test_no_noalias
+  none!
+  confused!
+  none!

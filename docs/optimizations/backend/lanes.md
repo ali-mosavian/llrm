@@ -1,17 +1,20 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lanes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lanes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lanes.rs sha256:212db65f2a39185d6a0db8872f7ce80d411ec14cc78826e8115b07e662bbe5b6 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/lanes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/lanes.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/lanes.rs sha256:53dd34fcc7683e557d786e384bbf4fee3fb6d760487b9629456498ba9ea797ff -->
 
 # lanes
 
 A set of register and flag lanes, as a 128-bit mask.
 
 ## How it works
-A lane is a byte of a general register root (4 each, 7 roots), a byte of a
-segment register (2 each, 6 segments), or a flag bit against
-`RegId::None` (32): 72 in all. The table sorts the lanes in `(RegId, u32)`
-order, so flag bit `i` is mask bit `i`, and iteration visits lanes in the
-order a `BTreeSet<Lane>` would. Each register records the mask bit of its
-byte 0 and its byte count, so a lane's bit is a table lookup.
+A lane is a byte of a general register root (4 each, 7 roots of a 32-bit
+target), a byte of a segment register (2 each, 6 segments), or a flag bit
+against `RegId::None` (32). Long mode adds 8 roots and a root's upper four
+bytes, which no view splits, are one lane: 5 lanes for each of 15 roots, 119
+lanes in all, which fit the mask a 32-bit target has always had. The table
+sorts the lanes in `(RegId, u32)` order, so flag bit `i` is mask bit `i`,
+and iteration visits lanes in the order a `BTreeSet<Lane>` would. Each
+register records the mask bit of its byte 0 and its byte count, so a lane's
+bit is a table lookup.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
@@ -35,5 +38,5 @@ No example: a bit set type. `liveness.rs` shows what it holds.
 
 ## Used by
 `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`,
-`regthrash`, `exactaddress`, `sharedstores`, `machinecse`), `loopslots`,
+`regthrash`, `exactaddress`, `sharedstores`), `loopslots`,
 `schedule`, `parcopy`, and `peep/guards`, `peep/walk`, `peep/make`.

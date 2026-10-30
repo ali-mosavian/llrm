@@ -5,7 +5,7 @@
 
 use llrm_mir::BinaryOp;
 use llrm_mir::build::Builder;
-use llrm_mir::facts::Fact;
+use llrm_mir::facts::{Fact, Inlining};
 use llrm_mir::{CastOp, Flags, GlobalId, IntPredicate, Linkage, Module, Operand, Type, TypeId};
 
 use super::{RUNTIME, convention, mark_cold};
@@ -119,6 +119,9 @@ fn define(
     body.b.function.take_changes();
     for &one in &meaning.releases {
         module.builder(global).function.parameter_attrs[one].push(Fact::Releases.carrier());
+    }
+    if meaning.always_inline {
+        module.builder(global).function.attrs.push(Fact::Inline(Inlining::Always).carrier());
     }
     module.globals[global.0 as usize].linkage = Linkage::AvailableExternally;
 }

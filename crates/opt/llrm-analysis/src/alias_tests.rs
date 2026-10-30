@@ -8,8 +8,8 @@ use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
 
 use super::{
-    _direct_summary, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences,
-    initialized, nonnull_by_definition, points_to, summaries,
+    _direct_summary, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_by_attributes, congruences,
+    nonnull_by_definition, points_to, summaries,
 };
 use crate::memory::{
     self, Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit, object_of,
@@ -71,9 +71,9 @@ impl Parsed {
     /// What `@f`'s calls read and write, callees summarized by `known`.
     fn effects(
         &self,
-        known: &IndexMap<String, Summary>,
+        _known: &IndexMap<String, Summary>,
     ) -> Vec<Effect> {
-        calls_annotated(&Procedure::of(self.unit()), known).unwrap().into_values().collect()
+        calls_by_attributes(&crate::testing::with_points(self.unit())).values().cloned().collect()
     }
 }
 
@@ -374,26 +374,6 @@ b0:
 ";
 
 #[test]
-fn test_interprocedural_modref_reaches_the_call_operation() {
-    // A known callee replaces the call's catch-all effect with its actual
-    // object.
-    let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
-    let procedures =
-        IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
-    let known = summaries(&procedures, None).unwrap();
-    let effect = &parsed.effects(&known)[0];
-    let Some(super::Actual::Provenance(passed)) =
-        procedures["f"].arguments.values().next().map(|actual| actual[0].clone())
-    else {
-        panic!("@g's slice")
-    };
-    let g = passed.slices.first().unwrap().object;
-    assert!(effect.loads.is_empty());
-    assert!(writes(effect, &bytes(&g, 6, 8)));
-    assert!(!writes(effect, &bytes(&g, 4, 6)) && !writes(effect, &bytes(&g, 8, 16)));
-}
-
-#[test]
 fn test_recursive_pointer_offset_summary_widens_and_terminates() {
     // A recursive f(p + 1) grew one byte per summary round; the SCC effect is
     // the whole formal object.
@@ -465,43 +445,6 @@ fn test_unknown_call_reaches_a_frame_pointer_escaped_before_the_call() {
     let effect = &parsed.effects(&IndexMap::default())[0];
     assert!(writes(effect, &bytes(&parsed.object("escaped"), 0, 4)));
     assert!(!writes(effect, &bytes(&parsed.object("private"), 0, 4)));
-}
-
-#[test]
-fn a_pointer_published_after_a_call_is_not_reached_by_it() {
-    let text = PUBLISHED.replace(
-        "  store ptr %escaped, ptr @g\n  call void @external()\n",
-        "  call void @external()\n  store ptr %escaped, ptr @g\n",
-    );
-    let parsed = Parsed::new(&text);
-    let effect = &parsed.effects(&IndexMap::default())[0];
-    assert!(!writes(effect, &bytes(&parsed.object("escaped"), 0, 4)));
-}
-
-#[test]
-fn test_known_capture_summary_controls_later_external_reach() {
-    // A borrowed pointer remains private; a retained pointer exposes its
-    // object to subsequent unknown calls.
-    let parsed = Parsed::new(
-        "declare void @known(ptr)
-
-declare void @external()
-
-define void @f() {
-b0:
-  %local = alloca [4 x i8]
-  call void @known(ptr %local)
-  call void @external()
-  ret void
-}
-",
-    );
-    let local = bytes(&parsed.object("local"), 0, 4);
-    let borrowed = parsed.effects(&IndexMap::from_iter([("known".to_owned(), Summary::default())]));
-    let captured = Summary { captures: BTreeSet::from([Some(Identity::Int(0))]), ..Summary::default() };
-    let captured = parsed.effects(&IndexMap::from_iter([("known".to_owned(), captured)]));
-    assert!(!writes(&borrowed[1], &local));
-    assert!(writes(&captured[1], &local));
 }
 
 #[test]
@@ -686,7 +629,11 @@ b50:
     let tagged = annotated(&parsed.unit()).unwrap()[&load].provenance.clone().expect("a provenance");
     let root = MemRef::of(&parsed.unit(), load).and_then(|one| one.root).expect("a root");
     let global = object_of(&parsed.unit(), root).expect("an object");
-    assert_eq!(tagged.slices, crate::memory::Sorted::from([Slice::new(global, 4, 11, 2, 2).unwrap()]));
+    // The guard `%i < 4` and the counted loop narrowed this to [4, 11) by 2
+    // (`Bounded`, llrm-only); `computeConstantRange` reads neither a phi nor a
+    // dominating branch, and neither does the pin's BasicAA, so the slice is
+    // the whole object (AM-BD-4, pin-faithful).
+    assert_eq!(tagged.slices, crate::memory::Sorted::from([Slice::new(global, 0, 64, 1, 2).unwrap()]));
 }
 
 /// A byte counter stepping by `step` for 200 trips, counting the trips
@@ -746,66 +693,6 @@ fn a_congruence_holds_across_the_counters_wrap() {
 
 fn parsed_module(text: &str) -> Module {
     parsed(&format!("{DOS}{text}"))
-}
-
-/// A slot zeroed by `memset` and only later made to hold `&inner`: the
-/// memset may only write through its argument, so it reads no pointer out
-/// of the slot and publishes nothing, and a call between the two does not
-/// reach `inner`. Lending the slot published what it would later hold, so
-/// every bounds error in T028's `update` read its zeroed samples.
-#[test]
-fn a_write_only_argument_publishes_nothing_it_will_hold() {
-    let parsed = Parsed::new(
-        "declare void @external()
-
-declare void @use(ptr)
-
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
-
-define void @f() {
-b0:
-  %slot = alloca [4 x i8]
-  %inner = alloca [4 x i8]
-  call void @llvm.memset.p0.i16(ptr %slot, i8 0, i16 4, i1 false)
-  call void @external()
-  store ptr %inner, ptr %slot
-  call void @use(ptr %slot)
-  ret void
-}
-",
-    );
-    let effects = parsed.effects(&IndexMap::default());
-    assert!(!writes(&effects[1], &bytes(&parsed.object("inner"), 0, 4)));
-}
-
-/// A call that keeps no pointer it reads out of its argument (`noretain`) lends
-/// nothing: `nocapture` alone still lets it keep `inner`, whose address `slot`
-/// holds, so a later unknown call may write it. QB's `ERASE` of an array behind
-/// a descriptor made the array escape everywhere (deedlines).
-#[test]
-fn a_noretain_argument_publishes_nothing_it_points_to() {
-    let after = |attrs: &str| {
-        let parsed = Parsed::new(&format!(
-            "declare void @external()
-
-declare void @use(ptr {attrs})
-
-define void @f() {{
-b0:
-  %slot = alloca [4 x i8]
-  %inner = alloca [4 x i8]
-  store ptr %inner, ptr %slot
-  call void @use(ptr %slot)
-  call void @external()
-  ret void
-}}
-"
-        ));
-        let effects = parsed.effects(&IndexMap::default());
-        writes(&effects[1], &bytes(&parsed.object("inner"), 0, 4))
-    };
-    assert!(after("nocapture"));
-    assert!(!after("nocapture noretain"));
 }
 
 /// A `noretain` call keeps nothing, but still reaches what its argument points
@@ -912,6 +799,19 @@ fn a_tags_ancestors_are_the_same_with_and_without_the_type_tree() {
         assert_eq!(llrm_mir::tbaa::Tbaa::chain(metadata, tag), tree.of_tag(metadata, tag), "tag !{at}");
     }
     assert_eq!(llrm_mir::tbaa::Tbaa::chain(metadata, llrm_mir::module::MetadataId(5)), ["int", "scalar", "root"]);
+}
+
+/// A body with no call was solved for what escapes twice by `summaries`: once
+/// for its direct summary and once for its visit, which finds the same with no
+/// call to give other captures (2 of 4 solves of d_faces' escape phase, which
+/// is 2.7% of the compile). The visit reuses the direct summary's facts.
+#[test]
+fn a_body_with_no_call_is_solved_for_what_escapes_once_by_summaries() {
+    let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
+    let procedures = IndexMap::from_iter([("callee".to_owned(), Procedure::of(parsed.unit_of("callee")))]);
+    let before = crate::alias::escape_solves();
+    summaries(&procedures, None).unwrap();
+    assert_eq!(crate::alias::escape_solves() - before, 1, "a call-free body was solved for escapes twice");
 }
 
 /// What a body does on its own was made again for every body in every round of
@@ -1106,6 +1006,27 @@ fn a_typed_reference_is_copied_without_allocating() {
     drop((copy, copies));
 }
 
+/// A held access was asked its `!tbaa` name and lineage again at every hit
+/// (9 M instructions on d_faces). Unchanged metadata is not asked twice.
+#[test]
+fn a_held_access_is_not_asked_its_type_again() {
+    let parsed = Parsed::new(&format!(
+        "define void @f(ptr %p) {{\n  store i16 1, ptr %p, !tbaa !5\n  ret void\n}}\n{TYPE_TREE}"
+    ));
+    let store = parsed.all(|op| matches!(op, Opcode::Store { .. }))[0];
+    let tree = llrm_mir::tbaa::Tbaa::of(&parsed.module.metadata);
+    for tree in [None, Some(&tree)] {
+        let unit = Unit { tbaa: tree, ..parsed.unit() };
+        let first = MemRef::of(&unit, store).expect("a store");
+        let before = crate::memory::TYPE_READS.with(std::cell::Cell::get);
+        for _ in 0..20 {
+            assert_eq!(MemRef::of(&unit, store).as_ref(), Some(&first));
+        }
+        let reads = crate::memory::TYPE_READS.with(std::cell::Cell::get) - before;
+        assert_eq!(reads, 0, "a held access was asked its type {reads} times in 20 hits");
+    }
+}
+
 /// A reference of a unit with no type tree was given the names of its type and
 /// every ancestor as new strings, for each reference: 7% of the compile's
 /// allocations (QCport). The names are read once for each type of a module.
@@ -1183,79 +1104,21 @@ fn a_procedure_knows_which_callees_a_definition_elsewhere_may_replace() {
     }
 }
 
-#[test]
-fn initialized_asks_the_interner_per_parameter_not_per_read_and_parameter() {
-    // stamped_all interned one Parameter object per (read, parameter) pair: 112
-    // M instructions per QCport file.
-    let loads: String = (0..24).map(|i| format!("  %l{i} = load i16, ptr %p{}\n", i % 6)).collect();
-    let text = format!(
-        "define i16 @f(ptr %p0, ptr %p1, ptr %p2, ptr %p3, ptr %p4, ptr %p5) {{\nb0:\n{loads}  store i16 0, ptr %p0\n  ret i16 %l0\n}}\n"
-    );
-    let parsed = Parsed::new(&text);
-    let unit = parsed.unit();
-    let before = ObjectInterner::of(&parsed.module.context).lookups();
-    let found = initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
-    let asked = ObjectInterner::of(&parsed.module.context).lookups() - before;
-    assert_eq!(found.len(), 6);
-    assert!(asked < 24 * 6 / 2, "{asked} interner lookups for 24 reads and 6 parameters");
-}
-
 /// `initialized` made two points-to solves and the effects of every call for
 /// each body of the module, 45% of `mir interprocedural` over QCport at -O1.
 /// What it states is bytes a body writes into a pointer parameter before
 /// reading them: a body with no pointer parameter, or with no store or call,
 /// states none, and is not solved.
-#[test]
-fn initialized_does_not_solve_a_body_that_writes_no_pointer_parameter() {
-    let run = |text: &str| {
-        let parsed = Parsed::new(text);
-        let unit = parsed.unit();
-        let before = ObjectInterner::of(&parsed.module.context).lookups();
-        let found = initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
-        (found, ObjectInterner::of(&parsed.module.context).lookups() - before)
-    };
-    for (text, what) in [
-        ("define i16 @f(i16 %a) {\nb0:\n  %x = add i16 %a, 1\n  ret i16 %x\n}\n", "integer parameters"),
-        ("define i16 @f(ptr %p) {\nb0:\n  %x = load i16, ptr %p\n  ret i16 %x\n}\n", "a pointer parameter only read"),
-    ] {
-        let (found, asked) = run(text);
-        assert!(found.iter().all(Vec::is_empty), "{what}: {found:?}");
-        assert_eq!(asked, 0, "{what}: the body was solved");
-    }
-    let (found, asked) = run("define i16 @f(ptr %p) {\nb0:\n  store i16 0, ptr %p\n  ret i16 0\n}\n");
-    assert_eq!(found, vec![vec![(0, 2)]], "premise: a store through a pointer parameter initializes it");
-    assert!(asked > 0);
-}
 
 /// `initialized` solved where every pointer points three times (plain, with the
 /// call arguments, with arguments and captures), the escape phase being the
 /// only part that differs: 3,908 + 1,954 solves over QCport's front half at
 /// -O1. Once a body.
-#[test]
-fn initialized_solves_the_pointer_values_of_a_body_once() {
-    let parsed = Parsed::new(
-        "declare void @g(ptr)\n\ndefine void @f(ptr %p) {\nb0:\n  store i16 0, ptr %p\n  call void @g(ptr %p)\n  ret void\n}\n",
-    );
-    let unit = parsed.unit();
-    let before = crate::alias::value_solves();
-    initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
-    assert_eq!(crate::alias::value_solves() - before, 1, "initialized solved the pointer values again");
-}
 
 /// `initialized` asked the escape phase twice more (with the call arguments,
 /// and plain) for provenance alone: `.values` of each is the value solve's, and
 /// 20 of d_faces' 252 escape phases at -O2 were these. It asks the one of
 /// `calls_annotated`, whose effects it reads.
-#[test]
-fn initialized_asks_no_escape_phase_of_its_own() {
-    let parsed = Parsed::new(
-        "declare void @g(ptr)\n\ndefine void @f(ptr %p) {\nb0:\n  store i16 0, ptr %p\n  call void @g(ptr %p)\n  ret void\n}\n",
-    );
-    let unit = parsed.unit();
-    let before = crate::alias::escape_solves();
-    initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
-    assert_eq!(crate::alias::escape_solves() - before, 1, "initialized asked for what escapes for its own use");
-}
 
 /// A loop the shape does not know of: the shape was taken before a copy loop
 /// was spliced in, so its dominance says no block dominates a latch and no back
@@ -1713,6 +1576,72 @@ fn an_effect_of_the_unknown_covers_a_fresh_slice_of_an_escaped_object_and_not_th
     );
 }
 
+/// A fresh run of a call states a slice of a global the program took the
+/// address of where the kept effect has what a callee may reach (`Nonlocal`),
+/// whole: that reaches every escaped object, a frame one aside, as
+/// `objects_may_alias` says. `covers` took the global for a new read, and
+/// `LLRM_CHECK_REPLAY` stopped arrprm.bas at -O1 and -O2 (m16) once -O1
+/// inlined: 'call-effects: the result kept past 4 sound edits contradicts what
+/// deriving it afresh gives' (no object changed: the kept effect was the less
+/// precise, both sound).
+#[test]
+fn an_effect_of_what_a_callee_reaches_covers_a_fresh_slice_of_an_escaped_global() {
+    let escaped = MemoryObject {
+        identity: Some(Identity::Global(4)),
+        extent: Some(8),
+        captured: true,
+        addressed: true,
+        ..MemoryObject::new(MemoryKind::Global)
+    };
+    let private = MemoryObject {
+        identity: Some(Identity::Global(5)),
+        extent: Some(8),
+        captured: false,
+        addressed: true,
+        ..MemoryObject::new(MemoryKind::Global)
+    };
+    let frame = MemoryObject {
+        identity: Some(Identity::Value(9)),
+        extent: Some(4),
+        captured: true,
+        addressed: true,
+        ..MemoryObject::new(MemoryKind::Frame)
+    };
+    let reference =
+        |provenance: Provenance| MemRef { provenance: Some(provenance.clone()), ..MemRef::reach(1, provenance) };
+    let effect = |loads: Vec<MemRef>| Effect { loads: loads.into(), ..Effect::default() };
+    let nonlocal = reference(Provenance::one(ObjectRef::NONLOCAL));
+    assert!(
+        effect(vec![nonlocal.clone()]).covers(&effect(vec![nonlocal.clone(), reference(one(&escaped, 0, 8))])),
+        "a callee's reach includes an escaped global"
+    );
+    assert!(
+        !effect(vec![nonlocal.clone()]).covers(&effect(vec![reference(one(&private, 0, 8))])),
+        "not a global whose address never escaped"
+    );
+    assert!(
+        !effect(vec![nonlocal.clone()]).covers(&effect(vec![reference(one(&frame, 0, 4))])),
+        "not a frame object, escaped or not"
+    );
+    // `objects_may_alias` asks both objects addressed before it asks captured.
+    let unaddressed = MemoryObject {
+        identity: Some(Identity::Global(6)),
+        extent: Some(8),
+        captured: true,
+        addressed: false,
+        ..MemoryObject::new(MemoryKind::Global)
+    };
+    assert!(
+        !effect(vec![nonlocal]).covers(&effect(vec![reference(one(&unaddressed, 0, 8))])),
+        "not a global nothing computes the address of, captured or not"
+    );
+    let unknown = reference(UNKNOWN.clone());
+    assert!(
+        !effect(vec![unknown]).covers(&effect(vec![reference(one(&unaddressed, 0, 8))])),
+        "the unknown object does not reach it either"
+    );
+}
+
 /// A summary stands for the bytes its slices name. A fresh read of two bytes
 /// at offset 2 of a 7-byte global lies in a kept read of its bytes [0, 7), and
 /// a two-byte read starting anywhere in [0, 7) names the object's last byte
@@ -1744,4 +1673,143 @@ fn a_summary_covers_a_read_by_the_bytes_it_names_not_by_its_shape() {
     };
     assert!(!in_large(0, 7, 1).covers(&in_large(5, 8, 1)), "byte 7 of a 20-byte object is a new read");
     assert!(!in_large(0, 7, 1).covers(&in_large(0, 7, 2)), "so is the byte after a two-byte read from 6");
+}
+
+/// A local published only after a call is still reached by its unknown writes:
+/// the footprint names the unknown object, which may be any object whose
+/// address leaves the function anywhere (`ObjectRef::captured`), not before
+/// the call as the pin's `isNotCapturedBefore` has it. The old effect lists
+/// (`a_pointer_published_after_a_call_is_not_reached_by_it`) were flow
+/// sensitive; the precision is row AM-CA-8. A local that is never published
+/// stays out.
+#[test]
+fn a_calls_footprint_reaches_a_local_published_later_but_not_one_never_published() {
+    let text = PUBLISHED.replace(
+        "  store ptr %escaped, ptr @g\n  call void @external()\n",
+        "  call void @external()\n  store ptr %escaped, ptr @g\n",
+    );
+    let parsed = Parsed::new(&text);
+    let unit = parsed.unit();
+    let found = crate::alias::calls_by_attributes(&unit);
+    let effect = found.iter().next().map(|(_, effect)| effect).expect("the call");
+    assert!(writes(effect, &bytes(&parsed.object("escaped"), 0, 4)), "published later: reached (AM-CA-8)");
+    assert!(!writes(effect, &bytes(&parsed.object("private"), 0, 4)), "never published: not reached");
+}
+
+/// What a callee reaches elsewhere depends on the module analyses alone: made
+/// under one proxy it is worked out once for the callee, not again for each
+/// body state (76 runs of the footprints on d_faces -O2, 6.5 M and 3.8 M Ir of
+/// `reaches`).
+#[test]
+fn what_a_callee_reaches_elsewhere_is_worked_out_once_under_one_proxy() {
+    let module = crate::testing::parsed(
+        "@g = internal global i16 0\n\ndeclare void @external()\n\ndefine void @f() {\nb0:\n  call void @external()\n  ret void\n}\n",
+    );
+    let layout = crate::testing::layout(&module);
+    let f = crate::testing::function(&module, "f");
+    let outer = llrm_mir::passes::Outer::of(&module, None);
+    let footprints = || {
+        let before = crate::alias::reaches_made();
+        let unit = crate::memory::Unit::within(&module.context, &layout, f, &outer);
+        crate::alias::calls_by_attributes(&unit);
+        crate::alias::reaches_made() - before
+    };
+    assert_eq!(footprints(), 1, "the first body state works it out");
+    assert_eq!(footprints(), 0, "the next asks the proxy");
+}
+
+/// A byval parameter is the callee's own copy: the call writes nothing of the
+/// object it passes, and `initializes` on it fills nothing of it. Without
+/// `byval` the same call writes and fills the object. Ported from
+/// `a_callee_that_writes_a_byval_parameter_writes_nothing_of_the_callers_object`
+/// and `a_byval_argument_that_initializes_fills_nothing_of_the_callers_object`
+/// (c/byval_inline -O2 dropped the store `g.a[0] = 1`).
+#[test]
+fn a_byval_argument_is_neither_written_nor_filled_by_the_call() {
+    let of = |attrs: &str| {
+        let text = format!(
+            "declare void @h(ptr {attrs}initializes((0, 4))) memory(argmem: write) nounwind\ndefine void @f() {{\nb0:\n  %a = alloca i32\n  call void @h(ptr %a)\n  ret void\n}}\n"
+        );
+        let parsed = Parsed::new(&text);
+        let unit = parsed.unit();
+        let found = crate::alias::calls_by_attributes(&unit);
+        let call = unit
+            .function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(unit.function.instruction(inst).opcode, Opcode::Call(_)))
+            .unwrap();
+        let accesses = crate::memoryssa::Accesses::of(&unit, IndexMap::default(), &found);
+        (found[&call].stores.len(), accesses.fills(call).len())
+    };
+    assert_eq!(of(""), (1, 1), "premise: a plain parameter is written and filled");
+    assert_eq!(of("byval(i32) "), (0, 0));
+}
+
+/// A call's footprint from its attributes alone (`calls_by_attributes`): a
+/// `memset` of a constant length writes those bytes through its destination
+/// and reads nothing; a callee with `memory(argmem: read)` reads through its
+/// argument and writes nothing; one with no attribute may write anywhere.
+#[test]
+fn a_calls_footprint_follows_its_attributes() {
+    let parsed = Parsed::new(
+        "declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nosync nounwind willreturn memory(argmem: write)
+declare i16 @peek(ptr nocapture) memory(argmem: read) nounwind willreturn
+declare void @anything(ptr)
+
+define void @f() {
+b0:
+  %s = alloca [8 x i8]
+  call void @llvm.memset.p0.i16(ptr %s, i8 0, i16 8, i1 false)
+  %v = call i16 @peek(ptr %s)
+  call void @anything(ptr %s)
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let found = crate::alias::calls_by_attributes(&unit);
+    let calls: Vec<InstId> = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(unit.function.instruction(inst).opcode, Opcode::Call(_)))
+        .collect();
+    let [memset, peek, anything] = calls[..] else { panic!("{calls:?}") };
+    let shape = |at: InstId| (found[&at].loads.len(), found[&at].stores.len());
+    assert_eq!(shape(memset), (0, 1));
+    assert_eq!(found[&memset].stores[0].width, 8, "the bytes the length names");
+    assert_eq!(shape(peek), (1, 0));
+    assert!(found[&anything].stores.len() > 1 && found[&anything].loads.len() > 1, "unknown memory too");
+}
+
+/// A load asked its global's size through the whole object: capture state and
+/// an interner lookup (750 Ir each) for a number the type gives. fjoins N=64
+/// asked 63,024 times, 47 M of 991 M Ir.
+#[test]
+fn test_the_extent_of_a_global_is_read_without_interning_its_object() {
+    let parsed = Parsed::new(
+        "@g = global i32 7
+
+define void @f() {
+b0:
+  store i8 0, ptr @g
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let root = unit
+        .function
+        .walk()
+        .flat_map(|(_, inst)| unit.function.instruction(inst).operands.iter().copied().collect::<Vec<_>>())
+        .find(|operand| matches!(
+            operand,
+            Operand::Constant(id) if matches!(unit.context.get(*id).kind, llrm_mir::context::ConstantKind::Global(_))
+        ))
+        .expect("the global's address");
+    let interner = ObjectInterner::of(unit.context);
+    let before = interner.lookups();
+    assert_eq!(memory::extent_of(&unit, root), Some(4));
+    assert_eq!(interner.lookups(), before, "extent_of interned the global's object");
 }

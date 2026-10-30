@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/verify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/verify.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/verify.rs sha256:8c1dccac6257c3e4ef76e1b6877bb7f73513f08394b3e86a1454b19655911d86 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/verify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/verify.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/verify.rs sha256:de9adea2dca65431b0f74873a8fd3ffca332be67f36d95abef35222166566524 -->
 
 # verify
 
@@ -47,11 +47,8 @@ in `verify.rs`.
 
 ## Runs
 After instruction selection and after every machine phase when `LLRM_VERIFY`
-is set to anything but `0`, or `-fverify-ir` is given (`flow::verified`,
-`flow::checked`). Tests, the gate and torture set it. A failure names the phase.
-The HIR and MIR a frontend made are checked then too, and not in a plain
-compile, as LLVM's release builds leave its verifier off (30 M instructions,
-0.9% of d_faces -O2); a malformed frontend output then fails in a later pass.
+is set to anything but `0` (`flow::verified`, `flow::checked`). Tests, the
+gate and torture set it. A failure names the phase.
 
 ## See also
 LLVM's

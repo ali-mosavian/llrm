@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/sharedstores.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/sharedstores.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/sharedstores.rs sha256:c65f4b52fb8aefd31a667c30cfb87433cd5d2ad7c551dfd233e9f5b236694701 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/sharedstores.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/sharedstores.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/sharedstores.rs sha256:daa52e2eab231f55f150e38b178ae8244c109ad716bb700fa8226493c2f21ab0 -->
 
 # sharedstores
 
@@ -70,6 +70,6 @@ at -Os -m16.
 
 ## Runs
 A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after
-`zeroed_loads` and before `machinecse`. It returns the body unchanged unless
+`zeroed_loads` and before `machinedce`. It returns the body unchanged unless
 the CPU profile is sized for bytes (`cpu.size`, -Os): the load costs a
 clock.

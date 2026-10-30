@@ -82,7 +82,7 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(out("bin", LLRM_BIN="/a"), "/a")
         self.assertEqual(out("target", CARGO_TARGET_DIR="/b"), "/b")
         scripts = [*Path(llrmbin.__file__).parent.glob("*.sh"), *Path(llrmbin.__file__).parent.glob("*/*.sh"), *(llrmbin.REPO / "crates/target/llrm-x86-m32/vsgcc").glob("*.sh")]
-        spelled = [one.name for one in scripts if "target/release" in one.read_text() or "LLRM_BIN:-" in one.read_text()]
+        spelled = [one.name for one in scripts if not one.name.startswith("test-") and ("target/release" in one.read_text() or "LLRM_BIN:-" in one.read_text())]  # a test-*.sh builds fixture trees that spell the path (test-sweep-targets.sh turned this red on parity)
         self.assertEqual(spelled, [])
 
 
@@ -95,3 +95,92 @@ def test_a_pinned_binary_has_a_path_of_one_length_whatever_directory_it_is_in(tm
     first, second = llrmbin.pinned(short / "llrm-c"), llrmbin.pinned(long / "llrm-c")
     assert len(str(first)) == len(str(second)) == llrmbin.PINNED_BYTES
     assert os.readlink(first) == str(short / "llrm-c") and os.readlink(second) == str(long / "llrm-c")
+
+
+def test_two_copies_of_one_binary_are_refused_and_two_different_ones_print_both_md5(tmp_path):
+    """`cargo build -p llrm-c` did not relink the binary: two commits' "builds" were one file, and the identity pair read 0 differ."""
+    import pytest
+
+    a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    a.write_bytes(b"one")
+    b.write_bytes(b"one")
+    c.write_bytes(b"two")
+    with pytest.raises(SystemExit, match="same binary"):
+        llrmbin.assert_distinct(a, b)
+    header = llrmbin.assert_distinct(a, c)
+    assert llrmbin.md5(a)[:12] in header and llrmbin.md5(c)[:12] in header
+    assert "same source" in llrmbin.assert_distinct(a, b, same_source=True)
+
+
+def test_a_source_with_a_future_mtime_is_named_as_the_reason_a_binary_stays_stale(tmp_path):
+    """A private tree copied with its timestamps kept a source an hour in the future: `cargo build` could not clear the check, and the refusal said only 'stale binaries'."""
+    import time
+
+    (tmp_path / "crates").mkdir()
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "llrm"\nversion = "0.0.0"\n[[bin]]\nname = "llrm-c"\npath = "src/c.rs"\n')
+    src = tmp_path / "crates/a.rs"
+    src.write_text("x")
+    release = tmp_path / "target/release"
+    release.mkdir(parents=True)
+    binary = release / "llrm-c"
+    binary.write_text("b")
+    (release / "llrm-c.d").write_text(f"{binary}: {src}\n")
+    future = time.time() + 3600
+    os.utime(src, (future, future))
+    assert llrmbin.stale_binaries(release, tmp_path) == ["llrm-c"]
+    detail = llrmbin.stale_detail(release, tmp_path)
+    assert str(src) in detail and "FUTURE" in detail, detail
+
+
+def _dist(tmp_path, content: bytes, recorded: bytes):
+    import hashlib
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Cargo.toml").write_text('[[bin]]\nname = "llrm-c"\npath = "x.rs"\n')
+    source = repo / "lib.rs"
+    source.write_text("")
+    dist = tmp_path / "sbp-abc" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "llrm-c").write_bytes(content)
+    (dist / "llrm-c.d").write_text(f"{dist}/llrm-c: {source}\n")
+    (tmp_path / "sbp-abc" / "ok").write_text(f"sha: abc\n{hashlib.md5(recorded).hexdigest()}  llrm-c\n")
+    return repo, dist, source
+
+
+def test_a_dist_binary_matching_its_recorded_md5_passes_with_an_old_mtime(tmp_path):
+    """A checkout made every source newer than the dist built from the same sha; the guard then wanted the binaries touched, which hides a real stale one."""
+    repo, dist, source = _dist(tmp_path, b"built", b"built")
+    os.utime(dist / "llrm-c", (1, 1))
+    assert llrmbin.stale_binaries(dist, repo) == []
+
+
+def test_a_dist_binary_not_matching_its_recorded_md5_is_stale_with_a_fresh_mtime(tmp_path):
+    """A fresh mtime says nothing of what the binary is: one that differs from what the dist built must be refused."""
+    repo, dist, source = _dist(tmp_path, b"other", b"built")
+    os.utime(source, (1, 1))
+    assert llrmbin.stale_binaries(dist, repo) == ["llrm-c"]
+
+
+def test_the_compiler_is_llrm_cc(tmp_path):
+    """Every tool names the C compiler through `compiler`; a directory that still holds an llrm-c is not read as having it."""
+    (tmp_path / "llrm-c").write_text("")
+    assert llrmbin.compiler(tmp_path) == tmp_path / "llrm-cc"
+
+
+def test_a_pinned_llrm_cc_has_the_path_length_llrm_c_had(tmp_path):
+    """The name was counted as `llrm-c`: llrm-cc's path was one byte longer, which moves an instruction count."""
+    (tmp_path / "llrm-cc").write_text("")
+    assert len(str(llrmbin.pinned(tmp_path / "llrm-cc"))) == llrmbin.PINNED_BYTES
+
+
+def test_the_stamp_is_read_from_llrm_llc_when_there_is_no_llrm_c(tmp_path, monkeypatch):
+    """llrm-cc prints clang's --version, no stamp; the backend beside it prints the sha. Without llrm-c nothing was checked."""
+    import stamp
+
+    seen = []
+    monkeypatch.setattr(stamp, "check", lambda binary, *args, **kwargs: seen.append(binary.name))
+    for name in ("llrm-cc", "llrm-llc"):
+        (tmp_path / name).write_text("")
+    llrmbin.stamped(tmp_path)
+    assert seen == ["llrm-llc"]

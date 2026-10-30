@@ -33,7 +33,7 @@
 //! ```
 //!
 //! The caller states what each call writes (`Calls`, from
-//! `alias::calls_annotated`); a call not listed writes what
+//! `alias::calls_by_attributes`); a call not listed writes what
 //! `memory::unmodeled_write` says. A far store through a segment selector
 //! nothing yet resolves is taken to write no program object, and the solve is
 //! made again without any such selector that did not resolve to a number.
@@ -130,7 +130,7 @@ pub static ARITH: [(BinaryOp, Binary); 8] = [
 /// its width in bytes.
 pub type Cells = IndexMap<(Addr, u32), Known>;
 
-/// What each call writes, where `alias::calls_annotated` found it. A call
+/// What each call writes, where `alias::calls_by_attributes` found it. A call
 /// not here writes what `memory::unmodeled_write` says: everything, or
 /// nothing.
 pub type Calls = IndexMap<InstId, std::rc::Rc<[MemRef]>>;
@@ -1085,7 +1085,8 @@ fn incoming(
 }
 
 /// Dominating, exact stores supplying loads outside the cell lattice: a
-/// load through a pointer whose one clobber, as MemorySSA walks it, is a
+/// load through a pointer whose one clobber, as MemorySSA's walker answers it
+/// ([`crate::mssa`], LLVM's `getClobberingMemoryAccess`), is a
 /// store of its bytes and its type.
 fn _pointer_stores(
     unit: &Unit,
@@ -1103,25 +1104,20 @@ fn _pointer_stores(
     if candidates.is_empty() {
         return Default::default();
     }
-    let graph = memoryssa::built(unit, &accesses);
     let shape = unit.shape();
     let dominance = &shape.dominance;
-    let before = |source: InstId, block: BlockId, inst: InstId| {
-        let order = function.block(block).instructions();
-        match function.parent(source) {
-            Some(at) if at == block => {
-                order.iter().position(|&one| one == source) < order.iter().position(|&one| one == inst)
-            }
-            Some(at) => dominance.dominates(cfg::id(at), cfg::id(block)),
-            None => false,
-        }
+    let graph = {
+        let mssa = crate::mssa::Mssa::build(function, &dominance, &crate::mssa::shadow::effect_of(&accesses, function));
+        crate::mssa::view::Translated::new(unit, &accesses, mssa)
+    };
+    let before = |source: InstId, block: BlockId, inst: InstId| match function.parent(source) {
+        Some(at) if at == block => function.comes_before(source, inst),
+        Some(at) => dominance.dominates(unit.function, cfg::id(at), cfg::id(block)),
+        None => false,
     };
     let mut providers = llrm_mir::dense::IdMap::default();
     for (block, inst, (reference, result)) in candidates {
-        let clobbers = graph.clobbers(inst, &reference);
-        let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
-        let Some(source) = single.filter(|access| access.kind == memoryssa::Kind::Def).and_then(|access| access.site)
-        else {
+        let Some(source) = graph.clobbering_access(inst).and_then(|access| graph.def_instruction(access)) else {
             continue;
         };
         if let Some((stored, value)) = avail::stored_from(unit, &accesses, source)
@@ -1171,7 +1167,6 @@ fn exit_loads(
     let graph = memoryssa::built(unit, accesses).with_known(_intervals(registers));
     let blocks = cfg::graph(function);
     let successors = blocks.iter().map(|block| (block.at, &block.succ)).collect::<IndexMap<_, _>>();
-    let predecessors = crate::graph::loops::predecessors(&blocks);
     let mut queries = memory_queries(*unit, registers);
     let shape = unit.shape();
     for exit in exits {
@@ -1180,7 +1175,7 @@ fn exit_loads(
         };
         let leaving = successors[&exit.header].iter().copied().filter(|at| !body.contains(at)).collect::<Vec<_>>();
         let [after] = leaving[..] else { continue };
-        if !predecessors.are(&after, &[exit.header]) {
+        if function.predecessors(cfg::block(after))[..] != [cfg::block(exit.header)] {
             continue;
         }
         let mut cells = Cells::default();
@@ -1190,7 +1185,7 @@ fn exit_loads(
         for (_, inst) in function.walk() {
             let Some((reference, result)) = avail::loaded_into(unit, accesses, inst) else { continue };
             let block = cfg::id(function.parent(inst).expect("a placed load"));
-            if !shape.dominance.dominates(after, block) {
+            if !shape.dominance.dominates(unit.function, after, block) {
                 continue;
             }
             let reference = _addressed(unit, &reference, registers);

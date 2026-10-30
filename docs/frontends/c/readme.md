@@ -38,6 +38,8 @@ generates code there. What the stream carries and what `llrm-c` does with it
 is in [the front end contract](ow-contract.md). `llrm-c` also accepts a
 recorded stream (`.cgs`) as its input.
 
+[`llrm-cc`](clang-route.md) is the same pipeline from clang's front end instead of Open Watcom's; [its calling conventions](calling-conventions.md).
+
 ## Targets and ABI
 
 `-m16` compiles for real-mode DOS and `-m32` for flat 32-bit DOS; the target
@@ -85,7 +87,7 @@ writes assembly. The object format is `-fobject-format=omf|elf|macho|coff`.
 
 The shared options of `llrm-qb`, `llrm-c` and `llrm-nib` apply: `-O0` to
 `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og`, `-f[no-]PASS`, `-march`, `-mtune`,
-`-m[no-]stack-is-data`, `-m[no-]far-bss`, `-m[no-]bss-begin` (an empty `BSSB` segment
+`-m[no-]stack-is-data`, `-m[no-]far-bss`, `-mcode-segment=NAME` (every module's code in the one segment, as Open Watcom's `-nt=`), `-m[no-]bss-begin` (an empty `BSSB` segment
 ahead of each object's `_BSS`, where a start-up zeroes from it, as the QB runtime's does), `--machine`, `-fstack-usage` and
 `-Wstack-usage`. `llrm-c --help` prints the full list.
 
@@ -143,6 +145,21 @@ included. `noinline`, `always_inline` and `noreturn` state facts. `unused`, `use
 `pure`, `const`, `malloc`, `deprecated`, `visibility` and a few others are read and dropped: leaving them out changes no
 meaning. Any other (`packed`, `aligned`, `section`, `weak`, `alias`) is an error, not ignored.
 
+## Block locals' lifetimes
+
+From -O1 up, a local declared in a nested block is started where its block
+begins (`llvm.lifetime.start`) and ended where the block's end is reached, as
+clang's `EmitAutoVarAlloca` and `CallLifetimeEnd` do
+([CGDecl.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/clang/lib/CodeGen/CGDecl.cpp)).
+The blocks are Open Watcom's `DBBegBlock`/`DBEndBlock`, each followed by its
+`CGAutoDecl`s. Inlined copies and frame-slot sharing (`lifetimes.rs`) read the
+markers. Function-level locals get none.
+
+A block left by `break`, `continue`, `goto` or `return` is not ended on that
+path: its locals stay live to the next start, which costs sharing, not
+correctness. A block a jump enters from outside is not marked at all (clang's
+`Bypasses`).
+
 ## Build
 
 The front end is built by `build.rs` from an Open Watcom tree: `$OWROOT` when
@@ -150,8 +167,10 @@ set, otherwise a tree cached per commit (`toolchain/owshim/ow-commit`) and
 bootstrapped once. `--no-default-features --features wccq` builds only the front
 end. Without the toolchain feature `llrm-c` still reads `.cgs` streams.
 
+[GNU C builtins](builtins.md): how a `__builtin_*` call compiles.
+
 ## Tests
 
-Unit tests are in `crates/frontends/llrm-c/src/`. Programs in `tests/run/c`
+Unit tests are in `crates/frontends/llrm-c/src/`. Run them with `cargo test -p llrm-c --features toolchain`; without it they do not compile. Programs in `tests/run/c`
 are compiled, run in DOSBox-X and compared with their `.out` by
 `tools/dosbatch/run_tests.py c`; see [testing](../../working/testing.md).

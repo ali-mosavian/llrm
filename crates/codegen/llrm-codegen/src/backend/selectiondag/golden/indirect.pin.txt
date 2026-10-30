@@ -1,0 +1,32 @@
+Initial selection DAG: %bb.0 'viaarg:'
+SelectionDAG has 20 nodes:
+  t0: ch,glue = EntryToken
+  t8: ch,glue = callseq_start t0, TargetConstant:i32<4>, TargetConstant:i32<0>
+  t11: i32 = Constant<0>
+      t5: i32,ch = load<(load (s32) from %fixed-stack.0)> t0, FrameIndex:i32<-2>, poison:i32
+      t10: i32,ch = CopyFromReg t8, Register:i32 $esp
+    t12: ch = store<(store (s32) into stack)> t8, t5, t10, poison:i32
+    t3: i32,ch = load<(load (s32) from %fixed-stack.1)> t0, FrameIndex:i32<-1>, poison:i32
+  t14: ch,glue = X86ISD::CALL t12, t3, RegisterMask:Untyped
+  t15: ch,glue = callseq_end t14, TargetConstant:i32<4>, TargetConstant:i32<0>, t14:1
+  t17: i32,ch,glue = CopyFromReg t15, Register:i32 $eax, t15:1
+  t18: ch,glue = CopyToReg t17:1, Register:i32 $eax, t17
+  t19: ch = X86ISD::RET_GLUE t18, TargetConstant:i32<0>, Register:i32 $eax, t18:1
+
+
+
+Initial selection DAG: %bb.0 'viaload:'
+SelectionDAG has 17 nodes:
+  t0: ch,glue = EntryToken
+  t5: i32 = Constant<0>
+  t6: i32,ch = load<(dereferenceable load (s32) from @fp)> t0, GlobalAddress:i32<ptr @fp> 0, poison:i32
+  t9: ch,glue = callseq_start t6:1, TargetConstant:i32<4>, TargetConstant:i32<0>
+      t3: i32,ch = load<(load (s32) from %fixed-stack.0)> t0, FrameIndex:i32<-1>, poison:i32
+      t11: i32,ch = CopyFromReg t9, Register:i32 $esp
+    t12: ch = store<(store (s32) into stack)> t9, t3, t11, poison:i32
+  t14: ch,glue = X86ISD::CALL t12, t6, RegisterMask:Untyped
+    t15: ch,glue = callseq_end t14, TargetConstant:i32<4>, TargetConstant:i32<0>, t14:1
+  t16: ch = X86ISD::RET_GLUE t15, TargetConstant:i32<0>
+
+
+

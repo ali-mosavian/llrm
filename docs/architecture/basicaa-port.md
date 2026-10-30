@@ -17,7 +17,7 @@ architecture-order: 290
 | `getUnderlyingObject` (ValueTracking.cpp) | `object_of`, `MemRef::of` decomposition | valuetracking-port's API, used from S1 |
 | `BasicAAResult::aliasCheck`, `aliasGEP`, `aliasPHI`, `aliasSelect` (each arm checked) | `Apart`, `regions::overlapping`, provenance sets with join rules | S2 |
 | `CaptureTracking.cpp`: `PointerMayBeCaptured`, `isNonEscapingLocalObject`, `EarliestEscapeAnalysis` | `escapes`, `EscapedBefore`, `ExposedFrames` | S1; the independent check is `capturecheck.rs` (#2146) |
-| `getModRefInfo(Call, Loc)`, `getArgModRefInfo`, `MemoryEffects` | `CallEffects`, `Summaries`, `calls_annotated` | S3, needs per-parameter `nocapture` from function-attrs (cgscc-poc) |
+| `getModRefInfo(Call, Loc)`, `getArgModRefInfo`, `MemoryEffects` | `call_mod_ref`, `get_memory_effects`, `get_arg_mod_ref_info` in `basicaa.rs` (`CallEffects` is deleted); `getModRefInfo(Call1, Call2)` since #3799 (DEVIATE AA-D1) | S3: per-parameter `nocapture` from function-attrs (cgscc-poc) still blocks the inferred ones |
 | `GlobalsModRef` | `GlobalsAA` | S4 |
 | TBAA, scoped noalias | `MemRef.typed`, restrict roots | with S2 |
 | `MemoryLocation::get`, `LocationSize` | `MemRef` width | S1 |
@@ -54,7 +54,7 @@ Each call against each load/store pointer (one entry per pointer and size), then
 | Mod | Mod | 1,445 |
 | NoModRef | ModRef | 18 |
 
-The 18 are call-against-call pairs in `floats-O2`: `bench_floats_` (declared `memory(inaccessiblemem: readwrite)`) against `report_` (no attributes). LLVM says ModRef: an unknown callee may touch inaccessible memory; llrm's `CallEffects` for an unknown callee lists the escaped objects and the tracked globals only, and says nothing of inaccessible memory, so the pair is NoModRef. Reachable on main today? Nothing asks a call about a call (GVN numbers only `memory(none)` calls, and a `TIMER` call stays in its loop beside a `PRINT`), so no; it is a hazard for any client that asks (EarlyCSE's read-only call CSE on MemorySSA, call-use clobbers). The fix is a token for inaccessible memory in the footprint of an unknown call, at S3.
+The 18 are call-against-call pairs in `floats-O2`: `bench_floats_` (declared `memory(inaccessiblemem: readwrite)`) against `report_` (no attributes). LLVM says ModRef. They were a hazard when `CallEffects` listed no inaccessible memory; that table is gone, `call_mod_ref` handles `InaccessibleMem`, and the pair is ModRef as in the pin (checked against the pinned `opt -passes=aa-eval -aa-pipeline=basic-aa`, 2026-10-22). The real gap was `AAResults::getModRefInfo(Call1, Call2)`, which answered ModRef for every pair; it is translated in #3799 (readnone, both read-only, argument-pointee and inaccessible-only pairs).
 
 ### First table (oracle 2, `tools/aliascompare.py --basic` of #2176)
 
@@ -103,6 +103,41 @@ Each step is its own PR with "LLVM structure: X; ours: Y; mirror or deviate beca
 | A6 | call CSE in EarlyCSE (llvm-order-poc) | read-only call numbering | waits for #2219 (the unknown callee's footprint omits inaccessible memory) |
 | A7 | delete the tower | `alias.rs` facts, `frameescape.rs`, `llrm-mir/alias.rs` | no caller left |
 
+### 4c. Retiring `MemRef`: the readers
+
+`MemRef::of` (and `point_values`) go when no reader is left. One owner moves every reader, one PR per file, each with bench's M for the step. Fields read are from a grep of `.field` in the file, so a count can include another struct's field.
+
+| reader | `of` calls | fields read | what it does | replacement | reviewer |
+|---|---|---|---|---|---|
+| `references.rs` | 3 | `lineage` | the cache of `MemRef::of` | goes with `MemRef` | none needed |
+| `slotstores.rs` | 3 | root, disp, base, width | cells of stored slots | `Decomposed` (object, offset, index) plus a size | unclaimed |
+| `floatloop.rs` | 3 | pointer, width | two accesses name the same address | `alias() == MustAlias` through `AAQueryInfo` | unclaimed |
+| `floatfacts.rs` | 5 | object | latch stores as cells | `Decomposed` plus a size | unclaimed |
+| `floatbounds.rs` | 1 | disp, base, scale, segment, width | builds a `MemRef` for a cell | `Decomposed`; the segment field is DEVIATE F2 below | unclaimed |
+| `consts.rs` | 4 | root, disp, base, segment, object, space, width, provenance | known values per object cell | `Decomposed`, underlying objects, `unit.space()` | unclaimed |
+| `observers.rs` | 1 | object, width, provenance | which accesses a kind of object reaches | underlying object and captured-before | unclaimed |
+| `induction.rs` | 1 | pointer, space, index_bits, width, inbounds | access stride | the pointer's SCEV | scev-createscev-2239 |
+| `isel.rs` | 1 | typed | which accesses carry `!tbaa` | the access's `AAInfo` | lir-cleanup-port |
+| `manager.rs` | 1 | pointer, root, base, segment, object | holds `IndexMap<InstId, MemRef>` | goes with `Accesses` | none needed |
+| `ranges.rs`, `regions.rs` | 1, 1 | disp, base, scale, width | the old ranges/regions engine | deleted with it | parity-pipeline |
+| `alias.rs` | 7 | all of them | the old points-to tower | deleted with the tower (funcattrs-port's call effects, then A7) | funcattrs-port |
+| `memory.rs` | 5 | all of them | defines `MemRef`, `ObjectRef`, `classes_may_alias` | last; deleted when the rest are gone | none needed |
+
+Fields with no LLVM counterpart, decided (2026-10-24):
+
+- **F1 `typed`, `lineage` (TBAA).** Home: a translation of `TypeBasedAliasAnalysis.cpp` as an `AAResults` provider over `AAInfo::tbaa`, which every load and store already carries (the C front end emits clang's scalar `!tbaa` tree; `llrm_mir::tbaa::Tbaa` is that tree). It needs the aggregate LLVM's `AAResults` has (`addAAResult`: the first answer that is not MayAlias wins, mod/ref intersect), which is the first step. DEVIATE F1: scalar tags only (type, parent, offset 0); LLVM's struct-path tags are not emitted by any front end here. Exit: a front end that emits struct-path tags. `isel.rs` reads `AAInfo::tbaa.is_some()` meanwhile.
+- **F2 `segment`, `selector`, `origin`, `linear` (far pointers and integer addresses).** Home: the datalayout, as LLVM states it: a far pointer is its own address space with pointer size 32 and index width 16 (`pN:32:16:16:16`; the m16 layout already has `p1:32:16:16:16`). The index width is what `GEP`, `ptrtoint` and offset arithmetic wrap at, so they follow the per-address-space paths with no special case, and BasicAA's decomposition uses that index width as at the pin. The selector/offset split of a pair-typed integer (`pair_constant`) becomes a `DataLayout` method beside `is_pair` and `offset_bits`; `Spaces` keeps only which space is far or fixed, and `linear` (one flat address space). DEVIATE F2: LLVM has no segment arithmetic; the split of a pair constant is a target fact stated once, tested at the boundary. No exit: a property of the DOS targets. Acceptance test of the first reader PR that needs it: a far-pointer `GEP` whose offset wraps at 16 bits. Oversight: agreed (2026-10-24).
+- **F3 `provenance`, `object` (object sets).** Home: `getUnderlyingObjects` (ValueTracking), which is not translated; only `getUnderlyingObject` is. Translate it with its lookup depth (`MaxLookup`, 6), and take "is a root an object's own address" from `isIdentifiedObject`. Exit: none; the old sets go with the tower.
+
+### 4d. Exposure by CaptureTracking: the verdict on the 286 and the 2
+
+Corpus probe over every alloca of `crates/opt/llrm-analysis/corpus` (3,987 allocas, `feat/parity` at 86be6bc37 plus a test-only probe, not committed): the old `frameescape::exposed_allocas` against `pointer_may_be_captured(ALL, any component, 150 uses)`, return captures counted. 3,699 agree.
+
+- **286 exposed only by the old walk.** Every one is the destination (operand 0) of `llvm.memset.p0.i16` and nothing else: the old walk counts any call argument as exposing; `DetermineUseCaptureKind` reads the callee's `captures(none)` on the memset destination. Pin check, `opt` 24.0.0git `-passes=function-attrs` on a `memset` of a pointer argument: `captures(none)`. Verdict: precision, not a bug. The call still writes the slot, which `getModRefInfo(Call, Loc)` answers by its argument effects (#2899); the exposure answer feeds only whether an unknown pointer may hold the address.
+- **2 captured only by the new walk** (`demo-deedlines` `@COPPER`, `@CREATEOBJECT`). Their uses are loads and stores only: 273 and 151, over the 150-use cap, so the walk says captured. The pin has the same cap (§5 item 6: 148 loads NoAlias, 149 MayAlias). Verdict: conservative for the pin's reason.
+- **Causes I expected and did not find in the corpus:** `icmp`-only (pin: `captures(address)`, no provenance), lifetime markers (pin: `captures(none)`) and the phi-join rule (pin: `captures(none)`). Pin checks on small functions agree with the new walk for all three.
+- **Cost: not measured.** bench's callgrind on a94491462 (d_faces -O2): the old `exposed_frames` is 301 calls, 30.7 M inclusive. A per-alloca walk's cost has no measurement yet; it is not claimed to be worse or equal.
+
 ### Item 5: the global-variable cells (S2)
 
 The 4,472 / 16,914 / 9,418 cells of the tables (tags on, BasicAA alone memops, BasicAA alone pointer pairs, with the machine's data layout) have a global on one side; 82% are `aliasGEP`'s inbounds rule, 10% the object-size rule, 8% open. Consumers: the hoist (a load of an internal global past char-tagged stores through a loaded pointer: the 19 `d_faces` -O2 hoists LLVM does and ours does not, 15 in -O1 and 19 in -Os) and GVN's load forwarding and DSE through the same query. Before: 19 hoists missing (memoryssa-port's L1 shadow). After: not measured; the number of those 19 that hoist once S2 is in, rows line first, is the acceptance of S4 and whether these cells are their cause is itself unproven.
@@ -115,6 +150,7 @@ The 4,472 / 16,914 / 9,418 cells of the tables (tags on, BasicAA alone memops, B
 4. The capture oracle trusts a callee another module defines when one module is compiled alone; the module report counts them.
 5. The first implementation answers from the existing provenance and `MemRef` where LLVM walks `GEP` chains; each place is replaced by the translated walk at S2 and listed in that PR.
 6. `CaptureTracking` stops at 150 uses of an object (`getDefaultMaxUsesToExploreForCaptureTracking`) and answers captured. Seen: a slot with about 200 loads in `loop400` (replay input 01/0011-in-hoist) is NoAlias against a loaded pointer for llrm and MayAlias for LLVM; the mirror takes the cap (precision lost, rows to be counted), a deviation takes none. Verified with the pinned opt (24.0.0git d1106deb71cc): a slot with 148 loads is NoAlias against a gep of a pointer loaded from it, with 149 it is MayAlias (the slot has two more uses). Default: mirror the cap (LLVM's limits at its defaults); an uncapped answer stays only as a numbered deviation if a row needs it, with its compile cost; the d_faces and mem-ladder compile numbers with and without the cap come with S1.
+7. `getModRefInfo(Call1, Call2)` is BasicAA's guard-intrinsic case only; MIR has no `experimental.guard`, so it answers ModRef (B2). The effects-based call-vs-call form is `AAResults`'.
 
 ## 6. Open
 

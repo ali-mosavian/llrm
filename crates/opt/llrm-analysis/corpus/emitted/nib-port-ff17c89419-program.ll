@@ -1,23 +1,8 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-define internal i16 @value() addrspace(1) {
+define internal cc 1005 i16 @value() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
-  %0 = zext i8 31 to i32
-  %1 = ashr i32 768, %0
-  %2 = and i32 %1, 255
-  %3 = add i32 768, %2
-  %4 = zext i8 8 to i32
-  %5 = ashr i32 %3, %4
-  %6 = trunc i32 %5 to i16
-  %7 = zext i8 31 to i32
-  %8 = ashr i32 704, %7
-  %9 = and i32 %8, 255
-  %10 = add i32 704, %9
-  %11 = zext i8 8 to i32
-  %12 = ashr i32 %10, %11
-  %13 = trunc i32 %12 to i16
-  %14 = add i16 %6, %13
-  ret i16 %14
+  ret i16 5
 }
 
 !0 = !{!"llrm hir"}

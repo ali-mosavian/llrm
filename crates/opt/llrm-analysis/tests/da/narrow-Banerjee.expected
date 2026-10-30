@@ -1,0 +1,276 @@
+== --no-delinearize --test all
+@banerjee0
+  none!
+  flow [<= <>]!
+  confused!
+  none!
+  confused!
+  output [* *]!
+@banerjee1
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  input [* *]!
+  confused!
+  confused!
+@banerjee2
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee3
+  none!
+  flow [> >]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee4
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee5
+  none!
+  flow [< <]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee6
+  none!
+  flow [=> <>]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee7
+  none!
+  flow [> <=]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee8
+  none!
+  flow [> <>]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee9
+  output [* *]!
+  flow [<= 0|<]!
+  confused!
+  none!
+  confused!
+  output [* *]!
+@banerjee10
+  none!
+  flow [<> 0]!
+  confused!
+  none!
+  confused!
+  output [* *]!
+@banerjee11
+  none!
+  flow [<= <>]!
+  confused!
+  none!
+  confused!
+  output [* *]!
+@banerjee12
+  none!
+  flow [0 <>]!
+  confused!
+  none!
+  confused!
+  output [* *]!
+== --no-delinearize --test all --normalize
+@banerjee0
+  none!
+  flow [<= <>]!
+  confused!
+  none!
+  confused!
+  output [* *]!
+@banerjee1
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  input [* *]!
+  confused!
+  confused!
+@banerjee2
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee3
+  none!
+  normalized - anti [< <]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee4
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee5
+  none!
+  flow [< <]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee6
+  none!
+  normalized - anti [<= <>]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee7
+  none!
+  normalized - anti [< =>]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee8
+  none!
+  normalized - anti [< <>]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee9
+  output [* *]!
+  flow [<= 0|<]!
+  confused!
+  none!
+  confused!
+  output [* *]!
+@banerjee10
+  none!
+  flow [<> 0]!
+  confused!
+  none!
+  confused!
+  output [* *]!
+@banerjee11
+  none!
+  flow [<= <>]!
+  confused!
+  none!
+  confused!
+  output [* *]!
+@banerjee12
+  none!
+  flow [0 <>]!
+  confused!
+  none!
+  confused!
+  output [* *]!
+== --test all
+@banerjee0
+  none!
+  flow [<= <>]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee1
+  output [* *]!
+  flow [* *|<]!
+  confused!
+  input [* *]!
+  confused!
+  confused!
+@banerjee2
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee3
+  none!
+  flow [> >]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee4
+  none!
+  none!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee5
+  none!
+  flow [< <]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee6
+  none!
+  flow [=> <>]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee7
+  none!
+  flow [-1 0]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee8
+  none!
+  flow [> <>]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee9
+  output [* *]!
+  flow [<= 0|<]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee10
+  none!
+  flow [-11 0]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee11
+  none!
+  flow [<= <>]!
+  confused!
+  none!
+  confused!
+  none!
+@banerjee12
+  none!
+  flow [0 <>]!
+  confused!
+  none!
+  confused!
+  none!

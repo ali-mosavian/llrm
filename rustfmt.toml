@@ -4,4 +4,4 @@ fn_params_layout = "Vertical"
 group_imports = "StdExternalCrate"
 wrap_comments = true
 comment_width = 80
-ignore = ["crates/target/llrm-x86/src/select_sweep.rs"]
+ignore = ["crates/target/llrm-x86/src/select_sweep.rs", "crates/ir/llrm-mir/src/intrinsic_attrs.rs", "crates/backend/llrm-dagisel/src/generated/ids.rs", "crates/backend/llrm-dagisel/src/generated/instrinfo.rs", "crates/backend/llrm-dagisel/src/generated/x86_i486.rs", "crates/backend/llrm-dagisel/src/generated/x86_p5.rs", "crates/backend/llrm-dagisel/src/generated/x86_m16.rs", "crates/backend/llrm-dagisel/src/generated/x86_x64.rs"]

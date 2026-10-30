@@ -1,6 +1,8 @@
 extern void report(long value);
+typedef unsigned long u32;
+typedef long i32; /* the width these kernels are written for: int is 16 bits at m16 */
 
-static int class_of(int c)
+static i32 class_of(i32 c)
 {
     switch (c) {
     case 48: case 49: case 50: case 51: case 52: case 53: case 54: case 55: case 56: case 57: return 1;
@@ -12,10 +14,10 @@ static int class_of(int c)
     default: return 0;
     }
 }
-long bench_x_switch_ranges(int n)
+long bench_x_switch_ranges(i32 n)
 {
-    int i; long sum = 0; unsigned r = 3;
-    for (i = 0; i < n; ++i) { r = r * 1103515245u + 12345u; sum += class_of((int)((r >> 16) & 127)); }
+    i32 i; long sum = 0; u32 r = 3;
+    for (i = 0; i < n; ++i) { r = r * 1103515245ul + 12345ul; sum += class_of((i32)((r >> 16) & 127)); }
     return sum;
 }
 

@@ -1,0 +1,39 @@
+# Files of the pin's LoopInterchange tests that tools/loopinterchange_oracle.py does not compare as they are.
+# `reason`: llrm differs or cannot read the file; `narrow`: compared with 32-bit indices (DA D1: Banerjee stops at
+# 128 bits); `debug`: compared with the debug info stripped (MIR keeps debug records, not DILocation).
+
+["atomic-memory-ordering.ll"]
+reason = "atomicrmw is outside MIR's subset"
+
+["indirectbr.ll"]
+reason = "indirectbr is outside MIR's subset"
+
+["multilevel-partial-reduction.ll"]
+reason = "vector instructions are outside MIR's subset"
+
+["vector-gep-operand.ll"]
+reason = "vector instructions are outside MIR's subset"
+
+["fp-reductions.ll"]
+reason = "llvm.minimumnum and llvm.maximumnum are not MIR intrinsics"
+
+["reduction-minmax-multi-use.ll"]
+reason = "llvm.maximum is not a MIR intrinsic"
+
+["pr57148.ll"]
+reason = "profitabilities=cache: no LoopCacheAnalysis (D2)"
+
+["inner-indvar-depend-on-outer-indvar.ll"]
+narrow = true
+reason = "DA D1"
+
+["interchange-insts-between-indvar.ll"]
+reason = "DA D1 (Banerjee past 128 bits; the file has i64 to i32 truncs, so no 32-bit copy)"
+
+["debuginfo.ll"]
+debug = true
+reason = "debug info stripped"
+
+["debug-record-after-phi.ll"]
+debug = true
+reason = "debug info stripped"

@@ -1,5 +1,10 @@
+# flags: -O1 | -O2 | -O3 | -Os
 # Planetary figures in f64 and a thermometer's readings in f32. A float
-# prints as the shortest decimal that reads back as the same value.
+# prints as the shortest decimal that reads back as the same value. Floats
+# follow C's fast default (language spec 3.6: a variable promoted to a
+# register may keep extended precision across statements), so the last digits
+# of a computed figure depend on the optimization level: the figures are
+# printed to a thousandth (a hundredth for the f32), which they do not.
 
 const G: f64 = 6.674e-11
 const SUN: f64 = 1.989e30
@@ -18,10 +23,14 @@ fn root(x: f64) -> f64:
         guess = (guess + x / guess) / 2.0
     return guess
 
+# The nearest thousandth of a positive figure.
+fn tidy(x: f64) -> f64:
+    return f64(i32(x * 1000.0 + 0.5)) / 1000.0
+
 fn report(p: &Planet) -> void:
-    let gravity = G * p.mass / (p.radius * p.radius)
-    let speed = root(G * SUN / p.orbit)
-    let year = 2.0 * 3.141592653589793 * p.orbit / speed / DAY
+    let gravity = tidy(G * p.mass / (p.radius * p.radius))
+    let speed = tidy(root(G * SUN / p.orbit))
+    let year = tidy(2.0 * 3.141592653589793 * p.orbit / speed / DAY)
     print(f"{p.name}: g {gravity} m/s2, orbit {speed} m/s, year {year} days")
 
 fn main() -> i16:
@@ -37,5 +46,6 @@ fn main() -> i16:
     let mut total: f32 = 0.0
     for r in readings:
         total += r
-    print(f"thermometer mean {total / 4.0} C, first {readings[0]}, zero {total * 0.0}")
+    let mean: f32 = f32(i32(total / 4.0 * 100.0 + 0.5)) / 100.0
+    print(f"thermometer mean {mean} C, first {readings[0]}, zero {total * 0.0}")
     return 0

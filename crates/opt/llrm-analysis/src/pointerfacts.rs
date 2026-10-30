@@ -63,8 +63,7 @@
 //!
 //! # Provides
 //! `Offsets` (made by `offsets`), `Location`. Consumers: [`crate::memoryssa`],
-//! [`crate::interprocedural`] (`cannot_fault`) and `argpromotion` in
-//! llrm-transforms.
+//! `argpromotion` in llrm-transforms.
 //!
 //! # Needs
 //! `llrm_mir::datalayout::DataLayout` for offsets and index widths.

@@ -21,7 +21,7 @@
 //! *From a Function to loops*
 //!
 //! The backend's `LirBlock` has its own copy of these walks in
-//! `crates/backend/llrm-core/src/analysis/loops.rs`; both build on
+//! `crates/codegen/llrm-codegen/src/analysis/loops.rs`; both build on
 //! `llrm_support::graph`.
 //!
 //! # Example

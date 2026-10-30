@@ -1,0 +1,28 @@
+# BranchProbabilityInfo, MachineBranchProbabilityInfo, MBFI: plan (2026-10-22)
+
+Owner w-5. Plan 2026-10-30; code 2026-11-13. Consumers waiting: row 44 MachineSink (w-2, #3843), switch probabilities SD101 (sdag-a: 1/(cases+1) today), block placement D6 (w-3: `Frequency` against MBFI).
+
+## What is already there (found 2026-10-22)
+The coordinator's names (`calcLoopBranchHeuristics` and the rest) are an older LLVM; the pin's file ([BranchProbabilityInfo.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp)) estimates loops through `estimateBlockWeights`. `crates/opt/llrm-analysis/src/bpi.rs` (961 lines) translates it; `blockfreq.rs` runs `llrm_mir::blockfrequency` over it; `crates/backend/llrm-core/src/liveness/blockfrequency.rs` is MBFI over MBPI for a LIR body, the edge odds being isel's (`LirBody::odds`, 2^31sts, the pin's denominator).
+
+| pin function (file order) | ours | status |
+|---|---|---|
+| [`isLoopEnteringEdge`/`Exiting`/`EnteringExiting`, `getLoopEnterBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L252) | `bpi.rs` same names | translated |
+| [`calcMetadataWeights`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L283) | `calc_metadata_weights` | translated |
+| [`calcPointerHeuristics`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L418) | `calc_pointer_heuristics` | translated |
+| [`getEstimatedBlockWeight` ... `estimateBlockWeights`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L553) | `estimated_*`, `update_`/`propagate_`/`initial_estimated_block_weight`, `estimate_block_weights` | translated |
+| [`calcEstimatedHeuristics`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L773) | `calc_estimated_heuristics` | translated |
+| [`calcZeroHeuristics`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L859), [`calcFloatingPointHeuristics`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L955) | same names | translated |
+| [`calculate`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L981) | `BranchProbabilityInfo::of` | translated |
+| [`getEdgeProbability` (two forms), `isEdgeHot`, `print`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L1090) | same | translated; one golden (`bpi_golden.ll`) |
+| [`setEdgeProbability`, `copyEdgeProbabilities`, `swapSuccEdgesProbabilities`, `eraseBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L1115) | none | MISSING: SimplifyCFG, JumpThreading, loop passes update BPI through these |
+| [`MachineBranchProbabilityInfo::getEdgeProbability`, `isEdgeHot`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBranchProbabilityInfo.cpp#L75) | `BlockOdds::probability`/`chance` (f64, keyed by block ids) | translated 2026-10-22: `MachineBranchProbabilityInfo::of(&LirBody)`, `get_edge_probability(block, succ_index)`, `is_edge_hot` |
+| [`MachineBlockFrequencyInfo::calculate`, `getBlockFreq`, `getEntryFreq`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockFrequencyInfo.cpp#L224) | `MachineBlockFrequencyInfo::of(&LirBody)`, `get_block_freq(index)` | translated; `onEdgeSplit` is `BlockOdds::redirected` (isel), not on the MBFI |
+| switch edge probabilities (SelectionDAGBuilder, SD101) | 1/(cases+1) in `selectiondag/builder/switch.rs` | MISSING: the pin gives a switch its BPI weights (`calcMetadataWeights`, else equal) |
+
+## Gaps to close, in order
+1. **Oracle** (done 2026-10-22): `tools/bpi/oracle.py` compares `llrm-mir --branch-prob` with the pinned `opt -passes='print<branch-prob>'` over the 306 corpus IRs: 13,724 edges, 0 failed (96.88/3.12 loop edges, 62.5/37.5 pointer and zero, 50, 0% unreachable, 66.67/33.33 all present). The IR side needs no fix.
+2. **Machine accessor** for row 44 (done 2026-10-22), in `liveness/blockfrequency.rs`: `MachineBranchProbabilityInfo::of(&LirBody)`, `get_edge_probability(&self, block: usize, succ_index: usize) -> BranchProbability` (numerator over 2^31), `is_edge_hot(block, succ_index)`; `MachineBlockFrequencyInfo::get_block_freq(index) -> BlockFrequency` (`get_frequency() -> u64`) already there. Both from the body and its odds, no allocation state. By 11-06.
+3. **Switch probabilities** to the pin's (SD101): coordinate with sdag-a; the switch's weights come from `BranchProbabilityInfo::getEdgeProbability` of the IR switch. By 11-13.
+4. **Mutation API** (`setEdgeProbability`, `copyEdgeProbabilities`, `swapSuccEdgesProbabilities`, `eraseBlock`) when the first pass that updates BPI is translated; not on the consumers' path. Dated with that pass.
+5. **D6** (block placement, w-3): `analysis/frequency.rs` `Frequency` against MBFI: llrm's own estimates (`branchprob.rs`, GCC's Dempster-Shafer votes, trips) are a DEVIATE of the placement; replacing them is w-3's row once 1 and 2 land.

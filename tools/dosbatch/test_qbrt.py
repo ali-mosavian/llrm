@@ -16,32 +16,8 @@ import dosbatch  # noqa: E402
 import qbbuild  # noqa: E402
 import qbruntime  # noqa: E402
 
-# The graphics probes are compared as pictures (test_qbgfx.py).
-PROBES = sorted(path for path in (qbruntime.dosbatch.ROOT / "tests" / "qbrt").glob("*.bas") if not path.name.startswith("gfx_") and ".flat" not in path.name)
-EXAMPLES = sorted((qbruntime.dosbatch.ROOT / "examples" / "basic").glob("*.bas"))
-# Event trapping, key traps, the absent devices and VARPTR$ are what BC refuses without its /V (test_qbbc.py compares them with BC
-# under it, test_qbkeys.py the keys); they have no BCOM45 run to differ from, but they still call runtime entries.
-# Launches at once: each runs a share of the programs through the oracle and each target, in a directory of its own.
-CHUNKS = 6
-LLRM_ONLY = ("events_", "keys_", "llrm_", "bc_nodevices")
-ALL_SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_sources(), *EXAMPLES]}
-SOURCES = {name: path for name, path in ALL_SOURCES.items() if not name.startswith(LLRM_ONLY)}
-
-
-def differential(sources: dict[str, Path], work: Path) -> dict[str, dict]:
-    """Each program as BCOM45 builds it (the oracle) and ours at each target, run and compared."""
-    objects = {}
-    candidates: dict[str, dict] = {target: {} for target in qbbuild.TARGETS}
-    runtime = qbbuild.runtimes(work)
-    for name, source in sources.items():
-        obj = work / f"{name}.qb45.obj"
-        error = qbruntime.compile_basic(source, obj, "qb45")
-        assert error is None, error
-        objects[name] = (obj, *qbruntime.linked_objects(source, work, "qb45"))
-        for target, built in qbbuild.build(source, work / f"b_{name}", runtime, tolerant=True).items():
-            candidates[target][name] = built  # or why it did not build: that program's test says so
-    # a flat program runs behind DOS/32A's banner: the raw bytes are compared there, the screens in real mode
-    return qbruntime.differential_batch(objects, candidates, work / "differential", screens={qbbuild.REAL}, chunks=CHUNKS)
+from qbrt_programs import BC_KNOWN, real_bc_text, not_real_bc  # noqa: E402
+from qbrt_programs import ALL_SOURCES, CHUNKS, EXAMPLES, INTERACTIVE, KNOWN, LLRM_ONLY, PROBES, SOURCES, differential  # noqa: E402,F401
 
 
 @pytest.fixture(scope="module")
@@ -55,13 +31,6 @@ def results(tmp_path_factory):
 # Programs that wait for something outside the runtime.  Strict: one that starts
 # to pass must leave this table.
 WAITING: dict[str, str] = {}
-
-# (program, target) where ours differs from BCOM45 for a bug that is open: it is expected to differ, and a pass fails the
-# test so the entry goes.  Only the flat target has any.
-KNOWN: dict[tuple[str, str], str] = {
-    ("scores", qbbuild.FLAT): "#1542: a library for BASIC is not supported at a flat target (llrm-nib refuses it by saying so)",
-}
-
 
 def case(name: str):
     reason = WAITING.get(name)
@@ -79,6 +48,28 @@ def test_program_matches_bcom45_byte_for_byte(results, name: str):
         assert result.candidate.status == "ok", f"{target}: {result.candidate.detail}"
         assert result.difference == "", f"{target}: {result.difference}"
         assert result.screen_difference == "", f"{target}: {result.screen_difference}"
+
+
+@pytest.fixture(scope="module")
+def games(tmp_path_factory):
+    """The interactive examples, built and run for the oracle and each target: they never end, so the run is stopped at the limit."""
+    if not qbruntime.dosbatch.QB45.is_dir():
+        pytest.skip("QB45_DIR is unavailable")
+    return differential({name: ALL_SOURCES[name] for name in INTERACTIVE}, tmp_path_factory.mktemp("games"))
+
+
+@pytest.mark.parametrize("name", INTERACTIVE)
+def test_an_interactive_game_draws_what_bcom45_draws(games, name: str):
+    """Compiled and run for the oracle and every target; stopped at the limit, the screens must agree (as the Microsoft demos' introductions do)."""
+    for target, result in games[name].items():
+        assert result.candidate.status in ("ok", "stopped"), f"{target}: {result.candidate.detail}"
+        assert result.reference.status in ("ok", "stopped")
+        assert result.screen_difference == "", target
+
+
+def test_no_game_that_waits_for_a_key_is_compared_byte_for_byte():
+    """gorillas and nibbles (examples/basic) never end: both arms ran to the 120 s limit and the reference was "stopped", not "ok" (gate run 3)."""
+    assert not {"gorillas", "nibbles"} & set(SOURCES)
 
 
 @pytest.fixture(scope="module")
@@ -120,3 +111,21 @@ def test_chunks_hold_every_program_once_in_order():
     for chunks in (1, 6, 7, 200):
         parts = qbruntime.chunked(names, chunks)
         assert sum(parts, []) == names and len(parts) <= chunks
+
+
+CHECKED_AGAINST_BC = sorted(name for name, path in SOURCES.items() if real_bc_text(path) is not None)
+
+
+@pytest.mark.parametrize("name", CHECKED_AGAINST_BC)
+def test_float_output_is_real_bcs_text(results, name: str):
+    """The differential's reference is our compiler on BC's runtime, so a LOG/EXP/^ digit wrong in our expansion is wrong in both arms and passes it (real_print_wide printed 9 lines
+    unlike BC with reference == candidate). The program's output is also compared with BC's own text."""
+    stored = real_bc_text(SOURCES[name])
+    problems = []
+    for target, result in results[name].items():
+        if why := not_real_bc(stored, result.reference.text, result.candidate.text) if target == qbbuild.REAL else None:
+            problems.append(f"{target}: {why}")
+    if name in BC_KNOWN:
+        assert problems, f"{name} now matches real BC: remove it from BC_KNOWN ({BC_KNOWN[name]})"
+        return
+    assert not problems, "; ".join(problems)

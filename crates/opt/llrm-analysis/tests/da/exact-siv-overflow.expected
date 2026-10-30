@@ -1,0 +1,18 @@
+== --tbaa
+@exactsiv_const_ovfl
+  none!
+  output [*|<]!
+  none!
+@exactsiv_param_ovfl
+  none!
+  output [*|<]!
+  none!
+== --test exact-siv --tbaa
+@exactsiv_const_ovfl
+  none!
+  output [*|<]!
+  none!
+@exactsiv_param_ovfl
+  output [*]!
+  output [*|<]!
+  output [*]!
