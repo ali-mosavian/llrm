@@ -1,0 +1,8 @@
+reason = "TEMPORARY trade-off (owner w2; accepted by coordinator 2026-10-30). quicksort c -O2: the pointer twin's setup (a pointer init and `add si, 2`) costs 7 B the shorter swap block does not repay; its instructions, memory operands and clocks are better. The pair's quicksort nib -Os rows belong to #6140 (w6: #6103 alone does not move them) and go in its waiver. Removal: the 2026-11-06 re-judge."
+exception = true
+
+[[row]]
+label = "quicksort c -O2"
+counter = "code_bytes"
+tip = 267
+to = 274
