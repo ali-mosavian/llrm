@@ -1,6 +1,7 @@
 //! LLVM IR to wasm assembly text: `llc -O0 -fast-isel=false`'s job for the
 //! functions of a module, one after another.
 
+use llrm_codegen::backend::masm::Datum;
 use crate::Width;
 use crate::dag::{Options, compile_function};
 use crate::print;
@@ -85,5 +86,46 @@ pub fn object(
         let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
         functions.push(crate::object::encode_function(&f));
     }
-    Ok(crate::object::write(&functions))
+    Ok(crate::object::write(&functions, &data(&module)?))
+}
+
+/// The defined variables of `module` as data segments, in module order.
+fn data(module: &llrm_mir::module::Module) -> Result<Vec<crate::object::DataObject>, String> {
+    use crate::object::{DataKind, DataObject};
+    use llrm_codegen::backend::globals;
+    use llrm_codegen::objectfile::module::Space;
+    use llrm_mir::module::{GlobalKind, Linkage};
+
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("no datalayout")?)?;
+    let mut out = Vec::new();
+    for (index, global) in module.globals.iter().enumerate() {
+        let id = llrm_mir::GlobalId(index as u32);
+        let GlobalKind::Variable(variable) = &global.kind else { continue };
+        if variable.initializer.is_none() {
+            continue;
+        }
+        let name = global.name.owned().ok_or("an unnamed variable")?;
+        if global.linkage != Linkage::External {
+            return Err(format!("@{name}: {:?} linkage is not supported yet", global.linkage));
+        }
+        let mut names = llrm_codegen::support::hash::IndexMap::default();
+        names.insert((Space::Segment, i64::from(id.0)), name.clone());
+        let mut bytes = Vec::new();
+        for datum in globals::datums(module, id, &names)? {
+            match datum {
+                Datum::Label(_) => {}
+                Datum::Bytes(more) => bytes.extend(more),
+                Datum::Fill(fill) => bytes.resize(bytes.len() + fill.size as usize, fill.byte.unwrap_or(0)),
+                other => return Err(format!("@{name}: {other:?} in an initializer is not supported yet")),
+            }
+        }
+        let align = globals::alignment(module, Some(&layout), variable, false, false).unwrap_or(1);
+        let kind = match (variable.constant, bytes.iter().all(|&b| b == 0)) {
+            (false, true) => DataKind::Bss,
+            (true, _) => DataKind::Rodata,
+            _ => DataKind::Data,
+        };
+        out.push(DataObject { name, kind, align: align.trailing_zeros(), bytes });
+    }
+    Ok(out)
 }

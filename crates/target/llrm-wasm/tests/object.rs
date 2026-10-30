@@ -12,7 +12,7 @@ fn four_functions_are_llcs_object_byte_for_byte() {
 
     let golden = std::fs::read(format!("{}/tests/golden/four.o", env!("CARGO_MANIFEST_DIR"))).expect("golden object");
 
-    let ours = write(&functions);
+    let ours = write(&functions, &[]);
     if let Some(path) = std::env::var_os("WASM_DUMP") {
         std::fs::write(path, &ours).expect("dump");
     }
@@ -24,7 +24,7 @@ fn four_functions_are_llcs_object_byte_for_byte() {
 #[test]
 fn the_stackified_object_is_written() {
     let functions: Vec<_> = common::four_with(true).iter().map(encode_function).collect();
-    let bytes = write(&functions);
+    let bytes = write(&functions, &[]);
     if let Some(path) = std::env::var_os("WASM_DUMP_STACKIFIED") {
         std::fs::write(path, &bytes).expect("dump");
     }
@@ -66,4 +66,17 @@ fn imports_follow_first_use() {
 #[test]
 fn a_callee_defined_later_is_not_an_import() {
     check("calls_defined");
+}
+
+/// A global's address was a panic ("needs a relocation"): no data section, segment info or address relocations.
+#[test]
+fn global_addresses_relocate_into_data_segments() {
+    check("data_small");
+}
+
+/// Segments follow module order, symbols the order of first use then the unused ones; sections by kind
+/// (`.rodata` for a constant, `.bss` for zeros), offsets aligned per object.
+#[test]
+fn segments_symbols_and_alignment_follow_the_assembler() {
+    check("data");
 }
