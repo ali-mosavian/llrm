@@ -217,6 +217,7 @@ fn planned(
     let mut fields: BTreeMap<i64, Field> = BTreeMap::new();
     let mut passed_on = Vec::new();
     let mut steps = Vec::new();
+    let recursive = calls.iter().any(|&(caller, _)| caller == id);
     let mut pending = vec![value];
     let mut seen = BTreeSet::new();
     while let Some(held) = pending.pop() {
@@ -229,6 +230,12 @@ fn planned(
                 Opcode::Load { volatile: false, .. } if one.index == 0 => {
                     let (Operand::Value(base), offset) = offsets.fixed(Operand::Value(held))? else { return None };
                     if base != value || offset < 0 {
+                        return None;
+                    }
+                    // `IsRecursive && Ty->isPointerTy()` in HandleEndUser:
+                    // promoting a pointer of a recursive
+                    // function might lead to recursive promotion.
+                    if recursive && matches!(context.types.get(instruction.ty), Type::Pointer(_)) {
                         return None;
                     }
                     let field = fields
