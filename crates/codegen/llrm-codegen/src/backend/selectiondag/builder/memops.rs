@@ -1057,7 +1057,10 @@ impl Builder<'_> {
         chain
     }
 
-    /// `rep stosb` of a size not known at compile time.
+    /// `rep stos` of a size not known at compile time: the unit is the widest
+    /// the size is known to be a whole multiple of (`n << 1` bytes of zero are
+    /// `n` words), as `rep_stos` takes it from a constant size. DEVIATE: the
+    /// pin calls `memset` here; the runtime has none. Exit: the target has one.
     fn rep_stosb(
         &mut self,
         chain: SDValue,
@@ -1067,9 +1070,31 @@ impl Builder<'_> {
     ) -> SDValue {
         let pointer = self.target.dag.pointer;
         let (cx, di, _) = self.string_registers();
-        let al = self.arch.register_named("al");
+        let word = u64::from(pointer.size_in_bits() / 8);
         let count = self.dag.get_zext_or_trunc(size, pointer);
-        let copy = self.dag.get_copy_to_phys_reg(chain, al, value, None);
+        let whole = super::super::known_bits::known_bits(&self.dag, size).zero.trailing_ones();
+        let block = match self.dag.constant(value) {
+            Some(_) => (1u64 << whole.min(2)).min(if self.has_opt_size() { word } else { word.max(4) }),
+            _ => 1,
+        };
+        let (acc, val, count) = match (block, self.dag.constant(value)) {
+            (1, _) => (self.arch.register_named("al"), value, count),
+            (block, Some(byte)) => {
+                let mut pattern = byte as u64 & 255;
+                pattern |= pattern << 8;
+                if block >= 4 {
+                    pattern |= pattern << 16;
+                }
+                let shift = self.dag.get_constant(u128::from(block.trailing_zeros()), EVT::I8);
+                (
+                    self.arch.register_named(if block == 2 { "ax" } else { "eax" }),
+                    self.dag.get_constant(u128::from(pattern), EVT::integer(block as u32 * 8)),
+                    self.dag.get_node(ISD::Srl, pointer, &[count, shift]),
+                )
+            }
+            _ => unreachable!("a block past a byte has a constant value"),
+        };
+        let copy = self.dag.get_copy_to_phys_reg(chain, acc, val, None);
         let mut glue = SDValue { node: copy.node, res: 1 };
         let mut chain = SDValue { node: copy.node, res: 0 };
         for (reg, value) in [(cx, count), (di, dst)] {
@@ -1077,8 +1102,8 @@ impl Builder<'_> {
             chain = SDValue { node: copy.node, res: 0 };
             glue = SDValue { node: copy.node, res: 1 };
         }
-        let byte = self.dag.get_value_type_node(EVT::I8);
-        let rep = self.dag.get_node_multi(x86isd::REP_STOS, &[EVT::OTHER, EVT::GLUE], &[chain, byte, glue]);
+        let unit = self.dag.get_value_type_node(EVT::integer(block as u32 * 8));
+        let rep = self.dag.get_node_multi(x86isd::REP_STOS, &[EVT::OTHER, EVT::GLUE], &[chain, unit, glue]);
         SDValue { node: rep.node, res: 0 }
     }
 

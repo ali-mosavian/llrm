@@ -1411,3 +1411,46 @@ define i16 @f() {
     let zero = zero.expect("a zero");
     assert!(matches!(zero.dests.as_slice(), [Loc::Held(held)] if held.width == 4), "{zero:?}");
 }
+
+/// The width in bytes of the register of the `rep stos` a `memset` of `n << shift` bytes of zero becomes
+/// at m16 -O2 on a 486 (`None`: no fill).
+fn dynamic_fill_unit(shift: u32) -> Option<String> {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(ptr %p, i16 %n) {{
+entry:
+  %s = shl nuw i16 %n, {shift}
+  call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 %s, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(|w| w.sources.iter().find_map(|source| match source {
+            crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+            _ => None,
+        }))
+}
+
+/// sieve bq16: `memset(p, 0, n << 1)` of a 2-byte array was `rep stosb` of
+/// 2048 bytes where `rep stosw` of 1024 stores half the operands: 1,024 of the
+/// 2,706 over main.
+#[test]
+fn a_fill_of_whole_words_is_rep_stosw() {
+    let unit = dynamic_fill_unit(1).expect("a fill");
+    assert_eq!(unit, "2");
+}
+
+/// A size that is no multiple of 2 stays bytes.
+#[test]
+fn a_fill_of_unknown_size_stays_rep_stosb() {
+    assert_eq!(dynamic_fill_unit(0).as_deref(), Some("1"));
+}
