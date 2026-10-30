@@ -108,8 +108,8 @@ def test_a_lib_test_that_fails_here_and_passes_on_the_tip_is_named_and_one_the_t
     def run(command, **kwargs):
         return SimpleNamespace(returncode=101, stdout=out, stderr="")
 
-    why = pc.lib_failures(Path("."), ["llrm-codegen"], ["crates/codegen/llrm-codegen/src/x.rs"], "origin/feat/parity", run, lambda root, failed, base: {"llrm-codegen": {"backend::x::test_old"}})
-    assert why == ["lib test fails here and passes on origin/feat/parity: llrm-codegen::backend::x::test_new"]
+    why = pc.lib_failures(Path("."), ["llrm-codegen"], ["crates/codegen/llrm-codegen/src/x.rs"], "origin/release/next", run, lambda root, failed, base: {"llrm-codegen": {"backend::x::test_old"}})
+    assert why == ["lib test fails here and passes on origin/release/next: llrm-codegen::backend::x::test_new"]
 
 
 def test_a_new_machine_phase_runs_the_slot_list_tests_of_llrm_transforms():
@@ -204,7 +204,7 @@ def test_a_docs_only_branch_is_told_of_a_scanner_it_turns_red(tmp_path, monkeypa
     and names one that fails here and passes on the base; one red on both is the base's."""
     monkeypatch.setattr(pc.parity_smoke, "integration_failures", lambda targets, root=None, run=None: {"integration docs_links::test_every_markdown_link_resolves"})
     named = pc.scanner_failures(tmp_path, ["docs/working/x.md"], on_base=lambda targets: set())
-    assert named == ["scanner fails here and passes on origin/feat/parity: integration docs_links::test_every_markdown_link_resolves"]
+    assert named == ["scanner fails here and passes on origin/release/next: integration docs_links::test_every_markdown_link_resolves"]
     assert pc.scanner_failures(tmp_path, ["docs/working/x.md"], on_base=lambda targets: {"integration docs_links::test_every_markdown_link_resolves"}) == []
 
 
