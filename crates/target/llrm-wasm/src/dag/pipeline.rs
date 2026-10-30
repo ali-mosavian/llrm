@@ -190,6 +190,10 @@ pub fn select_block(
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
     DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).with_opt_none().run();
 
+    // `LLRM_DAGDUMP=all`: each block's DAG as selection sees it, as the x86 driver does.
+    if llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
+        eprintln!("{}", dag.dump());
+    }
     let selector = Selector::new(match cpu {
         Cpu::Wasm32 => wasm_wasm32::TABLE,
         Cpu::Wasm64 => wasm_wasm64::TABLE,

@@ -133,3 +133,10 @@ fn frames() {
 fn internal_functions_are_not_global() {
     check("internal");
 }
+
+/// A promoted `load i8` was a plain `i32` load of one byte: the legalizer must make it an any-extending load. The
+/// selected `i32.load` of one byte stopped `SetP2AlignOperands` ("the default p2align is the access size").
+#[test]
+fn promoted_loads_are_any_extending() {
+    check("anyext_load");
+}
