@@ -105,9 +105,11 @@ def ids_of(args: list[str], tests: dict[str, list[str]]) -> list[str]:
     return [i for a in args for i in (tests[a] if a in tests else [a])]
 
 
-def merge(folder: Path, count: int) -> int:
-    """The verdict of the `count` shard files in `folder`: every shard is there and green, saw the same collection, and the shards' tests are that
-    collection, each once. A shard that crashed left no file; a missing one is a failure, never a pass over its tests."""
+def merge(folder: Path, count: int, collector=collect) -> int:
+    """The verdict of the `count` shard files in `folder`: every shard is there and green, and the tests the shards ran are the tests
+    `collector` finds over the selection the shards were given (their paths, ignores and flags, recorded in their files), each in one
+    shard. The merge collects for itself: the shards' own view of the collection could not tell a test they all dropped. A shard that
+    crashed left no file; a missing one is a failure, never a pass over its tests."""
     files = {i: folder / f"pytest-shard-{i}.json" for i in range(1, count + 1)}
     if missing := [i for i, f in files.items() if not f.is_file()]:
         print(f"FAIL pytest shard {' '.join(map(str, missing))} of {count} left no result: its tests were not run")
@@ -123,6 +125,27 @@ def merge(folder: Path, count: int) -> int:
         problems.append(f"{len(ids) - len(seen)} tests ran in more than one shard")
     if len(whole) == 1 and digest(seen) != next(iter(whole)):
         problems.append(f"the shards' tests are not the collection: {len(seen)} tests, digest {digest(seen)} against {next(iter(whole))}")
+    selections = {json.dumps(d["selection"], sort_keys=True) for d in data.values()}
+    if len(selections) != 1:
+        problems.append("the shards were given different selections")
+    else:
+        selection = json.loads(next(iter(selections)))
+        tests, broken = collector(selection["paths"], selection["ignores"], selection["flags"])
+        if broken is not None:
+            problems.append("the merge could not collect the selection: " + " ".join(broken.split())[-300:])
+        else:
+            every = {i for ids in tests.values() for i in ids}
+            if lost := sorted(every - seen):
+                problems.append(f"{len(lost)} collected tests ran in no shard: " + " ".join(lost[:5]))
+            if extra := sorted(seen - every):
+                problems.append(f"{len(extra)} tests ran that the merge's own collection lacks: " + " ".join(extra[:5]))
+    for i, d in sorted(data.items()):
+        print(f"pytest shard {i}: wall {d['wall']:.0f}s, table predicted {d['predicted']:.0f}s of unit time ({d['predicted'] / max(1, d['jobs']):.0f}s at {d['jobs']} workers), {len(d['ids'])} tests")
+    refreshed: dict[str, float] = {}
+    for d in data.values():
+        for name, took in d["files"].items():
+            refreshed[name] = refreshed.get(name, 0.0) + took
+    (folder / "pytest_hosted.refreshed.json").write_text(json.dumps({n: round(t, 1) for n, t in sorted(refreshed.items())}, indent=1) + "\n")
     for i, d in sorted(data.items()):
         if d["ran"] != len(d["ids"]) or d["failed"]:
             problems.append(f"shard {i}: {d['ran']} reported of {len(d['ids'])}" + (f"; failed {' '.join(d['failed'])}" if d["failed"] else ""))
@@ -172,10 +195,13 @@ def main() -> int:
     known = json.loads(Path(args.durations).read_text()) if args.durations and Path(args.durations).exists() else {}
     if args.shard:  # the split must be the same in every shard: the checked-in table, never a runner's own durations
         index, count = map(int, args.shard.split("/"))
-        work = deal(units(tests, hosted_seconds(tests), with_seconds=True), index, count)
+        plan = units(tests, hosted_seconds(tests), with_seconds=True)
+        work = deal(plan, index, count)
     else:
         work = units(tests, known)
+    began = time.time()
     results = run_all(work, flags, args.j)
+    wall = time.time() - began
     bad = {n: r for n, r in results.items() if r[0] != 0}
     counts = {n: tally(out) for n, (_, _, out) in results.items()}
     ran = sum(sum(c.values()) for c in counts.values())
@@ -185,6 +211,9 @@ def main() -> int:
         args.json.mkdir(parents=True, exist_ok=True)
         (args.json / f"pytest-shard-{index}.json").write_text(json.dumps({
             "shard": index, "count": count, "whole": digest(i for ids in tests.values() for i in ids), "ids": assigned, "ran": ran,
+            "selection": {"paths": args.paths, "ignores": args.ignore, "flags": flags}, "wall": wall, "jobs": args.j,
+            "predicted": sum(sec for label, _, sec in plan if label in results),
+            "files": {name: round(sum(t for label, (_, t, _) in results.items() if label.partition(" [")[0] == name), 1) for name in {l.partition(" [")[0] for l in results}},
             "passed": sum(c.get("passed", 0) for c in counts.values()), "skipped": sum(c.get("skipped", 0) for c in counts.values()), "failed": sorted(bad),
         }))
     if not bad and ran != wanted:

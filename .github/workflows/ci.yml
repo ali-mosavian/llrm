@@ -386,12 +386,33 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      # It collects the whole selection itself (the test modules import the built tools): the shards' own view of it could not tell a test
+      # they all dropped.
+      - uses: actions/download-artifact@v4
+        with:
+          name: target
+          path: ${{ runner.temp }}
+      - name: Restore the target dir
+        run: |
+          zstd -dc -T0 "$RUNNER_TEMP/target.tar.zst" | tar -C "$GITHUB_WORKSPACE" -xf -
+          python3 tools/ci/restore_mtime.py . "$(cat target/.built-from)"
       - uses: actions/download-artifact@v4
         with:
           pattern: python-*
           path: ${{ runner.temp }}/shards
           merge-multiple: true
-      - run: python3 tools/gate/pytest_shards.py --merge "$RUNNER_TEMP/shards" "$(python3 tools/gate/gate.py shards python)"
+      - run: PYTHONPATH=tools/gate uv run -q --project tools python tools/gate/pytest_shards.py --merge "$RUNNER_TEMP/shards" "$(python3 tools/gate/gate.py shards python)"
+      # What each file took on this run: the next hosted table, to commit as tools/gate/pytest_hosted.json.
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-hosted-refreshed
+          path: ${{ runner.temp }}/shards/pytest_hosted.refreshed.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   ci:
     needs: [plan, static, toolchain, pintools, build, gate, bench-merge, python-merge, setup-check]

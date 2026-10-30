@@ -1635,7 +1635,7 @@ def _merge(folder, count):
     import subprocess as sp
     import sys as _sys
 
-    return sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "--merge", str(folder), str(count)], capture_output=True, text=True)
+    return sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "--merge", str(folder), str(count)], capture_output=True, text=True, cwd=folder.parent)
 
 
 def test_the_shards_of_a_python_run_together_ran_every_test_once_and_the_merge_says_so(tmp_path):
@@ -1701,3 +1701,45 @@ def test_the_python_group_is_cut_into_shards_whose_pytest_step_carries_the_shard
     merge = workflow[workflow.index("  python-merge:") : workflow.index("\n  ci:")]
     assert "pytest_shards.py --merge" in merge and "gate.py shards python" in merge and "startsWith(matrix.group, 'python-')" in workflow
     assert "needs.python-merge.result" in workflow.split("\n  ci:")[1]
+
+
+def test_the_merge_collects_for_itself_and_fails_on_a_test_every_shard_dropped(tmp_path):
+    """The shards' own collection is a circle: a test they all lost reads as the whole. One id removed from every shard's view, digest and all."""
+    out = _sharded(tmp_path, 2)
+    import pytest_shards
+
+    for i in (1, 2):
+        f = out / f"pytest-shard-{i}.json"
+        d = json.loads(f.read_text())
+        if i == 2:
+            d["ids"] = d["ids"][1:]
+            d["ran"] -= 1
+        f.write_text(json.dumps(d))
+    for i in (1, 2):  # the digest of what is left, in both: self-consistent
+        f = out / f"pytest-shard-{i}.json"
+        d = json.loads(f.read_text())
+        d["whole"] = pytest_shards.digest([x for j in (1, 2) for x in json.loads((out / f"pytest-shard-{j}.json").read_text())["ids"]])
+        f.write_text(json.dumps(d))
+    done = _merge(out, 2)
+    assert done.returncode == 1 and "1 collected tests ran in no shard" in done.stdout, done.stdout
+
+
+def test_the_merge_fails_on_a_test_file_added_to_the_tree_that_the_deal_never_saw(tmp_path):
+    import subprocess as sp
+    import sys as _sys
+
+    (tmp_path / "test_a.py").write_text("def test_ok():\n    pass\n")
+    for i in (1, 2):
+        done = sp.run([_sys.executable, str(Path(gate.HERE) / "pytest_shards.py"), "--shard", f"{i}/2", "--json", str(tmp_path / "out"), "."], capture_output=True, text=True, cwd=tmp_path)
+        assert done.returncode == 0, done.stdout
+    assert _merge(tmp_path / "out", 2).returncode == 0
+    (tmp_path / "test_added.py").write_text("def test_new():\n    pass\n")
+    done = _merge(tmp_path / "out", 2)
+    assert done.returncode == 1 and "ran in no shard: test_added.py::test_new" in done.stdout, done.stdout
+
+
+def test_the_merge_prints_each_shards_wall_against_the_tables_prediction_and_the_refreshed_table(tmp_path):
+    out = _sharded(tmp_path, 2)
+    done = _merge(out, 2)
+    assert "pytest shard 1: wall " in done.stdout and "table predicted " in done.stdout and "workers" in done.stdout
+    assert sorted(json.loads((out / "pytest_hosted.refreshed.json").read_text())) == ["test_a.py", "test_b.py", "test_c.py"]
