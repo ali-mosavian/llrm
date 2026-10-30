@@ -3,6 +3,7 @@
 # a batch that does not merge lands one at a time with land.sh. Prints `N: MERGED ...` / `N: REFUSED: ...` lines
 # (the format refusals-report.sh reads). Waits for any running land.sh/runner first.
 . "$(dirname "${BASH_SOURCE[0]:-$0}")/branch.sh"
+[ "$1" = --print-plan ] && exec python3 "$(dirname "${BASH_SOURCE[0]:-$0}")/plan.py" "${@:2}"  # read-only: before the lock, the pid file and the loop
 export BUILDSLOT_BYPASS=1
 mkdir -p "${LAND_TMP:-/tmp/landing}"
 # every temp file of the batch (cargo, rustc, the linker, python tempfile) goes under LAND_TMP: /tmp is a tmpfs that sat at 98% of its inodes and failed links with "Cannot create temporary file"
