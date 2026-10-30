@@ -46,7 +46,8 @@ const PREDECESSOR_LIMIT: usize = 1000;
 /// `ExitBlockBias`.
 const EXIT_BLOCK_BIAS: u32 = 0;
 
-/// A natural loop: its header, its blocks (header first) and the loops inside it.
+/// A natural loop: its header, its blocks (header first) and the loops inside
+/// it.
 #[derive(Clone, Debug)]
 pub struct Loop {
     pub header: usize,
@@ -163,7 +164,8 @@ impl<'a, L: Layout> Placer<'a, L> {
         self.layout.frequency(from) * self.probability(from, to)
     }
 
-    /// `Chain.merge(BB, Chain)`: the chain `other` (headed by `block`) joins `into`.
+    /// `Chain.merge(BB, Chain)`: the chain `other` (headed by `block`) joins
+    /// `into`.
     fn merge(
         &mut self,
         into: usize,
@@ -834,9 +836,8 @@ pub fn place<L: Layout>(layout: &L) -> Vec<usize> {
     let order = placer.build_cfg_chains();
     // every block exactly once, the entry first
     let mut seen = vec![false; count];
-    let whole = order.len() == count
-        && order[0] == 0
-        && order.iter().all(|&block| !std::mem::replace(&mut seen[block], true));
+    let whole =
+        order.len() == count && order[0] == 0 && order.iter().all(|&block| !std::mem::replace(&mut seen[block], true));
     if whole { order } else { (0..count).collect() }
 }
 
@@ -926,7 +927,8 @@ impl Graph {
         let succs: Vec<Vec<usize>> = (0..count)
             .map(|from| {
                 let mut list = cfg.succs[from].clone();
-                // the fall-through successor is listed last; made blocks name it first
+                // the fall-through successor is listed last; made blocks name
+                // it first
                 list.sort_by_key(|&to| match odds.get(&(id(from), id(to))) {
                     Some(&(_, rank)) => (0, rank),
                     None => (1, usize::from(to != from + 1)),
@@ -960,7 +962,11 @@ impl Graph {
             (0..count).map(|block| info.get_block_freq(BlockId(block as u32))).collect()
         };
         let pinned = (0..count)
-            .map(|at| analyze(function, at).is_none() && at + 1 < count && !function.blocks[at].insts.last().is_some_and(|last| last.barrier))
+            .map(|at| {
+                analyze(function, at).is_none()
+                    && at + 1 < count
+                    && !function.blocks[at].insts.last().is_some_and(|last| last.barrier)
+            })
             .collect();
         let loops = loop_forest(&cfg);
         Graph { succs, preds, probs, freqs, pinned, loops, size }
@@ -994,7 +1000,9 @@ fn loop_forest(cfg: &Cfg) -> Vec<Loop> {
     let loops = cfg.loops();
     let parent = |one: usize| {
         (0..loops.len())
-            .filter(|&other| other != one && loops[other].1[loops[one].0] && count_of(&loops[other].1) > count_of(&loops[one].1))
+            .filter(|&other| {
+                other != one && loops[other].1[loops[one].0] && count_of(&loops[other].1) > count_of(&loops[one].1)
+            })
             .min_by_key(|&other| count_of(&loops[other].1))
     };
     fn count_of(body: &[bool]) -> usize {
@@ -1051,7 +1059,10 @@ impl Layout for Graph {
         from: usize,
         to: usize,
     ) -> BranchProbability {
-        self.succs[from].iter().position(|&one| one == to).map_or(BranchProbability::get_zero(), |at| self.probs[from][at])
+        self.succs[from]
+            .iter()
+            .position(|&one| one == to)
+            .map_or(BranchProbability::get_zero(), |at| self.probs[from][at])
     }
 
     fn frequency(

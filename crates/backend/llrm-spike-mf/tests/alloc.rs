@@ -468,10 +468,11 @@ fn a_phi_copy_is_not_hoisted_above_the_definition_of_its_source() {
     assert!(defines < reads, "{insts:?}");
 }
 
-/// Twenty values live together on two registers. A colouring round named only the first value
-/// it could not fit, so spilling took a round for each spill and the allocation of a long
-/// function took the square of its spills (a generated 2500-instruction function took minutes).
-/// A round names every value that fails.
+/// Twenty values live together on two registers. A colouring round named only
+/// the first value it could not fit, so spilling took a round for each spill
+/// and the allocation of a long function took the square of its spills (a
+/// generated 2500-instruction function took minutes). A round names every value
+/// that fails.
 #[test]
 fn a_colouring_round_names_every_value_it_cannot_fit() {
     let n = 20u32;

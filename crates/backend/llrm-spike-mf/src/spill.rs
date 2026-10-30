@@ -489,7 +489,8 @@ fn drop_self_copies<C>(
             }
         }
     }
-    let frame = |inst: &Inst| inst.operands.iter().find_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None });
+    let frame =
+        |inst: &Inst| inst.operands.iter().find_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None });
     for block in &mut function.blocks {
         let mut out: Vec<Inst> = Vec::with_capacity(block.insts.len());
         for inst in std::mem::take(&mut block.insts) {
@@ -538,10 +539,12 @@ pub fn allocate_spilling_ordered<T: Target>(
             }
             Err(failures) => failures,
         };
-        // A victim relieves the failures near it, so a victim per failure can spill more than the
-        // function needs; one per round made the cost the square of the spills. The round spills
-        // at most a quarter more than the function has spilled so far: the first spills are
-        // chosen one at a time, a long function's in O(log) rounds.
+        // A victim relieves the failures near it, so a victim per failure can
+        // spill more than the function needs; one per round made the
+        // cost the square of the spills. The round spills
+        // at most a quarter more than the function has spilled so far: the
+        // first spills are chosen one at a time, a long function's in
+        // O(log) rounds.
         let mut victims: Vec<u32> = Vec::new();
         let mut excluded = temporaries.clone();
         for failed in failures.iter().take(slots.len() / 4 + 1) {

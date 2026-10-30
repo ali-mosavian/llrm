@@ -465,8 +465,9 @@ impl<T: Target> GraphColoring<T> {
         keyed.into_iter().map(|(_, inst)| inst).collect()
     }
 
-    /// Colour every register, or name each one nothing fits, in colouring order. A register left
-    /// uncoloured constrains no other, so one round names every victim the others still leave.
+    /// Colour every register, or name each one nothing fits, in colouring
+    /// order. A register left uncoloured constrains no other, so one round
+    /// names every victim the others still leave.
     pub fn colour(
         &self,
         function: &MFunction<T::Class>,
