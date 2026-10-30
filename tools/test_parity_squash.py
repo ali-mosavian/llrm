@@ -2134,3 +2134,11 @@ def test_land_branch_sets_the_integration_branch_for_the_python_and_the_scripts(
     unset = {k: v for k, v in os.environ.items() if k != "LAND_BRANCH"}
     sh = subprocess.run(["bash", "-c", '. "$1"; echo $LAND_BRANCH', "_", str(Path(__file__).parent / "landing" / "branch.sh")], env=unset, capture_output=True, text=True, check=True)
     assert sh.stdout.strip() == "release/next"
+
+
+def test_no_tool_defaults_to_the_old_integration_branch():
+    """behavioural, postland, precheck_pr, sweep_hourly, readiness, pindiff, parity_smoke, qcport_sweep, nightly_integration and prepush kept a literal origin/feat/parity default after the switch."""
+    root = Path(__file__).parent
+    stale = [f"{p.relative_to(root)}:{n}" for p in root.rglob("*.py") if ".venv" not in p.parts and not p.name.startswith("test_") and p != Path(__file__)
+             for n, line in enumerate(p.read_text().splitlines(), 1) if "feat/parity" in line.split("#")[0] and ('"origin/feat/parity' in line or ' "feat/parity"' in line or "origin/feat/parity\"" in line)]
+    assert stale == []
