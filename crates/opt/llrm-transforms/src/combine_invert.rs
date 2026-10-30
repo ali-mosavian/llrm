@@ -140,3 +140,111 @@ impl Combiner<'_> {
         }
     }
 }
+
+impl Combiner<'_> {
+    /// `Builder.Insert*` with the insertion point `getInsertionPointAfterDef`
+    /// of `def`: a new instruction after it (the first non-phi of the block
+    /// after a phi), queued.
+    pub(crate) fn insert_after(
+        &mut self,
+        def: InstId,
+        opcode: Opcode,
+        ty: llrm_mir::types::TypeId,
+        operands: Vec<Operand>,
+        flags: Flags,
+    ) -> InstId {
+        let new = self.function.create_instruction(opcode, ty, operands, flags, None);
+        let position = if self.function.instruction(def).opcode == Opcode::Phi {
+            let block = self.function.parent(def).expect("placed");
+            let first = self
+                .function
+                .iter_block(block)
+                .find(|&inst| self.function.instruction(inst).opcode != Opcode::Phi)
+                .expect("a terminator");
+            llrm_mir::edit::Position::Before(first)
+        } else {
+            llrm_mir::edit::Position::After(def)
+        };
+        self.function.insert(new, position).expect("a placed instruction");
+        self.worklist.add(new);
+        new
+    }
+
+    /// `shouldAvoidAbsorbingNotIntoSelect` (InstCombiner.h:210): `a ? b :
+    /// false` and `a ? true : b` are the canonical logical and/or, and
+    /// swapping the arms to absorb a `not` would hide them.
+    fn should_avoid_absorbing_not_into_select(
+        &self,
+        select: Operand,
+    ) -> bool {
+        let q = query(self, None);
+        pattern::logical_and(&q, select).is_some() || pattern::logical_or(&q, select).is_some()
+    }
+
+    /// `canFreelyInvertAllUsersOf` (InstCombiner.h:267): every user of the i1
+    /// `v` but `ignored` takes `!v` for free: a select that reads it as its
+    /// condition, a conditional branch, a `not`.
+    pub(crate) fn can_freely_invert_all_users_of(
+        &self,
+        v: Operand,
+        ignored: Option<InstId>,
+    ) -> bool {
+        let Operand::Value(value) = v else { return false };
+        self.function
+            .users(value)
+            .iter()
+            .all(
+                |one| {
+                    if Some(one.user) == ignored {
+                        return true;
+                    }
+                    let user = self.function.instruction(one.user);
+                    match user.opcode {
+                        // Only if the value is used as select cond.
+                        Opcode::Select => {
+                            let result = Operand::Value(user.result.expect("a value"));
+                            one.index == 0 && !self.should_avoid_absorbing_not_into_select(result)
+                        }
+                        // Free to invert by swapping the successors.
+                        Opcode::Br => user.operands.len() == 3,
+                        // A `not` is dropped.
+                        Opcode::Binary(BinaryOp::Xor) => {
+                            pattern::not(&query(self, None), Operand::Value(user.result.expect("a value"))).is_some()
+                        }
+                        _ => false,
+                    }
+                },
+            )
+    }
+
+    /// `freelyInvertAllUsersOf` (InstructionCombining.cpp:1455): adapt every
+    /// user of `v` but `ignored` as if `v` were changed to `!v`. Only after
+    /// [`Self::can_freely_invert_all_users_of`] said yes.
+    ///
+    /// DEVIATE: the swapped select's and branch's `!prof` is not swapped.
+    pub(crate) fn freely_invert_all_users_of(
+        &mut self,
+        v: Operand,
+        ignored: Option<InstId>,
+    ) {
+        let Operand::Value(value) = v else { unreachable!("an instruction") };
+        let users: Vec<InstId> = self.function.users(value).iter().map(|one| one.user).collect();
+        for user in users {
+            if Some(user) == ignored {
+                continue;
+            }
+            match self.function.instruction(user).opcode {
+                Opcode::Select | Opcode::Br => {
+                    let mut operands = self.function.instruction(user).operands.clone();
+                    operands.swap(1, 2);
+                    self.function.set_operands(user, operands);
+                }
+                Opcode::Binary(BinaryOp::Xor) => {
+                    self.replace_inst_with(user, v);
+                }
+                _ => unreachable!("out of sync with can_freely_invert_all_users_of"),
+            }
+            self.add_to_worklist(user);
+        }
+    }
+}

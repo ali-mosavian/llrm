@@ -766,43 +766,13 @@ fn canonicalize_icmp_predicate(
     if is_canonical_predicate(pred) {
         return None;
     }
-    let result = c.function.instruction(inst).result?;
-    let users: Vec<(InstId, u32)> = c.function.users(result).iter().map(|one| (one.user, one.index)).collect();
-    for &(user, index) in &users {
-        let one = c.function.instruction(user);
-        let ok = match &one.opcode {
-            // Only as the condition, and not a logical and/or: absorbing the
-            // not would hide that pattern.
-            Opcode::Select => {
-                index == 0 && {
-                    let q = query(c, None);
-                    let value = Operand::Value(one.result?);
-                    pattern::logical_and(&q, value).is_none() && pattern::logical_or(&q, value).is_none()
-                }
-            }
-            Opcode::Br => one.operands.len() == 3,
-            Opcode::Binary(BinaryOp::Xor) => pattern::not(&query(c, None), Operand::Value(one.result?)).is_some(),
-            _ => false,
-        };
-        if !ok {
-            return None;
-        }
+    let value = Operand::Value(c.function.instruction(inst).result?);
+    // Can all users be adjusted to predicate inversion?
+    if !c.can_freely_invert_all_users_of(value, None) {
+        return None;
     }
     c.function.set_icmp_predicate(inst, pred.inverse());
-    for (user, _) in users {
-        match c.function.instruction(user).opcode {
-            Opcode::Select | Opcode::Br => {
-                let mut operands = c.function.instruction(user).operands.clone();
-                operands.swap(1, 2);
-                c.function.set_operands(user, operands);
-                c.add_to_worklist(user);
-            }
-            _ => {
-                c.replace_inst_with(user, Operand::Value(result));
-                c.add_to_worklist(user);
-            }
-        }
-    }
+    c.freely_invert_all_users_of(value, None);
     Some(Visit::Changed)
 }
 
