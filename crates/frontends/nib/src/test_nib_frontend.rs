@@ -685,8 +685,7 @@ fn update(v: &[i32]) -> i32:
 
 fn main() -> i16:
     let v: i32[6] = [1, 2, 3, 4, 5, 6]
-    update(&v)
-    return 0
+    return i16(update(&v))
 ";
 
 #[test]
@@ -824,19 +823,14 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     let assembly = listing_on(&program, "main", &O2_calls_kept(), "486");
     let bump = between(&assembly, "_bump proc near", "_bump endp");
     let main = between(&assembly, "_main proc far", "_main endp");
-    // The payload's address is the view's pointer, the view's address the
-    // argument.
-    let payload =
-        Regex::new(r"    lea ([a-z]+), \[bp-\d+\]\n").unwrap().captures(main).unwrap_or_else(|| panic!("{main}"))[1]
-            .to_owned();
-    assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
-    assert!(Regex::new(r"    mov (?:[a-z]+|word ptr \[bp-\d+\]), ss\n").unwrap().is_match(main), "{main}");
-    assert!(main.contains("call _bump"));
-    // `bump` is internal and called directly: the view, a stack pointer of one
-    // word, is its first argument, in AX, and nothing is pushed or popped.
+    // `bump` is internal and called directly: the view is passed as its data
+    // pointer and length. The length is the constant 3 every call passes, so
+    // only the data pointer, a stack address, is left: in AX, nothing pushed
+    // or popped.
     assert!(!main.contains("add sp, 2") && !bump.contains("ret 2"), "{main}{bump}");
     assert!(Regex::new(r"    lea ax, \[bp-\d+\]\n    call _bump").unwrap().is_match(main), "{main}");
-    assert!(bump.contains("es:["));
+    assert!(bump.contains("ss:["), "{bump}");
+    assert!(!main.contains("[bp-2], ss"), "{main}");
     assert!(
         !object_of(
             &program,
@@ -3384,4 +3378,181 @@ fn a_fixed_point_divide_is_one_truncating_divide() {
     assert!(!kdiv.contains("setl") && !kdiv.contains("setne"), "no floor correction after the divide: {kdiv}");
     let lines = kdiv.lines().filter(|line| !line.trim().is_empty()).count();
     assert!(lines <= 25, "{lines} lines: {kdiv}");
+}
+
+/// The MIR a source lowers to before any pass.
+fn emitted_mir(source: &str) -> String {
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "views.nib", source));
+    hir::mir::emit(&program, &llrm_x86_m16::layout())
+        .iter()
+        .map(|one| {
+            assert_eq!(one.refused, Vec::<(String, String)>::new());
+            llrm_mir::print::module(&one.module)
+        })
+        .collect()
+}
+
+/// `main`'s value, run on the HIR executor and on the MIR interpreter at -O0
+/// and -O2: the three agree.
+fn run_everywhere(source: &str) -> i128 {
+    use llrm_mir::interpret::{self, Val};
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "views_run.nib", source));
+    let held = llrm_codegen::hir::execute::run(&program, "main", &[]).expect("runs").value;
+    let Some(llrm_codegen::hir::model::Number::Int(want)) = held else { panic!("main returns {held:?}") };
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
+        llrm_codegen::hir::model::FunctionLinkage::External;
+    for optimize in [false, true] {
+        let pipeline = llrm_transforms::pipeline::Options { optimize, ..Default::default() };
+        let options = llrm_codegen::driver::Options {
+            pipeline,
+            ..llrm_driver::m16_options_old(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        };
+        let (mut mir, _) = llrm_codegen::driver::emitted(&program, &options).expect("emits");
+        llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
+        let got = interpret::run(&mir.modules[0], "main", vec![], 1_000_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        let Val::Int { bits, width } = got else { panic!("{got:?}") };
+        let signed = ((bits as i128) << (128 - width)) >> (128 - width);
+        assert_eq!(signed, i128::from(want), "optimize {optimize}");
+    }
+    i128::from(want)
+}
+
+fn define_of<'t>(
+    text: &'t str,
+    name: &str,
+) -> &'t str {
+    text.lines().find(|one| one.starts_with("define") && (one.contains(&format!("@{name}(")) || one.contains(&format!("@\"{name}\"(")))).unwrap_or_else(|| panic!("{name}: {text}"))
+}
+
+const SUM_VIEW: &str = "\
+fn total(values: &[i16]) -> i16:
+    return values[0] + values[1]
+
+fn main() -> i16:
+    let a: i16[3] = [10, 20, 30]
+    return total(&a)
+";
+
+/// Binding: an internal function's view parameter was one pointer to the
+/// caller's descriptor, so the length was a load every bounds check made and
+/// no pass could see through a recursive call (nib quicksort +10% memory
+/// operands over C's). It is the data pointer and the length, the descriptor
+/// rebuilt in the entry block.
+#[test]
+fn test_a_view_parameter_is_its_data_pointer_and_length() {
+    let text = emitted_mir(SUM_VIEW);
+    let header = define_of(&text, "total");
+    assert!(header.contains("(ptr addrspace(1) %0, i16 %1)"), "{header}");
+    assert!(text.contains("store ptr addrspace(1) %0"), "the descriptor is rebuilt from the data pointer: {text}");
+    assert_eq!(run_everywhere(SUM_VIEW), 30);
+}
+
+/// Call lowering: the caller reads the pointer and the length from its own
+/// descriptor and passes both.
+#[test]
+fn test_a_call_passes_the_views_data_pointer_and_length() {
+    let text = emitted_mir(SUM_VIEW);
+    let call = Regex::new(r"call [^\n]*@total\(ptr addrspace\(1\) %\d+, i16 %\d+\)").unwrap();
+    assert!(call.is_match(&text), "{text}");
+}
+
+/// Generics: an instance is an internal function like any, and splits.
+#[test]
+fn test_a_generic_instance_takes_its_view_as_data_pointer_and_length() {
+    let source = "\
+fn first[T](values: &[T]) -> T:
+    return values[0]
+
+fn main() -> i16:
+    let a: i16[3] = [7, 8, 9]
+    return first(&a) + first(&a)
+";
+    let text = emitted_mir(source);
+    let header = define_of(&text, "first[i16]");
+    assert!(header.contains("(ptr addrspace(1) %0, i16 %1)"), "{header}");
+    assert_eq!(run_everywhere(source), 14);
+}
+
+/// Lambdas: one built into a generic callee that also takes a view.
+#[test]
+fn test_a_generic_callee_with_a_lambda_takes_its_view_as_data_pointer_and_length() {
+    let source = "\
+fn count_if[F](values: &[i16], keep: F) -> i16:
+    let mut count = 0
+    for value in values:
+        if keep(value):
+            count += 1
+    return count
+
+fn main() -> i16:
+    let values: i16[5] = [1, 2, 4, 5, 8]
+    return count_if(values, |v: i16| v > 3)
+";
+    let text = emitted_mir(source);
+    let header = text.lines().find(|one| one.starts_with("define") && one.contains("@\"count_if")).expect("an instance");
+    assert!(header.contains("(ptr addrspace(1) %0, i16 %1"), "{header}");
+    assert_eq!(run_everywhere(source), 3);
+}
+
+/// Function values: a call through one reaches the function by a dispatcher
+/// that passes the view on, as data pointer and length.
+#[test]
+fn test_a_view_passes_through_a_function_value_as_data_pointer_and_length() {
+    let source = "\
+fn total(values: &[i16]) -> i16:
+    return values[0] + values[1]
+
+fn apply(f: fn(&[i16]) -> i16, values: &[i16]) -> i16:
+    return f(values)
+
+fn main() -> i16:
+    let a: i16[3] = [1, 2, 3]
+    return apply(total, &a)
+";
+    let text = emitted_mir(source);
+    let dispatcher = define_of(&text, "$call16");
+    assert!(dispatcher.contains("(i16 %0, ptr addrspace(1) %1, i16 %2)"), "{dispatcher}");
+    assert_eq!(run_everywhere(source), 3);
+}
+
+/// What keeps the descriptor: a view of rank 2, whose descriptor holds a
+/// length per axis.
+#[test]
+fn test_a_matrix_view_keeps_its_descriptor() {
+    let source = "\
+fn column(m: &[i32, 2], j: i16) -> i32:
+    return m[0, j]
+
+fn main() -> i16:
+    let g: i32[2, 2] = [[1, 2], [3, 4]]
+    return i16(column(&g, 1))
+";
+    let text = emitted_mir(source);
+    let at = text.find(define_of(&text, "column")).unwrap();
+    let body = &text[at..text[at..].find("\n}\n").map_or(text.len(), |end| at + end)];
+    assert!(body.contains("dereferenceable(10)"), "the descriptor of two axes is still the argument: {body}");
+    assert!(!body.contains("alloca [8 x i8]"), "no descriptor is rebuilt: {body}");
+    assert_eq!(run_everywhere(source), 2);
+}
+
+/// A recursive function that passes its view on: the case the length reaches
+/// every call as one argument.
+#[test]
+fn test_a_recursive_function_passes_its_view_on_by_data_pointer_and_length() {
+    let source = "\
+fn fill(a: &mut [i16], at: i16) -> void:
+    if at >= 4:
+        return
+    a[at] = at * 3
+    fill(a, at + 1)
+
+fn main() -> i16:
+    let mut a: i16[4] = [0, 0, 0, 0]
+    fill(&mut a, 0)
+    return a[0] + a[1] + a[2] + a[3]
+";
+    assert_eq!(run_everywhere(source), 18);
 }
