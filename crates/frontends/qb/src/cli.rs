@@ -133,6 +133,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.checked_stack = flags.sanitize.stack;
     let bound = llrm_driver::target(&flags, None)?;
     frontend.segment_bytes = bound.target.layout().segment_bytes();
+    frontend.idiv_overflow_traps = bound.target.idiv_overflow_traps();
     // The bytes of the pointer that is the near space, and of the one that is
     // the far: a target with one space has the same for both.
     let spaces = &bound.target.layout().spaces;
