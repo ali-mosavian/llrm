@@ -8741,7 +8741,6 @@ impl Compiler {
         // negation.
         let hardware_idiv = narrow_divmod
             && self.options.idiv_overflow_traps
-            && !(self.handles_errors || self.module_handled)
             && !matches!(&right_operand, Operand::Constant(_, Number::Integer(-1)));
         let narrow_divmod = narrow_divmod && !hardware_idiv;
         let integral = matches!(

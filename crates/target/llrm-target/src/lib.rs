@@ -672,14 +672,6 @@ pub trait Target {
         true
     }
 
-    /// Whether a signed divide whose quotient overflows (`INT_MIN / -1`)
-    /// raises the processor's divide fault, which the runtime installs a
-    /// handler for and reports as BASIC's error 11: a frontend may then leave
-    /// out its own check of that case. Off where no handler is known.
-    fn idiv_overflow_traps(&self) -> bool {
-        false
-    }
-
     /// Whether a function that needs no frame register may leave it out
     /// (`calling.toml`'s `frame_optional`).
     fn frame_optional(&self) -> bool {

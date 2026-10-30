@@ -38,12 +38,14 @@ fn test_an_integer_divide_at_m16_is_the_bare_16_bit_idiv_without_the_overflow_ch
     assert!(!text.contains("cdq") && !text.contains("idiv e"), "{text}");
 }
 
-/// Under ON ERROR the trap names no statement to RESUME, so the check stays.
+/// ON ERROR with RESUME NEXT after the fault (BC's own behaviour: ERR 11, ERL
+/// 0, the program goes on; tests/qbrt/idiv_resume.bas against BCOM45) needs no
+/// check either.
 #[test]
-fn test_a_program_that_handles_errors_keeps_the_overflow_check() {
+fn test_a_program_that_handles_errors_leaves_the_overflow_to_the_fault_too() {
     let source = format!("ON ERROR GOTO h\n{PLAIN}END\nh:\nRESUME NEXT\n");
     let text = listing(&source, &["--runtime", "qb45"]);
-    assert!(text.contains("32768"), "{text}");
+    assert!(!text.contains("32768"), "{text}");
 }
 
 /// The DOS extender's runtime takes exception 0 (runtime/qb/dos/m32/trap.asm,
