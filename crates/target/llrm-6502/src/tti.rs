@@ -14,9 +14,9 @@
 //! | operation | bytes, clocks | units |
 //! |---|---|---|
 //! | add/sub/and/or/xor, i8 / i16 | 7 / 13, 11 / 22 | 1 / 2 |
-//! | icmp, i8 / i16 (`lda; cmp` / `lda; cmp; lda; sbc`) | 4 / 8 | 1 / 1 (DEVIATE below) |
+//! | icmp, i8 / i16 (`lda; cmp` / `lda; cmp; lda; sbc`) | 4 / 8 | 1 / 2 |
 //! | select, i8 / i16 (`lda #1; bcc; lda #0` per byte) | 7 / 13 | parts + 1 |
-//! | load or store through a pointer, i8 / i16 (`ldy #n; lda (rc),y` per byte, one copy) | 4 / 13, 7 / 22 | 1 / 3 |
+//! | load or store through a pointer, i8 / i16 (`ldy #n; lda (rc),y` per byte, one copy) | 4 / 13, 7 / 22 | 1 / 2 (measured 1 / 3) |
 //! | shift by a constant (`asl; rol` pairs, per bit) | 4 per bit at i16 | parts |
 //! | multiply by a constant (shifts and adds), i16 | 28, 70 | 3 * parts |
 //! | `__mulqi3`, `__mulhi3` (8 / 16 iterations of about 25 / 45 clocks) | 200, 700 | 10 * parts^2 + 10 |
@@ -24,9 +24,10 @@
 //! | `__ashlhi3`, `__lshrhi3`, `__ashrhi3` (a loop of about 16 clocks per bit, 8 on average) | 130 | 6 * parts |
 //! | a call as code (`jsr`, two operands in `rc2..`) | 3 + 4 * parts | 2 + parts |
 //!
-//! DEVIATE: an `icmp` is 1 at every width, not 1 per byte. Reason: at 2 for a word, `SimplifyCFG` left the two
-//! compares of `c >= '0' && c <= '9'` as branches and `InstCombine` never saw the range check
-//! (hand corpus: isdigit 28 -> 50 bytes, isalpha 30 -> 74). Exit: the cause card for that ordering.
+//! A memory operation is `parts`, as `BasicTTIImplBase::getMemoryOpCost` prices it, not the measured 2 * parts - 1:
+//! with 3 for a word load, `SimplifyCFG`'s two-entry-phi budget (4) refused to flatten `c >= '0' && c <= '9'`
+//! (compare 2 + load 3), and `InstCombine` never saw its range check (isdigit 28 -> 50 bytes, isalpha 30 -> 74).
+//! The speed-priority form of such a limit belongs in the per-target override table.
 //!
 //! A trunc is free (a register is a byte); a zero extension is the new high bytes cleared, a sign extension
 //! twice that.
@@ -100,7 +101,7 @@ impl Tti for Mos6502 {
     ) -> Cost {
         let parts = self.parts(ty);
         match op {
-            CmpSel::ICmp => Cost::of(1),
+            CmpSel::ICmp => Cost::of(parts),
             CmpSel::Select => Cost::of(parts + 1),
             // soft float: a call
             CmpSel::FCmp => self.call(parts, kind, 10 * parts * parts + 10),
@@ -114,7 +115,7 @@ impl Tti for Mos6502 {
         _: CostKind,
         _: bool,
     ) -> Cost {
-        Cost::of(2 * self.parts(ty) - 1)
+        Cost::of(self.parts(ty))
     }
 
     fn cf_instr_cost(
