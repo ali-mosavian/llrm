@@ -1,6 +1,9 @@
 //! C semantics the Watcom targets keep. Needs the pinned clang
 //! (`LLRM_PIN_CLANG`) and the Open Watcom headers (`LLRM_OW`).
 
+#[path = "common/target_dir.rs"]
+mod target_dir;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -18,7 +21,10 @@ fn main_that_falls_off_its_end_returns_zero() {
     std::fs::write(dir.join("m.c"), "int v;\nint main(void) { v = 2; }\n").unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-O2", "-w", "-S", "-o"])
         .arg(dir.join("m.s"))
         .arg(dir.join("m.c"))
@@ -49,7 +55,10 @@ fn cdecl_is_the_stack_convention_on_x86_32_wat() {
     .unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-O2", "-w", "-S", "-o"])
         .arg(dir.join("c.s"))
         .arg(dir.join("c.c"))
@@ -84,7 +93,10 @@ fn a_spilled_float_is_stored_in_a_dword_cell() {
     std::fs::write(dir.join("s.c"), source).unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-O2", "-w", "-march=i486", "-S", "-o"])
         .arg(dir.join("s.s"))
         .arg(dir.join("s.c"))
@@ -117,7 +129,10 @@ fn the_address_of_a_library_builtin_fits_a_default_convention_pointer_at_m32() {
     .unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-O1", "-w", "-S", "-o"])
         .arg(dir.join("a.s"))
         .arg(dir.join("a.c"))
@@ -203,7 +218,7 @@ fn pragma_aux_link_name_is_the_symbol_at_m32() {
             .env("LLRM_CLANG_M16", &fork)
             .env(
                 "LLRM_LLC",
-                std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()),
+                std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
             )
             .args(["-O2", "-w", "-S", "-o"])
             .arg(dir.join("a.s"))
@@ -239,7 +254,10 @@ fn a_program_links_whichever_target_directory_the_driver_is_in() {
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env_remove("LLRM_CC_BIN")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-O2", "-w", "-o"])
         .arg(dir.join("m.exe"))
         .arg(dir.join("m.c"))
@@ -273,7 +291,7 @@ fn library_calls_are_the_watcom_names_at_both_models() {
             .env("LLRM_CC_TARGET", target)
             .env(
                 "LLRM_LLC",
-                std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()),
+                std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
             )
             .args(["-O1", "-w", "-S", "-o"])
             .arg(dir.join("l.s"))
@@ -341,7 +359,10 @@ fn a_far_pointer_initialised_from_an_integer_is_data() {
     .unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-Os", "-w", "-c", "-o"])
         .arg(dir.join("v.o"))
         .arg(dir.join("v.c"))
@@ -368,7 +389,10 @@ fn a_near_pointer_initialised_from_an_integer_is_data() {
     .unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-Os", "-w", "-c", "-o"])
         .arg(dir.join("v.o"))
         .arg(dir.join("v.c"))
@@ -399,7 +423,7 @@ fn an_uncalled_main_keeps_no_register_and_a_called_one_keeps_watcoms() {
             .env("LLRM_CC_TARGET", "x86_16-wat")
             .env(
                 "LLRM_LLC",
-                std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()),
+                std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
             )
             .args(["-Os", "-w", "-S", "-o"])
             .arg(dir.join(format!("{name}.s")))
@@ -435,7 +459,7 @@ fn the_rp3_dos_row_is_regparm3_and_links() {
     let dir = std::env::temp_dir().join(format!("llrm-cc-rp3-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("g.c"), "int g(int a) { return a + 1; }\nint main(void) { return g(1) - 2; }\n").unwrap();
-    let llc = std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into());
+    let llc = std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into());
     let cc = |target: &str, args: &[&str], output: &str| {
         let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
             .env("LLRM_CC_TARGET", target)
@@ -485,7 +509,7 @@ fn a_struct_has_its_natural_layout_at_m32_and_is_byte_packed_at_m16() {
             .env("LLRM_CC_TARGET", target)
             .env(
                 "LLRM_LLC",
-                std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()),
+                std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
             )
             .args(["-O1", "-w", "-S", "-o"])
             .arg(dir.join("s.s"))
@@ -522,7 +546,10 @@ fn a_far_function_pointer_takes_a_far_function() {
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env("LLRM_CLANG_M16", fork)
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-O0", "-w", "-c", "-o"])
         .arg(dir.join("p.o"))
         .arg(dir.join("p.c"))
@@ -549,7 +576,10 @@ fn an_os_layer_call_pushes_its_arguments_at_x86_16_wat() {
         .unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-O2", "-w", "-S", "-o"])
         .arg(dir.join("o.s"))
         .arg(dir.join("o.c"))
@@ -584,7 +614,10 @@ fn the_rp3_row_calls_the_library_by_its_c_names() {
     .unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_16-dos-rp3")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-O2", "-w", "-S", "-o"])
         .arg(dir.join("l.s"))
         .arg(dir.join("l.c"))
