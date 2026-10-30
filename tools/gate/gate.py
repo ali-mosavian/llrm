@@ -39,7 +39,7 @@ import envflag  # noqa: E402
 LANGUAGES = ("qb", "c", "nib")
 TREE_ONLY = {"fmt", "docs", "products"}  # steps that read the tree and build nothing: the `static` group
 NO_BINARIES = {"pytest", "pytest-perf", "fmt", "rfmt-post", "docs", "facts"}  # steps that do not run the release binaries, so need no build first
-SERIAL_STEPS = frozenset({"rfmt-post"})
+SERIAL_STEPS = frozenset({"rfmt-post", "qcport", "oracle-qcport"})  # the last two count frames in real time: starved by a step beside them, their runs differ from Borland's
 
 
 @functools.cache  # read once: a bisect checks out commits that predate this file
@@ -146,6 +146,13 @@ def failure_text(log: str, limit: int = 80) -> str:
         if shown:
             out += ([section.splitlines()[0]] if section.startswith("########") else []) + shown[:limit]
     return "\n".join(out)
+
+
+def diagnostic_lines(log: str, failed: bool) -> list[str]:
+    """The lines a step tags for the job log: `[diag!] ` ones always (the host's CPU, the emulator, a verdict), `[diag] ` ones only when the step
+    failed (hash tables). The job log shows a failed step's failing tests and the tail of its log, so a line printed before the tests was in
+    the step's own log file and never reached it (run 6's dos step printed neither lscpu nor the x87 verdict)."""
+    return [line for line in log.splitlines() if line.startswith("[diag!] ") or (failed and line.startswith("[diag] "))]
 
 
 def log_head(log: str, lines: int = 12) -> str:
@@ -579,7 +586,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport",
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
-        "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider',
+        "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; rm -f "${CARGO_TARGET_DIR:-target}/gate-logs/demo-hashes.txt"; { lscpu | grep -E "Vendor ID|Model name"; rustc -vV | head -n 4; "${DOSBOX_BIN:-${CARGO_TARGET_DIR:-target}/release/dosbox-x}" --version 2>&1 | grep -m1 "DOSBox-X version"; uv run -q --project tools python -c "import sys; sys.path.insert(0, \'tools/dosbatch\'); import qb32; print(\'demo conf:\', \', \'.join(l for l in qb32.DEMO_CONF.splitlines() if l.startswith((\'core=\', \'cputype=\', \'virtual\'))))"; uv run -q --project tools python tools/dosbatch/x87probe.py || true; readelf -p .comment "${DOSBOX_BIN:-${CARGO_TARGET_DIR:-target}/release/dosbox-x}" | grep -m1 "GCC:" || true; } 2>&1 | sed \'s/^/[diag!] /\'; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --must-pass tools/dosbatch/test_qbdemos.py --rerun tools/dosbatch/test_qbdemos.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider; rc=$?; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/dosbatch/nibprobe.py 2>&1 | sed \'s/^/[diag!] /\'; sed \'s/^/[diag] /\' "${CARGO_TARGET_DIR:-target}/gate-logs/demo-hashes.txt" 2>/dev/null; exit $rc',
         # What the full tier's pytest step runs but for its slow files: #1765 and #1766 were smoke-green and failed tools/test_identical.py
         # and tests/test_readme.py in the train.
         "pytest-quick": cfg_pytest(skip_py + tuple(cfg["smoke"]["slow_pytest"]), "pytest-quick-durations"),
@@ -710,21 +717,22 @@ def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
 SHARDED = {"bench": ("bench", "BENCH_SHARD"), "oracle": ("oracle", "ORACLE_SHARD")}
 
 
-# Slices a sharded group has besides its numbered ones: `bench-base` measures the base once, for every numbered slice's rows to be judged against.
+# Slices a sharded group has besides its numbered ones: `bench-base-I` measures slice I of the base, for the numbered slices' rows to be judged against.
 EXTRA_SLICES = {"bench": ("base",)}
 
 
 def shard_names(group: str) -> list[str]:
-    """`bench` as the CI jobs `bench-base`, `bench-1` .. `bench-N` (likewise `oracle`, without a base): the step is cut into slices that run on their own runners; any other group as itself."""
+    """`bench` as the CI jobs `bench-base-1` .. `bench-base-N`, `bench-1` .. `bench-N` (likewise `oracle`, without a base): the step is cut into slices that run on their own runners; any other group as itself."""
     if group not in SHARDED:
         return [group]
-    return [f"{group}-{one}" for one in EXTRA_SLICES.get(group, ())] + [f"{group}-{i}" for i in range(1, load()[SHARDED[group][0]]["shards"] + 1)]
+    count = load()[SHARDED[group][0]]["shards"]
+    return [f"{group}-{one}-{i}" for one in EXTRA_SLICES.get(group, ()) for i in range(1, count + 1)] + [f"{group}-{i}" for i in range(1, count + 1)]
 
 
 def shard_of(group: str | None) -> tuple[str | None, str | None]:
-    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`, (`bench`, "base") for `bench-base`; any other group as it is."""
-    if group == "bench-base":
-        return "bench", "base"
+    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`, (`bench`, "base:I/N") for `bench-base-I`; any other group as it is."""
+    if group and (one := re.fullmatch(r"bench-base-(\d+)", group)):
+        return "bench", f"base:{one[1]}/{load()['bench']['shards']}"
     if group and (one := re.fullmatch(r"(bench|oracle)-(\d+)", group)):
         return one[1], f"{one[2]}/{load()[SHARDED[one[1]][0]]['shards']}"
     return group, None
@@ -778,6 +786,29 @@ def kill_on_term() -> None:
         signal.signal(sig, die)
 
 
+# Steps whose log is also printed as it grows: the job log keeps a step's lines only if it ends, and a step cut by the job timeout left
+# none (gate run 7: bench-base cancelled at 90 minutes, no stage line to say where). A test step's thousands of lines stay in its file.
+STREAMED = ("bench",)
+
+
+class LogTail:
+    """The complete lines a step's log has gained since the last pump(), printed as `[step] line`."""
+
+    def __init__(self, path: Path, name: str):
+        self.path, self.name, self.at, self.rest = path, name, 0, b""
+
+    def pump(self) -> None:
+        if not self.path.is_file():
+            return
+        with open(self.path, "rb") as log:
+            log.seek(self.at)
+            data = log.read()
+        self.at += len(data)
+        *lines, self.rest = (self.rest + data).split(b"\n")
+        for line in lines:
+            print(f"[{self.name}] " + line.decode(errors="replace"), flush=True)
+
+
 def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = (), stall: float | None = None) -> tuple[str, int, float, float]:
     """(name, exit code, wall seconds, CPU seconds): the CPU is user+sys of the step's process tree, which a loaded host does not stretch.
     A step that neither writes to its log nor uses CPU for `stall` seconds is killed (a pytest step sat 84 minutes on a hung test with
@@ -790,6 +821,7 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
     # A new file, not a truncated one: an orphan of a killed gate still writing to the old inode interleaves with this step's output
     # (NUL gaps and extra "test result" lines: #1758 "95 results of 83 test binaries").
     path.unlink(missing_ok=True)
+    tail = LogTail(path, name) if name in STREAMED else None
     with open(path, "w") as log:
         child = subprocess.Popen(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         LIVE.add(child.pid)
@@ -802,10 +834,13 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
                 if done:
                     break
                 time.sleep(min(1.0, stall / 4))
+                if tail:
+                    tail.pump()
                 grown, burned = path.stat().st_size, proctree.tree_cpu(child.pid)
                 if grown != seen or burned > used:  # any tick: a loaded host gives a computing step far less than 0.1 s a poll
                     seen, used, active = grown, burned, time.time()
                 elif time.time() - active > stall:
+                    doing = proctree.describe(child.pid)  # before the kill: what it was waiting on is the only evidence of the stall
                     os.killpg(child.pid, signal.SIGKILL)
                     _, status, usage = os.wait4(child.pid, 0)
                     stalled = True
@@ -814,10 +849,12 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
             os.killpg(child.pid, signal.SIGKILL)
             raise
         LIVE.discard(child.pid)
+        if tail:
+            tail.pump()
         child.returncode = code = STALL_CODE if stalled else os.waitstatus_to_exitcode(status)
         cpu = usage.ru_utime + usage.ru_stime
     if stalled:
-        path.open("a").write(f"\nSTALLED: no log growth and no CPU in the step's process tree for {stall / 60:g} min; killed\n")
+        path.open("a").write(f"\nSTALLED: no log growth and no CPU in the step's process tree for {stall / 60:g} min; killed\nthe tree when it was killed:\n" + "\n".join(doing) + "\n")
     if code == 0 and check and (why := incomplete(path.read_text(), *check)):
         path.open("a").write(f"\nINCOMPLETE: {why}\n")
         code = 78
@@ -886,6 +923,9 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
         results[name] = (code, took, cpu)
         verdict = "ok" if code == 0 else "SKIPPED" if code == 77 else "INCOMPLETE" if code == 78 else "FAIL"
         print(f"[time] {name} {verdict} {took:.0f}s wall {cpu:.0f}s cpu", flush=True)
+        if code != 77 and (logs / f"{name}.log").exists():
+            if tagged := diagnostic_lines((logs / f"{name}.log").read_text(), code != 0):
+                print("\n".join("    " + line for line in tagged), flush=True)
         if code not in (0, 77):
             text = (logs / f"{name}.log").read_text()
             if failures := failure_text(text):
@@ -925,7 +965,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     jobs = default_jobs(os.environ)
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
-        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "oracle-qcport", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
+        order = sorted(rest, key=lambda s: s not in ("run", "identity", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
         for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env, checks.get(s), unset) for s in order]):
             report(*future.result())
     for name in alone:
@@ -1011,11 +1051,12 @@ def default_jobs(environ: dict, cpus: int | None = None) -> int:
 
 def scoped(argv: list[str], environ: dict | None = None, have: str | None = None) -> list[str] | None:
     """`argv` under its own systemd user scope with a high CPU weight, or None when it already is (GATE_SCOPED) or the host has no
-    systemd-run. Session builds share one scope with the gate by default and starve it; the weight is GATE_CPU_WEIGHT (1000). The scope is
+    systemd-run, or runs under GitHub Actions (a runner is no dev box: the self-hosted podman ones have no user bus, and the gate refused in 0 s).
+    Session builds share one scope with the gate by default and starve it; the weight is GATE_CPU_WEIGHT (1000). The scope is
     omitted from systemd-oomd: it killed two gates (SIGKILL, no verdict) for the host's memory pressure, not for their memory."""
     environ = os.environ if environ is None else environ
     have = shutil.which("systemd-run") if have is None else have
-    if environ.get("GATE_SCOPED") or not have or environ.get("GATE_CPU_WEIGHT") == "0":
+    if environ.get("GATE_SCOPED") or environ.get("GITHUB_ACTIONS") or not have or environ.get("GATE_CPU_WEIGHT") == "0":
         return None
     weight = environ.get("GATE_CPU_WEIGHT") or "1000"
     return [have, "--user", "--scope", "-q", "-p", f"CPUWeight={weight}", "-p", "ManagedOOMPreference=omit", "--setenv=GATE_SCOPED=1", *argv]
