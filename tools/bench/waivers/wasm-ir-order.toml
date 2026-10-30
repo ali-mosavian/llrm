@@ -19,24 +19,10 @@ to = 963
 
 # 3. worse
 [[row]]
-label = "grep bq16 -Os"
-counter = "code_bytes"
-tip = 967
-to = 974
-
-# 4. worse
-[[row]]
 label = "huge c -O2"
 counter = "instructions"
 tip = 731818
 to = 732018
-
-# 4. worse
-[[row]]
-label = "huge c -O2"
-counter = "clocks"
-tip = 3630440
-to = 3630840
 
 # 4. worse
 [[row]]
@@ -54,27 +40,6 @@ to = 732018
 
 # 6. worse
 [[row]]
-label = "jpeg_fixed bas -O2"
-counter = "code_bytes"
-tip = 4846
-to = 4873
-
-# 7. worse
-[[row]]
-label = "jpeg_single bas -O2"
-counter = "code_bytes"
-tip = 4534
-to = 4562
-
-# 8. worse
-[[row]]
-label = "jpeg_single c -Os"
-counter = "code_bytes"
-tip = 2783
-to = 2787
-
-# 9. worse
-[[row]]
 label = "lru c -O2"
 counter = "instructions"
 tip = 96
@@ -90,72 +55,16 @@ to = 49
 # 9. worse
 [[row]]
 label = "lru c -O2"
-counter = "clocks"
-tip = 218
-to = 222
-
-# 9. worse
-[[row]]
-label = "lru c -O2"
 counter = "code_bytes"
 tip = 495
 to = 502
 
 # 10. worse
 [[row]]
-label = "matmul bq32 -Os"
-counter = "instructions"
-tip = 7327
-to = 7446
-
-# 10. worse
-[[row]]
-label = "matmul bq32 -Os"
-counter = "code_bytes"
-tip = 533
-to = 537
-
-# 11. worse
-[[row]]
-label = "parity/qbsp bq16 -O2"
-counter = "instructions"
-tip = 1205
-to = 1210
-
-# 11. worse
-[[row]]
-label = "parity/qbsp bq16 -O2"
-counter = "clocks"
-tip = 3176
-to = 3181
-
-# 12. worse
-[[row]]
-label = "parity/qbsp bq16 -Os"
-counter = "instructions"
-tip = 1239
-to = 1244
-
-# 12. worse
-[[row]]
-label = "parity/qbsp bq16 -Os"
-counter = "clocks"
-tip = 3301
-to = 3306
-
-# 13. worse
-[[row]]
 label = "parity/qbsp nib -Os"
 counter = "instructions"
 tip = 317
 to = 318
-
-# 13. worse
-[[row]]
-label = "parity/qbsp nib -Os"
-counter = "clocks"
-tip = 984
-to = 986
 
 # 13. worse
 [[row]]
@@ -193,8 +102,3 @@ tip = 632330591
 to = 632330704
 
 # 18. mixed
-[[row]]
-label = "grep bq32 -Os"
-counter = "code_bytes"
-tip = 1217
-to = 1219
