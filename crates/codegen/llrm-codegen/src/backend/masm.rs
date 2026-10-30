@@ -580,8 +580,12 @@ pub enum Item {
     Label(Label),
     Callee(Callee),
     /// A conditional jump to `callee`, a sibling call folded into the branch
-    /// that reached it (`X86InstrInfo::replaceBranchWithTailCall`): `jcc callee`.
-    TailIf { condition: String, callee: String },
+    /// that reached it (`X86InstrInfo::replaceBranchWithTailCall`): `jcc
+    /// callee`.
+    TailIf {
+        condition: String,
+        callee: String,
+    },
     Semantics(Semantics),
     Mark(Mark),
     /// A `.cfi_*` directive (`MCCFIInstruction`), where LLVM's lands: no
@@ -1495,9 +1499,8 @@ pub fn listing(
 }
 
 /// The conditional jumps of x86 a sibling call can be folded into.
-const FOLDABLE: [&str; 16] = [
-    "jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg",
-];
+const FOLDABLE: [&str; 16] =
+    ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"];
 
 /// `BranchFolder::OptimizeBlock`'s tail-call fold: a block of nothing but a
 /// sibling call (the epilogue, if any, already instructions before it:
@@ -1514,18 +1517,28 @@ pub fn tail_calls_folded(procedure: Procedure) -> Procedure {
     let sole_call = |block: &lir::LirBlock| -> Option<(Arc<lir::Insn>, Callee)> {
         let [one] = &block.insns[..] else { return None };
         let what = one.what.as_ref().filter(|what| what.is_sibling_call() && !what.indirect)?;
-        let callee = procedure.callees.get(&one.at).filter(|callee| {
-            !callee.far && callee.pops == 0 && callee.code.is_empty() && what.sources.is_empty()
-        })?;
+        let callee = procedure
+            .callees
+            .get(&one.at)
+            .filter(|callee| !callee.far && callee.pops == 0 && callee.code.is_empty() && what.sources.is_empty())?;
         Some((Arc::clone(one), Callee { tail: true, ..callee.clone() }))
     };
-    let tails: IndexMap<i64, Callee> = procedure
+    let mut tails: IndexMap<i64, Callee> = procedure
         .body
         .blocks
         .iter()
         .filter(|block| block.at != procedure.body.entry)
         .filter_map(|block| sole_call(block).map(|(_, callee)| (block.at, callee)))
         .collect();
+    // DEVIATE TC1 (owner w10, 2026-10-30): the pin folds whatever the size. A
+    // `jcc rel32` is 4 bytes more than the `jcc rel8` it replaces and the
+    // block's one `jmp` goes only when every branch to it is folded, so at
+    // `-Os` a callee reached from two blocks grows 3 bytes (b17 -Os +2 on
+    // m64, +6 on m32). Exit: -Os is priced against the pin's size by the
+    // frame lowering, or `jcc` relaxation makes the fold free; drop `size`.
+    if procedure.size {
+        tails.retain(|at, _| procedure.body.blocks.iter().filter(|block| block.succ.contains(at)).count() <= 1);
+    }
     if tails.is_empty() {
         return procedure;
     }
@@ -1540,7 +1553,7 @@ pub fn tail_calls_folded(procedure: Procedure) -> Procedure {
             let Some(what) = last.what.as_ref().filter(|what| what.op == Operation::Branch && !what.indirect) else {
                 return block.clone();
             };
-            let (Some(target), Some(name)) = (what.target, what.name.as_deref().filter(|name| FOLDABLE.contains(name)))
+            let (Some(target), Some(_)) = (what.target, what.name.as_deref().filter(|name| FOLDABLE.contains(name)))
             else {
                 return block.clone();
             };
@@ -1553,7 +1566,8 @@ pub fn tail_calls_folded(procedure: Procedure) -> Procedure {
             let mut made = lir::LirBlock::clone(block);
             let mut insns = block.insns.to_vec();
             let at = insns.len() - 1;
-            insns[at] = Arc::new(lir::Insn { what: Some(Semantics { target: None, ..what.clone() }), ..(**last).clone() });
+            insns[at] =
+                Arc::new(lir::Insn { what: Some(Semantics { target: None, ..what.clone() }), ..(**last).clone() });
             made.insns = insns.into();
             made.succ = block.succ.iter().copied().filter(|one| *one != target).collect::<Vec<_>>().into();
             made.into()
@@ -1881,7 +1895,8 @@ fn built(
                     };
                     out.push(Item::Semantics(Semantics { name: Some(name.into()), ..what.clone() }));
                 }
-                // A branch folded with the sibling call it went to: `jcc callee`.
+                // A branch folded with the sibling call it went to: `jcc
+                // callee`.
                 Operation::Branch
                     if what.target.is_none() && procedure.callees.get(&one.at).is_some_and(|callee| callee.tail) =>
                 {
