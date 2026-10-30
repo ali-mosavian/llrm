@@ -26,12 +26,10 @@ const STT_SECTION: u8 = 3;
 const STT_FILE: u8 = 4;
 const SHN_ABS: u16 = 0xFFF1;
 
-/// A relocation type, the bytes of the field it patches, and the distance from
-/// the field's start to the place a pc-relative value is relative to.
+/// A relocation type and the bytes of the field it patches.
 pub struct Relocation {
     pub kind: u32,
     pub width: usize,
-    pub from: usize,
 }
 
 /// What a machine says of its ELF.
@@ -251,7 +249,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut image = section.image.clone();
         let mut entries = Vec::new();
         for one in &section.relocs {
-            let Relocation { kind, width, from } = M::relocation(one)?;
+            let Relocation { kind, width } = M::relocation(one)?;
             let (symbol, own) = match one.target {
                 Target::OmfGroup(_) => return Err(unsupported("a reference to a group is OMF's")),
                 // The section's own symbol.
@@ -263,8 +261,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
                     (None, Definition::Undefined) => unreachable!("an undefined symbol is global"),
                 },
             };
-            // S + A - P, where the model's value is S + addend - (at + from).
-            let addend = one.addend + own - from as i64;
+            // S + A - P: the addend is the model's, less the pc bias.
+            let addend = one.addend + own;
             // Checked for RELA too: the addend must fit the field the linker
             // would have patched.
             let mut field = [0u8; 8];

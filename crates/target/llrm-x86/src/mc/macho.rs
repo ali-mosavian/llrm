@@ -43,29 +43,27 @@ impl MachTargetWriter for X8664MachO {
         &self,
         reloc: &Reloc,
     ) -> Result<Described, Unsupported> {
-        let from = reloc.pc_bias;
-        let (kind, length, pcrel, beyond) = match (reloc.kind, reloc.pc_rel) {
+        let (kind, length, pcrel, baked) = match (reloc.kind, reloc.pc_rel) {
             (FixupKind::DATA_8, false) => (X86_64_RELOC_UNSIGNED, 3, false, 0),
             (FixupKind::DATA_4, false) => (X86_64_RELOC_UNSIGNED, 2, false, 0),
-            (fixup::BRANCH_4, true) => (X86_64_RELOC_BRANCH, 2, true, 0),
-            // SIGNED_n is chosen by the total addend, `-(addend - beyond + 4)`
-            // in X86MachObjectWriter (n is 1, 2 or 4), not by the distance
-            // alone: equal totals are one object.
-            (FixupKind::DATA_4, true) if from >= 4 => {
-                let beyond = reloc.beyond(4);
-                let kind = match beyond - reloc.addend {
+            (fixup::BRANCH_4, true) => (X86_64_RELOC_BRANCH, 2, true, 4),
+            // SIGNED_n is chosen by the total addend, `-(addend + 4)` in
+            // X86MachObjectWriter (n is 1, 2 or 4), not by the distance alone:
+            // equal totals are one object.
+            (FixupKind::DATA_4, true) => {
+                let kind = match -(reloc.addend + 4) {
                     1 => X86_64_RELOC_SIGNED_1,
                     2 => X86_64_RELOC_SIGNED_2,
                     4 => X86_64_RELOC_SIGNED_4,
                     _ => X86_64_RELOC_SIGNED,
                 };
-                (kind, 2, true, beyond)
+                (kind, 2, true, 4)
             }
             (fixup::SEGMENT_BASE, _) => return Err(unsupported("a segment selector has no Mach-O relocation")),
             (fixup::FAR_POINTER, _) => return Err(unsupported("a 16:16 far pointer has no Mach-O relocation")),
             other => return Err(unsupported(format!("Mach-O x86-64 has no relocation for {other:?}"))),
         };
-        Ok(Described { kind, length, pcrel, beyond, addend_in_field: true })
+        Ok(Described { kind, length, pcrel, baked, addend_in_field: true })
     }
 }
 
@@ -75,16 +73,14 @@ mod tests {
 
     use super::*;
 
-    /// (type, bytes past the field's end the field compensates) of a
-    /// pc-relative 32-bit field `from` bytes short of the place and `addend`
-    /// past the symbol.
+    /// The type of a pc-relative 32-bit field `from` bytes short of the place
+    /// and `addend` past the symbol.
     fn described(
         from: usize,
         addend: i64,
-    ) -> (u32, i64) {
+    ) -> u32 {
         let reloc = Reloc::new(2, Fix::pc_rel(4, from), Target::Symbol(0), addend);
-        let one = X8664MachO.relocation(&reloc).unwrap();
-        (one.kind, one.beyond)
+        X8664MachO.relocation(&reloc).unwrap().kind
     }
 
     /// X86MachObjectWriter picks SIGNED_n from `-(total + 4)`: `cmpb $1,
@@ -93,12 +89,12 @@ mod tests {
     /// alone and wrote SIGNED_1 and SIGNED.
     #[test]
     fn two_instructions_with_the_same_total_addend_write_one_signed_n() {
-        assert_eq!(described(5, 0), (X86_64_RELOC_SIGNED_1, 1));
-        assert_eq!(described(4, -1), (X86_64_RELOC_SIGNED_1, 0));
-        assert_eq!(described(6, 0).0, described(4, -2).0);
-        assert_eq!(described(8, 0).0, described(5, -3).0);
-        assert_eq!(described(4, 0).0, X86_64_RELOC_SIGNED);
-        assert_eq!(described(7, 0).0, X86_64_RELOC_SIGNED);
+        assert_eq!(described(5, 0), X86_64_RELOC_SIGNED_1);
+        assert_eq!(described(4, -1), X86_64_RELOC_SIGNED_1);
+        assert_eq!(described(6, 0), described(4, -2));
+        assert_eq!(described(8, 0), described(5, -3));
+        assert_eq!(described(4, 0), X86_64_RELOC_SIGNED);
+        assert_eq!(described(7, 0), X86_64_RELOC_SIGNED);
     }
 
     /// The field `write` leaves in an instruction: the 4 bytes after `prefix`

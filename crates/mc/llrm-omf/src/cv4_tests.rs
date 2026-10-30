@@ -236,8 +236,8 @@ fn a_32_bit_procedure_has_four_byte_fields_and_two_fixups() {
         [vec![0; 12], vec![5, 0, 0, 0, 3, 0, 0, 0, 5, 0, 0, 0], vec![0; 6], vec![0x01, 0x10, 0, 1, b'f']].concat();
     assert_eq!(symbols[2..], [(0x0205, proc32), (0x0200, vec![8, 0, 0, 0, 0x74, 0, 1, b'a']), (0x0006, vec![])]);
     assert_eq!(
-        relocs.iter().map(|one| (one.fix(), one.at - relocs[0].at)).collect::<Vec<_>>(),
-        [(llrm_object::Fix::abs(4), 0), (llrm_object::Fix::plain(crate::write::TEST_SEGMENT_BASE), 4)]
+        relocs.iter().map(|one| (one.kind, one.pc_rel, one.at - relocs[0].at)).collect::<Vec<_>>(),
+        [(llrm_object::Fix::abs(4).kind, false, 0), (crate::write::TEST_SEGMENT_BASE, false, 4)]
     );
 }
 

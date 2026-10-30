@@ -129,8 +129,9 @@ pub struct Described {
     /// log2 of the field's bytes.
     pub length: u32,
     pub pcrel: bool,
-    /// The bytes between the field's end and the place it is relative to.
-    pub beyond: i64,
+    /// What the field holds of the distance to the place it is relative to,
+    /// past the addend: a pc-relative `rel32` field is relative to its own end.
+    pub baked: i64,
     /// Whether the field holds the addend. The fields of arm64's instructions
     /// do not: the instruction keeps its zeros, and an addend travels in an
     /// `ARM64_RELOC_ADDEND` entry before the relocation.
@@ -278,7 +279,7 @@ pub fn write<W: MachTargetWriter>(
                 flavor.backend().apply_fixup(&mut image, one.at, one.kind, true, value, &section.name)?;
                 continue;
             }
-            let Described { kind, length, pcrel, beyond, addend_in_field } = flavor.relocation(one)?;
+            let Described { kind, length, pcrel, baked, addend_in_field } = flavor.relocation(one)?;
             // A section's start is a local symbol at offset 0 of it.
             let (target, home) = match one.target {
                 Target::Symbol(target) => (Some(target), None),
@@ -297,7 +298,7 @@ pub fn write<W: MachTargetWriter>(
                 continue;
             }
             let (symbolnum, external, field) = match target.and_then(|target| index_of[target]) {
-                Some(symbol) => (symbol, true, one.addend - beyond),
+                Some(symbol) => (symbol, true, one.addend + baked),
                 None if !addend_in_field => {
                     return Err(unsupported(format!(
                         "{}: an instruction field refers to a section, not to a symbol",
@@ -317,7 +318,7 @@ pub fn write<W: MachTargetWriter>(
                         (None, None) => unreachable!("a target is a symbol or a section"),
                     };
                     let place = if pcrel { (address[index] + one.at + 4) as i64 } else { 0 };
-                    (ordinal(home), false, (address[home] + offset) as i64 + one.addend - beyond - place)
+                    (ordinal(home), false, (address[home] + offset) as i64 + one.addend + baked - place)
                 }
             };
             if !addend_in_field {

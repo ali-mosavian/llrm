@@ -40,9 +40,9 @@ impl MachTargetWriter for Made {
         &self,
         reloc: &Reloc,
     ) -> Result<llrm_macho::Described, Unsupported> {
-        match (reloc.fix(), reloc.pc_rel) {
-            (fix, _) if fix == Fix::abs(8) => {
-                Ok(llrm_macho::Described { kind: 0, length: 3, pcrel: false, beyond: 0, addend_in_field: true })
+        match (reloc.kind, reloc.pc_rel) {
+            (kind, false) if kind == Fix::abs(8).kind => {
+                Ok(llrm_macho::Described { kind: 0, length: 3, pcrel: false, baked: 0, addend_in_field: true })
             }
             (other, _) => Err(Unsupported(format!("{other:?}"))),
         }

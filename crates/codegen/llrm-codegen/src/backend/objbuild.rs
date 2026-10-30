@@ -1304,8 +1304,13 @@ pub fn object_of(
             relocs.push(Reloc::new(one.at, one.kind, target, addend));
         }
         for one in &relocs {
-            if one.fix() != BASE {
-                pack_field(&mut image, one.at, one.fix(), 0)?;
+            if one.kind != BASE.kind {
+                pack_field(
+                    &mut image,
+                    one.at,
+                    Fix { kind: one.kind, pc_rel: one.pc_rel, pc_bias: 0, spec: one.spec },
+                    0,
+                )?;
             }
         }
         sections.push(Section { name, role, near, align, image, spans, relocs });

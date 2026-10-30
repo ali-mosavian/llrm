@@ -248,8 +248,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             let Relocation { kind, baked } = M::relocation(one)?;
             let Target::Symbol(target) = one.target else { return Err(unsupported("a reference to a group is OMF's")) };
             // The linker adds S + field (- P - baked, if relative); the model
-            // wants S + addend - (at + pc_bias).
-            let field = one.addend - one.beyond(baked);
+            // wants S + A - P: the addend is already less the pc bias.
+            let field = one.addend + baked as i64;
             M::backend().apply_fixup(&mut image, one.at, one.kind, one.pc_rel, field, &section.name)?;
             put32(&mut entries, one.at as u32);
             put32(&mut entries, coff_symbol[target]);

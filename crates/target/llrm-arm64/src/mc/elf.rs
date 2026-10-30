@@ -58,7 +58,7 @@ impl Machine for Arm64 {
             (fixup::LDST_IMM12_SCALE8, _, true) => (R_AARCH64_LD64_GOT_LO12_NC, 4),
             other => return Err(Unsupported(format!("ELF arm64 has no relocation for {other:?}"))),
         };
-        Ok(Relocation { kind, width, from: 0 })
+        Ok(Relocation { kind, width })
     }
 }
 
@@ -164,7 +164,7 @@ mod tests {
     fn a_four_byte_place_relative_field_is_prel32() {
         let reloc = Reloc::new(0, Fix::pc_rel(4, 0), Target::Section(0), 0);
         let relocation = Arm64::relocation(&reloc).expect("a relocation");
-        assert_eq!((relocation.kind, relocation.width, relocation.from), (261, 4, 0));
+        assert_eq!((relocation.kind, relocation.width), (261, 4));
     }
 
     /// The pinned `llvm-readobj` reads the object, and its relocations are

@@ -33,25 +33,24 @@ impl Machine for X8664 {
     }
 
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
-        let from = reloc.pc_bias;
-        let (kind, width, from) = match (reloc.kind, reloc.pc_rel) {
-            (FixupKind::DATA_8, false) => (R_X86_64_64, 8, 0),
+        let (kind, width) = match (reloc.kind, reloc.pc_rel) {
+            (FixupKind::DATA_8, false) => (R_X86_64_64, 8),
             // Zero-extended: a signed 32-bit absolute address has its own type,
             // which no encoder asks for yet.
-            (FixupKind::DATA_4, false) => (R_X86_64_32, 4, 0),
-            (FixupKind::DATA_2, false) => (R_X86_64_16, 2, 0),
-            (FixupKind::DATA_1, false) => (R_X86_64_8, 1, 0),
-            (FixupKind::DATA_8, true) => (R_X86_64_PC64, 8, from),
-            (FixupKind::DATA_4, true) => (R_X86_64_PC32, 4, from),
-            (fixup::BRANCH_4, true) => (R_X86_64_PLT32, 4, 4),
-            (fixup::GOT_PCREL_4, _) => (R_X86_64_REX_GOTPCRELX, 4, from),
-            (FixupKind::DATA_2, true) => (R_X86_64_PC16, 2, from),
-            (FixupKind::DATA_1, true) => (R_X86_64_PC8, 1, from),
+            (FixupKind::DATA_4, false) => (R_X86_64_32, 4),
+            (FixupKind::DATA_2, false) => (R_X86_64_16, 2),
+            (FixupKind::DATA_1, false) => (R_X86_64_8, 1),
+            (FixupKind::DATA_8, true) => (R_X86_64_PC64, 8),
+            (FixupKind::DATA_4, true) => (R_X86_64_PC32, 4),
+            (fixup::BRANCH_4, true) => (R_X86_64_PLT32, 4),
+            (fixup::GOT_PCREL_4, _) => (R_X86_64_REX_GOTPCRELX, 4),
+            (FixupKind::DATA_2, true) => (R_X86_64_PC16, 2),
+            (FixupKind::DATA_1, true) => (R_X86_64_PC8, 1),
             (fixup::SEGMENT_BASE, _) => return Err(Unsupported("a segment selector has no ELF relocation".into())),
             (fixup::FAR_POINTER, _) => return Err(Unsupported("a 16:16 far pointer has no ELF relocation".into())),
             other => return Err(Unsupported(format!("ELF x86-64 has no relocation for {other:?}"))),
         };
-        Ok(Relocation { kind, width, from })
+        Ok(Relocation { kind, width })
     }
 }
 

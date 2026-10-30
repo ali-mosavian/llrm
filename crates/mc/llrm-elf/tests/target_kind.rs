@@ -18,7 +18,7 @@ impl Machine for MadeUp {
 
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
         match reloc.kind {
-            MADE_UP => Ok(Relocation { kind: 0x1234, width: 4, from: 0 }),
+            MADE_UP => Ok(Relocation { kind: 0x1234, width: 4 }),
             other => Err(Unsupported(format!("{other:?}"))),
         }
     }

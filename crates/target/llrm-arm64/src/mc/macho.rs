@@ -61,6 +61,6 @@ impl MachTargetWriter for Arm64MachO {
             (fixup::LDST_IMM12_SCALE8, _, true) => (ARM64_RELOC_GOT_LOAD_PAGEOFF12, 2, false, false),
             other => return Err(Unsupported(format!("Mach-O arm64 has no relocation for {other:?}"))),
         };
-        Ok(Described { kind, length, pcrel, beyond: 0, addend_in_field })
+        Ok(Described { kind, length, pcrel, baked: 0, addend_in_field })
     }
 }
