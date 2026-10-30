@@ -2019,16 +2019,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             Some(c) if c == ones => return Some(self.dag.get_negative(n0, vt)),
             _ => {}
         }
-        let shift_vt = EVT::I8;
         if let (Some(c), false) = (c1, opaque) {
             if c.is_power_of_two() {
-                let amount = self.dag.get_constant(u128::from(c.trailing_zeros()), shift_vt);
+                let amount = self.shift_amount(vt, c.trailing_zeros());
                 return Some(self.dag.get_node(ISD::Shl, vt, &[n0, amount]));
             }
             // A negated power of two: `0 - (x << log2(-c))`.
             let negated = c.wrapping_neg() & ones;
             if negated.is_power_of_two() && negated != c {
-                let amount = self.dag.get_constant(u128::from(negated.trailing_zeros()), shift_vt);
+                let amount = self.shift_amount(vt, negated.trailing_zeros());
                 let shifted = self.dag.get_node(ISD::Shl, vt, &[n0, amount]);
                 let zero = self.dag.get_constant(0, vt);
                 return Some(self.dag.get_node(ISD::Sub, vt, &[zero, shifted]));

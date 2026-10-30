@@ -446,3 +446,18 @@ fn a_target_that_does_not_ask_keeps_the_biased_range_check() {
     let root = dag.get_root();
     assert_ne!(dag.opcode(dag.operand(root, 0)), ISD::SignExtendInReg);
 }
+
+/// `x * 4` shifted by an `i8` amount whatever the target; AArch64 cannot promote
+/// that operand and refused 3 corpus functions (`x * -2`).
+#[test]
+fn a_multiply_by_a_power_of_two_shifts_by_the_targets_amount_type() {
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I32, 5);
+    let four = dag.get_constant(4, EVT::I32);
+    let root = dag.get_node(ISD::Mul, EVT::I32, &[x, four]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Shl);
+    assert_eq!(dag.value_type(dag.operand(root, 1)), EVT::I32);
+}
