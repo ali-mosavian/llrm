@@ -657,7 +657,11 @@ impl Combiner<'_> {
                                 users.push(one.user);
                             }
                         }
-                        Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::Assume => {
+                        Intrinsic::LifetimeStart
+                        | Intrinsic::LifetimeEnd
+                        | Intrinsic::InvariantStart
+                        | Intrinsic::InvariantEnd
+                        | Intrinsic::Assume => {
                             if !users.contains(&one.user) {
                                 users.push(one.user);
                             }

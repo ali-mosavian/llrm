@@ -810,7 +810,7 @@ fn selected_in(
         // i16 %x,3` costs +59 B in 4 spill slots). Cost: an idiv is ~40 clocks
         // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
         // 5095 B against the pin's 5463 (2026-10-27).
-        .with_int_div_cheap(cpu.size || cpu.min_size || cpu.target().tuning().int_div_cheap)
+        .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_jump_tables(
             cpu.target().costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
@@ -938,7 +938,7 @@ fn selected_in(
     // range, where the phis of its successors look for their edges.
     let mut work: Vec<(BlockId, BlockId, crate::backend::selectiondag::builder::BlockDag)> = Vec::new();
     for &block in function.layout() {
-        let mut built = build_block(module, function, &layout, &builder_target, arch, &convention, &mut info, block)
+        let mut built = build_block(module, function, &layout, &builder_target, &arch, &convention, &mut info, block)
             .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
         let extras = std::mem::take(&mut built.extra);
         work.push((block, block, built));

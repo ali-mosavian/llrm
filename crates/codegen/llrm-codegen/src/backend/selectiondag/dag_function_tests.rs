@@ -726,10 +726,8 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
         let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
     };
-    llrm_x86_m16::with_pin_tuning(|| {
-        assert!(names(false).iter().all(|n| n != "idiv"), "speed: the reciprocal, as the pin");
-        assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
-    });
+    assert!(names(false).iter().all(|n| n != "idiv"), "speed: the reciprocal, as the pin");
+    assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
 }
 
 /// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)

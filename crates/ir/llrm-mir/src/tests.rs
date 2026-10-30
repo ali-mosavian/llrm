@@ -422,6 +422,44 @@ fn a_bswap_of_an_odd_number_of_bytes_is_reported() {
     }
 }
 
+/// `llvm.invariant.start` and `.end` are intrinsics MIR has (`Intrinsics.td`):
+/// a scope's call verifies, and the start's size is -1, 0 or positive
+/// (Verifier.cpp#L6072). MIR said "an intrinsic MIR does not have" of both.
+#[test]
+fn an_invariant_scope_verifies_and_a_size_below_minus_one_is_reported() {
+    let problems = |size: i64| {
+        crate::verify::verify(
+            &parse::module(&format!(
+                "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)\n\
+                 declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)\n\
+                 define void @f(ptr %p) {{\nb0:\n  %s = call ptr @llvm.invariant.start.p0(i64 {size}, ptr %p)\n  \
+                 call void @llvm.invariant.end.p0(ptr %s, i64 {size}, ptr %p)\n  ret void\n}}\n"
+            ))
+            .unwrap_or_else(|error| panic!("{error}")),
+        )
+    };
+    for size in [-1, 0, 4] {
+        assert_eq!(problems(size), Vec::<String>::new(), "size {size}");
+    }
+    let found = problems(-2);
+    assert!(
+        found.iter().any(|one| one.contains("invariant_start parameter must be -1, 0 or a positive number")),
+        "{found:?}"
+    );
+}
+
+/// `Intrinsics.td` gives `invariant.start` the result `ptr`, whatever pointer
+/// it covers: an `i32` result is a wrong signature.
+#[test]
+fn an_invariant_start_with_a_wrong_result_is_a_wrong_signature() {
+    let found = crate::verify::verify(
+        &parse::module("declare i32 @llvm.invariant.start.p0(i64 immarg, ptr nocapture)\n")
+            .unwrap_or_else(|error| panic!("{error}")),
+    );
+    let error = found.join("\n");
+    assert!(error.contains("incorrect return type"), "{error}");
+}
+
 /// `llvm.fshl`, `llvm.fshr` and `llvm.abs` are intrinsics MIR has: a call of
 /// each verifies. The verifier said "an intrinsic MIR does not have" of all
 /// three, and the funnel-shift and abs folds of InstCombine could not build

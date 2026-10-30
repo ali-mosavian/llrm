@@ -5211,6 +5211,38 @@ fn test_a_fixed_address_pointer_selects_as_a_far_one() {
     assert_eq!(listing(4), listing(1));
 }
 
+/// An invariant scope is not code either (SelectionDAGBuilder.cpp#L7680: the
+/// region information is discarded): a body with `invariant.start` and `.end`
+/// selects as the same body without. They were refused.
+#[test]
+fn test_invariant_markers_are_no_code() {
+    let text = |markers: bool| {
+        let (start, end) = if markers {
+            (
+                "%s = call ptr @llvm.invariant.start.p0(i64 16, ptr %x)",
+                "call void @llvm.invariant.end.p0(ptr %s, i64 16, ptr %x)",
+            )
+        } else {
+            ("", "")
+        };
+        format!(
+            "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)
+define i16 @f(i16 %a, i16 %c) addrspace(1) {{
+  %x = alloca [8 x i16]
+  %p = getelementptr inbounds [8 x i16], ptr %x, i16 0, i16 %c
+  store volatile i16 %a, ptr %p
+  {start}
+  %v = load volatile i16, ptr %p
+  {end}
+  ret i16 %v
+}}
+"
+        )
+    };
+    assert_eq!(listing(&text(true), "f"), listing(&text(false), "f"));
+}
+
 /// A scope's lifetime markers are not code: a body with them selects as the
 /// same body without. They were refused: `@llvm.lifetime.start.p0`.
 #[test]
