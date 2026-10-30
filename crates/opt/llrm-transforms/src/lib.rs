@@ -130,6 +130,7 @@ pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
 pub mod combine_icmp_const;
+pub mod combine_icmp_equality;
 pub mod combine_icmp_logic;
 pub mod combine_icmp_ranges;
 pub mod combine_invert;
@@ -311,6 +312,7 @@ mod pin_slots_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
+pub mod pipeline_text;
 pub mod ports;
 pub mod predicateinfo;
 pub mod profit;

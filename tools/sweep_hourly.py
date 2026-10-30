@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The hourly post-landing sweep of the feat/parity tip, and the one line it reports.
+"""The hourly post-landing sweep of the release/next tip, and the one line it reports.
 
     python3 tools/sweep_hourly.py [--tip SHA] [--no-build] [--bisect-builds N] [--state FILE]
 
@@ -337,7 +337,7 @@ def main(argv: list[str]) -> int:
 
 def sweep(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tip", help="the commit to sweep (default: origin/feat/parity after a fetch)")
+    parser.add_argument("--tip", help="the commit to sweep (default: origin/release/next after a fetch)")
     parser.add_argument("--no-build", action="store_true", help="use the binaries already in the target")
     parser.add_argument("--bisect-builds", type=int, default=6)
     parser.add_argument("--state", type=Path, default=STATE)

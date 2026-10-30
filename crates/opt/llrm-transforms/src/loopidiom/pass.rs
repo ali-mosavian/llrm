@@ -167,7 +167,9 @@ impl FunctionPass for LoopIdiom {
                 clocks: clock_costs.as_ref().map(|(costs, rate)| (costs, *rate)),
                 tti: tti.as_deref(),
             };
-            let mut idiom = LoopIdiomRecognize::new(self.options, self.library);
+            let mut options = self.options;
+            options.force_memset_pattern_intrinsic |= self.for_size && outer.target().fills_by_pattern();
+            let mut idiom = LoopIdiomRecognize::new(options, self.library);
             idiom.routines = self.routines.clone();
             idiom.for_size = self.for_size;
             if idiom.run_on_loop(&mut run) == Some(true) {
