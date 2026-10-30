@@ -100,4 +100,5 @@ mod x86_conditions;
 mod x86_preprocess;
 mod x87_compare;
 mod x87_goldens;
+mod pin_folds;
 mod xor_demorgan;

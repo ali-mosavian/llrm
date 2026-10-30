@@ -55,6 +55,19 @@ pub enum CombineLevel {
 
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
+    /// `visitXOR`'s `(xor (and x, y), y)` is `(and (not x), y)`. DEVIATE: off by
+    /// default so x86's rows stay as they are until the judge has seen them.
+    /// Exit: x86 judged.
+    fn fold_xor_of_and_with_mask(&self) -> bool {
+        false
+    }
+
+    /// `visitSIGN_EXTEND_INREG`'s `(sext_inreg (extload x))` is `(sextload x)`.
+    /// DEVIATE: off by default, as above. Exit: x86 judged.
+    fn fold_sext_in_reg_of_load(&self) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         _op: ISD,
@@ -754,6 +767,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 self.add_to_worklist(not_b.node);
                 return Some(self.dag.get_node(flipped, vt, &[not_a, not_b]));
             }
+        }
+        // fold (xor (and x, y), y) -> (and (not x), y)
+        if self.hooks.fold_xor_of_and_with_mask()
+            && self.dag.opcode(n0) == ISD::And
+            && self.dag.has_one_use(n0.node)
+            && self.dag.operand(n0, 1) == n1
+        {
+            let x = self.dag.operand(n0, 0);
+            let not_x = self.dag.get_not(x, vt);
+            self.add_to_worklist(not_x.node);
+            return Some(self.dag.get_node(ISD::And, vt, &[not_x, n1]));
         }
         // fold (xor (shl 1, x), -1) -> (rotl ~1, x): a zero placed in a value
         // of all ones, which the target clears a bit with (`btr`) when it
@@ -1854,7 +1878,49 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let mask = self.dag.get_constant(super::fold::mask(ext_bits), vt);
             return Some(self.dag.get_node(ISD::And, vt, &[n0, mask]));
         }
-        self.simplify_demanded(node)
+        if let Some(simplified) = self.simplify_demanded(node) {
+            return Some(simplified);
+        }
+        self.sext_in_reg_of_load(node, n0, vt, ext)
+    }
+
+    /// `visitSIGN_EXTEND_INREG`: `(sext_inreg (extload x))` and
+    /// `(sext_inreg (zextload x))` are `(sextload x)`.
+    fn sext_in_reg_of_load(
+        &mut self,
+        node: SDValue,
+        load: SDValue,
+        vt: EVT,
+        ext: EVT,
+    ) -> Option<SDValue> {
+        if !self.hooks.fold_sext_in_reg_of_load() || self.dag.opcode(load) != ISD::Load {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(load).data else { return None };
+        if info.mem_vt != ext || info.volatile {
+            return None;
+        }
+        let legal = match (vt, ext) {
+            (EVT::Simple(wide), EVT::Simple(mem)) => {
+                self.tli.is_some_and(|tli| tli.load_ext_action(LoadExt::SExtLoad, wide, mem) == Action::Legal)
+            }
+            _ => false,
+        };
+        let one_use = self.dag.has_one_use(load.node);
+        let fold = match info.ext {
+            Some(LoadExt::ExtLoad) => (!self.legal_operations() && one_use) || legal,
+            Some(LoadExt::ZExtLoad) => one_use && !self.legal_operations() && legal,
+            _ => false,
+        };
+        if !fold {
+            return None;
+        }
+        let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
+        let info = super::dag::MemInfo { ext: None, ..info };
+        let extended = self.dag.get_ext_load(LoadExt::SExtLoad, vt, chain, ptr, info);
+        self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
+        let _ = node;
+        Some(extended)
     }
 }
 
