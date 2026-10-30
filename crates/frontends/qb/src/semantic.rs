@@ -8,6 +8,7 @@ mod assignment;
 mod bounds;
 mod debug;
 mod format_spec;
+mod invariance;
 mod merging;
 mod shapes;
 mod tags;
@@ -288,6 +289,8 @@ struct Function {
     allocations: BTreeMap<u32, u32>,
     // Each element pointer of any array, whichever descriptor it came from.
     elements: BTreeSet<u32>,
+    // Each descriptor-word load nothing rewrites: `!invariant.load`.
+    invariant: BTreeSet<u32>,
     // Each POKE's far pointer whose DEF SEG is a literal on every path in:
     // the place of the segment cell, which names the memory it addresses.
     absolute: BTreeMap<u32, u32>,
@@ -613,6 +616,7 @@ pub fn compile_debugged(
         merging::applied(&mut compiler);
     }
     shapes::applied(&mut compiler);
+    invariance::applied(&mut compiler);
     absolute::applied(&mut compiler);
     absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
@@ -1938,6 +1942,7 @@ impl Compiler {
             origins: BTreeMap::new(),
             allocations: BTreeMap::new(),
             elements: BTreeSet::new(),
+            invariant: BTreeSet::new(),
             absolute: BTreeMap::new(),
         });
     }
@@ -10610,6 +10615,15 @@ impl Compiler {
                                 llrm_hir::facts::Fact::InBounds,
                             );
                         }
+                    }
+                    if function.invariant.contains(&instruction.id) {
+                        facts.state(
+                            llrm_hir::facts::Subject::Instruction {
+                                function: i64::from(function.id),
+                                id: i64::from(instruction.id),
+                            },
+                            llrm_hir::facts::Fact::Invariant,
+                        );
                     }
                     if let Some(region) = region(instruction, function) {
                         facts.state(
