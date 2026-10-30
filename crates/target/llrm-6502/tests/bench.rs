@@ -47,6 +47,21 @@ struct Kernel {
     /// The result is 16 bits: A is the low byte, X the high.
     wide_result: bool,
     expect: u16,
+    /// A routine of the hand-written corpus (`tests/bench/hand`), if it is one.
+    hand: Option<Hand>,
+}
+
+/// What a `tests/bench/hand/<file>.spec` says about the hand routine against its C kernel `name`.
+struct Hand {
+    file: &'static str,
+    /// The symbol of the hand routine as linked; `-` when the bench cannot drive it.
+    symbol: &'static str,
+    /// A pointer result is measured from this driver symbol.
+    rel: Option<&'static str>,
+    /// What the hand routine answers when it differs from the kernel's `expect` (a truth value).
+    expect: Option<u16>,
+    /// Other hand-corpus routines linked with it (the clone's, not the installed library's).
+    deps: &'static [&'static str],
 }
 
 const fn k(
@@ -55,7 +70,21 @@ const fn k(
     wide_result: bool,
     expect: u16,
 ) -> Kernel {
-    Kernel { name, args, wide_result, expect }
+    Kernel { name, args, wide_result, expect, hand: None }
+}
+
+/// The symbol the driver calls for the row `tag`: the hand routine's own for the hand row of a
+/// hand-corpus kernel, else the kernel (cc65 prefixes an underscore).
+fn call_symbol(
+    kernel: &Kernel,
+    abi: Abi,
+    tag: &str,
+) -> String {
+    match &kernel.hand {
+        Some(hand) if tag.starts_with('h') => hand.symbol.to_owned(),
+        _ if abi == Abi::Cc65 => format!("_{}", kernel.name),
+        _ => kernel.name.to_owned(),
+    }
 }
 
 /// Every expected value is worked out by hand from the arguments and `BUF`.
@@ -134,8 +163,9 @@ fn driver(
     abi: Abi,
     calls: u32,
     high: bool,
+    tag: &str,
 ) -> String {
-    let symbol = if abi == Abi::Cc65 { format!("_{}", kernel.name) } else { kernel.name.to_owned() };
+    let symbol = call_symbol(kernel, abi, tag);
     let mut s = String::from(".export _main\n.export buf, _buf\n");
     if abi == Abi::Cc65 {
         s.push_str(".import pusha, pushax\n");
@@ -186,6 +216,9 @@ fn driver(
         }
     }
     s.push_str(&format!("  jsr {symbol}\n  dec cnt\n  bne loop\n"));
+    if let Some(from) = kernel.hand.as_ref().and_then(|hand| hand.rel) {
+        s.push_str(&format!("  sec\n  sbc #<{from}\n  pha\n  txa\n  sbc #>{from}\n  tax\n  pla\n"));
+    }
     if high {
         s.push_str("  txa\n");
     }
@@ -200,7 +233,17 @@ fn driver(
     // bytes whose Fletcher sum is 52785.
     s.push_str(&format!("lz:\n_lz:\n  .byte {LZ}\n.export lz, _lz\n"));
     s.push_str(".export str, _str, tab, _tab, lzout, _lzout\n");
-    s.push_str(".segment \"BSS\"\ncnt: .res 1\nlzout:\n_lzout: .res 640\n");
+    // the hand corpus' strings and the output area (the same as `tests/bench/hand/data.c`)
+    for (name, text) in [
+        ("mix", "Hello, World 42!"),
+        ("mix2", "hELLO, wORLD 42?"),
+        ("num", "  -4829xyz"),
+        ("pat", "o w"),
+        ("set", "lo"),
+    ] {
+        s.push_str(&format!("{name}:\n_{name}:\n  .byte \"{text}\",0\n.export {name}, _{name}\n"));
+    }
+    s.push_str(".segment \"BSS\"\ncnt: .res 1\nlzout:\n_lzout: .res 640\ndst:\n_dst: .res 64\n.export dst, _dst\n");
     s
 }
 
@@ -220,7 +263,7 @@ fn link(
     tag: &str,
 ) -> Result<PathBuf, String> {
     let drv = format!("d-{tag}.s");
-    std::fs::write(dir.join(&drv), driver(kernel, abi, calls, high)).unwrap();
+    std::fs::write(dir.join(&drv), driver(kernel, abi, calls, high, tag)).unwrap();
     let bin = format!("p-{tag}.bin");
     let function_file = format!("f-{}.s", tag.split('-').next().unwrap());
     let _ = function;
@@ -238,6 +281,7 @@ fn run_sim(bin: &Path) -> Result<(i32, i64), String> {
     Ok((out.status.code().unwrap_or(-1), cycles))
 }
 
+#[derive(Debug)]
 struct Row {
     /// The linked program's bytes, library routines the code calls included.
     bytes: i64,
@@ -281,30 +325,43 @@ fn measure(
     bss: usize,
 ) -> Result<Row, String> {
     // correctness: one call, A (and X) against the hand-derived value
+    let expect = match &kernel.hand {
+        Some(Hand { expect: Some(own), .. }) if tag.starts_with('h') => *own,
+        _ => kernel.expect,
+    };
     let low = link(dir, kernel, abi, kernel.name, 1, false, &format!("{tag}-lo"))?;
     let (code, _) = run_sim(&low)?;
-    if code != i32::from(kernel.expect & 0xFF) {
-        return Err(format!("wrong result: A = {code}, want {}", kernel.expect & 0xFF));
+    if code != i32::from(expect & 0xFF) {
+        return Err(format!("wrong result: A = {code}, want {}", expect & 0xFF));
     }
-    println!("check {tag:<9} {:<9} A = {code:<3} want {:<3} pass", kernel.name, kernel.expect & 0xFF);
+    println!("check {tag:<9} {:<9} A = {code:<3} want {:<3} pass", kernel.name, expect & 0xFF);
     if kernel.wide_result {
         let high = link(dir, kernel, abi, kernel.name, 1, true, &format!("{tag}-hi"))?;
         let (code, _) = run_sim(&high)?;
-        if code != i32::from(kernel.expect >> 8) {
-            return Err(format!("wrong result: X = {code}, want {}", kernel.expect >> 8));
+        if code != i32::from(expect >> 8) {
+            return Err(format!("wrong result: X = {code}, want {}", expect >> 8));
         }
-        println!("check {tag:<9} {:<9} X = {code:<3} want {:<3} pass", kernel.name, kernel.expect >> 8);
+        println!("check {tag:<9} {:<9} X = {code:<3} want {:<3} pass", kernel.name, expect >> 8);
     }
     let many = link(dir, kernel, abi, kernel.name, 101, false, &format!("{tag}-n"))?;
     let (_, t1) = run_sim(&low)?;
     let (_, t101) = run_sim(&many)?;
     let cycles = (t101 - t1) / 100 - LOOP_CYCLES;
     // bytes against the stub
-    let stub_name = if abi == Abi::Cc65 { format!("_{}", kernel.name) } else { kernel.name.to_owned() };
+    let stub_name = call_symbol(kernel, abi, tag);
     std::fs::write(dir.join(format!("f-{tag}stub.s")), format!(".export {stub_name}\n{stub_name}:\n  rts\n")).unwrap();
     let stub = link(dir, kernel, abi, kernel.name, 1, false, &format!("{tag}stub-lo"))?;
     let bytes = std::fs::metadata(&low).unwrap().len() as i64 - std::fs::metadata(&stub).unwrap().len() as i64 + 1;
     Ok(Row { bytes, body: bytes, cycles, bss })
+}
+
+/// The `-D` flag and the C file of a kernel: its `#ifdef` in `kernels.c`, or its own file of the hand corpus.
+fn kernel_source(kernel: &Kernel) -> (String, PathBuf) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench");
+    match &kernel.hand {
+        Some(hand) => ("-DHAND".to_owned(), dir.join("hand").join(format!("{}.c", hand.file))),
+        None => (format!("-DK_{}", kernel.name), dir.join("kernels.c")),
+    }
 }
 
 fn cc65_row(
@@ -315,8 +372,7 @@ fn cc65_row(
     let dir = work(kernel.name);
     let mut args = vec!["-t", if cmos(tag) { "sim65c02" } else { "sim6502" }];
     args.extend_from_slice(flags);
-    let define = format!("-DK_{}", kernel.name);
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench/kernels.c");
+    let (define, source) = kernel_source(kernel);
     let source = source.to_str().unwrap();
     let output = format!("f-{tag}.s");
     args.extend_from_slice(&[&define, "-o", &output, source]);
@@ -337,8 +393,7 @@ fn ours_row(
     tag: &str,
 ) -> Result<Row, String> {
     let dir = work(kernel.name);
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench/kernels.c");
-    let define = format!("-DK_{}", kernel.name);
+    let (define, source) = kernel_source(kernel);
     // clang is only the C front end (msp430: int and pointers are 16 bits, as
     // for cc65); the optimizer then runs on our datalayout, so only i8 is a
     // legal integer and nothing widens to i16. `opt` stands in for the
@@ -433,12 +488,167 @@ fn ours_row(
 /// library routines it calls (counted).
 fn hand_row(kernel: &Kernel) -> Result<Row, String> {
     let dir = work(kernel.name);
-    let hand = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench/lz4.s")).unwrap();
-    let wrapper = ".export _lz4\n_lz4:\n  jsr _decompress_lz4\n  lda regsave\n  sec\n  sbc #<lzout\n  tay\n  lda regsave+1\n  sbc #>lzout\n  tax\n  tya\n  rts\n.import lzout\n";
-    std::fs::write(dir.join("f-h.s"), format!("{wrapper}{hand}")).unwrap();
+    let bench = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench");
+    let (wrapper, hand) = match &kernel.hand {
+        Some(hand) if hand.symbol == "-" => return Err("no hand: the bench cannot drive it".into()),
+        // the cc65 routine, with the glue that turns a runtime convention into a call, if it has one
+        Some(hand) => {
+            let read = |name: String| std::fs::read_to_string(bench.join("hand").join(name));
+            let deps: String = hand.deps.iter().map(|dep| read(format!("{dep}.s")).unwrap()).collect();
+            (read(format!("{}.glue.s", hand.file)).unwrap_or_default(), read(format!("{}.s", hand.file)).unwrap_or_default() + &deps)
+        }
+        None => (
+            ".export _lz4\n_lz4:\n  jsr _decompress_lz4\n  lda regsave\n  sec\n  sbc #<lzout\n  tay\n  lda regsave+1\n  sbc #>lzout\n  tax\n  tya\n  rts\n.import lzout\n".to_owned(),
+            std::fs::read_to_string(bench.join("lz4.s")).unwrap(),
+        ),
+    };
+    std::fs::write(dir.join("f-h.s"), without_own_imports(&format!("{wrapper}{hand}"))).unwrap();
     let mut row = measure(&dir, kernel, Abi::Cc65, "h", 0)?;
     row.body = code_bytes(&dir, "f-h.s")?;
     Ok(row)
+}
+
+/// The source with no `.import` of a symbol it exports: a glue file and the routine it calls, or a routine and the
+/// routine it depends on, are joined into one unit, where ca65 refuses an import of what the unit defines.
+fn without_own_imports(source: &str) -> String {
+    let names = |line: &str, directive: &str| -> Option<Vec<String>> {
+        let rest = line.trim().strip_prefix(directive).filter(|rest| rest.starts_with(char::is_whitespace))?;
+        Some(rest.split(';').next()?.split(',').map(|name| name.trim().to_owned()).filter(|name| !name.is_empty()).collect())
+    };
+    let exported: Vec<String> =
+        source.lines().flat_map(|line| names(line, ".export").or_else(|| names(line, ".exportzp")).unwrap_or_default()).collect();
+    source
+        .lines()
+        .filter_map(|line| {
+            let (directive, imported) = match (names(line, ".importzp"), names(line, ".import")) {
+                (Some(imported), _) => (".importzp", imported),
+                (None, Some(imported)) => (".import", imported),
+                _ => return Some(line.to_owned()),
+            };
+            let kept: Vec<String> = imported.into_iter().filter(|name| !exported.contains(name)).collect();
+            (!kept.is_empty()).then(|| format!("        {directive} {}", kept.join(", ")))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
+/// The hand-written corpus: every `tests/bench/hand/*.spec` (see that directory's README) as a kernel.
+fn hand_kernels() -> Vec<Kernel> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench/hand");
+    let mut specs: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "spec"))
+        .collect();
+    specs.sort();
+    let leak = |text: &str| -> &'static str { Box::leak(text.trim().to_owned().into_boxed_str()) };
+    let number = |text: &str| -> u16 {
+        let text = text.trim();
+        text.strip_prefix("0x").map_or_else(|| text.parse(), |hex| u16::from_str_radix(hex, 16)).unwrap()
+    };
+    specs
+        .iter()
+        .map(|path| {
+            let text = std::fs::read_to_string(path).unwrap();
+            let field = |key: &str| {
+                text.lines().find_map(|line| line.strip_prefix(key)?.strip_prefix(':')).map(|v| v.split('#').next().unwrap().trim().to_owned())
+            };
+            let args: Vec<Arg> = field("args")
+                .unwrap_or_default()
+                .replace("),", ") ")
+                .split_whitespace()
+                .map(|arg| {
+                    let (kind, rest) = arg.split_once('(').unwrap();
+                    let rest = rest.trim_end_matches(')');
+                    match kind {
+                        "B" => B(number(rest)),
+                        "W" => W(number(rest)),
+                        "P" => {
+                            let (symbol, offset) = rest.split_once(',').unwrap();
+                            P(leak(symbol), number(offset))
+                        }
+                        other => panic!("{}: argument {other}", path.display()),
+                    }
+                })
+                .collect();
+            let rel = field("rel").filter(|r| r != "-");
+            Kernel {
+                name: leak(&field("kernel").unwrap()),
+                args: Box::leak(args.into_boxed_slice()),
+                wide_result: field("wide").is_some_and(|w| w == "1"),
+                expect: number(&field("expect").unwrap()),
+                hand: Some(Hand {
+                    file: leak(path.file_stem().unwrap().to_str().unwrap()),
+                    symbol: leak(&field("hand").unwrap()),
+                    rel: rel.as_deref().map(leak),
+                    expect: field("hand_expect").map(|v| number(&v)),
+                    deps: Box::leak(
+                        field("deps")
+                            .unwrap_or_default()
+                            .split_whitespace()
+                            .map(leak)
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    ),
+                }),
+            }
+        })
+        .collect()
+}
+
+/// The hand corpus against cc65 -O, the hand code and ours, with the totals that say who wins.
+fn table4() {
+    let mut out = String::from("| kernel | cc65 -O | cc65 hand | ours | ours 65C02 |\n|---|---|---|---|---|\n");
+    let cell = |row: &Result<Row, String>| match row {
+        Ok(r) => format!("{} B, {} cy", r.bytes, r.cycles),
+        Err(why) if why.starts_with("no hand") => "-".to_owned(),
+        Err(why) => format!("n/a ({why})"),
+    };
+    let only = std::env::var("BENCH_ONLY").ok();
+    // (kernel, [bytes, cycles] of cc65, hand, ours)
+    let mut measured: Vec<(&str, [Option<(i64, i64)>; 3])> = Vec::new();
+    let kernels = hand_kernels();
+    for kernel in kernels.iter().filter(|k| only.as_deref().is_none_or(|o| o == k.name)) {
+        let rows =
+            [cc65_row(kernel, &["-O"], "c1"), hand_row(kernel), ours_row(kernel, "-O2", "o2"), ours_row(kernel, "-O2", "o2m")];
+        for row in rows.iter().filter(|row| matches!(row, Err(why) if !why.starts_with("no hand"))) {
+            eprintln!("{}: {}", kernel.name, row.as_ref().unwrap_err());
+        }
+        let pair = |row: &Result<Row, String>| row.as_ref().ok().map(|r| (r.bytes, r.cycles));
+        measured.push((kernel.name, [pair(&rows[0]), pair(&rows[1]), pair(&rows[2])]));
+        out.push_str(&format!("| {} | {} |\n", kernel.name, rows.iter().map(cell).collect::<Vec<_>>().join(" | ")));
+    }
+    // ours against cc65 -O and against the hand code: smaller/equal/larger and cycles, geometric means
+    for (label, other) in [("cc65 -O", 0usize), ("hand", 1)] {
+        let pairs: Vec<((i64, i64), (i64, i64))> = measured
+            .iter()
+            .filter_map(|(_, row)| Some((row[other]?, row[2]?)))
+            .collect();
+        let count = |f: &dyn Fn(&((i64, i64), (i64, i64))) -> std::cmp::Ordering, which: std::cmp::Ordering| {
+            pairs.iter().filter(|pair| f(pair) == which).count()
+        };
+        let bytes = |pair: &((i64, i64), (i64, i64))| pair.1.0.cmp(&pair.0.0);
+        let cycles = |pair: &((i64, i64), (i64, i64))| pair.1.1.cmp(&pair.0.1);
+        let geomean = |f: &dyn Fn(&((i64, i64), (i64, i64))) -> f64| {
+            (pairs.iter().map(|pair| f(pair).ln()).sum::<f64>() / pairs.len().max(1) as f64).exp()
+        };
+        let line = format!(
+            "ours against {label}, {} kernels: bytes smaller {} / equal {} / larger {} (geometric mean {:.3}x); cycles fewer {} / equal {} / more {} (geometric mean {:.3}x)",
+            pairs.len(),
+            count(&bytes, std::cmp::Ordering::Less),
+            count(&bytes, std::cmp::Ordering::Equal),
+            count(&bytes, std::cmp::Ordering::Greater),
+            geomean(&|pair| pair.1.0 as f64 / pair.0.0 as f64),
+            count(&cycles, std::cmp::Ordering::Less),
+            count(&cycles, std::cmp::Ordering::Equal),
+            count(&cycles, std::cmp::Ordering::Greater),
+            geomean(&|pair| pair.1.1.max(1) as f64 / pair.0.1.max(1) as f64),
+        );
+        out.push_str(&format!("\n{line}\n"));
+    }
+    println!("{out}");
+    std::fs::write(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bench4.md"), &out).unwrap();
 }
 
 fn table3() {
@@ -514,4 +724,11 @@ fn the_second_table() {
 #[ignore = "needs cc65, clang and sim65"]
 fn the_third_table() {
     table3();
+}
+
+/// The cc65 library's hand-written routines as C (`tests/bench/hand`).
+#[test]
+#[ignore = "needs cc65, clang and sim65"]
+fn the_hand_corpus() {
+    table4();
 }
