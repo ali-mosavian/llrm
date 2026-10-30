@@ -1526,25 +1526,13 @@ pub fn tail_calls_folded(procedure: Procedure) -> Procedure {
             .filter(|callee| !callee.far && callee.pops == 0 && callee.code.is_empty() && what.sources.is_empty())?;
         Some((Arc::clone(one), Callee { tail: true, ..callee.clone() }))
     };
-    let mut tails: IndexMap<i64, Callee> = procedure
+    let tails: IndexMap<i64, Callee> = procedure
         .body
         .blocks
         .iter()
         .filter(|block| block.at != procedure.body.entry)
         .filter_map(|block| sole_call(block).map(|(_, callee)| (block.at, callee)))
         .collect();
-    // DEVIATE TC1 (owner w10, 2026-10-30): the pin folds at every size
-    // (`BranchFolder::OptimizeBlock` asks none; its -Os `g` of three cases to
-    // two callees is `je f; je h; je f; ret`, 76 bytes). Here a `jcc rel32` is
-    // 4 bytes more than the `jcc rel8` it replaces and the block's `jmp` goes
-    // only when no other block enters it, so a callee reached from two blocks
-    // grows 3 bytes at -Os (b17 -Os: +2 on m64, +6 on m32): more than main's,
-    // which the -Os rule forbids. `LLRM_TC1_PIN=1` is the pin's form. Exit:
-    // -Os rows are priced against the pin's sizes, not main's, or branch
-    // relaxation makes the fold free; delete the guard.
-    if procedure.size && !llrm_support::env_flag!("LLRM_TC1_PIN") {
-        tails.retain(|at, _| procedure.body.blocks.iter().filter(|block| block.succ.contains(at)).count() <= 1);
-    }
     if tails.is_empty() {
         return procedure;
     }
