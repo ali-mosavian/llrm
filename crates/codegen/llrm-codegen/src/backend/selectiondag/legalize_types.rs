@@ -1595,7 +1595,8 @@ impl<'a> TypeLegalizer<'a> {
     /// `ExpandIntRes_MUL` through `expandMUL_LOHI`: the full product of the low
     /// halves, plus the two cross products in the high half. Two operands that
     /// are both zero-extended or both sign-extended (by their known bits) need
-    /// no cross products. The library call is not translated.
+    /// no cross products. No library call is made: the pin has none for the
+    /// types that come here, and `force_expand_multiply` is its fallback.
     fn expand_mul(
         &mut self,
         value: SDValue,
@@ -1636,17 +1637,57 @@ impl<'a> TypeLegalizer<'a> {
         } else if self.tli.is_operation_legal_or_custom(ISD::MulHU, half) {
             (self.dag.get_node(ISD::Mul, half, &[ll, rl]), self.dag.get_node(ISD::MulHU, half, &[ll, rl]))
         } else {
-            return Err(LegalizeError::Unsupported {
-                op: ISD::Mul,
-                ty: self.dag.value_type(value),
-                what: "expand multiply without a widening multiply",
-            });
+            return Ok(self.force_expand_multiply(ll, rl, lh, rh));
         };
         let cross_right = self.dag.get_node(ISD::Mul, half, &[ll, rh]);
         let cross_left = self.dag.get_node(ISD::Mul, half, &[lh, rl]);
         let hi = self.dag.get_node(ISD::Add, half, &[hi, cross_right]);
         let hi = self.dag.get_node(ISD::Add, half, &[hi, cross_left]);
         Ok((lo, hi))
+    }
+
+    /// `TargetLowering::forceExpandMultiply` (unsigned, with the high halves
+    /// `hi_lhs` and `hi_rhs` given): Hacker's Delight 8-2 on `half`-wide
+    /// values, for a half with no widening multiply. `ExpandIntRes_MUL` takes
+    /// it when the target has no library call for the type; x86-32 has none
+    /// for i128 (`__multi3` is 64-bit only), so a wide product of an i66
+    /// sum of products came to "expand multiply without a widening
+    /// multiply".
+    fn force_expand_multiply(
+        &mut self,
+        lhs: SDValue,
+        rhs: SDValue,
+        hi_lhs: SDValue,
+        hi_rhs: SDValue,
+    ) -> (SDValue, SDValue) {
+        let vt = self.dag.value_type(lhs);
+        let half_bits = vt.size_in_bits() / 2;
+        let mask = self.dag.get_constant(super::fold::mask(half_bits), vt);
+        let shift = self.dag.get_constant(u128::from(half_bits), EVT::I8);
+        let node = |this: &mut Self, op, a, b| this.dag.get_node(op, vt, &[a, b]);
+        let ll = node(self, ISD::And, lhs, mask);
+        let rl = node(self, ISD::And, rhs, mask);
+        let t = node(self, ISD::Mul, ll, rl);
+        let tl = node(self, ISD::And, t, mask);
+        let th = node(self, ISD::Srl, t, shift);
+        let lh = node(self, ISD::Srl, lhs, shift);
+        let rh = node(self, ISD::Srl, rhs, shift);
+        let lh_rl = node(self, ISD::Mul, lh, rl);
+        let u = node(self, ISD::Add, lh_rl, th);
+        let ul = node(self, ISD::And, u, mask);
+        let uh = node(self, ISD::Srl, u, shift);
+        let ll_rh = node(self, ISD::Mul, ll, rh);
+        let v = node(self, ISD::Add, ll_rh, ul);
+        let vh = node(self, ISD::Srl, v, shift);
+        let v_up = node(self, ISD::Shl, v, shift);
+        let lo = node(self, ISD::Add, tl, v_up);
+        let high_products = node(self, ISD::Mul, lh, rh);
+        let carries = node(self, ISD::Add, uh, vh);
+        let hi = node(self, ISD::Add, high_products, carries);
+        let cross_a = node(self, ISD::Mul, hi_rhs, lhs);
+        let cross_b = node(self, ISD::Mul, rhs, hi_lhs);
+        let crosses = node(self, ISD::Add, cross_a, cross_b);
+        (lo, node(self, ISD::Add, hi, crosses))
     }
 
     /// `expandFixedPointDiv` for the signed, non-saturating divide: the
