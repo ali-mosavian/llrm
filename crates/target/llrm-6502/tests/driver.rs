@@ -439,3 +439,52 @@ done:
     let table = bytes_at_o2(CRC16_SELECT_SHAPED);
     assert!(table > 500, "the select-shaped crc16 is {table} bytes: the bound cannot see the table");
 }
+
+/// Runs `main` on sim65: the equates, the compiled `text`, and a `_main` that
+/// sets the soft stack and returns what `function` leaves in A as the exit
+/// code.
+fn exit_code_of(
+    text: &str,
+    function: &str,
+) -> i32 {
+    let dir = std::env::temp_dir().join(format!("llrm6502-run-{}-{function}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let main = format!(
+        ".export _main\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  jsr {function}\n  ldx #0\n  rts\n"
+    );
+    std::fs::write(dir.join("t.s"), format!("{text}\n{main}")).unwrap();
+    common::pipeline::tool(&dir, "cl65", &["-t", "sim6502", "-o", "t.bin", "t.s"])
+        .unwrap_or_else(|e| panic!("{e}\n{text}"));
+    let code = std::process::Command::new("sim65").arg(dir.join("t.bin")).status().unwrap().code().unwrap();
+    std::fs::remove_dir_all(dir).ok();
+    code
+}
+
+/// A global holding the address of another (`static const char *p = buf + 3`,
+/// a table of pointers) was refused: "a global initializer that is not an
+/// integer, array or struct". function_table, static_pointers, tail_calls and
+/// ten more programs of tests/run/c did not compile. The words are relocated by
+/// the assembler and run: `tab[0][1]` is 2 and `*tab[1]`, the pointer `p` read
+/// through its address in the table, is `buf[3]` = 4.
+#[test]
+fn a_global_initialized_with_the_address_of_another_runs() {
+    let ir = module(
+        r#"@buf = internal global [5 x i8] c"\01\02\03\04\05"
+@p = internal global ptr getelementptr (i8, ptr @buf, i16 3)
+@tab = internal global [2 x ptr] [ptr @buf, ptr @p]
+define i8 @both() {
+  %q0 = load ptr, ptr @tab
+  %a.ptr = getelementptr i8, ptr %q0, i16 1
+  %a = load i8, ptr %a.ptr
+  %slot = getelementptr ptr, ptr @tab, i16 1
+  %q1 = load ptr, ptr %slot
+  %r = load ptr, ptr %q1
+  %b = load i8, ptr %r
+  %hi = shl i8 %a, 4
+  %sum = or i8 %hi, %b
+  ret i8 %sum
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert_eq!(exit_code_of(&text, "both"), 0x24, "{text}");
+}
