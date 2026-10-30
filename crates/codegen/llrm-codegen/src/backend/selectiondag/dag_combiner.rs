@@ -68,6 +68,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitFREEZE`'s `freeze(op(x, ...))` is `op(freeze(x), ...)`, so a
+    /// frozen compare tree is a compare tree of frozen leaves. DEVIATE: off by
+    /// default, as above; and only for an integer `setcc` or bitwise/add
+    /// node, with no `ReplaceAllUsesOfValueWith` of the frozen operand.
+    /// Exit: x86 judged.
+    fn push_freeze_through_operands(&self) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         _op: ISD,
@@ -1449,7 +1458,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let x = self.dag.operand(node, 0);
         if !self.guaranteed_not_undef_or_poison(x, 0) {
-            return None;
+            return self.push_freeze_through(x);
         }
         // The users now read `x` directly: their users may fold with it too
         // (`not (or (cmp), freeze (cmp))` was visited with the freeze there).
@@ -1458,6 +1467,53 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             self.add_to_worklist_with_users(user);
         }
         Some(x)
+    }
+
+    /// `freeze(op(x, ...))` to `op(freeze(x), ...)`: the operation cannot make
+    /// undef or poison itself (flags ignored), has one use, and has at most one
+    /// operand that may be undef or poison (a `setcc` may have two).
+    fn push_freeze_through(
+        &mut self,
+        op: SDValue,
+    ) -> Option<SDValue> {
+        let opcode = self.dag.opcode(op);
+        let is_setcc = opcode == ISD::SetCC;
+        let integer_setcc = is_setcc && self.dag.value_type(self.dag.operand(op, 0)).is_integer();
+        if !self.hooks.push_freeze_through_operands()
+            || !(integer_setcc || matches!(opcode, ISD::And | ISD::Or | ISD::Xor | ISD::Add | ISD::Sub))
+            || !self.dag.has_one_use(op.node)
+        {
+            return None;
+        }
+        let mut maybe_poison: Vec<usize> = Vec::new();
+        // A `setcc`'s third operand is its condition code, not a value.
+        let values = if is_setcc { 2 } else { self.dag.node(op).ops.len() };
+        for at in 0..values {
+            let operand = self.dag.operand(op, at);
+            if self.guaranteed_not_undef_or_poison(operand, 0) {
+                continue;
+            }
+            let seen = maybe_poison.iter().any(|&other| self.dag.operand(op, other) == operand);
+            if !maybe_poison.is_empty() && !seen && !is_setcc {
+                return None;
+            }
+            if !seen {
+                maybe_poison.push(at);
+            }
+        }
+        let mut ops: Vec<SDValue> = (0..self.dag.node(op).ops.len()).map(|at| self.dag.operand(op, at)).collect();
+        for at in maybe_poison {
+            if self.dag.is_undef(ops[at]) {
+                continue;
+            }
+            let frozen = self.dag.get_node(ISD::Freeze, self.dag.value_type(ops[at]), &[ops[at]]);
+            for other in ops.iter_mut().filter(|o| **o == self.dag.operand(op, at)) {
+                *other = frozen;
+            }
+        }
+        let vt = self.dag.value_type(op);
+        // The node is rebuilt without its poison-generating flags.
+        Some(self.dag.get_node(opcode, vt, &ops))
     }
 
     /// `isGuaranteedNotToBeUndefOrPoison`, for the nodes the combiner builds:

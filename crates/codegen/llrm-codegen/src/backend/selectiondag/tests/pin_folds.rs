@@ -15,6 +15,9 @@ impl CombineHooks for Asks {
     fn fold_sext_in_reg_of_load(&self) -> bool {
         true
     }
+    fn push_freeze_through_operands(&self) -> bool {
+        true
+    }
 }
 
 fn xor_of_masked(dag: &mut SelectionDAG) {
@@ -75,4 +78,33 @@ fn a_target_that_does_not_ask_keeps_the_sign_extension_in_the_register() {
     sext_in_reg_of_extload(&mut dag);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.get_root()), ISD::SignExtendInReg);
+}
+
+fn frozen_compare(dag: &mut SelectionDAG) {
+    let a = dag.get_register(EVT::I32, 5);
+    // A shift by a variable amount may be poison, so the combiner cannot drop the freeze.
+    let amount = dag.get_register(EVT::I32, 6);
+    let loaded = dag.get_node(ISD::Shl, EVT::I32, &[a, amount]);
+    let setcc = dag.get_setcc(EVT::I32, a, loaded, CondCode::SetLt);
+    let root = dag.get_node(ISD::Freeze, EVT::I32, &[setcc]);
+    dag.set_root(root);
+}
+
+/// `freeze (setcc a, x)` stayed a freeze of a compare; the pin freezes the
+/// operand it cannot prove defined, so the compare is a bare `setcc` again.
+#[test]
+fn a_frozen_compare_is_a_compare_of_a_frozen_operand() {
+    let mut dag = dag();
+    frozen_compare(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::SetCC);
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_frozen_compare() {
+    let mut dag = dag();
+    frozen_compare(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Freeze);
 }
