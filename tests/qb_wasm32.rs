@@ -45,14 +45,14 @@ fn built(
     dir
 }
 
-/// The text screen the program left, and its exit code.
-fn run(
+/// What the harness printed and its exit status, standard error included.
+fn run_raw(
     dir: &Path,
     name: &str,
     flags: &[&str],
-) -> (String, Option<i32>) {
+) -> std::process::Output {
     // A program that spins without asking the host anything is never stopped by the harness's own limit.
-    let ran = Command::new("timeout")
+    Command::new("timeout")
         .args(["-k", "5", "60", "node"])
         .arg(root().join("runtime/wasm/headless.mjs"))
         .arg(dir.join(format!("{name}.wasm")))
@@ -60,7 +60,16 @@ fn run(
         .arg(dir.join("frames"))
         .args(flags)
         .output()
-        .expect("node runs");
+        .expect("node runs")
+}
+
+/// The text screen the program left, and its exit code.
+fn run(
+    dir: &Path,
+    name: &str,
+    flags: &[&str],
+) -> (String, Option<i32>) {
+    let ran = run_raw(dir, name, flags);
     (String::from_utf8_lossy(&ran.stdout).into_owned(), ran.status.code())
 }
 
@@ -114,5 +123,18 @@ fn a_frame_and_a_key_leave_the_programs_locals_alone() {
     let (text, code) = run(&dir, "locals", &["--dump-at", "300=mid", "--keys", "x\\r@600"]);
     assert!(text.trim_end().ends_with("alpha!aal"), "{text:?}");
     assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// ON ERROR cannot land on wasm32 (no unwinding): an error that reaches a handler stops the program with a named failure,
+/// not by running on past it or by a bare trap. Gorillas' SCREEN 9 and PALETTE probes raise nothing, so it never lands.
+#[test]
+fn an_error_that_reaches_a_handler_stops_with_a_named_failure() {
+    let dir = built("onerror", "ON ERROR GOTO Handler\nERROR 5\nPRINT \"went on\"\nEND\nHandler:\nPRINT \"handled\"\nEND\n");
+    let ran = run_raw(&dir, "onerror", &[]);
+    let (out, err) = (String::from_utf8_lossy(&ran.stdout), String::from_utf8_lossy(&ran.stderr));
+    assert!(!out.contains("went on") && !out.contains("handled"), "{out:?}");
+    assert!(err.contains("ON ERROR landed: longjmp is not supported on wasm32"), "{err}");
+    assert_ne!(ran.status.code(), Some(0));
     std::fs::remove_dir_all(dir).ok();
 }

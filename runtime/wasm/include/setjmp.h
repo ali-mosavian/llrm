@@ -1,6 +1,6 @@
 /* ON ERROR's landing on wasm32: setjmp always returns 0 and longjmp stops the program with a named failure of the
-   host, so a program with a handler that would land in it ends there instead of continuing. Gorillas raises none
-   (tests/wasm_gorillas.rs). */
+   host, so a program with a handler that would land in it ends there instead of continuing. Gorillas' SCREEN 9 and PALETTE probes
+   raise none, so it never lands (tests/qb_wasm32.rs). */
 #ifndef LLRM_WASM_SETJMP_H
 #define LLRM_WASM_SETJMP_H
 typedef int jmp_buf[1];
