@@ -853,7 +853,8 @@ impl Builder<'_> {
                     // tail costs the bytes the dwords save, and a far one
                     // cannot be named) and not for size: `xor eax, eax` is a
                     // byte more than `xor al, al`. A size of whole words at
-                    // word alignment is words (the pin calls `memset` there).
+                    // word alignment is words (DEVIATE SD441: the pin calls
+                    // `memset` there, as for a size not known at compile time).
                     (None, Some(bytes))
                         if strings_exist
                             && !opt_size
@@ -1166,9 +1167,9 @@ impl Builder<'_> {
     /// the size is known to be a whole multiple of (`n << 1` bytes of zero are
     /// `n` words), as `rep_stos` takes it from a constant size.
     ///
-    /// DEVIATE: the pin calls `memset` for a size not known at compile time;
-    /// m16 has no libc `memset`, so this was already `rep stosb` here and only
-    /// the unit is new. Every m16 profile has 32-bit operands (the lowest is
+    /// DEVIATE SD441: the pin calls `memset` for a size not known at compile
+    /// time; m16 has no libc `memset`, so this was already `rep stosb` here and
+    /// only the unit is new. Every m16 profile has 32-bit operands (the lowest is
     /// the 386; llrm-cc rejects `-march=i286`), so a dword unit needs no
     /// gate. Like every string operation in this file it relies on DF being
     /// clear on entry (the `cld` convention). Exit: a runtime `memset` on
