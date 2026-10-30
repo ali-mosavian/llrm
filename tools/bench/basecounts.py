@@ -19,6 +19,7 @@ import shutil
 import hashlib
 import tomllib
 import subprocess
+import threading
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -173,6 +174,30 @@ def judge(measured: dict, base: dict, waived: list[dict], same: set[str] | None 
     return worse, better, stale
 
 
+def waived_rows(measured: dict, base: dict, waived: list[dict], same: set[str] | None = None) -> list[tuple[str, str, str, int, int]]:
+    """(file, label, counter, base's, now) of each row a waiver excused: worse than the base and exactly at the waiver's count."""
+    rows = []
+    for key, got in sorted(measured.items()):
+        was = base.get(key)
+        if key[1] not in OURS or was is None or (same is not None and key[0] not in same) or any(one in row for row in (got, was) for one in ("error", "skip", "known", "xpass")):
+            continue
+        for counter in COUNTERS:
+            if counter in got and counter in was and got[counter] > was[counter]:
+                rows += [(w["file"], label(key), counter, was[counter], got[counter]) for w in waived if w["label"] == label(key) and w["counter"] == counter and w["to"] == got[counter]]
+    return rows
+
+
+def waived_lines(rows: list[tuple], waived: list[dict], stale: list[str]) -> tuple[list[str], list[str]]:
+    """(summary lines, problems): how many rows ran under which waiver file, each at its limit. Waivers on file that excused nothing and went
+    stale nowhere mean the instrument is not reading them: a judge that printed 0 problems with every waiver unread looks the same as a clean run."""
+    per_file: dict[str, int] = {}
+    for one in rows:
+        per_file[one[0]] = per_file.get(one[0], 0) + 1
+    lines = [f"WAIVED {len(rows)} rows of {len(waived)} waivers (limit = measured): " + (", ".join(f"{f} {n}" for f, n in sorted(per_file.items())) or "none")]
+    problems = ["WAIVERS: none was applied and none is stale: the waivers are not being read"] if waived and not rows and not stale else []
+    return lines, problems
+
+
 def coverage(measured: dict, base: dict, same: set[str]) -> tuple[int, int, list[str], list[str]]:
     """(rows judged, programs judged, programs left out as edited, problems): what `judge` looked at. A program the base and the head share
     that yields no judged row is a problem, and so is a run that judged none: 424 measurements once passed with `same` empty, 218 waivers
@@ -206,6 +231,25 @@ def stale_summary(stale: list[str]) -> list[str]:
     return [f"BASE-STALE {len(stale)} waivers in {len(files)} files, delete them: {' '.join(files)}"] if stale else []
 
 
+def run_streaming(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """`subprocess.run(command, capture_output=True, text=True)` that passes stderr on as it is printed: the base's stage lines were captured,
+    and a 25 min leg showed the gate's watchdog nothing but `base counts`."""
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs) as proc:
+        said: list[str] = []
+
+        def pass_on() -> None:
+            for line in proc.stderr:
+                said.append(line)
+                print(line, end="", file=sys.stderr, flush=True)
+
+        reader = threading.Thread(target=pass_on, daemon=True)
+        reader.start()
+        stdout = proc.stdout.read()
+        proc.wait()
+        reader.join()
+    return subprocess.CompletedProcess(command, proc.returncode, stdout, "".join(said))
+
+
 def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: bool = False, only: list[str] | None = None, tree: Path | None = None) -> tuple[dict, dict[str, str]]:
     """(bench.py's rows, programs()) of the tree `directory` (a release directory of measure.py's build tree, `<build>/target/release`) was
     built from, by that tree's own bench.py with its compiler: the harness and the programs as the base had them (the head's harness may
@@ -213,7 +257,7 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: b
     tree = tree or directory.parents[1] / "tree"
     out = work / "base.json"
     work.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "LLRM_BIN": str(directory)}
+    env = {**os.environ, "LLRM_BIN": str(directory), "PYTHONPATH": os.pathsep.join([str(HERE / "forkstart"), *filter(None, [os.environ.get("PYTHONPATH")])])}
     env.pop("LLRM_BENCH_BASE", None)
     command = [sys.executable, str(tree / "tools/bench/bench.py"), "--opt", *opts, "--json", str(out), "--work", str(work / "run")]
     if timed:
@@ -221,7 +265,7 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: b
     command += only or []
     if (tree / "tools/bench/bench.py").is_file() and "--no-judge" in (tree / "tools/bench/bench.py").read_text():
         command.append("--no-judge")
-    done = subprocess.run(command, cwd=tree, env=env, capture_output=True, text=True)
+    done = run_streaming(command, cwd=tree, env=env)
     if not out.is_file():
         raise SystemExit("the base did not measure: " + " | ".join(line.strip() for line in (done.stdout + done.stderr).splitlines()[-4:] if line.strip()))
     return rows_of(json.loads(out.read_text())), programs(tree)
