@@ -1,0 +1,17 @@
+reason = "TEMPORARY trade-off (owner w12; ruling pending). loopsimplify's kept loops now match the CFG, so a header with several backedges is grouped into the single-latch form LLVM makes; downstream decisions of one large nib function then give 34 more code bytes at -Os. Removal: the cause is found in rotate/regalloc/layout and the rows are back at their tip count, or within 3 days w12 reverts the fix; no row may pass its measured count."
+exception = true
+
+# tip = c34f7b9e52 (= origin/main's tree); main = 854bb7efc4 (before the parity merge). Both rows are better than main.
+[[row]]
+label = "jpeg_fixed nib -Os"
+counter = "code_bytes"
+tip = 5304
+main = 5912
+to = 5338
+
+[[row]]
+label = "jpeg_single nib -Os"
+counter = "code_bytes"
+tip = 5172
+main = 5759
+to = 5206

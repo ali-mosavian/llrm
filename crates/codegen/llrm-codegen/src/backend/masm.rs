@@ -2266,6 +2266,15 @@ fn below_top(
 /// `stack_addressed`, but tuned for size only where it is no longer: `[esp+d]`
 /// is a byte longer than `[ebp+d]`, and a displacement past 127 three more,
 /// which a large frame's cells can cost more than the entry and return save.
+///
+/// DEVIATE FF1 (owner w10, 2026-10-30): the pin's `hasFP` alone decides the
+/// frame register and its omission is free of any size comparison. Here a
+/// size-tuned (-Os) function whose framed body is shorter keeps the register,
+/// for two more instructions a call (fpbench bq32 -Os +3 in all). Forcing the
+/// pin's rule costs matmul bq32 -Os 566 -> 659 bytes, fpbench 767 -> 907,
+/// jpeg_fixed 5749 -> 5874. Exit: the frame lowering prices the two forms in
+/// clocks as well as bytes (or `-Os` frames are laid out for disp8 reach from
+/// the stack pointer), and this comparison is deleted.
 fn frame_omitted(
     procedure: &Procedure,
     number: usize,

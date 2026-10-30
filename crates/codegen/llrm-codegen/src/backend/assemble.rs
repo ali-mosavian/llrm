@@ -759,7 +759,7 @@ fn machined_once(
     // An over-aligned local lies on its alignment below the aligned top: a
     // layout that moves objects would break it.
     let ordered = if far > 0 && first.body.over_aligned.is_empty() {
-        crate::backend::relayout::ordered(&first, &frame, target.basic).map(|(ordered, _)| ordered)
+        crate::backend::relayout::ordered(&first, &frame, first_stage.registers.free).map(|(ordered, _)| ordered)
     } else {
         None
     };
