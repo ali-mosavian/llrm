@@ -80,6 +80,21 @@ fn an_odd_width_integer_converts_to_and_from_a_float() {
     assert_eq!(dag.opcode(dag.operand(wide, 0)), ISD::FpToSInt);
 }
 
+/// An `lrint` to a narrow integer had no promotion ("promote result");
+/// `PromoteIntRes_XRINT` rounds to the wider type.
+#[test]
+fn a_narrow_lrint_rounds_to_the_promoted_type() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = super::dag();
+    let f = dag.get_register(EVT::Simple(MVT::F64), 9);
+    let rint = dag.get_node(ISD::LRint, EVT::Int(12), &[f]);
+    let byte = dag.get_node(ISD::Truncate, EVT::I8, &[rint]);
+    dag.set_root(byte);
+    assert_eq!(legalize(&mut dag, &tli), Ok(true));
+    let wide = dag.operand(dag.get_root(), 0);
+    assert_eq!((dag.opcode(wide), dag.value_type(wide)), (ISD::LRint, EVT::I16));
+}
+
 /// `trunc(load i12 + load i12)` to a byte: before legalization the root
 /// reads an `i12`, which no register holds. After it the add is an `i16`
 /// add of extending loads, and the root is rewritten to read it.
@@ -279,5 +294,50 @@ fn a_promotion_shifts_by_the_targets_shift_amount_type() {
     assert!(!shifts.is_empty(), "the operands are sign-extended in the register");
     for shift in shifts {
         assert_eq!(dag.value_type(dag.operand(shift, 1)), EVT::I64, "the shift amount of {:?}", dag.opcode(shift));
+    }
+}
+
+/// A divide in a promoted type was refused ("promote result"; wasm's `sdiv
+/// i8`). `PromoteIntRes_SDIV/UDIV` extends both operands in the register, sign
+/// for the signed forms and zero for the unsigned.
+#[test]
+fn a_promoted_divide_extends_both_operands_in_the_register() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    for (op, extend) in [
+        (ISD::SDiv, ISD::SignExtendInReg),
+        (ISD::SRem, ISD::SignExtendInReg),
+        (ISD::UDiv, ISD::And),
+        (ISD::URem, ISD::And),
+    ] {
+        let mut dag = super::dag();
+        let (a, b) = (load(&mut dag, EVT::Int(12), 1), load(&mut dag, EVT::Int(12), 2));
+        let quotient = dag.get_node(op, EVT::Int(12), &[a, b]);
+        let byte = dag.get_node(ISD::Truncate, EVT::I8, &[quotient]);
+        dag.set_root(byte);
+        assert_eq!(legalize(&mut dag, &tli), Ok(true), "{op:?}");
+        let wide = dag.operand(dag.get_root(), 0);
+        assert_eq!((dag.opcode(wide), dag.value_type(wide)), (op, EVT::I16), "{op:?}");
+        for at in 0..2 {
+            assert_eq!(dag.opcode(dag.operand(wide, at)), extend, "{op:?} operand {at}");
+        }
+    }
+}
+
+/// A shift whose amount is a byte on a target with no byte register was
+/// refused ("promote operand"; wasm's `shl i32 x, i8`). `PromoteIntOp_Shift`
+/// zero extends the amount in the register.
+#[test]
+fn a_promoted_shift_amount_is_zero_extended_in_the_register() {
+    let info = llrm_sdag::lowering::TargetLoweringInfo::new(&[MVT::I32], false).with_shift_amount_type(MVT::I32);
+    let tli = TargetLowering::empty(info);
+    for op in [ISD::Shl, ISD::Srl, ISD::Sra] {
+        let mut dag = dag();
+        let (value, amount) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I8, 2));
+        let shifted = dag.get_node(op, EVT::I32, &[value, amount]);
+        dag.set_root(shifted);
+        assert_eq!(legalize(&mut dag, &tli), Ok(true), "{op:?}");
+        let shift = dag.get_root();
+        let by = dag.operand(shift, 1);
+        assert_eq!((dag.opcode(by), dag.value_type(by)), (ISD::And, EVT::I32), "{op:?}");
     }
 }

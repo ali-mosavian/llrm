@@ -348,6 +348,11 @@ pub trait Tti {
         false
     }
 
+    /// The same bound for a caller optimized for speed (its tuning table).
+    fn speed_inline_by_code_size(&self) -> bool {
+        false
+    }
+
     /// How many percent of its `CodeSize` units a call and the pushes of its
     /// arguments take in code, where they are bigger than the average
     /// instruction (X86: a far call is 5 bytes and a push 1 to 4, against 2 to
@@ -408,6 +413,15 @@ pub trait Tti {
     /// The target's `DefaultThreshold` for the inliner (its tuning table);
     /// none: the pass's own.
     fn inline_threshold_override(&self) -> Option<i64> {
+        None
+    }
+
+    /// DEVIATE REC-1: the bounds of the recursion the target takes by default
+    /// when optimizing for speed: (depth of a function's copies of itself,
+    /// the largest recursive body in `gcc_insns` that is copied); none: the
+    /// pin's inliner, which copies no recursive callee (`-finline-recursive`
+    /// asks for gcc's).
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
         None
     }
 

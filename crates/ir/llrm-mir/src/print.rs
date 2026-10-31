@@ -240,6 +240,12 @@ pub fn fingerprint(function: &Function) -> u128 {
                         digest.write_u8(2);
                         operand(&mut digest, at);
                     }
+                    DebugWhat::Args(list) => {
+                        digest.write_u8(6);
+                        for &one in function.debug_args(list) {
+                            operand(&mut digest, one);
+                        }
+                    }
                     DebugWhat::Piece { value, offset, bytes } => {
                         digest.write_u8(3);
                         operand(&mut digest, value);
@@ -247,6 +253,15 @@ pub fn fingerprint(function: &Function) -> u128 {
                     }
                     DebugWhat::GonePiece { offset, bytes } => (4u8, offset, bytes).hash(&mut digest),
                     DebugWhat::Gone => digest.write_u8(5),
+                    DebugWhat::Assign { value, address, id, address_expression } => {
+                        digest.write_u8(7);
+                        value.is_some().hash(&mut digest);
+                        address.is_some().hash(&mut digest);
+                        for one in value.into_iter().chain(address) {
+                            operand(&mut digest, one);
+                        }
+                        (id, address_expression).hash(&mut digest);
+                    }
                 }
             }
             let instruction = function.instruction(inst);
@@ -603,6 +618,17 @@ impl Printer<'_> {
                             self.typed(function, slots, at),
                             record.variable.0
                         ),
+                        DebugWhat::Args(list) => writeln!(
+                            out,
+                            "  #dbg_value(!DIArgList({}), !{}{extra})",
+                            function
+                                .debug_args(list)
+                                .iter()
+                                .map(|&one| self.typed(function, slots, one))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            record.variable.0
+                        ),
                         DebugWhat::Piece { value, offset, bytes } => writeln!(
                             out,
                             "  #dbg_piece({}, !{}, {offset}, {bytes})",
@@ -613,6 +639,17 @@ impl Printer<'_> {
                             writeln!(out, "  #dbg_gonepiece(!{}, {offset}, {bytes})", record.variable.0)
                         }
                         DebugWhat::Gone => writeln!(out, "  #dbg_gone(!{})", record.variable.0),
+                        DebugWhat::Assign { value, address, id, address_expression } => writeln!(
+                            out,
+                            "  #dbg_assign({}, !{}, !{}, !{}, {}, !{}, !{})",
+                            value.map_or_else(|| "i1 poison".to_owned(), |one| self.typed(function, slots, one)),
+                            record.variable.0,
+                            record.expression.map_or(0, |one| one.0),
+                            id.0,
+                            address.map_or_else(|| "ptr poison".to_owned(), |one| self.typed(function, slots, one)),
+                            address_expression.0,
+                            record.location.map_or(0, |one| one.0)
+                        ),
                     };
                 }
                 out.push_str("  ");

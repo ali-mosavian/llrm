@@ -170,6 +170,10 @@ pub struct DivPrices {
     pub multiply_long: i64,
     pub divide: i64,
     pub divide_long: i64,
+    /// Percent of the divide's price the multiply-high sequence must exceed it
+    /// by: below the spread of the sheet's own prices the pin's sequence
+    /// stays.
+    pub margin: i64,
 }
 
 /// The target facts `getNode` asks (`TLI->` in the pin), passed in rather

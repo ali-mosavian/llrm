@@ -1,10 +1,11 @@
 //! What every x86 target shares. Each target's `x86.instr` holds only the forms
 //! it adds to `instructions::FAMILY`.
 
-#[cfg(test)]
-mod codemetrics_tests;
 /// `x86.instr`'s reader. Dependency-free but `llrm-lir`, so a build script can
 /// include it with `#[path]`.
+pub mod callsites;
+#[cfg(test)]
+mod codemetrics_tests;
 pub mod effects;
 #[cfg(test)]
 mod instructioncost_tests;

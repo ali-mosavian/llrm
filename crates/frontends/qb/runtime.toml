@@ -1144,6 +1144,7 @@ like = "qb45"
 evidence = "rt/strfcn.asm B$FLEN: the length word of the descriptor."
 parameters = ["string"]
 result = "len($0)"
+inline = "always"
 
 [semantics."B$FASC"]
 evidence = "rt/strfcn.asm B$FASC: a null string is JZ ERRFC -> B$ERR_FC (error 5); otherwise the first byte, and B$STDALCTMP frees the argument if it is a temp."

@@ -327,14 +327,22 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let refused = LegalizeError::Unsupported { op, ty: vt, what: "convert node to libcall" };
-        let signed = match op {
-            ISD::SDiv | ISD::SRem => true,
-            ISD::UDiv | ISD::URem | ISD::Mul => false,
+        let (signed, arity) = match op {
+            ISD::SDiv | ISD::SRem => (true, 2),
+            ISD::UDiv | ISD::URem | ISD::Mul => (false, 2),
+            // `ExpandFPLibCall`: every operand, none signed.
+            ISD::FRem => (false, 2),
+            ISD::FSin | ISD::FCos | ISD::FAtan | ISD::FLog | ISD::FLog2 | ISD::FExp | ISD::FExp2 | ISD::LRint => {
+                (false, 1)
+            }
             _ => return Err(refused),
         };
         let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
-        let args = [self.dag.operand(node, 0), self.dag.operand(node, 1)];
-        let Some(result) = self.hooks.make_lib_call(self.dag, name, &args, vt, signed) else { return Err(refused) };
+        let args: Vec<SDValue> = (0..arity).map(|at| self.dag.operand(node, at)).collect();
+        // `vt` is the type the action is keyed by: `LRINT` of a float returns
+        // an integer.
+        let ret = self.dag.value_type(node);
+        let Some(result) = self.hooks.make_lib_call(self.dag, name, &args, ret, signed) else { return Err(refused) };
         self.replace_node(node, result);
         Ok(())
     }

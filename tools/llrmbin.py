@@ -30,6 +30,10 @@ def cc_environment() -> dict[str, str]:
     """The variables llrm-cc needs, from the caller's, with the usual default for the Open Watcom tree."""
     env = {name: os.environ[name] for name in CC_ENV if name in os.environ}
     env.setdefault("LLRM_OW", str(Path.home() / "scratch/ow-src"))
+    pin = REPO / "toolchain/clang/pin"
+    lines = pin.read_text().splitlines() if pin.exists() else []
+    if len(lines) > 1 and "LLRM_CLANG_M16" not in env and (m16 := Path.home() / "scratch/clang-by-sha" / lines[1].split()[0] / "bin/clang").exists():
+        env["LLRM_CLANG_M16"] = str(m16)
     return env
 
 
@@ -204,7 +208,7 @@ OBJECT_BYTES = 100
 
 @contextlib.contextmanager
 def with_object(command: list[str]):
-    """`command` with the `OBJECT` placeholder made a path to write the object to. llrm-c encodes only for an `.o` or `.obj` output; `-o /dev/null` gets
+    """`command` with the `OBJECT` placeholder made a path to write the object to. llrm-cc encodes only for an `.o` or `.obj` output; `-o /dev/null` gets
     the assembly text, so a cost measured there leaves out the encoder and the object write (emit: 4 M of 22 M Ir on d_faces, 2026-10-23). The path is
     OBJECT_BYTES long whatever the directory: a longer argv moved an instruction count (see `pinned`)."""
     if OBJECT not in command:

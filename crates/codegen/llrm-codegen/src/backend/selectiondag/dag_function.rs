@@ -737,6 +737,7 @@ fn div_prices(
         multiply_long: costs.multiply_long,
         divide: costs.divide,
         divide_long: costs.divide_long,
+        margin: costs.divide_margin,
     })
 }
 
@@ -1083,6 +1084,25 @@ fn selected_in(
                 let view = regs.view(regs.root(*register), width * 8).unwrap_or(*register);
                 arrival.defines.push(value);
                 arrival.delivers.push((Held { value, width }, view));
+            }
+            // A sibling call through an argument that arrives in a register
+            // the epilogue leaves alone jumps through that register, as the
+            // pin's does (`jmp *rdi`), not through a copy of it.
+            let arrives: HashMap<u32, llrm_lir::registers::RegId> =
+                arrival.delivers.iter().map(|(held, view)| (held.value, *view)).collect();
+            for block in &mut done.blocks {
+                for insn in &mut block.insns {
+                    let jump =
+                        insn.what.as_ref().is_some_and(|what| what.indirect && what.name.as_deref() == Some("jmp"));
+                    let Some(&(callee, _)) = insn.requires.last().filter(|_| jump) else { continue };
+                    let Some(&view) = arrives.get(&callee.value) else { continue };
+                    let others = &insn.requires[..insn.requires.len() - 1];
+                    if caller_saved.contains(&regs.root(view))
+                        && others.iter().all(|(_, taken)| regs.root(*taken) != regs.root(view))
+                    {
+                        std::sync::Arc::make_mut(insn).requires.last_mut().expect("the callee").1 = view;
+                    }
+                }
             }
             done.blocks[0].insns.insert(0, std::sync::Arc::new(arrival));
         }

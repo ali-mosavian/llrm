@@ -161,3 +161,47 @@ fn an_unordered_float_code_the_target_expands_is_inverted_swapped_or_split() {
     // `ueq` has no inverse or swap the target takes: `eq` or unordered.
     assert_eq!(compare(CondCode::SetUEq), (ISD::Or, vec![CondCode::SetEq, CondCode::SetUo]));
 }
+
+/// `frem`, `fsin` and `lrint` marked `LibCall` were refused ("convert node to
+/// libcall"): only the two-operand integer routines were translated. The call
+/// takes every operand of the node, and `lrint` of a double returns an integer.
+#[test]
+fn a_float_routine_is_a_libcall_with_all_its_operands() {
+    #[derive(Default)]
+    struct Calls(Vec<(&'static str, usize, EVT)>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push((name, args.len(), ret));
+            Some(dag.get_register(ret, 40 + self.0.len() as u32))
+        }
+    }
+    let f64 = EVT::Simple(MVT::F64);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for (op, name) in [(ISD::FRem, "fmod"), (ISD::FSin, "sin"), (ISD::LRint, "lrint")] {
+        tli.set_operation_action(op, MVT::F64, Action::LibCall);
+        tli.set_libcall_name(op, MVT::F64, name);
+    }
+    let mut dag = dag();
+    let (a, b) = (dag.get_register(f64, 1), dag.get_register(f64, 2));
+    let rem = dag.get_node(ISD::FRem, f64, &[a, b]);
+    let sin = dag.get_node(ISD::FSin, f64, &[rem]);
+    let rint = dag.get_node(ISD::LRint, EVT::I32, &[sin]);
+    dag.set_root(rint);
+    let mut calls = Calls::default();
+    DagLegalizer::new(&mut dag, &tli, &mut calls).run().unwrap();
+    assert_eq!(calls.0, vec![("lrint", 1, EVT::I32), ("sin", 1, f64), ("fmod", 2, f64)]);
+}

@@ -8,6 +8,10 @@ use super::fixup;
 pub struct X86Omf;
 
 impl OmfTargetWriter for X86Omf {
+    fn backend(&self) -> &dyn llrm_object::assembler::AsmBackend {
+        &super::backend::FIELDS
+    }
+
     fn kind_info(
         &self,
         kind: FixupKind,
@@ -25,7 +29,7 @@ impl OmfTargetWriter for X86Omf {
     fn debug_target(
         &self,
         bits: u8,
-    ) -> llrm_object::debug::DebugTarget {
+    ) -> llrm_debug::DebugTarget {
         fixup::debug_target(bits)
     }
 }
@@ -60,7 +64,6 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             frames: Vec::new(),
-            debug: None,
         }
     }
 
@@ -69,7 +72,7 @@ mod tests {
     /// fixup) is refused.
     #[test]
     fn a_call_writes_and_a_got_field_is_refused() {
-        assert!(llrm_omf::write::write(&object(fixup::branch(4)), &X86Omf).is_ok());
-        assert!(llrm_omf::write::write(&object(fixup::got_pc_rel(4)), &X86Omf).is_err());
+        assert!(llrm_omf::write::write(&object(fixup::branch(4)), None, &X86Omf).is_ok());
+        assert!(llrm_omf::write::write(&object(fixup::got_pc_rel(4)), None, &X86Omf).is_err());
     }
 }

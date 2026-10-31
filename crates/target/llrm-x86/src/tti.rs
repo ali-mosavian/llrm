@@ -86,6 +86,9 @@ pub struct RealMode {
     /// (trips, bar): an `optsize` loop of at most that many trips is fully
     /// unrolled under that unrolled size (DEVIATE U1). (0, 0): the pin's.
     pub unroll_size_few_trips: (u32, u32),
+    /// DEVIATE REC-1: (depth, callee size) of the recursion taken at speed;
+    /// none: the pin's.
+    pub recursive_inlining: Option<(u32, i64)>,
 }
 
 impl RealMode {
@@ -531,6 +534,10 @@ impl Tti for X86 {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
 
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        self.real_mode.as_ref()?.recursive_inlining
+    }
+
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
         let real = self.real_mode.as_ref().filter(|real| real.unroll_size_few_trips.0 != 0)?;
         Some(real.unroll_size_few_trips)
@@ -541,6 +548,10 @@ impl Tti for X86 {
     /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
     fn opt_size_inline_by_code_size(&self) -> bool {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+    }
+
+    fn speed_inline_by_code_size(&self) -> bool {
+        self.tuning.inline_size_guard_at_speed
     }
 
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
