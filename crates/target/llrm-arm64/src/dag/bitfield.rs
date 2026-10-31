@@ -1,9 +1,8 @@
 //! `AArch64DAGToDAGISel::tryBitfieldInsertInZeroOp`: `(and (shl x, n), mask)` of one contiguous run
 //! of bits is `UBFM` (`UBFIZ`).
 //!
-//! DEVIATE: the non-zero bits come from `known_zero`, the structural subset of `computeKnownBits`
-//! (SD40), and the `and (any_extend (shl ..))` form of an `i64` is not matched. Exit: with the DAG's
-//! known bits and the `Widen` helper.
+//! DEVIATE: the `and (any_extend (shl ..))` form of an `i64` is not matched. Exit: the `Widen`
+//! helper.
 //!
 //! # See also
 //! `isBitfieldPositioningOp`, `AArch64ISelDAGToDAG.cpp`, pin d1106deb71cc.
@@ -12,7 +11,7 @@ use llrm_dagisel::dag::SDValue as PinValue;
 use llrm_dagisel::generated::aarch64::ids::opcode as aarch64_ids;
 use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::interp::Outcome;
-use llrm_dagisel::x86_addr::{AddrDag, known_zero};
+use llrm_dagisel::x86_addr::AddrDag;
 
 fn is_shifted_mask(x: u64) -> bool {
     x != 0 && {
@@ -38,7 +37,7 @@ pub fn select_bitfield_insert_in_zero(
     };
     let all = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
     // `isBitfieldPositioningOp`: the bits not provably zero are one run.
-    let non_zero = !known_zero(dag, value, 0) & all;
+    let non_zero = !dag.known_zero_bits(value) & all;
     if !is_shifted_mask(non_zero) {
         return None;
     }
@@ -68,7 +67,7 @@ pub fn select_bitfield_insert_in_zero(
 // ---- `tryBitfieldInsertOp` -------------------------------------------------------------------
 //
 // DEVIATE: `isBitfieldExtractOp` (the BFXIL operand of `tryBitfieldInsertOpFromOr`) and the
-// `BiggerPattern` passes are not ported, `computeKnownBits` is `known_zero` (SD40), and an `OR`
+// `BiggerPattern` passes are not ported, and an `OR`
 // none of whose bits are useful is not selected to `IMPLICIT_DEF`. Exit: with the DAG's known
 // bits and `isBitfieldExtractOp`.
 
@@ -275,7 +274,7 @@ fn bitfield_positioning<D: AddrDag>(
     bigger: bool,
 ) -> Option<(Value, u32, u32)> {
     let bits = width_of(dag.value_type(value))?;
-    let non_zero = !known_zero(dag, value, 0) & all(bits);
+    let non_zero = !dag.known_zero_bits(value) & all(bits);
     if !is_shifted_mask(non_zero) {
         return None;
     }
@@ -485,7 +484,7 @@ fn bitfield_insert_from_or<D: AddrDag>(
         } else {
             continue;
         }
-        let known_zero_bits = known_zero(dag, opd1, 0);
+        let known_zero_bits = dag.known_zero_bits(opd1);
         let to_insert = all(width) << dst_lsb;
         if to_insert & !known_zero_bits != 0 {
             continue;
@@ -559,7 +558,7 @@ fn bitfield_insert_from_or_and_imm<D: AddrDag>(
         return None;
     }
     imm_operand(dag, and.node, isd::AND)?;
-    let not_known_zero = !known_zero(dag, and, 0) & full;
+    let not_known_zero = !dag.known_zero_bits(and) & full;
     let known_zero_bits = !not_known_zero & full;
     if !is_shifted_mask(known_zero_bits) || or_imm & not_known_zero != 0 {
         return None;

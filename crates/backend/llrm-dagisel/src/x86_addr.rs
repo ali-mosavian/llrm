@@ -136,6 +136,17 @@ pub struct Wrapped {
 /// The DAG queries and constructors the address matchers need on top of
 /// [`Dag`].
 pub trait AddrDag: Dag {
+    /// `computeKnownBits(value).Zero`, within the value's width. A DAG with no
+    /// known-bits analysis answers [`known_zero`], the structural subset (SD40).
+    fn known_zero_bits(
+        &self,
+        value: SDValue,
+    ) -> u64
+    where
+        Self: Sized,
+    {
+        known_zero(self, value, 0)
+    }
     /// `SelectionDAG::isADDLike`: an `OR` of disjoint bits, or an `XOR` with
     /// the sign bit.
     fn is_add_like(

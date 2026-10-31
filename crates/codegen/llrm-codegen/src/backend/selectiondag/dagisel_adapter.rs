@@ -1099,6 +1099,15 @@ impl Dag for DagisAdapter<'_> {
 }
 
 impl AddrDag for DagisAdapter<'_> {
+    fn known_zero_bits(
+        &self,
+        value: PinValue,
+    ) -> u64 {
+        let ours = ours(value);
+        let bits = self.dag.value_type(ours).size_in_bits();
+        let all = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+        super::known_bits::known_bits(self.dag, ours).zero as u64 & all
+    }
     fn segment_override(
         &self,
         node: u32,
