@@ -1349,8 +1349,8 @@ impl Builder<'_> {
             )
             .map_err(|_| Refused("call the convention does not describe"))?
         };
-        if let Some(tail) = self.tail_candidate.take()
-            && !hooked
+        if !hooked
+            && let Some(tail) = self.tail_candidate.take()
             && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
         {
             self.tail_calls.push(tail);
@@ -1642,9 +1642,11 @@ impl Builder<'_> {
         result_type: TypeId,
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
-        let sibling = std::mem::take(&mut self.sibcall);
-        if sibling || flags_answer || byvals.iter().any(Option::is_some) {
-            return Err(Refused("tail call, flags answer or byval with a target's calling hook"));
+        if flags_answer || byvals.iter().any(Option::is_some) {
+            return Err(Refused("flags answer or byval with a target's calling hook"));
+        }
+        if std::mem::take(&mut self.call_attrs_move_arguments) {
+            return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
         }
         if std::mem::take(&mut self.call_attrs_move_arguments) {
             return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
@@ -1666,20 +1668,34 @@ impl Builder<'_> {
             }
         }
         let void = self.module.context.types.is_void(result_type);
-        let (vt, ins) = if void {
-            (EVT::OTHER, Vec::new())
-        } else {
-            if self.is_aggregate(result_type) {
-                return Err(Refused("an aggregate result with a target's calling hook"));
+        // `ComputeValueVTs`: an aggregate result is its leaves, each answered like a scalar result.
+        let mut layout: Vec<(EVT, usize)> = Vec::new();
+        let mut ins: Vec<In> = Vec::new();
+        let aggregate = !void && self.is_aggregate(result_type);
+        if !void {
+            let leaf_types: Vec<TypeId> =
+                if aggregate { self.leaves(result_type)?.into_iter().map(|(leaf, _)| leaf).collect() } else { vec![result_type] };
+            for leaf in leaf_types {
+                let vt = self.type_of(leaf)?;
+                let pointer = self.is_pointer_type(leaf);
+                let parts = self.calling_parts(vt)?;
+                let split = parts.len() > 1;
+                layout.push((vt, parts.len()));
+                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
             }
-            let vt = self.type_of(result_type)?;
-            let pointer = self.is_pointer_type(result_type);
-            let parts = self.calling_parts(vt)?;
-            let split = parts.len() > 1;
-            (vt, parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }).collect())
-        };
+        }
+        let vt = layout.first().map_or(EVT::OTHER, |(vt, _)| *vt);
         calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
+        // `IsTailCall`: the call in tail position, if the target takes it, ends the block
+        if let Some(tail) = self.tail_candidate.take()
+            && let Some(node) = calling.lower_tail_call(&mut self.dag, root, callee_node, &outs)
+        {
+            self.tail_calls.push(tail);
+            self.dag.set_root(node);
+            self.had_tail_call = true;
+            return Ok(None);
+        }
         let info = &mut *self.info;
         let (chain, parts) = calling.lower_call_with_frame(
             &mut self.dag,
@@ -1691,7 +1707,18 @@ impl Builder<'_> {
             &mut |size, align| info.new_stack_object(size, align),
         );
         self.dag.set_root(chain);
-        Ok((!void).then(|| self.join_from_calling(&parts, vt)))
+        if void {
+            return Ok(None);
+        }
+        let mut rest = &parts[..];
+        let mut leaves = Vec::new();
+        for (leaf_vt, count) in layout {
+            let (mine, tail) = rest.split_at(count);
+            leaves.push(self.join_from_calling(mine, leaf_vt));
+            rest = tail;
+        }
+        let _ = vt;
+        Ok(Some(if aggregate { self.merge(&leaves) } else { leaves[0] }))
     }
 
     /// `visitUnreachable`: a trap for a target that traps
@@ -3477,6 +3504,207 @@ mod f80_tests {
         assert_eq!(*stub.outs.lock().unwrap(), [(2, 2), (4, 4)]);
         assert_eq!(*stub.ins.lock().unwrap(), [EVT::I8; 4]);
     }
+
+    /// A target that records the result parts the builder asks it to place.
+    #[derive(Debug, Default)]
+    struct Results {
+        calls: std::sync::Mutex<usize>,
+        results: std::sync::Mutex<Vec<EVT>>,
+    }
+
+    impl TargetCalling for Results {
+        fn lower_call(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            callee: SDValue,
+            _outs: &[Out],
+            ins: &[In],
+        ) -> (SDValue, Vec<SDValue>) {
+            *self.calls.lock().unwrap() += 1;
+            *self.results.lock().unwrap() = ins.iter().map(|one| one.vt).collect();
+            let call = dag.get_node_multi(super::super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee]);
+            let values = ins.iter().map(|one| dag.get_constant(0, one.vt)).collect();
+            (SDValue { node: call.node, res: 0 }, values)
+        }
+
+        fn lower_formal_arguments(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            ins: &[In],
+            _fixed: FixedObject,
+            live_in: LiveIn,
+        ) -> Vec<SDValue> {
+            ins.iter().map(|one| dag.get_copy_from_reg(chain, live_in(RegId::AL), one.vt)).collect()
+        }
+
+        fn lower_return(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            _outs: &[Out],
+        ) -> SDValue {
+            dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain])
+        }
+    }
+
+    fn built_with_results(
+        body: &str,
+        stub: &'static Results,
+    ) {
+        let text = format!("target datalayout = \"e-p:32:32-n8:16:32\"\n{body}");
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let (id, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("f");
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        let target = BuilderTarget {
+            legal_ints: vec![8],
+            target_nodes: Some(TargetNodes {
+                call: super::super::x86isd::CALL,
+                ret: super::super::x86isd::RET_GLUE,
+                stack_pointer: "esp",
+                big_endian: false,
+                calling: Some(stub),
+            }),
+            ..BuilderTarget::m32()
+        };
+        build_block(
+            &module,
+            function,
+            &layout,
+            &target,
+            &llrm_x86_m32::M32,
+            &convention,
+            &mut info,
+            function.entry().unwrap(),
+        )
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    }
+
+    /// A call returning `{ i8, i8 }` was refused ("an aggregate result with a target's calling hook");
+    /// the hook is asked for each leaf's parts.
+    #[test]
+    fn a_struct_result_is_answered_leaf_by_leaf() {
+        let stub: &'static Results = Box::leak(Box::default());
+        built_with_results(
+            "declare { i8, i8 } @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = call { i8, i8 } @g(i8 %a)\n  %v = extractvalue { i8, i8 } %r, 1\n  ret i8 %v\n}",
+            stub,
+        );
+        assert_eq!(*stub.results.lock().unwrap(), [EVT::I8, EVT::I8]);
+    }
+    /// A target that takes a call in tail position as its own node, or answers none.
+    #[derive(Debug, Default)]
+    struct Tails {
+        takes: bool,
+        calls: std::sync::Mutex<usize>,
+        tails: std::sync::Mutex<usize>,
+        results: std::sync::Mutex<Vec<EVT>>,
+    }
+
+    impl TargetCalling for Tails {
+        fn lower_call(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            callee: SDValue,
+            _outs: &[Out],
+            ins: &[In],
+        ) -> (SDValue, Vec<SDValue>) {
+            *self.calls.lock().unwrap() += 1;
+            *self.results.lock().unwrap() = ins.iter().map(|one| one.vt).collect();
+            let call = dag.get_node_multi(super::super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee]);
+            let values = ins.iter().map(|one| dag.get_constant(0, one.vt)).collect();
+            (SDValue { node: call.node, res: 0 }, values)
+        }
+
+        fn lower_tail_call(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            callee: SDValue,
+            _outs: &[Out],
+        ) -> Option<SDValue> {
+            self.takes.then(|| {
+                *self.tails.lock().unwrap() += 1;
+                dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain, callee])
+            })
+        }
+
+        fn lower_formal_arguments(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            ins: &[In],
+            _fixed: FixedObject,
+            live_in: LiveIn,
+        ) -> Vec<SDValue> {
+            ins.iter().map(|one| dag.get_copy_from_reg(chain, live_in(RegId::AL), one.vt)).collect()
+        }
+
+        fn lower_return(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            _outs: &[Out],
+        ) -> SDValue {
+            dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain])
+        }
+    }
+
+    fn built_with_tails(
+        body: &str,
+        stub: &'static Tails,
+    ) {
+        let text = format!("target datalayout = \"e-p:32:32-n8:16:32\"\n{body}");
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let (id, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("f");
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        let target = BuilderTarget {
+            legal_ints: vec![8],
+            target_nodes: Some(TargetNodes {
+                call: super::super::x86isd::CALL,
+                ret: super::super::x86isd::RET_GLUE,
+                stack_pointer: "esp",
+                big_endian: false,
+                calling: Some(stub),
+            }),
+            ..BuilderTarget::m32()
+        };
+        build_block(
+            &module,
+            function,
+            &layout,
+            &target,
+            &llrm_x86_m32::M32,
+            &convention,
+            &mut info,
+            function.entry().unwrap(),
+        )
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    }
+
+    /// A call in tail position on a target with a calling hook was refused ("tail call ... with a
+    /// target's calling hook"); the target's `lower_tail_call` now ends the block.
+    #[test]
+    fn a_call_in_tail_position_is_the_targets_tail_call_where_it_takes_one() {
+        let stub: &'static Tails = Box::leak(Box::new(Tails { takes: true, ..Tails::default() }));
+        built_with_tails("declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}", stub);
+        assert_eq!((*stub.tails.lock().unwrap(), *stub.calls.lock().unwrap()), (1, 0));
+    }
+
+    #[test]
+    fn a_target_that_takes_no_tail_call_gets_an_ordinary_call() {
+        let stub: &'static Tails = Box::leak(Box::default());
+        built_with_tails("declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}", stub);
+        assert_eq!((*stub.tails.lock().unwrap(), *stub.calls.lock().unwrap()), (0, 1));
+    }
+
 }
 
 /// Whether `direct` names a `llrm.qb.` routine.
