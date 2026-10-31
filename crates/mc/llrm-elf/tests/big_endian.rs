@@ -132,3 +132,17 @@ fn a_32_bit_rela_entry_is_twelve_bytes_in_either_order() {
     assert_eq!((size, entsize), (12, 12));
     assert_eq!(u32_at(&bytes, offset + 8, false), 0x10203, "r_addend");
 }
+
+/// An undefined weak symbol was written STB_GLOBAL, so a linker would refuse
+/// the reference the program is written to survive.
+#[test]
+fn an_undefined_weak_symbol_is_weak() {
+    let mut weak = object();
+    weak.symbols[0].binding = Binding::Weak;
+    let bytes = write::<Little>(&weak).unwrap();
+    let count = usize::from(u16::from_le_bytes([bytes[48], bytes[49]]));
+    let (_, offset, size, entsize) =
+        (0..count).map(|index| section(&bytes, index, false)).find(|one| one.0 == 2).expect("a symbol table");
+    let last = offset + size - entsize;
+    assert_eq!(bytes[last + 12] >> 4, 2, "st_info binding of the undefined symbol is STB_WEAK");
+}
