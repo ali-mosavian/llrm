@@ -23,7 +23,7 @@
 
 # class 3: PRE / loop-header copy, ablation candidate, first-bad TBD: DEBT bench-clocks-pre
 "quicksort c -Os" = 325239  # main 309284
-"quicksort nib -Os" = 447484  # main 316122
+"quicksort nib -Os" = 350344  # main 316122; owner w12: slice-by-value moves a live value (card in the fix queue)
 "recfloat c -Os" = 50104  # main 47103
 
 # class 4: float rows: QB standard-precision default is deliberate (BC); compare like with like (bas rows: main under the same flag; nib rows: fast, as main): DEBT bench-clocks-float

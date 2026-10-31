@@ -1,0 +1,30 @@
+reason = "TEMPORARY (owner w10): foldLogicCastConstant (the pin's) moves a logic op on an extension into the source type; four bq32 rows run 1..9 more instructions in a harness-counted loop while their clocks fall. Exit: a re-judge on 2026-11-06, not a fix; no row may pass its measured count."
+exception = true
+
+[[row]]
+label = "stft_fixed bq32 -Os"
+counter = "instructions"
+tip = 91036141
+main = 102652646
+to = 91036150
+
+[[row]]
+label = "stft_single bq32 -O2"
+counter = "instructions"
+tip = 69050880
+main = 71255906
+to = 69050886
+
+[[row]]
+label = "huge bq32 -O2"
+counter = "instructions"
+tip = 574510
+main = 806320
+to = 574511
+
+[[row]]
+label = "huge bq32 -Os"
+counter = "instructions"
+tip = 450719
+main = 565722
+to = 450720

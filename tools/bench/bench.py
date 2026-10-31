@@ -919,6 +919,14 @@ def base_rows(args, names: list[str] | None = None) -> tuple[dict, set[str], str
     return base, same, base_sha
 
 
+def compare_baselines(first: Path, second: Path) -> int:
+    """Exit 1, naming the cells, when two runs of one compiler disagree: a baseline that two runs do not reproduce judges nothing."""
+    one, two = (basecounts.rows_of(json.loads(path.read_text())) for path in (first, second))
+    problems = basecounts.unstable_cells(one, two)
+    print("\n".join(problems) or f"STABLE {len(one.keys() & two.keys())} cells")
+    return 1 if problems else 0
+
+
 def base_leg(args, slice_of: tuple[int, int] | None = None) -> int:
     """`--shard base`: the base's counts, measured (or restored) once for the whole run and written to `base.json` for --merge. The numbered slices
     measure only the head: each of them built the base and measured its part of it (bench-3 of gate run 2 was cancelled at 60 minutes in it).
@@ -1026,11 +1034,14 @@ def main() -> int:
     parser.add_argument("--record", action="store_true", help="measure the head and keep its counts as the base of the next pull requests (a main push); no base, no judging")
     parser.add_argument("--shard", metavar="I/N", help="only shard I of N of the benchmarks (shards.toml), judged alone; --json then writes shard-I.json for --merge. `base` or `base:I/N`: the base's counts, all or slice I, in base.json or base-I.json")
     parser.add_argument("--merge", nargs=2, metavar=("DIR", "N"), help="judge nothing: print the verdict of the N shard-*.json in DIR (add --record on a main push)")
+    parser.add_argument("--compare-baselines", nargs=2, type=Path, metavar=("A", "B"), help="judge nothing: refuse (exit 1, cells named) when two --json runs of one compiler differ in any count")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
     global ONLY
     ONLY = args.lang
+    if args.compare_baselines:
+        return compare_baselines(*args.compare_baselines)
     if args.merge:
         return merge(Path(args.merge[0]), int(args.merge[1]), args.opt, args.record)
     if args.shard == "base":

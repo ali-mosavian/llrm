@@ -2010,3 +2010,48 @@ mod x64_table {
         assert_eq!(options.pointer_type(), mvt::i64);
     }
 }
+
+mod minsize_store_immediate {
+    use super::*;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+
+    fn selected_store(
+        value: i64,
+        vt: crate::matcher::Vt,
+        min_size: bool,
+    ) -> &'static str {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i32);
+        let constant = dag.make_constant(value, vt);
+        let off = SDValue::new(dag.node(isd::UNDEF, &[mvt::i32], &[]), 0);
+        let store = dag.add(Node {
+            opcode: isd::STORE,
+            vts: vec![mvt::Other],
+            ops: vec![SDValue::new(0, 0), constant, p, off],
+            memory_vt: Some(vt),
+            ..Node::default()
+        });
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: min_size,
+            min_size,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, store), Outcome::Selected);
+        selected(&dag, store)
+    }
+
+    /// X86InstrCompiler.td:1308: at OptForMinSize a store of 0 is `and [m], 0`
+    /// and of -1 `or [m], -1`, a byte immediate where `mov` has four.
+    #[test]
+    fn a_store_of_zero_or_minus_one_is_and_or_or_at_minsize_and_mov_otherwise() {
+        assert_eq!(selected_store(0, mvt::i32, false), "MOV32mi");
+        assert_eq!(selected_store(0, mvt::i32, true), "AND32mi");
+        assert_eq!(selected_store(-1, mvt::i32, true), "OR32mi");
+        assert_eq!(selected_store(0, mvt::i16, true), "AND16mi");
+        assert_eq!(selected_store(-1, mvt::i16, true), "OR16mi");
+        assert_eq!(selected_store(5, mvt::i32, true), "MOV32mi");
+    }
+}

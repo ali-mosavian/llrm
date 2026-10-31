@@ -12,7 +12,15 @@ fn a_legal_dag_is_swept_once() {
     let (a, b) = (dag.get_register(EVT::I32, 8), dag.get_register(EVT::I32, 9));
     let sum = dag.get_node(ISD::Add, EVT::I32, &[a, b]);
     let (chain, ptr) = (dag.entry_node(), dag.get_register(EVT::I32, 7));
-    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(1),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let store = dag.get_store(chain, sum, ptr, info);
     dag.set_root(store);
     let mut hooks = NoHooks;
