@@ -734,15 +734,17 @@ fn a_global_read_once_by_an_add_is_its_memory_operand() {
     assert!(!text.contains("sta rc"), "a load went through a cell:\n{text}");
 }
 
-/// A store between the load and the add changes what the add must read.
+/// A store between the load and the add must not change what the add reads:
+/// the folded add runs before the store (the load's place in the chain).
 #[test]
-fn a_store_between_a_load_and_its_add_keeps_the_load() {
+fn a_store_between_a_load_and_its_add_does_not_change_what_the_add_reads() {
     let ir = module(
         "@g = global [4 x i8] zeroinitializer\n\
          define i8 @f(i8 %x) {\n  %a = load i8, ptr @g\n  store i8 %x, ptr @g\n  %b = add i8 %a, %x\n  ret i8 %b\n}",
     );
-    let text = assembly(&ir, &Request::new(Level::O0)).unwrap();
-    assert!(!text.contains("adc g"), "the add reads the stored value:\n{text}");
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let (read, written) = (text.find("adc g"), text.find("sta g"));
+    assert!(read.is_some() && read < written, "the add reads g after the store:\n{text}");
 }
 
 /// A copy up to the terminator ran its pointer bumps and then `jmp` back to

@@ -211,6 +211,16 @@ pub fn expand(
             let (d, a, b) = simple(o)?;
             byte3(&mut out, "", "eor", &d, &a, &b);
         }
+        op::ADD8M | op::SUB8M | op::AND8M | op::OR8M | op::XOR8M => {
+            let (carry, mnemonic) = match inst.opcode {
+                op::ADD8M => ("clc", "adc"),
+                op::SUB8M => ("sec", "sbc"),
+                op::AND8M => ("", "and"),
+                op::OR8M => ("", "ora"),
+                _ => ("", "eor"),
+            };
+            byte3(&mut out, carry, mnemonic, reg(&o[0])?, reg(&o[1])?, &address(&o[2], &o[3])?);
+        }
         op::ADD16 => wide(&mut out, "adc", "adc", &o[0], &o[1], &o[2])?,
         op::SUB16 => wide(&mut out, "sbc", "sbc", &o[0], &o[1], &o[2])?,
         op::ADDO16 => wide(&mut out, "adc", "adc", &o[0], &o[2], &o[3])?,
