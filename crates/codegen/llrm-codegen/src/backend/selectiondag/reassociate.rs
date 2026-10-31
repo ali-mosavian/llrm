@@ -7,8 +7,8 @@
 //!
 //! DEVIATE SD211: the node flags (`nuw`, `disjoint`) the pin carries to the new
 //! nodes are dropped, and the compare-pair rule for `and`/`or` of `setcc`s
-//! runs only where `reassociate_compare_pairs` says so (x86 judged later). Exit: flags on
-//! the combiner's node builder. Owner w12.
+//! runs only where `reassociate_compare_pairs` says so (x86 judged later).
+//! Exit: flags on the combiner's node builder. Owner w12.
 //! Review 2026-12-10.
 //!
 //! # See also
@@ -140,7 +140,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     }
                 }
             }
-            // `(or (or a, b), c)` of compares where `c` and `b` share a predicate: pair those two.
+            // `(or (or a, b), c)` of compares where `c` and `b` share a
+            // predicate: pair those two.
             if matches!(opc, ISD::And | ISD::Or)
                 && self.hooks.reassociate_compare_pairs()
                 && [n1, n00, n01].iter().all(|&v| self.dag.opcode(v) == ISD::SetCC)

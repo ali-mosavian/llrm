@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 226 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 228 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -36,6 +36,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_branch | `visitCondBrInst`: the canonical forms of a conditional branch. | `visit` in [`combine`](combine.md), which dispatches a `br` here | [combine_branch](combine_branch.md) |
 | combine_build | `InstCombiner::Builder`: the `IRBuilder` over `InstSimplifyFolder` that InstCombine's `visit*` functions build new instructions with. | `combine_addsub` and the families after it. | [combine_build](combine_build.md) |
 | combine_castcall | InstCombine's call through a mismatched prototype: a call whose function type is not the callee's, to a function defined here, takes the callee's type. | `combine_memintrinsics` (`visit_call`). | [combine_castcall](combine_castcall.md) |
+| combine_casted_logic | `foldCastedBitwiseLogic`: `and`, `or` and `xor` of two like casts is the cast of the logic at the source type. | `combine_and_select::fold_and_select`, `combine_or::visit_or` and | [combine_casted_logic](combine_casted_logic.md) |
 | combine_casts | InstCombine's `visitTrunc`, `visitZExt`, `visitSExt` and the helpers they call, from [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp) at d1106deb71cc. | `combine::visit`, once the casts family's slot is flipped. | [combine_casts](combine_casts.md) |
 | combine_compares | InstCombine's `visitICmpInst` and the helpers it calls, from [`InstCombineCompares.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp) at d1106deb71cc. | `combine::visit`, once the compares slot is flipped. | [combine_compares](combine_compares.md) |
 | combine_demanded | `SimplifyDemandedUseBits`: an integer instruction is rewritten, or its operands are, when the users read only some of its bits. | The `visit*` of the integer families (`visitAnd`, `visitAdd`, `visitTrunc`, | [combine_demanded](combine_demanded.md) |
@@ -60,7 +61,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_narrow | `narrowMathIfNoOverflow`: `bo (ext X), (ext Y)` or `bo (ext X), C` as `ext (bo X, Y)` when the math cannot overflow in the narrow width. | `visitAdd`, `visitSub` (`TryToNarrowDeduceFlags`) and `visitMul`. | [combine_narrow](combine_narrow.md) |
 | combine_negator | `Negator`: sinks a negation into an expression tree when that does not add an instruction. | `combine_addsub::visit_sub`, `combine_muldivrem`. | [combine_negator](combine_negator.md) |
 | combine_not | `InstCombinerImpl::foldNot`: a `not` (`xor X, -1`) pushed into its operand. | Named by `combine_xor`. | [combine_not](combine_not.md) |
-| combine_or | `InstCombinerImpl::visitOr`: the integer `or` folds. | Named by `combine`. | [combine_or](combine_or.md) |
+| combine_or | `InstCombinerImpl::visitOr`: the integer `or` folds. | Named by `combine`, `combine_casted_logic`. | [combine_or](combine_or.md) |
 | combine_pass | The pass: InstCombine as a function pass of the pipeline. | `pipeline` (`combine@N`, in front of the old `fold@N` of each InstCombine | [combine_pass](combine_pass.md) |
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_phi_args | `visitPHINode`'s argument folds: a phi of the same operation applied to different values is the operation applied to a phi of those values. | `combine` (its `visit`, the `Phi` opcode). | [combine_phi_args](combine_phi_args.md) |
@@ -77,7 +78,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
 | combine_sub | `InstCombinerImpl::visitSub`: the integer subtraction folds. | `combine::visit` (the `Sub` arm). | [combine_sub](combine_sub.md) |
 | combine_visit_select | `visitSelectInst`: the canonical forms of a `select`. | Named by `combine_select_bit_test`, `combine_select_bools`, `combine_select_ext_const`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`. | [combine_visit_select](combine_visit_select.md) |
-| combine_xor | `InstCombinerImpl::visitXor`: the integer `xor` folds. | Named by `combine`. | [combine_xor](combine_xor.md) |
+| combine_xor | `InstCombinerImpl::visitXor`: the integer `xor` folds. | Named by `combine`, `combine_casted_logic`. | [combine_xor](combine_xor.md) |
 | condstores | Two conditional stores to one address, one in each of two if-then-else diamonds or triangles in a row, are one store after them, predicated on either condition: SimplifyCFG's `mergeConditionalStores`. | Named by `condtocond`, `simplifycfg`. | [condstores](condstores.md) |
 | condtocond | A conditional branch in an empty block that a conditional branch predecessor shares a destination with, folded into the predecessor: LLVM's [`SimplifyCondBranchToCondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4773). | Named by `simplifycfg`. | [condtocond](condtocond.md) |
 | congruentiv | Phis of a loop header that ScalarEvolution proves equal are one phi. | [`crate::indvars`](indvars.md), which leaves the phis it replaced to `dead`. | [congruentiv](congruentiv.md) |
@@ -170,6 +171,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | memcpyoptimizer | Adjacent stores of one repeated byte become a `llvm.memset`: LLVM's `MemCpyOptPass`, stage 1 (`runImpl`, `iterateOnFunction`, `processStore`, `processMemSet`, `tryMergingIntoMemset`, `MemsetRanges`). | In the slot of `merge@818`, where `loopidioms::Merge` ran. | [memcpyoptimizer](memcpyoptimizer.md) |
 | memsetpattern | Expands `llvm.experimental.memset.pattern` into a store loop in MIR before instruction selection, as the pin's `PreISelIntrinsicLowering` does (the DAG never sees the intrinsic). | Once per module in `driver::optimized`, for `--isel=dag`: the old selector | [memsetpattern](memsetpattern.md) |
 | mergestores | Adjacent stores become wider ones: LLVM's `DAGCombiner::mergeConsecutiveStores` for stores of constants (`tryStoreMergeOfConstants`, `merged_constants`) and of loaded values (`tryStoreMergeOfLoads`, `merged_copies`). | In `loopidioms::Merge`, after the scalar passes have settled. | [mergestores](mergestores.md) |
+| mirror | Turns an index that only some trips step into a pointer that steps with it, so a target whose addresses take no scale `k` does not shift the index on every access of `base + k * i`. | Not a pass: `crate::lsr` calls `found` and `applied` on each loop before | [mirror](mirror.md) |
 | mldstmotion | Stores to one address on both arms of a diamond become one store below it, as LLVM's `MergedLoadStoreMotion` (`mldst-motion<no-split-footer-bb>`). | Named by `pipeline`. | [mldstmotion](mldstmotion.md) |
 | narrowspace | A far pointer parameter that every call fills from one near space becomes a near pointer parameter: the caller passes the offset, and neither segment is pushed or loaded. | In [`crate::interprocedural`](../analyses/interprocedural.md) as stage `narrow.`, after argument promotion | [narrowspace](narrowspace.md) |
 | parity | The parity pipeline's slot registry: for each slot of LLVM's function pipeline that `Options::llvm_order` builds, whether llrm's pass there is translated from LLVM's, an older stand-in, or missing. | `pipeline` (`Fixed::linear`), the registry tests. | [parity](parity.md) |

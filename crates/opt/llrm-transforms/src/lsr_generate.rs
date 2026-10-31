@@ -25,8 +25,8 @@
 //! Nothing runs it yet: stage 4 of the translation of LSR.
 //!
 //! # Limits
-//! DEVIATE: the pre- and post-indexed addressing branches
-//! (`AMK_PreIndexed`, `AMK_PostIndexed`; x86 prefers none) are not ported.
+//! DEVIATE: the pre-indexed addressing branches (`AMK_PreIndexed`; no target
+//! of ours prefers it) are not ported; the post-indexed ones are.
 //! Work per use is bounded by the formulae it has, which the caps bound.
 //!
 //! DEVIATE LG1: `GenerateICmpZeroScales` asks `getExactSDiv` for no overflow
@@ -43,12 +43,12 @@ use std::collections::BTreeMap;
 use llrm_analysis::scev::expr::{Kind as ScevKind, Scev, Ty, Use as ScevUse};
 use llrm_analysis::scev::{Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
-use llrm_mir::tti::Ty as TtiTy;
+use llrm_mir::tti::{AddressingMode, Ty as TtiTy};
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::lsr_collect::{Collection, extract_immediate, extract_symbol, get_exact_sdiv, is_always_foldable_scev};
 use crate::lsr_formula::{Formula, Immediate};
-use crate::lsr_use::{Cost, Kind, Rating, is_legal_add_immediate, is_legal_use};
+use crate::lsr_use::{Cost, Kind, Rating, is_legal_add_immediate, is_legal_use, may_use_post_inc_mode};
 
 /// Which register of a formula a generator works on.
 #[derive(Clone, Copy)]
@@ -72,7 +72,7 @@ fn log2_floor(n: usize) -> u32 {
 }
 
 /// The cost model's view of a SCEV type.
-fn tti_ty(ty: Ty) -> TtiTy {
+pub(crate) fn tti_ty(ty: Ty) -> TtiTy {
     match ty {
         Ty::Int(bits) => TtiTy::Int(bits),
         Ty::Ptr(_) => TtiTy::Pointer,
@@ -204,6 +204,14 @@ impl Collection<'_, '_> {
     ) {
         let cx = self.cx;
         let reg = Self::reg_at(base, slot);
+        // No reassociation of the base register of a value that may be
+        // post-incremented: it would make base+register formulae that win,
+        // and the post-increment is better.
+        if self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed
+            && may_use_post_inc_mode(self.tti, se, cx, &self.uses[lu_idx], reg, self.l)
+        {
+            return;
+        }
         let mut add_ops = Vec::new();
         if let Some(remainder) = collect_subexprs(se, cx, reg, None, &mut add_ops, self.l, 0) {
             add_ops.push(remainder);
@@ -905,6 +913,11 @@ impl Collection<'_, '_> {
                         let mut new_f = f.clone();
                         new_f.base_offset = new_f.base_offset.add_unsigned(imm);
                         if !self.legal(lu_idx, &new_f) {
+                            if self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed
+                                && may_use_post_inc_mode(self.tti, se, cx, &self.uses[lu_idx], orig_reg, self.l)
+                            {
+                                continue;
+                            }
                             let unfolded = new_f.unfolded_offset.add_unsigned(imm);
                             if !is_legal_add_immediate(self.tti, unfolded) {
                                 continue;

@@ -1,4 +1,4 @@
-use super::{decode, hidden, lowered, restored};
+use super::{decode, hidden, lowered, lowered_single_thread, restored};
 use crate::module::Module;
 use crate::opcode::{AtomicKind, AtomicOrdering, Opcode};
 use crate::parse;
@@ -122,4 +122,30 @@ fn a_restored_module_prints_as_it_was() {
     let after = crate::print::module(&module);
     assert!(after.contains("load atomic i32, ptr @flag acquire") && after.contains("store atomic i32 %v, ptr @flag release"), "{after}");
     assert!(!after.contains("call ") && before.contains("load atomic"), "{after}");
+}
+
+/// A target with no atomics (wasm without the feature) runs `LowerAtomicPass`:
+/// wasm's selector has no atomic nodes, so the atomics stayed and selection
+/// refused them.
+#[test]
+fn without_atomics_a_load_and_a_store_are_plain_and_a_fence_is_nothing() {
+    let text = TEXT.replace("  ret i32 %a", "  fence seq_cst\n  ret i32 %a");
+    let mut module = parse::module(&text).unwrap();
+    assert!(opcodes(&module).iter().any(|opcode| matches!(opcode, Opcode::Atomic(_))), "the premise");
+    lowered_single_thread(&mut module).unwrap();
+    let kinds = opcodes(&module);
+    assert!(kinds.contains(&Opcode::Load { align: Some(4), volatile: false }), "{kinds:?}");
+    assert!(kinds.contains(&Opcode::Store { align: Some(4), volatile: false }), "{kinds:?}");
+    assert!(!kinds.iter().any(|opcode| matches!(opcode, Opcode::Atomic(_))), "{kinds:?}");
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+}
+
+/// A read-modify-write is not translated yet: refused by name, not lowered
+/// wrongly.
+#[test]
+fn without_atomics_a_read_modify_write_is_refused() {
+    let text = "target datalayout = \"e-p:32:32\"\n@flag = global i32 0\ndefine i32 @f(i32 %v) {\n  %a = atomicrmw add ptr @flag, i32 %v seq_cst\n  ret i32 %a\n}\n";
+    let mut module = parse::module(text).unwrap();
+    let why = lowered_single_thread(&mut module).unwrap_err();
+    assert!(why.contains("is not lowered without atomics yet"), "{why}");
 }

@@ -352,8 +352,15 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let scale = self.dag.get_constant(u128::from(entry.trailing_zeros()), EVT::I8);
         let index = self.dag.get_node(ISD::Shl, index_vt, &[index, scale]);
         let address = self.dag.get_node(ISD::Add, pointer, &[table, index]);
-        let info =
-            MemInfo { mem_vt: pointer, align: entry, volatile: false, base: MemBase::JumpTable, ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: pointer,
+            align: entry,
+            volatile: false,
+            base: MemBase::JumpTable,
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let target = self.dag.get_load(pointer, chain, address, info);
         self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: target.node, res: 1 }, target])
     }
@@ -388,7 +395,15 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let cell = self.dag.create_stack_temporary(size, 4);
         let pointer = self.dag.config().pointer;
         let slot = self.dag.get_frame_index(pointer, cell);
-        let info = MemInfo { mem_vt: from, align: 4, volatile: false, base: MemBase::Stack(cell), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: from,
+            align: 4,
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let entry = self.dag.entry_node();
         let store = self.dag.get_store(entry, src, slot, info);
         self.dag.get_load(to, store, slot, MemInfo { mem_vt: to, ..info })
@@ -551,6 +566,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     base: MemBase::Unknown,
                     ext: None,
                     space: 0,
+                    ordering: None,
                 };
                 let loaded = self.dag.get_load(pointer, chain, src, info);
                 Some(vec![self.dag.get_store(SDValue { node: loaded.node, res: 1 }, loaded, dest, info)])
@@ -762,6 +778,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             base: MemBase::ConstantPool(entry),
             ext: None,
             space: 0,
+            ordering: None,
         };
         let chain = self.dag.entry_node();
         // a narrower entry is read by an extending load (`ExpandConstantFP`'s

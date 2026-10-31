@@ -58,6 +58,16 @@ impl std::fmt::Debug for TtiHandle {
     }
 }
 
+impl BuilderTarget {
+    /// `getScalarShiftAmountTy(vt)`.
+    pub fn shift_amount_for(
+        &self,
+        vt: EVT,
+    ) -> EVT {
+        self.shift_amount_of.map_or(self.shift_amount, |amount| amount(vt))
+    }
+}
+
 /// The target facts the builder asks (`TLI->` in the pin).
 #[derive(Clone, Debug)]
 pub struct BuilderTarget {
@@ -67,6 +77,17 @@ pub struct BuilderTarget {
     pub dag: DagConfig,
     /// `getShiftAmountTy`: x86 shifts by `i8`.
     pub shift_amount: EVT,
+    /// `getScalarShiftAmountTy` for a target whose amount depends on the type
+    /// shifted (wasm); none: `shift_amount`.
+    pub shift_amount_of: Option<fn(EVT) -> EVT>,
+    /// `getMinimumJumpTableEntries`.
+    pub min_jump_table_entries: usize,
+    /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit
+    /// tests and peeling run.
+    pub switch_optimize: bool,
+    /// `TargetOptions::TrapUnreachable`: an `unreachable` is a trap, so control
+    /// that reaches it stops.
+    pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
     /// The library routines the target's runtime has, each with the calling
@@ -79,8 +100,9 @@ pub struct BuilderTarget {
     /// Sibling calls become `TC_RETURN`s (tail-call step 3); off until the
     /// emitter lays them (step 5).
     pub tail_calls: bool,
-    /// `TargetLowering::isZExtFree(Val, VT)`: the zero extension of `Val` to `VT` costs nothing. A value
-    /// exported to another block that this holds for is zero extended, not any extended.
+    /// `TargetLowering::isZExtFree(Val, VT)`: the zero extension of `Val` to
+    /// `VT` costs nothing. A value exported to another block that this
+    /// holds for is zero extended, not any extended.
     pub is_zext_free: fn(&SelectionDAG, SDValue, EVT) -> bool,
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
@@ -280,6 +302,10 @@ impl BuilderTarget {
         BuilderTarget {
             dag: DagConfig { offset_folding: true, ..DagConfig::default() },
             shift_amount: EVT::I8,
+            shift_amount_of: None,
+            min_jump_table_entries: 4,
+            switch_optimize: true,
+            trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
             stack_align: None,
@@ -314,6 +340,10 @@ impl BuilderTarget {
         BuilderTarget {
             dag: DagConfig { pointer: EVT::I16, offset_folding: true, ..DagConfig::default() },
             shift_amount: EVT::I8,
+            shift_amount_of: None,
+            min_jump_table_entries: 4,
+            switch_optimize: true,
+            trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
             stack_align: None,
@@ -867,7 +897,7 @@ impl Builder<'_> {
     /// also copied to a register of its own.
     fn lower_arguments(&mut self) -> Result<(), Refused> {
         let entry = self.function.entry();
-        let mut outside = llrm_support::hash::HashSet::default();
+        let mut outside = llrm_mir::dense::IdSet::<ValueId>::new();
         for &block in self.function.layout() {
             for inst in self.function.iter_block(block) {
                 let instruction = self.function.instruction(inst);
@@ -941,6 +971,7 @@ impl Builder<'_> {
                             base: MemBase::Stack(-fixed),
                             ext: None,
                             space: 0,
+                            ordering: None,
                         };
                         let load = self.dag.get_load(part_vt, entry_node, ptr, info);
                         // `LowerMemArgument` makes the object immutable unless
@@ -1023,10 +1054,10 @@ impl Builder<'_> {
     fn lower_arguments_with(
         &mut self,
         calling: &'static dyn TargetCalling,
-        outside: &llrm_support::hash::HashSet<ValueId>,
+        outside: &llrm_mir::dense::IdSet<ValueId>,
     ) -> Result<(), Refused> {
         let parameters = self.function.parameters().to_vec();
-        if self.function.parameter_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()) {
+        if self.function.parameter_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)) {
             return Err(Refused("a parameter attribute that moves it, with a target's calling hook"));
         }
         let mut ins = Vec::new();
@@ -1070,6 +1101,13 @@ impl Builder<'_> {
             }
         }
         if self.module.signature(self.function.ty).2 {
+            if let Some(buffer) = calling.variadic_buffer(&mut self.dag, ins.len()) {
+                let reg = self.info.new_reg();
+                let root = self.root();
+                let copy = self.dag.get_copy_to_reg(root, reg, buffer);
+                self.dag.set_root(copy);
+                self.info.variadic_buffer = Some(reg);
+            }
             self.dag.var_args_frame_index = Some(-(offsets.len() as i32 + 1));
         }
         Ok(())
@@ -1109,8 +1147,15 @@ impl Builder<'_> {
             let base = self.dag.get_frame_index(pointer, save);
             let slot = self.dag.get_constant(at as u128 * 8, pointer);
             let address = self.dag.get_node(ISD::Add, pointer, &[base, slot]);
-            let info =
-                MemInfo { mem_vt: pointer, align: 8, volatile: false, base: MemBase::Stack(save), ext: None, space: 0 };
+            let info = MemInfo {
+                mem_vt: pointer,
+                align: 8,
+                volatile: false,
+                base: MemBase::Stack(save),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
             let root = self.control_root();
             let store = self.dag.get_store(root, value, address, info);
             self.dag.set_root(store);
@@ -1409,7 +1454,10 @@ impl Builder<'_> {
         }
         self.variadic_call = variadic;
         self.fixed_args = named;
-        self.call_attrs_move_arguments = info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some());
+        self.call_attrs_move_arguments = match self.calling() {
+            Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
+            None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
+        };
         let result =
             self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
         if let (true, Some(answer)) = (flags_answer, result) {
@@ -1500,6 +1548,17 @@ impl Builder<'_> {
         let name =
             self.target.target_nodes.map_or_else(|| stack_pointer_name(self.target.dag.pointer), |t| t.stack_pointer);
         self.arch.register_named(name)
+    }
+
+    /// Whether an attribute of `attrs` moves its argument out of the ordinary
+    /// place, for a target whose hook leaves some (`sret` on wasm: a
+    /// pointer like any other) where they are.
+    fn moves_argument(
+        &self,
+        calling: &dyn TargetCalling,
+        attrs: &[llrm_mir::opcode::Attribute],
+    ) -> bool {
+        relocating_attribute(attrs).is_some_and(|name| !calling.passes_in_place(name))
     }
 
     fn calling(&self) -> Option<&'static dyn TargetCalling> {
@@ -1593,7 +1652,8 @@ impl Builder<'_> {
             return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
         }
         let mut outs = Vec::new();
-        let variadic_from = if std::mem::take(&mut self.variadic_call) { self.fixed_args } else { usize::MAX };
+        let variadic = std::mem::take(&mut self.variadic_call);
+        let variadic_from = if variadic { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
                 Some(ISD::SignExtend) => Ext::Sign,
@@ -1608,13 +1668,17 @@ impl Builder<'_> {
             }
         }
         let void = self.module.context.types.is_void(result_type);
-        // `ComputeValueVTs`: an aggregate result is its leaves, each answered like a scalar result.
+        // `ComputeValueVTs`: an aggregate result is its leaves, each answered
+        // like a scalar result.
         let mut layout: Vec<(EVT, usize)> = Vec::new();
         let mut ins: Vec<In> = Vec::new();
         let aggregate = !void && self.is_aggregate(result_type);
         if !void {
-            let leaf_types: Vec<TypeId> =
-                if aggregate { self.leaves(result_type)?.into_iter().map(|(leaf, _)| leaf).collect() } else { vec![result_type] };
+            let leaf_types: Vec<TypeId> = if aggregate {
+                self.leaves(result_type)?.into_iter().map(|(leaf, _)| leaf).collect()
+            } else {
+                vec![result_type]
+            };
             for leaf in leaf_types {
                 let vt = self.type_of(leaf)?;
                 let pointer = self.is_pointer_type(leaf);
@@ -1627,7 +1691,8 @@ impl Builder<'_> {
         let vt = layout.first().map_or(EVT::OTHER, |(vt, _)| *vt);
         calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
-        // `IsTailCall`: the call in tail position, if the target takes it, ends the block
+        // `IsTailCall`: the call in tail position, if the target takes it, ends
+        // the block
         if let Some(tail) = self.tail_candidate.take()
             && let Some(node) = calling.lower_tail_call(&mut self.dag, root, callee_node, &outs)
         {
@@ -1636,7 +1701,16 @@ impl Builder<'_> {
             self.had_tail_call = true;
             return Ok(None);
         }
-        let (chain, parts) = calling.lower_call(&mut self.dag, root, callee_node, &outs, &ins);
+        let info = &mut *self.info;
+        let (chain, parts) = calling.lower_call_with_frame(
+            &mut self.dag,
+            root,
+            callee_node,
+            &outs,
+            &ins,
+            variadic,
+            &mut |size, align| info.new_stack_object(size, align),
+        );
         self.dag.set_root(chain);
         if void {
             return Ok(None);
@@ -1650,6 +1724,20 @@ impl Builder<'_> {
         }
         let _ = vt;
         Ok(Some(if aggregate { self.merge(&leaves) } else { leaves[0] }))
+    }
+
+    /// `visitUnreachable`: a trap for a target that traps
+    /// (`NoTrapAfterNoreturn` is off for it).
+    ///
+    /// DEVIATE: no exception for the call before it being a `llvm.trap`, which
+    /// has no intrinsic here. Exit: with the intrinsic.
+    fn visit_unreachable(&mut self) {
+        if !self.target.trap_unreachable {
+            return;
+        }
+        let root = self.root();
+        let trap = self.dag.get_node(ISD::Trap, EVT::OTHER, &[root]);
+        self.dag.set_root(trap);
     }
 
     fn call_node(&self) -> ISD {
@@ -1738,6 +1826,7 @@ impl Builder<'_> {
                             base: MemBase::CallArgument((displacement - first + index as i64 * part_bytes) as i32),
                             ext: None,
                             space: 0,
+                            ordering: None,
                         };
                         stores.push(self.dag.get_store(chain, *piece, address, mem));
                     }
@@ -2315,7 +2404,8 @@ impl Builder<'_> {
             self.pending_exports.push(chain);
             return Ok(());
         }
-        // `RegsForValue::getCopyToRegs`: "if (ExtendKind == ISD::ANY_EXTEND) if (TLI.isZExtFree(peekThroughFreeze(Val), RegisterVT))".
+        // `RegsForValue::getCopyToRegs`: "if (ExtendKind == ISD::ANY_EXTEND) if
+        // (TLI.isZExtFree(peekThroughFreeze(Val), RegisterVT))".
         let mut peeled = value;
         while self.dag.opcode(peeled) == ISD::Freeze {
             peeled = self.dag.operand(peeled, 0);
@@ -2386,7 +2476,7 @@ impl Builder<'_> {
             Opcode::Alloca { .. }
                 if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
             Opcode::Alloca { allocated, align, .. } => self.visit_alloca(&instruction, *allocated, *align)?,
-            Opcode::Unreachable => {}
+            Opcode::Unreachable => self.visit_unreachable(),
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
             Opcode::Call(info) => {
@@ -2445,7 +2535,7 @@ impl Builder<'_> {
         if matches!(opcode, ISD::Shl | ISD::Srl | ISD::Sra) {
             // visitShift: the amount in the target's shift type, and only these
             // flags
-            rhs = self.dag.get_zext_or_trunc(rhs, self.target.shift_amount);
+            rhs = self.dag.get_zext_or_trunc(rhs, self.target.shift_amount_for(self.dag.value_type(lhs)));
             flags = SDNodeFlags(
                 flags.0 & (SDNodeFlags::NO_UNSIGNED_WRAP.0 | SDNodeFlags::NO_SIGNED_WRAP.0 | SDNodeFlags::EXACT.0),
             );
@@ -2545,7 +2635,15 @@ impl Builder<'_> {
         let align = vt.size_in_bits().div_ceil(8);
         let index = self.info.new_stack_object(align, align);
         let slot = self.dag.get_frame_index(self.target.dag.pointer, index);
-        let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: vt,
+            align,
+            volatile: false,
+            base: MemBase::Stack(index),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let root = self.root();
         let store = self.dag.get_store(root, operand, slot, info);
         self.dag.set_root(store);
@@ -2871,7 +2969,7 @@ impl Builder<'_> {
                 Some(Type::Pointer(space)) if *space == roles.stack && roles.stack != roles.near => 258,
                 _ => 0,
             };
-        Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space })
+        Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space, ordering: None })
     }
 
     fn visit_load(
@@ -3045,7 +3143,9 @@ impl Builder<'_> {
                 SDNodeFlags::default().with(SDNodeFlags::NO_SIGNED_WRAP, nusw).with(SDNodeFlags::NO_UNSIGNED_WRAP, nuw);
             if element != 1 {
                 if element.is_power_of_two() {
-                    let amount = self.dag.get_constant(u128::from(element.trailing_zeros()), self.target.shift_amount);
+                    let amount = self
+                        .dag
+                        .get_constant(u128::from(element.trailing_zeros()), self.target.shift_amount_for(ptr_vt));
                     idx = self.dag.get_node_flags(ISD::Shl, ptr_vt, &[idx, amount], scale_flags);
                 } else {
                     let scale = self.dag.get_constant(u128::from(element), ptr_vt);
@@ -3489,8 +3589,8 @@ mod f80_tests {
         .unwrap_or_else(|why| panic!("{}", why.0));
     }
 
-    /// A call returning `{ i8, i8 }` was refused ("an aggregate result with a target's calling hook");
-    /// the hook is asked for each leaf's parts.
+    /// A call returning `{ i8, i8 }` was refused ("an aggregate result with a
+    /// target's calling hook"); the hook is asked for each leaf's parts.
     #[test]
     fn a_struct_result_is_answered_leaf_by_leaf() {
         let stub: &'static Results = Box::leak(Box::default());
@@ -3500,7 +3600,8 @@ mod f80_tests {
         );
         assert_eq!(*stub.results.lock().unwrap(), [EVT::I8, EVT::I8]);
     }
-    /// A target that takes a call in tail position as its own node, or answers none.
+    /// A target that takes a call in tail position as its own node, or answers
+    /// none.
     #[derive(Debug, Default)]
     struct Tails {
         takes: bool,
@@ -3594,22 +3695,28 @@ mod f80_tests {
         .unwrap_or_else(|why| panic!("{}", why.0));
     }
 
-    /// A call in tail position on a target with a calling hook was refused ("tail call ... with a
-    /// target's calling hook"); the target's `lower_tail_call` now ends the block.
+    /// A call in tail position on a target with a calling hook was refused
+    /// ("tail call ... with a target's calling hook"); the target's
+    /// `lower_tail_call` now ends the block.
     #[test]
     fn a_call_in_tail_position_is_the_targets_tail_call_where_it_takes_one() {
         let stub: &'static Tails = Box::leak(Box::new(Tails { takes: true, ..Tails::default() }));
-        built_with_tails("declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}", stub);
+        built_with_tails(
+            "declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}",
+            stub,
+        );
         assert_eq!((*stub.tails.lock().unwrap(), *stub.calls.lock().unwrap()), (1, 0));
     }
 
     #[test]
     fn a_target_that_takes_no_tail_call_gets_an_ordinary_call() {
         let stub: &'static Tails = Box::leak(Box::default());
-        built_with_tails("declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}", stub);
+        built_with_tails(
+            "declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}",
+            stub,
+        );
         assert_eq!((*stub.tails.lock().unwrap(), *stub.calls.lock().unwrap()), (0, 1));
     }
-
 }
 
 /// Whether `direct` names a `llrm.qb.` routine.
@@ -3621,4 +3728,3 @@ fn is_runtime_routine(
         .and_then(|global| builder.module.global(global).name.owned())
         .is_some_and(|name| name.starts_with(llrm_hir::mir::RUNTIME))
 }
-

@@ -739,7 +739,10 @@ impl Dag for DagisAdapter<'_> {
         &self,
         node: u32,
     ) -> bool {
-        matches!(self.dag.nodes()[node as usize].opcode, ISD::LoadPost | ISD::StorePost)
+        matches!(
+            self.dag.nodes()[node as usize].opcode,
+            ISD::LoadPost | ISD::StorePost
+        )
     }
     fn is_truncating_store(
         &self,
@@ -818,6 +821,12 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> bool {
         self.dag.nodes()[node as usize].flags.has(SDNodeFlags::DISJOINT)
+    }
+    fn has_no_unsigned_wrap(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.dag.nodes()[node as usize].flags.has(SDNodeFlags::NO_UNSIGNED_WRAP)
     }
     fn masked_value_is_zero(
         &self,
@@ -951,7 +960,16 @@ impl Dag for DagisAdapter<'_> {
     ) -> (u32, Vec<u32>) {
         let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
+        let old_operands: Vec<u32> = self.dag.nodes()[node as usize].ops.iter().map(|o| o.node).collect();
         let morphed = self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops);
+        // `SelectionDAG::MorphNodeTo` deletes the operands the new node no
+        // longer reads, and what only they read (a folded shift and its
+        // amount).
+        for operand in old_operands {
+            if operand != self.dag.entry_node().node && !self.has_live_users(operand) {
+                self.remove(operand);
+            }
+        }
         // `MorphNodeTo` reuses the node with new operands and resets its id
         // ("to the isel this is a newly allocated machine node"): left small
         // it would be pruned from a walk toward the later nodes it now reads.
