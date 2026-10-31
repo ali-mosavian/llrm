@@ -194,6 +194,11 @@ pub struct Options {
     /// disjoint. llrm only (the pin rematerializes invariant loads alone); off
     /// by default, `-fllrm-spares`. DEVIATE (no number), 8.0 M Ir at d_faces.
     pub spare_loads: bool,
+    /// A CFG simplification ahead of loop strength reduction, to tidy the
+    /// compare-and-branch that follows a `cmpxchg`: the pin's `AArch64PassConfig`
+    /// adds it (`EnableAtomicTidy`, AArch64TargetMachine.cpp#L666, d1106deb71cc),
+    /// X86's does not. Set by the target's driver.
+    pub atomic_cfg_tidy: bool,
     /// `Homes`: a phi that also sits in a stored cell is spilled to that cell
     /// (gcc `REG_EQUIV`). llrm only; off by default, `-fllrm-homes`. DEVIATE
     /// (no number), 8.4 M Ir at d_faces.
@@ -287,6 +292,7 @@ impl Default for Options {
             drop_stores: true,
             sink: true,
             spare_loads: false,
+            atomic_cfg_tidy: false,
             stored_homes: false,
             stable_loads: false,
             promote: true,
@@ -1165,6 +1171,10 @@ pub fn recorded(
     // again after each edit, as gcc's passes after IPA read the modref
     // summaries it made there.
     manager.freeze::<Summaries>();
+    // `AArch64PassConfig::addIRPasses`, after AtomicExpand and before LSR.
+    if applied.options.atomic_cfg_tidy && applied.options.simplifycfg {
+        manager.add(simplifycfg::SimplifyCfg { options: simplifycfg::Options::ATOMIC_TIDY });
+    }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
     if applied.options.wanted("fixednarrow") {

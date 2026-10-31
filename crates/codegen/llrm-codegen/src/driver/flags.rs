@@ -125,6 +125,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("tree-dse", |options, on| options.drop_stores = on),
     ("tree-dce", |options, on| options.dead = on),
     ("tree-sink", |options, on| options.sink = on),
+    ("aarch64-atomic-cfg-tidy", |options, on| options.atomic_cfg_tidy = on),
     ("llrm-spares", |options, on| options.spare_loads = on),
     ("llrm-homes", |options, on| options.stored_homes = on),
     ("llrm-stable-loads", |options, on| options.stable_loads = on),

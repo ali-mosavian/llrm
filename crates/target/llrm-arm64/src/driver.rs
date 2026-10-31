@@ -138,8 +138,8 @@ impl Level {
     }
 
     fn options(self) -> Options {
-        // The DAG builder lowers the switches (`visitSwitch`); the MIR pass would do it first.
-        Options { lower_switches: false, ..self.generic_options() }
+        // The pin's AArch64 pass config adds the atomic tidy at every level but -O0.
+        Options { atomic_cfg_tidy: true, lower_switches: false, ..self.generic_options() }
     }
 
     fn generic_options(self) -> Options {
