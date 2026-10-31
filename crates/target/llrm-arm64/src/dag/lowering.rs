@@ -775,6 +775,16 @@ pub fn lower_xor(
     node: SDValue,
 ) -> Option<SDValue> {
     let (mut sel, mut other) = (dag.operand(node, 0), dag.operand(node, 1));
+    // The inverted overflow bit is one `CSINC` with the inverted condition.
+    if dag.constant(other) == Some(1)
+        && sel.res == 1
+        && matches!(dag.opcode(SDValue { node: sel.node, res: 0 }), ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO)
+    {
+        let (_, flags, code) = xalu_flags(dag, sel.node)?;
+        let (tval, fval) = (dag.get_constant(1, EVT::I32), dag.get_constant(0, EVT::I32));
+        let ccode = cond_const(dag, code ^ 1);
+        return Some(dag.get_node(ISD::Target(a64::CSEL), dag.value_type(node), &[tval, fval, ccode, flags]));
+    }
     if dag.opcode(sel) != ISD::SelectCC {
         std::mem::swap(&mut sel, &mut other);
     }
@@ -874,4 +884,40 @@ pub fn lower_atomic_load_and(
     let ones = dag.get_constant(u128::MAX, vt);
     let complement = dag.get_node(ISD::Xor, vt, &[ones, rhs]);
     Some(dag.get_atomic_rmw(ISD::AtomicLoadClr, chain, ptr, complement, info))
+}
+
+/// `getAArch64XALUOOp` for the add and subtract forms: the value and flags of `ADDS`/`SUBS`, and the
+/// condition that says overflow. `None` for any other node, or a type that is not a register type.
+fn xalu_flags(
+    dag: &mut SelectionDAG,
+    node: u32,
+) -> Option<(SDValue, SDValue, u128)> {
+    let op = SDValue { node, res: 0 };
+    let (opcode, code) = match dag.opcode(op) {
+        ISD::SAddO => (a64::ADDS, cc::VS),
+        ISD::UAddO => (a64::ADDS, cc::HS),
+        ISD::SSubO => (a64::SUBS, cc::VS),
+        ISD::USubO => (a64::SUBS, cc::LO),
+        _ => return None,
+    };
+    let vt = dag.value_type(op);
+    if vt != EVT::I32 && vt != EVT::I64 {
+        return None;
+    }
+    let (lhs, rhs) = (dag.operand(op, 0), dag.operand(op, 1));
+    let value = dag.get_node_multi(ISD::Target(opcode), &[vt, EVT::I32], &[lhs, rhs]);
+    Some((SDValue { node: value.node, res: 0 }, SDValue { node: value.node, res: 1 }, code))
+}
+
+/// `LowerXALUO` for the add and subtract forms: the value of `ADDS`/`SUBS` and the overflow as a `CSINC`
+/// of the inverted condition.
+pub fn lower_xalu(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (value, flags, code) = xalu_flags(dag, node.node)?;
+    let (tval, fval) = (dag.get_constant(1, EVT::I32), dag.get_constant(0, EVT::I32));
+    let ccode = cond_const(dag, code ^ 1);
+    let overflow = dag.get_node(ISD::Target(a64::CSEL), EVT::I32, &[fval, tval, ccode, flags]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[dag.value_type(value), EVT::I32], &[value, overflow]))
 }

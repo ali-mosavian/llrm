@@ -261,6 +261,7 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::Select => super::lowering::lower_select(dag, node),
             ISD::SelectCC => super::lowering::lower_select_cc_node(dag, node),
             ISD::Xor => super::lowering::lower_xor(dag, node),
+            ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO => super::lowering::lower_xalu(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
