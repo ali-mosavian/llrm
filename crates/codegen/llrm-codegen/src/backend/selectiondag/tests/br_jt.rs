@@ -16,7 +16,13 @@ fn a_jump_table_branch_loads_the_entry_and_branches_to_it() {
     let index = dag.get_register(EVT::I32, 7);
     let branch = dag.get_node(ISD::BrJT, EVT::OTHER, &[chain, table, index]);
     dag.set_root(branch);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::BrInd);
     let entry = dag.operand(root, 1);

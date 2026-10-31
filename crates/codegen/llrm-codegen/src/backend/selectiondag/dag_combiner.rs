@@ -161,21 +161,26 @@ pub trait CombineHooks {
         EVT::I8
     }
 
-    /// `replaceStoreOfFPConstant` stores a `double` constant as one `i64` when that type is
-    /// legal. Default false until x86 is judged.
+    /// `replaceStoreOfFPConstant` stores a `double` constant as one `i64` when
+    /// that type is legal. Default false until x86 is judged.
     fn store_fp_constant_as_i64(&self) -> bool {
         false
     }
 
-    /// `reassociateOpsCommutative`'s pairing of `and`/`or` operands that are compares of one predicate.
-    /// DEVIATE: off by default (the pin runs it for every target). Exit: x86 judged.
+    /// `reassociateOpsCommutative`'s pairing of `and`/`or` operands that are
+    /// compares of one predicate. DEVIATE: off by default (the pin runs it
+    /// for every target). Exit: x86 judged.
     fn reassociate_compare_pairs(&self) -> bool {
         false
     }
 
-    /// `visitSELECT`'s `select (setcc x, y, cc), a, b` to `select_cc x, y, a, b, cc`, which the pin makes
-    /// before legalizing when `SELECT_CC` is legal or custom for `vt`. x86 has no `SELECT_CC`.
-    fn select_to_select_cc(&self, _vt: EVT) -> bool {
+    /// `visitSELECT`'s `select (setcc x, y, cc), a, b` to `select_cc x, y, a,
+    /// b, cc`, which the pin makes before legalizing when `SELECT_CC` is
+    /// legal or custom for `vt`. x86 has no `SELECT_CC`.
+    fn select_to_select_cc(
+        &self,
+        _vt: EVT,
+    ) -> bool {
         false
     }
 
@@ -185,8 +190,8 @@ pub trait CombineHooks {
         false
     }
 
-    /// `isIndexedLoadLegal`/`isIndexedStoreLegal` of `PRE_INC`/`POST_INC` (the only modes made) for an access
-    /// of `vt`. x86 has no indexed forms.
+    /// `isIndexedLoadLegal`/`isIndexedStoreLegal` of `PRE_INC`/`POST_INC` (the
+    /// only modes made) for an access of `vt`. x86 has no indexed forms.
     fn is_indexed_legal(
         &self,
         _is_load: bool,
@@ -196,8 +201,9 @@ pub trait CombineHooks {
         false
     }
 
-    /// `getPreIndexedAddressParts`/`getPostIndexedAddressParts`: the base and the signed offset of `access`
-    /// (a load or store) when `address` (an add or subtract) can be its update; the offset is made a constant of
+    /// `getPreIndexedAddressParts`/`getPostIndexedAddressParts`: the base and
+    /// the signed offset of `access` (a load or store) when `address` (an
+    /// add or subtract) can be its update; the offset is made a constant of
     /// the type of the address's second operand.
     fn indexed_address_parts(
         &self,
@@ -209,8 +215,8 @@ pub trait CombineHooks {
         None
     }
 
-    /// `isLegalAddressingMode` of `[reg + base_offs]` (scale 0) or `[reg + reg]` (scale 1) for an access of
-    /// `vt`.
+    /// `isLegalAddressingMode` of `[reg + base_offs]` (scale 0) or `[reg +
+    /// reg]` (scale 1) for an access of `vt`.
     fn is_legal_addressing_mode(
         &self,
         _vt: EVT,
@@ -799,7 +805,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ///
     /// [pin]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13507
-    /// `visitSELECT_CC`, the `SimplifySetCC` of its compare: a simpler compare is a new `select_cc`.
+    /// `visitSELECT_CC`, the `SimplifySetCC` of its compare: a simpler compare
+    /// is a new `select_cc`.
     fn visit_select_cc(
         &mut self,
         node: SDValue,
@@ -815,7 +822,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.opcode(simpler) != ISD::SetCC {
             return None;
         }
-        let (lhs, rhs, code) = (self.dag.operand(simpler, 0), self.dag.operand(simpler, 1), self.dag.operand(simpler, 2));
+        let (lhs, rhs, code) =
+            (self.dag.operand(simpler, 0), self.dag.operand(simpler, 1), self.dag.operand(simpler, 2));
         Some(self.dag.get_node(ISD::SelectCC, vt, &[lhs, rhs, ops[2], ops[3], code]))
     }
 
@@ -2129,7 +2137,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     && ((tli.types.is_type_legal(EVT::I64) && !self.legal_operations() && !info.volatile)
                         || tli.is_operation_legal_or_custom(ISD::Store, EVT::I64)) =>
             {
-                // `replaceStoreOfFPConstant`: "store double 1.0" is "store i64 0x3FF0...".
+                // `replaceStoreOfFPConstant`: "store double 1.0" is "store i64
+                // 0x3FF0...".
                 let constant = self.dag.get_constant(bits & 0xFFFF_FFFF_FFFF_FFFF, EVT::I64);
                 Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I64, info.align, info.base)))
             }

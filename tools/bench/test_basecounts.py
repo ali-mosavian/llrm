@@ -355,3 +355,11 @@ def test_the_two_jpeg_nib_os_rows_the_loopsimplify_fix_moves_are_excused_by_thei
     base = {("jpeg_fixed", "nib", "Os"): row(100, code_bytes=5304), ("jpeg_single", "nib", "Os"): row(100, code_bytes=5172)}
     assert len(bc.judge(measured, base, [])[0]) == 2
     assert bc.judge(measured, base, bc.waivers())[0] == []
+
+
+def test_two_runs_of_one_compiler_that_differ_in_any_count_are_named_and_equal_runs_pass():
+    """Main read 78 instructions in one run and 2 in another (qlight c -Os, two programs); the baseline was trusted without a second look."""
+    run = {FIB: row(100), ("fib", "c", "O2"): row(50, code_bytes=80), ("fib", "ow", "O2"): row(9)}
+    assert bc.unstable_cells(run, dict(run)) == []
+    flipped = {**run, ("fib", "c", "O2"): row(50, code_bytes=82), ("fib", "ow", "O2"): row(10)}
+    assert bc.unstable_cells(run, flipped) == ["UNSTABLE fib c -O2: code_bytes 80 vs 82"], "the reference compilers do not move with ours and are left out"

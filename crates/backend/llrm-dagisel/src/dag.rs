@@ -219,7 +219,8 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> bool;
-    /// `getAddressingMode()` is `POST_INC`/`POST_DEC`: the update comes after the access.
+    /// `getAddressingMode()` is `POST_INC`/`POST_DEC`: the update comes after
+    /// the access.
     fn is_post_indexed(
         &self,
         _node: u32,
@@ -255,8 +256,8 @@ pub trait Dag {
         &self,
         value: SDValue,
     ) -> Option<FpClass>;
-    /// The bit pattern of a `ConstantFPSDNode` (`getValueAPF().bitcastToAPInt()`); `None` for any
-    /// other node.
+    /// The bit pattern of a `ConstantFPSDNode`
+    /// (`getValueAPF().bitcastToAPInt()`); `None` for any other node.
     fn fp_bits(
         &self,
         _value: SDValue,
@@ -433,8 +434,9 @@ pub trait Hooks<D: Dag> {
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool;
-    /// `AArch64_AM::getFP32Imm` / `getFP64Imm` of a float constant's bits: the 8-bit code of an
-    /// `fmov` immediate, `None` if there is none. A target without the form never has one.
+    /// `AArch64_AM::getFP32Imm` / `getFP64Imm` of a float constant's bits: the
+    /// 8-bit code of an `fmov` immediate, `None` if there is none. A target
+    /// without the form never has one.
     fn fp_imm_code(
         &self,
         _bits: u128,

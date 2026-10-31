@@ -119,9 +119,8 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         regen: "tools/dagisel/regen-target.sh",
         desc: "desc",
         local_desc: true,
-        dag_imports: "Dag, Hooks, PatternContext, SDValue",
+        hooks: "Hooks",
         listed_predicates: target.listed_predicates,
-        predicate_bound: "Hooks<D>",
     };
     let write = |name: &str, text: String| {
         let path = inputs.out.join(name);

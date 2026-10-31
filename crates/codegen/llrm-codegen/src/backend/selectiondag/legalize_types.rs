@@ -38,8 +38,8 @@
 //! ([L636](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeTypes.cpp#L636)).
 
 use llrm_mir::hash::HashSet;
-use llrm_support::hash::HashMap;
 use llrm_sdag::lowering::ShiftAmount;
+use llrm_support::hash::HashMap;
 
 use super::actions::TargetLowering;
 use super::dag::{BooleanContents, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
@@ -816,7 +816,8 @@ impl<'a> TypeLegalizer<'a> {
                 SDValue { node: updated, res: 0 }
             }
             ISD::SetCC | ISD::SelectCC if at < 2 => {
-                // `PromoteSetCCOperands` (and `PromoteIntOp_SELECT_CC`): both operands promoted and extended
+                // `PromoteSetCCOperands` (and `PromoteIntOp_SELECT_CC`): both
+                // operands promoted and extended
                 // in the register to the compare's signedness.
                 let Some(code) = self.setcc_code(node) else {
                     return Err(LegalizeError::Unsupported {
@@ -851,7 +852,9 @@ impl<'a> TypeLegalizer<'a> {
                     }
                 };
                 let (lhs, rhs) = (extend(self, lhs), extend(self, rhs));
-                let mut ops: Vec<SDValue> = (0..if self.dag.opcode(node) == ISD::SelectCC { 5 } else { 3 }).map(|i| self.dag.operand(node, i)).collect();
+                let mut ops: Vec<SDValue> = (0..if self.dag.opcode(node) == ISD::SelectCC { 5 } else { 3 })
+                    .map(|i| self.dag.operand(node, i))
+                    .collect();
                 (ops[0], ops[1]) = (lhs, rhs);
                 let updated = self.dag.update_node_operands(n, &ops);
                 SDValue { node: updated, res: 0 }
@@ -926,7 +929,8 @@ impl<'a> TypeLegalizer<'a> {
                     && self.dag.value_type(self.dag.operand(node, 1)).is_integer()
                     && self.dag.value_type(self.dag.operand(node, 1)).size_in_bits() % 8 == 0 =>
             {
-                // `PromoteIntOp_STORE`: a truncating store of the promoted value.
+                // `PromoteIntOp_STORE`: a truncating store of the promoted
+                // value.
                 let (chain, value, ptr) =
                     (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
                 let NodeData::Mem(info) = self.dag.node(node).data else {

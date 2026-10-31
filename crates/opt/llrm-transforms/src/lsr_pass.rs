@@ -77,6 +77,20 @@ impl FunctionPass for LoopStrengthReduce {
         let Some(tti) = outer.target().tti() else { return PreservedAnalyses::all() };
         // The expressions of the passes before, as the pin keeps one SE for
         // the loop passes; handed back below where the CFG is as it was.
+        // Beyond the pin: a counter only some trips step gets a pointer first,
+        // where the target's address takes no scale and asks for it.
+        if !self.size
+            && tti.mirrors_conditional_counters()
+            && crate::mirror::mirrored(
+                unit.context,
+                unit.layout,
+                unit.function,
+                &outer,
+                &outer.target().address_forms(),
+            )
+        {
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        }
         let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);
         let (changed, scev) = reduced_held(
             unit.context,
@@ -411,10 +425,12 @@ pub fn reduced_held(
                         body: &lp_blocks,
                         iv_inc_insert_pos: plan.iv_inc_insert_pos,
                         dead: Vec::new(),
+                        hoisted: Vec::new(),
                         changed: false,
                     };
                     run.implement_solution(&plan);
                     let dead = std::mem::take(&mut run.dead);
+                    let hoisted = std::mem::take(&mut run.hoisted);
                     let rewrote = run.changed;
                     // `ImplementSolution`: the dead instructions go first, so
                     // the increments move over only the
@@ -432,6 +448,7 @@ pub fn reduced_held(
                         body: &lp_blocks,
                         iv_inc_insert_pos: plan.iv_inc_insert_pos,
                         dead: Vec::new(),
+                        hoisted,
                         changed: false,
                     };
                     run.move_increments();

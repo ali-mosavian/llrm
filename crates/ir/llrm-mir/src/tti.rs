@@ -67,6 +67,23 @@ impl CostKind {
     }
 }
 
+/// `TTI::AddressingModeKind`: the indexed addressing modes loop strength
+/// reduction favors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AddressingMode {
+    None,
+    PreIndexed,
+    PostIndexed,
+    All,
+}
+
+impl AddressingMode {
+    /// `AMK & AMK_PostIndexed`.
+    pub fn has_post_indexed(self) -> bool {
+        matches!(self, AddressingMode::PostIndexed | AddressingMode::All)
+    }
+}
+
 /// A scalar type as the cost model sees it (T1: vectors are not modelled).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ty {
@@ -642,6 +659,28 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// `getPreferredAddressingMode`: which indexed addressing LSR favors.
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        AddressingMode::None
+    }
+
+    /// `isIndexedLoadLegal(MIM_PostInc, ty)`: a load that steps its pointer by
+    /// the access size after it (`(An)+`).
+    fn is_post_inc_load_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
+    /// `isIndexedStoreLegal(MIM_PostInc, ty)`.
+    fn is_post_inc_store_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter
     /// that never passes its bound should become `!=` (`exitne`). Counting to
     /// zero and testing `!=` is cheap where a decrement sets the flags and one
@@ -674,6 +713,14 @@ pub trait Tti {
     /// first), not one register. The pin charges one and survives on 7
     /// registers; with 6 they spill every outer iteration.
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
+        false
+    }
+
+    /// Beyond the pin (which treats a counter only some trips step as no
+    /// induction variable, `createSimpleAffineAddRec`): such a counter gets a
+    /// pointer that steps with it, where the address takes no scale. False
+    /// keeps the pin's loops. Exit: none, a pass of its own.
+    fn mirrors_conditional_counters(&self) -> bool {
         false
     }
 

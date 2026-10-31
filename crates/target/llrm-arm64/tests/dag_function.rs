@@ -435,7 +435,9 @@ fn memcpy_is_refused_not_expanded_with_x86_registers() {
     let ir = "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
 define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 100, i1 false)\n  ret void\n}";
     let why = selected(ir).expect_err("refused");
-    assert!(why.contains("mem"), "{why}");
+    // A target with no string instructions now gets the `memcpy` library call; selecting its
+    // `ExternalSymbol` is not translated yet.
+    assert!(why.contains("mem") || why.contains("ExternalSymbol"), "{why}");
 }
 
 mod emitted {

@@ -100,7 +100,10 @@ impl TargetLoweringInfo {
     }
 
     /// A shift's amount is a constant of `vt` (`getScalarShiftAmountTy`).
-    pub fn with_shift_amount_type(mut self, vt: MVT) -> TargetLoweringInfo {
+    pub fn with_shift_amount_type(
+        mut self,
+        vt: MVT,
+    ) -> TargetLoweringInfo {
         self.shift_amount = ShiftAmount::Fixed(vt);
         self
     }

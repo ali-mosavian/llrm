@@ -20,8 +20,8 @@ use super::isd::ISD;
 const MAX_STEPS: usize = 8192;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
-    /// `getCombineLoadStoreParts`: whether `n` is an unindexed load or store the target can index, and its
-    /// address.
+    /// `getCombineLoadStoreParts`: whether `n` is an unindexed load or store
+    /// the target can index, and its address.
     fn combine_load_store_parts(
         &self,
         n: SDValue,
@@ -40,8 +40,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         Some((is_load, ptr))
     }
 
-    /// `SDNode::hasPredecessorHelper`: whether `target` is an operand of a node reachable through operands
-    /// from `starts`, not going through `visited`. Giving up after the step limit counts as reachable.
+    /// `SDNode::hasPredecessorHelper`: whether `target` is an operand of a node
+    /// reachable through operands from `starts`, not going through
+    /// `visited`. Giving up after the step limit counts as reachable.
     fn reaches_operand(
         &self,
         target: u32,
@@ -72,8 +73,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         false
     }
 
-    /// `canFoldInAddressingMode`: `user` is an unindexed access that takes `n` (an add or subtract) as its
-    /// address and the target can fold it.
+    /// `canFoldInAddressingMode`: `user` is an unindexed access that takes `n`
+    /// (an add or subtract) as its address and the target can fold it.
     fn can_fold_in_addressing_mode(
         &self,
         n: SDValue,
@@ -106,8 +107,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.hooks.is_legal_addressing_mode(info.mem_vt, base_offs, scale)
     }
 
-    /// `DAG.getConstant(offset, LHS->getValueType(0))`: the offset as a constant of the type of the update's
-    /// second operand.
+    /// `DAG.getConstant(offset, LHS->getValueType(0))`: the offset as a
+    /// constant of the type of the update's second operand.
     fn offset_constant(
         &mut self,
         address: SDValue,
@@ -144,13 +145,15 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return None;
         }
         let (is_load, ptr) = self.combine_load_store_parts(n, false)?;
-        // "If the pointer is not an add/sub, or if it doesn't have multiple uses, bail out."
+        // "If the pointer is not an add/sub, or if it doesn't have multiple
+        // uses, bail out."
         if !matches!(self.dag.opcode(ptr), ISD::Add | ISD::Sub) || self.dag.has_one_use(ptr.node) {
             return None;
         }
         let (mut base, signed_offset) = self.hooks.indexed_address_parts(self.dag, n, ptr, false)?;
         let mut offset = self.offset_constant(ptr, signed_offset);
-        // "Backends without true r+i pre-indexed forms may need to pass a constant base with a variable offset".
+        // "Backends without true r+i pre-indexed forms may need to pass a
+        // constant base with a variable offset".
         let mut swapped = false;
         if self.dag.constant(base).is_some() {
             std::mem::swap(&mut base, &mut offset);
@@ -171,7 +174,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return None;
             }
         }
-        // "The offset is a constant: other adds of constants on the base fold into the update."
+        // "The offset is a constant: other adds of constants on the base fold
+        // into the update."
         let mut other_uses: Vec<u32> = Vec::new();
         if self.dag.constant(offset).is_some() {
             for user in self.dag.users(base).collect::<Vec<_>>() {
@@ -232,7 +236,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         // "Replace other uses of BasePtr that can be updated to use Ptr."
         for other in other_uses {
             let other_value = SDValue { node: other, res: 0 };
-            let offset_at = if self.dag.operand(other_value, 1) == base || self.dag.operand(other_value, 1).node == base.node { 0 } else { 1 };
+            let offset_at =
+                if self.dag.operand(other_value, 1) == base || self.dag.operand(other_value, 1).node == base.node {
+                    0
+                } else {
+                    1
+                };
             let c0 = self.signed_constant(self.dag.operand(other_value, offset_at));
             let c1 = self.signed_constant(offset);
             let is_sub = self.dag.opcode(other_value) == ISD::Sub;
@@ -275,13 +284,15 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             if user == ptr.node {
                 continue;
             }
-            // "No if there's a later user which could perform the index instead."
+            // "No if there's a later user which could perform the index
+            // instead."
             if self.combine_load_store_parts(SDValue { node: user, res: 0 }, true).is_some()
                 && self.reaches_operand(n.node, &[user], Default::default())
             {
                 return None;
             }
-            // "If all the uses are load / store addresses, then don't do the transformation."
+            // "If all the uses are load / store addresses, then don't do the
+            // transformation."
             let user_value = SDValue { node: user, res: 0 };
             if matches!(self.dag.opcode(user_value), ISD::Add | ISD::Sub) {
                 for user_user in self.dag.users(user_value).collect::<Vec<_>>() {

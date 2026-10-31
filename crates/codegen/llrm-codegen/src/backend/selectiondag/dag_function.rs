@@ -1023,7 +1023,12 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: tli.can_use_cmov(), sse2, min_size: cpu.min_size || bytes_beat_clocks },
+            &mut X86Lowering {
+                cmov: tli.can_use_cmov(),
+                sse2,
+                min_size: cpu.min_size || bytes_beat_clocks,
+                i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+            },
             &selector,
             &mut hooks,
             &Info { source_order: true },

@@ -1249,3 +1249,40 @@ fn the_uses_of_a_local_are_walked_once_however_many_accesses_ask() {
     let walks = llrm_analysis::frameescape::scans() - before;
     assert!(walks <= 3, "{walks} walks for 3 locals");
 }
+
+/// GVN simplifies with the dominator tree and the assumptions, as the pin's
+/// `simplifyInstruction(I, {DL, TLI, DT, AC})`: `umax(%p, 1)` of a phi whose
+/// edges are each guarded by `sgt x, 0` (one through a block the branch
+/// dominates) is `%p`. Without them the call stayed (grep -O2: the read loop's
+/// trip count).
+#[test]
+fn test_gvn_simplifies_a_umax_of_a_phi_guarded_on_every_edge() {
+    let text = "declare i32 @llvm.umax.i32(i32, i32)
+declare i32 @rd()
+define i32 @f() {
+e:
+  %a = call i32 @rd()
+  %g = icmp sgt i32 %a, 0
+  br i1 %g, label %m, label %x
+x:
+  %b = call i32 @rd()
+  %h = icmp sgt i32 %b, 0
+  br i1 %h, label %t2, label %z
+t2:
+  br label %m
+m:
+  %p = phi i32 [ %a, %e ], [ %b, %t2 ]
+  %u = call i32 @llvm.umax.i32(i32 %p, i32 1)
+  ret i32 %u
+z:
+  ret i32 0
+}
+";
+    let mut module = parsed(text);
+    let layout = llrm_analysis::testing::layout(&module);
+    let outer = llrm_mir::passes::Outer::of(&module, None);
+    let (context, function) = module.function_mut("f").expect("@f");
+    run_impl_cfg(context, &layout, function, &outer, true, None);
+    let out = printed(&module);
+    assert!(!out.contains("call i32 @llvm.umax"), "{out}");
+}

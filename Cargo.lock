@@ -599,6 +599,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-lir",
  "llrm-mir",
+ "llrm-support",
 ]
 
 [[package]]
