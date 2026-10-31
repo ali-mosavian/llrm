@@ -374,3 +374,4 @@ def test_a_base_measured_on_other_sources_than_the_heads_is_refused_and_rebased_
     with pytest.raises(SystemExit, match="q"):
         bc.rebased(base, {}, was, now)
     assert bc.rebased(base, {"q/c/O2": {"clocks": 460}}, was, now) == {"s/c/O2": {"clocks": 7}, "q/c/O2": {"clocks": 460}}
+    assert bc.rebased(base, {}, was, was) == base, "unchanged sources: the base stands, no overlay needed"
