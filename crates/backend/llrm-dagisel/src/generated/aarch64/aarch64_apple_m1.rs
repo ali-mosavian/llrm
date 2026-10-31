@@ -22838,6 +22838,7 @@ pub const MACHINE_OPCODES: &[(u16, &str)] = &[
     (1965, "ASRVWr"),
     (1966, "ASRVXr"),
     (2006, "B"),
+    (2154, "BFMWri"),
     (2155, "BFMXri"),
     (2172, "BICSWrs"),
     (2173, "BICSXrs"),

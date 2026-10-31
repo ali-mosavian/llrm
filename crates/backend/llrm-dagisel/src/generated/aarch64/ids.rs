@@ -764,6 +764,7 @@ pub mod opcode {
     pub const BFMUL_ZPmZ: u16 = 2151;
     pub const BFMUL_ZZZ: u16 = 2152;
     pub const BFMUL_ZZZI: u16 = 2153;
+    pub const BFMWri: u16 = 2154;
     pub const BFMXri: u16 = 2155;
     pub const BFSCALE_ZPmZ: u16 = 2160;
     pub const BFSUB_VG2_M2Z_H_PSEUDO: u16 = 509;

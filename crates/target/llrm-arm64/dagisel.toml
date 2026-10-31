@@ -43,6 +43,8 @@ extra_symbols = [
   "AArch64::LDRSpost",
   "AArch64::LDRDpost",
   "AArch64::LDRQpost",
+  # Selected by hand (tryBitfieldInsertOp).
+  "AArch64::BFMWri",
 ]
 ids_includes = [
   '#include "MCTargetDesc/AArch64MCTargetDesc.h"',
