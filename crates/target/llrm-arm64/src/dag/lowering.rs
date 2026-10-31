@@ -477,6 +477,12 @@ pub fn lower_select(
     if !result.is_integer() && !result.is_floating_point() {
         return None;
     }
+    // An overflow bit selects on the condition of the flags it came from.
+    if is_xalu_overflow(dag, cond) {
+        let (_, flags, code) = xalu_flags(dag, cond.node)?;
+        let ccode = cond_const(dag, code);
+        return Some(dag.get_node(ISD::Target(a64::CSEL), result, &[tval, fval, ccode, flags]));
+    }
     let (lhs, rhs, code) = if dag.opcode(cond) == ISD::SetCC {
         (dag.operand(cond, 0), dag.operand(cond, 1), cond_of(dag, dag.operand(cond, 2)))
     } else {
@@ -776,10 +782,7 @@ pub fn lower_xor(
 ) -> Option<SDValue> {
     let (mut sel, mut other) = (dag.operand(node, 0), dag.operand(node, 1));
     // The inverted overflow bit is one `CSINC` with the inverted condition.
-    if dag.constant(other) == Some(1)
-        && sel.res == 1
-        && matches!(dag.opcode(SDValue { node: sel.node, res: 0 }), ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO)
-    {
+    if dag.constant(other) == Some(1) && is_xalu_overflow(dag, sel) {
         let (_, flags, code) = xalu_flags(dag, sel.node)?;
         let (tval, fval) = (dag.get_constant(1, EVT::I32), dag.get_constant(0, EVT::I32));
         let ccode = cond_const(dag, code ^ 1);
@@ -920,4 +923,15 @@ pub fn lower_xalu(
     let ccode = cond_const(dag, code ^ 1);
     let overflow = dag.get_node(ISD::Target(a64::CSEL), EVT::I32, &[fval, tval, ccode, flags]);
     Some(dag.get_node_multi(ISD::MergeValues, &[dag.value_type(value), EVT::I32], &[value, overflow]))
+}
+
+/// `isOverflowIntrOpRes` for the forms `xalu_flags` lowers.
+fn is_xalu_overflow(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    let op = SDValue { node: value.node, res: 0 };
+    value.res == 1
+        && matches!(dag.opcode(op), ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO)
+        && matches!(dag.value_type(op), EVT::I32 | EVT::I64)
 }
