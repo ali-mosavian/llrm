@@ -419,6 +419,36 @@ fn liveness<C>(
     }
 }
 
+/// The calls each virtual register is live across, as (block, instruction),
+/// the last instruction of a block first. One backward walk of each block over
+/// its live set: the work is the registers live at each call.
+pub(crate) fn call_crossings<T: Target>(function: &MFunction<T::Class>) -> Vec<Vec<(usize, usize)>> {
+    let count = function.classes.len();
+    let mut nodes = Nodes { count, physical: Vec::new() };
+    let effects_of: Vec<Vec<(Vec<usize>, Vec<usize>)>> = function
+        .blocks
+        .iter()
+        .map(|block| block.insts.iter().map(|inst| effects::<T>(inst, &mut nodes)).collect())
+        .collect();
+    let (_, live_out) = liveness(function, &effects_of);
+    let mut crossings = vec![Vec::new(); count];
+    for (at, block) in function.blocks.iter().enumerate() {
+        let mut live = live_out[at].clone();
+        for (i, (defs, uses)) in effects_of[at].iter().enumerate().rev() {
+            if block.insts[i].call {
+                for &v in live.iter().filter(|&&v| v < count && !defs.contains(&v)) {
+                    crossings[v].push((at, i));
+                }
+            }
+            for d in defs {
+                live.remove(d);
+            }
+            live.extend(uses.iter().copied());
+        }
+    }
+    crossings
+}
+
 /// The graph colouring allocator.
 pub struct GraphColoring<T> {
     /// Join copies that run on every trip of a loop before the ones in a

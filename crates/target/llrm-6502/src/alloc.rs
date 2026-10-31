@@ -16,7 +16,6 @@ use std::fmt::Write;
 
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
-use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
     Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, forward_reloads, machine_sink_in_place,
     remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
@@ -1976,15 +1975,18 @@ fn emit_on(
     stack: bool,
     cmos: bool,
 ) -> Result<(String, Vec<(String, usize)>), String> {
-    let run = |function: MFunction<Class>, sink: bool, share: bool| {
+    let run = |function: MFunction<Class>, sink: bool, share: bool, split: bool| {
         if stack {
-            emit_with::<true>(function, labels, cmos, sink, share)
+            emit_with::<true>(function, labels, cmos, sink, share, split)
         } else {
-            emit_with::<false>(function, labels, cmos, sink, share)
+            emit_with::<false>(function, labels, cmos, sink, share, split)
         }
     };
-    let (code, slots, sunk, shared) = run(function.clone(), true, true)?;
-    if !sunk && !shared {
+    let (code, slots, sunk, shared) = run(function.clone(), true, true, false)?;
+    // a function with calls that spilled may do better with a register kept in
+    // a slot across them only
+    let splittable = !slots.is_empty() && function.blocks.iter().any(|b| b.insts.iter().any(|i| i.call));
+    if !sunk && !shared && !splittable {
         return Ok((code, slots));
     }
     let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
@@ -1995,17 +1997,31 @@ fn emit_on(
     // each change is kept only where it is no larger and no slower than the
     // function without it
     let mut best = (code, slots);
+    let mut settings = (true, true);
     let mut variants = vec![(false, false)];
     if sunk && shared {
         variants.extend([(true, false), (false, true)]);
     }
+    if !sunk && !shared {
+        variants.clear();
+    }
     for (sink, share) in variants {
-        let Ok((other, other_slots, _, _)) = run(function.clone(), sink, share) else { continue };
+        let Ok((other, other_slots, _, _)) = run(function.clone(), sink, share, false) else { continue };
         if let (Ok(kept), Ok(candidate)) = (price(&best.0, &best.1), price(&other, &other_slots)) {
             if kept.0 > candidate.0 || kept.1 > candidate.1 {
                 best = (other, other_slots);
+                settings = (sink, share);
             }
         }
+    }
+    if splittable
+        && let Ok((other, other_slots, _, _)) = run(function.clone(), settings.0, settings.1, true)
+        && let (Ok(kept), Ok(candidate)) = (price(&best.0, &best.1), price(&other, &other_slots))
+        && candidate.0 <= kept.0
+        && candidate.1 <= kept.1
+        && candidate != kept
+    {
+        best = (other, other_slots);
     }
     Ok(best)
 }
@@ -2138,6 +2154,7 @@ fn emit_with<const STACK: bool>(
     cmos: bool,
     sink: bool,
     share: bool,
+    split: bool,
 ) -> Result<(String, Vec<(String, usize)>, bool, bool), String> {
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
@@ -2146,7 +2163,8 @@ fn emit_with<const STACK: bool>(
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
     two_address(&mut function);
-    let (assignment, mut slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;
+    let (assignment, mut slots) =
+        llrm_spike_mf::spill::allocate_spilling_splitting::<Mos<STACK>>(&mut function, 0, false, split)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);
     let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
     // On the stack, spills sit above the locals, in the frame: the bytes of

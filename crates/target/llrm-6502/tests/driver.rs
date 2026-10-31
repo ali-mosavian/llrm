@@ -624,3 +624,41 @@ define void @copy(ptr noalias %d, ptr noalias %s, i16 %n) {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert!(text.contains("jsr memcpy"), "{text}");
 }
+
+/// lz4 with a call in its loop: 14 bytes are live across it and only four
+/// pairs survive a call, so the rest sat in slots for the whole function, 1038
+/// bytes against 542 without the call. Kept in a slot across the call only
+/// (RAGreedy's split around a call), 929.
+const LZ4_CALL: &str = include_str!("bench/lz4_call.ll");
+
+#[test]
+fn registers_live_across_a_call_are_in_a_slot_across_it_only() {
+    let ir = module(LZ4_CALL);
+    assert!(ir.contains("call void @touch()"), "the premise: a call in the loop");
+    let request = Request::new(Level::O2);
+    let text = assembly(&ir, &request).unwrap();
+    let bytes = llrm_6502::timing::estimate(request.cpu, &text).unwrap().bytes;
+    assert!(bytes < 1000, "{bytes} B\n{text}");
+}
+
+/// The values stored before the call and loaded after it are the ones the loop
+/// reads: one literal `A`, then a 4-byte match at distance 1 makes five, and
+/// the fifth is `A` (65): 5 + 65.
+#[test]
+fn lz4_with_a_call_still_decodes() {
+    let ir = module(&format!(
+        r#"{LZ4_CALL}
+@inp = internal global [4 x i8] c"\10A\01\00"
+@out = internal global [8 x i8] zeroinitializer
+define i8 @run() {{
+  %n = call i16 @lz4(ptr @inp, ptr @out, i16 5)
+  %last = getelementptr i8, ptr @out, i16 4
+  %b = load i8, ptr %last
+  %n8 = trunc i16 %n to i8
+  %r = add i8 %n8, %b
+  ret i8 %r
+}}"#
+    ));
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert_eq!(exit_code_of(&format!("{text}\n.export touch\ntouch:\n  rts\n"), "run"), 70, "{text}");
+}
