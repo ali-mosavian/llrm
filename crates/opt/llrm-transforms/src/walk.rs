@@ -442,21 +442,38 @@ impl ProgramPass for Walk {
                                 // takes a trial that grows the code where the
                                 // clocks it saves are worth the growth.
                                 let rate = tti.speed_milliclocks_per_byte();
-                                let saved = if size == crate::inlinecost::CallerSize::Speed && rate > 0 {
-                                    let callees: i64 = calls
+                                let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && rate > 0 {
+                                    let costs = program.target.size_costs();
+                                    let now = module.global(id).function().expect("a body");
+                                    let callees: Vec<&llrm_mir::module::Function> = calls
                                         .iter()
                                         .filter_map(|one| trials[one].callee)
                                         .filter_map(|callee| module.global(callee).function())
+                                        .collect();
+                                    let run: i64 = callees
+                                        .iter()
                                         .map(|body| function_clocks(module, &program.layout, tti, body))
                                         .sum();
-                                    let now = module.global(id).function().expect("a body");
-                                    kept_clocks + callees - function_clocks(module, &program.layout, tti, now)
+                                    let gone: i64 = if credit > 0 {
+                                        callees
+                                            .iter()
+                                            .map(|body| function_bytes(module, &program.layout, &costs, body))
+                                            .sum()
+                                    } else {
+                                        0
+                                    };
+                                    (
+                                        kept_clocks + run - function_clocks(module, &program.layout, tti, now),
+                                        function_bytes(module, &program.layout, &costs, now)
+                                            - function_bytes(module, &program.layout, &costs, &kept)
+                                            - gone,
+                                    )
                                 } else {
-                                    0
+                                    (0, 0)
                                 };
                                 if remarks {
                                     eprintln!(
-                                        "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee, {} clocks saved)",
+                                        "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee, {} clocks saved, {} bytes)",
                                         module.global(id).name.as_deref().unwrap_or("?"),
                                         module.global(id).function().map_or(0, |one| one.walk().count()),
                                         calls.len(),
@@ -468,10 +485,11 @@ impl ProgramPass for Walk {
                                         tried,
                                         best,
                                         credit,
-                                        saved
+                                        saved,
+                                        growth
                                     );
                                 }
-                                if tried <= best + credit || (saved > 0 && (tried - best - credit) * rate <= saved * 1000) {
+                                if tried <= best + credit || (saved > 0 && growth * rate <= saved * 1000) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -719,6 +737,100 @@ mod tests;
 
 /// SZ2: the largest caller, in instructions, whose refused sites are tried.
 const TRIAL_CALLER: usize = 300;
+
+/// SZ2: the bytes `function` becomes, by the target's byte prices
+/// (`Machine::size_costs`, the opcode table's encodings): each operation is
+/// the instructions it lowers to, a dword where the word is smaller
+/// carrying its operand-size prefix, a divide by a constant its multiply-high
+/// sequence. The `CodeSize` units of the cost model count instructions of
+/// the pin's x86, not bytes of a 16-bit encoding.
+fn function_bytes(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    costs: &llrm_mir::target::OperationCosts,
+    function: &llrm_mir::module::Function,
+) -> i64 {
+    use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
+    use llrm_mir::tti::Ty;
+    let word = layout.pointer(0).bits.max(16);
+    function
+        .walk()
+        .map(|(_, inst)| {
+            let operation = function.instruction(inst);
+            let ty = operation.operands.first().and_then(|&operand| function.operand_type(&module.context, operand));
+            let kind = ty.and_then(|ty| Ty::of(&module.context.types, ty));
+            let wide = matches!(kind, Some(Ty::Int(bits)) if bits > word);
+            let prefix = if wide { costs.prefix } else { 0 };
+            let float = matches!(kind, Some(Ty::Float | Ty::Double | Ty::X87));
+            let constant_divisor = operation
+                .operands
+                .get(1)
+                .is_some_and(
+                    |&operand| matches!(
+                        operand,
+                        llrm_mir::module::Operand::Constant(id) if matches!(module.context.get(id).kind, llrm_mir::context::ConstantKind::Int(_))
+                    ),
+                );
+            match &operation.opcode {
+                Opcode::Binary(op) => match op {
+                    BinaryOp::FAdd | BinaryOp::FSub => costs.float_add,
+                    BinaryOp::FMul => costs.float_multiply,
+                    BinaryOp::FDiv | BinaryOp::FRem => costs.float_divide,
+                    BinaryOp::Mul => (if wide { costs.multiply_long } else { costs.multiply }) + prefix,
+                    BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem if constant_divisor => {
+                        // The multiply-high sequence: the constant, the high
+                        // multiply, two shifts and two adds (a remainder
+                        // multiplies back and subtracts).
+                        let rem = matches!(op, BinaryOp::URem | BinaryOp::SRem);
+                        2 * costs.r#move
+                            + costs.multiply_long
+                            + 2 * costs.shift
+                            + 2 * costs.add
+                            + if rem { costs.multiply_long + costs.add } else { 0 }
+                            + 4 * costs.prefix
+                    }
+                    BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem => {
+                        (if wide { costs.divide_long } else { costs.divide }) + prefix
+                    }
+                    BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => costs.shift + prefix,
+                    _ => costs.add + prefix,
+                },
+                Opcode::Cast(cast) => match cast {
+                    CastOp::Trunc | CastOp::BitCast | CastOp::AddrSpaceCast | CastOp::PtrToInt | CastOp::IntToPtr => 0,
+                    CastOp::FPToSI | CastOp::FPToUI | CastOp::SIToFP | CastOp::UIToFP => {
+                        costs.float_store + costs.float_load
+                    }
+                    CastOp::FPTrunc | CastOp::FPExt | CastOp::FPRound => costs.float_store + costs.float_load,
+                    CastOp::ZExt | CastOp::SExt => costs.extend,
+                },
+                Opcode::Load { .. } => (if float { costs.float_load } else { costs.load }) + prefix,
+                Opcode::Store { .. } => {
+                    let stored =
+                        operation.operands.first().and_then(|&operand| function.operand_type(&module.context, operand));
+                    let stored = stored.and_then(|ty| Ty::of(&module.context.types, ty));
+                    let wide = matches!(stored, Some(Ty::Int(bits)) if bits > word);
+                    (if matches!(stored, Some(Ty::Float | Ty::Double | Ty::X87)) {
+                        costs.float_store
+                    } else {
+                        costs.store
+                    }) + if wide { costs.prefix } else { 0 }
+                }
+                Opcode::GetElementPtr { .. } => costs.address,
+                Opcode::ICmp(_) | Opcode::FCmp(_) => costs.add + prefix,
+                Opcode::Select => costs.branch + costs.r#move,
+                Opcode::Br => costs.branch,
+                Opcode::Switch => costs.branch * 2,
+                Opcode::Call(_) | Opcode::Invoke(_) => {
+                    costs.call + costs.argument * operation.operands.len().saturating_sub(1) as i64
+                }
+                Opcode::Ret => costs.return_,
+                Opcode::Phi => costs.r#move,
+                Opcode::Alloca { .. } | Opcode::Freeze | Opcode::ExtractValue(_) | Opcode::InsertValue(_) => 0,
+                _ => costs.add,
+            }
+        })
+        .sum()
+}
 
 /// SZ2: the clocks of `function` run once, by the target's latency model.
 fn function_clocks(
