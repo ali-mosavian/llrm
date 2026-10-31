@@ -12,11 +12,14 @@
 //! out. An instruction's `at` is `2 * ordinal`, the key back to the
 //! instruction it came from ([`Converted::origin`]).
 //!
-//! DEVIATE 1: a physical read with no definition earlier in its block is a
-//! live-in value pinned to the register, with no flow from the predecessors.
-//! Reason: the spike functions keep a/x/y and the argument registers inside a
-//! block. Exit: D-6502, when a function that carries one across blocks needs
-//! it.
+//! A physical register is one value for the whole function, so greedy's
+//! liveness carries it across blocks; a register read before any definition
+//! reaches it is an input (`LirBody::inputs`), found by backward liveness.
+//!
+//! DEVIATE 1: two physical registers that share a root (a pair and its
+//! bytes) in one function are refused, as greedy would see two pinned values
+//! meeting in one register. Reason: a value has no sub-register index to
+//! say one is part of the other. Exit: D-6502, if a 6502 function needs both.
 //!
 //! DEVIATE 2: no block odds. The `MFunction` states none, so greedy's block
 //! frequencies come from its loop estimate. Exit: D-6502, with the odds the
@@ -99,6 +102,7 @@ pub fn to_lir<T: Target>(
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return Err(format!("{}: a phi reached the converter", function.name));
     }
+    aliases::<T>(function)?;
     let widths: Vec<u32> = function.classes.iter().map(|class| class_width::<T>(registers, *class)).collect();
     let successors = successors(function);
     let mut made = Made {
@@ -107,18 +111,17 @@ pub fn to_lir<T: Target>(
         widths: &widths,
         next: function.classes.len() as u32 + 1,
         pins: IndexMap::default(),
-        inputs: BTreeSet::new(),
+        values: IndexMap::default(),
         origin: Vec::new(),
         marker: PhantomData::<T>,
     };
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for (at, block) in function.blocks.iter().enumerate() {
-        let mut latest: IndexMap<RegId, u32> = IndexMap::default();
         let mut insns = Vec::with_capacity(block.insts.len());
         for (position, inst) in block.insts.iter().enumerate() {
             let ordinal = made.origin.len() as i64;
             made.origin.push((at, position));
-            insns.push(Arc::new(made.insn(inst, 2 * ordinal, &mut latest)));
+            insns.push(Arc::new(made.insn(inst, 2 * ordinal)));
         }
         let mut lir = LirBlock::new(at as i64, insns);
         lir.succ = successors[at].iter().map(|to| *to as i64).collect();
@@ -126,7 +129,7 @@ pub fn to_lir<T: Target>(
     }
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
-    body.inputs = made.inputs.clone();
+    body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
     for (v, class) in function.classes.iter().enumerate() {
         orders.insert(v as u32 + 1, T::candidates(*class));
@@ -170,19 +173,29 @@ struct Made<'f, T: Target> {
     /// The next value a pinned register gets.
     next: u32,
     pins: IndexMap<u32, RegId>,
-    inputs: BTreeSet<u32>,
+    values: IndexMap<RegId, u32>,
     origin: Vec<(usize, usize)>,
     marker: PhantomData<T>,
 }
 
 impl<T: Target> Made<'_, T> {
+    /// The value of a physical register: one for the whole function, so
+    /// greedy's liveness follows it across blocks and through every rewrite.
     fn pinned(
         &mut self,
         register: RegId,
     ) -> (u32, u32) {
-        let value = self.next;
-        self.next += 1;
-        self.pins.insert(value, register);
+        let value = *self
+            .values
+            .entry(register)
+            .or_insert_with(
+                || {
+                    let value = self.next;
+                    self.next += 1;
+                    self.pins.insert(value, register);
+                    value
+                },
+            );
         (value, self.registers.bytes(register).map_or(1, |bytes| bytes as u32))
     }
 
@@ -190,7 +203,6 @@ impl<T: Target> Made<'_, T> {
         &mut self,
         inst: &Inst,
         at: i64,
-        latest: &mut IndexMap<RegId, u32>,
     ) -> Insn {
         let (mut defines, mut uses) = (Vec::new(), Vec::new());
         let (mut dests, mut sources) = (Vec::new(), Vec::new());
@@ -209,15 +221,7 @@ impl<T: Target> Made<'_, T> {
                     if T::reserved(T::root(*register)) {
                         continue;
                     }
-                    let value = match latest.get(register) {
-                        Some(value) => *value,
-                        None => {
-                            let (value, _) = self.pinned(*register);
-                            self.inputs.insert(value);
-                            latest.insert(*register, value);
-                            value
-                        }
-                    };
+                    let value = self.pinned(*register).0;
                     let width = self.registers.bytes(*register).map_or(1, |bytes| bytes as u32);
                     let held = Held { value, width };
                     uses.push(value);
@@ -250,7 +254,6 @@ impl<T: Target> Made<'_, T> {
                         continue;
                     }
                     let (value, width) = self.pinned(*register);
-                    latest.insert(*register, value);
                     let held = Held { value, width };
                     defines.push(value);
                     delivers.push((held, *register));
@@ -566,4 +569,83 @@ impl FrameInfo for SpikeFrame {
         _stacks: IndexMap<i64, Vec<(i64, i64)>>,
     ) {
     }
+}
+
+/// The allocatable physical registers `inst` reads and writes.
+fn physical<T: Target>(inst: &Inst) -> (impl Iterator<Item = RegId> + '_, impl Iterator<Item = RegId> + '_) {
+    let of = |operand: &Operand, def: bool| match operand {
+        Operand::Use(Reg::Phys(r)) if !def && !T::reserved(T::root(*r)) => Some(*r),
+        Operand::Def(Reg::Phys(r)) if def && !T::reserved(T::root(*r)) => Some(*r),
+        _ => None,
+    };
+    (inst.operands.iter().filter_map(move |o| of(o, false)), inst.operands.iter().filter_map(move |o| of(o, true)))
+}
+
+/// Two registers of one root in a function are refused (DEVIATE 1).
+fn aliases<T: Target>(function: &MFunction<T::Class>) -> Result<(), String> {
+    let mut seen: IndexMap<RegId, RegId> = IndexMap::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        let (reads, writes) = physical::<T>(inst);
+        for register in reads.chain(writes) {
+            let first = *seen.entry(T::root(register)).or_insert(register);
+            if first != register {
+                return Err(format!("{}: registers {first:?} and {register:?} share a root", function.name));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The physical registers read on some path from the entry before any
+/// definition: backward liveness over the registers the function names, one
+/// bit each. Cost: O(registers x (instructions + edges)), registers being
+/// the target's constant.
+fn entry_live<T: Target>(
+    function: &MFunction<T::Class>,
+    successors: &[Vec<usize>],
+) -> Vec<RegId> {
+    let mut names: Vec<RegId> = Vec::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        let (reads, writes) = physical::<T>(inst);
+        for register in reads.chain(writes) {
+            if !names.contains(&register) {
+                names.push(register);
+            }
+        }
+    }
+    let words = names.len().div_ceil(64).max(1);
+    let bit = |register: RegId| names.iter().position(|one| *one == register).unwrap();
+    let (mut exposed, mut killed) =
+        (vec![vec![0u64; words]; function.blocks.len()], vec![vec![0u64; words]; function.blocks.len()]);
+    for (at, block) in function.blocks.iter().enumerate() {
+        for inst in &block.insts {
+            let (reads, writes) = physical::<T>(inst);
+            for register in reads {
+                let n = bit(register);
+                if killed[at][n / 64] >> (n % 64) & 1 == 0 {
+                    exposed[at][n / 64] |= 1 << (n % 64);
+                }
+            }
+            for register in writes {
+                let n = bit(register);
+                killed[at][n / 64] |= 1 << (n % 64);
+            }
+        }
+    }
+    let mut live_in = exposed.clone();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for at in (0..function.blocks.len()).rev() {
+            for w in 0..words {
+                let out = successors[at].iter().fold(0u64, |all, to| all | live_in[*to][w]);
+                let now = exposed[at][w] | (out & !killed[at][w]);
+                if now != live_in[at][w] {
+                    live_in[at][w] = now;
+                    changed = true;
+                }
+            }
+        }
+    }
+    names.iter().enumerate().filter(|(n, _)| live_in[0][n / 64] >> (n % 64) & 1 == 1).map(|(_, r)| *r).collect()
 }
