@@ -2260,6 +2260,49 @@ fn save_preserved<const STACK: bool>(
     true
 }
 
+/// `COPY a, x; CMP a, m` where nothing reads `a` afterwards compares the index
+/// register itself: `CPX m` (likewise `y`). A select after the compare reads
+/// `a` as the compare left it, so it keeps the copy.
+fn compare_index_registers(
+    function: &mut MFunction<Class>,
+    at: &dyn Fn(Reg) -> RegId,
+) {
+    let after = live_after(function, at);
+    for (b, block) in function.blocks.iter_mut().enumerate() {
+        let mut folds = Vec::new();
+        for i in 1..block.insts.len() {
+            let (copy, compare) = (&block.insts[i - 1], &block.insts[i]);
+            let [Operand::Def(to), Operand::Use(from)] = copy.operands[..] else { continue };
+            let (true, [_, Operand::Use(tested), _]) = (compare.kind == Kind::Op("CMP"), &compare.operands[..]) else {
+                continue;
+            };
+            let index = match at(from) {
+                reg::X => "CPX",
+                reg::Y => "CPY",
+                _ => continue,
+            };
+            let next = block.insts.get(i + 1);
+            let selected = next.is_some_and(|next| next.kind == Kind::Op("CMOV"));
+            // against zero the transfer already set the flags: no compare
+            let zero_test = compare.operands[2] == Operand::Imm(0) && next.is_some_and(reads_zero_or_sign_only);
+            if copy.kind == Kind::Copy
+                && at(to) == reg::A
+                && at(*tested) == reg::A
+                && !after[b][i].contains(&reg::A)
+                && !selected
+                && !zero_test
+            {
+                folds.push((i, index, from));
+            }
+        }
+        for (i, index, from) in folds.into_iter().rev() {
+            block.insts[i].kind = Kind::Op(index);
+            block.insts[i].operands[1] = Operand::Use(from);
+            block.insts.remove(i - 1);
+        }
+    }
+}
+
 /// Whether `inst` tests only the zero or sign flag: `beq`, `bne`, `bmi`, `bpl`,
 /// or a select or set whose condition code (the last immediate, before the
 /// flags it reads) is one of those.
@@ -2365,6 +2408,7 @@ fn emit_with<const STACK: bool>(
     );
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     branch_fold::<Mos<STACK>>(&mut function);
+    compare_index_registers(&mut function, &at);
     let moved = place && {
         let odds = loop_odds(&function);
         llrm_spike_mf::placement::place_blocks_counting::<Class, Mos<STACK>>(&mut function, &odds, false, true)
@@ -2374,6 +2418,22 @@ fn emit_with<const STACK: bool>(
     let mut out = String::new();
     let mut made = 0;
     let mut pending: Option<i64> = None;
+    // a call that returns at once is a jump: the callee's `rts` returns from
+    // here. `__csave` keeps the return address, and a frame to release stands
+    // between the call and the return.
+    let tail_call = |block: &Block, i: usize, pending: Option<i64>| {
+        let named = |inst: &Inst| {
+            matches!(
+                &inst.operands[..],
+                [Operand::Symbol(callee, _), ..] if !callee.starts_with("__csave")
+            )
+        };
+        block.insts[i].kind == Kind::Op("JSR")
+            && named(&block.insts[i])
+            && block.insts.get(i + 1).is_some_and(|next| next.kind == Kind::Op("RTS"))
+            && pending.is_none()
+            && !(spilled > 0 && !has_frame)
+    };
     let target = |operand: &Operand| match operand {
         Operand::Block(id) => labels[*id as usize][0].clone(),
         other => unreachable!("{other:?} is not a block"),
@@ -2482,7 +2542,10 @@ fn emit_with<const STACK: bool>(
                     parallel_move(&mut out, &[(regs[0], regs[5]), (regs[1], regs[6])], false);
                     writeln!(out, "{done}:").unwrap();
                 }
-                (Kind::Op("JSR"), [Operand::Symbol(callee, _), ..]) => writeln!(out, "  jsr {callee}").unwrap(),
+                (Kind::Op("JSR"), [Operand::Symbol(callee, _), ..]) => {
+                    let jump = tail_call(block, i, pending);
+                    writeln!(out, "  {} {callee}", if jump { "jmp" } else { "jsr" }).unwrap()
+                }
                 // return address, then target-1, then rts into the callee; its
                 // own rts lands on the label
                 (Kind::Op("JSRI"), _) => {
@@ -2611,25 +2674,15 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("RTS"), _) => {
                     // on the stack the frame is released last: the result
                     // copies after the epilogue may still reload spills
+                    let jumped = i.checked_sub(1).is_some_and(|before| tail_call(block, before, pending));
                     let release = pending.take().or((spilled > 0 && !has_frame).then_some(spilled));
                     if let Some(n) = release {
                         out.push_str("  pha\n");
                         adjust(&mut out, n);
                         out.push_str("  pla\n");
                     }
-                    // a call that returns at once is a jump: the callee's `rts`
-                    // returns from here; `__csave` keeps the return address
-                    let tail = out
-                        .strip_suffix('\n')
-                        .and_then(|text| text.rsplit('\n').next())
-                        .and_then(|line| line.strip_prefix("  jsr ").filter(|callee| !callee.starts_with("__csave")));
-                    match tail {
-                        Some(callee) => {
-                            let jump = format!("  jmp {callee}\n");
-                            out.truncate(out.trim_end().rfind('\n').map_or(0, |at| at + 1));
-                            out.push_str(&jump);
-                        }
-                        None => out.push_str("  rts\n"),
+                    if !jumped {
+                        out.push_str("  rts\n");
                     }
                 }
                 (Kind::Op("ADJSP"), [_, Operand::Imm(n)]) => {
@@ -2663,25 +2716,13 @@ fn emit_with<const STACK: bool>(
                         out.truncate(out.len() - last.len() - 1);
                     }
                 }
-                (Kind::Op("CMP"), [_, _, second]) => {
+                (Kind::Op(compare @ ("CMP" | "CPX" | "CPY")), [_, _, second]) => {
                     let text = match second {
                         Operand::Imm(value) => format!("#{value}"),
                         Operand::Frame(slot) => slot_name(*slot),
                         _ => register_name(regs[2]),
                     };
-                    // `txa; cmp m` compares x itself where nothing reads a
-                    // afterwards: `cpx m`
-                    let next_reads_a = block.insts.get(i + 1).is_some_and(|next| next.kind == Kind::Op("CMOV"));
-                    let direct = (!a_live && !next_reads_a)
-                        .then(|| [("  txa\n", "cpx"), ("  tya\n", "cpy")].into_iter().find(|(t, _)| out.ends_with(t)))
-                        .flatten();
-                    match direct {
-                        Some((transfer, compare)) => {
-                            out.truncate(out.len() - transfer.len());
-                            writeln!(out, "  {compare} {text}").unwrap();
-                        }
-                        None => writeln!(out, "  cmp {text}").unwrap(),
-                    }
+                    writeln!(out, "  {} {text}", compare.to_lowercase()).unwrap();
                 }
                 (Kind::Op(branch @ ("BEQ" | "BNE" | "BCC" | "BCS" | "BMI" | "BPL")), [to, _]) => {
                     writeln!(out, "  {} {}", branch.to_lowercase(), target(to)).unwrap();
