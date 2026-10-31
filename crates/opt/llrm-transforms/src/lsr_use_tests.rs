@@ -5,7 +5,10 @@ use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Operand};
 use llrm_mir::opcode::{BinaryOp, Opcode};
-use llrm_mir::tti::{Cost as TtiCost, LsrCost};
+use llrm_mir::tti::{
+    AddressingMode, ArithOp, CastKind, CmpSel, Cost as TtiCost, CostKind, ImmUser, LsrCost, MemoryOp, OperandInfo, Tti,
+    Ty as TtiTy,
+};
 use llrm_mir::valuetracking::AssumptionCache;
 use llrm_support::hash::HashSet;
 use llrm_x86::tti::{RealMode, X86};
@@ -365,5 +368,137 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
             cost.rate_formula(&mut rating, &fb, &mut regs, &visited, &lu, None);
             assert_eq!(cost.c.insns, both, "the same scaled register is not paid for again");
         }
+    });
+}
+
+/// A target that favors post-indexed addressing and has `(An)+` for every type,
+/// on the basic cost model.
+struct PostInc {
+    favored: bool,
+}
+
+impl Tti for PostInc {
+    fn cmp_sel_cost(
+        &self,
+        _: CmpSel,
+        _: TtiTy,
+        _: CostKind,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn memory_op_cost(
+        &self,
+        _: MemoryOp,
+        _: TtiTy,
+        _: CostKind,
+        _: bool,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: CostKind,
+    ) -> TtiCost {
+        if phi && kind != CostKind::RecipThroughput { TtiCost::FREE } else { TtiCost::BASIC }
+    }
+
+    fn int_imm_cost(
+        &self,
+        _: i128,
+        _: u32,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        _: ImmUser,
+        _: u32,
+        _: i128,
+        _: u32,
+    ) -> TtiCost {
+        TtiCost::FREE
+    }
+
+    fn is_truncate_free(
+        &self,
+        _: TtiTy,
+        _: TtiTy,
+    ) -> bool {
+        false
+    }
+
+    /// `d16(An)` and `(An)`.
+    fn is_legal_addressing_mode(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        !base_gv && has_base_reg && scale == 0 && i16::try_from(base_offset).is_ok()
+    }
+
+    fn cast_cost(
+        &self,
+        _: CastKind,
+        _: TtiTy,
+        _: TtiTy,
+        _: CostKind,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn arithmetic_cost(
+        &self,
+        _: ArithOp,
+        _: TtiTy,
+        _: CostKind,
+        _: OperandInfo,
+        _: OperandInfo,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        if self.favored { AddressingMode::PostIndexed } else { AddressingMode::None }
+    }
+
+    fn is_post_inc_load_legal(
+        &self,
+        _ty: TtiTy,
+    ) -> bool {
+        true
+    }
+
+    fn is_post_inc_store_legal(
+        &self,
+        _ty: TtiTy,
+    ) -> bool {
+        true
+    }
+}
+
+/// A pointer `{%a,+,1}` that a store walks is the access's own increment where
+/// the target favors post-indexed addressing and has `(An)+` for the access:
+/// it costs no recurrence. Without that, or without `(An)+`, it costs one.
+#[test]
+fn a_pointer_stepping_by_a_constant_is_free_where_post_indexed_access_is_favored() {
+    with_loop(|cx, se, a, _, header, _| {
+        let one = se.get_constant_of_type(cx, Ty::Int(32), 1);
+        let walk = se.get_add_rec_expr(cx, vec![Operand32::of(a), Operand32::of(one)], header, Flags::default()).scev;
+        let f = Formula { base_regs: vec![walk], has_base_reg: true, ..Formula::default() };
+        let lu = use_of(Kind::Address, &[0]);
+        let rate = |tti: &dyn Tti, se: &mut ScalarEvolution| {
+            let mut rating = Rating { se, cx, tti, l: header, hardware_loop_profitable: false, as_written: false };
+            let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
+            cost.c.add_rec_cost
+        };
+        assert_eq!(rate(&PostInc { favored: false }, se), 1, "premise: the recurrence costs one");
+        assert_eq!(rate(&PostInc { favored: true }, se), 0);
     });
 }

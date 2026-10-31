@@ -161,8 +161,33 @@ pub enum ISD {
 
     Load,
     Store,
+    /// `LOAD`/`STORE` with an indexed addressing mode (`MemIndexedMode`), made
+    /// after legalization (`getIndexedLoad`/`getIndexedStore`): `PRE_INC`
+    /// writes back `base + offset` before the access, `POST_INC` after it.
+    /// A load's values are (value, new base, chain) and its operands (chain,
+    /// base, offset); a store's values are (new base, chain) and its
+    /// operands (chain, value, base, offset).
+    LoadPre,
+    LoadPost,
+    StorePre,
+    StorePost,
     /// `ATOMIC_SWAP`: `(chain, ptr, value)` to the old value and a chain.
     AtomicSwap,
+    /// `ATOMIC_CMP_SWAP`: `(chain, ptr, expected, new)` to the old value and a
+    /// chain.
+    AtomicCmpSwap,
+    /// `ATOMIC_LOAD_ADD` and its siblings: `(chain, ptr, value)` to the old
+    /// value and a chain.
+    AtomicLoadAdd,
+    AtomicLoadSub,
+    AtomicLoadAnd,
+    AtomicLoadOr,
+    AtomicLoadXor,
+    /// `ATOMIC_LOAD_CLR`: and with the complement.
+    AtomicLoadClr,
+    /// `ATOMIC_LOAD` and `ATOMIC_STORE`.
+    AtomicLoad,
+    AtomicStore,
     CallSeqStart,
     CallSeqEnd,
     DynamicStackAlloc,
@@ -324,7 +349,18 @@ impl ISD {
             BrInd => "brind",
             Load => "load",
             Store => "store",
+            LoadPre | LoadPost => "load<indexed>",
+            StorePre | StorePost => "store<indexed>",
             AtomicSwap => "atomic_swap",
+            AtomicCmpSwap => "atomic_cmp_swap",
+            AtomicLoadAdd => "atomic_load_add",
+            AtomicLoadSub => "atomic_load_sub",
+            AtomicLoadAnd => "atomic_load_and",
+            AtomicLoadOr => "atomic_load_or",
+            AtomicLoadXor => "atomic_load_xor",
+            AtomicLoadClr => "atomic_load_clr",
+            AtomicLoad => "atomic_load",
+            AtomicStore => "atomic_store",
             CallSeqStart => "callseq_start",
             CallSeqEnd => "callseq_end",
             DynamicStackAlloc => "dynamic_stackalloc",
@@ -540,5 +576,19 @@ impl CondCode {
             self,
             CondCode::SetUGt | CondCode::SetUGe | CondCode::SetULt | CondCode::SetULe
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The atomic read-modify-write nodes have names of their own, which the
+    /// DAG dump and a selector's refusals print.
+    #[test]
+    fn the_atomic_nodes_are_named() {
+        assert_eq!(ISD::AtomicLoadAdd.name(), "atomic_load_add");
+        assert_eq!(ISD::AtomicCmpSwap.name(), "atomic_cmp_swap");
+        assert_eq!(ISD::AtomicStore.name(), "atomic_store");
     }
 }
