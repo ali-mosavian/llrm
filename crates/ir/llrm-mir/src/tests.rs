@@ -918,8 +918,9 @@ fn the_sparse_containers_are_sanctioned_by_name_and_a_generic_alias_is_not() {
     assert_eq!(counts["hash.rs"], 0, "the alias lines themselves count none");
 }
 
-/// A ceiling for a file that moved or went away in the re-org stayed in `dense-keys.txt`: 8 of them were left, naming nothing, and a
-/// ceiling that names nothing guards nothing.
+/// A ceiling for a file that moved or went away in the re-org stayed in
+/// `dense-keys.txt`: 8 of them were left, naming nothing, and a ceiling that
+/// names nothing guards nothing.
 #[test]
 fn every_dense_key_ceiling_names_a_file_that_exists() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
