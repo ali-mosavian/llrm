@@ -16,7 +16,9 @@ const IR: &str = "declare i32 @g(i32, i8)\n\
 define i32 @add(i32 %a, i32 %b) {\n  %r = add i32 %a, %b\n  ret i32 %r\n}\n\
 define i32 @c(i32 %a, i8 %b) {\n  %r = call i32 @g(i32 %a, i8 %b)\n  ret i32 %r\n}\n\
 define i32 @sum(i32 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i32 [0, %entry], [%i1, %loop]\n  %s = phi i32 [0, %entry], [%s1, %loop]\n  %s1 = add i32 %s, %i\n  %i1 = add i32 %i, 1\n  %c = icmp slt i32 %i1, %n\n  br i1 %c, label %loop, label %exit\nexit:\n  ret i32 %s1\n}\n\
-define i32 @bump(i32 %d) {\n  %v = load i32, ptr @counter\n  %n = add i32 %v, %d\n  store i32 %n, ptr @counter\n  ret i32 %n\n}";
+define i32 @bump(i32 %d) {\n  %v = load i32, ptr @counter\n  %n = add i32 %v, %d\n  store i32 %n, ptr @counter\n  ret i32 %n\n}\n\
+define i32 @callee(i32 %a, i8 %b) {\n  %z = zext i8 %b to i32\n  %r = add i32 %a, %z\n  ret i32 %r\n}\n\
+define i32 @caller(i32 %a, i8 %b) {\n  %r = call i32 @callee(i32 %a, i8 %b)\n  ret i32 %r\n}";
 
 fn bin() -> Option<PathBuf> {
     let dir = PathBuf::from(std::env::var_os("HOME")?).join("scratch/llvm-build-m68k/bin");
@@ -226,4 +228,11 @@ fn data_bss_weak_and_undefined_symbols_are_as_llvm_mc_writes_them() {
         .unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     assert_eq!(dump_typed(&bin, &ours, true), dump_typed(&bin, &theirs, true));
+}
+
+/// Two functions that call each other's kind: a zero-extend and a call.
+#[test]
+fn a_callee_and_a_caller_are_as_llvm_mc_has_them() {
+    same_as_llvm_mc("callee");
+    same_as_llvm_mc("caller");
 }
