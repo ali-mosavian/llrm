@@ -20,6 +20,7 @@ pub mod mfunc;
 pub mod object;
 pub mod regalloc;
 pub mod target;
+pub mod timing;
 
 use llrm_lir::registers::{RegId, Row};
 
