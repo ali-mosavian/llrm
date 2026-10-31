@@ -16,13 +16,10 @@
 //! `dag_select.rs` in the codegen crate for the x86 run of the same stages.
 
 use llrm_codegen::backend::registerinfo::RegId;
-use llrm_codegen::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
+use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::dag_target::{DagTarget, Phases, Select, select_units};
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
-use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
-use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
-use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit, schedule};
-use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit};
 use llrm_dagisel::interp::Selector;
 
 use super::generated::ids::reg as pin;
