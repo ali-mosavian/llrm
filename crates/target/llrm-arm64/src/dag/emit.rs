@@ -794,7 +794,7 @@ impl Emitter<'_> {
                 let (nonzero, suffix) = (name.starts_with("CBNZ"), &name[name.len() - 1..]);
                 Inst::CompareBranch { nonzero, width: width(suffix), rt: *rt, target: self.label(*to)? }
             }
-            (_, [Operand::Reg(rt), Operand::Imm(bit), Operand::Block(to)]) if name.starts_with("TB") && name.len() <= 6 => {
+            (_, [Operand::Reg(rt), Operand::Imm(bit), Operand::Block(to)]) if matches!(name, "TBZW" | "TBZX" | "TBNZW" | "TBNZX") => {
                 let nonzero = name.starts_with("TBNZ");
                 Inst::TestBranch { nonzero, rt: *rt, bit: *bit as u8, target: self.label(*to)? }
             }

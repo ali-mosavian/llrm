@@ -6,7 +6,7 @@ sys.argv=[sys.argv[0],sys.argv[1]]
 S=sys.argv[1]
 src=open(os.path.dirname(os.path.abspath(__file__))+'/hand_vs_dag_vs_pin.py').read().split("tot=collections.Counter()")[0]
 exec(src)  # quality.py's funcs()
-llc=os.environ['HOME']+'/work/other/llvm-pin/build/bin/llc'
+llc=os.path.join(os.path.dirname(os.environ['LLRM_PIN_CLANG']),'llc')
 tot=collections.Counter(); rows=[]; skipped=[]
 for ir in sorted(glob.glob(S+'/*.ir.ll')):
     n=os.path.basename(ir)[:-6]

@@ -2,7 +2,7 @@
 # Shadow coverage over the arm64 C programs: each function the DAG path refused, with its reason.
 # Needs LLRM_PIN_CLANG (the pin's clang). Prints "fallbacks: N panics: M"; today N=1 (vla @main).
 cd "$(dirname "$0")/.."
-export LLRM_PIN_CLANG=${LLRM_PIN_CLANG:-$HOME/work/other/llvm-pin/build/bin/clang}
+export LLRM_PIN_CLANG=${LLRM_PIN_CLANG:?set to the pin clang}
 out=$(mktemp -d)
 cargo build -q -p llrm-cc -p llrm-arm64 || exit 1
 : > "$out/all.txt"

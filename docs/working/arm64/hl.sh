@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-root=/Users/alim/work/personal/llrm-mac2; S=$(dirname "$0"); qb=$root/runtime/qb; mkdir -p $S/hl
-export LLRM_CC_TARGET=arm64-macos LLRM_PIN_CLANG=$HOME/work/other/llvm-pin/build/bin/clang
+root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel); S=$(dirname "$0"); qb=$root/runtime/qb; mkdir -p $S/hl
+export LLRM_CC_TARGET=arm64-macos LLRM_PIN_CLANG=${LLRM_PIN_CLANG:?set to the pin clang}
 SDK=$(xcrun --show-sdk-path)
 fl=(-std=gnu11 -w -pthread -D__cdecl= -I $qb/posix -I $qb -I $qb/dev -I $qb/dev/headless -I $qb/dev/host -I $root/runtime/shared/posix)
 for f in headless main; do

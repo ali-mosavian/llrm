@@ -6,17 +6,17 @@ From session `mac2` to oversight, for a new arm64 session. Scope: the DAG path (
 
 | worktree | branch | tip | pushed |
 |---|---|---|---|
-| `/Users/alim/work/personal/llrm-mac2-merge` | `alim/spike/arm64-merge-m68k` (local name) | this handoff's commit | y, as `origin/alim/spike/arm64-parity-next` |
-| `/Users/alim/work/personal/llrm-lsr-access` | `alim/fix/lsr-access-size` | `31b5f0aba` | y ([#6105](https://github.com/ali-mosavian/llrm/pull/6105)) |
+| this worktree | `alim/spike/arm64-merge-m68k` (local name) | this handoff's commit | y, as `origin/alim/spike/arm64-parity-next` |
+| the LSR worktree | `alim/fix/lsr-access-size` | `31b5f0aba` | y ([#6105](https://github.com/ali-mosavian/llrm/pull/6105)) |
 
 Both clean. Push the spike with `git push origin HEAD:alim/spike/arm64-parity-next`. The stashes in the shared stack and the other `llrm-*` worktrees are not mine.
 
 ## 2. Run book (macOS, Apple Silicon; no tinytim run was made)
 
 ```bash
-cd /Users/alim/work/personal/llrm-mac2-merge
-export LLRM_PIN_CLANG=$HOME/work/other/llvm-pin/build/bin/clang   # pin d1106deb7
-export LLVM_SRC=$HOME/work/other/llvm-pin LLVM_BUILD=$HOME/work/other/llvm-pin/build
+cd <this worktree>
+export LLRM_PIN_CLANG=<pin build>/bin/clang   # pin d1106deb7
+export PIN_LLC=<pin build>/bin/llc LLVM_SRC=<pin source> LLVM_BUILD=<pin build>
 cargo build -p llrm-cc -p llrm-arm64                               # target/debug/llrm-cc, llrm-arm64-llc
 ```
 

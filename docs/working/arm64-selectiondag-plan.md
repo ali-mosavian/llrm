@@ -1,6 +1,6 @@
 # arm64 selection from the pin's AArch64 TableGen: plan
 
-Repo `llrm-mac2` @ `alim/spike/arm64-parity-next` (HEAD 4d8d9f338), pin d1106deb71cc (`~/work/other/llvm-pin`, build has `llvm-tblgen`, `llc`, `clang`, targets AArch64;X86). Read-only survey 2026-10-28. "unverified" marks what was not measured.
+Repo `llrm-mac2` @ `alim/spike/arm64-parity-next` (HEAD 4d8d9f338), pin d1106deb71cc (the pin checkout, build has `llvm-tblgen`, `llc`, `clang`, targets AArch64;X86). Read-only survey 2026-10-28. "unverified" marks what was not measured.
 
 ## Decision first
 
