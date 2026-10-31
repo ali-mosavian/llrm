@@ -172,7 +172,7 @@ fn edge_odds(
         },
         function,
     );
-    let mut odds = std::collections::HashMap::new();
+    let mut odds = llrm_spike_mf::placement::Odds::default();
     for &block in function.layout() {
         for (index, to) in llrm_mir::loopinfo::children(function, block).enumerate() {
             let probability = bpi.get_edge_probability(function, block, index);

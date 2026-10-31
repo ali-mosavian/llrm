@@ -27,3 +27,12 @@ fn the_layout_is_big_endian_with_four_byte_pointers() {
     assert_eq!(target.object().bitness, 32);
     assert_eq!(target.stack_slot_bytes(), 4);
 }
+
+/// After the object refactor `Target` asked for `objects` and `debug_target`;
+/// m68k answered neither and the crate did not build.
+#[test]
+fn the_target_has_no_object_writer_and_says_so() {
+    use llrm_object::ObjectTarget;
+    assert!(M68k.objects().asm_info("elf").is_none());
+    assert_eq!(M68k.debug_target().address_bytes, 4);
+}

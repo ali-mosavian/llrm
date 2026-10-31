@@ -28,6 +28,45 @@ static DIALECT: LazyLock<Dialect> =
 /// The m68k target.
 pub struct M68k;
 
+/// m68k's object writers: none yet, the static executable is `crate::object`'s.
+struct M68kObjects;
+
+impl llrm_object::ObjectTarget for M68kObjects {
+    fn write_object(
+        &self,
+        format: &str,
+        _object: &llrm_object::Object,
+    ) -> Result<Vec<u8>, llrm_object::Unsupported> {
+        Err(llrm_object::Unsupported(format!("m68k has no {format} object writer")))
+    }
+
+    fn asm_info(
+        &self,
+        _format: &str,
+    ) -> Option<llrm_object::AsmInfo> {
+        None
+    }
+}
+
+impl llrm_debug::DebugObjectTarget for M68kObjects {
+    fn write_described(
+        &self,
+        format: &str,
+        object: &llrm_object::Object,
+        _debug: Option<&llrm_debug::Info>,
+    ) -> Result<Vec<u8>, llrm_object::Unsupported> {
+        llrm_object::ObjectTarget::write_object(self, format, object)
+    }
+
+    fn debug_caps(
+        &self,
+        _format: &str,
+        _asked: llrm_debug::Format,
+    ) -> llrm_debug::DebugCaps {
+        llrm_debug::DebugCaps::default()
+    }
+}
+
 impl M68k {
     fn convention() -> &'static Convention {
         &CALLING.conventions[0]
@@ -37,6 +76,14 @@ impl M68k {
 impl Target for M68k {
     fn name(&self) -> &'static str {
         "m68k"
+    }
+
+    fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
+        &M68kObjects
+    }
+
+    fn debug_target(&self) -> llrm_debug::DebugTarget {
+        llrm_debug::DebugTarget::of(32)
     }
 
     fn machine(&self) -> Machine {
