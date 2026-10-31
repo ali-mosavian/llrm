@@ -19,15 +19,28 @@
 //! Nothing runs it yet: stage 5 of the translation of LSR.
 //!
 //! # Limits
-//! DEVIATE: `AMK_PostIndexed` (x86 prefers none) is not ported.
-//! DEVIATE LU3: see `solve`, the drop of a rewrite that spills (real mode).
+//! DEVIATE: `AMK_PreIndexed` is not ported, and so a loop that wants `-(An)`
+//! (a pointer stepped down before each access) stays a step and an access.
+//! The pin sites: `RateRegister`'s `CanPreIndex`
+//! ([L1468](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1468))
+//! and the offset-minus-step formulae of `GenerateConstantOffsetsImpl`
+//! ([L4230](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L4230)).
+//! No target of ours prefers it (`getPreferredAddressingMode` is `PostIndexed`
+//! or `None`), and the overlay has no `-(An)` fold either. Exit: with the first
+//! target that prefers pre-indexed addressing. The
+//! `-lsr-preferred-addressing-mode` option (L170) is not either: the target's
+//! hook decides. Ported, for `AMK_PostIndexed`: L1445, L1461-1471, L3780,
+//! L3988, L4735, L5196, L5609 and `getFixupInsertPos` (L6190,
+//! `lsr_implement.rs`; a store keeps the default position, as the pin's
+//! `I->getType()` is `void` for it). DEVIATE LU3: see `solve`, the drop of a
+//! rewrite that spills (real mode).
 
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::expr::Scev;
 use llrm_support::hash::HashSet;
 
 use crate::lsr_collect::Collection;
-use crate::lsr_use::Cost;
+use crate::lsr_use::{Cost, Kind};
 
 impl Collection<'_, '_> {
     /// `SolveRecurse`: decide use `workspace.len()`, then the rest.
@@ -51,17 +64,21 @@ impl Collection<'_, '_> {
             // Formulae that do not use the required registers before new ones
             // are ignored. If no formula satisfied them LLVM could clear the
             // set and try again; it gives up.
-            let mut to_find = f.num_regs().min(req_regs.len());
-            for reg in &req_regs {
-                if f.scaled_reg == Some(*reg) || f.base_regs.contains(reg) {
-                    to_find -= 1;
-                    if to_find == 0 {
-                        break;
+            // Favoring post-increment, an address use is left to the cost
+            // model: the required registers can mislead it.
+            if !self.tti.preferred_addressing_mode().has_post_indexed() || lu.kind != Kind::Address {
+                let mut to_find = f.num_regs().min(req_regs.len());
+                for reg in &req_regs {
+                    if f.scaled_reg == Some(*reg) || f.base_regs.contains(reg) {
+                        to_find -= 1;
+                        if to_find == 0 {
+                            break;
+                        }
                     }
                 }
-            }
-            if to_find != 0 {
-                continue;
+                if to_find != 0 {
+                    continue;
+                }
             }
             // The cost with this formula: a branch no better than the best is
             // pruned.
