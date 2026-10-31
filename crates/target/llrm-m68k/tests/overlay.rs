@@ -284,17 +284,6 @@ fn a_loop_carrying_a_sum_rotates_its_pair_in_three_moves_as_the_pin_does() {
     assert_eq!(loop_moves(&ours), 3, "{ours}");
 }
 
-/// The rotation's temporary was a copy of `a` narrowed to a data register by
-/// the add's tied slot it no longer sat in, so the pair took `d0`, `d1`, the
-/// counter took callee-saved `d2`, and the function pushed and popped it (4
-/// bytes). The temporary may take an address register.
-#[test]
-fn the_rotation_temporary_does_not_cost_a_saved_data_register() {
-    let ir = "define i32 @f(i32 %n) optsize {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %a = phi i32 [0, %entry], [%b, %l]\n  %b = phi i32 [1, %entry], [%s, %l]\n  %s = add i32 %a, %b\n  %i1 = add i32 %i, 1\n  %c = icmp slt i32 %i1, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %s\n}";
-    let ours = compiled(ir, Options::default());
-    assert!(!ours.contains("%d2") && !ours.contains("(%sp)+"), "{ours}");
-}
-
 /// `s += p[i] > t` ends `sgt %d1; and.l #255, %d1; and.l #1, %d1` in the pin's
 /// patterns; merging the masks was a rewrite of them.
 #[test]
@@ -343,10 +332,6 @@ fn a_base_an_index_and_a_displacement_are_refused_as_the_pin_does() {
     assert!(tti.is_legal_addressing_mode(false, 0, true, 1));
 }
 
-fn counted_sum() -> &'static str {
-    "define i32 @f(ptr %p, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  %s1 = add i32 %s, %v\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %s1\n}"
-}
-
 fn code_size(
     ir: &str,
     options: Options,
@@ -354,32 +339,6 @@ fn code_size(
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).unwrap();
     let items = llrm_m68k::compile::items_with(&module, "f", Cpu::M68000, options).unwrap();
     llrm_m68k::object::assemble(&items, 0).unwrap().code.len()
-}
-
-/// `n` was loaded into `a1` once and compared with in the register: 2 bytes
-/// more than comparing with the argument slot. In the loop that costs clocks
-/// on every trip, so only where size is wanted (`-Os`, or `optsize`).
-#[test]
-fn an_argument_read_once_in_a_loop_is_read_from_its_slot_where_size_is_wanted() {
-    let speed = compiled(counted_sum(), Options::default());
-    assert!(!speed.contains("cmp.l\t(8,%sp)"), "{speed}");
-    let size = compiled(counted_sum(), Options { size: true, ..Options::default() });
-    assert!(size.contains("cmp.l\t(8,%sp), %d"), "{size}");
-    assert!(
-        code_size(counted_sum(), Options { size: true, ..Options::default() })
-            < code_size(counted_sum(), Options::default())
-    );
-    let marked = counted_sum().replace(") {\nentry", ") optsize {\nentry");
-    assert!(compiled(&marked, Options::default()).contains("cmp.l\t(8,%sp), %d"));
-}
-
-/// Outside a loop the memory form is smaller and no slower: always.
-#[test]
-fn an_argument_read_once_outside_a_loop_is_read_from_its_slot() {
-    let ir = "define i32 @f(i32 %a, i32 %b) {\nentry:\n  %c = icmp slt i32 %a, 5\n  br i1 %c, label %y, label %n\ny:\n  %r = add i32 %a, %b\n  ret i32 %r\nn:\n  ret i32 0\n}";
-    let ours = compiled(ir, Options::default());
-    assert!(ours.contains("add.l\t(8,%sp), %d"), "{ours}");
-    assert!(!ours.contains("move.l\t(8,%sp)"), "{ours}");
 }
 
 /// popcount's `x & 1` of a copy is the pin's `move.l %d1, %d2; and.l #1, %d2`;
@@ -546,16 +505,6 @@ fn library(name: &str) -> String {
         .replace("@k(", "@f(")
 }
 
-/// bsearch's key is compared twice per trip (`==`, then `<`): two readers, so
-/// the argument fold (one reader only) kept the load, the register and, at
-/// `-Os`, a second callee-saved register to save (+4 B over gcc, 70 B).
-/// Expected: both compares read the slot, 64 B.
-#[test]
-fn an_argument_compared_twice_in_a_loop_is_read_from_its_slot_at_the_size_level() {
-    let size = Options { size: true, ..Options::default() };
-    assert!(compiled(&library("bsearch"), size).contains("cmp.l\t(16,%sp), %d"));
-}
-
 /// muldiv reads `b` three times, as the outgoing arguments of three calls:
 /// folded, each is a 6 B memory-to-memory `move` where the register form is 4,
 /// and the function grew from 68 to 78 B.
@@ -563,17 +512,6 @@ fn an_argument_compared_twice_in_a_loop_is_read_from_its_slot_at_the_size_level(
 fn an_argument_read_three_times_keeps_its_register() {
     let text = compiled(&library("muldiv"), Options::default());
     assert!(!text.contains(",%sp), ("), "{text}");
-}
-
-/// memset stored the low byte of its `c` argument from a register: the 4 B
-/// load, the register and, at `-Os`, the callee-saved register the index then
-/// needed (46 B against gcc's 44). A byte read of an argument is the last byte
-/// of its slot (big-endian): `move.b (11,%sp), (%a1)+`.
-#[test]
-fn a_byte_of_an_argument_is_read_from_the_end_of_its_slot() {
-    let size = Options { size: true, ..Options::default() };
-    let text = compiled(&library("memset"), size);
-    assert!(text.contains("move.b\t(11,%sp), "), "{text}");
 }
 
 /// The same argument also read as a whole value keeps its register: the load is
@@ -972,4 +910,15 @@ fn a_counting_loop_uses_no_quick_or_test_forms_as_the_pin_has_none() {
         ours.contains("add.l\t#1,") && !ours.contains("addq") && !ours.contains("subq") && !ours.contains("tst."),
         "{ours}"
     );
+}
+
+/// An argument read by a compare is loaded into a register and compared from
+/// there, as the pin's selection does. Reading it from its slot (`cmp.l
+/// (16,%sp), %d1`) was a fold of the load after expansion that the pin's M68k,
+/// with no `foldMemoryOperandImpl`, does not make.
+#[test]
+fn an_argument_read_by_a_compare_is_loaded_first_as_the_pin_does() {
+    let size = Options { size: true, ..Options::default() };
+    let text = compiled(&library("bsearch"), size);
+    assert!(!text.contains("cmp.l\t(16,%sp), %d"), "{text}");
 }

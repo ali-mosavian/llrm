@@ -13,7 +13,6 @@ use crate::expand::{Line, finish};
 use crate::flags::preserve_flags;
 use crate::machine::{M68k, M68kMachine};
 use crate::mc;
-use crate::memoperand::fold_argument_loads;
 use crate::mfunc::{emit, expand_cmov};
 use crate::regalloc::{
     allocate_spilling, branch_fold, commute_tied, eliminate_phis_with, fold_reserved_copies, machine_sink,
@@ -108,9 +107,6 @@ pub fn items_with(
         address_arithmetic(&mut function);
     }
     commute_tied(&mut function);
-    if options.overlay {
-        fold_argument_loads(&mut function, wants_size, crate::memoperand::M68K);
-    }
     two_address(&mut function);
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
