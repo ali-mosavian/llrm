@@ -142,6 +142,14 @@ pub fn to_lir<T: Target>(
         origin: Vec::new(),
         marker: PhantomData::<T>,
     };
+    // every physical register is a value before the first instruction, so a
+    // call (which writes the ones it clobbers) can say so
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        let (reads, writes) = physical::<T>(inst);
+        for register in reads.chain(writes) {
+            made.pinned(register);
+        }
+    }
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insts.len());
@@ -337,6 +345,16 @@ impl<T: Target> Made<'_, T> {
         insn.delivers = delivers;
         if inst.call {
             insn.clobbers = T::caller_saved().into_iter().collect();
+            // The call writes each clobbered register it names: a value that
+            // lives across it cannot be the register, and a read after it
+            // sees what the call left.
+            for (register, value) in &self.values {
+                let clobbered =
+                    insn.clobbers.contains(register) || insn.clobbers.contains(&self.registers.root(*register));
+                if clobbered && !insn.defines.contains(value) {
+                    insn.defines.push(*value);
+                }
+            }
         }
         insn.symbol = symbol.then_some(true);
         insn.volatile = inst.side_effects;

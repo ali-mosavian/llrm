@@ -688,3 +688,29 @@ fn test_a_value_copied_from_an_argument_register_stays_the_register() {
         decided.edited.as_ref().unwrap().blocks[0].insns.iter().flat_map(|i| i.uses.clone()).collect();
     assert!(survivors.iter().all(|value| pinned.contains(value)), "the store reads {survivors:?}, pinned {pinned:?}");
 }
+
+/// A value taken from the register an argument arrives in and put back after a
+/// call: the call clobbers the register, so the value cannot be the register
+/// across it. The coalescer joined it into the register anyway (the call
+/// wrote no pinned value) and `rotv`'s `x` came back from a clobbered `rc2`:
+/// `rotl 1 by 15` gave 0x4000 where 0x8000 was due.
+#[test]
+fn test_a_value_across_a_call_is_not_joined_into_a_register_the_call_clobbers() {
+    let mut f = MFunction::<()>::new("keep");
+    f.classes = vec![(); 1];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::EBX))]));
+    only.insts.push(call());
+    only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Use(v(0))]));
+    only.insts.push(op("get", vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::EBX))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let f = lowered(f);
+    let back = rewritten_with(&f, true);
+    let count = |name| back.function.blocks.iter().flat_map(|b| &b.insts).filter(|i| i.kind == Kind::Op(name)).count();
+    assert!(
+        count("st") > 0 && count("ld") > 0,
+        "the value is kept in a slot across the call: {:?}",
+        back.function.blocks[0].insts
+    );
+}
