@@ -816,3 +816,33 @@ fn a_loaded_value_compared_with_a_register_is_loaded_first_as_the_pin_does() {
     let ours = compiled(ir, Options::default());
     assert!(!ours.contains("cmp.l\t(%a0)"), "{ours}");
 }
+
+/// `split_flag_edges` (a DEVIATE from `PHIElimination::SplitPHIEdges`): without
+/// it the select-expansion's phi copy sits above the compare and the running
+/// maximum of a max loop takes a third register move per iteration (arrmax:
+/// +2 B, +24 executed insns over eight elements).
+#[test]
+fn a_max_loop_carries_its_maximum_in_two_register_moves() {
+    let ir = "define i32 @f(ptr %p, i32 %n) {
+entry:
+  %f = load i32, ptr %p
+  br label %loop
+loop:
+  %i = phi i32 [1, %entry], [%i1, %loop]
+  %m = phi i32 [%f, %entry], [%m1, %loop]
+  %q = getelementptr i32, ptr %p, i32 %i
+  %v = load i32, ptr %q
+  %c = icmp sgt i32 %v, %m
+  %m1 = select i1 %c, i32 %v, i32 %m
+  %i1 = add i32 %i, 1
+  %d = icmp slt i32 %i1, %n
+  br i1 %d, label %loop, label %exit
+exit:
+  ret i32 %m1
+}";
+    let text = compiled(ir, Options::PINNED);
+    let body = text.split(".LBB0_1:").nth(1).and_then(|rest| rest.split("blt").next()).expect("the loop");
+    let moves =
+        body.lines().filter(|line| line.trim_start().starts_with("move.l\t%d") && line.contains(", %d")).count();
+    assert_eq!(moves, 2, "{text}");
+}
