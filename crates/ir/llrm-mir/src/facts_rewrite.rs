@@ -567,6 +567,12 @@ mod tests {
             // `willNotOverflow` has shown the math cannot wrap at that width.
             // It reads no flag off an existing instruction.
             "combine_narrow.rs",
+            // InstCombineAndOrXor.cpp's `foldCastedBitwiseLogic` reads the
+            // `nuw`/`nsw` of the two truncs it merges: `trunc nuw` of an and
+            // needs one operand `nuw`, of an or both, and `nsw` needs both.
+            // The flags go on the new trunc only, which the logic result
+            // proves; the old truncs keep theirs.
+            "combine_casted_logic.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

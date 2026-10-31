@@ -339,7 +339,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
-    entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
+    partial(
+        "indvars@753",
+        Simplify,
+        "indvars (LPM2 worklist: the loops the unroll made)",
+        "the same pass as indvars@738, whose module (indvars.rs) translates rewriteLoopExitValues and widenIV; criterion: as indvars@738; exit: as indvars@738",
+    ),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).

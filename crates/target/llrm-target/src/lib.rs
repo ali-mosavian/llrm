@@ -405,6 +405,16 @@ pub trait Target {
     /// The target's name, for messages.
     fn name(&self) -> &'static str;
 
+    /// Its object writers and what each format says of the code it holds
+    /// (LLVM's `MCObjectWriter` and `MCAsmInfo`), which the backend is handed
+    /// instead of naming a target.
+    fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget;
+
+    /// The machine as a debug writer reads it (`MCRegisterInfo` and the
+    /// fixup kinds of a segment): everything but the register file, which the
+    /// caller reads from [`Target::registers_text`] once.
+    fn debug_target(&self) -> llrm_debug::DebugTarget;
+
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
 

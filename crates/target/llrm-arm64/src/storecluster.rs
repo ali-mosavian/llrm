@@ -19,13 +19,13 @@
 
 use crate::mc::inst::*;
 use crate::mc::visit::Reg;
-use crate::mfunc::{MFunc, Op};
+use crate::mfunc::{MFunc, Op, OpList};
 use crate::pairs::{access, commutes, leaves_the_block, pair_of, touch, touch_of};
 
 /// How many instructions ahead a store looks.
 const WINDOW: usize = 12;
 
-fn cluster(mut ops: Vec<Op>) -> Vec<Op> {
+fn cluster(mut ops: OpList) -> OpList {
     let mut i = 0;
     while i < ops.len() {
         let Op::I(inst) = &ops[i] else {
@@ -45,8 +45,8 @@ fn cluster(mut ops: Vec<Op>) -> Vec<Op> {
                 && pair_of(&first, &second).is_some()
             {
                 if j > i + 1 {
-                    let moved = ops.remove(i);
-                    ops.insert(j - 1, moved);
+                    let (moved, loc) = ops.remove(i);
+                    ops.insert_at(j - 1, moved, loc);
                 }
                 break;
             }

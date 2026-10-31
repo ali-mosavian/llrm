@@ -18,6 +18,7 @@ llrm-dwarf = { workspace = true }
 llrm-elf = { workspace = true }
 llrm-macho = { workspace = true }
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-target = { workspace = true }

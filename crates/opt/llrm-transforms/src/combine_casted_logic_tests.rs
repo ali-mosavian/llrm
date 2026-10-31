@@ -109,3 +109,34 @@ fn an_and_of_two_truncs_is_a_trunc_of_the_and() {
         &["and i8"],
     );
 }
+
+/// `(zext i8 x) & 15` stayed an `and i16` (a `movzx` then a mask); the pin
+/// narrows it to `zext (and i8 x, 15)`.
+#[test]
+fn a_zext_masked_by_a_constant_that_fits_is_the_zext_of_the_narrow_and() {
+    check(
+        "i16",
+        "i8 %x",
+        "  %z = zext i8 %x to i16\n  %r = and i16 %z, 15\n",
+        &["and i8 %x, 15", "zext i8 %"],
+        &["and i16"],
+    );
+}
+
+/// A constant that does not fit the source stays.
+#[test]
+fn a_constant_wider_than_the_source_stays() {
+    check("i16", "i8 %x", "  %z = zext i8 %x to i16\n  %r = or i16 %z, 256\n", &["i16 %z, 256"], &["or i8"]);
+}
+
+/// A `sext` takes a constant that is lossless as a signed truncation.
+#[test]
+fn a_sext_xored_with_a_negative_constant_that_fits_is_the_sext_of_the_narrow_xor() {
+    check(
+        "i16",
+        "i8 %x",
+        "  %z = sext i8 %x to i16\n  %r = xor i16 %z, -2\n",
+        &["xor i8 %x, -2", "sext i8 %"],
+        &["xor i16"],
+    );
+}

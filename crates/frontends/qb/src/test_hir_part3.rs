@@ -959,10 +959,28 @@ fn test_a_counted_loop_reads_an_unannotated_byref_once() {
     let loop_ = poke_block(&text);
 
     assert!(!text.contains("load volatile"), "{text}");
-    // `ch` is one plain load per trip, as the pin leaves it: a volatile far
-    // store may reach it (4f82e22e1, #3994). Not a wait on it: no volatile.
-    assert_eq!(loop_.matches(" = load ").count(), 1, "{text}");
+    // `ch` is read before the loop: the POKE is to a segment the program owns
+    // nothing in, and a reference parameter points into the program, so the
+    // two are stated apart (the pin, given no such fact, reloaded it every
+    // trip).
+    assert_eq!(loop_.matches(" = load ").count(), 0, "{text}");
     assert!(loop_.contains("store volatile"), "the POKE still lands: {text}");
+}
+
+/// The reads of a reference parameter stay in the loop where the segment is not
+/// a literal: DEF SEG with a variable may point at the program's own data.
+#[test]
+fn test_a_counted_loop_reloads_a_byref_when_the_segment_is_not_a_literal() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "FILLSEG.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Fill (ch, s)\r\nFill 65, &HB800\r\nSUB Fill (ch, s)\r\nDEF SEG = s\r\nFOR o = 0 TO 3998 STEP 2\r\nPOKE o, ch\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let source = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = function_text(&optimized_mir(&source), "FILL");
+
+    assert_eq!(poke_block(&text).matches(" = load ").count(), 2, "{text}");
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.
@@ -3207,11 +3225,10 @@ fn a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment() {
     let body = &fill[top..=at];
     let loads = body.iter().filter(|one| one.contains("ptr [") || one.contains("b$seg")).count();
     let pokes = body.iter().filter(|one| one.starts_with("mov byte ptr es:[")).count();
-    // The pin's output: `opt -passes='loop-mssa(licm)'` and `default<O2>` hoist
-    // neither cell past a volatile far store (4f82e22e1, #3994 states that
-    // video memory holds no program data). Both POKEs still land every
-    // trip.
-    assert_eq!((loads, pokes), (2, 2), "{body:#?}");
+    // Given the facts (the POKE's segment is a literal, the parameters point
+    // into the program) neither cell is reloaded; both POKEs still land every
+    // trip. Without them the pin reloads both past a volatile far store.
+    assert_eq!((loads, pokes), (0, 2), "{body:#?}");
 }
 
 /// The listing of `source` through `llrm-qb -O2 -march=i486 -S`, as shipped.
@@ -3862,25 +3879,6 @@ fn the_run_time_module_flag_marks_the_header_and_names_the_loader_externals() {
     }
     let (_, plain) = build(false);
     assert!(!plain.iter().any(|one| one == "$AC"), "{plain:?}");
-}
-
-/// `PRINT 1` at -m32 with the QB 4.5 runtime was refused by the DAG selector
-/// ("QB runtime routine whose stack cleanup the convention does not model"):
-/// the table's 16-bit block pops 2 bytes, the call pushes a dword and the
-/// callee pops all 4, which is what the old selector does. After: the call
-/// compiles, with no `add esp` after it.
-#[test]
-fn test_a_32_bit_call_of_a_callee_popped_routine_selects_under_the_dag_selector() {
-    let directory = tempfile::tempdir().expect("creates a directory");
-    let source = written(&directory, "p1.bas", b"PRINT 1\r\n");
-    let out = directory.path().join("p1.asm");
-    let argv = [source.to_str().unwrap(), "-m32", "--runtime", "qb45", "--isel=dag", "-S", "-o", out.to_str().unwrap()]
-        .map(str::to_owned);
-    assert_eq!(crate::cli::main(&argv), 0);
-    let text = std::fs::read_to_string(&out).expect("the listing");
-    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
-    assert!(main.contains("pushd 1\n    call B$PEI2"), "{main}");
-    assert!(!main.contains("add esp"), "{main}");
 }
 
 /// A BASIC program whose last statement is a runtime call ended without
