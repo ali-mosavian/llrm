@@ -54,6 +54,9 @@ pub struct Options {
     pub min_size: bool,
     /// `Subtarget->getFrameLowering()->hasFP(*MF)`.
     pub has_frame_pointer: bool,
+    /// The CPU's multiply ends early on the r/m operand's length (the 486: `10
+    /// + max(bits, 3)`), from its tune description.
+    pub multiply_early_out: bool,
     /// The address forms the target has (SD3).
     pub address_mode: AddrMode,
 }

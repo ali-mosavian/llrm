@@ -918,6 +918,10 @@ fn selected_in(
         opt_for_size: cpu.size,
         min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
+        multiply_early_out: crate::backend::timing::signed_multiply(cpu, 4, false)
+            .ok()
+            .flatten()
+            .is_some_and(|clocks| clocks.minimum < clocks.maximum),
         address_mode,
     });
     let selector = Selector::new(if m16 {

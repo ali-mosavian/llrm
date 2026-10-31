@@ -46,6 +46,7 @@ fn selected(text: &str) -> BTreeMap<String, Result<Counts, String>> {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: AddrMode::Flat32,
         });
         let mut info = FunctionLoweringInfo::new(function);
