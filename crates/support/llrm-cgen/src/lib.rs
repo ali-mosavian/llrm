@@ -547,7 +547,7 @@ impl Gen {
                 init,
                 "  s.a = {}{o}; s.b = {}{o}; s.c = {}{o};",
                 self.rng.below(256),
-                self.rng.below(65536),
+                self.rng.below(1 << u16::BITS),
                 self.rng.below(256),
                 o = self.opaque()
             )

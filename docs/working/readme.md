@@ -29,6 +29,11 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [bench-table-a33fdfff7](bench-table-a33fdfff7.md) | vsgcc bench table at tip a33fdfff7: old and dag selectors against min(gcc, clang) |
 | [flip-packet](flip-packet.md) | The default flip to `--isel=dag`: the five conditions, status and evidence per condition |
 | [greedy-switchover-plan](greedy-switchover-plan.md) | Switching over to the translated greedy allocator: what the old modules still provide (2026-10-22) |
+| [dagisel-target-seam](dagisel-target-seam.md) | The `DagTarget` seam: shared `select_units`, the x86 and m68k implementations, the proof |
+| [dagisel-seam-merge](dagisel-seam-merge.md) | Merge order and conflicts of the DAG seam with the shared legalizer stack |
+| [m68k-enabler-series](m68k-enabler-series.md) | The shared enablers the m68k backend needs, in landing order |
+| [m68k-block-placement-plan](m68k-block-placement-plan.md) | Block placement for m68k: the pin's `MachineBlockPlacement` over the spike's machine function |
+| [m68k parity](../../crates/target/llrm-m68k/PARITY.md) | m68k against the pin: numbered deviations, what the removed overlay bought per piece, open rows |
 | [testing](testing.md) | Running the tests |
 | [pr-rules](pr-rules.md) | The goal, what a PR carries, how it lands, how to measure, safety |
 | [gate](gate.md) | What CI and the gate run, the tiers, what must pass |

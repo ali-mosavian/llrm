@@ -37,7 +37,7 @@
 //! that the units of one call sequence stay together: without them two calls'
 //! stack arguments interleave.
 //!
-//! DEVIATE SD32: the register pressure per class is not kept. Reason: the
+//! DEVIATE SD406: the register pressure per class is not kept. Reason: the
 //! pressure functions compare it with `getRegPressureLimit`, 0 for M68k, the
 //! only target on the ILP queue. Exit: a target with a limit asks for
 //! [`Preference::Ilp`]. Owner: m68k-spike.
@@ -1627,16 +1627,6 @@ thread_local! {
     /// Source order on for this thread: what `LLRM_SRC_ORDER` does for the
     /// process.
     pub(super) static SRC_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// `createDefaultScheduler`: X86 enables the machine scheduler and its default
-/// scheduler role (`enableMachineScheduler() &&
-/// enableMachineSchedDefaultSched()`), so the pin's DAG scheduler is
-/// `createSourceListDAGScheduler`: a `SrcRegReductionPriorityQueue`
-/// (`srcorder`), IR order first. On at every width, as the pin has it: off at
-/// m16 a select could fall inside a call frame and `jumps` grew 28 B.
-fn src_order(info: &dyn SchedInfo) -> bool {
-    preference(info) == Preference::Source
 }
 
 /// The scheduler this run builds: the target's, or source order where the
