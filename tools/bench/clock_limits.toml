@@ -37,6 +37,9 @@
 # class 5: DAG selection, rows that fall below main under --isel=old: DEBT bench-clocks-dag-isel
 "fib bas -Os" = 1313485  # main 1116464
 "hanoi bas -Os" = 1130452  # main 1040343
+"fib bq16 -Os" = 1017956  # main 820936
+"hanoi bq16 -Os" = 917473  # main 810982
+"recgcd c -Os" = 112876  # main 111082; llrm-c vs clang, see the call-group card
 "matmul c -Os" = 21851  # main 20480
 "crc c -Os" = 1402  # main 1393
 "histo c -Os" = 239669  # main 227125
