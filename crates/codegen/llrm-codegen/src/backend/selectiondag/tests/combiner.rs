@@ -40,9 +40,13 @@ fn x86(
     level: CombineLevel,
 ) {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    DagCombiner::new(dag, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }, level)
-        .with_tli(&tli)
-        .run();
+    DagCombiner::new(
+        dag,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        level,
+    )
+    .with_tli(&tli)
+    .run();
 }
 
 /// `x * 1` is `x` and `x * 8` is `x << 3`: `getNode` keeps the multiply
@@ -145,7 +149,7 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         let k = dag.get_constant(c, EVT::I16);
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
         dag.set_root(product);
-        let mut lowering = X86Lowering { cmov: false, sse2: false, min_size, i16_mul_chains: chains };
+        let mut lowering = X86Lowering { cmov: false, sse2: false, min_size, i16_mul_chains: chains, profile: None };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
         dag.opcode(dag.get_root())
     };
@@ -157,7 +161,8 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         let k = dag.get_constant(c, EVT::I16);
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
         dag.set_root(product);
-        let mut lowering = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: true };
+        let mut lowering =
+            X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: true, profile: None };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
         let mut todo = vec![dag.get_root()];
         while let Some(value) = todo.pop() {
@@ -180,6 +185,33 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
     assert_eq!(shape(7, true, false), ISD::Sub);
 }
 
+/// An `imul` by 75 is 13+ clocks on a 486 where a `lea`/`shl` chain is a few:
+/// switch c, huge and qmove kept the `imul` (the pin's `combineMul` has no
+/// case for 75). The sheet's chain is built where it is cheaper, never at
+/// `minsize` nor where the sheet has none (277167 on the P5).
+#[test]
+fn a_constant_the_pin_leaves_an_imul_is_the_priced_chain() {
+    let shape = |cpu: &crate::backend::cpu::Profile, c: u128, min_size: bool, priced: bool| {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let product = mul_by(&mut dag, x, c);
+        dag.set_root(product);
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut lowering =
+            X86Lowering { cmov: false, sse2: false, min_size, i16_mul_chains: false, profile: priced.then_some(cpu) };
+        DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
+        dag.opcode(dag.get_root())
+    };
+    let i486 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let p5 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "P5", false).expect("a cpu");
+    assert_ne!(shape(i486, 75, false, true), x86isd::MUL_IMM, "75 kept the imul");
+    assert_ne!(shape(i486, 75, false, true), ISD::Mul, "75 kept the multiply");
+    assert_eq!(shape(i486, 75, false, false), ISD::Mul, "no profile: the pin's imul");
+    assert_eq!(shape(i486, 75, true, true), ISD::Mul, "minsize grew");
+    assert!(crate::backend::arithmetic::scale(277167, p5).unwrap().is_none(), "premise: no cheaper chain");
+    assert_eq!(shape(p5, 277167, false, true), ISD::Mul, "the sheet has no chain: the imul stays");
+}
+
 /// The `i16` multiply chain is built where `i16` is not promoted and nowhere
 /// else: one predicate (`promotes_i16`) decides both, so changing SD441's rule
 /// moves them together.
@@ -195,7 +227,13 @@ fn the_i16_chain_is_built_exactly_where_i16_is_not_promoted() {
         let x = dag.get_register(EVT::I16, 2);
         let y = dag.get_register(EVT::I16, 3);
         let sum = dag.get_node(ISD::Add, EVT::I16, &[x, y]);
-        let lowering = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: !promotes_i16(&tli) };
+        let lowering = X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: !promotes_i16(&tli),
+            profile: None,
+        };
         assert_eq!(promotes_i16(&tli), promotes);
         assert_eq!(lowering.promote_type(&dag, &tli, sum).is_some(), promotes);
         assert_eq!(lowering.i16_mul_chains, !promotes);
@@ -326,7 +364,7 @@ fn a_not_of_a_float_compare_does_not_make_a_code_the_target_expands() {
     dag.set_root(branch);
     DagCombiner::new(
         &mut dag,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
         CombineLevel::AfterLegalizeDag,
     )
     .with_tli(&tli)

@@ -1057,6 +1057,7 @@ fn selected_in(
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+                profile: (!(cpu.min_size || bytes_beat_clocks)).then_some(cpu),
             },
             &selector,
             &mut hooks,

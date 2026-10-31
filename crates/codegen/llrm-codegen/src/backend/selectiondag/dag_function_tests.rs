@@ -306,7 +306,8 @@ define i32 @f(i16 %x) {
 /// A chain of word operations at m32 is done in dwords, and the casts between
 /// them fold (`aext (trunc x)` is `x`): it was `mov; imul; add; and` each
 /// narrowed and widened again, three `INSERT_SUBREG` and a `movzx` more than
-/// the pin (bintree, 13 functions of the corpus shadow).
+/// the pin (bintree, 13 functions of the corpus shadow). The multiply is the
+/// 486's priced chain (SD446), not an `imul`.
 #[test]
 fn a_chain_of_word_operations_has_no_casts_between_them() {
     let module = crate::testing::module(WORD_CHAIN).expect("parses");
@@ -315,7 +316,7 @@ fn a_chain_of_word_operations_has_no_casts_between_them() {
     let names: Vec<String> =
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     assert!(!names.iter().any(|n| n.starts_with("movzx") || n.starts_with("movsx")), "{names:?}");
-    assert_eq!(names.iter().filter(|n| matches!(n.as_str(), "imul" | "add" | "and")).count(), 3, "{names:?}");
+    assert!(!names.iter().any(|n| n == "imul") && names.iter().any(|n| n == "and"), "{names:?}");
 }
 
 /// `read_before_defined` kept a hash set of every value defined on every path
