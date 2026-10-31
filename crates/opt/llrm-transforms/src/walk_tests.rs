@@ -1691,7 +1691,18 @@ fn calls_of_tree_with(
     pin: bool,
     inline: crate::inline::Threshold,
 ) -> usize {
-    let mut module = parsed(&tree_recursion(extra));
+    calls_of("tree", &tree_recursion(extra), pin, inline)
+}
+
+/// Calls of `@name` in `text` after the default pipeline on the real-mode
+/// target.
+fn calls_of(
+    name: &str,
+    text: &str,
+    pin: bool,
+    inline: crate::inline::Threshold,
+) -> usize {
+    let mut module = parsed(text);
     let target = if pin { llrm_x86_m16::Dos::pin_tuned() } else { llrm_x86_m16::Dos::default() };
     llrm_mir::program::Program::lend(
         &mut module,
@@ -1705,7 +1716,7 @@ fn calls_of_tree_with(
     .and_then(|done| done)
     .expect("the pipeline runs");
     let text = llrm_mir::print::module(&module);
-    text.lines().filter(|line| line.contains("call") && line.contains("@tree(")).count()
+    text.lines().filter(|line| line.contains("call") && line.contains(&format!("@{name}("))).count()
 }
 
 /// bench fib, hanoi, rectwo and frames at m16 -O2 ran 356059, 199, 2382380 and
@@ -1736,4 +1747,82 @@ fn test_the_real_mode_target_copies_no_recursion_with_inlining_off() {
     let off = crate::inline::Threshold::new(0);
     assert!(calls_of_tree_with(0, false, off) <= 3, "copies with inlining off: {}", calls_of_tree_with(0, false, off));
     assert!(calls_of_tree_with(0, false, crate::inline::Threshold::new(225)) > 3, "control: the copies with it on");
+}
+
+/// A tree recursion (`@walk`) with `work` between its entry and its two
+/// calls: nothing (`none`), a loop summing `%n` terms (`sum`), or a loop that
+/// halves a value until it is below 2 (`halve`).
+fn looped_recursion(work: &str) -> String {
+    let (head, body) = match work {
+        "sum" => (
+            "  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %rec ], [ %i1, %loop ]
+  %t = phi i32 [ 0, %rec ], [ %t1, %loop ]
+  %t1 = add i32 %t, %i
+  %i1 = add i32 %i, 1
+  %more = icmp slt i32 %i1, %n
+  br i1 %more, label %loop, label %calls
+
+calls:
+",
+            "%t",
+        ),
+        "halve" => (
+            "  br label %loop
+
+loop:
+  %v = phi i32 [ %n, %rec ], [ %v1, %loop ]
+  %v1 = lshr i32 %v, 1
+  %more = icmp ugt i32 %v1, 1
+  br i1 %more, label %loop, label %calls
+
+calls:
+",
+            "%v1",
+        ),
+        _ => ("", "%n"),
+    };
+    format!(
+        "define internal i32 @walk(i32 %n) {{
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+{head}  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @walk(i32 %a)
+  %y = call i32 @walk(i32 %b)
+  %s = add i32 %x, %y
+  %r = add i32 %s, {body}
+  ret i32 %r
+}}
+
+define i32 @main() {{
+b0:
+  %r = call i32 @walk(i32 30)
+  ret i32 %r
+}}
+"
+    )
+}
+
+/// bench recchop at m16 -O2 ran 11310 clocks against 10242 without the copy
+/// (main 10960): its loop between the entry and the calls is run again in
+/// every copy, which saved only the calls. The budget is the callee's work per
+/// call (`gcc_work`, a loop at its trips), so a loop-bearing recursion is
+/// not copied, whatever the loop, and the same recursion without it is.
+#[test]
+fn test_the_real_mode_target_does_not_copy_a_recursion_whose_work_is_a_loop() {
+    let on = crate::inline::Threshold::new(225);
+    assert!(calls_of("walk", &looped_recursion("none"), false, on) > 3, "control: copied without the loop");
+    for work in ["sum", "halve"] {
+        let calls = calls_of("walk", &looped_recursion(work), false, on);
+        assert!(calls <= 3, "{work}: a recursion with a loop was copied into itself: {calls} calls");
+    }
 }

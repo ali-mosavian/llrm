@@ -388,6 +388,25 @@ pub fn gcc_insns_in(
         .count() as i64
 }
 
+/// The most a block counts in a function's time: the trips gcc's loop
+/// estimates stop at (ipacp's `MAX_FREQUENCY`).
+const LOOP_TRIPS: i64 = 10;
+
+/// What one call of `body` runs, in `gcc_insns`: the size, with the
+/// instructions inside a loop counted at its trips. A copy of the body in
+/// itself saves the call and keeps the loop's work, so a body whose work is
+/// mostly a loop gains little for the code it multiplies; the recursive
+/// callee cap is held to this (bench recchop -O2: the loop between the entry
+/// and the calls, 10242 clocks without the copy, 11310 with).
+pub fn gcc_work(body: &Function) -> i64 {
+    let mut inside = BTreeSet::new();
+    for one in llrm_analysis::cfg::loops_of(body) {
+        inside.extend(one.body.iter().map(|&at| llrm_analysis::cfg::block(at)));
+    }
+    let looped = gcc_insns_in(body, body.walk().filter(|&(block, _)| inside.contains(&block)).map(|(_, inst)| inst));
+    gcc_insns(body) + (LOOP_TRIPS - 1) * looped
+}
+
 fn semantic_count(body: &Function) -> i64 {
     body.walk().filter(|&(_, inst)| semantic(body, inst)).count() as i64
 }
@@ -750,7 +769,7 @@ impl<'a> Plan<'a, '_> {
             // call within the body, over the entry's, above the minimum.
             let frequency = frequencies.get(&site).copied().unwrap_or(1.0);
             if depth > self.caller.depth
-                || grown + 1 > self.caller.callee
+                || gcc_work(callee) > self.caller.callee
                 || self.insns + grown > MAX_INLINE_INSNS_RECURSIVE
                 || frequency * 100.0 <= MIN_INLINE_RECURSIVE_PROBABILITY
             {

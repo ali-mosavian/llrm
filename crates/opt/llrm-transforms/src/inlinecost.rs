@@ -1469,7 +1469,7 @@ impl<'a> Analyzer<'a> {
         // analysis" unless the params allow a recursive call (:2481).
         if target == self.site.callee_id
             && (!self.params.allow_recursive_call
-                || crate::inline::gcc_insns(self.callee) > self.params.recursive_callee_limit)
+                || crate::inline::gcc_work(self.callee) > self.params.recursive_callee_limit)
         {
             self.is_recursive_call = true;
             return false;
