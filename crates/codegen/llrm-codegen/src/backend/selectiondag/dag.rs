@@ -153,6 +153,23 @@ pub enum BooleanContents {
     Undefined,
 }
 
+/// What a target charges for the operations a divide by a constant is made of or
+/// replaced by: the divide's own price, and the multiply-high sequence's parts.
+/// `None` in [`DagConfig::div_prices`]: the pin's rule (`int_div_cheap` alone).
+#[derive(Clone, Copy, Debug)]
+pub struct DivPrices {
+    /// The target's own operand size in bytes: a value of another width runs under the prefix.
+    pub operand: i64,
+    pub prefix: i64,
+    pub add: i64,
+    pub shift: i64,
+    pub extend: i64,
+    pub multiply: i64,
+    pub multiply_long: i64,
+    pub divide: i64,
+    pub divide_long: i64,
+}
+
 /// The target facts `getNode` asks (`TLI->` in the pin), passed in rather
 /// than read from a global.
 #[derive(Clone, Copy, Debug)]
@@ -168,6 +185,8 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// Prices that decide `isIntDivCheap` per divisor and width; see [`DivPrices`].
+    pub div_prices: Option<DivPrices>,
     /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an
     /// `sdiv` by a power of two stays an `sdiv`.
     pub sdiv_pow2_stays: bool,
@@ -198,6 +217,7 @@ impl Default for DagConfig {
             dso_local_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            div_prices: None,
             sdiv_pow2_stays: false,
             fp_extended: false,
             known_bits_for_target_node: None,

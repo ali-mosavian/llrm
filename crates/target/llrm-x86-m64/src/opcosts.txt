@@ -6,6 +6,8 @@
 add = alu_rr
 multiply = imul_r32
 divide = idiv_r32
+multiply_long = imul_r32
+divide_long = idiv_r32
 shift = shift_ri
 address = lea
 carry = carry(movzx, alu_rr, shift_ri, mov_rr)
