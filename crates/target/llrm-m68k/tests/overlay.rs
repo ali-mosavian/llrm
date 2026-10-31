@@ -440,26 +440,17 @@ fn constant(value: i64) -> String {
     compiled(&format!("define i32 @f() {{\n  ret i32 {value}\n}}"), Options::default())
 }
 
-/// crc16 loaded 65535 with `move.l #65535` (6 B) twice, where gcc has `moveq
-/// #0; not.w` (4 B). A constant of 0xFF80..0xFFFF is a `moveq` and a `not.w`;
-/// 0xFF7F, one short, and 0x10000 are not.
+/// The pin's `ExpandMOVI` loads 65535 and 0x30000 with `move.l #imm`; the
+/// `moveq` and `not.w` or `swap` forms (4 B for 6) were a deviation of ours.
 #[test]
-fn a_constant_just_under_64k_is_a_moveq_and_not_w() {
-    let text = constant(65535);
-    assert!(text.contains("moveq\t#0, %d0") && text.contains("not.w\t%d0"), "{text}");
-    assert!(constant(65408).contains("moveq\t#127, %d0"));
-    assert!(!constant(65407).contains("not.w"));
-    assert!(!constant(65536 * 128).contains("swap"));
-}
-
-/// A `moveq` value shifted up 16 is a `moveq` and a `swap` (4 B for 6); a value
-/// that is not a multiple of 64 KiB is not.
-#[test]
-fn a_constant_shifted_up_16_is_a_moveq_and_swap() {
-    let text = constant(65536 * 3);
-    assert!(text.contains("moveq\t#3, %d0") && text.contains("swap\t%d0"), "{text}");
-    assert!(!constant(65536 * 3 + 1).contains("swap"));
-    assert!(!constant(0).contains("swap"));
+fn a_constant_above_a_byte_is_a_move_long_immediate_as_the_pin_has_it() {
+    for value in [65535, 65408, 65536 * 3] {
+        let text = constant(value);
+        assert!(
+            text.contains(&format!("move.l\t#{value}, %d0")) && !text.contains("swap") && !text.contains("not.w"),
+            "{text}"
+        );
+    }
 }
 
 #[test]
