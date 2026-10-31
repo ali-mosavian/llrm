@@ -46,8 +46,13 @@ fn selects(body: &str) -> Result<(), String> {
         let mut built =
             build_block(&module, function, &layout, &BuilderTarget::m16(), &machine, &convention, &mut info, block)
                 .map_err(|r| format!("builder: {}", r.0))?;
-        legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }, &machine)
-            .map_err(|r| format!("{r:?}"))?;
+        legalized(
+            &mut built.dag,
+            &tli,
+            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+            &machine,
+        )
+        .map_err(|r| format!("{r:?}"))?;
         do_instruction_selection(&mut built.dag, &selector, &mut hooks).map_err(|r| format!("{r:?}"))?;
     }
     Ok(())

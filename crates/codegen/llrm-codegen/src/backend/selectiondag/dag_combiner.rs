@@ -150,21 +150,26 @@ pub trait CombineHooks {
         EVT::I8
     }
 
-    /// `replaceStoreOfFPConstant` stores a `double` constant as one `i64` when that type is
-    /// legal. Default false until x86 is judged.
+    /// `replaceStoreOfFPConstant` stores a `double` constant as one `i64` when
+    /// that type is legal. Default false until x86 is judged.
     fn store_fp_constant_as_i64(&self) -> bool {
         false
     }
 
-    /// `reassociateOpsCommutative`'s pairing of `and`/`or` operands that are compares of one predicate.
-    /// DEVIATE: off by default (the pin runs it for every target). Exit: x86 judged.
+    /// `reassociateOpsCommutative`'s pairing of `and`/`or` operands that are
+    /// compares of one predicate. DEVIATE: off by default (the pin runs it
+    /// for every target). Exit: x86 judged.
     fn reassociate_compare_pairs(&self) -> bool {
         false
     }
 
-    /// `visitSELECT`'s `select (setcc x, y, cc), a, b` to `select_cc x, y, a, b, cc`, which the pin makes
-    /// before legalizing when `SELECT_CC` is legal or custom for `vt`. x86 has no `SELECT_CC`.
-    fn select_to_select_cc(&self, _vt: EVT) -> bool {
+    /// `visitSELECT`'s `select (setcc x, y, cc), a, b` to `select_cc x, y, a,
+    /// b, cc`, which the pin makes before legalizing when `SELECT_CC` is
+    /// legal or custom for `vt`. x86 has no `SELECT_CC`.
+    fn select_to_select_cc(
+        &self,
+        _vt: EVT,
+    ) -> bool {
         false
     }
 
@@ -174,8 +179,8 @@ pub trait CombineHooks {
         false
     }
 
-    /// `isIndexedLoadLegal`/`isIndexedStoreLegal` of `PRE_INC`/`POST_INC` (the only modes made) for an access
-    /// of `vt`. x86 has no indexed forms.
+    /// `isIndexedLoadLegal`/`isIndexedStoreLegal` of `PRE_INC`/`POST_INC` (the
+    /// only modes made) for an access of `vt`. x86 has no indexed forms.
     fn is_indexed_legal(
         &self,
         _is_load: bool,
@@ -185,8 +190,9 @@ pub trait CombineHooks {
         false
     }
 
-    /// `getPreIndexedAddressParts`/`getPostIndexedAddressParts`: the base and the signed offset of `access`
-    /// (a load or store) when `address` (an add or subtract) can be its update; the offset is made a constant of
+    /// `getPreIndexedAddressParts`/`getPostIndexedAddressParts`: the base and
+    /// the signed offset of `access` (a load or store) when `address` (an
+    /// add or subtract) can be its update; the offset is made a constant of
     /// the type of the address's second operand.
     fn indexed_address_parts(
         &self,
@@ -198,8 +204,8 @@ pub trait CombineHooks {
         None
     }
 
-    /// `isLegalAddressingMode` of `[reg + base_offs]` (scale 0) or `[reg + reg]` (scale 1) for an access of
-    /// `vt`.
+    /// `isLegalAddressingMode` of `[reg + base_offs]` (scale 0) or `[reg +
+    /// reg]` (scale 1) for an access of `vt`.
     fn is_legal_addressing_mode(
         &self,
         _vt: EVT,
@@ -316,6 +322,9 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     combined: NodeSet,
     /// The action table, for the folds that ask what the target can do.
     pub(super) tli: Option<&'a TargetLowering>,
+    /// `OptLevel == CodeGenOptLevel::None`: the chain, store and load combines
+    /// the pin skips at `-O0` are skipped.
+    pub(super) opt_none: bool,
 }
 
 fn op_is_srl(op: ISD) -> bool {
@@ -336,6 +345,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             queued: NodeSet::default(),
             combined: NodeSet::default(),
             tli: None,
+            opt_none: false,
         }
     }
 
@@ -345,6 +355,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         tli: &'a TargetLowering,
     ) -> DagCombiner<'a, H> {
         self.tli = Some(tli);
+        self
+    }
+
+    /// The pin's `-O0` combiner (`OptLevel == None`).
+    pub fn with_opt_none(mut self) -> DagCombiner<'a, H> {
+        self.opt_none = true;
         self
     }
 
@@ -777,7 +793,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ///
     /// [pin]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13507
-    /// `visitSELECT_CC`, the `SimplifySetCC` of its compare: a simpler compare is a new `select_cc`.
+    /// `visitSELECT_CC`, the `SimplifySetCC` of its compare: a simpler compare
+    /// is a new `select_cc`.
     fn visit_select_cc(
         &mut self,
         node: SDValue,
@@ -793,7 +810,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.opcode(simpler) != ISD::SetCC {
             return None;
         }
-        let (lhs, rhs, code) = (self.dag.operand(simpler, 0), self.dag.operand(simpler, 1), self.dag.operand(simpler, 2));
+        let (lhs, rhs, code) =
+            (self.dag.operand(simpler, 0), self.dag.operand(simpler, 1), self.dag.operand(simpler, 2));
         Some(self.dag.get_node(ISD::SelectCC, vt, &[lhs, rhs, ops[2], ops[3], code]))
     }
 
@@ -2083,7 +2101,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.merge_consecutive_stores(node) {
             return Some(node);
         }
-        // `replaceStoreOfFPConstant` takes a volatile store too (`isNormalStore`); the hook asks for that.
+        // `replaceStoreOfFPConstant` takes a volatile store too
+        // (`isNormalStore`); the hook asks for that.
         let volatile_blocks = info.volatile && !self.hooks.store_fp_constant_as_i64();
         if self.dag.opcode(value) != ISD::ConstantFP || volatile_blocks || info.mem_vt != self.dag.value_type(value) {
             return None;
@@ -2101,7 +2120,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     && ((tli.types.is_type_legal(EVT::I64) && !self.legal_operations() && !info.volatile)
                         || tli.is_operation_legal_or_custom(ISD::Store, EVT::I64)) =>
             {
-                // `replaceStoreOfFPConstant`: "store double 1.0" is "store i64 0x3FF0...".
+                // `replaceStoreOfFPConstant`: "store double 1.0" is "store i64
+                // 0x3FF0...".
                 let constant = self.dag.get_constant(bits & 0xFFFF_FFFF_FFFF_FFFF, EVT::I64);
                 Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I64, info.align, info.base)))
             }
@@ -2133,6 +2153,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        if self.opt_none {
+            return None;
+        }
         let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let NodeData::Mem(info) = self.dag.node(node).data else { return None };
         if self.dag.opcode(value) != ISD::BuildPair

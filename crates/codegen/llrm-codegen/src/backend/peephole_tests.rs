@@ -5510,6 +5510,42 @@ fn test_a_reload_stays_across_a_volatile_access() {
     assert_eq!(store_then_reload(vec![device]), 3);
 }
 
+/// nib quicksort `_sort` at m16, the swap block: `mov [bp-14],dx ; mov [si],cx
+/// ; mov dx,[bp-14]` kept a reload of what `dx` still held because `[si]` might
+/// be the slot: 2 operands a swap, 9,286 over the run. Returns the movs left.
+fn reload_across_a_pointer_store(spill: bool) -> usize {
+    let cell = || Loc::Mem(mem(Some(Addr::new(Space::Frame, -14).in_slot(-14)), 2, RegId::BP, -14, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>, spill_store: bool| Insn {
+        spill_store,
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let through_si = Loc::Mem(mem(None, 2, RegId::SI, 0, 0));
+    let mut insns = vec![
+        Arc::new(mov(0, vec![cell()], vec![rl(RegId::DX, 2)], spill)),
+        Arc::new(mov(10, vec![through_si], vec![rl(RegId::CX, 2)], false)),
+        Arc::new(mov(100, vec![rl(RegId::DX, 2)], vec![cell()], false)),
+    ];
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
+    let done = forwarded_reloads(rules(), &body("forwarded-reload", 0, vec![block(0, insns, vec![]).into()]));
+    whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
+}
+
+#[test]
+fn test_a_spill_slot_is_not_reached_by_a_store_through_a_pointer() {
+    assert_eq!(reload_across_a_pointer_store(true), 2);
+}
+
+#[test]
+fn test_a_cell_that_is_no_spill_slot_may_be_reached_by_a_store_through_a_pointer() {
+    assert_eq!(reload_across_a_pointer_store(false), 3);
+}
+
 /// quicksort `_sort` at m16 -Os: `mov [bp-2],cx ; ... ; mov bx,[bp-2]` read a
 /// cell back into another register while `cx` still held it. Returns the
 /// reload's source register, or `None` when it still reads the cell.
@@ -5825,4 +5861,227 @@ fn test_a_sum_still_read_after_its_store_keeps_its_register_form() {
     assert_eq!(transferred(rules(), &input).insns(), input.blocks[0].insns.to_vec());
     let (input, _) = _accumulated("sub", true);
     assert_eq!(transferred(rules(), &input).insns(), input.blocks[0].insns.to_vec());
+}
+
+/// nib quicksort `_sort` at m16: the swap block's `mov [bp-6],dx` filled a slot
+/// the next block overwrites (`mov [bp-6],si`) before any read, yet
+/// `unread_spill_stores` kept it because the slot is read elsewhere: one dead
+/// operand a swap, 4,643 over the run. Returns the stores to the slot left in
+/// the first block; `reads_first`: the next block reads the slot before
+/// storing.
+fn spill_store_before_an_overwrite(reads_first: bool) -> usize {
+    let cell = || Loc::Mem(mem(Some(Addr::new(Space::Frame, -6).in_slot(-6)), 2, RegId::BP, -6, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let ret = insn(200, Some((200, 200)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![]);
+    let store = |at: i64, from: RegId| mov(at, vec![cell()], vec![rl(from, 2)]);
+    let load = |at: i64| mov(at, vec![rl(RegId::AX, 2)], vec![cell()]);
+    let next =
+        if reads_first { vec![load(100), store(110, RegId::SI)] } else { vec![store(100, RegId::SI), load(110)] };
+    let first = block(0, vec![Arc::new(store(0, RegId::DX))], vec![100]);
+    let second = block(100, next.into_iter().chain([ret]).map(Arc::new).collect(), vec![]);
+    let done = crate::backend::deadspills::dead_spill_stores(&body("dead-spill", 0, vec![first.into(), second.into()]));
+    whats(&done.blocks[0].insns).len()
+}
+
+#[test]
+fn test_a_spill_store_the_next_block_overwrites_before_a_read_is_dropped() {
+    assert_eq!(spill_store_before_an_overwrite(false), 0);
+}
+
+#[test]
+fn test_a_spill_store_the_next_block_reads_stays() {
+    assert_eq!(spill_store_before_an_overwrite(true), 1);
+}
+
+/// Instructions `dead_spill_stores` visits on a ladder of `blocks` blocks, each
+/// storing the slot and a back edge from the last to the first.
+fn visits(blocks: i64) -> usize {
+    let spec: Vec<(i64, &str, Vec<i64>)> =
+        (0..blocks).map(|at| (at * 100, "SD SS L", vec![if at + 1 < blocks { (at + 1) * 100 } else { 0 }])).collect();
+    crate::backend::deadspills::VISITED.with(|visited| visited.set(0));
+    stores_left(&spec);
+    crate::backend::deadspills::VISITED.with(std::cell::Cell::get)
+}
+
+/// Doubling the function must not more than double the work.
+#[test]
+fn doubling_the_blocks_doubles_the_dead_store_work() {
+    let (small, large) = (visits(100), visits(200));
+    assert!(small > 300, "{small} visits: the pass looked at nothing");
+    assert!(large * 10 <= small * 21, "{small} visits for 100 blocks, {large} for 200");
+}
+
+/// The spill stores `dead_spill_stores` leaves in block 0 of a function whose
+/// blocks are `(at, instructions, successors)`; `S(from)` stores slot -6, `L`
+/// loads it, `A` takes its address.
+fn stores_left(blocks: &[(i64, &str, Vec<i64>)]) -> usize {
+    let cell = || Loc::Mem(mem(Some(Addr::new(Space::Frame, -6).in_slot(-6)), 2, RegId::BP, -6, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut at = 0;
+    let built: Vec<Block> = blocks
+        .iter()
+        .map(|(start, text, succ)| {
+            let insns = text
+                .split_whitespace()
+                .map(|word| {
+                    at += 10;
+                    Arc::new(match word {
+                        "SD" => mov(at, vec![cell()], vec![rl(RegId::DX, 2)]),
+                        "SS" => mov(at, vec![cell()], vec![rl(RegId::SI, 2)]),
+                        "L" => mov(at, vec![rl(RegId::AX, 2)], vec![cell()]),
+                        "A" => insn(
+                            at,
+                            Some((at, at)),
+                            Some(sem(
+                                Operation::Address,
+                                "lea",
+                                vec![rl(RegId::BX, 2)],
+                                vec![Loc::Address(AddressRef::new(Some(Addr::new(Space::Frame, -6).in_slot(-6))))],
+                            )),
+                            vec![],
+                            vec![],
+                        ),
+                        _ => insn(
+                            at,
+                            Some((at, at)),
+                            Some(sem(Operation::Return, "ret", vec![], vec![])),
+                            vec![],
+                            vec![],
+                        ),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Block::from(block(*start, insns, Vec::clone(succ)))
+        })
+        .collect();
+    let done = crate::backend::deadspills::dead_spill_stores(&body("dead-spill", 0, built));
+    done.blocks
+        .iter()
+        .flat_map(|block| whats(&block.insns))
+        .filter(|what| what.name.as_deref() == Some("mov") && matches!(what.dests.as_slice(), [Loc::Mem(_)]))
+        .count()
+}
+
+#[test]
+fn test_a_spill_store_a_loop_reads_on_the_next_trip_stays() {
+    // The store ends the loop body; the read is at its top, reached by the back
+    // edge.
+    assert_eq!(stores_left(&[(0, "", vec![100]), (100, "L SD", vec![100, 200]), (200, "ret", vec![])]), 1);
+}
+
+#[test]
+fn test_a_spill_store_overwritten_before_the_loop_reads_it_is_dropped() {
+    assert_eq!(stores_left(&[(0, "SD", vec![100]), (100, "SS L", vec![100, 200]), (200, "ret", vec![])]), 1);
+}
+
+#[test]
+fn test_two_stores_to_a_shared_slot_keep_the_one_a_reload_reads() {
+    assert_eq!(stores_left(&[(0, "SD SS L ret", vec![])]), 1);
+}
+
+#[test]
+fn test_a_slot_whose_address_escapes_keeps_every_store() {
+    assert_eq!(stores_left(&[(0, "SD A SS L ret", vec![])]), 2);
+}
+
+#[test]
+fn test_a_store_read_on_one_of_two_paths_stays() {
+    // 0 -> {100 reads, 200 overwrites}: the read path needs it.
+    assert_eq!(stores_left(&[(0, "SD", vec![100, 200]), (100, "L ret", vec![]), (200, "SS L ret", vec![])]), 2);
+}
+
+/// The movs left of `mov [bp-14],dx ; <between> ; mov dx,[bp-14]` (a spill and
+/// its reload) after forwarding, when `between` writes `place` and the slot is
+/// named by an address when `taken`. 3: the reload stays.
+fn reload_across(
+    place: Loc,
+    taken: bool,
+) -> usize {
+    reload_across_with(place, taken, false)
+}
+
+/// `reload_across`, the instruction between volatile when `volatile`: how
+/// inline asm and runtime frame accesses are classified.
+fn reload_across_with(
+    place: Loc,
+    taken: bool,
+    volatile: bool,
+) -> usize {
+    let slot = || Addr::new(Space::Frame, -14).in_slot(-14);
+    let cell = || Loc::Mem(mem(Some(slot()), 2, RegId::BP, -14, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>, spill_store: bool| Insn {
+        spill_store,
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let mut insns = vec![Arc::new(mov(0, vec![cell()], vec![rl(RegId::DX, 2)], true))];
+    if taken {
+        insns.push(Arc::new(insn(
+            5,
+            Some((5, 5)),
+            Some(sem(
+                Operation::Address,
+                "lea",
+                vec![rl(RegId::BX, 2)],
+                vec![Loc::Address(AddressRef::new(Some(slot())))],
+            )),
+            vec![],
+            vec![],
+        )));
+    }
+    insns.push(Arc::new(Insn { volatile, ..mov(10, vec![place], vec![rl(RegId::CX, 2)], false) }));
+    insns.push(Arc::new(mov(100, vec![rl(RegId::DX, 2)], vec![cell()], false)));
+    insns.push(Arc::new(insn(
+        200,
+        Some((200, 200)),
+        Some(sem(Operation::Return, "ret", vec![], vec![])),
+        vec![],
+        vec![],
+    )));
+    let done = forwarded_reloads(rules(), &body("forwarded-reload", 0, vec![block(0, insns, vec![]).into()]));
+    whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
+}
+
+#[test]
+fn test_a_store_to_the_spill_slot_stops_the_forwarding() {
+    let slot = Addr::new(Space::Frame, -14).in_slot(-14);
+    assert_eq!(reload_across(Loc::Mem(mem(Some(slot), 2, RegId::BP, -14, 1)), false), 3);
+}
+
+#[test]
+fn test_a_byte_store_into_the_spill_slot_stops_the_forwarding() {
+    let byte = Addr::new(Space::Frame, -13);
+    assert_eq!(reload_across(Loc::Mem(mem(Some(byte), 1, RegId::BP, -13, 1)), false), 3);
+}
+
+#[test]
+/// ASSUMPTION (DEVIATE of `holds_after`): an access through an array index
+/// never reaches a spill slot unless the program is out of bounds (C:
+/// undefined; QB: bounds-checked). The pin says the same with a FixedStack
+/// operand. Not covered: accesses the compiler cannot see as object accesses
+/// (see the volatile test below).
+fn test_a_frame_array_store_indexed_by_a_register_does_not_reach_a_spill_slot() {
+    let base = Addr::new(Space::Frame, -20);
+    let indexed = Mem { index_through: RegId::SI, scale: 1, ..mem(Some(base), 2, RegId::BP, -20, 1) };
+    assert_eq!(reload_across(Loc::Mem(indexed), false), 2);
+}
+
+#[test]
+fn test_a_pointer_store_stops_the_forwarding_where_the_slot_address_is_taken() {
+    assert_eq!(reload_across(Loc::Mem(mem(None, 2, RegId::DI, 0, 0)), true), 3);
+}
+
+/// Inline asm and a runtime routine's frame access are volatile or clobbering
+/// instructions to the compiler: they stop the forwarding like an address-taken
+/// slot, whatever they name.
+#[test]
+fn test_a_volatile_frame_access_stops_the_forwarding() {
+    let base = Addr::new(Space::Frame, -20);
+    let indexed = Mem { index_through: RegId::SI, scale: 1, ..mem(Some(base), 2, RegId::BP, -20, 1) };
+    assert_eq!(reload_across_with(Loc::Mem(indexed), false, true), 3);
 }

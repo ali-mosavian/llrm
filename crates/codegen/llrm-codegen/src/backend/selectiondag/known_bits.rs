@@ -190,14 +190,13 @@ fn walk(
             };
             KnownBits { zero: flip(inner.zero), one: flip(inner.one), width }
         }
-        _ => dag
-            .config()
-            .known_bits_for_target_node
-            .and_then(|known| known(dag, value, &operand))
-            .map_or_else(|| KnownBits::unknown(width), |mut found| {
+        _ => dag.config().known_bits_for_target_node.and_then(|known| known(dag, value, &operand)).map_or_else(
+            || KnownBits::unknown(width),
+            |mut found| {
                 found.width = width;
                 found
-            }),
+            },
+        ),
     }
 }
 

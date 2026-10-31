@@ -332,6 +332,13 @@ class StartupTests(unittest.TestCase):
         have = {one.language for one in bench.variants(bench.STARTUP)}
         self.assertEqual(have, {"bas", "bq16", "bq32", "c", "nib"})
 
+@pytest.fixture(autouse=True)
+def no_waivers(monkeypatch):
+    """The repo's own waivers (tools/bench/waivers) are not these tests' fixtures: every exception whose row the one-row base lacks is stale, so the
+    gate failed ("FAIL EXCEPTION ... delete it") on 10 tests the day an exception file landed."""
+    monkeypatch.setattr(bench.basecounts, "waivers", lambda root=None: [])
+
+
 
 def test_every_basic_benchmark_has_a_variant_on_our_runtime_with_the_same_kernel():
     """BASIC on our runtime (bq16: llrm runtime, real mode, jwlink) runs beside the Microsoft-runtime `bas` and needs no QB45."""
@@ -1036,3 +1043,13 @@ def test_the_first_stage_line_says_how_many_programs_and_how_many_cores(monkeypa
     monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
     bench.main()
     assert f"measuring 2 benchmarks at O2 Os, {len(os.sched_getaffinity(0))} usable of {os.cpu_count()} cores" in capsys.readouterr().err
+
+
+def test_compare_baselines_refuses_two_runs_that_differ_and_names_the_cells(tmp_path, capsys):
+    """A baseline that a second run does not reproduce (main's qlight c: 78 instructions in one run, 2 in another) must stop the comparison."""
+    one, two = tmp_path / "one.json", tmp_path / "two.json"
+    one.write_text(json.dumps({"q/c/Os": {"instructions": 78, "code_bytes": 154}, "q/nib/Os": {"instructions": 9}}))
+    two.write_text(json.dumps({"q/c/Os": {"instructions": 2, "code_bytes": 63}, "q/nib/Os": {"instructions": 9}}))
+    assert bench.compare_baselines(one, two) == 1
+    assert "UNSTABLE q c -Os: code_bytes 154 vs 63, instructions 78 vs 2" in capsys.readouterr().out
+    assert bench.compare_baselines(one, one) == 0

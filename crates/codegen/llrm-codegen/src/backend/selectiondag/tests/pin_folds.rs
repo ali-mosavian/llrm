@@ -104,6 +104,7 @@ fn sext_in_reg_of_extload(dag: &mut SelectionDAG) {
         base: MemBase::Stack(0),
         ext: Some(LoadExt::ExtLoad),
         space: 0,
+        ordering: None,
     };
     let load = dag.get_ext_load(LoadExt::ExtLoad, EVT::I32, chain, ptr, info);
     let narrow = dag.get_value_type_node(EVT::I8);
@@ -171,6 +172,7 @@ fn two_byte_stores(dag: &mut SelectionDAG) {
         base: MemBase::Stack(offset),
         ext: None,
         space: 0,
+        ordering: None,
     };
     let (lo, hi) = (dag.get_constant(1, EVT::I8), dag.get_constant(0, EVT::I8));
     let one = dag.get_constant(1, EVT::I64);
@@ -295,6 +297,7 @@ fn masked_frozen_extload(dag: &mut SelectionDAG) {
         base: MemBase::Stack(0),
         ext: Some(LoadExt::ExtLoad),
         space: 0,
+        ordering: None,
     };
     let load = dag.get_ext_load(LoadExt::ExtLoad, EVT::I32, chain, ptr, info);
     let frozen = dag.get_node(ISD::Freeze, EVT::I32, &[load]);
@@ -485,8 +488,9 @@ fn select_of_compare(dag: &mut SelectionDAG) {
     dag.set_root(root);
 }
 
-/// A `select` on a compare stayed a `select` beside the compare, which a second user then kept alive; the
-/// pin makes it a `select_cc` where `SELECT_CC` is legal or custom.
+/// A `select` on a compare stayed a `select` beside the compare, which a second
+/// user then kept alive; the pin makes it a `select_cc` where `SELECT_CC` is
+/// legal or custom.
 #[test]
 fn a_select_on_a_compare_is_a_select_cc_where_the_target_asks() {
     let mut dag = dag();
@@ -515,8 +519,8 @@ fn or_of_three_compares(dag: &mut SelectionDAG) {
     dag.set_root(root);
 }
 
-/// `(a == 0 | b > x) | c > y` stayed in written order; the pin pairs the two `>` first
-/// (`reassociateOpsCommutative`).
+/// `(a == 0 | b > x) | c > y` stayed in written order; the pin pairs the two
+/// `>` first (`reassociateOpsCommutative`).
 #[test]
 fn an_or_of_compares_pairs_those_of_one_predicate_where_the_target_asks() {
     let mut dag = dag();
@@ -549,8 +553,8 @@ fn masked_add_of_a_high_constant(dag: &mut SelectionDAG) {
     dag.set_root(root);
 }
 
-/// `(x + 0xff) & 0xff` kept the addend: every demanded bit of it is set, so the pin makes it `-1`
-/// (`SimplifyDemandedBits`, `ADD`).
+/// `(x + 0xff) & 0xff` kept the addend: every demanded bit of it is set, so the
+/// pin makes it `-1` (`SimplifyDemandedBits`, `ADD`).
 #[test]
 fn an_addend_of_all_demanded_ones_is_minus_one_where_the_target_asks() {
     let mut dag = dag();
@@ -572,13 +576,22 @@ fn a_target_that_does_not_ask_keeps_the_addend() {
 fn volatile_double_store(dag: &mut SelectionDAG) {
     let (ptr, chain) = (dag.get_register(EVT::I64, 7), dag.entry_node());
     let one = dag.get_constant_fp(u128::from(1.0f64.to_bits()), EVT::Simple(MVT::F64));
-    let info = MemInfo { mem_vt: EVT::Simple(MVT::F64), align: 8, volatile: true, base: MemBase::Stack(0), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: EVT::Simple(MVT::F64),
+        align: 8,
+        volatile: true,
+        base: MemBase::Stack(0),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let root = dag.get_store(chain, one, ptr, info);
     dag.set_root(root);
 }
 
-/// `store volatile double 1.0` stayed an FP-constant store (a constant-pool load); the pin stores
-/// the bits as an `i64` when that store is legal (`replaceStoreOfFPConstant`).
+/// `store volatile double 1.0` stayed an FP-constant store (a constant-pool
+/// load); the pin stores the bits as an `i64` when that store is legal
+/// (`replaceStoreOfFPConstant`).
 #[test]
 fn a_volatile_double_constant_is_stored_as_an_integer_where_the_target_asks() {
     let tli = TargetLowering::x86_64(Features::default(), MVT::I64);
@@ -633,11 +646,20 @@ impl CombineHooks for Indexes {
 fn store_then_store_of_the_address(dag: &mut SelectionDAG) {
     let (r, chain) = (dag.get_register(EVT::I64, 7), dag.entry_node());
     let q = dag.get_register(EVT::I64, 9);
-    // A register base would need a copy (`CombineToPreIndexedLoadStore`, check #1).
+    // A register base would need a copy (`CombineToPreIndexedLoadStore`, check
+    // #1).
     let p = dag.get_node(ISD::Or, EVT::I64, &[r, q]);
     let sixteen = dag.get_constant(16, EVT::I64);
     let a = dag.get_node(ISD::Add, EVT::I64, &[p, sixteen]);
-    let info = |vt| MemInfo { mem_vt: vt, align: 8, volatile: false, base: MemBase::Stack(0), ext: None, space: 0 };
+    let info = |vt| MemInfo {
+        mem_vt: vt,
+        align: 8,
+        volatile: false,
+        base: MemBase::Stack(0),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let value = dag.get_register(EVT::I32, 8);
     let first = dag.get_store(chain, value, a, info(EVT::I32));
     let second = dag.get_store(first, a, p, info(EVT::I64));
@@ -651,8 +673,9 @@ fn has_node(
     dag.nodes().iter().any(|n| n.opcode == opcode)
 }
 
-/// A store whose address `p+16` is stored again kept the add beside a plain store; the pin writes the
-/// first as a pre-indexed store and stores the writeback (`CombineToPreIndexedLoadStore`).
+/// A store whose address `p+16` is stored again kept the add beside a plain
+/// store; the pin writes the first as a pre-indexed store and stores the
+/// writeback (`CombineToPreIndexedLoadStore`).
 #[test]
 fn a_store_whose_address_is_used_again_is_pre_indexed_where_the_target_asks() {
     let mut dag = dag();
@@ -687,8 +710,8 @@ fn masked_target_node(config: DagConfig) -> (SelectionDAG, SDValue) {
     (dag, node)
 }
 
-/// A target node the target says is a byte: `(and node, 0xff)` is `node`. Without the hook the node
-/// is unknown and the mask stays.
+/// A target node the target says is a byte: `(and node, 0xff)` is `node`.
+/// Without the hook the node is unknown and the mask stays.
 #[test]
 fn the_known_bits_of_a_target_node_come_from_the_target_where_it_says() {
     let (mut dag, node) = masked_target_node(DagConfig {

@@ -12,7 +12,8 @@ use super::isd::ISD;
 use super::known_bits::{known_bits, num_sign_bits};
 use super::mvt::EVT;
 
-/// Record the sign bits and known bits of every integer `CopyToReg` of a virtual register reachable by chain from the root.
+/// Record the sign bits and known bits of every integer `CopyToReg` of a
+/// virtual register reachable by chain from the root.
 pub fn compute_live_out_vreg_info(
     dag: &SelectionDAG,
     info: &mut FunctionLoweringInfo,
@@ -99,8 +100,10 @@ fn replace_uses_except(
             continue;
         }
         let user = SDValue { node: user, res: 0 };
-        let ops: Vec<SDValue> =
-            (0..dag.node(user).ops.len()).map(|at| dag.operand(user, at)).map(|op| if op == from { to } else { op }).collect();
+        let ops: Vec<SDValue> = (0..dag.node(user).ops.len())
+            .map(|at| dag.operand(user, at))
+            .map(|op| if op == from { to } else { op })
+            .collect();
         dag.update_node_operands(user.node, &ops);
     }
 }

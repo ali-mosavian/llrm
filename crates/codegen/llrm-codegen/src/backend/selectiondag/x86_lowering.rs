@@ -136,6 +136,15 @@ pub struct X86Lowering {
     pub sse2: bool,
     /// `hasMinSize`: llrm's `-Os` as well as `-Oz`.
     pub min_size: bool,
+    /// The pin chains an `i16` multiply by a constant: it promotes it to `i32`
+    /// ([L64277][promote]) and `combineMul` builds the `lea`/shift chain there.
+    /// Where `i16` is not promoted (m16, `is_desirable_to_promote_op`) the same
+    /// chain is built at `i16`, without the promotion's `66h`/`67h` prefixes.
+    /// Consequence of DEVIATE SD441, which holds the exit.
+    ///
+    /// [promote]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L64277
+    pub i16_mul_chains: bool,
 }
 
 impl CombineHooks for X86Lowering {
@@ -163,7 +172,7 @@ impl CombineHooks for X86Lowering {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul => combine_mul(dag, node, level, self.min_size),
+            ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains),
             ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
@@ -227,10 +236,22 @@ fn x86_shrink_demanded_constant(
     Some(Some(dag.get_node(ISD::And, vt, &[x, new_mask])))
 }
 
+/// Whether this target promotes `i16` (and `i8` multiply) operations to `i32`
+/// (SD441: not at m16). `is_desirable_to_promote_op` and the `i16` multiply
+/// chain both ask this, so the chain is built exactly where nothing promotes.
+pub fn promotes_i16(tli: &TargetLowering) -> bool {
+    !tli.types.has_far_pointer()
+}
+
 /// `isTypeDesirableForOp` (undesirable) and `IsDesirableToPromoteOp`: an `i16`
 /// operation, or an `i8` multiply by a constant, is done in `i32` unless an
-/// operand is a load the operation could fold. m32 only: the 16-bit target
-/// has no wider register to promote into.
+/// operand is a load the operation could fold.
+///
+/// DEVIATE SD441: not at m16. The pin promotes there too; in real mode each
+/// promoted op carries a `66h` prefix (a `lea` of it `67h` as well), which
+/// grows every `i16` op and breaks the m16 -Os rule. Exit: promotion priced
+/// against those prefix bytes and clocks. Until then `i16_mul_chains` builds
+/// the multiply's chain at `i16`.
 fn is_desirable_to_promote_op(
     dag: &SelectionDAG,
     tli: &TargetLowering,
@@ -238,7 +259,7 @@ fn is_desirable_to_promote_op(
 ) -> Option<EVT> {
     let vt = dag.value_type(op);
     let opcode = dag.opcode(op);
-    if tli.types.has_far_pointer() || !tli.types.is_type_legal(vt) {
+    if !promotes_i16(tli) || !tli.types.is_type_legal(vt) {
         return None;
     }
     let is8_mul_by_constant = vt == EVT::I8 && opcode == ISD::Mul && dag.constant(dag.operand(op, 1)).is_some();
@@ -1496,8 +1517,15 @@ fn lower_fp_to_int(
         value = shifted;
         adjust = Some(flip);
     }
-    let info =
-        MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: stored_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let fist = dag.intern(
         x86isd::FP_TO_INT_IN_MEM,
         &[EVT::OTHER],
@@ -1526,8 +1554,15 @@ fn lower_lrint(
     let index = dag.create_stack_temporary(size, size);
     let slot = dag.get_frame_index(dag.config().pointer, index);
     let chain = dag.entry_node();
-    let info =
-        MemInfo { mem_vt: result_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: result_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let fist =
         dag.intern(x86isd::FIST, &[EVT::OTHER], &[chain, value, slot], SDNodeFlags::default(), NodeData::Mem(info));
     Some(dag.get_load(result_vt, fist, slot, info))
@@ -1591,6 +1626,7 @@ fn lower_int_to_fp(
         base: MemBase::Stack(index),
         ext: None,
         space: 0,
+        ordering: None,
     };
     if signed || (src_vt != EVT::I32 && src_vt != EVT::I64) {
         let size = src_vt.size_in_bits() / 8;
@@ -1631,6 +1667,7 @@ fn lower_int_to_fp(
         base: MemBase::ConstantPool(entry),
         ext: Some(super::actions::LoadExt::ExtLoad),
         space: 0,
+        ordering: None,
     };
     let fudge_value = dag.get_load(EVT::Simple(MVT::F80), SDValue { node: fild.node, res: 1 }, fudge_ptr, fudge_info);
     let sum = dag.get_node(ISD::FAdd, EVT::Simple(MVT::F80), &[fild, fudge_value]);
@@ -1659,8 +1696,15 @@ fn lower_vastart(
     };
     if pointer != EVT::I64 {
         let first = dag.get_frame_index(pointer, index);
-        let info =
-            MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: pointer,
+            align: pointer.size_in_bits() / 8,
+            volatile: false,
+            base,
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         return Some(dag.get_store(chain, first, list, info));
     }
     let (save, gp_offset) = dag.var_args_save?;
@@ -1675,7 +1719,7 @@ fn lower_vastart(
     for (offset, vt, value) in fields {
         let at = dag.get_constant(offset, pointer);
         let address = dag.get_node(ISD::Add, pointer, &[list, at]);
-        let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base, ext: None, space: 0 };
+        let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base, ext: None, space: 0, ordering: None };
         stores.push(dag.get_store(chain, value, address, info));
     }
     Some(dag.get_node(ISD::TokenFactor, EVT::OTHER, &stores))
@@ -1689,6 +1733,24 @@ fn log2(value: u128) -> u128 {
     u128::from(127 - value.leading_zeros())
 }
 
+/// `X86ISD::MUL_IMM` by 3, 5 or 9: the `lea` the matcher folds it into. An
+/// `i16` has no such `lea` pattern, so it is written as the add of a shift
+/// (`x + (x << 1)`), which the same matcher turns into one.
+fn mul_imm_node(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    by: u128,
+    vt: EVT,
+) -> SDValue {
+    if vt == EVT::I16 && matches!(by, 3 | 5 | 9) {
+        let amount = dag.get_constant(log2(by - 1), EVT::I8);
+        let shifted = dag.get_node(ISD::Shl, vt, &[x, amount]);
+        return dag.get_node(ISD::Add, vt, &[x, shifted]);
+    }
+    let by = dag.get_constant(by, vt);
+    dag.get_node(x86isd::MUL_IMM, vt, &[x, by])
+}
+
 /// `combineMulSpecial`: `x * c` for the constants that are a `lea` and a
 /// shift or an add.
 fn combine_mul_special(
@@ -1698,17 +1760,14 @@ fn combine_mul_special(
     vt: EVT,
 ) -> Option<SDValue> {
     let shl_add_or_sub = |dag: &mut SelectionDAG, mult: u128, shift: u128, add: bool| {
-        let by = dag.get_constant(mult, vt);
-        let product = dag.get_node(x86isd::MUL_IMM, vt, &[x, by]);
+        let product = mul_imm_node(dag, x, mult, vt);
         let amount = dag.get_constant(shift, EVT::I8);
         let shifted = dag.get_node(ISD::Shl, vt, &[product, amount]);
         dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[shifted, x])
     };
     let mul_mul_add = |dag: &mut SelectionDAG, first: u128, second: u128| {
-        let a = dag.get_constant(first, vt);
-        let once = dag.get_node(x86isd::MUL_IMM, vt, &[x, a]);
-        let b = dag.get_constant(second, vt);
-        let twice = dag.get_node(x86isd::MUL_IMM, vt, &[once, b]);
+        let once = mul_imm_node(dag, x, first, vt);
+        let twice = mul_imm_node(dag, once, second, vt);
         dag.get_node(ISD::Add, vt, &[twice, x])
     };
     match amount {
@@ -1751,9 +1810,10 @@ fn combine_mul(
     node: SDValue,
     level: CombineLevel,
     min_size: bool,
+    i16_chains: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if vt != EVT::I32 {
+    if vt != EVT::I32 && !(vt == EVT::I16 && i16_chains) {
         return None;
     }
     let (x, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
@@ -1769,17 +1829,14 @@ fn combine_mul(
     if is_pow2(bits) || min_size || level == CombineLevel::BeforeLegalizeTypes {
         return None;
     }
-    let signed = i128::from(bits as u32 as i32);
+    let signed = if vt == EVT::I16 { i128::from(bits as u16 as i16) } else { i128::from(bits as u32 as i32) };
     let abs = signed.unsigned_abs();
     let negate = |dag: &mut SelectionDAG, value: SDValue| if signed < 0 { dag.get_negative(value, vt) } else { value };
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
         let by = dag.get_constant(by, EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
     };
-    let mul_imm = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
-        let by = dag.get_constant(by, vt);
-        dag.get_node(x86isd::MUL_IMM, vt, &[value, by])
-    };
+    let mul_imm = |dag: &mut SelectionDAG, value: SDValue, by: u128| mul_imm_node(dag, value, by, vt);
     if matches!(abs, 3 | 5 | 9) {
         let product = mul_imm(dag, x, abs);
         return Some(negate(dag, product));

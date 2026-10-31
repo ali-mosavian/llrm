@@ -2,7 +2,7 @@
 //! frame slot, stored after each definition and loaded before each use into a
 //! short-lived register of its own.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::regalloc::{Assignment, GraphColoring, Target, Uncolourable, successors};
@@ -37,10 +37,16 @@ pub(crate) fn costs<C>(function: &MFunction<C>) -> Vec<u64> {
     cost
 }
 
+/// How many instructions `mentions` has looked at: the work that made the
+/// allocation of a long function cost registers times instructions. The tests
+/// count it; nothing reads it otherwise.
+pub static MENTION_SCANS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn mentions(
     inst: &Inst,
     v: u32,
 ) -> (bool, bool) {
+    MENTION_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let has = |wanted: fn(&Operand) -> Option<Reg>| inst.operands.iter().any(|o| wanted(o) == Some(Reg::Virt(v)));
     (
         has(|o| if let Operand::Use(r) = o { Some(*r) } else { None }),
@@ -268,7 +274,7 @@ fn rematerialize<C: Copy>(
 /// rematerializing a copy's source leaves behind.
 fn remove_dead_defs<C>(function: &mut MFunction<C>) {
     loop {
-        let mut used = HashSet::new();
+        let mut used = HashSet::default();
         for block in &function.blocks {
             for inst in &block.insts {
                 for operand in &inst.operands {
@@ -312,33 +318,36 @@ fn remove_dead_defs<C>(function: &mut MFunction<C>) {
     }
 }
 
-/// Whether every definition and use of `v` is in one run of instructions of
-/// one block: spilling it leaves the same run, so frees nothing.
-pub(crate) fn already_minimal<C>(
-    function: &MFunction<C>,
-    v: u32,
-) -> bool {
-    let mut places = function
-        .blocks
-        .iter()
-        .enumerate()
-        .flat_map(
-            |(at, block)| block
-                .insts
-                .iter()
-                .enumerate()
-                .filter(move |(_, inst)| mentions(inst, v) != (false, false))
-                .map(move |(i, _)| (at, i)),
-        );
-    let Some((block, first)) = places.next() else { return true };
-    let mut last = first;
-    for (at, i) in places {
-        if at != block || i != last + 1 {
-            return false;
+/// For each virtual register, whether every definition and use of it is in one
+/// run of instructions of one block: spilling it leaves the same run, so frees
+/// nothing. One pass over the function; a test per register made the colouring
+/// and the choice of victim cost registers times instructions.
+pub fn minimal_vregs<C>(function: &MFunction<C>) -> Vec<bool> {
+    // (block, last instruction) of the run so far
+    let mut run: Vec<Option<(usize, usize)>> = vec![None; function.classes.len()];
+    let mut minimal = vec![true; function.classes.len()];
+    let mut seen = Vec::new();
+    for (at, block) in function.blocks.iter().enumerate() {
+        for (i, inst) in block.insts.iter().enumerate() {
+            seen.clear();
+            for operand in &inst.operands {
+                if let Operand::Use(Reg::Virt(v)) | Operand::Def(Reg::Virt(v)) = operand
+                    && !seen.contains(v)
+                {
+                    seen.push(*v);
+                }
+            }
+            for &v in &seen {
+                let v = v as usize;
+                match run[v] {
+                    None => run[v] = Some((at, i)),
+                    Some((block, last)) if block == at && i == last + 1 => run[v] = Some((at, i)),
+                    Some(_) => minimal[v] = false,
+                }
+            }
         }
-        last = i;
     }
-    true
+    minimal
 }
 
 /// The register to spill for `failed`: the cheapest that spilling can free
@@ -351,10 +360,11 @@ fn victim<T: Target>(
     temporaries: &HashSet<u32>,
 ) -> Option<u32> {
     let cost = costs(function);
+    let minimal = minimal_vregs(function);
     let cheapest = |from: &[u32]| {
         from.iter()
             .copied()
-            .filter(|u| !temporaries.contains(u) && !already_minimal(function, *u))
+            .filter(|u| !temporaries.contains(u) && !minimal[*u as usize])
             .min_by_key(|u| (cost[*u as usize], std::cmp::Reverse(*u)))
     };
     let near: Vec<u32> = failed.blockers.iter().copied().chain([failed.vreg]).collect();
@@ -392,15 +402,15 @@ fn slot_sources<C>(
     slots: &[(i32, C)],
     origin: &[Vec<usize>],
 ) -> Vec<((usize, usize), Sites)> {
-    use std::collections::HashMap;
+    use llrm_support::hash::HashMap;
     type State = HashMap<i32, Sites>;
     let next = successors(function);
     let mut entry: Vec<Option<State>> = vec![None; function.blocks.len()];
-    entry[0] = Some(State::new());
+    entry[0] = Some(State::default());
     let step = |state: &mut State, b: usize, reads: &mut Vec<((usize, usize), Sites)>| {
         // the stores a register's value came from, while it holds a reloaded
         // slot
-        let mut loaded: HashMap<Reg, Sites> = HashMap::new();
+        let mut loaded: HashMap<Reg, Sites> = HashMap::default();
         for (i, inst) in function.blocks[b].insts.iter().enumerate() {
             let access = slot_access(inst, slots);
             let reload = access.is_some_and(|(_, stores)| !stores) && is_reload(inst);
@@ -650,7 +660,7 @@ fn drop_self_copies<C>(
     function: &mut MFunction<C>,
     slots: &[(i32, C)],
 ) -> Vec<Vec<usize>> {
-    let mut mentions = std::collections::HashMap::<Reg, usize>::new();
+    let mut mentions = llrm_support::hash::HashMap::<Reg, usize>::default();
     for inst in function.blocks.iter().flat_map(|b| &b.insts) {
         for operand in &inst.operands {
             if let Operand::Def(r) | Operand::Use(r) = operand {
@@ -706,7 +716,7 @@ pub fn allocate_spilling_ordered<T: Target>(
     by_frequency: bool,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     let mut slots = Vec::new();
-    let mut temporaries = HashSet::new();
+    let mut temporaries = HashSet::default();
     loop {
         let failures =
             match GraphColoring::<T>::by_frequency(by_frequency).with_unspillable(&temporaries).colour(function) {

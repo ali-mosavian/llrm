@@ -10,7 +10,15 @@ fn load(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: vt,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(slot),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     dag.get_load(vt, chain, ptr, info)
 }
 
@@ -19,7 +27,9 @@ fn lowered(
     cmov: bool,
 ) {
     let tli = TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32);
-    DagLegalizer::new(dag, &tli, &mut X86Lowering { cmov, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(dag, &tli, &mut X86Lowering { cmov, sse2: false, min_size: false, i16_mul_chains: false })
+        .run()
+        .unwrap();
 }
 
 fn code(

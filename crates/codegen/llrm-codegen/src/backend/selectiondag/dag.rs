@@ -112,6 +112,9 @@ pub struct MemInfo {
     /// `MachinePointerInfo::getAddrSpace`: 0, or the segment-override space
     /// (`fs` 257, `gs` 256) the IR's pointer names.
     pub space: u32,
+    /// The ordering of an atomic access
+    /// (`MachineMemOperand::getSuccessOrdering`); none for a plain one.
+    pub ordering: Option<llrm_mir::opcode::AtomicOrdering>,
 }
 
 /// `MachinePointerInfo`'s value: what the access is relative to.
@@ -169,8 +172,9 @@ pub struct DagConfig {
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
     pub fp_extended: bool,
-    /// `computeKnownBitsForTargetNode`: what the target knows of one of its nodes, given the known bits
-    /// of operand `n`; `None` for a node it says nothing about.
+    /// `computeKnownBitsForTargetNode`: what the target knows of one of its
+    /// nodes, given the known bits of operand `n`; `None` for a node it
+    /// says nothing about.
     pub known_bits_for_target_node: Option<TargetKnownBits>,
     /// `DataLayout::isBigEndian`: a narrowed load's offset counts from the
     /// other end.
@@ -178,7 +182,8 @@ pub struct DagConfig {
 }
 
 /// See [`DagConfig::known_bits_for_target_node`].
-pub type TargetKnownBits = fn(&SelectionDAG, SDValue, &dyn Fn(usize) -> super::known_bits::KnownBits) -> Option<super::known_bits::KnownBits>;
+pub type TargetKnownBits =
+    fn(&SelectionDAG, SDValue, &dyn Fn(usize) -> super::known_bits::KnownBits) -> Option<super::known_bits::KnownBits>;
 
 impl Default for DagConfig {
     /// x86: 0 or 1; symbol offsets do not fold (`isOffsetFoldingLegal` is false
@@ -940,7 +945,7 @@ impl SelectionDAG {
         }
         let index = self.nodes.len() as u32;
         self.nodes.push(SDNode {
-            order: self.cur_order,
+            order: if has_no_ir_order(opcode) { 0 } else { self.cur_order },
             opcode,
             values: values.to_vec(),
             ops: ops.to_vec(),
@@ -1161,8 +1166,8 @@ impl SelectionDAG {
         store
     }
 
-    /// `getIndexedLoad`: `load` as `PRE_INC` or `POST_INC` of `offset` on `base`. The values are the loaded
-    /// value, the new base and the chain.
+    /// `getIndexedLoad`: `load` as `PRE_INC` or `POST_INC` of `offset` on
+    /// `base`. The values are the loaded value, the new base and the chain.
     pub fn get_indexed_load(
         &mut self,
         load: SDValue,
@@ -1186,8 +1191,8 @@ impl SelectionDAG {
         result
     }
 
-    /// `getIndexedStore`: `store` as `PRE_INC` or `POST_INC` of `offset` on `base`. The values are the new base
-    /// and the chain.
+    /// `getIndexedStore`: `store` as `PRE_INC` or `POST_INC` of `offset` on
+    /// `base`. The values are the new base and the chain.
     pub fn get_indexed_store(
         &mut self,
         store: SDValue,
@@ -1663,4 +1668,36 @@ impl Iterator for LiveUsers<'_> {
             }
         }
     }
+}
+
+/// The nodes the pin makes with `IROrder` 0 whatever instruction is being
+/// visited (`ConstantSDNode`, `FrameIndexSDNode`, `RegisterSDNode`,
+/// `BasicBlockSDNode`, .. take no `SDLoc`; `getUNDEF` and `getPOISON` pass an
+/// empty one). The scheduler reads 0 as "no order" and ranks such a node
+/// differently from an ordered one.
+fn has_no_ir_order(opcode: ISD) -> bool {
+    use ISD::*;
+    matches!(
+        opcode,
+        Constant
+            | TargetConstant
+            | ConstantFP
+            | TargetConstantFP
+            | Register
+            | RegisterMask
+            | JumpTable
+            | TargetJumpTable
+            | SrcValue
+            | ExternalSymbol
+            | TargetExternalSymbolNode
+            | FrameIndex
+            | TargetFrameIndex
+            | ConstantPool
+            | TargetConstantPool
+            | BasicBlock
+            | ValueType
+            | CondCodeNode
+            | Undef
+            | Poison
+    )
 }

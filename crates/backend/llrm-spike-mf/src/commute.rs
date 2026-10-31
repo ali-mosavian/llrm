@@ -17,7 +17,7 @@
 //! `isRevCopyChain` (L320), `noUseAfterLastDef` (L351), `isKilled` (L454),
 //! `isProfitableToCommute` (L648), `tryInstructionCommute` (L1285).
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::regalloc::{Target, successors};
@@ -51,7 +51,7 @@ impl Facts {
         let succs = successors(function);
         let mut gen_ = vec![vec![false; count]; blocks];
         let mut kill = vec![vec![false; count]; blocks];
-        let mut defs: HashMap<u32, Vec<(usize, usize)>> = HashMap::new();
+        let mut defs: HashMap<u32, Vec<(usize, usize)>> = HashMap::default();
         for (b, block) in function.blocks.iter().enumerate() {
             for (i, inst) in block.insts.iter().enumerate() {
                 for u in uses(inst) {
