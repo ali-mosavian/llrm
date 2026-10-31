@@ -146,3 +146,29 @@ fn an_undefined_weak_symbol_is_weak() {
     let last = offset + size - entsize;
     assert_eq!(bytes[last + 12] >> 4, 2, "st_info binding of the undefined symbol is STB_WEAK");
 }
+
+struct Flagged;
+
+impl Machine for Flagged {
+    const BITS: u8 = 32;
+    const WIDE: bool = false;
+    const NUMBER: u16 = 6502;
+    const ADDEND: bool = true;
+    const FLAGS: u32 = 3;
+
+    fn backend() -> &'static dyn AsmBackend {
+        &Backend
+    }
+
+    fn relocation(_: &Reloc) -> Result<Relocation, Unsupported> {
+        Ok(Relocation { kind: 3, width: 2 })
+    }
+}
+
+/// `e_flags` was always 0, so a machine that names its CPU there (llvm-mos:
+/// 0x3, mos6502 + mos6502bcd) wrote an object its linker takes for another.
+#[test]
+fn a_machine_sets_e_flags() {
+    let bytes = write::<Flagged>(&object()).unwrap();
+    assert_eq!(u32::from_le_bytes(bytes[36..40].try_into().unwrap()), 3);
+}

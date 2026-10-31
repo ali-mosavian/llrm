@@ -45,6 +45,8 @@ pub trait Machine {
     /// ELFDATA2MSB: the file's own fields are big-endian. The section bytes
     /// are the target's.
     const BIG_ENDIAN: bool = false;
+    /// `e_flags`: the machine's own (llvm-mos writes its CPU there).
+    const FLAGS: u32 = 0;
     /// `sh_type` of `.eh_frame`: `SHT_X86_64_UNWIND` on x86-64, else PROGBITS.
     const UNWIND_TYPE: u32 = SHT_PROGBITS;
 
@@ -438,7 +440,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     put_word::<M>(&mut header, 0); // entry
     put_word::<M>(&mut header, 0); // program headers
     put_word::<M>(&mut header, table);
-    put32::<M>(&mut header, 0); // flags
+    put32::<M>(&mut header, M::FLAGS);
     put16::<M>(&mut header, header_size as u16);
     put16::<M>(&mut header, 0);
     put16::<M>(&mut header, 0);
