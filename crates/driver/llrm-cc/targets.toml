@@ -173,3 +173,28 @@ llc = ["-fobject-format=elf", "-mabi=sysv"]
 object = "elf"
 link = ["clang", "-m32", "-no-pie", "-o", "{output}", "{objects}", "-lm"]
 run = []
+
+# 6502 on sim65: clang's msp430 is only the C front end (16-bit int and pointers, as cc65; unsigned char, packed structs),
+# its datalayout replaced by the 6502's. Stops at -S: ca65 text, which the tests assemble and link with cl65.
+[6502-sim65]
+description = "6502"
+triple = "msp430"
+datalayout = "{datalayout:6502}"
+clang_datalayout = "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16"
+clang = ["-ffp-contract=off", "-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
+llc = ["--platform=sim65", "--cpu=6502"]
+llc_program = "llrm-6502-llc"
+object = "ca65"
+link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
+
+# The same for a 65C02.
+[65c02-sim65]
+description = "6502"
+triple = "msp430"
+datalayout = "{datalayout:6502}"
+clang_datalayout = "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16"
+clang = ["-ffp-contract=off", "-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
+llc = ["--platform=sim65", "--cpu=65c02"]
+llc_program = "llrm-6502-llc"
+object = "ca65"
+link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]

@@ -888,6 +888,13 @@ impl Dag for DagisAdapter<'_> {
             let vt = self.dag.value_type(v);
             return theirs(self.dag.get_constant_with(bits, vt, true, false));
         }
+        if self.dag.opcode(v) == ISD::ConstantFP {
+            let NodeData::ConstFp { bits } = self.dag.node(v).data else {
+                unreachable!("a float constant has its bits")
+            };
+            let vt = self.dag.value_type(v);
+            return theirs(self.dag.get_target_constant_fp(bits, vt));
+        }
         value
     }
     fn register(
