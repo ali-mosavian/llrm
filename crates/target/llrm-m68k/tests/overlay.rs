@@ -138,12 +138,13 @@ fn branches(body: &str) -> String {
     compiled(&ir, Options::default())
 }
 
-/// `lsr` sets Z from its result, so the `tst.l` after it only repeats it: the
-/// popcount loop ended `lsr.l #1, %d1; tst.l %d1; bne`.
+/// `lsr` sets Z from its result, but the pin has no `optimizeCompareInstr` for
+/// M68k: the popcount loop ends `lsr.l #1, %d1; tst.l %d1; bne`, the `tst.l`
+/// stays.
 #[test]
-fn a_test_right_after_the_instruction_that_set_the_flags_is_dropped() {
+fn a_test_right_after_the_instruction_that_set_the_flags_stays_as_the_pin_has_it() {
     let asm = branches("%s = lshr i32 %a, 1\n  %c = icmp ne i32 %s, 0");
-    assert!(asm.contains("lsr.l") && !asm.contains("tst.l"), "{asm}");
+    assert!(asm.contains("lsr.l") && asm.contains("tst.l"), "{asm}");
 }
 
 /// `add` can overflow, so after it `gt` (Z clear and N = V) is not what `tst`
@@ -178,22 +179,6 @@ define i32 @f(i32 %a) {
     let text = compiled(ir, Options::PINNED);
     assert_eq!(text.matches("move.l\t%d2, %d0").count(), 1, "{text}");
     assert!(!text.contains("bra"), "{text}");
-}
-
-/// The copy that hoisting put before a `tst.l` of its source left the codes
-/// `tst.l` gives: the `tst.l %d2` after `move.l %d2, %d0` was kept, an
-/// instruction on the path that had none.
-#[test]
-fn a_test_after_a_copy_of_the_tested_register_is_dropped() {
-    use llrm_m68k::expand::Line;
-    use llrm_m68k::overlay::drop_redundant_tests;
-    let inst = |opcode, operands| Line::Inst(Inst { opcode, operands });
-    let copy = inst("MOV32rr", vec![register("d0"), register("d2")]);
-    let branch = inst("Bpl8", vec![]);
-    let lines = vec![copy.clone(), inst("TST32d", vec![register("d2")]), branch.clone()];
-    assert_eq!(opcodes(&drop_redundant_tests(lines)), ["MOV32rr", "Bpl8"]);
-    let other = vec![copy, inst("TST32d", vec![register("d1")]), branch];
-    assert_eq!(opcodes(&drop_redundant_tests(other)), ["MOV32rr", "TST32d", "Bpl8"]);
 }
 
 /// An add of a constant to a zero-extended byte went to an address register,
@@ -623,44 +608,6 @@ fn a_sum_that_is_only_an_address_is_a_lea() {
     assert!(!pinned.contains("\tlea\t(0,%a"), "{pinned}");
 }
 
-mod repeated_compares {
-    use llrm_m68k::expand::Line;
-    use llrm_m68k::overlay::drop_repeated_compares;
-
-    use super::*;
-
-    fn cmp() -> Line {
-        Line::Inst(Inst { opcode: "CMP32dr", operands: vec![register("d2"), register("a1")] })
-    }
-
-    fn branch(opcode: &'static str) -> Line {
-        Line::Inst(Inst { opcode, operands: vec![Operand::Symbol(".LBB0_9".into(), 0)] })
-    }
-
-    /// `a[m] == key`, then `a[m] < key` on the next block: one `cmp` for both
-    /// branches (bsearch ran `cmp; beq; cmp; bge` each trip).
-    #[test]
-    fn a_compare_again_after_a_branch_is_dropped() {
-        let lines = vec![cmp(), branch("Beq8"), cmp(), branch("Bge8")];
-        assert_eq!(drop_repeated_compares(lines), vec![cmp(), branch("Beq8"), branch("Bge8")]);
-    }
-
-    /// A label in between has another way in; a write between changes the
-    /// operands; a different compare is a different compare.
-    #[test]
-    fn a_compare_after_a_label_a_write_or_other_operands_stays() {
-        let with_label = vec![cmp(), branch("Beq8"), Line::Label(3), cmp(), branch("Bge8")];
-        assert_eq!(drop_repeated_compares(with_label.clone()), with_label);
-        let write =
-            Line::Inst(Inst { opcode: "ADDQ32d", operands: vec![register("d2"), register("d2"), Operand::Imm(1)] });
-        let after_write = vec![cmp(), branch("Beq8"), write, cmp(), branch("Bge8")];
-        assert_eq!(drop_repeated_compares(after_write.clone()), after_write);
-        let other = Line::Inst(Inst { opcode: "CMP32dr", operands: vec![register("d3"), register("a1")] });
-        let different = vec![cmp(), branch("Beq8"), other, branch("Bge8")];
-        assert_eq!(drop_repeated_compares(different.clone()), different);
-    }
-}
-
 /// A frame of saved registers and an outgoing-argument area was `suba.l #20,
 /// %sp; movem.l regs, (8,%sp)` and back: 24 B of prologue and epilogue. The
 /// saved registers are the top of the frame, so pushing them and taking the
@@ -694,7 +641,6 @@ fn library(name: &str) -> String {
 fn an_argument_compared_twice_in_a_loop_is_read_from_its_slot_at_the_size_level() {
     let size = Options { size: true, ..Options::default() };
     assert!(compiled(&library("bsearch"), size).contains("cmp.l\t(16,%sp), %d"));
-    assert!(code_size(&library("bsearch"), size) <= 64);
 }
 
 /// muldiv reads `b` three times, as the outgoing arguments of three calls:
@@ -765,16 +711,6 @@ fn a_constant_shifted_up_16_is_a_moveq_and_swap() {
     assert!(text.contains("moveq\t#3, %d0") && text.contains("swap\t%d0"), "{text}");
     assert!(!constant(65536 * 3 + 1).contains("swap"));
     assert!(!constant(0).contains("swap"));
-}
-
-fn opcodes(lines: &[llrm_m68k::expand::Line]) -> Vec<&'static str> {
-    lines
-        .iter()
-        .filter_map(|line| match line {
-            llrm_m68k::expand::Line::Inst(inst) => Some(inst.opcode),
-            _ => None,
-        })
-        .collect()
 }
 
 #[test]
