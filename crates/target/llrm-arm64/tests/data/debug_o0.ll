@@ -33,7 +33,7 @@ attributes #1 = { "frame-pointer"="non-leaf" "no-trapping-math"="true" "stack-pr
 !llvm.ident = !{!9}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: "Ubuntu clang version 20.1.8 (0ubuntu4)", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, splitDebugInlining: false, nameTableKind: None)
-!1 = !DIFile(filename: "a64.c", directory: "/tmp/claude-1000/iv10", checksumkind: CSK_MD5, checksum: "450995d35c1ad2e2996796096c5d4639")
+!1 = !DIFile(filename: "a64.c", directory: "", checksumkind: CSK_MD5, checksum: "450995d35c1ad2e2996796096c5d4639")
 !2 = !{i32 7, !"Dwarf Version", i32 5}
 !3 = !{i32 2, !"Debug Info Version", i32 3}
 !4 = !{i32 1, !"wchar_size", i32 4}
