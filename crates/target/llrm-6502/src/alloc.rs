@@ -2072,25 +2072,35 @@ fn emit_on(
     stack: bool,
     cmos: bool,
 ) -> Result<(String, Vec<(String, usize)>), String> {
-    let run = |function: MFunction<Class>, sink: bool, share: bool, split: bool| {
+    let run = |function: MFunction<Class>, sink: bool, share: bool, split: bool, place: bool| {
         if stack {
-            emit_with::<true>(function, labels, cmos, sink, share, split)
+            emit_with::<true>(function, labels, cmos, sink, share, split, place)
         } else {
-            emit_with::<false>(function, labels, cmos, sink, share, split)
+            emit_with::<false>(function, labels, cmos, sink, share, split, place)
         }
     };
-    let (code, slots, sunk, shared) = run(function.clone(), true, true, false)?;
+    let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
+    let price = |code: &str, slots: &[(String, usize)]| {
+        crate::timing::estimate(cpu, code)
+            .map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
+    };
+    let (mut code, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
+    // a layout that rotates a loop is kept only where it is no larger and no
+    // slower than the order the blocks came in
+    let mut place = true;
+    if moved
+        && let Ok((other, other_slots, ..)) = run(function.clone(), true, true, false, false)
+        && let (Ok(kept), Ok(candidate)) = (price(&code, &slots), price(&other, &other_slots))
+        && (kept.0 > candidate.0 || kept.1 > candidate.1)
+    {
+        (code, slots, place) = (other, other_slots, false);
+    }
     // a function with calls that spilled may do better with a register kept in
     // a slot across them only
     let splittable = !slots.is_empty() && function.blocks.iter().any(|b| b.insts.iter().any(|i| i.call));
     if !sunk && !shared && !splittable {
         return Ok((code, slots));
     }
-    let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
-    let price = |code: &str, slots: &[(String, usize)]| {
-        crate::timing::estimate(cpu, code)
-            .map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
-    };
     // each change is kept only where it is no larger and no slower than the
     // function without it
     let mut best = (code, slots);
@@ -2103,7 +2113,7 @@ fn emit_on(
         variants.clear();
     }
     for (sink, share) in variants {
-        let Ok((other, other_slots, _, _)) = run(function.clone(), sink, share, false) else { continue };
+        let Ok((other, other_slots, ..)) = run(function.clone(), sink, share, false, place) else { continue };
         if let (Ok(kept), Ok(candidate)) = (price(&best.0, &best.1), price(&other, &other_slots)) {
             if kept.0 > candidate.0 || kept.1 > candidate.1 {
                 best = (other, other_slots);
@@ -2112,7 +2122,7 @@ fn emit_on(
         }
     }
     if splittable
-        && let Ok((other, other_slots, _, _)) = run(function.clone(), settings.0, settings.1, true)
+        && let Ok((other, other_slots, ..)) = run(function.clone(), settings.0, settings.1, true, place)
         && let (Ok(kept), Ok(candidate)) = (price(&best.0, &best.1), price(&other, &other_slots))
         && candidate.0 <= kept.0
         && candidate.1 <= kept.1
@@ -2254,6 +2264,35 @@ fn sets_nz_of_a(line: &str) -> bool {
     }
 }
 
+/// The odds of a branch out of a loop, as `BranchProbabilityInfo`'s loop
+/// heuristic gives them with no profile: the edge that stays in the innermost
+/// loop of its block takes 124 of 128, the edge that leaves it the rest.
+fn loop_odds(function: &MFunction<Class>) -> llrm_spike_mf::placement::Odds {
+    use llrm_mir::blockfrequency::BranchProbability;
+    let cfg = llrm_spike_mf::cfg::Cfg::new(function);
+    let mut odds = llrm_spike_mf::placement::Odds::new();
+    for (from, succs) in cfg.succs.iter().enumerate() {
+        if succs.len() != 2 {
+            continue;
+        }
+        let innermost = cfg
+            .loops()
+            .iter()
+            .filter(|(_, body)| body[from])
+            .min_by_key(|(_, body)| body.iter().filter(|b| **b).count());
+        let Some((_, body)) = innermost else { continue };
+        let leaves: Vec<bool> = succs.iter().map(|&to| !body[to]).collect();
+        if leaves[0] == leaves[1] {
+            continue;
+        }
+        for (rank, &to) in succs.iter().enumerate() {
+            let share = if leaves[rank] { 4 } else { 124 };
+            odds.insert((function.blocks[from].id, function.blocks[to].id), (BranchProbability::new(share, 128), rank));
+        }
+    }
+    odds
+}
+
 fn emit_with<const STACK: bool>(
     mut function: MFunction<Class>,
     labels: &[Vec<String>],
@@ -2261,7 +2300,8 @@ fn emit_with<const STACK: bool>(
     sink: bool,
     share: bool,
     split: bool,
-) -> Result<(String, Vec<(String, usize)>, bool, bool), String> {
+    place: bool,
+) -> Result<(String, Vec<(String, usize)>, bool, bool, bool), String> {
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
@@ -2313,6 +2353,10 @@ fn emit_with<const STACK: bool>(
     );
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     branch_fold::<Mos<STACK>>(&mut function);
+    let moved = place && {
+        let odds = loop_odds(&function);
+        llrm_spike_mf::placement::place_blocks_counting::<Class, Mos<STACK>>(&mut function, &odds, false, true)
+    };
     let after = live_after(&function, &at);
     let slot_name = |slot: i32| format!("s_{}_{}", function.name, slot);
     let mut out = String::new();
@@ -2783,6 +2827,7 @@ fn emit_with<const STACK: bool>(
         slots,
         sunk,
         shared,
+        moved,
     ))
 }
 

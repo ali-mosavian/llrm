@@ -744,3 +744,14 @@ fn a_store_between_a_load_and_its_add_keeps_the_load() {
     let text = assembly(&ir, &Request::new(Level::O0)).unwrap();
     assert!(!text.contains("adc g"), "the add reads the stored value:\n{text}");
 }
+
+/// A copy up to the terminator ran its pointer bumps and then `jmp` back to
+/// the test at its top: the jump is 3 clocks and 3 bytes a trip. The test
+/// sits at the bottom and the loop closes with its branch; one `jmp` at the
+/// entry is all that is left (`strcpy`, 40 clocks a byte).
+#[test]
+fn a_loop_with_its_test_at_the_top_is_laid_out_with_it_at_the_bottom() {
+    let text = assembly(&module(COPY_UNTIL_ZERO), &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("cp_b0:\n  jmp cp_b1\n"), "entered by falling into the test:\n{text}");
+    assert!(text.contains("  bne cp_b3\n"), "the loop is not closed by its branch:\n{text}");
+}
