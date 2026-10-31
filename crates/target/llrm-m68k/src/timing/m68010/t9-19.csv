@@ -1,0 +1,17 @@
+#title,Table 9-19. Exception Processing Execution Times,page,9-13,notes,+ Add effective address calculation time. | * The interrupt acknowledge and breakpoint cycles are assumed to take four clock periods. | ** Indicates maximum value. | *** Indicates the time from when RESET and HALT are first sampled as negated to when instruction execution starts.
+Exception,
+Address Error,126(4/26)
+Breakpoint Instruction*,45(5/4)
+Bus Error,126(4/26)
+CHK Instruction**,44(5/4)+
+Divide By Zero,42(5/4)+
+Illegal Instruction,38(5/4)
+Interrupt*,46(5/4)
+"MOVEC, Illegal Control Register**",46(5/4)
+Privilege Violation,38(5/4)
+Reset***,40(6/0)
+"RTE, Illegal Format",50(7/4)
+"RTE, Illegal Revision",70(12/4)
+Trace,38(4/4)
+TRAP Instruction,38(4/4)
+TRAPV Instruction,38(5/4)

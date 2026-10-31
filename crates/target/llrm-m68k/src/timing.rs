@@ -23,7 +23,11 @@
 //! # See also
 //! `tests/timing.rs`: the cells it checks, with table and page.
 
-use crate::dagisel::hooks::Cpu;
+mod m68010;
+mod table;
+
+use crate::dagisel::hooks::Cpu as SelectCpu;
+use crate::isa::Cpu;
 
 /// Clock periods of one instruction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,6 +71,10 @@ enum Operand {
     Target,
     /// `%sr` or `%ccr`.
     Status,
+    /// `%usp`.
+    Usp,
+    /// Any other control register (`%vbr`, `%cacr`, ...).
+    Control,
 }
 
 fn split_operands(text: &str) -> Vec<&str> {
@@ -127,11 +135,17 @@ fn operand(text: &str) -> Result<Operand, String> {
     if text == "%sr" || text == "%ccr" {
         return Ok(Operand::Status);
     }
+    if text == "%usp" {
+        return Ok(Operand::Usp);
+    }
     if let Some(value) = text.strip_prefix('#') {
         return Ok(Operand::Mode(Mode::Imm, value.parse().unwrap_or(0)));
     }
     if text.starts_with('%') && (text.contains('/') || text.contains('-')) {
         return list_size(text).map(Operand::List).ok_or_else(unsupported);
+    }
+    if text.starts_with('%') && text[1..].chars().all(|c| c.is_ascii_lowercase()) {
+        return Ok(Operand::Control);
     }
     if let Some(inner) = text.strip_prefix("-(").and_then(|rest| rest.strip_suffix(')')) {
         return if is_address(inner) { Ok(Operand::Mode(Mode::Pre, 0)) } else { Err(unsupported()) };
@@ -251,6 +265,24 @@ fn set_on_condition(base: &str) -> bool {
 /// conditional branch has a byte or a word displacement by it) and `taken`
 /// whether a branch was taken.
 pub fn cost(
+    cpu: SelectCpu,
+    text: &str,
+    bytes: u32,
+    taken: bool,
+) -> Result<Cost, String> {
+    cost_on(
+        match cpu {
+            SelectCpu::M68000 => Cpu::M68000,
+            SelectCpu::M68020 => Cpu::M68020,
+        },
+        text,
+        bytes,
+        taken,
+    )
+}
+
+/// [`cost`] for any CPU of the family.
+pub fn cost_on(
     cpu: Cpu,
     text: &str,
     bytes: u32,
@@ -273,11 +305,13 @@ pub fn cost(
     }
     let clocks = match cpu {
         Cpu::M68000 => clocks68000(base, suffix, &operands, bytes, taken),
+        Cpu::M68010 => m68010::clocks(base, suffix, &operands, bytes, taken),
         Cpu::M68020 => clocks68020(base, suffix, &operands, bytes, taken),
+        Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => None,
     }
     .ok_or_else(|| format!("`{text}` is not in the {cpu:?} tables"))?;
-    let by_register = is_shift(base) && cpu == Cpu::M68000 && places(&operands).is_none() && operands.len() == 2;
-    let partial = matches!(base, "mulu" | "muls" | "divu" | "divs") || by_register || set_on_condition(base);
+    let by_register = is_shift(base) && matches!(cpu, Cpu::M68000 | Cpu::M68010) && places(&operands).is_none() && operands.len() == 2;
+    let partial = matches!(base, "mulu" | "muls" | "divu" | "divs") || by_register || (set_on_condition(base) && cpu == Cpu::M68000);
     Ok(Cost { clocks, partial })
 }
 
