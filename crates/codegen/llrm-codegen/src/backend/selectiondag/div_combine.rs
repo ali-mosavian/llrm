@@ -138,11 +138,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.dag.config().int_div_cheap && vt != EVT::I8
     }
 
-    /// `isIntDivCheap(VT)` priced per divisor: whether the target's `div`/`idiv` of a `vt` value costs fewer clocks than
-    /// `BuildSDIV`/`BuildUDIV`'s multiply-high sequence for the constant `n1` (and, for a remainder, the multiply and
-    /// subtract that follow it). The sequence's parts are counted from the same magic numbers the build uses, each
-    /// priced as the sheet prices it, with the operand-size prefix where the width is not the target's own. O(1) per
-    /// node: the magic numbers take O(bits). DEVIATE DIV-COST-1: the pin's hook is `minsize` alone.
+    /// `isIntDivCheap(VT)` priced per divisor: whether the target's
+    /// `div`/`idiv` of a `vt` value costs fewer clocks than `BuildSDIV`/
+    /// `BuildUDIV`'s multiply-high sequence for the constant `n1` (and, for a
+    /// remainder, the multiply and subtract that follow it). The sequence's
+    /// parts are counted from the same magic numbers the build uses, each
+    /// priced as the sheet prices it, with the operand-size prefix where the
+    /// width is not the target's own. O(1) per node: the magic numbers take
+    /// O(bits). DEVIATE SD445: the pin's hook is `minsize` alone, and a margin
+    /// of a quarter keeps the sequence where the sheet's prices differ by
+    /// less than the multiply's own spread (13 to 42 clocks).
     fn hardware_divide_wins(
         &self,
         vt: EVT,
@@ -153,18 +158,21 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     ) -> bool {
         let Some(p) = self.dag.config().div_prices else { return false };
         let bits = vt.size_in_bits();
-        if bits != 16 && bits != 32 {
+        let width = i64::from(bits / 8);
+        // A byte divide has no selected form, and the double word of a pair is
+        // a call.
+        if !(2..=4).contains(&width) || bits % 8 != 0 {
             return false;
         }
         let Some(d) = self.dag.constant(n1).map(|c| c & super::fold::mask(bits)) else { return false };
         if d <= 1 || signed && d == super::fold::mask(bits) {
             return false;
         }
-        let width = i64::from(bits / 8);
         let sized = |price: i64| price + if width != p.operand { p.prefix } else { 0 };
         let wide = |price: i64| price + if 4 != p.operand { p.prefix } else { 0 };
         let hardware = sized(if width == 4 { p.divide_long } else { p.divide }) + if signed { p.extend } else { p.add };
-        // A multiply-high of a narrower value is the widened product, its high half taken.
+        // A multiply-high of a narrower value is the widened product, its high
+        // half taken.
         let high = wide(p.multiply_long) + if width < 4 { p.extend + p.shift } else { 0 };
         let (add, shift) = (sized(p.add), sized(p.shift));
         let magic = if signed {
@@ -181,7 +189,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 + if found.is_add { 2 * add + shift } else { 0 }
                 + if found.post_shift != 0 { shift } else { 0 }
         };
-        // The remainder is `x - q * d`: the product by a constant is a multiply or a few shifts and adds.
+        // The remainder is `x - q * d`: the product by a constant is a multiply
+        // or a few shifts and adds.
         let back = sized(if width == 4 { p.multiply_long } else { p.multiply }).min(2 * shift + 2 * add) + add;
         let total = magic + if rem { back } else { 0 };
         hardware + hardware / 4 < total
@@ -220,7 +229,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(if negative { self.dag.get_negative(quotient, vt) } else { quotient });
             }
         }
-        if self.dag.constant(n1).is_some() && !self.int_div_cheap(vt) && !self.hardware_divide_wins(vt, n0, n1, true, false) {
+        if self.dag.constant(n1).is_some()
+            && !self.int_div_cheap(vt)
+            && !self.hardware_divide_wins(vt, n0, n1, true, false)
+        {
             return self.build_sdiv(n0, n1, node);
         }
         None
@@ -311,7 +323,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(self.dag.get_node(ISD::Srl, vt, &[n0, total]));
             }
         }
-        if self.dag.constant(n1).is_some() && !self.int_div_cheap(vt) && !self.hardware_divide_wins(vt, n0, n1, false, false) {
+        if self.dag.constant(n1).is_some()
+            && !self.int_div_cheap(vt)
+            && !self.hardware_divide_wins(vt, n0, n1, false, false)
+        {
             return self.build_udiv(n0, n1, node);
         }
         None

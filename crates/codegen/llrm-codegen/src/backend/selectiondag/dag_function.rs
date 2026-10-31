@@ -717,8 +717,9 @@ impl super::emit::ConstantCells for PoolCells<'_> {
     }
 }
 
-/// The prices `isIntDivCheap` weighs per divisor (`DivPrices`): none for a target that does not price a divide
-/// above a multiply, which then keeps the pin's rule.
+/// The prices `isIntDivCheap` weighs per divisor (`DivPrices`): none for a
+/// target that does not price a divide above a multiply, which then keeps the
+/// pin's rule.
 fn div_prices(
     costs: &llrm_mir::target::OperationCosts,
     bitness: u32,

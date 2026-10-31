@@ -224,7 +224,8 @@ impl BuilderTarget {
         self
     }
 
-    /// This target with a divide by a constant kept where its priced clocks beat the multiply-high sequence's.
+    /// This target with a divide by a constant kept where its priced clocks
+    /// beat the multiply-high sequence's.
     pub fn with_div_prices(
         mut self,
         prices: Option<super::dag::DivPrices>,

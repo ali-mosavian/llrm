@@ -153,12 +153,14 @@ pub enum BooleanContents {
     Undefined,
 }
 
-/// What a target charges for the operations a divide by a constant is made of or
-/// replaced by: the divide's own price, and the multiply-high sequence's parts.
-/// `None` in [`DagConfig::div_prices`]: the pin's rule (`int_div_cheap` alone).
+/// What a target charges for the operations a divide by a constant is made of
+/// or replaced by: the divide's own price, and the multiply-high sequence's
+/// parts. `None` in [`DagConfig::div_prices`]: the pin's rule (`int_div_cheap`
+/// alone).
 #[derive(Clone, Copy, Debug)]
 pub struct DivPrices {
-    /// The target's own operand size in bytes: a value of another width runs under the prefix.
+    /// The target's own operand size in bytes: a value of another width runs
+    /// under the prefix.
     pub operand: i64,
     pub prefix: i64,
     pub add: i64,
@@ -185,7 +187,8 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
-    /// Prices that decide `isIntDivCheap` per divisor and width; see [`DivPrices`].
+    /// Prices that decide `isIntDivCheap` per divisor and width; see
+    /// [`DivPrices`].
     pub div_prices: Option<DivPrices>,
     /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an
     /// `sdiv` by a power of two stays an `sdiv`.

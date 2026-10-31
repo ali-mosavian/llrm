@@ -281,8 +281,9 @@ pub struct OperationCosts {
     pub add: i64,
     pub multiply: i64,
     pub divide: i64,
-    /// The same on a dword where the target's own word is smaller (`imul`/`idiv` r32 in
-    /// real mode, before the operand-size prefix); equal to `multiply`/`divide` elsewhere.
+    /// The same on a dword where the target's own word is smaller
+    /// (`imul`/`idiv` r32 in real mode, before the operand-size prefix);
+    /// equal to `multiply`/`divide` elsewhere.
     pub multiply_long: i64,
     pub divide_long: i64,
     pub shift: i64,
