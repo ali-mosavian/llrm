@@ -98,6 +98,31 @@ e:\n  ret i32 0\n}\n";
     assert_eq!(asm.matches("sub").count(), 1, "one subtract, not a compare and a subtract:\n{asm}");
 }
 
+/// The pin's MachineSink moves the zero a phi takes from the entry onto that edge. The DAG path
+/// built it in the entry block, so it ran on both paths: `orr x0, xzr, xzr` before the branch.
+#[test]
+fn a_constant_only_one_edge_reads_is_made_on_that_edge() {
+    let ir = "target triple = \"arm64-apple-macosx\"\n\
+target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+define i32 @f(i32 %a, i32 %b) {\n  %c = icmp sgt i32 %a, 0\n  br i1 %c, label %t, label %e\n\
+t:\n  %m = mul i32 %b, %a\n  br label %e\n\
+e:\n  %r = phi i32 [ 0, %0 ], [ %m, %t ]\n  ret i32 %r\n}\n";
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("t.ll");
+    std::fs::write(&input, ir).unwrap();
+    let output = dir.path().join("t.s");
+    let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .output()
+        .unwrap();
+    assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+    let asm = std::fs::read_to_string(&output).unwrap();
+    let entry = asm.split(".Lf.1:").next().unwrap();
+    assert!(!entry.contains("xzr, xzr"), "the zero is made before the branch that skips its use:\n{asm}");
+}
+
 /// A `tail call` whose arguments are all in registers is the jump to the callee (`LowerCall`'s
 /// `TC_RETURN`): the DAG path made `bl _strcmp` inside a frame, 7 instructions for the pin's 3.
 /// An argument on the stack has no place in the caller's frame, so that call stays a call.

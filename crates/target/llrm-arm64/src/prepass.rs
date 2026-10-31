@@ -18,6 +18,12 @@
 //! becomes the zero register. A copy of a single-definition register is read
 //! through when expressions are compared (`PerformTrivialCopyPropagation`).
 //!
+//! A pure value, or a copy of the zero register, that is read only below its
+//! block is moved to the start of the nearest block dominating its readers
+//! (`MachineSink`), so a phi's constant is made on its edge and not on the
+//! paths that skip it. The pin pays the same extra jump where that edge block
+//! does not fall through to its target.
+//!
 //! DEVIATE 3: LLVM runs these on the shared machine IR; this is a small version
 //! over the arm64 selector's operations, standing in until the core machine
 //! passes run on arm64 (docs/architecture/arm64-spike.md).
@@ -256,6 +262,88 @@ pub fn run(function: &mut MFunc) {
     hoist(function);
     // What was hoisted from several blocks is one value in the preheader.
     cse(function);
+    sink(function);
+}
+
+/// The blocks each block can reach by one or more edges.
+fn reachable(cfg: &Cfg) -> Vec<HashSet<usize>> {
+    (0..cfg.successors.len())
+        .map(|start| {
+            let mut seen = HashSet::new();
+            let mut stack = cfg.successors[start].clone();
+            while let Some(block) = stack.pop() {
+                if seen.insert(block) {
+                    stack.extend(&cfg.successors[block]);
+                }
+            }
+            seen
+        })
+        .collect()
+}
+
+/// A pure value that is read only below the block making it is made at the
+/// start of the nearest block that dominates its readers, so the paths that
+/// skip them do not pay for it (`MachineSink`; a phi's constant is made on its
+/// edge). A block in a loop the maker is not in is no target. A value moves one
+/// step at a time: what it reads goes next, in the following round.
+fn sink(function: &mut MFunc) {
+    for _ in 0..16 {
+        let cfg = cfg(function);
+        let definitions = definitions(function);
+        let reach = reachable(&cfg);
+        let mut readers: HashMap<Reg, Vec<usize>> = HashMap::new();
+        for (at, block) in function.blocks.iter().enumerate() {
+            for op in &block.ops {
+                for register in op.defs_and_uses().1 {
+                    readers.entry(register).or_default().push(at);
+                }
+            }
+        }
+        let mut moves: Vec<(usize, usize, usize)> = Vec::new();
+        for &from in &cfg.order {
+            for (index, op) in function.blocks[from].ops.iter().enumerate() {
+                // The zero register is the same value everywhere.
+                let zero = matches!(op, Op::Copy { dst, src } if dst.is_virtual() && *src == Reg::Gpr(Gpr::R31));
+                if !(pure(op) || zero) {
+                    continue;
+                }
+                let Some(register) = defined(op) else { continue };
+                let once = |one: &Reg| definitions.get(one) == Some(&1);
+                if !once(&register) || !(zero || op.defs_and_uses().1.iter().all(once)) {
+                    continue;
+                }
+                let Some(blocks) = readers.get(&register) else { continue };
+                let mut target = blocks[0];
+                for &reader in &blocks[1..] {
+                    while !dominates(&cfg, target, reader) {
+                        target = cfg.idom[target];
+                    }
+                }
+                let in_cycle = |block: usize| reach[block].contains(&block);
+                let same_cycle = reach[from].contains(&target) && reach[target].contains(&from);
+                if target != from
+                    && cfg.order.contains(&target)
+                    && dominates(&cfg, from, target)
+                    && (!in_cycle(target) || same_cycle)
+                {
+                    moves.push((from, index, target));
+                }
+            }
+        }
+        if moves.is_empty() {
+            return;
+        }
+        let mut sunk: HashMap<usize, Vec<Op>> = HashMap::new();
+        for &(from, index, target) in &moves {
+            sunk.entry(target).or_default().push(function.blocks[from].ops[index].clone());
+        }
+        for &(from, index, _) in moves.iter().rev() {
+            function.blocks[from].ops.remove(index);
+        }
+        for (target, ops) in sunk {
+            function.blocks[target].ops.splice(0..0, ops);
+        }
+    }
 }
 
 /// The virtual registers that are plain copies of another, each defined once:
