@@ -87,6 +87,7 @@
 //! # See also
 //! The phase map: [`crate::backend`]
 
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -392,6 +393,36 @@ fn _disturbs(
         || one.requires.iter().any(|(held, register)| held.value != kept.value && in_root(register))
 }
 
+thread_local! {
+    /// Whether `distinct_classes` gives a cold read of a narrowly confined
+    /// value a copy (`LLRM_NO_NARROW=1` turns it off, as `LLRM_NO_SPLIT` does
+    /// splitting).
+    static NARROW: Cell<bool> = Cell::new(!llrm_support::env_flag!("LLRM_NO_NARROW"));
+    /// Whether it did, since `narrowed` last said.
+    static PEELED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether a body was allocated with a cold read given a copy since this was
+/// last asked.
+pub fn narrowed() -> bool {
+    PEELED.with(|made| made.replace(false))
+}
+
+/// Run `route` with the copies for cold reads on or off.
+pub fn narrowing<T>(
+    on: bool,
+    route: impl FnOnce() -> T,
+) -> T {
+    let before = NARROW.with(|one| one.replace(on));
+    let made = route();
+    NARROW.with(|one| one.set(before));
+    made
+}
+
+/// `InstrEmitter.cpp`'s `MinRCSize`: the smallest class a value is constrained
+/// to; a use that would need less takes a copy of its own.
+const MIN_RC_SIZE: usize = 4;
+
 /// `body` with no value whose reads need registers that share none.
 ///
 /// A value read as a byte (ax..dx) and as the index of a frame array (si, di)
@@ -416,8 +447,29 @@ pub fn distinct_classes_given(
     uses: &[regclass::Use],
 ) -> Option<LirBody> {
     let mut by_value: IndexMap<u32, Vec<&regclass::Use>> = IndexMap::default();
-    for one in uses {
+    for one in uses.iter().filter(|one| !one.spare) {
         by_value.entry(one.value).or_default().push(one);
+    }
+    // Every confining read, the spare halves of address pairs too.
+    let mut every: IndexMap<u32, Vec<&regclass::Use>> = IndexMap::default();
+    for one in uses {
+        every.entry(one.value).or_default().push(one);
+    }
+    let depths = crate::analysis::intervals::depths_shared(body);
+    let depth_of = |block: usize| depths.get(&body.blocks[block].at).copied().unwrap_or(0);
+    // The deepest loop each value is named in.
+    let mut referenced: IndexMap<u32, u32> = IndexMap::default();
+    for (at, block) in body.blocks.iter().enumerate() {
+        for held in block
+            .insns
+            .iter()
+            .filter_map(|one| one.what.as_ref())
+            .flat_map(|what| what.dests.iter().chain(&what.sources))
+            .flat_map(ir::values)
+        {
+            let deepest = referenced.entry(held.value).or_default();
+            *deepest = (*deepest).max(depth_of(at));
+        }
     }
     // Which (block, instruction, value, role) reads take a copy.
     let mut peeled: BTreeSet<(usize, usize, u32, u8)> = BTreeSet::new();
@@ -448,6 +500,27 @@ pub fn distinct_classes_given(
         }
         for one in all.iter().filter(|one| !one.defining && kept.intersection(&one.class).next().is_none()) {
             peeled.insert((one.block, one.insn, *value, one.role as u8));
+        }
+    }
+    // `InstrEmitter.cpp`'s `MinRCSize`: reads that leave a value fewer than
+    // four registers. Those in a block less deep in loops than the value's
+    // deepest reference take a copy of their own, if that leaves the rest more.
+    for (value, all) in every.iter().filter(|_| NARROW.with(Cell::get)) {
+        let class = |chosen: &[&&regclass::Use]| {
+            chosen.iter().fold(None::<BTreeSet<RegId>>, |had, one| {
+                Some(had.map_or_else(|| one.class.clone(), |had| had.intersection(&one.class).copied().collect()))
+            })
+        };
+        let all: Vec<&&regclass::Use> = all.iter().collect();
+        let Some(left) = class(&all).filter(|left| !left.is_empty() && left.len() < MIN_RC_SIZE) else { continue };
+        let deepest = referenced.get(value).copied().unwrap_or(0);
+        let (cold, kept): (Vec<&&regclass::Use>, Vec<&&regclass::Use>) =
+            all.iter().partition(|one| !one.defining && depth_of(one.block) < deepest);
+        if !cold.is_empty() && class(&kept).is_none_or(|rest| rest.len() > left.len()) {
+            for one in cold {
+                peeled.insert((one.block, one.insn, *value, one.role as u8));
+            }
+            PEELED.with(|made| made.set(true));
         }
     }
     if peeled.is_empty() {
