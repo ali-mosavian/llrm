@@ -296,6 +296,9 @@ mod lsr_use_tests;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
+pub mod memloops;
+#[cfg(test)]
+mod memloops_tests;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
