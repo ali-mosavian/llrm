@@ -583,7 +583,7 @@ mod tuning_tests {
     #[test]
     fn m16_overrides_only_the_size_limits_and_the_rate() {
         let table = super::Dos::default().tuning();
-        assert_eq!((table.max_stores_per_memset, table.max_stores_per_memcpy, table.max_stores_per_memmove), (4, 2, 2));
+        assert_eq!((table.max_stores_per_memset, table.max_stores_per_memcpy, table.max_stores_per_memmove), (4, 8, 2));
         assert_eq!(table.max_stores_per_memset_opt_size, 4);
         assert_eq!((table.max_stores_per_memcpy_opt_size, table.max_stores_per_memmove_opt_size), (2, 2));
         assert_eq!(table.size_milliclocks_per_byte, 10_000);

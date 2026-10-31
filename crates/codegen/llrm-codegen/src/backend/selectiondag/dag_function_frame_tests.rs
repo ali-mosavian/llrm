@@ -1237,11 +1237,12 @@ entry:
     assert!(names.iter().any(|n| n == "inc"), "{names:?}");
 }
 
-/// At -O2 the same copy is `rep movsd` too: m16's table states the -Os limit
-/// (2, SD225) at every level, where the pin's `MaxStoresPerMemcpy` (8) would
-/// make three dword load and store pairs.
+/// At -O2 the same copy is three dword load and store pairs: m16's table states
+/// the pin's `MaxStoresPerMemcpy` (8) at speed and keeps the -Os limit (2,
+/// SD225) for size. It was `rep movsd` at every level (lru nib -O2: 447 -> 356
+/// clocks, 144 -> 104 memory operands with the pairs).
 #[test]
-fn at_o2_a_12_byte_copy_is_a_string_move_at_m16() {
+fn at_o2_a_12_byte_copy_is_three_dword_pairs_at_m16() {
     let module = llrm_mir::parse::module(M16_COPY_12).expect("parses");
     let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
     let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
@@ -1253,7 +1254,7 @@ fn at_o2_a_12_byte_copy_is_a_string_move_at_m16() {
         .filter_map(|i| i.what.as_ref())
         .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
         .count();
-    assert_eq!((copies, stores), (1, 0), "a string move and no stores");
+    assert_eq!((copies, stores), (0, 3), "three stores and no string move");
 }
 
 const M16_FAR_COPY_12: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
