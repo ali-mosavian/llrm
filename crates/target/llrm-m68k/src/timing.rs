@@ -4,13 +4,13 @@
 //! # How it works
 //! [`cost`] reads an instruction in the pin's assembler syntax (what `asm`
 //! prints and `llvm-objdump` shows) and returns its clock periods.
-//! - 68000: MC68000UM section 8 ("16-bit instruction execution times"),
-//!   Tables 8-1 to 8-12. A move is `4 + source + destination`, which gives
-//!   every cell of Tables 8-2 and 8-3.
-//! - 68020: MC68020UM section 8, the cache case column (instruction cache
-//!   hit, no wait states). The manual says its tables bound the real time and
-//!   do not predict it, since overlap and alignment move it; the move matrix
-//!   is copied from section 8.2.6.
+//! - 68000: MC68000UM section 8 ("16-bit instruction execution times"), Tables
+//!   8-1 to 8-12. A move is `4 + source + destination`, which gives every cell
+//!   of Tables 8-2 and 8-3.
+//! - 68020: MC68020UM section 8, the cache case column (instruction cache hit,
+//!   no wait states). The manual says its tables bound the real time and do not
+//!   predict it, since overlap and alignment move it; the move matrix is copied
+//!   from section 8.2.6.
 //!
 //! A branch is priced taken or not by the caller's `taken`. A [`Cost`] with
 //! `partial` set leaves out a data-dependent term: a shift by a register
@@ -150,8 +150,19 @@ fn operand(text: &str) -> Result<Operand, String> {
             _ => Err(unsupported()),
         };
     }
+    if text.strip_suffix(":l").is_some_and(|address| address.starts_with("0x")) {
+        return Ok(Operand::Mode(Mode::AbsL, 0));
+    }
+    if text.strip_suffix(":w").is_some_and(|address| address.starts_with("0x")) {
+        return Ok(Operand::Mode(Mode::AbsW, 0));
+    }
     let first = text.chars().next();
-    if first == Some('$') || first == Some('.') || first.is_some_and(|c| c.is_alphabetic() || c == '_') {
+    if first == Some('$')
+        || text.starts_with("0x")
+        || text.chars().all(|c| c.is_ascii_hexdigit())
+        || first == Some('.')
+        || first.is_some_and(|c| c.is_alphabetic() || c == '_')
+    {
         return Ok(Operand::Target);
     }
     Err(unsupported())
@@ -187,7 +198,10 @@ fn places(operands: &[Operand]) -> Option<u32> {
 }
 
 fn is_shift(base: &str) -> bool {
-    matches!(base, "asl" | "asr" | "lsl" | "lsr" | "rol" | "ror" | "roxl" | "roxr")
+    matches!(
+        base,
+        "asl" | "asr" | "lsl" | "lsr" | "rol" | "ror" | "roxl" | "roxr"
+    )
 }
 
 fn condition_branch(base: &str) -> bool {
@@ -379,7 +393,9 @@ fn clocks68000(
         ("jmp" | "jsr", [target]) => {
             let (ind, short, index, absolute) = if base == "jmp" { (8, 10, 14, 12) } else { (16, 18, 22, 20) };
             match target {
-                Operand::Target => Some(absolute),
+                // a call to an address is absolute short in four bytes, long in
+                // six
+                Operand::Target => Some(if bytes == 4 { short } else { absolute }),
                 other => match mode(other)? {
                     Mode::Ind => Some(ind),
                     Mode::Disp | Mode::AbsW | Mode::PcDisp => Some(short),
@@ -597,12 +613,71 @@ fn clocks68020(
             Mode::Dn => Some(4),
             memory => Some(6 + calculate68020(memory)?),
         },
-        ("movem", [Operand::List(registers), memory]) => {
-            Some(4 + 3 * registers + movem_address68020(mode(memory)?)?)
-        }
-        ("movem", [memory, Operand::List(registers)]) => {
-            Some(8 + 4 * registers + movem_address68020(mode(memory)?)?)
-        }
+        ("movem", [Operand::List(registers), memory]) => Some(4 + 3 * registers + movem_address68020(mode(memory)?)?),
+        ("movem", [memory, Operand::List(registers)]) => Some(8 + 4 * registers + movem_address68020(mode(memory)?)?),
         _ => None,
     }
+}
+
+const BASES: [&str; 62] = [
+    "movea", "move", "moveq", "movem", "adda", "addi", "addq", "addx", "add", "suba", "subi", "subq", "subx", "sub",
+    "andi", "and", "ori", "or", "eori", "eor", "cmpa", "cmpi", "cmpm", "cmp", "clr", "negx", "neg", "not", "tst",
+    "ext", "swap", "lsl", "lsr", "asl", "asr", "rol", "ror", "roxl", "roxr", "link", "unlk", "lea", "pea", "jsr",
+    "jmp", "rts", "bra", "bsr", "mulu", "muls", "divu", "divs", "exg", "nop", "dbf", "dbra", "dbt", "dbne", "dbeq",
+    "scc", "seq", "sne",
+];
+
+/// `name` of GNU syntax (`addql`, `bnew`) as the pin's `base.size`.
+fn gnu_mnemonic(name: &str) -> String {
+    if BASES.contains(&name) || set_on_condition(name) {
+        return name.to_owned();
+    }
+    let split = |name: &str| -> Option<(String, char)> {
+        let last = name.chars().last()?;
+        let base = &name[..name.len() - 1];
+        "bwls".contains(last).then_some((base.to_owned(), last))
+    };
+    match split(name) {
+        Some((base, size)) if BASES.contains(&base.as_str()) || condition_branch(&base) => {
+            // a branch's `s`, `w` or `l` is its displacement, not an operand
+            // size
+            if condition_branch(&base) || base == "bra" || base == "bsr" {
+                base
+            } else {
+                format!("{base}.{}", if size == 's' { 'b' } else { size })
+            }
+        }
+        _ => name.to_owned(),
+    }
+}
+
+/// An operand of GNU syntax (`%a0@(12,%d2:l)`) as the pin's.
+fn gnu_operand(text: &str) -> String {
+    let Some((base, rest)) = text.split_once('@') else { return text.to_owned() };
+    match rest {
+        "" => format!("({base})"),
+        "+" => format!("({base})+"),
+        "-" => format!("-({base})"),
+        _ => {
+            let inner = rest.trim_start_matches('(').trim_end_matches(')');
+            let mut parts = inner.split(',');
+            let displacement = parts.next().unwrap_or("0");
+            match parts.next() {
+                None => format!("({displacement},{base})"),
+                Some(index) => format!("({displacement},{base},{})", index.split(':').next().unwrap_or(index)),
+            }
+        }
+    }
+}
+
+/// The pin's syntax for one line of binutils' `objdump -d` (GNU syntax:
+/// `movel %a0@(12),%d2`), which disassembles `addq`, `tst` and the rest of
+/// what the pin's own `llvm-objdump` shows as `<unknown>`.
+pub fn from_gnu(text: &str) -> Result<String, String> {
+    // a branch target reads `80000074 <k+0x8>`
+    let text = text.split(" <").next().unwrap_or(text).trim();
+    let (name, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+    let name = gnu_mnemonic(name);
+    let operands: Vec<String> = split_operands(rest.trim()).into_iter().map(gnu_operand).collect();
+    Ok(if operands.is_empty() { name } else { format!("{name} {}", operands.join(", ")) })
 }

@@ -146,3 +146,44 @@ fn an_unmodelled_instruction_is_an_error() {
     assert!(cost(Cpu::M68000, "frobnicate %d0", 2, false).is_err());
     assert!(cost(Cpu::M68000, "move.l ($12345678).l, %d0", 6, false).is_err());
 }
+
+fn gnu(text: &str) -> String {
+    llrm_m68k::timing::from_gnu(text).unwrap_or_else(|why| panic!("{text}: {why}"))
+}
+
+/// binutils prints `addql #1,%d0`; the pin's syntax is `addq.l #1, %d0`. The
+/// first cycle runs read the overlay-era code through the pin's own objdump,
+/// which shows `addq` and `tst` as `<unknown>`, and priced none of them.
+#[test]
+fn a_gnu_mnemonic_loses_its_size_letter_to_a_suffix() {
+    assert_eq!(gnu("addql #1,%d0"), "addq.l #1, %d0");
+    assert_eq!(gnu("tstl %d1"), "tst.l %d1");
+    assert_eq!(gnu("moveal %a1,%a0"), "movea.l %a1, %a0");
+    assert_eq!(gnu("moveml %d2-%d4,%sp@-"), "movem.l %d2-%d4, -(%sp)");
+    assert_eq!(gnu("lsll #8,%d0"), "lsl.l #8, %d0");
+    assert_eq!(gnu("moveq #1,%d0"), "moveq #1, %d0");
+    assert_eq!(gnu("rts"), "rts");
+    assert_eq!(gnu("linkw %fp,#-4"), "link.w %fp, #-4");
+}
+
+#[test]
+fn a_gnu_operand_is_the_pins_addressing_syntax() {
+    assert_eq!(gnu("movel %a0@(12),%d2"), "move.l (12,%a0), %d2");
+    assert_eq!(gnu("movel %a0@+,%d1"), "move.l (%a0)+, %d1");
+    assert_eq!(gnu("movel %d1,%a0@"), "move.l %d1, (%a0)");
+    assert_eq!(gnu("movel %a0@(0,%d2:l),%d3"), "move.l (0,%a0,%d2), %d3");
+    assert_eq!(gnu("lea %pc@(0x20),%a1"), "lea (0x20,%pc), %a1");
+    assert_eq!(gnu("bnes 0x20"), "bne 0x20");
+    assert_eq!(gnu("bnew 0x20"), "bne 0x20");
+    // the symbol annotation of a branch target is dropped; priced as a target
+    assert_eq!(gnu("bnes 80000074 <k+0x8>"), "bne 80000074");
+    assert_eq!(clocks(Cpu::M68000, &gnu("bras 80000074 <k+0x8>")), 10);
+}
+
+/// Cost through the conversion, the way the cycles tool prices code.
+#[test]
+fn a_gnu_line_is_priced_after_conversion() {
+    let line = gnu("addql #1,%d0");
+    assert_eq!(clocks(Cpu::M68000, &line), 8);
+    assert_eq!(clocks(Cpu::M68020, &line), 2);
+}

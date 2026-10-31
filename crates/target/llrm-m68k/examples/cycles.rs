@@ -2,7 +2,8 @@
 //! compiled by this compiler (default and size), run under `qemu-m68k`, and
 //! the clocks of the executed instructions inside `k` added up from
 //! `llrm_m68k::timing` for the 68000 and the 68020 (cache case). Needs
-//! `$LLVM_M68K` (the pin's m68k build) for `llvm-objdump` and `qemu-m68k`.
+//! `$GCC_M68K` (the unpacked m68k binutils, for `objdump`: the pin's
+//! `llvm-objdump` shows `addq` and `tst` as `<unknown>`) and `qemu-m68k`.
 //! A `*` marks a total that holds a data-dependent term at its bound; `?`
 //! counts executed instructions the tables do not cover.
 
@@ -14,7 +15,7 @@ use llrm_m68k::compile::{Item, Options, items, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::kernels::{data, library_data, library_table, program_with_data, source_in, table};
 use llrm_m68k::object::{assemble, executable, write_executable};
-use llrm_m68k::timing::cost;
+use llrm_m68k::timing::{cost, from_gnu};
 
 /// Executed instructions read before a run is called runaway.
 const CAP: usize = 2_000_000;
@@ -46,10 +47,15 @@ fn trace(exe: &Path) -> Vec<u32> {
 /// `(address, text)` of every instruction of `llvm-objdump -d`, and the
 /// address range of `k`.
 fn listing(
-    llvm: &Path,
+    gcc: &Path,
     exe: &Path,
 ) -> (Vec<(u32, String)>, std::ops::Range<u32>) {
-    let out = Command::new(llvm.join("llvm-objdump")).args(["-d", "--no-show-raw-insn"]).arg(exe).output().unwrap();
+    let out = Command::new(gcc.join("usr/bin/m68k-linux-gnu-objdump"))
+        .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
+        .args(["-d", "--no-show-raw-insn"])
+        .arg(exe)
+        .output()
+        .expect("m68k-linux-gnu-objdump runs");
     let mut lines = Vec::new();
     let mut range = 0..0;
     let mut in_k = false;
@@ -67,7 +73,7 @@ fn listing(
         }
         let Some((address, text)) = line.split_once(':') else { continue };
         let Ok(address) = u32::from_str_radix(address.trim(), 16) else { continue };
-        lines.push((address, text.trim().replace('\t', " ")));
+        lines.push((address, from_gnu(&text.trim().replace('\t', " ")).unwrap_or_else(|why| why)));
     }
     if in_k {
         range.end = lines.last().map_or(0, |last| last.0 + 2);
@@ -83,17 +89,20 @@ struct Total {
 }
 
 fn price(
-    llvm: &Path,
+    gcc: &Path,
     exe: &Path,
 ) -> Total {
-    let (lines, range) = listing(llvm, exe);
+    let (lines, range) = listing(gcc, exe);
     let at: HashMap<u32, (usize, &str)> = lines
         .iter()
         .enumerate()
-        .map(|(index, (address, text))| (*address, (lines.get(index + 1).map_or(2, |next| next.0 - address) as usize, text.as_str())))
+        .map(|(index, (address, text))| {
+            (*address, (lines.get(index + 1).map_or(2, |next| next.0 - address) as usize, text.as_str()))
+        })
         .collect();
     let pcs = trace(exe);
     let mut total = Total { insns: 0, clocks: [0; 2], partial: false, unknown: 0 };
+    let mut seen = std::collections::HashSet::new();
     for (index, pc) in pcs.iter().enumerate() {
         if !range.contains(pc) {
             continue;
@@ -113,7 +122,9 @@ fn price(
                 Err(why) => {
                     if slot == 0 {
                         total.unknown += 1;
-                        eprintln!("unpriced: {why}");
+                        if seen.insert(why.clone()) {
+                            eprintln!("unpriced: {why}");
+                        }
                     }
                 }
             }
@@ -123,7 +134,7 @@ fn price(
 }
 
 fn main() {
-    let llvm = PathBuf::from(std::env::var("LLVM_M68K").expect("LLVM_M68K: the pin's m68k build, its bin directory"));
+    let gcc = PathBuf::from(std::env::var("GCC_M68K").expect("GCC_M68K: the unpacked m68k binutils root"));
     let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let set = std::env::args().nth(1).unwrap_or_else(|| "kernels".to_owned());
@@ -160,7 +171,7 @@ fn main() {
             code.extend(runtime.clone());
             let exe = dir.join(format!("{name}.elf"));
             write_executable(&exe, &executable(&program_with_data(&args, code, &block)).unwrap()).unwrap();
-            let total = price(&llvm, &exe);
+            let total = price(&gcc, &exe);
             let mark = if total.partial { "*" } else { "" };
             let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
             cells.push(format!(

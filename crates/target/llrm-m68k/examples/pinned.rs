@@ -1,4 +1,4 @@
-//! `pinned FILE FUNCTION [mid]`: the function's asm without the overlay (for
+//! `pinned FILE FUNCTION [mid]`: the function's asm in the pin's form (for
 //! `llvm-mc`), with the mid-end if a third argument is given.
 use llrm_m68k::compile::{Options, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;

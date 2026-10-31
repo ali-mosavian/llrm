@@ -1,10 +1,10 @@
 //! A function from IR to scheduled machine nodes: the shared builder, then
 //! [`super::pipeline`]'s stages, block by block.
 //!
-//! DEVIATE: no static allocas, jump tables, switches or live-in registers: the
-//! builder makes the frame objects and the C convention passes everything on
-//! the stack, so the slice (arithmetic, branches, calls) needs none. Reason:
-//! frame objects wait for the m68k machine function. Exit: M4.
+//! DEVIATE: no jump tables and no live-in registers: a `switch` is a chain of
+//! compares and the C convention passes everything on the stack, so the slice
+//! (arithmetic, branches, calls) needs neither. Reason: the pin's jump tables
+//! wait for the m68k machine function's table support. Exit: M4.
 
 use std::sync::LazyLock;
 
