@@ -1017,21 +1017,10 @@ impl Emitter<'_> {
                     }
                     _ => {}
                 }
-                let dead = self.dag.users(SDValue { node: id, res: 0 }).next().is_none();
-                let sets_flags = ["ADDS", "SUBS", "ANDS", "BICS"].iter().any(|prefix| name.starts_with(prefix));
-                // `optimizeCompareInstr` / `convertToNonFlagSettingOpc`: an add or sub whose flags nothing
-                // reads (the pin selects `sub` as `SUBS*` with a dead `$nzcv`) is the plain instruction.
-                // A dead value too is a compare (`cmp`), which keeps the flags.
-                let flags_unread = (1..node.values.len() as u8).all(|res| self.dag.users(SDValue { node: id, res }).next().is_none());
-                let plain;
-                let name = if sets_flags && !dead && flags_unread && (name.starts_with("ADDS") || name.starts_with("SUBS")) {
-                    plain = format!("{}{}", &name[..3], &name[4..]);
-                    plain.as_str()
-                } else {
-                    name
-                };
-                // A compare writes the zero register: `cmp` is `subs xzr`.
-                let rd = if sets_flags && dead { Gpr::R31 } else { self.mf.gpr() };
+                // A flag-setting instruction defines a register even where nothing reads it, as the
+                // pin's selection has it (`$wzr` and the plain opcode come later, in `prepass`:
+                // `AArch64DeadRegisterDefinitions`, `optimizeCompareInstr`), so that equal ones merge.
+                let rd = self.mf.gpr();
                 if let Some((op, width)) = cond_select(name) {
                     // The flags arrive as a glued copy to NZCV, or as a value.
                     let [Operand::Reg(rn), Operand::Reg(rm), Operand::Imm(cond), ..] = operands.as_slice() else {

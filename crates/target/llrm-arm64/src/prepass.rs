@@ -263,6 +263,41 @@ pub fn run(function: &mut MFunc) {
     // What was hoisted from several blocks is one value in the preheader.
     cse(function);
     sink(function);
+    dead_definitions(function);
+    non_flag_setting(function);
+}
+
+/// A flag-setting instruction whose register nothing reads defines the zero
+/// register (`AArch64DeadRegisterDefinitions`): that is a compare.
+fn dead_definitions(function: &mut MFunc) {
+    let read: HashSet<Reg> =
+        function.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| op.defs_and_uses().1).collect();
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            if let Op::I(Inst::AddSubImm { rd, .. } | Inst::AddSubShifted { rd, .. } | Inst::AddSubExtended { rd, .. }) = op
+                && rd.is_virtual()
+                && !read.contains(&Reg::Gpr(*rd))
+            {
+                *rd = Gpr::R31;
+            }
+        }
+    }
+}
+
+/// An add or subtract that sets flags nothing reads is the plain instruction
+/// (`optimizeCompareInstr`, `convertToNonFlagSettingOpc`).
+fn non_flag_setting(function: &mut MFunc) {
+    for block in &mut function.blocks {
+        for at in 0..block.ops.len() {
+            if flag_setting(&block.ops[at]) && flags_dead(&block.ops, at) {
+                if let Op::I(Inst::AddSubImm { op, .. } | Inst::AddSubShifted { op, .. } | Inst::AddSubExtended { op, .. }) =
+                    &mut block.ops[at]
+                {
+                    op.set_flags = false;
+                }
+            }
+        }
+    }
 }
 
 /// The blocks each block can reach by one or more edges.
@@ -380,20 +415,32 @@ fn renamed(op: &Op, rename: &HashMap<Reg, Reg>, copies: &HashMap<Reg, Reg>) -> O
     copy
 }
 
-/// The difference a comparison (`subs wzr, ..`) would make as a plain add or
-/// subtract into a virtual register: what the pin's selection has before its
-/// dead flag-setting results become the zero register.
-fn plain_form(op: &Op) -> Option<Op> {
-    let Op::I(inst) = op else { return None };
-    let mut plain = inst.clone();
-    match &mut plain {
-        Inst::AddSubImm { op, rd, .. } | Inst::AddSubShifted { op, rd, .. } if op.set_flags && *rd == Gpr::R31 => {
-            op.set_flags = false;
-            *rd = Gpr(Gpr::FIRST_VIRTUAL);
-        }
-        _ => return None,
+/// Whether `op` sets the flags and defines a register, as the pin's `SUBSWri`
+/// with a `$nzcv` def that may be dead.
+fn flag_setting(op: &Op) -> bool {
+    match op {
+        Op::I(
+            Inst::AddSubImm { op, rd, .. } | Inst::AddSubShifted { op, rd, .. } | Inst::AddSubExtended { op, rd, .. },
+        ) => op.set_flags && rd.is_virtual(),
+        _ => false,
     }
-    Some(Op::I(plain))
+}
+
+/// Whether the flags `block.ops[at]` sets are overwritten before anything reads
+/// them (`$nzcv` is `dead`). The flags do not live out of a block.
+fn flags_dead(
+    ops: &[Op],
+    at: usize,
+) -> bool {
+    for op in &ops[at + 1..] {
+        if matches!(op, Op::I(Inst::BranchCond { .. } | Inst::CondSelect { .. } | Inst::CondCompare { .. })) {
+            return false;
+        }
+        if crate::flagcse::writes_flags(op) {
+            return true;
+        }
+    }
+    true
 }
 
 /// Equal pure computations of a dominating block are used instead of repeated.
@@ -418,16 +465,8 @@ fn cse(function: &mut MFunc) {
         if *next == 0 {
             let mut entries = Vec::new();
             for (index, op) in function.blocks[*block].ops.iter().enumerate() {
-                // A comparison waits for the difference it would also make.
-                if let Some(plain) = plain_form(op) {
-                    let key = format!("compare {}", keyed(&renamed(&plain, &rename, &copies)));
-                    if !compares.contains_key(&key) {
-                        compares.insert(key.clone(), (*block, index));
-                        entries.push(key);
-                    }
-                    continue;
-                }
-                if !pure(op) {
+                let setter = flag_setting(op);
+                if !(pure(op) || setter) {
                     continue;
                 }
                 let Some(register) = defined(op) else { continue };
@@ -436,22 +475,17 @@ fn cse(function: &mut MFunc) {
                 }
                 let key = keyed(&renamed(op, &rename, &copies));
                 match table.get(&key) {
-                    Some(&earlier) => {
+                    // A flag-setting instruction is shared where its own flags are dead:
+                    // the earlier one still sets them (`MachineCSE`, `PhysRegDefsReach`).
+                    Some(&earlier) if !setter || flags_dead(&function.blocks[*block].ops, index) => {
                         rename.insert(register, earlier);
                         removed.insert((*block, index));
                     }
-                    None => match (compares.get(&format!("compare {key}")), register) {
-                        // The comparison defines the value instead: the pin's
-                        // `SUBSWri` shared with the dominated `SUBSWri`.
-                        (Some(&at), Reg::Gpr(register)) => {
-                            defines.insert(at, register);
-                            removed.insert((*block, index));
-                        }
-                        _ => {
-                            table.insert(key.clone(), register);
-                            entries.push(key);
-                        }
-                    },
+                    Some(_) => {}
+                    None => {
+                        table.insert(key.clone(), register);
+                        entries.push(key);
+                    }
                 }
             }
             *added = entries;
@@ -463,18 +497,12 @@ fn cse(function: &mut MFunc) {
         } else {
             for key in added.iter() {
                 table.remove(key);
-                compares.remove(key);
             }
             stack.pop();
         }
     }
     if removed.is_empty() {
         return;
-    }
-    for ((block, index), register) in defines {
-        if let Op::I(Inst::AddSubImm { rd, .. } | Inst::AddSubShifted { rd, .. }) = &mut function.blocks[block].ops[index] {
-            *rd = register;
-        }
     }
     for (index, block) in function.blocks.iter_mut().enumerate() {
         let mut at = 0;
