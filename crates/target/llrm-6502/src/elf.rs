@@ -247,8 +247,6 @@ pub fn object(
     let mut equates: HashMap<String, i64> = HashMap::new();
     let mut zero_page: HashMap<String, ()> = HashMap::new();
     let mut sections: Vec<Piece> = Vec::new();
-    // ca65 starts in CODE.
-    let mut current: Option<usize> = None;
     let mut labels: Vec<(String, usize, usize)> = Vec::new();
     let mut exported: Vec<String> = Vec::new();
 
@@ -266,7 +264,8 @@ pub fn object(
         sections.len() - 1
     };
 
-    current = Some(section_of(&mut sections, "CODE"));
+    // ca65 starts in CODE.
+    let mut current = Some(section_of(&mut sections, "CODE"));
     for (number_of_line, raw) in text.lines().enumerate() {
         let fail = |message: String| format!("line {}: {message}: {raw}", number_of_line + 1);
         let line = raw.split(';').next().unwrap_or("").trim();
