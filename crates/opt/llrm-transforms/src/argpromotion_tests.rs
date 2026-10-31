@@ -118,3 +118,21 @@ fn a_noipa_routine_keeps_its_pointer_parameter() {
     let after = run(&marked);
     assert!(after.contains("call i16 @sum(ptr addrspace(1)"), "{after}");
 }
+
+/// A recursive function that also loads a pointer out of the descriptor (a
+/// slice's data pointer beside its length). ArgumentPromotion.cpp
+/// (HandleEndUser): `if (IsRecursive && Ty->isPointerTy()) return false`, "it
+/// might lead to recursive promotion". Ours promoted length and pointer both;
+/// the pin keeps the descriptor.
+#[test]
+fn a_recursive_function_loading_a_pointer_from_the_descriptor_keeps_it() {
+    let both = sum(
+        READS,
+        "internal ",
+        "%p = getelementptr i8, ptr addrspace(1) %d, i16 0\n  %data = load ptr addrspace(1), ptr addrspace(1) %p",
+    );
+    let before = run(&sum(READS, "internal ", ""));
+    assert!(before.contains("@sum(i16 %"), "premise: the length alone is promoted: {before}");
+    let after = run(&both);
+    assert!(after.contains("@sum(ptr addrspace(1) noalias readonly dereferenceable(6)"), "{after}");
+}
