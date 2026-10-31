@@ -2255,7 +2255,7 @@ fn declare_wrapped(
     callee_saved: &dyn Fn(RegId) -> Option<u16>,
 ) -> Vec<Item> {
     let mut cur = Unwound { cfa: entry, saves };
-    let mut incoming: std::collections::HashMap<String, Unwound> = std::collections::HashMap::new();
+    let mut incoming: IndexMap<String, Unwound> = IndexMap::default();
     let mut pending: Vec<(u16, i64)> = Vec::new();
     let mut ended = false;
     let last_label = tail.iter().rposition(|item| matches!(item, Item::Label(_)));
