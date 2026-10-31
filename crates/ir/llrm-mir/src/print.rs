@@ -47,7 +47,16 @@ pub fn module(module: &Module) -> String {
             .iter()
             .enumerate()
             .filter(|(_, one)| matches!(one.kind, GlobalKind::Variable(_)))
-            .map(|(at, one)| printer.variable(at, one, module.global_metadata.get(&(at as u32)))),
+            .map(
+                |(at, one)| {
+                    printer.variable(
+                        at,
+                        one,
+                        module.global_metadata.get(&(at as u32)),
+                        one.name.owned().and_then(|name| module.sections.get(&name)),
+                    )
+                },
+            ),
     );
     for (at, global) in module.globals.iter().enumerate() {
         if let GlobalKind::Function(function) = &global.kind {
@@ -485,6 +494,7 @@ impl Printer<'_> {
         at: usize,
         global: &GlobalValue,
         attached: Option<&Vec<(String, MetadataId)>>,
+        section: Option<&String>,
     ) -> String {
         let GlobalKind::Variable(variable) = &global.kind else { unreachable!("a variable") };
         let linkage = match (global.linkage, variable.initializer) {
@@ -500,10 +510,11 @@ impl Printer<'_> {
         words.push((if variable.constant { "constant" } else { "global" }).to_owned());
         words.push(self.ty(variable.ty));
         words.extend(variable.initializer.map(|one| self.constant(one)));
+        let section = section.map(|one| format!(", section \"{one}\"")).unwrap_or_default();
         let align = variable.align.map(|one| format!(", align {one}")).unwrap_or_default();
         let attached: String =
             attached.into_iter().flatten().map(|(kind, node)| format!(", !{kind} !{}", node.0)).collect();
-        format!("{} = {}{align}{attached}\n", self.globals[at], words.join(" "))
+        format!("{} = {}{section}{align}{attached}\n", self.globals[at], words.join(" "))
     }
 
     fn function(

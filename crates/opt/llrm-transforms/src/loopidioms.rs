@@ -1308,8 +1308,11 @@ fn _stored(
         return Some((pointer, Byte::Number(byte), bytes));
     }
     // LLVM's memset_pattern16: the cell is a word or dword; the stored value
-    // need not be a constant.
-    matches!(width, 16 | 32).then_some((pointer, Byte::Pattern(value), bytes))
+    // need not be a constant. Not over a pointer whose index is wider than the
+    // default space's (a huge array): the count would be wider than the
+    // target's `rep stos` takes, and isel cannot lower it.
+    let counted = unit.layout.pointer(unit.space(pointer)?).index_bits <= unit.layout.pointer(0).index_bits;
+    (matches!(width, 16 | 32) && counted).then_some((pointer, Byte::Pattern(value), bytes))
 }
 
 /// The store and load of `one` and `other`, where the store writes the loaded

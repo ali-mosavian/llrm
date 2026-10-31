@@ -26,13 +26,12 @@
 //! every transformation. A loop's block order is its header, then reverse
 //! post-order, as `LoopInfo` leaves it.
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_mir::blockfrequency::{BlockFrequency, BlockFrequencyInfo, BranchProbability, EdgeProbabilities};
 use llrm_mir::blocklist::BlockList;
 use llrm_mir::cycleinfo::{CycleInfo, FlowGraph};
 use llrm_mir::domtree::DomGraph;
 use llrm_mir::module::BlockId;
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::cfg::Cfg;
 use crate::fold::{Branches, analyze, insert_branch, remove_branch};
@@ -591,7 +590,7 @@ impl<'a, L: Layout> Placer<'a, L> {
         // the pin never raises `BestExitLoopDepth` from 0
         let best_depth = 0;
         let mut exiting: Option<usize> = None;
-        let mut to_outer: HashSet<usize> = HashSet::new();
+        let mut to_outer: HashSet<usize> = HashSet::default();
         for &block in &blocks {
             let chain = self.chain_of[block];
             if block != self.tail(chain) {
@@ -749,7 +748,7 @@ impl<'a, L: Layout> Placer<'a, L> {
             self.preferred_exit = exiting.map(|(block, _)| block);
         }
         let chain = self.chain_of[top];
-        let mut updated = HashSet::new();
+        let mut updated = HashSet::default();
         updated.insert(chain);
         for &block in &filter.order {
             self.fill_work_lists(block, &mut updated, Some(&filter));
@@ -786,7 +785,7 @@ impl<'a, L: Layout> Placer<'a, L> {
             self.build_loop_chains(root, &inner);
         }
         debug_assert!(self.work.is_empty());
-        let mut updated = HashSet::new();
+        let mut updated = HashSet::default();
         for block in 0..count {
             self.fill_work_lists(block, &mut updated, None);
         }
@@ -828,7 +827,7 @@ pub fn place<L: Layout>(layout: &L) -> Vec<usize> {
         chain_of: vec![NONE; count],
         chains: Vec::new(),
         work: Vec::new(),
-        computed: HashMap::new(),
+        computed: HashMap::default(),
         loops: Vec::new(),
         innermost: vec![None; count],
         preferred_exit: None,

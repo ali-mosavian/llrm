@@ -717,6 +717,29 @@ impl super::emit::ConstantCells for PoolCells<'_> {
     }
 }
 
+/// The prices `isIntDivCheap` weighs per divisor (`DivPrices`): none for a
+/// target that does not price a divide above a multiply, which then keeps the
+/// pin's rule.
+fn div_prices(
+    costs: &llrm_mir::target::OperationCosts,
+    bitness: u32,
+) -> Option<super::dag::DivPrices> {
+    if costs.divide <= costs.multiply {
+        return None;
+    }
+    Some(super::dag::DivPrices {
+        operand: i64::from(bitness.min(32) / 8),
+        prefix: costs.prefix,
+        add: costs.add,
+        shift: costs.shift,
+        extend: costs.extend,
+        multiply: costs.multiply,
+        multiply_long: costs.multiply_long,
+        divide: costs.divide,
+        divide_long: costs.divide_long,
+    })
+}
+
 /// The clock prices a size-only pick weighs against bytes (m16: the fill it
 /// prices is real mode's).
 fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
@@ -811,6 +834,7 @@ fn selected_in(
         // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
         // 5095 B against the pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
+        .with_div_prices(div_prices(&cpu.target().costs(), bitness))
         .with_jump_tables(
             cpu.target().costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
@@ -918,6 +942,10 @@ fn selected_in(
         opt_for_size: cpu.size,
         min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
+        multiply_early_out: crate::backend::timing::signed_multiply(cpu, 4, false)
+            .ok()
+            .flatten()
+            .is_some_and(|clocks| clocks.minimum < clocks.maximum),
         address_mode,
     });
     let selector = Selector::new(if m16 {
@@ -1023,7 +1051,12 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: tli.can_use_cmov(), sse2, min_size: cpu.min_size || bytes_beat_clocks },
+            &mut X86Lowering {
+                cmov: tli.can_use_cmov(),
+                sse2,
+                min_size: cpu.min_size || bytes_beat_clocks,
+                i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+            },
             &selector,
             &mut hooks,
             &Info { source_order: true },
