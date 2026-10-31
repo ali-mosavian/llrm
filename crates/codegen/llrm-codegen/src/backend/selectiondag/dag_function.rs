@@ -737,6 +737,7 @@ fn div_prices(
         multiply_long: costs.multiply_long,
         divide: costs.divide,
         divide_long: costs.divide_long,
+        margin: costs.divide_margin,
     })
 }
 
