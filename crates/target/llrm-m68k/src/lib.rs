@@ -8,6 +8,7 @@ pub mod compile;
 pub mod dagisel;
 pub mod divide;
 pub mod driver;
+pub mod elf;
 pub mod encode;
 pub mod expand;
 pub mod flags;
