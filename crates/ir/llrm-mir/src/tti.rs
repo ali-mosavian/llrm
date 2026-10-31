@@ -405,9 +405,9 @@ pub trait Tti {
         None
     }
 
-    /// What a byte of code is worth in thousandths of a clock, where the
-    /// target weighs bytes over clocks at every level; 0: it does not.
-    fn size_milliclocks_per_byte(&self) -> i64 {
+    /// What a byte of code is worth in thousandths of a clock at speed, where
+    /// the target trades bytes for clocks; 0: it does not.
+    fn speed_milliclocks_per_byte(&self) -> i64 {
         0
     }
 

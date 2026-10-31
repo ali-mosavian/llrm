@@ -527,8 +527,8 @@ impl Tti for X86 {
         self.tuning.inline_threshold
     }
 
-    fn size_milliclocks_per_byte(&self) -> i64 {
-        self.tuning.size_milliclocks_per_byte
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.speed_milliclocks_per_byte
     }
 
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {

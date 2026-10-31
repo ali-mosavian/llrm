@@ -24,6 +24,9 @@ pub struct Tuning {
     /// Clocks a byte of code is worth, in thousandths, where a decision is
     /// made for size; 0: bytes alone decide.
     pub size_milliclocks_per_byte: i64,
+    /// What a byte is worth in thousandths of a clock at speed; 0: bytes and
+    /// clocks are not traded.
+    pub speed_milliclocks_per_byte: i64,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
@@ -46,6 +49,7 @@ impl Tuning {
         max_stores_per_memmove: 8,
         max_stores_per_memmove_opt_size: 4,
         size_milliclocks_per_byte: 0,
+        speed_milliclocks_per_byte: 0,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         inline_threshold: None,
