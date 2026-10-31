@@ -40,11 +40,22 @@ pub struct TargetEnv {
     pub palettes: RefCell<IndexMap<u32, BTreeSet<RegId>>>,
     pub pins: IndexMap<u32, RegId>,
     pub size: bool,
+    /// A join leaves a pinned value standing ([`CoalescerEnv::keeps`]): for a
+    /// caller whose pins are values of their own, not constraints on an
+    /// instruction.
+    pub keep_pinned: bool,
 }
 
 impl CoalescerEnv for TargetEnv {
     fn tuned_for_size(&self) -> bool {
         self.size
+    }
+
+    fn keeps(
+        &self,
+        value: u32,
+    ) -> bool {
+        self.keep_pinned && self.pins.contains_key(&value)
     }
 
     fn can_share(
@@ -114,7 +125,7 @@ pub fn coalesce(
     pins: IndexMap<u32, RegId>,
     size: bool,
 ) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>) {
-    let env = TargetEnv { palettes: palettes.into(), pins, size };
+    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let after = joined(body, &env, &depth);

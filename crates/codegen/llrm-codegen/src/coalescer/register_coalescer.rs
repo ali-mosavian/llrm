@@ -182,8 +182,13 @@ pub fn join_copy(
         lis.remove_instr(block, copy);
         return JoinResult::Joined;
     }
-    // When possible, let DstReg be the larger interval.
-    if lis.interval(cp.src_reg()).size() > lis.interval(cp.dst_reg()).size() {
+    // When possible, let DstReg be the larger interval; a kept value stays.
+    let (keeps_src, keeps_dst) = (env.keeps(cp.src_reg()), env.keeps(cp.dst_reg()));
+    if keeps_src != keeps_dst {
+        if keeps_src {
+            cp.flip();
+        }
+    } else if lis.interval(cp.src_reg()).size() > lis.interval(cp.dst_reg()).size() {
         cp.flip();
     }
     let result = join_virt_regs(lis, state, &cp);

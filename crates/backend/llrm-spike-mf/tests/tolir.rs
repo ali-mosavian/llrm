@@ -659,3 +659,32 @@ fn test_a_copy_into_a_pinned_register_joins_into_it() {
     let store = joined.function.blocks[0].insts.iter().find(|inst| inst.kind == Kind::Op("store")).unwrap();
     assert_eq!(store.operands, vec![Operand::Use(Reg::Phys(RegId::EBX))], "the value is the register now");
 }
+
+/// A value copied from the register an argument arrives in joins into that
+/// register's pinned value, not the other way: the argument's range then keeps
+/// other values out of the register. Joined the other way round the value was
+/// an ordinary one with the register as its only choice, and values placed
+/// before it took the register's cells: crc16's pointer spilled with 26 cells
+/// free.
+#[test]
+fn test_a_value_copied_from_an_argument_register_stays_the_register() {
+    let mut f = MFunction::<()>::new("arg");
+    f.classes = vec![(); 1];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::EBX))]));
+    only.insts.push(op("store", vec![Operand::Use(v(0))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let f = lowered(f);
+    let mut converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    converted.coalesce(false);
+    let pinned: Vec<u32> = converted.body.pins.keys().copied().collect();
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided =
+        decide_with_split(&inputs, Mode::Inline { frame: &mut llrm_spike_mf::tolir::SpikeFrame::of(&f) }, true)
+            .expect("allocates");
+    let survivors: Vec<u32> =
+        decided.edited.as_ref().unwrap().blocks[0].insns.iter().flat_map(|i| i.uses.clone()).collect();
+    assert!(survivors.iter().all(|value| pinned.contains(value)), "the store reads {survivors:?}, pinned {pinned:?}");
+}
