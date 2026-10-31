@@ -1000,6 +1000,8 @@ pub struct Decided {
     /// about, and whether a spill could not be written.
     pub edited: Option<LirBody>,
     pub spill_failed: bool,
+    /// The value each clone a split or a spill made was cloned from.
+    pub parents: std::collections::HashMap<u32, u32>,
 }
 
 /// How a spilled range is dealt with.
@@ -1481,7 +1483,8 @@ pub fn decide_with_split(
             }
         }
     }
-    Some(Decided { report, placed, spilled, edited, spill_failed: greedy.spill_failed() })
+    let parents = tables.parents.borrow().iter().map(|(new, from)| (*new, *from)).collect();
+    Some(Decided { report, placed, spilled, edited, spill_failed: greedy.spill_failed(), parents })
 }
 
 #[cfg(test)]

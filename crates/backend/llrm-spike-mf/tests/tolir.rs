@@ -464,3 +464,24 @@ fn test_a_pair_set_then_read_as_a_byte_is_refused() {
     let inputs = converted.inputs(regs(), &order);
     assert!(decide_with_split(&inputs, Mode::Simple, true).is_none());
 }
+
+/// A split makes new values, and the class of each is its parent's: the rewrite
+/// back to a machine function reads the parent of every value it did not
+/// start with. Inline mode edits the function; the table of parents was not
+/// returned, so a clone had no class to be written with.
+#[test]
+fn test_every_clone_a_split_makes_names_its_parent() {
+    struct Frame(llrm_spike_mf::tolir::SpikeFrame);
+    let f = lowered(across_a_call(4));
+    let converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let mut frame = Frame(llrm_spike_mf::tolir::SpikeFrame::of(&f));
+    let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame.0 }, true).expect("allocates");
+    let first = f.classes.len() as u32 + 1 + converted.body.pins.len() as u32;
+    let clones: Vec<u32> = decided.placed.iter().map(|(v, _)| *v).filter(|v| *v >= first).collect();
+    assert!(!clones.is_empty(), "premise: the split made new values: {:?}", decided.placed);
+    for clone in clones {
+        assert!(decided.parents.contains_key(&clone), "clone {clone} has no parent: {:?}", decided.parents);
+    }
+}
