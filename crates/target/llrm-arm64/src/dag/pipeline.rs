@@ -1,10 +1,9 @@
 //! The shared DAG stages run for arm64: combine, legalize, select with the
 //! AArch64 table, schedule.
 //!
-//! DEVIATE: no target combines (`PerformDAGCombine` of AArch64 is not
+//! DEVIATE SD505: no target combines (`PerformDAGCombine` of AArch64 is not
 //! translated) and no `PreprocessISelDAG`. A Custom operation is refused (the
-//! legalizer would otherwise expand it). Reason: the first functions need none.
-//! Exit: B3.
+//! legalizer would otherwise expand it). Exit: B3.
 
 use llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks;
 use llrm_codegen::backend::selectiondag::dag_combiner::CombineLevel;

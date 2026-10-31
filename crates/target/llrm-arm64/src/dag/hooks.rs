@@ -7,8 +7,7 @@
 //! translation in [`super::addr`]. The node and pattern predicates are the
 //! generated ones.
 //!
-//! DEVIATE: the complex patterns `addr` lists as not translated answer false.
-//! Reason: the first loads and stores need none. Exit: B4.
+//! DEVIATE SD502: the complex patterns `addr` lists as not translated answer false.
 
 use llrm_dagisel::aarch64_predicates::encode_logical_immediate;
 use llrm_dagisel::dag::{Hooks, PatternContext, SDValue};

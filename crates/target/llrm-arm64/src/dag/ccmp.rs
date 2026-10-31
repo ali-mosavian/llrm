@@ -9,7 +9,7 @@
 //! if it fails, sets the flags so the final condition reads false. The caller
 //! branches or selects on the returned condition.
 //!
-//! DEVIATE: a floating-point compare is not a leaf (`FCCMP`, and the
+//! DEVIATE SD507: a floating-point compare is not a leaf (`FCCMP`, and the
 //! two-condition compares, are not translated) so the tree is refused.
 //! Exit: floating-point conditional compares.
 //!

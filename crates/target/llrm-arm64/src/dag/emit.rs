@@ -8,12 +8,13 @@
 //! its operands. `RET_ReallyLR` becomes `Op::Return` over the physical
 //! registers it names.
 //!
-//! DEVIATE: the float arithmetic, compare, select, conversion, move and `LDR`/`STR` `ui` rows, and the integer
+//! DEVIATE SD508: the float arithmetic, compare, select, conversion, move and `LDR`/`STR` `ui` rows, and the integer
 //! `ADD`/`SUB`/logic, variable shift, `SBFM`/`UBFM`, `MADD`, divide and
 //! one-source forms, `MOVi32imm`/`MOVi64imm`, a frame address, the integer `LDR`/`STR` (`ui`, `UR`, `roX`, `roW`)
 //! forms and the sub-register pseudos only (no `BFM`, no insert into a defined register), with no
-//! memory operand kept (`MemOperand::default`). Reason: each family adds rows
-//! to [`build`] with an encoder byte check. Exit: C2..Cn.
+//! memory operand kept (`MemOperand::default`); a machine opcode with no row is a named error
+//! (`machine opcode X has no arm64 instruction yet`), which `--isel=shadow` falls back on. Rows added
+//! to [`build`] each carry an encoder byte check. Exit: C2..Cn.
 
 use std::collections::HashMap;
 

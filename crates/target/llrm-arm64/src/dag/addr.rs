@@ -7,12 +7,9 @@
 //! shape, returns the operands the table expects, in the order of the pin's
 //! signature (`SelectAddrModeIndexed`: base, scaled offset).
 //!
-//! DEVIATE: not translated, and answering false (the pattern after it, or a
-//! refusal, follows):
-//! `SelectExtractHigh`, `SelectDupZero`; `SelectCVTFixedPos*` reads only a
-//! `ConstantFP`, not one loaded from the constant pool. `isWorthNegatingImm` is
-//! false. Reason: the first loads and stores need none. Exit: pairs and
-//! globals.
+//! DEVIATE SD502: not translated, and answering false (the pattern after it, or a
+//! refusal, follows): `SelectExtractHigh`, `SelectDupZero`; `SelectCVTFixedPos*` reads only a
+//! `ConstantFP`, not one loaded from the constant pool. Exit: vectors; the constant pool.
 //!
 //! # See also
 //! `llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp`, pin d1106deb71cc.
@@ -519,7 +516,7 @@ pub fn addr_mode_wro<D: AddrDag>(
 /// four, as an `add`/`sub`/`cmp` operand: the register and the encoded
 /// extend.
 ///
-/// DEVIATE: the extend of a vector lane answers false (the pin refuses only a
+/// DEVIATE SD502: the extend of a vector lane answers false (the pin refuses only a
 /// fixed-length vector). Exit: vectors.
 pub fn arith_extended_register<D: AddrDag>(
     dag: &mut D,

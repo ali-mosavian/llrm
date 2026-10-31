@@ -15,10 +15,10 @@
 //!
 //! A float part takes `s0`..`s7`/`d0`..`d7` apart from the integer registers, or 4/8 bytes of stack.
 //!
-//! DEVIATE: not translated are `f16`/`fp128` and vectors, `sret` (`x8`), HFAs,
+//! DEVIATE SD506: not translated are `f16`/`fp128` and vectors, `sret` (`x8`), HFAs,
 //! `byval`, varargs, a tail call that needs stack arguments or an argument area
 //! of a different size, and a callee reached through the GOT; `accepts`
-//! refuses what it can see. Reason: the integer calls come first. Exit: B3.
+//! refuses what it can see. Exit: B3.
 //!
 //! # See also
 //! `AArch64ISelLowering.cpp` at the pin: `LowerCall`, `LowerCallResult`,

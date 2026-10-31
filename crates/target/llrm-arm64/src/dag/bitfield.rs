@@ -1,7 +1,7 @@
 //! `AArch64DAGToDAGISel::tryBitfieldInsertInZeroOp`: `(and (shl x, n), mask)` of one contiguous run
 //! of bits is `UBFM` (`UBFIZ`).
 //!
-//! DEVIATE: the `and (any_extend (shl ..))` form of an `i64` is not matched. Exit: the `Widen`
+//! DEVIATE SD509: the `and (any_extend (shl ..))` form of an `i64` is not matched. Exit: the `Widen`
 //! helper.
 //!
 //! # See also
@@ -66,10 +66,9 @@ pub fn select_bitfield_insert_in_zero(
 
 // ---- `tryBitfieldInsertOp` -------------------------------------------------------------------
 //
-// DEVIATE: `isBitfieldExtractOp` (the BFXIL operand of `tryBitfieldInsertOpFromOr`) and the
-// `BiggerPattern` passes are not ported, and an `OR`
-// none of whose bits are useful is not selected to `IMPLICIT_DEF`. Exit: with the DAG's known
-// bits and `isBitfieldExtractOp`.
+// DEVIATE SD509: an `OR` none of whose bits are useful is not selected to `IMPLICIT_DEF`, and the
+// `any_extend`/`truncate` forms of `isBitfieldExtractOpFromAnd` are not matched. Exit: the `Widen`
+// helper.
 
 use crate::mc::immediate::{decode_logical, logical};
 use llrm_dagisel::dag::{Dag, SDValue as Value};
@@ -422,8 +421,8 @@ fn orr_with_shift<D: AddrDag>(
 }
 
 /// `isBitfieldExtractOpFromAnd` for an `and` of a right shift (or, in the bigger pattern, of the
-/// value itself): the source and the `UBFM` bit range. DEVIATE: the `any_extend`/`truncate` forms
-/// are not ported.
+/// value itself): the source and the `UBFM` bit range (DEVIATE SD509 for the `any_extend`/`truncate`
+/// forms).
 fn bitfield_extract_from_and<D: AddrDag>(
     dag: &D,
     node: u32,

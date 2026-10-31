@@ -9,12 +9,11 @@
 //! second result of the flag-setting node. The users read them as the last
 //! operand of `CSEL`.
 //!
-//! DEVIATE 1: no `computeKnownBits` `x == 1` to `CBZ` normalization, no `CSET` + `BR_CC` fold,
+//! DEVIATE SD503: no `computeKnownBits` `x == 1` to `CBZ` normalization, no `CSET` + `BR_CC` fold,
 //! `BRCOND` expands to `BR_CC` here (the shared legalizer has no `ExpandNode` arm for it), no
-//! floating-point `emitConjunction` (see `ccmp`), no zero-extending-load `CMN` trick, no overflow-intrinsic folds, no
-//! `lookThroughSignExtension` `TST` form, and for floats no vector-compare mask and no `nsz` zero rewrite. Reason: the
-//! first compares need none; each is its own slice. Owner arm64-quality, review
-//! 2026-11-13, exit B4..B6.
+//! floating-point `emitConjunction` (see `ccmp`), no zero-extending-load `CMN` trick, no
+//! `lookThroughSignExtension` `TST` form, and for floats no vector-compare mask and no `nsz` zero rewrite.
+//! Exit: each fold its own translation, B4..B6.
 //!
 //! # See also
 //! `AArch64ISelLowering.cpp` at pin d1106deb7:
@@ -775,7 +774,6 @@ fn lower_br_cc(
 }
 
 /// `LowerXOR`: the node itself, but `xor x, (select_cc a, b, cc, 0, -1)` is a `CSINV`.
-/// DEVIATE 1 also leaves out the overflow-intrinsic form.
 pub fn lower_xor(
     dag: &mut SelectionDAG,
     node: SDValue,

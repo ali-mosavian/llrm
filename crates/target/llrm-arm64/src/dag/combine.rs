@@ -5,7 +5,7 @@
 //! the pin does, so the selector sees `ADDXrs` and not a `MOVi32imm` and a
 //! `MADD`.
 //!
-//! DEVIATE: the `hasALULSLFast` decompositions are omitted (apple-m1 does not
+//! DEVIATE SD504: the `hasALULSLFast` decompositions are omitted (apple-m1 does not
 //! have the feature); the vector, SVE and `rdsvl` parts do not apply to the
 //! scalar table; `isOnlyUsedAsMemoryAddress` does not look at indexed
 //! accesses. Exit: vectors; indexed addressing.
@@ -168,7 +168,7 @@ fn shl_or_same(
 /// ones through `log2(width)`, shifts by `x`. The register shift takes the amount modulo the
 /// width.
 ///
-/// DEVIATE: `N - x` (a `NEG`, a `NOT`) is not done. Exit: a pre-selection hook.
+/// DEVIATE SD504: `N - x` (a `NEG`, a `NOT`) is not done. Exit: a pre-selection hook.
 pub fn shift_amount_mod(
     dag: &mut SelectionDAG,
     node: SDValue,
