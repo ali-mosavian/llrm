@@ -593,7 +593,13 @@ fn aliases<T: Target>(
         for register in reads.chain(writes) {
             let first = *seen.entry(registers.root(register)).or_insert(register);
             if first != register {
-                return Err(format!("{}: registers {first:?} and {register:?} share a root", function.name));
+                let name = |one| registers.name(one).unwrap_or_default();
+                return Err(format!(
+                    "{}: registers {} and {} share a root",
+                    function.name,
+                    name(first),
+                    name(register)
+                ));
             }
         }
     }
