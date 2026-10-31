@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use llrm_codegen::backend::allocresult::Error;
 use llrm_codegen::backend::frame::{FrameInfo, Refused};
-use llrm_codegen::greedy::shadow::ShadowInputs;
+use llrm_codegen::greedy::shadow::{Decided, ShadowInputs};
 use llrm_codegen::greedy::targetinfo::TargetRegisterInfo;
 use llrm_codegen::greedy::tii::TargetInstrInfo;
 use llrm_codegen::model::lir::{Block as LirBlockRef, Insn, LirBlock, LirBody};
@@ -41,8 +41,8 @@ use llrm_lir::registers::{RegId, Regs};
 use llrm_lir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use llrm_support::hash::IndexMap;
 
-use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
-use crate::regalloc::{Target, successors};
+use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+use crate::regalloc::{Assignment, Target, successors};
 
 /// The name of a copy: `COPY dst, src`.
 const COPY: &str = "COPY";
@@ -339,7 +339,7 @@ impl<T: Target> SpikeInstrInfo<T> {
         value: u32,
         class: T::Class,
     ) -> Option<Insn> {
-        let width = class_width::<T>(self.registers, class);
+        let width = held_width(beside, value).unwrap_or_else(|| class_width::<T>(self.registers, class));
         let (mut defines, mut uses) = (Vec::new(), Vec::new());
         let (mut dests, mut sources) = (Vec::new(), Vec::new());
         for operand in &made.operands {
@@ -356,6 +356,9 @@ impl<T: Target> SpikeInstrInfo<T> {
                     let cell = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, i64::from(*slot))), width));
                     if defines.is_empty() { dests.push(cell) } else { sources.push(cell) }
                 }
+                // what the form clobbers is put back by the way back
+                // ([`from_lir`]), which asks the target for the form again
+                Operand::Def(Reg::Phys(_)) => {}
                 _ => return None,
             }
         }
@@ -367,6 +370,23 @@ impl<T: Target> SpikeInstrInfo<T> {
         let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(Operation::Move) };
         Some(Insn::new(beside.at, Some((at, at)), Some(what), defines, uses))
     }
+}
+
+/// How wide `insn` holds `value`.
+fn held_width(
+    insn: &Insn,
+    value: u32,
+) -> Option<u32> {
+    let what = insn.what.as_ref()?;
+    what.dests
+        .iter()
+        .chain(&what.sources)
+        .find_map(
+            |loc| match loc {
+                Loc::Held(held) if held.value == value => Some(held.width),
+                _ => None,
+            },
+        )
 }
 
 /// The frame index a spill cell names.
@@ -634,4 +654,157 @@ fn entry_live<T: Target>(
         }
     }
     names.iter().enumerate().filter(|(n, _)| live_in[0][n / 64] >> (n % 64) & 1 == 1).map(|(_, r)| *r).collect()
+}
+
+/// What greedy's edited function is as a machine function again.
+pub struct Rewritten<C> {
+    pub function: MFunction<C>,
+    /// The register of each virtual register of `function`.
+    pub assignment: Assignment,
+    /// The frame slots the spills use, each with the class of what it holds.
+    pub slots: Vec<(i32, C)>,
+}
+
+/// The machine function greedy's `Mode::Inline` result stands for, the way
+/// `allocate_spilling` leaves one: the original instructions with the
+/// registers greedy chose (`instruction.at / 2` names the original), the
+/// spills and reloads as the target writes them, a clone's class its
+/// parent's, and the register of each value.
+pub fn from_lir<T: Target>(
+    original: &MFunction<T::Class>,
+    converted: &Converted<T>,
+    decided: &Decided,
+    registers: Regs,
+) -> Result<Rewritten<T::Class>, String> {
+    let edited = decided.edited.as_ref().ok_or_else(|| format!("{}: greedy returned no edited body", original.name))?;
+    let known = original.classes.len() as u32;
+    let mut classes = original.classes.clone();
+    // A value of the function keeps its register number; a clone takes the
+    // next one and its parent's class.
+    let mut numbers: IndexMap<u32, u32> = IndexMap::default();
+    let mut number = |value: u32, classes: &mut Vec<T::Class>| -> u32 {
+        if value <= known {
+            return value - 1;
+        }
+        *numbers.entry(value).or_insert_with(|| {
+            let mut root = value;
+            while root > known {
+                match decided.parents.get(&root) {
+                    Some(parent) => root = *parent,
+                    None => break,
+                }
+            }
+            classes.push(if root >= 1 && root <= known { original.classes[root as usize - 1] } else { T::any() });
+            classes.len() as u32 - 1
+        })
+    };
+    let mut slots: Vec<(i32, T::Class)> = Vec::new();
+    let mut blocks = Vec::with_capacity(edited.blocks.len());
+    for (at, block) in edited.blocks.iter().enumerate() {
+        let mut insts = Vec::with_capacity(block.insns.len());
+        for insn in block.insns.iter() {
+            let what = insn.what.as_ref().ok_or("an instruction with no semantics")?;
+            let held = |locs: &[Loc]| -> Vec<u32> {
+                locs.iter().filter_map(|loc| if let Loc::Held(held) = loc { Some(held.value) } else { None }).collect()
+            };
+            if insn.spill_store || insn.spill_reload {
+                let value =
+                    held(&what.dests).into_iter().chain(held(&what.sources)).next().ok_or("a spill of nothing")?;
+                let cell = what
+                    .dests
+                    .iter()
+                    .chain(&what.sources)
+                    .find_map(|loc| if let Loc::Mem(cell) = loc { Some(cell) } else { None });
+                let slot = slot_of(cell.ok_or("a spill with no cell")?);
+                let register = Reg::Virt(number(value, &mut classes));
+                let class = classes[match register {
+                    Reg::Virt(v) => v as usize,
+                    Reg::Phys(_) => 0,
+                }];
+                let made = if insn.spill_store {
+                    T::spill_store(class, register, slot)
+                } else {
+                    T::spill_load(class, register, slot)
+                };
+                insts.push(made.ok_or("the target states no spill form")?);
+                if !slots.iter().any(|(one, _)| *one == slot) {
+                    slots.push((slot, class));
+                }
+                continue;
+            }
+            let (from, inst) = *converted.origin.get((insn.at / 2) as usize).ok_or("an instruction from nowhere")?;
+            let source = &original.blocks[from].insts[inst];
+            let name = what.name.as_deref();
+            if name == Some(COPY) && source.kind != Kind::Copy {
+                let (Some(to), Some(from)) = (held(&what.dests).first().copied(), held(&what.sources).first().copied())
+                else {
+                    return Err("a copy that does not move a value".into());
+                };
+                insts.push(Inst::new(
+                    Kind::Copy,
+                    vec![
+                        Operand::Def(Reg::Virt(number(to, &mut classes))),
+                        Operand::Use(Reg::Virt(number(from, &mut classes))),
+                    ],
+                ));
+                continue;
+            }
+            let (mut dests, mut sources) = (what.dests.iter(), what.sources.iter());
+            let mut made = source.clone();
+            for operand in &mut made.operands {
+                *operand = match operand.clone() {
+                    Operand::Def(Reg::Virt(_)) => match dests.next() {
+                        Some(Loc::Held(held)) => Operand::Def(Reg::Virt(number(held.value, &mut classes))),
+                        _ => return Err("a definition that is not a register".into()),
+                    },
+                    Operand::Def(Reg::Phys(r)) => {
+                        if !T::reserved(T::root(r)) {
+                            dests.next();
+                        }
+                        Operand::Def(Reg::Phys(r))
+                    }
+                    Operand::Use(Reg::Virt(_)) => match sources.next() {
+                        Some(Loc::Held(held)) => Operand::Use(Reg::Virt(number(held.value, &mut classes))),
+                        _ => return Err("a use that is not a register".into()),
+                    },
+                    Operand::Use(Reg::Phys(r)) => {
+                        if !T::reserved(T::root(r)) {
+                            sources.next();
+                        }
+                        Operand::Use(Reg::Phys(r))
+                    }
+                    one @ (Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_)) => {
+                        sources.next();
+                        one
+                    }
+                    other => other,
+                };
+            }
+            insts.push(made);
+        }
+        blocks.push(Block { id: original.blocks[at].id, insts, phis: Vec::new() });
+    }
+    let mut assignment = vec![None; classes.len()];
+    for (value, register) in &decided.placed {
+        if converted.body.pins.contains_key(value) {
+            continue;
+        }
+        let v = number(*value, &mut classes) as usize;
+        if v >= assignment.len() {
+            assignment.resize(v + 1, None);
+        }
+        let class = classes[v];
+        assignment[v] =
+            Some(if registers.root(*register) == *register { T::view(*register, class) } else { *register });
+    }
+    // A register nothing reads is anywhere its class allows.
+    let assignment = assignment
+        .iter()
+        .enumerate()
+        .map(|(v, one)| {
+            one.or_else(|| T::candidates(classes[v]).first().copied()).ok_or("a register with no candidates")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let function = MFunction { blocks, classes, ..original.clone() };
+    Ok(Rewritten { function, assignment: Assignment(assignment), slots })
 }

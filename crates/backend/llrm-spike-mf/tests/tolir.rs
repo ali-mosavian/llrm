@@ -4,7 +4,7 @@ use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
 use llrm_lir::registers::{RegId, Regs};
 use llrm_lir::{Loc, Operation};
 use llrm_spike_mf::regalloc::{Target, eliminate_phis, two_address};
-use llrm_spike_mf::tolir::to_lir;
+use llrm_spike_mf::tolir::{from_lir, to_lir};
 use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Reg};
 
 /// Three allocatable registers, one reserved, all lost to a call.
@@ -484,4 +484,123 @@ fn test_every_clone_a_split_makes_names_its_parent() {
     for clone in clones {
         assert!(decided.parents.contains_key(&clone), "clone {clone} has no parent: {:?}", decided.parents);
     }
+}
+
+/// What greedy left, checked on its own terms: at every instruction the
+/// virtual registers live together hold distinct registers of `Flat`, and
+/// none is live across a call (which loses them all).
+fn assert_allocated(
+    function: &MFunction<()>,
+    assignment: &llrm_spike_mf::regalloc::Assignment,
+) {
+    use std::collections::BTreeSet;
+    let virt = |operand: &Operand| match operand {
+        Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => Some(*v),
+        _ => None,
+    };
+    let succ = llrm_spike_mf::regalloc::successors(function);
+    let mut live_in: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); function.blocks.len()];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for b in (0..function.blocks.len()).rev() {
+            let mut live: BTreeSet<u32> = succ[b].iter().flat_map(|to| live_in[*to].iter().copied()).collect();
+            for inst in function.blocks[b].insts.iter().rev() {
+                for operand in &inst.operands {
+                    if let (Operand::Def(Reg::Virt(v)), true) = (operand, true) {
+                        live.remove(v);
+                    }
+                }
+                for operand in &inst.operands {
+                    if let Operand::Use(Reg::Virt(v)) = operand {
+                        live.insert(*v);
+                    }
+                }
+            }
+            if live != live_in[b] {
+                live_in[b] = live;
+                changed = true;
+            }
+        }
+    }
+    for b in 0..function.blocks.len() {
+        let mut live: BTreeSet<u32> = succ[b].iter().flat_map(|to| live_in[*to].iter().copied()).collect();
+        for inst in function.blocks[b].insts.iter().rev() {
+            let defs: Vec<u32> =
+                inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).filter_map(virt).collect();
+            let together: Vec<u32> = live.iter().copied().chain(defs.iter().copied()).collect();
+            for (i, one) in together.iter().enumerate() {
+                for other in &together[i + 1..] {
+                    if one != other {
+                        assert_ne!(
+                            assignment.0[*one as usize], assignment.0[*other as usize],
+                            "v{one} and v{other} are live together in block {b} at {:?}",
+                            inst.kind
+                        );
+                    }
+                }
+            }
+            if inst.call {
+                assert!(
+                    live.iter().all(|v| defs.contains(v)),
+                    "v{:?} lives across a call in block {b}",
+                    live.difference(&defs.iter().copied().collect())
+                );
+            }
+            for d in &defs {
+                live.remove(d);
+            }
+            for operand in &inst.operands {
+                if let Operand::Use(Reg::Virt(v)) = operand {
+                    live.insert(*v);
+                }
+            }
+        }
+    }
+}
+
+fn rewritten(f: &MFunction<()>) -> llrm_spike_mf::tolir::Rewritten<()> {
+    let converted = to_lir::<Flat>(f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(f);
+    let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
+    from_lir::<Flat>(f, &converted, &decided, regs()).expect("writes back")
+}
+
+/// A function that needs no spill comes back as it went in, with a register
+/// for each value.
+#[test]
+fn test_a_function_that_needs_no_spill_comes_back_unchanged() {
+    let f = lowered(set_here_read_there());
+    let back = rewritten(&f);
+    assert_eq!(format!("{:?}", back.function.blocks), format!("{:?}", f.blocks));
+    assert_eq!(back.function.classes.len(), f.classes.len());
+    assert!(back.slots.is_empty());
+    assert_allocated(&back.function, &back.assignment);
+}
+
+/// A value live across a call lives in a slot there: the way back writes the
+/// spill and the reload the target states, the registers hold, and a slot is
+/// named for each (the emitter reads only these).
+#[test]
+fn test_what_greedy_spills_across_a_call_comes_back_as_stores_and_loads() {
+    let f = lowered(across_a_call(4));
+    let back = rewritten(&f);
+    assert_allocated(&back.function, &back.assignment);
+    // the control: the checker sees every value in one register
+    let crowded = llrm_spike_mf::regalloc::Assignment(vec![RegId::EBX; back.assignment.0.len()]);
+    let caught = std::panic::catch_unwind(|| assert_allocated(&back.function, &crowded));
+    assert!(caught.is_err(), "the checker accepts values live together in one register");
+    let count = |name| back.function.blocks.iter().flat_map(|b| &b.insts).filter(|i| i.kind == Kind::Op(name)).count();
+    assert!(count("st") > 0 && count("ld") > 0, "{:?}", back.function.blocks);
+    let slot_operands: std::collections::BTreeSet<i32> = back
+        .function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .flat_map(|i| &i.operands)
+        .filter_map(|o| if let Operand::Frame(slot) = o { Some(*slot) } else { None })
+        .collect();
+    assert_eq!(slot_operands, back.slots.iter().map(|(slot, _)| *slot).collect());
 }
