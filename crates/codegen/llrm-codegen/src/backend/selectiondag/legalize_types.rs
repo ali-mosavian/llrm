@@ -899,6 +899,18 @@ impl<'a> TypeLegalizer<'a> {
                 let updated = self.dag.update_node_operands(n, &[extended]);
                 SDValue { node: updated, res: 0 }
             }
+            ISD::Shl | ISD::Srl | ISD::Sra if at == 1 => {
+                // `PromoteIntOp_Shift`: the amount zero extended in the
+                // register.
+                let amount = self.dag.operand(node, 1);
+                let bits = self.dag.value_type(amount).size_in_bits();
+                let promoted = self.promoted_integer(amount);
+                let wide = self.dag.value_type(promoted);
+                let mask = self.dag.get_constant(super::fold::mask(bits), wide);
+                let amount = self.dag.get_node(ISD::And, wide, &[promoted, mask]);
+                let updated = self.dag.update_node_operands(n, &[self.dag.operand(node, 0), amount]);
+                SDValue { node: updated, res: 0 }
+            }
             ISD::BrCond if at == 1 => {
                 // `PromoteIntOp_BRCOND`: the condition to the target's boolean
                 // type.
