@@ -63,6 +63,13 @@ pub trait Target {
         true
     }
 
+    /// Registers the code of a spill or a reload overwrites (the 6502's
+    /// stack-mode spill goes through `y`): greedy writes spills after it has
+    /// chosen registers, so no value may be held in one.
+    fn spill_clobbers() -> Vec<RegId> {
+        Vec::new()
+    }
+
     /// The class the instruction `name` names for operand `index`, where it
     /// does (`MCInstrDesc::operands`).
     fn operand_class(
