@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import sys
 import json
 from pathlib import Path
@@ -363,3 +364,13 @@ def test_two_runs_of_one_compiler_that_differ_in_any_count_are_named_and_equal_r
     assert bc.unstable_cells(run, dict(run)) == []
     flipped = {**run, ("fib", "c", "O2"): row(50, code_bytes=82), ("fib", "ow", "O2"): row(10)}
     assert bc.unstable_cells(run, flipped) == ["UNSTABLE fib c -O2: code_bytes 80 vs 82"], "the reference compilers do not move with ours and are left out"
+
+
+def test_a_base_measured_on_other_sources_than_the_heads_is_refused_and_rebased_with_the_overlay():
+    """The m16 list took main's counts from main's own tree: parity/qlight c read 15 clocks (constant-argument source) against 460 on the head's
+    source, and 'regression' went out. An edited program without base-compiler rows on the head's sources is refused; with them its rows replace the base's."""
+    base = {"q/c/O2": {"clocks": 15}, "s/c/O2": {"clocks": 7}}
+    was, now = {"q": "a", "s": "b"}, {"q": "z", "s": "b"}
+    with pytest.raises(SystemExit, match="q"):
+        bc.rebased(base, {}, was, now)
+    assert bc.rebased(base, {"q/c/O2": {"clocks": 460}}, was, now) == {"s/c/O2": {"clocks": 7}, "q/c/O2": {"clocks": 460}}
