@@ -173,7 +173,7 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, false)
+    select_block_with(dag, cpu, false, false, &mut Temporaries::new(0))
 }
 
 /// [`select_block`], with a compare's load put where a pattern folds it where
@@ -183,6 +183,7 @@ pub fn select_block_with(
     cpu: Cpu,
     load_as_source: bool,
     source_order: bool,
+    frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
     let mut lowering = M68kLowering { load_as_source };
@@ -195,7 +196,7 @@ pub fn select_block_with(
         lowering: &mut lowering,
         chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false) },
     };
-    select_units(dag, &mut target, &M68kSched { source_order }, &mut NoFrame).map_err(|why| match why {
+    select_units(dag, &mut target, &M68kSched { source_order }, frame).map_err(|why| match why {
         llrm_codegen::backend::selectiondag::dag_select::Refusal::Legalize(why) => Refusal::Legalize(why),
         other => Refusal::CannotSelect(format!("{other:?}")),
     })
@@ -234,19 +235,35 @@ impl DagTarget for M68kTarget<'_> {
     }
 }
 
-/// m68k makes no scratch frame object yet.
-struct NoFrame;
+/// `CreateStackTemporary`: the scratch frame objects a block's legalization
+/// asks for, numbered after the function's static allocas.
+pub struct Temporaries {
+    next: i32,
+    /// `(frame index, size, alignment)` of each one made, as
+    /// `Selected::locals`.
+    pub made: Vec<(i32, i64, i64)>,
+}
 
-impl llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects for NoFrame {
+impl Temporaries {
+    /// Frame indices from `first` on: the number of frame objects there are.
+    pub fn new(first: i32) -> Temporaries {
+        Temporaries { next: first, made: Vec::new() }
+    }
+}
+
+impl llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects for Temporaries {
     fn objects(&self) -> i32 {
-        0
+        self.next
     }
 
     fn create_stack_temporary(
         &mut self,
-        _size: u32,
-        _align: u32,
+        size: u32,
+        align: u32,
     ) -> i32 {
-        panic!("m68k makes no scratch frame object yet")
+        let index = self.next;
+        self.next += 1;
+        self.made.push((index, i64::from(size), i64::from(align.max(1))));
+        index
     }
 }

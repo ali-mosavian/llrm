@@ -1,6 +1,6 @@
 //! IR to assembly text, against the pin's `llc -mtriple=m68k-linux-gnu
 //! -mcpu=M68000 -relocation-model=static -O2` (directives and comments
-//! dropped). The oracle is `~/scratch/llvm-build-m68k/bin/llc`, LLVM
+//! dropped). The oracle is `$LLVM_M68K/llc`, LLVM
 //! d1106deb71cc built with the M68k target; not the system llc.
 //!
 //! The call tests failed before the reserved-copy fold (`move.l %sp, %d0` and

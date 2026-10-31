@@ -21,7 +21,7 @@ use llrm_mir::module::{BlockId, Module, ValueDef};
 use super::call::M68kCalling;
 use super::hooks::Cpu;
 use super::lowering::m68kisd;
-use super::pipeline::select_block_with;
+use super::pipeline::{Temporaries, select_block_with};
 use crate::target::M68k;
 
 static CALLING: LazyLock<M68kCalling> = LazyLock::new(M68kCalling::default);
@@ -125,6 +125,7 @@ pub fn select_function_ordered(
     let mut target = builder_target();
     target.ordered_copies = ordered_copies;
     let mut info = FunctionLoweringInfo::new(function);
+    let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
     let mut selected = Vec::new();
     let mut updates = Vec::new();
     for &block in function.layout() {
@@ -134,12 +135,12 @@ pub fn select_function_ordered(
         // follow the block that made them, as x86's driver lays them
         // out
         let extras = std::mem::take(&mut built.extra);
-        let units =
-            select_block_with(&mut built.dag, cpu, load_as_source, source_order).map_err(|why| format!("{why:?}"))?;
+        let units = select_block_with(&mut built.dag, cpu, load_as_source, source_order, &mut temporaries)
+            .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
         selected.push(Selected { block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
         for (id, mut extra) in extras {
-            let units = select_block_with(&mut extra.dag, cpu, load_as_source, source_order)
+            let units = select_block_with(&mut extra.dag, cpu, load_as_source, source_order, &mut temporaries)
                 .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
             selected.push(Selected { block: id, dag: extra.dag, units, phis: Vec::new(), locals: Vec::new() });
@@ -171,6 +172,7 @@ pub fn select_function_ordered(
             i64::try_from(layout.pref_align(types, allocated)).unwrap_or(1).max(wanted.map_or(1, |one| one as i64));
         locals.push((index, size, align));
     }
+    locals.extend(temporaries.made);
     locals.sort();
     if let Some(entry) = selected.first_mut() {
         entry.locals = locals;

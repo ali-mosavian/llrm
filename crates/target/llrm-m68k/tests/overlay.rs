@@ -1,5 +1,5 @@
 //! The overlay's encodings against binutils `m68k-linux-gnu-as` (unpacked
-//! without root under `$GCC_M68K`, default `~/scratch/gcc-m68k/root`), and its
+//! without root under `$GCC_M68K`), and its
 //! effect on size.
 
 use llrm_m68k::compile::{Options, text_with};

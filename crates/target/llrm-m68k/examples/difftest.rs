@@ -88,9 +88,7 @@ fn qemu_cpu() -> &'static str {
 }
 
 fn clang() -> PathBuf {
-    std::env::var_os("LLRM_PIN_CLANG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap()).join("scratch/llvm-build/bin/clang"))
+    std::env::var_os("LLRM_PIN_CLANG").map(PathBuf::from).expect("LLRM_PIN_CLANG: the pin's clang")
 }
 
 /// A guarded child ended: its exit code and stdout, or the deadline passed.
@@ -270,9 +268,7 @@ fn gcc_m68k(
     dir: &Path,
     source: &str,
 ) -> Option<i32> {
-    let root = PathBuf::from(
-        std::env::var("GCC_M68K").unwrap_or(format!("{}/scratch/gcc-m68k/root", std::env::var("HOME").ok()?)),
-    );
+    let root = PathBuf::from(std::env::var("GCC_M68K").ok()?);
     let driver = root.join("usr/bin/m68k-linux-gnu-gcc");
     let start = "void _start(void) { extern unsigned char k(void); register int s asm(\"d1\") = k(); register int n asm(\"d0\") = 1; asm volatile(\"trap #0\" :: \"r\"(s), \"r\"(n)); for (;;); }\nconst unsigned char buf[16] = {3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3};\nconst unsigned char tab[8] = {2,5,8,11,14,17,20,23};\nconst volatile unsigned char zero = 0;\n";
     std::fs::write(dir.join("m.c"), format!("{start}{source}")).ok()?;
