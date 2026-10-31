@@ -129,6 +129,7 @@ pub mod addressvalues;
 pub mod affine;
 pub mod allocate;
 pub mod allocresult;
+pub mod assignment_tracking;
 
 pub mod arithmetic;
 pub mod arrival;
