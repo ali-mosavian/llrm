@@ -14,7 +14,9 @@ fn run(
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    // The child may exit (an unknown pass is refused before stdin is read)
+    // while we write: EPIPE is the child's answer, not a failure of the test.
+    let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
     let out = child.wait_with_output().unwrap();
     (out.status.code(), String::from_utf8_lossy(&out.stdout).into(), String::from_utf8_lossy(&out.stderr).into())
 }
@@ -72,4 +74,12 @@ fn indvars_predicate_loops_and_the_debug_checks_are_accepted() {
     }
     let (code, _, err) = run(&["-S", "-passes=indvars", "-indvars-no-such-flag"], LOOP);
     assert_eq!((code, err.trim()), (Some(77), "unsupported: -indvars-no-such-flag"));
+}
+
+#[test]
+fn an_input_larger_than_the_pipe_to_a_process_that_exits_unread_still_gives_its_exit_code() {
+    // 2 of 20 runs of the 77 test died on EPIPE: the write raced the child's
+    // exit. With more input than a pipe holds the race is lost every time.
+    let (code, _, err) = run(&["-S", "-passes=loop-term-fold"], &"x".repeat(1 << 20));
+    assert_eq!((code, err.trim()), (Some(77), "unsupported: loop-term-fold"));
 }
