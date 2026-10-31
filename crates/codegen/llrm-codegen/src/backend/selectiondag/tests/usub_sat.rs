@@ -1,4 +1,5 @@
-//! `foldSubToUSubSat`: `umax(a, b) - b`, `a - umin(a, b)` and the truncated
+//! `foldSubToUSubSat`
+//! ([L4100](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4100)): `umax(a, b) - b`, `a - umin(a, b)` and the truncated
 //! `sub(a, trunc(umin(zext(a), b)))` stayed a max (or min) and a subtract: on
 //! arm64 `text_write`'s clamped difference was a compare, a select and a
 //! subtract twice over (`SUBS CSEL SUBS SUBS CSEL SUBS`) where the pin has
@@ -90,4 +91,23 @@ fn a_max_with_another_use_stays() {
     });
     assert_eq!(dag.opcode(root), ISD::Add);
     assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Sub);
+}
+
+/// `trunc (umax(a, b) - b)` of zero-extended 16-bit values: the `sub` is a
+/// saturating subtract before the truncate reads it (`visitTRUNCATE`, L17910,
+/// asks too; the `sub` is visited first).
+#[test]
+fn a_truncated_max_difference_of_wide_values_is_a_truncated_saturating_subtract() {
+    let mut dag = dag();
+    let (a16, b16) = (dag.get_register(EVT::I16, 5), dag.get_register(EVT::I16, 6));
+    let a = dag.get_node(ISD::ZeroExtend, EVT::I32, &[a16]);
+    let b = dag.get_node(ISD::ZeroExtend, EVT::I32, &[b16]);
+    let max = dag.get_node(ISD::UMax, EVT::I32, &[a, b]);
+    let diff = dag.get_node(ISD::Sub, EVT::I32, &[max, b]);
+    let root = dag.get_node(ISD::Truncate, EVT::I16, &[diff]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    let inner = if dag.opcode(root) == ISD::Truncate { dag.operand(root, 0) } else { root };
+    assert_eq!(dag.opcode(inner), ISD::USubSat);
 }
