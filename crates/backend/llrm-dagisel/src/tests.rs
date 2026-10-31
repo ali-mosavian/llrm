@@ -2082,3 +2082,106 @@ mod minsize_store_immediate {
         assert_eq!(selected_store(5, mvt::i32, true), "MOV32mi");
     }
 }
+
+/// A target that is not x86 implements `Hooks` and nothing else. The x86
+/// PatFrags' subtarget and user queries (`hasSSEUnalignedMem`, `isDef32`, ..)
+/// were methods of `Hooks`, so m68k's hooks named seven that mean nothing
+/// there. A table of another target needs only `Hooks`; x86's takes
+/// `X86Predicates`.
+#[test]
+fn a_target_that_is_not_x86_implements_hooks_alone() {
+    use crate::dag::Hooks;
+    use crate::generated::ids::mvt::i32 as pointer;
+
+    struct Bare;
+    impl Hooks<TestDag> for Bare {
+        fn pointer_type(&self) -> crate::matcher::Vt {
+            pointer
+        }
+        fn check_pattern_predicate(
+            &self,
+            _: u16,
+        ) -> bool {
+            false
+        }
+        fn check_node_predicate(
+            &self,
+            _: &TestDag,
+            _: SDValue,
+            _: u16,
+        ) -> bool {
+            false
+        }
+        fn check_complex_pattern(
+            &mut self,
+            _: &mut TestDag,
+            _: u32,
+            _: Option<u32>,
+            _: SDValue,
+            _: u8,
+            _: &mut Vec<(SDValue, Option<u32>)>,
+        ) -> bool {
+            false
+        }
+        fn run_xform(
+            &mut self,
+            _: &mut TestDag,
+            value: SDValue,
+            _: u8,
+        ) -> SDValue {
+            value
+        }
+        fn is_profitable_to_fold(
+            &self,
+            _: &TestDag,
+            _: SDValue,
+            _: u32,
+            _: u32,
+        ) -> bool {
+            true
+        }
+        fn is_legal_to_fold(
+            &self,
+            _: &TestDag,
+            _: SDValue,
+            _: u32,
+            _: u32,
+        ) -> bool {
+            true
+        }
+        fn check_and_mask(
+            &self,
+            _: &TestDag,
+            _: SDValue,
+            _: i64,
+            _: i64,
+        ) -> bool {
+            false
+        }
+        fn check_or_mask(
+            &self,
+            _: &TestDag,
+            _: SDValue,
+            _: i64,
+            _: i64,
+        ) -> bool {
+            false
+        }
+        fn may_load_store(
+            &self,
+            _: u16,
+        ) -> (bool, bool) {
+            (false, false)
+        }
+    }
+
+    let mut dag = TestDag::new();
+    let a = dag.input(1, mvt::i32);
+    let add = dag.node(isd::ADD, &[mvt::i32], &[a, a]);
+    let selector = Selector::new(table::TABLE);
+    assert_eq!(
+        selector.select(&mut dag, &mut Bare, add),
+        Outcome::Selected,
+        "the matcher asks `Hooks` and nothing more"
+    );
+}

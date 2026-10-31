@@ -29,7 +29,13 @@ fn a_one_bit_sign_extension_legalizes_to_a_negated_mask() {
     let ty = dag.get_value_type_node(EVT::I1);
     let root = dag.get_node(ISD::SignExtendInReg, EVT::I32, &[x, ty]);
     dag.set_root(root);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::Sub);
     assert_eq!(dag.constant(dag.operand(root, 0)), Some(0));

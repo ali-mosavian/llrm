@@ -3452,7 +3452,8 @@ mod tests {
     /// x_hanoi2 `mv` -Os m32 pushed four registers before its `n == 0` exit:
     /// the size refusal of a wrap around a shared return was the 16-bit
     /// target's (a jump over the epilogue outgrows its short form), and applied
-    /// everywhere. The target description states it (`frame_wrap_split_size`).
+    /// everywhere. The target description states it (`frame_wrap_split_size`);
+    /// where it does not, the wrap is taken when no jump outgrows (fib bq16).
     #[test]
     fn test_a_size_build_wraps_a_shared_return_only_where_the_target_allows() {
         let esi = Loc::Reg(ir::Reg { register: RegId::ESI, width: 4 });
@@ -3497,7 +3498,7 @@ mod tests {
             wrap_of(&procedure, &body, false, false).is_some()
         };
         assert!(wrapped(&llrm_x86_m32::M32, 32), "m32 states it");
-        assert!(!wrapped(&llrm_x86_m16::M16, 16), "m16 does not");
+        assert!(wrapped(&llrm_x86_m16::M16, 16), "m16 does too where no jump outgrows");
     }
 
     fn through_bp() -> Loc {

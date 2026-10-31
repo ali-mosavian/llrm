@@ -51,7 +51,7 @@ impl KnownBits {
         (self.zero | self.one) == mask(self.width)
     }
 
-    fn intersect(
+    pub fn intersect(
         self,
         other: KnownBits,
     ) -> KnownBits {
@@ -190,7 +190,13 @@ fn walk(
             };
             KnownBits { zero: flip(inner.zero), one: flip(inner.one), width }
         }
-        _ => KnownBits::unknown(width),
+        _ => dag.config().known_bits_for_target_node.and_then(|known| known(dag, value, &operand)).map_or_else(
+            || KnownBits::unknown(width),
+            |mut found| {
+                found.width = width;
+                found
+            },
+        ),
     }
 }
 
