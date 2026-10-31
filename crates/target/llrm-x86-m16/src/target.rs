@@ -281,6 +281,11 @@ impl Machine for Dos {
             // DEVIATE: bytes over clocks at -O2 too: a callee that stays is
             // not copied into a speed caller where it grows the code (D11).
             inline_size_guard_at_speed: true,
+            // DEVIATE: a constant offset is a displacement of the access at
+            // m16; behind a sunk phi it costs an add and a register
+            // (qbsp `r_point_leaf`: two `[bx+si+2|4]` loads became an index
+            // select, +6 B, +36 clk).
+            keep_constant_displacements: true,
             // DEVIATE: byte registers are scarce at every level, not only at
             // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
             // `setcc` pair and an `or` that took `bp` addressing out of the

@@ -348,6 +348,12 @@ pub trait Tti {
         false
     }
 
+    /// Whether a constant address offset may become a phi: false where the
+    /// access folds it as a displacement and the target says to keep it.
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        true
+    }
+
     /// The same bound for a caller optimized for speed (its tuning table).
     fn speed_inline_by_code_size(&self) -> bool {
         false
