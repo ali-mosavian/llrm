@@ -224,6 +224,16 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with a divide by a constant kept where its priced clocks
+    /// beat the multiply-high sequence's.
+    pub fn with_div_prices(
+        mut self,
+        prices: Option<super::dag::DivPrices>,
+    ) -> BuilderTarget {
+        self.dag.div_prices = prices;
+        self
+    }
+
     /// This target with jump tables on or off.
     pub fn with_jump_tables(
         mut self,
