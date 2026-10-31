@@ -387,6 +387,7 @@ pub fn assembled_by(
                         .any(|one| Fact::of_attribute(one) == Some(Fact::StackCheck))
                         .then(|| abi.stack_check().cloned())
                         .flatten(),
+                    probe_stack: None,
                     registers,
                 };
                 // Copies of returns and split tails only make code better: -O0
@@ -508,7 +509,12 @@ pub fn assembled_by(
     externs.sort();
     externs.dedup();
     let debug = timed("debug info", || {
-        crate::backend::debuginfo::described(module, &names, llrm_object::debug::Producer::Native, arch)
+        crate::backend::debuginfo::described(
+            module,
+            &names,
+            llrm_debug::Producer::Native,
+            &crate::backend::debuginfo::Machine::of(arch),
+        )
     })?;
     let code_segments: std::collections::BTreeMap<String, String> = procedures
         .iter()

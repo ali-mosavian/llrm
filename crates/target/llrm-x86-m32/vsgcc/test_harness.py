@@ -1,4 +1,5 @@
 """Regression tests of the instrument: each name says what went wrong and what it produced."""
+import os
 import json
 from pathlib import Path
 
@@ -144,6 +145,25 @@ def test_run_sh_builds_the_programs_programs_py_lists_and_no_file():
     listed = subprocess.run([sys.executable, str(HERE / "programs.py")], capture_output=True, text=True, check=True).stdout.split()
     assert listed and all((harness.BENCH / name).is_dir() or (HERE / "kernels" / name).is_dir() for name in listed), listed
     assert "bench_io.h" not in listed and "programs.py" in (HERE / "run.sh").read_text()
+
+
+def test_ctime_times_the_programs_programs_py_lists_and_no_file():
+    """`ctime.py` listed `ls bench` and timed `bench_io.h` as a program: the run stopped before writing ctime.json."""
+    import importlib
+    import ctime
+    importlib.reload(ctime)
+    names = sorted(ctime.programs.sources())
+    assert names and "bench_io.h" not in names and all(ctime.cmds(n) for n in names), names
+
+
+def test_levels_time_gives_llrm_cc_its_tree_and_skips_programs_gcc_cannot_build(monkeypatch):
+    """`levels_time.py` ran llrm-cc without LLRM_OW (the -O0 bench/bintree compile exited 1) and handed gcc bench/jpeg_fixed, which needs bench_io.h."""
+    import levels_time
+    monkeypatch.delenv("LLRM_OW", raising=False)
+    levels_time.setup()
+    assert os.environ.get("LLRM_OW")
+    names = levels_time.bench_sources()
+    assert "bintree" in names and "jpeg_fixed" not in names, sorted(names)
 
 
 def test_every_x87_encoding_has_a_clock_price():

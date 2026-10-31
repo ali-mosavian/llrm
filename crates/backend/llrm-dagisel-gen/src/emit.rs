@@ -61,6 +61,9 @@ pub struct Source<'a> {
     /// The names of the instructions (not registers or classes, whose numbers
     /// collide with theirs).
     pub instructions: &'a BTreeSet<String>,
+    /// Qualified instruction names the hand code selects (`extra_symbols`):
+    /// listed in `MACHINE_OPCODES` too.
+    pub extra: &'a [String],
 }
 
 fn vt(v: Vt) -> String {
@@ -159,6 +162,7 @@ fn machine_opcodes(
     ids: &Ids,
     instructions: &BTreeSet<String>,
     ns: &str,
+    extra: &[String],
 ) -> BTreeMap<u16, String> {
     let wanted: BTreeSet<u16> = flat
         .items
@@ -171,7 +175,9 @@ fn machine_opcodes(
     let mut by_value: BTreeMap<u16, Vec<&str>> = BTreeMap::new();
     for (name, &value) in &ids.0 {
         let short = name.strip_prefix(ns).or_else(|| name.strip_prefix("TargetOpcode::"));
-        if let (Some(short), true) = (short.filter(|s| instructions.contains(*s)), wanted.contains(&(value as u16))) {
+        if let (Some(short), true) =
+            (short.filter(|s| instructions.contains(*s)), (wanted.contains(&(value as u16)) || extra.contains(name)))
+        {
             by_value.entry(value as u16).or_default().push(short);
         }
     }
@@ -260,7 +266,7 @@ pub fn render(src: &Source) -> Result<String, String> {
     writeln!(w, "/// The machine opcodes the table emits, with the pin's names (`{}` and `TargetOpcode::`).", style.ns)
         .unwrap();
     writeln!(w, "pub const MACHINE_OPCODES: &[(u16, &str)] = &[").unwrap();
-    for (value, name) in machine_opcodes(flat, src.ids, src.instructions, style.ns) {
+    for (value, name) in machine_opcodes(flat, src.ids, src.instructions, style.ns, src.extra) {
         writeln!(w, "    ({value}, {name:?}),").unwrap();
     }
     writeln!(w, "];").unwrap();

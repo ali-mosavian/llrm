@@ -133,6 +133,7 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
             complex_patterns: &parsed.complex_patterns,
             xforms: &parsed.xforms,
             instructions: &instructions,
+            extra: &target.extra_symbols,
         };
         emitted.extend(flat.items.iter().filter_map(|m| match m {
             Matcher::EmitNode(e) | Matcher::MorphNodeTo(e) => Some(e.opcode),

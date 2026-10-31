@@ -166,9 +166,13 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         Br => pin::BR,
         BrJT => pin::BR_JT,
         BrInd => pin::BRIND,
-        Load => pin::LOAD,
-        Store => pin::STORE,
+        Load | LoadPre | LoadPost => pin::LOAD,
+        Store | StorePre | StorePost => pin::STORE,
         AtomicSwap => pin::ATOMIC_SWAP,
+        // No x86 table names these; a target whose table does gets its own id
+        // map (B2).
+        AtomicCmpSwap | AtomicLoadAdd | AtomicLoadSub | AtomicLoadAnd | AtomicLoadOr | AtomicLoadXor
+        | AtomicLoadClr | AtomicLoad | AtomicStore => u16::MAX,
         CallSeqStart => pin::CALLSEQ_START,
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
@@ -724,7 +728,7 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<LoadExt> {
         let node = &self.dag.nodes()[node as usize];
-        (node.opcode == ISD::Load).then(|| match node.data {
+        matches!(node.opcode, ISD::Load | ISD::LoadPre | ISD::LoadPost).then(|| match node.data {
             NodeData::Mem(info) => match info.ext {
                 None => LoadExt::NonExt,
                 Some(super::actions::LoadExt::ExtLoad) => LoadExt::Ext,
@@ -736,9 +740,21 @@ impl Dag for DagisAdapter<'_> {
     }
     fn is_indexed(
         &self,
-        _: u32,
+        node: u32,
     ) -> bool {
-        false
+        matches!(
+            self.dag.nodes()[node as usize].opcode,
+            ISD::LoadPre | ISD::LoadPost | ISD::StorePre | ISD::StorePost
+        )
+    }
+    fn is_post_indexed(
+        &self,
+        node: u32,
+    ) -> bool {
+        matches!(
+            self.dag.nodes()[node as usize].opcode,
+            ISD::LoadPost | ISD::StorePost
+        )
     }
     fn is_truncating_store(
         &self,
@@ -746,7 +762,7 @@ impl Dag for DagisAdapter<'_> {
     ) -> bool {
         let n = &self.dag.nodes()[node as usize];
         match n.data {
-            NodeData::Mem(info) if n.opcode == ISD::Store => {
+            NodeData::Mem(info) if matches!(n.opcode, ISD::Store | ISD::StorePre | ISD::StorePost) => {
                 self.dag.value_type(n.ops[1]).size_in_bits() > info.mem_vt.size_in_bits()
             }
             _ => false,

@@ -281,6 +281,15 @@ pub struct OperationCosts {
     pub add: i64,
     pub multiply: i64,
     pub divide: i64,
+    /// The same on a dword where the target's own word is smaller
+    /// (`imul`/`idiv` r32 in real mode, before the operand-size prefix);
+    /// equal to `multiply`/`divide` elsewhere.
+    pub multiply_long: i64,
+    pub divide_long: i64,
+    /// Percent by which a constant divide's multiply-high sequence must cost
+    /// more than the divide for the divide to stay (`isIntDivCheap`,
+    /// priced); 0 where the target states none.
+    pub divide_margin: i64,
     pub shift: i64,
     pub address: i64,
     /// An address advanced in a space whose displacement carries into its
@@ -431,6 +440,9 @@ impl Default for OperationCosts {
             add: 1,
             multiply: 1,
             divide: 1,
+            multiply_long: 1,
+            divide_long: 1,
+            divide_margin: 0,
             shift: 1,
             address: 1,
             carry: 1,

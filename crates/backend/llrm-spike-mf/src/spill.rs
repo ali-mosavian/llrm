@@ -2,7 +2,7 @@
 //! frame slot, stored after each definition and loaded before each use into a
 //! short-lived register of its own.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::regalloc::{Assignment, GraphColoring, Target, Uncolourable, successors};
@@ -274,7 +274,7 @@ fn rematerialize<C: Copy>(
 /// rematerializing a copy's source leaves behind.
 fn remove_dead_defs<C>(function: &mut MFunction<C>) {
     loop {
-        let mut used = HashSet::new();
+        let mut used = HashSet::default();
         for block in &function.blocks {
             for inst in &block.insts {
                 for operand in &inst.operands {
@@ -402,15 +402,15 @@ fn slot_sources<C>(
     slots: &[(i32, C)],
     origin: &[Vec<usize>],
 ) -> Vec<((usize, usize), Sites)> {
-    use std::collections::HashMap;
+    use llrm_support::hash::HashMap;
     type State = HashMap<i32, Sites>;
     let next = successors(function);
     let mut entry: Vec<Option<State>> = vec![None; function.blocks.len()];
-    entry[0] = Some(State::new());
+    entry[0] = Some(State::default());
     let step = |state: &mut State, b: usize, reads: &mut Vec<((usize, usize), Sites)>| {
         // the stores a register's value came from, while it holds a reloaded
         // slot
-        let mut loaded: HashMap<Reg, Sites> = HashMap::new();
+        let mut loaded: HashMap<Reg, Sites> = HashMap::default();
         for (i, inst) in function.blocks[b].insts.iter().enumerate() {
             let access = slot_access(inst, slots);
             let reload = access.is_some_and(|(_, stores)| !stores) && is_reload(inst);
@@ -660,7 +660,7 @@ fn drop_self_copies<C>(
     function: &mut MFunction<C>,
     slots: &[(i32, C)],
 ) -> Vec<Vec<usize>> {
-    let mut mentions = std::collections::HashMap::<Reg, usize>::new();
+    let mut mentions = llrm_support::hash::HashMap::<Reg, usize>::default();
     for inst in function.blocks.iter().flat_map(|b| &b.insts) {
         for operand in &inst.operands {
             if let Operand::Def(r) | Operand::Use(r) = operand {
@@ -716,7 +716,7 @@ pub fn allocate_spilling_ordered<T: Target>(
     by_frequency: bool,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     let mut slots = Vec::new();
-    let mut temporaries = HashSet::new();
+    let mut temporaries = HashSet::default();
     loop {
         let failures =
             match GraphColoring::<T>::by_frequency(by_frequency).with_unspillable(&temporaries).colour(function) {

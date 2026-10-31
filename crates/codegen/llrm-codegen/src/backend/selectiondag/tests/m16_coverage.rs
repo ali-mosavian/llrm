@@ -39,6 +39,7 @@ fn selects(body: &str) -> Result<(), String> {
         opt_for_size: false,
         min_size: false,
         has_frame_pointer: true,
+        multiply_early_out: false,
         address_mode: AddrMode::Real16,
     });
     let mut info = FunctionLoweringInfo::new(function);

@@ -137,7 +137,10 @@ pub(crate) fn leaves_the_block(inst: &Inst) -> bool {
     )
 }
 
-fn pairs_in(insts: Vec<Inst>) -> Vec<Inst> {
+fn pairs_in(
+    insts: Vec<Inst>,
+    locs: Vec<Option<(u32, u32)>>,
+) -> (Vec<Inst>, Vec<Option<(u32, u32)>>) {
     let mut insts: Vec<Option<Inst>> = insts.into_iter().map(Some).collect();
     for i in 0..insts.len() {
         let Some(first) = insts[i].as_ref().and_then(access) else { continue };
@@ -177,7 +180,7 @@ fn pairs_in(insts: Vec<Inst>) -> Vec<Inst> {
             }
         }
     }
-    insts.into_iter().flatten().collect()
+    insts.into_iter().zip(locs).filter_map(|(inst, loc)| Some((inst?, loc))).unzip()
 }
 
 pub(crate) struct Pair {
@@ -228,7 +231,13 @@ pub(crate) fn pair_of(
 
 /// `blocks` with their adjacent accesses paired.
 pub fn fold(blocks: Vec<Lowered>) -> Vec<Lowered> {
-    blocks.into_iter().map(|block| Lowered { label: block.label, insts: pairs_in(block.insts) }).collect()
+    blocks
+        .into_iter()
+        .map(|block| {
+            let (insts, locs) = pairs_in(block.insts, block.locs);
+            Lowered { label: block.label, insts, locs }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -260,7 +269,8 @@ mod tests {
     }
 
     fn folded(insts: Vec<Inst>) -> Vec<Inst> {
-        pairs_in(insts)
+        let places = vec![None; insts.len()];
+        pairs_in(insts, places).0
     }
 
     /// Two loads of neighbouring doublewords were two instructions.

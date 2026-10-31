@@ -25,7 +25,6 @@ fn with(code: &[u8]) -> Object {
         }],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
-        debug: None,
         frames: Vec::new(),
     }
 }
@@ -198,8 +197,34 @@ fn declared_directives_are_encoded_as_the_pins_assembler_does() {
 fn a_declared_prologue_is_not_read_back_from_the_bytes() {
     use llrm_object::{Frame, Seh};
     let mut object = with(&[0xC3]);
-    object.frames.push(Frame { section: 0, offset: 0, length: 1, rows: Vec::new(), seh: vec![(1, Seh::PushReg(6))] });
+    object
+        .frames
+        .push(
+            Frame {
+                section: 0,
+                offset: 0,
+                length: 1,
+                rows: Vec::new(),
+                cfi: Vec::new(),
+                seh: vec![(1, Seh::PushReg(6))],
+            },
+        );
     let written = expanded(&object).unwrap();
     let xdata = written.sections.iter().find(|one| one.name == ".xdata").unwrap();
     assert_eq!(xdata.image, bytes("0101010001600000"));
+}
+
+/// A frame over 4 KiB is probed (`mov eax, N; call __chkstk; sub rsp, rax`) and
+/// the pin's `.seh_stackalloc N` follows the `sub`. The call ends the run
+/// `from_prologue` reads, so the declared directive is the only way to describe
+/// it; the large forms are 16-bit units of 8 up to 512 KiB, then 32-bit bytes.
+#[test]
+fn a_probed_frame_declares_its_allocation_after_the_sub() {
+    use llrm_object::Seh::StackAlloc;
+    let probed = bytes("b8484e0000e8000000004829c4488d4c2428e800000000904881c4484e0000c3");
+    assert!(from_prologue("f", &probed).unwrap().codes.is_empty(), "the call ends the prologue run");
+    for (size, expected) in [(20040, "010d02000d01c909"), (600040, "010d03000d11e82709000000")] {
+        let info = from_seh("f", &[(0xd, StackAlloc(size))]).unwrap();
+        assert_eq!(info.bytes().unwrap(), bytes(expected), "{size}");
+    }
 }

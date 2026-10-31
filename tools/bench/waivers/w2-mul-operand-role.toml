@@ -1,0 +1,14 @@
+reason = "SD444: on a 486 the multiply's constant goes to EAX and the variable is the r/m multiplier the early-out reads; -22.2M clocks over 78 rows, -140 B. These rows gain a copy or a spill slot while their clocks fall (recmany c -112k, huge bq32 -708k)."
+exception = true
+
+[[row]]
+label = "recmany c -O2"
+counter = "memory_operands"
+tip = 13502
+to = 15002
+
+[[row]]
+label = "huge bq32 -O2"
+counter = "instructions"
+tip = 574511
+to = 574715
