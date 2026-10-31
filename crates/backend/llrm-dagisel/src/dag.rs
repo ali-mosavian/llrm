@@ -102,7 +102,6 @@ impl Visited {
         self.count = 0;
     }
 }
-
 pub trait Dag {
     fn opcode(
         &self,
@@ -281,6 +280,17 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> bool;
+    /// `SelectionDAG::ComputeNumSignBits`. The least a DAG says is one (every
+    /// value is its own sign bit), so a DAG with no analysis keeps the pin's
+    /// conservative answer.
+    fn compute_num_sign_bits(
+        &self,
+        value: SDValue,
+    ) -> u32 {
+        let _ = value;
+        1
+    }
+
     /// `SelectionDAG::MaskedValueIsZero`: every bit of `mask` is known zero in
     /// `value`.
     fn masked_value_is_zero(

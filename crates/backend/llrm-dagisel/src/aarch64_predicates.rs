@@ -3,11 +3,16 @@
 //! `AArch64InstrFormats.td` and `TargetSelectionDAG.td`. llrm-dagisel's shared
 //! ones are re-exported.
 //!
-//! DEVIATE: [`never`] stands for a predicate whose query the [`Dag`] lacks (the
-//! `STSHH` hints, an indexed store, `ComputeNumSignBits`, a memory intrinsic's type, `isWorthFoldingALU`): the
-//! patterns that name it are not selected and the block is refused, never
-//! mis-selected. Reason: loads and stores of the scalar subset need none.
-//! Exit: with the atomics (`FEAT-atomics`).
+//! DEVIATE 1: the predicates below that answer false by name ([`atomic_store_hint`],
+//! [`exclusive_load_intrinsic`], [`f16_immediate`], [`sve_increment`], [`sme_streaming_mode`]) guard
+//! patterns of a feature or a node the scalar subset never builds (FEAT_PCDPHINT, an AArch64
+//! intrinsic, `f16`, SVE, SME): false is the pin's answer for them on apple-m1 too. Exit: with that
+//! feature.
+//!
+//! DEVIATE 2: [`negated_immediate_cheaper`] (`isWorthNegatingImm`) and [`aligned_global_literal`]
+//! (`alignedglobal`) are untranslated and answer false: `add x, imm` keeps the add, and a global is
+//! addressed by `adrp` + `add`, not `ldr` literal. Exit: `isWorthNegatingImm` over the immediate
+//! expansion; the global's alignment as a `Dag` query.
 
 pub use crate::predicates::*;
 
@@ -17,8 +22,38 @@ use crate::generated::ids::{isd, mvt};
 
 type Args<'a, D, H> = (&'a D, &'a H, SDValue);
 
-pub fn never<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
+pub fn atomic_store_hint<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
     false
+}
+
+pub fn exclusive_load_intrinsic<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
+    false
+}
+
+pub fn f16_immediate<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
+    false
+}
+
+pub fn sve_increment<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
+    false
+}
+
+pub fn sme_streaming_mode<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
+    false
+}
+
+pub fn negated_immediate_cheaper<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
+    false
+}
+
+pub fn aligned_global_literal<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
+    false
+}
+
+/// `smullwithsignbits`: both operands of the multiply have more than 32 sign
+/// bits, so a 64-bit multiply is one `SMULL`.
+pub fn smull_with_sign_bits<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
+    (0..2).all(|at| dag.compute_num_sign_bits(dag.operand(v.node, at)) > 32)
 }
 
 /// `AtomicOrdering` numbers (LLVM's enum), as [`Dag::atomic_ordering`] returns them.

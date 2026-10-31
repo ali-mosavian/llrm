@@ -549,6 +549,12 @@ impl<'a> DagisAdapter<'a> {
 }
 
 impl Dag for DagisAdapter<'_> {
+    fn compute_num_sign_bits(
+        &self,
+        value: PinValue,
+    ) -> u32 {
+        super::known_bits::num_sign_bits(self.dag, ours(value))
+    }
     fn opcode(
         &self,
         node: u32,
