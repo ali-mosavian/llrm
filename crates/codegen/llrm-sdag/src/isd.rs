@@ -161,6 +161,14 @@ pub enum ISD {
 
     Load,
     Store,
+    /// `LOAD`/`STORE` with an indexed addressing mode (`MemIndexedMode`), made after legalization
+    /// (`getIndexedLoad`/`getIndexedStore`): `PRE_INC` writes back `base + offset` before the access,
+    /// `POST_INC` after it. A load's values are (value, new base, chain) and its operands (chain, base,
+    /// offset); a store's values are (new base, chain) and its operands (chain, value, base, offset).
+    LoadPre,
+    LoadPost,
+    StorePre,
+    StorePost,
     /// `ATOMIC_SWAP`: `(chain, ptr, value)` to the old value and a chain.
     AtomicSwap,
     CallSeqStart,
@@ -324,6 +332,8 @@ impl ISD {
             BrInd => "brind",
             Load => "load",
             Store => "store",
+            LoadPre | LoadPost => "load<indexed>",
+            StorePre | StorePost => "store<indexed>",
             AtomicSwap => "atomic_swap",
             CallSeqStart => "callseq_start",
             CallSeqEnd => "callseq_end",

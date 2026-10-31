@@ -727,8 +727,8 @@ impl<'a> TypeLegalizer<'a> {
                 let updated = self.dag.update_node_operands(n, &[cond, then, other]);
                 SDValue { node: updated, res: 0 }
             }
-            ISD::SetCC if at < 2 => {
-                // `PromoteSetCCOperands`: both operands promoted and extended
+            ISD::SetCC | ISD::SelectCC if at < 2 => {
+                // `PromoteSetCCOperands` (and `PromoteIntOp_SELECT_CC`): both operands promoted and extended
                 // in the register to the compare's signedness.
                 let Some(code) = self.setcc_code(node) else {
                     return Err(LegalizeError::Unsupported {
@@ -752,7 +752,8 @@ impl<'a> TypeLegalizer<'a> {
                     }
                 };
                 let (lhs, rhs) = (extend(self, lhs), extend(self, rhs));
-                let ops = [lhs, rhs, self.dag.operand(node, 2)];
+                let mut ops: Vec<SDValue> = (0..if self.dag.opcode(node) == ISD::SelectCC { 5 } else { 3 }).map(|i| self.dag.operand(node, i)).collect();
+                (ops[0], ops[1]) = (lhs, rhs);
                 let updated = self.dag.update_node_operands(n, &ops);
                 SDValue { node: updated, res: 0 }
             }
@@ -2278,7 +2279,8 @@ impl<'a> TypeLegalizer<'a> {
         &self,
         setcc: SDValue,
     ) -> Option<CondCode> {
-        match self.dag.node(self.dag.operand(setcc, 2)).data {
+        let at = if self.dag.opcode(setcc) == ISD::SelectCC { 4 } else { 2 };
+        match self.dag.node(self.dag.operand(setcc, at)).data {
             NodeData::CondCode(code) => Some(code),
             _ => None,
         }

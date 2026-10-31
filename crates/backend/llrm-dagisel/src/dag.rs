@@ -219,6 +219,13 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> bool;
+    /// `getAddressingMode()` is `POST_INC`/`POST_DEC`: the update comes after the access.
+    fn is_post_indexed(
+        &self,
+        _node: u32,
+    ) -> bool {
+        false
+    }
     fn is_truncating_store(
         &self,
         node: u32,

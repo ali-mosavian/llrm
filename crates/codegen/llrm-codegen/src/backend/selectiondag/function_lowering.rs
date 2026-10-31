@@ -12,6 +12,14 @@ use llrm_mir::opcode::Opcode;
 pub const FIRST_VIRTUAL: u32 = 4096;
 
 /// What `FunctionLoweringInfo::set` decides before any block is selected.
+/// `FunctionLoweringInfo::LiveOutInfo`: the sign bits and the known bits of a value.
+#[derive(Clone, Copy, Debug)]
+pub struct LiveOut {
+    pub sign_bits: u32,
+    pub zero: u128,
+    pub one: u128,
+}
+
 pub struct FunctionLoweringInfo {
     /// `ValueMap`: a value used outside its block (or by a phi) and the
     /// virtual register that carries it.
@@ -32,6 +40,8 @@ pub struct FunctionLoweringInfo {
     /// (`addSuccessorWithProb`): (from, to, probability in 2^31sts). An edge
     /// the lowering did not state has none.
     pub edge_probs: Vec<(BlockId, BlockId, u32)>,
+    /// `LiveOutRegInfo`: what the block that defines a virtual register knew of the bits of its value.
+    pub live_out: std::collections::BTreeMap<u32, LiveOut>,
     next_reg: u32,
     /// The register of the high half of a two-register value, by the low's.
     second: std::collections::BTreeMap<u32, u32>,
@@ -59,6 +69,18 @@ pub(super) struct Tables {
 }
 
 impl FunctionLoweringInfo {
+    /// `AddLiveOutRegInfo`: only information that tells something is kept.
+    pub fn add_live_out(
+        &mut self,
+        reg: u32,
+        info: LiveOut,
+    ) {
+        if info.sign_bits == 1 && info.zero == 0 && info.one == 0 {
+            return;
+        }
+        self.live_out.insert(reg, info);
+    }
+
     /// `FunctionLoweringInfo::set`: one walk in layout order, numbering
     /// registers and frame indices as the pin does.
     pub fn new(function: &Function) -> FunctionLoweringInfo {
@@ -85,6 +107,7 @@ impl FunctionLoweringInfo {
             bpi: None,
             edge_probs: Vec::new(),
             next_reg: FIRST_VIRTUAL,
+            live_out: Default::default(),
             second: Default::default(),
             jump_tables: Vec::new(),
             next_block: 0,
