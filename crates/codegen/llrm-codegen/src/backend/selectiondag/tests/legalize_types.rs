@@ -53,6 +53,33 @@ fn a_promoted_load_is_an_any_extending_load() {
     assert_eq!(info.ext, Some(crate::backend::selectiondag::actions::LoadExt::ExtLoad));
 }
 
+/// `sitofp i12` and `fptosi` to `i12` had no promotion: the legalizer refused
+/// them as "promote operand" / "promote result" (wasm's `sitofp i16`).
+/// `PromoteIntOp_SINT_TO_FP` extends the promoted source in the register;
+/// `PromoteIntRes_FP_TO_XINT` converts wide and asserts the narrow type.
+#[test]
+fn an_odd_width_integer_converts_to_and_from_a_float() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let i12 = EVT::Int(12);
+    let mut dag = dag();
+    let a = load(&mut dag, i12, 1);
+    let float = dag.get_node(ISD::SIntToFp, EVT::Simple(MVT::F64), &[a]);
+    dag.set_root(float);
+    assert_eq!(legalize(&mut dag, &tli), Ok(true));
+    let source = dag.operand(dag.get_root(), 0);
+    assert_eq!((dag.opcode(source), dag.value_type(source)), (ISD::SignExtendInReg, EVT::I16));
+
+    let mut dag = super::dag();
+    let f = dag.get_register(EVT::Simple(MVT::F64), 9);
+    let int = dag.get_node(ISD::FpToSInt, i12, &[f]);
+    let byte = dag.get_node(ISD::Truncate, EVT::I8, &[int]);
+    dag.set_root(byte);
+    assert_eq!(legalize(&mut dag, &tli), Ok(true));
+    let wide = dag.operand(dag.get_root(), 0);
+    assert_eq!((dag.opcode(wide), dag.value_type(wide)), (ISD::AssertSext, EVT::I16));
+    assert_eq!(dag.opcode(dag.operand(wide, 0)), ISD::FpToSInt);
+}
+
 /// `trunc(load i12 + load i12)` to a byte: before legalization the root
 /// reads an `i12`, which no register holds. After it the add is an `i16`
 /// add of extending loads, and the root is rewritten to read it.
