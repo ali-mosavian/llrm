@@ -137,9 +137,10 @@ done:
     }
 }
 
-/// The index is as wide as the target says (`Tti::index_register_bits`), not
-/// a byte: a 4-bit index wraps every 16 bytes and the bases move by 16. With a
-/// byte hard-coded the pass made an `i8` index whatever the target asked.
+/// The index is as wide as the target says (`Machine::index_register_bits`),
+/// not a byte: a 4-bit index wraps every 16 bytes and the bases move by 16.
+/// With a byte hard-coded the pass made an `i8` index whatever the target
+/// asked.
 #[test]
 fn the_page_is_as_wide_as_the_targets_index() {
     let before = llrm_mir::parse::module(TEXT).expect("parses");

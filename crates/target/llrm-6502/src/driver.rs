@@ -211,7 +211,7 @@ pub fn assembly(
     let looped = looped.transpose()?;
     // The loops that walk a pointer by page, for the functions that have one:
     // priced against the loops as they are, below.
-    let index_bits = llrm_mir::tti::Tti::index_register_bits(&crate::tti::Mos6502::new());
+    let index_bits = llrm_mir::target::Machine::index_register_bits(&Mos6502Machine);
     let paged = index_bits
         .filter(|_| request.level != Level::O0)
         .map(|bits| {
@@ -309,6 +309,11 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
 struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {
+    /// `lda (zp),y`: the index is `y`.
+    fn index_register_bits(&self) -> Option<u32> {
+        Some(8)
+    }
+
     fn foreign_span(
         &self,
         selectors: (i64, i64),

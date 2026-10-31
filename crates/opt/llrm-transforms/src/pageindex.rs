@@ -4,9 +4,9 @@
 //! # How it works
 //! A loop with a pointer `p` that starts at `s` and steps by `c` bytes is
 //! `p = s + c * trips`. On a target whose indexed load adds an index of `n`
-//! bits to a base (`Tti::index_register_bits`), the sum is cheaper kept in two
-//! parts: an index `i` that steps by `c`, and a base that moves by `2^n` where
-//! the index wraps. The loop's pointers share the one index.
+//! bits to a base (`Machine::index_register_bits`), the sum is cheaper kept in
+//! two parts: an index `i` that steps by `c`, and a base that moves by `2^n`
+//! where the index wraps. The loop's pointers share the one index.
 //!
 //! The pass rewrites the loops of one latch and one way in whose pointers are
 //! used only as the address of a byte load or store (or of a constant offset
@@ -43,7 +43,7 @@
 //!
 //! # Runs
 //! In a target's driver, after the mid-end, for a target whose
-//! `Tti::index_register_bits` is set: the width of the index its indexed
+//! `Machine::index_register_bits` is set: the width of the index its indexed
 //! addressing adds to a base (8 for `lda (base),y`).
 
 use llrm_analysis::cfg::{self, loops_of};
