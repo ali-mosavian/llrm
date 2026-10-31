@@ -46,6 +46,8 @@ use crate::regalloc::{Assignment, Target, successors};
 
 /// The name of a copy: `COPY dst, src`.
 const COPY: &str = "COPY";
+/// A flag-setting instruction and the one that reads its flags, as one.
+const BUNDLE: &str = "BUNDLE";
 
 /// A converted function and what greedy asks of the target around it.
 pub struct Converted<T: Target> {
@@ -156,10 +158,28 @@ pub fn to_lir<T: Target>(
         let mut insns = Vec::with_capacity(block.insts.len());
         // DEVIATE 2b: greedy is not given a block no path reaches (LLVM
         // removes them first); `from_lir` returns it as it was.
-        for (position, inst) in block.insts.iter().enumerate().filter(|_| reachable[at]) {
+        let mut position = 0;
+        while reachable[at] && position < block.insts.len() {
+            let inst = &block.insts[position];
             let ordinal = made.origin.len() as i64;
             made.origin.push((at, position));
-            insns.push(Arc::new(made.insn(inst, 2 * ordinal)));
+            // A copy, spill or reload overwrites the flags a compare set, and
+            // greedy puts them where a value is read: the compare and the
+            // instruction that reads its flags are one instruction to it.
+            let reader = block.insts.get(position + 1).filter(|next| {
+                inst.sets_flags && !inst.terminator && !inst.call && next.reads_flags && T::reads_flags_set_just_before(next)
+            });
+            match reader {
+                Some(next) if made.independent(inst, next) => {
+                    made.origin.push((at, position + 1));
+                    insns.push(Arc::new(made.bundle(inst, next, 2 * ordinal)));
+                    position += 2;
+                }
+                _ => {
+                    insns.push(Arc::new(made.insn(inst, 2 * ordinal)));
+                    position += 1;
+                }
+            }
         }
         let mut lir = LirBlock::new(at as i64, insns);
         if reachable[at] {
@@ -241,6 +261,59 @@ impl<T: Target> Made<'_, T> {
                 },
             );
         (value, self.registers.bytes(register).map_or(1, |bytes| bytes as u32))
+    }
+
+    /// Whether `next` reads no virtual register `first` sets: one instruction
+    /// cannot read what it also defines. A physical register it reads from
+    /// `first` (the flags) is passed inside the bundle.
+    fn independent(
+        &self,
+        first: &Inst,
+        next: &Inst,
+    ) -> bool {
+        !first.operands.iter().any(|set| {
+            matches!(set, Operand::Def(register @ Reg::Virt(_)) if next.operands.iter().any(|read| *read == Operand::Use(*register)))
+        })
+    }
+
+    /// `first` and `next` as one instruction: the operands of the two, in
+    /// order, which [`from_lir`] takes apart again.
+    fn bundle(
+        &mut self,
+        first: &Inst,
+        next: &Inst,
+        at: i64,
+    ) -> Insn {
+        let (one, two) = (self.insn(first, at), self.insn(next, at + 2));
+        let (a, b) = (one.what.as_ref().expect("converted"), two.what.as_ref().expect("converted"));
+        let what = Semantics {
+            name: Some(BUNDLE.into()),
+            dests: a.dests.iter().chain(&b.dests).cloned().collect(),
+            sources: a.sources.iter().chain(&b.sources).cloned().collect(),
+            target: b.target,
+            ..Semantics::new(b.op)
+        };
+        let join = |x: &[u32], y: &[u32]| {
+            let mut all = x.to_vec();
+            for value in y {
+                if !all.contains(value) {
+                    all.push(*value);
+                }
+            }
+            all
+        };
+        // what `next` reads of what `first` sets is read inside the bundle
+        let inside = |value: &u32| one.defines.contains(value);
+        let reads: Vec<u32> = two.uses.iter().copied().filter(|value| !inside(value)).collect();
+        let mut insn =
+            Insn::new(at, Some((at, at + 3)), Some(what), join(&one.defines, &two.defines), join(&one.uses, &reads));
+        insn.requires =
+            one.requires.iter().chain(two.requires.iter().filter(|(held, _)| !inside(&held.value))).cloned().collect();
+        insn.delivers = one.delivers.iter().chain(&two.delivers).cloned().collect();
+        insn.clobbers = one.clobbers.union(&two.clobbers).copied().collect();
+        insn.symbol = if one.symbol == Some(true) || two.symbol == Some(true) { Some(true) } else { None };
+        insn.volatile = one.volatile || two.volatile;
+        insn
     }
 
     fn insn(
@@ -721,6 +794,47 @@ fn entry_live<T: Target>(
     names.iter().enumerate().filter(|(n, _)| live_in[0][n / 64] >> (n % 64) & 1 == 1).map(|(_, r)| *r).collect()
 }
 
+/// `source` with the registers greedy chose: its definitions take the
+/// destinations in order, its reads the sources.
+fn substitute<'a, T: Target>(
+    source: &Inst,
+    dests: &mut impl Iterator<Item = &'a Loc>,
+    sources: &mut impl Iterator<Item = &'a Loc>,
+    number: &mut dyn FnMut(u32) -> Reg,
+) -> Result<Inst, String> {
+    let mut made = source.clone();
+    for operand in &mut made.operands {
+        *operand = match operand.clone() {
+            Operand::Def(Reg::Virt(_)) => match dests.next() {
+                Some(Loc::Held(held)) => Operand::Def(number(held.value)),
+                _ => return Err("a definition that is not a register".into()),
+            },
+            Operand::Def(Reg::Phys(r)) => {
+                if !T::reserved(T::root(r)) {
+                    dests.next();
+                }
+                Operand::Def(Reg::Phys(r))
+            }
+            Operand::Use(Reg::Virt(_)) => match sources.next() {
+                Some(Loc::Held(held)) => Operand::Use(number(held.value)),
+                _ => return Err("a use that is not a register".into()),
+            },
+            Operand::Use(Reg::Phys(r)) => {
+                if !T::reserved(T::root(r)) {
+                    sources.next();
+                }
+                Operand::Use(Reg::Phys(r))
+            }
+            one @ (Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_)) => {
+                sources.next();
+                one
+            }
+            other => other,
+        };
+    }
+    Ok(made)
+}
+
 /// What greedy's edited function is as a machine function again.
 pub struct Rewritten<C> {
     pub function: MFunction<C>,
@@ -820,6 +934,17 @@ pub fn from_lir<T: Target>(
                 }
                 continue;
             }
+            if what.name.as_deref() == Some(BUNDLE) {
+                let (mut dests, mut sources) = (what.dests.iter(), what.sources.iter());
+                for ordinal in [(insn.at / 2) as usize, (insn.at / 2) as usize + 1] {
+                    let (from, inst) = *converted.origin.get(ordinal).ok_or("a bundle from nowhere")?;
+                    let source = &original.blocks[from].insts[inst];
+                    insts.push(substitute::<T>(source, &mut dests, &mut sources, &mut |value| {
+                        number(value, &mut classes)
+                    })?);
+                }
+                continue;
+            }
             let (mut from, mut inst) =
                 *converted.origin.get((insn.at / 2) as usize).ok_or("an instruction from nowhere")?;
             let name = what.name.as_deref();
@@ -848,37 +973,7 @@ pub fn from_lir<T: Target>(
                 continue;
             }
             let (mut dests, mut sources) = (what.dests.iter(), what.sources.iter());
-            let mut made = source.clone();
-            for operand in &mut made.operands {
-                *operand = match operand.clone() {
-                    Operand::Def(Reg::Virt(_)) => match dests.next() {
-                        Some(Loc::Held(held)) => Operand::Def(number(held.value, &mut classes)),
-                        _ => return Err("a definition that is not a register".into()),
-                    },
-                    Operand::Def(Reg::Phys(r)) => {
-                        if !T::reserved(T::root(r)) {
-                            dests.next();
-                        }
-                        Operand::Def(Reg::Phys(r))
-                    }
-                    Operand::Use(Reg::Virt(_)) => match sources.next() {
-                        Some(Loc::Held(held)) => Operand::Use(number(held.value, &mut classes)),
-                        _ => return Err("a use that is not a register".into()),
-                    },
-                    Operand::Use(Reg::Phys(r)) => {
-                        if !T::reserved(T::root(r)) {
-                            sources.next();
-                        }
-                        Operand::Use(Reg::Phys(r))
-                    }
-                    one @ (Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_)) => {
-                        sources.next();
-                        one
-                    }
-                    other => other,
-                };
-            }
-            insts.push(made);
+            insts.push(substitute::<T>(source, &mut dests, &mut sources, &mut |value| number(value, &mut classes))?);
         }
         blocks.push(Block { id: original.blocks[at].id, insts, phis: Vec::new() });
     }

@@ -938,3 +938,90 @@ fn every_read_is_set(function: &MFunction<()>) -> Result<(), String> {
         None => Ok(()),
     }
 }
+
+/// A target whose copies, spills and reloads overwrite the status flags (the
+/// 6502's `lda`), and which says so: a compare and the instruction that reads
+/// its flags are one instruction to greedy.
+struct Flags;
+
+impl Target for Flags {
+    type Class = ();
+
+    fn meet(
+        _: (),
+        _: (),
+    ) -> Option<()> {
+        Some(())
+    }
+    fn any() {}
+    fn candidates(_: ()) -> Vec<RegId> {
+        REGISTERS.to_vec()
+    }
+    fn view(
+        root: RegId,
+        _: (),
+    ) -> RegId {
+        root
+    }
+    fn root(register: RegId) -> RegId {
+        register
+    }
+    fn reserved(root: RegId) -> bool {
+        root == RegId::ESP
+    }
+    fn caller_saved() -> Vec<RegId> {
+        REGISTERS.to_vec()
+    }
+    fn reads_flags_set_just_before(inst: &Inst) -> bool {
+        inst.reads_flags
+    }
+    fn spill_store(
+        _: (),
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(Inst::new(Kind::Op("st"), vec![Operand::Frame(slot), Operand::Use(register)]))
+    }
+    fn spill_load(
+        _: (),
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(Inst::new(Kind::Op("ld"), vec![Operand::Def(register), Operand::Frame(slot)]))
+    }
+}
+
+/// A reload for the instruction that reads the flags of a compare stood
+/// between the two, and overwrote the flags: a conditional move took the wrong
+/// side (differential seed 212, `RELOAD` between a `CMP` and its `CMOV`).
+#[test]
+fn test_nothing_stands_between_a_compare_and_the_instruction_that_reads_its_flags() {
+    let mut f = MFunction::<()>::new("flags");
+    f.classes = vec![(); 6];
+    let mut entry = Block { id: 0, ..Block::default() };
+    for n in 0..4 {
+        entry.insts.push(op("load", vec![Operand::Def(v(n))]));
+    }
+    entry.insts.push(call());
+    let mut compare = op("cmp", vec![Operand::Use(v(0))]);
+    compare.sets_flags = true;
+    entry.insts.push(compare);
+    let mut select = op("cmov", vec![Operand::Def(v(4)), Operand::Use(v(1)), Operand::Use(v(2))]);
+    select.reads_flags = true;
+    entry.insts.push(select);
+    entry.insts.push(op("add", vec![Operand::Def(v(5)), Operand::Use(v(4)), Operand::Use(v(3))]));
+    entry.insts.push(op("store", vec![Operand::Use(v(5))]));
+    entry.insts.push(ret());
+    f.blocks = vec![entry];
+    let f = lowered(f);
+    let mut converted = to_lir::<Flags>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(&f);
+    let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
+    let back = from_lir::<Flags>(&f, &converted, &decided, regs()).expect("writes back");
+    let insts = &back.function.blocks[0].insts;
+    let read = insts.iter().position(|i| i.reads_flags).unwrap();
+    assert!(insts[read - 1].sets_flags, "{insts:?}");
+    converted.coalesce(regs(), false);
+}

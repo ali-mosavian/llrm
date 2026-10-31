@@ -70,6 +70,13 @@ pub trait Target {
         false
     }
 
+    /// Whether `inst` reads the status flags set by the instruction before
+    /// it, where a copy, spill or reload overwrites them: the two are one
+    /// instruction to the allocator, which puts nothing between them.
+    fn reads_flags_set_just_before(_inst: &Inst) -> bool {
+        false
+    }
+
     /// Registers the code of a spill or a reload overwrites (the 6502's
     /// stack-mode spill goes through `y`): greedy writes spills after it has
     /// chosen registers, so no value may be held in one.

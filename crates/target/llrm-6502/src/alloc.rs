@@ -201,6 +201,10 @@ impl<const STACK: bool> Target for Mos<STACK> {
     }
 
     /// In stack mode a spill is `ldy #offset; sta (rc0),y`: it overwrites `y`.
+    fn reads_flags_set_just_before(inst: &Inst) -> bool {
+        inst.reads_flags && (inst.terminator || inst.kind == Kind::Op("CMOV"))
+    }
+
     fn moves_lanes(inst: &Inst) -> bool {
         matches!(inst.kind, Kind::Op("PACK" | "UNPACK"))
     }
@@ -2819,7 +2823,7 @@ fn allocate<const STACK: bool>(
     if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
         for (at, block) in function.blocks.iter().enumerate() {
             for (i, inst) in block.insts.iter().enumerate() {
-                eprintln!("in bb{at}.{i}: {:?} {:?}", inst.kind, inst.operands);
+                eprintln!("in bb{at}.{i}: {:?} {:?}{}{}", inst.kind, inst.operands, if inst.sets_flags { " SF" } else { "" }, if inst.reads_flags { " RF" } else { "" });
             }
         }
     }
@@ -2854,7 +2858,7 @@ fn allocate_greedy<T: Target<Class = Class>>(
     if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
         for (at, block) in function.blocks.iter().enumerate() {
             for (i, inst) in block.insts.iter().enumerate() {
-                eprintln!("bb{at}.{i}: {:?} {:?}", inst.kind, inst.operands);
+                eprintln!("bb{at}.{i}: {:?} {:?}{}{}", inst.kind, inst.operands, if inst.sets_flags { " SF" } else { "" }, if inst.reads_flags { " RF" } else { "" });
             }
         }
     }
