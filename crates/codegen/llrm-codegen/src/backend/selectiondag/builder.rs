@@ -660,7 +660,8 @@ struct Builder<'a> {
     /// The call being lowered has an argument whose attribute moves it
     /// (`relocating_attribute`).
     call_attrs_move_arguments: bool,
-    /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks for.
+    /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
+    /// for.
     call_result_assert: Option<ISD>,
     /// The parameters the callee declares: the arguments after them are
     /// variadic.
@@ -1635,7 +1636,8 @@ impl Builder<'_> {
             if self.dag.value_type(*one) == vt {
                 return *one;
             }
-            // `getCopyFromParts` with the `AssertOp` of `LowerArguments`/`LowerCallTo`
+            // `getCopyFromParts` with the `AssertOp` of
+            // `LowerArguments`/`LowerCallTo`
             let one = match assert {
                 Some(code) => {
                     let narrow = self.dag.get_value_type_node(vt);
