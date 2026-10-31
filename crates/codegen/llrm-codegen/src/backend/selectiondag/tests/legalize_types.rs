@@ -35,6 +35,24 @@ fn all_legal(
     TypeLegalizer::new(dag, tli).all_legal()
 }
 
+/// A promoted `i12` load read two bytes as a plain `i16` load, which wasm's
+/// `SetP2AlignOperands` asserted on (its alignment is the access size, 2 bytes
+/// of a 1-byte access). `PromoteIntRes_LOAD` makes it an any-extending load.
+#[test]
+fn a_promoted_load_is_an_any_extending_load() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = dag();
+    let i12 = EVT::Int(12);
+    let a = load(&mut dag, i12, 1);
+    let byte = dag.get_node(ISD::Truncate, EVT::I8, &[a]);
+    dag.set_root(byte);
+    assert_eq!(legalize(&mut dag, &tli), Ok(true));
+    let wide = dag.operand(dag.get_root(), 0);
+    assert_eq!((dag.opcode(wide), dag.value_type(wide)), (ISD::Load, EVT::I16));
+    let NodeData::Mem(info) = dag.node(wide).data else { panic!("mem") };
+    assert_eq!(info.ext, Some(crate::backend::selectiondag::actions::LoadExt::ExtLoad));
+}
+
 /// `trunc(load i12 + load i12)` to a byte: before legalization the root
 /// reads an `i12`, which no register holds. After it the add is an `i16`
 /// add of extending loads, and the root is rewritten to read it.
