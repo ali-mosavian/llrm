@@ -265,6 +265,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
                     simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
                     for_size: false,
                     flag: true,
+                    inlining: true,
                 };
                 late.apply(program, &mut modules)
             },
@@ -1682,13 +1683,23 @@ fn calls_of_tree(
     extra: usize,
     pin: bool,
 ) -> usize {
+    calls_of_tree_with(extra, pin, crate::inline::Threshold::default())
+}
+
+fn calls_of_tree_with(
+    extra: usize,
+    pin: bool,
+    inline: crate::inline::Threshold,
+) -> usize {
     let mut module = parsed(&tree_recursion(extra));
     let target = if pin { llrm_x86_m16::Dos::pin_tuned() } else { llrm_x86_m16::Dos::default() };
     llrm_mir::program::Program::lend(
         &mut module,
         std::rc::Rc::new(target),
         |program: &mut llrm_mir::program::Program| {
-            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+            let mut applied = crate::pipeline::Applied::default();
+            applied.options.inline = inline;
+            crate::pipeline::applied(program, &applied)
         },
     )
     .and_then(|done| done)
@@ -1714,4 +1725,15 @@ fn test_the_real_mode_target_copies_a_small_tree_recursion_by_default() {
 #[test]
 fn test_the_real_mode_target_does_not_copy_a_large_tree_recursion() {
     assert!(calls_of_tree(10, false) <= 3, "a large body was copied into itself: {} calls", calls_of_tree(10, false));
+}
+
+/// bench frames and fib (nib, `-fno-inline-functions`) at m16 -O2 grew from 186
+/// and 63 bytes to 336 and 155 with the copies, which main (no copy of a
+/// recursive body) never made: with inlining off the target's default copies
+/// nothing.
+#[test]
+fn test_the_real_mode_target_copies_no_recursion_with_inlining_off() {
+    let off = crate::inline::Threshold::new(0);
+    assert!(calls_of_tree_with(0, false, off) <= 3, "copies with inlining off: {}", calls_of_tree_with(0, false, off));
+    assert!(calls_of_tree_with(0, false, crate::inline::Threshold::new(225)) > 3, "control: the copies with it on");
 }

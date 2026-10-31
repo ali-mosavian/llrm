@@ -1112,6 +1112,7 @@ pub fn recorded(
                 TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             }),
             for_size: applied.options.prefers_size(),
+            inlining: applied.options.inline.limit != 0,
             flag: applied.options.inline.recursive,
         }
     });

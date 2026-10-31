@@ -183,8 +183,9 @@ pub struct Walk {
 /// DEVIATE REC-1: the recursion a program is given. `-finline-recursive` asks
 /// for gcc's (copies of a function in itself to depth 3, any size); a target
 /// that states bounds (`Tti::recursive_inlining`) takes those by default when
-/// optimizing for speed. None: the pin's inliner, which copies no recursive
-/// callee (`IsRecursiveCall`).
+/// optimizing for speed and inlining is on (`-fno-inline-functions` asks for
+/// no copies of a body, a recursive one included). None: the pin's inliner,
+/// which copies no recursive callee (`IsRecursiveCall`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Recursion {
     pub depth: usize,
@@ -195,10 +196,11 @@ impl Recursion {
     pub fn of(
         flag: bool,
         single: bool,
+        inlining: bool,
         tti: Option<&dyn llrm_mir::tti::Tti>,
     ) -> Option<Self> {
         match tti.and_then(|tti| tti.recursive_inlining()) {
-            Some((depth, callee)) if !single => Some(Self { depth: depth as usize, callee }),
+            Some((depth, callee)) if !single && inlining => Some(Self { depth: depth as usize, callee }),
             _ => flag.then_some(Self { depth: crate::inline::MAX_INLINE_RECURSIVE_DEPTH, callee: i64::MAX }),
         }
     }
@@ -216,7 +218,12 @@ impl ProgramPass for Walk {
     ) -> Result<(), String> {
         let mut modules = managers(program, analyses);
         let roots = roots(program);
-        let recursion = Recursion::of(self.inline.recursive, self.inline.single, program.target.tti().as_deref());
+        let recursion = Recursion::of(
+            self.inline.recursive,
+            self.inline.single,
+            self.inline.limit != 0,
+            program.target.tti().as_deref(),
+        );
         let mut params = crate::inlinecost::InlineParams {
             allow_recursive_call: recursion.is_some(),
             recursive_callee_limit: recursion.map_or(i64::MAX, |one| one.callee),
@@ -584,6 +591,8 @@ pub struct SelfInline {
     pub for_size: bool,
     /// `-finline-recursive`.
     pub flag: bool,
+    /// Inlining is on (`Threshold.limit != 0`).
+    pub inlining: bool,
 }
 
 impl SelfInline {
@@ -604,7 +613,8 @@ impl SelfInline {
                     ),
                 )
         };
-        let Some(recursion) = Recursion::of(self.flag, self.for_size, program.target.tti().as_deref()) else {
+        let Some(recursion) = Recursion::of(self.flag, self.for_size, self.inlining, program.target.tti().as_deref())
+        else {
             return Ok(());
         };
         for at in 0..program.modules.len() {
