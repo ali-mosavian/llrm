@@ -139,8 +139,9 @@ pub fn classes(
 /// instructions that name it, which a value made from another by the spiller or
 /// a split does not inherit. None where its instructions confine it to nothing.
 ///
-/// DEVIATE CF-1: the m16 `[base+index]` pairs colour base {BX} and index
-/// {SI,DI}; the pin has no such model. A pair member keeps its side.
+/// A `[base+index]` pair member keeps its side: the bases and indexes are the
+/// target's (`RegisterClasses::word_bases`, `word_indexes`: m16's {BX} and
+/// {SI,DI}), a fact of the encoding, not a deviation.
 /// DEVIATE CF-4: the answer comes from `classes` over the whole body, so a call
 /// costs a body; a caller that makes many values asks `classes` once.
 ///
