@@ -421,6 +421,12 @@ fn translate_cc(
                 return cond::NS;
             }
             CondCode::SetLt if bits == 0 => return cond::S,
+            // DEVIATE SD447: the pin reaches this by canonicalizing `x <= -1`
+            // to `x < 0` (`canonicalize_ge_le`, off for x86). Exit: that hook.
+            CondCode::SetLe if all_ones => {
+                *rhs = dag.get_constant(0, vt);
+                return cond::S;
+            }
             CondCode::SetGe if bits == 0 => return cond::NS,
             CondCode::SetLt if bits == 1 => {
                 *rhs = dag.get_constant(0, vt);
