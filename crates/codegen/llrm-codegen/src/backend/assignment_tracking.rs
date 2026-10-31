@@ -34,7 +34,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
-use llrm_mir::{DwOp, InstId, MetadataId, Module, Operand};
+use llrm_mir::{DebugRecord, DwOp, InstId, MetadataId, Module, Operand};
 
 /// A number of a variable in [`FunctionVarLocs::variables`]; 0 is reserved
 /// (`VariableID::Reserved`), as the pin's table is one-based.
@@ -68,6 +68,216 @@ pub struct VarLocInfo {
     pub location: Option<MetadataId>,
     /// The values the expression reads; none for a location nothing says.
     pub values: Vec<Operand>,
+}
+
+/// The kind of location in use for a variable: `Mem` is the stack home, `Val`
+/// an SSA value or constant, and `None` that there is not one single kind
+/// (several, or none). A join-semilattice, `None > Mem, Val`: the join of two
+/// different kinds is `None` (`LocKind`, `joinKind`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocKind {
+    Mem,
+    Val,
+    None,
+}
+
+impl LocKind {
+    pub fn join(
+        self,
+        other: LocKind,
+    ) -> LocKind {
+        if self == other { self } else { LocKind::None }
+    }
+}
+
+/// The assignment of a value to a variable or to memory, named by its
+/// `!DIAssignID` (`Assignment`). `NoneOrPhi` is the join of two different
+/// ones, or none known; `Known` has an id. A join-semilattice,
+/// `NoneOrPhi > Known(id)`.
+#[derive(Clone, Copy, Debug)]
+pub enum Assignment {
+    Known {
+        id: MetadataId,
+        /// The `#dbg_assign` that marks this definition; none for a memory
+        /// definition, which has no use for it.
+        source: Option<DebugRecord>,
+    },
+    NoneOrPhi,
+}
+
+impl Assignment {
+    /// Assignments are defined by their id, not by the records that name it
+    /// (`isSameSourceAssignment`).
+    pub fn is_same_source_assignment(
+        &self,
+        other: &Assignment,
+    ) -> bool {
+        match (self, other) {
+            (Assignment::Known { id: a, .. }, Assignment::Known { id: b, .. }) => a == b,
+            (Assignment::NoneOrPhi, Assignment::NoneOrPhi) => true,
+            _ => false,
+        }
+    }
+
+    /// `joinAssignment`: two different assignments, or an unknown one, join
+    /// to `NoneOrPhi`. Where the same one comes from two records, the record
+    /// is kept only if they are equivalent: there is no telling which of two
+    /// constants to take.
+    pub fn join(
+        &self,
+        other: &Assignment,
+    ) -> Assignment {
+        match (self, other) {
+            (Assignment::Known { id, source: a }, Assignment::Known { id: other_id, source: b }) if id == other_id => {
+                let source = match (a, b) {
+                    (Some(a), Some(b)) if records_equivalent(a, b) => Some(*a),
+                    _ => None,
+                };
+                Assignment::Known { id: *id, source }
+            }
+            _ => Assignment::NoneOrPhi,
+        }
+    }
+}
+
+/// `DbgVariableRecord::isEquivalentTo`: the same statement, wherever it stands.
+fn records_equivalent(
+    a: &DebugRecord,
+    b: &DebugRecord,
+) -> bool {
+    (a.variable, a.what, a.expression, a.location) == (b.variable, b.what, b.expression, b.location)
+}
+
+/// What is known at a point of the function about the variables it has
+/// seen (`BlockInfo`): per variable the assignment last made to its stack
+/// home, the one last made to its debug value, and which of the two is live.
+#[derive(Clone, Debug, Default)]
+pub struct BlockInfo {
+    tracked: Vec<bool>,
+    stack_home: Vec<Assignment>,
+    debug_value: Vec<Assignment>,
+    live: Vec<LocKind>,
+}
+
+/// Which map of a [`BlockInfo`] (`AssignmentKind`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssignmentKind {
+    Stack,
+    Debug,
+}
+
+impl BlockInfo {
+    /// A block that tracks nothing, with room for `variables` variables
+    /// (`init`); index 0 is the reserved variable.
+    pub fn new(variables: usize) -> BlockInfo {
+        BlockInfo {
+            tracked: vec![false; variables],
+            stack_home: vec![Assignment::NoneOrPhi; variables],
+            debug_value: vec![Assignment::NoneOrPhi; variables],
+            live: vec![LocKind::None; variables],
+        }
+    }
+
+    fn map(
+        &self,
+        kind: AssignmentKind,
+    ) -> &[Assignment] {
+        match kind {
+            AssignmentKind::Stack => &self.stack_home,
+            AssignmentKind::Debug => &self.debug_value,
+        }
+    }
+
+    pub fn is_variable_tracked(
+        &self,
+        variable: VariableId,
+    ) -> bool {
+        self.tracked[variable.0 as usize]
+    }
+
+    pub fn assignment(
+        &self,
+        kind: AssignmentKind,
+        variable: VariableId,
+    ) -> &Assignment {
+        assert!(self.is_variable_tracked(variable), "the variable is not tracked in this block");
+        &self.map(kind)[variable.0 as usize]
+    }
+
+    pub fn loc_kind(
+        &self,
+        variable: VariableId,
+    ) -> LocKind {
+        assert!(self.is_variable_tracked(variable), "the variable is not tracked in this block");
+        self.live[variable.0 as usize]
+    }
+
+    pub fn set_loc_kind(
+        &mut self,
+        variable: VariableId,
+        kind: LocKind,
+    ) {
+        self.tracked[variable.0 as usize] = true;
+        self.live[variable.0 as usize] = kind;
+    }
+
+    pub fn set_assignment(
+        &mut self,
+        kind: AssignmentKind,
+        variable: VariableId,
+        assignment: Assignment,
+    ) {
+        self.tracked[variable.0 as usize] = true;
+        match kind {
+            AssignmentKind::Stack => self.stack_home[variable.0 as usize] = assignment,
+            AssignmentKind::Debug => self.debug_value[variable.0 as usize] = assignment,
+        }
+    }
+
+    pub fn has_assignment(
+        &self,
+        kind: AssignmentKind,
+        variable: VariableId,
+        assignment: &Assignment,
+    ) -> bool {
+        self.is_variable_tracked(variable) && assignment.is_same_source_assignment(self.assignment(kind, variable))
+    }
+
+    /// `BlockInfo::join`: for a variable both track, the join of each of the
+    /// three; the tracked variables are those either tracks.
+    pub fn join(
+        a: &BlockInfo,
+        b: &BlockInfo,
+        variables: usize,
+    ) -> BlockInfo {
+        let mut join = BlockInfo::new(variables);
+        for variable in 0..variables {
+            if a.tracked[variable] && b.tracked[variable] {
+                join.live[variable] = a.live[variable].join(b.live[variable]);
+                join.debug_value[variable] = a.debug_value[variable].join(&b.debug_value[variable]);
+                join.stack_home[variable] = a.stack_home[variable].join(&b.stack_home[variable]);
+            }
+            join.tracked[variable] = a.tracked[variable] || b.tracked[variable];
+        }
+        join
+    }
+}
+
+/// Equal where the tracked variables, their live kinds and the assignments'
+/// ids are (`BlockInfo::operator==`): the records an assignment came from do
+/// not count.
+impl PartialEq for BlockInfo {
+    fn eq(
+        &self,
+        other: &BlockInfo,
+    ) -> bool {
+        self.tracked == other.tracked
+            && self.live == other.live
+            && (0..self.tracked.len()).filter(|&at| self.tracked[at]).all(|at| {
+                self.stack_home[at].is_same_source_assignment(&other.stack_home[at])
+                    && self.debug_value[at].is_same_source_assignment(&other.debug_value[at])
+            })
+    }
 }
 
 /// The result: the locations of one function (`FunctionVarLocs`).
@@ -259,6 +469,65 @@ mod tests {
 
     fn variable(node: u32) -> DebugVariable {
         DebugVariable { variable: MetadataId(node), fragment: None, inlined_at: None }
+    }
+
+    fn known(id: u32) -> Assignment {
+        Assignment::Known { id: MetadataId(id), source: None }
+    }
+
+    /// Different kinds of location join to `None`; equal ones to themselves.
+    #[test]
+    fn locations_of_two_kinds_join_to_none() {
+        use LocKind::*;
+        assert_eq!(
+            (Mem.join(Mem), Val.join(Val), Mem.join(Val), None.join(Mem), None.join(None)),
+            (Mem, Val, None, None, None)
+        );
+    }
+
+    /// Two paths that made the same assignment keep it; different ones, or an
+    /// unknown one, make a phi.
+    #[test]
+    fn assignments_join_to_the_same_one_or_a_phi() {
+        assert!(known(1).join(&known(1)).is_same_source_assignment(&known(1)));
+        assert!(known(1).join(&known(2)).is_same_source_assignment(&Assignment::NoneOrPhi));
+        assert!(known(1).join(&Assignment::NoneOrPhi).is_same_source_assignment(&Assignment::NoneOrPhi));
+        assert!(Assignment::NoneOrPhi.join(&Assignment::NoneOrPhi).is_same_source_assignment(&Assignment::NoneOrPhi));
+    }
+
+    /// A variable only one path tracked stays as that path had it; one both
+    /// track is joined.
+    #[test]
+    fn a_join_tracks_what_either_path_does_and_joins_what_both_do() {
+        let (x, y) = (VariableId(1), VariableId(2));
+        let mut a = BlockInfo::new(3);
+        let mut b = BlockInfo::new(3);
+        a.set_loc_kind(x, LocKind::Mem);
+        a.set_assignment(AssignmentKind::Stack, x, known(7));
+        b.set_loc_kind(x, LocKind::Val);
+        b.set_assignment(AssignmentKind::Stack, x, known(7));
+        a.set_loc_kind(y, LocKind::Val);
+        let join = BlockInfo::join(&a, &b, 3);
+        assert_eq!(join.loc_kind(x), LocKind::None, "Mem and Val");
+        assert!(join.has_assignment(AssignmentKind::Stack, x, &known(7)), "the same assignment on both");
+        assert!(join.is_variable_tracked(y) && !join.is_variable_tracked(VariableId(0)));
+        assert_eq!(join.loc_kind(y), LocKind::None, "the join does not copy what only one path knew");
+    }
+
+    /// Two blocks are equal when their tracked variables are: what an
+    /// untracked slot holds does not count.
+    #[test]
+    fn block_infos_compare_on_the_variables_they_track() {
+        let x = VariableId(1);
+        let (mut a, mut b) = (BlockInfo::new(2), BlockInfo::new(2));
+        assert_eq!(a, b);
+        a.set_loc_kind(x, LocKind::Mem);
+        assert_ne!(a, b);
+        b.set_loc_kind(x, LocKind::Mem);
+        assert_eq!(a, b);
+        a.set_assignment(AssignmentKind::Debug, x, known(1));
+        b.set_assignment(AssignmentKind::Debug, x, known(2));
+        assert_ne!(a, b);
     }
 
     /// A variable has one id however often it is asked for, and the ids start
