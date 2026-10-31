@@ -442,6 +442,10 @@ fn corpus(dir: &Path) -> bool {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // without `$GCC_M68K` the host's gcc is the only reference: say so
+    if std::env::var_os("GCC_M68K").is_none_or(|root| !Path::new(&root).join("usr/bin/m68k-linux-gnu-gcc").exists()) {
+        eprintln!("difftest: no m68k gcc under $GCC_M68K; the reference is the host's gcc -m32 alone");
+    }
     if let Some(dir) = args.get(1).map(Path::new).filter(|path| path.is_dir()) {
         std::process::exit(i32::from(!corpus(dir)));
     }

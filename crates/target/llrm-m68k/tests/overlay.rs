@@ -470,20 +470,16 @@ fn a_step_after_a_label_entered_from_outside_the_span_stays() {
 
 /// `p[i + 1]` through `(d8,An,Xn)`: the base class's `isLegalAddressingMode`
 /// refuses a base, an index and a displacement together, the hardware does
-/// not. The description of the pin's output keeps the refusal; the overlay's
-/// takes the byte displacement, and only that range.
+/// not. The pin's M68k overrides no hook, so the refusal stays; a byte
+/// displacement priced legal was a deviation (`M68k::indexed_displacement`).
 #[test]
-fn the_indexed_displacement_is_priced_only_in_the_overlay_description() {
+fn a_base_an_index_and_a_displacement_are_refused_as_the_pin_does() {
     use llrm_m68k::machine::M68k;
     use llrm_mir::tti::Tti;
-    let pinned = M68k::default();
-    let ours = M68k { indexed_displacement: true, ..M68k::default() };
-    assert!(!pinned.is_legal_addressing_mode(false, 1, true, 1));
-    assert!(ours.is_legal_addressing_mode(false, 1, true, 1));
-    assert!(ours.is_legal_addressing_mode(false, -128, true, 1) && ours.is_legal_addressing_mode(false, 127, true, 1));
-    assert!(
-        !ours.is_legal_addressing_mode(false, 128, true, 1) && !ours.is_legal_addressing_mode(false, -129, true, 1)
-    );
+    let tti = M68k::default();
+    assert!(!tti.is_legal_addressing_mode(false, 1, true, 1));
+    assert!(!tti.is_legal_addressing_mode(false, -128, true, 1) && !tti.is_legal_addressing_mode(false, 127, true, 1));
+    assert!(tti.is_legal_addressing_mode(false, 0, true, 1));
 }
 
 fn counted_sum() -> &'static str {
@@ -595,20 +591,6 @@ fn a_compare_of_memory_with_zero_is_a_tst() {
 /// The loop strength reduction priced `(d8, An, Xn)` with a displacement as
 /// illegal, as the pin's base class does, so strlen's counter was fixed up
 /// after the loop (`subq.l #1`) and the test read `(0,%a0,%d1)` from a copy.
-/// With the byte displacement priced the fix-up folds into the address.
-#[test]
-fn an_index_with_a_byte_displacement_is_priced_legal_for_the_loop_pass() {
-    let ir = "define i32 @f(ptr %p) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %q = getelementptr i8, ptr %p, i32 %i\n  %v = load i8, ptr %q\n  %z = icmp eq i8 %v, 0\n  %i1 = add i32 %i, 1\n  br i1 %z, label %x, label %l\nx:\n  ret i32 %i\n}";
-    let ours = compiled(ir, Options::default());
-    assert!(!ours.contains("subq.l\t#1"), "{ours}");
-    let pinned_pricing = {
-        let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).unwrap();
-        let reduced = llrm_m68k::compile::mid_end_described_by(&module, &llrm_m68k::machine::M68k::default(), None);
-        llrm_mir::print::module(&reduced.unwrap())
-    };
-    assert!(pinned_pricing.contains("add i32") && pinned_pricing.contains("-1"), "{pinned_pricing}");
-}
-
 /// A byte copy walked two pointers by one shared index register and a `move.b
 /// (%a0,%d1), (%a1,%d1)`, 46 bytes; the loop is `move.b (%a0)+, (%a2)+` with
 /// neither pointer stepped apart (once the text printed `(%a2)+` while the
@@ -679,12 +661,7 @@ fn a_pointer_stepped_before_the_compare_that_reads_it_is_post_incremented() {
 fn after_mid_end(ir: &str) -> String {
     use std::rc::Rc;
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    let tti = llrm_m68k::machine::M68k {
-        indexed_displacement: true,
-        post_indexed: true,
-        exit_ne: true,
-        ..Default::default()
-    };
+    let tti = llrm_m68k::machine::M68k { post_indexed: true, exit_ne: true, ..Default::default() };
     let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine)))
         .expect("the mid-end runs");
     llrm_mir::print::module(&done)
@@ -786,7 +763,7 @@ fn a_down_counter_tested_above_its_floor_is_counted_to_zero() {
 fn the_strict_compare_stays_where_the_target_does_not_prefer_exit_ne() {
     use std::rc::Rc;
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{MEMCPY}")).expect("parses");
-    let tti = llrm_m68k::machine::M68k { indexed_displacement: true, post_indexed: true, ..Default::default() };
+    let tti = llrm_m68k::machine::M68k { post_indexed: true, ..Default::default() };
     let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine)))
         .expect("the mid-end runs");
     let done = llrm_mir::print::module(&done);

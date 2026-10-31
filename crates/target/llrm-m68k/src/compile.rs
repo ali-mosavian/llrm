@@ -78,12 +78,7 @@ pub fn items_with(
     let module = if options.mid_end {
         optimized = mid_end_described_by(
             module,
-            &M68k {
-                indexed_displacement: options.overlay,
-                post_indexed: options.overlay && !options.size,
-                exit_ne: options.overlay,
-                ..M68k::default()
-            },
+            &M68k { post_indexed: options.overlay && !options.size, exit_ne: options.overlay, ..M68k::default() },
             Some(Rc::new(M68kMachine)),
         )?;
         &optimized
@@ -123,7 +118,6 @@ pub fn items_with(
     if options.overlay {
         fold_argument_loads(&mut function, wants_size, crate::memoperand::M68K);
         crate::overlay::widen_compare_operands(&mut function);
-        crate::address::reassociate_indexed_displacement(&mut function);
     }
     two_address(&mut function);
     // spill slots are numbered after the static allocas

@@ -74,18 +74,6 @@ impl Machine for M68kMachine {
 pub struct M68k {
     /// The 68020's scaled index, `(d8, An, Xn*2/4/8)`; the 68000 has none.
     pub scaled_index: bool,
-    /// `(d8, An, Xn)` takes a signed byte displacement beside base and index,
-    /// which the base class's `isLegalAddressingMode` does not allow.
-    ///
-    /// DEVIATE from the pin's M68k, which overrides no hook. Reason: the
-    /// hardware has the mode, and with it a loop's `p[i + 1]` needs no
-    /// address arithmetic. Evidence: the 68000 Programmer's Reference Manual,
-    /// "Address Register Indirect with Index (8-Bit Displacement) Mode"
-    /// (`EA = (An) + (Xn) + d8`, all 68k); binutils encodes `tst.b
-    /// 1(%a0,%d1.l)` as `4a30 1801`; the pin's own `CMP8fi` prints `(d,An,Xn)`.
-    /// `Options::PINNED` leaves it off. Exit: never; a target description, set
-    /// with the overlay.
-    pub indexed_displacement: bool,
     /// LSR favors a pointer stepped after each access, `(An)+`.
     ///
     /// DEVIATE from the pin's M68k, which has no `getPreferredAddressingMode`
@@ -128,10 +116,7 @@ impl Tti for M68k {
         }
         match scale {
             0 => true,
-            1 => {
-                !(has_base_reg && base_offset != 0)
-                    || (self.indexed_displacement && (-128..=127).contains(&base_offset))
-            }
+            1 => !(has_base_reg && base_offset != 0),
             2 if !self.scaled_index => !(has_base_reg || base_offset != 0),
             2 | 4 | 8 => self.scaled_index,
             _ => false,
