@@ -842,14 +842,7 @@ impl Builder<'_> {
                     // no `memcpy` to call for a copy the pin leaves to one
                     // (alignment under 4): dwords, as the old selector copies;
                     // x86 takes them unaligned
-                    (None, Intrinsic::MemCpy, Some(bytes))
-                        if strings_exist
-                            && !self.runtime_has("memcpy")
-                            // the tail of a far copy is made from the far
-                            // pointers moved on, which the string tail at size
-                            // is not
-                            && (opt_size || bytes % 4 == 0 || !(self.is_far(dst) || self.is_far(other))) =>
-                    {
+                    (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && !self.runtime_has("memcpy") => {
                         self.rep_movs(root, dst, other, bytes, 4, dst_align, src_align)?
                     }
                     _ if strings_exist && matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
@@ -1533,7 +1526,11 @@ impl Builder<'_> {
         // block are `movsw` and `movsb` glued after the move, not a load and a
         // store from addresses made again (the pin's tail): 1 byte each. The
         // old selector's tail. Owner w12. Exit: a cost hook on the target.
-        if self.has_opt_size() && self.string_instructions().is_some() {
+        // Far pointers take it at every level: the segment registers are set
+        // once for the move and the tail, where the pin's tail would
+        // make the far addresses again (a 14-byte far copy: `rep movsd`
+        // and `movsw`, not 14 `movsb`; w2).
+        if (self.has_opt_size() || self.is_far(dst) || self.is_far(src)) && self.string_instructions().is_some() {
             let mut last = rep;
             let mut rest = left;
             for width in [2u64, 1] {
