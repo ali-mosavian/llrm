@@ -217,6 +217,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-6502"
+version = "0.1.0"
+dependencies = [
+ "llrm-codegen",
+ "llrm-dagisel",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-spike-mf",
+ "llrm-target",
+ "llrm-transforms",
+ "toml",
+]
+
+[[package]]
 name = "llrm-alloc"
 version = "0.1.0"
 dependencies = [

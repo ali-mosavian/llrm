@@ -560,7 +560,7 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
-            call_attrs_move_arguments: false,
+            call_attrs_move_arguments: Vec::new(),
             fixed_args: 0,
             had_tail_call: false,
             volatile_memory: false,
@@ -604,7 +604,7 @@ struct Builder<'a> {
     variadic_call: bool,
     /// The call being lowered has an argument whose attribute moves it
     /// (`relocating_attribute`).
-    call_attrs_move_arguments: bool,
+    call_attrs_move_arguments: Vec<&'static str>,
     /// The parameters the callee declares: the arguments after them are
     /// variadic.
     fixed_args: usize,
@@ -1013,7 +1013,12 @@ impl Builder<'_> {
         outside: &llrm_support::hash::HashSet<ValueId>,
     ) -> Result<(), Refused> {
         let parameters = self.function.parameters().to_vec();
-        if self.function.parameter_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()) {
+        if self
+            .function
+            .parameter_attrs
+            .iter()
+            .any(|attrs| relocating_attribute(attrs).is_some_and(|name| !calling.places_attribute(name)))
+        {
             return Err(Refused("a parameter attribute that moves it, with a target's calling hook"));
         }
         let mut ins = Vec::new();
@@ -1403,7 +1408,8 @@ impl Builder<'_> {
         }
         self.variadic_call = variadic;
         self.fixed_args = named;
-        self.call_attrs_move_arguments = info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some());
+        self.call_attrs_move_arguments =
+            info.argument_attrs.iter().filter_map(|attrs| relocating_attribute(attrs)).collect();
         let result =
             self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
         if let (true, Some(answer)) = (flags_answer, result) {
@@ -1578,10 +1584,23 @@ impl Builder<'_> {
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let sibling = std::mem::take(&mut self.sibcall);
-        if sibling || flags_answer || byvals.iter().any(Option::is_some) {
+        if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference()) {
             return Err(Refused("tail call, flags answer or byval with a target's calling hook"));
         }
-        if std::mem::take(&mut self.call_attrs_move_arguments) {
+        // a `byval` argument is the address of a copy in this frame
+        let mut values = values.to_vec();
+        for (value, byval) in values.iter_mut().zip(byvals) {
+            let Some((size, align)) = *byval else { continue };
+            let index = self.info.new_stack_object(size as u32, align as u32);
+            let copy_to = self.dag.get_frame_index(self.target.dag.pointer, index);
+            let root = self.root();
+            let copy = self
+                .inline_memcpy(root, copy_to, *value, size, usize::MAX, align, align)?
+                .ok_or(Refused("byval copy"))?;
+            self.dag.set_root(copy);
+            *value = copy_to;
+        }
+        if std::mem::take(&mut self.call_attrs_move_arguments).iter().any(|name| !calling.places_attribute(name)) {
             return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
         }
         let mut outs = Vec::new();

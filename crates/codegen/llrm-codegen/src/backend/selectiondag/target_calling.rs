@@ -82,6 +82,25 @@ pub enum Site {
 }
 
 pub trait TargetCalling: Debug + Sync {
+    /// Whether the hook places an argument or parameter carrying the attribute
+    /// `name` (`sret`, `byval`, `inreg`..., see `relocating_attribute`)
+    /// where its type puts it; when it does not, a function or call with
+    /// one is refused.
+    fn places_attribute(
+        &self,
+        _name: &str,
+    ) -> bool {
+        false
+    }
+
+    /// Whether a `byval` argument is passed as the address of a copy the
+    /// caller makes in its own frame, the callee reading through the pointer.
+    /// A target that puts the bytes in the argument area says no, and a call
+    /// with one is refused.
+    fn byval_by_reference(&self) -> bool {
+        false
+    }
+
     /// Whether the target places these parts (`outs` the values sent, `ins` the
     /// values received); the builder refuses with the reason when it does not.
     fn accepts(
