@@ -1826,3 +1826,31 @@ fn test_the_real_mode_target_does_not_copy_a_recursion_whose_work_is_a_loop() {
         assert!(calls <= 3, "{work}: a recursion with a loop was copied into itself: {calls} calls");
     }
 }
+
+/// bench recchop at m16 -O2 ran 11310 clocks against 10242: the real-mode
+/// target deferred its tail-call elimination for copies the callee cap refuses,
+/// so the loop it makes was built late and its sum spilled. Only a body within
+/// the cap waits.
+#[test]
+fn test_a_recursion_the_cap_refuses_keeps_its_tail_call_elimination_slot() {
+    use llrm_mir::program::ProgramPass;
+    let marked = |work: &str| {
+        let mut module = parsed(&looped_recursion(work));
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut walk = crate::walk::Walk {
+                    inline: crate::inline::Threshold::new(225),
+                    simplify: Box::new(|_, _, _, _| {}),
+                };
+                walk.run(program, &mut Default::default())
+            },
+        )
+        .and_then(|done| done)
+        .expect("the walk runs");
+        llrm_mir::print::module(&module).contains(crate::tailcallelim::DEFERRED)
+    };
+    assert!(marked("none"), "control: a body within the cap waits");
+    assert!(!marked("halve"), "a loop-bearing body waits for copies it will not get");
+}

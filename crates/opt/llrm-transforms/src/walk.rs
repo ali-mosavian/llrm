@@ -334,9 +334,14 @@ impl ProgramPass for Walk {
                         // DEVIATE (recursion): a tree-recursive function waits
                         // for its tail-call elimination
                         // until its copies are made
-                        // (`SelfInline`, after ipa-cp has seen it whole).
-                        if recursion.is_some() && self_calls(module, &program.layout, id, self.inline.single).is_some()
-                        {
+                        // (`SelfInline`, after ipa-cp has seen it whole). Only
+                        // a body within the callee cap
+                        // waits: one above it gets no
+                        // copies, so its elimination stays at the pin's slot.
+                        let fits = recursion.is_some_and(|one| {
+                            module.global(id).function().is_some_and(|body| crate::inline::gcc_work(body) <= one.callee)
+                        });
+                        if fits && self_calls(module, &program.layout, id, self.inline.single).is_some() {
                             function_mut(module, id)
                                 .1
                                 .attrs
