@@ -602,6 +602,7 @@ mod tuning_tests {
                 inline_threshold: None,
                 split_merged_conditions: false,
                 inline_size_guard_at_speed: false,
+                keep_constant_displacements: false,
                 ..table
             },
             Tuning::PIN
