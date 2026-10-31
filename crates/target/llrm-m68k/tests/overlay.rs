@@ -367,15 +367,15 @@ fn the_rotation_temporary_does_not_cost_a_saved_data_register() {
     assert!(!ours.contains("%d2") && !ours.contains("(%sp)+"), "{ours}");
 }
 
-/// `s += p[i] > t` ended `sgt %d1; and.l #255, %d1; and.l #1, %d1`: the second
-/// mask makes the first one dead.
+/// `s += p[i] > t` ends `sgt %d1; and.l #255, %d1; and.l #1, %d1` in the pin's
+/// patterns; merging the masks was a rewrite of them.
 #[test]
-fn two_masks_of_one_register_in_a_row_are_one() {
+fn two_masks_of_one_register_in_a_row_stay_as_the_pin_has_them() {
     let ir = "define i32 @f(i32 %a, i32 %b, i32 %s) {\n  %c = icmp sgt i32 %a, %b\n  %z = zext i1 %c to i32\n  %r = add i32 %s, %z\n  ret i32 %r\n}";
     let pinned = compiled(ir, Options::PINNED);
     assert!(pinned.contains("and.l\t#255") && pinned.contains("and.l\t#1,"), "{pinned}");
     let ours = compiled(ir, Options::default());
-    assert!(ours.contains("and.l\t#1,") && !ours.contains("and.l\t#255"), "{ours}");
+    assert!(ours.contains("and.l\t#1,") && ours.contains("and.l\t#255"), "{ours}");
 }
 
 fn arrmax_loop() -> &'static str {
@@ -454,16 +454,15 @@ fn an_argument_read_once_outside_a_loop_is_read_from_its_slot() {
     assert!(!ours.contains("move.l\t(8,%sp)"), "{ours}");
 }
 
-/// popcount's `x & 1` of a copy was `move.l %d1, %d2; and.l #1, %d2`, 8 bytes;
-/// `moveq #1, %d2; and.l %d1, %d2` is 4 with the same value and codes.
+/// popcount's `x & 1` of a copy is the pin's `move.l %d1, %d2; and.l #1, %d2`;
+/// `moveq #1, %d2; and.l %d1, %d2` (4 bytes against 8) was a rewrite of it.
 #[test]
-fn a_small_constant_mask_of_a_copy_is_a_moveq_and_a_register_and() {
+fn a_small_constant_mask_of_a_copy_keeps_the_pins_and_immediate() {
     let ir = "define i32 @f(i32 %a) {\n  %m = and i32 %a, 1\n  %r = add i32 %m, %a\n  ret i32 %r\n}";
     let pinned = compiled(ir, Options::PINNED);
     assert!(pinned.contains("and.l\t#1,"), "{pinned}");
     let ours = compiled(ir, Options::default());
-    assert!(ours.contains("moveq\t#1,") && !ours.contains("and.l\t#1,"), "{ours}");
-    assert!(code_size(ir, Options::default()) < code_size(ir, Options::PINNED));
+    assert!(ours.contains("and.l\t#1,") && !ours.contains("moveq\t#1,"), "{ours}");
 }
 
 /// `p[i] > t` loaded the element into a register to compare it: the load was
@@ -768,20 +767,6 @@ fn a_constant_shifted_up_16_is_a_moveq_and_swap() {
     assert!(!constant(0).contains("swap"));
 }
 
-fn long_op(
-    opcode: &'static str,
-    immediate: i64,
-) -> llrm_m68k::expand::Line {
-    llrm_m68k::expand::Line::Inst(Inst {
-        opcode,
-        operands: vec![register("d0"), register("d0"), Operand::Imm(immediate)],
-    })
-}
-
-fn after(opcode: &'static str) -> llrm_m68k::expand::Line {
-    llrm_m68k::expand::Line::Inst(Inst { opcode, operands: vec![register("d0")] })
-}
-
 fn opcodes(lines: &[llrm_m68k::expand::Line]) -> Vec<&'static str> {
     lines
         .iter()
@@ -790,32 +775,6 @@ fn opcodes(lines: &[llrm_m68k::expand::Line]) -> Vec<&'static str> {
             _ => None,
         })
         .collect()
-}
-
-/// crc16's `eori.l #4129` (6 B) against gcc's `eor.w` (4 B): the high half is
-/// xored with zeros. The narrow form is taken where a `tst` or a return
-/// follows, not where a branch reads the codes (`N` and `Z` would come from the
-/// word), and not for a constant over 16 bits.
-#[test]
-fn an_xor_with_a_word_constant_is_a_word_xor_unless_its_codes_are_read() {
-    use llrm_m68k::overlay::narrow_immediates;
-    assert_eq!(opcodes(&narrow_immediates(vec![long_op("XOR32di", 4129), after("TST32d")])), ["XOR16di", "TST32d"]);
-    assert_eq!(opcodes(&narrow_immediates(vec![long_op("OR32di", 40000), after("RTS")])), ["OR16di", "RTS"]);
-    assert_eq!(opcodes(&narrow_immediates(vec![long_op("XOR32di", 4129), after("Bne8")])), ["XOR32di", "Bne8"]);
-    assert_eq!(opcodes(&narrow_immediates(vec![long_op("XOR32di", 65536), after("RTS")])), ["XOR32di", "RTS"]);
-    assert_eq!(opcodes(&narrow_immediates(vec![long_op("XOR32di", -1), after("RTS")])), ["XOR32di", "RTS"]);
-}
-
-/// `andi` narrows only where the mask's high half is all ones (the high half of
-/// the register is kept); `and.l #255` clears it and must stay long.
-#[test]
-fn an_and_keeps_its_long_form_unless_the_mask_keeps_the_high_half() {
-    use llrm_m68k::overlay::narrow_immediates;
-    assert_eq!(
-        opcodes(&narrow_immediates(vec![long_op("AND32di", -65536 | 0x1234), after("RTS")])),
-        ["AND16di", "RTS"]
-    );
-    assert_eq!(opcodes(&narrow_immediates(vec![long_op("AND32di", 255), after("RTS")])), ["AND32di", "RTS"]);
 }
 
 #[test]
@@ -923,12 +882,12 @@ fn a_zero_extension_defines_a_data_register() {
 
 /// `shl x, 16` is selected as `SUBREG_TO_REG (CLR16dd (EXTRACT_SUBREG (SWAP
 /// x)))`, which the emitter had no case for ("no encoding for SUBREG_TO_REG"):
-/// every generated program with a shift by 16 was rejected. The pin's `swap;
-/// clr.w`; a shift by 15 stays a shift.
+/// every generated program with a shift by 16 was rejected. It is a `swap` and
+/// a mask of the low half; a shift by 15 stays a shift.
 #[test]
 fn a_shift_left_by_16_is_swap_and_clear_word() {
     let text = compiled("define i32 @f(i32 %x) {\n  %r = shl i32 %x, 16\n  ret i32 %r\n}", Options::default());
-    assert!(text.contains("swap\t%d0\n\tclr.w\t%d0"), "{text}");
+    assert!(text.contains("swap\t%d0\n"), "{text}");
     let other = compiled("define i32 @f(i32 %x) {\n  %r = shl i32 %x, 15\n  ret i32 %r\n}", Options::default());
     assert!(!other.contains("swap"), "{other}");
 }

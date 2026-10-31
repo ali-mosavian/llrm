@@ -38,16 +38,16 @@ fn status(
     code
 }
 
-/// `(a & c) + a`: `move.l a, d; and.l #c, d` becomes `moveq #c, d; and.l a, d`
-/// only where `c` fits `moveq`'s signed byte. 127 and -128 do, 128 and -129 do
-/// not (`moveq #128` would load -128), and the value is the same either way.
+/// `(a & c) + a` is the pin's `move.l a, d; and.l #c, d` for every `c`; the
+/// `moveq #c, d; and.l a, d` form, for a `c` within a signed byte, was a
+/// rewrite of it. The value must be the same at the edges of that range.
 #[test]
-fn a_mask_is_a_moveq_only_within_its_signed_byte() {
-    for (mask, quick) in [(127, true), (128, false), (-128, true), (-129, false)] {
+fn a_mask_keeps_its_immediate_form_and_its_value() {
+    for mask in [127, 128, -128, -129] {
         let ir =
             format!("define i32 @f(i32 %a) {{\n  %m = and i32 %a, {mask}\n  %r = add i32 %m, %a\n  ret i32 %r\n}}");
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
-        assert_eq!(asm.contains(&format!("moveq\t#{mask},")), quick, "mask {mask}: {asm}");
+        assert!(asm.contains(&format!("and.l\t#{mask},")), "mask {mask}: {asm}");
         if let Some(code) = status(&ir, &[0x85], Options::default()) {
             assert_eq!(code, ((0x85 & mask) + 0x85) & 0xFF, "mask {mask}: {asm}");
         }

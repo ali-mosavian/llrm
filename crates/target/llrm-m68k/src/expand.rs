@@ -329,9 +329,6 @@ pub fn finish(
                 label => label,
             })
             .collect();
-        lines = crate::overlay::merge_masks(lines);
-        lines = crate::overlay::constant_into_destination(lines);
-        lines = crate::overlay::narrow_immediates(lines);
         lines = crate::overlay::drop_redundant_tests(lines);
         lines = crate::overlay::drop_repeated_compares(lines);
     }
