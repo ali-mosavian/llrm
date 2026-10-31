@@ -23,7 +23,7 @@ LAYERS = [
             "llrm-peepgen",
         ],
     ),
-    ("codegen", ["llrm-codegen", "llrm-dagisel", "llrm-dagisel-gen"]),
+    ("codegen", ["llrm-codegen", "llrm-dagisel", "llrm-dagisel-gen", "llrm-sdag", "llrm-spike-mf"]),
     (
         "concrete targets",
         [
@@ -31,7 +31,7 @@ LAYERS = [
             "llrm-x86-m64-select", "llrm-arm64",
         ],
     ),
-    ("driver", ["llrm-driver", "llrm-cc", "llrm-bcdriver"]),
+    ("driver", ["llrm-driver", "llrm-cc", "llrm-bcdriver", "llrm-opt"]),
     ("frontends", ["llrm-c", "llrm-nib", "llrm-qb", "llrm-qbruntime", "llrm-bcobj"]),
     ("tools", ["llrm"]),
 ]
