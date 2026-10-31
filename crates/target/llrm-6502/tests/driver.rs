@@ -622,7 +622,7 @@ define void @copy(ptr noalias %d, ptr noalias %s, i16 %n) {
 }"#,
     );
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(text.contains("jsr memcpy"), "{text}");
+    assert!(text.contains("jsr memcpy") || text.contains("jmp memcpy"), "{text}");
 }
 
 /// lz4 with a call in its loop: 14 bytes are live across it and only four
@@ -690,4 +690,31 @@ fn a_call_in_return_position_is_a_jump() {
     let ir = module("define i8 @f(i8 %a, i8 %b) {\n  %m = mul i8 %a, %b\n  ret i8 %m\n}");
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert!(text.contains("jmp __mulqi3") && !text.contains("jsr __mulqi3"), "no tail call:\n{text}");
+}
+
+const COPY_UNTIL_ZERO: &str = "define ptr @cp(ptr %d, ptr %s) {
+entry:
+  br label %loop
+loop:
+  %d1 = phi ptr [ %d, %entry ], [ %d2, %loop ]
+  %s1 = phi ptr [ %s, %entry ], [ %s2, %loop ]
+  %c = load i8, ptr %s1
+  store i8 %c, ptr %d1
+  %s2 = getelementptr i8, ptr %s1, i16 1
+  %d2 = getelementptr i8, ptr %d1, i16 1
+  %z = icmp ne i8 %c, 0
+  br i1 %z, label %loop, label %exit
+exit:
+  ret ptr %d1
+}";
+
+/// A copy up to the terminator loaded `y` twice with the same constant
+/// (`ldy #0; lda (s),y; ldy #0; sta (d),y`) and then tested the byte it had
+/// just loaded with `cmp #0`, because the second `ldy` stood between the load
+/// and the test: 4 bytes and 6 clocks a trip (`stpcpy`, 68 B against 30).
+#[test]
+fn a_register_holding_the_constant_is_not_loaded_again() {
+    let text = assembly(&module(COPY_UNTIL_ZERO), &Request::new(Level::O2)).unwrap();
+    assert!(!text.contains("cmp #0"), "tests a byte the load set the flags of:\n{text}");
+    assert_eq!(text.matches("ldy #0").count(), 1, "y loaded with 0 more than once:\n{text}");
 }
