@@ -1369,6 +1369,90 @@ fn at_o2(
     printed.split("define").find(|one| one.contains(name)).expect("the function").to_owned()
 }
 
+/// `@top` after the -O2 pipeline over `text`, on `target`.
+fn at_o2_on(
+    target: llrm_x86_m16::Dos,
+    text: &str,
+    name: &str,
+) -> String {
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::default(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(target),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    printed.split("define").find(|one| one.contains(name)).expect("the function").to_owned()
+}
+
+const GROWS: &str = "@g = global i32 0
+
+define i32 @callee(i32 %x) {
+b0:
+  %a = load i32, ptr @g
+  %b = add i32 %a, %x
+  %c = add i32 %b, %a
+  %d = mul i32 %c, %x
+  %e = add i32 %d, %b
+  %f = mul i32 %e, %a
+  %g = add i32 %f, %c
+  %h = mul i32 %g, %d
+  %i = add i32 %h, %a
+  %j = mul i32 %i, %x
+  %k = add i32 %j, %c
+  %l = mul i32 %k, %b
+  %m = add i32 %l, %e
+  store i32 %m, ptr @g
+  ret i32 %m
+}
+";
+
+/// qlight c at m16 -O2 inlined a 30-instruction `ls_scale_byte` four times,
+/// 211 -> 376 bytes. The pin's bar (50) allows it; the m16 description holds
+/// a speed caller to the callee's code size too (`inline_size_guard_at_speed`).
+#[test]
+fn test_an_o2_call_of_a_callee_that_stays_and_grows_the_code_stays_a_call_at_m16() {
+    let text = format!("{GROWS}\ndefine i32 @top(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n");
+    let pin = at_o2_on(llrm_x86_m16::Dos::pin_tuned(), &text, "@top(");
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), &text, "@top(");
+    assert!(!pin.contains("call i32 @callee"), "premise: the pin inlines it:\n{pin}");
+    assert!(m16.contains("call i32 @callee"), "m16 copied it:\n{m16}");
+}
+
+/// The same callee with a constant argument folds in the caller once inlined
+/// (algebra, control, memory: 15 clocks inlined, 143 to 283 as calls), so
+/// the blocked site's trial keeps the inline.
+#[test]
+fn test_an_o2_call_that_folds_once_inlined_is_inlined_at_m16() {
+    let text = "define i32 @callee(i32 %n) {
+b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %h ]
+  %a = phi i32 [ 1, %b0 ], [ %a1, %h ]
+  %m = mul i32 %a, 31
+  %x = xor i32 %m, %i
+  %a1 = add i32 %x, 7
+  %i1 = add i32 %i, 1
+  %c = icmp ult i32 %i1, %n
+  br i1 %c, label %h, label %e
+e:
+  ret i32 %a1
+}
+
+define i32 @top() {
+b0:
+  %r = call i32 @callee(i32 6)
+  ret i32 %r
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(!m16.contains("call i32 @callee"), "the folding call stayed:\n{m16}");
+}
+
 /// `@top` after the -Os pipeline over `text`.
 fn at_os(
     text: &str,

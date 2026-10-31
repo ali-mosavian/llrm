@@ -2010,9 +2010,14 @@ impl<'a> Analyzer<'a> {
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        let grows = self.site.caller_size != CallerSize::Speed
-            && !self.site.sole_call_to_local
-            && self.site.tti.is_some_and(|tti| tti.opt_size_inline_by_code_size())
+        let grows = !self.site.sole_call_to_local
+            && self.site.tti.is_some_and(|tti| {
+                if self.site.caller_size == CallerSize::Speed {
+                    tti.speed_inline_by_code_size()
+                } else {
+                    tti.opt_size_inline_by_code_size()
+                }
+            })
             && self.size_units > self.call_size();
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {
@@ -2627,7 +2632,7 @@ pub fn sites_with_trials(
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
         let worth = blocked
             && trials.is_some()
-            && (goes(decision.callee) || worth_a_trial(module, caller, inst, decision.callee));
+            && (size == CallerSize::Speed || goes(decision.callee) || worth_a_trial(module, caller, inst, decision.callee));
         if !decision.inline && !worth {
             continue;
         }
