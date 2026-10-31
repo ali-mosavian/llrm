@@ -286,8 +286,7 @@ x:
 }";
     let options = Options { mid_end: false, ..Options::default() };
     let asm = text_with(&module(ir), "k", Cpu::M68000, options).unwrap();
-    // the step may be folded into the load across the inner loop (`(%a0)+`)
-    assert!((asm.contains("addq.l\t#1, %a") || asm.contains("(%a0)+")) && !asm.contains("move.l\t%a0, %d"), "{asm}");
+    assert!(asm.contains("adda.l\t#1, %a") && !asm.contains("move.l\t%a0, %d"), "{asm}");
     if let Some(code) = status_with_data(ir, &[Data(0), Imm(3)], options) {
         assert_eq!(code, (313 * 3) & 0xFF, "{asm}");
     }

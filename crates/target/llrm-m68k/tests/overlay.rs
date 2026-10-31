@@ -42,22 +42,13 @@ fn hex(bytes: &[u8]) -> String {
 /// 5489, `subq.l #7,%a3` 5f8b.
 #[test]
 fn overlay_instructions_encode_as_binutils_does() {
-    let q = |opcode, to: &str, amount| Inst { opcode, operands: vec![register(to), Operand::Imm(amount)] };
     let t = |opcode, of: &str| Inst { opcode, operands: vec![register(of)] };
     let cases = [
-        (q("ADDQ32d", "d1", 1), "5281"),
-        (q("ADDQ32d", "d1", 8), "5081"),
-        (q("SUBQ32a", "sp", 4), "598f"),
-        (q("ADDQ16d", "d2", 3), "5642"),
-        (q("ADDQ8d", "d3", 2), "5403"),
-        (q("SUBQ16d", "d0", 1), "5340"),
         (t("TST8d", "d0"), "4a00"),
         (t("TST16d", "d5"), "4a45"),
         (t("TST32d", "d1"), "4a81"),
         (t("NOT16d", "d5"), "4645"),
         (Inst { opcode: "SWAP", operands: vec![register("d3"), register("d3")] }, "4843"),
-        (q("ADDQ32a", "a1", 2), "5489"),
-        (q("SUBQ32a", "a3", 7), "5f8b"),
     ];
     for (inst, golden) in cases {
         assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
@@ -76,23 +67,6 @@ fn compiled(
 ) -> String {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
     text_with(&module, "f", Cpu::M68000, options).expect("compiles")
-}
-
-/// `add.l #1` was 6 bytes and `cmpi.l #0` 6; as `addq.l` and `tst.l` they
-/// are 2 each. The pin's text keeps the long forms.
-#[test]
-fn a_counting_loop_uses_addq_and_tst_where_the_pin_does_not() {
-    let ir = "define i32 @f(i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %i1 = add i32 %i, 1\n  %c = icmp ne i32 %i1, 0\n  %d = icmp slt i32 %i1, %n\n  br i1 %d, label %l, label %x\nx:\n  ret i32 %i1\n}";
-    let pinned = compiled(ir, Options::PINNED);
-    let ours = compiled(ir, Options::default());
-    assert!(pinned.contains("add.l\t#1,"), "{pinned}");
-    assert!(ours.contains("addq.l\t#1,") && !ours.contains("add.l\t#1,"), "{ours}");
-    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).unwrap();
-    let size = |options| {
-        let items = llrm_m68k::compile::items_with(&module, "f", Cpu::M68000, options).unwrap();
-        llrm_m68k::object::assemble(&items, 0).unwrap().code.len()
-    };
-    assert!(size(Options::default()) < size(Options::PINNED));
 }
 
 /// Push and pop of saved registers, bytes from binutils: `move.l %d2,-(%sp)`
@@ -139,26 +113,25 @@ fn branches(body: &str) -> String {
 }
 
 /// `lsr` sets Z from its result, but the pin has no `optimizeCompareInstr` for
-/// M68k: the popcount loop ends `lsr.l #1, %d1; tst.l %d1; bne`, the `tst.l`
-/// stays.
+/// M68k: the popcount loop ends `lsr.l #1, %d1; cmpi.l #0, %d1; bne`, the
+/// compare stays (the pin has no `tst` either).
 #[test]
 fn a_test_right_after_the_instruction_that_set_the_flags_stays_as_the_pin_has_it() {
     let asm = branches("%s = lshr i32 %a, 1\n  %c = icmp ne i32 %s, 0");
-    assert!(asm.contains("lsr.l") && asm.contains("tst.l"), "{asm}");
+    assert!(asm.contains("lsr.l") && asm.contains("cmpi.l\t#0,"), "{asm}");
 }
 
-/// `add` can overflow, so after it `gt` (Z clear and N = V) is not what `tst`
-/// gives: the `tst.l` stays for it, and goes for `ne`. `slt 0` is `N` alone
-/// (the sign of the wrapped sum, as the pin selects it: `add; bmi`), which
-/// needs none.
+/// The pin compares a sum with zero by `cmpi.l #0` for an ordering, but reads
+/// the codes of the `add` itself for equality and for `slt 0` (`N` alone, the
+/// sign of the wrapped sum: `add; bmi`).
 #[test]
-fn a_test_after_an_add_stays_for_a_signed_ordering_and_goes_for_equality() {
+fn a_compare_with_zero_after_an_add_is_the_pins_cmpi_for_an_ordering() {
     let signed = branches("%s = add i32 %a, %b\n  %c = icmp sgt i32 %s, 0");
-    assert!(signed.contains("tst.l"), "{signed}");
+    assert!(signed.contains("cmpi.l\t#0,"), "{signed}");
     let sign = branches("%s = add i32 %a, %b\n  %c = icmp slt i32 %s, 0");
-    assert!(!sign.contains("tst.l") && sign.contains("add.l"), "{sign}");
+    assert!(!sign.contains("cmpi") && sign.contains("add.l"), "{sign}");
     let equal = branches("%s = add i32 %a, %b\n  %c = icmp ne i32 %s, 0");
-    assert!(!equal.contains("tst.l"), "{equal}");
+    assert!(!equal.contains("cmpi"), "{equal}");
 }
 
 /// `__modsi3` ended each way of a negate with `move.l %d2, %d0` and one of them
@@ -281,27 +254,6 @@ fn a_long_divide_stores_no_remainder() {
     }
 }
 
-/// `cmpa.l %d0,%a1` b3c0 and `cmpa.l %a2,%a3` b7ca, from binutils.
-#[test]
-fn cmpa_encodes_as_binutils_does() {
-    let cmpa = |lhs: &str, rhs: &str| Inst { opcode: "CMPA32", operands: vec![register(lhs), register(rhs)] };
-    for (inst, golden) in [(cmpa("d0", "a1"), "b3c0"), (cmpa("a2", "a3"), "b7ca")] {
-        assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
-    }
-}
-
-/// The loaded value of the running maximum took `d2`, because the compare
-/// wants a data register, and so a push and a pop (4 bytes). It compares
-/// from an address register with `cmpa.l`, as gcc does.
-#[test]
-fn a_loaded_value_only_compared_may_sit_in_an_address_register() {
-    let marked = arrmax_loop().replace(") {\nentry", ") optsize {\nentry");
-    let ours = compiled(&marked, Options::default());
-    assert!(ours.contains("cmpa.l") && !ours.contains("%d2"), "{ours}");
-    let pinned = compiled(arrmax_loop(), Options::PINNED);
-    assert!(!pinned.contains("cmpa.l"), "{pinned}");
-}
-
 fn sum_loop(step: &str) -> String {
     format!(
         "define i32 @f(ptr %p, i32 %n) {{\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %q = phi ptr [%p, %entry], [%q1, %l]\n  %v = load i32, ptr %q\n  %s1 = add i32 %s, %v\n  %q1 = getelementptr i32, ptr %q, i32 {step}\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %s1\n}}"
@@ -313,16 +265,6 @@ fn sum_loop(step: &str) -> String {
 fn a_step_of_another_size_is_not_a_post_increment() {
     let ours = compiled(&sum_loop("2"), Options::default());
     assert!(!ours.contains("%a0)+") && !ours.contains("%a1)+") && !ours.contains("%a2)+"), "{ours}");
-}
-
-/// `add.l #-1` took 6 bytes where `subq.l #1` takes 2: strlen ended with it.
-#[test]
-fn adding_a_small_negative_is_a_subq() {
-    let ir = "define i32 @f(i32 %a) {\nentry:\n  %r = add i32 %a, -1\n  %c = add i32 %r, -8\n  %d = sub i32 %c, -3\n  ret i32 %d\n}";
-    let pinned = compiled(ir, Options::PINNED);
-    let ours = compiled(ir, Options::default());
-    assert!(pinned.contains("add.l\t#-1") || pinned.contains("add.l\t#-"), "{pinned}");
-    assert!(ours.contains("subq.l") && !ours.contains("add.l\t#-"), "{ours}");
 }
 
 fn loop_moves(asm: &str) -> usize {
@@ -475,36 +417,6 @@ fn a_loaded_value_read_again_is_not_swapped_into_the_compare() {
     assert!(!ours.contains("cmp.l\t(%a0)"), "{ours}");
 }
 
-/// `tst` of memory, bytes from binutils: `tst.b (0,%a0,%d1.l)` 4a301800,
-/// `tst.w (4,%a1)` 4a690004, `tst.l (%a2)` 4a92, `tst.l (8,%a0,%d2.l)`
-/// 4ab02808.
-#[test]
-fn tst_of_memory_encodes_as_binutils_does() {
-    let tst = |opcode, operands| Inst { opcode, operands };
-    let imm = Operand::Imm;
-    let cases = [
-        (tst("TST8f", vec![imm(0), register("a0"), register("d1")]), "4a301800"),
-        (tst("TST16p", vec![imm(4), register("a1")]), "4a690004"),
-        (tst("TST32j", vec![register("a2")]), "4a92"),
-        (tst("TST32f", vec![imm(8), register("a0"), register("d2")]), "4ab02808"),
-    ];
-    for (inst, golden) in cases {
-        assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
-    }
-}
-
-/// strlen's test of the byte was `cmpi.b #0, (0,%a0,%d1)`, 6 bytes; `tst.b` of
-/// the same operand is 4.
-#[test]
-fn a_compare_of_memory_with_zero_is_a_tst() {
-    let ir = "define i32 @f(ptr %p, i32 %i) {\n  %q = getelementptr i8, ptr %p, i32 %i\n  %v = load i8, ptr %q\n  %z = icmp eq i8 %v, 0\n  %r = zext i1 %z to i32\n  ret i32 %r\n}";
-    let pinned = compiled(ir, Options::PINNED);
-    assert!(pinned.contains("cmpi.b\t#0,"), "{pinned}");
-    let ours = compiled(ir, Options::default());
-    assert!(ours.contains("tst.b\t(") && !ours.contains("cmpi.b"), "{ours}");
-    assert!(code_size(ir, Options::default()) < code_size(ir, Options::PINNED));
-}
-
 /// The mid-end with the pin's addressing mode (none): `post_indexed` off.
 fn after_pinned_mid_end(ir: &str) -> String {
     use std::rc::Rc;
@@ -618,8 +530,8 @@ fn saved_registers_are_pushed_and_the_rest_of_the_frame_follows() {
     let ir = llrm_m68k::kernels::source_in("library", "fnptr");
     let module = llrm_mir::parse::module(&ir).expect("parses");
     let ours = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
-    assert!(ours.contains("movem.l\t%d2-%d3/%a2, -(%sp)\n\tsubq.l\t#8, %sp\n"), "{ours}");
-    assert!(ours.contains("\taddq.l\t#8, %sp\n\tmovem.l\t(%sp)+, %d2-%d3/%a2\n\trts"), "{ours}");
+    assert!(ours.contains("movem.l\t%d2-%d3/%a2, -(%sp)\n\tsuba.l\t#8, %sp\n"), "{ours}");
+    assert!(ours.contains("\tadda.l\t#8, %sp\n\tmovem.l\t(%sp)+, %d2-%d3/%a2\n\trts"), "{ours}");
     let pinned = text_with(&module, "k", Cpu::M68000, Options::PINNED).expect("compiles");
     assert!(pinned.contains("suba.l\t#20, %sp\n\tmovem.l\t%d2-%d3/%a2, (8,%sp)"), "{pinned}");
 }
@@ -683,8 +595,8 @@ x:
   ret i32 %r
 }";
     let text = compiled(ir, Options { size: true, ..Options::default() });
-    assert!(text.contains("move.l\t(8,%sp), %d"), "{text}");
-    assert!(!text.contains("(11,%sp)"), "{text}");
+    assert!(text.contains("move.l\t(12,%sp), %d"), "{text}");
+    assert!(!text.contains("(15,%sp)"), "{text}");
 }
 
 fn constant(value: i64) -> String {
@@ -826,46 +738,6 @@ fn a_shift_left_by_16_is_swap_and_clear_word() {
     assert!(text.contains("swap\t%d0\n"), "{text}");
     let other = compiled("define i32 @f(i32 %x) {\n  %r = shl i32 %x, 15\n  ret i32 %r\n}", Options::default());
     assert!(!other.contains("swap"), "{other}");
-}
-
-/// `widen_compare_operands` let a compare's second operand take an address
-/// register where nothing else restricts it; it read the table's `XR32` for the
-/// result of `MOVZXd32d16` as free, so a zero-extended word was given `a0`
-/// again (`moveq #0, %a0; move.w %d3, %a0`: a sign extension),
-/// and a sign-extended one got `ext.l %a0`, which does not exist. Seeds 12 and
-/// 75 of the differential driver.
-#[test]
-fn a_compare_does_not_widen_an_extension_to_an_address_register() {
-    for (extension, mnemonic) in [("zext", "MOVZX"), ("sext", "MOVSX")] {
-        let module = llrm_mir::parse::module(&format!(
-            "target datalayout = \"{DATALAYOUT}\"\ndefine i32 @f(i16 %a, i16 %b, i32 %y) {{\n  %x = lshr i16 %a, %b\n  %e = {extension} i16 %x to i32\n  %n = sub i32 0, %y\n  %c = icmp sgt i32 %e, %n\n  %r = select i1 %c, i32 1, i32 2\n  ret i32 %r\n}}"
-        ))
-        .expect("parses");
-        let blocks = llrm_m68k::dagisel::function::select_function(&module, "f", Cpu::M68000).expect("selects");
-        let mut function = llrm_m68k::mfunc::emit("f", &blocks).expect("emits");
-        llrm_m68k::overlay::widen_compare_operands(&mut function);
-        let compared = function
-            .blocks
-            .iter()
-            .flat_map(|block| &block.insts)
-            .filter_map(|inst| match (inst.kind, &inst.operands[..]) {
-                (
-                    llrm_spike_mf::Kind::Op("CMP32dr"),
-                    [_, llrm_spike_mf::Operand::Use(llrm_spike_mf::Reg::Virt(rhs))],
-                ) => Some(*rhs),
-                _ => None,
-            })
-            .count();
-        assert_eq!(compared, 1, "the compare is the premise");
-        for inst in function.blocks.iter().flat_map(|block| &block.insts) {
-            if let (llrm_spike_mf::Kind::Op(name), Some(llrm_spike_mf::Operand::Def(llrm_spike_mf::Reg::Virt(v)))) =
-                (inst.kind, inst.operands.first())
-                && name.starts_with(&format!("{mnemonic}d32d16"))
-            {
-                assert_eq!(function.classes[*v as usize], llrm_m68k::mfunc::Class::Dr32, "{extension}: {name}");
-            }
-        }
-    }
 }
 
 /// The mid-end handed out an id for a declaration a pass made (`llvm.umin.i1`)
@@ -1085,4 +957,18 @@ fn a_copy_loop_has_no_post_increment_as_the_pin_has_none() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("copy")).expect("parses");
     let ours = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
     assert!(!ours.contains("%a0)+") && !ours.contains("%a1)+") && !ours.contains("%a2)+"), "{ours}");
+}
+
+/// A counting loop adds and compares with the pin's `add.l #1` and `cmpi.l`.
+/// `addq`, `subq`, `tst` and `cmpa` came from a rewrite of the expanded
+/// instructions; the pin marks `ADDQ` and `SUBQ` as not implemented and has no
+/// `TST`.
+#[test]
+fn a_counting_loop_uses_no_quick_or_test_forms_as_the_pin_has_none() {
+    let ir = "define i32 @f(i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %i1 = add i32 %i, 1\n  %e = icmp ult i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %i1\n}";
+    let ours = compiled(ir, Options::default());
+    assert!(
+        ours.contains("add.l\t#1,") && !ours.contains("addq") && !ours.contains("subq") && !ours.contains("tst."),
+        "{ours}"
+    );
 }
