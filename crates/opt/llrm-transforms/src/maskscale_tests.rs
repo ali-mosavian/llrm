@@ -116,6 +116,27 @@ fn an_odd_step_and_start_scale_by_the_element() {
     assert!(text.contains("icmp eq i16 %next, 12004"), "{text}");
 }
 
+/// Scale 2: 16-bit elements, the constants double.
+#[test]
+fn a_scale_of_two_doubles_the_constants() {
+    let (before, text) = m16(&ring(5, 3, 511, "i16", "eq", 2000, ""));
+    agree(&before, &text);
+    assert!(text.contains("and i16 %i, 1022"), "{text}");
+    assert!(text.contains("[ 10, %entry ]"), "{text}");
+    assert!(text.contains("add i16 %i, 6"), "{text}");
+    assert!(text.contains("icmp eq i16 %next, 4000"), "{text}");
+}
+
+/// An 8-bit counter: the products are mod 2^8 (exit 40 * 4 = 160 = -96).
+#[test]
+fn a_narrow_counter_scales_mod_its_width() {
+    let (before, text) = m16(&ring(1, 3, 15, "i32", "eq", 40, "").replace("i16", "i8"));
+    agree(&before, &text);
+    assert!(text.contains("and i8 %i, 60"), "{text}");
+    assert!(text.contains("add i8 %i, 12"), "{text}");
+    assert!(text.contains("icmp eq i8 %next, -96"), "{text}");
+}
+
 /// A target with no pricing of the scaled index keeps the counter.
 #[test]
 fn a_target_without_the_cost_keeps_the_counter() {
