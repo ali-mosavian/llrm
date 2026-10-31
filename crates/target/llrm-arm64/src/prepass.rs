@@ -27,7 +27,7 @@
 //! paths that skip it. The pin pays the same extra jump where that edge block
 //! does not fall through to its target.
 //!
-//! DEVIATE 3: LLVM runs these on the shared machine IR; this is a small version
+//! DEVIATE SD510: LLVM runs these on the shared machine IR; this is a small version
 //! over the arm64 selector's operations, standing in until the core machine
 //! passes run on arm64 (docs/architecture/arm64-spike.md).
 

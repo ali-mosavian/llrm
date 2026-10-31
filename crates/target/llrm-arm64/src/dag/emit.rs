@@ -625,7 +625,8 @@ impl Emitter<'_> {
     /// `TCRETURNdi` and `TCRETURNri`: the epilogue and a jump to the callee.
     /// The arguments are the `Register` operands. An indirect callee is moved
     /// to `x9` first: the epilogue restores the callee-saved registers and uses
-    /// `x16`/`x17` itself.
+    /// `x16`/`x17` itself. DEVIATE SD511: the pin lets the allocator pick any
+    /// `tcGPR64`; here the register is fixed.
     fn tail_call(
         &mut self,
         id: u32,
