@@ -44,6 +44,8 @@ pub struct TargetEnv {
     /// caller whose pins are values of their own, not constraints on an
     /// instruction.
     pub keep_pinned: bool,
+    /// For each pinned value, the pinned values on overlapping registers.
+    pub aliases: IndexMap<u32, Vec<u32>>,
 }
 
 impl CoalescerEnv for TargetEnv {
@@ -56,6 +58,13 @@ impl CoalescerEnv for TargetEnv {
         value: u32,
     ) -> bool {
         self.keep_pinned && self.pins.contains_key(&value)
+    }
+
+    fn aliases(
+        &self,
+        value: u32,
+    ) -> Vec<u32> {
+        self.aliases.get(&value).cloned().unwrap_or_default()
     }
 
     fn can_share(
@@ -124,8 +133,24 @@ pub fn coalesce(
     palettes: IndexMap<u32, BTreeSet<RegId>>,
     pins: IndexMap<u32, RegId>,
     size: bool,
+    regs: llrm_lir::registers::Regs,
 ) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>) {
-    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true };
+    let aliases = pins
+        .iter()
+        .map(|(value, register)| {
+            let others = pins
+                .iter()
+                .filter(|(other, theirs)| {
+                    *other != value
+                        && regs.root(**theirs) == regs.root(*register)
+                        && regs.lanes(**theirs) & regs.lanes(*register) != 0
+                })
+                .map(|(other, _)| *other)
+                .collect();
+            (*value, others)
+        })
+        .collect();
+    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let after = joined(body, &env, &depth);

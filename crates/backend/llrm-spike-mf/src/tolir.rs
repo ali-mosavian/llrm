@@ -71,6 +71,7 @@ impl<T: Target> Converted<T> {
     /// joins into it, and [`from_lir`] writes that value as the register.
     pub fn coalesce(
         &mut self,
+        registers: Regs,
         size: bool,
     ) {
         let palettes = self
@@ -79,7 +80,7 @@ impl<T: Target> Converted<T> {
             .map(|(value, order)| (*value, order.iter().copied().collect::<BTreeSet<RegId>>()))
             .collect();
         let (body, palettes) =
-            llrm_codegen::coalescer::env::coalesce(&self.body, palettes, self.body.pins.clone(), size);
+            llrm_codegen::coalescer::env::coalesce(&self.body, palettes, self.body.pins.clone(), size, registers);
         for (value, order) in self.orders.iter_mut() {
             if let Some(allowed) = palettes.get(value) {
                 order.retain(|register| allowed.contains(register));
