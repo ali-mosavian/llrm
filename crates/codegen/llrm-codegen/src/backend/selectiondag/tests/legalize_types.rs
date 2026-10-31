@@ -322,6 +322,8 @@ fn a_promoted_store_keeps_its_atomic_ordering() {
     assert_eq!(legalize(&mut dag, &tli), Ok(true));
     let NodeData::Mem(stored) = dag.node(dag.get_root()).data else { panic!("a store has a memory operand") };
     assert_eq!(stored.ordering, Some(AtomicOrdering::Release));
+}
+
 /// A divide in a promoted type was refused ("promote result"; wasm's `sdiv
 /// i8`). `PromoteIntRes_SDIV/UDIV` extends both operands in the register, sign
 /// for the signed forms and zero for the unsigned.

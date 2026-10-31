@@ -309,3 +309,18 @@ fn an_sdiv_by_a_power_of_two_stays_when_the_target_says_so() {
     assert_ne!(root(false), ISD::SDiv);
     assert_eq!(root(true), ISD::SDiv);
 }
+
+const EXTENDED: &str = "declare zeroext i8 @g()\ndefine i32 @f(i8 zeroext %a, i8 signext %b) {\n  %c = call zeroext i8 @g()\n  \
+    %x = zext i8 %a to i32\n  %y = sext i8 %b to i32\n  %z = zext i8 %c to i32\n  %s = add i32 %x, %y\n  %r = add i32 %s, %z\n  ret i32 %r\n}\n";
+
+/// A narrow parameter or call result of a target with a calling hook (wasm)
+/// lost its `zeroext`/`signext`: the `and 255` and `extend8_s` after it stayed.
+/// `LowerArguments` and `LowerCallTo` assert the register extended.
+#[test]
+fn a_hooked_target_asserts_the_extension_a_parameter_and_a_result_carry() {
+    let (done, ..) = built(EXTENDED, Probe::default(), |target| target.legal_ints = vec![32]);
+    let block = done.unwrap();
+    assert!(has(&block, ISD::AssertZext) && has(&block, ISD::AssertSext), "parameters and the result are asserted");
+    let count = |op| block.dag.nodes().iter().filter(|node| node.opcode == op).count();
+    assert_eq!((count(ISD::AssertZext), count(ISD::AssertSext)), (2, 1), "zeroext a and the result; signext b");
+}

@@ -550,6 +550,10 @@ impl Tti for X86 {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
     }
 
+    fn speed_inline_by_code_size(&self) -> bool {
+        self.tuning.inline_size_guard_at_speed
+    }
+
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
     /// an ALU instruction. With 100 the 28 calls of `_savegame_read_block`
     /// stayed (+408 bytes of the module); 150 inlines them and still keeps the

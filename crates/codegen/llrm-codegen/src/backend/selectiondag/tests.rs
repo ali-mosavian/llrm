@@ -95,7 +95,6 @@ mod trunc_binop;
 mod type_actions;
 mod usub_sat;
 mod undef_float;
-mod usub_sat;
 mod vastart;
 mod wasm_hooks;
 mod wide_compare;

@@ -620,6 +620,7 @@ impl<'a> Builder<'a> {
             sibcall: false,
             variadic_call: false,
             call_attrs_move_arguments: false,
+            call_result_assert: None,
             fixed_args: 0,
             had_tail_call: false,
             volatile_memory: false,
@@ -664,6 +665,9 @@ struct Builder<'a> {
     /// The call being lowered has an argument whose attribute moves it
     /// (`relocating_attribute`).
     call_attrs_move_arguments: bool,
+    /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
+    /// for.
+    call_result_assert: Option<ISD>,
     /// The parameters the callee declares: the arguments after them are
     /// variadic.
     fixed_args: usize,
@@ -1107,28 +1111,8 @@ impl Builder<'_> {
         }
         let mut next = 0;
         for (at, (&arg, (vt, count))) in parameters.iter().zip(shapes).enumerate() {
-            let mut pieces = parts[next..next + count].to_vec();
-            // `LowerFormalArguments`: a narrow argument arrives in a wider register, and `zeroext` /
-            // `signext` says what is in the bits above it (`AssertZext`, `AssertSext`).
-            if let [piece] = pieces[..]
-                && vt.is_integer()
-                && self.dag.value_type(piece).is_integer()
-                && vt.size_in_bits() < self.dag.value_type(piece).size_in_bits()
-            {
-                let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
-                let code = if llrm_mir::memory::has(attrs, "signext") {
-                    Some(ISD::AssertSext)
-                } else if llrm_mir::memory::has(attrs, "zeroext") {
-                    Some(ISD::AssertZext)
-                } else {
-                    None
-                };
-                if let Some(code) = code {
-                    let narrow = self.dag.get_value_type_node(vt);
-                    pieces[0] = self.dag.get_node(code, self.dag.value_type(piece), &[piece, narrow]);
-                }
-            }
-            let value = self.join_from_calling(&pieces, vt);
+            let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
+            let value = self.join_from_calling(&parts[next..next + count], vt, extension_assert(attrs));
             next += count;
             self.node_map.insert(arg, value);
             if outside.contains(&arg) {
@@ -1577,6 +1561,7 @@ impl Builder<'_> {
             }
         }
         self.variadic_call = variadic;
+        self.call_result_assert = extension_assert(&info.return_attrs);
         self.fixed_args = named;
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
@@ -1738,13 +1723,26 @@ impl Builder<'_> {
         &mut self,
         parts: &[SDValue],
         vt: EVT,
+        assert: Option<ISD>,
     ) -> SDValue {
         if let [one] = parts {
-            return if self.dag.value_type(*one) == vt { *one } else { self.dag.get_node(ISD::Truncate, vt, &[*one]) };
+            if self.dag.value_type(*one) == vt {
+                return *one;
+            }
+            // `getCopyFromParts` with the `AssertOp` of
+            // `LowerArguments`/`LowerCallTo`
+            let one = match assert {
+                Some(code) => {
+                    let narrow = self.dag.get_value_type_node(vt);
+                    self.dag.get_node(code, self.dag.value_type(*one), &[*one, narrow])
+                }
+                None => *one,
+            };
+            return self.dag.get_node(ISD::Truncate, vt, &[one]);
         }
         let half = EVT::integer(vt.size_in_bits() / 2);
         let (low, high) = parts.split_at(parts.len() / 2);
-        let pair = [self.join_from_calling(low, half), self.join_from_calling(high, half)];
+        let pair = [self.join_from_calling(low, half, None), self.join_from_calling(high, half, None)];
         self.dag.get_node(ISD::BuildPair, vt, &pair)
     }
 
@@ -1841,9 +1839,10 @@ impl Builder<'_> {
         }
         let mut rest = &parts[..];
         let mut leaves = Vec::new();
+        let assert = if aggregate { None } else { std::mem::take(&mut self.call_result_assert) };
         for (leaf_vt, count) in layout {
             let (mine, tail) = rest.split_at(count);
-            leaves.push(self.join_from_calling(mine, leaf_vt));
+            leaves.push(self.join_from_calling(mine, leaf_vt, assert));
             rest = tail;
         }
         let _ = vt;
@@ -3851,4 +3850,15 @@ fn is_runtime_routine(
     direct
         .and_then(|global| builder.module.global(global).name.owned())
         .is_some_and(|name| name.starts_with(llrm_hir::mir::RUNTIME))
+}
+
+/// The assertion `signext`/`zeroext` makes of a narrow value's register.
+fn extension_assert(attrs: &[llrm_mir::Attribute]) -> Option<ISD> {
+    if llrm_mir::memory::has(attrs, "signext") {
+        Some(ISD::AssertSext)
+    } else if llrm_mir::memory::has(attrs, "zeroext") {
+        Some(ISD::AssertZext)
+    } else {
+        None
+    }
 }
