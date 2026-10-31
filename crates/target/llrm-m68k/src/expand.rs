@@ -56,17 +56,6 @@ fn frame_op(
         FrameOp::Save { registers, base: at, offset } => {
             mc::Inst { opcode: "MOVM32pm", operands: vec![Imm(*offset), base(at), Imm(mask(registers))] }
         }
-        FrameOp::Push(registers) | FrameOp::Pop(registers) => {
-            let pushing = matches!(op, FrameOp::Push(_));
-            let mut sorted: Vec<RegId> = registers.clone();
-            sorted.sort_by_key(|one| mask_bit(REGISTER_INFO.root(*one)));
-            match (&sorted[..], pushing) {
-                ([one], true) => mc::Inst { opcode: "PUSH32", operands: vec![R(*one)] },
-                ([one], false) => mc::Inst { opcode: "POP32", operands: vec![R(*one)] },
-                (_, true) => mc::Inst { opcode: "PUSHM32", operands: vec![Imm(mask(registers))] },
-                (_, false) => mc::Inst { opcode: "POPM32", operands: vec![Imm(mask(registers))] },
-            }
-        }
         FrameOp::Restore { registers, base: at, offset } => {
             mc::Inst { opcode: "MOVM32mp", operands: vec![Imm(mask(registers)), Imm(*offset), base(at)] }
         }
@@ -102,7 +91,6 @@ pub fn finish(
     assignment: &Assignment,
     number: usize,
     slots: &[i32],
-    overlay: bool,
     cpu: crate::dagisel::hooks::Cpu,
 ) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
@@ -175,9 +163,7 @@ pub fn finish(
         ..Function::default()
     });
     let mut out = Vec::new();
-    let pushes = overlay && layout.pushes();
-    let opening = if pushes { layout.push_prologue() } else { layout.prologue() };
-    opening.iter().for_each(|op| frame_op(op, &mut out));
+    layout.prologue().iter().for_each(|op| frame_op(op, &mut out));
     let mut lines = Vec::new();
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
     // pointer is that much further
@@ -272,7 +258,7 @@ pub fn finish(
             }
             Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
             Kind::Op("RET") => {
-                let closing = if pushes { layout.pop_epilogue() } else { layout.epilogue() };
+                let closing = layout.epilogue();
                 closing.iter().for_each(|op| frame_op(op, &mut out));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
             }

@@ -14,8 +14,8 @@ use crate::machine::{M68k, M68kMachine};
 use crate::mc;
 use crate::mfunc::{emit, expand_cmov};
 use crate::regalloc::{
-    allocate_spilling, branch_fold, commute_tied, eliminate_phis_with, fold_reserved_copies, machine_sink,
-    remove_identity_copies, remove_redundant_copies, two_address,
+    branch_fold, commute_tied, eliminate_phis_with, fold_reserved_copies, machine_sink, remove_identity_copies,
+    remove_redundant_copies, two_address,
 };
 
 /// A line of the function: a label or an instruction.
@@ -30,8 +30,6 @@ pub enum Item {
 /// What the compiler may do beyond the pin's output.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
-    /// Use the instructions of [`crate::overlay`] (`addq`, `subq`, `tst`).
-    pub overlay: bool,
     /// Run the shared IR mid-end (`-O2`) first, as `llc -O2` is given
     /// optimized IR by `opt`.
     pub mid_end: bool,
@@ -46,12 +44,12 @@ pub struct Options {
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
-    pub const PINNED: Options = Options { overlay: false, mid_end: false, size: false, source_order: false };
+    pub const PINNED: Options = Options { mid_end: false, size: false, source_order: false };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { overlay: true, mid_end: true, size: false, source_order: false }
+        Options { mid_end: true, size: false, source_order: false }
     }
 }
 
@@ -88,30 +86,22 @@ pub fn items_with(
     let mut function = emit(name, &blocks)?;
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
-    if options.overlay {
-        crate::regalloc::split_flag_edges(&mut function);
-    }
-    eliminate_phis_with(&mut function, options.overlay);
+    crate::regalloc::split_flag_edges(&mut function);
+    eliminate_phis_with(&mut function, false);
     fold_reserved_copies(&mut function);
     commute_tied(&mut function);
     two_address(&mut function);
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
-    let (assignment, slots) = if options.overlay {
-        crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
-    } else {
-        allocate_spilling(&mut function, first_slot)?
-    };
+    let (assignment, slots) = crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?;
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
-    if options.overlay {
-        crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
-    }
+    crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
     let mut out = vec![Item::Label(name.to_owned())];
-    for line in finish(&function, &assignment, number, &slots, options.overlay, cpu)? {
+    for line in finish(&function, &assignment, number, &slots, cpu)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),

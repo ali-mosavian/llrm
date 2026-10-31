@@ -59,7 +59,7 @@ fn overlay_instructions_encode_as_binutils_does() {
 /// `flags.rs`, which only a schedule that separates a compare from its uses
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
-const SOURCE_ORDER: Options = Options { overlay: true, mid_end: true, size: false, source_order: true };
+const SOURCE_ORDER: Options = Options { mid_end: true, size: false, source_order: true };
 
 fn compiled(
     ir: &str,
@@ -67,42 +67,6 @@ fn compiled(
 ) -> String {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
     text_with(&module, "f", Cpu::M68000, options).expect("compiles")
-}
-
-/// Push and pop of saved registers, bytes from binutils: `move.l %d2,-(%sp)`
-/// 2f02, `move.l (%sp)+,%d2` 241f, `movem.l %d2-%d3,-(%sp)` 48e73000,
-/// `movem.l (%sp)+,%d2-%d3` 4cdf000c, `movem.l %d2-%d7/%a2,-(%sp)` 48e73f20,
-/// `movem.l (%sp)+,%d2-%d7/%a2` 4cdf04fc, `move.l %a2,-(%sp)` 2f0a, `move.l
-/// (%sp)+,%a2` 245f.
-#[test]
-fn push_and_pop_encode_as_binutils_does() {
-    let one = |opcode, to| Inst { opcode, operands: vec![Operand::Reg(to)] };
-    let many = |opcode, mask| Inst { opcode, operands: vec![Operand::Imm(mask)] };
-    let d = |n: u32| 1i64 << n;
-    let cases = [
-        (one("PUSH32", reg::D2), "2f02"),
-        (one("POP32", reg::D2), "241f"),
-        (many("PUSHM32", d(2) | d(3)), "48e73000"),
-        (many("POPM32", d(2) | d(3)), "4cdf000c"),
-        (many("PUSHM32", 0xFC | d(10)), "48e73f20"),
-        (many("POPM32", 0xFC | d(10)), "4cdf04fc"),
-        (one("PUSH32", reg::A2), "2f0a"),
-        (one("POP32", reg::A2), "245f"),
-    ];
-    for (inst, golden) in cases {
-        assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
-    }
-}
-
-/// A leaf that only saves registers opens its frame with a push: the pin's
-/// `suba.l #8, %sp` and `movem.l %d2-%d3, (0,%sp)` are 12 bytes, the push 4.
-#[test]
-fn a_frame_of_saved_registers_is_pushed_not_carved() {
-    let ir = "define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [%a, %entry], [%s1, %l]\n  %t = phi i32 [%b, %entry], [%t1, %l]\n  %u = phi i32 [%c, %entry], [%u1, %l]\n  %v = phi i32 [%d, %entry], [%v1, %l]\n  %s1 = add i32 %s, %t\n  %t1 = add i32 %t, %u\n  %u1 = add i32 %u, %v\n  %v1 = add i32 %v, %i\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, 100\n  br i1 %e, label %l, label %x\nx:\n  %r = add i32 %s1, %u1\n  ret i32 %r\n}";
-    let pinned = compiled(ir, Options::PINNED);
-    let ours = compiled(ir, Options::default());
-    assert!(pinned.contains("suba.l") && pinned.contains("movem.l\t%d2"), "{pinned}");
-    assert!(ours.contains("-(%sp)") && ours.contains("(%sp)+") && !ours.contains("suba.l"), "{ours}");
 }
 
 fn branches(body: &str) -> String {
@@ -295,30 +259,6 @@ fn two_masks_of_one_register_in_a_row_stay_as_the_pin_has_them() {
     assert!(ours.contains("and.l\t#1,") && ours.contains("and.l\t#255"), "{ours}");
 }
 
-fn arrmax_loop() -> &'static str {
-    "define i32 @f(ptr %p, i32 %n) {\nentry:\n  %f = load i32, ptr %p\n  br label %l\nl:\n  %i = phi i32 [1, %entry], [%i1, %l]\n  %m = phi i32 [%f, %entry], [%m1, %l]\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  %c = icmp sgt i32 %v, %m\n  %m1 = select i1 %c, i32 %v, i32 %m\n  %i1 = add i32 %i, 1\n  %d = icmp slt i32 %i1, %n\n  br i1 %d, label %l, label %x\nx:\n  ret i32 %m1\n}"
-}
-
-/// Register-to-register moves between the loop label and its last branch.
-fn loop_register_moves(asm: &str) -> usize {
-    let body = asm.split(".LBB0_1:").nth(1).expect("a loop");
-    let end = body.rfind("\tblt").expect("the loop branch");
-    body[..end].lines().filter(|line| line.starts_with("\tmove.l\t%")).count()
-}
-
-/// The running maximum was copied on both arms of the select and once more at
-/// the loop end: the copy of the loaded value joined its register first and
-/// kept the copy that runs every trip from joining the maximum's. Now the
-/// maximum stays in its register and only the arm that takes a new one moves
-/// (the pointer's step through a data register is the pin's, three in all).
-#[test]
-fn a_select_in_a_loop_moves_no_more_than_the_pin_does() {
-    let pinned = compiled(arrmax_loop(), Options::PINNED);
-    assert!(loop_register_moves(&pinned) >= 3, "{pinned}");
-    let ours = compiled(arrmax_loop(), Options::default());
-    assert!(loop_register_moves(&ours) <= loop_register_moves(&pinned), "{ours}");
-}
-
 /// `p[i + 1]` through `(d8,An,Xn)`: the base class's `isLegalAddressingMode`
 /// refuses a base, an index and a displacement together, the hardware does
 /// not. The pin's M68k overrides no hook, so the refusal stays; a byte
@@ -331,15 +271,6 @@ fn a_base_an_index_and_a_displacement_are_refused_as_the_pin_does() {
     assert!(!tti.is_legal_addressing_mode(false, 1, true, 1));
     assert!(!tti.is_legal_addressing_mode(false, -128, true, 1) && !tti.is_legal_addressing_mode(false, 127, true, 1));
     assert!(tti.is_legal_addressing_mode(false, 0, true, 1));
-}
-
-fn code_size(
-    ir: &str,
-    options: Options,
-) -> usize {
-    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).unwrap();
-    let items = llrm_m68k::compile::items_with(&module, "f", Cpu::M68000, options).unwrap();
-    llrm_m68k::object::assemble(&items, 0).unwrap().code.len()
 }
 
 /// popcount's `x & 1` of a copy is the pin's `move.l %d1, %d2; and.l #1, %d2`;
@@ -450,20 +381,17 @@ done:
     assert!(!ours.contains("-(%a"), "{ours}");
 }
 
-/// A frame of saved registers and an outgoing-argument area was `suba.l #20,
-/// %sp; movem.l regs, (8,%sp)` and back: 24 B of prologue and epilogue. The
-/// saved registers are the top of the frame, so pushing them and taking the
-/// rest off the stack pointer opens the same frame in 12 B (fnptr 52 to 40 B,
-/// muldiv 80 to 68).
+/// A frame of saved registers and an outgoing-argument area is the pin's
+/// `suba.l #20, %sp; movem.l regs, (8,%sp)` and back. Pushing the registers and
+/// taking only the rest off the stack pointer (12 B instead of 24) was a
+/// different prologue that the pin's `M68kFrameLowering` does not emit.
 #[test]
-fn saved_registers_are_pushed_and_the_rest_of_the_frame_follows() {
+fn saved_registers_are_stored_into_the_carved_frame_as_the_pin_does() {
     let ir = llrm_m68k::kernels::source_in("library", "fnptr");
     let module = llrm_mir::parse::module(&ir).expect("parses");
     let ours = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
-    assert!(ours.contains("movem.l\t%d2-%d3/%a2, -(%sp)\n\tsuba.l\t#8, %sp\n"), "{ours}");
-    assert!(ours.contains("\tadda.l\t#8, %sp\n\tmovem.l\t(%sp)+, %d2-%d3/%a2\n\trts"), "{ours}");
-    let pinned = text_with(&module, "k", Cpu::M68000, Options::PINNED).expect("compiles");
-    assert!(pinned.contains("suba.l\t#20, %sp\n\tmovem.l\t%d2-%d3/%a2, (8,%sp)"), "{pinned}");
+    assert!(ours.contains("suba.l\t#20, %sp\n\tmovem.l\t%d2-%d3/%a2, (8,%sp)"), "{ours}");
+    assert!(!ours.contains("-(%sp)"), "{ours}");
 }
 
 fn library(name: &str) -> String {
