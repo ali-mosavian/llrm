@@ -1,4 +1,5 @@
-//! The hooks a target with no x86 conventions sets (wasm's): each is called when set and invisible when not.
+//! The hooks a target with no x86 conventions sets (wasm's): each is called
+//! when set and invisible when not.
 
 use std::sync::Mutex;
 
@@ -11,7 +12,8 @@ use super::super::function_lowering::FunctionLoweringInfo;
 use super::super::target_calling::{FixedObject, In, LiveIn, Out, TargetCalling};
 use super::*;
 
-/// A target with no x86 description (wasm): the builder asks its hooks, not x86's string instructions.
+/// A target with no x86 description (wasm): the builder asks its hooks, not
+/// x86's string instructions.
 struct Narrow;
 
 impl BuilderArch for Narrow {
@@ -137,8 +139,8 @@ impl TargetCalling for Probe {
     }
 }
 
-/// `body` built for a 32-bit target whose calling hooks are `probe`: whether it built, the DAG, what the hooks saw
-/// and the lowering info.
+/// `body` built for a 32-bit target whose calling hooks are `probe`: whether it
+/// built, the DAG, what the hooks saw and the lowering info.
 fn built(
     body: &str,
     probe: Probe,
@@ -162,16 +164,8 @@ fn built(
         ..BuilderTarget::m32()
     };
     options(&mut target);
-    let done = build_block(
-        &module,
-        function,
-        &layout,
-        &target,
-        &Narrow,
-        &convention,
-        &mut info,
-        function.entry().unwrap(),
-    );
+    let done =
+        build_block(&module, function, &layout, &target, &Narrow, &convention, &mut info, function.entry().unwrap());
     (done.map_err(|why| why.0.to_string()), probe.seen.lock().unwrap().clone(), info)
 }
 
@@ -184,8 +178,9 @@ fn has(
 
 const SRET: &str = "define void @f(ptr sret(i32) align 4 %p) {\n  ret void\n}\n";
 
-/// A target whose `sret` is an ordinary pointer (wasm) said so with `passes_in_place`; the builder refused the
-/// function whatever the target said.
+/// A target whose `sret` is an ordinary pointer (wasm) said so with
+/// `passes_in_place`; the builder refused the function whatever the target
+/// said.
 #[test]
 fn a_target_passes_an_sret_pointer_in_place_when_it_says_so() {
     let (default, ..) = built(SRET, Probe::default(), |_| {});
@@ -194,10 +189,12 @@ fn a_target_passes_an_sret_pointer_in_place_when_it_says_so() {
     assert!(set.is_ok(), "{:?}", set.err());
 }
 
-const VARIADIC_CALL: &str = "declare i32 @v(i32, ...)\ndefine i32 @f() {\n  %r = call i32 (i32, ...) @v(i32 1)\n  ret i32 %r\n}\n";
+const VARIADIC_CALL: &str =
+    "declare i32 @v(i32, ...)\ndefine i32 @f() {\n  %r = call i32 (i32, ...) @v(i32 1)\n  ret i32 %r\n}\n";
 
-/// `LowerCall` of a target that makes frame objects of its own or needs the callee's variadic flag: the builder
-/// called the plain `lower_call` and dropped both.
+/// `LowerCall` of a target that makes frame objects of its own or needs the
+/// callee's variadic flag: the builder called the plain `lower_call` and
+/// dropped both.
 #[test]
 fn a_call_reaches_the_targets_frame_hook_with_the_variadic_flag() {
     let (done, seen, _) = built(VARIADIC_CALL, Probe::default(), |_| {});
@@ -207,8 +204,8 @@ fn a_call_reaches_the_targets_frame_hook_with_the_variadic_flag() {
 
 const VARIADIC_BODY: &str = "define i32 @f(i32 %n, ...) {\n  ret i32 %n\n}\n";
 
-/// A variadic function's extra buffer parameter, after the fixed ones: the target gave none, so `va_start` had
-/// nothing to read.
+/// A variadic function's extra buffer parameter, after the fixed ones: the
+/// target gave none, so `va_start` had nothing to read.
 #[test]
 fn a_variadic_function_asks_the_target_for_its_buffer() {
     let (_, seen, none) = built(VARIADIC_BODY, Probe::default(), |_| {});
@@ -221,7 +218,8 @@ const MEM: &str = "declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\ndecla
     define void @f(ptr %d, ptr %s, i32 %n) {\n  call void @llvm.memcpy.p0.p0.i32(ptr %d, ptr %s, i32 %n, i1 false)\n  \
     call void @llvm.memset.p0.i32(ptr %d, i8 0, i32 %n, i1 false)\n  ret void\n}\n";
 
-/// A copy or fill of a size not known asks the target for its own node before the library call.
+/// A copy or fill of a size not known asks the target for its own node before
+/// the library call.
 #[test]
 fn a_memcpy_and_a_memset_of_unknown_size_ask_the_target_first() {
     let asked = |seen: &[String]| seen.iter().filter(|one| matches!(one.as_str(), "memcpy" | "memset")).count();
@@ -235,7 +233,8 @@ fn a_memcpy_and_a_memset_of_unknown_size_ask_the_target_first() {
 
 const UNREACHABLE: &str = "define void @f() {\n  unreachable\n}\n";
 
-/// `TargetOptions::TrapUnreachable`: control that reaches an `unreachable` stops with a trap (wasm).
+/// `TargetOptions::TrapUnreachable`: control that reaches an `unreachable`
+/// stops with a trap (wasm).
 #[test]
 fn an_unreachable_traps_only_for_a_target_that_traps() {
     let (off, ..) = built(UNREACHABLE, Probe::default(), |_| {});
@@ -246,7 +245,8 @@ fn an_unreachable_traps_only_for_a_target_that_traps() {
 
 const SHIFT: &str = "define i32 @f(i32 %a) {\n  %r = shl i32 %a, 3\n  ret i32 %r\n}\n";
 
-/// `getScalarShiftAmountTy` of wasm is the value's type: a constant amount was always an `i8`.
+/// `getScalarShiftAmountTy` of wasm is the value's type: a constant amount was
+/// always an `i8`.
 #[test]
 fn a_shift_amount_takes_the_type_the_target_names() {
     let amount = |block: &BlockDag| {
@@ -263,8 +263,8 @@ fn a_shift_amount_takes_the_type_the_target_names() {
 const SWITCH: &str = "define i32 @f(i32 %x) {\nentry:\n  switch i32 %x, label %d [ i32 0, label %a i32 1, label %b i32 2, label %c i32 3, label %e ]\n\
     a:\n  ret i32 10\nb:\n  ret i32 11\nc:\n  ret i32 12\ne:\n  ret i32 13\nd:\n  ret i32 0\n}\n";
 
-/// A jump table needs `min_jump_table_entries` cases and an optimizing target; the floor was fixed at 4 and the
-/// search always on.
+/// A jump table needs `min_jump_table_entries` cases and an optimizing target;
+/// the floor was fixed at 4 and the search always on.
 #[test]
 fn the_jump_table_floor_and_the_optimizer_switch_are_the_targets() {
     let table = |options: fn(&mut BuilderTarget)| has(&built(SWITCH, Probe::default(), options).0.unwrap(), ISD::BrJT);
@@ -275,20 +275,23 @@ fn the_jump_table_floor_and_the_optimizer_switch_are_the_targets() {
 const SPARSE: &str = "define i32 @f(i32 %x) {\nentry:\n  switch i32 %x, label %d [ i32 10, label %a i32 30, label %b i32 50, label %c i32 70, label %e i32 90, label %g ]\n\
     a:\n  ret i32 1\nb:\n  ret i32 2\nc:\n  ret i32 3\ne:\n  ret i32 4\ng:\n  ret i32 5\nd:\n  ret i32 0\n}\n";
 
-/// `getOptLevel() == None`: five sparse cases are tested one after another; an optimizing target splits them into a
-/// binary search.
+/// `getOptLevel() == None`: five sparse cases are tested one after another; an
+/// optimizing target splits them into a binary search.
 #[test]
 fn an_unoptimized_switch_is_a_chain_not_a_binary_search() {
     let dump = |optimize: bool| {
         let (done, ..) = built(SPARSE, Probe::default(), |target| target.switch_optimize = optimize);
         let block = done.unwrap();
-        std::iter::once(&block).chain(block.extra.iter().map(|(_, one)| one)).map(|one| one.dag.dump()).collect::<String>()
+        std::iter::once(&block)
+            .chain(block.extra.iter().map(|(_, one)| one))
+            .map(|one| one.dag.dump())
+            .collect::<String>()
     };
     assert_ne!(dump(true), dump(false));
 }
 
-/// `BuildSDIVPow2`'s default under `isIntDivCheap`: an `sdiv` by a power of two stays an `sdiv` (wasm); it was
-/// always turned into shifts.
+/// `BuildSDIVPow2`'s default under `isIntDivCheap`: an `sdiv` by a power of two
+/// stays an `sdiv` (wasm); it was always turned into shifts.
 #[test]
 fn an_sdiv_by_a_power_of_two_stays_when_the_target_says_so() {
     use super::super::dag::DagConfig;
@@ -306,4 +309,3 @@ fn an_sdiv_by_a_power_of_two_stays_when_the_target_says_so() {
     assert_ne!(root(false), ISD::SDiv);
     assert_eq!(root(true), ISD::SDiv);
 }
-

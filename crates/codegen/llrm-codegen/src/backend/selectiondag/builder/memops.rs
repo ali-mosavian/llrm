@@ -12,8 +12,8 @@ use llrm_mir::opcode::{Attribute, CallInfo};
 use super::super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue};
 use super::super::isd::ISD;
 use super::super::mvt::EVT;
-use super::super::x86isd;
 use super::super::target_calling::TargetCalling;
+use super::super::x86isd;
 use super::{Builder, Refused, convention_for};
 use crate::backend::isel::Convention;
 use crate::backend::memcpycall::inline_widths;
@@ -33,7 +33,8 @@ impl Builder<'_> {
         intrinsic: &Intrinsic,
     ) -> Result<(), Refused> {
         match intrinsic {
-            // The expansion is x86's `rep movs` and `rep stos` and its registers.
+            // The expansion is x86's `rep movs` and `rep stos` and its
+            // registers.
             Intrinsic::MemCpy | Intrinsic::MemSet | Intrinsic::MemMove
                 if self.arch.full().is_none() && self.calling().is_none() =>
             {
@@ -177,9 +178,10 @@ impl Builder<'_> {
         Ok(())
     }
 
-    /// `LowerVASTART` of a target whose `va_list` is a pointer to the variadic buffer: the buffer's
-    /// pointer, stored to the list. `VAEND` is expanded to its chain, `VACOPY` to a load and a store
-    /// of the pointer (`LegalizeDAG`'s `ExpandNode`).
+    /// `LowerVASTART` of a target whose `va_list` is a pointer to the variadic
+    /// buffer: the buffer's pointer, stored to the list. `VAEND` is
+    /// expanded to its chain, `VACOPY` to a load and a store of the pointer
+    /// (`LegalizeDAG`'s `ExpandNode`).
     fn visit_va_in_buffer(
         &mut self,
         instruction: &Instruction,
@@ -307,9 +309,10 @@ impl Builder<'_> {
         &self,
         size: u64,
     ) -> u64 {
-        // `findOptimalMemOpLowering` with no preferred type: the widest legal integer.
-        // DEVIATE: a misaligned access is taken as fast (wasm's `allowsMisalignedMemoryAccesses`).
-        // Exit: a hook on the target when one that is not asks for it.
+        // `findOptimalMemOpLowering` with no preferred type: the widest legal
+        // integer. DEVIATE: a misaligned access is taken as fast
+        // (wasm's `allowsMisalignedMemoryAccesses`). Exit: a hook on
+        // the target when one that is not asks for it.
         if self.arch.full().is_none() && self.calling().is_some() {
             return u64::from(self.target.legal_ints.iter().copied().max().unwrap_or(32) / 8);
         }
@@ -776,7 +779,13 @@ impl Builder<'_> {
 
         let opt_size = self.has_opt_size();
         if let (None, Some(calling)) = (self.arch.full(), self.calling()) {
-            return self.lower_hooked_mem_intrinsic(calling, which, [dst, other, size], [dst_align, src_align], opt_size);
+            return self.lower_hooked_mem_intrinsic(
+                calling,
+                which,
+                [dst, other, size],
+                [dst_align, src_align],
+                opt_size,
+            );
         }
         // `rep movs` and `rep stos` are x86's: a target without string
         // instructions copies past the inline limit with a call
@@ -922,9 +931,10 @@ impl Builder<'_> {
         Ok(())
     }
 
-    /// `getMemcpy`, `getMemmove` and `getMemset` for a target with a calling hook: the loads and
-    /// stores of a constant size within the limit, then the target's node
-    /// (`EmitTargetCodeFor*`), then the C library routine.
+    /// `getMemcpy`, `getMemmove` and `getMemset` for a target with a calling
+    /// hook: the loads and stores of a constant size within the limit, then
+    /// the target's node (`EmitTargetCodeFor*`), then the C library
+    /// routine.
     fn lower_hooked_mem_intrinsic(
         &mut self,
         calling: &'static dyn TargetCalling,
@@ -938,8 +948,7 @@ impl Builder<'_> {
         let tuning = &self.target.tuning;
         let chain = match which {
             Intrinsic::MemSet => {
-                let limit =
-                    if opt_size { tuning.max_stores_per_memset_opt_size } else { tuning.max_stores_per_memset };
+                let limit = if opt_size { tuning.max_stores_per_memset_opt_size } else { tuning.max_stores_per_memset };
                 let inline = match constant {
                     Some(bytes) => self.inline_memset(root, dst, other, bytes, limit, dst_align)?,
                     None => None,
@@ -964,11 +973,9 @@ impl Builder<'_> {
                 };
                 match inline.or_else(|| calling.emit_memcpy(&mut self.dag, root, dst, other, size)) {
                     Some(chain) => chain,
-                    None => self.hooked_mem_libcall(
-                        if copy { "memcpy" } else { "memmove" },
-                        root,
-                        [dst, other, size],
-                    )?,
+                    None => {
+                        self.hooked_mem_libcall(if copy { "memcpy" } else { "memmove" }, root, [dst, other, size])?
+                    }
                 }
             }
         };
@@ -976,8 +983,8 @@ impl Builder<'_> {
         Ok(())
     }
 
-    /// The call of `memcpy`, `memmove` or `memset` through the target's `LowerCall`; the result
-    /// (the destination) is dropped.
+    /// The call of `memcpy`, `memmove` or `memset` through the target's
+    /// `LowerCall`; the result (the destination) is dropped.
     fn hooked_mem_libcall(
         &mut self,
         name: &str,

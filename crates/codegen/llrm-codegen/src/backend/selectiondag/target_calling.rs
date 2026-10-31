@@ -94,8 +94,9 @@ pub trait TargetCalling: Debug + Sync {
         Ok(())
     }
 
-    /// Whether an argument with this attribute (`sret`, `byval`, ...) is placed like any other: the
-    /// builder refuses the ones the hook would have to move.
+    /// Whether an argument with this attribute (`sret`, `byval`, ...) is placed
+    /// like any other: the builder refuses the ones the hook would have to
+    /// move.
     fn passes_in_place(
         &self,
         _attribute: &str,
@@ -141,9 +142,9 @@ pub trait TargetCalling: Debug + Sync {
         live_in: LiveIn,
     ) -> Vec<SDValue>;
 
-    /// `LowerFormalArguments` of a variadic function: the pointer to the buffer its variadic
-    /// arguments are in, an extra parameter after the `fixed` ones; none for a target that keeps
-    /// them elsewhere.
+    /// `LowerFormalArguments` of a variadic function: the pointer to the buffer
+    /// its variadic arguments are in, an extra parameter after the `fixed`
+    /// ones; none for a target that keeps them elsewhere.
     fn variadic_buffer(
         &self,
         _dag: &mut SelectionDAG,

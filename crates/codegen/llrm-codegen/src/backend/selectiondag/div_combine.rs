@@ -152,7 +152,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if let Some(c) = divisor.filter(|&c| c != 0 && !exact) {
             let negated = c.wrapping_neg() & super::fold::mask(bits);
             if c.is_power_of_two() || negated.is_power_of_two() {
-                // `BuildSDIVPow2` of the default hook: `SDValue(N, 0)`, the divide as it is.
+                // `BuildSDIVPow2` of the default hook: `SDValue(N, 0)`, the
+                // divide as it is.
                 if self.dag.config().sdiv_pow2_stays {
                     return Some(node);
                 }

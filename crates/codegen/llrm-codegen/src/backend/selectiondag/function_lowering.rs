@@ -26,8 +26,8 @@ pub struct FunctionLoweringInfo {
     pub prezeroed: llrm_mir::dense::IdSet<InstId>,
     /// The register the `sret` parameter is copied to, read back to return it.
     pub sret_reg: Option<u32>,
-    /// The register a variadic function keeps the pointer to its variadic arguments in
-    /// (`WebAssemblyFunctionInfo::VarargBufferVreg`).
+    /// The register a variadic function keeps the pointer to its variadic
+    /// arguments in (`WebAssemblyFunctionInfo::VarargBufferVreg`).
     pub variadic_buffer: Option<u32>,
     /// The branch probabilities of the function, made at its first `switch`.
     pub bpi: Option<llrm_analysis::bpi::BranchProbabilityInfo>,

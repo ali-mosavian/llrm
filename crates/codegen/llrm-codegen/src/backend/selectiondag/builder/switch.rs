@@ -485,7 +485,8 @@ impl Builder<'_> {
         }
         // Most probable first (all equal here, so by value), then a cluster
         // whose block is next moves last so it falls through.
-        // `getOptLevel() != None`: the order of the clusters stays as the case list has it at `-O0`.
+        // `getOptLevel() != None`: the order of the clusters stays as the case
+        // list has it at `-O0`.
         if self.target_optimizes() {
             clusters[item.first..=item.last].sort_by(|a, b| b.prob.cmp(&a.prob).then(a.low.cmp(&b.low)));
             let last_prob = clusters[item.last].prob;

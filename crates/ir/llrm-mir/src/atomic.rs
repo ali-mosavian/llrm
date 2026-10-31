@@ -222,9 +222,10 @@ pub fn lowered(
     Ok(())
 }
 
-/// `LowerAtomicPass`, which a target without atomics runs before selection (wasm without the `atomics`
-/// feature): an atomic load or store is a plain one, a fence is nothing. A read-modify-write and a
-/// compare-exchange are refused until the pass's expansion into a load, an operation and a store is
+/// `LowerAtomicPass`, which a target without atomics runs before selection
+/// (wasm without the `atomics` feature): an atomic load or store is a plain
+/// one, a fence is nothing. A read-modify-write and a compare-exchange are
+/// refused until the pass's expansion into a load, an operation and a store is
 /// translated.
 pub fn lowered_single_thread(module: &mut Module) -> Result<(), String> {
     let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();

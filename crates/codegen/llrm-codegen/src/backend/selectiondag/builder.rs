@@ -82,9 +82,11 @@ pub struct BuilderTarget {
     pub shift_amount_of: Option<fn(EVT) -> EVT>,
     /// `getMinimumJumpTableEntries`.
     pub min_jump_table_entries: usize,
-    /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit tests and peeling run.
+    /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit
+    /// tests and peeling run.
     pub switch_optimize: bool,
-    /// `TargetOptions::TrapUnreachable`: an `unreachable` is a trap, so control that reaches it stops.
+    /// `TargetOptions::TrapUnreachable`: an `unreachable` is a trap, so control
+    /// that reaches it stops.
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
@@ -1533,8 +1535,9 @@ impl Builder<'_> {
         self.arch.register_named(name)
     }
 
-    /// Whether an attribute of `attrs` moves its argument out of the ordinary place, for a target
-    /// whose hook leaves some (`sret` on wasm: a pointer like any other) where they are.
+    /// Whether an attribute of `attrs` moves its argument out of the ordinary
+    /// place, for a target whose hook leaves some (`sret` on wasm: a
+    /// pointer like any other) where they are.
     fn moves_argument(
         &self,
         calling: &dyn TargetCalling,
@@ -1676,10 +1679,11 @@ impl Builder<'_> {
         Ok((!void).then(|| self.join_from_calling(&parts, vt)))
     }
 
-    /// `visitUnreachable`: a trap for a target that traps (`NoTrapAfterNoreturn` is off for it).
+    /// `visitUnreachable`: a trap for a target that traps
+    /// (`NoTrapAfterNoreturn` is off for it).
     ///
-    /// DEVIATE: no exception for the call before it being a `llvm.trap`, which has no intrinsic here.
-    /// Exit: with the intrinsic.
+    /// DEVIATE: no exception for the call before it being a `llvm.trap`, which
+    /// has no intrinsic here. Exit: with the intrinsic.
     fn visit_unreachable(&mut self) {
         if !self.target.trap_unreachable {
             return;
@@ -3081,7 +3085,9 @@ impl Builder<'_> {
                 SDNodeFlags::default().with(SDNodeFlags::NO_SIGNED_WRAP, nusw).with(SDNodeFlags::NO_UNSIGNED_WRAP, nuw);
             if element != 1 {
                 if element.is_power_of_two() {
-                    let amount = self.dag.get_constant(u128::from(element.trailing_zeros()), self.target.shift_amount_for(ptr_vt));
+                    let amount = self
+                        .dag
+                        .get_constant(u128::from(element.trailing_zeros()), self.target.shift_amount_for(ptr_vt));
                     idx = self.dag.get_node_flags(ISD::Shl, ptr_vt, &[idx, amount], scale_flags);
                 } else {
                     let scale = self.dag.get_constant(u128::from(element), ptr_vt);
