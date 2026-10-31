@@ -145,7 +145,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         let emitted = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: false },
+            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
             &selector,
             &mut hooks(),
             &Info,
@@ -204,7 +204,7 @@ fn the_combiner_runs_between_the_legalizers() {
     super::dag_select::legalized(
         &mut built.dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false },
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
         &machine,
     )
     .expect("legalizes");
@@ -318,7 +318,8 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
             function.layout()[0],
         )
         .expect("builds");
-        let (mut lowering, mut hooks) = (X86Lowering { cmov: false, sse2: false, min_size: false }, hooks());
+        let (mut lowering, mut hooks) =
+            (X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }, hooks());
         let x86 = X86Target {
             tli: &tli,
             lowering: &mut lowering,

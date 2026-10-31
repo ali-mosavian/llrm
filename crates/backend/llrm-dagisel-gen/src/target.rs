@@ -106,6 +106,7 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         regen: "tools/dagisel/regen-target.sh",
         desc: "desc",
         local_desc: true,
+        hooks: "Hooks",
     };
     let write = |name: &str, text: String| {
         let path = inputs.out.join(name);
