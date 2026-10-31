@@ -201,4 +201,24 @@ fn test_greedy_splits_a_range_the_spike_allocator_spills_whole() {
         split.report.reloads
     );
     assert!(split.report.reloads < whole.report.reloads);
+    assert!(
+        split.report.stores < spike_stores && split.report.stores < whole.report.stores,
+        "stores: spike {spike_stores}, greedy whole {} split {}",
+        whole.report.stores,
+        split.report.stores
+    );
+}
+
+/// Record mode only notes what to spill and writes nothing, so a split (which
+/// edits the function) is off in it (`decide_with_split`): the reason the test
+/// above runs in Simple mode.
+#[test]
+fn test_record_mode_never_splits() {
+    let converted = to_lir::<Flat>(&lowered(across_a_call(4)), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let plain = decide_with_split(&inputs, Mode::Record, false).expect("allocates");
+    let asked = decide_with_split(&inputs, Mode::Record, true).expect("allocates");
+    assert_eq!(plain.spilled, asked.spilled);
+    assert_eq!(plain.report.signature, asked.report.signature);
 }
