@@ -34,6 +34,10 @@ pub struct Tuning {
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
+    /// The inliner's D11 bound (a callee that stays must not grow the code)
+    /// also holds a caller optimized for speed; false: the pin's threshold
+    /// alone decides there.
+    pub inline_size_guard_at_speed: bool,
 }
 
 impl Tuning {
@@ -50,6 +54,7 @@ impl Tuning {
         unroll_max_percent_threshold_boost: None,
         inline_threshold: None,
         split_merged_conditions: false,
+        inline_size_guard_at_speed: false,
     };
 }
 

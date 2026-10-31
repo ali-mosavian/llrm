@@ -233,6 +233,45 @@ b0:
     assert!(wide < kept, "32-bit code kept it, cost {wide} threshold {kept}");
 }
 
+/// A callee that stays is not copied into a speed caller where the target's
+/// `inline_size_guard_at_speed` says so: qlight c at -O2 inlined a 30-instruction
+/// `ls_scale_byte` four times, 211 -> 376 bytes. Off, the pin's decision stands.
+#[test]
+fn a_speed_caller_does_not_copy_a_callee_that_stays_where_the_target_guards_size() {
+    let text = format!(
+        "{GLOBAL}define i32 @callee(i32 %x) {{
+b0:
+  %a = load i32, ptr @g
+  %b = add i32 %a, %x
+  %c = add i32 %b, %a
+  %d = mul i32 %c, %x
+  %e = add i32 %d, %b
+  %f = mul i32 %e, %a
+  %g = add i32 %f, %c
+  %h = mul i32 %g, %d
+  %i = add i32 %h, %a
+  %j = mul i32 %i, %x
+  %k = add i32 %j, %c
+  %l = mul i32 %k, %b
+  %m = add i32 %l, %e
+  store i32 %m, ptr @g
+  ret i32 %m
+}}
+
+define i32 @f(i32 %y) {{
+b0:
+  %r = call i32 @callee(i32 %y)
+  ret i32 %r
+}}
+"
+    );
+    let guarded = x86_real().with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_speed: true, ..llrm_mir::target::Tuning::PIN });
+    let (plain, bound) = priced_with(&text, 0, false, CallerSize::Speed, Some(&x86_real()));
+    let (cost, held) = priced_with(&text, 0, false, CallerSize::Speed, Some(&guarded));
+    assert!(plain < bound, "premise: without the guard the pin inlines it, cost {plain} threshold {bound}");
+    assert!(cost >= held, "the guard kept it, cost {cost} threshold {held}");
+}
+
 /// A callee at `-Os` on x86 (D11): the inline must not make the code bigger.
 /// `idioms.bas` copied a 14-instruction loop (cost 15 against the target's old
 /// bound of 25) into ten call sites, +690 bytes. The callee that stays is

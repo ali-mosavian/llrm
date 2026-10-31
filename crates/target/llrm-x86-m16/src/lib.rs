@@ -601,6 +601,7 @@ mod tuning_tests {
                 unroll_max_percent_threshold_boost: None,
                 inline_threshold: None,
                 split_merged_conditions: false,
+                inline_size_guard_at_speed: false,
                 ..table
             },
             Tuning::PIN

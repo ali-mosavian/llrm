@@ -278,6 +278,9 @@ impl Machine for Dos {
             // instructions in 6 procedures at 225, 1559 in 10 at 50 (main
             // 1703).
             inline_threshold: Some(50),
+            // DEVIATE: bytes over clocks at -O2 too: a callee that stays is
+            // not copied into a speed caller where it grows the code (D11).
+            inline_size_guard_at_speed: true,
             // DEVIATE: byte registers are scarce at every level, not only at
             // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
             // `setcc` pair and an `or` that took `bp` addressing out of the
