@@ -768,3 +768,22 @@ fn a_pointer_walk_is_a_byte_index_and_a_page_bump() {
     assert!(text.contains("  iny\n"), "no byte index:\n{text}");
     assert!(!text.contains("_pa1"), "a pointer still steps by its low byte:\n{text}");
 }
+
+/// `x >> 7` of a word was seven `lsr; ror` pairs on two cells for its low byte
+/// (112 clocks); the byte is the high one of `x << 1`, one `asl; rol` (the
+/// hand-written `shrax7` is 28).
+#[test]
+fn a_word_shifted_right_by_seven_is_one_shift_left() {
+    let ir = module("define i16 @shr7(i16 %x) {\n  %r = lshr i16 %x, 7\n  ret i16 %r\n}");
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!text.contains("lsr rc") && text.matches("ror").count() == 0, "seven right shifts:\n{text}");
+}
+
+/// A run of shifts of a word keeps the byte that shifts alone in `a`: `asl a;
+/// rol hi` is 7 clocks a step, `asl lo; rol hi` is 10.
+#[test]
+fn a_run_of_word_shifts_carries_one_byte_in_the_accumulator() {
+    let ir = module("define i16 @shr3(i16 %x) {\n  %r = lshr i16 %x, 3\n  ret i16 %r\n}");
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("lsr a\n  ror rc2"), "the shifts go through memory:\n{text}");
+}

@@ -2548,10 +2548,23 @@ fn emit_with<const STACK: bool>(
                         .count();
                     let (saved, slower) = (4 * run as i64 - 9, 5 * run as u32 + 1);
                     let pays = saved > 0 && slower <= TUNING.with(|t| t.get()).clocks_per_byte * saved as u32;
+                    // the byte that shifts alone rides in `a` for a run: 7
+                    // clocks a step where memory is 10 (`asl a; rol hi` against
+                    // `asl lo; rol hi`), for the two bytes of the load and
+                    // the store; a byte longer under three steps
+                    let in_a = run >= if TUNING.with(|t| t.get()).clocks_per_byte > 1 { 5 } else { 3 };
                     match spare {
                         Some(index) if pays => {
                             made += 1;
                             writeln!(out, "  ld{index} #{run}\n_sh{made}:\n  {first} {one}\n  {second} {two}\n  de{index}\n  bne _sh{made}").unwrap();
+                            repeated = run - 1;
+                        }
+                        _ if in_a && !a_live => {
+                            writeln!(out, "  lda {one}").unwrap();
+                            for _ in 0..run {
+                                writeln!(out, "  {first} a\n  {second} {two}").unwrap();
+                            }
+                            writeln!(out, "  sta {one}").unwrap();
                             repeated = run - 1;
                         }
                         _ => writeln!(out, "  {first} {one}\n  {second} {two}").unwrap(),

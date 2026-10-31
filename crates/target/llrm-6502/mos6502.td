@@ -257,6 +257,10 @@ def : Pat<(i8 (trunc Imag16:$a)), (EXTRACT_SUBREG Imag16:$a, sub_lo)>;
 def : Pat<(i8 (trunc (srl Imag16:$a, (i8 8)))), (EXTRACT_SUBREG Imag16:$a, sub_hi)>;
 // Only the low byte of a left shift is wanted: shift the low byte (`(x << 11) >> 8` is a byte shifted by 3).
 def : Pat<(i8 (trunc (shl Imag16:$a, (i8 imm:$k)))), (SHL8 (EXTRACT_SUBREG Imag16:$a, sub_lo), imm:$k)>;
+// The low byte of a word shifted right by 5 to 7 is the high byte of the word shifted left by 3 to 1: three
+// steps of `asl; rol` where seven of `lsr; ror` were.
+foreach k = 5-7 in
+  def : Pat<(i8 (trunc (srl Imag16:$a, (i8 k)))), (EXTRACT_SUBREG (SHL16 Imag16:$a, !sub(8, k)), sub_hi)>;
 def : Pat<(i16 (zext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (LDI8 0), sub_hi)>;
 def : Pat<(i16 (anyext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (LDI8 0), sub_hi)>;
 // A byte loaded and widened: the load, and a zero high byte.
