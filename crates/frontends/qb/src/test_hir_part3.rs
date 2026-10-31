@@ -959,10 +959,28 @@ fn test_a_counted_loop_reads_an_unannotated_byref_once() {
     let loop_ = poke_block(&text);
 
     assert!(!text.contains("load volatile"), "{text}");
-    // `ch` is one plain load per trip, as the pin leaves it: a volatile far
-    // store may reach it (4f82e22e1, #3994). Not a wait on it: no volatile.
-    assert_eq!(loop_.matches(" = load ").count(), 1, "{text}");
+    // `ch` is read before the loop: the POKE is to a segment the program owns
+    // nothing in, and a reference parameter points into the program, so the
+    // two are stated apart (the pin, given no such fact, reloaded it every
+    // trip).
+    assert_eq!(loop_.matches(" = load ").count(), 0, "{text}");
     assert!(loop_.contains("store volatile"), "the POKE still lands: {text}");
+}
+
+/// The reads of a reference parameter stay in the loop where the segment is not
+/// a literal: DEF SEG with a variable may point at the program's own data.
+#[test]
+fn test_a_counted_loop_reloads_a_byref_when_the_segment_is_not_a_literal() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "FILLSEG.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Fill (ch, s)\r\nFill 65, &HB800\r\nSUB Fill (ch, s)\r\nDEF SEG = s\r\nFOR o = 0 TO 3998 STEP 2\r\nPOKE o, ch\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let source = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = function_text(&optimized_mir(&source), "FILL");
+
+    assert_eq!(poke_block(&text).matches(" = load ").count(), 2, "{text}");
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.
@@ -3207,11 +3225,10 @@ fn a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment() {
     let body = &fill[top..=at];
     let loads = body.iter().filter(|one| one.contains("ptr [") || one.contains("b$seg")).count();
     let pokes = body.iter().filter(|one| one.starts_with("mov byte ptr es:[")).count();
-    // The pin's output: `opt -passes='loop-mssa(licm)'` and `default<O2>` hoist
-    // neither cell past a volatile far store (4f82e22e1, #3994 states that
-    // video memory holds no program data). Both POKEs still land every
-    // trip.
-    assert_eq!((loads, pokes), (2, 2), "{body:#?}");
+    // Given the facts (the POKE's segment is a literal, the parameters point
+    // into the program) neither cell is reloaded; both POKEs still land every
+    // trip. Without them the pin reloads both past a volatile far store.
+    assert_eq!((loads, pokes), (0, 2), "{body:#?}");
 }
 
 /// The listing of `source` through `llrm-qb -O2 -march=i486 -S`, as shipped.
