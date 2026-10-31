@@ -2436,7 +2436,20 @@ fn emit_with<const STACK: bool>(
                         adjust(&mut out, n);
                         out.push_str("  pla\n");
                     }
-                    out.push_str("  rts\n")
+                    // a call that returns at once is a jump: the callee's `rts`
+                    // returns from here; `__csave` keeps the return address
+                    let tail = out
+                        .strip_suffix('\n')
+                        .and_then(|text| text.rsplit('\n').next())
+                        .and_then(|line| line.strip_prefix("  jsr ").filter(|callee| !callee.starts_with("__csave")));
+                    match tail {
+                        Some(callee) => {
+                            let jump = format!("  jmp {callee}\n");
+                            out.truncate(out.trim_end().rfind('\n').map_or(0, |at| at + 1));
+                            out.push_str(&jump);
+                        }
+                        None => out.push_str("  rts\n"),
+                    }
                 }
                 (Kind::Op("ADJSP"), [_, Operand::Imm(n)]) => {
                     let n = i64::from(*n as u16 as i16);
@@ -2465,7 +2478,19 @@ fn emit_with<const STACK: bool>(
                         Operand::Frame(slot) => slot_name(*slot),
                         _ => register_name(regs[2]),
                     };
-                    writeln!(out, "  cmp {text}").unwrap();
+                    // `txa; cmp m` compares x itself where nothing reads a
+                    // afterwards: `cpx m`
+                    let next_reads_a = block.insts.get(i + 1).is_some_and(|next| next.kind == Kind::Op("CMOV"));
+                    let direct = (!a_live && !next_reads_a)
+                        .then(|| [("  txa\n", "cpx"), ("  tya\n", "cpy")].into_iter().find(|(t, _)| out.ends_with(t)))
+                        .flatten();
+                    match direct {
+                        Some((transfer, compare)) => {
+                            out.truncate(out.len() - transfer.len());
+                            writeln!(out, "  {compare} {text}").unwrap();
+                        }
+                        None => writeln!(out, "  cmp {text}").unwrap(),
+                    }
                 }
                 (Kind::Op(branch @ ("BEQ" | "BNE" | "BCC" | "BCS" | "BMI" | "BPL")), [to, _]) => {
                     writeln!(out, "  {} {}", branch.to_lowercase(), target(to)).unwrap();

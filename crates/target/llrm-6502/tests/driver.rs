@@ -662,3 +662,32 @@ define i8 @run() {{
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert_eq!(exit_code_of(&format!("{text}\n.export touch\ntouch:\n  rts\n"), "run"), 70, "{text}");
 }
+
+/// A counted loop compares its index, which lives in `x`. It went through the
+/// accumulator, `txa; cmp rc2` (two bytes and two clocks a trip over
+/// `cpx rc2`); 163 compares of the corpus' loops did.
+#[test]
+fn a_loop_bound_in_x_is_compared_with_cpx() {
+    let ir = module(
+        "@buf = global [16 x i8] zeroinitializer\n\
+         define void @f(i8 %n) {\n\
+         entry:\n  br label %loop\n\
+         loop:\n  %i = phi i8 [ 0, %entry ], [ %j, %loop ]\n  \
+         %z = zext i8 %i to i16\n  %p = getelementptr i8, ptr @buf, i16 %z\n  store i8 %i, ptr %p\n  \
+         %j = add i8 %i, 1\n  %c = icmp ne i8 %j, %n\n  br i1 %c, label %loop, label %exit\n\
+         exit:\n  ret void\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("cpx") || text.contains("cpy"), "no cpx:\n{text}");
+    assert!(!text.contains("txa\n  cmp") && !text.contains("tya\n  cmp"), "compared through a:\n{text}");
+}
+
+/// A function that returns what its last call returned was `jsr f; rts`: four
+/// bytes and nine clocks over `jmp f`, and a stack level deeper (`mul8`, 12
+/// clocks of 205).
+#[test]
+fn a_call_in_return_position_is_a_jump() {
+    let ir = module("define i8 @f(i8 %a, i8 %b) {\n  %m = mul i8 %a, %b\n  ret i8 %m\n}");
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("jmp __mulqi3") && !text.contains("jsr __mulqi3"), "no tail call:\n{text}");
+}

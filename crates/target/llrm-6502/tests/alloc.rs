@@ -1486,7 +1486,7 @@ fn a_remainder_alone_is_the_remainder_routine() {
             "define i{bits} @{name}(i{bits} %x, i{bits} %y) {{\n  %r = urem i{bits} %x, %y\n  ret i{bits} %r\n}}"
         );
         let text = compile(&ir, name);
-        assert!(text.contains(&format!("jsr {routine}")), "{bits}: {text}");
+        assert!(text.contains(&format!("jsr {routine}")) || text.contains(&format!("jmp {routine}")), "{bits}: {text}");
         assert!(!text.contains("rc6"), "{bits}: {text}");
         let setup = if bits == 16 {
             set("rc2", x & 0xFF) + &set("rc3", x >> 8) + &set("rc4", y & 0xFF) + &set("rc5", y >> 8)
@@ -2480,5 +2480,8 @@ define void @fill(ptr %p, i8 %c, i16 %n) {
 
     let text = compile(ir, "fill");
 
-    assert!(text.contains("jsr memset") || text.contains("jsr _memset"), "no call of memset in:\n{text}");
+    assert!(
+        ["jsr memset", "jsr _memset", "jmp memset", "jmp _memset"].iter().any(|call| text.contains(call)),
+        "no call of memset in:\n{text}"
+    );
 }
