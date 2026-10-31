@@ -498,6 +498,9 @@ pub struct Cost {
     /// The registers rated scaled so far, with their scale: the target's
     /// `scaled_index_insns` is paid once for each (DEVIATE LU1).
     scaled: Vec<(Scev, i64)>,
+    /// The formulae need an induction variable the enclosing loop does not
+    /// have (DEVIATE LU6).
+    pub new_outer_iv: bool,
 }
 
 impl Cost {
@@ -696,6 +699,7 @@ impl Cost {
                     self.lose();
                     return;
                 }
+                self.new_outer_iv |= !r.as_written;
                 self.c.num_regs += 1;
                 return;
             }
@@ -717,6 +721,8 @@ impl Cost {
                     let _ = outer;
                     if !r.se.is_affine(start) {
                         self.c.num_regs += (r.se.operands(start).len() as u32).saturating_sub(1);
+                    } else if !r.as_written && !is_existing_phi(r.se, r.cx, start) {
+                        self.new_outer_iv = true;
                     }
                 }
             }

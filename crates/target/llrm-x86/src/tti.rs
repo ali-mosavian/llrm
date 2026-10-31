@@ -947,6 +947,10 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    fn lsr_drops_outer_iv_in_full_loop(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
         self.real_mode.is_some()
     }

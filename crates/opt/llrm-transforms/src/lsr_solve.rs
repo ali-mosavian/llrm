@@ -203,6 +203,15 @@ impl Collection<'_, '_> {
         // DEVIATE LU3: a rewrite that needs more registers than the loop and
         // than the target has, and costs two instructions more, is dropped.
         let budget = self.tti.number_of_gpr_registers().saturating_sub(1);
+        // DEVIATE LU6: a loop that already fills the registers does not take
+        // an induction variable for its enclosing loop, held through it.
+        if self.tti.lsr_drops_outer_iv_in_full_loop()
+            && solution_cost.new_outer_iv
+            && self.baseline_cost.c.num_regs > budget
+        {
+            solution.clear();
+            return solution;
+        }
         let spills = solution_cost.c.num_regs > budget
             && solution_cost.c.num_regs > self.baseline_cost.c.num_regs
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
