@@ -1,4 +1,4 @@
-use super::{decode, hidden, lowered};
+use super::{decode, hidden, lowered, lowered_single_thread};
 use crate::module::Module;
 use crate::opcode::{AtomicKind, AtomicOrdering, Opcode};
 use crate::parse;
@@ -107,4 +107,28 @@ fn an_x86_exchange_and_a_seq_cst_store_stay_for_the_target_to_select() {
     let mut refused = parse::module(SWAP).unwrap();
     hidden(&mut refused).unwrap();
     assert!(lowered(&mut refused, 32, true, false).unwrap_err().contains("not lowered"));
+}
+
+/// A target with no atomics (wasm without the feature) runs `LowerAtomicPass`: wasm's selector has no atomic nodes, so
+/// the atomics stayed and selection refused them.
+#[test]
+fn without_atomics_a_load_and_a_store_are_plain_and_a_fence_is_nothing() {
+    let text = TEXT.replace("  ret i32 %a", "  fence seq_cst\n  ret i32 %a");
+    let mut module = parse::module(&text).unwrap();
+    assert!(opcodes(&module).iter().any(|opcode| matches!(opcode, Opcode::Atomic(_))), "the premise");
+    lowered_single_thread(&mut module).unwrap();
+    let kinds = opcodes(&module);
+    assert!(kinds.contains(&Opcode::Load { align: Some(4), volatile: false }), "{kinds:?}");
+    assert!(kinds.contains(&Opcode::Store { align: Some(4), volatile: false }), "{kinds:?}");
+    assert!(!kinds.iter().any(|opcode| matches!(opcode, Opcode::Atomic(_))), "{kinds:?}");
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+}
+
+/// A read-modify-write is not translated yet: refused by name, not lowered wrongly.
+#[test]
+fn without_atomics_a_read_modify_write_is_refused() {
+    let text = "target datalayout = \"e-p:32:32\"\n@flag = global i32 0\ndefine i32 @f(i32 %v) {\n  %a = atomicrmw add ptr @flag, i32 %v seq_cst\n  ret i32 %a\n}\n";
+    let mut module = parse::module(text).unwrap();
+    let why = lowered_single_thread(&mut module).unwrap_err();
+    assert!(why.contains("is not lowered without atomics yet"), "{why}");
 }

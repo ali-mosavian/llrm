@@ -96,6 +96,7 @@ mod undef_float;
 mod vastart;
 mod wide_compare;
 mod wide_counts;
+mod wasm_hooks;
 mod wide_division;
 mod wide_shifts;
 mod window;
