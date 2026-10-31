@@ -1,6 +1,6 @@
 //! The relocatable object of four functions against the bytes of `llc
 //! -mtriple=wasm32 -O0 -fast-isel=false -filetype=obj` (system LLVM 20.1.8,
-//! `tests/golden/four.o`).
+//! `tests/golden/four.wasm`).
 
 use llrm_wasm::Width;
 use llrm_wasm::dag::Options;
@@ -14,7 +14,7 @@ fn four(options: Options) -> Vec<u8> {
 
 #[test]
 fn four_functions_are_llcs_object_byte_for_byte() {
-    let golden = std::fs::read(format!("{}/tests/golden/four.o", env!("CARGO_MANIFEST_DIR"))).expect("golden object");
+    let golden = std::fs::read(format!("{}/tests/golden/four.wasm", env!("CARGO_MANIFEST_DIR"))).expect("golden object");
     let ours = four(Options { stackify: false });
     if let Some(path) = std::env::var_os("WASM_DUMP") {
         std::fs::write(path, &ours).expect("dump");
@@ -32,20 +32,20 @@ fn the_stackified_object_is_written() {
     }
     assert!(
         bytes.len()
-            < std::fs::metadata(format!("{}/tests/golden/four.o", env!("CARGO_MANIFEST_DIR"))).unwrap().len() as usize
+            < std::fs::metadata(format!("{}/tests/golden/four.wasm", env!("CARGO_MANIFEST_DIR"))).unwrap().len() as usize
     );
 }
 
-/// `tests/obj/NAME.o` is `llc -mtriple=wasm32 -O0 -fast-isel=false
+/// `tests/obj/NAME.wasm` is `llc -mtriple=wasm32 -O0 -fast-isel=false
 /// -filetype=obj` of `NAME.ll` at the pin.
 fn check(name: &str) {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/obj");
     let source = std::fs::read_to_string(dir.join(format!("{name}.ll"))).expect("the .ll");
-    let golden = std::fs::read(dir.join(format!("{name}.o"))).expect("the .o");
+    let golden = std::fs::read(dir.join(format!("{name}.wasm"))).expect("the .wasm");
     let got = llrm_wasm::driver::object(&source, llrm_wasm::Width::W32, llrm_wasm::dag::Options::default())
         .unwrap_or_else(|why| panic!("{name}: {why}"));
     if let Some(path) = std::env::var_os("WASM_DUMP_DIR") {
-        std::fs::write(std::path::Path::new(&path).join(format!("{name}.o")), &got).expect("dump");
+        std::fs::write(std::path::Path::new(&path).join(format!("{name}.wasm")), &got).expect("dump");
     }
     assert_eq!(got, golden, "{name}");
 }
