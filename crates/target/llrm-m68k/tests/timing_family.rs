@@ -197,3 +197,54 @@ fn m68030_shifts_bits_and_movem() {
     assert_eq!(m68030("bset %d0, (%a0)"), 6 + 3);
     assert_eq!(m68030("movem.l %d2-%d4, -(%sp)"), 4 + 2 * 3 + 2);
 }
+
+fn m68040(text: &str) -> u32 {
+    clocks(Cpu::M68040, text)
+}
+
+/// MC68040UM Section 10: the clocks are the busiest stage, `max(<ea> calculate, execute base)`; the
+/// lead time is hidden. Cells below are `<ea> calculate`, `execute` of the printed tables.
+/// 10.6 (p. 10-13): ADD (An) 1, 1; ADDA (An)+ 2, 1L + 2. 10.4 (p. 10-9): MOVE (An)+ to (An)+ 2, 1L + 1.
+#[test]
+fn m68040_integer_cells() {
+    assert_eq!(m68040("add.l (%a0), %d0"), 1);
+    assert_eq!(m68040("adda.l (%a0)+, %a1"), 2);
+    assert_eq!(m68040("move.l (%a0)+, (%a1)+"), 2);
+    assert_eq!(m68040("move.w %d0, %d1"), 1);
+}
+
+/// 10.5 (pp. 10-11, 10-12): RTS 5, 5; UNLK 2, 1L + 1; LINK 3, 2L + 1; BSR 2, 1L + 1; Bcc taken 2, 2; not taken 3, 3.
+#[test]
+fn m68040_control_flow() {
+    assert_eq!(m68040("rts"), 5);
+    assert_eq!(m68040("unlk %a6"), 2);
+    assert_eq!(m68040("link %a6, #-4"), 3);
+    assert_eq!(m68040("bsr .L1"), 2);
+    assert_eq!(cost_on(Cpu::M68040, "bne .L1", 2, true).unwrap().clocks, 2);
+    assert_eq!(cost_on(Cpu::M68040, "bne .L1", 2, false).unwrap().clocks, 3);
+}
+
+/// 10.6: DIVS.W Dn 8, 27 (p. 10-20); MULS.W Dn 1, 16/20 and MULU.L 1, 14/20 (p. 10-25, word/long);
+/// ASL Dn 1, 3/4 and ASR/LSL/LSR Dn 1, 2/3 (p. 10-14, immediate/register count).
+#[test]
+fn m68040_multiply_divide_and_shifts() {
+    assert_eq!(m68040("divs.w %d1, %d0"), 27);
+    assert_eq!(m68040("muls.w %d1, %d0"), 16);
+    assert_eq!(m68040("mulu.l %d1, %d0"), 20);
+    assert_eq!(m68040("asl.l #2, %d0"), 3);
+    assert_eq!(m68040("asl.l %d1, %d0"), 4);
+    assert_eq!(m68040("lsl.l #2, %d0"), 2);
+    assert_eq!(m68040("lsl.l %d1, %d0"), 3);
+}
+
+/// 10.6 (p. 10-23): MOVEM <list>,-(An) calculates `2 + D' + A'` and executes `1L + 1 + D' + A'`: n = 3 gives 5.
+#[test]
+fn m68040_movem_counts_its_registers() {
+    assert_eq!(m68040("movem.l %d2-%d4, -(%sp)"), 5);
+}
+
+/// The 68040 tables have no NOP row; it is an error, not zero clocks.
+#[test]
+fn m68040_nop_is_not_in_the_tables() {
+    assert!(cost_on(Cpu::M68040, "nop", 2, true).is_err());
+}

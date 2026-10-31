@@ -1,0 +1,19 @@
+#title,10.6 INTEGER UNIT INSTRUCTION TIMINGS: TAS *,page,10-28,notes,*Times listed are typical. This instruction interlocks the <ea> calculate and execute stages and synchronizes some portions of the processor before execution.
+Addressing Mode,TAS * <ea> Calculate,TAS * Execute
+Dn,1,2
+An,—,—
+(An),26,2L + 24
+(An)+,26,2L + 24
+–(An),26,2L + 24
+"(d 16,An)",26,2L + 24
+"(d 16,PC)",—,—
+"(xxx).W, (xxx).L",26,2L + 24
+#<xxx>,—,—
+"(d 8,An,Xn)",27,27
+"(d 8,PC,Xn)",—,—
+"(BR,Xn)",30,1L + 28
+"(bd,BR,Xn)",31,1L + 29
+"([bd,BR,Xn])",33,33
+"([bd,BR,Xn],od)",35,34
+"([bd,BR],Xn)",34,3L + 31
+"([bd,BR],Xn,od)",36,3L + 32

@@ -1,0 +1,19 @@
+#title,"10.6 INTEGER UNIT INSTRUCTION TIMINGS: ADD, AND, EOR, OR, SUB, TST | ADDA | ADDI, ANDI, EORI, ORI, SUBI",page,10-13,notes,
+Addressing Mode,"ADD, AND, EOR, OR, SUB, TST <ea> Calculate","ADD, AND, EOR, OR, SUB, TST Execute",ADDA <ea> Calculate,ADDA Execute,"ADDI, ANDI, EORI, ORI, SUBI <ea> Calculate","ADDI, ANDI, EORI, ORI, SUBI Execute"
+Dn,1,1,1,2,1,1
+An,1,1,1,1,—,—
+(An),1,1,1,2,1,1
+(An)+,1,1,2,1L + 2,2,1L + 1
+–(An),1,1,2,1L + 2,2,1L + 1
+"(d 16,An)",1,1,2,1L + 2,2,1L + 1
+"(d 16,PC)",3,2L + 1,3,2L + 2,—,—
+"(xxx).W, (xxx).L",1,1,1,2,2,1L + 1
+#<xxx>,1,1,1,1,—,—
+"(d 8,An,Xn)",3,3,4,5,3,3
+"(d 8,PC,Xn)",5,1L + 4,5,1L + 5,—,—
+"(BR,Xn)",6,1L + 5,6,1L + 6,7,1L + 6
+"(bd,BR,Xn)",7,1L + 6,7,1L + 7,8,1L + 7
+"([bd,BR,Xn])",10,1L + 9,10,1L + 10,10,1L + 10
+"([bd,BR,Xn],od)",11,1L + 11,11,1L + 12,11,1L + 11
+"([bd,BR],Xn)",11,3L + 8,11,3L + 9,11,3L + 9
+"([bd,BR],Xn,od)",12,3L + 10,12,3L + 11,12,3L + 10

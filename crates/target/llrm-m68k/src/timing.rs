@@ -25,6 +25,7 @@
 
 mod m68010;
 mod m68030;
+mod m68040;
 mod table;
 
 use crate::dagisel::hooks::Cpu as SelectCpu;
@@ -317,7 +318,8 @@ pub fn cost_on(
         Cpu::M68010 => m68010::clocks(base, suffix, &operands, bytes, taken),
         Cpu::M68020 => clocks68020(base, suffix, &operands, bytes, taken),
         Cpu::M68030 => m68030::clocks(base, suffix, &operands, bytes, taken),
-        Cpu::M68040 | Cpu::M68060 => None,
+        Cpu::M68040 => m68040::clocks(base, suffix, &operands, bytes, taken),
+        Cpu::M68060 => None,
     }
     .ok_or_else(|| format!("`{text}` is not in the {cpu:?} tables"))?;
     let by_register = is_shift(base) && matches!(cpu, Cpu::M68000 | Cpu::M68010) && places(&operands).is_none() && operands.len() == 2;
