@@ -343,11 +343,16 @@ impl Profile {
     /// What the first use of a callee-saved register costs, in thousandths of
     /// a spill access, where the target prices it (`Tuning::csr_priced`): its
     /// `push_r` and `pop_r` against the mean of `mov_rm` and `mov_mr`, all in
-    /// clocks. None: the pin's rule, and always under `size`.
-    pub fn csr_price_milli(&self) -> Option<u32> {
+    /// clocks. None: the pin's rule, always under `size`, and for a function
+    /// with no frame (`frameless`): its first spill makes one (`push bp; mov
+    /// bp,sp; sub sp,n` ... `mov sp,bp; pop bp`), dearer than the push and pop.
+    pub fn csr_price_milli(
+        &self,
+        frameless: bool,
+    ) -> Option<u32> {
         // Under `size` bytes decide, and a push and a pop (2 B) are under the
         // spill's accesses (3 or 4 B each): the pin's rule keeps the register.
-        if !self.target().tuning().csr_priced || self.size || self.min_size {
+        if !self.target().tuning().csr_priced || self.size || self.min_size || frameless {
             return None;
         }
         let (push, pop) = (self.cost("push_r").ok()?, self.cost("pop_r").ok()?);
