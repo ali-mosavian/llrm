@@ -1953,7 +1953,7 @@ fn a_select_of_bits_as_a_condition_compiles_and_runs() {
     let text = compile_within_ten_seconds(ir, "bitsel");
     for (a, b, c) in [(0u16, 0u16, 0u16), (0, 0, 1), (1, 0, 0), (1, 1, 1), (1, 1, 0), (0, 1, 1)] {
         let setup = set("rc2", a) + &set("rc3", b) + &set("rc4", c);
-        let want = if (if a & 1 == 1 { b == 0 } else { c & 1 == 1 }) { 3 } else { 4 };
+        let want = if if a & 1 == 1 { b == 0 } else { c & 1 == 1 } { 3 } else { 4 };
         assert_eq!(
             common::run_with(&format!("alloc-bitsel-{a}{b}{c}"), &format!("{setup}  jsr bitsel\n"), &text),
             want,

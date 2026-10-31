@@ -248,7 +248,7 @@ fn expand_macros(text: &str) -> String {
     let substitute = |line: &str, parameters: &[String], arguments: &[&str]| -> String {
         let mut out = String::new();
         let mut word = String::new();
-        let mut flush = |word: &mut String, out: &mut String| {
+        let flush = |word: &mut String, out: &mut String| {
             match parameters.iter().position(|parameter| parameter == word) {
                 Some(at) => out.push_str(arguments.get(at).copied().unwrap_or("")),
                 None => out.push_str(word),

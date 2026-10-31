@@ -346,6 +346,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-cgen"
+version = "0.1.0"
+
+[[package]]
 name = "llrm-codegen"
 version = "0.1.0"
 dependencies = [
@@ -491,6 +495,23 @@ dependencies = [
  "iced-x86",
  "llrm-omf",
  "llrm-support",
+]
+
+[[package]]
+name = "llrm-m68k"
+version = "0.1.0"
+dependencies = [
+ "llrm-analysis",
+ "llrm-cgen",
+ "llrm-codegen",
+ "llrm-dagisel",
+ "llrm-debug",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-object",
+ "llrm-spike-mf",
+ "llrm-target",
+ "llrm-transforms",
 ]
 
 [[package]]
