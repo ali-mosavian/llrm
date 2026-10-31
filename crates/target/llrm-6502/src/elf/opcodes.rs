@@ -1,6 +1,7 @@
-//! The 6502 and 65C02 opcode map: (mnemonic, addressing mode, opcode, bytes, NMOS).
-//! Derived by assembling each form with the llvm-mos SDK's `llvm-mc` (`-mcpu=mos6502` and
-//! `-mcpu=mosw65c02`) and reading the first byte; `tests/elf.rs` checks every row against it again.
+//! The 6502 and 65C02 opcode map: (mnemonic, addressing mode, opcode, bytes,
+//! NMOS). Derived by assembling each form with the llvm-mos SDK's `llvm-mc`
+//! (`-mcpu=mos6502` and `-mcpu=mosw65c02`) and reading the first byte;
+//! `tests/elf.rs` checks every row against it again.
 
 use super::Mode;
 
@@ -31,13 +32,22 @@ pub const OPCODES: &[(&str, Mode, u8, u8, bool)] = &[
     ("asl", Mode::Imp, 0x0A, 1, true),
     ("asl", Mode::Zp, 0x06, 2, true),
     ("asl", Mode::ZpX, 0x16, 2, true),
+    ("bcc", Mode::Rel, 0x90, 2, true),
+    ("bcs", Mode::Rel, 0xB0, 2, true),
+    ("beq", Mode::Rel, 0xF0, 2, true),
     ("bit", Mode::Abs, 0x2C, 3, true),
     ("bit", Mode::AbsX, 0x3C, 3, false),
     ("bit", Mode::Imm, 0x89, 2, false),
     ("bit", Mode::Zp, 0x24, 2, true),
     ("bit", Mode::ZpX, 0x34, 2, false),
+    ("bmi", Mode::Rel, 0x30, 2, true),
+    ("bne", Mode::Rel, 0xD0, 2, true),
+    ("bpl", Mode::Rel, 0x10, 2, true),
+    ("bra", Mode::Rel, 0x80, 2, false),
     ("brk", Mode::Imm, 0x00, 2, true),
     ("brk", Mode::Imp, 0x00, 1, true),
+    ("bvc", Mode::Rel, 0x50, 2, true),
+    ("bvs", Mode::Rel, 0x70, 2, true),
     ("clc", Mode::Imp, 0x18, 1, true),
     ("cld", Mode::Imp, 0xD8, 1, true),
     ("cli", Mode::Imp, 0x58, 1, true),

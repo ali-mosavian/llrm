@@ -1,7 +1,7 @@
-//! The 6502's ca65 text as an ELF32 relocatable object, as `llvm-mc -triple=mos`
-//! writes one: the container is `llrm-elf`'s; this is the machine number
-//! (EM_MOS), the `R_MOS_*` types, and a small assembler for the text this
-//! backend prints.
+//! The 6502's ca65 text as an ELF32 relocatable object, as `llvm-mc
+//! -triple=mos` writes one: the container is `llrm-elf`'s; this is the machine
+//! number (EM_MOS), the `R_MOS_*` types, and a small assembler for the text
+//! this backend prints.
 //!
 //! # How it works
 //! Lines are read once, in order. A `.segment` picks the section
@@ -32,6 +32,7 @@ use llrm_object::assembler::AsmBackend;
 use llrm_object::{
     Binding, Definition, Fix, FixupKind, FixupKindInfo, Object, Reloc, Role, Section, Symbol, Target, Unsupported,
 };
+pub use opcodes::OPCODES;
 
 /// `EM_MOS` (llvm-mos `ELF.h`).
 const EM_MOS: u16 = 6502;
@@ -221,10 +222,14 @@ fn expr(
     Ok(result)
 }
 
+/// An imaginary register, `rcN`: a byte of the zero page the platform places.
+fn imaginary(symbol: &str) -> bool {
+    symbol.strip_prefix("rc").is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// `rcN` is `__rcN` in the object; other names are as written.
 fn linked(symbol: &str) -> String {
-    let imaginary = symbol.strip_prefix("rc").is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()));
-    if imaginary { format!("__{symbol}") } else { symbol.to_owned() }
+    if imaginary(symbol) { format!("__{symbol}") } else { symbol.to_owned() }
 }
 
 struct Piece {
@@ -242,6 +247,7 @@ pub fn object(
     let mut equates: HashMap<String, i64> = HashMap::new();
     let mut zero_page: HashMap<String, ()> = HashMap::new();
     let mut sections: Vec<Piece> = Vec::new();
+    // ca65 starts in CODE.
     let mut current: Option<usize> = None;
     let mut labels: Vec<(String, usize, usize)> = Vec::new();
     let mut exported: Vec<String> = Vec::new();
@@ -260,6 +266,7 @@ pub fn object(
         sections.len() - 1
     };
 
+    current = Some(section_of(&mut sections, "CODE"));
     for (number_of_line, raw) in text.lines().enumerate() {
         let fail = |message: String| format!("line {}: {message}: {raw}", number_of_line + 1);
         let line = raw.split(';').next().unwrap_or("").trim();
@@ -345,7 +352,7 @@ pub fn object(
         let operand = operand.trim();
         let is_zero_page = |value: &Expr| -> bool {
             match &value.symbol {
-                Some(symbol) => zero_page.contains_key(symbol.as_str()) || equates.contains_key(symbol.as_str()),
+                Some(symbol) => imaginary(symbol) || zero_page.contains_key(symbol.as_str()),
                 None => (0..256).contains(&value.addend),
             }
         };
@@ -368,10 +375,16 @@ pub fn object(
             }
         } else if let Some(index) = operand.strip_suffix(",x") {
             let value = expr(index, &equates).map_err(&fail)?;
-            (if is_zero_page(&value) && opcode(&mnemonic, Mode::ZpX).is_some() { Mode::ZpX } else { Mode::AbsX }, Some(value))
+            (
+                if is_zero_page(&value) && opcode(&mnemonic, Mode::ZpX).is_some() { Mode::ZpX } else { Mode::AbsX },
+                Some(value),
+            )
         } else if let Some(index) = operand.strip_suffix(",y") {
             let value = expr(index, &equates).map_err(&fail)?;
-            (if is_zero_page(&value) && opcode(&mnemonic, Mode::ZpY).is_some() { Mode::ZpY } else { Mode::AbsY }, Some(value))
+            (
+                if is_zero_page(&value) && opcode(&mnemonic, Mode::ZpY).is_some() { Mode::ZpY } else { Mode::AbsY },
+                Some(value),
+            )
         } else {
             let value = expr(operand, &equates).map_err(&fail)?;
             let mode = if opcode(&mnemonic, Mode::Rel).is_some() {
@@ -451,16 +464,20 @@ pub fn object(
                     continue;
                 }
             }
-            let target = *index_of.entry(symbol.clone()).or_insert_with(|| {
-                symbols.push(Symbol {
-                    name: symbol.clone(),
-                    binding: Binding::Public,
-                    definition: Definition::Undefined,
-                    size: 0,
-                    group: None,
-                });
-                symbols.len() - 1
-            });
+            let target = *index_of
+                .entry(symbol.clone())
+                .or_insert_with(
+                    || {
+                        symbols.push(Symbol {
+                            name: symbol.clone(),
+                            binding: Binding::Public,
+                            definition: Definition::Undefined,
+                            size: 0,
+                            group: None,
+                        });
+                        symbols.len() - 1
+                    },
+                );
             let fix = if *kind == fixup::PCREL_8 { Fix::relative(*kind, 0) } else { Fix::plain(*kind) };
             relocs.push(Reloc::new(*place, fix, Target::Symbol(target), *addend));
         }
