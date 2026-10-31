@@ -448,6 +448,18 @@ pub trait Hooks<D: Dag> {
         rhs: i64,
         desired: i64,
     ) -> bool;
+    /// `MCInstrDesc::mayLoad` and `mayStore` of a machine opcode.
+    fn may_load_store(
+        &self,
+        opcode: u16,
+    ) -> (bool, bool);
+}
+
+/// What the x86 PatFrags ask of the target beyond [`Hooks`]: the bodies in
+/// `X86InstrFragments.td`, `X86InstrCompiler.td` and `X86InstrInfo.td` that
+/// read the subtarget or a node's users. The x86 tables' `node_predicate` takes
+/// a `Hooks` that also has these; another target's table does not.
+pub trait X86Predicates<D: Dag>: Hooks<D> {
     /// `Subtarget->hasSSEUnalignedMem()`.
     fn has_sse_unaligned_mem(&self) -> bool;
     /// `shouldAvoidImmediateInstFormsForSize(N)`.
@@ -488,11 +500,6 @@ pub trait Hooks<D: Dag> {
         dag: &D,
         node: u32,
     ) -> bool;
-    /// `MCInstrDesc::mayLoad` and `mayStore` of a machine opcode.
-    fn may_load_store(
-        &self,
-        opcode: u16,
-    ) -> (bool, bool);
 }
 
 /// The pattern predicates that are decided when a function is selected, as
