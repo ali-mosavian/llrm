@@ -1914,15 +1914,12 @@ fn priced_chain(
     profile: &crate::backend::cpu::Profile,
 ) -> Option<SDValue> {
     use crate::backend::arithmetic;
-    let (chain, clocks) = if vt == EVT::I16 {
-        arithmetic::cheapest_narrow_chain(c, profile)
+    let chain = if vt == EVT::I16 {
+        let (chain, clocks) = arithmetic::cheapest_narrow_chain(c, profile).ok()??;
+        (clocks < arithmetic::immediate_multiply(profile, c).ok()?).then_some(chain)
     } else {
-        arithmetic::cheapest_chain(c, profile)
-    }
-    .ok()??;
-    if clocks >= arithmetic::immediate_multiply(profile, c).ok()? {
-        return None;
-    }
+        arithmetic::scale(c, profile).ok()?
+    }?;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
         let by = dag.get_constant(by as u128, EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])

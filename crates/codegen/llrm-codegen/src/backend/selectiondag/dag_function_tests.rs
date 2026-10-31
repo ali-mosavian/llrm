@@ -311,8 +311,14 @@ define i32 @f(i16 %x) {
 #[test]
 fn a_chain_of_word_operations_has_no_casts_between_them() {
     let module = crate::testing::module(WORD_CHAIN).expect("parses");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
-        .unwrap_or_else(|e| panic!("{}", e.0));
+    let done = selected(
+        &module,
+        "f",
+        &llrm_x86_m32::M32,
+        crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu"),
+        &[],
+    )
+    .unwrap_or_else(|e| panic!("{}", e.0));
     let names: Vec<String> =
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     assert!(!names.iter().any(|n| n.starts_with("movzx") || n.starts_with("movsx")), "{names:?}");

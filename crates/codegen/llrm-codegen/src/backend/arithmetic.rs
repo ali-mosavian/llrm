@@ -125,7 +125,14 @@ pub fn scale<'a>(
 ) -> Result<Option<Vec<(&'static str, i64)>>, String> {
     let target = targets::profile(cpu)?;
     let Some((best, clocks)) = cheapest_chain(number, target)? else { return Ok(None) };
-    Ok((clocks < immediate_multiply(target, number)?).then_some(best))
+    Ok((clocks < immediate_multiply(target, number)? + dword_prefix(target)).then_some(best))
+}
+
+/// What a dword instruction costs beyond a word one where the target's own
+/// operand is a word (m16): the operand-size prefix (66h). Each step of a
+/// dword chain pays it, and so does the `imul` it is priced against.
+fn dword_prefix(target: &targets::Profile) -> i64 {
+    if target.operand_bytes < 4 { target.prefix_cost } else { 0 }
 }
 
 /// The cheaper of the binary and signed-digit chains a multiply by
@@ -289,16 +296,20 @@ fn positive_chains<'a>(
         }
         // One copy seeds the accumulator without destroying the source, unless
         // a `lea` makes the first step's result.
-        let mut total = if parts.first().is_some_and(|part| part.0 == "lea") { 0 } else { cost(target, "mov_rr")? };
+        let prefix = if with_lea { dword_prefix(target) } else { 0 };
+        let mut total =
+            if parts.first().is_some_and(|part| part.0 == "lea") { 0 } else { cost(target, "mov_rr")? + prefix };
         for (name, count) in parts {
             total += match *name {
-                "shl" => shift(target, *count)?,
+                "shl" => shift(target, *count)? + prefix,
                 "lea" => lea(*count).expect("a lea part has its form"),
                 // `cur + cur*scale` is one `lea`; `cur<<count` +- `cur` is a
                 // shifted copy and an add.
                 "flea" => lea(*count).expect("a lea part has its form"),
-                "fadd" | "fsub" => cost(target, "mov_rr")? + shift(target, *count)? + cost(target, "alu_rr")?,
-                _ => cost(target, "alu_rr")?,
+                "fadd" | "fsub" => {
+                    cost(target, "mov_rr")? + shift(target, *count)? + cost(target, "alu_rr")? + 3 * prefix
+                }
+                _ => cost(target, "alu_rr")? + prefix,
             };
         }
         Ok(total)
@@ -482,6 +493,19 @@ mod tests {
         assert_eq!(immediate_multiply(m32, -3).unwrap(), 15, "a negative multiplier has a floor of 5 bits");
         assert_eq!(immediate_multiply(m32, -1103515245).unwrap(), 41);
         assert!(scale(1103515245, m32).unwrap().is_some(), "the chain is below the imul");
+    }
+
+    /// In 16-bit code every dword step of a chain carries the 66h prefix (a
+    /// clock on the 486), as does the `imul`. Unpriced, the 11-step chain for
+    /// 30011 (16 clocks against `imul`'s 25) ran slower than the `imul`:
+    /// recpow c -O2 m16, +13501 clocks, +50002 instructions.
+    #[test]
+    fn test_a_dword_chain_in_16_bit_code_pays_the_prefix_per_step() {
+        let m16 = targets::tuned_for(&llrm_x86_m16::M16, "486", false).unwrap();
+        let m32 = targets::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
+        assert_eq!(immediate_multiply(m16, 30011).unwrap(), 25, "premise: the sheet's imul");
+        assert!(scale(30011, m16).unwrap().is_none(), "the chain's steps cost a prefix each");
+        assert!(scale(30011, m32).unwrap().is_some(), "no prefix at m32");
     }
 
     /// GCC's `synth_mult` factors `q * (2^m +- 1)` and tries `t - 1` and `t +
