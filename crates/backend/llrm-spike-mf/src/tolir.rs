@@ -65,6 +65,29 @@ pub struct Converted<T: Target> {
 }
 
 impl<T: Target> Converted<T> {
+    /// The body with its copies joined by the translated `RegisterCoalescer`
+    /// (a join narrows the survivor's registers to those both could take).
+    /// Run before [`Converted::inputs`]; a copy to or from a pinned value
+    /// joins into it, and [`from_lir`] writes that value as the register.
+    pub fn coalesce(
+        &mut self,
+        size: bool,
+    ) {
+        let palettes = self
+            .orders
+            .iter()
+            .map(|(value, order)| (*value, order.iter().copied().collect::<BTreeSet<RegId>>()))
+            .collect();
+        let (body, palettes) =
+            llrm_codegen::coalescer::env::coalesce(&self.body, palettes, self.body.pins.clone(), size);
+        for (value, order) in self.orders.iter_mut() {
+            if let Some(allowed) = palettes.get(value) {
+                order.retain(|register| allowed.contains(register));
+            }
+        }
+        self.body = body;
+    }
+
     /// The registers `value` may take.
     pub fn order(
         &self,
@@ -702,7 +725,8 @@ pub fn from_lir<T: Target>(
     // A value of the function keeps its register number; a clone takes the
     // next one and its parent's class.
     let mut numbers: IndexMap<u32, u32> = IndexMap::default();
-    let mut number = |value: u32, classes: &mut Vec<T::Class>| -> u32 {
+    let pinned = &converted.body.pins;
+    let mut numbered = |value: u32, classes: &mut Vec<T::Class>| -> u32 {
         if value <= known {
             return value - 1;
         }
@@ -717,6 +741,12 @@ pub fn from_lir<T: Target>(
             classes.push(if root >= 1 && root <= known { original.classes[root as usize - 1] } else { T::any() });
             classes.len() as u32 - 1
         })
+    };
+    let mut number = |value: u32, classes: &mut Vec<T::Class>| -> Reg {
+        match pinned.get(&value) {
+            Some(register) => Reg::Phys(*register),
+            None => Reg::Virt(numbered(value, classes)),
+        }
     };
     let mut slots: Vec<(i32, T::Class)> = Vec::new();
     let mut blocks = Vec::with_capacity(edited.blocks.len());
@@ -740,7 +770,7 @@ pub fn from_lir<T: Target>(
                     .chain(&what.sources)
                     .find_map(|loc| if let Loc::Mem(cell) = loc { Some(cell) } else { None });
                 let slot = slot_of(cell.ok_or("a spill with no cell")?);
-                let register = Reg::Virt(number(value, &mut classes));
+                let register = number(value, &mut classes);
                 let class = classes[match register {
                     Reg::Virt(v) => v as usize,
                     Reg::Phys(_) => 0,
@@ -766,10 +796,7 @@ pub fn from_lir<T: Target>(
                 };
                 insts.push(Inst::new(
                     Kind::Copy,
-                    vec![
-                        Operand::Def(Reg::Virt(number(to, &mut classes))),
-                        Operand::Use(Reg::Virt(number(from, &mut classes))),
-                    ],
+                    vec![Operand::Def(number(to, &mut classes)), Operand::Use(number(from, &mut classes))],
                 ));
                 continue;
             }
@@ -778,7 +805,7 @@ pub fn from_lir<T: Target>(
             for operand in &mut made.operands {
                 *operand = match operand.clone() {
                     Operand::Def(Reg::Virt(_)) => match dests.next() {
-                        Some(Loc::Held(held)) => Operand::Def(Reg::Virt(number(held.value, &mut classes))),
+                        Some(Loc::Held(held)) => Operand::Def(number(held.value, &mut classes)),
                         _ => return Err("a definition that is not a register".into()),
                     },
                     Operand::Def(Reg::Phys(r)) => {
@@ -788,7 +815,7 @@ pub fn from_lir<T: Target>(
                         Operand::Def(Reg::Phys(r))
                     }
                     Operand::Use(Reg::Virt(_)) => match sources.next() {
-                        Some(Loc::Held(held)) => Operand::Use(Reg::Virt(number(held.value, &mut classes))),
+                        Some(Loc::Held(held)) => Operand::Use(number(held.value, &mut classes)),
                         _ => return Err("a use that is not a register".into()),
                     },
                     Operand::Use(Reg::Phys(r)) => {
@@ -813,7 +840,7 @@ pub fn from_lir<T: Target>(
         if converted.body.pins.contains_key(value) {
             continue;
         }
-        let v = number(*value, &mut classes) as usize;
+        let v = numbered(*value, &mut classes) as usize;
         if v >= assignment.len() {
             assignment.resize(v + 1, None);
         }
