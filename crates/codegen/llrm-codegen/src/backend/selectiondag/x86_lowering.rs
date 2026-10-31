@@ -130,7 +130,7 @@ pub mod cond {
 }
 
 /// The custom lowerings, for a CPU with or without CMOV.
-pub struct X86Lowering {
+pub struct X86Lowering<'a> {
     pub cmov: bool,
     /// Scalar floats live in xmm registers (`isScalarFPTypeInSSEReg`).
     pub sse2: bool,
@@ -145,9 +145,23 @@ pub struct X86Lowering {
     /// [promote]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L64277
     pub i16_mul_chains: bool,
+    /// What prices a constant multiply that `combineMul` leaves an `imul`
+    /// (DEVIATE SD446); none keeps the pin's `imul`.
+    pub profile: Option<MulPricing<'a>>,
 }
 
-impl CombineHooks for X86Lowering {
+/// The sheet, the target and the block a constant multiply is priced against.
+#[derive(Clone, Copy)]
+pub struct MulPricing<'a> {
+    pub cpu: &'a crate::backend::cpu::Profile,
+    pub arch: &'a dyn llrm_target::Target,
+    /// The block's frequency over the entry's.
+    pub freq: f64,
+    /// `Tti::speed_milliclocks_per_byte`.
+    pub milliclocks_per_byte: i64,
+}
+
+impl CombineHooks for X86Lowering<'_> {
     fn has_target_combine(
         &self,
         op: ISD,
@@ -172,7 +186,7 @@ impl CombineHooks for X86Lowering {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains),
+            ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
             ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
@@ -322,7 +336,7 @@ fn is_desirable_to_promote_op(
     Some(EVT::I32)
 }
 
-impl Hooks for X86Lowering {
+impl Hooks for X86Lowering<'_> {
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
@@ -1811,6 +1825,7 @@ fn combine_mul(
     level: CombineLevel,
     min_size: bool,
     i16_chains: bool,
+    profile: Option<MulPricing<'_>>,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I32 && !(vt == EVT::I16 && i16_chains) {
@@ -1884,7 +1899,69 @@ fn combine_mul(
             new_mul = Some(dag.get_node(ISD::Sub, vt, &[shifted, twice]));
         }
     }
+    // DEVIATE SD446: where the pin keeps `imul`, the sheet's cheaper chain.
+    if new_mul.is_none() {
+        new_mul = profile.and_then(|profile| priced_chain(dag, x, signed as i64, vt, profile));
+    }
     new_mul
+}
+
+/// `x * c` as the chain `arithmetic::chain_at_speed` accepts (the clocks it
+/// saves pay for its bytes at the block's frequency; the search is cached per
+/// constant, O(1) here), built from shifts, adds, subtracts and
+/// the `lea` forms. An `i16` has no `lea`: the narrow chain.
+///
+/// DEVIATE SD446: the pin's `combineMul` leaves an `imul` for a constant none
+/// of its cases covers (75, 251, 10000); on the 486 that is 13-42 clocks
+/// (Intel 240440-002 Table 10.1) against 2-4 for a chain. The search is
+/// GCC's `synth_mult`
+/// ([expmed.cc](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/expmed.cc)),
+/// the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
+/// bytes for clocks at speed (m16: `speed_milliclocks_per_byte`); the block's
+/// frequency is the IR `BlockFrequencies` (the machine one does not exist at
+/// DAG time). Exit: none while the clocks decide. Owner sdag-d.
+fn priced_chain(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    c: i64,
+    vt: EVT,
+    pricing: MulPricing<'_>,
+) -> Option<SDValue> {
+    use crate::backend::arithmetic;
+    let width = if vt == EVT::I16 { 2 } else { 4 };
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte } = pricing;
+    let chain = arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte).ok()??;
+    let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
+        let by = dag.get_constant(by as u128, EVT::I8);
+        dag.get_node(ISD::Shl, vt, &[value, by])
+    };
+    let mut value = x;
+    for (step, count) in chain {
+        value = match step {
+            "shl" => shift(dag, value, count),
+            "add" => dag.get_node(ISD::Add, vt, &[value, x]),
+            "sub" => dag.get_node(ISD::Sub, vt, &[value, x]),
+            "rsub" => dag.get_node(ISD::Sub, vt, &[x, value]),
+            "neg" => dag.get_negative(value, vt),
+            // `x + value * count`
+            "lea" => {
+                let scaled = shift(dag, value, i64::from(count.trailing_zeros()));
+                dag.get_node(ISD::Add, vt, &[scaled, x])
+            }
+            // `value + value * count`
+            "flea" => mul_imm_node(dag, value, count as u128 + 1, vt),
+            "fadd" => {
+                let scaled = shift(dag, value, count);
+                dag.get_node(ISD::Add, vt, &[value, scaled])
+            }
+            "fsub" => {
+                let scaled = shift(dag, value, count);
+                dag.get_node(ISD::Sub, vt, &[scaled, value])
+            }
+            _ => return None,
+        };
+    }
+    Some(value)
 }
 
 /// `LowerFunnelShift`, the scalar part ([L32188][pin]). An `i8` by a variable
