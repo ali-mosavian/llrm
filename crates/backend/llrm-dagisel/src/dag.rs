@@ -219,7 +219,8 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> bool;
-    /// `getAddressingMode()` is `POST_INC`/`POST_DEC`: the update comes after the access.
+    /// `getAddressingMode()` is `POST_INC`/`POST_DEC`: the update comes after
+    /// the access.
     fn is_post_indexed(
         &self,
         _node: u32,

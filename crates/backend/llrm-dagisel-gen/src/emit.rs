@@ -57,7 +57,8 @@ pub struct Source<'a> {
     /// The names of the instructions (not registers or classes, whose numbers
     /// collide with theirs).
     pub instructions: &'a BTreeSet<String>,
-    /// Qualified instruction names the hand code selects (`extra_symbols`): listed in `MACHINE_OPCODES` too.
+    /// Qualified instruction names the hand code selects (`extra_symbols`):
+    /// listed in `MACHINE_OPCODES` too.
     pub extra: &'a [String],
 }
 
@@ -170,7 +171,9 @@ fn machine_opcodes(
     let mut by_value: BTreeMap<u16, Vec<&str>> = BTreeMap::new();
     for (name, &value) in &ids.0 {
         let short = name.strip_prefix(ns).or_else(|| name.strip_prefix("TargetOpcode::"));
-        if let (Some(short), true) = (short.filter(|s| instructions.contains(*s)), (wanted.contains(&(value as u16)) || extra.contains(name))) {
+        if let (Some(short), true) =
+            (short.filter(|s| instructions.contains(*s)), (wanted.contains(&(value as u16)) || extra.contains(name)))
+        {
             by_value.entry(value as u16).or_default().push(short);
         }
     }

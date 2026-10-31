@@ -736,7 +736,10 @@ impl Dag for DagisAdapter<'_> {
         &self,
         node: u32,
     ) -> bool {
-        matches!(self.dag.nodes()[node as usize].opcode, ISD::LoadPost | ISD::StorePost)
+        matches!(
+            self.dag.nodes()[node as usize].opcode,
+            ISD::LoadPost | ISD::StorePost
+        )
     }
     fn is_truncating_store(
         &self,

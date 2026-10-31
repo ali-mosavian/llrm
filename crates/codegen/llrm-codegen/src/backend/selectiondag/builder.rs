@@ -79,8 +79,9 @@ pub struct BuilderTarget {
     /// Sibling calls become `TC_RETURN`s (tail-call step 3); off until the
     /// emitter lays them (step 5).
     pub tail_calls: bool,
-    /// `TargetLowering::isZExtFree(Val, VT)`: the zero extension of `Val` to `VT` costs nothing. A value
-    /// exported to another block that this holds for is zero extended, not any extended.
+    /// `TargetLowering::isZExtFree(Val, VT)`: the zero extension of `Val` to
+    /// `VT` costs nothing. A value exported to another block that this
+    /// holds for is zero extended, not any extended.
     pub is_zext_free: fn(&SelectionDAG, SDValue, EVT) -> bool,
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
@@ -2297,7 +2298,8 @@ impl Builder<'_> {
             self.pending_exports.push(chain);
             return Ok(());
         }
-        // `RegsForValue::getCopyToRegs`: "if (ExtendKind == ISD::ANY_EXTEND) if (TLI.isZExtFree(peekThroughFreeze(Val), RegisterVT))".
+        // `RegsForValue::getCopyToRegs`: "if (ExtendKind == ISD::ANY_EXTEND) if
+        // (TLI.isZExtFree(peekThroughFreeze(Val), RegisterVT))".
         let mut peeled = value;
         while self.dag.opcode(peeled) == ISD::Freeze {
             peeled = self.dag.operand(peeled, 0);
@@ -3410,4 +3412,3 @@ fn is_runtime_routine(
         .and_then(|global| builder.module.global(global).name.owned())
         .is_some_and(|name| name.starts_with(llrm_hir::mir::RUNTIME))
 }
-

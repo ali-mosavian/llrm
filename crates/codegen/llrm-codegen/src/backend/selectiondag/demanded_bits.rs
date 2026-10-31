@@ -488,7 +488,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let length = 128 - demanded.leading_zeros();
                 let low = mask(length);
                 let k1 = self.sdb(op1, low, depth + 1, false, tlo)?;
-                let lhs_demanded = if opcode == ISD::Mul { low & mask(width - k1.zero.trailing_ones().min(width)) } else { low };
+                let lhs_demanded =
+                    if opcode == ISD::Mul { low & mask(width - k1.zero.trailing_ones().min(width)) } else { low };
                 self.sdb(op0, lhs_demanded, depth + 1, false, tlo)?;
                 if opcode != ISD::Mul && !self.dag.is_opaque(op1) {
                     if let Some(c) = self.dag.constant(op1) {
