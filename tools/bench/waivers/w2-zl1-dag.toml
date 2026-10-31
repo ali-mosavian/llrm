@@ -1,4 +1,4 @@
-reason = "ZL1 on the DAG path: `xor r,r; mov r8,m8` for `movzx r32,m8` where the tune prices the pair lower (486, Pentium; -Os and Pentium Pro keep movzx). One instruction more and, in 16-bit code, a byte more per site for -4000 clocks on textfill and -4096 on histo; the row counters are instructions and bytes, which the clocks buy. Exit: none (target tuning)."
+reason = "ZL1 on the DAG path: `xor r,r; mov r8,m8` for `movzx r32,m8` where the tune prices the pair lower (486, Pentium; -Os and Pentium Pro keep movzx). One instruction more and, in 16-bit code, a byte more per site for -4000 clocks on textfill and -4096 on histo; fewer clocks, and clocks are the 486 metric. Exit: none (target tuning)."
 exception = true
 
 [[row]]
