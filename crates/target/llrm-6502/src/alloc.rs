@@ -915,6 +915,12 @@ fn immediate(operand: &Machine) -> Result<i64, Unsupported> {
 /// A pointer stays one through a copy and through an add of a constant 1..=255
 /// (`p++`, `p += k`), in both directions, so a pointer walked round a loop is
 /// bumped in its pair instead of unpacked, added and packed every trip.
+///
+/// DEVIATE (6502-7): pointer-ness is worked out from how the cells are used,
+/// and an add of a constant is found by following the cell that holds it; the
+/// pin gets both from the register class a pattern constrains an operand to
+/// and from an immediate-form pattern. Exit: the class constraint of the
+/// greedy PR (#6259) and `ADD16` immediate forms in `mos6502.td`.
 fn pointer_cells(
     items: &[Item],
     constants: &HashMap<String, i64>,
