@@ -146,12 +146,13 @@ impl FunctionPass for LoopIdiom {
         let mark = unit.function.mark();
         let held = analyses.get::<llrm_analysis::scev::analysis::Scevs>(unit.context, unit.layout, unit.function);
         let mut se = held.take();
-        let size_costs = self.for_size.then(|| outer.target().size_costs());
-        let clock_costs = self
-            .for_size
-            .then(|| (outer.target().costs(), outer.target().size_milliclocks_per_byte()))
-            .filter(|(_, rate)| *rate > 0);
-        let speed_costs = (!self.for_size).then(|| outer.target().costs());
+        // DEVIATE: a target that weighs bytes over clocks at every level (m16)
+        // prices a fill by the bytes it adds as `-Os` does, and its clocks at
+        // the stated rate. Exit: none.
+        let rate = tti.as_deref().map_or(0, |tti| tti.size_milliclocks_per_byte());
+        let size_costs = (self.for_size || rate > 0).then(|| outer.target().size_costs());
+        let clock_costs = (!self.for_size && rate > 0).then(|| (outer.target().costs(), rate));
+        let speed_costs = (!self.for_size && rate == 0).then(|| outer.target().costs());
         let mut changed = false;
         for header in headers {
             let cur_loop = loops.get_loop_for(header).expect("a loop");
