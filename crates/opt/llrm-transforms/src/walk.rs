@@ -180,6 +180,30 @@ pub struct Walk {
     pub simplify: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,
 }
 
+/// DEVIATE REC-1: the recursion a program is given. `-finline-recursive` asks
+/// for gcc's (copies of a function in itself to depth 3, any size); a target
+/// that states bounds (`Tti::recursive_inlining`) takes those by default when
+/// optimizing for speed. None: the pin's inliner, which copies no recursive
+/// callee (`IsRecursiveCall`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Recursion {
+    pub depth: usize,
+    pub callee: i64,
+}
+
+impl Recursion {
+    pub fn of(
+        flag: bool,
+        single: bool,
+        tti: Option<&dyn llrm_mir::tti::Tti>,
+    ) -> Option<Self> {
+        match tti.and_then(|tti| tti.recursive_inlining()) {
+            Some((depth, callee)) if !single => Some(Self { depth: depth as usize, callee }),
+            _ => flag.then_some(Self { depth: crate::inline::MAX_INLINE_RECURSIVE_DEPTH, callee: i64::MAX }),
+        }
+    }
+}
+
 impl ProgramPass for Walk {
     fn name(&self) -> &'static str {
         "walk"
@@ -192,8 +216,10 @@ impl ProgramPass for Walk {
     ) -> Result<(), String> {
         let mut modules = managers(program, analyses);
         let roots = roots(program);
+        let recursion = Recursion::of(self.inline.recursive, self.inline.single, program.target.tti().as_deref());
         let mut params = crate::inlinecost::InlineParams {
-            allow_recursive_call: self.inline.recursive,
+            allow_recursive_call: recursion.is_some(),
+            recursive_callee_limit: recursion.map_or(i64::MAX, |one| one.callee),
             last_call_to_static: self.inline.last,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
@@ -270,14 +296,16 @@ impl ProgramPass for Walk {
                         // at -Os).
                         let peeled: llrm_support::hash::IndexMap<GlobalId, crate::inline::Candidate> = constant
                             .values()
-                            .filter(|one| one.self_calls.is_some() && !self.inline.single && self.inline.recursive)
+                            .filter(|one| one.self_calls.is_some() && !self.inline.single && recursion.is_some())
                             .filter_map(|one| Some((one.callee?, one.clone())))
                             .collect();
                         let by = crate::inline::Caller {
                             layout: &program.layout,
                             recursive: recursive.contains(&id),
                             self_inlining: None,
-                            peeling: !self.inline.single && self.inline.recursive,
+                            peeling: !self.inline.single && recursion.is_some(),
+                            depth: recursion.map_or(0, |one| one.depth),
+                            callee: recursion.map_or(i64::MAX, |one| one.callee),
                         };
                         let spliced = crate::inline::expanded_all(
                             context,
@@ -300,8 +328,7 @@ impl ProgramPass for Walk {
                         // for its tail-call elimination
                         // until its copies are made
                         // (`SelfInline`, after ipa-cp has seen it whole).
-                        if self.inline.recursive
-                            && self_calls(module, &program.layout, id, self.inline.single).is_some()
+                        if recursion.is_some() && self_calls(module, &program.layout, id, self.inline.single).is_some()
                         {
                             function_mut(module, id)
                                 .1
@@ -555,6 +582,8 @@ pub struct SelfInline {
     pub simplify: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,
     /// Sized for bytes: gcc does not inline recursively there.
     pub for_size: bool,
+    /// `-finline-recursive`.
+    pub flag: bool,
 }
 
 impl SelfInline {
@@ -574,6 +603,9 @@ impl SelfInline {
                         llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED
                     ),
                 )
+        };
+        let Some(recursion) = Recursion::of(self.flag, self.for_size, program.target.tti().as_deref()) else {
+            return Ok(());
         };
         for at in 0..program.modules.len() {
             let module = &mut program.modules[at];
@@ -600,6 +632,8 @@ impl SelfInline {
                         recursive: true,
                         self_inlining: Some(&frequencies),
                         peeling: false,
+                        depth: recursion.depth,
+                        callee: recursion.callee,
                     };
                     copies =
                         crate::inline::expanded_all(context, function, &by, &available, None, &mut declared, metadata)?;

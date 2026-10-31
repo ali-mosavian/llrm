@@ -1103,7 +1103,7 @@ pub fn recorded(
     let mut again = Fixed::linear(&again_applied, Phase::Simplify);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
-    let late = applied.options.inline.recursive.then(|| {
+    let late = Some({
         let mut simplify = Fixed::linear(&again_applied, Phase::Simplify);
         crate::walk::SelfInline {
             simplify: Box::new(move |module, analyses, id, stage| {
@@ -1112,6 +1112,7 @@ pub fn recorded(
                 TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             }),
             for_size: applied.options.prefers_size(),
+            flag: applied.options.inline.recursive,
         }
     });
     manager.add_program(Interprocedural {

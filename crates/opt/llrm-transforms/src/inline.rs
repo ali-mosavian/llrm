@@ -279,6 +279,11 @@ pub struct Caller<'a> {
     /// A recursive callee inlined here may have its own calls inlined in the
     /// copy, gcc's peeling.
     pub peeling: bool,
+    /// The recursion's bounds (`walk::Recursion`): the depth of a function's
+    /// copies of itself and the largest recursive body, in `gcc_insns`,
+    /// that is copied.
+    pub depth: usize,
+    pub callee: i64,
 }
 
 /// DEVIATE (recursion), gcc's `--param max-inline-recursive-depth-auto` is 8
@@ -744,7 +749,8 @@ impl<'a> Plan<'a, '_> {
             // `want_inline_self_recursive_call_p`: the frequency of the
             // call within the body, over the entry's, above the minimum.
             let frequency = frequencies.get(&site).copied().unwrap_or(1.0);
-            if depth > MAX_INLINE_RECURSIVE_DEPTH
+            if depth > self.caller.depth
+                || grown + 1 > self.caller.callee
                 || self.insns + grown > MAX_INLINE_INSNS_RECURSIVE
                 || frequency * 100.0 <= MIN_INLINE_RECURSIVE_PROBABILITY
             {

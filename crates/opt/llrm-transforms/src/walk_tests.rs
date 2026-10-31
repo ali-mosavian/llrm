@@ -264,6 +264,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
                 let mut late = crate::walk::SelfInline {
                     simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
                     for_size: false,
+                    flag: true,
                 };
                 late.apply(program, &mut modules)
             },
@@ -1637,4 +1638,80 @@ fn test_minsize_is_walked_as_a_minsize_caller() {
     assert_eq!(Options::min_size().inline.caller_size(), CallerSize::MinSize);
     assert_eq!(Options::size().inline.caller_size(), CallerSize::OptSize);
     assert_eq!(Options::default().inline.caller_size(), CallerSize::Speed);
+}
+
+/// A tree recursion (two calls of itself, a `report` at the leaf) with `extra`
+/// more additions in its body.
+fn tree_recursion(extra: usize) -> String {
+    let mut body = String::new();
+    let mut last = "%s".to_owned();
+    for at in 0..extra {
+        body += &format!("  %q{at} = shl i32 %n, {}\n  %p{at} = xor i32 {last}, %q{at}\n", at + 1);
+        last = format!("%p{at}");
+    }
+    format!(
+        "define internal i32 @tree(i32 %n) {{
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @tree(i32 %a)
+  %y = call i32 @tree(i32 %b)
+  %s = add i32 %x, %y
+{body}  ret i32 {last}
+}}
+
+define i32 @main() {{
+b0:
+  %r = call i32 @tree(i32 30)
+  ret i32 %r
+}}
+"
+    )
+}
+
+/// Calls of `tree` after the default pipeline on the real-mode target, tuned
+/// (`pin_tuned`: the pin's) or not.
+fn calls_of_tree(
+    extra: usize,
+    pin: bool,
+) -> usize {
+    let mut module = parsed(&tree_recursion(extra));
+    let target = if pin { llrm_x86_m16::Dos::pin_tuned() } else { llrm_x86_m16::Dos::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(target),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    text.lines().filter(|line| line.contains("call") && line.contains("@tree(")).count()
+}
+
+/// bench fib, hanoi, rectwo and frames at m16 -O2 ran 356059, 199, 2382380 and
+/// 9280596 clocks against main's 298686, 107, 1765045 and 8807338, which copied
+/// a small recursion into itself. The real-mode target does so by
+/// default (depth 2, bodies of at most 15 `gcc_insns`), the pin's tuning does
+/// not.
+#[test]
+fn test_the_real_mode_target_copies_a_small_tree_recursion_by_default() {
+    assert!(calls_of_tree(0, false) > 3, "copies of a small tree recursion in itself");
+    assert!(calls_of_tree(0, true) <= 3, "the pin copies none");
+}
+
+/// bench bintree and quicksort (bodies of 16 and more) grew to 956 and 1181
+/// bytes against main's 289 and 318 with the copies: a recursive body above
+/// gcc's `max-inline-insns-auto` is not copied.
+#[test]
+fn test_the_real_mode_target_does_not_copy_a_large_tree_recursion() {
+    assert!(calls_of_tree(10, false) <= 3, "a large body was copied into itself: {} calls", calls_of_tree(10, false));
 }
