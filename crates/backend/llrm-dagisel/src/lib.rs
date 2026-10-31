@@ -24,6 +24,7 @@ pub mod interp;
 pub mod matcher;
 pub mod predicates;
 pub mod x86_addr;
+pub mod x86_byte_mask;
 pub mod x86_classes;
 pub mod x86_divrem;
 pub mod x86_fcmp;

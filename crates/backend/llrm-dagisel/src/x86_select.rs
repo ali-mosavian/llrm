@@ -25,6 +25,7 @@
 use crate::generated::ids::{isd, x86isd};
 use crate::interp::{Outcome, Selector};
 use crate::x86_addr::AddrDag;
+use crate::x86_byte_mask::select_byte_mask;
 use crate::x86_divrem::select_divrem;
 use crate::x86_fcmp::{select_fcmp, select_fist16, select_pop_from_x87, select_setcc_carry};
 use crate::x86_fplogic::select_fp_logic;
@@ -48,6 +49,11 @@ pub fn select_node<D: AddrDag>(
     match dag.opcode(node) {
         isd::STORE => {
             if fold_load_store_into_mem_operand(dag, hooks, node) {
+                return Outcome::Selected;
+            }
+        }
+        isd::AND => {
+            if select_byte_mask(dag, hooks, node) {
                 return Outcome::Selected;
             }
         }
