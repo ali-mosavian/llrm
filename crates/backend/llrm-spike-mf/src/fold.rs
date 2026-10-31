@@ -32,9 +32,8 @@
 //! branch is rewritten, and block numbers for the reordering test are the
 //! layout indices when the sweep began, as `RenumberBlocks` leaves them.
 
-use std::collections::HashMap;
-
 use llrm_lir::registers::RegId;
+use llrm_mir::hash::HashMap;
 
 use crate::mfunc::{Inst, MFunction, Operand, Reg};
 use crate::regalloc::{Assignment, Target};
@@ -703,7 +702,7 @@ fn fold<T: Target + Jump>(
     assignment: Option<&Assignment>,
 ) -> bool {
     let mut folder =
-        Folder::<T::Class, T> { function, assignment, number: HashMap::new(), jump: std::marker::PhantomData };
+        Folder::<T::Class, T> { function, assignment, number: HashMap::default(), jump: std::marker::PhantomData };
     let mut ever = false;
     loop {
         let mut changed = folder.optimize_branches();

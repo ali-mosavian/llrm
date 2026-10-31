@@ -28,7 +28,9 @@
 //! and ordered access it could pass (the pin's `AA` is null for this target's
 //! machine operands).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+
+use llrm_mir::hash::{HashMap, HashSet};
 
 use crate::cfg::Cfg;
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
@@ -164,8 +166,8 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             def_is_copy: Vec::new(),
             copy_source: Vec::new(),
             uses: Vec::new(),
-            considered: HashSet::new(),
-            merge: HashMap::new(),
+            considered: HashSet::default(),
+            merge: HashMap::default(),
             to_split: Vec::new(),
             live_out: None,
             allow_split: true,
@@ -310,13 +312,13 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
     /// The virtual registers live out of each block.
     fn liveness(&self) -> Vec<HashSet<u32>> {
         let count = self.function.blocks.len();
-        let mut live_in: Vec<HashSet<u32>> = vec![HashSet::new(); count];
-        let mut live_out: Vec<HashSet<u32>> = vec![HashSet::new(); count];
+        let mut live_in: Vec<HashSet<u32>> = vec![HashSet::default(); count];
+        let mut live_out: Vec<HashSet<u32>> = vec![HashSet::default(); count];
         let mut changed = true;
         while changed {
             changed = false;
             for block in (0..count).rev() {
-                let mut out: HashSet<u32> = HashSet::new();
+                let mut out: HashSet<u32> = HashSet::default();
                 for &succ in &self.cfg.succs[block] {
                     let results: HashSet<u32> =
                         self.function.blocks[succ].phis.iter().filter_map(|phi| virt(phi.result)).collect();
@@ -725,7 +727,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             return false;
         }
         let mut changed = false;
-        let mut cache = HashMap::new();
+        let mut cache = HashMap::default();
         let mut saw_store = false;
         let mut at = self.function.blocks[block].insts.len();
         while at > 0 {
