@@ -471,7 +471,7 @@ impl ProgramPass for Walk {
                                         saved
                                     );
                                 }
-                                if tried <= best + credit || (tried - best - credit) * rate <= saved * 1000 {
+                                if tried <= best + credit || (saved > 0 && (tried - best - credit) * rate <= saved * 1000) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
