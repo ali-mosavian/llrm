@@ -146,7 +146,12 @@ pub struct M68kLowering {
     pub load_as_source: bool,
 }
 
-impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {}
+impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
+    /// The pin canonicalizes `x >= c` to `x > c - 1`; `slt 0` then folds to `bmi`.
+    fn canonicalize_ge_le(&self) -> bool {
+        true
+    }
+}
 
 impl Hooks for M68kLowering {
     fn lower_operation(
