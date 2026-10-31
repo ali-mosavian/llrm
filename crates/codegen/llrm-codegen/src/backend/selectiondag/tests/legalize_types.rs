@@ -322,3 +322,22 @@ fn a_promoted_divide_extends_both_operands_in_the_register() {
         }
     }
 }
+
+/// A shift whose amount is a byte on a target with no byte register was
+/// refused ("promote operand"; wasm's `shl i32 x, i8`). `PromoteIntOp_Shift`
+/// zero extends the amount in the register.
+#[test]
+fn a_promoted_shift_amount_is_zero_extended_in_the_register() {
+    let info = llrm_sdag::lowering::TargetLoweringInfo::new(&[MVT::I32], false).with_shift_amount_type(MVT::I32);
+    let tli = TargetLowering::empty(info);
+    for op in [ISD::Shl, ISD::Srl, ISD::Sra] {
+        let mut dag = dag();
+        let (value, amount) = (load(&mut dag, EVT::I32, 1), load(&mut dag, EVT::I8, 2));
+        let shifted = dag.get_node(op, EVT::I32, &[value, amount]);
+        dag.set_root(shifted);
+        assert_eq!(legalize(&mut dag, &tli), Ok(true), "{op:?}");
+        let shift = dag.get_root();
+        let by = dag.operand(shift, 1);
+        assert_eq!((dag.opcode(by), dag.value_type(by)), (ISD::And, EVT::I32), "{op:?}");
+    }
+}
