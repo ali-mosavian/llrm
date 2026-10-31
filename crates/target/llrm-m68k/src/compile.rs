@@ -107,9 +107,6 @@ pub fn items_with(
     if options.overlay {
         address_arithmetic(&mut function);
     }
-    if options.overlay {
-        crate::overlay::mark_commutable(&mut function);
-    }
     commute_tied(&mut function);
     if options.overlay {
         fold_argument_loads(&mut function, wants_size, crate::memoperand::M68K);

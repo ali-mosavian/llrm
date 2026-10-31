@@ -109,24 +109,3 @@ pub fn encoding(name: &str) -> Option<(u16, &'static [Piece])> {
         _ => return None,
     })
 }
-
-/// An instruction whose `dr` form takes a register of either kind as its
-/// source commutes when its `dd` form (data registers only) does: `ADD32dr`
-/// from `ADD32dd`'s `isCommutable`. The swap is checked against the register
-/// classes by `commute_tied`.
-///
-/// DEVIATE from the pin, which selects `ADD32dr` for a value in an `xr32`
-/// register (every phi is) and so never swaps its sources. Reason: swapping
-/// is what lets the result take the register of the source that lives on, and
-/// saves a move on a loop that carries a sum. Exit: never; a target choice,
-/// off with [`crate::compile::Options::overlay`].
-pub fn mark_commutable(function: &mut crate::mfunc::MFunction) {
-    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
-        if let llrm_spike_mf::Kind::Op(name) = inst.kind
-            && let Some(stem) = name.strip_suffix("dr")
-            && crate::mfunc::pin_commutable(&format!("{stem}dd"))
-        {
-            inst.commutable = true;
-        }
-    }
-}

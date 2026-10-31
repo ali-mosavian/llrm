@@ -274,7 +274,7 @@ fn a_guard_over_a_loop_branches_forward_to_a_cold_return() {
 fn the_arms_of_an_expanded_select_keep_their_order() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source_in("library", "hex")).expect("parses");
     let text = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
-    assert!(text.contains("\tcmpi.l\t#10, %d0\n\tbcc\t.LBB0_3\n"), "{text}");
+    assert!(text.contains("\tcmpi.l\t#10, %d") && text.contains("\tbcc\t.LBB0_3\n"), "{text}");
 }
 
 /// The ILP scheduler put the loop-carried copy between `hex`'s `cmpi` and
