@@ -283,6 +283,12 @@ impl Machine for Dos {
             // `setcc` pair and an `or` that took `bp` addressing out of the
             // loop; split, sieve bq16 -O2 is 8780 -> 8436 memory operands.
             split_merged_conditions: true,
+            // DEVIATE: a callee-saved register's first use is its push and
+            // pop at the CPU's prices (a pop is 4 clocks on a 486, a spill
+            // access 1), not the pin's two instructions at 30%: fib's two
+            // values kept across calls in si/di cost 10 clocks a node, spilled
+            // 4 (fib bq16 -O2 +10.7% clocks).
+            csr_priced: true,
             ..llrm_mir::target::Tuning::PIN
         }
     }

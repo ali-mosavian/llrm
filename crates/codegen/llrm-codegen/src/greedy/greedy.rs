@@ -362,6 +362,13 @@ pub trait GreedyEnv: SpillWeightEnv {
     fn csr_first_use_cost(&self) -> u32 {
         0
     }
+    /// DEVIATE CSR3: the first use of a callee-saved register as the target
+    /// prices it, in thousandths of a spill access, counted in full (no
+    /// `CSR_COST_SCALE`), and a range whose spill is cheaper than it is
+    /// spilled instead of waiting for `RS_Spill`. None: the pin's rule.
+    fn csr_price_milli(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// `uint8_t(~0u)`: no limit on the cost per use of the register a range may
@@ -1262,7 +1269,10 @@ impl<'a> RAGreedy<'a> {
         self.csr_cost = BlockFrequency(0);
         let Some(split) = &self.split else { return };
         let entry = split.mbfi.get_entry_freq().get_frequency();
-        self.csr_cost = csr_cost_of(self.env.csr_first_use_cost(), entry);
+        self.csr_cost = match self.env.csr_price_milli() {
+            Some(milli) => BlockFrequency(entry / 1000 * u64::from(milli)),
+            None => csr_cost_of(self.env.csr_first_use_cost(), entry),
+        };
     }
 
     /// `tryAssignCSRFirstTime` (RegAllocGreedy.cpp#L2384): a callee-saved
@@ -1281,6 +1291,7 @@ impl<'a> RAGreedy<'a> {
     ) -> Option<RegId> {
         let stage = self.extra.get_stage(virt.reg());
         let csr_cost = self.csr_cost;
+        let priced = self.env.csr_price_milli().is_some();
         let ss = self.split.as_mut()?;
         let mut splitter = Splitter {
             lis: &mut self.lis,
@@ -1305,7 +1316,14 @@ impl<'a> RAGreedy<'a> {
         if stage < LiveRangeStage::Split {
             // We choose pre-splitting over using the CSR for the first time if
             // the cost of splitting is lower than CSRCost.
-            return splitter.csr_pre_split(virt, order, csr_cost, new_vregs).then_some(phys);
+            if !splitter.csr_pre_split(virt, order, csr_cost, new_vregs) {
+                return None;
+            }
+        }
+        // CSR3: no split is cheaper than the register; so is a spill?
+        if priced && virt.is_spillable() && !splitter.csr_spill_is_dearer(virt, csr_cost) {
+            *cost_per_use_limit = 1;
+            return None;
         }
         Some(phys)
     }
