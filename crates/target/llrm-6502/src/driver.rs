@@ -173,8 +173,9 @@ fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
-        // Bytes over speed on an 8-bit target: no unrolling (the stand-in for
-        // the target's override-table entry).
+        // DEVIATE (6502-5): no unrolling, where the pin's unroller reads the
+        // target's `getUnrollingPreferences`. Exit: the 6502's thresholds as a
+        // per-target override-table entry, once the unroller takes them.
         options.unroll = false;
         options.loop_unrolling = false;
         for flag in &request.passes {

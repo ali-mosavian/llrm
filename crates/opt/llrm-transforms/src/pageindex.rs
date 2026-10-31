@@ -14,11 +14,12 @@
 //! load the next byte before it tests steps in the latch at that load, and the
 //! load reads the next page's base through a join block after it.
 //!
-//! DEVIATE: it is not LLVM's. `MOSIndexIV` (llvm-mos) rewrites a pointer to a
-//! base and an 8-bit index only where `ScalarEvolution` proves the index stays
-//! under 256; this one handles the wrap with a block run once every `256 / c`
-//! trips. Reason: the string and memory routines of the C library walk a
-//! pointer of unknown extent. Exit: none.
+//! DEVIATE (6502-6): it is not LLVM's. `MOSIndexIV` (llvm-mos) rewrites a
+//! pointer to a base and an 8-bit index only where `ScalarEvolution` proves the
+//! index stays under 256; this one handles the wrap with a block run once every
+//! `256 / c` trips. Reason: the string and memory routines of the C library
+//! walk a pointer of unknown extent. Exit: `MOSIndexIV` translated for the case
+//! `ScalarEvolution` proves under `2^n`; the wrap block stays as the deviation.
 //!
 //! # Example
 //! `strcpy`'s loop, in IR:

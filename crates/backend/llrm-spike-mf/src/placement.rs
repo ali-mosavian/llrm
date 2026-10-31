@@ -715,11 +715,13 @@ impl<'a, L: Layout> Placer<'a, L> {
                     return;
                 }
             }
-            // DEVIATE: against the back edge's frequency when the layout
-            // counts jumps, where the pin's `ExitFreq` ties with the entry's
-            // for a loop with one entry and one exit. Reason: a 6502 `jmp`
-            // is 3 clocks and 3 bytes; the rotation drops one per trip and
-            // adds one per entry. Exit: none.
+            // DEVIATE (6502-4): against the back edge's frequency when the
+            // layout counts jumps, where the pin's `ExitFreq` ties
+            // with the entry's for a loop with one entry and one
+            // exit. Reason: a 6502 `jmp` is 3 clocks and 3 bytes;
+            // the rotation drops one per trip and adds one per
+            // entry. Exit: none while the pin's rotation ignores the
+            // cost of the jump it removes; drop it if the pin counts that cost.
             let saved = if self.layout.counts_jumps() { self.edge_frequency(bottom, top) } else { exit_freq };
             if self.top_fall_through_freq(top, loop_set) >= saved {
                 return;
