@@ -3,10 +3,10 @@
 //!
 //! # How it works
 //! A loop with a pointer `p` that starts at `s` and steps by `c` bytes is
-//! `p = s + c * trips`. On a target whose registers are bytes and whose
-//! indexed load takes a byte index (`lda (base),y`), the sum is cheaper kept
-//! in two parts: a byte index `i` that steps by `c`, and a base that moves by
-//! 256 where the index wraps. The loop's pointers share the one index.
+//! `p = s + c * trips`. On a target whose indexed load adds an index of `n`
+//! bits to a base (`Tti::index_register_bits`), the sum is cheaper kept in two
+//! parts: an index `i` that steps by `c`, and a base that moves by `2^n` where
+//! the index wraps. The loop's pointers share the one index.
 //!
 //! The pass rewrites the loops of one latch and one way in whose pointers are
 //! used only as the address of a byte load or store (or of a constant offset
@@ -41,8 +41,9 @@
 //! ```
 //!
 //! # Runs
-//! In a target's driver, after the mid-end, for a target whose indexed
-//! addressing takes a byte index.
+//! In a target's driver, after the mid-end, for a target whose
+//! `Tti::index_register_bits` is set: the width of the index its indexed
+//! addressing adds to a base (8 for `lda (base),y`).
 
 use llrm_analysis::cfg::{self, loops_of};
 use llrm_mir::context::{Constant, ConstantKind, Context};
@@ -59,6 +60,8 @@ struct Walker {
     start: Operand,
     next: InstId,
     step: u128,
+    /// The type of its step's constant: the width of an offset from a pointer.
+    offset: TypeId,
     /// The instructions that read it as an address.
     accesses: Vec<(InstId, usize)>,
     /// The loads and stores that read its next value, in the latch.
@@ -71,7 +74,10 @@ struct Walker {
 
 /// Every loop of `module`'s functions that can walk by page; the names of the
 /// functions that have one.
-pub fn indexed(module: &mut Module) -> Result<Vec<String>, String> {
+pub fn indexed(
+    module: &mut Module,
+    index_bits: u32,
+) -> Result<Vec<String>, String> {
     let context = &mut module.context;
     let mut changed = Vec::new();
     for global in &mut module.globals {
@@ -87,7 +93,8 @@ pub fn indexed(module: &mut Module) -> Result<Vec<String>, String> {
             .iter()
             .filter(|one| one.body.iter().filter(|at| **at != one.header && headers.contains(at)).count() == 0)
         {
-            done |= rewrite(context, function, one.header, one.latches.iter().copied().collect(), &one.body)?;
+            done |=
+                rewrite(context, function, one.header, one.latches.iter().copied().collect(), &one.body, index_bits)?;
         }
         if let (true, Some(name)) = (done, global.name.as_deref()) {
             changed.push(name.to_owned());
@@ -145,6 +152,7 @@ fn set_arms(
 fn walkers(
     context: &Context,
     byte: TypeId,
+    max_step: u128,
     function: &Function,
     header: BlockId,
     preheader: BlockId,
@@ -165,12 +173,12 @@ fn walkers(
         };
         let Operand::Value(next_value) = next_value else { continue };
         let ValueDef::Instruction(next) = function.value(next_value).def else { continue };
-        let step = match (&function.instruction(next).opcode, &function.instruction(next).operands[..]) {
+        let (step, offset) = match (&function.instruction(next).opcode, &function.instruction(next).operands[..]) {
             (Opcode::GetElementPtr { source }, [base, index])
                 if Some(*source) == byte && *base == Operand::Value(value) =>
             {
-                match constant(context, *index) {
-                    Some(step) if (1..=127).contains(&step) => step,
+                match (constant(context, *index), function.operand_type(context, *index)) {
+                    (Some(step), Some(offset)) if (1..=max_step).contains(&step) => (step, offset),
                     _ => continue,
                 }
             }
@@ -225,7 +233,7 @@ fn walkers(
             }
         }
         if plain && !(accesses.is_empty() && ahead.is_empty()) {
-            found.push(Walker { phi, value, start, next, step, accesses, ahead, after, exits });
+            found.push(Walker { phi, value, start, next, step, offset, accesses, ahead, after, exits });
         }
     }
     found
@@ -237,6 +245,7 @@ fn rewrite(
     header_at: i64,
     latches: Vec<i64>,
     body: &llrm_mir::forest::Body,
+    index_bits: u32,
 ) -> Result<bool, String> {
     let [latch_at] = latches[..] else { return Ok(false) };
     let (header, latch) = (cfg::block(header_at), cfg::block(latch_at));
@@ -250,16 +259,16 @@ fn rewrite(
         return Ok(false);
     }
     let byte = context.types.int(8);
-    let mut found = walkers(context, byte, function, header, preheader, latch, &in_loop);
+    let mut found = walkers(context, byte, (1 << (index_bits - 1)) - 1, function, header, preheader, latch, &in_loop);
     // one step for all: the first walker's
-    let Some(step) = found.first().map(|one| one.step) else { return Ok(false) };
+    let Some((step, word)) = found.first().map(|one| (one.step, one.offset)) else { return Ok(false) };
     found.retain(|one| one.step == step);
 
     let others: Vec<InstId> = crate::edges::phis(function, header)
         .into_iter()
         .filter(|phi| !found.iter().any(|one| one.phi == *phi))
         .collect();
-    let word = context.types.int(16);
+    let index_ty = context.types.int(index_bits);
     let flag = context.types.int(1);
     let void = function.instruction(jump).ty;
     let first = function
@@ -314,9 +323,9 @@ fn rewrite(
     function.insert_block(bump, Some(stepper)).map_err(|why| why.to_string())?;
 
     // the index and the bases, phis at the top of the header and of the join
-    let zero = int(context, byte, 0);
-    let step_value = int(context, byte, step);
-    let index = new(function, Position::Before(first), Opcode::Phi, byte, Vec::new(), Flags::default())?;
+    let zero = int(context, index_ty, 0);
+    let step_value = int(context, index_ty, step);
+    let index = new(function, Position::Before(first), Opcode::Phi, index_ty, Vec::new(), Flags::default())?;
     let mut bases = Vec::new();
     for walker in &found {
         let ty = function.operand_type(context, Operand::Value(walker.value)).ok_or("a typed pointer")?;
@@ -337,7 +346,7 @@ fn rewrite(
         function,
         Position::End(stepper),
         Opcode::Binary(BinaryOp::Add),
-        byte,
+        index_ty,
         vec![value_of(function, index), step_value],
         Flags::default(),
     )?;
@@ -368,7 +377,7 @@ fn rewrite(
         vec![value_of(function, wrapped), Operand::Block(bump), Operand::Block(join)],
         Flags::default(),
     )?;
-    let page = int(context, word, 256);
+    let page = int(context, word, 1 << index_bits);
     let mut moved = Vec::new();
     for (walker, base) in found.iter().zip(&bases) {
         let ty = function.operand_type(context, Operand::Value(walker.value)).ok_or("a typed pointer")?;

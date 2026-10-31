@@ -210,10 +210,12 @@ pub fn assembly(
     let looped = looped.transpose()?;
     // The loops that walk a pointer by page, for the functions that have one:
     // priced against the loops as they are, below.
-    let paged = (request.level != Level::O0)
-        .then(|| {
+    let index_bits = llrm_mir::tti::Tti::index_register_bits(&crate::tti::Mos6502::new());
+    let paged = index_bits
+        .filter(|_| request.level != Level::O0)
+        .map(|bits| {
             let mut paged = program.modules[0].clone();
-            llrm_transforms::pageindex::indexed(&mut paged).map(|names| {
+            llrm_transforms::pageindex::indexed(&mut paged, bits).map(|names| {
                 crate::prepare::split_phi_edges(&mut paged);
                 (names, paged)
             })

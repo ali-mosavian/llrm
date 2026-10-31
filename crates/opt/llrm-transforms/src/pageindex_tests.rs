@@ -49,7 +49,7 @@ fn answer(
 fn the_walk_by_page_copies_what_the_pointer_walk_copies() {
     let before = llrm_mir::parse::module(TEXT).expect("parses");
     let mut after = before.clone();
-    let changed = crate::pageindex::indexed(&mut after).expect("rewrites");
+    let changed = crate::pageindex::indexed(&mut after, 8).expect("rewrites");
     assert_eq!(changed, vec!["f".to_owned()]);
     assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
     let printed = llrm_mir::print::module(&after);
@@ -78,7 +78,7 @@ done:
 }
 ";
     let mut module = llrm_mir::parse::module(text).expect("parses");
-    assert_eq!(crate::pageindex::indexed(&mut module).expect("runs"), Vec::<String>::new());
+    assert_eq!(crate::pageindex::indexed(&mut module, 8).expect("runs"), Vec::<String>::new());
 }
 
 /// A loop rotated to read the next byte before it tests (the shape of a
@@ -127,12 +127,28 @@ done:
 ";
     let before = llrm_mir::parse::module(text).expect("parses");
     let mut after = before.clone();
-    let changed = crate::pageindex::indexed(&mut after).expect("rewrites");
+    let changed = crate::pageindex::indexed(&mut after, 8).expect("rewrites");
     assert_eq!(changed, vec!["f".to_owned()]);
     let printed = llrm_mir::print::module(&after);
     assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{printed}");
     assert!(!printed.contains("%sq ="), "the pointer still steps:\n{printed}");
     for n in [1, 2, 255, 256, 257, 300, 511, 512, 513, 598] {
+        assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
+    }
+}
+
+/// The index is as wide as the target says (`Tti::index_register_bits`), not
+/// a byte: a 4-bit index wraps every 16 bytes and the bases move by 16. With a
+/// byte hard-coded the pass made an `i8` index whatever the target asked.
+#[test]
+fn the_page_is_as_wide_as_the_targets_index() {
+    let before = llrm_mir::parse::module(TEXT).expect("parses");
+    let mut after = before.clone();
+    assert_eq!(crate::pageindex::indexed(&mut after, 4).expect("rewrites"), vec!["f".to_owned()]);
+    let printed = llrm_mir::print::module(&after);
+    assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{printed}");
+    assert!(printed.contains("phi i4"), "no 4-bit index:\n{printed}");
+    for n in [1, 15, 16, 17, 31, 32, 33, 100] {
         assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
     }
 }

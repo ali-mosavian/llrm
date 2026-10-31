@@ -99,6 +99,11 @@ impl Tti for Mos6502 {
         "mos6502"
     }
 
+    /// `lda (zp),y`: the index is `y`.
+    fn index_register_bits(&self) -> Option<u32> {
+        Some(8)
+    }
+
     fn cmp_sel_cost(
         &self,
         op: CmpSel,
