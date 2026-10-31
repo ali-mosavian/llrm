@@ -12,6 +12,12 @@
 //! and equal values made in several blocks count once and are one value in the
 //! preheader (a second `MachineCSE` after the hoist).
 //!
+//! A comparison into the zero register (`subs wzr, w0, #1`) and a dominated
+//! plain subtract of the same operands (`sub w9, w0, #1`) are one `subs w9,
+//! w0, #1`, as the pin's `SUBSWri` pair is merged before its dead flag result
+//! becomes the zero register. A copy of a single-definition register is read
+//! through when expressions are compared (`PerformTrivialCopyPropagation`).
+//!
 //! DEVIATE 3: LLVM runs these on the shared machine IR; this is a small version
 //! over the arm64 selector's operations, standing in until the core machine
 //! passes run on arm64 (docs/architecture/arm64-spike.md).
@@ -252,6 +258,56 @@ pub fn run(function: &mut MFunc) {
     cse(function);
 }
 
+/// The virtual registers that are plain copies of another, each defined once:
+/// reading the copy is reading its source (`PerformTrivialCopyPropagation`).
+fn single_copies(function: &MFunc, definitions: &HashMap<Reg, usize>) -> HashMap<Reg, Reg> {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter_map(|op| match op {
+            Op::Copy { dst, src } if dst.is_virtual() && src.is_virtual() => Some((*dst, *src)),
+            _ => None,
+        })
+        .filter(|(dst, src)| definitions.get(dst) == Some(&1) && definitions.get(src) == Some(&1))
+        .collect()
+}
+
+/// `op` with the uses that earlier removals renamed, and copies read through.
+fn renamed(op: &Op, rename: &HashMap<Reg, Reg>, copies: &HashMap<Reg, Reg>) -> Op {
+    let mut copy = op.clone();
+    copy.visit(&mut |slot, role| {
+        if role == Role::Use {
+            let mut key = slot.key();
+            while let Some(&found) = rename.get(&key).or_else(|| copies.get(&key)) {
+                key = found;
+            }
+            match (slot, key) {
+                (RegRef::Gpr(slot), Reg::Gpr(new)) => *slot = new,
+                (RegRef::Fpr(slot), Reg::Fpr(new)) => *slot = new,
+                _ => {}
+            }
+        }
+    });
+    copy
+}
+
+/// The difference a comparison (`subs wzr, ..`) would make as a plain add or
+/// subtract into a virtual register: what the pin's selection has before its
+/// dead flag-setting results become the zero register.
+fn plain_form(op: &Op) -> Option<Op> {
+    let Op::I(inst) = op else { return None };
+    let mut plain = inst.clone();
+    match &mut plain {
+        Inst::AddSubImm { op, rd, .. } | Inst::AddSubShifted { op, rd, .. } if op.set_flags && *rd == Gpr::R31 => {
+            op.set_flags = false;
+            *rd = Gpr(Gpr::FIRST_VIRTUAL);
+        }
+        _ => return None,
+    }
+    Some(Op::I(plain))
+}
+
 /// Equal pure computations of a dominating block are used instead of repeated.
 fn cse(function: &mut MFunc) {
     let cfg = cfg(function);
@@ -265,12 +321,24 @@ fn cse(function: &mut MFunc) {
     let mut rename: HashMap<Reg, Reg> = HashMap::new();
     let mut removed: HashSet<(usize, usize)> = HashSet::new();
     let mut table: HashMap<String, Reg> = HashMap::new();
+    let mut compares: HashMap<String, (usize, usize)> = HashMap::new();
+    let copies = single_copies(function, &definitions);
+    let mut defines: HashMap<(usize, usize), Gpr> = HashMap::new();
     let mut stack: Vec<(usize, usize, Vec<String>)> = vec![(0, 0, Vec::new())];
     // Depth-first over the tree, undoing a block's entries when it is left.
     while let Some((block, next, added)) = stack.last_mut() {
         if *next == 0 {
             let mut entries = Vec::new();
             for (index, op) in function.blocks[*block].ops.iter().enumerate() {
+                // A comparison waits for the difference it would also make.
+                if let Some(plain) = plain_form(op) {
+                    let key = format!("compare {}", keyed(&renamed(&plain, &rename, &copies)));
+                    if !compares.contains_key(&key) {
+                        compares.insert(key.clone(), (*block, index));
+                        entries.push(key);
+                    }
+                    continue;
+                }
                 if !pure(op) {
                     continue;
                 }
@@ -278,30 +346,24 @@ fn cse(function: &mut MFunc) {
                 if definitions.get(&register) != Some(&1) {
                     continue;
                 }
-                // Uses renamed already by earlier removals.
-                let mut copy = op.clone();
-                copy.visit(&mut |slot, role| {
-                    if role == Role::Use {
-                        let key = slot.key();
-                        if let Some(found) = rename.get(&key) {
-                            match (slot, found) {
-                                (RegRef::Gpr(slot), Reg::Gpr(new)) => *slot = *new,
-                                (RegRef::Fpr(slot), Reg::Fpr(new)) => *slot = *new,
-                                _ => {}
-                            }
-                        }
-                    }
-                });
-                let key = keyed(&copy);
+                let key = keyed(&renamed(op, &rename, &copies));
                 match table.get(&key) {
                     Some(&earlier) => {
                         rename.insert(register, earlier);
                         removed.insert((*block, index));
                     }
-                    None => {
-                        table.insert(key.clone(), register);
-                        entries.push(key);
-                    }
+                    None => match (compares.get(&format!("compare {key}")), register) {
+                        // The comparison defines the value instead: the pin's
+                        // `SUBSWri` shared with the dominated `SUBSWri`.
+                        (Some(&at), Reg::Gpr(register)) => {
+                            defines.insert(at, register);
+                            removed.insert((*block, index));
+                        }
+                        _ => {
+                            table.insert(key.clone(), register);
+                            entries.push(key);
+                        }
+                    },
                 }
             }
             *added = entries;
@@ -313,12 +375,18 @@ fn cse(function: &mut MFunc) {
         } else {
             for key in added.iter() {
                 table.remove(key);
+                compares.remove(key);
             }
             stack.pop();
         }
     }
     if removed.is_empty() {
         return;
+    }
+    for ((block, index), register) in defines {
+        if let Op::I(Inst::AddSubImm { rd, .. } | Inst::AddSubShifted { rd, .. }) = &mut function.blocks[block].ops[index] {
+            *rd = register;
+        }
     }
     for (index, block) in function.blocks.iter_mut().enumerate() {
         let mut at = 0;
