@@ -147,3 +147,53 @@ fn csv_rows(csv: &str) -> Vec<Vec<String>> {
         })
         .collect()
 }
+
+fn m68030(text: &str) -> u32 {
+    clocks(Cpu::M68030, text)
+}
+
+/// MC68030UM 11.6.6 (p. 11-37), I-cache case: MOVE Rn,Dn 2; MOVE SOURCE,(An)+ 4 plus the fetch of a
+/// `(An)+` source (11.6.1, p. 11-26: 3).
+#[test]
+fn m68030_moves() {
+    assert_eq!(m68030("move.w %d0, %d1"), 2);
+    assert_eq!(m68030("move.l (%a0)+, (%a1)+"), 4 + 3);
+}
+
+/// 11.6.8 (p. 11-40): ADD Dn,EA 3 plus fea `(An)` 3; DIVU.W 44; MULU.L 44 plus the immediate fetch `#<data>.W,Dn` 2
+/// (11.6.2, p. 11-28).
+#[test]
+fn m68030_arithmetic() {
+    assert_eq!(m68030("add.l %d0, (%a0)"), 3 + 3);
+    assert_eq!(m68030("divu.w %d1, %d0"), 44);
+    assert_eq!(m68030("mulu.l %d1, %d0"), 44 + 2);
+}
+
+/// 11.6.16 (p. 11-49): RTS 9, UNLK 5, LINK.W 4; 11.6.15 (p. 11-48): Bcc taken 6, not taken byte 4, DBcc expired 10.
+#[test]
+fn m68030_control() {
+    assert_eq!(m68030("rts"), 9);
+    assert_eq!(m68030("unlk %a6"), 5);
+    assert_eq!(m68030("link.w %a6, #-4"), 4);
+    assert_eq!(cost_on(Cpu::M68030, "bne .L1", 2, true).unwrap().clocks, 6);
+    assert_eq!(cost_on(Cpu::M68030, "bne .L1", 2, false).unwrap().clocks, 4);
+    assert_eq!(cost_on(Cpu::M68030, "dbf %d0, .L1", 4, false).unwrap().clocks, 10);
+}
+
+/// 11.6.14 (p. 11-47): BFTST Dn 8; BFEXTU Mem (<5 bytes) 12 plus the immediate address `#<data>.W,(An)` (11.6.4, p. 11-33: 2).
+#[test]
+fn m68030_bit_fields() {
+    assert_eq!(m68030("bftst %d0{4:8}"), 8);
+    assert_eq!(m68030("bfextu (%a0){4:8}, %d0"), 12 + 2);
+}
+
+/// 11.6.12 (p. 11-45): LSd #,Dy 4; ASL Dx,Dy 8; 11.6.13 (p. 11-46): BTST #,Dn 4, BSET Dn,Mem 6 plus fea `(An)` 3;
+/// 11.6.7 (p. 11-39): MOVEM RL,EA 4+2n plus the register-mask address `#<data>.W,-(An)` (2).
+#[test]
+fn m68030_shifts_bits_and_movem() {
+    assert_eq!(m68030("lsl.l #2, %d0"), 4);
+    assert_eq!(m68030("asl.l %d1, %d0"), 8);
+    assert_eq!(m68030("btst #3, %d0"), 4);
+    assert_eq!(m68030("bset %d0, (%a0)"), 6 + 3);
+    assert_eq!(m68030("movem.l %d2-%d4, -(%sp)"), 4 + 2 * 3 + 2);
+}

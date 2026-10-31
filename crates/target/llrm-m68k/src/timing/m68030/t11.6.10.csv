@@ -1,0 +1,15 @@
+#title,11.6.10 Binary-Coded Decimal and Extended Instructions,page,11-43,notes,none printed on page
+Group,Mark,Instruction or Address Mode,Operands or Condition,Head,Tail,I-Cache Case,No-Cache Case
+,,ABCD,"Dn,Dn",0,0,4(0/0/0),4(0/1/0)
+,,ABCD,"-(An),-(An)",2,1,13(2/0/1),14(2/1/1)
+,,SBCD,"Dn,Dn",0,0,4(0/0/0),4(0/1/0)
+,,SBCD,"-(An),-(An)",2,1,13(2/0/1),14(2/1/1)
+,,ADDX,"Dn,Dn",2,0,2(0/0/0),2(0/1/0)
+,,ADDX,"-(An),-(An)",2,1,9(2/0/1),10(2/1/1)
+,,SUBX,"Dn,Dn",2,0,2(0/0/0),2(0/1/0)
+,,SUBX,"-(An),-(An)",2,1,9(2/0/1),10(2/1/1)
+,,CMPM,"(An)+,(An)+",0,0,8(2/0/0),8(2/1/0)
+,,PACK,"Dn,Dn,#<data>",6,0,6(0/0/0),6(0/1/0)
+,,PACK,"-(An),-(An),#<data>",2,1,11(1/0/1),11(1/1/1)
+,,UNPK,"Dn,Dn,#<data>",8,0,8(0/0/0),8(0/1/0)
+,,UNPK,"-(An),-(An),#<data>",2,1,11(1/0/1),11(1/1/1)

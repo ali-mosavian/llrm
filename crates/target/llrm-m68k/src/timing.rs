@@ -24,6 +24,7 @@
 //! `tests/timing.rs`: the cells it checks, with table and page.
 
 mod m68010;
+mod m68030;
 mod table;
 
 use crate::dagisel::hooks::Cpu as SelectCpu;
@@ -126,6 +127,14 @@ fn list_size(text: &str) -> Option<u32> {
 
 fn operand(text: &str) -> Result<Operand, String> {
     let unsupported = || format!("operand `{text}` is not in the tables");
+    // a bit field's `{offset:width}` and a register pair `%d1:%d0` do not change the operand's mode
+    if let Some((inner, field)) = text.split_once('{').filter(|(_, field)| field.ends_with('}')) {
+        let _ = field;
+        return operand(inner);
+    }
+    if text.split_once(':').is_some_and(|(high, low)| is_data(high) && is_data(low)) {
+        return Ok(Operand::Mode(Mode::Dn, 0));
+    }
     if is_data(text) {
         return Ok(Operand::Mode(Mode::Dn, 0));
     }
@@ -307,7 +316,8 @@ pub fn cost_on(
         Cpu::M68000 => clocks68000(base, suffix, &operands, bytes, taken),
         Cpu::M68010 => m68010::clocks(base, suffix, &operands, bytes, taken),
         Cpu::M68020 => clocks68020(base, suffix, &operands, bytes, taken),
-        Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => None,
+        Cpu::M68030 => m68030::clocks(base, suffix, &operands, bytes, taken),
+        Cpu::M68040 | Cpu::M68060 => None,
     }
     .ok_or_else(|| format!("`{text}` is not in the {cpu:?} tables"))?;
     let by_register = is_shift(base) && matches!(cpu, Cpu::M68000 | Cpu::M68010) && places(&operands).is_none() && operands.len() == 2;
