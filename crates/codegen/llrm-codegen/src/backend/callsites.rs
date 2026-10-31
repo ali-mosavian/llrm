@@ -15,6 +15,7 @@
 //! A branch, a call or a branch target ends the run, and the register is then
 //! left out: a site that says less is true, one that says more may not be.
 //!
+//! # Example
 //! ```text
 //!  mov esi, 7        ; rsi = 7
 //!  mov rdi, rbx      ; rdi = rbx + 0

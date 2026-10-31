@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 136 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 137 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -23,6 +23,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 136 documen
 | calleefacts | Records which registers a private function writes, so its direct callers keep values in the others across the call. | Per function in `assemble.rs`: `record` after the function is machined. | [calleefacts](calleefacts.md) |
 | callframe | Stores into a reserved call frame become pushes: `X86CallFrameOptimization`. | After `FixupSetCC`, before `FlagsCopy` (the pin's pre-allocation order). | [callframe](callframe.md) |
 | callregs | Which registers a runtime call destroys or keeps, read from its contract, so the allocator knows what may stay live across it. | `isel.rs`, `isel/wide.rs`, `isel/unwind.rs` (the clobber sets of a call | [callregs](callregs.md) |
+| callsites | The calls of emitted code and what their argument registers hold (`DW_TAG_call_site`). | On the emitted code of a procedure, from `debuginfo`, for targets whose | [callsites](callsites.md) |
 | cfi | Reads call frame information back from emitted code. | `debuginfo.rs`, under `-g`. | [cfi](cfi.md) |
 | classes | What the selected target says about its registers, for the allocator and the passes around it. | `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller | [classes](classes.md) |
 | cmpsub | A compare of a value with a constant, where the same value minus (nearly) that constant is made just before it: the subtract's flags are the compare's. | A machine phase ahead of the first SSA phase (`flow::machine_with`), at | [cmpsub](cmpsub.md) |
@@ -36,7 +37,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 136 documen
 | datagroup | Make the data segment register a fourth selector register where the stack lives in the data group. | Register allocation (`allocate.rs`): `names_data_segment` before it, | [datagroup](datagroup.md) |
 | deadmi | An instruction nothing reads is gone: `DeadMachineInstructionElim` after selection. | Named by `flow`. | [deadmi](deadmi.md) |
 | deadspills | Drops a spill store no later read of its slot can see. | Named by `peephole`. | [deadspills](deadspills.md) |
-| debuginfo | `-g`: build a module's debug information as [`llrm_object::debug::Info`], the format-neutral model each object format's writer encodes. | `described` when a module is assembled (`assemble.rs`; `driver/basic.rs` | [debuginfo](debuginfo.md) |
+| debuginfo | `-g`: build a module's debug information as [`llrm_debug::Info`], the format-neutral model each object format's writer encodes. | `described` when a module is assembled (`assemble.rs`; `driver/basic.rs` | [debuginfo](debuginfo.md) |
 | division | Select a dword division by a constant as a multiply by its reciprocal, where the CPU's prices make that cheaper. | `isel.rs` (`divide`), for each division by a constant. | [division](division.md) |
 | earlytaildup | Which blocks early tail duplication may copy, and into which predecessors: `shouldTailDuplicate`, `isSimpleBB`, `canCompletelyDuplicateBB` and `canTailDuplicate` of [TailDuplicator.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp) with `PreRegAlloc` set and `LayoutMode` clear. | `flow::machine_with`, first of the machine phases. | [earlytaildup](earlytaildup.md) |
 | edges | Breaks one edge of a body: a block of its own that jumps on. | `machinesink`. | [edges](edges.md) |
