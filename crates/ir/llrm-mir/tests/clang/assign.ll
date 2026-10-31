@@ -28,7 +28,7 @@ attributes #2 = { nounwind }
 !llvm.errno.tbaa = !{!9}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: "clang version 24.0.0git (https://github.com/llvm/llvm-project.git d1106deb71cc81016406a1917d0508d2df296266)", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, splitDebugInlining: false, nameTableKind: None)
-!1 = !DIFile(filename: "as.c", directory: "/tmp/claude-1000/iv10", checksumkind: CSK_MD5, checksum: "c332a8ffa497f9494383a4c67fd936b8")
+!1 = !DIFile(filename: "as.c", directory: "", checksumkind: CSK_MD5, checksum: "c332a8ffa497f9494383a4c67fd936b8")
 !2 = !{i32 7, !"Dwarf Version", i32 5}
 !3 = !{i32 2, !"Debug Info Version", i32 3}
 !4 = !{i32 8, !"PIC Level", i32 2}

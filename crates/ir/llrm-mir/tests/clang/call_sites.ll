@@ -1,5 +1,5 @@
-; ModuleID = '/tmp/claude-1000/iv10/cs.c'
-source_filename = "/tmp/claude-1000/iv10/cs.c"
+; ModuleID = 'cs.c'
+source_filename = "cs.c"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 
 ; Function Attrs: nounwind uwtable
@@ -29,7 +29,7 @@ attributes #2 = { nounwind }
 !llvm.errno.tbaa = !{!9}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: "clang version 24.0.0git (https://github.com/llvm/llvm-project.git d1106deb71cc81016406a1917d0508d2df296266)", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, splitDebugInlining: false, nameTableKind: None)
-!1 = !DIFile(filename: "/tmp/claude-1000/iv10/cs.c", directory: "/home/alim/work/personal/llrm/.claude/worktrees/orr", checksumkind: CSK_MD5, checksum: "459591ed1d3006f42f366a63818b7ead")
+!1 = !DIFile(filename: "cs.c", directory: "", checksumkind: CSK_MD5, checksum: "459591ed1d3006f42f366a63818b7ead")
 !2 = !{i32 7, !"Dwarf Version", i32 5}
 !3 = !{i32 2, !"Debug Info Version", i32 3}
 !4 = !{i32 8, !"PIC Level", i32 2}
@@ -43,7 +43,7 @@ attributes #2 = { nounwind }
 !12 = !{!"omnipotent char", !13, i64 0}
 !13 = !{!"Simple C/C++ TBAA"}
 !14 = distinct !DISubprogram(name: "f", scope: !15, file: !15, line: 3, type: !16, scopeLine: 3, flags: DIFlagPrototyped | DIFlagAllCallsDescribed, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0, retainedNodes: !19, keyInstructions: true)
-!15 = !DIFile(filename: "/tmp/claude-1000/iv10/cs.c", directory: "", checksumkind: CSK_MD5, checksum: "459591ed1d3006f42f366a63818b7ead")
+!15 = !DIFile(filename: "cs.c", directory: "", checksumkind: CSK_MD5, checksum: "459591ed1d3006f42f366a63818b7ead")
 !16 = !DISubroutineType(types: !17)
 !17 = !{!18, !18, !18}
 !18 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)

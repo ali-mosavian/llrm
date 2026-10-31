@@ -34,7 +34,7 @@ attributes #2 = { nounwind }
 !llvm.ident = !{!10}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: "Ubuntu clang version 20.1.8 (0ubuntu4)", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, splitDebugInlining: false, nameTableKind: None)
-!1 = !DIFile(filename: "al.c", directory: "/tmp/claude-1000/dx", checksumkind: CSK_MD5, checksum: "7636b6fcee8f2265a170007025967690")
+!1 = !DIFile(filename: "al.c", directory: "", checksumkind: CSK_MD5, checksum: "7636b6fcee8f2265a170007025967690")
 !2 = !{i32 1, !"NumRegisterParameters", i32 0}
 !3 = !{i32 7, !"Dwarf Version", i32 5}
 !4 = !{i32 2, !"Debug Info Version", i32 3}
