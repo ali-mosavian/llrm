@@ -596,6 +596,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
         "qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/qcport-run-cc.py',
         "oracle-qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/oracle_qcport.py --jobs ${JOBS:-8}',
+        "objsweep": "python3 tools/pairs/objsweep_gate.py",
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
         "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} -p llrm --test run -- test_every_program_under_tests_run_prints_its_out",
     }
@@ -888,7 +889,7 @@ def snapshot_binaries(release: Path, into: Path) -> Path:
 
 
 # The steps that run the compiler's binaries (the others build what they test, or read the tree).
-USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "oracle-sweep", "oracle-premise", "oracle-qcport", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
+USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "oracle-sweep", "oracle-premise", "oracle-qcport", "identity", "measure", "objsweep", "qcport", "turbo", "cv4", "dos-slow")
 
 
 def group_plan(p: Plan, group: str) -> Plan:

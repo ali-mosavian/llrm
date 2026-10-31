@@ -12,7 +12,13 @@ fn legalized(
     let (a, b) = (dag.get_register(F64, 5), dag.get_register(F64, 6));
     let root = build(&mut dag, a, b);
     dag.set_root(root);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     (dag, root, [a, b])
 }
@@ -81,7 +87,13 @@ fn branching(
     let branch = dag.get_node(ISD::BrCond, EVT::OTHER, &[entry, test, taken]);
     let root = if then_br { dag.get_node(ISD::Br, EVT::OTHER, &[branch, other]) } else { branch };
     dag.set_root(root);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     (dag, root, [taken, other])
 }

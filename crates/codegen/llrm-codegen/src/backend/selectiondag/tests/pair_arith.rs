@@ -90,9 +90,13 @@ fn the_overflow_add_and_add_with_carry_are_add_and_adc() {
         let joined = dag.get_node(ISD::Xor, EVT::I32, &[lo, hi]);
         dag.set_root(joined);
         let tli = p5();
-        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false })
-            .run()
-            .unwrap();
+        DagLegalizer::new(
+            &mut dag,
+            &tli,
+            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+        )
+        .run()
+        .unwrap();
         let root = dag.get_root();
         let (low, high) = (dag.operand(root, 0), dag.operand(root, 1));
         assert_eq!((dag.opcode(low), low.res), (ISD::MergeValues, 0));

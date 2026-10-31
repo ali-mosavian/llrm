@@ -131,8 +131,8 @@ impl GlobalSplitCandidate {
 
 /// What the splitting analyses keep for a function: built once from its CFG,
 /// frequencies and loops.
-pub struct SplitSupport {
-    pub env: Box<dyn SplitEnv>,
+pub struct SplitSupport<'a> {
+    pub env: Box<dyn SplitEnv + 'a>,
     pub mbfi: MachineBlockFrequencyInfo,
     pub bundles: Rc<EdgeBundles>,
     pub placer: SpillPlacement,
@@ -146,10 +146,10 @@ pub struct SplitSupport {
     split_constraints: Vec<BlockConstraint>,
 }
 
-impl SplitSupport {
+impl<'a> SplitSupport<'a> {
     /// `succs[n]` are the successors of block `n`.
     pub fn new(
-        env: Box<dyn SplitEnv>,
+        env: Box<dyn SplitEnv + 'a>,
         mbfi: MachineBlockFrequencyInfo,
         succs: &[Vec<usize>],
     ) -> Self {
@@ -173,17 +173,17 @@ impl SplitSupport {
 
 /// The parts of the allocator the splits work on, borrowed apart so the editor
 /// can hold the live intervals while the extra info is read.
-pub struct Splitter<'p> {
+pub struct Splitter<'p, 'a> {
     pub lis: &'p mut LiveIntervals,
     pub matrix: &'p mut LiveRegMatrix,
     pub extra: &'p mut ExtraRegInfo,
-    pub ss: &'p mut SplitSupport,
+    pub ss: &'p mut SplitSupport<'a>,
     pub env: &'p dyn GreedyEnv,
     pub original: &'p HashMap<u32, u32>,
     pub hints: &'p mut std::collections::BTreeMap<u32, Vec<Hint>>,
 }
 
-impl Splitter<'_> {
+impl Splitter<'_, '_> {
     /// `trySplit`
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L1975>):
     /// try to split `virt`, making it assignable. Returns a register when it

@@ -209,6 +209,10 @@ pub struct Use {
     pub role: Role,
     /// The instruction writes the value there, rather than reads it.
     pub defining: bool,
+    /// A half of an address pair the roles left registers for: it confines the
+    /// value to the addressing registers, and only `distinct_classes`' cold
+    /// reads use it.
+    pub spare: bool,
 }
 
 /// Every read that confines a value on its own, a byte operand or an address
@@ -741,7 +745,15 @@ fn collected(
                         // The reads are kept only for a caller that asks for
                         // them.
                         if let Some(uses) = uses.as_deref_mut() {
-                            uses.push(Use { block: at, insn: position, value, class: choices.clone(), role, defining });
+                            uses.push(Use {
+                                block: at,
+                                insn: position,
+                                value,
+                                class: choices.clone(),
+                                role,
+                                defining,
+                                spare: false,
+                            });
                         }
                         _restrict(&mut out, value, choices);
                     }
@@ -786,16 +798,20 @@ fn collected(
     if let Some(uses) = uses.as_deref_mut() {
         for (block, insn, base, index) in pair_sites {
             for (value, role, kind) in [(base, Role::Base, Kind::WordBases), (index, Role::Index, Kind::WordIndexes)] {
-                if out.get(&value).is_some_and(BTreeSet::is_empty) {
-                    uses.push(Use {
-                        block,
-                        insn,
-                        value,
-                        class: kind.registers(registers).clone(),
-                        role,
-                        defining: false,
-                    });
-                }
+                let none = out.get(&value).is_some_and(BTreeSet::is_empty);
+                uses.push(Use {
+                    block,
+                    insn,
+                    value,
+                    class: if none {
+                        kind.registers(registers).clone()
+                    } else {
+                        registers.word_bases.union(&registers.word_indexes).copied().collect()
+                    },
+                    role,
+                    defining: false,
+                    spare: !none,
+                });
             }
         }
     }

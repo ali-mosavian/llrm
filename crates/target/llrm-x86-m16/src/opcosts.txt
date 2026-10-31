@@ -8,6 +8,11 @@
 add = alu_rr
 multiply = mul_r16
 divide = div_r16
+multiply_long = imul_r32
+divide_long = idiv_r32
+# A quarter: the 486 sheet's `imul r32` is the midpoint of 13..42, so a smaller win is inside its spread (a two-clock win
+# lost 0.9% on switch and recmany).
+divide_margin = 25
 shift = shift_ri
 address = lea
 carry = carry(movzx, alu_rr, shift_ri, mov_rr)
@@ -59,6 +64,8 @@ alu_rr = 4
 xchg_rr = 4
 mul_r16 = 6
 div_r16 = 6
+imul_r32 = 8
+idiv_r32 = 8
 shift_ri = 6
 lea = 6
 movzx = 6

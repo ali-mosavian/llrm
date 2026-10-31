@@ -263,7 +263,7 @@ pub fn lower_return(
 pub struct MosCalling;
 
 impl TargetCalling for MosCalling {
-    fn places_attribute(
+    fn passes_in_place(
         &self,
         name: &str,
     ) -> bool {

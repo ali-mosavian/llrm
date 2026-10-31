@@ -233,7 +233,15 @@ impl LirBody {
     pub fn named_values(&self) -> BTreeSet<u32> {
         self.notes
             .iter()
-            .filter_map(|note| if let NoteValue::Value(value) = note.value { Some(value) } else { None })
+            .flat_map(|note| match &note.value {
+                NoteValue::Value(value) | NoteValue::Offset(value, _) | NoteValue::Arrived(value, _) => vec![*value],
+                NoteValue::Expr(expr) => expr
+                    .args
+                    .iter()
+                    .filter_map(|arg| if let NoteArg::Value(value) = arg { Some(*value) } else { None })
+                    .collect(),
+                _ => Vec::new(),
+            })
             .collect()
     }
 
@@ -1104,13 +1112,38 @@ pub struct DebugNote {
 }
 
 /// What a note says a variable (or a piece of it) is.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum NoteValue {
     /// Nothing: its value was deleted.
     Nothing,
     /// The value, by the number its register had in SSA.
     Value(u32),
     /// A constant.
+    Constant(i64),
+    /// The value plus a constant (`DW_OP_plus_uconst, n, DW_OP_stack_value`).
+    Offset(u32, i64),
+    /// What the operations make of the arguments.
+    Expr(Arc<NoteExpr>),
+    /// A parameter's own value, which arrived in the register: where no
+    /// register holds it, it is what the function was entered with
+    /// (`DW_OP_entry_value`).
+    Arrived(u32, RegId),
+}
+
+/// A value made of other values (`!DIArgList` with a `!DIExpression`).
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct NoteExpr {
+    pub args: Vec<NoteArg>,
+    pub ops: Vec<llrm_debug::ExprOp>,
+    /// The result is the value, not the address of it.
+    pub value: bool,
+}
+
+/// An argument of a [`NoteExpr`].
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum NoteArg {
+    /// The value, by the number its register had in SSA.
+    Value(u32),
     Constant(i64),
 }
 

@@ -25,7 +25,7 @@
 //! # Used by
 //! The shadow harness: `Selector::select(dag, &mut X86Hooks::new(..), node)`.
 
-use crate::dag::{Hooks, PatternContext, SDValue};
+use crate::dag::{Hooks, PatternContext, SDValue, X86Predicates};
 use crate::generated::ids::{isd, mvt, x86, x86isd};
 use crate::generated::{x86_i486, x86_m16, x86_p5, x86_x64};
 use crate::instr;
@@ -54,6 +54,9 @@ pub struct Options {
     pub min_size: bool,
     /// `Subtarget->getFrameLowering()->hasFP(*MF)`.
     pub has_frame_pointer: bool,
+    /// The CPU's multiply ends early on the r/m operand's length (the 486: `10
+    /// + max(bits, 3)`), from its tune description.
+    pub multiply_early_out: bool,
     /// The address forms the target has (SD3).
     pub address_mode: AddrMode,
 }
@@ -548,6 +551,15 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         false
     }
 
+    fn may_load_store(
+        &self,
+        opcode: u16,
+    ) -> (bool, bool) {
+        crate::generated::memory_flags(opcode)
+    }
+}
+
+impl<D: AddrDag> X86Predicates<D> for X86Hooks {
     fn has_sse_unaligned_mem(&self) -> bool {
         false
     }
@@ -632,12 +644,5 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         _: u32,
     ) -> bool {
         false
-    }
-
-    fn may_load_store(
-        &self,
-        opcode: u16,
-    ) -> (bool, bool) {
-        crate::generated::memory_flags(opcode)
     }
 }
