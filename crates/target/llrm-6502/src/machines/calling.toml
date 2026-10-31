@@ -1,0 +1,43 @@
+# llvm-mos's convention, simplified: bytes and words in the imaginary registers from rc2 (rc0:rc1 is the soft stack
+# pointer, which the callee keeps), a result in A, A:X or A:X:rc2:rc3. Whatever does not fit goes in static frame
+# cells (stack args, no stack pointer arithmetic on the hardware stack).
+default = "mos"
+private = "mos"
+
+[abi.mos]
+convention = "mos"
+
+[mos]
+cc = "cdecl"
+slot_bytes = 1
+order = "left-to-right"
+cleanup = "caller"
+argument_registers = ["rc2", "rc3", "rc4", "rc5", "rc6", "rc7"]
+wide_pairs = [["rc2", "rc3"], ["rc4", "rc5"], ["rc6", "rc7"]]
+backfill = true
+return_address_bytes = 2
+first_argument_offset = 0
+frame = "rs0"
+frame_optional = true
+stack = "rs0"
+preserved = [["rs0", "rs0"], ["rs4", "rs4"], ["rs5", "rs5"], ["rs6", "rs6"], ["rs7", "rs7"]]
+clobbered = ["a", "x", "y", "rs1", "rs2", "rs3", "rs8", "rs9", "rs10", "rs11", "rs12", "flags"]
+entry_state = ["decimal_clear"]
+promotion = "slot"
+wide_slots = 2
+variadic_float = "double"
+aggregate = "hidden-pointer"
+aggregate_in_register_bytes = []
+aggregate_pointer = "register"
+aggregate_pointer_register = "rs1"
+aggregate_pointer_returned = "a"
+aggregate_pointer_popped_by = "caller"
+
+[mos.symbol]
+elf = "*"
+
+[mos.result]
+1 = ["a"]
+2 = ["a", "x"]
+4 = ["a", "x", "rc2", "rc3"]
+pointer = ["a", "x"]

@@ -14,6 +14,7 @@ indexmap = "2"
 # The compilers' allocator: glibc's malloc and free were a quarter of a compile's instructions.
 mimalloc = { version = "0.1", default-features = false }
 llrm-alloc = { path = "crates/support/llrm-alloc" }
+llrm-cgen = { path = "crates/support/llrm-cgen" }
 llrm-env = { path = "crates/support/llrm-env" }
 num-bigint = "0.4"
 num-traits = "0.2"

@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 LAYERS = [
-    ("support", ["llrm-env", "llrm-support", "llrm-alloc", "llrm-adt"]),
+    ("support", ["llrm-env", "llrm-support", "llrm-alloc", "llrm-adt", "llrm-cgen"]),
     ("ir", ["llrm-mir", "llrm-lir", "llrm-hir"]),
     ("analysis", ["llrm-analysis"]),
     ("transforms", ["llrm-transforms", "llrm-sroa-poc"]),
@@ -28,7 +28,7 @@ LAYERS = [
         "concrete targets",
         [
             "llrm-x86", "llrm-x86-m16", "llrm-x86-m32", "llrm-x86-m64", "llrm-x86-m16-select", "llrm-x86-m32-select",
-            "llrm-x86-m64-select", "llrm-arm64",
+            "llrm-x86-m64-select", "llrm-arm64", "llrm-6502", "llrm-m68k",
         ],
     ),
     ("driver", ["llrm-driver", "llrm-cc", "llrm-bcdriver", "llrm-opt"]),
