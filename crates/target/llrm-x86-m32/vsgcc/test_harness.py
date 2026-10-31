@@ -1,4 +1,5 @@
 """Regression tests of the instrument: each name says what went wrong and what it produced."""
+import os
 import json
 from pathlib import Path
 
@@ -153,6 +154,16 @@ def test_ctime_times_the_programs_programs_py_lists_and_no_file():
     importlib.reload(ctime)
     names = sorted(ctime.programs.sources())
     assert names and "bench_io.h" not in names and all(ctime.cmds(n) for n in names), names
+
+
+def test_levels_time_gives_llrm_cc_its_tree_and_skips_programs_gcc_cannot_build(monkeypatch):
+    """`levels_time.py` ran llrm-cc without LLRM_OW (the -O0 bench/bintree compile exited 1) and handed gcc bench/jpeg_fixed, which needs bench_io.h."""
+    import levels_time
+    monkeypatch.delenv("LLRM_OW", raising=False)
+    levels_time.setup()
+    assert os.environ.get("LLRM_OW")
+    names = levels_time.bench_sources()
+    assert "bintree" in names and "jpeg_fixed" not in names, sorted(names)
 
 
 def test_every_x87_encoding_has_a_clock_price():
