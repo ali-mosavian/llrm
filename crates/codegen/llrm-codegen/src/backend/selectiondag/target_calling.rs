@@ -7,10 +7,11 @@
 //! [`Out`]s and [`In`]s, and joins the parts the target returns
 //! (`getCopyFromParts`). Where each part goes is the target's.
 //!
-//! A call in tail position is the target's `lower_tail_call` (`TC_RETURN`), or an
-//! ordinary call where it answers none.
+//! A call in tail position is the target's `lower_tail_call` (`TC_RETURN`), or
+//! an ordinary call where it answers none.
 //!
-//! DEVIATE: integers and pointers only; no byval, sret, floats or aggregates. Reason: the targets using the hook need none yet. Exit: with the
+//! DEVIATE: integers and pointers only; no byval, sret, floats or aggregates.
+//! Reason: the targets using the hook need none yet. Exit: with the
 //! first target that does.
 
 use std::fmt::Debug;
@@ -117,9 +118,10 @@ pub trait TargetCalling: Debug + Sync {
         ins: &[In],
     ) -> (SDValue, Vec<SDValue>);
 
-    /// `LowerCall` of a call in tail position (`IsTailCall`): the `TC_RETURN` node that ends the
-    /// block, or none where the target does not take the call as a tail call
-    /// (`isEligibleForTailCallOptimization`), which is then an ordinary call.
+    /// `LowerCall` of a call in tail position (`IsTailCall`): the `TC_RETURN`
+    /// node that ends the block, or none where the target does not take the
+    /// call as a tail call (`isEligibleForTailCallOptimization`), which is
+    /// then an ordinary call.
     fn lower_tail_call(
         &self,
         _dag: &mut SelectionDAG,

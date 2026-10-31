@@ -1668,13 +1668,17 @@ impl Builder<'_> {
             }
         }
         let void = self.module.context.types.is_void(result_type);
-        // `ComputeValueVTs`: an aggregate result is its leaves, each answered like a scalar result.
+        // `ComputeValueVTs`: an aggregate result is its leaves, each answered
+        // like a scalar result.
         let mut layout: Vec<(EVT, usize)> = Vec::new();
         let mut ins: Vec<In> = Vec::new();
         let aggregate = !void && self.is_aggregate(result_type);
         if !void {
-            let leaf_types: Vec<TypeId> =
-                if aggregate { self.leaves(result_type)?.into_iter().map(|(leaf, _)| leaf).collect() } else { vec![result_type] };
+            let leaf_types: Vec<TypeId> = if aggregate {
+                self.leaves(result_type)?.into_iter().map(|(leaf, _)| leaf).collect()
+            } else {
+                vec![result_type]
+            };
             for leaf in leaf_types {
                 let vt = self.type_of(leaf)?;
                 let pointer = self.is_pointer_type(leaf);
@@ -1687,7 +1691,8 @@ impl Builder<'_> {
         let vt = layout.first().map_or(EVT::OTHER, |(vt, _)| *vt);
         calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
-        // `IsTailCall`: the call in tail position, if the target takes it, ends the block
+        // `IsTailCall`: the call in tail position, if the target takes it, ends
+        // the block
         if let Some(tail) = self.tail_candidate.take()
             && let Some(node) = calling.lower_tail_call(&mut self.dag, root, callee_node, &outs)
         {
@@ -3584,8 +3589,8 @@ mod f80_tests {
         .unwrap_or_else(|why| panic!("{}", why.0));
     }
 
-    /// A call returning `{ i8, i8 }` was refused ("an aggregate result with a target's calling hook");
-    /// the hook is asked for each leaf's parts.
+    /// A call returning `{ i8, i8 }` was refused ("an aggregate result with a
+    /// target's calling hook"); the hook is asked for each leaf's parts.
     #[test]
     fn a_struct_result_is_answered_leaf_by_leaf() {
         let stub: &'static Results = Box::leak(Box::default());
@@ -3595,7 +3600,8 @@ mod f80_tests {
         );
         assert_eq!(*stub.results.lock().unwrap(), [EVT::I8, EVT::I8]);
     }
-    /// A target that takes a call in tail position as its own node, or answers none.
+    /// A target that takes a call in tail position as its own node, or answers
+    /// none.
     #[derive(Debug, Default)]
     struct Tails {
         takes: bool,
@@ -3689,22 +3695,28 @@ mod f80_tests {
         .unwrap_or_else(|why| panic!("{}", why.0));
     }
 
-    /// A call in tail position on a target with a calling hook was refused ("tail call ... with a
-    /// target's calling hook"); the target's `lower_tail_call` now ends the block.
+    /// A call in tail position on a target with a calling hook was refused
+    /// ("tail call ... with a target's calling hook"); the target's
+    /// `lower_tail_call` now ends the block.
     #[test]
     fn a_call_in_tail_position_is_the_targets_tail_call_where_it_takes_one() {
         let stub: &'static Tails = Box::leak(Box::new(Tails { takes: true, ..Tails::default() }));
-        built_with_tails("declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}", stub);
+        built_with_tails(
+            "declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}",
+            stub,
+        );
         assert_eq!((*stub.tails.lock().unwrap(), *stub.calls.lock().unwrap()), (1, 0));
     }
 
     #[test]
     fn a_target_that_takes_no_tail_call_gets_an_ordinary_call() {
         let stub: &'static Tails = Box::leak(Box::default());
-        built_with_tails("declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}", stub);
+        built_with_tails(
+            "declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}",
+            stub,
+        );
         assert_eq!((*stub.tails.lock().unwrap(), *stub.calls.lock().unwrap()), (0, 1));
     }
-
 }
 
 /// Whether `direct` names a `llrm.qb.` routine.
