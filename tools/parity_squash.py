@@ -238,6 +238,7 @@ PASS_CODE = re.compile(r"^crates/(opt/[^/]+|codegen/llrm-codegen)/src/(?!.*(?:_t
 FEAT_TITLE = re.compile(r"^\s*feat(\(|:)", re.I)
 PIPELINE_WIRING = "crates/opt/llrm-transforms/src/pipeline.rs"
 ROWS_LINE = re.compile(r"^\s*Rows:\s*\S+", re.I | re.M)
+COMPLEXITY_LINE = re.compile(r"^\s*Complexity:\s*\S+", re.I | re.M)
 
 
 def perf_needs_rows(title: str, description: str, files: list[str] | tuple[str, ...] = ()) -> list[str]:
@@ -392,6 +393,15 @@ def judge_line_warning(number: str, info: dict) -> str | None:
     return f"{number}: WARN: no judge line for {info['headRefOid']}: the description has no `problems: 0 @ <full head SHA>`"
 
 
+def complexity_warning(number: str, info: dict) -> str | None:
+    """`N: WARN: ...` for a PR that changes pass code (PASS_CODE) and whose description has no `Complexity:` line: the user's 10-31 rule is that a new or changed pass is O(n) or as
+    close as possible, and the body states the bound (the pin's if faithful, else a numbered DEVIATE). A warning only, like the judge line: body checks never block a landing."""
+    paths = [f["path"] if isinstance(f, dict) else f for f in info.get("files", [])]
+    if any(PASS_CODE.match(path) for path in paths) and not COMPLEXITY_LINE.search(info.get("body") or ""):
+        return f"{number}: WARN: pass code changed and the description has no `Complexity:` line (the pin's bound, or a numbered DEVIATE)"
+    return None
+
+
 def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHECK_DIR / "target", checks=None, merge=None, deletions=None, info=None, head_failed: set[str] | None = None, cache: Path = PRECHECK_CACHE, base_sha: str | None = None) -> str:
     """`N: PASS`, or `N: REFUSED: <names>` after merging PR N's head with release/next in the dev checkout and running the cheap static checks (ratchets, fmt, docs, the
     deletion rule) there: seconds, no dist build. #2836 cost a batch 26 minutes of halving for a failure these checks name. Only items NEW against release/next's own
@@ -399,8 +409,9 @@ def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHE
     info = info or json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName,files"], capture_output=True, text=True, errors="replace", check=True).stdout)
     if info["baseRefName"] != BRANCH:
         return f"{number}: REFUSED: targets {info['baseRefName']}, not {BRANCH}"
-    if warning := judge_line_warning(number, info):
-        print(warning, file=sys.stderr, flush=True)
+    for warning in (judge_line_warning(number, info), complexity_warning(number, info)):
+        if warning:
+            print(warning, file=sys.stderr, flush=True)
     base_sha = base_sha or git("rev-parse", BASE).strip()
     key = f"{info['headRefOid']} {base_sha}"
     cached = json.loads(cache.read_text()) if cache.exists() else {}

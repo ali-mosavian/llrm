@@ -2138,3 +2138,20 @@ def test_no_tool_defaults_to_the_old_integration_branch():
     stale = [f"{p.relative_to(root)}:{n}" for p in root.rglob("*.py") if ".venv" not in p.parts and not p.name.startswith("test_") and p != Path(__file__)
              for n, line in enumerate(p.read_text().splitlines(), 1) if "feat/parity" in line.split("#")[0] and ('"origin/feat/parity' in line or ' "feat/parity"' in line or "origin/feat/parity\"" in line)]
     assert stale == []
+
+
+def test_a_pr_that_changes_pass_code_without_a_complexity_line_warns_and_one_with_it_does_not(tmp_path, monkeypatch, capsys):
+    """The 10-31 rule: a new or changed pass states its complexity. Warn only: the PR still passes the precheck."""
+    pass_file = {"path": "crates/opt/llrm-transforms/src/licm.rs"}
+    info = {"headRefOid": "h" * 40, "baseRefName": ps.BRANCH, "files": [pass_file]}
+    assert ps.complexity_warning("7", {**info, "body": "TL;DR\nOwner: w6"}).startswith("7: WARN: pass code changed and the description has no `Complexity:`")
+    assert ps.complexity_warning("7", {**info, "body": None}) is not None
+    assert ps.complexity_warning("7", {**info, "body": "Complexity: O(n) per loop, the pin's bound"}) is None
+    assert ps.complexity_warning("7", {**info, "body": "x", "files": [{"path": "crates/opt/llrm-transforms/src/licm_tests.rs"}, {"path": "docs/x.md"}]}) is None, "tests and docs are not pass code"
+    assert ps.complexity_warning("7", {"body": "x"}) is None, "no file list read: nothing to name"
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    tree = Tree(set(), set())
+    for n, body in enumerate(("x", "Complexity: O(n)")):
+        line = ps.precheck(str(n), dev=tmp_path, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info={**info, "body": body}, cache=tmp_path / f"c{n}.json", base_sha="base")
+        assert line == f"{n}: PASS", "a warning never blocks"
+        assert (f"{n}: WARN: pass code changed" in capsys.readouterr().err) == (n == 0)
