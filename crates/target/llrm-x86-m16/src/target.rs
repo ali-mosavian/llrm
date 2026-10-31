@@ -253,7 +253,10 @@ impl Machine for Dos {
         }
         llrm_mir::target::Tuning {
             max_stores_per_memset: 4,
-            max_stores_per_memcpy: 2,
+            // The pin's limit at speed: a constant copy up to 8 pieces is dword
+            // and word moves (lru nib -O2: 447 -> 356 clocks, 144 -> 104 memory
+            // operands against `rep movsb`, +32 B). The size limits below stay.
+            max_stores_per_memcpy: 8,
             max_stores_per_memmove: 2,
             // DEVIATE SD223/SD225 (real mode): a dword store is 4 bytes
             // (prefix, opcode, ModRM, disp8) against 13 for the fill (`lea di`,

@@ -1,0 +1,8 @@
+reason = "m16 constant copies of 3..8 pieces at speed are dword/word moves as the pin's MaxStoresPerMemcpy (8) says, not `rep movsb` (SD223/SD225 stay for -Os). lru nib O2: 447 -> 356 clocks, 144 -> 104 memory operands (both below main), +32 B for the pairs: fewer clocks, clocks are the 486 metric."
+exception = true
+
+[[row]]
+label = "lru nib -O2"
+counter = "code_bytes"
+tip = 596
+to = 628
