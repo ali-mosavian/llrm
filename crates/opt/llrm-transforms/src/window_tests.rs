@@ -225,10 +225,18 @@ fn paged(
     text: &str,
     bits: Option<u32>,
 ) -> String {
+    paged_for(text, bits, false)
+}
+
+fn paged_for(
+    text: &str,
+    bits: Option<u32>,
+    size: bool,
+) -> String {
     let mut module = parsed(&format!("{SMALL}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Window { size: false });
+    manager.add(Window { size });
     manager.run_module(&mut module, Rc::new(Tuned { index_bits: bits, ..Tuned::default() })).unwrap();
     printed(&module)
 }
@@ -332,4 +340,12 @@ fn test_a_pointer_read_after_the_walk_is_the_windows_end() {
     assert_eq!(results(&parsed(&got), LENGTHS), results(&before, LENGTHS), "{got}");
     assert!(got.contains("windows:"), "{got}");
     assert!(!got.contains("%sp2") && !got.contains("%dp2"), "a pointer still steps:\n{got}");
+}
+
+/// Priced in bytes (-Os) the windows' setup always exceeds what one index
+/// saves, so no loop is split: the copy keeps its pointers and its count.
+#[test]
+fn test_a_size_build_does_not_window_a_pointer_walk() {
+    let got = paged_for(COPY, Some(8), true);
+    assert!(!got.contains("windows:") && got.contains("%sp2"), "{got}");
 }
