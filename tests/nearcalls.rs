@@ -111,16 +111,17 @@ fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
 
 /// Queens' `safe(q, row, col)` reads `q[r]` for `r < row` under a bounds check
 /// on the slice's length, 12, which reaches it as a field of the descriptor.
-/// DEVIATE SD443 (the extra IPSCCP after `promote.`, interprocedural.rs; owner w2,
-/// fix-by 2026-11-07): the checks
+/// DEVIATE SD443 (the extra IPSCCP after `promote.`, interprocedural.rs; owner
+/// w2, fix-by 2026-11-07): the checks
 /// are folded. The pin keeps them: its ArgumentPromotion refuses a recursive
 /// function's descriptor that holds a pointer (ArgumentPromotion.cpp#L581 at
 /// d1106deb71cc), so `opt -O2` keeps the descriptor argument and both
 /// `call @N$EBND` (one in `safe`, one in `place`; measured with the pin's
-/// `opt -passes='default<O2>'` over queens' IR, with and without `noinline`). Ours promotes the length,
-/// the extra IPSCCP folds it (queens -O2: 225467 to 182177 instructions).
-/// Exit: by-value slice parameters (#6140) remove the descriptor, then #6159
-/// lands and this returns to the pin shape: the two calls.
+/// `opt -passes='default<O2>'` over queens' IR, with and without `noinline`).
+/// Ours promotes the length, the extra IPSCCP folds it (queens -O2: 225467 to
+/// 182177 instructions). Exit: by-value slice parameters (#6140) remove the
+/// descriptor, then #6159 lands and this returns to the pin shape: the two
+/// calls.
 #[test]
 fn test_nib_queens_folds_its_bounds_checks_where_the_pin_keeps_them() {
     let asm = compiled(
@@ -159,9 +160,9 @@ fn test_nib_reads_a_local_array_slice_through_ss() {
     assert!(body.contains("ss:[") && !body.contains("les "), "{asm}");
 }
 
-/// The exit of the DEVIATE above: the pin's shape, the two checks stay (the pin's
-/// `opt -O2` and #6159's build both have two; a0ed5eb43's "three" was wrong).
-/// Run it with `--ignored`; #6159 turns it on and the test above goes.
+/// The exit of the DEVIATE above: the pin's shape, the two checks stay (the
+/// pin's `opt -O2` and #6159's build both have two; a0ed5eb43's "three" was
+/// wrong). Run it with `--ignored`; #6159 turns it on and the test above goes.
 #[test]
 #[ignore = "the pin shape: on when #6159 lands (exit of the extra IPSCCP DEVIATE)"]
 fn test_nib_queens_keeps_its_bounds_checks_as_the_pin_does() {
