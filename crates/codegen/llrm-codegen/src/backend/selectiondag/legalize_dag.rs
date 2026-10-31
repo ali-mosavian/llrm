@@ -365,21 +365,89 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: target.node, res: 1 }, target])
     }
 
-    /// `LegalizeSetCCCondCode` for the two codes that need two compares:
-    /// `oeq` is `eq` and ordered, `une` is `ne` or unordered.
+    /// `getLogicalNOT`: `xor v, 1` (`-1` where booleans are all ones).
+    fn get_logical_not(
+        &mut self,
+        value: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(value);
+        match self.dag.config().boolean_contents {
+            super::dag::BooleanContents::ZeroOrNegativeOne => self.dag.get_not(value, vt),
+            _ => {
+                let one = self.dag.get_constant(1, vt);
+                self.dag.get_node(ISD::Xor, vt, &[value, one])
+            }
+        }
+    }
+
+    /// `TargetLowering::LegalizeSetCCCondCode` of a `SETCC` whose code the
+    /// target expands: the operands swapped, the condition inverted (and
+    /// the result negated), or two compares joined by `and` or `or`. The `i1`
+    /// case is not translated.
     fn expand_setcc_code(
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
         let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(node, 2)).data else { return None };
-        let (first, second, combine) = match cc {
-            CondCode::SetOEq => (CondCode::SetEq, CondCode::SetO, ISD::And),
-            CondCode::SetUNe => (CondCode::SetNe, CondCode::SetUo, ISD::Or),
-            _ => return None,
-        };
         let (lhs, rhs, vt) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.value_type(node));
-        let (one, other) = (self.dag.get_setcc(vt, lhs, rhs, first), self.dag.get_setcc(vt, lhs, rhs, second));
-        Some(self.dag.get_node(combine, vt, &[one, other]))
+        let EVT::Simple(op_vt) = self.dag.value_type(lhs) else { return None };
+        let tli = self.tli;
+        let legal_or_custom = |cc: CondCode| matches!(
+            tli.cond_code_action(cc, op_vt),
+            Action::Legal | Action::Custom
+        );
+        let legal = |cc: CondCode| tli.cond_code_action(cc, op_vt) == Action::Legal;
+        let float = self.dag.value_type(lhs).is_floating_point();
+        // Swapping the operands.
+        let swapped = cc.swapped_operands();
+        if legal_or_custom(swapped) {
+            return Some(self.dag.get_setcc(vt, rhs, lhs, swapped));
+        }
+        // Inverting the condition, then swapping on top of it.
+        let mut inverse = if float { cc.inverse_float() } else { cc.inverse_integer() };
+        let mut swap = false;
+        if !legal_or_custom(inverse) {
+            inverse = inverse.swapped_operands();
+            swap = true;
+        }
+        if legal_or_custom(inverse) {
+            let (l, r) = if swap { (rhs, lhs) } else { (lhs, rhs) };
+            let compare = self.dag.get_setcc(vt, l, r, inverse);
+            return Some(self.get_logical_not(compare));
+        }
+        if !float {
+            // An integer code with no swap or inverse the target takes: x86's
+            // `oeq`/`une` are the only ones here.
+            return None;
+        }
+        let unordered = cc as u8 & 0x8 != 0;
+        let generic = |cc: CondCode| {
+            (
+                CondCode::ALL_CODES[((cc as u8 & 0x7) | 0x10) as usize],
+                if unordered { CondCode::SetUo } else { CondCode::SetO },
+                if unordered { ISD::Or } else { ISD::And },
+                false,
+            )
+        };
+        let (cc1, cc2, opcode, invert) = match cc {
+            CondCode::SetUo if legal(CondCode::SetUNe) => (CondCode::SetUNe, CondCode::SetUNe, ISD::Or, false),
+            CondCode::SetUo => (CondCode::SetOEq, CondCode::SetOEq, ISD::And, true),
+            CondCode::SetO => (CondCode::SetOEq, CondCode::SetOEq, ISD::And, false),
+            CondCode::SetONe | CondCode::SetUEq
+                if !legal(if unordered { CondCode::SetUo } else { CondCode::SetO })
+                    && (legal(CondCode::SetOGt) || legal(CondCode::SetOLt)) =>
+            {
+                (CondCode::SetOGt, CondCode::SetOLt, ISD::Or, unordered)
+            }
+            _ => generic(cc),
+        };
+        let (first, second) = if cc != CondCode::SetO && cc != CondCode::SetUo {
+            (self.dag.get_setcc(vt, lhs, rhs, cc1), self.dag.get_setcc(vt, lhs, rhs, cc2))
+        } else {
+            (self.dag.get_setcc(vt, lhs, lhs, cc1), self.dag.get_setcc(vt, rhs, rhs, cc2))
+        };
+        let joined = self.dag.get_node(opcode, vt, &[first, second]);
+        Some(if invert { self.get_logical_not(joined) } else { joined })
     }
 
     /// `ExpandBitCast` of a float to or from an integer of its size, with no
