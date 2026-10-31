@@ -40,8 +40,8 @@ pub fn builder_target() -> BuilderTarget {
         legal_ints: vec![32, 64],
         stack_align: Some(16),
         native_atomics: true,
-        jump_tables: false,
-        // AArch64Subtarget.cpp#L345: 10 (4 at minsize, not modelled: jump tables are off here).
+        jump_tables: true,
+        // AArch64Subtarget.cpp#L345: 10 (4 at minsize, not modelled).
         min_jump_table_entries: 10,
         target_nodes: Some(TargetNodes {
             call: ISD::Target(0),

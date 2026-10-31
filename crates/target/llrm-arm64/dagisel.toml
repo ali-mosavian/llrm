@@ -45,6 +45,9 @@ extra_symbols = [
   "AArch64::LDRQpost",
   # Selected by hand (tryBitfieldInsertOp).
   "AArch64::BFMWri",
+  # Selected by hand (LowerBR_JT).
+  "AArch64::JumpTableDest32",
+  "TargetOpcode::JUMP_TABLE_DEBUG_INFO",
 ]
 ids_includes = [
   '#include "MCTargetDesc/AArch64MCTargetDesc.h"',

@@ -1555,6 +1555,15 @@ impl SelectionDAG {
         self.intern(ISD::JumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index))
     }
 
+    /// `getTargetJumpTable`.
+    pub fn get_target_jump_table(
+        &mut self,
+        vt: EVT,
+        index: u32,
+    ) -> SDValue {
+        self.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index))
+    }
+
     pub fn get_register_mask(&mut self) -> SDValue {
         self.intern(ISD::RegisterMask, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::None)
     }

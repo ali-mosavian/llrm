@@ -3036,6 +3036,7 @@ pub mod opcode {
     pub const IRGstack: u16 = 1009;
     pub const ISB: u16 = 4498;
     pub const InOutZAUsePseudo: u16 = 1010;
+    pub const JumpTableDest32: u16 = 1012;
     pub const LASTA_RPZ_B: u16 = 4499;
     pub const LASTA_RPZ_D: u16 = 4500;
     pub const LASTA_RPZ_H: u16 = 4501;

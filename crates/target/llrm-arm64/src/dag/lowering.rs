@@ -935,3 +935,48 @@ fn is_xalu_overflow(
         && matches!(dag.opcode(op), ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO)
         && matches!(dag.value_type(op), EVT::I32 | EVT::I64)
 }
+
+/// `LowerJumpTable` for the small code model: `ADRP` and `ADDlow` of the table.
+pub fn lower_jump_table(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::JumpTable(index) = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let target = dag.get_target_jump_table(vt, index);
+    let page = dag.get_node(ISD::Target(a64::ADRP), vt, &[target]);
+    Some(dag.get_node(ISD::Target(a64::ADDlow), vt, &[page, target]))
+}
+
+/// `TargetOpcode::JUMP_TABLE_DEBUG_INFO`, in `MACHINE_OPCODES`.
+const JUMP_TABLE_DEBUG_INFO: u32 = 46;
+
+/// `LowerBR_JT`: `JumpTableDest32` of the table address and the entry index, then `BRIND` through the
+/// debug-info node. Entries are 4-byte offsets from the table.
+pub fn lower_br_jt(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (chain, table, entry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let NodeData::JumpTable(index) = dag.node(table).data else { return None };
+    let target = dag.get_target_jump_table(EVT::I32, index);
+    let destination = dag.get_node_multi(
+        ISD::Machine(u32::from(llrm_dagisel::generated::aarch64::ids::opcode::JumpTableDest32)),
+        &[EVT::I64, EVT::I64],
+        &[table, entry, target],
+    );
+    let index_const = dag.get_constant_with(u128::from(index), EVT::I64, true, false);
+    let info = dag.get_node_multi(ISD::Machine(JUMP_TABLE_DEBUG_INFO), &[EVT::GLUE], &[chain, index_const]);
+    Some(dag.get_node(ISD::BrInd, EVT::OTHER, &[info, SDValue { node: destination.node, res: 0 }]))
+}
+
+/// `LowerBRIND`: the `BRIND` of a jump table (`lower_br_jt`) is left as it is; the other forms
+/// (`indirectbr`, pointer authentication) are not ported.
+pub fn lower_br_ind(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let destination = dag.operand(node, 1);
+    let table = ISD::Machine(u32::from(llrm_dagisel::generated::aarch64::ids::opcode::JumpTableDest32));
+    (dag.opcode(destination) == table).then_some(node)
+}
