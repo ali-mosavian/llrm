@@ -819,52 +819,6 @@ pub fn narrow_immediates(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::
     lines.into_iter().zip(narrowed).map(|(line, narrow)| narrow.map_or(line, Line::Inst)).collect()
 }
 
-/// `cmp; scc %d; and.l #1, %d` is `moveq #0, %d; cmp; scc %d; neg.b %d`: the
-/// byte `scc` leaves is 0 or 255, and `neg.b` makes it 0 or 1 over the zeros
-/// `moveq` put in the rest. The `moveq` goes before the compare, which sets
-/// the codes `scc` reads (`moveq` would clear them) and does not touch `%d`.
-/// 4 bytes and 8 clocks for 6 and 16 (`and.l #imm, Dn` 16 clocks, `moveq` 4,
-/// `neg.b Dn` 4: the 68000 manual's instruction timing tables), one
-/// instruction more. The codes after differ from the `and`'s in `C`, which a
-/// branch on the boolean (`ne`, `eq`) does not read; `drop_redundant_tests`
-/// does not know `neg`, so a test after it stays.
-///
-/// DEVIATE from the pin, whose patterns mask. Exit: never; a target choice,
-/// off with [`crate::compile::Options::overlay`].
-pub fn boolean_by_negation(lines: Vec<crate::expand::Line>) -> Vec<crate::expand::Line> {
-    use crate::expand::Line;
-    let mut lines = lines;
-    let mut at = 2;
-    while at < lines.len() {
-        let (Line::Inst(compare), Line::Inst(set), Line::Inst(mask)) = (&lines[at - 2], &lines[at - 1], &lines[at])
-        else {
-            at += 1;
-            continue;
-        };
-        let mentions = |inst: &Inst, root| {
-            inst.operands.iter().any(|o| matches!(o, Operand::Reg(r) if REGISTER_INFO.root(*r) == root))
-        };
-        if (compare.opcode.starts_with("CMP") || compare.opcode.starts_with("TST"))
-            && set.opcode.starts_with("SETd8")
-            && mask.opcode == "AND32di"
-            && let [Operand::Reg(byte)] = set.operands[..]
-            && let [Operand::Reg(to), Operand::Reg(from), Operand::Imm(1)] = mask.operands[..]
-            && to == from
-            && REGISTER_INFO.root(to) == REGISTER_INFO.root(byte)
-            && !mentions(compare, REGISTER_INFO.root(to))
-        {
-            let negate = Inst { opcode: "NEG8d", operands: vec![Operand::Reg(byte), Operand::Reg(byte)] };
-            let clear = Inst { opcode: "MOVQ", operands: vec![Operand::Reg(to), Operand::Imm(0)] };
-            lines[at] = Line::Inst(negate);
-            lines.insert(at - 2, Line::Inst(clear));
-            at += 2;
-            continue;
-        }
-        at += 1;
-    }
-    lines
-}
-
 struct TstRow {
     asm: AsmRow,
     encoding: EncodingRow,
