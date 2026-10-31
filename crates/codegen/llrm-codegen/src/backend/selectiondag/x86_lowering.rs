@@ -148,6 +148,17 @@ pub struct X86Lowering {
 }
 
 impl CombineHooks for X86Lowering {
+    fn store_fp_to_int_in_memory(
+        &self,
+        float: EVT,
+        int: EVT,
+    ) -> bool {
+        // The same split `lower_fp_to_int` makes: SSE2 converts f32/f64 in registers.
+        let x87 = matches!(float, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80))
+            && !(self.sse2 && float != EVT::Simple(MVT::F80));
+        x87 && matches!(int, EVT::I16 | EVT::I32 | EVT::I64)
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,

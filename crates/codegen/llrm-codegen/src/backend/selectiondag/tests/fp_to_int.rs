@@ -99,3 +99,75 @@ fn an_i64_result_is_lowered_by_the_target_then_split() {
     assert_eq!(dag.opcode(fist), x86isd::FP_TO_INT_IN_MEM);
     assert_eq!(stored(&dag, root).0, EVT::I64);
 }
+
+struct StoresFist;
+
+impl crate::backend::selectiondag::dag_combiner::CombineHooks for StoresFist {
+    fn store_fp_to_int_in_memory(
+        &self,
+        _float: EVT,
+        _int: EVT,
+    ) -> bool {
+        true
+    }
+}
+
+fn store_of_fptosi(
+    volatile: bool,
+    extra_use: bool,
+) -> (SelectionDAG, SDValue) {
+    use crate::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner};
+    let mut dag = dag();
+    let x = dag.get_register(EVT::Simple(MVT::F32), 5);
+    let ptr = dag.get_register(EVT::I16, 6);
+    let converted = dag.get_node(ISD::FpToSInt, EVT::I32, &[x]);
+    let info = MemInfo {
+        mem_vt: EVT::I32,
+        align: 2,
+        volatile,
+        base: MemBase::Unknown,
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let entry = dag.entry_node();
+    let store = dag.get_store(entry, converted, ptr, info);
+    let root = if extra_use {
+        let other = dag.get_register(EVT::I16, 7);
+        let keep = dag.get_store(store, converted, other, info);
+        dag.get_token_factor(&[store, keep])
+    } else {
+        store
+    };
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut StoresFist, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    (dag, root)
+}
+
+/// `store (fptosi x), p` was `fist` to a frame temporary, a reload and the
+/// store; it is one `fist` on the store's pointer.
+#[test]
+fn a_store_of_fptosi_is_one_fist_on_the_pointer() {
+    let (dag, root) = store_of_fptosi(false, false);
+    assert_eq!(dag.opcode(root), x86isd::FP_TO_INT_IN_MEM);
+    assert_eq!(dag.opcode(dag.operand(root, 1)), ISD::Register, "the float is stored as is");
+    assert_eq!(dag.opcode(dag.operand(root, 2)), ISD::Register, "into the store's pointer");
+}
+
+/// A volatile store keeps its own store of the converted value.
+#[test]
+fn a_volatile_store_of_fptosi_is_not_folded() {
+    let (dag, root) = store_of_fptosi(true, false);
+    assert_eq!(dag.opcode(root), ISD::Store);
+}
+
+/// A converted value used again is still produced by `fptosi`.
+#[test]
+fn a_store_of_a_shared_fptosi_is_not_folded() {
+    let (dag, root) = store_of_fptosi(false, true);
+    assert_ne!(dag.opcode(root), x86isd::FP_TO_INT_IN_MEM);
+    let first = dag.operand(root, 0);
+    assert_eq!(dag.opcode(first), ISD::Store);
+    assert_eq!(dag.opcode(dag.operand(first, 1)), ISD::FpToSInt);
+}

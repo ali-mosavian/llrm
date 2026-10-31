@@ -167,6 +167,18 @@ pub trait CombineHooks {
         false
     }
 
+    /// DEVIATE SD446: `store (fp_to_sint x), ptr` is one `fist` into `ptr`
+    /// (`X86ISD::FP_TO_INT_IN_MEM`) when this returns true for the float and
+    /// the integer type; the pin converts through a frame temporary. Exit: the
+    /// pin has no such fold (it matches main's output).
+    fn store_fp_to_int_in_memory(
+        &self,
+        _float: EVT,
+        _int: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `reassociateOpsCommutative`'s pairing of `and`/`or` operands that are
     /// compares of one predicate. DEVIATE: off by default (the pin runs it
     /// for every target). Exit: x86 judged.
@@ -2210,6 +2222,26 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // the merged stores are dead, the node is returned as handled.
         if self.merge_consecutive_stores(node) {
             return Some(node);
+        }
+        // DEVIATE SD446: the conversion's only use is this plain store.
+        if self.dag.opcode(value) == ISD::FpToSInt
+            && !info.volatile
+            && info.ordering.is_none()
+            && info.ext.is_none()
+            && info.mem_vt == self.dag.value_type(value)
+            && self.dag.value_type(ptr) != MVT::Far.into()
+            && self.dag.has_one_use(value.node)
+        {
+            let source = self.dag.operand(value, 0);
+            if self.hooks.store_fp_to_int_in_memory(self.dag.value_type(source), info.mem_vt) {
+                return Some(self.dag.intern(
+                    super::x86_lowering::x86isd::FP_TO_INT_IN_MEM,
+                    &[EVT::OTHER],
+                    &[chain, source, ptr],
+                    SDNodeFlags::default(),
+                    NodeData::Mem(info),
+                ));
+            }
         }
         // `replaceStoreOfFPConstant` takes a volatile store too
         // (`isNormalStore`); the hook asks for that.
