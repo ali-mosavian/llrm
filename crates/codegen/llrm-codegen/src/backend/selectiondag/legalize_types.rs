@@ -504,6 +504,28 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(op, wide, &[lhs, rhs])
             }
+            op @ (ISD::SDiv | ISD::SRem | ISD::UDiv | ISD::URem) => {
+                // `PromoteIntRes_SDIV/UDIV`: both operands extended in the
+                // register, signed for a signed divide, zero
+                // for an unsigned one.
+                let signed = matches!(op, ISD::SDiv | ISD::SRem);
+                let mut extended = Vec::with_capacity(2);
+                for at in 0..2 {
+                    let operand = self.dag.operand(value, at);
+                    let bits = self.dag.value_type(operand).size_in_bits();
+                    let promoted = self.promoted_integer(operand);
+                    let wide = self.dag.value_type(promoted);
+                    extended.push(if signed {
+                        let ty = self.dag.get_value_type_node(self.dag.value_type(operand));
+                        self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
+                    } else {
+                        let mask = self.dag.get_constant(super::fold::mask(bits), wide);
+                        self.dag.get_node(ISD::And, wide, &[promoted, mask])
+                    });
+                }
+                let wide = self.dag.value_type(extended[0]);
+                self.dag.get_node(op, wide, &extended)
+            }
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => {
                 // `PromoteIntRes_SHL/SRL/SRA`: the value promoted, with the
                 // bits above its width cleared (srl) or sign-filled (sra); a
@@ -647,7 +669,10 @@ impl<'a> TypeLegalizer<'a> {
                     self.set_promoted_integer(value, joined);
                     return Ok(());
                 }
-                let loaded = self.dag.get_load(to, chain, ptr, info);
+                // `PromoteIntRes_LOAD`: a non-extending load becomes an
+                // any-extending one.
+                let ext = info.ext.unwrap_or(super::actions::LoadExt::ExtLoad);
+                let loaded = self.dag.get_ext_load(ext, to, chain, ptr, info);
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: loaded.node, res: 1 });
                 loaded
             }
@@ -673,6 +698,11 @@ impl<'a> TypeLegalizer<'a> {
                     }
                 }
             }
+            ISD::LRint => {
+                // `PromoteIntRes_XRINT`: the same rounding to the wider type.
+                let input = self.dag.operand(value, 0);
+                self.dag.get_node(ISD::LRint, to, &[input])
+            }
             ISD::UAddO
             | ISD::USubO
             | ISD::UAddOCarry
@@ -692,6 +722,27 @@ impl<'a> TypeLegalizer<'a> {
                 let node = self.dag.get_node_multi(self.dag.opcode(value), &[sum_vt, flag_vt], &ops);
                 self.replace_value_with(SDValue { node: value.node, res: 0 }, SDValue { node: node.node, res: 0 });
                 SDValue { node: node.node, res: 1 }
+            }
+            op @ (ISD::FpToSInt | ISD::FpToUInt) => {
+                // `PromoteIntRes_FP_TO_XINT`: the wider conversion (signed when
+                // only that one is legal), asserted to fit the
+                // type it had.
+                let input = self.dag.operand(value, 0);
+                let wide_op = if op == ISD::FpToUInt
+                    && !self.tli.is_operation_legal(ISD::FpToUInt, to)
+                    && self.tli.is_operation_legal_or_custom(ISD::FpToSInt, to)
+                {
+                    ISD::FpToSInt
+                } else {
+                    op
+                };
+                let converted = self.dag.get_node(wide_op, to, &[input]);
+                let ty = self.dag.get_value_type_node(vt);
+                self.dag.get_node(
+                    if op == ISD::FpToUInt { ISD::AssertZext } else { ISD::AssertSext },
+                    to,
+                    &[converted, ty],
+                )
             }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
@@ -828,6 +879,24 @@ impl<'a> TypeLegalizer<'a> {
                 };
                 let carry = self.dag.get_node(extend, bool_vt, &[carry]);
                 let updated = self.dag.update_node_operands(n, &[lhs, rhs, carry]);
+                SDValue { node: updated, res: 0 }
+            }
+            op @ (ISD::SIntToFp | ISD::UIntToFp) => {
+                // `PromoteIntOp_SINT_TO_FP`, `PromoteIntOp_UINT_TO_FP`: the
+                // promoted source extended in the register as
+                // the conversion reads it.
+                let src = self.dag.operand(node, 0);
+                let promoted = self.promoted_integer(src);
+                let wide = self.dag.value_type(promoted);
+                let from = self.dag.value_type(src);
+                let extended = if op == ISD::SIntToFp {
+                    let ty = self.dag.get_value_type_node(from);
+                    self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
+                } else {
+                    let mask = self.dag.get_constant(super::fold::mask(from.size_in_bits()), wide);
+                    self.dag.get_node(ISD::And, wide, &[promoted, mask])
+                };
+                let updated = self.dag.update_node_operands(n, &[extended]);
                 SDValue { node: updated, res: 0 }
             }
             ISD::BrCond if at == 1 => {
