@@ -357,6 +357,7 @@ impl Peephole {
         let body = forwarded_reloads(self.rules, &body);
         let body = forwarded_copies(self.rules, &body);
         let body = unread_spill_stores(&body);
+        let body = crate::backend::deadspills::dead_spill_stores(&body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
@@ -1080,37 +1081,70 @@ pub fn forwarded_reloads(
     peep::rewritten(rules.forwarded_reloads, body, &Facts::new(body, None))
 }
 
+/// The frame slots that are the allocator's own: one a spill store fills, whose
+/// address nothing takes and no debug variable names. No program pointer
+/// reaches such a slot, so only an access that names the slot can change it.
+pub fn spill_homes(body: &LirBody) -> BTreeSet<i64> {
+    let home = |addr: Option<Addr>| addr.and_then(|a| a.slot_home()).filter(|home| *home < 0);
+    let mut spilled: BTreeSet<i64> = BTreeSet::new();
+    let mut named: BTreeSet<i64> = BTreeSet::new();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let Some(what) = one.what.as_ref() else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            match place {
+                Loc::Address(a) => named.extend(home(a.addr)),
+                Loc::Mem(cell) if one.spill_store => spilled.extend(home(cell.addr)),
+                _ => {}
+            }
+        }
+    }
+    for variable in &body.variables {
+        if let lir::DebugPlace::At(addr) = &variable.place {
+            named.extend(addr.slot_home());
+        }
+    }
+    spilled.retain(|home| !named.contains(home));
+    spilled
+}
+
+/// The slot a frame cell belongs to, for a slot of the allocator's own.
+pub fn frame_home(place: &Loc) -> Option<i64> {
+    let Loc::Mem(cell) = place else { return None };
+    cell.addr.filter(|addr| addr.space == Space::Frame).and_then(|addr| addr.slot_home()).filter(|home| *home < 0)
+}
+
+/// The slot a plain `mov [slot], reg|imm` spill store fills; nothing else
+/// about the instruction (group, requirements, clobbers) may matter.
+pub fn plain_spill_store(one: &Insn) -> Option<i64> {
+    let what = one.what.as_ref()?;
+    let plain = what.op == Operation::Move
+        && what.name.as_deref() == Some("mov")
+        && one.spill_store
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty()
+        && one.spread.is_empty()
+        && !one.volatile
+        && !one.frame_adjust
+        && one.symbol != Some(true);
+    match (&what.dests[..], &what.sources[..]) {
+        ([place @ Loc::Mem(cell)], [Loc::Reg(_) | Loc::Held(_) | Loc::Imm(_)])
+            if plain && cell.index.is_none() && cell.index_through == RegId::None =>
+        {
+            frame_home(place)
+        }
+        _ => None,
+    }
+}
+
 /// `body` without the stores to a spill slot nothing reads. The forwarding
 /// above can drop the last reload of a slot and leave the store that filled
 /// it. A slot is read by any operand but the destination of a plain store; a
 /// slot a debug variable names stays.
 pub fn unread_spill_stores(body: &LirBody) -> LirBody {
-    let home = |place: &Loc| -> Option<i64> {
-        let Loc::Mem(cell) = place else { return None };
-        cell.addr.filter(|addr| addr.space == Space::Frame).and_then(|addr| addr.slot_home()).filter(|home| *home < 0)
-    };
-    let store_home = |one: &Insn| -> Option<i64> {
-        let what = one.what.as_ref()?;
-        let plain = what.op == Operation::Move
-            && what.name.as_deref() == Some("mov")
-            && one.spill_store
-            && one.group.is_none()
-            && one.requires.is_empty()
-            && one.delivers.is_empty()
-            && one.clobbers.is_empty()
-            && one.spread.is_empty()
-            && !one.volatile
-            && !one.frame_adjust
-            && one.symbol != Some(true);
-        match (&what.dests[..], &what.sources[..]) {
-            ([place @ Loc::Mem(cell)], [Loc::Reg(_) | Loc::Held(_) | Loc::Imm(_)])
-                if plain && cell.index.is_none() && cell.index_through == RegId::None =>
-            {
-                home(place)
-            }
-            _ => None,
-        }
-    };
+    let home = frame_home;
+    let store_home = plain_spill_store;
     let mut read: BTreeSet<i64> = BTreeSet::new();
     for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
         let Some(what) = one.what.as_ref() else { continue };
