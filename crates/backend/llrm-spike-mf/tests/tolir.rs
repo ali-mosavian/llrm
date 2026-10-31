@@ -883,3 +883,58 @@ fn test_the_cost_of_a_first_use_of_a_callee_saved_register_reaches_greedy() {
     assert_eq!(splits_with(0), splits_with(0), "the control: the answer does not depend on chance");
     assert_ne!(splits_with(0), splits_with(1_000), "the cost never changed what greedy did");
 }
+
+/// A literal live across a call is made again where it is read, not stored and
+/// loaded. The spiller puts that copy of the definition beside the read; the
+/// way back wrote the read's own instruction in its place and refused it
+/// ("a spill with no cell": 558 refusals in 300 differential programs).
+#[test]
+fn test_a_literal_made_again_after_a_call_comes_back_as_the_literal() {
+    let mut f = MFunction::<()>::new("literal");
+    f.classes = vec![(); 3];
+    let mut entry = Block { id: 0, ..Block::default() };
+    let mut literal = op("ldi", vec![Operand::Def(v(0)), Operand::Imm(7)]);
+    literal.rematerializable = true;
+    entry.insts.push(literal);
+    entry.insts.push(op("load", vec![Operand::Def(v(1))]));
+    entry.insts.push(call());
+    entry.insts.push(op("add", vec![Operand::Def(v(2)), Operand::Use(v(1)), Operand::Use(v(0))]));
+    entry.insts.push(op("store", vec![Operand::Use(v(2))]));
+    entry.insts.push(ret());
+    f.blocks = vec![entry];
+    let back = rewritten(&lowered(f));
+    let insts: Vec<&Inst> = back.function.blocks.iter().flat_map(|b| &b.insts).collect();
+    let literals = insts.iter().filter(|i| i.kind == Kind::Op("ldi")).count();
+    // the one before the call is gone: nothing reads it
+    assert_eq!(literals, 1, "{insts:?}");
+    let call_at = insts.iter().position(|i| i.call).unwrap();
+    assert_eq!(insts[call_at + 1].kind, Kind::Op("ldi"), "{insts:?}");
+    for ldi in insts.iter().filter(|i| i.kind == Kind::Op("ldi")) {
+        assert!(matches!(ldi.operands.as_slice(), [Operand::Def(_), Operand::Imm(7)]), "{ldi:?}");
+    }
+    assert_allocated(&back.function, &back.assignment);
+    every_read_is_set(&back.function).unwrap();
+}
+
+/// Every virtual register an instruction reads is set by one.
+fn every_read_is_set(function: &MFunction<()>) -> Result<(), String> {
+    let mut set = std::collections::BTreeSet::new();
+    let mut read = std::collections::BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|b| &b.insts) {
+        for operand in &inst.operands {
+            match operand {
+                Operand::Def(Reg::Virt(n)) => {
+                    set.insert(*n);
+                }
+                Operand::Use(Reg::Virt(n)) => {
+                    read.insert(*n);
+                }
+                _ => {}
+            }
+        }
+    }
+    match read.difference(&set).next() {
+        Some(n) => Err(format!("%{n} is read and never set")),
+        None => Ok(()),
+    }
+}
