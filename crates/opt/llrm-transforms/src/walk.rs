@@ -412,6 +412,7 @@ impl ProgramPass for Walk {
                             let mut accepted: Vec<llrm_mir::module::InstId> = Vec::new();
                             for (calls, credit) in units {
                                 let kept = function_mut(module, id).1.clone();
+                                let kept_clocks = function_clocks(module, &program.layout, tti, &kept);
                                 let mut chosen = accepted.clone();
                                 chosen.extend(calls.iter().copied());
                                 let available: llrm_support::hash::SparseIdMap<_, _> =
@@ -437,9 +438,25 @@ impl ProgramPass for Walk {
                                     .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                                 (self.simplify)(module, &mut modules[at], id, "walk.trial.");
                                 let tried = body_size(module, &program.layout, tti, id);
+                                // At speed a target that prices bytes in clocks
+                                // takes a trial that grows the code where the
+                                // clocks it saves are worth the growth.
+                                let rate = tti.speed_milliclocks_per_byte();
+                                let saved = if size == crate::inlinecost::CallerSize::Speed && rate > 0 {
+                                    let callees: i64 = calls
+                                        .iter()
+                                        .filter_map(|one| trials[one].callee)
+                                        .filter_map(|callee| module.global(callee).function())
+                                        .map(|body| function_clocks(module, &program.layout, tti, body))
+                                        .sum();
+                                    let now = module.global(id).function().expect("a body");
+                                    kept_clocks + callees - function_clocks(module, &program.layout, tti, now)
+                                } else {
+                                    0
+                                };
                                 if remarks {
                                     eprintln!(
-                                        "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee)",
+                                        "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee, {} clocks saved)",
                                         module.global(id).name.as_deref().unwrap_or("?"),
                                         module.global(id).function().map_or(0, |one| one.walk().count()),
                                         calls.len(),
@@ -450,10 +467,11 @@ impl ProgramPass for Walk {
                                             .unwrap_or("?")),
                                         tried,
                                         best,
-                                        credit
+                                        credit,
+                                        saved
                                     );
                                 }
-                                if tried <= best + credit {
+                                if tried <= best + credit || (tried - best - credit) * rate <= saved * 1000 {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -701,6 +719,30 @@ mod tests;
 
 /// SZ2: the largest caller, in instructions, whose refused sites are tried.
 const TRIAL_CALLER: usize = 300;
+
+/// SZ2: the clocks of `function` run once, by the target's latency model.
+fn function_clocks(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    tti: &dyn llrm_mir::tti::Tti,
+    function: &llrm_mir::module::Function,
+) -> i64 {
+    function
+        .walk()
+        .map(|(_, inst)| {
+            llrm_mir::instructioncost::instruction_cost(
+                tti,
+                &module.context,
+                layout,
+                &module.globals,
+                function,
+                inst,
+                llrm_mir::tti::CostKind::Latency,
+            )
+            .value
+        })
+        .sum()
+}
 
 /// SZ2: the code size of body `id`, by the target's cost model for bytes.
 fn body_size(
