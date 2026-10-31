@@ -349,7 +349,10 @@ pub trait Tti {
     }
 
     /// Whether a constant address offset may become a phi: false where the
-    /// access folds it as a displacement and the target says to keep it.
+    /// access folds it as a displacement and the target says to keep it. A
+    /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
+    /// register offset costs an add and a register at m16 (6 GPRs, base+index
+    /// already taken), nothing at m32.
     fn constant_offset_phi_is_cheap(&self) -> bool {
         true
     }
