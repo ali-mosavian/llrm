@@ -145,9 +145,20 @@ pub struct X86Lowering<'a> {
     /// [promote]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L64277
     pub i16_mul_chains: bool,
-    /// The CPU whose sheet prices a constant multiply that `combineMul` leaves
-    /// an `imul` (DEVIATE SD446); none keeps the pin's `imul`.
-    pub profile: Option<&'a crate::backend::cpu::Profile>,
+    /// What prices a constant multiply that `combineMul` leaves an `imul`
+    /// (DEVIATE SD446); none keeps the pin's `imul`.
+    pub profile: Option<MulPricing<'a>>,
+}
+
+/// The sheet, the target and the block a constant multiply is priced against.
+#[derive(Clone, Copy)]
+pub struct MulPricing<'a> {
+    pub cpu: &'a crate::backend::cpu::Profile,
+    pub arch: &'a dyn llrm_target::Target,
+    /// The block's frequency over the entry's.
+    pub freq: f64,
+    /// `Tti::speed_milliclocks_per_byte`.
+    pub milliclocks_per_byte: i64,
 }
 
 impl CombineHooks for X86Lowering<'_> {
@@ -1814,7 +1825,7 @@ fn combine_mul(
     level: CombineLevel,
     min_size: bool,
     i16_chains: bool,
-    profile: Option<&crate::backend::cpu::Profile>,
+    profile: Option<MulPricing<'_>>,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I32 && !(vt == EVT::I16 && i16_chains) {
@@ -1895,8 +1906,9 @@ fn combine_mul(
     new_mul
 }
 
-/// `x * c` as the chain `arithmetic::scale` prices below `imul` on `profile`
-/// (cached per constant, O(1) here), built from shifts, adds, subtracts and
+/// `x * c` as the chain `arithmetic::chain_at_speed` accepts (the clocks it
+/// saves pay for its bytes at the block's frequency; the search is cached per
+/// constant, O(1) here), built from shifts, adds, subtracts and
 /// the `lea` forms. An `i16` has no `lea`: the narrow chain.
 ///
 /// DEVIATE SD446: the pin's `combineMul` leaves an `imul` for a constant none
@@ -1904,22 +1916,21 @@ fn combine_mul(
 /// (Intel 240440-002 Table 10.1) against 2-4 for a chain. The search is
 /// GCC's `synth_mult`
 /// ([expmed.cc](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/expmed.cc)),
-/// the same as DEVIATE M1 in `arithmetic.rs`. Exit: none while the clocks
-/// decide. Owner sdag-d.
+/// the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
+/// bytes for clocks at speed (m16: `speed_milliclocks_per_byte`); the block's
+/// frequency is the IR `BlockFrequencies` (the machine one does not exist at
+/// DAG time). Exit: none while the clocks decide. Owner sdag-d.
 fn priced_chain(
     dag: &mut SelectionDAG,
     x: SDValue,
     c: i64,
     vt: EVT,
-    profile: &crate::backend::cpu::Profile,
+    pricing: MulPricing<'_>,
 ) -> Option<SDValue> {
     use crate::backend::arithmetic;
-    let chain = if vt == EVT::I16 {
-        let (chain, clocks) = arithmetic::cheapest_narrow_chain(c, profile).ok()??;
-        (clocks < arithmetic::immediate_multiply(profile, c).ok()?).then_some(chain)
-    } else {
-        arithmetic::scale(c, profile).ok()?
-    }?;
+    let width = if vt == EVT::I16 { 2 } else { 4 };
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte } = pricing;
+    let chain = arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte).ok()??;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
         let by = dag.get_constant(by as u128, EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])

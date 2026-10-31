@@ -128,6 +128,52 @@ pub fn scale<'a>(
     Ok((clocks < immediate_multiply(target, number)? + dword_prefix(target)).then_some(best))
 }
 
+/// Bytes of `chain`'s shifts, adds and subtracts on `width`-byte registers.
+/// The copy that seeds it is not counted: the allocator drops it where the
+/// source dies.
+pub fn chain_bytes(
+    chain: &[(&str, i64)],
+    width: i64,
+    arch: &dyn llrm_target::Target,
+) -> i64 {
+    let operand = arch.operand_bytes();
+    // A `lea r,[a+cur*s]` is the opcode, the ModRM and the SIB.
+    chain
+        .iter()
+        .map(|&(name, count)| match name {
+            "shl" => arch.shift_op_bytes(count, width),
+            "lea" | "flea" => 3 + i64::from(width != operand),
+            "fadd" | "fsub" => arch.shift_op_bytes(count, width) + 2 * arch.register_op_bytes(width),
+            _ => arch.register_op_bytes(width),
+        })
+        .sum()
+}
+
+/// The chain for a multiply by `number` of `width` bytes in a block `freq`
+/// times as hot as the entry, where the clocks it saves over `imul r,r,imm`
+/// pay for the bytes it adds at `milliclocks_per_byte` (the target's rate at
+/// speed): `saved * freq * 1000 >= extra_bytes * rate`. None where the rate
+/// is 0: the target does not trade bytes for clocks.
+pub fn chain_at_speed<'a>(
+    number: i64,
+    width: i64,
+    cpu: impl Into<ProfileOrName<'a>>,
+    arch: &dyn llrm_target::Target,
+    freq: f64,
+    milliclocks_per_byte: i64,
+) -> Result<Option<Vec<(&'static str, i64)>>, String> {
+    let target = targets::profile(cpu)?;
+    if milliclocks_per_byte <= 0 {
+        return Ok(None);
+    }
+    let found = if width == 4 { cheapest_chain(number, target)? } else { cheapest_narrow_chain(number, target)? };
+    let Some((chain, clocks)) = found else { return Ok(None) };
+    let prefix = if width == 4 { dword_prefix(target) } else { 0 };
+    let saved = immediate_multiply(target, number)? + prefix - clocks;
+    let extra = chain_bytes(&chain, width, arch) - arch.multiply_immediate_bytes(number, width);
+    Ok((saved > 0 && saved as f64 * freq * 1000.0 >= (extra * milliclocks_per_byte) as f64).then_some(chain))
+}
+
 /// What a dword instruction costs beyond a word one where the target's own
 /// operand is a word (m16): the operand-size prefix (66h). Each step of a
 /// dword chain pays it, and so does the `imul` it is priced against.
@@ -506,6 +552,25 @@ mod tests {
         assert_eq!(immediate_multiply(m16, 30011).unwrap(), 25, "premise: the sheet's imul");
         assert!(scale(30011, m16).unwrap().is_none(), "the chain's steps cost a prefix each");
         assert!(scale(30011, m32).unwrap().is_some(), "no prefix at m32");
+    }
+
+    /// The chain is taken where the clocks it saves, times the block's
+    /// frequency, pay for the bytes it adds at the target's rate (m16: one
+    /// clock is two bytes): x*43 run once is not worth its bytes, in a loop
+    /// (8 trips) it is, and with no rate (m32, m64) never.
+    #[test]
+    fn test_a_chain_is_taken_where_saved_clocks_times_frequency_pay_the_bytes() {
+        let m16 = targets::tuned_for(&llrm_x86_m16::M16, "486", false).unwrap();
+        let at = |width, freq, rate| chain_at_speed(43, width, m16, &llrm_x86_m16::M16, freq, rate).unwrap();
+        assert!(at(4, 1.0, 500).is_none(), "once: 43 clocks' worth of bytes is not saved");
+        assert!(at(4, 8.0, 500).is_some(), "in a loop");
+        assert!(at(4, 1000.0, 0).is_none(), "no rate: bytes and clocks are not traded");
+        assert!(at(2, 1.0, 500).is_none() || at(2, 8.0, 500).is_some(), "hotter never loses a chain");
+        let (chain, clocks) = cheapest_chain(43, m16).unwrap().unwrap();
+        let extra = chain_bytes(&chain, 4, &llrm_x86_m16::M16)
+            - llrm_target::Target::multiply_immediate_bytes(&llrm_x86_m16::M16, 43, 4);
+        let saved = immediate_multiply(m16, 43).unwrap() + dword_prefix(m16) - clocks;
+        assert!(saved > 0 && extra > 2 * saved && extra <= 2 * saved * 8, "premise: saved {saved}, extra {extra}");
     }
 
     /// GCC's `synth_mult` factors `q * (2^m +- 1)` and tries `t - 1` and `t +

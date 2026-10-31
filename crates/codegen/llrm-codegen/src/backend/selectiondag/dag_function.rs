@@ -1044,6 +1044,26 @@ fn selected_in(
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::default();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
     let sse2 = arch.scalar_sse();
+    // SD446: a target that trades bytes for clocks at speed prices a constant
+    // multiply by its block's frequency (the IR one: no machine block exists
+    // before selection).
+    let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks {
+        0
+    } else {
+        cpu.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+    };
+    let frequencies = (mul_rate > 0).then(|| {
+        let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+            llrm_analysis::bpi::Module {
+                context: &module.context,
+                declarations: &module.globals,
+                metadata: &module.metadata,
+                layout: &layout,
+            },
+            function,
+        );
+        llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, &bpi)
+    });
     for (block, parent, mut built) in work {
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
@@ -1057,7 +1077,16 @@ fn selected_in(
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
-                profile: (!(cpu.min_size || cpu.size || bytes_beat_clocks)).then_some(cpu),
+                profile: frequencies
+                    .as_ref()
+                    .map(
+                        |frequencies| super::x86_lowering::MulPricing {
+                            cpu,
+                            arch,
+                            freq: frequencies.relative_to_entry(parent),
+                            milliclocks_per_byte: mul_rate,
+                        },
+                    ),
             },
             &selector,
             &mut hooks,
