@@ -2276,27 +2276,6 @@ fn reads_zero_or_sign_only(inst: &Inst) -> bool {
     }
 }
 
-/// Whether the emitted line changes neither `a` nor the zero and sign flags: a
-/// store, or a carry flag set or cleared.
-fn leaves_flags(line: &str) -> bool {
-    matches!(
-        line.trim().split(' ').next(),
-        Some("sta" | "stx" | "sty" | "stz" | "clc" | "sec")
-    )
-}
-
-/// Whether the emitted line leaves the zero and sign flags describing what `a`
-/// now holds.
-fn sets_nz_of_a(line: &str) -> bool {
-    let line = line.trim();
-    let (mnemonic, operand) = line.split_once(' ').unwrap_or((line, ""));
-    match mnemonic {
-        "lda" | "txa" | "tya" | "tax" | "tay" | "pla" | "and" | "ora" | "eor" | "adc" | "sbc" => true,
-        "asl" | "lsr" | "rol" | "ror" | "inc" | "dec" => operand == "a",
-        _ => false,
-    }
-}
-
 /// The odds of a branch out of a loop, as `BranchProbabilityInfo`'s loop
 /// heuristic gives them with no profile: the edge that stays in the innermost
 /// loop of its block takes 124 of 128, the edge that leaves it the rest.
@@ -2673,7 +2652,7 @@ fn emit_with<const STACK: bool>(
                 // flags a zero or sign test reads
                 (Kind::Op("CMP"), [_, _, Operand::Imm(0)])
                     if block.insts.get(i + 1).is_some_and(reads_zero_or_sign_only)
-                        && out.lines().last().is_some_and(sets_nz_of_a) =>
+                        && out.lines().last().is_some_and(crate::peephole::sets_nz_of_a) =>
                 {
                     // `iny; tya; bne`: the step set the flags of y itself
                     let mut tail = out.lines().rev();
@@ -2881,10 +2860,7 @@ fn emit_with<const STACK: bool>(
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
     Ok((
-        own_labels(
-            &crate::emit::relax_bra(&relax(&drop_zero_compares(&drop_known_loads(&drop_reloads(&out))))),
-            &function.name,
-        ),
+        own_labels(&crate::emit::relax_bra(&relax(&crate::peephole::run(&out))), &function.name),
         slots,
         sunk,
         shared,
@@ -2927,167 +2903,12 @@ fn own_labels(
     out
 }
 
-/// Whether an instruction of this mnemonic sets the zero and sign flags.
-fn sets_flags(mnemonic: &str) -> bool {
-    matches!(
-        mnemonic,
-        "lda"
-            | "ldx"
-            | "ldy"
-            | "adc"
-            | "sbc"
-            | "cmp"
-            | "cpx"
-            | "cpy"
-            | "and"
-            | "ora"
-            | "eor"
-            | "asl"
-            | "lsr"
-            | "rol"
-            | "ror"
-            | "inc"
-            | "dec"
-            | "inx"
-            | "iny"
-            | "dex"
-            | "dey"
-            | "tax"
-            | "tay"
-            | "txa"
-            | "tya"
-            | "pla"
-            | "bit"
-            | "jsr"
-            | "rts"
-    )
-}
-
-/// Whether the zero and sign flags are set again before anything reads them,
-/// from `lines[from]` on.
-fn flags_unread_after(
-    lines: &[&str],
-    from: usize,
-) -> bool {
-    for line in &lines[from..] {
-        let mnemonic = line.trim().split(' ').next().unwrap_or("");
-        if !line.starts_with("  ") {
-            return false;
-        }
-        if sets_flags(mnemonic) {
-            return true;
-        }
-        if !matches!(
-            mnemonic,
-            "sta" | "stx" | "sty" | "stz" | "clc" | "sec" | "pha" | "nop"
-        ) {
-            return false;
-        }
-    }
-    false
-}
-
-/// `cmp #0` before a branch on zero or sign, after an instruction that set
-/// those flags from `a` (stores in between leave them): the branch reads them
-/// as they are.
-pub fn drop_zero_compares(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let mut out = String::with_capacity(text.len());
-    for (at, line) in lines.iter().enumerate() {
-        let branch = lines.get(at + 1).and_then(|next| next.trim().split(' ').next());
-        let tested = (line.trim() == "cmp #0" && matches!(branch, Some("beq" | "bne" | "bmi" | "bpl")))
-            .then(|| lines[..at].iter().rev().find(|before| !leaves_flags(before)))
-            .flatten()
-            .is_some_and(|before| before.starts_with("  ") && sets_nz_of_a(before));
-        if !tested {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// `ldx #n` (likewise `lda` and `ldy`) of what the register already holds: it
-/// goes, unless a branch reads the flags it sets. The values known are the
-/// immediates loaded and the transfers between registers, forgotten at a
-/// label, a call or an instruction not listed.
-pub fn drop_known_loads(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let mut known: [Option<&str>; 3] = [None; 3];
-    let slot = |register: &str| match register {
-        "lda" | "a" => Some(0),
-        "ldx" | "x" => Some(1),
-        "ldy" | "y" => Some(2),
-        _ => None,
-    };
-    let mut out = String::with_capacity(text.len());
-    for (at, line) in lines.iter().enumerate() {
-        if !line.starts_with("  ") || line.trim_start().starts_with('.') {
-            known = [None; 3];
-            out.push_str(line);
-            out.push('\n');
-            continue;
-        }
-        let (mnemonic, operand) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
-        match (mnemonic, slot(mnemonic)) {
-            (_, Some(register)) if operand.starts_with('#') => {
-                if known[register] == Some(operand) && flags_unread_after(&lines, at + 1) {
-                    continue;
-                }
-                known[register] = Some(operand);
-            }
-            ("lda" | "pla" | "adc" | "sbc" | "and" | "ora" | "eor", _) => known[0] = None,
-            ("asl" | "lsr" | "rol" | "ror" | "inc" | "dec", _) if operand.is_empty() || operand == "a" => {
-                known[0] = None
-            }
-            ("ldx" | "inx" | "dex", _) => known[1] = None,
-            ("ldy" | "iny" | "dey", _) => known[2] = None,
-            ("txa", _) => known[0] = known[1],
-            ("tya", _) => known[0] = known[2],
-            ("tax", _) => known[1] = known[0],
-            ("tay", _) => known[2] = known[0],
-            (
-                "sta" | "stx" | "sty" | "stz" | "clc" | "sec" | "cmp" | "cpx" | "cpy" | "pha" | "bit" | "nop" | "inc"
-                | "dec" | "asl" | "lsr" | "rol" | "ror",
-                _,
-            )
-            | ("beq" | "bne" | "bcc" | "bcs" | "bmi" | "bpl" | "bvc" | "bvs", _) => {}
-            _ => known = [None; 3],
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
-}
-
 /// A conditional branch reaches 127 bytes. An instruction is at most 3 bytes,
 /// so one whose target is within 40 instruction lines stays and any other
 /// becomes the opposite branch over a `jmp`.
 ///
 /// DEVIATE: line counting, not sizes (as `emit::relax_bra`). Exit: the shared
 /// branch relaxation.
-/// `sta m` then `lda m` (likewise `x` and `y`) of a zero-page or spill cell:
-/// the register still holds it, so the load goes. It also set the zero and sign
-/// flags, so it stays when a branch reads them before anything sets them again.
-pub fn drop_reloads(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let cell = |operand: &str| operand.starts_with("rc") || operand.starts_with("s_");
-    let mut out = String::with_capacity(text.len());
-    for (at, line) in lines.iter().enumerate() {
-        let reload = at > 0
-            && lines[at - 1].starts_with("  st")
-            && line.starts_with("  ld")
-            && lines[at - 1].trim()[2..] == line.trim()[2..]
-            && line.trim().split(' ').nth(1).is_some_and(cell)
-            && flags_unread_after(&lines, at + 1);
-        if !reload {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    out
-}
-
 fn relax(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let is_instruction = |l: &str| l.starts_with("  ") && !l.trim_start().starts_with('.');

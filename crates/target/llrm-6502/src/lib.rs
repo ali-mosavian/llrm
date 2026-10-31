@@ -6,6 +6,7 @@ pub mod dagisel;
 pub mod driver;
 pub mod emit;
 pub mod frame;
+pub mod peephole;
 pub mod platform;
 pub mod prepare;
 pub mod routines;

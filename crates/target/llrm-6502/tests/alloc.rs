@@ -2224,7 +2224,7 @@ fn an_undefined_value_is_stored_as_zero() {
 /// reads the flags the load set.
 #[test]
 fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
-    use llrm_6502::alloc::drop_reloads;
+    use llrm_6502::peephole::drop_reloads;
     assert_eq!(
         drop_reloads("  lda rc4\n  sta rc2\n  lda rc2\n  ora rc3\n  rts\n"),
         "  lda rc4\n  sta rc2\n  ora rc3\n  rts\n"
@@ -2234,6 +2234,36 @@ fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
     assert_eq!(drop_reloads(branch), branch, "bne reads the zero flag the load set");
     let other = "  sta rc2\n  lda rc3\n  ldx rc2\n  sta (rc2),y\n  lda (rc2),y\n  sty rc2\n  lda rc2\n  rts\n";
     assert_eq!(drop_reloads(other), other, "only the same register and cell");
+}
+
+/// `ldx #0` twice, or after `lda #0; tax`, loaded what the register held; a
+/// label, a call or a write in between makes it unknown again. The load goes
+/// only when no branch reads the flags it set.
+#[test]
+fn a_load_of_the_immediate_a_register_holds_goes() {
+    use llrm_6502::peephole::drop_known_loads;
+    assert_eq!(drop_known_loads("  ldx #0\n  sta rc2\n  ldx #0\n  inx\n"), "  ldx #0\n  sta rc2\n  inx\n");
+    assert_eq!(drop_known_loads("  lda #0\n  tax\n  ldx #0\n  inx\n"), "  lda #0\n  tax\n  inx\n");
+    let label = "  ldx #0\nl:\n  ldx #0\n  inx\n";
+    assert_eq!(drop_known_loads(label), label, "a label joins other paths");
+    let call = "  ldx #0\n  jsr f\n  ldx #0\n  inx\n";
+    assert_eq!(drop_known_loads(call), call, "a call may change x");
+    let branch = "  ldx #0\n  sta rc2\n  ldx #0\n  beq l\n";
+    assert_eq!(drop_known_loads(branch), branch, "beq reads the flags the load set");
+}
+
+/// `cmp #0` after a load, an ALU op or a transfer into `a` tested what the
+/// flags already said (`strcpy`, 2 bytes and 2 clocks a trip); a store between
+/// leaves the flags as they were, any other op does not.
+#[test]
+fn a_zero_compare_after_an_op_that_set_the_flags_goes() {
+    use llrm_6502::peephole::drop_zero_compares;
+    assert_eq!(drop_zero_compares("  lda rc2\n  sta rc3\n  cmp #0\n  bne l\n"), "  lda rc2\n  sta rc3\n  bne l\n");
+    assert_eq!(drop_zero_compares("  txa\n  cmp #0\n  beq l\n"), "  txa\n  beq l\n");
+    let other = "  ldx rc2\n  cmp #0\n  bne l\n";
+    assert_eq!(drop_zero_compares(other), other, "ldx set the flags of x");
+    let carry = "  lda rc2\n  cmp #0\n  bcs l\n";
+    assert_eq!(drop_zero_compares(carry), carry, "bcs reads the carry the compare set");
 }
 
 /// A spilled byte used as the second operand of an ALU op is read from its cell
